@@ -9,6 +9,14 @@
    The SQLite catalog is an index and cache, not the only copy.
 4. **Lightweight.** The app starts fast, uses little memory when idle, and needs no background services.
 
+## Camera support
+
+- **Long term:** most cameras that LibRaw supports.
+- **Development phase:** Sony A1 and A7R IV (`.ARW`), Panasonic (`.RW2`) and DNG (`.dng`).
+  These formats define the test set in `D:\PhotoWorkflowData\RAW`.
+- The fast path, which uses the embedded previews, is designed per format with a generic fallback.
+  This means a camera without a usable preview still works, just more slowly.
+
 ## Crates
 
 ```

@@ -8,6 +8,8 @@
 
 ## Measured / observed
 
+**Runtime output (Windows):** `PW_REA_PROBE_MARKER_v1 64x48 blur-hash=c47cbaf7a035c359`. This is identical to the Linux build, so the probe computes the same result on both platforms.
+
 **Static inspectors (no Ghidra):**
 
 | Observation | Value | Tool / evidence |
@@ -54,7 +56,7 @@
 
 ## Follow-up
 
-- [ ] Paste the probe output from Windows and confirm `blur-hash=c47cbaf7a035c359` (the Linux reference value).
+- [x] Probe output on Windows confirmed: `blur-hash=c47cbaf7a035c359`, identical to the Linux reference value.
 - [ ] Verify `procedure_assembly` on `0x140005970` and record whether the blur is vectorised.
 - [ ] Investigate PDB loading (for example whether Ghidra picks the PDB up from the image directory or a symbol path).
 - [ ] Verify `compare_functions` / `match_native_functions` between two builds before the first real optimisation.

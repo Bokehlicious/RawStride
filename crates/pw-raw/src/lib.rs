@@ -1,8 +1,9 @@
 //! RAW decoding for PhotoWorkflow.
 //!
 //! Responsibilities (planned):
-//! - Fast path: locate and return the embedded JPEG previews in Sony ARW files
-//!   (A1, A7R IV) without a full demosaic – this is what culling speed depends on.
+//! - Fast path: locate and return embedded JPEG previews without a full demosaic –
+//!   this is what culling speed depends on. Development formats: Sony ARW (A1, A7R IV),
+//!   Panasonic RW2 and DNG; long term, most cameras supported by LibRaw.
 //! - Slow path: full decode through LibRaw (FFI, statically linked via vcpkg).
 //! - Orientation and basic capture info needed before metadata is loaded.
 //!
