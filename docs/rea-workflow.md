@@ -138,3 +138,4 @@ measure time, so it must never be the only source for a performance claim.
 | Date | Module | Topic | File |
 |---|---|---|---|
 | 2026-11-03 | tools/rea-probe | REA/Ghidra verification on a known-source binary | [analyses/2026-11-03-rea-probe-baseline.md](analyses/2026-11-03-rea-probe-baseline.md) |
+| 2026-11-03 | pw-raw | Embedded previews in ARW, RW2, DNG (ExifTool; REA not applicable) | [analyses/2026-11-03-pw-raw-embedded-previews.md](analyses/2026-11-03-pw-raw-embedded-previews.md) |

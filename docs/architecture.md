@@ -12,8 +12,10 @@
 ## Camera support
 
 - **Long term:** most cameras that LibRaw supports.
-- **Development phase:** Sony A1 and A7R IV (`.ARW`), Panasonic (`.RW2`) and DNG (`.dng`).
+- **Development phase:** Sony A1 (ILCE-1) and A7R IVA (ILCE-7RM4A) (`.ARW`), Panasonic (`.RW2`) and DNG (`.dng`).
   These formats define the test set in `D:\PhotoWorkflowData\RAW`.
+- Sony files are tested as **Compressed RAW** only, since that is the format in use. LibRaw still
+  decodes Lossless Compressed and Uncompressed, but we neither test nor optimise for them in this phase.
 - The fast path, which uses the embedded previews, is designed per format with a generic fallback.
   This means a camera without a usable preview still works, just more slowly.
 

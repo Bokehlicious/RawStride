@@ -5,7 +5,7 @@
 
 ## Context
 
-We need a fast, lightweight Windows culling and ingest tool for Sony A1 and A7R IV
+We need a fast, lightweight Windows culling and ingest tool for Sony A1 and A7R IVA
 ARW files, developed by a small team.
 
 ## Decision

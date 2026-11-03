@@ -4,7 +4,7 @@ A fast and lightweight photo culling and ingest application for Windows.
 It covers card ingest, culling, rating and metadata.
 
 **Camera support:** the goal is to support most cameras, through LibRaw.
-During development we start with Sony A1 and A7R IV (ARW), Panasonic (RW2) and DNG.
+During development we start with Sony A1 and A7R IVA (ARW), Panasonic (RW2) and DNG.
 
 > Status: **project skeleton**. There is no application code yet.
 
