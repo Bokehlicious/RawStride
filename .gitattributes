@@ -1,0 +1,17 @@
+* text=auto eol=lf
+*.ps1 text eol=crlf
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Images and RAW files are never diffed or normalized
+*.arw  binary
+*.ARW  binary
+*.dng  binary
+*.jpg  binary
+*.jpeg binary
+*.png  binary
+*.ico  binary
+*.icns binary
+*.tif  binary
+*.tiff binary
+*.db   binary

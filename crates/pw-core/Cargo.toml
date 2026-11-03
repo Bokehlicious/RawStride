@@ -1,0 +1,13 @@
+[package]
+name = "pw-core"
+description = "Shared types, errors and configuration for PhotoWorkflow"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]

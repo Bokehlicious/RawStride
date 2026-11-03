@@ -1,0 +1,5 @@
+[env]
+# LibRaw is built by vcpkg (manifest mode, see vcpkg.json) as a static lib
+# with the dynamic CRT, matching Rust's default /MD on MSVC.
+VCPKGRS_TRIPLET = "x64-windows-static-md"
+VCPKG_DEFAULT_TRIPLET = "x64-windows-static-md"

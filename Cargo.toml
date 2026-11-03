@@ -1,0 +1,48 @@
+[workspace]
+resolver = "3"
+members = ["crates/*", "tools/rea-probe"]
+# src-tauri is added as a member when the Tauri shell is generated
+# (implementation phase, `cargo tauri init`).
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.99"
+publish = false
+authors = ["Tobias Nykänen"]
+repository = ""
+# license = "TBD" – see docs/adr/0002-licensing.md
+
+[workspace.dependencies]
+# Internal crates
+pw-core = { path = "crates/pw-core" }
+pw-raw = { path = "crates/pw-raw" }
+pw-metadata = { path = "crates/pw-metadata" }
+pw-catalog = { path = "crates/pw-catalog" }
+pw-ingest = { path = "crates/pw-ingest" }
+pw-thumbcache = { path = "crates/pw-thumbcache" }
+pw-render = { path = "crates/pw-render" }
+# External dependencies are added here (pinned once) when implementation starts.
+
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+missing_debug_implementations = "warn"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+
+[profile.dev]
+# Keep image decoding usable in debug builds.
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+debug = "line-tables-only"
+
+[profile.profiling]
+inherits = "release"
+debug = true

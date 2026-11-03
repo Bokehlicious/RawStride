@@ -1,0 +1,52 @@
+# Rust
+/target/
+**/*.rs.bk
+
+# vcpkg manifest-mode output
+/vcpkg_installed/
+
+# Frontend
+node_modules/
+/ui/dist/
+/ui/.vite/
+
+# Tauri
+/src-tauri/target/
+/src-tauri/gen/
+
+# Local data – RAW files, catalogs and caches live outside the repo
+# (D:\PhotoWorkflowData). Small, licence-clean fixtures only in tests/fixtures.
+*.ARW
+*.arw
+*.dng
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+*.db
+*.db-wal
+*.db-shm
+/cache/
+
+# Clean-room material must never enter this repository
+/pm-clean-room/
+*.cany
+
+# Editors / OS
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+.idea/
+*.swp
+Thumbs.db
+desktop.ini
+.DS_Store
+
+# Profiling
+*.etl
+*.wpaProfile
+*.rdc
+/profiling/
+
+# Env
+.env
+.env.*

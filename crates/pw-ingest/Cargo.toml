@@ -1,0 +1,16 @@
+[package]
+name = "pw-ingest"
+description = "Card detection, copy with verification, renaming and backup"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+pw-core.workspace = true
+pw-metadata.workspace = true
+pw-catalog.workspace = true

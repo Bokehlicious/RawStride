@@ -1,0 +1,10 @@
+[package]
+name = "rea-probe"
+description = "Known-source test binary used to verify REA/Ghidra analysis on Windows"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lints]
+workspace = true
