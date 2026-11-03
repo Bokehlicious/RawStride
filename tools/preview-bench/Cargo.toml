@@ -9,8 +9,13 @@ publish = false
 [lints]
 workspace = true
 
+[features]
+# libjpeg-turbo via its TurboJPEG C API, linked statically from vcpkg (manifest mode):
+#   vcpkg install --triplet x64-windows-static-md      (in the repo root)
+#   cargo run -p preview-bench --profile profiling --features turbojpeg -- <metadata.csv>
+turbojpeg = []
+
 [dependencies]
-# Pure-Rust decoders for a first baseline. libjpeg-turbo (via vcpkg) is the
-# candidate for production and will be benchmarked against these later.
+# Pure-Rust decoders for the baseline.
 zune-jpeg = "0.4"
-jpeg-decoder = { version = "0.3", default-features = false } # no rayon: single-threaded
+jpeg-decoder = { version = "0.3", default-features = false } # no rayon (may still use worker threads)

@@ -5,4 +5,4 @@
 - [dev-setup.md](dev-setup.md) – toolchain and machine setup
 - [rea-workflow.md](rea-workflow.md) – how REA/Ghidra, WPR and benchmarks are used
 - [analyses/](analyses/) – recorded analyses (measured vs. interpreted)
-- [adr/](adr/) – Architecture Decision Records
+- [adr/](adr/) – Architecture Decision Records (0003: M1 viewer architecture)

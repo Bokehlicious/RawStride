@@ -7,7 +7,14 @@
 //!   (`FILE_FLAG_NO_BUFFERING`, sector-aligned). On other OSes this falls back to a normal read.
 //! * `read_cached`   – the same range through the normal (warm) file cache.
 //! * `decode_zune`   – full-size decode with zune-jpeg (single thread).
-//! * `decode_jd_1/N` – decode with jpeg-decoder at scale 1/1, 1/2, 1/4, 1/8 (single thread).
+//! * `decode_jd_1/N` – decode with jpeg-decoder at scale 1/1, 1/2, 1/4, 1/8 (scaled IDCT).
+//! * `decode_tj_1/N` – decode with libjpeg-turbo (TurboJPEG API) at 1/1 … 1/8, single thread.
+//!   Only with `--features turbojpeg` (static link from the vcpkg manifest install).
+//!
+//! For decode metrics the process CPU time over all repetitions is recorded as well
+//! (`cpu_ratio` = CPU time / wall time). A ratio clearly above 1.0 means the decoder used
+//! more than one thread. Windows' process times have ~15.6 ms resolution, so the ratio is only
+//! meaningful when the repetitions add up to well over 100 ms.
 //!
 //! Per file it also measures `file_uncached`: reading the whole file uncached in 8 MiB chunks.
 //!
@@ -43,6 +50,7 @@ struct Row {
     out_h: u32,
     bytes: usize,
     times: Vec<Duration>,
+    cpu: Option<Duration>,
 }
 
 fn main() {
@@ -126,6 +134,7 @@ fn row(
         out_h: h,
         bytes,
         times,
+        cpu: None,
     }
 }
 
@@ -159,6 +168,7 @@ fn bench_preview(p: &Preview, reps: usize, rows: &mut Vec<Row>) -> Result<(), St
     // zune-jpeg, full size
     let mut t_z = Vec::new();
     let (mut zw, mut zh) = (0, 0);
+    let c0 = process_cpu_time();
     for _ in 0..reps {
         let t = Instant::now();
         let mut dec = zune_jpeg::JpegDecoder::new(&data);
@@ -169,12 +179,15 @@ fn bench_preview(p: &Preview, reps: usize, rows: &mut Vec<Row>) -> Result<(), St
         }
         std::hint::black_box(pixels);
     }
-    rows.push(row(p, &p.kind, "decode_zune", zw, zh, p.length, t_z));
+    let mut r = row(p, &p.kind, "decode_zune", zw, zh, p.length, t_z);
+    r.cpu = cpu_delta(c0);
+    rows.push(r);
 
     // jpeg-decoder at 1/1, 1/2, 1/4, 1/8 (scaled IDCT)
     for div in [1u32, 2, 4, 8] {
         let mut t_j = Vec::new();
         let (mut ow, mut oh) = (0, 0);
+        let c0 = process_cpu_time();
         for _ in 0..reps {
             let t = Instant::now();
             let mut dec = jpeg_decoder::Decoder::new(io::Cursor::new(&data));
@@ -190,7 +203,7 @@ fn bench_preview(p: &Preview, reps: usize, rows: &mut Vec<Row>) -> Result<(), St
             (ow, oh) = (u32::from(w), u32::from(h));
             std::hint::black_box(pixels);
         }
-        rows.push(row(
+        let mut r = row(
             p,
             &p.kind,
             &format!("decode_jd_1/{div}"),
@@ -198,9 +211,195 @@ fn bench_preview(p: &Preview, reps: usize, rows: &mut Vec<Row>) -> Result<(), St
             oh,
             p.length,
             t_j,
-        ));
+        );
+        r.cpu = cpu_delta(c0);
+        rows.push(r);
+    }
+
+    // libjpeg-turbo at 1/1, 1/2, 1/4, 1/8
+    #[cfg(feature = "turbojpeg")]
+    for div in [1u32, 2, 4, 8] {
+        let mut t_t = Vec::new();
+        let (mut ow, mut oh) = (0, 0);
+        let c0 = process_cpu_time();
+        for _ in 0..reps {
+            let t = Instant::now();
+            let mut dec = turbo::Decompressor::new()?;
+            let (w, h, pixels) = dec.decode(&data, div)?;
+            t_t.push(t.elapsed());
+            (ow, oh) = (w, h);
+            std::hint::black_box(pixels);
+        }
+        let mut r = row(
+            p,
+            &p.kind,
+            &format!("decode_tj_1/{div}"),
+            ow,
+            oh,
+            p.length,
+            t_t,
+        );
+        r.cpu = cpu_delta(c0);
+        rows.push(r);
     }
     Ok(())
+}
+
+// ---------- CPU time ----------
+
+/// Total CPU time (user + kernel) of this process, all threads.
+#[cfg(windows)]
+fn process_cpu_time() -> Option<Duration> {
+    use std::ffi::c_void;
+    #[repr(C)]
+    #[derive(Default, Clone, Copy)]
+    struct FileTime {
+        low: u32,
+        high: u32,
+    }
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn GetCurrentProcess() -> *mut c_void;
+        fn GetProcessTimes(
+            process: *mut c_void,
+            creation: *mut FileTime,
+            exit: *mut FileTime,
+            kernel: *mut FileTime,
+            user: *mut FileTime,
+        ) -> i32;
+    }
+    let mut c = FileTime::default();
+    let mut e = FileTime::default();
+    let mut k = FileTime::default();
+    let mut u = FileTime::default();
+    // SAFETY: GetCurrentProcess returns a pseudo-handle; all out-pointers are valid locals.
+    let ok = unsafe { GetProcessTimes(GetCurrentProcess(), &mut c, &mut e, &mut k, &mut u) };
+    if ok == 0 {
+        return None;
+    }
+    let t100 = |f: FileTime| (u64::from(f.high) << 32) | u64::from(f.low);
+    Some(Duration::from_nanos((t100(k) + t100(u)) * 100))
+}
+
+#[cfg(not(windows))]
+fn process_cpu_time() -> Option<Duration> {
+    None
+}
+
+fn cpu_delta(start: Option<Duration>) -> Option<Duration> {
+    Some(process_cpu_time()?.saturating_sub(start?))
+}
+
+// ---------- libjpeg-turbo ----------
+
+#[cfg(feature = "turbojpeg")]
+mod turbo {
+    //! Minimal FFI to the TurboJPEG 2.x API (still provided by libjpeg-turbo 3.x).
+    use std::ffi::{CStr, c_char, c_int, c_ulong, c_void};
+
+    type Handle = *mut c_void;
+    const TJPF_RGB: c_int = 0;
+    const TJERR_WARNING: c_int = 0;
+
+    unsafe extern "C" {
+        fn tjInitDecompress() -> Handle;
+        fn tjDecompressHeader3(
+            handle: Handle,
+            jpeg_buf: *const u8,
+            jpeg_size: c_ulong,
+            width: *mut c_int,
+            height: *mut c_int,
+            subsamp: *mut c_int,
+            colorspace: *mut c_int,
+        ) -> c_int;
+        fn tjDecompress2(
+            handle: Handle,
+            jpeg_buf: *const u8,
+            jpeg_size: c_ulong,
+            dst_buf: *mut u8,
+            width: c_int,
+            pitch: c_int,
+            height: c_int,
+            pixel_format: c_int,
+            flags: c_int,
+        ) -> c_int;
+        fn tjGetErrorStr2(handle: Handle) -> *mut c_char;
+        fn tjGetErrorCode(handle: Handle) -> c_int;
+        fn tjDestroy(handle: Handle) -> c_int;
+    }
+
+    #[derive(Debug)]
+    pub struct Decompressor(Handle);
+
+    impl Decompressor {
+        pub fn new() -> Result<Self, String> {
+            // SAFETY: plain constructor; null means failure.
+            let h = unsafe { tjInitDecompress() };
+            if h.is_null() {
+                Err("tjInitDecompress failed".into())
+            } else {
+                Ok(Self(h))
+            }
+        }
+
+        fn error(&self) -> String {
+            // SAFETY: the handle is valid and the library returns a NUL-terminated string.
+            unsafe { CStr::from_ptr(tjGetErrorStr2(self.0)) }
+                .to_string_lossy()
+                .into_owned()
+        }
+
+        /// Decodes `data` to RGB at scale 1/`div`. Returns (width, height, pixels).
+        pub fn decode(&mut self, data: &[u8], div: u32) -> Result<(u32, u32, Vec<u8>), String> {
+            let size = c_ulong::try_from(data.len()).map_err(|_| "JPEG too large".to_string())?;
+            let (mut w, mut h, mut ss, mut cs) = (0, 0, 0, 0);
+            // SAFETY: data is valid for `size` bytes; out-pointers are valid locals.
+            let rc = unsafe {
+                tjDecompressHeader3(
+                    self.0,
+                    data.as_ptr(),
+                    size,
+                    &mut w,
+                    &mut h,
+                    &mut ss,
+                    &mut cs,
+                )
+            };
+            if rc != 0 {
+                return Err(format!("tjDecompressHeader3: {}", self.error()));
+            }
+            // TJSCALED(dim, 1/div) == ceil(dim / div); TurboJPEG then picks exactly 1/div.
+            let sw = (w as u32).div_ceil(div);
+            let sh = (h as u32).div_ceil(div);
+            let mut out = vec![0u8; sw as usize * sh as usize * 3];
+            // SAFETY: out holds sw*sh*3 bytes for an RGB image of the requested scaled size.
+            let rc = unsafe {
+                tjDecompress2(
+                    self.0,
+                    data.as_ptr(),
+                    size,
+                    out.as_mut_ptr(),
+                    sw as c_int,
+                    0,
+                    sh as c_int,
+                    TJPF_RGB,
+                    0,
+                )
+            };
+            // SAFETY: the handle is valid.
+            if rc != 0 && unsafe { tjGetErrorCode(self.0) } != TJERR_WARNING {
+                return Err(format!("tjDecompress2: {}", self.error()));
+            }
+            Ok((sw, sh, out))
+        }
+    }
+
+    impl Drop for Decompressor {
+        fn drop(&mut self) {
+            // SAFETY: the handle came from tjInitDecompress and is destroyed exactly once.
+            unsafe { tjDestroy(self.0) };
+        }
+    }
 }
 
 // ---------- CSV ----------
@@ -410,13 +609,13 @@ fn write_csv(path: &Path, rows: &[Row]) -> io::Result<()> {
     let mut f = io::BufWriter::new(File::create(path)?);
     writeln!(
         f,
-        "file,model,kind,metric,out_w,out_h,bytes,reps,median_ms,min_ms,max_ms"
+        "file,model,kind,metric,out_w,out_h,bytes,reps,median_ms,min_ms,max_ms,cpu_ratio"
     )?;
     for r in rows {
         let (med, min, max) = stats(&r.times);
         writeln!(
             f,
-            "\"{}\",\"{}\",{},{},{},{},{},{},{:.3},{:.3},{:.3}",
+            "\"{}\",\"{}\",{},{},{},{},{},{},{:.3},{:.3},{:.3},{}",
             r.file,
             r.model,
             r.kind,
@@ -427,16 +626,24 @@ fn write_csv(path: &Path, rows: &[Row]) -> io::Result<()> {
             r.times.len(),
             med,
             min,
-            max
+            max,
+            cpu_ratio(r).map(|c| format!("{c:.2}")).unwrap_or_default()
         )?;
     }
     f.flush()
 }
 
+/// CPU time / wall time over all repetitions of a metric (None when not measured).
+fn cpu_ratio(r: &Row) -> Option<f64> {
+    let wall: Duration = r.times.iter().sum();
+    let cpu = r.cpu?;
+    (wall > Duration::ZERO).then(|| cpu.as_secs_f64() / wall.as_secs_f64())
+}
+
 fn print_summary(rows: &[Row]) {
     println!(
-        "\n{:<24} {:<20} {:<16} {:>11} {:>9} {:>10}",
-        "model", "kind", "metric", "output", "KB", "median ms"
+        "\n{:<24} {:<20} {:<16} {:>11} {:>9} {:>10} {:>5}",
+        "model", "kind", "metric", "output", "KB", "median ms", "cpu/w"
     );
     for r in rows {
         let (med, _, _) = stats(&r.times);
@@ -446,13 +653,14 @@ fn print_summary(rows: &[Row]) {
             String::new()
         };
         println!(
-            "{:<24} {:<20} {:<16} {:>11} {:>9} {:>10.2}",
+            "{:<24} {:<20} {:<16} {:>11} {:>9} {:>10.2} {:>5}",
             r.model.chars().take(24).collect::<String>(),
             r.kind,
             r.metric,
             dims,
             r.bytes / 1024,
-            med
+            med,
+            cpu_ratio(r).map(|c| format!("{c:.2}")).unwrap_or_default()
         );
     }
 }

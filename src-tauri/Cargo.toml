@@ -1,0 +1,23 @@
+[package]
+name = "photoworkflow"
+description = "PhotoWorkflow – fast RAW culling, ingest and metadata (Tauri 2 app shell)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+pw-raw.workspace = true
+# "custom-protocol" embeds ui/web into the binary, so a plain `cargo run` works
+# without the Tauri CLI or a dev server.
+tauri = { version = "2", features = ["custom-protocol"] }
+tauri-plugin-dialog = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

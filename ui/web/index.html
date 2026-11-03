@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="sv">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PhotoWorkflow</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header id="toolbar">
+    <button id="open-btn" title="Öppna mapp (Ctrl+O)">Öppna mapp…</button>
+    <span id="folder" class="muted">Ingen mapp öppnad – välj en mapp eller dra in den i fönstret</span>
+    <span class="spacer"></span>
+    <button id="view-btn" title="Växla kontaktark / loupe (G / Enter)" disabled>Loupe</button>
+    <button id="info-btn" title="Visa/dölj info (I)">Info</button>
+    <label class="size-label" title="Miniatyrstorlek">
+      <input id="thumb-size" type="range" min="120" max="420" step="10" value="200">
+    </label>
+  </header>
+
+  <main id="main">
+    <section id="grid" tabindex="0" aria-label="Kontaktark"></section>
+
+    <section id="loupe" hidden tabindex="0" aria-label="Loupe">
+      <div id="viewport">
+        <img id="loupe-img" alt="" draggable="false" crossorigin="anonymous">
+      </div>
+      <div id="loupe-badge" hidden></div>
+    </section>
+
+    <aside id="info" aria-label="Bildinformation">
+      <h2 id="info-name">–</h2>
+      <dl id="info-list"></dl>
+      <h3>Inbäddade förhandsvisningar</h3>
+      <ul id="info-previews" class="muted"></ul>
+      <p class="hint">
+        ← → bläddra · Enter/G växla vy · Z eller dubbelklick 100&nbsp;% · 0 anpassa ·
+        mushjul zoom · dra för att panorera · I info
+      </p>
+    </aside>
+  </main>
+
+  <footer id="status">
+    <span id="status-pos"></span>
+    <span id="status-source"></span>
+    <span class="spacer"></span>
+    <span id="status-zoom"></span>
+  </footer>
+
+  <div id="toast" hidden></div>
+  <script src="app.js"></script>
+</body>
+</html>

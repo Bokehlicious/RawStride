@@ -1,4 +1,8 @@
 # ui
 
-Frontend for the contact sheet, loupe and metadata panels. The framework is not chosen yet.
-Its build output goes to `ui/dist/`, which is ignored by git.
+The frontend lives in `web/`. It is plain HTML, CSS and JavaScript with no npm and no build step,
+and is embedded into the app by `src-tauri` at compile time.
+
+- `web/index.html`: layout (toolbar, contact sheet, loupe, info panel, status bar)
+- `web/app.js`: logic (folders, grid, loupe zoom/pan, orientation, preloading)
+- `web/style.css`: styling
