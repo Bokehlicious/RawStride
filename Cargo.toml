@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/*", "tools/rea-probe"]
+members = ["crates/*", "tools/rea-probe", "tools/preview-bench"]
 # src-tauri is added as a member when the Tauri shell is generated
 # (implementation phase, `cargo tauri init`).
 

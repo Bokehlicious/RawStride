@@ -92,6 +92,22 @@ Each tool is moved to the verified table the first time it is used successfully.
 Rule of thumb: **measure with a profiler, explain with REA.** REA does not
 measure time, so it must never be the only source for a performance claim.
 
+### When to use REA (project rule, 2026-11-03)
+
+REA is a tool for **targeted** technical analysis. It is not a step in every development or test cycle.
+
+- **Do not** run REA automatically after builds, test runs or code changes.
+- **Use the dedicated tools without REA** for unit and functional tests, Clippy, rustfmt and performance measurements.
+- **Use REA when a concrete technical question justifies it:** does a JPEG decoder use SIMD? Which
+  DLLs does a build depend on? Why is our own rendering code a bottleneck? What did the compiler do
+  in our release or profiling build?
+- **Prefer targeted questions** over broad decompilation of whole programs.
+- **Stop or narrow an analysis** that grows out of proportion to the question.
+- **Always report** why REA was used, which analyses were actually run, and what they found.
+
+Working principle: measure first with the normal tools, use REA when the measurements or a concrete
+question justify a deeper look, then verify any improvement with new measurements.
+
 ## 4. Known limitations (observed)
 
 - **PDB symbols are not loaded.** Ghidra sees the PDB reference in our MSVC builds
@@ -104,6 +120,11 @@ measure time, so it must never be the only source for a performance claim.
 - **Large outputs.** `binary_session` and complete-detail results can exceed 70 kB.
   Prefer `detail: "summary"` and page through the views instead.
 - **Rust strings** may not be listed as defined strings, so an empty string search does not prove absence.
+- **The device bridge times out after 60 s per call.** On `preview-bench.exe` (565 KB), Ghidra's first
+  query after `open_binary` exceeded that limit three times, and the REA session was lost twice
+  (2026-11-03). Ghidra analysis on Windows is therefore practical only for small binaries, unless the
+  analysis can be completed outside the bridge. Prefer the static inspectors (`inspect_pe_*`,
+  `inspect_rust_binary`), which return in seconds.
 
 ## 5. Running a performance comparison
 
@@ -139,3 +160,4 @@ measure time, so it must never be the only source for a performance claim.
 |---|---|---|---|
 | 2026-11-03 | tools/rea-probe | REA/Ghidra verification on a known-source binary | [analyses/2026-11-03-rea-probe-baseline.md](analyses/2026-11-03-rea-probe-baseline.md) |
 | 2026-11-03 | pw-raw | Embedded previews in ARW, RW2, DNG (ExifTool; REA not applicable) | [analyses/2026-11-03-pw-raw-embedded-previews.md](analyses/2026-11-03-pw-raw-embedded-previews.md) |
+| 2026-11-03 | pw-raw | Read and decode time of embedded previews (REA: imports; Ghidra aborted) | [analyses/2026-11-03-pw-raw-preview-timing.md](analyses/2026-11-03-pw-raw-preview-timing.md) |

@@ -1,0 +1,16 @@
+[package]
+name = "preview-bench"
+description = "Measures read and JPEG decode time of embedded RAW previews (development tool)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+# Pure-Rust decoders for a first baseline. libjpeg-turbo (via vcpkg) is the
+# candidate for production and will be benchmarked against these later.
+zune-jpeg = "0.4"
+jpeg-decoder = { version = "0.3", default-features = false } # no rayon: single-threaded
