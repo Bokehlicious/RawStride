@@ -9,6 +9,9 @@
   - **Amendment 3 (2026-11-05):** the presenter is decided: **B2-res**, meaning WebView2 shared
     buffers into WebGL2, with prepared views kept as GPU textures. A (wgpu) is not chosen. See
     section 13.
+  - **Amendment 4 (2026-11-05):** P6 results (GPU demosaicing in B2) and the orientation check. No new
+    decision: PPG stays the default method and AHD the quality reference. P6b (PPG as a GPU shader) is
+    planned and waits for the owner's approval. See section 14.
   - New dependencies (wgpu or another GPU library) still need separate approval before they are added or
     installed. libjpeg-turbo was approved for prototype P0 on 2026-11-05; using it in the app is a
     separate decision.
@@ -306,7 +309,7 @@ No new tools or libraries are installed or added by this proposal.
 | **P5** | Memory budget: 2/3/4 GB under fast switching and repeated zooms, both display modes cached | peak RAM/VRAM, evictions, hit rate | The default for V8 | **done 2026-11-05**; 4 GB decided (section 12) |
 | **P2** | Presenter B2: WebView2 shared buffer → WebGL2 (and WebGPU if the runtime has it); 100 % view (≈ 6–12 MB) and a full A1 image (199 MB) | swap latency on screen, upload ms, memory, buffer lifetime | Can WebView2 present finished images within the 30 ms targets? | **done 2026-11-05**; chosen as B2-res (section 13) |
 | **P3** | Presenter A: wgpu surface for the image area under a transparent Tauri webview; same images | swap latency, resize/DPI/focus behaviour, GPU power | Can wgpu be integrated cleanly, and how much faster is a swap? | **done 2026-11-05**; not chosen (section 13). wgpu stays in the prototype only |
-| **P6** | **GPU demosaicing in our own presenter:** upload the unpacked Bayer data (≈ 2 bytes per pixel) and demosaic plus colour-convert in a shader. Variants: P3 (wgpu compute/render) and P2 (WebGPU/WebGL in WebView2). Visible region first. Compared with the CPU (P4b) on the same files | time from image change and from Z to the visible sharp view; upload time; CPU/GPU/VRAM; quality (8.3) | Whether the GPU path shortens image change and zoom, as OpenGL did in FastRawViewer (9.9a), and in which presenter | **approved**; runs in B2 (WebGL2/WebGPU in WebView2), so no new dependency (section 13) |
+| **P6** | **GPU demosaicing in our own presenter:** upload the unpacked Bayer data (≈ 2 bytes per pixel) and demosaic plus colour-convert in a shader. Variants: P3 (wgpu compute/render) and P2 (WebGPU/WebGL in WebView2). Visible region first. Compared with the CPU (P4b) on the same files | time from image change and from Z to the visible sharp view; upload time; CPU/GPU/VRAM; quality (8.3) | Whether the GPU path shortens image change and zoom, as OpenGL did in FastRawViewer (9.9a), and in which presenter | **done 2026-11-05** in B2 (WebGL2); results in section 14. P6b (PPG shader) planned, not started |
 | **P1** | Optional quick fix: JS `createImageBitmap` prefetch of large previews in today's app, behind a flag | `latency.ps1` V1/V3 in JPEG mode | Is a cheap interim fix worth doing? | **approved**; lowest priority |
 
 ### 8.3 How the prototypes are compared
@@ -627,7 +630,8 @@ comparable.
 7. ~~Scheduling and memory budget (V8)~~ – decided 2026-11-05 after P4/P5: the strategy in 12.1, with a
    4 GB default budget.
 8. ~~Presenter~~ – decided 2026-11-05: B2-res (section 13).
-9. Next: P6 (GPU demosaicing in B2). libjpeg-turbo in the app still needs separate approval.
+9. ~~P6~~ – done 2026-11-05 (section 14). Next: P6b, a PPG GPU shader (14.5), **only after the owner's
+   approval**. libjpeg-turbo in the app still needs separate approval.
    Postponed by the owner: DPI change, moving to another screen, GPU device loss.
 
 ## 11. Amendment 1: demosaic method (owner decision, 2026-11-05)
@@ -817,4 +821,157 @@ Times are on screen, from key press to changed pixels, median / p95. The screen 
   (WebGL context loss).
 - **Not solved by any presenter:** RAW-mode cold start and fast stepping (V4, V5, V7 cold). That is
   P6.
+
+## 14. Amendment 4: P6 results and orientation check (2026-11-05)
+
+No decision changes. **PPG stays the default demosaic method and AHD the quality reference
+(section 11).** The MHC shader of P6 is a measurement candidate, not a replacement.
+
+### 14.1 What P6 did
+
+- **Prototype:** `prototypes/phase3/p6-gpu-demosaic`. Raw data in `D:\PhotoWorkflowData\analysis\phase3\p6\`.
+- **CPU side:** LibRaw opens and unpacks the file (ADR 0006 settings). The visible Bayer area (16 bit)
+  goes through a WebView2 shared buffer into a WebGL2 R16UI texture, and stays on the GPU.
+- **Shaders:** they repeat `dcraw_process` on the GPU, in this order:
+  1. black levels per CFA position;
+  2. camera white balance, with clipping;
+  3. demosaicing;
+  4. the camera → sRGB matrix;
+  5. dcraw's output curve.
+- **Demosaic methods:** `linear` (LibRaw's linear method, used to check the pipeline) and `mhc`
+  (Malvar–He–Cutler, 5×5).
+- **Fit view:** half-size superpixels, as LibRaw `half_size`.
+- **100 % view:** only the visible region is demosaiced, straight into the canvas.
+- **Files:** A7R IVA ×5 (9568×6376), Panasonic GM1 RW2 ×4 (4608×3464), A1 ×2 (8640×5760).
+
+### 14.2 Results [M]
+
+**Pipeline check.** GPU `linear` against LibRaw `linear` on the same 1920×1080 region gave **ΔE00
+0.00 and SSIM 1.0000 in all 11 files**. The shader reproduces LibRaw exactly under the ADR 0006
+settings. The differences below come only from the demosaic method.
+
+**Quality against AHD** (median over the files; the AHD false-colour value itself is about 3.1):
+
+| | ΔE00 mean / p99 | SSIM | Fine detail (HF) | False colour | Zipper (AHD = 1) |
+|---|---|---|---|---|---|
+| A7R, MHC (GPU) | 1.60 / 6.3 | 0.9921 | 0.94 | 3.89 | **1.63** |
+| A7R, PPG (CPU) | 1.03 / 5.4 | 0.9935 | 0.98 | 3.56 | 0.93 |
+| RW2, MHC | 1.65 / 5.0 | 0.9710 | 0.97 | 4.71 | **2.19** |
+| RW2, PPG | 1.61 / 6.7 | 0.9758 | 0.95 | 3.44 | 0.88 |
+| A1, MHC | 1.49 / 4.6 | 0.9842 | 0.89 | 3.53 | **1.21** |
+| A1, PPG | 1.44 / 6.1 | 0.9830 | 0.94 | 3.51 | 0.95 |
+
+MHC is close to PPG in colour and structure, but it has 1.2–2.2 times AHD's zipper artefacts, while
+PPG is at 0.9. On the A7R files it also loses some fine detail. **MHC does not meet the PPG quality
+decided in section 11.**
+
+**Zoom (Z) with the Bayer data already on the GPU** (A7R, on screen, latency.ps1, 20 presses that
+alternate fit and 100 %):
+
+- 12–33 ms, median about 26 ms;
+- 18 of 20 presses within 30 ms;
+- no pre-rendered view is needed.
+
+For comparison:
+
+- on the CPU, a cold Z took 40–46 ms to memory (P4/P5), before the presenter;
+- B2-res with a pre-rendered view took 13 ms (section 13).
+
+**Cold start and image change** (unpack included):
+
+| | In the page, total | Open + unpack (CPU) | Copy to shared buffer | Upload to GPU |
+|---|---|---|---|---|
+| A7R | 436 ms | 291 ms | 52 ms | 57 ms |
+| RW2 | 202 ms | 164 ms | 13 ms | 12 ms |
+| A1 | 364 ms | 240 ms | 43 ms | 44 ms |
+
+- On screen, A7R, RIGHT to a new file: **533–557 ms**. That is no faster than the CPU path's first
+  fit view, about 550 ms (P5 S4), because unpacking dominates.
+- What the GPU removes is the CPU demosaic and half-size render. The CPU only unpacks, and a sharp
+  100 % view needs no further CPU work.
+
+**Not reliable:** the GPU times measured in the page (0.1–0.6 ms). `gl.finish` under ANGLE/D3D11 does
+not wait for the GPU, so only on-screen times are used.
+
+**Memory:** the process tree used 0.8–0.9 GB with one image on the GPU. The A7R Bayer texture is
+about 122 MB, plus the half-size texture.
+
+### 14.3 Orientation check (2026-11-05)
+
+**Test set** (ExifTool; `D:\PhotoWorkflowData\analysis\phase3\p6\orient\exif.txt`):
+
+| Camera | Files | Orientation |
+|---|---|---|
+| A7R IVA (ILCE-7RM4A) | all 5 | **vertical**, Orientation 8, "Rotate 270 CW" |
+| Panasonic GM1 | P1240235 vertical (Orientation 8); P1240231, P1240233, P1240236 horizontal | mixed |
+| A1 (ILCE-1) | all files | horizontal |
+| Ricoh GR III DNG, Xiaomi DNG | both orientations | not in P6 |
+
+The comparison of a vertical and a horizontal file from the same camera is the GM1 pair, P1240235
+against P1240231/33/36. There is **no horizontal A7R file** in the test set.
+
+| Question | Finding |
+|---|---|
+| 1. Was the orientation tag read and used? | **Read, not used.** The shim passes LibRaw's `sizes.flip` to the page, and the page ignores it. Vertical images were therefore shown on their side in P6 |
+| 2. Did LibRaw and the shader get the same orientation and size? | **Yes.** Both work in sensor orientation: the references were rendered with `user_flip = 0`, and the shader indexes the sensor grid. Proof: GPU `linear` = LibRaw `linear` (ΔE00 0.00, SSIM 1.0000) for the vertical files (A7R ×5, GM1 P1240235) as for the horizontal ones (GM1 ×3, A1 ×2). A mismatch in orientation or size would have given large differences, or a failed crop |
+| 3. Bayer pattern, black level and crop for vertical images? | **Correct.** The CFA pattern, black levels and visible-area crop are defined on the sensor grid, before any rotation, and orientation does not enter them. The exact `linear` match on the vertical files confirms it |
+| 4. Was the result rotated after demosaicing, or did orientation affect the demosaic step? | **Neither.** The result was never rotated, and orientation did not touch the demosaic step. That is the right order; only the final rotation for display was missing |
+| 5. Were the PPG and AHD comparisons made with matched orientation? | **Yes**, both in sensor orientation (`user_flip = 0`). The P4b comparisons were also matched: each method's region was rotated the same way before the metrics were computed |
+| 6. Did orientation affect the performance figures? | **Not materially.** The 100 % region was 1920×1129 in sensor coordinates. For a vertical image shown upright, the region would be 1129×1920: the same number of pixels and the same shader work. The fit pass handles the whole image either way; only the final blit draws a differently sized area (the image was shown on its side). Panning was not measured in P6. P4/P5 already swapped the view size for flip 5/6 |
+
+**Conclusions:**
+
+- **The P6 results remain valid.** The quality comparisons do not need to be redone, because
+  orientation was matched and the exact linear match on vertical and horizontal files from the same
+  camera shows it.
+- **The performance figures do not need to be redone.** The images were shown on their side, but the
+  pixel count and GPU work are the same.
+- **Missing, and needed in P6b and in the app:**
+  1. rotation for display, after demosaicing (flip 3/5/6 as a UV transform when drawing);
+  2. mapping the visible screen rectangle to a sensor rectangle, with the size swapped for flip 5/6
+     and the position mapped (V6, relative point in the oriented image);
+  3. comparisons kept in sensor orientation, or both sides rotated the same way.
+- **The test set is lopsided:** the A7R set is all vertical and the A1 set all horizontal. P6b should
+  include a horizontal A7R file (none is available yet), or the Ricoh GR III DNG pair.
+
+### 14.4 Remaining uncertainties
+
+- **VRAM:** not measured. WebGL2 exposes no VRAM figure. The process tree's private bytes do not
+  show VRAM, and wgpu's allocator report (P3) was not available on Vulkan.
+- **WebGL context loss:** not tested. Nothing was reconstructed after a loss, and the Bayer textures
+  would then have to be uploaded again.
+- **Stepping throughput with GPU demosaicing:** not measured. The CPU work per image falls to unpack
+  only (about 290 ms for A7R), but the copy and upload (about 110 ms) are added.
+- **Panning at 100 % with the Bayer data on the GPU:** not measured.
+- **Texture budget:** each image held on the GPU costs about 122 MB for A7R and about 100 MB for A1
+  (Bayer) plus the half-size texture. It has to fit the V8 budget together with the 4 GB core budget
+  (section 13.3).
+- **The in-page GPU times are unreliable** under ANGLE (14.2).
+- **DPI change and another screen:** postponed by the owner (section 13.3).
+
+### 14.5 Next prototype: P6b, PPG as a GPU shader (planned, not started)
+
+P6b starts only after the owner's explicit approval. The PPG shader may not enter the app before its
+results have been reviewed and approved.
+
+1. **Images and methods:**
+   - the same test images as P4b/P6: A7R ×5, GM1 ×4, A1 ×2;
+   - a horizontal A7R file if the owner provides one, or the Ricoh GR III DNG pair;
+   - the same metrics (section 8.3).
+2. **Quality:** against LibRaw PPG (target: as close to identical as P6 `linear`) and against AHD.
+3. **Orientation:** rotation for display after demosaicing, screen-to-sensor mapping, and both
+   horizontal and vertical files (14.3).
+4. **Time:** image change, cold start, Z and panning at 100 %, on screen with latency.ps1.
+5. **Stepping:** back and forth, and fast continuous stepping (as P5 S2, S5 and MIX), with GPU
+   demosaicing.
+6. **Memory:** VRAM and the texture budget against the 4 GB decision (section 12) and V8, as far as
+   it can be measured.
+7. **Context loss:** recovery after a WebGL context loss, forced with `WEBGL_lose_context`.
+
+Rules for P6b:
+
+- no new dependencies without approval;
+- no change to the app's code;
+- no commits during the investigation;
+- the finished and reported prototype is committed as its own commit.
 

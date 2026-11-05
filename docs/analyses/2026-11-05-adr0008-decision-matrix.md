@@ -86,11 +86,25 @@ run within a few ms.
 2. **A fit-sized rendition for the A1** (for example libjpeg-turbo scaled to 1/4, as in P0) would
    make the fit swap a 1920 px upload instead of 199 MB in B2 and A-up. That is not measured on screen.
    libjpeg-turbo in the app needs approval.
-3. **P6 (GPU demosaicing)** is the only candidate for the cold-start and fast-stepping cases in RAW
-   mode (V5, V7 cold, V4 RAW). It is not measured.
+3. **P6 (GPU demosaicing)** is measured; see "P6" below and ADR 0008 §14. It helps zoom without a
+   pre-rendered view, but not cold start or image change.
 4. **VRAM and presenter memory under the V8 budget** are not measured for any presenter.
 5. **The three robustness points** (DPI change, another screen, GPU device loss) are postponed by the
    owner.
+
+## P6: GPU demosaicing inside B2-res (added 2026-11-05, ADR 0008 §14)
+
+The presenter is B2-res in both columns below. The columns differ only in where demosaicing runs.
+
+| Requirement (target) | CPU PPG, prepared views (§12) | GPU demosaic, Bayer data on the GPU (P6, MHC) |
+|---|---|---|
+| **V3 / V7** Z ≤ 30 ms, prepared | ✓ 13 / 44 ms (pre-rendered view) [M] | ✓ for any position, no pre-render needed: on screen 12–33 ms, median about 26, 18 of 20 within 30 ms [M] |
+| **V7** Z cold or at a new position | ✗ 40–46 ms to memory, plus the presenter [M] | ✓ / ≈ as above, once the Bayer data is on the GPU [M] |
+| **V5 / V4** cold start, image change (RAW) | ✗ about 550 ms to the first view (A7R) [M] | ✗ 533–557 ms on screen (A7R); unpack dominates [M] |
+| Fast stepping (RAW) | ✗ the CPU does not keep up at ≥ 4/s [M] | ? CPU work per image is unpack only, plus about 110 ms of copy and upload; not measured |
+| Quality against AHD | PPG: ΔE00 1.03 (A7R), zipper 0.9 [M] | MHC: ΔE00 1.60 (A7R), zipper 1.2–2.2. **Below PPG** [M]. P6b (PPG shader) planned |
+| **V8** memory | 4 GB core budget [M] | Plus about 122 MB of Bayer texture per A7R image on the GPU. VRAM is not measurable in WebGL2 |
+| Orientation | P4/P5 swap the view for flip 5/6 [M] | Demosaicing in sensor orientation, correct; rotation for display missing in the prototype (§14.3) |
 
 ## Summary of what the matrix shows (not a decision)
 
@@ -104,4 +118,6 @@ run within a few ms.
   dependencies and had no focus problem. A needs wgpu, Tauri's `unstable` feature and a focus fix.
 - **Upload-on-swap variants (B2, A-up) are at the limit**, at 30 ms in the median, and too slow for
   whole large images.
-- **No presenter fixes cold start or fast stepping in RAW mode.** That is the CPU (P6).
+- **No presenter fixes cold start or fast stepping in RAW mode.** P6 confirmed that unpacking is
+  the limit for cold start. GPU demosaicing helps zoom at any position, and its quality depends on the
+  method: MHC is below PPG, and P6b is planned.
