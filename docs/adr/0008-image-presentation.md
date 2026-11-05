@@ -12,6 +12,10 @@
   - **Amendment 4 (2026-11-05):** P6 results (GPU demosaicing in B2) and the orientation check. No new
     decision: PPG stays the default method and AHD the quality reference. P6b (PPG as a GPU shader) is
     planned and waits for the owner's approval. See section 14.
+  - **Amendment 5 (2026-11-05):** P6b results (PPG as a GPU shader in B2-res). No production decision:
+    PPG stays the default method and AHD the quality reference. GPU PPG is a promising candidate for
+    production, with open questions on dead-pixel correction, the memory budget, the texture cache size
+    and the CPU unpack. GPU PPG does not solve the slow unpack of new RAW files. See section 15.
   - New dependencies (wgpu or another GPU library) still need separate approval before they are added or
     installed. libjpeg-turbo was approved for prototype P0 on 2026-11-05; using it in the app is a
     separate decision.
@@ -630,9 +634,16 @@ comparable.
 7. ~~Scheduling and memory budget (V8)~~ – decided 2026-11-05 after P4/P5: the strategy in 12.1, with a
    4 GB default budget.
 8. ~~Presenter~~ – decided 2026-11-05: B2-res (section 13).
-9. ~~P6~~ – done 2026-11-05 (section 14). Next: P6b, a PPG GPU shader (14.5), **only after the owner's
-   approval**. libjpeg-turbo in the app still needs separate approval.
+9. ~~P6~~ – done 2026-11-05 (section 14). ~~P6b~~ – done 2026-11-05 and approved by the owner as a
+   finished prototype (section 15). libjpeg-turbo in the app still needs separate approval.
    Postponed by the owner: DPI change, moving to another screen, GPU device loss.
+10. GPU PPG in production – **open**, not decided. To be answered first (15.4):
+    - dead-pixel correction before GPU processing: a proposed step, not implemented or verified; other
+      camera models must be examined too;
+    - whether the 4 GB budget covers the WebView2 GPU process and its memory use (unclear);
+    - how a smaller texture cache (preliminary, unverified estimate about 1.3–1.4 GB) affects P5 hit
+      rates and stepping;
+    - a faster CPU unpack without lower image quality.
 
 ## 11. Amendment 1: demosaic method (owner decision, 2026-11-05)
 
@@ -949,7 +960,7 @@ against P1240231/33/36. There is **no horizontal A7R file** in the test set.
 - **The in-page GPU times are unreliable** under ANGLE (14.2).
 - **DPI change and another screen:** postponed by the owner (section 13.3).
 
-### 14.5 Next prototype: P6b, PPG as a GPU shader (planned, not started)
+### 14.5 Next prototype: P6b, PPG as a GPU shader (planned; done 2026-11-05, see section 15)
 
 P6b starts only after the owner's explicit approval. The PPG shader may not enter the app before its
 results have been reviewed and approved.
@@ -975,3 +986,228 @@ Rules for P6b:
 - no commits during the investigation;
 - the finished and reported prototype is committed as its own commit.
 
+
+## 15. Amendment 5: P6b results, PPG as a GPU shader (2026-11-05)
+
+**No production decision.** PPG stays the decided default demosaic method and AHD the quality
+reference (section 11). The presenter stays B2-res (section 13), and the scheduling strategy and the
+4 GB budget stay as decided (section 12).
+
+The GPU version of PPG is a **promising candidate for a production implementation**. It is not
+approved for the app. The open questions in 15.4 must be answered first, and the owner must decide.
+
+### 15.1 What P6b did
+
+- **Prototype:** `prototypes/phase3/p6b-gpu-ppg`, commit `a44643a`. It is not part of the app and
+  adds no new dependencies.
+- **Raw data:** `D:\PhotoWorkflowData\analysis\phase3\p6b\`:
+  - `p6b-bench.json`;
+  - `p6b-latency.csv`;
+  - PPM crops in `crops\`.
+- **Machine:** thanos, Intel Arc B580, WebGL2 through ANGLE on D3D11.
+- **Pipeline:** as in P6 (14.1).
+  - LibRaw unpacks on the CPU.
+  - The Bayer data goes through a WebView2 shared buffer into an R16UI texture and stays on the GPU.
+  - Black level, white balance, matrix and output curve are done in the shader.
+- **What is new:**
+  1. **PPG demosaicing on the GPU:** dcraw `ppg_interpolate` in two WebGL2 passes, only for the
+     visible region.
+     - Pass 1: green at R/B sites, written to an R16UI target.
+     - Pass 2: R/B at G sites and at R/B sites, followed by colour conversion and the output curve.
+  2. **Rotation for display:** each screen pixel is mapped to the upright image, and then through
+     flip 3/5/6 to sensor coordinates (14.3).
+  3. **A GPU texture cache:** a budget with LRU eviction, prefetch of ±1 and +2, and the stepping
+     scenarios from P5.
+  4. **GPU memory per process tree:** Windows PDH counters "GPU Process Memory", dedicated and shared,
+     including the WebView2 processes.
+  5. **Context loss:** forced with `WEBGL_lose_context`.
+- **Files:**
+  - A7R IVA ×5, 9568×6376, all vertical;
+  - GM1 RW2 ×4, 4608×3464, one vertical and three horizontal;
+  - A1 ×2, 8660×5784, horizontal;
+  - Ricoh GR III DNG ×2, 6020×4024: TN002512 horizontal, TN002513 vertical.
+- **Comparison:** a 1920×1080 region at the image centre, against LibRaw PPG and AHD rendered for
+  the same sensor rectangle (`cropbox`). The region was compared in sensor orientation and, rotated,
+  against LibRaw's own rotation (`user_flip = -1`).
+
+### 15.2 Results [M]
+
+**1. GPU PPG against LibRaw PPG**
+
+| Files | Identical pixels | Max channel difference (8 bit) | ΔE00 mean / p99 |
+|---|---|---|---|
+| A7R ×5 | 99.990–100.000 % | 1–4 | ≤ 0.0001 / 0.00 |
+| A1 ×2 | 100.000 % | 1 | 0.0000 / 0.00 |
+| Ricoh GR III DNG ×2 | 100.000 % | 1 | 0.0000 / 0.00 |
+| GM1 RW2 ×4 | 99.984–99.989 % | 115–216 | 0.0005–0.0008 / 0.00 |
+
+- **On A7R, A1 and Ricoh, GPU PPG reproduces LibRaw PPG.** At least 99.98 % of the pixels are
+  identical, and ΔE00 is in practice 0. The remaining differences are rounding of one or a few steps.
+- **Against AHD:** GPU PPG has the same distance to AHD as LibRaw PPG to the third decimal on every
+  file. Zipper against LibRaw PPG is 1.000 (1.006 on P1240235).
+  - The quality decided in section 11 is therefore reached.
+  - The zipper problem of MHC in P6 (14.2) does not occur.
+- **Pipeline check:** GPU `linear` against LibRaw `linear` gives ΔE00 0.0000 on every file except
+  GM1. The GM1 exception has the same cause as below.
+
+**2. The GM1 deviation and its cause**
+
+- **Where:** on GM1, the differing pixels gather in about 15 small clusters per region, 3×3 to 7×7
+  pixels each.
+- **Cause:**
+  - Each cluster has a sensor pixel with the raw value 0 at its centre, a defective (dead) pixel.
+  - For Panasonic files, LibRaw replaces such pixels before demosaicing (`zero_is_bad`, in
+    `remove_zeroes`). The new value is the average of the non-zero pixels of the same CFA colour
+    around it.
+  - The prototype does not do this. The shader treats the 0 as a real value, and PPG spreads it to
+    the neighbouring pixels.
+- **It is not a demosaicing error.** GPU `linear` shows the same small deviation on GM1.
+- **Proposed preprocessing step on the CPU, before GPU processing.** It is **not implemented and not
+  verified**; P6b did not test it.
+  - **What it would do:** after unpacking and before upload, replace each zero pixel in the visible
+    Bayer area when LibRaw marks the file as `zero_is_bad`.
+  - **How:** the same way as LibRaw, with the average of the non-zero same-colour neighbours.
+  - **Expected cost:** small next to the unpack, since zero pixels are few. Not measured.
+  - **Why on the CPU:** the shader would stay the same for every camera.
+  - **Expected effect:** GM1 matches LibRaw PPG as closely as the other cameras. That has to be
+    verified with the same comparison as in this section.
+- **Other camera models must also be examined.**
+  - P6b covers four models: A7R IVA, A1, GM1 and Ricoh GR III.
+  - For each model the app supports, it has to be checked which corrections LibRaw makes before
+    demosaicing under the ADR 0006 settings, for example zero pixels or bad-pixel maps if they are
+    turned on.
+  - It also has to be checked whether GPU PPG then matches LibRaw PPG.
+
+**3. Orientation**
+
+- **Vertical images** (A7R ×5, GM1 P1240235, Ricoh TN002513): rotated by the shader and compared
+  with LibRaw `user_flip = -1`, for a 1080×1920 region in the upright image. The result is
+  99.98–100.000 % identical, the same as in sensor orientation.
+- **Horizontal images** (GM1 ×3, A1 ×2, Ricoh TN002512): the same result as in sensor orientation.
+- On screen, vertical images display upright in both fit and 100 %. Panning follows the upright
+  image.
+
+**4. Zoom, panning and prefetched image changes: the image's Bayer data is already on the GPU**
+(A7R, all vertical; on screen, latency.ps1)
+
+These results apply only when the image is already unpacked and uploaded, either because it is shown
+or because it was prefetched. A new RAW image that is not prefetched is covered in point 5.
+
+| Action | Median | Max | ≤ 30 ms |
+|---|---|---|---|
+| Z, fit ↔ 100 % (PPG of the visible region) | 18.2 ms | 47 ms | 14 of 20 |
+| Panning at 100 % (PPG per frame) | 20.1 ms | 36 ms | 16 of 20 |
+| Next image, prefetched, fit (1500 ms gap) | 22.9 ms | 44 ms | 9 of 12 |
+| Next image, prefetched, 100 % with PPG (1500 ms gap) | 28.4 ms | 37 ms | 7 of 12 |
+
+- No pre-rendered view is needed; any position and zoom is computed from the Bayer data on the GPU.
+- For comparison:
+  - P6 MHC took a median of about 26 ms for Z;
+  - CPU Z cold took 40–46 ms to memory, before the presenter (12.2).
+- In the bench, stepping with prefetch showed every image within 30 ms:
+  - natural pace, 300–1500 ms per step: 25 of 25;
+  - back and forth 1–3 steps, 800 ms: 12 of 12.
+- Without prefetch, only 9 of 25 steps were within 30 ms, with a median of 216 ms.
+- The page's own GPU times (0.3–0.7 ms) are unreliable under ANGLE (14.2) and are not used.
+
+**5. New RAW image change, cold (not prefetched): limited by the CPU unpack**
+
+| | Total in the page | Open + unpack (CPU) | Upload to GPU |
+|---|---|---|---|
+| A7R | 483–517 ms | **321–334 ms (about 330 ms)** | 91–94 ms |
+| A1 | 402–404 ms | 266–268 ms | 74 ms |
+| GM1 | 212–214 ms | 167–170 ms | 23 ms |
+| Ricoh DNG | 588–647 ms | 522–584 ms | 35 ms |
+
+A new, not prefetched RAW image is **not faster than the CPU path**, about 550 ms for A7R (P5 S4).
+The time is dominated by LibRaw's unpack on the CPU, about 330 ms for A7R. **GPU PPG does not solve the
+slow unpack of new RAW files.** GPU demosaicing removes
+the CPU demosaic and half-size render, but not the unpack.
+
+**6. Fast RAW stepping (A7R, bench, every step a new image)**
+
+| Pace | Images shown | Of those within 30 ms |
+|---|---|---|
+| 4 images/s, prefetch | 7 of 20 | 1 |
+| 7 images/s, prefetch | 2 of 20 | 1 |
+
+- Fast stepping still does not keep up. About 500 ms per new A7R image allows at most about 2
+  images/s, and the "latest wins" rule skips the rest.
+- In RAW mode, fast stepping still needs the embedded preview, as in strategy p5 (section 12).
+- The on-screen run at a 400 ms gap (median 43 ms, max 81 ms) cycled through five images that were all
+  in the cache. It is optimistic and is not used as evidence.
+
+**7. Memory: textures use both GPU and system memory**
+
+| State | Texture cache | GPU dedicated | GPU shared | Process tree, private |
+|---|---|---|---|---|
+| Start | 0 | 56 MB | 3 MB | 0.2 GB |
+| One A7R image | 175 MB | 259 MB | 316 MB | 0.8–0.9 GB |
+| Cache full (2 GB texture budget) | 1.9–2.0 GB | 2.0–2.4 GB | 2.0–2.3 GB | **4.8–5.4 GB** |
+| Back to one image | 175 MB | 422 MB | 332 MB | 1.4 GB |
+
+- **Under ANGLE/D3D11 each texture also occupies system memory.** The "shared" counter is about the
+  size of the cache, and the process tree grows by about 2.3 times the cache size.
+- **A 2 GB texture cache gives about 5.4 GB in total** for the process tree [M].
+- **It is unclear whether the 4 GB budget (section 12) should cover the WebView2 GPU process and its
+  memory use.**
+  - Section 12 set the budget for the core's caches.
+  - Whether the presenter's textures, and the GPU and system memory they take in the WebView2 GPU
+    process, count in the same 4 GB is not decided (15.4).
+- **Preliminary estimate [T], not verified:** if the whole process tree must stay within 4 GB, the
+  texture cache would need to be about **1.3–1.4 GB**.
+  - The figure is (4 GB − about 0.65 GB base) / 2.3, with a margin.
+  - That is room for about 7–8 A7R images.
+  - It extrapolates from one run with one cache size. A cache of that size was not run, and the core's
+    own caches were not loaded at the same time.
+- Memory is returned when the cache shrinks.
+- One A7R image takes about 175 MB in the cache: the Bayer texture plus the half-size texture.
+
+**8. WebGL context loss** (forced, zoomed vertical image)
+
+- The `webglcontextrestored` event arrives after 30 ms.
+- Rebuilding the shaders, reloading the current image (unpack and upload) and drawing it takes 509 ms.
+- **The view is back after about 0.5 s (539 ms in all), at the same zoom and position.**
+- All textures are lost. The cache is filled again by prefetch as the user steps on.
+
+### 15.3 Assessment (not a decision)
+
+- **Quality:** on A7R, A1 and Ricoh, GPU PPG gives the same image as LibRaw PPG.
+  - GM1 deviates at zero pixels. The proposed preprocessing step (15.2 point 2) is expected to remove
+    that, but it is not implemented or verified.
+  - Other camera models are not examined.
+- **Orientation:** correct for vertical and horizontal images.
+- **Performance, image already on the GPU** (shown or prefetched): better than the CPU path for Z,
+  panning and image changes, without any pre-rendered zoom view.
+- **Performance, new RAW image (cold) and fast stepping:** no better than the CPU path. The unpack of
+  about 330 ms per A7R limits, and GPU PPG does not solve that.
+- **Memory:** this is the main obstacle.
+  - The texture budget must be set from measured total use, not from texture bytes.
+  - Whether the 4 GB covers the WebView2 GPU process is undecided.
+- **Robustness:** context loss is handled. DPI change, moving to another screen and GPU device loss
+  are still postponed by the owner (13.3).
+
+### 15.4 Open questions before a production decision
+
+1. **Dead-pixel correction before GPU processing:**
+   - implement the proposed preprocessing step of 15.2 point 2;
+   - verify that GM1 then matches LibRaw PPG like the other cameras;
+   - examine other camera models for LibRaw corrections made before demosaicing.
+2. **How system and GPU memory count in the common 4 GB budget:**
+   - It is unclear whether the budget covers the WebView2 GPU process and its memory use, both GPU
+     memory and system memory.
+   - How are the core's caches (section 12) and the texture cache divided?
+   - Can GPU memory be measured reliably in the app (PDH)?
+3. **A smaller texture cache:** the preliminary 1.3–1.4 GB is not verified.
+   - Measure the total use at that cache size.
+   - Measure how it affects P5 hit rates and stepping performance, especially back and forth and
+     natural stepping with prefetch.
+4. **Faster CPU unpack without lower image quality:** for example, unpacking in parallel with the
+   previous image's upload, prefetching more images, or a faster unpack per format. Any route must
+   give the same Bayer data as today's LibRaw unpack.
+
+Rules that still apply:
+
+- no new dependencies without approval;
+- the PPG shader enters the app only after an owner decision;
+- requirements V1–V8 and G1–G4 are unchanged.

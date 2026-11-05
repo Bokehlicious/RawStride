@@ -4,8 +4,9 @@
 - Basis:
   - ADR 0008 §8.3 (decision matrix), §11 (PPG) and §12 (scheduling, 4 GB);
   - phase 1 (P0, P4b, P4, P5);
-  - phase 2 (P2, P3) and the robustness checks by hand.
-- Raw data: `D:\PhotoWorkflowData\analysis\phase1\` and `...\phase2\`.
+  - phase 2 (P2, P3) and the robustness checks by hand;
+  - phase 3 (P6, P6b), ADR 0008 §14 and §15.
+- Raw data: `D:\PhotoWorkflowData\analysis\phase1\`, `...\phase2\` and `...\phase3\`.
 - Status: **for the owner's decision.** The matrix shows measured values against the targets. It
   does not choose.
 
@@ -35,8 +36,9 @@
   - **A-up:** wgpu surface. Each image is uploaded from RAM to the GPU on the swap.
   - **A-res:** wgpu surface. Prepared views are already GPU textures (a VRAM cache), so the swap is
     a draw only.
-- **CPU and GPU demosaicing:** every column uses CPU demosaicing (PPG). GPU demosaicing (P6) is not
-  measured yet. The rows it could change are marked "P6".
+- **CPU and GPU demosaicing:** every column of the main matrix uses CPU demosaicing (PPG). The rows that
+  GPU demosaicing could change are marked "P6". GPU demosaicing is measured separately in the P6/P6b
+  section below.
 
 ## Presenter alone, data ready in RAM (on screen, median / p95)
 
@@ -86,25 +88,38 @@ run within a few ms.
 2. **A fit-sized rendition for the A1** (for example libjpeg-turbo scaled to 1/4, as in P0) would
    make the fit swap a 1920 px upload instead of 199 MB in B2 and A-up. That is not measured on screen.
    libjpeg-turbo in the app needs approval.
-3. **P6 (GPU demosaicing)** is measured; see "P6" below and ADR 0008 §14. It helps zoom without a
-   pre-rendered view, but not cold start or image change.
-4. **VRAM and presenter memory under the V8 budget** are not measured for any presenter.
+3. **P6 and P6b (GPU demosaicing)** are measured; see "P6 and P6b" below and ADR 0008 §14–§15.
+   - GPU PPG gives the same image as LibRaw PPG.
+   - When the image is already on the GPU (shown or prefetched), it helps zoom, panning and image
+     changes without a pre-rendered view.
+   - It does not help a cold change to a new RAW file or fast stepping. The CPU unpack, about 330 ms
+     for A7R, limits.
+4. **VRAM and presenter memory under the V8 budget:** measured for B2-res with GPU textures in P6b.
+   - Textures also take system memory.
+   - A 2 GB texture cache gives about 5.4 GB in total.
+   - It is unclear whether the 4 GB budget covers the WebView2 GPU process and its memory use (ADR
+     0008 §15.4).
+   - Not measured for the other presenters.
 5. **The three robustness points** (DPI change, another screen, GPU device loss) are postponed by the
    owner.
 
-## P6: GPU demosaicing inside B2-res (added 2026-11-05, ADR 0008 §14)
+## P6 and P6b: GPU demosaicing inside B2-res (added 2026-11-05, ADR 0008 §14; P6b column added 2026-11-05, §15)
 
-The presenter is B2-res in both columns below. The columns differ only in where demosaicing runs.
+The presenter is B2-res in all columns below. The columns differ only in where demosaicing runs and
+with which method. The P6b times are on screen, A7R (vertical), latency.ps1, median / max.
 
-| Requirement (target) | CPU PPG, prepared views (§12) | GPU demosaic, Bayer data on the GPU (P6, MHC) |
-|---|---|---|
-| **V3 / V7** Z ≤ 30 ms, prepared | ✓ 13 / 44 ms (pre-rendered view) [M] | ✓ for any position, no pre-render needed: on screen 12–33 ms, median about 26, 18 of 20 within 30 ms [M] |
-| **V7** Z cold or at a new position | ✗ 40–46 ms to memory, plus the presenter [M] | ✓ / ≈ as above, once the Bayer data is on the GPU [M] |
-| **V5 / V4** cold start, image change (RAW) | ✗ about 550 ms to the first view (A7R) [M] | ✗ 533–557 ms on screen (A7R); unpack dominates [M] |
-| Fast stepping (RAW) | ✗ the CPU does not keep up at ≥ 4/s [M] | ? CPU work per image is unpack only, plus about 110 ms of copy and upload; not measured |
-| Quality against AHD | PPG: ΔE00 1.03 (A7R), zipper 0.9 [M] | MHC: ΔE00 1.60 (A7R), zipper 1.2–2.2. **Below PPG** [M]. P6b (PPG shader) planned |
-| **V8** memory | 4 GB core budget [M] | Plus about 122 MB of Bayer texture per A7R image on the GPU. VRAM is not measurable in WebGL2 |
-| Orientation | P4/P5 swap the view for flip 5/6 [M] | Demosaicing in sensor orientation, correct; rotation for display missing in the prototype (§14.3) |
+| Requirement (target) | CPU PPG, prepared views (§12) | GPU demosaic, Bayer data on the GPU (P6, MHC) | GPU PPG, Bayer data on the GPU (P6b) |
+|---|---|---|---|
+| **V3 / V7** Z ≤ 30 ms, prepared | ✓ 13 / 44 ms (pre-rendered view) [M] | ✓ for any position, no pre-render needed: on screen 12–33 ms, median about 26, 18 of 20 within 30 ms [M] | ✓ 18 / 47 ms, 14 of 20 within 30 ms, any position, no pre-render [M] |
+| **V7** Z cold or at a new position | ✗ 40–46 ms to memory, plus the presenter [M] | ✓ / ≈ as above, once the Bayer data is on the GPU [M] | New position in an image already on the GPU: ✓ / ≈ as above [M]. A new RAW image that is not prefetched has to be unpacked first: ✗, see the next row |
+| **V5 / V4** cold start, image change (RAW) | ✗ about 550 ms to the first view (A7R) [M] | ✗ 533–557 ms on screen (A7R); unpack dominates [M] | ✗ 483–517 ms in the page (A7R); unpack about 330 ms dominates. GPU PPG does not solve this [M] |
+| Fast stepping (RAW) | ✗ the CPU does not keep up at ≥ 4/s [M] | ? CPU work per image is unpack only, plus about 110 ms of copy and upload; not measured | ✗ 4/s: 7 of 20 images shown; 7/s: 2 of 20 [M]. With prefetch at a natural pace: 25 of 25 within 30 ms [M] |
+| Quality against AHD | PPG: ΔE00 1.03 (A7R), zipper 0.9 [M] | MHC: ΔE00 1.60 (A7R), zipper 1.2–2.2. **Below PPG** [M]. P6b: see the next column | = LibRaw PPG: ≥ 99.98 % identical pixels, ΔE00 ≈ 0 on A7R, A1 and Ricoh; the same distance to AHD as CPU PPG. GM1 deviates at dead (zero) pixels that LibRaw corrects. A preprocessing step before upload is proposed, not implemented or verified. Other camera models are not examined [M] |
+| **V8** memory | 4 GB core budget [M] | Plus about 122 MB of Bayer texture per A7R image on the GPU. VRAM is not measurable in WebGL2 | ✗ / ? textures also use system memory: a 2 GB texture cache gives 5.4 GB in total. Whether the 4 GB budget covers the WebView2 GPU process is unclear. If it does, about 1.3–1.4 GB of cache would fit: a preliminary, unverified estimate [M]/[T] |
+| Orientation | P4/P5 swap the view for flip 5/6 [M] | Demosaicing in sensor orientation, correct; rotation for display missing in the prototype (§14.3) | ✓ rotation for display and screen-to-sensor mapping; vertical and horizontal equal to LibRaw with `user_flip = -1` [M] |
+| Panning at 100 % | – (pre-rendered region only) | – | ✓ / ≈ 20 / 36 ms, 16 of 20 within 30 ms [M] |
+| Image change, prefetched (image already on the GPU) | ✓ 13 / 44 ms (B2-res, §13) [M] | – | ✓ / ≈ fit 23 / 44 ms; 100 % with PPG 28 / 37 ms [M]. Applies only to prefetched images; cold changes are in the V5/V4 row |
+| WebGL context loss | – | – | ✓ view back after about 0.5 s at the same zoom and position [M] |
 
 ## Summary of what the matrix shows (not a decision)
 
@@ -118,6 +133,17 @@ The presenter is B2-res in both columns below. The columns differ only in where 
   dependencies and had no focus problem. A needs wgpu, Tauri's `unstable` feature and a focus fix.
 - **Upload-on-swap variants (B2, A-up) are at the limit**, at 30 ms in the median, and too slow for
   whole large images.
-- **No presenter fixes cold start or fast stepping in RAW mode.** P6 confirmed that unpacking is
-  the limit for cold start. GPU demosaicing helps zoom at any position, and its quality depends on the
-  method: MHC is below PPG, and P6b is planned.
+- **No presenter fixes cold start or fast stepping in RAW mode.** P6 and P6b confirm that the CPU
+  unpack is the limit, about 330 ms for A7R.
+- **GPU PPG (P6b) keeps the PPG quality on the cameras tested**, except at GM1 zero pixels. When
+  the image is already on the GPU, it makes zoom, panning and prefetched image changes fast without
+  pre-rendering.
+- **It does not solve the slow unpack of new RAW files.**
+  - It is a promising candidate for production, but there is no production decision.
+  - Open (ADR 0008 §15.4):
+    - dead-pixel correction before upload: a proposed step, not implemented or verified; other
+      camera models must be examined too;
+    - whether the 4 GB budget covers the WebView2 GPU process and its memory use (unclear);
+    - the effect of a smaller texture cache (preliminary, unverified estimate about 1.3–1.4 GB) on hit
+      rates;
+    - a faster unpack without lower quality.
