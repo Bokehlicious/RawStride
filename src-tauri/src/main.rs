@@ -1,4 +1,4 @@
-//! PhotoWorkflow – Tauri 2 application shell (milestone 1: browse and view).
+//! PhotoWorkflow – Tauri 2 application shell: browse, view and rate (RAW, DNG, JPEG, TIFF).
 //!
 //! The frontend (`ui/web`) talks to Rust through a handful of commands and loads image bytes
 //! through the `pw://` URI scheme (`http://pw.localhost/…` on Windows). That scheme only serves
@@ -6,6 +6,13 @@
 //! accepts a file path, so it cannot be used to read arbitrary files.
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
+mod imaging;
+mod bench;
+mod ingest;
+mod ratings;
+mod rawview;
+mod tiff_view;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -48,12 +55,40 @@ impl AppState {
             lib.files.get(index).cloned().ok_or("no such image")?
         };
         // Inspect without holding the lock (file I/O).
-        let info = Arc::new(pw_raw::inspect(&path).map_err(|e| e.to_string())?);
+        let info = Arc::new(inspect(&path)?);
         let mut lib = self.lock();
         if lib.generation == generation {
             lib.info.insert(index, info.clone());
         }
         Ok((path, info))
+    }
+
+    /// Drops the cached inspection of one file (after its metadata was rewritten in place,
+    /// which can move embedded previews inside the file).
+    pub(crate) fn forget(&self, generation: u64, index: usize) {
+        let mut lib = self.lock();
+        if lib.generation == generation {
+            lib.info.remove(&index);
+        }
+    }
+}
+
+/// pw-raw inspection; plain TIFFs it cannot read (e.g. BigTIFF) still open with the decoder's
+/// image size, without EXIF.
+fn inspect(path: &Path) -> Result<ImageInfo, String> {
+    match pw_raw::inspect(path) {
+        Ok(i) => Ok(i),
+        Err(e) if pw_raw::is_tiff_file(path) => {
+            let (w, h) = tiff_view::dimensions(path).map_err(|t| format!("{e}; {t}"))?;
+            Ok(ImageInfo {
+                format: Some(pw_raw::Format::Tiff),
+                orientation: 1,
+                width: Some(w),
+                height: Some(h),
+                ..ImageInfo::default()
+            })
+        }
+        Err(e) => Err(e.to_string()),
     }
 }
 
@@ -62,6 +97,9 @@ struct FileEntry {
     index: usize,
     name: String,
     size: u64,
+    /// Ratings/labels can be stored for this file (XMP sidecar for RAW, embedded for
+    /// DNG/JPEG/TIFF).
+    ratable: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -97,6 +135,8 @@ struct ImageDetails {
     width: Option<u32>,
     height: Option<u32>,
     is_jpeg_file: bool,
+    /// Plain TIFF: the previews below are decoded from the image data, not embedded JPEGs.
+    is_tiff_file: bool,
     previews: Vec<PreviewDto>,
     small: Option<PreviewDto>,
     medium: Option<PreviewDto>,
@@ -146,7 +186,11 @@ fn initial_folder() -> Option<String> {
 }
 
 #[tauri::command]
-async fn open_folder(path: String, state: State<'_, AppState>) -> Result<FolderListing, String> {
+async fn open_folder(
+    path: String,
+    state: State<'_, AppState>,
+    raw: State<'_, rawview::RawView>,
+) -> Result<FolderListing, String> {
     let mut folder = PathBuf::from(&path);
     // A dropped or passed file opens its folder.
     if folder.is_file()
@@ -160,6 +204,8 @@ async fn open_folder(path: String, state: State<'_, AppState>) -> Result<FolderL
     lib.folder = Some(folder.clone());
     lib.info.clear();
     lib.files = files.iter().map(|(p, _)| p.clone()).collect();
+    // RAW rendering of the old folder is dropped (queue, caches, LibRaw sessions).
+    raw.folder_opened(lib.generation);
     Ok(FolderListing {
         generation: lib.generation,
         folder: folder.display().to_string(),
@@ -173,6 +219,7 @@ async fn open_folder(path: String, state: State<'_, AppState>) -> Result<FolderL
                     .map(|n| n.to_string_lossy().into_owned())
                     .unwrap_or_default(),
                 size: *size,
+                ratable: pw_metadata::supports_rating(p),
             })
             .collect(),
     })
@@ -185,6 +232,25 @@ async fn image_info(
     state: State<'_, AppState>,
 ) -> Result<ImageDetails, String> {
     let (path, i) = state.info(generation, index)?;
+    let is_tiff = pw_raw::is_tiff_file(&path);
+    // TIFF previews are rendered from the image data at fixed sizes (see tiff_view).
+    let decoded = |size: PreviewSize| -> Option<PreviewDto> {
+        let (w, h) = i.width.zip(i.height)?;
+        let (width, height) = imaging::fit(w, h, tiff_view::max_edge(size));
+        Some(PreviewDto {
+            width,
+            height,
+            bytes: 0,
+            source: "TIFF-avkodning".into(),
+        })
+    };
+    let pick = |size: PreviewSize| {
+        if is_tiff {
+            decoded(size)
+        } else {
+            dto(i.pick(size))
+        }
+    };
     Ok(ImageDetails {
         name: path
             .file_name()
@@ -204,14 +270,15 @@ async fn image_info(
         width: i.width,
         height: i.height,
         is_jpeg_file: i.format == Some(pw_raw::Format::Jpeg),
+        is_tiff_file: is_tiff,
         previews: i
             .previews
             .iter()
             .map(|p| dto(Some(p)).expect("some"))
             .collect(),
-        small: dto(i.pick(PreviewSize::Small)),
-        medium: dto(i.pick(PreviewSize::Medium)),
-        large: dto(i.pick(PreviewSize::Large)),
+        small: pick(PreviewSize::Small),
+        medium: pick(PreviewSize::Medium),
+        large: pick(PreviewSize::Large),
     })
 }
 
@@ -232,8 +299,37 @@ fn respond(status: StatusCode, body: Vec<u8>, content_type: &str) -> Response<Ve
 
 fn serve(app: &AppHandle, request: &Request<Vec<u8>>) -> Response<Vec<u8>> {
     let not_found = |m: &str| respond(StatusCode::NOT_FOUND, m.as_bytes().to_vec(), "text/plain");
-    // Path: /<generation>/<index>/<small|medium|large>
+    // Path: /<generation>/<index>/<small|medium|large|rawhalf>, /<generation>/<index>/tile/<c>/<r>,
+    // or /bench/half (measurement)
     let parts: Vec<&str> = request.uri().path().trim_matches('/').split('/').collect();
+    if parts.as_slice() == ["bench", "half"] {
+        return match app.state::<rawview::RawView>().bench_bytes() {
+            Some(b) => respond(StatusCode::OK, b, "image/jpeg"),
+            None => not_found("no measurement image"),
+        };
+    }
+    if let [g, i, "tile", c, r] = parts.as_slice() {
+        // RAW tile at full resolution (ADR 0006 step 4); only requested after `raw-tile`.
+        let (Ok(generation), Ok(index), Ok(col), Ok(row)) =
+            (g.parse::<u64>(), i.parse::<usize>(), c.parse::<u32>(), r.parse::<u32>())
+        else {
+            return not_found("bad path");
+        };
+        return match app.state::<rawview::RawView>().tile(generation, index, col, row) {
+            Some(b) => respond(StatusCode::OK, b, "image/jpeg"),
+            None => not_found("RAW tile not ready"),
+        };
+    }
+    if let [g, i, "rawhalf"] = parts.as_slice() {
+        // RAW half-size image (ADR 0006); only requested after the `raw-ready` event.
+        let (Ok(generation), Ok(index)) = (g.parse::<u64>(), i.parse::<usize>()) else {
+            return not_found("bad path");
+        };
+        return match app.state::<rawview::RawView>().half(generation, index) {
+            Some(b) => respond(StatusCode::OK, b, "image/jpeg"),
+            None => not_found("RAW image not ready"),
+        };
+    }
     let [g, i, s] = parts.as_slice() else {
         return not_found("bad path");
     };
@@ -251,6 +347,19 @@ fn serve(app: &AppHandle, request: &Request<Vec<u8>>) -> Response<Vec<u8>> {
         Ok(r) => r,
         Err(e) => return not_found(&e),
     };
+    if pw_raw::is_tiff_file(&path) {
+        return match app
+            .state::<tiff_view::TiffView>()
+            .jpeg(&path, generation, index, size)
+        {
+            Ok(jpeg) => respond(StatusCode::OK, jpeg.as_ref().clone(), "image/jpeg"),
+            Err(e) => respond(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                e.into_bytes(),
+                "text/plain",
+            ),
+        };
+    }
     let Some(preview) = info.pick(size) else {
         return not_found("no embedded preview");
     };
@@ -268,10 +377,31 @@ fn serve(app: &AppHandle, request: &Request<Vec<u8>>) -> Response<Vec<u8>> {
     }
 }
 
+/// The RAW renderer's library version (ADR 0006). Not used by the UI yet (step 1 links LibRaw).
+#[tauri::command]
+fn raw_engine_info() -> String {
+    format!(
+        "LibRaw {} (capabilities 0x{:x})",
+        pw_libraw::version(),
+        pw_libraw::capabilities()
+    )
+}
+
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(AppState::default())
+        .manage(ratings::Metadata::default())
+        .manage(tiff_view::TiffView::default())
+        .manage(ingest::IngestState::default())
+        .setup(|app| {
+            // Start ExifTool in the background so the first rating is instant.
+            let handle = app.handle().clone();
+            std::thread::spawn(move || handle.state::<ratings::Metadata>().warm_up());
+            // RAW rendering (ADR 0006); its events go to the UI.
+            app.manage(rawview::RawView::new(app.handle().clone()));
+            Ok(())
+        })
         .register_asynchronous_uri_scheme_protocol("pw", |ctx, request, responder| {
             let app = ctx.app_handle().clone();
             tauri::async_runtime::spawn_blocking(move || {
@@ -282,7 +412,24 @@ fn main() {
             pick_folder,
             initial_folder,
             open_folder,
-            image_info
+            image_info,
+            ratings::read_ratings,
+            ratings::set_rating,
+            ingest::ingest_volumes,
+            ingest::ingest_preview,
+            ingest::ingest_start,
+            ingest::ingest_cancel,
+            raw_engine_info,
+            rawview::raw_view,
+            rawview::raw_set_enabled,
+            rawview::raw_stats,
+            rawview::raw_set_half_max,
+            rawview::raw_prepare,
+            rawview::raw_tiles,
+            rawview::raw_bench_half,
+            bench::bench_config,
+            bench::bench_write,
+            bench::bench_exit
         ])
         .run(tauri::generate_context!())
         .expect("error while running PhotoWorkflow");

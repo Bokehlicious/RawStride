@@ -1604,6 +1604,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "00810f1d8b74be64b13dbf3db89ac67740615d6c891f0e7b6179326533011a07"
 
 [[package]]
+name = "jpeg-encoder"
+version = "0.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a0370574b86f7eca156b9f298392b5e69a23f8c86f3f865add60bbc2e79467a6"
+
+[[package]]
 name = "js-sys"
 version = "0.3.107"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2202,12 +2208,18 @@ dependencies = [
 name = "photoworkflow"
 version = "0.1.0"
 dependencies = [
+ "jpeg-encoder",
+ "pw-ingest",
+ "pw-libraw",
+ "pw-metadata",
  "pw-raw",
+ "pw-rawview",
  "serde",
  "serde_json",
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",
+ "tiff",
 ]
 
 [[package]]
@@ -2369,9 +2381,14 @@ version = "0.1.0"
 name = "pw-ingest"
 version = "0.1.0"
 dependencies = [
- "pw-catalog",
- "pw-core",
- "pw-metadata",
+ "pw-raw",
+]
+
+[[package]]
+name = "pw-libraw"
+version = "0.1.0"
+dependencies = [
+ "cc",
 ]
 
 [[package]]
@@ -2386,6 +2403,14 @@ name = "pw-raw"
 version = "0.1.0"
 dependencies = [
  "pw-core",
+]
+
+[[package]]
+name = "pw-rawview"
+version = "0.1.0"
+dependencies = [
+ "jpeg-encoder",
+ "pw-libraw",
 ]
 
 [[package]]
@@ -2432,6 +2457,13 @@ name = "r-efi"
 version = "6.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
+
+[[package]]
+name = "raw-decode-bench"
+version = "0.1.0"
+dependencies = [
+ "cc",
+]
 
 [[package]]
 name = "raw-window-handle"
@@ -3442,6 +3474,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "tiff"
+version = "0.9.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ba1310fcea54c6a9a4fd1aad794ecc02c31682f6bfbecdf460bf19533eed1e3e"
+dependencies = [
+ "flate2",
+ "jpeg-decoder",
+ "weezl",
+]
+
+[[package]]
 name = "time"
 version = "0.3.55"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4021,6 +4064,12 @@ dependencies = [
  "windows",
  "windows-core",
 ]
+
+[[package]]
+name = "weezl"
+version = "0.1.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a28ac98ddc8b9274cb41bb4d9d4d5c425b6020c50c46f25559911905610b4a88"
 
 [[package]]
 name = "winapi"

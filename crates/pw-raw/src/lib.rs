@@ -165,8 +165,16 @@ pub fn read_preview(path: &Path, preview: &PreviewRef) -> Result<Vec<u8>> {
 
 /// File extensions (lower case, without dot) the viewer lists.
 pub const SUPPORTED_EXTENSIONS: &[&str] = &[
-    "arw", "rw2", "dng", "nef", "cr2", "orf", "pef", "srw", "jpg", "jpeg",
+    "arw", "rw2", "dng", "nef", "cr2", "orf", "pef", "srw", "jpg", "jpeg", "tif", "tiff",
 ];
+
+/// True for plain TIFF files (`.tif`/`.tiff`). These usually carry no embedded JPEG preview,
+/// so the app decodes the image data itself.
+pub fn is_tiff_file(path: &Path) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| e.eq_ignore_ascii_case("tif") || e.eq_ignore_ascii_case("tiff"))
+}
 
 #[cfg(test)]
 mod tests {
@@ -265,6 +273,52 @@ mod tests {
         assert_eq!(sizes, vec![(160, 120), (1616, 1080)]);
         assert_eq!(info.pick(PreviewSize::Small).unwrap().width, 1616);
         assert_eq!(info.pick(PreviewSize::Large).unwrap().width, 1616);
+    }
+
+    /// A plain 8-bit RGB TIFF (no previews): IFD0 300×200, Orientation 6, one strip.
+    fn plain_rgb_tiff() -> Vec<u8> {
+        let (w, h) = (300u32, 200u32);
+        let mut f = b"II*\0".to_vec();
+        f.extend_from_slice(&8u32.to_le_bytes());
+        let entries: [(u16, u16, u32, u32); 8] = [
+            (0x0100, 4, 1, w),         // ImageWidth
+            (0x0101, 4, 1, h),         // ImageLength
+            (0x0103, 3, 1, 1),         // Compression: none
+            (0x0106, 3, 1, 2),         // Photometric: RGB
+            (0x0111, 4, 1, 0),         // StripOffsets (patched below)
+            (0x0112, 3, 1, 6),         // Orientation
+            (0x0115, 3, 1, 3),         // SamplesPerPixel
+            (0x0117, 4, 1, w * h * 3), // StripByteCounts
+        ];
+        f.extend_from_slice(&(entries.len() as u16).to_le_bytes());
+        let data_at = 8 + 2 + entries.len() as u32 * 12 + 4;
+        for (tag, typ, count, val) in entries {
+            f.extend_from_slice(&tag.to_le_bytes());
+            f.extend_from_slice(&typ.to_le_bytes());
+            f.extend_from_slice(&count.to_le_bytes());
+            let val = if tag == 0x0111 { data_at } else { val };
+            if typ == 3 {
+                f.extend_from_slice(&(val as u16).to_le_bytes());
+                f.extend_from_slice(&[0, 0]);
+            } else {
+                f.extend_from_slice(&val.to_le_bytes());
+            }
+        }
+        f.extend_from_slice(&[0, 0, 0, 0]);
+        f.resize(f.len() + (w * h * 3) as usize, 0x80);
+        f
+    }
+
+    #[test]
+    fn plain_tiff_file() {
+        let data = plain_rgb_tiff();
+        let info = inspect_source(&mut SliceSource(&data)).unwrap();
+        assert_eq!(info.format, Some(Format::Tiff));
+        assert_eq!((info.width, info.height), (Some(300), Some(200)));
+        assert_eq!(info.orientation, 6);
+        assert!(info.previews.is_empty());
+        assert!(is_tiff_file(Path::new("x/Scan 01.TIF")));
+        assert!(!is_tiff_file(Path::new("x/a.dng")));
     }
 
     #[test]

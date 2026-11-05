@@ -17,15 +17,22 @@ const el = {
   openBtn: $("open-btn"), viewBtn: $("view-btn"), infoBtn: $("info-btn"),
   thumbSize: $("thumb-size"), infoName: $("info-name"), infoList: $("info-list"),
   infoPreviews: $("info-previews"), pos: $("status-pos"), source: $("status-source"),
-  zoom: $("status-zoom"), toast: $("toast"),
+  zoom: $("status-zoom"), toast: $("toast"), anchor: $("status-anchor"),
+  filterStars: $("filter-stars"), filterLabel: $("filter-label"), sel: $("status-sel"),
 };
 
 const state = {
   generation: 0,
   files: [],          // [{index, name, size}]
   info: new Map(),    // index -> details (from Rust)
+  ratings: new Map(), // index -> {stars, label}
   current: 0,
   mode: "grid",       // "grid" | "loupe"
+  visible: [],        // indexes shown under the current filter, in order
+  pos: new Map(),     // index -> position in `visible`
+  picked: new Set(),  // multi-selection (indexes); empty = only `current`
+  anchor: 0,          // start of a Shift range
+  filter: { stars: "all", label: "all" },
 };
 
 // ---------- helpers ----------
@@ -76,9 +83,13 @@ async function openFolder(path) {
   try {
     const listing = await invoke("open_folder", { path });
     state.generation = listing.generation;
+    if (window.rawFolder) rawFolder(listing.generation); // RAW rendering (raw.js)
     state.files = listing.files;
     state.info.clear();
+    state.ratings.clear();
     state.current = 0;
+    state.picked.clear();
+    state.anchor = 0;
     preload.clear();
     el.folder.textContent = `${listing.folder} — ${listing.files.length} bilder`;
     el.folder.classList.remove("muted");
@@ -87,6 +98,8 @@ async function openFolder(path) {
     buildGrid();
     setMode("grid");
     if (listing.files.length === 0) toast("Inga bildfiler som stöds hittades i mappen.");
+    await loadRatings(listing.generation);
+    if (state.filter.stars !== "all" || state.filter.label !== "all") applyFilter(false);
   } catch (e) {
     toast(`Kunde inte öppna mappen: ${e}`);
   }
@@ -110,14 +123,18 @@ function buildGrid() {
     const cell = document.createElement("div");
     cell.className = "cell";
     cell.dataset.index = f.index;
-    cell.innerHTML = `<div class="frame"></div><div class="name"></div>`;
+    cell.innerHTML =
+      `<div class="frame"></div><div class="label-bar"><span class="stars"></span></div>` +
+      `<div class="name"></div>`;
     cell.querySelector(".name").textContent = f.name;
-    cell.addEventListener("click", () => select(f.index));
+    cell.addEventListener("click", (e) => clickCell(f.index, e));
     cell.addEventListener("dblclick", () => { select(f.index); setMode("loupe"); });
     frag.appendChild(cell);
     observer.observe(cell);
   }
   el.grid.appendChild(frag);
+  state.visible = state.files.map((f) => f.index);
+  state.pos = new Map(state.visible.map((idx, p) => [idx, p]));
   select(0);
 }
 
@@ -190,9 +207,11 @@ async function showInfo(index) {
     ["ISO", info.iso],
     ["Brännvidd", info.focal_length != null ? `${fmtNum(info.focal_length)} mm` : null],
     ["Exp.-komp.", info.exposure_bias != null ? `${info.exposure_bias > 0 ? "+" : ""}${fmtNum(info.exposure_bias, 2)} EV` : null],
-    [info.is_jpeg_file ? "Storlek" : "RAW-storlek", info.width ? `${info.width} × ${info.height}` : null],
+    [info.is_jpeg_file || info.is_tiff_file ? "Storlek" : "RAW-storlek", info.width ? `${info.width} × ${info.height}` : null],
     ["Orientering", `${info.orientation} (${orient(info.orientation).rot}°)`],
     ["Format", info.format],
+    ["Betyg", ratingText(index)],
+    ["Etikett", (() => { const l = (state.ratings.get(index) || {}).label; return l ? (LABEL_SV[l] || l) : null; })()],
   ];
   el.infoList.replaceChildren();
   for (const [k, v] of rows) {
@@ -234,20 +253,50 @@ function preloadImage(index) {
 async function showLoupe(index) {
   const gen = state.generation;
   let info;
-  try { info = await getInfo(index); } catch (e) { toast(String(e)); return; }
+  try { info = await getInfo(index); } catch (e) {
+    if (gen === state.generation && index === state.current) showUnreadable(index, e);
+    return;
+  }
   if (gen !== state.generation || index !== state.current) return;
   view.index = index;
   view.loadingLarge = false;
+  renderRating(index);
   Object.assign(view, orient(info.orientation));
   if (!info.medium) {
+    view.level = null;
     el.img.removeAttribute("src");
     el.badge.hidden = false;
-    el.badge.textContent = "Ingen inbäddad förhandsvisning – RAW-avkodning kommer i M2.";
+    el.badge.textContent = (window.rawFailedText && rawFailedText(index)) ||
+      "Ingen inbäddad förhandsvisning – väntar på RAW-avkodning.";
+    if (window.rawTilesRender) rawTilesRender(); // no tiles of the previous image stay
+    if (window.rawWarnUpdate) rawWarnUpdate();
+    if (window.rawShow) rawShow(index);
     return;
   }
   setSource(info, "medium", info.medium.width, info.medium.height);
   fitToWindow();
   for (const d of [1, -1, 2, -2]) preloadImage(index + d);
+  // The embedded preview (M1) is shown first; RAW pixels replace it when ready (raw.js).
+  if (window.rawShow) rawShow(index);
+}
+
+/// A file that cannot be read: the loupe is emptied (no image of the previous file stays on
+/// screen) and says why. RAW work for the previous image stops.
+function showUnreadable(index, error) {
+  view.index = index;
+  view.level = null;
+  view.loadingLarge = false;
+  el.img.removeAttribute("src");
+  el.img.style.width = "0px";
+  el.img.style.height = "0px";
+  renderRating(index);
+  el.badge.textContent = `Filen kan inte läsas: ${String(error)}`;
+  el.badge.hidden = false;
+  el.zoom.textContent = "";
+  if (window.rawTilesRender) rawTilesRender(); // tiles of the previous image go
+  if (window.rawWarnUpdate) rawWarnUpdate();
+  if (window.rawShow) rawShow(index); // the backend stops working on the previous image
+  document.dispatchEvent(new CustomEvent("pw-unreadable", { detail: { index, error: String(error) } }));
 }
 
 function setSource(info, level, w, h) {
@@ -282,6 +331,8 @@ function render() {
   el.img.style.transform =
     `translate(${x}px, ${y}px) rotate(${view.rot}deg) scale(${sx}, ${view.scale})`;
   updateZoomStatus();
+  if (window.rawTilesRender) rawTilesRender(); // RAW tiles follow the image (rawtiles.js)
+  if (window.rawWarnUpdate) rawWarnUpdate();   // warning chip of the image on screen
 }
 
 /// Zoom to `newScale` keeping the viewport point (cx, cy) fixed.
@@ -311,7 +362,9 @@ function maybeLoadLarge() {
   big.crossOrigin = "anonymous";
   big.src = url(index, "large");
   el.badge.hidden = false;
-  el.badge.textContent = `Laddar inbäddad JPEG ${info.large.width} × ${info.large.height} …`;
+  el.badge.textContent = info.is_tiff_file
+    ? `Avkodar TIFF i full upplösning ${info.large.width} × ${info.large.height} …`
+    : `Laddar inbäddad JPEG ${info.large.width} × ${info.large.height} …`;
   big.decode().then(() => {
     if (view.index !== index || view.level !== "medium") return;
     const k = view.w / info.large.width; // keep the same on-screen size
@@ -326,9 +379,24 @@ function maybeLoadLarge() {
 }
 
 /// 100 % = one pixel of the largest available embedded JPEG per screen pixel.
+/// Width of the full RAW image while a half-size RAW image is shown (twice its width if the
+/// backend did not report it).
+function rawhalfRef() {
+  const w = typeof rawFullWidth === "function" ? rawFullWidth(view.index) : null;
+  return w || view.w * 2;
+}
+
+/// Full RAW width when RAW rendering shows more than the embedded previews (null otherwise).
+function rawRefWidth() {
+  return typeof rawTileRef === "function" ? rawTileRef(view.index) : null;
+}
+
 function zoomTo100(cx, cy) {
   const info = state.info.get(view.index);
   if (!info) return;
+  const fw = rawRefWidth();
+  if (fw) { zoomTo(fw / view.w, cx, cy); return; } // 100 % of the RAW (tiles)
+  if (view.level === "rawhalf") { zoomTo(rawhalfRef() / view.w, cx, cy); return; } // 100 % of the RAW
   if (info.large && view.level === "medium" && info.large.width > view.w) {
     // Express 100 % of the large image in medium-image pixels; maybeLoadLarge swaps the source.
     zoomTo(info.large.width / view.w, cx, cy);
@@ -343,22 +411,42 @@ function toggleZoom(cx, cy) {
 }
 
 function updateBadge(info) {
+  if (view.level === "rawhalf") {
+    // Half-size RAW, scaled to the screen: show both the shown size and the full RAW size.
+    const fw = rawhalfRef();
+    const full = fw !== view.w * 2 ? ` (av ${fw} px bredd)` : "";
+    el.badge.textContent = `RAW-avkodning (LibRaw), skärmanpassad ${view.w} × ${view.h}${full}` +
+      (window.rawTilesBadge ? rawTilesBadge() : "");
+    el.badge.hidden = false;
+    return;
+  }
   const p = view.level === "large" ? info.large : info.medium;
   if (!p) return;
   const rawW = info.width;
   if (info.is_jpeg_file) { el.badge.hidden = true; return; }
-  const parts = [`Inbäddad JPEG ${p.width} × ${p.height} (kamerans rendering, inte RAW-avkodning)`];
-  if (rawW && (!info.large || info.large.width < rawW * 0.95)) {
-    parts.push(`RAW är ${info.width} × ${info.height} – full upplösning kräver RAW-avkodning (M2)`);
+  if (info.is_tiff_file) {
+    el.badge.textContent = `TIFF avkodad till ${p.width} × ${p.height}` +
+      (view.level === "large" ? " (full upplösning)" : " – zooma in för full upplösning");
+    el.badge.hidden = false;
+    return;
   }
-  el.badge.textContent = parts.join(" · ");
+  const parts = [`Inbäddad JPEG ${p.width} × ${p.height} (kamerans rendering, inte RAW-avkodning)`];
+  const failed = window.rawFailedText && rawFailedText(view.index);
+  if (rawW && !failed && (!info.large || info.large.width < rawW * 0.95)) {
+    parts.push(window.rawTileRef && rawTileRef(view.index)
+      ? `RAW är ${info.width} × ${info.height} – zooma in för RAW-rutor i full upplösning`
+      : `RAW är ${info.width} × ${info.height} – full upplösning kräver RAW-avkodning (M2)`);
+  }
+  if (failed) parts.push(failed);
+  el.badge.textContent = parts.join(" · ") + (window.rawTilesBadge ? rawTilesBadge() : "");
   el.badge.hidden = false;
 }
 
 function updateZoomStatus() {
   const info = state.info.get(view.index);
   if (!info || state.mode !== "loupe") { el.zoom.textContent = ""; return; }
-  const ref = (info.large && info.large.width) || view.w;
+  const ref = rawRefWidth() ||
+    (view.level === "rawhalf" ? rawhalfRef() : (info.large && info.large.width) || view.w);
   const pct = Math.round(view.scale * (view.w / ref) * 100);
   el.zoom.textContent = `Zoom ${pct} %${view.scale <= view.fit * 1.01 ? " (anpassad)" : ""}`;
 }
@@ -380,73 +468,140 @@ el.viewport.addEventListener("pointermove", (e) => {
 const endDrag = () => { drag = null; el.viewport.classList.remove("dragging"); };
 el.viewport.addEventListener("pointerup", endDrag);
 el.viewport.addEventListener("pointercancel", endDrag);
+// ---------- zoom anchor: at the mouse cursor (default) or at the centre ----------
+
+// Last mouse position over the loupe, in viewport coordinates (null = mouse elsewhere).
+let mouseAt = null;
+let anchorAtCursor = true;
+try { anchorAtCursor = localStorage.getItem("zoomAnchor") !== "center"; } catch (_) {}
+
+el.loupe.addEventListener("pointermove", (e) => {
+  const r = el.viewport.getBoundingClientRect();
+  mouseAt = [e.clientX - r.left, e.clientY - r.top];
+});
+el.loupe.addEventListener("pointerleave", () => { mouseAt = null; });
+
+/// The point to zoom around: the given mouse point or the last known cursor position when
+/// anchoring at the cursor, else the centre (undefined = centre in zoomTo).
+function anchor(x, y) {
+  if (!anchorAtCursor) return [];
+  if (x != null) return [x, y];
+  return mouseAt ? [...mouseAt] : [];
+}
+
+function renderAnchorToggle() {
+  el.anchor.textContent = anchorAtCursor ? "Zoom mot pekaren" : "Zoom mot mitten";
+  el.anchor.title = "Klicka för att växla vad zoomen förankras vid (A)";
+}
+
+function toggleAnchor() {
+  anchorAtCursor = !anchorAtCursor;
+  try { localStorage.setItem("zoomAnchor", anchorAtCursor ? "cursor" : "center"); } catch (_) {}
+  renderAnchorToggle();
+  toast(anchorAtCursor ? "Zoom förankras vid muspekaren." : "Zoom förankras vid bildens mitt.");
+}
+el.anchor.addEventListener("click", toggleAnchor);
+renderAnchorToggle();
+
 el.viewport.addEventListener("wheel", (e) => {
   e.preventDefault();
   const r = el.viewport.getBoundingClientRect();
   const k = Math.exp(-e.deltaY * 0.0015);
-  zoomTo(view.scale * k, e.clientX - r.left, e.clientY - r.top);
+  zoomTo(view.scale * k, ...anchor(e.clientX - r.left, e.clientY - r.top));
 }, { passive: false });
 el.viewport.addEventListener("dblclick", (e) => {
   const r = el.viewport.getBoundingClientRect();
-  toggleZoom(e.clientX - r.left, e.clientY - r.top);
+  toggleZoom(...anchor(e.clientX - r.left, e.clientY - r.top));
 });
 window.addEventListener("resize", () => { if (state.mode === "loupe") fitToWindow(); });
 
 // ---------- modes, status, keyboard ----------
 
 function setMode(mode) {
-  if (state.files.length === 0) mode = "grid";
+  if (state.visible.length === 0) mode = "grid";
   state.mode = mode;
   el.grid.hidden = mode !== "grid";
   el.loupe.hidden = mode !== "loupe";
   el.viewBtn.textContent = mode === "grid" ? "Loupe" : "Kontaktark";
   if (mode === "loupe") { showLoupe(state.current); el.loupe.focus(); }
-  else { el.badge.hidden = true; select(state.current); el.grid.focus(); }
+  else {
+    el.badge.hidden = true;
+    if (window.rawLeave) rawLeave(); // no RAW work for the contact sheet
+    select(state.current);
+    el.grid.focus();
+  }
   updateStatus();
 }
 
 function updateStatus() {
-  const n = state.files.length;
-  el.pos.textContent = n ? `${state.current + 1} / ${n} · ${state.files[state.current].name}` : "";
+  const n = state.visible.length;
+  const total = state.files.length;
+  const p = state.pos.get(state.current);
+  el.pos.textContent = n && p != null
+    ? `${p + 1} / ${n}${n < total ? ` (av ${total})` : ""} · ${state.files[state.current].name}`
+    : total ? `Inga bilder matchar filtret (${total} i mappen)` : "";
+  el.sel.textContent = state.picked.size > 1 ? `${state.picked.size} markerade` : "";
   el.source.textContent = "";
   updateZoomStatus();
 }
 
-function go(delta) {
-  select(state.current + delta);
+/// Moves `delta` positions among the visible images. With `extend` (Shift), the multi-selection
+/// grows from the anchor; otherwise it is cleared.
+function go(delta, extend = false) {
+  // Images that stopped matching the filter (after a rating) disappear when you move on.
+  applyFilter(true);
+  if (!state.visible.length) return;
+  const p = state.pos.has(state.current) ? state.pos.get(state.current) : 0;
+  const np = Math.max(0, Math.min(state.visible.length - 1, p + delta));
+  const index = state.visible[np];
+  if (extend) {
+    if (!state.picked.size) state.anchor = state.current;
+    pickRange(state.anchor, index);
+  } else if (state.picked.size) {
+    clearPicked();
+  }
+  if (!extend) state.anchor = index;
+  select(index);
+  // Now drop the previous image if it no longer matches (the new current one is kept).
+  applyFilter(true);
   if (state.mode === "loupe") showLoupe(state.current);
 }
 
 document.addEventListener("keydown", (e) => {
   if (e.ctrlKey && e.key.toLowerCase() === "o") { e.preventDefault(); pickFolder(); return; }
-  if (e.target.tagName === "INPUT") return;
-  const n = state.files.length;
+  if (e.target.tagName === "INPUT" || e.target.tagName === "SELECT") return;
+  if (!state.files.length) return;
+  const n = state.visible.length;
   if (!n) return;
+  if (handleRatingKey(e)) { e.preventDefault(); return; }
   const key = e.key;
+  const ext = e.shiftKey;
+  if (e.ctrlKey && !e.altKey && key.toLowerCase() === "a") { e.preventDefault(); pickAll(); return; }
   if (state.mode === "loupe") {
     switch (key) {
       case "ArrowRight": case "ArrowDown": case "PageDown": go(1); break;
       case "ArrowLeft": case "ArrowUp": case "PageUp": go(-1); break;
-      case "Home": go(-state.current); break;
-      case "End": go(n - 1 - state.current); break;
+      case "Home": go(-n); break;
+      case "End": go(n); break;
       case "Escape": case "g": case "G": case "Enter": setMode("grid"); break;
-      case "z": case "Z": toggleZoom(); break;
-      case "0": fitToWindow(); break;
-      case "1": zoomTo100(); break;
-      case "+": zoomTo(view.scale * 1.25); break;
-      case "-": zoomTo(view.scale / 1.25); break;
+      case "z": case "Z": toggleZoom(...anchor()); break;
+      case "f": case "F": fitToWindow(); break;
+      case "+": case "=": zoomTo(view.scale * 1.25, ...anchor()); break;
+      case "-": zoomTo(view.scale / 1.25, ...anchor()); break;
+      case "a": case "A": toggleAnchor(); break;
       case "i": case "I": toggleInfo(); break;
       default: return;
     }
   } else {
     const cols = gridColumns();
     switch (key) {
-      case "ArrowRight": go(1); break;
-      case "ArrowLeft": go(-1); break;
-      case "ArrowDown": go(cols); break;
-      case "ArrowUp": go(-cols); break;
-      case "Home": go(-state.current); break;
-      case "End": go(n - 1 - state.current); break;
+      case "ArrowRight": go(1, ext); break;
+      case "ArrowLeft": go(-1, ext); break;
+      case "ArrowDown": go(cols, ext); break;
+      case "ArrowUp": go(-cols, ext); break;
+      case "Home": go(-n, ext); break;
+      case "End": go(n, ext); break;
+      case "Escape": clearPicked(); updateStatus(); break;
       case "Enter": case "g": case "G": case " ": setMode("loupe"); break;
       case "i": case "I": toggleInfo(); break;
       default: return;
@@ -466,6 +621,10 @@ el.infoBtn.addEventListener("click", toggleInfo);
 el.thumbSize.addEventListener("input", () => {
   document.documentElement.style.setProperty("--thumb", `${el.thumbSize.value}px`);
 });
+// Lets raw.js and the measurement run (bench.js) know what is on screen.
+el.img.addEventListener("load", () => {
+  document.dispatchEvent(new CustomEvent("pw-shown", { detail: { index: view.index, level: view.level } }));
+});
 el.img.addEventListener("error", () => {
   if (el.img.getAttribute("src")) toast("Kunde inte visa bilden.");
 });
@@ -484,4 +643,260 @@ listen("tauri://drag-drop", (ev) => {
   let start = await invoke("initial_folder");
   if (!start) { try { start = localStorage.getItem("lastFolder"); } catch (_) {} }
   if (start) openFolder(start);
+})();
+
+
+// ---------- ratings and colour labels (XMP sidecar via ExifTool) ----------
+
+const LABELS = ["Red", "Yellow", "Green", "Blue", "Purple"];
+const LABEL_COLORS = { Red: "#e5484d", Yellow: "#f5c400", Green: "#3fb950", Blue: "#4c8dff", Purple: "#a371f7" };
+const LABEL_SV = { Red: "Röd", Yellow: "Gul", Green: "Grön", Blue: "Blå", Purple: "Lila" };
+
+function ratingText(index) {
+  const r = state.ratings.get(index);
+  if (!r || r.stars == null) return null;
+  return r.stars < 0 ? "Avvisad" : "★".repeat(r.stars) + "☆".repeat(5 - r.stars);
+}
+
+async function loadRatings(gen) {
+  try {
+    const list = await invoke("read_ratings", { generation: gen });
+    if (gen !== state.generation) return;
+    for (const r of list) {
+      state.ratings.set(r.index, { stars: r.stars, label: r.label });
+      renderRating(r.index);
+    }
+  } catch (e) {
+    toast(`Kunde inte läsa betyg: ${e}`);
+  }
+}
+
+/// The rating/label bar under a thumbnail (and in the loupe): a rounded bar in the label colour
+/// with the stars inside; without a label only the stars show.
+function paintLabelBar(bar, r) {
+  const stars = bar.querySelector(".stars");
+  if (r.stars == null) stars.textContent = "";
+  else if (r.stars < 0) stars.textContent = "✕";
+  else stars.innerHTML = "★".repeat(r.stars) + `<span class="empty">${"•".repeat(5 - r.stars)}</span>`;
+  bar.classList.toggle("labelled", !!r.label);
+  bar.classList.toggle("rejected", r.stars != null && r.stars < 0);
+  bar.style.background = r.label ? (LABEL_COLORS[r.label] || "#888") : "";
+  const sv = r.label ? (LABEL_SV[r.label] || r.label) : "";
+  const st = r.stars == null ? "" : r.stars < 0 ? "Avvisad" : `${r.stars} stjärn${r.stars === 1 ? "a" : "or"}`;
+  bar.title = [st, sv].filter(Boolean).join(" · ");
+}
+
+function renderRating(index) {
+  const r = state.ratings.get(index) || {};
+  const cell = cellOf(index);
+  if (cell) {
+    paintLabelBar(cell.querySelector(".label-bar"), r);
+  }
+  if (index === state.current) {
+    const el2 = document.getElementById("loupe-rating");
+    if (el2) {
+      const bar = el2.querySelector(".label-bar") || el2.appendChild(Object.assign(
+        document.createElement("div"), { className: "label-bar", innerHTML: '<span class="stars"></span>' }));
+      paintLabelBar(bar, r);
+      el2.hidden = r.stars == null && !r.label;
+    }
+    showInfo(index);
+  }
+}
+
+async function setRating(index, change, quiet = false) {
+  const f = state.files[index];
+  if (!f) return;
+  if (!f.ratable) {
+    if (!quiet) toast("Betyg och etiketter kan inte sparas för den här filtypen.");
+    return;
+  }
+  const before = { ...(state.ratings.get(index) || { stars: null, label: null }) };
+  const after = { ...before, ...change };
+  if (after.stars === 0) after.stars = null;
+  state.ratings.set(index, after);
+  renderRating(index);
+  const gen = state.generation;
+  // Writes go out one at a time, in key-press order, so the last key always wins.
+  writeQueue = writeQueue.then(() =>
+    invoke("set_rating", { generation: gen, index, stars: after.stars, label: after.label })
+  ).catch((e) => {
+    if (gen === state.generation) { state.ratings.set(index, before); renderRating(index); }
+    toast(`Kunde inte spara betyget: ${e}`);
+  });
+}
+let writeQueue = Promise.resolve();
+
+/// 0–5 / Alt+0–5: stars. 6–9: Red/Yellow/Green/Blue. Ctrl+1–5: Red…Purple, Ctrl+0: no label.
+/// Pressing the label an image already has removes it.
+/// With a multi-selection, rating keys apply to every marked image.
+function handleRatingKey(e) {
+  const m = /^(?:Digit|Numpad)(\d)$/.exec(e.code);
+  if (!m || e.shiftKey || e.metaKey) return false;
+  const d = Number(m[1]);
+  const targets = ratingTargets();
+  const apply = (change) => {
+    const multi = targets.length > 1;
+    if (multi && !targets.some((i) => state.files[i].ratable)) {
+      toast("Inga av de markerade filerna kan få betyg.");
+      return;
+    }
+    for (const i of targets) setRating(i, change, multi);
+  };
+  // The same label again removes it (from all targets, if all of them have it).
+  const toggle = (label) => {
+    const ratable = targets.filter((i) => state.files[i].ratable);
+    const all = ratable.length > 0 &&
+      ratable.every((i) => (state.ratings.get(i) || {}).label === label);
+    apply({ label: all ? null : label });
+  };
+  if (e.ctrlKey && !e.altKey) {
+    if (d === 0) apply({ label: null });
+    else if (d <= LABELS.length) toggle(LABELS[d - 1]);
+    else return false;
+    return true;
+  }
+  if (e.ctrlKey) return false; // Ctrl+Alt (AltGr) is used for characters on some layouts
+  if (d <= 5) { apply({ stars: d }); return true; }
+  if (!e.altKey && d <= 9) { toggle(LABELS[d - 6]); return true; }
+  return false;
+}
+
+// ---------- multi-selection ----------
+
+/// The images a rating key acts on: in the contact sheet, the marked ones (in grid order) if
+/// the current image is among them; otherwise (and always in the loupe) the current image.
+function ratingTargets() {
+  if (state.mode === "grid" && state.picked.size > 1 && state.picked.has(state.current)) {
+    return state.visible.filter((i) => state.picked.has(i));
+  }
+  return [state.current];
+}
+
+function markCell(index, on) {
+  const c = cellOf(index);
+  if (c) c.classList.toggle("picked", on);
+}
+
+function clearPicked() {
+  for (const i of state.picked) markCell(i, false);
+  state.picked.clear();
+}
+
+/// Marks every visible image between `a` and `b` (inclusive), replacing the marking.
+function pickRange(a, b) {
+  clearPicked();
+  let pa = state.pos.get(a);
+  let pb = state.pos.get(b);
+  if (pa == null) pa = pb;
+  if (pa > pb) [pa, pb] = [pb, pa];
+  for (let p = pa; p <= pb; p++) {
+    state.picked.add(state.visible[p]);
+    markCell(state.visible[p], true);
+  }
+}
+
+function pickAll() {
+  if (state.mode !== "grid") return;
+  clearPicked();
+  for (const i of state.visible) { state.picked.add(i); markCell(i, true); }
+  updateStatus();
+}
+
+/// Click: select. Ctrl+click: add/remove from the marking. Shift+click: mark a range.
+function clickCell(index, e) {
+  if (e.shiftKey) {
+    if (!state.picked.size) state.anchor = state.current;
+    pickRange(state.anchor, index);
+  } else if (e.ctrlKey) {
+    if (!state.picked.size) { state.picked.add(state.current); markCell(state.current, true); }
+    if (state.picked.has(index) && state.picked.size > 1) {
+      state.picked.delete(index);
+      markCell(index, false);
+    } else {
+      state.picked.add(index);
+      markCell(index, true);
+    }
+    state.anchor = index;
+  } else {
+    clearPicked();
+    state.anchor = index;
+  }
+  select(index);
+}
+
+// ---------- filter by rating and label ----------
+
+function matches(index) {
+  const r = state.ratings.get(index) || {};
+  const s = r.stars == null ? null : r.stars;
+  const fs = state.filter.stars;
+  const okStars = fs === "all" ? true
+    : fs === "unrated" ? s == null
+    : fs === "rejected" ? s != null && s < 0
+    : s != null && s >= Number(fs);
+  const fl = state.filter.label;
+  const okLabel = fl === "all" ? true : fl === "none" ? !r.label : r.label === fl;
+  return okStars && okLabel;
+}
+
+/// Recomputes which images are shown. `keepCurrent` keeps the current image visible even if
+/// it no longer matches (so rating an image does not make it vanish under the cursor).
+function applyFilter(keepCurrent) {
+  if (!state.files.length) return;
+  const vis = [];
+  for (const f of state.files) {
+    const show = matches(f.index) || (keepCurrent && f.index === state.current);
+    const c = cellOf(f.index);
+    if (c) c.hidden = !show;
+    if (show) vis.push(f.index);
+  }
+  state.visible = vis;
+  state.pos = new Map(vis.map((idx, p) => [idx, p]));
+  for (const i of [...state.picked]) {
+    if (!state.pos.has(i)) { state.picked.delete(i); markCell(i, false); }
+  }
+  el.grid.classList.toggle("empty", vis.length === 0);
+  if (!vis.length) {
+    if (state.mode === "loupe") setMode("grid");
+    updateStatus();
+    return;
+  }
+  if (!state.pos.has(state.current)) {
+    // Move to the nearest following visible image.
+    const next = vis.find((i) => i > state.current);
+    select(next != null ? next : vis[vis.length - 1]);
+    if (state.mode === "loupe") showLoupe(state.current);
+  } else {
+    updateStatus();
+  }
+}
+
+/// An active filter is outlined so a folder that looks half-empty is never a mystery.
+function markFilters() {
+  el.filterStars.classList.toggle("active", state.filter.stars !== "all");
+  el.filterLabel.classList.toggle("active", state.filter.label !== "all");
+}
+
+function setFilter(change) {
+  Object.assign(state.filter, change);
+  markFilters();
+  try { localStorage.setItem("filter", JSON.stringify(state.filter)); } catch (_) {}
+  applyFilter(false);
+  updateStatus();
+  (state.mode === "grid" ? el.grid : el.loupe).focus();
+}
+
+(() => {
+  try {
+    const saved = JSON.parse(localStorage.getItem("filter") || "null");
+    if (saved && typeof saved === "object") Object.assign(state.filter, saved);
+  } catch (_) {}
+  el.filterStars.value = state.filter.stars;
+  el.filterLabel.value = state.filter.label;
+  if (el.filterStars.value !== state.filter.stars) state.filter.stars = el.filterStars.value = "all";
+  if (el.filterLabel.value !== state.filter.label) state.filter.label = el.filterLabel.value = "all";
+  markFilters();
+  el.filterStars.addEventListener("change", () => setFilter({ stars: el.filterStars.value }));
+  el.filterLabel.addEventListener("change", () => setFilter({ label: el.filterLabel.value }));
 })();

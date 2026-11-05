@@ -289,6 +289,8 @@ pub(crate) fn inspect_tiff<S: Source>(src: &mut S) -> Result<ImageInfo> {
     let mut raw_dims: Option<(u32, u32)> = None;
     let mut exif_offsets = Vec::new();
     let mut pana = [None::<u32>; 8];
+    // Size of IFD0's image; for plain TIFF files this is the image itself.
+    let mut ifd0_dims: Option<(u32, u32)> = None;
 
     let mut queue = VecDeque::from([(ifd0, "IFD0".to_string(), Some(0usize))]);
     let mut visited = HashSet::new();
@@ -355,6 +357,14 @@ pub(crate) fn inspect_tiff<S: Source>(src: &mut S) -> Result<ImageInfo> {
         }
         if let (Some(o), Some(c)) = (strip_offsets, strip_counts) {
             v.strip = Some((o, c));
+        }
+        if is_ifd0
+            && !matches!(
+                v.photometric,
+                Some(PHOTOMETRIC_CFA | PHOTOMETRIC_LINEAR_RAW)
+            )
+        {
+            ifd0_dims = v.width.zip(v.height);
         }
         if let (Some(o), Some(l)) = v.jif
             && l > 0
@@ -435,10 +445,12 @@ pub(crate) fn inspect_tiff<S: Source>(src: &mut S) -> Result<ImageInfo> {
         }
     }
 
-    let (w, h) = raw_dims.unzip();
+    // Plain TIFF (no RAW data): the image size is IFD0's size.
+    let dims = raw_dims.or(ifd0_dims);
+    let (w, h) = dims.unzip();
     info.width = w;
     info.height = h;
-    if info.previews.is_empty() && raw_dims.is_none() {
+    if info.previews.is_empty() && dims.is_none() {
         return Err(Error::Format("no image data found".into()));
     }
     Ok(info)

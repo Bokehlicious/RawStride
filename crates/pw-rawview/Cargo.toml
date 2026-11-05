@@ -1,0 +1,20 @@
+[package]
+name = "pw-rawview"
+description = "RAW rendering jobs: priorities, cancellation and memory budget (ADR 0006)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+# The real decoder (LibRaw with OpenMP + JPEG encoding). Without it the engine is generic and is
+# tested with a simulated decoder (tests/engine.rs), so the tests need no native libraries.
+libraw = ["dep:pw-libraw", "dep:jpeg-encoder"]
+
+[dependencies]
+pw-libraw = { workspace = true, optional = true }
+jpeg-encoder = { version = "0.7", optional = true }

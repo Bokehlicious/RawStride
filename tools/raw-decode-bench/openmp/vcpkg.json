@@ -1,0 +1,10 @@
+{
+  "$schema": "https://raw.githubusercontent.com/microsoft/vcpkg-tool/main/docs/vcpkg.schema.json",
+  "name": "photoworkflow-libraw-openmp",
+  "version": "0.1.0",
+  "description": "MEASUREMENT ONLY: LibRaw with OpenMP, installed into vcpkg_installed_openmp (see docs/libraw-build.md). The app and the baseline use the root vcpkg.json.",
+  "dependencies": [
+    { "name": "libraw", "features": ["openmp"] }
+  ],
+  "builtin-baseline": "afa249f12f52ed8a3b919f195495ba8b330288d1"
+}

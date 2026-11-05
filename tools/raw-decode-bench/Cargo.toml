@@ -1,0 +1,13 @@
+[package]
+name = "raw-decode-bench"
+description = "Measures LibRaw decode time, memory and parallel throughput (development tool)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[build-dependencies]
+cc = "1"

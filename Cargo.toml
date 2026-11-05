@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/*", "src-tauri", "tools/rea-probe", "tools/preview-bench"]
+members = ["crates/*", "src-tauri", "tools/rea-probe", "tools/preview-bench", "tools/raw-decode-bench"]
 
 [workspace.package]
 version = "0.1.0"
@@ -15,6 +15,8 @@ repository = ""
 # Internal crates
 pw-core = { path = "crates/pw-core" }
 pw-raw = { path = "crates/pw-raw" }
+pw-libraw = { path = "crates/pw-libraw" }
+pw-rawview = { path = "crates/pw-rawview" }
 pw-metadata = { path = "crates/pw-metadata" }
 pw-catalog = { path = "crates/pw-catalog" }
 pw-ingest = { path = "crates/pw-ingest" }

@@ -1,9 +1,14 @@
 # Rust
 /target/
+# Standalone distribution folder (tools/package-dist.ps1)
+/dist/
 **/*.rs.bk
 
 # vcpkg manifest-mode output
 /vcpkg_installed/
+# OpenMP measurement variant (docs/libraw-build.md)
+/vcpkg_installed_openmp/
+/target-openmp/
 
 # Frontend
 node_modules/

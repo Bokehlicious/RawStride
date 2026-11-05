@@ -11,6 +11,6 @@ authors.workspace = true
 workspace = true
 
 [dependencies]
-pw-core.workspace = true
-pw-metadata.workspace = true
-pw-catalog.workspace = true
+# Capture time and camera from the embedded EXIF (no ExifTool round trip per file).
+pw-raw.workspace = true
+# pw-metadata (IPTC templates) and pw-catalog (registration) are added when they are wired in.
