@@ -2,12 +2,13 @@
 
 - Status: **accepted by the owner (2026-11-05)**, as a whole: the common core, the display modes (G4), the
   prototype plan (section 8) and the method of choosing.
-  - **Still open, by design:** the choice between presenter A (wgpu) and B2 (WebView2). It is decided later
-    from the measured results (8.3/8.4) and recorded as an amendment.
   - **Amendment 1 (2026-11-05):** the demosaic method is decided. PPG is the default method; AHD is kept as
     the quality reference. GPU demosaicing (P6) is still investigated. See section 11.
   - **Amendment 2 (2026-11-05):** phase 1 is done (P0, P4b, P4, P5). The scheduling strategy and a
     memory budget of **4 GB** are decided. See section 12.
+  - **Amendment 3 (2026-11-05):** the presenter is decided: **B2-res**, meaning WebView2 shared
+    buffers into WebGL2, with prepared views kept as GPU textures. A (wgpu) is not chosen. See
+    section 13.
   - New dependencies (wgpu or another GPU library) still need separate approval before they are added or
     installed. libjpeg-turbo was approved for prototype P0 on 2026-11-05; using it in the app is a
     separate decision.
@@ -78,7 +79,7 @@ Most of the work is the same for every presentation option, so it is decided her
 | **Decoded-image cache** | Decoded RGBA/RGB images (embedded JPEG, full size), and for RAW the **rendered regions** (tiles) and the **unpacked RAW sessions**. Each entry knows its source (G1) |
 | **Prefetch policy** | What to prepare, and in which order (2.3) |
 | **Scheduler** | `pw-rawview`'s workers, priorities, cancellation and budgets (ADR 0006), extended with JPEG-decode and region-render job types |
-| **Budget** | One user setting (for example "x % of RAM", default to be measured), split between decoded images, RAW sessions and tiles (V8). LRU per class; the current image is never evicted |
+| **Budget** | One user setting, split between decoded images, RAW sessions and tiles (V8). The current image is never evicted. **Decided 2026-11-05 (section 12):** 4 GB by default, as one budget for sessions and views, with LRU eviction of what the scheduler no longer wants. The GPU texture cache of the presenter (section 13) needs a budget of its own |
 | **Swap rule (V2)** | The presentation receives only a *complete* view: all tiles visible at the target zoom, or the whole image at fit. It swaps to it in **one direct swap** as soon as it is ready. **No blurred, low-resolution or unfinished image is ever shown.** Until the swap, the previous view stays. **Permitted exception (owner, 2026-11-05; V2 in the requirements):** if the finished view is not ready after **1 s**, a **neutral loading indicator** may be shown. It contains no image content of the new image, and it never blocks stepping, zooming or other actions. When the finished view arrives, it replaces everything in one swap. The 1 s value is a starting point and may be tuned after the prototypes |
 
 ### 2.2 Decoders
@@ -303,9 +304,9 @@ No new tools or libraries are installed or added by this proposal.
 | **P4b** | Demosaicing, CPU, Rust + LibRaw, no UI: AHD (today) against faster LibRaw methods (linear, VNG, PPG, DHT, AAHD, DCB) and half-size, whole image and one 100 % view region, 1–8 threads (OpenMP) | time; peak memory; quality (8.3) | Which demosaic may be used for browsing in RAW mode, with AHD on demand | **done 2026-11-05**; decision in section 11 |
 | **P4** | Core scheduling, no UI: RAW zoom-target pre-render (unpack + the tiles Z would show + a ring); **visible region first** after an image change or zoom, then the rest; neighbour prefetch while stepping at 1, 2, 4 and 7 images/s; with the demosaic candidates from P4b | time until the visible view is ready; % of simulated Z presses served ≤ 30 ms; CPU load | V7: what is reachable "without waiting"; whether "visible region first" helps (testing the FastRawViewer hypothesis on our own code) | **done 2026-11-05**; decision in section 12 |
 | **P5** | Memory budget: 2/3/4 GB under fast switching and repeated zooms, both display modes cached | peak RAM/VRAM, evictions, hit rate | The default for V8 | **done 2026-11-05**; 4 GB decided (section 12) |
-| **P2** | Presenter B2: WebView2 shared buffer → WebGL2 (and WebGPU if the runtime has it); 100 % view (≈ 6–12 MB) and a full A1 image (199 MB) | swap latency on screen, upload ms, memory, buffer lifetime | Can WebView2 present finished images within the 30 ms targets? | **approved** |
-| **P3** | Presenter A: wgpu surface for the image area under a transparent Tauri webview; same images | swap latency, resize/DPI/focus behaviour, GPU power | Can wgpu be integrated cleanly, and how much faster is a swap? | **approved** (wgpu needs separate approval as a new dependency) |
-| **P6** | **GPU demosaicing in our own presenter:** upload the unpacked Bayer data (≈ 2 bytes per pixel) and demosaic plus colour-convert in a shader. Variants: P3 (wgpu compute/render) and P2 (WebGPU/WebGL in WebView2). Visible region first. Compared with the CPU (P4b) on the same files | time from image change and from Z to the visible sharp view; upload time; CPU/GPU/VRAM; quality (8.3) | Whether the GPU path shortens image change and zoom, as OpenGL did in FastRawViewer (9.9a), and in which presenter | **approved** (the GPU library needs approval as a dependency) |
+| **P2** | Presenter B2: WebView2 shared buffer → WebGL2 (and WebGPU if the runtime has it); 100 % view (≈ 6–12 MB) and a full A1 image (199 MB) | swap latency on screen, upload ms, memory, buffer lifetime | Can WebView2 present finished images within the 30 ms targets? | **done 2026-11-05**; chosen as B2-res (section 13) |
+| **P3** | Presenter A: wgpu surface for the image area under a transparent Tauri webview; same images | swap latency, resize/DPI/focus behaviour, GPU power | Can wgpu be integrated cleanly, and how much faster is a swap? | **done 2026-11-05**; not chosen (section 13). wgpu stays in the prototype only |
+| **P6** | **GPU demosaicing in our own presenter:** upload the unpacked Bayer data (≈ 2 bytes per pixel) and demosaic plus colour-convert in a shader. Variants: P3 (wgpu compute/render) and P2 (WebGPU/WebGL in WebView2). Visible region first. Compared with the CPU (P4b) on the same files | time from image change and from Z to the visible sharp view; upload time; CPU/GPU/VRAM; quality (8.3) | Whether the GPU path shortens image change and zoom, as OpenGL did in FastRawViewer (9.9a), and in which presenter | **approved**; runs in B2 (WebGL2/WebGPU in WebView2), so no new dependency (section 13) |
 | **P1** | Optional quick fix: JS `createImageBitmap` prefetch of large previews in today's app, behind a flag | `latency.ps1` V1/V3 in JPEG mode | Is a cheap interim fix worth doing? | **approved**; lowest priority |
 
 ### 8.3 How the prototypes are compared
@@ -623,6 +624,11 @@ comparable.
    - Further test with DirectX 11/OpenGL: done 2026-11-04 (9.9a). Settings restored and verified.
 6. ~~G4~~ – decided 2026-11-04: two manual modes, RAW and JPEG, no automatic mode (requirements
    document updated).
+7. ~~Scheduling and memory budget (V8)~~ – decided 2026-11-05 after P4/P5: the strategy in 12.1, with a
+   4 GB default budget.
+8. ~~Presenter~~ – decided 2026-11-05: B2-res (section 13).
+9. Next: P6 (GPU demosaicing in B2). libjpeg-turbo in the app still needs separate approval.
+   Postponed by the owner: DPI change, moving to another screen, GPU device loss.
 
 ## 11. Amendment 1: demosaic method (owner decision, 2026-11-05)
 
@@ -766,4 +772,49 @@ Comparison on A7R, on top of `full`:
   Scaled decoding (libjpeg-turbo, 1/2 to 1/4) is the candidate for the fit view; it needs approval as an
   app dependency.
 - **Phase 2 (P2/P3) uses** the finished views from this strategy, and measures the time on screen.
+
+## 13. Amendment 3: presenter (owner decision, 2026-11-05)
+
+### 13.1 Decision
+
+- **The presenter is B2-res:**
+  - The view core (section 12) writes finished pixels into **WebView2 shared buffers**
+    (`CreateSharedBuffer` / `PostSharedBufferToScript`).
+  - The page uploads them to **WebGL2 textures** and keeps prepared views on the GPU, as a texture
+    cache. An image change or Z is then a draw only.
+  - B1 (`pw://` with `fetch`) is replaced for image pixels.
+- **A (wgpu) is not chosen.** wgpu is not added to the app. It remains only in prototype P3.
+- **P6 (GPU demosaicing) is done inside B2**, with WebGL2 (or WebGPU where the runtime has it). That
+  needs no new dependency.
+- This amendment records the decision only. Changing the app is implementation work, done in its own
+  steps, with approval and without breaking working features.
+
+### 13.2 Basis [M]
+
+Basis: `docs/analyses/2026-11-05-adr0008-decision-matrix.md`.
+
+Times are on screen, from key press to changed pixels, median / p95. The screen is sampled every
+~17 ms.
+
+| | B1 (today) | B2 (upload on swap) | **B2-res** | A-up (wgpu) | A-res (wgpu) |
+|---|---|---|---|---|---|
+| 100 % view 2560×1440 | 145 / 152 ms | 30 / 49 ms | **13 / 44 ms** (19 of 20 ≤ 30 ms) | 30 / 42 ms | 17 / 33 ms (19 of 20) |
+| Whole A1 image, fitted | 1599 ms | 203 ms | **16 / 36 ms** (18 of 20) | 120–129 ms | 14 / 37 ms (18 of 20) |
+
+- B2-res and A-res are equally fast. The gain comes from keeping textures on the GPU, not from the
+  graphics library.
+- B2 was chosen for integration:
+  - **dependencies:** none new, against wgpu plus Tauri's `unstable` child-webview feature;
+  - **focus:** no problem, whereas A lost keyboard focus after a restore from the taskbar;
+  - **code:** less new code.
+
+### 13.3 Consequences and open items
+
+- **V8:** the GPU texture cache lives in the WebView2 GPU process. It needs a budget of its own,
+  alongside the 4 GB core budget. P2 grew to 3.0 GB in all. VRAM is not measured yet.
+- **The page must redraw on resize**, and set its canvas size from the window (the prototype did not).
+- **Not tested, postponed by the owner:** DPI change, moving to another screen, GPU device loss
+  (WebGL context loss).
+- **Not solved by any presenter:** RAW-mode cold start and fast stepping (V4, V5, V7 cold). That is
+  P6.
 
