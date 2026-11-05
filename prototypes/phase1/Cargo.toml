@@ -1,0 +1,27 @@
+[package]
+name = "proto-phase1"
+description = "ADR 0008 phase 1 prototypes: P0 (JPEG decoders) and P4b (demosaic vs AHD). Not part of the app."
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+# Its own workspace: the prototypes are built apart from the app (ADR 0008 §8.1).
+[workspace]
+
+[features]
+# libjpeg-turbo (TurboJPEG API) for P0, statically from the repository's vcpkg install, as the
+# `turbojpeg` feature of tools/preview-bench (approved for P0 on 2026-11-05).
+default = ["turbojpeg"]
+turbojpeg = []
+
+[dependencies]
+pw-raw = { path = "../../crates/pw-raw" }
+# The same decoders the existing tools/preview-bench uses (no new dependency).
+zune-jpeg = "0.4"
+jpeg-decoder = { version = "0.3", default-features = false }
+
+[build-dependencies]
+cc = "1"
+
+[profile.release]
+debug = "line-tables-only"
