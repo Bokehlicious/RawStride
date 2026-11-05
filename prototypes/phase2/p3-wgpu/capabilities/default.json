@@ -1,0 +1,7 @@
+{
+  "identifier": "default",
+  "description": "Permissions for the prototype window and its webview",
+  "windows": ["main"],
+  "webviews": ["ui"],
+  "permissions": ["core:default"]
+}
