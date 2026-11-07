@@ -59,23 +59,50 @@ impl fmt::Display for DecodeError {
 
 impl std::error::Error for DecodeError {}
 
-/// A RAW decoder: open (unpack) once, then render any number of views from the session.
-pub trait RawBackend: Send + Sync + 'static {
-    /// An opened and unpacked RAW file. Used by one thread at a time.
+/// Where an image's pixels come from: the display mode (G4).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Source {
+    /// A RAW rendering (LibRaw, PPG).
+    Raw,
+    /// The camera's largest embedded JPEG, or a plain JPEG file itself.
+    Jpeg,
+}
+
+impl Source {
+    /// The other display mode.
+    pub fn other(self) -> Source {
+        match self {
+            Source::Raw => Source::Jpeg,
+            Source::Jpeg => Source::Raw,
+        }
+    }
+}
+
+/// A decoder: open once, then render any number of views from the session. For RAW, opening
+/// unpacks the file; for JPEG it reads the JPEG and its header, and the full decode is made when
+/// a view needs it.
+pub trait Backend: Send + Sync + 'static {
+    /// An opened file. Used by one thread at a time.
     type Session: Send + 'static;
 
-    /// Opens and unpacks `path`. Returns the session and the image size in sensor orientation.
-    fn open(&self, path: &Path) -> Result<(Self::Session, ImageSize), DecodeError>;
+    /// Opens `path` as `source`. Returns the session and the size of its pixel grid (sensor
+    /// orientation for RAW, the JPEG's own grid for JPEG) with the orientation to apply.
+    fn open(&self, path: &Path, source: Source) -> Result<(Self::Session, ImageSize), DecodeError>;
 
-    /// The whole image at half size (2×2 binning), in sensor orientation.
+    /// The whole image at half size.
     fn render_half(&self, session: &mut Self::Session) -> Result<Rgb, DecodeError>;
 
-    /// Exactly the sensor region `r` at full resolution, demosaiced with PPG.
+    /// Exactly the region `r` at full resolution (RAW: demosaiced with PPG).
     fn render_region(&self, session: &mut Self::Session, r: Rect) -> Result<Rgb, DecodeError>;
 
     /// The memory one open session holds, for the core budget.
-    fn session_bytes(&self, size: ImageSize) -> u64 {
-        // unpacked Bayer data, 16 bits per pixel (P5's estimate)
-        u64::from(size.w) * u64::from(size.h) * 2
+    fn session_bytes(&self, size: ImageSize, source: Source) -> u64 {
+        let px = u64::from(size.w) * u64::from(size.h);
+        match source {
+            // unpacked Bayer data, 16 bits per pixel (P5's estimate)
+            Source::Raw => px * 2,
+            // the full decode, kept for 100 % views
+            Source::Jpeg => px * 3,
+        }
     }
 }

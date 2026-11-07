@@ -122,7 +122,7 @@ impl<'a, S: Source> Parser<'a, S> {
         let mut raw = vec![0u8; usize::from(n) * 12 + 4];
         self.src.read_at(start + 2, &mut raw)?;
         let mut entries = Vec::with_capacity(usize::from(n));
-        for e in raw[..usize::from(n) * 12].chunks_exact(12) {
+        for e in raw[..usize::from(n) * 12].as_chunks::<12>().0 {
             let tag = self.u16_of([e[0], e[1]]);
             let typ = self.u16_of([e[2], e[3]]);
             let count = self.u32_of([e[4], e[5], e[6], e[7]]);

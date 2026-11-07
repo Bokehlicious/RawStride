@@ -67,6 +67,30 @@ pub fn downscale(img: &Rgb, out_w: u32, out_h: u32) -> Option<Rgb> {
     })
 }
 
+/// Copies the region `x, y, w, h` of `img`. Returns `None` if it does not lie inside the image or
+/// the image is inconsistent.
+pub fn crop(img: &Rgb, x: u32, y: u32, w: u32, h: u32) -> Option<Rgb> {
+    if !img.is_consistent()
+        || w == 0
+        || h == 0
+        || u64::from(x) + u64::from(w) > u64::from(img.width)
+        || u64::from(y) + u64::from(h) > u64::from(img.height)
+    {
+        return None;
+    }
+    let row = w as usize * 3;
+    let mut data = Vec::with_capacity(row * h as usize);
+    for yy in y..y + h {
+        let start = (yy as usize * img.width as usize + x as usize) * 3;
+        data.extend_from_slice(img.data.get(start..start + row)?);
+    }
+    Some(Rgb {
+        width: w,
+        height: h,
+        data,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -123,6 +147,17 @@ mod tests {
                 "{w}x{h}"
             );
         }
+    }
+
+    #[test]
+    fn crop_copies_the_region_and_refuses_outside() {
+        let src = img(5, 4, |x, y| [x as u8, y as u8, 0]);
+        let c = crop(&src, 1, 2, 3, 2).unwrap_or_else(|| img(0, 0, |_, _| [0; 3]));
+        assert_eq!((c.width, c.height), (3, 2));
+        assert_eq!(&c.data[..3], &[1, 2, 0]);
+        assert_eq!(&c.data[c.data.len() - 3..], &[3, 3, 0]);
+        assert!(crop(&src, 3, 0, 3, 1).is_none());
+        assert!(crop(&src, 0, 0, 0, 1).is_none());
     }
 
     #[test]

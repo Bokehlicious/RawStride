@@ -1,5 +1,5 @@
 //! The core with its workers, driven like the presentation drives it, against a simulated decoder
-//! (no native libraries). Real files are checked in `libraw_files.rs`.
+//! (no native libraries). Real files are checked in `native_files.rs`.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -8,14 +8,15 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use pw_viewcore::{
-    Config, DecodeError, Frame, ImageSize, RawBackend, Rect, Rgb, Status, ViewCore, ViewKind,
+    Backend, Config, DecodeError, Frame, ImageSize, Rect, Rgb, Source, Status, ViewCore, ViewKind,
     ViewOut, Zoom,
 };
 
 const VIEW: [u32; 2] = [1000, 800];
 
-/// Simulated RAW files: "bad*" fails as damaged, the rest are 4000×3000 (flip 6 for "v*").
-/// Every pixel encodes its sensor position, so regions can be checked.
+/// Simulated files. RAW: "bad*" fails as damaged, the rest are 4000×3000 (flip 6 for "v*").
+/// JPEG: "nojpeg*" has no embedded JPEG, the rest have a 1600×1200 one. Every pixel encodes its
+/// position, so regions can be checked.
 #[derive(Clone, Default)]
 struct Fake {
     opens: Arc<AtomicUsize>,
@@ -27,25 +28,25 @@ fn pixel(x: u32, y: u32) -> [u8; 3] {
     [(x % 251) as u8, (y % 241) as u8, ((x + y) % 239) as u8]
 }
 
-impl RawBackend for Fake {
+impl Backend for Fake {
     type Session = (u32, u32);
 
-    fn open(&self, path: &Path) -> Result<((u32, u32), ImageSize), DecodeError> {
+    fn open(&self, path: &Path, source: Source) -> Result<((u32, u32), ImageSize), DecodeError> {
         self.opens.fetch_add(1, Ordering::SeqCst);
         std::thread::sleep(self.delay);
         let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-        if name.starts_with("bad") {
-            return Err(DecodeError::damaged("damaged: RAW data incomplete"));
-        }
         let flip = if name.starts_with('v') { 6 } else { 0 };
-        Ok((
-            (4000, 3000),
-            ImageSize {
-                w: 4000,
-                h: 3000,
-                flip,
-            },
-        ))
+        let (w, h) = match source {
+            Source::Raw if name.starts_with("bad") => {
+                return Err(DecodeError::damaged("damaged: RAW data incomplete"));
+            }
+            Source::Jpeg if name.starts_with("nojpeg") => {
+                return Err(DecodeError::new("the file has no embedded JPEG"));
+            }
+            Source::Raw => (4000, 3000),
+            Source::Jpeg => (1600, 1200),
+        };
+        Ok(((w, h), ImageSize { w, h, flip }))
     }
 
     fn render_half(&self, s: &mut (u32, u32)) -> Result<Rgb, DecodeError> {
@@ -89,12 +90,12 @@ impl RawBackend for Fake {
 }
 
 /// The presentation's side: uploads finished views into a map of "textures".
-struct Screen<'a, B: RawBackend> {
+struct Screen<'a, B: Backend> {
     core: &'a ViewCore<B>,
     textures: HashMap<u64, ViewOut>,
 }
 
-impl<'a, B: RawBackend> Screen<'a, B> {
+impl<'a, B: Backend> Screen<'a, B> {
     fn new(core: &'a ViewCore<B>) -> Self {
         Screen {
             core,
@@ -343,4 +344,46 @@ fn every_action_returns_at_once_while_the_workers_are_busy() {
     core.fit();
     let _ = core.frame(VIEW);
     assert!(t.elapsed() < Duration::from_millis(50), "{:?}", t.elapsed());
+}
+
+#[test]
+fn r_switches_to_the_embedded_jpeg_and_back() {
+    let core = start(Fake::default(), Config::default());
+    core.open_folder(files(&["a", "bad", "nojpeg"]));
+    let mut screen = Screen::new(&core);
+    let f = screen.until(WAIT, ready);
+    assert_eq!((f.mode, f.source), (Source::Raw, Source::Raw));
+    assert_eq!(f.size.map(|s| (s.w, s.h)), Some((4000, 3000)));
+    core.toggle_mode();
+    let f = screen.until(WAIT, |f| ready(f) && f.source == Source::Jpeg);
+    assert_eq!(f.size.map(|s| (s.w, s.h)), Some((1600, 1200)));
+    // 100 % is 100 % of the JPEG
+    core.toggle_zoom(None);
+    let f = screen.until(WAIT, |f| ready(f) && f.zoom == Zoom::Scale(1.0));
+    let tex = &screen.textures[&f.draw.map_or(0, |d| d.id)];
+    assert_eq!(tex.source, Source::Jpeg);
+    assert!(tex.region.x + tex.region.w <= 1600 && tex.region.y + tex.region.h <= 1200);
+    // a damaged RAW still shows its embedded JPEG (G3)
+    core.fit();
+    core.step(1);
+    let f = screen.until(WAIT, |f| ready(f) && f.pos == Some(1));
+    assert_eq!(f.status, Status::Ready);
+    // no embedded JPEG: a message, not the RAW rendering (G4)
+    core.step(1);
+    let f = screen.until(WAIT, |f| matches!(f.status, Status::Error(_)));
+    assert!(matches!(f.status, Status::Error(ref e) if e.message.contains("no embedded JPEG")));
+    assert!(f.draw.is_none());
+    // back to RAW: the mode is the user's, and stays until changed
+    core.toggle_mode();
+    let f = screen.until(WAIT, ready);
+    assert_eq!((f.mode, f.source), (Source::Raw, Source::Raw));
+}
+
+#[test]
+fn a_plain_jpeg_file_is_shown_in_raw_mode_too() {
+    let core = start(Fake::default(), Config::default());
+    core.open_folder(files(&["photo.jpg"]));
+    let mut screen = Screen::new(&core);
+    let f = screen.until(WAIT, ready);
+    assert_eq!((f.mode, f.source), (Source::Raw, Source::Jpeg));
 }

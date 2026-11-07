@@ -13,22 +13,26 @@
 //! - **Swap rule (V2):** the previous view stays until the new one is complete; the neutral
 //!   indicator after 1 s. **Damaged files (G3)** show an error, never an earlier image.
 //!
-//! No GUI types, no files listed here and no FFI outside the `libraw` feature: the decoder is a
-//! [`RawBackend`], and the presentation (`pw-render`, `pw-loupe`) uploads and draws.
-//! JPEG mode (G4) is added in step S3.
+//! - **Display mode (G4):** RAW (LibRaw, PPG) or JPEG (the largest embedded JPEG), switched only by
+//!   the user. Zoom and position stay; 100 % is 100 % of the source shown. A plain JPEG file is
+//!   shown as itself in both modes. A file without an embedded JPEG says so in JPEG mode, and a
+//!   damaged RAW keeps its intact embedded JPEG (G3).
+//!
+//! No GUI types, no files listed here and no FFI outside the `native` feature: the decoders are a
+//! [`Backend`], and the presentation (`pw-render`, `pw-loupe`) uploads and draws.
 
 mod backend;
 mod core;
 pub mod geometry;
-#[cfg(feature = "libraw")]
-pub mod libraw;
+#[cfg(feature = "native")]
+pub mod native;
 pub mod scale;
 mod state;
 
-pub use crate::backend::{DecodeError, RawBackend, Rgb};
+pub use crate::backend::{Backend, DecodeError, Rgb, Source};
 pub use crate::core::ViewCore;
 pub use crate::geometry::{ImageSize, Rect};
 pub use crate::state::{
     Config, Draw, Frame, HALF_DENSITY, MAX_SCALE, Record, Resident, Stats, Status, ViewKind,
-    ViewOut, ZOOM_STEP, Zoom, fnv,
+    ViewOut, ZOOM_STEP, Zoom, fnv, is_plain_jpeg,
 };

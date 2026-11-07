@@ -1,13 +1,14 @@
-//! The core with LibRaw (PPG) on the real test RAWs. Needs the `libraw` feature and PW_TESTDATA
-//! (the folder with the test RAWs, e.g. D:\PhotoWorkflowData\RAW); skipped when it is not set.
-#![cfg(feature = "libraw")]
+//! The core with LibRaw (PPG) and libjpeg-turbo on the real test RAWs. Needs the `native` feature
+//! and PW_TESTDATA (the folder with the test RAWs, e.g. D:\PhotoWorkflowData\RAW); skipped when it
+//! is not set.
+#![cfg(feature = "native")]
 
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use pw_viewcore::libraw::LibRawBackend;
-use pw_viewcore::{Config, Frame, Status, ViewCore, ViewKind, ViewOut, Zoom};
+use pw_viewcore::native::NativeBackend;
+use pw_viewcore::{Config, Frame, Source, Status, ViewCore, ViewKind, ViewOut, Zoom};
 
 const VIEW: [u32; 2] = [1920, 1080];
 const WAIT: Duration = Duration::from_secs(30);
@@ -35,7 +36,7 @@ fn testdata(prefix: &str) -> Vec<PathBuf> {
 }
 
 struct Screen<'a> {
-    core: &'a ViewCore<LibRawBackend>,
+    core: &'a ViewCore<NativeBackend>,
     textures: HashMap<u64, ViewOut>,
 }
 
@@ -68,8 +69,8 @@ impl Screen<'_> {
     }
 }
 
-fn start() -> ViewCore<LibRawBackend> {
-    match ViewCore::start(LibRawBackend, Config::default()) {
+fn start() -> ViewCore<NativeBackend> {
+    match ViewCore::start(NativeBackend, Config::default()) {
         Ok(c) => c,
         Err(e) => panic!("start: {e}"),
     }
@@ -147,4 +148,49 @@ fn a_file_that_is_not_raw_shows_an_error() {
     );
     assert!(frame.draw.is_none());
     let _ = std::fs::remove_dir_all(&tmp);
+}
+
+#[test]
+fn jpeg_mode_shows_the_embedded_jpeg_upright_at_its_own_size() {
+    for prefix in ["TN1004", "TN0059", "P124"] {
+        let files = testdata(prefix);
+        if files.is_empty() {
+            eprintln!("PW_TESTDATA not set or no {prefix}* files; skipped");
+            continue;
+        }
+        let core = start();
+        core.set_mode(Source::Jpeg);
+        core.open_folder(files.clone());
+        let mut screen = Screen {
+            core: &core,
+            textures: HashMap::new(),
+        };
+        let f = screen.until_ready();
+        assert_eq!(f.status, Status::Ready, "{prefix}");
+        assert_eq!(f.source, Source::Jpeg);
+        let size = f.size.unwrap_or_else(|| panic!("no size"));
+        let info = pw_raw::inspect(&files[0]).unwrap_or_else(|e| panic!("{e}"));
+        let large = info
+            .pick(pw_raw::PreviewSize::Large)
+            .unwrap_or_else(|| panic!("{prefix}: no preview"));
+        assert_eq!((size.w, size.h), (large.width, large.height), "{prefix}");
+        // the RAW file's orientation tag decides the rotation
+        let expected = match info.orientation {
+            3 => 3,
+            6 => 6,
+            8 => 5,
+            _ => 0,
+        };
+        assert_eq!(size.flip, expected, "{prefix}");
+        // 100 % of the JPEG
+        core.toggle_zoom(None);
+        let f = screen.until_ready();
+        assert_eq!(f.status, Status::Ready, "{prefix} at 100 %");
+        let tex = &screen.textures[&f.draw.map_or(0, |d| d.id)];
+        assert_eq!(tex.source, Source::Jpeg);
+        assert_eq!(
+            (tex.image.width, tex.image.height),
+            (tex.region.w, tex.region.h)
+        );
+    }
 }

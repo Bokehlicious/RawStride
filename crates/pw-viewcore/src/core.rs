@@ -8,7 +8,7 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use crate::backend::{DecodeError, RawBackend};
+use crate::backend::{Backend, DecodeError, Source};
 use crate::scale;
 use crate::state::{Config, Frame, Record, State, Stats, Task, ViewKind, ViewOut, ZOOM_STEP, Zoom};
 
@@ -17,7 +17,7 @@ const IDLE_WAIT: Duration = Duration::from_secs(1);
 
 type Wake = Box<dyn Fn() + Send + Sync>;
 
-struct Shared<B: RawBackend> {
+struct Shared<B: Backend> {
     backend: B,
     state: Mutex<State<B::Session>>,
     cv: Condvar,
@@ -30,7 +30,7 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
 }
 
-impl<B: RawBackend> Shared<B> {
+impl<B: Backend> Shared<B> {
     fn state(&self) -> MutexGuard<'_, State<B::Session>> {
         lock(&self.state)
     }
@@ -58,25 +58,25 @@ impl<B: RawBackend> Shared<B> {
             drop(g);
             let t0 = Instant::now();
             match task {
-                Task::Unpack {
+                Task::Open {
                     generation,
-                    pos,
+                    key,
                     path,
                 } => {
-                    let result = self.backend.open(&path);
+                    let result = self.backend.open(&path, key.1);
                     let ms = t0.elapsed().as_secs_f64() * 1000.0;
                     let mut s = self.state();
-                    s.finish_unpack(
+                    s.finish_open(
                         generation,
-                        pos,
+                        key,
                         result,
-                        |size| self.backend.session_bytes(size),
+                        |size, source| self.backend.session_bytes(size, source),
                         ms,
                     );
                 }
                 Task::Render {
                     generation,
-                    pos,
+                    key,
                     view,
                     mut session,
                 } => {
@@ -104,7 +104,7 @@ impl<B: RawBackend> Shared<B> {
                     });
                     let ms = t0.elapsed().as_secs_f64() * 1000.0;
                     let mut s = self.state();
-                    s.finish_render(generation, pos, view, session, result, ms);
+                    s.finish_render(generation, key, view, session, result, ms);
                 }
             }
             self.cv.notify_all();
@@ -124,12 +124,12 @@ impl<B: RawBackend> Shared<B> {
 /// 3. [`frame`](Self::frame), and draws what it says.
 ///
 /// Dropping the core stops the workers. A LibRaw call that is running finishes first.
-pub struct ViewCore<B: RawBackend> {
+pub struct ViewCore<B: Backend> {
     shared: Arc<Shared<B>>,
     workers: Vec<JoinHandle<()>>,
 }
 
-impl<B: RawBackend> fmt::Debug for ViewCore<B> {
+impl<B: Backend> fmt::Debug for ViewCore<B> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let s = self.shared.state();
         f.debug_struct("ViewCore")
@@ -142,7 +142,7 @@ impl<B: RawBackend> fmt::Debug for ViewCore<B> {
     }
 }
 
-impl<B: RawBackend> ViewCore<B> {
+impl<B: Backend> ViewCore<B> {
     /// Starts the core with its two workers.
     pub fn start(backend: B, config: Config) -> Result<ViewCore<B>, String> {
         let shared = Arc::new(Shared {
@@ -232,6 +232,19 @@ impl<B: RawBackend> ViewCore<B> {
         self.act("zoom-wheel", |s| s.zoom_by(factor, anchor));
     }
 
+    /// R: switches the display mode RAW ↔ JPEG (G4). Only the user changes it.
+    pub fn toggle_mode(&self) {
+        self.act("mode", |s| {
+            let m = s.mode.other();
+            s.set_mode(m);
+        });
+    }
+
+    /// Sets the display mode (G4).
+    pub fn set_mode(&self, mode: Source) {
+        self.act("mode", |s| s.set_mode(mode));
+    }
+
     /// Drags the image by `delta` view pixels.
     pub fn pan(&self, delta: [f64; 2]) {
         self.act("pan", |s| s.pan(delta));
@@ -308,7 +321,7 @@ impl<B: RawBackend> ViewCore<B> {
     }
 }
 
-impl<B: RawBackend> Drop for ViewCore<B> {
+impl<B: Backend> Drop for ViewCore<B> {
     fn drop(&mut self) {
         self.shutdown();
     }
