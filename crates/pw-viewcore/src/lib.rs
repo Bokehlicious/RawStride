@@ -1,0 +1,34 @@
+//! The view core of the egui loupe (ADR 0009, built on the P7 prototype; ADR 0008 §2 and §12).
+//!
+//! - **View model:** the current image, the zoom level (fit, or a free scale from half of fit up to
+//!   800 %), and the position as a relative point of the upright image (V6).
+//! - **Views:** fit and small levels from a half-size render; the exact visible region at 100 % (the
+//!   zoom target, V7); a ring of twice that for panning; and free levels between 50 % and 100 % as
+//!   a region scaled down on the worker. A view is never drawn upscaled below 100 % (V2).
+//! - **Plan (strategy p5):** the current view first; after a 150 ms dwell the other view, then +1
+//!   and +2 in the direction of travel, the ring, and −1 behind. Free levels are not prefetched.
+//! - **Budgets (V8):** LibRaw sessions under the core budget and finished views under the texture
+//!   budget, counted separately (ADR 0008 §18). Prefetch starts only if it fits; the current image
+//!   and the view on screen are never evicted.
+//! - **Swap rule (V2):** the previous view stays until the new one is complete; the neutral
+//!   indicator after 1 s. **Damaged files (G3)** show an error, never an earlier image.
+//!
+//! No GUI types, no files listed here and no FFI outside the `libraw` feature: the decoder is a
+//! [`RawBackend`], and the presentation (`pw-render`, `pw-loupe`) uploads and draws.
+//! JPEG mode (G4) is added in step S3.
+
+mod backend;
+mod core;
+pub mod geometry;
+#[cfg(feature = "libraw")]
+pub mod libraw;
+pub mod scale;
+mod state;
+
+pub use crate::backend::{DecodeError, RawBackend, Rgb};
+pub use crate::core::ViewCore;
+pub use crate::geometry::{ImageSize, Rect};
+pub use crate::state::{
+    Config, Draw, Frame, HALF_DENSITY, MAX_SCALE, Record, Resident, Stats, Status, ViewKind,
+    ViewOut, ZOOM_STEP, Zoom, fnv,
+};

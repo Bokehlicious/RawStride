@@ -1,0 +1,19 @@
+[package]
+name = "pw-viewcore"
+description = "View core of the egui loupe: view model, plan, budgets and workers (ADR 0009)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+# The real decoder: LibRaw with PPG through pw-libraw. Without it the core is generic and is tested
+# with a simulated decoder, so its tests need no native libraries.
+libraw = ["dep:pw-libraw"]
+
+[dependencies]
+pw-libraw = { workspace = true, optional = true }

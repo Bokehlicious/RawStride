@@ -17,6 +17,7 @@ pw-core = { path = "crates/pw-core" }
 pw-raw = { path = "crates/pw-raw" }
 pw-libraw = { path = "crates/pw-libraw" }
 pw-rawview = { path = "crates/pw-rawview" }
+pw-viewcore = { path = "crates/pw-viewcore" }
 pw-metadata = { path = "crates/pw-metadata" }
 pw-catalog = { path = "crates/pw-catalog" }
 pw-ingest = { path = "crates/pw-ingest" }
