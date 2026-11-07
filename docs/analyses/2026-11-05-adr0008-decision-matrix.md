@@ -9,6 +9,10 @@
 - Raw data: `D:\PhotoWorkflowData\analysis\phase1\`, `...\phase2\` and `...\phase3\`.
 - Status: **for the owner's decision.** The matrix shows measured values against the targets. It
   does not choose.
+- **2026-11-07:** the presenter columns (B1, B2, B2-res, A-up, A-res) and the GPU demosaicing section
+  were measured on a Tauri/WebView2 shell. The owner has since chosen a native GUI in Rust with
+  eframe + egui (ADR 0008 §16, `docs/GUI_REQUIREMENTS.md`). The figures stay as a record. They are not
+  the basis for the GUI choice, and the egui GUI must be measured against V1–V8 again.
 
 ## How to read it
 

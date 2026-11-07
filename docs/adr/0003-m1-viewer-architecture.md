@@ -1,7 +1,16 @@
 # ADR 0003: Milestone 1 viewer architecture
 
-- Status: accepted (approved by the project owner, 2026-11-03)
+- Status: accepted (approved by the project owner, 2026-11-03); **amended 2026-11-07**
 - Date: 2026-11-03
+
+> **Amendment 2026-11-07 (owner):** the GUI moves to pure Rust with eframe + egui
+> ([GUI_REQUIREMENTS.md](../GUI_REQUIREMENTS.md)). This ADR describes the M1 app as built, and it stays
+> valid for the current Tauri app until the egui GUI replaces it.
+> - **Still valid in the new GUI:** points 3 (an embedded JPEG is labelled as such), 4 (rotation always
+>   from the RAW file's orientation tag; never applied twice) and 5 (EXIF from `pw-raw`).
+> - **Superseded for the new GUI:** point 1 (pixels served to WebView2 through `pw://`), the CSS part of
+>   point 4, and point 6 (HTML/CSS/JS frontend in `ui/web`). In egui the images are decoded in Rust and
+>   drawn as textures in the same process.
 
 ## Context
 
@@ -54,5 +63,6 @@ The crates were not tried in code, because the build sandbox has no access to cr
   It is loaded only when zooming in past the 1616 px preview.
 - **No miniature cache yet.** Grids of DNG files decode 4096 px previews; a thumbnail cache comes in
   milestone 2.
-- **wgpu postponed.** A native wgpu renderer is not needed for M1. It is reconsidered when RAW-decoded
-  tiles (milestone 2) need GPU upload.
+- ~~**wgpu postponed.** A native wgpu renderer is not needed for M1. It is reconsidered when RAW-decoded
+  tiles (milestone 2) need GPU upload.~~ **2026-11-07:** no separate wgpu renderer is planned. GPU
+  drawing goes through eframe's backend (GUI_REQUIREMENTS.md, GR4).

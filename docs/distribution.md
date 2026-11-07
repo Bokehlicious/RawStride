@@ -1,7 +1,11 @@
 # Distributing PhotoWorkflow to another Windows 11 PC
 
 This file describes the state after M2 step 5 (2026-11-04), verified with `tools\m2-step5.cmd`
-and `tools\verify-dist.ps1`. The analysis is in `docs/analyses/2026-11-04-m2-pipeline-steps.md`
+and `tools\verify-dist.ps1`.
+
+> **2026-11-07:** this describes the current Tauri app. Once the GUI moves to eframe + egui
+> (`docs/GUI_REQUIREMENTS.md`), the WebView2 runtime, its profile folder and the `msedgewebview2.exe`
+> child processes are no longer needed. This file is updated then. The analysis is in `docs/analyses/2026-11-04-m2-pipeline-steps.md`
 (step 5).
 
 ## What the program folder contains
