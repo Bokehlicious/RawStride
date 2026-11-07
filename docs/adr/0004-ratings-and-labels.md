@@ -82,7 +82,8 @@ Plain TIFFs (`.tif`/`.tiff`) rarely carry an embedded JPEG, so the app decodes t
 as RAW previews: small ≤ 640 px, medium ≤ 2560 px, large = full resolution (decoded only when
 zooming in). Decodes are serialised, so a folder of large TIFFs cannot exhaust memory, and the
 encoded JPEGs are cached (FIFO, 256 MB). Orientation comes from IFD0 and is applied by CSS, as for
-RAW. Supported: 8/16-bit and float Gray, Gray+alpha, RGB, RGBA and CMYK (naive conversion);
+RAW. (Current Tauri UI. In the eframe + egui GUI, orientation is applied when the image is drawn;
+see `docs/GUI_REQUIREMENTS.md`.) Supported: 8/16-bit and float Gray, Gray+alpha, RGB, RGBA and CMYK (naive conversion);
 palette and YCbCr TIFFs are reported as unsupported. ICC profiles are not applied yet.
 
 ## Addendum: filter and multi-selection (2026-11-04)

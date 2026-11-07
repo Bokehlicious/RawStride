@@ -1,5 +1,9 @@
 # Architecture (draft)
 
+> **2026-11-07 (owner):** the GUI is built in pure Rust with eframe + egui
+> ([GUI_REQUIREMENTS.md](GUI_REQUIREMENTS.md)). The app crate below replaces `src-tauri` when the egui GUI
+> takes over. Until then, the current Tauri app keeps working.
+
 ## Goals
 
 1. **Culling speed above everything.** Moving to the next image must feel instant.
@@ -23,7 +27,7 @@
 
 ```
                  ┌──────────────┐
-                 │  src-tauri   │  commands, windows, events
+                 │  app (egui)  │  eframe window, egui UI, view model
                  └──────┬───────┘
      ┌────────┬─────────┼──────────┬────────────┐
      ▼        ▼         ▼          ▼            ▼
@@ -42,7 +46,7 @@
 | `pw-catalog` | SQLite schema, migrations and queries (WAL, single writer) |
 | `pw-ingest` | Volume detection, copy and verify, renaming, backup |
 | `pw-thumbcache` | Content-addressed thumbnail and preview cache |
-| `pw-render` | GPU texture upload and presentation |
+| `pw-render` | Image presentation in egui: texture upload and residency within the budget, through eframe's renderer only (no separate wgpu pipelines) |
 
 ## Storage on the dev machine
 
@@ -57,7 +61,8 @@ Benchmark large ingests before choosing default destinations.
 
 ## Open questions
 
-- How GPU rendering integrates with the Tauri webview: native child window,
-  shared texture, or webview-only rendering. This gets an ADR before any code is written.
+- ~~How GPU rendering integrates with the Tauri webview.~~ Settled 2026-11-07: there is no webview; the
+  GUI and image presentation are eframe + egui (ADR 0008 §16).
+- eframe rendering backend (OpenGL through glow, or wgpu): open, to be chosen after measurement.
 - Thumbnail cache format and sizes.
 - Catalog per volume or global.

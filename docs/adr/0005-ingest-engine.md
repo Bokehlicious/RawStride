@@ -72,6 +72,10 @@ The sandbox disk is not the PC. Measure on thanos with a real card before tuning
 
 ## Dialog (src-tauri/src/ingest.rs, ui/web/ingest.js)
 
+> **2026-11-07:** this section describes the dialog in the current Tauri app. The GUI moves to
+> eframe + egui (`docs/GUI_REQUIREMENTS.md`). The behaviour below is kept, and the dialog is rebuilt
+> in egui (GR8). Settings then move from the WebView's local storage to a settings file.
+
 - Opened with **Importera…** or Ctrl+I. A card (drive with `DCIM`) is selected automatically;
   any folder can be chosen instead.
 - The plan is recomputed 300 ms after each change (the scan of the card is cached; ↻ reads it

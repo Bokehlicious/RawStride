@@ -29,6 +29,11 @@
 | App wiring | `src-tauri` | Commands and the `pw://` routes for half-size images and tiles |
 | Display | `ui/web` | Swaps in the half-size image, and lays tiles over the loupe image |
 
+**2026-11-07:** the app wiring and display rows describe the current Tauri app. In the eframe + egui
+GUI (`docs/GUI_REQUIREMENTS.md`), the GUI calls `pw-rawview` directly in the same process. Images
+are drawn as egui textures, with no `pw://` routes and no JPEG round trip. `pw-libraw` and
+`pw-rawview` are unchanged.
+
 `pw-raw` (the M1 embedded-preview reader) is not changed.
 
 ### 2. Decode settings (identical everywhere)
@@ -107,7 +112,8 @@ Expected peak is ~0.9 GB on top of M1, and below that at rest. Each figure is me
 - A standalone build must ship `vcomp140.dll`, the MSVC OpenMP runtime from the Visual C++
   redistributable, next to the exe. A build script copies it from the VS Build Tools redist
   folder and checks that it is there.
-- The Tauri bundle (when enabled) lists it as a resource.
+- The Tauri bundle (when enabled) lists it as a resource. With the eframe + egui GUI, the packaging
+  script copies it, as today.
 
 ## Steps, each measured against M1
 

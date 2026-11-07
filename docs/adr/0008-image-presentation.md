@@ -16,6 +16,13 @@
     PPG stays the default method and AHD the quality reference. GPU PPG is a promising candidate for
     production, with open questions on dead-pixel correction, the memory budget, the texture cache size
     and the CPU unpack. GPU PPG does not solve the slow unpack of new RAW files. See section 15.
+  - **Amendment 6 (2026-11-07, owner decision):** the GUI is built in **pure Rust with eframe + egui**
+    ([GUI_REQUIREMENTS.md](../GUI_REQUIREMENTS.md)).
+    - **Superseded:** the presenter decision B2-res (section 13) and the rejection of a native UI (C3).
+      No WebView2, WebGL2 or separate wgpu pipelines for the UI.
+    - **Kept:** the core (section 2), PPG/AHD (section 11), strategy p5 and the 4 GB budget
+      (section 12), V1–V8 and G1–G4, and all measurements as a record.
+    - See section 16.
   - New dependencies (wgpu or another GPU library) still need separate approval before they are added or
     installed. libjpeg-turbo was approved for prototype P0 on 2026-11-05; using it in the app is a
     separate decision.
@@ -149,6 +156,10 @@ set after measurement **[P]**.
 
 ## 3. Presentation options
 
+> **Superseded 2026-11-07 (section 16).** Options A, B and C below assumed a Tauri/WebView2 shell. The
+> owner has chosen a native Rust GUI with eframe + egui (`docs/GUI_REQUIREMENTS.md`). The analysis is
+> kept as the record of how the presenter was chosen in phase 2.
+
 ### A. Rust + wgpu: native GPU surface for the image area, UI stays in WebView2
 
 - The window gets a wgpu surface that covers the image area. The WebView2 UI is a **transparent child**
@@ -212,7 +223,7 @@ Variants for moving pixels:
 |---|---|
 | **C1** WebView2 UI + **native Direct2D/DirectComposition** visual for the image area | Windows-only. It gives the same control as A without wgpu, but binds the code to the Windows APIs. wgpu covers the same need portably. **Not recommended** [T] |
 | **C2** Keep today's B1 path, but prefetch with `createImageBitmap` of the *large* previews in JS | Cheapest change. It may help V1/V3 for JPEG previews. It gives no control of memory (V8), cannot carry RAW tiles without encoding, and has no Rust budget. **Fallback only** (prototype P1 measures it) |
-| **C3** Full native UI (no WebView) | Large rewrite of the working UI. Not justified by V1–V8. **Rejected** |
+| **C3** Full native UI (no WebView) | Large rewrite of the working UI. Not justified by V1–V8. **Rejected** (2026-11-04). **Reversed 2026-11-07:** the owner chose a native UI in Rust with eframe + egui (section 16) |
 | **C4** A and B2 behind one `Presenter` interface | The core (section 2) does not depend on the presenter. A and B2 can be compared on the same core, and one can remain as a fallback. **Recommended structure** |
 
 ## 4. Options against V1–V8 (expected; all [T] until the prototypes are measured)
@@ -234,6 +245,10 @@ scheduling), not by the presenter. The presenter decides how close to one frame 
 well VRAM can be controlled.
 
 ## 5. Reuse of existing code
+
+> **2026-11-07 (section 16):** the rows for `src-tauri`, `ui/web` and `app.js` assumed a WebView2 UI.
+> In the eframe + egui GUI, that logic (tile grid, badge, warnings, sequence guards, zoom and pan)
+> moves to Rust. The core crates are reused as stated.
 
 | Code | Use |
 |---|---|
@@ -265,6 +280,10 @@ well VRAM can be controlled.
 No new tools or libraries are installed or added by this proposal.
 
 ## 7. Recommendation
+
+> **2026-11-07:** points 2 and 3 (choosing between A and B2, and keeping B1 as the fallback inside
+> WebView2) are superseded by the eframe + egui decision (section 16). Point 1, the core behind a
+> `Presenter` interface, still applies: the egui GUI is the presenter.
 
 1. **Build the presentation-independent core first** (section 2), behind a `Presenter` interface (C4):
    - view model (V6);
@@ -484,6 +503,9 @@ after a pause and immediately on arrival.
 | Swap without intermediate frames | partly (blur first) | full control | swap in one `requestAnimationFrame`; Chromium timing |
 | GPU RAW processing later | no | wgpu compute shaders [T] | WebGPU compute, if the runtime supports it [T] |
 
+**2026-11-07:** the "GPU RAW processing later" row (wgpu or WebGPU compute shaders) is not a plan any
+more. No separate compute pipelines are built for the UI (section 16, GUI_REQUIREMENTS.md GR4).
+
 FastRawViewer uses a native GPU presentation (DirectX/OpenGL). This **does not prove** that WebView2 is
 too slow. It confirms that the presentation must hold *finished, resident textures* and swap them whole.
 
@@ -633,11 +655,15 @@ comparable.
    document updated).
 7. ~~Scheduling and memory budget (V8)~~ – decided 2026-11-05 after P4/P5: the strategy in 12.1, with a
    4 GB default budget.
-8. ~~Presenter~~ – decided 2026-11-05: B2-res (section 13).
+8. ~~Presenter~~ – decided 2026-11-05: B2-res (section 13). **Superseded 2026-11-07:** the GUI and
+   the image presentation are built in Rust with eframe + egui (section 16).
 9. ~~P6~~ – done 2026-11-05 (section 14). ~~P6b~~ – done 2026-11-05 and approved by the owner as a
    finished prototype (section 15). libjpeg-turbo in the app still needs separate approval.
    Postponed by the owner: DPI change, moving to another screen, GPU device loss.
-10. GPU PPG in production – **open**, not decided. To be answered first (15.4):
+10. GPU PPG in production – **open**, not decided. **2026-11-07:** the WebGL2 shader cannot be used in
+    the eframe + egui GUI as is. Whether a GPU demosaic step is moved into eframe's renderer is a new
+    open question (section 16). CPU PPG stays the decided path. The points below were asked for the
+    WebView2 presenter; the memory points must be measured again under eframe:
     - dead-pixel correction before GPU processing: a proposed step, not implemented or verified; other
       camera models must be examined too;
     - whether the 4 GB budget covers the WebView2 GPU process and its memory use (unclear);
@@ -789,6 +815,11 @@ Comparison on A7R, on top of `full`:
 - **Phase 2 (P2/P3) uses** the finished views from this strategy, and measures the time on screen.
 
 ## 13. Amendment 3: presenter (owner decision, 2026-11-05)
+
+> **Superseded 2026-11-07 by amendment 6 (section 16).** The presenter is no longer WebView2 with
+> WebGL2 but the eframe + egui GUI in our own process. The measurements below stay valid as a record.
+> One finding carries over: the gain came from keeping prepared images resident on the GPU, not from
+> the graphics library.
 
 ### 13.1 Decision
 
@@ -988,6 +1019,10 @@ Rules for P6b:
 
 
 ## 15. Amendment 5: P6b results, PPG as a GPU shader (2026-11-05)
+
+> **2026-11-07 (section 16):** the GPU PPG measured here runs as a WebGL2 shader in WebView2. It is not
+> carried over into the eframe + egui GUI as is. The quality results (the GPU shader equals LibRaw PPG)
+> stay valid as a fact about the algorithm. The memory results are specific to WebView2/ANGLE.
 
 **No production decision.** PPG stays the decided default demosaic method and AHD the quality
 reference (section 11). The presenter stays B2-res (section 13), and the scheduling strategy and the
@@ -1211,3 +1246,58 @@ Rules that still apply:
 - no new dependencies without approval;
 - the PPG shader enters the app only after an owner decision;
 - requirements V1–V8 and G1–G4 are unchanged.
+
+## 16. Amendment 6: GUI in pure Rust with eframe + egui (owner decision, 2026-11-07)
+
+### 16.1 Decision
+
+- **The GUI is built in Rust with eframe + egui** (`docs/GUI_REQUIREMENTS.md`). That covers the loupe
+  and image presentation as well as all other UI.
+- **No Tauri, WebView2, HTML, CSS or JavaScript** in the new GUI.
+- **GPU use only through eframe's rendering backend.** No separate wgpu device, surface or compute
+  pipeline is built for the UI.
+
+### 16.2 What it supersedes
+
+| Earlier | Now |
+|---|---|
+| Section 3: options A, B and C on a Tauri/WebView2 shell; C3 (native UI) rejected | A native Rust UI (eframe + egui) is chosen |
+| Section 7, points 2–3: choose A or B2; B1 as the fallback | The egui GUI is the presenter. The current Tauri app is the fallback until the egui GUI passes acceptance (GUI_REQUIREMENTS.md, GR8) |
+| Section 9.7: GPU RAW processing later through wgpu or WebGPU compute shaders | Not planned |
+| Section 13: presenter B2-res (WebView2 shared buffer into WebGL2) | Superseded. Images are egui textures in our own process. No shared buffers or IPC |
+| Sections 14–15: GPU PPG as a WebGL2 shader | Not carried over as is (16.4) |
+
+### 16.3 What stays
+
+- **The core (section 2):**
+  - the view model (V6);
+  - the decoded-image and tile caches;
+  - prefetch and scheduling;
+  - the swap rule (V2), including the 1 s loading indicator.
+- **PPG as the default demosaic method, with AHD as the quality reference** (section 11).
+- **Strategy p5 and the 4 GB budget** (section 12).
+- **V1–V8 and G1–G4.** They are the acceptance criteria for the egui GUI, measured on screen with
+  `latency.ps1`.
+- **All measurements** in sections 9–15 and in the analyses, as a record of what was measured where.
+  - The phase 2 finding still applies: prepared images resident on the GPU are what make a swap fast.
+  - P0, P4b, P4 and P5 measure the core and do not depend on the GUI.
+
+### 16.4 Consequences and open questions
+
+1. **Image presentation in egui.** Prepared views are uploaded as egui textures and kept resident within
+   a budget, so that an image change or Z is a draw only. Whether egui textures alone reach the 30 ms
+   targets, or a custom paint step in eframe's renderer is needed, must be measured [P].
+2. **eframe rendering backend** (OpenGL through glow, or wgpu): open [T]. To be chosen after a measured
+   comparison on the Arc B580.
+3. **GPU PPG.** The WebGL2 shader of P6b/P6c is not usable in egui as is. CPU PPG stays the decided path.
+   Moving a demosaic shader into eframe's renderer would be a display shader, not a compute pipeline.
+   It needs its own owner decision.
+4. **Memory budget.** Under eframe the textures belong to our own process, so they can be counted in
+   the same budget as the core's caches. The P6c figures (WebView2 GPU process, ANGLE: 2.33× RAM per
+   texture byte) do not apply. Texture memory must be measured again.
+5. **Robustness** (resize, DPI change, another screen, GPU device loss) is part of acceptance for the
+   GUI (GUI_REQUIREMENTS.md, GR7).
+6. **Dependencies.** eframe, egui and any helper crates need the owner's approval of the concrete
+   versions and a licence check before they are added.
+7. **Migration.** The current Tauri app is not broken. It is replaced only when the egui GUI covers its
+   features and passes the acceptance tests.

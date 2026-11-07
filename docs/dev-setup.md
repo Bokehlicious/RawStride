@@ -12,9 +12,12 @@ Verified on the reference machine "thanos" on 2026-11-03.
 | CMake / Ninja | 4.4.5 / 1.13.2 | |
 | vcpkg | 2026-10-29 | `VCPKG_ROOT=C:\Development\vcpkg` |
 | ExifTool | 13.59 | on PATH |
-| Tauri CLI | 2.12.4 | `cargo install tauri-cli --version "^2" --locked` |
-| Node.js | 26.13 | frontend tooling |
+| Tauri CLI | 2.12.4 | `cargo install tauri-cli --version "^2" --locked` (current Tauri app only) |
+| Node.js | 26.13 | frontend tooling and UI tests of the current Tauri app |
 | Git | 2.56 | `core.longpaths=true` |
+
+The Tauri CLI and Node.js are only needed for the current Tauri app. The planned GUI (eframe + egui,
+`docs/GUI_REQUIREMENTS.md`) is built with Cargo alone.
 
 ## System settings
 
