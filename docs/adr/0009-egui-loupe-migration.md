@@ -172,6 +172,7 @@ screen at that level, so it is never a blurred upscale (V2).
 | **`pw-viewcore`** | **New** library | The view core from P7, at production quality (section 5). No egui, no FFI, no GUI types. The decoders are traits, so it can be tested without native libraries |
 | `pw-libraw` | Extended, **additive only** | A demosaic choice: **PPG** for the egui loupe, while today's AHD stays the default for existing callers (section 7). The fixed settings of ADR 0006 are otherwise unchanged |
 | `pw-raw` | Used as is | Locates embedded JPEG previews and reads orientation and EXIF (ADR 0003) |
+| **`pw-libjpeg`** | **New** library (step S3) | Our own safe wrapper over libjpeg-turbo's TurboJPEG 3 API, linked statically from the vcpkg install like LibRaw (§11, decision 1a). No new crates |
 | **`pw-render`** | **Repurposed** (today an empty stub described as wgpu) | Image presentation in egui: texture upload, residency within the texture budget, and placement and texture coordinates per corner. Depends on `egui` only, not eframe (section 6) |
 | **`pw-loupe`** | **New** program (binary crate) | The window (eframe with glow), keyboard and mouse input, the status line, the indicator and error display, and the settings. It wires `pw-viewcore` and `pw-render` together |
 | `pw-rawview` | **Unchanged** | Stays the engine of the Tauri app (ADR 0006) |
@@ -288,7 +289,7 @@ These parts were measured in P7. They are rewritten to production quality, not c
 
 | Need | Decision | Note |
 |---|---|---|
-| **JPEG decoding** of embedded previews (G4) | **libjpeg-turbo, through a safe Rust wrapper.** Fastest in P0, with scaled decoding [M] | The concrete wrapper crate and version, and how libjpeg-turbo is built or linked (vcpkg static, as LibRaw, or the wrapper's own build), are proposed with a licence check in step S3, before they are added (GR10, ADR 0002). libjpeg-turbo carries the IJG, BSD-3-Clause and zlib licences [D]; their notices go to THIRD-PARTY-NOTICES |
+| **JPEG decoding** of embedded previews (G4) | **libjpeg-turbo, through a safe Rust wrapper.** Fastest in P0, with scaled decoding [M]. **The wrapper is our own crate `pw-libjpeg`** (owner, 2026-11-07, option B of `claude/s3-jpeg-decoder-options.md`) | libjpeg-turbo 3.2.0 is already a direct dependency in `vcpkg.json` (since P0) and is linked statically, with libspng and zlib, as the vcpkg port needs. No new crates and no second copy of libjpeg-turbo. libjpeg-turbo carries the IJG, BSD-3-Clause and zlib licences [D]; their notices go to THIRD-PARTY-NOTICES |
 | Folder dialog | **None in milestone 1.** Command line and drag-and-drop, which eframe supports itself | No `rfd` |
 | Settings file | **None.** Command-line arguments only | eframe's `persistence` feature stays off (GUI_REQUIREMENTS §6) |
 
@@ -361,7 +362,7 @@ summary, git diff and git status, and the owner's approval before commit. Nothin
 | **S0** | Accept this ADR. Amend GUI_REQUIREMENTS §6 (remove `wgpu`). Decide the questions in section 11 | **Done 2026-11-07:** documentation commit |
 | **S1** | `pw-libraw`: PPG as an additive option, with the region identity test for PPG | Code + tests |
 | **S2** | `pw-viewcore`: view model, views (including free-zoom views), scheduling, budgets and errors, with simulated decoders; then the RAW backend on `pw-libraw` | Code + tests |
-| **S3** | JPEG mode in `pw-viewcore`: libjpeg-turbo through a safe wrapper (decided in S0), behind its trait. The wrapper crate and its licence check are approved first | Code + tests |
+| **S3** | JPEG mode in `pw-viewcore`: libjpeg-turbo through our own safe wrapper `pw-libjpeg` (§11, decision 1a), behind the decoder trait | Code + tests |
 | **S4** | `pw-render`: textures within the budget, and placement, including free zoom levels | Code + tests |
 | **S5** | `pw-loupe`: window, input, status line, indicator, errors and settings. The licence check for the eframe tree without wgpu comes before the first build | Code + tests, first runnable program |
 | **S6** | Acceptance measurement (section 8.2) and a results report | Results document; no code changes unless the owner asks |
@@ -395,6 +396,12 @@ Added after S0 (owner, 2026-11-07):
 
 7. **R** is the key for the display mode (section 3.3).
 8. **Free zoom is part of milestone 1** (section 3.4).
+
+Added in step S3 (owner, 2026-11-07):
+
+1a. **The libjpeg-turbo wrapper is our own crate `pw-libjpeg`** (option B), not the `turbojpeg`
+    crate. It links the vcpkg libjpeg-turbo 3.2.0 statically and adds no new crates
+    (`claude/s3-jpeg-decoder-options.md`).
 
 ## 12. Consequences
 
