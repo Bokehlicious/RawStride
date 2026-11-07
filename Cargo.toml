@@ -27,6 +27,7 @@ pw-render = { path = "crates/pw-render" }
 # External dependencies are added here (pinned once) when implementation starts.
 # eframe/egui 0.37.0, pinned exactly; features as approved (GUI_REQUIREMENTS §6, ADR 0009 §6.1).
 egui = { version = "=0.37.0", default-features = false }
+eframe = { version = "=0.37.0", default-features = false, features = ["glow", "accesskit", "default_fonts", "clipboard"] }
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"
