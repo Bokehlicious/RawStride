@@ -104,6 +104,10 @@ run within a few ms.
    - It is unclear whether the 4 GB budget covers the WebView2 GPU process and its memory use (ADR
      0008 §15.4).
    - Not measured for the other presenters.
+   - **P6c (2026-11-05, ADR 0008 §17):** under WebView2/ANGLE each texture byte costs 2.33 bytes of RAM,
+     or 1.40 with a pixel unpack buffer. A 1.3–1.4 GB texture cache matches P5 at 4 GB except on ±3
+     jumps (71 % against 88 %). These factors are specific to WebView2 and must be measured again
+     under eframe + egui.
 5. **The three robustness points** (DPI change, another screen, GPU device loss) are postponed by the
    owner.
 

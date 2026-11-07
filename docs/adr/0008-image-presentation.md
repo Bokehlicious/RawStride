@@ -23,6 +23,10 @@
     - **Kept:** the core (section 2), PPG/AHD (section 11), strategy p5 and the 4 GB budget
       (section 12), V1–V8 and G1–G4, and all measurements as a record.
     - See section 16.
+  - **Amendment 7 (2026-11-07):** P6c results (GPU PPG memory budget and texture cache, measured in
+    the WebView2 presenter). No decision. The memory factors are specific to WebView2/ANGLE and do not
+    describe the eframe + egui GUI. The findings on cache size, hit rates, eviction and measurement
+    method carry over as questions to measure again. See section 17.
   - New dependencies (wgpu or another GPU library) still need separate approval before they are added or
     installed. libjpeg-turbo was approved for prototype P0 on 2026-11-05; using it in the app is a
     separate decision.
@@ -1301,3 +1305,136 @@ Rules that still apply:
    versions and a licence check before they are added.
 7. **Migration.** The current Tauri app is not broken. It is replaced only when the egui GUI covers its
    features and passes the acceptance tests.
+
+## 17. Amendment 7: P6c results, memory budget and texture cache (2026-11-07)
+
+**No decision.** P6c was run on 2026-11-05, before amendment 6. It measured GPU PPG in the WebView2
+presenter (B2-res), which has since been superseded by the eframe + egui GUI (section 16).
+
+- **Specific to WebView2/ANGLE:** the memory factors below. They describe the WebView2 GPU process, not
+  the egui GUI.
+- **Carried over:** the findings on cache size, hit rates, eviction and measurement method, as
+  questions to measure again under eframe.
+- **Unchanged:** PPG/AHD (section 11), strategy p5 and the 4 GB budget (section 12), the P5 results,
+  and V1–V8 and G1–G4.
+
+### 17.1 What P6c did
+
+- **Prototype:** `prototypes/phase3/p6c-gpu-memory`, commit `40903c0`. Built on P6b, with no new
+  dependencies.
+- **Raw data:** `D:\PhotoWorkflowData\analysis\phase3\p6c\`. Results:
+  `claude/phase3-p6c-results.md` (project).
+- **Memory in four layers, never added up blindly:**
+  - L1, own accounting;
+  - L2, private bytes per process, with WebView2 process kinds from `GetProcessInfos`;
+  - L3, PDH "GPU Process Memory" and "GPU Adapter Memory";
+  - L4, system commit, used only as a control.
+- **The texture cache** used the P5 rules:
+  - a byte budget;
+  - the current image always loads;
+  - prefetch of +1, +2 and −1 after 150 ms, only if it fits;
+  - LRU eviction.
+- **Variants:**
+  - U1–U4: upload as one call, through a pixel unpack buffer, in strips, and with a texture pool;
+  - H0: no half-size texture;
+  - K2: unpacked data kept in a CPU tier.
+- **Scenarios:** the P5 scenarios (S1, S2, S4, S6, S5, NAT and MIX in RAW mode), with P5's positions
+  and random sequence; an overlap sweep (M0); and stress tests M1–M5 with frame hashes.
+- **Size:** 22 configurations, each in a fresh process. All finished without errors.
+
+### 17.2 Results [M]
+
+**1. Measurement method (carries over to any GPU process).**
+
+- The RAM cost of GPU textures shows up as private bytes of the process that owns the GPU context. The
+  change in system commit equals the change in the private bytes of the process tree.
+- Shared GPU memory (PDH) is part of those private bytes and must not be added to them.
+- Dedicated GPU memory (VRAM) is not part of RAM and is reported separately.
+- Allocating a texture without data costs nothing. Memory is committed on upload, and released about
+  10 s after deletion.
+
+**2. Memory per texture in WebView2/ANGLE (WebView2-specific).**
+
+| Upload | RAM per MB of texture | Shared GPU memory | VRAM |
+|---|---|---|---|
+| U1 `texSubImage2D` | 2.33 × | 1.08 × | 1.03 × |
+| U2 pixel unpack buffer | 1.40 × | 0.00 × | 1.09 × |
+
+With A7R and U1, the whole process tree peaked at:
+
+| Texture cache | Peak RAM |
+|---|---|
+| 768 MB | 3.0 GB |
+| 1024 MB | 3.3 GB |
+| 1300 MB | 4.0 GB |
+| 1400 MB | 4.4 GB |
+| 2048 MB | 5.3 GB |
+| 1400 MB with U2 | 3.4 GB |
+
+**3. Hit rate against P5** (A7R, share within 30 ms). The cause, one image's size in the cache, is not
+specific to WebView2.
+
+| Run | S1, S5, S6, NAT | MIX steps | **MIX jumps ±3** | S2 4–10/s | Z right after the first view |
+|---|---|---|---|---|---|
+| P5, 4 GB | 100 % | 94 % | **88 %** | 10 % | 0 % (43–46 ms) |
+| P5, 2 GB | 94–100 % | 91 % | **35 %** | 11 % | 0 % |
+| GPU cache 2048 MB (11 images) | 100 % | 96 % | **76 %** | 10 % | 100 % |
+| GPU cache 1300–1400 MB (7–8 images) | 100 % | 96 % | **71 %** | 10 % | 100 % |
+| GPU cache 1024 MB (5 images) | 97–100 % | 91 % | **35 %** | 10 % | 100 % |
+| GPU cache 768 MB (4 images) | 71–100 % | 76 % | **29 %** | 10 % | 100 % |
+
+- **Smaller caches miss on jumps.** One A7R image takes 175 MB as Bayer plus half-size texture, against
+  about 60 MB as P5 views, so a smaller GPU cache holds fewer images of the 12-image MIX window. Every
+  such miss was classed "evicted".
+- **Without the half-size texture (H0)** the same cache holds 11 images instead of 8, and jumps rise to
+  76 %.
+- **A miss costs about 480 ms** (unpack + upload). With K2 it costs about 190–210 ms, but the CPU tier
+  takes 1.5 GB of RAM, and the hit rate is unchanged.
+- **Fast stepping (S2) is unchanged at about 10 %.** The CPU unpack limits.
+- **CPU:** 0.4–0.65 cores on average, against 1.2–1.7 in P5, because there is no CPU demosaicing.
+- **Same pattern for A1 and RW2.**
+  - A1 at 1400 MB: jumps 76 % (P5 4 GB: 82 %).
+  - RW2 at 1400 MB: jumps 94 % (P5: 94 %), because one image is small.
+
+**4. Eviction and correctness (carries over as a requirement).**
+
+- 562 frames were checked by hash: 0 wrong images, 0 black frames, 0 GL errors.
+- Zoom, evict and return: zoom and position kept, same pixels, no intermediate image. The image showed
+  after about 0.6 s.
+- A tiny budget at 10 images/s never exceeded the budget.
+- 400 steps at the limit showed no growth over time.
+- The texture pool (U4) reused textures 110 times, gave somewhat faster uploads, and worked with mixed
+  image sizes.
+
+**5. On screen (WebView2, 1400 MB).**
+
+| Action | Median | Max |
+|---|---|---|
+| Z | 22.7 ms | 194 ms, the first press only |
+| Pan | 21.0 ms | 184 ms, the first press only |
+| Prefetched image change | 47 ms (P6b: 23 ms) | – |
+
+The cause of the slower image change is not determined. A probable factor is P6c's PDH sampler.
+
+### 17.3 What this means for the eframe + egui GUI (not a decision)
+
+- **Measure again under eframe.** Texture memory per image is to be measured with the L1–L4 method, for
+  both rendering backends (glow and wgpu). The WebView2 factors (2.33 × and 1.40 ×) must not be used to
+  set the budget.
+- **The 4 GB question is simpler under eframe.** The textures belong to our own process, so they can be
+  counted in the same budget as the core's caches (GUI_REQUIREMENTS.md §4). The split must still be set
+  from measurement.
+- **Cache size and hit rate.** Holding the MIX window (about 12 A7R images) as GPU textures takes about
+  2.1 GB with half-size textures, or about 1.4 GB without. A smaller cache costs jump hits, as measured.
+  - To be weighed: textures for the current image and its neighbours only, with views or unpacked data
+    kept in RAM within the core's budget (as in P5).
+- **Carried over as requirements for the GUI's image cache:**
+  - the eviction rules;
+  - never evict the current image;
+  - frame correctness under memory pressure;
+  - reuse of textures of the same size.
+- **Open (section 16.4):**
+  - the eframe rendering backend;
+  - whether egui textures alone meet the 30 ms targets;
+  - GPU PPG in eframe's renderer;
+  - the budget split.
