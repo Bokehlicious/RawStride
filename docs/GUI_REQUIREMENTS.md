@@ -1,7 +1,8 @@
 # GUI requirements: pure Rust with eframe + egui
 
 - Status: **decided by the owner (2026-11-07).** Versions and features approved the same day (§6).
-  The renderer and the memory budget were decided after P7, also the same day (§7).
+  The renderer and the memory budget were decided after P7, also the same day (§7). `wgpu` was
+  removed from the feature list on 2026-11-07 (ADR 0009, step S0).
 - Scope: the whole graphical user interface of PhotoWorkflow. That covers the window, the loupe and
   stepping, the contact sheet, ratings and labels, the ingest dialog, the metadata views and settings.
 - Related:
@@ -82,19 +83,22 @@ ADR 0003) and the presenter decision B2-res (WebView2 shared buffer into WebGL2,
 
 | Feature | Why |
 |---|---|
-| `wgpu` | eframe's default renderer since 0.34. Measured in P7 and **not chosen** (§7). Whether it stays in the app's feature list is decided when eframe is added to the app |
 | `glow` | **The chosen renderer** (OpenGL, §7) |
 | `accesskit` | Windows accessibility |
 | `default_fonts` | Bundled fonts. Kept by the owner's decision. The fonts carry OFL-1.1 and the Ubuntu Font Licence, so their notices ship later with THIRD-PARTY-NOTICES (ADR 0002) |
 | `clipboard` | Copy and paste |
 
-Left out: `wayland`, `x11`, `web_screen_reader` and `links` (Linux and web only), and `persistence`
-(until there is a real settings format).
+Left out:
+
+- **`wgpu`** (owner decision, 2026-11-07, ADR 0009): glow is the only renderer (§7). The P7 prototype
+  built both renderers for its comparison; the app uses glow only.
+- `wayland`, `x11`, `web_screen_reader` and `links` (Linux and web only).
+- `persistence` (until there is a real settings format).
 
 **Licence review (accepted by the owner, 2026-11-07):**
 
-- **Scope:** all 162 sub-dependencies for Windows x64, read from `cargo metadata` in a throwaway crate
-  outside the repository. The list is in `D:\PhotoWorkflowData\analysis\licprobe\eframe-0.37-licences.md`.
+- **Scope:** all 162 sub-dependencies for Windows x64, with `wgpu` still included, read from
+  `cargo metadata` in a throwaway crate outside the repository. The list is in `D:\PhotoWorkflowData\analysis\licprobe\eframe-0.37-licences.md`.
 - **Result:** all are permissive. Most are MIT OR Apache-2.0; others are Zlib, BSD, ISC, BSL-1.0 or
   Unlicense, or offer one of these.
 - **`self_cell`** is offered as "Apache-2.0 OR GPL-2.0-only" and is used under **Apache-2.0**.
@@ -110,6 +114,8 @@ Left out: `wayland`, `x11`, `web_screen_reader` and `links` (Linux and web only)
 - **Adding eframe to the code** is a separate step, with its own approval. This decision approves the
   versions and features, not a code change.
 - **A newer version** needs a new decision and a new licence review.
+- **The tree without `wgpu`** is checked again before eframe is first built in the workspace (ADR 0009
+  §6.1). It is expected to be a subset of the 162 crates reviewed, with no new licence.
 
 ## 7. Renderer and memory budget (owner decision, 2026-11-07)
 
