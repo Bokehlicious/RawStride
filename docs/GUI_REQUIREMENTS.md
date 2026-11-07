@@ -1,6 +1,6 @@
 # GUI requirements: pure Rust with eframe + egui
 
-- Status: **decided by the owner (2026-11-07).**
+- Status: **decided by the owner (2026-11-07).** Versions and features approved the same day (§6).
 - Scope: the whole graphical user interface of PhotoWorkflow. That covers the window, the loupe and
   stepping, the contact sheet, ratings and labels, the ingest dialog, the metadata views and settings.
 - Related:
@@ -63,6 +63,49 @@ ADR 0003) and the presenter decision B2-res (WebView2 shared buffer into WebGL2,
 
 ## 5. Not decided here
 
-- The eframe and egui versions, the rendering backend and any helper crates (GR10).
+- The rendering backend (§4) and any helper crates (GR10). The eframe and egui versions are decided
+  in §6.
 - The order of migration, and whether the first egui milestone is the loupe alone.
 - Whether any prototype is built before the app is changed. Rule: the working app is not broken.
+
+## 6. Approved versions and features (owner decision, 2026-11-07)
+
+**Versions:**
+
+- **eframe 0.37.0** and **egui 0.37.0**, released 2026-10-15.
+- Licence MIT OR Apache-2.0.
+- They need Rust 1.95; the project toolchain is 1.99.1.
+- The version is pinned exactly, as `=0.37.0`.
+
+**Features:** `default-features = false`, plus only these:
+
+| Feature | Why |
+|---|---|
+| `wgpu` | Renderer candidate, and eframe's default renderer since 0.34 |
+| `glow` | Renderer candidate (OpenGL). Kept until the measured comparison picks one (§4) |
+| `accesskit` | Windows accessibility |
+| `default_fonts` | Bundled fonts. Kept by the owner's decision. The fonts carry OFL-1.1 and the Ubuntu Font Licence, so their notices ship later with THIRD-PARTY-NOTICES (ADR 0002) |
+| `clipboard` | Copy and paste |
+
+Left out: `wayland`, `x11`, `web_screen_reader` and `links` (Linux and web only), and `persistence`
+(until there is a real settings format).
+
+**Licence review (accepted by the owner, 2026-11-07):**
+
+- **Scope:** all 162 sub-dependencies for Windows x64, read from `cargo metadata` in a throwaway crate
+  outside the repository. The list is in `D:\PhotoWorkflowData\analysis\licprobe\eframe-0.37-licences.md`.
+- **Result:** all are permissive. Most are MIT OR Apache-2.0; others are Zlib, BSD, ISC, BSL-1.0 or
+  Unlicense, or offer one of these.
+- **`self_cell`** is offered as "Apache-2.0 OR GPL-2.0-only" and is used under **Apache-2.0**.
+- **Notices required in the distribution:**
+  - the Apache-2.0 and MIT licence texts;
+  - the OFL-1.1 and Ubuntu Font Licence, for the fonts;
+  - Unicode-3.0, for `unicode-ident` and `unicode-properties`.
+  
+  These are collected in THIRD-PARTY-NOTICES before a first release (ADR 0002).
+
+**Still to do:**
+
+- **Adding eframe to the code** is a separate step, with its own approval. This decision approves the
+  versions and features, not a code change.
+- **A newer version** needs a new decision and a new licence review.

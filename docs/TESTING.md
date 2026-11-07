@@ -1,171 +1,266 @@
-﻿# Testing Strategy for PhotoWorkflow
+﻿# Testing Strategy — Mandatory Requirements
 
-## Introduction
+## 1. Purpose
 
-This document describes the testing strategy for the PhotoWorkflow project. It defines principles for golden-output verification, test tiers, and when different types of tests should be used.
+This document defines how PhotoWorkflow is tested, how test results are evaluated, and how implementation correctness is verified against approved project requirements.
 
-**Note**: Test implementation is not performed during this task. This is documentation of the strategy to be implemented in future CI workflows.
+The testing strategy must:
+- Verify observable product behavior rather than merely implementation details.
+- Connect tests to requirements and ADR decisions.
+- Distinguish automated tests from manual verification.
+- Distinguish simulated tests from tests using real files and real application components.
+- Make skipped and unavailable tests visible.
+- Avoid inventing acceptance criteria that have not been approved.
 
-## 1. Golden-Output Principles
+## 2. Source of Truth
 
-Golden output defines reference outputs against which new builds can be compared.
+Testing must be based on:
+- Explicit project-owner decisions.
+- Approved product requirements.
+- Accepted ADRs and their accepted amendments.
+- Approved implementation specifications.
 
-### 1.1 Metadata Handling
+A proposed ADR is not an approved implementation contract.
 
-#### Semantic Verification
+Prototype measurements and experimental results must not automatically become production acceptance criteria.
 
-- Validate field structure and value semantics (e.g., IPTC field names, XMP schema).
-- Ensure values have meaningful context-appropriate meanings.
+When a requirement is unresolved, tests may document the intended verification area, but must not claim that the final acceptance criteria are established.
 
-#### Round-Trip Verification
+## 3. Metadata Storage and Integrity
 
-- Test that metadata survives a full pipeline (read -> process -> write).
+The following storage policy is fixed:
 
-### 1.2 Deterministic CPU Operations
+| File format | Metadata storage | Original image modification |
+|---|---|---|
+| DNG | Embedded in DNG | Allowed and required for metadata writes |
+| Other RAW formats, including ARW and RW2 | Adjacent XMP sidecar | Original RAW must not be modified |
+| JPEG | Embedded in JPEG | Allowed and required for metadata writes |
+| TIFF | Embedded in TIFF | Allowed and required for metadata writes |
 
-- Use reproducible tests for preprocessor code and binary calculations.
-- Perform byte-exact comparisons where appropriate (mathematical constants, hash values).
-- Avoid randomization or timestamp-dependent values in golden output.
+Tests must respect these rules.
 
-### 1.3 RAW Decoding
+Full-file hash equality must not be expected after an intentional embedded metadata write to DNG, JPEG, or TIFF.
 
-#### Verified References
+For RAW formats using sidecars, tests must verify that metadata operations leave the original RAW file unchanged.
 
-- Known file formats have verified reference outputs (e.g., Adobe DNG specification).
-- Compare decoding results against known references when available.
+Tests should verify:
+- Correct metadata storage location.
+- Preservation of unrelated metadata.
+- Preservation of existing sidecar content where required.
+- Correct behavior when sidecars are missing or already exist.
+- Correct handling of Unicode and special characters in paths.
+- Correct handling of metadata read, write, update, and clear operations.
+- Image data integrity where embedded metadata is modified.
 
-#### Environment Variations
+Detailed IPTC/XMP behavior must follow the approved metadata ADR and subsequent project-owner decisions.
 
-- Document actual variations between build environments as allowed.
-- Long-term environment dependencies are documented in docs/analyses/.
+## 4. Test Categories
 
-### 1.4 GPU Rendering
+### 4.1 Unit Tests
 
-#### Tolerance-Based Comparison
+Test individual functions and components in isolation.
 
-- Pixel values may differ between builds due to rendering order, floating-point precision.
-- Tolerances should be determined empirically via benchmarking against reference builds.
-- Perceptual comparison is used (LPIPS/DSSIM as optional tools, not mandatory).
+Examples:
+- Filename and path handling.
+- Metadata mapping.
+- Filtering and sorting.
+- Geometry and coordinate calculations.
+- Cache key generation.
+- Scheduling and prioritization logic.
 
-#### Rendering-Varying Factors
+### 4.2 Rust Integration Tests
 
-- GPU rendering tolerates certain differences (shader execution order, floating-point round-off).
-- Avoid byte-exact comparisons when rendering is involved.
+Test interactions between Rust crates and external components.
 
-## 2. Test Tiers and Usage Cases
+Examples:
+- Ingest planning and execution.
+- RAW decoding.
+- Metadata operations.
+- Rendering engine behavior.
+- File integrity and error handling.
 
-Tests are organized into four tiers:
+### 4.3 UI Regression Tests
 
-### 2.1 Fast Gate
+Use the existing Node.js and Playwright tests where applicable.
 
-**Purpose**: Basic functional tests that should always succeed.
-**When used**: All branch merges, release builds.
-**Includes**:
-- Basic compilation checks
-- API compatibility (when applicable)
-- Metadata round-trip for known formats
+The current UI tests use a mocked Tauri backend.
 
-### 2.2 Targeted Tests
+They verify frontend behavior but do not, by themselves, verify the complete integration with the real Rust backend or WebView2 runtime.
 
-**Purpose**: Tests for specific functionality areas or problem domains.
-**When used**: Local changes within a domain (e.g., RAW decoding, GPU rendering).
-**Includes**:
-- Format-specific tests (RAW, JPEG, TIFF)
-- Feature tests for new functionality
-- Regression tests for changed areas
+### 4.4 Real-File Tests
 
-### 2.3 Comprehensive Tests
+Use real camera files when behavior depends on actual RAW formats, embedded previews, metadata, orientation, or decoder behavior.
 
-**Purpose**: Full-system tests including extensive performance and memory checks.
-**When used**: Merge to main branch when risk/size is high.
-**Criteria for when comprehensive tests are required**:
-1. Change risk and scope justify it (e.g., core code, renderer).
-2. New dependencies are added or changed.
-3. Heritage between build environments is affected (OpenMP, GPU rendering).
+The external test dataset is configured through `PW_TESTDATA`.
 
-### 2.4 Release Controls
+Tests that require this dataset must be clearly reported as skipped or unavailable when it is missing.
 
-**Purpose**: Performance, memory, and compatibility controls prior to release.
-**When used**: New versions, packaging.
-**Includes**:
-- Memory leak detection (optional tooling)
-- Performance benchmarking
-- Cross-platform compatibility (when applicable)
+### 4.5 External Tool Tests
 
-## 3. Comparison Strategies
+Tests requiring ExifTool must verify that ExifTool is available.
 
-The following comparison methods are used depending on data and context:
+A test that returns early because ExifTool is unavailable must not be reported as a successful verification.
 
-| Strategy | Usage | Example |
-|----------|-------|---------|
-| Byte-exact | Metadata, deterministic calculations | Hash values, numerical constants |
-| Tolerance-based | GPU rendering, preprocessor results | Pixel difference (<1 pixel), shader output |
-| Perceptual | Rendering comparisons | LPIPS/DSSIM as optional tools |
+The configured executable may be selected through `PW_EXIFTOOL_PL` where supported.
 
-### 3.1 Byte-Exact Comparison
+### 4.6 Performance Tests
 
-- Metadata hash values (MD5/SHA).
-- Known numerical constants (pi, e, etc.).
-- File formats with exact specifications (e.g., JPEG quality 100%).
+Performance testing must measure observable behavior and use documented test conditions.
 
-### 3.2 Tolerance-Based Comparison
+Every reported measurement must identify:
+- Hardware.
+- Operating system.
+- Build configuration.
+- Test dataset.
+- Measurement method.
+- Number of runs or sampling method.
+- Result and relevant distribution statistics.
 
-- GPU rendering (max diff < 1 pixel).
-- Preprocessor results where environment-sensitive (OpenMP parallelization).
-- Timestamp-dependent values are avoided.
+Do not convert measurements from a prototype, one machine, or one test run into universal acceptance criteria without explicit approval.
 
-### 3.3 Perceptual Comparison
+### 4.7 Manual Acceptance Tests
 
-- Rendering comparisons (LPIPS/DSSIM as optional tools).
-- User-driven test cases (manual review when automatic detection is unclear).
+Some requirements require verification in the running desktop application.
 
-**Important**: LPIPS, SSIM, and DSSIM are optional tools, not mandatory dependencies. Threshold values should be determined empirically via benchmarking.
+Manual tests must document:
+- Preconditions.
+- Exact test procedure.
+- Expected result.
+- Actual result.
+- Pass/fail status.
+- Relevant screenshots, logs, or measurements.
 
-Avoid byte-exact comparison when environment variations are expected (e.g., timestamping, UUIDs).
+## 5. Test Execution Profiles
 
-## 4. CI Strategy (Documentation)
+The testing strategy should define separate execution profiles.
 
-### 4.1 Test Tier Descriptions
+### Fast Regression
 
-The following test tiers should be implemented when CI workflows are created:
+Purpose:
+- Quickly detect common regressions.
+- Run suitable unit and integration tests.
+- Avoid requiring large external datasets where possible.
 
-| Workflow | Purpose | Required For |
-|----------|---------|--------------|
-| fast-gate | Basic functional tests, fast feedback | All merge requests |
-| targeted-tests | Tests specific to changed areas | Local updates, small changes |
-| comprehensive-tests | Full-system test including extensive performance/memory checks | Merge to main with justified risk/scope |
-| release-controls | Performance-memory-compatibility controls for release | Release branches, packaging |
+### UI Regression
 
-### 4.2 When Comprehensive Tests Are Required
+Purpose:
+- Verify frontend behavior using the existing Playwright tests.
+- Report the mocked-backend limitation.
 
-Comprehensive tests should be required before merge when:
-1. Change risk and scope justify it (e.g., core code, renderer).
-2. New dependencies are added or changed.
-3. Heritage between build environments is affected (OpenMP, GPU rendering).
+### Metadata Integration
 
-### 4.3 Documentation Status
+Purpose:
+- Verify metadata behavior using ExifTool.
+- Test DNG, JPEG, TIFF, and RAW sidecar behavior according to the storage policy.
 
-- .github/workflows/ci.yml should not be created during this task.
-- The testing strategy is documented here; implementation occurs in future project phases.
+### Real RAW Verification
 
----
+Purpose:
+- Verify behavior using the external RAW test dataset.
+- Cover supported cameras and formats represented in the dataset.
 
-## 5. Analysis Files
+### Rendering and Memory Verification
 
-Analysis files for specific investigations are stored in docs/analyses/:
+Purpose:
+- Verify rendering engine behavior, scheduling, memory limits, cache behavior, and resource cleanup.
 
-| File | Purpose |
-|------|---------|
-| raw-decoding-analysis.md | Investigation of RAW decoding variations between build environments |
-| iptc-metadata-validation.md | Detailed analysis of IPTC metadata needs and round-trip verification |
-| adr0008-decision-matrix.md | Decision matrix for ADR0008 (e.g., rendering pipeline decisions) |
+### Full Verification
 
-## 6. References
+Purpose:
+- Combine all applicable automated tests, real-file tests, performance measurements, and manual acceptance checks.
 
-- AGENTS.md#golden-output-and-test-strategy - Shared test principles
-- docs/clean-room.md - Clean-room policy for legal scoping
-- docs/adr/ - Architecture decisions and technical choices
+Exact commands and prerequisites must be verified against the repository before being documented.
 
----
+Do not invent a unified test runner if none exists.
 
-*This document describes the testing strategy. Implementation is deferred to future CI workflow creation.*
+## 6. Test Result Classification
+
+Every test or test group must be classified as one of:
+
+- **Passed:** The test executed and all assertions succeeded.
+- **Failed:** The test executed and one or more assertions failed.
+- **Skipped:** The test was intentionally not executed or skipped because a prerequisite was unavailable.
+- **Blocked:** The test could not be completed because of an environmental or technical problem.
+- **Not run:** The test was not executed.
+- **Not applicable:** The test does not apply to the tested configuration.
+
+A skipped test must never be counted as a passed verification.
+
+A test command that exits successfully does not prove that all intended tests actually executed.
+
+## 7. Requirement Traceability
+
+Every important product requirement must be traceable to its verification method.
+
+The traceability matrix should contain:
+
+| Field | Description |
+|---|---|
+| Requirement ID | Exact identifier from the requirement or ADR |
+| Requirement | Short description |
+| Source | Requirement document or ADR |
+| Verification method | Automated, real-file, performance, or manual |
+| Existing test | Exact test file or test name, if present |
+| Coverage status | Verified, partially verified, not verified, or blocked |
+| Notes | Limitations and outstanding work |
+
+The existence of a related test does not automatically mean that the complete requirement is verified.
+
+## 8. Performance and Acceptance Criteria
+
+Acceptance thresholds must come from approved requirements.
+
+For image viewer requirements V1–V8 and G1–G4:
+- Preserve the exact requirement wording and thresholds.
+- Do not replace them with more convenient targets.
+- Do not claim compliance based only on simulated tests.
+- Identify which requirements need measurements in the actual desktop application.
+- Record hardware and test conditions for performance results.
+
+Prototype results from ADR 0008 must remain identified as prototype evidence unless explicitly adopted by the project owner.
+
+## 9. Test Data
+
+Small files that may legally be redistributed may be stored in the repository's fixture directory.
+
+Large RAW datasets must remain outside the repository.
+
+The current external test dataset is documented in `tests/fixtures/README.md` and accessed through `PW_TESTDATA`.
+
+Tests must not silently substitute synthetic files for required real-file verification.
+
+Synthetic fixtures and real camera files serve different purposes and must be reported separately.
+
+## 10. Test Integrity
+
+- Do not weaken assertions to make tests pass.
+- Do not remove tests merely because they are inconvenient.
+- Do not change expected behavior without an approved requirement change.
+- Do not report unexecuted tests as successful.
+- Do not hide missing external dependencies.
+- Do not treat mocked backend tests as full integration tests.
+- Do not treat prototype benchmarks as product acceptance results.
+- Do not use full-file hashes as an integrity criterion when embedded metadata writes are expected.
+- Use disposable copies or temporary files for tests that modify image metadata.
+
+## 11. CI Strategy
+
+CI documentation must describe the actual implemented CI configuration.
+
+Do not claim that tests run on every commit, pull request, branch, or release unless the corresponding workflow exists and has been verified.
+
+Do not create or modify CI workflows as part of a documentation-only task.
+
+## 12. Test Documentation Maintenance
+
+When tests are added, removed, or materially changed:
+- Update the relevant test inventory.
+- Update requirement traceability where necessary.
+- Document new external dependencies.
+- Document new environment variables.
+- Document new test data requirements.
+- Update exact execution commands only after verifying them.
+
+Keep the test strategy aligned with the actual repository.
+
+Do not document planned tests as existing tests.
