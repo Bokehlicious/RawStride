@@ -27,6 +27,11 @@
     the WebView2 presenter). No decision. The memory factors are specific to WebView2/ANGLE and do not
     describe the eframe + egui GUI. The findings on cache size, hit rates, eviction and measurement
     method carry over as questions to measure again. See section 17.
+  - **Amendment 8 (2026-11-07, owner decision):** P7 results (image presentation in eframe + egui).
+    - **The eframe renderer is glow.** wgpu is not chosen.
+    - **The core budget (4 GB, section 12) and the texture budget are counted separately for now.**
+    - Egui textures meet the 30 ms targets on screen with both renderers.
+    - See section 18.
   - New dependencies (wgpu or another GPU library) still need separate approval before they are added or
     installed. libjpeg-turbo was approved for prototype P0 on 2026-11-05; using it in the app is a
     separate decision.
@@ -1438,3 +1443,133 @@ The cause of the slower image change is not determined. A probable factor is P6c
   - whether egui textures alone meet the 30 ms targets;
   - GPU PPG in eframe's renderer;
   - the budget split.
+
+## 18. Amendment 8: P7 results, renderer and memory budget (owner decision, 2026-11-07)
+
+### 18.1 Decisions
+
+1. **The eframe renderer is glow** (OpenGL). wgpu is not chosen.
+   - glow drew resident views without stalls under load, used less GPU memory and exited cleanly.
+   - wgpu had two faults that are not explained (18.3).
+2. **The core budget and the texture budget are counted separately for now.**
+   - The core keeps its 4 GB for LibRaw sessions and views (section 12).
+   - The egui textures have their own budget. 1 GB was measured as enough for P5's hit rates.
+   - The whole process can therefore go above 4 GB (18.3). A shared budget may be decided later.
+
+This resolves section 16.4, points 1, 2 and 4, and the corresponding open items in section 17.3.
+Unchanged: PPG/AHD (section 11), strategy p5 (section 12), V1–V8 and G1–G4.
+
+### 18.2 What P7 did
+
+- **Prototype:** `prototypes/gui/p7-egui-presenter`, commit `1dff27c`.
+  - eframe/egui 0.37.0 as approved (GUI_REQUIREMENTS.md §6), with both renderers built in.
+  - No other new dependencies.
+- **Raw data:** `D:\PhotoWorkflowData\analysis\gui\p7\`. Results: `claude/gui-p7-results.md`
+  (project).
+- **The core** follows P5's rules (section 12): two workers, the 150 ms dwell, prefetch, admission and
+  LRU, with CPU PPG through LibRaw.
+- **The views are those of P5:** fit at half size, the exact 100 % region, and a ring of twice that
+  region for panning.
+- **Every finished view is uploaded as an egui texture.** The textures are the view cache, under their
+  own byte budget.
+  - Orientation is a texture coordinate per corner.
+  - The swap rule (V2) is kept.
+- **Measured for each renderer:**
+  - P5's RAW scenarios at texture budgets of 2048, 1024 and 512 MB (A7R), and 1024 MB for A1 (and RW2
+    with wgpu);
+  - stress tests M1–M5;
+  - the M0 texture sweep;
+  - memory in P6c's four layers (section 17.2);
+  - on screen, with `latency.ps1`.
+- Resize, minimise and restore, and keyboard focus were checked by hand. DPI was postponed by the
+  owner.
+
+### 18.3 Results [M]
+
+**On screen (A7R unless noted, median / max).**
+
+| Action | glow | wgpu |
+|---|---|---|
+| Z fit ↔ 100 % | 11.6 / 23.8 ms, 20 of 20 within 30 ms | 13.3 / 22.6 ms, 20 of 20 |
+| Image change, prefetched | 12.8 / 20.4 ms, 12 of 12 | 14.4 / 20.9 ms, 12 of 12 |
+| Image change, A1, prefetched | 12.8 / 18.6 ms, 12 of 12 | 13.3 / 21.7 ms, 12 of 12 |
+| Pan at 100 % | 17.3 / 30.5 ms, 19 of 20 | 16.2 / 30.5 ms, 19 of 20 |
+| Image change every 400 ms | 133 / 200 ms, 4 of 12 | 134 / 201 ms, 4 of 12 |
+
+- Every key press gave exactly one screen change, with no intermediate or black frame.
+- At 400 ms the first four images were prefetched. After that each step waits for CPU PPG, as in P5's
+  S2.
+- These times are the same as B2-res (13 ms median for Z) and better than P6c (47 ms for a prefetched
+  image change).
+
+**Hit rate against P5** (RAW events; the share whose view was already resident).
+
+| Run | All | MIX | S2 (4–10/s) |
+|---|---|---|---|
+| P5 A7R, core 4 GB | 68.4 % | 94.5 % | 10 % |
+| P7 A7R, textures 2048 MB (both renderers) | 68.1 % | 94.5 % | 10 % |
+| P7 A7R, textures 1024 MB (both renderers) | 67.3 % | 91.2 % | 10 % |
+| P7 A7R, textures 512 MB | 66.0–66.5 % | 85.7–86.8 % | 10 % |
+| P7 A1, textures 1024 MB | 67.6–67.8 % | 92.3–93.4 % | 10 % |
+| P7 RW2, textures 1024 MB (wgpu) | 69.4 % (P5 69.2 %) | 96.7 % (P5 96.7 %) | 10 % |
+
+- S1, S5 and S6 hit 100 % in every run. S4 (cold) mostly missed, as in P5.
+- **A 1 GB texture cache is enough** because P5's views are small: fit at half size, and zoom and ring
+  at view size. P6c's Bayer textures took 175 MB per A7R image.
+
+**How long until a resident view was drawn, in the app.**
+
+| Renderer | Within 30 ms | Over 100 ms | Max |
+|---|---|---|---|
+| glow (4 runs) | 88–98 % | 0 | 75 ms |
+| wgpu, A7R at 1–2 GB | 99.6–100 % | 0 | 69 ms |
+| wgpu, A7R at 512 MB, A1 and RW2 | 75–89 % | 14–40 per run | 285 ms |
+
+The cause of the wgpu stalls is not determined. They came while prefetched views arrived during
+stepping. They did not show on screen at a 1.5 s pace.
+
+**Memory.**
+
+| | glow | wgpu |
+|---|---|---|
+| RAM (private bytes) per texture byte, M0 | 1.21 × | 1.21 × |
+| Dedicated GPU memory per texture byte, M0 | 1.08 × | 1.14 × |
+| Dedicated GPU memory without textures | 47 MB | 403 MB |
+| Left after deleting all textures | about 230 MB (driver pools) | about 65 MB |
+| P5 run, A7R, textures 1 GB and core sessions 1.9 GB: RAM / dedicated GPU | 3.3 / 1.3 GB | 3.5 / 1.75 GB |
+| Stress M1, core sessions at 4.07 GB and textures at 1 GB: RAM | 5.5 GB | 5.8 GB |
+
+- **Under eframe a texture costs about 1.2× its size in RAM.** Under WebView2/ANGLE it was 2.33×
+  (section 17.2).
+- Shared GPU memory did not grow. Deleting textures released the memory at once.
+- With separate budgets the process reaches about 1.08× the sum of the two budgets, plus a baseline of
+  0.1–0.3 GB.
+
+**Correctness and robustness.**
+
+- **Stress tests M1–M5:** no errors, no failures and no too-large textures with either renderer. Zoom
+  and position were kept after eviction, with the same pixels and no intermediate image. Memory did
+  not grow over time.
+- **Checked by hand with both renderers:**
+  - focus was kept after minimise and restore;
+  - resize and maximise rescaled correctly, also at 100 %;
+  - orientation (flip 5) was correct.
+- **wgpu: the process did not exit after its window closed and `run_native` returned.** The prototype
+  works around this with a hard exit after writing its results. glow exited normally.
+
+### 18.4 Consequences and open items
+
+1. **eframe features.** `glow` is the renderer. Whether `wgpu` stays in the app's feature list is
+   decided when eframe is added to the app (GUI_REQUIREMENTS.md §6, §7).
+2. **The texture cache** follows the P5 rules and the P6c requirements (section 17.3): never evict the
+   current image, LRU and admission, frame correctness under memory pressure.
+3. **The texture budget** is about 1 GB of views (P7), alongside the core's 4 GB. A shared budget for
+   the whole process is not decided.
+4. **Not measured in P7:**
+   - GPU device loss;
+   - DPI change and a move to another screen (postponed, GR7);
+   - glow's driver pools over a long session;
+   - the cause of the wgpu stalls and exit hang. These are not examined further, since wgpu is not
+     chosen.
+5. **Cold start and fast stepping in RAW mode are unchanged.** The CPU unpack, about 337 ms for A7R,
+   and PPG limit them, as in P5 and P6c.

@@ -63,6 +63,7 @@ Benchmark large ingests before choosing default destinations.
 
 - ~~How GPU rendering integrates with the Tauri webview.~~ Settled 2026-11-07: there is no webview; the
   GUI and image presentation are eframe + egui (ADR 0008 §16).
-- eframe rendering backend (OpenGL through glow, or wgpu): open, to be chosen after measurement.
+- ~~eframe rendering backend (OpenGL through glow, or wgpu).~~ Settled 2026-11-07: **glow**, after the
+  P7 measurements (ADR 0008 §18, GUI_REQUIREMENTS.md §7).
 - Thumbnail cache format and sizes.
 - Catalog per volume or global.
