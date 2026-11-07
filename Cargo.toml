@@ -16,13 +16,18 @@ repository = ""
 pw-core = { path = "crates/pw-core" }
 pw-raw = { path = "crates/pw-raw" }
 pw-libraw = { path = "crates/pw-libraw" }
+pw-libjpeg = { path = "crates/pw-libjpeg" }
 pw-rawview = { path = "crates/pw-rawview" }
+pw-viewcore = { path = "crates/pw-viewcore" }
 pw-metadata = { path = "crates/pw-metadata" }
 pw-catalog = { path = "crates/pw-catalog" }
 pw-ingest = { path = "crates/pw-ingest" }
 pw-thumbcache = { path = "crates/pw-thumbcache" }
 pw-render = { path = "crates/pw-render" }
 # External dependencies are added here (pinned once) when implementation starts.
+# eframe/egui 0.37.0, pinned exactly; features as approved (GUI_REQUIREMENTS §6, ADR 0009 §6.1).
+egui = { version = "=0.37.0", default-features = false }
+eframe = { version = "=0.37.0", default-features = false, features = ["glow", "accesskit", "default_fonts", "clipboard"] }
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"

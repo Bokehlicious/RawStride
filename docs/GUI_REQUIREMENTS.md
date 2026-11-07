@@ -1,12 +1,14 @@
 # GUI requirements: pure Rust with eframe + egui
 
 - Status: **decided by the owner (2026-11-07).** Versions and features approved the same day (§6).
+  The renderer and the memory budget were decided after P7, also the same day (§7). `wgpu` was
+  removed from the feature list on 2026-11-07 (ADR 0009, step S0).
 - Scope: the whole graphical user interface of PhotoWorkflow. That covers the window, the loupe and
   stepping, the contact sheet, ratings and labels, the ingest dialog, the metadata views and settings.
 - Related:
   - ADR 0001 (technology stack, amended);
   - ADR 0003 (M1 viewer, amended);
-  - ADR 0008 (image presentation, amendment 6, §16);
+  - ADR 0008 (image presentation, amendment 6, §16, and amendment 8, §18);
   - `requirements-image-viewer.md` (V1–V8, G1–G4), which is unchanged.
 
 ## 1. Decision
@@ -55,16 +57,16 @@ ADR 0003) and the presenter decision B2-res (WebView2 shared buffer into WebGL2,
 |---|---|
 | Presenter B2-res (WebView2 + WebGL2) | **Superseded.** The image is drawn by egui in our own process. |
 | GPU PPG (P6b/P6c, a WebGL2 shader) | **Not carried over as is.** CPU PPG stays the decided path. Whether a GPU demosaic step is ever moved into eframe's renderer is an open question for the owner. It would be a display shader, not a compute pipeline (GR4). |
-| P6c memory figures (WebView2 GPU process, ANGLE) | **Specific to WebView2.** They do not describe an egui GUI. Texture memory under eframe must be measured again. |
-| The 4 GB budget and texture memory | **Open.** Under eframe the textures belong to our own process, so they can be counted in one budget. The split must be decided after measurement. |
-| eframe rendering backend (OpenGL through glow, or wgpu) | **Open [T].** To be chosen after a measured comparison on the Arc B580 against V1–V7. |
+| P6c memory figures (WebView2 GPU process, ANGLE) | **Specific to WebView2.** They do not describe an egui GUI. **Measured again in P7:** under eframe a texture costs about 1.2× its size in RAM (§7). |
+| The 4 GB budget and texture memory | **Decided for now (§7):** the core's 4 GB and the texture budget are counted separately. |
+| eframe rendering backend (OpenGL through glow, or wgpu) | **Decided: glow (§7)**, after the measured comparison in P7. |
 | Today's UI tests (Playwright against a mocked Tauri backend) | Remain valid for the current app until it is replaced. New tests follow GR11. `docs/TESTING.md` is updated when the GUI work starts. |
 | Distribution (`distribution.md`) | The WebView2 runtime and profile folder are no longer needed once the egui GUI ships. To be updated then. |
 
 ## 5. Not decided here
 
-- The rendering backend (§4) and any helper crates (GR10). The eframe and egui versions are decided
-  in §6.
+- Any helper crates (GR10). The eframe and egui versions are decided in §6, and the rendering backend
+  in §7.
 - The order of migration, and whether the first egui milestone is the loupe alone.
 - Whether any prototype is built before the app is changed. Rule: the working app is not broken.
 
@@ -81,19 +83,22 @@ ADR 0003) and the presenter decision B2-res (WebView2 shared buffer into WebGL2,
 
 | Feature | Why |
 |---|---|
-| `wgpu` | Renderer candidate, and eframe's default renderer since 0.34 |
-| `glow` | Renderer candidate (OpenGL). Kept until the measured comparison picks one (§4) |
+| `glow` | **The chosen renderer** (OpenGL, §7) |
 | `accesskit` | Windows accessibility |
 | `default_fonts` | Bundled fonts. Kept by the owner's decision. The fonts carry OFL-1.1 and the Ubuntu Font Licence, so their notices ship later with THIRD-PARTY-NOTICES (ADR 0002) |
 | `clipboard` | Copy and paste |
 
-Left out: `wayland`, `x11`, `web_screen_reader` and `links` (Linux and web only), and `persistence`
-(until there is a real settings format).
+Left out:
+
+- **`wgpu`** (owner decision, 2026-11-07, ADR 0009): glow is the only renderer (§7). The P7 prototype
+  built both renderers for its comparison; the app uses glow only.
+- `wayland`, `x11`, `web_screen_reader` and `links` (Linux and web only).
+- `persistence` (until there is a real settings format).
 
 **Licence review (accepted by the owner, 2026-11-07):**
 
-- **Scope:** all 162 sub-dependencies for Windows x64, read from `cargo metadata` in a throwaway crate
-  outside the repository. The list is in `D:\PhotoWorkflowData\analysis\licprobe\eframe-0.37-licences.md`.
+- **Scope:** all 162 sub-dependencies for Windows x64, with `wgpu` still included, read from
+  `cargo metadata` in a throwaway crate outside the repository. The list is in `D:\PhotoWorkflowData\analysis\licprobe\eframe-0.37-licences.md`.
 - **Result:** all are permissive. Most are MIT OR Apache-2.0; others are Zlib, BSD, ISC, BSL-1.0 or
   Unlicense, or offer one of these.
 - **`self_cell`** is offered as "Apache-2.0 OR GPL-2.0-only" and is used under **Apache-2.0**.
@@ -101,7 +106,7 @@ Left out: `wayland`, `x11`, `web_screen_reader` and `links` (Linux and web only)
   - the Apache-2.0 and MIT licence texts;
   - the OFL-1.1 and Ubuntu Font Licence, for the fonts;
   - Unicode-3.0, for `unicode-ident` and `unicode-properties`.
-  
+
   These are collected in THIRD-PARTY-NOTICES before a first release (ADR 0002).
 
 **Still to do:**
@@ -109,3 +114,31 @@ Left out: `wayland`, `x11`, `web_screen_reader` and `links` (Linux and web only)
 - **Adding eframe to the code** is a separate step, with its own approval. This decision approves the
   versions and features, not a code change.
 - **A newer version** needs a new decision and a new licence review.
+- **The tree without `wgpu`** is checked again before eframe is first built in the workspace (ADR 0009
+  §6.1). It is expected to be a subset of the 162 crates reviewed, with no new licence.
+
+## 7. Renderer and memory budget (owner decision, 2026-11-07)
+
+**Decisions:**
+
+- **The renderer is glow** (OpenGL), set with `NativeOptions::renderer = Renderer::Glow`. wgpu is
+  not chosen.
+- **The core budget and the texture budget are counted separately for now.**
+  - The core keeps its 4 GB (ADR 0008 §12).
+  - The egui textures have their own budget, about 1 GB.
+  - The whole process can therefore use more than 4 GB. A shared budget may be decided later.
+
+**Basis: P7** (ADR 0008 §18; `prototypes/gui/p7-egui-presenter`).
+
+- **On screen, glow:** Z 11.6 ms, prefetched image change 12.8 ms and pan 17.3 ms (medians). 63 of 64
+  presses were within 30 ms; the other was 30.5 ms. wgpu was equally fast on screen.
+- **Hit rates match P5** with a 1–2 GB texture cache.
+- **Why glow and not wgpu:**
+  - Under load, glow drew resident views within 75 ms at most. wgpu had unexplained stalls of up to
+    285 ms.
+  - glow used less GPU memory: a baseline of 47 MB against 403 MB.
+  - glow exited cleanly; the wgpu process hung on exit.
+- **A texture costs about 1.2× its size in RAM** under eframe, against 2.33× under WebView2.
+- **Checked by hand:** resize, minimise and restore, and keyboard focus passed (GR6, GR7).
+  - DPI change and a move to another screen are still postponed.
+  - GPU device loss is not tested.

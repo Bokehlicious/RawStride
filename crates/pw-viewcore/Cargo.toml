@@ -1,0 +1,25 @@
+[package]
+name = "pw-viewcore"
+description = "View core of the egui loupe: view model, plan, budgets and workers (ADR 0009)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+# The real decoders: LibRaw with PPG through pw-libraw, and libjpeg-turbo through pw-libjpeg for
+# the embedded JPEG that pw-raw locates. Without it the core is generic and is tested with
+# simulated decoders, so its tests need no native libraries.
+native = ["dep:pw-libraw", "dep:pw-libjpeg", "dep:pw-raw"]
+
+[dependencies]
+pw-libraw = { workspace = true, optional = true }
+pw-libjpeg = { workspace = true, optional = true }
+pw-raw = { workspace = true, optional = true }
+
+[dev-dependencies]
+pw-raw.workspace = true

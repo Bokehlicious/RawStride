@@ -1,6 +1,6 @@
 [package]
 name = "pw-render"
-description = "GPU-accelerated image presentation (wgpu on DX12/Vulkan)"
+description = "Image presentation in egui: views of pw-viewcore as textures within the budget (ADR 0009 step S4)"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -11,4 +11,5 @@ authors.workspace = true
 workspace = true
 
 [dependencies]
-pw-core.workspace = true
+pw-viewcore.workspace = true
+egui.workspace = true

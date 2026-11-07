@@ -3,10 +3,15 @@
 //! - One [`Session`] = one opened and unpacked RAW file. Unpacking (~0.3 s for a 61 MP Sony) is
 //!   done once; any number of regions can then be rendered from it.
 //! - Every render uses the same fixed settings (camera white balance, no auto brightness, no
-//!   white-level adjustment from the image data, sensor orientation, AHD, 8-bit sRGB). With
-//!   them a region is **pixel-identical** to the same area of a whole-image render, so tiles
-//!   cannot show seams or differ in colour (measured: docs/analyses/2026-11-04-m2-libraw-decode.md;
-//!   checked again by `tests/regions.rs`).
+//!   white-level adjustment from the image data, sensor orientation, 8-bit sRGB). With them a
+//!   region is **pixel-identical** to the same area of a whole-image render, so tiles cannot show
+//!   seams or differ in colour (measured: docs/analyses/2026-11-04-m2-libraw-decode.md; checked
+//!   again by `tests/regions.rs`).
+//! - The demosaic method is chosen per render ([`Demosaic`]): **AHD** is the default and what
+//!   [`Session::render_full`] and [`Session::render_region`] use (ADR 0006, the Tauri app);
+//!   **PPG** is the decided method for the egui loupe (ADR 0008 §11, ADR 0009) and is used through
+//!   [`Session::render_full_with`] and [`Session::render_region_with`]. The region identity holds
+//!   for both (`tests/regions.rs`).
 //! - LibRaw is built with OpenMP: one render uses all cores.
 //! - Images come out in **sensor orientation**; the viewer rotates them like the M1 previews.
 
@@ -68,6 +73,7 @@ unsafe extern "C" {
     fn pwlr_open(path: *const u16, info: *mut Info) -> *mut c_void;
     fn pwlr_render(
         session: *mut c_void,
+        quality: c_int,
         half: c_int,
         x: c_int,
         y: c_int,
@@ -98,6 +104,27 @@ pub fn version() -> String {
 pub fn capabilities() -> u32 {
     // SAFETY: plain query without arguments.
     unsafe { pwlr_capabilities() }
+}
+
+/// The demosaic method of a full-resolution render (LibRaw `user_qual`). Half-size renders
+/// bin 2×2 pixels and do not demosaic, so the method does not affect them.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub enum Demosaic {
+    /// AHD: the default and the quality reference (ADR 0006, ADR 0008 §11).
+    #[default]
+    Ahd,
+    /// PPG: the decided method for the viewer core (ADR 0008 §11), about twice as fast as AHD.
+    Ppg,
+}
+
+impl Demosaic {
+    /// LibRaw's `user_qual` value for the method.
+    fn user_qual(self) -> c_int {
+        match self {
+            Demosaic::Ahd => 3,
+            Demosaic::Ppg => 2,
+        }
+    }
 }
 
 /// A rectangle in sensor pixels of the visible image.
@@ -275,13 +302,14 @@ impl Session {
         self.flip
     }
 
-    fn render(&mut self, half: bool, r: Option<Rect>) -> Result<Rgb8> {
+    fn render(&mut self, half: bool, r: Option<Rect>, demosaic: Demosaic) -> Result<Rgb8> {
         let r = r.unwrap_or(Rect::new(0, 0, 0, 0));
         let mut err = [0 as c_char; 200];
         // SAFETY: live session (exclusive &mut), valid error buffer.
         let img = unsafe {
             pwlr_render(
                 self.ptr,
+                demosaic.user_qual(),
                 c_int::from(half),
                 r.x as c_int,
                 r.y as c_int,
@@ -313,20 +341,31 @@ impl Session {
         out
     }
 
-    /// The whole image at full resolution.
+    /// The whole image at full resolution, with AHD.
     pub fn render_full(&mut self) -> Result<Rgb8> {
-        self.render(false, None)
+        self.render_full_with(Demosaic::Ahd)
+    }
+
+    /// The whole image at full resolution, with the given demosaic method.
+    pub fn render_full_with(&mut self, demosaic: Demosaic) -> Result<Rgb8> {
+        self.render(false, None, demosaic)
     }
 
     /// The whole image at half resolution (2×2 binning, no demosaicing).
     pub fn render_half(&mut self) -> Result<Rgb8> {
-        self.render(true, None)
+        self.render(true, None, Demosaic::Ahd)
     }
 
-    /// Exactly the region `r`, rendered with `margin` extra pixels of context on every side
-    /// (clamped at the image border) that are cut off again. With a margin of at least 8 px the
-    /// result equals the same area of [`render_full`](Self::render_full).
+    /// Exactly the region `r`, rendered with AHD and with `margin` extra pixels of context on
+    /// every side (clamped at the image border) that are cut off again. With a margin of at least
+    /// 8 px the result equals the same area of [`render_full`](Self::render_full).
     pub fn render_region(&mut self, r: Rect, margin: u32) -> Result<Rgb8> {
+        self.render_region_with(r, margin, Demosaic::Ahd)
+    }
+
+    /// Like [`render_region`](Self::render_region), with the given demosaic method. The result
+    /// equals the same area of [`render_full_with`](Self::render_full_with) with that method.
+    pub fn render_region_with(&mut self, r: Rect, margin: u32, demosaic: Demosaic) -> Result<Rgb8> {
         if r.w == 0 || r.h == 0 || r.x + r.w > self.width || r.y + r.h > self.height {
             return Err(Error(format!(
                 "region {r:?} is outside the image ({}x{})",
@@ -337,7 +376,7 @@ impl Session {
         let y0 = r.y.saturating_sub(margin);
         let x1 = (r.x + r.w + margin).min(self.width);
         let y1 = (r.y + r.h + margin).min(self.height);
-        let big = self.render(false, Some(Rect::new(x0, y0, x1 - x0, y1 - y0)))?;
+        let big = self.render(false, Some(Rect::new(x0, y0, x1 - x0, y1 - y0)), demosaic)?;
         if big.width != x1 - x0 || big.height != y1 - y0 {
             return Err(Error(format!(
                 "LibRaw returned {}x{} for a {}x{} region",
@@ -361,6 +400,13 @@ impl Drop for Session {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn demosaic_maps_to_libraw_user_qual() {
+        assert_eq!(Demosaic::default(), Demosaic::Ahd);
+        assert_eq!(Demosaic::Ahd.user_qual(), 3);
+        assert_eq!(Demosaic::Ppg.user_qual(), 2);
+    }
 
     #[test]
     fn crop_copies_rows() {

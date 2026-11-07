@@ -3,7 +3,8 @@
  * All decodes use the same fixed settings, chosen so that a region is pixel-identical to the
  * same area of a whole-image decode (docs/analyses/2026-11-04-m2-libraw-decode.md, follow-ups
  * 3 and 4): camera white balance, no auto white balance, no auto brightness, no white-level
- * adjustment from the image data, sensor orientation, AHD, 8-bit sRGB.
+ * adjustment from the image data, sensor orientation, 8-bit sRGB. The demosaic method is chosen per
+ * render: AHD (the default, ADR 0006) or PPG (ADR 0008 section 11; the egui loupe, ADR 0009).
  *
  * Damaged files (M2 error handling): LibRaw does not return an error when the RAW data is
  * shorter than the file says (a truncated copy); many decoders read on and fill the rest. The
@@ -150,12 +151,22 @@ void *pwlr_open(const wchar_t *path, pwlr_info *info) {
   return s;
 }
 
-/* Processes the region (x, y, w, h) of the visible image, or the whole image if w == 0.
- * half != 0 gives half size (2x2 binning, whole image only). Returns a LibRaw image that the
- * caller frees with pwlr_free; NULL on failure. */
-libraw_processed_image_t *pwlr_render(void *session, int half, int x, int y, int w, int h,
-                                      char *error) {
+/* LibRaw user_qual values the shim accepts. */
+static const int PWLR_QUAL_PPG = 2;
+static const int PWLR_QUAL_AHD = 3;
+
+/* Processes the region (x, y, w, h) of the visible image, or the whole image if w == 0, with the
+ * demosaic method `quality` (LibRaw user_qual: 2 PPG or 3 AHD; anything else is refused).
+ * half != 0 gives half size (2x2 binning, whole image only; no demosaicing). Returns a LibRaw
+ * image that the caller frees with pwlr_free; NULL on failure. */
+libraw_processed_image_t *pwlr_render(void *session, int quality, int half, int x, int y, int w,
+                                      int h, char *error) {
+  if (quality != PWLR_QUAL_PPG && quality != PWLR_QUAL_AHD) {
+    snprintf(error, 200, "unsupported demosaic method %d", quality);
+    return 0;
+  }
   LibRaw *lr = ((PwSession *)session)->lr;
+  lr->imgdata.params.user_qual = quality;
   lr->imgdata.params.half_size = half ? 1 : 0;
   if (w > 0 && h > 0) {
     lr->imgdata.params.cropbox[0] = (unsigned)x;

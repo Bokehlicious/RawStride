@@ -5,14 +5,17 @@
   - ADR 0008 §8.3 (decision matrix), §11 (PPG) and §12 (scheduling, 4 GB);
   - phase 1 (P0, P4b, P4, P5);
   - phase 2 (P2, P3) and the robustness checks by hand;
-  - phase 3 (P6, P6b), ADR 0008 §14 and §15.
-- Raw data: `D:\PhotoWorkflowData\analysis\phase1\`, `...\phase2\` and `...\phase3\`.
+  - phase 3 (P6, P6b), ADR 0008 §14 and §15;
+  - the GUI prototype P7 (eframe + egui), ADR 0008 §18.
+- Raw data: `D:\PhotoWorkflowData\analysis\phase1\`, `...\phase2\`, `...\phase3\` and `...\gui\p7\`.
 - Status: **for the owner's decision.** The matrix shows measured values against the targets. It
   does not choose.
 - **2026-11-07:** the presenter columns (B1, B2, B2-res, A-up, A-res) and the GPU demosaicing section
   were measured on a Tauri/WebView2 shell. The owner has since chosen a native GUI in Rust with
   eframe + egui (ADR 0008 §16, `docs/GUI_REQUIREMENTS.md`). The figures stay as a record. They are not
   the basis for the GUI choice, and the egui GUI must be measured against V1–V8 again.
+- **2026-11-07 (P7, ADR 0008 §18):** the egui GUI was measured with both eframe renderers. The owner
+  chose **glow**, and kept the core budget and the texture budget separate for now. See "P7" below.
 
 ## How to read it
 
@@ -108,8 +111,12 @@ run within a few ms.
      or 1.40 with a pixel unpack buffer. A 1.3–1.4 GB texture cache matches P5 at 4 GB except on ±3
      jumps (71 % against 88 %). These factors are specific to WebView2 and must be measured again
      under eframe + egui.
+   - **P7 (2026-11-07, ADR 0008 §18):** under eframe a texture costs about 1.2× its size in RAM, and
+     1.08× (glow) or 1.14× (wgpu) on the GPU. A 1 GB cache of P5 views matches P5's hit rates. The core
+     budget and the texture budget are counted separately for now (owner decision).
 5. **The three robustness points** (DPI change, another screen, GPU device loss) are postponed by the
-   owner.
+   owner. In P7, resize, minimise and restore, and keyboard focus were checked by hand and passed with
+   both renderers.
 
 ## P6 and P6b: GPU demosaicing inside B2-res (added 2026-11-05, ADR 0008 §14; P6b column added 2026-11-05, §15)
 
@@ -128,6 +135,23 @@ with which method. The P6b times are on screen, A7R (vertical), latency.ps1, med
 | Panning at 100 % | – (pre-rendered region only) | – | ✓ / ≈ 20 / 36 ms, 16 of 20 within 30 ms [M] |
 | Image change, prefetched (image already on the GPU) | ✓ 13 / 44 ms (B2-res, §13) [M] | – | ✓ / ≈ fit 23 / 44 ms; 100 % with PPG 28 / 37 ms [M]. Applies only to prefetched images; cold changes are in the V5/V4 row |
 | WebGL context loss | – | – | ✓ view back after about 0.5 s at the same zoom and position [M] |
+
+## P7: image presentation in eframe + egui (added 2026-11-07, ADR 0008 §18)
+
+The core is P5's (§12) with CPU PPG, and every view is an egui texture. All values are A7R on screen
+(latency.ps1, median / max), unless noted. The owner chose glow.
+
+| Requirement (target) | glow (chosen) | wgpu |
+|---|---|---|
+| **V3 / V7** Z ≤ 30 ms, prepared | ✓ 11.6 / 23.8 ms, 20 of 20 [M] | ✓ 13.3 / 22.6 ms, 20 of 20 [M] |
+| **V1** image change, prefetched | ✓ 12.8 / 20.4 ms, 12 of 12; A1 12.8 / 18.6 [M] | ✓ 14.4 / 20.9 ms, 12 of 12; A1 13.3 / 21.7 [M] |
+| Panning at 100 % | ✓ 17.3 / 30.5 ms, 19 of 20 [M] | ✓ 16.2 / 30.5 ms, 19 of 20 [M] |
+| Resident view drawn under load (in the app) | ✓ / ≈ 88–98 % within 30 ms, max 75 ms [M] | ≈ / ✗ 75–100 % within 30 ms; stalls of up to 285 ms in 3 of 5 runs [M] |
+| **V5 / V4** cold start, fast stepping (RAW) | ✗ unchanged from P5: CPU unpack and PPG limit; 400 ms steps 133 / 200 ms [M] | ✗ the same [M] |
+| Hit rate (P5 scenarios, textures 1 GB) | ≈ P5: 67.3 % in total, MIX 91.2 % (P5: 68.4 / 94.5 %) [M] | The same [M] |
+| **V8** memory | Core 4 GB plus textures about 1 GB, counted separately. RAM 1.21× per texture byte; GPU baseline 47 MB [M] | RAM 1.21× per texture byte; GPU baseline 403 MB [M] |
+| Robustness by hand (resize, minimise and restore, focus) | ✓ [M] | ✓ [M] |
+| Process exit | ✓ [M] | ✗ hung after the window closed [M] |
 
 ## Summary of what the matrix shows (not a decision)
 
