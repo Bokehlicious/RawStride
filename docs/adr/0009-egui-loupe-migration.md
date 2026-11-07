@@ -62,7 +62,7 @@ owner's answers to the questions of section 11 are recorded there.
 |---|---|---|
 | Open a folder | One folder at a time. The file types of `pw_raw::SUPPORTED_EXTENSIONS`, as in the current app, except TIFF (later). The folder comes from the command line or is dropped on the window. There is no dialog (§11, decision 2) | V5 |
 | Stepping | Next, previous, first and last, with the keys of section 3.3 | V1, V4 |
-| Zoom | Fit ↔ 100 % with Z. The 100 % view is real sensor pixels in RAW mode | V3, V7 |
+| Zoom | Fit ↔ 100 % with Z. The 100 % view is real sensor pixels in RAW mode. **Free zoom** with +, − and the mouse wheel (section 3.4) | V2, V3, V7 |
 | Pan | Dragging with the mouse at 100 %, as in the current viewer (section 3.3) | V6, G2 |
 | Zoom and position persist | Kept as the relative point in the oriented image, clamped, and centred for small images | V6 |
 | Display mode | RAW or JPEG, switched by the user with R and a control. Never changed by the program | G4 |
@@ -101,6 +101,9 @@ The loupe keeps the keys of the current viewer (`ui/web/app.js`, loupe mode).
 | Home / End | First / last image |
 | Z, double-click | Fit ↔ 100 % |
 | F | Fit |
+| + (also =) / − | Zoom in / out one step (×1.25), around the anchor (section 3.4) |
+| Mouse wheel | Free zoom around the anchor (section 3.4) |
+| R | Display mode RAW ↔ JPEG (G4; new, approved by the owner 2026-11-07) |
 | A | Zoom anchor: at the pointer or at the image centre |
 | I | Show or hide the information |
 | Mouse drag at 100 % | Pan |
@@ -113,15 +116,52 @@ Notes:
   - Ctrl+O (folder dialog);
   - Ctrl+A (select all);
   - digits and Ctrl+digits (ratings and labels).
-- **Free zoom** (+, − and the mouse wheel) exists in the current viewer. Milestone 1 has fit and 100 %
-  only, the views of ADR 0008 §12. Free zoom levels need a view type of their own and are planned
-  with a later milestone.
+- **Free zoom** (+, − and the mouse wheel) is part of milestone 1 (owner decision, 2026-11-07;
+  section 3.4).
 - **The display mode (G4) needs a key** (G4: "with a key and a control"). The current viewer has only
   a button for it. The loupe uses **R**, which is free in the current viewer, plus a control in the
-  window.
+  window. **Approved by the owner, 2026-11-07.**
 - **Pan by keyboard** does not exist in the current viewer. P7 measured pan with D and A, but A is the
   anchor key here. The on-screen pan measurement (section 8.2) therefore uses mouse drags, or a key
   that is active only in the measurement mode of section 5.2.
+
+### 3.4 Free zoom (owner decision, 2026-11-07)
+
+Free zoom is added to milestone 1. It follows the current viewer's behaviour where V1–V8 allow it.
+
+**Behaviour:**
+
+| Rule | Content |
+|---|---|
+| Range | From half the fit scale (or half of 100 %, whichever is smaller) up to **800 %**, as the current viewer |
+| Steps | + and − zoom by ×1.25; the mouse wheel zooms continuously |
+| Anchor | The point under the pointer, or the image centre, as set with A (`ui/web/app.js`, `zoomTo`) |
+| What 100 % means | One sensor pixel (RAW mode) or one JPEG pixel (JPEG mode) per physical screen pixel, as for Z |
+| Status | The zoom percentage is shown, as today ("Zoom 37 %"), and "(anpassad)" at fit |
+| V6 | The zoom level and the relative position persist when stepping. Fit stays fit; 100 % stays 100 %; any other level is kept as the same percentage of the new image |
+
+**Views [T]:** a free level is drawn only from a texture whose resolution is at least that of the
+screen at that level, so it is never a blurred upscale (V2).
+
+| Level (RAW mode) | Source texture | Ready at once? |
+|---|---|---|
+| Up to the half-size fit view's resolution (≤ 50 % of the sensor) | The fit view, scaled down on the GPU | Yes, when the fit view is resident |
+| Between that and 100 % | A **scaled view**: the visible region rendered at full resolution, then scaled down to the screen size on the worker | No. Rendered on demand on the interactive worker |
+| 100 % and above (up to 800 %) | The 100 % view or the ring, when they cover the visible region; drawn with nearest-neighbour magnification above 100 % | Yes, inside the prepared region |
+
+- In JPEG mode the source is the decoded JPEG: a scaled decode for small levels, and the full decode
+  for the rest.
+- **The swap rule (V2) applies to every zoom step.** While a sharp view for the new level is being
+  prepared, the previous complete view stays, with the indicator after 1 s. During a wheel gesture
+  the core asks for a view only when the gesture pauses (about 100 ms) [T]. Requests that are no
+  longer wanted are dropped, as for image changes.
+- **Free-zoom views are not prefetched.** Strategy p5 (ADR 0008 §12) prepares fit and the zoom
+  target only. A free level outside those textures is therefore a miss.
+  - The expected cost is a region render plus scaling, about 100–300 ms on A7R depending on the
+    level [T].
+  - S6 measures it. It is a known limit, not a target change.
+- Scaled views count in the texture budget and are evicted first, before the fit and zoom views of
+  the current image.
 
 ## 4. Architecture
 
@@ -216,9 +256,12 @@ These parts were measured in P7. They are rewritten to production quality, not c
    - Worker errors become error views, not lost threads.
    - Shutdown is orderly: the workers stop and the LibRaw sessions close. P7's hard exit was a
      workaround for wgpu and is not carried over.
-5. **Measurement hooks.** The event record of P7 (request, hit or miss, shown) stays behind a
+5. **Free zoom (section 3.4).** A view kind for a scaled region at an arbitrary level, requested
+   on demand. The view model keeps the zoom level as a percentage. The gesture debounce and
+   cancellation follow the image-change rules.
+6. **Measurement hooks.** The event record of P7 (request, hit or miss, shown) stays behind a
    measurement switch, so that P5-style runs can be repeated against the product [T].
-6. **A JPEG decoder trait.** It mirrors the RAW backend trait, so that both decoders can be simulated
+7. **A JPEG decoder trait.** It mirrors the RAW backend trait, so that both decoders can be simulated
    in tests.
 
 ### 5.3 What stays out of `pw-viewcore`
@@ -277,7 +320,7 @@ can be expected.
 
 | Level | What | Tested without |
 |---|---|---|
-| Unit tests, `pw-viewcore` | View geometry and orientation (flip 0/3/5/6); V6 clamping and centring; the scheduling order; dwell; admission and eviction; the current image never evicted; folder generations; display-mode rules (G4); error views (G3) | Native libraries: the decoders are simulated |
+| Unit tests, `pw-viewcore` | View geometry and orientation (flip 0/3/5/6); V6 clamping and centring; the scheduling order; dwell; admission and eviction; the current image never evicted; folder generations; display-mode rules (G4); error views (G3); free zoom: range, steps, anchor, the choice of source texture (never an upscale below 100 %), and dropped requests | Native libraries: the decoders are simulated |
 | Unit tests, `pw-render` | Texture-budget accounting, protected views, and texture coordinates per corner | A GPU: the logic is kept apart from the egui calls |
 | Integration tests, `pw-libraw` | PPG regions with a margin equal the same area of a whole PPG render (the ADR 0006 identity, checked again for PPG) [P] | – (real files, LibRaw) |
 | Real-file tests, `pw-viewcore` with LibRaw | A7R (flip 5), A1, RW2 and DNG: views have the expected sizes and orientation; damaged files are refused | – |
@@ -290,6 +333,7 @@ can be expected.
 | V1, V3, V7: image change, Z and pan | `latency.ps1` against the window title "PhotoWorkflow Loupe", in RAW and JPEG mode, as in P7 part D |
 | V2: one swap, no intermediate frame | `latency.ps1`, which counts the changes per press |
 | V4: about 7 images/s at 100 % | `latency.ps1` at a 140 ms gap |
+| Free zoom (section 3.4) | `latency.ps1` with + and −: the number of changes per press (one swap, V2) and the time until sharp, at levels inside and outside the prepared views |
 | V5: first image after opening | Measured from opening, in both modes |
 | V6, G1, G3, G4 | Checked by hand against a list, with screenshots |
 | V8 | Process memory against the two budgets, with the L1–L4 method of P6c/P7 |
@@ -301,6 +345,8 @@ These are not new findings. Milestone 1 is not expected to fix them, and the rep
 
 - **Cold RAW start and continuous fast stepping in RAW mode** (V4, V5) are limited by the CPU unpack,
   about 337 ms for A7R, and PPG. P5 and P7 measured about 10 % hits at 4–10 images/s.
+- **Free zoom between the fit view's resolution and 100 %** is not prefetched. Each new level there is
+  a region render, about 100–300 ms on A7R [T].
 - **JPEG mode on the A1:** a full decode takes about 150 ms with libjpeg-turbo [M, P0]. Scaled
   decoding for the fit view is expected to shorten this (97–120 ms at 1/2 in P0); JPEG stepping at
   10/s is measured in S6.
@@ -314,9 +360,9 @@ summary, git diff and git status, and the owner's approval before commit. Nothin
 |---|---|---|
 | **S0** | Accept this ADR. Amend GUI_REQUIREMENTS §6 (remove `wgpu`). Decide the questions in section 11 | **Done 2026-11-07:** documentation commit |
 | **S1** | `pw-libraw`: PPG as an additive option, with the region identity test for PPG | Code + tests |
-| **S2** | `pw-viewcore`: view model, views, scheduling, budgets and errors, with simulated decoders; then the RAW backend on `pw-libraw` | Code + tests |
+| **S2** | `pw-viewcore`: view model, views (including free-zoom views), scheduling, budgets and errors, with simulated decoders; then the RAW backend on `pw-libraw` | Code + tests |
 | **S3** | JPEG mode in `pw-viewcore`: libjpeg-turbo through a safe wrapper (decided in S0), behind its trait. The wrapper crate and its licence check are approved first | Code + tests |
-| **S4** | `pw-render`: textures within the budget, and placement | Code + tests |
+| **S4** | `pw-render`: textures within the budget, and placement, including free zoom levels | Code + tests |
 | **S5** | `pw-loupe`: window, input, status line, indicator, errors and settings. The licence check for the eframe tree without wgpu comes before the first build | Code + tests, first runnable program |
 | **S6** | Acceptance measurement (section 8.2) and a results report | Results document; no code changes unless the owner asks |
 | **S7** | Documentation: architecture.md, TESTING.md (the loupe's tests), docs/README.md | Documentation commit |
@@ -330,6 +376,7 @@ summary, git diff and git status, and the owner's approval before commit. Nothin
 | glow's driver pools (about 230 MB that stays) grow over a long session | Memory above the budgets | S6 runs a long session with the L1–L4 method |
 | Two programs share `pw-libraw` | A change for the loupe affects the Tauri app | Additive changes only, and the existing `pw-libraw` tests stay green |
 | Production rewrite differs from the measured prototype | Results worse than P7 | The P7 tests are carried over, and S6 repeats the P7 on-screen series |
+| Free zoom is not measured in any prototype | Slower zoom steps than the current viewer, which scales without waiting for sharpness | Section 3.4 keeps V2. S6 measures it, and the owner decides on any change |
 | eframe 0.37 with glow on other GPUs | Not tested | Out of scope; only thanos (Arc B580) is the target machine for now |
 
 ## 11. Owner decisions on the open questions (2026-11-07)
@@ -343,6 +390,11 @@ summary, git diff and git status, and the owner's approval before commit. Nothin
    `latency.ps1` targets it.
 5. **Keys:** **the same classic keys as the current viewer** (section 3.3).
 6. **`pw-rawview`:** **left untouched** in the Tauri app, as an isolated legacy component.
+
+Added after S0 (owner, 2026-11-07):
+
+7. **R** is the key for the display mode (section 3.3).
+8. **Free zoom is part of milestone 1** (section 3.4).
 
 ## 12. Consequences
 
