@@ -5,6 +5,7 @@
 //! - Files cut short inside their RAW data are refused as damaged (error contains `damaged:`),
 //!   even though LibRaw itself returns success for them.
 //! - Files LibRaw cannot read at all fail as before, but are not called damaged.
+//!
 //! The diagnostics of every case are printed (`-- --nocapture`) for the analysis.
 
 use std::path::{Path, PathBuf};
@@ -69,10 +70,9 @@ fn complete_files_are_never_called_damaged() {
             d.data_errors,
             d.short_reads,
             d.missing,
-            if r.is_ok() {
-                "ok".to_string()
-            } else {
-                format!("{}", r.as_ref().unwrap_err())
+            match &r {
+                Ok(_) => "ok".to_string(),
+                Err(e) => e.to_string(),
             }
         );
         if d.warnings != 0 {
