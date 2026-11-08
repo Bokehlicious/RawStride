@@ -64,7 +64,7 @@ Ordered from easiest to hardest. Start at the top.
 - **Done when:** `cargo test -p pw-loupe` passes and `Cargo.lock` does not change (check with
   `git diff Cargo.lock`).
 
-### T3. pw-loupe: typed metadata state instead of comparing display text — Open
+### T3. pw-loupe: typed metadata state instead of comparing display text — Done
 
 - **Crate:** `pw-loupe`. **Files:** `crates/pw-loupe/src/metadata.rs`, `crates/pw-loupe/src/main.rs`.
 - **Problem:** `main.rs` decides behaviour by comparing user-visible text:
@@ -155,3 +155,4 @@ and reviewer:
 | 2026-11-08 | T7 | Open | Added: pre-existing formatting differences found during the T1 review |
 | 2026-11-08 | T2 | Done | Reviewed: `pw-metadata.workspace = true`, Cargo.lock unchanged. Tests: pw-loupe 6 + 2 passed |
 | 2026-11-08 | T7 | Done | Reviewed: only the three named files changed, layout only; `cargo fmt --all --check` clean. Tests: photoworkflow 10 passed; clippy without lint warnings. Agent again did not report test output or update the status |
+| 2026-11-08 | T3 | Done | Reviewed: is_loading/is_error read LoadState; no text comparisons left in main.rs; all required tests present. Tests: pw-loupe 6 + 3 passed; fmt and clippy clean. Agent updated the status itself this time |
