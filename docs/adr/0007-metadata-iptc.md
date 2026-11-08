@@ -1,11 +1,19 @@
 # ADR 0007: Metadata handling according to the IPTC standards
 
-- Status: **proposed for review (revision 2, 2026-11-04).**
+- Status: **proposed for review (revision 7, 2026-11-08).**
   - The owner's decisions of 2026-11-04 are written in.
+  - Q4 was answered by the owner on 2026-11-08: DNG Exif overlap fields are synchronised like TIFF.
+  - Q5 was answered by the owner on 2026-11-08: foreign XMP sidecars next to DNG are ignored and reported.
+  - Q6 was answered by the owner on 2026-11-08: missing Exif overlap fields are not created.
+  - Q7 was answered by the owner on 2026-11-08: edit `x-default` only and preserve all other language entries.
+  - Revision 7 (2026-11-08) makes the text consistent with the Q4–Q7 answers; it adds no new decision.
   - The open questions in §14 must be answered, and the ADR approved, **before any
     implementation starts**.
 - Date: 2026-11-04 (revision 1: storage, IIM policy and the role of XMP; revision 2: all owner
-  decisions of 2026-11-04, MWG 2.0, the full IPTC specification and the Mapping Guidelines).
+  decisions of 2026-11-04, MWG 2.0, the full IPTC specification and the Mapping Guidelines;
+  revision 3: Q4 answered by the owner on 2026-11-08; revision 4: Q5 answered by the owner on
+  2026-11-08; revision 5: Q6 answered by the owner on 2026-11-08; revision 6: Q7 answered by the
+  owner on 2026-11-08; revision 7: consistency fixes after review, 2026-11-08).
 - Basis: `docs/analyses/2026-11-04-iptc-metadata-requirements.md` (§1–§10) and
   `docs/references.md`. Local copies of the sources are in `D:\PhotoWorkflowData\references\`
   (see its `README.md`).
@@ -43,11 +51,11 @@ Every rule in §3–§12 carries its basis:
 | 1 | **XMP is PhotoWorkflow's primary representation** for the explicitly mapped descriptive fields | [Product]; IPTC Core/Extension are defined in XMP [IPTC §1] |
 | 2 | **IIM vs XMP:**<br>- checksum matches → XMP;<br>- checksum differs → IIM per differing field;<br>- no checksum → conflict, the user decides;<br>- conflicts always visible | [MWG §4.2.3.2] for the first two; [Product ≠ std] for the third |
 | 3 | **IIM is preserved and written back when it exists.** New IIM only with the setting | [MWG §4.2.3.2]; [Product ≠ std] against [IPTC §5.3.4] "should save … both" |
-| 4 | **Exif vs XMP:**<br>- XMP wins;<br>- conflicts detected and shown;<br>- JPEG/TIFF synchronise the corresponding Exif fields;<br>- RAW originals are never changed (Exif conflicts there are only shown) | [Product ≠ std] against [MWG §4.2.3.1] "prefer Exif"; sync per [MWG §4.2.3.1] and [IPTC-MG] |
+| 4 | **Exif vs XMP:**<br>- XMP wins;<br>- conflicts detected and shown;<br>- JPEG/TIFF/DNG synchronise the corresponding existing Exif fields;<br>- RAW originals are never changed (Exif conflicts there are only shown) | [Product ≠ std] against [MWG §4.2.3.1] "prefer Exif"; sync per [MWG §4.2.3.1] and [IPTC-MG] |
 | 5 | **Storage (fixed):**<br>- **DNG: embedded, never a sidecar** (also Xiaomi 17 Ultra DNG);<br>- **ARW, RW2 and other manufacturer RAW: sidecar only, original never changed**;<br>- **JPEG/TIFF: embedded** | [Product] (architecture decision) |
 | 6 | **Embedded writes are transactional:** a verified temporary copy, then an atomic replace; never a partially written original | [Product] |
 | 7 | **DateTimeOriginal is never changed automatically. A time zone is never invented**; it is stored only when known | [MWG §4.2.3.4 "Time-zone handling"]; [Product] |
-| 8 | **Preserved untouched:**<br>- hierarchical keywords (`mwg-kw`, `lr:hierarchicalSubject`);<br>- deprecated IIM datasets (kept in sync if present);<br>- unknown namespaces;<br>- other Lang Alt languages | [MWG §5.10]; [IPTC §9.1]; [Product] |
+| 8 | **Preserved untouched:**<br>- hierarchical keywords (`mwg-kw`, `lr:hierarchicalSubject`);<br>- deprecated IIM datasets (kept in sync if present);<br>- unknown namespaces;<br>- other Lang Alt languages (except when the whole field is cleared, §8) | [MWG §5.10]; [IPTC §9.1]; [Product] |
 | 9 | **Rating:** decimal precision kept internally; rounding only for display | [MWG §5.5]; [IPTC §11.19] |
 
 ## 3. Data model
@@ -75,15 +83,15 @@ Every rule in §3–§12 carries its basis:
 | File | XMP (primary) | IIM | Exif overlap fields (§6) | Original modified? |
 |---|---|---|---|---|
 | **ARW, RW2, NEF, CR2, CR3, ORF, RAF and other manufacturer RAW** | **only** the sidecar next to the file (§4.2) | – (IIM has no sidecar form) | embedded Exif is **read-only**; differences are shown as conflicts | **never** [Product] |
-| **DNG** (all producers, **including the Xiaomi 17 Ultra**) | **embedded in the DNG; no sidecar is ever written or used** | embedded; preserved and synced if present, created only with the setting (§5.4) | synced if present (**Q4**) | yes: metadata only, by the safe write procedure (§9) [Product] |
+| **DNG** (all producers, **including the Xiaomi 17 Ultra**) | **embedded in the DNG; no sidecar is ever written or used**; a foreign sidecar is ignored and reported | embedded; preserved and synced if present, created only with the setting (§5.2) | synced if present, like TIFF | yes: metadata only, by the safe write procedure (§9) [Product] |
 | **JPEG** | embedded (APP1) | APP13 PSIR 1028; as DNG | synced (§6.3) | yes: metadata only, §9 |
-| **TIFF** | embedded (tag 700) | tag 33723, checksum in PSIR 34377; as DNG | synced (§6.3) | yes: metadata only, §9 |
+| **TIFF** | embedded (tag 700) | tag 33723, checksum in PSIR 1061 in tag 34377; as DNG | synced (§6.3) | yes: metadata only, §9 |
 
 Where in the file to read and write [MWG §4.2.3.4]:
 
 - JPEG: XMP in the APP1 XMP segment, IIM in APP13 PSIR 1028, Exif in the APP1 Exif segment, which
   must directly follow SOI. "All other occurrences SHOULD be ignored".
-- TIFF/DNG: IFD0 tags 34665 (Exif), 33723 (IIM) and 700 (XMP); the IIM checksum in PSIR 34377.
+- TIFF/DNG: IFD0 tags 34665 (Exif), 33723 (IIM) and 700 (XMP); the IIM checksum in PSIR 1061 in tag 34377.
   MWG does not cover DNG. As a TIFF-based format it is handled like TIFF.
 
 ### 4.1 Rationale
@@ -97,6 +105,8 @@ Where in the file to read and write [MWG §4.2.3.4]:
   - DNG is an open, documented TIFF-based format with a defined place for XMP.
   - Lightroom writes XMP into DNG, and Photo Mechanic treats DNG as "embedded only".
   - A sidecar next to a DNG would be ignored by those tools and cause the metadata to diverge.
+- A foreign `<basename>.xmp` next to a DNG is never read or written; the info panel reports that it
+  exists and is ignored.
 - **The Xiaomi 17 Ultra DNG is named explicitly.** Phone DNGs differ in structure from camera
   DNGs; for example, the test files keep their preview at the end of the file. The safe write
   procedure (§9) verifies such files individually.
@@ -229,13 +239,16 @@ Urgency (2:10), Category (2:15) and Supplemental Categories (2:20):
 - **Text encoding of Exif when reading:** ASCII → valid UTF-8 → fallback (**Q10**). Exif 3.0 tags
   of the UTF-8 type are read as UTF-8. [MWG; IPTC-MG]
 
-### 6.3 Writing (JPEG, TIFF; DNG see Q4)
+### 6.3 Writing (JPEG, TIFF and DNG)
 
-- **Overlap fields that exist are updated** whenever the corresponding IPTC property changes
+- **Overlap fields that exist are updated** whenever the corresponding IPTC property changes.
+  This applies only to the fields marked "both ways" in §6.1; fields marked "Exif → IPTC only"
+  (DateTimeOriginal and its sub-fields, ImageUniqueID, GPS) are never written
   [Product, as allowed by the owner]. MWG §4.2.3.1: "a Changer SHOULD update both forms of a
   value. If only one form is updated, an existing value in the other form MUST be removed".
-- **Overlap fields that do not exist are not created** [Product; Q6]. Exception: the Exif 3.0
-  pair Artist/Photographer is kept together (§6.5).
+- **Missing Exif overlap fields are not created** in JPEG, TIFF or DNG. Existing overlap fields are
+  synchronised. This includes Artist and Photographer: each is written only if it already exists,
+  and neither is created to complete the pair (§6.5).
 - **Encoding:**
   - Files with Exif 3.0: a non-ASCII value uses the UTF-8 data type. [IPTC-MG]
   - Older Exif: UTF-8 bytes in the ASCII type, as MWG advises. Formally this violates Exif 2.3x;
@@ -254,8 +267,9 @@ Urgency (2:10), Category (2:15) and Supplemental Categories (2:20):
 
 ### 6.5 Creator ↔ Artist/Photographer
 
-- **Writing:** the **first** Creator is copied to Artist and, in Exif 3.0, to Photographer, as one
-  name each. [IPTC-MG Exif Note on Creator]
+- **Writing:** the **first** Creator is copied, as one name, to whichever of Artist and (in Exif
+  3.0) Photographer already exists; a missing tag is not created (§6.3). [IPTC-MG Exif Note on
+  Creator]; [Product] for not creating
   - **[IPTC-MG] over [MWG]:** MWG §5.7 joins all creators with "; ". The newer IPTC guideline,
     written with CIPA, asks for a single name.
 - **Reading:**
@@ -289,12 +303,12 @@ Urgency (2:10), Category (2:15) and Supplemental Categories (2:20):
 | **Keywords may be phrases** and are never split at spaces | [IPTC §7.18] |
 | Keyword lists are rewritten as a whole in IIM; XMP qualifiers on keywords are kept | [MWG §5.1] |
 | **Rating:** stored internally with full precision (a real number). Rounded only for display (out-of-range values shown as the nearest of −1…5). Written only when the user changes it. 0 = unrated; a missing value counts as 0; −1 = rejected | [IPTC §11.19]; [MWG §5.5] |
-| **Lang Alt:** PhotoWorkflow edits `x-default` and keeps all other languages. The detailed processing rules are in ISO XMP (Q7) | [IPTC §14.1]; [MWG §5.2] |
+| **Lang Alt:**<br>- PhotoWorkflow edits `x-default` only and preserves all other language entries, including one that held the same value as the old `x-default`;<br>- when `x-default` is absent, it is added first;<br>- **reading** without `x-default`: the first entry is shown, marked with its language;<br>- clearing removes the whole property, all languages included | [IPTC §14.1]; [Product]. **To verify:** the Adobe XMP Toolkit also updates entries equal to the old `x-default`; if MWG §5.2 or ISO 16684-1 recommend that, this becomes [Product ≠ std] (Q7, §13, §16) |
 | **Unknown namespaces, list items not touched, camera maker notes** are never removed or rewritten | [Product] |
 | **Creator's Contact Info** and **Creator's Jobtitle** belong to the first Creator. The contact sub-fields are single Text values that may hold several entries | [IPTC §7.7, §7.8, §8.1] |
 | **Creator ↔ Image Creator name (PLUS):** synchronisation is offered | [IPTC §7.6 note 1] |
 | **Cardinalities:**<br>- Image Creator, Copyright Owner, Licensor: at most 3;<br>- Image Supplier: 1;<br>- Location Created: one in the UI (all are kept when reading) | [IPTC §11.9, 11.18, 11.22, 11.24, 11.26] |
-| **Clearing a field** removes it consistently from every representation PhotoWorkflow may write:<br>- XMP (embedded or sidecar);<br>- IIM;<br>- the Exif overlap field in JPEG/TIFF (and DNG, Q4).<br>**A manufacturer RAW file is never changed** (Q2) | [MWG §4.2.3.1]; [Product] |
+| **Clearing a field** removes it consistently from every representation PhotoWorkflow may write:<br>- XMP (embedded or sidecar);<br>- IIM;<br>- the Exif overlap field in JPEG/TIFF/DNG.<br>**A manufacturer RAW file is never changed** (Q2) | [MWG §4.2.3.1]; [Product] |
 | **Copyright-management fields cannot be cleared by templates** (Copyright Notice, Creator, Credit Line, Rights Usage Terms, Web Statement of Rights, Copyright Owner, Licensor, Image Creator). They can be replaced | IPTC Embedded Metadata Manifesto (User Guide); [Product] |
 
 ## 9. Safe writing of embedded metadata (DNG; also JPEG and TIFF)
@@ -455,9 +469,11 @@ The three documents were compared for every rule above (details in the analysis 
 | Deprecated IIM datasets | keep in sync (§9.1) | – | – | kept and synced | Compatible |
 | DNG embedded / RAW sidecar | not covered | – | DNG not covered | product decision | No conflict |
 | Clearing | – | – | update both forms or remove the other | consistent across forms, RAW untouched | Compatible; the RAW + camera-Exif case is Q2 |
+| Lang Alt edits | Lang Alt type (§14.1) | – | §5.2, not yet checked on this point | edit `x-default` only; other entries kept | **To verify:** the Adobe XMP Toolkit also updates entries equal to the old `x-default`. If MWG §5.2 or ISO 16684-1 recommend that, this is a deliberate deviation (Q7) |
 
 **No rule of this ADR contradicts a MUST of the three documents.** The deviations concern
-SHOULD-level recommendations; each is marked [Product ≠ std] with its reason.
+SHOULD-level recommendations; each is marked [Product ≠ std] with its reason. The Lang Alt rule
+(§8, Q7) is still to be checked against MWG §5.2 and ISO 16684-1.
 
 ## 14. Open questions (must be answered before approval)
 
@@ -466,10 +482,10 @@ SHOULD-level recommendations; each is marked [Product ≠ std] with its reason.
 | **Q1** | **Writing a file with an unresolved IIM/XMP conflict** (no-checksum case). Writing both forms and the checksum would decide the conflict silently in favour of the written value | Writing other fields is allowed. For each conflicting property both forms are left as they are **and no new checksum is written**, until the user decides. MWG requires the checksum "whether changed or not", so this is a deliberate exception, limited to unresolved conflicts. Batch operations list such files |
 | **Q2** | **Clearing a field for an ARW/RW2 whose embedded camera Exif has a value** (e.g. Artist set in the camera). After clearing, the camera value would fill the gap again (§6.2) | The sidecar records the cleared property in the PhotoWorkflow namespace (`pwf:Cleared`, a Bag of property ids), which suppresses the camera value. Other tools ignore it and will show the camera value |
 | **Q3** | **IIM 2:60 Time Created without a known time zone.** IIM's time format includes an offset; writing `+0000` would invent one | Write only 2:55 (the date) and leave 2:60 out until the zone is known. To be confirmed against the IIM 4.2 specification (not read) |
-| **Q4** | **Exif overlap fields inside DNG:** the decision lists JPEG/TIFF for synchronisation | Treat DNG like TIFF: overlap fields that exist are updated (MWG requires updating or removing the other form) |
-| **Q5** | **A foreign `<basename>.xmp` next to a DNG** (written by another tool) | Never written and never used as a source (decision 3); the info panel shows a notice that it exists and is ignored |
-| **Q6** | **Creating missing Exif overlap fields** in JPEG/TIFF | Not created (as revision 1); only existing ones are synchronised |
-| **Q7** | Exact Lang Alt rules (`x-default` alongside a language entry) | Read ISO 16684-1 / XMP Part 1 before implementing Lang Alt editing |
+| ~~**Q4**~~ | **Exif overlap fields inside DNG:** the decision lists JPEG/TIFF for synchronisation | **Resolved 2026-11-08:** Treat DNG like TIFF: overlap fields that exist are updated (MWG requires updating or removing the other form) |
+| ~~**Q5**~~ | **A foreign `<basename>.xmp` next to a DNG** (written by another tool) | **Resolved 2026-11-08:** Never written and never used as a source; the info panel shows a notice that it exists and is ignored |
+| ~~**Q6**~~ | **Creating missing Exif overlap fields** in JPEG/TIFF | **Resolved 2026-11-08:** Do not create missing fields in JPEG, TIFF or DNG (DNG is handled like TIFF, Q4); synchronise only existing overlap fields |
+| ~~**Q7**~~ | Exact Lang Alt rules (`x-default` alongside a language entry) | **Resolved 2026-11-08 (product policy):** edit only `x-default`; leave all other language entries and their values unchanged. If `x-default` is absent, add it first. Clearing removes the whole property. Adobe's SDK also synchronises entries matching the old default ([`SetLocalizedText`](https://github.com/adobe/XMP-Toolkit-SDK/blob/v2025.03/XMPCore/source/XMPMeta-GetSet.cpp), SDK v2025.03); PhotoWorkflow deliberately does not. The full ISO 16684-1 text was not accessible during review, so verify this policy against the standard before implementation. |
 | **Q8** | Normative sidecar naming (`name.xmp` vs `name.ARW.xmp`) and RAW+JPEG pairs | Read Adobe XMP Part 3; check Lightroom and Photo Mechanic samples |
 | **Q9** | Allowed URI values of PLUS properties (release status, minor model age, data mining) | Read the PLUS specification |
 | **Q10** | Fallback encoding for IIM/Exif text that is neither ASCII nor UTF-8 | Windows-1252 by default, changeable in the settings; the value is marked as converted |
@@ -498,9 +514,9 @@ SHOULD-level recommendations; each is marked [Product ≠ std] with its reason.
 1. ~~The owner decides D5 and the IIM default~~ – decided 2026-11-04.
 2. ~~Read the IPTC spec 9–17, the Mapping Guidelines and MWG 2.0~~ – done 2026-11-04 (analysis
    §8–§9).
-3. **Answer Q1–Q13** (proposals in §14), then **review and approve this ADR**.
-4. Read **XMP Part 1** (Q7), **XMP Part 3** (Q8), **IIM 4.2** (Q3) and **PLUS** (Q9) if the owner
-   provides them.
+3. **Answer the remaining open questions** (Q1–Q3 and Q8–Q13; proposals in §14), then **review and approve this ADR**.
+4. Read **XMP Part 1** (ISO 16684-1) and **MWG §5.2** to verify the Q7 policy, **XMP Part 3** (Q8), **IIM 4.2** (Q3) and
+   **PLUS** (Q9) if the owner provides them.
 5. **Level-C samples** (Q11).
 
 ## Revision history
@@ -509,3 +525,8 @@ SHOULD-level recommendations; each is marked [Product ≠ std] with its reason.
 |---|---|---|
 | 1 | 2026-11-04 | Storage, IIM policy (only if present + setting), XMP primary, templates, validation |
 | 2 | 2026-11-04 | All owner decisions of 2026-11-04 written in:<br>- IIM/XMP precedence by checksum (three cases) and conflict markers;<br>- Exif/XMP rules (XMP primary, JPEG/TIFF sync, RAW Exif kept as conflict);<br>- the fixed storage decision (DNG embedded incl. Xiaomi 17 Ultra, no sidecar);<br>- **the safe write procedure (§9)**;<br>- date, time and time-zone rules;<br>- hierarchical keywords, decimal rating, deprecated IIM, encodings, phrases, clearing.<br>Also: IPTC 2025.1 §9–17, IPTC-MG 2023.1 and MWG 2.0 incorporated with source labels; the consistency check (§13); open questions Q1–Q13 |
+| 3 | 2026-11-08 | Owner answered Q4: synchronise existing Exif overlap fields in DNG like TIFF |
+| 4 | 2026-11-08 | Owner answered Q5: ignore foreign XMP sidecars next to DNG and show a notice |
+| 5 | 2026-11-08 | Owner answered Q6: do not create missing Exif overlap fields |
+| 6 | 2026-11-08 | Owner answered Q7: edit only `x-default`, preserving other language entries |
+| 7 | 2026-11-08 | Consistency fixes after review, no new decisions:<br>- §6.3/§6.5: Artist and Photographer are only written if they exist (Q6);<br>- §6.3: only "both ways" fields of §6.1 are written;<br>- §8: Lang Alt reading rule without `x-default`; source label for Q7 marked as to be verified, §13 row added;<br>- §2: clearing a Lang Alt field removes all languages;<br>- §4: cross-reference to §5.2, IIM checksum location (PSIR 1061 in tag 34377);<br>- Q6 resolution names DNG; SDK link pinned to v2025.03; spelling "synchronise" |
