@@ -2,13 +2,19 @@
 //! tested without a window (GR11): command-line options, the folder listing, the key map and the
 //! texts of the status line. `main.rs` wires them to eframe, `pw-viewcore` and `pw-render`.
 
+mod grid;
 mod tabs;
 
 use std::path::{Path, PathBuf};
 
 use pw_viewcore::{DecodeError, Frame, Source, Status, Zoom};
 
-pub use tabs::{Tab, Tabs};
+pub use grid::{
+    DEFAULT_THUMBNAIL_SIZE, GridKeyAction, LoupeKeyAction, MAX_THUMBNAIL_SIZE, MIN_THUMBNAIL_SIZE,
+    Navigation, THUMBNAIL_SIZE_STEP, clamp_thumbnail_size, columns, grid_key_action,
+    loupe_key_action, navigate, row, step_thumbnail_size, visible_range,
+};
+pub use tabs::{Tab, Tabs, ViewMode};
 
 /// The window title; `latency.ps1` finds the window by it (ADR 0009 §11, decision 4).
 pub const WINDOW_TITLE: &str = "PhotoWorkflow Loupe";

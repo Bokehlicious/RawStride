@@ -285,7 +285,7 @@ Ordered from easiest to hardest. Start at the top.
   Ctrl+drag-and-drop, switched with the keys and the mouse, and closed, and that each tab comes back
   on its own image.
 
-### T22. pw-ingest: tidy the import API before the egui dialog uses it — Open
+### T22. pw-ingest: tidy the import API before the egui dialog uses it — Done
 
 - **Why:** T20 moved the logic correctly, but the egui dialog (ADR 0010 M4) will call these functions
   from Rust, so the API should be hard to misuse, and a few required tests are missing.
@@ -306,7 +306,7 @@ Ordered from easiest to hardest. Start at the top.
 - **Rules:** behaviour and messages unchanged; no new dependencies; nothing else in `src-tauri` changes.
 - **Done when:** `.\tools\check.ps1` is all OK and the new tests pass.
 
-### T23. ADR 0011 K1: thumbnail extraction in pw-thumbcache — Open
+### T23. ADR 0011 K1: thumbnail extraction in pw-thumbcache — Done
 
 - **Crate:** `pw-thumbcache`. **Files:** `crates/pw-thumbcache/Cargo.toml` (add the internal
   dependency `pw-libjpeg.workspace = true`; `pw-raw` is already there), `crates/pw-thumbcache/src/`
@@ -333,8 +333,9 @@ Ordered from easiest to hardest. Start at the top.
 - **Tests to add:**
   - `choose_preview`: several previews (picks the smallest large enough), none large enough (picks the
     largest), no previews (`None`), a portrait preview (long edge is the height);
-  - `choose_scale`: e.g. 1616×1080 with cell 200 → Quarter; 160×120 with cell 200 → Full; exact
-    boundaries;
+  - `choose_scale`: e.g. 1616×1080 with cell 200 → Eighth (202 px), with cell 300 → Quarter;
+    160×120 with cell 200 → Full; exact boundaries (corrected in review: the first example said
+    Quarter by mistake);
   - `orient`: a small 2×3 image with distinct pixels, checked for all eight values (size and pixel
     positions);
   - `thumbnail`: a non-existent file → `Unreadable`; a file that is not an image → `Unreadable`, not a
@@ -344,7 +345,7 @@ Ordered from easiest to hardest. Start at the top.
     with the oriented width/height checked for an A7R IVA vertical image (`TN100423.ARW`, orientation 8).
 - **Done when:** `.\tools\check.ps1` and `.\tools\check.ps1 -Ignored` are all OK.
 
-### T24. ADR 0011 K2: thumbnail worker and in-memory cache — Open
+### T24. ADR 0011 K2: thumbnail worker and in-memory cache — Done
 
 - **Start after T23 is done.**
 - **Crate:** `pw-thumbcache`. **Files:** `crates/pw-thumbcache/src/` (e.g. `worker.rs`).
@@ -371,7 +372,7 @@ Ordered from easiest to hardest. Start at the top.
   calling the source again; eviction respects the byte limit; an error result is delivered.
 - **Done when:** `.\tools\check.ps1` is all OK.
 
-### T25. ADR 0011 K3: grid model in pw-loupe — Open
+### T25. ADR 0011 K3: grid model in pw-loupe — Done
 
 - **Can be done in parallel with T23** (different crate).
 - **Crate:** `pw-loupe`. **Files:** `crates/pw-loupe/src/` (e.g. a new `grid.rs` declared in `lib.rs`),
@@ -621,3 +622,11 @@ and reviewer:
 | 2026-11-08 | T21 | Done | Owner's manual test after the drop fix: new tabs on drop, switching with keys and mouse, each tab returns to its own image, closing works |
 | 2026-11-08 | – | Decision | Owner accepted ADR 0011 (contact sheet) with Q1–Q6 as proposed and C1–C5 as behaviour requirements; GR13 added. The rest of ADR 0010 (M3–M7) follows after the contact sheet |
 | 2026-11-08 | T23–T25 | Open | Added: ADR 0011 steps K1 (thumbnail extraction), K2 (worker and cache), K3 (grid model) |
+| 2026-11-08 | T23 | Ready for review | Added preview choice, scaling, EXIF orientation and JPEG/embedded-preview extraction in pw-thumbcache. Unit tests and ignored ARW/RW2/DNG/A7R IVA real-file tests pass; workspace checks with and without ignored tests, fmt and clippy are clean. The 1616×1080/cell 200 example selects Quarter via a 2× decode threshold. |
+| 2026-11-08 | T25 | Ready for review | Added plain-Rust grid layout, visible range, navigation, grid/loupe key actions and thumbnail-size helpers; added per-tab view mode defaulting to Grid and tests for mode persistence across tab switches. |
+| 2026-11-08 | T24 | Ready for review | Added a two-thread thumbnail worker pool, generation-aware request queue/cancellation, visible-range priority with nearby prefetch, pause/resume, per-thread decoders, and generation-scoped LRU cache. Simulated-source tests cover exact results, priority/drop, stale work, pause, cache hits/eviction, errors, and non-blocking drop. Crate and workspace fmt, tests and clippy pass. |
+| 2026-11-08 | T22 | Ready for review | Changed card detection to return `PathBuf` values and made the Tauri command convert them to strings; replaced positional validation arguments with `OptionsInput`. Added DCIM-root and requested validation tests. Package and workspace checks pass. |
+| 2026-11-08 | T22 | Done | Reviewed: `card_volumes() -> Vec<PathBuf>` with a testable `with_dcim`; `OptionsInput` struct; messages unchanged; all required tests present. Fixed in review: the existing test `identifies_volumes_with_a_dcim_directory` had been replaced, so it is restored (rule 5); the new `with_dcim` test now uses one temporary root and removes it. pw-ingest 30 passed in the cloud check (Linux), clippy clean |
+| 2026-11-08 | T23 | Done | Reviewed: preview choice, orientation (all eight values checked by hand against the 2×3 test) and `thumbnail` match the spec; no RAW decoding. The task's example 1616×1080/200 → Quarter was wrong (1616/8 = 202 ≥ 200); the agent added a 2× rule to satisfy it. Fixed in review: `choose_scale` follows the spec (long edge ≥ cell); `cell` is in physical pixels, so K4 multiplies by the display scale on high-DPI screens; tests corrected with exact boundaries |
+| 2026-11-08 | T24 | Done | Reviewed: two threads, generation and visible-range priority, pause, LRU cache with a byte limit, errors as results, poisoned locks recovered, drop does not join. Doc fix in review: after `cancel()` the UI must call `set_generation`. Note for K4: requests far outside the visible range are dropped without a result, so the UI re-requests visible cells that have no thumbnail when the visible range changes |
+| 2026-11-08 | T25 | Done | Reviewed: columns, visible range, navigation (short last row), grid/loupe keys, size clamp 96–480 and Ctrl+wheel step 16; `ViewMode` per tab, new folders start in Grid; `key_action` and `tab_action` unchanged; main.rs not touched. Workspace check: fmt, test and clippy OK |

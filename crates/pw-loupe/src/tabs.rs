@@ -1,11 +1,20 @@
 use std::path::PathBuf;
 
+/// The per-tab view shown for a folder.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ViewMode {
+    #[default]
+    Grid,
+    Loupe,
+}
+
 /// One open folder and the image it should return to.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Tab {
     pub folder: Option<PathBuf>,
     pub files: Vec<PathBuf>,
     pub current: usize,
+    pub mode: ViewMode,
 }
 
 impl Tab {
@@ -17,6 +26,7 @@ impl Tab {
             .len()
             .checked_sub(1)
             .map_or(0, |last| pos.min(last));
+        self.mode = ViewMode::Grid;
     }
 
     fn clear(&mut self) {
@@ -129,6 +139,12 @@ impl Tabs {
                 .len()
                 .checked_sub(1)
                 .map_or(0, |last| pos.min(last));
+        }
+    }
+
+    pub fn set_mode(&mut self, mode: ViewMode) {
+        if let Some(tab) = self.tabs.get_mut(self.active) {
+            tab.mode = mode;
         }
     }
 
@@ -264,13 +280,17 @@ mod tests {
         let mut tabs = Tabs::default();
         tabs.open_in_active(PathBuf::from("first"), files("first", 3), 0);
         tabs.set_current(2);
+        tabs.set_mode(ViewMode::Loupe);
         tabs.open_new(PathBuf::from("second"), files("second", 4), 1);
         tabs.set_current(3);
+        assert_eq!(tabs.active().map(|tab| tab.mode), Some(ViewMode::Grid));
         assert_eq!(tabs.titles(), vec!["first", "second"]);
         tabs.previous();
         assert_eq!(tabs.active().map(|tab| tab.current), Some(2));
+        assert_eq!(tabs.active().map(|tab| tab.mode), Some(ViewMode::Loupe));
         tabs.next();
         assert_eq!(tabs.active().map(|tab| tab.current), Some(3));
+        assert_eq!(tabs.active().map(|tab| tab.mode), Some(ViewMode::Grid));
 
         tabs.close_active();
         assert_eq!(tabs.titles(), vec!["first"]);
