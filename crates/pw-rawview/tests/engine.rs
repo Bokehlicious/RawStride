@@ -984,7 +984,7 @@ fn a_late_failure_of_a_left_image_does_not_touch_the_current_one() {
     };
     e.set_current(bad.clone(), &[target(1, 6, true)]);
     std::thread::sleep(Duration::from_millis(80)); // dwell passed: the half-size job runs and fails
-    e.set_current(target(1, 6, true), &[bad.clone()]);
+    e.set_current(target(1, 6, true), std::slice::from_ref(&bad));
     assert!(matches!(
         e.half(key(1, 6), Duration::from_secs(2)),
         Lookup::Ready(_)

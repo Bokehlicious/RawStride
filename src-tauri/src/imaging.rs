@@ -46,15 +46,21 @@ pub fn to_rgb8(samples: &[u8], layout: Layout, width: u32, height: u32) -> Resul
         Layout::Rgb => samples[..n * 3].to_vec(),
         Layout::Gray => samples[..n].iter().flat_map(|&g| [g, g, g]).collect(),
         Layout::GrayAlpha => samples[..n * 2]
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .flat_map(|p| [p[0], p[0], p[0]])
             .collect(),
         Layout::Rgba => samples[..n * 4]
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .flat_map(|p| [p[0], p[1], p[2]])
             .collect(),
         Layout::Cmyk => samples[..n * 4]
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .flat_map(|p| {
                 let k = 255 - u32::from(p[3]);
                 let c = |v: u8| ((255 - u32::from(v)) * k / 255) as u8;
@@ -113,7 +119,7 @@ pub fn downscale(src: &Rgb8, tw: u32, th: u32) -> Rgb8 {
         acc.fill(0);
         cnt.fill(0);
         for row in src.data[y0 * sw * 3..y1 * sw * 3].chunks_exact(sw * 3) {
-            for (x, px) in row.chunks_exact(3).enumerate() {
+            for (x, px) in row.as_chunks::<3>().0.iter().enumerate() {
                 let t = col[x];
                 acc[t * 3] += u32::from(px[0]);
                 acc[t * 3 + 1] += u32::from(px[1]);

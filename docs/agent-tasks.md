@@ -42,7 +42,7 @@ project owner together with a reviewer before it is merged. Read `AGENTS.md`, `C
 
 Ordered from easiest to hardest. Start at the top.
 
-### T1. Fix the five existing clippy warnings — Open
+### T1. Fix the five existing clippy warnings — Done
 
 - **Crates:** `pw-rawview` (tests), `photoworkflow` (`src-tauri`).
 - **Files:** `crates/pw-rawview/tests/engine.rs`, `src-tauri/src/imaging.rs`.
@@ -116,6 +116,15 @@ Ordered from easiest to hardest. Start at the top.
   test it without a real drive (gone at once, gone after a few polls, never gone).
 - **Done when:** `cargo test -p photoworkflow` passes. The owner tests a real eject by hand.
 
+### T7. Format the files that `cargo fmt --check` reports — Open
+
+- **Crates:** `photoworkflow` (`src-tauri`), `preview-bench` (`tools/preview-bench`).
+- **Files:** `src-tauri/src/main.rs`, `src-tauri/src/rawview.rs`, `tools/preview-bench/build.rs`.
+- **What:** run `cargo fmt --all`. Only these three files should change, and only in layout (line
+  breaks, the order of the `mod` lines in `main.rs`). If any other file changes, stop and report it.
+- **Done when:** `cargo fmt --all --check` prints nothing, `git diff --stat` lists only these three
+  files, and `cargo test -p photoworkflow` passes with the same test count as before.
+
 ### T6. Metadata test with real files: make a missing dataset visible — Blocked
 
 - **Crate:** `pw-metadata`. **File:** `crates/pw-metadata/tests/sidecar.rs`.
@@ -142,3 +151,5 @@ and reviewer:
 | Date | Task | Status | Note |
 |---|---|---|---|
 | 2026-11-08 | – | – | List created |
+| 2026-11-08 | T1 | Done | Reviewed: exact clippy suggestions, no behaviour change. Tests: photoworkflow 10, pw-rawview engine 24 + libraw_engine 3, all passed; clippy without lint warnings. Agent did not report test output or update the status itself |
+| 2026-11-08 | T7 | Open | Added: pre-existing formatting differences found during the T1 review |
