@@ -218,15 +218,144 @@ Ordered from easiest to hardest. Start at the top.
 - **Done when:** `cargo fmt --all --check` prints nothing, `git diff --stat` lists only these three
   files, and `cargo test -p photoworkflow` passes with the same test count as before.
 
-### T6. Metadata test with real files: make a missing dataset visible — Blocked
+### T6. Real-file tests, part 1 (pw-metadata, pw-ingest, pw-libjpeg): never pass silently — Open
 
-- **Crate:** `pw-metadata`. **File:** `crates/pw-metadata/tests/sidecar.rs`.
-- **Problem:** `real_dng_is_written_in_place` returns early and is counted as passed when
-  `PW_TESTDATA` is not set (`docs/TESTING.md` §4.4: a skipped test must not count as passed).
-- **Decision needed from the owner:** should the test fail when the dataset is missing (like the
-  ExifTool tests now do), or be marked `#[ignore]` and run explicitly with
-  `cargo test -- --include-ignored`?
-- **Do not start** until the owner has decided and updated this entry.
+- **Owner decision (2026-11-08):** a test that needs the real camera files is **ignored by default**
+  and **fails when it is run explicitly without them**. So `cargo test` stays fast and green without
+  the files (TESTING.md §5 "Fast Regression") and shows such tests as "ignored", not "passed"
+  (§4.4, §6); `cargo test -- --ignored` is the "Real RAW Verification" run.
+- **This task sets the pattern** that T12–T14 repeat for the other crates. Keep it simple and
+  identical in every file.
+- **Files:** `crates/pw-metadata/tests/sidecar.rs` (`real_dng_is_written_in_place`),
+  `crates/pw-ingest/tests/ingest.rs` (`real_raw_uses_exif_time`),
+  `crates/pw-libjpeg/tests/decode.rs` (`embedded_previews_of_the_test_raws_decode`),
+  `tests/fixtures/README.md`.
+- **The pattern:**
+  - Every test that reads `PW_TESTDATA` gets
+    `#[ignore = "needs real camera files: set PW_TESTDATA and run with --ignored"]`.
+  - In each test file, a small helper replaces the early `return`s:
+    `fn testdata() -> PathBuf` returns the folder from `PW_TESTDATA`, and **panics with a clear
+    message** if the variable is not set or the folder does not exist. If a test needs a specific
+    file (or a file with a given prefix), a second helper panics with a message that names the
+    missing file and the folder it looked in.
+  - `panic!`/`unwrap` are allowed here: this is test code (AGENTS.md §3).
+  - Tests that do not read `PW_TESTDATA` are not touched and stay un-ignored.
+  - Do not change what the tests check. Update the comment at the top of each file so it says how
+    to run them (`$env:PW_TESTDATA = "<folder>"; cargo test -p <crate> -- --ignored`).
+  - `tests/fixtures/README.md`: replace "are skipped when it is not set" with the new behaviour and
+    the command above.
+  - Leave `pw-metadata`'s `test_support::fake_exiftool_entry` as it is (it is a helper, already
+    ignored).
+- **Report back:** the output of
+  1. `cargo test -p pw-metadata -p pw-ingest -p pw-libjpeg` (the three tests show as "ignored");
+  2. the same with `-- --ignored` and `PW_TESTDATA` **not** set (the three tests fail with your
+     message; paste one message);
+  3. the same with `-- --ignored` and `PW_TESTDATA` set by the owner (all pass). If a test cannot
+     find its file in the owner's folder, **stop and report which file and folder**; do not
+     change the test to look elsewhere.
+- **Done when:** the three runs behave as described and clippy is clean.
+
+### T12. Real-file tests, part 2 (pw-raw, pw-viewcore) — Open
+
+- **Start after T6 is done.** Use exactly the pattern from T6.
+- **Files:** `crates/pw-raw/tests/real_files.rs` (4 tests), `crates/pw-viewcore/tests/native_files.rs`
+  (3 tests).
+- **Report back** the same three runs as in T6, for `-p pw-raw -p pw-viewcore`.
+- **Done when:** all 7 tests are ignored by default, fail with a clear message without the files and
+  pass with them; clippy is clean.
+
+### T13. Real-file tests, part 3 (pw-libraw) — Open
+
+- **Start after T6 is done.** Use exactly the pattern from T6.
+- **Files:** `crates/pw-libraw/tests/damaged.rs` (`complete_files_are_never_called_damaged`,
+  `truncated_files_are_damaged`), `crates/pw-libraw/tests/regions.rs` (the tests that call
+  `check_regions_identical`, `check_ppg_regions_identical` or `check_methods_switch_cleanly`).
+  `unreadable_files_fail_but_are_not_damaged`, `not_a_raw_file_is_an_error` and
+  `version_is_reported` do not need the files and stay as they are.
+- **Note:** some of these tests look for a file by name prefix (e.g. a Panasonic file). A missing
+  prefix must now fail with a message, not print "skipped".
+- **Report back** the same three runs as in T6, for `-p pw-libraw`.
+- **Done when:** as in T12.
+
+### T14. Real-file tests, part 4 (pw-rawview with LibRaw) — Open
+
+- **Start after T6 is done.** Use exactly the pattern from T6.
+- **File:** `crates/pw-rawview/tests/libraw_engine.rs` (3 tests). The file only builds on Windows
+  with the `libraw` feature; keep its `#![cfg(...)]` line.
+- **Note:** `memory_stays_within_budget_and_is_freed` measures the memory of the whole test process.
+  The file's own instructions say to run it with `--release` and `--test-threads=1`; keep that
+  instruction in the comment and use it for the `--ignored` run.
+- **Report back** the same three runs as in T6, for `-p pw-rawview` (the `--ignored` runs with
+  `--release -- --ignored --test-threads=1`).
+- **Done when:** as in T12.
+
+### T15. A script that runs the checks and writes a readable report — Open
+
+- **File:** `tools/check.ps1` (new).
+- **Why:** the owner runs the same commands after every task and the output file is written as
+  UTF-16, which is hard to read.
+- **What:** a PowerShell script that, run from the repository root:
+  - uses `$env:VCPKG_INSTALLED_DIR` if it is set; otherwise, if
+    `..\PhotoWorkflow\vcpkg_installed` exists next to this worktree, uses that and prints which
+    folder it chose; otherwise stops with a clear message;
+  - runs, in order, `cargo fmt --all --check`, `cargo test --workspace` and
+    `cargo clippy --workspace --all-targets`, and keeps going after a failure so all three are
+    reported;
+  - writes everything to `test-output.txt` in the repository root as **UTF-8**, and ends with a
+    short summary: for each of the three steps "OK" or "FAILED";
+  - takes an optional `-Ignored` switch that adds `-- --ignored` to the test step (for the
+    real-file runs from T6–T14);
+  - exits with code 0 only if all steps passed.
+- **Rules:** no new tools or modules; plain PowerShell 5.1 (the version in Windows). Do not
+  change any other file; `test-output.txt` is not committed.
+- **Done when:** the owner runs `.\tools\check.ps1` and gets a readable `test-output.txt` with the
+  summary at the end.
+
+### T16. Developer setup: document what the tests need — Open
+
+- **Start after T6 and T15 are done.**
+- **File:** `docs/dev-setup.md`.
+- **What:** add a short "Running the tests" section:
+  - in a worktree, `vcpkg_installed` is not shared; set `VCPKG_INSTALLED_DIR` to the main checkout's
+    folder (one line for the current window, one for a permanent user variable);
+  - ExifTool must be on `PATH` (or `PW_EXIFTOOL_PL` set), otherwise the `pw-metadata` integration
+    tests fail on purpose;
+  - `PW_TESTDATA` and `-- --ignored` for the real-file tests (T6–T14);
+  - `.\tools\check.ps1` (T15) runs all checks.
+- **Rules:** only document what exists and has been verified (TESTING.md §12). Keep the existing
+  sections.
+- **Done when:** the section is there and every command in it has been run once by the owner.
+
+### T17. Test inventory — Open
+
+- **Start after T12–T14 are done.**
+- **File:** `docs/test-inventory.md` (new).
+- **What:** one table with a row per test file (unit-test modules counted per crate): crate, file,
+  what it verifies (one line), category from TESTING.md §4 (unit, integration, real-file,
+  external tool), prerequisites (none / ExifTool / `PW_TESTDATA` / vcpkg libraries / Windows),
+  number of tests, and how many are ignored by default.
+- **Rules:** describe only tests that exist; read each file, do not guess from names. Do not
+  claim a requirement is verified (TESTING.md §7).
+- **Done when:** the numbers match a `cargo test --workspace` run (the owner checks the totals).
+
+### T18. pw-ingest: split `paths.rs` and restore the explanations — Open
+
+- **Crate:** `pw-ingest`. **Files:** `crates/pw-ingest/src/paths.rs`, new files next to it,
+  `crates/pw-ingest/src/lib.rs`.
+- **What:** `paths.rs` now holds three unrelated things. Split it, moving tests with their
+  functions:
+  - `paths.rs`: `inside`, `resolve`;
+  - `eject.rs`: `drive_of`, `eject`, `eject_script`, `wait_until_gone`, `retry_until_gone`;
+  - `summary.rs`: `folder_summary`.
+  `lib.rs` keeps exporting the same public names.
+- **Restore the fuller doc comments** that were shortened in T8, for example that `inside()`
+  expects paths that went through `resolve()`, and why `resolve()` canonicalises (`\\?\` prefixes,
+  `subst` drives, folders that do not exist yet). Keep the comment on `eject_script` about why
+  PowerShell must stay alive.
+- **Rules:** a move only: no change in behaviour, signatures, messages or test assertions; keep the
+  `#[cfg(any(windows, test))]` markings.
+- **Done when:** `cargo test -p pw-ingest -p photoworkflow` passes with the same test counts as
+  before and clippy is clean.
 
 ## Not for agents yet
 
@@ -272,3 +401,5 @@ and reviewer:
 | 2026-11-08 | T11 | Ready for review | Eject PowerShell script now waits for DCIM to disappear for up to 5 s; added a cross-platform script test. |
 | 2026-11-08 | T11 | Done | Reviewed: eject_script() keeps PowerShell alive until DCIM is gone (max 5 s); reviewer added `#[cfg(any(windows, test))]` and a doc comment. Tests: pw-ingest 20 + 8, photoworkflow 5; fmt and clippy clean |
 | 2026-11-08 | T5, T10, T11 | Done | Owner card test: import with eject now ejects the card |
+| 2026-11-08 | T6 | Open | Owner decision: real-file tests are ignored by default and fail when run with `--ignored` without the files. T6 extended; T12–T14 cover the other crates |
+| 2026-11-08 | T15–T18 | Open | Added: check script, test documentation, test inventory, pw-ingest module split |
