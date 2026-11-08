@@ -58,6 +58,19 @@ pub fn drive_of(source: &Path) -> Option<String> {
     }
 }
 
+/// PowerShell that ejects `drive` and stays alive until `<drive>\DCIM` is gone (at most 5 s):
+/// the eject verb runs in the background and is cancelled if PowerShell exits at once.
+#[cfg(any(windows, test))]
+fn eject_script(drive: &str) -> String {
+    format!(
+        "$d = (New-Object -ComObject Shell.Application).Namespace(17).ParseName('{drive}'); \
+         $d.InvokeVerb('Eject'); \
+         for ($i = 0; $i -lt 20 -and (Test-Path '{drive}\\DCIM'); $i++) {{ \
+             Start-Sleep -Milliseconds 250 \
+         }}"
+    )
+}
+
 /// Ejects the drive containing `source` on Windows.
 pub fn eject(source: &Path) -> String {
     let Some(drive) = drive_of(source) else {
@@ -79,9 +92,7 @@ pub fn eject(source: &Path) -> String {
             .join("WindowsPowerShell")
             .join("v1.0")
             .join("powershell.exe");
-        let script = format!(
-            "(New-Object -ComObject Shell.Application).Namespace(17).ParseName('{drive}').InvokeVerb('Eject')"
-        );
+        let script = eject_script(&drive);
         let dcim = PathBuf::from(format!("{drive}\\DCIM"));
         match retry_until_gone(
             EJECT_ATTEMPTS,
@@ -173,6 +184,17 @@ mod tests {
     use super::*;
     use crate::PlanItem;
     use std::time::SystemTime;
+
+    #[test]
+    fn eject_script_invokes_eject_and_waits_for_the_requested_drive() {
+        let script = eject_script("E:");
+
+        assert!(script.contains("ParseName('E:')"));
+        assert!(script.contains("InvokeVerb('Eject')"));
+        assert!(script.contains("Test-Path 'E:\\DCIM'"));
+        assert!(script.contains("Start-Sleep"));
+        assert_eq!(script.matches(':').count(), 2);
+    }
 
     fn item() -> PlanItem {
         PlanItem {

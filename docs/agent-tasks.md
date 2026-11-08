@@ -127,7 +127,7 @@ Ordered from easiest to hardest. Start at the top.
 - **Done when:** `cargo test -p pw-ingest` and `cargo test -p photoworkflow` pass; the total number
   of tests in the two crates is the same as before the move; `cargo clippy` shows no warnings.
 
-### T5. Card eject in pw-ingest: safer PowerShell call and a real wait — Done (manual eject test pending)
+### T5. Card eject in pw-ingest: safer PowerShell call and a real wait — Done
 
 - **Start after T8 is done.**
 - **Crates:** `pw-ingest`, `photoworkflow`.
@@ -163,7 +163,7 @@ Ordered from easiest to hardest. Start at the top.
 - **Done when:** `cargo test -p pw-ingest` passes and finishes in well under a second;
   `cargo clippy -p pw-ingest --all-targets` shows no warnings.
 
-### T10. Card eject: try again when Windows is still busy after the import — Done (manual eject test pending)
+### T10. Card eject: try again when Windows is still busy after the import — Done
 
 - **Start after T9 is done** (it uses T9's `wait_until_gone` with parameters).
 - **Crate:** `pw-ingest`. **File:** `crates/pw-ingest/src/paths.rs`.
@@ -187,7 +187,7 @@ Ordered from easiest to hardest. Start at the top.
 - **Done when:** `cargo test -p pw-ingest` passes quickly and clippy is clean. The owner tests a real
   import with eject again.
 
-### T11. Card eject: keep PowerShell running until the card is gone — Open
+### T11. Card eject: keep PowerShell running until the card is gone — Done
 
 - **Crate:** `pw-ingest`. **File:** `crates/pw-ingest/src/paths.rs`.
 - **Finding (owner test, 2026-11-08):** the Windows eject verb finishes in the background. When the
@@ -269,3 +269,6 @@ and reviewer:
 | 2026-11-08 | T10 | Ready for review | Added three-attempt eject retry and four fast unit tests. Tests: pw-ingest 19 unit + 8 integration passed; fmt and clippy clean. |
 | 2026-11-08 | T10 | Done (manual test pending) | Reviewed: retry_until_gone with 3 attempts and four tests; pw-ingest 19 unit tests pass. Card test: still not ejected ("Antal försök: 3") |
 | 2026-11-08 | T11 | Open | Added: owner test showed PowerShell must stay alive after InvokeVerb('Eject') (A: exits at once → not ejected; B: Start-Sleep 5 inside → ejected) |
+| 2026-11-08 | T11 | Ready for review | Eject PowerShell script now waits for DCIM to disappear for up to 5 s; added a cross-platform script test. |
+| 2026-11-08 | T11 | Done | Reviewed: eject_script() keeps PowerShell alive until DCIM is gone (max 5 s); reviewer added `#[cfg(any(windows, test))]` and a doc comment. Tests: pw-ingest 20 + 8, photoworkflow 5; fmt and clippy clean |
+| 2026-11-08 | T5, T10, T11 | Done | Owner card test: import with eject now ejects the card |
