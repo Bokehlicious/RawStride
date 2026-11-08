@@ -218,7 +218,7 @@ Ordered from easiest to hardest. Start at the top.
 - **Done when:** `cargo test -p pw-viewcore` runs it (1 more passed, 1 fewer ignored) and clippy is
   clean.
 
-### T20. ADR 0010 M1: move card detection and request validation to pw-ingest — Open
+### T20. ADR 0010 M1: move card detection and request validation to pw-ingest — Done
 
 - **Why:** the egui import (ADR 0010) must give the same answers as the Tauri dialog. The last two
   pieces of import logic that still live in `src-tauri` move to the shared crate first (ADR 0010
@@ -253,7 +253,7 @@ Ordered from easiest to hardest. Start at the top.
 - **Done when:** `.\tools\check.ps1` is all OK, the Tauri app's test count is unchanged, and the new
   tests pass.
 
-### T21. ADR 0010 M2: folder tabs in pw-loupe — Open
+### T21. ADR 0010 M2: folder tabs in pw-loupe — Done (manual test pending)
 
 - **Can be done in parallel with T20** (different files).
 - **Crate:** `pw-loupe`. **Files:** `crates/pw-loupe/src/lib.rs` (or a new module file such as
@@ -274,6 +274,8 @@ Ordered from easiest to hardest. Start at the top.
      `core.open_folder(files)`, `core.go(current)` and the metadata `begin_load` for that folder.
      Remember the image from `frame.pos` with `set_current`. Zoom resets on activation (Q1).
   4. **Drag-and-drop:** opens in the active tab as today; with **Ctrl** held it opens a new tab (Q3).
+     **Changed 2026-11-08 (owner, after testing):** a dropped folder always opens in a new tab; an
+     empty active tab is filled instead (ADR 0010 Q3).
 - **Rules:** the loupe's existing keys and behaviour are unchanged (ADR 0009 §3.3); one view core for
   all tabs; no `unwrap`/`expect`/`panic!` in non-test code; no new dependencies.
 - **Tests to add:** the tab model (open in active, open new, open an already open folder, next and
@@ -282,6 +284,27 @@ Ordered from easiest to hardest. Start at the top.
 - **Done when:** `.\tools\check.ps1` is all OK; the owner checks by hand that tabs can be opened with
   Ctrl+drag-and-drop, switched with the keys and the mouse, and closed, and that each tab comes back
   on its own image.
+
+### T22. pw-ingest: tidy the import API before the egui dialog uses it — Open
+
+- **Why:** T20 moved the logic correctly, but the egui dialog (ADR 0010 M4) will call these functions
+  from Rust, so the API should be hard to misuse, and a few required tests are missing.
+- **Crates:** `pw-ingest`, `photoworkflow`. **Files:** `crates/pw-ingest/src/volumes.rs`,
+  `crates/pw-ingest/src/request.rs`, `crates/pw-ingest/src/lib.rs`, `src-tauri/src/ingest.rs`.
+- **What:**
+  1. **Card detection:** rename `pw_ingest::ingest_volumes()` to `card_volumes()` and return
+     `Vec<PathBuf>`. Put the loop over candidate roots in a small function that takes the roots, e.g.
+     `fn with_dcim(roots: impl IntoIterator<Item = PathBuf>) -> Vec<PathBuf>`, and test it with
+     temporary folders (a root with `DCIM` is found, one without is not, a missing root is skipped).
+     The Tauri command `ingest_volumes()` keeps its name and converts the paths to strings.
+  2. **Validation input:** replace the seven positional arguments of `validate_options` with a plain
+     struct, e.g. `pub struct OptionsInput<'a> { source, dest, backup: Option<&'a str>, folder, name,
+     job, first_seq }`, so source and destination cannot be swapped by mistake. Messages unchanged.
+  3. **Missing tests** from T20: empty destination ("Välj ett mål."); source inside the destination;
+     a bad folder template starts with "Mappmall: " and a bad file-name template with
+     "Filnamnsmall: "; a valid input with a backup folder.
+- **Rules:** behaviour and messages unchanged; no new dependencies; nothing else in `src-tauri` changes.
+- **Done when:** `.\tools\check.ps1` is all OK and the new tests pass.
 
 ### T7. Format the files that `cargo fmt --check` reports — Done
 
@@ -450,6 +473,8 @@ and reviewer:
 - ADR 0010 steps M3 (approving the folder-dialog crate), M5 (drawing the import dialog) and M6
   (acceptance by hand) stay with the owner and reviewer for now. M4 and M7 are added to this list
   when M1 and M2 are done.
+- Note for M5: when the import opens its folder with `Tabs::open_new`, compare folders by their
+  resolved form (`pw_ingest::resolve`), so `C:\Foto` and `c:\foto\` do not open two tabs.
 
 ## Log
 
@@ -496,4 +521,9 @@ and reviewer:
 | 2026-11-08 | T17 | Ready for review | Added `docs/test-inventory.md` from the inspected Rust test modules and files; counts match the `cargo test --workspace` run (180 passed, 23 ignored, 0 failed). |
 | 2026-11-08 | T19, T16, T17 | Done | Reviewed. T19: test now runs in every run (native_files 1 passed, 2 ignored). T16: section added; reviewer replaced the internal task numbers with a pointer to the test inventory. T17: inventory matches the owner's run (180 passed, 23 ignored, 0 failed; 22 real-file tests plus the pw-metadata helper) |
 | 2026-11-08 | – | Decision | Owner accepted ADR 0010 (import and folder tabs in pw-loupe) with all proposals for Q1–Q6; GR12 added to GUI_REQUIREMENTS |
-| 2026-11-08 | T20, T21 | Open | Added: ADR 0010 steps M1 (shared import logic in pw-ingest) and M2 (folder tabs) |
+| 2026-11-08 | T20 | Ready for review | Moved card detection and import request validation into `pw-ingest`; Tauri calls the shared functions. Added validation and DCIM detection tests. `cargo test -p pw-ingest -p photoworkflow`: pw-ingest 25 unit + 7 integration passed (1 ignored), photoworkflow 5 passed; fmt and clippy clean. |
+| 2026-11-08 | T21 | Ready for review | Added the plain-Rust tab model, tab shortcuts and egui tab bar; tabs remember the current image, Ctrl+drop opens a tab, and the final tab clears instead of closing. `cargo test -p pw-loupe`: 13 library + 3 binary tests passed; workspace check: 192 passed, 23 ignored, 0 failed; fmt and clippy clean. Manual desktop acceptance remains for the owner. |
+| 2026-11-08 | T20 | Done | Reviewed: logic and messages moved unchanged; Tauri calls `validate_source`, `validate_options` and `ingest_volumes` in pw-ingest. Deviations from the task (String return, seven positional arguments, some tests missing) go to T22 |
+| 2026-11-08 | T21 | Done (manual test pending) | Reviewed: tab model with 6 tests, tab keys with a test, tab bar, Ctrl+drop; `frame.pos` is read after the core's state is updated, so each tab remembers its own image. Workspace: 192 passed, 23 ignored, 0 failed. Owner checks tabs by hand |
+| 2026-11-08 | T22 | Open | Added: follow-ups from the T20 review |
+| 2026-11-08 | T21 | Manual test | Owner: Ctrl+drop did not open a new tab (Windows does not report Ctrl while dragging from Explorer), so tab switching could not be tried; closing works. Owner decided: dropping always opens a new tab. Reviewer changed `main.rs` (drop always uses `open_new`) and `Tabs::open_new` (fills an empty active tab), added a test and adjusted the setup of one test that relied on the old behaviour; ADR 0010 Q3 updated. Tab switching to be tested again |

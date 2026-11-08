@@ -2,9 +2,13 @@
 //! tested without a window (GR11): command-line options, the folder listing, the key map and the
 //! texts of the status line. `main.rs` wires them to eframe, `pw-viewcore` and `pw-render`.
 
+mod tabs;
+
 use std::path::{Path, PathBuf};
 
 use pw_viewcore::{DecodeError, Frame, Source, Status, Zoom};
+
+pub use tabs::{Tab, Tabs};
 
 /// The window title; `latency.ps1` finds the window by it (ADR 0009 §11, decision 4).
 pub const WINDOW_TITLE: &str = "PhotoWorkflow Loupe";
@@ -140,6 +144,28 @@ pub fn key_action(key: egui::Key, ctrl: bool, alt: bool) -> Option<Action> {
         K::R => Action::ToggleMode,
         _ => return None,
     })
+}
+
+/// What a tab shortcut does.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TabAction {
+    Next,
+    Previous,
+    Close,
+}
+
+/// Maps tab shortcuts separately from the loupe key map.
+pub fn tab_action(key: egui::Key, ctrl: bool, shift: bool, alt: bool) -> Option<TabAction> {
+    use egui::Key as K;
+    if !ctrl || alt {
+        return None;
+    }
+    match (key, shift) {
+        (K::Tab, false) => Some(TabAction::Next),
+        (K::Tab, true) => Some(TabAction::Previous),
+        (K::W, false) => Some(TabAction::Close),
+        _ => None,
+    }
 }
 
 /// The zoom factor of a mouse-wheel movement of `dy` points (as the current viewer: about ×1.16
@@ -344,6 +370,25 @@ mod tests {
         assert_eq!(key_action(K::O, true, false), None);
         assert_eq!(key_action(K::A, true, false), None);
         assert_eq!(key_action(K::A, false, false), Some(Action::ToggleAnchor));
+    }
+
+    #[test]
+    fn tab_keys_are_separate_from_viewer_keys() {
+        use egui::Key as K;
+        assert_eq!(
+            tab_action(K::Tab, true, false, false),
+            Some(TabAction::Next)
+        );
+        assert_eq!(
+            tab_action(K::Tab, true, true, false),
+            Some(TabAction::Previous)
+        );
+        assert_eq!(tab_action(K::W, true, false, false), Some(TabAction::Close));
+        assert_eq!(tab_action(K::Tab, false, false, false), None);
+        assert_eq!(tab_action(K::W, true, true, false), None);
+        assert_eq!(tab_action(K::W, true, false, true), None);
+        assert_eq!(key_action(K::Tab, true, false), None);
+        assert_eq!(key_action(K::W, true, false), None);
     }
 
     #[test]

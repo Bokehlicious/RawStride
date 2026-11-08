@@ -10,6 +10,7 @@
   - ADR 0003 (M1 viewer, amended);
   - ADR 0008 (image presentation, amendment 6, §16, and amendment 8, §18);
   - ADR 0010 (milestone 2: import and folder tabs; GR12);
+  - ADR 0011 (milestone 3: the contact sheet; GR13);
   - `requirements-image-viewer.md` (V1–V8, G1–G4), which is unchanged.
 
 ## 1. Decision
@@ -41,6 +42,7 @@ ADR 0003) and the presenter decision B2-res (WebView2 shared buffer into WebGL2,
 | GR10 | **Dependencies need approval.** eframe, egui and any helper crates are added only after the owner approves the concrete crates and versions, with a licence check (ADR 0002). Nothing is installed by this document. |
 | GR11 | **Testable.** UI logic (view model, key handling, dialog state) is kept in plain Rust that can be tested with `cargo test`, apart from drawing. |
 | GR12 | **Imported folders open in a new tab.** When an import finishes, the imported folder opens automatically in a new tab in the viewer (owner requirement, 2026-11-08; ADR 0010). If that folder is already open in a tab, that tab is activated instead. |
+| GR13 | **Opened folders start as a contact sheet.** A folder dropped on the window or opened by an import is shown as a grid of thumbnails first, not in the loupe (owner requirement, 2026-11-08; ADR 0011). |
 
 ## 3. What stays
 

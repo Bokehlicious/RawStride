@@ -1,7 +1,7 @@
 # Test inventory
 
 This inventory describes Rust tests included by `cargo test --workspace`. It was checked against
-a Windows run on 2026-11-08: **180 passed, 23 ignored by default, 0 failed**. Test counts include
+a Windows run on 2026-11-08: **192 passed, 23 ignored by default, 0 failed**. Test counts include
 ignored tests. Unit-test rows aggregate the inline `#[cfg(test)]` modules in each crate; for
 `pw-loupe`, the shared metadata module is included in both its library and binary test targets.
 Crates and targets with no tests are omitted. This inventory does not claim that a product
@@ -12,10 +12,10 @@ requirement is fully verified.
 | `photoworkflow` | `src-tauri/src/imaging.rs`, `src-tauri/src/ingest.rs` | Image-buffer conversion and fit sizing; ingest action labels and conversion of dialog text to IPTC. | Unit | vcpkg libraries | 5 | 0 |
 | `preview-bench` | `tools/preview-bench/src/main.rs` | CSV parsing, timing statistics, and reading byte ranges including an unaligned end-of-file range. | Unit | None | 4 | 0 |
 | `pw-core` | `crates/pw-core/src/lib.rs` | Human-readable byte formatting and unit-boundary rounding. | Unit | None | 14 | 0 |
-| `pw-ingest` | `crates/pw-ingest/src/eject.rs`, `paths.rs`, `summary.rs`, `template.rs` | Eject polling/scripts, path resolution, folder counts, template rendering, capture dates, and safe path segments. | Unit | None | 20 | 0 |
+| `pw-ingest` | `crates/pw-ingest/src/eject.rs`, `paths.rs`, `request.rs`, `summary.rs`, `template.rs`, `volumes.rs` | Eject polling/scripts, path and import-request validation, card detection, folder counts, template rendering, capture dates, and safe path segments. | Unit | None | 25 | 0 |
 | `pw-libjpeg` | `crates/pw-libjpeg/src/lib.rs` | Scaled JPEG output dimensions. | Unit | vcpkg libraries | 1 | 0 |
 | `pw-libraw` | `crates/pw-libraw/src/lib.rs` | Demosaic quality mapping and RGB crop behavior. | Unit | vcpkg libraries | 2 | 0 |
-| `pw-loupe` | `crates/pw-loupe/src/lib.rs`, `src/main.rs` (shared `src/metadata.rs` module) | Viewer options, file listing, keyboard actions and status text; metadata-cache loading and error states. | Unit | vcpkg libraries | 9 | 0 |
+| `pw-loupe` | `crates/pw-loupe/src/lib.rs`, `src/tabs.rs`, `src/main.rs` (shared `src/metadata.rs` module) | Viewer options, file listing, keyboard actions, folder-tab state and titles; metadata-cache loading and error states. | Unit | vcpkg libraries | 16 | 0 |
 | `pw-metadata` | `crates/pw-metadata/src/exiftool.rs`, `lib.rs`, `test_support.rs`, `worker.rs` | ExifTool protocol handling, localized IPTC values, worker failures/restarts, and its ignored fake-process entry point. | Unit | None | 14 | 1 |
 | `pw-raw` | `crates/pw-raw/src/lib.rs` | Synthetic JPEG/TIFF parsing, preview extraction, EXIF orientation, and exposure formatting. | Unit | None | 6 | 0 |
 | `pw-render` | `crates/pw-render/src/lib.rs` | View sizing, mesh placement/UVs, texture filtering, and texture memory accounting. | Unit | None | 3 | 0 |
@@ -31,4 +31,3 @@ requirement is fully verified.
 | `pw-render` | `crates/pw-render/tests/sync.rs` | Synchronizing simulated view output with headless egui textures, including texture limits and folder changes. | Integration | None | 3 | 0 |
 | `pw-viewcore` | `crates/pw-viewcore/tests/engine.rs` | Simulated view scheduling, zoom/rotation, error presentation, texture residency, worker responsiveness, and JPEG mode. | Integration | vcpkg libraries in the workspace feature-unified build | 12 | 0 |
 | `pw-viewcore` | `crates/pw-viewcore/tests/native_files.rs` | Native decoder behavior on camera RAWs and a generated non-RAW file. | Integration / real-file | vcpkg libraries; `PW_TESTDATA` (2 ignored) | 3 | 2 |
-

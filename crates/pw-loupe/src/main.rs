@@ -13,8 +13,8 @@ use std::time::Duration;
 use eframe::egui;
 use metadata::MetadataCache;
 use pw_loupe::{
-    Action, Options, WINDOW_TITLE, error_text, indicator_text, key_action, list_folder, mode_label,
-    parse_args, status_line, wheel_factor,
+    Action, Options, TabAction, Tabs, WINDOW_TITLE, error_text, indicator_text, key_action,
+    list_folder, mode_label, parse_args, status_line, tab_action, wheel_factor,
 };
 use pw_metadata::MetadataWorker;
 use pw_render::{Textures, view_px};
@@ -35,30 +35,72 @@ struct Loupe {
     show_info: bool,
     message: Option<String>,
     indicator_after: Duration,
+    tabs: Tabs,
 }
 
 impl Loupe {
-    fn open(&mut self, path: &Path) {
+    fn open(&mut self, path: &Path, new_tab: bool) {
         match list_folder(path) {
-            Ok((files, _)) if files.is_empty() => {
-                self.message = Some(format!("Inga bilder i {}", path.display()));
-            }
             Ok((files, pos)) => {
-                self.message = None;
-                let files = match self.metadata.begin_load(files, &mut self.metadata_worker) {
-                    Ok(files) => files,
-                    Err(error) => {
-                        self.message = Some(error);
-                        return;
-                    }
+                let folder = if path.is_dir() {
+                    path.to_path_buf()
+                } else {
+                    path.parent()
+                        .filter(|parent| !parent.as_os_str().is_empty())
+                        .unwrap_or(Path::new("."))
+                        .to_path_buf()
                 };
-                self.core.open_folder(files);
-                if pos > 0 {
-                    self.core.go(pos);
+                if new_tab {
+                    self.tabs.open_new(folder, files, pos);
+                } else {
+                    self.tabs.open_in_active(folder, files, pos);
                 }
+                self.load_active_tab();
             }
             Err(e) => self.message = Some(format!("Kan inte öppna: {e}")),
         }
+    }
+
+    fn load_active_tab(&mut self) {
+        let Some(tab) = self.tabs.active().cloned() else {
+            return;
+        };
+        let files = match self
+            .metadata
+            .begin_load(tab.files, &mut self.metadata_worker)
+        {
+            Ok(files) => files,
+            Err(error) => {
+                self.message = Some(error);
+                return;
+            }
+        };
+        self.core.open_folder(files);
+        self.core.go(tab.current);
+        self.message = if self
+            .tabs
+            .active()
+            .is_some_and(|active| active.files.is_empty())
+        {
+            Some(format!(
+                "Inga bilder i {}",
+                tab.folder
+                    .as_deref()
+                    .map(|folder| folder.display().to_string())
+                    .unwrap_or_else(|| "mappen".to_string())
+            ))
+        } else {
+            None
+        };
+    }
+
+    fn tab_action(&mut self, action: TabAction) {
+        match action {
+            TabAction::Next => self.tabs.next(),
+            TabAction::Previous => self.tabs.previous(),
+            TabAction::Close => self.tabs.close_active(),
+        }
+        self.load_active_tab();
     }
 
     /// The anchor of a zoom: the pointer (physical pixels inside the image area) or the centre.
@@ -91,7 +133,10 @@ impl Loupe {
     fn draw(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
         self.metadata.poll(&self.metadata_worker);
-        // a folder or a file dropped on the window (ADR 0009 §11, decision 2)
+        // A folder or a file dropped on the window opens in a new tab (owner decision 2026-11-08,
+        // ADR 0010 Q3). An empty active tab is filled instead, and an already open folder is
+        // activated (GR12). Modifier keys are not used: Windows does not report them reliably
+        // while dragging from Explorer.
         let dropped = ctx.input(|i| {
             i.raw
                 .dropped_files
@@ -100,9 +145,52 @@ impl Loupe {
                 .find(|p| !p.as_os_str().is_empty())
         });
         if let Some(path) = dropped {
-            self.open(&path);
+            self.open(&path, true);
         }
-        let full = ui.max_rect();
+        let key_actions: Vec<(Option<TabAction>, Option<Action>)> = ctx.input(|i| {
+            i.events
+                .iter()
+                .filter_map(|event| match event {
+                    egui::Event::Key {
+                        key,
+                        pressed: true,
+                        modifiers,
+                        ..
+                    } => {
+                        let ctrl = modifiers.ctrl || modifiers.command;
+                        let tab = tab_action(*key, ctrl, modifiers.shift, modifiers.alt);
+                        let action = if tab.is_none() {
+                            key_action(*key, ctrl, modifiers.alt)
+                        } else {
+                            None
+                        };
+                        Some((tab, action))
+                    }
+                    _ => None,
+                })
+                .collect()
+        });
+        let titles = self.tabs.titles();
+        let active = self.tabs.active_index();
+        let mut selected = None;
+        egui::ScrollArea::horizontal()
+            .id_salt("folder-tabs")
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    for (index, title) in titles.iter().enumerate() {
+                        if ui.selectable_label(index == active, title).clicked() {
+                            selected = Some(index);
+                        }
+                    }
+                });
+            });
+        if let Some(index) = selected
+            && index != self.tabs.active_index()
+            && self.tabs.activate(index)
+        {
+            self.load_active_tab();
+        }
+        let full = ui.available_rect_before_wrap();
         let status_h = if self.show_info { STATUS_HEIGHT } else { 0.0 };
         let rect = egui::Rect::from_min_max(
             full.min,
@@ -116,23 +204,12 @@ impl Loupe {
         );
         let pointer = response.hover_pos();
         let anchor = self.anchor(pointer, rect, ppp);
-        // keys
-        let actions: Vec<Action> = ctx.input(|i| {
-            i.events
-                .iter()
-                .filter_map(|e| match e {
-                    egui::Event::Key {
-                        key,
-                        pressed: true,
-                        modifiers,
-                        ..
-                    } => key_action(*key, modifiers.ctrl || modifiers.command, modifiers.alt),
-                    _ => None,
-                })
-                .collect()
-        });
-        for a in actions {
-            self.act(a, anchor);
+        for (tab, action) in key_actions {
+            if let Some(action) = tab {
+                self.tab_action(action);
+            } else if let Some(action) = action {
+                self.act(action, anchor);
+            }
         }
         // mouse: double-click = Z, drag = pan, wheel = zoom
         if response.double_clicked() {
@@ -153,6 +230,9 @@ impl Loupe {
         let max_side = ctx.input(|i| i.max_texture_side);
         self.textures.sync(&ctx, &self.core, max_side);
         let frame = self.core.frame(view_px(rect, ppp));
+        if let Some(pos) = frame.pos {
+            self.tabs.set_current(pos);
+        }
         let painter = ui.painter().clone();
         painter.rect_filled(full, 0.0, BACKGROUND);
         self.textures.paint(&painter, rect, ppp, &frame);
@@ -272,9 +352,10 @@ fn run(options: Options) -> Result<(), String> {
                 show_info: true,
                 message: None,
                 indicator_after,
+                tabs: Tabs::default(),
             };
             if let Some(p) = path {
-                loupe.open(&p);
+                loupe.open(&p, false);
             }
             Ok(Box::new(loupe))
         }),

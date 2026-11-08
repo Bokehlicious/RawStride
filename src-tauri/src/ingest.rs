@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Instant;
 
-use pw_ingest::{Options, Plan, Shot, Template};
+use pw_ingest::{Options, Plan, Shot};
 use pw_metadata::{Iptc, LocalizedValue};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -110,60 +110,19 @@ fn one() -> u32 {
 
 impl IngestRequest {
     fn source(&self) -> Result<PathBuf, String> {
-        let s = self.source.trim();
-        if s.is_empty() {
-            return Err("Välj en källa.".into());
-        }
-        let p = PathBuf::from(s);
-        if !p.is_absolute() {
-            return Err(format!("Källan måste vara en fullständig sökväg: {s}"));
-        }
-        if !p.is_dir() {
-            return Err(format!("Källan {s} finns inte."));
-        }
-        Ok(p)
+        pw_ingest::validate_source(&self.source)
     }
 
     fn options(&self) -> Result<Options, String> {
-        let source = self.source()?;
-        let dest = self.dest.trim();
-        if dest.is_empty() {
-            return Err("Välj ett mål.".into());
-        }
-        let dest = PathBuf::from(dest);
-        let backup = self
-            .backup
-            .as_deref()
-            .map(str::trim)
-            .filter(|b| !b.is_empty())
-            .map(PathBuf::from);
-        // The overlap checks use resolved paths; the copy itself uses the paths as entered.
-        let source_r = pw_ingest::resolve(&source, "Källan")?;
-        let dest_r = pw_ingest::resolve(&dest, "Målet")?;
-        let backup_r = backup
-            .as_deref()
-            .map(|b| pw_ingest::resolve(b, "Backupmålet"))
-            .transpose()?;
-        for (what, p) in [("Målet", Some(&dest_r)), ("Backupmålet", backup_r.as_ref())] {
-            if let Some(p) = p
-                && (pw_ingest::inside(p, &source_r) || pw_ingest::inside(&source_r, p))
-            {
-                return Err(format!("{what} får inte ligga på eller över källan."));
-            }
-        }
-        if let Some(b) = &backup_r
-            && (pw_ingest::inside(b, &dest_r) || pw_ingest::inside(&dest_r, b))
-        {
-            return Err("Backupmålet måste vara en annan mapp än målet.".into());
-        }
-        Ok(Options {
-            dest,
-            backup,
-            folder: Template::parse(&self.folder).map_err(|e| format!("Mappmall: {e}"))?,
-            name: Template::parse(&self.name).map_err(|e| format!("Filnamnsmall: {e}"))?,
-            job: self.job.trim().to_string(),
-            first_seq: self.first_seq,
-        })
+        pw_ingest::validate_options(
+            &self.source,
+            &self.dest,
+            self.backup.as_deref(),
+            &self.folder,
+            &self.name,
+            &self.job,
+            self.first_seq,
+        )
     }
 }
 
@@ -231,33 +190,7 @@ fn preview_of(shots: &[Shot], plan: &Plan) -> PreviewDto {
 /// Drives (or mounted volumes) with a `DCIM` folder, i.e. camera cards.
 #[tauri::command]
 pub fn ingest_volumes() -> Vec<String> {
-    let mut out = Vec::new();
-    #[cfg(windows)]
-    for c in b'A'..=b'Z' {
-        let root = format!("{}:\\", c as char);
-        if Path::new(&root).join("DCIM").is_dir() {
-            out.push(root);
-        }
-    }
-    #[cfg(not(windows))]
-    for base in ["/Volumes", "/media", "/run/media"] {
-        let mut stack = vec![PathBuf::from(base)];
-        for _ in 0..2 {
-            let mut next = Vec::new();
-            for d in stack {
-                for e in std::fs::read_dir(&d).into_iter().flatten().flatten() {
-                    let p = e.path();
-                    if p.join("DCIM").is_dir() {
-                        out.push(p.to_string_lossy().into_owned());
-                    } else if p.is_dir() {
-                        next.push(p);
-                    }
-                }
-            }
-            stack = next;
-        }
-    }
-    out
+    pw_ingest::ingest_volumes()
 }
 
 /// What an ingest with these settings would do. Writes nothing.

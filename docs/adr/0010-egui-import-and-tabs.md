@@ -72,7 +72,9 @@
 - **One view core for all tabs.** Only the active tab reads and prepares images; the 4 GB core budget
   and the texture budget are not split. Switching tabs opens that tab's folder in the core again and
   goes to its remembered image.
-- Opening a folder by command line or drag-and-drop opens it in the active tab, as today (§11, Q3).
+- A folder dropped on the window opens **in a new tab**; an empty active tab is filled instead, and a
+  folder that is already open is activated. A folder from the command line opens in the first tab
+  (§11, Q3, changed 2026-11-08).
 - Keys (§11, Q4): **Ctrl+Tab** / **Ctrl+Shift+Tab** next / previous tab, **Ctrl+W** close tab.
   Clicking a tab activates it. The last tab cannot be closed; it becomes empty instead.
 - If the imported folder is already open in a tab, that tab is activated and reloaded instead of
@@ -194,7 +196,7 @@ The owner accepted every proposal below as written.
 |---|---|---|
 | **Q1** | What does a tab remember? | Folder, file list and current image. Zoom and pan reset to fit when the tab is shown again |
 | **Q2** | Does a cancelled or partly failed import also open a new tab? | Yes for cancelled or partly failed imports that copied at least one file, with the summary saying so; no tab when nothing was copied |
-| **Q3** | Where does drag-and-drop or the command line open a folder? | In the active tab, as today. A new tab only through the import, or with Ctrl held while dropping |
+| **Q3** | Where does drag-and-drop or the command line open a folder? | **Changed by the owner after testing (2026-11-08):** a dropped folder always opens in a new tab (an empty active tab is filled instead; an already open folder is activated). The command line opens in the first tab. The first answer ("in the active tab; Ctrl+drop for a new tab") was dropped: Windows does not report Ctrl reliably while dragging from Explorer, and the owner prefers a new tab |
 | **Q4** | Tab keys | Ctrl+Tab, Ctrl+Shift+Tab, Ctrl+W, as listed in §3.3. None of them is used by the loupe today |
 | **Q5** | Settings (destination, templates) between sessions | Session only in step A; a settings file is a separate decision |
 | **Q6** | Maximum number of tabs | No hard limit; inactive tabs hold only paths, so they cost little memory |
