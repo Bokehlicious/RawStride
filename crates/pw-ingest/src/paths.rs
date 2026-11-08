@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 use std::path::{Component, Path, PathBuf};
+use std::time::{Duration, Instant};
 
 /// Returns true if `a` is `b` or lies below it, ignoring case and separator differences.
 pub fn inside(a: &Path, b: &Path) -> bool {
@@ -52,6 +53,71 @@ pub fn drive_of(source: &Path) -> Option<String> {
             Some(format!("{}:", letter.to_ascii_uppercase()))
         }
         _ => None,
+    }
+}
+
+/// Ejects the drive containing `source` on Windows.
+pub fn eject(source: &Path) -> String {
+    let Some(drive) = drive_of(source) else {
+        return "Källan är ingen enhet, så inget matades ut.".into();
+    };
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+        let Some(system_root) = std::env::var_os("SystemRoot") else {
+            return "Utmatning kunde inte startas: miljövariabeln SystemRoot saknas.".into();
+        };
+        let powershell = PathBuf::from(system_root)
+            .join("System32")
+            .join("WindowsPowerShell")
+            .join("v1.0")
+            .join("powershell.exe");
+        let script = format!(
+            "(New-Object -ComObject Shell.Application).Namespace(17).ParseName('{drive}').InvokeVerb('Eject')"
+        );
+        let status = std::process::Command::new(powershell)
+            .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+            .creation_flags(CREATE_NO_WINDOW)
+            .status();
+        match status {
+            Ok(status) if !status.success() => {
+                format!(
+                    "{drive} kunde inte matas ut: PowerShell avslutades med felstatus {status:?}."
+                )
+            }
+            Ok(_) => {
+                let dcim = PathBuf::from(format!("{drive}\\DCIM"));
+                if wait_until_gone(|| dcim.exists()) {
+                    format!("{drive} är utmatat och kan tas ut.")
+                } else {
+                    format!(
+                        "{drive} kunde inte matas ut (används den av ett annat program?). Mata ut i Utforskaren."
+                    )
+                }
+            }
+            Err(error) => format!("{drive} kunde inte matas ut: {error}"),
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        format!("Utmatning av {drive} stöds bara på Windows.")
+    }
+}
+
+fn wait_until_gone(mut still_present: impl FnMut() -> bool) -> bool {
+    const INTERVAL: Duration = Duration::from_millis(250);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        if !still_present() {
+            return true;
+        }
+        let now = Instant::now();
+        if now >= deadline {
+            return false;
+        }
+        std::thread::sleep(INTERVAL.min(deadline - now));
     }
 }
 
@@ -221,5 +287,30 @@ mod tests {
         assert_eq!(drive_of(Path::new("/media/card")), None);
         assert_eq!(drive_of(Path::new("1:")), None);
         assert_eq!(drive_of(Path::new("")), None);
+    }
+
+    #[test]
+    fn wait_until_gone_succeeds_when_already_gone() {
+        let mut polls = 0;
+        assert!(wait_until_gone(|| {
+            polls += 1;
+            false
+        }));
+        assert_eq!(polls, 1);
+    }
+
+    #[test]
+    fn wait_until_gone_succeeds_after_a_few_polls() {
+        let mut polls = 0;
+        assert!(wait_until_gone(|| {
+            polls += 1;
+            polls < 3
+        }));
+        assert_eq!(polls, 3);
+    }
+
+    #[test]
+    fn wait_until_gone_times_out_when_still_present() {
+        assert!(!wait_until_gone(|| true));
     }
 }

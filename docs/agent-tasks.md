@@ -127,7 +127,7 @@ Ordered from easiest to hardest. Start at the top.
 - **Done when:** `cargo test -p pw-ingest` and `cargo test -p photoworkflow` pass; the total number
   of tests in the two crates is the same as before the move; `cargo clippy` shows no warnings.
 
-### T5. Card eject in pw-ingest: safer PowerShell call and a real wait — Open
+### T5. Card eject in pw-ingest: safer PowerShell call and a real wait — Done (manual eject test pending)
 
 - **Start after T8 is done.**
 - **Crates:** `pw-ingest`, `photoworkflow`.
@@ -145,6 +145,23 @@ Ordered from easiest to hardest. Start at the top.
   test it without a real drive (gone at once, gone after a few polls, never gone).
 - **Done when:** `cargo test -p pw-ingest` and `cargo test -p photoworkflow` pass. The owner tests
   a real eject by hand.
+
+### T9. Eject polish: readable exit status, fast timeout test, no dead code off Windows — Open
+
+- **Crate:** `pw-ingest`. **File:** `crates/pw-ingest/src/paths.rs`.
+- **What:**
+  1. In `eject()`, show the exit status with `{status}` instead of `{status:?}`, so the message
+     reads "exit code: 1" instead of `ExitStatus(ExitStatus(1))`.
+  2. Give `wait_until_gone` the timeout and the poll interval as parameters
+     (`fn wait_until_gone(still_present: impl FnMut() -> bool, timeout: Duration, interval: Duration) -> bool`).
+     `eject()` passes the current values (5 s and 250 ms) as named constants. The three tests pass
+     short values (e.g. 20 ms timeout, 1 ms interval), so the "never gone" test no longer waits
+     5 seconds.
+  3. `wait_until_gone` is only used by the Windows code and by tests. Mark it
+     `#[cfg(any(windows, test))]` so other platforms do not warn about dead code.
+- **Rules:** behaviour on Windows unchanged; keep the three existing test names and what they check.
+- **Done when:** `cargo test -p pw-ingest` passes and finishes in well under a second;
+  `cargo clippy -p pw-ingest --all-targets` shows no warnings.
 
 ### T7. Format the files that `cargo fmt --check` reports — Done
 
@@ -190,3 +207,6 @@ and reviewer:
 | 2026-11-08 | T5, T8 | Open | Plan changed (owner): reusable ingest logic moves to pw-ingest for the egui GUI; T8 added, T5 now moves eject() to pw-ingest after T8 |
 | 2026-11-08 | T8 | Ready for review | Moved reusable ingest path and folder summary helpers with their tests to pw-ingest; pre/post crate test counts preserved. |
 | 2026-11-08 | T8 | Done | Reviewed: pure move to `pw-ingest/src/paths.rs`, functions identical, src-tauri calls them. Tests: photoworkflow 5 + pw-ingest 12 (was 13 + 4), integration 8; fmt and clippy clean. Nit: doc comments shorter than the originals |
+| 2026-11-08 | T5 | Ready for review | Moved eject() to pw-ingest, use full-path PowerShell and poll DCIM for up to 5 s; added three polling tests. Tests: pw-ingest 23 (was 20), photoworkflow 5 (was 5); fmt and clippy clean. Manual eject verification remains with the owner. |
+| 2026-11-08 | T5 | Done | Reviewed: eject() moved to pw-ingest, full-path PowerShell, exit status checked, polling up to 5 s with three tests. Tests: pw-ingest 15 + 8, photoworkflow 5; fmt and clippy clean. Owner still tests a real eject by hand. Follow-ups in T9 |
+| 2026-11-08 | T9 | Open | Added: small follow-ups from the T5 review |

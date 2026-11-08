@@ -498,45 +498,11 @@ fn run(app: &AppHandle, req: &IngestRequest, opt: &Options) -> DoneDto {
                 },
             );
             *state.scan_cache() = None;
-            eject(&source)
+            pw_ingest::eject(&source)
         });
     }
     done.seconds = started.elapsed().as_secs_f64();
     done
-}
-
-/// Asks Windows to eject the drive the source is on (as "Mata ut" in Explorer).
-fn eject(source: &Path) -> String {
-    let Some(drive) = pw_ingest::drive_of(source) else {
-        return "Källan är ingen enhet, så inget matades ut.".into();
-    };
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        let script = format!(
-            "(New-Object -ComObject Shell.Application).Namespace(17).ParseName('{drive}').InvokeVerb('Eject')"
-        );
-        let status = std::process::Command::new("powershell")
-            .args(["-NoProfile", "-NonInteractive", "-Command", &script])
-            .creation_flags(CREATE_NO_WINDOW)
-            .status();
-        // The verb does not report failure; check whether the drive is still there.
-        std::thread::sleep(std::time::Duration::from_millis(1500));
-        match status {
-            Ok(_) if !Path::new(&format!("{drive}\\")).join("DCIM").exists() => {
-                format!("{drive} är utmatat och kan tas ut.")
-            }
-            Ok(_) => format!(
-                "{drive} kunde inte matas ut (används den av ett annat program?). Mata ut i Utforskaren."
-            ),
-            Err(e) => format!("{drive} kunde inte matas ut: {e}"),
-        }
-    }
-    #[cfg(not(windows))]
-    {
-        format!("Utmatning av {drive} stöds bara på Windows.")
-    }
 }
 
 #[cfg(test)]

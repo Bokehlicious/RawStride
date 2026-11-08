@@ -32,7 +32,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-pub use paths::{drive_of, folder_summary, inside, resolve};
+pub use paths::{drive_of, eject, folder_summary, inside, resolve};
 pub use template::{CaptureTime, Template, TemplateError};
 
 /// Extensions copied together with an image of the same stem (but never on their own).
