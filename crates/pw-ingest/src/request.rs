@@ -2,6 +2,18 @@ use std::path::PathBuf;
 
 use crate::{Options, Template};
 
+/// Named input for validating an ingest request.
+#[derive(Debug)]
+pub struct OptionsInput<'a> {
+    pub source: &'a str,
+    pub dest: &'a str,
+    pub backup: Option<&'a str>,
+    pub folder: &'a str,
+    pub name: &'a str,
+    pub job: &'a str,
+    pub first_seq: u32,
+}
+
 /// Validates the selected source folder.
 pub fn validate_source(source: &str) -> Result<PathBuf, String> {
     let source = source.trim();
@@ -19,15 +31,16 @@ pub fn validate_source(source: &str) -> Result<PathBuf, String> {
 }
 
 /// Validates an import request and creates the options used for planning and copying.
-pub fn validate_options(
-    source: &str,
-    dest: &str,
-    backup: Option<&str>,
-    folder: &str,
-    name: &str,
-    job: &str,
-    first_seq: u32,
-) -> Result<Options, String> {
+pub fn validate_options(input: OptionsInput<'_>) -> Result<Options, String> {
+    let OptionsInput {
+        source,
+        dest,
+        backup,
+        folder,
+        name,
+        job,
+        first_seq,
+    } = input;
     let source = validate_source(source)?;
     let dest = dest.trim();
     if dest.is_empty() {
@@ -89,6 +102,24 @@ mod tests {
         path
     }
 
+    fn input<'a>(
+        source: &'a str,
+        dest: &'a str,
+        backup: Option<&'a str>,
+        folder: &'a str,
+        name: &'a str,
+    ) -> OptionsInput<'a> {
+        OptionsInput {
+            source,
+            dest,
+            backup,
+            folder,
+            name,
+            job: " jobb ",
+            first_seq: 7,
+        }
+    }
+
     #[test]
     fn validates_source_and_preserves_error_messages() {
         assert_eq!(validate_source("  "), Err("Välj en källa.".into()));
@@ -117,15 +148,15 @@ mod tests {
     fn validates_paths_and_builds_options() {
         let source = source_folder();
         let dest = source.with_file_name("pw-ingest-request-dest");
-        let options = validate_options(
-            &source.to_string_lossy(),
-            &format!(" {} ", dest.display()),
+        let source_text = source.to_string_lossy();
+        let dest_text = format!(" {} ", dest.display());
+        let options = validate_options(input(
+            &source_text,
+            &dest_text,
             Some(" "),
             "2026/{date}",
             "{name}_{seq:4}",
-            "  jobb  ",
-            7,
-        );
+        ));
         let options = match options {
             Ok(options) => options,
             Err(error) => panic!("{error}"),
@@ -142,15 +173,13 @@ mod tests {
         let source = source_folder();
         let nested_dest = source.join("destination");
         assert_eq!(
-            validate_options(
+            validate_options(input(
                 &source.to_string_lossy(),
                 &nested_dest.to_string_lossy(),
                 None,
                 "",
                 "{name}",
-                "",
-                1,
-            )
+            ))
             .err(),
             Some("Målet får inte ligga på eller över källan.".into())
         );
@@ -158,29 +187,15 @@ mod tests {
         let dest = source.with_file_name("pw-ingest-request-dest");
         let backup = dest.join("backup");
         assert_eq!(
-            validate_options(
+            validate_options(input(
                 &source.to_string_lossy(),
                 &dest.to_string_lossy(),
                 Some(&backup.to_string_lossy()),
                 "",
                 "{name}",
-                "",
-                1,
-            )
+            ))
             .err(),
             Some("Backupmålet måste vara en annan mapp än målet.".into())
-        );
-        assert!(
-            validate_options(
-                &source.to_string_lossy(),
-                &dest.to_string_lossy(),
-                None,
-                "{invalid}",
-                "{name}",
-                "",
-                1,
-            )
-            .is_err()
         );
         let _ = std::fs::remove_dir_all(source);
     }
@@ -189,18 +204,94 @@ mod tests {
     fn rejects_relative_destination_with_existing_message() {
         let source = source_folder();
         assert_eq!(
-            validate_options(
+            validate_options(input(
                 &source.to_string_lossy(),
                 "relative",
                 None,
                 "",
-                "{name}",
-                "",
-                1
-            )
+                "{name}"
+            ))
             .err(),
             Some("Målet måste vara en fullständig sökväg: relative".into())
         );
         let _ = std::fs::remove_dir_all(source);
+    }
+
+    #[test]
+    fn rejects_empty_destination_with_existing_message() {
+        let source = source_folder();
+        assert_eq!(
+            validate_options(input(&source.to_string_lossy(), "  ", None, "", "{name}",)).err(),
+            Some("Välj ett mål.".into())
+        );
+        let _ = std::fs::remove_dir_all(source);
+    }
+
+    #[test]
+    fn rejects_source_inside_destination_with_existing_message() {
+        let base = source_folder();
+        let source = base.join("source");
+        if let Err(error) = std::fs::create_dir_all(&source) {
+            panic!("could not create test source {}: {error}", source.display());
+        }
+        assert_eq!(
+            validate_options(input(
+                &source.to_string_lossy(),
+                &base.to_string_lossy(),
+                None,
+                "",
+                "{name}",
+            ))
+            .err(),
+            Some("Målet får inte ligga på eller över källan.".into())
+        );
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn invalid_templates_keep_their_field_specific_error_prefixes() {
+        let source = source_folder();
+        let dest = source.with_file_name("pw-ingest-request-dest");
+        let source_text = source.to_string_lossy();
+        let dest_text = dest.to_string_lossy();
+
+        let folder_error =
+            validate_options(input(&source_text, &dest_text, None, "{invalid}", "{name}"))
+                .err()
+                .unwrap_or_default();
+        assert!(folder_error.starts_with("Mappmall: "), "{folder_error}");
+
+        let name_error = validate_options(input(&source_text, &dest_text, None, "", "{invalid}"))
+            .err()
+            .unwrap_or_default();
+        assert!(name_error.starts_with("Filnamnsmall: "), "{name_error}");
+
+        let _ = std::fs::remove_dir_all(source);
+    }
+
+    #[test]
+    fn accepts_a_separate_backup_folder() {
+        let base = source_folder();
+        let source = base.join("source");
+        let dest = base.join("destination");
+        let backup = base.join("backup");
+        if let Err(error) = std::fs::create_dir_all(&source) {
+            panic!("could not create test source {}: {error}", source.display());
+        }
+        let options = validate_options(input(
+            &source.to_string_lossy(),
+            &dest.to_string_lossy(),
+            Some(&backup.to_string_lossy()),
+            "2026/{date}",
+            "{name}",
+        ));
+        let options = match options {
+            Ok(options) => options,
+            Err(error) => panic!("{error}"),
+        };
+        assert_eq!(options.dest, dest);
+        assert_eq!(options.backup, Some(backup));
+
+        let _ = std::fs::remove_dir_all(base);
     }
 }

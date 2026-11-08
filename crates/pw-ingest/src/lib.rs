@@ -38,10 +38,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 pub use eject::{drive_of, eject};
 pub use paths::{inside, resolve};
-pub use request::{validate_options, validate_source};
+pub use request::{OptionsInput, validate_options, validate_source};
 pub use summary::folder_summary;
 pub use template::{CaptureTime, Template, TemplateError};
-pub use volumes::ingest_volumes;
+pub use volumes::card_volumes;
 
 /// Extensions copied together with an image of the same stem (but never on their own).
 pub const COMPANION_EXTENSIONS: &[&str] = &["xmp"];

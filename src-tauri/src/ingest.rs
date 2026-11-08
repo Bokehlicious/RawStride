@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Instant;
 
-use pw_ingest::{Options, Plan, Shot};
+use pw_ingest::{Options, OptionsInput, Plan, Shot};
 use pw_metadata::{Iptc, LocalizedValue};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -114,15 +114,15 @@ impl IngestRequest {
     }
 
     fn options(&self) -> Result<Options, String> {
-        pw_ingest::validate_options(
-            &self.source,
-            &self.dest,
-            self.backup.as_deref(),
-            &self.folder,
-            &self.name,
-            &self.job,
-            self.first_seq,
-        )
+        pw_ingest::validate_options(OptionsInput {
+            source: &self.source,
+            dest: &self.dest,
+            backup: self.backup.as_deref(),
+            folder: &self.folder,
+            name: &self.name,
+            job: &self.job,
+            first_seq: self.first_seq,
+        })
     }
 }
 
@@ -190,7 +190,10 @@ fn preview_of(shots: &[Shot], plan: &Plan) -> PreviewDto {
 /// Drives (or mounted volumes) with a `DCIM` folder, i.e. camera cards.
 #[tauri::command]
 pub fn ingest_volumes() -> Vec<String> {
-    pw_ingest::ingest_volumes()
+    pw_ingest::card_volumes()
+        .into_iter()
+        .map(|path| path.to_string_lossy().into_owned())
+        .collect()
 }
 
 /// What an ingest with these settings would do. Writes nothing.
