@@ -26,6 +26,12 @@ node_modules/
 *.ARW
 *.arw
 *.dng
+*.RW2
+*.rw2
+# ExifTool backups (written when -overwrite_original is not used)
+*_original
+# Local test images; real test sets live in D:\PhotoWorkflowData (PW_TESTDATA)
+/test_images/
 *.sqlite
 *.sqlite-wal
 *.sqlite-shm

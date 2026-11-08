@@ -6,25 +6,27 @@ It covers card ingest, culling, rating and metadata.
 **Camera support:** the goal is to support most cameras, through LibRaw.
 During development we start with Sony A1 and A7R IVA (ARW), Panasonic (RW2) and DNG.
 
-> Status: **project skeleton**. There is no application code yet.
+> Status: The Rust workspace includes the standalone `pw-loupe` viewer, the first milestone of the
+> eframe + egui GUI migration. The existing Tauri app remains in place while the rest of its features
+> are migrated.
 
 ## Stack
 
 | Area | Choice |
 |---|---|
-| App shell | Tauri 2 |
+| App | Existing Tauri 2 app; standalone eframe + egui loupe |
 | Core | Rust (workspace in `crates/`) |
 | RAW decoding | LibRaw (vcpkg, static), plus our own embedded-preview fast path |
-| Metadata | ExifTool (persistent `-stay_open` process pool) |
-| Catalog | SQLite |
-| Rendering | GPU via wgpu (DX12 / Vulkan) |
+| Metadata | ExifTool (one persistent `-stay_open` process) |
+| Catalog | SQLite (planned; `pw-catalog` is not implemented yet) |
+| Rendering | eframe renderer (glow) for the new GUI |
 
 ## Layout
 
 ```
-crates/        Rust libraries (core, raw, metadata, catalog, ingest, thumbcache, render)
-src-tauri/     Tauri app shell (generated in the implementation phase)
-ui/            Frontend (contact sheet, loupe, panels)
+crates/        Rust libraries and the standalone pw-loupe app
+src-tauri/     Existing Tauri app shell
+ui/            Existing Tauri frontend
 docs/          Architecture, ADRs, clean-room policy, developer setup
 third_party/   Notes, pins and licences for native dependencies
 tools/         Developer scripts and benchmarks
