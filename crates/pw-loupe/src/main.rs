@@ -187,11 +187,9 @@ impl Loupe {
             }
             Status::Ready => {}
         }
-        let metadata_notice = self.metadata.notice(frame.path.as_deref());
-        if metadata_notice
-            .as_deref()
-            .is_some_and(|notice| notice == "Metadata loading…")
-        {
+        let metadata_path = frame.path.as_deref();
+        let metadata_notice = self.metadata.notice(metadata_path);
+        if self.metadata.is_loading(metadata_path) {
             ctx.request_repaint_after(Duration::from_millis(100));
         }
         if self.show_info {
@@ -225,8 +223,8 @@ impl Loupe {
                 self.core.toggle_mode();
             }
         } else if matches!(frame.status, Status::Ready)
+            && self.metadata.is_error(frame.path.as_deref())
             && let Some(notice) = metadata_notice
-            && notice.starts_with("Metadata error")
         {
             centre_text(&notice);
         }

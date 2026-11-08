@@ -115,6 +115,16 @@ impl MetadataCache {
         }
     }
 
+    pub fn is_loading(&self, path: Option<&Path>) -> bool {
+        path.and_then(|path| self.images.get(path))
+            .is_some_and(|metadata| matches!(&metadata.state, LoadState::Loading))
+    }
+
+    pub fn is_error(&self, path: Option<&Path>) -> bool {
+        path.and_then(|path| self.images.get(path))
+            .is_some_and(|metadata| matches!(&metadata.state, LoadState::Error(_)))
+    }
+
     pub fn rating_summary(&self, path: Option<&Path>) -> Option<String> {
         let rating = self.images.get(path?)?.rating.as_ref()?;
         let mut summary = match rating.stars {
@@ -177,7 +187,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn metadata_cache_uses_absolute_paths_and_reports_queue_errors() {
+    fn metadata_cache_uses_absolute_paths_and_starts_loading() {
         let program =
             std::env::temp_dir().join(format!("pw-loupe-missing-exiftool-{}", std::process::id()));
         let mut worker = match MetadataWorker::start_with(&program.to_string_lossy(), &[]) {
@@ -190,10 +200,32 @@ mod tests {
             Err(error) => panic!("current directory should be available: {error}"),
         };
         assert!(files[0].is_absolute());
+        assert!(cache.is_loading(Some(&files[0])));
+        assert!(!cache.is_error(Some(&files[0])));
         assert_eq!(
             cache.notice(Some(&files[0])).as_deref(),
             Some("Metadata loading…")
         );
+    }
+
+    #[test]
+    fn metadata_state_queries_are_false_for_unsupported_files_and_missing_paths() {
+        let program =
+            std::env::temp_dir().join(format!("pw-loupe-unsupported-{}", std::process::id()));
+        let mut worker = match MetadataWorker::start_with(&program.to_string_lossy(), &[]) {
+            Ok(worker) => worker,
+            Err(error) => panic!("worker thread should start: {error}"),
+        };
+        let mut cache = MetadataCache::default();
+        let files = match cache.begin_load(vec![PathBuf::from("notes.txt")], &mut worker) {
+            Ok(files) => files,
+            Err(error) => panic!("current directory should be available: {error}"),
+        };
+
+        assert!(!cache.is_loading(Some(&files[0])));
+        assert!(!cache.is_error(Some(&files[0])));
+        assert!(!cache.is_loading(None));
+        assert!(!cache.is_error(None));
     }
 
     #[test]
@@ -213,6 +245,8 @@ mod tests {
             Err(error) => panic!("current directory should be available: {error}"),
         };
         cache.drain(|| Err(TryRecvError::Disconnected));
+        assert!(!cache.is_loading(Some(&files[0])));
+        assert!(cache.is_error(Some(&files[0])));
         assert_eq!(
             cache.notice(Some(&files[0])).as_deref(),
             Some("Metadata error: metadata worker has stopped")
