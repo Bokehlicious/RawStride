@@ -21,6 +21,7 @@
 //! Not yet: volume detection, IPTC templates, catalog registration, unbuffered read-back
 //! (the read-back currently may come from the OS cache).
 
+mod paths;
 pub mod template;
 
 use std::collections::{HashMap, HashSet};
@@ -31,6 +32,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+pub use paths::{drive_of, folder_summary, inside, resolve};
 pub use template::{CaptureTime, Template, TemplateError};
 
 /// Extensions copied together with an image of the same stem (but never on their own).

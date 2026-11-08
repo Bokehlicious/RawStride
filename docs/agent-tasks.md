@@ -102,7 +102,7 @@ Ordered from easiest to hardest. Start at the top.
 - **Tests to add:** the sort order; items in two folders; only the items passed in are counted.
 - **Done when:** `cargo test -p photoworkflow` passes.
 
-### T8. Move reusable ingest helpers from src-tauri to pw-ingest — Open
+### T8. Move reusable ingest helpers from src-tauri to pw-ingest — Done
 
 - **Why:** the Tauri app is being replaced by the egui GUI (ADR 0001 amended 2026-11-07, ADR 0009).
   Logic that the egui GUI will also need belongs in the shared crate `pw-ingest`, not in
@@ -188,3 +188,5 @@ and reviewer:
 | 2026-11-08 | T3 | Done | Reviewed: is_loading/is_error read LoadState; no text comparisons left in main.rs; all required tests present. Tests: pw-loupe 6 + 3 passed; fmt and clippy clean. Agent updated the status itself this time |
 | 2026-11-08 | T4 | Done | Reviewed: folder_summary() is pure, existence check in run(); three required tests present. Tests: photoworkflow 13 passed; fmt and clippy clean |
 | 2026-11-08 | T5, T8 | Open | Plan changed (owner): reusable ingest logic moves to pw-ingest for the egui GUI; T8 added, T5 now moves eject() to pw-ingest after T8 |
+| 2026-11-08 | T8 | Ready for review | Moved reusable ingest path and folder summary helpers with their tests to pw-ingest; pre/post crate test counts preserved. |
+| 2026-11-08 | T8 | Done | Reviewed: pure move to `pw-ingest/src/paths.rs`, functions identical, src-tauri calls them. Tests: photoworkflow 5 + pw-ingest 12 (was 13 + 4), integration 8; fmt and clippy clean. Nit: doc comments shorter than the originals |

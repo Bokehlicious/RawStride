@@ -3,8 +3,7 @@
 //!
 //! Events: `ingest-progress` ([`ProgressDto`]) during the run, `ingest-done` ([`DoneDto`]) once.
 
-use std::collections::BTreeMap;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Instant;
@@ -109,52 +108,6 @@ fn one() -> u32 {
     1
 }
 
-/// True if `a` is `b` or lies below it. Compares whole components, ignoring case and the kind of
-/// separator (Windows). Both paths should come from [`resolve`], so `..`, relative paths and
-/// different spellings of the same folder do not fool it.
-fn inside(a: &Path, b: &Path) -> bool {
-    let norm = |p: &Path| {
-        p.to_string_lossy()
-            .replace('\\', "/")
-            .trim_end_matches('/')
-            .to_lowercase()
-    };
-    let (a, b) = (norm(a), norm(b));
-    a == b || a.starts_with(&format!("{b}/"))
-}
-
-/// Checks that `p` is absolute and free of `..`, then resolves it to its canonical form so that
-/// overlap checks compare like with like (e.g. `\\?\` prefixes, `subst` drives, links). A folder
-/// that does not exist yet (a new destination) is resolved through its closest existing parent.
-fn resolve(p: &Path, what: &str) -> Result<PathBuf, String> {
-    if !p.is_absolute() {
-        return Err(format!(
-            "{what} måste vara en fullständig sökväg: {}",
-            p.display()
-        ));
-    }
-    if p.components().any(|c| matches!(c, Component::ParentDir)) {
-        return Err(format!("{what} får inte innehålla \"..\": {}", p.display()));
-    }
-    let mut existing = p;
-    let mut missing = Vec::new();
-    loop {
-        if let Ok(canonical) = existing.canonicalize() {
-            let mut out = canonical;
-            out.extend(missing.iter().rev());
-            return Ok(out);
-        }
-        match (existing.parent(), existing.file_name()) {
-            (Some(parent), Some(name)) => {
-                missing.push(name.to_os_string());
-                existing = parent;
-            }
-            // Nothing exists, not even the drive: keep the path as given.
-            _ => return Ok(p.to_path_buf()),
-        }
-    }
-}
-
 impl IngestRequest {
     fn source(&self) -> Result<PathBuf, String> {
         let s = self.source.trim();
@@ -185,21 +138,21 @@ impl IngestRequest {
             .filter(|b| !b.is_empty())
             .map(PathBuf::from);
         // The overlap checks use resolved paths; the copy itself uses the paths as entered.
-        let source_r = resolve(&source, "Källan")?;
-        let dest_r = resolve(&dest, "Målet")?;
+        let source_r = pw_ingest::resolve(&source, "Källan")?;
+        let dest_r = pw_ingest::resolve(&dest, "Målet")?;
         let backup_r = backup
             .as_deref()
-            .map(|b| resolve(b, "Backupmålet"))
+            .map(|b| pw_ingest::resolve(b, "Backupmålet"))
             .transpose()?;
         for (what, p) in [("Målet", Some(&dest_r)), ("Backupmålet", backup_r.as_ref())] {
             if let Some(p) = p
-                && (inside(p, &source_r) || inside(&source_r, p))
+                && (pw_ingest::inside(p, &source_r) || pw_ingest::inside(&source_r, p))
             {
                 return Err(format!("{what} får inte ligga på eller över källan."));
             }
         }
         if let Some(b) = &backup_r
-            && (inside(b, &dest_r) || inside(&dest_r, b))
+            && (pw_ingest::inside(b, &dest_r) || pw_ingest::inside(&dest_r, b))
         {
             return Err("Backupmålet måste vara en annan mapp än målet.".into());
         }
@@ -416,22 +369,6 @@ fn file_name(p: &Path) -> String {
         .unwrap_or_default()
 }
 
-fn folder_summary(items: &[&pw_ingest::PlanItem], dest: &Path) -> Vec<(String, usize)> {
-    let mut folders: BTreeMap<PathBuf, usize> = BTreeMap::new();
-    for item in items {
-        let path = dest.join(&item.rel);
-        if let Some(parent) = path.parent() {
-            *folders.entry(parent.to_path_buf()).or_default() += 1;
-        }
-    }
-    let mut folders: Vec<(String, usize)> = folders
-        .into_iter()
-        .map(|(path, count)| (path.to_string_lossy().into_owned(), count))
-        .collect();
-    folders.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
-    folders
-}
-
 fn run(app: &AppHandle, req: &IngestRequest, opt: &Options) -> DoneDto {
     let state = app.state::<IngestState>();
     let started = Instant::now();
@@ -543,7 +480,7 @@ fn run(app: &AppHandle, req: &IngestRequest, opt: &Options) -> DoneDto {
         .iter()
         .filter(|item| opt.dest.join(&item.rel).exists())
         .collect();
-    done.folders = folder_summary(&destination_items, &opt.dest);
+    done.folders = pw_ingest::folder_summary(&destination_items, &opt.dest);
 
     if req.eject {
         done.eject = Some(if done.cancelled || !done.failed.is_empty() {
@@ -568,21 +505,9 @@ fn run(app: &AppHandle, req: &IngestRequest, opt: &Options) -> DoneDto {
     done
 }
 
-/// The drive (`"E:"`) a path starts with, if it starts with a drive letter.
-fn drive_of(source: &Path) -> Option<String> {
-    let s = source.to_string_lossy();
-    let mut chars = s.chars();
-    match (chars.next(), chars.next()) {
-        (Some(letter), Some(':')) if letter.is_ascii_alphabetic() => {
-            Some(format!("{}:", letter.to_ascii_uppercase()))
-        }
-        _ => None,
-    }
-}
-
 /// Asks Windows to eject the drive the source is on (as "Mata ut" in Explorer).
 fn eject(source: &Path) -> String {
-    let Some(drive) = drive_of(source) else {
+    let Some(drive) = pw_ingest::drive_of(source) else {
         return "Källan är ingen enhet, så inget matades ut.".into();
     };
     #[cfg(windows)]
@@ -631,145 +556,12 @@ mod tests {
         }
     }
 
-    fn folder_item(rel: &str) -> pw_ingest::PlanItem {
-        pw_ingest::PlanItem {
-            rel: PathBuf::from(rel),
-            ..item(false, false, false)
-        }
-    }
-
-    #[test]
-    fn folder_summary_sorts_by_count_then_name() {
-        let dest = Path::new("destination");
-        let items = [
-            folder_item("z/one.arw"),
-            folder_item("z/two.arw"),
-            folder_item("a/one.arw"),
-            folder_item("a/two.arw"),
-            folder_item("m/one.arw"),
-        ];
-        let summary = folder_summary(&items.iter().collect::<Vec<_>>(), dest);
-
-        assert_eq!(
-            summary,
-            vec![
-                (dest.join("a").to_string_lossy().into_owned(), 2),
-                (dest.join("z").to_string_lossy().into_owned(), 2),
-                (dest.join("m").to_string_lossy().into_owned(), 1),
-            ]
-        );
-    }
-
-    #[test]
-    fn folder_summary_counts_items_in_separate_folders() {
-        let dest = Path::new("destination");
-        let items = [
-            folder_item("2026/01/one.arw"),
-            folder_item("2026/02/two.arw"),
-        ];
-        let summary = folder_summary(&items.iter().collect::<Vec<_>>(), dest);
-
-        assert_eq!(
-            summary,
-            vec![
-                (dest.join("2026/01").to_string_lossy().into_owned(), 1),
-                (dest.join("2026/02").to_string_lossy().into_owned(), 1),
-            ]
-        );
-    }
-
-    #[test]
-    fn folder_summary_counts_only_items_passed_to_it() {
-        let dest = Path::new("destination");
-        let items = [
-            folder_item("2026/01/one.arw"),
-            folder_item("2026/01/two.arw"),
-            folder_item("2026/02/three.arw"),
-        ];
-        let selected = [&items[0], &items[2]];
-
-        let summary = folder_summary(&selected, dest);
-
-        assert_eq!(
-            summary,
-            vec![
-                (dest.join("2026/01").to_string_lossy().into_owned(), 1),
-                (dest.join("2026/02").to_string_lossy().into_owned(), 1),
-            ]
-        );
-    }
-
     #[test]
     fn plan_item_actions() {
         assert_eq!(action(&item(false, false, false)), "present");
         assert_eq!(action(&item(true, false, false)), "copy");
         assert_eq!(action(&item(true, true, true)), "renamed");
         assert_eq!(action(&item(false, true, false)), "backup");
-    }
-
-    #[test]
-    fn inside_compares_whole_components_ignoring_case_and_separators() {
-        let p = Path::new;
-        assert!(inside(p(r"E:\DCIM\100MSDCF"), p("e:/dcim")));
-        assert!(inside(p(r"E:\DCIM\"), p(r"E:\DCIM")));
-        assert!(inside(p("/a/b"), p("/a/b")));
-        assert!(!inside(p(r"E:\DCIM2"), p(r"E:\DCIM")), "prefix of a name");
-        assert!(
-            !inside(p(r"E:\"), p(r"E:\DCIM")),
-            "parent is not inside child"
-        );
-    }
-
-    #[test]
-    fn resolve_rejects_relative_and_parent_paths() {
-        assert!(resolve(Path::new("Foto"), "Målet").is_err());
-        let up = std::env::temp_dir().join("a").join("..").join("b");
-        assert!(resolve(&up, "Målet").is_err());
-    }
-
-    #[test]
-    fn resolve_keeps_missing_folders_below_an_existing_parent() {
-        let base = std::env::temp_dir();
-        let wanted = base.join("pw-ingest-resolve-missing").join("2026");
-        let resolved = match resolve(&wanted, "Målet") {
-            Ok(p) => p,
-            Err(e) => panic!("{e}"),
-        };
-        let canonical_base = match base.canonicalize() {
-            Ok(p) => p,
-            Err(e) => panic!("{e}"),
-        };
-        assert_eq!(
-            resolved,
-            canonical_base
-                .join("pw-ingest-resolve-missing")
-                .join("2026")
-        );
-    }
-
-    #[test]
-    fn resolve_detects_the_same_folder_spelled_differently() {
-        let base = std::env::temp_dir().join(format!("pw-ingest-same-{}", std::process::id()));
-        if let Err(e) = std::fs::create_dir_all(base.join("card")) {
-            panic!("{e}");
-        }
-        let a = resolve(&base.join("card"), "Källan");
-        let b = resolve(&base.join(".").join("card"), "Målet");
-        match (a, b) {
-            (Ok(a), Ok(b)) => assert!(inside(&a, &b) && inside(&b, &a)),
-            other => panic!("{other:?}"),
-        }
-        let _ = std::fs::remove_dir_all(&base);
-    }
-
-    #[test]
-    fn drive_letter_is_found_only_at_the_start() {
-        assert_eq!(drive_of(Path::new(r"e:\DCIM")).as_deref(), Some("E:"));
-        assert_eq!(drive_of(Path::new("F:")).as_deref(), Some("F:"));
-        assert_eq!(drive_of(Path::new(r"\\server\share")), None);
-        assert_eq!(drive_of(Path::new("/media/card")), None);
-        assert_eq!(drive_of(Path::new("1:")), None);
-        assert_eq!(drive_of(Path::new("")), None);
     }
 
     #[test]
