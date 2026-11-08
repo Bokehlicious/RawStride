@@ -1,20 +1,33 @@
 //! Checks `pw-raw` against the project's RAW test set. The expected values come from the
 //! ExifTool survey (docs/analyses/2026-11-03-pw-raw-embedded-previews.md).
 //!
-//! Runs only when `PW_TESTDATA` points to the RAW folder, e.g.
-//! `$env:PW_TESTDATA = "D:\PhotoWorkflowData\RAW"; cargo test -p pw-raw`
+//! These tests are ignored by default. Run them with
+//! `$env:PW_TESTDATA = "<folder>"; cargo test -p pw-raw -- --ignored`.
 
 use std::path::PathBuf;
 
-fn file(name: &str) -> Option<PathBuf> {
-    let dir = std::env::var_os("PW_TESTDATA")?;
-    let p = PathBuf::from(dir).join(name);
-    if p.exists() {
-        Some(p)
-    } else {
-        eprintln!("skipping: {} not found", p.display());
-        None
-    }
+fn testdata() -> PathBuf {
+    let Some(dir) = std::env::var_os("PW_TESTDATA") else {
+        panic!("PW_TESTDATA is not set; set it to the real camera test-data folder");
+    };
+    let dir = PathBuf::from(dir);
+    assert!(
+        dir.is_dir(),
+        "PW_TESTDATA folder does not exist: {}",
+        dir.display()
+    );
+    dir
+}
+
+fn test_file(name: &str) -> PathBuf {
+    let dir = testdata();
+    let file = dir.join(name);
+    assert!(
+        file.is_file(),
+        "required test file {name} was not found in PW_TESTDATA folder {}",
+        dir.display()
+    );
+    file
 }
 
 fn widths(info: &pw_raw::ImageInfo) -> Vec<u32> {
@@ -22,10 +35,9 @@ fn widths(info: &pw_raw::ImageInfo) -> Vec<u32> {
 }
 
 #[test]
+#[ignore = "needs real camera files: set PW_TESTDATA and run with --ignored"]
 fn sony_a1() {
-    let Some(p) = file("TN005956.ARW") else {
-        return;
-    };
+    let p = test_file("TN005956.ARW");
     let i = pw_raw::inspect(&p).unwrap();
     assert_eq!(i.model.as_deref(), Some("ILCE-1"));
     assert_eq!((i.width, i.height), (Some(8672), Some(5784)));
@@ -41,10 +53,9 @@ fn sony_a1() {
 }
 
 #[test]
+#[ignore = "needs real camera files: set PW_TESTDATA and run with --ignored"]
 fn sony_a7r_iva_orientation_8() {
-    let Some(p) = file("TN100423.ARW") else {
-        return;
-    };
+    let p = test_file("TN100423.ARW");
     let i = pw_raw::inspect(&p).unwrap();
     assert_eq!(i.model.as_deref(), Some("ILCE-7RM4A"));
     assert_eq!((i.width, i.height), (Some(9600), Some(6376)));
@@ -56,10 +67,9 @@ fn sony_a7r_iva_orientation_8() {
 }
 
 #[test]
+#[ignore = "needs real camera files: set PW_TESTDATA and run with --ignored"]
 fn panasonic_rw2() {
-    let Some(p) = file("P1240231.RW2") else {
-        return;
-    };
+    let p = test_file("P1240231.RW2");
     let i = pw_raw::inspect(&p).unwrap();
     assert_eq!(i.format, Some(pw_raw::Format::Panasonic));
     assert_eq!(i.model.as_deref(), Some("DMC-GM1"));
@@ -72,10 +82,9 @@ fn panasonic_rw2() {
 }
 
 #[test]
+#[ignore = "needs real camera files: set PW_TESTDATA and run with --ignored"]
 fn dng_preview_orientation_is_neutralized() {
-    let Some(p) = file("IMG_20261026_062851.dng") else {
-        return;
-    };
+    let p = test_file("IMG_20261026_062851.dng");
     let i = pw_raw::inspect(&p).unwrap();
     assert_eq!((i.width, i.height), (Some(4096), Some(3072)));
     assert_eq!(widths(&i), vec![4096]);

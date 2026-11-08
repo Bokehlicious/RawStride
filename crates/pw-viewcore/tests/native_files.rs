@@ -1,6 +1,6 @@
-//! The core with LibRaw (PPG) and libjpeg-turbo on the real test RAWs. Needs the `native` feature
-//! and PW_TESTDATA (the folder with the test RAWs, e.g. D:\PhotoWorkflowData\RAW); skipped when it
-//! is not set.
+//! The core with LibRaw (PPG) and libjpeg-turbo on the real test RAWs. These tests are ignored by
+//! default; run them with
+//! `$env:PW_TESTDATA = "<folder>"; cargo test -p pw-viewcore --features native -- --ignored`.
 #![cfg(feature = "native")]
 
 use std::collections::HashMap;
@@ -13,26 +13,57 @@ use pw_viewcore::{Config, Frame, Source, Status, ViewCore, ViewKind, ViewOut, Zo
 const VIEW: [u32; 2] = [1920, 1080];
 const WAIT: Duration = Duration::from_secs(30);
 
-fn testdata(prefix: &str) -> Vec<PathBuf> {
-    let Some(dir) = std::env::var_os("PW_TESTDATA").map(PathBuf::from) else {
-        return Vec::new();
+fn testdata() -> PathBuf {
+    let Some(dir) = std::env::var_os("PW_TESTDATA") else {
+        panic!("PW_TESTDATA is not set; set it to the real camera test-data folder");
     };
-    let mut v: Vec<PathBuf> = std::fs::read_dir(&dir)
-        .map(|rd| {
-            rd.filter_map(|e| e.ok().map(|e| e.path()))
-                .filter(|p| {
-                    p.file_name()
-                        .and_then(|n| n.to_str())
-                        .is_some_and(|n| n.starts_with(prefix))
-                        && p.extension().and_then(|e| e.to_str()).is_some_and(|e| {
-                            matches!(e.to_ascii_lowercase().as_str(), "arw" | "rw2" | "dng")
-                        })
+    let dir = PathBuf::from(dir);
+    assert!(
+        dir.is_dir(),
+        "PW_TESTDATA folder does not exist: {}",
+        dir.display()
+    );
+    dir
+}
+
+fn test_files(prefix: &str) -> Vec<PathBuf> {
+    let dir = testdata();
+    let entries = std::fs::read_dir(&dir).unwrap_or_else(|error| {
+        panic!(
+            "could not read PW_TESTDATA folder {}: {error}",
+            dir.display()
+        )
+    });
+    let mut files: Vec<PathBuf> = entries
+        .map(|entry| {
+            entry
+                .unwrap_or_else(|error| {
+                    panic!(
+                        "could not read an entry in PW_TESTDATA folder {}: {error}",
+                        dir.display()
+                    )
                 })
-                .collect()
+                .path()
         })
-        .unwrap_or_default();
-    v.sort();
-    v
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with(prefix))
+                && path
+                    .extension()
+                    .and_then(|ext| ext.to_str())
+                    .is_some_and(|ext| {
+                        matches!(ext.to_ascii_lowercase().as_str(), "arw" | "rw2" | "dng")
+                    })
+        })
+        .collect();
+    files.sort();
+    assert!(
+        !files.is_empty(),
+        "no RAW test file with prefix {prefix} was found in PW_TESTDATA folder {}",
+        dir.display()
+    );
+    files
 }
 
 struct Screen<'a> {
@@ -77,12 +108,9 @@ fn start() -> ViewCore<NativeBackend> {
 }
 
 #[test]
+#[ignore = "needs real camera files: set PW_TESTDATA and run with --ignored"]
 fn a7r_vertical_images_fit_and_zoom_with_correct_sizes() {
-    let files = testdata("TN1004");
-    if files.is_empty() {
-        eprintln!("PW_TESTDATA not set or no TN1004* files; skipped");
-        return;
-    }
+    let files = test_files("TN1004");
     let core = start();
     core.open_folder(files);
     let mut screen = Screen {
@@ -125,11 +153,9 @@ fn a7r_vertical_images_fit_and_zoom_with_correct_sizes() {
 }
 
 #[test]
+#[ignore = "needs real camera files: set PW_TESTDATA and run with --ignored"]
 fn a_file_that_is_not_raw_shows_an_error() {
-    if std::env::var_os("PW_TESTDATA").is_none() {
-        eprintln!("PW_TESTDATA not set; skipped");
-        return;
-    }
+    let _ = testdata();
     let tmp = std::env::temp_dir().join(format!("pw-viewcore-{}", std::process::id()));
     let _ = std::fs::create_dir_all(&tmp);
     let f = tmp.join("not-raw.ARW");
@@ -151,13 +177,10 @@ fn a_file_that_is_not_raw_shows_an_error() {
 }
 
 #[test]
+#[ignore = "needs real camera files: set PW_TESTDATA and run with --ignored"]
 fn jpeg_mode_shows_the_embedded_jpeg_upright_at_its_own_size() {
     for prefix in ["TN1004", "TN0059", "P124"] {
-        let files = testdata(prefix);
-        if files.is_empty() {
-            eprintln!("PW_TESTDATA not set or no {prefix}* files; skipped");
-            continue;
-        }
+        let files = test_files(prefix);
         let core = start();
         core.set_mode(Source::Jpeg);
         core.open_folder(files.clone());

@@ -1,9 +1,59 @@
-//! Decoding with the real library: a small JPEG built into the test, and (with PW_TESTDATA) the
-//! embedded previews of the test RAWs.
+//! Decoding with the real library: a small JPEG built into the test, and an ignored real-file test
+//! for embedded RAW previews. Run the latter with
+//! `$env:PW_TESTDATA = "<folder>"; cargo test -p pw-libjpeg -- --ignored`.
 
 use std::path::PathBuf;
 
 use pw_libjpeg::{Decoder, Scale};
+
+fn testdata() -> PathBuf {
+    let Some(dir) = std::env::var_os("PW_TESTDATA") else {
+        panic!("PW_TESTDATA is not set; set it to the real camera test-data folder");
+    };
+    let dir = PathBuf::from(dir);
+    assert!(
+        dir.is_dir(),
+        "PW_TESTDATA folder does not exist: {}",
+        dir.display()
+    );
+    dir
+}
+
+fn test_raw_files() -> Vec<PathBuf> {
+    let dir = testdata();
+    let entries = std::fs::read_dir(&dir).unwrap_or_else(|error| {
+        panic!(
+            "could not read PW_TESTDATA folder {}: {error}",
+            dir.display()
+        )
+    });
+    let mut files: Vec<PathBuf> = entries
+        .map(|entry| {
+            entry
+                .unwrap_or_else(|error| {
+                    panic!(
+                        "could not read an entry in PW_TESTDATA folder {}: {error}",
+                        dir.display()
+                    )
+                })
+                .path()
+        })
+        .filter(|path| {
+            path.extension()
+                .and_then(|ext| ext.to_str())
+                .is_some_and(|ext| {
+                    matches!(ext.to_ascii_lowercase().as_str(), "arw" | "rw2" | "dng")
+                })
+        })
+        .collect();
+    files.sort();
+    assert!(
+        !files.is_empty(),
+        "no ARW, RW2, or DNG files found in PW_TESTDATA folder {}",
+        dir.display()
+    );
+    files
+}
 
 /// 16×8, left half red (220, 30, 30), right half blue (30, 30, 220); 4:4:4, quality 95.
 const SMALL: &[u8] = &[
@@ -109,24 +159,9 @@ fn the_decoder_can_move_to_another_thread() {
 }
 
 #[test]
+#[ignore = "needs real camera files: set PW_TESTDATA and run with --ignored"]
 fn embedded_previews_of_the_test_raws_decode() {
-    let Some(dir) = std::env::var_os("PW_TESTDATA").map(PathBuf::from) else {
-        eprintln!("PW_TESTDATA not set; skipped");
-        return;
-    };
-    let mut files: Vec<PathBuf> = std::fs::read_dir(&dir)
-        .map(|rd| {
-            rd.filter_map(|e| e.ok().map(|e| e.path()))
-                .filter(|p| {
-                    p.extension().and_then(|e| e.to_str()).is_some_and(|e| {
-                        matches!(e.to_ascii_lowercase().as_str(), "arw" | "rw2" | "dng")
-                    })
-                })
-                .collect()
-        })
-        .unwrap_or_default();
-    files.sort();
-    assert!(!files.is_empty());
+    let files = test_raw_files();
     let mut d = decoder();
     let mut checked = 0;
     for f in &files {

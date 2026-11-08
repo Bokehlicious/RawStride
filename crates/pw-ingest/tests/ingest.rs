@@ -1,5 +1,5 @@
-//! End-to-end ingest tests on temporary folders. With `PW_TESTDATA` set (folder with the test
-//! RAWs), a real ARW is included so the EXIF capture time is exercised too.
+//! End-to-end ingest tests on temporary folders. The real-ARW test is ignored by default; run it
+//! with `$env:PW_TESTDATA = "<folder>"; cargo test -p pw-ingest -- --ignored`.
 
 use std::fs::{self, File};
 use std::path::{Path, PathBuf};
@@ -7,6 +7,30 @@ use std::sync::atomic::AtomicBool;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use pw_ingest::{Options, Template, execute, plan, scan};
+
+fn testdata() -> PathBuf {
+    let Some(dir) = std::env::var_os("PW_TESTDATA") else {
+        panic!("PW_TESTDATA is not set; set it to the real camera test-data folder");
+    };
+    let dir = PathBuf::from(dir);
+    assert!(
+        dir.is_dir(),
+        "PW_TESTDATA folder does not exist: {}",
+        dir.display()
+    );
+    dir
+}
+
+fn test_file(name: &str) -> PathBuf {
+    let dir = testdata();
+    let file = dir.join(name);
+    assert!(
+        file.is_file(),
+        "required test file {name} was not found in PW_TESTDATA folder {}",
+        dir.display()
+    );
+    file
+}
 
 struct Tmp(PathBuf);
 impl Tmp {
@@ -271,14 +295,11 @@ fn cancel_leaves_no_files() {
 }
 
 #[test]
+#[ignore = "needs real camera files: set PW_TESTDATA and run with --ignored"]
 fn real_raw_uses_exif_time() {
-    let Some(dir) = std::env::var_os("PW_TESTDATA") else {
-        eprintln!("PW_TESTDATA not set; skipped");
-        return;
-    };
     let src = Tmp::new("real-src");
     let dst = Tmp::new("real-dst");
-    let raw = Path::new(&dir).join("TN005956.ARW");
+    let raw = test_file("TN005956.ARW");
     let copy = src.0.join("TN005956.ARW");
     fs::copy(&raw, &copy).unwrap();
     let shots = scan(&src.0).unwrap();

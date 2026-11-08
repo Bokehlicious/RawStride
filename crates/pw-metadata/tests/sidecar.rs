@@ -4,10 +4,37 @@
 //! These tests need ExifTool and fail with an explanation when it is missing, instead of returning
 //! early and being counted as passed (docs/TESTING.md §4.5). To leave them out deliberately, run
 //! e.g. `cargo test --workspace --exclude pw-metadata`, so the omission is visible.
+//!
+//! The real-DNG test is ignored by default. Run it with
+//! `$env:PW_TESTDATA = "<folder>"; cargo test -p pw-metadata -- --ignored`.
 
 use std::path::PathBuf;
 
 use pw_metadata::{ExifTool, Iptc, LocalizedValue, Rating, sidecar_path, supports_sidecar};
+
+fn testdata() -> PathBuf {
+    let Some(dir) = std::env::var_os("PW_TESTDATA") else {
+        panic!("PW_TESTDATA is not set; set it to the real camera test-data folder");
+    };
+    let dir = PathBuf::from(dir);
+    assert!(
+        dir.is_dir(),
+        "PW_TESTDATA folder does not exist: {}",
+        dir.display()
+    );
+    dir
+}
+
+fn test_file(name: &str) -> PathBuf {
+    let dir = testdata();
+    let file = dir.join(name);
+    assert!(
+        file.is_file(),
+        "required test file {name} was not found in PW_TESTDATA folder {}",
+        dir.display()
+    );
+    file
+}
 
 /// Starts ExifTool and checks that it answers. Panics (fails the test) if it is unavailable.
 fn exiftool() -> ExifTool {
@@ -282,15 +309,10 @@ fn jpeg_and_tiff_are_written_in_place() {
 
 /// Uses a real DNG from the test set (copied, never the original).
 #[test]
+#[ignore = "needs real camera files: set PW_TESTDATA and run with --ignored"]
 fn real_dng_is_written_in_place() {
     let mut et = exiftool();
-    let Some(src) = std::env::var_os("PW_TESTDATA")
-        .map(|d| PathBuf::from(d).join("IMG_20261026_062851.dng"))
-        .filter(|p| p.exists())
-    else {
-        eprintln!("skipping: PW_TESTDATA DNG not found");
-        return;
-    };
+    let src = test_file("IMG_20261026_062851.dng");
     let dir = temp_dir("dng");
     let dng = dir.join("copy.dng");
     std::fs::copy(&src, &dng).unwrap();

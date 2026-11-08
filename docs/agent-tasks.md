@@ -209,6 +209,15 @@ Ordered from easiest to hardest. Start at the top.
 - **Done when:** `cargo test -p pw-ingest` passes and clippy is clean. The owner tests a real import
   with eject again; T5, T10 and T11 are then marked Done together.
 
+### T19. pw-viewcore: run the "not a RAW file" test in every test run — Open
+
+- **File:** `crates/pw-viewcore/tests/native_files.rs`, test `a_file_that_is_not_raw_shows_an_error`.
+- **Why:** the test writes its own broken file and does not use the real camera files, but it is
+  ignored and calls `testdata()` only because it used to check `PW_TESTDATA`.
+- **What:** remove its `#[ignore = …]` line and the `let _ = testdata();` line. Nothing else.
+- **Done when:** `cargo test -p pw-viewcore` runs it (1 more passed, 1 fewer ignored) and clippy is
+  clean.
+
 ### T7. Format the files that `cargo fmt --check` reports — Done
 
 - **Crates:** `photoworkflow` (`src-tauri`), `preview-bench` (`tools/preview-bench`).
@@ -218,7 +227,7 @@ Ordered from easiest to hardest. Start at the top.
 - **Done when:** `cargo fmt --all --check` prints nothing, `git diff --stat` lists only these three
   files, and `cargo test -p photoworkflow` passes with the same test count as before.
 
-### T6. Real-file tests, part 1 (pw-metadata, pw-ingest, pw-libjpeg): never pass silently — Open
+### T6. Real-file tests, part 1 (pw-metadata, pw-ingest, pw-libjpeg): never pass silently — Done
 
 - **Owner decision (2026-11-08):** a test that needs the real camera files is **ignored by default**
   and **fails when it is run explicitly without them**. So `cargo test` stays fast and green without
@@ -255,7 +264,7 @@ Ordered from easiest to hardest. Start at the top.
      change the test to look elsewhere.
 - **Done when:** the three runs behave as described and clippy is clean.
 
-### T12. Real-file tests, part 2 (pw-raw, pw-viewcore) — Open
+### T12. Real-file tests, part 2 (pw-raw, pw-viewcore) — Done
 
 - **Start after T6 is done.** Use exactly the pattern from T6.
 - **Watch for:** with `PW_TESTDATA` set, `real_files.rs` finished its 4 tests in 0.00 s, so they
@@ -412,3 +421,5 @@ and reviewer:
 | 2026-11-08 | T15 | Ready for review | Added `tools/check.ps1`; formatting and clippy passed. Workspace tests fail in `pw-libraw`'s `truncated_files_are_damaged` test with a path-not-found error while writing a temporary file. |
 | 2026-11-08 | T15 | Done | Reviewed: all requirements met. Reviewer added `--no-fail-fast` to the test step (cargo stopped at the first failing crate) and `/test-output.txt` to `.gitignore`. Full run with `PW_TESTDATA` set: fmt, test and clippy OK |
 | 2026-11-08 | – | Fix | With `PW_TESTDATA` set, `pw-libraw` `truncated_files_are_damaged` failed: two tests shared one scratch folder and one removed it. Reviewer gave each test its own folder (test code only); now passes |
+| 2026-11-08 | T6, T12 | Done | Reviewed: same pattern in all five files; 10 tests ignored by default. `check.ps1 -Ignored` with `PW_TESTDATA` set: all 10 pass (pw-raw 4, pw-viewcore 3, pw-ingest 1, pw-libjpeg 1, pw-metadata 1). The earlier worry about pw-raw (0.00 s) was wrong: it only reads file headers, which is fast. The run without `PW_TESTDATA` was not reported |
+| 2026-11-08 | T19 | Open | Added: the "not a RAW file" test needs no real files |
