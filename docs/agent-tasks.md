@@ -218,6 +218,71 @@ Ordered from easiest to hardest. Start at the top.
 - **Done when:** `cargo test -p pw-viewcore` runs it (1 more passed, 1 fewer ignored) and clippy is
   clean.
 
+### T20. ADR 0010 M1: move card detection and request validation to pw-ingest — Open
+
+- **Why:** the egui import (ADR 0010) must give the same answers as the Tauri dialog. The last two
+  pieces of import logic that still live in `src-tauri` move to the shared crate first (ADR 0010
+  §4.3).
+- **Crates:** `pw-ingest`, `photoworkflow`.
+- **Files:** `crates/pw-ingest/src/` (new module files, e.g. `volumes.rs` and `request.rs`, plus
+  `lib.rs`), `src-tauri/src/ingest.rs`.
+- **What:**
+  1. **Card detection.** Move the body of `ingest_volumes()` to `pw-ingest` as
+     `pub fn card_volumes() -> Vec<PathBuf>`. Put the check itself in a small function that takes the
+     candidate roots, e.g. `fn with_dcim(roots: impl IntoIterator<Item = PathBuf>) -> Vec<PathBuf>`,
+     so it can be tested with temporary folders. `card_volumes()` passes `A:\` … `Z:\` on Windows and
+     keeps today's two-level walk of `/Volumes`, `/media`, `/run/media` elsewhere. The Tauri command
+     `ingest_volumes()` stays and only converts the paths to strings.
+  2. **Request validation.** Move the logic of `IngestRequest::source()` and `IngestRequest::options()`
+     to `pw-ingest` as plain functions on a plain input struct, e.g.
+     `pub struct OptionsInput { source, dest, backup: Option<String>, folder, name, job, first_seq }`
+     and `pub fn validate_source(source: &str) -> Result<PathBuf, String>` /
+     `pub fn build_options(input: &OptionsInput) -> Result<Options, String>`.
+     `IngestRequest` in `src-tauri` keeps its serde fields and calls these.
+- **Rules:**
+  - **Behaviour unchanged:** the same checks in the same order and **the same Swedish messages**
+    (including the "Mappmall: " and "Filnamnsmall: " prefixes).
+  - No serde or Tauri types in `pw-ingest`; no new dependencies.
+  - Nothing else in `src-tauri` changes; `ui/web` is not touched.
+- **Tests to add (in `pw-ingest`):**
+  - `with_dcim`: a temporary root with `DCIM` is found, one without is not, a missing root is skipped;
+  - `validate_source`: empty, relative, missing folder, valid folder;
+  - `build_options`: empty destination; destination inside the source; source inside the destination;
+    backup equal to the destination; a bad folder template and a bad file-name template (check the
+    prefix of the message); a valid input with and without backup.
+- **Done when:** `.\tools\check.ps1` is all OK, the Tauri app's test count is unchanged, and the new
+  tests pass.
+
+### T21. ADR 0010 M2: folder tabs in pw-loupe — Open
+
+- **Can be done in parallel with T20** (different files).
+- **Crate:** `pw-loupe`. **Files:** `crates/pw-loupe/src/lib.rs` (or a new module file such as
+  `src/tabs.rs` declared in `lib.rs`), `crates/pw-loupe/src/main.rs`.
+- **What (ADR 0010 §3.3 and §11):**
+  1. **Tab model in plain Rust** (no egui types), e.g. `pub struct Tabs` with tabs that each hold
+     `folder: Option<PathBuf>`, `files: Vec<PathBuf>` and `current: usize`:
+     - starts with one empty tab;
+     - `open_in_active(folder, files, pos)`; `open_new(folder, files, pos)`, which activates the
+       existing tab instead if that folder is already open (GR12);
+     - `activate(i)`, `next()` and `previous()` (wrapping), `close_active()` (the last tab becomes
+       empty instead of closing);
+     - `set_current(pos)` to remember the image of the active tab;
+     - `titles()`: the folder name, or "Tom" for an empty tab.
+  2. **Tab keys** as a plain function with tests, separate from `key_action` (which must keep
+     returning `None` for Ctrl combinations): Ctrl+Tab next, Ctrl+Shift+Tab previous, Ctrl+W close.
+  3. **Drawing in `main.rs`:** a tab bar above the image; clicking a tab activates it. On activation:
+     `core.open_folder(files)`, `core.go(current)` and the metadata `begin_load` for that folder.
+     Remember the image from `frame.pos` with `set_current`. Zoom resets on activation (Q1).
+  4. **Drag-and-drop:** opens in the active tab as today; with **Ctrl** held it opens a new tab (Q3).
+- **Rules:** the loupe's existing keys and behaviour are unchanged (ADR 0009 §3.3); one view core for
+  all tabs; no `unwrap`/`expect`/`panic!` in non-test code; no new dependencies.
+- **Tests to add:** the tab model (open in active, open new, open an already open folder, next and
+  previous with wrap, close the last tab, close a middle tab and which tab becomes active, remembered
+  image per tab, titles) and the tab keys.
+- **Done when:** `.\tools\check.ps1` is all OK; the owner checks by hand that tabs can be opened with
+  Ctrl+drag-and-drop, switched with the keys and the mouse, and closed, and that each tab comes back
+  on its own image.
+
 ### T7. Format the files that `cargo fmt --check` reports — Done
 
 - **Crates:** `photoworkflow` (`src-tauri`), `preview-bench` (`tools/preview-bench`).
@@ -382,11 +447,9 @@ and reviewer:
   Windows API call and a new dependency).
 - Anything from ADR 0007 (IPTC/IIM/Exif metadata): the ADR is not approved yet.
 - The import dialog fields for title and description in `ui/` (frontend).
-- **Owner requirement for the egui import (2026-11-08):** when an import finishes, the imported
-  folder opens automatically in a new tab in the viewer. Today the Tauri app shows an
-  "Öppna i visaren" button instead; that is not changed. To be added to `docs/GUI_REQUIREMENTS.md`
-  when the egui import dialog is designed. Describe the behaviour only; no code or material from
-  other products (`docs/clean-room.md`).
+- ADR 0010 steps M3 (approving the folder-dialog crate), M5 (drawing the import dialog) and M6
+  (acceptance by hand) stay with the owner and reviewer for now. M4 and M7 are added to this list
+  when M1 and M2 are done.
 
 ## Log
 
@@ -432,3 +495,5 @@ and reviewer:
 | 2026-11-08 | T16 | Ready for review | Added worktree vcpkg setup, ExifTool requirements, PW_TESTDATA/ignored test instructions, and the check-script commands. |
 | 2026-11-08 | T17 | Ready for review | Added `docs/test-inventory.md` from the inspected Rust test modules and files; counts match the `cargo test --workspace` run (180 passed, 23 ignored, 0 failed). |
 | 2026-11-08 | T19, T16, T17 | Done | Reviewed. T19: test now runs in every run (native_files 1 passed, 2 ignored). T16: section added; reviewer replaced the internal task numbers with a pointer to the test inventory. T17: inventory matches the owner's run (180 passed, 23 ignored, 0 failed; 22 real-file tests plus the pw-metadata helper) |
+| 2026-11-08 | – | Decision | Owner accepted ADR 0010 (import and folder tabs in pw-loupe) with all proposals for Q1–Q6; GR12 added to GUI_REQUIREMENTS |
+| 2026-11-08 | T20, T21 | Open | Added: ADR 0010 steps M1 (shared import logic in pw-ingest) and M2 (folder tabs) |

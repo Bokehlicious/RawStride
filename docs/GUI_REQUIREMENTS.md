@@ -9,6 +9,7 @@
   - ADR 0001 (technology stack, amended);
   - ADR 0003 (M1 viewer, amended);
   - ADR 0008 (image presentation, amendment 6, §16, and amendment 8, §18);
+  - ADR 0010 (milestone 2: import and folder tabs; GR12);
   - `requirements-image-viewer.md` (V1–V8, G1–G4), which is unchanged.
 
 ## 1. Decision
@@ -39,6 +40,7 @@ ADR 0003) and the presenter decision B2-res (WebView2 shared buffer into WebGL2,
 | GR9 | **Honest source (G1) stays visible.** The UI says whether an image is the embedded JPEG or a RAW rendering, as today. |
 | GR10 | **Dependencies need approval.** eframe, egui and any helper crates are added only after the owner approves the concrete crates and versions, with a licence check (ADR 0002). Nothing is installed by this document. |
 | GR11 | **Testable.** UI logic (view model, key handling, dialog state) is kept in plain Rust that can be tested with `cargo test`, apart from drawing. |
+| GR12 | **Imported folders open in a new tab.** When an import finishes, the imported folder opens automatically in a new tab in the viewer (owner requirement, 2026-11-08; ADR 0010). If that folder is already open in a tab, that tab is activated instead. |
 
 ## 3. What stays
 

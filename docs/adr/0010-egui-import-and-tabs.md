@@ -1,9 +1,9 @@
 # ADR 0010: Milestone 2 – import and folder tabs in the egui program
 
-- Status: **proposed (2026-11-08).** Four points were decided by the owner on 2026-11-08 (§2). The
-  open questions in §11 must be answered and this ADR accepted before work starts. Nothing is
-  built, installed or added as a dependency by this ADR. Each step in §9 is its own work part, with
-  its own approval and commit.
+- Status: **accepted by the owner (2026-11-08, step M0).** The four points of §2 and the answers to
+  the questions of §11 (the proposals, accepted as written) are decided. Nothing is built, installed
+  or added as a dependency by this ADR. Each step in §9 is its own work part, with its own approval
+  and commit.
 - Date: 2026-11-08
 - Related:
   - [GUI_REQUIREMENTS.md](../GUI_REQUIREMENTS.md) (GR1–GR11);
@@ -164,7 +164,7 @@ dialogs give the same answers. The Tauri app keeps its own Tauri glue only.
 
 | Step | Content | Result |
 |---|---|---|
-| **M0** | Accept this ADR; answer §11; add the auto-open requirement to GUI_REQUIREMENTS (GR12) | Documentation commit |
+| **M0** | Accept this ADR; answer §11; add the auto-open requirement to GUI_REQUIREMENTS (GR12) | **Done 2026-11-08:** documentation commit |
 | **M1** | `pw-ingest`: move card detection and request validation from `src-tauri`; the Tauri app calls them | Code + tests |
 | **M2** | `pw-loupe`: tab model (plain Rust) and tab bar with keys | Code + tests |
 | **M3** | Approve the folder-dialog crate (version, features, licence tree) | Decision, no code |
@@ -174,7 +174,8 @@ dialogs give the same answers. The Tauri app keeps its own Tauri glue only.
 | **M7** | Step B: backup, job and running number, IPTC template, eject | Code + tests, one part each |
 | **M8** | Documentation: ADR 0005 dialog section, architecture.md, test inventory | Documentation commit |
 
-Steps M1, M2, M4 and M7 are suited to the agent task list once this ADR is accepted.
+Steps M1, M2, M4 and M7 are suited to the agent task list (`docs/agent-tasks.md`): M1 is T20 and M2
+is T21.
 
 ## 10. Risks
 
@@ -185,9 +186,11 @@ Steps M1, M2, M4 and M7 are suited to the agent task list once this ADR is accep
 | Two dialogs (Tauri and egui) drift apart | Different answers for the same input | Shared validation and checks in `pw-ingest` (M1) |
 | The import and the open tab use the same card | A card cannot be ejected while a tab reads from it (step B) | Before ejecting, a tab showing the card is emptied; checked in M7 |
 
-## 11. Open questions (must be answered before acceptance)
+## 11. Questions and the owner's answers (2026-11-08)
 
-| # | Question | Proposal |
+The owner accepted every proposal below as written.
+
+| # | Question | Decision (the proposal, accepted) |
 |---|---|---|
 | **Q1** | What does a tab remember? | Folder, file list and current image. Zoom and pan reset to fit when the tab is shown again |
 | **Q2** | Does a cancelled or partly failed import also open a new tab? | Yes for cancelled or partly failed imports that copied at least one file, with the summary saying so; no tab when nothing was copied |
