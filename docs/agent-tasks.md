@@ -56,7 +56,7 @@ Ordered from easiest to hardest. Start at the top.
   before.
 - **Do not:** use `#[allow(...)]` to silence the warnings.
 
-### T2. pw-loupe: use the workspace dependency for pw-metadata — Open
+### T2. pw-loupe: use the workspace dependency for pw-metadata — Done
 
 - **Crate:** `pw-loupe`. **File:** `crates/pw-loupe/Cargo.toml` (this task may change it).
 - **What:** replace `pw-metadata = { path = "../pw-metadata" }` with
@@ -116,7 +116,7 @@ Ordered from easiest to hardest. Start at the top.
   test it without a real drive (gone at once, gone after a few polls, never gone).
 - **Done when:** `cargo test -p photoworkflow` passes. The owner tests a real eject by hand.
 
-### T7. Format the files that `cargo fmt --check` reports — Open
+### T7. Format the files that `cargo fmt --check` reports — Done
 
 - **Crates:** `photoworkflow` (`src-tauri`), `preview-bench` (`tools/preview-bench`).
 - **Files:** `src-tauri/src/main.rs`, `src-tauri/src/rawview.rs`, `tools/preview-bench/build.rs`.
@@ -153,3 +153,5 @@ and reviewer:
 | 2026-11-08 | – | – | List created |
 | 2026-11-08 | T1 | Done | Reviewed: exact clippy suggestions, no behaviour change. Tests: photoworkflow 10, pw-rawview engine 24 + libraw_engine 3, all passed; clippy without lint warnings. Agent did not report test output or update the status itself |
 | 2026-11-08 | T7 | Open | Added: pre-existing formatting differences found during the T1 review |
+| 2026-11-08 | T2 | Done | Reviewed: `pw-metadata.workspace = true`, Cargo.lock unchanged. Tests: pw-loupe 6 + 2 passed |
+| 2026-11-08 | T7 | Done | Reviewed: only the three named files changed, layout only; `cargo fmt --all --check` clean. Tests: photoworkflow 10 passed; clippy without lint warnings. Agent again did not report test output or update the status |
