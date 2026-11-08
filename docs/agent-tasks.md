@@ -163,6 +163,30 @@ Ordered from easiest to hardest. Start at the top.
 - **Done when:** `cargo test -p pw-ingest` passes and finishes in well under a second;
   `cargo clippy -p pw-ingest --all-targets` shows no warnings.
 
+### T10. Card eject: try again when Windows is still busy after the import — Open
+
+- **Start after T9 is done** (it uses T9's `wait_until_gone` with parameters).
+- **Crate:** `pw-ingest`. **File:** `crates/pw-ingest/src/paths.rs`.
+- **Finding (owner test, 2026-11-08):** right after an import, `eject()` reported that the card
+  could not be ejected. Running the same PowerShell eject command by hand a moment later, with the
+  app still open, worked. So the app does not hold the card; Windows is briefly busy after all files
+  were read (e.g. Defender or the search indexer). The eject verb then fails silently, and waiting
+  longer alone does not help: the verb must be invoked again.
+- **What:**
+  - Add a small function that does the retrying and can be tested without Windows, e.g.
+    `fn retry_until_gone(attempts: usize, invoke: impl FnMut() -> Result<(), String>, still_present: impl FnMut() -> bool, timeout: Duration, interval: Duration) -> Result<bool, String>`:
+    for each attempt, call `invoke`, then `wait_until_gone(still_present, timeout, interval)`;
+    return `Ok(true)` as soon as the drive is gone, `Ok(false)` after the last attempt, and the
+    error at once if `invoke` fails (e.g. PowerShell could not start or exited with an error).
+  - `eject()` uses it with 3 attempts, 5 s timeout and 250 ms interval (named constants), and
+    `invoke` runs the existing PowerShell command.
+  - Keep the existing messages. The final failure message may add how many attempts were made.
+- **Tests to add** (with short timeouts so they run instantly): gone after the first attempt (invoke
+  called once); gone after the second attempt (invoke called twice); never gone (invoke called 3
+  times, `Ok(false)`); invoke fails on the first attempt (error returned, no further attempts).
+- **Done when:** `cargo test -p pw-ingest` passes quickly and clippy is clean. The owner tests a real
+  import with eject again.
+
 ### T7. Format the files that `cargo fmt --check` reports — Done
 
 - **Crates:** `photoworkflow` (`src-tauri`), `preview-bench` (`tools/preview-bench`).
@@ -192,6 +216,11 @@ and reviewer:
   Windows API call and a new dependency).
 - Anything from ADR 0007 (IPTC/IIM/Exif metadata): the ADR is not approved yet.
 - The import dialog fields for title and description in `ui/` (frontend).
+- **Owner requirement for the egui import (2026-11-08):** when an import finishes, the imported
+  folder opens automatically in a new tab in the viewer. Today the Tauri app shows an
+  "Öppna i visaren" button instead; that is not changed. To be added to `docs/GUI_REQUIREMENTS.md`
+  when the egui import dialog is designed. Describe the behaviour only; no code or material from
+  other products (`docs/clean-room.md`).
 
 ## Log
 
@@ -210,3 +239,6 @@ and reviewer:
 | 2026-11-08 | T5 | Ready for review | Moved eject() to pw-ingest, use full-path PowerShell and poll DCIM for up to 5 s; added three polling tests. Tests: pw-ingest 23 (was 20), photoworkflow 5 (was 5); fmt and clippy clean. Manual eject verification remains with the owner. |
 | 2026-11-08 | T5 | Done | Reviewed: eject() moved to pw-ingest, full-path PowerShell, exit status checked, polling up to 5 s with three tests. Tests: pw-ingest 15 + 8, photoworkflow 5; fmt and clippy clean. Owner still tests a real eject by hand. Follow-ups in T9 |
 | 2026-11-08 | T9 | Open | Added: small follow-ups from the T5 review |
+| 2026-11-08 | T5 | Manual test | Import and path checks work. Eject right after import failed; a manual eject a moment later worked with the app open. T10 added |
+| 2026-11-08 | T10 | Open | Added: retry the eject when Windows is still busy |
+| 2026-11-08 | – | Note | Owner test: "Öppna i visaren" opens the imported folder correctly. Requirement noted for the egui import: open the imported folder automatically in a new tab |
