@@ -27,5 +27,8 @@ fn main() {
         });
     println!("cargo:rustc-link-search=native={}", lib_dir.display());
     println!("cargo:rustc-link-lib=static={name}");
-    println!("cargo:warning=linking {name}.lib from {}", lib_dir.display());
+    println!(
+        "cargo:warning=linking {name}.lib from {}",
+        lib_dir.display()
+    );
 }

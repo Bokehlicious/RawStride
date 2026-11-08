@@ -235,10 +235,10 @@ impl RawView {
         if !self.enabled.load(Ordering::Relaxed) {
             return None;
         }
-        match self.engine.half(
-            ImageKey { generation, index },
-            Duration::from_millis(50),
-        ) {
+        match self
+            .engine
+            .half(ImageKey { generation, index }, Duration::from_millis(50))
+        {
             Lookup::Ready(b) => Some(b.as_ref().clone()),
             _ => None,
         }
@@ -416,8 +416,7 @@ pub fn raw_tiles(generation: u64, index: usize, tiles: Vec<(u32, u32)>, raw: Sta
 pub fn raw_set_enabled(enabled: bool, generation: u64, raw: State<'_, RawView>) {
     raw.enabled.store(enabled, Ordering::Relaxed);
     // Generation 0 is never a folder: switching to it drops every queue, cache and session.
-    raw.engine
-        .set_folder(if enabled { generation } else { 0 });
+    raw.engine.set_folder(if enabled { generation } else { 0 });
 }
 
 #[derive(Debug, Serialize)]

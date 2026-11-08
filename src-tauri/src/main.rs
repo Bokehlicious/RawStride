@@ -7,8 +7,8 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-mod imaging;
 mod bench;
+mod imaging;
 mod ingest;
 mod ratings;
 mod rawview;
@@ -310,12 +310,18 @@ fn serve(app: &AppHandle, request: &Request<Vec<u8>>) -> Response<Vec<u8>> {
     }
     if let [g, i, "tile", c, r] = parts.as_slice() {
         // RAW tile at full resolution (ADR 0006 step 4); only requested after `raw-tile`.
-        let (Ok(generation), Ok(index), Ok(col), Ok(row)) =
-            (g.parse::<u64>(), i.parse::<usize>(), c.parse::<u32>(), r.parse::<u32>())
-        else {
+        let (Ok(generation), Ok(index), Ok(col), Ok(row)) = (
+            g.parse::<u64>(),
+            i.parse::<usize>(),
+            c.parse::<u32>(),
+            r.parse::<u32>(),
+        ) else {
             return not_found("bad path");
         };
-        return match app.state::<rawview::RawView>().tile(generation, index, col, row) {
+        return match app
+            .state::<rawview::RawView>()
+            .tile(generation, index, col, row)
+        {
             Some(b) => respond(StatusCode::OK, b, "image/jpeg"),
             None => not_found("RAW tile not ready"),
         };
