@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
@@ -82,6 +82,7 @@ struct State {
     generation: u64,
     visible: Option<Range<usize>>,
     queue: Vec<QueuedRequest>,
+    in_flight: HashSet<(u64, usize, u32)>,
     next_sequence: u64,
     paused: bool,
     stopped: bool,
@@ -154,6 +155,7 @@ impl ThumbWorker {
                 generation: 0,
                 visible: None,
                 queue: Vec::new(),
+                in_flight: HashSet::new(),
                 next_sequence: 0,
                 paused: false,
                 stopped: false,
@@ -201,6 +203,18 @@ impl ThumbWorker {
                 return;
             }
             if is_far_from_visible(state.visible.as_ref(), request.index) {
+                return;
+            }
+            let request_key = (request.generation, request.index, request.cell);
+            if state.in_flight.contains(&request_key)
+                || state.queue.iter().any(|queued| {
+                    (
+                        queued.request.generation,
+                        queued.request.index,
+                        queued.request.cell,
+                    ) == request_key
+                })
+            {
                 return;
             }
 
@@ -361,6 +375,11 @@ fn run_worker(shared: Arc<Shared>) {
                     if queued.request.generation == state.generation
                         && !is_far_from_visible(state.visible.as_ref(), queued.request.index)
                     {
+                        state.in_flight.insert((
+                            queued.request.generation,
+                            queued.request.index,
+                            queued.request.cell,
+                        ));
                         break queued.request;
                     }
                     continue;
@@ -374,6 +393,9 @@ fn run_worker(shared: Arc<Shared>) {
 
         let result = source.make(&request.path, request.cell);
         let mut state = lock_state(&shared);
+        state
+            .in_flight
+            .remove(&(request.generation, request.index, request.cell));
         if !state.stopped
             && request.generation == state.generation
             && !is_far_from_visible(state.visible.as_ref(), request.index)
@@ -570,6 +592,79 @@ mod tests {
             worker.try_recv(),
             Err(std::sync::mpsc::TryRecvError::Empty)
         ));
+    }
+
+    #[test]
+    fn duplicate_queued_request_gets_one_source_call_and_one_result() {
+        let (worker, state) = worker(1, 1024);
+        worker.pause();
+        worker.request(request(0, 0, "same"));
+        worker.request(request(0, 0, "same"));
+        worker.resume();
+
+        assert_eq!(next_event(&worker).index, 0);
+        assert_eq!(calls(&state), vec![PathBuf::from("same")]);
+        assert!(matches!(
+            worker.try_recv(),
+            Err(std::sync::mpsc::TryRecvError::Empty)
+        ));
+    }
+
+    #[test]
+    fn duplicate_in_flight_request_gets_one_source_call_and_one_result() {
+        let (worker, state, gate) = gated_worker();
+        worker.request(request(0, 0, "same"));
+        {
+            let mut gate_state = gate.state.lock().unwrap_or_else(|error| error.into_inner());
+            while !gate_state.started {
+                gate_state = gate
+                    .changed
+                    .wait(gate_state)
+                    .unwrap_or_else(|error| error.into_inner());
+            }
+        }
+        worker.request(request(0, 0, "same"));
+        {
+            let mut gate_state = gate.state.lock().unwrap_or_else(|error| error.into_inner());
+            gate_state.released = true;
+            gate.changed.notify_all();
+        }
+
+        assert_eq!(next_event(&worker).index, 0);
+        assert_eq!(calls(&state), vec![PathBuf::from("same")]);
+        assert!(matches!(
+            worker.try_recv(),
+            Err(std::sync::mpsc::TryRecvError::Empty)
+        ));
+    }
+
+    #[test]
+    fn same_index_with_different_cell_sizes_is_not_a_duplicate() {
+        let (worker, state) = worker(1, 1024);
+        worker.pause();
+        worker.request(request(0, 0, "same"));
+        let mut larger = request(0, 0, "same");
+        larger.cell = 256;
+        worker.request(larger);
+        worker.resume();
+
+        assert_eq!(next_event(&worker).index, 0);
+        assert_eq!(next_event(&worker).index, 0);
+        assert_eq!(
+            calls(&state),
+            vec![PathBuf::from("same"), PathBuf::from("same")]
+        );
+    }
+
+    #[test]
+    fn completed_request_is_answered_again_from_the_cache() {
+        let (worker, state) = worker(1, 1024);
+        worker.request(request(0, 0, "same"));
+        assert_eq!(next_event(&worker).index, 0);
+        worker.request(request(0, 0, "same"));
+        assert_eq!(next_event(&worker).index, 0);
+
+        assert_eq!(calls(&state), vec![PathBuf::from("same")]);
     }
 
     #[test]

@@ -398,6 +398,142 @@ Ordered from easiest to hardest. Start at the top.
   survives tab switching; the key functions for both modes; size clamping.
 - **Done when:** `.\tools\check.ps1` is all OK.
 
+### T26. ADR 0011 K4a: pw-thumbcache — skip duplicate requests, export the image type — Done
+
+- **Crate:** `pw-thumbcache`. **Files:** `crates/pw-thumbcache/src/worker.rs`,
+  `crates/pw-thumbcache/src/lib.rs`.
+- **Why:** the grid (T28) asks again for every visible cell that has no thumbnail yet each time the
+  visible range changes, because the worker drops requests far outside the visible range without a
+  result (T24). That is simple and safe only if asking twice does not decode twice.
+- **What:**
+  1. In `ThumbWorker::request`: if a request with the same generation, index and cell is already
+     **queued** or **being made** by a worker thread, ignore the new one. Keep a small set of the
+     in-flight `(generation, index, cell)` in `State`; a worker adds the entry when it takes a job
+     and removes it when the job is done (also when the result is thrown away).
+     `set_generation`, `cancel` and drop clear the queue as today; in-flight entries of an old
+     generation simply never match again.
+  2. In `lib.rs`: add `pub use pw_libjpeg::Rgb8;`, so `pw-loupe` can name the image type without its
+     own dependency on `pw-libjpeg`.
+- **Rules:** behaviour otherwise unchanged; the existing tests keep their names and assertions; no
+  `unwrap`/`expect`/`panic!` in non-test code; no new dependencies.
+- **Tests to add** (simulated source, as in the existing tests): the same request sent twice while it
+  is queued gives one source call and one result; the same request sent again while it is being made
+  (use the gated source) gives one source call and one result; the same index with another cell size
+  is not a duplicate; after the result has arrived, asking again is answered from the cache (one
+  source call).
+- **Done when:** `.\tools\check.ps1` is all OK.
+
+### T27. ADR 0011 K4b: thumbnail bookkeeping for the grid (plain Rust) — Open
+
+- **Start after T26 is done.**
+- **Crate:** `pw-loupe`. **Files:** `crates/pw-loupe/Cargo.toml` (add `pw-thumbcache.workspace = true`
+  to `[dependencies]`; approved by ADR 0011 §6), a new `crates/pw-loupe/src/thumbs.rs`, declared and
+  re-exported in `crates/pw-loupe/src/lib.rs`. **Not** `main.rs`.
+- **What:** a struct `ThumbGrid` that remembers, for the folder shown in the grid, which thumbnails
+  are missing, asked for, ready or failed. It holds no images and no textures (the program keeps the
+  textures; T28).
+  - `ThumbGrid::new(generation: u64, count: usize)`.
+  - `to_request(&self, range: Range<usize>, cell: u32) -> Vec<usize>`: the indexes in `range` (clamped
+    to `count`) that are missing, or ready/asked for with a **different** cell size. Already asked for
+    with the same cell is included too (T26 makes repeating safe, and it covers requests the worker
+    dropped); ready with the same cell and failed are not.
+  - `mark_requested(index, cell)`.
+  - `apply(&mut self, event: &pw_thumbcache::ThumbnailEvent) -> bool`: records ready (with the cell
+    size that was asked for) or failed (with the error text); returns `false` and changes nothing for
+    an event of another generation or an index outside the folder.
+  - `state(index) -> CellState` with `CellState::{Missing, Requested, Ready, Failed(String)}`, for
+    drawing (failed shows the error placeholder; `ThumbError::NoPreview` shows
+    "ingen förhandsvisning").
+  - `forget_outside(&mut self, keep: Range<usize>) -> Vec<usize>`: every ready or failed index outside
+    `keep` goes back to missing; returns those indexes, so the program can release their textures.
+  - A free function `request_cell(size_points: u32, pixels_per_point: f32) -> u32`: the cell size in
+    physical pixels, rounded **up** to a multiple of 128 (so moving the size slider decodes again
+    only when it crosses a step), at least 128; a non-finite or non-positive `pixels_per_point`
+    counts as 1.0.
+  - A free function `color_image(image: &pw_thumbcache::Rgb8) -> Option<egui::ColorImage>`:
+    `None` if the data length is not width × height × 3.
+- **Rules:** no egui drawing; no `unwrap`/`expect`/`panic!`/unchecked indexing in non-test code.
+- **Tests to add:** a new grid asks for every index in range; an index asked for with the same cell
+  is asked for again, a ready one is not; a ready one with another cell is asked for again; a failed
+  one is not; an event of an old generation is ignored; an index outside the folder is ignored;
+  `forget_outside` returns and resets exactly the indexes outside `keep`; `request_cell` for 200 pt
+  at 1.0 → 256, at 1.5 → 384, 96 pt at 1.0 → 128, and a bad `pixels_per_point`; `color_image` for a
+  2×1 image and for wrong data length.
+- **Done when:** `.\tools\check.ps1` is all OK.
+
+### T28. ADR 0011 K4c: draw the contact sheet — Open
+
+- **Start after T27 is done.**
+- **Crate:** `pw-loupe`. **File:** `crates/pw-loupe/src/main.rs` only.
+- **What:** when the active tab's `mode` is `ViewMode::Grid`, the image area shows the contact sheet
+  instead of the loupe. Switching between the modes is T29; in this task a tab is shown in the grid
+  as soon as it is opened (that is already the default of `Tab`), and the loupe code path stays as
+  it is for tabs in `Loupe` mode.
+  - Start a `pw_thumbcache::ThumbWorker` in `run()` next to the metadata worker, and keep a
+    `ThumbGrid`, a generation counter and a `HashMap<usize, egui::TextureHandle>` in `Loupe`.
+    Every time a tab is loaded (`load_active_tab`), increase the generation, call
+    `set_generation`, create a new `ThumbGrid` and clear the textures.
+  - Draw the grid in an `egui::ScrollArea::vertical()` with `show_viewport`: content height =
+    rows × (cell + spacing); spacing 8 pt; use `columns`, `visible_range` (margin 1 row) from T25.
+    The cell size comes from a field `thumb_size: u32` in `Loupe`, starting at
+    `DEFAULT_THUMBNAIL_SIZE`.
+  - Each frame: `set_visible` with the visible range, then for `to_request(range, cell)` send a
+    `ThumbnailRequest` (path from the tab's file list, `cell = request_cell(thumb_size, ppp)`) and
+    call `mark_requested`; poll `try_recv` until empty, `apply` each event and turn a ready image
+    into a texture with `color_image` + `ctx.load_texture` (linear filtering); call
+    `forget_outside` with the visible range plus 2 rows and remove those textures.
+  - A cell: the thumbnail scaled to fit the square, centred, keeping its proportions; a grey
+    placeholder while missing or asked for; the text "ingen förhandsvisning" for `NoPreview` and a
+    short error text for other failures; the file name under the cell, shortened when too long
+    (egui `Label` with `truncate()` or a clipped painter text). The current image (`tab.current`)
+    gets a clear frame.
+  - Clicking a cell makes it current (`Tabs::set_current`).
+  - Keys in the grid: `grid_key_action` + `navigate` (visible rows for Page Up/Down = view height ÷
+    (cell + spacing), at least 1); after a key move, scroll so the current cell is visible
+    (`ui.scroll_to_rect`). `OpenLoupe` does nothing yet (T29). The tab keys keep working; the loupe's
+    `key_action` is **not** used while the grid is shown.
+  - Status line in the grid: file name of the current image, "position / count", and the message as
+    today.
+  - Ask for a repaint while thumbnails are still asked for (e.g. `request_repaint_after` 50 ms), so
+    results are shown without moving the mouse.
+- **Rules:** no file I/O or decoding on the UI thread (G2); no `unwrap`/`expect`/`panic!`; no new
+  dependencies; the loupe behaviour for tabs in `Loupe` mode is unchanged.
+- **Tests:** the logic is in T25 and T27; this task adds none unless a new plain function is needed
+  (put it in the library with a test).
+- **Done when:** `.\tools\check.ps1` is all OK, and the owner checks by hand: drop the test folder → a
+  grid appears at once with placeholders that fill in; arrows, Page Up/Down, Home/End move the frame
+  and scroll; clicking selects; a vertical A7R IVA image stands upright.
+
+### T29. ADR 0011 K4d: switch between grid and loupe, size control — Open
+
+- **Start after T28 is done.**
+- **Crate:** `pw-loupe`. **Files:** `crates/pw-loupe/src/main.rs`; `crates/pw-loupe/src/lib.rs` only
+  if a small plain function is needed (with a test).
+- **What:**
+  1. **Grid → loupe:** Enter, G, Space (`GridKeyAction::OpenLoupe`) or a double-click on a cell:
+     `set_mode(ViewMode::Loupe)`, then `core.open_folder(files)` and `core.go(current)` (through the
+     metadata cache as `load_active_tab` does today), and `ThumbWorker::pause()`.
+  2. **Loupe → grid:** Escape, G, Enter (`loupe_key_action`): `set_mode(ViewMode::Grid)`; the image
+     shown in the loupe becomes the current cell (`tab.current` is already kept up to date by the
+     loupe); `resume()`; scroll so that cell is visible. These three keys are checked **before**
+     `key_action` in loupe mode (they are reserved there and do nothing today).
+  3. **The view core only gets the folder in the loupe (ADR 0011 §4.2):** when a tab in `Grid` mode is
+     loaded, call `core.open_folder(Vec::new())` instead of giving it the files, so the loupe does not
+     decode in the background; a tab in `Loupe` mode is loaded as today. Switching tabs therefore
+     shows each tab in its own mode (Q5).
+  4. **Command line (Q1):** a folder opens in the grid; a single file opens the loupe on that file
+     (set `ViewMode::Loupe` after opening when the path is a file).
+  5. **Size:** a slider (96–480, `clamp_thumbnail_size`) in the status line while the grid is shown,
+     and Ctrl + mouse wheel over the grid with `step_thumbnail_size` (egui turns Ctrl + wheel into
+     `zoom_delta()`; use its direction, and make sure the scroll area does not scroll at the same
+     time). The size is kept for the session in `Loupe`, shared by all tabs.
+  6. The display-mode button of the loupe's status line is only shown in loupe mode.
+- **Rules:** as T28; the loupe's own keys, mouse and zoom behaviour are unchanged in loupe mode.
+- **Done when:** `.\tools\check.ps1` is all OK, and the owner checks by hand (ADR 0011 §8.2): Enter
+  and double-click open the loupe on the right image; Escape returns with the same image framed; two
+  tabs keep their own mode; the slider and Ctrl + wheel change the size; `pw-loupe <file>` opens the
+  loupe and `pw-loupe <folder>` the grid.
+
 ### T7. Format the files that `cargo fmt --check` reports — Done
 
 - **Crates:** `photoworkflow` (`src-tauri`), `preview-bench` (`tools/preview-bench`).
@@ -630,3 +766,6 @@ and reviewer:
 | 2026-11-08 | T23 | Done | Reviewed: preview choice, orientation (all eight values checked by hand against the 2×3 test) and `thumbnail` match the spec; no RAW decoding. The task's example 1616×1080/200 → Quarter was wrong (1616/8 = 202 ≥ 200); the agent added a 2× rule to satisfy it. Fixed in review: `choose_scale` follows the spec (long edge ≥ cell); `cell` is in physical pixels, so K4 multiplies by the display scale on high-DPI screens; tests corrected with exact boundaries |
 | 2026-11-08 | T24 | Done | Reviewed: two threads, generation and visible-range priority, pause, LRU cache with a byte limit, errors as results, poisoned locks recovered, drop does not join. Doc fix in review: after `cancel()` the UI must call `set_generation`. Note for K4: requests far outside the visible range are dropped without a result, so the UI re-requests visible cells that have no thumbnail when the visible range changes |
 | 2026-11-08 | T25 | Done | Reviewed: columns, visible range, navigation (short last row), grid/loupe keys, size clamp 96–480 and Ctrl+wheel step 16; `ViewMode` per tab, new folders start in Grid; `key_action` and `tab_action` unchanged; main.rs not touched. Workspace check: fmt, test and clippy OK |
+| 2026-11-08 | T26–T29 | Open | Added: ADR 0011 K4 split into four parts for the agent (duplicate-free requests, thumbnail bookkeeping, drawing the grid, switching grid/loupe and size). K5 (acceptance and first measurement) follows T29 |
+| 2026-11-08 | T26 | Ready for review | Deduplicated queued and in-flight thumbnail requests by generation/index/cell, added simulated-source tests for duplicate handling, distinct cell sizes and completed cache hits, and re-exported `Rgb8`. `cargo fmt --all --check`, `cargo test -p pw-thumbcache`, `cargo clippy -p pw-thumbcache --all-targets` and `.\tools\check.ps1` pass. |
+| 2026-11-09 | T26 | Done | Reviewed: queued and in-flight duplicates (generation, index, cell) are skipped; the in-flight entry is removed under the same lock that fills the cache, so a later request is a cache hit, never a gap; `Rgb8` re-exported. Four required tests present. pw-thumbcache 25 passed, 4 ignored; workspace fmt, test and clippy OK. No changes in review |
