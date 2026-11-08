@@ -153,9 +153,7 @@ fn a7r_vertical_images_fit_and_zoom_with_correct_sizes() {
 }
 
 #[test]
-#[ignore = "needs real camera files: set PW_TESTDATA and run with --ignored"]
 fn a_file_that_is_not_raw_shows_an_error() {
-    let _ = testdata();
     let tmp = std::env::temp_dir().join(format!("pw-viewcore-{}", std::process::id()));
     let _ = std::fs::create_dir_all(&tmp);
     let f = tmp.join("not-raw.ARW");

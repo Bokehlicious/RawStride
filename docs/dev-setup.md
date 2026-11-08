@@ -36,6 +36,40 @@ The vcpkg baseline is pinned in `vcpkg.json` (`builtin-baseline`).
 vcpkg install            # run in the repo root; output goes to .\vcpkg_installed
 ```
 
+## Running the tests
+
+Each Git worktree has its own `vcpkg_installed` directory; it is not shared with the main
+checkout. To reuse the main checkout's installed libraries, point the worktree at that directory.
+For this setup, the main checkout is `C:\Development\PhotoWorkflow`:
+
+```powershell
+$env:VCPKG_INSTALLED_DIR = 'C:\Development\PhotoWorkflow\vcpkg_installed'
+[Environment]::SetEnvironmentVariable('VCPKG_INSTALLED_DIR', 'C:\Development\PhotoWorkflow\vcpkg_installed', 'User')
+```
+
+The first command applies to the current PowerShell window; the second sets a permanent user
+variable. Adjust the path if the main checkout is elsewhere.
+
+The `pw-metadata` integration tests require ExifTool on `PATH`. Alternatively, set
+`PW_EXIFTOOL_PL` to the ExifTool Perl script path; the tests run it through `perl`. If neither
+option works, those tests intentionally fail rather than silently passing.
+
+Tests that need real camera files are ignored by default and read the files from `PW_TESTDATA`
+(see `docs/test-inventory.md`). Set it to the external test-data folder, then run the checks with
+the ignored tests enabled:
+
+```powershell
+$env:PW_TESTDATA = 'D:\PhotoWorkflowData\RAW'
+.\tools\check.ps1 -Ignored
+```
+
+The `-Ignored` switch passes `-- --ignored` to the workspace test run. To run the regular formatting,
+test and clippy checks without the ignored real-file tests, use:
+
+```powershell
+.\tools\check.ps1
+```
+
 ## Quick check
 
 ```powershell

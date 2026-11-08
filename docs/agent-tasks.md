@@ -209,7 +209,7 @@ Ordered from easiest to hardest. Start at the top.
 - **Done when:** `cargo test -p pw-ingest` passes and clippy is clean. The owner tests a real import
   with eject again; T5, T10 and T11 are then marked Done together.
 
-### T19. pw-viewcore: run the "not a RAW file" test in every test run — Open
+### T19. pw-viewcore: run the "not a RAW file" test in every test run — Done
 
 - **File:** `crates/pw-viewcore/tests/native_files.rs`, test `a_file_that_is_not_raw_shows_an_error`.
 - **Why:** the test writes its own broken file and does not use the real camera files, but it is
@@ -326,7 +326,7 @@ Ordered from easiest to hardest. Start at the top.
 - **Done when:** the owner runs `.\tools\check.ps1` and gets a readable `test-output.txt` with the
   summary at the end.
 
-### T16. Developer setup: document what the tests need — Open
+### T16. Developer setup: document what the tests need — Done
 
 - **Start after T6 and T15 are done.**
 - **File:** `docs/dev-setup.md`.
@@ -341,7 +341,7 @@ Ordered from easiest to hardest. Start at the top.
   sections.
 - **Done when:** the section is there and every command in it has been run once by the owner.
 
-### T17. Test inventory — Open
+### T17. Test inventory — Done
 
 - **Start after T12–T14 are done.**
 - **File:** `docs/test-inventory.md` (new).
@@ -428,3 +428,7 @@ and reviewer:
 | 2026-11-08 | T19 | Open | Added: the "not a RAW file" test needs no real files |
 | 2026-11-08 | T13, T14 | Done | Reviewed: same pattern; helpers now pick only RAW files (.arw/.rw2/.dng). Owner's `check.ps1 -Ignored`: all 23 real-file tests pass (pw-libraw 10, pw-rawview 3, plus the 10 from T6/T12); fmt and clippy OK |
 | 2026-11-08 | T18 | Done | Reviewed: pure split into paths.rs, eject.rs, summary.rs; same exports and 20 unit tests; fuller doc comments restored. Reviewer moved the `PathBuf` import into the Windows-only block of eject.rs (unused elsewhere) |
+| 2026-11-08 | T19 | Ready for review | Removed the ignored marker and unnecessary PW_TESTDATA check from the synthetic non-RAW test. `cargo test -p pw-viewcore`: 43 unit + 12 engine tests pass (the native_files target is feature-gated); with `--features native`, the named test passes. Fmt and clippy clean. |
+| 2026-11-08 | T16 | Ready for review | Added worktree vcpkg setup, ExifTool requirements, PW_TESTDATA/ignored test instructions, and the check-script commands. |
+| 2026-11-08 | T17 | Ready for review | Added `docs/test-inventory.md` from the inspected Rust test modules and files; counts match the `cargo test --workspace` run (180 passed, 23 ignored, 0 failed). |
+| 2026-11-08 | T19, T16, T17 | Done | Reviewed. T19: test now runs in every run (native_files 1 passed, 2 ignored). T16: section added; reviewer replaced the internal task numbers with a pointer to the test inventory. T17: inventory matches the owner's run (180 passed, 23 ignored, 0 failed; 22 real-file tests plus the pw-metadata helper) |
