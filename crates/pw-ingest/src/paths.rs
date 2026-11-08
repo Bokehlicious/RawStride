@@ -67,6 +67,7 @@ pub fn eject(source: &Path) -> String {
     {
         use std::os::windows::process::CommandExt;
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        const EJECT_ATTEMPTS: usize = 3;
         const EJECT_TIMEOUT: Duration = Duration::from_secs(5);
         const EJECT_POLL_INTERVAL: Duration = Duration::from_millis(250);
 
@@ -81,27 +82,31 @@ pub fn eject(source: &Path) -> String {
         let script = format!(
             "(New-Object -ComObject Shell.Application).Namespace(17).ParseName('{drive}').InvokeVerb('Eject')"
         );
-        let status = std::process::Command::new(powershell)
-            .args(["-NoProfile", "-NonInteractive", "-Command", &script])
-            .creation_flags(CREATE_NO_WINDOW)
-            .status();
-        match status {
-            Ok(status) if !status.success() => {
-                format!(
-                    "{drive} kunde inte matas ut: PowerShell avslutades med felstatus {status}."
-                )
-            }
-            Ok(_) => {
-                let dcim = PathBuf::from(format!("{drive}\\DCIM"));
-                if wait_until_gone(|| dcim.exists(), EJECT_TIMEOUT, EJECT_POLL_INTERVAL) {
-                    format!("{drive} är utmatat och kan tas ut.")
-                } else {
-                    format!(
-                        "{drive} kunde inte matas ut (används den av ett annat program?). Mata ut i Utforskaren."
-                    )
+        let dcim = PathBuf::from(format!("{drive}\\DCIM"));
+        match retry_until_gone(
+            EJECT_ATTEMPTS,
+            || {
+                let status = std::process::Command::new(&powershell)
+                    .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+                    .creation_flags(CREATE_NO_WINDOW)
+                    .status()
+                    .map_err(|error| format!("{drive} kunde inte matas ut: {error}"))?;
+                if !status.success() {
+                    return Err(format!(
+                        "{drive} kunde inte matas ut: PowerShell avslutades med felstatus {status}."
+                    ));
                 }
-            }
-            Err(error) => format!("{drive} kunde inte matas ut: {error}"),
+                Ok(())
+            },
+            || dcim.exists(),
+            EJECT_TIMEOUT,
+            EJECT_POLL_INTERVAL,
+        ) {
+            Ok(true) => format!("{drive} är utmatat och kan tas ut."),
+            Ok(false) => format!(
+                "{drive} kunde inte matas ut (används den av ett annat program?). Mata ut i Utforskaren. Antal försök: {EJECT_ATTEMPTS}."
+            ),
+            Err(error) => error,
         }
     }
     #[cfg(not(windows))]
@@ -127,6 +132,23 @@ fn wait_until_gone(
         }
         std::thread::sleep(interval.min(deadline - now));
     }
+}
+
+#[cfg(any(windows, test))]
+fn retry_until_gone(
+    attempts: usize,
+    mut invoke: impl FnMut() -> Result<(), String>,
+    mut still_present: impl FnMut() -> bool,
+    timeout: Duration,
+    interval: Duration,
+) -> Result<bool, String> {
+    for _ in 0..attempts {
+        invoke()?;
+        if wait_until_gone(&mut still_present, timeout, interval) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 /// Summarizes the number of plan items in each destination folder.
@@ -332,5 +354,77 @@ mod tests {
             Duration::from_millis(20),
             Duration::from_millis(1)
         ));
+    }
+
+    #[test]
+    fn retry_until_gone_succeeds_after_first_attempt() {
+        let invocations = std::cell::Cell::new(0);
+        let result = retry_until_gone(
+            3,
+            || {
+                invocations.set(invocations.get() + 1);
+                Ok(())
+            },
+            || false,
+            Duration::from_millis(2),
+            Duration::from_millis(1),
+        );
+
+        assert_eq!(result, Ok(true));
+        assert_eq!(invocations.get(), 1);
+    }
+
+    #[test]
+    fn retry_until_gone_succeeds_after_second_attempt() {
+        let invocations = std::cell::Cell::new(0);
+        let result = retry_until_gone(
+            3,
+            || {
+                invocations.set(invocations.get() + 1);
+                Ok(())
+            },
+            || invocations.get() < 2,
+            Duration::from_millis(2),
+            Duration::from_millis(1),
+        );
+
+        assert_eq!(result, Ok(true));
+        assert_eq!(invocations.get(), 2);
+    }
+
+    #[test]
+    fn retry_until_gone_returns_false_after_all_attempts() {
+        let invocations = std::cell::Cell::new(0);
+        let result = retry_until_gone(
+            3,
+            || {
+                invocations.set(invocations.get() + 1);
+                Ok(())
+            },
+            || true,
+            Duration::from_millis(2),
+            Duration::from_millis(1),
+        );
+
+        assert_eq!(result, Ok(false));
+        assert_eq!(invocations.get(), 3);
+    }
+
+    #[test]
+    fn retry_until_gone_returns_invoke_error_without_retrying() {
+        let invocations = std::cell::Cell::new(0);
+        let result = retry_until_gone(
+            3,
+            || {
+                invocations.set(invocations.get() + 1);
+                Err("PowerShell failed".to_owned())
+            },
+            || true,
+            Duration::from_millis(2),
+            Duration::from_millis(1),
+        );
+
+        assert_eq!(result, Err("PowerShell failed".to_owned()));
+        assert_eq!(invocations.get(), 1);
     }
 }

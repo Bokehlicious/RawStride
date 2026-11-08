@@ -163,7 +163,7 @@ Ordered from easiest to hardest. Start at the top.
 - **Done when:** `cargo test -p pw-ingest` passes and finishes in well under a second;
   `cargo clippy -p pw-ingest --all-targets` shows no warnings.
 
-### T10. Card eject: try again when Windows is still busy after the import — Open
+### T10. Card eject: try again when Windows is still busy after the import — Done (manual eject test pending)
 
 - **Start after T9 is done** (it uses T9's `wait_until_gone` with parameters).
 - **Crate:** `pw-ingest`. **File:** `crates/pw-ingest/src/paths.rs`.
@@ -186,6 +186,28 @@ Ordered from easiest to hardest. Start at the top.
   times, `Ok(false)`); invoke fails on the first attempt (error returned, no further attempts).
 - **Done when:** `cargo test -p pw-ingest` passes quickly and clippy is clean. The owner tests a real
   import with eject again.
+
+### T11. Card eject: keep PowerShell running until the card is gone — Open
+
+- **Crate:** `pw-ingest`. **File:** `crates/pw-ingest/src/paths.rs`.
+- **Finding (owner test, 2026-11-08):** the Windows eject verb finishes in the background. When the
+  PowerShell process exits right after `InvokeVerb('Eject')`, the eject is cancelled. Tested by hand
+  with the app closed:
+  - `powershell -Command "…InvokeVerb('Eject')"` then wait 5 s outside → card still there (`True`);
+  - `powershell -Command "…InvokeVerb('Eject'); Start-Sleep 5"` → card ejected (`False`).
+  So T10's retries cannot help on their own: every attempt is cancelled the same way.
+- **What:**
+  - Build the PowerShell script in a small pure function, e.g. `fn eject_script(drive: &str) -> String`,
+    available on all platforms (so it can be tested), and use it in `eject()`.
+  - The script invokes the verb and then **stays alive until `<drive>\DCIM` is gone, at most 5 s**,
+    polling every 250 ms, for example:
+    `$d = (New-Object -ComObject Shell.Application).Namespace(17).ParseName('E:'); $d.InvokeVerb('Eject'); for ($i = 0; $i -lt 20 -and (Test-Path 'E:\DCIM'); $i++) { Start-Sleep -Milliseconds 250 }`
+  - Keep everything from T10 (the Rust side still checks and retries up to 3 times) and keep the
+    messages.
+- **Tests to add:** `eject_script("E:")` contains `ParseName('E:')`, `InvokeVerb('Eject')`,
+  `Test-Path 'E:\DCIM'` and `Start-Sleep`; it contains no other drive letter.
+- **Done when:** `cargo test -p pw-ingest` passes and clippy is clean. The owner tests a real import
+  with eject again; T5, T10 and T11 are then marked Done together.
 
 ### T7. Format the files that `cargo fmt --check` reports — Done
 
@@ -244,3 +266,6 @@ and reviewer:
 | 2026-11-08 | – | Note | Owner test: "Öppna i visaren" opens the imported folder correctly. Requirement noted for the egui import: open the imported folder automatically in a new tab |
 | 2026-11-08 | T9 | Ready for review | Display-formatted PowerShell exit status; parameterized eject polling with named production timing constants and fast test timings; wait helper is Windows/test-only. Tests: pw-ingest 15 unit + 8 integration passed; fmt and clippy clean. |
 | 2026-11-08 | T9 | Done | Reviewed: all three points done; reviewer added `#[cfg(any(windows, test))]` on the `std::time` import, which was unused off Windows. Tests: pw-ingest 15 (0.02 s, was 5 s) + 8, photoworkflow 5; fmt and clippy clean |
+| 2026-11-08 | T10 | Ready for review | Added three-attempt eject retry and four fast unit tests. Tests: pw-ingest 19 unit + 8 integration passed; fmt and clippy clean. |
+| 2026-11-08 | T10 | Done (manual test pending) | Reviewed: retry_until_gone with 3 attempts and four tests; pw-ingest 19 unit tests pass. Card test: still not ejected ("Antal försök: 3") |
+| 2026-11-08 | T11 | Open | Added: owner test showed PowerShell must stay alive after InvokeVerb('Eject') (A: exits at once → not ejected; B: Start-Sleep 5 inside → ejected) |
