@@ -17,7 +17,7 @@ mod exiftool;
 mod test_support;
 mod worker;
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 use std::path::{Path, PathBuf};
 
@@ -66,12 +66,64 @@ pub struct Rating {
     pub label: Option<String>,
 }
 
+/// Text values indexed by BCP 47 language tag (an XMP Lang Alt value).
+///
+/// The map is ordered by language tag so iteration and serialized plans are deterministic.
+///
+/// Only the `x-default` entry is written (ADR 0007, Q7: PhotoWorkflow edits `x-default` only and
+/// preserves all other language entries in the file). Other entries are kept in the model for
+/// reading, but they are not written and do not make a template non-empty.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct LocalizedValue {
+    pub values: BTreeMap<String, String>,
+}
+
+impl LocalizedValue {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn insert(
+        &mut self,
+        language_tag: impl Into<String>,
+        value: impl Into<String>,
+    ) -> Option<String> {
+        self.values.insert(language_tag.into(), value.into())
+    }
+
+    pub fn get(&self, language_tag: &str) -> Option<&str> {
+        self.values.get(language_tag).map(String::as_str)
+    }
+
+    /// Empty when no locale has a non-whitespace value.
+    pub fn is_empty(&self) -> bool {
+        self.values.values().all(|value| value.trim().is_empty())
+    }
+
+    /// A value with only the `x-default` entry, the one PhotoWorkflow writes.
+    pub fn x_default(value: impl Into<String>) -> Self {
+        let mut out = Self::new();
+        out.insert(X_DEFAULT, value);
+        out
+    }
+
+    /// The `x-default` entry, or `""` if there is none.
+    pub fn default_text(&self) -> &str {
+        self.get(X_DEFAULT).unwrap_or("")
+    }
+}
+
+/// The Lang Alt entry PhotoWorkflow reads first and writes (ADR 0007 §8, Q7).
+pub const X_DEFAULT: &str = "x-default";
+
 /// IPTC fields applied to every image of an ingest (photographer, copyright, contact).
 /// Written as IPTC Core in XMP, which Lightroom, Bridge and Photo Mechanic read.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Iptc {
     pub creator: String,
-    pub copyright: String,
+    pub copyright: LocalizedValue,
+    pub title: LocalizedValue,
+    pub description: LocalizedValue,
     pub credit: String,
     pub email: String,
     pub phone: String,
@@ -79,6 +131,9 @@ pub struct Iptc {
 }
 
 impl Iptc {
+    /// True when applying the template would write nothing. Defined through [`Iptc::tags`], so
+    /// "empty" and "writes nothing" can never disagree (a template with only non-`x-default`
+    /// languages is empty, because those are not written).
     pub fn is_empty(&self) -> bool {
         self.tags().is_empty()
     }
@@ -95,12 +150,14 @@ impl Iptc {
             }
         };
         put("XMP-dc:Creator", &self.creator);
-        put("XMP-dc:Rights", &self.copyright);
+        put("XMP-dc:Title", self.title.default_text());
+        put("XMP-dc:Description", self.description.default_text());
+        put("XMP-dc:Rights", self.copyright.default_text());
         put("XMP-photoshop:Credit", &self.credit);
         put("XMP-iptcCore:CreatorWorkEmail", &self.email);
         put("XMP-iptcCore:CreatorWorkTelephone", &self.phone);
         put("XMP-iptcCore:CreatorWorkURL", &self.url);
-        if !clean(&self.copyright).is_empty() {
+        if !clean(self.copyright.default_text()).is_empty() {
             out.push("-XMP-xmpRights:Marked=True".to_string());
         }
         out
@@ -274,5 +331,112 @@ impl ExifTool {
             }
         }
         Ok(result)
+    }
+}
+
+#[cfg(test)]
+mod localized_iptc_tests {
+    use super::{Iptc, LocalizedValue};
+
+    #[test]
+    fn localized_values_are_ordered_by_language_tag() {
+        let mut value = LocalizedValue::new();
+        value.insert("sv-SE", "Rättigheter");
+        value.insert("en-US", "Rights");
+        value.insert("fr-FR", "Droits");
+
+        assert_eq!(
+            value.values.keys().map(String::as_str).collect::<Vec<_>>(),
+            ["en-US", "fr-FR", "sv-SE"]
+        );
+        assert_eq!(value.get("sv-SE"), Some("Rättigheter"));
+        assert_eq!(value.get("de-DE"), None);
+        assert!(!value.is_empty());
+    }
+
+    #[test]
+    fn localized_values_are_empty_when_unset_or_whitespace_only() {
+        assert!(LocalizedValue::default().is_empty());
+
+        let mut value = LocalizedValue::new();
+        value.insert("en-US", "");
+        value.insert("sv-SE", " \t\n ");
+        assert!(value.is_empty());
+
+        value.insert("fr-FR", "Droits");
+        assert!(!value.is_empty());
+    }
+
+    #[test]
+    fn iptc_is_empty_for_default_and_whitespace_only_templates() {
+        assert!(Iptc::default().is_empty());
+        assert!(
+            Iptc {
+                creator: "  ".into(),
+                credit: "\n".into(),
+                email: "\t".into(),
+                phone: " ".into(),
+                url: " \r\n".into(),
+                ..Iptc::default()
+            }
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn iptc_is_not_empty_for_x_default_values() {
+        for iptc in [
+            Iptc {
+                copyright: LocalizedValue::x_default("Copyright"),
+                ..Iptc::default()
+            },
+            Iptc {
+                title: LocalizedValue::x_default("Titel"),
+                ..Iptc::default()
+            },
+            Iptc {
+                description: LocalizedValue::x_default("Description"),
+                ..Iptc::default()
+            },
+        ] {
+            assert!(!iptc.is_empty(), "{iptc:?}");
+        }
+    }
+
+    /// Only `x-default` is written (ADR 0007 Q7), so a template whose localized fields hold other
+    /// languages only writes nothing and must count as empty; otherwise ingest would run ExifTool
+    /// with no tags and report an error for every file.
+    #[test]
+    fn iptc_with_only_other_languages_is_empty_and_writes_nothing() {
+        let mut copyright = LocalizedValue::new();
+        copyright.insert("en-US", "Copyright");
+        let mut title = LocalizedValue::new();
+        title.insert("sv-SE", "Titel");
+        let iptc = Iptc {
+            copyright,
+            title,
+            ..Iptc::default()
+        };
+        assert!(iptc.tags().is_empty());
+        assert!(iptc.is_empty());
+    }
+
+    #[test]
+    fn localized_fields_write_x_default_and_rights_marked() {
+        let iptc = Iptc {
+            title: LocalizedValue::x_default("Solnedgång"),
+            description: LocalizedValue::x_default("Rad 1\nRad 2"),
+            copyright: LocalizedValue::x_default("© 2026 Tobias Nykänen"),
+            ..Iptc::default()
+        };
+        assert_eq!(
+            iptc.tags(),
+            [
+                "-XMP-dc:Title=Solnedgång",
+                "-XMP-dc:Description=Rad 1 Rad 2",
+                "-XMP-dc:Rights=© 2026 Tobias Nykänen",
+                "-XMP-xmpRights:Marked=True",
+            ]
+        );
     }
 }

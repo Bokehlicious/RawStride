@@ -7,7 +7,7 @@
 
 use std::path::PathBuf;
 
-use pw_metadata::{ExifTool, Iptc, Rating, sidecar_path, supports_sidecar};
+use pw_metadata::{ExifTool, Iptc, LocalizedValue, Rating, sidecar_path, supports_sidecar};
 
 /// Starts ExifTool and checks that it answers. Panics (fails the test) if it is unavailable.
 fn exiftool() -> ExifTool {
@@ -307,7 +307,7 @@ fn iptc_template_in_sidecar_and_embedded() {
     std::fs::write(&jpg, tiny_jpeg()).unwrap();
     let iptc = Iptc {
         creator: "Tobias Nykänen".into(),
-        copyright: "© 2026 Tobias Nykänen".into(),
+        copyright: LocalizedValue::x_default("© 2026 Tobias Nykänen"),
         email: "foto@example.com".into(),
         url: "https://example.com\nx".into(),
         ..Iptc::default()
