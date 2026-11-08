@@ -416,6 +416,22 @@ fn file_name(p: &Path) -> String {
         .unwrap_or_default()
 }
 
+fn folder_summary(items: &[&pw_ingest::PlanItem], dest: &Path) -> Vec<(String, usize)> {
+    let mut folders: BTreeMap<PathBuf, usize> = BTreeMap::new();
+    for item in items {
+        let path = dest.join(&item.rel);
+        if let Some(parent) = path.parent() {
+            *folders.entry(parent.to_path_buf()).or_default() += 1;
+        }
+    }
+    let mut folders: Vec<(String, usize)> = folders
+        .into_iter()
+        .map(|(path, count)| (path.to_string_lossy().into_owned(), count))
+        .collect();
+    folders.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+    folders
+}
+
 fn run(app: &AppHandle, req: &IngestRequest, opt: &Options) -> DoneDto {
     let state = app.state::<IngestState>();
     let started = Instant::now();
@@ -522,22 +538,12 @@ fn run(app: &AppHandle, req: &IngestRequest, opt: &Options) -> DoneDto {
         }
     }
 
-    let mut folders: BTreeMap<PathBuf, usize> = BTreeMap::new();
-    for i in plan
+    let destination_items: Vec<&pw_ingest::PlanItem> = plan
         .items
         .iter()
-        .filter(|i| !failed_sources.contains(&i.source))
-    {
-        if let Some(parent) = opt.dest.join(&i.rel).parent() {
-            *folders.entry(parent.to_path_buf()).or_default() += 1;
-        }
-    }
-    let mut folders: Vec<(String, usize)> = folders
-        .into_iter()
-        .map(|(p, n)| (p.to_string_lossy().into_owned(), n))
+        .filter(|item| opt.dest.join(&item.rel).exists())
         .collect();
-    folders.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
-    done.folders = folders;
+    done.folders = folder_summary(&destination_items, &opt.dest);
 
     if req.eject {
         done.eject = Some(if done.cancelled || !done.failed.is_empty() {
@@ -623,6 +629,74 @@ mod tests {
             to_backup,
             renamed_for_conflict: renamed,
         }
+    }
+
+    fn folder_item(rel: &str) -> pw_ingest::PlanItem {
+        pw_ingest::PlanItem {
+            rel: PathBuf::from(rel),
+            ..item(false, false, false)
+        }
+    }
+
+    #[test]
+    fn folder_summary_sorts_by_count_then_name() {
+        let dest = Path::new("destination");
+        let items = [
+            folder_item("z/one.arw"),
+            folder_item("z/two.arw"),
+            folder_item("a/one.arw"),
+            folder_item("a/two.arw"),
+            folder_item("m/one.arw"),
+        ];
+        let summary = folder_summary(&items.iter().collect::<Vec<_>>(), dest);
+
+        assert_eq!(
+            summary,
+            vec![
+                (dest.join("a").to_string_lossy().into_owned(), 2),
+                (dest.join("z").to_string_lossy().into_owned(), 2),
+                (dest.join("m").to_string_lossy().into_owned(), 1),
+            ]
+        );
+    }
+
+    #[test]
+    fn folder_summary_counts_items_in_separate_folders() {
+        let dest = Path::new("destination");
+        let items = [
+            folder_item("2026/01/one.arw"),
+            folder_item("2026/02/two.arw"),
+        ];
+        let summary = folder_summary(&items.iter().collect::<Vec<_>>(), dest);
+
+        assert_eq!(
+            summary,
+            vec![
+                (dest.join("2026/01").to_string_lossy().into_owned(), 1),
+                (dest.join("2026/02").to_string_lossy().into_owned(), 1),
+            ]
+        );
+    }
+
+    #[test]
+    fn folder_summary_counts_only_items_passed_to_it() {
+        let dest = Path::new("destination");
+        let items = [
+            folder_item("2026/01/one.arw"),
+            folder_item("2026/01/two.arw"),
+            folder_item("2026/02/three.arw"),
+        ];
+        let selected = [&items[0], &items[2]];
+
+        let summary = folder_summary(&selected, dest);
+
+        assert_eq!(
+            summary,
+            vec![
+                (dest.join("2026/01").to_string_lossy().into_owned(), 1),
+                (dest.join("2026/02").to_string_lossy().into_owned(), 1),
+            ]
+        );
     }
 
     #[test]

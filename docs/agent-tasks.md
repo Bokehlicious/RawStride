@@ -84,7 +84,7 @@ Ordered from easiest to hardest. Start at the top.
 - **Done when:** no string comparison on notice text remains in `main.rs`; `cargo test -p pw-loupe`
   passes.
 
-### T4. Ingest summary: only count files that were copied or already present — Open
+### T4. Ingest summary: only count files that were copied or already present — Done
 
 - **Crate:** `photoworkflow`. **File:** `src-tauri/src/ingest.rs`.
 - **Problem:** in `run()`, the `folders` summary counts every plan item that did not fail. When the
@@ -102,10 +102,39 @@ Ordered from easiest to hardest. Start at the top.
 - **Tests to add:** the sort order; items in two folders; only the items passed in are counted.
 - **Done when:** `cargo test -p photoworkflow` passes.
 
-### T5. Card eject: safer PowerShell call and a real wait — Open
+### T8. Move reusable ingest helpers from src-tauri to pw-ingest — Open
 
-- **Crate:** `photoworkflow`. **File:** `src-tauri/src/ingest.rs`, function `eject()`.
+- **Why:** the Tauri app is being replaced by the egui GUI (ADR 0001 amended 2026-11-07, ADR 0009).
+  Logic that the egui GUI will also need belongs in the shared crate `pw-ingest`, not in
+  `src-tauri`. `src-tauri` only keeps the Tauri glue and calls the shared functions (GR8: the
+  Tauri app keeps working).
+- **Crates:** `pw-ingest`, `photoworkflow`.
+- **Files:** `crates/pw-ingest/src/lib.rs` (or a new module file in `crates/pw-ingest/src/`, e.g.
+  `paths.rs`), `src-tauri/src/ingest.rs`.
+- **What:** move these functions from `src-tauri/src/ingest.rs` to `pw-ingest` and make them `pub`:
+  - `inside(a, b)` and `resolve(p, what)` (path overlap checks);
+  - `drive_of(path)` (drive letter of a path);
+  - `folder_summary(items, dest)` (folder counts for the summary).
+- **Rules:**
+  - **Behaviour unchanged:** same signatures, same results, same (Swedish) error messages. This is
+    a move, not a rewrite.
+  - Move their tests with them (`inside_…`, `resolve_…`, `drive_letter_…`, `folder_summary_…`).
+    The tests keep their names and assertions.
+  - `src-tauri/src/ingest.rs` calls `pw_ingest::…` instead of its own copies, and the copies are
+    deleted. Nothing else in `src-tauri` changes.
+  - Add a short `///` doc comment to each moved function.
+  - No new dependencies.
+- **Done when:** `cargo test -p pw-ingest` and `cargo test -p photoworkflow` pass; the total number
+  of tests in the two crates is the same as before the move; `cargo clippy` shows no warnings.
+
+### T5. Card eject in pw-ingest: safer PowerShell call and a real wait — Open
+
+- **Start after T8 is done.**
+- **Crates:** `pw-ingest`, `photoworkflow`.
+- **Files:** `crates/pw-ingest/src/` (same place as `drive_of` after T8), `src-tauri/src/ingest.rs`.
 - **What:**
+  - Move `eject()` from `src-tauri/src/ingest.rs` to `pw-ingest` next to `drive_of`, as
+    `pub fn eject(source: &Path) -> String`. `src-tauri` calls it; its own copy is deleted.
   - Start PowerShell by full path:
     `%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe` (read `SystemRoot` with
     `std::env::var_os`; if it is missing, return a clear message instead of using `PATH`).
@@ -114,7 +143,8 @@ Ordered from easiest to hardest. Start at the top.
     `<drive>\DCIM` is gone.
 - **Tests to add:** put the polling in a small function that takes a "still present?" closure and
   test it without a real drive (gone at once, gone after a few polls, never gone).
-- **Done when:** `cargo test -p photoworkflow` passes. The owner tests a real eject by hand.
+- **Done when:** `cargo test -p pw-ingest` and `cargo test -p photoworkflow` pass. The owner tests
+  a real eject by hand.
 
 ### T7. Format the files that `cargo fmt --check` reports — Done
 
@@ -156,3 +186,5 @@ and reviewer:
 | 2026-11-08 | T2 | Done | Reviewed: `pw-metadata.workspace = true`, Cargo.lock unchanged. Tests: pw-loupe 6 + 2 passed |
 | 2026-11-08 | T7 | Done | Reviewed: only the three named files changed, layout only; `cargo fmt --all --check` clean. Tests: photoworkflow 10 passed; clippy without lint warnings. Agent again did not report test output or update the status |
 | 2026-11-08 | T3 | Done | Reviewed: is_loading/is_error read LoadState; no text comparisons left in main.rs; all required tests present. Tests: pw-loupe 6 + 3 passed; fmt and clippy clean. Agent updated the status itself this time |
+| 2026-11-08 | T4 | Done | Reviewed: folder_summary() is pure, existence check in run(); three required tests present. Tests: photoworkflow 13 passed; fmt and clippy clean |
+| 2026-11-08 | T5, T8 | Open | Plan changed (owner): reusable ingest logic moves to pw-ingest for the egui GUI; T8 added, T5 now moves eject() to pw-ingest after T8 |
