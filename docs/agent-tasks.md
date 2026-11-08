@@ -423,7 +423,7 @@ Ordered from easiest to hardest. Start at the top.
   source call).
 - **Done when:** `.\tools\check.ps1` is all OK.
 
-### T27. ADR 0011 K4b: thumbnail bookkeeping for the grid (plain Rust) — Open
+### T27. ADR 0011 K4b: thumbnail bookkeeping for the grid (plain Rust) — Done
 
 - **Start after T26 is done.**
 - **Crate:** `pw-loupe`. **Files:** `crates/pw-loupe/Cargo.toml` (add `pw-thumbcache.workspace = true`
@@ -768,4 +768,6 @@ and reviewer:
 | 2026-11-08 | T25 | Done | Reviewed: columns, visible range, navigation (short last row), grid/loupe keys, size clamp 96–480 and Ctrl+wheel step 16; `ViewMode` per tab, new folders start in Grid; `key_action` and `tab_action` unchanged; main.rs not touched. Workspace check: fmt, test and clippy OK |
 | 2026-11-08 | T26–T29 | Open | Added: ADR 0011 K4 split into four parts for the agent (duplicate-free requests, thumbnail bookkeeping, drawing the grid, switching grid/loupe and size). K5 (acceptance and first measurement) follows T29 |
 | 2026-11-08 | T26 | Ready for review | Deduplicated queued and in-flight thumbnail requests by generation/index/cell, added simulated-source tests for duplicate handling, distinct cell sizes and completed cache hits, and re-exported `Rgb8`. `cargo fmt --all --check`, `cargo test -p pw-thumbcache`, `cargo clippy -p pw-thumbcache --all-targets` and `.\tools\check.ps1` pass. |
+| 2026-11-08 | T27 | Ready for review | Added `ThumbGrid` state tracking and completion handling, 128-pixel physical cell sizing, RGB-to-egui conversion and tests. Crate fmt, tests and clippy pass. |
 | 2026-11-09 | T26 | Done | Reviewed: queued and in-flight duplicates (generation, index, cell) are skipped; the in-flight entry is removed under the same lock that fills the cache, so a later request is a cache hit, never a gap; `Rgb8` re-exported. Four required tests present. pw-thumbcache 25 passed, 4 ignored; workspace fmt, test and clippy OK. No changes in review |
+| 2026-11-09 | T27 | Done | Reviewed: `ThumbGrid` (to_request, mark_requested, apply, state, forget_outside), `request_cell` (128 px steps, bad scale counts as 1.0) and `color_image` match the spec; all required tests present; pw-thumbcache added as an internal dependency. Note: `ThumbnailEvent` carries no cell size, so `apply` records the cell of the latest request; a late result for an older size is shown until the newer one arrives and replaces it, which is harmless. Workspace fmt, test and clippy OK. No changes in review |

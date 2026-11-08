@@ -3851,6 +3851,7 @@ dependencies = [
  "pw-metadata",
  "pw-raw",
  "pw-render",
+ "pw-thumbcache",
  "pw-viewcore",
 ]
 

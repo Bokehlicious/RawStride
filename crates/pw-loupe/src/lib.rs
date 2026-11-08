@@ -4,6 +4,7 @@
 
 mod grid;
 mod tabs;
+mod thumbs;
 
 use std::path::{Path, PathBuf};
 
@@ -15,6 +16,7 @@ pub use grid::{
     loupe_key_action, navigate, row, step_thumbnail_size, visible_range,
 };
 pub use tabs::{Tab, Tabs, ViewMode};
+pub use thumbs::{CellState, ThumbGrid, color_image, request_cell};
 
 /// The window title; `latency.ps1` finds the window by it (ADR 0009 §11, decision 4).
 pub const WINDOW_TITLE: &str = "PhotoWorkflow Loupe";
