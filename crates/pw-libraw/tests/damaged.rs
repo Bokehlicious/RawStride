@@ -1,5 +1,5 @@
-//! Damaged and incomplete files (M2 error handling) on the real test RAWs. Set PW_TESTDATA to
-//! the folder with the test RAWs (D:\PhotoWorkflowData\RAW); skipped when it is not set.
+//! Damaged and incomplete files (M2 error handling) on the real test RAWs.
+//! Run with `$env:PW_TESTDATA = "<folder>"; cargo test -p pw-libraw -- --ignored`.
 //!
 //! - Every complete test file opens, whatever LibRaw's processing warnings say.
 //! - Files cut short inside their RAW data are refused as damaged (error contains `damaged:`),
@@ -12,32 +12,62 @@ use std::path::{Path, PathBuf};
 
 use pw_libraw::{DAMAGED, Session};
 
-fn testdata() -> Option<PathBuf> {
-    std::env::var_os("PW_TESTDATA").map(PathBuf::from)
+fn testdata() -> PathBuf {
+    let Some(dir) = std::env::var_os("PW_TESTDATA") else {
+        panic!("PW_TESTDATA is not set; set it to the real camera test-data folder");
+    };
+    let dir = PathBuf::from(dir);
+    assert!(
+        dir.is_dir(),
+        "PW_TESTDATA folder does not exist: {}",
+        dir.display()
+    );
+    dir
 }
 
 fn raws(dir: &Path) -> Vec<PathBuf> {
-    let mut v: Vec<PathBuf> = std::fs::read_dir(dir)
-        .map(|rd| {
-            rd.filter_map(|e| e.ok().map(|e| e.path()))
-                .filter(|p| {
-                    p.extension().and_then(|e| e.to_str()).is_some_and(|e| {
-                        matches!(e.to_ascii_lowercase().as_str(), "arw" | "rw2" | "dng")
-                    })
+    let entries = std::fs::read_dir(dir).unwrap_or_else(|error| {
+        panic!(
+            "could not read PW_TESTDATA folder {}: {error}",
+            dir.display()
+        )
+    });
+    let mut v: Vec<PathBuf> = entries
+        .map(|entry| {
+            entry
+                .unwrap_or_else(|error| {
+                    panic!(
+                        "could not read an entry in PW_TESTDATA folder {}: {error}",
+                        dir.display()
+                    )
                 })
-                .collect()
+                .path()
         })
-        .unwrap_or_default();
+        .filter(|p| {
+            p.is_file()
+                && p.extension().and_then(|e| e.to_str()).is_some_and(|e| {
+                    matches!(e.to_ascii_lowercase().as_str(), "arw" | "rw2" | "dng")
+                })
+        })
+        .collect();
     v.sort();
     v
 }
 
-fn first(dir: &Path, prefix: &str) -> Option<PathBuf> {
-    raws(dir).into_iter().find(|p| {
-        p.file_name()
-            .and_then(|n| n.to_str())
-            .is_some_and(|n| n.starts_with(prefix))
-    })
+fn first(dir: &Path, prefix: &str) -> PathBuf {
+    raws(dir)
+        .into_iter()
+        .find(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.starts_with(prefix))
+        })
+        .unwrap_or_else(|| {
+            panic!(
+                "no RAW test file with prefix {prefix} was found in PW_TESTDATA folder {}",
+                dir.display()
+            )
+        })
 }
 
 /// A scratch folder for one test. Each test gets its own folder: tests run in parallel, and a
@@ -55,13 +85,15 @@ fn cut(src: &Path, keep: u64, dst: &Path) {
 }
 
 #[test]
+#[ignore = "needs real camera files: set PW_TESTDATA and run with --ignored"]
 fn complete_files_are_never_called_damaged() {
-    let Some(dir) = testdata() else {
-        eprintln!("PW_TESTDATA not set; skipped");
-        return;
-    };
+    let dir = testdata();
     let files = raws(&dir);
-    assert!(!files.is_empty());
+    assert!(
+        !files.is_empty(),
+        "no RAW test files were found in PW_TESTDATA folder {}",
+        dir.display()
+    );
     let mut warned = 0;
     for f in &files {
         let (r, d) = Session::open_with_diagnostics(f);
@@ -90,11 +122,9 @@ fn complete_files_are_never_called_damaged() {
 }
 
 #[test]
+#[ignore = "needs real camera files: set PW_TESTDATA and run with --ignored"]
 fn truncated_files_are_damaged() {
-    let Some(dir) = testdata() else {
-        eprintln!("PW_TESTDATA not set; skipped");
-        return;
-    };
+    let dir = testdata();
     let tmp = scratch("truncated");
     // (prefix, fractions that must be refused)
     let cases: [(&str, &[f64]); 4] = [
@@ -104,10 +134,7 @@ fn truncated_files_are_damaged() {
         ("IMG_", &[0.50]),                                 // Xiaomi DNG
     ];
     for (prefix, parts) in cases {
-        let Some(src) = first(&dir, prefix) else {
-            eprintln!("no {prefix}* file; skipped");
-            continue;
-        };
+        let src = first(&dir, prefix);
         let len = std::fs::metadata(&src).unwrap().len();
         for &part in parts {
             let dst = tmp.join(format!(

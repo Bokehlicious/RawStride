@@ -276,7 +276,7 @@ Ordered from easiest to hardest. Start at the top.
 - **Done when:** all 7 tests are ignored by default, fail with a clear message without the files and
   pass with them; clippy is clean.
 
-### T13. Real-file tests, part 3 (pw-libraw) — Open
+### T13. Real-file tests, part 3 (pw-libraw) — Done
 
 - **Start after T6 is done.** Use exactly the pattern from T6.
 - **Files:** `crates/pw-libraw/tests/damaged.rs` (`complete_files_are_never_called_damaged`,
@@ -292,7 +292,7 @@ Ordered from easiest to hardest. Start at the top.
 - **Report back** the same three runs as in T6, for `-p pw-libraw`.
 - **Done when:** as in T12.
 
-### T14. Real-file tests, part 4 (pw-rawview with LibRaw) — Open
+### T14. Real-file tests, part 4 (pw-rawview with LibRaw) — Done
 
 - **Start after T6 is done.** Use exactly the pattern from T6.
 - **File:** `crates/pw-rawview/tests/libraw_engine.rs` (3 tests). The file only builds on Windows
@@ -353,7 +353,7 @@ Ordered from easiest to hardest. Start at the top.
   claim a requirement is verified (TESTING.md §7).
 - **Done when:** the numbers match a `cargo test --workspace` run (the owner checks the totals).
 
-### T18. pw-ingest: split `paths.rs` and restore the explanations — Open
+### T18. pw-ingest: split `paths.rs` and restore the explanations — Done
 
 - **Crate:** `pw-ingest`. **Files:** `crates/pw-ingest/src/paths.rs`, new files next to it,
   `crates/pw-ingest/src/lib.rs`.
@@ -422,4 +422,9 @@ and reviewer:
 | 2026-11-08 | T15 | Done | Reviewed: all requirements met. Reviewer added `--no-fail-fast` to the test step (cargo stopped at the first failing crate) and `/test-output.txt` to `.gitignore`. Full run with `PW_TESTDATA` set: fmt, test and clippy OK |
 | 2026-11-08 | – | Fix | With `PW_TESTDATA` set, `pw-libraw` `truncated_files_are_damaged` failed: two tests shared one scratch folder and one removed it. Reviewer gave each test its own folder (test code only); now passes |
 | 2026-11-08 | T6, T12 | Done | Reviewed: same pattern in all five files; 10 tests ignored by default. `check.ps1 -Ignored` with `PW_TESTDATA` set: all 10 pass (pw-raw 4, pw-viewcore 3, pw-ingest 1, pw-libjpeg 1, pw-metadata 1). The earlier worry about pw-raw (0.00 s) was wrong: it only reads file headers, which is fast. The run without `PW_TESTDATA` was not reported |
+| 2026-11-08 | T13 | Ready for review | `pw-libraw`: 10 real-file tests ignored by default; explicit run without `PW_TESTDATA` fails with a clear message; all 10 pass with the owner test data. Formatting and clippy clean. |
+| 2026-11-08 | T14 | Ready for review | `pw-rawview` LibRaw: all 3 real-file tests ignored by default; explicit release run without `PW_TESTDATA` fails with a clear message; all 3 pass with the owner test data. Formatting and clippy clean. |
+| 2026-11-08 | T18 | Ready for review | Split `pw-ingest` paths, eject, and folder-summary helpers into separate modules; restored path-resolution explanations. `cargo test -p pw-ingest -p photoworkflow`: pw-ingest 20 unit + 7 integration passed (1 ignored), photoworkflow 5 passed; fmt and clippy clean. |
 | 2026-11-08 | T19 | Open | Added: the "not a RAW file" test needs no real files |
+| 2026-11-08 | T13, T14 | Done | Reviewed: same pattern; helpers now pick only RAW files (.arw/.rw2/.dng). Owner's `check.ps1 -Ignored`: all 23 real-file tests pass (pw-libraw 10, pw-rawview 3, plus the 10 from T6/T12); fmt and clippy OK |
+| 2026-11-08 | T18 | Done | Reviewed: pure split into paths.rs, eject.rs, summary.rs; same exports and 20 unit tests; fuller doc comments restored. Reviewer moved the `PathBuf` import into the Windows-only block of eject.rs (unused elsewhere) |

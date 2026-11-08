@@ -1,5 +1,6 @@
 //! Checks on real RAW files (set PW_TESTDATA to the folder with the test RAWs, e.g.
-//! D:\PhotoWorkflowData\RAW). Skipped when it is not set.
+//! D:\PhotoWorkflowData\RAW). Run with
+//! `$env:PW_TESTDATA = "<folder>"; cargo test -p pw-libraw -- --ignored`.
 //!
 //! The key guarantee of ADR 0006: a region rendered on its own (with the overlap margin) is
 //! pixel-identical to the same area of a whole-image render. It is checked for AHD (the default)
@@ -10,26 +11,61 @@ use std::path::PathBuf;
 
 use pw_libraw::{Demosaic, Rect, Session};
 
-fn test_file(prefix: &str) -> Option<PathBuf> {
-    let dir = PathBuf::from(std::env::var_os("PW_TESTDATA")?);
-    let mut files: Vec<PathBuf> = std::fs::read_dir(&dir)
-        .ok()?
-        .filter_map(|e| e.ok().map(|e| e.path()))
+fn testdata() -> PathBuf {
+    let Some(dir) = std::env::var_os("PW_TESTDATA") else {
+        panic!("PW_TESTDATA is not set; set it to the real camera test-data folder");
+    };
+    let dir = PathBuf::from(dir);
+    assert!(
+        dir.is_dir(),
+        "PW_TESTDATA folder does not exist: {}",
+        dir.display()
+    );
+    dir
+}
+
+fn test_file(prefix: &str) -> PathBuf {
+    let dir = testdata();
+    let entries = std::fs::read_dir(&dir).unwrap_or_else(|error| {
+        panic!(
+            "could not read PW_TESTDATA folder {}: {error}",
+            dir.display()
+        )
+    });
+    let mut files: Vec<PathBuf> = entries
+        .map(|entry| {
+            entry
+                .unwrap_or_else(|error| {
+                    panic!(
+                        "could not read an entry in PW_TESTDATA folder {}: {error}",
+                        dir.display()
+                    )
+                })
+                .path()
+        })
         .filter(|p| {
             p.file_name()
                 .and_then(|n| n.to_str())
                 .is_some_and(|n| n.starts_with(prefix))
+                && p.is_file()
+                && p.extension()
+                    .and_then(|ext| ext.to_str())
+                    .is_some_and(|ext| {
+                        matches!(ext.to_ascii_lowercase().as_str(), "arw" | "rw2" | "dng")
+                    })
         })
         .collect();
     files.sort();
-    files.into_iter().next()
+    files.into_iter().next().unwrap_or_else(|| {
+        panic!(
+            "no RAW test file with prefix {prefix} was found in PW_TESTDATA folder {}",
+            dir.display()
+        )
+    })
 }
 
 fn check_regions_identical(prefix: &str) {
-    let Some(file) = test_file(prefix) else {
-        eprintln!("PW_TESTDATA not set or no {prefix}* file; skipped");
-        return;
-    };
+    let file = test_file(prefix);
     let mut s = Session::open(&file).unwrap();
     let (w, h) = (s.width(), s.height());
     let full = s.render_full().unwrap();
@@ -102,10 +138,7 @@ fn loupe_regions(w: u32, h: u32) -> Vec<Rect> {
 }
 
 fn check_ppg_regions_identical(prefix: &str) {
-    let Some(file) = test_file(prefix) else {
-        eprintln!("PW_TESTDATA not set or no {prefix}* file; skipped");
-        return;
-    };
+    let file = test_file(prefix);
     let mut s = Session::open(&file).unwrap();
     let (w, h) = (s.width(), s.height());
     let full = s.render_full_with(Demosaic::Ppg).unwrap();
@@ -134,10 +167,7 @@ fn check_ppg_regions_identical(prefix: &str) {
 /// The method is a per-render choice: switching on one session never leaks into the next render,
 /// and PPG really differs from AHD (so the choice reaches LibRaw).
 fn check_methods_switch_cleanly(prefix: &str) {
-    let Some(file) = test_file(prefix) else {
-        eprintln!("PW_TESTDATA not set or no {prefix}* file; skipped");
-        return;
-    };
+    let file = test_file(prefix);
     let mut s = Session::open(&file).unwrap();
     let (w, h) = (s.width(), s.height());
     let r = Rect::new(((w - 1920) / 2) & !1, ((h - 1080) / 2) & !1, 1920, 1080);
@@ -167,41 +197,49 @@ fn check_methods_switch_cleanly(prefix: &str) {
 }
 
 #[test]
+#[ignore = "needs real camera files: set PW_TESTDATA and run with --ignored"]
 fn a7r_iva_ppg_regions_are_identical_to_full() {
     check_ppg_regions_identical("TN1004");
 }
 
 #[test]
+#[ignore = "needs real camera files: set PW_TESTDATA and run with --ignored"]
 fn a1_ppg_regions_are_identical_to_full() {
     check_ppg_regions_identical("TN0059");
 }
 
 #[test]
+#[ignore = "needs real camera files: set PW_TESTDATA and run with --ignored"]
 fn panasonic_ppg_regions_are_identical_to_full() {
     check_ppg_regions_identical("P124");
 }
 
 #[test]
+#[ignore = "needs real camera files: set PW_TESTDATA and run with --ignored"]
 fn a7r_iva_methods_switch_cleanly() {
     check_methods_switch_cleanly("TN1004");
 }
 
 #[test]
+#[ignore = "needs real camera files: set PW_TESTDATA and run with --ignored"]
 fn panasonic_methods_switch_cleanly() {
     check_methods_switch_cleanly("P124");
 }
 
 #[test]
+#[ignore = "needs real camera files: set PW_TESTDATA and run with --ignored"]
 fn a7r_iva_regions_are_identical_to_full() {
     check_regions_identical("TN1004");
 }
 
 #[test]
+#[ignore = "needs real camera files: set PW_TESTDATA and run with --ignored"]
 fn a1_regions_are_identical_to_full() {
     check_regions_identical("TN0059");
 }
 
 #[test]
+#[ignore = "needs real camera files: set PW_TESTDATA and run with --ignored"]
 fn panasonic_regions_are_identical_to_full() {
     check_regions_identical("P124");
 }

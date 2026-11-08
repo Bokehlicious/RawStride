@@ -1,5 +1,5 @@
 //! The engine with the real decoder (LibRaw + JPEG) on the test RAWs, on Windows:
-//! `PW_TESTDATA=D:\PhotoWorkflowData\RAW cargo test --release -p pw-rawview --features libraw -- --nocapture --test-threads=1`
+//! `$env:PW_TESTDATA = "D:\PhotoWorkflowData\RAW"; cargo test --release -p pw-rawview --features libraw -- --ignored --nocapture --test-threads=1`
 //!
 //! Measures the time to the first tile (with and without the unpack done ahead) and checks that
 //! process memory stays within the budget during fast switching with zooming, and comes back down
@@ -12,23 +12,71 @@ use std::time::{Duration, Instant};
 use pw_rawview::libraw::LibRawBackend;
 use pw_rawview::{Config, Engine, ImageKey, Lookup, Target, TileId};
 
-fn raws() -> Vec<PathBuf> {
+fn testdata() -> PathBuf {
     let Some(dir) = std::env::var_os("PW_TESTDATA") else {
-        return Vec::new();
+        panic!("PW_TESTDATA is not set; set it to the real camera test-data folder");
     };
-    let mut v: Vec<PathBuf> = std::fs::read_dir(dir)
-        .map(|rd| {
-            rd.filter_map(|e| e.ok().map(|e| e.path()))
-                .filter(|p| {
-                    p.extension().and_then(|e| e.to_str()).is_some_and(|e| {
-                        matches!(e.to_ascii_lowercase().as_str(), "arw" | "rw2" | "dng")
-                    })
+    let dir = PathBuf::from(dir);
+    assert!(
+        dir.is_dir(),
+        "PW_TESTDATA folder does not exist: {}",
+        dir.display()
+    );
+    dir
+}
+
+fn raws() -> Vec<PathBuf> {
+    let dir = testdata();
+    let entries = std::fs::read_dir(&dir).unwrap_or_else(|error| {
+        panic!(
+            "could not read PW_TESTDATA folder {}: {error}",
+            dir.display()
+        )
+    });
+    let mut v: Vec<PathBuf> = entries
+        .map(|entry| {
+            entry
+                .unwrap_or_else(|error| {
+                    panic!(
+                        "could not read an entry in PW_TESTDATA folder {}: {error}",
+                        dir.display()
+                    )
                 })
-                .collect()
+                .path()
         })
-        .unwrap_or_default();
+        .filter(|path| {
+            path.is_file()
+                && path
+                    .extension()
+                    .and_then(|ext| ext.to_str())
+                    .is_some_and(|ext| {
+                        matches!(ext.to_ascii_lowercase().as_str(), "arw" | "rw2" | "dng")
+                    })
+        })
+        .collect();
     v.sort();
+    assert!(
+        !v.is_empty(),
+        "no RAW test files were found in PW_TESTDATA folder {}",
+        dir.display()
+    );
     v
+}
+
+fn a7r_iva_index(files: &[PathBuf]) -> usize {
+    files
+        .iter()
+        .position(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with("TN1004"))
+        })
+        .unwrap_or_else(|| {
+            panic!(
+                "no A7R IVA test file with prefix TN1004 was found in PW_TESTDATA folder {}",
+                testdata().display()
+            )
+        })
 }
 
 #[repr(C)]
@@ -90,15 +138,10 @@ fn wait_idle(e: &Engine<LibRawBackend>, max: Duration) {
 }
 
 #[test]
+#[ignore = "needs real camera files: set PW_TESTDATA and run with --ignored"]
 fn first_tile_and_half_size_with_libraw() {
     let files = raws();
-    let Some(a7r) = files
-        .iter()
-        .position(|p| p.to_string_lossy().contains("TN1004"))
-    else {
-        eprintln!("PW_TESTDATA not set or no A7R IVA file; skipped");
-        return;
-    };
+    let a7r = a7r_iva_index(&files);
     let e = Engine::new(LibRawBackend, Config::default());
     e.set_folder(1);
     // Cold: zoom right away (open + unpack + tile).
@@ -153,12 +196,14 @@ fn first_tile_and_half_size_with_libraw() {
 }
 
 #[test]
+#[ignore = "needs real camera files: set PW_TESTDATA and run with --ignored"]
 fn memory_stays_within_budget_and_is_freed() {
     let files = raws();
-    if files.len() < 2 {
-        eprintln!("PW_TESTDATA not set; skipped");
-        return;
-    }
+    assert!(
+        files.len() >= 2,
+        "at least two RAW test files are required in PW_TESTDATA folder {}",
+        testdata().display()
+    );
     let base = private_mb();
     let e = Engine::new(LibRawBackend, Config::default());
     e.set_folder(1);
@@ -225,15 +270,10 @@ fn memory_stays_within_budget_and_is_freed() {
 /// shown, with the half-size job's session reused and without; and on the first zoom action
 /// (`prepare`) without a half-size image. Also the memory a kept session costs.
 #[test]
+#[ignore = "needs real camera files: set PW_TESTDATA and run with --ignored"]
 fn step4_first_tile_with_and_without_session_reuse() {
     let files = raws();
-    let Some(a7r) = files
-        .iter()
-        .position(|p| p.to_string_lossy().contains("TN1004"))
-    else {
-        eprintln!("PW_TESTDATA not set or no A7R IVA file; skipped");
-        return;
-    };
+    let a7r = a7r_iva_index(&files);
     for reuse in [true, false] {
         let base = private_mb();
         let e = Engine::new(
