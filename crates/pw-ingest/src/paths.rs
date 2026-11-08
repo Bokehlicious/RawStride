@@ -1,5 +1,7 @@
 use std::collections::BTreeMap;
 use std::path::{Component, Path, PathBuf};
+// Only the Windows eject code and the tests wait for a drive to disappear.
+#[cfg(any(windows, test))]
 use std::time::{Duration, Instant};
 
 /// Returns true if `a` is `b` or lies below it, ignoring case and separator differences.
@@ -65,6 +67,8 @@ pub fn eject(source: &Path) -> String {
     {
         use std::os::windows::process::CommandExt;
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        const EJECT_TIMEOUT: Duration = Duration::from_secs(5);
+        const EJECT_POLL_INTERVAL: Duration = Duration::from_millis(250);
 
         let Some(system_root) = std::env::var_os("SystemRoot") else {
             return "Utmatning kunde inte startas: miljövariabeln SystemRoot saknas.".into();
@@ -84,12 +88,12 @@ pub fn eject(source: &Path) -> String {
         match status {
             Ok(status) if !status.success() => {
                 format!(
-                    "{drive} kunde inte matas ut: PowerShell avslutades med felstatus {status:?}."
+                    "{drive} kunde inte matas ut: PowerShell avslutades med felstatus {status}."
                 )
             }
             Ok(_) => {
                 let dcim = PathBuf::from(format!("{drive}\\DCIM"));
-                if wait_until_gone(|| dcim.exists()) {
+                if wait_until_gone(|| dcim.exists(), EJECT_TIMEOUT, EJECT_POLL_INTERVAL) {
                     format!("{drive} är utmatat och kan tas ut.")
                 } else {
                     format!(
@@ -106,9 +110,13 @@ pub fn eject(source: &Path) -> String {
     }
 }
 
-fn wait_until_gone(mut still_present: impl FnMut() -> bool) -> bool {
-    const INTERVAL: Duration = Duration::from_millis(250);
-    let deadline = Instant::now() + Duration::from_secs(5);
+#[cfg(any(windows, test))]
+fn wait_until_gone(
+    mut still_present: impl FnMut() -> bool,
+    timeout: Duration,
+    interval: Duration,
+) -> bool {
+    let deadline = Instant::now() + timeout;
     loop {
         if !still_present() {
             return true;
@@ -117,7 +125,7 @@ fn wait_until_gone(mut still_present: impl FnMut() -> bool) -> bool {
         if now >= deadline {
             return false;
         }
-        std::thread::sleep(INTERVAL.min(deadline - now));
+        std::thread::sleep(interval.min(deadline - now));
     }
 }
 
@@ -292,25 +300,37 @@ mod tests {
     #[test]
     fn wait_until_gone_succeeds_when_already_gone() {
         let mut polls = 0;
-        assert!(wait_until_gone(|| {
-            polls += 1;
-            false
-        }));
+        assert!(wait_until_gone(
+            || {
+                polls += 1;
+                false
+            },
+            Duration::from_millis(20),
+            Duration::from_millis(1)
+        ));
         assert_eq!(polls, 1);
     }
 
     #[test]
     fn wait_until_gone_succeeds_after_a_few_polls() {
         let mut polls = 0;
-        assert!(wait_until_gone(|| {
-            polls += 1;
-            polls < 3
-        }));
+        assert!(wait_until_gone(
+            || {
+                polls += 1;
+                polls < 3
+            },
+            Duration::from_millis(20),
+            Duration::from_millis(1)
+        ));
         assert_eq!(polls, 3);
     }
 
     #[test]
     fn wait_until_gone_times_out_when_still_present() {
-        assert!(!wait_until_gone(|| true));
+        assert!(!wait_until_gone(
+            || true,
+            Duration::from_millis(20),
+            Duration::from_millis(1)
+        ));
     }
 }

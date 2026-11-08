@@ -146,7 +146,7 @@ Ordered from easiest to hardest. Start at the top.
 - **Done when:** `cargo test -p pw-ingest` and `cargo test -p photoworkflow` pass. The owner tests
   a real eject by hand.
 
-### T9. Eject polish: readable exit status, fast timeout test, no dead code off Windows — Open
+### T9. Eject polish: readable exit status, fast timeout test, no dead code off Windows — Done
 
 - **Crate:** `pw-ingest`. **File:** `crates/pw-ingest/src/paths.rs`.
 - **What:**
@@ -242,3 +242,5 @@ and reviewer:
 | 2026-11-08 | T5 | Manual test | Import and path checks work. Eject right after import failed; a manual eject a moment later worked with the app open. T10 added |
 | 2026-11-08 | T10 | Open | Added: retry the eject when Windows is still busy |
 | 2026-11-08 | – | Note | Owner test: "Öppna i visaren" opens the imported folder correctly. Requirement noted for the egui import: open the imported folder automatically in a new tab |
+| 2026-11-08 | T9 | Ready for review | Display-formatted PowerShell exit status; parameterized eject polling with named production timing constants and fast test timings; wait helper is Windows/test-only. Tests: pw-ingest 15 unit + 8 integration passed; fmt and clippy clean. |
+| 2026-11-08 | T9 | Done | Reviewed: all three points done; reviewer added `#[cfg(any(windows, test))]` on the `std::time` import, which was unused off Windows. Tests: pw-ingest 15 (0.02 s, was 5 s) + 8, photoworkflow 5; fmt and clippy clean |
