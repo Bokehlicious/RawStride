@@ -4,6 +4,8 @@
   (the proposals, accepted as written) and C1–C5 as behaviour requirements (§7; targets after the
   first measurement) are decided. Nothing is built, installed or added as a dependency by this ADR.
   Each step in §9 is its own work part, with its own approval and commit.
+- **Implemented (2026-11-09):** steps K1–K4 (agent tasks T23–T29) are done; K5 acceptance passed and the
+  owner set the C1 and C2 targets (§7); K6 is this documentation update.
 - Date: 2026-11-08
 - Related:
   - [GUI_REQUIREMENTS.md](../GUI_REQUIREMENTS.md) (GR1–GR13; GR13 is this milestone's owner requirement);
@@ -98,18 +100,22 @@
 - No new crates. `pw-thumbcache` gains dependencies on `pw-raw` and `pw-libjpeg` (internal), and
   `pw-loupe` on `pw-thumbcache` (internal).
 
-## 7. Contact sheet requirements (accepted as behaviour requirements, 2026-11-08)
+## 7. Contact sheet requirements (accepted 2026-11-08; targets set 2026-11-09)
 
 The image viewer requirements leave the contact sheet "for later". These are proposed as **behaviour
 requirements now and targets after a first measurement**, so no number is invented (TESTING.md §2):
 
 | # | Requirement | Target |
 |---|---|---|
-| **C1** | Opening a folder shows the grid at once, with placeholders, before any thumbnail is ready | Measured in K5; target set by the owner afterwards |
-| **C2** | The visible thumbnails of a folder of the test set (31 files) are complete within a short time | Measured in K5 (time until the last visible thumbnail is shown); target set by the owner afterwards |
-| **C3** | Scrolling and key navigation keep the display frame rate while thumbnails load (G2) | Checked by hand in K5 |
-| **C4** | Grid → loupe on the current image, and back, follow the loupe's V1/V5 rules for the image shown | V5 applies to the first image shown in the loupe |
-| **C5** | A thumbnail is never a RAW rendering, and never shows the wrong image for a cell | Tests and checked by hand |
+| **C1** | Opening a folder shows the grid at once, with placeholders, before any thumbnail is ready | **Within 1 s** of dropping the folder (owner, 2026-11-09). K5: under 1 s |
+| **C2** | The visible thumbnails of a folder of the test set (31 files) are complete within a short time | **Within 1 s**, also the first time after a restart (owner, 2026-11-09). K5: under 1 s |
+| **C3** | Scrolling and key navigation keep the display frame rate while thumbnails load (G2) | Checked by hand in K5: passed |
+| **C4** | Grid → loupe on the current image, and back, follow the loupe's V1/V5 rules for the image shown | V5 applies to the first image shown in the loupe. K5: right image both ways, in two tabs |
+| **C5** | A thumbnail is never a RAW rendering, and never shows the wrong image for a cell | Tests and checked by hand. K5: passed, A7R IVA vertical images upright |
+
+The targets apply to the test set. They were met by hand timing (everything appeared within the same
+second), so no finer measurement was made. Folders much larger than the test set are measured when
+that milestone comes (§3.2).
 
 ## 8. Testing and acceptance
 
@@ -136,14 +142,14 @@ requirements now and targets after a first measurement**, so no number is invent
 | Step | Content | Result |
 |---|---|---|
 | **K0** | Accept this ADR; answer §11; decide C1–C5 as behaviour requirements | **Done 2026-11-08:** documentation commit |
-| **K1** | `pw-thumbcache`: thumbnail extraction (preview choice, scaled decode, orientation, placeholder, errors) | Code + tests |
-| **K2** | `pw-thumbcache`: worker pool, priority queue, cancel and in-memory cache | Code + tests |
-| **K3** | `pw-loupe`: grid model (layout, visible range, keys, mode per tab) in plain Rust | Code + tests |
-| **K4** | `pw-loupe`: draw the grid, upload thumbnails, slider, grid ↔ loupe, dropped folders open in the grid | Code + tests |
-| **K5** | Acceptance by hand and the first measurement for C1–C2 | Results noted in the log; the owner sets the targets |
-| **K6** | Documentation: architecture.md (`pw-thumbcache`), test inventory, ADR 0010 (imports open in the grid) | Documentation commit |
+| **K1** | `pw-thumbcache`: thumbnail extraction (preview choice, scaled decode, orientation, placeholder, errors) | **Done 2026-11-09** (T23) |
+| **K2** | `pw-thumbcache`: worker pool, priority queue, cancel and in-memory cache | **Done 2026-11-09** (T24, T26: duplicate requests skipped) |
+| **K3** | `pw-loupe`: grid model (layout, visible range, keys, mode per tab) in plain Rust | **Done 2026-11-09** (T25) |
+| **K4** | `pw-loupe`: draw the grid, upload thumbnails, slider, grid ↔ loupe, dropped folders open in the grid | **Done 2026-11-09** (T27 thumbnail bookkeeping, T28 drawing, T29 switching and size) |
+| **K5** | Acceptance by hand and the first measurement for C1–C2 | **Done 2026-11-09:** passed; targets in §7 |
+| **K6** | Documentation: architecture.md (`pw-thumbcache`), test inventory, ADR 0010 (imports open in the grid) | **Done 2026-11-09:** documentation commit |
 
-Steps K1, K2 and K3 are on the agent task list as T23, T24 and T25; K4 is larger and may be split.
+Steps K1–K4 were done as agent tasks T23–T29 (`docs/agent-tasks.md`); K4 was split into T26–T29.
 
 ## 10. Risks
 
@@ -161,9 +167,9 @@ The owner accepted every proposal below as written.
 | # | Question | Decision (the proposal, accepted) |
 |---|---|---|
 | **Q1** | What does the command line open? | A folder opens in the grid; a single file opens the loupe on that file (useful for `latency.ps1`, which can also double-click a thumbnail first) |
-| **Q2** | Thumbnail sizes | Long edge from 96 to 480 px, default 200 px, changed with the slider or Ctrl + mouse wheel; kept for the session only |
+| **Q2** | Thumbnail sizes | Long edge from 96 to 480 px, default 200 px, changed with the slider or Ctrl + mouse wheel; kept for the session only. *Owner, 2026-11-09:* one wheel notch is one 8 px step; the plain wheel keeps scrolling the grid. Sizes are in points; thumbnails are decoded for the screen's pixels, rounded up to 128 px steps |
 | **Q3** | Text under a thumbnail | The file name, shortened when it does not fit. Ratings and labels come with their milestone |
-| **Q4** | Disk cache now or later | Later, only if K5 shows that thumbnails of the test set are too slow from the embedded previews |
+| **Q4** | Disk cache now or later | Later, only if K5 shows that thumbnails of the test set are too slow from the embedded previews. *K5, 2026-11-09:* not needed; no disk cache is built |
 | **Q5** | Does a tab remember grid or loupe? | Yes; a new folder always starts in the grid |
 | **Q6** | Escape in the grid | Does nothing for now (it will clear a multiple selection when that exists) |
 

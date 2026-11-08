@@ -55,7 +55,7 @@
 | Copy | `pw-ingest::execute` on a background thread; the UI only polls progress (G2, GR2) | ADR 0005 point 6 |
 | Progress and cancel | Files, bytes and current file; cancel stops between chunks and leaves no final-named file | ADR 0005 point 6 |
 | Summary | Copied, already present, failed (with reasons), time and speed, destination folders | – |
-| Open the result | When the copy is complete, the destination folder with the most files opens **in a new tab** automatically (§11, Q2 for cancel and failures) | Owner requirement |
+| Open the result | When the copy is complete, the destination folder with the most files opens **in a new tab** automatically (§11, Q2 for cancel and failures), shown as a **contact sheet** (ADR 0011 §2, GR13; added 2026-11-09) | Owner requirement |
 | Settings | Remembered for the running session only. A settings file comes later (§11, Q5) | ADR 0009 decision 3 |
 
 ### 3.2 Step B
@@ -82,7 +82,8 @@
 
 ### 3.4 Out of scope
 
-- The contact sheet, ratings and labels in the egui program (later milestones).
+- Ratings and labels in the egui program (a later milestone). The contact sheet was built first, in
+  ADR 0011 (done 2026-11-09).
 - A settings window and a settings file (§11, Q5).
 - Writing IPTC through the safe write procedure of ADR 0007 §9 (it applies once ADR 0007 is accepted;
   step B uses today's `write_iptc`, as the Tauri app does).

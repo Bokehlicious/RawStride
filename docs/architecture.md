@@ -45,7 +45,7 @@
 | `pw-metadata` | ExifTool process pool, EXIF/IPTC/XMP read and write |
 | `pw-catalog` | SQLite schema, migrations and queries (WAL, single writer) |
 | `pw-ingest` | Volume detection, copy and verify, renaming, backup |
-| `pw-thumbcache` | Content-addressed thumbnail and preview cache |
+| `pw-thumbcache` | Thumbnails from the embedded previews (never a RAW rendering), a small pool of background workers with visible-first priority, and an in-memory cache with a byte limit (ADR 0011). A disk cache is not built: the first measurement showed it is not needed for the test set |
 | `pw-render` | Image presentation in egui: texture upload and residency within the budget, through eframe's renderer only (no separate wgpu pipelines) |
 
 ## Storage on the dev machine
@@ -65,5 +65,7 @@ Benchmark large ingests before choosing default destinations.
   GUI and image presentation are eframe + egui (ADR 0008 §16).
 - ~~eframe rendering backend (OpenGL through glow, or wgpu).~~ Settled 2026-11-07: **glow**, after the
   P7 measurements (ADR 0008 §18, GUI_REQUIREMENTS.md §7).
-- Thumbnail cache format and sizes.
+- ~~Thumbnail cache format and sizes.~~ Settled 2026-11-09 for now: thumbnails are made from the embedded
+  previews on demand and kept in memory only; sizes 96–480 pt, default 200 (ADR 0011 §11, K5). A disk
+  cache is reconsidered only if larger folders need it.
 - Catalog per volume or global.
