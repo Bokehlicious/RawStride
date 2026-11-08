@@ -13,7 +13,7 @@ use pw_viewcore::{DecodeError, Frame, Source, Status, Zoom};
 pub use grid::{
     DEFAULT_THUMBNAIL_SIZE, GridKeyAction, LoupeKeyAction, MAX_THUMBNAIL_SIZE, MIN_THUMBNAIL_SIZE,
     Navigation, THUMBNAIL_SIZE_STEP, clamp_thumbnail_size, columns, grid_key_action,
-    loupe_key_action, navigate, row, step_thumbnail_size, visible_range,
+    loupe_key_action, navigate, row, step_thumbnail_size, take_wheel_steps, visible_range,
 };
 pub use tabs::{Tab, Tabs, ViewMode};
 pub use thumbs::{CellState, ThumbGrid, color_image, request_cell};

@@ -15,10 +15,11 @@ use std::time::Duration;
 use eframe::egui;
 use metadata::MetadataCache;
 use pw_loupe::{
-    Action, CellState, DEFAULT_THUMBNAIL_SIZE, GridKeyAction, Options, TabAction, Tabs, ThumbGrid,
-    ViewMode, WINDOW_TITLE, color_image, columns, error_text, grid_key_action, indicator_text,
-    key_action, list_folder, mode_label, navigate, parse_args, request_cell, status_line,
-    tab_action, visible_range, wheel_factor,
+    Action, CellState, DEFAULT_THUMBNAIL_SIZE, GridKeyAction, MAX_THUMBNAIL_SIZE,
+    MIN_THUMBNAIL_SIZE, Options, TabAction, Tabs, ThumbGrid, ViewMode, WINDOW_TITLE,
+    clamp_thumbnail_size, color_image, columns, error_text, grid_key_action, indicator_text,
+    key_action, list_folder, loupe_key_action, mode_label, navigate, parse_args, request_cell,
+    status_line, step_thumbnail_size, tab_action, take_wheel_steps, visible_range, wheel_factor,
 };
 use pw_metadata::MetadataWorker;
 use pw_render::{Textures, view_px};
@@ -45,6 +46,8 @@ struct Loupe {
     /// The column count of the last drawn grid, so key navigation uses the same layout as the
     /// drawing (the scroll bar makes the drawing area narrower than the image area).
     grid_columns: usize,
+    /// Ctrl + wheel movement not yet turned into a size step.
+    wheel_notches: f32,
     textures: Textures,
     anchor_at_pointer: bool,
     show_info: bool,
@@ -70,6 +73,11 @@ impl Loupe {
                 } else {
                     self.tabs.open_in_active(folder, files, pos);
                 }
+                self.tabs.set_mode(if path.is_dir() {
+                    ViewMode::Grid
+                } else {
+                    ViewMode::Loupe
+                });
                 self.load_active_tab();
             }
             Err(e) => self.message = Some(format!("Kan inte öppna: {e}")),
@@ -86,6 +94,11 @@ impl Loupe {
         };
         self.thumb_grid = ThumbGrid::new(self.thumb_generation, tab.files.len());
         self.thumb_textures.clear();
+        if tab.mode == ViewMode::Grid {
+            self.thumb_worker.resume();
+        } else {
+            self.thumb_worker.pause();
+        }
         let files = match self
             .metadata
             .begin_load(tab.files, &mut self.metadata_worker)
@@ -96,8 +109,12 @@ impl Loupe {
                 return;
             }
         };
-        self.core.open_folder(files);
-        self.core.go(tab.current);
+        if tab.mode == ViewMode::Loupe {
+            self.core.open_folder(files);
+            self.core.go(tab.current);
+        } else {
+            self.core.open_folder(Vec::new());
+        }
         self.message = if self
             .tabs
             .active()
@@ -113,6 +130,34 @@ impl Loupe {
         } else {
             None
         };
+    }
+
+    /// Switches the active tab between grid and loupe without reloading the tab, so the
+    /// thumbnails and their cache survive a visit to the loupe (ADR 0011 §4.2). Returns the
+    /// current image, so the grid can scroll to it.
+    fn switch_mode(&mut self, mode: ViewMode) -> Option<usize> {
+        let tab = self.tabs.active().cloned()?;
+        self.tabs.set_mode(mode);
+        match mode {
+            ViewMode::Loupe => {
+                self.thumb_worker.pause();
+                match self
+                    .metadata
+                    .begin_load(tab.files, &mut self.metadata_worker)
+                {
+                    Ok(files) => {
+                        self.core.open_folder(files);
+                        self.core.go(tab.current);
+                    }
+                    Err(error) => self.message = Some(error),
+                }
+            }
+            ViewMode::Grid => {
+                self.core.open_folder(Vec::new());
+                self.thumb_worker.resume();
+            }
+        }
+        Some(tab.current)
     }
 
     fn poll_thumbnails(&mut self, ctx: &egui::Context) {
@@ -164,11 +209,17 @@ impl Loupe {
         };
         let cell_size = self.thumb_size as f32;
         let stride = cell_size + GRID_SPACING;
+        let mut open_loupe = false;
 
         // The grid uses the image area only, so it never runs under the status line.
         ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
+            let ctrl_held = ui.input(|input| input.modifiers.ctrl || input.modifiers.command);
             egui::ScrollArea::vertical()
                 .id_salt("contact-sheet")
+                .scroll_source(egui::containers::scroll_area::ScrollSource {
+                    mouse_wheel: !ctrl_held,
+                    ..Default::default()
+                })
                 .auto_shrink([false, false])
                 .show_viewport(ui, |ui, viewport| {
                     let width = ui.available_width().max(0.0);
@@ -315,6 +366,10 @@ impl Loupe {
                         if response.clicked() {
                             clicked = Some(index);
                         }
+                        if response.double_clicked() {
+                            clicked = Some(index);
+                            open_loupe = true;
+                        }
                     }
 
                     if let Some(index) = scroll_to {
@@ -341,6 +396,9 @@ impl Loupe {
                     }
                 });
         });
+        if open_loupe {
+            self.switch_mode(ViewMode::Loupe);
+        }
 
         let painter = ui.painter().clone();
         if tab.files.is_empty() {
@@ -383,13 +441,32 @@ impl Loupe {
             {
                 line = format!("{line}  ·  {notice}");
             }
-            painter.text(
-                egui::pos2(bar.min.x + 8.0, bar.center().y),
-                egui::Align2::LEFT_CENTER,
-                line,
-                egui::FontId::monospace(12.0),
-                egui::Color32::from_gray(210),
+            let slider = egui::Rect::from_min_max(
+                egui::pos2((bar.max.x - 180.0).max(bar.min.x), bar.min.y + 2.0),
+                egui::pos2(bar.max.x - 8.0, bar.max.y - 2.0),
             );
+            painter
+                .with_clip_rect(egui::Rect::from_min_max(
+                    bar.min,
+                    egui::pos2((slider.min.x - 8.0).max(bar.min.x), bar.max.y),
+                ))
+                .text(
+                    egui::pos2(bar.min.x + 8.0, bar.center().y),
+                    egui::Align2::LEFT_CENTER,
+                    line,
+                    egui::FontId::monospace(12.0),
+                    egui::Color32::from_gray(210),
+                );
+            ui.put(
+                slider,
+                egui::Slider::new(
+                    &mut self.thumb_size,
+                    MIN_THUMBNAIL_SIZE..=MAX_THUMBNAIL_SIZE,
+                )
+                .text("Storlek")
+                .show_value(true),
+            );
+            self.thumb_size = clamp_thumbnail_size(self.thumb_size);
         }
     }
 
@@ -490,38 +567,88 @@ impl Loupe {
             full.min,
             egui::pos2(full.max.x, (full.max.y - status_h).max(full.min.y + 1.0)),
         );
+        let ppp = ctx.pixels_per_point();
+        let key_anchor = self.anchor(ctx.input(|input| input.pointer.hover_pos()), rect, ppp);
+        let mut scroll_to = None;
+        for (tab_action, key, ctrl, alt) in key_actions {
+            if let Some(action) = tab_action {
+                self.tab_action(action);
+                continue;
+            }
+
+            match self.tabs.active().map(|tab| tab.mode) {
+                Some(ViewMode::Grid) => match grid_key_action(key, ctrl, alt) {
+                    Some(GridKeyAction::OpenLoupe) => {
+                        self.switch_mode(ViewMode::Loupe);
+                    }
+                    Some(GridKeyAction::Navigate(action)) => {
+                        let count = self.tabs.active().map_or(0, |tab| tab.files.len());
+                        let visible_rows = ((rect.height()
+                            / (self.thumb_size as f32 + GRID_SPACING))
+                            .floor() as usize)
+                            .max(1);
+                        let current = self.tabs.active().map_or(0, |tab| tab.current);
+                        self.tabs.set_current(navigate(
+                            count,
+                            self.grid_columns,
+                            current,
+                            action,
+                            visible_rows,
+                        ));
+                        scroll_to = self.tabs.active().map(|tab| tab.current);
+                    }
+                    None => {}
+                },
+                Some(ViewMode::Loupe) => {
+                    if loupe_key_action(key, ctrl, alt).is_some() {
+                        scroll_to = self.switch_mode(ViewMode::Grid);
+                    } else if let Some(action) = key_action(key, ctrl, alt) {
+                        self.act(action, key_anchor);
+                    }
+                }
+                None => {}
+            }
+        }
         if self
             .tabs
             .active()
             .is_some_and(|tab| tab.mode == ViewMode::Grid)
         {
-            let mut scroll_to = None;
-            for (tab, key, ctrl, alt) in key_actions {
-                if let Some(action) = tab {
-                    self.tab_action(action);
-                } else if let Some(GridKeyAction::Navigate(action)) =
-                    grid_key_action(key, ctrl, alt)
-                {
-                    let count = self.tabs.active().map_or(0, |tab| tab.files.len());
-                    let column_count = self.grid_columns;
-                    let visible_rows = ((rect.height() / (self.thumb_size as f32 + GRID_SPACING))
-                        .floor() as usize)
-                        .max(1);
-                    let current = self.tabs.active().map_or(0, |tab| tab.current);
-                    self.tabs.set_current(navigate(
-                        count,
-                        column_count,
-                        current,
-                        action,
-                        visible_rows,
-                    ));
-                    scroll_to = self.tabs.active().map(|tab| tab.current);
+            // Ctrl + mouse wheel changes the size by one step per wheel notch. The raw wheel
+            // events are used, not `zoom_delta()`, because egui spreads one notch over several
+            // frames and each frame would otherwise be a step (owner feedback 2026-11-09).
+            let (wheel, pointer) = ctx.input(|input| {
+                let wheel: f32 = input
+                    .events
+                    .iter()
+                    .filter_map(|event| match event {
+                        egui::Event::MouseWheel {
+                            unit,
+                            delta,
+                            modifiers,
+                            ..
+                        } if modifiers.ctrl || modifiers.command => Some(match unit {
+                            egui::MouseWheelUnit::Line => delta.y,
+                            egui::MouseWheelUnit::Point => delta.y / 50.0,
+                            egui::MouseWheelUnit::Page => delta.y * 3.0,
+                        }),
+                        _ => None,
+                    })
+                    .sum();
+                (wheel, input.pointer.hover_pos())
+            });
+            if pointer.is_some_and(|pointer| rect.contains(pointer)) {
+                self.wheel_notches += wheel;
+                let steps = take_wheel_steps(&mut self.wheel_notches);
+                for _ in 0..steps.unsigned_abs() {
+                    self.thumb_size = step_thumbnail_size(self.thumb_size, steps.signum());
                 }
+            } else {
+                self.wheel_notches = 0.0;
             }
             self.draw_grid(ui, full, rect, scroll_to);
             return;
         }
-        let ppp = ctx.pixels_per_point();
         let response = ui.interact(
             rect,
             ui.scope_id().with("image"),
@@ -529,13 +656,6 @@ impl Loupe {
         );
         let pointer = response.hover_pos();
         let anchor = self.anchor(pointer, rect, ppp);
-        for (tab, key, ctrl, alt) in key_actions {
-            if let Some(action) = tab {
-                self.tab_action(action);
-            } else if let Some(action) = key_action(key, ctrl, alt) {
-                self.act(action, anchor);
-            }
-        }
         // mouse: double-click = Z, drag = pan, wheel = zoom
         if response.double_clicked() {
             self.core.toggle_zoom(anchor);
@@ -679,6 +799,7 @@ fn run(options: Options) -> Result<(), String> {
                 thumb_textures: HashMap::new(),
                 thumb_size: DEFAULT_THUMBNAIL_SIZE,
                 grid_columns: 1,
+                wheel_notches: 0.0,
                 textures: Textures::new(),
                 anchor_at_pointer: true,
                 show_info: true,

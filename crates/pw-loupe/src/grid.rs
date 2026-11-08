@@ -3,7 +3,7 @@ use std::ops::Range;
 pub const DEFAULT_THUMBNAIL_SIZE: u32 = 200;
 pub const MIN_THUMBNAIL_SIZE: u32 = 96;
 pub const MAX_THUMBNAIL_SIZE: u32 = 480;
-pub const THUMBNAIL_SIZE_STEP: u32 = 16;
+pub const THUMBNAIL_SIZE_STEP: u32 = 8;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Navigation {
@@ -154,6 +154,20 @@ pub fn step_thumbnail_size(size: u32, direction: i32) -> u32 {
     }
 }
 
+/// Takes whole mouse-wheel notches out of an accumulated wheel movement (in lines; positive is
+/// away from the user) and returns them as size steps; the remainder stays for the next frame.
+/// One notch of a mouse wheel is one step, however many frames egui spreads it over.
+pub fn take_wheel_steps(accumulated: &mut f32) -> i32 {
+    if !accumulated.is_finite() {
+        *accumulated = 0.0;
+        return 0;
+    }
+    let steps = accumulated.trunc();
+    *accumulated -= steps;
+    // At most one full range of sizes per frame; protects the cast from huge values.
+    steps.clamp(-64.0, 64.0) as i32
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -243,8 +257,8 @@ mod tests {
         assert_eq!(clamp_thumbnail_size(0), MIN_THUMBNAIL_SIZE);
         assert_eq!(clamp_thumbnail_size(200), 200);
         assert_eq!(clamp_thumbnail_size(u32::MAX), MAX_THUMBNAIL_SIZE);
-        assert_eq!(step_thumbnail_size(200, 1), 216);
-        assert_eq!(step_thumbnail_size(200, -1), 184);
+        assert_eq!(step_thumbnail_size(200, 1), 208);
+        assert_eq!(step_thumbnail_size(200, -1), 192);
         assert_eq!(
             step_thumbnail_size(MIN_THUMBNAIL_SIZE, -1),
             MIN_THUMBNAIL_SIZE
@@ -254,5 +268,22 @@ mod tests {
             MAX_THUMBNAIL_SIZE
         );
         assert_eq!(step_thumbnail_size(200, 0), 200);
+    }
+
+    #[test]
+    fn wheel_steps_are_whole_notches_and_keep_the_remainder() {
+        let mut accumulated = 0.4;
+        assert_eq!(take_wheel_steps(&mut accumulated), 0);
+        accumulated += 0.7;
+        assert_eq!(take_wheel_steps(&mut accumulated), 1);
+        assert!((accumulated - 0.1).abs() < 1e-6);
+        accumulated = -2.5;
+        assert_eq!(take_wheel_steps(&mut accumulated), -2);
+        assert!((accumulated + 0.5).abs() < 1e-6);
+        accumulated = f32::NAN;
+        assert_eq!(take_wheel_steps(&mut accumulated), 0);
+        assert_eq!(accumulated, 0.0);
+        accumulated = 1.0e9;
+        assert_eq!(take_wheel_steps(&mut accumulated), 64);
     }
 }
