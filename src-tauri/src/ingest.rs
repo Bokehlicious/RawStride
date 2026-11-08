@@ -4,13 +4,13 @@
 //! Events: `ingest-progress` ([`ProgressDto`]) during the run, `ingest-done` ([`DoneDto`]) once.
 
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Instant;
 
 use pw_ingest::{Options, Plan, Shot, Template};
-use pw_metadata::Iptc;
+use pw_metadata::{Iptc, LocalizedValue};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State};
 
@@ -56,6 +56,10 @@ pub struct IptcDto {
     #[serde(default)]
     copyright: String,
     #[serde(default)]
+    title: String,
+    #[serde(default)]
+    description: String,
+    #[serde(default)]
     credit: String,
     #[serde(default)]
     email: String,
@@ -67,9 +71,13 @@ pub struct IptcDto {
 
 impl From<IptcDto> for Iptc {
     fn from(d: IptcDto) -> Iptc {
+        // The dialog edits one text per field; it becomes the Lang Alt `x-default` entry, the only
+        // one PhotoWorkflow writes (ADR 0007 Q7).
         Iptc {
             creator: d.creator,
-            copyright: d.copyright,
+            copyright: LocalizedValue::x_default(d.copyright),
+            title: LocalizedValue::x_default(d.title),
+            description: LocalizedValue::x_default(d.description),
             credit: d.credit,
             email: d.email,
             phone: d.phone,
@@ -101,6 +109,9 @@ fn one() -> u32 {
     1
 }
 
+/// True if `a` is `b` or lies below it. Compares whole components, ignoring case and the kind of
+/// separator (Windows). Both paths should come from [`resolve`], so `..`, relative paths and
+/// different spellings of the same folder do not fool it.
 fn inside(a: &Path, b: &Path) -> bool {
     let norm = |p: &Path| {
         p.to_string_lossy()
@@ -112,6 +123,38 @@ fn inside(a: &Path, b: &Path) -> bool {
     a == b || a.starts_with(&format!("{b}/"))
 }
 
+/// Checks that `p` is absolute and free of `..`, then resolves it to its canonical form so that
+/// overlap checks compare like with like (e.g. `\\?\` prefixes, `subst` drives, links). A folder
+/// that does not exist yet (a new destination) is resolved through its closest existing parent.
+fn resolve(p: &Path, what: &str) -> Result<PathBuf, String> {
+    if !p.is_absolute() {
+        return Err(format!(
+            "{what} måste vara en fullständig sökväg: {}",
+            p.display()
+        ));
+    }
+    if p.components().any(|c| matches!(c, Component::ParentDir)) {
+        return Err(format!("{what} får inte innehålla \"..\": {}", p.display()));
+    }
+    let mut existing = p;
+    let mut missing = Vec::new();
+    loop {
+        if let Ok(canonical) = existing.canonicalize() {
+            let mut out = canonical;
+            out.extend(missing.iter().rev());
+            return Ok(out);
+        }
+        match (existing.parent(), existing.file_name()) {
+            (Some(parent), Some(name)) => {
+                missing.push(name.to_os_string());
+                existing = parent;
+            }
+            // Nothing exists, not even the drive: keep the path as given.
+            _ => return Ok(p.to_path_buf()),
+        }
+    }
+}
+
 impl IngestRequest {
     fn source(&self) -> Result<PathBuf, String> {
         let s = self.source.trim();
@@ -119,6 +162,9 @@ impl IngestRequest {
             return Err("Välj en källa.".into());
         }
         let p = PathBuf::from(s);
+        if !p.is_absolute() {
+            return Err(format!("Källan måste vara en fullständig sökväg: {s}"));
+        }
         if !p.is_dir() {
             return Err(format!("Källan {s} finns inte."));
         }
@@ -138,15 +184,22 @@ impl IngestRequest {
             .map(str::trim)
             .filter(|b| !b.is_empty())
             .map(PathBuf::from);
-        for (what, p) in [("Målet", Some(&dest)), ("Backupmålet", backup.as_ref())] {
+        // The overlap checks use resolved paths; the copy itself uses the paths as entered.
+        let source_r = resolve(&source, "Källan")?;
+        let dest_r = resolve(&dest, "Målet")?;
+        let backup_r = backup
+            .as_deref()
+            .map(|b| resolve(b, "Backupmålet"))
+            .transpose()?;
+        for (what, p) in [("Målet", Some(&dest_r)), ("Backupmålet", backup_r.as_ref())] {
             if let Some(p) = p
-                && (inside(p, &source) || inside(&source, p))
+                && (inside(p, &source_r) || inside(&source_r, p))
             {
                 return Err(format!("{what} får inte ligga på eller över källan."));
             }
         }
-        if let Some(b) = &backup
-            && (inside(b, &dest) || inside(&dest, b))
+        if let Some(b) = &backup_r
+            && (inside(b, &dest_r) || inside(&dest_r, b))
         {
             return Err("Backupmålet måste vara en annan mapp än målet.".into());
         }
@@ -283,13 +336,43 @@ pub fn ingest_start(
         return Err("En import pågår redan.".into());
     }
     state.cancel.store(false, Ordering::SeqCst);
-    std::thread::spawn(move || {
-        let done = run(&app, &request, &opt);
-        let state = app.state::<IngestState>();
+    let spawned = std::thread::Builder::new()
+        .name("pw-ingest".into())
+        .spawn(move || {
+            // Clears `running` and sends `ingest-done` even if the run panics.
+            let mut finish = RunFinish {
+                app: &app,
+                done: None,
+            };
+            finish.done = Some(run(&app, &request, &opt));
+        });
+    if let Err(e) = spawned {
         state.running.store(false, Ordering::SeqCst);
-        let _ = app.emit("ingest-done", done);
-    });
+        return Err(format!("Kunde inte starta importen: {e}"));
+    }
     Ok(())
+}
+
+/// Ends a run: clears `running` and emits `ingest-done` when dropped, so neither is skipped if the
+/// run panics (the dialog would otherwise wait forever and every new import would be refused).
+struct RunFinish<'a> {
+    app: &'a AppHandle,
+    /// `None` until the run returns; still `None` here means it panicked.
+    done: Option<DoneDto>,
+}
+
+impl Drop for RunFinish<'_> {
+    fn drop(&mut self) {
+        let done = self.done.take().unwrap_or_else(|| DoneDto {
+            error: Some("Importen avbröts av ett internt fel. Kontrollera målmappen.".into()),
+            ..DoneDto::default()
+        });
+        self.app
+            .state::<IngestState>()
+            .running
+            .store(false, Ordering::SeqCst);
+        let _ = self.app.emit("ingest-done", done);
+    }
 }
 
 #[tauri::command]
@@ -345,7 +428,10 @@ fn run(app: &AppHandle, req: &IngestRequest, opt: &Options) -> DoneDto {
             };
         }
     };
-    let shots = match state.shots(&source, false) {
+    // Always scan again: the card may have been swapped since the preview (same drive letter,
+    // same file names such as DSC00001.ARW), and the cached scan would then name, date and copy
+    // the new card's files according to the old card's EXIF.
+    let shots = match state.shots(&source, true) {
         Ok(s) => s,
         Err(e) => {
             return DoneDto {
@@ -476,14 +562,23 @@ fn run(app: &AppHandle, req: &IngestRequest, opt: &Options) -> DoneDto {
     done
 }
 
+/// The drive (`"E:"`) a path starts with, if it starts with a drive letter.
+fn drive_of(source: &Path) -> Option<String> {
+    let s = source.to_string_lossy();
+    let mut chars = s.chars();
+    match (chars.next(), chars.next()) {
+        (Some(letter), Some(':')) if letter.is_ascii_alphabetic() => {
+            Some(format!("{}:", letter.to_ascii_uppercase()))
+        }
+        _ => None,
+    }
+}
+
 /// Asks Windows to eject the drive the source is on (as "Mata ut" in Explorer).
 fn eject(source: &Path) -> String {
-    let s = source.to_string_lossy();
-    let b = s.as_bytes();
-    if b.len() < 2 || !b[0].is_ascii_alphabetic() || b[1] != b':' {
+    let Some(drive) = drive_of(source) else {
         return "Källan är ingen enhet, så inget matades ut.".into();
-    }
-    let drive = format!("{}:", (b[0] as char).to_ascii_uppercase());
+    };
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -510,5 +605,108 @@ fn eject(source: &Path) -> String {
     #[cfg(not(windows))]
     {
         format!("Utmatning av {drive} stöds bara på Windows.")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::SystemTime;
+
+    fn item(to_dest: bool, to_backup: bool, renamed: bool) -> pw_ingest::PlanItem {
+        pw_ingest::PlanItem {
+            source: PathBuf::from("DSC00001.ARW"),
+            size: 1,
+            modified: SystemTime::UNIX_EPOCH,
+            rel: PathBuf::from("2026/DSC00001.ARW"),
+            to_dest,
+            to_backup,
+            renamed_for_conflict: renamed,
+        }
+    }
+
+    #[test]
+    fn plan_item_actions() {
+        assert_eq!(action(&item(false, false, false)), "present");
+        assert_eq!(action(&item(true, false, false)), "copy");
+        assert_eq!(action(&item(true, true, true)), "renamed");
+        assert_eq!(action(&item(false, true, false)), "backup");
+    }
+
+    #[test]
+    fn inside_compares_whole_components_ignoring_case_and_separators() {
+        let p = Path::new;
+        assert!(inside(p(r"E:\DCIM\100MSDCF"), p("e:/dcim")));
+        assert!(inside(p(r"E:\DCIM\"), p(r"E:\DCIM")));
+        assert!(inside(p("/a/b"), p("/a/b")));
+        assert!(!inside(p(r"E:\DCIM2"), p(r"E:\DCIM")), "prefix of a name");
+        assert!(
+            !inside(p(r"E:\"), p(r"E:\DCIM")),
+            "parent is not inside child"
+        );
+    }
+
+    #[test]
+    fn resolve_rejects_relative_and_parent_paths() {
+        assert!(resolve(Path::new("Foto"), "Målet").is_err());
+        let up = std::env::temp_dir().join("a").join("..").join("b");
+        assert!(resolve(&up, "Målet").is_err());
+    }
+
+    #[test]
+    fn resolve_keeps_missing_folders_below_an_existing_parent() {
+        let base = std::env::temp_dir();
+        let wanted = base.join("pw-ingest-resolve-missing").join("2026");
+        let resolved = match resolve(&wanted, "Målet") {
+            Ok(p) => p,
+            Err(e) => panic!("{e}"),
+        };
+        let canonical_base = match base.canonicalize() {
+            Ok(p) => p,
+            Err(e) => panic!("{e}"),
+        };
+        assert_eq!(
+            resolved,
+            canonical_base
+                .join("pw-ingest-resolve-missing")
+                .join("2026")
+        );
+    }
+
+    #[test]
+    fn resolve_detects_the_same_folder_spelled_differently() {
+        let base = std::env::temp_dir().join(format!("pw-ingest-same-{}", std::process::id()));
+        if let Err(e) = std::fs::create_dir_all(base.join("card")) {
+            panic!("{e}");
+        }
+        let a = resolve(&base.join("card"), "Källan");
+        let b = resolve(&base.join(".").join("card"), "Målet");
+        match (a, b) {
+            (Ok(a), Ok(b)) => assert!(inside(&a, &b) && inside(&b, &a)),
+            other => panic!("{other:?}"),
+        }
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn drive_letter_is_found_only_at_the_start() {
+        assert_eq!(drive_of(Path::new(r"e:\DCIM")).as_deref(), Some("E:"));
+        assert_eq!(drive_of(Path::new("F:")).as_deref(), Some("F:"));
+        assert_eq!(drive_of(Path::new(r"\\server\share")), None);
+        assert_eq!(drive_of(Path::new("/media/card")), None);
+        assert_eq!(drive_of(Path::new("1:")), None);
+        assert_eq!(drive_of(Path::new("")), None);
+    }
+
+    #[test]
+    fn dialog_text_becomes_x_default() {
+        let iptc: Iptc = IptcDto {
+            title: "Titel".into(),
+            ..IptcDto::default()
+        }
+        .into();
+        assert_eq!(iptc.title.default_text(), "Titel");
+        assert!(iptc.description.default_text().is_empty());
+        assert!(!iptc.is_empty());
     }
 }

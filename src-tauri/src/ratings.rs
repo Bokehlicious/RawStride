@@ -27,17 +27,16 @@ impl Metadata {
         if guard.is_none() {
             *guard = Some(ExifTool::start().map_err(|e| e.to_string())?);
         }
-        let et = guard.as_mut().expect("started above");
-        match f(et) {
-            Ok(v) => Ok(v),
-            Err(e) => {
-                // A broken process is restarted on the next call.
-                if matches!(e, pw_metadata::Error::Io(_)) {
-                    *guard = None;
-                }
-                Err(e.to_string())
-            }
+        let Some(et) = guard.as_mut() else {
+            return Err("ExifTool is not available".into());
+        };
+        let result = f(et);
+        // A broken process (I/O failure or unexpected exit) refuses every further command;
+        // drop it so the next call starts a new one.
+        if guard.as_ref().is_some_and(ExifTool::is_broken) {
+            *guard = None;
         }
+        result.map_err(|e| e.to_string())
     }
 
     /// Starts ExifTool in the background so the first rating is not delayed.
