@@ -1,16 +1,34 @@
-//! Integration tests against a real ExifTool. Skipped unless ExifTool is available:
-//! `exiftool` on PATH, or `PW_EXIFTOOL_PL=/path/to/exiftool` (run through `perl`).
+//! Integration tests against a real ExifTool: `exiftool` on PATH, or
+//! `PW_EXIFTOOL_PL=/path/to/exiftool` (run through `perl`).
+//!
+//! These tests need ExifTool and fail with an explanation when it is missing, instead of returning
+//! early and being counted as passed (docs/TESTING.md §4.5). To leave them out deliberately, run
+//! e.g. `cargo test --workspace --exclude pw-metadata`, so the omission is visible.
 
 use std::path::PathBuf;
 
 use pw_metadata::{ExifTool, Iptc, Rating, sidecar_path, supports_sidecar};
 
-fn exiftool() -> Option<ExifTool> {
-    if let Ok(pl) = std::env::var("PW_EXIFTOOL_PL") {
-        return ExifTool::start_with("perl", &[&pl]).ok();
+/// Starts ExifTool and checks that it answers. Panics (fails the test) if it is unavailable.
+fn exiftool() -> ExifTool {
+    let (started, source) = match std::env::var("PW_EXIFTOOL_PL") {
+        Ok(pl) => (
+            ExifTool::start_with("perl", &[&pl]),
+            format!("perl {pl} (PW_EXIFTOOL_PL)"),
+        ),
+        Err(_) => (ExifTool::start(), "exiftool on PATH".to_string()),
+    };
+    let mut et = match started {
+        Ok(et) => et,
+        Err(e) => panic!(
+            "ExifTool is required for this test but could not be started from {source}: {e}. \
+             Install ExifTool or set PW_EXIFTOOL_PL (docs/TESTING.md §4.5)."
+        ),
+    };
+    if let Err(e) = et.execute(&["-ver".to_string()]) {
+        panic!("ExifTool from {source} does not answer: {e} (docs/TESTING.md §4.5)");
     }
-    let mut et = ExifTool::start().ok()?;
-    et.execute(&["-ver".to_string()]).ok().map(|_| et)
+    et
 }
 
 fn temp_dir(name: &str) -> PathBuf {
@@ -22,10 +40,7 @@ fn temp_dir(name: &str) -> PathBuf {
 
 #[test]
 fn write_read_update_clear() {
-    let Some(mut et) = exiftool() else {
-        eprintln!("skipping: ExifTool not available");
-        return;
-    };
+    let mut et = exiftool();
     let dir = temp_dir("rw");
     let raw = dir.join("TN0001.ARW");
     std::fs::write(&raw, b"not really a raw file").unwrap();
@@ -95,7 +110,7 @@ fn write_read_update_clear() {
 
 #[test]
 fn existing_sidecar_content_is_preserved() {
-    let Some(mut et) = exiftool() else { return };
+    let mut et = exiftool();
     let dir = temp_dir("keep");
     let raw = dir.join("P1000.RW2");
     std::fs::write(&raw, b"x").unwrap();
@@ -131,7 +146,7 @@ fn existing_sidecar_content_is_preserved() {
 
 #[test]
 fn unicode_and_spaces_in_paths() {
-    let Some(mut et) = exiftool() else { return };
+    let mut et = exiftool();
     let dir = temp_dir("åäö mapp");
     let raw = dir.join("Bild ÅÄÖ 01.ARW");
     std::fs::write(&raw, b"x").unwrap();
@@ -255,7 +270,7 @@ fn check_embedded(et: &mut ExifTool, file: &std::path::Path) {
 
 #[test]
 fn jpeg_and_tiff_are_written_in_place() {
-    let Some(mut et) = exiftool() else { return };
+    let mut et = exiftool();
     let dir = temp_dir("embedded");
     let jpg = dir.join("IMG_0001.JPG");
     std::fs::write(&jpg, tiny_jpeg()).unwrap();
@@ -268,7 +283,7 @@ fn jpeg_and_tiff_are_written_in_place() {
 /// Uses a real DNG from the test set (copied, never the original).
 #[test]
 fn real_dng_is_written_in_place() {
-    let Some(mut et) = exiftool() else { return };
+    let mut et = exiftool();
     let Some(src) = std::env::var_os("PW_TESTDATA")
         .map(|d| PathBuf::from(d).join("IMG_20261026_062851.dng"))
         .filter(|p| p.exists())
@@ -284,10 +299,7 @@ fn real_dng_is_written_in_place() {
 
 #[test]
 fn iptc_template_in_sidecar_and_embedded() {
-    let Some(mut et) = exiftool() else {
-        eprintln!("skipping: ExifTool not available");
-        return;
-    };
+    let mut et = exiftool();
     let dir = temp_dir("iptc");
     let raw = dir.join("TN0002.ARW");
     std::fs::write(&raw, b"raw").unwrap();

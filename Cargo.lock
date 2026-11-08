@@ -3848,6 +3848,7 @@ version = "0.1.0"
 dependencies = [
  "eframe",
  "egui",
+ "pw-metadata",
  "pw-raw",
  "pw-render",
  "pw-viewcore",

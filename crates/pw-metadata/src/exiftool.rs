@@ -1,20 +1,34 @@
 //! A persistent ExifTool process in `-stay_open` mode.
 
+use std::fmt::Write as _;
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use crate::{Error, Result};
 
+/// How long `Drop` waits for ExifTool to exit on its own before killing it.
+const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
+
 /// One running `exiftool -stay_open True -@ -` process. Commands are serialised; wrap it in a
 /// `Mutex` to share it between threads.
+///
+/// After any I/O failure or unexpected exit the request/response stream can no longer be trusted,
+/// so the instance is marked broken ([`ExifTool::is_broken`]) and refuses further commands.
+/// Callers that need to keep going should drop it and start a new one.
+///
+/// Dropping an instance asks ExifTool to exit and waits up to two seconds before killing it, so
+/// drop it on a worker thread rather than the UI thread.
 #[derive(Debug)]
 pub struct ExifTool {
     child: Child,
-    stdin: ChildStdin,
+    /// `None` only while shutting down: taken in `Drop` so the pipe closes before waiting.
+    stdin: Option<ChildStdin>,
     stdout: BufReader<ChildStdout>,
     stderr: Arc<Mutex<String>>,
     seq: u64,
+    broken: bool,
 }
 
 impl ExifTool {
@@ -43,64 +57,89 @@ impl ExifTool {
                 "could not start {program}: {e} (is ExifTool on PATH?)"
             ))
         })?;
-        let stdin = child.stdin.take().expect("piped stdin");
-        let stdout = BufReader::new(child.stdout.take().expect("piped stdout"));
-        let stderr = Arc::new(Mutex::new(String::new()));
-        if let Some(err) = child.stderr.take() {
-            let sink = stderr.clone();
-            std::thread::spawn(move || {
-                for line in BufReader::new(err).lines().map_while(|l| l.ok()) {
-                    let mut s = sink.lock().unwrap_or_else(|e| e.into_inner());
-                    s.push_str(&line);
-                    s.push('\n');
+        let (stdin, stdout) = match (child.stdin.take(), child.stdout.take()) {
+            (Some(stdin), Some(stdout)) => (stdin, BufReader::new(stdout)),
+            (stdin, stdout) => {
+                let missing = if stdin.is_none() { "stdin" } else { "stdout" };
+                drop((stdin, stdout));
+                let mut message = format!("could not access ExifTool {missing} pipe");
+                let kill_error = child.kill().err();
+                if let Err(wait_error) = child.wait() {
+                    let _ = write!(message, "; failed to wait for ExifTool child: {wait_error}");
+                    if let Some(kill_error) = kill_error {
+                        let _ = write!(message, "; failed to stop child: {kill_error}");
+                    }
                 }
-            });
-        }
-        Ok(Self {
+                return Err(Error::ExifTool(message));
+            }
+        };
+        let stderr_pipe = child.stderr.take();
+        // From here on `Drop` owns the cleanup of the child process, also on the error path below.
+        let tool = Self {
             child,
-            stdin,
+            stdin: Some(stdin),
             stdout,
-            stderr,
+            stderr: Arc::new(Mutex::new(String::new())),
             seq: 0,
-        })
+            broken: false,
+        };
+        if let Some(err) = stderr_pipe {
+            let sink = Arc::clone(&tool.stderr);
+            std::thread::Builder::new()
+                .name("pw-exiftool-stderr".into())
+                .spawn(move || {
+                    for line in BufReader::new(err).lines().map_while(|l| l.ok()) {
+                        let mut s = sink.lock().unwrap_or_else(|e| e.into_inner());
+                        s.push_str(&line);
+                        s.push('\n');
+                    }
+                })
+                .map_err(|e| {
+                    Error::ExifTool(format!("could not start ExifTool stderr reader: {e}"))
+                })?;
+        }
+        Ok(tool)
+    }
+
+    /// True after an I/O failure or unexpected exit; the instance then rejects all commands.
+    pub fn is_broken(&self) -> bool {
+        self.broken
     }
 
     /// Runs one ExifTool command (one argument per element) and returns its standard output.
     /// Warnings and errors printed by ExifTool are appended after a line "--- stderr ---".
+    ///
+    /// Output that is not valid UTF-8 is decoded lossily (U+FFFD) instead of failing, so a
+    /// response is always read up to its end marker and the stream stays in step.
     pub fn execute(&mut self, args: &[String]) -> Result<String> {
-        self.seq += 1;
-        let mut cmd = String::new();
+        if self.broken {
+            return Err(Error::ExifTool(
+                "ExifTool process is unusable after an earlier failure".into(),
+            ));
+        }
+        // Validate before writing anything: one argument per line in the -stay_open protocol.
+        if args.iter().any(|a| a.contains(['\n', '\r'])) {
+            return Err(Error::ExifTool("argument contains a line break".into()));
+        }
+        self.seq = self.seq.wrapping_add(1);
         // Arguments are passed as UTF-8; tell ExifTool to treat file names the same way.
-        for a in ["-charset", "filename=utf8"]
-            .iter()
-            .map(|s| s.to_string())
-            .chain(args.iter().cloned())
-        {
-            if a.contains('\n') {
-                return Err(Error::ExifTool("argument contains a line break".into()));
-            }
-            cmd.push_str(&a);
+        let mut cmd = String::from("-charset\nfilename=utf8\n");
+        for a in args {
+            cmd.push_str(a);
             cmd.push('\n');
         }
-        cmd.push_str(&format!("-execute{}\n", self.seq));
-        self.stdin.write_all(cmd.as_bytes())?;
-        self.stdin.flush()?;
+        let _ = writeln!(cmd, "-execute{}", self.seq);
 
-        let ready = format!("{{ready{}}}", self.seq);
-        let mut out = String::new();
-        let mut line = String::new();
-        loop {
-            line.clear();
-            if self.stdout.read_line(&mut line)? == 0 {
-                return Err(Error::ExifTool("ExifTool exited unexpectedly".into()));
+        let mut out = match self.round_trip(&cmd) {
+            Ok(out) => out,
+            Err(error) => {
+                // A partial response may still be in the pipe; never reuse this stream.
+                self.broken = true;
+                return Err(error);
             }
-            if line.trim_end() == ready {
-                break;
-            }
-            out.push_str(&line);
-        }
+        };
         // Give the stderr reader a moment to catch up with this command's messages.
-        std::thread::sleep(std::time::Duration::from_millis(2));
+        std::thread::sleep(Duration::from_millis(2));
         let mut err = self.stderr.lock().unwrap_or_else(|e| e.into_inner());
         if !err.is_empty() {
             out.push_str("--- stderr ---\n");
@@ -109,12 +148,113 @@ impl ExifTool {
         }
         Ok(out)
     }
+
+    /// Sends one command and reads standard output up to its `{readyN}` marker.
+    fn round_trip(&mut self, cmd: &str) -> Result<String> {
+        let stdin = self
+            .stdin
+            .as_mut()
+            .ok_or_else(|| Error::ExifTool("ExifTool input is closed".into()))?;
+        stdin.write_all(cmd.as_bytes())?;
+        stdin.flush()?;
+
+        let ready = format!("{{ready{}}}", self.seq);
+        let mut out = String::new();
+        let mut buf = Vec::new();
+        loop {
+            buf.clear();
+            if self.stdout.read_until(b'\n', &mut buf)? == 0 {
+                return Err(Error::ExifTool("ExifTool exited unexpectedly".into()));
+            }
+            let line = String::from_utf8_lossy(&buf);
+            if line.trim_end() == ready {
+                return Ok(out);
+            }
+            out.push_str(&line);
+        }
+    }
 }
 
 impl Drop for ExifTool {
     fn drop(&mut self) {
-        let _ = self.stdin.write_all(b"-stay_open\nFalse\n");
-        let _ = self.stdin.flush();
+        if let Some(mut stdin) = self.stdin.take() {
+            let _ = stdin.write_all(b"-stay_open\nFalse\n");
+            let _ = stdin.flush();
+            // `stdin` is dropped here, so ExifTool also sees end-of-input.
+        }
+        let deadline = Instant::now() + SHUTDOWN_TIMEOUT;
+        loop {
+            match self.child.try_wait() {
+                Ok(Some(_)) => return,
+                Ok(None) if Instant::now() < deadline => {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                Ok(None) | Err(_) => break,
+            }
+        }
+        let _ = self.child.kill();
         let _ = self.child.wait();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_support::start_fake;
+    use std::sync::mpsc;
+
+    #[test]
+    fn invalid_utf8_output_does_not_desync_the_stream() {
+        let mut et = start_fake("invalid-utf8");
+        let first = et
+            .execute(&["-ver".into()])
+            .expect("lossy decoding must not fail");
+        assert!(first.contains('\u{FFFD}'), "{first:?}");
+        assert!(first.contains("first-only"), "{first:?}");
+        let second = et.execute(&["-ver".into()]).expect("second command");
+        assert!(
+            !second.contains("first-only"),
+            "leftover from command 1: {second:?}"
+        );
+        assert!(second.contains("files updated"), "{second:?}");
+        assert!(!et.is_broken());
+    }
+
+    #[test]
+    fn unexpected_exit_marks_the_instance_broken() {
+        let mut et = start_fake("exit-after-first");
+        assert!(et.execute(&["-ver".into()]).is_ok());
+        assert!(et.execute(&["-ver".into()]).is_err());
+        assert!(et.is_broken());
+        match et.execute(&["-ver".into()]) {
+            Err(Error::ExifTool(m)) => assert!(m.contains("unusable"), "{m}"),
+            other => panic!("expected an 'unusable' error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn line_breaks_are_rejected_without_breaking_the_instance() {
+        let mut et = start_fake("normal");
+        assert!(et.execute(&["a\rb".into()]).is_err());
+        assert!(et.execute(&["a\nb".into()]).is_err());
+        assert!(!et.is_broken());
+        assert!(et.execute(&["-ver".into()]).is_ok());
+    }
+
+    #[test]
+    fn drop_kills_a_process_that_ignores_the_stop_request() {
+        let mut et = start_fake("hang");
+        assert!(et.execute(&["-ver".into()]).is_ok());
+        let (done_tx, done_rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            drop(et);
+            let _ = done_tx.send(());
+        });
+        assert!(
+            done_rx
+                .recv_timeout(SHUTDOWN_TIMEOUT + Duration::from_secs(10))
+                .is_ok(),
+            "Drop did not return"
+        );
     }
 }

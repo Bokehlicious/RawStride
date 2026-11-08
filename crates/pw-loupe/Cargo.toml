@@ -18,5 +18,6 @@ path = "src/main.rs"
 pw-viewcore = { workspace = true, features = ["native"] }
 pw-render.workspace = true
 pw-raw.workspace = true
+pw-metadata = { path = "../pw-metadata" }
 egui.workspace = true
 eframe.workspace = true

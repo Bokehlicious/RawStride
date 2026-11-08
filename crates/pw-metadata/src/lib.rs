@@ -13,12 +13,16 @@
 //! - ExifTool edits existing metadata in place, so everything else is preserved.
 
 mod exiftool;
+#[cfg(test)]
+mod test_support;
+mod worker;
 
 use std::collections::HashMap;
 use std::fmt;
 use std::path::{Path, PathBuf};
 
 pub use exiftool::ExifTool;
+pub use worker::{Event as WorkerEvent, MetadataWorker, RequestId, SubmitError};
 
 /// Errors from metadata operations.
 #[derive(Debug)]

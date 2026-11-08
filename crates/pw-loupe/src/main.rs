@@ -1,8 +1,8 @@
 //! PhotoWorkflow Loupe (ADR 0009, milestone 1): the loupe as its own program beside the Tauri app.
 //!
 //! eframe with glow (GUI_REQUIREMENTS §7) hosts one image area. `pw-viewcore` decides what to show
-//! and prepares it on its workers; `pw-render` uploads and draws. This file only turns input into
-//! core actions and draws the status line, the indicator and errors. Nothing here waits (G2).
+//! and prepares it on its workers; `pw-render` uploads and draws. Metadata reads and writes are
+//! queued to a separate worker; the UI only polls completed results (G2).
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
@@ -11,19 +11,25 @@ use std::process::ExitCode;
 use std::time::Duration;
 
 use eframe::egui;
+use metadata::MetadataCache;
 use pw_loupe::{
     Action, Options, WINDOW_TITLE, error_text, indicator_text, key_action, list_folder, mode_label,
     parse_args, status_line, wheel_factor,
 };
+use pw_metadata::MetadataWorker;
 use pw_render::{Textures, view_px};
 use pw_viewcore::native::NativeBackend;
 use pw_viewcore::{Config, Status, ViewCore};
+
+mod metadata;
 
 const BACKGROUND: egui::Color32 = egui::Color32::from_gray(32);
 const STATUS_HEIGHT: f32 = 24.0;
 
 struct Loupe {
     core: ViewCore<NativeBackend>,
+    metadata_worker: MetadataWorker,
+    metadata: MetadataCache,
     textures: Textures,
     anchor_at_pointer: bool,
     show_info: bool,
@@ -39,6 +45,13 @@ impl Loupe {
             }
             Ok((files, pos)) => {
                 self.message = None;
+                let files = match self.metadata.begin_load(files, &mut self.metadata_worker) {
+                    Ok(files) => files,
+                    Err(error) => {
+                        self.message = Some(error);
+                        return;
+                    }
+                };
                 self.core.open_folder(files);
                 if pos > 0 {
                     self.core.go(pos);
@@ -77,6 +90,7 @@ impl Loupe {
 
     fn draw(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
+        self.metadata.poll(&self.metadata_worker);
         // a folder or a file dropped on the window (ADR 0009 §11, decision 2)
         let dropped = ctx.input(|i| {
             i.raw
@@ -173,11 +187,24 @@ impl Loupe {
             }
             Status::Ready => {}
         }
+        let metadata_notice = self.metadata.notice(frame.path.as_deref());
+        if metadata_notice
+            .as_deref()
+            .is_some_and(|notice| notice == "Metadata loading…")
+        {
+            ctx.request_repaint_after(Duration::from_millis(100));
+        }
         if self.show_info {
             let bar = egui::Rect::from_min_max(egui::pos2(full.min.x, rect.max.y), full.max);
             let mut line = status_line(&frame, self.anchor_at_pointer);
             if let Some(m) = &self.message {
                 line = format!("{line}  ·  {m}");
+            }
+            if let Some(notice) = &metadata_notice {
+                line = format!("{line}  ·  {notice}");
+            }
+            if let Some(rating) = self.metadata.rating_summary(frame.path.as_deref()) {
+                line = format!("{line}  ·  {rating}");
             }
             painter.text(
                 egui::pos2(bar.min.x + 8.0, bar.center().y),
@@ -197,6 +224,11 @@ impl Loupe {
             {
                 self.core.toggle_mode();
             }
+        } else if matches!(frame.status, Status::Ready)
+            && let Some(notice) = metadata_notice
+            && notice.starts_with("Metadata error")
+        {
+            centre_text(&notice);
         }
     }
 }
@@ -217,6 +249,7 @@ fn run(options: Options) -> Result<(), String> {
     };
     let indicator_after = config.indicator_after;
     let core = ViewCore::start(NativeBackend, config)?;
+    let metadata_worker = MetadataWorker::start().map_err(|e| e.to_string())?;
     let native = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title(WINDOW_TITLE)
@@ -234,6 +267,8 @@ fn run(options: Options) -> Result<(), String> {
             core.set_wake(move || ctx.request_repaint());
             let mut loupe = Loupe {
                 core,
+                metadata_worker,
+                metadata: MetadataCache::default(),
                 textures: Textures::new(),
                 anchor_at_pointer: true,
                 show_info: true,
