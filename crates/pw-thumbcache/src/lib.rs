@@ -1,6 +1,7 @@
-//! Thumbnail and preview cache.
-//!
-//! Responsibilities (planned):
-//! - Content-addressed cache of thumbnails and screen-sized previews.
-//! - Background generation with priority for what is currently visible.
-//! - Size-bounded eviction; cache location configurable (default on NVMe).
+//! Thumbnail extraction, background generation and an in-memory cache.
+
+mod extract;
+mod worker;
+
+pub use extract::{ThumbError, choose_preview, choose_scale, orient, thumbnail};
+pub use worker::{ThumbSource, ThumbWorker, ThumbnailEvent, ThumbnailRequest};

@@ -1,6 +1,6 @@
 [package]
 name = "pw-thumbcache"
-description = "On-disk thumbnail and preview cache"
+description = "Thumbnail extraction, background generation and an in-memory cache (disk cache later)"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -12,4 +12,5 @@ workspace = true
 
 [dependencies]
 pw-core.workspace = true
+pw-libjpeg.workspace = true
 pw-raw.workspace = true
