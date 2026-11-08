@@ -534,6 +534,124 @@ Ordered from easiest to hardest. Start at the top.
   tabs keep their own mode; the slider and Ctrl + wheel change the size; `pw-loupe <file>` opens the
   loupe and `pw-loupe <folder>` the grid.
 
+### T30. ADR 0010 M4a: import form and preview summary (plain Rust) — Open
+
+- **Crate:** `pw-loupe`. **Files:** `crates/pw-loupe/Cargo.toml` (add `pw-ingest.workspace = true` to
+  `[dependencies]`; internal, approved by ADR 0010 §6), a new `crates/pw-loupe/src/import.rs`, declared
+  and re-exported in `crates/pw-loupe/src/lib.rs`. **Not** `main.rs`. Do **not** add `rfd` yet (M5).
+- **Why:** the egui import dialog (step A of ADR 0010) needs the same rules and messages as the Tauri
+  dialog. They come from `pw-ingest`; this task wraps them in a small, testable form model.
+- **What:**
+  1. `pub struct ImportForm { pub source: String, pub dest: String, pub folder: String, pub name: String }`
+     with `Default`: empty source and destination, folder `{year}/{date} {job}`, name `{name}` (ADR 0005
+     choice 1, the Tauri defaults). Step B fields (backup, job, running number) are not in the form;
+     validation passes backup `None`, job `""` and first number `1`.
+  2. `pub enum Field { Source, Dest, Folder, Name }` and
+     `pub struct FieldError { pub field: Field, pub message: String }`.
+  3. `ImportForm::validate(&self) -> Result<Validated, FieldError>` where
+     `pub struct Validated { pub source: PathBuf, pub options: pw_ingest::Options }`. Decide the field
+     **by which check fails, never by reading the message text**:
+     - `pw_ingest::validate_source(&self.source)` fails → `Field::Source`;
+     - `pw_ingest::Template::parse(&self.folder)` fails → `Field::Folder`, message
+       `"Mappmall: {error}"`;
+     - `pw_ingest::Template::parse(&self.name)` fails → `Field::Name`, message `"Filnamnsmall: {error}"`;
+     - then `pw_ingest::validate_options(OptionsInput { … })`; any error left → `Field::Dest`.
+     The messages are exactly those of `pw-ingest`.
+  4. `pub struct Preview` built by `Preview::new(shots: &[pw_ingest::Shot], plan: &pw_ingest::Plan)`,
+     with the same numbers as the Tauri `preview_of` in `src-tauri/src/ingest.rs`: `shots`,
+     `files_to_copy`, `bytes_to_copy`, `present`, `renamed` (renamed for a conflict **and** to be
+     copied), `no_exif`, `items_total`, and `lines`: the first 20 plan items as
+     `PreviewLine { source_name: String, rel: String, action: ItemAction }`, with
+     `pub enum ItemAction { Copy, Renamed, Present, BackupOnly }` following the Tauri `action()` rules.
+     (Do not change `src-tauri`.)
+  5. `pub fn result_folder(copied: usize, folders: &[(String, usize)]) -> Option<PathBuf>`: the folder
+     the import opens in a new tab (GR12, ADR 0010 Q2): `None` when nothing was copied, otherwise the
+     first entry of `folders` (the output of `pw_ingest::folder_summary`, largest first).
+- **Rules:** no threads, no file writes; no `unwrap`/`expect`/`panic!` in non-test code; no new external
+  crates.
+- **Tests to add:** the defaults; an empty source → `Source` with "Välj en källa."; an empty destination
+  → `Dest` with "Välj ett mål."; a destination inside the source → `Dest`; a bad folder template →
+  `Folder` starting with "Mappmall: "; a bad name template → `Name` starting with "Filnamnsmall: "; a
+  valid form (temporary source folder) → `Ok` with the destination and templates; `Preview::new` on a
+  hand-made plan (items for each action, a renamed item that is not copied, a shot without EXIF time,
+  more than 20 items); `result_folder` for 0 copied, and for several folders.
+- **Done when:** `.\tools\check.ps1` is all OK.
+
+### T31. ADR 0010 M4b: import worker (background thread) — Open
+
+- **Start after T30 is done.**
+- **Crate:** `pw-loupe`. **Files:** a new `crates/pw-loupe/src/import_worker.rs`, declared and
+  re-exported in `crates/pw-loupe/src/lib.rs`. **Not** `main.rs`.
+- **What:** a worker thread that does the slow parts of the import, so the UI never waits (G2, GR2),
+  built like `pw-metadata`'s `MetadataWorker` and `pw-thumbcache`'s `ThumbWorker`.
+  - `ImportWorker::start() -> io::Result<Self>`; requests go through a **bounded** channel; a full queue
+    or a stopped worker is reported as an error, never a panic.
+  - Requests, each with a `RequestId` (a counter):
+    - `preview(source: PathBuf, options: Options, rescan: bool) -> Result<RequestId, SubmitError>`:
+      scan (reusing the last scan when the source is the same and `rescan` is false, as the Tauri
+      `IngestState::shots` does), plan, and answer with `ImportEvent::Previewed { id, result:
+      Result<Preview, String> }`. A scan error uses the Tauri message `"Kunde inte läsa {source}: {error}"`.
+    - `run(source: PathBuf, options: Options) -> Result<RequestId, SubmitError>`: **always scan again
+      and plan again** (the card may have been swapped, the destination may have changed; see the
+      comments in the Tauri `run`), then `pw_ingest::execute` with progress. Progress is sent as
+      `ImportEvent::Progress { id, progress: pw_ingest::Progress }`; at the end
+      `ImportEvent::Done { id, done: ImportDone }` with `copied`, `present`, `bytes`, `failed:
+      Vec<String>` (`"{file name}: {error}"`), `cancelled`, `elapsed: Duration`, `folders` (from
+      `pw_ingest::folder_summary` on the plan items that exist in the destination, as the Tauri `run`
+      does) and `error: Option<String>` (scan error).
+    - `cancel()`: sets the cancel flag that `execute` checks; the flag is cleared when a new `run` starts.
+  - `try_recv() -> Result<ImportEvent, TryRecvError>` for the UI to poll.
+  - Dropping the worker cancels a running copy and does not block the UI thread (do not join).
+- **Rules:** step A only: no backup, IPTC or eject here (step B, M7); the ADR 0005 guarantees stay
+  (`pw-ingest` does the copying); no `unwrap`/`expect`/`panic!` in non-test code; a poisoned lock is
+  recovered; no new crates.
+- **Tests to add** (temporary folders; a small "card" with a few files in `DCIM/100TEST`, as in
+  `crates/pw-ingest/tests/ingest.rs`): a preview gives the expected counts; a second preview with
+  `rescan = false` reuses the scan (add a file in between: it is not counted) and with `rescan = true`
+  sees it; a run copies the files, sends progress and a `Done` with `copied`, `folders` and no error; a
+  run into a destination that already holds the files reports them as present; a missing source gives
+  a preview error with the Tauri message; `cancel` before a run of many files ends with `cancelled` and
+  no final-named partial files; dropping the worker during a run returns at once.
+- **Done when:** `.\tools\check.ps1` is all OK.
+
+### T32. ADR 0010 M4c: import dialog state machine (plain Rust) — Open
+
+- **Start after T31 is done.**
+- **Crate:** `pw-loupe`. **Files:** a new `crates/pw-loupe/src/import_dialog.rs`, declared and
+  re-exported in `crates/pw-loupe/src/lib.rs`. **Not** `main.rs`.
+- **What (ADR 0010 §4.2):** `ImportDialog` holds an `ImportForm` and the state, and never touches files
+  or threads itself. It returns the requests to send and takes the worker's events, so every transition
+  is a plain function that is tested without a window or a worker.
+  - States: `Editing { preview: Option<Preview>, error: Option<FieldError> }`, `Previewing`,
+    `Running { progress: Option<Progress> }`, `Done { done: ImportDone }`.
+  - `edit(&mut self, change: impl FnOnce(&mut ImportForm), now: Instant)`: changes the form and marks
+    it as changed at `now`; remembers whether the **source** changed (a new scan is needed) or only the
+    other fields (the scan can be reused).
+  - `tick(&mut self, now: Instant) -> Option<DialogRequest>`: when the form changed at least 300 ms ago
+    and nothing is running: validate; on an error go to `Editing` with that error and no request; when
+    valid return `DialogRequest::Preview { source, options, rescan }` and go to `Previewing`.
+  - `start(&mut self) -> Option<DialogRequest>`: only in `Editing` with a preview that has
+    `files_to_copy > 0` and no error → `DialogRequest::Run { source, options }`, state `Running`.
+  - `sent(&mut self, id: RequestId)` records the id of the request just sent; `apply(&mut self, event:
+    &ImportEvent)` ignores events of any other id (an older preview, as in the loupe's metadata cache):
+    `Previewed` → `Editing` with the preview or with the error on `Field::Source`; `Progress` → updates
+    `Running`; `Done` → `Done`.
+  - `disconnected(&mut self)`: if the worker is gone, `Previewing` and `Running` become an error
+    (`Editing` with a `Source` error "Importen avbröts: arbetaren har stoppats.", or `Done` with that
+    `error`), never "running" forever.
+  - `cancel(&self) -> bool` (true while `Running`, so the UI calls `ImportWorker::cancel`), `can_close()`
+    (false while `Running`), `back_to_editing()` from `Done` (keeps the form, clears the preview and
+    marks the form as changed so a fresh preview follows), and `result_folder()` from `Done` using
+    T30's `result_folder`.
+- **Rules:** no egui drawing; no `unwrap`/`expect`/`panic!` in non-test code; no new dependencies.
+- **Tests to add:** no request before 300 ms, one after; an invalid form gives its field error and no
+  request; a source change asks for `rescan = true`, a template change for `rescan = false`; an old
+  preview event is ignored; `start` is refused without a preview, with 0 files to copy, and while
+  previewing; progress and done move the state; `disconnected` while previewing and while running;
+  `can_close` is false while running; `result_folder` is `None` when nothing was copied and the
+  largest folder otherwise; `back_to_editing` asks for a new preview.
+- **Done when:** `.\tools\check.ps1` is all OK.
+
 ### T7. Format the files that `cargo fmt --check` reports — Done
 
 - **Crates:** `photoworkflow` (`src-tauri`), `preview-bench` (`tools/preview-bench`).
@@ -775,3 +893,4 @@ and reviewer:
 | 2026-11-08 | T29 | Ready for review | Added grid/loupe switching by keys and double-click, per-tab core/thumbnail worker state, file-versus-folder startup mode, grid size slider and Ctrl+wheel resizing. |
 | 2026-11-09 | T29 | Done | Reviewed: grid ↔ loupe by keys and double-click, per-tab mode, empty view core in grid mode, file opens in the loupe and folder in the grid, size slider, mode button only in the loupe. Fixed in review: switching mode reloaded the whole tab (new generation), so every visit to the loupe threw the thumbnails and their cache away; `switch_mode` now only pauses/resumes the thumbnail worker and fills/empties the view core (ADR 0011 §4.2). Owner feedback: one Ctrl + wheel notch changed the size too much, because egui spreads a notch over several frames of `zoom_delta()`; now the raw wheel events give exactly one step per notch (`take_wheel_steps`, tested) and `THUMBNAIL_SIZE_STEP` is 8 instead of 16 (owner request; the step test uses the new values). Owner kept wheel = scroll, Ctrl + wheel = size. Workspace fmt, test and clippy OK; owner checked by hand (ADR 0011 §8.2 steps for C3, C4) |
 | 2026-11-09 | ADR 0011 K5, K6 | Done | K5 by the owner: grid, thumbnails and loupe switching all appear within the same second for the test folder; C3–C5 passed by hand. Owner set the targets C1 and C2 to within 1 s (also the first time after a restart). No disk cache needed (Q4). K6: architecture.md, test inventory (236 passed, 27 ignored), ADR 0010 (imports open as a contact sheet) and ADR 0011 updated |
+| 2026-11-09 | ADR 0010 M3 | Done | Owner approved `rfd` =0.17.2 (MIT, `default-features = false`) for the folder dialog; its Windows dependencies are already in the workspace (GUI_REQUIREMENTS §6.1). Added T30–T32 (M4: form and preview summary, worker, dialog state machine). `rfd` is added in M5 |

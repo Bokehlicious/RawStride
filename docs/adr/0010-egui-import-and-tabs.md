@@ -4,6 +4,8 @@
   the questions of §11 (the proposals, accepted as written) are decided. Nothing is built, installed
   or added as a dependency by this ADR. Each step in §9 is its own work part, with its own approval
   and commit.
+- **Progress:** M1 and M2 done (2026-11-08); the contact sheet (ADR 0011) was built next; **M3 done
+  2026-11-09** (§6: `rfd` 0.17.2 approved).
 - Date: 2026-11-08
 - Related:
   - [GUI_REQUIREMENTS.md](../GUI_REQUIREMENTS.md) (GR1–GR11);
@@ -133,10 +135,11 @@ dialogs give the same answers. The Tauri app keeps its own Tauri glue only.
 
 ## 6. Dependencies
 
-- **Folder dialog:** a helper crate for the Windows folder dialog, most likely `rfd` (MIT). Before it is
-  added:
-  - the owner approves the crate, the exact version and the features;
-  - the licence of the whole new dependency tree for Windows x64 is checked (ADR 0002, GR10).
+- **Folder dialog:** **`rfd` 0.17.2 (MIT), approved by the owner on 2026-11-09 (step M3)**, pinned as
+  `=0.17.2` with `default-features = false`, in `pw-loupe` only. The licence check of the new tree for
+  Windows x64 is in GUI_REQUIREMENTS §6.1: its Windows dependencies (`windows-sys` 0.61,
+  `raw-window-handle` 0.6, `log` 0.4) are already in the workspace, so `rfd` is the only new crate. It
+  is added in step M5, where the dialog is drawn.
 - No other new crates are expected. `pw-loupe` gains a dependency on `pw-ingest` (internal).
 
 ## 7. Coexistence with the Tauri app (GR8)
@@ -170,15 +173,15 @@ dialogs give the same answers. The Tauri app keeps its own Tauri glue only.
 | **M0** | Accept this ADR; answer §11; add the auto-open requirement to GUI_REQUIREMENTS (GR12) | **Done 2026-11-08:** documentation commit |
 | **M1** | `pw-ingest`: move card detection and request validation from `src-tauri`; the Tauri app calls them | Code + tests |
 | **M2** | `pw-loupe`: tab model (plain Rust) and tab bar with keys | Code + tests |
-| **M3** | Approve the folder-dialog crate (version, features, licence tree) | Decision, no code |
+| **M3** | Approve the folder-dialog crate (version, features, licence tree) | **Done 2026-11-09:** `rfd` =0.17.2 (§6) |
 | **M4** | `pw-loupe`: import dialog state machine and worker (plain Rust) | Code + tests |
 | **M5** | `pw-loupe`: draw the dialog, Ctrl+I, folder dialog, open the result in a new tab | Code + tests |
 | **M6** | Acceptance by hand, step A (§8.2) | Results noted in the log |
 | **M7** | Step B: backup, job and running number, IPTC template, eject | Code + tests, one part each |
 | **M8** | Documentation: ADR 0005 dialog section, architecture.md, test inventory | Documentation commit |
 
-Steps M1, M2, M4 and M7 are suited to the agent task list (`docs/agent-tasks.md`): M1 is T20 and M2
-is T21.
+Steps M1, M2, M4 and M7 are suited to the agent task list (`docs/agent-tasks.md`): M1 is T20, M2
+is T21, and M4 is T30–T32.
 
 ## 10. Risks
 

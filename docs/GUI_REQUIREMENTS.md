@@ -99,6 +99,17 @@ Left out:
 - `wayland`, `x11`, `web_screen_reader` and `links` (Linux and web only).
 - `persistence` (until there is a real settings format).
 
+### 6.1 Folder dialog (owner decision, 2026-11-09, ADR 0010 M3)
+
+- **rfd 0.17.2** (Rust File Dialog), for the Windows folder dialog of the import, in `pw-loupe` only.
+- Licence MIT. Pinned exactly: `rfd = { version = "=0.17.2", default-features = false }`. The default
+  features (`xdg-portal`, `wayland`) are for Linux only; no feature is enabled.
+- On Windows it needs `windows-sys` 0.61, `raw-window-handle` 0.6 and `log` 0.4, which are already in
+  the workspace through eframe (0.61.2, 0.6.2 and 0.4.35; all MIT OR Apache-2.0, `raw-window-handle`
+  also Zlib). The only new crate is `rfd` itself; `Cargo.lock` must show no other new entry.
+- 0.18.0 was released a day before the decision and was not chosen; an update is a separate decision.
+- `rfd` is listed in THIRD-PARTY-NOTICES before the first release (ADR 0002).
+
 **Licence review (accepted by the owner, 2026-11-07):**
 
 - **Scope:** all 162 sub-dependencies for Windows x64, with `wgpu` still included, read from
