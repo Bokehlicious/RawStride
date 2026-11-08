@@ -253,7 +253,7 @@ Ordered from easiest to hardest. Start at the top.
 - **Done when:** `.\tools\check.ps1` is all OK, the Tauri app's test count is unchanged, and the new
   tests pass.
 
-### T21. ADR 0010 M2: folder tabs in pw-loupe — Done (manual test pending)
+### T21. ADR 0010 M2: folder tabs in pw-loupe — Done
 
 - **Can be done in parallel with T20** (different files).
 - **Crate:** `pw-loupe`. **Files:** `crates/pw-loupe/src/lib.rs` (or a new module file such as
@@ -305,6 +305,97 @@ Ordered from easiest to hardest. Start at the top.
      "Filnamnsmall: "; a valid input with a backup folder.
 - **Rules:** behaviour and messages unchanged; no new dependencies; nothing else in `src-tauri` changes.
 - **Done when:** `.\tools\check.ps1` is all OK and the new tests pass.
+
+### T23. ADR 0011 K1: thumbnail extraction in pw-thumbcache — Open
+
+- **Crate:** `pw-thumbcache`. **Files:** `crates/pw-thumbcache/Cargo.toml` (add the internal
+  dependency `pw-libjpeg.workspace = true`; `pw-raw` is already there), `crates/pw-thumbcache/src/`
+  (e.g. a new `extract.rs`, declared in `lib.rs`).
+- **What (ADR 0011 §3.1, §4.1):**
+  1. `pub fn choose_preview(info: &pw_raw::ImageInfo, cell: u32) -> Option<&pw_raw::PreviewRef>`:
+     the smallest embedded preview whose **long edge** is at least `cell`; if none is that large, the
+     largest one; `None` if there is no preview.
+  2. `pub fn choose_scale(width: u32, height: u32, cell: u32) -> pw_libjpeg::Scale`: the smallest
+     decode (Eighth, then Quarter, then Half, then Full) whose long edge is still at least `cell`
+     (use `Scale::size`).
+  3. `pub fn orient(image: pw_libjpeg::Rgb8, orientation: u16) -> pw_libjpeg::Rgb8`: applies the EXIF
+     orientation in pixels, all eight values (1 = as is, 2 = mirror, 3 = 180°, 4 = flip, 5 =
+     transpose, 6 = 90° clockwise, 7 = transverse, 8 = 270° clockwise); unknown values act as 1.
+  4. `pub fn thumbnail(path: &Path, cell: u32, decoder: &mut pw_libjpeg::Decoder) -> Result<Rgb8, ThumbError>`:
+     `pw_raw::inspect`, then for a plain JPEG file (`Format::Jpeg`) read and decode the file itself,
+     otherwise `choose_preview` + `pw_raw::read_preview`; decode with `choose_scale`; apply `orient`
+     with the file's orientation.
+     `ThumbError` is an enum with at least `NoPreview` (the "ingen förhandsvisning" case) and
+     `Unreadable(String)` (I/O, format or decode errors), and implements `Display`.
+- **Rules:** never decode RAW data (G1); no `unwrap`/`expect`/`panic!`/unchecked indexing in non-test
+  code; no new external crates. Update the crate description in `Cargo.toml` to "Thumbnail
+  extraction, background generation and an in-memory cache (disk cache later)".
+- **Tests to add:**
+  - `choose_preview`: several previews (picks the smallest large enough), none large enough (picks the
+    largest), no previews (`None`), a portrait preview (long edge is the height);
+  - `choose_scale`: e.g. 1616×1080 with cell 200 → Quarter; 160×120 with cell 200 → Full; exact
+    boundaries;
+  - `orient`: a small 2×3 image with distinct pixels, checked for all eight values (size and pixel
+    positions);
+  - `thumbnail`: a non-existent file → `Unreadable`; a file that is not an image → `Unreadable`, not a
+    panic; a small JPEG written to a temporary file (you may reuse the small JPEG bytes of
+    `crates/pw-libjpeg/tests/decode.rs`) → a thumbnail of the expected size;
+  - real files (ignored by default, the T6 pattern): one thumbnail per camera format of the test set,
+    with the oriented width/height checked for an A7R IVA vertical image (`TN100423.ARW`, orientation 8).
+- **Done when:** `.\tools\check.ps1` and `.\tools\check.ps1 -Ignored` are all OK.
+
+### T24. ADR 0011 K2: thumbnail worker and in-memory cache — Open
+
+- **Start after T23 is done.**
+- **Crate:** `pw-thumbcache`. **Files:** `crates/pw-thumbcache/src/` (e.g. `worker.rs`).
+- **What (ADR 0011 §3.1, §4.1, §4.2):**
+  - A worker with a small pool of background threads (2 by default) that turns requests into
+    thumbnails with T23's `thumbnail`. The UI never waits: it sends requests and polls results
+    (`try_recv`), as `pw-metadata`'s `MetadataWorker` does.
+  - Requests carry a folder generation, an image index, the path and the cell size.
+  - **Priority:** the UI can tell the worker which index range is visible (e.g. `set_visible(range)`);
+    requests in that range are done first, then the rest. Requests from an older generation, and
+    requests far outside the visible range, are dropped (`set_generation` / `cancel`).
+  - **Pause:** `pause()` / `resume()`, used while the loupe is shown (§4.2).
+  - **In-memory cache** of finished thumbnails for the current generation, with a byte limit; the
+    least recently used are evicted first. A cache hit answers without decoding.
+  - Errors (`ThumbError`) are results too, so the UI can show the placeholder.
+  - To make it testable without files, the work is done through a small trait (e.g.
+    `trait ThumbSource { fn make(&mut self, path: &Path, cell: u32) -> Result<Rgb8, ThumbError>; }`);
+    the real one uses `thumbnail` with its own `Decoder` per thread.
+- **Rules:** no `unwrap`/`expect`/`panic!` in non-test code; a poisoned lock is recovered or turned into
+  an error; dropping the worker does not block the UI thread; no new external crates.
+- **Tests to add** (with a simulated `ThumbSource`, no real files): every request gets exactly one
+  result; visible requests are done before others; results of an older generation never arrive after
+  `set_generation`; pause stops new work and resume continues it; the cache returns a hit without
+  calling the source again; eviction respects the byte limit; an error result is delivered.
+- **Done when:** `.\tools\check.ps1` is all OK.
+
+### T25. ADR 0011 K3: grid model in pw-loupe — Open
+
+- **Can be done in parallel with T23** (different crate).
+- **Crate:** `pw-loupe`. **Files:** `crates/pw-loupe/src/` (e.g. a new `grid.rs` declared in `lib.rs`),
+  `crates/pw-loupe/src/tabs.rs`, `crates/pw-loupe/src/lib.rs`. **Not** `main.rs` (drawing is K4).
+- **What (ADR 0011 §3.1, §11):**
+  1. **Layout in plain Rust:** the number of columns for an available width, cell size and spacing
+     (at least 1); the row of an index; the range of indexes visible for a scroll offset and view
+     height, plus a margin of rows.
+  2. **Navigation:** for a count, a column count and a current index: Left, Right, Up, Down (by one
+     row), PageUp, PageDown (by the number of visible rows), Home, End; clamped at the edges, including
+     a short last row (Down from the row above it goes to the last image).
+  3. **View mode per tab:** add a mode (`Grid` or `Loupe`) to `Tab`. A newly opened folder starts in
+     `Grid` (GR13); a tab keeps its mode when switching tabs (Q5).
+  4. **Keys** as plain functions with tests:
+     - in the grid: arrows, Page Up/Down, Home/End → navigation; **Enter, G, Space** → open the loupe;
+       Escape → nothing (Q6);
+     - in the loupe: **Escape, G, Enter** → back to the grid (ADR 0009 §3.3).
+     `key_action` (the loupe's own keys) must not change, and `tab_action` stays as it is.
+  5. **Thumbnail size:** clamp to 96–480 px, default 200 (Q2); a step function for Ctrl + mouse wheel.
+- **Rules:** no egui drawing; no `unwrap`/`expect`/`panic!` in non-test code; no new dependencies.
+- **Tests to add:** columns for several widths; visible range at the top, middle and end; every
+  navigation direction including both edges and a short last row; a new tab starts in `Grid`; the mode
+  survives tab switching; the key functions for both modes; size clamping.
+- **Done when:** `.\tools\check.ps1` is all OK.
 
 ### T7. Format the files that `cargo fmt --check` reports — Done
 
@@ -470,9 +561,9 @@ and reviewer:
   Windows API call and a new dependency).
 - Anything from ADR 0007 (IPTC/IIM/Exif metadata): the ADR is not approved yet.
 - The import dialog fields for title and description in `ui/` (frontend).
-- ADR 0010 steps M3 (approving the folder-dialog crate), M5 (drawing the import dialog) and M6
-  (acceptance by hand) stay with the owner and reviewer for now. M4 and M7 are added to this list
-  when M1 and M2 are done.
+- ADR 0010 steps M3–M7 (the rest of the import) wait until the contact sheet (ADR 0011) is done
+  (owner decision, 2026-11-08). M4 and M7 are added to this list then.
+- ADR 0011 step K4 (drawing the contact sheet) is planned after T23–T25.
 - Note for M5: when the import opens its folder with `Tabs::open_new`, compare folders by their
   resolved form (`pw_ingest::resolve`), so `C:\Foto` and `c:\foto\` do not open two tabs.
 
@@ -527,3 +618,6 @@ and reviewer:
 | 2026-11-08 | T21 | Done (manual test pending) | Reviewed: tab model with 6 tests, tab keys with a test, tab bar, Ctrl+drop; `frame.pos` is read after the core's state is updated, so each tab remembers its own image. Workspace: 192 passed, 23 ignored, 0 failed. Owner checks tabs by hand |
 | 2026-11-08 | T22 | Open | Added: follow-ups from the T20 review |
 | 2026-11-08 | T21 | Manual test | Owner: Ctrl+drop did not open a new tab (Windows does not report Ctrl while dragging from Explorer), so tab switching could not be tried; closing works. Owner decided: dropping always opens a new tab. Reviewer changed `main.rs` (drop always uses `open_new`) and `Tabs::open_new` (fills an empty active tab), added a test and adjusted the setup of one test that relied on the old behaviour; ADR 0010 Q3 updated. Tab switching to be tested again |
+| 2026-11-08 | T21 | Done | Owner's manual test after the drop fix: new tabs on drop, switching with keys and mouse, each tab returns to its own image, closing works |
+| 2026-11-08 | – | Decision | Owner accepted ADR 0011 (contact sheet) with Q1–Q6 as proposed and C1–C5 as behaviour requirements; GR13 added. The rest of ADR 0010 (M3–M7) follows after the contact sheet |
+| 2026-11-08 | T23–T25 | Open | Added: ADR 0011 steps K1 (thumbnail extraction), K2 (worker and cache), K3 (grid model) |

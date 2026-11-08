@@ -1,9 +1,9 @@
 # ADR 0011: Milestone 3 – the contact sheet in the egui program
 
-- Status: **proposed (2026-11-08).** Two points were decided by the owner on 2026-11-08 (§2). The
-  open questions in §11 must be answered and this ADR accepted before work starts. Nothing is
-  built, installed or added as a dependency by this ADR. Each step in §9 is its own work part, with
-  its own approval and commit.
+- Status: **accepted by the owner (2026-11-08, step K0).** The two points of §2, the answers to §11
+  (the proposals, accepted as written) and C1–C5 as behaviour requirements (§7; targets after the
+  first measurement) are decided. Nothing is built, installed or added as a dependency by this ADR.
+  Each step in §9 is its own work part, with its own approval and commit.
 - Date: 2026-11-08
 - Related:
   - [GUI_REQUIREMENTS.md](../GUI_REQUIREMENTS.md) (GR1–GR13; GR13 is this milestone's owner requirement);
@@ -98,7 +98,7 @@
 - No new crates. `pw-thumbcache` gains dependencies on `pw-raw` and `pw-libjpeg` (internal), and
   `pw-loupe` on `pw-thumbcache` (internal).
 
-## 7. Proposed contact sheet requirements (for the owner's approval)
+## 7. Contact sheet requirements (accepted as behaviour requirements, 2026-11-08)
 
 The image viewer requirements leave the contact sheet "for later". These are proposed as **behaviour
 requirements now and targets after a first measurement**, so no number is invented (TESTING.md §2):
@@ -135,7 +135,7 @@ requirements now and targets after a first measurement**, so no number is invent
 
 | Step | Content | Result |
 |---|---|---|
-| **K0** | Accept this ADR; answer §11; decide C1–C5 as behaviour requirements | Documentation commit |
+| **K0** | Accept this ADR; answer §11; decide C1–C5 as behaviour requirements | **Done 2026-11-08:** documentation commit |
 | **K1** | `pw-thumbcache`: thumbnail extraction (preview choice, scaled decode, orientation, placeholder, errors) | Code + tests |
 | **K2** | `pw-thumbcache`: worker pool, priority queue, cancel and in-memory cache | Code + tests |
 | **K3** | `pw-loupe`: grid model (layout, visible range, keys, mode per tab) in plain Rust | Code + tests |
@@ -143,7 +143,7 @@ requirements now and targets after a first measurement**, so no number is invent
 | **K5** | Acceptance by hand and the first measurement for C1–C2 | Results noted in the log; the owner sets the targets |
 | **K6** | Documentation: architecture.md (`pw-thumbcache`), test inventory, ADR 0010 (imports open in the grid) | Documentation commit |
 
-Steps K1, K2 and K3 suit the agent task list once this ADR is accepted; K4 is larger and may be split.
+Steps K1, K2 and K3 are on the agent task list as T23, T24 and T25; K4 is larger and may be split.
 
 ## 10. Risks
 
@@ -154,9 +154,11 @@ Steps K1, K2 and K3 suit the agent task list once this ADR is accepted; K4 is la
 | Thumbnails and the loupe compete for the disk or CPU | A slower loupe | Thumbnail work pauses while the loupe is shown (§4.2) |
 | Orientation errors in thumbnails | Wrong-looking grid | Orientation tests for all eight values and the A7R IVA real files |
 
-## 11. Open questions (must be answered before acceptance)
+## 11. Questions and the owner's answers (2026-11-08)
 
-| # | Question | Proposal |
+The owner accepted every proposal below as written.
+
+| # | Question | Decision (the proposal, accepted) |
 |---|---|---|
 | **Q1** | What does the command line open? | A folder opens in the grid; a single file opens the loupe on that file (useful for `latency.ps1`, which can also double-click a thumbnail first) |
 | **Q2** | Thumbnail sizes | Long edge from 96 to 480 px, default 200 px, changed with the slider or Ctrl + mouse wheel; kept for the session only |
