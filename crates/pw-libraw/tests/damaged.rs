@@ -40,8 +40,10 @@ fn first(dir: &Path, prefix: &str) -> Option<PathBuf> {
     })
 }
 
-fn scratch() -> PathBuf {
-    let d = std::env::temp_dir().join(format!("pw-libraw-damaged-{}", std::process::id()));
+/// A scratch folder for one test. Each test gets its own folder: tests run in parallel, and a
+/// test that removes a shared folder when it finishes breaks the others.
+fn scratch(test: &str) -> PathBuf {
+    let d = std::env::temp_dir().join(format!("pw-libraw-damaged-{test}-{}", std::process::id()));
     std::fs::create_dir_all(&d).unwrap();
     d
 }
@@ -93,7 +95,7 @@ fn truncated_files_are_damaged() {
         eprintln!("PW_TESTDATA not set; skipped");
         return;
     };
-    let tmp = scratch();
+    let tmp = scratch("truncated");
     // (prefix, fractions that must be refused)
     let cases: [(&str, &[f64]); 4] = [
         ("TN1004", &[0.02, 0.05, 0.10, 0.40, 0.90, 0.99]), // A7R IVA
@@ -170,7 +172,7 @@ fn truncated_files_are_damaged() {
 
 #[test]
 fn unreadable_files_fail_but_are_not_damaged() {
-    let tmp = scratch();
+    let tmp = scratch("unreadable");
     // Random bytes with a RAW extension.
     let mut x: u64 = 42;
     let junk: Vec<u8> = (0..3 * 1024 * 1024 + 17)

@@ -258,6 +258,9 @@ Ordered from easiest to hardest. Start at the top.
 ### T12. Real-file tests, part 2 (pw-raw, pw-viewcore) — Open
 
 - **Start after T6 is done.** Use exactly the pattern from T6.
+- **Watch for:** with `PW_TESTDATA` set, `real_files.rs` finished its 4 tests in 0.00 s, so they
+  probably still skip because their files are not found in that folder. Expect the `--ignored` run
+  to show which file is missing, and report it.
 - **Files:** `crates/pw-raw/tests/real_files.rs` (4 tests), `crates/pw-viewcore/tests/native_files.rs`
   (3 tests).
 - **Report back** the same three runs as in T6, for `-p pw-raw -p pw-viewcore`.
@@ -272,6 +275,9 @@ Ordered from easiest to hardest. Start at the top.
   `check_regions_identical`, `check_ppg_regions_identical` or `check_methods_switch_cleanly`).
   `unreadable_files_fail_but_are_not_damaged`, `not_a_raw_file_is_an_error` and
   `version_is_reported` do not need the files and stay as they are.
+- **Already fixed by the reviewer (2026-11-08):** `scratch()` now takes the test name, so each test
+  has its own temporary folder (two tests shared one, and one removed it while the other was still
+  writing). Keep that.
 - **Note:** some of these tests look for a file by name prefix (e.g. a Panasonic file). A missing
   prefix must now fail with a message, not print "skipped".
 - **Report back** the same three runs as in T6, for `-p pw-libraw`.
@@ -289,7 +295,7 @@ Ordered from easiest to hardest. Start at the top.
   `--release -- --ignored --test-threads=1`).
 - **Done when:** as in T12.
 
-### T15. A script that runs the checks and writes a readable report — Open
+### T15. A script that runs the checks and writes a readable report — Done
 
 - **File:** `tools/check.ps1` (new).
 - **Why:** the owner runs the same commands after every task and the output file is written as
@@ -403,3 +409,6 @@ and reviewer:
 | 2026-11-08 | T5, T10, T11 | Done | Owner card test: import with eject now ejects the card |
 | 2026-11-08 | T6 | Open | Owner decision: real-file tests are ignored by default and fail when run with `--ignored` without the files. T6 extended; T12–T14 cover the other crates |
 | 2026-11-08 | T15–T18 | Open | Added: check script, test documentation, test inventory, pw-ingest module split |
+| 2026-11-08 | T15 | Ready for review | Added `tools/check.ps1`; formatting and clippy passed. Workspace tests fail in `pw-libraw`'s `truncated_files_are_damaged` test with a path-not-found error while writing a temporary file. |
+| 2026-11-08 | T15 | Done | Reviewed: all requirements met. Reviewer added `--no-fail-fast` to the test step (cargo stopped at the first failing crate) and `/test-output.txt` to `.gitignore`. Full run with `PW_TESTDATA` set: fmt, test and clippy OK |
+| 2026-11-08 | – | Fix | With `PW_TESTDATA` set, `pw-libraw` `truncated_files_are_damaged` failed: two tests shared one scratch folder and one removed it. Reviewer gave each test its own folder (test code only); now passes |

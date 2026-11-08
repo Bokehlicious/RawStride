@@ -65,3 +65,6 @@ desktop.ini
 # Env
 .env
 .env.*
+
+# Report written by tools/check.ps1
+/test-output.txt
