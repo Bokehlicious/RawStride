@@ -461,7 +461,7 @@ Ordered from easiest to hardest. Start at the top.
   2×1 image and for wrong data length.
 - **Done when:** `.\tools\check.ps1` is all OK.
 
-### T28. ADR 0011 K4c: draw the contact sheet — Open
+### T28. ADR 0011 K4c: draw the contact sheet — Done
 
 - **Start after T27 is done.**
 - **Crate:** `pw-loupe`. **File:** `crates/pw-loupe/src/main.rs` only.
@@ -771,3 +771,4 @@ and reviewer:
 | 2026-11-08 | T27 | Ready for review | Added `ThumbGrid` state tracking and completion handling, 128-pixel physical cell sizing, RGB-to-egui conversion and tests. Crate fmt, tests and clippy pass. |
 | 2026-11-09 | T26 | Done | Reviewed: queued and in-flight duplicates (generation, index, cell) are skipped; the in-flight entry is removed under the same lock that fills the cache, so a later request is a cache hit, never a gap; `Rgb8` re-exported. Four required tests present. pw-thumbcache 25 passed, 4 ignored; workspace fmt, test and clippy OK. No changes in review |
 | 2026-11-09 | T27 | Done | Reviewed: `ThumbGrid` (to_request, mark_requested, apply, state, forget_outside), `request_cell` (128 px steps, bad scale counts as 1.0) and `color_image` match the spec; all required tests present; pw-thumbcache added as an internal dependency. Note: `ThumbnailEvent` carries no cell size, so `apply` records the cell of the latest request; a late result for an older size is shown until the newer one arrives and replaces it, which is harmless. Workspace fmt, test and clippy OK. No changes in review |
+| 2026-11-09 | T28 | Done | Reviewed: grid in a vertical scroll area with `show_viewport`, requests only for the visible range, polling, textures released outside the visible range ± 3 rows, placeholders, error text, file names, frame on the current image, click and key navigation, repaint while thumbnails are pending; loupe path unchanged. Fixed in review: key navigation used the column count of the full image width while the drawing is narrower (scroll bar), so Down could land in the wrong column at some widths — the drawn column count is now remembered and used; the scroll area is limited to the image area so the last row no longer runs under the status line. Workspace fmt, test and clippy OK; owner checked by hand: grid fills in, keys, click, upright A7R IVA images, resizing |

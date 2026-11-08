@@ -6,18 +6,23 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+use std::collections::HashMap;
 use std::path::Path;
 use std::process::ExitCode;
+use std::sync::mpsc::TryRecvError;
 use std::time::Duration;
 
 use eframe::egui;
 use metadata::MetadataCache;
 use pw_loupe::{
-    Action, Options, TabAction, Tabs, WINDOW_TITLE, error_text, indicator_text, key_action,
-    list_folder, mode_label, parse_args, status_line, tab_action, wheel_factor,
+    Action, CellState, DEFAULT_THUMBNAIL_SIZE, GridKeyAction, Options, TabAction, Tabs, ThumbGrid,
+    ViewMode, WINDOW_TITLE, color_image, columns, error_text, grid_key_action, indicator_text,
+    key_action, list_folder, mode_label, navigate, parse_args, request_cell, status_line,
+    tab_action, visible_range, wheel_factor,
 };
 use pw_metadata::MetadataWorker;
 use pw_render::{Textures, view_px};
+use pw_thumbcache::{ThumbWorker, ThumbnailRequest};
 use pw_viewcore::native::NativeBackend;
 use pw_viewcore::{Config, Status, ViewCore};
 
@@ -25,11 +30,21 @@ mod metadata;
 
 const BACKGROUND: egui::Color32 = egui::Color32::from_gray(32);
 const STATUS_HEIGHT: f32 = 24.0;
+const GRID_SPACING: f32 = 8.0;
+const GRID_LABEL_HEIGHT: f32 = 18.0;
 
 struct Loupe {
     core: ViewCore<NativeBackend>,
     metadata_worker: MetadataWorker,
     metadata: MetadataCache,
+    thumb_worker: ThumbWorker,
+    thumb_grid: ThumbGrid,
+    thumb_generation: u64,
+    thumb_textures: HashMap<usize, egui::TextureHandle>,
+    thumb_size: u32,
+    /// The column count of the last drawn grid, so key navigation uses the same layout as the
+    /// drawing (the scroll bar makes the drawing area narrower than the image area).
+    grid_columns: usize,
     textures: Textures,
     anchor_at_pointer: bool,
     show_info: bool,
@@ -62,9 +77,15 @@ impl Loupe {
     }
 
     fn load_active_tab(&mut self) {
+        self.thumb_generation = self.thumb_generation.wrapping_add(1);
+        self.thumb_worker.set_generation(self.thumb_generation);
         let Some(tab) = self.tabs.active().cloned() else {
+            self.thumb_grid = ThumbGrid::new(self.thumb_generation, 0);
+            self.thumb_textures.clear();
             return;
         };
+        self.thumb_grid = ThumbGrid::new(self.thumb_generation, tab.files.len());
+        self.thumb_textures.clear();
         let files = match self
             .metadata
             .begin_load(tab.files, &mut self.metadata_worker)
@@ -92,6 +113,284 @@ impl Loupe {
         } else {
             None
         };
+    }
+
+    fn poll_thumbnails(&mut self, ctx: &egui::Context) {
+        loop {
+            match self.thumb_worker.try_recv() {
+                Ok(event) => {
+                    if !self.thumb_grid.apply(&event) {
+                        continue;
+                    }
+                    match event.result {
+                        Ok(image) => {
+                            if let Some(image) = color_image(&image) {
+                                let texture = ctx.load_texture(
+                                    format!("thumbnail-{}-{}", self.thumb_generation, event.index),
+                                    image,
+                                    egui::TextureOptions::LINEAR,
+                                );
+                                self.thumb_textures.insert(event.index, texture);
+                            } else {
+                                self.message = Some("Ogiltig miniatyrdata".to_string());
+                            }
+                        }
+                        Err(_) => {
+                            self.thumb_textures.remove(&event.index);
+                        }
+                    }
+                }
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Disconnected) => {
+                    self.message = Some("Förhandsvisningsarbetaren avslutades".to_string());
+                    break;
+                }
+            }
+        }
+    }
+
+    fn draw_grid(
+        &mut self,
+        ui: &mut egui::Ui,
+        full: egui::Rect,
+        rect: egui::Rect,
+        scroll_to: Option<usize>,
+    ) {
+        let ctx = ui.ctx().clone();
+        let painter = ui.painter().clone();
+        painter.rect_filled(full, 0.0, BACKGROUND);
+        let Some(mut tab) = self.tabs.active().cloned() else {
+            return;
+        };
+        let cell_size = self.thumb_size as f32;
+        let stride = cell_size + GRID_SPACING;
+
+        // The grid uses the image area only, so it never runs under the status line.
+        ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
+            egui::ScrollArea::vertical()
+                .id_salt("contact-sheet")
+                .auto_shrink([false, false])
+                .show_viewport(ui, |ui, viewport| {
+                    let width = ui.available_width().max(0.0);
+                    let column_count = columns(
+                        width.min(u32::MAX as f32) as u32,
+                        self.thumb_size,
+                        GRID_SPACING as u32,
+                    );
+                    self.grid_columns = column_count;
+                    let rows = tab.files.len().div_ceil(column_count);
+                    let content_height = rows as f32 * stride;
+                    ui.set_min_size(egui::vec2(width, content_height));
+
+                    let visible = visible_range(
+                        tab.files.len(),
+                        column_count,
+                        self.thumb_size,
+                        GRID_SPACING as u32,
+                        viewport.min.y,
+                        viewport.height(),
+                        1,
+                    );
+                    self.thumb_worker.set_visible(visible.clone());
+                    let cell = request_cell(self.thumb_size, ctx.pixels_per_point());
+                    for index in self.thumb_grid.to_request(visible.clone(), cell) {
+                        if let Some(path) = tab.files.get(index) {
+                            self.thumb_worker.request(ThumbnailRequest {
+                                generation: self.thumb_generation,
+                                index,
+                                path: path.clone(),
+                                cell,
+                            });
+                            self.thumb_grid.mark_requested(index, cell);
+                        }
+                    }
+                    self.poll_thumbnails(&ctx);
+
+                    let keep = visible_range(
+                        tab.files.len(),
+                        column_count,
+                        self.thumb_size,
+                        GRID_SPACING as u32,
+                        viewport.min.y,
+                        viewport.height(),
+                        3,
+                    );
+                    for index in self.thumb_grid.forget_outside(keep) {
+                        self.thumb_textures.remove(&index);
+                    }
+
+                    let origin = ui.min_rect().min;
+                    let painter = ui.painter().clone();
+                    let mut clicked = None;
+                    for index in visible.clone() {
+                        let Some(path) = tab.files.get(index) else {
+                            continue;
+                        };
+                        let row = index / column_count;
+                        let column = index % column_count;
+                        let cell_rect = egui::Rect::from_min_size(
+                            egui::pos2(
+                                origin.x + column as f32 * stride,
+                                origin.y + row as f32 * stride,
+                            ),
+                            egui::vec2(cell_size, cell_size),
+                        );
+                        let image_size = (cell_size - GRID_LABEL_HEIGHT).max(1.0);
+                        let image_rect = egui::Rect::from_center_size(
+                            egui::pos2(cell_rect.center().x, cell_rect.min.y + image_size * 0.5),
+                            egui::vec2(image_size, image_size),
+                        );
+                        painter.rect_filled(image_rect, 0.0, egui::Color32::from_gray(64));
+                        match self.thumb_grid.state(index) {
+                            CellState::Ready => {
+                                if let Some(texture) = self.thumb_textures.get(&index) {
+                                    let size = texture.size_vec2();
+                                    let scale = (image_size / size.x.max(1.0))
+                                        .min(image_size / size.y.max(1.0));
+                                    let fitted = size * scale;
+                                    let image_rect =
+                                        egui::Rect::from_center_size(image_rect.center(), fitted);
+                                    painter.image(
+                                        texture.id(),
+                                        image_rect,
+                                        egui::Rect::from_min_max(
+                                            egui::pos2(0.0, 0.0),
+                                            egui::pos2(1.0, 1.0),
+                                        ),
+                                        egui::Color32::WHITE,
+                                    );
+                                }
+                            }
+                            CellState::Failed(error) => {
+                                let text = if error == "ingen förhandsvisning" {
+                                    error
+                                } else {
+                                    let shortened: String = error.chars().take(32).collect();
+                                    if error.chars().count() > 32 {
+                                        format!("{shortened}…")
+                                    } else {
+                                        shortened
+                                    }
+                                };
+                                painter.text(
+                                    image_rect.center(),
+                                    egui::Align2::CENTER_CENTER,
+                                    text,
+                                    egui::FontId::proportional(12.0),
+                                    egui::Color32::LIGHT_GRAY,
+                                );
+                            }
+                            CellState::Missing | CellState::Requested => {}
+                        }
+
+                        let name = path
+                            .file_name()
+                            .map(|name| name.to_string_lossy().into_owned())
+                            .unwrap_or_else(|| path.display().to_string());
+                        let label_rect = egui::Rect::from_min_max(
+                            egui::pos2(cell_rect.min.x, cell_rect.max.y - GRID_LABEL_HEIGHT),
+                            cell_rect.max,
+                        );
+                        painter.with_clip_rect(label_rect).text(
+                            label_rect.center(),
+                            egui::Align2::CENTER_CENTER,
+                            name,
+                            egui::FontId::proportional(12.0),
+                            egui::Color32::LIGHT_GRAY,
+                        );
+
+                        if index == tab.current {
+                            painter.rect_stroke(
+                                cell_rect,
+                                0.0,
+                                egui::Stroke::new(2.0, egui::Color32::YELLOW),
+                                egui::StrokeKind::Inside,
+                            );
+                        }
+                        let response = ui.interact(
+                            cell_rect,
+                            ui.make_persistent_id(("grid-cell", index)),
+                            egui::Sense::click(),
+                        );
+                        if response.clicked() {
+                            clicked = Some(index);
+                        }
+                    }
+
+                    if let Some(index) = scroll_to {
+                        let row = index / column_count;
+                        let column = index % column_count;
+                        let target = egui::Rect::from_min_size(
+                            egui::pos2(
+                                origin.x + column as f32 * stride,
+                                origin.y + row as f32 * stride,
+                            ),
+                            egui::vec2(cell_size, cell_size),
+                        );
+                        ui.scroll_to_rect(target, Some(egui::Align::Center));
+                    }
+                    if let Some(index) = clicked {
+                        self.tabs.set_current(index);
+                        tab.current = index;
+                    }
+                    if visible
+                        .clone()
+                        .any(|index| matches!(self.thumb_grid.state(index), CellState::Requested))
+                    {
+                        ctx.request_repaint_after(Duration::from_millis(50));
+                    }
+                });
+        });
+
+        let painter = ui.painter().clone();
+        if tab.files.is_empty() {
+            let text = self
+                .message
+                .as_deref()
+                .unwrap_or("Dra en mapp eller en bild hit");
+            painter.text(
+                rect.center(),
+                egui::Align2::CENTER_CENTER,
+                text,
+                egui::FontId::proportional(18.0),
+                egui::Color32::LIGHT_GRAY,
+            );
+        }
+        if self.show_info {
+            let bar = egui::Rect::from_min_max(egui::pos2(full.min.x, rect.max.y), full.max);
+            let mut line = if let Some(path) = tab.files.get(tab.current) {
+                let name = path
+                    .file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| path.display().to_string());
+                format!(
+                    "{}  {} / {}",
+                    name,
+                    tab.current.saturating_add(1),
+                    tab.files.len()
+                )
+            } else {
+                "Ingen bild vald".to_string()
+            };
+            if let Some(message) = &self.message {
+                line = format!("{line}  ·  {message}");
+            }
+            if let Some(notice) = self
+                .tabs
+                .active()
+                .and_then(|active| active.files.get(active.current))
+                .and_then(|path| self.metadata.notice(Some(path)))
+            {
+                line = format!("{line}  ·  {notice}");
+            }
+            painter.text(
+                egui::pos2(bar.min.x + 8.0, bar.center().y),
+                egui::Align2::LEFT_CENTER,
+                line,
+                egui::FontId::monospace(12.0),
+                egui::Color32::from_gray(210),
+            );
+        }
     }
 
     fn tab_action(&mut self, action: TabAction) {
@@ -147,7 +446,7 @@ impl Loupe {
         if let Some(path) = dropped {
             self.open(&path, true);
         }
-        let key_actions: Vec<(Option<TabAction>, Option<Action>)> = ctx.input(|i| {
+        let key_actions: Vec<(Option<TabAction>, egui::Key, bool, bool)> = ctx.input(|i| {
             i.events
                 .iter()
                 .filter_map(|event| match event {
@@ -159,12 +458,7 @@ impl Loupe {
                     } => {
                         let ctrl = modifiers.ctrl || modifiers.command;
                         let tab = tab_action(*key, ctrl, modifiers.shift, modifiers.alt);
-                        let action = if tab.is_none() {
-                            key_action(*key, ctrl, modifiers.alt)
-                        } else {
-                            None
-                        };
-                        Some((tab, action))
+                        Some((tab, *key, ctrl, modifiers.alt))
                     }
                     _ => None,
                 })
@@ -196,6 +490,37 @@ impl Loupe {
             full.min,
             egui::pos2(full.max.x, (full.max.y - status_h).max(full.min.y + 1.0)),
         );
+        if self
+            .tabs
+            .active()
+            .is_some_and(|tab| tab.mode == ViewMode::Grid)
+        {
+            let mut scroll_to = None;
+            for (tab, key, ctrl, alt) in key_actions {
+                if let Some(action) = tab {
+                    self.tab_action(action);
+                } else if let Some(GridKeyAction::Navigate(action)) =
+                    grid_key_action(key, ctrl, alt)
+                {
+                    let count = self.tabs.active().map_or(0, |tab| tab.files.len());
+                    let column_count = self.grid_columns;
+                    let visible_rows = ((rect.height() / (self.thumb_size as f32 + GRID_SPACING))
+                        .floor() as usize)
+                        .max(1);
+                    let current = self.tabs.active().map_or(0, |tab| tab.current);
+                    self.tabs.set_current(navigate(
+                        count,
+                        column_count,
+                        current,
+                        action,
+                        visible_rows,
+                    ));
+                    scroll_to = self.tabs.active().map(|tab| tab.current);
+                }
+            }
+            self.draw_grid(ui, full, rect, scroll_to);
+            return;
+        }
         let ppp = ctx.pixels_per_point();
         let response = ui.interact(
             rect,
@@ -204,10 +529,10 @@ impl Loupe {
         );
         let pointer = response.hover_pos();
         let anchor = self.anchor(pointer, rect, ppp);
-        for (tab, action) in key_actions {
+        for (tab, key, ctrl, alt) in key_actions {
             if let Some(action) = tab {
                 self.tab_action(action);
-            } else if let Some(action) = action {
+            } else if let Some(action) = key_action(key, ctrl, alt) {
                 self.act(action, anchor);
             }
         }
@@ -328,6 +653,7 @@ fn run(options: Options) -> Result<(), String> {
     let indicator_after = config.indicator_after;
     let core = ViewCore::start(NativeBackend, config)?;
     let metadata_worker = MetadataWorker::start().map_err(|e| e.to_string())?;
+    let thumb_worker = ThumbWorker::start().map_err(|e| e.to_string())?;
     let native = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title(WINDOW_TITLE)
@@ -347,6 +673,12 @@ fn run(options: Options) -> Result<(), String> {
                 core,
                 metadata_worker,
                 metadata: MetadataCache::default(),
+                thumb_worker,
+                thumb_grid: ThumbGrid::new(0, 0),
+                thumb_generation: 0,
+                thumb_textures: HashMap::new(),
+                thumb_size: DEFAULT_THUMBNAIL_SIZE,
+                grid_columns: 1,
                 textures: Textures::new(),
                 anchor_at_pointer: true,
                 show_info: true,
