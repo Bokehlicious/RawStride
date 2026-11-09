@@ -4,8 +4,9 @@
   the questions of §11 (the proposals, accepted as written) are decided. Nothing is built, installed
   or added as a dependency by this ADR. Each step in §9 is its own work part, with its own approval
   and commit.
-- **Progress:** M1 and M2 done (2026-11-08); the contact sheet (ADR 0011) was built next; **M3 done
-  2026-11-09** (§6: `rfd` 0.17.2 approved).
+- **Progress:** M1 and M2 done (2026-11-08); the contact sheet (ADR 0011) was built next; M3 done
+  2026-11-09 (§6: `rfd` 0.17.2 approved); **M4, M5 and M6 (step A) done 2026-11-09**: the import
+  dialog works in `pw-loupe` and the owner accepted it with a real card. Next: M7 (step B) and M8.
 - Date: 2026-11-08
 - Related:
   - [GUI_REQUIREMENTS.md](../GUI_REQUIREMENTS.md) (GR1–GR11);
@@ -175,14 +176,14 @@ dialogs give the same answers. The Tauri app keeps its own Tauri glue only.
 | **M1** | `pw-ingest`: move card detection and request validation from `src-tauri`; the Tauri app calls them | Code + tests |
 | **M2** | `pw-loupe`: tab model (plain Rust) and tab bar with keys | Code + tests |
 | **M3** | Approve the folder-dialog crate (version, features, licence tree) | **Done 2026-11-09:** `rfd` =0.17.2 (§6) |
-| **M4** | `pw-loupe`: import dialog state machine and worker (plain Rust) | Code + tests |
-| **M5** | `pw-loupe`: draw the dialog, Ctrl+I, folder dialog, open the result in a new tab | Code + tests |
-| **M6** | Acceptance by hand, step A (§8.2) | Results noted in the log |
+| **M4** | `pw-loupe`: import dialog state machine and worker (plain Rust) | **Done 2026-11-09** (T30–T33) |
+| **M5** | `pw-loupe`: draw the dialog, Ctrl+I, folder dialog, open the result in a new tab | **Done 2026-11-09** (T34–T36) |
+| **M6** | Acceptance by hand, step A (§8.2) | **Done 2026-11-09:** owner imported from a real card: progress, summary, the folder opens in a new tab as a contact sheet; cancel leaves no partial files; "Dölj" keeps the grid and loupe smooth during the copy; a second import shows the files as present and opens no tab |
 | **M7** | Step B: backup, job and running number, IPTC template, eject | Code + tests, one part each |
 | **M8** | Documentation: ADR 0005 dialog section, architecture.md, test inventory | Documentation commit |
 
 Steps M1, M2, M4 and M7 are suited to the agent task list (`docs/agent-tasks.md`): M1 is T20, M2
-is T21, and M4 is T30–T32.
+is T21, M4 is T30–T33 and M5 is T34–T36.
 
 ## 10. Risks
 

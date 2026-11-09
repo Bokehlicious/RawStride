@@ -18,10 +18,11 @@ use pw_loupe::{
     Action, CellState, DEFAULT_THUMBNAIL_SIZE, DialogKey, DialogRequest, Field, GridKeyAction,
     ImportDialog, ImportDialogState, ImportEvent, ImportForm, ImportWorker, MAX_THUMBNAIL_SIZE,
     MIN_THUMBNAIL_SIZE, Options, SubmitError, TabAction, Tabs, ThumbGrid, ViewMode, WINDOW_TITLE,
-    clamp_thumbnail_size, color_image, columns, dialog_key_action, error_text, grid_key_action,
-    indicator_text, key_action, list_folder, loupe_key_action, mode_label, more_lines, navigate,
-    opens_import, parse_args, preview_line, preview_summary, request_cell, status_line,
-    step_thumbnail_size, tab_action, take_wheel_steps, visible_range, wheel_factor,
+    clamp_thumbnail_size, color_image, columns, dialog_key_action, done_lines, error_text,
+    grid_key_action, indicator_text, key_action, list_folder, loupe_key_action, mode_label,
+    more_lines, navigate, opens_import, parse_args, preview_line, preview_summary, progress_text,
+    request_cell, status_line, step_thumbnail_size, tab_action, take_wheel_steps, visible_range,
+    wheel_factor,
 };
 use pw_metadata::MetadataWorker;
 use pw_render::{Textures, view_px};
@@ -45,6 +46,8 @@ struct Loupe {
     last_form: ImportForm,
     detected_cards: Vec<PathBuf>,
     import_submit_error: Option<String>,
+    import_hidden: bool,
+    import_result_opened: bool,
     thumb_worker: ThumbWorker,
     thumb_grid: ThumbGrid,
     thumb_generation: u64,
@@ -66,8 +69,11 @@ struct Loupe {
 impl Loupe {
     fn open_import(&mut self) {
         if self.import_dialog.is_some() {
+            self.import_hidden = false;
             return;
         }
+        self.import_hidden = false;
+        self.import_result_opened = false;
         self.import_dialog = Some(ImportDialog::new(self.last_form.clone()));
         self.import_submit_error = None;
         if let Err(error) = self.import_worker.cards() {
@@ -79,15 +85,80 @@ impl Loupe {
         if let Some(dialog) = self.import_dialog.take() {
             self.last_form = dialog.form().clone();
         }
+        self.import_hidden = false;
     }
 
-    fn poll_import_worker(&mut self) {
+    fn start_import(&mut self) {
+        let request = self.import_dialog.as_mut().and_then(ImportDialog::start);
+        let Some(DialogRequest::Run { form }) = request else {
+            return;
+        };
+        match self.import_worker.run(form) {
+            Ok(id) => {
+                if let Some(dialog) = &mut self.import_dialog {
+                    dialog.sent(id);
+                }
+                self.import_result_opened = false;
+                self.import_submit_error = None;
+            }
+            Err(error) => {
+                if let Some(dialog) = &mut self.import_dialog {
+                    dialog.disconnected();
+                }
+                self.import_submit_error = Some(submit_error_text(error));
+            }
+        }
+    }
+
+    fn hidden_import_status(&self) -> Option<String> {
+        if !self.import_hidden {
+            return None;
+        }
+        match self.import_dialog.as_ref()?.state() {
+            ImportDialogState::Running { progress } => Some(progress.as_ref().map_or_else(
+                || "Importerar 0 / 0".to_string(),
+                |progress| {
+                    format!(
+                        "Importerar {} / {}",
+                        progress.files_done, progress.files_total
+                    )
+                },
+            )),
+            ImportDialogState::Done { done } => {
+                if let Some(error) = &done.error {
+                    Some(error.clone())
+                } else if done.cancelled {
+                    Some(format!("Importen avbruten: {} filer", done.copied))
+                } else {
+                    Some(format!("Importen klar: {} filer", done.copied))
+                }
+            }
+            _ => None,
+        }
+    }
+
+    fn poll_import_worker(&mut self, ctx: &egui::Context) {
         loop {
             match self.import_worker.try_recv() {
                 Ok(ImportEvent::Cards { cards, .. }) => self.detected_cards = cards,
                 Ok(event) => {
-                    if let Some(dialog) = &mut self.import_dialog {
+                    let folder_to_open = if let Some(dialog) = &mut self.import_dialog {
+                        let was_running = dialog.cancel();
                         dialog.apply(&event);
+                        if was_running
+                            && matches!(dialog.state(), ImportDialogState::Done { .. })
+                            && !self.import_result_opened
+                        {
+                            self.import_result_opened = true;
+                            dialog.result_folder()
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    };
+                    if let Some(folder) = folder_to_open {
+                        self.open(&folder, true);
                     }
                 }
                 Err(TryRecvError::Empty) => break,
@@ -99,9 +170,19 @@ impl Loupe {
                 }
             }
         }
+        if self
+            .import_dialog
+            .as_ref()
+            .is_some_and(ImportDialog::cancel)
+        {
+            ctx.request_repaint_after(Duration::from_millis(100));
+        }
     }
 
     fn draw_import_dialog(&mut self, ctx: &egui::Context) {
+        if self.import_hidden {
+            return;
+        }
         let Some(dialog) = self.import_dialog.as_ref() else {
             return;
         };
@@ -109,110 +190,166 @@ impl Loupe {
         let original_form = form.clone();
         let state = dialog.state().clone();
         let can_close = dialog.can_close();
+        let can_start = dialog.can_start();
+        let running = dialog.cancel();
         let cards = self.detected_cards.clone();
         let mut rescan = false;
         let mut close = false;
+        let mut start = false;
+        let mut cancel = false;
+        let mut hide = false;
+        let mut new_import = false;
 
         egui::Window::new("Importera")
             .collapsible(false)
             .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
             .show(ctx, |ui| {
-                ui.label("Källa");
-                ui.horizontal(|ui| {
-                    ui.text_edit_singleline(&mut form.source);
-                    if ui.button("Välj…").clicked()
-                        && let Some(path) = pick_folder("Välj källa", &form.source, cards.first())
-                    {
-                        form.source = path.to_string_lossy().into_owned();
+                ui.add_enabled_ui(!running, |ui| {
+                    ui.label("Källa");
+                    ui.horizontal(|ui| {
+                        ui.text_edit_singleline(&mut form.source);
+                        if ui.button("Välj…").clicked()
+                            && let Some(path) =
+                                pick_folder("Välj källa", &form.source, cards.first())
+                        {
+                            form.source = path.to_string_lossy().into_owned();
+                        }
+                    });
+                    if let Some(message) = field_error(&state, Field::Source) {
+                        ui.colored_label(egui::Color32::RED, message);
+                    }
+                    ui.horizontal_wrapped(|ui| {
+                        for card in &cards {
+                            if ui.button(card.display().to_string()).clicked() {
+                                form.source = card.to_string_lossy().into_owned();
+                            }
+                        }
+                    });
+
+                    ui.add_space(8.0);
+                    ui.label("Mål");
+                    ui.horizontal(|ui| {
+                        ui.text_edit_singleline(&mut form.dest);
+                        if ui.button("Välj…").clicked()
+                            && let Some(path) = pick_folder("Välj mål", &form.dest, None)
+                        {
+                            form.dest = path.to_string_lossy().into_owned();
+                        }
+                    });
+                    if let Some(message) = field_error(&state, Field::Dest) {
+                        ui.colored_label(egui::Color32::RED, message);
+                    }
+
+                    ui.add_space(8.0);
+                    ui.label("Mappmall");
+                    ui.text_edit_singleline(&mut form.folder);
+                    if let Some(message) = field_error(&state, Field::Folder) {
+                        ui.colored_label(egui::Color32::RED, message);
+                    }
+
+                    ui.add_space(8.0);
+                    ui.label("Filnamnsmall");
+                    ui.text_edit_singleline(&mut form.name);
+                    if let Some(message) = field_error(&state, Field::Name) {
+                        ui.colored_label(egui::Color32::RED, message);
+                    }
+
+                    ui.add_space(8.0);
+                    ui.horizontal(|ui| {
+                        ui.label("Förhandsvisning");
+                        if ui.button("Sök igen").clicked() {
+                            rescan = true;
+                        }
+                    });
+                    match &state {
+                        ImportDialogState::Previewing => {
+                            ui.label("Förhandsvisar …");
+                        }
+                        ImportDialogState::Editing {
+                            preview: Some(preview),
+                            ..
+                        } => {
+                            ui.label(preview_summary(preview));
+                            egui::ScrollArea::vertical()
+                                .max_height(160.0)
+                                .show(ui, |ui| {
+                                    for line in &preview.lines {
+                                        ui.label(preview_line(line));
+                                    }
+                                    if let Some(more) = more_lines(preview) {
+                                        ui.label(more);
+                                    }
+                                });
+                        }
+                        ImportDialogState::Editing { .. } => {}
+                        ImportDialogState::Running { .. } | ImportDialogState::Done { .. } => {}
                     }
                 });
-                if let Some(message) = field_error(&state, Field::Source) {
-                    ui.colored_label(egui::Color32::RED, message);
-                }
-                ui.horizontal_wrapped(|ui| {
-                    for card in &cards {
-                        if ui.button(card.display().to_string()).clicked() {
-                            form.source = card.to_string_lossy().into_owned();
+
+                match &state {
+                    ImportDialogState::Running { progress } => {
+                        let fraction = progress.as_ref().map_or(0.0, |progress| {
+                            if progress.bytes_total == 0 {
+                                0.0
+                            } else {
+                                (progress.bytes_done as f32 / progress.bytes_total as f32)
+                                    .clamp(0.0, 1.0)
+                            }
+                        });
+                        let text = progress
+                            .as_ref()
+                            .map(progress_text)
+                            .unwrap_or_else(|| "Importerar …".to_string());
+                        ui.add(egui::ProgressBar::new(fraction).text(text));
+                        ui.horizontal(|ui| {
+                            if ui.button("Avbryt").clicked() {
+                                cancel = true;
+                            }
+                            if ui.button("Dölj").clicked() {
+                                hide = true;
+                            }
+                        });
+                    }
+                    ImportDialogState::Done { done } => {
+                        for line in done_lines(done) {
+                            if line.error {
+                                ui.colored_label(egui::Color32::RED, line.text);
+                            } else {
+                                ui.label(line.text);
+                            }
+                        }
+                        if ui.button("Ny import").clicked() {
+                            new_import = true;
+                        }
+                        if ui.button("Stäng").clicked() {
+                            close = true;
                         }
                     }
-                });
-
-                ui.add_space(8.0);
-                ui.label("Mål");
-                ui.horizontal(|ui| {
-                    ui.text_edit_singleline(&mut form.dest);
-                    if ui.button("Välj…").clicked()
-                        && let Some(path) = pick_folder("Välj mål", &form.dest, None)
-                    {
-                        form.dest = path.to_string_lossy().into_owned();
-                    }
-                });
-                if let Some(message) = field_error(&state, Field::Dest) {
-                    ui.colored_label(egui::Color32::RED, message);
-                }
-
-                ui.add_space(8.0);
-                ui.label("Mappmall");
-                ui.text_edit_singleline(&mut form.folder);
-                if let Some(message) = field_error(&state, Field::Folder) {
-                    ui.colored_label(egui::Color32::RED, message);
-                }
-
-                ui.add_space(8.0);
-                ui.label("Filnamnsmall");
-                ui.text_edit_singleline(&mut form.name);
-                if let Some(message) = field_error(&state, Field::Name) {
-                    ui.colored_label(egui::Color32::RED, message);
-                }
-
-                ui.add_space(8.0);
-                ui.horizontal(|ui| {
-                    ui.label("Förhandsvisning");
-                    if ui.button("Sök igen").clicked() {
-                        rescan = true;
-                    }
-                });
-                match &state {
-                    ImportDialogState::Previewing => {
-                        ui.label("Förhandsvisar …");
-                    }
-                    ImportDialogState::Editing {
-                        preview: Some(preview),
-                        ..
-                    } => {
-                        ui.label(preview_summary(preview));
-                        egui::ScrollArea::vertical()
-                            .max_height(160.0)
-                            .show(ui, |ui| {
-                                for line in &preview.lines {
-                                    ui.label(preview_line(line));
-                                }
-                                if let Some(more) = more_lines(preview) {
-                                    ui.label(more);
-                                }
-                            });
-                    }
-                    ImportDialogState::Editing { .. } => {}
-                    ImportDialogState::Running { .. } => {
-                        ui.label("Importerar …");
-                    }
-                    ImportDialogState::Done { .. } => {
-                        ui.label("Importen är klar.");
+                    ImportDialogState::Editing { .. } | ImportDialogState::Previewing => {
+                        if let Some(error) = &self.import_submit_error {
+                            ui.colored_label(egui::Color32::RED, error);
+                        }
+                        ui.horizontal(|ui| {
+                            if ui
+                                .add_enabled(can_start, egui::Button::new("Starta import"))
+                                .clicked()
+                            {
+                                start = true;
+                            }
+                            if ui
+                                .add_enabled(can_close, egui::Button::new("Stäng"))
+                                .clicked()
+                            {
+                                close = true;
+                            }
+                        });
                     }
                 }
-                if let Some(error) = &self.import_submit_error {
+                if matches!(state, ImportDialogState::Done { .. })
+                    && let Some(error) = &self.import_submit_error
+                {
                     ui.colored_label(egui::Color32::RED, error);
                 }
-
-                ui.add_space(8.0);
-                ui.horizontal(|ui| {
-                    if ui
-                        .add_enabled(can_close, egui::Button::new("Stäng"))
-                        .clicked()
-                    {
-                        close = true;
-                    }
-                });
             });
 
         if let Some(dialog) = &mut self.import_dialog
@@ -224,6 +361,29 @@ impl Loupe {
         if rescan && let Some(dialog) = &mut self.import_dialog {
             dialog.rescan(Instant::now());
             self.import_submit_error = None;
+        }
+        if start {
+            self.start_import();
+        }
+        if cancel
+            && self
+                .import_dialog
+                .as_ref()
+                .is_some_and(ImportDialog::cancel)
+        {
+            self.import_worker.cancel();
+        }
+        if hide
+            && self
+                .import_dialog
+                .as_ref()
+                .is_some_and(ImportDialog::cancel)
+        {
+            self.import_hidden = true;
+        }
+        if new_import && let Some(dialog) = &mut self.import_dialog {
+            dialog.back_to_editing();
+            self.import_result_opened = false;
         }
         if close
             && self
@@ -263,7 +423,6 @@ impl Loupe {
                 DialogRequest::Run { .. } => {}
             }
         }
-        self.poll_import_worker();
         ctx.request_repaint_after(Duration::from_millis(100));
     }
 
@@ -624,9 +783,12 @@ impl Loupe {
                 egui::Color32::LIGHT_GRAY,
             );
         }
-        if self.show_info {
+        let import_status = self.hidden_import_status();
+        if self.show_info || import_status.is_some() {
             let bar = egui::Rect::from_min_max(egui::pos2(full.min.x, rect.max.y), full.max);
-            let mut line = if let Some(path) = tab.files.get(tab.current) {
+            let mut line = if !self.show_info {
+                String::new()
+            } else if let Some(path) = tab.files.get(tab.current) {
                 let name = path
                     .file_name()
                     .map(|name| name.to_string_lossy().into_owned())
@@ -640,43 +802,63 @@ impl Loupe {
             } else {
                 "Ingen bild vald".to_string()
             };
-            if let Some(message) = &self.message {
+            if self.show_info
+                && let Some(message) = &self.message
+            {
                 line = format!("{line}  ·  {message}");
             }
-            if let Some(notice) = self
-                .tabs
-                .active()
-                .and_then(|active| active.files.get(active.current))
-                .and_then(|path| self.metadata.notice(Some(path)))
+            if self.show_info
+                && let Some(notice) = self
+                    .tabs
+                    .active()
+                    .and_then(|active| active.files.get(active.current))
+                    .and_then(|path| self.metadata.notice(Some(path)))
             {
                 line = format!("{line}  ·  {notice}");
             }
-            let slider = egui::Rect::from_min_max(
-                egui::pos2((bar.max.x - 180.0).max(bar.min.x), bar.min.y + 2.0),
-                egui::pos2(bar.max.x - 8.0, bar.max.y - 2.0),
-            );
-            painter
-                .with_clip_rect(egui::Rect::from_min_max(
-                    bar.min,
-                    egui::pos2((slider.min.x - 8.0).max(bar.min.x), bar.max.y),
-                ))
-                .text(
+            if let Some(status) = import_status {
+                line = if line.is_empty() {
+                    status
+                } else {
+                    format!("{line}  ·  {status}")
+                };
+            }
+            if self.show_info {
+                let slider = egui::Rect::from_min_max(
+                    egui::pos2((bar.max.x - 180.0).max(bar.min.x), bar.min.y + 2.0),
+                    egui::pos2(bar.max.x - 8.0, bar.max.y - 2.0),
+                );
+                painter
+                    .with_clip_rect(egui::Rect::from_min_max(
+                        bar.min,
+                        egui::pos2((slider.min.x - 8.0).max(bar.min.x), bar.max.y),
+                    ))
+                    .text(
+                        egui::pos2(bar.min.x + 8.0, bar.center().y),
+                        egui::Align2::LEFT_CENTER,
+                        line,
+                        egui::FontId::monospace(12.0),
+                        egui::Color32::from_gray(210),
+                    );
+                ui.put(
+                    slider,
+                    egui::Slider::new(
+                        &mut self.thumb_size,
+                        MIN_THUMBNAIL_SIZE..=MAX_THUMBNAIL_SIZE,
+                    )
+                    .text("Storlek")
+                    .show_value(true),
+                );
+                self.thumb_size = clamp_thumbnail_size(self.thumb_size);
+            } else {
+                painter.text(
                     egui::pos2(bar.min.x + 8.0, bar.center().y),
                     egui::Align2::LEFT_CENTER,
                     line,
                     egui::FontId::monospace(12.0),
                     egui::Color32::from_gray(210),
                 );
-            ui.put(
-                slider,
-                egui::Slider::new(
-                    &mut self.thumb_size,
-                    MIN_THUMBNAIL_SIZE..=MAX_THUMBNAIL_SIZE,
-                )
-                .text("Storlek")
-                .show_value(true),
-            );
-            self.thumb_size = clamp_thumbnail_size(self.thumb_size);
+            }
         }
     }
 
@@ -777,7 +959,12 @@ impl Loupe {
             self.load_active_tab();
         }
         let full = ui.available_rect_before_wrap();
-        let status_h = if self.show_info { STATUS_HEIGHT } else { 0.0 };
+        let import_status = self.hidden_import_status();
+        let status_h = if self.show_info || import_status.is_some() {
+            STATUS_HEIGHT
+        } else {
+            0.0
+        };
         let rect = egui::Rect::from_min_max(
             full.min,
             egui::pos2(full.max.x, (full.max.y - status_h).max(full.min.y + 1.0)),
@@ -785,16 +972,21 @@ impl Loupe {
         let ppp = ctx.pixels_per_point();
         let key_anchor = self.anchor(ctx.input(|input| input.pointer.hover_pos()), rect, ppp);
         let mut scroll_to = None;
-        let mut dialog_consumes_keys = self.import_dialog.is_some();
+        let mut dialog_consumes_keys = self.import_dialog.is_some() && !self.import_hidden;
+        let mut start_import = false;
         for (tab_action, key, ctrl, shift, alt) in key_actions {
             if dialog_consumes_keys {
-                if let Some(DialogKey::Close) = dialog_key_action(key, ctrl, alt)
-                    && self
-                        .import_dialog
-                        .as_ref()
-                        .is_some_and(ImportDialog::can_close)
-                {
-                    self.close_import();
+                match dialog_key_action(key, ctrl, alt) {
+                    Some(DialogKey::Close)
+                        if self
+                            .import_dialog
+                            .as_ref()
+                            .is_some_and(ImportDialog::can_close) =>
+                    {
+                        self.close_import();
+                    }
+                    Some(DialogKey::Start) => start_import = true,
+                    _ => {}
                 }
                 continue;
             }
@@ -840,6 +1032,9 @@ impl Loupe {
                 }
                 None => {}
             }
+        }
+        if start_import {
+            self.start_import();
         }
         if self
             .tabs
@@ -949,17 +1144,34 @@ impl Loupe {
         if self.metadata.is_loading(metadata_path) {
             ctx.request_repaint_after(Duration::from_millis(100));
         }
-        if self.show_info {
+        if self.show_info || import_status.is_some() {
             let bar = egui::Rect::from_min_max(egui::pos2(full.min.x, rect.max.y), full.max);
-            let mut line = status_line(&frame, self.anchor_at_pointer);
-            if let Some(m) = &self.message {
+            let mut line = if self.show_info {
+                status_line(&frame, self.anchor_at_pointer)
+            } else {
+                String::new()
+            };
+            if self.show_info
+                && let Some(m) = &self.message
+            {
                 line = format!("{line}  ·  {m}");
             }
-            if let Some(notice) = &metadata_notice {
+            if self.show_info
+                && let Some(notice) = &metadata_notice
+            {
                 line = format!("{line}  ·  {notice}");
             }
-            if let Some(rating) = self.metadata.rating_summary(frame.path.as_deref()) {
+            if self.show_info
+                && let Some(rating) = self.metadata.rating_summary(frame.path.as_deref())
+            {
                 line = format!("{line}  ·  {rating}");
+            }
+            if let Some(status) = import_status {
+                line = if line.is_empty() {
+                    status
+                } else {
+                    format!("{line}  ·  {status}")
+                };
             }
             painter.text(
                 egui::pos2(bar.min.x + 8.0, bar.center().y),
@@ -969,15 +1181,17 @@ impl Loupe {
                 egui::Color32::from_gray(210),
             );
             // the display-mode control (G4: a key and a control)
-            let button = egui::Rect::from_min_size(
-                egui::pos2(bar.max.x - 130.0, bar.min.y + 2.0),
-                egui::vec2(124.0, STATUS_HEIGHT - 4.0),
-            );
-            if ui
-                .put(button, egui::Button::new(mode_label(frame.mode)))
-                .clicked()
-            {
-                self.core.toggle_mode();
+            if self.show_info {
+                let button = egui::Rect::from_min_size(
+                    egui::pos2(bar.max.x - 130.0, bar.min.y + 2.0),
+                    egui::vec2(124.0, STATUS_HEIGHT - 4.0),
+                );
+                if ui
+                    .put(button, egui::Button::new(mode_label(frame.mode)))
+                    .clicked()
+                {
+                    self.core.toggle_mode();
+                }
             }
         } else if matches!(frame.status, Status::Ready)
             && self.metadata.is_error(frame.path.as_deref())
@@ -1020,6 +1234,7 @@ fn submit_error_text(error: SubmitError) -> String {
 
 impl eframe::App for Loupe {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        self.poll_import_worker(ui.ctx());
         egui::CentralPanel::default()
             .frame(egui::Frame::NONE)
             .show(ui, |ui| {
@@ -1064,6 +1279,8 @@ fn run(options: Options) -> Result<(), String> {
                 last_form: ImportForm::default(),
                 detected_cards: Vec::new(),
                 import_submit_error: None,
+                import_hidden: false,
+                import_result_opened: false,
                 thumb_worker,
                 thumb_grid: ThumbGrid::new(0, 0),
                 thumb_generation: 0,
