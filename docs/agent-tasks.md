@@ -23,9 +23,13 @@ project owner together with a reviewer before it is merged. Read `AGENTS.md`, `C
    cargo clippy -p <crate> --all-targets
    ```
    (`<crate>` is named in the task; for `src-tauri` it is `photoworkflow`.)
-7. **Do not commit.** Leave the changes uncommitted so they can be reviewed with `git diff`.
+7. **Build only in the project's own `target` folder.** Do not set `CARGO_TARGET_DIR` or
+   `--target-dir`, and do not build in a temporary folder (for example under `%TEMP%`). The
+   owner's antivirus has an exception for `target` only; builds elsewhere are quarantined.
+   If the program is running and `target` is locked, ask the owner to close it.
+8. **Do not commit.** Leave the changes uncommitted so they can be reviewed with `git diff`.
    Do not create checkpoint commits or refs in this repository.
-8. **Report:** list every file changed, what changed and why, and paste the exact output of the
+9. **Report:** list every file changed, what changed and why, and paste the exact output of the
    commands in step 6. Then mark the task "Ready for review" below.
 
 ## Status legend
@@ -534,7 +538,7 @@ Ordered from easiest to hardest. Start at the top.
   tabs keep their own mode; the slider and Ctrl + wheel change the size; `pw-loupe <file>` opens the
   loupe and `pw-loupe <folder>` the grid.
 
-### T30. ADR 0010 M4a: import form and preview summary (plain Rust) — Open
+### T30. ADR 0010 M4a: import form and preview summary (plain Rust) — Done
 
 - **Crate:** `pw-loupe`. **Files:** `crates/pw-loupe/Cargo.toml` (add `pw-ingest.workspace = true` to
   `[dependencies]`; internal, approved by ADR 0010 §6), a new `crates/pw-loupe/src/import.rs`, declared
@@ -894,3 +898,6 @@ and reviewer:
 | 2026-11-09 | T29 | Done | Reviewed: grid ↔ loupe by keys and double-click, per-tab mode, empty view core in grid mode, file opens in the loupe and folder in the grid, size slider, mode button only in the loupe. Fixed in review: switching mode reloaded the whole tab (new generation), so every visit to the loupe threw the thumbnails and their cache away; `switch_mode` now only pauses/resumes the thumbnail worker and fills/empties the view core (ADR 0011 §4.2). Owner feedback: one Ctrl + wheel notch changed the size too much, because egui spreads a notch over several frames of `zoom_delta()`; now the raw wheel events give exactly one step per notch (`take_wheel_steps`, tested) and `THUMBNAIL_SIZE_STEP` is 8 instead of 16 (owner request; the step test uses the new values). Owner kept wheel = scroll, Ctrl + wheel = size. Workspace fmt, test and clippy OK; owner checked by hand (ADR 0011 §8.2 steps for C3, C4) |
 | 2026-11-09 | ADR 0011 K5, K6 | Done | K5 by the owner: grid, thumbnails and loupe switching all appear within the same second for the test folder; C3–C5 passed by hand. Owner set the targets C1 and C2 to within 1 s (also the first time after a restart). No disk cache needed (Q4). K6: architecture.md, test inventory (236 passed, 27 ignored), ADR 0010 (imports open as a contact sheet) and ADR 0011 updated |
 | 2026-11-09 | ADR 0010 M3 | Done | Owner approved `rfd` =0.17.2 (MIT, `default-features = false`) for the folder dialog; its Windows dependencies are already in the workspace (GUI_REQUIREMENTS §6.1). Added T30–T32 (M4: form and preview summary, worker, dialog state machine). `rfd` is added in M5 |
+| 2026-11-09 | T30 | Ready for review | Added the plain-Rust import form, shared `pw-ingest` validation, plan preview summary and result-folder selection, with the specified unit tests. |
+| 2026-11-09 | – | – | Rule 7 added (owner's antivirus): build only in the project's `target` folder, never in a temporary target folder. During T30 the agent built in `%TEMP%\pw-loupe-t30-target` and the antivirus quarantined a build script there |
+| 2026-11-09 | T30 | Done | Reviewed: `ImportForm` with the Tauri defaults; the field is chosen by which check fails (source, folder template, name template, then the rest as destination), never by the message text; messages are exactly those of `pw-ingest`; `Preview::new` matches the Tauri `preview_of`/`action` rules; `result_folder` follows Q2. All required tests present; pw-ingest added as an internal dependency. The first run failed to compile because the antivirus quarantined a build script in the agent's temporary target folder (rule 7); the owner's rerun: workspace fmt, test (245 passed, 27 ignored) and clippy OK. No changes in review |
