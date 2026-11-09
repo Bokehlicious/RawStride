@@ -7,19 +7,21 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::mpsc::TryRecvError;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use eframe::egui;
 use metadata::MetadataCache;
 use pw_loupe::{
-    Action, CellState, DEFAULT_THUMBNAIL_SIZE, GridKeyAction, MAX_THUMBNAIL_SIZE,
-    MIN_THUMBNAIL_SIZE, Options, TabAction, Tabs, ThumbGrid, ViewMode, WINDOW_TITLE,
-    clamp_thumbnail_size, color_image, columns, error_text, grid_key_action, indicator_text,
-    key_action, list_folder, loupe_key_action, mode_label, navigate, parse_args, request_cell,
-    status_line, step_thumbnail_size, tab_action, take_wheel_steps, visible_range, wheel_factor,
+    Action, CellState, DEFAULT_THUMBNAIL_SIZE, DialogKey, DialogRequest, Field, GridKeyAction,
+    ImportDialog, ImportDialogState, ImportEvent, ImportForm, ImportWorker, MAX_THUMBNAIL_SIZE,
+    MIN_THUMBNAIL_SIZE, Options, SubmitError, TabAction, Tabs, ThumbGrid, ViewMode, WINDOW_TITLE,
+    clamp_thumbnail_size, color_image, columns, dialog_key_action, error_text, grid_key_action,
+    indicator_text, key_action, list_folder, loupe_key_action, mode_label, more_lines, navigate,
+    opens_import, parse_args, preview_line, preview_summary, request_cell, status_line,
+    step_thumbnail_size, tab_action, take_wheel_steps, visible_range, wheel_factor,
 };
 use pw_metadata::MetadataWorker;
 use pw_render::{Textures, view_px};
@@ -38,6 +40,11 @@ struct Loupe {
     core: ViewCore<NativeBackend>,
     metadata_worker: MetadataWorker,
     metadata: MetadataCache,
+    import_worker: ImportWorker,
+    import_dialog: Option<ImportDialog>,
+    last_form: ImportForm,
+    detected_cards: Vec<PathBuf>,
+    import_submit_error: Option<String>,
     thumb_worker: ThumbWorker,
     thumb_grid: ThumbGrid,
     thumb_generation: u64,
@@ -57,6 +64,209 @@ struct Loupe {
 }
 
 impl Loupe {
+    fn open_import(&mut self) {
+        if self.import_dialog.is_some() {
+            return;
+        }
+        self.import_dialog = Some(ImportDialog::new(self.last_form.clone()));
+        self.import_submit_error = None;
+        if let Err(error) = self.import_worker.cards() {
+            self.import_submit_error = Some(submit_error_text(error));
+        }
+    }
+
+    fn close_import(&mut self) {
+        if let Some(dialog) = self.import_dialog.take() {
+            self.last_form = dialog.form().clone();
+        }
+    }
+
+    fn poll_import_worker(&mut self) {
+        loop {
+            match self.import_worker.try_recv() {
+                Ok(ImportEvent::Cards { cards, .. }) => self.detected_cards = cards,
+                Ok(event) => {
+                    if let Some(dialog) = &mut self.import_dialog {
+                        dialog.apply(&event);
+                    }
+                }
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Disconnected) => {
+                    if let Some(dialog) = &mut self.import_dialog {
+                        dialog.disconnected();
+                    }
+                    break;
+                }
+            }
+        }
+    }
+
+    fn draw_import_dialog(&mut self, ctx: &egui::Context) {
+        let Some(dialog) = self.import_dialog.as_ref() else {
+            return;
+        };
+        let mut form = dialog.form().clone();
+        let original_form = form.clone();
+        let state = dialog.state().clone();
+        let can_close = dialog.can_close();
+        let cards = self.detected_cards.clone();
+        let mut rescan = false;
+        let mut close = false;
+
+        egui::Window::new("Importera")
+            .collapsible(false)
+            .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+            .show(ctx, |ui| {
+                ui.label("Källa");
+                ui.horizontal(|ui| {
+                    ui.text_edit_singleline(&mut form.source);
+                    if ui.button("Välj…").clicked()
+                        && let Some(path) = pick_folder("Välj källa", &form.source, cards.first())
+                    {
+                        form.source = path.to_string_lossy().into_owned();
+                    }
+                });
+                if let Some(message) = field_error(&state, Field::Source) {
+                    ui.colored_label(egui::Color32::RED, message);
+                }
+                ui.horizontal_wrapped(|ui| {
+                    for card in &cards {
+                        if ui.button(card.display().to_string()).clicked() {
+                            form.source = card.to_string_lossy().into_owned();
+                        }
+                    }
+                });
+
+                ui.add_space(8.0);
+                ui.label("Mål");
+                ui.horizontal(|ui| {
+                    ui.text_edit_singleline(&mut form.dest);
+                    if ui.button("Välj…").clicked()
+                        && let Some(path) = pick_folder("Välj mål", &form.dest, None)
+                    {
+                        form.dest = path.to_string_lossy().into_owned();
+                    }
+                });
+                if let Some(message) = field_error(&state, Field::Dest) {
+                    ui.colored_label(egui::Color32::RED, message);
+                }
+
+                ui.add_space(8.0);
+                ui.label("Mappmall");
+                ui.text_edit_singleline(&mut form.folder);
+                if let Some(message) = field_error(&state, Field::Folder) {
+                    ui.colored_label(egui::Color32::RED, message);
+                }
+
+                ui.add_space(8.0);
+                ui.label("Filnamnsmall");
+                ui.text_edit_singleline(&mut form.name);
+                if let Some(message) = field_error(&state, Field::Name) {
+                    ui.colored_label(egui::Color32::RED, message);
+                }
+
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    ui.label("Förhandsvisning");
+                    if ui.button("Sök igen").clicked() {
+                        rescan = true;
+                    }
+                });
+                match &state {
+                    ImportDialogState::Previewing => {
+                        ui.label("Förhandsvisar …");
+                    }
+                    ImportDialogState::Editing {
+                        preview: Some(preview),
+                        ..
+                    } => {
+                        ui.label(preview_summary(preview));
+                        egui::ScrollArea::vertical()
+                            .max_height(160.0)
+                            .show(ui, |ui| {
+                                for line in &preview.lines {
+                                    ui.label(preview_line(line));
+                                }
+                                if let Some(more) = more_lines(preview) {
+                                    ui.label(more);
+                                }
+                            });
+                    }
+                    ImportDialogState::Editing { .. } => {}
+                    ImportDialogState::Running { .. } => {
+                        ui.label("Importerar …");
+                    }
+                    ImportDialogState::Done { .. } => {
+                        ui.label("Importen är klar.");
+                    }
+                }
+                if let Some(error) = &self.import_submit_error {
+                    ui.colored_label(egui::Color32::RED, error);
+                }
+
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    if ui
+                        .add_enabled(can_close, egui::Button::new("Stäng"))
+                        .clicked()
+                    {
+                        close = true;
+                    }
+                });
+            });
+
+        if let Some(dialog) = &mut self.import_dialog
+            && form != original_form
+        {
+            dialog.edit(|current| *current = form, Instant::now());
+            self.import_submit_error = None;
+        }
+        if rescan && let Some(dialog) = &mut self.import_dialog {
+            dialog.rescan(Instant::now());
+            self.import_submit_error = None;
+        }
+        if close
+            && self
+                .import_dialog
+                .as_ref()
+                .is_some_and(ImportDialog::can_close)
+        {
+            self.close_import();
+            return;
+        }
+
+        if let Some(request) = self
+            .import_dialog
+            .as_mut()
+            .and_then(|dialog| dialog.tick(Instant::now()))
+        {
+            match request {
+                DialogRequest::Preview { form, rescan } => {
+                    match self.import_worker.preview(form, rescan) {
+                        Ok(id) => {
+                            if let Some(dialog) = &mut self.import_dialog {
+                                dialog.sent(id);
+                            }
+                            self.import_submit_error = None;
+                        }
+                        Err(error) => {
+                            if let Some(dialog) = &mut self.import_dialog {
+                                match &error {
+                                    SubmitError::QueueFull => dialog.rescan(Instant::now()),
+                                    SubmitError::Stopped => dialog.disconnected(),
+                                }
+                            }
+                            self.import_submit_error = Some(submit_error_text(error));
+                        }
+                    }
+                }
+                DialogRequest::Run { .. } => {}
+            }
+        }
+        self.poll_import_worker();
+        ctx.request_repaint_after(Duration::from_millis(100));
+    }
+
     fn open(&mut self, path: &Path, new_tab: bool) {
         match list_folder(path) {
             Ok((files, pos)) => {
@@ -523,7 +733,7 @@ impl Loupe {
         if let Some(path) = dropped {
             self.open(&path, true);
         }
-        let key_actions: Vec<(Option<TabAction>, egui::Key, bool, bool)> = ctx.input(|i| {
+        let key_actions: Vec<(Option<TabAction>, egui::Key, bool, bool, bool)> = ctx.input(|i| {
             i.events
                 .iter()
                 .filter_map(|event| match event {
@@ -535,7 +745,7 @@ impl Loupe {
                     } => {
                         let ctrl = modifiers.ctrl || modifiers.command;
                         let tab = tab_action(*key, ctrl, modifiers.shift, modifiers.alt);
-                        Some((tab, *key, ctrl, modifiers.alt))
+                        Some((tab, *key, ctrl, modifiers.shift, modifiers.alt))
                     }
                     _ => None,
                 })
@@ -544,6 +754,7 @@ impl Loupe {
         let titles = self.tabs.titles();
         let active = self.tabs.active_index();
         let mut selected = None;
+        let mut open_import_clicked = false;
         egui::ScrollArea::horizontal()
             .id_salt("folder-tabs")
             .show(ui, |ui| {
@@ -553,8 +764,12 @@ impl Loupe {
                             selected = Some(index);
                         }
                     }
+                    open_import_clicked = ui.button("Importera…").clicked();
                 });
             });
+        if open_import_clicked {
+            self.open_import();
+        }
         if let Some(index) = selected
             && index != self.tabs.active_index()
             && self.tabs.activate(index)
@@ -570,7 +785,24 @@ impl Loupe {
         let ppp = ctx.pixels_per_point();
         let key_anchor = self.anchor(ctx.input(|input| input.pointer.hover_pos()), rect, ppp);
         let mut scroll_to = None;
-        for (tab_action, key, ctrl, alt) in key_actions {
+        let mut dialog_consumes_keys = self.import_dialog.is_some();
+        for (tab_action, key, ctrl, shift, alt) in key_actions {
+            if dialog_consumes_keys {
+                if let Some(DialogKey::Close) = dialog_key_action(key, ctrl, alt)
+                    && self
+                        .import_dialog
+                        .as_ref()
+                        .is_some_and(ImportDialog::can_close)
+                {
+                    self.close_import();
+                }
+                continue;
+            }
+            if opens_import(key, ctrl, shift, alt) {
+                self.open_import();
+                dialog_consumes_keys = true;
+                continue;
+            }
             if let Some(action) = tab_action {
                 self.tab_action(action);
                 continue;
@@ -756,11 +988,44 @@ impl Loupe {
     }
 }
 
+fn field_error(state: &ImportDialogState, field: Field) -> Option<&str> {
+    match state {
+        ImportDialogState::Editing {
+            error: Some(error), ..
+        } if error.field == field => Some(&error.message),
+        _ => None,
+    }
+}
+
+/// Opens the Windows folder dialog. It starts in the folder already typed in the field, else in
+/// `fallback` (the first detected card for the source); Windows itself falls back to its default
+/// folder when the start folder does not exist, so nothing is checked on disk here.
+fn pick_folder(title: &str, current: &str, fallback: Option<&PathBuf>) -> Option<PathBuf> {
+    let mut dialog = rfd::FileDialog::new().set_title(title);
+    let current = current.trim();
+    if !current.is_empty() {
+        dialog = dialog.set_directory(current);
+    } else if let Some(fallback) = fallback {
+        dialog = dialog.set_directory(fallback);
+    }
+    dialog.pick_folder()
+}
+
+fn submit_error_text(error: SubmitError) -> String {
+    match error {
+        SubmitError::QueueFull => "Importarbetarens kö är full.".to_string(),
+        SubmitError::Stopped => "Importarbetaren har stoppat.".to_string(),
+    }
+}
+
 impl eframe::App for Loupe {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         egui::CentralPanel::default()
             .frame(egui::Frame::NONE)
-            .show(ui, |ui| self.draw(ui));
+            .show(ui, |ui| {
+                self.draw(ui);
+                self.draw_import_dialog(ui.ctx());
+            });
     }
 }
 
@@ -773,6 +1038,7 @@ fn run(options: Options) -> Result<(), String> {
     let indicator_after = config.indicator_after;
     let core = ViewCore::start(NativeBackend, config)?;
     let metadata_worker = MetadataWorker::start().map_err(|e| e.to_string())?;
+    let import_worker = ImportWorker::start().map_err(|e| e.to_string())?;
     let thumb_worker = ThumbWorker::start().map_err(|e| e.to_string())?;
     let native = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
@@ -793,6 +1059,11 @@ fn run(options: Options) -> Result<(), String> {
                 core,
                 metadata_worker,
                 metadata: MetadataCache::default(),
+                import_worker,
+                import_dialog: None,
+                last_form: ImportForm::default(),
+                detected_cards: Vec::new(),
+                import_submit_error: None,
                 thumb_worker,
                 thumb_grid: ThumbGrid::new(0, 0),
                 thumb_generation: 0,

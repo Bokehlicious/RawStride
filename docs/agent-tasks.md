@@ -742,7 +742,7 @@ Ordered from easiest to hardest. Start at the top.
   folders.
 - **Done when:** `.\tools\check.ps1` is all OK.
 
-### T35. ADR 0010 M5b: draw the import dialog (editing and preview) — Open
+### T35. ADR 0010 M5b: draw the import dialog (editing and preview) — Done
 
 - **Start after T34 is done.**
 - **Crate:** `pw-loupe`. **Files:** `crates/pw-loupe/Cargo.toml` (add
@@ -1064,3 +1064,5 @@ and reviewer:
 | 2026-11-09 | T34 | Ready for review | Added worker-side card detection, import key actions, pure Swedish import texts and full tests for dialog transitions and text output. |
 | 2026-11-09 | T34–T36 | Open | Added: ADR 0010 M5 split into card detection on the worker plus keys and Swedish texts (plain Rust), drawing the dialog with editing and preview (adds `rfd`), and running the import with progress, hide, summary and opening the result in a new tab. M6 (acceptance by the owner) follows T36 |
 | 2026-11-09 | T34 | Done | Reviewed: `cards()` runs `card_volumes` on the worker; `can_start` (no side effects) and `rescan`; `opens_import` (Ctrl+I only) and `dialog_key_action` (in `lib.rs`, next to the other key maps); Swedish texts match the Tauri dialog, with `pw_core::format_bytes`. All required tests present. Fixed in review: the speed was truncated (4.6 MB/s showed as 4); it is now rounded as `toFixed(0)` in the Tauri dialog, with a test. Workspace fmt, test (280 passed, 27 ignored) and clippy OK before the fix; the owner reruns `.\tools\check.ps1` |
+| 2026-11-09 | T35 | Ready for review | Added the centred import dialog, folder and card selection, editable form, field validation errors, debounced worker previews and Ctrl+I/tab-bar opening; preserved settings when closing. `.\tools\check.ps1` passed (fmt, workspace tests and clippy); Cargo.lock only adds `rfd` to `pw-loupe`. Owner's manual GUI checks remain. |
+| 2026-11-09 | T35 | Done | Reviewed: `rfd` added as approved and `Cargo.lock` only lists it under `pw-loupe`; Ctrl+I and the "Importera…" button open the dialog; cards are found on the worker; folder dialogs, field errors under the right field, preview on the worker; keys go only to the dialog while it is open; settings kept for the session. Fixed in review: the heading "Preview" is now "Förhandsvisning"; owner feedback: "Välj…" always opened Documents, so the folder dialog now starts in the folder typed in the field, else (for the source) the first detected card. Owner checked by hand: everything else works. Note: the first hand test ran an old `pw-loupe.exe`, because `cargo build -p pw-loupe` fails on the `thiserror` build script; use `cargo build --workspace` |

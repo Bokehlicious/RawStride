@@ -24,3 +24,4 @@ pw-ingest.workspace = true
 pw-core.workspace = true
 egui.workspace = true
 eframe.workspace = true
+rfd = { version = "=0.17.2", default-features = false }
