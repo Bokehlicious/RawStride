@@ -697,7 +697,7 @@ Ordered from easiest to hardest. Start at the top.
   `target`).
 - **Done when:** `.\tools\check.ps1` is all OK.
 
-### T34. ADR 0010 M5a: card detection on the worker, dialog keys and texts (plain Rust) — Open
+### T34. ADR 0010 M5a: card detection on the worker, dialog keys and texts (plain Rust) — Done
 
 - **Crate:** `pw-loupe`. **Files:** `crates/pw-loupe/Cargo.toml` (add `pw-core.workspace = true`;
   internal), `crates/pw-loupe/src/import_worker.rs`, `crates/pw-loupe/src/import_dialog.rs`, a new
@@ -1061,4 +1061,6 @@ and reviewer:
 | 2026-11-09 | T32 | Done | Owner reran `.\tools\check.ps1` on the final code: fmt, test (262 passed, 27 ignored) and clippy OK; committed. Rule 6 changed: the agent runs `.\tools\check.ps1` (whole workspace) instead of single-crate `cargo test -p`/`clippy -p`, whose different feature set builds new build scripts that failed to link (LNK1104), most likely blocked by the antivirus. Noted in review: `rfd` 0.17.2 is already in `Cargo.lock` through `tauri-plugin-dialog`, so adding it to `pw-loupe` in M5 adds no new crate at all |
 | 2026-11-09 | T33 | Ready for review | Import requests now carry the form; validation and file access run on the worker, and field errors are preserved through preview and dialog state. Added worker and dialog regression tests. |
 | 2026-11-09 | T33 | Done | Reviewed: the worker takes the form and validates it first; preview errors keep their field (scan errors on `Source` with the Tauri message); a run with an invalid form ends with its message and copies nothing; `tick()` and `start()` no longer touch the disk. Only the calls of the existing tests changed, as allowed. The T31 test for a missing source now checks the validation message ("Källan … finns inte."), because validation now runs before the scan; the scan-error path ("Kunde inte läsa …") is unchanged code but no longer reached by a test, since a missing folder is caught first. Workspace fmt, test (266 passed, 27 ignored) and clippy OK. No changes in review. ADR 0010 M4 is complete |
+| 2026-11-09 | T34 | Ready for review | Added worker-side card detection, import key actions, pure Swedish import texts and full tests for dialog transitions and text output. |
 | 2026-11-09 | T34–T36 | Open | Added: ADR 0010 M5 split into card detection on the worker plus keys and Swedish texts (plain Rust), drawing the dialog with editing and preview (adds `rfd`), and running the import with progress, hide, summary and opening the result in a new tab. M6 (acceptance by the owner) follows T36 |
+| 2026-11-09 | T34 | Done | Reviewed: `cards()` runs `card_volumes` on the worker; `can_start` (no side effects) and `rescan`; `opens_import` (Ctrl+I only) and `dialog_key_action` (in `lib.rs`, next to the other key maps); Swedish texts match the Tauri dialog, with `pw_core::format_bytes`. All required tests present. Fixed in review: the speed was truncated (4.6 MB/s showed as 4); it is now rounded as `toFixed(0)` in the Tauri dialog, with a test. Workspace fmt, test (280 passed, 27 ignored) and clippy OK before the fix; the owner reruns `.\tools\check.ps1` |

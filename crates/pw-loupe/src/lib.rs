@@ -5,6 +5,7 @@
 mod grid;
 mod import;
 mod import_dialog;
+mod import_text;
 mod import_worker;
 mod tabs;
 mod thumbs;
@@ -22,6 +23,9 @@ pub use import::{
     Field, FieldError, ImportForm, ItemAction, Preview, PreviewLine, Validated, result_folder,
 };
 pub use import_dialog::{DialogRequest, ImportDialog, ImportDialogState};
+pub use import_text::{
+    DoneLine, done_lines, more_lines, preview_line, preview_summary, progress_text,
+};
 pub use import_worker::{ImportDone, ImportEvent, ImportWorker, RequestId, SubmitError};
 pub use tabs::{Tab, Tabs, ViewMode};
 pub use thumbs::{CellState, ThumbGrid, color_image, request_cell};
@@ -287,6 +291,29 @@ pub fn mode_label(mode: Source) -> &'static str {
     }
 }
 
+/// Whether the key combination opens the import dialog (Ctrl+I, no shift or alt).
+pub fn opens_import(key: egui::Key, ctrl: bool, shift: bool, alt: bool) -> bool {
+    key == egui::Key::I && ctrl && !shift && !alt
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DialogKey {
+    Close,
+    Start,
+}
+
+/// The action of a key press while the import dialog is open.
+pub fn dialog_key_action(key: egui::Key, ctrl: bool, alt: bool) -> Option<DialogKey> {
+    if ctrl || alt {
+        return None;
+    }
+    match key {
+        egui::Key::Escape => Some(DialogKey::Close),
+        egui::Key::Enter => Some(DialogKey::Start),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -454,5 +481,34 @@ mod tests {
         assert!(error_text(&none, Source::Jpeg).contains("ingen inbäddad JPEG"));
         assert!(error_text(&DecodeError::new("boom"), Source::Raw).contains("boom"));
         assert_eq!(mode_label(Source::Jpeg), "Läge: JPEG (R)");
+    }
+
+    #[test]
+    fn opens_import_only_on_ctrl_i() {
+        use egui::Key as K;
+        assert!(opens_import(K::I, true, false, false));
+        assert!(!opens_import(K::I, false, false, false));
+        assert!(!opens_import(K::I, true, true, false));
+        assert!(!opens_import(K::I, true, false, true));
+        assert!(!opens_import(K::I, false, false, true));
+        assert!(!opens_import(K::O, true, false, false));
+    }
+
+    #[test]
+    fn dialog_keys_match_spec() {
+        use egui::Key as K;
+        assert_eq!(
+            dialog_key_action(K::Escape, false, false),
+            Some(DialogKey::Close)
+        );
+        assert_eq!(
+            dialog_key_action(K::Enter, false, false),
+            Some(DialogKey::Start)
+        );
+        assert_eq!(dialog_key_action(K::Escape, true, false), None);
+        assert_eq!(dialog_key_action(K::Enter, true, false), None);
+        assert_eq!(dialog_key_action(K::Escape, false, true), None);
+        assert_eq!(dialog_key_action(K::Enter, false, true), None);
+        assert_eq!(dialog_key_action(K::A, false, false), None);
     }
 }

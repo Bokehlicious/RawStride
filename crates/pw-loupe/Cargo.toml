@@ -21,5 +21,6 @@ pw-raw.workspace = true
 pw-metadata.workspace = true
 pw-thumbcache.workspace = true
 pw-ingest.workspace = true
+pw-core.workspace = true
 egui.workspace = true
 eframe.workspace = true

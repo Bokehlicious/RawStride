@@ -28,6 +28,10 @@ pub enum ImportEvent {
         id: RequestId,
         progress: pw_ingest::Progress,
     },
+    Cards {
+        id: RequestId,
+        cards: Vec<PathBuf>,
+    },
     Done {
         id: RequestId,
         done: ImportDone,
@@ -56,6 +60,9 @@ enum Request {
     Run {
         id: RequestId,
         form: ImportForm,
+    },
+    Cards {
+        id: RequestId,
     },
 }
 
@@ -126,6 +133,13 @@ impl ImportWorker {
         Ok(id)
     }
 
+    /// Queues a card detection.
+    pub fn cards(&mut self) -> Result<RequestId, SubmitError> {
+        let id = self.next_request_id();
+        self.submit(Request::Cards { id })?;
+        Ok(id)
+    }
+
     /// Requests cancellation of the current or next queued copy.
     pub fn cancel(&self) {
         self.cancel.store(true, Ordering::Relaxed);
@@ -184,6 +198,10 @@ fn run(
                 drop(lock_recover(&run_gate));
                 run_import(id, &form, &cancel, &mut cached_scan, &events)
             }
+            Request::Cards { id } => ImportEvent::Cards {
+                id,
+                cards: pw_ingest::card_volumes(),
+            },
         };
         if events.send(event).is_err() {
             break;
@@ -385,6 +403,7 @@ mod tests {
                     return done;
                 }
                 ImportEvent::Previewed { .. } => panic!("unexpected preview event"),
+                ImportEvent::Cards { .. } => panic!("unexpected cards event"),
             }
         }
     }
@@ -457,6 +476,7 @@ mod tests {
                     break done;
                 }
                 ImportEvent::Previewed { .. } => panic!("unexpected preview event"),
+                ImportEvent::Cards { .. } => panic!("unexpected cards event"),
             }
         };
 
@@ -591,6 +611,16 @@ mod tests {
                     );
                 }
             }
+        }
+    }
+
+    #[test]
+    fn cards_answers_with_its_id() {
+        let mut worker = ImportWorker::start().unwrap();
+        let id = worker.cards().unwrap();
+        match next_event(&worker) {
+            ImportEvent::Cards { id: event_id, .. } => assert_eq!(event_id, id),
+            event => panic!("unexpected cards event: {event:?}"),
         }
     }
 

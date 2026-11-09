@@ -223,6 +223,30 @@ impl ImportDialog {
             _ => None,
         }
     }
+
+    pub fn can_start(&self) -> bool {
+        let ImportDialogState::Editing {
+            preview: Some(preview),
+            error: None,
+        } = &self.state
+        else {
+            return false;
+        };
+        preview.files_to_copy > 0
+    }
+
+    pub fn rescan(&mut self, now: Instant) {
+        if matches!(self.state, ImportDialogState::Running { .. }) {
+            return;
+        }
+        self.changed_at = Some(now);
+        self.source_changed = true;
+        self.request_id = None;
+        self.state = ImportDialogState::Editing {
+            preview: None,
+            error: None,
+        };
+    }
 }
 
 #[cfg(test)]
@@ -637,6 +661,126 @@ mod tests {
             dialog.tick(Instant::now() + PREVIEW_DELAY),
             Some(DialogRequest::Preview { rescan: true, .. })
         ));
+    }
+
+    #[test]
+    fn can_start_is_true_only_with_nonempty_preview_in_editing_mode() {
+        let mut dialog = ImportDialog::new(ImportForm::default());
+        assert!(!dialog.can_start());
+        assert!(matches!(
+            dialog.state(),
+            ImportDialogState::Editing {
+                preview: None,
+                error: None
+            }
+        ));
+        dialog.state = ImportDialogState::Editing {
+            preview: Some(preview(0)),
+            error: None,
+        };
+        assert!(!dialog.can_start());
+        assert!(matches!(
+            dialog.state(),
+            ImportDialogState::Editing {
+                preview: Some(current),
+                error: None
+            } if current.files_to_copy == 0
+        ));
+        dialog.state = ImportDialogState::Editing {
+            preview: Some(preview(1)),
+            error: None,
+        };
+        assert!(dialog.can_start());
+        assert!(matches!(
+            dialog.state(),
+            ImportDialogState::Editing {
+                preview: Some(current),
+                error: None
+            } if current.files_to_copy == 1
+        ));
+        dialog.state = ImportDialogState::Editing {
+            preview: Some(preview(1)),
+            error: Some(FieldError {
+                field: Field::Dest,
+                message: "Välj ett mål.".to_string(),
+            }),
+        };
+        assert!(!dialog.can_start());
+        assert!(matches!(
+            dialog.state(),
+            ImportDialogState::Editing {
+                preview: Some(_),
+                error: Some(_)
+            }
+        ));
+        dialog.state = ImportDialogState::Previewing;
+        assert!(!dialog.can_start());
+        assert!(matches!(dialog.state(), ImportDialogState::Previewing));
+        dialog.state = ImportDialogState::Running { progress: None };
+        assert!(!dialog.can_start());
+        assert!(matches!(
+            dialog.state(),
+            ImportDialogState::Running { progress: None }
+        ));
+        dialog.state = ImportDialogState::Done {
+            done: ImportDone::default(),
+        };
+        assert!(!dialog.can_start());
+        assert!(matches!(
+            dialog.state(),
+            ImportDialogState::Done { done } if done == &ImportDone::default()
+        ));
+    }
+
+    #[test]
+    fn rescan_marks_form_as_changed_and_asks_for_fresh_scan() {
+        let mut dialog = ImportDialog::new(ImportForm::default());
+        dialog.state = ImportDialogState::Editing {
+            preview: Some(preview(1)),
+            error: None,
+        };
+        let now = Instant::now();
+        dialog.rescan(now);
+        assert!(matches!(
+            dialog.state(),
+            ImportDialogState::Editing {
+                preview: None,
+                error: None
+            }
+        ));
+        assert!(matches!(
+            dialog.tick(now + PREVIEW_DELAY),
+            Some(DialogRequest::Preview { rescan: true, .. })
+        ));
+    }
+
+    #[test]
+    fn rescan_is_ignored_while_running() {
+        let mut dialog = ImportDialog::new(ImportForm::default());
+        dialog.changed_at = None;
+        dialog.source_changed = false;
+        dialog.request_id = Some(7);
+        dialog.state = ImportDialogState::Running {
+            progress: Some(pw_ingest::Progress::default()),
+        };
+        let now = Instant::now();
+
+        dialog.rescan(now);
+
+        assert!(matches!(
+            dialog.state(),
+            ImportDialogState::Running {
+                progress: Some(progress)
+            } if progress.files_done == 0
+                && progress.files_total == 0
+                && progress.bytes_done == 0
+                && progress.bytes_total == 0
+                && progress.current.as_os_str().is_empty()
+        ));
+        assert_eq!(dialog.changed_at, None);
+        assert!(!dialog.source_changed);
+        assert_eq!(dialog.request_id, Some(7));
+        assert!(dialog.tick(now + PREVIEW_DELAY).is_none());
     }
 
     #[test]
