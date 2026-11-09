@@ -1,11 +1,15 @@
 use std::collections::HashMap;
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::TryRecvError;
+use std::time::{Duration, Instant};
 
 use pw_loupe::{
     RatingKey, RatingRefused, RatingStore, RatingWriter, UNSUPPORTED_TEXT, status_text,
 };
-use pw_metadata::{MetadataWorker, Rating, RequestId, SubmitError, WorkerEvent, supports_rating};
+use pw_metadata::{
+    MetadataWorker, Rating, RequestId, SubmitError, WorkerEvent, WriteError, supports_rating,
+};
 
 pub(crate) trait MetadataSubmit: RatingWriter {
     fn read_ratings(&mut self, images: Vec<PathBuf>) -> Result<RequestId, SubmitError>;
@@ -185,6 +189,11 @@ impl MetadataCache {
         self.ratings.shown(path)
     }
 
+    /// Rating writes that are queued or sent but not yet confirmed.
+    pub fn pending_writes(&self) -> usize {
+        self.ratings.pending()
+    }
+
     fn apply(&mut self, event: WorkerEvent, failures: &mut Vec<String>) {
         match event {
             WorkerEvent::RatingsRead { id, result } if Some(id) == self.load_request => {
@@ -210,12 +219,108 @@ impl MetadataCache {
             WorkerEvent::RatingWritten {
                 id, path, result, ..
             } => {
-                if let Some(message) = self.ratings.written(id, &path, result) {
+                if let Some(message) =
+                    self.ratings
+                        .written(id, &path, result.map_err(write_error_text))
+                {
                     failures.push(message);
                 }
             }
             WorkerEvent::RatingsRead { .. } => {}
         }
+    }
+}
+
+/// The longest wait for rating writes when the program exits (ADR 0013 Q6).
+pub(crate) const EXIT_WAIT_LIMIT: Duration = Duration::from_secs(5);
+/// The pause between two polls while waiting at exit.
+pub(crate) const EXIT_POLL_INTERVAL: Duration = Duration::from_millis(20);
+/// The most lines listed in the exit message box before "… och {n} till".
+const UNSAVED_LIST_LIMIT: usize = 20;
+/// Title of the message box listing ratings that were not saved at exit.
+pub(crate) const UNSAVED_TITLE: &str = "Betyg som inte sparades";
+
+/// What is left after waiting for the rating writes at exit.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub(crate) struct UnsavedRatings {
+    /// Messages for writes that failed during the wait; each names its file.
+    pub failed: Vec<String>,
+    /// File names of writes still pending when the wait ended.
+    pub pending: Vec<String>,
+}
+
+impl UnsavedRatings {
+    pub fn is_empty(&self) -> bool {
+        self.failed.is_empty() && self.pending.is_empty()
+    }
+
+    /// The lines of the message box: the failures first, then the files still pending.
+    pub fn lines(&self) -> Vec<String> {
+        self.failed.iter().chain(&self.pending).cloned().collect()
+    }
+}
+
+/// Keeps sending and confirming rating writes until none is pending or `EXIT_WAIT_LIMIT` has
+/// passed. The clock and the sleep are passed in so the wait can be tested without real time.
+pub(crate) fn finish_pending_writes(
+    cache: &mut MetadataCache,
+    worker: &mut impl MetadataSubmit,
+    mut now: impl FnMut() -> Instant,
+    mut sleep: impl FnMut(Duration),
+) -> UnsavedRatings {
+    let mut unsaved = UnsavedRatings::default();
+    if cache.pending_writes() == 0 {
+        return unsaved;
+    }
+    let start = now();
+    loop {
+        unsaved.failed.extend(cache.poll(worker));
+        if cache.pending_writes() == 0 || now().saturating_duration_since(start) >= EXIT_WAIT_LIMIT
+        {
+            break;
+        }
+        sleep(EXIT_POLL_INTERVAL);
+    }
+    unsaved.pending = cache
+        .ratings
+        .pending_paths()
+        .iter()
+        .map(|path| {
+            path.file_name()
+                .unwrap_or(path.as_os_str())
+                .to_string_lossy()
+                .into_owned()
+        })
+        .collect();
+    unsaved
+}
+
+/// The text of the exit message box: at most `UNSAVED_LIST_LIMIT` lines, then how many more.
+pub(crate) fn unsaved_list_text(lines: &[String]) -> String {
+    let mut text = lines
+        .iter()
+        .take(UNSAVED_LIST_LIMIT)
+        .cloned()
+        .collect::<Vec<_>>()
+        .join("\n");
+    let more = lines.len().saturating_sub(UNSAVED_LIST_LIMIT);
+    if more > 0 {
+        let _ = write!(text, "\n… och {more} till");
+    }
+    text
+}
+
+/// Shown after "Kunde inte spara betyget för <fil>: " when the file is read-only (T49).
+const READ_ONLY_TEXT: &str = "filen är skrivskyddad";
+/// Shown after "Kunde inte spara betyget för <fil>: " when ExifTool refused the write (T49).
+const NOT_WRITTEN_TEXT: &str = "filen kunde inte skrivas";
+
+/// The reason in the message for a failed rating write. Other errors keep their own text.
+fn write_error_text(error: WriteError) -> String {
+    match error {
+        WriteError::ReadOnly => READ_ONLY_TEXT.into(),
+        WriteError::NotWritten(_) => NOT_WRITTEN_TEXT.into(),
+        WriteError::Other(text) => text,
     }
 }
 
@@ -239,6 +344,8 @@ mod tests {
         operations: Vec<&'static str>,
         events: VecDeque<WorkerEvent>,
         next_write_id: RequestId,
+        /// When set, every accepted write is answered with this result on the next `try_recv`.
+        write_result: Option<Result<(), String>>,
     }
 
     impl FakeSubmit {
@@ -250,6 +357,7 @@ mod tests {
                 operations: Vec::new(),
                 events: VecDeque::new(),
                 next_write_id: 100,
+                write_result: None,
             }
         }
     }
@@ -258,12 +366,20 @@ mod tests {
         fn write_rating(
             &mut self,
             path: PathBuf,
-            _rating: Rating,
+            rating: Rating,
         ) -> Result<RequestId, SubmitError> {
             self.operations.push("write");
-            self.write_attempts.push(path);
+            self.write_attempts.push(path.clone());
             let id = self.next_write_id;
             self.next_write_id += 1;
+            if let Some(result) = self.write_result.clone() {
+                self.events.push_back(WorkerEvent::RatingWritten {
+                    id,
+                    path,
+                    rating,
+                    result: result.map_err(WriteError::Other),
+                });
+            }
             Ok(id)
         }
     }
@@ -534,5 +650,172 @@ mod tests {
             &worker.operations[operations_before_poll..],
             ["read", "write"]
         );
+    }
+
+    /// A cache with one rating write queued for each named file (absolute paths, no load).
+    fn cache_with_writes(names: &[&str]) -> MetadataCache {
+        let mut cache = MetadataCache::default();
+        for name in names {
+            let path = std::env::temp_dir().join(name);
+            if let Err(error) = cache.set_rating(&path, RatingKey::Stars(2)) {
+                panic!("supported rating path should be accepted: {error}");
+            }
+        }
+        cache
+    }
+
+    #[test]
+    fn exit_wait_returns_at_once_when_nothing_is_pending() {
+        let mut worker = FakeSubmit::new([]);
+        let mut cache = MetadataCache::default();
+        let mut clock_reads = 0;
+        let mut sleeps = 0;
+
+        let unsaved = finish_pending_writes(
+            &mut cache,
+            &mut worker,
+            || {
+                clock_reads += 1;
+                Instant::now()
+            },
+            |_| sleeps += 1,
+        );
+
+        assert!(unsaved.is_empty());
+        assert_eq!((clock_reads, sleeps), (0, 0));
+        assert!(worker.operations.is_empty());
+    }
+
+    #[test]
+    fn exit_wait_ends_when_the_last_write_is_confirmed() {
+        let mut worker = FakeSubmit::new([]);
+        worker.write_result = Some(Ok(()));
+        let mut cache = cache_with_writes(&["pw-loupe-exit-a.ARW", "pw-loupe-exit-b.DNG"]);
+        let clock = std::cell::Cell::new(Instant::now());
+        let start = clock.get();
+        let mut sleeps = 0;
+
+        let unsaved = finish_pending_writes(
+            &mut cache,
+            &mut worker,
+            || clock.get(),
+            |pause| {
+                sleeps += 1;
+                clock.set(clock.get() + pause);
+            },
+        );
+
+        assert_eq!(unsaved, UnsavedRatings::default());
+        assert_eq!(cache.pending_writes(), 0);
+        assert_eq!(worker.write_attempts.len(), 2);
+        assert_eq!(sleeps, 1, "one poll sends, the next confirms");
+        assert_eq!(clock.get() - start, EXIT_POLL_INTERVAL);
+    }
+
+    #[test]
+    fn exit_wait_gives_up_after_five_seconds_and_lists_the_pending_files() {
+        let mut worker = FakeSubmit::new([]);
+        let mut cache = cache_with_writes(&["pw-loupe-exit-c.ARW", "pw-loupe-exit-d.RW2"]);
+        let clock = std::cell::Cell::new(Instant::now());
+        let start = clock.get();
+
+        let unsaved = finish_pending_writes(
+            &mut cache,
+            &mut worker,
+            || clock.get(),
+            |pause| clock.set(clock.get() + pause),
+        );
+
+        assert_eq!(clock.get() - start, EXIT_WAIT_LIMIT);
+        assert!(unsaved.failed.is_empty());
+        assert_eq!(
+            unsaved.pending,
+            ["pw-loupe-exit-c.ARW", "pw-loupe-exit-d.RW2"]
+        );
+        assert_eq!(cache.pending_writes(), 2, "the writes are still pending");
+    }
+
+    #[test]
+    fn exit_wait_reports_writes_that_fail_during_the_wait() {
+        let mut worker = FakeSubmit::new([]);
+        worker.write_result = Some(Err("skrivskyddad".to_owned()));
+        let mut cache = cache_with_writes(&["pw-loupe-exit-e.ARW"]);
+        let clock = std::cell::Cell::new(Instant::now());
+
+        let unsaved = finish_pending_writes(
+            &mut cache,
+            &mut worker,
+            || clock.get(),
+            |pause| clock.set(clock.get() + pause),
+        );
+
+        assert!(unsaved.pending.is_empty());
+        assert_eq!(
+            unsaved.failed,
+            ["Kunde inte spara betyget för pw-loupe-exit-e.ARW: skrivskyddad"]
+        );
+        assert_eq!(unsaved.lines(), unsaved.failed);
+    }
+
+    #[test]
+    fn unsaved_list_text_shows_at_most_twenty_lines_then_the_rest_as_a_count() {
+        let lines: Vec<String> = (1..=23).map(|n| format!("bild{n}.ARW")).collect();
+
+        let text = unsaved_list_text(&lines);
+
+        let shown: Vec<&str> = text.lines().collect();
+        assert_eq!(shown.len(), 21);
+        assert_eq!(shown.first(), Some(&"bild1.ARW"));
+        assert_eq!(shown.get(19), Some(&"bild20.ARW"));
+        assert_eq!(shown.last(), Some(&"… och 3 till"));
+        assert_eq!(
+            unsaved_list_text(&lines[..20]).lines().count(),
+            20,
+            "exactly twenty lines need no count"
+        );
+    }
+
+    #[test]
+    fn write_error_texts_are_swedish_for_read_only_and_refused_writes() {
+        assert_eq!(
+            write_error_text(WriteError::ReadOnly),
+            "filen är skrivskyddad"
+        );
+        assert_eq!(
+            write_error_text(WriteError::NotWritten(
+                "0 image files updated\n1 files weren't updated due to errors".into()
+            )),
+            "filen kunde inte skrivas"
+        );
+        assert_eq!(
+            write_error_text(WriteError::Other("ExifTool exited unexpectedly".into())),
+            "ExifTool exited unexpectedly"
+        );
+    }
+
+    #[test]
+    fn a_read_only_write_result_gives_the_swedish_message_through_poll() {
+        let mut worker = FakeSubmit::new([]);
+        let mut cache = cache_with_writes(&["pw-loupe-read-only.ARW"]);
+        assert!(cache.poll(&mut worker).is_empty(), "the first poll sends");
+        assert_eq!(worker.write_attempts.len(), 1);
+        let id = worker.next_write_id - 1;
+        worker.events.push_back(WorkerEvent::RatingWritten {
+            id,
+            path: std::env::temp_dir().join("pw-loupe-read-only.ARW"),
+            rating: Rating {
+                stars: Some(2),
+                label: None,
+            },
+            result: Err(WriteError::ReadOnly),
+        });
+
+        let failures = cache.poll(&mut worker);
+
+        assert_eq!(
+            failures,
+            ["Kunde inte spara betyget för pw-loupe-read-only.ARW: filen är skrivskyddad"]
+        );
+        assert_eq!(cache.pending_writes(), 0);
     }
 }

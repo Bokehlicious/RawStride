@@ -1085,7 +1085,7 @@ Ordered from easiest to hardest. Start at the top.
   folder; a DNG rated in RAW mode still shows correctly after stepping away and back; a read-only
   sidecar gives the message and the old value; holding a digit while stepping keeps the loupe smooth.
 
-### T44. ADR 0013 B4: finish pending rating writes on exit — Open
+### T44. ADR 0013 B4: finish pending rating writes on exit — Done
 
 - **Start after T43 is done.**
 - **Crate:** `pw-loupe`. **Files:** `crates/pw-loupe/src/main.rs`; `crates/pw-loupe/src/ratings.rs` or
@@ -1135,7 +1135,7 @@ Ordered from easiest to hardest. Start at the top.
   before queued writes in the same `poll`.
 - **Done when:** `.\tools\check.ps1` is all OK.
 
-### T46. ADR 0013 §5: rounded, inset label bar in the grid and the loupe badge — Open
+### T46. ADR 0013 §5: rounded, inset label bar in the grid and the loupe badge — Ready for review
 
 - **Start after T43 is done.** For a Claude agent (drawing code, checked by hand).
 - **Crate:** `pw-loupe`. **File:** `crates/pw-loupe/src/main.rs` only.
@@ -1158,6 +1158,119 @@ Ordered from easiest to hardest. Start at the top.
 - **Done when:** `.\tools\check.ps1` is all OK, and the owner checks by hand: the colour bar no longer
   touches the cell edges, its ends are round, the stars and name sit inside it at thumbnail sizes 96,
   200 and 480, and the loupe badge has the same shape.
+
+### T47. pw-loupe does not start since T44: embed the Common Controls 6 manifest — Done
+
+- **Do this first; it blocks the hand checks of T43, T44 and T46.** For a Claude agent.
+- **Crate:** `pw-loupe`. **Files:** a new `crates/pw-loupe/build.rs`; `crates/pw-loupe/Cargo.toml` only
+  if Cargo needs `build = "build.rs"` (it finds `build.rs` by itself, so normally no change). No new
+  dependencies.
+- **What happens (owner, 2026-11-09):** since T44, `target\debug\pw-loupe.exe` exits at once without
+  a window or a message, exit code `-1073741511` = `0xC0000139` (STATUS_ENTRYPOINT_NOT_FOUND: Windows
+  cannot find a function the program imports). The T43 + T45 build starts normally.
+- **Likely cause:** T44 added `rfd::MessageDialog`. In this workspace `rfd` 0.17.2 is shared with the
+  Tauri app's `tauri-plugin-dialog`, and Cargo merges the features of a shared crate, so `rfd` is
+  probably built with `common-controls-v6`. Its message box then imports `TaskDialogIndirect` from
+  `comctl32.dll`, which exists only in Common Controls version 6. Windows loads version 6 only when the
+  program's manifest asks for it; the Tauri app has such a manifest, `pw-loupe` has none. The test
+  binary still loads because nothing in it calls `on_exit`, so the linker drops the import (that is
+  why `check.ps1` stayed green).
+- **What:**
+  1. **Confirm first** and paste the output in the report:
+     `cargo tree --workspace -e features -i rfd` (shows which crate enables `common-controls-v6`). If
+     it is **not** enabled, stop and report; the fix below would then be the wrong one.
+  2. Add `crates/pw-loupe/build.rs` that, only when `CARGO_CFG_TARGET_OS` is `windows` and
+     `CARGO_CFG_TARGET_ENV` is `msvc`, prints
+     ```
+     cargo:rustc-link-arg-bins=/MANIFEST:EMBED
+     cargo:rustc-link-arg-bins=/MANIFESTDEPENDENCY:type='win32' name='Microsoft.Windows.Common-Controls' version='6.0.0.0' processorArchitecture='*' publicKeyToken='6595b64144ccf1df' language='*'
+     ```
+     and `cargo:rerun-if-changed=build.rs`. No `unwrap`/`expect` (read the variables with `match` or
+     `.ok()`). A short comment explains why (this task, ADR 0013 T44).
+  3. Nothing else changes; `on_exit` and the message box stay.
+- **Note:** a new build script may be stopped by the owner's antivirus (LNK1104, rules 6–7). Build
+  only with `cargo build --workspace` in `target`; if it is blocked, stop and tell the owner.
+- **Done when:** `.\tools\check.ps1` is all OK, **and** `cargo build --workspace` followed by
+  `.\target\debug\pw-loupe.exe D:\PhotoWorkflowData\RAW` opens the window (report `$LASTEXITCODE`
+  after closing it: `0`). Then the owner checks by hand: rate an image, close the window at once,
+  reopen the folder → the rating is there; and, with a read-only sidecar, the message box "Betyg som
+  inte sparades" appears at exit.
+
+### T48. pw-metadata: a write that ExifTool refused is reported as saved — Done
+
+- **Added by the agent at the owner's request (2026-11-09), found in the T47 hand check.** For a Claude
+  agent.
+- **Crate:** `pw-metadata`. **Files:** `crates/pw-metadata/src/lib.rs`,
+  `crates/pw-metadata/tests/sidecar.rs`. No new dependencies.
+- **What happens:** with a read-only `.xmp`, a rating can be set in `pw-loupe` without any message;
+  the file is not changed. ExifTool refuses the write and answers
+  ```
+  Error renaming temporary file to …/test.xmp
+      0 image files updated
+      1 files weren't updated due to errors
+  ```
+  (a read-only JPEG gives `Error opening … for writing` and the same two lines). `write_tags` treats
+  every answer that contains the text `files updated` as success, so `0 image files updated` counts
+  as saved. `write_rating` and `write_iptc` both go through `write_tags`.
+- **What:**
+  1. Add a small pure function in `lib.rs`, e.g. `fn write_succeeded(out: &str) -> bool`, that reads
+     ExifTool's summary lines (`<n> image files created|updated|unchanged`,
+     `<n> files weren't … due to errors`) as numbers: success only when at least one file was
+     created, updated or unchanged and no file failed.
+  2. `write_tags` uses it instead of the three `contains` checks. A failure still returns
+     `Error::ExifTool(out.trim())` as today (the message text is unchanged).
+  3. Nothing else changes; `pw-loupe` already shows the error and rolls the rating back when the
+     write fails (T42, T43).
+- **Tests to add:**
+  - unit tests for `write_succeeded`: created, updated, unchanged (success); the read-only answer
+    above, `0 image files updated` alone and an empty answer (failure);
+  - in `tests/sidecar.rs` (real ExifTool): a rating written to an ARW whose sidecar is read-only
+    returns an error, and the sidecar keeps its old rating; the same for a read-only JPEG (embedded).
+    Restore the permissions afterwards so the temporary folder can be removed.
+- **Done when:** `.\tools\check.ps1` is all OK. Then the owner checks by hand: rate an image with a
+  read-only sidecar → the error message and the old rating; at exit with such a write pending, the
+  message box "Betyg som inte sparades".
+
+### T49. Swedish message when a rating cannot be saved — Done
+
+- **Added by the agent at the owner's request (2026-11-09), found in the T48 hand check.** For a Claude
+  agent. **Start after T48.**
+- **Crates:** `pw-metadata`, `pw-loupe`. **Files:** `crates/pw-metadata/src/lib.rs`,
+  `crates/pw-metadata/src/worker.rs`, `crates/pw-metadata/tests/sidecar.rs`,
+  `crates/pw-loupe/src/metadata.rs`. No new dependencies.
+- **What happens:** since T48 a rating on an image with a read-only sidecar is refused and rolled
+  back, but the message shows ExifTool's English answer:
+  `Kunde inte spara betyget för TN005979.ARW: ExifTool: 0 image files updated … Error renaming
+  temporary file …`.
+- **Owner's decision (2026-11-09):** a read-only file gives
+  `Kunde inte spara betyget för <fil>: filen är skrivskyddad`; any other write that ExifTool refuses
+  gives `Kunde inte spara betyget för <fil>: filen kunde inte skrivas`. The Swedish texts live in
+  `pw-loupe`; `pw-metadata` reports the kind of error, and `pw-loupe` never compares error text (as T3).
+- **What:**
+  1. `pw-metadata` `Error`: two new variants, `ReadOnly(PathBuf)` and `NotWritten(String)` (ExifTool's
+     answer). When `write_succeeded` is false, `write_tags` returns `ReadOnly(target)` if the target
+     file exists and is read-only, otherwise `NotWritten(answer)`. ExifTool still decides whether
+     the write failed; the read-only check only names the reason. Put the choice in a small function
+     that can be tested with a temporary file.
+  2. `pw-metadata`: a public `WriteError` (`ReadOnly`, `NotWritten(String)`, `Other(String)`) with
+     `From<Error>` and `Display`; `WorkerEvent::RatingWritten` carries `Result<(), WriteError>`
+     instead of `Result<(), String>`. `Other` holds today's text for everything else (ExifTool could
+     not start, crashed, I/O), so those messages are unchanged.
+  3. `pw-loupe` `metadata.rs`: turn the `WriteError` into the text for the rating store with a small
+     function: `ReadOnly` → "filen är skrivskyddad", `NotWritten` → "filen kunde inte skrivas",
+     `Other(text)` → `text`. `RatingStore` and its tests are not changed.
+  4. Test helpers that build or read `RatingWritten` (`FakeSubmit` in `pw-loupe/src/metadata.rs`,
+     `write_result` in `pw-metadata/src/worker.rs`) convert between `String` and `WriteError::Other`;
+     their assertions stay as they are. T48's test in `tests/sidecar.rs` now expects
+     `Error::ReadOnly` for the read-only sidecar and JPEG (the old rating is still kept).
+- **Tests to add:** the choice in point 1 (read-only file → `ReadOnly`, writable file → `NotWritten`,
+  missing file → `NotWritten`); `From<Error>` for the three kinds; the text function for the three
+  kinds; a `RatingWritten` with `ReadOnly` gives "Kunde inte spara betyget för <fil>: filen är
+  skrivskyddad" through `MetadataCache::poll`.
+- **Not in this task:** messages for ExifTool missing or crashing stay as today (English); the Tauri
+  app shows the new English `Display` text of the two variants.
+- **Done when:** `.\tools\check.ps1` is all OK. Then the owner checks by hand: rate an image with a
+  read-only sidecar → "Kunde inte spara betyget för <fil>: filen är skrivskyddad" and the old rating.
 
 ### T7. Format the files that `cargo fmt --check` reports — Done
 
@@ -1452,3 +1565,21 @@ and reviewer:
 | 2026-11-09 | T43 | Ready for review | Second review: the star is ten centre triangles in an `egui::Mesh` (indices checked: centre 0, ring 1–10, wrapping); the badge text is measured with `layout_no_wrap` and drawn as that galley. Accepted; meshes are not anti-aliased, so the stars may look slightly hard-edged at small sizes (owner judges in the hand check). Point 3 (label name in the badge) is the owner's choice. Waiting for the hand check |
 | 2026-11-09 | T39 | Done | Heading corrected to Done (the log already said Done; found by a reviewer) |
 | 2026-11-09 | T46 | Open | Added: owner wants the label colour inset and rounded (pill) in the grid row and the loupe badge |
+| 2026-11-09 | T44 | Ready for review | (Agent) Started at the owner's request while T43 waits for the hand check. `metadata.rs`: `finish_pending_writes` (injectable clock and sleep; polls every 20 ms until no write is pending or 5 s have passed; returns the failures and the still-pending file names), `unsaved_list_text` (20 lines, then "… och {n} till"), `pending_writes` accessor; the test `FakeSubmit` can now answer writes (new optional field, existing tests unchanged). `main.rs`: `on_exit` runs the wait and shows one `rfd::MessageDialog` titled "Betyg som inte sparades" (available with the pinned features). Failed writes are listed with their existing message (it names the file), pending ones by file name. The window probably stays visible during the wait (`on_exit` runs before eframe destroys it); not checked by hand. 5 tests added; test inventory updated. Workspace fmt, test (341 passed, 27 ignored, 0 failed) and clippy OK; no commit. |
+| 2026-11-09 | T46 | Ready for review | (Agent) Started at the owner's request while T43 waits for the hand check; T44 is still uncommitted, so `main.rs` holds both. `main.rs` only: `label_pill` insets the row 6 pt sideways and 2 pt vertically; the label colour is drawn there with corner radius = half its height; stars and name start 6 pt further in; the name is still clipped to the row. The loupe badge (label colour and dark background) has radius = half its height. Colours, dark text, dimming, cell size and selection frame unchanged. 1 test for `label_pill`; test inventory updated (pw-loupe 136). Workspace fmt, test (342 passed, 27 ignored, 0 failed) and clippy OK; no commit. |
+| 2026-11-09 | T44 | Ready for review | Reviewed (code): `finish_pending_writes` returns at once with nothing pending, polls every 20 ms, stops at 5 s and lists failures and still-pending files; `unsaved_list_text` caps at 20 lines; `on_exit` shows one `rfd::MessageDialog` only when something was not saved. Tests cover the task's list. Owner's `check.ps1`: fmt, test (342 passed, 27 ignored, 0 failed) and clippy OK. Not Done: the owner's first start of the program showed nothing; nothing in T44 or T46 runs at start-up, so the cause is not visible in the diff. Waiting for a start from a console (debug build prints the error) and the hand check |
+| 2026-11-09 | T46 | Ready for review | Reviewed (code): `label_pill` = row shrunk 6 pt sideways and 2 pt vertically (tested); label colour drawn there with radius = half its height; stars and name moved inside; badge rounded the same way. Accepted; waiting for the hand check (see T44) |
+| 2026-11-09 | T47 | Open | Added: since T44 `pw-loupe.exe` exits at start with 0xC0000139 (entry point not found); T43+T45 build starts. Likely `rfd`'s message box needs Common Controls 6, which `pw-loupe` has no manifest for. Blocks the hand checks of T43, T44, T46 |
+| 2026-11-09 | T47 | Ready for review | (Agent) Confirmed: `cargo tree --workspace -e features -i rfd` shows `rfd` feature `common-controls-v6` enabled by `tauri-plugin-dialog` v2.8.4. New `crates/pw-loupe/build.rs`: on windows + msvc only, `/MANIFEST:EMBED` and the Common Controls 6.0.0.0 `/MANIFESTDEPENDENCY` for the bins, plus `rerun-if-changed=build.rs`; reads the variables with `.ok()`. `Cargo.toml` unchanged. `cargo build --workspace` OK (not blocked); `pw-loupe.exe D:\PhotoWorkflowData\RAW` opened the "RawStride" window, closed with `CloseMainWindow`, exit code 0. Workspace fmt, test (342 passed, 27 ignored, 0 failed) and clippy OK; no commit. Owner's hand checks (rating at exit, read-only sidecar message box) not done |
+| 2026-11-09 | T48 | Open | Added by the agent at the owner's request: in the T47 hand check a rating could be set on an image with a read-only sidecar without a message. ExifTool refuses ("0 image files updated", "1 files weren't updated due to errors"), but `write_tags` takes any answer containing "files updated" as success |
+| 2026-11-09 | T48 | Ready for review | (Agent) `lib.rs`: `write_succeeded` reads ExifTool's summary lines as numbers (created/updated/unchanged > 0 and no "files weren't … due to errors"); `write_tags` uses it, error text unchanged. 3 unit tests (success answers; the read-only sidecar and JPEG answers; "0 image files updated" alone and empty). `tests/sidecar.rs`: 1 ExifTool test, read-only sidecar and read-only JPEG give `Error::ExifTool` and keep the old rating (permissions restored before the assertions). Test inventory updated. Workspace fmt, test (346 passed, 27 ignored, 0 failed) and clippy OK; no commit. Owner's hand check not done |
+| 2026-11-09 | T48 | Ready for review | Owner's hand check: a rating on a RAW file with a read-only `.xmp` is now refused, but the message is in English (ExifTool's answer). T49 added |
+| 2026-11-09 | T49 | Open | Added by the agent at the owner's request. Owner's decision: "filen är skrivskyddad" for a read-only file, "filen kunde inte skrivas" for other refused writes |
+| 2026-11-09 | T49 | Ready for review | (Agent) `pw-metadata`: `Error::ReadOnly(PathBuf)` and `Error::NotWritten(String)`; `refused_write_error` picks `ReadOnly` only after ExifTool refused and the target is read-only; public `WriteError` (`ReadOnly`, `NotWritten`, `Other`) with `From<Error>`; `RatingWritten` carries `Result<(), WriteError>`. `pw-loupe` `metadata.rs`: `write_error_text` gives the two Swedish texts, `Other` keeps its text; `RatingStore` unchanged. Test helpers convert `String` ↔ `WriteError::Other` (assertions unchanged); T48's sidecar test now expects `Error::ReadOnly`. 6 tests added; test inventory updated. Workspace fmt, test (352 passed, 27 ignored, 0 failed) and clippy OK; no commit. Owner's hand check not done |
+| 2026-11-09 | T49 | Ready for review | Owner's hand check OK: a rating on an image with a read-only sidecar gives the Swedish message "filen är skrivskyddad" and keeps the old rating. Waiting for review and commit |
+| 2026-11-09 | T47 | Ready for review | Owner's hand check: the program starts; rate an image, close at once, reopen → the rating is kept (R4) OK. The message box at exit is not checked yet: a write finishes before the window can be closed |
+| 2026-11-09 | T47 | Ready for review | Owner's hand check of the message box at exit OK, with ExifTool (`ExifTool.exe` and `perl.exe`) paused in Resource Monitor: (A) a write still pending at exit → after about 5 s "Betyg som inte sparades" lists the file; (B) a write to a read-only sidecar, ExifTool resumed during the wait → the box shows "Kunde inte spara betyget för TN005979.ARW: filen är skrivskyddad". All hand checks of T47 (and the exit part of T44) done; waiting for review and commit |
+| 2026-11-09 | T47 | Done | Reviewed: `build.rs` embeds the Common Controls 6 manifest for the bins on windows + msvc only, no `unwrap`, `rerun-if-changed`; cause confirmed with `cargo tree` (`tauri-plugin-dialog` enables `common-controls-v6`). Owner's start and exit checks passed. Lesson: `check.ps1` cannot catch a binary that fails to load, because the test binaries never reference `on_exit` |
+| 2026-11-09 | T44 | Done | Exit wait and message box checked by hand in T47 (pending write → list after about 5 s; read-only sidecar → Swedish reason); code reviewed earlier |
+| 2026-11-09 | T48 | Done | Reviewed: `write_succeeded` reads the summary counts (created/updated/unchanged > 0 and no "files weren't … due to errors"); `write_iptc` gets the same, stricter check, which is correct. Unit tests for the three answers; real ExifTool test for a read-only sidecar and JPEG keeps the old rating and restores permissions before asserting |
+| 2026-11-09 | T49 | Done | Reviewed: `Error::ReadOnly`/`NotWritten` chosen only after ExifTool refused; `WriteError` keeps the kind across the worker; `pw-loupe` maps it to "filen är skrivskyddad" / "filen kunde inte skrivas" without comparing text; `RatingStore` unchanged; test helpers convert as the task said. Owner's `check.ps1`: fmt, test (352 passed, 27 ignored, 0 failed) and clippy OK; owner's hand check passed |

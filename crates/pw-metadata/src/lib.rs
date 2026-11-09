@@ -32,6 +32,10 @@ pub enum Error {
     ExifTool(String),
     /// The file type cannot carry ratings yet (DNG, JPEG, …).
     Unsupported(String),
+    /// ExifTool refused a write because the file that holds the metadata is read-only.
+    ReadOnly(PathBuf),
+    /// ExifTool refused a write for another reason; holds ExifTool's answer.
+    NotWritten(String),
 }
 
 impl fmt::Display for Error {
@@ -40,11 +44,45 @@ impl fmt::Display for Error {
             Error::Io(e) => write!(f, "I/O error: {e}"),
             Error::ExifTool(m) => write!(f, "ExifTool: {m}"),
             Error::Unsupported(m) => write!(f, "{m}"),
+            Error::ReadOnly(path) => write!(f, "{} is read-only", path.display()),
+            Error::NotWritten(m) => write!(f, "ExifTool did not write the file: {m}"),
         }
     }
 }
 
 impl std::error::Error for Error {}
+
+/// Why a rating write from the worker failed, kept as a kind so a program can show its own text
+/// (T49).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WriteError {
+    /// The file that holds the rating is read-only.
+    ReadOnly,
+    /// ExifTool refused the write for another reason; holds ExifTool's answer.
+    NotWritten(String),
+    /// Anything else (ExifTool could not start or crashed, I/O); holds the error text.
+    Other(String),
+}
+
+impl From<Error> for WriteError {
+    fn from(error: Error) -> Self {
+        match error {
+            Error::ReadOnly(_) => WriteError::ReadOnly,
+            Error::NotWritten(answer) => WriteError::NotWritten(answer),
+            other => WriteError::Other(other.to_string()),
+        }
+    }
+}
+
+impl fmt::Display for WriteError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            WriteError::ReadOnly => write!(f, "the file is read-only"),
+            WriteError::NotWritten(m) => write!(f, "ExifTool did not write the file: {m}"),
+            WriteError::Other(m) => write!(f, "{m}"),
+        }
+    }
+}
 
 impl From<std::io::Error> for Error {
     fn from(e: std::io::Error) -> Self {
@@ -205,6 +243,43 @@ pub fn rating_file(image: &Path) -> PathBuf {
     }
 }
 
+/// True if ExifTool's answer to a write says that at least one file was created, updated or left
+/// unchanged and that no file failed (T48). The summary lines are read as numbers, because a
+/// refused write also prints "0 image files updated" next to "1 files weren't updated due to
+/// errors".
+fn write_succeeded(out: &str) -> bool {
+    let mut written = 0u64;
+    let mut failed = 0u64;
+    for line in out.lines() {
+        let Some((count, rest)) = line.trim().split_once(' ') else {
+            continue;
+        };
+        let Ok(count) = count.parse::<u64>() else {
+            continue;
+        };
+        if matches!(
+            rest,
+            "image files created" | "image files updated" | "image files unchanged"
+        ) {
+            written = written.saturating_add(count);
+        } else if rest.starts_with("files weren't ") && rest.ends_with(" due to errors") {
+            failed = failed.saturating_add(count);
+        }
+    }
+    written > 0 && failed == 0
+}
+
+/// The error for a write that ExifTool refused (T49): `ReadOnly` when `target` exists and is
+/// read-only, otherwise `NotWritten` with ExifTool's answer. ExifTool has already decided that the
+/// write failed; this only names the reason.
+fn refused_write_error(target: &Path, out: &str) -> Error {
+    if std::fs::metadata(target).is_ok_and(|meta| meta.permissions().readonly()) {
+        Error::ReadOnly(target.to_path_buf())
+    } else {
+        Error::NotWritten(out.trim().to_string())
+    }
+}
+
 /// The sidecar path for an image: same folder and stem, extension `.xmp`.
 pub fn sidecar_path(image: &Path) -> PathBuf {
     image.with_extension("xmp")
@@ -261,13 +336,10 @@ impl ExifTool {
         args.extend(tags);
         args.push(rating_file(image).to_string_lossy().into_owned());
         let out = self.execute(&args)?;
-        if out.contains("files created")
-            || out.contains("files updated")
-            || out.contains("unchanged")
-        {
+        if write_succeeded(&out) {
             Ok(())
         } else {
-            Err(Error::ExifTool(out.trim().to_string()))
+            Err(refused_write_error(&rating_file(image), &out))
         }
     }
 
@@ -331,6 +403,111 @@ impl ExifTool {
             }
         }
         Ok(result)
+    }
+}
+
+#[cfg(test)]
+mod write_result_tests {
+    use super::write_succeeded;
+
+    #[test]
+    fn created_updated_and_unchanged_answers_are_success() {
+        assert!(write_succeeded("    1 image files created\n"));
+        assert!(write_succeeded("    1 image files updated\n"));
+        assert!(write_succeeded("    1 image files unchanged\n"));
+    }
+
+    #[test]
+    fn a_refused_write_on_a_read_only_file_is_a_failure() {
+        let sidecar = "    0 image files updated\n    1 files weren't updated due to errors\n\
+                       --- stderr ---\nError renaming temporary file to C:/temp/test.xmp\n";
+        let jpeg = "    0 image files updated\n    1 files weren't updated due to errors\n\
+                    --- stderr ---\nError opening C:/temp/test.jpg for writing\n";
+
+        assert!(!write_succeeded(sidecar));
+        assert!(!write_succeeded(jpeg));
+    }
+
+    #[test]
+    fn zero_files_updated_alone_or_an_empty_answer_is_a_failure() {
+        assert!(!write_succeeded("    0 image files updated\n"));
+        assert!(!write_succeeded(""));
+    }
+}
+
+#[cfg(test)]
+mod refused_write_tests {
+    use super::{Error, WriteError, refused_write_error};
+
+    const REFUSED: &str = "    0 image files updated\n    1 files weren't updated due to errors\n";
+
+    fn temp_file(name: &str) -> std::path::PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "pw-metadata-refused-{name}-{}.xmp",
+            std::process::id()
+        ));
+        std::fs::write(&path, b"<x:xmpmeta/>").unwrap();
+        path
+    }
+
+    #[test]
+    fn a_read_only_target_is_read_only() {
+        let path = temp_file("read-only");
+        let original = std::fs::metadata(&path).unwrap().permissions();
+        let mut read_only = original.clone();
+        read_only.set_readonly(true);
+        std::fs::set_permissions(&path, read_only).unwrap();
+
+        let error = refused_write_error(&path, REFUSED);
+
+        std::fs::set_permissions(&path, original).unwrap();
+        let _ = std::fs::remove_file(&path);
+        assert!(
+            matches!(&error, Error::ReadOnly(target) if *target == path),
+            "{error:?}"
+        );
+    }
+
+    #[test]
+    fn a_writable_target_is_not_written_with_the_answer() {
+        let path = temp_file("writable");
+
+        let error = refused_write_error(&path, REFUSED);
+
+        let _ = std::fs::remove_file(&path);
+        assert!(
+            matches!(&error, Error::NotWritten(answer) if answer == REFUSED.trim()),
+            "{error:?}"
+        );
+    }
+
+    #[test]
+    fn a_missing_target_is_not_written() {
+        let path = std::env::temp_dir().join(format!(
+            "pw-metadata-refused-missing-{}.xmp",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+
+        let error = refused_write_error(&path, REFUSED);
+
+        assert!(matches!(error, Error::NotWritten(_)), "{error:?}");
+    }
+
+    #[test]
+    fn write_error_keeps_the_kind_of_the_error() {
+        assert_eq!(
+            WriteError::from(Error::ReadOnly("a.xmp".into())),
+            WriteError::ReadOnly
+        );
+        assert_eq!(
+            WriteError::from(Error::NotWritten("0 image files updated".into())),
+            WriteError::NotWritten("0 image files updated".into())
+        );
+        assert_eq!(
+            WriteError::from(Error::ExifTool("ExifTool exited unexpectedly".into())),
+            WriteError::Other("ExifTool: ExifTool exited unexpectedly".into())
+        );
     }
 }
 

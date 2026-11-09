@@ -838,10 +838,11 @@ impl Loupe {
                             egui::pos2(cell_rect.min.x, cell_rect.max.y - GRID_LABEL_HEIGHT),
                             cell_rect.max,
                         );
+                        let pill = label_pill(label_rect);
                         let label = rating.and_then(|rating| rating.label.as_deref());
                         let color = label.and_then(label_color);
                         if let Some(color) = color {
-                            painter.rect_filled(label_rect, 0.0, color);
+                            painter.rect_filled(pill, pill.height() * 0.5, color);
                         }
                         let text_color = if matches!(label, Some("Yellow" | "Green")) {
                             egui::Color32::from_gray(24)
@@ -851,16 +852,13 @@ impl Loupe {
                         let glyphs = star_glyphs(rating.and_then(|rating| rating.stars));
                         let glyph_width = paint_rating_glyphs(
                             &painter,
-                            egui::pos2(label_rect.min.x + 4.0, label_rect.min.y),
+                            egui::pos2(pill.min.x + 4.0, label_rect.min.y),
                             label_rect.height(),
                             &glyphs,
                             text_color,
                         );
                         painter.with_clip_rect(label_rect).text(
-                            egui::pos2(
-                                label_rect.min.x + 4.0 + glyph_width + 4.0,
-                                label_rect.center().y,
-                            ),
+                            egui::pos2(pill.min.x + 4.0 + glyph_width + 4.0, label_rect.center().y),
                             egui::Align2::LEFT_CENTER,
                             name,
                             egui::FontId::proportional(12.0),
@@ -1432,6 +1430,17 @@ fn label_color(label: &str) -> Option<egui::Color32> {
     Some(egui::Color32::from_rgb(red, green, blue))
 }
 
+/// Horizontal inset of the label pill from the cell edges, in points.
+const LABEL_PILL_INSET_X: f32 = 6.0;
+/// Vertical inset of the label pill from the top and bottom of the row, in points.
+const LABEL_PILL_INSET_Y: f32 = 2.0;
+
+/// The rounded label bar inside the row under a thumbnail: inset from the cell edges so it does
+/// not touch them. Its corner radius is half its height (a pill).
+fn label_pill(row: egui::Rect) -> egui::Rect {
+    row.shrink2(egui::vec2(LABEL_PILL_INSET_X, LABEL_PILL_INSET_Y))
+}
+
 fn paint_rating_glyphs(
     painter: &egui::Painter,
     origin: egui::Pos2,
@@ -1536,7 +1545,7 @@ fn paint_rating_badge(painter: &egui::Painter, image_rect: egui::Rect, rating: &
         .as_deref()
         .and_then(label_color)
         .unwrap_or_else(|| egui::Color32::from_black_alpha(190));
-    painter.rect_filled(badge, 0.0, color);
+    painter.rect_filled(badge, height * 0.5, color);
     let glyph_width = paint_rating_glyphs(
         painter,
         egui::pos2(badge.min.x + 4.0, badge.min.y),
@@ -1583,6 +1592,25 @@ impl eframe::App for Loupe {
                 self.draw(ui);
                 self.draw_import_dialog(ui.ctx());
             });
+    }
+
+    /// Waits up to 5 s for rating writes still on their way to disk, then lists the ones that
+    /// were not saved (ADR 0013 Q6, R4).
+    fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        let unsaved = metadata::finish_pending_writes(
+            &mut self.metadata,
+            &mut self.metadata_worker,
+            Instant::now,
+            std::thread::sleep,
+        );
+        if !unsaved.is_empty() {
+            let _ = rfd::MessageDialog::new()
+                .set_level(rfd::MessageLevel::Warning)
+                .set_title(metadata::UNSAVED_TITLE)
+                .set_description(metadata::unsaved_list_text(&unsaved.lines()))
+                .set_buttons(rfd::MessageButtons::Ok)
+                .show();
+        }
     }
 }
 
@@ -1665,8 +1693,21 @@ fn main() -> ExitCode {
 
 #[cfg(test)]
 mod tests {
-    use super::label_color;
-    use egui::Color32;
+    use super::{label_color, label_pill};
+    use egui::{Color32, Rect, pos2};
+
+    #[test]
+    fn label_pill_is_inset_six_points_sideways_and_two_vertically() {
+        let row = Rect::from_min_max(pos2(100.0, 282.0), pos2(300.0, 300.0));
+
+        let pill = label_pill(row);
+
+        assert_eq!(
+            pill,
+            Rect::from_min_max(pos2(106.0, 284.0), pos2(294.0, 298.0))
+        );
+        assert!(row.contains_rect(pill));
+    }
 
     #[test]
     fn rating_label_colours_match_the_accepted_palette() {

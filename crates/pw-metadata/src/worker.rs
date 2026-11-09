@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, SyncSender, TryRecvError, TrySendError};
 use std::thread::JoinHandle;
 
-use crate::{ExifTool, Rating, Result};
+use crate::{ExifTool, Rating, Result, WriteError};
 
 const REQUEST_CAPACITY: usize = 8;
 
@@ -27,7 +27,8 @@ pub enum Event {
         id: RequestId,
         path: PathBuf,
         rating: Rating,
-        result: std::result::Result<(), String>,
+        /// The kind of failure is kept, so the program can show its own text (T49).
+        result: std::result::Result<(), WriteError>,
     },
 }
 
@@ -172,8 +173,8 @@ fn handle(tool: Option<&mut ExifTool>, start_error: Option<String>, request: Req
         }
         Request::Write { id, path, rating } => {
             let result = match tool {
-                Some(tool) => tool.write_rating(&path, &rating).map_err(|e| e.to_string()),
-                None => Err(unavailable()),
+                Some(tool) => tool.write_rating(&path, &rating).map_err(WriteError::from),
+                None => Err(WriteError::Other(unavailable())),
             };
             Event::RatingWritten {
                 id,
@@ -223,7 +224,7 @@ mod tests {
                 ..
             } => {
                 assert_eq!(event_id, id);
-                result
+                result.map_err(|error| error.to_string())
             }
             other => panic!("unexpected event {other:?}"),
         }

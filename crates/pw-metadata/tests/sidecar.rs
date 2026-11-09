@@ -307,6 +307,73 @@ fn jpeg_and_tiff_are_written_in_place() {
     check_embedded(&mut et, &tif);
 }
 
+/// Writes `new` to `image` while `file` (the file that holds its rating) is read-only, restores the
+/// permissions, and returns the result of the write. The restore comes before any assertion, so a
+/// failing test still leaves a folder that can be removed.
+fn write_while_read_only(
+    et: &mut ExifTool,
+    image: &std::path::Path,
+    file: &std::path::Path,
+    new: &Rating,
+) -> pw_metadata::Result<()> {
+    let original = std::fs::metadata(file).unwrap().permissions();
+    let mut read_only = original.clone();
+    read_only.set_readonly(true);
+    std::fs::set_permissions(file, read_only).unwrap();
+    let result = et.write_rating(image, new);
+    std::fs::set_permissions(file, original).unwrap();
+    result
+}
+
+#[test]
+fn a_write_to_a_read_only_file_is_an_error_and_keeps_the_old_rating() {
+    let mut et = exiftool();
+    let dir = temp_dir("read-only");
+    let old = Rating {
+        stars: Some(2),
+        label: Some("Red".into()),
+    };
+    let new = Rating {
+        stars: Some(5),
+        label: None,
+    };
+
+    let raw = dir.join("TN0003.ARW");
+    std::fs::write(&raw, b"raw").unwrap();
+    et.write_rating(&raw, &old).unwrap();
+    let sidecar = sidecar_path(&raw);
+    let result = write_while_read_only(&mut et, &raw, &sidecar, &new);
+    assert!(
+        matches!(&result, Err(pw_metadata::Error::ReadOnly(target)) if *target == sidecar),
+        "read-only sidecar: {result:?}"
+    );
+    assert_eq!(
+        et.read_ratings(std::slice::from_ref(&raw))
+            .unwrap()
+            .get(&raw),
+        Some(&old),
+        "the sidecar keeps the old rating"
+    );
+
+    let jpg = dir.join("IMG_0003.JPG");
+    std::fs::write(&jpg, tiny_jpeg()).unwrap();
+    et.write_rating(&jpg, &old).unwrap();
+    let result = write_while_read_only(&mut et, &jpg, &jpg, &new);
+    assert!(
+        matches!(&result, Err(pw_metadata::Error::ReadOnly(target)) if *target == jpg),
+        "read-only JPEG: {result:?}"
+    );
+    assert_eq!(
+        et.read_ratings(std::slice::from_ref(&jpg))
+            .unwrap()
+            .get(&jpg),
+        Some(&old),
+        "the JPEG keeps the old rating"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// Uses a real DNG from the test set (copied, never the original).
 #[test]
 #[ignore = "needs real camera files: set PW_TESTDATA and run with --ignored"]
