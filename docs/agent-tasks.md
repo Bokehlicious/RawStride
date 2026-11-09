@@ -809,6 +809,121 @@ Ordered from easiest to hardest. Start at the top.
   import of the same card shows the files as already present and opens no new tab when nothing was
   copied.
 
+### T37. ADR 0010 M7a: backup destination — Open
+
+- **Crate:** `pw-loupe`. **Files:** `crates/pw-loupe/src/import.rs`, `crates/pw-loupe/src/main.rs`.
+- **What (ADR 0010 §3.2; the Tauri dialog's "Backup" checkbox and field):**
+  1. `ImportForm` gets `backup_on: bool` (default `false`) and `backup: String` (default empty).
+     `Field` gets `Backup`.
+  2. `validate()`: when `backup_on` is false, the backup is `None` as today. When it is true, pass the
+     trimmed `backup` (an empty field counts as no backup, as in `pw-ingest`). To put an error on the
+     right field **without reading the message text**: first call `validate_options` **without** the
+     backup; an error there is `Field::Dest` (as today); then call it **with** the backup; an error that
+     only appears now is `Field::Backup`. Messages unchanged ("Backupmålet …").
+  3. Dialog (`main.rs`): under "Mål", a checkbox "Backup" and, on the same row, a text field and
+     "Välj…" (title "Välj backupmål", starting in the typed folder), both disabled while the checkbox is
+     off; the `Backup` field error under it. Disabled while running, like the other fields.
+- **Rules:** the copy itself already handles `Options::backup` (`pw-ingest`); nothing changes in the
+  worker; rules 6 and 7.
+- **Tests to add** (`import.rs`): backup off → `None` even with text in the field; backup on with a
+  folder → `Some`; backup on with an empty field → `None`; backup inside the source → `Field::Backup`;
+  backup equal to the destination → `Field::Backup` with "Backupmålet måste vara en annan mapp än målet.";
+  a bad destination together with a bad backup → `Field::Dest` (the destination is reported first).
+- **Done when:** `.\tools\check.ps1` is all OK, and the owner checks by hand: an import with backup
+  writes the same files to both folders; the preview shows "(bara backup)" for files that only the
+  backup lacks.
+
+### T38. ADR 0010 M7b: job name and first running number — Open
+
+- **Start after T37 is done.**
+- **Crate:** `pw-loupe`. **Files:** `crates/pw-loupe/src/import.rs`, `crates/pw-loupe/src/main.rs`.
+- **What:**
+  1. `ImportForm` gets `job: String` (default empty) and `first_seq: u32` (default 1). `validate()`
+     passes them on instead of `""` and `1` (the job is trimmed by `pw-ingest`).
+  2. Dialog: after "Filnamnsmall", a row "Jobb" with a text field and "Första nr" with an
+     `egui::DragValue` (range 0 to 999 999, as the Tauri field allows 0), and the help text
+     "Variabler: {year} {year2} {month} {day} {hour} {minute} {second} {date} {time} {make} {model}
+     {name} {seq} {seq:4} {job}" in a small, grey font (the list in the `pw_ingest::template` module
+     documentation).
+- **Rules:** rules 6 and 7.
+- **Tests to add:** the defaults; `job` and `first_seq` reach `Options`; a job with spaces around it is
+  trimmed.
+- **Done when:** `.\tools\check.ps1` is all OK, and the owner checks by hand that `{job}` in the folder
+  template and `{seq:4}` in the file-name template give the expected names in the preview.
+
+### T39. ADR 0010 M7c: IPTC template on the new copies — Open
+
+- **Start after T38 is done.**
+- **Crate:** `pw-loupe`. **Files:** `crates/pw-loupe/src/import.rs`, `crates/pw-loupe/src/import_worker.rs`,
+  `crates/pw-loupe/src/import_text.rs`, `crates/pw-loupe/src/main.rs`, `crates/pw-loupe/src/lib.rs`.
+- **What (ADR 0010 §3.2; the Tauri `run`, "IPTC template on the new copies"):**
+  1. **Form:** `ImportForm` gets `iptc: IptcForm` with the strings `creator`, `copyright`, `credit`,
+     `email`, `phone`, `url` (the six fields of the Tauri dialog; title and description are not in that
+     dialog either). `IptcForm::to_iptc(&self) -> pw_metadata::Iptc`, as the Tauri `From<IptcDto>`:
+     copyright as `LocalizedValue::x_default`, title and description empty.
+  2. **Worker:** after the copy, when the result is not cancelled and the template is not empty
+     (`Iptc::is_empty`), write it to every copied file that is not a companion file
+     (`pw_ingest::COMPANION_EXTENSIONS`), in the destination and, when `to_backup`, in the backup — the
+     same selection as the Tauri `run`. Use a `pw_metadata::ExifTool` that the worker thread starts
+     itself, only when needed, and keeps for later runs. The program name comes from
+     `ImportWorker::start()` (`"exiftool"`, as `ExifTool::start`) or from a new
+     `ImportWorker::start_with_exiftool(program: &str)` used by the tests.
+     - Send `ImportEvent::IptcProgress { id, done, total, current: PathBuf }` before each file.
+     - Check the cancel flag before each file; when set, stop and mark the result `cancelled`.
+     - `ImportDone` gets `iptc_errors: Vec<String>` (`"{file name}: {error}"`); if ExifTool cannot be
+       started, one entry with that error and no further attempts in this run.
+  3. **Dialog state:** `Running` also shows IPTC progress: add an `IptcProgress` case to the state
+     machine (`Running { progress }` keeps the copy progress; add `iptc: Option<(usize, usize, PathBuf)>`
+     or a small enum, your choice, tested).
+  4. **Texts:** `iptc_progress_text(done, total, current) -> String` = "Skriver IPTC {done + 1} / {total}
+     · {file name}"; `done_lines` adds up to 10 "IPTC: {error}" error lines after the failures (as the
+     Tauri dialog).
+  5. **Dialog (`main.rs`):** a collapsing section "IPTC-mall" (closed by default) with the six fields
+     labelled Fotograf, Copyright (hint "© 2026 Namn"), Credit, E-post, Telefon, Webb, and the help text
+     "Skrivs till .xmp-sidofilen för RAW och in i DNG/JPG/TIF. Tomma fält lämnas orörda." While running,
+     the progress bar shows the IPTC progress (files) after the copy.
+- **Rules:** ExifTool runs only on the worker thread; no `unwrap`/`expect`/`panic!` in non-test code;
+  rules 6 and 7.
+- **Tests to add:** `to_iptc` (copyright becomes `x-default`; an all-empty form is `is_empty`); the
+  worker with an **empty** template never starts ExifTool (use a program name that does not exist: no
+  `iptc_errors`); with a template and a program that does not exist: the copy is reported as usual and
+  `iptc_errors` has one entry; cancel before the IPTC step writes nothing; the state machine and the
+  texts (including the 10-line limit). A real write is checked by hand.
+- **Done when:** `.\tools\check.ps1` is all OK, and the owner checks by hand: after an import with
+  Fotograf and Copyright filled in, the `.xmp` sidecar of a RAW (and a DNG or JPG itself) carries them,
+  for example in Photo Mechanic or with `exiftool -XMP:Creator -XMP:Rights <file>`.
+
+### T40. ADR 0010 M7d: eject the card after the import — Open
+
+- **Start after T39 is done.**
+- **Crate:** `pw-loupe`. **Files:** `crates/pw-loupe/src/import.rs`, `crates/pw-loupe/src/import_worker.rs`,
+  `crates/pw-loupe/src/import_text.rs`, `crates/pw-loupe/src/tabs.rs`, `crates/pw-loupe/src/main.rs`.
+- **What (ADR 0010 §3.2 and the risk in §10; the Tauri `run`):**
+  1. `ImportForm` gets `eject: bool` (default `false`).
+  2. **Worker,** after the copy and the IPTC step, when `eject` is set:
+     - if the result is cancelled or has failures: `ImportDone::eject = Some("Kortet matades inte ut
+       eftersom importen inte blev komplett.")`;
+     - otherwise send `ImportEvent::Ejecting { id }`, forget the cached scan, and set
+       `eject = Some(pw_ingest::eject(&source))` (its message as it is).
+  3. **Tabs:** `Tabs::clear_inside(&mut self, root: &Path) -> bool` empties every tab whose folder is
+     the root or below it (compare paths component by component, case-insensitively on Windows, with no
+     file access) and returns whether the active tab was among them.
+  4. **Dialog (`main.rs`):** a checkbox "Mata ut kortet när importen är klar (inget raderas från kortet)".
+     When a run starts with `eject` set, call `clear_inside(source)` first and reload the active tab if
+     it was emptied, so no tab reads from the card while it is ejected (ADR 0010 §10). While ejecting,
+     the progress text is "Matar ut {source} …". After `Done` with an `eject` message, ask the worker
+     for `cards()` again so the ejected card disappears from the buttons.
+  5. **Texts:** `done_lines` adds the eject message as a normal line after the IPTC errors.
+- **Rules:** `pw_ingest::eject` runs only on the worker thread (it waits for Windows); rules 6 and 7.
+- **Tests to add:** eject not requested → `eject` is `None`; requested with a cancelled or failed result
+  → the "inte komplett" message and no eject attempt (use a run that is cancelled before it starts);
+  `clear_inside` (the root itself, a subfolder, a folder with a similar name such as `E:\DCIM2` next to
+  `E:\DCIM`, different case, the active tab returned); the dialog state and `done_lines` with an eject
+  message. A real eject is checked by hand.
+- **Done when:** `.\tools\check.ps1` is all OK, and the owner checks by hand: an import with the
+  checkbox ejects the card at the end and the message says so; a cancelled import with the checkbox
+  does not eject and says why; a tab showing the card is emptied before the eject.
+
 ### T7. Format the files that `cargo fmt --check` reports — Done
 
 - **Crates:** `photoworkflow` (`src-tauri`), `preview-bench` (`tools/preview-bench`).
@@ -1069,3 +1184,4 @@ and reviewer:
 | 2026-11-09 | T36 | Ready for review | Added worker-backed import start, byte progress, cancellation and hide/show during copying, completion summaries, and one-time opening of the imported folder in a new grid tab. |
 | 2026-11-09 | T36 | Done | Reviewed: start by button or Enter only when `can_start`; copy on the worker; fields locked, progress bar with `progress_text`, "Avbryt" and "Dölj" while running, no close; the worker is polled every frame, also while hidden, and the status line shows the progress; on `Done` the result folder opens once in a new tab (grid), none when nothing was copied; "Ny import" and "Stäng". No changes in review. Workspace fmt, test (281 passed, 27 ignored) and clippy OK |
 | 2026-11-09 | ADR 0010 M6 | Done | Owner acceptance of step A with a real card: full import into an empty folder (progress, summary, new tab as contact sheet), cancel (summary "Avbruten", no partial files), "Dölj" during the copy (grid and loupe stay smooth), second import (files present, no new tab). All passed |
+| 2026-11-09 | T37–T40 | Open | Added: ADR 0010 M7 (step B) as four parts: backup destination, job name and first number, IPTC template on the new copies (ExifTool on the import worker), eject the card (tabs on the card are emptied first). M8 (documentation) is done by the reviewer after T40 |
