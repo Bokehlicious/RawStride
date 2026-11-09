@@ -581,7 +581,7 @@ Ordered from easiest to hardest. Start at the top.
   more than 20 items); `result_folder` for 0 copied, and for several folders.
 - **Done when:** `.\tools\check.ps1` is all OK.
 
-### T31. ADR 0010 M4b: import worker (background thread) — Open
+### T31. ADR 0010 M4b: import worker (background thread) — Done
 
 - **Start after T30 is done.**
 - **Crate:** `pw-loupe`. **Files:** a new `crates/pw-loupe/src/import_worker.rs`, declared and
@@ -901,3 +901,5 @@ and reviewer:
 | 2026-11-09 | T30 | Ready for review | Added the plain-Rust import form, shared `pw-ingest` validation, plan preview summary and result-folder selection, with the specified unit tests. |
 | 2026-11-09 | – | – | Rule 7 added (owner's antivirus): build only in the project's `target` folder, never in a temporary target folder. During T30 the agent built in `%TEMP%\pw-loupe-t30-target` and the antivirus quarantined a build script there |
 | 2026-11-09 | T30 | Done | Reviewed: `ImportForm` with the Tauri defaults; the field is chosen by which check fails (source, folder template, name template, then the rest as destination), never by the message text; messages are exactly those of `pw-ingest`; `Preview::new` matches the Tauri `preview_of`/`action` rules; `result_folder` follows Q2. All required tests present; pw-ingest added as an internal dependency. The first run failed to compile because the antivirus quarantined a build script in the agent's temporary target folder (rule 7); the owner's rerun: workspace fmt, test (245 passed, 27 ignored) and clippy OK. No changes in review |
+| 2026-11-09 | T31 | Ready for review | Added the bounded background import worker, cached preview scans, fresh scans and execution for runs, progress/completion events, cancellation, and worker lifecycle tests. `.\tools\check.ps1` passed, including 42 pw-loupe library tests, 3 binary tests and workspace clippy. |
+| 2026-11-09 | T31 | Done | Reviewed: one worker thread with a bounded request queue (full queue and stopped worker are errors), cached scan for previews and a fresh scan and plan for every run (as the Tauri `run`), progress and `Done` events with the Tauri summary and messages, cancel flag cleared per run behind a small gate so a new run never starts with an old flag, drop cancels and does not join. All required tests present, including no partial files after cancel. Comments added in review to explain the gate. Workspace fmt, test (251 passed, 27 ignored) and clippy OK |
