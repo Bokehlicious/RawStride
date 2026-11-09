@@ -106,7 +106,8 @@ Left out:
   features (`xdg-portal`, `wayland`) are for Linux only; no feature is enabled.
 - On Windows it needs `windows-sys` 0.61, `raw-window-handle` 0.6 and `log` 0.4, which are already in
   the workspace through eframe (0.61.2, 0.6.2 and 0.4.35; all MIT OR Apache-2.0, `raw-window-handle`
-  also Zlib). The only new crate is `rfd` itself; `Cargo.lock` must show no other new entry.
+  also Zlib). `rfd` 0.17.2 itself is also already in `Cargo.lock`, through the Tauri app's `tauri-plugin-dialog` (noted
+  2026-11-09), so adding it to `pw-loupe` adds no new crate; `Cargo.lock` must show no new entry.
 - 0.18.0 was released a day before the decision and was not chosen; an update is a separate decision.
 - `rfd` is listed in THIRD-PARTY-NOTICES before the first release (ADR 0002).
 

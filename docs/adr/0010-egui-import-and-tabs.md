@@ -138,7 +138,8 @@ dialogs give the same answers. The Tauri app keeps its own Tauri glue only.
 - **Folder dialog:** **`rfd` 0.17.2 (MIT), approved by the owner on 2026-11-09 (step M3)**, pinned as
   `=0.17.2` with `default-features = false`, in `pw-loupe` only. The licence check of the new tree for
   Windows x64 is in GUI_REQUIREMENTS §6.1: its Windows dependencies (`windows-sys` 0.61,
-  `raw-window-handle` 0.6, `log` 0.4) are already in the workspace, so `rfd` is the only new crate. It
+  `raw-window-handle` 0.6, `log` 0.4) are already in the workspace, and so is `rfd` 0.17.2 itself
+  (through the Tauri app's `tauri-plugin-dialog`), so no new crate is added. It
   is added in step M5, where the dialog is drawn.
 - No other new crates are expected. `pw-loupe` gains a dependency on `pw-ingest` (internal).
 

@@ -16,13 +16,11 @@ project owner together with a reviewer before it is merged. Read `AGENTS.md`, `C
    non-test code. Return errors instead.
 5. **Tests:** every behaviour change gets a test. Never weaken, delete or rewrite an existing test
    to make it pass; if a test seems wrong, stop and explain.
-6. **Before you report back,** run and keep the output of:
-   ```powershell
-   cargo fmt --all --check
-   cargo test -p <crate>
-   cargo clippy -p <crate> --all-targets
-   ```
-   (`<crate>` is named in the task; for `src-tauri` it is `photoworkflow`.)
+6. **Before you report back,** run `.\tools\check.ps1` and keep `test-output.txt` from that run
+   (it must be newer than your last change). Do not run `cargo test -p <crate>` or
+   `cargo clippy -p <crate>` on their own: a single-crate build uses a different feature set, which
+   builds new build scripts that the owner's antivirus may block (seen as linker error LNK1104). While
+   working you may run `cargo build --workspace` or `cargo test --workspace`.
 7. **Build only in the project's own `target` folder.** Do not set `CARGO_TARGET_DIR` or
    `--target-dir`, and do not build in a temporary folder (for example under `%TEMP%`). The
    owner's antivirus has an exception for `target` only; builds elsewhere are quarantined.
@@ -30,7 +28,7 @@ project owner together with a reviewer before it is merged. Read `AGENTS.md`, `C
 8. **Do not commit.** Leave the changes uncommitted so they can be reviewed with `git diff`.
    Do not create checkpoint commits or refs in this repository.
 9. **Report:** list every file changed, what changed and why, and paste the exact output of the
-   commands in step 6. Then mark the task "Ready for review" below.
+   summary of `test-output.txt` from step 6. Then mark the task "Ready for review" below.
 
 ## Status legend
 
@@ -618,7 +616,7 @@ Ordered from easiest to hardest. Start at the top.
   no final-named partial files; dropping the worker during a run returns at once.
 - **Done when:** `.\tools\check.ps1` is all OK.
 
-### T32. ADR 0010 M4c: import dialog state machine (plain Rust) — Ready for review
+### T32. ADR 0010 M4c: import dialog state machine (plain Rust) — Done
 
 - **Start after T31 is done.**
 - **Crate:** `pw-loupe`. **Files:** a new `crates/pw-loupe/src/import_dialog.rs`, declared and
@@ -948,3 +946,4 @@ and reviewer:
 | 2026-11-09 | T31 | Done | Reviewed: one worker thread with a bounded request queue (full queue and stopped worker are errors), cached scan for previews and a fresh scan and plan for every run (as the Tauri `run`), progress and `Done` events with the Tauri summary and messages, cancel flag cleared per run behind a small gate so a new run never starts with an old flag, drop cancels and does not join. All required tests present, including no partial files after cancel. Comments added in review to explain the gate. Workspace fmt, test (251 passed, 27 ignored) and clippy OK |
 | 2026-11-09 | T32 | Ready for review | Added the plain-Rust import dialog state machine, debounced preview requests with rescan tracking, request-ID filtering, progress/done/error/disconnect handling, cancellation/close checks, result-folder lookup and back-to-editing behavior, with transition tests. `.\tools\check.ps1` passed: pw-loupe 53 library tests and 3 binary tests; workspace fmt, tests and clippy OK. The separate `cargo test -p pw-loupe` and `cargo clippy -p pw-loupe --all-targets` commands failed while linking the thiserror build script (MSVC LNK1104); no pw-loupe process was running. |
 | 2026-11-09 | T32 | Reviewed | The state machine matches the spec: 300 ms debounce, rescan only when the source changed, stale events ignored by request id, start only with a preview that has files to copy, disconnect turns previewing and running into errors, no close while running, result folder from T30, back to editing asks for a fresh scan. All required tests present. Finding: `tick()` and `start()` call `ImportForm::validate`, which touches the disk (exists check and canonicalise) on the UI thread; on a sleeping HDD this can freeze the window. Fixed in T33 (validation on the worker). The agent's `test-output.txt` predates the final T32 code, so the owner reruns `.\tools\check.ps1` before the commit. The agent also saw LNK1104 (linker could not open the thiserror build script) in separate cargo runs |
+| 2026-11-09 | T32 | Done | Owner reran `.\tools\check.ps1` on the final code: fmt, test (262 passed, 27 ignored) and clippy OK; committed. Rule 6 changed: the agent runs `.\tools\check.ps1` (whole workspace) instead of single-crate `cargo test -p`/`clippy -p`, whose different feature set builds new build scripts that failed to link (LNK1104), most likely blocked by the antivirus. Noted in review: `rfd` 0.17.2 is already in `Cargo.lock` through `tauri-plugin-dialog`, so adding it to `pw-loupe` in M5 adds no new crate at all |
