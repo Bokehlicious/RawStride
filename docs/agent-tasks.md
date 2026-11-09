@@ -866,7 +866,7 @@ Ordered from easiest to hardest. Start at the top.
 - **Done when:** `.\tools\check.ps1` is all OK, and the owner checks by hand that `{job}` in the folder
   template and `{seq:4}` in the file-name template give the expected names in the preview.
 
-### T39. ADR 0010 M7c: IPTC template on the new copies — Ready for review
+### T39. ADR 0010 M7c: IPTC template on the new copies — Done
 
 - **Start after T38 is done.**
 - **Crate:** `pw-loupe`. **Files:** `crates/pw-loupe/src/import.rs`, `crates/pw-loupe/src/import_worker.rs`,
@@ -1041,7 +1041,25 @@ Ordered from easiest to hardest. Start at the top.
   expected English texts to the Swedish ones, and say so in the report).
 - **Done when:** `.\tools\check.ps1` is all OK.
 
-### T43. ADR 0013 B3: rating keys and display in the grid and the loupe — Open
+### T43. ADR 0013 B3: rating keys and display in the grid and the loupe — Ready for review
+
+- **Second review 2026-11-09: code accepted.** Points 1 and 2 below are fixed; point 3 is decided by
+  the owner during the hand check. Waiting for the owner's hand check ("Done when").
+- **Review 2026-11-09: changes requested.** Keys, focus rule, grid row, dimming and the badge are
+  accepted. Still to do, in `crates/pw-loupe/src/main.rs` only:
+  1. **The star is drawn wrongly.** `paint_rating_glyphs` fills the ten-point star with
+     `egui::Shape::convex_polygon`, but a star is not convex: egui fills a convex polygon as a fan
+     from its first point, so the notches between the tips are filled in (the star looks like a
+     pentagon) and the edge anti-aliasing is wrong. Draw it as ten triangles from the centre in an
+     `egui::Mesh` (centre, point *i*, point *i*+1), or as the inner pentagon plus five tip triangles,
+     each of which is convex. Keep the size and spacing.
+  2. **Badge width:** measure the label text with `painter.layout_no_wrap(…)` (the galley's
+     `rect.width()`) instead of `chars().count() × 8`, so "Röd" and "Lila" neither overflow nor leave a
+     gap.
+  3. **Badge content:** ADR 0013 §5.2 asks for the same look as the grid row (stars on the label
+     colour). The Swedish label name in the badge is an addition; keep it only if the owner says so
+     after looking at it — otherwise remove it (the status line already names the label).
+  Then run `.\tools\check.ps1` and hand over for the owner's manual check (the "Done when" list).
 
 - **Start after T42 is done.**
 - **Crate:** `pw-loupe`. **Files:** `crates/pw-loupe/src/main.rs`; `crates/pw-loupe/src/ratings.rs`
@@ -1089,7 +1107,7 @@ Ordered from easiest to hardest. Start at the top.
 - **Done when:** `.\tools\check.ps1` is all OK, and the owner checks by hand: press a rating key and
   close the window at once; reopen the folder and the value is there.
 
-### T45. ADR 0013 B2 follow-up: send the folder read again when the metadata queue is full — Open
+### T45. ADR 0013 B2 follow-up: send the folder read again when the metadata queue is full — Done
 
 - **Start after T42 is done.** Small; can be done before or after T43.
 - **Crate:** `pw-loupe`. **File:** `crates/pw-loupe/src/metadata.rs` only.
@@ -1116,6 +1134,30 @@ Ordered from easiest to hardest. Start at the top.
   as today; a second `begin_load` while a read is pending sends only the new folder; the read is sent
   before queued writes in the same `poll`.
 - **Done when:** `.\tools\check.ps1` is all OK.
+
+### T46. ADR 0013 §5: rounded, inset label bar in the grid and the loupe badge — Open
+
+- **Start after T43 is done.** For a Claude agent (drawing code, checked by hand).
+- **Crate:** `pw-loupe`. **File:** `crates/pw-loupe/src/main.rs` only.
+- **Why (owner, 2026-11-09):** the label colour fills the whole row under a thumbnail, edge to edge,
+  with square corners. The owner wants it inset from the cell edges and clearly rounded.
+- **What:**
+  1. **Grid row:** draw the label colour as a rounded rectangle **inside** `label_rect`: about 6 pt in
+     from the left and right edges and 2 pt from the top and bottom, with the corner radius equal to
+     half its height (a pill shape). Use the painter's rounded `rect_filled` (corner radius), no new
+     shape code. Without a label nothing is drawn behind the row, as today.
+  2. The stars and the file name start inside the pill (move their left edge in by the same inset)
+     and the file name stays clipped to the row.
+  3. **Loupe badge:** the same rounding (radius = half the badge height) for both the label colour
+     and the dark background used when there is no label.
+  4. Keep the colours, the dark text on Yellow and Green, the dimming of rejected thumbnails, the
+     cell size and the selection frame as they are.
+- **Rules:** as T43; no new dependencies; rules 6, 7, 10–12.
+- **Tests:** none required (drawing only); if you factor the inset rectangle into a small plain
+  function, give it a test.
+- **Done when:** `.\tools\check.ps1` is all OK, and the owner checks by hand: the colour bar no longer
+  touches the cell edges, its ends are round, the stars and name sit inside it at thumbnail sizes 96,
+  200 and 480, and the loupe badge has the same shape.
 
 ### T7. Format the files that `cargo fmt --check` reports — Done
 
@@ -1402,3 +1444,11 @@ and reviewer:
 | 2026-11-09 | T42 | Ready for review | Added the optimistic `RatingStore` and testable writer queue, wired read/write events and polling into `MetadataCache`, preserved ratings across folder loads, pruned closed-tab ratings, and localized metadata notices. Added queue, rollback, stale-read, pruning and cache tests; updated the existing metadata notice expectations and test inventory. Workspace fmt, test (330 passed, 27 ignored) and clippy OK; no commit. |
 | 2026-11-09 | T42 | Done | Reviewed: `RatingStore` follows ADR 0013 §4.2 rules 1–6 (coalescing of unsent writes, back-pressure, rollback that respects newer writes, read merge by request id, prune keeps pending writes); `MetadataCache` keeps only load states; Swedish notices; 15 store tests + 2 cache tests. Owner's `check.ps1`: fmt, test (330 passed, 27 ignored, 0 failed) and clippy OK. Gap in the task text: a folder read refused with `QueueFull` becomes an error → T45. Minor, no action: a cleared rating is stored as an empty `Some(Rating)` after a write but as `None` after a read (both draw the same); tabs emptied by the import's eject are not pruned (harmless). The agent changed this file only as rule 11 allows. The T41 "Done" status and its log row were missing because the reviewer's own earlier write of this file did not land (a file-transfer problem on the reviewer's side, not the agent); restored above |
 | 2026-11-09 | T45 | Open | Added: retry the folder read on `QueueFull` (T42 follow-up) |
+| 2026-11-09 | T43 | Ready for review | Wired rating shortcuts with keyboard-focus/import-dialog guards; added grid rating rows, label colours, rejected-thumbnail dimming and the loupe badge. `MetadataCache` exposes the store's set/shown operations; glyphs are drawn as shapes. Added a palette test and updated the test inventory. Workspace fmt, tests (331 passed, 27 ignored) and clippy OK. Owner's manual acceptance remains pending; no commit. |
+| 2026-11-09 | T43 | Changes requested | Reviewed: rating keys sit after the dialog and tab checks and before the mode keys, skipped while egui wants keyboard input; act on `tab.current`; refusal shows `UNSUPPORTED_TEXT`. Grid row (glyphs left, name left-aligned, label colour, dark text on Yellow/Green), 40 % dimming of rejected thumbnails, loupe badge only with the I information. Owner's `check.ps1`: fmt, test (331 passed, 27 ignored, 0 failed) and clippy OK. Requested: the star shape is filled as a convex polygon although it is concave (notches filled); measure the badge text; the label name in the badge is not in ADR 0013 §5.2 (owner decides). Note: two small accessors were added to `metadata.rs`, which the task did not name (rule 2 says stop and ask); accepted, as the store lives inside `MetadataCache` |
+| 2026-11-09 | T45 | Ready for review | On `QueueFull`, `MetadataCache` retains the active folder read and retries it in `poll` before rating writes; `Stopped` still reports the existing load error. Added five fake-worker tests for loading state, retry/read completion, stopped workers, replacing pending folders and read/write order. Updated the test inventory. Workspace fmt, tests (336 passed, 27 ignored) and clippy OK; no commit. |
+| 2026-11-09 | T43 | Ready for review | (Agent) Review fixes in `main.rs` only: the star is drawn as ten centre triangles in an `egui::Mesh`; the badge's label text is measured with `painter.layout_no_wrap` and drawn as that galley. The Swedish label name in the badge is kept for the owner to look at during the hand check (point 3), then kept or removed. No test changes. Workspace fmt, test (336 passed, 27 ignored, 0 failed) and clippy OK; no commit. |
+| 2026-11-09 | T45 | Done | Reviewed: `MetadataSubmit` trait (read + events) over `MetadataWorker`; `QueueFull` keeps the read pending and the images loading; `poll` retries it after draining events and before `pump`, so a freed slot goes to the read first; `Stopped` fails the load as before; a new `begin_load` and `fail_loading` clear the pending read. Five tests cover every point of the task. Owner's `check.ps1`: fmt, test (336 passed, 27 ignored, 0 failed) and clippy OK |
+| 2026-11-09 | T43 | Ready for review | Second review: the star is ten centre triangles in an `egui::Mesh` (indices checked: centre 0, ring 1–10, wrapping); the badge text is measured with `layout_no_wrap` and drawn as that galley. Accepted; meshes are not anti-aliased, so the stars may look slightly hard-edged at small sizes (owner judges in the hand check). Point 3 (label name in the badge) is the owner's choice. Waiting for the hand check |
+| 2026-11-09 | T39 | Done | Heading corrected to Done (the log already said Done; found by a reviewer) |
+| 2026-11-09 | T46 | Open | Added: owner wants the label colour inset and rounded (pill) in the grid row and the loupe badge |

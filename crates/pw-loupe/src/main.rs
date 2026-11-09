@@ -18,14 +18,16 @@ use metadata::MetadataCache;
 use pw_loupe::{
     Action, CellState, DEFAULT_THUMBNAIL_SIZE, DialogKey, DialogRequest, Field, GridKeyAction,
     ImportDialog, ImportDialogState, ImportEvent, ImportForm, ImportWorker, MAX_THUMBNAIL_SIZE,
-    MIN_THUMBNAIL_SIZE, Options, SubmitError, TabAction, Tabs, ThumbGrid, ViewMode, WINDOW_TITLE,
-    clamp_thumbnail_size, color_image, columns, dialog_key_action, done_lines,
-    ejecting_progress_text, error_text, grid_key_action, indicator_text, iptc_progress_text,
-    key_action, list_folder, loupe_key_action, mode_label, more_lines, navigate, opens_import,
-    parse_args, preview_line, preview_summary, progress_text, request_cell, status_line,
-    step_thumbnail_size, tab_action, take_wheel_steps, visible_range, wheel_factor,
+    MIN_THUMBNAIL_SIZE, Options, RatingRefused, SubmitError, TabAction, Tabs, ThumbGrid,
+    UNSUPPORTED_TEXT, ViewMode, WINDOW_TITLE, clamp_thumbnail_size, color_image, columns,
+    dialog_key_action, done_lines, ejecting_progress_text, error_text, grid_key_action,
+    indicator_text, iptc_progress_text, key_action, label_name, list_folder, loupe_key_action,
+    mode_label, more_lines, navigate, opens_import, parse_args, preview_line, preview_summary,
+    progress_text, rating_key_action, request_cell, star_glyphs, status_line, step_thumbnail_size,
+    tab_action, take_wheel_steps, visible_range, wheel_factor,
 };
 use pw_metadata::MetadataWorker;
+use pw_metadata::Rating;
 use pw_render::{Textures, view_px};
 use pw_thumbcache::{ThumbWorker, ThumbnailRequest};
 use pw_viewcore::native::NativeBackend;
@@ -777,6 +779,7 @@ impl Loupe {
                             egui::pos2(cell_rect.center().x, cell_rect.min.y + image_size * 0.5),
                             egui::vec2(image_size, image_size),
                         );
+                        let rating = self.metadata.shown_rating(path);
                         painter.rect_filled(image_rect, 0.0, egui::Color32::from_gray(64));
                         match self.thumb_grid.state(index) {
                             CellState::Ready => {
@@ -819,6 +822,13 @@ impl Loupe {
                             }
                             CellState::Missing | CellState::Requested => {}
                         }
+                        if rating.is_some_and(|rating| rating.stars == Some(-1)) {
+                            painter.rect_filled(
+                                image_rect,
+                                0.0,
+                                egui::Color32::from_rgba_unmultiplied(0, 0, 0, 102),
+                            );
+                        }
 
                         let name = path
                             .file_name()
@@ -828,12 +838,33 @@ impl Loupe {
                             egui::pos2(cell_rect.min.x, cell_rect.max.y - GRID_LABEL_HEIGHT),
                             cell_rect.max,
                         );
+                        let label = rating.and_then(|rating| rating.label.as_deref());
+                        let color = label.and_then(label_color);
+                        if let Some(color) = color {
+                            painter.rect_filled(label_rect, 0.0, color);
+                        }
+                        let text_color = if matches!(label, Some("Yellow" | "Green")) {
+                            egui::Color32::from_gray(24)
+                        } else {
+                            egui::Color32::LIGHT_GRAY
+                        };
+                        let glyphs = star_glyphs(rating.and_then(|rating| rating.stars));
+                        let glyph_width = paint_rating_glyphs(
+                            &painter,
+                            egui::pos2(label_rect.min.x + 4.0, label_rect.min.y),
+                            label_rect.height(),
+                            &glyphs,
+                            text_color,
+                        );
                         painter.with_clip_rect(label_rect).text(
-                            label_rect.center(),
-                            egui::Align2::CENTER_CENTER,
+                            egui::pos2(
+                                label_rect.min.x + 4.0 + glyph_width + 4.0,
+                                label_rect.center().y,
+                            ),
+                            egui::Align2::LEFT_CENTER,
                             name,
                             egui::FontId::proportional(12.0),
-                            egui::Color32::LIGHT_GRAY,
+                            text_color,
                         );
 
                         if index == tab.current {
@@ -1149,6 +1180,26 @@ impl Loupe {
                 continue;
             }
 
+            if !ctx.egui_wants_keyboard_input()
+                && let Some(action) = rating_key_action(key, ctrl, shift, alt)
+            {
+                if let Some(path) = self
+                    .tabs
+                    .active()
+                    .and_then(|tab| tab.files.get(tab.current))
+                    .cloned()
+                {
+                    match self.metadata.set_rating(&path, action) {
+                        Ok(()) => {}
+                        Err(RatingRefused::Unsupported) => {
+                            self.message = Some(UNSUPPORTED_TEXT.to_owned());
+                        }
+                        Err(error) => self.message = Some(error.to_string()),
+                    }
+                }
+                continue;
+            }
+
             match self.tabs.active().map(|tab| tab.mode) {
                 Some(ViewMode::Grid) => match grid_key_action(key, ctrl, alt) {
                     Some(GridKeyAction::OpenLoupe) => {
@@ -1257,6 +1308,15 @@ impl Loupe {
         let painter = ui.painter().clone();
         painter.rect_filled(full, 0.0, BACKGROUND);
         self.textures.paint(&painter, rect, ppp, &frame);
+        if self.show_info
+            && let Some(rating) = frame
+                .path
+                .as_deref()
+                .and_then(|path| self.metadata.shown_rating(path))
+            && (rating.stars.is_some() || rating.label.is_some())
+        {
+            paint_rating_badge(&painter, rect, rating);
+        }
         let centre_text = |text: &str| {
             painter.text(
                 rect.center(),
@@ -1357,6 +1417,139 @@ fn field_error(state: &ImportDialogState, field: Field) -> Option<&str> {
             error: Some(error), ..
         } if error.field == field => Some(&error.message),
         _ => None,
+    }
+}
+
+fn label_color(label: &str) -> Option<egui::Color32> {
+    let (red, green, blue) = match label {
+        "Red" => (0xe5, 0x48, 0x4d),
+        "Yellow" => (0xf5, 0xc4, 0x00),
+        "Green" => (0x3f, 0xb9, 0x50),
+        "Blue" => (0x4c, 0x8d, 0xff),
+        "Purple" => (0xa3, 0x71, 0xf7),
+        _ => return None,
+    };
+    Some(egui::Color32::from_rgb(red, green, blue))
+}
+
+fn paint_rating_glyphs(
+    painter: &egui::Painter,
+    origin: egui::Pos2,
+    height: f32,
+    glyphs: &str,
+    color: egui::Color32,
+) -> f32 {
+    let mut x = origin.x;
+    let center_y = origin.y + height * 0.5;
+    for glyph in glyphs.chars() {
+        match glyph {
+            '★' => {
+                let center = egui::pos2(x + 5.5, center_y);
+                let radius = height.min(14.0) * 0.44;
+                // A star is concave, so it is drawn as ten triangles from the centre (each convex)
+                // instead of one convex polygon, which would fill the notches between the tips.
+                let mut mesh = egui::Mesh::default();
+                mesh.colored_vertex(center, color);
+                for point in 0..10u32 {
+                    let angle =
+                        -std::f32::consts::FRAC_PI_2 + point as f32 * std::f32::consts::PI / 5.0;
+                    let point_radius = if point % 2 == 0 {
+                        radius
+                    } else {
+                        radius * 0.43
+                    };
+                    mesh.colored_vertex(
+                        egui::pos2(
+                            center.x + angle.cos() * point_radius,
+                            center.y + angle.sin() * point_radius,
+                        ),
+                        color,
+                    );
+                    mesh.add_triangle(0, 1 + point, 1 + (point + 1) % 10);
+                }
+                painter.add(egui::Shape::mesh(mesh));
+                x += 11.0;
+            }
+            '•' => {
+                painter.circle_filled(
+                    egui::pos2(x + 5.5, center_y),
+                    height.min(14.0) * 0.12,
+                    color,
+                );
+                x += 11.0;
+            }
+            '✕' => {
+                let center = egui::pos2(x + 6.0, center_y);
+                let radius = height.min(14.0) * 0.34;
+                let stroke = egui::Stroke::new(1.8, color);
+                painter.line_segment(
+                    [
+                        egui::pos2(center.x - radius, center.y - radius),
+                        egui::pos2(center.x + radius, center.y + radius),
+                    ],
+                    stroke,
+                );
+                painter.line_segment(
+                    [
+                        egui::pos2(center.x - radius, center.y + radius),
+                        egui::pos2(center.x + radius, center.y - radius),
+                    ],
+                    stroke,
+                );
+                x += 12.0;
+            }
+            _ => {}
+        }
+    }
+    x - origin.x
+}
+
+fn paint_rating_badge(painter: &egui::Painter, image_rect: egui::Rect, rating: &Rating) {
+    let glyphs = star_glyphs(rating.stars);
+    let text_color = if matches!(rating.label.as_deref(), Some("Yellow" | "Green")) {
+        egui::Color32::from_gray(24)
+    } else {
+        egui::Color32::WHITE
+    };
+    let label = rating.label.as_deref().map(|label| {
+        painter.layout_no_wrap(
+            label_name(label).to_owned(),
+            egui::FontId::proportional(14.0),
+            text_color,
+        )
+    });
+    let label_width = label.as_ref().map_or(0.0, |galley| galley.rect.width());
+    let glyph_width = glyphs.chars().count() as f32 * 11.0;
+    let gap = if !glyphs.is_empty() && label.is_some() {
+        6.0
+    } else {
+        0.0
+    };
+    let height = 24.0;
+    let width = 8.0 + glyph_width + gap + label_width + 8.0;
+    let badge = egui::Rect::from_min_size(
+        egui::pos2(image_rect.min.x + 8.0, image_rect.max.y - height - 8.0),
+        egui::vec2(width, height),
+    );
+    let color = rating
+        .label
+        .as_deref()
+        .and_then(label_color)
+        .unwrap_or_else(|| egui::Color32::from_black_alpha(190));
+    painter.rect_filled(badge, 0.0, color);
+    let glyph_width = paint_rating_glyphs(
+        painter,
+        egui::pos2(badge.min.x + 4.0, badge.min.y),
+        height,
+        &glyphs,
+        text_color,
+    );
+    if let Some(galley) = label {
+        let position = egui::pos2(
+            badge.min.x + 4.0 + glyph_width + gap,
+            badge.center().y - galley.rect.height() * 0.5,
+        );
+        painter.galley(position, galley, text_color);
     }
 }
 
@@ -1467,5 +1660,25 @@ fn main() -> ExitCode {
             eprintln!("pw-loupe: {e}");
             ExitCode::FAILURE
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::label_color;
+    use egui::Color32;
+
+    #[test]
+    fn rating_label_colours_match_the_accepted_palette() {
+        for (label, expected) in [
+            ("Red", Color32::from_rgb(0xe5, 0x48, 0x4d)),
+            ("Yellow", Color32::from_rgb(0xf5, 0xc4, 0x00)),
+            ("Green", Color32::from_rgb(0x3f, 0xb9, 0x50)),
+            ("Blue", Color32::from_rgb(0x4c, 0x8d, 0xff)),
+            ("Purple", Color32::from_rgb(0xa3, 0x71, 0xf7)),
+        ] {
+            assert_eq!(label_color(label), Some(expected), "{label}");
+        }
+        assert_eq!(label_color("unknown"), None);
     }
 }

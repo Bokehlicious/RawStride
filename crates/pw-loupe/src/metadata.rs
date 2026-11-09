@@ -2,8 +2,26 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::TryRecvError;
 
-use pw_loupe::{RatingStore, UNSUPPORTED_TEXT, status_text};
-use pw_metadata::{MetadataWorker, RequestId, SubmitError, WorkerEvent, supports_rating};
+use pw_loupe::{
+    RatingKey, RatingRefused, RatingStore, RatingWriter, UNSUPPORTED_TEXT, status_text,
+};
+use pw_metadata::{MetadataWorker, Rating, RequestId, SubmitError, WorkerEvent, supports_rating};
+
+pub(crate) trait MetadataSubmit: RatingWriter {
+    fn read_ratings(&mut self, images: Vec<PathBuf>) -> Result<RequestId, SubmitError>;
+
+    fn try_recv(&mut self) -> Result<WorkerEvent, TryRecvError>;
+}
+
+impl MetadataSubmit for MetadataWorker {
+    fn read_ratings(&mut self, images: Vec<PathBuf>) -> Result<RequestId, SubmitError> {
+        MetadataWorker::read_ratings(self, images)
+    }
+
+    fn try_recv(&mut self) -> Result<WorkerEvent, TryRecvError> {
+        MetadataWorker::try_recv(self)
+    }
+}
 
 #[derive(Clone, Debug)]
 enum LoadState {
@@ -22,6 +40,7 @@ struct ImageMetadata {
 pub(crate) struct MetadataCache {
     images: HashMap<PathBuf, ImageMetadata>,
     load_request: Option<RequestId>,
+    pending_read: Option<Vec<PathBuf>>,
     ratings: RatingStore,
 }
 
@@ -30,7 +49,7 @@ impl MetadataCache {
     pub fn begin_load(
         &mut self,
         files: Vec<PathBuf>,
-        worker: &mut MetadataWorker,
+        worker: &mut impl MetadataSubmit,
     ) -> Result<Vec<PathBuf>, String> {
         let cwd =
             std::env::current_dir().map_err(|e| format!("cannot resolve image paths: {e}"))?;
@@ -56,25 +75,42 @@ impl MetadataCache {
             })
             .collect();
         self.load_request = None;
+        self.pending_read = None;
         let supported: Vec<PathBuf> = files
             .iter()
             .filter(|path| supports_rating(path))
             .cloned()
             .collect();
         if !supported.is_empty() {
-            match worker.read_ratings(supported) {
+            match worker.read_ratings(supported.clone()) {
                 Ok(id) => self.load_request = Some(id),
+                Err(SubmitError::QueueFull) => self.pending_read = Some(supported),
                 Err(error) => self.fail_loading(&submit_error(error)),
             }
         }
         Ok(files)
     }
 
-    pub fn poll(&mut self, worker: &mut MetadataWorker) -> Vec<String> {
+    pub fn poll(&mut self, worker: &mut impl MetadataSubmit) -> Vec<String> {
         let mut failures = Vec::new();
         self.drain(|| worker.try_recv(), &mut failures);
+        self.retry_pending_read(worker);
         failures.extend(self.ratings.pump(worker));
         failures
+    }
+
+    fn retry_pending_read(&mut self, worker: &mut impl MetadataSubmit) {
+        let Some(files) = self.pending_read.clone() else {
+            return;
+        };
+        match worker.read_ratings(files) {
+            Ok(id) => {
+                self.load_request = Some(id);
+                self.pending_read = None;
+            }
+            Err(SubmitError::QueueFull) => {}
+            Err(error) => self.fail_loading(&submit_error(error)),
+        }
     }
 
     pub fn prune(&mut self, keep: impl Fn(&Path) -> bool) {
@@ -104,6 +140,7 @@ impl MetadataCache {
     /// Moves every entry that is still loading to the error state.
     fn fail_loading(&mut self, message: &str) {
         self.load_request = None;
+        self.pending_read = None;
         for metadata in self.images.values_mut() {
             if matches!(&metadata.state, LoadState::Loading) {
                 metadata.state = LoadState::Error(message.to_owned());
@@ -137,6 +174,15 @@ impl MetadataCache {
         self.ratings
             .contains(path)
             .then(|| status_text(self.ratings.shown(path)))
+    }
+
+    pub fn set_rating(&mut self, path: &Path, key: RatingKey) -> Result<(), RatingRefused> {
+        self.ratings.set(path, key)
+    }
+
+    pub fn shown_rating(&self, path: &Path) -> Option<&Rating> {
+        self.images.get(path)?;
+        self.ratings.shown(path)
     }
 
     fn apply(&mut self, event: WorkerEvent, failures: &mut Vec<String>) {
@@ -184,7 +230,57 @@ fn submit_error(error: SubmitError) -> String {
 mod tests {
     use super::*;
     use pw_metadata::Rating;
-    use std::collections::HashMap;
+    use std::collections::{HashMap, VecDeque};
+
+    struct FakeSubmit {
+        read_responses: VecDeque<Result<RequestId, SubmitError>>,
+        read_attempts: Vec<Vec<PathBuf>>,
+        write_attempts: Vec<PathBuf>,
+        operations: Vec<&'static str>,
+        events: VecDeque<WorkerEvent>,
+        next_write_id: RequestId,
+    }
+
+    impl FakeSubmit {
+        fn new(read_responses: impl IntoIterator<Item = Result<RequestId, SubmitError>>) -> Self {
+            Self {
+                read_responses: read_responses.into_iter().collect(),
+                read_attempts: Vec::new(),
+                write_attempts: Vec::new(),
+                operations: Vec::new(),
+                events: VecDeque::new(),
+                next_write_id: 100,
+            }
+        }
+    }
+
+    impl RatingWriter for FakeSubmit {
+        fn write_rating(
+            &mut self,
+            path: PathBuf,
+            _rating: Rating,
+        ) -> Result<RequestId, SubmitError> {
+            self.operations.push("write");
+            self.write_attempts.push(path);
+            let id = self.next_write_id;
+            self.next_write_id += 1;
+            Ok(id)
+        }
+    }
+
+    impl MetadataSubmit for FakeSubmit {
+        fn read_ratings(&mut self, images: Vec<PathBuf>) -> Result<RequestId, SubmitError> {
+            self.operations.push("read");
+            self.read_attempts.push(images);
+            self.read_responses
+                .pop_front()
+                .unwrap_or(Err(SubmitError::QueueFull))
+        }
+
+        fn try_recv(&mut self) -> Result<WorkerEvent, TryRecvError> {
+            self.events.pop_front().ok_or(TryRecvError::Empty)
+        }
+    }
 
     #[test]
     fn metadata_cache_uses_absolute_paths_and_starts_loading() {
@@ -330,6 +426,113 @@ mod tests {
         assert_eq!(
             cache.rating_summary(Some(&files[0])).as_deref(),
             Some("Betyg: 3 stjärnor, Röd")
+        );
+    }
+
+    #[test]
+    fn queue_full_read_keeps_images_loading_without_an_error_notice() {
+        let mut worker = FakeSubmit::new([Err(SubmitError::QueueFull)]);
+        let mut cache = MetadataCache::default();
+        let files = match cache.begin_load(vec![PathBuf::from("photo.ARW")], &mut worker) {
+            Ok(files) => files,
+            Err(error) => panic!("current directory should be available: {error}"),
+        };
+
+        assert!(cache.is_loading(Some(&files[0])));
+        assert!(!cache.is_error(Some(&files[0])));
+        assert_eq!(
+            cache.notice(Some(&files[0])).as_deref(),
+            Some("Läser metadata…")
+        );
+        assert_eq!(cache.pending_read, Some(files));
+    }
+
+    #[test]
+    fn pending_read_is_retried_and_its_result_marks_images_ready() {
+        let mut worker = FakeSubmit::new([Err(SubmitError::QueueFull), Ok(7)]);
+        let mut cache = MetadataCache::default();
+        let files = match cache.begin_load(vec![PathBuf::from("photo.ARW")], &mut worker) {
+            Ok(files) => files,
+            Err(error) => panic!("current directory should be available: {error}"),
+        };
+
+        assert!(cache.poll(&mut worker).is_empty());
+        assert_eq!(cache.load_request, Some(7));
+        worker.events.push_back(WorkerEvent::RatingsRead {
+            id: 7,
+            result: Ok(HashMap::new()),
+        });
+        assert!(cache.poll(&mut worker).is_empty());
+
+        assert!(!cache.is_loading(Some(&files[0])));
+        assert!(!cache.is_error(Some(&files[0])));
+        assert_eq!(cache.notice(Some(&files[0])), None);
+    }
+
+    #[test]
+    fn stopped_pending_read_fails_loading_with_the_existing_error() {
+        let mut worker = FakeSubmit::new([Err(SubmitError::QueueFull), Err(SubmitError::Stopped)]);
+        let mut cache = MetadataCache::default();
+        let files = match cache.begin_load(vec![PathBuf::from("photo.ARW")], &mut worker) {
+            Ok(files) => files,
+            Err(error) => panic!("current directory should be available: {error}"),
+        };
+
+        assert!(cache.poll(&mut worker).is_empty());
+
+        assert!(!cache.is_loading(Some(&files[0])));
+        assert!(cache.is_error(Some(&files[0])));
+        assert_eq!(
+            cache.notice(Some(&files[0])).as_deref(),
+            Some("Metadatafel: metadataarbetaren har stannat")
+        );
+    }
+
+    #[test]
+    fn a_new_load_replaces_the_pending_read() {
+        let mut worker = FakeSubmit::new([
+            Err(SubmitError::QueueFull),
+            Err(SubmitError::QueueFull),
+            Ok(9),
+        ]);
+        let mut cache = MetadataCache::default();
+        let old_files = match cache.begin_load(vec![PathBuf::from("old.ARW")], &mut worker) {
+            Ok(files) => files,
+            Err(error) => panic!("current directory should be available: {error}"),
+        };
+        let new_files = match cache.begin_load(vec![PathBuf::from("new.ARW")], &mut worker) {
+            Ok(files) => files,
+            Err(error) => panic!("current directory should be available: {error}"),
+        };
+
+        assert!(cache.poll(&mut worker).is_empty());
+
+        assert_eq!(
+            worker.read_attempts,
+            vec![old_files.clone(), new_files.clone(), new_files.clone(),]
+        );
+        assert!(cache.is_loading(Some(&new_files[0])));
+        assert!(!cache.images.contains_key(&old_files[0]));
+    }
+
+    #[test]
+    fn pending_read_is_submitted_before_queued_rating_writes() {
+        let mut worker = FakeSubmit::new([Err(SubmitError::QueueFull), Ok(11)]);
+        let mut cache = MetadataCache::default();
+        let files = match cache.begin_load(vec![PathBuf::from("photo.ARW")], &mut worker) {
+            Ok(files) => files,
+            Err(error) => panic!("current directory should be available: {error}"),
+        };
+        if let Err(error) = cache.set_rating(&files[0], RatingKey::Stars(3)) {
+            panic!("supported rating path should be accepted: {error}");
+        }
+        let operations_before_poll = worker.operations.len();
+
+        assert!(cache.poll(&mut worker).is_empty());
+
+        assert_eq!(
+            &worker.operations[operations_before_poll..],
+            ["read", "write"]
         );
     }
 }
