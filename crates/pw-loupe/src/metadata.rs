@@ -2,8 +2,8 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::TryRecvError;
 
-use pw_metadata::{MetadataWorker, RequestId};
-use pw_metadata::{Rating, SubmitError, WorkerEvent, supports_rating};
+use pw_loupe::{RatingStore, UNSUPPORTED_TEXT, status_text};
+use pw_metadata::{MetadataWorker, RequestId, SubmitError, WorkerEvent, supports_rating};
 
 #[derive(Clone, Debug)]
 enum LoadState {
@@ -15,7 +15,6 @@ enum LoadState {
 
 #[derive(Clone, Debug)]
 struct ImageMetadata {
-    rating: Option<Rating>,
     state: LoadState,
 }
 
@@ -23,6 +22,7 @@ struct ImageMetadata {
 pub(crate) struct MetadataCache {
     images: HashMap<PathBuf, ImageMetadata>,
     load_request: Option<RequestId>,
+    ratings: RatingStore,
 }
 
 impl MetadataCache {
@@ -52,13 +52,7 @@ impl MetadataCache {
                 } else {
                     LoadState::Unsupported
                 };
-                (
-                    path.clone(),
-                    ImageMetadata {
-                        rating: None,
-                        state,
-                    },
-                )
+                (path.clone(), ImageMetadata { state })
             })
             .collect();
         self.load_request = None;
@@ -76,19 +70,31 @@ impl MetadataCache {
         Ok(files)
     }
 
-    pub fn poll(&mut self, worker: &MetadataWorker) {
-        self.drain(|| worker.try_recv());
+    pub fn poll(&mut self, worker: &mut MetadataWorker) -> Vec<String> {
+        let mut failures = Vec::new();
+        self.drain(|| worker.try_recv(), &mut failures);
+        failures.extend(self.ratings.pump(worker));
+        failures
     }
 
-    /// Applies every available event. If the worker is gone, nothing still loading can ever
-    /// finish, so those entries become errors instead of showing "loading" forever.
-    fn drain(&mut self, mut next: impl FnMut() -> Result<WorkerEvent, TryRecvError>) {
+    pub fn prune(&mut self, keep: impl Fn(&Path) -> bool) {
+        self.ratings.prune(keep);
+    }
+
+    /// Applies every available event. If the worker is gone, no outstanding operation can
+    /// finish, so loading entries and writes become errors instead of remaining pending.
+    fn drain(
+        &mut self,
+        mut next: impl FnMut() -> Result<WorkerEvent, TryRecvError>,
+        failures: &mut Vec<String>,
+    ) {
         loop {
             match next() {
-                Ok(event) => self.apply(event),
+                Ok(event) => self.apply(event, failures),
                 Err(TryRecvError::Empty) => return,
                 Err(TryRecvError::Disconnected) => {
                     self.fail_loading(&submit_error(SubmitError::Stopped));
+                    failures.extend(self.ratings.fail_sent());
                     return;
                 }
             }
@@ -108,10 +114,10 @@ impl MetadataCache {
     pub fn notice(&self, path: Option<&Path>) -> Option<String> {
         let metadata = self.images.get(path?)?;
         match &metadata.state {
-            LoadState::Loading => Some("Metadata loading…".into()),
+            LoadState::Loading => Some("Läser metadata…".into()),
             LoadState::Ready => None,
-            LoadState::Unsupported => Some("Ratings unsupported for this file".into()),
-            LoadState::Error(error) => Some(format!("Metadata error: {error}")),
+            LoadState::Unsupported => Some(UNSUPPORTED_TEXT.into()),
+            LoadState::Error(error) => Some(format!("Metadatafel: {error}")),
         }
     }
 
@@ -126,27 +132,28 @@ impl MetadataCache {
     }
 
     pub fn rating_summary(&self, path: Option<&Path>) -> Option<String> {
-        let rating = self.images.get(path?)?.rating.as_ref()?;
-        let mut summary = match rating.stars {
-            Some(-1) => "Rejected".to_string(),
-            Some(stars) => format!("{stars} stars"),
-            None => "Unrated".to_string(),
-        };
-        if let Some(label) = &rating.label {
-            summary.push_str(&format!(", {label}"));
-        }
-        Some(format!("Rating: {summary}"))
+        let path = path?;
+        self.images.get(path)?;
+        self.ratings
+            .contains(path)
+            .then(|| status_text(self.ratings.shown(path)))
     }
 
-    fn apply(&mut self, event: WorkerEvent) {
+    fn apply(&mut self, event: WorkerEvent, failures: &mut Vec<String>) {
         match event {
             WorkerEvent::RatingsRead { id, result } if Some(id) == self.load_request => {
                 self.load_request = None;
                 match result {
                     Ok(ratings) => {
-                        for (path, metadata) in &mut self.images {
+                        let paths: Vec<PathBuf> = self
+                            .images
+                            .iter()
+                            .filter(|(_, metadata)| matches!(&metadata.state, LoadState::Loading))
+                            .map(|(path, _)| path.clone())
+                            .collect();
+                        self.ratings.read(id, &ratings, &paths);
+                        for metadata in self.images.values_mut() {
                             if matches!(&metadata.state, LoadState::Loading) {
-                                metadata.rating = ratings.get(path).cloned();
                                 metadata.state = LoadState::Ready;
                             }
                         }
@@ -155,19 +162,10 @@ impl MetadataCache {
                 }
             }
             WorkerEvent::RatingWritten {
-                path,
-                rating,
-                result,
-                ..
+                id, path, result, ..
             } => {
-                if let Some(metadata) = self.images.get_mut(&path) {
-                    match result {
-                        Ok(()) => {
-                            metadata.rating = (!rating.is_empty()).then_some(rating);
-                            metadata.state = LoadState::Ready;
-                        }
-                        Err(error) => metadata.state = LoadState::Error(error),
-                    }
+                if let Some(message) = self.ratings.written(id, &path, result) {
+                    failures.push(message);
                 }
             }
             WorkerEvent::RatingsRead { .. } => {}
@@ -177,14 +175,16 @@ impl MetadataCache {
 
 fn submit_error(error: SubmitError) -> String {
     match error {
-        SubmitError::QueueFull => "metadata queue is full".into(),
-        SubmitError::Stopped => "metadata worker has stopped".into(),
+        SubmitError::QueueFull => "metadatakön är full".into(),
+        SubmitError::Stopped => "metadataarbetaren har stannat".into(),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pw_metadata::Rating;
+    use std::collections::HashMap;
 
     #[test]
     fn metadata_cache_uses_absolute_paths_and_starts_loading() {
@@ -204,7 +204,7 @@ mod tests {
         assert!(!cache.is_error(Some(&files[0])));
         assert_eq!(
             cache.notice(Some(&files[0])).as_deref(),
-            Some("Metadata loading…")
+            Some("Läser metadata…")
         );
     }
 
@@ -226,10 +226,14 @@ mod tests {
         assert!(!cache.is_error(Some(&files[0])));
         assert!(!cache.is_loading(None));
         assert!(!cache.is_error(None));
+        assert_eq!(
+            cache.notice(Some(&files[0])).as_deref(),
+            Some(UNSUPPORTED_TEXT)
+        );
     }
 
     #[test]
-    fn disconnected_worker_turns_loading_into_an_error() {
+    fn disconnected_worker_turns_loading_into_a_swedish_error() {
         let program =
             std::env::temp_dir().join(format!("pw-loupe-stopped-worker-{}", std::process::id()));
         let mut worker = match MetadataWorker::start_with(&program.to_string_lossy(), &[]) {
@@ -244,17 +248,88 @@ mod tests {
             Ok(files) => files,
             Err(error) => panic!("current directory should be available: {error}"),
         };
-        cache.drain(|| Err(TryRecvError::Disconnected));
+        let mut failures = Vec::new();
+        cache.drain(|| Err(TryRecvError::Disconnected), &mut failures);
+        assert!(failures.is_empty());
         assert!(!cache.is_loading(Some(&files[0])));
         assert!(cache.is_error(Some(&files[0])));
         assert_eq!(
             cache.notice(Some(&files[0])).as_deref(),
-            Some("Metadata error: metadata worker has stopped")
+            Some("Metadatafel: metadataarbetaren har stannat")
         );
         assert_eq!(
             cache.notice(Some(&files[1])).as_deref(),
-            Some("Ratings unsupported for this file"),
+            Some(UNSUPPORTED_TEXT),
             "entries that were not loading keep their state"
+        );
+    }
+
+    #[test]
+    fn ratings_survive_loading_another_folder() {
+        let program =
+            std::env::temp_dir().join(format!("pw-loupe-preserved-rating-{}", std::process::id()));
+        let mut worker = match MetadataWorker::start_with(&program.to_string_lossy(), &[]) {
+            Ok(worker) => worker,
+            Err(error) => panic!("worker thread should start: {error}"),
+        };
+        let mut cache = MetadataCache::default();
+        let old_path = std::env::temp_dir().join("pw-loupe-preserved.ARW");
+        if let Err(error) = cache.begin_load(vec![old_path.clone()], &mut worker) {
+            panic!("current directory should be available: {error}");
+        }
+        if let Err(error) = cache.ratings.set(&old_path, pw_loupe::RatingKey::Stars(3)) {
+            panic!("supported rating path should be accepted: {error}");
+        }
+        if let Err(error) = cache.begin_load(vec![PathBuf::from("notes.txt")], &mut worker) {
+            panic!("current directory should be available: {error}");
+        }
+
+        assert_eq!(
+            cache
+                .ratings
+                .shown(&old_path)
+                .and_then(|rating| rating.stars),
+            Some(3)
+        );
+    }
+
+    #[test]
+    fn rating_summary_uses_the_swedish_rating_text() {
+        let program =
+            std::env::temp_dir().join(format!("pw-loupe-rating-summary-{}", std::process::id()));
+        let mut worker = match MetadataWorker::start_with(&program.to_string_lossy(), &[]) {
+            Ok(worker) => worker,
+            Err(error) => panic!("worker thread should start: {error}"),
+        };
+        let mut cache = MetadataCache::default();
+        let path = std::env::temp_dir().join("pw-loupe-summary.ARW");
+        let files = match cache.begin_load(vec![path.clone()], &mut worker) {
+            Ok(files) => files,
+            Err(error) => panic!("current directory should be available: {error}"),
+        };
+        let Some(id) = cache.load_request else {
+            panic!("supported image should queue a metadata read");
+        };
+        let mut failures = Vec::new();
+        cache.apply(
+            WorkerEvent::RatingsRead {
+                id,
+                result: Ok(HashMap::from([(
+                    files[0].clone(),
+                    Rating {
+                        stars: Some(3),
+                        label: Some("Red".to_owned()),
+                    },
+                )])),
+            },
+            &mut failures,
+        );
+
+        assert!(failures.is_empty());
+        assert_eq!(cache.notice(Some(&files[0])), None);
+        assert_eq!(
+            cache.rating_summary(Some(&files[0])).as_deref(),
+            Some("Betyg: 3 stjärnor, Röd")
         );
     }
 }

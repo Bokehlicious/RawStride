@@ -983,9 +983,39 @@ impl Loupe {
         match action {
             TabAction::Next => self.tabs.next(),
             TabAction::Previous => self.tabs.previous(),
-            TabAction::Close => self.tabs.close_active(),
+            TabAction::Close => {
+                self.tabs.close_active();
+                self.load_active_tab();
+                self.prune_metadata_to_open_tabs();
+                return;
+            }
         }
         self.load_active_tab();
+    }
+
+    fn prune_metadata_to_open_tabs(&mut self) {
+        let current_dir = match std::env::current_dir() {
+            Ok(current_dir) => current_dir,
+            Err(error) => {
+                self.message = Some(format!("Kan inte städa metadata: {error}"));
+                return;
+            }
+        };
+        let open_files: Vec<PathBuf> = self
+            .tabs
+            .tabs()
+            .iter()
+            .flat_map(|tab| &tab.files)
+            .map(|path| {
+                if path.is_absolute() {
+                    path.clone()
+                } else {
+                    current_dir.join(path)
+                }
+            })
+            .collect();
+        self.metadata
+            .prune(|path| open_files.iter().any(|open_path| open_path == path));
     }
 
     /// The anchor of a zoom: the pointer (physical pixels inside the image area) or the centre.
@@ -1017,7 +1047,9 @@ impl Loupe {
 
     fn draw(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
-        self.metadata.poll(&self.metadata_worker);
+        if let Some(message) = self.metadata.poll(&mut self.metadata_worker).last() {
+            self.message = Some(message.clone());
+        }
         // A folder or a file dropped on the window opens in a new tab (owner decision 2026-11-08,
         // ADR 0010 Q3). An empty active tab is filled instead, and an already open folder is
         // activated (GR12). Modifier keys are not used: Windows does not report them reliably

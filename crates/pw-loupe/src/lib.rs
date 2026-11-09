@@ -32,7 +32,8 @@ pub use import_text::{
 };
 pub use import_worker::{ImportDone, ImportEvent, ImportWorker, RequestId, SubmitError};
 pub use ratings::{
-    RatingKey, UNSUPPORTED_TEXT, apply, label_name, rating_key_action, star_glyphs, status_text,
+    RatingKey, RatingRefused, RatingStore, RatingWriter, UNSUPPORTED_TEXT, apply, label_name,
+    rating_key_action, star_glyphs, status_text,
 };
 pub use tabs::{Tab, Tabs, ViewMode};
 pub use thumbs::{CellState, ThumbGrid, color_image, request_cell};

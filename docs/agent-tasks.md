@@ -939,10 +939,10 @@ Ordered from easiest to hardest. Start at the top.
   checkbox ejects the card at the end and the message says so; a cancelled import with the checkbox
   does not eject and says why; a tab showing the card is emptied before the eject.
 
-### T41. ADR 0013 B1: rating keys, applying a key, rating texts (plain Rust) — Ready for review
+### T41. ADR 0013 B1: rating keys, applying a key, rating texts (plain Rust) — Done
 
 - **2026-11-09:** the agent did points 1–3; the review asked for point 4 and more tests, and the
-  reviewer (Claude) finished them. Waiting for the owner's `.\tools\check.ps1` run.
+  reviewer (Claude) finished them. The owner's `.\tools\check.ps1` run passed.
 
 - **Crate:** `pw-loupe`. **Files:** a new `crates/pw-loupe/src/ratings.rs`, declared and re-exported in
   `crates/pw-loupe/src/lib.rs`. **Not** `main.rs`, `metadata.rs` or any `Cargo.toml`.
@@ -983,7 +983,10 @@ Ordered from easiest to hardest. Start at the top.
   unknown label.
 - **Done when:** `.\tools\check.ps1` is all OK.
 
-### T42. ADR 0013 B2: rating store and write queue (plain Rust) — Open
+### T42. ADR 0013 B2: rating store and write queue (plain Rust) — Done
+
+- **Review 2026-11-09:** accepted. One gap in this task's text (reads were not covered by the
+  back-pressure rule) is fixed in T45.
 
 - **Start after T41 is done.**
 - **Crate:** `pw-loupe`. **Files:** `crates/pw-loupe/src/ratings.rs`, `crates/pw-loupe/src/metadata.rs`,
@@ -1085,6 +1088,34 @@ Ordered from easiest to hardest. Start at the top.
   than 20 files.
 - **Done when:** `.\tools\check.ps1` is all OK, and the owner checks by hand: press a rating key and
   close the window at once; reopen the folder and the value is there.
+
+### T45. ADR 0013 B2 follow-up: send the folder read again when the metadata queue is full — Open
+
+- **Start after T42 is done.** Small; can be done before or after T43.
+- **Crate:** `pw-loupe`. **File:** `crates/pw-loupe/src/metadata.rs` only.
+- **Why:** `MetadataCache::begin_load` sends the folder read with `worker.read_ratings`. Since T42,
+  rating writes can fill the worker's queue (8 requests). If a tab is loaded at that moment, the read
+  gets `SubmitError::QueueFull`, and every image of the folder shows "Metadatafel: metadatakön är
+  full" until the tab is loaded again. ADR 0013 §4.2 rule 2 (back-pressure is retried, not an error)
+  should apply to the read too.
+- **What:**
+  1. When `read_ratings` returns `QueueFull`, keep the files to read (for example
+     `pending_read: Option<Vec<PathBuf>>`) and leave the images in `Loading`. `Stopped` still fails the
+     load as today.
+  2. In `poll`, after draining the events, send the pending read **before** `ratings.pump(worker)`.
+     On `Ok(id)` set `load_request = Some(id)` and clear `pending_read`; on `QueueFull` keep it for the
+     next frame; on `Stopped` fail the load.
+  3. A new `begin_load` replaces any pending read (only the active tab's folder is read).
+  4. To test this without ExifTool, let the read go through a small trait, as `RatingWriter` does
+     for writes (for example `trait MetadataSubmit: RatingWriter { fn read_ratings(…) }` implemented
+     for `MetadataWorker`), and make `begin_load` and `poll` generic over it, or test a private
+     helper; your choice, as long as the test uses a fake that can return `QueueFull`.
+- **Rules:** no `unwrap`/`expect`/`panic!` in non-test code; rules 6, 7, 10–12.
+- **Tests to add:** `QueueFull` on the read keeps the images loading (no error notice); the next
+  `poll` sends the read and a `RatingsRead` with that id makes them ready; `Stopped` gives the error
+  as today; a second `begin_load` while a read is pending sends only the new folder; the read is sent
+  before queued writes in the same `poll`.
+- **Done when:** `.\tools\check.ps1` is all OK.
 
 ### T7. Format the files that `cargo fmt --check` reports — Done
 
@@ -1367,3 +1398,7 @@ and reviewer:
 | 2026-11-09 | T41 | Ready for review | (Agent) Added the rating key map and pure `apply` function per ADR 0013 B1, with tests for shortcuts, ignored modifiers, existing key maps, and rating/label/reject updates. Updated the test inventory. Workspace fmt, test (307 passed, 27 ignored) and clippy OK. |
 | 2026-11-09 | T41 | Changes requested | Reviewed: key map and `apply` correct (`Stars` as `u8` accepted). Missing: point 4 (`label_name`, `status_text`, `star_glyphs`, `UNSUPPORTED_TEXT`) and several tests. The agent had also replaced this file with an older copy (T41 rewritten, T42–T44, a note and two log rows removed); restored. Rules 10–12 added under "How to work on a task" |
 | 2026-11-09 | T41 | Ready for review | Reviewer (Claude) finished point 4 and the missing tests in `ratings.rs` (11 tests, was 3) and re-exported the texts in `lib.rs`; test inventory updated (pw-loupe 109, total 315). Checked in the sandbox with a stand-in for `egui::Key` (crates.io not reachable there): rustfmt clean, 11 tests pass, clippy without findings in `ratings.rs`. **Not yet run on Windows:** the owner runs `.\tools\check.ps1` |
+| 2026-11-09 | T41 | Done | Owner's `check.ps1`: fmt, test (315 passed, 27 ignored, 0 failed; all 11 `ratings` tests) and clippy OK. T42 can start |
+| 2026-11-09 | T42 | Ready for review | Added the optimistic `RatingStore` and testable writer queue, wired read/write events and polling into `MetadataCache`, preserved ratings across folder loads, pruned closed-tab ratings, and localized metadata notices. Added queue, rollback, stale-read, pruning and cache tests; updated the existing metadata notice expectations and test inventory. Workspace fmt, test (330 passed, 27 ignored) and clippy OK; no commit. |
+| 2026-11-09 | T42 | Done | Reviewed: `RatingStore` follows ADR 0013 §4.2 rules 1–6 (coalescing of unsent writes, back-pressure, rollback that respects newer writes, read merge by request id, prune keeps pending writes); `MetadataCache` keeps only load states; Swedish notices; 15 store tests + 2 cache tests. Owner's `check.ps1`: fmt, test (330 passed, 27 ignored, 0 failed) and clippy OK. Gap in the task text: a folder read refused with `QueueFull` becomes an error → T45. Minor, no action: a cleared rating is stored as an empty `Some(Rating)` after a write but as `None` after a read (both draw the same); tabs emptied by the import's eject are not pruned (harmless). The agent changed this file only as rule 11 allows. The T41 "Done" status and its log row were missing because the reviewer's own earlier write of this file did not land (a file-transfer problem on the reviewer's side, not the agent); restored above |
+| 2026-11-09 | T45 | Open | Added: retry the folder read on `QueueFull` (T42 follow-up) |
