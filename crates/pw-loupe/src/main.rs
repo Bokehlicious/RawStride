@@ -273,6 +273,21 @@ impl Loupe {
 
                     ui.add_space(8.0);
                     ui.horizontal(|ui| {
+                        ui.label("Jobb");
+                        ui.text_edit_singleline(&mut form.job);
+                        ui.label("Första nr");
+                        ui.add(egui::DragValue::new(&mut form.first_seq).range(0..=999_999));
+                    });
+                    ui.label(
+                        egui::RichText::new(
+                            "Variabler: {year} {year2} {month} {day} {hour} {minute} {second} \
+                             {date} {time} {make} {model} {name} {seq} {seq:4} {job}",
+                        )
+                        .small()
+                        .color(egui::Color32::GRAY),
+                    );
+
+                    ui.horizontal(|ui| {
                         ui.label("Förhandsvisning");
                         if ui.button("Sök igen").clicked() {
                             rescan = true;

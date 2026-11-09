@@ -833,7 +833,7 @@ Ordered from easiest to hardest. Start at the top.
   writes the same files to both folders; the preview shows "(bara backup)" for files that only the
   backup lacks.
 
-### T38. ADR 0010 M7b: job name and first running number — Open
+### T38. ADR 0010 M7b: job name and first running number — Done
 
 - **Start after T37 is done.**
 - **Crate:** `pw-loupe`. **Files:** `crates/pw-loupe/src/import.rs`, `crates/pw-loupe/src/main.rs`.
@@ -1187,3 +1187,6 @@ and reviewer:
 | 2026-11-09 | T37–T40 | Open | Added: ADR 0010 M7 (step B) as four parts: backup destination, job name and first number, IPTC template on the new copies (ExifTool on the import worker), eject the card (tabs on the card are emptied first). M8 (documentation) is done by the reviewer after T40 |
 | 2026-11-09 | T37 | Ready for review | Added the optional backup destination to the import form and dialog, with destination-first validation and coverage for disabled, empty, valid and invalid backup paths. |
 | 2026-11-09 | T37 | Reviewed | `backup_on` and `backup` in the form; the field of an error is found by validating without and then with the backup, never by the message text; an empty or disabled backup is `None`; checkbox, field and "Välj backupmål" in the dialog, disabled when off. All required tests present; the defaults test now includes the two new fields. Workspace fmt, test (287 passed, 27 ignored) and clippy OK. No changes in review; waits for the owner's hand test |
+| 2026-11-09 | T38 | Ready for review | Added job and first sequence number to the import form and options; added the job/number controls and template-variable help to the dialog; validation tests cover defaults, passed values and job trimming. |
+| 2026-11-09 | T37 | Done | Owner moved on to T38 after the hand test of the backup (both folders get the same files) |
+| 2026-11-09 | T38 | Reviewed | `job` and `first_seq` in the form and passed to `Options` (job trimmed by `pw-ingest`); dialog row "Jobb" and "Första nr" (`DragValue` 0–999 999) and the variable help, matching the `pw_ingest::template` list. All required tests present. Workspace fmt, test (289 passed, 27 ignored) and clippy OK. No changes in review; waits for the owner's hand test |

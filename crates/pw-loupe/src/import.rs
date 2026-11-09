@@ -9,6 +9,8 @@ pub struct ImportForm {
     pub backup: String,
     pub folder: String,
     pub name: String,
+    pub job: String,
+    pub first_seq: u32,
 }
 
 impl Default for ImportForm {
@@ -20,6 +22,8 @@ impl Default for ImportForm {
             backup: String::new(),
             folder: "{year}/{date} {job}".to_string(),
             name: "{name}".to_string(),
+            job: String::new(),
+            first_seq: 1,
         }
     }
 }
@@ -71,8 +75,8 @@ impl ImportForm {
             backup: None,
             folder: &self.folder,
             name: &self.name,
-            job: "",
-            first_seq: 1,
+            job: &self.job,
+            first_seq: self.first_seq,
         })
         .map_err(|message| FieldError {
             field: Field::Dest,
@@ -90,8 +94,8 @@ impl ImportForm {
                 backup: Some(backup),
                 folder: &self.folder,
                 name: &self.name,
-                job: "",
-                first_seq: 1,
+                job: &self.job,
+                first_seq: self.first_seq,
             })
             .map_err(|message| FieldError {
                 field: Field::Backup,
@@ -246,6 +250,8 @@ mod tests {
                 backup: String::new(),
                 folder: "{year}/{date} {job}".to_string(),
                 name: "{name}".to_string(),
+                job: String::new(),
+                first_seq: 1,
             }
         );
     }
@@ -328,6 +334,30 @@ mod tests {
         assert!(validated.options.backup.is_none());
         assert_eq!(validated.options.job, "");
         assert_eq!(validated.options.first_seq, 1);
+    }
+
+    #[test]
+    fn job_and_first_seq_are_passed_to_options() {
+        let dirs = TempDirs::new();
+        let mut form = valid_form(&dirs);
+        form.job = "jobb".to_string();
+        form.first_seq = 42;
+
+        let validated = form.validate().unwrap();
+
+        assert_eq!(validated.options.job, "jobb");
+        assert_eq!(validated.options.first_seq, 42);
+    }
+
+    #[test]
+    fn job_is_trimmed_before_it_reaches_options() {
+        let dirs = TempDirs::new();
+        let mut form = valid_form(&dirs);
+        form.job = "  jobb  ".to_string();
+
+        let validated = form.validate().unwrap();
+
+        assert_eq!(validated.options.job, "jobb");
     }
 
     #[test]
