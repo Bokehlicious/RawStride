@@ -27,6 +27,9 @@ pub enum ImportDialogState {
         progress: Option<pw_ingest::Progress>,
         iptc: Option<(usize, usize, PathBuf)>,
     },
+    Ejecting {
+        source: PathBuf,
+    },
     Done {
         done: ImportDone,
     },
@@ -71,7 +74,10 @@ impl ImportDialog {
         change(&mut self.form);
         self.source_changed |= self.form.source != previous_source;
         self.changed_at = Some(now);
-        if matches!(self.state, ImportDialogState::Running { .. }) {
+        if matches!(
+            self.state,
+            ImportDialogState::Running { .. } | ImportDialogState::Ejecting { .. }
+        ) {
             return;
         }
         self.request_id = None;
@@ -85,7 +91,10 @@ impl ImportDialog {
     pub fn tick(&mut self, now: Instant) -> Option<DialogRequest> {
         let changed_at = self.changed_at?;
         if now.saturating_duration_since(changed_at) < PREVIEW_DELAY
-            || matches!(self.state, ImportDialogState::Running { .. })
+            || matches!(
+                self.state,
+                ImportDialogState::Running { .. } | ImportDialogState::Ejecting { .. }
+            )
             || !matches!(self.state, ImportDialogState::Editing { .. })
         {
             return None;
@@ -175,8 +184,19 @@ impl ImportDialog {
                     *iptc = Some((*done, *total, current.clone()));
                 }
             }
-            ImportEvent::Done { id: event_id, done }
+            ImportEvent::Ejecting { id: event_id }
                 if *event_id == id && matches!(self.state, ImportDialogState::Running { .. }) =>
+            {
+                self.state = ImportDialogState::Ejecting {
+                    source: PathBuf::from(&self.form.source),
+                };
+            }
+            ImportEvent::Done { id: event_id, done }
+                if *event_id == id
+                    && matches!(
+                        self.state,
+                        ImportDialogState::Running { .. } | ImportDialogState::Ejecting { .. }
+                    ) =>
             {
                 self.request_id = None;
                 self.state = ImportDialogState::Done { done: done.clone() };
@@ -198,7 +218,7 @@ impl ImportDialog {
                     }),
                 };
             }
-            ImportDialogState::Running { .. } => {
+            ImportDialogState::Running { .. } | ImportDialogState::Ejecting { .. } => {
                 self.request_id = None;
                 self.state = ImportDialogState::Done {
                     done: ImportDone {
@@ -212,7 +232,10 @@ impl ImportDialog {
     }
 
     pub fn cancel(&self) -> bool {
-        matches!(self.state, ImportDialogState::Running { .. })
+        matches!(
+            self.state,
+            ImportDialogState::Running { .. } | ImportDialogState::Ejecting { .. }
+        )
     }
 
     pub fn can_close(&self) -> bool {
@@ -251,7 +274,10 @@ impl ImportDialog {
     }
 
     pub fn rescan(&mut self, now: Instant) {
-        if matches!(self.state, ImportDialogState::Running { .. }) {
+        if matches!(
+            self.state,
+            ImportDialogState::Running { .. } | ImportDialogState::Ejecting { .. }
+        ) {
             return;
         }
         self.changed_at = Some(now);
@@ -267,6 +293,7 @@ impl ImportDialog {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     static NEXT_TEMP: AtomicUsize = AtomicUsize::new(0);
@@ -553,6 +580,53 @@ mod tests {
             Some(PathBuf::from("destination/largest"))
         );
         assert!(!dialog.cancel());
+        assert!(dialog.can_close());
+    }
+
+    #[test]
+    fn ejecting_event_updates_state_until_done() {
+        let dirs = TempDirs::new();
+        dirs.create_source();
+        let mut form = dirs.form();
+        form.eject = true;
+        let mut dialog = ImportDialog::new(form.clone());
+        let now = Instant::now();
+        let _ = schedule_preview(&mut dialog, now);
+        dialog.sent(21);
+        dialog.apply(&ImportEvent::Previewed {
+            id: 21,
+            result: Ok(preview(1)),
+        });
+        assert!(dialog.start().is_some());
+        dialog.sent(22);
+
+        dialog.apply(&ImportEvent::Ejecting { id: 22 });
+
+        assert!(matches!(
+            dialog.state(),
+            ImportDialogState::Ejecting { source } if source == Path::new(&form.source)
+        ));
+        assert!(dialog.cancel());
+        assert!(!dialog.can_close());
+        dialog.apply(&ImportEvent::Ejecting { id: 21 });
+        assert!(matches!(
+            dialog.state(),
+            ImportDialogState::Ejecting { source } if source == Path::new(&form.source)
+        ));
+
+        let done = ImportDone {
+            eject: Some("Kortet matades ut.".to_string()),
+            ..ImportDone::default()
+        };
+        dialog.apply(&ImportEvent::Done {
+            id: 22,
+            done: done.clone(),
+        });
+
+        assert!(matches!(
+            dialog.state(),
+            ImportDialogState::Done { done: current } if current == &done
+        ));
         assert!(dialog.can_close());
     }
 

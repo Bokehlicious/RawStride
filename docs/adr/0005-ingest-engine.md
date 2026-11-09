@@ -90,3 +90,27 @@ The sandbox disk is not the PC. Measure on thanos with a real card before tuning
 - Tests: `ui/tests/ingest-dialog.test.js` (27 checks against a mocked backend),
   `crates/pw-metadata` `iptc_template_in_sidecar_and_embedded`,
   `crates/pw-ingest` `files_edited_after_ingest_still_count_as_ingested`.
+
+## Dialog in the egui program (`pw-loupe`, ADR 0010, 2026-11-09)
+
+The same behaviour, rebuilt in egui (GR8), accepted by the owner with a real card on 2026-11-09.
+
+- Opened with **Importera…** in the tab bar or Ctrl+I. Detected cards are buttons; "Välj…" opens the
+  Windows folder dialog (`rfd`), starting in the typed folder.
+- Fields: source, destination, **Backup** (checkbox and folder), folder and file-name templates,
+  **Jobb** and **Första nr**, the **IPTC-mall** (Fotograf, Copyright, Credit, E-post, Telefon, Webb)
+  and **Mata ut kortet när importen är klar**. Errors are shown under the field they belong to.
+- Validation, scan, plan, copy, IPTC writing (ExifTool) and eject all run on one import worker thread
+  (`crates/pw-loupe/src/import_worker.rs`); the window never reads the disk for the dialog. Messages
+  and texts are those of the Tauri dialog (`pw-ingest` and `import_text.rs`).
+- The preview follows 300 ms after the last change; the card is scanned again only when the source
+  changes or with **Sök igen**, and always right before copying.
+- While copying: progress, **Avbryt**, and **Dölj** to keep using the grid and loupe (the status line
+  shows the progress; Ctrl+I shows the dialog again). The card is ejected only after a complete import;
+  tabs showing the card are emptied first.
+- At the end, the destination folder with the most files opens automatically in a new tab as a
+  contact sheet (GR12, GR13); no tab opens when nothing was copied.
+- Settings are kept for the session only (ADR 0010 Q5); a settings file is a later decision.
+- Code: `import.rs` (form and validation), `import_worker.rs`, `import_dialog.rs` (state machine),
+  `import_text.rs`, `tabs.rs` (`clear_inside`), drawing in `main.rs`. Tests: the `import*` and `tabs`
+  unit tests of `pw-loupe` (see `docs/test-inventory.md`).

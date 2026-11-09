@@ -4,9 +4,9 @@
   the questions of §11 (the proposals, accepted as written) are decided. Nothing is built, installed
   or added as a dependency by this ADR. Each step in §9 is its own work part, with its own approval
   and commit.
-- **Progress:** M1 and M2 done (2026-11-08); the contact sheet (ADR 0011) was built next; M3 done
-  2026-11-09 (§6: `rfd` 0.17.2 approved); **M4, M5 and M6 (step A) done 2026-11-09**: the import
-  dialog works in `pw-loupe` and the owner accepted it with a real card. Next: M7 (step B) and M8.
+- **Progress:** **all steps done (2026-11-09).** M1 and M2 on 2026-11-08; the contact sheet (ADR 0011)
+  was built next; M3–M8 on 2026-11-09. Step A was accepted by the owner with a real card (M6); step B
+  (backup, job and number, IPTC template, eject) was checked by hand part by part (M7).
 - Date: 2026-11-08
 - Related:
   - [GUI_REQUIREMENTS.md](../GUI_REQUIREMENTS.md) (GR1–GR11);
@@ -179,11 +179,11 @@ dialogs give the same answers. The Tauri app keeps its own Tauri glue only.
 | **M4** | `pw-loupe`: import dialog state machine and worker (plain Rust) | **Done 2026-11-09** (T30–T33) |
 | **M5** | `pw-loupe`: draw the dialog, Ctrl+I, folder dialog, open the result in a new tab | **Done 2026-11-09** (T34–T36) |
 | **M6** | Acceptance by hand, step A (§8.2) | **Done 2026-11-09:** owner imported from a real card: progress, summary, the folder opens in a new tab as a contact sheet; cancel leaves no partial files; "Dölj" keeps the grid and loupe smooth during the copy; a second import shows the files as present and opens no tab |
-| **M7** | Step B: backup, job and running number, IPTC template, eject | Code + tests, one part each |
-| **M8** | Documentation: ADR 0005 dialog section, architecture.md, test inventory | Documentation commit |
+| **M7** | Step B: backup, job and running number, IPTC template, eject | **Done 2026-11-09** (T37–T40, each checked by hand) |
+| **M8** | Documentation: ADR 0005 dialog section, architecture.md, test inventory | **Done 2026-11-09:** documentation commit |
 
 Steps M1, M2, M4 and M7 are suited to the agent task list (`docs/agent-tasks.md`): M1 is T20, M2
-is T21, M4 is T30–T33 and M5 is T34–T36.
+is T21, M4 is T30–T33, M5 is T34–T36 and M7 is T37–T40.
 
 ## 10. Risks
 
@@ -192,7 +192,7 @@ is T21, M4 is T30–T33 and M5 is T34–T36.
 | Re-opening a folder in the core on every tab switch | A visible pause before the image | Measured in M6; caching per tab only if the owner asks (it would split the budget) |
 | A native dialog blocks the UI thread while open | Other drawing pauses while the dialog is open | Acceptable for a modal choice; checked in M6 |
 | Two dialogs (Tauri and egui) drift apart | Different answers for the same input | Shared validation and checks in `pw-ingest` (M1) |
-| The import and the open tab use the same card | A card cannot be ejected while a tab reads from it (step B) | Before ejecting, a tab showing the card is emptied; checked in M7 |
+| The import and the open tab use the same card | A card cannot be ejected while a tab reads from it (step B) | A tab showing the card is emptied when an import with eject starts (`Tabs::clear_inside`); checked by hand in M7 |
 
 ## 11. Questions and the owner's answers (2026-11-08)
 

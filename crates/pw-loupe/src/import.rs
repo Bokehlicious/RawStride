@@ -14,6 +14,7 @@ pub struct ImportForm {
     pub job: String,
     pub first_seq: u32,
     pub iptc: IptcForm,
+    pub eject: bool,
 }
 
 /// The IPTC fields edited in the import dialog.
@@ -55,6 +56,7 @@ impl Default for ImportForm {
             job: String::new(),
             first_seq: 1,
             iptc: IptcForm::default(),
+            eject: false,
         }
     }
 }
@@ -284,6 +286,7 @@ mod tests {
                 job: String::new(),
                 first_seq: 1,
                 iptc: IptcForm::default(),
+                eject: false,
             }
         );
     }

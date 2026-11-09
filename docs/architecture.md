@@ -44,8 +44,9 @@
 | `pw-raw` | ARW preview extraction (fast path) and the LibRaw full decode (slow path) |
 | `pw-metadata` | ExifTool process pool, EXIF/IPTC/XMP read and write |
 | `pw-catalog` | SQLite schema, migrations and queries (WAL, single writer) |
-| `pw-ingest` | Volume detection, copy and verify, renaming, backup |
+| `pw-ingest` | Card detection, request validation, scan, plan, verified copy, renaming, backup, eject; shared by the Tauri app and the egui program |
 | `pw-thumbcache` | Thumbnails from the embedded previews (never a RAW rendering), a small pool of background workers with visible-first priority, and an in-memory cache with a byte limit (ADR 0011). A disk cache is not built: the first measurement showed it is not needed for the test set |
+| `pw-loupe` | The egui program (until it is renamed): loupe, contact sheet, folder tabs and the import dialog with its worker (ADR 0009, 0010, 0011). UI logic is plain Rust in its library and tested; `main.rs` only draws |
 | `pw-render` | Image presentation in egui: texture upload and residency within the budget, through eframe's renderer only (no separate wgpu pipelines) |
 
 ## Storage on the dev machine

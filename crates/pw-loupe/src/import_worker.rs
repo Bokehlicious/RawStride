@@ -36,6 +36,9 @@ pub enum ImportEvent {
         total: usize,
         current: PathBuf,
     },
+    Ejecting {
+        id: RequestId,
+    },
     Cards {
         id: RequestId,
         cards: Vec<PathBuf>,
@@ -53,6 +56,7 @@ pub struct ImportDone {
     pub bytes: u64,
     pub failed: Vec<String>,
     pub iptc_errors: Vec<String>,
+    pub eject: Option<String>,
     pub cancelled: bool,
     pub elapsed: Duration,
     pub folders: Vec<(String, usize)>,
@@ -358,6 +362,16 @@ fn run_import(
         &mut iptc_runtime,
         &mut done,
     );
+    if form.eject {
+        if done.cancelled || !done.failed.is_empty() || done.error.is_some() {
+            done.eject =
+                Some("Kortet matades inte ut eftersom importen inte blev komplett.".to_string());
+        } else {
+            *cached_scan = None;
+            let _ = events.send(ImportEvent::Ejecting { id });
+            done.eject = Some(pw_ingest::eject(&validated.source));
+        }
+    }
     done.elapsed = started.elapsed();
 
     ImportEvent::Done { id, done }
@@ -545,6 +559,9 @@ mod tests {
             match next_event(worker) {
                 ImportEvent::Progress { id: event_id, .. } => assert_eq!(event_id, id),
                 ImportEvent::IptcProgress { id: event_id, .. } => assert_eq!(event_id, id),
+                ImportEvent::Ejecting { id: event_id } => {
+                    panic!("unexpected ejection event for request {event_id}")
+                }
                 ImportEvent::Done { id: event_id, done } => {
                     assert_eq!(event_id, id);
                     return done;
@@ -621,6 +638,9 @@ mod tests {
                 ImportEvent::IptcProgress { .. } => {
                     panic!("unexpected IPTC progress for an empty template")
                 }
+                ImportEvent::Ejecting { id: event_id } => {
+                    panic!("unexpected ejection event for request {event_id}")
+                }
                 ImportEvent::Done { id: event_id, done } => {
                     assert_eq!(event_id, id);
                     break done;
@@ -634,6 +654,7 @@ mod tests {
         assert_eq!((done.copied, done.present, done.bytes), (1, 0, 11));
         assert!(done.failed.is_empty());
         assert!(!done.cancelled);
+        assert!(done.eject.is_none());
         assert!(done.error.is_none());
         assert_eq!(
             done.folders,
@@ -871,6 +892,77 @@ mod tests {
         assert!(exiftool.is_none());
         assert!(image.exists());
         assert!(!image.with_extension("xmp").exists());
+    }
+
+    #[test]
+    fn cancelled_run_with_eject_requested_does_not_attempt_ejection() {
+        let dirs = TempDirs::new("eject-cancelled");
+        dirs.write_image("A001.ARW", b"image bytes");
+        let mut form = dirs.form("");
+        form.eject = true;
+        let cancel = AtomicBool::new(true);
+        let (events, receiver) = mpsc::channel();
+        let mut cached_scan = None;
+        let mut exiftool = None;
+
+        let ImportEvent::Done { done, .. } = run_import(
+            7,
+            &form,
+            &cancel,
+            &mut cached_scan,
+            &events,
+            &mut exiftool,
+            None,
+        ) else {
+            panic!("run_import did not return Done");
+        };
+
+        assert!(done.cancelled);
+        assert_eq!(
+            done.eject.as_deref(),
+            Some("Kortet matades inte ut eftersom importen inte blev komplett.")
+        );
+        assert!(
+            receiver
+                .try_iter()
+                .all(|event| !matches!(event, ImportEvent::Ejecting { .. }))
+        );
+    }
+
+    #[test]
+    fn failed_run_with_eject_requested_does_not_attempt_ejection() {
+        let dirs = TempDirs::new("eject-failed");
+        dirs.write_image("A001.ARW", b"image bytes");
+        fs::write(&dirs.dest, b"not a directory").unwrap();
+        let mut form = dirs.form("");
+        form.eject = true;
+        let cancel = AtomicBool::new(false);
+        let (events, receiver) = mpsc::channel();
+        let mut cached_scan = None;
+        let mut exiftool = None;
+
+        let ImportEvent::Done { done, .. } = run_import(
+            8,
+            &form,
+            &cancel,
+            &mut cached_scan,
+            &events,
+            &mut exiftool,
+            None,
+        ) else {
+            panic!("run_import did not return Done");
+        };
+
+        assert!(!done.failed.is_empty());
+        assert_eq!(
+            done.eject.as_deref(),
+            Some("Kortet matades inte ut eftersom importen inte blev komplett.")
+        );
+        assert!(
+            receiver
+                .try_iter()
+                .all(|event| !matches!(event, ImportEvent::Ejecting { .. }))
+        );
     }
 
     #[test]

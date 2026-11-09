@@ -25,8 +25,8 @@ pub use import::{
 };
 pub use import_dialog::{DialogRequest, ImportDialog, ImportDialogState};
 pub use import_text::{
-    DoneLine, done_lines, iptc_progress_text, more_lines, preview_line, preview_summary,
-    progress_text,
+    DoneLine, done_lines, ejecting_progress_text, iptc_progress_text, more_lines, preview_line,
+    preview_summary, progress_text,
 };
 pub use import_worker::{ImportDone, ImportEvent, ImportWorker, RequestId, SubmitError};
 pub use tabs::{Tab, Tabs, ViewMode};

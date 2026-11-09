@@ -18,11 +18,11 @@ use pw_loupe::{
     Action, CellState, DEFAULT_THUMBNAIL_SIZE, DialogKey, DialogRequest, Field, GridKeyAction,
     ImportDialog, ImportDialogState, ImportEvent, ImportForm, ImportWorker, MAX_THUMBNAIL_SIZE,
     MIN_THUMBNAIL_SIZE, Options, SubmitError, TabAction, Tabs, ThumbGrid, ViewMode, WINDOW_TITLE,
-    clamp_thumbnail_size, color_image, columns, dialog_key_action, done_lines, error_text,
-    grid_key_action, indicator_text, iptc_progress_text, key_action, list_folder, loupe_key_action,
-    mode_label, more_lines, navigate, opens_import, parse_args, preview_line, preview_summary,
-    progress_text, request_cell, status_line, step_thumbnail_size, tab_action, take_wheel_steps,
-    visible_range, wheel_factor,
+    clamp_thumbnail_size, color_image, columns, dialog_key_action, done_lines,
+    ejecting_progress_text, error_text, grid_key_action, indicator_text, iptc_progress_text,
+    key_action, list_folder, loupe_key_action, mode_label, more_lines, navigate, opens_import,
+    parse_args, preview_line, preview_summary, progress_text, request_cell, status_line,
+    step_thumbnail_size, tab_action, take_wheel_steps, visible_range, wheel_factor,
 };
 use pw_metadata::MetadataWorker;
 use pw_render::{Textures, view_px};
@@ -93,6 +93,11 @@ impl Loupe {
         let Some(DialogRequest::Run { form }) = request else {
             return;
         };
+        let previous_tabs = self.tabs.clone();
+        let active_cleared = form.eject && self.tabs.clear_inside(Path::new(form.source.trim()));
+        if active_cleared {
+            self.load_active_tab();
+        }
         match self.import_worker.run(form) {
             Ok(id) => {
                 if let Some(dialog) = &mut self.import_dialog {
@@ -102,6 +107,10 @@ impl Loupe {
                 self.import_submit_error = None;
             }
             Err(error) => {
+                self.tabs = previous_tabs;
+                if active_cleared {
+                    self.load_active_tab();
+                }
                 if let Some(dialog) = &mut self.import_dialog {
                     dialog.disconnected();
                 }
@@ -130,6 +139,7 @@ impl Loupe {
                         )
                     }),
             ),
+            ImportDialogState::Ejecting { source } => Some(ejecting_progress_text(source)),
             ImportDialogState::Done { done } => {
                 if let Some(error) = &done.error {
                     Some(error.clone())
@@ -148,6 +158,10 @@ impl Loupe {
             match self.import_worker.try_recv() {
                 Ok(ImportEvent::Cards { cards, .. }) => self.detected_cards = cards,
                 Ok(event) => {
+                    let refresh_cards = matches!(
+                        &event,
+                        ImportEvent::Done { done, .. } if done.eject.is_some()
+                    );
                     let folder_to_open = if let Some(dialog) = &mut self.import_dialog {
                         let was_running = dialog.cancel();
                         dialog.apply(&event);
@@ -165,6 +179,9 @@ impl Loupe {
                     };
                     if let Some(folder) = folder_to_open {
                         self.open(&folder, true);
+                    }
+                    if refresh_cards && let Err(error) = self.import_worker.cards() {
+                        self.import_submit_error = Some(submit_error_text(error));
                     }
                 }
                 Err(TryRecvError::Empty) => break,
@@ -330,6 +347,10 @@ impl Loupe {
                             .color(egui::Color32::GRAY),
                         );
                     });
+                    ui.checkbox(
+                        &mut form.eject,
+                        "Mata ut kortet när importen är klar (inget raderas från kortet)",
+                    );
 
                     ui.horizontal(|ui| {
                         ui.label("Förhandsvisning");
@@ -358,7 +379,9 @@ impl Loupe {
                                 });
                         }
                         ImportDialogState::Editing { .. } => {}
-                        ImportDialogState::Running { .. } | ImportDialogState::Done { .. } => {}
+                        ImportDialogState::Running { .. }
+                        | ImportDialogState::Ejecting { .. }
+                        | ImportDialogState::Done { .. } => {}
                     }
                 });
 
@@ -396,6 +419,12 @@ impl Loupe {
                                 hide = true;
                             }
                         });
+                    }
+                    ImportDialogState::Ejecting { source } => {
+                        ui.add(egui::ProgressBar::new(0.0).text(ejecting_progress_text(source)));
+                        if ui.button("Dölj").clicked() {
+                            hide = true;
+                        }
                     }
                     ImportDialogState::Done { done } => {
                         for line in done_lines(done) {

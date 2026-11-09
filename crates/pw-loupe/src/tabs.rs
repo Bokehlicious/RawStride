@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Component, Path, PathBuf};
 
 /// The per-tab view shown for a folder.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -131,6 +131,24 @@ impl Tabs {
         self.active = self.active.min(self.tabs.len().saturating_sub(1));
     }
 
+    /// Clears tabs rooted at `root` or below it without touching the filesystem.
+    pub fn clear_inside(&mut self, root: &Path) -> bool {
+        let mut active_cleared = false;
+        for (index, tab) in self.tabs.iter_mut().enumerate() {
+            if tab
+                .folder
+                .as_deref()
+                .is_some_and(|folder| path_starts_with(folder, root))
+            {
+                if index == self.active {
+                    active_cleared = true;
+                }
+                tab.clear();
+            }
+        }
+        active_cleared
+    }
+
     /// Remembers the current image of the active tab.
     pub fn set_current(&mut self, pos: usize) {
         if let Some(tab) = self.tabs.get_mut(self.active) {
@@ -176,6 +194,49 @@ impl Tabs {
                     .unwrap_or_else(|| "Tom".to_string())
             })
             .collect()
+    }
+}
+
+fn path_starts_with(path: &Path, root: &Path) -> bool {
+    let path_components = normalized_components(path);
+    let root_components = normalized_components(root);
+    path_components.len() >= root_components.len()
+        && path_components.iter().zip(root_components.iter()).all(
+            |(path_component, root_component)| components_equal(*path_component, *root_component),
+        )
+}
+
+fn normalized_components(path: &Path) -> Vec<Component<'_>> {
+    let mut normalized = Vec::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if matches!(normalized.last(), Some(Component::Normal(_))) {
+                    normalized.pop();
+                } else if !normalized
+                    .iter()
+                    .any(|part| matches!(part, Component::RootDir))
+                {
+                    normalized.push(component);
+                }
+            }
+            _ => normalized.push(component),
+        }
+    }
+    normalized
+}
+
+fn components_equal(left: Component<'_>, right: Component<'_>) -> bool {
+    #[cfg(windows)]
+    {
+        left.as_os_str()
+            .to_string_lossy()
+            .eq_ignore_ascii_case(&right.as_os_str().to_string_lossy())
+    }
+    #[cfg(not(windows))]
+    {
+        left == right
     }
 }
 
@@ -296,5 +357,49 @@ mod tests {
         assert_eq!(tabs.titles(), vec!["first"]);
         tabs.close_active();
         assert_eq!(tabs.titles(), vec!["Tom"]);
+    }
+
+    #[test]
+    fn clear_inside_clears_root_and_subfolders_but_not_similar_names() {
+        let root = PathBuf::from(r"E:\DCIM");
+        let mut tabs = Tabs::default();
+        tabs.open_in_active(root.clone(), files("root", 1), 0);
+        tabs.open_new(root.join("100TEST"), files("nested", 1), 0);
+        tabs.open_new(PathBuf::from(r"E:\DCIM2"), files("similar", 1), 0);
+        assert!(tabs.activate(1));
+
+        assert!(tabs.clear_inside(&root));
+
+        assert_eq!(tabs.tabs()[0], Tab::default());
+        assert_eq!(tabs.tabs()[1], Tab::default());
+        assert_eq!(tabs.tabs()[2].folder, Some(PathBuf::from(r"E:\DCIM2")));
+        assert_eq!(tabs.active_index(), 1);
+    }
+
+    #[test]
+    fn clear_inside_uses_lexical_parent_components_without_file_access() {
+        let mut tabs = Tabs::default();
+        tabs.open_in_active(
+            PathBuf::from("card").join("..").join("other"),
+            files("other", 1),
+            0,
+        );
+
+        assert!(!tabs.clear_inside(Path::new("card")));
+        let expected = PathBuf::from("card").join("..").join("other");
+        assert_eq!(
+            tabs.active().and_then(|tab| tab.folder.as_deref()),
+            Some(expected.as_path())
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn clear_inside_compares_path_components_without_case_on_windows() {
+        let mut tabs = Tabs::default();
+        tabs.open_in_active(PathBuf::from(r"e:\dcim\100test"), files("nested", 1), 0);
+
+        assert!(tabs.clear_inside(Path::new(r"E:\DCIM")));
+        assert_eq!(tabs.tabs(), &[Tab::default()]);
     }
 }

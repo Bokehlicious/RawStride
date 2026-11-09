@@ -893,7 +893,7 @@ Ordered from easiest to hardest. Start at the top.
   Fotograf and Copyright filled in, the `.xmp` sidecar of a RAW (and a DNG or JPG itself) carries them,
   for example in Photo Mechanic or with `exiftool -XMP:Creator -XMP:Rights <file>`.
 
-### T40. ADR 0010 M7d: eject the card after the import — Open
+### T40. ADR 0010 M7d: eject the card after the import — Done
 
 - **Start after T39 is done.**
 - **Crate:** `pw-loupe`. **Files:** `crates/pw-loupe/src/import.rs`, `crates/pw-loupe/src/import_worker.rs`,
@@ -1193,3 +1193,8 @@ and reviewer:
 | 2026-11-09 | T39 | Ready for review | Added the six-field IPTC template, worker-thread ExifTool writes for copied images in the destination and backup, cancellation, progress, errors and UI; added mapping, target-selection, lazy-start, cancellation and text tests. Workspace check passed; the real metadata write remains for the owner's hand test. |
 | 2026-11-09 | T38 | Done | Owner checked by hand: `{job}` and `{seq:4}` give the expected names |
 | 2026-11-09 | T39 | Reviewed | `IptcForm` with the six fields of the Tauri dialog and `to_iptc` (copyright as `x-default`); the worker writes the template after the copy, not when cancelled or empty, to copied images (no companions, no failures) in the destination and the backup, as the Tauri `run`; ExifTool is started on the worker only when needed and kept; progress, cancel per file and up to 10 "IPTC:" lines; collapsing "IPTC-mall" section with the help text. All required tests present. Note: an ExifTool start error is listed with the first file's name in front; harmless. Workspace fmt, test (296 passed, 27 ignored) and clippy OK. No changes in review; waits for the owner's hand test |
+| 2026-11-09 | T40 | Ready for review | Added the optional eject checkbox, worker-thread eject after a complete import, cancellation/failure messaging, clearing card-backed tabs before starting, eject progress and card-list refresh. Added state, path-boundary, worker, and text tests; real-card eject remains for owner hand testing. |
+| 2026-11-09 | T39 | Done | Owner checked by hand: Fotograf and Copyright are in the sidecar of a RAW and in a DNG/JPG; committed |
+| 2026-11-09 | T40 | Reviewed | `eject` in the form; the worker ejects only after a complete import (not cancelled, no failures, no error), forgets the cached scan and reports `pw_ingest::eject`'s message, otherwise "Kortet matades inte ut eftersom importen inte blev komplett."; `Tabs::clear_inside` compares path components without file access (case-insensitive on Windows, `DCIM2` is not inside `DCIM`); tabs on the card are emptied when the run starts; "Matar ut …" progress; the card list is refreshed after the eject. All required tests present. Fixed in review: the source path is trimmed before the tab comparison, as validation trims it. Workspace fmt, test (304 passed, 27 ignored) and clippy OK before the fix; waits for the owner's check and hand test |
+| 2026-11-09 | T40 | Done | Owner checked by hand: an import with the checkbox empties the tab showing the card, then ejects it (the card disappears from Explorer; Windows shows no notice for the Eject verb, as in the Tauri app); a cancelled import does not eject and says why. Workspace check after the review fix: fmt, test (304 passed, 27 ignored) and clippy OK |
+| 2026-11-09 | ADR 0010 M8 | Done | Documentation: ADR 0005 (egui dialog section), ADR 0010 (all steps done), architecture.md (`pw-ingest`, `pw-loupe`), test inventory (304 passed, 27 ignored). ADR 0010 is complete |

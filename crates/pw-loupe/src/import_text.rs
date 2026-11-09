@@ -76,6 +76,11 @@ pub fn iptc_progress_text(done: usize, total: usize, current: &Path) -> String {
     )
 }
 
+/// Returns the Swedish progress text while ejecting the source card.
+pub fn ejecting_progress_text(source: &Path) -> String {
+    format!("Matar ut {} …", source.display())
+}
+
 #[derive(Debug)]
 pub struct DoneLine {
     pub text: String,
@@ -136,6 +141,13 @@ pub fn done_lines(done: &ImportDone) -> Vec<DoneLine> {
         lines.push(DoneLine {
             text: format!("IPTC: {error}"),
             error: true,
+        });
+    }
+
+    if let Some(eject) = &done.eject {
+        lines.push(DoneLine {
+            text: eject.clone(),
+            error: false,
         });
     }
 
@@ -270,6 +282,14 @@ mod tests {
     }
 
     #[test]
+    fn ejecting_progress_includes_the_source_path() {
+        assert_eq!(
+            ejecting_progress_text(Path::new(r"E:\DCIM")),
+            "Matar ut E:\\DCIM …"
+        );
+    }
+
+    #[test]
     fn done_success_with_one_folder() {
         let done = ImportDone {
             copied: 10,
@@ -345,6 +365,22 @@ mod tests {
         assert_eq!(lines.len(), 1);
         assert_eq!(lines[0].text, "Disk full");
         assert!(lines[0].error);
+    }
+
+    #[test]
+    fn done_includes_eject_message_after_iptc_errors_as_a_normal_line() {
+        let done = ImportDone {
+            iptc_errors: vec!["A001.ARW: metadata error".to_string()],
+            eject: Some("Kortet matades ut.".to_string()),
+            ..ImportDone::default()
+        };
+
+        let lines = done_lines(&done);
+
+        assert_eq!(lines[1].text, "IPTC: A001.ARW: metadata error");
+        assert!(lines[1].error);
+        assert_eq!(lines[2].text, "Kortet matades ut.");
+        assert!(!lines[2].error);
     }
 
     #[test]
