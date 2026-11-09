@@ -29,12 +29,27 @@ project owner together with a reviewer before it is merged. Read `AGENTS.md`, `C
    Do not create checkpoint commits or refs in this repository.
 9. **Report:** list every file changed, what changed and why, and paste the exact output of the
    summary of `test-output.txt` from step 6. Then mark the task "Ready for review" below.
+10. **Do the whole task as written here.** Read the task in this file as it is in your working tree
+    when you start, and do every numbered point under **What** and every test under **Tests to add**.
+    If a point seems wrong, unclear or impossible, stop and ask; do not leave it out, shorten it or
+    replace it with your own version.
+11. **This file (`docs/agent-tasks.md`) is the owner's.** An agent may change exactly two things in it:
+    - the status at the end of its own task's heading (for example `— Open` → `— Ready for review`);
+    - one new row at the **end** of the Log table.
+
+    Never rewrite, shorten or move task text (your own task included), never touch other tasks, the
+    "Not for agents yet" list or earlier log rows, and never write the file from another copy or from
+    memory. Edit it in place. Check with `git diff docs/agent-tasks.md` before you report: the diff
+    must show only those two changes.
+12. **Other documentation:** update `docs/test-inventory.md` (counts and the description of the
+    crate's tests) when you add tests; it is the only other file under `docs/` an agent changes, unless
+    the task names one.
 
 ## Status legend
 
 | Status | Meaning |
 |---|---|
-| Open | Not started |
+| Open | Not started, or sent back after a review (the log says what is left) |
 | In progress | An agent is working on it |
 | Ready for review | Done by the agent, waiting for review |
 | Done | Reviewed and committed |
@@ -924,6 +939,153 @@ Ordered from easiest to hardest. Start at the top.
   checkbox ejects the card at the end and the message says so; a cancelled import with the checkbox
   does not eject and says why; a tab showing the card is emptied before the eject.
 
+### T41. ADR 0013 B1: rating keys, applying a key, rating texts (plain Rust) — Ready for review
+
+- **2026-11-09:** the agent did points 1–3; the review asked for point 4 and more tests, and the
+  reviewer (Claude) finished them. Waiting for the owner's `.\tools\check.ps1` run.
+
+- **Crate:** `pw-loupe`. **Files:** a new `crates/pw-loupe/src/ratings.rs`, declared and re-exported in
+  `crates/pw-loupe/src/lib.rs`. **Not** `main.rs`, `metadata.rs` or any `Cargo.toml`.
+- **Why:** ADR 0013 §4.1. The keys of ADR 0004 (and X, ADR 0013 Q5) as tested plain Rust, before
+  anything is drawn or written.
+- **What:**
+  1. `pub enum RatingKey { Stars(i8), Label(&'static str), ClearLabel, Reject }` (`Stars` is 0–5;
+     `Label` holds one of `pw_metadata::LABELS`).
+  2. `pub fn rating_key_action(key: egui::Key, ctrl: bool, shift: bool, alt: bool) -> Option<RatingKey>`,
+     with the same `(key, ctrl, shift, alt)` that `main.rs` already collects:
+     - **Shift held → `None`.** Ctrl **and** Alt (AltGr) → `None`.
+     - No modifier: `Num0`–`Num5` → `Stars(0..=5)`; `Num6`–`Num9` → `Label` Red, Yellow, Green, Blue;
+       `X` → `Reject`.
+     - Alt only: `Num0`–`Num5` → `Stars`; Alt+6–9 and Alt+X → `None`.
+     - Ctrl only: `Num0` → `ClearLabel`; `Num1`–`Num5` → `Label` Red … Purple; Ctrl+6–9 and Ctrl+X →
+       `None`.
+     - Every other key → `None`.
+     (egui reports the number pad digits as `Num0`–`Num9` too; this is checked by hand in T43.)
+  3. `pub fn apply(current: &pw_metadata::Rating, key: RatingKey) -> pw_metadata::Rating`:
+     `Stars(0)` clears the stars (also a reject) and keeps the label; `Stars(n)` sets them and keeps the
+     label; `Label(l)` sets `l`, or clears the label if it already is `l`; `ClearLabel` clears it;
+     `Reject` sets the stars to −1, or clears them if they already are −1, and keeps the label.
+  4. Texts (Swedish, ADR 0013 Q2):
+     - `pub fn label_name(label: &str) -> &str`: Red → "Röd", Yellow → "Gul", Green → "Grön",
+       Blue → "Blå", Purple → "Lila"; any other text is returned as it is.
+     - `pub fn status_text(rating: Option<&Rating>) -> String`: "Betyg: " followed by "Avvisad" (−1),
+       "1 stjärna", "{n} stjärnor" or "Ej betygsatt", then ", {label_name}" when there is a label.
+       Examples: "Betyg: 3 stjärnor, Röd", "Betyg: Avvisad", "Betyg: Ej betygsatt, Blå".
+     - `pub fn star_glyphs(stars: Option<i8>) -> String`: "" for `None`, "✕" for −1, otherwise `n` × "★"
+       followed by `5 − n` × "•".
+     - `pub const UNSUPPORTED_TEXT: &str = "Betyg och etiketter kan inte sparas för den här filtypen.";`
+- **Rules:** no I/O, no threads; no `unwrap`/`expect`/`panic!` or unchecked indexing in non-test code.
+  `key_action` and `grid_key_action` are **not** changed (digits and X keep returning `None` there).
+- **Tests to add:** every row of point 2, including Shift+digit, Ctrl+Alt+digit, Alt+6, Ctrl+6, Ctrl+X
+  and an unrelated key; `key_action` and `grid_key_action` still return `None` for `Num0`–`Num9` and
+  `X`; every rule of point 3 (including Stars(0) on a rejected image and a label toggle on an image
+  with stars); the texts for −1, 1, 3, `None`, and with and without a label; `label_name` of an
+  unknown label.
+- **Done when:** `.\tools\check.ps1` is all OK.
+
+### T42. ADR 0013 B2: rating store and write queue (plain Rust) — Open
+
+- **Start after T41 is done.**
+- **Crate:** `pw-loupe`. **Files:** `crates/pw-loupe/src/ratings.rs`, `crates/pw-loupe/src/metadata.rs`,
+  and `crates/pw-loupe/src/main.rs` **only** for the calls that replace today's rating calls (no new
+  drawing, no keys; those are T43). Not `pw-metadata`.
+- **Why:** ADR 0013 §4.2: optimistic values, writes in key order, the last key wins, rollback on
+  failure, and a folder read that never overwrites a newer value.
+- **What:**
+  1. A small trait so the store can be tested without ExifTool:
+     `pub trait RatingWriter { fn write_rating(&mut self, path: PathBuf, rating: Rating) -> Result<RequestId, SubmitError>; }`,
+     implemented for `pw_metadata::MetadataWorker` (it calls the existing method).
+  2. `pub struct RatingStore`, keyed by absolute path, holding per path `confirmed: Option<Rating>`,
+     `shown: Option<Rating>` and its writes (queued, not sent; and sent, with their `RequestId`).
+     Methods (names may differ if the tests show the same behaviour):
+     - `set(&mut self, path: &Path, key: RatingKey) -> Result<(), RatingRefused>`: refuses a file
+       without `pw_metadata::supports_rating` (`RatingRefused::Unsupported`, nothing queued);
+       otherwise `shown = apply(shown, key)` and queues a write. If the path already has a queued write
+       that was **not sent yet**, that write's value is replaced instead of queuing another.
+     - `pump(&mut self, writer: &mut impl RatingWriter)`: sends queued writes in queue order until the
+       writer returns `QueueFull` (stop; the rest stays queued for the next frame). `Stopped` fails the
+       write as in point 3.
+     - `written(&mut self, id, path, result) -> Option<String>`: success → `confirmed` is the written
+       value; failure → `confirmed` unchanged, and `shown` goes back to `confirmed` **unless** a newer
+       write for the path is queued or sent. Returns the message for the status line on failure:
+       "Kunde inte spara betyget för {file name}: {error}".
+     - `read(&mut self, read_id: RequestId, ratings: &HashMap<PathBuf, Rating>, paths: &[PathBuf])`:
+       for each path, `confirmed` = the read value (absent = `None`); `shown` is set too **only** if the
+       path has no queued write and no write sent with an id greater than `read_id`.
+     - `shown(&self, path: &Path) -> Option<&Rating>`, `pending(&self) -> usize` (queued + sent),
+       `pending_paths(&self) -> Vec<PathBuf>`, and `prune(&mut self, keep: impl Fn(&Path) -> bool)`
+       that drops entries for which `keep` is false **and** that have no pending write.
+  3. `MetadataCache` keeps the load states (`Loading`, `Ready`, `Unsupported`, `Error`) and the read
+     request, and gets a `RatingStore`. `begin_load` no longer drops ratings; a `RatingsRead` for the
+     current load calls `store.read(…)`; `RatingWritten` calls `store.written(…)` (today's handling
+     in `apply` is replaced). `poll` also calls `store.pump(worker)` (it needs `&mut MetadataWorker`).
+     Failure messages are returned from `poll` (for example as `Vec<String>`) so `main.rs` can put the
+     last one in `self.message`.
+  4. `rating_summary` uses `status_text` (T41). The three English notices become Swedish:
+     "Läser metadata…", `UNSUPPORTED_TEXT` and "Metadatafel: {error}". `submit_error` texts: "metadatakön är full" and "metadataarbetaren har
+     stannat".
+  5. `main.rs`: only adapt the existing calls (`poll` with `&mut`, the message). When a tab is closed,
+     call `prune` with the files of the tabs still open.
+- **Rules:** no I/O and no threads in `ratings.rs`; no `unwrap`/`expect`/`panic!`; rules 6 and 7.
+- **Tests to add** (with a fake writer that records requests, can return `QueueFull` or `Stopped`, and
+  lets the test deliver results): `set` shows the value at once; Unsupported refused with nothing queued;
+  1-2-3-4-5 before a `pump` gives one write of 5; order kept across two paths; `QueueFull` leaves the
+  rest for the next `pump`; `Stopped` rolls back; a failure with a newer write pending keeps the newer
+  value, and a failure without one rolls back to `confirmed`; a read with an id lower than a sent write
+  does not change `shown` but a read with a higher id does; a read never changes a path with a queued
+  write; entries survive `begin_load` of another folder; `prune` keeps paths with pending writes;
+  `MetadataCache` with the Swedish notices. Existing `metadata.rs` tests keep passing (update only
+  expected English texts to the Swedish ones, and say so in the report).
+- **Done when:** `.\tools\check.ps1` is all OK.
+
+### T43. ADR 0013 B3: rating keys and display in the grid and the loupe — Open
+
+- **Start after T42 is done.**
+- **Crate:** `pw-loupe`. **Files:** `crates/pw-loupe/src/main.rs`; `crates/pw-loupe/src/ratings.rs`
+  only for a small plain function with a test (for example the label colours).
+- **What:**
+  1. **Keys:** in the key loop, after the dialog and tab checks and before the mode-specific keys,
+     `rating_key_action(key, ctrl, shift, alt)` acts on the current image of the active tab (grid: the
+     current cell; loupe: the shown image, `tab.current`). Skip rating keys when
+     `ctx.wants_keyboard_input()` is true or the import dialog consumes keys (ADR 0013 §4.3). A refusal
+     puts `UNSUPPORTED_TEXT` in the status line.
+  2. **Grid row (ADR 0013 §5.1):** in the row under each thumbnail, `star_glyphs` on the left, the file
+     name (shortened as today) after it. With a label, the row's background is the label colour —
+     Red `#e5484d`, Yellow `#f5c400`, Green `#3fb950`, Blue `#4c8dff`, Purple `#a371f7` — with dark text
+     on Yellow and Green. A rejected image's thumbnail is drawn dimmed (for example a tint of about 40 %).
+  3. **Loupe badge (§5.2):** in the lower left corner of the image area, the same look as the grid row
+     (stars on the label colour), only when the image has stars or a label, and only while the
+     information is shown (I key). The status line shows `status_text` as today's rating summary does.
+  4. If egui's bundled fonts lack "★", "•" or "✕", draw them as shapes instead; no new font.
+- **Rules:** as T28; drawing reads `RatingStore::shown` only, never files; no other key changes.
+- **Done when:** `.\tools\check.ps1` is all OK, and the owner checks by hand (ADR 0013 §8.2): keys on
+  the main row and the number pad in grid and loupe; Shift+digit and AltGr do nothing; digits typed
+  into the import dialog never rate; ARW, RW2, DNG and JPEG keep their values after reopening the
+  folder; a DNG rated in RAW mode still shows correctly after stepping away and back; a read-only
+  sidecar gives the message and the old value; holding a digit while stepping keeps the loupe smooth.
+
+### T44. ADR 0013 B4: finish pending rating writes on exit — Open
+
+- **Start after T43 is done.**
+- **Crate:** `pw-loupe`. **Files:** `crates/pw-loupe/src/main.rs`; `crates/pw-loupe/src/ratings.rs` or
+  `metadata.rs` only for a plain, tested helper.
+- **What (ADR 0013 Q6, R4):**
+  1. When the program exits (`eframe::App::on_exit`, or the equivalent hook in eframe 0.37), keep
+     calling `pump` and `poll` with a short sleep (about 20 ms) until `pending()` is 0 or **5 s** have
+     passed. Put the loop in a plain helper with an injectable clock and sleep, so it can be tested.
+  2. If writes are still pending, or some failed during the wait, show one message box listing the file
+     names (at most 20, then "… och {n} till"), titled "Betyg som inte sparades", with
+     `rfd::MessageDialog` (`rfd` is already a dependency of `pw-loupe`). If `MessageDialog` is not
+     available with the pinned features, **stop and report** instead of adding a feature.
+  3. If the window stays visible during the wait, say so in the report; the owner decides whether that
+     is acceptable.
+- **Rules:** as T42; no new dependencies and no feature changes.
+- **Tests to add:** the helper returns at once when nothing is pending; ends when the last write is
+  confirmed; gives up after 5 s with the pending files listed (fake clock); the list text with more
+  than 20 files.
+- **Done when:** `.\tools\check.ps1` is all OK, and the owner checks by hand: press a rating key and
+  close the window at once; reopen the folder and the value is there.
+
 ### T7. Format the files that `cargo fmt --check` reports — Done
 
 - **Crates:** `photoworkflow` (`src-tauri`), `preview-bench` (`tools/preview-bench`).
@@ -1091,6 +1253,8 @@ and reviewer:
 - ADR 0010 steps M3–M7 (the rest of the import) wait until the contact sheet (ADR 0011) is done
   (owner decision, 2026-11-08). M4 and M7 are added to this list then.
 - ADR 0011 step K4 (drawing the contact sheet) is planned after T23–T25.
+- Moving rejected or picked images to `_rejected` / `_picked` folders (ADR 0013 §13): needs its own
+  ADR first.
 - Note for M5: when the import opens its folder with `Tabs::open_new`, compare folders by their
   resolved form (`pw_ingest::resolve`), so `C:\Foto` and `c:\foto\` do not open two tabs.
 
@@ -1198,3 +1362,8 @@ and reviewer:
 | 2026-11-09 | T40 | Reviewed | `eject` in the form; the worker ejects only after a complete import (not cancelled, no failures, no error), forgets the cached scan and reports `pw_ingest::eject`'s message, otherwise "Kortet matades inte ut eftersom importen inte blev komplett."; `Tabs::clear_inside` compares path components without file access (case-insensitive on Windows, `DCIM2` is not inside `DCIM`); tabs on the card are emptied when the run starts; "Matar ut …" progress; the card list is refreshed after the eject. All required tests present. Fixed in review: the source path is trimmed before the tab comparison, as validation trims it. Workspace fmt, test (304 passed, 27 ignored) and clippy OK before the fix; waits for the owner's check and hand test |
 | 2026-11-09 | T40 | Done | Owner checked by hand: an import with the checkbox empties the tab showing the card, then ejects it (the card disappears from Explorer; Windows shows no notice for the Eject verb, as in the Tauri app); a cancelled import does not eject and says why. Workspace check after the review fix: fmt, test (304 passed, 27 ignored) and clippy OK |
 | 2026-11-09 | ADR 0010 M8 | Done | Documentation: ADR 0005 (egui dialog section), ADR 0010 (all steps done), architecture.md (`pw-ingest`, `pw-loupe`), test inventory (304 passed, 27 ignored). ADR 0010 is complete |
+| 2026-11-09 | ADR 0013 B0 | Done | Owner accepted ADR 0013 (milestone 4: ratings and labels) and every proposal in §11. Direction for later: X moves the image to `_rejected`, another key to `_picked`, possibly as a menu option (ADR 0013 §13) |
+| 2026-11-09 | T41–T44 | Open | Added: ADR 0013 steps B1–B4 |
+| 2026-11-09 | T41 | Ready for review | (Agent) Added the rating key map and pure `apply` function per ADR 0013 B1, with tests for shortcuts, ignored modifiers, existing key maps, and rating/label/reject updates. Updated the test inventory. Workspace fmt, test (307 passed, 27 ignored) and clippy OK. |
+| 2026-11-09 | T41 | Changes requested | Reviewed: key map and `apply` correct (`Stars` as `u8` accepted). Missing: point 4 (`label_name`, `status_text`, `star_glyphs`, `UNSUPPORTED_TEXT`) and several tests. The agent had also replaced this file with an older copy (T41 rewritten, T42–T44, a note and two log rows removed); restored. Rules 10–12 added under "How to work on a task" |
+| 2026-11-09 | T41 | Ready for review | Reviewer (Claude) finished point 4 and the missing tests in `ratings.rs` (11 tests, was 3) and re-exported the texts in `lib.rs`; test inventory updated (pw-loupe 109, total 315). Checked in the sandbox with a stand-in for `egui::Key` (crates.io not reachable there): rustfmt clean, 11 tests pass, clippy without findings in `ratings.rs`. **Not yet run on Windows:** the owner runs `.\tools\check.ps1` |

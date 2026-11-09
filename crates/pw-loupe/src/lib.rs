@@ -8,6 +8,7 @@ mod import;
 mod import_dialog;
 mod import_text;
 mod import_worker;
+mod ratings;
 mod tabs;
 mod thumbs;
 
@@ -30,6 +31,9 @@ pub use import_text::{
     preview_summary, progress_text,
 };
 pub use import_worker::{ImportDone, ImportEvent, ImportWorker, RequestId, SubmitError};
+pub use ratings::{
+    RatingKey, UNSUPPORTED_TEXT, apply, label_name, rating_key_action, star_glyphs, status_text,
+};
 pub use tabs::{Tab, Tabs, ViewMode};
 pub use thumbs::{CellState, ThumbGrid, color_image, request_cell};
 
