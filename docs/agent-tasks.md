@@ -697,6 +697,118 @@ Ordered from easiest to hardest. Start at the top.
   `target`).
 - **Done when:** `.\tools\check.ps1` is all OK.
 
+### T34. ADR 0010 M5a: card detection on the worker, dialog keys and texts (plain Rust) — Open
+
+- **Crate:** `pw-loupe`. **Files:** `crates/pw-loupe/Cargo.toml` (add `pw-core.workspace = true`;
+  internal), `crates/pw-loupe/src/import_worker.rs`, `crates/pw-loupe/src/import_dialog.rs`, a new
+  `crates/pw-loupe/src/import_text.rs`, `crates/pw-loupe/src/lib.rs`. **Not** `main.rs`.
+- **Why:** M5 draws the import dialog (T35, T36). Everything that can be tested without a window is
+  done first, here.
+- **What:**
+  1. **Card detection on the worker** (it checks drives A–Z, which is file I/O): `ImportWorker::cards()
+     -> Result<RequestId, SubmitError>`; the worker answers `ImportEvent::Cards { id, cards: Vec<PathBuf> }`
+     from `pw_ingest::card_volumes()`.
+  2. **Dialog additions** in `ImportDialog`: `can_start(&self) -> bool` (true exactly when `start()`
+     would return a request, without changing anything) and `rescan(&mut self, now: Instant)` (marks the
+     form as changed with a new scan, for a "Sök igen" button; ignored while running).
+  3. **Keys** (plain functions):
+     - `opens_import(key, ctrl, shift, alt) -> bool`: true only for **Ctrl+I** (no Shift, no Alt). The
+       loupe's `I` (info) without Ctrl is unchanged.
+     - `dialog_key_action(key, ctrl, alt) -> Option<DialogKey>` with `DialogKey::{Close, Start}`:
+       Escape → `Close`, Enter → `Start`; nothing with Ctrl or Alt.
+  4. **Swedish texts**, the same as the Tauri dialog (`ui/web/ingest.js`, `igRenderPreview`,
+     `igOnProgress`, `igOnDone`), with `pw_core::format_bytes` for sizes:
+     - `preview_summary(&Preview) -> String`: "Inga bilder hittades i källan." when there are no shots;
+       otherwise "{shots} bilder · {files} filer att kopiera ({bytes})", followed, when not zero, by
+       "{n} finns redan", "{n} får nytt namn pga namnkrock" and "{n} utan EXIF-datum (fildatum används)",
+       all joined with " · ".
+     - `preview_line(&PreviewLine) -> String`: "{source}  →  {rel}" plus "  (namnkrock)",
+       "  (finns redan)" or "  (bara backup)" for those actions; `more_lines(&Preview) -> Option<String>`:
+       "… och {n} till" when `items_total` is larger than the lines shown.
+     - `progress_text(&pw_ingest::Progress) -> String`: "Kopierar och verifierar {done} / {total} ·
+       {bytes done} av {bytes total} · {file name of current}".
+     - `done_lines(&ImportDone) -> Vec<DoneLine>` with `DoneLine { text: String, error: bool }`: with an
+       `error`, only that line (as an error). Otherwise "Klar: " or "Avbruten: " + "{copied} filer kopierade
+       och verifierade ({bytes} på {seconds:.1} s · {MB/s} MB/s)" (the speed part only when the time is
+       above zero; MB/s = bytes / 1 000 000 / seconds, no decimals) + ", {n} fanns redan" when not zero +
+       "."; then up to 20 "Misslyckades: {failure}" error lines and "… och {n} till"; then, when there is
+       more than one folder, "Mappar: {folder} ({n}), …".
+- **Rules:** no drawing; no `unwrap`/`expect`/`panic!` in non-test code; no new external crates; rules 6
+  and 7.
+- **Tests to add:** `cards()` answers with its id (the list itself depends on the machine); `can_start`
+  in each state (and that it changes nothing); `rescan` asks for `rescan = true` and is ignored while
+  running; the key functions (Ctrl+I yes; I, Ctrl+Shift+I, Alt+I no; Escape and Enter; with Ctrl
+  nothing); every text function, including the zero cases, the 20-failure limit and one versus several
+  folders.
+- **Done when:** `.\tools\check.ps1` is all OK.
+
+### T35. ADR 0010 M5b: draw the import dialog (editing and preview) — Open
+
+- **Start after T34 is done.**
+- **Crate:** `pw-loupe`. **Files:** `crates/pw-loupe/Cargo.toml` (add
+  `rfd = { version = "=0.17.2", default-features = false }`, approved 2026-11-09, GUI_REQUIREMENTS §6.1),
+  `crates/pw-loupe/src/main.rs`. `Cargo.lock` may change **only** by listing `rfd` among `pw-loupe`'s
+  dependencies; `rfd` 0.17.2 is already in it. Check with `git diff Cargo.lock` and report it.
+- **What (ADR 0010 §3.1 step A, without the copy):**
+  - Start an `ImportWorker` in `run()` next to the other workers. `Loupe` gets the worker, an
+    `Option<ImportDialog>` (open or not), `last_form: ImportForm` (the settings of this session, Q5) and
+    the detected cards.
+  - **Open:** Ctrl+I (`opens_import`) or an "Importera…" button at the end of the tab bar:
+    `ImportDialog::new(last_form.clone())` and ask the worker for `cards()`. **Close:** Escape
+    (`dialog_key_action`) or a "Stäng" button, only when `can_close()`; the form is then saved in
+    `last_form`. While the dialog is open, keys go to the dialog only (not to the grid, the loupe or the
+    tabs); text fields keep their normal keys.
+  - **Window:** an `egui::Window` titled "Importera", centred, not collapsible. In it, in this order:
+    - **Källa:** a text field, a "Välj…" button (`rfd::FileDialog::new().set_title("Välj källa")
+      .pick_folder()`; add `.set_parent(…)` with the eframe window if it compiles, otherwise leave it
+      out), and one button per detected card (its drive, for example `E:\`) that sets the source, plus
+      "Sök igen" (`rescan`) next to the preview.
+    - **Mål:** a text field and "Välj…" (title "Välj mål").
+    - **Mappmall** and **Filnamnsmall:** text fields.
+    - Under each field, its `FieldError` in red when there is one.
+    - **Preview:** "Förhandsvisar …" while previewing; otherwise `preview_summary`, then the lines
+      (`preview_line`) in a small scroll area and `more_lines`.
+  - **Each frame while open:** apply text changes with `edit(…, Instant::now())`; call `tick()` and send
+    a request with `preview()`, then `sent(id)`; a `SubmitError` is shown as an error line in the dialog.
+    Poll the worker until empty: `Cards` updates the card list, other events go to `apply`;
+    `Disconnected` calls `disconnected()`. Ask for a repaint (about 100 ms) while a preview is pending.
+  - No start button yet (T36).
+- **Rules:** no file I/O on the UI thread (the folder dialog itself is the accepted exception, ADR 0010
+  §10); no `unwrap`/`expect`/`panic!`; the grid and loupe behave as before when the dialog is closed;
+  rules 6 and 7.
+- **Done when:** `.\tools\check.ps1` is all OK, and the owner checks by hand: Ctrl+I and the button open
+  the dialog; a card in the reader shows as a button; "Välj…" opens the Windows folder dialog; a bad
+  template or an empty destination shows its message under the right field; typing does not freeze the
+  window; the preview updates shortly after typing stops; Escape closes, and Ctrl+I shows the same
+  settings again.
+
+### T36. ADR 0010 M5c: run the import and open the result in a new tab — Open
+
+- **Start after T35 is done.**
+- **Crate:** `pw-loupe`. **File:** `crates/pw-loupe/src/main.rs` only.
+- **What (ADR 0010 §3.1, GR12, Q2):**
+  - **Start:** a "Starta import" button, enabled when `can_start()`, and Enter (`DialogKey::Start`):
+    `start()`, then `run(form)` on the worker and `sent(id)`.
+  - **Running:** the fields and buttons of the form are disabled; a progress bar (bytes done of bytes
+    total) with `progress_text`; "Avbryt" calls `ImportWorker::cancel()` when `dialog.cancel()` is true.
+    The dialog cannot be closed (Escape does nothing), but a **"Dölj"** button hides it so the grid and
+    loupe can be used during the copy (ADR 0010 §8.2); Ctrl+I shows it again. While it is hidden and
+    running, the status line shows `progress_text` in short form ("Importerar {done} / {total}").
+    Keep polling the worker every frame whether the dialog is shown or hidden, and ask for repaints
+    while running.
+  - **Done:** show `done_lines` (error lines in red). When the state becomes `Done` and `result_folder()`
+    is `Some`, open that folder **once** in a new tab with the existing `open(&folder, true)` (it starts
+    in the grid, GR13; an already open folder is activated, GR12). If the dialog is hidden at that
+    moment, the status line shows "Importen klar: {copied} filer" or "Importen avbruten: {copied} filer"
+    (or the error). Buttons: "Ny import" (`back_to_editing`) and "Stäng".
+- **Rules:** as T35; the copy never runs on the UI thread; rules 6 and 7.
+- **Done when:** `.\tools\check.ps1` is all OK, and the owner checks by hand (ADR 0010 §8.2, step A):
+  import from a real card into an empty folder: progress, summary, and the folder opens in a new tab as
+  a contact sheet; cancel during the copy leaves no final-named partial files and the summary says
+  "Avbruten"; "Dölj" during the copy, then stepping in the grid and the loupe stays smooth; a second
+  import of the same card shows the files as already present and opens no new tab when nothing was
+  copied.
+
 ### T7. Format the files that `cargo fmt --check` reports — Done
 
 - **Crates:** `photoworkflow` (`src-tauri`), `preview-bench` (`tools/preview-bench`).
@@ -949,3 +1061,4 @@ and reviewer:
 | 2026-11-09 | T32 | Done | Owner reran `.\tools\check.ps1` on the final code: fmt, test (262 passed, 27 ignored) and clippy OK; committed. Rule 6 changed: the agent runs `.\tools\check.ps1` (whole workspace) instead of single-crate `cargo test -p`/`clippy -p`, whose different feature set builds new build scripts that failed to link (LNK1104), most likely blocked by the antivirus. Noted in review: `rfd` 0.17.2 is already in `Cargo.lock` through `tauri-plugin-dialog`, so adding it to `pw-loupe` in M5 adds no new crate at all |
 | 2026-11-09 | T33 | Ready for review | Import requests now carry the form; validation and file access run on the worker, and field errors are preserved through preview and dialog state. Added worker and dialog regression tests. |
 | 2026-11-09 | T33 | Done | Reviewed: the worker takes the form and validates it first; preview errors keep their field (scan errors on `Source` with the Tauri message); a run with an invalid form ends with its message and copies nothing; `tick()` and `start()` no longer touch the disk. Only the calls of the existing tests changed, as allowed. The T31 test for a missing source now checks the validation message ("Källan … finns inte."), because validation now runs before the scan; the scan-error path ("Kunde inte läsa …") is unchanged code but no longer reached by a test, since a missing folder is caught first. Workspace fmt, test (266 passed, 27 ignored) and clippy OK. No changes in review. ADR 0010 M4 is complete |
+| 2026-11-09 | T34–T36 | Open | Added: ADR 0010 M5 split into card detection on the worker plus keys and Swedish texts (plain Rust), drawing the dialog with editing and preview (adds `rfd`), and running the import with progress, hide, summary and opening the result in a new tab. M6 (acceptance by the owner) follows T36 |
