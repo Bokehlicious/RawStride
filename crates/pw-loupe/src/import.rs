@@ -5,6 +5,8 @@ use std::path::PathBuf;
 pub struct ImportForm {
     pub source: String,
     pub dest: String,
+    pub backup_on: bool,
+    pub backup: String,
     pub folder: String,
     pub name: String,
 }
@@ -14,6 +16,8 @@ impl Default for ImportForm {
         Self {
             source: String::new(),
             dest: String::new(),
+            backup_on: false,
+            backup: String::new(),
             folder: "{year}/{date} {job}".to_string(),
             name: "{name}".to_string(),
         }
@@ -25,6 +29,7 @@ impl Default for ImportForm {
 pub enum Field {
     Source,
     Dest,
+    Backup,
     Folder,
     Name,
 }
@@ -60,7 +65,7 @@ impl ImportForm {
             message: format!("Filnamnsmall: {error}"),
         })?;
 
-        let options = pw_ingest::validate_options(pw_ingest::OptionsInput {
+        let mut options = pw_ingest::validate_options(pw_ingest::OptionsInput {
             source: &self.source,
             dest: &self.dest,
             backup: None,
@@ -73,6 +78,26 @@ impl ImportForm {
             field: Field::Dest,
             message,
         })?;
+
+        if let Some(backup) = self
+            .backup_on
+            .then(|| self.backup.trim())
+            .filter(|backup| !backup.is_empty())
+        {
+            options = pw_ingest::validate_options(pw_ingest::OptionsInput {
+                source: &self.source,
+                dest: &self.dest,
+                backup: Some(backup),
+                folder: &self.folder,
+                name: &self.name,
+                job: "",
+                first_seq: 1,
+            })
+            .map_err(|message| FieldError {
+                field: Field::Backup,
+                message,
+            })?;
+        }
 
         Ok(Validated { source, options })
     }
@@ -217,6 +242,8 @@ mod tests {
             ImportForm {
                 source: String::new(),
                 dest: String::new(),
+                backup_on: false,
+                backup: String::new(),
                 folder: "{year}/{date} {job}".to_string(),
                 name: "{name}".to_string(),
             }
@@ -301,6 +328,81 @@ mod tests {
         assert!(validated.options.backup.is_none());
         assert_eq!(validated.options.job, "");
         assert_eq!(validated.options.first_seq, 1);
+    }
+
+    #[test]
+    fn backup_is_ignored_when_disabled_even_if_a_folder_is_entered() {
+        let dirs = TempDirs::new();
+        let mut form = valid_form(&dirs);
+        form.backup = dirs.root.join("backup").to_string_lossy().into_owned();
+
+        let validated = form.validate().unwrap();
+        assert!(validated.options.backup.is_none());
+    }
+
+    #[test]
+    fn enabled_backup_folder_is_trimmed_and_passed_to_options() {
+        let dirs = TempDirs::new();
+        let backup = dirs.root.join("backup");
+        let mut form = valid_form(&dirs);
+        form.backup_on = true;
+        form.backup = format!("  {}  ", backup.display());
+
+        let validated = form.validate().unwrap();
+        assert_eq!(validated.options.backup, Some(backup));
+    }
+
+    #[test]
+    fn enabled_empty_backup_is_none() {
+        let dirs = TempDirs::new();
+        let mut form = valid_form(&dirs);
+        form.backup_on = true;
+        form.backup = "  ".to_string();
+
+        let validated = form.validate().unwrap();
+        assert!(validated.options.backup.is_none());
+    }
+
+    #[test]
+    fn backup_inside_source_has_backup_field_error() {
+        let dirs = TempDirs::new();
+        let mut form = valid_form(&dirs);
+        form.backup_on = true;
+        form.backup = dirs.source.join("backup").to_string_lossy().into_owned();
+
+        let error = form.validate().unwrap_err();
+        assert_eq!(error.field, Field::Backup);
+    }
+
+    #[test]
+    fn backup_equal_to_destination_has_backup_field_error() {
+        let dirs = TempDirs::new();
+        let mut form = valid_form(&dirs);
+        form.backup_on = true;
+        form.backup = form.dest.clone();
+
+        let error = form.validate().unwrap_err();
+        assert_eq!(error.field, Field::Backup);
+        assert_eq!(
+            error.message,
+            "Backupmålet måste vara en annan mapp än målet."
+        );
+    }
+
+    #[test]
+    fn invalid_destination_is_reported_before_invalid_backup() {
+        let dirs = TempDirs::new();
+        let mut form = valid_form(&dirs);
+        form.dest = dirs
+            .source
+            .join("destination")
+            .to_string_lossy()
+            .into_owned();
+        form.backup_on = true;
+        form.backup = dirs.source.join("backup").to_string_lossy().into_owned();
+
+        let error = form.validate().unwrap_err();
+        assert_eq!(error.field, Field::Dest);
     }
 
     #[test]

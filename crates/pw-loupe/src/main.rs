@@ -239,6 +239,23 @@ impl Loupe {
                     if let Some(message) = field_error(&state, Field::Dest) {
                         ui.colored_label(egui::Color32::RED, message);
                     }
+                    ui.horizontal(|ui| {
+                        ui.checkbox(&mut form.backup_on, "Backup");
+                        ui.add_enabled_ui(form.backup_on, |ui| {
+                            ui.horizontal(|ui| {
+                                ui.text_edit_singleline(&mut form.backup);
+                                if ui.button("Välj…").clicked()
+                                    && let Some(path) =
+                                        pick_folder("Välj backupmål", &form.backup, None)
+                                {
+                                    form.backup = path.to_string_lossy().into_owned();
+                                }
+                            });
+                        });
+                    });
+                    if let Some(message) = field_error(&state, Field::Backup) {
+                        ui.colored_label(egui::Color32::RED, message);
+                    }
 
                     ui.add_space(8.0);
                     ui.label("Mappmall");

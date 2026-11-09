@@ -809,7 +809,7 @@ Ordered from easiest to hardest. Start at the top.
   import of the same card shows the files as already present and opens no new tab when nothing was
   copied.
 
-### T37. ADR 0010 M7a: backup destination — Open
+### T37. ADR 0010 M7a: backup destination — Done
 
 - **Crate:** `pw-loupe`. **Files:** `crates/pw-loupe/src/import.rs`, `crates/pw-loupe/src/main.rs`.
 - **What (ADR 0010 §3.2; the Tauri dialog's "Backup" checkbox and field):**
@@ -1185,3 +1185,5 @@ and reviewer:
 | 2026-11-09 | T36 | Done | Reviewed: start by button or Enter only when `can_start`; copy on the worker; fields locked, progress bar with `progress_text`, "Avbryt" and "Dölj" while running, no close; the worker is polled every frame, also while hidden, and the status line shows the progress; on `Done` the result folder opens once in a new tab (grid), none when nothing was copied; "Ny import" and "Stäng". No changes in review. Workspace fmt, test (281 passed, 27 ignored) and clippy OK |
 | 2026-11-09 | ADR 0010 M6 | Done | Owner acceptance of step A with a real card: full import into an empty folder (progress, summary, new tab as contact sheet), cancel (summary "Avbruten", no partial files), "Dölj" during the copy (grid and loupe stay smooth), second import (files present, no new tab). All passed |
 | 2026-11-09 | T37–T40 | Open | Added: ADR 0010 M7 (step B) as four parts: backup destination, job name and first number, IPTC template on the new copies (ExifTool on the import worker), eject the card (tabs on the card are emptied first). M8 (documentation) is done by the reviewer after T40 |
+| 2026-11-09 | T37 | Ready for review | Added the optional backup destination to the import form and dialog, with destination-first validation and coverage for disabled, empty, valid and invalid backup paths. |
+| 2026-11-09 | T37 | Reviewed | `backup_on` and `backup` in the form; the field of an error is found by validating without and then with the backup, never by the message text; an empty or disabled backup is `None`; checkbox, field and "Välj backupmål" in the dialog, disabled when off. All required tests present; the defaults test now includes the two new fields. Workspace fmt, test (287 passed, 27 ignored) and clippy OK. No changes in review; waits for the owner's hand test |

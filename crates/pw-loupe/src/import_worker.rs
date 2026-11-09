@@ -370,6 +370,7 @@ mod tests {
                 dest: self.dest.to_string_lossy().into_owned(),
                 folder: folder.to_string(),
                 name: "{name}".to_string(),
+                ..ImportForm::default()
             }
         }
     }
