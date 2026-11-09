@@ -2,8 +2,7 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use crate::{
-    Field, FieldError, ImportDone, ImportEvent, ImportForm, Preview, RequestId, Validated,
-    result_folder,
+    Field, FieldError, ImportDone, ImportEvent, ImportForm, Preview, RequestId, result_folder,
 };
 
 const PREVIEW_DELAY: Duration = Duration::from_millis(300);
@@ -12,15 +11,8 @@ const STOPPED_MESSAGE: &str = "Importen avbröts: arbetaren har stoppats.";
 /// The request the UI should submit to the import worker.
 #[derive(Clone, Debug)]
 pub enum DialogRequest {
-    Preview {
-        source: PathBuf,
-        options: pw_ingest::Options,
-        rescan: bool,
-    },
-    Run {
-        source: PathBuf,
-        options: pw_ingest::Options,
-    },
+    Preview { form: ImportForm, rescan: bool },
+    Run { form: ImportForm },
 }
 
 /// The current import-dialog state.
@@ -88,7 +80,7 @@ impl ImportDialog {
         };
     }
 
-    /// Returns a debounced preview request when the current form is valid.
+    /// Returns a debounced preview request with the current form.
     pub fn tick(&mut self, now: Instant) -> Option<DialogRequest> {
         let changed_at = self.changed_at?;
         if now.saturating_duration_since(changed_at) < PREVIEW_DELAY
@@ -99,20 +91,9 @@ impl ImportDialog {
         }
 
         self.changed_at = None;
-        let Validated { source, options } = match self.form.validate() {
-            Ok(validated) => validated,
-            Err(error) => {
-                self.state = ImportDialogState::Editing {
-                    preview: None,
-                    error: Some(error),
-                };
-                return None;
-            }
-        };
         self.state = ImportDialogState::Previewing;
         Some(DialogRequest::Preview {
-            source,
-            options,
+            form: self.form.clone(),
             rescan: self.source_changed,
         })
     }
@@ -129,10 +110,11 @@ impl ImportDialog {
         if preview.files_to_copy == 0 {
             return None;
         }
-        let Validated { source, options } = self.form.validate().ok()?;
         self.changed_at = None;
         self.state = ImportDialogState::Running { progress: None };
-        Some(DialogRequest::Run { source, options })
+        Some(DialogRequest::Run {
+            form: self.form.clone(),
+        })
     }
 
     /// Records the worker request ID for the request most recently submitted.
@@ -159,13 +141,10 @@ impl ImportDialog {
                             error: None,
                         };
                     }
-                    Err(message) => {
+                    Err(error) => {
                         self.state = ImportDialogState::Editing {
                             preview: None,
-                            error: Some(FieldError {
-                                field: Field::Source,
-                                message: message.clone(),
-                            }),
+                            error: Some(error.clone()),
                         };
                     }
                 }
@@ -328,7 +307,7 @@ mod tests {
     }
 
     #[test]
-    fn invalid_form_shows_field_error_without_a_request() {
+    fn invalid_form_sends_preview_request_and_shows_worker_error() {
         let dirs = TempDirs::new();
         let mut form = dirs.form();
         form.source.clear();
@@ -336,16 +315,48 @@ mod tests {
         let now = Instant::now();
 
         dialog.edit(|_| {}, now);
-        assert!(dialog.tick(now + PREVIEW_DELAY).is_none());
+        assert!(matches!(
+            dialog.tick(now + PREVIEW_DELAY),
+            Some(DialogRequest::Preview { .. })
+        ));
+        dialog.sent(13);
+        let error = FieldError {
+            field: Field::Source,
+            message: "Välj en källa.".to_string(),
+        };
+        dialog.apply(&ImportEvent::Previewed {
+            id: 13,
+            result: Err(error.clone()),
+        });
         assert!(matches!(
             dialog.state(),
             ImportDialogState::Editing {
-                error: Some(FieldError {
-                    field: Field::Source,
-                    ..
-                }),
+                error: Some(current),
                 ..
-            }
+            } if current == &error
+        ));
+    }
+
+    #[test]
+    fn preview_and_run_requests_do_not_check_source_on_the_dialog_thread() {
+        let dirs = TempDirs::new();
+        let form = dirs.form();
+        let mut dialog = ImportDialog::new(form.clone());
+        let now = Instant::now();
+
+        assert!(matches!(
+            dialog.tick(now + PREVIEW_DELAY),
+            Some(DialogRequest::Preview { form: request_form, .. }) if request_form == form
+        ));
+        dialog.sent(14);
+        dialog.apply(&ImportEvent::Previewed {
+            id: 14,
+            result: Ok(preview(1)),
+        });
+
+        assert!(matches!(
+            dialog.start(),
+            Some(DialogRequest::Run { form: request_form }) if request_form == form
         ));
     }
 
@@ -520,7 +531,10 @@ mod tests {
         dialog.sent(12);
         dialog.apply(&ImportEvent::Previewed {
             id: 12,
-            result: Err("Kunde inte läsa källa.".to_string()),
+            result: Err(FieldError {
+                field: Field::Source,
+                message: "Kunde inte läsa källa.".to_string(),
+            }),
         });
 
         assert!(matches!(
@@ -532,6 +546,30 @@ mod tests {
                 }),
                 ..
             } if message == "Kunde inte läsa källa."
+        ));
+    }
+
+    #[test]
+    fn preview_validation_error_is_attached_to_the_reported_field() {
+        let mut dialog = ImportDialog::new(ImportForm::default());
+        let now = Instant::now();
+        let _ = schedule_preview(&mut dialog, now);
+        dialog.sent(15);
+        let error = FieldError {
+            field: Field::Folder,
+            message: "Mappmall: ogiltig".to_string(),
+        };
+        dialog.apply(&ImportEvent::Previewed {
+            id: 15,
+            result: Err(error.clone()),
+        });
+
+        assert!(matches!(
+            dialog.state(),
+            ImportDialogState::Editing {
+                error: Some(current),
+                ..
+            } if current == &error
         ));
     }
 

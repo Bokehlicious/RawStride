@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use crate::Preview;
+use crate::{Field, FieldError, ImportForm, Preview};
 
 const REQUEST_CAPACITY: usize = 8;
 
@@ -22,7 +22,7 @@ pub enum SubmitError {
 pub enum ImportEvent {
     Previewed {
         id: RequestId,
-        result: Result<Preview, String>,
+        result: Result<Preview, FieldError>,
     },
     Progress {
         id: RequestId,
@@ -50,14 +50,12 @@ pub struct ImportDone {
 enum Request {
     Preview {
         id: RequestId,
-        source: PathBuf,
-        options: pw_ingest::Options,
+        form: ImportForm,
         rescan: bool,
     },
     Run {
         id: RequestId,
-        source: PathBuf,
-        options: pw_ingest::Options,
+        form: ImportForm,
     },
 }
 
@@ -111,37 +109,19 @@ impl ImportWorker {
     }
 
     /// Queues a preview, optionally reusing the last scan for this source.
-    pub fn preview(
-        &mut self,
-        source: PathBuf,
-        options: pw_ingest::Options,
-        rescan: bool,
-    ) -> Result<RequestId, SubmitError> {
+    pub fn preview(&mut self, form: ImportForm, rescan: bool) -> Result<RequestId, SubmitError> {
         let id = self.next_request_id();
-        self.submit(Request::Preview {
-            id,
-            source,
-            options,
-            rescan,
-        })?;
+        self.submit(Request::Preview { id, form, rescan })?;
         Ok(id)
     }
 
     /// Queues a fresh scan and copy. A previous cancellation is cleared for this run.
-    pub fn run(
-        &mut self,
-        source: PathBuf,
-        options: pw_ingest::Options,
-    ) -> Result<RequestId, SubmitError> {
+    pub fn run(&mut self, form: ImportForm) -> Result<RequestId, SubmitError> {
         let id = self.next_request_id();
         // The worker waits for this gate before it starts a run, so it cannot start copying
         // before the cancel flag of an earlier run is cleared below.
         let _gate = lock_recover(&self.run_gate);
-        self.submit(Request::Run {
-            id,
-            source,
-            options,
-        })?;
+        self.submit(Request::Run { id, form })?;
         self.cancel.store(false, Ordering::Relaxed);
         Ok(id)
     }
@@ -195,23 +175,14 @@ fn run(
     let mut cached_scan: Option<(PathBuf, Arc<Vec<pw_ingest::Shot>>)> = None;
     while let Ok(request) = requests.recv() {
         let event = match request {
-            Request::Preview {
+            Request::Preview { id, form, rescan } => ImportEvent::Previewed {
                 id,
-                source,
-                options,
-                rescan,
-            } => ImportEvent::Previewed {
-                id,
-                result: preview(&source, &options, rescan, &mut cached_scan),
+                result: preview(&form, rescan, &mut cached_scan),
             },
-            Request::Run {
-                id,
-                source,
-                options,
-            } => {
+            Request::Run { id, form } => {
                 // Wait until `ImportWorker::run` has cleared the cancel flag for this run.
                 drop(lock_recover(&run_gate));
-                run_import(id, &source, &options, &cancel, &mut cached_scan, &events)
+                run_import(id, &form, &cancel, &mut cached_scan, &events)
             }
         };
         if events.send(event).is_err() {
@@ -241,26 +212,41 @@ fn shots(
 }
 
 fn preview(
-    source: &Path,
-    options: &pw_ingest::Options,
+    form: &ImportForm,
     rescan: bool,
     cached_scan: &mut Option<(PathBuf, Arc<Vec<pw_ingest::Shot>>)>,
-) -> Result<Preview, String> {
-    let shots = shots(source, rescan, cached_scan)?;
-    let plan = pw_ingest::plan(&shots, options);
+) -> Result<Preview, FieldError> {
+    let validated = form.validate()?;
+    let shots = shots(&validated.source, rescan, cached_scan).map_err(|message| FieldError {
+        field: Field::Source,
+        message,
+    })?;
+    let plan = pw_ingest::plan(&shots, &validated.options);
     Ok(Preview::new(&shots, &plan))
 }
 
 fn run_import(
     id: RequestId,
-    source: &Path,
-    options: &pw_ingest::Options,
+    form: &ImportForm,
     cancel: &AtomicBool,
     cached_scan: &mut Option<(PathBuf, Arc<Vec<pw_ingest::Shot>>)>,
     events: &mpsc::Sender<ImportEvent>,
 ) -> ImportEvent {
     let started = Instant::now();
-    let shots = match shots(source, true, cached_scan) {
+    let validated = match form.validate() {
+        Ok(validated) => validated,
+        Err(error) => {
+            return ImportEvent::Done {
+                id,
+                done: ImportDone {
+                    elapsed: started.elapsed(),
+                    error: Some(error.message),
+                    ..ImportDone::default()
+                },
+            };
+        }
+    };
+    let shots = match shots(&validated.source, true, cached_scan) {
         Ok(shots) => shots,
         Err(error) => {
             return ImportEvent::Done {
@@ -274,8 +260,8 @@ fn run_import(
         }
     };
 
-    let plan = pw_ingest::plan(&shots, options);
-    let report = pw_ingest::execute(&plan, options, cancel, |progress| {
+    let plan = pw_ingest::plan(&shots, &validated.options);
+    let report = pw_ingest::execute(&plan, &validated.options, cancel, |progress| {
         let _ = events.send(ImportEvent::Progress {
             id,
             progress: progress.clone(),
@@ -284,7 +270,7 @@ fn run_import(
     let destination_items: Vec<&pw_ingest::PlanItem> = plan
         .items
         .iter()
-        .filter(|item| options.dest.join(&item.rel).exists())
+        .filter(|item| validated.options.dest.join(&item.rel).exists())
         .collect();
 
     ImportEvent::Done {
@@ -306,7 +292,7 @@ fn run_import(
                 .collect(),
             cancelled: report.cancelled,
             elapsed: started.elapsed(),
-            folders: pw_ingest::folder_summary(&destination_items, &options.dest),
+            folders: pw_ingest::folder_summary(&destination_items, &validated.options.dest),
             error: None,
         },
     }
@@ -359,6 +345,15 @@ mod tests {
                 first_seq: 1,
             }
         }
+
+        fn form(&self, folder: &str) -> ImportForm {
+            ImportForm {
+                source: self.source.to_string_lossy().into_owned(),
+                dest: self.dest.to_string_lossy().into_owned(),
+                folder: folder.to_string(),
+                name: "{name}".to_string(),
+            }
+        }
     }
 
     impl Drop for TempDirs {
@@ -399,11 +394,8 @@ mod tests {
         let dirs = TempDirs::new("preview-cache");
         dirs.write_image("A001.ARW", b"first image");
         let mut worker = ImportWorker::start().unwrap();
-        let options = dirs.options("");
 
-        let id = worker
-            .preview(dirs.source.clone(), options.clone(), false)
-            .unwrap();
+        let id = worker.preview(dirs.form(""), false).unwrap();
         match next_event(&worker) {
             ImportEvent::Previewed {
                 id: event_id,
@@ -416,9 +408,7 @@ mod tests {
         }
 
         dirs.write_image("A002.ARW", b"second image");
-        let cached_id = worker
-            .preview(dirs.source.clone(), options.clone(), false)
-            .unwrap();
+        let cached_id = worker.preview(dirs.form(""), false).unwrap();
         match next_event(&worker) {
             ImportEvent::Previewed {
                 id,
@@ -430,7 +420,7 @@ mod tests {
             event => panic!("unexpected cached preview: {event:?}"),
         }
 
-        let rescan_id = worker.preview(dirs.source.clone(), options, true).unwrap();
+        let rescan_id = worker.preview(dirs.form(""), true).unwrap();
         match next_event(&worker) {
             ImportEvent::Previewed {
                 id,
@@ -450,7 +440,7 @@ mod tests {
         let mut worker = ImportWorker::start().unwrap();
         let options = dirs.options("imported");
 
-        let id = worker.run(dirs.source.clone(), options.clone()).unwrap();
+        let id = worker.run(dirs.form("imported")).unwrap();
         let mut progress_count = 0;
         let done = loop {
             match next_event(&worker) {
@@ -493,25 +483,24 @@ mod tests {
         let dirs = TempDirs::new("present");
         dirs.write_image("A001.ARW", b"image bytes");
         let mut worker = ImportWorker::start().unwrap();
-        let options = dirs.options("imported");
 
-        let first = worker.run(dirs.source.clone(), options.clone()).unwrap();
+        let first = worker.run(dirs.form("imported")).unwrap();
         let first_done = done_event(&worker, first);
         assert_eq!(first_done.copied, 1);
 
-        let second = worker.run(dirs.source.clone(), options).unwrap();
+        let second = worker.run(dirs.form("imported")).unwrap();
         let second_done = done_event(&worker, second);
         assert_eq!((second_done.copied, second_done.present), (0, 1));
     }
 
     #[test]
-    fn missing_source_returns_tauri_preview_error() {
+    fn missing_source_returns_validation_error() {
         let dirs = TempDirs::new("missing");
         let missing = dirs.root.join("missing");
         let mut worker = ImportWorker::start().unwrap();
-        let id = worker
-            .preview(missing.clone(), dirs.options(""), true)
-            .unwrap();
+        let mut form = dirs.form("");
+        form.source = missing.to_string_lossy().into_owned();
+        let id = worker.preview(form, true).unwrap();
 
         match next_event(&worker) {
             ImportEvent::Previewed {
@@ -519,13 +508,50 @@ mod tests {
                 result: Err(error),
             } => {
                 assert_eq!(event_id, id);
-                assert!(
-                    error.starts_with(&format!("Kunde inte läsa {}: ", missing.display())),
-                    "unexpected scan error: {error}"
+                assert_eq!(error.field, Field::Source);
+                assert_eq!(
+                    error.message,
+                    format!("Källan {} finns inte.", missing.display())
                 );
             }
             event => panic!("unexpected missing-source event: {event:?}"),
         }
+    }
+
+    #[test]
+    fn invalid_form_returns_destination_error_from_preview() {
+        let dirs = TempDirs::new("invalid-preview");
+        let mut worker = ImportWorker::start().unwrap();
+        let mut form = dirs.form("");
+        form.dest.clear();
+        let id = worker.preview(form, true).unwrap();
+
+        match next_event(&worker) {
+            ImportEvent::Previewed {
+                id: event_id,
+                result: Err(error),
+            } => {
+                assert_eq!(event_id, id);
+                assert_eq!(error.field, Field::Dest);
+                assert_eq!(error.message, "Välj ett mål.");
+            }
+            event => panic!("unexpected invalid preview event: {event:?}"),
+        }
+    }
+
+    #[test]
+    fn invalid_run_finishes_with_validation_error_without_copying() {
+        let dirs = TempDirs::new("invalid-run");
+        dirs.write_image("A001.ARW", b"image bytes");
+        let mut worker = ImportWorker::start().unwrap();
+        let mut form = dirs.form("");
+        form.dest.clear();
+        let id = worker.run(form).unwrap();
+
+        let done = done_event(&worker, id);
+        assert_eq!(done.error.as_deref(), Some("Välj ett mål."));
+        assert_eq!(done.copied, 0);
+        assert!(!dirs.dest.exists());
     }
 
     #[test]
@@ -537,7 +563,7 @@ mod tests {
         }
         let mut worker = ImportWorker::start().unwrap();
         let options = dirs.options("");
-        let id = worker.run(dirs.source.clone(), options.clone()).unwrap();
+        let id = worker.run(dirs.form("")).unwrap();
         worker.cancel();
 
         let done = done_event(&worker, id);
@@ -573,7 +599,7 @@ mod tests {
         let dirs = TempDirs::new("drop");
         dirs.write_image("A001.ARW", &vec![3; 16 * 1024 * 1024]);
         let mut worker = ImportWorker::start().unwrap();
-        worker.run(dirs.source.clone(), dirs.options("")).unwrap();
+        worker.run(dirs.form("")).unwrap();
 
         let started = Instant::now();
         drop(worker);
