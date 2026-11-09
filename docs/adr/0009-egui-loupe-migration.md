@@ -72,7 +72,7 @@ owner's answers to the questions of section 11 are recorded there.
 | Orientation | Always from the RAW file's orientation tag, applied once, as texture coordinates per corner | ADR 0003 point 4 |
 | Memory | Core budget 4 GB and texture budget about 1 GB, counted separately. Both are user settings, given as command-line arguments (§11, decision 3) | V8, ADR 0008 §18 |
 | Keyboard | The current viewer's keys (section 3.3). Every culling action works from the keyboard (GR6). Focus survives minimise, restore and resize | GR6, GR7 |
-| Window | Binary `pw-loupe`. The window title is **"PhotoWorkflow Loupe"**, which `latency.ps1` targets (§11, decision 4) | – |
+| Window | Binary `pw-loupe`. The window title is **"PhotoWorkflow Loupe"** (since 2026-11-09 **"RawStride"**, ADR 0012), which `latency.ps1` targets (§11, decision 4) | – |
 
 ### 3.2 Out of scope (later milestones)
 
@@ -388,7 +388,8 @@ summary, git diff and git status, and the owner's approval before commit. Nothin
    boxes.
 3. **Budget settings (V8):** **command-line arguments only.** No settings file yet.
 4. **Names:** the binary is **`pw-loupe`**. The window title is **"PhotoWorkflow Loupe"**, and
-   `latency.ps1` targets it.
+   `latency.ps1` targets it. *Amended 2026-11-09 by ADR 0012:* the window title is **"RawStride"**;
+   `latency.ps1` is pointed at the new title.
 5. **Keys:** **the same classic keys as the current viewer** (section 3.3).
 6. **`pw-rawview`:** **left untouched** in the Tauri app, as an isolated legacy component.
 

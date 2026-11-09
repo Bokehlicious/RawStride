@@ -1,5 +1,8 @@
 # Architecture (draft)
 
+> **2026-11-09 (owner):** the product is called **RawStride** (ADR 0012). Crate names keep the `pw-`
+> prefix.
+
 > **2026-11-07 (owner):** the GUI is built in pure Rust with eframe + egui
 > ([GUI_REQUIREMENTS.md](GUI_REQUIREMENTS.md)). The app crate below replaces `src-tauri` when the egui GUI
 > takes over. Until then, the current Tauri app keeps working.

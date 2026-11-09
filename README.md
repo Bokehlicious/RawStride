@@ -1,20 +1,24 @@
-# PhotoWorkflow
+# RawStride
 
 A fast and lightweight photo culling and ingest application for Windows.
+
+The project was called PhotoWorkflow until 2026-11-09 (ADR 0012). Folder, branch and crate names
+(`pw-*`) keep the old name for now; the existing Tauri app is still titled PhotoWorkflow.
 It covers card ingest, culling, rating and metadata.
 
 **Camera support:** the goal is to support most cameras, through LibRaw.
 During development we start with Sony A1 and A7R IVA (ARW), Panasonic (RW2) and DNG.
 
-> Status: The Rust workspace includes the standalone `pw-loupe` viewer, the first milestone of the
-> eframe + egui GUI migration. The existing Tauri app remains in place while the rest of its features
-> are migrated.
+> Status: the new eframe + egui program (binary `pw-loupe`, window title "RawStride") has the loupe,
+> the contact sheet, folder tabs and the full import dialog. The existing Tauri app remains in place
+> until the egui program covers the rest of its features (ratings and labels, filters and
+> multi-selection, TIFF viewing; GUI_REQUIREMENTS GR8).
 
 ## Stack
 
 | Area | Choice |
 |---|---|
-| App | Existing Tauri 2 app; standalone eframe + egui loupe |
+| App | RawStride: eframe + egui (`pw-loupe`); the existing Tauri 2 app until the switch |
 | Core | Rust (workspace in `crates/`) |
 | RAW decoding | LibRaw (vcpkg, static), plus our own embedded-preview fast path |
 | Metadata | ExifTool (one persistent `-stay_open` process) |
@@ -24,7 +28,7 @@ During development we start with Sony A1 and A7R IVA (ARW), Panasonic (RW2) and 
 ## Layout
 
 ```
-crates/        Rust libraries and the standalone pw-loupe app
+crates/        Rust libraries and the RawStride egui program (pw-loupe)
 src-tauri/     Existing Tauri app shell
 ui/            Existing Tauri frontend
 docs/          Architecture, ADRs, clean-room policy, developer setup

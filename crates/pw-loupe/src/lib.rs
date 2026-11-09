@@ -1,6 +1,7 @@
-//! PhotoWorkflow Loupe (ADR 0009, milestone 1): the parts of the program that are plain Rust and
-//! tested without a window (GR11): command-line options, the folder listing, the key map and the
-//! texts of the status line. `main.rs` wires them to eframe, `pw-viewcore` and `pw-render`.
+//! RawStride (ADR 0012; the egui program of ADR 0009–0011): the parts of the program that are plain
+//! Rust and tested without a window (GR11): command-line options, the folder listing, the key map
+//! and the texts of the status line. `main.rs` wires them to eframe, `pw-viewcore` and
+//! `pw-render`.
 
 mod grid;
 mod import;
@@ -32,8 +33,9 @@ pub use import_worker::{ImportDone, ImportEvent, ImportWorker, RequestId, Submit
 pub use tabs::{Tab, Tabs, ViewMode};
 pub use thumbs::{CellState, ThumbGrid, color_image, request_cell};
 
-/// The window title; `latency.ps1` finds the window by it (ADR 0009 §11, decision 4).
-pub const WINDOW_TITLE: &str = "PhotoWorkflow Loupe";
+/// The window title: the product name (ADR 0012). `latency.ps1` finds the window by it (ADR 0009
+/// §11, decision 4, amended by ADR 0012).
+pub const WINDOW_TITLE: &str = "RawStride";
 
 /// Command-line options (ADR 0009 §11, decisions 2 and 3: no settings file, no dialog).
 #[derive(Clone, Debug, PartialEq, Eq)]

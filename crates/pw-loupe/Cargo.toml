@@ -1,6 +1,6 @@
 [package]
 name = "pw-loupe"
-description = "PhotoWorkflow Loupe: the egui loupe, milestone 1 of the GUI migration (ADR 0009)"
+description = "RawStride: the egui program with loupe, contact sheet, folder tabs and import (ADR 0009-0012)"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

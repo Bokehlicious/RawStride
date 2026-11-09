@@ -1,4 +1,5 @@
-//! PhotoWorkflow Loupe (ADR 0009, milestone 1): the loupe as its own program beside the Tauri app.
+//! RawStride (ADR 0012): the egui program beside the Tauri app, with the loupe (ADR 0009), folder
+//! tabs and the import (ADR 0010) and the contact sheet (ADR 0011).
 //!
 //! eframe with glow (GUI_REQUIREMENTS §7) hosts one image area. `pw-viewcore` decides what to show
 //! and prepares it on its workers; `pw-render` uploads and draws. Metadata reads and writes are
