@@ -4,6 +4,7 @@
 
 mod grid;
 mod import;
+mod import_dialog;
 mod import_worker;
 mod tabs;
 mod thumbs;
@@ -20,6 +21,7 @@ pub use grid::{
 pub use import::{
     Field, FieldError, ImportForm, ItemAction, Preview, PreviewLine, Validated, result_folder,
 };
+pub use import_dialog::{DialogRequest, ImportDialog, ImportDialogState};
 pub use import_worker::{ImportDone, ImportEvent, ImportWorker, RequestId, SubmitError};
 pub use tabs::{Tab, Tabs, ViewMode};
 pub use thumbs::{CellState, ThumbGrid, color_image, request_cell};

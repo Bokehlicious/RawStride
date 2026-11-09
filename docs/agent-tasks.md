@@ -618,7 +618,7 @@ Ordered from easiest to hardest. Start at the top.
   no final-named partial files; dropping the worker during a run returns at once.
 - **Done when:** `.\tools\check.ps1` is all OK.
 
-### T32. ADR 0010 M4c: import dialog state machine (plain Rust) — Open
+### T32. ADR 0010 M4c: import dialog state machine (plain Rust) — Ready for review
 
 - **Start after T31 is done.**
 - **Crate:** `pw-loupe`. **Files:** a new `crates/pw-loupe/src/import_dialog.rs`, declared and
@@ -654,6 +654,49 @@ Ordered from easiest to hardest. Start at the top.
   previewing; progress and done move the state; `disconnected` while previewing and while running;
   `can_close` is false while running; `result_folder` is `None` when nothing was copied and the
   largest folder otherwise; `back_to_editing` asks for a new preview.
+- **Done when:** `.\tools\check.ps1` is all OK.
+
+### T33. ADR 0010 M4d: validate the import form on the worker thread (G2) — Open
+
+- **Start after T32 is committed.**
+- **Crate:** `pw-loupe`. **Files:** `crates/pw-loupe/src/import_worker.rs`,
+  `crates/pw-loupe/src/import_dialog.rs`, `crates/pw-loupe/src/lib.rs` (re-exports only). **Not**
+  `main.rs`, not `import.rs`.
+- **Why (found in the T32 review):** `ImportForm::validate` checks that the source exists and
+  canonicalises the source and destination (`pw_ingest::resolve`). That is file I/O. T32 calls it in
+  `tick()` and `start()`, which run on the UI thread. On a sleeping hard disk (the F:, G: and H:
+  destinations), a card reader without a card or a network folder this can block for seconds, and the
+  window freezes while the user types. ADR 0010 §5 and G2: no file I/O on the UI thread. The Tauri app
+  validates inside its background task too.
+- **What:**
+  1. **Worker:** `ImportWorker::preview(form: ImportForm, rescan: bool)` and `ImportWorker::run(form:
+     ImportForm)` take the form instead of `source` and `options`; the worker thread calls
+     `form.validate()` first.
+     - `ImportEvent::Previewed { id, result: Result<Preview, FieldError> }`: a validation error is
+       returned as it is; a scan error becomes `Field::Source` with the existing message
+       (`"Kunde inte läsa {source}: {error}"`).
+     - `run` with an invalid form ends with `ImportEvent::Done` whose `error` is the field error's
+       message and nothing copied.
+     - Everything else (scan cache, fresh scan for a run, progress, cancel, the gate, drop) is unchanged.
+  2. **Dialog:** `DialogRequest::Preview { form: ImportForm, rescan: bool }` and
+     `DialogRequest::Run { form: ImportForm }`.
+     - `tick()` no longer validates: when the form changed at least 300 ms ago and the state is
+       `Editing`, it goes to `Previewing` and returns the request with a copy of the form.
+     - `apply(Previewed { result: Err(field_error) })` → `Editing` with that error (any field).
+     - `start()` no longer validates: it needs `Editing` with a preview that has `files_to_copy > 0` and
+       no error, and returns `Run` with a copy of the form.
+     - The debounce, `rescan`, request ids, `disconnected`, `cancel`, `can_close`, `back_to_editing`
+       and `result_folder` stay as they are.
+- **Tests:** this task changes the API that some T31 and T32 tests call. Update **only those calls**
+  and keep what each test verifies. The one test whose behaviour moves, T32's
+  `invalid_form_shows_field_error_without_a_request`, becomes: the invalid form gives a preview request,
+  and applying `Previewed` with a `Source` field error shows that error. Add:
+  - worker: an invalid form (empty destination) gives `Previewed` with `Field::Dest` and "Välj ett
+    mål."; `run` with an invalid form gives `Done` with that message and `copied == 0`;
+  - dialog: `tick()` and `start()` work with a form whose source does not exist (no file access in the
+    dialog); a field error for `Field::Folder` from the worker is shown on that field.
+- **Rules:** no `unwrap`/`expect`/`panic!` in non-test code; no new dependencies; rule 7 (build only in
+  `target`).
 - **Done when:** `.\tools\check.ps1` is all OK.
 
 ### T7. Format the files that `cargo fmt --check` reports — Done
@@ -903,3 +946,5 @@ and reviewer:
 | 2026-11-09 | T30 | Done | Reviewed: `ImportForm` with the Tauri defaults; the field is chosen by which check fails (source, folder template, name template, then the rest as destination), never by the message text; messages are exactly those of `pw-ingest`; `Preview::new` matches the Tauri `preview_of`/`action` rules; `result_folder` follows Q2. All required tests present; pw-ingest added as an internal dependency. The first run failed to compile because the antivirus quarantined a build script in the agent's temporary target folder (rule 7); the owner's rerun: workspace fmt, test (245 passed, 27 ignored) and clippy OK. No changes in review |
 | 2026-11-09 | T31 | Ready for review | Added the bounded background import worker, cached preview scans, fresh scans and execution for runs, progress/completion events, cancellation, and worker lifecycle tests. `.\tools\check.ps1` passed, including 42 pw-loupe library tests, 3 binary tests and workspace clippy. |
 | 2026-11-09 | T31 | Done | Reviewed: one worker thread with a bounded request queue (full queue and stopped worker are errors), cached scan for previews and a fresh scan and plan for every run (as the Tauri `run`), progress and `Done` events with the Tauri summary and messages, cancel flag cleared per run behind a small gate so a new run never starts with an old flag, drop cancels and does not join. All required tests present, including no partial files after cancel. Comments added in review to explain the gate. Workspace fmt, test (251 passed, 27 ignored) and clippy OK |
+| 2026-11-09 | T32 | Ready for review | Added the plain-Rust import dialog state machine, debounced preview requests with rescan tracking, request-ID filtering, progress/done/error/disconnect handling, cancellation/close checks, result-folder lookup and back-to-editing behavior, with transition tests. `.\tools\check.ps1` passed: pw-loupe 53 library tests and 3 binary tests; workspace fmt, tests and clippy OK. The separate `cargo test -p pw-loupe` and `cargo clippy -p pw-loupe --all-targets` commands failed while linking the thiserror build script (MSVC LNK1104); no pw-loupe process was running. |
+| 2026-11-09 | T32 | Reviewed | The state machine matches the spec: 300 ms debounce, rescan only when the source changed, stale events ignored by request id, start only with a preview that has files to copy, disconnect turns previewing and running into errors, no close while running, result folder from T30, back to editing asks for a fresh scan. All required tests present. Finding: `tick()` and `start()` call `ImportForm::validate`, which touches the disk (exists check and canonicalise) on the UI thread; on a sleeping HDD this can freeze the window. Fixed in T33 (validation on the worker). The agent's `test-output.txt` predates the final T32 code, so the owner reruns `.\tools\check.ps1` before the commit. The agent also saw LNK1104 (linker could not open the thiserror build script) in separate cargo runs |
