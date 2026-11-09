@@ -1,5 +1,6 @@
 use crate::{ImportDone, ItemAction, Preview, PreviewLine};
 use pw_core::format_bytes;
+use std::path::Path;
 
 /// Returns the Swedish preview summary as in the Tauri app.
 pub fn preview_summary(p: &Preview) -> String {
@@ -62,6 +63,19 @@ pub fn progress_text(p: &pw_ingest::Progress) -> String {
     )
 }
 
+/// Returns the Swedish progress text while writing IPTC metadata.
+pub fn iptc_progress_text(done: usize, total: usize, current: &Path) -> String {
+    format!(
+        "Skriver IPTC {} / {} · {}",
+        done.saturating_add(1),
+        total,
+        current
+            .file_name()
+            .map(|name| name.to_string_lossy())
+            .unwrap_or_default()
+    )
+}
+
 #[derive(Debug)]
 pub struct DoneLine {
     pub text: String,
@@ -114,6 +128,13 @@ pub fn done_lines(done: &ImportDone) -> Vec<DoneLine> {
         }
         lines.push(DoneLine {
             text: format!("Misslyckades: {failure}"),
+            error: true,
+        });
+    }
+
+    for error in done.iptc_errors.iter().take(10) {
+        lines.push(DoneLine {
+            text: format!("IPTC: {error}"),
             error: true,
         });
     }
@@ -237,6 +258,18 @@ mod tests {
     }
 
     #[test]
+    fn iptc_progress_uses_one_based_file_number_and_name() {
+        assert_eq!(
+            iptc_progress_text(2, 5, Path::new("destination/image.ARW")),
+            "Skriver IPTC 3 / 5 · image.ARW"
+        );
+        assert_eq!(
+            iptc_progress_text(0, 0, Path::new("")),
+            "Skriver IPTC 1 / 0 · "
+        );
+    }
+
+    #[test]
     fn done_success_with_one_folder() {
         let done = ImportDone {
             copied: 10,
@@ -312,5 +345,24 @@ mod tests {
         assert_eq!(lines.len(), 1);
         assert_eq!(lines[0].text, "Disk full");
         assert!(lines[0].error);
+    }
+
+    #[test]
+    fn done_includes_at_most_ten_iptc_errors_after_copy_failures() {
+        let done = ImportDone {
+            failed: vec!["copy failure".to_string()],
+            iptc_errors: (0..12)
+                .map(|index| format!("image{index}.ARW: error"))
+                .collect(),
+            ..ImportDone::default()
+        };
+        let lines = done_lines(&done);
+
+        assert_eq!(lines[1].text, "Misslyckades: copy failure");
+        assert!(lines[1].error);
+        assert_eq!(lines.len(), 12);
+        assert_eq!(lines[2].text, "IPTC: image0.ARW: error");
+        assert_eq!(lines[11].text, "IPTC: image9.ARW: error");
+        assert!(lines[2..].iter().all(|line| line.error));
     }
 }

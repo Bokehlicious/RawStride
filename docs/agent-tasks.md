@@ -851,7 +851,7 @@ Ordered from easiest to hardest. Start at the top.
 - **Done when:** `.\tools\check.ps1` is all OK, and the owner checks by hand that `{job}` in the folder
   template and `{seq:4}` in the file-name template give the expected names in the preview.
 
-### T39. ADR 0010 M7c: IPTC template on the new copies — Open
+### T39. ADR 0010 M7c: IPTC template on the new copies — Ready for review
 
 - **Start after T38 is done.**
 - **Crate:** `pw-loupe`. **Files:** `crates/pw-loupe/src/import.rs`, `crates/pw-loupe/src/import_worker.rs`,
@@ -1190,3 +1190,6 @@ and reviewer:
 | 2026-11-09 | T38 | Ready for review | Added job and first sequence number to the import form and options; added the job/number controls and template-variable help to the dialog; validation tests cover defaults, passed values and job trimming. |
 | 2026-11-09 | T37 | Done | Owner moved on to T38 after the hand test of the backup (both folders get the same files) |
 | 2026-11-09 | T38 | Reviewed | `job` and `first_seq` in the form and passed to `Options` (job trimmed by `pw-ingest`); dialog row "Jobb" and "Första nr" (`DragValue` 0–999 999) and the variable help, matching the `pw_ingest::template` list. All required tests present. Workspace fmt, test (289 passed, 27 ignored) and clippy OK. No changes in review; waits for the owner's hand test |
+| 2026-11-09 | T39 | Ready for review | Added the six-field IPTC template, worker-thread ExifTool writes for copied images in the destination and backup, cancellation, progress, errors and UI; added mapping, target-selection, lazy-start, cancellation and text tests. Workspace check passed; the real metadata write remains for the owner's hand test. |
+| 2026-11-09 | T38 | Done | Owner checked by hand: `{job}` and `{seq:4}` give the expected names |
+| 2026-11-09 | T39 | Reviewed | `IptcForm` with the six fields of the Tauri dialog and `to_iptc` (copyright as `x-default`); the worker writes the template after the copy, not when cancelled or empty, to copied images (no companions, no failures) in the destination and the backup, as the Tauri `run`; ExifTool is started on the worker only when needed and kept; progress, cancel per file and up to 10 "IPTC:" lines; collapsing "IPTC-mall" section with the help text. All required tests present. Note: an ExifTool start error is listed with the first file's name in front; harmless. Workspace fmt, test (296 passed, 27 ignored) and clippy OK. No changes in review; waits for the owner's hand test |

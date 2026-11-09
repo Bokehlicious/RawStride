@@ -1,5 +1,7 @@
 use std::path::PathBuf;
 
+use pw_metadata::{Iptc, LocalizedValue};
+
 /// The editable fields used to prepare an import.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ImportForm {
@@ -11,6 +13,34 @@ pub struct ImportForm {
     pub name: String,
     pub job: String,
     pub first_seq: u32,
+    pub iptc: IptcForm,
+}
+
+/// The IPTC fields edited in the import dialog.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct IptcForm {
+    pub creator: String,
+    pub copyright: String,
+    pub credit: String,
+    pub email: String,
+    pub phone: String,
+    pub url: String,
+}
+
+impl IptcForm {
+    /// Converts the plain-text form fields to the metadata template.
+    pub fn to_iptc(&self) -> Iptc {
+        Iptc {
+            creator: self.creator.clone(),
+            copyright: LocalizedValue::x_default(self.copyright.clone()),
+            title: LocalizedValue::default(),
+            description: LocalizedValue::default(),
+            credit: self.credit.clone(),
+            email: self.email.clone(),
+            phone: self.phone.clone(),
+            url: self.url.clone(),
+        }
+    }
 }
 
 impl Default for ImportForm {
@@ -24,6 +54,7 @@ impl Default for ImportForm {
             name: "{name}".to_string(),
             job: String::new(),
             first_seq: 1,
+            iptc: IptcForm::default(),
         }
     }
 }
@@ -252,8 +283,33 @@ mod tests {
                 name: "{name}".to_string(),
                 job: String::new(),
                 first_seq: 1,
+                iptc: IptcForm::default(),
             }
         );
+    }
+
+    #[test]
+    fn iptc_form_maps_copyright_to_x_default_and_empty_form_is_empty() {
+        let empty = IptcForm::default().to_iptc();
+        assert!(empty.is_empty());
+
+        let iptc = IptcForm {
+            creator: "Fotograf".to_string(),
+            copyright: "© 2026 Namn".to_string(),
+            credit: "Byrå".to_string(),
+            email: "namn@example.com".to_string(),
+            phone: "+46 123".to_string(),
+            url: "https://example.com".to_string(),
+        }
+        .to_iptc();
+        assert_eq!(iptc.creator, "Fotograf");
+        assert_eq!(iptc.copyright.default_text(), "© 2026 Namn");
+        assert!(iptc.title.is_empty());
+        assert!(iptc.description.is_empty());
+        assert_eq!(iptc.credit, "Byrå");
+        assert_eq!(iptc.email, "namn@example.com");
+        assert_eq!(iptc.phone, "+46 123");
+        assert_eq!(iptc.url, "https://example.com");
     }
 
     #[test]

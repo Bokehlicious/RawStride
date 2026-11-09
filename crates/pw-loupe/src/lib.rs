@@ -20,11 +20,13 @@ pub use grid::{
     loupe_key_action, navigate, row, step_thumbnail_size, take_wheel_steps, visible_range,
 };
 pub use import::{
-    Field, FieldError, ImportForm, ItemAction, Preview, PreviewLine, Validated, result_folder,
+    Field, FieldError, ImportForm, IptcForm, ItemAction, Preview, PreviewLine, Validated,
+    result_folder,
 };
 pub use import_dialog::{DialogRequest, ImportDialog, ImportDialogState};
 pub use import_text::{
-    DoneLine, done_lines, more_lines, preview_line, preview_summary, progress_text,
+    DoneLine, done_lines, iptc_progress_text, more_lines, preview_line, preview_summary,
+    progress_text,
 };
 pub use import_worker::{ImportDone, ImportEvent, ImportWorker, RequestId, SubmitError};
 pub use tabs::{Tab, Tabs, ViewMode};

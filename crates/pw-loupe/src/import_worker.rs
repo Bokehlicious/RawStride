@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -7,6 +8,7 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use crate::{Field, FieldError, ImportForm, Preview};
+use pw_metadata::{ExifTool, Iptc};
 
 const REQUEST_CAPACITY: usize = 8;
 
@@ -28,6 +30,12 @@ pub enum ImportEvent {
         id: RequestId,
         progress: pw_ingest::Progress,
     },
+    IptcProgress {
+        id: RequestId,
+        done: usize,
+        total: usize,
+        current: PathBuf,
+    },
     Cards {
         id: RequestId,
         cards: Vec<PathBuf>,
@@ -44,6 +52,7 @@ pub struct ImportDone {
     pub present: usize,
     pub bytes: u64,
     pub failed: Vec<String>,
+    pub iptc_errors: Vec<String>,
     pub cancelled: bool,
     pub elapsed: Duration,
     pub folders: Vec<(String, usize)>,
@@ -88,6 +97,15 @@ impl std::fmt::Debug for ImportWorker {
 impl ImportWorker {
     /// Starts the single import worker thread.
     pub fn start() -> io::Result<Self> {
+        Self::start_inner(None)
+    }
+
+    /// Starts the worker with a specific ExifTool program, primarily for tests.
+    pub fn start_with_exiftool(program: &str) -> io::Result<Self> {
+        Self::start_inner(Some(program.to_string()))
+    }
+
+    fn start_inner(exiftool_program: Option<String>) -> io::Result<Self> {
         let (request_sender, request_receiver) = mpsc::sync_channel(REQUEST_CAPACITY);
         let (event_sender, event_receiver) = mpsc::channel();
         let cancel = Arc::new(AtomicBool::new(false));
@@ -102,6 +120,7 @@ impl ImportWorker {
                     event_sender,
                     worker_cancel,
                     worker_run_gate,
+                    exiftool_program,
                 )
             })?;
 
@@ -185,8 +204,10 @@ fn run(
     events: mpsc::Sender<ImportEvent>,
     cancel: Arc<AtomicBool>,
     run_gate: Arc<Mutex<()>>,
+    exiftool_program: Option<String>,
 ) {
     let mut cached_scan: Option<(PathBuf, Arc<Vec<pw_ingest::Shot>>)> = None;
+    let mut exiftool: Option<ExifTool> = None;
     while let Ok(request) = requests.recv() {
         let event = match request {
             Request::Preview { id, form, rescan } => ImportEvent::Previewed {
@@ -196,7 +217,15 @@ fn run(
             Request::Run { id, form } => {
                 // Wait until `ImportWorker::run` has cleared the cancel flag for this run.
                 drop(lock_recover(&run_gate));
-                run_import(id, &form, &cancel, &mut cached_scan, &events)
+                run_import(
+                    id,
+                    &form,
+                    &cancel,
+                    &mut cached_scan,
+                    &events,
+                    &mut exiftool,
+                    exiftool_program.as_deref(),
+                )
             }
             Request::Cards { id } => ImportEvent::Cards {
                 id,
@@ -249,6 +278,8 @@ fn run_import(
     cancel: &AtomicBool,
     cached_scan: &mut Option<(PathBuf, Arc<Vec<pw_ingest::Shot>>)>,
     events: &mpsc::Sender<ImportEvent>,
+    exiftool: &mut Option<ExifTool>,
+    exiftool_program: Option<&str>,
 ) -> ImportEvent {
     let started = Instant::now();
     let validated = match form.validate() {
@@ -257,7 +288,7 @@ fn run_import(
             return ImportEvent::Done {
                 id,
                 done: ImportDone {
-                    elapsed: started.elapsed(),
+                    elapsed: Duration::ZERO,
                     error: Some(error.message),
                     ..ImportDone::default()
                 },
@@ -291,29 +322,143 @@ fn run_import(
         .filter(|item| validated.options.dest.join(&item.rel).exists())
         .collect();
 
-    ImportEvent::Done {
+    let mut done = ImportDone {
+        copied: report.copied,
+        present: report.skipped_present,
+        bytes: report.bytes,
+        failed: report
+            .failed
+            .iter()
+            .map(|(path, error)| {
+                let name = path
+                    .file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                format!("{name}: {error}")
+            })
+            .collect(),
+        cancelled: report.cancelled,
+        elapsed: started.elapsed(),
+        folders: pw_ingest::folder_summary(&destination_items, &validated.options.dest),
+        error: None,
+        ..ImportDone::default()
+    };
+    let mut iptc_runtime = IptcRuntime {
         id,
-        done: ImportDone {
-            copied: report.copied,
-            present: report.skipped_present,
-            bytes: report.bytes,
-            failed: report
-                .failed
-                .iter()
-                .map(|(path, error)| {
-                    let name = path
-                        .file_name()
-                        .map(|name| name.to_string_lossy().into_owned())
-                        .unwrap_or_default();
-                    format!("{name}: {error}")
-                })
-                .collect(),
-            cancelled: report.cancelled,
-            elapsed: started.elapsed(),
-            folders: pw_ingest::folder_summary(&destination_items, &validated.options.dest),
-            error: None,
-        },
+        cancel,
+        events,
+        exiftool,
+        exiftool_program,
+    };
+    apply_iptc(
+        &plan,
+        &report.failed,
+        &validated.options,
+        &form.iptc.to_iptc(),
+        &mut iptc_runtime,
+        &mut done,
+    );
+    done.elapsed = started.elapsed();
+
+    ImportEvent::Done { id, done }
+}
+
+struct IptcRuntime<'a> {
+    id: RequestId,
+    cancel: &'a AtomicBool,
+    events: &'a mpsc::Sender<ImportEvent>,
+    exiftool: &'a mut Option<ExifTool>,
+    exiftool_program: Option<&'a str>,
+}
+
+fn iptc_targets(
+    plan: &pw_ingest::Plan,
+    failed: &[(PathBuf, String)],
+    options: &pw_ingest::Options,
+) -> Vec<PathBuf> {
+    let failed_sources: HashSet<PathBuf> =
+        failed.iter().map(|(source, _)| source.clone()).collect();
+    let mut targets = Vec::new();
+    for item in &plan.items {
+        if !(item.to_dest || item.to_backup) || failed_sources.contains(&item.source) {
+            continue;
+        }
+        let is_companion = item
+            .rel
+            .extension()
+            .map(|extension| extension.to_string_lossy().to_ascii_lowercase())
+            .is_some_and(|extension| pw_ingest::COMPANION_EXTENSIONS.contains(&extension.as_str()));
+        if is_companion {
+            continue;
+        }
+        if item.to_dest {
+            targets.push(options.dest.join(&item.rel));
+        }
+        if item.to_backup
+            && let Some(backup) = &options.backup
+        {
+            targets.push(backup.join(&item.rel));
+        }
     }
+    targets
+}
+
+fn apply_iptc(
+    plan: &pw_ingest::Plan,
+    failed: &[(PathBuf, String)],
+    options: &pw_ingest::Options,
+    iptc: &Iptc,
+    runtime: &mut IptcRuntime<'_>,
+    done: &mut ImportDone,
+) {
+    if done.cancelled || iptc.is_empty() {
+        return;
+    }
+
+    let targets = iptc_targets(plan, failed, options);
+    for (index, current) in targets.iter().enumerate() {
+        if runtime.cancel.load(Ordering::Relaxed) {
+            done.cancelled = true;
+            break;
+        }
+        if runtime.exiftool.is_none() {
+            let started = match runtime.exiftool_program {
+                Some(program) => ExifTool::start_with(program, &[]),
+                None => ExifTool::start(),
+            };
+            match started {
+                Ok(tool) => *runtime.exiftool = Some(tool),
+                Err(error) => {
+                    done.iptc_errors
+                        .push(format!("{}: {error}", file_name(current)));
+                    break;
+                }
+            }
+        }
+        let Some(tool) = runtime.exiftool.as_mut() else {
+            done.iptc_errors.push(format!(
+                "{}: ExifTool worker is unavailable",
+                file_name(current)
+            ));
+            break;
+        };
+        let _ = runtime.events.send(ImportEvent::IptcProgress {
+            id: runtime.id,
+            done: index,
+            total: targets.len(),
+            current: current.clone(),
+        });
+        if let Err(error) = tool.write_iptc(current, iptc) {
+            done.iptc_errors
+                .push(format!("{}: {error}", file_name(current)));
+        }
+    }
+}
+
+fn file_name(path: &Path) -> String {
+    path.file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -399,6 +544,7 @@ mod tests {
         loop {
             match next_event(worker) {
                 ImportEvent::Progress { id: event_id, .. } => assert_eq!(event_id, id),
+                ImportEvent::IptcProgress { id: event_id, .. } => assert_eq!(event_id, id),
                 ImportEvent::Done { id: event_id, done } => {
                     assert_eq!(event_id, id);
                     return done;
@@ -471,6 +617,9 @@ mod tests {
                     assert_eq!(event_id, id);
                     assert_eq!(progress.files_total, 1);
                     progress_count += 1;
+                }
+                ImportEvent::IptcProgress { .. } => {
+                    panic!("unexpected IPTC progress for an empty template")
                 }
                 ImportEvent::Done { id: event_id, done } => {
                     assert_eq!(event_id, id);
@@ -573,6 +722,155 @@ mod tests {
         assert_eq!(done.error.as_deref(), Some("Välj ett mål."));
         assert_eq!(done.copied, 0);
         assert!(!dirs.dest.exists());
+    }
+
+    #[test]
+    fn empty_iptc_template_does_not_start_exiftool() {
+        let dirs = TempDirs::new("empty-iptc");
+        dirs.write_image("A001.ARW", b"image bytes");
+        let missing_exiftool = dirs
+            .root
+            .join("missing-exiftool")
+            .to_string_lossy()
+            .into_owned();
+        let mut worker = ImportWorker::start_with_exiftool(&missing_exiftool).unwrap();
+        let id = worker.run(dirs.form("")).unwrap();
+
+        let done = done_event(&worker, id);
+        assert_eq!(done.copied, 1);
+        assert!(done.iptc_errors.is_empty());
+        assert!(dirs.dest.join("A001.ARW").exists());
+    }
+
+    #[test]
+    fn unavailable_exiftool_reports_one_iptc_error_after_copying() {
+        let dirs = TempDirs::new("iptc-start-error");
+        dirs.write_image("A001.ARW", b"image bytes");
+        let missing_exiftool = dirs
+            .root
+            .join("missing-exiftool")
+            .to_string_lossy()
+            .into_owned();
+        let mut worker = ImportWorker::start_with_exiftool(&missing_exiftool).unwrap();
+        let mut form = dirs.form("");
+        form.iptc.creator = "Fotograf".to_string();
+        let id = worker.run(form).unwrap();
+
+        let done = done_event(&worker, id);
+        assert_eq!(done.copied, 1);
+        assert!(done.failed.is_empty());
+        assert_eq!(done.iptc_errors.len(), 1);
+        assert!(
+            done.iptc_errors[0].starts_with("A001.ARW: ExifTool: could not start "),
+            "{:?}",
+            done.iptc_errors
+        );
+        assert!(dirs.dest.join("A001.ARW").exists());
+    }
+
+    #[test]
+    fn iptc_targets_images_in_destination_and_backup_but_not_companions_or_failures() {
+        let dirs = TempDirs::new("iptc-targets");
+        let mut options = dirs.options("");
+        let backup = dirs.root.join("backup");
+        options.backup = Some(backup.clone());
+        let copied_source = dirs.source.join("A001.ARW");
+        let companion_source = dirs.source.join("A001.xmp");
+        let failed_source = dirs.source.join("A002.ARW");
+        let plan = pw_ingest::Plan {
+            items: vec![
+                pw_ingest::PlanItem {
+                    source: copied_source.clone(),
+                    size: 10,
+                    modified: std::time::SystemTime::UNIX_EPOCH,
+                    rel: PathBuf::from("A001.ARW"),
+                    to_dest: true,
+                    to_backup: true,
+                    renamed_for_conflict: false,
+                },
+                pw_ingest::PlanItem {
+                    source: companion_source,
+                    size: 10,
+                    modified: std::time::SystemTime::UNIX_EPOCH,
+                    rel: PathBuf::from("A001.xmp"),
+                    to_dest: true,
+                    to_backup: true,
+                    renamed_for_conflict: false,
+                },
+                pw_ingest::PlanItem {
+                    source: failed_source.clone(),
+                    size: 10,
+                    modified: std::time::SystemTime::UNIX_EPOCH,
+                    rel: PathBuf::from("A002.ARW"),
+                    to_dest: true,
+                    to_backup: false,
+                    renamed_for_conflict: false,
+                },
+            ],
+        };
+
+        assert_eq!(
+            iptc_targets(
+                &plan,
+                &[(failed_source, "copy failed".to_string())],
+                &options
+            ),
+            vec![options.dest.join("A001.ARW"), backup.join("A001.ARW")]
+        );
+    }
+
+    #[test]
+    fn cancellation_before_iptc_writes_nothing() {
+        let dirs = TempDirs::new("iptc-cancel");
+        dirs.write_image("A001.ARW", b"image bytes");
+        let options = dirs.options("");
+        let image = options.dest.join("A001.ARW");
+        fs::create_dir_all(&options.dest).unwrap();
+        fs::write(&image, b"image bytes").unwrap();
+        let plan = pw_ingest::Plan {
+            items: vec![pw_ingest::PlanItem {
+                source: dirs.source.join("DCIM").join("100TEST").join("A001.ARW"),
+                size: 11,
+                modified: std::time::SystemTime::UNIX_EPOCH,
+                rel: PathBuf::from("A001.ARW"),
+                to_dest: true,
+                to_backup: false,
+                renamed_for_conflict: false,
+            }],
+        };
+        let cancel = AtomicBool::new(true);
+        let mut exiftool = None;
+        let (events, _receiver) = mpsc::channel();
+        let mut runtime = IptcRuntime {
+            id: 1,
+            cancel: &cancel,
+            events: &events,
+            exiftool: &mut exiftool,
+            exiftool_program: Some("missing-exiftool"),
+        };
+        let mut done = ImportDone {
+            copied: 1,
+            ..ImportDone::default()
+        };
+
+        apply_iptc(
+            &plan,
+            &[],
+            &options,
+            &crate::IptcForm {
+                creator: "Fotograf".to_string(),
+                ..crate::IptcForm::default()
+            }
+            .to_iptc(),
+            &mut runtime,
+            &mut done,
+        );
+
+        assert!(done.cancelled);
+        assert!(done.iptc_errors.is_empty());
+        assert!(exiftool.is_none());
+        assert!(image.exists());
+        assert!(!image.with_extension("xmp").exists());
     }
 
     #[test]

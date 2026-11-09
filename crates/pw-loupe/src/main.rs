@@ -19,10 +19,10 @@ use pw_loupe::{
     ImportDialog, ImportDialogState, ImportEvent, ImportForm, ImportWorker, MAX_THUMBNAIL_SIZE,
     MIN_THUMBNAIL_SIZE, Options, SubmitError, TabAction, Tabs, ThumbGrid, ViewMode, WINDOW_TITLE,
     clamp_thumbnail_size, color_image, columns, dialog_key_action, done_lines, error_text,
-    grid_key_action, indicator_text, key_action, list_folder, loupe_key_action, mode_label,
-    more_lines, navigate, opens_import, parse_args, preview_line, preview_summary, progress_text,
-    request_cell, status_line, step_thumbnail_size, tab_action, take_wheel_steps, visible_range,
-    wheel_factor,
+    grid_key_action, indicator_text, iptc_progress_text, key_action, list_folder, loupe_key_action,
+    mode_label, more_lines, navigate, opens_import, parse_args, preview_line, preview_summary,
+    progress_text, request_cell, status_line, step_thumbnail_size, tab_action, take_wheel_steps,
+    visible_range, wheel_factor,
 };
 use pw_metadata::MetadataWorker;
 use pw_render::{Textures, view_px};
@@ -115,15 +115,21 @@ impl Loupe {
             return None;
         }
         match self.import_dialog.as_ref()?.state() {
-            ImportDialogState::Running { progress } => Some(progress.as_ref().map_or_else(
-                || "Importerar 0 / 0".to_string(),
-                |progress| {
-                    format!(
-                        "Importerar {} / {}",
-                        progress.files_done, progress.files_total
-                    )
-                },
-            )),
+            ImportDialogState::Running { progress, iptc } => Some(
+                iptc.as_ref()
+                    .map(|(done, total, current)| iptc_progress_text(*done, *total, current))
+                    .unwrap_or_else(|| {
+                        progress.as_ref().map_or_else(
+                            || "Importerar 0 / 0".to_string(),
+                            |progress| {
+                                format!(
+                                    "Importerar {} / {}",
+                                    progress.files_done, progress.files_total
+                                )
+                            },
+                        )
+                    }),
+            ),
             ImportDialogState::Done { done } => {
                 if let Some(error) = &done.error {
                     Some(error.clone())
@@ -287,6 +293,44 @@ impl Loupe {
                         .color(egui::Color32::GRAY),
                     );
 
+                    ui.collapsing("IPTC-mall", |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label("Fotograf");
+                            ui.text_edit_singleline(&mut form.iptc.creator);
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("Copyright");
+                            ui.add(
+                                egui::TextEdit::singleline(&mut form.iptc.copyright)
+                                    .hint_text("© 2026 Namn"),
+                            );
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("Credit");
+                            ui.text_edit_singleline(&mut form.iptc.credit);
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("E-post");
+                            ui.text_edit_singleline(&mut form.iptc.email);
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("Telefon");
+                            ui.text_edit_singleline(&mut form.iptc.phone);
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("Webb");
+                            ui.text_edit_singleline(&mut form.iptc.url);
+                        });
+                        ui.label(
+                            egui::RichText::new(
+                                "Skrivs till .xmp-sidofilen för RAW och in i DNG/JPG/TIF. \
+                                 Tomma fält lämnas orörda.",
+                            )
+                            .small()
+                            .color(egui::Color32::GRAY),
+                        );
+                    });
+
                     ui.horizontal(|ui| {
                         ui.label("Förhandsvisning");
                         if ui.button("Sök igen").clicked() {
@@ -319,19 +363,30 @@ impl Loupe {
                 });
 
                 match &state {
-                    ImportDialogState::Running { progress } => {
-                        let fraction = progress.as_ref().map_or(0.0, |progress| {
-                            if progress.bytes_total == 0 {
+                    ImportDialogState::Running { progress, iptc } => {
+                        let (fraction, text) = if let Some((done, total, current)) = iptc {
+                            let files_done = done.saturating_add(1);
+                            let fraction = if *total == 0 {
                                 0.0
                             } else {
-                                (progress.bytes_done as f32 / progress.bytes_total as f32)
-                                    .clamp(0.0, 1.0)
-                            }
-                        });
-                        let text = progress
-                            .as_ref()
-                            .map(progress_text)
-                            .unwrap_or_else(|| "Importerar …".to_string());
+                                (files_done as f32 / *total as f32).clamp(0.0, 1.0)
+                            };
+                            (fraction, iptc_progress_text(*done, *total, current))
+                        } else {
+                            let fraction = progress.as_ref().map_or(0.0, |progress| {
+                                if progress.bytes_total == 0 {
+                                    0.0
+                                } else {
+                                    (progress.bytes_done as f32 / progress.bytes_total as f32)
+                                        .clamp(0.0, 1.0)
+                                }
+                            });
+                            let text = progress
+                                .as_ref()
+                                .map(progress_text)
+                                .unwrap_or_else(|| "Importerar …".to_string());
+                            (fraction, text)
+                        };
                         ui.add(egui::ProgressBar::new(fraction).text(text));
                         ui.horizontal(|ui| {
                             if ui.button("Avbryt").clicked() {
