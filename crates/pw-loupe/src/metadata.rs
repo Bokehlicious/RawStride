@@ -45,6 +45,8 @@ pub(crate) struct MetadataCache {
     images: HashMap<PathBuf, ImageMetadata>,
     load_request: Option<RequestId>,
     pending_read: Option<Vec<PathBuf>>,
+    /// Why the last folder read failed (ADR 0014 Q7); cleared by the next `begin_load`.
+    read_error: Option<String>,
     ratings: RatingStore,
 }
 
@@ -80,6 +82,7 @@ impl MetadataCache {
             .collect();
         self.load_request = None;
         self.pending_read = None;
+        self.read_error = None;
         let supported: Vec<PathBuf> = files
             .iter()
             .filter(|path| supports_rating(path))
@@ -89,7 +92,7 @@ impl MetadataCache {
             match worker.read_ratings(supported.clone()) {
                 Ok(id) => self.load_request = Some(id),
                 Err(SubmitError::QueueFull) => self.pending_read = Some(supported),
-                Err(error) => self.fail_loading(&submit_error(error)),
+                Err(error) => self.fail_read(&submit_error(error)),
             }
         }
         Ok(files)
@@ -113,7 +116,7 @@ impl MetadataCache {
                 self.pending_read = None;
             }
             Err(SubmitError::QueueFull) => {}
-            Err(error) => self.fail_loading(&submit_error(error)),
+            Err(error) => self.fail_read(&submit_error(error)),
         }
     }
 
@@ -133,12 +136,24 @@ impl MetadataCache {
                 Ok(event) => self.apply(event, failures),
                 Err(TryRecvError::Empty) => return,
                 Err(TryRecvError::Disconnected) => {
-                    self.fail_loading(&submit_error(SubmitError::Stopped));
+                    let message = submit_error(SubmitError::Stopped);
+                    if self.ratings_ready() {
+                        self.fail_loading(&message);
+                    } else {
+                        // The folder read was sent or waiting to be sent: it can never finish.
+                        self.fail_read(&message);
+                    }
                     failures.extend(self.ratings.fail_sent());
                     return;
                 }
             }
         }
+    }
+
+    /// The folder read failed: remembers why (Q7), then fails every entry that is still loading.
+    fn fail_read(&mut self, message: &str) {
+        self.read_error = Some(message.to_owned());
+        self.fail_loading(message);
     }
 
     /// Moves every entry that is still loading to the error state.
@@ -150,6 +165,23 @@ impl MetadataCache {
                 metadata.state = LoadState::Error(message.to_owned());
             }
         }
+    }
+
+    /// Whether the ratings of the loaded folder are read: false while the folder read is sent or
+    /// waiting to be sent (ADR 0014 Q7), true otherwise. A failed read also ends the wait, so this
+    /// is true then as well: the caller of `Tab::refilter` must treat a `read_error` as
+    /// `ratings_ready == false`, so an active filter shows nothing.
+    pub fn ratings_ready(&self) -> bool {
+        self.load_request.is_none() && self.pending_read.is_none()
+    }
+
+    /// Why the folder read failed, if it did (ADR 0014 Q7: an active filter then shows nothing and
+    /// the status line gives this error). Treat it as `ratings_ready == false` when calling
+    /// `Tab::refilter`.
+    // Called from the grid once the filter is wired (T56); until then only the tests use it.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn read_error(&self) -> Option<String> {
+        self.read_error.clone()
     }
 
     pub fn notice(&self, path: Option<&Path>) -> Option<String> {
@@ -229,7 +261,7 @@ impl MetadataCache {
                             }
                         }
                     }
-                    Err(error) => self.fail_loading(&error),
+                    Err(error) => self.fail_read(&error),
                 }
             }
             WorkerEvent::RatingWritten {
@@ -864,5 +896,104 @@ mod tests {
             cache.set_ratings(&paths[1..2], RatingKey::Stars(1)),
             Err(RatingRefused::Unsupported)
         );
+    }
+
+    #[test]
+    fn ratings_are_not_ready_while_the_folder_read_is_sent_or_waiting() {
+        let mut cache = MetadataCache::default();
+        assert!(cache.ratings_ready(), "nothing loaded, nothing to wait for");
+
+        // Waiting to be sent (queue full), then sent, then answered.
+        let mut worker = FakeSubmit::new([Err(SubmitError::QueueFull), Ok(7)]);
+        if let Err(error) = cache.begin_load(vec![PathBuf::from("photo.ARW")], &mut worker) {
+            panic!("current directory should be available: {error}");
+        }
+        assert!(!cache.ratings_ready(), "the read waits to be sent");
+        assert!(cache.poll(&mut worker).is_empty());
+        assert_eq!(cache.load_request, Some(7));
+        assert!(!cache.ratings_ready(), "the read is sent");
+        worker.events.push_back(WorkerEvent::RatingsRead {
+            id: 7,
+            result: Ok(HashMap::new()),
+        });
+        assert!(cache.poll(&mut worker).is_empty());
+        assert!(cache.ratings_ready());
+        assert_eq!(cache.read_error(), None);
+
+        // A folder without ratable files has nothing to read.
+        let mut worker = FakeSubmit::new([]);
+        if let Err(error) = cache.begin_load(vec![PathBuf::from("notes.txt")], &mut worker) {
+            panic!("current directory should be available: {error}");
+        }
+        assert!(cache.ratings_ready());
+        assert!(worker.read_attempts.is_empty());
+    }
+
+    #[test]
+    fn a_failed_folder_read_gives_a_read_error_until_the_next_load() {
+        let mut worker = FakeSubmit::new([Ok(3), Ok(4)]);
+        let mut cache = MetadataCache::default();
+        if let Err(error) = cache.begin_load(vec![PathBuf::from("photo.ARW")], &mut worker) {
+            panic!("current directory should be available: {error}");
+        }
+        assert_eq!(cache.read_error(), None);
+        worker.events.push_back(WorkerEvent::RatingsRead {
+            id: 3,
+            result: Err("exiftool saknas".to_owned()),
+        });
+        assert!(cache.poll(&mut worker).is_empty());
+
+        assert_eq!(cache.read_error().as_deref(), Some("exiftool saknas"));
+        // The wait is over; the caller treats the error as "not ready" (doc comment).
+        assert!(cache.ratings_ready());
+
+        if let Err(error) = cache.begin_load(vec![PathBuf::from("photo.ARW")], &mut worker) {
+            panic!("current directory should be available: {error}");
+        }
+        assert_eq!(cache.read_error(), None, "a new load clears the error");
+        assert!(!cache.ratings_ready());
+    }
+
+    #[test]
+    fn a_read_that_cannot_be_sent_or_a_stopped_worker_gives_a_read_error() {
+        // The worker refuses the read at once.
+        let mut worker = FakeSubmit::new([Err(SubmitError::Stopped)]);
+        let mut cache = MetadataCache::default();
+        if let Err(error) = cache.begin_load(vec![PathBuf::from("photo.ARW")], &mut worker) {
+            panic!("current directory should be available: {error}");
+        }
+        assert_eq!(
+            cache.read_error().as_deref(),
+            Some("metadataarbetaren har stannat")
+        );
+        assert!(cache.ratings_ready());
+
+        // The worker stops while the read is sent.
+        let mut worker = FakeSubmit::new([Ok(5)]);
+        let mut cache = MetadataCache::default();
+        if let Err(error) = cache.begin_load(vec![PathBuf::from("photo.ARW")], &mut worker) {
+            panic!("current directory should be available: {error}");
+        }
+        let mut failures = Vec::new();
+        cache.drain(|| Err(TryRecvError::Disconnected), &mut failures);
+        assert_eq!(
+            cache.read_error().as_deref(),
+            Some("metadataarbetaren har stannat")
+        );
+
+        // The worker stops after the read was answered: the ratings were read, no read error.
+        let mut worker = FakeSubmit::new([Ok(6)]);
+        let mut cache = MetadataCache::default();
+        if let Err(error) = cache.begin_load(vec![PathBuf::from("photo.ARW")], &mut worker) {
+            panic!("current directory should be available: {error}");
+        }
+        worker.events.push_back(WorkerEvent::RatingsRead {
+            id: 6,
+            result: Ok(HashMap::new()),
+        });
+        assert!(cache.poll(&mut worker).is_empty());
+        cache.drain(|| Err(TryRecvError::Disconnected), &mut failures);
+        assert_eq!(cache.read_error(), None);
+        assert!(cache.ratings_ready());
     }
 }

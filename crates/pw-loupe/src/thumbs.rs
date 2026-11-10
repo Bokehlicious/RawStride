@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::ops::Range;
 
 use egui::ColorImage;
@@ -37,6 +38,26 @@ impl Entry {
             Entry::Failed(message) => CellState::Failed(message.clone()),
         }
     }
+
+    /// Whether this entry should be submitted for `cell`: missing, requested (a retry), or ready at
+    /// another cell size. A failed entry is not retried.
+    fn wants(&self, cell: u32) -> bool {
+        match self {
+            Entry::Missing | Entry::Requested(_) => true,
+            Entry::Ready(ready_cell) => *ready_cell != Some(cell),
+            Entry::Failed(_) => false,
+        }
+    }
+
+    /// Resets a ready or failed entry to missing; returns whether it did (its texture is released).
+    fn forget(&mut self) -> bool {
+        if matches!(self, Entry::Ready(_) | Entry::Failed(_)) {
+            *self = Entry::Missing;
+            true
+        } else {
+            false
+        }
+    }
 }
 
 /// Tracks thumbnail state for one folder generation without holding images or textures.
@@ -68,11 +89,17 @@ impl ThumbGrid {
             .enumerate()
             .take(end)
             .skip(start)
-            .filter_map(|(index, entry)| match entry {
-                Entry::Missing | Entry::Requested(_) => Some(index),
-                Entry::Ready(ready_cell) if *ready_cell != Some(cell) => Some(index),
-                Entry::Ready(_) | Entry::Failed(_) => None,
-            })
+            .filter_map(|(index, entry)| entry.wants(cell).then_some(index))
+            .collect()
+    }
+
+    /// As `to_request`, for a list of file indexes (the visible cells under a filter, ADR 0014
+    /// §4.2), in the given order. Indexes outside this folder are left out.
+    pub fn to_request_indexes(&self, indexes: &[usize], cell: u32) -> Vec<usize> {
+        indexes
+            .iter()
+            .copied()
+            .filter(|&index| self.entries.get(index).is_some_and(|e| e.wants(cell)))
             .collect()
     }
 
@@ -116,12 +143,20 @@ impl ThumbGrid {
             .enumerate()
             .filter_map(|(index, entry)| {
                 let outside = index < start || index >= end || start >= end;
-                if outside && matches!(entry, Entry::Ready(_) | Entry::Failed(_)) {
-                    *entry = Entry::Missing;
-                    Some(index)
-                } else {
-                    None
-                }
+                (outside && entry.forget()).then_some(index)
+            })
+            .collect()
+    }
+
+    /// As `forget_outside`, for a list of file indexes to keep (ADR 0014 §4.2): resets ready and
+    /// failed entries not in `keep`, returning their indexes in ascending order.
+    pub fn forget_not_in(&mut self, keep: &[usize]) -> Vec<usize> {
+        let keep: HashSet<usize> = keep.iter().copied().collect();
+        self.entries
+            .iter_mut()
+            .enumerate()
+            .filter_map(|(index, entry)| {
+                (!keep.contains(&index) && entry.forget()).then_some(index)
             })
             .collect()
     }
@@ -237,6 +272,62 @@ mod tests {
             CellState::Failed("ingen förhandsvisning".to_string())
         );
         assert_eq!(grid.state(4), CellState::Missing);
+    }
+
+    /// A grid of six cells: 0 missing, 1 requested at 128, 2 ready at 128, 3 ready at 256,
+    /// 4 failed, 5 missing.
+    fn mixed_grid() -> ThumbGrid {
+        let mut grid = ThumbGrid::new(1, 6);
+        let success = Ok(Rgb8 {
+            width: 1,
+            height: 1,
+            data: vec![0, 0, 0],
+        });
+        grid.mark_requested(1, 128);
+        grid.mark_requested(2, 128);
+        assert!(grid.apply(&event(1, 2, success.clone())));
+        grid.mark_requested(3, 256);
+        assert!(grid.apply(&event(1, 3, success)));
+        grid.mark_requested(4, 128);
+        assert!(grid.apply(&event(1, 4, Err(ThumbError::NoPreview))));
+        grid
+    }
+
+    #[test]
+    fn to_request_indexes_follows_the_rules_of_to_request_in_the_given_order() {
+        let grid = mixed_grid();
+        // Missing and requested are (re)requested, ready at another size is requested again,
+        // ready at this size and failed are not; out-of-folder indexes are left out.
+        assert_eq!(
+            grid.to_request_indexes(&[5, 4, 3, 2, 1, 0, 9], 128),
+            vec![5, 3, 1, 0]
+        );
+        assert_eq!(grid.to_request_indexes(&[2, 3], 256), vec![2]);
+        assert!(grid.to_request_indexes(&[], 128).is_empty());
+        // The same answer as the range method for a contiguous list.
+        assert_eq!(
+            grid.to_request_indexes(&[0, 1, 2, 3, 4, 5], 128),
+            grid.to_request(0..6, 128)
+        );
+    }
+
+    #[test]
+    fn forget_not_in_resets_ready_and_failed_entries_outside_the_list() {
+        let mut grid = mixed_grid();
+        // Keep 3 and 4 (not contiguous with the others); 2 (ready) is forgotten, the requested and
+        // missing ones are left alone.
+        assert_eq!(grid.forget_not_in(&[4, 3, 9]), vec![2]);
+        assert_eq!(grid.state(1), CellState::Requested);
+        assert_eq!(grid.state(2), CellState::Missing);
+        assert_eq!(grid.state(3), CellState::Ready);
+        assert_eq!(
+            grid.state(4),
+            CellState::Failed("ingen förhandsvisning".to_string())
+        );
+        // Keeping nothing forgets the ready and failed rest.
+        assert_eq!(grid.forget_not_in(&[]), vec![3, 4]);
+        assert_eq!(grid.state(4), CellState::Missing);
+        assert!(grid.forget_not_in(&[]).is_empty());
     }
 
     #[test]

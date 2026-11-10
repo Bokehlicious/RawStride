@@ -3,6 +3,7 @@
 //! and the texts of the status line. `main.rs` wires them to eframe, `pw-viewcore` and
 //! `pw-render`.
 
+mod browse;
 mod filter;
 mod grid;
 mod import;
@@ -18,6 +19,7 @@ use std::path::{Path, PathBuf};
 
 use pw_viewcore::{DecodeError, Frame, Source, Status, Zoom};
 
+pub use browse::LoupeMove;
 pub use filter::{
     Filter, LABEL_FILTERS, LabelFilter, STAR_FILTERS, StarFilter, label_filter_text, matches,
     nearest_visible, star_filter_text, visible,
@@ -279,6 +281,31 @@ pub fn status_line(frame: &Frame, anchor_at_pointer: bool) -> String {
     )
 }
 
+/// The position part of the status line (ADR 0014 §5.3): "3 / 12 (av 31)" under a filter, or
+/// "3 / 31" when every image is shown. `pos` is the zero-based position in the visible list.
+pub fn position_text(pos: usize, shown: usize, total: usize) -> String {
+    let number = pos.saturating_add(1);
+    if shown == total {
+        format!("{number} / {total}")
+    } else {
+        format!("{number} / {shown} (av {total})")
+    }
+}
+
+/// The text when the filter lets nothing through (ADR 0014 §2.4, §5.3), in the status line and the
+/// empty grid.
+pub fn no_match_text(total: usize) -> String {
+    format!("Inga bilder matchar filtret ({total} i mappen)")
+}
+
+/// The marking part of the status line (ADR 0014 §5.3): only when more than one image is marked.
+pub fn marked_text(n: usize) -> Option<String> {
+    (n > 1).then(|| format!("{n} markerade"))
+}
+
+/// Shown in the grid and the status line while an active filter waits for the ratings (Q7).
+pub const READING_RATINGS_TEXT: &str = "Läser betyg …";
+
 /// The neutral loading indicator (V2): no image content, only what is being prepared.
 pub fn indicator_text(frame: &Frame) -> String {
     match frame.source {
@@ -497,6 +524,22 @@ mod tests {
         assert!(error_text(&none, Source::Jpeg).contains("ingen inbäddad JPEG"));
         assert!(error_text(&DecodeError::new("boom"), Source::Raw).contains("boom"));
         assert_eq!(mode_label(Source::Jpeg), "Läge: JPEG (R)");
+    }
+
+    #[test]
+    fn the_filter_texts_of_the_status_line() {
+        assert_eq!(position_text(2, 12, 31), "3 / 12 (av 31)");
+        assert_eq!(position_text(2, 31, 31), "3 / 31");
+        assert_eq!(position_text(0, 2, 12), "1 / 2 (av 12)");
+        assert_eq!(
+            no_match_text(31),
+            "Inga bilder matchar filtret (31 i mappen)"
+        );
+        assert_eq!(marked_text(0), None);
+        assert_eq!(marked_text(1), None);
+        assert_eq!(marked_text(2).as_deref(), Some("2 markerade"));
+        assert_eq!(marked_text(12).as_deref(), Some("12 markerade"));
+        assert_eq!(READING_RATINGS_TEXT, "Läser betyg …");
     }
 
     #[test]

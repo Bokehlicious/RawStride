@@ -22,6 +22,9 @@ pub struct Tab {
     pub filter: Filter,
     /// The marked images of this tab (ADR 0014 §2.5); cleared when the folder is opened again.
     pub selection: Selection,
+    /// The file indexes shown, in display order (ADR 0014 §4.2). Set only by `refilter` and the
+    /// moves of `browse.rs`, never by drawing.
+    pub visible: Vec<usize>,
 }
 
 impl Tab {
@@ -36,6 +39,8 @@ impl Tab {
             .checked_sub(1)
             .map_or(0, |last| pos.min(last));
         self.mode = ViewMode::Grid;
+        // Without a filter every file is shown; no rating is needed for that.
+        self.refilter(true, &|_| None, None);
     }
 
     fn clear(&mut self) {

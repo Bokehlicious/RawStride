@@ -1546,7 +1546,25 @@ Ordered from easiest to hardest. Start at the top.
   - an empty list → no current image, everything released.
 - **Done when:** `.\tools\check.ps1` is all OK.
 
-### T55. ADR 0014 F5a: browse logic of a tab under a filter (plain Rust) — Open
+### T55. ADR 0014 F5a: browse logic of a tab under a filter (plain Rust) — Done
+
+- **Second review 2026-11-10: accepted.** The review point below is done.
+
+- **Review 2026-11-10: changes requested (one point).** Accepted: `refilter`, `position`, `click`
+  (a hidden index changes nothing), the moves doing nothing when nothing is visible, `Tab::open`
+  showing every file, `to_request_indexes`/`forget_not_in`, `ratings_ready`/`read_error` (the
+  temporary `allow(dead_code)` on `read_error` is removed in T56), the texts, and the tests. Still to
+  do, in `crates/pw-loupe/src/browse.rs` only:
+  1. **Refilter before the move too, as `go()` in `app.js` does** (you asked; ADR 0014 §4.2 says "as
+     in `go()`"). `grid_move` and `loupe_move` must first `refilter` keeping the **current** image,
+     then compute the move over that list, then `refilter` keeping the new current one, as now.
+     Otherwise, after a batch rating, images other than the current one that stopped matching are
+     still in `visible`, the move lands on one of them, and `keep` keeps it: under "Ej betygsatt",
+     rating four marked images and pressing Right walks through the four rated images one by one.
+     `click` stays as it is. Add a test: filter Unrated (visible [0, 4, 5, …, 11]), current 5, marked
+     5–7, all three get stars; `grid_move(Right)` → current 8 and visible [0, 4, 8, 9, 10, 11]; the
+     same case with `loupe_move(Next)`. Update the doc comments.
+  Then run `.\tools\check.ps1`.
 
 - **Start after T51 and T52 are done.**
 - **Crate:** `pw-loupe`. **Files:** `crates/pw-loupe/src/tabs.rs` (or a new `browse.rs` with an
@@ -1603,6 +1621,8 @@ Ordered from easiest to hardest. Start at the top.
 
 - **Note from the T53 review:** remove `#[cfg_attr(not(test), allow(dead_code))]` from
   `MetadataCache::set_ratings` when point 7 calls it.
+- **Note from the T55 review:** the same for `MetadataCache::read_error` when the grid shows the
+  read error (point 3).
 
 - **Start after T53 and T55 are done.** **For a Claude agent** (drawing and wiring, checked by hand).
 - **Crate:** `pw-loupe`. **File:** `crates/pw-loupe/src/main.rs` only (a small plain helper with a test
@@ -2023,3 +2043,7 @@ and reviewer:
 | 2026-11-10 | T54 | Open | Review: `set_files` accepted; one point: the generation in `running` also lets the new folder start an open of a position whose old-folder open is still running (`open_folder` behaviour change, better but untested). Add a test and mention it. Checked: `test-output.txt` newer than the changes, fmt/test (411 passed, 27 ignored, 0 failed)/clippy OK |
 | 2026-11-10 | T54 | Ready for review | (Agent) Review point: new test `a_new_folder_does_not_wait_for_an_open_of_the_old_folder` in `state.rs`. Behaviour change of `open_folder` (from the generation in `running`): an open of a position whose open from the old folder is still running is handed out at once instead of waiting; the old open coming back stores nothing (no session, size or bytes) and does not free the new one's place (it is not handed out twice); the new open then stores its session. Production code unchanged since the review. Test inventory updated (`pw-viewcore` unit 53). Workspace fmt, test (412 passed, 27 ignored, 0 failed) and clippy OK; no commit. |
 | 2026-11-10 | T54 | Done | Second review: the new test pins the `open_folder` change (the new folder's open starts at once, the old one is discarded without storing or freeing anything, the new one is not handed out twice); production code unchanged since the first review. Checked: `test-output.txt` newer than the change, fmt/test (412 passed, 27 ignored, 0 failed)/clippy OK; `pw-viewcore` unit 53, matching the test inventory. T53 and T54 committed together. T55 can start (T51, T52 done); T56 after T55; T57 after T56 |
+| 2026-11-10 | T55 | Ready for review | (Agent) New `browse.rs` (`impl Tab`, declared in `lib.rs`, `LoupeMove` re-exported): `refilter` (all without an active filter; empty with an active filter before the ratings are read; otherwise `filter::visible` with `keep`; then `retain_visible` and `nearest_visible`; returns whether `visible` changed), `position`, `grid_move`, `click`, `loupe_move` (each ends with `refilter` keeping the new current; `loupe_move` and plain moves use `selection.click`). Decisions to check: a click on a file index that is not visible changes nothing (S5); `grid_move` and `loupe_move` with nothing visible change nothing (otherwise keep = current would show a hidden image; `app.js` ignores keys then); a move does not refilter before moving (as written in the task and §4.2; `go()` in `app.js` also refilters first, which differs only when another image than the current one stopped matching, e.g. after a batch rating). `tabs.rs`: `Tab.visible`; `Tab::open` ends with `refilter(true, …, None)`, so a newly opened folder shows every file. `thumbs.rs`: `to_request_indexes`, `forget_not_in`, sharing private `wants`/`forget` with the range methods. `metadata.rs`: `ratings_ready`, `read_error` (set only when a folder read fails: refused, failed answer, or the worker stops while the read is sent or waiting; cleared by `begin_load`); `read_error` has `#[cfg_attr(not(test), allow(dead_code))]` until T56. `lib.rs`: `position_text` (`pos` zero-based), `no_match_text`, `marked_text`, `READING_RATINGS_TEXT`. 15 tests; existing tests unchanged; test inventory updated (`pw-loupe` 204). `.\tools\check.ps1`: fmt, test (427 passed, 27 ignored, 0 failed) and clippy OK; no commit. |
+| 2026-11-10 | T55 | Open | Review: accepted except one point; `grid_move` and `loupe_move` must also refilter (keeping the current image) before the move, as `go()` in `app.js` and ADR 0014 §4.2, so images that stopped matching after a batch rating drop out before the move instead of becoming current. `read_error`'s temporary `allow(dead_code)` is removed in T56. Checked: `test-output.txt` newer than the changes, fmt/test (427 passed, 27 ignored, 0 failed)/clippy OK |
+| 2026-11-10 | T55 | Ready for review | (Agent) Review point, `browse.rs` only: `grid_move` and `loupe_move` first call the private `refilter_before_move` (`refilter` keeping the **current** image, as `go()` in `app.js`; with nothing visible it returns at once and the move changes nothing, as accepted), then move over that list, then `refilter` keeping the new current image as before. `click` unchanged. Doc comments updated. 2 tests (shared setup: Unrated, current 5, marked 5–7, all three get stars): `grid_move(Right)` and `loupe_move(Next)` → current 8, visible [0, 4, 8, 9, 10, 11], marking cleared. Existing tests unchanged and passing. Test inventory updated (`pw-loupe` 206). `.\tools\check.ps1`: fmt, test (429 passed, 27 ignored, 0 failed) and clippy OK; no commit. |
+| 2026-11-10 | T55 | Done | Second review: `grid_move` and `loupe_move` refilter keeping the current image before the move (`refilter_before_move`), then after it as before; `click` unchanged; the two batch-rating tests give current 8 and visible [0, 4, 8, 9, 10, 11] in grid and loupe. Checked: `test-output.txt` newer than the change, fmt/test (429 passed, 27 ignored, 0 failed)/clippy OK; `pw-loupe` 206, matching the test inventory. T56 can start (T53 and T55 done) |
