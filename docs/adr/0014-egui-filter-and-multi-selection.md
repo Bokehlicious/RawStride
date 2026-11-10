@@ -4,6 +4,8 @@
   requirements (§7) and every proposal in §11 are accepted as written. Nothing is built, installed or
   added as a dependency by this ADR. Each step in §9 is its own work part, with its own approval and
   commit.
+- **Amendment 1 (owner, 2026-11-10, §13):** §2.1 gets a star condition (≥, =, ≤), and §2.2 removes
+  a rated image that stops matching at once. Tasks T59, T60; T57 changed.
 - Date: 2026-11-10
 - Related:
   - ADR 0004, addendum "filter and multi-selection" (2026-11-04): today's Tauri behaviour. **Its
@@ -34,12 +36,21 @@
 - **Missing:** a filter, a marking of several images, rating keys that act on the marking, and a
   loupe that steps within the filter.
 
-## 2. Decisions already fixed (ADR 0004 addendum, unchanged)
+## 2. Decisions (ADR 0004 addendum; points 1 and 2 changed by amendment 1, §13)
 
-1. **Filter by stars:** all, ≥ 1, ≥ 2, ≥ 3, ≥ 4, 5, unrated, rejected. **By label:** all, one of the
-   five colours, or no label. Stars and label combine with AND. "≥ n" never includes a reject (−1).
-2. **An image that stops matching after a rating stays visible until the user moves on** (as in
-   Lightroom), so it never vanishes under the cursor.
+1. **Filter by stars:** two lists side by side: a **condition** (≥, =, ≤) and a **star choice**
+   (all, 1–5 stars, unrated, rejected, all except rejected). The condition applies only when a
+   number of stars is chosen; with any other star choice it is disabled and changes nothing, and
+   it keeps its value. "≥ n" matches n stars or more; "= n" exactly n stars; "≤ n" n stars or
+   fewer **and unrated images**. A rejected image (−1) never matches a number of stars, under any
+   condition. **By label:** all, one of the five colours, or no label. Stars and label combine
+   with AND.
+2. **An image that stops matching after a rating leaves the visible list at once**, in the grid
+   and in the loupe, for every image the key acted on (one image or a marking). If the current
+   image leaves, point 3 applies. Marked images that leave are unmarked (point 8); marked images
+   that still match stay marked. A refused key changes nothing. A rolled-back write (a failed
+   write that restores the old rating) does not recompute the list; the next move or filter
+   change does.
 3. **When the filter hides the current image**, the nearest following visible image becomes current
    (the last visible one if none follows). If nothing is visible, the loupe returns to the grid.
 4. **An active filter is always visible:** its control is outlined, and the status line shows
@@ -60,8 +71,8 @@
 
 | Area | Content |
 |---|---|
-| Filter model | `Filter { stars, label }`, `matches(rating)`, and the visible list of a tab with the "keep current" rule (§2.2, §2.3). Plain Rust |
-| Filter controls | Two drop-down lists (`egui::ComboBox`) in the tab bar row, next to "Importera…". An active list is outlined |
+| Filter model | `Filter { stars, label }`, `matches(rating)`, and the visible list of a tab, recomputed after a rating (§2.2) and around a move (§4.2, §2.3). Plain Rust |
+| Filter controls | Three drop-down lists (`egui::ComboBox`) in the tab bar row, next to "Importera…": the star condition, the stars and the label. An active filter is outlined |
 | Grid | Draws only the visible images, in folder order. Layout, visible range, keys and scrolling work on positions in the visible list; thumbnails keep their file-index keys, so a filter change reloads nothing |
 | Loupe | Steps within the visible list; Home/End go to the first and last visible image; the status line shows "3 / 12 (av 31)" |
 | Selection model | Marking, anchor, click / Ctrl+click / Shift+click, Shift+navigation, Ctrl+A, Escape, and the rating targets (§2.5, §2.6). Plain Rust |
@@ -97,14 +108,15 @@
 
 - The tab's `files` and `current` (a file index) do not change. The visible list is a
   `Vec<usize>` of file indexes, recomputed when the filter, a rating or the folder changes, and on a
-  move (§2.2). It is never recomputed by drawing alone.
+  move (§4.2 third point). It is never recomputed by drawing alone.
 - The grid model (`navigate`, `visible_range`, `columns`) keeps working on positions `0..n`; the
   wiring maps position ↔ file index through the visible list. `ThumbGrid::to_request` takes the file
   indexes of the visible range instead of a `Range`.
-- **The keep-current rule (§2.2):** the visible list is computed with "keep" = the current index.
-  Moving (a key, a click, a loupe step) first moves, then recomputes the list keeping the **new**
-  current image, so the image that was rated drops out only after the user has left it (as in
-  `go()` in `app.js`).
+- **Recompute after a rating (§2.2):** after an accepted rating key, the visible list is
+  recomputed without keeping any image (`Tab::rated`). A move (a key, a click, a loupe step) still
+  recomputes the list keeping the current image before the move and the new current image after
+  it, as `go()` in `app.js`; after §2.2 this only matters when a shown rating changed without a
+  key (a rolled-back write).
 
 ### 4.3 Batch ratings
 
@@ -153,20 +165,22 @@ Proposal: **C**. `open_folder` is unchanged and still used for a new folder or t
 
 - The current cell keeps its yellow outline. A marked cell gets a blue outline (`#4c8dff`, the
   label blue) and a faint blue fill behind the thumbnail; the current cell inside a marking has both.
-- A rated cell that no longer matches (kept by §2.2) looks like any other cell until the user moves.
 
 ### 5.2 Filter controls
 
-- Stars: "Alla betyg", "≥ 1 stjärna", "≥ 2 stjärnor", "≥ 3 stjärnor", "≥ 4 stjärnor", "5 stjärnor",
-  "Ej betygsatt", "Avvisade". Label: "Alla etiketter", "Röd", "Gul", "Grön", "Blå", "Lila",
-  "Ingen etikett".
-- An active list (not "Alla …") has a yellow outline.
+- Condition: "≥", "=", "≤" (default "≥"); enabled only when a number of stars is chosen.
+  Stars: "Alla betyg", "1 stjärna", "2 stjärnor", "3 stjärnor", "4 stjärnor", "5 stjärnor",
+  "Ej betygsatt", "Avvisade", "Alla utom avvisade". Label: "Alla etiketter", "Röd", "Gul", "Grön",
+  "Blå", "Lila", "Ingen etikett".
+- An active filter has a yellow outline: the star list (and the condition list when a number of
+  stars is chosen) when not "Alla betyg"; the label list when not "Alla etiketter".
 
 ### 5.3 Status line
 
-- Grid and loupe: "3 / 12 (av 31) · TN100423.ARW · …"; without a filter, as today ("3 / 31").
+- Grid and loupe: "3 / 12 (av 31) · 12 markerade · TN100423.ARW · …"; without a filter, as today
+  ("3 / 31"). "k markerade" only when more than one image is marked (the order the owner chose on
+  2026-11-10).
 - Nothing visible: "Inga bilder matchar filtret (31 i mappen)", also as text in the empty grid.
-- More than one marked: "· 12 markerade".
 
 ## 6. Dependencies
 
@@ -180,11 +194,11 @@ ADR 0013 §7:
 | # | Requirement | Target |
 |---|---|---|
 | **S1** | Changing the filter updates the grid in the same frame, without reloading thumbnails and without I/O on the UI thread (G2) | By hand on the test set; tests for the visible list |
-| **S2** | A rated image never vanishes under the cursor; it drops out when the user moves on | Tests (the `app.js` cases); by hand in grid and loupe |
+| **S2** | A rated image that stops matching leaves the visible list at once, in the grid and the loupe; in the loupe the next visible image is shown without a cold load when it was prefetched | Tests (`Tab::rated`); by hand in grid and loupe |
 | **S3** | Stepping in the loupe under a filter stays in the filter and meets V1 for the next visible image | By hand with `latency.ps1` under "≥ 3 stjärnor" on the test set; tests for `set_files` |
 | **S4** | A key on k marked images updates all k cells in the same frame; their writes reach the disk in order, with the batch rules of §4.3 | Tests with the fake writer; by hand: mark 20, press 7 twice, reopen → no label |
 | **S5** | The marking never contains a hidden image, and the targets never include one | Tests |
-| **S6** | Every check of `ui/tests/filter-select.test.js` that is not Tauri-specific has a `cargo test` counterpart that passes | Test list in the T task |
+| **S6** | Every check of `ui/tests/filter-select.test.js` that is not Tauri-specific has a `cargo test` counterpart that passes, **except the check "a rated image stays until the user moves on", which amendment 1 replaces** (the Tauri app keeps the old behaviour) | Test list in the T task |
 
 ## 8. Testing and acceptance
 
@@ -204,7 +218,12 @@ ADR 0013 §7:
 ### 8.2 By hand (owner)
 
 - Each filter on the test set; an empty filter; a filter in two tabs (Q1).
-- Under "Ej betygsatt": rate the current image, see it stay, step, see it go (grid and loupe).
+- Under "Ej betygsatt": rate the current image and see it leave at once with the next image
+  current (grid and loupe); rate a marking and see all of it leave. Under "Grön": give the current
+  image another label and see it leave at once.
+- The star condition: "= 3", "≤ 2" (unrated included, rejects not) and "≥ 4" on the test set; the
+  condition list disabled under "Ej betygsatt" and keeping its value; two tabs with different
+  conditions.
 - Mark a range with Shift+click and Shift+arrows, add with Ctrl+click, press a label twice; Ctrl+A;
   Escape. Include a file that cannot carry ratings.
 - Loupe under "≥ 3 stjärnor": step with the arrow held; `latency.ps1` for V1 (S3).
@@ -222,9 +241,11 @@ ADR 0013 §7:
 | **F5** | `pw-loupe`: the browse logic of a tab (visible list, moves, clicks, texts) in plain Rust (T55); then the binary: filter controls, the grid over the visible list, marked cells, status texts, clicks and keys (T56) | T55, T56 |
 | **F6** | `pw-loupe` (binary): the loupe under a filter with `set_files` | T57 |
 | **F7** | Acceptance by hand (§8.2), including V1 under a filter | Owner |
+| **F5c** | Amendment 1: a rating removes an image that stops matching at once (§2.2) | T59 |
+| **F5d** | Amendment 1: the star condition ≥, =, ≤ (§2.1) | T60 |
 | **F8** | Documentation: architecture.md, test inventory, GR8 status, ADR 0004 addendum (egui note) | T58 |
 
-T51–T54 do not depend on each other; T55 needs T51 and T52; T56 needs T53 and T55; T57 needs T54
+T59 comes after T56 and before T57; T60 after T57 (all three change `main.rs`). T51–T54 do not depend on each other; T55 needs T51 and T52; T56 needs T53 and T55; T57 needs T54
 and T56. Until T57, the loupe opens on the visible list with `open_folder` (§4.4, way A) as an
 interim step.
 
@@ -262,3 +283,14 @@ The owner accepted every proposal below as written.
   fields.
 - `pw-viewcore` gains `set_files`; its other behaviour is unchanged.
 - The reserved keys Ctrl+A (ADR 0009 §3.3) and Escape in the grid (ADR 0011 Q6) get their meaning.
+
+## 13. Amendment 1 (owner, 2026-11-10)
+
+| Point | Change | Reason | Tasks |
+|---|---|---|---|
+| §2.1 | A condition list (≥, =, ≤) beside the star list; "≤ n" includes unrated images; rejects never match a number of stars; "Ej betygsatt", "Avvisade" and "Alla utom avvisade" stay | Filtering on an exact number and an upper bound | T60 |
+| §2.2 | A rated image that stops matching leaves at once instead of when the user moves on | The owner's culling workflow: what no longer matches should go at once | T59; T57 updated |
+| §5.3 | The marking count before the file name | Owner decision | T56 (done in its review) |
+
+The same change applies to the ADR 0004 addendum (points 1 and 2); T58 updates it. Parity with
+`ui/tests/filter-select.test.js` (S6) is given up for the one check that §2.2 replaces.

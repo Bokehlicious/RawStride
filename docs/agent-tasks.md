@@ -1617,7 +1617,12 @@ Ordered from easiest to hardest. Start at the top.
   marking; `to_request_indexes` and `forget_not_in`; the four texts.
 - **Done when:** `.\tools\check.ps1` is all OK.
 
-### T56. ADR 0014 F5b: draw the filter and the marking in the grid, wire clicks and keys — Open
+### T56. ADR 0014 F5b: draw the filter and the marking in the grid, wire clicks and keys — Done
+
+- **Review 2026-11-10: accepted**, after the owner's hand check. The owner's decisions in the check:
+  the marking count before the file name in the status line (ADR 0014 §5.3, amendment 1), and
+  amendment 1 itself (§13), which becomes T59 and T60 and changes T57. The "Done when" check "under
+  'Ej betygsatt' a rated image stays until moving on" no longer applies; T59 replaces it.
 
 - **Note from the T53 review:** remove `#[cfg_attr(not(test), allow(dead_code))]` from
   `MetadataCache::set_ratings` when point 7 calls it.
@@ -1661,31 +1666,126 @@ Ordered from easiest to hardest. Start at the top.
   until moving on; Shift+click, Shift+arrows, Ctrl+click, a label pressed twice on a marking; Ctrl+A;
   Escape; thumbnails appear at once when the filter changes (S1).
 
+### T59. ADR 0014 amendment 1, §2.2: a rating removes an image that stops matching at once — Open
+
+- **Start after T56 is done.** Before T57.
+- **Crate:** `pw-loupe`. **Files:** `crates/pw-loupe/src/browse.rs`, `crates/pw-loupe/src/main.rs`
+  (the rating key and the shown-rating lookup of point 4).
+- **Why:** ADR 0014 §2.2, §4.2 and S2 as changed by amendment 1 (§13). Changes the behaviour T55
+  built: a rated image no longer stays until the user moves on.
+- **What:**
+  1. `Tab::rated(&mut self, ratings_ready: bool, rating_of: &dyn Fn(&Path) -> Option<Rating>) -> bool`:
+     `refilter` without keeping any image. Images that no longer match leave `visible`; if the
+     current image left, the nearest following visible image becomes current (the last visible one
+     if none follows; unchanged when nothing is visible, §2.3); marked images that left are
+     unmarked, the others stay marked. Returns whether `visible` changed.
+  2. `grid_move`, `loupe_move` and `click` stay as they are (they still recompute before and after
+     a move, which matters when a rating changes without a key, e.g. a rolled-back write). Update
+     the doc comments in `browse.rs` (module, `refilter_before_move`, `grid_move`, `loupe_move`)
+     and of `Tab.visible` in `tabs.rs` that describe the old §2.2 rule. No other change in `tabs.rs`.
+  3. `main.rs`: after `set_ratings` returns `Ok`, call `rated` on the active tab with the same
+     readiness as the other refilters. Grid: if `visible` changed, scroll to the current image's
+     position. Loupe (until T57): if `visible` changed, give the core the visible list as
+     `reopen_loupe` does; if nothing is visible, return to the grid (§2.3). A refused key
+     (`Unsupported`, a path error) does not call `rated`. A rolled-back write does not refilter.
+  4. **Resolved paths for the shown rating** (found in the T56 review): the filter's `rating_of`
+     (`refilter_active`, `grid_move`, `click`, and `rated`) and the grid's `shown_rating` call pass
+     `tab.files` as they are, but `MetadataCache` keys by absolute path. A folder given as a relative
+     path on the command line then filters and draws every image as unrated. Look the rating up by
+     the path resolved as `resolve_paths` does (for example a small helper on `Loupe`). Add a test
+     for the helper if it is plain.
+- **Rules:** as T55; rules 6, 7, 10–12.
+- **Tests to change** (approved by amendment 1; nothing else in these tests changes):
+  - `the_filter_select_cases_of_app_js`: the block from the comment "Under "unrated", rating the
+    current image (2 stars) keeps it visible" up to the comment "Multi-selection with every image
+    shown" becomes: rate image 4 with 2 stars, call `rated` → returns true, current 5, visible
+    [0, 5, 6, 7, 8, 9, 10, 11], the file at current is `IMG_005.ARW`.
+  - `a_loupe_step_drops_the_rated_image_it_leaves` and `batch_rated_under_unrated`: comments only
+    (the ratings change without `rated`, as after a rolled-back write); assertions unchanged.
+- **Tests to add:**
+  - Unrated, current 5, marked 5–7, all three get stars, `rated` → visible [0, 4, 8, 9, 10, 11],
+    current 8, nothing marked.
+  - "Alla utom avvisade" (visible every index but 3), current 2, marked 1, 2 and 4; image 2 gets
+    rejected, `rated` → 2 hidden, current 4, marked [1, 4].
+  - The last visible image rated out → the previous visible image is current.
+  - Red (visible [2, 4]), both marked, both lose Red, `rated` → nothing visible, returns true,
+    current unchanged, nothing marked.
+  - `rated` when nothing stopped matching → returns false; current and marking unchanged.
+- **Done when:** `.\tools\check.ps1` is all OK, and the owner checks by hand: under "Ej betygsatt"
+  a rated image leaves at once in grid and loupe, and a rated marking leaves at once; under "Grön"
+  another label removes the image at once.
+
 ### T57. ADR 0014 F6: the loupe steps and prefetches within the filter — Open
 
-- **Start after T54 and T56 are done.** **For a Claude agent.**
+- **Start after T54, T56 and T59 are done.** **For a Claude agent.**
 - **Crate:** `pw-loupe`. **Files:** `crates/pw-loupe/src/main.rs`; `crates/pw-loupe/src/lib.rs` for the
   status line.
-- **Why:** ADR 0014 §2.2, §2.3, §4.4 (way C), S2, S3.
+- **Why:** ADR 0014 §2.2 (amendment 1), §2.3, §4.4 (way C), §5.3 (amendment 1), S2, S3.
 - **What:**
   1. Loupe steps (Next, Previous, First, Last) go through `Tab::loupe_move` instead of
      `core.step`/`go(0)`/`last`. If `visible` changed, call `core.set_files(paths of visible,
      position)`; otherwise `core.go(position)`.
   2. A filter change while the loupe is shown: `refilter`, then `set_files`; if nothing is visible,
      return to the grid (§2.3).
-  3. The tab's current image is taken from the tab, not from `frame.pos`, while the loupe is shown
+  3. A rating key in the loupe: after `Tab::rated` (T59), if `visible` changed, `core.set_files(paths
+     of visible, position)`, so the next visible image comes from the prefetched views; if nothing
+     is visible, return to the grid (§2.3).
+  4. The tab's current image is taken from the tab, not from `frame.pos`, while the loupe is shown
      (the core follows the tab).
-  4. Status line: `status_line` gets the folder's total and uses `position_text`
-     ("3 / 12 (av 31)"); update its test.
-  5. Remove the interim `open_folder` of T56 point 9 for changes of the visible list; opening the loupe
-     from the grid and a tab load still use `open_folder`.
+  5. Status line: `status_line` gets the folder's total and uses `position_text`
+     ("3 / 12 (av 31)") first, as in the grid (§5.3, amendment 1); update its test.
+  6. Remove the interim `open_folder` of T56 point 9 and T59 point 3 for changes of the visible
+     list; opening the loupe from the grid and a tab load still use `open_folder`.
 - **Rules:** as T56.
-- **Tests to add:** the `app.js` case "loupe within filter": Red, Home, Enter, step right → IMG_002 then
-  IMG_004 (on `Tab::loupe_move`); the status-line text with and without a filter.
+- **Tests to add:** the `app.js` case "loupe within filter": Red, Home, Enter, step right → IMG_002
+  then IMG_004 (on `Tab::loupe_move`); the status-line text with and without a filter.
 - **Done when:** `.\tools\check.ps1` is all OK, and the owner checks by hand: under "≥ 3 stjärnor"
-  stepping stays in the filter and holding an arrow is smooth; under "Ej betygsatt" a rated image stays
-  until the next step and the step after it is not a cold load; `latency.ps1` under the filter for V1
-  (S3); a batch of 30 then closing the window at once keeps the values (ADR 0013 R4).
+  stepping stays in the filter and holding an arrow is smooth; under "Ej betygsatt" rating the shown
+  image shows the next unrated image at once, without a cold load; `latency.ps1` under the filter for
+  V1 (S3); a batch of 30 then closing the window at once keeps the values (ADR 0013 R4).
+
+### T60. ADR 0014 amendment 1, §2.1: the star condition ≥, =, ≤ — Open
+
+- **Start after T57 is done** (all three change `main.rs`).
+- **Crate:** `pw-loupe`. **Files:** `crates/pw-loupe/src/filter.rs`, `crates/pw-loupe/src/lib.rs`
+  (re-exports), `crates/pw-loupe/src/main.rs` (the filter lists only), `crates/pw-loupe/src/browse.rs`
+  (tests only, see below).
+- **Why:** ADR 0014 §2.1 and §5.2 as changed by amendment 1 (§13).
+- **What:**
+  1. `pub enum StarCondition { AtLeast, Exactly, AtMost }`, `AtLeast` the default;
+     `pub const STAR_CONDITIONS: [StarCondition; 3]` in that order; `star_condition_text`:
+     "≥", "=", "≤".
+  2. `StarFilter::AtLeast(u8)` becomes `StarFilter::Stars(u8)` (a number of stars, clamped to 1–5
+     as today). `Filter` gets `pub condition: StarCondition`.
+  3. `matches` for `Stars(n)`: `AtLeast` → n stars or more; `Exactly` → exactly n; `AtMost` → no
+     stars (unrated) or 0 to n stars. A reject (−1) never matches `Stars(n)`. The other star choices
+     ignore `condition`.
+  4. `Filter::is_active`: true when `stars` is not `All` or `label` is not `All`; the condition alone
+     never makes a filter active.
+  5. `STAR_FILTERS`: All, Stars(1)…Stars(5), Unrated, Rejected, NotRejected. `star_filter_text`:
+     "Alla betyg", "1 stjärna", "2 stjärnor", "3 stjärnor", "4 stjärnor", "5 stjärnor",
+     "Ej betygsatt", "Avvisade", "Alla utom avvisade" (outside 1–5: the nearest valid value, as today).
+  6. `main.rs`: a narrow condition list just before the star list (order: condition, stars, label).
+     Enabled only when the star choice is a number of stars; it keeps its value while disabled.
+     Yellow outline on the condition and the star list when a number of stars is chosen. A choice
+     works as the other two lists (`set_filter`, refilter without keeping, no widget keeps focus).
+- **Rules:** as T51; rules 6, 7, 10–12.
+- **Tests to change** (approved by amendment 1): every `StarFilter::AtLeast(n)` in the tests of
+  `filter.rs` and `browse.rs` becomes `StarFilter::Stars(n)` with the default condition; assertions
+  unchanged, except `star_filter_list_and_texts` and `star_filter_text_outside_one_to_five_uses_the_nearest_valid_value`,
+  which get the new texts.
+- **Tests to add:**
+  - Each condition with n = 1–5 against unrated, 1–5 stars and rejected (≤ n includes unrated, no
+    condition matches a reject).
+  - `Exactly` and `AtMost` outside 1–5 behave like the nearest valid value (= 0 as = 1, ≤ 9 as ≤ 5).
+  - The condition is ignored for All, Unrated, Rejected and NotRejected.
+  - `is_active`: All/All with each condition is inactive; `Stars(n)` with each condition is active.
+  - `STAR_CONDITIONS` order and texts.
+  - With the `browse.rs` setup (1: 3 stars, 2: 5 stars Red, 3: rejected, 4: Red only): = 3 → [1];
+    = 5 → [2]; ≤ 3 → [0, 1, 4, 5, …, 11]; ≤ 3 and Red → [4]; ≥ 3 → [1, 2] (unchanged).
+- **Done when:** `.\tools\check.ps1` is all OK, and the owner checks by hand (§8.2): "= 3", "≤ 2" and
+  "≥ 4" on the test set; the condition disabled under "Ej betygsatt" and keeping its value; two tabs
+  with different conditions.
 
 ### T58. ADR 0014 F8: documentation after milestone 5 — Open
 
@@ -1694,14 +1794,15 @@ Ordered from easiest to hardest. Start at the top.
 - **Files:** `docs/adr/0014-egui-filter-and-multi-selection.md`, `docs/adr/0004-ratings-and-labels.md`,
   `docs/architecture.md`, `docs/GUI_REQUIREMENTS.md`, `docs/README.md`, the root `README.md`,
   `docs/test-inventory.md` (only if it does not match the latest `test-output.txt`). This file: rule 11.
-- **Source of truth:** the log rows of T51–T57 and the owner's F7 notes in this file; write only what
+- **Source of truth:** the log rows of T51–T57, T59 and T60 and the owner's F7 notes in this file; write only what
   they record.
 - **What:**
   1. **ADR 0014:** "Implemented" status line; §7 results for S1–S6; §9 results per step; a short
      "Findings during implementation" section if the log has any.
   2. **ADR 0004** addendum "filter and multi-selection": a note that the egui program implements it
      (ADR 0014), with the differences: filter per tab, not saved between sessions, "Alla utom
-     avvisade".
+     avvisade", and amendment 1 (ADR 0014 §13): the star condition ≥, =, ≤ (points 1) and a rated
+     image that stops matching leaves at once (point 2).
   3. **architecture.md:** `pw-loupe` (filter, selection, batch ratings) and `pw-viewcore`
      (`set_files`).
   4. **GUI_REQUIREMENTS.md** GR8 and the root `README.md`: filter and multi-selection done; left
@@ -2047,3 +2148,7 @@ and reviewer:
 | 2026-11-10 | T55 | Open | Review: accepted except one point; `grid_move` and `loupe_move` must also refilter (keeping the current image) before the move, as `go()` in `app.js` and ADR 0014 §4.2, so images that stopped matching after a batch rating drop out before the move instead of becoming current. `read_error`'s temporary `allow(dead_code)` is removed in T56. Checked: `test-output.txt` newer than the changes, fmt/test (427 passed, 27 ignored, 0 failed)/clippy OK |
 | 2026-11-10 | T55 | Ready for review | (Agent) Review point, `browse.rs` only: `grid_move` and `loupe_move` first call the private `refilter_before_move` (`refilter` keeping the **current** image, as `go()` in `app.js`; with nothing visible it returns at once and the move changes nothing, as accepted), then move over that list, then `refilter` keeping the new current image as before. `click` unchanged. Doc comments updated. 2 tests (shared setup: Unrated, current 5, marked 5–7, all three get stars): `grid_move(Right)` and `loupe_move(Next)` → current 8, visible [0, 4, 8, 9, 10, 11], marking cleared. Existing tests unchanged and passing. Test inventory updated (`pw-loupe` 206). `.\tools\check.ps1`: fmt, test (429 passed, 27 ignored, 0 failed) and clippy OK; no commit. |
 | 2026-11-10 | T55 | Done | Second review: `grid_move` and `loupe_move` refilter keeping the current image before the move (`refilter_before_move`), then after it as before; `click` unchanged; the two batch-rating tests give current 8 and visible [0, 4, 8, 9, 10, 11] in grid and loupe. Checked: `test-output.txt` newer than the change, fmt/test (429 passed, 27 ignored, 0 failed)/clippy OK; `pw-loupe` 206, matching the test inventory. T56 can start (T53 and T55 done) |
+| 2026-11-10 | T56 | Ready for review | (Agent) `main.rs`: two `ComboBox` after "Importera…" (`STAR_FILTERS`/`LABEL_FILTERS` with their texts; yellow outline when not "Alla …"); a choice calls `Tabs::set_filter` and `refilter(None)`, then surrenders the keyboard focus. Refilter on a filter change, on a tab load (`load_active_tab`, keep `None`) and when the active tab's readiness changes; readiness = "ratings read since the tab load" (new `ratings_read`, so the second folder read that `switch_mode` sends when the loupe opens does not empty the grid or drop a kept image) and no `read_error` (a read error also refilters, so an active filter shows nothing). Grid over `tab.visible`: rows, visible range, keys and scrolling by position; `to_request_indexes`, `set_visible` with the smallest..largest file index + 1 (new helper `index_span`, 1 test), `forget_not_in` of the keep range; with nothing visible the read error, `READING_RATINGS_TEXT` or `no_match_text` in the middle. Marked cells: faint blue fill and a 2 px `#4c8dff` outline outside the cell; the yellow current outline stays inside. Clicks read Ctrl/Shift and call `Tab::click`; a double-click opens the loupe without a second click. Keys: `Navigate`/`Extend` → `grid_move`, `SelectAll`, `ClearSelection`. Rating keys: `selection.targets` → `set_ratings` (nothing when the current image is not shown). Status line: `position_text` · `marked_text` · name (marking before the name, owner decision after the first report), or the nothing-shown text. Loupe (interim way A): `open_folder` with the visible paths and `go(position)`, also after a filter change or a readiness refilter while the loupe is shown; `frame.pos` mapped through `visible`; Enter/G/Space and double-click do nothing with nothing visible. `metadata.rs`: `allow(dead_code)` removed from `set_ratings` and `read_error`; added to `set_rating`, which only the tests use now (decision to check). Test inventory updated (`pw-loupe` 207). `.\tools\check.ps1`: fmt, test (430 passed, 27 ignored, 0 failed) and clippy OK; no commit. Not checked by hand (needs the owner, §8.2). |
+| 2026-11-10 | T56 | Done | Reviewed after the owner's hand check: filter lists with outline and focus release; readiness = ratings read since the tab load and no read error (so the loupe's second read does not empty the grid); the grid over `visible` (positions for layout, file indexes for thumbnails, `index_span` for the worker's priority); marked cells; clicks with Ctrl/Shift; marking keys; rating keys through `targets` and `set_ratings`; status line with the marking before the name (owner); interim loupe on the visible list. `allow(dead_code)` moved from `set_ratings`/`read_error` to `set_rating` (tests only), accepted. One finding for T59: `rating_of` and the grid's `shown_rating` use unresolved `tab.files`, so a relative command-line folder filters as all unrated. Checked: `test-output.txt` newer than the changes, fmt/test (430 passed, 27 ignored, 0 failed)/clippy OK; `pw-loupe` 207, matching the test inventory |
+| 2026-11-10 | – | Note | ADR 0014 amendment 1 (owner, §13): §2.1 star condition ≥, =, ≤; §2.2 a rated image that stops matching leaves at once; §5.3 marking before the name. ADR updated (§2, §3.1, §4.2, §5, §7 S2 and S6, §8.2, §9, §13) |
+| 2026-11-10 | T57, T59, T60 | Open | T59 added (§2.2, with the resolved-path point from the T56 review); T57 replaced (loupe after a rating, status line order); T60 added (§2.1). Order T59 → T57 → T60 (all change `main.rs`); T58 also covers amendment 1 |

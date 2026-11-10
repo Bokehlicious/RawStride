@@ -178,8 +178,6 @@ impl MetadataCache {
     /// Why the folder read failed, if it did (ADR 0014 Q7: an active filter then shows nothing and
     /// the status line gives this error). Treat it as `ratings_ready == false` when calling
     /// `Tab::refilter`.
-    // Called from the grid once the filter is wired (T56); until then only the tests use it.
-    #[cfg_attr(not(test), allow(dead_code))]
     pub fn read_error(&self) -> Option<String> {
         self.read_error.clone()
     }
@@ -212,13 +210,14 @@ impl MetadataCache {
             .then(|| status_text(self.ratings.shown(path)))
     }
 
+    // Since T56 the program rates through `set_ratings` (one path equals `set`); the tests still
+    // use this one.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn set_rating(&mut self, path: &Path, key: RatingKey) -> Result<(), RatingRefused> {
         self.ratings.set(path, key)
     }
 
     /// One rating key on several images (ADR 0014 §2.7); see `RatingStore::set_many`.
-    // Called from the grid once the marking is wired (T56); until then only the tests use it.
-    #[cfg_attr(not(test), allow(dead_code))]
     pub fn set_ratings(
         &mut self,
         paths: &[PathBuf],

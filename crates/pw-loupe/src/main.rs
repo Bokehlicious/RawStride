@@ -16,15 +16,17 @@ use std::time::{Duration, Instant};
 use eframe::egui;
 use metadata::MetadataCache;
 use pw_loupe::{
-    Action, CellState, DEFAULT_THUMBNAIL_SIZE, DialogKey, DialogRequest, Field, GridKeyAction,
-    ImportDialog, ImportDialogState, ImportEvent, ImportForm, ImportWorker, MAX_THUMBNAIL_SIZE,
-    MIN_THUMBNAIL_SIZE, Options, RatingRefused, SubmitError, TabAction, Tabs, ThumbGrid,
-    UNSUPPORTED_TEXT, ViewMode, WINDOW_TITLE, clamp_thumbnail_size, color_image, columns,
-    dialog_key_action, done_lines, ejecting_progress_text, error_text, grid_key_action,
-    indicator_text, iptc_progress_text, key_action, label_name, list_folder, loupe_key_action,
-    mode_label, more_lines, navigate, opens_import, parse_args, preview_line, preview_summary,
-    progress_text, rating_key_action, request_cell, star_glyphs, status_line, step_thumbnail_size,
-    tab_action, take_wheel_steps, visible_range, wheel_factor,
+    Action, CellState, DEFAULT_THUMBNAIL_SIZE, DialogKey, DialogRequest, Field, Filter,
+    GridKeyAction, ImportDialog, ImportDialogState, ImportEvent, ImportForm, ImportWorker,
+    LABEL_FILTERS, LabelFilter, MAX_THUMBNAIL_SIZE, MIN_THUMBNAIL_SIZE, Navigation, Options,
+    READING_RATINGS_TEXT, RatingRefused, STAR_FILTERS, StarFilter, SubmitError, Tab, TabAction,
+    Tabs, ThumbGrid, UNSUPPORTED_TEXT, ViewMode, WINDOW_TITLE, clamp_thumbnail_size, color_image,
+    columns, dialog_key_action, done_lines, ejecting_progress_text, error_text, grid_key_action,
+    indicator_text, iptc_progress_text, key_action, label_filter_text, label_name, list_folder,
+    loupe_key_action, marked_text, mode_label, more_lines, no_match_text, opens_import, parse_args,
+    position_text, preview_line, preview_summary, progress_text, rating_key_action, request_cell,
+    star_filter_text, star_glyphs, status_line, step_thumbnail_size, tab_action, take_wheel_steps,
+    visible_range, wheel_factor,
 };
 use pw_metadata::MetadataWorker;
 use pw_metadata::Rating;
@@ -39,6 +41,9 @@ const BACKGROUND: egui::Color32 = egui::Color32::from_gray(32);
 const STATUS_HEIGHT: f32 = 24.0;
 const GRID_SPACING: f32 = 8.0;
 const GRID_LABEL_HEIGHT: f32 = 18.0;
+/// The outline and, faint, the fill of a marked cell (ADR 0014 §5.1: the label blue).
+const MARKED_BLUE: egui::Color32 = egui::Color32::from_rgb(0x4c, 0x8d, 0xff);
+const MARKED_FILL: egui::Color32 = egui::Color32::from_rgba_premultiplied(0x0f, 0x1c, 0x33, 0x33);
 
 struct Loupe {
     core: ViewCore<NativeBackend>,
@@ -67,9 +72,117 @@ struct Loupe {
     message: Option<String>,
     indicator_after: Duration,
     tabs: Tabs,
+    /// Whether the active tab's ratings have been read since the tab was loaded. A later read of
+    /// the same folder (`switch_mode` reads again) does not clear it: the rating store keeps the
+    /// shown values meanwhile, so the filter keeps working.
+    ratings_read: bool,
+    /// The value of `ratings_ready` when the active tab was last refiltered for it, so a change
+    /// refilters once (ADR 0014 Q7).
+    last_ratings_ready: bool,
 }
 
 impl Loupe {
+    /// Whether the filter of the active tab can use the ratings (ADR 0014 Q7): they have been read,
+    /// and the folder read did not fail. A read error counts as not ready, so an active filter
+    /// shows nothing.
+    fn ratings_ready(&self) -> bool {
+        self.ratings_read && self.metadata.read_error().is_none()
+    }
+
+    /// `Tab::refilter` on the active tab with the shown ratings. Returns whether `visible` changed.
+    fn refilter_active(&mut self, keep: Option<usize>) -> bool {
+        let ready = self.ratings_ready();
+        let metadata = &self.metadata;
+        self.tabs.active_mut().is_some_and(|tab| {
+            tab.refilter(ready, &|path| metadata.shown_rating(path).cloned(), keep)
+        })
+    }
+
+    /// A key move in the grid over the visible list (`Tab::grid_move`).
+    fn grid_move(&mut self, nav: Navigation, extend: bool, visible_rows: usize) {
+        let ready = self.ratings_ready();
+        let columns = self.grid_columns;
+        let metadata = &self.metadata;
+        if let Some(tab) = self.tabs.active_mut() {
+            tab.grid_move(nav, extend, columns, visible_rows, ready, &|path| {
+                metadata.shown_rating(path).cloned()
+            });
+        }
+    }
+
+    /// A click on the cell of file `index` (`Tab::click`).
+    fn click(&mut self, index: usize, ctrl: bool, shift: bool) {
+        let ready = self.ratings_ready();
+        let metadata = &self.metadata;
+        if let Some(tab) = self.tabs.active_mut() {
+            tab.click(index, ctrl, shift, ready, &|path| {
+                metadata.shown_rating(path).cloned()
+            });
+        }
+    }
+
+    /// A new filter for the active tab, as `setFilter` in `app.js`: refilter without keeping the
+    /// current image. The loupe gets the new visible list (interim, ADR 0014 §9 way A, until T57).
+    fn set_filter(&mut self, filter: Filter) {
+        if self.tabs.active().is_none_or(|tab| tab.filter == filter) {
+            return;
+        }
+        self.tabs.set_filter(filter);
+        self.refilter_active(None);
+        self.reopen_loupe();
+    }
+
+    /// Recomputes the active tab's visible list when `ratings_ready` has changed since the last
+    /// time (ADR 0014 Q7): the list fills when the ratings are read, and empties under an active
+    /// filter when the read fails.
+    fn refilter_when_ratings_change(&mut self) {
+        if !self.ratings_read
+            && self.metadata.ratings_ready()
+            && self.metadata.read_error().is_none()
+        {
+            self.ratings_read = true;
+        }
+        let ready = self.ratings_ready();
+        if ready != self.last_ratings_ready {
+            self.last_ratings_ready = ready;
+            if self.refilter_active(None) {
+                self.reopen_loupe();
+            }
+        }
+    }
+
+    /// Gives the view core the visible images of the active tab and goes to the current one
+    /// (interim, ADR 0014 §9 way A, until T57). `files` are the tab's files resolved as the
+    /// metadata cache keys them.
+    fn open_loupe_core(&mut self, files: &[PathBuf]) {
+        let Some(tab) = self.tabs.active() else {
+            self.core.open_folder(Vec::new());
+            return;
+        };
+        let paths: Vec<PathBuf> = tab
+            .visible
+            .iter()
+            .filter_map(|&index| files.get(index).cloned())
+            .collect();
+        let position = tab.position().unwrap_or(0);
+        self.core.open_folder(paths);
+        self.core.go(position);
+    }
+
+    /// When the active tab shows the loupe, gives the core the tab's current visible list.
+    fn reopen_loupe(&mut self) {
+        let Some(tab) = self.tabs.active() else {
+            return;
+        };
+        if tab.mode != ViewMode::Loupe {
+            return;
+        }
+        match resolve_paths(&tab.files) {
+            Ok(files) => self.open_loupe_core(&files),
+            Err(error) => self.message = Some(error),
+        }
+    }
+
     fn open_import(&mut self) {
         if self.import_dialog.is_some() {
             self.import_hidden = false;
@@ -587,10 +700,16 @@ impl Loupe {
         } else {
             self.thumb_worker.pause();
         }
-        let files = match self
+        let loaded = self
             .metadata
-            .begin_load(tab.files, &mut self.metadata_worker)
-        {
+            .begin_load(tab.files, &mut self.metadata_worker);
+        // A tab load refilters without keeping the current image, as a folder load in `app.js`;
+        // under an active filter nothing is shown until the ratings are read (Q7).
+        self.ratings_read =
+            loaded.is_ok() && self.metadata.ratings_ready() && self.metadata.read_error().is_none();
+        self.last_ratings_ready = self.ratings_ready();
+        self.refilter_active(None);
+        let files = match loaded {
             Ok(files) => files,
             Err(error) => {
                 self.message = Some(error);
@@ -598,8 +717,7 @@ impl Loupe {
             }
         };
         if tab.mode == ViewMode::Loupe {
-            self.core.open_folder(files);
-            self.core.go(tab.current);
+            self.open_loupe_core(&files);
         } else {
             self.core.open_folder(Vec::new());
         }
@@ -621,10 +739,14 @@ impl Loupe {
     }
 
     /// Switches the active tab between grid and loupe without reloading the tab, so the
-    /// thumbnails and their cache survive a visit to the loupe (ADR 0011 §4.2). Returns the
-    /// current image, so the grid can scroll to it.
+    /// thumbnails and their cache survive a visit to the loupe (ADR 0011 §4.2). The loupe gets the
+    /// visible images (interim, ADR 0014 §9 way A); with nothing visible it does not open. Returns
+    /// the current image's position in the visible list, so the grid can scroll to it.
     fn switch_mode(&mut self, mode: ViewMode) -> Option<usize> {
         let tab = self.tabs.active().cloned()?;
+        if mode == ViewMode::Loupe && tab.visible.is_empty() {
+            return None;
+        }
         self.tabs.set_mode(mode);
         match mode {
             ViewMode::Loupe => {
@@ -633,10 +755,7 @@ impl Loupe {
                     .metadata
                     .begin_load(tab.files, &mut self.metadata_worker)
                 {
-                    Ok(files) => {
-                        self.core.open_folder(files);
-                        self.core.go(tab.current);
-                    }
+                    Ok(files) => self.open_loupe_core(&files),
                     Err(error) => self.message = Some(error),
                 }
             }
@@ -645,7 +764,7 @@ impl Loupe {
                 self.thumb_worker.resume();
             }
         }
-        Some(tab.current)
+        self.tabs.active().and_then(Tab::position)
     }
 
     fn poll_thumbnails(&mut self, ctx: &egui::Context) {
@@ -698,6 +817,7 @@ impl Loupe {
         let cell_size = self.thumb_size as f32;
         let stride = cell_size + GRID_SPACING;
         let mut open_loupe = false;
+        let mut clicked_cell = None;
 
         // The grid uses the image area only, so it never runs under the status line.
         ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
@@ -717,12 +837,15 @@ impl Loupe {
                         GRID_SPACING as u32,
                     );
                     self.grid_columns = column_count;
-                    let rows = tab.files.len().div_ceil(column_count);
+                    // Layout, rows and scrolling use positions in `tab.visible`; cells, thumbnails
+                    // and textures use file indexes (ADR 0014 §4.2).
+                    let shown = tab.visible.len();
+                    let rows = shown.div_ceil(column_count);
                     let content_height = rows as f32 * stride;
                     ui.set_min_size(egui::vec2(width, content_height));
 
-                    let visible = visible_range(
-                        tab.files.len(),
+                    let positions = visible_range(
+                        shown,
                         column_count,
                         self.thumb_size,
                         GRID_SPACING as u32,
@@ -730,9 +853,11 @@ impl Loupe {
                         viewport.height(),
                         1,
                     );
-                    self.thumb_worker.set_visible(visible.clone());
+                    let visible_files = tab.visible.get(positions.clone()).unwrap_or(&[]);
+                    self.thumb_worker
+                        .set_visible(index_span(visible_files.iter().copied()));
                     let cell = request_cell(self.thumb_size, ctx.pixels_per_point());
-                    for index in self.thumb_grid.to_request(visible.clone(), cell) {
+                    for index in self.thumb_grid.to_request_indexes(visible_files, cell) {
                         if let Some(path) = tab.files.get(index) {
                             self.thumb_worker.request(ThumbnailRequest {
                                 generation: self.thumb_generation,
@@ -746,7 +871,7 @@ impl Loupe {
                     self.poll_thumbnails(&ctx);
 
                     let keep = visible_range(
-                        tab.files.len(),
+                        shown,
                         column_count,
                         self.thumb_size,
                         GRID_SPACING as u32,
@@ -754,19 +879,20 @@ impl Loupe {
                         viewport.height(),
                         3,
                     );
-                    for index in self.thumb_grid.forget_outside(keep) {
+                    let keep_files = tab.visible.get(keep).unwrap_or(&[]);
+                    for index in self.thumb_grid.forget_not_in(keep_files) {
                         self.thumb_textures.remove(&index);
                     }
 
                     let origin = ui.min_rect().min;
                     let painter = ui.painter().clone();
                     let mut clicked = None;
-                    for index in visible.clone() {
+                    for (position, &index) in positions.clone().zip(visible_files) {
                         let Some(path) = tab.files.get(index) else {
                             continue;
                         };
-                        let row = index / column_count;
-                        let column = index % column_count;
+                        let row = position / column_count;
+                        let column = position % column_count;
                         let cell_rect = egui::Rect::from_min_size(
                             egui::pos2(
                                 origin.x + column as f32 * stride,
@@ -780,6 +906,10 @@ impl Loupe {
                             egui::vec2(image_size, image_size),
                         );
                         let rating = self.metadata.shown_rating(path);
+                        let marked = tab.selection.is_marked(index);
+                        if marked {
+                            painter.rect_filled(cell_rect, 0.0, MARKED_FILL);
+                        }
                         painter.rect_filled(image_rect, 0.0, egui::Color32::from_gray(64));
                         match self.thumb_grid.state(index) {
                             CellState::Ready => {
@@ -865,6 +995,16 @@ impl Loupe {
                             text_color,
                         );
 
+                        // A marked cell has a blue outline outside the cell; the current cell keeps
+                        // its yellow outline inside, so a current marked cell shows both (§5.1).
+                        if marked {
+                            painter.rect_stroke(
+                                cell_rect,
+                                0.0,
+                                egui::Stroke::new(2.0, MARKED_BLUE),
+                                egui::StrokeKind::Outside,
+                            );
+                        }
                         if index == tab.current {
                             painter.rect_stroke(
                                 cell_rect,
@@ -878,18 +1018,23 @@ impl Loupe {
                             ui.make_persistent_id(("grid-cell", index)),
                             egui::Sense::click(),
                         );
-                        if response.clicked() {
-                            clicked = Some(index);
-                        }
                         if response.double_clicked() {
-                            clicked = Some(index);
+                            // The first click of the pair already made this image current.
                             open_loupe = true;
+                        } else if response.clicked() {
+                            let (ctrl, shift) = ui.input(|input| {
+                                (
+                                    input.modifiers.ctrl || input.modifiers.command,
+                                    input.modifiers.shift,
+                                )
+                            });
+                            clicked = Some((index, ctrl, shift));
                         }
                     }
 
-                    if let Some(index) = scroll_to {
-                        let row = index / column_count;
-                        let column = index % column_count;
+                    if let Some(position) = scroll_to {
+                        let row = position / column_count;
+                        let column = position % column_count;
                         let target = egui::Rect::from_min_size(
                             egui::pos2(
                                 origin.x + column as f32 * stride,
@@ -899,28 +1044,37 @@ impl Loupe {
                         );
                         ui.scroll_to_rect(target, Some(egui::Align::Center));
                     }
-                    if let Some(index) = clicked {
-                        self.tabs.set_current(index);
-                        tab.current = index;
-                    }
-                    if visible
-                        .clone()
-                        .any(|index| matches!(self.thumb_grid.state(index), CellState::Requested))
+                    if visible_files
+                        .iter()
+                        .any(|&index| matches!(self.thumb_grid.state(index), CellState::Requested))
                     {
                         ctx.request_repaint_after(Duration::from_millis(50));
                     }
+                    if let Some(click) = clicked {
+                        clicked_cell = Some(click);
+                    }
                 });
         });
+        if let Some((index, ctrl, shift)) = clicked_cell {
+            self.click(index, ctrl, shift);
+        }
         if open_loupe {
             self.switch_mode(ViewMode::Loupe);
         }
+        // The status line shows the tab as it is after this frame's click.
+        if let Some(active) = self.tabs.active() {
+            tab = active.clone();
+        }
 
         let painter = ui.painter().clone();
-        if tab.files.is_empty() {
-            let text = self
-                .message
-                .as_deref()
-                .unwrap_or("Dra en mapp eller en bild hit");
+        if tab.visible.is_empty() {
+            let text = if tab.files.is_empty() {
+                self.message
+                    .clone()
+                    .unwrap_or_else(|| "Dra en mapp eller en bild hit".to_string())
+            } else {
+                self.nothing_shown_text(&tab)
+            };
             painter.text(
                 rect.center(),
                 egui::Align2::CENTER_CENTER,
@@ -932,21 +1086,28 @@ impl Loupe {
         let import_status = self.hidden_import_status();
         if self.show_info || import_status.is_some() {
             let bar = egui::Rect::from_min_max(egui::pos2(full.min.x, rect.max.y), full.max);
+            let current_path = tab
+                .position()
+                .and_then(|_| tab.files.get(tab.current))
+                .cloned();
             let mut line = if !self.show_info {
                 String::new()
-            } else if let Some(path) = tab.files.get(tab.current) {
+            } else if let (Some(position), Some(path)) = (tab.position(), &current_path) {
+                // "3 / 12 (av 31) · 12 markerade · TN100423.ARW": the marking before the name
+                // (owner decision 2026-11-10; ADR 0014 §5.3 lists the parts).
                 let name = path
                     .file_name()
                     .map(|name| name.to_string_lossy().into_owned())
                     .unwrap_or_else(|| path.display().to_string());
-                format!(
-                    "{}  {} / {}",
-                    name,
-                    tab.current.saturating_add(1),
-                    tab.files.len()
-                )
-            } else {
+                let mut line = position_text(position, tab.visible.len(), tab.files.len());
+                if let Some(marked) = marked_text(tab.selection.count()) {
+                    line = format!("{line}  ·  {marked}");
+                }
+                format!("{line}  ·  {name}")
+            } else if tab.files.is_empty() {
                 "Ingen bild vald".to_string()
+            } else {
+                self.nothing_shown_text(&tab)
             };
             if self.show_info
                 && let Some(message) = &self.message
@@ -954,11 +1115,7 @@ impl Loupe {
                 line = format!("{line}  ·  {message}");
             }
             if self.show_info
-                && let Some(notice) = self
-                    .tabs
-                    .active()
-                    .and_then(|active| active.files.get(active.current))
-                    .and_then(|path| self.metadata.notice(Some(path)))
+                && let Some(notice) = self.metadata.notice(current_path.as_deref())
             {
                 line = format!("{line}  ·  {notice}");
             }
@@ -1006,6 +1163,20 @@ impl Loupe {
                 );
             }
         }
+    }
+
+    /// Why a tab with files shows nothing (ADR 0014 §2.4, §5.3, Q7): the read error, the ratings
+    /// still being read under an active filter, or no image matching the filter.
+    fn nothing_shown_text(&self, tab: &Tab) -> String {
+        if tab.filter.is_active() {
+            if let Some(error) = self.metadata.read_error() {
+                return format!("Metadatafel: {error}");
+            }
+            if !self.ratings_ready() {
+                return READING_RATINGS_TEXT.to_string();
+            }
+        }
+        no_match_text(tab.files.len())
     }
 
     fn tab_action(&mut self, action: TabAction) {
@@ -1085,6 +1256,8 @@ impl Loupe {
                     .unwrap_or_else(|| message.clone()),
             );
         }
+        // A rating key does not refilter (ADR 0014 §2.2); the ratings becoming ready does.
+        self.refilter_when_ratings_change();
         // A folder or a file dropped on the window opens in a new tab (owner decision 2026-11-08,
         // ADR 0010 Q3). An empty active tab is filled instead, and an already open folder is
         // activated (GR12). Modifier keys are not used: Windows does not report them reliably
@@ -1121,6 +1294,8 @@ impl Loupe {
         let active = self.tabs.active_index();
         let mut selected = None;
         let mut open_import_clicked = false;
+        let filter = self.tabs.active().map(|tab| tab.filter).unwrap_or_default();
+        let mut new_filter = None;
         egui::ScrollArea::horizontal()
             .id_salt("folder-tabs")
             .show(ui, |ui| {
@@ -1131,10 +1306,40 @@ impl Loupe {
                         }
                     }
                     open_import_clicked = ui.button("Importera…").clicked();
+                    // The filter of the active tab (ADR 0014 §5.2).
+                    if let Some(stars) = filter_combo(
+                        ui,
+                        "star-filter",
+                        filter.stars,
+                        &STAR_FILTERS,
+                        star_filter_text,
+                        filter.stars != StarFilter::All,
+                    ) {
+                        new_filter = Some(Filter { stars, ..filter });
+                    }
+                    if let Some(label) = filter_combo(
+                        ui,
+                        "label-filter",
+                        filter.label,
+                        &LABEL_FILTERS,
+                        label_filter_text,
+                        filter.label != LabelFilter::All,
+                    ) {
+                        new_filter = Some(Filter { label, ..filter });
+                    }
                 });
             });
         if open_import_clicked {
             self.open_import();
+        }
+        let mut scroll_to = None;
+        if let Some(filter) = new_filter {
+            self.set_filter(filter);
+            // No widget keeps the keyboard focus, so arrows and digits work at once (§4.5).
+            if let Some(id) = ctx.memory(|memory| memory.focused()) {
+                ctx.memory_mut(|memory| memory.surrender_focus(id));
+            }
+            scroll_to = self.tabs.active().and_then(Tab::position);
         }
         if let Some(index) = selected
             && index != self.tabs.active_index()
@@ -1155,7 +1360,6 @@ impl Loupe {
         );
         let ppp = ctx.pixels_per_point();
         let key_anchor = self.anchor(ctx.input(|input| input.pointer.hover_pos()), rect, ppp);
-        let mut scroll_to = None;
         let mut dialog_consumes_keys = self.import_dialog.is_some() && !self.import_hidden;
         let mut start_import = false;
         for (tab_action, key, ctrl, shift, alt) in key_actions {
@@ -1187,14 +1391,23 @@ impl Loupe {
             if !ctx.egui_wants_keyboard_input()
                 && let Some(action) = rating_key_action(key, ctrl, shift, alt)
             {
-                if let Some(path) = self
+                // The marked images in the grid, else the current one (ADR 0014 §2.6); nothing
+                // when the current image is not shown. No refilter here (§2.2).
+                let paths: Vec<PathBuf> = self
                     .tabs
                     .active()
-                    .and_then(|tab| tab.files.get(tab.current))
-                    .cloned()
-                {
-                    match self.metadata.set_rating(&path, action) {
-                        Ok(()) => {}
+                    .filter(|tab| tab.position().is_some())
+                    .map(|tab| {
+                        tab.selection
+                            .targets(&tab.visible, tab.current, tab.mode)
+                            .into_iter()
+                            .filter_map(|index| tab.files.get(index).cloned())
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                if !paths.is_empty() {
+                    match self.metadata.set_ratings(&paths, action) {
+                        Ok(_) => {}
                         Err(RatingRefused::Unsupported) => {
                             self.message = Some(UNSUPPORTED_TEXT.to_owned());
                         }
@@ -1209,29 +1422,26 @@ impl Loupe {
                     Some(GridKeyAction::OpenLoupe) => {
                         self.switch_mode(ViewMode::Loupe);
                     }
-                    Some(GridKeyAction::Navigate(action)) => {
-                        let count = self.tabs.active().map_or(0, |tab| tab.files.len());
+                    Some(action @ (GridKeyAction::Navigate(nav) | GridKeyAction::Extend(nav))) => {
+                        let extend = matches!(action, GridKeyAction::Extend(_));
                         let visible_rows = ((rect.height()
                             / (self.thumb_size as f32 + GRID_SPACING))
                             .floor() as usize)
                             .max(1);
-                        let current = self.tabs.active().map_or(0, |tab| tab.current);
-                        self.tabs.set_current(navigate(
-                            count,
-                            self.grid_columns,
-                            current,
-                            action,
-                            visible_rows,
-                        ));
-                        scroll_to = self.tabs.active().map(|tab| tab.current);
+                        self.grid_move(nav, extend, visible_rows);
+                        scroll_to = self.tabs.active().and_then(Tab::position);
                     }
-                    // The marking keys of ADR 0014 F2; T56 wires them.
-                    Some(
-                        GridKeyAction::Extend(_)
-                        | GridKeyAction::SelectAll
-                        | GridKeyAction::ClearSelection,
-                    )
-                    | None => {}
+                    Some(GridKeyAction::SelectAll) => {
+                        if let Some(tab) = self.tabs.active_mut() {
+                            tab.selection.all(&tab.visible);
+                        }
+                    }
+                    Some(GridKeyAction::ClearSelection) => {
+                        if let Some(tab) = self.tabs.active_mut() {
+                            tab.selection.clear();
+                        }
+                    }
+                    None => {}
                 },
                 Some(ViewMode::Loupe) => {
                     if loupe_key_action(key, ctrl, alt).is_some() {
@@ -1312,8 +1522,13 @@ impl Loupe {
         let max_side = ctx.input(|i| i.max_texture_side);
         self.textures.sync(&ctx, &self.core, max_side);
         let frame = self.core.frame(view_px(rect, ppp));
-        if let Some(pos) = frame.pos {
-            self.tabs.set_current(pos);
+        // The core shows the visible list (interim, ADR 0014 §9 way A): its position maps to a
+        // file index through `visible`.
+        if let Some(index) = frame
+            .pos
+            .and_then(|pos| self.tabs.active()?.visible.get(pos).copied())
+        {
+            self.tabs.set_current(index);
         }
         let painter = ui.painter().clone();
         painter.rect_filled(full, 0.0, BACKGROUND);
@@ -1419,6 +1634,59 @@ impl Loupe {
             centre_text(&notice);
         }
     }
+}
+
+/// The range from the smallest to the largest file index (+1), for the thumbnail worker's
+/// priority (ADR 0014 §4.2); empty without indexes.
+fn index_span(indexes: impl Iterator<Item = usize> + Clone) -> std::ops::Range<usize> {
+    match (indexes.clone().min(), indexes.max()) {
+        (Some(first), Some(last)) => first..last.saturating_add(1),
+        _ => 0..0,
+    }
+}
+
+/// The paths as the metadata cache keys them (`MetadataCache::begin_load`): relative paths are
+/// taken from the current folder.
+fn resolve_paths(files: &[PathBuf]) -> Result<Vec<PathBuf>, String> {
+    let cwd = std::env::current_dir().map_err(|e| format!("cannot resolve image paths: {e}"))?;
+    Ok(files.iter().map(|path| cwd.join(path)).collect())
+}
+
+/// A filter drop-down list in the tab bar (ADR 0014 §5.2): an active list (not "Alla …") has a
+/// yellow outline. Returns the chosen value, if one was picked this frame.
+fn filter_combo<T: Copy + PartialEq>(
+    ui: &mut egui::Ui,
+    id: &str,
+    current: T,
+    choices: &[T],
+    text: impl Fn(T) -> &'static str,
+    active: bool,
+) -> Option<T> {
+    let mut chosen = current;
+    let mut picked = false;
+    ui.scope(|ui| {
+        if active {
+            let stroke = egui::Stroke::new(1.5, egui::Color32::YELLOW);
+            let widgets = &mut ui.visuals_mut().widgets;
+            widgets.inactive.bg_stroke = stroke;
+            widgets.hovered.bg_stroke = stroke;
+            widgets.active.bg_stroke = stroke;
+            widgets.open.bg_stroke = stroke;
+        }
+        egui::ComboBox::from_id_salt(id)
+            .selected_text(text(current))
+            .show_ui(ui, |ui| {
+                for &choice in choices {
+                    if ui
+                        .selectable_value(&mut chosen, choice, text(choice))
+                        .clicked()
+                    {
+                        picked = true;
+                    }
+                }
+            });
+    });
+    picked.then_some(chosen)
 }
 
 fn field_error(state: &ImportDialogState, field: Field) -> Option<&str> {
@@ -1676,6 +1944,8 @@ fn run(options: Options) -> Result<(), String> {
                 message: None,
                 indicator_after,
                 tabs: Tabs::default(),
+                ratings_read: false,
+                last_ratings_ready: false,
             };
             if let Some(p) = path {
                 loupe.open(&p, false);
@@ -1705,8 +1975,18 @@ fn main() -> ExitCode {
 
 #[cfg(test)]
 mod tests {
-    use super::{label_color, label_pill};
+    use super::{index_span, label_color, label_pill};
     use egui::{Color32, Rect, pos2};
+
+    #[test]
+    fn thumbnail_priority_span_runs_from_the_smallest_to_the_largest_file_index() {
+        // The visible cells under a filter (ADR 0014 §4.2): file indexes with gaps.
+        assert_eq!(index_span([0, 4, 8, 9].into_iter()), 0..10);
+        assert_eq!(index_span([9, 2, 5].into_iter()), 2..10);
+        assert_eq!(index_span([7].into_iter()), 7..8);
+        assert_eq!(index_span(std::iter::empty()), 0..0);
+        assert_eq!(index_span([usize::MAX].into_iter()), usize::MAX..usize::MAX);
+    }
 
     #[test]
     fn label_pill_is_inset_six_points_sideways_and_two_vertically() {
