@@ -104,6 +104,13 @@ UI only; no backend change.
   ratings are skipped silently. Toggling a label removes it only if all marked images have it.
   In the loupe, keys always act on the shown image.
 - Test: `ui/tests/filter-select.test.js` (Playwright, mocked backend), 22 checks.
+- **2026-11-10: implemented in the egui program (ADR 0014).** The rules above are carried over,
+  with these differences: the filter is per folder tab and is not saved between sessions; the star
+  list has an extra choice "Alla utom avvisade"; and ADR 0014 amendment 1 (§13): (point 1) a
+  condition ≥, =, ≤ beside the star list, where "≤ n" also takes unrated images and a reject never
+  matches a number of stars, and (point 2) an image you rate so that it no longer matches leaves at
+  once, in the grid and the loupe. ADR 0014 amendment 2 (§14): the label filter takes several labels
+  at once. The Tauri app keeps the behaviour described above.
 
 ## Note (2026-11-04): ADR 0007
 

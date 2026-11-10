@@ -3,6 +3,8 @@
 - Status: **accepted by the owner (2026-11-07, step S0).** The six questions of section 11 are
   decided. Nothing is built, installed or added as a dependency by this ADR. Each step in section 9 is
   its own work part, with its own approval and commit.
+- **Amendment 1 (owner, 2026-11-10, §13):** a held step key in the loupe waits for the shown image
+  (task T62).
 - Date: 2026-11-07
 - Related:
   - [GUI_REQUIREMENTS.md](../GUI_REQUIREMENTS.md) (GR1–GR11; §6 versions and features; §7 renderer and
@@ -121,6 +123,7 @@ Notes:
 - **The display mode (G4) needs a key** (G4: "with a key and a control"). The current viewer has only
   a button for it. The loupe uses **R**, which is free in the current viewer, plus a control in the
   window. **Approved by the owner, 2026-11-07.**
+- **Held step keys** (key repeat) wait for the shown image: amendment 1, §13.
 - **Pan by keyboard** does not exist in the current viewer. P7 measured pan with D and A, but A is the
   anchor key here. The on-screen pan measurement (section 8.2) therefore uses mouse drags, or a key
   that is active only in the measurement mode of section 5.2.
@@ -415,3 +418,27 @@ Added in step S3 (owner, 2026-11-07):
   written.
 - **GUI_REQUIREMENTS §5:** the order of migration is settled for milestone 1, with the loupe first. The
   later milestones are planned in their own ADRs or amendments.
+
+## 13. Amendment 1: a held step key waits for the shown image (owner, 2026-11-10)
+
+**Finding.** In the acceptance of ADR 0014 (F7) the owner held an arrow key in the loupe in RAW mode.
+The key repeats (about 30 times a second) faster than LibRaw renders, so V2 keeps the old image while
+the position runs on; only the last image is shown when the key is released. The same happens
+without a filter.
+
+**Decision.** In the loupe, **a repeated step key is ignored while the current image is not shown
+yet.**
+
+1. **Shown yet** means the status of the last frame is `Ready`, `Error` (a file that cannot be shown
+   must not stop stepping, G3) or `Empty`; it is not shown while the status is `Preparing`.
+2. **Only key repeats are ignored** (egui's `repeat` flag). Every separate press moves at once, so
+   pressing quickly moves as fast as before, and V1 is unchanged.
+3. **The step keys** are Next and Previous: the arrows, Page Up and Page Down. Home and End, zoom
+   keys and the grid are not affected.
+4. **Both display modes.** In JPEG mode the embedded previews are prefetched and usually shown within
+   one frame, so a held key keeps moving as today; in RAW mode stepping follows the rendering, and
+   every image passed is seen.
+
+**Consequence.** Holding an arrow no longer runs far ahead in RAW mode; to get far quickly, use the
+contact sheet, Home/End, or JPEG mode (R). V2 and G4 are unchanged: the program still never shows an
+intermediate image and never changes the display mode by itself.

@@ -1831,7 +1831,10 @@ Ordered from easiest to hardest. Start at the top.
 - **Done when:** `.\tools\check.ps1` is all OK, and the owner checks by hand: two and three colours;
   a colour plus "Ingen etikett"; ticking all six; the outline; two tabs with different sets.
 
-### T58. ADR 0014 F8: documentation after milestone 5 — Open
+### T58. ADR 0014 F8: documentation after milestone 5 — Done
+
+- **Review 2026-11-10: accepted.** Including amendment 2 in the ADR 0004 note (the task text named
+  only amendment 1; adding it is right).
 
 - **Start after T61 and the owner's acceptance (F7).** Documentation only; no code, no `Cargo.toml`. For a
   Claude agent.
@@ -1854,6 +1857,33 @@ Ordered from easiest to hardest. Start at the top.
   5. **docs/README.md:** "0014 milestone 5: filter and multi-selection in egui – done {date}".
 - **Rules:** English, the style of the existing documents; change only the lines needed; rules 10–12.
 - **Done when:** `.\tools\check.ps1` is all OK and `git diff --stat` shows only the files above.
+
+### T62. ADR 0009 amendment 1: a held step key in the loupe waits for the shown image — Open
+
+- **Can start now.** Small; for a Claude agent or a local agent.
+- **Crate:** `pw-loupe`. **Files:** `crates/pw-loupe/src/lib.rs` (a plain function and its tests),
+  `crates/pw-loupe/src/main.rs`.
+- **Why:** ADR 0009 §13 (amendment 1, owner 2026-11-10), found in the F7 check of ADR 0014: in RAW
+  mode a held arrow runs to the end of the list and only the last image is shown.
+- **What:**
+  1. `lib.rs`: `pub fn step_allowed(action: Action, repeat: bool, status: &Status) -> bool`: false
+     only when `repeat` is true, `action` is `Action::Next` or `Action::Previous`, and `status` is
+     `Status::Preparing { .. }`; true otherwise (`Ready`, `Error`, `Empty`, every other action, and
+     every press that is not a repeat).
+  2. `main.rs`: keep egui's `repeat` flag of each key event in the collected key actions (today
+     `Event::Key { key, pressed: true, modifiers, .. }`). Remember whether the loupe's last frame was
+     shown (the `Status` of the last `core.frame`, for example as a field updated where the frame is
+     taken). In the loupe, call `act` for a step only when `step_allowed` says so; an ignored repeat
+     does nothing else. The grid, the dialog keys, the rating keys and the tab keys are unchanged.
+- **Rules:** no `unwrap`/`expect`/`panic!` in non-test code; rules 6, 7, 10–12. No change of
+  `pw-viewcore`.
+- **Tests to add:** `step_allowed` for Next and Previous with and without `repeat` against `Ready`,
+  `Preparing`, `Error` and `Empty`; a repeat of `First`, `Last`, `ToggleZoom` and `ZoomStep` is always
+  allowed.
+- **Done when:** `.\tools\check.ps1` is all OK, and the owner checks by hand: in RAW mode, holding an
+  arrow shows every image passed (stepping follows the rendering) and stops at once when the key is
+  released; in JPEG mode a held arrow moves as before; single quick presses move at once in both
+  modes; a damaged file (error message) does not stop a held arrow; the grid's arrows are unchanged.
 
 ### T7. Format the files that `cargo fmt --check` reports — Done
 
@@ -2216,3 +2246,7 @@ and reviewer:
 | 2026-11-10 | T61 | Ready for review | Review: code accepted. `LabelFilter` is a six-bit set (empty = all; the sixth tick clears it, Q12); `matches` is OR within the set and AND with stars; a label outside `LABELS` (written by another program) is never in a non-empty set, documented. `label_combo`: "Alla etiketter" clears, check boxes per choice, `CloseOnClickOutside`, yellow outline when not empty, changes through `set_filter`. `LABEL_FILTERS` replaced by `LABEL_CHOICES`; test changes limited to the new constructors and the list/text test. Note for the hand check: while the popup is open, keys still reach the grid (as with the other lists). Checked: `test-output.txt` newer than the changes, fmt/test (454 passed, 27 ignored, 0 failed)/clippy OK; `pw-loupe` 231, matching the test inventory. Waiting for the owner's hand check |
 | 2026-11-10 | T61 | Done | Owner's hand check passed (two and three colours, a colour plus "Ingen etikett", all six clearing the set, the outline, two tabs). Committed |
 | 2026-11-10 | – | Note | Owner idea for later: a filter bar of toggle buttons (stars and colour swatches) instead of the drop-down lists. Recorded in ADR 0014 §15 and under "Not for agents yet"; needs its own amendment |
+| 2026-11-10 | F7 | Done | Owner's acceptance of ADR 0014 (§8.2 and amendments 1–2): every check passed (filters, the condition, several labels, two tabs, thumbnails not reloaded on a filter change (S1), filter reset after a restart, a rating removes the image at once in grid and loupe, marking and status line, 20 marked + 7 twice → no label (S4), Ctrl+A/Escape, a batch of 30 kept after closing at once). Stepping with an arrow held: smooth in the filter as measured in T57; in RAW mode the position runs ahead of the rendering and only the last image is shown, the same without a filter, so outside this milestone (added under "Not for agents yet"). T58 can start |
+| 2026-11-10 | T58 | Ready for review | (Agent) Documentation only. ADR 0014: "Implemented" status line; §7 results for S1–S6 from the log (S3 with the owner's T57 `latency.ps1` run; S6 notes that the log has no check-by-check list against the 22 checks); §9 "Tasks" column → "Result"; new §9.1 "Findings during implementation" (`open_folder` after T54, readiness in T56, relative folders T56/T59, moves with nothing visible T55, keys while a filter list is open T61, the arrow held in RAW mode F7). ADR 0004 addendum: egui note with the differences (per tab, not saved, "Alla utom avvisade", amendment 1 points 1 and 2) and **also amendment 2 (several labels), not named in point 2 (decision to check)**. `architecture.md`: `pw-loupe` row extended; **new `pw-viewcore` row** (the table had none). GR8, root `README.md` (on top of the owner's uncommitted change), `docs/README.md` updated. `docs/test-inventory.md` unchanged (matches: 454 passed, 27 ignored). `.\tools\check.ps1`: fmt, test (454 passed, 27 ignored, 0 failed) and clippy OK; no commit. |
+| 2026-11-10 | T58 | Done | Reviewed: only the named files changed; every result in ADR 0014 §7 and §9 is taken from the log; §9.1 findings correct; ADR 0004 note also names amendment 2 (accepted); `architecture.md` gains a `pw-viewcore` row (accepted, the table had none); GR8, both READMEs, ADR list correct; test inventory matches `test-output.txt` (454 passed, 27 ignored). **Milestone 5 (ADR 0014) is complete** |
+| 2026-11-10 | T62 | Open | Added: ADR 0009 amendment 1 (§13, owner): a repeated Next/Previous in the loupe is ignored while the current image is still being prepared. Replaces the "held arrow in RAW mode" item under "Not for agents yet" |

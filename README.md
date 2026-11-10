@@ -10,9 +10,9 @@ It covers card ingest, culling, rating and metadata.
 During development we start with Sony A1 and A7R IVA (ARW), Panasonic (RW2) and DNG.
 
 > Status: the new eframe + egui program (binary `pw-loupe`, window title "RawStride") has the loupe,
-> the contact sheet, folder tabs and the full import dialog. The existing Tauri app remains in place
-> until the egui program covers the rest of its features (ratings and labels, filters and
-> multi-selection, TIFF viewing; GUI_REQUIREMENTS GR8).
+> the contact sheet, folder tabs, the full import dialog, ratings and labels, and filter and
+> multi-selection. The existing Tauri app remains in place until the egui program covers the rest
+> of its features (IPTC metadata, TIFF viewing; GUI_REQUIREMENTS GR8).
 
 ## Stack
 

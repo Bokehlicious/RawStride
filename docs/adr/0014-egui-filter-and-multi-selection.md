@@ -4,6 +4,8 @@
   requirements (§7) and every proposal in §11 are accepted as written. Nothing is built, installed or
   added as a dependency by this ADR. Each step in §9 is its own work part, with its own approval and
   commit.
+- **Implemented (2026-11-10):** steps F1–F6 and the amendments done (agent tasks T51–T57, T59–T61),
+  F7 accepted by the owner; F8 is this documentation update.
 - **Amendment 2 (owner, 2026-11-10, §14):** the label filter takes several labels at once (T61).
 - **Amendment 1 (owner, 2026-11-10, §13):** §2.1 gets a star condition (≥, =, ≤), and §2.2 removes
   a rated image that stops matching at once. Tasks T59, T60; T57 changed.
@@ -201,6 +203,17 @@ ADR 0013 §7:
 | **S5** | The marking never contains a hidden image, and the targets never include one | Tests |
 | **S6** | Every check of `ui/tests/filter-select.test.js` that is not Tauri-specific has a `cargo test` counterpart that passes, **except the check "a rated image stays until the user moves on", which amendment 1 replaces** (the Tauri app keeps the old behaviour) | Test list in the T task |
 
+Results (2026-11-10, from the log in `docs/agent-tasks.md`):
+
+| # | Result |
+|---|---|
+| **S1** | Tests for the visible list (T51, T55). The grid keeps the thumbnails' file-index keys (T56). Checked by hand (F7): a filter change does not reload thumbnails |
+| **S2** | Tests for `Tab::rated` (T59). Checked by hand: a rated image and a rated marking leave at once in grid and loupe, and another label under "Grön" leaves (T59); the next unrated image is shown at once after a rating under "Ej betygsatt" (T57); again in F7 |
+| **S3** | Tests for `set_files` (T54). Checked by hand: smooth stepping under "≥ 3 stjärnor" (T57, F7). The owner's `latency.ps1` run (T57; label `t57-filter-next`, loupe under a filter, RIGHT × 7, maximised window): six steps, first change 10.9–17.0 ms (median 13.7 ms), one change each, so V1 (≤ 30 ms) and V2 are met; the seventh press at the end of the visible list gave no change. No run without a filter for comparison. Holding an arrow in RAW mode: see §9.1 |
+| **S4** | Tests with the fake writer (T53). Checked by hand (F7): 20 marked, 7 pressed twice → no label |
+| **S5** | Tests (T52: `extend_to` a hidden index changes nothing; T55: `retain_visible` after each recompute, a click on a hidden image changes nothing) |
+| **S6** | The `filter-select.test.js` cases are ported in `browse.rs` (T55) with the case "loupe within filter" (T57); the check that amendment 1 replaces was changed with the owner's approval (T59). All pass (454 passed, 0 failed after T61). The log does not record a check-by-check list against the 22 checks |
+
 ## 8. Testing and acceptance
 
 ### 8.1 Automated (`cargo test`)
@@ -232,24 +245,47 @@ ADR 0013 §7:
 
 ## 9. Work steps
 
-| Step | Content | Tasks |
+| Step | Content | Result |
 |---|---|---|
 | **F0** | Accept this ADR; answer §11; accept S1–S6 | **Done 2026-11-10** |
-| **F1** | `pw-loupe`: `filter.rs` and the filter in `Tab` (plain Rust, tests) | T51 |
-| **F2** | `pw-loupe`: `selection.rs` and the marking in `Tab`; `grid_key_action` with Shift (plain Rust, tests) | T52 |
-| **F3** | `pw-loupe`: `RatingStore::set_many` and the batch failure text (plain Rust, tests with the fake writer) | T53 |
-| **F4** | `pw-viewcore`: `set_files` that keeps caches by path (Q3; tests) | T54 |
-| **F5** | `pw-loupe`: the browse logic of a tab (visible list, moves, clicks, texts) in plain Rust (T55); then the binary: filter controls, the grid over the visible list, marked cells, status texts, clicks and keys (T56) | T55, T56 |
-| **F6** | `pw-loupe` (binary): the loupe under a filter with `set_files` | T57 |
-| **F7** | Acceptance by hand (§8.2), including V1 under a filter | Owner |
-| **F5c** | Amendment 1: a rating removes an image that stops matching at once (§2.2) | T59 |
-| **F5d** | Amendment 1: the star condition ≥, =, ≤ (§2.1) | T60 |
-| **F5e** | Amendment 2: several labels at once (§2.1) | T61 |
-| **F8** | Documentation: architecture.md, test inventory, GR8 status, ADR 0004 addendum (egui note) | T58 |
+| **F1** | `pw-loupe`: `filter.rs` and the filter in `Tab` (plain Rust, tests) | **Done:** T51 |
+| **F2** | `pw-loupe`: `selection.rs` and the marking in `Tab`; `grid_key_action` with Shift (plain Rust, tests) | **Done:** T52 |
+| **F3** | `pw-loupe`: `RatingStore::set_many` and the batch failure text (plain Rust, tests with the fake writer) | **Done:** T53 |
+| **F4** | `pw-viewcore`: `set_files` that keeps caches by path (Q3; tests) | **Done:** T54 |
+| **F5** | `pw-loupe`: the browse logic of a tab (visible list, moves, clicks, texts) in plain Rust (T55); then the binary: filter controls, the grid over the visible list, marked cells, status texts, clicks and keys (T56) | **Done:** T55, T56 |
+| **F6** | `pw-loupe` (binary): the loupe under a filter with `set_files` | **Done:** T57 |
+| **F7** | Acceptance by hand (§8.2), including V1 under a filter | **Done** by the owner (2026-11-10); see §7 |
+| **F5c** | Amendment 1: a rating removes an image that stops matching at once (§2.2) | **Done:** T59 |
+| **F5d** | Amendment 1: the star condition ≥, =, ≤ (§2.1) | **Done:** T60 |
+| **F5e** | Amendment 2: several labels at once (§2.1) | **Done:** T61 |
+| **F8** | Documentation: architecture.md, test inventory, GR8 status, ADR 0004 addendum (egui note) | **Done:** T58 |
 
 T59 comes after T56 and before T57; T60 after T57 (all three change `main.rs`). T51–T54 do not depend on each other; T55 needs T51 and T52; T56 needs T53 and T55; T57 needs T54
 and T56. Until T57, the loupe opens on the visible list with `open_folder` (§4.4, way A) as an
 interim step.
+
+Steps F1–F6 and the amendments are agent tasks T51–T57 and T59–T61 (`docs/agent-tasks.md`).
+Amendment 2 came from the owner's hand check of T60.
+
+### 9.1 Findings during implementation
+
+- **`open_folder` no longer waits for the old folder (T54).** The generation that `set_files` adds to
+  the running jobs also lets a new folder start the open of a position whose open from the old
+  folder is still running; the old open stores nothing when it comes back. Pinned by a test.
+- **Readiness of a tab's ratings (T56).** "Ready" means the ratings were read since the tab was
+  loaded, and there is no read error. Otherwise the second folder read that opening the loupe sends
+  would empty the grid under an active filter.
+- **Relative command-line folders (T56 review, T59).** The rating lookup for the filter and the grid
+  badge used unresolved tab paths, so a relative folder filtered as all unrated. T59 resolves them
+  as the metadata cache does.
+- **Moves with nothing visible (T55).** A click on a hidden image, and a grid move or loupe step
+  with nothing visible, change nothing.
+- **Keys while a filter list is open (T61 review).** Keys still reach the grid while a filter
+  popup is open, as with the other lists.
+- **Holding an arrow in the loupe in RAW mode (F7).** The key repeats faster than LibRaw renders, so
+  the position runs ahead and only the last image is shown when the key is released. The same
+  happens without a filter, so it is outside this milestone; decided in ADR 0009 amendment 1 (§13):
+  a repeated step key waits for the shown image (task T62).
 
 ## 10. Risks
 
