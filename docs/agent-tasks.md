@@ -1436,7 +1436,9 @@ Ordered from easiest to hardest. Start at the top.
   tests keep passing with `shift = false`.
 - **Done when:** `.\tools\check.ps1` is all OK.
 
-### T53. ADR 0014 F3: one rating key on several images, and the batch failure text (plain Rust) — Open
+### T53. ADR 0014 F3: one rating key on several images, and the batch failure text (plain Rust) — Done
+
+- **Review 2026-11-10: accepted.** Commit together with T54.
 
 - **Can start now.** Independent of T51, T52 and T54.
 - **Crate:** `pw-loupe`. **Files:** `crates/pw-loupe/src/ratings.rs`, `crates/pw-loupe/src/metadata.rs`,
@@ -1478,7 +1480,23 @@ Ordered from easiest to hardest. Start at the top.
   without a label.
 - **Done when:** `.\tools\check.ps1` is all OK.
 
-### T54. ADR 0014 F4: pw-viewcore keeps its caches when the file list changes — Open
+### T54. ADR 0014 F4: pw-viewcore keeps its caches when the file list changes — Done
+
+- **Second review 2026-11-10: accepted.** The review point below is done. Commit together with T53.
+
+- **Review 2026-11-10: changes requested (one point).** `set_files` is accepted as written: the
+  remap by path, the release of removed paths with exact byte counts, `lent`/`detached` so a stale
+  render never touches a session under a key of the new order, `last_draw`, and the eight tests.
+  Still to do, in `crates/pw-viewcore/src/state.rs` only:
+  1. **The generation in `running` also changes `open_folder`, and that needs a test.** Before, a job
+     of the old folder still running blocked the job with the same key in the new folder (`pick`
+     skipped `Open(key)` while any job with that key ran), so the new folder's first image waited for
+     the old folder's unpack. Now it starts at once. That is better and is accepted, but it is a
+     behaviour change outside `set_files` ("`open_folder` keeps its behaviour"), and every behaviour
+     change gets a test. Add one: an `Open` picked before `open_folder` is still running; after
+     `open_folder`, `pick` hands out the `Open` of the same position in the new folder; when the old
+     one finishes, it is discarded and the new one is kept. Mention the change in your log row.
+  Then run `.\tools\check.ps1`.
 
 - **Can start now.** Independent of T51–T53. **For a Claude agent** (the cache bookkeeping of
   `pw-viewcore`).
@@ -1582,6 +1600,9 @@ Ordered from easiest to hardest. Start at the top.
 - **Done when:** `.\tools\check.ps1` is all OK.
 
 ### T56. ADR 0014 F5b: draw the filter and the marking in the grid, wire clicks and keys — Open
+
+- **Note from the T53 review:** remove `#[cfg_attr(not(test), allow(dead_code))]` from
+  `MetadataCache::set_ratings` when point 7 calls it.
 
 - **Start after T53 and T55 are done.** **For a Claude agent** (drawing and wiring, checked by hand).
 - **Crate:** `pw-loupe`. **File:** `crates/pw-loupe/src/main.rs` only (a small plain helper with a test
@@ -1996,3 +2017,9 @@ and reviewer:
 | 2026-11-10 | T52 | Ready for review | (Agent) Review points 1–2, `selection.rs` only: `extend_to` returns without changing the marking or the anchor when `index` is not in `visible` (S5; an anchor that is not visible still marks `index` alone), doc comment updated; `all` clears the marking first, as `pickAll` does. New tests `extend_to_a_hidden_index_changes_nothing` and `all_replaces_the_marking` (mark 2 and 3, `all(&[0, 1])` → [0, 1]). Existing tests unchanged; test inventory updated (`pw-loupe` 175). Workspace fmt, test (389 passed, 27 ignored, 0 failed) and clippy OK; no commit. |
 | 2026-11-10 | T51 | Done | Second review: `matches` clamps the `AtLeast` minimum to 1–5, so it does what `star_filter_text` says; the new test covers 0, 6 and 255 against every value in `STAR_VALUES`, and a reject never matches |
 | 2026-11-10 | T52 | Done | Second review: `extend_to` returns before touching the marking or the anchor when `index` is not visible (S5); `all` clears first, as `pickAll` does; both have tests. Checked: `test-output.txt` newer than the changes, fmt/test (389 passed, 27 ignored, 0 failed)/clippy OK (the only `warning:` line is the existing `raw-decode-bench` build-script note); `pw-loupe` 175 tests, matching the test inventory. T51 and T52 can be committed together |
+| 2026-11-10 | T53 | Ready for review | (Agent) `ratings.rs`: `RatingStore::set_many` (skips files without `supports_rating`, `Unsupported` when none is left, resolves every path before anything changes; one decision for the batch: a label or a reject is cleared only when every image has it, otherwise set on all; `Stars`/`ClearLabel` as `apply`; other half kept; returns the count). `set` and `set_many` share the private `current` and `put` helpers. Failure count and last file/error recorded in `fail_write`; `failure_text` (none / today's text / "Kunde inte spara betyget för {n} bilder. Senast: {fil}: {fel}"); reset by an accepted `set` or `set_many` (a refused key changes nothing, the count included). Strings from `pump`, `written`, `fail_sent` unchanged. 13 tests. `metadata.rs`: `set_ratings` (marked `#[cfg_attr(not(test), allow(dead_code))]` until T56 calls it) and `failure_text`; 1 test. `main.rs`: the status line uses `failure_text()` when `poll` returned a failure. Existing tests unchanged; test inventory updated (`pw-loupe` 189). Workspace fmt, test (403 passed, 27 ignored, 0 failed) and clippy OK; no commit. |
+| 2026-11-10 | T54 | Ready for review | (Agent) `state.rs`: `State::set_files(files, current)`. Same list → only `go(current)`. Otherwise a new generation; old position → new position by path (each new position taken once); `sizes`, `failed`, owned sessions with `session_bytes_of` and `session_lru`, `resident` (`pos`, generation, same ids) and `ever_resident` (old generation only) are moved; state of removed paths is released (resident ids to `take_dropped`, `texture_bytes`/`session_bytes` subtracted); `inflight` and `outbox` cleared. Lent sessions are remembered with the generation they were lent in (`lent`); at `set_files` they leave `sessions` for `detached` (bytes still counted) and are dropped when they come back, so a stale `finish_render` never removes a session under a key of the new order (after `open_folder` it clears only the slot it was lent from, as before). `running` holds `(generation, Job)`, so an old-order job neither blocks nor is removed by a new-order job with the same key. `cur` = `current` clamped; zoom, centre, direction and mode kept; `since` kept when the current path is unchanged; `last_draw` kept unless its texture was dropped. `open_folder` unchanged apart from clearing `detached`. `core.rs`: `ViewCore::set_files` through `act`. 8 tests; existing tests unchanged; test inventory updated (`pw-viewcore` unit 52). Workspace fmt, test (411 passed, 27 ignored, 0 failed) and clippy OK; no commit. |
+| 2026-11-10 | T53 | Done | Reviewed: `set_many` decides once per batch (label and reject cleared only when all have them), skips unsupported files, resolves every path before changing anything; `set` and `set_many` share `current`/`put`; the failure count is reset only by an accepted key; strings of `pump`/`written`/`fail_sent` unchanged, so the exit list of T44 is unaffected; `set_many` with one path equals `set` for every key and six starting values. The temporary `allow(dead_code)` on `MetadataCache::set_ratings` is removed in T56. Commit together with T54 |
+| 2026-11-10 | T54 | Open | Review: `set_files` accepted; one point: the generation in `running` also lets the new folder start an open of a position whose old-folder open is still running (`open_folder` behaviour change, better but untested). Add a test and mention it. Checked: `test-output.txt` newer than the changes, fmt/test (411 passed, 27 ignored, 0 failed)/clippy OK |
+| 2026-11-10 | T54 | Ready for review | (Agent) Review point: new test `a_new_folder_does_not_wait_for_an_open_of_the_old_folder` in `state.rs`. Behaviour change of `open_folder` (from the generation in `running`): an open of a position whose open from the old folder is still running is handed out at once instead of waiting; the old open coming back stores nothing (no session, size or bytes) and does not free the new one's place (it is not handed out twice); the new open then stores its session. Production code unchanged since the review. Test inventory updated (`pw-viewcore` unit 53). Workspace fmt, test (412 passed, 27 ignored, 0 failed) and clippy OK; no commit. |
+| 2026-11-10 | T54 | Done | Second review: the new test pins the `open_folder` change (the new folder's open starts at once, the old one is discarded without storing or freeing anything, the new one is not handed out twice); production code unchanged since the first review. Checked: `test-output.txt` newer than the change, fmt/test (412 passed, 27 ignored, 0 failed)/clippy OK; `pw-viewcore` unit 53, matching the test inventory. T53 and T54 committed together. T55 can start (T51, T52 done); T56 after T55; T57 after T56 |

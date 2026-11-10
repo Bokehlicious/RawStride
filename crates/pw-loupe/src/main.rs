@@ -1076,8 +1076,14 @@ impl Loupe {
 
     fn draw(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
-        if let Some(message) = self.metadata.poll(&mut self.metadata_worker).last() {
-            self.message = Some(message.clone());
+        let failures = self.metadata.poll(&mut self.metadata_worker);
+        if let Some(message) = failures.last() {
+            // One line for every failure since the last rating key (ADR 0014 Q6).
+            self.message = Some(
+                self.metadata
+                    .failure_text()
+                    .unwrap_or_else(|| message.clone()),
+            );
         }
         // A folder or a file dropped on the window opens in a new tab (owner decision 2026-11-08,
         // ADR 0010 Q3). An empty active tab is filled instead, and an already open folder is

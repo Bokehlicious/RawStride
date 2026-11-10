@@ -184,6 +184,22 @@ impl MetadataCache {
         self.ratings.set(path, key)
     }
 
+    /// One rating key on several images (ADR 0014 §2.7); see `RatingStore::set_many`.
+    // Called from the grid once the marking is wired (T56); until then only the tests use it.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn set_ratings(
+        &mut self,
+        paths: &[PathBuf],
+        key: RatingKey,
+    ) -> Result<usize, RatingRefused> {
+        self.ratings.set_many(paths, key)
+    }
+
+    /// The status-line text for the write failures since the last rating key (ADR 0014 Q6).
+    pub fn failure_text(&self) -> Option<String> {
+        self.ratings.failure_text()
+    }
+
     pub fn shown_rating(&self, path: &Path) -> Option<&Rating> {
         self.images.get(path)?;
         self.ratings.shown(path)
@@ -817,5 +833,36 @@ mod tests {
             ["Kunde inte spara betyget för pw-loupe-read-only.ARW: filen är skrivskyddad"]
         );
         assert_eq!(cache.pending_writes(), 0);
+    }
+
+    #[test]
+    fn set_ratings_and_failure_text_pass_through_to_the_store() {
+        let mut worker = FakeSubmit::new([]);
+        worker.write_result = Some(Err("skrivskyddad".to_owned()));
+        let mut cache = MetadataCache::default();
+        let paths = [
+            std::env::temp_dir().join("pw-loupe-cache-batch-a.ARW"),
+            std::env::temp_dir().join("pw-loupe-cache-batch-b.png"),
+            std::env::temp_dir().join("pw-loupe-cache-batch-c.DNG"),
+        ];
+
+        assert_eq!(cache.set_ratings(&paths, RatingKey::Stars(4)), Ok(2));
+        assert_eq!(cache.failure_text(), None);
+        assert!(cache.poll(&mut worker).is_empty(), "the first poll sends");
+        assert_eq!(worker.write_attempts, [paths[0].clone(), paths[2].clone()]);
+
+        let failures = cache.poll(&mut worker);
+
+        assert_eq!(failures.len(), 2);
+        assert_eq!(
+            cache.failure_text().as_deref(),
+            Some(
+                "Kunde inte spara betyget för 2 bilder. Senast: pw-loupe-cache-batch-c.DNG: skrivskyddad"
+            )
+        );
+        assert_eq!(
+            cache.set_ratings(&paths[1..2], RatingKey::Stars(1)),
+            Err(RatingRefused::Unsupported)
+        );
     }
 }

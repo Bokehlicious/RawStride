@@ -141,12 +141,22 @@ struct RatingEntry {
     shown: Option<Rating>,
 }
 
+/// The file name and the error text of the last failed write.
+#[derive(Clone, Debug)]
+struct WriteFailure {
+    name: String,
+    error: String,
+}
+
 /// Optimistic per-image ratings and the ordered, non-blocking metadata write queue.
 #[derive(Clone, Debug, Default)]
 pub struct RatingStore {
     entries: HashMap<PathBuf, RatingEntry>,
     queued: VecDeque<PendingWrite>,
     sent: HashMap<RequestId, SentWrite>,
+    /// Write failures since the last accepted `set` or `set_many` (ADR 0014 Q6).
+    failure_count: usize,
+    last_failure: Option<WriteFailure>,
 }
 
 impl RatingStore {
@@ -156,14 +166,91 @@ impl RatingStore {
             return Err(RatingRefused::Unsupported);
         }
         let path = absolute_path(path)?;
-        let entry = self.entries.entry(path.clone()).or_default();
-        let current = entry
-            .shown
-            .as_ref()
-            .or(entry.confirmed.as_ref())
+        let rating = apply(&self.current(&path), key);
+        self.reset_failures();
+        self.put(path, rating);
+        Ok(())
+    }
+
+    /// Applies one rating key to several images with one decision for the whole batch
+    /// (ADR 0014 §2.7). Files that cannot carry ratings are skipped. A label or a reject is
+    /// cleared only when every image already has it, otherwise it is set on every image; stars
+    /// and clearing the label work as `apply`. The other half of each rating is kept. Returns the
+    /// number of images set; nothing changes when the batch is refused.
+    pub fn set_many(&mut self, paths: &[PathBuf], key: RatingKey) -> Result<usize, RatingRefused> {
+        let supported: Vec<&PathBuf> = paths.iter().filter(|path| supports_rating(path)).collect();
+        if supported.is_empty() {
+            return Err(RatingRefused::Unsupported);
+        }
+        let targets = supported
+            .into_iter()
+            .map(|path| absolute_path(path))
+            .collect::<Result<Vec<_>, _>>()?;
+        let currents: Vec<Rating> = targets.iter().map(|path| self.current(path)).collect();
+
+        let ratings: Vec<Rating> = match key {
+            RatingKey::Label(label) => {
+                let clear = currents
+                    .iter()
+                    .all(|rating| rating.label.as_deref() == Some(label));
+                currents
+                    .into_iter()
+                    .map(|mut rating| {
+                        rating.label = if clear { None } else { Some(label.to_owned()) };
+                        rating
+                    })
+                    .collect()
+            }
+            RatingKey::Reject => {
+                let clear = currents.iter().all(|rating| rating.stars == Some(-1));
+                currents
+                    .into_iter()
+                    .map(|mut rating| {
+                        rating.stars = if clear { None } else { Some(-1) };
+                        rating
+                    })
+                    .collect()
+            }
+            RatingKey::Stars(_) | RatingKey::ClearLabel => {
+                currents.iter().map(|rating| apply(rating, key)).collect()
+            }
+        };
+
+        self.reset_failures();
+        let count = targets.len();
+        for (path, rating) in targets.into_iter().zip(ratings) {
+            self.put(path, rating);
+        }
+        Ok(count)
+    }
+
+    /// The status-line text for the write failures since the last key (ADR 0014 Q6): `None`
+    /// without failures, the message of the failed image for one, and the count plus the last
+    /// failure for more.
+    pub fn failure_text(&self) -> Option<String> {
+        let last = self.last_failure.as_ref()?;
+        match self.failure_count {
+            0 => None,
+            1 => Some(failure_message(&last.name, &last.error)),
+            count => Some(format!(
+                "Kunde inte spara betyget för {count} bilder. Senast: {}: {}",
+                last.name, last.error
+            )),
+        }
+    }
+
+    /// The value a key starts from: the shown value, otherwise the confirmed one.
+    fn current(&self, path: &Path) -> Rating {
+        self.entries
+            .get(path)
+            .and_then(|entry| entry.shown.as_ref().or(entry.confirmed.as_ref()))
             .cloned()
-            .unwrap_or_default();
-        let rating = apply(&current, key);
+            .unwrap_or_default()
+    }
+
+    /// Shows `rating` at once and queues it, replacing an unsent queued write for the path.
+    fn put(&mut self, path: PathBuf, rating: Rating) {
+        let entry = self.entries.entry(path.clone()).or_default();
         entry.shown = Some(rating.clone());
 
         if let Some(queued) = self.queued.iter_mut().find(|write| write.path == path) {
@@ -171,7 +258,11 @@ impl RatingStore {
         } else {
             self.queued.push_back(PendingWrite { path, rating });
         }
-        Ok(())
+    }
+
+    fn reset_failures(&mut self) {
+        self.failure_count = 0;
+        self.last_failure = None;
     }
 
     /// Sends writes in key order. Back-pressure keeps the remaining writes queued.
@@ -326,9 +417,18 @@ impl RatingStore {
         let name = path
             .file_name()
             .unwrap_or(path.as_os_str())
-            .to_string_lossy();
-        Some(format!("Kunde inte spara betyget för {name}: {error}"))
+            .to_string_lossy()
+            .into_owned();
+        let message = failure_message(&name, &error);
+        self.failure_count = self.failure_count.saturating_add(1);
+        self.last_failure = Some(WriteFailure { name, error });
+        Some(message)
     }
+}
+
+/// The message for one failed write, as returned by `pump`, `written` and `fail_sent`.
+fn failure_message(name: &str, error: &str) -> String {
+    format!("Kunde inte spara betyget för {name}: {error}")
 }
 
 fn absolute_path(path: &Path) -> Result<PathBuf, RatingRefused> {
@@ -958,5 +1058,400 @@ mod tests {
         assert!(store.contains(&sent));
         assert!(store.contains(&queued));
         assert!(!store.contains(&unused));
+    }
+
+    /// Loads the given ratings as a folder read, so they are both confirmed and shown.
+    fn read_ratings(store: &mut RatingStore, values: &[(&Path, Rating)]) {
+        let ratings = values
+            .iter()
+            .map(|(path, rating)| (path.to_path_buf(), rating.clone()))
+            .collect();
+        let paths: Vec<PathBuf> = values.iter().map(|(path, _)| path.to_path_buf()).collect();
+        store.read(1, &ratings, &paths);
+    }
+
+    fn shown(store: &RatingStore, path: &Path) -> Rating {
+        store.shown(path).cloned().unwrap_or_default()
+    }
+
+    #[test]
+    fn batch_label_on_a_mix_sets_it_on_all_and_keeps_the_stars() {
+        let a = image("pw-loupe-batch-label-mix-a.ARW");
+        let b = image("pw-loupe-batch-label-mix-b.ARW");
+        let c = image("pw-loupe-batch-label-mix-c.DNG");
+        let mut store = RatingStore::default();
+        read_ratings(
+            &mut store,
+            &[
+                (&a, rating(Some(3), None)),
+                (&b, rating(None, Some("Yellow"))),
+                (&c, rating(Some(-1), Some("Red"))),
+            ],
+        );
+
+        assert_eq!(
+            store.set_many(
+                &[a.clone(), b.clone(), c.clone()],
+                RatingKey::Label("Yellow")
+            ),
+            Ok(3)
+        );
+
+        assert_eq!(shown(&store, &a), rating(Some(3), Some("Yellow")));
+        assert_eq!(shown(&store, &b), rating(None, Some("Yellow")));
+        assert_eq!(shown(&store, &c), rating(Some(-1), Some("Yellow")));
+        assert_eq!(store.pending(), 3);
+    }
+
+    #[test]
+    fn batch_label_on_all_that_have_it_clears_it_on_all() {
+        let a = image("pw-loupe-batch-label-all-a.ARW");
+        let b = image("pw-loupe-batch-label-all-b.ARW");
+        let mut store = RatingStore::default();
+        read_ratings(
+            &mut store,
+            &[
+                (&a, rating(Some(2), Some("Yellow"))),
+                (&b, rating(None, Some("Yellow"))),
+            ],
+        );
+
+        assert_eq!(
+            store.set_many(&[a.clone(), b.clone()], RatingKey::Label("Yellow")),
+            Ok(2)
+        );
+
+        assert_eq!(shown(&store, &a), rating(Some(2), None));
+        assert_eq!(shown(&store, &b), rating(None, None));
+    }
+
+    #[test]
+    fn batch_reject_on_a_mix_rejects_all_and_keeps_the_labels() {
+        let a = image("pw-loupe-batch-reject-mix-a.ARW");
+        let b = image("pw-loupe-batch-reject-mix-b.ARW");
+        let c = image("pw-loupe-batch-reject-mix-c.ARW");
+        let mut store = RatingStore::default();
+        read_ratings(
+            &mut store,
+            &[
+                (&a, rating(Some(3), Some("Red"))),
+                (&b, rating(Some(-1), None)),
+                (&c, rating(None, Some("Blue"))),
+            ],
+        );
+
+        assert_eq!(
+            store.set_many(&[a.clone(), b.clone(), c.clone()], RatingKey::Reject),
+            Ok(3)
+        );
+
+        assert_eq!(shown(&store, &a), rating(Some(-1), Some("Red")));
+        assert_eq!(shown(&store, &b), rating(Some(-1), None));
+        assert_eq!(shown(&store, &c), rating(Some(-1), Some("Blue")));
+    }
+
+    #[test]
+    fn batch_reject_on_all_rejected_clears_the_stars_and_keeps_the_labels() {
+        let a = image("pw-loupe-batch-reject-all-a.ARW");
+        let b = image("pw-loupe-batch-reject-all-b.ARW");
+        let mut store = RatingStore::default();
+        read_ratings(
+            &mut store,
+            &[
+                (&a, rating(Some(-1), Some("Green"))),
+                (&b, rating(Some(-1), None)),
+            ],
+        );
+
+        assert_eq!(
+            store.set_many(&[a.clone(), b.clone()], RatingKey::Reject),
+            Ok(2)
+        );
+
+        assert_eq!(shown(&store, &a), rating(None, Some("Green")));
+        assert_eq!(shown(&store, &b), rating(None, None));
+    }
+
+    #[test]
+    fn batch_stars_and_clear_label_work_as_apply_on_each_image() {
+        let a = image("pw-loupe-batch-stars-a.ARW");
+        let b = image("pw-loupe-batch-stars-b.ARW");
+        let mut store = RatingStore::default();
+        read_ratings(
+            &mut store,
+            &[
+                (&a, rating(Some(-1), Some("Red"))),
+                (&b, rating(None, None)),
+            ],
+        );
+        let paths = [a.clone(), b.clone()];
+
+        assert_eq!(store.set_many(&paths, RatingKey::Stars(3)), Ok(2));
+        assert_eq!(shown(&store, &a), rating(Some(3), Some("Red")));
+        assert_eq!(shown(&store, &b), rating(Some(3), None));
+
+        assert_eq!(store.set_many(&paths, RatingKey::ClearLabel), Ok(2));
+        assert_eq!(shown(&store, &a), rating(Some(3), None));
+        assert_eq!(shown(&store, &b), rating(Some(3), None));
+
+        assert_eq!(store.set_many(&paths, RatingKey::Stars(0)), Ok(2));
+        assert_eq!(shown(&store, &a), rating(None, None));
+        assert_eq!(shown(&store, &b), rating(None, None));
+    }
+
+    #[test]
+    fn batch_skips_files_that_cannot_carry_ratings() {
+        let a = image("pw-loupe-batch-skip-a.ARW");
+        let png = image("x.png");
+        let b = image("pw-loupe-batch-skip-b.DNG");
+        let mut store = RatingStore::default();
+        let mut writer = FakeWriter::default();
+
+        assert_eq!(
+            store.set_many(&[a.clone(), png.clone(), b.clone()], RatingKey::Stars(2)),
+            Ok(2)
+        );
+        store.pump(&mut writer);
+
+        let written: Vec<&PathBuf> = writer.requests.iter().map(|(_, path, _)| path).collect();
+        assert_eq!(written, [&a, &b]);
+        assert!(!store.contains(&png));
+    }
+
+    #[test]
+    fn batch_of_only_unsupported_files_is_refused_and_nothing_is_queued() {
+        let mut store = RatingStore::default();
+
+        assert_eq!(
+            store.set_many(
+                &[image("x.png"), PathBuf::from("notes.txt")],
+                RatingKey::Label("Red")
+            ),
+            Err(RatingRefused::Unsupported)
+        );
+        assert_eq!(
+            store.set_many(&[], RatingKey::Stars(1)),
+            Err(RatingRefused::Unsupported)
+        );
+
+        assert_eq!(store.pending(), 0);
+        assert!(store.pending_paths().is_empty());
+        assert!(!store.contains(&image("x.png")));
+    }
+
+    #[test]
+    fn batch_writes_follow_the_order_of_the_paths() {
+        let a = image("pw-loupe-batch-order-a.ARW");
+        let b = image("pw-loupe-batch-order-b.ARW");
+        let c = image("pw-loupe-batch-order-c.ARW");
+        let mut store = RatingStore::default();
+        let mut writer = FakeWriter::default();
+
+        assert_eq!(
+            store.set_many(&[c.clone(), a.clone(), b.clone()], RatingKey::Stars(4)),
+            Ok(3)
+        );
+        store.pump(&mut writer);
+
+        let written: Vec<&PathBuf> = writer.requests.iter().map(|(_, path, _)| path).collect();
+        assert_eq!(written, [&c, &a, &b]);
+    }
+
+    #[test]
+    fn two_batches_before_a_pump_coalesce_per_path() {
+        let a = image("pw-loupe-batch-coalesce-a.ARW");
+        let b = image("pw-loupe-batch-coalesce-b.ARW");
+        let c = image("pw-loupe-batch-coalesce-c.ARW");
+        let mut store = RatingStore::default();
+        let mut writer = FakeWriter::default();
+
+        assert_eq!(
+            store.set_many(&[a.clone(), b.clone()], RatingKey::Stars(2)),
+            Ok(2)
+        );
+        assert_eq!(
+            store.set_many(&[b.clone(), c.clone()], RatingKey::Label("Red")),
+            Ok(2)
+        );
+        assert_eq!(store.pending(), 3);
+        store.pump(&mut writer);
+
+        let requests: Vec<(PathBuf, Rating)> = writer
+            .requests
+            .iter()
+            .map(|(_, path, rating)| (path.clone(), rating.clone()))
+            .collect();
+        assert_eq!(
+            requests,
+            [
+                (a, rating(Some(2), None)),
+                (b, rating(Some(2), Some("Red"))),
+                (c, rating(None, Some("Red"))),
+            ]
+        );
+    }
+
+    #[test]
+    fn one_failed_image_of_a_batch_rolls_back_only_that_image() {
+        let a = image("pw-loupe-batch-rollback-a.ARW");
+        let b = image("pw-loupe-batch-rollback-b.ARW");
+        let mut store = RatingStore::default();
+        let mut writer = FakeWriter::default();
+        read_ratings(
+            &mut store,
+            &[(&a, loaded_rating(1)), (&b, loaded_rating(1))],
+        );
+        assert_eq!(
+            store.set_many(&[a.clone(), b.clone()], RatingKey::Stars(4)),
+            Ok(2)
+        );
+        store.pump(&mut writer);
+        let (id_a, id_b) = (writer.requests[0].0, writer.requests[1].0);
+
+        assert!(
+            store
+                .written(id_a, &a, Err("write failed".to_owned()))
+                .is_some()
+        );
+        assert_eq!(store.written(id_b, &b, Ok(())), None);
+
+        assert_eq!(store.shown(&a), Some(&loaded_rating(1)));
+        assert_eq!(store.shown(&b), Some(&loaded_rating(4)));
+        assert_eq!(store.pending(), 0);
+    }
+
+    #[test]
+    fn batch_with_one_path_equals_set_for_every_key() {
+        let path = image("pw-loupe-batch-single.ARW");
+        let mut keys: Vec<RatingKey> = (0..=5).map(RatingKey::Stars).collect();
+        keys.extend(pw_metadata::LABELS.iter().copied().map(RatingKey::Label));
+        keys.extend([RatingKey::ClearLabel, RatingKey::Reject]);
+        let starts = [
+            Rating::default(),
+            rating(Some(3), None),
+            rating(Some(-1), Some("Red")),
+            rating(None, Some("Yellow")),
+            rating(Some(5), Some("Purple")),
+            rating(Some(-1), None),
+        ];
+
+        for start in &starts {
+            for key in &keys {
+                let mut single = RatingStore::default();
+                let mut batch = RatingStore::default();
+                read_ratings(&mut single, &[(&path, start.clone())]);
+                read_ratings(&mut batch, &[(&path, start.clone())]);
+
+                assert_eq!(single.set(&path, *key), Ok(()));
+                assert_eq!(batch.set_many(std::slice::from_ref(&path), *key), Ok(1));
+                assert_eq!(batch.shown(&path), single.shown(&path), "{start:?} {key:?}");
+
+                let mut single_writer = FakeWriter::default();
+                let mut batch_writer = FakeWriter::default();
+                single.pump(&mut single_writer);
+                batch.pump(&mut batch_writer);
+                assert_eq!(
+                    batch_writer.requests, single_writer.requests,
+                    "{start:?} {key:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn failure_text_for_zero_one_and_three_failures_and_reset_by_the_next_key() {
+        let a = image("pw-loupe-batch-failure-a.ARW");
+        let b = image("pw-loupe-batch-failure-b.ARW");
+        let c = image("pw-loupe-batch-failure-c.ARW");
+        let mut store = RatingStore::default();
+        let mut writer = FakeWriter::default();
+        assert_eq!(
+            store.set_many(&[a.clone(), b.clone(), c.clone()], RatingKey::Stars(2)),
+            Ok(3)
+        );
+        store.pump(&mut writer);
+        let ids: Vec<RequestId> = writer.requests.iter().map(|(id, _, _)| *id).collect();
+
+        assert_eq!(store.failure_text(), None);
+
+        assert_eq!(
+            store.written(ids[0], &a, Err("fel A".to_owned())),
+            Some("Kunde inte spara betyget för pw-loupe-batch-failure-a.ARW: fel A".to_owned())
+        );
+        assert_eq!(
+            store.failure_text().as_deref(),
+            Some("Kunde inte spara betyget för pw-loupe-batch-failure-a.ARW: fel A")
+        );
+
+        // The per-write messages are unchanged; only `failure_text` sums them up.
+        assert_eq!(
+            store.written(ids[1], &b, Err("fel B".to_owned())),
+            Some("Kunde inte spara betyget för pw-loupe-batch-failure-b.ARW: fel B".to_owned())
+        );
+        assert_eq!(
+            store.written(ids[2], &c, Err("fel C".to_owned())),
+            Some("Kunde inte spara betyget för pw-loupe-batch-failure-c.ARW: fel C".to_owned())
+        );
+        assert_eq!(
+            store.failure_text().as_deref(),
+            Some(
+                "Kunde inte spara betyget för 3 bilder. Senast: pw-loupe-batch-failure-c.ARW: fel C"
+            )
+        );
+
+        // A refused key changes nothing, the failures included.
+        assert_eq!(
+            store.set_many(&[image("x.png")], RatingKey::Stars(1)),
+            Err(RatingRefused::Unsupported)
+        );
+        assert!(store.failure_text().is_some());
+
+        assert_eq!(store.set(&a, RatingKey::Stars(1)), Ok(()));
+        assert_eq!(store.failure_text(), None);
+
+        // `set_many` resets the count as well; a stopped worker counts as a failure.
+        let mut stopped = FakeWriter::with_responses([WriteResponse::Stopped]);
+        assert_eq!(store.pump(&mut stopped).len(), 1);
+        assert!(store.failure_text().is_some());
+        assert_eq!(
+            store.set_many(std::slice::from_ref(&b), RatingKey::Stars(5)),
+            Ok(1)
+        );
+        assert_eq!(store.failure_text(), None);
+    }
+
+    /// The `app.js` case: five marked images, one of them unsupported.
+    #[test]
+    fn yellow_on_five_marked_images_sets_then_clears_it_on_the_four_ratable_ones() {
+        let paths = [
+            image("pw-loupe-batch-app-1.ARW"),
+            image("pw-loupe-batch-app-2.RW2"),
+            image("pw-loupe-batch-app-3.png"),
+            image("pw-loupe-batch-app-4.DNG"),
+            image("pw-loupe-batch-app-5.JPG"),
+        ];
+        let ratable: Vec<&PathBuf> = paths
+            .iter()
+            .filter(|path| path.extension().is_some_and(|ext| ext != "png"))
+            .collect();
+        let mut store = RatingStore::default();
+        let mut writer = FakeWriter::default();
+
+        assert_eq!(store.set_many(&paths, RatingKey::Label("Yellow")), Ok(4));
+        store.pump(&mut writer);
+        assert_eq!(writer.requests.len(), 4);
+        for ((id, path, written), expected) in writer.requests.clone().into_iter().zip(&ratable) {
+            assert_eq!(&&path, expected);
+            assert_eq!(written, rating(None, Some("Yellow")));
+            assert_eq!(store.written(id, &path, Ok(())), None);
+        }
+
+        assert_eq!(store.set_many(&paths, RatingKey::Label("Yellow")), Ok(4));
+        store.pump(&mut writer);
+        assert_eq!(writer.requests.len(), 8);
+        for ((_, path, written), expected) in writer.requests[4..].iter().zip(&ratable) {
+            assert_eq!(&path, expected);
+            assert_eq!(written, &rating(None, None));
+        }
     }
 }

@@ -193,6 +193,14 @@ impl<B: Backend> ViewCore<B> {
         self.act("open", |s| s.open_folder(files));
     }
 
+    /// The list of files changed (a filter, or an image that dropped out of it): `files` in display
+    /// order, and `current` becomes current (clamped). Views and sessions of paths still in the
+    /// list are kept, with the same texture ids; the rest are released through
+    /// [`take_dropped`](Self::take_dropped) (ADR 0014 §4.4).
+    pub fn set_files(&self, files: Vec<PathBuf>, current: usize) {
+        self.act("files", |s| s.set_files(files, current));
+    }
+
     /// Makes image `pos` current (clamped to the folder).
     pub fn go(&self, pos: usize) {
         self.act("go", |s| s.go(pos));

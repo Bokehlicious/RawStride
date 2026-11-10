@@ -300,6 +300,12 @@ pub(crate) struct State<S> {
     pub view_px: [u32; 2],
     pub sizes: HashMap<Key, ImageSize>,
     sessions: HashMap<Key, Option<S>>,
+    /// The generation each lent session (`None` in `sessions`) was lent in.
+    lent: HashMap<Key, u64>,
+    /// Sessions lent under an older order of the files ([`State::set_files`]), by the generation
+    /// and key they were lent under, with their bytes. They still count in `session_bytes` and are
+    /// dropped when they come back.
+    detached: HashMap<(u64, Key), u64>,
     session_bytes_of: HashMap<Key, u64>,
     session_lru: Vec<Key>,
     pub session_bytes: u64,
@@ -310,7 +316,8 @@ pub(crate) struct State<S> {
     tick: u64,
     next_id: u64,
     inflight: Vec<Inflight>,
-    running: HashSet<Job>,
+    /// Jobs handed to a worker, with the generation they were handed out in.
+    running: HashSet<(u64, Job)>,
     failed: HashMap<Key, DecodeError>,
     ever_resident: HashSet<(u64, Key)>,
     refused: HashSet<(u64, Key)>,
@@ -339,6 +346,8 @@ impl<S> State<S> {
             view_px: [1920, 1080],
             sizes: HashMap::new(),
             sessions: HashMap::new(),
+            lent: HashMap::new(),
+            detached: HashMap::new(),
             session_bytes_of: HashMap::new(),
             session_lru: Vec::new(),
             session_bytes: 0,
@@ -503,6 +512,7 @@ impl<S> State<S> {
         self.zoom = Zoom::Fit;
         self.centre = [0.5, 0.5];
         self.sessions.retain(|_, s| s.is_none());
+        self.detached.clear();
         self.session_bytes_of.clear();
         self.session_lru.clear();
         self.session_bytes = 0;
@@ -516,6 +526,136 @@ impl<S> State<S> {
         self.waiting_since = None;
         if !self.files.is_empty() {
             self.go(0);
+        }
+    }
+
+    /// The list of files changed, and `current` becomes current (clamped) (ADR 0014 §4.4, way C).
+    /// The same list only goes to `current`. Otherwise the finished state of every path still in
+    /// the list moves to its new position: sizes, failures, owned sessions and resident views
+    /// (which keep their ids). The state of paths no longer in the list is released as eviction
+    /// does. Work in flight belongs to the old order: a new generation starts, so none of its
+    /// results is stored, and a session lent before is dropped when it comes back. Zoom, centre,
+    /// direction and display mode are kept.
+    pub fn set_files(&mut self, files: Vec<PathBuf>, current: usize) {
+        if files == self.files {
+            self.go(current);
+            return;
+        }
+        let before = self.cur.and_then(|c| self.files.get(c).cloned());
+        let old_generation = self.generation;
+        let old_files = std::mem::replace(&mut self.files, files);
+        // old position → new position, by path; each new position is taken at most once
+        let moved: Vec<Option<usize>> = {
+            let mut index: HashMap<&PathBuf, usize> = HashMap::new();
+            for (i, p) in self.files.iter().enumerate() {
+                index.entry(p).or_insert(i);
+            }
+            let mut taken = HashSet::new();
+            old_files
+                .iter()
+                .map(|p| index.get(p).copied().filter(|n| taken.insert(*n)))
+                .collect()
+        };
+        let to = |key: Key| moved.get(key.0).copied().flatten().map(|p| (p, key.1));
+        self.generation += 1;
+        let generation = self.generation;
+
+        // work in flight belongs to the old order
+        self.inflight.clear();
+        self.outbox.clear();
+        let lent: Vec<Key> = self
+            .sessions
+            .iter()
+            .filter(|(_, s)| s.is_none())
+            .map(|(k, _)| *k)
+            .collect();
+        for key in lent {
+            self.sessions.remove(&key);
+            let lent_in = self.lent.remove(&key).unwrap_or(old_generation);
+            let bytes = self.session_bytes_of.remove(&key).unwrap_or(0);
+            self.detached.insert((lent_in, key), bytes);
+        }
+        self.lent.clear();
+
+        // owned sessions move or are dropped
+        let mut sessions = HashMap::new();
+        let mut bytes_of = HashMap::new();
+        for (key, slot) in self.sessions.drain() {
+            let bytes = self.session_bytes_of.remove(&key);
+            match (to(key), slot) {
+                (Some(n), Some(s)) => {
+                    sessions.insert(n, Some(s));
+                    if let Some(b) = bytes {
+                        bytes_of.insert(n, b);
+                    }
+                }
+                _ => {
+                    if let Some(b) = bytes {
+                        self.session_bytes = self.session_bytes.saturating_sub(b);
+                    }
+                }
+            }
+        }
+        for (_, b) in self.session_bytes_of.drain() {
+            self.session_bytes = self.session_bytes.saturating_sub(b);
+        }
+        self.sessions = sessions;
+        self.session_bytes_of = bytes_of;
+        self.session_lru = std::mem::take(&mut self.session_lru)
+            .into_iter()
+            .filter_map(to)
+            .filter(|k| self.sessions.contains_key(k))
+            .collect();
+
+        self.sizes = self
+            .sizes
+            .drain()
+            .filter_map(|(k, v)| to(k).map(|n| (n, v)))
+            .collect();
+        self.failed = self
+            .failed
+            .drain()
+            .filter_map(|(k, v)| to(k).map(|n| (n, v)))
+            .collect();
+        self.ever_resident = self
+            .ever_resident
+            .drain()
+            .filter(|(g, _)| *g == old_generation)
+            .filter_map(|(_, k)| to(k).map(|n| (generation, n)))
+            .collect();
+
+        // resident views keep their ids
+        let mut kept = Vec::with_capacity(self.resident.len());
+        for mut r in self.resident.drain(..) {
+            match to((r.pos, r.source)) {
+                Some((pos, _)) if r.generation == old_generation => {
+                    r.pos = pos;
+                    r.generation = generation;
+                    kept.push(r);
+                }
+                _ => {
+                    self.texture_bytes = self.texture_bytes.saturating_sub(r.bytes);
+                    self.dropped.push(r.id);
+                }
+            }
+        }
+        self.resident = kept;
+        if let Some(d) = self.last_draw
+            && !self.resident.iter().any(|r| r.id == d.id)
+        {
+            self.last_draw = None;
+        }
+
+        if self.files.is_empty() {
+            self.cur = None;
+            self.last_draw = None;
+            self.waiting_since = None;
+            return;
+        }
+        let pos = current.min(self.files.len() - 1);
+        self.cur = Some(pos);
+        if self.files.get(pos) != before.as_ref() {
+            self.since = Instant::now();
         }
     }
 
@@ -785,15 +925,20 @@ impl<S> State<S> {
     /// mode.
     pub fn pick(&mut self, interactive: bool) -> Option<Task<S>> {
         let ck = self.cur_key();
+        let generation = self.generation;
         for job in self.plan() {
             let key = job.key();
-            if self.running.contains(&job) || (interactive && Some(key) != ck) {
+            if self.running.contains(&(generation, job)) || (interactive && Some(key) != ck) {
                 continue;
             }
             let is_cur = Some(key) == ck;
             match job {
                 Job::Open(key) => {
-                    if self.running.iter().any(|j| j.key() == key) {
+                    if self
+                        .running
+                        .iter()
+                        .any(|(g, j)| *g == generation && j.key() == key)
+                    {
                         continue;
                     }
                     let need = self.last_session_bytes;
@@ -805,7 +950,7 @@ impl<S> State<S> {
                     let Some(path) = self.files.get(key.0).cloned() else {
                         continue;
                     };
-                    self.running.insert(job);
+                    self.running.insert((generation, job));
                     return Some(Task::Open {
                         generation: self.generation,
                         key,
@@ -825,7 +970,8 @@ impl<S> State<S> {
                     let Some(session) = slot.take() else {
                         continue;
                     };
-                    self.running.insert(job);
+                    self.lent.insert(key, generation);
+                    self.running.insert((generation, job));
                     self.inflight.push(Inflight {
                         generation: self.generation,
                         key,
@@ -853,7 +999,7 @@ impl<S> State<S> {
         session_bytes: impl Fn(ImageSize, Source) -> u64,
         ms: f64,
     ) {
-        self.running.remove(&Job::Open(key));
+        self.running.remove(&(generation, Job::Open(key)));
         self.stats.unpacks += 1;
         self.stats.unpack_ms.push(ms);
         if generation != self.generation {
@@ -889,7 +1035,7 @@ impl<S> State<S> {
         result: Result<Rgb, DecodeError>,
         ms: f64,
     ) {
-        self.running.remove(&Job::Render(key, view));
+        self.running.remove(&(generation, Job::Render(key, view)));
         self.stats.renders += 1;
         self.stats
             .render_ms
@@ -897,10 +1043,20 @@ impl<S> State<S> {
             .or_default()
             .push(ms);
         if generation != self.generation {
-            self.sessions.remove(&key);
+            // the session is dropped; only the slot it was lent from is cleared, never a session
+            // that now has the same key (ADR 0014 §4.4)
+            if let Some(bytes) = self.detached.remove(&(generation, key)) {
+                self.session_bytes = self.session_bytes.saturating_sub(bytes);
+            } else if self.lent.get(&key) == Some(&generation)
+                && matches!(self.sessions.get(&key), Some(None))
+            {
+                self.sessions.remove(&key);
+                self.lent.remove(&key);
+            }
             self.stats.discarded += 1;
             return;
         }
+        self.lent.remove(&key);
         if let Some(slot) = self.sessions.get_mut(&key) {
             *slot = Some(session);
         }
@@ -1122,7 +1278,11 @@ impl<S> State<S> {
             .is_some_and(|req| self.serving(&req).is_some());
         let miss = if hit {
             ""
-        } else if self.running.iter().any(|j| j.key() == key) {
+        } else if self
+            .running
+            .iter()
+            .any(|(g, j)| *g == self.generation && j.key() == key)
+        {
             "inflight"
         } else if self.ever_resident.contains(&(self.generation, key)) {
             "evicted"
@@ -1579,6 +1739,35 @@ mod tests {
         }
     }
 
+    /// `running` holds the generation (T54): after `open_folder`, an open of a position whose
+    /// open from the old folder is still running starts at once instead of waiting for it, and
+    /// the old one coming back neither stores anything nor frees the new one's place.
+    #[test]
+    fn a_new_folder_does_not_wait_for_an_open_of_the_old_folder() {
+        let mut s = state(1024);
+        let old = s.generation;
+        assert!(matches!(s.pick(true), Some(Task::Open { key, .. }) if key == k(10)));
+        s.open_folder(
+            (0..20)
+                .map(|i| PathBuf::from(format!("new{i}.raw")))
+                .collect(),
+        );
+        s.go(10);
+        let new = s.generation;
+        assert!(matches!(
+            s.pick(true),
+            Some(Task::Open { generation, key, .. }) if generation == new && key == k(10)
+        ));
+        s.finish_open(old, k(10), Ok((99, SIZE)), mb24, 1.0);
+        assert!(s.sessions.is_empty() && s.sizes.is_empty());
+        assert_eq!(s.session_bytes, 0);
+        // the new open is still running: it is not handed out twice
+        assert!(s.pick(true).is_none());
+        s.finish_open(new, k(10), Ok((10, SIZE)), mb24, 1.0);
+        assert!(matches!(s.sessions.get(&k(10)), Some(Some(10))));
+        assert_eq!(s.session_bytes, 24 << 20);
+    }
+
     #[test]
     fn a_stale_free_zoom_view_is_discarded() {
         let mut s = state(1024);
@@ -1753,6 +1942,216 @@ mod tests {
         let f = s.frame(VIEW);
         assert!(matches!(f.status, Status::Preparing { .. }));
         assert_eq!(f.draw.map(|d| d.id), raw);
+    }
+
+    // ---------- set_files (ADR 0014 §4.4, T54) ----------
+
+    fn path(i: usize) -> PathBuf {
+        PathBuf::from(format!("img{i}.raw"))
+    }
+
+    /// `files(n)` without the images in `gone`.
+    fn without(n: usize, gone: &[usize]) -> Vec<PathBuf> {
+        (0..n).filter(|i| !gone.contains(i)).map(path).collect()
+    }
+
+    /// `session_bytes` is the sum of the sessions held and the detached ones still lent.
+    fn exact(s: &State<u32>) -> bool {
+        s.session_bytes
+            == s.session_bytes_of.values().sum::<u64>() + s.detached.values().sum::<u64>()
+    }
+
+    fn mb24(_: ImageSize, _: Source) -> u64 {
+        24 << 20
+    }
+
+    #[test]
+    fn set_files_moves_a_resident_view_to_its_new_position_with_the_same_id() {
+        let mut s = state(1024);
+        known(&mut s, 10);
+        let id = s.accept(&out(&s, 10, Want::Fit), 100);
+        assert!(id.is_some());
+        // image 3 drops out: image 10 is now at position 9
+        s.set_files(without(20, &[3]), 9);
+        assert!(s.take_dropped().is_empty());
+        let r = s.resident.iter().find(|r| Some(r.id) == id);
+        assert!(r.is_some_and(|r| r.pos == 9 && r.generation == s.generation));
+        assert_eq!(s.sizes.get(&k(9)), Some(&SIZE));
+        assert!(!s.sizes.contains_key(&k(10)));
+        let f = s.frame(VIEW);
+        assert_eq!(f.status, Status::Ready);
+        assert_eq!(f.draw.map(|d| d.id), id);
+        assert_eq!(f.path, Some(path(10)));
+        // drawn without a new render: nothing is planned for the shown view
+        s.since = Instant::now();
+        assert!(s.plan().is_empty());
+    }
+
+    #[test]
+    fn set_files_releases_the_view_and_session_of_a_removed_image() {
+        let mut s = state(1024);
+        s.finish_open(s.generation, k(11), Ok((11, SIZE)), mb24, 1.0);
+        s.finish_open(s.generation, k(12), Ok((12, SIZE)), mb24, 1.0);
+        let gone = s.accept(&out(&s, 12, Want::Fit), 100);
+        let stays = s.accept(&out(&s, 11, Want::Fit), 50);
+        assert!(gone.is_some() && stays.is_some());
+        s.set_files(without(20, &[12]), 10);
+        assert_eq!(s.take_dropped(), gone.into_iter().collect::<Vec<_>>());
+        assert_eq!(s.texture_bytes, 50);
+        assert!(
+            s.resident
+                .iter()
+                .any(|r| Some(r.id) == stays && r.pos == 11)
+        );
+        assert_eq!(s.session_bytes, 24 << 20);
+        assert!(matches!(s.sessions.get(&k(11)), Some(Some(11))));
+        // image 13 is now at position 12 and has no session of image 12
+        assert!(!s.sessions.contains_key(&k(12)));
+        assert_eq!(s.session_lru, vec![k(11)]);
+        assert!(exact(&s));
+    }
+
+    #[test]
+    fn after_set_files_the_plan_follows_the_new_order() {
+        let mut s = state(1024);
+        s.set_files(vec![path(5), path(10), path(17), path(3)], 1);
+        assert_eq!(s.files.get(2), Some(&path(17)));
+        use Want::*;
+        assert_eq!(
+            s.wanted(false),
+            vec![
+                (k(1), Shown),
+                (k(1), Target),
+                (k(2), Fit),
+                (k(2), Target),
+                (k(3), Fit),
+                (k(3), Target),
+                ((1, Source::Jpeg), Fit),
+                (k(1), Ring),
+                (k(0), Fit)
+            ]
+        );
+        let plan = s.plan();
+        assert_eq!(plan.first(), Some(&Job::Open(k(1))));
+        assert!(plan.contains(&Job::Open(k(2))) && plan.contains(&Job::Open(k(3))));
+        // +1 is the next path in the new order
+        assert!(matches!(s.pick(true), Some(Task::Open { key, .. }) if key == k(1)));
+        assert!(
+            matches!(s.pick(false), Some(Task::Open { key, path: p, .. }) if key == k(2) && p == path(17))
+        );
+    }
+
+    #[test]
+    fn a_render_lent_before_set_files_is_discarded_and_leaves_the_new_key_alone() {
+        let mut s = state(1024);
+        s.finish_open(s.generation, k(10), Ok((10, SIZE)), mb24, 1.0);
+        s.finish_open(s.generation, k(11), Ok((11, SIZE)), mb24, 1.0);
+        let Some(Task::Render {
+            generation,
+            key,
+            view,
+            session,
+        }) = s.pick(true)
+        else {
+            panic!("expected a render task");
+        };
+        assert_eq!(key, k(10));
+        // image 3 drops out: image 11 is now at position 10, image 10 at 9
+        s.set_files(without(20, &[3]), 9);
+        assert!(matches!(s.sessions.get(&k(10)), Some(Some(11))));
+        assert!(exact(&s));
+        let discarded = s.stats.discarded;
+        let img = Rgb {
+            width: 1,
+            height: 1,
+            data: vec![0; 3],
+        };
+        s.finish_render(generation, key, view, session, Ok(img), 1.0);
+        assert!(s.outbox.is_empty());
+        assert_eq!(s.stats.discarded, discarded + 1);
+        // the session of image 11, now under the same key, is untouched
+        assert!(matches!(s.sessions.get(&k(10)), Some(Some(11))));
+        assert!(!s.sessions.contains_key(&k(9)));
+        assert_eq!(s.session_bytes, 24 << 20);
+        assert!(s.detached.is_empty());
+        assert!(exact(&s));
+    }
+
+    #[test]
+    fn an_open_finished_after_set_files_is_discarded() {
+        let mut s = state(1024);
+        let Some(Task::Open {
+            generation,
+            key,
+            path: p,
+        }) = s.pick(true)
+        else {
+            panic!("expected an open task");
+        };
+        assert_eq!((key, p), (k(10), path(10)));
+        s.set_files(without(20, &[3]), 9);
+        s.finish_open(generation, key, Ok((10, SIZE)), mb24, 1.0);
+        // nothing is stored under the old key, which now belongs to image 11
+        assert!(s.sessions.is_empty());
+        assert!(s.sizes.is_empty());
+        assert_eq!(s.session_bytes, 0);
+        // the image is opened again at its new position
+        assert!(
+            matches!(s.pick(true), Some(Task::Open { key, path: p, .. }) if key == k(9) && p == path(10))
+        );
+    }
+
+    #[test]
+    fn set_files_with_the_same_list_only_goes_to_the_current_image() {
+        let mut s = state(1024);
+        known(&mut s, 10);
+        let id = s.accept(&out(&s, 10, Want::Fit), 100);
+        let generation = s.generation;
+        s.set_files(files(20), 12);
+        assert_eq!(s.generation, generation);
+        assert!(s.take_dropped().is_empty());
+        assert_eq!(s.cur, Some(12));
+        assert!(s.resident.iter().any(|r| Some(r.id) == id && r.pos == 10));
+        assert_eq!(s.sizes.get(&k(10)), Some(&SIZE));
+    }
+
+    #[test]
+    fn set_files_keeps_the_view_of_an_unchanged_current_image_and_the_zoom() {
+        let mut s = state(1024);
+        known(&mut s, 10);
+        s.zoom = Zoom::Scale(1.0);
+        s.centre = [0.3, 0.6];
+        s.dir = -1;
+        s.set_mode(Source::Raw);
+        let id = s.accept(&out(&s, 10, Want::Shown), 100);
+        assert_eq!(s.frame(VIEW).draw.map(|d| d.id), id);
+        s.set_files(without(20, &[0, 1]), 8);
+        assert_eq!(s.zoom, Zoom::Scale(1.0));
+        assert_eq!(s.centre, [0.3, 0.6]);
+        assert_eq!(s.dir, -1);
+        assert_eq!(s.mode, Source::Raw);
+        let f = s.frame(VIEW);
+        assert_eq!(f.status, Status::Ready);
+        assert_eq!(f.draw.map(|d| d.id), id);
+        assert_eq!(f.pos, Some(8));
+        assert_eq!(f.path, Some(path(10)));
+    }
+
+    #[test]
+    fn set_files_with_an_empty_list_releases_everything() {
+        let mut s = state(1024);
+        s.finish_open(s.generation, k(10), Ok((10, SIZE)), mb24, 1.0);
+        let id = s.accept(&out(&s, 10, Want::Fit), 100);
+        assert_eq!(s.frame(VIEW).draw.map(|d| d.id), id);
+        s.set_files(Vec::new(), 0);
+        assert_eq!(s.cur, None);
+        assert_eq!(s.take_dropped(), id.into_iter().collect::<Vec<_>>());
+        assert_eq!((s.session_bytes, s.texture_bytes), (0, 0));
+        assert!(s.sessions.is_empty() && s.sizes.is_empty() && s.resident.is_empty());
+        assert!(s.plan().is_empty());
+        let f = s.frame(VIEW);
+        assert_eq!(f.status, Status::Empty);
+        assert!(f.draw.is_none());
     }
 
     #[test]
