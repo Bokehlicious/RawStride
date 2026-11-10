@@ -283,6 +283,16 @@ pub fn is_plain_jpeg(path: &std::path::Path) -> bool {
         .is_some_and(|e| e.eq_ignore_ascii_case("jpg") || e.eq_ignore_ascii_case("jpeg"))
 }
 
+/// Whether `path` is shown as itself in both display modes: a plain JPEG file (ADR 0009 §5.2) or
+/// a TIFF file (ADR 0015 Q3). Such a file is always keyed [`Source::Jpeg`].
+pub fn is_shown_as_itself(path: &std::path::Path) -> bool {
+    path.extension().and_then(|e| e.to_str()).is_some_and(|e| {
+        ["jpg", "jpeg", "tif", "tiff"]
+            .iter()
+            .any(|x| e.eq_ignore_ascii_case(x))
+    })
+}
+
 /// The core's state.
 #[derive(Debug)]
 pub(crate) struct State<S> {
@@ -374,10 +384,11 @@ impl<S> State<S> {
 
     // ---------- the view model ----------
 
-    /// Where image `pos` comes from in display mode `mode`: plain JPEG files are always JPEG.
+    /// Where image `pos` comes from in display mode `mode`: plain JPEG and TIFF files are always
+    /// `Source::Jpeg` (shown as themselves).
     pub fn source_in(&self, pos: usize, mode: Source) -> Source {
         match self.files.get(pos) {
-            Some(p) if is_plain_jpeg(p) => Source::Jpeg,
+            Some(p) if is_shown_as_itself(p) => Source::Jpeg,
             _ => mode,
         }
     }
@@ -1894,6 +1905,34 @@ mod tests {
         assert_eq!(s.key(0), (0, Source::Jpeg));
         s.since = Instant::now() - Duration::from_secs(1);
         // no "other mode" entry for a plain JPEG
+        assert!(
+            s.wanted(false)
+                .iter()
+                .all(|(key, _)| *key != (0, Source::Raw))
+        );
+    }
+
+    #[test]
+    fn jpeg_and_tiff_files_are_shown_as_themselves() {
+        use std::path::Path;
+        assert!(is_shown_as_itself(Path::new("a.tif")));
+        assert!(is_shown_as_itself(Path::new("b.TIFF")));
+        assert!(is_shown_as_itself(Path::new("c.jpg")));
+        assert!(!is_shown_as_itself(Path::new("d.arw")));
+        assert!(!is_shown_as_itself(Path::new("e.dng")));
+        assert!(!is_shown_as_itself(Path::new("f")));
+    }
+
+    #[test]
+    fn a_tiff_file_is_shown_as_itself_in_both_modes() {
+        let mut s: State<u32> = State::new(Config::default());
+        s.open_folder(vec![PathBuf::from("a.tif"), PathBuf::from("b.arw")]);
+        assert_eq!(s.key(0), (0, Source::Jpeg));
+        assert_eq!(s.key(1), (1, Source::Raw));
+        s.set_mode(Source::Jpeg);
+        assert_eq!(s.key(0), (0, Source::Jpeg));
+        s.since = Instant::now() - Duration::from_secs(1);
+        // no "other mode" entry for a TIFF
         assert!(
             s.wanted(false)
                 .iter()

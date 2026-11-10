@@ -66,6 +66,37 @@ fn test_files(prefix: &str) -> Vec<PathBuf> {
     files
 }
 
+/// Every `.tif` / `.tiff` file in `PW_TESTDATA`, sorted; at least one must exist.
+fn tiff_files() -> Vec<PathBuf> {
+    let dir = testdata();
+    let entries = std::fs::read_dir(&dir).unwrap_or_else(|error| {
+        panic!(
+            "could not read PW_TESTDATA folder {}: {error}",
+            dir.display()
+        )
+    });
+    let mut files: Vec<PathBuf> = entries
+        .map(|entry| {
+            entry
+                .unwrap_or_else(|error| {
+                    panic!(
+                        "could not read an entry in PW_TESTDATA folder {}: {error}",
+                        dir.display()
+                    )
+                })
+                .path()
+        })
+        .filter(|path| path.is_file() && pw_raw::is_tiff_file(path))
+        .collect();
+    files.sort();
+    assert!(
+        !files.is_empty(),
+        "no TIFF test file was found in PW_TESTDATA folder {}",
+        dir.display()
+    );
+    files
+}
+
 struct Screen<'a> {
     core: &'a ViewCore<NativeBackend>,
     textures: HashMap<u64, ViewOut>,
@@ -101,7 +132,7 @@ impl Screen<'_> {
 }
 
 fn start() -> ViewCore<NativeBackend> {
-    match ViewCore::start(NativeBackend, Config::default()) {
+    match ViewCore::start(NativeBackend::default(), Config::default()) {
         Ok(c) => c,
         Err(e) => panic!("start: {e}"),
     }
@@ -172,6 +203,34 @@ fn a_file_that_is_not_raw_shows_an_error() {
     );
     assert!(frame.draw.is_none());
     let _ = std::fs::remove_dir_all(&tmp);
+}
+
+#[test]
+#[ignore = "needs real camera files: set PW_TESTDATA and run with --ignored"]
+fn tiff_files_are_shown_as_themselves_in_both_modes() {
+    for file in tiff_files() {
+        let (w, h) = pw_tiff::dimensions(&file)
+            .unwrap_or_else(|e| panic!("{}: dimensions: {e}", file.display()));
+        for mode in [Source::Raw, Source::Jpeg] {
+            let core = start();
+            core.set_mode(mode);
+            core.open_folder(vec![file.clone()]);
+            let mut screen = Screen {
+                core: &core,
+                textures: HashMap::new(),
+            };
+            let f = screen.until_ready();
+            assert_eq!(f.status, Status::Ready, "{} in {mode:?}", file.display());
+            assert_eq!(f.zoom, Zoom::Fit, "{} in {mode:?}", file.display());
+            assert_eq!(f.source, Source::Jpeg, "{} in {mode:?}", file.display());
+            let size = f
+                .size
+                .unwrap_or_else(|| panic!("{} in {mode:?}: no size", file.display()));
+            assert_eq!((size.w, size.h), (w, h), "{} in {mode:?}", file.display());
+            let tex = &screen.textures[&f.draw.map_or(0, |d| d.id)];
+            assert_eq!(tex.source, Source::Jpeg, "{} in {mode:?}", file.display());
+        }
+    }
 }
 
 #[test]

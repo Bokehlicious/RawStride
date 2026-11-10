@@ -14,8 +14,9 @@
 //!   indicator after 1 s. **Damaged files (G3)** show an error, never an earlier image.
 //!
 //! - **Display mode (G4):** RAW (LibRaw, PPG) or JPEG (the largest embedded JPEG), switched only by
-//!   the user. Zoom and position stay; 100 % is 100 % of the source shown. A plain JPEG file is
-//!   shown as itself in both modes. A file without an embedded JPEG says so in JPEG mode, and a
+//!   the user. Zoom and position stay; 100 % is 100 % of the source shown. A plain JPEG file and a
+//!   TIFF file (decoded once with `pw-tiff` under the core budget, ADR 0015) are shown as
+//!   themselves in both modes. A file without an embedded JPEG says so in JPEG mode, and a
 //!   damaged RAW keeps its intact embedded JPEG (G3).
 //!
 //! No GUI types, no files listed here and no FFI outside the `native` feature: the decoders are a
@@ -34,5 +35,5 @@ pub use crate::core::ViewCore;
 pub use crate::geometry::{ImageSize, Rect};
 pub use crate::state::{
     Config, Draw, Frame, HALF_DENSITY, MAX_SCALE, Record, Resident, Stats, Status, ViewKind,
-    ViewOut, ZOOM_STEP, Zoom, fnv, is_plain_jpeg,
+    ViewOut, ZOOM_STEP, Zoom, fnv, is_plain_jpeg, is_shown_as_itself,
 };

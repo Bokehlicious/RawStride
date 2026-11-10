@@ -2063,7 +2063,10 @@ fn run(options: Options) -> Result<(), String> {
         ..Config::default()
     };
     let indicator_after = config.indicator_after;
-    let core = ViewCore::start(NativeBackend, config)?;
+    let core = ViewCore::start(
+        NativeBackend::with_tiff_limit(usize::try_from(config.core_budget).unwrap_or(usize::MAX)),
+        config,
+    )?;
     let metadata_worker = MetadataWorker::start().map_err(|e| e.to_string())?;
     let import_worker = ImportWorker::start().map_err(|e| e.to_string())?;
     let thumb_worker = ThumbWorker::start().map_err(|e| e.to_string())?;
