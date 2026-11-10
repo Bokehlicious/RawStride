@@ -1041,7 +1041,7 @@ Ordered from easiest to hardest. Start at the top.
   expected English texts to the Swedish ones, and say so in the report).
 - **Done when:** `.\tools\check.ps1` is all OK.
 
-### T43. ADR 0013 B3: rating keys and display in the grid and the loupe — Ready for review
+### T43. ADR 0013 B3: rating keys and display in the grid and the loupe — Done
 
 - **Second review 2026-11-09: code accepted.** Points 1 and 2 below are fixed; point 3 is decided by
   the owner during the hand check. Waiting for the owner's hand check ("Done when").
@@ -1135,7 +1135,7 @@ Ordered from easiest to hardest. Start at the top.
   before queued writes in the same `poll`.
 - **Done when:** `.\tools\check.ps1` is all OK.
 
-### T46. ADR 0013 §5: rounded, inset label bar in the grid and the loupe badge — Ready for review
+### T46. ADR 0013 §5: rounded, inset label bar in the grid and the loupe badge — Done
 
 - **Start after T43 is done.** For a Claude agent (drawing code, checked by hand).
 - **Crate:** `pw-loupe`. **File:** `crates/pw-loupe/src/main.rs` only.
@@ -1583,3 +1583,5 @@ and reviewer:
 | 2026-11-09 | T44 | Done | Exit wait and message box checked by hand in T47 (pending write → list after about 5 s; read-only sidecar → Swedish reason); code reviewed earlier |
 | 2026-11-09 | T48 | Done | Reviewed: `write_succeeded` reads the summary counts (created/updated/unchanged > 0 and no "files weren't … due to errors"); `write_iptc` gets the same, stricter check, which is correct. Unit tests for the three answers; real ExifTool test for a read-only sidecar and JPEG keeps the old rating and restores permissions before asserting |
 | 2026-11-09 | T49 | Done | Reviewed: `Error::ReadOnly`/`NotWritten` chosen only after ExifTool refused; `WriteError` keeps the kind across the worker; `pw-loupe` maps it to "filen är skrivskyddad" / "filen kunde inte skrivas" without comparing text; `RatingStore` unchanged; test helpers convert as the task said. Owner's `check.ps1`: fmt, test (352 passed, 27 ignored, 0 failed) and clippy OK; owner's hand check passed |
+| 2026-11-10 | T43 | Done | Owner's hand check passed (keys in grid and loupe, display, label name in the badge kept) |
+| 2026-11-10 | T46 | Done | Owner's hand check passed (inset, rounded label bar and badge) |
