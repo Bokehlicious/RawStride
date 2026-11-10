@@ -1887,7 +1887,7 @@ Ordered from easiest to hardest. Start at the top.
   released; in JPEG mode a held arrow moves as before; single quick presses move at once in both
   modes; a damaged file (error message) does not stop a held arrow; the grid's arrows are unchanged.
 
-### T63. ADR 0015 D1: new crate `pw-tiff` with the TIFF decoder from the Tauri app — Ready for review
+### T63. ADR 0015 D1: new crate `pw-tiff` with the TIFF decoder from the Tauri app — Done
 
 - **Review 2026-11-10: code accepted.** Waiting for the owner's commit.
 
@@ -1954,6 +1954,114 @@ Ordered from easiest to hardest. Start at the top.
 - **Done when:** `.\tools\check.ps1` is all OK; `photoworkflow` has the same tests as before minus
   `conversions`, which `pw-tiff` now has, all passing; `docs/test-inventory.md` has a `pw-tiff` row
   and the new totals; `git diff --stat` shows only the files above.
+
+### T64. ADR 0015 D2: the loupe core opens TIFF files — Open
+
+- **Can start now.** Independent of T65 (they share only `docs/test-inventory.md` and this file).
+- **Crates:** `pw-viewcore`, `pw-loupe` (one line).
+- **Files:** `crates/pw-viewcore/Cargo.toml`, `crates/pw-viewcore/src/native.rs`,
+  `crates/pw-viewcore/src/state.rs`, `crates/pw-viewcore/src/lib.rs` (re-export),
+  `crates/pw-viewcore/tests/native_files.rs`, `crates/pw-loupe/src/main.rs` (the `NativeBackend`
+  construction in `run` only), `Cargo.lock` (by cargo), `docs/test-inventory.md`.
+- **Why:** ADR 0015 §4.1–§4.4 and §5: a TIFF is shown as itself in both display modes, decoded once
+  with `pw-tiff` under the core budget.
+- **What:**
+  1. **Cargo:** `pw-tiff = { workspace = true, optional = true }` under `[dependencies]` and
+     `"dep:pw-tiff"` added to the `native` feature (update its comment); `tiff = "=0.9.1"` under
+     `[dev-dependencies]` (to write test files; already in `Cargo.lock`).
+  2. **`state.rs`:** a new `pub fn is_shown_as_itself(path: &Path) -> bool`: true for the extensions
+     jpg, jpeg, tif, tiff (any case). `source_in` uses it instead of `is_plain_jpeg`, so a TIFF is
+     `Source::Jpeg` in both modes (ADR 0015 Q3). `is_plain_jpeg` stays unchanged (pw-loupe uses it for
+     the "JPEG-fil" text until T66). Re-export the new function from `lib.rs` next to it.
+  3. **`native.rs`, the limit:** `NativeBackend` gets a private field `tiff_limit: usize` (keeps
+     `Clone, Copy, Debug`); `impl Default` = `4 << 30` (the default core budget);
+     `pub fn with_tiff_limit(bytes: usize) -> NativeBackend`. `pw-loupe` `run`:
+     `NativeBackend::with_tiff_limit(usize::try_from(config.core_budget).unwrap_or(usize::MAX))`
+     instead of `NativeBackend` (ADR 0015 Q4). `native_files.rs`: `NativeBackend` →
+     `NativeBackend::default()`, nothing else in the existing tests.
+  4. **`native.rs`, the session:** `NativeSession::Tiff(Rgb)` holding the full decoded image.
+     `open` checks the file type **first**, for either `Source`: a TIFF (`pw_raw::is_tiff_file`) goes
+     to a new `open_tiff(path, limit)`:
+     - `pw_tiff::decode_rgb8(path, Some(limit))`, converted to `Rgb` (same three fields);
+     - the orientation from `pw_raw::inspect(path)`; if inspect fails (BigTIFF), orientation 1
+       (ADR 0015 §4.3); `ImageSize { w, h, flip: flip_of_orientation(orientation) }` with the
+       decoded size.
+     - `render_half`: `scale::downscale` of the full image to `scale::scaled_size(w, h, 0.5)`;
+       `render_region`: `scale::crop` as for the JPEG's full decode, with the same error texts
+       ("the TIFF was not decoded" is not needed: the image is always there).
+     - `session_bytes` needs no change: a TIFF is keyed `Source::Jpeg`, which already counts
+       `w × h × 3`, the decoded RGB.
+  5. **Error texts (Swedish, ADR 0015 §5; the loupe shows them after "Filen kan inte visas: "):**
+     `TiffError::Unsupported(m)` → "TIFF-varianten stöds inte än ({m})";
+     `TiffError::TooLarge { limit }` → "TIFF-filen är för stor för minnesbudgeten ({limit / 1 MiB}
+     MB)"; `Io` and `Decode` → their own text. Never `DecodeError::damaged` (that is for RAW data,
+     G3). Put the mapping in a small function `tiff_error(e: pw_tiff::TiffError) -> DecodeError` so
+     it can be tested.
+- **Rules:** no change of `Source`, of the cache keys or of RAW/JPEG behaviour; rules 3–7 and 10–12.
+  `git diff Cargo.lock`: only the new dependency lines of `pw-viewcore`; no new package.
+- **Tests to add:**
+  - `state.rs`: `is_shown_as_itself` for `a.tif`, `b.TIFF`, `c.jpg`, not for `d.arw`, `e.dng`, `f`;
+    a TIFF is keyed `Source::Jpeg` in RAW mode and in JPEG mode, and has no "other mode" entry
+    (follow `a_plain_jpeg_file_is_shown_as_itself_in_both_modes`).
+  - `native.rs` (write the files with `tiff::encoder::TiffEncoder` into a test folder of its own):
+    a 6×4 8-bit RGB TIFF opens with `w = 6, h = 4`, `flip = 0`, and `render_half` gives 3×2 and
+    `render_region` gives exactly the requested pixels; opening it with `Source::Raw` gives the same
+    TIFF session (the file type wins); a TIFF with Orientation 6 (write the tag with the encoder's
+    directory API, or by hand) gives `flip = 6`; a palette TIFF (copy `palette_tiff` from
+    `crates/pw-tiff/src/tests.rs`) gives the "TIFF-varianten stöds inte än" text and `damaged =
+    false`; a limit smaller than the image gives the "för stor för minnesbudgeten" text;
+    `tiff_error` for all four kinds.
+  - `native_files.rs`, ignored like the others (needs `PW_TESTDATA`): every `.tif` / `.tiff` in
+    `PW_TESTDATA` (a new helper; at least one must exist) is shown in fit view with
+    `Source::Jpeg` in **both** modes, at the size of `pw_tiff::dimensions`, without an error.
+- **Done when:** `.\tools\check.ps1` is all OK; the owner runs `.\tools\check.ps1 -Ignored` with
+  `PW_TESTDATA` set and the new real-file test passes on his 9 TIFFs; `git diff --stat` shows only
+  the files above.
+
+### T65. ADR 0015 D3: thumbnails of TIFF files — Open
+
+- **Can start now.** Independent of T64 (they share only `docs/test-inventory.md` and this file).
+- **Crates:** `pw-tiff`, `pw-thumbcache`, `photoworkflow` (`src-tauri`).
+- **Files:** `crates/pw-tiff/src/` (a new module for the moved helpers, and `lib.rs`),
+  `src-tauri/src/imaging.rs`, `crates/pw-thumbcache/Cargo.toml`, `crates/pw-thumbcache/src/extract.rs`,
+  `Cargo.lock` (by cargo), `docs/test-inventory.md`.
+- **Why:** ADR 0015 §4.1 and Q7: a TIFF thumbnail is decoded from the image data and reduced to the
+  cell with a box filter. The box filter already exists in the Tauri app.
+- **What:**
+  1. **Move `fit` and `downscale`** with their tests (`fit_keeps_aspect_and_never_upscales`,
+     `downscale_averages_blocks`, assertions unchanged) from `src-tauri/src/imaging.rs` to `pw-tiff`
+     (for example `crates/pw-tiff/src/resize.rs`), exported from `pw-tiff`. Behaviour unchanged.
+     In `downscale`, replace slice indexing (`src.data[..]`, `out[..]`, `col[x]`, `acc[..]`,
+     `cnt[t]`) with forms that cannot panic in non-test code (`get`/`get_mut`, iterators,
+     `chunks_exact`), keeping the result bit for bit; the existing test and one more on a 7×5 image
+     reduced to 3×2 (compare with the result of today's code, computed in the test) pin it.
+     `imaging.rs` becomes `pub use pw_tiff::{Rgb8, downscale, fit};` plus its module comment, so
+     `rawview.rs`, `tiff_view.rs` and `main.rs` do not change.
+  2. **`pw-thumbcache`:** `pw-tiff.workspace = true` under `[dependencies]` and `tiff = "=0.9.1"`
+     under `[dev-dependencies]`. In `thumbnail`, before `pw_raw::inspect`: for a TIFF
+     (`pw_raw::is_tiff_file`), a new private `tiff_thumbnail(path, cell)`:
+     - `pw_tiff::decode_rgb8(path, Some(TIFF_LIMIT))`, with `const TIFF_LIMIT: usize = 4 << 30`
+       (the default core budget; the thumbnail worker does not get the user's budget, ADR 0015 §9.1);
+     - reduce with `pw_tiff::fit(w, h, cell)` and `pw_tiff::downscale` (never upscales);
+     - convert to `pw_libjpeg::Rgb8` (same three fields) and apply `orient` with the orientation of
+       `pw_raw::inspect`, or 1 if inspect fails (BigTIFF);
+     - errors become `ThumbError::Unreadable(e.to_string())`.
+     The embedded previews of a TIFF are not used (ADR 0015 Q7).
+- **Rules:** RAW and JPEG thumbnails unchanged; the Tauri app's output unchanged; rules 3–7 and
+  10–12. `git diff Cargo.lock`: only the new dependency lines of `pw-thumbcache`; no new package.
+- **Tests to add** (`extract.rs`; write the files with `tiff::encoder::TiffEncoder` into a test
+  folder of its own):
+  - a 400×200 8-bit RGB TIFF with `cell = 100` gives 100×50; with `cell = 1000` it stays 400×200
+    (no upscale); a uniform colour stays that colour;
+  - a TIFF with Orientation 6 gives a thumbnail turned to 50×100;
+  - a palette TIFF gives `Unreadable` with the `pw-tiff` text;
+  - a TIFF with an embedded JPEG preview is still decoded from its image data (optional if the
+    encoder cannot write one; then say so in the report);
+  - ignored like the existing real-file test (needs `PW_TESTDATA`): every `.tif` in `PW_TESTDATA`
+    gives a thumbnail whose long edge is 256 for `cell = 256`.
+- **Done when:** `.\tools\check.ps1` is all OK; `photoworkflow` has two tests fewer and `pw-tiff`
+  three more; the owner's `check.ps1 -Ignored` run passes the new real-file test; `git diff --stat`
+  shows only the files above.
 
 ### T7. Format the files that `cargo fmt --check` reports — Done
 
@@ -2327,3 +2435,5 @@ and reviewer:
 | 2026-11-10 | T63 | Open | Added: ADR 0015 D1, the TIFF decoder moves from `src-tauri` to the new crate `pw-tiff`, with a memory limit and one decode at a time. `imaging::fit` and `downscale` stay in `src-tauri` (its RAW view uses them) |
 | 2026-11-10 | T63 | Ready for review | (Agent) New crate `pw-tiff` (`lib.rs`, `convert.rs`, `tests.rs`; one dependency `tiff = "=0.9.1"`): `Layout`, `Rgb8`, `to_rgb8` (now `samples.get(..n * k)`, same "image data is short" text), `u16_to_u8`, `f32_to_u8` and the test `conversions` moved from `imaging.rs`; `dimensions` and `decode_rgb8(path, limit)` moved from `tiff_view.rs`. `TiffError` holds each message as shown today; `tiff`'s `UnsupportedError` (e.g. a palette TIFF) becomes `Unsupported` with the same "TIFF: …" text; `LimitsExceeded` becomes `TooLarge` only when a limit is set. A private static decode lock (poison taken with `into_inner`) is held by `decode_rgb8` only. `src-tauri`: `pw-tiff.workspace = true` replaces `tiff`; `imaging.rs` keeps `fit`/`downscale` and re-exports `Rgb8`; `tiff_view.rs` has one-line wrappers; `main.rs` and `rawview.rs` unchanged. `Cargo.lock`: only the new package and the two dependency lists. 16 tests in `pw-tiff`, `photoworkflow` 4; test inventory updated. `.\tools\check.ps1`: fmt, test (471 passed, 27 ignored, 0 failed) and clippy OK; no commit. |
 | 2026-11-10 | T63 | Ready for review | Review: code accepted. A move with the named additions: same texts (`Display` of `TiffError`), `samples.get(..)` instead of indexing, the limit sets both buffer sizes, the lock is held for the whole decode and not by `dimensions`, the Tauri wrappers keep `main.rs` and `rawview.rs` unchanged. `Cargo.lock`: only `pw-tiff` and the two dependency lists, no new external package. Checked: `test-output.txt` newer than the changes, fmt/test (471 passed, 0 failed)/clippy OK; `pw-tiff` 16, `photoworkflow` 4, matching the test inventory. Reviewer also decoded the owner's 9 TIFFs in `D:\PhotoWorkflowData\RAW` with a temporary probe (removed): all decode, the same pixels with no limit and with 4 GiB, 26–164 ms warm (3201×2134 to 7741×5161). Notes, not blocking: a palette TIFF is `Unsupported` through `tiff`'s own error ("TIFF: …"), not the colour-type text, which matters for the Swedish texts in D4; the tests leave small files in `%TEMP%\pw-tiff-{pid}`. Finding for D5 in ADR 0015 §9.1: all 9 files are 16-bit RGB, uncompressed, orientation 1, **ProPhoto RGB** |
+| 2026-11-10 | T63 | Done | Committed by the owner (2132129) |
+| 2026-11-10 | T64, T65 | Open | Added: ADR 0015 D2 (the loupe core opens TIFF: a TIFF session, shown as itself in both modes, the limit from the core budget, Swedish error texts made in `pw-viewcore`) and D3 (TIFF thumbnails; `fit` and `downscale` move from `src-tauri` to `pw-tiff`, a fixed 4 GiB limit). Both can start now and do not depend on each other; T66 (D4) is added after them |

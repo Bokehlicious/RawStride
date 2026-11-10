@@ -120,8 +120,9 @@
 - **While decoding:** the previous image stays until the new one is complete, with the neutral
   indicator after 1 s (V2 swap rule). No new text.
 - **Grid:** a TIFF cell shows the placeholder until its thumbnail is ready, as other files.
-- **Errors (Swedish):** "TIFF-färgtypen stöds inte än (Palette)", "TIFF-filen är för stor för
-  minnesbudgeten (… MB)", and the decoder's message for a damaged file.
+- **Errors (Swedish, after "Filen kan inte visas: "):** "TIFF-varianten stöds inte än (…)" with the
+  decoder's detail (a palette TIFF is reported by the `tiff` crate itself, §9.1), "TIFF-filen är för
+  stor för minnesbudgeten (… MB)", and the decoder's message for a damaged file.
 
 ## 6. Dependencies
 
@@ -176,10 +177,10 @@ ADR 0014 §7:
 | Step | Content | Result |
 |---|---|---|
 | **D0** | Accept this ADR; answer §11; approve `tiff` =0.9.1 in `pw-tiff`; accept E1–E6 | **Done 2026-11-10** |
-| **D1** | New crate `pw-tiff`: move the decoder and pixel helpers from `src-tauri` with their tests; the Tauri app calls it; add the lock and the limit (tests) | Agent task T63 |
-| **D2** | `pw-viewcore`: the TIFF session, "shown as itself" for TIFF, budget accounting (tests) | |
-| **D3** | `pw-thumbcache`: TIFF thumbnails (tests) | |
-| **D4** | `pw-loupe`: list TIFF, status text, error texts (library tests; binary wiring) | |
+| **D1** | New crate `pw-tiff`: move the decoder and pixel helpers from `src-tauri` with their tests; the Tauri app calls it; add the lock and the limit (tests) | **Done:** T63 |
+| **D2** | `pw-viewcore`: the TIFF session, "shown as itself" for TIFF, budget accounting, the Swedish TIFF error texts (tests) | Agent task T64 |
+| **D3** | `pw-thumbcache`: TIFF thumbnails; `fit` and `downscale` move to `pw-tiff` (tests) | Agent task T65 |
+| **D4** | `pw-loupe`: list TIFF, status text (library tests; binary wiring) | |
 | **D5** | Acceptance by hand (§8.2) | |
 | **D6** | Documentation: architecture.md (`pw-tiff`), test inventory, ADR 0004 addendum (egui note), ADR 0009 §3.2 note | |
 | **D7** | GR8 and the root `README.md`: TIFF viewing done; IPTC parity met through the import template; ADR 0007 is milestone 7 | |
@@ -203,6 +204,16 @@ task.
 - **What the set does not cover (Q5):** orientation 6, LZW or ZIP compression, 8-bit, grayscale,
   CMYK, palette, BigTIFF, and a file of about 60 MP. The synthetic tests of T63 cover the colour
   types and LZW; orientation and BigTIFF have no file yet.
+- **Planning of D2 and D3 (reviewer, 2026-11-10):**
+  - The Swedish TIFF error texts (§5) are made in `pw-viewcore` from the `TiffError` kind, not in
+    `pw-loupe`. The loupe already shows a decode message after "Filen kan inte visas: ", so no
+    message text has to be recognised later.
+  - The loupe's limit is the user's core budget, given to `NativeBackend` at start. The thumbnail
+    worker does not get the user's setting, so thumbnails use a fixed 4 GiB, the default core
+    budget.
+  - A thumbnail needs a box filter on `pw-tiff::Rgb8`. The Tauri app's `fit` and `downscale` move to
+    `pw-tiff` instead of being written a second time; `src-tauri` re-exports them.
+  - `session_bytes` already counts `w × h × 3` for `Source::Jpeg`, which is the decoded TIFF.
 
 ## 10. Risks
 
