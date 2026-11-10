@@ -22,8 +22,9 @@ pub struct Tab {
     pub filter: Filter,
     /// The marked images of this tab (ADR 0014 §2.5); cleared when the folder is opened again.
     pub selection: Selection,
-    /// The file indexes shown, in display order (ADR 0014 §4.2). Set only by `refilter` and the
-    /// moves of `browse.rs`, never by drawing.
+    /// The file indexes shown, in display order (ADR 0014 §4.2). Set only by `refilter`, `rated`
+    /// (a rating key removes the images that stop matching at once, §2.2) and the moves of
+    /// `browse.rs`, never by drawing.
     pub visible: Vec<usize>,
 }
 

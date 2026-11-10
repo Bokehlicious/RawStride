@@ -251,8 +251,10 @@ pub fn zoom_text(frame: &Frame) -> String {
     }
 }
 
-/// The status line.
-pub fn status_line(frame: &Frame, anchor_at_pointer: bool) -> String {
+/// The status line of the loupe. It starts with `position_text`, as in the grid (ADR 0014 §5.3,
+/// amendment 1): the core holds the visible list, so `frame.count` is the number shown, and `total`
+/// is the number of images in the folder ("3 / 12 (av 31)", or "3 / 31" without a filter).
+pub fn status_line(frame: &Frame, anchor_at_pointer: bool, total: usize) -> String {
     let Some(pos) = frame.pos else {
         return "Ingen mapp öppen. Dra en mapp eller en bild hit, eller ange den på kommandoraden."
             .to_string();
@@ -271,9 +273,8 @@ pub fn status_line(frame: &Frame, anchor_at_pointer: bool) -> String {
         _ => source_text(frame),
     };
     format!(
-        "{} / {}  ·  {}  ·  {}  ·  {}  ·  {}",
-        pos + 1,
-        frame.count,
+        "{}  ·  {}  ·  {}  ·  {}  ·  {}",
+        position_text(pos, frame.count, total),
         file_name(frame),
         what,
         zoom_text(frame),
@@ -487,14 +488,16 @@ mod tests {
     #[test]
     fn the_status_line_says_what_is_shown() {
         let f = frame(Status::Ready, Source::Raw);
-        let s = status_line(&f, true);
-        assert!(s.starts_with("3 / 31"), "{s}");
+        let s = status_line(&f, true, 31);
+        assert!(s.starts_with("3 / 31  ·  "), "{s}");
         assert!(s.contains("TN100423.ARW"));
         assert!(s.contains("RAW-rendering (LibRaw, PPG) 6376 × 9568"), "{s}");
         assert!(s.contains("Zoom 11 % (anpassad)"));
         assert!(s.contains("zoom mot pekaren"));
         let j = frame(Status::Ready, Source::Jpeg);
-        assert!(status_line(&j, false).contains("Inbäddad JPEG 6376 × 9568 (kamerans rendering"));
+        assert!(
+            status_line(&j, false, 31).contains("Inbäddad JPEG 6376 × 9568 (kamerans rendering")
+        );
         let mut plain = frame(Status::Ready, Source::Jpeg);
         plain.path = Some(PathBuf::from("photo.JPG"));
         assert!(source_text(&plain).starts_with("JPEG-fil"));
@@ -503,7 +506,81 @@ mod tests {
         assert_eq!(zoom_text(&z), "Zoom 200 %");
         let mut empty = frame(Status::Empty, Source::Raw);
         empty.pos = None;
-        assert!(status_line(&empty, true).starts_with("Ingen mapp"));
+        assert!(status_line(&empty, true, 31).starts_with("Ingen mapp"));
+    }
+
+    #[test]
+    fn the_loupe_status_line_starts_with_the_position_in_the_filter() {
+        // Without a filter the core shows the whole folder: "3 / 31".
+        let all = frame(Status::Ready, Source::Raw);
+        assert_eq!(
+            status_line(&all, true, 31),
+            "3 / 31  ·  TN100423.ARW  ·  RAW-rendering (LibRaw, PPG) 6376 × 9568  ·  \
+             Zoom 11 % (anpassad)  ·  zoom mot pekaren"
+        );
+        // Under a filter the core shows the 12 visible images of 31 (ADR 0014 §5.3).
+        let mut filtered = frame(Status::Ready, Source::Raw);
+        filtered.count = 12;
+        let s = status_line(&filtered, false, 31);
+        assert!(s.starts_with("3 / 12 (av 31)  ·  TN100423.ARW  ·  "), "{s}");
+        assert!(s.ends_with("zoom mot mitten"), "{s}");
+    }
+
+    /// The `app.js` case "loupe within filter" (`ui/tests/filter-select.test.js`) on
+    /// `Tab::loupe_move`: with the `browse.rs` setup (1: 3 stars, 2: 5 stars Red, 3: rejected,
+    /// 4: Red only), filter Red, Home, Enter, step right → IMG_002, then IMG_004.
+    #[test]
+    fn the_loupe_steps_within_the_filter() {
+        use pw_metadata::Rating;
+        use std::collections::HashMap;
+
+        let name = |index: usize| PathBuf::from(format!("IMG_{index:03}.ARW"));
+        let rating = |stars: Option<i8>, label: Option<&str>| Rating {
+            stars,
+            label: label.map(str::to_owned),
+        };
+        let ratings = HashMap::from([
+            (name(1), rating(Some(3), None)),
+            (name(2), rating(Some(5), Some("Red"))),
+            (name(3), rating(Some(-1), None)),
+            (name(4), rating(None, Some("Red"))),
+        ]);
+        let rating_of = |path: &Path| ratings.get(path).cloned();
+        let mut tabs = Tabs::default();
+        tabs.open_in_active(PathBuf::from("D:/x"), (0..12).map(name).collect(), 7);
+        tabs.set_filter(Filter {
+            stars: StarFilter::All,
+            label: LabelFilter::Label("Red"),
+        });
+        let Some(tab) = tabs.active_mut() else {
+            panic!("there is always an active tab");
+        };
+        tab.refilter(true, &rating_of, None);
+        assert_eq!(tab.visible, [2, 4]);
+        // Home in the grid, then Enter opens the loupe on the current image.
+        tab.grid_move(Navigation::Home, false, 4, 3, true, &rating_of);
+        tab.mode = ViewMode::Loupe;
+        let shown = |tab: &Tab| tab.files.get(tab.current).cloned();
+        assert_eq!(shown(tab), Some(name(2)));
+        assert_eq!(tab.position(), Some(0));
+        // A step right skips IMG_003 (hidden) and shows IMG_004.
+        tab.loupe_move(LoupeMove::Next, true, &rating_of);
+        assert_eq!(shown(tab), Some(name(4)));
+        assert_eq!(tab.position(), Some(1));
+        assert_eq!(
+            tab.visible,
+            [2, 4],
+            "a step does not change the visible list"
+        );
+        // Stepping stays within the filter at both ends.
+        tab.loupe_move(LoupeMove::Next, true, &rating_of);
+        assert_eq!(shown(tab), Some(name(4)));
+        tab.loupe_move(LoupeMove::Previous, true, &rating_of);
+        assert_eq!(shown(tab), Some(name(2)));
+        tab.loupe_move(LoupeMove::Last, true, &rating_of);
+        assert_eq!(shown(tab), Some(name(4)));
+        tab.loupe_move(LoupeMove::First, true, &rating_of);
+        assert_eq!(shown(tab), Some(name(2)));
     }
 
     #[test]
@@ -516,7 +593,7 @@ mod tests {
             Source::Raw,
         );
         f.size = None;
-        assert!(status_line(&f, true).contains("förbereder RAW"));
+        assert!(status_line(&f, true, 31).contains("förbereder RAW"));
         assert_eq!(indicator_text(&f), "Förbereder RAW …");
         let damaged = DecodeError::damaged("damaged: cut");
         assert!(error_text(&damaged, Source::Raw).contains("JPEG-läget"));

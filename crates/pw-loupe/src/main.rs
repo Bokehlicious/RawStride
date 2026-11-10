@@ -18,15 +18,15 @@ use metadata::MetadataCache;
 use pw_loupe::{
     Action, CellState, DEFAULT_THUMBNAIL_SIZE, DialogKey, DialogRequest, Field, Filter,
     GridKeyAction, ImportDialog, ImportDialogState, ImportEvent, ImportForm, ImportWorker,
-    LABEL_FILTERS, LabelFilter, MAX_THUMBNAIL_SIZE, MIN_THUMBNAIL_SIZE, Navigation, Options,
-    READING_RATINGS_TEXT, RatingRefused, STAR_FILTERS, StarFilter, SubmitError, Tab, TabAction,
-    Tabs, ThumbGrid, UNSUPPORTED_TEXT, ViewMode, WINDOW_TITLE, clamp_thumbnail_size, color_image,
-    columns, dialog_key_action, done_lines, ejecting_progress_text, error_text, grid_key_action,
-    indicator_text, iptc_progress_text, key_action, label_filter_text, label_name, list_folder,
-    loupe_key_action, marked_text, mode_label, more_lines, no_match_text, opens_import, parse_args,
-    position_text, preview_line, preview_summary, progress_text, rating_key_action, request_cell,
-    star_filter_text, star_glyphs, status_line, step_thumbnail_size, tab_action, take_wheel_steps,
-    visible_range, wheel_factor,
+    LABEL_FILTERS, LabelFilter, LoupeMove, MAX_THUMBNAIL_SIZE, MIN_THUMBNAIL_SIZE, Navigation,
+    Options, READING_RATINGS_TEXT, RatingRefused, STAR_FILTERS, StarFilter, SubmitError, Tab,
+    TabAction, Tabs, ThumbGrid, UNSUPPORTED_TEXT, ViewMode, WINDOW_TITLE, clamp_thumbnail_size,
+    color_image, columns, dialog_key_action, done_lines, ejecting_progress_text, error_text,
+    grid_key_action, indicator_text, iptc_progress_text, key_action, label_filter_text, label_name,
+    list_folder, loupe_key_action, marked_text, mode_label, more_lines, no_match_text,
+    opens_import, parse_args, position_text, preview_line, preview_summary, progress_text,
+    rating_key_action, request_cell, star_filter_text, star_glyphs, status_line,
+    step_thumbnail_size, tab_action, take_wheel_steps, visible_range, wheel_factor,
 };
 use pw_metadata::MetadataWorker;
 use pw_metadata::Rating;
@@ -92,44 +92,78 @@ impl Loupe {
     /// `Tab::refilter` on the active tab with the shown ratings. Returns whether `visible` changed.
     fn refilter_active(&mut self, keep: Option<usize>) -> bool {
         let ready = self.ratings_ready();
-        let metadata = &self.metadata;
-        self.tabs.active_mut().is_some_and(|tab| {
-            tab.refilter(ready, &|path| metadata.shown_rating(path).cloned(), keep)
-        })
+        let cwd = std::env::current_dir().ok();
+        let rating_of = tab_rating(&self.metadata, cwd.as_deref());
+        self.tabs
+            .active_mut()
+            .is_some_and(|tab| tab.refilter(ready, &rating_of, keep))
+    }
+
+    /// `Tab::rated` on the active tab after an accepted rating key (ADR 0014 §2.2, amendment 1):
+    /// the images that stopped matching leave at once. Returns whether `visible` changed.
+    fn rated_active(&mut self) -> bool {
+        let ready = self.ratings_ready();
+        let cwd = std::env::current_dir().ok();
+        let rating_of = tab_rating(&self.metadata, cwd.as_deref());
+        self.tabs
+            .active_mut()
+            .is_some_and(|tab| tab.rated(ready, &rating_of))
     }
 
     /// A key move in the grid over the visible list (`Tab::grid_move`).
     fn grid_move(&mut self, nav: Navigation, extend: bool, visible_rows: usize) {
         let ready = self.ratings_ready();
         let columns = self.grid_columns;
-        let metadata = &self.metadata;
+        let cwd = std::env::current_dir().ok();
+        let rating_of = tab_rating(&self.metadata, cwd.as_deref());
         if let Some(tab) = self.tabs.active_mut() {
-            tab.grid_move(nav, extend, columns, visible_rows, ready, &|path| {
-                metadata.shown_rating(path).cloned()
-            });
+            tab.grid_move(nav, extend, columns, visible_rows, ready, &rating_of);
         }
     }
 
     /// A click on the cell of file `index` (`Tab::click`).
     fn click(&mut self, index: usize, ctrl: bool, shift: bool) {
         let ready = self.ratings_ready();
-        let metadata = &self.metadata;
+        let cwd = std::env::current_dir().ok();
+        let rating_of = tab_rating(&self.metadata, cwd.as_deref());
         if let Some(tab) = self.tabs.active_mut() {
-            tab.click(index, ctrl, shift, ready, &|path| {
-                metadata.shown_rating(path).cloned()
-            });
+            tab.click(index, ctrl, shift, ready, &rating_of);
+        }
+    }
+
+    /// A step in the loupe over the visible list (`Tab::loupe_move`, ADR 0014 §4.4 way C). The core
+    /// follows the tab: `set_files` when the visible list changed, so the views of images still in
+    /// the list are kept, otherwise `go`. With nothing visible, back to the grid (§2.3).
+    fn loupe_move(&mut self, to: LoupeMove) {
+        let ready = self.ratings_ready();
+        let cwd = std::env::current_dir().ok();
+        let (changed, position) = {
+            let rating_of = tab_rating(&self.metadata, cwd.as_deref());
+            let Some(tab) = self.tabs.active_mut() else {
+                return;
+            };
+            let before = tab.visible.clone();
+            tab.loupe_move(to, ready, &rating_of);
+            (tab.visible != before, tab.position())
+        };
+        match position {
+            Some(position) if !changed => self.core.go(position),
+            _ => {
+                self.loupe_follows_visible();
+            }
         }
     }
 
     /// A new filter for the active tab, as `setFilter` in `app.js`: refilter without keeping the
-    /// current image. The loupe gets the new visible list (interim, ADR 0014 §9 way A, until T57).
+    /// current image. A shown loupe gets the new visible list (ADR 0014 §4.4), or returns to the grid
+    /// when nothing is visible (§2.3).
     fn set_filter(&mut self, filter: Filter) {
         if self.tabs.active().is_none_or(|tab| tab.filter == filter) {
             return;
         }
         self.tabs.set_filter(filter);
         self.refilter_active(None);
-        self.reopen_loupe();
+        self.loupe_follows_visible();
     }
 
     /// Recomputes the active tab's visible list when `ratings_ready` has changed since the last
@@ -146,13 +180,14 @@ impl Loupe {
         if ready != self.last_ratings_ready {
             self.last_ratings_ready = ready;
             if self.refilter_active(None) {
-                self.reopen_loupe();
+                self.loupe_follows_visible();
             }
         }
     }
 
-    /// Gives the view core the visible images of the active tab and goes to the current one
-    /// (interim, ADR 0014 §9 way A, until T57). `files` are the tab's files resolved as the
+    /// Opens the view core on the visible images of the active tab and goes to the current one:
+    /// opening the loupe from the grid and a tab load. A later change of the visible list goes
+    /// through `loupe_follows_visible` instead. `files` are the tab's files resolved as the
     /// metadata cache keys them.
     fn open_loupe_core(&mut self, files: &[PathBuf]) {
         let Some(tab) = self.tabs.active() else {
@@ -169,18 +204,32 @@ impl Loupe {
         self.core.go(position);
     }
 
-    /// When the active tab shows the loupe, gives the core the tab's current visible list.
-    fn reopen_loupe(&mut self) {
-        let Some(tab) = self.tabs.active() else {
-            return;
-        };
-        if tab.mode != ViewMode::Loupe {
-            return;
+    /// After the active tab's visible list changed while it shows the loupe (a filter change, the
+    /// ratings becoming ready, a rating key, a step): `core.set_files` with the visible paths and the
+    /// current position, so the views of images still in the list are kept and the next image
+    /// comes from the prefetched views (ADR 0014 §4.4 way C). With nothing visible, back to the grid
+    /// (§2.3). Returns the position the grid should scroll to when it returned to the grid.
+    fn loupe_follows_visible(&mut self) -> Option<usize> {
+        let (mode, position) = self.tabs.active().map(|tab| (tab.mode, tab.position()))?;
+        if mode != ViewMode::Loupe {
+            return None;
         }
+        let Some(position) = position else {
+            return self.switch_mode(ViewMode::Grid);
+        };
+        let tab = self.tabs.active()?;
         match resolve_paths(&tab.files) {
-            Ok(files) => self.open_loupe_core(&files),
+            Ok(files) => {
+                let paths: Vec<PathBuf> = tab
+                    .visible
+                    .iter()
+                    .filter_map(|&index| files.get(index).cloned())
+                    .collect();
+                self.core.set_files(paths, position);
+            }
             Err(error) => self.message = Some(error),
         }
+        None
     }
 
     fn open_import(&mut self) {
@@ -739,8 +788,8 @@ impl Loupe {
     }
 
     /// Switches the active tab between grid and loupe without reloading the tab, so the
-    /// thumbnails and their cache survive a visit to the loupe (ADR 0011 §4.2). The loupe gets the
-    /// visible images (interim, ADR 0014 §9 way A); with nothing visible it does not open. Returns
+    /// thumbnails and their cache survive a visit to the loupe (ADR 0011 §4.2). The loupe opens on
+    /// the visible images (`open_folder`); with nothing visible it does not open. Returns
     /// the current image's position in the visible list, so the grid can scroll to it.
     fn switch_mode(&mut self, mode: ViewMode) -> Option<usize> {
         let tab = self.tabs.active().cloned()?;
@@ -818,6 +867,8 @@ impl Loupe {
         let stride = cell_size + GRID_SPACING;
         let mut open_loupe = false;
         let mut clicked_cell = None;
+        // The tab's files may be relative; the metadata cache keys by resolved path.
+        let cwd = std::env::current_dir().ok();
 
         // The grid uses the image area only, so it never runs under the status line.
         ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
@@ -905,7 +956,7 @@ impl Loupe {
                             egui::pos2(cell_rect.center().x, cell_rect.min.y + image_size * 0.5),
                             egui::vec2(image_size, image_size),
                         );
-                        let rating = self.metadata.shown_rating(path);
+                        let rating = shown_rating(&self.metadata, cwd.as_deref(), path);
                         let marked = tab.selection.is_marked(index);
                         if marked {
                             painter.rect_filled(cell_rect, 0.0, MARKED_FILL);
@@ -1232,10 +1283,11 @@ impl Loupe {
 
     fn act(&mut self, action: Action, anchor: Option<[f64; 2]>) {
         match action {
-            Action::Next => self.core.step(1),
-            Action::Previous => self.core.step(-1),
-            Action::First => self.core.go(0),
-            Action::Last => self.core.last(),
+            // Steps go through the tab's visible list; the core follows (ADR 0014 §4.4).
+            Action::Next => self.loupe_move(LoupeMove::Next),
+            Action::Previous => self.loupe_move(LoupeMove::Previous),
+            Action::First => self.loupe_move(LoupeMove::First),
+            Action::Last => self.loupe_move(LoupeMove::Last),
             Action::ToggleZoom => self.core.toggle_zoom(anchor),
             Action::Fit => self.core.fit(),
             Action::ZoomStep(n) => self.core.zoom_steps(n, anchor),
@@ -1256,7 +1308,8 @@ impl Loupe {
                     .unwrap_or_else(|| message.clone()),
             );
         }
-        // A rating key does not refilter (ADR 0014 §2.2); the ratings becoming ready does.
+        // A rolled-back write does not refilter (ADR 0014 §2.2; the next move drops the image); the
+        // ratings becoming ready does.
         self.refilter_when_ratings_change();
         // A folder or a file dropped on the window opens in a new tab (owner decision 2026-11-08,
         // ADR 0010 Q3). An empty active tab is filled instead, and an already open folder is
@@ -1392,7 +1445,8 @@ impl Loupe {
                 && let Some(action) = rating_key_action(key, ctrl, shift, alt)
             {
                 // The marked images in the grid, else the current one (ADR 0014 §2.6); nothing
-                // when the current image is not shown. No refilter here (§2.2).
+                // when the current image is not shown. An accepted key removes the images that
+                // stopped matching at once (§2.2, amendment 1); a refused key changes nothing.
                 let paths: Vec<PathBuf> = self
                     .tabs
                     .active()
@@ -1407,7 +1461,22 @@ impl Loupe {
                     .unwrap_or_default();
                 if !paths.is_empty() {
                     match self.metadata.set_ratings(&paths, action) {
-                        Ok(_) => {}
+                        Ok(_) => {
+                            if self.rated_active() {
+                                let tab = self.tabs.active();
+                                let position = tab.and_then(Tab::position);
+                                match tab.map(|tab| tab.mode) {
+                                    Some(ViewMode::Grid) => scroll_to = position,
+                                    // The core gets the new visible list, so the next image
+                                    // comes from the prefetched views (§4.4); nothing left to
+                                    // show: back to the grid (§2.3).
+                                    Some(ViewMode::Loupe) => {
+                                        scroll_to = self.loupe_follows_visible();
+                                    }
+                                    None => {}
+                                }
+                            }
+                        }
                         Err(RatingRefused::Unsupported) => {
                             self.message = Some(UNSUPPORTED_TEXT.to_owned());
                         }
@@ -1522,14 +1591,9 @@ impl Loupe {
         let max_side = ctx.input(|i| i.max_texture_side);
         self.textures.sync(&ctx, &self.core, max_side);
         let frame = self.core.frame(view_px(rect, ppp));
-        // The core shows the visible list (interim, ADR 0014 §9 way A): its position maps to a
-        // file index through `visible`.
-        if let Some(index) = frame
-            .pos
-            .and_then(|pos| self.tabs.active()?.visible.get(pos).copied())
-        {
-            self.tabs.set_current(index);
-        }
+        // The tab's current image comes from the tab, not from `frame.pos`: every step goes through
+        // the tab and the core follows it (ADR 0014 §4.4). The status line counts the whole folder.
+        let total = self.tabs.active().map_or(0, |tab| tab.files.len());
         let painter = ui.painter().clone();
         painter.rect_filled(full, 0.0, BACKGROUND);
         self.textures.paint(&painter, rect, ppp, &frame);
@@ -1568,7 +1632,7 @@ impl Loupe {
                 let text = self
                     .message
                     .clone()
-                    .unwrap_or_else(|| status_line(&frame, true));
+                    .unwrap_or_else(|| status_line(&frame, true, total));
                 centre_text(&text);
             }
             Status::Ready => {}
@@ -1581,7 +1645,7 @@ impl Loupe {
         if self.show_info || import_status.is_some() {
             let bar = egui::Rect::from_min_max(egui::pos2(full.min.x, rect.max.y), full.max);
             let mut line = if self.show_info {
-                status_line(&frame, self.anchor_at_pointer)
+                status_line(&frame, self.anchor_at_pointer, total)
             } else {
                 String::new()
             };
@@ -1649,7 +1713,36 @@ fn index_span(indexes: impl Iterator<Item = usize> + Clone) -> std::ops::Range<u
 /// taken from the current folder.
 fn resolve_paths(files: &[PathBuf]) -> Result<Vec<PathBuf>, String> {
     let cwd = std::env::current_dir().map_err(|e| format!("cannot resolve image paths: {e}"))?;
-    Ok(files.iter().map(|path| cwd.join(path)).collect())
+    Ok(files.iter().map(|path| resolve_path(&cwd, path)).collect())
+}
+
+/// One path as `resolve_paths` resolves it: a relative path is taken from `cwd`, an absolute one
+/// stays as it is.
+fn resolve_path(cwd: &Path, path: &Path) -> PathBuf {
+    cwd.join(path)
+}
+
+/// The shown rating of a tab file, looked up by the resolved path the metadata cache keys by (a
+/// folder given as a relative path on the command line has relative files). Without a current
+/// folder (`cwd` is `None`) the path is looked up as it is.
+fn shown_rating<'a>(
+    metadata: &'a MetadataCache,
+    cwd: Option<&Path>,
+    path: &Path,
+) -> Option<&'a Rating> {
+    match cwd {
+        Some(cwd) if !path.is_absolute() => metadata.shown_rating(&resolve_path(cwd, path)),
+        _ => metadata.shown_rating(path),
+    }
+}
+
+/// The `rating_of` of the filter (`Tab::refilter`, `rated`, `grid_move`, `click`): `shown_rating`
+/// of each tab file.
+fn tab_rating<'a>(
+    metadata: &'a MetadataCache,
+    cwd: Option<&'a Path>,
+) -> impl Fn(&Path) -> Option<Rating> + 'a {
+    move |path| shown_rating(metadata, cwd, path).cloned()
 }
 
 /// A filter drop-down list in the tab bar (ADR 0014 §5.2): an active list (not "Alla …") has a
@@ -1975,8 +2068,41 @@ fn main() -> ExitCode {
 
 #[cfg(test)]
 mod tests {
-    use super::{index_span, label_color, label_pill};
+    use super::{index_span, label_color, label_pill, resolve_path, resolve_paths};
     use egui::{Color32, Rect, pos2};
+    use std::path::{Path, PathBuf};
+
+    #[test]
+    fn a_relative_path_is_resolved_from_the_current_folder_and_an_absolute_one_is_kept() {
+        let cwd = std::env::temp_dir().join("pw-loupe-cwd");
+        assert_eq!(
+            resolve_path(&cwd, Path::new("shoot/IMG_001.ARW")),
+            cwd.join("shoot").join("IMG_001.ARW")
+        );
+        assert_eq!(
+            resolve_path(&cwd, Path::new("IMG_001.ARW")),
+            cwd.join("IMG_001.ARW")
+        );
+        let absolute = std::env::temp_dir().join("other").join("IMG_002.ARW");
+        assert!(absolute.is_absolute());
+        assert_eq!(resolve_path(&cwd, &absolute), absolute);
+
+        // The same result as `resolve_paths`, which the view core and the metadata cache get.
+        let files = [PathBuf::from("shoot/IMG_001.ARW"), absolute.clone()];
+        let current_dir = match std::env::current_dir() {
+            Ok(current_dir) => current_dir,
+            Err(error) => panic!("current directory should be available: {error}"),
+        };
+        let resolved = match resolve_paths(&files) {
+            Ok(resolved) => resolved,
+            Err(error) => panic!("current directory should be available: {error}"),
+        };
+        assert_eq!(
+            resolved,
+            [resolve_path(&current_dir, &files[0]), absolute.clone()]
+        );
+        assert!(resolved.iter().all(|path| path.is_absolute()));
+    }
 
     #[test]
     fn thumbnail_priority_span_runs_from_the_smallest_to_the_largest_file_index() {

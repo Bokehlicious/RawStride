@@ -1,6 +1,7 @@
-//! Browsing a tab under a filter (ADR 0014 §2.2–§2.4, §4.2, Q5, Q7): the visible list of a tab, the
-//! keep-current rule, and moves in the grid and the loupe that end by recomputing the list. Plain
-//! Rust, no I/O (GR11); the shown rating of each file comes through a closure.
+//! Browsing a tab under a filter (ADR 0014 §2.2–§2.4, §4.2, Q5, Q7): the visible list of a tab,
+//! a rating key that removes the images that stop matching at once (§2.2, amendment 1), and moves
+//! in the grid and the loupe that recompute the list before and after the move. Plain Rust, no I/O
+//! (GR11); the shown rating of each file comes through a closure.
 
 use std::path::Path;
 
@@ -22,9 +23,9 @@ pub enum LoupeMove {
 impl Tab {
     /// Recomputes `visible`: every file without an active filter; nothing with an active filter
     /// while the ratings are not read yet (Q7); otherwise the files that match, plus `keep` (the
-    /// keep-current rule, §2.2). Then unmarks the images the filter hides (§2.8), and if the current
-    /// image is hidden, makes the nearest visible one current (§2.3; unchanged when nothing is
-    /// visible). Returns whether `visible` changed.
+    /// image a move lands on, §4.2). Then unmarks the images the filter hides (§2.8), and if the
+    /// current image is hidden, makes the nearest visible one current (§2.3; unchanged when nothing
+    /// is visible). Returns whether `visible` changed.
     pub fn refilter(
         &mut self,
         ratings_ready: bool,
@@ -54,15 +55,29 @@ impl Tab {
         changed
     }
 
+    /// After a rating key changed the ratings (§2.2, amendment 1): `refilter` without keeping any
+    /// image. Images that no longer match leave `visible` at once; if the current image left, the
+    /// nearest following visible image becomes current (the last visible one if none follows;
+    /// unchanged when nothing is visible, §2.3); marked images that left are unmarked, the others
+    /// stay marked. Returns whether `visible` changed.
+    pub fn rated(
+        &mut self,
+        ratings_ready: bool,
+        rating_of: &dyn Fn(&Path) -> Option<Rating>,
+    ) -> bool {
+        self.refilter(ratings_ready, rating_of, None)
+    }
+
     /// The position of the current image in `visible`, if it is shown.
     pub fn position(&self) -> Option<usize> {
         self.visible.iter().position(|&index| index == self.current)
     }
 
     /// The first half of a move, as `go()` in `app.js` (§4.2): `refilter` keeping the **current**
-    /// image, so other images that stopped matching (after a batch rating) drop out before the move
-    /// instead of becoming current. Returns false when nothing is visible: then the move changes
-    /// nothing, since keeping the current image would show an image the filter hides.
+    /// image, so images that stopped matching drop out before the move instead of becoming current.
+    /// A rating key already removes them (`rated`); this matters when a rating changes without a
+    /// key, for example a rolled-back write. Returns false when nothing is visible: then the move
+    /// changes nothing, since keeping the current image would show an image the filter hides.
     fn refilter_before_move(
         &mut self,
         ratings_ready: bool,
@@ -75,9 +90,10 @@ impl Tab {
         !self.visible.is_empty()
     }
 
-    /// A key move in the grid, as `go()` in `app.js`: first `refilter` keeping the current image,
-    /// then the new position from `grid::navigate` over that visible list. With `extend` (Shift),
-    /// the marking becomes the range from the anchor; otherwise the marking is cleared. Ends with
+    /// A key move in the grid, as `go()` in `app.js`: first `refilter` keeping the current image
+    /// (it drops images whose rating changed without a key, see `refilter_before_move`), then the
+    /// new position from `grid::navigate` over that visible list. With `extend` (Shift), the
+    /// marking becomes the range from the anchor; otherwise the marking is cleared. Ends with
     /// `refilter` keeping the new current image (§4.2). With nothing visible, nothing changes (as
     /// the keys in `app.js`). Returns the new current file index.
     pub fn grid_move(
@@ -134,10 +150,11 @@ impl Tab {
         self.current
     }
 
-    /// A step in the loupe, as `go()` in `app.js`: first `refilter` keeping the current image, then
-    /// the step over that visible list. A step clears the marking (Q5). Ends with `refilter` keeping
-    /// the new current image (§4.2). With nothing visible, nothing changes. Returns the new current
-    /// file index.
+    /// A step in the loupe, as `go()` in `app.js`: first `refilter` keeping the current image (it
+    /// drops images whose rating changed without a key, see `refilter_before_move`), then the step
+    /// over that visible list. A step clears the marking (Q5). Ends with `refilter` keeping the new
+    /// current image (§4.2). With nothing visible, nothing changes. Returns the new current file
+    /// index.
     pub fn loupe_move(
         &mut self,
         to: LoupeMove,
@@ -271,22 +288,15 @@ mod tests {
         );
         assert_eq!(tab(&mut tabs).current, 4, "the nearest following image");
 
-        // Under "unrated", rating the current image (2 stars) keeps it visible: a rating key does
-        // not refilter (§2.2).
+        // Under "unrated", rating the current image (2 stars) removes it at once, and the next one
+        // is current (§2.2, amendment 1).
         if let Some(rating) = ratings.get_mut(&name(4)) {
             rating.stars = Some(2);
         }
-        assert!(
-            tab(&mut tabs).visible.contains(&4),
-            "rated image stays visible"
-        );
-        // Moving on drops it, and the next one is current.
-        let current = tab(&mut tabs).grid_move(Navigation::Right, false, 4, 3, true, &of(&ratings));
+        assert!(tab(&mut tabs).rated(true, &of(&ratings)));
+        let current = tab(&mut tabs).current;
         assert_eq!(current, 5);
-        assert!(
-            !tab(&mut tabs).visible.contains(&4),
-            "disappears after moving on"
-        );
+        assert_eq!(tab(&mut tabs).visible, [0, 5, 6, 7, 8, 9, 10, 11]);
         assert_eq!(tab(&mut tabs).files.get(current), Some(&name(5)));
 
         // Multi-selection with every image shown.
@@ -510,6 +520,8 @@ mod tests {
             tab(&mut tabs).loupe_move(LoupeMove::First, true, &of(&ratings)),
             0
         );
+        // The rating changes without `rated`, as after a rolled-back write: the image stays until
+        // the step.
         ratings.insert(
             name(0),
             Rating {
@@ -524,8 +536,9 @@ mod tests {
         assert_eq!(t.visible, [4, 5, 6, 7, 8, 9, 10, 11]);
     }
 
-    /// Under "Ej betygsatt": current 5, marked 5–7, and all three get stars (a batch rating, which
-    /// does not refilter). Returns the tab state and the ratings.
+    /// Under "Ej betygsatt": current 5, marked 5–7, and all three get stars. The ratings change
+    /// without `rated` (as after a rolled-back write), so the list is not recomputed here. Returns
+    /// the tab state and the ratings.
     fn batch_rated_under_unrated() -> (Tabs, HashMap<PathBuf, Rating>) {
         let (mut tabs, mut ratings) = setup();
         set(
@@ -577,5 +590,126 @@ mod tests {
         assert_eq!(t.current, 8);
         assert_eq!(t.visible, [0, 4, 8, 9, 10, 11]);
         assert_eq!(t.selection.count(), 0);
+    }
+
+    fn stars(stars: i8) -> Rating {
+        Rating {
+            stars: Some(stars),
+            label: None,
+        }
+    }
+
+    #[test]
+    fn rated_removes_a_rated_marking_at_once() {
+        let (mut tabs, ratings) = batch_rated_under_unrated();
+        let t = tab(&mut tabs);
+        assert!(t.rated(true, &of(&ratings)));
+        assert_eq!(t.visible, [0, 4, 8, 9, 10, 11]);
+        assert_eq!(t.current, 8);
+        assert_eq!(t.selection.count(), 0, "nothing marked");
+    }
+
+    #[test]
+    fn rated_unmarks_only_the_images_that_left() {
+        let (mut tabs, mut ratings) = setup();
+        set(
+            &mut tabs,
+            &ratings,
+            filter(StarFilter::NotRejected, LabelFilter::All),
+        );
+        let t = tab(&mut tabs);
+        assert_eq!(t.visible, [0, 1, 2, 4, 5, 6, 7, 8, 9, 10, 11]);
+        t.click(1, false, false, true, &of(&ratings));
+        t.click(4, true, false, true, &of(&ratings));
+        t.click(2, true, false, true, &of(&ratings));
+        assert_eq!(t.current, 2);
+        assert_eq!(t.selection.marked_in(&t.visible), [1, 2, 4]);
+
+        ratings.insert(name(2), stars(-1));
+        let t = tab(&mut tabs);
+        assert!(t.rated(true, &of(&ratings)));
+        assert!(!t.visible.contains(&2), "the rejected image is hidden");
+        assert_eq!(t.visible, [0, 1, 4, 5, 6, 7, 8, 9, 10, 11]);
+        assert_eq!(t.current, 4, "the nearest following visible image");
+        assert_eq!(t.selection.marked_in(&t.visible), [1, 4]);
+        assert_eq!(t.selection.count(), 2);
+    }
+
+    #[test]
+    fn rated_out_of_the_last_place_makes_the_previous_visible_image_current() {
+        let (mut tabs, mut ratings) = setup();
+        set(
+            &mut tabs,
+            &ratings,
+            filter(StarFilter::Unrated, LabelFilter::All),
+        );
+        let t = tab(&mut tabs);
+        t.click(11, false, false, true, &of(&ratings));
+        assert_eq!(t.current, 11);
+
+        ratings.insert(name(11), stars(1));
+        let t = tab(&mut tabs);
+        assert!(t.rated(true, &of(&ratings)));
+        assert_eq!(t.visible, [0, 4, 5, 6, 7, 8, 9, 10]);
+        assert_eq!(t.current, 10);
+    }
+
+    #[test]
+    fn rated_with_nothing_left_keeps_the_current_image_and_unmarks_all() {
+        let (mut tabs, mut ratings) = setup();
+        set(
+            &mut tabs,
+            &ratings,
+            filter(StarFilter::All, LabelFilter::Label("Red")),
+        );
+        let t = tab(&mut tabs);
+        assert_eq!(t.visible, [2, 4]);
+        let visible = t.visible.clone();
+        t.selection.all(&visible);
+        assert_eq!(t.selection.count(), 2);
+        let current = t.current;
+
+        for index in [2, 4] {
+            if let Some(rating) = ratings.get_mut(&name(index)) {
+                rating.label = None;
+            }
+        }
+        let t = tab(&mut tabs);
+        assert!(t.rated(true, &of(&ratings)));
+        assert!(t.visible.is_empty());
+        assert_eq!(t.position(), None);
+        assert_eq!(t.current, current, "unchanged when nothing is visible");
+        assert_eq!(t.selection.count(), 0);
+    }
+
+    #[test]
+    fn rated_when_nothing_stopped_matching_changes_nothing() {
+        let (mut tabs, mut ratings) = setup();
+        set(
+            &mut tabs,
+            &ratings,
+            filter(StarFilter::AtLeast(3), LabelFilter::All),
+        );
+        let t = tab(&mut tabs);
+        assert_eq!(t.visible, [1, 2]);
+        t.click(1, false, false, true, &of(&ratings));
+        t.click(2, false, true, true, &of(&ratings));
+        assert_eq!(t.current, 2);
+
+        // Image 1 goes from 3 to 4 stars: it still matches "≥ 3".
+        ratings.insert(name(1), stars(4));
+        let t = tab(&mut tabs);
+        let before = t.clone();
+        assert!(!t.rated(true, &of(&ratings)));
+        assert_eq!(*t, before);
+        assert_eq!(t.current, 2);
+        assert_eq!(t.selection.marked_in(&t.visible), [1, 2]);
+
+        // Without an active filter a rating never changes the list.
+        set(&mut tabs, &ratings, Filter::default());
+        ratings.insert(name(0), stars(-1));
+        let t = tab(&mut tabs);
+        assert!(!t.rated(true, &of(&ratings)));
+        assert_eq!(t.visible.len(), 12);
     }
 }
