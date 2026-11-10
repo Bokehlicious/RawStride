@@ -162,6 +162,13 @@ pub enum Action {
     ToggleMode,
 }
 
+/// Whether a loupe action is allowed for this key event (ADR 0009 §13).
+pub fn step_allowed(action: Action, repeat: bool, status: &Status) -> bool {
+    !(repeat
+        && matches!(action, Action::Next | Action::Previous)
+        && matches!(status, Status::Preparing { .. }))
+}
+
 /// The action of a key press. Keys that are reserved for later milestones (Escape, G, Enter,
 /// Ctrl+O, Ctrl+A, digits) give `None`.
 pub fn key_action(key: egui::Key, ctrl: bool, alt: bool) -> Option<Action> {
@@ -385,6 +392,44 @@ mod tests {
             }),
             zoom: Zoom::Fit,
             scale: Some(0.1129),
+        }
+    }
+
+    #[test]
+    fn step_actions_wait_only_for_preparing_frames_on_repeats() {
+        let statuses = [
+            Status::Ready,
+            Status::Preparing {
+                since: Instant::now(),
+                indicator: false,
+            },
+            Status::Error(DecodeError::new("damaged")),
+            Status::Empty,
+        ];
+        for action in [Action::Next, Action::Previous] {
+            for status in &statuses {
+                assert!(step_allowed(action, false, status));
+                assert_eq!(
+                    step_allowed(action, true, status),
+                    !matches!(status, Status::Preparing { .. })
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn repeated_non_step_actions_are_always_allowed() {
+        for action in [
+            Action::First,
+            Action::Last,
+            Action::ToggleZoom,
+            Action::ZoomStep(1),
+        ] {
+            let preparing = Status::Preparing {
+                since: Instant::now(),
+                indicator: false,
+            };
+            assert!(step_allowed(action, true, &preparing));
         }
     }
 

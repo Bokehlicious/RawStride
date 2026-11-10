@@ -26,8 +26,8 @@ use pw_loupe::{
     key_action, label_choice_text, label_filter_text, label_name, list_folder, loupe_key_action,
     marked_text, mode_label, more_lines, no_match_text, opens_import, parse_args, position_text,
     preview_line, preview_summary, progress_text, rating_key_action, request_cell,
-    star_condition_text, star_filter_text, star_glyphs, status_line, step_thumbnail_size,
-    tab_action, take_wheel_steps, visible_range, wheel_factor,
+    star_condition_text, star_filter_text, star_glyphs, status_line, step_allowed,
+    step_thumbnail_size, tab_action, take_wheel_steps, visible_range, wheel_factor,
 };
 use pw_metadata::MetadataWorker;
 use pw_metadata::Rating;
@@ -82,6 +82,8 @@ struct Loupe {
     /// The value of `ratings_ready` when the active tab was last refiltered for it, so a change
     /// refilters once (ADR 0014 Q7).
     last_ratings_ready: bool,
+    /// Status of the last rendered loupe frame (ADR 0009 §13).
+    last_frame_status: Status,
 }
 
 impl Loupe {
@@ -1328,24 +1330,26 @@ impl Loupe {
         if let Some(path) = dropped {
             self.open(&path, true);
         }
-        let key_actions: Vec<(Option<TabAction>, egui::Key, bool, bool, bool)> = ctx.input(|i| {
-            i.events
-                .iter()
-                .filter_map(|event| match event {
-                    egui::Event::Key {
-                        key,
-                        pressed: true,
-                        modifiers,
-                        ..
-                    } => {
-                        let ctrl = modifiers.ctrl || modifiers.command;
-                        let tab = tab_action(*key, ctrl, modifiers.shift, modifiers.alt);
-                        Some((tab, *key, ctrl, modifiers.shift, modifiers.alt))
-                    }
-                    _ => None,
-                })
-                .collect()
-        });
+        let key_actions: Vec<(Option<TabAction>, egui::Key, bool, bool, bool, bool)> =
+            ctx.input(|i| {
+                i.events
+                    .iter()
+                    .filter_map(|event| match event {
+                        egui::Event::Key {
+                            key,
+                            pressed: true,
+                            modifiers,
+                            repeat,
+                            ..
+                        } => {
+                            let ctrl = modifiers.ctrl || modifiers.command;
+                            let tab = tab_action(*key, ctrl, modifiers.shift, modifiers.alt);
+                            Some((tab, *key, ctrl, modifiers.shift, modifiers.alt, *repeat))
+                        }
+                        _ => None,
+                    })
+                    .collect()
+            });
         let titles = self.tabs.titles();
         let active = self.tabs.active_index();
         let mut selected = None;
@@ -1434,7 +1438,7 @@ impl Loupe {
         let key_anchor = self.anchor(ctx.input(|input| input.pointer.hover_pos()), rect, ppp);
         let mut dialog_consumes_keys = self.import_dialog.is_some() && !self.import_hidden;
         let mut start_import = false;
-        for (tab_action, key, ctrl, shift, alt) in key_actions {
+        for (tab_action, key, ctrl, shift, alt, repeat) in key_actions {
             if dialog_consumes_keys {
                 match dialog_key_action(key, ctrl, alt) {
                     Some(DialogKey::Close)
@@ -1534,7 +1538,9 @@ impl Loupe {
                 Some(ViewMode::Loupe) => {
                     if loupe_key_action(key, ctrl, alt).is_some() {
                         scroll_to = self.switch_mode(ViewMode::Grid);
-                    } else if let Some(action) = key_action(key, ctrl, alt) {
+                    } else if let Some(action) = key_action(key, ctrl, alt)
+                        && step_allowed(action, repeat, &self.last_frame_status)
+                    {
                         self.act(action, key_anchor);
                     }
                 }
@@ -1610,6 +1616,7 @@ impl Loupe {
         let max_side = ctx.input(|i| i.max_texture_side);
         self.textures.sync(&ctx, &self.core, max_side);
         let frame = self.core.frame(view_px(rect, ppp));
+        self.last_frame_status = frame.status.clone();
         // The tab's current image comes from the tab, not from `frame.pos`: every step goes through
         // the tab and the core follows it (ADR 0014 §4.4). The status line counts the whole folder.
         let total = self.tabs.active().map_or(0, |tab| tab.files.len());
@@ -2101,6 +2108,7 @@ fn run(options: Options) -> Result<(), String> {
                 tabs: Tabs::default(),
                 ratings_read: false,
                 last_ratings_ready: false,
+                last_frame_status: Status::Empty,
             };
             if let Some(p) = path {
                 loupe.open(&p, false);
