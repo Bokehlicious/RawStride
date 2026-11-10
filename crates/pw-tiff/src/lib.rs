@@ -7,9 +7,13 @@
 //! - one decode at a time in the whole process (ADR 0015 §4.4): `decode_rgb8` holds a private
 //!   lock for the whole decode; `dimensions` does not.
 //!
+//! The target size `fit` and the area-averaging `downscale` moved here from `src-tauri`
+//! (`imaging.rs`) in ADR 0015 D3, for the TIFF thumbnails of RawStride.
+//!
 //! Orientation and colour management are not applied; CMYK is converted naively.
 
 mod convert;
+mod resize;
 
 use std::fmt;
 use std::fs::File;
@@ -21,6 +25,7 @@ use tiff::ColorType;
 use tiff::decoder::{Decoder, DecodingResult, Limits};
 
 pub use convert::{Layout, Rgb8, f32_to_u8, to_rgb8, u16_to_u8};
+pub use resize::{downscale, fit};
 
 /// Why a TIFF could not be read. Each `String` is the complete message that `Display` shows.
 #[derive(Debug, Clone, PartialEq, Eq)]

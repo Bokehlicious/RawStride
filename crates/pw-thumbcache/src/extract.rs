@@ -126,8 +126,18 @@ pub fn orient(image: Rgb8, orientation: u16) -> Rgb8 {
     }
 }
 
+/// Memory limit of one TIFF decode for a thumbnail: the default core budget. The thumbnail worker
+/// does not get the user's budget (ADR 0015 §9.1).
+const TIFF_LIMIT: usize = 4 << 30;
+
 /// Extracts and orients a thumbnail without decoding RAW image data.
+///
+/// A TIFF is the exception: it is decoded from its image data and reduced to the cell with a box
+/// filter; its embedded previews are not used (ADR 0015 §4.1, Q7).
 pub fn thumbnail(path: &Path, cell: u32, decoder: &mut Decoder) -> Result<Rgb8, ThumbError> {
+    if pw_raw::is_tiff_file(path) {
+        return tiff_thumbnail(path, cell);
+    }
     let info = pw_raw::inspect(path).map_err(|error| ThumbError::Unreadable(error.to_string()))?;
     let bytes = if info.format == Some(Format::Jpeg) {
         fs::read(path).map_err(|error| ThumbError::Unreadable(error.to_string()))?
@@ -144,6 +154,24 @@ pub fn thumbnail(path: &Path, cell: u32, decoder: &mut Decoder) -> Result<Rgb8, 
         .decode(&bytes, scale)
         .map_err(|error| ThumbError::Unreadable(error.to_string()))?;
     Ok(orient(image, info.orientation))
+}
+
+/// Decodes a TIFF with `pw-tiff` under `TIFF_LIMIT`, reduces it so the long edge is at most
+/// `cell` (never upscales) and applies the orientation of `pw_raw::inspect`, or none when inspect
+/// fails (for example a BigTIFF).
+fn tiff_thumbnail(path: &Path, cell: u32) -> Result<Rgb8, ThumbError> {
+    let full = pw_tiff::decode_rgb8(path, Some(TIFF_LIMIT))
+        .map_err(|error| ThumbError::Unreadable(error.to_string()))?;
+    let (width, height) = pw_tiff::fit(full.width, full.height, cell);
+    let small = pw_tiff::downscale(&full, width, height);
+    drop(full);
+    let image = Rgb8 {
+        width: small.width,
+        height: small.height,
+        data: small.data,
+    };
+    let orientation = pw_raw::inspect(path).map_or(1, |info| info.orientation);
+    Ok(orient(image, orientation))
 }
 
 #[cfg(test)]
@@ -382,5 +410,224 @@ mod tests {
         let image = thumbnail(&path, 200, &mut decoder)
             .unwrap_or_else(|error| panic!("{}: {error}", path.display()));
         assert_eq!((image.width, image.height), (height, width));
+    }
+
+    mod tiff_files {
+        use std::io::Cursor;
+        use std::path::{Path, PathBuf};
+
+        use tiff::encoder::{TiffEncoder, colortype};
+        use tiff::tags::Tag;
+
+        use super::super::*;
+
+        /// Writes `bytes` to `name` in a test folder of its own.
+        fn temp_file(name: &str, bytes: &[u8]) -> PathBuf {
+            let dir =
+                std::env::temp_dir().join(format!("pw-thumbcache-tiff-{}", std::process::id()));
+            std::fs::create_dir_all(&dir)
+                .unwrap_or_else(|error| panic!("create test folder: {error}"));
+            let path = dir.join(name);
+            std::fs::write(&path, bytes).unwrap_or_else(|error| panic!("write test file: {error}"));
+            path
+        }
+
+        /// The colour of every pixel of the uniform test image.
+        const COLOUR: [u8; 3] = [200, 100, 50];
+
+        fn uniform(width: u32, height: u32) -> Vec<u8> {
+            COLOUR.repeat((width * height) as usize)
+        }
+
+        /// An 8-bit RGB TIFF with optional Orientation and JPEGInterchangeFormat (offset, length)
+        /// tags in IFD0.
+        fn rgb_tiff(
+            width: u32,
+            height: u32,
+            data: &[u8],
+            orientation: Option<u16>,
+            jpeg: Option<(u32, u32)>,
+        ) -> Vec<u8> {
+            let mut out = Cursor::new(Vec::new());
+            let mut encoder =
+                TiffEncoder::new(&mut out).unwrap_or_else(|error| panic!("encoder: {error}"));
+            let mut image = encoder
+                .new_image::<colortype::RGB8>(width, height)
+                .unwrap_or_else(|error| panic!("new image: {error}"));
+            if let Some(o) = orientation {
+                image
+                    .encoder()
+                    .write_tag(Tag::Orientation, o)
+                    .unwrap_or_else(|error| panic!("orientation tag: {error}"));
+            }
+            if let Some((offset, length)) = jpeg {
+                image
+                    .encoder()
+                    .write_tag(Tag::Unknown(0x0201), offset)
+                    .unwrap_or_else(|error| panic!("JPEGInterchangeFormat tag: {error}"));
+                image
+                    .encoder()
+                    .write_tag(Tag::Unknown(0x0202), length)
+                    .unwrap_or_else(|error| panic!("JPEGInterchangeFormatLength tag: {error}"));
+            }
+            image
+                .write_data(data)
+                .unwrap_or_else(|error| panic!("write data: {error}"));
+            out.into_inner()
+        }
+
+        fn thumb(path: &Path, cell: u32) -> Result<Rgb8, ThumbError> {
+            let mut decoder = Decoder::new().unwrap_or_else(|error| panic!("{error}"));
+            thumbnail(path, cell, &mut decoder)
+        }
+
+        #[test]
+        fn a_tiff_is_reduced_to_the_cell_and_never_upscaled() {
+            let path = temp_file(
+                "rgb-400x200.tif",
+                &rgb_tiff(400, 200, &uniform(400, 200), None, None),
+            );
+
+            let small = thumb(&path, 100).unwrap_or_else(|error| panic!("{error}"));
+            assert_eq!((small.width, small.height), (100, 50));
+            assert_eq!(
+                small.data,
+                uniform(100, 50),
+                "a uniform colour stays that colour"
+            );
+
+            let same = thumb(&path, 1000).unwrap_or_else(|error| panic!("{error}"));
+            assert_eq!((same.width, same.height), (400, 200));
+            assert_eq!(same.data, uniform(400, 200));
+        }
+
+        #[test]
+        fn a_tiff_with_orientation_6_is_turned() {
+            let path = temp_file(
+                "rgb-400x200-orientation-6.tif",
+                &rgb_tiff(400, 200, &uniform(400, 200), Some(6), None),
+            );
+            let image = thumb(&path, 100).unwrap_or_else(|error| panic!("{error}"));
+            assert_eq!((image.width, image.height), (50, 100));
+        }
+
+        /// A 2×2 8-bit palette TIFF (PhotometricInterpretation 3 with a ColorMap), built by hand.
+        /// Copied from `crates/pw-tiff/src/tests.rs`.
+        fn palette_tiff() -> Vec<u8> {
+            const ENTRIES: u16 = 10;
+            let ifd_end = 8 + 2 + 12 * u32::from(ENTRIES) + 4;
+            let colormap_at = ifd_end;
+            let pixels_at = colormap_at + 3 * 256 * 2;
+            let mut b = Vec::new();
+            b.extend_from_slice(b"II");
+            b.extend_from_slice(&42u16.to_le_bytes());
+            b.extend_from_slice(&8u32.to_le_bytes());
+            b.extend_from_slice(&ENTRIES.to_le_bytes());
+            let mut entry = |tag: u16, kind: u16, count: u32, value: u32| {
+                b.extend_from_slice(&tag.to_le_bytes());
+                b.extend_from_slice(&kind.to_le_bytes());
+                b.extend_from_slice(&count.to_le_bytes());
+                b.extend_from_slice(&value.to_le_bytes());
+            };
+            const SHORT: u16 = 3;
+            const LONG: u16 = 4;
+            entry(256, SHORT, 1, 2); // ImageWidth
+            entry(257, SHORT, 1, 2); // ImageLength
+            entry(258, SHORT, 1, 8); // BitsPerSample
+            entry(259, SHORT, 1, 1); // Compression: none
+            entry(262, SHORT, 1, 3); // PhotometricInterpretation: palette
+            entry(273, LONG, 1, pixels_at); // StripOffsets
+            entry(277, SHORT, 1, 1); // SamplesPerPixel
+            entry(278, SHORT, 1, 2); // RowsPerStrip
+            entry(279, LONG, 1, 4); // StripByteCounts
+            entry(320, SHORT, 3 * 256, colormap_at); // ColorMap
+            b.extend_from_slice(&0u32.to_le_bytes()); // no next IFD
+            assert_eq!(b.len() as u32, colormap_at);
+            for channel in 0..3u32 {
+                for i in 0..256u32 {
+                    let v = ((i * (channel + 1)) % 256) as u16 * 257;
+                    b.extend_from_slice(&v.to_le_bytes());
+                }
+            }
+            assert_eq!(b.len() as u32, pixels_at);
+            b.extend_from_slice(&[0, 1, 2, 3]);
+            b
+        }
+
+        #[test]
+        fn a_palette_tiff_is_unreadable_with_the_pw_tiff_text() {
+            let path = temp_file("palette.tif", &palette_tiff());
+            let expected = pw_tiff::decode_rgb8(&path, None)
+                .err()
+                .unwrap_or_else(|| panic!("pw-tiff decoded a palette TIFF"));
+            assert!(matches!(expected, pw_tiff::TiffError::Unsupported(_)));
+            assert_eq!(
+                thumb(&path, 100).err(),
+                Some(ThumbError::Unreadable(expected.to_string()))
+            );
+        }
+
+        #[test]
+        fn a_tiff_with_an_embedded_jpeg_preview_is_decoded_from_its_image_data() {
+            // Encode once to learn where the file ends (the tag values have a fixed size), then
+            // again with the JPEG preview's offset there, and append the JPEG.
+            let data = uniform(400, 200);
+            let length = jpeg_fixture::SMALL.len() as u32;
+            let offset = rgb_tiff(400, 200, &data, None, Some((0, length))).len() as u32;
+            let mut bytes = rgb_tiff(400, 200, &data, None, Some((offset, length)));
+            assert_eq!(bytes.len() as u32, offset);
+            bytes.extend_from_slice(jpeg_fixture::SMALL);
+            let path = temp_file("rgb-with-jpeg-preview.tif", &bytes);
+
+            // pw-raw sees the 16×8 preview, so a thumbnail from it would be 16×8.
+            let info = pw_raw::inspect(&path).unwrap_or_else(|error| panic!("{error}"));
+            assert_eq!(
+                info.previews
+                    .iter()
+                    .map(|p| (p.offset, p.width, p.height))
+                    .collect::<Vec<_>>(),
+                vec![(u64::from(offset), 16, 8)]
+            );
+
+            let image = thumb(&path, 100).unwrap_or_else(|error| panic!("{error}"));
+            assert_eq!((image.width, image.height), (100, 50));
+            assert_eq!(image.data, uniform(100, 50));
+        }
+
+        /// Every TIFF (`.tif` or `.tiff`, any case) in `PW_TESTDATA`; at least one must exist.
+        fn real_tiff_files() -> Vec<PathBuf> {
+            let directory = std::env::var_os("PW_TESTDATA")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| panic!("PW_TESTDATA is not set"));
+            let mut files: Vec<PathBuf> = std::fs::read_dir(&directory)
+                .unwrap_or_else(|error| panic!("{}: {error}", directory.display()))
+                .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+                .filter(|path| path.is_file() && pw_raw::is_tiff_file(path))
+                .collect();
+            files.sort();
+            assert!(
+                !files.is_empty(),
+                "no .tif file in PW_TESTDATA: {}",
+                directory.display()
+            );
+            files
+        }
+
+        #[test]
+        #[ignore = "needs real camera files: set PW_TESTDATA and run with --ignored"]
+        fn real_tiff_thumbnails_have_a_long_edge_of_256() {
+            for path in real_tiff_files() {
+                let image =
+                    thumb(&path, 256).unwrap_or_else(|error| panic!("{}: {error}", path.display()));
+                assert_eq!(
+                    image.width.max(image.height),
+                    256,
+                    "{}: {}×{}",
+                    path.display(),
+                    image.width,
+                    image.height
+                );
+            }
+        }
     }
 }

@@ -14,3 +14,7 @@ workspace = true
 pw-core.workspace = true
 pw-libjpeg.workspace = true
 pw-raw.workspace = true
+pw-tiff.workspace = true
+
+[dev-dependencies]
+tiff = "=0.9.1"

@@ -3895,6 +3895,8 @@ dependencies = [
  "pw-core",
  "pw-libjpeg",
  "pw-raw",
+ "pw-tiff",
+ "tiff 0.9.1",
 ]
 
 [[package]]
