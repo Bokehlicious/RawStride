@@ -5,6 +5,8 @@
   direction: X will move the image to a `_rejected` folder instead (§13); in this milestone X sets the
   rating "rejected". Nothing is built, installed or added as a dependency by this ADR. Each step in §9
   is its own work part, with its own approval and commit.
+- **Implemented (2026-11-10):** steps B1–B5 done (agent tasks T41–T49); B6 is this documentation
+  update.
 - Date: 2026-11-09
 - Related:
   - ADR 0004 (ratings and labels: storage, ExifTool, keys, write order). **Its decisions are carried
@@ -158,6 +160,17 @@ Proposed as behaviour requirements now and targets after a first measurement, as
 | **R5** | Stepping in the loupe and scrolling the grid keep the display frame rate while writes run (V1–V8 unchanged) | By hand while holding a rating key and stepping |
 | **R6** | Values written by RawStride are read by Lightroom Classic and Photo Mechanic, and theirs by RawStride | By hand in B5 (also closes ADR 0004's open "clean-room level C check") |
 
+Results (2026-11-10, from the log in `docs/agent-tasks.md`):
+
+| # | Result |
+|---|---|
+| **R1** | Checked by hand: the owner's T43 hand check (keys in the grid and the loupe, display) passed |
+| **R2** | Tests with a fake worker (T42: coalescing, order across paths, retry on a full queue); checked by hand in T43 (values kept after reopening the folder) |
+| **R3** | Tests (T42, T48, T49); checked by hand: a read-only sidecar keeps the old rating and gives "Kunde inte spara betyget för <fil>: filen är skrivskyddad" (T49) |
+| **R4** | Checked by hand (T47): rate, close at once, reopen → value kept. The exit wait of T44 lists a write still pending after about 5 s, and a refused write with its Swedish reason, in "Betyg som inte sparades" |
+| **R5** | Checked by hand in T43 (holding a digit while stepping keeps the loupe smooth) |
+| **R6** | **Photo Mechanic: passed (owner, 2026-11-10)**, with one limit: Photo Mechanic does not show a reject (`xmp:Rating` −1), since its scale is 0–5; the label is shown. Stars and labels go both ways; Photo Mechanic writes the same `xmp:Rating` and `xmp:Label` with Adobe's label names. **Lightroom Classic: not checked** (not available) |
+
 ## 8. Testing and acceptance
 
 ### 8.1 Automated (`cargo test`)
@@ -188,14 +201,30 @@ Proposed as behaviour requirements now and targets after a first measurement, as
 | Step | Content | Result |
 |---|---|---|
 | **B0** | Accept this ADR; answer §11; accept R1–R6 | **Done 2026-11-09:** documentation commit |
-| **B1** | `pw-loupe`: rating key map and `apply` (plain Rust, tests) | Agent task |
-| **B2** | `pw-loupe`: rating store and write queue (§4.2), replacing the rating part of `MetadataCache`; Swedish status texts (plain Rust, tests with a fake worker) | Agent task |
-| **B3** | `pw-loupe`: draw the grid row and the loupe badge; wire the keys in grid and loupe with the focus rule (§4.3); failure messages in the status line | Agent task |
-| **B4** | `pw-loupe`: complete pending writes on exit (Q6) | Agent task |
-| **B5** | Acceptance by hand (§8.2), including the Lightroom/Photo Mechanic check | Owner |
-| **B6** | Documentation: architecture.md, test inventory, ADR 0004 (open check closed), GR8 status | Documentation commit |
+| **B1** | `pw-loupe`: rating key map and `apply` (plain Rust, tests) | **Done:** T41 |
+| **B2** | `pw-loupe`: rating store and write queue (§4.2), replacing the rating part of `MetadataCache`; Swedish status texts (plain Rust, tests with a fake worker) | **Done:** T42, T45 |
+| **B3** | `pw-loupe`: draw the grid row and the loupe badge; wire the keys in grid and loupe with the focus rule (§4.3); failure messages in the status line | **Done:** T43, T46 |
+| **B4** | `pw-loupe`: complete pending writes on exit (Q6) | **Done:** T44, T47 |
+| **B5** | Acceptance by hand (§8.2), including the Lightroom/Photo Mechanic check | **Done** by the owner's hand checks; R6 with Photo Mechanic on 2026-11-10, Lightroom not checked (§7) |
+| **B6** | Documentation: architecture.md, test inventory, ADR 0004 (open check closed), GR8 status | **Done:** T50 |
 
-Steps B1–B4 are agent tasks T41–T44 (`docs/agent-tasks.md`).
+Steps B1–B4 are agent tasks T41–T44 (`docs/agent-tasks.md`). T47–T49 were found in the hand checks.
+
+### 9.1 Findings during implementation
+
+- **Common Controls 6 manifest (T47).** After T44, `pw-loupe.exe` exited at start (0xC0000139).
+  Cargo merges the features of `rfd`, which is shared with the Tauri app's `tauri-plugin-dialog`, so
+  `rfd` is built with `common-controls-v6`, and its message box needs Common Controls 6.
+  `crates/pw-loupe/build.rs` now embeds the manifest. `check.ps1` cannot catch a binary that fails to
+  load, because the test binaries never reference `on_exit`.
+- **Refused writes (T48).** ExifTool answers "0 image files updated" when it refuses a write (for
+  example a read-only sidecar). `pw-metadata` took that answer as success; it now reads the summary
+  counts and reports the write as failed.
+- **Swedish reasons (T49).** `pw-metadata` reports the kind of a refused write as `WriteError`
+  (`ReadOnly`, `NotWritten`, `Other`); `pw-loupe` turns it into "filen är skrivskyddad" or "filen kunde
+  inte skrivas" without comparing text.
+- **Label name in the loupe badge (T43).** The badge also shows the Swedish label name; this is not in
+  §5.2, and the owner chose to keep it.
 
 ## 10. Risks
 
@@ -244,3 +273,21 @@ Not part of this milestone; recorded so that this milestone does not block it.
   from its public documentation and by using it (clean-room levels C and D, `docs/clean-room.md`).
 - Consequence for this milestone: the X key goes through the same `RatingKey::Reject` path as the
   other keys, so changing what it does later is a change in one place.
+
+## 14. Photo Mechanic check (R6, 2026-11-10)
+
+Test folder with RW2, DNG and JPEG files; values set in RawStride and read in Photo Mechanic
+2026.6, and the other way round. The sidecars were compared afterwards (clean-room level C: only
+files the programs write).
+
+- **Same fields.** Photo Mechanic writes `xmp:Rating` and `xmp:Label` with Adobe's names
+  ("Yellow"), so stars and labels are read both ways.
+- **Reject.** RawStride writes −1 (Adobe's reject). Photo Mechanic does not show it. This supports
+  the later direction in §13: moving rejected images to `_rejected` works in every program.
+- **Sidecar name.** Photo Mechanic writes `<stem>.XMP` in upper case. Windows does not distinguish
+  case, and RawStride reads and updates that file.
+- **Photo Mechanic's own fields.** Photo Mechanic also writes `photomechanic:ColorClass` (a number).
+  RawStride changes only `xmp:Label`, so after a change in RawStride the number is stale. Photo
+  Mechanic showed the `xmp:Label` colour in the test, so this has no visible effect today. If it ever
+  does, RawStride could also write `ColorClass`; that would need its own decision.
+

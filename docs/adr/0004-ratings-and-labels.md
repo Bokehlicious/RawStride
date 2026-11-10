@@ -2,6 +2,7 @@
 
 - Status: accepted (choices made by the project owner, 2026-11-03)
 - Date: 2026-11-03
+- 2026-11-10: implemented in the egui program (ADR 0013).
 
 ## Context
 
@@ -70,8 +71,10 @@ Measured in the sandbox, so Windows numbers may differ:
 
 ## Open
 
-- **Clean-room level C check.** Rate one ARW in Photo Mechanic and compare its sidecar (file name
-  case, fields) with ours.
+- ~~**Clean-room level C check.**~~ **Done 2026-11-10** with Photo Mechanic (ADR 0013 R6, §14): the
+  same `xmp:Rating` and `xmp:Label` fields; Photo Mechanic names its sidecar `.XMP` and does not show
+  a reject (−1). Lightroom Classic is not checked.
+- A write that ExifTool refuses is now reported (T48); a read-only file gives its own error (T49).
 - **Concurrent reads during an embedded write.** A preview request that arrives while ExifTool
   replaces a DNG can read stale offsets once; the next request is correct. Acceptable for now.
 

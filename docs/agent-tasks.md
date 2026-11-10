@@ -1272,6 +1272,45 @@ Ordered from easiest to hardest. Start at the top.
 - **Done when:** `.\tools\check.ps1` is all OK. Then the owner checks by hand: rate an image with a
   read-only sidecar → "Kunde inte spara betyget för <fil>: filen är skrivskyddad" and the old rating.
 
+### T50. ADR 0013 B6: documentation after milestone 4 — Ready for review
+
+- **Documentation only; no code, no `Cargo.toml`.** For a Claude agent.
+- **Files:** `docs/adr/0013-egui-ratings-and-labels.md`, `docs/adr/0004-ratings-and-labels.md`,
+  `docs/architecture.md`, `docs/GUI_REQUIREMENTS.md`, `docs/README.md`, the root `README.md`,
+  `docs/test-inventory.md` (only if it does not match the latest `test-output.txt`). This file: rule 11.
+- **Source of truth:** the log rows of T41–T49 in this file; write only what they record. Do not
+  invent measurements or results.
+- **What:**
+  1. **ADR 0013:**
+     - Status: add "**Implemented (2026-11-10):** steps B1–B5 done (agent tasks T41–T49); B6 is this
+       documentation update." (as ADR 0011's status line).
+     - §9: the Result column of B1–B6 with their tasks (B1 T41; B2 T42, T45; B3 T43, T46; B4 T44, T47;
+       B5 the owner's hand checks; B6 T50), and one line under the table that T47–T49 were found in the
+       hand checks.
+     - §7: a short result per R1–R6 from the log (R1–R5 checked by hand as recorded; R3 with the Swedish
+       messages of T49; R4 with the exit wait of T44). **R6 (Lightroom / Photo Mechanic) is not in the
+       log:** mark it "not checked yet" — do not mark it passed.
+     - A new short section "Findings during implementation": the Common Controls 6 manifest (T47:
+       `rfd` features are merged with the Tauri app, `check.ps1` cannot catch a binary that fails to
+       load), refused writes (T48: ExifTool's "0 image files updated"), the Swedish reasons (T49:
+       `WriteError`), and the label name kept in the loupe badge (owner, T43).
+  2. **ADR 0004:** a note "2026-11-10: implemented in the egui program (ADR 0013)". Under "Open", keep
+     the clean-room level C check open (it is the same as ADR 0013 R6) and add: "A write that ExifTool
+     refuses is now reported (T48); a read-only file gives its own error (T49)."
+  3. **architecture.md:** in the crate table, `pw-metadata` also reports refused writes by kind
+     (`WriteError`), and `pw-loupe` also has ratings and labels (key map, the rating store with its
+     ordered write queue, the exit wait; ADR 0013). Mention `crates/pw-loupe/build.rs` (manifest) in one
+     line.
+  4. **GUI_REQUIREMENTS.md** GR8 and the root `README.md` status: ratings and labels are done in the
+     egui program; still left before the switch: filter and multi-selection, IPTC metadata, TIFF
+     viewing. Keep the rest of GR8 as it is.
+  5. **docs/README.md:** the ADR list says "0013 milestone 4: ratings and labels in egui – done
+     2026-11-10".
+- **Rules:** English, the style of the existing documents (short sentences, no marketing words);
+  change only the lines needed; rules 10–12.
+- **Done when:** `.\tools\check.ps1` is all OK (formatting and tests are unaffected) and
+  `git diff --stat` shows only the files above.
+
 ### T7. Format the files that `cargo fmt --check` reports — Done
 
 - **Crates:** `photoworkflow` (`src-tauri`), `preview-bench` (`tools/preview-bench`).
@@ -1585,3 +1624,6 @@ and reviewer:
 | 2026-11-09 | T49 | Done | Reviewed: `Error::ReadOnly`/`NotWritten` chosen only after ExifTool refused; `WriteError` keeps the kind across the worker; `pw-loupe` maps it to "filen är skrivskyddad" / "filen kunde inte skrivas" without comparing text; `RatingStore` unchanged; test helpers convert as the task said. Owner's `check.ps1`: fmt, test (352 passed, 27 ignored, 0 failed) and clippy OK; owner's hand check passed |
 | 2026-11-10 | T43 | Done | Owner's hand check passed (keys in grid and loupe, display, label name in the badge kept) |
 | 2026-11-10 | T46 | Done | Owner's hand check passed (inset, rounded label bar and badge) |
+| 2026-11-10 | T50 | Open | Added: ADR 0013 B6, documentation after milestone 4 (R6, the Lightroom/Photo Mechanic check, stays open) |
+| 2026-11-10 | T50 | Ready for review | (Agent) Documentation only. ADR 0013: "Implemented" status line, §7 results for R1–R6 (R6 not checked yet), §9 Result column with tasks and a note that T47–T49 came from the hand checks, new §9.1 "Findings during implementation". ADR 0004: implementation note; level C check still open (= ADR 0013 R6); refused and read-only writes noted. architecture.md (`pw-metadata` `WriteError`, `pw-loupe` ratings and `build.rs`), GR8 status, root README status, docs/README ADR list. Test inventory unchanged (matches `test-output.txt`). Workspace fmt, test (352 passed, 27 ignored, 0 failed) and clippy OK; no commit. |
+| 2026-11-10 | – | Note | R6 / ADR 0004 clean-room check done with Photo Mechanic by the owner: stars and labels both ways; a reject (−1) is not shown in Photo Mechanic (its scale is 0–5); PM writes `.XMP` and its own `ColorClass`. Reviewer updated ADR 0013 (§7 R6, §9 B5, new §14) and ADR 0004 (Open). Lightroom not checked |
