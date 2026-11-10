@@ -19,14 +19,15 @@ use pw_loupe::{
     Action, CellState, DEFAULT_THUMBNAIL_SIZE, DialogKey, DialogRequest, Field, Filter,
     GridKeyAction, ImportDialog, ImportDialogState, ImportEvent, ImportForm, ImportWorker,
     LABEL_FILTERS, LabelFilter, LoupeMove, MAX_THUMBNAIL_SIZE, MIN_THUMBNAIL_SIZE, Navigation,
-    Options, READING_RATINGS_TEXT, RatingRefused, STAR_FILTERS, StarFilter, SubmitError, Tab,
-    TabAction, Tabs, ThumbGrid, UNSUPPORTED_TEXT, ViewMode, WINDOW_TITLE, clamp_thumbnail_size,
-    color_image, columns, dialog_key_action, done_lines, ejecting_progress_text, error_text,
-    grid_key_action, indicator_text, iptc_progress_text, key_action, label_filter_text, label_name,
-    list_folder, loupe_key_action, marked_text, mode_label, more_lines, no_match_text,
-    opens_import, parse_args, position_text, preview_line, preview_summary, progress_text,
-    rating_key_action, request_cell, star_filter_text, star_glyphs, status_line,
-    step_thumbnail_size, tab_action, take_wheel_steps, visible_range, wheel_factor,
+    Options, READING_RATINGS_TEXT, RatingRefused, STAR_CONDITIONS, STAR_FILTERS, StarFilter,
+    SubmitError, Tab, TabAction, Tabs, ThumbGrid, UNSUPPORTED_TEXT, ViewMode, WINDOW_TITLE,
+    clamp_thumbnail_size, color_image, columns, dialog_key_action, done_lines,
+    ejecting_progress_text, error_text, grid_key_action, indicator_text, iptc_progress_text,
+    key_action, label_filter_text, label_name, list_folder, loupe_key_action, marked_text,
+    mode_label, more_lines, no_match_text, opens_import, parse_args, position_text, preview_line,
+    preview_summary, progress_text, rating_key_action, request_cell, star_condition_text,
+    star_filter_text, star_glyphs, status_line, step_thumbnail_size, tab_action, take_wheel_steps,
+    visible_range, wheel_factor,
 };
 use pw_metadata::MetadataWorker;
 use pw_metadata::Rating;
@@ -39,6 +40,8 @@ mod metadata;
 
 const BACKGROUND: egui::Color32 = egui::Color32::from_gray(32);
 const STATUS_HEIGHT: f32 = 24.0;
+/// Width of the narrow star-condition list ("≥", "=", "≤", ADR 0014 §5.2, amendment 1).
+const CONDITION_COMBO_WIDTH: f32 = 40.0;
 const GRID_SPACING: f32 = 8.0;
 const GRID_LABEL_HEIGHT: f32 = 18.0;
 /// The outline and, faint, the fill of a marked cell (ADR 0014 §5.1: the label blue).
@@ -1359,7 +1362,29 @@ impl Loupe {
                         }
                     }
                     open_import_clicked = ui.button("Importera…").clicked();
-                    // The filter of the active tab (ADR 0014 §5.2).
+                    // The filter of the active tab (ADR 0014 §5.2, amendment 1): condition, stars,
+                    // label. The condition applies only to a number of stars; it keeps its value
+                    // while disabled.
+                    let counts_stars = matches!(filter.stars, StarFilter::Stars(_));
+                    let condition = ui
+                        .add_enabled_ui(counts_stars, |ui| {
+                            filter_combo(
+                                ui,
+                                "star-condition",
+                                filter.condition,
+                                &STAR_CONDITIONS,
+                                star_condition_text,
+                                counts_stars,
+                                Some(CONDITION_COMBO_WIDTH),
+                            )
+                        })
+                        .inner;
+                    if let Some(condition) = condition {
+                        new_filter = Some(Filter {
+                            condition,
+                            ..filter
+                        });
+                    }
                     if let Some(stars) = filter_combo(
                         ui,
                         "star-filter",
@@ -1367,6 +1392,7 @@ impl Loupe {
                         &STAR_FILTERS,
                         star_filter_text,
                         filter.stars != StarFilter::All,
+                        None,
                     ) {
                         new_filter = Some(Filter { stars, ..filter });
                     }
@@ -1377,6 +1403,7 @@ impl Loupe {
                         &LABEL_FILTERS,
                         label_filter_text,
                         filter.label != LabelFilter::All,
+                        None,
                     ) {
                         new_filter = Some(Filter { label, ..filter });
                     }
@@ -1754,6 +1781,7 @@ fn filter_combo<T: Copy + PartialEq>(
     choices: &[T],
     text: impl Fn(T) -> &'static str,
     active: bool,
+    width: Option<f32>,
 ) -> Option<T> {
     let mut chosen = current;
     let mut picked = false;
@@ -1766,18 +1794,20 @@ fn filter_combo<T: Copy + PartialEq>(
             widgets.active.bg_stroke = stroke;
             widgets.open.bg_stroke = stroke;
         }
-        egui::ComboBox::from_id_salt(id)
-            .selected_text(text(current))
-            .show_ui(ui, |ui| {
-                for &choice in choices {
-                    if ui
-                        .selectable_value(&mut chosen, choice, text(choice))
-                        .clicked()
-                    {
-                        picked = true;
-                    }
+        let mut combo = egui::ComboBox::from_id_salt(id).selected_text(text(current));
+        if let Some(width) = width {
+            combo = combo.width(width);
+        }
+        combo.show_ui(ui, |ui| {
+            for &choice in choices {
+                if ui
+                    .selectable_value(&mut chosen, choice, text(choice))
+                    .clicked()
+                {
+                    picked = true;
                 }
-            });
+            }
+        });
     });
     picked.then_some(chosen)
 }

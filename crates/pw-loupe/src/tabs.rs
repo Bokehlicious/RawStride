@@ -422,6 +422,7 @@ mod tests {
     fn unrated() -> Filter {
         Filter {
             stars: crate::filter::StarFilter::Unrated,
+            condition: crate::filter::StarCondition::AtLeast,
             label: crate::filter::LabelFilter::All,
         }
     }
@@ -429,6 +430,7 @@ mod tests {
     fn red() -> Filter {
         Filter {
             stars: crate::filter::StarFilter::All,
+            condition: crate::filter::StarCondition::AtLeast,
             label: crate::filter::LabelFilter::Label("Red"),
         }
     }

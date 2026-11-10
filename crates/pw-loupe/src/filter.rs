@@ -6,13 +6,25 @@ use pw_metadata::Rating;
 
 use crate::label_name;
 
+/// How a number of stars (`StarFilter::Stars`) is compared (ADR 0014 §2.1, amendment 1).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum StarCondition {
+    /// This many stars or more.
+    #[default]
+    AtLeast,
+    /// Exactly this many stars.
+    Exactly,
+    /// Unrated, or 0 up to this many stars.
+    AtMost,
+}
+
 /// The star part of a filter.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum StarFilter {
     #[default]
     All,
-    /// At least this many stars (1–5); `AtLeast(5)` is "5 stjärnor".
-    AtLeast(u8),
+    /// A number of stars (1–5), compared by the filter's `StarCondition`.
+    Stars(u8),
     Unrated,
     Rejected,
     /// Anything except rejected, unrated included.
@@ -29,17 +41,20 @@ pub enum LabelFilter {
     NoLabel,
 }
 
-/// The filter of a tab: stars and label, combined with AND.
+/// The filter of a tab: stars and label, combined with AND. `condition` applies only to
+/// `StarFilter::Stars`; it keeps its value while another star choice is made.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Filter {
     pub stars: StarFilter,
+    pub condition: StarCondition,
     pub label: LabelFilter,
 }
 
 impl Filter {
-    /// True when the filter lets anything less than every image through (not all / all).
+    /// True when the filter lets anything less than every image through (not all / all). The
+    /// condition alone never makes a filter active.
     pub fn is_active(&self) -> bool {
-        *self != Self::default()
+        self.stars != StarFilter::All || self.label != LabelFilter::All
     }
 }
 
@@ -55,9 +70,16 @@ pub fn matches(filter: &Filter, rating: Option<&Rating>) -> bool {
     let stars_match = match filter.stars {
         StarFilter::All => true,
         // Clamped to 1–5 so the filter does what its text says (`star_filter_text`).
-        StarFilter::AtLeast(min) => {
-            let min = min.clamp(1, 5);
-            stars.is_some_and(|stars| i16::from(stars) >= i16::from(min))
+        StarFilter::Stars(n) => {
+            let n = i16::from(n.clamp(1, 5));
+            match filter.condition {
+                StarCondition::AtLeast => stars.is_some_and(|stars| i16::from(stars) >= n),
+                StarCondition::Exactly => stars.is_some_and(|stars| i16::from(stars) == n),
+                // Unrated counts as no stars; a reject (−1) is not a number of stars.
+                StarCondition::AtMost => {
+                    stars.is_none_or(|stars| (0..=n).contains(&i16::from(stars)))
+                }
+            }
         }
         StarFilter::Unrated => stars.is_none(),
         StarFilter::Rejected => stars == Some(REJECTED),
@@ -96,28 +118,44 @@ pub fn nearest_visible(visible: &[usize], current: usize) -> Option<usize> {
 /// The star choices in the order of the drop-down list (ADR 0014 §5.2, Q8).
 pub const STAR_FILTERS: [StarFilter; 9] = [
     StarFilter::All,
-    StarFilter::AtLeast(1),
-    StarFilter::AtLeast(2),
-    StarFilter::AtLeast(3),
-    StarFilter::AtLeast(4),
-    StarFilter::AtLeast(5),
+    StarFilter::Stars(1),
+    StarFilter::Stars(2),
+    StarFilter::Stars(3),
+    StarFilter::Stars(4),
+    StarFilter::Stars(5),
     StarFilter::Unrated,
     StarFilter::Rejected,
     StarFilter::NotRejected,
 ];
 
-/// The text of a star choice. `AtLeast` outside 1–5 gives the text of the nearest valid value.
+/// The text of a star choice. `Stars` outside 1–5 gives the text of the nearest valid value.
 pub fn star_filter_text(filter: StarFilter) -> &'static str {
     match filter {
         StarFilter::All => "Alla betyg",
-        StarFilter::AtLeast(0..=1) => "≥ 1 stjärna",
-        StarFilter::AtLeast(2) => "≥ 2 stjärnor",
-        StarFilter::AtLeast(3) => "≥ 3 stjärnor",
-        StarFilter::AtLeast(4) => "≥ 4 stjärnor",
-        StarFilter::AtLeast(_) => "5 stjärnor",
+        StarFilter::Stars(0..=1) => "1 stjärna",
+        StarFilter::Stars(2) => "2 stjärnor",
+        StarFilter::Stars(3) => "3 stjärnor",
+        StarFilter::Stars(4) => "4 stjärnor",
+        StarFilter::Stars(_) => "5 stjärnor",
         StarFilter::Unrated => "Ej betygsatt",
         StarFilter::Rejected => "Avvisade",
         StarFilter::NotRejected => "Alla utom avvisade",
+    }
+}
+
+/// The star conditions in the order of their drop-down list (ADR 0014 §5.2, amendment 1).
+pub const STAR_CONDITIONS: [StarCondition; 3] = [
+    StarCondition::AtLeast,
+    StarCondition::Exactly,
+    StarCondition::AtMost,
+];
+
+/// The text of a star condition.
+pub fn star_condition_text(condition: StarCondition) -> &'static str {
+    match condition {
+        StarCondition::AtLeast => "≥",
+        StarCondition::Exactly => "=",
+        StarCondition::AtMost => "≤",
     }
 }
 
@@ -156,6 +194,7 @@ mod tests {
     fn stars_only(stars: StarFilter) -> Filter {
         Filter {
             stars,
+            condition: StarCondition::default(),
             label: LabelFilter::All,
         }
     }
@@ -163,7 +202,16 @@ mod tests {
     fn label_only(label: LabelFilter) -> Filter {
         Filter {
             stars: StarFilter::All,
+            condition: StarCondition::default(),
             label,
+        }
+    }
+
+    fn with_condition(stars: StarFilter, condition: StarCondition) -> Filter {
+        Filter {
+            stars,
+            condition,
+            label: LabelFilter::All,
         }
     }
 
@@ -225,10 +273,7 @@ mod tests {
     fn at_least_one_never_matches_a_reject() {
         for label in [None, Some("Red"), Some("Purple")] {
             let rejected = rating(Some(-1), label);
-            assert!(!matches(
-                &stars_only(StarFilter::AtLeast(1)),
-                Some(&rejected)
-            ));
+            assert!(!matches(&stars_only(StarFilter::Stars(1)), Some(&rejected)));
         }
     }
 
@@ -239,21 +284,21 @@ mod tests {
                 for label in [None, Some("Red")] {
                     let rating = rating(stars, label);
                     assert_eq!(
-                        matches(&stars_only(StarFilter::AtLeast(outside)), Some(&rating)),
-                        matches(&stars_only(StarFilter::AtLeast(valid)), Some(&rating)),
-                        "AtLeast({outside}) against stars {stars:?}, label {label:?}"
+                        matches(&stars_only(StarFilter::Stars(outside)), Some(&rating)),
+                        matches(&stars_only(StarFilter::Stars(valid)), Some(&rating)),
+                        "Stars({outside}) against stars {stars:?}, label {label:?}"
                     );
                 }
             }
             assert_eq!(
-                matches(&stars_only(StarFilter::AtLeast(outside)), None),
-                matches(&stars_only(StarFilter::AtLeast(valid)), None),
-                "AtLeast({outside}) against no rating"
+                matches(&stars_only(StarFilter::Stars(outside)), None),
+                matches(&stars_only(StarFilter::Stars(valid)), None),
+                "Stars({outside}) against no rating"
             );
         }
         // A reject still never matches.
         assert!(!matches(
-            &stars_only(StarFilter::AtLeast(0)),
+            &stars_only(StarFilter::Stars(0)),
             Some(&rating(Some(-1), None))
         ));
     }
@@ -301,7 +346,8 @@ mod tests {
     #[test]
     fn stars_and_label_combine_with_and() {
         let filter = Filter {
-            stars: StarFilter::AtLeast(3),
+            stars: StarFilter::Stars(3),
+            condition: StarCondition::default(),
             label: LabelFilter::Label("Red"),
         };
         assert!(matches(&filter, Some(&rating(Some(3), Some("Red")))));
@@ -313,6 +359,7 @@ mod tests {
 
         let filter = Filter {
             stars: StarFilter::Unrated,
+            condition: StarCondition::default(),
             label: LabelFilter::NoLabel,
         };
         assert!(matches(&filter, None));
@@ -385,10 +432,10 @@ mod tests {
             texts,
             vec![
                 "Alla betyg",
-                "≥ 1 stjärna",
-                "≥ 2 stjärnor",
-                "≥ 3 stjärnor",
-                "≥ 4 stjärnor",
+                "1 stjärna",
+                "2 stjärnor",
+                "3 stjärnor",
+                "4 stjärnor",
                 "5 stjärnor",
                 "Ej betygsatt",
                 "Avvisade",
@@ -399,9 +446,161 @@ mod tests {
 
     #[test]
     fn star_filter_text_outside_one_to_five_uses_the_nearest_valid_value() {
-        assert_eq!(star_filter_text(StarFilter::AtLeast(0)), "≥ 1 stjärna");
-        assert_eq!(star_filter_text(StarFilter::AtLeast(6)), "5 stjärnor");
-        assert_eq!(star_filter_text(StarFilter::AtLeast(u8::MAX)), "5 stjärnor");
+        assert_eq!(star_filter_text(StarFilter::Stars(0)), "1 stjärna");
+        assert_eq!(star_filter_text(StarFilter::Stars(6)), "5 stjärnor");
+        assert_eq!(star_filter_text(StarFilter::Stars(u8::MAX)), "5 stjärnor");
+    }
+
+    /// Unrated, 1–5 stars and rejected.
+    const CONDITION_VALUES: [Option<i8>; 7] =
+        [None, Some(1), Some(2), Some(3), Some(4), Some(5), Some(-1)];
+
+    #[test]
+    fn each_condition_with_one_to_five_stars_against_unrated_1_to_5_and_rejected() {
+        for n in 1..=5u8 {
+            let n_i8 = i8::try_from(n).unwrap_or(i8::MAX);
+            for stars in CONDITION_VALUES {
+                let rejected = stars == Some(-1);
+                let at_least = !rejected && stars.is_some_and(|s| s >= n_i8);
+                let exactly = !rejected && stars == Some(n_i8);
+                // ≤ n includes unrated; a reject never matches.
+                let at_most = !rejected && stars.is_none_or(|s| s <= n_i8);
+                for (condition, want) in [
+                    (StarCondition::AtLeast, at_least),
+                    (StarCondition::Exactly, exactly),
+                    (StarCondition::AtMost, at_most),
+                ] {
+                    let filter = with_condition(StarFilter::Stars(n), condition);
+                    for label in [None, Some("Red")] {
+                        assert_eq!(
+                            matches(&filter, Some(&rating(stars, label))),
+                            want,
+                            "{condition:?} {n} against stars {stars:?}, label {label:?}"
+                        );
+                    }
+                    if stars.is_none() {
+                        assert_eq!(
+                            matches(&filter, None),
+                            want,
+                            "{condition:?} {n} against no rating"
+                        );
+                    }
+                }
+            }
+        }
+        // Spot checks of the rule above.
+        let at_most_2 = with_condition(StarFilter::Stars(2), StarCondition::AtMost);
+        assert!(matches(&at_most_2, None));
+        assert!(matches(&at_most_2, Some(&rating(Some(0), None))));
+        assert!(matches(&at_most_2, Some(&rating(Some(2), None))));
+        assert!(!matches(&at_most_2, Some(&rating(Some(3), None))));
+        assert!(!matches(&at_most_2, Some(&rating(Some(-1), None))));
+        let exactly_3 = with_condition(StarFilter::Stars(3), StarCondition::Exactly);
+        assert!(matches(&exactly_3, Some(&rating(Some(3), None))));
+        assert!(!matches(&exactly_3, Some(&rating(Some(4), None))));
+        assert!(!matches(&exactly_3, None));
+    }
+
+    #[test]
+    fn exactly_and_at_most_outside_one_to_five_match_like_the_nearest_valid_value() {
+        let values = [
+            None,
+            Some(0),
+            Some(1),
+            Some(2),
+            Some(3),
+            Some(4),
+            Some(5),
+            Some(-1),
+        ];
+        for condition in [StarCondition::Exactly, StarCondition::AtMost] {
+            for (outside, valid) in [(0, 1), (6, 5), (9, 5), (u8::MAX, 5)] {
+                let outside_filter = with_condition(StarFilter::Stars(outside), condition);
+                let valid_filter = with_condition(StarFilter::Stars(valid), condition);
+                for stars in values {
+                    assert_eq!(
+                        matches(&outside_filter, Some(&rating(stars, None))),
+                        matches(&valid_filter, Some(&rating(stars, None))),
+                        "{condition:?} {outside} against stars {stars:?}"
+                    );
+                }
+                assert_eq!(
+                    matches(&outside_filter, None),
+                    matches(&valid_filter, None),
+                    "{condition:?} {outside} against no rating"
+                );
+            }
+        }
+        // = 0 as = 1, ≤ 9 as ≤ 5.
+        let exactly_0 = with_condition(StarFilter::Stars(0), StarCondition::Exactly);
+        assert!(matches(&exactly_0, Some(&rating(Some(1), None))));
+        assert!(!matches(&exactly_0, Some(&rating(Some(0), None))));
+        let at_most_9 = with_condition(StarFilter::Stars(9), StarCondition::AtMost);
+        assert!(matches(&at_most_9, Some(&rating(Some(5), None))));
+        assert!(matches(&at_most_9, None));
+        assert!(!matches(&at_most_9, Some(&rating(Some(-1), None))));
+    }
+
+    #[test]
+    fn the_condition_is_ignored_for_all_unrated_rejected_and_not_rejected() {
+        let values = [None, Some(0), Some(1), Some(3), Some(5), Some(-1)];
+        for stars in [
+            StarFilter::All,
+            StarFilter::Unrated,
+            StarFilter::Rejected,
+            StarFilter::NotRejected,
+        ] {
+            for condition in STAR_CONDITIONS {
+                let filter = with_condition(stars, condition);
+                for value in values {
+                    assert_eq!(
+                        matches(&filter, Some(&rating(value, None))),
+                        matches(&stars_only(stars), Some(&rating(value, None))),
+                        "{stars:?} with {condition:?} against stars {value:?}"
+                    );
+                }
+                assert_eq!(
+                    matches(&filter, None),
+                    matches(&stars_only(stars), None),
+                    "{stars:?} with {condition:?} against no rating"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_condition_alone_never_makes_a_filter_active() {
+        for condition in STAR_CONDITIONS {
+            assert!(
+                !with_condition(StarFilter::All, condition).is_active(),
+                "All/All with {condition:?}"
+            );
+            for n in 1..=5 {
+                assert!(
+                    with_condition(StarFilter::Stars(n), condition).is_active(),
+                    "Stars({n}) with {condition:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn star_condition_list_texts_and_default() {
+        assert_eq!(
+            STAR_CONDITIONS,
+            [
+                StarCondition::AtLeast,
+                StarCondition::Exactly,
+                StarCondition::AtMost
+            ]
+        );
+        let texts: Vec<&str> = STAR_CONDITIONS
+            .iter()
+            .map(|c| star_condition_text(*c))
+            .collect();
+        assert_eq!(texts, vec!["≥", "=", "≤"]);
+        assert_eq!(StarCondition::default(), StarCondition::AtLeast);
+        assert_eq!(Filter::default().condition, StarCondition::AtLeast);
     }
 
     #[test]

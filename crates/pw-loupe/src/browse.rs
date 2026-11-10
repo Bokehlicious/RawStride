@@ -190,7 +190,7 @@ mod tests {
     use std::path::PathBuf;
 
     use super::*;
-    use crate::filter::{Filter, LabelFilter, StarFilter};
+    use crate::filter::{Filter, LabelFilter, StarCondition, StarFilter};
     use crate::tabs::{Tabs, ViewMode};
     use crate::{marked_text, no_match_text, position_text};
 
@@ -221,7 +221,11 @@ mod tests {
     }
 
     fn filter(stars: StarFilter, label: LabelFilter) -> Filter {
-        Filter { stars, label }
+        Filter {
+            stars,
+            condition: StarCondition::default(),
+            label,
+        }
     }
 
     fn tab(tabs: &mut Tabs) -> &mut Tab {
@@ -258,13 +262,13 @@ mod tests {
         );
 
         assert_eq!(
-            set(&mut tabs, &ratings, filter(S::AtLeast(3), L::All)),
+            set(&mut tabs, &ratings, filter(S::Stars(3), L::All)),
             [1, 2]
         );
         assert_eq!(tab(&mut tabs).current, 1);
         assert_eq!(status(tab(&mut tabs)), "1 / 2 (av 12)");
         assert_eq!(
-            set(&mut tabs, &ratings, filter(S::AtLeast(3), L::Label("Red"))),
+            set(&mut tabs, &ratings, filter(S::Stars(3), L::Label("Red"))),
             [2]
         );
         assert_eq!(
@@ -688,7 +692,7 @@ mod tests {
         set(
             &mut tabs,
             &ratings,
-            filter(StarFilter::AtLeast(3), LabelFilter::All),
+            filter(StarFilter::Stars(3), LabelFilter::All),
         );
         let t = tab(&mut tabs);
         assert_eq!(t.visible, [1, 2]);
@@ -711,5 +715,47 @@ mod tests {
         let t = tab(&mut tabs);
         assert!(!t.rated(true, &of(&ratings)));
         assert_eq!(t.visible.len(), 12);
+    }
+
+    #[test]
+    fn the_star_conditions_on_the_filter_select_setup() {
+        use LabelFilter as L;
+        use StarCondition as C;
+        use StarFilter as S;
+        let with = |stars, condition, label| Filter {
+            stars,
+            condition,
+            label,
+        };
+        let (mut tabs, ratings) = setup();
+        assert_eq!(
+            set(&mut tabs, &ratings, with(S::Stars(3), C::Exactly, L::All)),
+            [1],
+            "= 3"
+        );
+        assert_eq!(
+            set(&mut tabs, &ratings, with(S::Stars(5), C::Exactly, L::All)),
+            [2],
+            "= 5"
+        );
+        assert_eq!(
+            set(&mut tabs, &ratings, with(S::Stars(3), C::AtMost, L::All)),
+            [0, 1, 4, 5, 6, 7, 8, 9, 10, 11],
+            "≤ 3"
+        );
+        assert_eq!(
+            set(
+                &mut tabs,
+                &ratings,
+                with(S::Stars(3), C::AtMost, L::Label("Red"))
+            ),
+            [4],
+            "≤ 3 and Red"
+        );
+        assert_eq!(
+            set(&mut tabs, &ratings, with(S::Stars(3), C::AtLeast, L::All)),
+            [1, 2],
+            "≥ 3 (unchanged)"
+        );
     }
 }

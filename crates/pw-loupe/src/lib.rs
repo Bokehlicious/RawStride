@@ -21,8 +21,8 @@ use pw_viewcore::{DecodeError, Frame, Source, Status, Zoom};
 
 pub use browse::LoupeMove;
 pub use filter::{
-    Filter, LABEL_FILTERS, LabelFilter, STAR_FILTERS, StarFilter, label_filter_text, matches,
-    nearest_visible, star_filter_text, visible,
+    Filter, LABEL_FILTERS, LabelFilter, STAR_CONDITIONS, STAR_FILTERS, StarCondition, StarFilter,
+    label_filter_text, matches, nearest_visible, star_condition_text, star_filter_text, visible,
 };
 pub use grid::{
     DEFAULT_THUMBNAIL_SIZE, GridKeyAction, LoupeKeyAction, MAX_THUMBNAIL_SIZE, MIN_THUMBNAIL_SIZE,
@@ -550,6 +550,7 @@ mod tests {
         tabs.open_in_active(PathBuf::from("D:/x"), (0..12).map(name).collect(), 7);
         tabs.set_filter(Filter {
             stars: StarFilter::All,
+            condition: StarCondition::AtLeast,
             label: LabelFilter::Label("Red"),
         });
         let Some(tab) = tabs.active_mut() else {
