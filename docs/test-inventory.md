@@ -1,7 +1,7 @@
 # Test inventory
 
 This inventory describes Rust tests included by `cargo test --workspace`. It was checked against
-a Windows run on 2026-11-10 (after T62): **456 passed, 27 ignored by default, 0 failed**.
+a Windows run on 2026-11-10 (after T63): **471 passed, 27 ignored by default, 0 failed**.
 Test counts include
 ignored tests. Unit-test rows aggregate the inline `#[cfg(test)]` modules in each crate; for
 `pw-loupe`, the shared metadata module is included in both its library and binary test targets.
@@ -10,7 +10,7 @@ requirement is fully verified.
 
 | Crate | File(s) | What it verifies | Category | Prerequisites | Tests | Ignored |
 |---|---|---|---|---|---:|---:|
-| `photoworkflow` | `src-tauri/src/imaging.rs`, `src-tauri/src/ingest.rs` | Image-buffer conversion and fit sizing; ingest action labels and conversion of dialog text to IPTC. | Unit | vcpkg libraries | 5 | 0 |
+| `photoworkflow` | `src-tauri/src/imaging.rs`, `src-tauri/src/ingest.rs` | Fit sizing and area-averaging downscale; ingest action labels and conversion of dialog text to IPTC. | Unit | vcpkg libraries | 4 | 0 |
 | `preview-bench` | `tools/preview-bench/src/main.rs` | CSV parsing, timing statistics, and reading byte ranges including an unaligned end-of-file range. | Unit | None | 4 | 0 |
 | `pw-core` | `crates/pw-core/src/lib.rs` | Human-readable byte formatting and unit-boundary rounding. | Unit | None | 14 | 0 |
 | `pw-ingest` | `crates/pw-ingest/src/eject.rs`, `paths.rs`, `request.rs`, `summary.rs`, `template.rs`, `volumes.rs` | Eject polling/scripts, path and import-request validation (with its exact messages), card detection over candidate roots, folder counts, template rendering, capture dates, and safe path segments. | Unit | None | 30 | 0 |
@@ -20,6 +20,7 @@ requirement is fully verified.
 | `pw-metadata` | `crates/pw-metadata/src/exiftool.rs`, `lib.rs`, `test_support.rs`, `worker.rs` | ExifTool protocol handling, reading ExifTool's write summary (created/updated/unchanged versus refused writes), the kind of a refused write (read-only, not written) and the worker's write-error kinds, localized IPTC values, worker failures/restarts, and its ignored fake-process entry point. | Unit | None | 21 | 1 |
 | `pw-raw` | `crates/pw-raw/src/lib.rs` | Synthetic JPEG/TIFF parsing, preview extraction, EXIF orientation, and exposure formatting. | Unit | None | 6 | 0 |
 | `pw-thumbcache` | `crates/pw-thumbcache/src/extract.rs`, `worker.rs` | Embedded-preview and decode-scale choice, all eight orientations, thumbnails from a generated JPEG and from invalid files; the worker's priority, generations, cancel, pause, duplicate requests, LRU cache and error results with a simulated source; thumbnails from camera RAWs. | Unit / real-file | vcpkg libraries; `PW_TESTDATA` (4 ignored) | 29 | 4 |
+| `pw-tiff` | `crates/pw-tiff/src/convert.rs`, `tests.rs` | Sample conversion to 8-bit RGB (moved from `photoworkflow`); decoding generated 8-bit RGB, 16-bit RGB, 8-bit Gray, 8-bit RGBA, 8-bit CMYK and 32-bit float RGB files, an LZW file equal to its uncompressed twin, `dimensions`, a hand-built palette TIFF as `Unsupported`, a truncated file as an error, a memory limit (`TooLarge` and its text; no limit and a large enough limit decode), one decode at a time (a decode waits for the held lock; `dimensions` does not), and a missing file as `Io`. | Unit | None | 16 | 0 |
 | `pw-render` | `crates/pw-render/src/lib.rs` | View sizing, mesh placement/UVs, texture filtering, and texture memory accounting. | Unit | None | 3 | 0 |
 | `pw-viewcore` | `crates/pw-viewcore/src/geometry.rs`, `native.rs`, `scale.rs`, `state.rs` | Geometry/orientation, image scaling and cropping, native orientation mapping, scheduling, zoom, and memory-budget state; a changed file list (`set_files`): resident views and sessions moved by path with the same texture ids, removed images released (textures and session bytes), the plan on the new order, renders and opens of the old order discarded without touching the new keys, the same list, the unchanged current view and zoom, and an empty list; after `open_folder`, an open of the new folder does not wait for the old folder's open of the same position. | Unit | vcpkg libraries | 53 | 0 |
 | `pw-ingest` | `crates/pw-ingest/tests/ingest.rs` | Scanning synthetic card contents, planning and verifying copies, conflict naming, backups, cancellation, and a real-RAW EXIF-time case. | Integration / real-file | `PW_TESTDATA` (1 ignored) | 8 | 1 |

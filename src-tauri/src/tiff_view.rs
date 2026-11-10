@@ -1,12 +1,14 @@
 //! Viewing plain TIFF files (`.tif`/`.tiff`).
 //!
 //! Unlike RAW files, TIFFs from scanners and editors usually carry no embedded JPEG preview, so
-//! the image data is decoded with the `tiff` crate, scaled down (`imaging`) and served to the
-//! WebView as JPEG (`jpeg-encoder`), at the same three sizes as RAW previews:
+//! the image data is decoded by the shared crate `pw-tiff` (ADR 0015 D1; this file only wraps
+//! it, without a memory limit), scaled down (`imaging`) and served to the WebView as JPEG
+//! (`jpeg-encoder`), at the same three sizes as RAW previews:
 //! small ≤ 640 px, medium ≤ 2560 px (long edge) and large = full resolution.
 //!
 //! - Decoding is serialised (one TIFF at a time) so a grid full of large TIFFs cannot exhaust
-//!   memory; a 61 MP 16-bit RGB TIFF needs about 360 MB while decoding.
+//!   memory; a 61 MP 16-bit RGB TIFF needs about 360 MB while decoding. `pw-tiff` also allows
+//!   only one decode at a time in the process; this file keeps its own lock around the cache.
 //! - Encoded JPEGs are kept in a small FIFO cache (by bytes), keyed by folder generation, index
 //!   and size, so switching back and forth does not decode again.
 //! - Orientation is not applied here: the viewer rotates with CSS from the TIFF's IFD0
@@ -14,16 +16,12 @@
 //! - Colour management (embedded ICC profiles) is not applied yet; CMYK is converted naively.
 
 use std::collections::VecDeque;
-use std::fs::File;
-use std::io::BufReader;
 use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use pw_raw::PreviewSize;
-use tiff::ColorType;
-use tiff::decoder::{Decoder, DecodingResult, Limits};
 
-use crate::imaging::{self, Layout, Rgb8};
+use crate::imaging::{self, Rgb8};
 
 /// Long-edge limits of the generated sizes (0 = full resolution).
 pub const SMALL_EDGE: u32 = 640;
@@ -129,39 +127,14 @@ impl TiffView {
     }
 }
 
-fn open(path: &Path) -> Result<Decoder<BufReader<File>>, String> {
-    let file = File::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
-    let dec =
-        Decoder::new(BufReader::with_capacity(1 << 20, file)).map_err(|e| format!("TIFF: {e}"))?;
-    // Default limits (256 MB) reject large 16-bit files from high-resolution cameras.
-    Ok(dec.with_limits(Limits::unlimited()))
-}
-
 /// Image size from the TIFF decoder (used when pw-raw cannot inspect the file, e.g. BigTIFF).
 pub fn dimensions(path: &Path) -> Result<(u32, u32), String> {
-    open(path)?.dimensions().map_err(|e| format!("TIFF: {e}"))
+    pw_tiff::dimensions(path).map_err(|e| e.to_string())
 }
 
-/// Decodes the first image of a TIFF to 8-bit RGB.
+/// Decodes the first image of a TIFF to 8-bit RGB (no memory limit).
 pub fn decode_rgb8(path: &Path) -> Result<Rgb8, String> {
-    let mut dec = open(path)?;
-    let (w, h) = dec.dimensions().map_err(|e| format!("TIFF: {e}"))?;
-    let color = dec.colortype().map_err(|e| format!("TIFF: {e}"))?;
-    let layout = match color {
-        ColorType::Gray(_) => Layout::Gray,
-        ColorType::GrayA(_) => Layout::GrayAlpha,
-        ColorType::RGB(_) => Layout::Rgb,
-        ColorType::RGBA(_) => Layout::Rgba,
-        ColorType::CMYK(_) => Layout::Cmyk,
-        other => return Err(format!("TIFF colour type {other:?} is not supported yet")),
-    };
-    let samples = match dec.read_image().map_err(|e| format!("TIFF: {e}"))? {
-        DecodingResult::U8(v) => v,
-        DecodingResult::U16(v) => imaging::u16_to_u8(&v),
-        DecodingResult::F32(v) => imaging::f32_to_u8(&v),
-        _ => return Err("TIFF sample format is not supported yet".into()),
-    };
-    imaging::to_rgb8(&samples, layout, w, h)
+    pw_tiff::decode_rgb8(path, None).map_err(|e| e.to_string())
 }
 
 fn encode_jpeg(img: &Rgb8) -> Result<Vec<u8>, String> {

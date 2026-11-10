@@ -3592,12 +3592,12 @@ dependencies = [
  "pw-metadata",
  "pw-raw",
  "pw-rawview",
+ "pw-tiff",
  "serde",
  "serde_json",
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",
- "tiff 0.9.1",
 ]
 
 [[package]]
@@ -3895,6 +3895,13 @@ dependencies = [
  "pw-core",
  "pw-libjpeg",
  "pw-raw",
+]
+
+[[package]]
+name = "pw-tiff"
+version = "0.1.0"
+dependencies = [
+ "tiff 0.9.1",
 ]
 
 [[package]]

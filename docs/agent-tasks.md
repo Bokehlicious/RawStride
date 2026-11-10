@@ -1858,7 +1858,7 @@ Ordered from easiest to hardest. Start at the top.
 - **Rules:** English, the style of the existing documents; change only the lines needed; rules 10–12.
 - **Done when:** `.\tools\check.ps1` is all OK and `git diff --stat` shows only the files above.
 
-### T62. ADR 0009 amendment 1: a held step key in the loupe waits for the shown image — Ready for review
+### T62. ADR 0009 amendment 1: a held step key in the loupe waits for the shown image — Done
 
 - **Review 2026-11-10: code accepted.** Waiting for the owner's hand check ("Done when").
 
@@ -1886,6 +1886,74 @@ Ordered from easiest to hardest. Start at the top.
   arrow shows every image passed (stepping follows the rendering) and stops at once when the key is
   released; in JPEG mode a held arrow moves as before; single quick presses move at once in both
   modes; a damaged file (error message) does not stop a held arrow; the grid's arrows are unchanged.
+
+### T63. ADR 0015 D1: new crate `pw-tiff` with the TIFF decoder from the Tauri app — Ready for review
+
+- **Review 2026-11-10: code accepted.** Waiting for the owner's commit.
+
+- **Can start now.** ADR 0015 accepted by the owner (D0, 2026-11-10), including `tiff` =0.9.1.
+- **Crates:** new `pw-tiff`, `photoworkflow` (`src-tauri`).
+- **Files:** new `crates/pw-tiff/Cargo.toml` and `crates/pw-tiff/src/lib.rs` (more module files in
+  `crates/pw-tiff/src/` are fine); the root `Cargo.toml` (`[workspace.dependencies]` only);
+  `src-tauri/Cargo.toml`; `src-tauri/src/tiff_view.rs`; `src-tauri/src/imaging.rs`; `Cargo.lock`
+  (by cargo); `docs/test-inventory.md`. This task may change the three `Cargo.toml` files as written
+  below and nothing else in them.
+- **Why:** ADR 0015 §4.1, §4.4 and §6: RawStride and the Tauri app share one TIFF decoder; RawStride
+  needs a memory limit and one decode at a time.
+- **What:**
+  1. **Crate:** `crates/pw-tiff/Cargo.toml` as the other internal crates (`version.workspace = true`
+     and the other `*.workspace` keys, `[lints] workspace = true`), description "TIFF decoding to 8-bit
+     RGB (ADR 0015)", one dependency `tiff = "=0.9.1"` with default features. Root `Cargo.toml`: add
+     `pw-tiff = { path = "crates/pw-tiff" }` under "Internal crates" (the members glob
+     `crates/*` already covers the folder).
+  2. **Move from `src-tauri/src/imaging.rs`** to `pw-tiff`, unchanged in behaviour and messages:
+     `Layout` (with `channels`), `Rgb8`, `to_rgb8`, `u16_to_u8`, `f32_to_u8`, and the test
+     `conversions` with its assertions. In `to_rgb8`, replace the slice indexing `samples[..n * k]`
+     with `samples.get(..n * k)` and the same "image data is short: …" error (rule 4); the result is
+     the same. `imaging.rs` keeps `fit` and `downscale` and their tests (the RAW view uses them) and
+     gets `pub use pw_tiff::Rgb8;` so `rawview.rs` and `main.rs` do not change.
+  3. **Move from `src-tauri/src/tiff_view.rs`** to `pw-tiff`: `open`, `dimensions` and `decode_rgb8`.
+     New signatures: `pub fn dimensions(path: &Path) -> Result<(u32, u32), TiffError>` and
+     `pub fn decode_rgb8(path: &Path, limit: Option<usize>) -> Result<Rgb8, TiffError>`.
+     - `limit = None` keeps today's `Limits::unlimited()` (the Tauri app). `Some(bytes)` starts from
+       `Limits::default()` and sets `decoding_buffer_size` and `intermediate_buffer_size` to `bytes`
+       (the core budget in RawStride, ADR 0015 Q4).
+     - `pub enum TiffError { Io(String), Decode(String), Unsupported(String), TooLarge { limit: usize } }`
+       with `Display` and `std::error::Error`. `Display` gives **exactly today's texts** for the first
+       three ("{path}: {io error}", "TIFF: {error}", "TIFF colour type {other:?} is not supported
+       yet", "TIFF sample format is not supported yet", "image data is short: …"). `tiff`'s
+       `LimitsExceeded` becomes `TooLarge`, shown as "TIFF: the file needs more memory than the
+       limit of {limit / 1 MiB} MB". The Swedish texts of ADR 0015 §5 come in D4, not here.
+  4. **One decode at a time (ADR 0015 §4.4):** a private `static` `Mutex<()>` in `pw-tiff`, taken by
+     `decode_rgb8` for the whole decode (a poisoned lock is taken with `into_inner`, as `tiff_view`'s
+     `lock` does). `dimensions` does not take it.
+  5. **Tauri app:** `src-tauri/Cargo.toml` replaces `tiff = "0.9"` with `pw-tiff.workspace = true`.
+     `tiff_view.rs` keeps `TiffView`, the cache, `max_edge`, `encode_jpeg` and its own decode lock,
+     and keeps the functions `dimensions(path) -> Result<_, String>` and `decode_rgb8(path) ->
+     Result<Rgb8, String>` as one-line wrappers over `pw_tiff` (`limit = None`, `.map_err(|e|
+     e.to_string())`), so `main.rs` does not change. Update the module comments of both files to say
+     where the decoder now lives.
+- **Rules:** a move with additions; no change in what the Tauri app shows or reports; rules 3–7 and
+  10–12. Check with `git diff Cargo.lock`: the only changes are the new `pw-tiff` package and the
+  dependency lists of `photoworkflow` and `pw-tiff`; **no new external package** (`tiff` 0.9.1 is
+  already there). If cargo wants anything else, stop and report.
+- **Tests to add** (in `pw-tiff`; build the files in the test with `tiff::encoder::TiffEncoder`, or
+  by hand as `crates/pw-metadata/tests/sidecar.rs` does):
+  - 8-bit RGB, 16-bit RGB, 8-bit Gray, 8-bit RGBA, 8-bit CMYK and 32-bit float RGB, each 2×2 or
+    larger, decode to the expected RGB bytes; one LZW-compressed RGB file decodes to the same bytes
+    as its uncompressed twin;
+  - `dimensions` gives the encoded size;
+  - a palette TIFF gives `Unsupported` (build it by hand: PhotometricInterpretation 3 with a
+    ColorMap);
+  - a truncated file (a valid file cut in half) gives an error, not a panic;
+  - `Some(limit)` smaller than the image gives `TooLarge`; `None` and a large enough limit decode;
+  - the lock: while a test holds the decode lock (a `#[cfg(test)]` accessor is fine), a
+    `decode_rgb8` on another thread does not finish (`recv_timeout` of 200 ms gives a timeout); after
+    the lock is released it finishes;
+  - a file that does not exist gives `Io`.
+- **Done when:** `.\tools\check.ps1` is all OK; `photoworkflow` has the same tests as before minus
+  `conversions`, which `pw-tiff` now has, all passing; `docs/test-inventory.md` has a `pw-tiff` row
+  and the new totals; `git diff --stat` shows only the files above.
 
 ### T7. Format the files that `cargo fmt --check` reports — Done
 
@@ -2254,3 +2322,8 @@ and reviewer:
 | 2026-11-10 | T62 | Open | Added: ADR 0009 amendment 1 (§13, owner): a repeated Next/Previous in the loupe is ignored while the current image is still being prepared. Replaces the "held arrow in RAW mode" item under "Not for agents yet" |
 | 2026-11-10 | T62 | Ready for review | (Agent) `lib.rs`: added and tested `step_allowed`; repeated Next/Previous are ignored only for `Preparing`, while single presses and other actions remain allowed. `main.rs`: preserves egui's repeat flag, checks loupe actions against the last `core.frame` status; grid, dialog, rating and tab handling unchanged. `docs/test-inventory.md`: `pw-loupe` 233; workspace 456 passed, 27 ignored. `.\tools\check.ps1`: fmt, test and clippy OK; no commit. Owner hand check remains: held arrows in RAW and JPEG, quick presses, damaged file, and unchanged grid arrows |
 | 2026-11-10 | T62 | Ready for review | Review: code accepted. `step_allowed` is false only for a repeated Next/Previous while the last frame is `Preparing`; tests cover the four statuses and the non-step actions. `main.rs` keeps egui's `repeat` flag, gates only the loupe's `key_action`, and stores the status of the last `core.frame`. Note: the status is the previous frame's, so two repeats in one slow frame could both step; unlikely (the UI thread does not decode), so accepted. Checked: `test-output.txt` newer than the changes, fmt/test (456 passed, 27 ignored, 0 failed)/clippy OK; `pw-loupe` 233, matching the test inventory. Waiting for the owner's hand check |
+| 2026-11-10 | T62 | Done | Owner's hand check and commit done. Also: the display mode of the T57 `latency.ps1` run is not known (owner); ADR 0014 S3 says "not recorded" |
+| 2026-11-10 | – | Note | ADR 0015 (milestone 6: TIFF viewing) accepted by the owner (D0): scope, E1–E6, every proposal of §11 as written, `tiff` =0.9.1 in the new crate `pw-tiff`, and replacing the test `the_folder_lists_supported_files_by_name_without_tiff` in D4. IPTC is split off: parity is met by the import template (T39); ADR 0007 becomes milestone 7 after its approval |
+| 2026-11-10 | T63 | Open | Added: ADR 0015 D1, the TIFF decoder moves from `src-tauri` to the new crate `pw-tiff`, with a memory limit and one decode at a time. `imaging::fit` and `downscale` stay in `src-tauri` (its RAW view uses them) |
+| 2026-11-10 | T63 | Ready for review | (Agent) New crate `pw-tiff` (`lib.rs`, `convert.rs`, `tests.rs`; one dependency `tiff = "=0.9.1"`): `Layout`, `Rgb8`, `to_rgb8` (now `samples.get(..n * k)`, same "image data is short" text), `u16_to_u8`, `f32_to_u8` and the test `conversions` moved from `imaging.rs`; `dimensions` and `decode_rgb8(path, limit)` moved from `tiff_view.rs`. `TiffError` holds each message as shown today; `tiff`'s `UnsupportedError` (e.g. a palette TIFF) becomes `Unsupported` with the same "TIFF: …" text; `LimitsExceeded` becomes `TooLarge` only when a limit is set. A private static decode lock (poison taken with `into_inner`) is held by `decode_rgb8` only. `src-tauri`: `pw-tiff.workspace = true` replaces `tiff`; `imaging.rs` keeps `fit`/`downscale` and re-exports `Rgb8`; `tiff_view.rs` has one-line wrappers; `main.rs` and `rawview.rs` unchanged. `Cargo.lock`: only the new package and the two dependency lists. 16 tests in `pw-tiff`, `photoworkflow` 4; test inventory updated. `.\tools\check.ps1`: fmt, test (471 passed, 27 ignored, 0 failed) and clippy OK; no commit. |
+| 2026-11-10 | T63 | Ready for review | Review: code accepted. A move with the named additions: same texts (`Display` of `TiffError`), `samples.get(..)` instead of indexing, the limit sets both buffer sizes, the lock is held for the whole decode and not by `dimensions`, the Tauri wrappers keep `main.rs` and `rawview.rs` unchanged. `Cargo.lock`: only `pw-tiff` and the two dependency lists, no new external package. Checked: `test-output.txt` newer than the changes, fmt/test (471 passed, 0 failed)/clippy OK; `pw-tiff` 16, `photoworkflow` 4, matching the test inventory. Reviewer also decoded the owner's 9 TIFFs in `D:\PhotoWorkflowData\RAW` with a temporary probe (removed): all decode, the same pixels with no limit and with 4 GiB, 26–164 ms warm (3201×2134 to 7741×5161). Notes, not blocking: a palette TIFF is `Unsupported` through `tiff`'s own error ("TIFF: …"), not the colour-type text, which matters for the Swedish texts in D4; the tests leave small files in `%TEMP%\pw-tiff-{pid}`. Finding for D5 in ADR 0015 §9.1: all 9 files are 16-bit RGB, uncompressed, orientation 1, **ProPhoto RGB** |
