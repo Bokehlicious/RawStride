@@ -4,6 +4,7 @@
   requirements (§7) and every proposal in §11 are accepted as written. Nothing is built, installed or
   added as a dependency by this ADR. Each step in §9 is its own work part, with its own approval and
   commit.
+- **Amendment 2 (owner, 2026-11-10, §14):** the label filter takes several labels at once (T61).
 - **Amendment 1 (owner, 2026-11-10, §13):** §2.1 gets a star condition (≥, =, ≤), and §2.2 removes
   a rated image that stops matching at once. Tasks T59, T60; T57 changed.
 - Date: 2026-11-10
@@ -243,6 +244,7 @@ ADR 0013 §7:
 | **F7** | Acceptance by hand (§8.2), including V1 under a filter | Owner |
 | **F5c** | Amendment 1: a rating removes an image that stops matching at once (§2.2) | T59 |
 | **F5d** | Amendment 1: the star condition ≥, =, ≤ (§2.1) | T60 |
+| **F5e** | Amendment 2: several labels at once (§2.1) | T61 |
 | **F8** | Documentation: architecture.md, test inventory, GR8 status, ADR 0004 addendum (egui note) | T58 |
 
 T59 comes after T56 and before T57; T60 after T57 (all three change `main.rs`). T51–T54 do not depend on each other; T55 needs T51 and T52; T56 needs T53 and T55; T57 needs T54
@@ -294,3 +296,22 @@ The owner accepted every proposal below as written.
 
 The same change applies to the ADR 0004 addendum (points 1 and 2); T58 updates it. Parity with
 `ui/tests/filter-select.test.js` (S6) is given up for the one check that §2.2 replaces.
+
+## 14. Amendment 2: several labels at once (owner, 2026-11-10)
+
+Status: **accepted by the owner (2026-11-10)**, after the hand check of T60 ("I miss filtering on
+several colours at once"). Every proposal below is accepted as written. Task T61.
+
+**Proposed change of §2.1 (label part):** the label filter is a **set** of label choices: the five
+colours and "Ingen etikett". An image matches when its label is in the set (OR within the set);
+stars and label still combine with AND. An empty set means "Alla etiketter".
+
+| # | Question | Decision (the proposal, accepted) |
+|---|---|---|
+| **Q10** | How is the set chosen? | The label list stays one drop-down; its items become check boxes (Röd, Gul, Grön, Blå, Lila, Ingen etikett) and the popup stays open while ticking. "Alla etiketter" at the top clears the set. Closed, it shows "Alla etiketter", the one name ("Röd"), or the names joined ("Röd, Grön"), shortened to "3 etiketter" from three |
+| **Q11** | Can "Ingen etikett" be combined with colours? | **Yes**: "Röd + Ingen etikett" shows red and unlabelled images (for example: what is red or not yet sorted) |
+| **Q12** | All six ticked? | Treated as "Alla etiketter" (the set is cleared), so the filter is not shown as active when it lets everything through |
+| **Q13** | Keys? | None, as Q4 |
+
+Unchanged: per tab, not saved between sessions (Q1, Q2); the yellow outline when the set is not
+empty (§5.2); a rating that takes an image out of the set removes it at once (§2.2).

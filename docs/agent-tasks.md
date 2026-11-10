@@ -1749,7 +1749,7 @@ Ordered from easiest to hardest. Start at the top.
   image shows the next unrated image at once, without a cold load; `latency.ps1` under the filter for
   V1 (S3); a batch of 30 then closing the window at once keeps the values (ADR 0013 R4).
 
-### T60. ADR 0014 amendment 1, §2.1: the star condition ≥, =, ≤ — Ready for review
+### T60. ADR 0014 amendment 1, §2.1: the star condition ≥, =, ≤ — Done
 
 - **Review 2026-11-10: code accepted.** Waiting for the owner's hand check ("Done when").
 
@@ -1794,14 +1794,49 @@ Ordered from easiest to hardest. Start at the top.
   "≥ 4" on the test set; the condition disabled under "Ej betygsatt" and keeping its value; two tabs
   with different conditions.
 
+### T61. ADR 0014 amendment 2: filter on several labels at once — Open
+
+- **Can start now.** ADR 0014 §14 accepted by the owner (Q10–Q13 as proposed).
+- **Crate:** `pw-loupe`. **Files:** `crates/pw-loupe/src/filter.rs`, `crates/pw-loupe/src/lib.rs`
+  (re-exports), `crates/pw-loupe/src/main.rs` (the label list only), and the tests of `browse.rs`,
+  `tabs.rs` and `lib.rs` that build a `Filter` (the label field only).
+- **Why:** ADR 0014 §2.1 and §5.2 as changed by amendment 2 (§14).
+- **What:**
+  1. `pub enum LabelChoice { Label(&'static str), NoLabel }` and `pub const LABEL_CHOICES:
+     [LabelChoice; 6]` (the five labels in `pw_metadata::LABELS` order, then `NoLabel`);
+     `label_choice_text`: the Swedish names, "Ingen etikett".
+  2. `LabelFilter` becomes a set of `LabelChoice` (for example a small bit set; `Copy`, `Default` =
+     empty = all). Methods: `all()`, `is_all()`, `contains(choice)`, `toggle(choice)` (ticking the
+     sixth choice clears the set, Q12), `only(choice)` for tests and callers.
+  3. `matches`: with an empty set, every label; otherwise the image's label (or `NoLabel` when it has
+     none) must be in the set. AND with stars as today. `Filter::is_active`: stars not `All` or the
+     set not empty.
+  4. `label_filter_text(&LabelFilter) -> String`: "Alla etiketter"; one name; two names joined with
+     ", "; "{n} etiketter" from three.
+  5. `main.rs`: the label drop-down shows "Alla etiketter" (clears the set) and one check box per
+     `LABEL_CHOICES` item; the popup stays open while ticking (egui's close-on-click-outside
+     behaviour); each tick goes through `set_filter` as today (refilter without keeping, no widget
+     keeps the keyboard focus after the popup closes). Yellow outline when the set is not empty.
+- **Rules:** as T51; rules 6, 7, 10–12.
+- **Tests to change:** `LabelFilter::Label(l)` / `NoLabel` / `All` in existing tests become
+  `LabelFilter::only(…)` / `LabelFilter::all()`; assertions unchanged, except the label text tests,
+  which get the new texts.
+- **Tests to add:** every single choice as before; Red + Yellow; Red + Ingen etikett; all five
+  colours (unlabelled images hidden); ticking all six clears the set; toggling twice returns to the
+  start; `is_active` for the empty and a non-empty set; the texts for 0, 1, 2 and 3 choices; with the
+  `browse.rs` setup (2: 5 stars Red, 4: Red only): Red + Yellow → [2, 4]; Ingen etikett →
+  [0, 1, 3, 5, …, 11]; ≥ 3 and Red + Ingen etikett → [1, 2].
+- **Done when:** `.\tools\check.ps1` is all OK, and the owner checks by hand: two and three colours;
+  a colour plus "Ingen etikett"; ticking all six; the outline; two tabs with different sets.
+
 ### T58. ADR 0014 F8: documentation after milestone 5 — Open
 
-- **Start after the owner's acceptance (F7).** Documentation only; no code, no `Cargo.toml`. For a
+- **Start after T61 and the owner's acceptance (F7).** Documentation only; no code, no `Cargo.toml`. For a
   Claude agent.
 - **Files:** `docs/adr/0014-egui-filter-and-multi-selection.md`, `docs/adr/0004-ratings-and-labels.md`,
   `docs/architecture.md`, `docs/GUI_REQUIREMENTS.md`, `docs/README.md`, the root `README.md`,
   `docs/test-inventory.md` (only if it does not match the latest `test-output.txt`). This file: rule 11.
-- **Source of truth:** the log rows of T51–T57, T59 and T60 and the owner's F7 notes in this file; write only what
+- **Source of truth:** the log rows of T51–T57, T59–T61 and the owner's F7 notes in this file; write only what
   they record.
 - **What:**
   1. **ADR 0014:** "Implemented" status line; §7 results for S1–S6; §9 results per step; a short
@@ -2168,3 +2203,6 @@ and reviewer:
 | 2026-11-10 | T57 | Done | Owner's hand checks passed (smooth stepping under "≥ 3 stjärnor", the next unrated image at once after a rating under "Ej betygsatt", a batch of 30 kept after closing at once). Committed. T60 can start |
 | 2026-11-10 | T60 | Ready for review | (Agent) `filter.rs`: `StarCondition { AtLeast (default), Exactly, AtMost }`, `STAR_CONDITIONS`, `star_condition_text` ("≥", "=", "≤"); `StarFilter::AtLeast(u8)` → `Stars(u8)` (clamped 1–5); `Filter.condition`; `matches` for `Stars(n)`: ≥ n, exactly n, or unrated/0–n; a reject never matches; `is_active` is `stars != All \|\| label != All`; star texts "1 stjärna" … "5 stjärnor". `lib.rs`: re-exports. `main.rs`: a narrow (40 pt) condition list before the star list, enabled only for a number of stars (keeps its value while disabled), yellow outline then; same choice handling as the other lists (`filter_combo` got an optional width). Tests: `AtLeast(n)` → `Stars(n)` with the default condition in `filter.rs`/`browse.rs`, the two text tests get the new texts; with the owner's approval the `Filter` literals in the `tabs.rs` test helpers `unrated`/`red` and the `lib.rs` test got `condition: AtLeast` (assertions unchanged). 6 tests added (5 in `filter.rs`, 1 in `browse.rs`: = 3, = 5, ≤ 3, ≤ 3 and Red, ≥ 3). Test inventory updated (`pw-loupe` 221). `.\tools\check.ps1`: fmt, test (444 passed, 27 ignored, 0 failed) and clippy OK; no commit. Not checked by hand (needs the owner): "= 3", "≤ 2", "≥ 4" on the test set; the condition disabled under "Ej betygsatt" keeping its value; two tabs with different conditions |
 | 2026-11-10 | T60 | Ready for review | Review: code accepted. `matches` for `Stars(n)` clamps n to 1–5 and compares by the condition; ≤ n takes unrated and 0–n, and no condition matches −1; `is_active` ignores the condition. `main.rs`: the condition list is disabled unless a number of stars is chosen, keeps its value, has the yellow outline then, and goes through the same `set_filter` path. Test changes limited to the rename and the two text tests; the `condition` field added to the `Filter` literals in the `tabs.rs` and `lib.rs` tests (owner's approval, assertions unchanged). Checked: `test-output.txt` newer than the changes, fmt/test (444 passed, 27 ignored, 0 failed)/clippy OK; `pw-loupe` 221, matching the test inventory. Waiting for the owner's hand check |
+| 2026-11-10 | T60 | Done | Owner's hand check passed ("= 3", "≤ 2", "≥ 4"; the condition disabled under "Ej betygsatt" keeping its value; two tabs). Committed |
+| 2026-11-10 | T61 | Blocked | Added after the owner's hand check of T60: filter on several labels at once. ADR 0014 §14 (amendment 2, proposed) with Q10–Q13; T61 waits for the answers. T58 now starts after T61 |
+| 2026-11-10 | T61 | Open | ADR 0014 amendment 2 (§14) accepted by the owner with Q10–Q13 as proposed; T61 can start |
