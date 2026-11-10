@@ -1272,7 +1272,7 @@ Ordered from easiest to hardest. Start at the top.
 - **Done when:** `.\tools\check.ps1` is all OK. Then the owner checks by hand: rate an image with a
   read-only sidecar → "Kunde inte spara betyget för <fil>: filen är skrivskyddad" and the old rating.
 
-### T50. ADR 0013 B6: documentation after milestone 4 — Ready for review
+### T50. ADR 0013 B6: documentation after milestone 4 — Done
 
 - **Documentation only; no code, no `Cargo.toml`.** For a Claude agent.
 - **Files:** `docs/adr/0013-egui-ratings-and-labels.md`, `docs/adr/0004-ratings-and-labels.md`,
@@ -1627,3 +1627,4 @@ and reviewer:
 | 2026-11-10 | T50 | Open | Added: ADR 0013 B6, documentation after milestone 4 (R6, the Lightroom/Photo Mechanic check, stays open) |
 | 2026-11-10 | T50 | Ready for review | (Agent) Documentation only. ADR 0013: "Implemented" status line, §7 results for R1–R6 (R6 not checked yet), §9 Result column with tasks and a note that T47–T49 came from the hand checks, new §9.1 "Findings during implementation". ADR 0004: implementation note; level C check still open (= ADR 0013 R6); refused and read-only writes noted. architecture.md (`pw-metadata` `WriteError`, `pw-loupe` ratings and `build.rs`), GR8 status, root README status, docs/README ADR list. Test inventory unchanged (matches `test-output.txt`). Workspace fmt, test (352 passed, 27 ignored, 0 failed) and clippy OK; no commit. |
 | 2026-11-10 | – | Note | R6 / ADR 0004 clean-room check done with Photo Mechanic by the owner: stars and labels both ways; a reject (−1) is not shown in Photo Mechanic (its scale is 0–5); PM writes `.XMP` and its own `ColorClass`. Reviewer updated ADR 0013 (§7 R6, §9 B5, new §14) and ADR 0004 (Open). Lightroom not checked |
+| 2026-11-10 | T50 | Done | Reviewed: only the named files changed; every result in ADR 0013 §7 and §9 is taken from the log (R6 updated afterwards by the reviewer with the Photo Mechanic check); §9.1 findings, ADR 0004 note, architecture.md, GR8, both READMEs correct. Milestone 4 (ADR 0013) is complete |
