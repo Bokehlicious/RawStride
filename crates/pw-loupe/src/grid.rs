@@ -21,6 +21,12 @@ pub enum Navigation {
 pub enum GridKeyAction {
     Navigate(Navigation),
     OpenLoupe,
+    /// Shift + a navigation key: extends the marking (ADR 0014 §4.5).
+    Extend(Navigation),
+    /// Ctrl+A: marks every visible image.
+    SelectAll,
+    /// Escape: clears the marking.
+    ClearSelection,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -102,26 +108,46 @@ pub fn navigate(
     }
 }
 
-/// Maps keys handled while the contact sheet is active.
-pub fn grid_key_action(key: egui::Key, ctrl: bool, alt: bool) -> Option<GridKeyAction> {
+/// Maps keys handled while the contact sheet is active. Shift + a navigation key extends the
+/// marking, Ctrl+A marks all and Escape clears the marking (ADR 0014 §4.5); every other Ctrl or Alt
+/// combination, and Shift with any other key, does nothing.
+pub fn grid_key_action(
+    key: egui::Key,
+    ctrl: bool,
+    shift: bool,
+    alt: bool,
+) -> Option<GridKeyAction> {
     use egui::Key as K;
     if ctrl || alt {
-        return None;
+        return (key == K::A && ctrl && !shift && !alt).then_some(GridKeyAction::SelectAll);
     }
 
-    let action = match key {
-        K::ArrowLeft => GridKeyAction::Navigate(Navigation::Left),
-        K::ArrowRight => GridKeyAction::Navigate(Navigation::Right),
-        K::ArrowUp => GridKeyAction::Navigate(Navigation::Up),
-        K::ArrowDown => GridKeyAction::Navigate(Navigation::Down),
-        K::PageUp => GridKeyAction::Navigate(Navigation::PageUp),
-        K::PageDown => GridKeyAction::Navigate(Navigation::PageDown),
-        K::Home => GridKeyAction::Navigate(Navigation::Home),
-        K::End => GridKeyAction::Navigate(Navigation::End),
-        K::Enter | K::G | K::Space => GridKeyAction::OpenLoupe,
-        _ => return None,
+    let navigation = match key {
+        K::ArrowLeft => Some(Navigation::Left),
+        K::ArrowRight => Some(Navigation::Right),
+        K::ArrowUp => Some(Navigation::Up),
+        K::ArrowDown => Some(Navigation::Down),
+        K::PageUp => Some(Navigation::PageUp),
+        K::PageDown => Some(Navigation::PageDown),
+        K::Home => Some(Navigation::Home),
+        K::End => Some(Navigation::End),
+        _ => None,
     };
-    Some(action)
+    if let Some(navigation) = navigation {
+        return Some(if shift {
+            GridKeyAction::Extend(navigation)
+        } else {
+            GridKeyAction::Navigate(navigation)
+        });
+    }
+    if shift {
+        return None;
+    }
+    match key {
+        K::Enter | K::G | K::Space => Some(GridKeyAction::OpenLoupe),
+        K::Escape => Some(GridKeyAction::ClearSelection),
+        _ => None,
+    }
 }
 
 /// Maps keys handled while the loupe is active.
@@ -230,18 +256,21 @@ mod tests {
             (K::End, Navigation::End),
         ] {
             assert_eq!(
-                grid_key_action(key, false, false),
+                grid_key_action(key, false, false, false),
                 Some(GridKeyAction::Navigate(navigation))
             );
         }
         for key in [K::Enter, K::G, K::Space] {
             assert_eq!(
-                grid_key_action(key, false, false),
+                grid_key_action(key, false, false, false),
                 Some(GridKeyAction::OpenLoupe)
             );
         }
-        assert_eq!(grid_key_action(K::Escape, false, false), None);
-        assert_eq!(grid_key_action(K::G, true, false), None);
+        assert_eq!(
+            grid_key_action(K::Escape, false, false, false),
+            Some(GridKeyAction::ClearSelection)
+        );
+        assert_eq!(grid_key_action(K::G, true, false, false), None);
         for key in [K::Escape, K::G, K::Enter] {
             assert_eq!(
                 loupe_key_action(key, false, false),
@@ -250,6 +279,49 @@ mod tests {
         }
         assert_eq!(loupe_key_action(K::Space, false, false), None);
         assert_eq!(loupe_key_action(K::G, false, true), None);
+    }
+
+    #[test]
+    fn grid_marking_keys_shift_extends_ctrl_a_marks_all_escape_clears() {
+        use egui::Key as K;
+        for (key, navigation) in [
+            (K::ArrowLeft, Navigation::Left),
+            (K::ArrowRight, Navigation::Right),
+            (K::ArrowUp, Navigation::Up),
+            (K::ArrowDown, Navigation::Down),
+            (K::PageUp, Navigation::PageUp),
+            (K::PageDown, Navigation::PageDown),
+            (K::Home, Navigation::Home),
+            (K::End, Navigation::End),
+        ] {
+            assert_eq!(
+                grid_key_action(key, false, true, false),
+                Some(GridKeyAction::Extend(navigation))
+            );
+            // Ctrl or Alt with Shift + navigation still does nothing.
+            assert_eq!(grid_key_action(key, true, true, false), None);
+            assert_eq!(grid_key_action(key, false, true, true), None);
+        }
+        assert_eq!(
+            grid_key_action(K::A, true, false, false),
+            Some(GridKeyAction::SelectAll)
+        );
+        assert_eq!(grid_key_action(K::A, true, true, false), None);
+        assert_eq!(grid_key_action(K::A, false, false, true), None);
+        assert_eq!(grid_key_action(K::A, true, false, true), None);
+        assert_eq!(grid_key_action(K::A, false, false, false), None);
+        assert_eq!(
+            grid_key_action(K::Escape, false, false, false),
+            Some(GridKeyAction::ClearSelection)
+        );
+        assert_eq!(grid_key_action(K::Escape, true, false, false), None);
+        assert_eq!(grid_key_action(K::Escape, false, true, false), None);
+        assert_eq!(grid_key_action(K::Escape, false, false, true), None);
+        for key in [K::Enter, K::G, K::Space] {
+            assert_eq!(grid_key_action(key, false, true, false), None);
+        }
+        // The loupe key map is unchanged: Ctrl+A does nothing there.
+        assert_eq!(loupe_key_action(K::A, true, false), None);
     }
 
     #[test]

@@ -1311,6 +1311,364 @@ Ordered from easiest to hardest. Start at the top.
 - **Done when:** `.\tools\check.ps1` is all OK (formatting and tests are unaffected) and
   `git diff --stat` shows only the files above.
 
+### T51. ADR 0014 F1: the filter model and the filter of a tab (plain Rust) — Done
+
+- **Second review 2026-11-10: accepted.** The review points below are fixed.
+
+- **Review 2026-11-10: changes requested (one point).** Everything else is accepted: `matches`,
+  `visible`, `nearest_visible`, the lists and texts, the `Tab` field, the reset in `Tab::open`, and the
+  tests. Still to do, in `crates/pw-loupe/src/filter.rs` only:
+  1. **`AtLeast` outside 1–5 must match the way its text reads.** `star_filter_text` shows
+     `AtLeast(0)` as "≥ 1 stjärna" and `AtLeast(6)` as "5 stjärnor", but `matches` uses the raw
+     value (`AtLeast(0)` lets through stars ≥ 0, `AtLeast(6)` nothing). In `matches`, clamp the
+     minimum to 1–5 first, so the filter does what its text says. Add a test: `AtLeast(0)` behaves as
+     `AtLeast(1)` (a reject still never matches) and `AtLeast(6)` as `AtLeast(5)`, for every value in
+     `STAR_VALUES`.
+  Then run `.\tools\check.ps1`.
+
+- **Can start now.** Independent of T52–T54.
+- **Crate:** `pw-loupe`. **Files:** a new `crates/pw-loupe/src/filter.rs`, declared and re-exported in
+  `crates/pw-loupe/src/lib.rs`; `crates/pw-loupe/src/tabs.rs`. **Not** `main.rs` or any `Cargo.toml`.
+- **Why:** ADR 0014 §2.1–§2.3, §4.1, §5.2, Q1, Q8. The filter as tested plain Rust before anything is
+  drawn.
+- **What:**
+  1. Types:
+     - `pub enum StarFilter { All, AtLeast(u8), Unrated, Rejected, NotRejected }` (`AtLeast` is 1–5;
+       `AtLeast(5)` is "5 stjärnor");
+     - `pub enum LabelFilter { All, Label(&'static str), NoLabel }` (`Label` holds one of
+       `pw_metadata::LABELS`);
+     - `pub struct Filter { pub stars: StarFilter, pub label: LabelFilter }`, `Default` = all / all,
+       and `pub fn is_active(&self) -> bool` (anything other than all / all).
+  2. `pub fn matches(filter: &Filter, rating: Option<&pw_metadata::Rating>) -> bool`. No rating and a
+     rating without stars count as unrated. Stars: `All` → true; `AtLeast(n)` → stars ≥ n (so a reject,
+     −1, never matches); `Unrated` → no stars; `Rejected` → −1; `NotRejected` → anything except −1
+     (unrated included). Label: `All` → true; `Label(l)` → the label is `l`; `NoLabel` → no label.
+     Stars and label combine with AND.
+  3. `pub fn visible(count: usize, keep: Option<usize>, is_match: impl Fn(usize) -> bool) -> Vec<usize>`:
+     the indexes `0..count` that match, in order, plus `keep` if it is `< count` (the keep-current rule,
+     ADR 0014 §2.2).
+  4. `pub fn nearest_visible(visible: &[usize], current: usize) -> Option<usize>`: `current` if it is
+     in `visible`; otherwise the first index after it; otherwise the last one; `None` when `visible` is
+     empty (§2.3).
+  5. Texts (ADR 0014 §5.2), in the order of the drop-down lists:
+     - `pub const STAR_FILTERS: [StarFilter; 9]` = All, AtLeast(1)…AtLeast(4), AtLeast(5), Unrated,
+       Rejected, NotRejected, and `pub fn star_filter_text(f: StarFilter) -> &'static str`: "Alla
+       betyg", "≥ 1 stjärna", "≥ 2 stjärnor", "≥ 3 stjärnor", "≥ 4 stjärnor", "5 stjärnor", "Ej
+       betygsatt", "Avvisade", "Alla utom avvisade" (Q8);
+     - `pub const LABEL_FILTERS: [LabelFilter; 7]` = All, the five labels in `LABELS` order, NoLabel,
+       and `pub fn label_filter_text(f: LabelFilter) -> &'static str`: "Alla etiketter", the Swedish
+       names of `label_name`, "Ingen etikett". `AtLeast` outside 1–5 gives the text of the nearest
+       valid value; no panic.
+  6. `tabs.rs`: `Tab` gets `pub filter: Filter`. `Tab::open` resets it to the default (a new or
+     refreshed folder starts without a filter, Q1). `Tabs::set_filter(&mut self, filter: Filter)` sets
+     the filter of the active tab. Other tabs keep their own filter.
+- **Rules:** no I/O, no threads; no `unwrap`/`expect`/`panic!` or unchecked indexing in non-test code;
+  rules 6, 7, 10–12. Existing tests are not changed.
+- **Tests to add:** every star choice against unrated, 1, 3, 5, −1 (with and without a label); every
+  label choice against no label, Red and Purple; AND of both; "≥ 1" never matches −1;
+  `NotRejected` matches unrated; `visible` with and without `keep`, and `keep` out of range;
+  `nearest_visible` for current visible, a following index, only earlier ones, empty; the text lists
+  (length, order, Swedish texts); a new tab and `Tab::open` start without a filter; `set_filter` changes
+  only the active tab; two tabs keep different filters across `next`/`previous`.
+- **Done when:** `.\tools\check.ps1` is all OK.
+
+### T52. ADR 0014 F2: multi-selection model, Shift in the grid key map (plain Rust) — Done
+
+- **Second review 2026-11-10: accepted.** The review points below are fixed.
+
+- **Review 2026-11-10: changes requested (two points).** The key map, the `Tab` field,
+  `active_mut`, the `main.rs` call and the tests are accepted. The change to the existing key test
+  (Escape now gives `ClearSelection`) is correct: point 2 of this task gives Escape that meaning, and
+  the task's "existing key tests keep passing" was wrong for that one line. The two `ratings.rs` test
+  calls outside the file list are accepted (the new argument made them necessary). Still to do, in
+  `crates/pw-loupe/src/selection.rs` only:
+  1. **`extend_to` must never mark a hidden image** (ADR 0014 S5). When `index` is not in `visible`,
+     it marks `index` today. Change it: if `index` is not visible, leave the marking and the anchor
+     unchanged. If only the anchor is not visible, mark `index` alone, as today. Update the doc comment
+     and add a test that an `index` outside `visible` changes nothing.
+  2. **`all` must replace the marking**, as `pickAll` in `app.js` does (`clearPicked`, then every
+     visible image), not add to it. Today the result is the same only while every marked image is
+     still visible. Add a test: mark 2 and 3, then `all(&[0, 1])` → exactly [0, 1].
+  Then run `.\tools\check.ps1`.
+
+- **Can start now.** Independent of T51, T53 and T54. If T51 is done first, keep its `Tab` field.
+- **Crate:** `pw-loupe`. **Files:** a new `crates/pw-loupe/src/selection.rs` (declared and re-exported
+  in `lib.rs`), `crates/pw-loupe/src/grid.rs`, `crates/pw-loupe/src/tabs.rs`, and
+  `crates/pw-loupe/src/main.rs` **only** for the changed `grid_key_action` call (new arms do nothing
+  yet; T56 wires them).
+- **Why:** ADR 0014 §2.5, §2.6, §2.8, §4.5, Q5. The marking rules of `app.js` (`clickCell`,
+  `pickRange`, `pickAll`, `clearPicked`, `go`, `ratingTargets`) as tested plain Rust.
+- **What:**
+  1. `pub struct Selection` with the marked file indexes and an anchor (`Option<usize>`). All
+     positions are taken from a `visible: &[usize]` argument (file indexes in display order).
+     Methods:
+     - `click(&mut self, index)`: clears the marking; anchor = `index`.
+     - `ctrl_click(&mut self, current, index)`: if nothing is marked, mark `current` first; then if
+       `index` is marked **and** more than one is marked, unmark it, otherwise mark it; anchor = `index`.
+     - `extend_to(&mut self, visible, current, index)`: if nothing is marked, anchor = `current`; then
+       the marking is replaced by every visible index between the anchor and `index` (inclusive, by
+       position in `visible`). If the anchor is not visible, the range is `index` alone. The anchor
+       does not change. (Shift+click and Shift+navigation.)
+     - `all(&mut self, visible)`: marks every visible index (anchor unchanged).
+     - `clear(&mut self)`: unmarks all (anchor unchanged).
+     - `retain_visible(&mut self, visible)`: unmarks indexes not in `visible` (§2.8).
+     - `count()`, `is_marked(index)`, and `marked_in(&self, visible) -> Vec<usize>` (marked, in
+       display order).
+     - `targets(&self, visible, current, mode: ViewMode) -> Vec<usize>`: in `Grid`, `marked_in(visible)`
+       if more than one is marked and `current` is marked; otherwise (and always in `Loupe`)
+       `vec![current]` (§2.6).
+  2. `grid.rs`: `grid_key_action(key, ctrl, shift, alt)` (new `shift` argument). New
+     `GridKeyAction` variants: `Extend(Navigation)` for Shift + any navigation key, `SelectAll` for
+     Ctrl+A (no Shift, no Alt), `ClearSelection` for Escape (no modifier). Shift with Enter, G or Space
+     → `None`; every other Ctrl or Alt combination → `None` as today. `loupe_key_action` and the
+     loupe's `key_action` are unchanged (Ctrl+A stays `None` there).
+  3. `tabs.rs`: `Tab` gets `pub selection: Selection`; `Tab::open` clears it (anchor `None`).
+     `Tabs::active_mut(&mut self) -> Option<&mut Tab>`.
+  4. `main.rs`: pass `shift` to `grid_key_action`; the new variants do nothing yet.
+- **Rules:** as T51.
+- **Tests to add:** the `app.js` cases with 12 images, all visible: click 5, Shift+click 8 → 4
+  marked; Ctrl+click 10 → 5 marked; Ctrl+click on the only marked image keeps it; Ctrl+click with
+  nothing marked marks current and index; Shift range backwards; Shift from an anchor that is no
+  longer visible; `all` then `clear`; `retain_visible`; `targets` in grid with current marked, with
+  current not marked, with one marked, and in the loupe; `extend_to` twice from the same anchor
+  replaces the range. Key map: every navigation key with Shift → `Extend`, Ctrl+A → `SelectAll`,
+  Ctrl+Shift+A and Alt+A → `None`, Escape → `ClearSelection`, Shift+Enter → `None`; the existing key
+  tests keep passing with `shift = false`.
+- **Done when:** `.\tools\check.ps1` is all OK.
+
+### T53. ADR 0014 F3: one rating key on several images, and the batch failure text (plain Rust) — Open
+
+- **Can start now.** Independent of T51, T52 and T54.
+- **Crate:** `pw-loupe`. **Files:** `crates/pw-loupe/src/ratings.rs`, `crates/pw-loupe/src/metadata.rs`,
+  and `crates/pw-loupe/src/main.rs` **only** to use the new failure text (point 4). Not `pw-metadata`.
+- **Why:** ADR 0014 §2.7, §4.3, Q6. `apply` toggles per image, so several targets need one decision
+  for the whole batch.
+- **What:**
+  1. `RatingStore::set_many(&mut self, paths: &[PathBuf], key: RatingKey) -> Result<usize, RatingRefused>`:
+     - Paths without `supports_rating` are skipped. If none is left → `Err(RatingRefused::Unsupported)`,
+       nothing changes. Resolve every remaining path to absolute first; if one fails, return that error
+       before anything changes.
+     - Decide **once**, from the shown value of each ratable path (as `set` reads it): `Label(l)` →
+       if all have `l`, clear the label on all, otherwise set `l` on all; `Reject` → if all have −1,
+       clear the stars on all, otherwise set −1 on all; `Stars(n)` and `ClearLabel` → as `apply`. The
+       other half of each rating is kept.
+     - Then, for each path in the given order, the same as `set` with that explicit value: `shown` at
+       once, an unsent queued write for the path is replaced, otherwise a new write is queued. Share
+       this with `set` through a private helper rather than copying it.
+     - Returns the number of images set.
+  2. With one path, `set_many` gives the same result as `set` for every key (the toggle included).
+  3. Failure text (Q6): `RatingStore` counts write failures since the last `set` or `set_many` and
+     keeps the file name and error of the last one. `pub fn failure_text(&self) -> Option<String>`:
+     none → `None`; one → today's text "Kunde inte spara betyget för {fil}: {fel}"; more →
+     "Kunde inte spara betyget för {n} bilder. Senast: {fil}: {fel}". `set` and `set_many` reset the
+     count. The strings returned by `pump`, `written` and `fail_sent` are unchanged (the exit list of
+     T44 uses them).
+  4. `MetadataCache`: `set_ratings(&mut self, paths: &[PathBuf], key) -> Result<usize, RatingRefused>`
+     and `failure_text()`, passing through. `main.rs`: where the last message of `poll` is put in the
+     status line, use `failure_text()` instead when `poll` returned a failure. No other change.
+- **Rules:** as T42; rules 6, 7, 10–12. Existing tests are not changed.
+- **Tests to add** (with the existing fake writer): the table of point 1 — label on a mix → set on all;
+  label on all that have it → cleared on all; X on a mix → −1 on all; X on all rejected → cleared;
+  `Stars(3)` and `ClearLabel` on several; the other half kept in each case; an unsupported file
+  (`x.png`) among the targets is skipped; only unsupported → `Unsupported` and nothing queued; order of
+  writes follows the paths; two batches before a `pump` coalesce per path; one failed image of a batch
+  rolls back only that image; `set_many` with one path equals `set` for every key on a few starting
+  values; `failure_text` for 0, 1 and 3 failures, and reset by the next key. The `app.js` case: five
+  marked images (one unsupported), label Yellow → four writes with Yellow; Yellow again → four writes
+  without a label.
+- **Done when:** `.\tools\check.ps1` is all OK.
+
+### T54. ADR 0014 F4: pw-viewcore keeps its caches when the file list changes — Open
+
+- **Can start now.** Independent of T51–T53. **For a Claude agent** (the cache bookkeeping of
+  `pw-viewcore`).
+- **Crate:** `pw-viewcore`. **Files:** `crates/pw-viewcore/src/state.rs`,
+  `crates/pw-viewcore/src/core.rs`. Not `pw-loupe`.
+- **Why:** ADR 0014 §4.4, Q3 (way C). The loupe gets the visible list. When it changes (an image
+  drops out after a rating, or the filter changes), images already opened and rendered must be kept
+  and prefetch must follow the new order. Today every cache is keyed by position
+  (`Key = (usize, Source)`) and `open_folder` empties them all.
+- **What:**
+  1. `State::set_files(&mut self, files: Vec<PathBuf>, current: usize)` and
+     `ViewCore::set_files(&self, files, current)` (through `act`, like `open_folder`).
+  2. Same list (equal paths in the same order) → only `go(current)`; nothing else changes.
+  3. Otherwise:
+     - **Finished state is moved to the new positions by path:** `sizes`, `failed`, owned sessions
+       (`Some`) with `session_bytes_of` and `session_lru`, `resident` (`pos`), and `ever_resident`.
+       Resident views keep their **ids**, so the textures in `pw-loupe` stay valid and need no upload.
+     - **State of paths no longer in the list is released** the way eviction does: resident ids go to
+       `take_dropped`, sessions are dropped and their bytes subtracted, `texture_bytes` and
+       `session_bytes` stay exact.
+     - **Work in flight** (`running`, `inflight`, `outbox`, lent sessions) belongs to the old order.
+       You may start a new generation for it, as `open_folder` does, as long as the moved resident
+       views still serve (they are checked against the generation in `serves`). The rule: **a result
+       of the old order must never be stored, shown, or remove anything under a key of the new
+       order.** Note that today a stale `finish_render` removes `sessions[key]`; after a remap that key
+       can belong to another image. If lent sessions need to remember the generation they were lent in,
+       change that inside `state.rs`.
+     - `cur` becomes `current` (clamped); zoom, centre, direction and display mode are kept. If the
+       current image is the same path as before, the view on screen stays until a new one is ready
+       (no flash, as `the_view_on_screen_is_kept_while_the_next_is_prepared`).
+  4. `open_folder` keeps its behaviour.
+  5. If a structure cannot be remapped safely in this way, **stop and report** instead of choosing
+     another design.
+- **Rules:** as the other tasks; no `unwrap`/`expect`/`panic!` or unchecked indexing in non-test code;
+  rules 6, 7, 10–12. Existing `pw-viewcore` tests are not changed.
+- **Tests to add** (in `state.rs`, with the existing helpers):
+  - a resident view of an image that stays moves to its new position with the same id, and `frame`
+    draws it without a new render;
+  - removing an image releases its resident id (`take_dropped`) and its session bytes;
+  - after `set_files`, `wanted` and `plan` use the neighbours of the **new** list (+1, +2 are the next
+    paths in the new order);
+  - a render lent before `set_files` and finished after it is discarded, leaves the session of the
+    image now at that position alone, and leaves `session_bytes` exact;
+  - an open finished after `set_files` is discarded;
+  - the same list → nothing dropped, generation unchanged;
+  - the current image unchanged → its view keeps being drawn; zoom kept;
+  - an empty list → no current image, everything released.
+- **Done when:** `.\tools\check.ps1` is all OK.
+
+### T55. ADR 0014 F5a: browse logic of a tab under a filter (plain Rust) — Open
+
+- **Start after T51 and T52 are done.**
+- **Crate:** `pw-loupe`. **Files:** `crates/pw-loupe/src/tabs.rs` (or a new `browse.rs` with an
+  `impl Tab`, declared in `lib.rs`), `crates/pw-loupe/src/thumbs.rs`, `crates/pw-loupe/src/metadata.rs`,
+  `crates/pw-loupe/src/lib.rs` (texts and re-exports). **Not** `main.rs`.
+- **Why:** ADR 0014 §2.2–§2.4, §4.2, §5.3, Q5, Q7; GR11. Everything T56 needs to draw the grid under a
+  filter, as tested plain Rust, so `main.rs` only calls it.
+- **What:**
+  1. `Tab` gets `pub visible: Vec<usize>` (file indexes shown, in order). It is set only by the
+     methods below, never by drawing.
+  2. `Tab::refilter(&mut self, ratings_ready: bool, rating_of: &dyn Fn(&Path) -> Option<Rating>, keep: Option<usize>)`:
+     - without an active filter: all indexes;
+     - with an active filter and `ratings_ready == false`: empty (Q7);
+     - otherwise `filter::visible` with `keep`;
+     - then `selection.retain_visible`, and if `current` is not visible, `current` =
+       `nearest_visible` (unchanged when nothing is visible).
+     Returns whether `visible` changed.
+  3. Moves (each ends with `refilter` keeping the **new** current, §4.2):
+     - `grid_move(&mut self, nav: Navigation, extend: bool, columns, visible_rows, …)`: the new
+       position from `grid::navigate` over `visible.len()`; `extend` → `selection.extend_to`, otherwise
+       `selection.click(new)` (plain moves clear the marking);
+     - `click(&mut self, index, ctrl: bool, shift: bool, …)`: Shift → `extend_to`, Ctrl → `ctrl_click`,
+       neither → `click`; then `current = index`;
+     - `loupe_move(&mut self, to: LoupeMove, …)` with `LoupeMove::{Next, Previous, First, Last}` over
+       the visible list; clears the marking (Q5).
+     Each returns the new current file index.
+  4. `Tab::position(&self) -> Option<usize>` (position of `current` in `visible`).
+  5. `MetadataCache::ratings_ready(&self) -> bool`: false while the folder read is sent or waiting to
+     be sent (`load_request` or `pending_read`), true otherwise; `read_error(&self) -> Option<String>`
+     when the read failed (Q7: an active filter then shows nothing, and the status line gives the
+     error). Treat a read error as `ratings_ready == false` in `refilter`'s caller (say so in a doc
+     comment).
+  6. `thumbs.rs`: `ThumbGrid::to_request_indexes(&self, indexes: &[usize], cell) -> Vec<usize>` and
+     `forget_not_in(&mut self, keep: &[usize]) -> Vec<usize>`, with the same rules as `to_request` and
+     `forget_outside`. The range methods stay.
+  7. Texts (`lib.rs`, ADR 0014 §5.3): `position_text(pos: usize, shown: usize, total: usize) -> String`
+     ("3 / 12 (av 31)", or "3 / 31" when `shown == total`); `no_match_text(total)` → "Inga bilder
+     matchar filtret (31 i mappen)"; `marked_text(n) -> Option<String>` → "12 markerade" for n > 1;
+     `pub const READING_RATINGS_TEXT: &str = "Läser betyg …";`.
+- **Rules:** as T51.
+- **Tests to add:** port these checks of `ui/tests/filter-select.test.js` with 12 files `IMG_000.ARW` …
+  `IMG_011.ARW` and the ratings 1: 3 stars, 2: 5 stars Red, 3: rejected, 4: Red only (ADR 0014 S6):
+  all 12 visible; ≥ 3 → [1, 2] and position text "1 / 2 (av 12)"; ≥ 3 and Red → [2]; Red → [2, 4];
+  Purple → empty and the no-match text; Rejected → [3]; Unrated → [0, 4, 5, …, 11]; under Unrated, a
+  rating of the current image keeps it visible, a move right drops it and the next one is current;
+  click 5, Shift+click 8 → 4 marked; Ctrl+click 10 → 5; Escape (`selection.clear`) → none;
+  Shift+Left twice → 3; `all` → 12; a plain Left clears. Also: an active filter before the ratings are
+  read shows nothing, and after the read the matching images; the filter hides the current image →
+  the nearest following one; a marked image that the filter hides is unmarked; `loupe_move` clears the
+  marking; `to_request_indexes` and `forget_not_in`; the four texts.
+- **Done when:** `.\tools\check.ps1` is all OK.
+
+### T56. ADR 0014 F5b: draw the filter and the marking in the grid, wire clicks and keys — Open
+
+- **Start after T53 and T55 are done.** **For a Claude agent** (drawing and wiring, checked by hand).
+- **Crate:** `pw-loupe`. **File:** `crates/pw-loupe/src/main.rs` only (a small plain helper with a test
+  may go in the library).
+- **Why:** ADR 0014 §3.1, §4.5, §5. Until T57, the loupe opens on the visible list with `open_folder`
+  (ADR 0014 §9, way A).
+- **What:**
+  1. **Filter controls:** two `egui::ComboBox` in the tab bar row after "Importera…", listing
+     `STAR_FILTERS` and `LABEL_FILTERS` with their texts. An active list has a yellow outline. A choice
+     calls `Tabs::set_filter` and `refilter` (keep `None`, as `setFilter` in `app.js`); afterwards no
+     widget keeps keyboard focus, so arrows and digits work at once.
+  2. **When to refilter:** a filter change, a tab load, and when the active tab's ratings become ready
+     (`ratings_ready` turns true). A rating key does **not** refilter (§2.2); moves do (T55).
+  3. **The grid over `tab.visible`:** layout, rows, the visible range and scrolling use positions in
+     `visible`; cells map to file indexes. Thumbnails: `to_request_indexes` for the file indexes of the
+     visible positions; `set_visible` gets the range from the smallest to the largest of those file
+     indexes (+1); `forget_not_in` with the file indexes of the keep range. With nothing visible, the
+     grid shows `no_match_text` (or `READING_RATINGS_TEXT`, or the read error) in the middle.
+  4. **Marked cells (§5.1):** blue outline `#4c8dff` and a faint blue fill behind the thumbnail; the
+     current cell keeps its yellow outline (both when current and marked).
+  5. **Clicks:** read Ctrl and Shift from the input; `Tab::click`. A double-click opens the loupe as
+     today.
+  6. **Keys in the grid:** `Navigate` and `Extend` → `grid_move`; `SelectAll` → `selection.all`;
+     `ClearSelection` → `selection.clear`; scroll to the new current as today.
+  7. **Rating keys:** targets from `selection.targets(visible, current, mode)`, then
+     `metadata.set_ratings`; `Unsupported` gives `UNSUPPORTED_TEXT` as today.
+  8. **Status line in the grid:** `position_text` (with `visible.len()` and `files.len()`),
+     `marked_text`, the read notice; replaces today's "{name}  {n} / {total}".
+  9. **Loupe (interim):** opening the loupe gives the core the paths of `visible` with `open_folder`
+     and `go(position)`; where `main.rs` sets the tab's current from `frame.pos`, map the position
+     through `visible`. With nothing visible, Enter/G/Space and a double-click do nothing.
+- **Rules:** drawing reads `tab.visible`, `RatingStore` and `Selection` only, never files; no new
+  dependencies; rules 6, 7, 10–12.
+- **Done when:** `.\tools\check.ps1` is all OK, and the owner checks by hand (ADR 0014 §8.2): each
+  filter; an empty filter; two tabs with different filters; under "Ej betygsatt" a rated image stays
+  until moving on; Shift+click, Shift+arrows, Ctrl+click, a label pressed twice on a marking; Ctrl+A;
+  Escape; thumbnails appear at once when the filter changes (S1).
+
+### T57. ADR 0014 F6: the loupe steps and prefetches within the filter — Open
+
+- **Start after T54 and T56 are done.** **For a Claude agent.**
+- **Crate:** `pw-loupe`. **Files:** `crates/pw-loupe/src/main.rs`; `crates/pw-loupe/src/lib.rs` for the
+  status line.
+- **Why:** ADR 0014 §2.2, §2.3, §4.4 (way C), S2, S3.
+- **What:**
+  1. Loupe steps (Next, Previous, First, Last) go through `Tab::loupe_move` instead of
+     `core.step`/`go(0)`/`last`. If `visible` changed, call `core.set_files(paths of visible,
+     position)`; otherwise `core.go(position)`.
+  2. A filter change while the loupe is shown: `refilter`, then `set_files`; if nothing is visible,
+     return to the grid (§2.3).
+  3. The tab's current image is taken from the tab, not from `frame.pos`, while the loupe is shown
+     (the core follows the tab).
+  4. Status line: `status_line` gets the folder's total and uses `position_text`
+     ("3 / 12 (av 31)"); update its test.
+  5. Remove the interim `open_folder` of T56 point 9 for changes of the visible list; opening the loupe
+     from the grid and a tab load still use `open_folder`.
+- **Rules:** as T56.
+- **Tests to add:** the `app.js` case "loupe within filter": Red, Home, Enter, step right → IMG_002 then
+  IMG_004 (on `Tab::loupe_move`); the status-line text with and without a filter.
+- **Done when:** `.\tools\check.ps1` is all OK, and the owner checks by hand: under "≥ 3 stjärnor"
+  stepping stays in the filter and holding an arrow is smooth; under "Ej betygsatt" a rated image stays
+  until the next step and the step after it is not a cold load; `latency.ps1` under the filter for V1
+  (S3); a batch of 30 then closing the window at once keeps the values (ADR 0013 R4).
+
+### T58. ADR 0014 F8: documentation after milestone 5 — Open
+
+- **Start after the owner's acceptance (F7).** Documentation only; no code, no `Cargo.toml`. For a
+  Claude agent.
+- **Files:** `docs/adr/0014-egui-filter-and-multi-selection.md`, `docs/adr/0004-ratings-and-labels.md`,
+  `docs/architecture.md`, `docs/GUI_REQUIREMENTS.md`, `docs/README.md`, the root `README.md`,
+  `docs/test-inventory.md` (only if it does not match the latest `test-output.txt`). This file: rule 11.
+- **Source of truth:** the log rows of T51–T57 and the owner's F7 notes in this file; write only what
+  they record.
+- **What:**
+  1. **ADR 0014:** "Implemented" status line; §7 results for S1–S6; §9 results per step; a short
+     "Findings during implementation" section if the log has any.
+  2. **ADR 0004** addendum "filter and multi-selection": a note that the egui program implements it
+     (ADR 0014), with the differences: filter per tab, not saved between sessions, "Alla utom
+     avvisade".
+  3. **architecture.md:** `pw-loupe` (filter, selection, batch ratings) and `pw-viewcore`
+     (`set_files`).
+  4. **GUI_REQUIREMENTS.md** GR8 and the root `README.md`: filter and multi-selection done; left
+     before the switch: IPTC metadata, TIFF viewing.
+  5. **docs/README.md:** "0014 milestone 5: filter and multi-selection in egui – done {date}".
+- **Rules:** English, the style of the existing documents; change only the lines needed; rules 10–12.
+- **Done when:** `.\tools\check.ps1` is all OK and `git diff --stat` shows only the files above.
+
 ### T7. Format the files that `cargo fmt --check` reports — Done
 
 - **Crates:** `photoworkflow` (`src-tauri`), `preview-bench` (`tools/preview-bench`).
@@ -1628,3 +1986,13 @@ and reviewer:
 | 2026-11-10 | T50 | Ready for review | (Agent) Documentation only. ADR 0013: "Implemented" status line, §7 results for R1–R6 (R6 not checked yet), §9 Result column with tasks and a note that T47–T49 came from the hand checks, new §9.1 "Findings during implementation". ADR 0004: implementation note; level C check still open (= ADR 0013 R6); refused and read-only writes noted. architecture.md (`pw-metadata` `WriteError`, `pw-loupe` ratings and `build.rs`), GR8 status, root README status, docs/README ADR list. Test inventory unchanged (matches `test-output.txt`). Workspace fmt, test (352 passed, 27 ignored, 0 failed) and clippy OK; no commit. |
 | 2026-11-10 | – | Note | R6 / ADR 0004 clean-room check done with Photo Mechanic by the owner: stars and labels both ways; a reject (−1) is not shown in Photo Mechanic (its scale is 0–5); PM writes `.XMP` and its own `ColorClass`. Reviewer updated ADR 0013 (§7 R6, §9 B5, new §14) and ADR 0004 (Open). Lightroom not checked |
 | 2026-11-10 | T50 | Done | Reviewed: only the named files changed; every result in ADR 0013 §7 and §9 is taken from the log (R6 updated afterwards by the reviewer with the Photo Mechanic check); §9.1 findings, ADR 0004 note, architecture.md, GR8, both READMEs correct. Milestone 4 (ADR 0013) is complete |
+| 2026-11-10 | – | Note | ADR 0014 (milestone 5: filter and multi-selection) accepted by the owner (F0): scope, S1–S6 and every proposal of §11 as written |
+| 2026-11-10 | T51–T58 | Open | Added: ADR 0014 F1–F6 and F8. T51–T54 can start now and are independent; T55 after T51 and T52; T56 after T53 and T55; T57 after T54 and T56; T58 after the owner's acceptance (F7). T54, T56, T57 and T58 are for a Claude agent |
+| 2026-11-10 | T51 | Ready for review | (Agent) New `pw-loupe/src/filter.rs` (re-exported in `lib.rs`): `StarFilter`, `LabelFilter`, `Filter` (`Default`, `is_active`), `matches`, `visible` (keep-current rule), `nearest_visible`, `STAR_FILTERS`/`star_filter_text`, `LABEL_FILTERS`/`label_filter_text`; 17 tests. `tabs.rs`: `Tab::filter`, reset in `Tab::open`, `Tabs::set_filter`; 3 tests. Existing tests unchanged; `main.rs` and `Cargo.toml` untouched. Test inventory updated (`pw-loupe` 158). Workspace fmt, test (372 passed, 27 ignored, 0 failed) and clippy OK; no commit. |
+| 2026-11-10 | T52 | Ready for review | (Agent) New `pw-loupe/src/selection.rs` (re-exported in `lib.rs`): `Selection` with `click`, `ctrl_click`, `extend_to`, `all`, `clear`, `retain_visible`, `count`, `is_marked`, `anchor`, `marked_in`, `targets`; 12 tests. `grid.rs`: `grid_key_action(key, ctrl, shift, alt)`, new `Extend`, `SelectAll`, `ClearSelection`; 1 new test; in the existing key test the calls get `shift = false` and its Escape line now expects `ClearSelection` (point 2). `tabs.rs`: `Tab::selection`, cleared in `Tab::open`, `Tabs::active_mut`; 1 test. `main.rs`: passes `shift`, new arms do nothing. **Outside the file list:** `ratings.rs`, two existing test calls of `grid_key_action` get `shift = false` (no other change). Test inventory updated (`pw-loupe` 172). Workspace fmt, test (386 passed, 27 ignored, 0 failed) and clippy OK; no commit. |
+| 2026-11-10 | T51 | Open | Review: accepted except one point; `AtLeast` outside 1–5 must match the way its text reads (clamp in `matches`, with a test). See the review note in the task |
+| 2026-11-10 | T52 | Open | Review: accepted except two points in `selection.rs`; `extend_to` must not mark an index that is not visible (S5), and `all` must replace the marking as `pickAll` does. The changed Escape line in the existing key test and the two `ratings.rs` test calls are accepted. Checked: `test-output.txt` newer than the changes, fmt/test (386 passed, 27 ignored, 0 failed)/clippy OK; `pw-loupe` 153 + 19 = 172 tests, matching the test inventory; no `unwrap`/`expect`/`panic!` in the new non-test code |
+| 2026-11-10 | T51 | Ready for review | (Agent) Review point 1: `matches` clamps the `AtLeast` minimum to 1–5 first, so `AtLeast(0)` behaves as `AtLeast(1)` (a reject still never matches) and `AtLeast(6)`/`AtLeast(255)` as `AtLeast(5)`, as `star_filter_text` reads; new test `at_least_outside_one_to_five_matches_like_the_nearest_valid_value` over every value in `STAR_VALUES`. Only `filter.rs` changed in code; test inventory updated (`pw-loupe` 173). Workspace fmt, test (387 passed, 27 ignored, 0 failed) and clippy OK; no commit. |
+| 2026-11-10 | T52 | Ready for review | (Agent) Review points 1–2, `selection.rs` only: `extend_to` returns without changing the marking or the anchor when `index` is not in `visible` (S5; an anchor that is not visible still marks `index` alone), doc comment updated; `all` clears the marking first, as `pickAll` does. New tests `extend_to_a_hidden_index_changes_nothing` and `all_replaces_the_marking` (mark 2 and 3, `all(&[0, 1])` → [0, 1]). Existing tests unchanged; test inventory updated (`pw-loupe` 175). Workspace fmt, test (389 passed, 27 ignored, 0 failed) and clippy OK; no commit. |
+| 2026-11-10 | T51 | Done | Second review: `matches` clamps the `AtLeast` minimum to 1–5, so it does what `star_filter_text` says; the new test covers 0, 6 and 255 against every value in `STAR_VALUES`, and a reject never matches |
+| 2026-11-10 | T52 | Done | Second review: `extend_to` returns before touching the marking or the anchor when `index` is not visible (S5); `all` clears first, as `pickAll` does; both have tests. Checked: `test-output.txt` newer than the changes, fmt/test (389 passed, 27 ignored, 0 failed)/clippy OK (the only `warning:` line is the existing `raw-decode-bench` build-script note); `pw-loupe` 175 tests, matching the test inventory. T51 and T52 can be committed together |

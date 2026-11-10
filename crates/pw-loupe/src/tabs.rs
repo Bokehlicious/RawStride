@@ -1,5 +1,8 @@
 use std::path::{Component, Path, PathBuf};
 
+use crate::filter::Filter;
+use crate::selection::Selection;
+
 /// The per-tab view shown for a folder.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ViewMode {
@@ -15,10 +18,16 @@ pub struct Tab {
     pub files: Vec<PathBuf>,
     pub current: usize,
     pub mode: ViewMode,
+    /// The filter of this tab (ADR 0014 Q1: per tab, reset when the folder is opened again).
+    pub filter: Filter,
+    /// The marked images of this tab (ADR 0014 §2.5); cleared when the folder is opened again.
+    pub selection: Selection,
 }
 
 impl Tab {
     fn open(&mut self, folder: PathBuf, files: Vec<PathBuf>, pos: usize) {
+        self.filter = Filter::default();
+        self.selection = Selection::default();
         self.folder = Some(folder);
         self.files = files;
         self.current = self
@@ -166,12 +175,23 @@ impl Tabs {
         }
     }
 
+    /// Sets the filter of the active tab; other tabs keep their own filter (ADR 0014 Q1).
+    pub fn set_filter(&mut self, filter: Filter) {
+        if let Some(tab) = self.tabs.get_mut(self.active) {
+            tab.filter = filter;
+        }
+    }
+
     pub fn active_index(&self) -> usize {
         self.active
     }
 
     pub fn active(&self) -> Option<&Tab> {
         self.tabs.get(self.active)
+    }
+
+    pub fn active_mut(&mut self) -> Option<&mut Tab> {
+        self.tabs.get_mut(self.active)
     }
 
     pub fn tabs(&self) -> &[Tab] {
@@ -391,6 +411,99 @@ mod tests {
             tabs.active().and_then(|tab| tab.folder.as_deref()),
             Some(expected.as_path())
         );
+    }
+
+    fn unrated() -> Filter {
+        Filter {
+            stars: crate::filter::StarFilter::Unrated,
+            label: crate::filter::LabelFilter::All,
+        }
+    }
+
+    fn red() -> Filter {
+        Filter {
+            stars: crate::filter::StarFilter::All,
+            label: crate::filter::LabelFilter::Label("Red"),
+        }
+    }
+
+    #[test]
+    fn a_new_tab_and_tab_open_start_without_a_filter() {
+        let mut tabs = Tabs::default();
+        assert_eq!(tabs.active().map(|tab| tab.filter), Some(Filter::default()));
+
+        tabs.open_in_active(PathBuf::from("first"), files("first", 2), 0);
+        assert_eq!(tabs.active().map(|tab| tab.filter), Some(Filter::default()));
+
+        tabs.set_filter(unrated());
+        assert_eq!(tabs.active().map(|tab| tab.filter), Some(unrated()));
+        // Opening a folder again in the same tab (a refresh) resets the filter (Q1).
+        tabs.open_in_active(PathBuf::from("first"), files("first", 2), 0);
+        assert_eq!(tabs.active().map(|tab| tab.filter), Some(Filter::default()));
+
+        tabs.set_filter(unrated());
+        // `open_new` on a folder that is already open refreshes that tab.
+        tabs.open_new(PathBuf::from("first"), files("first", 3), 0);
+        assert_eq!(tabs.active().map(|tab| tab.filter), Some(Filter::default()));
+
+        tabs.open_new(PathBuf::from("second"), files("second", 1), 0);
+        assert_eq!(tabs.active_index(), 1);
+        assert_eq!(tabs.active().map(|tab| tab.filter), Some(Filter::default()));
+    }
+
+    #[test]
+    fn set_filter_changes_only_the_active_tab() {
+        let mut tabs = Tabs::default();
+        tabs.open_in_active(PathBuf::from("first"), files("first", 1), 0);
+        tabs.open_new(PathBuf::from("second"), files("second", 1), 0);
+        tabs.open_new(PathBuf::from("third"), files("third", 1), 0);
+        assert!(tabs.activate(1));
+
+        tabs.set_filter(red());
+
+        let filters: Vec<Filter> = tabs.tabs().iter().map(|tab| tab.filter).collect();
+        assert_eq!(filters, vec![Filter::default(), red(), Filter::default()]);
+    }
+
+    #[test]
+    fn two_tabs_keep_different_filters_across_next_and_previous() {
+        let mut tabs = Tabs::default();
+        tabs.open_in_active(PathBuf::from("first"), files("first", 1), 0);
+        tabs.set_filter(unrated());
+        tabs.open_new(PathBuf::from("second"), files("second", 1), 0);
+        tabs.set_filter(red());
+
+        tabs.previous();
+        assert_eq!(tabs.active_index(), 0);
+        assert_eq!(tabs.active().map(|tab| tab.filter), Some(unrated()));
+        tabs.next();
+        assert_eq!(tabs.active_index(), 1);
+        assert_eq!(tabs.active().map(|tab| tab.filter), Some(red()));
+        tabs.next();
+        assert_eq!(tabs.active().map(|tab| tab.filter), Some(unrated()));
+    }
+
+    #[test]
+    fn tab_open_clears_the_selection_and_active_mut_changes_only_the_active_tab() {
+        let mut tabs = Tabs::default();
+        assert_eq!(
+            tabs.active().map(|tab| tab.selection.clone()),
+            Some(Selection::default())
+        );
+        tabs.open_in_active(PathBuf::from("first"), files("first", 4), 0);
+        tabs.open_new(PathBuf::from("second"), files("second", 4), 0);
+
+        if let Some(tab) = tabs.active_mut() {
+            tab.selection.ctrl_click(1, 3);
+        }
+        assert_eq!(tabs.active().map(|tab| tab.selection.count()), Some(2));
+        assert_eq!(tabs.tabs()[0].selection, Selection::default());
+
+        // Opening the folder again (a refresh) clears the marking and the anchor.
+        tabs.open_new(PathBuf::from("second"), files("second", 4), 0);
+        let selection = tabs.active().map(|tab| tab.selection.clone());
+        assert_eq!(selection, Some(Selection::default()));
+        assert_eq!(selection.and_then(|selection| selection.anchor()), None);
     }
 
     #[cfg(windows)]

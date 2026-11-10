@@ -1199,7 +1199,7 @@ impl Loupe {
             }
 
             match self.tabs.active().map(|tab| tab.mode) {
-                Some(ViewMode::Grid) => match grid_key_action(key, ctrl, alt) {
+                Some(ViewMode::Grid) => match grid_key_action(key, ctrl, shift, alt) {
                     Some(GridKeyAction::OpenLoupe) => {
                         self.switch_mode(ViewMode::Loupe);
                     }
@@ -1219,7 +1219,13 @@ impl Loupe {
                         ));
                         scroll_to = self.tabs.active().map(|tab| tab.current);
                     }
-                    None => {}
+                    // The marking keys of ADR 0014 F2; T56 wires them.
+                    Some(
+                        GridKeyAction::Extend(_)
+                        | GridKeyAction::SelectAll
+                        | GridKeyAction::ClearSelection,
+                    )
+                    | None => {}
                 },
                 Some(ViewMode::Loupe) => {
                     if loupe_key_action(key, ctrl, alt).is_some() {

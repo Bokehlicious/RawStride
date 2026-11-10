@@ -474,7 +474,7 @@ mod tests {
         }
 
         assert_eq!(crate::key_action(K::Num1, false, false), None);
-        assert_eq!(crate::grid_key_action(K::Num1, false, false), None);
+        assert_eq!(crate::grid_key_action(K::Num1, false, false, false), None);
     }
 
     #[test]
@@ -573,7 +573,11 @@ mod tests {
     fn digits_and_x_keep_no_meaning_in_the_loupe_and_grid_key_maps() {
         for key in DIGITS.into_iter().chain([K::X]) {
             assert_eq!(crate::key_action(key, false, false), None, "{key:?}");
-            assert_eq!(crate::grid_key_action(key, false, false), None, "{key:?}");
+            assert_eq!(
+                crate::grid_key_action(key, false, false, false),
+                None,
+                "{key:?}"
+            );
             assert_eq!(crate::loupe_key_action(key, false, false), None, "{key:?}");
         }
     }

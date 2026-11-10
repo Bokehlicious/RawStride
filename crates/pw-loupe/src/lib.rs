@@ -3,12 +3,14 @@
 //! and the texts of the status line. `main.rs` wires them to eframe, `pw-viewcore` and
 //! `pw-render`.
 
+mod filter;
 mod grid;
 mod import;
 mod import_dialog;
 mod import_text;
 mod import_worker;
 mod ratings;
+mod selection;
 mod tabs;
 mod thumbs;
 
@@ -16,6 +18,10 @@ use std::path::{Path, PathBuf};
 
 use pw_viewcore::{DecodeError, Frame, Source, Status, Zoom};
 
+pub use filter::{
+    Filter, LABEL_FILTERS, LabelFilter, STAR_FILTERS, StarFilter, label_filter_text, matches,
+    nearest_visible, star_filter_text, visible,
+};
 pub use grid::{
     DEFAULT_THUMBNAIL_SIZE, GridKeyAction, LoupeKeyAction, MAX_THUMBNAIL_SIZE, MIN_THUMBNAIL_SIZE,
     Navigation, THUMBNAIL_SIZE_STEP, clamp_thumbnail_size, columns, grid_key_action,
@@ -35,6 +41,7 @@ pub use ratings::{
     RatingKey, RatingRefused, RatingStore, RatingWriter, UNSUPPORTED_TEXT, apply, label_name,
     rating_key_action, star_glyphs, status_text,
 };
+pub use selection::Selection;
 pub use tabs::{Tab, Tabs, ViewMode};
 pub use thumbs::{CellState, ThumbGrid, color_image, request_cell};
 
