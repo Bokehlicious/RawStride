@@ -75,7 +75,7 @@ impl Default for Options {
 
 pub const USAGE: &str = "pw-loupe [--core-mb <MiB>] [--texture-mb <MiB>] [<folder or file>]\n\
      \n\
-     --core-mb     memory for RAW sessions and decoded JPEGs (default 4096)\n\
+     --core-mb     memory for RAW sessions and decoded JPEGs and TIFFs (default 4096)\n\
      --texture-mb  memory for finished views as textures (default 1024)";
 
 /// Parses the arguments after the program name.
@@ -104,13 +104,13 @@ pub fn parse_args<I: IntoIterator<Item = String>>(args: I) -> Result<Options, St
     Ok(o)
 }
 
-/// Whether the loupe lists `path`: the file types of the current app, except TIFF (ADR 0009 §3.1).
+/// Whether the loupe lists `path`: the file types of the current app (TIFF since ADR 0015).
 pub fn is_listed(path: &Path) -> bool {
     let Some(ext) = path.extension().and_then(|e| e.to_str()) else {
         return false;
     };
     let ext = ext.to_ascii_lowercase();
-    pw_raw::SUPPORTED_EXTENSIONS.contains(&ext.as_str()) && !pw_raw::is_tiff_file(path)
+    pw_raw::SUPPORTED_EXTENSIONS.contains(&ext.as_str())
 }
 
 /// The images of a folder in display order (by name, ignoring case), and the position of
@@ -230,7 +230,14 @@ fn file_name(frame: &Frame) -> String {
         .unwrap_or_default()
 }
 
-/// What is shown (G1, honest source): RAW rendering, embedded JPEG or a JPEG file, with size.
+/// Whether the frame shows a TIFF file. The core keys a TIFF `Source::Jpeg` (ADR 0015 §4.2), so the
+/// texts look at the path.
+fn is_tiff(frame: &Frame) -> bool {
+    frame.path.as_deref().is_some_and(pw_raw::is_tiff_file)
+}
+
+/// What is shown (G1, honest source): RAW rendering, embedded JPEG, a JPEG file or a TIFF file,
+/// with size.
 pub fn source_text(frame: &Frame) -> String {
     let size = frame
         .size
@@ -245,6 +252,7 @@ pub fn source_text(frame: &Frame) -> String {
         .is_some_and(pw_viewcore::is_plain_jpeg);
     match frame.source {
         Source::Raw => format!("RAW-rendering (LibRaw, PPG){size}"),
+        Source::Jpeg if is_tiff(frame) => format!("TIFF-fil{size}"),
         Source::Jpeg if plain => format!("JPEG-fil{size}"),
         Source::Jpeg => format!("Inbäddad JPEG{size} (kamerans rendering, inte RAW)"),
     }
@@ -276,6 +284,7 @@ pub fn status_line(frame: &Frame, anchor_at_pointer: bool, total: usize) -> Stri
         Status::Error(_) => "kan inte visas".to_string(),
         Status::Preparing { .. } if frame.size.is_none() => match frame.source {
             Source::Raw => "förbereder RAW".to_string(),
+            Source::Jpeg if is_tiff(frame) => "förbereder TIFF".to_string(),
             Source::Jpeg => "förbereder JPEG".to_string(),
         },
         _ => source_text(frame),
@@ -319,6 +328,7 @@ pub const READING_RATINGS_TEXT: &str = "Läser betyg …";
 pub fn indicator_text(frame: &Frame) -> String {
     match frame.source {
         Source::Raw => "Förbereder RAW …".to_string(),
+        Source::Jpeg if is_tiff(frame) => "Förbereder TIFF …".to_string(),
         Source::Jpeg => "Förbereder JPEG …".to_string(),
     }
 }
@@ -454,7 +464,7 @@ mod tests {
     }
 
     #[test]
-    fn the_folder_lists_supported_files_by_name_without_tiff() {
+    fn the_folder_lists_supported_files_by_name() {
         let dir = std::env::temp_dir().join(format!("pw-loupe-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::create_dir_all(dir.join("sub.arw"));
@@ -474,7 +484,7 @@ mod tests {
             .iter()
             .filter_map(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
             .collect();
-        assert_eq!(names, vec!["a.jpg", "b.ARW", "C.dng", "f.rw2"]);
+        assert_eq!(names, vec!["a.jpg", "b.ARW", "C.dng", "d.tif", "f.rw2"]);
         assert_eq!(pos, 0);
         // a file opens its folder with that file selected
         let (_, pos) = list_folder(&dir.join("C.dng")).unwrap_or_default();
@@ -648,6 +658,77 @@ mod tests {
         assert!(error_text(&none, Source::Jpeg).contains("ingen inbäddad JPEG"));
         assert!(error_text(&DecodeError::new("boom"), Source::Raw).contains("boom"));
         assert_eq!(mode_label(Source::Jpeg), "Läge: JPEG (R)");
+    }
+
+    #[test]
+    fn tiff_files_are_listed() {
+        for n in ["a.tif", "b.TIFF", "c.tiff"] {
+            assert!(is_listed(Path::new(n)), "{n}");
+        }
+    }
+
+    fn tiff_frame(status: Status, mode: Source) -> Frame {
+        Frame {
+            draw: None,
+            status,
+            pos: Some(0),
+            count: 9,
+            path: Some(PathBuf::from("D:/Scans/Scan 01.tif")),
+            mode,
+            source: Source::Jpeg,
+            size: Some(ImageSize {
+                w: 7741,
+                h: 5161,
+                flip: 6,
+            }),
+            zoom: Zoom::Fit,
+            scale: Some(0.2),
+        }
+    }
+
+    #[test]
+    fn a_tiff_frame_is_named_tiff_file_with_its_oriented_size_in_both_modes() {
+        for mode in [Source::Raw, Source::Jpeg] {
+            let f = tiff_frame(Status::Ready, mode);
+            assert_eq!(source_text(&f), "TIFF-fil 5161 × 7741", "{mode:?}");
+            let s = status_line(&f, true, 9);
+            assert!(
+                s.contains("Scan 01.tif  ·  TIFF-fil 5161 × 7741  ·  "),
+                "{s}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_preparing_tiff_frame_says_tiff() {
+        let mut f = tiff_frame(
+            Status::Preparing {
+                since: Instant::now(),
+                indicator: true,
+            },
+            Source::Raw,
+        );
+        f.size = None;
+        let s = status_line(&f, true, 9);
+        assert!(s.contains("förbereder TIFF"), "{s}");
+        assert!(!s.contains("JPEG"), "{s}");
+        assert_eq!(indicator_text(&f), "Förbereder TIFF …");
+    }
+
+    #[test]
+    fn a_jpeg_file_keeps_its_texts() {
+        let mut f = frame(
+            Status::Preparing {
+                since: Instant::now(),
+                indicator: true,
+            },
+            Source::Jpeg,
+        );
+        f.path = Some(PathBuf::from("D:/Photos/photo.JPG"));
+        assert_eq!(indicator_text(&f), "Förbereder JPEG …");
+        assert_eq!(source_text(&f), "JPEG-fil 6376 × 9568");
+        f.size = None;
+        assert!(status_line(&f, true, 31).contains("förbereder JPEG"));
     }
 
     #[test]

@@ -1955,7 +1955,7 @@ Ordered from easiest to hardest. Start at the top.
   `conversions`, which `pw-tiff` now has, all passing; `docs/test-inventory.md` has a `pw-tiff` row
   and the new totals; `git diff --stat` shows only the files above.
 
-### T64. ADR 0015 D2: the loupe core opens TIFF files — Ready for review
+### T64. ADR 0015 D2: the loupe core opens TIFF files — Done
 
 - **Review 2026-11-10: code accepted.** Waiting for the owner's commit.
 
@@ -2020,7 +2020,7 @@ Ordered from easiest to hardest. Start at the top.
   `PW_TESTDATA` set and the new real-file test passes on his 9 TIFFs; `git diff --stat` shows only
   the files above.
 
-### T65. ADR 0015 D3: thumbnails of TIFF files — Ready for review
+### T65. ADR 0015 D3: thumbnails of TIFF files — Done
 
 - **Review 2026-11-10: code accepted.** Waiting for the owner's commit.
 
@@ -2066,6 +2066,46 @@ Ordered from easiest to hardest. Start at the top.
 - **Done when:** `.\tools\check.ps1` is all OK; `photoworkflow` has two tests fewer and `pw-tiff`
   three more; the owner's `check.ps1 -Ignored` run passes the new real-file test; `git diff --stat`
   shows only the files above.
+
+### T66. ADR 0015 D4: RawStride lists TIFF files and names them in the status line — Ready for review
+
+- **Review 2026-11-10: code accepted.** Waiting for the owner's hand check ("Done when").
+
+- **Can start now.** T64 and T65 are done: the core opens TIFF files and the thumbnail worker
+  makes their thumbnails, so listing them is the last step before the owner's acceptance (D5).
+- **Crate:** `pw-loupe`. **File:** `crates/pw-loupe/src/lib.rs` (functions and tests);
+  `docs/test-inventory.md`. No change of `main.rs` is expected; if one is needed, stop and explain.
+- **Why:** ADR 0015 §3.1 and §5: TIFF files are listed in the grid and the loupe, and the status line
+  names the real source (GR9). The owner accepted replacing the test that pins the old rule (ADR
+  0015 D0, §8.1).
+- **What:**
+  1. **Listing:** `is_listed` lists every extension of `pw_raw::SUPPORTED_EXTENSIONS`, TIFF
+     included (remove `&& !pw_raw::is_tiff_file(path)`). Update its doc comment: "the file types of
+     the current app (TIFF since ADR 0015)".
+  2. **Status texts for a TIFF** (`frame.path` is a TIFF by `pw_raw::is_tiff_file`; the core keys it
+     `Source::Jpeg`, ADR 0015 §4.2). Add a private helper, for example `fn is_tiff(frame: &Frame) ->
+     bool`, and use it in:
+     - `source_text`: "TIFF-fil{size}" (before the JPEG cases), for example "TIFF-fil 7741 × 5161";
+     - `status_line` while preparing without a size: "förbereder TIFF" instead of "förbereder JPEG";
+     - `indicator_text`: "Förbereder TIFF …" instead of "Förbereder JPEG …".
+     RAW files, embedded JPEGs and JPEG files keep their texts exactly.
+  3. **Usage text** (`USAGE`): `--core-mb` "memory for RAW sessions and decoded JPEGs and TIFFs
+     (default 4096)". Nothing else in `USAGE`.
+- **Rules:** rules 4–7 and 10–12. No change of `error_text`: the TIFF error texts come from
+  `pw-viewcore` (T64) after "Filen kan inte visas: ". No `Cargo.toml` change.
+- **Test to replace (owner's approval, ADR 0015 D0):** `the_folder_lists_supported_files_by_name_without_tiff`
+  becomes `the_folder_lists_supported_files_by_name`, with the same files and steps; only the
+  expected list changes to `["a.jpg", "b.ARW", "C.dng", "d.tif", "f.rw2"]` (`e.xmp`, `notes.txt` and
+  the folder `sub.arw` stay out; `C.dng` stays at position 2). Every other test keeps its assertions.
+- **Tests to add:** `is_listed` for `a.tif`, `b.TIFF`, `c.tiff`; `source_text` of a ready TIFF frame
+  (path `D:/Scans/Scan 01.tif`, `Source::Jpeg`, a size with `flip = 6`) is "TIFF-fil" with the oriented
+  size, in both `mode` values; `status_line` of a preparing TIFF frame without a size contains
+  "förbereder TIFF"; `indicator_text` of a TIFF frame is "Förbereder TIFF …"; a `.JPG` frame still
+  gives "JPEG-fil" and "Förbereder JPEG …".
+- **Done when:** `.\tools\check.ps1` is all OK; `git diff --stat` shows only the files above; and
+  the owner checks by hand that `D:\PhotoWorkflowData\RAW` shows its TIFFs in the grid (thumbnails)
+  and the loupe, with "TIFF-fil W × H" in the status line in both modes. The full acceptance with
+  ratings, zoom, errors and timing is step D5 (ADR 0015 §8.2).
 
 ### T7. Format the files that `cargo fmt --check` reports — Done
 
@@ -2445,3 +2485,7 @@ and reviewer:
 | 2026-11-10 | T64 | Ready for review | Review: code accepted. `is_shown_as_itself` keys a TIFF `Source::Jpeg` in both modes and leaves `is_plain_jpeg` alone; `open` checks the file type before the mode; `NativeSession::Tiff` holds the decode, `render_half` and `render_region` use `scale`; `session_bytes` unchanged (`w × h × 3` is the decoded RGB); `tiff_error` gives the §5 texts, never `damaged`; the loupe passes its core budget. `Cargo.lock`: only `pw-viewcore`'s list. Checked: `test-output.txt` newer than the changes, fmt/test (479 passed, 28 ignored, 0 failed)/clippy OK; counts match the test inventory (+8 unit, +1 ignored). The reviewer ran the new real-file test with `PW_TESTDATA` = `D:\PhotoWorkflowData\RAW`: passed, 9 TIFFs × 2 modes in 3.7 s. Notes, not blocking: `Io`/`Decode` texts stay English after "Filen kan inte visas: " (as the task says); the tests leave small files in `%TEMP%`; with two workers, a TIFF open can wait for the other worker's TIFF decode (about 0.15 s on the owner's files), RAW opens never wait |
 | 2026-11-10 | T65 | Ready for review | (Agent) New `pw-tiff/src/resize.rs`: `fit` and `downscale` moved from `src-tauri/src/imaging.rs` with `fit_keeps_aspect_and_never_upscales` and `downscale_averages_blocks` (assertions unchanged), exported from `pw-tiff`. `downscale` without slice indexing (`get`, `get_mut`, `as_chunks`, `chunks_exact`, iterators); sums in `u64` instead of `u32` (the same result wherever the old code did not overflow); a source without pixels or with short `data` gives black target pixels instead of a panic (decision to check). New test `downscale_of_7x5_to_3x2_matches_the_code_before_the_move` compares with a copy of the old code (7×5 → 3×2, plus seven sizes of a 13×11 image, plus the empty and short source). `imaging.rs` is now `pub use pw_tiff::{Rgb8, downscale, fit};` with its module comment; `rawview.rs`, `tiff_view.rs`, `main.rs` unchanged. `pw-thumbcache`: `pw-tiff` dependency, `tiff = "=0.9.1"` dev-dependency; `thumbnail` sends a TIFF (`is_tiff_file`) to `tiff_thumbnail` before `inspect` (`decode_rgb8` under `TIFF_LIMIT` = 4 GiB, `fit` + `downscale` to the cell, orientation from `inspect` or 1, errors `Unreadable(e.to_string())`); embedded previews not used. 5 tests in `extract.rs` (400×200 → 100×50 at cell 100, unchanged at 1000, uniform colour kept; Orientation 6 → 50×100; palette → `Unreadable` with the `pw-tiff` text; a TIFF with a JPEGInterchangeFormat preview that `pw_raw::inspect` reports (16×8) still gives 100×50 from the image data; ignored: every TIFF in `PW_TESTDATA` has long edge 256 at cell 256). `Cargo.lock`: only `pw-tiff` and `tiff 0.9.1` in `pw-thumbcache`'s list. `photoworkflow` 2 (−2), `pw-tiff` 19 (+3), `pw-thumbcache` 34 (5 ignored); test inventory updated. `.\tools\check.ps1`: fmt, test (484 passed, 29 ignored, 0 failed) and clippy OK; the new ignored test also run with `PW_TESTDATA` = `D:\PhotoWorkflowData\RAW`: passed on the 9 TIFFs. No commit |
 | 2026-11-10 | T65 | Ready for review | Review: code accepted. `fit` unchanged; `downscale` without slice indexing, pinned against a copy of the old code on 7×5 → 3×2 and seven sizes of a 13×11 image. Accepted the agent's two decisions: sums in `u64` (the old `u32` could overflow when a very large image is reduced to a few pixels; same result otherwise) and black pixels instead of a panic for an empty or short source (`to_rgb8` never gives one, so no visible change). `imaging.rs` only re-exports, the Tauri views unchanged. `tiff_thumbnail` runs before `inspect`, frees the full decode before orienting, uses the fixed 4 GiB limit; the embedded-preview test proves `pw-raw` sees a 16×8 preview that is not used. `Cargo.lock`: only `pw-thumbcache`'s list. Checked: `test-output.txt` newer than the changes, fmt/test (484 passed, 29 ignored, 0 failed)/clippy OK; counts match the test inventory. The reviewer ran the new real-file test with `PW_TESTDATA` = `D:\PhotoWorkflowData\RAW`: passed, 9 thumbnails in 1.1 s (about 0.12 s each). Note, not blocking: a TIFF thumbnail has exactly the cell's long edge, a JPEG one at least the cell (DCT scaling); the grid scales both |
+| 2026-11-10 | T64, T65 | Done | Committed by the owner (0a36b60, ea9ba94) |
+| 2026-11-10 | T66 | Open | Added: ADR 0015 D4, `is_listed` lists TIFF (the test `…_without_tiff` replaced, owner's approval in D0), "TIFF-fil W × H", "förbereder TIFF" and "Förbereder TIFF …" for a TIFF frame. After T66: the owner's acceptance D5, then the documentation D6–D7 |
+| 2026-11-10 | T66 | Ready for review | (Agent) `pw-loupe/src/lib.rs`: `is_listed` lists every extension of `pw_raw::SUPPORTED_EXTENSIONS`, TIFF included (doc comment updated); private `is_tiff(frame)` by `pw_raw::is_tiff_file` on `frame.path`, used before the JPEG cases in `source_text` ("TIFF-fil W × H"), `status_line` while preparing without a size ("förbereder TIFF") and `indicator_text` ("Förbereder TIFF …"); RAW, embedded JPEG and JPEG-file texts unchanged; `USAGE` `--core-mb` text "…decoded JPEGs and TIFFs…". Test `the_folder_lists_supported_files_by_name_without_tiff` → `the_folder_lists_supported_files_by_name`, only the expected list changed (adds `d.tif`). New tests: `tiff_files_are_listed`, `a_tiff_frame_is_named_tiff_file_with_its_oriented_size_in_both_modes`, `a_preparing_tiff_frame_says_tiff`, `a_jpeg_file_keeps_its_texts`. `main.rs`, `error_text`, `Cargo.toml` unchanged. `pw-loupe` 237 (+4); test inventory updated. `.\tools\check.ps1`: fmt, test (488 passed, 29 ignored, 0 failed) and clippy OK. Hand check of `D:\PhotoWorkflowData\RAW` left to the owner. No commit |
+| 2026-11-10 | T66 | Ready for review | Review: code accepted. `is_listed` only drops the TIFF exclusion; `is_tiff` looks at the path because the core keys a TIFF `Source::Jpeg`, and comes before the JPEG cases in `source_text`, `status_line` and `indicator_text`; RAW, embedded-JPEG and JPEG-file texts unchanged (a new test pins the JPEG file's). The replaced test changes only its name and the expected list (`d.tif` added, `C.dng` still at 2), as approved in D0. `main.rs`, `error_text`, `Cargo.toml` unchanged. Checked: no file newer than `test-output.txt`; fmt/test (488 passed, 29 ignored, 0 failed)/clippy OK; `pw-loupe` 237, matching the test inventory. Waiting for the owner's hand check |

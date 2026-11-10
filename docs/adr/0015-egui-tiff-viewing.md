@@ -178,9 +178,9 @@ ADR 0014 §7:
 |---|---|---|
 | **D0** | Accept this ADR; answer §11; approve `tiff` =0.9.1 in `pw-tiff`; accept E1–E6 | **Done 2026-11-10** |
 | **D1** | New crate `pw-tiff`: move the decoder and pixel helpers from `src-tauri` with their tests; the Tauri app calls it; add the lock and the limit (tests) | **Done:** T63 |
-| **D2** | `pw-viewcore`: the TIFF session, "shown as itself" for TIFF, budget accounting, the Swedish TIFF error texts (tests) | Agent task T64 |
-| **D3** | `pw-thumbcache`: TIFF thumbnails; `fit` and `downscale` move to `pw-tiff` (tests) | Agent task T65 |
-| **D4** | `pw-loupe`: list TIFF, status text (library tests; binary wiring) | |
+| **D2** | `pw-viewcore`: the TIFF session, "shown as itself" for TIFF, budget accounting, the Swedish TIFF error texts (tests) | **Done:** T64 |
+| **D3** | `pw-thumbcache`: TIFF thumbnails; `fit` and `downscale` move to `pw-tiff` (tests) | **Done:** T65 |
+| **D4** | `pw-loupe`: list TIFF, status text (library tests) | Agent task T66 |
 | **D5** | Acceptance by hand (§8.2) | |
 | **D6** | Documentation: architecture.md (`pw-tiff`), test inventory, ADR 0004 addendum (egui note), ADR 0009 §3.2 note | |
 | **D7** | GR8 and the root `README.md`: TIFF viewing done; IPTC parity met through the import template; ADR 0007 is milestone 7 | |
