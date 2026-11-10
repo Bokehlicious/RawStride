@@ -315,3 +315,25 @@ stars and label still combine with AND. An empty set means "Alla etiketter".
 
 Unchanged: per tab, not saved between sessions (Q1, Q2); the yellow outline when the set is not
 empty (§5.2); a rating that takes an image out of the set removes it at once (§2.2).
+
+## 15. Later idea: a filter bar of toggle buttons (owner, 2026-11-10)
+
+Not decided; recorded so that it is not lost. After the hand check of T61 the owner asked whether a
+filter bar of toggle buttons would be better than drop-down lists:
+
+- one row of star buttons, "0★ 1★ 2★ 3★ 4★ 5★", and one row of colour swatches (the five labels and
+  "no label"), each clicked on and off, so the chosen values are visible at all times and one click
+  changes them;
+- a check box in front of each row turns that whole row of the filter on or off without losing the
+  choice.
+
+What it would change, to be weighed in its own amendment before any task:
+
+- the star part becomes a set of star values (any combination, for example 1★ and 4★) instead of
+  one number with ≥ / = / ≤ (§2.1, amendment 1, T60); where "unrated" and "rejected" go (0★ as
+  unrated, a separate button for rejected) needs a decision;
+- the label part is already a set (§14), so only its controls change;
+- the bar takes room in the tab bar row or needs its own row;
+- the layout is studied from other culling programs only by using them and from their public
+  documentation (clean-room levels C and D, `docs/clean-room.md`); no screenshots or assets of
+  another product go into the repository.

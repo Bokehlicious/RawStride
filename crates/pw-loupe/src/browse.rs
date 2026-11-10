@@ -190,7 +190,7 @@ mod tests {
     use std::path::PathBuf;
 
     use super::*;
-    use crate::filter::{Filter, LabelFilter, StarCondition, StarFilter};
+    use crate::filter::{Filter, LabelChoice, LabelFilter, StarCondition, StarFilter};
     use crate::tabs::{Tabs, ViewMode};
     use crate::{marked_text, no_match_text, position_text};
 
@@ -262,20 +262,35 @@ mod tests {
         );
 
         assert_eq!(
-            set(&mut tabs, &ratings, filter(S::Stars(3), L::All)),
+            set(&mut tabs, &ratings, filter(S::Stars(3), L::all())),
             [1, 2]
         );
         assert_eq!(tab(&mut tabs).current, 1);
         assert_eq!(status(tab(&mut tabs)), "1 / 2 (av 12)");
         assert_eq!(
-            set(&mut tabs, &ratings, filter(S::Stars(3), L::Label("Red"))),
+            set(
+                &mut tabs,
+                &ratings,
+                filter(S::Stars(3), L::only(LabelChoice::Label("Red")))
+            ),
             [2]
         );
         assert_eq!(
-            set(&mut tabs, &ratings, filter(S::All, L::Label("Red"))),
+            set(
+                &mut tabs,
+                &ratings,
+                filter(S::All, L::only(LabelChoice::Label("Red")))
+            ),
             [2, 4]
         );
-        assert!(set(&mut tabs, &ratings, filter(S::All, L::Label("Purple"))).is_empty());
+        assert!(
+            set(
+                &mut tabs,
+                &ratings,
+                filter(S::All, L::only(LabelChoice::Label("Purple")))
+            )
+            .is_empty()
+        );
         assert_eq!(
             status(tab(&mut tabs)),
             "Inga bilder matchar filtret (12 i mappen)"
@@ -285,9 +300,9 @@ mod tests {
             2,
             "unchanged when nothing is visible"
         );
-        assert_eq!(set(&mut tabs, &ratings, filter(S::Rejected, L::All)), [3]);
+        assert_eq!(set(&mut tabs, &ratings, filter(S::Rejected, L::all())), [3]);
         assert_eq!(
-            set(&mut tabs, &ratings, filter(S::Unrated, L::All)),
+            set(&mut tabs, &ratings, filter(S::Unrated, L::all())),
             [0, 4, 5, 6, 7, 8, 9, 10, 11]
         );
         assert_eq!(tab(&mut tabs).current, 4, "the nearest following image");
@@ -344,7 +359,10 @@ mod tests {
     #[test]
     fn an_active_filter_shows_nothing_until_the_ratings_are_read() {
         let (mut tabs, ratings) = setup();
-        tabs.set_filter(filter(StarFilter::All, LabelFilter::Label("Red")));
+        tabs.set_filter(filter(
+            StarFilter::All,
+            LabelFilter::only(LabelChoice::Label("Red")),
+        ));
         let t = tab(&mut tabs);
         t.current = 4;
         t.selection.ctrl_click(4, 5);
@@ -373,7 +391,10 @@ mod tests {
         set(
             &mut tabs,
             &ratings,
-            filter(StarFilter::All, LabelFilter::Label("Red")),
+            filter(
+                StarFilter::All,
+                LabelFilter::only(LabelChoice::Label("Red")),
+            ),
         );
         assert_eq!(tab(&mut tabs).current, 4, "the next visible image after 3");
 
@@ -382,7 +403,10 @@ mod tests {
         set(
             &mut tabs,
             &ratings,
-            filter(StarFilter::All, LabelFilter::Label("Red")),
+            filter(
+                StarFilter::All,
+                LabelFilter::only(LabelChoice::Label("Red")),
+            ),
         );
         assert_eq!(
             tab(&mut tabs).current,
@@ -392,7 +416,10 @@ mod tests {
 
         // `keep` keeps a current image that does not match.
         set(&mut tabs, &ratings, Filter::default());
-        tabs.set_filter(filter(StarFilter::All, LabelFilter::Label("Red")));
+        tabs.set_filter(filter(
+            StarFilter::All,
+            LabelFilter::only(LabelChoice::Label("Red")),
+        ));
         let t = tab(&mut tabs);
         t.current = 6;
         t.refilter(true, &of(&ratings), Some(6));
@@ -411,7 +438,7 @@ mod tests {
         set(
             &mut tabs,
             &ratings,
-            filter(StarFilter::NotRejected, LabelFilter::All),
+            filter(StarFilter::NotRejected, LabelFilter::all()),
         );
         let t = tab(&mut tabs);
         assert_eq!(t.selection.count(), 3);
@@ -425,7 +452,10 @@ mod tests {
         set(
             &mut tabs,
             &ratings,
-            filter(StarFilter::All, LabelFilter::Label("Red")),
+            filter(
+                StarFilter::All,
+                LabelFilter::only(LabelChoice::Label("Red")),
+            ),
         );
         let t = tab(&mut tabs);
         t.click(2, true, false, true, &of(&ratings));
@@ -442,7 +472,7 @@ mod tests {
         set(
             &mut tabs,
             &ratings,
-            filter(StarFilter::NotRejected, LabelFilter::All),
+            filter(StarFilter::NotRejected, LabelFilter::all()),
         );
         // Visible: 0, 1, 2, 4, 5, …, 11 (11 images); 4 columns, pages of 2 rows.
         let t = tab(&mut tabs);
@@ -466,7 +496,10 @@ mod tests {
         set(
             &mut tabs,
             &ratings,
-            filter(StarFilter::All, LabelFilter::Label("Purple")),
+            filter(
+                StarFilter::All,
+                LabelFilter::only(LabelChoice::Label("Purple")),
+            ),
         );
         let t = tab(&mut tabs);
         assert_eq!(t.current, 7);
@@ -481,7 +514,10 @@ mod tests {
         set(
             &mut tabs,
             &ratings,
-            filter(StarFilter::All, LabelFilter::Label("Red")),
+            filter(
+                StarFilter::All,
+                LabelFilter::only(LabelChoice::Label("Red")),
+            ),
         );
         let t = tab(&mut tabs);
         let r = of(&ratings);
@@ -505,7 +541,10 @@ mod tests {
         set(
             &mut tabs,
             &ratings,
-            filter(StarFilter::All, LabelFilter::Label("Purple")),
+            filter(
+                StarFilter::All,
+                LabelFilter::only(LabelChoice::Label("Purple")),
+            ),
         );
         let t = tab(&mut tabs);
         assert_eq!(t.loupe_move(LoupeMove::Next, true, &r), 2);
@@ -518,7 +557,7 @@ mod tests {
         set(
             &mut tabs,
             &ratings,
-            filter(StarFilter::Unrated, LabelFilter::All),
+            filter(StarFilter::Unrated, LabelFilter::all()),
         );
         assert_eq!(
             tab(&mut tabs).loupe_move(LoupeMove::First, true, &of(&ratings)),
@@ -548,7 +587,7 @@ mod tests {
         set(
             &mut tabs,
             &ratings,
-            filter(StarFilter::Unrated, LabelFilter::All),
+            filter(StarFilter::Unrated, LabelFilter::all()),
         );
         let t = tab(&mut tabs);
         assert_eq!(t.visible, [0, 4, 5, 6, 7, 8, 9, 10, 11]);
@@ -619,7 +658,7 @@ mod tests {
         set(
             &mut tabs,
             &ratings,
-            filter(StarFilter::NotRejected, LabelFilter::All),
+            filter(StarFilter::NotRejected, LabelFilter::all()),
         );
         let t = tab(&mut tabs);
         assert_eq!(t.visible, [0, 1, 2, 4, 5, 6, 7, 8, 9, 10, 11]);
@@ -645,7 +684,7 @@ mod tests {
         set(
             &mut tabs,
             &ratings,
-            filter(StarFilter::Unrated, LabelFilter::All),
+            filter(StarFilter::Unrated, LabelFilter::all()),
         );
         let t = tab(&mut tabs);
         t.click(11, false, false, true, &of(&ratings));
@@ -664,7 +703,10 @@ mod tests {
         set(
             &mut tabs,
             &ratings,
-            filter(StarFilter::All, LabelFilter::Label("Red")),
+            filter(
+                StarFilter::All,
+                LabelFilter::only(LabelChoice::Label("Red")),
+            ),
         );
         let t = tab(&mut tabs);
         assert_eq!(t.visible, [2, 4]);
@@ -692,7 +734,7 @@ mod tests {
         set(
             &mut tabs,
             &ratings,
-            filter(StarFilter::Stars(3), LabelFilter::All),
+            filter(StarFilter::Stars(3), LabelFilter::all()),
         );
         let t = tab(&mut tabs);
         assert_eq!(t.visible, [1, 2]);
@@ -729,17 +771,17 @@ mod tests {
         };
         let (mut tabs, ratings) = setup();
         assert_eq!(
-            set(&mut tabs, &ratings, with(S::Stars(3), C::Exactly, L::All)),
+            set(&mut tabs, &ratings, with(S::Stars(3), C::Exactly, L::all())),
             [1],
             "= 3"
         );
         assert_eq!(
-            set(&mut tabs, &ratings, with(S::Stars(5), C::Exactly, L::All)),
+            set(&mut tabs, &ratings, with(S::Stars(5), C::Exactly, L::all())),
             [2],
             "= 5"
         );
         assert_eq!(
-            set(&mut tabs, &ratings, with(S::Stars(3), C::AtMost, L::All)),
+            set(&mut tabs, &ratings, with(S::Stars(3), C::AtMost, L::all())),
             [0, 1, 4, 5, 6, 7, 8, 9, 10, 11],
             "≤ 3"
         );
@@ -747,15 +789,52 @@ mod tests {
             set(
                 &mut tabs,
                 &ratings,
-                with(S::Stars(3), C::AtMost, L::Label("Red"))
+                with(S::Stars(3), C::AtMost, L::only(LabelChoice::Label("Red")))
             ),
             [4],
             "≤ 3 and Red"
         );
         assert_eq!(
-            set(&mut tabs, &ratings, with(S::Stars(3), C::AtLeast, L::All)),
+            set(&mut tabs, &ratings, with(S::Stars(3), C::AtLeast, L::all())),
             [1, 2],
             "≥ 3 (unchanged)"
+        );
+    }
+
+    #[test]
+    fn several_labels_on_the_filter_select_setup() {
+        use LabelChoice as C;
+        use StarFilter as S;
+        let labels = |choices: &[LabelChoice]| {
+            let mut set = LabelFilter::all();
+            for choice in choices {
+                set.toggle(*choice);
+            }
+            set
+        };
+        let (mut tabs, ratings) = setup();
+        assert_eq!(
+            set(
+                &mut tabs,
+                &ratings,
+                filter(S::All, labels(&[C::Label("Red"), C::Label("Yellow")]))
+            ),
+            [2, 4],
+            "Red + Yellow"
+        );
+        assert_eq!(
+            set(&mut tabs, &ratings, filter(S::All, labels(&[C::NoLabel]))),
+            [0, 1, 3, 5, 6, 7, 8, 9, 10, 11],
+            "Ingen etikett"
+        );
+        assert_eq!(
+            set(
+                &mut tabs,
+                &ratings,
+                filter(S::Stars(3), labels(&[C::Label("Red"), C::NoLabel]))
+            ),
+            [1, 2],
+            "≥ 3 and Red + Ingen etikett"
         );
     }
 }

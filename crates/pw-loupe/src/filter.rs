@@ -1,6 +1,6 @@
-//! The filter of a folder tab (ADR 0014 §2.1–§2.3, §4.1, §5.2): which images a rating and a label
-//! let through, the visible list with the keep-current rule, the nearest visible image, and the
-//! Swedish texts of the two drop-down lists. Plain Rust, no I/O (GR11).
+//! The filter of a folder tab (ADR 0014 §2.1–§2.3, §4.1, §5.2): which images a rating and a set of
+//! labels (amendment 2, §14) let through, the visible list with the keep-current rule, the nearest
+//! visible image, and the Swedish texts of the drop-down lists. Plain Rust, no I/O (GR11).
 
 use pw_metadata::Rating;
 
@@ -31,14 +31,95 @@ pub enum StarFilter {
     NotRejected,
 }
 
-/// The label part of a filter.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum LabelFilter {
-    #[default]
-    All,
+/// One choice of the label list (ADR 0014 §5.2, amendment 2): a label, or no label.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LabelChoice {
     /// One of `pw_metadata::LABELS`.
     Label(&'static str),
     NoLabel,
+}
+
+/// The label part of a filter: a set of `LabelChoice` (ADR 0014 §2.1, amendment 2). An image
+/// matches when its label (or `NoLabel`) is in the set; the empty set (the default) lets every
+/// label through ("Alla etiketter"). A label outside `pw_metadata::LABELS` is not a choice: it is
+/// never in the set, and `only`, `toggle` and `contains` ignore it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct LabelFilter {
+    /// Bit `i` is `LABEL_CHOICES[i]`.
+    bits: u8,
+}
+
+/// Every bit of `LABEL_CHOICES` set.
+const ALL_CHOICES: u8 = (1 << LABEL_CHOICES.len()) - 1;
+
+impl LabelFilter {
+    /// The empty set: every label ("Alla etiketter").
+    pub fn all() -> LabelFilter {
+        LabelFilter::default()
+    }
+
+    /// The set with only `choice` (empty when `choice` is not a valid choice).
+    pub fn only(choice: LabelChoice) -> LabelFilter {
+        let mut filter = LabelFilter::all();
+        filter.toggle(choice);
+        filter
+    }
+
+    /// True for the empty set, which lets every label through.
+    pub fn is_all(&self) -> bool {
+        self.bits == 0
+    }
+
+    /// Whether `choice` is ticked.
+    pub fn contains(&self, choice: LabelChoice) -> bool {
+        choice_bit(choice).is_some_and(|bit| self.bits & bit != 0)
+    }
+
+    /// Ticks `choice`, or unticks it when it is ticked. Ticking the sixth choice clears the set,
+    /// since all six let every image through (Q12).
+    pub fn toggle(&mut self, choice: LabelChoice) {
+        if let Some(bit) = choice_bit(choice) {
+            self.bits ^= bit;
+            if self.bits == ALL_CHOICES {
+                self.bits = 0;
+            }
+        }
+    }
+
+    /// The ticked choices, in `LABEL_CHOICES` order.
+    fn choices(&self) -> impl Iterator<Item = LabelChoice> + '_ {
+        LABEL_CHOICES
+            .into_iter()
+            .filter(|choice| self.contains(*choice))
+    }
+
+    /// Whether an image with `label` (`None`: no label) passes the label part.
+    fn matches(&self, label: Option<&str>) -> bool {
+        self.is_all() || label_bit(label).is_some_and(|bit| self.bits & bit != 0)
+    }
+}
+
+/// The bit of a choice in `LabelFilter`.
+fn choice_bit(choice: LabelChoice) -> Option<u8> {
+    match choice {
+        LabelChoice::Label(label) => label_bit(Some(label)),
+        LabelChoice::NoLabel => label_bit(None),
+    }
+}
+
+/// The bit of an image's label (`None`: no label) in `LabelFilter`; `None` for a label outside
+/// `pw_metadata::LABELS`.
+fn label_bit(label: Option<&str>) -> Option<u8> {
+    let index = LABEL_CHOICES
+        .iter()
+        .position(|choice| match (choice, label) {
+            (LabelChoice::Label(choice), Some(label)) => *choice == label,
+            (LabelChoice::NoLabel, None) => true,
+            _ => false,
+        })?;
+    u32::try_from(index)
+        .ok()
+        .and_then(|index| 1u8.checked_shl(index))
 }
 
 /// The filter of a tab: stars and label, combined with AND. `condition` applies only to
@@ -54,7 +135,7 @@ impl Filter {
     /// True when the filter lets anything less than every image through (not all / all). The
     /// condition alone never makes a filter active.
     pub fn is_active(&self) -> bool {
-        self.stars != StarFilter::All || self.label != LabelFilter::All
+        self.stars != StarFilter::All || !self.label.is_all()
     }
 }
 
@@ -85,12 +166,7 @@ pub fn matches(filter: &Filter, rating: Option<&Rating>) -> bool {
         StarFilter::Rejected => stars == Some(REJECTED),
         StarFilter::NotRejected => stars != Some(REJECTED),
     };
-    let label_match = match filter.label {
-        LabelFilter::All => true,
-        LabelFilter::Label(wanted) => label == Some(wanted),
-        LabelFilter::NoLabel => label.is_none(),
-    };
-    stars_match && label_match
+    stars_match && filter.label.matches(label)
 }
 
 /// The indexes `0..count` that match, in order, plus `keep` when it is `< count` (the keep-current
@@ -159,24 +235,33 @@ pub fn star_condition_text(condition: StarCondition) -> &'static str {
     }
 }
 
-/// The label choices in the order of the drop-down list (ADR 0014 §5.2): all, the five labels in
-/// `pw_metadata::LABELS` order, no label.
-pub const LABEL_FILTERS: [LabelFilter; 7] = [
-    LabelFilter::All,
-    LabelFilter::Label("Red"),
-    LabelFilter::Label("Yellow"),
-    LabelFilter::Label("Green"),
-    LabelFilter::Label("Blue"),
-    LabelFilter::Label("Purple"),
-    LabelFilter::NoLabel,
+/// The label choices in the order of the check boxes of the drop-down list (ADR 0014 §5.2,
+/// amendment 2): the five labels in `pw_metadata::LABELS` order, then no label.
+pub const LABEL_CHOICES: [LabelChoice; 6] = [
+    LabelChoice::Label("Red"),
+    LabelChoice::Label("Yellow"),
+    LabelChoice::Label("Green"),
+    LabelChoice::Label("Blue"),
+    LabelChoice::Label("Purple"),
+    LabelChoice::NoLabel,
 ];
 
-/// The text of a label choice: the Swedish label name of `label_name`.
-pub fn label_filter_text(filter: LabelFilter) -> &'static str {
-    match filter {
-        LabelFilter::All => "Alla etiketter",
-        LabelFilter::Label(label) => label_name(label),
-        LabelFilter::NoLabel => "Ingen etikett",
+/// The text of a label choice: the Swedish label name of `label_name`, or "Ingen etikett".
+pub fn label_choice_text(choice: LabelChoice) -> &'static str {
+    match choice {
+        LabelChoice::Label(label) => label_name(label),
+        LabelChoice::NoLabel => "Ingen etikett",
+    }
+}
+
+/// The text of the closed label list (ADR 0014 Q10): "Alla etiketter" for the empty set, the one
+/// name, two names joined with ", ", and "{n} etiketter" from three.
+pub fn label_filter_text(filter: &LabelFilter) -> String {
+    let names: Vec<&str> = filter.choices().map(label_choice_text).collect();
+    match names.len() {
+        0 => "Alla etiketter".to_owned(),
+        1 | 2 => names.join(", "),
+        n => format!("{n} etiketter"),
     }
 }
 
@@ -195,7 +280,7 @@ mod tests {
         Filter {
             stars,
             condition: StarCondition::default(),
-            label: LabelFilter::All,
+            label: LabelFilter::all(),
         }
     }
 
@@ -211,7 +296,7 @@ mod tests {
         Filter {
             stars,
             condition,
-            label: LabelFilter::All,
+            label: LabelFilter::all(),
         }
     }
 
@@ -265,8 +350,14 @@ mod tests {
                 "{filter:?} against no rating"
             );
         }
-        assert!(matches(&label_only(LabelFilter::NoLabel), None));
-        assert!(!matches(&label_only(LabelFilter::Label("Red")), None));
+        assert!(matches(
+            &label_only(LabelFilter::only(LabelChoice::NoLabel)),
+            None
+        ));
+        assert!(!matches(
+            &label_only(LabelFilter::only(LabelChoice::Label("Red"))),
+            None
+        ));
     }
 
     #[test]
@@ -319,7 +410,7 @@ mod tests {
     #[test]
     fn every_label_choice_against_no_label_red_and_purple() {
         let labels = [None, Some("Red"), Some("Purple")];
-        // Expected results for `labels`, in `LABEL_FILTERS` order.
+        // Expected results for `labels`: all, then each of `LABEL_CHOICES` alone.
         let expected: [[bool; 3]; 7] = [
             [true, true, true],    // All
             [false, true, false],  // Red
@@ -329,12 +420,14 @@ mod tests {
             [false, false, true],  // Purple
             [true, false, false],  // NoLabel
         ];
-        for (filter, expected) in LABEL_FILTERS.iter().zip(expected.iter()) {
+        let filters =
+            std::iter::once(LabelFilter::all()).chain(LABEL_CHOICES.map(LabelFilter::only));
+        for (filter, expected) in filters.zip(expected.iter()) {
             for (label, want) in labels.iter().zip(expected.iter()) {
                 for stars in [None, Some(3)] {
                     let rating = rating(stars, *label);
                     assert_eq!(
-                        matches(&label_only(*filter), Some(&rating)),
+                        matches(&label_only(filter), Some(&rating)),
                         *want,
                         "{filter:?} against label {label:?}, stars {stars:?}"
                     );
@@ -348,7 +441,7 @@ mod tests {
         let filter = Filter {
             stars: StarFilter::Stars(3),
             condition: StarCondition::default(),
-            label: LabelFilter::Label("Red"),
+            label: LabelFilter::only(LabelChoice::Label("Red")),
         };
         assert!(matches(&filter, Some(&rating(Some(3), Some("Red")))));
         assert!(matches(&filter, Some(&rating(Some(5), Some("Red")))));
@@ -360,7 +453,7 @@ mod tests {
         let filter = Filter {
             stars: StarFilter::Unrated,
             condition: StarCondition::default(),
-            label: LabelFilter::NoLabel,
+            label: LabelFilter::only(LabelChoice::NoLabel),
         };
         assert!(matches(&filter, None));
         assert!(!matches(&filter, Some(&rating(None, Some("Red")))));
@@ -371,10 +464,10 @@ mod tests {
     fn the_default_filter_is_all_all_and_not_active() {
         let filter = Filter::default();
         assert_eq!(filter.stars, StarFilter::All);
-        assert_eq!(filter.label, LabelFilter::All);
+        assert_eq!(filter.label, LabelFilter::all());
         assert!(!filter.is_active());
         assert!(stars_only(StarFilter::Unrated).is_active());
-        assert!(label_only(LabelFilter::NoLabel).is_active());
+        assert!(label_only(LabelFilter::only(LabelChoice::NoLabel)).is_active());
     }
 
     #[test]
@@ -605,33 +698,196 @@ mod tests {
 
     #[test]
     fn label_filter_list_and_texts() {
-        assert_eq!(LABEL_FILTERS.len(), 7);
-        let labels: Vec<&str> = LABEL_FILTERS
+        assert_eq!(LABEL_CHOICES.len(), 6);
+        let labels: Vec<&str> = LABEL_CHOICES
             .iter()
-            .filter_map(|filter| match filter {
-                LabelFilter::Label(label) => Some(*label),
-                _ => None,
+            .filter_map(|choice| match choice {
+                LabelChoice::Label(label) => Some(*label),
+                LabelChoice::NoLabel => None,
             })
             .collect();
         assert_eq!(labels, pw_metadata::LABELS);
-        assert_eq!(LABEL_FILTERS.first(), Some(&LabelFilter::All));
-        assert_eq!(LABEL_FILTERS.last(), Some(&LabelFilter::NoLabel));
+        assert_eq!(LABEL_CHOICES.last(), Some(&LabelChoice::NoLabel));
 
-        let texts: Vec<&str> = LABEL_FILTERS
+        assert_eq!(label_filter_text(&LabelFilter::all()), "Alla etiketter");
+        let texts: Vec<&str> = LABEL_CHOICES
             .iter()
-            .map(|f| label_filter_text(*f))
+            .map(|c| label_choice_text(*c))
             .collect();
         assert_eq!(
             texts,
-            vec![
-                "Alla etiketter",
-                "Röd",
-                "Gul",
-                "Grön",
-                "Blå",
-                "Lila",
-                "Ingen etikett",
-            ]
+            vec!["Röd", "Gul", "Grön", "Blå", "Lila", "Ingen etikett"]
         );
+    }
+
+    const RED: LabelChoice = LabelChoice::Label("Red");
+    const YELLOW: LabelChoice = LabelChoice::Label("Yellow");
+    const GREEN: LabelChoice = LabelChoice::Label("Green");
+
+    /// A set with the given choices ticked.
+    fn set_of(choices: &[LabelChoice]) -> LabelFilter {
+        let mut filter = LabelFilter::all();
+        for choice in choices {
+            filter.toggle(*choice);
+        }
+        filter
+    }
+
+    /// The labels of the label tests: none, then every label of `pw_metadata::LABELS`.
+    const LABEL_VALUES: [Option<&str>; 6] = [
+        None,
+        Some("Red"),
+        Some("Yellow"),
+        Some("Green"),
+        Some("Blue"),
+        Some("Purple"),
+    ];
+
+    /// Whether `set` lets each of `LABEL_VALUES` through; checked to be the same unrated, with 3
+    /// stars, and (for no label) without a rating.
+    fn label_results(set: LabelFilter) -> Vec<bool> {
+        LABEL_VALUES
+            .iter()
+            .map(|label| {
+                let want = matches(&label_only(set), Some(&rating(None, *label)));
+                assert_eq!(
+                    matches(&label_only(set), Some(&rating(Some(3), *label))),
+                    want,
+                    "{set:?} against label {label:?} with 3 stars"
+                );
+                if label.is_none() {
+                    assert_eq!(
+                        matches(&label_only(set), None),
+                        want,
+                        "{set:?} against no rating"
+                    );
+                }
+                want
+            })
+            .collect()
+    }
+
+    #[test]
+    fn every_single_label_choice_matches_only_its_own_label() {
+        for choice in LABEL_CHOICES {
+            let filter = LabelFilter::only(choice);
+            assert!(filter.contains(choice));
+            assert!(!filter.is_all());
+            let expected: Vec<bool> = LABEL_VALUES
+                .iter()
+                .map(|label| match choice {
+                    LabelChoice::Label(wanted) => *label == Some(wanted),
+                    LabelChoice::NoLabel => label.is_none(),
+                })
+                .collect();
+            assert_eq!(label_results(filter), expected, "{choice:?}");
+        }
+    }
+
+    #[test]
+    fn red_and_yellow_match_either_label() {
+        assert_eq!(
+            label_results(set_of(&[RED, YELLOW])),
+            [false, true, true, false, false, false]
+        );
+    }
+
+    #[test]
+    fn red_and_no_label_match_red_and_unlabelled_images() {
+        assert_eq!(
+            label_results(set_of(&[RED, LabelChoice::NoLabel])),
+            [true, true, false, false, false, false]
+        );
+    }
+
+    #[test]
+    fn all_five_colours_hide_unlabelled_images() {
+        let colours: Vec<LabelChoice> = LABEL_CHOICES
+            .into_iter()
+            .filter(|choice| *choice != LabelChoice::NoLabel)
+            .collect();
+        let filter = set_of(&colours);
+        assert!(!filter.is_all());
+        assert!(!filter.contains(LabelChoice::NoLabel));
+        assert_eq!(label_results(filter), [false, true, true, true, true, true]);
+        // A label text outside the five (kept from a sidecar) is none of the colours.
+        assert!(!matches(
+            &label_only(filter),
+            Some(&rating(None, Some("Orange")))
+        ));
+    }
+
+    #[test]
+    fn ticking_all_six_clears_the_set() {
+        let mut filter = LabelFilter::all();
+        for (ticked, choice) in LABEL_CHOICES.into_iter().enumerate() {
+            filter.toggle(choice);
+            if ticked + 1 < LABEL_CHOICES.len() {
+                assert!(filter.contains(choice), "{choice:?} ticked");
+                assert!(!filter.is_all());
+            }
+        }
+        assert!(filter.is_all(), "all six ticked");
+        assert_eq!(filter, LabelFilter::all());
+        assert!(LABEL_CHOICES.iter().all(|choice| !filter.contains(*choice)));
+        assert!(!label_only(filter).is_active());
+    }
+
+    #[test]
+    fn toggling_twice_returns_to_the_start() {
+        for start in [
+            LabelFilter::all(),
+            set_of(&[RED]),
+            set_of(&[RED, YELLOW]),
+            set_of(&[GREEN, LabelChoice::NoLabel]),
+        ] {
+            for choice in LABEL_CHOICES {
+                let mut filter = start;
+                filter.toggle(choice);
+                assert_ne!(filter, start, "{start:?} toggled {choice:?} once");
+                filter.toggle(choice);
+                assert_eq!(filter, start, "{start:?} toggled {choice:?} twice");
+            }
+        }
+    }
+
+    #[test]
+    fn a_label_outside_the_five_is_not_a_choice() {
+        let orange = LabelChoice::Label("Orange");
+        assert_eq!(LabelFilter::only(orange), LabelFilter::all());
+        let mut filter = set_of(&[RED]);
+        filter.toggle(orange);
+        assert_eq!(filter, set_of(&[RED]));
+        assert!(!filter.contains(orange));
+    }
+
+    #[test]
+    fn is_active_for_the_empty_and_a_non_empty_set() {
+        assert!(!label_only(LabelFilter::all()).is_active());
+        assert!(label_only(set_of(&[RED])).is_active());
+        assert!(label_only(set_of(&[RED, LabelChoice::NoLabel])).is_active());
+        assert!(label_only(set_of(&[RED, YELLOW, GREEN])).is_active());
+    }
+
+    #[test]
+    fn label_filter_text_for_zero_one_two_and_three_choices() {
+        assert_eq!(label_filter_text(&LabelFilter::all()), "Alla etiketter");
+        assert_eq!(label_filter_text(&set_of(&[RED])), "Röd");
+        assert_eq!(
+            label_filter_text(&set_of(&[LabelChoice::NoLabel])),
+            "Ingen etikett"
+        );
+        // Two names in list order, whatever order they were ticked in.
+        assert_eq!(label_filter_text(&set_of(&[GREEN, RED])), "Röd, Grön");
+        assert_eq!(
+            label_filter_text(&set_of(&[RED, LabelChoice::NoLabel])),
+            "Röd, Ingen etikett"
+        );
+        assert_eq!(
+            label_filter_text(&set_of(&[RED, YELLOW, GREEN])),
+            "3 etiketter"
+        );
+        let five: Vec<LabelChoice> = LABEL_CHOICES.into_iter().take(5).collect();
+        assert_eq!(label_filter_text(&set_of(&five)), "5 etiketter");
     }
 }

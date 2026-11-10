@@ -1794,7 +1794,9 @@ Ordered from easiest to hardest. Start at the top.
   "≥ 4" on the test set; the condition disabled under "Ej betygsatt" and keeping its value; two tabs
   with different conditions.
 
-### T61. ADR 0014 amendment 2: filter on several labels at once — Open
+### T61. ADR 0014 amendment 2: filter on several labels at once — Done
+
+- **Review 2026-11-10: code accepted.** Waiting for the owner's hand check ("Done when").
 
 - **Can start now.** ADR 0014 §14 accepted by the owner (Q10–Q13 as proposed).
 - **Crate:** `pw-loupe`. **Files:** `crates/pw-loupe/src/filter.rs`, `crates/pw-loupe/src/lib.rs`
@@ -2022,6 +2024,10 @@ and reviewer:
 - ADR 0011 step K4 (drawing the contact sheet) is planned after T23–T25.
 - Moving rejected or picked images to `_rejected` / `_picked` folders (ADR 0013 §13): needs its own
   ADR first.
+- **A filter bar of toggle buttons instead of drop-down lists** (owner idea, 2026-11-10, after T61;
+  ADR 0014 §15): a row "0★ 1★ 2★ 3★ 4★ 5★" and a row of colour swatches, each clicked on and off,
+  with a check box per row that turns the row on or off. Needs an amendment of ADR 0014 first: the
+  star part would become a set of star values instead of the ≥ / = / ≤ condition (T60).
 - Note for M5: when the import opens its folder with `Tabs::open_new`, compare folders by their
   resolved form (`pw_ingest::resolve`), so `C:\Foto` and `c:\foto\` do not open two tabs.
 
@@ -2206,3 +2212,7 @@ and reviewer:
 | 2026-11-10 | T60 | Done | Owner's hand check passed ("= 3", "≤ 2", "≥ 4"; the condition disabled under "Ej betygsatt" keeping its value; two tabs). Committed |
 | 2026-11-10 | T61 | Blocked | Added after the owner's hand check of T60: filter on several labels at once. ADR 0014 §14 (amendment 2, proposed) with Q10–Q13; T61 waits for the answers. T58 now starts after T61 |
 | 2026-11-10 | T61 | Open | ADR 0014 amendment 2 (§14) accepted by the owner with Q10–Q13 as proposed; T61 can start |
+| 2026-11-10 | T61 | Ready for review | (Agent) `filter.rs`: `LabelChoice { Label, NoLabel }`, `LABEL_CHOICES` (the five `LABELS`, then `NoLabel`), `label_choice_text`; `LabelFilter` is now a `Copy` bit set (empty = all) with `all`, `is_all`, `contains`, `toggle` (a full set of six is cleared, Q12), `only`; a label outside `LABELS` is not a choice (ignored by `only`/`toggle`/`contains`, never matches a non-empty set). `matches`: empty set → every label, otherwise the image's label or `NoLabel` must be in the set, AND with stars; `is_active`: stars not `All` or the set not empty. `label_filter_text(&LabelFilter) -> String`: "Alla etiketter", one name, two joined with ", " (list order), "{n} etiketter" from three. `LABEL_FILTERS` removed (replaced by `LABEL_CHOICES`). `lib.rs`: re-exports. `main.rs`: a new `label_combo` replaces the `filter_combo` call for the label list: "Alla etiketter" (clears the set) and a check box per choice, `PopupCloseBehavior::CloseOnClickOutside`, yellow outline when the set is not empty, each change through `set_filter` as before. Tests: `LabelFilter::Label/NoLabel/All` → `only(…)`/`all()` in `filter.rs`, `browse.rs`, `tabs.rs`, `lib.rs` (assertions unchanged; `label_filter_list_and_texts` gets the new lists and texts). 10 tests added (9 in `filter.rs`, 1 in `browse.rs`: Red + Yellow → [2, 4], Ingen etikett → [0, 1, 3, 5, …, 11], ≥ 3 and Red + Ingen etikett → [1, 2]). Test inventory updated (`pw-loupe` 231). `.\tools\check.ps1`: fmt, test (454 passed, 27 ignored, 0 failed) and clippy OK; no commit. Not checked by hand (needs the owner): two and three colours, a colour plus "Ingen etikett", ticking all six, the outline, two tabs with different sets |
+| 2026-11-10 | T61 | Ready for review | Review: code accepted. `LabelFilter` is a six-bit set (empty = all; the sixth tick clears it, Q12); `matches` is OR within the set and AND with stars; a label outside `LABELS` (written by another program) is never in a non-empty set, documented. `label_combo`: "Alla etiketter" clears, check boxes per choice, `CloseOnClickOutside`, yellow outline when not empty, changes through `set_filter`. `LABEL_FILTERS` replaced by `LABEL_CHOICES`; test changes limited to the new constructors and the list/text test. Note for the hand check: while the popup is open, keys still reach the grid (as with the other lists). Checked: `test-output.txt` newer than the changes, fmt/test (454 passed, 27 ignored, 0 failed)/clippy OK; `pw-loupe` 231, matching the test inventory. Waiting for the owner's hand check |
+| 2026-11-10 | T61 | Done | Owner's hand check passed (two and three colours, a colour plus "Ingen etikett", all six clearing the set, the outline, two tabs). Committed |
+| 2026-11-10 | – | Note | Owner idea for later: a filter bar of toggle buttons (stars and colour swatches) instead of the drop-down lists. Recorded in ADR 0014 §15 and under "Not for agents yet"; needs its own amendment |

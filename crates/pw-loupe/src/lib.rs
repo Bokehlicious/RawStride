@@ -21,8 +21,9 @@ use pw_viewcore::{DecodeError, Frame, Source, Status, Zoom};
 
 pub use browse::LoupeMove;
 pub use filter::{
-    Filter, LABEL_FILTERS, LabelFilter, STAR_CONDITIONS, STAR_FILTERS, StarCondition, StarFilter,
-    label_filter_text, matches, nearest_visible, star_condition_text, star_filter_text, visible,
+    Filter, LABEL_CHOICES, LabelChoice, LabelFilter, STAR_CONDITIONS, STAR_FILTERS, StarCondition,
+    StarFilter, label_choice_text, label_filter_text, matches, nearest_visible,
+    star_condition_text, star_filter_text, visible,
 };
 pub use grid::{
     DEFAULT_THUMBNAIL_SIZE, GridKeyAction, LoupeKeyAction, MAX_THUMBNAIL_SIZE, MIN_THUMBNAIL_SIZE,
@@ -551,7 +552,7 @@ mod tests {
         tabs.set_filter(Filter {
             stars: StarFilter::All,
             condition: StarCondition::AtLeast,
-            label: LabelFilter::Label("Red"),
+            label: LabelFilter::only(LabelChoice::Label("Red")),
         });
         let Some(tab) = tabs.active_mut() else {
             panic!("there is always an active tab");

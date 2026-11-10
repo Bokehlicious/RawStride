@@ -423,7 +423,7 @@ mod tests {
         Filter {
             stars: crate::filter::StarFilter::Unrated,
             condition: crate::filter::StarCondition::AtLeast,
-            label: crate::filter::LabelFilter::All,
+            label: crate::filter::LabelFilter::all(),
         }
     }
 
@@ -431,7 +431,7 @@ mod tests {
         Filter {
             stars: crate::filter::StarFilter::All,
             condition: crate::filter::StarCondition::AtLeast,
-            label: crate::filter::LabelFilter::Label("Red"),
+            label: crate::filter::LabelFilter::only(crate::filter::LabelChoice::Label("Red")),
         }
     }
 

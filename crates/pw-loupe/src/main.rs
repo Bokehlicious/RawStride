@@ -18,16 +18,16 @@ use metadata::MetadataCache;
 use pw_loupe::{
     Action, CellState, DEFAULT_THUMBNAIL_SIZE, DialogKey, DialogRequest, Field, Filter,
     GridKeyAction, ImportDialog, ImportDialogState, ImportEvent, ImportForm, ImportWorker,
-    LABEL_FILTERS, LabelFilter, LoupeMove, MAX_THUMBNAIL_SIZE, MIN_THUMBNAIL_SIZE, Navigation,
+    LABEL_CHOICES, LabelFilter, LoupeMove, MAX_THUMBNAIL_SIZE, MIN_THUMBNAIL_SIZE, Navigation,
     Options, READING_RATINGS_TEXT, RatingRefused, STAR_CONDITIONS, STAR_FILTERS, StarFilter,
     SubmitError, Tab, TabAction, Tabs, ThumbGrid, UNSUPPORTED_TEXT, ViewMode, WINDOW_TITLE,
     clamp_thumbnail_size, color_image, columns, dialog_key_action, done_lines,
     ejecting_progress_text, error_text, grid_key_action, indicator_text, iptc_progress_text,
-    key_action, label_filter_text, label_name, list_folder, loupe_key_action, marked_text,
-    mode_label, more_lines, no_match_text, opens_import, parse_args, position_text, preview_line,
-    preview_summary, progress_text, rating_key_action, request_cell, star_condition_text,
-    star_filter_text, star_glyphs, status_line, step_thumbnail_size, tab_action, take_wheel_steps,
-    visible_range, wheel_factor,
+    key_action, label_choice_text, label_filter_text, label_name, list_folder, loupe_key_action,
+    marked_text, mode_label, more_lines, no_match_text, opens_import, parse_args, position_text,
+    preview_line, preview_summary, progress_text, rating_key_action, request_cell,
+    star_condition_text, star_filter_text, star_glyphs, status_line, step_thumbnail_size,
+    tab_action, take_wheel_steps, visible_range, wheel_factor,
 };
 use pw_metadata::MetadataWorker;
 use pw_metadata::Rating;
@@ -1396,15 +1396,7 @@ impl Loupe {
                     ) {
                         new_filter = Some(Filter { stars, ..filter });
                     }
-                    if let Some(label) = filter_combo(
-                        ui,
-                        "label-filter",
-                        filter.label,
-                        &LABEL_FILTERS,
-                        label_filter_text,
-                        filter.label != LabelFilter::All,
-                        None,
-                    ) {
+                    if let Some(label) = label_combo(ui, "label-filter", filter.label) {
                         new_filter = Some(Filter { label, ..filter });
                     }
                 });
@@ -1810,6 +1802,46 @@ fn filter_combo<T: Copy + PartialEq>(
         });
     });
     picked.then_some(chosen)
+}
+
+/// The label drop-down list in the tab bar (ADR 0014 §5.2, amendment 2, Q10): "Alla etiketter"
+/// clears the set, and one check box per label choice. The popup stays open while ticking and closes
+/// on a click outside it. Yellow outline when the set is not empty. Returns the new set, if it
+/// changed this frame.
+fn label_combo(ui: &mut egui::Ui, id: &str, current: LabelFilter) -> Option<LabelFilter> {
+    let mut chosen = current;
+    ui.scope(|ui| {
+        if !current.is_all() {
+            let stroke = egui::Stroke::new(1.5, egui::Color32::YELLOW);
+            let widgets = &mut ui.visuals_mut().widgets;
+            widgets.inactive.bg_stroke = stroke;
+            widgets.hovered.bg_stroke = stroke;
+            widgets.active.bg_stroke = stroke;
+            widgets.open.bg_stroke = stroke;
+        }
+        egui::ComboBox::from_id_salt(id)
+            .selected_text(label_filter_text(&current))
+            .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+            .show_ui(ui, |ui| {
+                let all = LabelFilter::all();
+                if ui
+                    .selectable_label(chosen.is_all(), label_filter_text(&all))
+                    .clicked()
+                {
+                    chosen = all;
+                }
+                for choice in LABEL_CHOICES {
+                    let mut ticked = chosen.contains(choice);
+                    if ui
+                        .checkbox(&mut ticked, label_choice_text(choice))
+                        .changed()
+                    {
+                        chosen.toggle(choice);
+                    }
+                }
+            });
+    });
+    (chosen != current).then_some(chosen)
 }
 
 fn field_error(state: &ImportDialogState, field: Field) -> Option<&str> {
