@@ -194,7 +194,7 @@ on the worker threads, before the pixels become a texture. One screen, one profi
 | **C1** | New crate `pw-colour` (tests F1, F3, F4) — **T68, accepted 2026-11-11** |
 | **C2** | `pw-loupe`: read the monitor profile at start; window title (passthrough check §8.2 done first) — **T69** |
 | **C3** | Source profiles: `pw-tiff` (ICC, 16-bit path) — **T70**; `pw-libjpeg` (APP2) and `pw-raw` (Exif marker) — **T71** |
-| **C4** | Apply: `pw-viewcore` sessions and `pw-thumbcache` |
+| **C4** | Apply: `pw-viewcore` sessions and `pw-thumbcache` — **T72**. The status-line note for an unusable embedded profile (§5) follows in its own task, since it needs a field through the loupe core |
 | **C5** | Acceptance by hand (§8.2) |
 | **C6** | Documentation: architecture.md, test inventory, GR8 note, ADR 0015 §3.2 note |
 

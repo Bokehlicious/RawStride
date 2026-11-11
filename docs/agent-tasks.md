@@ -2242,7 +2242,7 @@ Ordered from easiest to hardest. Start at the top.
 - **Done when:** `.\tools\check.ps1` is all OK; `docs/test-inventory.md` has a `pw-colour` row and the
   new totals; `git diff --stat` shows only the files above.
 
-### T69. ADR 0016 C2: RawStride reads the monitor profile at start and names it in the window title — Ready for review
+### T69. ADR 0016 C2: RawStride reads the monitor profile at start and names it in the window title — Done
 
 - **Can start now.** T68 (`pw-colour`) accepted. The passthrough check of ADR 0016 §8.2 is done
   (§1.1). T69, T70 and T71 do not depend on each other.
@@ -2311,7 +2311,7 @@ Ordered from easiest to hardest. Start at the top.
 - **Done when:** `.\tools\check.ps1` is all OK; `docs/test-inventory.md` has the new tests in the
   `pw-loupe` row and the new totals; `git diff --stat` shows only the files above.
 
-### T70. ADR 0016 C3 (TIFF): `pw-tiff` reads the embedded ICC profile and converts 16-bit data before the reduction — Ready for review
+### T70. ADR 0016 C3 (TIFF): `pw-tiff` reads the embedded ICC profile and converts 16-bit data before the reduction — Done
 
 - **Can start now.** T68 accepted. Independent of T69 and T71.
 - **Crates:** `pw-tiff` only. Nothing calls the new function yet (that is C4); the Tauri app and
@@ -2379,7 +2379,7 @@ Ordered from easiest to hardest. Start at the top.
 - **Done when:** `.\tools\check.ps1` is all OK; `docs/test-inventory.md` has the new tests in the
   `pw-tiff` row and the new totals; `git diff --stat` shows only the files above.
 
-### T71. ADR 0016 C3 (JPEG): `pw-libjpeg` returns the ICC profile, `pw-raw` the Exif colour space — Ready for review
+### T71. ADR 0016 C3 (JPEG): `pw-libjpeg` returns the ICC profile, `pw-raw` the Exif colour space — Done
 
 - **Can start now.** Independent of T69 and T70. Nothing calls the new code yet (that is C4).
 - **Crates:** `pw-libjpeg`, `pw-raw`.
@@ -2428,6 +2428,104 @@ Ordered from easiest to hardest. Start at the top.
     nothing (the reviewer reads the output).
 - **Done when:** `.\tools\check.ps1` is all OK; `git diff Cargo.lock` is empty;
   `docs/test-inventory.md` has the new tests and totals; `git diff --stat` shows only the files above.
+
+### T72. ADR 0016 C4: the loupe and the thumbnails convert to the monitor profile — Open
+
+- **Can start now.** T68–T71 are done: `pw-colour` (transforms), the monitor profile in `pw-loupe`
+  (T69), `pw_tiff::decode_rgb8_for_display` (T70), `Decoder::icc_profile` and
+  `ImageInfo::colour_space` (T71). **This is the step that changes what the owner sees.**
+- **Crates:** `pw-colour`, `pw-viewcore` (feature `native`), `pw-thumbcache`, `pw-loupe`.
+- **Files:** `crates/pw-colour/src/lib.rs`, `crates/pw-colour/src/tests.rs`;
+  `crates/pw-viewcore/Cargo.toml`, `crates/pw-viewcore/src/native.rs`,
+  `crates/pw-viewcore/tests/native_files.rs`; `crates/pw-thumbcache/Cargo.toml`,
+  `crates/pw-thumbcache/src/extract.rs`, `crates/pw-thumbcache/src/worker.rs`;
+  `crates/pw-loupe/src/main.rs`; `Cargo.lock` (by cargo); `docs/test-inventory.md`. The two
+  `Cargo.toml` files may change only as written below.
+- **Why:** ADR 0016 §2, §3.1, §4.1 ("Applying it in the loupe", "Thumbnails"), §4.2 (caches hold
+  display-ready pixels), F3, F5, F6.
+- **Not in this task:** the status-line note for an embedded profile that cannot be used (ADR 0016
+  §5) needs a new field through the loupe core; it is a later task. Here an unusable profile only
+  falls back to sRGB.
+- **What:**
+  1. **`pw-colour`: the JPEG rule in one place.** `pub fn jpeg_source_profile(icc: Option<&[u8]>,
+     exif_adobe_rgb: bool) -> Profile` (ADR 0016 §3.1): the ICC profile through
+     `Profile::from_icc` when there is one and it parses as RGB; else `Profile::adobe_rgb()` when
+     `exif_adobe_rgb`; else `Profile::srgb()`. An ICC profile that cannot be used falls through to
+     the Exif rule, then sRGB. Never an error.
+  2. **`pw-viewcore`** (`Cargo.toml`: `pw-colour = { workspace = true, optional = true }` and
+     `"dep:pw-colour"` in the `native` feature):
+     - `NativeBackend` gets `destination: pw_colour::Profile` and `cache:
+       Arc<pw_colour::TransformCache>`. It becomes `Clone` instead of `Copy` (nothing needs `Copy`;
+       check with the compiler). `Default` and `with_tiff_limit` use `Profile::srgb()`, so every
+       existing test sees identity transforms and unchanged pixels (F3). New
+       `pub fn with_monitor_profile(self, profile: pw_colour::Profile) -> NativeBackend`.
+     - **TIFF:** `open_tiff` calls `pw_tiff::decode_rgb8_for_display(path, Some(limit),
+       &destination, &cache)` instead of `decode_rgb8` (the `SourceColour` is not used yet). The
+       session holds the converted image, so `render_half` and `render_region` stay as they are.
+     - **JPEG** (embedded preview and plain JPEG file): `open_jpeg` gets the transform once from
+       `jpeg_source_profile(decoder.icc_profile(&data)?, info.colour_space ==
+       ExifColourSpace::AdobeRgb)` (`icc_profile` before `header`; an `icc_profile` error is a
+       `jpeg_error` like `header`'s) and the cache, and keeps it in `JpegSession` as
+       `Arc<Transform>`. `render_half` converts its output; the full decode for `render_region` is
+       converted **once** when it is made, before it is stored in `full`, so crops need no work.
+     - **RAW:** LibRaw renders sRGB (ADR 0006): `render_half` and `render_region` convert their
+       output with the sRGB → destination transform. Keep it in `NativeSession::Raw` next to the
+       LibRaw session (for example `Raw(Session, Arc<Transform>)` or a small struct).
+     - A conversion error (cannot happen for whole RGB pixels) is a `DecodeError::new` with the
+       `ColourError` text.
+  3. **`pw-thumbcache`** (`Cargo.toml`: `pw-colour.workspace = true` under `[dependencies]`;
+     `moxcms = "=0.8.1"` under `[dev-dependencies]` for test profiles):
+     - `thumbnail(path, cell, decoder)` gets two more parameters, `destination: &Profile` and
+       `cache: &TransformCache`.
+     - **JPEG and embedded previews:** the source profile with `jpeg_source_profile` as in the
+       loupe (`decoder.icc_profile(&bytes)` and `info.colour_space`); convert **after** the scaled
+       decode and before `orient` (the thumbnail is small, so this is cheap).
+     - **TIFF:** `pw_tiff::decode_rgb8_for_display(path, Some(TIFF_LIMIT), destination, cache)`
+       instead of `decode_rgb8`, then `fit`, `downscale` and `orient` as today.
+     - `FileThumbSource` holds the destination and an `Arc<TransformCache>` shared by the worker
+       threads. New `pub fn start_with_monitor_profile(profile: Profile) -> io::Result<ThumbWorker>`
+       (the default thread count and cache limit); `start()` and `start_with_limits` use sRGB.
+  4. **`pw-loupe/src/main.rs`:** the backend becomes
+     `NativeBackend::with_tiff_limit(…).with_monitor_profile(monitor_profile.profile.clone())` and
+     the thumbnails `ThumbWorker::start_with_monitor_profile(monitor_profile.profile.clone())`.
+     Remove the `#[allow(dead_code)] // used by ADR 0016 C4` on `monitor_profile` only if the field
+     is now read; if not, keep the field and the allow (the status-line task will read it).
+- **Rules:** rules 3–7 and 10–12. `git diff Cargo.lock`: only `pw-colour` (and `moxcms` for
+  `pw-thumbcache`'s tests) in the dependency lists of `pw-viewcore` and `pw-thumbcache`; no new
+  package. Every existing test keeps passing **unchanged**: with an sRGB destination nothing may
+  change (F3). If one has to change, stop and explain.
+- **Tests to add** (synthetic files as the existing tests of each crate; ICC profiles from
+  `moxcms`; a pixel is "converted" when it equals the plain result run through
+  `TransformCache::get(source, destination)` and `convert_rgb8`, byte for byte):
+  - `pw-colour`: `jpeg_source_profile` checked by identity (`Transform::new(&result,
+    &expected).is_identity()`): an Adobe RGB ICC with or without the marker → the profile from
+    `Profile::from_icc` of the same bytes; no ICC and the marker → `Profile::adobe_rgb()`; no ICC and
+    no marker → `Profile::srgb()`; a garbage or gray ICC and the marker → `Profile::adobe_rgb()`; a
+    garbage ICC and no marker → `Profile::srgb()`.
+  - `pw-viewcore` (`native.rs` tests):
+    - a TIFF with a ProPhoto ICC and the backend's destination sRGB: the opened image equals
+      `decode_rgb8_for_display` for that file; the same TIFF with the default backend and a TIFF
+      without ICC: equal to `decode_rgb8` (F3);
+    - a plain JPEG file (the `pw-thumbcache` fixture through `#[path]`, as T71 did) with
+      destination Adobe RGB: `render_half` and a `render_region` are the plain decodes converted
+      sRGB → Adobe RGB; with destination sRGB: the plain decodes byte for byte;
+    - the same JPEG with an APP2 ICC holding the Adobe RGB profile and destination Adobe RGB
+      parsed from **the same bytes**: unchanged (identity by ICC bytes);
+    - the same JPEG with an APP1 Exif ColorSpace 0xFFFF and InteroperabilityIndex "R03" (build it
+      as the `pw-raw` tests of T71 do) and destination sRGB: converted Adobe RGB → sRGB.
+  - `pw-viewcore` real files (`tests/native_files.rs`, `#[ignore]`, `PW_TESTDATA`): for one
+    camera RAW in RAW mode and in JPEG mode, a backend with destination Adobe RGB gives the
+    `render_half` of the sRGB backend converted sRGB → Adobe RGB (JPEG mode: from the file's own
+    source profile); print the time of each `render_half` with and without conversion.
+  - `pw-thumbcache`: the fixture JPEG thumbnail with destination Adobe RGB is the sRGB thumbnail
+    converted; a uniform ProPhoto TIFF of (150,110,90) with its ICC and destination sRGB gives
+    (200,118,105) within 1 in every pixel (T68's reference); with destination sRGB and no ICC,
+    thumbnails equal today's byte for byte.
+- **Check by hand (owner, after review; ADR 0016 C5):** the ProPhoto TIFFs are no longer dull, sRGB
+  images are no longer oversaturated, the `_TN0633x` Adobe RGB shots look like Lightroom in JPEG
+  mode, side by side with Lightroom on the CX240 (F5); `latency.ps1` on the TIFF and RAW sets (F6).
+- **Done when:** `.\tools\check.ps1` is all OK; `docs/test-inventory.md` has the new tests and
+  totals; `git diff --stat` shows only the files above.
 
 ### T7. Format the files that `cargo fmt --check` reports — Done
 
@@ -2826,3 +2924,4 @@ and reviewer:
 | 2026-11-11 | T70 | Ready for review | Review: accepted. Only the named files changed; `Cargo.lock` gains only `moxcms` and `pw-colour` in `pw-tiff`'s list. `decode_rgb8` untouched. **The deviation is accepted:** checked in `tiff` 0.9.1 (`decoder/ifd.rs`): a BYTE tag longer than 4 bytes is decoded as `UnsignedBig` values, which `into_u8_vec` refuses, so `icc_bytes` is needed for the test files; real files use UNDEFINED and take `into_u8_vec`. The layout rules, the 16-bit path (`to_rgb16` → `convert_rgb16` → `u16_to_u8`), the fallbacks to sRGB and the tests follow the task; the hand-built UNDEFINED file passes; the ramp gives 20 distinct values via 16 bit against 13 reduced first. Reviewer re-ran `check.ps1` (fmt, test 517 passed, 30 ignored, 0 failed, clippy OK) and the ignored real-file test on `D:\PhotoWorkflowData\TIFF`: all 9 Lightroom TIFFs `Embedded`, decode and conversion to sRGB of all nine (3201×2134 to 7741×5161) in 1.78 s together (debug profile with optimised dependencies). Input for C4: the conversion runs under the decode lock, so it adds to the time thumbnails wait |
 | 2026-11-11 | T71 | Ready for review | (Agent) `pw-libjpeg/src/lib.rs`: `tj3Set`, `tj3GetICCProfile`, `tj3Free` declared; `TJPARAM_SAVEMARKERS = 25` (entry 25 of `enum TJPARAM` in the vcpkg `turbojpeg.h` 3.2.0, checked); `new` sets it to 2 (a failing `tj3Set` is an error, the handle destroyed); `icc_profile`: `header`, then `tj3GetICCProfile`; null or size 0 = `Ok(None)` (without a profile TurboJPEG returns -1 as a warning), a fatal error = `Err`; the buffer is freed by a guard (`TjBuffer`, `tj3Free`) on every path; `decode` unchanged. **Deviation approved by the owner during the task:** libjpeg-turbo 3.2.0 never clears an extracted profile (`turbojpeg.c` replaces `decompICCBuf` only when the next header has one), so a reused decoder would report an earlier JPEG's profile for a JPEG without one, also after `decode`. `icc_profile` first asks for the size only (`tj3GetICCProfile(handle, NULL, &size)`, no allocation) and replaces the instance with a fresh one when a profile is held; one extra test. The task's `#[path]` needed one more `..` (an inline `tests` module resolves from `src/tests/`). `pw-raw`: `ExifColourSpace` and `ImageInfo::colour_space`; ColorSpace (SHORT only) and the Interop IFD read in `read_exif_ifd` (so also from a JPEG's APP1); unreadable Interop IFD = not "R03"; `jpeg.rs` unchanged. Tests: 6 in `pw-libjpeg` (5 listed + the reuse test), 8 in `pw-raw` (7 listed, the 0xFFFF/R98 and other-value cases included; 1 ignored real-file in `src/lib.rs`, since `tests/real_files.rs` is not in the file list). Real files (`D:\PhotoWorkflowData\RAW`): Sony ARW and JPG `Srgb`, `_TN0633x` ARW and JPG `AdobeRgb`, Pixel DNG `Uncalibrated`, RW2, `TN0025xx.DNG` and TIFF `Unknown`. Test inventory: totals 530/31. `Cargo.toml` and `Cargo.lock` unchanged. `.\tools\check.ps1`: fmt, test (530 passed, 31 ignored, 0 failed) and clippy OK. No commit |
 | 2026-11-11 | T71 | Ready for review | Review: accepted. Only the named files changed; `Cargo.toml` and `Cargo.lock` unchanged. `pw-libjpeg`: the FFI declarations match `turbojpeg.h` 3.2.0 (`TJPARAM_SAVEMARKERS` = 25 recounted); the buffer is freed by a guard on every path. **The extra instance reset is accepted:** checked in the vcpkg source (`buildtrees/libjpeg-turbo/…/turbojpeg.c`, `tj3DecompressHeader`): `decompICCBuf` is replaced only when the new header has a profile and is never cleared, so without the reset a reused decoder would report an earlier JPEG's profile; the reuse test pins it. The `#[path]` with one more `..` is correct for an inline module. `pw-raw`: ColorSpace (SHORT) and the Interop IFD in `read_exif_ifd`, so RAW and JPEG APP1 both work; an unreadable Interop IFD is not "R03". Reviewer re-ran `check.ps1` (fmt, test 530 passed, 31 ignored, 0 failed, clippy OK) and the real-file print on `D:\PhotoWorkflowData\RAW`: Sony ARW/JPG `Srgb`, `_TN0633x` ARW/JPG `AdobeRgb`, Pixel DNG `Uncalibrated`, RW2, `TN0025xx.DNG` and TIFF `Unknown`, as the agent reported. **Input for C4:** none of the five camera JPEGs has an APP2 ICC profile, so the three Adobe RGB shots (and their ARW previews) are only recognised through the Exif marker; no JPEG with an embedded profile exists in the set yet (ADR 0016 Q9) |
+| 2026-11-11 | T72 | Open | Added: ADR 0016 C4, conversion to the monitor profile in the loupe (TIFF through `decode_rgb8_for_display`, JPEG through its ICC or the Exif Adobe RGB marker, RAW from sRGB) and the thumbnails; `jpeg_source_profile` in `pw-colour`. T69–T71 committed (Done). The status-line note for an unusable embedded profile (ADR 0016 §5) is left for a later task, so the loupe core's interface does not change here |
