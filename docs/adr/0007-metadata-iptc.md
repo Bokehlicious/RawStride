@@ -1,7 +1,7 @@
 # ADR 0007: Metadata handling according to the IPTC standards
 
-- Status: **proposed for review (revision 8, 2026-11-11); all open questions answered, the
-  owner's approval of the ADR is pending.**
+- Status: **accepted by the owner (2026-11-11, revision 9).** All open questions are answered
+  (§14); what is left before the implementation is in §16.
   - The owner's decisions of 2026-11-04 are written in.
   - Planned as milestone 8 of the egui program after its approval (owner, 2026-11-10; ADR 0015 §2;
     moved from milestone 7 by ADR 0016 Q1, 2026-11-11).
@@ -15,13 +15,14 @@
   - Revision 8 also uses the product name **RawStride** (ADR 0012). This ADR was still a proposal
     when the name changed, so ADR 0012 §5 ("earlier ADRs keep the old name") does not apply to it.
     Paths, crate names and technical file suffixes keep their old names (ADR 0012 §4).
-  - The ADR must be approved **before any implementation starts**.
+  - The owner approved the ADR on 2026-11-11 together with the answers (revision 9).
 - Date: 2026-11-04 (revision 1: storage, IIM policy and the role of XMP; revision 2: all owner
   decisions of 2026-11-04, MWG 2.0, the full IPTC specification and the Mapping Guidelines;
   revision 3: Q4 answered by the owner on 2026-11-08; revision 4: Q5 answered by the owner on
   2026-11-08; revision 5: Q6 answered by the owner on 2026-11-08; revision 6: Q7 answered by the
   owner on 2026-11-08; revision 7: consistency fixes after review, 2026-11-08; revision 8: Q1–Q3
-  and Q8–Q13 answered by the owner and the product name RawStride, 2026-11-11).
+  and Q8–Q13 answered by the owner and the product name RawStride, 2026-11-11; revision 9: approved
+  by the owner, 2026-11-11).
 - Basis: `docs/analyses/2026-11-04-iptc-metadata-requirements.md` (§1–§10) and
   `docs/references.md`. Local copies of the sources are in `D:\PhotoWorkflowData\references\`
   (see its `README.md`).
@@ -562,7 +563,7 @@ silently. All other deviations concern SHOULD-level recommendations; each is mar
 2. ~~Read the IPTC spec 9–17, the Mapping Guidelines and MWG 2.0~~ – done 2026-11-04 (analysis
    §8–§9).
 3. ~~Answer the remaining open questions~~ – Q1–Q3 and Q8–Q13 answered 2026-11-11 (§14).
-   **Left: the owner reviews and approves this ADR.**
+   The ADR was approved by the owner the same day.
 4. **Read the PLUS controlled vocabulary** (Q9) before the agent task for the PLUS fields is
    written.
 5. Read **XMP Part 1** (ISO 16684-1) and **MWG §5.2** to verify the Q7 policy, **XMP Part 3** (Q8)
@@ -581,3 +582,4 @@ silently. All other deviations concern SHOULD-level recommendations; each is mar
 | 6 | 2026-11-08 | Owner answered Q7: edit only `x-default`, preserving other language entries |
 | 7 | 2026-11-08 | Consistency fixes after review, no new decisions:<br>- §6.3/§6.5: Artist and Photographer are only written if they exist (Q6);<br>- §6.3: only "both ways" fields of §6.1 are written;<br>- §8: Lang Alt reading rule without `x-default`; source label for Q7 marked as to be verified, §13 row added;<br>- §2: clearing a Lang Alt field removes all languages;<br>- §4: cross-reference to §5.2, IIM checksum location (PSIR 1061 in tag 34377);<br>- Q6 resolution names DNG; SDK link pinned to v2025.03; spelling "synchronise" |
 | 8 | 2026-11-11 | Owner answered Q1–Q3 and Q8–Q13, all as proposed; Q2 after a comparison with Lightroom and Photo Mechanic:<br>- answers written into §4.2 (Q8), §5.2 (Q1, Q13), §5.3 and §7 (Q3, Q12), §5.4 (Q10), §6.4 (Q2), §11 (Q9), §12 (Q11);<br>- §13: the Q1 checksum rule is recorded as a deliberate deviation from a MWG MUST;<br>- §16: what is left before implementation;<br>- product name RawStride (ADR 0012) instead of the former name; paths, crate names and file suffixes unchanged |
+| 9 | 2026-11-11 | Owner approved the ADR (status "accepted"); no change to the rules |
