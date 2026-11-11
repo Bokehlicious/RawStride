@@ -20,6 +20,7 @@ mod iptc_table;
 pub mod properties;
 #[cfg(test)]
 mod test_support;
+pub mod value;
 mod worker;
 
 use std::collections::{BTreeMap, HashMap};

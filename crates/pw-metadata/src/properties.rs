@@ -252,6 +252,29 @@ pub fn list_kind(xmp_id: &str) -> Option<ListKind> {
     }
 }
 
+/// The XMP array type of a structure field: `None` for an unknown structure or field and for a
+/// `Single` field.
+///
+/// ADR 0007 §3 (value types follow IPTC §7 and §11): `Seq` for Creator and Creator ID of an
+/// artwork or object (`ArtworkOrObject`) and the polygon vertices of a region boundary
+/// (`RegionBoundary`); every other `Multi` field is a `Bag`. [`list_kind`] covers top-level
+/// properties only. Checked on 2026-11-11 against the "XMP Specs" value type of every `Multi`
+/// field of every structure in IPTC Photo Metadata 2025.1: exactly these three are `Seq`.
+pub fn field_list_kind(struct_name: &str, field_xmp_id: &str) -> Option<ListKind> {
+    let field = struct_def(struct_name)?
+        .fields
+        .iter()
+        .find(|field| field.xmp_id == field_xmp_id)?;
+    match field.occurrence {
+        Occurrence::Single => None,
+        Occurrence::Multi => match (struct_name, field_xmp_id) {
+            ("ArtworkOrObject", "Iptc4xmpExt:AOCreator" | "Iptc4xmpExt:AOCreatorId")
+            | ("RegionBoundary", "Iptc4xmpExt:rbVertices") => Some(ListKind::Seq),
+            _ => Some(ListKind::Bag),
+        },
+    }
+}
+
 /// The most entries a list property may hold, where IPTC sets a limit (ADR 0007 §8,
 /// "Cardinalities"; IPTC §11.9, §11.22, §11.24, §11.26): Image Creator, Copyright Owner and
 /// Licensor 3, Image Supplier 1. `None` for every other property.
@@ -577,6 +600,48 @@ mod tests {
                 def.xmp_id
             );
         }
+    }
+
+    #[test]
+    fn field_list_kinds() {
+        assert_eq!(
+            field_list_kind("ArtworkOrObject", "Iptc4xmpExt:AOCreator"),
+            Some(ListKind::Seq)
+        );
+        assert_eq!(
+            field_list_kind("ArtworkOrObject", "Iptc4xmpExt:AOCreatorId"),
+            Some(ListKind::Seq)
+        );
+        assert_eq!(
+            field_list_kind("RegionBoundary", "Iptc4xmpExt:rbVertices"),
+            Some(ListKind::Seq)
+        );
+        assert_eq!(
+            field_list_kind("PersonWDetails", "Iptc4xmpExt:PersonId"),
+            Some(ListKind::Bag)
+        );
+        assert_eq!(field_list_kind("Location", "Iptc4xmpExt:City"), None);
+        assert_eq!(field_list_kind("Location", "no:Such"), None);
+        assert_eq!(field_list_kind("NoSuchStruct", "Iptc4xmpExt:City"), None);
+        // Every `Multi` field of every structure has a list kind, every `Single` one none; exactly
+        // three are `Seq`.
+        let mut seq = 0;
+        for def in STRUCTS {
+            for field in def.fields {
+                let kind = field_list_kind(def.name, field.xmp_id);
+                assert_eq!(
+                    kind.is_some(),
+                    field.occurrence == Occurrence::Multi,
+                    "{}/{}",
+                    def.name,
+                    field.xmp_id
+                );
+                if kind == Some(ListKind::Seq) {
+                    seq += 1;
+                }
+            }
+        }
+        assert_eq!(seq, 3);
     }
 
     #[test]
