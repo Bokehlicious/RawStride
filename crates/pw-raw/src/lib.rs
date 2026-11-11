@@ -102,6 +102,22 @@ impl fmt::Display for ExposureTime {
     }
 }
 
+/// The colour space the Exif data names (ADR 0016 §3.1, §4.1). For a RAW file it is the camera's
+/// colour-space setting, which its embedded JPEG previews follow; for a JPEG file it comes from
+/// its APP1 Exif.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ExifColourSpace {
+    /// No ColorSpace tag, or a value other than 1 and 0xFFFF.
+    #[default]
+    Unknown,
+    /// ColorSpace 1.
+    Srgb,
+    /// ColorSpace 0xFFFF with InteroperabilityIndex "R03" (the DCF rule for Adobe RGB).
+    AdobeRgb,
+    /// ColorSpace 0xFFFF without the "R03" index.
+    Uncalibrated,
+}
+
 /// What the viewer needs to know about one image file.
 #[derive(Debug, Clone, Default)]
 pub struct ImageInfo {
@@ -118,6 +134,9 @@ pub struct ImageInfo {
     pub exposure_bias: Option<f64>,
     /// EXIF/TIFF orientation (1 = normal, 3 = 180°, 6 = 90° CW, 8 = 270° CW). Defaults to 1.
     pub orientation: u16,
+    /// Exif ColorSpace (0xA001) with the Interoperability index, from the first Exif IFD that
+    /// has it.
+    pub colour_space: ExifColourSpace,
     /// Dimensions of the sensor image (RAW) or of the JPEG itself.
     pub width: Option<u32>,
     pub height: Option<u32>,
@@ -349,6 +368,171 @@ mod tests {
     fn garbage_is_an_error() {
         assert!(inspect_source(&mut SliceSource(b"hello world")).is_err());
         assert!(inspect_source(&mut SliceSource(b"II*\0\xff\xff\xff\xff")).is_err());
+    }
+
+    /// Writes one little-endian IFD at `at` (entries as tag, type, count, inline value or offset).
+    fn put_ifd(f: &mut [u8], at: usize, entries: &[(u16, u16, u32, u32)]) {
+        f[at..at + 2].copy_from_slice(&(entries.len() as u16).to_le_bytes());
+        for (k, &(tag, typ, count, val)) in entries.iter().enumerate() {
+            let e = at + 2 + 12 * k;
+            f[e..e + 2].copy_from_slice(&tag.to_le_bytes());
+            f[e + 2..e + 4].copy_from_slice(&typ.to_le_bytes());
+            f[e + 4..e + 8].copy_from_slice(&count.to_le_bytes());
+            f[e + 8..e + 12].copy_from_slice(&val.to_le_bytes());
+        }
+        let n = at + 2 + 12 * entries.len();
+        f[n..n + 4].copy_from_slice(&0u32.to_le_bytes());
+    }
+
+    /// The Interoperability IFD of [`exif_colour_tiff`].
+    #[derive(Clone, Copy)]
+    enum Interop {
+        None,
+        /// An Interop IFD with this InteroperabilityIndex (3 characters).
+        Index(&'static [u8; 3]),
+        /// An Interop offset pointing outside the file.
+        Outside,
+    }
+
+    /// A little-endian TIFF: IFD0 (4×4, Exif IFD) → Exif IFD (ISO, optional ColorSpace, optional
+    /// Interop IFD) → Interop IFD (InteroperabilityIndex).
+    fn exif_colour_tiff(colour_space: Option<u16>, interop: Interop) -> Vec<u8> {
+        let (exif_at, interop_at) = (100u32, 200u32);
+        let mut f = vec![0u8; 256];
+        f[0..4].copy_from_slice(b"II*\0");
+        f[4..8].copy_from_slice(&8u32.to_le_bytes());
+        put_ifd(
+            &mut f,
+            8,
+            &[
+                (0x0100, 4, 1, 4),
+                (0x0101, 4, 1, 4),
+                (0x8769, 4, 1, exif_at),
+            ],
+        );
+        let mut exif = vec![(0x8827, 3, 1, 100)];
+        if let Some(cs) = colour_space {
+            exif.push((0xA001, 3, 1, u32::from(cs)));
+        }
+        match interop {
+            Interop::None => {}
+            Interop::Index(index) => {
+                exif.push((0xA005, 4, 1, interop_at));
+                let value = u32::from_le_bytes([index[0], index[1], index[2], 0]);
+                put_ifd(&mut f, interop_at as usize, &[(0x0001, 2, 4, value)]);
+            }
+            Interop::Outside => exif.push((0xA005, 4, 1, 0x00FF_FFF0)),
+        }
+        put_ifd(&mut f, exif_at as usize, &exif);
+        f
+    }
+
+    fn colour_space_of(data: &[u8]) -> ExifColourSpace {
+        inspect_source(&mut SliceSource(data)).unwrap().colour_space
+    }
+
+    #[test]
+    fn exif_colour_space_srgb() {
+        assert_eq!(
+            colour_space_of(&exif_colour_tiff(Some(1), Interop::None)),
+            ExifColourSpace::Srgb
+        );
+    }
+
+    #[test]
+    fn exif_colour_space_uncalibrated_with_r03_is_adobe_rgb() {
+        assert_eq!(
+            colour_space_of(&exif_colour_tiff(Some(0xFFFF), Interop::Index(b"R03"))),
+            ExifColourSpace::AdobeRgb
+        );
+    }
+
+    #[test]
+    fn exif_colour_space_uncalibrated_with_r98_is_uncalibrated() {
+        assert_eq!(
+            colour_space_of(&exif_colour_tiff(Some(0xFFFF), Interop::Index(b"R98"))),
+            ExifColourSpace::Uncalibrated
+        );
+    }
+
+    #[test]
+    fn exif_colour_space_uncalibrated_without_interop_ifd() {
+        assert_eq!(
+            colour_space_of(&exif_colour_tiff(Some(0xFFFF), Interop::None)),
+            ExifColourSpace::Uncalibrated
+        );
+    }
+
+    #[test]
+    fn exif_colour_space_missing_or_other_value_is_unknown() {
+        assert_eq!(
+            colour_space_of(&exif_colour_tiff(None, Interop::None)),
+            ExifColourSpace::Unknown
+        );
+        assert_eq!(
+            colour_space_of(&exif_colour_tiff(Some(2), Interop::Index(b"R03"))),
+            ExifColourSpace::Unknown
+        );
+        // tiny_tiff has an Exif IFD without ColorSpace
+        assert_eq!(colour_space_of(&tiny_tiff()), ExifColourSpace::Unknown);
+    }
+
+    #[test]
+    fn exif_colour_space_interop_outside_the_file_is_uncalibrated() {
+        assert_eq!(
+            colour_space_of(&exif_colour_tiff(Some(0xFFFF), Interop::Outside)),
+            ExifColourSpace::Uncalibrated
+        );
+    }
+
+    #[test]
+    fn exif_colour_space_of_a_jpeg_file_from_app1() {
+        let tiff = exif_colour_tiff(Some(1), Interop::None);
+        let mut j = vec![0xFF, 0xD8, 0xFF, 0xE1];
+        j.extend_from_slice(&((2 + 6 + tiff.len()) as u16).to_be_bytes());
+        j.extend_from_slice(b"Exif\0\0");
+        j.extend_from_slice(&tiff);
+        j.extend_from_slice(&tiny_jpeg(64, 48, None)[2..]);
+        let info = inspect_source(&mut SliceSource(&j)).unwrap();
+        assert_eq!(info.format, Some(Format::Jpeg));
+        assert_eq!(info.colour_space, ExifColourSpace::Srgb);
+        // a JPEG without Exif
+        assert_eq!(
+            colour_space_of(&tiny_jpeg(64, 48, None)),
+            ExifColourSpace::Unknown
+        );
+    }
+
+    /// Prints the Exif colour space of every file in `PW_TESTDATA` that `pw-raw` lists; asserts
+    /// nothing (the reviewer reads the output). Run with `-- --ignored --nocapture`.
+    #[test]
+    #[ignore = "needs real camera files: set PW_TESTDATA and run with --ignored"]
+    fn real_files_print_exif_colour_space() {
+        let directory = std::env::var_os("PW_TESTDATA")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| panic!("PW_TESTDATA is not set"));
+        let mut files: Vec<_> = std::fs::read_dir(&directory)
+            .unwrap_or_else(|error| panic!("{}: {error}", directory.display()))
+            .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+            .filter(|path| {
+                path.is_file()
+                    && path.extension().and_then(|e| e.to_str()).is_some_and(|e| {
+                        SUPPORTED_EXTENSIONS.contains(&e.to_ascii_lowercase().as_str())
+                    })
+            })
+            .collect();
+        files.sort();
+        assert!(
+            !files.is_empty(),
+            "no supported file in PW_TESTDATA: {}",
+            directory.display()
+        );
+        for path in files {
+            match inspect(&path) {
+                Ok(info) => println!("{}: {:?}", path.display(), info.colour_space),
+                Err(error) => println!("{}: inspect failed: {error}", path.display()),
+            }
+        }
     }
 
     #[test]

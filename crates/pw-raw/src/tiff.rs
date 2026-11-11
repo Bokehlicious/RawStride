@@ -3,7 +3,7 @@
 use std::collections::{HashSet, VecDeque};
 
 use crate::source::Source;
-use crate::{Error, ExposureTime, Format, ImageInfo, PreviewRef, Result, jpeg};
+use crate::{Error, ExifColourSpace, ExposureTime, Format, ImageInfo, PreviewRef, Result, jpeg};
 
 const MAX_IFDS: usize = 64;
 const MAX_ENTRIES: u16 = 1000;
@@ -30,6 +30,15 @@ const DATE_TIME_ORIGINAL: u16 = 0x9003;
 const EXPOSURE_BIAS: u16 = 0x9204;
 const FOCAL_LENGTH: u16 = 0x920A;
 const LENS_MODEL: u16 = 0xA434;
+const COLOR_SPACE: u16 = 0xA001;
+const INTEROP_IFD: u16 = 0xA005;
+// Interoperability IFD
+const INTEROP_INDEX: u16 = 0x0001;
+
+const TYPE_SHORT: u16 = 3;
+/// Exif ColorSpace values.
+const COLOR_SPACE_SRGB: u32 = 1;
+const COLOR_SPACE_UNCALIBRATED: u32 = 0xFFFF;
 // Panasonic RW2 (IFD0)
 const PANA_SENSOR_WIDTH: u16 = 0x0002;
 const PANA_SENSOR_HEIGHT: u16 = 0x0003;
@@ -196,11 +205,26 @@ fn ratio(n: u32, d: u32) -> Option<f64> {
     (d != 0).then(|| f64::from(n) / f64::from(d))
 }
 
+/// Whether the Interoperability IFD at `off` has InteroperabilityIndex "R03" (DCF: Adobe RGB).
+/// An IFD that cannot be read counts as no.
+fn interop_is_r03<S: Source>(p: &mut Parser<'_, S>, off: u32) -> bool {
+    let Ok((entries, _)) = p.read_ifd(off) else {
+        return false;
+    };
+    entries
+        .iter()
+        .find(|e| e.tag == INTEROP_INDEX)
+        .and_then(|e| p.ascii(e))
+        .is_some_and(|index| index == "R03")
+}
+
 /// Fills empty EXIF fields of `info` from an EXIF IFD.
 fn read_exif_ifd<S: Source>(p: &mut Parser<'_, S>, off: u32, info: &mut ImageInfo) {
     let Ok((entries, _)) = p.read_ifd(off) else {
         return;
     };
+    let mut colour_space = None;
+    let mut interop = None;
     for e in &entries {
         match e.tag {
             EXPOSURE_TIME if info.exposure_time.is_none() => {
@@ -222,8 +246,23 @@ fn read_exif_ifd<S: Source>(p: &mut Parser<'_, S>, off: u32, info: &mut ImageInf
                 info.focal_length = p.rational(e).and_then(|(n, d)| ratio(n, d));
             }
             LENS_MODEL if info.lens.is_none() => info.lens = p.ascii(e),
+            COLOR_SPACE if e.typ == TYPE_SHORT => colour_space = p.uint(e, 0),
+            INTEROP_IFD => interop = p.uint(e, 0),
             _ => {}
         }
+    }
+    if info.colour_space == ExifColourSpace::Unknown {
+        info.colour_space = match colour_space {
+            Some(COLOR_SPACE_SRGB) => ExifColourSpace::Srgb,
+            Some(COLOR_SPACE_UNCALIBRATED) => {
+                if interop.is_some_and(|off| interop_is_r03(p, off)) {
+                    ExifColourSpace::AdobeRgb
+                } else {
+                    ExifColourSpace::Uncalibrated
+                }
+            }
+            _ => ExifColourSpace::Unknown,
+        };
     }
 }
 
