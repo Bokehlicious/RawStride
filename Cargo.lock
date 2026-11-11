@@ -3855,6 +3855,8 @@ version = "0.1.0"
 dependencies = [
  "eframe",
  "egui",
+ "moxcms",
+ "pw-colour",
  "pw-core",
  "pw-ingest",
  "pw-metadata",
@@ -3863,6 +3865,7 @@ dependencies = [
  "pw-thumbcache",
  "pw-viewcore",
  "rfd",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

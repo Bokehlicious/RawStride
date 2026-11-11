@@ -10,6 +10,7 @@ mod import;
 mod import_dialog;
 mod import_text;
 mod import_worker;
+mod monitor_profile;
 mod ratings;
 mod selection;
 mod tabs;
@@ -40,6 +41,9 @@ pub use import_text::{
     preview_summary, progress_text,
 };
 pub use import_worker::{ImportDone, ImportEvent, ImportWorker, RequestId, SubmitError};
+pub use monitor_profile::{
+    MonitorProfile, ProfileSource, load_monitor_profile, primary_monitor_profile_path, window_title,
+};
 pub use ratings::{
     RatingKey, RatingRefused, RatingStore, RatingWriter, UNSUPPORTED_TEXT, apply, label_name,
     rating_key_action, star_glyphs, status_text,

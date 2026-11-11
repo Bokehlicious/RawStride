@@ -22,6 +22,13 @@ pw-metadata.workspace = true
 pw-thumbcache.workspace = true
 pw-ingest.workspace = true
 pw-core.workspace = true
+pw-colour.workspace = true
 egui.workspace = true
 eframe.workspace = true
 rfd = { version = "=0.17.2", default-features = false }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "=0.61.2", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_UI_ColorSystem"] }
+
+[dev-dependencies]
+moxcms = "=0.8.1"

@@ -18,16 +18,17 @@ use metadata::MetadataCache;
 use pw_loupe::{
     Action, CellState, DEFAULT_THUMBNAIL_SIZE, DialogKey, DialogRequest, Field, Filter,
     GridKeyAction, ImportDialog, ImportDialogState, ImportEvent, ImportForm, ImportWorker,
-    LABEL_CHOICES, LabelFilter, LoupeMove, MAX_THUMBNAIL_SIZE, MIN_THUMBNAIL_SIZE, Navigation,
-    Options, READING_RATINGS_TEXT, RatingRefused, STAR_CONDITIONS, STAR_FILTERS, StarFilter,
-    SubmitError, Tab, TabAction, Tabs, ThumbGrid, UNSUPPORTED_TEXT, ViewMode, WINDOW_TITLE,
-    clamp_thumbnail_size, color_image, columns, dialog_key_action, done_lines,
+    LABEL_CHOICES, LabelFilter, LoupeMove, MAX_THUMBNAIL_SIZE, MIN_THUMBNAIL_SIZE, MonitorProfile,
+    Navigation, Options, READING_RATINGS_TEXT, RatingRefused, STAR_CONDITIONS, STAR_FILTERS,
+    StarFilter, SubmitError, Tab, TabAction, Tabs, ThumbGrid, UNSUPPORTED_TEXT, ViewMode,
+    WINDOW_TITLE, clamp_thumbnail_size, color_image, columns, dialog_key_action, done_lines,
     ejecting_progress_text, error_text, grid_key_action, indicator_text, iptc_progress_text,
-    key_action, label_choice_text, label_filter_text, label_name, list_folder, loupe_key_action,
-    marked_text, mode_label, more_lines, no_match_text, opens_import, parse_args, position_text,
-    preview_line, preview_summary, progress_text, rating_key_action, request_cell,
+    key_action, label_choice_text, label_filter_text, label_name, list_folder,
+    load_monitor_profile, loupe_key_action, marked_text, mode_label, more_lines, no_match_text,
+    opens_import, parse_args, position_text, preview_line, preview_summary,
+    primary_monitor_profile_path, progress_text, rating_key_action, request_cell,
     star_condition_text, star_filter_text, star_glyphs, status_line, step_allowed,
-    step_thumbnail_size, tab_action, take_wheel_steps, visible_range, wheel_factor,
+    step_thumbnail_size, tab_action, take_wheel_steps, visible_range, wheel_factor, window_title,
 };
 use pw_metadata::MetadataWorker;
 use pw_metadata::Rating;
@@ -84,6 +85,9 @@ struct Loupe {
     last_ratings_ready: bool,
     /// Status of the last rendered loupe frame (ADR 0009 §13).
     last_frame_status: Status,
+    /// The monitor profile, read once at start (ADR 0016 §4.1, Q4); not used for pixels yet.
+    #[allow(dead_code)] // used by ADR 0016 C4
+    monitor_profile: MonitorProfile,
 }
 
 impl Loupe {
@@ -2063,6 +2067,8 @@ fn run(options: Options) -> Result<(), String> {
         ..Config::default()
     };
     let indicator_after = config.indicator_after;
+    let monitor_profile = load_monitor_profile(primary_monitor_profile_path());
+    let title = window_title(&monitor_profile.source);
     let core = ViewCore::start(
         NativeBackend::with_tiff_limit(usize::try_from(config.core_budget).unwrap_or(usize::MAX)),
         config,
@@ -2072,7 +2078,7 @@ fn run(options: Options) -> Result<(), String> {
     let thumb_worker = ThumbWorker::start().map_err(|e| e.to_string())?;
     let native = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_title(WINDOW_TITLE)
+            .with_title(title)
             .with_maximized(true)
             .with_drag_and_drop(true),
         renderer: eframe::Renderer::Glow,
@@ -2112,6 +2118,7 @@ fn run(options: Options) -> Result<(), String> {
                 ratings_read: false,
                 last_ratings_ready: false,
                 last_frame_status: Status::Empty,
+                monitor_profile,
             };
             if let Some(p) = path {
                 loupe.open(&p, false);
