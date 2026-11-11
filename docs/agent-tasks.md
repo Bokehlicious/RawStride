@@ -2883,11 +2883,13 @@ types.
 
 ### T78. ADR 0007 I3: the value model — values, origins, Lang Alt, changes — Open
 
-- **Can start after T76 and T77 are accepted** (it uses the property table and `IptcDate`).
+- **Can start now.** T76 and T77 are accepted and committed (4e7df84); this task uses the property
+  table and `IptcDate`. Independent of T79.
 - **Crates:** `pw-metadata` only. Nothing uses the model yet; `LocalizedValue` and `Iptc` stay as
   they are (they move to the new model in I9).
 - **Files:** new `crates/pw-metadata/src/value.rs`; `crates/pw-metadata/src/lib.rs` (the `mod`
-  line only); `docs/test-inventory.md`.
+  line only); `crates/pw-metadata/src/properties.rs` (**only** the new function of point 8 and its
+  test); `docs/test-inventory.md`.
 - **Why:** ADR 0007 §3 (one model keyed by the XMP id, value types from the spec, each value
   carries its origin), §8 (Lang Alt: edit `x-default` only, Q7; clearing removes the whole
   property; cardinalities), §10 (clearing is always explicit).
@@ -2928,11 +2930,25 @@ types.
        new value, or `None` when cleared.
   6. **Kind check:** `Text`, `Uri`, `Url`, `Any` → `Text`; `LangAlt` → `LangAlt`; `Date` → `Date`;
      `Integer` → `Number` whose text parses as `i64`; `Number` → `Number` whose text parses as
-     `f64`; `Struct` single → `Struct`, multi → `StructList` (each field's id must be a field of
-     that structure); any `Multi` non-structure → `List`. Otherwise `ValueError::Kind`.
+     `f64`; `Struct` single → `Struct`, multi → `StructList`; any `Multi` non-structure → `List`.
+     Otherwise `ValueError::Kind`. **Inside a structure the same check applies to every field,
+     at any depth:** each field's id must be a field of that structure (`properties::struct_def`),
+     and its value must fit that field's kind and occurrence by the same rules (a `Multi` field is
+     a `List` or `StructList`). The `property` of a `Kind` error inside a structure names the
+     property and the field (e.g. `Iptc4xmpCore:CreatorContactInfo/Iptc4xmpCore:CiAdrCity`).
   7. **`ValueError`** (`UnknownProperty(String)`, `Kind { property, expected }`,
      `TooMany { property, max }`, `Empty(String)`) with `Display` (English) and
      `std::error::Error`.
+  8. **Seq or Bag for structure fields** (T76 review: `list_kind` covers top-level properties
+     only). In `properties.rs`, next to `list_kind`:
+     `pub fn field_list_kind(struct_name: &str, field_xmp_id: &str) -> Option<ListKind>`: `None`
+     for an unknown structure or field and for a `Single` field; `Seq` for
+     `Iptc4xmpExt:AOCreator` and `Iptc4xmpExt:AOCreatorId` in `ArtworkOrObject` and
+     `Iptc4xmpExt:rbVertices` in `RegionBoundary`; `Bag` for every other `Multi` field. The
+     reviewer found these three as `Seq` in the "XMP Specs" rows of
+     `D:\PhotoWorkflowData\references\IPTC-PhotoMetadata-2025.1.md`; check every `Multi` field of
+     every structure there. If the spec gives `Seq` for a field not named here, **stop and
+     report**. A comment names ADR 0007 §3 and the check date, as `list_kind` does.
 - **Rules:** rules 3–7 and 10–12. No `Cargo.toml` change.
 - **Tests to add** (`#[cfg(test)] mod tests` in `value.rs`):
   - Lang Alt: `[("x-default","A"),("sv","A"),("en","B")]` + `set_default("C")` gives
@@ -2944,6 +2960,18 @@ types.
     entries is accepted;
   - kind errors: `Text` for `dc:subject`, `List` for `photoshop:City`, `Number("abc")` for
     `xmp:Rating`, a structure field that does not belong to `CreatorContactInfo`;
+  - fields inside structures: `Iptc4xmpCore:CreatorContactInfo` with `Iptc4xmpCore:CiAdrCity` as
+    `Text` is accepted, with `CiAdrCity` as `List` is a `Kind` error naming
+    `Iptc4xmpCore:CreatorContactInfo/Iptc4xmpCore:CiAdrCity`; `Iptc4xmpExt:LocationCreated` as a
+    `StructList` of one `Location` with `Iptc4xmpExt:City` as `Text` is accepted; an error two
+    levels down (in `Iptc4xmpExt:ImageRegion`, a `RegionBoundary` whose `rbVertices` is `Text`) is
+    found;
+  - `field_list_kind` (in `properties.rs`): `("ArtworkOrObject", "Iptc4xmpExt:AOCreator")`,
+    `("ArtworkOrObject", "Iptc4xmpExt:AOCreatorId")` and
+    `("RegionBoundary", "Iptc4xmpExt:rbVertices")` are `Seq`; a `Multi` field of another structure
+    is `Bag`; `("Location", "Iptc4xmpExt:City")` (single), an unknown field and an unknown
+    structure are `None`; every `Multi` field of every structure has `Some`, every `Single` field
+    `None`;
   - `Number("2.5")` for `xmp:Rating` is kept as the text `2.5`;
   - `set` with `""`, `"   "`, an empty list and an empty Lang Alt is `Empty`;
   - an unknown property (`foo:Bar`) is `UnknownProperty` for `set`, `insert_read` and `clear`;
@@ -3454,3 +3482,4 @@ and reviewer:
 | 2026-11-11 | T77 | Ready for review | New `crates/pw-metadata/src/date.rs` (`pub mod date`): `IptcDate`, `Time`, `Zone`, `DateError`; `parse_xmp`/`to_xmp` (exact round trip), `to_iim`/`from_iim` (2:60 only with a known zone), `from_exif` (read only, no zone without an offset). 12 tests; `pw-metadata` unit tests 44 (1 ignored), workspace 579 passed, 32 ignored, 0 failed (with T76). Choices for the reviewer: `-00:00` is refused (it cannot be written back as the same text, and in RFC 3339 it means an unknown offset); a blank SubSecTimeOriginal or OffsetTimeOriginal counts as not given. T76 was done at the same time in the same worktree, so `git diff --stat` also shows its files |
 | 2026-11-11 | T76 | Ready for review | Review: accepted. T76 and T77 ran at the same time in the same working tree; their files do not overlap, and the shared files (`lib.rs`, `docs/test-inventory.md`, this file) hold both changes correctly. Only the named files changed. The reviewer ran the script again: byte-identical `iptc_table.rs` (SHA-256 of the file `1974a269…2fac8534`); with an unknown `propoccurrence` it stops and writes nothing. The reviewer's `check.ps1`: fmt, test and clippy OK, 579 passed, 0 failed, 32 ignored. Accepted deviations: `ipmdschema` is only checked for `ipmd_top` (structure fields carry `PLUS`, and `FieldDef` has no schema); `photoshop:Urgency` is `Integer` (Adobe XMP). The reviewer corrected one line of the module comment of `properties.rs` (the SHA-256 is not in `docs/references.md`). Noted for T78/I5: the spec also gives `Seq` for three **structure fields** (`Iptc4xmpExt:AOCreator`, `AOCreatorId`, `rbVertices`); `list_kind` covers top-level properties only |
 | 2026-11-11 | T77 | Ready for review | Review: accepted. Every point and test of the task is there; the same `check.ps1` run as T76. Accepted choices: `-00:00` is refused; a blank SubSecTimeOriginal or OffsetTimeOriginal counts as not given. Noted for I5/I6: an IIM date `00000000` reads as year 0, not as `Empty`; a date the reader cannot parse must be kept and shown with a warning, not dropped (§11). The test `writers_do_not_panic_on_values_built_by_hand` pins the text `-546:08` for an impossible offset; that only shows there is no panic |
+| 2026-11-11 | T78 | Open | Task text changed before start, after the T76 review: can start now; point 6 checks fields inside structures at any depth; new point 8 `properties::field_list_kind` (Seq for `AOCreator`, `AOCreatorId`, `rbVertices`), so `properties.rs` is added to the files for that function only; tests for both |
