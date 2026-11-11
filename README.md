@@ -11,7 +11,8 @@ During development we start with Sony A1 and A7R IVA (ARW), Panasonic (RW2) and 
 
 > Status: the new eframe + egui program (binary `pw-loupe`, window title "RawStride") has the loupe,
 > the contact sheet, folder tabs, the full import dialog, ratings and labels, filter and
-> multi-selection, and TIFF viewing. The existing Tauri app remains in place until the switch
+> multi-selection, TIFF viewing, and colour management (conversion to the monitor profile). The
+> existing Tauri app remains in place until the switch
 > (GUI_REQUIREMENTS GR8).
 
 ## Stack

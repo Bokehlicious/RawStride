@@ -2617,6 +2617,79 @@ Ordered from easiest to hardest. Start at the top.
 - **Done when:** `.\tools\check.ps1` is all OK (no code changed) and `git diff --stat` shows only the
   files above.
 
+### T75. ADR 0009 S6: acceptance measurement of RawStride and a results report — Open
+
+- **Starts after the owner's runs (S6a below).** The report itself is documentation only; no code, no
+  `Cargo.toml`. For a Claude agent.
+- **Why:** ADR 0009 §9 step S6 was never done. There is no log row, no `D:\PhotoWorkflowData\analysis\s6`
+  and no report; ADR 0009's status still ends at S0. GR8 says the switch from the Tauri app waits for
+  the acceptance tests, and S6 is those tests. Since S5 the program has gained the contact sheet,
+  tabs, import, ratings, filter, TIFF and colour management (ADR 0010–0016), so S6 measures
+  RawStride as it is now, not the milestone 1 loupe alone. The earlier runs in
+  `latency-rawstride.csv` (`t57-…`, `t66-…`, `c4-…`) cover next/previous only.
+- **S7** (TESTING.md: the loupe's tests) is a separate task after this one.
+
+**S6a – the owner's runs** (not an agent task). The method is ADR 0009 §8.2, with these changes:
+
+- the window title is **"RawStride"** (ADR 0012), not "PhotoWorkflow Loupe";
+- RawStride is started **with a file path**, which opens the loupe; a folder opens the grid (F6 log
+  row, 2026-11-11);
+- a release build of the committed HEAD; the window maximised on the main screen; default budgets;
+- `latency.ps1 -Title RawStride -Region 0.12,0.1,0.5,0.5 -Out
+  D:\PhotoWorkflowData\pm-study\results\latency-rawstride.csv`, with `-Proc` set to RawStride's
+  process name (check it in Task Manager) so the memory columns are filled;
+- every label starts with `s6-`; screenshots and notes go to `D:\PhotoWorkflowData\analysis\s6\`;
+- each run gets one row in the Log ("S6a"), as for F6; an invalid run is marked invalid with the
+  reason, and repeated.
+
+| # | Check | Requirement | Run | Label |
+|---|---|---|---|---|
+| 1 | Next at fit, RAW mode, per camera (A7R IV, A1, RW2, DNG) | V1, V2 | `-Key RIGHT -Count 20 -Gap 1500` | `s6-raw-fit-next-<camera>` |
+| 2 | The same in JPEG mode | V1, V2 | as 1 | `s6-jpg-fit-next-<camera>` |
+| 3 | Next at 100 % (Z first), RAW and JPEG, A7R IV | V1, V6 | as 1 | `s6-raw-100-next`, `s6-jpg-100-next` |
+| 4 | Z after a pause on a shown image (ADR 0008 S6), A7R IV and RW2; Z toggles, so the odd presses are fit → 100 % | V3, V7 | `-Key Z -Count 10 -Gap 3000` | `s6-raw-z-pause-<camera>` |
+| 5 | Z right after an image change (ADR 0008 S1); Z toggles, so the odd presses are fit → 100 %; with a short delay the image change itself can be the first change, so the time to the sharp 100 % view is `settled_ms` | V7 | `-PreKey RIGHT -PreDelay 0`, `50` and `150`, `-Key Z` | `s6-raw-z-next-<delay>` |
+| 6 | Z in JPEG mode on the A1 (full-size embedded JPEG) | V3 | `-Key Z -Count 10 -Gap 3000` | `s6-jpg-z-a1` |
+| 7 | Rapid stepping at 100 %, about 7 images/s, RAW and JPEG. `latency.ps1` waits `-Quiet` ms without change after each press, so the defaults cannot reach 7/s; with these values a press without a change within 70 ms ends after 70 ms (empty `first_ms` = over the V4 limit) | V4, V2 | `-Key RIGHT -Count 30 -Quiet 1 -Timeout 70 -Gap 70` | `s6-raw-100-7fps`, `s6-jpg-100-7fps` |
+| 8 | R on a shown image, and right after an image change | G4 (ADR 0008 S3) | `-Key R`; `-PreKey RIGHT -Key R` | `s6-r-shown`, `s6-r-next` |
+| 9 | Free zoom from fit, anchor at the centre (A) | V2, §3.4 | `-Key ADD -Count 5`; then `-Key SUBTRACT -Count 5` | `s6-zoom-plus`, `s6-zoom-minus` |
+| 10 | Back after three steps (ADR 0008 S5) | V1 | `-Key LEFT` after RIGHT × 3 | `s6-raw-back` |
+| 11 | First image after opening, cold (after a restart) and warm, both modes | V5 | by hand or a screen recording; the note names the method | – |
+| 12 | Long session: about 15 min of mixed stepping and Z in RAW mode on the A7R IV files; private memory at start (L1), after the first image (L2), after 10 min (L3), after closing the tab (L4); a clean exit | V8 | the `-Proc` columns of runs 1–10, plus Task Manager | `s6-mem` (note) |
+| 13 | By hand, with screenshots: zoom and position persist and small images are centred (V6); the status line in both modes, for RAW, JPEG and TIFF (G1); a truncated RAW file shows an error, never bad data (G3); the mode never changes by itself (G4); focus after minimise, restore, resize and the import dialog (GR6, GR7) | V6, G1–G4, GR6, GR7 | checklist | – |
+
+TIFF and RAW next with colour management are already measured (`c4-tiff-next-2`; the last 20 rows of
+`c4-raw-next`, F6) and are not repeated. DPI change, a second screen and GPU device loss stay postponed
+(GR7, ADR 0008 §18.4).
+
+**T75 – the report** (Claude agent, after S6a):
+
+- **Files:** a new `docs/analyses/<date of the runs>-adr0009-s6-acceptance.md` (from
+  `docs/analyses/TEMPLATE.md`); `docs/adr/0009-egui-loupe-migration.md` (the status list and §9
+  only); `docs/GUI_REQUIREMENTS.md` (the GR8 status sentence only). This file: rule 11.
+- **Source of truth:** the `s6-` rows of `latency-rawstride.csv`, the S6a log rows and the notes in
+  `D:\PhotoWorkflowData\analysis\s6\`; for TIFF/RAW with colour management, the F6 log rows. Write only
+  what they record. The CSV uses decimal commas.
+- **What:**
+  1. **The report:** one table row per requirement (V1–V8, G1–G4, GR6, GR7) with the target, what
+     was measured (median, 95th percentile, maximum and n; never a median alone, ADR 0008 §8.3), the
+     number of screen changes per press for V2, and **met / not met / not measured**. A column with
+     the P7 figure (ADR 0008 §18.3) for comparison; P7 is not an acceptance criterion (TESTING.md §2).
+     The known limits of ADR 0009 §8.3 in their own section, stated as expected. Invalid runs listed
+     with the reason, not used. Measured values marked [M], interpretations [T], as in the ADRs.
+  2. **ADR 0009:** a status line "S6 done (<date>): results in `docs/analyses/…`" after amendment 1;
+     §9 S6 "**Done:** T75". Nothing else.
+  3. **GR8:** after "the switch waits for the acceptance tests", add "S6 (ADR 0009) measured on
+     <date>: <all met / the requirements not met>." Nothing else.
+- **Runs 11–13 were deferred by the owner (2026-11-11).** The report marks V5, V8 over a long session
+  (L1–L4) and the checks of run 13 (V6, G1, G3, G4, GR6, GR7) as **not measured**, says that S6 is
+  partly done, and that `s6a.ps1 -Run 11,12,13` runs them later. The per-run memory columns
+  (`proc_private_mb`) are reported as they are, without an L1–L4 claim. ADR 0009 §9 S6 then reads
+  "**Partly done:** T75 (runs 11–13 open)" instead of "**Done:** T75", and the GR8 sentence says the same.
+- **Rules:** the report draws no conclusion about the switch; that is the owner's decision. English,
+  the style of the existing documents; rules 10–12.
+- **Done when:** `.\tools\check.ps1` is all OK and `git diff --stat` shows only the files above.
+
 ### T7. Format the files that `cargo fmt --check` reports — Done
 
 - **Crates:** `photoworkflow` (`src-tauri`), `preview-bench` (`tools/preview-bench`).
@@ -3028,3 +3101,16 @@ and reviewer:
 | 2026-11-11 | T73 | Done | Owner's check by hand passed: `TN005701_DxO_trasig-profil.jpg` shows "Inbäddad färgprofil kunde inte användas" in the loupe status line, `TN005702_DxO.jpg` does not. Committed (3b06d4f). T74 can start |
 | 2026-11-11 | T74 | Ready for review | (Agent) Documentation only. ADR 0016: "Implemented (2026-11-11)" line after the status (C1–C4 = T68–T72, the status-line note = T73, C5 accepted by the owner, C6 = T74); §7 results table F1–F6 from the log rows of T68–T73, C5 and F6 (F6: TIFF median 17.4 ms, RAW median 17.0 ms, V1 met); §9 C6 "**Done:** T74"; §12 one point: milestone 7 complete. The §9 C5 row still says "F6 (`latency.ps1`) not yet measured" (not in the task's list, left unchanged). ADR 0015: "(moved to milestone 8 by ADR 0016 Q1, 2026-11-11)" in §2, §9 D7 and §12; "(done: ADR 0016, 2026-11-11)" in §3.2 and the §12 colour point. ADR 0007: status line milestone 8, still "proposed". architecture.md: new `pw-colour` row after `pw-tiff`; additions in `pw-raw`, `pw-tiff`, `pw-thumbcache`, `pw-loupe`, `pw-viewcore`; **the table had no `pw-libjpeg` row, so a new one was added after `pw-raw` (owner's answer during the task)**; diagram unchanged. GR8 status as written in the task. docs/README.md: 0016 "done 2026-11-11". Root `README.md`: colour management listed. `docs/test-inventory.md` unchanged (no code change). `.\tools\check.ps1`: fmt, test (556 passed, 32 ignored, 0 failed) and clippy OK. No commit |
 | 2026-11-11 | T74 | Done | Review: accepted. Only the named files changed, each in the named lines; the results table of ADR 0016 §7 matches the log rows (F1–F6). The new `pw-libjpeg` row in architecture.md is accepted: the table had none, and the task asked for an addition there. The reviewer updated the stale "F6 not yet measured" in ADR 0016 §9 C5 (F6 met). `check.ps1` OK. **Milestone 7 (ADR 0016, colour management) is complete**; IPTC (ADR 0007) is milestone 8 |
+| 2026-11-11 | T75 | Open | Added: ADR 0009 S6 (acceptance measurement and report) was never done: no log row, no `analysis\s6`, no report. Owner's runs S6a with `latency.ps1` against "RawStride" (started on a file), labels `s6-…`; then T75, the report, ADR 0009 status/§9 and the GR8 sentence. S7 (TESTING.md) follows separately |
+| 2026-11-11 | S6a | — | Owner's runs with `D:\PhotoWorkflowData\pm-study\tools\s6a.ps1` (release build, RawStride started on the first file of `D:\PhotoWorkflowData\s6\<camera>`, maximised, restarted before each run; folders a7r 5, a1 14, rw2 21, dng 9 files). Rows in `latency-rawstride.csv`, labels `s6-…`; summaries in `D:\PhotoWorkflowData\analysis\s6\s6a-log.txt`. Every press in runs 1–10 had at most one screen change; no run invalid. Times are `first_ms` median / max |
+| 2026-11-11 | S6a | — | Run 1 (next at fit, RAW), **run twice** (14:33–14:37 and 14:42–14:44; both valid, same labels): a7r n=4 15.6/16.0 and 16.8/17.0; a1 n=13 16.7/17.5 and 16.8/17.4; rw2 n=20 16.8/17.8 and 16.8/17.3; dng n=8 16.8/17.2 and 16.8/17.0 ms. Process private memory up to 5087 MB (a1, first round) and 3007 MB (a1, second round) |
+| 2026-11-11 | S6a | — | Run 2 (next at fit, JPEG), **run twice** (14:38–14:41 and 14:45–14:47): a7r 17.0/17.4 and 16.9/17.2; a1 16.8/17.8 and 16.9/17.3; rw2 16.8/17.2 and 16.9/17.3; dng 16.8/17.1 and 16.8/17.5 ms. Memory up to 5111 and 5157 MB on a1 in JPEG mode as well |
+| 2026-11-11 | S6a | — | Run 3 (next at 100 %, a7r, n=4): RAW 17.2/17.8 ms, JPEG 16.6/16.9 ms |
+| 2026-11-11 | S6a | — | Run 4 (Z after a 3 s pause, RAW, n=10; odd presses fit → 100 %): a7r fit → 100 % 82.6, 15.8, 16.5, 16.5, 17.0 ms (median 16.5), back to fit median 16.9, max 19.7; rw2 fit → 100 % 98.9, 16.2, 16.7, 16.2, 16.7 ms (median 16.7), back median 16.1. The slow press is the first one in both |
+| 2026-11-11 | S6a | — | Run 5 (RIGHT then Z, RAW, rw2, n=10; one change per press, so `settled_ms` = `first_ms`): delay 0 ms: fit → 100 % 81.9, 16.3, 33.2, 33.0, 32.1 (median 33.0); delay 50 ms: 99.8, 17.0, 83.9, 16.8, 17.0 (median 17.0); delay 150 ms: 231.4, 17.1, 17.3, 17.2, 17.2 (median 17.2) ms. Again the first press is the slowest |
+| 2026-11-11 | S6a | — | Run 6 (Z, JPEG, a1, n=10): fit → 100 % 51.8, 16.4, 16.7, 16.9, 16.0 ms (median 16.7); back median 16.7 ms |
+| 2026-11-11 | S6a | — | Run 7 (about 7 images/s at 100 %, rw2, n=20, `-Quiet 1 -Timeout 70 -Gap 70`): **RAW: 16 of 20 presses showed no change within 70 ms** (the 4 others 15.9–22.6 ms), the known limit of ADR 0009 §8.3; **JPEG: all 20 within 70 ms**, median 50.0, max 51.0 ms (values 16.9–51.0) |
+| 2026-11-11 | S6a | — | Run 8 (R, RAW start): on a shown image (a7r, n=6) median 17.1, max 21.1 ms; right after RIGHT (rw2, n=6) median 32.3, max 47.8 ms |
+| 2026-11-11 | S6a | — | Run 9 (free zoom from fit, anchor at the centre, a7r, n=5 each): + median 16.7, max 17.1 ms; − median 16.6, max 16.9 ms; one change per press |
+| 2026-11-11 | S6a | — | Run 10 (LEFT after RIGHT × 3, RAW, a7r, n=3): 17.0/17.0 ms |
+| 2026-11-11 | S6a | — | **Runs 11–13 deferred by the owner.** A first attempt at run 12 (15:02, about 30 s) was not done as intended (no long session) and is not used; `mem.csv` from it stays as a record. Not measured: V5, V8 over a long session (L1–L4), and the hand checks V6, G1, G3, G4, GR6, GR7. `s6a.ps1` was updated for these runs (run 11 measured by the script, run 12 with a timer, run 13 as a checklist); `-Run 11,12,13` runs them later. T75 can start; it reports these as not measured |
