@@ -44,7 +44,7 @@
 - **This milestone is TIFF viewing only.**
 - **IPTC parity is already met.** The Tauri app's only IPTC feature, the import template, is in
   RawStride (T39). GR8's "IPTC metadata" is marked done for parity in step D7.
-- **ADR 0007 becomes milestone 7.** It is finished (open questions answered, ADR approved) on its
+- **ADR 0007 becomes milestone 7** (moved to milestone 8 by ADR 0016 Q1, 2026-11-11). It is finished (open questions answered, ADR approved) on its
   own and then planned as reading, display and editing in RawStride. That work is new, not parity,
   so it does not block the switch from the Tauri app.
 
@@ -66,7 +66,7 @@
 
 - IPTC beyond the import template (§2, ADR 0007).
 - Colour management: ICC profiles are not applied (as in the Tauri app). CMYK stays a naive
-  conversion. Comes with a colour-management decision for all formats.
+  conversion. Comes with a colour-management decision for all formats (done: ADR 0016, 2026-11-11).
 - Palette, YCbCr and other colour types the Tauri app does not support.
 - More pages than the first image (multi-page TIFF), layers and alpha display (alpha is dropped).
 - A disk cache of TIFF thumbnails (the thumbnail cache is in memory for all formats).
@@ -199,7 +199,7 @@ Results (D5, 2026-11-11, the owner's acceptance; the reviewer's checks from the 
 | **D4** | `pw-loupe`: list TIFF, status text (library tests) | **Done:** T66 |
 | **D5** | Acceptance by hand (§8.2) | **Done 2026-11-11** by the owner; see §7 |
 | **D6** | Documentation: architecture.md (`pw-tiff`), test inventory, ADR 0004 addendum (egui note), ADR 0009 §3.2 note | **Done:** T67 |
-| **D7** | GR8 and the root `README.md`: TIFF viewing done; IPTC parity met through the import template; ADR 0007 is milestone 7 | **Done:** T67 |
+| **D7** | GR8 and the root `README.md`: TIFF viewing done; IPTC parity met through the import template; ADR 0007 is milestone 7 (moved to milestone 8 by ADR 0016 Q1, 2026-11-11) | **Done:** T67 |
 
 D2 and D3 need D1 and do not depend on each other. D4 needs D2 and D3. Each of D1–D4 is one agent
 task.
@@ -265,6 +265,8 @@ palette TIFF; CMYK and BigTIFF can follow.
   tests.
 - A new crate `pw-tiff` holds the decoder that the Tauri app had inside `src-tauri`.
 - `pw-viewcore` gains a third session kind; `Source` is unchanged.
-- ADR 0007 (IPTC) is planned as milestone 7, after its approval.
+- ADR 0007 (IPTC) is planned as milestone 7, after its approval (moved to milestone 8 by ADR 0016
+  Q1, 2026-11-11).
 - Colour management (ICC) is not applied, so a TIFF with a wide-gamut profile such as ProPhoto RGB
-  looks dull. Whether it comes before the switch is an open owner question (§9.1).
+  looks dull. Whether it comes before the switch is an open owner question (§9.1) (done: ADR 0016,
+  2026-11-11).

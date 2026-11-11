@@ -2,7 +2,8 @@
 
 - Status: **proposed for review (revision 7, 2026-11-08).**
   - The owner's decisions of 2026-11-04 are written in.
-  - Planned as milestone 7 of the egui program after its approval (owner, 2026-11-10; ADR 0015 §2).
+  - Planned as milestone 8 of the egui program after its approval (owner, 2026-11-10; ADR 0015 §2;
+    moved from milestone 7 by ADR 0016 Q1, 2026-11-11).
   - Q4 was answered by the owner on 2026-11-08: DNG Exif overlap fields are synchronised like TIFF.
   - Q5 was answered by the owner on 2026-11-08: foreign XMP sidecars next to DNG are ignored and reported.
   - Q6 was answered by the owner on 2026-11-08: missing Exif overlap fields are not created.

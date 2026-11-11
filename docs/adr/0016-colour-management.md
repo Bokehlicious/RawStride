@@ -4,6 +4,9 @@
   requirements (§7), every decision in §11, `moxcms` =0.8.1 in `pw-colour` and the `windows-sys`
   =0.61.2 features in `pw-loupe` (§6) are accepted. Nothing is built or installed by this ADR. Each
   later step in §9 is its own work part, with its own approval and commit.
+- **Implemented (2026-11-11):** steps C1–C4 done (agent tasks T68–T72), the status-line note for an
+  unusable embedded profile (§5) in T73, C5 accepted by the owner on 2026-11-11; C6 is this
+  documentation update (T74).
 - Date: 2026-11-11
 - Related:
   - ADR 0015 §3.2 and §9.1 (ICC left out of milestone 6; ProPhoto TIFFs look dull);
@@ -166,6 +169,18 @@ on the worker threads, before the pixels become a texture. One screen, one profi
 | **F5** | Side by side with Lightroom on the CX240, an sRGB JPEG and a ProPhoto TIFF look the same | By hand (owner) |
 | **F6** | Stepping to a prefetched image still meets V1 (median ≤ 30 ms) | `latency.ps1` on the owner's TIFF and RAW sets |
 
+Results (C5, 2026-11-11, the owner's acceptance; the reviewer's checks from the log in
+`docs/agent-tasks.md`):
+
+| # | Result |
+|---|---|
+| **F1** | `pw-colour` reference-value tests (T68): every reference value, computed independently of `moxcms` by the reviewer, passes within 1 with no tolerance widened, so `moxcms` stays (Q5) |
+| **F2** | Tests on synthetic files: TIFF tag 34675 (T70, also BYTE and UNDEFINED tags), JPEG APP2 ICC (T71, also a reused decoder), the Exif Adobe RGB marker (T71), and the source rule `jpeg_source_profile` (T72). Real files: all 9 Lightroom TIFFs `Embedded` (T70); Sony ARW/JPG `Srgb`, `_TN0633x` ARW/JPG `AdobeRgb` through the Exif marker only, Pixel DNG `Uncalibrated`, RW2, `TN0025xx.DNG` and TIFF `Unknown` (T71); the DxO export `TN005701_DxO.jpg` has an APP2 Adobe RGB profile, `TN005702_DxO.jpg` none (T72 review) |
+| **F3** | Identity when source and destination are the same profile (T68); the existing pixel tests unchanged; with an sRGB destination a session and a thumbnail equal today's decode (T72) |
+| **F4** | Tests: a damaged or unsupported source profile falls back to sRGB (T68, T70, T72), a missing or unusable monitor profile gives sRGB (T69); the status-line note "Inbäddad färgprofil kunde inte användas" (T73), checked by hand by the owner on `TN005701_DxO_trasig-profil.jpg` (shown) and `TN005702_DxO.jpg` (not shown) |
+| **F5** | No Lightroom: objective check instead (C5): the eight sRGB patches of §1.1 shown in RawStride with T72 (release build) and read back from a screenshot of the CX240 matched values computed independently of `moxcms` from the CX240 profile within 1 (seven exactly; before T72 they were shown unchanged). Visual side-by-side check with DxO PhotoLab; accepted by the owner ("godkänt") |
+| **F6** | The owner's `latency.ps1` runs (RawStride started on a file, release build with T72–T73): TIFF (label `c4-tiff-next-2`, the 9 TIFFs, RIGHT × 8) first change 16.4–30.6 ms, **median 17.4 ms** (16.1 ms before colour management, ADR 0015 §7); RAW (label `c4-raw-next`, the last 20 rows of `latency-rawstride.csv`, 20 RAW files) 13.7–17.5 ms, **median 17.0 ms**; one change each. V1 is met with colour management on. An earlier run from the grid and one that ran past the end of the folder are not valid (log) |
+
 ## 8. Testing and acceptance
 
 ### 8.1 Automated (`cargo test`)
@@ -200,8 +215,8 @@ on the worker threads, before the pixels become a texture. One screen, one profi
 | **C2** | `pw-loupe`: read the monitor profile at start; window title (passthrough check §8.2 done first) — **T69** |
 | **C3** | Source profiles: `pw-tiff` (ICC, 16-bit path) — **T70**; `pw-libjpeg` (APP2) and `pw-raw` (Exif marker) — **T71** |
 | **C4** | Apply: `pw-viewcore` sessions and `pw-thumbcache` — **T72**. The status-line note for an unusable embedded profile (§5) follows in its own task, since it needs a field through the loupe core |
-| **C5** | Acceptance by hand (§8.2) — **accepted by the owner 2026-11-11** (objective patch check within 1; visual check with DxO PhotoLab instead of Lightroom). F6 (`latency.ps1`) not yet measured |
-| **C6** | Documentation: architecture.md, test inventory, GR8 note, ADR 0015 §3.2 note |
+| **C5** | Acceptance by hand (§8.2) — **accepted by the owner 2026-11-11** (objective patch check within 1; visual check with DxO PhotoLab instead of Lightroom). F6 met: `latency.ps1` medians 17.4 ms (TIFF) and 17.0 ms (RAW), §7 |
+| **C6** | Documentation: architecture.md, test inventory, GR8 note, ADR 0015 §3.2 note — **Done:** T74 |
 
 C2 and C3 need C1 and do not depend on each other; C4 needs both.
 
@@ -239,3 +254,5 @@ The owner answered Q1, Q2 and Q5 and then accepted every other proposal as writt
 - A new crate `pw-colour`; `moxcms` becomes a direct dependency (no new crate in `Cargo.lock`).
 - Every cache holds display-ready pixels, which ties them to one screen until GR7 is done.
 - The open GR8 question about colour management is answered by this milestone.
+- **Milestone 7 (colour management) is complete** (2026-11-11): C0–C6 done; IPTC (ADR 0007) is
+  milestone 8.
