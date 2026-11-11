@@ -148,6 +148,18 @@ ADR 0014 §7:
 | **E5** | Stepping to a **prefetched** TIFF meets V1. A cold TIFF follows the V2 swap rule (Q6) | By hand with `latency.ps1` on the owner's set |
 | **E6** | Ratings and labels work on TIFF in grid and loupe, and survive a reopen | By hand; the existing `pw-metadata` test covers the write |
 
+Results (D5, 2026-11-11, the owner's acceptance; the reviewer's checks from the log in
+`docs/agent-tasks.md`):
+
+| # | Result |
+|---|---|
+| **E1** | Tests on synthetic TIFFs (T63–T66). The real-file tests of T64 (loupe, both modes, size of `pw_tiff::dimensions`) and T65 (thumbnails, long edge 256) pass on the owner's 9 TIFFs. Checked by hand (T66, D5): listed, thumbnails in the grid, shown in the loupe with "TIFF-fil W × H", zoom to 100 % and pan |
+| **E2** | The decoder is the Tauri app's code, moved with its tests (T63); one test per colour type and an LZW twin in `pw-tiff`; `downscale` pinned bit for bit against the old code (T65) |
+| **E3** | Tests: palette (`Unsupported`), truncated file, a file over the limit, a missing file (T63); the Swedish loupe texts, never `damaged` (T64); a palette thumbnail is `Unreadable` (T65). The owner's set has no palette or damaged TIFF (§9.1), so this rests on the automated tests |
+| **E4** | Tests for the lock (T63). Checked by hand (D5): the UI stays responsive while the grid loads thumbnails and the loupe steps |
+| **E5** | The owner's `latency.ps1` run (`D:\PhotoWorkflowData\pm-study\results\latency-rawstride.csv`, label `t66-tiff-next`; RAW mode; the 9 TIFFs copied alone to `D:\PhotoWorkflowData\TIFF`; RIGHT × 8, 1.5 s apart, so each next image was prefetched): first change 15.5–30.7 ms, **median 16.1 ms**, one change each. V1 (median ≤ 30 ms) and V2 are met at fit. The first press was the slowest (30.7 ms); the others 15.5–16.5 ms, about one frame. Not measured: 100 % zoom, and cold (not prefetched) TIFFs |
+| **E6** | Checked by hand (D5): ratings and labels on TIFFs in grid and loupe survive a reopen |
+
 ## 8. Testing and acceptance
 
 ### 8.1 Automated (`cargo test`)
@@ -166,7 +178,9 @@ ADR 0014 §7:
 ### 8.2 By hand (owner)
 
 - The owner's TIFF set (Q5) in the grid and the loupe: sizes, orientation, zoom to 100 %, pan.
-- R on a TIFF: nothing changes, and the status line still says "TIFF-fil".
+- R on a TIFF: the image does not change and the status line still says "TIFF-fil". The mode
+  control ("Läge: RAW (R)" / "Läge: JPEG (R)") does switch: it shows the folder's display mode (G4),
+  which applies to the next RAW file, exactly as on a plain JPEG file (ADR 0009 §5.2).
 - A palette TIFF and a damaged TIFF: error message; stepping on works.
 - A grid of large TIFFs while stepping the loupe: the UI stays responsive (E4).
 - `latency.ps1` on prefetched TIFFs (E5).
@@ -180,8 +194,8 @@ ADR 0014 §7:
 | **D1** | New crate `pw-tiff`: move the decoder and pixel helpers from `src-tauri` with their tests; the Tauri app calls it; add the lock and the limit (tests) | **Done:** T63 |
 | **D2** | `pw-viewcore`: the TIFF session, "shown as itself" for TIFF, budget accounting, the Swedish TIFF error texts (tests) | **Done:** T64 |
 | **D3** | `pw-thumbcache`: TIFF thumbnails; `fit` and `downscale` move to `pw-tiff` (tests) | **Done:** T65 |
-| **D4** | `pw-loupe`: list TIFF, status text (library tests) | Agent task T66 |
-| **D5** | Acceptance by hand (§8.2) | |
+| **D4** | `pw-loupe`: list TIFF, status text (library tests) | **Done:** T66 |
+| **D5** | Acceptance by hand (§8.2) | **Done 2026-11-11** by the owner; see §7 |
 | **D6** | Documentation: architecture.md (`pw-tiff`), test inventory, ADR 0004 addendum (egui note), ADR 0009 §3.2 note | |
 | **D7** | GR8 and the root `README.md`: TIFF viewing done; IPTC parity met through the import template; ADR 0007 is milestone 7 | |
 
