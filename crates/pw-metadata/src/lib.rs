@@ -11,8 +11,12 @@
 //!   and as Lightroom expects for these formats. Only the metadata is rewritten, never the image
 //!   data; the file modification date is preserved (`-P`) and the file is replaced in place.
 //! - ExifTool edits existing metadata in place, so everything else is preserved.
+//! - `properties`: the IPTC property table generated from the TechReference (ADR 0007 §3).
 
+pub mod date;
 mod exiftool;
+mod iptc_table;
+pub mod properties;
 #[cfg(test)]
 mod test_support;
 mod worker;
