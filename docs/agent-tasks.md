@@ -2699,7 +2699,25 @@ the steps are kept here. The first four tasks (T76–T79) are plain Rust in `pw-
 without ExifTool; nothing in RawStride or the Tauri app uses them yet. The old API
 (`write_rating`, `write_iptc`, `read_ratings`, `Iptc`, `LocalizedValue`) stays unchanged until I9.
 The tasks for I5 and later are written after T76–T79 are accepted, because they build on those
-types.
+types. T80–T83 (I5–I7) were written on 2026-11-11 after T76–T79 were done; I8 and later follow when
+T83 is accepted.
+
+**What the reviewer measured with ExifTool 13.59 before writing T80–T83** (2026-11-11, on small
+JPEGs in a temporary folder):
+- `-b -IPTC` gives the **raw IIM block** (in JSON as `base64:…`); its MD5 is
+  `CurrentIPTCDigest`, and `Photoshop:IPTCDigest` is the stored checksum. Writing IIM does **not**
+  update an existing `IPTCDigest`; `-IPTCDigest=new` must be given (then ExifTool warns "IPTCDigest
+  is not current" when they differ). Without an existing digest none is created.
+- `-j -struct -G1` gives XMP structures as JSON objects keyed by the ExifTool field names (`etTag`),
+  lists as arrays, Lang Alt as one key per language (`XMP-dc:Description` is `x-default`,
+  `XMP-dc:Description-sv` and so on), and keys named as `etXMP` in the table.
+- XMP dates come in ExifTool's own form **even with `-n`**: `2026:11`, `2026:11:04 10:15`,
+  `2026:11:04 10:15:30.5+01:00`. Truncation and zone are kept, so the form can be turned back into
+  the XMP form without loss. A text such as `007` stays a JSON string; `xmp:Rating` is a JSON number.
+- **Arguments on ExifTool's command line are converted to the Windows code page** (from PowerShell
+  and from Git Bash alike: "Göteborg" was stored as Latin-1). `pw-metadata` sends arguments through
+  `-stay_open` as UTF-8 and is not affected; **tests must use the `ExifTool` type, never a command
+  line**. An argument file (`-@`) in UTF-8 also works.
 
 | Step | Task | Content | ADR 0007 | Can start |
 |---|---|---|---|---|
@@ -2708,9 +2726,12 @@ types.
 | I2 | T77 | Dates and times: truncated dates, zones never invented, IIM and Exif forms | §7, §5.3 | now |
 | I3 | T78 | The value model: values, origins, Lang Alt rules, changes | §3, §8 | after T76 and T77 |
 | I4 | T79 | IIM text rules: blank values, byte limits, prefixes, character encodings | §5.1–§5.4, §6.2 | now |
-| I5 | – | Reconciliation: IIM/XMP by checksum, Exif/XMP, Creator ↔ Artist/Photographer, `Cleared` | §5.1, §6.2, §6.4, §6.5 | after T76–T79 |
-| I6 | – | Reader with ExifTool for every format; sidecar rules and notices (foreign sidecar next to DNG, `<name>.<ext>.xmp`) | §4, §4.2 | after I5 |
-| I7 | – | Write plan: XMP, IIM if present (or with the setting), existing Exif overlap fields, clearing, unresolved conflicts without checksum | §5.2, §6.3, §8 | after I5 |
+| I5a | T80 | IIM block: the datasets of the raw IIM block, decoded and turned into values | §5.1, §5.3, §5.4 | now |
+| I5b | T81 | Reconciliation: IIM/XMP by checksum, Exif/XMP, Creator ↔ Artist/Photographer, `Cleared` as an input | §5.1, §6.2, §6.4, §6.5 | after T80 |
+| D1 | owner | The XMP namespace (prefix and URI) of `Cleared` (§6.4: "fixed with the implementation"). Reading and writing `Cleared` gets its own small task after D1 | §6.4 | – |
+| D2 | owner | `serde_json` (=1.0.154, already in `Cargo.lock` through the Tauri app, so nothing new is compiled) as a dependency of `pw-metadata`, to read ExifTool's `-j -struct` output. **Approved by the owner on 2026-11-11** | – | done |
+| I6 | T82 | Reader with ExifTool for every format; sidecar rules and notices (foreign sidecar next to DNG, `<name>.<ext>.xmp`) | §4, §4.2 | after T81 |
+| I7 | T83 | Write plan: XMP, IIM if present (or with the setting), existing Exif overlap fields, clearing, unresolved conflicts without checksum; checked against ExifTool | §5.2, §6.3, §8 | after T82 |
 | I8 | – | Safe write transaction: temporary copy, verification, `ReplaceFileW`, journal and recovery. Needs `windows-sys` in `pw-metadata` (**owner approval of the `Cargo.toml` change first**) | §9 | after I7 |
 | I9 | – | Ratings, labels and the ingest template through I7/I8; template modes Keep/Replace/Append/Clear | §10, §15 | after I8 |
 | I10 | – | RawStride: info panel with conflicts and notices, editor, settings (create IIM, fallback encoding), ExifTool version check at start | §5.2, §5.4, §11 | after I6 (panel), I9 (editor) |
@@ -3048,6 +3069,371 @@ types.
 - **Done when:** `.\tools\check.ps1` is all OK; `docs/test-inventory.md` is updated;
   `git diff --stat` shows only the files above.
 
+### T80. ADR 0007 I5a: the IIM block — datasets, decoding, values — Open
+
+- **Can start now.** T76–T79 are done. Plain Rust; no ExifTool. Nothing uses the module yet.
+- **Crates:** `pw-metadata` only.
+- **Files:** new `crates/pw-metadata/src/iim_read.rs`; `crates/pw-metadata/src/lib.rs` (the `mod`
+  line only); `docs/test-inventory.md`.
+- **Why:** ADR 0007 §5.1 (blank values are non-existent), §5.3 (prefixes; 2:55 + 2:60 merged into
+  one Date Created), §5.4 (1:90, decoding, the fallback marks the value as converted), §5.5 (the
+  deprecated datasets are read like the others). The reader (T82) gets the raw IIM block from
+  ExifTool (`-b -IPTC`, measured above) and needs it as values of the model (T78) for the
+  reconciliation (T81).
+- **What:** `pub mod iim_read` with:
+  1. **`Dataset { record: u8, dataset: u8, data: Vec<u8> }`** and
+     **`parse_block(bytes: &[u8]) -> Result<Vec<Dataset>, IimError>`**, in file order:
+     - each dataset is the tag marker `0x1C`, the record number, the dataset number and a 2-byte
+       big-endian length, then the data;
+     - a length with the top bit set is an **extended length**: its low 15 bits give how many of the
+       following bytes hold the real length (big-endian); 1–4 bytes are accepted, more is an error;
+     - zero bytes after the last complete dataset are padding and are ignored (Photoshop pads its
+       resources to an even length); any other byte where a tag marker is expected, and a length
+       that runs past the end, are `IimError::Malformed { offset }` (the offset of the bad byte);
+     - an empty block is `Ok(vec![])`. Never a panic and no unchecked indexing, whatever the bytes.
+  2. **`IimError`** with `Display` (English, "IIM block is malformed at byte {offset}") and
+     `std::error::Error`.
+  3. **`iim_format(xmp_id: &str) -> IimFormat`**: `Genre` for
+     `Iptc4xmpCore:IntellectualGenre`, `SubjectCode` for `Iptc4xmpCore:SubjectCode`, `Plain`
+     otherwise (T79's formats; T83 uses the same function for writing).
+  4. **`IimValues { values: Vec<(String, Value)>, charset: CodedCharset, notices: Vec<IimNotice> }`**
+     and **`iim_values(datasets: &[Dataset], fallback: Fallback) -> IimValues`**:
+     - `charset` is `iim::coded_charset` of dataset 1:90 (the first one; `Absent` without it). Every
+       other record-1 dataset and 2:00 (record version) are ignored;
+     - every record-2 dataset is decoded with `iim::decode` under that charset; a decoded value that
+       is `is_blank` is **non-existent** (§5.1) and skipped;
+     - the property is `properties::by_iim(2, dataset)`; a dataset without a property is ignored (it
+       stays in the file, because RawStride never writes it);
+     - the prefix is removed with `strip_prefix(text, iim_format(xmp_id))`;
+     - the value follows the property's kind and occurrence (T78 point 6): a `Multi` property gives
+       one `List` of all its datasets in file order; a `Single` property takes its **first**
+       dataset, and a repeated one adds `IimNotice::Repeated { property }`; `Text`/`Uri`/`Url` give
+       `Text`, `LangAlt` gives a Lang Alt with one `x-default` entry, `Integer`/`Number` give
+       `Number` with the text as decoded (no trimming);
+     - **Date Created:** 2:55 with the first 2:60 (if any) through `IptcDate::from_iim`. A 2:55 of
+       only zeros (`00000000`) is **non-existent** (T77 review). An error, or a 2:60 without a 2:55,
+       gives `IimNotice::Unreadable { property, text }` (the text as read, 2:55 and 2:60 joined with
+       a space) and no value;
+     - any other value that cannot be built (a kind that has no IIM form, a number that does not
+       fit the kind) gives `Unreadable` and no value. Values are checked by the same rules as
+       `Metadata::insert_read`; use it (or the same check) instead of a copy of the rules;
+     - a value decoded with `converted` set gives `IimNotice::Converted { property }` **once per
+       property**;
+     - `values` is ordered by the position of each property's first dataset.
+  5. **`IimNotice { Converted { property: String }, Repeated { property: String },
+     Unreadable { property: String, text: String } }`** (`Clone`, `Debug`, `PartialEq`, `Eq`).
+- **Rules:** rules 3–7 and 10–12. No `Cargo.toml` change.
+- **Tests to add** (`#[cfg(test)] mod tests` in `iim_read.rs`; byte strings written out in the test):
+  - **a block written by ExifTool 13.59** (base64
+    `HAFaAAMbJUccAQAAAgAEHAIZAANldHQcAhkAA3R25RwCWgAIR/Z0ZWJvcmccAgAAAgAE`, decoded in the test
+    without a new dependency, e.g. a small base64 helper in the test module): six datasets 1:90,
+    1:00, 2:25, 2:25, 2:90, 2:00. The block declares UTF-8 but holds Latin-1 bytes (the arguments
+    came through the Windows command line), so `dc:subject` is `["ett", "tv\u{FFFD}"]` and
+    `photoshop:City` is `"G\u{FFFD}teborg"`, each with a `Converted` notice;
+  - the same datasets without 1:90: `["ett", "två"]`, `"Göteborg"`, `Converted` for both
+    (Windows-1252 fallback); with the `Latin1` fallback the same text;
+  - extended length (a 2:120 of 40 000 bytes with a 2-byte extended length) is read; a 5-byte
+    extended length, a length past the end, a missing tag marker, and 3 bytes of garbage are
+    `Malformed` with the right offset; trailing zero bytes are ignored; random byte strings of
+    every length 0–64 (a fixed seed, no new dependency) never panic;
+  - blank values: a 2:90 of spaces, of NUL bytes, and an all-blank 2:25 list give no value;
+    `00000000` in 2:55 gives no value and no notice;
+  - prefixes: `2:04 = "000:Feature"` gives `Iptc4xmpCore:IntellectualGenre` `Feature`;
+    `2:12 = "IPTC:04000000"` gives `Iptc4xmpCore:SubjectCode` `["04000000"]`;
+  - kinds: 2:120 gives a Lang Alt `[("x-default", …)]` for `dc:description`; 2:80 twice gives
+    `dc:creator` `List` of two; 2:90 twice gives the first and `Repeated`; 2:10 `"5"` gives
+    `photoshop:Urgency` `Number("5")`; 2:10 `"x"` gives `Unreadable`;
+  - Date Created: `20261104` + `101530+0100` gives the date with zone; `20261104` alone gives a date
+    without time; `20261304` and a 2:60 without 2:55 give `Unreadable` with the text;
+  - an unknown dataset (2:200) is ignored; 1:00 and 2:00 are ignored;
+  - `iim_format` for the two prefixed properties and `photoshop:City`.
+- **Done when:** `.\tools\check.ps1` is all OK; `docs/test-inventory.md` is updated;
+  `git diff --stat` shows only the files above.
+
+### T81. ADR 0007 I5b: reconciliation — IIM/XMP by checksum, Exif/XMP, Creator, `Cleared` — Open
+
+- **Can start after T80 is accepted.** Plain Rust; no ExifTool. Nothing uses the module yet.
+- **Crates:** `pw-metadata` only.
+- **Files:** new `crates/pw-metadata/src/reconcile.rs`; `crates/pw-metadata/src/lib.rs` (the `mod`
+  line only); `docs/test-inventory.md`.
+- **Why:** ADR 0007 §5.1 (IIM/XMP precedence by checksum, equality on the predicted IIM value,
+  every difference is a conflict with the rule applied), §6.2 (XMP has precedence over Exif; Exif
+  only fills; Exif against IIM), §6.4 (manufacturer RAW: the file's metadata only fills, `Cleared`
+  suppresses it), §6.5 (Creator ↔ Artist/Photographer), §7 (Date Created is only suggested from
+  DateTimeOriginal), §4.2 (embedded camera XMP in a RAW only fills).
+- **What:** `pub mod reconcile` with:
+  1. **Input** (all `Clone`, `Debug`):
+     - `FileKind { Jpeg, Tiff, Dng, Raw }` (`Raw` = manufacturer RAW with a sidecar, §4);
+     - `IimDigest { Matches, Differs, Missing }` (`IPTCDigest` against `CurrentIPTCDigest`);
+     - `IimRead { values: IimValues, digest: IimDigest }` (T80);
+     - `ExifFields { image_description, copyright, artist, photographer, image_unique_id,
+       date_time_original, sub_sec_time_original, offset_time_original }`, each
+       `Option<String>`, already decoded (T82);
+     - `Readings { kind: FileKind, xmp: Vec<(String, Value)>, camera_xmp: Vec<(String, Value)>,
+       iim: Option<IimRead>, exif: ExifFields, cleared: BTreeSet<String> }`. `xmp` is the primary
+       XMP: embedded for JPEG/TIFF/DNG, the sidecar for `Raw`. `camera_xmp` is the XMP inside a
+       `Raw` file (empty otherwise). `cleared` is the sidecar's `Cleared` list (only for `Raw`;
+       empty until D1).
+  2. **Output:** `Reconciled { metadata: Metadata, notices: Vec<Notice>,
+     suggested_date_created: Option<IptcDate> }` and `Notice { Iim(IimNotice), Refused { property,
+     origin, error: ValueError }, HiddenByUser { property, value: Value, origin: Origin },
+     Unreadable { property, origin, text } }`.
+  3. **`reconcile(readings: Readings) -> Reconciled`**, in this order:
+     1. **Primary XMP:** each value through `Metadata::insert_read` with origin `XmpEmbedded`
+        (`XmpSidecar` for `Raw`); a refused value gives `Notice::Refused` and is left out. A blank
+        text (T79 `is_blank`) counts as absent.
+     2. **IIM** (§5.1), for each IIM property (T80 notices are passed on as `Notice::Iim`):
+        - XMP lacks the property → the IIM value is inserted with origin `Iim`;
+        - XMP has it and the two are **equal** (point 4) → nothing;
+        - they differ → a `Conflict` with both values (XMP first) and: `Matches` → rule `Xmp`, XMP
+          kept; `Differs` → rule `Iim`, the IIM value replaces the XMP value (origin `Iim`);
+          `Missing` → rule `Open`, the XMP value stays in the model until the user decides (the
+          panel shows both);
+        - for `Raw` the IIM in the RAW file is camera data: it only fills, and a difference is a
+          conflict with rule `Xmp` whatever the digest (§4.2, §6.4).
+     3. **Camera XMP** (`Raw` only, §4.2): fills a property still absent (origin `XmpEmbedded`); a
+        difference to the sidecar value is a conflict with rule `Xmp`.
+     4. **Exif** (§6.1, §6.2, §6.5), for the both-ways fields Description ↔ ImageDescription,
+        Copyright Notice ↔ Copyright, Creator ↔ Photographer/Artist:
+        - the Exif value is Photographer if present, else Artist, for Creator; ImageDescription and
+          Copyright as they are; blank counts as absent;
+        - property absent → filled from Exif (origin `Exif`): Description and Copyright Notice as a
+          Lang Alt with one `x-default` entry; Creator as `[photographer]`, or `split_artist(artist)`;
+        - property present and **different** (point 4) → a conflict. If the current value came from
+          XMP: rule `Xmp`, value kept. If it came from IIM (no XMP, §6.2): `Differs` → rule `Iim`,
+          kept; `Matches` or `Missing` → rule `Exif`, the Exif value replaces it (origin `Exif`).
+          For `Raw` always rule `Xmp`/kept (camera data);
+        - **Digital Image GUID** (`Iptc4xmpExt:DigImageGUID`; ExifTool tag `XMP-iptcExt:DigitalImageGUID`) ← ImageUniqueID only fills; a
+          difference is **not** a conflict (§6.1: the IPTC value is then not changed);
+        - ImageEditor ↔ Contributor and GPS → Location Created are **not** part of this task (they
+          get a task later; leave a comment).
+     5. **`Cleared`** (`Raw`, §6.4): a property in `cleared` that the sidecar does not hold is never
+        filled from the RAW file (IIM, camera XMP or Exif). The first value that would have filled
+        it gives `Notice::HiddenByUser { property, value, origin }` (shown as "dold av användaren"
+        later). A sidecar value for a cleared property wins (another tool wrote it).
+     6. **Date Created** (§7): if `photoshop:DateCreated` is still absent, `suggested_date_created`
+        is `IptcDate::from_exif` of the three Exif fields; `Empty` gives `None`, `Invalid` gives
+        `Notice::Unreadable` (origin `Exif`). **Never inserted** into the metadata.
+  4. **Equality** (`pub fn same_value(xmp_id, a: &Value, b: &Value) -> bool`, also used by T83):
+     - against IIM (§5.1), on the predicted IIM value: `Text` and `Number` with `iim::predict`
+       (the property's `max_bytes` and `iim_format`) and `same_as_predicted`; a Lang Alt by its
+       shown text (`LangAlt::display`); a `List` item by item in order, same length; a `Date` by
+       `to_iim()` (both 2:55 and 2:60 equal);
+     - against Exif (§6.5): Description and Copyright by the shown text; Creator: the **first**
+       creator against the Exif value's first name (RawStride writes only the first creator, so
+       `["A","B"]` against Artist `A` is not a conflict);
+     - text equality is exact (no trimming, no case folding).
+  5. **`split_artist(text: &str) -> Vec<String>`** (MWG §5.7): names separated by `"; "`; a name in
+     double quotes may contain `;` and doubled quotes `""` stand for one quote. Read the rule in
+     `D:\PhotoWorkflowData\references\mwg_guidance.pdf` §5.7 first; if it differs from this
+     description, **stop and report**. Blank names are dropped.
+- **Rules:** rules 3–7 and 10–12. No `Cargo.toml` change.
+- **Tests to add** (`#[cfg(test)] mod tests` in `reconcile.rs`; `Readings` built by hand):
+  - **the three checksum cases** for `photoshop:City` (XMP `Göteborg`, IIM `Malmö`): `Matches` →
+    `Göteborg`, conflict rule `Xmp`; `Differs` → `Malmö` origin `Iim`, rule `Iim`; `Missing` →
+    `Göteborg`, rule `Open`; each conflict holds both values;
+  - **equality on the prediction**: XMP City of 40 bytes against its IIM value cut to 32 bytes is
+    not a conflict; IIM `000:Feature` (already stripped by T80) against XMP Genre `Feature` is
+    not; a Description Lang Alt `[x-default "A", sv "B"]` against IIM `A` is not; keywords in
+    another order are a conflict; a zone-less XMP date against IIM 2:55 only is not; XMP with a
+    known zone against IIM without 2:60 is;
+  - IIM only fills when XMP lacks the property (origin `Iim`, no conflict); a blank XMP text counts
+    as absent;
+  - **Exif**: Exif fills Description, Copyright and Creator when XMP and IIM lack them; Photographer
+    wins over Artist; `split_artist("A; B")` → `["A","B"]`, `"\"Smith; J\"; B"` →
+    `["Smith; J","B"]`, `"\"Say \"\"hi\"\"\"; B"` → `["Say \"hi\"","B"]`; XMP `["A","B"]` with
+    Artist `A` is not a conflict, with Artist `C` it is (rule `Xmp`); IIM-only Creator against
+    Artist with `Matches` → Exif wins (rule `Exif`), with `Differs` → IIM kept (rule `Iim`);
+  - GUID fills from ImageUniqueID, and a different XMP GUID is kept without a conflict;
+  - **RAW**: sidecar wins over camera XMP (conflict `Xmp`); camera XMP fills; RAW IIM with `Differs`
+    only fills and gives rule `Xmp`; a cleared property is not filled from camera XMP, IIM or Exif
+    and gives one `HiddenByUser` with the camera value; a sidecar value for a cleared property is
+    used;
+  - Date Created: absent → suggestion from Exif (zone only with an offset) and not in the metadata;
+    present → no suggestion; an invalid DateTimeOriginal → `Unreadable`;
+  - a refused XMP value (e.g. `Text` for `dc:subject`) gives `Refused` and the IIM value fills;
+  - T80 notices arrive as `Notice::Iim`.
+- **Done when:** `.\tools\check.ps1` is all OK; `docs/test-inventory.md` is updated;
+  `git diff --stat` shows only the files above.
+
+### T82. ADR 0007 I6: the reader — ExifTool output into readings, sidecar rules — Open
+
+- **Can start after T81 is accepted.** D2 (`serde_json` = 1.0.154 in `pw-metadata`) was approved by
+  the owner on 2026-11-11. `Cleared` (D1) is not read in this task: `Readings::cleared` stays
+  empty.
+- **Crates:** `pw-metadata` only. Nothing in RawStride uses the reader yet (the info panel is I10);
+  the old `read_ratings` is unchanged.
+- **Files:** new `crates/pw-metadata/src/read.rs`; `crates/pw-metadata/src/date.rs` (**only** the new
+  function of point 4 and its tests); `crates/pw-metadata/src/lib.rs` (the `mod` line only);
+  `crates/pw-metadata/Cargo.toml` (one line: `serde_json = "=1.0.154"` under `[dependencies]`);
+  `Cargo.lock` (by cargo); new `crates/pw-metadata/tests/read.rs`; `docs/test-inventory.md`.
+- **Why:** ADR 0007 §4 (where each format keeps its metadata), §4.1 and Q5 (a foreign sidecar next
+  to a DNG is ignored and reported), §4.2 and Q8 (`<basename>.xmp`; `<basename>.<ext>.xmp` is
+  ignored and reported; RAW+JPEG pairs), §5.4/§6.2 (decoding with the fallback), §6.5 (Copyright
+  parts), §12 (round trip per format).
+- **What:**
+  1. **`ExifTool::read_metadata(&mut self, image: &Path, fallback: Fallback) ->
+     Result<MetadataRead>`** with `MetadataRead { reconciled: Reconciled, file_notices:
+     Vec<FileNotice> }` and `FileNotice { ForeignSidecarIgnored(PathBuf),
+     ExtSidecarIgnored(PathBuf), IimBlockUnreadable(String) }`.
+  2. **File kind** by extension, from the existing lists in `lib.rs` (do not change them):
+     `supports_sidecar` → `Raw`; `dng` → `Dng`; `jpg`/`jpeg` → `Jpeg`; `tif`/`tiff` → `Tiff`; anything
+     else is `Error::Unsupported`.
+  3. **ExifTool calls** through `self.execute` (never a command line, see the measurements above):
+     - the image file: `-j -n -b -struct -G1 -XMP:all -IPTC -Photoshop:IPTCDigest
+       -CurrentIPTCDigest -IFD0:ImageDescription -IFD0:Artist -IFD0:Copyright
+       -ExifIFD:Photographer -ExifIFD:ImageUniqueID -ExifIFD:DateTimeOriginal
+       -ExifIFD:SubSecTimeOriginal -ExifIFD:OffsetTimeOriginal <file>`;
+     - for `Raw`, also the sidecar `<basename>.xmp` (`sidecar_path`) if it exists, with
+       `-j -n -b -struct -G1 -XMP:all <sidecar>`; its XMP is `Readings::xmp`, the RAW file's XMP is
+       `camera_xmp`. Without a sidecar `xmp` is empty;
+     - for `Dng`: a `<basename>.xmp` next to it is **never read** and gives
+       `ForeignSidecarIgnored` (Q5);
+     - for every kind: a `<basename>.<ext>.xmp` (e.g. `DSC01234.ARW.xmp`) gives `ExtSidecarIgnored`
+       and is never read (Q8). Compare names without regard to case (Windows).
+     If ExifTool reports the file missing or unreadable, return the error as `read_ratings` does.
+  4. **XMP JSON → values** (with `serde_json::Value`): a key is mapped to a property by the table's
+     `et_xmp` (`properties()`); unknown keys are ignored (they stay in the file).
+     - Lang Alt: `<et_xmp>` is `x-default`, `<et_xmp>-<language>` is that language (the language may
+       contain `-`, e.g. `en-US`); the entries are kept in the order of the JSON object (enable
+       `serde_json`'s `preserve_order` feature **only if** it adds no new package to `Cargo.lock`;
+       otherwise stop and report);
+     - lists (JSON arrays) → `List`; objects → `Struct`, arrays of objects → `StructList`; structure
+       fields by the field's `et_tag` (`FieldDef`), at any depth, Lang Alt fields as above;
+     - JSON numbers → `Number` with the number's text; JSON strings → by the kind;
+     - **dates:** add `IptcDate::parse_exiftool(text) -> Result<IptcDate, DateError>` in `date.rs`:
+       ExifTool's form (`2026`, `2026:11`, `2026:11:04`, `2026:11:04 10:15`, `…:30`, `…:30.5`, each
+       with or without `Z`/`±hh:mm`) is turned into the XMP form (the first two `:` of the date
+       become `-`, the space becomes `T`) and parsed with `parse_xmp`. An unparsable date gives
+       `Notice::Unreadable` through the reconciliation's notices (keep the text);
+     - a value that cannot be built is passed on and refused by `reconcile` (`Notice::Refused`).
+  5. **IIM:** the `IPTC` value (`base64:…`) is decoded (a small base64 decoder in `read.rs`, no new
+     dependency), parsed with `parse_block` and turned into values with `iim_values`;
+     `IimError` gives `FileNotice::IimBlockUnreadable` and no IIM. The digest: `Matches` when
+     `IPTCDigest` equals `CurrentIPTCDigest`, `Differs` when both exist and differ, `Missing`
+     without `IPTCDigest`. No `IPTC` key → `iim: None`.
+  6. **Exif:** each value is a JSON string, or `base64:…` when ExifTool found bytes that are not
+     UTF-8 (`-b`); those bytes are decoded with `iim::decode(bytes, &CodedCharset::Absent,
+     fallback)` (§6.2: ASCII → UTF-8 → fallback). Copyright: parts separated by NUL are joined with
+     a line feed (§6.5); trailing NULs and spaces are dropped. Blank values are `None`.
+  7. `reconcile(readings)` gives `reconciled`.
+- **Rules:** rules 3–7 and 10–12. The `Cargo.toml` line of D2 is the only dependency change. Check
+  with `git diff Cargo.lock`: `serde_json` added to `pw-metadata`'s dependency list, **no new
+  package**; otherwise stop and report.
+- **Tests to add:**
+  - `date.rs`: `parse_exiftool` for every form of point 4 gives the same `IptcDate` as `parse_xmp`
+    of the XMP form; `2026:11:04T10:15` and `2026-11-04 10:15` are errors;
+  - `read.rs` unit tests: the base64 decoder (RFC 4648 vectors, padding, invalid input is an error,
+    never a panic); JSON → values for a hand-written JSON object with a Lang Alt in three languages
+    (order kept, `en-US`), a list, a structure, a list of structures with a Lang Alt field, a date
+    and a number; the digest cases; the Copyright NUL join; Exif `base64:` bytes in Windows-1252;
+  - `tests/read.rs` (integration, **ExifTool required**; it fails with an explanation when ExifTool
+    is missing, as `tests/sidecar.rs` does): a JPEG made from the `SMALL` bytes of
+    `crates/pw-thumbcache/src/jpeg_fixture.rs` (copied into the test file), written with
+    `ExifTool::execute` in a temporary folder:
+    - XMP Description in two languages, two creators, Creator's Contact Info, Location Created,
+      Rating `2.5`, Date Created `2026-11`, plus IIM City and Keywords with `-IPTCDigest=new`
+      → read back exactly, digest `Matches`, no conflicts;
+    - then IIM City changed without `-IPTCDigest=new` → `Differs`, City from IIM, conflict `Iim`;
+    - IIM without a digest and a different XMP City → `Missing`, conflict `Open`;
+    - Exif Artist and ImageDescription only → filled from Exif;
+    - a fake RAW (`TN0001.ARW`, bytes as in `tests/sidecar.rs`) with `TN0001.xmp` → `XmpSidecar`
+      values; with `TN0001.ARW.xmp` → `ExtSidecarIgnored`;
+    - a JPEG renamed `.dng` is not a DNG, so a DNG test needs a real file: one test **ignored by
+      default** reads the first DNG in `PW_TESTDATA` with a `<basename>.xmp` written next to a copy
+      of it in a temporary folder → `ForeignSidecarIgnored`, and the sidecar's value is not used.
+- **Done when:** `.\tools\check.ps1` is all OK; `docs/test-inventory.md` is updated;
+  `git diff --stat` shows only the files above.
+
+### T83. ADR 0007 I7: the write plan — XMP, IIM, Exif overlap fields, conflicts — Open
+
+- **Can start after T82 is accepted** (its tests read the result back with `read_metadata`).
+- **Crates:** `pw-metadata` only. The plan is not used for real files yet: the safe write procedure
+  (§9) is I8; ratings and templates move to it in I9.
+- **Files:** new `crates/pw-metadata/src/write_plan.rs`; `crates/pw-metadata/src/lib.rs` (the `mod`
+  line only); new `crates/pw-metadata/tests/write_plan.rs`; `docs/test-inventory.md`.
+- **Why:** ADR 0007 §5.2 (IIM written when present or with the setting, UTF-8 with 1:90, the
+  checksum, Q1, byte limits), §5.4 (existing IIM in another encoding is converted on the first
+  write), §5.5 (deprecated datasets never edited), §6.3 (only existing "both ways" Exif fields are
+  synced, never created; DateTimeOriginal never written), §6.5 (first creator to Artist and
+  Photographer), §7, §8 (Lang Alt, clearing removes every representation; a RAW is never changed).
+- **What:** `pub mod write_plan` with:
+  1. **Input:** `FileState { kind: FileKind, iim_present: bool, iim_charset: CodedCharset,
+     iim_values: Vec<(String, Value)>, digest: IimDigest, exif_present: ExifPresent }`, where
+     `ExifPresent { image_description, copyright, artist, photographer }` are `bool`s (the tag
+     exists in the file) and `iim_values` are the values T80 read from the file's IIM;
+     `WriteSettings { create_iim: bool }` (§5.2, off by default); and the `Metadata` with its
+     `changes()` and `conflicts()`. T82 gets a helper `FileState::from_read(&MetadataRead, …)` only if
+     it is needed here; otherwise the tests build `FileState` by hand.
+  2. **Output:** `plan(metadata: &Metadata, state: &FileState, settings: WriteSettings) ->
+     Result<WritePlan, PlanError>` with `WritePlan { options: Vec<String>, args: Vec<String>, notices: Vec<WriteNotice> }`.
+     `args` are ExifTool tag arguments only (`-TAG=value`); `options` holds only `-ec` when needed;
+    no file name and no other options such as
+     `-o` or `-P` (they belong to I8). `WriteNotice { Truncated { property }, IimConvertedToUtf8,
+     ConflictKept { property }, DigestNotWritten }`. `PlanError { NotEditable(String) }` for a
+     changed deprecated IIM property (§5.5).
+  3. **XMP** for each changed property (`et_xmp`):
+     - text, number, URI: `-<et_xmp>=<text>`; date: `to_xmp()` (ExifTool accepts the XMP form);
+       line breaks are kept: `-stay_open` takes one argument per line, so a line break is written
+       as `\n` (and `\` as `\\`) and the plan lists ExifTool's `-ec` option (C-style escapes) in
+       `WritePlan::options`; prove in the integration test that a two-line Description comes back
+       with its line break;
+     - Lang Alt: only `x-default` (`-<et_xmp>=<text>`), the other languages are not touched (Q7);
+     - list: the whole list (`-<et_xmp>=` followed by one `-<et_xmp>=<item>` per item);
+     - structure or list of structures: ExifTool's structure syntax
+       (`{Field=value,Field2=value}`, `[{…},{…}]`, fields by `et_tag`, Lang Alt fields with
+       `-<lang>`), with ExifTool's escape character `|` before `,`, `}`, `]`, `|` and a leading
+       `[`/`{` inside values;
+     - cleared: the property is removed; for a Lang Alt **all** languages. Find the ExifTool
+       arguments that remove every language and prove them in the integration test; if ExifTool
+       cannot do it in one write, stop and report.
+  4. **IIM** (JPEG, TIFF, DNG; never `Raw`):
+     - written when `iim_present`, or when `settings.create_iim` (§5.2);
+     - every changed property with an IIM dataset is written as `iim::predict` of its value with
+       `iim_format` and the table's byte limit (lists item by item; Lang Alt by its `x-default`); a
+       cut value gives `Truncated`. Date Created: 2:55 and, only when `to_iim()` gives one, 2:60;
+       otherwise 2:60 is removed (Q3). Find the ExifTool value form for `IPTC:DateCreated` and
+       `IPTC:TimeCreated` that stores exactly the `to_iim()` text and prove it in the test;
+     - cleared → the dataset(s) are removed;
+     - `-IPTC:CodedCharacterSet=UTF8` whenever IIM is written (MWG: UTF-8 with 1:90);
+     - **existing IIM not declared UTF-8** (`iim_charset` other than `Utf8`) with any non-ASCII
+       value in `iim_values`: every value of `iim_values` that is not changed is written again as
+       UTF-8, once, with `IimConvertedToUtf8` (§5.4);
+     - **checksum:** when both IIM and XMP will exist after the write, `-IPTCDigest=new`, **unless a
+       conflict with rule `Open` remains** (Q1): then no digest is written and `DigestNotWritten`
+       is given;
+     - **Q1 conflicts:** a property with an `Open` conflict that the user did **not** change is not
+       written in either form (`ConflictKept`). A property the user changed counts as decided: both
+       forms are written and its conflict no longer blocks the digest. (This is the reviewer's
+       reading of Q1 — "until the user decides" — and is marked for the owner in the log.)
+  5. **Exif** (JPEG, TIFF, DNG; never `Raw`), only for the fields that **exist** (`ExifPresent`),
+     never created (§6.3): Description → `IFD0:ImageDescription` (shown `x-default`), Copyright Notice
+     → `IFD0:Copyright`, Creator → the **first** creator to `IFD0:Artist` and
+     `ExifIFD:Photographer`; cleared → the existing field is removed (MWG: the other form must be
+     removed). DateTimeOriginal, SubSecTimeOriginal, OffsetTimeOriginal, ImageUniqueID and GPS are
+     never in the plan, whatever changed.
+  6. **`Raw`:** XMP only (the plan is applied to the sidecar by I8). A cleared property is just
+     removed from the sidecar; recording it in `Cleared` waits for D1.
+- **Rules:** rules 3–7 and 10–12. No `Cargo.toml` change.
+- **Tests to add:**
+  - unit tests in `write_plan.rs` with hand-built `Metadata`/`FileState`: the exact argument lists
+    for a text, a Lang Alt, a list, a structure with characters that need `|`, a date with and
+    without zone (2:60 written or removed), a clear of each kind; IIM not written without IIM and
+    without the setting, written with the setting; `Truncated` for a 40-byte City; Genre and
+    Subject Code prefixes; the UTF-8 conversion of unchanged Latin-1 values; the digest with and
+    without an `Open` conflict, a changed property with an `Open` conflict written in both forms;
+    Exif fields only when present; nothing for DateTimeOriginal; `NotEditable` for
+    `photoshop:Category`; `Raw` gives XMP arguments only;
+  - `tests/write_plan.rs` (integration, **ExifTool required**, same JPEG fixture as T82): apply the
+    plan with `ExifTool::execute` to a **temporary copy** (with `-overwrite_original`, test only) and
+    read it back with `read_metadata`: the changed values are there; other XMP languages are kept;
+    a cleared Lang Alt has no language left; IIM equals XMP and `CurrentIPTCDigest` equals
+    `IPTCDigest`; with an `Open` conflict the digest is unchanged; an existing Artist is updated, a
+    missing one is not created; the IIM bytes are UTF-8 with 1:90 (`-b -IPTC`); a Date Created
+    without zone has no 2:60.
+- **Done when:** `.\tools\check.ps1` is all OK; `docs/test-inventory.md` is updated;
+  `git diff --stat` shows only the files above.
+
 ### T7. Format the files that `cargo fmt --check` reports — Done
 
 - **Crates:** `photoworkflow` (`src-tauri`), `preview-bench` (`tools/preview-bench`).
@@ -3210,10 +3596,11 @@ and reviewer:
 - A timeout when ExifTool hangs (process supervision across threads).
 - Suppressing the Windows "no disk in drive" dialog when scanning empty card readers (needs a
   Windows API call and a new dependency).
-- ADR 0007 (IPTC metadata) steps I5–I13: their tasks are written after T76–T79 are accepted (see
-  "Milestone 8 (ADR 0007, IPTC metadata): steps"). I8 needs the owner's approval of `windows-sys`
-  in `pw-metadata`; I11 waits for the PLUS controlled vocabulary; I12 waits for the level-C
-  samples.
+- ADR 0007 (IPTC metadata) steps I8–I13 and the `Cleared` task: their tasks are written after T83
+  is accepted (see "Milestone 8 (ADR 0007, IPTC metadata): steps"). I8 needs the owner's approval
+  of `windows-sys` in `pw-metadata`; `Cleared` waits for D1; I11 waits for the PLUS controlled
+  vocabulary; I12 waits for the level-C samples. Also later: Exif ImageEditor ↔ Contributor and
+  GPS → Location Created (§6.1), left out of T81; keyword qualifiers (§8), left out of T83.
 - The import dialog fields for title and description in `ui/` (frontend).
 - ADR 0010 steps M3–M7 (the rest of the import) wait until the contact sheet (ADR 0011) is done
   (owner decision, 2026-11-08). M4 and M7 are added to this list then.
@@ -3488,3 +3875,5 @@ and reviewer:
 | 2026-11-11 | T79 | Ready for review | Reviewer fix of the open point above (owner's choice, 2026-11-11): `coded_charset` splits 1:90 into its ISO 2022 escape sequences; `Latin1` is one or more of `ESC - A` (G1) and `ESC . A` (G2), optionally with `ESC ( B` (ASCII in G0), and nothing else; `Utf8` stays exactly `ESC % G`; everything else, including UTF-8 mixed with other sequences, is `Other`. Two tests added, no existing test changed. `check.ps1`: fmt, test and clippy OK, 594 passed, 0 failed, 32 ignored; `docs/test-inventory.md` updated |
 | 2026-11-11 | T78 | Ready for review | New `pw-metadata::value` (`Origin`, `LangAlt`, `Value`, `StructValue`, `PropertyValue`, `Conflict`, `ConflictRule`, `Metadata`, `ValueError`) with 14 unit tests; `properties::field_list_kind` with 1 test; `lib.rs` the `mod` line; `docs/test-inventory.md`. Point 8 checked: of the 13 `Multi` structure fields, the spec's "XMP Specs" rows give `Seq` for exactly `AOCreator`, `AOCreatorId` and `rbVertices`, `Bag` for the other ten. Choices for review: a Lang Alt `set` takes the text the new value shows (`display`) and applies it with `set_default` to the existing value (without one, the new value's entries are the start); "only spaces" means the space character only (as T79 `is_blank`); `Number` must parse as a finite `f64` (`NaN`/`inf` refused); a `List` is not checked entry by entry (point 6 only asks for `List`). `check.ps1`: fmt, test and clippy OK, 609 passed, 0 failed, 32 ignored |
 | 2026-11-11 | T78 | Ready for review | Review: accepted. Only the named files changed (`value.rs`, the `mod` line, `properties.rs` with `field_list_kind` and its test only, `docs/test-inventory.md`; this file: the heading status and one log row). Every point and test of the task is there, including the structure-field check at any depth with the `/` path and the two-level case; no `unwrap`/`expect`/`panic!` outside tests. `field_list_kind` matches the reviewer's search of the spec (exactly seven `Seq` in the "XMP Specs" rows: four top-level, three fields). The reviewer's `check.ps1`: fmt, test and clippy OK, 609 passed, 0 failed, 32 ignored (14 new `value` tests, 1 new `properties` test). Accepted choices: a Lang Alt `set` applies the new value's shown text to `x-default` of the existing value; "only spaces" means the space character (as T79); a `Number` must be finite. Noted for I5/I7: the entries of a `List` are not checked against the kind (e.g. `Iptc4xmpExt:ModelAge` is a list of integers); `Integer` and `Number` accept surrounding spaces (the text is kept as it is); `insert_read` replaces an earlier value of the same property, so I5 must reconcile before it inserts |
+| 2026-11-11 | T80–T83 | Open / Blocked | Added after T76–T79 were done: T80 the IIM block (datasets, decoding, values); T81 the reconciliation (checksum cases, Exif, Creator, `Cleared` as an input); T82 the reader with ExifTool (**Blocked** on owner decision D2, `serde_json` in `pw-metadata`); T83 the write plan, checked against ExifTool. The step plan gains I5a/I5b and the owner decisions D1 (namespace of `Cleared`) and D2, and records the reviewer's ExifTool 13.59 measurements (raw IIM block, `CurrentIPTCDigest`, `-IPTCDigest=new`, the JSON form, ExifTool's date form, the Windows code page on the command line). **For the owner (T83 point 4):** an edit of a property with an `Open` conflict counts as the user's decision, so both forms are written; other `Open` conflicts keep the digest from being written (reviewer's reading of Q1). T80 can start now |
+| 2026-11-11 | T82 | Open | Owner decision D2: `serde_json` = 1.0.154 as a dependency of `pw-metadata` approved. T82 is no longer blocked; it starts after T81 is accepted |
