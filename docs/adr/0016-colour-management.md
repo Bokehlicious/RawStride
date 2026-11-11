@@ -136,8 +136,10 @@ on the worker threads, before the pixels become a texture. One screen, one profi
   visible; reviewer's refinement 2026-11-11): "RawStride  ·  Skärmprofil: CX240(…)08CAL (DP)"
   (the file name), "RawStride  ·  Ingen skärmprofil – visas som sRGB", or "RawStride  ·
   Skärmprofilen kunde inte användas – visas som sRGB".
-- **Status line:** unchanged when the source profile is used. When an embedded profile cannot be
-  used: "… · profilen kunde inte läsas, visas som sRGB".
+- **Status line (loupe):** unchanged when the source profile is used. When an embedded profile cannot be
+  used: "…  ·  TIFF-fil 6000 × 4000  ·  Inbäddad färgprofil kunde inte användas  ·  …" (reviewer's
+  refinement 2026-11-11: without "visas som sRGB", since a JPEG with an unusable ICC and the Exif
+  Adobe RGB marker is shown as Adobe RGB).
 - **Errors:** none new; colour problems never stop an image from being shown.
 
 ## 6. Dependencies (GR10, approved by the owner 2026-11-11)

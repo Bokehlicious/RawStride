@@ -2429,7 +2429,7 @@ Ordered from easiest to hardest. Start at the top.
 - **Done when:** `.\tools\check.ps1` is all OK; `git diff Cargo.lock` is empty;
   `docs/test-inventory.md` has the new tests and totals; `git diff --stat` shows only the files above.
 
-### T72. ADR 0016 C4: the loupe and the thumbnails convert to the monitor profile — Ready for review
+### T72. ADR 0016 C4: the loupe and the thumbnails convert to the monitor profile — Done
 
 - **Can start now.** T68–T71 are done: `pw-colour` (transforms), the monitor profile in `pw-loupe`
   (T69), `pw_tiff::decode_rgb8_for_display` (T70), `Decoder::icc_profile` and
@@ -2526,6 +2526,96 @@ Ordered from easiest to hardest. Start at the top.
   mode, side by side with Lightroom on the CX240 (F5); `latency.ps1` on the TIFF and RAW sets (F6).
 - **Done when:** `.\tools\check.ps1` is all OK; `docs/test-inventory.md` has the new tests and
   totals; `git diff --stat` shows only the files above.
+
+### T73. ADR 0016 §5: the loupe says when an embedded colour profile cannot be used — Open
+
+- **Can start now.** T72 is done. Independent of T74's text, but T74 describes it, so T73 first.
+- **Crates:** `pw-colour`, `pw-viewcore`, `pw-loupe`.
+- **Files:** `crates/pw-colour/src/lib.rs`, `crates/pw-colour/src/tests.rs`;
+  `crates/pw-viewcore/src/backend.rs`, `crates/pw-viewcore/src/core.rs`,
+  `crates/pw-viewcore/src/state.rs`, `crates/pw-viewcore/src/native.rs`; `crates/pw-loupe/src/lib.rs`;
+  any test file that builds a `Frame` literal (today `crates/pw-loupe/src/lib.rs`; add
+  `profile_unusable: false` and nothing else there); `docs/test-inventory.md`. No `Cargo.toml`
+  change; `Cargo.lock` must not change.
+- **Why:** ADR 0016 §3.1 ("Display") and §5 (refined 2026-11-11), GR9: the user must see when the
+  colours rest on a fallback because the file's own profile was broken.
+- **What:**
+  1. **`pw-colour`:** `pub fn jpeg_source_profile_checked(icc: Option<&[u8]>, exif_adobe_rgb: bool)
+     -> (Profile, bool)`: the same choice as `jpeg_source_profile`, plus `true` when an ICC profile
+     was present but could not be used. `jpeg_source_profile` becomes a wrapper that drops the flag
+     (its behaviour and tests unchanged).
+  2. **`pw-viewcore` `Backend`:** a new method with a default,
+     `fn profile_unusable(&self, _session: &Self::Session) -> bool { false }`, so the fake backends
+     of the tests need no change.
+  3. **Core and state:** after a successful open the worker asks
+     `backend.profile_unusable(&session)` and the state keeps the keys for which it is true in a new
+     `HashSet<Key>` next to `sizes`: cleared where `sizes` is cleared, moved by `set_files` exactly
+     as `sizes` is moved. `Frame` gets `pub profile_unusable: bool` (true when the current key is in
+     the set), documented like the other fields.
+  4. **`native.rs`:** the flag per session. TIFF: `SourceColour::Unusable(_)` from
+     `decode_rgb8_for_display` (keep it next to the image in `NativeSession::Tiff`). JPEG:
+     `jpeg_source_profile_checked`, plus `true` when `NativeBackend::transform` had to fall back to
+     sRGB because no transform could be built from the source profile. RAW: always `false`.
+     `profile_unusable` returns the session's flag.
+  5. **`pw-loupe` `status_line`:** when `frame.profile_unusable` and the source text is shown (not
+     "kan inte visas", not "förbereder …"), insert the part
+     **"Inbäddad färgprofil kunde inte användas"** right after the source text, with the usual
+     `"  ·  "`. Nothing else in the line changes. The grid's status line is not changed.
+- **Rules:** rules 3–7 and 10–12. Existing tests keep their assertions; the only allowed change to
+  existing test code is the new field in `Frame` literals.
+- **Tests to add:**
+  - `pw-colour`: `jpeg_source_profile_checked`: no ICC → `false` (with and without the marker); a
+    usable Adobe RGB ICC → `false`; a garbage ICC → `true` with sRGB, and with the marker `true` with
+    Adobe RGB; a gray ICC → `true`.
+  - `pw-viewcore` `native.rs`: a TIFF with a garbage ICC tag → `profile_unusable` true; with a
+    ProPhoto ICC and without ICC → false; the fixture JPEG with a garbage APP2 ICC → true; without
+    APP2 and with a usable one → false.
+  - `pw-viewcore` state (with the simulated backend of the existing state or core tests; a fake
+    that reports `true` for one path): the frame of that image has `profile_unusable` true and the
+    others false; after `set_files` reorders the list the flag follows the path; after
+    `open_folder` it is gone.
+  - `pw-loupe`: `status_line` of a ready frame with the flag contains
+    "TIFF-fil 6 × 4  ·  Inbäddad färgprofil kunde inte användas  ·  " (or the JPEG equivalent);
+    without the flag the line equals today's; a `Preparing` frame without size and an `Error` frame
+    with the flag do not show the part.
+- **Check by hand (owner, after review):** a copy of a JPEG with its APP2 profile damaged (the
+  reviewer provides one) shows the part in the loupe status line; the DxO and Sony files do not.
+- **Done when:** `.\tools\check.ps1` is all OK; `git diff Cargo.lock` is empty;
+  `docs/test-inventory.md` has the new tests and totals; `git diff --stat` shows only the files above.
+
+### T74. ADR 0016 C6: documentation after milestone 7 (colour management) — Open
+
+- **Can start after T73 is done.** Documentation only; no code, no tests change.
+- **Files:** `docs/adr/0016-colour-management.md`; `docs/adr/0015-egui-tiff-viewing.md`;
+  `docs/adr/0007-metadata-iptc.md` (one status line); `docs/architecture.md`;
+  `docs/GUI_REQUIREMENTS.md` (GR8 only); `docs/README.md` (the ADR list line only); the root
+  `README.md`. Change only the lines needed; rules 10–12.
+- **Why:** ADR 0016 §9 C6, as T67 did for ADR 0015.
+- **What:**
+  1. **ADR 0016:** after the status, an "Implemented (date)" line: C1–C4 = T68–T72, the status-line
+     note = T73, C5 accepted by the owner on 2026-11-11, C6 = T74. §7: a results table under the F1–F6
+     table, in the style of ADR 0015 §7, filled **from the log rows of T68–T73 and C5** in
+     `docs/agent-tasks.md` (F1: T68 within 1; F2: T70/T71 tests and the real-file results; F3:
+     unchanged tests and identity; F4: the fallback tests; F5: the objective patch check within 1 and
+     the owner's DxO check; F6: the `latency.ps1` result **if a log row gives one**, otherwise
+     "not measured yet; the render timings of the T72 review show the conversion within the noise").
+     §9: C6 "**Done:** T74". §12: one point that milestone 7 is complete.
+  2. **ADR 0015:** §2 "ADR 0007 becomes milestone 7" and §9 D7 and §12 "milestone 7": add
+     "(moved to milestone 8 by ADR 0016 Q1, 2026-11-11)" once each, nothing else; §3.2 and §12 colour
+     points: add "(done: ADR 0016, 2026-11-11)".
+  3. **ADR 0007:** its "Planned as milestone 7" status line becomes milestone 8 with
+     "(ADR 0016 Q1, 2026-11-11)"; status still "proposed".
+  4. **architecture.md:** a new `pw-colour` row (ICC profiles and transforms with `moxcms` 0.8.1,
+     the transform cache, the JPEG source rule; ADR 0016) after `pw-tiff`; one short addition each in
+     the `pw-tiff`, `pw-thumbcache`, `pw-viewcore`, `pw-loupe`, `pw-libjpeg` and `pw-raw` rows (what
+     T69–T73 added there). Diagrams unchanged.
+  5. **GR8:** the status sentence: the open owner question about colour management is answered —
+     done in ADR 0016 (2026-11-11); full IPTC handling (ADR 0007) is now milestone 8.
+  6. **docs/README.md:** add "0016 colour management – done 2026-11-11" to the ADR list.
+  7. **Root README.md:** list colour management (conversion to the monitor profile) with the other
+     done features of RawStride.
+- **Done when:** `.\tools\check.ps1` is all OK (no code changed) and `git diff --stat` shows only the
+  files above.
 
 ### T7. Format the files that `cargo fmt --check` reports — Done
 
@@ -2929,3 +3019,4 @@ and reviewer:
 | 2026-11-11 | T72 | Ready for review | Review: accepted. Only the named files changed, plus two deviations the agent reports as approved by the owner: `moxcms` as a dev-dependency of `pw-viewcore` (test ICC bytes; no new package in `Cargo.lock`) and the existing `thumbnail(…)` test calls given the two sRGB arguments the new signature needs (no assertion changed). `native.rs`: TIFF through `decode_rgb8_for_display`; JPEG from `jpeg_source_profile` (APP2 ICC, Exif marker, sRGB), the full decode converted once; RAW sRGB → destination on every render; a source with no buildable transform falls back to sRGB. `extract.rs`/`worker.rs`: the same rules, one shared `TransformCache`. Reviewer re-ran `check.ps1` (fmt, test, clippy OK) and the ignored real-file tests in release on `D:\PhotoWorkflowData\RAW` (all pass): `TN100423.ARW` render_half 4784×3188 359 ms to sRGB and 312 ms to Adobe RGB, embedded JPEG 808×540 8.3 / 8.7 ms, so the conversion is lost in the noise of the render. The owner's new DxO PhotoLab exports: `TN005701_DxO.jpg` has an APP2 ICC "Adobe RGB (1998)" (560 bytes); `TN005702_DxO.jpg` has none (sRGB). Next: the owner's check by hand (ADR 0016 C5) |
 | 2026-11-11 | C5 | — | Objective check of F5 instead of Lightroom (the owner has no Lightroom): the eight-patch sRGB TIFF of the passthrough check shown in RawStride with T72 (release build) and read back from a screenshot of the CX240. Expected values computed independently of moxcms from the CX240 profile (sRGB D50 matrix, the profile's matrix inverted, its 1024-point TRC tables inverted): all eight patches within 1, seven exactly (sRGB red: expected 216,64,31, shown 216,63,30). Before T72 the same patches were shown unchanged (255,0,0 etc.). The visual side-by-side check uses DxO PhotoLab instead of Lightroom |
 | 2026-11-11 | C5 | Done | The owner accepted T72 and the C5 check by hand ("godkänt"). Still open: F6 with `latency.ps1` on the TIFF and RAW sets; the status-line note for an unusable embedded profile (ADR 0016 §5); the documentation step C6 |
+| 2026-11-11 | T73–T74 | Open | Added: T73, the loupe's status-line part "Inbäddad färgprofil kunde inte användas" (ADR 0016 §5, text refined by the reviewer: no "visas som sRGB", since the Exif marker can take over); T74, documentation step C6 (after T73). T72 committed (Done) |
