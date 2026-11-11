@@ -5,6 +5,8 @@
   its own work part, with its own approval and commit.
 - **Amendment 1 (owner, 2026-11-10, §13):** a held step key in the loupe waits for the shown image
   (task T62).
+- S6 partly done (2026-11-11, runs 11–13 open): results in
+  `docs/analyses/2026-11-11-adr0009-s6-acceptance.md`.
 - Date: 2026-11-07
 - Related:
   - [GUI_REQUIREMENTS.md](../GUI_REQUIREMENTS.md) (GR1–GR11; §6 versions and features; §7 renderer and
@@ -368,7 +370,7 @@ summary, git diff and git status, and the owner's approval before commit. Nothin
 | **S3** | JPEG mode in `pw-viewcore`: libjpeg-turbo through our own safe wrapper `pw-libjpeg` (§11, decision 1a), behind the decoder trait | Code + tests |
 | **S4** | `pw-render`: textures within the budget, and placement, including free zoom levels | Code + tests |
 | **S5** | `pw-loupe`: window, input, status line, indicator, errors and settings. The licence check for the eframe tree without wgpu comes before the first build | Code + tests, first runnable program |
-| **S6** | Acceptance measurement (section 8.2) and a results report | Results document; no code changes unless the owner asks |
+| **S6** | Acceptance measurement (section 8.2) and a results report | Results document; no code changes unless the owner asks. **Partly done:** T75 (runs 11–13 open) |
 | **S7** | Documentation: architecture.md, TESTING.md (the loupe's tests), docs/README.md | Documentation commit |
 
 ## 10. Risks

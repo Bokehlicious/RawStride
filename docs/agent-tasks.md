@@ -2617,7 +2617,9 @@ Ordered from easiest to hardest. Start at the top.
 - **Done when:** `.\tools\check.ps1` is all OK (no code changed) and `git diff --stat` shows only the
   files above.
 
-### T75. ADR 0009 S6: acceptance measurement of RawStride and a results report — Open
+### T75. ADR 0009 S6: acceptance measurement of RawStride and a results report — Ready for review
+
+- **Review 2026-11-11: accepted.** Waiting for the owner's commit.
 
 - **Starts after the owner's runs (S6a below).** The report itself is documentation only; no code, no
   `Cargo.toml`. For a Claude agent.
@@ -3114,3 +3116,5 @@ and reviewer:
 | 2026-11-11 | S6a | — | Run 9 (free zoom from fit, anchor at the centre, a7r, n=5 each): + median 16.7, max 17.1 ms; − median 16.6, max 16.9 ms; one change per press |
 | 2026-11-11 | S6a | — | Run 10 (LEFT after RIGHT × 3, RAW, a7r, n=3): 17.0/17.0 ms |
 | 2026-11-11 | S6a | — | **Runs 11–13 deferred by the owner.** A first attempt at run 12 (15:02, about 30 s) was not done as intended (no long session) and is not used; `mem.csv` from it stays as a record. Not measured: V5, V8 over a long session (L1–L4), and the hand checks V6, G1, G3, G4, GR6, GR7. `s6a.ps1` was updated for these runs (run 11 measured by the script, run 12 with a timer, run 13 as a checklist); `-Run 11,12,13` runs them later. T75 can start; it reports these as not measured |
+| 2026-11-11 | T75 | Ready for review | Report `docs/analyses/2026-11-11-adr0009-s6-acceptance.md` from the `s6-` CSV rows, the S6a and F6 log rows and `analysis\s6`: V1 and V2 met; V3 (first Z, JPEG A1 51.8 ms), V4 (RAW: 16 of 20 steps over 70 ms) and V7 (first Z 81.9–231.4 ms) not met; V5, V6, V8, G1–G4, GR6, GR7 not measured (runs 11–13 deferred). ADR 0009 status line and §9 S6 "Partly done"; GR8 sentence added. The status line says "S6 partly done" instead of "S6 done", to match the deferral |
+| 2026-11-11 | T75 | Ready for review | Review: accepted. Only the named files changed (the report, ADR 0009 status line and §9 S6, the GR8 sentence; this file: the heading status and one log row); `test-output.txt` newer than the changes, fmt/test/clippy OK. Every median, 95th percentile, maximum and n recomputed from the `s6-` CSV rows: all match (medians within 0.05 ms, rounded as in `s6a-log.txt`); the P7 figures match ADR 0008 §18.3. Accepted deviation: the ADR 0009 status line says "partly done", as the deferral requires. The reviewer corrected three lines of the report: G2 was not in the S6a plan (not "in run 13"); the number of screens is not recorded in S6a; `s6-zoom-minus` was not preceded by a restart. Noted, not changed: the F6 log row gives the TIFF median as 17.4 ms, the CSV gives 17.25 ms |
