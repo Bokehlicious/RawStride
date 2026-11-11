@@ -6,8 +6,8 @@ project owner together with a reviewer before it is merged. Read `AGENTS.md`, `C
 
 ## How to work on a task
 
-1. **Branch:** work on `feature/gui-workspace` only. Never commit to `m2-and-adr0008-phase1` or
-   `main`; the owner moves `m2-and-adr0008-phase1` forward after review.
+1. **Branch:** work on `feature/gui-workspace` only. Never commit to `main`; the owner
+   moves `main` forward after review.
 2. **One task at a time.** Change only the files the task names. If another file must change, stop
    and explain why instead of changing it.
 3. **No new dependencies** and no changes to any `Cargo.toml` `[dependencies]` unless the task says
