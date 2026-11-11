@@ -118,9 +118,11 @@ pub fn is_listed(path: &Path) -> bool {
 }
 
 /// The images of a folder in display order (by name, ignoring case), and the position of
-/// `selected` among them. A file path opens its folder with that file selected.
+/// `selected` among them. A file path opens its folder with that file selected. A path that
+/// does not exist is an error naming that path, not its folder.
 pub fn list_folder(path: &Path) -> Result<(Vec<PathBuf>, usize), String> {
-    let (dir, selected) = if path.is_dir() {
+    let meta = std::fs::metadata(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let (dir, selected) = if meta.is_dir() {
         (path.to_path_buf(), None)
     } else {
         let dir = path
@@ -502,7 +504,13 @@ mod tests {
         // a file opens its folder with that file selected
         let (_, pos) = list_folder(&dir.join("C.dng")).unwrap_or_default();
         assert_eq!(pos, 2);
-        assert!(list_folder(&dir.join("missing-folder").join("x.arw")).is_err());
+        // a missing path is an error naming the path itself, not its folder
+        let missing = dir.join("missing-folder").join("x.arw");
+        let error = list_folder(&missing).err().unwrap_or_default();
+        assert!(error.starts_with(&missing.display().to_string()), "{error}");
+        let missing = dir.join("missing.arw");
+        let error = list_folder(&missing).err().unwrap_or_default();
+        assert!(error.starts_with(&missing.display().to_string()), "{error}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
