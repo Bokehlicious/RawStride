@@ -5,6 +5,8 @@
   accepted. Also accepted: replacing the test `the_folder_lists_supported_files_by_name_without_tiff`
   in step D4 (§8.1). Nothing is built or installed by this ADR. Each step in §9 is its own work part,
   with its own approval and commit.
+- **Implemented (2026-11-11):** steps D1–D4 done (agent tasks T63–T66), D5 accepted by the owner;
+  D6–D7 are this documentation update.
 - Date: 2026-11-10
 - Related:
   - ADR 0004, addendum "viewing TIFF" (2026-11-03): today's Tauri behaviour. **Its rules are carried
@@ -196,8 +198,8 @@ Results (D5, 2026-11-11, the owner's acceptance; the reviewer's checks from the 
 | **D3** | `pw-thumbcache`: TIFF thumbnails; `fit` and `downscale` move to `pw-tiff` (tests) | **Done:** T65 |
 | **D4** | `pw-loupe`: list TIFF, status text (library tests) | **Done:** T66 |
 | **D5** | Acceptance by hand (§8.2) | **Done 2026-11-11** by the owner; see §7 |
-| **D6** | Documentation: architecture.md (`pw-tiff`), test inventory, ADR 0004 addendum (egui note), ADR 0009 §3.2 note | |
-| **D7** | GR8 and the root `README.md`: TIFF viewing done; IPTC parity met through the import template; ADR 0007 is milestone 7 | |
+| **D6** | Documentation: architecture.md (`pw-tiff`), test inventory, ADR 0004 addendum (egui note), ADR 0009 §3.2 note | **Done:** T67 |
+| **D7** | GR8 and the root `README.md`: TIFF viewing done; IPTC parity met through the import template; ADR 0007 is milestone 7 | **Done:** T67 |
 
 D2 and D3 need D1 and do not depend on each other. D4 needs D2 and D3. Each of D1–D4 is one agent
 task.
@@ -264,3 +266,5 @@ palette TIFF; CMYK and BigTIFF can follow.
 - A new crate `pw-tiff` holds the decoder that the Tauri app had inside `src-tauri`.
 - `pw-viewcore` gains a third session kind; `Source` is unchanged.
 - ADR 0007 (IPTC) is planned as milestone 7, after its approval.
+- Colour management (ICC) is not applied, so a TIFF with a wide-gamut profile such as ProPhoto RGB
+  looks dull. Whether it comes before the switch is an open owner question (§9.1).

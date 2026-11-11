@@ -62,7 +62,7 @@ owner's answers to the questions of section 11 are recorded there.
 
 | Area | Content | Requirement |
 |---|---|---|
-| Open a folder | One folder at a time. The file types of `pw_raw::SUPPORTED_EXTENSIONS`, as in the current app, except TIFF (later). The folder comes from the command line or is dropped on the window. There is no dialog (§11, decision 2) | V5 |
+| Open a folder | One folder at a time. The file types of `pw_raw::SUPPORTED_EXTENSIONS`, as in the current app, TIFF since ADR 0015. The folder comes from the command line or is dropped on the window. There is no dialog (§11, decision 2) | V5 |
 | Stepping | Next, previous, first and last, with the keys of section 3.3 | V1, V4 |
 | Zoom | Fit ↔ 100 % with Z. The 100 % view is real sensor pixels in RAW mode. **Free zoom** with +, − and the mouse wheel (section 3.4) | V2, V3, V7 |
 | Pan | Dragging with the mouse at 100 %, as in the current viewer (section 3.3) | V6, G2 |
@@ -83,7 +83,7 @@ owner's answers to the questions of section 11 are recorded there.
 - The ingest dialog (ADR 0005).
 - IPTC metadata (ADR 0007), apart from the few EXIF fields `pw-raw` already reads, which the status
   line may show.
-- TIFF viewing.
+- TIFF viewing (done: ADR 0015, 2026-11-11).
 - A settings window and a settings file. The budgets are command-line arguments in milestone 1
   (§11, decision 3).
 - A folder dialog (§11, decision 2).

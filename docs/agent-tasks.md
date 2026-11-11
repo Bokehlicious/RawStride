@@ -2107,7 +2107,9 @@ Ordered from easiest to hardest. Start at the top.
   and the loupe, with "TIFF-fil W × H" in the status line in both modes. The full acceptance with
   ratings, zoom, errors and timing is step D5 (ADR 0015 §8.2).
 
-### T67. ADR 0015 D6–D7: documentation after milestone 6 — Open
+### T67. ADR 0015 D6–D7: documentation after milestone 6 — Ready for review
+
+- **Review 2026-11-11: accepted.** Waiting for the owner's commit.
 
 - **Can start now.** T63–T66 and the owner's acceptance (D5, 2026-11-11) are done. Documentation
   only; no code, no `Cargo.toml`. For a Claude agent.
@@ -2540,3 +2542,5 @@ and reviewer:
 | 2026-11-10 | T66 | Done | Owner's hand check (TIFFs in grid and loupe, "TIFF-fil W × H" in both modes) and commit done (4bf5023). Next: the owner's acceptance D5 (ADR 0015 §8.2) |
 | 2026-11-11 | D5 | Done | Owner's acceptance of ADR 0015 (§8.2): every check passed. The R check was worded unclearly: R switches the folder's display mode and its control even on a TIFF, while the image and "TIFF-fil" stay, as on a plain JPEG file; §8.2 reworded. `latency.ps1` (label `t66-tiff-next`, RAW mode, the 9 TIFFs alone in `D:\PhotoWorkflowData\TIFF`, RIGHT × 8, 1.5 s apart): first change 15.5–30.7 ms, median 16.1 ms, one change each, so V1 and V2 are met for prefetched TIFFs (E5). Results in ADR 0015 §7. Next: documentation D6–D7 |
 | 2026-11-11 | T67 | Open | Added: ADR 0015 D6–D7, documentation after milestone 6 (ADR 0015, 0004, 0009, 0007 status line, architecture.md, GR8, both READMEs). GR8: no feature of the Tauri app is left; IPTC parity through the import template; colour management named as an open owner question |
+| 2026-11-11 | T67 | Ready for review | (Agent) Documentation only. ADR 0015: "Implemented (2026-11-11)" line after the status (D1–D4 = T63–T66, D5 accepted by the owner, D6–D7 this update); §9 D6 and D7 "**Done:** T67"; §12 one new point: ICC colour management is not applied, an open owner question before the switch (§9.1); §7 and §9.1 unchanged. ADR 0004 addendum "viewing TIFF": the 2026-11-11 egui note with the six differences. ADR 0009: §3.1 "TIFF since ADR 0015", §3.2 "TIFF viewing (done: ADR 0015, 2026-11-11)." ADR 0007: one status item after the first ("Planned as milestone 7 …"). architecture.md crate table: new `pw-tiff` row after `pw-thumbcache`, TIFF notes in `pw-thumbcache`, `pw-viewcore`, `pw-loupe`. GR8 status 2026-11-11 as written in the task. Root `README.md`: TIFF viewing listed, "until the switch (GUI_REQUIREMENTS GR8)". docs/README.md: 0015 "done 2026-11-11". `docs/test-inventory.md` unchanged (matches: 488 passed, 29 ignored, 0 failed). `.\tools\check.ps1`: fmt, test (488 passed, 29 ignored, 0 failed) and clippy OK. No commit |
+| 2026-11-11 | T67 | Ready for review | Review: accepted. Only the named files changed, each in the named lines: ADR 0015 "Implemented" line, D6–D7 results and the colour point in §12 (§7 and §9.1 untouched); ADR 0004 note with the six differences; ADR 0009 §3.1 row and §3.2 item; ADR 0007 one status line, still "proposed"; architecture.md new `pw-tiff` row and three short additions, diagram unchanged; GR8 status as written in the task; root README "until the switch"; docs/README "done 2026-11-11". Test inventory unchanged (no code change). `check.ps1` OK. **Milestone 6 (ADR 0015) is complete** once committed |

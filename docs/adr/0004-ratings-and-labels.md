@@ -89,6 +89,12 @@ RAW. (Current Tauri UI. In the eframe + egui GUI, orientation is applied when th
 see `docs/GUI_REQUIREMENTS.md`.) Supported: 8/16-bit and float Gray, Gray+alpha, RGB, RGBA and CMYK (naive conversion);
 palette and YCbCr TIFFs are reported as unsupported. ICC profiles are not applied yet.
 
+- **2026-11-11: implemented in the egui program (ADR 0015).** The rules above are carried over,
+  with these differences: the decoder is the shared crate `pw-tiff`; RawStride keeps the decoded
+  image instead of JPEGs at three sizes; one decode at a time in the whole process; a memory limit
+  (the core budget in the loupe, 4 GiB for thumbnails); a TIFF is shown as itself in both display
+  modes; thumbnails are decoded from the image data, and embedded previews are not used.
+
 ## Addendum: filter and multi-selection (2026-11-04)
 
 UI only; no backend change.
