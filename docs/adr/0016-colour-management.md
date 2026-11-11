@@ -183,6 +183,9 @@ on the worker threads, before the pixels become a texture. One screen, one profi
   and read back with a screenshot: the values are unchanged. **Done 2026-11-11** (§1.1).
 - F5: the same sRGB JPEG and ProPhoto TIFF in RawStride and Lightroom side by side; saturated reds
   and greens, skin tones, a grey ramp.
+  **The owner has no Lightroom (2026-11-11):** DxO PhotoLab (colour managed) is the visual reference
+  instead. Objective check done the same day: the eight sRGB patches of §1.1 shown in RawStride after
+  T72 matched values computed independently from the CX240 profile within 1 (seven exactly).
 - The info panel names the profile. Rename the profile association away: RawStride says "ingen".
 - F6 with `latency.ps1`.
 

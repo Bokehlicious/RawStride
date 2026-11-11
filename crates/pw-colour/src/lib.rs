@@ -7,10 +7,12 @@
 //! - [`Transform`]: an 8-bit and a 16-bit RGB → RGB transform with relative colorimetric intent
 //!   (ADR 0016 Q6), converting in place in chunks; the same profile on both sides is an identity
 //!   that leaves the data untouched (F3);
-//! - [`TransformCache`]: builds each transform once per pair of profiles.
+//! - [`TransformCache`]: builds each transform once per pair of profiles;
+//! - [`jpeg_source_profile`]: the source profile of a JPEG (ADR 0016 §3.1).
 //!
-//! The conversion itself is done by `moxcms` (ADR 0016 Q5). The crate is not used yet; the loupe,
-//! the loupe core, the thumbnails and `pw-tiff` follow in later steps (ADR 0016 C2–C4).
+//! The conversion itself is done by `moxcms` (ADR 0016 Q5). `pw-tiff`, the loupe core
+//! (`pw-viewcore`), the thumbnails (`pw-thumbcache`) and the loupe (`pw-loupe`) use it
+//! (ADR 0016 C2–C4).
 
 use std::collections::HashMap;
 use std::fmt;
@@ -230,6 +232,21 @@ where
             .map_err(|e| ColourError::Transform(e.to_string()))?;
     }
     Ok(())
+}
+
+/// The source profile of a JPEG (an embedded preview or a JPEG file; ADR 0016 §3.1): the ICC
+/// profile from its APP2 segments when there is one and it parses as RGB; else Adobe RGB when the
+/// Exif data marks the image as Adobe RGB (`exif_adobe_rgb`); else sRGB. An ICC profile that
+/// cannot be used falls through to the Exif rule, then sRGB. Never an error.
+pub fn jpeg_source_profile(icc: Option<&[u8]>, exif_adobe_rgb: bool) -> Profile {
+    if let Some(profile) = icc.and_then(|bytes| Profile::from_icc(bytes).ok()) {
+        return profile;
+    }
+    if exif_adobe_rgb {
+        Profile::adobe_rgb()
+    } else {
+        Profile::srgb()
+    }
 }
 
 /// Builds each transform once per pair of profiles and shares it (ADR 0016 §4.1).

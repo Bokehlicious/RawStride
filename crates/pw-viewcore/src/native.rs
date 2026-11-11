@@ -2,11 +2,21 @@
 //! RAW, libjpeg-turbo through `pw-libjpeg` for the embedded JPEG located by `pw-raw` (G4,
 //! ADR 0009 §5.2), and `pw-tiff` for TIFF files, decoded once under the core budget (ADR 0015
 //! §4.1–§4.4). Without the feature the core's tests need no native libraries.
+//!
+//! Every image is converted from its source profile to the backend's destination (the monitor
+//! profile) with `pw-colour` before it leaves the backend, so the core's caches hold
+//! display-ready pixels (ADR 0016 §4.1, §4.2): TIFF from its embedded profile, JPEG from its
+//! APP2 profile or Exif marker (ADR 0016 §3.1), RAW from sRGB (LibRaw renders sRGB, ADR 0006).
+//! With the default destination sRGB, sRGB sources are identity transforms and the pixels are
+//! unchanged (F3).
 
 use std::path::Path;
+use std::sync::Arc;
 
+use pw_colour::{ColourError, Profile, Transform, TransformCache, jpeg_source_profile};
 use pw_libjpeg::{Decoder, Scale};
 use pw_libraw::{DAMAGED, Demosaic, Session};
+use pw_raw::ExifColourSpace;
 
 use crate::backend::{Backend, DecodeError, Rgb, Source};
 use crate::geometry::{ImageSize, Rect};
@@ -22,36 +32,63 @@ const DEFAULT_TIFF_LIMIT: usize = 4 << 30;
 const MIB: usize = 1024 * 1024;
 
 /// LibRaw with the fixed settings of ADR 0006 and PPG, libjpeg-turbo for embedded JPEGs, and
-/// `pw-tiff` for TIFF files.
-#[derive(Clone, Copy, Debug)]
+/// `pw-tiff` for TIFF files; every image converted to the destination profile (ADR 0016).
+#[derive(Clone, Debug)]
 pub struct NativeBackend {
     /// The most memory in bytes one TIFF decode may use (the core budget, ADR 0015 Q4).
     tiff_limit: usize,
+    /// The profile the pixels are converted to: the monitor profile (ADR 0016 §4.1).
+    destination: Profile,
+    /// The transforms, built once per pair of profiles and shared by the core's workers.
+    cache: Arc<TransformCache>,
 }
 
 impl Default for NativeBackend {
+    /// The default TIFF limit and destination sRGB.
     fn default() -> NativeBackend {
-        NativeBackend {
-            tiff_limit: DEFAULT_TIFF_LIMIT,
-        }
+        NativeBackend::with_tiff_limit(DEFAULT_TIFF_LIMIT)
     }
 }
 
 impl NativeBackend {
-    /// A backend whose TIFF decodes may use at most `bytes` (the core budget, ADR 0015 Q4).
+    /// A backend whose TIFF decodes may use at most `bytes` (the core budget, ADR 0015 Q4), with
+    /// destination sRGB.
     pub fn with_tiff_limit(bytes: usize) -> NativeBackend {
-        NativeBackend { tiff_limit: bytes }
+        NativeBackend {
+            tiff_limit: bytes,
+            destination: Profile::srgb(),
+            cache: Arc::new(TransformCache::default()),
+        }
+    }
+
+    /// The same backend converting to `profile` (the monitor profile, ADR 0016 §4.1).
+    pub fn with_monitor_profile(self, profile: Profile) -> NativeBackend {
+        NativeBackend {
+            destination: profile,
+            ..self
+        }
+    }
+
+    /// The transform from `source` to the destination, built once per pair. A source profile no
+    /// transform can be built from is treated as sRGB, as `pw-tiff` does.
+    fn transform(&self, source: &Profile) -> Result<Arc<Transform>, DecodeError> {
+        self.cache
+            .get(source, &self.destination)
+            .or_else(|_| self.cache.get(&Profile::srgb(), &self.destination))
+            .map_err(colour_error)
     }
 }
 
 /// An opened file.
 #[derive(Debug)]
 pub enum NativeSession {
-    /// An unpacked RAW file.
-    Raw(Session),
-    /// A JPEG: its bytes, a decoder, and the full decode once a 100 % view needed it.
+    /// An unpacked RAW file and the sRGB → destination transform of its renders.
+    Raw(Session, Arc<Transform>),
+    /// A JPEG: its bytes, a decoder, its transform, and the full decode once a 100 % view needed
+    /// it.
     Jpeg(JpegSession),
-    /// A TIFF file: the whole image, decoded once when it was opened (ADR 0015 §4.2).
+    /// A TIFF file: the whole image, decoded and converted once when it was opened (ADR 0015
+    /// §4.2, ADR 0016 §4.1).
     Tiff(Rgb),
 }
 
@@ -59,6 +96,9 @@ pub enum NativeSession {
 pub struct JpegSession {
     data: Vec<u8>,
     decoder: Decoder,
+    /// From the JPEG's source profile (ADR 0016 §3.1) to the destination.
+    transform: Arc<Transform>,
+    /// The full decode, already converted.
     full: Option<Rgb>,
 }
 
@@ -102,6 +142,20 @@ fn tiff_error(e: pw_tiff::TiffError) -> DecodeError {
     }
 }
 
+/// A conversion error (cannot happen for whole RGB pixels) or a transform that could not be
+/// built, with the `ColourError` text.
+fn colour_error(e: ColourError) -> DecodeError {
+    DecodeError::new(e.to_string())
+}
+
+/// Converts `img` in place with `transform` (nothing happens for an identity).
+fn convert(transform: &Transform, mut img: Rgb) -> Result<Rgb, DecodeError> {
+    transform
+        .convert_rgb8(&mut img.data)
+        .map_err(colour_error)?;
+    Ok(img)
+}
+
 fn rgb_raw(img: pw_libraw::Rgb8) -> Rgb {
     Rgb {
         width: img.width,
@@ -118,8 +172,13 @@ fn rgb_jpeg(img: pw_libjpeg::Rgb8) -> Rgb {
     }
 }
 
-/// Opens the largest embedded JPEG of `path` (or a plain JPEG file itself).
-fn open_jpeg(path: &Path) -> Result<(JpegSession, ImageSize), DecodeError> {
+/// Opens the largest embedded JPEG of `path` (or a plain JPEG file itself), with the transform
+/// from its source profile (APP2 ICC, else the Exif Adobe RGB marker, else sRGB; ADR 0016 §3.1)
+/// to the backend's destination.
+fn open_jpeg(
+    backend: &NativeBackend,
+    path: &Path,
+) -> Result<(JpegSession, ImageSize), DecodeError> {
     let info =
         pw_raw::inspect(path).map_err(|e| DecodeError::new(format!("{}: {e}", path.display())))?;
     let Some(preview) = info.pick(pw_raw::PreviewSize::Large) else {
@@ -131,21 +190,36 @@ fn open_jpeg(path: &Path) -> Result<(JpegSession, ImageSize), DecodeError> {
     let data = pw_raw::read_preview(path, preview)
         .map_err(|e| DecodeError::new(format!("{}: {e}", path.display())))?;
     let mut decoder = Decoder::new().map_err(jpeg_error)?;
+    let icc = decoder.icc_profile(&data).map_err(jpeg_error)?;
     let (w, h) = decoder.header(&data).map_err(jpeg_error)?;
+    let source = jpeg_source_profile(
+        icc.as_deref(),
+        info.colour_space == ExifColourSpace::AdobeRgb,
+    );
+    let transform = backend.transform(&source)?;
     // the orientation is the file's tag (ADR 0003 point 4); the JPEG's own tag is not applied
     let flip = flip_of_orientation(info.orientation);
     let session = JpegSession {
         data,
         decoder,
+        transform,
         full: None,
     };
     Ok((session, ImageSize { w, h, flip }))
 }
 
-/// Decodes a TIFF file whole with `pw-tiff` under `limit` bytes. The orientation is the file's
-/// tag as `pw-raw` reads it, or 1 when `pw-raw` cannot inspect the file (BigTIFF, ADR 0015 §4.3).
-fn open_tiff(path: &Path, limit: usize) -> Result<(Rgb, ImageSize), DecodeError> {
-    let img = pw_tiff::decode_rgb8(path, Some(limit)).map_err(tiff_error)?;
+/// Decodes a TIFF file whole with `pw-tiff` under the backend's limit and converts it from its
+/// source profile to the destination (ADR 0016 §4.1; the `SourceColour` is not used yet). The
+/// orientation is the file's tag as `pw-raw` reads it, or 1 when `pw-raw` cannot inspect the file
+/// (BigTIFF, ADR 0015 §4.3).
+fn open_tiff(backend: &NativeBackend, path: &Path) -> Result<(Rgb, ImageSize), DecodeError> {
+    let (img, _source) = pw_tiff::decode_rgb8_for_display(
+        path,
+        Some(backend.tiff_limit),
+        &backend.destination,
+        &backend.cache,
+    )
+    .map_err(tiff_error)?;
     let img = Rgb {
         width: img.width,
         height: img.height,
@@ -166,21 +240,23 @@ impl Backend for NativeBackend {
     fn open(&self, path: &Path, source: Source) -> Result<(NativeSession, ImageSize), DecodeError> {
         // the file type wins over the display mode: a TIFF is shown as itself (ADR 0015 Q3)
         if pw_raw::is_tiff_file(path) {
-            let (img, size) = open_tiff(path, self.tiff_limit)?;
+            let (img, size) = open_tiff(self, path)?;
             return Ok((NativeSession::Tiff(img), size));
         }
         match source {
             Source::Raw => {
                 let session = Session::open(path).map_err(raw_error)?;
+                // LibRaw renders sRGB (ADR 0006)
+                let transform = self.transform(&Profile::srgb())?;
                 let size = ImageSize {
                     w: session.width(),
                     h: session.height(),
                     flip: session.flip(),
                 };
-                Ok((NativeSession::Raw(session), size))
+                Ok((NativeSession::Raw(session, transform), size))
             }
             Source::Jpeg => {
-                let (s, size) = open_jpeg(path)?;
+                let (s, size) = open_jpeg(self, path)?;
                 Ok((NativeSession::Jpeg(s), size))
             }
         }
@@ -188,12 +264,18 @@ impl Backend for NativeBackend {
 
     fn render_half(&self, session: &mut NativeSession) -> Result<Rgb, DecodeError> {
         match session {
-            NativeSession::Raw(s) => s.render_half().map(rgb_raw).map_err(raw_error),
-            NativeSession::Jpeg(j) => j
-                .decoder
-                .decode(&j.data, Scale::Half)
-                .map(rgb_jpeg)
-                .map_err(jpeg_error),
+            NativeSession::Raw(s, t) => {
+                let img = s.render_half().map(rgb_raw).map_err(raw_error)?;
+                convert(t, img)
+            }
+            NativeSession::Jpeg(j) => {
+                let img = j
+                    .decoder
+                    .decode(&j.data, Scale::Half)
+                    .map(rgb_jpeg)
+                    .map_err(jpeg_error)?;
+                convert(&j.transform, img)
+            }
             NativeSession::Tiff(img) => {
                 let (w, h) = scale::scaled_size(img.width, img.height, 0.5);
                 scale::downscale(img, w, h).ok_or_else(|| {
@@ -208,11 +290,13 @@ impl Backend for NativeBackend {
 
     fn render_region(&self, session: &mut NativeSession, r: Rect) -> Result<Rgb, DecodeError> {
         match session {
-            NativeSession::Raw(s) => {
+            NativeSession::Raw(s, t) => {
                 let r = pw_libraw::Rect::new(r.x, r.y, r.w, r.h);
-                s.render_region_with(r, MARGIN, Demosaic::Ppg)
+                let img = s
+                    .render_region_with(r, MARGIN, Demosaic::Ppg)
                     .map(rgb_raw)
-                    .map_err(raw_error)
+                    .map_err(raw_error)?;
+                convert(t, img)
             }
             NativeSession::Jpeg(j) => {
                 if j.full.is_none() {
@@ -221,7 +305,8 @@ impl Backend for NativeBackend {
                         .decode(&j.data, Scale::Full)
                         .map(rgb_jpeg)
                         .map_err(jpeg_error)?;
-                    j.full = Some(full);
+                    // converted once here, so crops need no work
+                    j.full = Some(convert(&j.transform, full)?);
                 }
                 let full = j
                     .full
@@ -448,5 +533,231 @@ mod tests {
         assert_eq!(e, DecodeError::new("x.tif: not found"));
         let e = tiff_error(TiffError::Decode("TIFF: bad strip".into()));
         assert_eq!(e, DecodeError::new("TIFF: bad strip"));
+    }
+
+    // ---------- colour conversion to the monitor profile (ADR 0016 C4) ----------
+
+    use moxcms::ColorProfile;
+
+    // Inside the inline `tests` module of `native.rs` the path is relative to
+    // `src/native/tests/`, hence four `..`.
+    #[path = "../../../../pw-thumbcache/src/jpeg_fixture.rs"]
+    mod jpeg_fixture;
+
+    fn pro_photo_icc() -> Vec<u8> {
+        ColorProfile::new_pro_photo_rgb().encode().unwrap()
+    }
+
+    fn adobe_rgb_icc() -> Vec<u8> {
+        ColorProfile::new_adobe_rgb().encode().unwrap()
+    }
+
+    /// `data` converted from `source` to `destination`, through a transform cache as the backend
+    /// gets it.
+    fn converted(mut data: Vec<u8>, source: &Profile, destination: &Profile) -> Vec<u8> {
+        let cache = TransformCache::default();
+        let transform = cache.get(source, destination).unwrap();
+        transform.convert_rgb8(&mut data).unwrap();
+        data
+    }
+
+    /// An 8-bit RGB TIFF with the ICC profile `icc` in tag 34675.
+    fn rgb_tiff_with_icc(w: u32, h: u32, data: &[u8], icc: &[u8]) -> Vec<u8> {
+        let mut out = Cursor::new(Vec::new());
+        let mut encoder = TiffEncoder::new(&mut out).unwrap();
+        let mut image = encoder.new_image::<colortype::RGB8>(w, h).unwrap();
+        image.encoder().write_tag(Tag::Unknown(34675), icc).unwrap();
+        image.write_data(data).unwrap();
+        out.into_inner()
+    }
+
+    /// The whole image of a session, through `render_region`.
+    fn whole(backend: &NativeBackend, session: &mut NativeSession, size: ImageSize) -> Rgb {
+        backend
+            .render_region(session, Rect::new(0, 0, size.w, size.h))
+            .unwrap()
+    }
+
+    #[test]
+    fn a_tiff_with_an_icc_profile_is_opened_converted_to_the_destination() {
+        let (w, h) = (6, 4);
+        let path = temp_file(
+            "pro-photo-icc.tif",
+            &rgb_tiff_with_icc(w, h, &pixels(w, h), &pro_photo_icc()),
+        );
+        let srgb = Profile::srgb();
+        let expected =
+            pw_tiff::decode_rgb8_for_display(&path, None, &srgb, &TransformCache::default())
+                .unwrap()
+                .0;
+        // the conversion changed the pixels, so the comparison below means something
+        assert_ne!(
+            expected.data,
+            pw_tiff::decode_rgb8(&path, None).unwrap().data
+        );
+
+        for backend in [
+            NativeBackend::default().with_monitor_profile(srgb.clone()),
+            NativeBackend::default(),
+        ] {
+            let (mut session, size) = backend.open(&path, Source::Jpeg).unwrap();
+            assert_eq!(whole(&backend, &mut session, size).data, expected.data);
+        }
+    }
+
+    #[test]
+    fn a_tiff_without_icc_is_unchanged_with_the_default_backend() {
+        let (w, h) = (6, 4);
+        let path = temp_file("no-icc.tif", &rgb_tiff(w, h, &pixels(w, h), None));
+        let backend = NativeBackend::default();
+        let (mut session, size) = backend.open(&path, Source::Jpeg).unwrap();
+        assert_eq!(
+            whole(&backend, &mut session, size).data,
+            pw_tiff::decode_rgb8(&path, None).unwrap().data
+        );
+    }
+
+    /// The fixture JPEG's plain decodes: half size, and the region (4, 2, 8×4) of the full decode.
+    fn plain_jpeg_decodes() -> (Rgb, Rgb) {
+        let mut decoder = Decoder::new().unwrap();
+        let half = rgb_jpeg(decoder.decode(jpeg_fixture::SMALL, Scale::Half).unwrap());
+        let full = rgb_jpeg(decoder.decode(jpeg_fixture::SMALL, Scale::Full).unwrap());
+        let region = scale::crop(&full, 4, 2, 8, 4).unwrap();
+        (half, region)
+    }
+
+    /// `render_half` and the region (4, 2, 8×4) of `path` opened with `backend`.
+    fn jpeg_renders(backend: &NativeBackend, path: &Path) -> (Rgb, Rgb) {
+        let (mut session, size) = backend.open(path, Source::Jpeg).unwrap();
+        assert!(matches!(session, NativeSession::Jpeg(_)), "{session:?}");
+        assert_eq!((size.w, size.h), (16, 8));
+        let half = backend.render_half(&mut session).unwrap();
+        let region = backend
+            .render_region(&mut session, Rect::new(4, 2, 8, 4))
+            .unwrap();
+        // a second region comes from the stored full decode and is converted the same way
+        let again = backend
+            .render_region(&mut session, Rect::new(4, 2, 8, 4))
+            .unwrap();
+        assert_eq!(again, region);
+        (half, region)
+    }
+
+    #[test]
+    fn a_plain_jpeg_is_converted_from_srgb_to_the_destination() {
+        let path = temp_file("plain.jpg", jpeg_fixture::SMALL);
+        let (plain_half, plain_region) = plain_jpeg_decodes();
+        let (srgb, adobe) = (Profile::srgb(), Profile::adobe_rgb());
+
+        let backend = NativeBackend::default().with_monitor_profile(adobe.clone());
+        let (half, region) = jpeg_renders(&backend, &path);
+        let expected_half = converted(plain_half.data.clone(), &srgb, &adobe);
+        assert_ne!(
+            expected_half, plain_half.data,
+            "the conversion changes the fixture"
+        );
+        assert_eq!(half.data, expected_half);
+        assert_eq!(
+            region.data,
+            converted(plain_region.data.clone(), &srgb, &adobe)
+        );
+
+        // destination sRGB: the plain decodes byte for byte (F3)
+        let backend = NativeBackend::default().with_monitor_profile(srgb);
+        let (half, region) = jpeg_renders(&backend, &path);
+        assert_eq!(half, plain_half);
+        assert_eq!(region, plain_region);
+    }
+
+    /// The fixture JPEG with `segment` (a marker segment, marker included) inserted after SOI.
+    fn fixture_with_segment(segment: &[u8]) -> Vec<u8> {
+        let jpeg = jpeg_fixture::SMALL;
+        let mut out = jpeg[..2].to_vec();
+        out.extend_from_slice(segment);
+        out.extend_from_slice(&jpeg[2..]);
+        out
+    }
+
+    /// One APP2 `ICC_PROFILE` segment (sequence 1 of 1) holding `icc`.
+    fn app2_icc(icc: &[u8]) -> Vec<u8> {
+        let len = u16::try_from(2 + 12 + 2 + icc.len()).unwrap();
+        let mut s = vec![0xFF, 0xE2];
+        s.extend_from_slice(&len.to_be_bytes());
+        s.extend_from_slice(b"ICC_PROFILE\0");
+        s.extend_from_slice(&[1, 1]);
+        s.extend_from_slice(icc);
+        s
+    }
+
+    /// Writes a little-endian IFD with `entries` (tag, type, count, value) at `at` of `f`.
+    fn put_ifd(f: &mut [u8], at: usize, entries: &[(u16, u16, u32, u32)]) {
+        f[at..at + 2].copy_from_slice(&(entries.len() as u16).to_le_bytes());
+        for (i, &(tag, kind, count, val)) in entries.iter().enumerate() {
+            let e = at + 2 + 12 * i;
+            f[e..e + 2].copy_from_slice(&tag.to_le_bytes());
+            f[e + 2..e + 4].copy_from_slice(&kind.to_le_bytes());
+            f[e + 4..e + 8].copy_from_slice(&count.to_le_bytes());
+            f[e + 8..e + 12].copy_from_slice(&val.to_le_bytes());
+        }
+        let n = at + 2 + 12 * entries.len();
+        f[n..n + 4].copy_from_slice(&0u32.to_le_bytes());
+    }
+
+    /// An APP1 Exif segment: IFD0 → Exif IFD (ColorSpace 0xFFFF, Interop IFD) → Interop IFD
+    /// (InteroperabilityIndex "R03"), the DCF marker of Adobe RGB. Built as the `pw-raw` tests
+    /// of T71 build it.
+    fn app1_exif_adobe_rgb() -> Vec<u8> {
+        let (exif_at, interop_at) = (100u32, 200u32);
+        let mut tiff = vec![0u8; 256];
+        tiff[0..4].copy_from_slice(b"II*\0");
+        tiff[4..8].copy_from_slice(&8u32.to_le_bytes());
+        put_ifd(&mut tiff, 8, &[(0x8769, 4, 1, exif_at)]);
+        put_ifd(
+            &mut tiff,
+            exif_at as usize,
+            &[(0xA001, 3, 1, 0xFFFF), (0xA005, 4, 1, interop_at)],
+        );
+        let r03 = u32::from_le_bytes([b'R', b'0', b'3', 0]);
+        put_ifd(&mut tiff, interop_at as usize, &[(0x0001, 2, 4, r03)]);
+        let mut s = vec![0xFF, 0xE1];
+        s.extend_from_slice(&((2 + 6 + tiff.len()) as u16).to_be_bytes());
+        s.extend_from_slice(b"Exif\0\0");
+        s.extend_from_slice(&tiff);
+        s
+    }
+
+    #[test]
+    fn a_jpeg_with_the_destinations_own_icc_profile_is_unchanged() {
+        let icc = adobe_rgb_icc();
+        let path = temp_file("app2-adobe.jpg", &fixture_with_segment(&app2_icc(&icc)));
+        let destination = Profile::from_icc(&icc).unwrap();
+        let backend = NativeBackend::default().with_monitor_profile(destination);
+        let (plain_half, plain_region) = plain_jpeg_decodes();
+        let (half, region) = jpeg_renders(&backend, &path);
+        assert_eq!(half, plain_half);
+        assert_eq!(region, plain_region);
+    }
+
+    #[test]
+    fn a_jpeg_with_the_exif_adobe_rgb_marker_is_converted_from_adobe_rgb() {
+        let path = temp_file(
+            "exif-adobe.jpg",
+            &fixture_with_segment(&app1_exif_adobe_rgb()),
+        );
+        assert_eq!(
+            pw_raw::inspect(&path).unwrap().colour_space,
+            ExifColourSpace::AdobeRgb
+        );
+        let backend = NativeBackend::default();
+        let (plain_half, plain_region) = plain_jpeg_decodes();
+        let (half, region) = jpeg_renders(&backend, &path);
+        let (adobe, srgb) = (Profile::adobe_rgb(), Profile::srgb());
+        let expected_half = converted(plain_half.data.clone(), &adobe, &srgb);
+        assert_ne!(
+            expected_half, plain_half.data,
+            "the conversion changes the fixture"
+        );
+        assert_eq!(half.data, expected_half);
+        assert_eq!(region.data, converted(plain_region.data, &adobe, &srgb));
     }
 }

@@ -3902,6 +3902,8 @@ dependencies = [
 name = "pw-thumbcache"
 version = "0.1.0"
 dependencies = [
+ "moxcms",
+ "pw-colour",
  "pw-core",
  "pw-libjpeg",
  "pw-raw",
@@ -3922,6 +3924,8 @@ dependencies = [
 name = "pw-viewcore"
 version = "0.1.0"
 dependencies = [
+ "moxcms",
+ "pw-colour",
  "pw-libjpeg",
  "pw-libraw",
  "pw-raw",

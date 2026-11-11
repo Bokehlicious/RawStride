@@ -14,14 +14,16 @@ workspace = true
 # The real decoders: LibRaw with PPG through pw-libraw, libjpeg-turbo through pw-libjpeg for
 # the embedded JPEG that pw-raw locates, and pw-tiff for TIFF files (ADR 0015). Without it the
 # core is generic and is tested with simulated decoders, so its tests need no native libraries.
-native = ["dep:pw-libraw", "dep:pw-libjpeg", "dep:pw-raw", "dep:pw-tiff"]
+native = ["dep:pw-libraw", "dep:pw-libjpeg", "dep:pw-raw", "dep:pw-tiff", "dep:pw-colour"]
 
 [dependencies]
 pw-libraw = { workspace = true, optional = true }
 pw-libjpeg = { workspace = true, optional = true }
 pw-raw = { workspace = true, optional = true }
 pw-tiff = { workspace = true, optional = true }
+pw-colour = { workspace = true, optional = true }
 
 [dev-dependencies]
 pw-raw.workspace = true
 tiff = "=0.9.1"
+moxcms = "=0.8.1"

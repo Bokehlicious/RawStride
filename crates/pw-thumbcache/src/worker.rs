@@ -6,6 +6,7 @@ use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::thread::JoinHandle;
 
+use pw_colour::{Profile, TransformCache};
 use pw_libjpeg::{Decoder, Rgb8};
 
 use crate::{ThumbError, thumbnail};
@@ -20,14 +21,20 @@ pub trait ThumbSource: Send {
     fn make(&mut self, path: &Path, cell: u32) -> Result<Rgb8, ThumbError>;
 }
 
+/// Thumbnails from files, converted to `destination` (ADR 0016 §4.1 "Thumbnails").
 struct FileThumbSource {
     decoder: Result<Decoder, String>,
+    destination: Profile,
+    /// Shared by the worker threads, so each transform is built once.
+    cache: Arc<TransformCache>,
 }
 
 impl FileThumbSource {
-    fn new() -> Self {
+    fn new(destination: Profile, cache: Arc<TransformCache>) -> Self {
         Self {
             decoder: Decoder::new().map_err(|error| error.to_string()),
+            destination,
+            cache,
         }
     }
 }
@@ -35,7 +42,7 @@ impl FileThumbSource {
 impl ThumbSource for FileThumbSource {
     fn make(&mut self, path: &Path, cell: u32) -> Result<Rgb8, ThumbError> {
         match &mut self.decoder {
-            Ok(decoder) => thumbnail(path, cell, decoder),
+            Ok(decoder) => thumbnail(path, cell, decoder, &self.destination, &self.cache),
             Err(error) => Err(ThumbError::Unreadable(error.clone())),
         }
     }
@@ -123,17 +130,37 @@ impl std::fmt::Debug for ThumbWorker {
 }
 
 impl ThumbWorker {
-    /// Starts the default two-thread pool with a 64 MiB thumbnail cache.
+    /// Starts the default two-thread pool with a 64 MiB thumbnail cache; thumbnails in sRGB.
     pub fn start() -> io::Result<Self> {
         Self::start_with_limits(DEFAULT_WORKER_COUNT, DEFAULT_CACHE_LIMIT)
     }
 
-    /// Starts a pool with a chosen thread count and in-memory cache limit.
+    /// Starts the default two-thread pool with a 64 MiB thumbnail cache; thumbnails converted to
+    /// `profile`, the monitor profile (ADR 0016 §4.1).
+    pub fn start_with_monitor_profile(profile: Profile) -> io::Result<Self> {
+        Self::start_with_profile(DEFAULT_WORKER_COUNT, DEFAULT_CACHE_LIMIT, profile)
+    }
+
+    /// Starts a pool with a chosen thread count and in-memory cache limit; thumbnails in sRGB.
     pub fn start_with_limits(worker_count: usize, cache_limit: usize) -> io::Result<Self> {
+        Self::start_with_profile(worker_count, cache_limit, Profile::srgb())
+    }
+
+    fn start_with_profile(
+        worker_count: usize,
+        cache_limit: usize,
+        destination: Profile,
+    ) -> io::Result<Self> {
+        let cache = Arc::new(TransformCache::default());
         Self::with_source_factory(
             worker_count,
             cache_limit,
-            Arc::new(|| Box::new(FileThumbSource::new())),
+            Arc::new(move || {
+                Box::new(FileThumbSource::new(
+                    destination.clone(),
+                    Arc::clone(&cache),
+                ))
+            }),
         )
     }
 

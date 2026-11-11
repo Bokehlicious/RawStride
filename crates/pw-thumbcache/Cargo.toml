@@ -15,6 +15,8 @@ pw-core.workspace = true
 pw-libjpeg.workspace = true
 pw-raw.workspace = true
 pw-tiff.workspace = true
+pw-colour.workspace = true
 
 [dev-dependencies]
 tiff = "=0.9.1"
+moxcms = "=0.8.1"

@@ -2,8 +2,9 @@ use std::fmt;
 use std::fs;
 use std::path::Path;
 
+use pw_colour::{Profile, TransformCache, jpeg_source_profile};
 use pw_libjpeg::{Decoder, Rgb8, Scale};
-use pw_raw::{Format, ImageInfo, PreviewRef};
+use pw_raw::{ExifColourSpace, Format, ImageInfo, PreviewRef};
 
 /// Selects the smallest embedded preview whose long edge reaches `cell`, or the largest preview
 /// when none is large enough.
@@ -130,13 +131,23 @@ pub fn orient(image: Rgb8, orientation: u16) -> Rgb8 {
 /// does not get the user's budget (ADR 0015 §9.1).
 const TIFF_LIMIT: usize = 4 << 30;
 
-/// Extracts and orients a thumbnail without decoding RAW image data.
+/// Extracts and orients a thumbnail without decoding RAW image data, converted from its source
+/// profile to `destination` (the monitor profile, ADR 0016 §4.1 "Thumbnails").
 ///
-/// A TIFF is the exception: it is decoded from its image data and reduced to the cell with a box
-/// filter; its embedded previews are not used (ADR 0015 §4.1, Q7).
-pub fn thumbnail(path: &Path, cell: u32, decoder: &mut Decoder) -> Result<Rgb8, ThumbError> {
+/// A JPEG (a plain file or an embedded preview) is converted from its APP2 ICC profile, else the
+/// Exif Adobe RGB marker, else sRGB (ADR 0016 §3.1), after the scaled decode. A TIFF is decoded
+/// from its image data, converted from its embedded profile and reduced to the cell with a box
+/// filter; its embedded previews are not used (ADR 0015 §4.1, Q7). With destination sRGB, sRGB
+/// sources are left unchanged (F3).
+pub fn thumbnail(
+    path: &Path,
+    cell: u32,
+    decoder: &mut Decoder,
+    destination: &Profile,
+    cache: &TransformCache,
+) -> Result<Rgb8, ThumbError> {
     if pw_raw::is_tiff_file(path) {
-        return tiff_thumbnail(path, cell);
+        return tiff_thumbnail(path, cell, destination, cache);
     }
     let info = pw_raw::inspect(path).map_err(|error| ThumbError::Unreadable(error.to_string()))?;
     let bytes = if info.format == Some(Format::Jpeg) {
@@ -146,22 +157,42 @@ pub fn thumbnail(path: &Path, cell: u32, decoder: &mut Decoder) -> Result<Rgb8, 
         pw_raw::read_preview(path, preview)
             .map_err(|error| ThumbError::Unreadable(error.to_string()))?
     };
+    let icc = decoder
+        .icc_profile(&bytes)
+        .map_err(|error| ThumbError::Unreadable(error.to_string()))?;
     let (width, height) = decoder
         .header(&bytes)
         .map_err(|error| ThumbError::Unreadable(error.to_string()))?;
     let scale = choose_scale(width, height, cell);
-    let image = decoder
+    let mut image = decoder
         .decode(&bytes, scale)
+        .map_err(|error| ThumbError::Unreadable(error.to_string()))?;
+    let source = jpeg_source_profile(
+        icc.as_deref(),
+        info.colour_space == ExifColourSpace::AdobeRgb,
+    );
+    // the thumbnail is small, so converting it after the scaled decode is cheap; a source profile
+    // no transform can be built from is treated as sRGB
+    cache
+        .get(&source, destination)
+        .or_else(|_| cache.get(&Profile::srgb(), destination))
+        .and_then(|transform| transform.convert_rgb8(&mut image.data))
         .map_err(|error| ThumbError::Unreadable(error.to_string()))?;
     Ok(orient(image, info.orientation))
 }
 
-/// Decodes a TIFF with `pw-tiff` under `TIFF_LIMIT`, reduces it so the long edge is at most
-/// `cell` (never upscales) and applies the orientation of `pw_raw::inspect`, or none when inspect
-/// fails (for example a BigTIFF).
-fn tiff_thumbnail(path: &Path, cell: u32) -> Result<Rgb8, ThumbError> {
-    let full = pw_tiff::decode_rgb8(path, Some(TIFF_LIMIT))
-        .map_err(|error| ThumbError::Unreadable(error.to_string()))?;
+/// Decodes a TIFF with `pw-tiff` under `TIFF_LIMIT` and converts it to `destination`, reduces it
+/// so the long edge is at most `cell` (never upscales) and applies the orientation of
+/// `pw_raw::inspect`, or none when inspect fails (for example a BigTIFF).
+fn tiff_thumbnail(
+    path: &Path,
+    cell: u32,
+    destination: &Profile,
+    cache: &TransformCache,
+) -> Result<Rgb8, ThumbError> {
+    let (full, _source) =
+        pw_tiff::decode_rgb8_for_display(path, Some(TIFF_LIMIT), destination, cache)
+            .map_err(|error| ThumbError::Unreadable(error.to_string()))?;
     let (width, height) = pw_tiff::fit(full.width, full.height, cell);
     let small = pw_tiff::downscale(&full, width, height);
     drop(full);
@@ -333,13 +364,25 @@ mod tests {
         let missing =
             std::env::temp_dir().join(format!("pw-thumbcache-missing-{}.jpg", std::process::id()));
         assert!(matches!(
-            thumbnail(&missing, 200, &mut decoder),
+            thumbnail(
+                &missing,
+                200,
+                &mut decoder,
+                &Profile::srgb(),
+                &TransformCache::default()
+            ),
             Err(ThumbError::Unreadable(_))
         ));
 
         let invalid = TempFile::new("img", b"not an image");
         assert!(matches!(
-            thumbnail(invalid.path(), 200, &mut decoder),
+            thumbnail(
+                invalid.path(),
+                200,
+                &mut decoder,
+                &Profile::srgb(),
+                &TransformCache::default()
+            ),
             Err(ThumbError::Unreadable(_))
         ));
     }
@@ -349,9 +392,63 @@ mod tests {
         let file = TempFile::new("jpg", jpeg_fixture::SMALL);
         let mut decoder = Decoder::new().unwrap_or_else(|error| panic!("{error}"));
 
-        let image = thumbnail(file.path(), 200, &mut decoder)
-            .unwrap_or_else(|error| panic!("thumbnail failed: {error}"));
+        let image = thumbnail(
+            file.path(),
+            200,
+            &mut decoder,
+            &Profile::srgb(),
+            &TransformCache::default(),
+        )
+        .unwrap_or_else(|error| panic!("thumbnail failed: {error}"));
         assert_eq!((image.width, image.height), (16, 8));
+    }
+
+    // ---------- colour conversion to the monitor profile (ADR 0016 C4) ----------
+
+    fn jpeg_thumbnail(destination: &Profile) -> Rgb8 {
+        let file = TempFile::new("jpg", jpeg_fixture::SMALL);
+        let mut decoder = Decoder::new().unwrap_or_else(|error| panic!("{error}"));
+        thumbnail(
+            file.path(),
+            200,
+            &mut decoder,
+            destination,
+            &TransformCache::default(),
+        )
+        .unwrap_or_else(|error| panic!("thumbnail failed: {error}"))
+    }
+
+    #[test]
+    fn a_jpeg_thumbnail_is_converted_to_the_destination() {
+        let srgb_thumb = jpeg_thumbnail(&Profile::srgb());
+        let adobe = Profile::adobe_rgb();
+        let adobe_thumb = jpeg_thumbnail(&adobe);
+
+        let mut expected = srgb_thumb.data.clone();
+        TransformCache::default()
+            .get(&Profile::srgb(), &adobe)
+            .and_then(|transform| transform.convert_rgb8(&mut expected))
+            .unwrap_or_else(|error| panic!("{error}"));
+        assert_ne!(
+            expected, srgb_thumb.data,
+            "the conversion changes the fixture"
+        );
+        assert_eq!(
+            (adobe_thumb.width, adobe_thumb.height),
+            (srgb_thumb.width, srgb_thumb.height)
+        );
+        assert_eq!(adobe_thumb.data, expected);
+    }
+
+    #[test]
+    fn a_jpeg_thumbnail_in_srgb_equals_the_plain_decode() {
+        // today's path: the scaled decode, then the orientation (1 here)
+        let mut decoder = Decoder::new().unwrap_or_else(|error| panic!("{error}"));
+        let scale = choose_scale(16, 8, 200);
+        let plain = decoder
+            .decode(jpeg_fixture::SMALL, scale)
+            .unwrap_or_else(|error| panic!("{error}"));
+        assert_eq!(jpeg_thumbnail(&Profile::srgb()), plain);
     }
 
     fn test_file(name: &str) -> PathBuf {
@@ -369,8 +466,14 @@ mod tests {
         let path = test_file("TN005956.ARW");
         let mut decoder = Decoder::new().unwrap_or_else(|error| panic!("{error}"));
 
-        let image = thumbnail(&path, 200, &mut decoder)
-            .unwrap_or_else(|error| panic!("{}: {error}", path.display()));
+        let image = thumbnail(
+            &path,
+            200,
+            &mut decoder,
+            &Profile::srgb(),
+            &TransformCache::default(),
+        )
+        .unwrap_or_else(|error| panic!("{}: {error}", path.display()));
         assert!(image.width > 0 && image.height > 0);
     }
 
@@ -380,8 +483,14 @@ mod tests {
         let path = test_file("P1240231.RW2");
         let mut decoder = Decoder::new().unwrap_or_else(|error| panic!("{error}"));
 
-        let image = thumbnail(&path, 200, &mut decoder)
-            .unwrap_or_else(|error| panic!("{}: {error}", path.display()));
+        let image = thumbnail(
+            &path,
+            200,
+            &mut decoder,
+            &Profile::srgb(),
+            &TransformCache::default(),
+        )
+        .unwrap_or_else(|error| panic!("{}: {error}", path.display()));
         assert!(image.width > 0 && image.height > 0);
     }
 
@@ -391,8 +500,14 @@ mod tests {
         let path = test_file("IMG_20261026_062851.dng");
         let mut decoder = Decoder::new().unwrap_or_else(|error| panic!("{error}"));
 
-        let image = thumbnail(&path, 200, &mut decoder)
-            .unwrap_or_else(|error| panic!("{}: {error}", path.display()));
+        let image = thumbnail(
+            &path,
+            200,
+            &mut decoder,
+            &Profile::srgb(),
+            &TransformCache::default(),
+        )
+        .unwrap_or_else(|error| panic!("{}: {error}", path.display()));
         assert!(image.width > 0 && image.height > 0);
     }
 
@@ -407,8 +522,14 @@ mod tests {
             choose_scale(preview.width, preview.height, 200).size(preview.width, preview.height);
         let mut decoder = Decoder::new().unwrap_or_else(|error| panic!("{error}"));
 
-        let image = thumbnail(&path, 200, &mut decoder)
-            .unwrap_or_else(|error| panic!("{}: {error}", path.display()));
+        let image = thumbnail(
+            &path,
+            200,
+            &mut decoder,
+            &Profile::srgb(),
+            &TransformCache::default(),
+        )
+        .unwrap_or_else(|error| panic!("{}: {error}", path.display()));
         assert_eq!((image.width, image.height), (height, width));
     }
 
@@ -478,7 +599,86 @@ mod tests {
 
         fn thumb(path: &Path, cell: u32) -> Result<Rgb8, ThumbError> {
             let mut decoder = Decoder::new().unwrap_or_else(|error| panic!("{error}"));
-            thumbnail(path, cell, &mut decoder)
+            thumbnail(
+                path,
+                cell,
+                &mut decoder,
+                &Profile::srgb(),
+                &TransformCache::default(),
+            )
+        }
+
+        // ---------- colour conversion to the monitor profile (ADR 0016 C4) ----------
+
+        /// An 8-bit RGB TIFF with the ICC profile `icc` in tag 34675.
+        fn rgb_tiff_with_icc(width: u32, height: u32, data: &[u8], icc: &[u8]) -> Vec<u8> {
+            let mut out = Cursor::new(Vec::new());
+            let mut encoder =
+                TiffEncoder::new(&mut out).unwrap_or_else(|error| panic!("encoder: {error}"));
+            let mut image = encoder
+                .new_image::<colortype::RGB8>(width, height)
+                .unwrap_or_else(|error| panic!("new image: {error}"));
+            image
+                .encoder()
+                .write_tag(Tag::Unknown(34675), icc)
+                .unwrap_or_else(|error| panic!("ICC tag: {error}"));
+            image
+                .write_data(data)
+                .unwrap_or_else(|error| panic!("write data: {error}"));
+            out.into_inner()
+        }
+
+        #[test]
+        fn a_pro_photo_tiff_thumbnail_is_converted_to_srgb() {
+            let icc = moxcms::ColorProfile::new_pro_photo_rgb()
+                .encode()
+                .unwrap_or_else(|error| panic!("encode ProPhoto: {error}"));
+            let data = [150u8, 110, 90].repeat(400 * 200);
+            let path = temp_file(
+                "pro-photo-400x200.tif",
+                &rgb_tiff_with_icc(400, 200, &data, &icc),
+            );
+            let mut decoder = Decoder::new().unwrap_or_else(|error| panic!("{error}"));
+            let image = thumbnail(
+                &path,
+                100,
+                &mut decoder,
+                &Profile::srgb(),
+                &TransformCache::default(),
+            )
+            .unwrap_or_else(|error| panic!("{error}"));
+            assert_eq!((image.width, image.height), (100, 50));
+            // T68's reference for ProPhoto (150,110,90) → sRGB, each channel within 1
+            let reference = [200u8, 118, 105];
+            for pixel in image.data.as_chunks::<3>().0 {
+                assert!(
+                    pixel
+                        .iter()
+                        .zip(reference)
+                        .all(|(value, expected)| value.abs_diff(expected) <= 1),
+                    "{pixel:?}, reference {reference:?}"
+                );
+            }
+        }
+
+        #[test]
+        fn a_tiff_thumbnail_without_icc_in_srgb_equals_todays() {
+            let (width, height) = (40u32, 20u32);
+            let data: Vec<u8> = (0..height)
+                .flat_map(|y| (0..width).flat_map(move |x| [(x * 6) as u8, (y * 12) as u8, 77]))
+                .collect();
+            let path = temp_file(
+                "pattern-40x20.tif",
+                &rgb_tiff(width, height, &data, None, None),
+            );
+            // today's path: decode_rgb8, fit, downscale, orient (1 here)
+            let full = pw_tiff::decode_rgb8(&path, None).unwrap_or_else(|error| panic!("{error}"));
+            let (w, h) = pw_tiff::fit(full.width, full.height, 10);
+            let small = pw_tiff::downscale(&full, w, h);
+
+            let image = thumb(&path, 10).unwrap_or_else(|error| panic!("{error}"));
+            assert_eq!((image.width, image.height), (small.width, small.height));
+            assert_eq!(image.data, small.data);
         }
 
         #[test]

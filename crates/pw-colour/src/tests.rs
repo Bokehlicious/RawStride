@@ -315,3 +315,62 @@ fn transforms_and_the_cache_can_be_shared_between_threads() {
     send_sync::<TransformCache>();
     send_sync::<Profile>();
 }
+
+// ---------- jpeg_source_profile (ADR 0016 §3.1, C4) ----------
+
+/// `result` is the same profile as `expected`: the transform between them is an identity.
+fn assert_same_profile(result: &Profile, expected: &Profile, what: &str) {
+    assert!(
+        transform(result, expected).is_identity(),
+        "{what}: got {result:?}, expected {expected:?}"
+    );
+}
+
+fn garbage_icc() -> Vec<u8> {
+    (0..100u32).map(|i| (i * 37 % 251) as u8).collect()
+}
+
+#[test]
+fn a_jpeg_with_an_rgb_icc_profile_uses_it_with_or_without_the_exif_marker() {
+    let bytes = adobe_rgb_icc();
+    let expected = match Profile::from_icc(&bytes) {
+        Ok(p) => p,
+        Err(e) => panic!("parsing the Adobe RGB ICC bytes failed: {e}"),
+    };
+    for marker in [false, true] {
+        let result = jpeg_source_profile(Some(&bytes), marker);
+        assert_same_profile(&result, &expected, &format!("ICC, marker {marker}"));
+    }
+}
+
+#[test]
+fn a_jpeg_without_icc_uses_the_exif_marker_or_srgb() {
+    assert_same_profile(
+        &jpeg_source_profile(None, true),
+        &Profile::adobe_rgb(),
+        "no ICC, marker",
+    );
+    assert_same_profile(
+        &jpeg_source_profile(None, false),
+        &Profile::srgb(),
+        "no ICC, no marker",
+    );
+}
+
+#[test]
+fn a_jpeg_icc_profile_that_cannot_be_used_falls_through_to_the_exif_rule() {
+    let garbage = garbage_icc();
+    let gray = gray_icc();
+    for (what, bytes) in [("garbage", &garbage), ("gray", &gray)] {
+        assert_same_profile(
+            &jpeg_source_profile(Some(bytes), true),
+            &Profile::adobe_rgb(),
+            &format!("{what} ICC, marker"),
+        );
+    }
+    assert_same_profile(
+        &jpeg_source_profile(Some(&garbage), false),
+        &Profile::srgb(),
+        "garbage ICC, no marker",
+    );
+}

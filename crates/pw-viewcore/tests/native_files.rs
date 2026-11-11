@@ -7,8 +7,9 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
+use pw_colour::{Profile, TransformCache, jpeg_source_profile};
 use pw_viewcore::native::NativeBackend;
-use pw_viewcore::{Config, Frame, Source, Status, ViewCore, ViewKind, ViewOut, Zoom};
+use pw_viewcore::{Backend, Config, Frame, Rgb, Source, Status, ViewCore, ViewKind, ViewOut, Zoom};
 
 const VIEW: [u32; 2] = [1920, 1080];
 const WAIT: Duration = Duration::from_secs(30);
@@ -271,6 +272,89 @@ fn jpeg_mode_shows_the_embedded_jpeg_upright_at_its_own_size() {
         assert_eq!(
             (tex.image.width, tex.image.height),
             (tex.region.w, tex.region.h)
+        );
+    }
+}
+
+/// `render_half` of `path` opened as `mode` with `backend`, and how long the render took.
+fn timed_half(backend: &NativeBackend, path: &std::path::Path, mode: Source) -> (Rgb, Duration) {
+    let (mut session, _) = backend
+        .open(path, mode)
+        .unwrap_or_else(|e| panic!("{} in {mode:?}: open: {}", path.display(), e.message));
+    let start = Instant::now();
+    let half = backend
+        .render_half(&mut session)
+        .unwrap_or_else(|e| panic!("{} in {mode:?}: render_half: {}", path.display(), e.message));
+    (half, start.elapsed())
+}
+
+/// The source profile of the large embedded JPEG of `path`, found as the backend finds it
+/// (ADR 0016 §3.1), and that JPEG decoded at half size without conversion.
+fn embedded_jpeg_source(path: &std::path::Path) -> (Profile, Rgb) {
+    let info = pw_raw::inspect(path).unwrap_or_else(|e| panic!("{e}"));
+    let preview = info
+        .pick(pw_raw::PreviewSize::Large)
+        .unwrap_or_else(|| panic!("{}: no preview", path.display()));
+    let data = pw_raw::read_preview(path, preview).unwrap_or_else(|e| panic!("{e}"));
+    let mut decoder = pw_libjpeg::Decoder::new().unwrap_or_else(|e| panic!("{e}"));
+    let icc = decoder.icc_profile(&data).unwrap_or_else(|e| panic!("{e}"));
+    let source = jpeg_source_profile(
+        icc.as_deref(),
+        info.colour_space == pw_raw::ExifColourSpace::AdobeRgb,
+    );
+    let img = decoder
+        .decode(&data, pw_libjpeg::Scale::Half)
+        .unwrap_or_else(|e| panic!("{e}"));
+    let plain = Rgb {
+        width: img.width,
+        height: img.height,
+        data: img.data,
+    };
+    (source, plain)
+}
+
+#[test]
+#[ignore = "needs real camera files: set PW_TESTDATA and run with --ignored"]
+fn a_camera_raw_is_converted_to_the_monitor_profile_in_both_modes() {
+    let file = test_files("TN1004")[0].clone();
+    let srgb_backend = NativeBackend::default();
+    let adobe = Profile::adobe_rgb();
+    let adobe_backend = NativeBackend::default().with_monitor_profile(adobe.clone());
+    let cache = TransformCache::default();
+
+    for mode in [Source::Raw, Source::Jpeg] {
+        let (srgb_half, srgb_time) = timed_half(&srgb_backend, &file, mode);
+        let (adobe_half, adobe_time) = timed_half(&adobe_backend, &file, mode);
+        // RAW: LibRaw renders sRGB, and the sRGB backend leaves it unchanged (F3). JPEG: the
+        // embedded JPEG converted from its own source profile.
+        let (source, plain) = match mode {
+            Source::Raw => (Profile::srgb(), srgb_half.clone()),
+            Source::Jpeg => embedded_jpeg_source(&file),
+        };
+        let mut expected = plain.data;
+        cache
+            .get(&source, &adobe)
+            .and_then(|t| t.convert_rgb8(&mut expected))
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(
+            (adobe_half.width, adobe_half.height),
+            (plain.width, plain.height),
+            "{} in {mode:?}",
+            file.display()
+        );
+        assert!(
+            adobe_half.data == expected,
+            "{} in {mode:?}: the Adobe RGB render is not the converted render",
+            file.display()
+        );
+        println!(
+            "{} in {mode:?}: source {source:?}; render_half {}x{} destination sRGB {:.1} ms, \
+             destination Adobe RGB {:.1} ms",
+            file.display(),
+            adobe_half.width,
+            adobe_half.height,
+            srgb_time.as_secs_f64() * 1000.0,
+            adobe_time.as_secs_f64() * 1000.0,
         );
     }
 }

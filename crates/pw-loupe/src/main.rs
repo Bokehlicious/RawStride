@@ -2070,12 +2070,14 @@ fn run(options: Options) -> Result<(), String> {
     let monitor_profile = load_monitor_profile(primary_monitor_profile_path());
     let title = window_title(&monitor_profile.source);
     let core = ViewCore::start(
-        NativeBackend::with_tiff_limit(usize::try_from(config.core_budget).unwrap_or(usize::MAX)),
+        NativeBackend::with_tiff_limit(usize::try_from(config.core_budget).unwrap_or(usize::MAX))
+            .with_monitor_profile(monitor_profile.profile.clone()),
         config,
     )?;
     let metadata_worker = MetadataWorker::start().map_err(|e| e.to_string())?;
     let import_worker = ImportWorker::start().map_err(|e| e.to_string())?;
-    let thumb_worker = ThumbWorker::start().map_err(|e| e.to_string())?;
+    let thumb_worker = ThumbWorker::start_with_monitor_profile(monitor_profile.profile.clone())
+        .map_err(|e| e.to_string())?;
     let native = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title(title)
