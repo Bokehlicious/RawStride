@@ -8,7 +8,9 @@
 //!   (ADR 0016 Q6), converting in place in chunks; the same profile on both sides is an identity
 //!   that leaves the data untouched (F3);
 //! - [`TransformCache`]: builds each transform once per pair of profiles;
-//! - [`jpeg_source_profile`]: the source profile of a JPEG (ADR 0016 §3.1).
+//! - [`jpeg_source_profile`]: the source profile of a JPEG (ADR 0016 §3.1), and
+//!   [`jpeg_source_profile_checked`], which also says when an embedded profile could not be used
+//!   (ADR 0016 §5).
 //!
 //! The conversion itself is done by `moxcms` (ADR 0016 Q5). `pw-tiff`, the loupe core
 //! (`pw-viewcore`), the thumbnails (`pw-thumbcache`) and the loupe (`pw-loupe`) use it
@@ -239,14 +241,25 @@ where
 /// Exif data marks the image as Adobe RGB (`exif_adobe_rgb`); else sRGB. An ICC profile that
 /// cannot be used falls through to the Exif rule, then sRGB. Never an error.
 pub fn jpeg_source_profile(icc: Option<&[u8]>, exif_adobe_rgb: bool) -> Profile {
-    if let Some(profile) = icc.and_then(|bytes| Profile::from_icc(bytes).ok()) {
-        return profile;
+    jpeg_source_profile_checked(icc, exif_adobe_rgb).0
+}
+
+/// [`jpeg_source_profile`] plus whether an ICC profile was present but could not be used, so the
+/// colours rest on the Exif rule or sRGB instead (ADR 0016 §5). Never an error.
+pub fn jpeg_source_profile_checked(icc: Option<&[u8]>, exif_adobe_rgb: bool) -> (Profile, bool) {
+    let mut unusable = false;
+    if let Some(bytes) = icc {
+        match Profile::from_icc(bytes) {
+            Ok(profile) => return (profile, false),
+            Err(_) => unusable = true,
+        }
     }
-    if exif_adobe_rgb {
+    let profile = if exif_adobe_rgb {
         Profile::adobe_rgb()
     } else {
         Profile::srgb()
-    }
+    };
+    (profile, unusable)
 }
 
 /// Builds each transform once per pair of profiles and shares it (ADR 0016 §4.1).

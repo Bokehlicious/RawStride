@@ -66,11 +66,12 @@ impl<B: Backend> Shared<B> {
                     let result = self.backend.open(&path, key.1);
                     let ms = t0.elapsed().as_secs_f64() * 1000.0;
                     let mut s = self.state();
-                    s.finish_open(
+                    s.finish_open_checked(
                         generation,
                         key,
                         result,
                         |size, source| self.backend.session_bytes(size, source),
+                        |session| self.backend.profile_unusable(session),
                         ms,
                     );
                 }

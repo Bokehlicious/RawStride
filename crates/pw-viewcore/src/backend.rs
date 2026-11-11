@@ -95,6 +95,12 @@ pub trait Backend: Send + Sync + 'static {
     /// Exactly the region `r` at full resolution (RAW: demosaiced with PPG).
     fn render_region(&self, session: &mut Self::Session, r: Rect) -> Result<Rgb, DecodeError>;
 
+    /// Whether the file's embedded colour profile was present but could not be used, so its
+    /// colours rest on a fallback (ADR 0016 §5). Asked once after a successful open.
+    fn profile_unusable(&self, _session: &Self::Session) -> bool {
+        false
+    }
+
     /// The memory one open session holds, for the core budget.
     fn session_bytes(&self, size: ImageSize, source: Source) -> u64 {
         let px = u64::from(size.w) * u64::from(size.h);

@@ -374,3 +374,46 @@ fn a_jpeg_icc_profile_that_cannot_be_used_falls_through_to_the_exif_rule() {
         "garbage ICC, no marker",
     );
 }
+
+// ---------- jpeg_source_profile_checked (ADR 0016 §5, T73) ----------
+
+#[test]
+fn a_jpeg_without_icc_is_not_flagged() {
+    for (marker, expected) in [(false, Profile::srgb()), (true, Profile::adobe_rgb())] {
+        let (profile, unusable) = jpeg_source_profile_checked(None, marker);
+        assert!(!unusable, "no ICC, marker {marker}: flagged");
+        assert_same_profile(&profile, &expected, &format!("no ICC, marker {marker}"));
+    }
+}
+
+#[test]
+fn a_jpeg_with_a_usable_icc_profile_is_not_flagged() {
+    let bytes = adobe_rgb_icc();
+    let expected = match Profile::from_icc(&bytes) {
+        Ok(p) => p,
+        Err(e) => panic!("parsing the Adobe RGB ICC bytes failed: {e}"),
+    };
+    let (profile, unusable) = jpeg_source_profile_checked(Some(&bytes), false);
+    assert!(!unusable, "usable Adobe RGB ICC: flagged");
+    assert_same_profile(&profile, &expected, "usable Adobe RGB ICC");
+}
+
+#[test]
+fn a_jpeg_with_a_garbage_icc_profile_is_flagged_and_falls_back() {
+    let garbage = garbage_icc();
+    let (profile, unusable) = jpeg_source_profile_checked(Some(&garbage), false);
+    assert!(unusable, "garbage ICC, no marker: not flagged");
+    assert_same_profile(&profile, &Profile::srgb(), "garbage ICC, no marker");
+
+    let (profile, unusable) = jpeg_source_profile_checked(Some(&garbage), true);
+    assert!(unusable, "garbage ICC, marker: not flagged");
+    assert_same_profile(&profile, &Profile::adobe_rgb(), "garbage ICC, marker");
+}
+
+#[test]
+fn a_jpeg_with_a_gray_icc_profile_is_flagged() {
+    let gray = gray_icc();
+    let (profile, unusable) = jpeg_source_profile_checked(Some(&gray), false);
+    assert!(unusable, "gray ICC: not flagged");
+    assert_same_profile(&profile, &Profile::srgb(), "gray ICC, no marker");
+}

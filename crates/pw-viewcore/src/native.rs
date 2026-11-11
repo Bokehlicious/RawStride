@@ -8,12 +8,13 @@
 //! display-ready pixels (ADR 0016 §4.1, §4.2): TIFF from its embedded profile, JPEG from its
 //! APP2 profile or Exif marker (ADR 0016 §3.1), RAW from sRGB (LibRaw renders sRGB, ADR 0006).
 //! With the default destination sRGB, sRGB sources are identity transforms and the pixels are
-//! unchanged (F3).
+//! unchanged (F3). A session remembers whether the file's embedded profile could not be used
+//! (ADR 0016 §5), for the loupe's status line.
 
 use std::path::Path;
 use std::sync::Arc;
 
-use pw_colour::{ColourError, Profile, Transform, TransformCache, jpeg_source_profile};
+use pw_colour::{ColourError, Profile, Transform, TransformCache, jpeg_source_profile_checked};
 use pw_libjpeg::{Decoder, Scale};
 use pw_libraw::{DAMAGED, Demosaic, Session};
 use pw_raw::ExifColourSpace;
@@ -72,10 +73,20 @@ impl NativeBackend {
     /// The transform from `source` to the destination, built once per pair. A source profile no
     /// transform can be built from is treated as sRGB, as `pw-tiff` does.
     fn transform(&self, source: &Profile) -> Result<Arc<Transform>, DecodeError> {
-        self.cache
-            .get(source, &self.destination)
-            .or_else(|_| self.cache.get(&Profile::srgb(), &self.destination))
-            .map_err(colour_error)
+        self.transform_checked(source).map(|(t, _)| t)
+    }
+
+    /// [`NativeBackend::transform`], plus `true` when it had to fall back to sRGB because no
+    /// transform could be built from `source` (ADR 0016 §5).
+    fn transform_checked(&self, source: &Profile) -> Result<(Arc<Transform>, bool), DecodeError> {
+        match self.cache.get(source, &self.destination) {
+            Ok(t) => Ok((t, false)),
+            Err(_) => self
+                .cache
+                .get(&Profile::srgb(), &self.destination)
+                .map(|t| (t, true))
+                .map_err(colour_error),
+        }
     }
 }
 
@@ -89,7 +100,15 @@ pub enum NativeSession {
     Jpeg(JpegSession),
     /// A TIFF file: the whole image, decoded and converted once when it was opened (ADR 0015
     /// §4.2, ADR 0016 §4.1).
-    Tiff(Rgb),
+    Tiff(TiffSession),
+}
+
+#[derive(Debug)]
+pub struct TiffSession {
+    /// The whole image, already converted.
+    image: Rgb,
+    /// The file's embedded ICC profile could not be used (`SourceColour::Unusable`, ADR 0016 §5).
+    profile_unusable: bool,
 }
 
 #[derive(Debug)]
@@ -100,6 +119,9 @@ pub struct JpegSession {
     transform: Arc<Transform>,
     /// The full decode, already converted.
     full: Option<Rgb>,
+    /// The JPEG's embedded ICC profile could not be used, or no transform could be built from its
+    /// source profile (ADR 0016 §5).
+    profile_unusable: bool,
 }
 
 /// LibRaw's flip code for an EXIF/TIFF orientation (mirrored orientations are shown unmirrored).
@@ -192,11 +214,11 @@ fn open_jpeg(
     let mut decoder = Decoder::new().map_err(jpeg_error)?;
     let icc = decoder.icc_profile(&data).map_err(jpeg_error)?;
     let (w, h) = decoder.header(&data).map_err(jpeg_error)?;
-    let source = jpeg_source_profile(
+    let (source, icc_unusable) = jpeg_source_profile_checked(
         icc.as_deref(),
         info.colour_space == ExifColourSpace::AdobeRgb,
     );
-    let transform = backend.transform(&source)?;
+    let (transform, fell_back) = backend.transform_checked(&source)?;
     // the orientation is the file's tag (ADR 0003 point 4); the JPEG's own tag is not applied
     let flip = flip_of_orientation(info.orientation);
     let session = JpegSession {
@@ -204,16 +226,20 @@ fn open_jpeg(
         decoder,
         transform,
         full: None,
+        profile_unusable: icc_unusable || fell_back,
     };
     Ok((session, ImageSize { w, h, flip }))
 }
 
 /// Decodes a TIFF file whole with `pw-tiff` under the backend's limit and converts it from its
-/// source profile to the destination (ADR 0016 §4.1; the `SourceColour` is not used yet). The
-/// orientation is the file's tag as `pw-raw` reads it, or 1 when `pw-raw` cannot inspect the file
-/// (BigTIFF, ADR 0015 §4.3).
-fn open_tiff(backend: &NativeBackend, path: &Path) -> Result<(Rgb, ImageSize), DecodeError> {
-    let (img, _source) = pw_tiff::decode_rgb8_for_display(
+/// source profile to the destination (ADR 0016 §4.1); `SourceColour::Unusable` sets the session's
+/// `profile_unusable` (ADR 0016 §5). The orientation is the file's tag as `pw-raw` reads it, or 1
+/// when `pw-raw` cannot inspect the file (BigTIFF, ADR 0015 §4.3).
+fn open_tiff(
+    backend: &NativeBackend,
+    path: &Path,
+) -> Result<(TiffSession, ImageSize), DecodeError> {
+    let (img, source) = pw_tiff::decode_rgb8_for_display(
         path,
         Some(backend.tiff_limit),
         &backend.destination,
@@ -231,7 +257,11 @@ fn open_tiff(backend: &NativeBackend, path: &Path) -> Result<(Rgb, ImageSize), D
         h: img.height,
         flip: flip_of_orientation(orientation),
     };
-    Ok((img, size))
+    let session = TiffSession {
+        image: img,
+        profile_unusable: matches!(source, pw_tiff::SourceColour::Unusable(_)),
+    };
+    Ok((session, size))
 }
 
 impl Backend for NativeBackend {
@@ -240,8 +270,8 @@ impl Backend for NativeBackend {
     fn open(&self, path: &Path, source: Source) -> Result<(NativeSession, ImageSize), DecodeError> {
         // the file type wins over the display mode: a TIFF is shown as itself (ADR 0015 Q3)
         if pw_raw::is_tiff_file(path) {
-            let (img, size) = open_tiff(self, path)?;
-            return Ok((NativeSession::Tiff(img), size));
+            let (tiff, size) = open_tiff(self, path)?;
+            return Ok((NativeSession::Tiff(tiff), size));
         }
         match source {
             Source::Raw => {
@@ -276,7 +306,7 @@ impl Backend for NativeBackend {
                     .map_err(jpeg_error)?;
                 convert(&j.transform, img)
             }
-            NativeSession::Tiff(img) => {
+            NativeSession::Tiff(TiffSession { image: img, .. }) => {
                 let (w, h) = scale::scaled_size(img.width, img.height, 0.5);
                 scale::downscale(img, w, h).ok_or_else(|| {
                     DecodeError::new(format!(
@@ -315,8 +345,19 @@ impl Backend for NativeBackend {
                 scale::crop(full, r.x, r.y, r.w, r.h)
                     .ok_or_else(|| DecodeError::new(format!("region {r:?} is outside the JPEG")))
             }
-            NativeSession::Tiff(img) => scale::crop(img, r.x, r.y, r.w, r.h)
-                .ok_or_else(|| DecodeError::new(format!("region {r:?} is outside the TIFF"))),
+            NativeSession::Tiff(TiffSession { image: img, .. }) => {
+                scale::crop(img, r.x, r.y, r.w, r.h)
+                    .ok_or_else(|| DecodeError::new(format!("region {r:?} is outside the TIFF")))
+            }
+        }
+    }
+
+    fn profile_unusable(&self, session: &NativeSession) -> bool {
+        match session {
+            // LibRaw renders sRGB (ADR 0006): there is no embedded profile to use
+            NativeSession::Raw(..) => false,
+            NativeSession::Jpeg(j) => j.profile_unusable,
+            NativeSession::Tiff(t) => t.profile_unusable,
         }
     }
 }
@@ -759,5 +800,61 @@ mod tests {
         );
         assert_eq!(half.data, expected_half);
         assert_eq!(region.data, converted(plain_region.data, &adobe, &srgb));
+    }
+
+    // ---------- an embedded profile that cannot be used (ADR 0016 §5, T73) ----------
+
+    /// Bytes that are no ICC profile.
+    fn garbage_icc() -> Vec<u8> {
+        (0..100u32).map(|i| (i * 37 % 251) as u8).collect()
+    }
+
+    /// Whether `path` opened with the default backend reports an unusable profile.
+    fn opened_profile_unusable(path: &Path) -> bool {
+        let backend = NativeBackend::default();
+        let (session, _) = backend.open(path, Source::Jpeg).unwrap();
+        backend.profile_unusable(&session)
+    }
+
+    #[test]
+    fn a_tiff_with_a_garbage_icc_profile_is_flagged() {
+        let (w, h) = (6, 4);
+        let path = temp_file(
+            "garbage-icc.tif",
+            &rgb_tiff_with_icc(w, h, &pixels(w, h), &garbage_icc()),
+        );
+        assert!(opened_profile_unusable(&path));
+    }
+
+    #[test]
+    fn a_tiff_with_a_pro_photo_icc_profile_or_without_icc_is_not_flagged() {
+        let (w, h) = (6, 4);
+        let with = temp_file(
+            "flag-pro-photo-icc.tif",
+            &rgb_tiff_with_icc(w, h, &pixels(w, h), &pro_photo_icc()),
+        );
+        assert!(!opened_profile_unusable(&with));
+        let without = temp_file("flag-no-icc.tif", &rgb_tiff(w, h, &pixels(w, h), None));
+        assert!(!opened_profile_unusable(&without));
+    }
+
+    #[test]
+    fn a_jpeg_with_a_garbage_app2_icc_profile_is_flagged() {
+        let path = temp_file(
+            "app2-garbage.jpg",
+            &fixture_with_segment(&app2_icc(&garbage_icc())),
+        );
+        assert!(opened_profile_unusable(&path));
+    }
+
+    #[test]
+    fn a_jpeg_without_app2_or_with_a_usable_icc_profile_is_not_flagged() {
+        let plain = temp_file("flag-plain.jpg", jpeg_fixture::SMALL);
+        assert!(!opened_profile_unusable(&plain));
+        let usable = temp_file(
+            "flag-app2-adobe.jpg",
+            &fixture_with_segment(&app2_icc(&adobe_rgb_icc())),
+        );
+        assert!(!opened_profile_unusable(&usable));
     }
 }

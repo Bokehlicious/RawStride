@@ -160,6 +160,9 @@ pub struct Frame {
     pub zoom: Zoom,
     /// The effective scale (fit resolved), once the size is known.
     pub scale: Option<f64>,
+    /// The current image's embedded colour profile was present but could not be used, so its
+    /// colours rest on a fallback (ADR 0016 §5). Known once the image is opened.
+    pub profile_unusable: bool,
 }
 
 /// One user request, for measurement (ADR 0009 §5.2; the P5 event format).
@@ -309,6 +312,9 @@ pub(crate) struct State<S> {
     pub centre: [f64; 2],
     pub view_px: [u32; 2],
     pub sizes: HashMap<Key, ImageSize>,
+    /// The opened images whose embedded colour profile could not be used (ADR 0016 §5). Kept,
+    /// cleared and moved like `sizes`.
+    pub profile_unusable: HashSet<Key>,
     sessions: HashMap<Key, Option<S>>,
     /// The generation each lent session (`None` in `sessions`) was lent in.
     lent: HashMap<Key, u64>,
@@ -355,6 +361,7 @@ impl<S> State<S> {
             centre: [0.5, 0.5],
             view_px: [1920, 1080],
             sizes: HashMap::new(),
+            profile_unusable: HashSet::new(),
             sessions: HashMap::new(),
             lent: HashMap::new(),
             detached: HashMap::new(),
@@ -528,6 +535,7 @@ impl<S> State<S> {
         self.session_lru.clear();
         self.session_bytes = 0;
         self.sizes.clear();
+        self.profile_unusable.clear();
         self.failed.clear();
         self.inflight.clear();
         self.outbox.clear();
@@ -623,6 +631,7 @@ impl<S> State<S> {
             .drain()
             .filter_map(|(k, v)| to(k).map(|n| (n, v)))
             .collect();
+        self.profile_unusable = self.profile_unusable.drain().filter_map(to).collect();
         self.failed = self
             .failed
             .drain()
@@ -1001,13 +1010,30 @@ impl<S> State<S> {
         None
     }
 
-    /// An open (RAW unpack, or JPEG read) finished (`ms` = how long it took).
+    /// An open (RAW unpack, or JPEG read) finished (`ms` = how long it took), for a backend whose
+    /// profiles are always usable. The core calls [`State::finish_open_checked`].
+    #[cfg(test)]
     pub fn finish_open(
         &mut self,
         generation: u64,
         key: Key,
         result: Result<(S, ImageSize), DecodeError>,
         session_bytes: impl Fn(ImageSize, Source) -> u64,
+        ms: f64,
+    ) {
+        self.finish_open_checked(generation, key, result, session_bytes, |_| false, ms);
+    }
+
+    /// [`State::finish_open`], and `profile_unusable` (the backend's
+    /// [`profile_unusable`](crate::backend::Backend::profile_unusable)) is asked of the session
+    /// after a successful open whose result is stored (ADR 0016 §5).
+    pub fn finish_open_checked(
+        &mut self,
+        generation: u64,
+        key: Key,
+        result: Result<(S, ImageSize), DecodeError>,
+        session_bytes: impl Fn(ImageSize, Source) -> u64,
+        profile_unusable: impl Fn(&S) -> bool,
         ms: f64,
     ) {
         self.running.remove(&(generation, Job::Open(key)));
@@ -1020,6 +1046,11 @@ impl<S> State<S> {
             Ok((session, size)) => {
                 let bytes = session_bytes(size, key.1);
                 self.sizes.insert(key, size);
+                if profile_unusable(&session) {
+                    self.profile_unusable.insert(key);
+                } else {
+                    self.profile_unusable.remove(&key);
+                }
                 self.sessions.insert(key, Some(session));
                 self.session_bytes_of.insert(key, bytes);
                 self.session_bytes += bytes;
@@ -1210,6 +1241,7 @@ impl<S> State<S> {
             size: key.and_then(|k| self.sizes.get(&k).copied()),
             zoom: self.zoom,
             scale: key.and_then(|k| self.scale_of(k)),
+            profile_unusable: key.is_some_and(|k| self.profile_unusable.contains(&k)),
         };
         let Some(key) = key else {
             self.last_draw = None;
@@ -2191,6 +2223,69 @@ mod tests {
         let f = s.frame(VIEW);
         assert_eq!(f.status, Status::Empty);
         assert!(f.draw.is_none());
+    }
+
+    // ---------- an embedded profile that cannot be used (ADR 0016 §5, T73) ----------
+
+    /// A simulated backend's `profile_unusable`: true for the session of `img10.raw` only (the
+    /// test sessions are the position the image was opened at in `files(20)`).
+    fn unusable_for_img10(session: &u32) -> bool {
+        files(20).get(*session as usize) == Some(&path(10))
+    }
+
+    fn open_checked(s: &mut State<u32>, pos: usize) {
+        s.finish_open_checked(
+            s.generation,
+            k(pos),
+            Ok((pos as u32, SIZE)),
+            mb24,
+            unusable_for_img10,
+            1.0,
+        );
+    }
+
+    #[test]
+    fn the_frame_says_when_the_current_images_profile_cannot_be_used() {
+        let mut s = state(1024);
+        open_checked(&mut s, 10);
+        open_checked(&mut s, 11);
+        let f = s.frame(VIEW);
+        assert_eq!(f.path, Some(path(10)));
+        assert!(f.profile_unusable);
+        s.go(11);
+        assert!(!s.frame(VIEW).profile_unusable);
+        s.go(12);
+        assert!(!s.frame(VIEW).profile_unusable);
+    }
+
+    #[test]
+    fn the_unusable_profile_flag_follows_the_path_through_set_files() {
+        let mut s = state(1024);
+        open_checked(&mut s, 10);
+        open_checked(&mut s, 11);
+        // image 3 drops out: img10 is now at position 9, img11 at 10
+        s.set_files(without(20, &[3]), 9);
+        let f = s.frame(VIEW);
+        assert_eq!(f.path, Some(path(10)));
+        assert!(f.profile_unusable);
+        s.go(10);
+        let f = s.frame(VIEW);
+        assert_eq!(f.path, Some(path(11)));
+        assert!(!f.profile_unusable);
+        assert_eq!(s.profile_unusable, HashSet::from([k(9)]));
+    }
+
+    #[test]
+    fn open_folder_clears_the_unusable_profile_flags() {
+        let mut s = state(1024);
+        open_checked(&mut s, 10);
+        assert!(s.frame(VIEW).profile_unusable);
+        s.open_folder(files(20));
+        s.go(10);
+        assert!(s.profile_unusable.is_empty());
+        let f = s.frame(VIEW);
+        assert_eq!(f.path, Some(path(10)));
+        assert!(!f.profile_unusable);
     }
 
     #[test]

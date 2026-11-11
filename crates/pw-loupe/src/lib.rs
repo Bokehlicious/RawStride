@@ -271,6 +271,10 @@ pub fn zoom_text(frame: &Frame) -> String {
     }
 }
 
+/// The status-line part after the source text when the image's embedded colour profile could not
+/// be used (ADR 0016 §5).
+pub const PROFILE_UNUSABLE_TEXT: &str = "Inbäddad färgprofil kunde inte användas";
+
 /// The status line of the loupe. It starts with `position_text`, as in the grid (ADR 0014 §5.3,
 /// amendment 1): the core holds the visible list, so `frame.count` is the number shown, and `total`
 /// is the number of images in the folder ("3 / 12 (av 31)", or "3 / 31" without a filter).
@@ -291,6 +295,10 @@ pub fn status_line(frame: &Frame, anchor_at_pointer: bool, total: usize) -> Stri
             Source::Jpeg if is_tiff(frame) => "förbereder TIFF".to_string(),
             Source::Jpeg => "förbereder JPEG".to_string(),
         },
+        // ADR 0016 §5: the colours rest on a fallback because the file's own profile was broken
+        _ if frame.profile_unusable => {
+            format!("{}  ·  {PROFILE_UNUSABLE_TEXT}", source_text(frame))
+        }
         _ => source_text(frame),
     };
     format!(
@@ -406,6 +414,7 @@ mod tests {
             }),
             zoom: Zoom::Fit,
             scale: Some(0.1129),
+            profile_unusable: false,
         }
     }
 
@@ -687,6 +696,7 @@ mod tests {
             }),
             zoom: Zoom::Fit,
             scale: Some(0.2),
+            profile_unusable: false,
         }
     }
 
@@ -749,6 +759,73 @@ mod tests {
         assert_eq!(marked_text(2).as_deref(), Some("2 markerade"));
         assert_eq!(marked_text(12).as_deref(), Some("12 markerade"));
         assert_eq!(READING_RATINGS_TEXT, "Läser betyg …");
+    }
+
+    // ---------- an embedded profile that cannot be used (ADR 0016 §5, T73) ----------
+
+    fn small_tiff_frame(status: Status) -> Frame {
+        let mut f = tiff_frame(status, Source::Jpeg);
+        f.size = Some(ImageSize {
+            w: 6,
+            h: 4,
+            flip: 0,
+        });
+        f
+    }
+
+    #[test]
+    fn the_status_line_says_when_the_embedded_profile_cannot_be_used() {
+        let mut f = small_tiff_frame(Status::Ready);
+        let without = status_line(&f, true, 9);
+        f.profile_unusable = true;
+        let with = status_line(&f, true, 9);
+        assert!(
+            with.contains("TIFF-fil 6 × 4  ·  Inbäddad färgprofil kunde inte användas  ·  "),
+            "{with}"
+        );
+        // nothing else in the line changes
+        assert_eq!(
+            with.replace("  ·  Inbäddad färgprofil kunde inte användas", ""),
+            without
+        );
+
+        let mut j = frame(Status::Ready, Source::Jpeg);
+        j.path = Some(PathBuf::from("D:/RAW/TN005701_DxO.jpg"));
+        j.profile_unusable = true;
+        let s = status_line(&j, false, 31);
+        assert!(
+            s.contains("JPEG-fil 6376 × 9568  ·  Inbäddad färgprofil kunde inte användas  ·  "),
+            "{s}"
+        );
+    }
+
+    #[test]
+    fn without_the_flag_the_status_line_is_unchanged() {
+        let f = small_tiff_frame(Status::Ready);
+        assert!(!f.profile_unusable);
+        assert_eq!(
+            status_line(&f, true, 9),
+            "1 / 9  ·  Scan 01.tif  ·  TIFF-fil 6 × 4  ·  Zoom 20 % (anpassad)  ·  zoom mot pekaren"
+        );
+    }
+
+    #[test]
+    fn preparing_and_error_frames_do_not_show_the_profile_part() {
+        let mut preparing = small_tiff_frame(Status::Preparing {
+            since: Instant::now(),
+            indicator: true,
+        });
+        preparing.size = None;
+        preparing.profile_unusable = true;
+        let s = status_line(&preparing, true, 9);
+        assert!(s.contains("förbereder TIFF"), "{s}");
+        assert!(!s.contains(PROFILE_UNUSABLE_TEXT), "{s}");
+
+        let mut error = small_tiff_frame(Status::Error(DecodeError::new("boom")));
+        error.profile_unusable = true;
+        let s = status_line(&error, true, 9);
+        assert!(s.contains("kan inte visas"), "{s}");
+        assert!(!s.contains(PROFILE_UNUSABLE_TEXT), "{s}");
     }
 
     #[test]
