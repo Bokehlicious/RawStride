@@ -19,7 +19,10 @@
 - Every image ends as 8-bit RGB in an egui texture, and those values reach the screen **unchanged**:
   `egui_glow` 0.37.0 uploads `RGBA8` (not `SRGB8_ALPHA8`, `srgb_textures = false`), disables
   `FRAMEBUFFER_SRGB`, and its fragment shader passes the texture value through (with optional
-  dithering of ±½ step). Read from the source; still to be confirmed on screen (§8.2).
+  dithering of ±½ step). **Confirmed on screen (2026-11-11, reviewer):** a generated 8-bit TIFF
+  with eight flat patches (pure R, G, B, white, grey 128, (200,100,50), (30,160,220), (10,20,30))
+  shown in RawStride (release build) at fit and read back with a screenshot of the CX240: every
+  patch had exactly its file values, with no dithering noise.
 - So RawStride assumes that **the image is sRGB and that the screen is sRGB**. Both are often wrong:
   - **TIFF:** the owner's 9 test files are Lightroom 16-bit **ProPhoto RGB** (ADR 0015 §9.1).
     `pw-tiff` reduces 16 → 8 bit (`u16_to_u8`) and the ICC profile (tag 34675) is ignored, so they
@@ -108,7 +111,7 @@ on the worker threads, before the pixels become a texture. One screen, one profi
 | Part | Crate | Notes |
 |---|---|---|
 | Profile parsing, transform cache, `convert_rgb8` / `convert_rgb16_to_8`, the built-in sRGB / Adobe RGB / ProPhoto profiles | **new internal crate `pw-colour`** (Q3) | Wraps `moxcms` (§6). Plain Rust, testable with synthetic profiles. Transforms are built once per (source profile, destination) and shared (`Arc`) |
-| Reading the monitor profile | `pw-loupe` (`main.rs`, Windows only) | `GetICMProfileW` on the window's device context at start, read the file, pass the bytes to `pw-colour`. Non-Windows builds and failures: sRGB |
+| Reading the monitor profile | `pw-loupe` (Windows only) | At start, before the loupe core starts (so C4 can hand it to the workers): the **primary** screen (`MonitorFromPoint` with `MONITOR_DEFAULTTOPRIMARY`, `GetMonitorInfoW`, `CreateDCW` on its device name, `GetICMProfileW`), where the maximised window opens. Checked by the reviewer on 2026-11-11: it returns the per-user association, `…\color\CX240(…)08CAL (DP).icc`. Read the file, pass the bytes to `pw-colour`. Non-Windows builds and failures: sRGB |
 | TIFF source profile, 16-bit path | `pw-tiff` | `decode` returns the ICC bytes alongside the pixels; a 16-bit image stays 16 bit until `pw-colour` has converted it, then reduces. Memory: +2 bytes/pixel while converting (240 MB for 40 MP), counted in the budget |
 | JPEG source profile | `pw-libjpeg` | `tj3GetICCProfile` (libjpeg-turbo 3.1 in vcpkg already has it, with `TJPARAM_SAVEMARKERS`); no new dependency |
 | Exif Adobe RGB marker | `pw-raw` | ColorSpace (0xA001) and InteropIndex (`R03`) from the file or the embedded preview's Exif |
@@ -129,8 +132,10 @@ on the worker threads, before the pixels become a texture. One screen, one profi
 
 ## 5. Display
 
-- **Info/help panel:** "Skärmprofil: CX240(…)08CAL (DP)" or "Skärmprofil: ingen – bilderna
-  visas som sRGB".
+- **Window title** (RawStride has no info or help panel, so the title is where it is always
+  visible; reviewer's refinement 2026-11-11): "RawStride  ·  Skärmprofil: CX240(…)08CAL (DP)"
+  (the file name), "RawStride  ·  Ingen skärmprofil – visas som sRGB", or "RawStride  ·
+  Skärmprofilen kunde inte användas – visas som sRGB".
 - **Status line:** unchanged when the source profile is used. When an embedded profile cannot be
   used: "… · profilen kunde inte läsas, visas som sRGB".
 - **Errors:** none new; colour problems never stop an image from being shown.
@@ -175,7 +180,7 @@ on the worker threads, before the pixels become a texture. One screen, one profi
 ### 8.2 By hand (owner)
 
 - **Passthrough check before C2:** a test image with known values (sRGB patches) shown in RawStride
-  at 100 % and read back with a screenshot: the values are unchanged (confirms §1.1).
+  and read back with a screenshot: the values are unchanged. **Done 2026-11-11** (§1.1).
 - F5: the same sRGB JPEG and ProPhoto TIFF in RawStride and Lightroom side by side; saturated reds
   and greens, skin tones, a grey ramp.
 - The info panel names the profile. Rename the profile association away: RawStride says "ingen".
@@ -186,9 +191,9 @@ on the worker threads, before the pixels become a texture. One screen, one profi
 | Step | Content |
 |---|---|
 | **C0** | Accept this ADR; answer §11; approve §6 (GR10); accept F1–F6 — **Done 2026-11-11** |
-| **C1** | New crate `pw-colour` (tests F1, F3, F4) |
-| **C2** | `pw-loupe`: read the monitor profile at start; info panel text (passthrough check §8.2 first) |
-| **C3** | Source profiles: `pw-tiff` (ICC, 16-bit path), `pw-libjpeg` (APP2), `pw-raw` (Exif marker) |
+| **C1** | New crate `pw-colour` (tests F1, F3, F4) — **T68, accepted 2026-11-11** |
+| **C2** | `pw-loupe`: read the monitor profile at start; window title (passthrough check §8.2 done first) — **T69** |
+| **C3** | Source profiles: `pw-tiff` (ICC, 16-bit path) — **T70**; `pw-libjpeg` (APP2) and `pw-raw` (Exif marker) — **T71** |
 | **C4** | Apply: `pw-viewcore` sessions and `pw-thumbcache` |
 | **C5** | Acceptance by hand (§8.2) |
 | **C6** | Documentation: architecture.md, test inventory, GR8 note, ADR 0015 §3.2 note |

@@ -2157,7 +2157,7 @@ Ordered from easiest to hardest. Start at the top.
   change only the lines needed; rules 10–12.
 - **Done when:** `.\tools\check.ps1` is all OK and `git diff --stat` shows only the files above.
 
-### T68. ADR 0016 C1: new crate `pw-colour` for colour conversion — Ready for review
+### T68. ADR 0016 C1: new crate `pw-colour` for colour conversion — Done
 
 - **Can start now.** ADR 0016 accepted by the owner (C0, 2026-11-11), including `moxcms` =0.8.1.
 - **Crates:** new `pw-colour` only. No other crate uses it yet (that is C2–C4).
@@ -2241,6 +2241,193 @@ Ordered from easiest to hardest. Start at the top.
   - **Threads:** a compile-time check that `Transform` and `TransformCache` are `Send + Sync`.
 - **Done when:** `.\tools\check.ps1` is all OK; `docs/test-inventory.md` has a `pw-colour` row and the
   new totals; `git diff --stat` shows only the files above.
+
+### T69. ADR 0016 C2: RawStride reads the monitor profile at start and names it in the window title — Open
+
+- **Can start now.** T68 (`pw-colour`) accepted. The passthrough check of ADR 0016 §8.2 is done
+  (§1.1). T69, T70 and T71 do not depend on each other.
+- **Crates:** `pw-loupe` only.
+- **Files:** `crates/pw-loupe/Cargo.toml`; `crates/pw-loupe/src/lib.rs`; a new module
+  `crates/pw-loupe/src/monitor_profile.rs`; `crates/pw-loupe/src/main.rs`; `Cargo.lock` (by cargo);
+  `docs/test-inventory.md`. This task may change `crates/pw-loupe/Cargo.toml` as written below and
+  nothing else in it.
+- **Why:** ADR 0016 §4.1 ("Reading the monitor profile"), §5 (window title), Q4 (read at start
+  only), §6 (`windows-sys` features approved in C0).
+- **What:**
+  1. **Dependencies** in `crates/pw-loupe/Cargo.toml`: `pw-colour.workspace = true` under
+     `[dependencies]`, and a new section
+     `[target.'cfg(windows)'.dependencies]` with
+     `windows-sys = { version = "=0.61.2", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_UI_ColorSystem"] }`.
+  2. **`monitor_profile.rs`** (library module, exported from `lib.rs`):
+     - `pub enum ProfileSource { File(String), Missing, Unusable(String) }` (`Debug`, `Clone`,
+       `PartialEq`, `Eq`): `File` holds the profile's **file name** (not the path); `Unusable` holds
+       the detail (English, for a later log; not shown).
+     - `pub struct MonitorProfile { pub profile: pw_colour::Profile, pub source: ProfileSource }`
+       (`Debug`, `Clone`).
+     - `pub fn load_monitor_profile(path: Result<Option<PathBuf>, String>) -> MonitorProfile`: the
+       testable part. `Ok(Some(path))`: read the file and `Profile::from_icc`; success is `File(name)`
+       with that profile. `Ok(None)` (no profile associated) is `Missing`. A read error, a parse
+       error, an `Unsupported` profile or `Err(detail)` is `Unusable(detail)`. Every case except
+       `File` uses `Profile::srgb()`, so the pixels stay as today (F3). Never a panic.
+     - `pub fn primary_monitor_profile_path() -> Result<Option<PathBuf>, String>`: on Windows, the
+       sequence the reviewer checked on the owner's machine (ADR 0016 §4.1): `MonitorFromPoint`
+       (point 0,0, `MONITOR_DEFAULTTOPRIMARY`), `GetMonitorInfoW` with `MONITORINFOEXW`,
+       `CreateDCW(device, device, null, null)` with its `szDevice`, `GetICMProfileW` twice (first
+       for the length, then into a buffer of that length), `DeleteDC` on every path after a
+       successful `CreateDCW`. A failing call gives `Err` with the call's name; `GetICMProfileW`
+       reporting no profile gives `Ok(None)`. Each `unsafe` block gets a `// SAFETY:` comment, as in
+       `pw-libjpeg`. On other platforms it returns `Ok(None)`.
+     - `pub fn window_title(source: &ProfileSource) -> String`, exactly (ADR 0016 §5, two spaces
+       around the dot as in the status line):
+       - `File(name)`: "RawStride  ·  Skärmprofil: {name}"
+       - `Missing`: "RawStride  ·  Ingen skärmprofil – visas som sRGB"
+       - `Unusable(_)`: "RawStride  ·  Skärmprofilen kunde inte användas – visas som sRGB"
+  3. **`main.rs`, `run`:** call `load_monitor_profile(primary_monitor_profile_path())` **before**
+     `ViewCore::start`, give the viewport `.with_title(window_title(&monitor.source))` instead of
+     `WINDOW_TITLE` (the first argument of `run_native`, the app name, stays `WINDOW_TITLE`), and keep
+     the `MonitorProfile` in a new `Loupe` field `monitor_profile` for C4. It is not used for pixels
+     in this task. If the compiler warns that the field is never read, mark that one field
+     `#[allow(dead_code)]` with the comment "used by ADR 0016 C4".
+- **Rules:** rules 3–7 and 10–12. Check with `git diff Cargo.lock`: the only change is `pw-colour`
+  and `windows-sys` in `pw-loupe`'s dependency list; **no new package**. If cargo wants anything
+  else, stop and report.
+- **Tests to add** (in `pw-loupe`'s library; files in `std::env::temp_dir()` with the process id in
+  the name, removed afterwards, as the existing tests do; an ICC file is made with
+  `moxcms::ColorProfile::new_adobe_rgb().encode()` — add `moxcms = "=0.8.1"` under
+  `[dev-dependencies]` for that, the only other `Cargo.toml` change allowed):
+  - an Adobe RGB ICC file gives `File("<its file name>")`, and its profile converts sRGB
+    (255,0,0) to within 1 of (219,0,0) (the same check as T68, through `pw_colour::Transform`);
+  - `Ok(None)` gives `Missing` with an sRGB profile: an sRGB → that profile transform is
+    `is_identity()`;
+  - a path that does not exist, a file of garbage bytes, a gray profile
+    (`ColorProfile::new_gray_with_gamma(2.2).encode()`) and `Err("x")` each give `Unusable` with an
+    sRGB profile (identity as above);
+  - `window_title` gives the three texts exactly;
+  - `primary_monitor_profile_path()` returns without panicking (no assertion on the value: it
+    depends on the machine).
+- **Check by hand (owner, after review):** start RawStride; the title says
+  "RawStride  ·  Skärmprofil: CX240(…)08CAL (DP).icc"; the images look exactly as before
+  (no conversion yet).
+- **Done when:** `.\tools\check.ps1` is all OK; `docs/test-inventory.md` has the new tests in the
+  `pw-loupe` row and the new totals; `git diff --stat` shows only the files above.
+
+### T70. ADR 0016 C3 (TIFF): `pw-tiff` reads the embedded ICC profile and converts 16-bit data before the reduction — Open
+
+- **Can start now.** T68 accepted. Independent of T69 and T71.
+- **Crates:** `pw-tiff` only. Nothing calls the new function yet (that is C4); the Tauri app and
+  `decode_rgb8` are unchanged.
+- **Files:** `crates/pw-tiff/Cargo.toml`; `crates/pw-tiff/src/lib.rs`; `crates/pw-tiff/src/convert.rs`;
+  `crates/pw-tiff/src/tests.rs`; `Cargo.lock` (by cargo); `docs/test-inventory.md`. This task may
+  change `crates/pw-tiff/Cargo.toml` as written below and nothing else in it.
+- **Why:** ADR 0016 §3.1 and §4.1: the owner's TIFFs are 16-bit ProPhoto RGB; the profile is in
+  tag 34675 and must be applied **before** `u16_to_u8`, or the 8-bit result bands.
+- **What:**
+  1. `crates/pw-tiff/Cargo.toml`: `pw-colour.workspace = true` under `[dependencies]`; under
+     `[dev-dependencies]` `moxcms = "=0.8.1"` (to encode ICC profiles in tests).
+  2. **`pub enum SourceColour { Embedded, AssumedSrgb, Unusable(String) }`** (`Debug`, `Clone`,
+     `PartialEq`, `Eq`): which source profile was used. `Embedded`: the file's ICC profile.
+     `AssumedSrgb`: no profile, or a layout whose profile is not applied (below). `Unusable(detail)`:
+     the file has a profile that could not be used (the `ColourError` text); the pixels are treated
+     as sRGB.
+  3. **`pub fn decode_rgb8_for_display(path: &Path, limit: Option<usize>, destination:
+     &pw_colour::Profile, cache: &pw_colour::TransformCache) -> Result<(Rgb8, SourceColour),
+     TiffError>`**, under the same decode lock as `decode_rgb8`, for the whole decode and
+     conversion:
+     - Read the ICC profile with `find_tag(Tag::Unknown(34675))` and `into_u8_vec` (the `tiff` crate
+       reads type UNDEFINED, which Lightroom writes, as bytes). A tag that cannot be read counts as
+       `Unusable`, never as an error of the decode.
+     - **Source profile:** for `Layout::Rgb` and `Layout::Rgba`, the ICC profile through
+       `Profile::from_icc` (`Embedded`), sRGB when there is none (`AssumedSrgb`), sRGB when it fails
+       (`Unusable`). For Gray, GrayAlpha and CMYK the profile is **not** applied (a gray or CMYK
+       profile does not describe the RGB that `to_rgb8` makes; ADR 0016 §3.2): sRGB,
+       `AssumedSrgb`.
+     - Get the transform with `cache.get(source, destination)`; a failure there is `Unusable` with
+       sRGB as the source.
+     - **16-bit RGB or RGBA:** make 16-bit RGB first (a new helper `to_rgb16` in `convert.rs`, the
+       16-bit twin of `to_rgb8` for `Rgb` and `Rgba` only, with the same "image data is short" error;
+       for `Rgb` it uses the samples without a copy when their length is exact), then
+       `convert_rgb16`, then `u16_to_u8`. **8-bit and float:** today's path to `Rgb8`, then
+       `convert_rgb8`. Gray, GrayAlpha and CMYK at 16 bit keep today's path (reduce, then
+       `to_rgb8`, then `convert_rgb8` from sRGB).
+     - A conversion error (cannot happen for whole pixels, but handled) returns the image as it is
+       with `Unusable`.
+  4. `decode_rgb8` and everything the Tauri app uses stay unchanged; their tests stay unchanged.
+- **Rules:** rules 3–7 and 10–12. `git diff Cargo.lock`: only `pw-colour` and `moxcms` in
+  `pw-tiff`'s dependency list; no new package.
+- **Tests to add** (synthetic files as the existing `pw-tiff` tests; the ICC tag written with
+  `encoder().write_tag(Tag::Unknown(34675), &bytes[..])`, plus **one hand-built file** with the tag
+  as type UNDEFINED (7), as Lightroom writes it). The references are T68's tables
+  (`PRO_PHOTO_TO_SRGB`, `SRGB_TO_ADOBE`); copy the values into `tests.rs`. Each channel within 1:
+  - 8-bit RGB with a ProPhoto ICC (`ColorProfile::new_pro_photo_rgb().encode()`), destination sRGB:
+    the ProPhoto → sRGB references, `Embedded`; the same with the hand-built UNDEFINED tag;
+  - **16-bit** RGB with the ProPhoto ICC (values × 257), destination sRGB: the same references,
+    `Embedded`;
+  - 16-bit RGBA with the ProPhoto ICC: the same, alpha dropped;
+  - 8-bit RGB without ICC, destination Adobe RGB: the sRGB → Adobe RGB references, `AssumedSrgb`;
+  - **identity (F3):** 8-bit RGB, 16-bit RGB, Gray and CMYK without ICC, destination sRGB: pixels
+    equal to `decode_rgb8` byte for byte, `AssumedSrgb`;
+  - a 100-byte garbage ICC tag and a gray ICC on an RGB file: `Unusable`, and with destination sRGB
+    the pixels equal `decode_rgb8`;
+  - a Gray file **with** a gray ICC: `AssumedSrgb`, pixels equal `decode_rgb8` (destination sRGB);
+  - the limit, a truncated file and a missing file give the same errors as `decode_rgb8`;
+  - **16 bit is better than 8 bit:** a 16-bit ProPhoto ramp of 4 096 dark values (0 to 4 095,
+    grey) converted to sRGB gives at least as many distinct 8-bit output values as the same ramp
+    reduced to 8 bit first and then converted (shows that the conversion runs before the
+    reduction);
+  - **real files** (`#[ignore]`, `PW_TESTDATA`, as the existing real-file tests): every TIFF there
+    decodes with `Embedded` against destination sRGB.
+- **Done when:** `.\tools\check.ps1` is all OK; `docs/test-inventory.md` has the new tests in the
+  `pw-tiff` row and the new totals; `git diff --stat` shows only the files above.
+
+### T71. ADR 0016 C3 (JPEG): `pw-libjpeg` returns the ICC profile, `pw-raw` the Exif colour space — Open
+
+- **Can start now.** Independent of T69 and T70. Nothing calls the new code yet (that is C4).
+- **Crates:** `pw-libjpeg`, `pw-raw`.
+- **Files:** `crates/pw-libjpeg/src/lib.rs`; `crates/pw-raw/src/lib.rs`; `crates/pw-raw/src/tiff.rs`;
+  `crates/pw-raw/src/jpeg.rs` (only if the JPEG path needs it); `docs/test-inventory.md`. No
+  `Cargo.toml` changes; `Cargo.lock` must not change.
+- **Why:** ADR 0016 §3.1 and §4.1: a JPEG's source profile is the ICC profile in APP2, else the
+  Exif Adobe RGB marker, else sRGB.
+- **What:**
+  1. **`pw-libjpeg`:** declare `tj3Set(handle, param, value) -> c_int`,
+     `tj3GetICCProfile(handle, *mut *mut u8, *mut usize) -> c_int` and `tj3Free(*mut c_void)`
+     (libjpeg-turbo 3.2.0 in vcpkg has them); `TJPARAM_SAVEMARKERS = 25` (its position in the
+     `TJPARAM` enum of that `turbojpeg.h`; write that in a comment).
+     - `Decoder::new` sets `TJPARAM_SAVEMARKERS` to `2` (keep ICC markers when reading a header); a
+       failing `tj3Set` is an error from `new`.
+     - New `pub fn icc_profile(&mut self, data: &[u8]) -> Result<Option<Vec<u8>>>`: `header(data)`,
+       then `tj3GetICCProfile`; a null buffer or size 0 is `Ok(None)`; otherwise copy the bytes into
+       a `Vec` and free the buffer with `tj3Free` on every path. `// SAFETY:` comments as in the
+       rest of the file. `decode` is unchanged in behaviour.
+  2. **`pw-raw`:** `ImageInfo` gets `pub colour_space: ExifColourSpace` with
+     `pub enum ExifColourSpace { #[default] Unknown, Srgb, AdobeRgb, Uncalibrated }`
+     (`Debug`, `Clone`, `Copy`, `PartialEq`, `Eq`, `Default`), filled from the first Exif IFD that
+     has it, like the other Exif fields:
+     - ColorSpace (0xA001, SHORT) = 1 → `Srgb`;
+     - ColorSpace = 0xFFFF and the Interoperability IFD (0xA005 in the Exif IFD) has
+       InteroperabilityIndex (0x0001, ASCII) "R03" → `AdobeRgb` (the DCF rule cameras use);
+     - ColorSpace = 0xFFFF otherwise → `Uncalibrated`; no ColorSpace → `Unknown`; any other value
+       → `Unknown`.
+     For a RAW file this is the camera's colour-space setting, which its embedded JPEG previews
+     follow; for a JPEG file it comes from its APP1 Exif. Malformed values are ignored, never an
+     error of `inspect`.
+- **Rules:** rules 3–7 and 10–12.
+- **Tests to add:**
+  - `pw-libjpeg`: the 16 × 8 JPEG fixture of `pw-thumbcache`
+    (`#[path = "../../pw-thumbcache/src/jpeg_fixture.rs"] mod jpeg_fixture;` in the test module)
+    gives `Ok(None)`; the same JPEG with one APP2 segment `ICC_PROFILE\0` + sequence 1 + count 1 +
+    100 test bytes inserted after SOI gives exactly those bytes; with the bytes split over **two**
+    APP2 segments (sequence 1 and 2 of 2) gives them joined; `decode` of the JPEG with APP2 gives the
+    same pixels as without; garbage data gives an error.
+  - `pw-raw`: generated files as the existing tests (`lib.rs` builds TIFF and JPEG structures by
+    hand): ColorSpace 1 → `Srgb`; 0xFFFF with "R03" → `AdobeRgb`; 0xFFFF with "R98" → `Uncalibrated`;
+    0xFFFF without an Interop IFD → `Uncalibrated`; no ColorSpace → `Unknown`; a JPEG file with
+    APP1 Exif ColorSpace 1 → `Srgb`; an Interop offset pointing outside the file → no panic,
+    `Uncalibrated`.
+  - `pw-raw` real files (`#[ignore]`, `PW_TESTDATA`): print each file's `colour_space`, assert
+    nothing (the reviewer reads the output).
+- **Done when:** `.\tools\check.ps1` is all OK; `git diff Cargo.lock` is empty;
+  `docs/test-inventory.md` has the new tests and totals; `git diff --stat` shows only the files above.
 
 ### T7. Format the files that `cargo fmt --check` reports — Done
 
@@ -2632,3 +2819,4 @@ and reviewer:
 | 2026-11-11 | T68 | Open | Added: ADR 0016 C1, new crate `pw-colour` (moxcms =0.8.1, approved in C0) with profiles, transforms, a transform cache and reference-value tests (F1, F3, F4). The reference values were computed independently of moxcms by the reviewer |
 | 2026-11-11 | T68 | Ready for review | (Agent) New crate `pw-colour` (`Cargo.toml` as `pw-tiff`'s, `moxcms = "=0.8.1"` with default features); root `Cargo.toml`: `pw-colour` under "Internal crates" after `pw-tiff`. `lib.rs`: `Profile` (`srgb`, `adobe_rgb`, `pro_photo_rgb`, `from_icc`: parse error `Profile`, non-RGB `Unsupported`), private `ProfileId` (ICC by its bytes; `Debug` prints only the length), `Transform` (8- and 16-bit moxcms transforms, `Layout::Rgb`, relative colorimetric; same `ProfileId` = identity, nothing built, data untouched; `convert_rgb8`/`convert_rgb16` in place in chunks of 65 536 pixels through one scratch `Vec`; length not a multiple of 3 = `Length`, checked before the identity shortcut too), `TransformCache` (`Mutex<HashMap>`, built under the lock, failures not cached, poisoned lock via `into_inner`), `ColourError` with the four English texts (each `String` holds the detail; `Display` adds the text, `Unsupported` holds the `{:?}` of the colour space, e.g. "Gray"). If moxcms fails on a later chunk, earlier chunks are already converted (documented). `tests.rs`: 13 tests; every reference value within 1 (no tolerance widened). The cache failure test builds a gray `Profile` by hand, since `from_icc` refuses gray. `Cargo.lock`: only the new `pw-colour` package with `moxcms`; no new external package. Test inventory: `pw-colour` row (13), totals 501/29. `.\tools\check.ps1`: fmt, test (501 passed, 29 ignored, 0 failed) and clippy OK. No commit |
 | 2026-11-11 | T68 | Ready for review | Review: accepted. Only the named files changed; `Cargo.lock` gains only the `pw-colour` package (no new external package). `lib.rs` follows points 1–6: no panic paths, the length checked before the identity shortcut, chunks of 65 536 pixels through one scratch buffer, relative colorimetric, failures not cached. 13 tests cover every point under **Tests to add**; every reference value of F1 passes within 1 with no tolerance widened, so `moxcms` stays (ADR 0016 Q5). The gray failure pair is built by hand inside the crate, since `from_icc` refuses gray: accepted. Notes for later steps, not faults: the cache builds under its lock (builds are serialised; fine for a handful of profiles), and a `moxcms` error in a later chunk leaves earlier chunks converted (only a length mismatch makes it fail, which `check_length` rules out). Reviewer re-ran `check.ps1`: fmt, test (501 passed, 29 ignored, 0 failed) and clippy OK. Next: C2 and C3 (ADR 0016 §9) |
+| 2026-11-11 | T69–T71 | Open | Added: ADR 0016 C2 (T69, monitor profile at start, window title) and C3 split in two (T70 TIFF ICC and 16-bit path; T71 JPEG ICC and Exif colour space). Before writing them the reviewer confirmed on the owner's CX240 that egui passes texture values through unchanged (ADR 0016 §1.1) and that `GetICMProfileW` on the primary screen returns the per-user CX240 profile (§4.1). ADR 0016 §5 refined: no info panel exists, so the profile is named in the window title. The three tasks are independent |
