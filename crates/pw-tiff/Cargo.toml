@@ -11,4 +11,8 @@ authors.workspace = true
 workspace = true
 
 [dependencies]
+pw-colour.workspace = true
 tiff = "=0.9.1"
+
+[dev-dependencies]
+moxcms = "=0.8.1"

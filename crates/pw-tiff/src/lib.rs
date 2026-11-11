@@ -10,7 +10,11 @@
 //! The target size `fit` and the area-averaging `downscale` moved here from `src-tauri`
 //! (`imaging.rs`) in ADR 0015 D3, for the TIFF thumbnails of RawStride.
 //!
-//! Orientation and colour management are not applied; CMYK is converted naively.
+//! `decode_rgb8_for_display` (ADR 0016 C3) decodes like `decode_rgb8` and converts the pixels from
+//! the file's embedded ICC profile (tag 34675) into a destination profile; 16-bit RGB is converted
+//! before the reduction to 8 bit (ADR 0016 §3.1, §4.1). Nothing calls it yet (ADR 0016 C4).
+//!
+//! Orientation is not applied; `decode_rgb8` does no colour management; CMYK is converted naively.
 
 mod convert;
 mod resize;
@@ -21,9 +25,13 @@ use std::io::BufReader;
 use std::path::Path;
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
+use pw_colour::{Profile, Transform, TransformCache};
 use tiff::ColorType;
+use tiff::decoder::ifd::Value;
 use tiff::decoder::{Decoder, DecodingResult, Limits};
+use tiff::tags::Tag;
 
+use convert::to_rgb16;
 pub use convert::{Layout, Rgb8, f32_to_u8, to_rgb8, u16_to_u8};
 pub use resize::{downscale, fit};
 
@@ -133,6 +141,148 @@ pub fn decode_rgb8(path: &Path, limit: Option<usize>) -> Result<Rgb8, TiffError>
         }
     };
     to_rgb8(&samples, layout, w, h).map_err(TiffError::Decode)
+}
+
+/// The TIFF tag that holds an embedded ICC profile (InterColorProfile).
+const ICC_PROFILE_TAG: u16 = 34675;
+
+/// Which source profile `decode_rgb8_for_display` used for the pixels.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SourceColour {
+    /// The file's embedded ICC profile.
+    Embedded,
+    /// No embedded profile, or a layout whose profile is not applied (Gray, GrayAlpha, CMYK);
+    /// the pixels are treated as sRGB.
+    AssumedSrgb,
+    /// The file has a profile that could not be used (the detail, e.g. the `ColourError` text);
+    /// the pixels are treated as sRGB.
+    Unusable(String),
+}
+
+/// Decodes the first image of a TIFF like [`decode_rgb8`] and converts it from its source profile
+/// to `destination` (ADR 0016 §4.1). The source profile is the embedded ICC profile for RGB and
+/// RGBA, else sRGB (see [`SourceColour`]). 16-bit RGB and RGBA are converted before the
+/// reduction to 8 bit. Decode errors are the same as those of `decode_rgb8`; a profile or
+/// conversion problem is never an error, only `Unusable`. Only one decode runs at a time.
+pub fn decode_rgb8_for_display(
+    path: &Path,
+    limit: Option<usize>,
+    destination: &Profile,
+    cache: &TransformCache,
+) -> Result<(Rgb8, SourceColour), TiffError> {
+    let _decoding = decode_lock();
+    let mut dec = open(path, limit)?;
+    let (w, h) = dec.dimensions().map_err(|e| tiff_error(e, limit))?;
+    let color = dec.colortype().map_err(|e| tiff_error(e, limit))?;
+    let layout = layout_of(color)?;
+
+    let (source, mut colour) = source_profile(&mut dec, layout);
+    let transform = match cache.get(&source, destination) {
+        Ok(transform) => Some(transform),
+        Err(e) => {
+            colour = SourceColour::Unusable(e.to_string());
+            cache.get(&Profile::srgb(), destination).ok()
+        }
+    };
+
+    let result = dec.read_image().map_err(|e| tiff_error(e, limit))?;
+    let rgb_16_bit = matches!(layout, Layout::Rgb | Layout::Rgba);
+    let (image, converted) = match result {
+        DecodingResult::U16(v) if rgb_16_bit => {
+            let mut data = to_rgb16(v, layout, w, h).map_err(TiffError::Decode)?;
+            let converted = convert(transform.as_deref(), |t| t.convert_rgb16(&mut data));
+            let image = Rgb8 {
+                width: w,
+                height: h,
+                data: u16_to_u8(&data),
+            };
+            (image, converted)
+        }
+        result => {
+            let samples = match result {
+                DecodingResult::U8(v) => v,
+                DecodingResult::U16(v) => u16_to_u8(&v),
+                DecodingResult::F32(v) => f32_to_u8(&v),
+                _ => {
+                    return Err(TiffError::Unsupported(
+                        "TIFF sample format is not supported yet".into(),
+                    ));
+                }
+            };
+            let mut image = to_rgb8(&samples, layout, w, h).map_err(TiffError::Decode)?;
+            let converted = convert(transform.as_deref(), |t| t.convert_rgb8(&mut image.data));
+            (image, converted)
+        }
+    };
+    if let Err(detail) = converted {
+        colour = SourceColour::Unusable(detail);
+    }
+    Ok((image, colour))
+}
+
+/// The pixel layout of a TIFF colour type, as in `decode_rgb8`.
+fn layout_of(color: ColorType) -> Result<Layout, TiffError> {
+    match color {
+        ColorType::Gray(_) => Ok(Layout::Gray),
+        ColorType::GrayA(_) => Ok(Layout::GrayAlpha),
+        ColorType::RGB(_) => Ok(Layout::Rgb),
+        ColorType::RGBA(_) => Ok(Layout::Rgba),
+        ColorType::CMYK(_) => Ok(Layout::Cmyk),
+        other => Err(TiffError::Unsupported(format!(
+            "TIFF colour type {other:?} is not supported yet"
+        ))),
+    }
+}
+
+/// The source profile of the pixels and how it was chosen. The embedded profile is applied to
+/// RGB and RGBA only: a gray or CMYK profile does not describe the RGB that `to_rgb8` makes
+/// (ADR 0016 §3.2).
+fn source_profile<R: std::io::Read + std::io::Seek>(
+    dec: &mut Decoder<R>,
+    layout: Layout,
+) -> (Profile, SourceColour) {
+    if !matches!(layout, Layout::Rgb | Layout::Rgba) {
+        return (Profile::srgb(), SourceColour::AssumedSrgb);
+    }
+    let bytes = dec
+        .find_tag(Tag::Unknown(ICC_PROFILE_TAG))
+        .and_then(|value| value.map(icc_bytes).transpose());
+    match bytes {
+        Ok(None) => (Profile::srgb(), SourceColour::AssumedSrgb),
+        Ok(Some(bytes)) => match Profile::from_icc(&bytes) {
+            Ok(profile) => (profile, SourceColour::Embedded),
+            Err(e) => (Profile::srgb(), SourceColour::Unusable(e.to_string())),
+        },
+        Err(e) => (
+            Profile::srgb(),
+            SourceColour::Unusable(format!("TIFF ICC profile tag: {e}")),
+        ),
+    }
+}
+
+/// The bytes of the ICC profile tag. The `tiff` crate reads type UNDEFINED (as Lightroom writes
+/// it) as bytes (`into_u8_vec`), but type BYTE longer than 4 bytes as `UnsignedBig` values, so
+/// those are taken one by one.
+fn icc_bytes(value: Value) -> tiff::TiffResult<Vec<u8>> {
+    match value {
+        Value::List(items) if matches!(items.first(), Some(Value::UnsignedBig(_))) => items
+            .into_iter()
+            .map(|v| v.into_u64().and_then(|n| Ok(u8::try_from(n)?)))
+            .collect(),
+        value => value.into_u8_vec(),
+    }
+}
+
+/// Runs a conversion if there is a transform; an error becomes its text. Without a transform
+/// (no transform could be built at all) the data stays as it is.
+fn convert(
+    transform: Option<&Transform>,
+    run: impl FnOnce(&Transform) -> Result<(), pw_colour::ColourError>,
+) -> Result<(), String> {
+    match transform {
+        Some(transform) => run(transform).map_err(|e| e.to_string()),
+        None => Ok(()),
+    }
 }
 
 #[cfg(test)]
