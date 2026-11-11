@@ -1,7 +1,7 @@
 # Test inventory
 
 This inventory describes Rust tests included by `cargo test --workspace`. It was checked against
-a Windows run on 2026-11-10 (after T66): **488 passed, 29 ignored by default, 0 failed**.
+a Windows run on 2026-11-11 (after T68): **501 passed, 29 ignored by default, 0 failed**.
 Test counts include
 ignored tests. Unit-test rows aggregate the inline `#[cfg(test)]` modules in each crate; for
 `pw-loupe`, the shared metadata module is included in both its library and binary test targets.
@@ -12,6 +12,7 @@ requirement is fully verified.
 |---|---|---|---|---|---:|---:|
 | `photoworkflow` | `src-tauri/src/ingest.rs` | Ingest action labels and conversion of dialog text to IPTC. | Unit | vcpkg libraries | 2 | 0 |
 | `preview-bench` | `tools/preview-bench/src/main.rs` | CSV parsing, timing statistics, and reading byte ranges including an unaligned end-of-file range. | Unit | None | 4 | 0 |
+| `pw-colour` | `crates/pw-colour/src/tests.rs` | Colour conversion with `moxcms` against reference values computed independently (each channel within 1): sRGB → Adobe RGB and ProPhoto RGB → sRGB in 8 bit, ProPhoto RGB → sRGB in 16 bit reduced to 8 bit, and sRGB → an Adobe RGB profile parsed from ICC bytes; the identity (the same built-in profile, two profiles from the same ICC bytes) leaving 8- and 16-bit data unchanged byte for byte; bad ICC bytes (empty, garbage, a profile cut in half) as errors and a gray profile as `Unsupported`; the error texts; a length that is not whole RGB pixels refused with the data unchanged, and an empty buffer; chunked conversion of 65 536 × 2 + 7 pixels equal to converting each pixel on its own; the transform cache (the same `Arc` for the same pair, another for a different pair, a failed build returned and not cached); `Send + Sync` of `Transform`, `TransformCache` and `Profile`. | Unit | None | 13 | 0 |
 | `pw-core` | `crates/pw-core/src/lib.rs` | Human-readable byte formatting and unit-boundary rounding. | Unit | None | 14 | 0 |
 | `pw-ingest` | `crates/pw-ingest/src/eject.rs`, `paths.rs`, `request.rs`, `summary.rs`, `template.rs`, `volumes.rs` | Eject polling/scripts, path and import-request validation (with its exact messages), card detection over candidate roots, folder counts, template rendering, capture dates, and safe path segments. | Unit | None | 30 | 0 |
 | `pw-libjpeg` | `crates/pw-libjpeg/src/lib.rs` | Scaled JPEG output dimensions. | Unit | vcpkg libraries | 1 | 0 |

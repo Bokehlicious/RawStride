@@ -3818,6 +3818,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "pw-colour"
+version = "0.1.0"
+dependencies = [
+ "moxcms",
+]
+
+[[package]]
 name = "pw-core"
 version = "0.1.0"
 

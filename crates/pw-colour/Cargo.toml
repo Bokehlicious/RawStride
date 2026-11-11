@@ -1,0 +1,14 @@
+[package]
+name = "pw-colour"
+description = "Colour conversion between ICC profiles (ADR 0016)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+moxcms = "=0.8.1"
