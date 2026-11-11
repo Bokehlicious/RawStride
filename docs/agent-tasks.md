@@ -2527,7 +2527,7 @@ Ordered from easiest to hardest. Start at the top.
 - **Done when:** `.\tools\check.ps1` is all OK; `docs/test-inventory.md` has the new tests and
   totals; `git diff --stat` shows only the files above.
 
-### T73. ADR 0016 §5: the loupe says when an embedded colour profile cannot be used — Ready for review
+### T73. ADR 0016 §5: the loupe says when an embedded colour profile cannot be used — Done
 
 - **Can start now.** T72 is done. Independent of T74's text, but T74 describes it, so T73 first.
 - **Crates:** `pw-colour`, `pw-viewcore`, `pw-loupe`.
@@ -3025,3 +3025,4 @@ and reviewer:
 | 2026-11-11 | F6 | — | The owner's first `latency.ps1` run (labels `c4-tiff-next`, `c4-raw-next`) is **not valid**: every press has `changes` 0 and no `first_ms`, i.e. no screen change was seen. RawStride was started with a folder, which opens the grid, not the loupe; to be repeated with a file path (the loupe) |
 | 2026-11-11 | F6 | — | Repeated run, RawStride started on a file (loupe), release build with T72–T73. **TIFF** (`c4-tiff-next-2`, the 9 TIFFs, RIGHT × 8, 1.5 s): first change 16.4–30.6 ms, **median 17.4 ms**, one change each (T66 before colour management: median 16.1 ms): V1 met. **RAW folder** (`c4-raw-next-2`, from `TN100423.ARW`, RIGHT × 20): the four `TN1004xx` A7R IV steps 16.7–26.7 ms, but the `_TN0633x` ARW/JPG pairs (copied to the folder today, never read before) took 0.6–6.7 s, and three presses changed nothing. Not yet attributed: the T72 render timings show the conversion in the noise, and the slow files were cold in the file cache; a second run on warm files decides |
 | 2026-11-11 | F6 | Done | **Corrects the previous row.** The `c4-raw-next-2` run started near the end of the folder: after four `TN1004xx` steps it reached the `_TN0633x` files and then the end of the list, so it does not measure stepping. The owner re-ran it on 20 RAW files (label `c4-raw-next`, the **last 20 rows** of `latency-rawstride.csv`; the first 20 rows with that label are the invalid grid run): first change 13.7–17.5 ms, **median 17.0 ms**, one change each. With TIFF median 17.4 ms (`c4-tiff-next-2`), **F6 is met**: V1 (median ≤ 30 ms) holds with colour management on |
+| 2026-11-11 | T73 | Done | Owner's check by hand passed: `TN005701_DxO_trasig-profil.jpg` shows "Inbäddad färgprofil kunde inte användas" in the loupe status line, `TN005702_DxO.jpg` does not. Committed (3b06d4f). T74 can start |
