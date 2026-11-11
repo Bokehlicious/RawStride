@@ -112,6 +112,33 @@ impl IptcDate {
         Ok(IptcDate { time, ..date })
     }
 
+    /// Reads ExifTool's form of an XMP date (`2026`, `2026:11`, `2026:11:04`, `2026:11:04 10:15`,
+    /// `2026:11:04 10:15:30`, `2026:11:04 10:15:30.5`, each time form with or without `Z` or
+    /// `±hh:mm`), which ExifTool prints even with `-n` (ADR 0007 §7). The date's `:` become `-` and
+    /// the space before the time becomes `T`; the result is read with [`IptcDate::parse_xmp`].
+    ///
+    /// The date part may only hold digits and `:`, so the XMP form (`2026-11-04`) and a `T` before
+    /// the time are errors. An error holds the text as given.
+    pub fn parse_exiftool(text: &str) -> Result<IptcDate, DateError> {
+        if text.trim().is_empty() {
+            return Err(DateError::Empty);
+        }
+        let invalid = || DateError::Invalid(text.to_string());
+        let (date_text, time_text) = match text.split_once(' ') {
+            Some((date, time)) => (date, Some(time)),
+            None => (text, None),
+        };
+        if !date_text.chars().all(|c| c.is_ascii_digit() || c == ':') {
+            return Err(invalid());
+        }
+        let mut xmp = date_text.replace(':', "-");
+        if let Some(time_text) = time_text {
+            xmp.push('T');
+            xmp.push_str(time_text);
+        }
+        IptcDate::parse_xmp(&xmp).map_err(|_| invalid())
+    }
+
     /// Writes the XMP form; for a value read with [`IptcDate::parse_xmp`] this is exactly the text
     /// that was read.
     pub fn to_xmp(&self) -> String {
@@ -832,5 +859,55 @@ mod tests {
         );
         let boxed: Box<dyn std::error::Error> = Box::new(DateError::Empty);
         assert_eq!(boxed.to_string(), "the date is empty");
+    }
+
+    #[test]
+    fn every_exiftool_form_equals_its_xmp_form() {
+        let cases = [
+            ("2026", "2026"),
+            ("2026:11", "2026-11"),
+            ("2026:11:04", "2026-11-04"),
+            ("2026:11:04 10:15", "2026-11-04T10:15"),
+            ("2026:11:04 10:15Z", "2026-11-04T10:15Z"),
+            ("2026:11:04 10:15+01:00", "2026-11-04T10:15+01:00"),
+            ("2026:11:04 10:15-05:30", "2026-11-04T10:15-05:30"),
+            ("2026:11:04 10:15:30", "2026-11-04T10:15:30"),
+            ("2026:11:04 10:15:30Z", "2026-11-04T10:15:30Z"),
+            ("2026:11:04 10:15:30+01:00", "2026-11-04T10:15:30+01:00"),
+            ("2026:11:04 10:15:30.5", "2026-11-04T10:15:30.5"),
+            ("2026:11:04 10:15:30.5Z", "2026-11-04T10:15:30.5Z"),
+            ("2026:11:04 10:15:30.5+01:00", "2026-11-04T10:15:30.5+01:00"),
+        ];
+        for (exiftool, xmp_form) in cases {
+            assert_eq!(
+                IptcDate::parse_exiftool(exiftool),
+                Ok(xmp(xmp_form)),
+                "{exiftool:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn invalid_exiftool_forms_are_errors_with_the_text_as_given() {
+        for text in [
+            "2026:11:04T10:15",
+            "2026-11-04 10:15",
+            "2026-11-04",
+            "2026:13",
+            "2026:11:04 25:00",
+            "2026:11:04 10:15 Z",
+            "2026:11:04Z",
+            "2026:11:04:01",
+            "Ä026",
+            "x",
+        ] {
+            assert_eq!(
+                IptcDate::parse_exiftool(text),
+                Err(DateError::Invalid(text.to_string())),
+                "{text:?}"
+            );
+        }
+        assert_eq!(IptcDate::parse_exiftool(""), Err(DateError::Empty));
+        assert_eq!(IptcDate::parse_exiftool("  "), Err(DateError::Empty));
     }
 }

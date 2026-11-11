@@ -12,3 +12,4 @@ workspace = true
 
 [dependencies]
 pw-core.workspace = true
+serde_json = { version = "=1.0.154", features = ["preserve_order"] }

@@ -19,6 +19,7 @@ pub mod iim;
 pub mod iim_read;
 mod iptc_table;
 pub mod properties;
+pub mod read;
 pub mod reconcile;
 #[cfg(test)]
 mod test_support;
