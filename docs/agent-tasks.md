@@ -2617,7 +2617,7 @@ Ordered from easiest to hardest. Start at the top.
 - **Done when:** `.\tools\check.ps1` is all OK (no code changed) and `git diff --stat` shows only the
   files above.
 
-### T75. ADR 0009 S6: acceptance measurement of RawStride and a results report — Ready for review
+### T75. ADR 0009 S6: acceptance measurement of RawStride and a results report — Done
 
 - **Review 2026-11-11: accepted.** Waiting for the owner's commit.
 
