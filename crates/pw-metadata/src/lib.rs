@@ -16,6 +16,7 @@
 pub mod date;
 mod exiftool;
 pub mod iim;
+pub mod iim_read;
 mod iptc_table;
 pub mod properties;
 #[cfg(test)]
