@@ -4292,7 +4292,7 @@ leaves the stored `IPTCDigest` out of date (`Validate`: `IPTCDigest is not curre
 - **Done when:** `.\tools\check.ps1` is all OK; `docs/test-inventory.md` is updated;
   `git diff --stat` shows only the files above.
 
-### T95. ADR 0007 I10b: the reader looks up the two sidecar names instead of listing the folder — Open
+### T95. ADR 0007 I10b: the reader looks up the two sidecar names instead of listing the folder — In progress
 
 - **Can start now.** No dependency change. Can run at the same time as T94, T96, T97 and T99 (no
   shared files).
@@ -4326,7 +4326,7 @@ leaves the stored `IPTCDigest` out of date (`Validate`: `IPTCDigest is not curre
 - **Done when:** `.\tools\check.ps1` is all OK; `docs/test-inventory.md` is updated;
   `git diff --stat` shows only the files above.
 
-### T96. ADR 0007 I10c: validation warnings for edited metadata (§11) — Open
+### T96. ADR 0007 I10c: validation warnings for edited metadata (§11) — In progress
 
 - **Can start now.** No dependency change. Can run at the same time as T95, T97 and T99; not at
   the same time as T94 (both change `lib.rs`).
@@ -4628,8 +4628,14 @@ leaves the stored `IPTCDigest` out of date (`Validate`: `IPTCDigest is not curre
   next write by RawStride), §6.2, §6.4 ("hidden by the user"), §5.4 (converted text marked), Q5/Q8
   (ignored sidecars reported), §7 (suggested Date Created).
 - **What** (`info_panel.rs`, pure functions, no egui):
-  1. `pub fn property_label(xmp_id: &str) -> String`: the Swedish name of D11 for the properties in
-     its list, otherwise the table's `name` (`properties::property`), otherwise the id.
+  1. `pub enum Language { Sv, En }` and `pub fn property_label(xmp_id: &str, language: Language)
+     -> String` (owner, 2026-11-12: so an English RawStride later only has to choose the language):
+     - `Sv`: the Swedish name of D11 for the properties and fields in its list, otherwise as `En`;
+     - `En`: always the IPTC name from the table (`name` of `properties::property`, or of the field
+       in `properties::struct_def` for a structure field), otherwise the id.
+     The Swedish names are in **one** table in `info_panel.rs`, keyed by XMP id; no other code holds
+     property names. Everything else in this task uses `Language::Sv` (the rest of RawStride's
+     texts stay Swedish in the code; a language setting is not part of I10).
   2. `pub fn value_text(value: &Value) -> String`: `Text` and `Number` as they are; a Lang Alt its
      shown text, with ` (<språk>)` when it is not `x-default` and ` +N språk` when it has N other
      entries; a list its entries joined with `; `; a date `IptcDate::to_xmp()`; a structure
@@ -4661,7 +4667,8 @@ leaves the stored `IPTCDigest` out of date (`Validate`: `IPTCDigest is not curre
          saknar kontrollsumma".
 - **Rules:** rules 3–7 and 10–12. No `Cargo.toml` change. Nothing in `pw-metadata` changes.
 - **Tests to add** (unit tests on hand-built `MetadataRead`): `property_label` for a listed, an
-  unlisted and an unknown id; `value_text` for every `Value` kind (Lang Alt with `x-default` only,
+  unlisted and an unknown id, each with `Sv` and `En` (`dc:creator` gives "Fotograf" and
+  "Creator"; a contact field gives "E-post" and the table's field name); `value_text` for every `Value` kind (Lang Alt with `x-default` only,
   without `x-default`, with two other languages; a list; a date with and without a zone; a contact
   structure; two Location Created); every rule text; every notice text above once; the order of
   values follows the table.
@@ -4716,7 +4723,8 @@ leaves the stored `IPTCDigest` out of date (`Validate`: `IPTCDigest is not curre
   (warnings).
 - **What** (`editor.rs`, pure, no egui), with the fields of D12:
   1. `pub enum EditorField` with the D12 fields in the D12 order; `label()` from T102's
-     `property_label` (the contact fields "E-post", "Telefon", "Webb"); `multiline()` true for
+     `property_label(…, Language::Sv)` (the contact fields "E-post", "Telefon", "Webb"; no names
+     of its own in `editor.rs`); `multiline()` true for
      Beskrivning, Alternativtext, Instruktioner, Användarvillkor, Nyckelord and Fotograf.
   2. **`EditorForm::from_read(read: &MetadataRead) -> EditorForm`:** one text per field: a text as
      it is; a Lang Alt its shown text (and a note "(<språk>)" when it has no `x-default`, so saving
@@ -4998,6 +5006,10 @@ and reviewer:
   modes in a RawStride namespace (needs the same kind of namespace decision as D1). Left out of
   I10: editing several images at once, lists of structures in the editor, the other controlled
   vocabularies of §11.
+- **Future improvement (owner, 2026-11-12, after D11):** Swedish names for **every** IPTC property
+  and structure field in T102's name table, so the Swedish info panel and editor show no English
+  IPTC names. Today D11 names about 35 of them; the rest fall back to IPTC's English name. Needs
+  the owner's approval of the full list.
 - The import dialog fields for title and description in `ui/` (frontend).
 - ADR 0010 steps M3–M7 (the rest of the import) wait until the contact sheet (ADR 0011) is done
   (owner decision, 2026-11-08). M4 and M7 are added to this list then.
@@ -5314,3 +5326,6 @@ and reviewer:
 | 2026-11-12 | T91, T93 | Done / Ready for review | Review: both accepted. **T93** (Done): `-IPTCDigest=new` also when the plan writes IIM to a file with a stored checksum and no XMP is left; the owner's change of the existing unit test `the_digest_needs_xmp_after_the_write` (its state now `missing_digest()`) is right, because that test asserted exactly the case T93 corrects. **T91** (code accepted, stays Ready for review until the owner's hand check of its Done when): `WriteSetup` and `write_rating_safely` in the worker, `WriteError::NotSafe` and `From<EditError>`, the journal in `%LOCALAPPDATA%\RawStride\journal` with recovery before the workers start, one `RawImageCheck` with `Releaser::release` (5 s) per worker, the Swedish texts, the ingest through `apply_template_safely`; `Cargo.toml`/`Cargo.lock` add only `pw-imagecheck` to `pw-loupe`. The owner's three decisions during the task are accepted: the two fake-ExifTool worker tests now drive the worker with `read_ratings` (a safe write needs a JSON read the fake cannot answer; what they check is unchanged); without a journal the workers start with `None` and every write fails with "skrivloggen kunde inte öppnas"; the recovery line names the backup only when it exists. The reviewer's `check.ps1`: fmt, test and clippy OK, **903 passed, 0 failed, 41 ignored**; ignored runs (`PW_TESTDATA`): `edit` (25 files) and both `safe_write` real-file tests passed. Committed. Left: the owner's hand check in RawStride (a rating on a DNG shown in RAW mode, on a JPEG and on an ARW with a sidecar) |
 | 2026-11-12 | T91 | Done | Owner hand check in RawStride: works (the Done when check: a rating on a DNG shown in RAW mode, on a JPEG and on an ARW with a sidecar). T91 is complete |
 | 2026-11-12 | T94–T106 | Open / Blocked | Added after T91 was done: ADR 0007 I10 split in thirteen. `pw-metadata`: T94 the ExifTool version checked when the worker starts (**Blocked** on D9); T95 the two sidecar names looked up directly instead of listing the folder for every image (from T82); T96 the validation warnings of §11; T97 edits of single properties and sub-fields written safely, with the plan's write notices (`Edit`, `apply_edits`, `write_edits_safely`); T98 the worker reads the whole `MetadataRead`, writes edits and takes new options (after T94, T97). `pw-loupe`: T99 the settings file (**Blocked** on D10); T100 a mode per field in the import dialog and the confirmation before a Clear (**Blocked** on D13, D14; left over from T88/T91); T101 the start message for a missing or too old ExifTool (after T94, T100); T102 the texts of the info panel (**Blocked** on D11); T103 the info panel (after T98, T101, T102, D15); T104 the editor's form (after T96, T97, T102, D12); T105 the editor window (after T103, T104); T106 the settings window (after T98, T99, T101). T95, T96 and T97 can start now and at the same time (T96 not with T94: both change `lib.rs`); T101, T103, T105 and T106 one at a time (`main.rs`). Owner decisions D9–D15 added to the step plan; D1 still open |
+| 2026-11-12 | T95 | In progress | (Agent) `read.rs`: on Windows `find_sidecars` looks up `<basename>.xmp` and `<basename>.<ext>.xmp` directly (`std::fs::metadata`; only `NotFound` is "no sidecar", any other failure is the error) and returns `folder.join(<file name of std::fs::canonicalize>)`, the name as stored; other systems keep the listing (`#[cfg(not(windows))]`); module comment says why. `tests/read.rs`: `IMG_1.XMP` next to a fake `img_1.dng` → `ForeignSidecarIgnored` naming `IMG_1.XMP`; `img_2.arw` + `IMG_2.xmp` read; `x.arw.XMP` → `ExtSidecarIgnored` naming `x.arw.XMP`; ignored timing test. Time per read, JPEG next to 20 000 empty files, ten reads, one run each, Windows 11, test profile, ExifTool through `-stay_open`: **21.0 ms before, 5.7 ms after**. `check.ps1`: tests OK (917 passed, 0 failed, 42 ignored, including another agent's unfinished T97 tests), clippy OK, **fmt FAILED only in `edit.rs`** (T97, changed by another agent in this worktree while T95 ran; not touched); `read.rs` and `tests/read.rs` pass `rustfmt --check`. Waits for a green `check.ps1` |
+| 2026-11-12 | T96 | In progress | (Agent) New `validate.rs` (`pub mod validate` in `lib.rs`): `Warning` with the seven warnings, `validate(&Metadata, iim_written)` in table order, English `Display`, module comment (§11; left out PLUS/I11, other vocabularies, dates). `TooLongForIim` through `iim::predict` with `iim_read::iim_format` (shown text of a Lang Alt, each list entry, the property once). A blank value (`iim::is_blank`) counts as missing, also for Creator in `JobtitleWithoutCreator`; a Digital Source Type code is one or more ASCII letters or digits. Owner decision 2026-11-12: `abc` cannot be stored as `xmp:Rating` in a `Metadata` (`check_kind`), so it is tested through the private `rating_warning` that `validate` uses. 15 unit tests, all passed; `docs/test-inventory.md` row 290 → 305, header 920 passed / 42 ignored. `check.ps1`: fmt OK, clippy OK, **test FAILED only in `tests/edits.rs`** (another agent's unfinished T97, untracked; `clearing_the_copyright_notice_removes_it_from_xmp_and_exif`); 936 passed, 1 failed, 42 ignored; `pw_metadata` lib 316 passed, 1 ignored. Waits for a green `check.ps1` |
+| 2026-11-12 | T102, T104 | Blocked | Owner decision on D11 and translation: `property_label` takes a language (`Language::Sv`, `Language::En`); English always gives the IPTC name from the property table, Swedish the D11 name where there is one. The Swedish names stay in one table in `info_panel.rs`; T104 takes its labels from it. Swedish names for every property (no English fallback in the Swedish panel) are kept as a future improvement under "Not for agents yet". D11 itself (the proposed names) is still open |
