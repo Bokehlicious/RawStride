@@ -2851,6 +2851,7 @@ leaves the stored `IPTCDigest` out of date (`Validate`: `IPTCDigest is not curre
 | D13 | owner | The modes in the import dialog (§10). Reviewer's proposal: the Swedish names Behåll, Ersätt, Lägg till efter, Lägg till före, Rensa; the default Ersätt for every field (an empty field then does nothing, exactly as today); Fotograf offers Behåll, Ersätt, Lägg till efter; Copyright and Credit also Lägg till före; E-post, Telefon and Webb all five (no Rensa of copyright-management fields, §8; no "before" on a list). The modes are remembered during the session like the texts, not between runs. **Approved by the owner on 2026-11-12** | §8, §10 | done |
 | D14 | owner | The confirmation before a Clear (§10: "once per template"). Reviewer's proposal: when an import is started with at least one field in Rensa, one window lists those fields ("Rensa och importera" / "Avbryt"); asked once per started import, never per image. The editor does not ask (emptying a field there is the user's own choice for one image). **Approved by the owner on 2026-11-12** | §10 | done |
 | D15 | owner | The place of the info panel and the keys. Reviewer's proposal: a panel on the right side, in the loupe and in the contact sheet (the selected image), shown and hidden with `M`, hidden at start; the editor opens with `E` or the button "Redigera" in the panel, in its own window. **Approved by the owner on 2026-11-12** | – | done |
+| D16 | owner | One metadata window instead of the panel and the editor (replaces the panel and the keys of D15; the fields of D12 stay). Owner, 2026-11-12: like a floating info window where everything is seen and edited directly, **locked to the image until OK or Avbryt**. Reviewer's proposal for the details: `M` opens a floating, movable and resizable window "Metadata – <fil>" for the current image (one image of a kind with metadata support); `E`, the right-hand panel and the button "Redigera" go away. While it is open it is modal, like the import dialog: the loupe and the contact sheet take no keys or clicks, so the window cannot change image. Top to bottom: the 22 fields editable, "Olösta konflikter" with a choice each, "Varningar", then read-only "Övrig metadata" (every other property with its origin), the conflicts already decided by a rule, and the notices. "OK" writes the edits (nothing to write: closes) and closes after a successful write; with write notices the window stays showing "Sparat." and them until OK or Avbryt; a failed write keeps the window and the typed text. "Avbryt" closes without writing; Escape is Avbryt but asks "Släng ändringarna?" ("Släng" / "Fortsätt redigera") when there are edits. Unsaved edits are dropped at program exit (a write already running is waited for, as today). **Approved in principle by the owner on 2026-11-12; the details above are the reviewer's proposal** | §5.1, §6.2 | done in principle |
 | I10a | T94 | The ExifTool version (at least 12.67) checked when the metadata worker starts; writes refused below it (D9) | §11 | now |
 | I10b | T95 | The reader looks up the two sidecar names directly instead of listing the folder for every image (from T82) | §4.1, §4.2 | now |
 | I10c | T96 | Validation warnings (§11): IIM byte limits, Alt Text length, Country Code form, Jobtitle without Creator, Digital Source Type, Image Registry Entry, Rating | §11 | now |
@@ -2864,6 +2865,7 @@ leaves the stored `IPTCDigest` out of date (`Validate`: `IPTCDigest is not curre
 | I10k | T104 | The editor's form: fields, conflict choices, edits, warnings in Swedish (D12) | §5.1, §7, §8, §11 | after T96, T97 and T102 |
 | I10l | T105 | The editor window in RawStride, saved through the worker | §9 | after T103 and T104 |
 | I10m | T106 | The settings window; the settings used by ratings, the editor, the panel and the import | §5.2, §5.4 | after T98, T99 and T101 |
+| I10n | T107 | One metadata window locked to its image, opened with `M`: the 22 fields edited directly with OK and Avbryt, the conflicts, warnings, the other metadata and the notices (D16; replaces the panel of T103 and the window of T105) | §5.1, §6.2, §9 | now; not with T106 |
 | I11 | – | PLUS fields as fixed choice lists | §11, Q9 | **after the PLUS controlled vocabulary is read** (§16.4) |
 | I12 | – | Real-file tests with the owner's level-C samples | §12, Q11 | when the owner provides the samples |
 | I13 | – | Documentation after milestone 8 | – | last |
@@ -4718,7 +4720,7 @@ leaves the stored `IPTCDigest` out of date (`Validate`: `IPTCDigest is not curre
 - **Done when:** `.\tools\check.ps1` is all OK; `docs/test-inventory.md` is updated;
   `git diff --stat` shows only the files above.
 
-### T103. ADR 0007 I10j: the info panel in RawStride — Ready for review
+### T103. ADR 0007 I10j: the info panel in RawStride — Done
 
 - **Can start after T98, T101 and T102 are accepted** (D15 approved on 2026-11-12). Not at the same time as
   T105 or T106 (`main.rs`).
@@ -4819,7 +4821,7 @@ leaves the stored `IPTCDigest` out of date (`Validate`: `IPTCDigest is not curre
 - **Done when:** `.\tools\check.ps1` is all OK; `docs/test-inventory.md` is updated;
   `git diff --stat` shows only the files above.
 
-### T105. ADR 0007 I10l: the editor window in RawStride, saved through the worker — Ready for review
+### T105. ADR 0007 I10l: the editor window in RawStride, saved through the worker — Done
 
 - **Can start after T103 and T104 are accepted.** Not at the same time as T106 (`main.rs`).
 - **Crates:** `pw-loupe` only.
@@ -4910,6 +4912,84 @@ leaves the stored `IPTCDigest` out of date (`Validate`: `IPTCDigest is not curre
   `git diff --stat` shows only the files above. The owner checks by hand: the setting survives a
   restart, and with "Skapa IPTC-IIM" on, a Title written in the editor to a JPEG without IIM
   appears in IIM (ExifTool `-IPTC:all`).
+
+### T107. ADR 0007 I10n: one metadata window locked to its image (D16) — Open
+
+- **Can start now** (T103, T104, T105 are committed). Not at the same time as T106 (`main.rs`); the
+  reviewer decides the order. It replaces the right-hand panel of T103 and the editor window of
+  T105 by one window; their logic is kept where it can be (the read in flight, the write and the
+  read after it, the exit wait, the texts).
+- **Crates:** `pw-loupe` only.
+- **Files:** `crates/pw-loupe/src/main.rs`; `crates/pw-loupe/src/metadata.rs`;
+  `crates/pw-loupe/src/lib.rs` (`Action`, `key_action` and the `pub use` lines of `editor` and
+  `info_panel` only); `crates/pw-loupe/src/editor.rs` (`EditorText`/`editor_text` only);
+  `crates/pw-loupe/src/info_panel.rs` (point 4 only); `docs/test-inventory.md`.
+- **Why:** owner decision D16 (2026-11-12): the information and the editing in one floating window,
+  as the user knows it from other photo programs, locked to its image until OK or Avbryt.
+- **What:**
+  1. **Keys** (`lib.rs`): `Action::ToggleMetadata` becomes `Action::OpenMetadata` on `M` (no Ctrl
+     or Alt); `Action::EditMetadata` and the key `E` are removed (`E` does nothing).
+  2. **Opening** (`main.rs`): `M` in the loupe or the contact sheet opens the window for the
+     current image (in the contact sheet: the current image when at most one is marked; with
+     several marked, or a kind without metadata support (`supports_rating`), `M` does nothing).
+     The read is asked for **at once** (no 200 ms wait: the window is opened on purpose); until it
+     is back the window shows `PanelText::Loading` and only "Avbryt"; a read error shows
+     `PanelText::ReadError` and only "Avbryt". The right-hand panel, `show_metadata`, the
+     "Redigera" button and opening from `E` are removed.
+  3. **The window** (`egui::Window`, title `EditorText::WindowTitle`, movable, resizable, default
+     about 460 × 640, its own vertical scroll area, the buttons outside it at the bottom):
+     - **modal**: while it is open the loupe, the contact sheet, the tabs and the top bar take no
+       keys or clicks (as the import dialog keeps keys away today), so the image cannot change;
+       keys typed into its fields reach nothing else;
+     - top to bottom: the 22 fields of `EditorForm` (multi-line where `multiline()`, the Lang Alt
+       note, field errors under their field); "Olösta konflikter" with radio buttons
+       (`EditorText::ConflictChoice`); "Varningar" in the warning colour; then read-only, in small
+       text: `EditorText::OtherValuesHeading` with point 4's other values (label, value, origin in
+       grey), `PanelText::Conflicts` with the conflicts a rule has decided (rule text in the
+       warning colour), `PanelText::Notices` with the notices; each read-only section only when it
+       has rows;
+     - **OK** (`EditorText::Ok`): field errors → shown, nothing written; no edits → the window
+       closes; otherwise `write_edits` (T98), the window read-only with `EditorText::Saving` and
+       "Avbryt" disabled; success without notices → the window closes; success with notices → the
+       form is refilled from the new read and the window stays showing `EditorText::Saved` and the
+       notice texts until OK or Avbryt; failure → `EditorText::SaveFailed`, the typed text kept;
+     - **Avbryt** (`EditorText::Cancel`) closes without writing; **Escape** is Avbryt, but with
+       edits it first asks `EditorText::DiscardQuestion` with `EditorText::Discard` and
+       `EditorText::KeepEditing`; Enter does not press OK;
+     - unsaved edits are dropped at program exit; a write already running is waited for as T105
+       does (the exit wait and its message are unchanged).
+  4. **`info_panel.rs`:** `ConflictRow` gains `pub open: bool` (the rule is `Open`), and `pub fn
+     other_values(read: &MetadataRead, editor_properties: &[&str]) -> Vec<ValueRow>`: the `values`
+     of `info_panel` without the properties in `editor_properties`; `main.rs` passes the
+     properties of `EditorField::ALL` except `Iptc4xmpCore:CreatorContactInfo` (its address fields
+     are not editor fields, so the structure stays in the list). Nothing else changes there.
+  5. **`metadata.rs`:** the read of the window's image: one read in flight, a result for another
+     image dropped, read again after `RatingWritten`/`EditsWritten` of the image; asked for at
+     once when the window opens, not while moving between images (the 200 ms wait and the reads
+     while the panel was shown go away). The editor's write, the read after it and the exit wait
+     of T105 stay.
+  6. **`editor.rs` texts:** `EditorText` gains `Ok` "OK", `OtherValuesHeading` "Övrig metadata",
+     `DiscardQuestion` "Släng ändringarna?", `KeepEditing` "Fortsätt redigera"; `WindowTitle`
+     becomes "Metadata – <file>"; `EditButton`, `Close`, `Save` and `UnsavedQuestion` are removed
+     when nothing uses them. `rule_text(Open)` is not shown in the window (open conflicts are the
+     choices). A text that turns out to be missing is added to `EditorText` the same way and named
+     in the hand-over.
+- **Rules:** rules 3–7 and 10–13. No `Cargo.toml` change. The rating path and the exit wait are
+  unchanged.
+- **Tests to add / change:** `key_action` for `M` (`OpenMetadata`, not with Ctrl or Alt) and `E`
+  (`None`); `editor_text` of the new and changed texts (the test of every text updated);
+  `other_values` (an editor property left out, `CreatorContactInfo` kept, the order of the table)
+  and `ConflictRow::open`; `metadata.rs` with the fake submitter: a read sent at once when the
+  window opens, one in flight, a stale result dropped, a new read after a write of the image. The
+  T103 tests of the 200 ms wait and of reads while hidden are removed or rewritten for the window
+  (say which in the hand-over).
+- **Done when:** `.\tools\check.ps1` is all OK; `docs/test-inventory.md` is updated;
+  `git diff --stat` shows only the files above. The owner checks by hand in RawStride: `M` on a
+  JPEG, a DNG shown in RAW mode and an ARW with a sidecar shows their metadata; while the window is
+  open the image cannot be changed; a Title and a keyword written with OK, read back with `M` and
+  in another program (Photo Mechanic or Lightroom); an emptied Description; a conflict chosen in
+  `D:\PhotoWorkflowData\Konflikttest\konflikt-stad.jpg`; Avbryt drops the edits; Escape with
+  edits asks first.
 
 ### T7. Format the files that `cargo fmt --check` reports — Done
 
@@ -5426,3 +5506,4 @@ and reviewer:
 | 2026-11-12 | T105 | Open | Stopped by the agent under rule 13: the window needs about a dozen new user-visible texts (Redigera, the window title, Olösta konflikter, a conflict choice, Spara, Stäng, Sparar …, Sparat., the save error, Spara ändringarna?, Släng, Avbryt), and none of T105's files was a text module. **Owner decision (2026-11-12):** T105 may also change `editor.rs`, only to add `EditorText` and `editor_text` (point 5, as `PanelText`), with one test of every text; the `pub use editor::…` line gains the two names. The "Redigera" button text is there too, so all of the editor's texts are in one module |
 | 2026-11-12 | T105 | Ready for review | (Agent) `lib.rs`: `Action::EditMetadata` on `E` (not with Ctrl or Alt); `EditorText`/`editor_text` in the `pub use editor::…` line. `editor.rs` (point 5 only): `EditorText` and `editor_text` with the listed texts. `metadata.rs`: `MetadataSubmit::write_edits`; `save_edits` sends one write at a time (a submit error gives the save-failed text at once); `EditsWritten` of that id → `EditorEvent::Saved` (notices) and a read of the image for the form (`EditorEvent::Reloaded`, its own request, sent again while the queue is full), or `Failed` with "Kunde inte spara metadata för <fil>: <skäl>" through `write_error_text`; the panel's read of the image is renewed as before; a stopped worker fails the write and the read; `finish_pending_writes` also waits for the editor's write (same limit), lists its failure, or its file name when it does not finish. `main.rs`: `EditorWindow` (one image, kept when moving), opened by `E` or "Redigera" at the top of the panel only when the panel's image has a loaded read and no editor is open; the 22 fields (multi-line where `multiline()`), Lang Alt notes, field errors under their fields, "Olösta konflikter" with radio buttons, warnings in the warning colour, "Spara"/"Stäng"; the form read-only with "Sparar …" while the write and the read after it run; "Sparat." with the notice texts, then the form refilled; "Spara ändringarna?" (Spara, Släng, Avbryt) when closing with unsaved edits, "Spara" there closes after a successful write; while the editor is open and a text field has the keyboard, no key reaches the rating, navigation, tab or import keys. **Outside the text, to review:** (1) owner's answer during the task (2026-11-12): one exit message for ratings and the editor with a neutral title, so `EditorText::UnsavedAtExitTitle` "Ändringar som inte sparades" was added and `UNSAVED_TITLE` ("Betyg som inte sparades") removed from `metadata.rs`; (2) `WarningsHeading` "Varningar" is used as listed; a failed read after a save is shown with `panel_text(ReadError)`; (3) `create_iim` for the warnings is `EditOptions::default()`'s, as the worker is started with it (T106 wires the settings); (4) E or "Redigera" does nothing while an editor is open (no second window, no swap that could lose edits); (5) after a save of the panel's image two reads are sent (panel and form). 10 new tests (1 `editor_text`, 1 key, 8 `metadata.rs`); `test-inventory.md` pw-loupe 349, header total. `check.ps1`: fmt, test and clippy OK, **1055 passed, 0 failed, 43 ignored** in 54 programs. Owner's hand check pending |
 | 2026-11-12 | T105 | Ready for review | Review: code accepted, stays Ready for review until the owner's hand check of its Done when. `Action::EditMetadata` on `E`; the window belongs to one image and opens only with a loaded read and no editor open; the 22 fields, notes, field errors, "Olösta konflikter" with radio buttons, "Varningar", "Spara"/"Stäng"; one write at a time through `write_edits`, the form read-only during the write and the read after it, "Sparat." with the notice texts and the form refilled, the save error through `write_error_text`; "Spara ändringarna?" with Spara/Släng/Avbryt; keys typed into a text field of the editor reach no other key; the exit wait counts the editor's write. Every text from `editor_text`, `EditorForm`, `notice_text` or `info_panel.rs` (point 5). Accepted outside the text: (1) the owner's decision for one exit message with the neutral title "Ändringar som inte sparades" (`UNSAVED_TITLE` removed); (2) a failed read after a save shown with `panel_text(ReadError)`; (3) `create_iim` for the warnings from `EditOptions::default()` until T106 wires the settings; (4) E/"Redigera" do nothing while an editor is open; (5) two reads after a save of the panel's image. Reviewer fix: a doc comment line of `finish_pending_writes` over 100 characters wrapped. The reviewer's `check.ps1`: fmt, test and clippy OK, **1055 passed, 0 failed, 43 ignored** in 54 programs. Committed. Left: the owner's hand check of T105 (a Title and a keyword on a JPEG, a DNG in RAW mode and an ARW with a sidecar, read back in the panel and in another program; an emptied Description; a conflict chosen) |
+| 2026-11-12 | D16, T107, T103, T105 | Open / Done | Owner decision D16: one floating metadata window instead of the right-hand panel and the separate editor (everything seen and edited directly, as in other photo programs), **locked to its image until OK or Avbryt**; the reviewer's proposal for the details is in the D16 row. Added T107 (I10n), which replaces the panel of T103 and the window of T105 and keeps their logic; not at the same time as T106. T103 and T105 set to Done without their hand checks, which move to T107's Done when |
