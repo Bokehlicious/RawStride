@@ -3874,6 +3874,7 @@ version = "0.1.0"
 dependencies = [
  "pw-core",
  "serde_json",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

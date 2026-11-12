@@ -15,15 +15,18 @@
 
 pub mod date;
 mod exiftool;
+mod fileops;
 pub mod iim;
 pub mod iim_read;
 mod iptc_table;
+pub mod journal;
 pub mod properties;
 pub mod read;
 pub mod reconcile;
 #[cfg(test)]
 mod test_support;
 pub mod value;
+pub mod verify;
 mod worker;
 pub mod write_plan;
 
