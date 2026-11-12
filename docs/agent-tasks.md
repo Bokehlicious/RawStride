@@ -2864,7 +2864,6 @@ leaves the stored `IPTCDigest` out of date (`Validate`: `IPTCDigest is not curre
 | I10k | T104 | The editor's form: fields, conflict choices, edits, warnings in Swedish (D12) | §5.1, §7, §8, §11 | after T96, T97 and T102 |
 | I10l | T105 | The editor window in RawStride, saved through the worker | §9 | after T103 and T104 |
 | I10m | T106 | The settings window; the settings used by ratings, the editor, the panel and the import | §5.2, §5.4 | after T98, T99 and T101 |
-| C | T107 | `Cleared` (D1: `urn:rawstride:xmp:1.0`, prefix `rawstride`) read from and written to a manufacturer RAW's sidecar; ExifTool started with RawStride's config file | §6.4, Q2 | now (not with T94) |
 | I11 | – | PLUS fields as fixed choice lists | §11, Q9 | **after the PLUS controlled vocabulary is read** (§16.4) |
 | I12 | – | Real-file tests with the owner's level-C samples | §12, Q11 | when the owner provides the samples |
 | I13 | – | Documentation after milestone 8 | – | last |
@@ -4891,113 +4890,6 @@ leaves the stored `IPTCDigest` out of date (`Validate`: `IPTCDigest is not curre
   restart, and with "Skapa IPTC-IIM" on, a Title written in the editor to a JPEG without IIM
   appears in IIM (ExifTool `-IPTC:all`).
 
-### T107. ADR 0007 §6.4: `Cleared` read from and written to a RAW file's sidecar (D1) — Open
-
-- **Can start now.** The owner approved D1 on 2026-11-12, for now: the namespace URI is
-  `urn:rawstride:xmp:1.0`, the prefix `rawstride`, the property `rawstride:Cleared` (a Bag of XMP
-  ids). Not at the same time as T94 (both change `exiftool.rs`); it can run at the same time as
-  every `pw-loupe` task. No dependency change.
-- **Crates:** `pw-metadata` only. RawStride already shows "dold av användaren" through
-  `Notice::HiddenByUser` once the reader fills `cleared` (T102).
-- **Files:** `crates/pw-metadata/src/exiftool.rs`; `crates/pw-metadata/src/read.rs`;
-  `crates/pw-metadata/src/write_plan.rs`; new `crates/pw-metadata/tests/cleared.rs`; the files whose
-  tests build a `FileState` by hand (`src/read.rs`, `src/write_plan.rs`, `tests/safe_write.rs`,
-  `tests/verify.rs`, `tests/write_plan.rs`: **only** the new field, `cleared: BTreeSet::new()`, or
-  one shared helper that adds it); `docs/adr/0007-metadata-iptc.md` (§6.4: one sentence naming the
-  URI and prefix, D1); `docs/test-inventory.md`.
-- **Why:** ADR 0007 §6.4 and Q2: a property the user cleared for a manufacturer RAW is recorded in
-  its sidecar, so the camera's own value (Exif or camera XMP in the RAW file) does not fill it
-  again; writing a value removes it from the list. The reconciliation already honours
-  `Readings::cleared` (T81, `HiddenByUser`); the reader leaves it empty and the write plan never
-  writes it (T82, T83: "waits for D1").
-  **Measured by the reviewer with ExifTool 13.59** (2026-11-12, an XMP file in a temporary folder):
-  - **reading** needs nothing: `-j -G1 -struct` gives `"XMP-rawstride:Cleared": ["dc:description",
-    "dc:creator"]` with or without a config file; without `-struct` a list of one entry comes as a
-    plain string;
-  - **writing** needs a user-defined tag: without it ExifTool answers `Tag
-    'XMP-rawstride:Cleared' is not defined` and writes nothing. With this config file (given as
-    `-config <file>` **before** `-stay_open True -@ -`) it works through `-stay_open` as well:
-    ```perl
-    %Image::ExifTool::UserDefined = (
-        'Image::ExifTool::XMP::Main' => {
-            rawstride => {
-                SubDirectory => { TagTable => 'Image::ExifTool::UserDefined::rawstride' },
-            },
-        },
-    );
-    %Image::ExifTool::UserDefined::rawstride = (
-        GROUPS => { 0 => 'XMP', 1 => 'XMP-rawstride', 2 => 'Image' },
-        NAMESPACE => { 'rawstride' => 'urn:rawstride:xmp:1.0' },
-        WRITABLE => 'string',
-        Cleared => { List => 'Bag' },
-    );
-    1;
-    ```
-  - `-XMP-rawstride:Cleared=dc:description -XMP-rawstride:Cleared=dc:creator` replaces the whole
-    list with these two (as `dc:subject`, T88); `-XMP-rawstride:Cleared=` removes it, and the
-    namespace disappears from the file; a new sidecar (`-o x.xmp` without a source) gets
-    `<rawstride:Cleared><rdf:Bag>…` under `xmlns:rawstride='urn:rawstride:xmp:1.0'`; `-validate`
-    is `OK`.
-  - `-config` replaces ExifTool's own default config file (`.ExifTool_config` in the user's home
-    folder), which RawStride does not use.
-- **What:**
-  1. **`exiftool.rs`:** the config above as a `const` (with a comment naming D1 and §6.4);
-     `start_with` writes it to `std::env::temp_dir()` as `pw-metadata-rawstride-1.config` when the
-     file is missing or its content differs (written to a temporary name in the same folder, then
-     renamed onto it), and gives `-config <file>` as the first ExifTool argument (after `pre_args`,
-     before `-stay_open`). A failure to write it is an `Error::ExifTool` naming the file. Every
-     `ExifTool` process gets it (the workers, the import, the Tauri app through `ExifTool::start`).
-     Module comment updated.
-  2. **`read.rs`:** for a `Raw` file, the sidecar's `XMP-rawstride:Cleared` (a JSON array, or a
-     single string) becomes `Readings::cleared` and the new `FileState::cleared`; every entry is
-     kept as text, also one that is not in the table (it is written back unchanged). For JPEG, TIFF
-     and DNG both stay empty: a `Cleared` inside such a file is ignored (the embedded XMP has no
-     camera value to hide, §6.4 is for manufacturer RAW only). Remove the "not read yet" sentence
-     from the module comment.
-  3. **`write_plan.rs`:** `FileState` gains `pub cleared: BTreeSet<String>` (the list as read). For a
-     `Raw` file the plan computes the new list: the read list, without every property the changes
-     set to a value, with every property the changes clear (a cleared structure field that leaves
-     the property empty counts as a clear of the property). When the new list differs from the read
-     one, the plan adds `-XMP-rawstride:Cleared=<id>` for every entry in sorted order, or
-     `-XMP-rawstride:Cleared=` when the new list is empty. Nothing for JPEG, TIFF or DNG. Update the
-     module comment (the `Raw` bullet).
-  4. **`docs/adr/0007-metadata-iptc.md` §6.4:** after "prefix and namespace URI are fixed with the
-     implementation" add: "(D1, 2026-11-12: `urn:rawstride:xmp:1.0`, prefix `rawstride`; a later
-     address under a domain must keep this one readable)". Nothing else in the ADR changes.
-- **Rules:** rules 3–7 and 10–13. No `Cargo.toml` change. Do not change `reconcile.rs`, `edit.rs`,
-  `template.rs` or `safe_write.rs`. `verify.rs` should allow `XMP-rawstride:Cleared` already
-  (the key of an argument of the plan); if the copy check refuses it, stop and explain. If an
-  existing test that starts a fake ExifTool program fails because of the new `-config` argument,
-  stop and report; do not change the test.
-- **Tests to add:**
-  - unit tests in `write_plan.rs`: a `Raw` file, `dc:description` cleared → the plan holds
-    `-XMP-dc:Description=` and `-XMP-rawstride:Cleared=dc:description`; the read list
-    `{dc:creator, x:unknown}` and Description cleared → all three entries, sorted; the read list
-    `{dc:description}` and Description set → `-XMP-rawstride:Cleared=` and the Description; the read
-    list unchanged by the changes (a Title set) → no `Cleared` argument; the same changes on a JPEG
-    → no `Cleared` argument; the last field of `CreatorContactInfo` cleared on a `Raw` → the
-    property in the list;
-  - unit tests in `read.rs` on hand-written JSON: an array and a single string become the set; a
-    JPEG's `XMP-rawstride:Cleared` is ignored;
-  - `tests/cleared.rs` (integration, **ExifTool required**; the fake RAW of T82 with a sidecar, in
-    a temporary folder; `NoImageCheck`; a temporary journal):
-    - a sidecar holding a Description, cleared with `write_edits_safely` (T97) → the sidecar has no
-      Description and `Cleared` holds `dc:description`; `read_metadata` gives
-      `state.cleared` = `{dc:description}`;
-    - the fake RAW given an Exif `ImageDescription` (with `ExifTool::execute` on the RAW copy before
-      the test, as T82's tests prepare files) and a cleared Description in its sidecar →
-      `read_metadata` has no Description and one `Notice::HiddenByUser` with the camera's text;
-    - a Description written again → `Cleared` gone from the sidecar (no `rawstride` namespace left
-      in the file's text), the Description read back;
-    - a template `Clear` of `photoshop:City` (T88) on the fake RAW → `Cleared` holds it;
-    - the RAW file's bytes unchanged after each write; the config file exists in the temporary
-      folder after `ExifTool::start`, and a second start does not rewrite it (same modification
-      time).
-- **Done when:** `.\tools\check.ps1` is all OK; `docs/test-inventory.md` is updated;
-  `git diff --stat` shows only the files above. The owner checks by hand later (with T105): a
-  Description cleared on an ARW whose camera wrote an ImageDescription stays empty in RawStride
-  after a restart.
-
 ### T7. Format the files that `cargo fmt --check` reports — Done
 
 - **Crates:** `photoworkflow` (`src-tauri`), `preview-bench` (`tools/preview-bench`).
@@ -5161,7 +5053,7 @@ and reviewer:
 - Suppressing the Windows "no disk in drive" dialog when scanning empty card readers (needs a
   Windows API call and a new dependency).
 - ADR 0007 (IPTC metadata) steps I11–I13 and the `Cleared` task (see "Milestone 8 (ADR 0007, IPTC
-  metadata): steps"; I9 is T87–T93, I10 is T94–T106): the `Cleared` task is T107 (D1
+  metadata): steps"; I9 is T87–T93, I10 is T94–T106): the `Cleared` task can be written now (D1
   approved); I11 waits for the PLUS controlled
   vocabulary; I12 waits for the level-C samples. Also later: Exif ImageEditor ↔ Contributor and
   GPS → Location Created (§6.1), left out of T81; keyword qualifiers (§8), left out of T83; from
@@ -5500,4 +5392,3 @@ and reviewer:
 | 2026-11-12 | – | Decision | Owner added rule 13 to "How to work on a task": every text the user sees is made by a function in its area's text module as a whole-sentence template with placeholders, no user-visible string literals in drawing code, property names only through `property_label`, no fixed text width; existing hard-coded texts stay unless a task moves them. It applies to every task that adds or changes such a text, whichever rules the task lists. T102–T104 already state the same rule for the info panel and the editor (commit fc5b3e0) |
 | 2026-11-12 | T94, T99–T104 | Open | The owner approved D9–D15 as proposed: D9 an ExifTool that is missing or older than 12.67 gives one message at start and refuses every write, reading as today; D10 the settings in `%LOCALAPPDATA%\RawStride\settings.txt`, `key = value`; D11 the Swedish property names of the list (the others IPTC's English name); D12 the editor edits one image at a time with the 22 fields and the conflict choices; D13 the modes Behåll, Ersätt, Lägg till efter, Lägg till före, Rensa, default Ersätt, the allowed modes per field; D14 one confirmation per started import that clears fields; D15 the panel on the right with `M`, the editor with `E` or "Redigera". T94, T99, T100 and T102 can start now; T101, T103 and T104 wait for the tasks they name |
 | 2026-11-12 | – | Decision | The owner approved D1 for now: RawStride's XMP namespace is the URN `urn:rawstride:xmp:1.0` with the prefix `rawstride` (`rawstride:Cleared`, later also the template modes of §10). A later change to an address under a domain must keep the URN readable. The `Cleared` task (reading and writing it, §6.4) can now be written |
-| 2026-11-12 | T107 | Open | Added after D1: `Cleared` read from a RAW file's sidecar into `Readings::cleared` and the new `FileState::cleared`, and written by the plan as the whole list (`-XMP-rawstride:Cleared=…`) when a change clears or sets a property; every ExifTool process gets RawStride's config file (`-config`), which defines the tag. Measured by the reviewer with ExifTool 13.59: reading needs no config; writing without it gives "Tag 'XMP-rawstride:Cleared' is not defined"; with it, a whole-list write, its removal and a new sidecar work through `-stay_open` and `-validate` is OK. Not at the same time as T94 (`exiftool.rs`) |
