@@ -29,6 +29,9 @@ pub struct ExifTool {
     stderr: Arc<Mutex<String>>,
     seq: u64,
     broken: bool,
+    /// The program and leading arguments it was started with, for [`ExifTool::restart`].
+    program: String,
+    pre_args: Vec<String>,
 }
 
 impl ExifTool {
@@ -82,6 +85,8 @@ impl ExifTool {
             stderr: Arc::new(Mutex::new(String::new())),
             seq: 0,
             broken: false,
+            program: program.to_string(),
+            pre_args: pre_args.iter().map(|arg| arg.to_string()).collect(),
         };
         if let Some(err) = stderr_pipe {
             let sink = Arc::clone(&tool.stderr);
@@ -99,6 +104,29 @@ impl ExifTool {
                 })?;
         }
         Ok(tool)
+    }
+
+    /// Stops this ExifTool process and starts a new one with the same program and arguments
+    /// (T92). The safe write needs it: measured with ExifTool 13.59, after a process has written
+    /// `-IPTCDigest=new` to a TIFF whose Photoshop block holds an `IPTCDigest` and an `AgHg`
+    /// resource, that process reads the Photoshop block of such TIFFs wrongly until it ends (two
+    /// more validation warnings, "Non-standard Photoshop at TIFF-IFD0-Photoshop-IPTCDigest" and
+    /// "Bad Photoshop IRB resource"), even of files it never wrote. If the new process cannot be
+    /// started this instance is marked broken, so callers that start a new one when
+    /// [`ExifTool::is_broken`] do so.
+    pub fn restart(&mut self) -> Result<()> {
+        let pre_args: Vec<&str> = self.pre_args.iter().map(String::as_str).collect();
+        match Self::start_with(&self.program, &pre_args) {
+            Ok(fresh) => {
+                // The old process is stopped when it is dropped here.
+                *self = fresh;
+                Ok(())
+            }
+            Err(error) => {
+                self.broken = true;
+                Err(error)
+            }
+        }
     }
 
     /// True after an I/O failure or unexpected exit; the instance then rejects all commands.
@@ -239,6 +267,37 @@ mod tests {
         assert!(et.execute(&["a\nb".into()]).is_err());
         assert!(!et.is_broken());
         assert!(et.execute(&["-ver".into()]).is_ok());
+    }
+
+    #[test]
+    fn restart_starts_a_new_process_that_answers() {
+        let mut et = start_fake("normal");
+        assert!(et.execute(&["-ver".into()]).is_ok());
+        let first = et.child.id();
+        assert!(et.restart().is_ok());
+        assert_ne!(et.child.id(), first);
+        assert!(!et.is_broken());
+        assert!(et.execute(&["-ver".into()]).is_ok());
+    }
+
+    #[test]
+    fn restart_brings_a_broken_instance_back() {
+        let mut et = start_fake("exit-after-first");
+        assert!(et.execute(&["-ver".into()]).is_ok());
+        assert!(et.execute(&["-ver".into()]).is_err());
+        assert!(et.is_broken());
+        assert!(et.restart().is_ok());
+        assert!(!et.is_broken());
+        assert!(et.execute(&["-ver".into()]).is_ok());
+    }
+
+    #[test]
+    fn a_failed_restart_marks_the_instance_broken() {
+        let mut et = start_fake("normal");
+        et.program = "pw-no-such-exiftool-program".to_string();
+        assert!(et.restart().is_err());
+        assert!(et.is_broken());
+        assert!(et.execute(&["-ver".into()]).is_err());
     }
 
     #[test]

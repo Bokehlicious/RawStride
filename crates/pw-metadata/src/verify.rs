@@ -6,7 +6,8 @@
 //! and every other tag as text. [`check_file_type`] refuses a file whose content does not match
 //! its kind (a JPEG renamed `.dng`). [`verify_copy`] compares the snapshot of the original with
 //! the snapshot of the written copy: the type and the image data must be unchanged, there must be
-//! no new errors or warnings, and every tag that was added, removed or changed must be one the
+//! no new errors or warnings (one more warning when the write creates the Photoshop block of a
+//! TIFF or DNG, D8), and every tag that was added, removed or changed must be one the
 //! write plan wrote or one a write is known to change (file data, pointers, tool data).
 //!
 //! Nothing here writes a file; the safe write (T86) uses these checks.
@@ -72,6 +73,16 @@ const IIM_RECORD_VERSIONS: &[&str] = &[
 /// The plan argument tag that writes the IIM checksum, and the key it changes.
 const DIGEST_TAG: &str = "IPTCDigest";
 const DIGEST_KEY: &str = "Photoshop:IPTCDigest";
+/// The plan argument that writes a new IIM checksum (as `write_plan` makes it); also the argument
+/// of the safe write's digest pass.
+pub(crate) const NEW_DIGEST: &str = "-IPTCDigest=new";
+/// The file types in which ExifTool stores the Photoshop block as a TIFF tag (IFD0 0x8649).
+const PHOTOSHOP_TAG_TYPES: &[&str] = &["TIFF", "DNG"];
+
+/// True if the plan writes a new IIM checksum (`-IPTCDigest=new`).
+pub(crate) fn writes_new_digest(plan: &WritePlan) -> bool {
+    plan.args.iter().any(|arg| arg == NEW_DIGEST)
+}
 
 /// ExifTool's validation counts (`ExifTool:Validate`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -332,9 +343,15 @@ pub fn verify_copy(
             after: copy.image_data_hash.clone(),
         });
     }
+    // D8 (owner, 2026-11-12; T92): when the write creates the Photoshop block of a TIFF or DNG to
+    // store a new checksum, ExifTool 13.59 adds the validation warning "Non-standard format
+    // (undef) for IFD0 0x8649 PhotoshopSettings" (measured on a Xiaomi DNG, `0 7 1` → `0 8 1`, and
+    // a Ricoh DNG), so exactly one more warning (never an error) is allowed then.
+    let extra_warnings = u32::from(creates_photoshop_tag(original, copy, plan));
     let more = match (original.validate, copy.validate) {
         (Some(before), Some(after)) => {
-            after.errors > before.errors || after.warnings > before.warnings
+            after.errors > before.errors
+                || after.warnings > before.warnings.saturating_add(extra_warnings)
         }
         (None, None) => false,
         _ => true,
@@ -362,6 +379,15 @@ pub fn verify_copy(
         }
     }
     Ok(())
+}
+
+/// D8: the copy of a TIFF or DNG has the key `Photoshop:IPTCDigest`, the original has not, and the
+/// plan writes `-IPTCDigest=new`, so the write created the Photoshop block.
+fn creates_photoshop_tag(original: &FileSnapshot, copy: &FileSnapshot, plan: &WritePlan) -> bool {
+    PHOTOSHOP_TAG_TYPES.contains(&original.file_type.as_str())
+        && copy.listing.contains_key(DIGEST_KEY)
+        && !original.listing.contains_key(DIGEST_KEY)
+        && writes_new_digest(plan)
 }
 
 /// The keys a plan may change besides the ones always allowed.
@@ -743,6 +769,76 @@ mod tests {
                 after: None,
             })
         );
+    }
+
+    /// D8: `verify_copy` of a `file_type` copy whose validation goes from `0 7 1` to `after`; the
+    /// copy has a new `Photoshop:IPTCDigest`, and the original has one when `original_digest`.
+    fn photoshop_block(
+        file_type: &str,
+        original_digest: bool,
+        args: &[&str],
+        after: Option<Validate>,
+    ) -> std::result::Result<(), VerifyError> {
+        let mut original = original();
+        original.file_type = file_type.to_string();
+        original.validate = validate(0, 7, 1);
+        if original_digest {
+            original
+                .listing
+                .insert(DIGEST_KEY.to_string(), "f379e478".to_string());
+        }
+        let mut copy = original.clone();
+        copy.listing
+            .insert(DIGEST_KEY.to_string(), "2c586d07".to_string());
+        copy.validate = after;
+        verify_copy(&original, &copy, &plan(args))
+    }
+
+    #[test]
+    fn one_more_warning_passes_when_a_tiff_or_dng_gets_its_photoshop_block() {
+        for file_type in ["TIFF", "DNG"] {
+            assert_eq!(
+                photoshop_block(file_type, false, &[NEW_DIGEST], validate(0, 8, 1)),
+                Ok(()),
+                "{file_type}"
+            );
+            // Fewer warnings or more minor warnings still pass.
+            assert_eq!(
+                photoshop_block(file_type, false, &[NEW_DIGEST], validate(0, 7, 2)),
+                Ok(()),
+                "{file_type}"
+            );
+        }
+    }
+
+    #[test]
+    fn one_more_warning_is_refused_outside_the_photoshop_block_case() {
+        let refused = |file_type, original_digest, args: &[&str], after| {
+            assert_eq!(
+                photoshop_block(file_type, original_digest, args, after),
+                Err(VerifyError::NewWarnings {
+                    before: validate(0, 7, 1),
+                    after,
+                }),
+                "{file_type} {original_digest} {args:?} {after:?}"
+            );
+        };
+        // A JPEG.
+        refused("JPEG", false, &[NEW_DIGEST], validate(0, 8, 1));
+        // The plan does not write the checksum.
+        refused("TIFF", false, &["-IPTC:City=Lund"], validate(0, 8, 1));
+        refused("DNG", false, &[], validate(0, 8, 1));
+        // The original already had the Photoshop block.
+        refused("TIFF", true, &[NEW_DIGEST], validate(0, 8, 1));
+        refused("DNG", true, &[NEW_DIGEST], validate(0, 8, 1));
+        // Two more warnings.
+        refused("TIFF", false, &[NEW_DIGEST], validate(0, 9, 1));
+        refused("DNG", false, &[NEW_DIGEST], validate(0, 9, 1));
+        // One more error, with or without one more warning.
+        refused("TIFF", false, &[NEW_DIGEST], validate(1, 7, 1));
+        refused("DNG", false, &[NEW_DIGEST], validate(1, 8, 1));
+        // Missing counts.
+        refused("TIFF", false, &[NEW_DIGEST], None);
     }
 
     #[test]

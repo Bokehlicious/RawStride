@@ -75,6 +75,85 @@ const SMALL: &[u8] = &[
 /// The content of the fake RAW file.
 const FAKE_RAW: &[u8] = b"not really a raw file";
 
+/// A minimal uncompressed little-endian TIFF built here (T92): the header and one IFD with a
+/// 1 × 1 grey strip, enough for ExifTool to write it.
+fn tiny_tiff() -> Vec<u8> {
+    tiny_tiff_with(None)
+}
+
+/// [`tiny_tiff`], with `photoshop` (a Photoshop block) as IFD0 0x8649 when it is given.
+fn tiny_tiff_with(photoshop: Option<&[u8]>) -> Vec<u8> {
+    const SHORT: u16 = 3;
+    const LONG: u16 = 4;
+    const UNDEFINED: u16 = 7;
+    let count: u32 = if photoshop.is_some() { 10 } else { 9 };
+    // The header (8 bytes), the IFD (entry count, the entries, next-IFD offset), the strip (one
+    // byte and one byte of padding), then the Photoshop block.
+    let strip: u32 = 8 + 2 + count * 12 + 4;
+    let block = strip + 2;
+    let mut entries: Vec<(u16, u16, u32, u32)> = vec![
+        (256, SHORT, 1, 1),    // ImageWidth
+        (257, SHORT, 1, 1),    // ImageLength
+        (258, SHORT, 1, 8),    // BitsPerSample
+        (259, SHORT, 1, 1),    // Compression: none
+        (262, SHORT, 1, 1),    // PhotometricInterpretation: BlackIsZero
+        (273, LONG, 1, strip), // StripOffsets
+        (277, SHORT, 1, 1),    // SamplesPerPixel
+        (278, SHORT, 1, 1),    // RowsPerStrip
+        (279, LONG, 1, 1),     // StripByteCounts
+    ];
+    if let Some(photoshop) = photoshop {
+        let length = u32::try_from(photoshop.len()).unwrap();
+        entries.push((0x8649, UNDEFINED, length, block)); // PhotoshopSettings
+    }
+    let mut tiff = b"II*\0".to_vec();
+    tiff.extend_from_slice(&8u32.to_le_bytes());
+    tiff.extend_from_slice(&u16::try_from(entries.len()).unwrap().to_le_bytes());
+    for (tag, kind, count, value) in entries {
+        tiff.extend_from_slice(&tag.to_le_bytes());
+        tiff.extend_from_slice(&kind.to_le_bytes());
+        tiff.extend_from_slice(&count.to_le_bytes());
+        if kind == SHORT {
+            tiff.extend_from_slice(&u16::try_from(value).unwrap().to_le_bytes());
+            tiff.extend_from_slice(&[0, 0]);
+        } else {
+            tiff.extend_from_slice(&value.to_le_bytes());
+        }
+    }
+    tiff.extend_from_slice(&0u32.to_le_bytes());
+    assert_eq!(tiff.len(), strip as usize);
+    tiff.extend_from_slice(&[0x80, 0]);
+    if let Some(photoshop) = photoshop {
+        tiff.extend_from_slice(photoshop);
+    }
+    tiff
+}
+
+/// One Photoshop resource: signature, id, an empty name and the data, padded to an even length.
+fn photoshop_resource(signature: &[u8; 4], id: u16, data: &[u8]) -> Vec<u8> {
+    let mut resource = signature.to_vec();
+    resource.extend_from_slice(&id.to_be_bytes());
+    resource.extend_from_slice(&[0, 0]);
+    resource.extend_from_slice(&u32::try_from(data.len()).unwrap().to_be_bytes());
+    resource.extend_from_slice(data);
+    if data.len() % 2 == 1 {
+        resource.push(0);
+    }
+    resource
+}
+
+/// The Photoshop block that makes ExifTool 13.59 misread (T92, measured): an `IPTCDigest`
+/// (`8BIM` 0x0425) followed by an `AgHg` resource 0x1f40 of 4 bytes, as at the end of the block
+/// of `TN002683.tif`. After a process has written `-IPTCDigest=new` to such a TIFF, it reads the
+/// block of every such TIFF with two more warnings ("Non-standard Photoshop at
+/// TIFF-IFD0-Photoshop-IPTCDigest", "Bad Photoshop IRB resource").
+fn ag_hg_block() -> Vec<u8> {
+    let digest: Vec<u8> = (0u8..16).collect();
+    let mut block = photoshop_resource(b"8BIM", 0x0425, &digest);
+    block.extend(photoshop_resource(b"AgHg", 0x1f40, &[0, 0, 0, 1]));
+    block
+}
+
 /// Starts ExifTool and checks that it answers. Panics (fails the test) if it is unavailable.
 fn exiftool() -> ExifTool {
     let (started, source) = match std::env::var("PW_EXIFTOOL_PL") {
@@ -131,6 +210,13 @@ impl Scratch {
     fn jpeg(&self) -> PathBuf {
         let file = self.dir.join("bild ä.jpg");
         std::fs::write(&file, SMALL).unwrap();
+        file
+    }
+
+    /// A minimal TIFF in the folder (see [`tiny_tiff`]).
+    fn tiff(&self) -> PathBuf {
+        let file = self.dir.join("bild ä.tif");
+        std::fs::write(&file, tiny_tiff()).unwrap();
         file
     }
 
@@ -610,6 +696,171 @@ fn a_read_only_original_fails_in_precheck() {
     s.remove();
 }
 
+/// The stored IIM checksum (`Photoshop:IPTCDigest`) of `file`, or why it is not current: it must
+/// exist and equal `File:CurrentIPTCDigest` (T92).
+fn digest_state(et: &mut ExifTool, file: &Path) -> Result<String, String> {
+    let snapshot = et.snapshot(file).map_err(|e| e.to_string())?;
+    let stored = snapshot.listing.get("Photoshop:IPTCDigest");
+    let current = snapshot.listing.get("File:CurrentIPTCDigest");
+    match (stored, current) {
+        (Some(stored), Some(current)) if stored == current => Ok(stored.clone()),
+        _ => Err(format!(
+            "IPTCDigest {stored:?} is not CurrentIPTCDigest {current:?}"
+        )),
+    }
+}
+
+fn assert_digest_current(et: &mut ExifTool, file: &Path) {
+    if let Err(e) = digest_state(et, file) {
+        panic!("{}: {e}", file.display());
+    }
+}
+
+/// The plan that sets City in `read`'s metadata, for the file as read (T87's `state`).
+fn read_city_plan(read: &MetadataRead, city: &str, settings: WriteSettings) -> WritePlan {
+    let mut metadata = read.reconciled.metadata.clone();
+    metadata.set("photoshop:City", text(city)).unwrap();
+    plan(&metadata, &read.state, settings).unwrap()
+}
+
+/// A TIFF with IIM and a current checksum (made with two ExifTool calls): a City write leaves a
+/// current checksum, which the reader reports as `Matches` (T92: in a TIFF, `-IPTCDigest=new` in
+/// the same call as the IIM write leaves it out of date, measured with ExifTool 13.59).
+#[test]
+fn a_tiff_with_iim_keeps_a_current_digest() {
+    let mut et = exiftool();
+    let s = Scratch::new("tiff-iim");
+    let file = s.tiff();
+    write(
+        &mut et,
+        &file,
+        &[
+            "-IPTC:CodedCharacterSet=UTF8",
+            "-IPTC:City=Lund",
+            "-XMP-photoshop:City=Lund",
+            "-IPTCDigest=new",
+        ],
+    );
+    write(&mut et, &file, &["-IPTCDigest=new"]);
+    assert_digest_current(&mut et, &file);
+    let read = read_file(&mut et, &file);
+    assert!(read.state.iim_present, "{:?}", read.state);
+    assert_eq!(read.state.digest, IimDigest::Matches);
+
+    let plan = read_city_plan(&read, "Malmö", WriteSettings::default());
+    assert!(
+        plan.args.iter().any(|arg| arg == "-IPTC:City=Malmö"),
+        "{plan:?}"
+    );
+    assert!(
+        plan.args.iter().any(|arg| arg == "-IPTCDigest=new"),
+        "{plan:?}"
+    );
+
+    assert_eq!(
+        et.write_safely(&file, &plan, &NoImageCheck, &s.journal),
+        written(&file)
+    );
+
+    assert_digest_current(&mut et, &file);
+    let read = read_file(&mut et, &file);
+    assert_eq!(read.state.digest, IimDigest::Matches);
+    assert_eq!(value(&read, "photoshop:City"), Some(text("Malmö")));
+    s.assert_clean();
+    s.remove();
+}
+
+/// A TIFF without IIM and the setting "create IIM": the IIM and the Photoshop block are created,
+/// with one more validation warning (D8), and the checksum is current.
+#[test]
+fn a_tiff_without_iim_gets_iim_and_a_current_digest() {
+    let mut et = exiftool();
+    let s = Scratch::new("tiff-new-iim");
+    let file = s.tiff();
+    let read = read_file(&mut et, &file);
+    assert!(!read.state.iim_present, "{:?}", read.state);
+    assert_eq!(read.state.digest, IimDigest::Missing);
+    let before = et.snapshot(&file).unwrap();
+    assert!(
+        !before.listing.contains_key("Photoshop:IPTCDigest"),
+        "{before:?}"
+    );
+
+    let plan = read_city_plan(&read, "Malmö", WriteSettings { create_iim: true });
+    assert!(
+        plan.args
+            .iter()
+            .any(|arg| arg == "-IPTC:CodedCharacterSet=UTF8"),
+        "IIM is created: {plan:?}"
+    );
+    assert!(
+        plan.args.iter().any(|arg| arg == "-IPTCDigest=new"),
+        "{plan:?}"
+    );
+
+    assert_eq!(
+        et.write_safely(&file, &plan, &NoImageCheck, &s.journal),
+        written(&file)
+    );
+
+    assert_digest_current(&mut et, &file);
+    let read = read_file(&mut et, &file);
+    assert!(read.state.iim_present, "{:?}", read.state);
+    assert_eq!(read.state.digest, IimDigest::Matches);
+    assert_eq!(value(&read, "photoshop:City"), Some(text("Malmö")));
+    s.assert_clean();
+    s.remove();
+}
+
+/// A TIFF whose Photoshop block holds an `IPTCDigest` and an `AgHg` resource (as `TN002683.tif`,
+/// see [`ag_hg_block`]), written with "create IIM": `Written` with a current checksum, and the same
+/// `ExifTool` afterwards reads an untouched copy of the file as it did before the write (T92: the
+/// safe write restarts ExifTool after a TIFF write of the checksum).
+#[test]
+fn a_tiff_with_an_aghg_resource_is_written_and_read_correctly_afterwards() {
+    let mut et = exiftool();
+    let s = Scratch::new("tiff-aghg");
+    let bytes = tiny_tiff_with(Some(&ag_hg_block()));
+    let file = s.dir.join("bild ä.tif");
+    let untouched = s.dir.join("orörd.tif");
+    std::fs::write(&file, &bytes).unwrap();
+    std::fs::write(&untouched, &bytes).unwrap();
+    let before = et.snapshot(&untouched).unwrap();
+    assert!(
+        before.listing.contains_key("Photoshop:IPTCDigest"),
+        "{before:?}"
+    );
+
+    let plan = read_city_plan(
+        &read_file(&mut et, &file),
+        "Malmö",
+        WriteSettings { create_iim: true },
+    );
+    assert!(
+        plan.args.iter().any(|arg| arg == "-IPTCDigest=new"),
+        "{plan:?}"
+    );
+
+    assert_eq!(
+        et.write_safely(&file, &plan, &NoImageCheck, &s.journal),
+        written(&file)
+    );
+
+    assert_digest_current(&mut et, &file);
+    assert_eq!(
+        value(&read_file(&mut et, &file), "photoshop:City"),
+        Some(text("Malmö"))
+    );
+    let after = et.snapshot(&untouched).unwrap();
+    assert_eq!(after.validate, before.validate);
+    assert_eq!(
+        after.listing.get("Photoshop:IPTCDigest"),
+        before.listing.get("Photoshop:IPTCDigest")
+    );
+    s.assert_clean();
+    s.remove();
+}
+
 /// Every DNG in `PW_TESTDATA`, copied to a temporary folder, written with a City and Description
 /// plan and `NoImageCheck`: `Written`, the image data hash unchanged and the values read back.
 /// Prints the result for each file (run with `--nocapture` to see it).
@@ -692,6 +943,90 @@ fn every_real_dng_is_written_safely() {
             std::fs::metadata(&file).map(|m| m.len()).unwrap_or(0),
             match &outcome {
                 Ok(()) => "written, hash unchanged, values read back".to_string(),
+                Err(e) => e.clone(),
+            }
+        );
+        if let Err(e) = outcome {
+            failures.push(format!("{name}: {e}"));
+        }
+        std::fs::remove_file(&file).unwrap();
+    }
+    s.assert_clean();
+    s.remove();
+    assert!(failures.is_empty(), "{failures:#?}");
+}
+
+/// Every TIFF and DNG in `PW_TESTDATA`, copied to a temporary folder, written with a City plan
+/// for the file as read and the setting "create IIM" through `write_safely` (T92): `Written`, the
+/// image data hash unchanged, City read back and a current IIM checksum (`Matches`). Prints the
+/// result for each file (run with `--nocapture` to see it).
+#[test]
+#[ignore = "needs real camera files: set PW_TESTDATA and run with --ignored"]
+fn every_real_tiff_and_dng_gets_a_current_digest() {
+    let Some(testdata) = std::env::var_os("PW_TESTDATA") else {
+        panic!("PW_TESTDATA is not set; set it to the real camera test-data folder");
+    };
+    let testdata = PathBuf::from(testdata);
+    let mut files: Vec<PathBuf> = std::fs::read_dir(&testdata)
+        .unwrap_or_else(|e| panic!("cannot read PW_TESTDATA {}: {e}", testdata.display()))
+        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .filter(|path| {
+            path.is_file()
+                && path.extension().is_some_and(|e| {
+                    ["dng", "tif", "tiff"]
+                        .iter()
+                        .any(|ext| e.eq_ignore_ascii_case(ext))
+                })
+        })
+        .collect();
+    files.sort();
+    assert!(
+        !files.is_empty(),
+        "no TIFF or DNG in PW_TESTDATA {}",
+        testdata.display()
+    );
+
+    let mut et = exiftool();
+    let s = Scratch::new("real-digest");
+    let mut failures = Vec::new();
+    for source in &files {
+        let name = source.file_name().unwrap().to_string_lossy().into_owned();
+        let file = s.dir.join(&name);
+        std::fs::copy(source, &file).unwrap();
+        let before = et.snapshot(&file).unwrap();
+        let plan = read_city_plan(
+            &read_file(&mut et, &file),
+            "Malmö",
+            WriteSettings { create_iim: true },
+        );
+
+        let result = et.write_safely(&file, &plan, &NoImageCheck, &s.journal);
+        let outcome = match &result {
+            Ok(WriteReport::Written { target }) if *target == file => {
+                let after = et.snapshot(&file).unwrap();
+                let read = read_file(&mut et, &file);
+                if after.image_data_hash != before.image_data_hash {
+                    Err("the image data hash changed".to_string())
+                } else if value(&read, "photoshop:City") != Some(text("Malmö")) {
+                    Err(format!(
+                        "City read back as {:?}",
+                        value(&read, "photoshop:City")
+                    ))
+                } else if read.state.digest != IimDigest::Matches {
+                    Err(format!("the checksum is read as {:?}", read.state.digest))
+                } else {
+                    digest_state(&mut et, &file).map(|_| ())
+                }
+            }
+            other => Err(format!("{other:?}")),
+        };
+        println!(
+            "{name}: {} bytes, validation {:?} -> {:?}; {}",
+            before.size,
+            before.validate,
+            et.snapshot(&file).ok().and_then(|after| after.validate),
+            match &outcome {
+                Ok(()) => "written, hash unchanged, City read back, digest current".to_string(),
                 Err(e) => e.clone(),
             }
         );

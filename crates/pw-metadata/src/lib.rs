@@ -25,6 +25,7 @@ pub mod properties;
 pub mod read;
 pub mod reconcile;
 pub mod safe_write;
+pub mod template;
 #[cfg(test)]
 mod test_support;
 pub mod value;
@@ -215,7 +216,60 @@ impl Iptc {
         }
         out
     }
+
+    /// The template for the safe write (ADR 0007 §10, §15; T88): each field that [`Iptc::tags`]
+    /// writes, with `Replace` and its value when it is given and `Keep` otherwise, so the old
+    /// behaviour ("Keep for empty fields, Replace for filled ones") stays. Creator is `dc:creator`
+    /// as a list of one name; title, description and copyright are the `x-default` of `dc:title`,
+    /// `dc:description` and `dc:rights`; e-mail, phone and URL are fields of
+    /// `Iptc4xmpCore:CreatorContactInfo`; `xmpRights:Marked` is `True` when a copyright is given
+    /// (D6). Values are trimmed; line breaks inside them are kept (the plan writes them with
+    /// `-ec`).
+    pub fn to_template(&self) -> template::Template {
+        use template::{Mode, TemplateField};
+        use value::Value;
+
+        fn field(property: &str, sub: Option<&str>, value: Option<Value>) -> TemplateField {
+            TemplateField {
+                property: property.to_string(),
+                field: sub.map(str::to_string),
+                mode: if value.is_some() {
+                    Mode::Replace
+                } else {
+                    Mode::Keep
+                },
+                value,
+            }
+        }
+        let trimmed = |text: &str| Some(text.trim().to_string()).filter(|text| !text.is_empty());
+        let text = |text: &str| trimmed(text).map(Value::Text);
+        let lang_alt = |value: &LocalizedValue| {
+            trimmed(value.default_text()).map(|text| template::x_default(&text))
+        };
+        let copyright = lang_alt(&self.copyright);
+        let marked = copyright.as_ref().map(|_| Value::Text("True".to_string()));
+        template::Template {
+            fields: vec![
+                field(
+                    "dc:creator",
+                    None,
+                    trimmed(&self.creator).map(|name| Value::List(vec![name])),
+                ),
+                field("dc:title", None, lang_alt(&self.title)),
+                field("dc:description", None, lang_alt(&self.description)),
+                field("dc:rights", None, copyright),
+                field("photoshop:Credit", None, text(&self.credit)),
+                field(CONTACT, Some("Iptc4xmpCore:CiEmailWork"), text(&self.email)),
+                field(CONTACT, Some("Iptc4xmpCore:CiTelWork"), text(&self.phone)),
+                field(CONTACT, Some("Iptc4xmpCore:CiUrlWork"), text(&self.url)),
+                field("xmpRights:Marked", None, marked),
+            ],
+        }
+    }
 }
+
+/// The structure of the creator's contact details (IPTC Core).
+const CONTACT: &str = "Iptc4xmpCore:CreatorContactInfo";
 
 impl Rating {
     pub fn is_empty(&self) -> bool {
@@ -630,5 +684,131 @@ mod localized_iptc_tests {
                 "-XMP-xmpRights:Marked=True",
             ]
         );
+    }
+}
+
+#[cfg(test)]
+mod to_template_tests {
+    use super::{Iptc, LocalizedValue};
+    use crate::template::{Mode, Template, TemplateField, x_default};
+    use crate::value::Value;
+
+    const CONTACT: &str = "Iptc4xmpCore:CreatorContactInfo";
+
+    fn field(property: &str, sub: Option<&str>, value: Option<Value>) -> TemplateField {
+        TemplateField {
+            property: property.to_string(),
+            field: sub.map(str::to_string),
+            mode: if value.is_some() {
+                Mode::Replace
+            } else {
+                Mode::Keep
+            },
+            value,
+        }
+    }
+
+    fn text(text: &str) -> Option<Value> {
+        Some(Value::Text(text.to_string()))
+    }
+
+    #[test]
+    fn a_full_template_replaces_every_field() {
+        let iptc = Iptc {
+            creator: " Tobias Nykänen ".into(),
+            copyright: LocalizedValue::x_default("© 2026 Tobias Nykänen"),
+            title: LocalizedValue::x_default("Solnedgång"),
+            description: LocalizedValue::x_default("Hamnen"),
+            credit: "Tobias Nykänen".into(),
+            email: "foto@example.com".into(),
+            phone: "+46 31 12 34 56".into(),
+            url: " https://example.com ".into(),
+        };
+        assert_eq!(
+            iptc.to_template(),
+            Template {
+                fields: vec![
+                    field(
+                        "dc:creator",
+                        None,
+                        Some(Value::List(vec!["Tobias Nykänen".to_string()]))
+                    ),
+                    field("dc:title", None, Some(x_default("Solnedgång"))),
+                    field("dc:description", None, Some(x_default("Hamnen"))),
+                    field("dc:rights", None, Some(x_default("© 2026 Tobias Nykänen"))),
+                    field("photoshop:Credit", None, text("Tobias Nykänen")),
+                    field(
+                        CONTACT,
+                        Some("Iptc4xmpCore:CiEmailWork"),
+                        text("foto@example.com")
+                    ),
+                    field(
+                        CONTACT,
+                        Some("Iptc4xmpCore:CiTelWork"),
+                        text("+46 31 12 34 56")
+                    ),
+                    field(
+                        CONTACT,
+                        Some("Iptc4xmpCore:CiUrlWork"),
+                        text("https://example.com")
+                    ),
+                    field("xmpRights:Marked", None, text("True")),
+                ]
+            }
+        );
+    }
+
+    #[test]
+    fn an_empty_template_keeps_every_field() {
+        let mut copyright = LocalizedValue::new();
+        copyright.insert("en-US", "Copyright");
+        for iptc in [
+            Iptc::default(),
+            Iptc {
+                creator: "  ".into(),
+                credit: "\n".into(),
+                email: "\t".into(),
+                phone: " ".into(),
+                url: " \r\n".into(),
+                title: LocalizedValue::x_default("   "),
+                // Only `x-default` is written (Q7): another language alone is empty.
+                copyright,
+                ..Iptc::default()
+            },
+        ] {
+            let template = iptc.to_template();
+            assert_eq!(template.fields.len(), 9, "{iptc:?}");
+            for field in &template.fields {
+                assert_eq!(field.mode, Mode::Keep, "{field:?}");
+                assert_eq!(field.value, None, "{field:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_line_break_in_the_description_is_kept() {
+        let iptc = Iptc {
+            description: LocalizedValue::x_default("\nRad 1\nRad 2\r\nRad 3 \n"),
+            ..Iptc::default()
+        };
+        let template = iptc.to_template();
+        let description = template
+            .fields
+            .iter()
+            .find(|field| field.property == "dc:description");
+        assert_eq!(
+            description,
+            Some(&field(
+                "dc:description",
+                None,
+                Some(x_default("Rad 1\nRad 2\r\nRad 3"))
+            ))
+        );
+        // No copyright, so Marked is kept as it is.
+        let marked = template
+            .fields
+            .iter()
+            .find(|field| field.property == "xmpRights:Marked");
+        assert_eq!(marked, Some(&field("xmpRights:Marked", None, None)));
     }
 }

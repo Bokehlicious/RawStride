@@ -13,7 +13,8 @@
 //!   `iptc_table.rs` by hand.
 //! - **The rules the TechReference does not hold** are written here by hand, each naming its ADR
 //!   section: Seq or Bag (`list_kind`), the cardinality limits (`max_entries`), and the extra
-//!   entries `xmp:Label` and the deprecated IIM datasets (`properties`, `is_deprecated_iim`).
+//!   entries `xmp:Label`, `xmpRights:Marked` and the deprecated IIM datasets (`properties`,
+//!   `is_deprecated_iim`).
 
 use crate::iptc_table::{STRUCTS, TOP};
 
@@ -24,7 +25,8 @@ pub enum Schema {
     Core,
     /// IPTC Extension (`ipmdschema` `IptcExt`).
     Extension,
-    /// Not an IPTC property: `xmp:Label` and the deprecated IIM datasets (ADR 0007 §3, §5.5).
+    /// Not an IPTC property: `xmp:Label`, `xmpRights:Marked` (D6) and the deprecated IIM datasets
+    /// (ADR 0007 §3, §5.5).
     Other,
 }
 
@@ -134,6 +136,9 @@ pub struct FieldDef {
 /// Properties that are not in the TechReference but belong to the model (written by hand).
 ///
 /// - `xmp:Label`: not IPTC, kept for Adobe/Photo Mechanic compatibility (ADR 0007 §3).
+/// - `xmpRights:Marked` ("Copyrighted" in Lightroom and Photo Mechanic): not IPTC; the ingest
+///   template sets it to `True` with a Copyright Notice, as the old template did (ADR 0007 §10,
+///   §15; owner decision D6). Text, as ExifTool reads and writes it (`True`/`False`).
 /// - The deprecated IIM datasets Urgency (2:10), Category (2:15) and Supplemental Categories
 ///   (2:20) with their `photoshop:` XMP properties: kept and synchronised, never offered for
 ///   editing (ADR 0007 §5.5). Their value kinds follow the Adobe XMP specification
@@ -150,6 +155,20 @@ static EXTRA: &[PropertyDef] = &[
         iim_name: None,
         exif_id: None,
         et_xmp: Some("XMP-xmp:Label"),
+        et_iim: None,
+        et_exif: None,
+    },
+    PropertyDef {
+        key: "marked",
+        name: "Marked",
+        schema: Schema::Other,
+        kind: ValueKind::Text,
+        occurrence: Occurrence::Single,
+        xmp_id: "xmpRights:Marked",
+        iim: None,
+        iim_name: None,
+        exif_id: None,
+        et_xmp: Some("XMP-xmpRights:Marked"),
         et_iim: None,
         et_exif: None,
     },
@@ -513,7 +532,9 @@ mod tests {
                 );
             }
         }
-        assert_eq!(xmp_ids.len(), 66 + 4);
+        // 66 from the TechReference; `xmp:Label`, `xmpRights:Marked` (D6) and the three
+        // deprecated IIM properties by hand.
+        assert_eq!(xmp_ids.len(), 66 + 5);
     }
 
     #[test]
@@ -527,6 +548,22 @@ mod tests {
         assert_eq!(label.occurrence, Occurrence::Single);
         assert_eq!(label.et_xmp, Some("XMP-xmp:Label"));
         assert_eq!(label.iim, None);
+    }
+
+    /// D6: `xmpRights:Marked` is a hand-written non-IPTC text, XMP only, like `xmp:Label`.
+    #[test]
+    fn rights_marked_is_found() {
+        let marked = def("xmpRights:Marked");
+        assert_eq!(marked.schema, Schema::Other);
+        assert_eq!(marked.kind, ValueKind::Text);
+        assert_eq!(marked.occurrence, Occurrence::Single);
+        assert_eq!(marked.et_xmp, Some("XMP-xmpRights:Marked"));
+        assert_eq!(marked.iim, None);
+        assert_eq!(marked.et_iim, None);
+        assert_eq!(marked.exif_id, None);
+        assert_eq!(marked.et_exif, None);
+        assert!(!is_deprecated_iim("xmpRights:Marked"));
+        assert_eq!(max_entries("xmpRights:Marked"), None);
     }
 
     #[test]

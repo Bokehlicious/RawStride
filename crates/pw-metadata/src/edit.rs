@@ -1,5 +1,5 @@
-//! Edits of one image written through the write plan and the safe write (ADR 0007 §8, §9, §15;
-//! I9a, T87).
+//! Edits of one image written through the write plan and the safe write (ADR 0007 §8, §9, §10,
+//! §15; I9a, T87; I9b, T88).
 //!
 //! [`ExifTool::write_rating_safely`] writes a star rating and a colour label the way §15 asks for
 //! embedded writes: no longer with `-overwrite_original_in_place`, but as a [`WritePlan`] applied
@@ -21,6 +21,13 @@
 //!    rating that is already in the file writes nothing, and a manufacturer RAW without a sidecar
 //!    gets none for an empty rating. The RAW file itself is never written (§4.2); its sidecar is.
 //!
+//! [`ExifTool::apply_template_safely`] writes an ingest template the same way (§9.5, §10): a file
+//! kind that cannot hold metadata is [`EditError::Unsupported`] with the same text as the old
+//! [`ExifTool::write_iptc`]; then the file is read, [`template::apply`] applies the template's
+//! modes to its metadata (an error is [`EditError::Template`]), and the plan is made and written as
+//! above. A template that is already in the file gives an empty plan and
+//! [`WriteReport::Unchanged`].
+//!
 //! The old `write_rating`, `write_iptc` and `write_tags` are unchanged; the Tauri app still uses
 //! them (owner decision D7).
 //!
@@ -33,6 +40,7 @@ use crate::iim::Fallback;
 use crate::journal::Journal;
 use crate::reconcile::same_value;
 use crate::safe_write::{ImageCheck, SafeWriteError, WriteReport};
+use crate::template::{self, Template, TemplateError};
 use crate::value::{Metadata, Value, ValueError};
 use crate::write_plan::{self, PlanError, WriteSettings};
 use crate::{Error, ExifTool, Rating, supports_rating};
@@ -64,6 +72,8 @@ pub enum EditError {
     Plan(PlanError),
     /// The safe write failed.
     Write(SafeWriteError),
+    /// The template could not be applied.
+    Template(TemplateError),
 }
 
 impl fmt::Display for EditError {
@@ -74,6 +84,9 @@ impl fmt::Display for EditError {
             EditError::Value(error) => write!(f, "the value was not accepted: {error}"),
             EditError::Plan(error) => write!(f, "the write could not be planned: {error}"),
             EditError::Write(error) => write!(f, "{error}"),
+            EditError::Template(error) => {
+                write!(f, "the template could not be applied: {error}")
+            }
         }
     }
 }
@@ -122,6 +135,33 @@ impl ExifTool {
             apply(&mut metadata, LABEL, new_label)?;
         }
 
+        let plan =
+            write_plan::plan(&metadata, &read.state, options.settings).map_err(EditError::Plan)?;
+        self.write_safely(image, &plan, checks, journal)
+            .map_err(EditError::Write)
+    }
+
+    /// Applies `template` to `image` through the write plan and the safe write (see the module
+    /// comment). `checks` are the caller's image checks; `journal` is the app's write journal.
+    pub fn apply_template_safely(
+        &mut self,
+        image: &Path,
+        template: &Template,
+        options: &EditOptions,
+        checks: &dyn ImageCheck,
+        journal: &Journal,
+    ) -> Result<WriteReport, EditError> {
+        if !supports_rating(image) {
+            return Err(EditError::Unsupported(format!(
+                "metadata is not supported for {}",
+                image.display()
+            )));
+        }
+        let read = self
+            .read_metadata(image, options.fallback)
+            .map_err(EditError::Read)?;
+        let mut metadata = read.reconciled.metadata;
+        template::apply(template, &mut metadata).map_err(EditError::Template)?;
         let plan =
             write_plan::plan(&metadata, &read.state, options.settings).map_err(EditError::Plan)?;
         self.write_safely(image, &plan, checks, journal)
@@ -222,6 +262,12 @@ mod tests {
             plan.to_string(),
             "the write could not be planned: photoshop:Urgency is a deprecated IIM property and \
              cannot be edited"
+        );
+        let template = EditError::Template(TemplateError::CannotClear("dc:rights".to_string()));
+        assert_eq!(
+            template.to_string(),
+            "the template could not be applied: dc:rights is a copyright-management property and \
+             cannot be cleared by a template"
         );
     }
 }

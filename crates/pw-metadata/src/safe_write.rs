@@ -14,7 +14,18 @@
 //! - **9.2, the copy:** one ExifTool call writes the plan to `<name>.pwtmp-<hex>.<ext>` with `-o`;
 //!   the target is only read. A new sidecar is made without a source file (measured: `-o x.xmp`
 //!   from a RAW copies the RAW's Exif into the sidecar). ExifTool must report one file created
-//!   and no warning.
+//!   and no warning. **The digest pass** (T92, §5.2, §12): for a TIFF or DNG whose plan writes
+//!   `-IPTCDigest=new`, a second call `-IPTCDigest=new -overwrite_original <copy>` on the copy
+//!   only (RawStride's own temporary file; the original is still only read). Measured with
+//!   ExifTool 13.59: in a TIFF or DNG, `-IPTCDigest=new` in the same call as an IIM write stores
+//!   the MD5 of the IIM block without the padding ExifTool adds to it in the TIFF structure, while
+//!   `CurrentIPTCDigest` includes it, so the checksum is out of date; the second call stores the
+//!   current one and leaves the image data hash unchanged. A JPEG is not affected. ExifTool must
+//!   report one file updated and no warning. **The restart** (T92, owner's choice A): after a
+//!   TIFF write with `-IPTCDigest=new` (also a failed one), [`ExifTool::restart`] starts a new
+//!   process before the copy is read, because the process that wrote it reads the Photoshop block
+//!   of such TIFFs wrongly from then on (measured on `TN002683.tif`, whose block holds an `AgHg`
+//!   resource: the correct copy read with two more warnings, and so refused in 9.3).
 //! - **9.3, verification:** the copy's snapshot against the original's ([`verify_copy`]); a new
 //!   sidecar must be XMP and hold, besides `System`, `ExifTool` and `File` keys, only keys
 //!   [`verify_copy`] allows for the plan (owner's decision during T86: ExifTool always adds
@@ -37,7 +48,9 @@ use std::path::{Path, PathBuf};
 use crate::fileops::{self, ReplaceError};
 use crate::journal::{Entry, EntryId, Journal};
 use crate::reconcile::FileKind;
-use crate::verify::{FileSnapshot, VerifyError, check_file_type, verify_copy};
+use crate::verify::{
+    FileSnapshot, NEW_DIGEST, VerifyError, check_file_type, verify_copy, writes_new_digest,
+};
 use crate::write_plan::WritePlan;
 use crate::{ExifTool, sidecar_path};
 
@@ -343,24 +356,21 @@ impl Transaction<'_> {
         kind: FileKind,
         checks: &dyn ImageCheck,
     ) -> Result<FileSnapshot, (Stage, String)> {
-        let mut args = self.plan.options.clone();
-        args.extend(self.plan.args.iter().cloned());
-        args.push("-o".to_string());
-        args.push(open.copy.to_string_lossy().into_owned());
-        // A new sidecar is made from the arguments alone, without a source file.
-        if original.is_some() {
-            args.push(self.target.to_string_lossy().into_owned());
-        }
-        let answer = self
-            .et
-            .execute(&args)
-            .map_err(|e| (Stage::WriteCopy, e.to_string()))?;
-        if !copy_written(&answer) || !open.copy.is_file() {
-            return Err((
-                Stage::WriteCopy,
-                format!("ExifTool did not write the copy: {}", answer.trim()),
-            ));
-        }
+        let wrote = self.write_copy(open, original.is_some(), kind);
+        // The restart (T92; see the module comment), also after a failed write, before anything
+        // else is read with this ExifTool.
+        let restarted = if needs_restart(kind, self.plan) {
+            self.et.restart().map_err(|e| {
+                (
+                    Stage::Verify,
+                    format!("ExifTool could not be restarted to read the copy: {e}"),
+                )
+            })
+        } else {
+            Ok(())
+        };
+        wrote?;
+        restarted?;
 
         let verify = |reason: String| (Stage::Verify, reason);
         let written = self
@@ -384,6 +394,61 @@ impl Transaction<'_> {
         fileops::flush(&open.copy)
             .map_err(|e| verify(format!("the copy could not be flushed: {e}")))?;
         Ok(written)
+    }
+
+    /// Writes the copy with one ExifTool call (§9.2) and, when needed, the digest pass.
+    fn write_copy(
+        &mut self,
+        open: &Open,
+        original_exists: bool,
+        kind: FileKind,
+    ) -> Result<(), (Stage, String)> {
+        let mut args = self.plan.options.clone();
+        args.extend(self.plan.args.iter().cloned());
+        args.push("-o".to_string());
+        args.push(open.copy.to_string_lossy().into_owned());
+        // A new sidecar is made from the arguments alone, without a source file.
+        if original_exists {
+            args.push(self.target.to_string_lossy().into_owned());
+        }
+        let answer = self
+            .et
+            .execute(&args)
+            .map_err(|e| (Stage::WriteCopy, e.to_string()))?;
+        if !copy_written(&answer) || !open.copy.is_file() {
+            return Err((
+                Stage::WriteCopy,
+                format!("ExifTool did not write the copy: {}", answer.trim()),
+            ));
+        }
+        if needs_digest_pass(kind, self.plan) {
+            self.digest_pass(&open.copy)?;
+        }
+        Ok(())
+    }
+
+    /// The digest pass (§9.2, T92; see the module comment): stores the current IIM checksum in
+    /// the copy, never in the original.
+    fn digest_pass(&mut self, copy: &Path) -> Result<(), (Stage, String)> {
+        let args = [
+            NEW_DIGEST.to_string(),
+            "-overwrite_original".to_string(),
+            copy.to_string_lossy().into_owned(),
+        ];
+        let answer = self
+            .et
+            .execute(&args)
+            .map_err(|e| (Stage::WriteCopy, e.to_string()))?;
+        if !digest_written(&answer) {
+            return Err((
+                Stage::WriteCopy,
+                format!(
+                    "ExifTool did not write the IIM checksum of the copy: {}",
+                    answer.trim()
+                ),
+            ));
+        }
+        Ok(())
     }
 
     /// Replaces the original with the verified copy, or moves a new sidecar into place (§9.4);
@@ -492,15 +557,40 @@ impl Transaction<'_> {
 /// True if ExifTool's answer to the write of the copy reports exactly one file created, no failed
 /// file and no warning.
 fn copy_written(answer: &str) -> bool {
-    let created: u64 = answer
+    one_file_without_warning(answer, " image files created")
+}
+
+/// True if ExifTool's answer to the digest pass reports exactly one file updated, no failed file
+/// and no warning.
+fn digest_written(answer: &str) -> bool {
+    one_file_without_warning(answer, " image files updated")
+}
+
+/// True if the answer's count of `summary` (`" image files created"`, …) is exactly one, no file
+/// failed and no line is a warning.
+fn one_file_without_warning(answer: &str, summary: &str) -> bool {
+    let count: u64 = answer
         .lines()
-        .filter_map(|line| line.trim().strip_suffix(" image files created"))
+        .filter_map(|line| line.trim().strip_suffix(summary))
         .filter_map(|count| count.trim().parse::<u64>().ok())
         .sum();
     let warned = answer
         .lines()
         .any(|line| line.trim_start().starts_with("Warning"));
-    crate::write_succeeded(answer) && created == 1 && !warned
+    crate::write_succeeded(answer) && count == 1 && !warned
+}
+
+/// True if the copy needs the digest pass (§9.2, T92): a TIFF or DNG whose plan writes
+/// `-IPTCDigest=new`. Never a JPEG or a sidecar.
+fn needs_digest_pass(kind: FileKind, plan: &WritePlan) -> bool {
+    matches!(kind, FileKind::Tiff | FileKind::Dng) && writes_new_digest(plan)
+}
+
+/// True if ExifTool must be restarted after the copy is written (T92, owner's choice A): a TIFF
+/// whose plan writes `-IPTCDigest=new`. Measured with ExifTool 13.59: the same write in a JPEG or
+/// a DNG leaves the process reading correctly.
+fn needs_restart(kind: FileKind, plan: &WritePlan) -> bool {
+    kind == FileKind::Tiff && writes_new_digest(plan)
 }
 
 /// The check of a new sidecar (§9.3, owner's decision during T86): it is XMP, and besides its
@@ -607,6 +697,57 @@ mod tests {
         assert!(!copy_written("    1 image files updated\n"));
         assert!(!copy_written("    2 image files created\n"));
         assert!(!copy_written(""));
+    }
+
+    #[test]
+    fn the_digest_pass_is_made_for_a_tiff_or_dng_whose_plan_writes_the_checksum() {
+        let with_digest = WritePlan {
+            args: vec![
+                "-IPTC:CodedCharacterSet=UTF8".to_string(),
+                "-IPTC:City=Lund".to_string(),
+                NEW_DIGEST.to_string(),
+            ],
+            ..WritePlan::default()
+        };
+        assert!(needs_digest_pass(FileKind::Tiff, &with_digest));
+        assert!(needs_digest_pass(FileKind::Dng, &with_digest));
+        assert!(!needs_digest_pass(FileKind::Jpeg, &with_digest));
+        assert!(!needs_digest_pass(FileKind::Raw, &with_digest));
+        for kind in [FileKind::Tiff, FileKind::Dng, FileKind::Jpeg, FileKind::Raw] {
+            assert!(!needs_digest_pass(kind, &city_plan()), "{kind:?}");
+            assert!(!needs_digest_pass(kind, &WritePlan::default()), "{kind:?}");
+        }
+    }
+
+    #[test]
+    fn exiftool_is_restarted_only_after_a_tiff_write_of_the_checksum() {
+        let with_digest = WritePlan {
+            args: vec!["-IPTC:City=Lund".to_string(), NEW_DIGEST.to_string()],
+            ..WritePlan::default()
+        };
+        assert!(needs_restart(FileKind::Tiff, &with_digest));
+        for kind in [FileKind::Dng, FileKind::Jpeg, FileKind::Raw] {
+            assert!(!needs_restart(kind, &with_digest), "{kind:?}");
+        }
+        for kind in [FileKind::Tiff, FileKind::Dng, FileKind::Jpeg, FileKind::Raw] {
+            assert!(!needs_restart(kind, &city_plan()), "{kind:?}");
+        }
+    }
+
+    #[test]
+    fn the_digest_pass_needs_one_file_updated_without_a_warning() {
+        // Measured with ExifTool 13.59 on a written DNG copy.
+        assert!(digest_written("    1 image files updated\n"));
+        assert!(!digest_written(
+            "    1 image files updated\n--- stderr ---\nWarning: IPTCDigest is not current\n"
+        ));
+        assert!(!digest_written("    1 image files unchanged\n"));
+        assert!(!digest_written("    1 image files created\n"));
+        assert!(!digest_written("    2 image files updated\n"));
+        assert!(!digest_written(
+            "    0 image files updated\n    1 files weren't updated due to errors\n"
+        ));
+        assert!(!digest_written(""));
     }
 
     /// Measured with ExifTool 13.59: a sidecar made from `-XMP-photoshop:City=Lund -o new.xmp`.
