@@ -4824,7 +4824,9 @@ leaves the stored `IPTCDigest` out of date (`Validate`: `IPTCDigest is not curre
 - **Can start after T103 and T104 are accepted.** Not at the same time as T106 (`main.rs`).
 - **Crates:** `pw-loupe` only.
 - **Files:** `crates/pw-loupe/src/main.rs`; `crates/pw-loupe/src/metadata.rs`;
-  `crates/pw-loupe/src/lib.rs` (`Action` and `key_action` only); `docs/test-inventory.md`.
+  `crates/pw-loupe/src/lib.rs` (`Action` and `key_action` only, and `EditorText`/`editor_text` in
+  the `pub use editor::…` line); `crates/pw-loupe/src/editor.rs` (point 5 only: the window's
+  texts; owner decision 2026-11-12, rule 13); `docs/test-inventory.md`.
 - **Why:** I10 in the step plan: the editor, written with §9 through T97/T98.
 - **What** (as D12 and D15):
   1. **Opening:** `Action::EditMetadata` on the key `E` (no Ctrl or Alt), and a button "Redigera"
@@ -4845,9 +4847,28 @@ leaves the stored `IPTCDigest` out of date (`Validate`: `IPTCDigest is not curre
   4. **Closing** with unsaved edits asks "Spara ändringarna?" with "Spara", "Släng" and "Avbryt".
      At program exit an editor write still running is waited for as rating writes are (T44's
      exit wait, the same limit), and listed if it does not finish.
+  5. **The window's texts** (`editor.rs`; owner decision 2026-11-12: T105 needs these texts and
+     rule 13 puts them in the editor's text module): `pub enum EditorText` and `pub fn
+     editor_text(text: &EditorText) -> String`, as `PanelText`/`panel_text` (T102), each a whole
+     sentence from one template:
+     - `EditButton` "Redigera" (the button in the info panel);
+     - `WindowTitle { file }` "Redigera metadata – <file>";
+     - `ConflictsHeading` "Olösta konflikter";
+     - `ConflictChoice { value, origin }` "<value> (<origin>)" (one radio button);
+     - `WarningsHeading` "Varningar";
+     - `Save` "Spara"; `Close` "Stäng"; `Saving` "Sparar …"; `Saved` "Sparat.";
+     - `SaveFailed { file, reason }` "Kunde inte spara metadata för <file>: <reason>" (the reason
+       as `write_error_text` gives it);
+     - `UnsavedQuestion` "Spara ändringarna?"; `Discard` "Släng"; `Cancel` "Avbryt" (the
+       question's "Spara" is `Save`).
+     Nothing else in `editor.rs` changes: the form, its functions and its tests stay as T104 left
+     them. `main.rs` draws only texts from `editor_text`, `EditorForm`/`EditorField` (labels, notes,
+     field errors, warnings), `notice_text`, `info_panel.rs` and data (file names, values typed).
+     A text that turns out to be missing is added to `EditorText` in the same way, and named in
+     the hand-over.
 - **Rules:** rules 3–7 and 10–12. No `Cargo.toml` change. Keys typed into the editor's text fields
   must not reach the rating and navigation keys (as the import dialog already prevents).
-- **Tests to add:** `key_action` for `E`; `metadata.rs` with the fake submitter: an edits request
+- **Tests to add:** `editor_text` of every `EditorText` once (`editor.rs`); `key_action` for `E`; `metadata.rs` with the fake submitter: an edits request
   sent with the form's edits, `EditsWritten` `Ok` asks for a new read of the image, `Err` keeps the
   pending state cleared and gives the Swedish text; the exit wait counts a running edits write.
 - **Done when:** `.\tools\check.ps1` is all OK; `docs/test-inventory.md` is updated;
@@ -5402,3 +5423,4 @@ and reviewer:
 | 2026-11-12 | T103 | Ready for review | (Agent) `lib.rs`: `Action::ToggleMetadata` on `M` (not with Ctrl or Alt). `metadata.rs`: `MetadataSubmit::read_metadata`; the cache keeps the result of one image (`PanelState`: `Unsupported`, `Loading`, `Error`, `Ready`), `panel_request` each frame asks only while the panel is shown, after the image has been current for 200 ms, with at most one read in flight (results for another image or id dropped, the newest image asked for after it); `RatingWritten`/`EditsWritten` of the image read it again (old values shown meanwhile); a folder change empties it (the same folder loaded again by a grid ↔ loupe switch keeps it); a stopped worker turns the read in flight into an error. `main.rs`: `egui::Panel::right` (egui 0.37 has no `SidePanel`; same panel), width 320, resizable, own vertical scroll area, hidden at start, not saved; subject = loupe's current image, or in the contact sheet `Selected(n)` with more than one marked, the current image otherwise, `NoneSelected` when nothing is shown; texts only from `panel_text`/`info_panel`, `UNSUPPORTED_TEXT` for other file kinds, file name, then Metadata (label, value, origin in grey), Konflikter in `warn_fg_color` and Meddelanden only when there are any; labels and values wrap. 7 tests (1 key, 6 cache). `check.ps1`: fmt, test (1045 passed, 43 ignored, 0 failed) and clippy OK. No missing texts. The T104 work of another agent (`editor.rs`, two lines in `lib.rs`, its part of `test-inventory.md`) was in the same worktree during the run and is not part of T103. Owner's hand check pending; no commit |
 | 2026-11-12 | T104 | Ready for review | (Agent) New `editor.rs` (pure, no egui): `EditorField` with the 22 D12 fields in order, `label()` through `property_label(…, Sv)`, `multiline()`, the value kind from the property table; `EditorForm::from_read` (Lang Alt shown text with the note "(<språk>)" without `x-default`, lists one entry per line, dates `to_xmp()`, the contact fields from `CreatorContactInfo`), `text`/`text_mut`/`note`; `open_conflicts` (every `Open` conflict, label, values with origin, chosen) and `choose` (fills the property's fields; `false` out of range); `edits` (`Set`/`Clear` per changed field, contact fields as `field` edits, dates by `parse_xmp` with the given error text, a chosen value a `Set` even unchanged; all errors together); `warnings` (edits applied to a copy, `validate` with `iim_written` = IIM present or `create_iim` on a non-RAW; the Swedish texts); `notice_text`. `lib.rs`: one `mod`, one `pub use`. 26 unit tests; `test-inventory.md` updated (pw-loupe 339 with T103's). Notes for review: only the date field can give a field error with the D12 fields, so "several errors at once" is tested as one date error with other changed fields (owner agreed 2026-11-12); after a choice a field counts as changed against the chosen value's text; "Fotografens titel utan Fotograf" and "Digital källtyp …" take the names from `property_label`, the definite forms (Alternativtexten, Landskoden, Betyget, Registerpost) are in the templates; the registry entry is numbered from 1. `check.ps1`: fmt, test, clippy OK; 1045 passed, 0 failed, 43 ignored |
 | 2026-11-12 | T103, T104 | Ready for review / Done | Review: both accepted. **T103** (code accepted, stays Ready for review until the owner's hand check of its Done when): `Action::ToggleMetadata` on `M`; the cache keeps one image's read (`PanelState`), at most one read in flight, the newest image asked for after it, stale results dropped, no read while hidden or before 200 ms, a new read after `RatingWritten`/`EditsWritten` of the image with the old values shown meanwhile, a folder change empties it; the panel on the right (`egui::Panel::right`, as `SidePanel` is named in egui 0.37), 320 wide, resizable, its own scroll area, hidden at start; every text from `info_panel.rs` (the file name is data). No missing texts. **T104** (Done): `editor.rs` with the 22 D12 fields, `from_read`, `open_conflicts`/`choose`, `edits` (a chosen value a `Set` even unchanged, contact fields as `field` edits, dates through `parse_xmp`), `warnings` through `apply_edits` and `validate`, `notice_text`; the owner's agreement to test "several errors at once" as one date error beside other changed fields is noted (only the date field can fail). Accepted interpretations: after a choice a field counts as changed against the chosen value's text; the definite forms (Alternativtexten, Landskoden, Betyget, Registerpost) are in the templates; registry entries numbered from 1. The reviewer's `check.ps1`: fmt, test and clippy OK, **1045 passed, 0 failed, 43 ignored** in 54 programs. Committed. Left: the owner's hand check of T103 (the panel shows a JPEG, a DNG, an ARW with a sidecar, and a conflict) |
+| 2026-11-12 | T105 | Open | Stopped by the agent under rule 13: the window needs about a dozen new user-visible texts (Redigera, the window title, Olösta konflikter, a conflict choice, Spara, Stäng, Sparar …, Sparat., the save error, Spara ändringarna?, Släng, Avbryt), and none of T105's files was a text module. **Owner decision (2026-11-12):** T105 may also change `editor.rs`, only to add `EditorText` and `editor_text` (point 5, as `PanelText`), with one test of every text; the `pub use editor::…` line gains the two names. The "Redigera" button text is there too, so all of the editor's texts are in one module |
