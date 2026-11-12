@@ -4687,13 +4687,24 @@ leaves the stored `IPTCDigest` out of date (`Validate`: `IPTCDigest is not curre
        - the IIM checksum when the file has IIM (`state`): `Matches` nothing, `Differs` "IIM har
          ändrats av ett annat program efter XMP (kontrollsumman stämmer inte)", `Missing` "IIM
          saknar kontrollsumma".
+  5. **`pub enum PanelText`** and **`pub fn panel_text(text: &PanelText) -> String`** for the
+     panel's fixed texts that T103 shows: `Selected(n)` "<n> bilder markerade", `NoneSelected`
+     "Ingen bild vald", `Loading` "Läser metadata …", `ReadError(e)` "Metadata kunde inte läsas:
+     <e>", and the section headings `Values` "Metadata", `Conflicts` "Konflikter", `Notices`
+     "Meddelanden".
+- **Text rule** (owner, 2026-11-12: so English can be added later in one module): every text the
+  user sees in the info panel is made by a function in `info_panel.rs`; drawing code holds no
+  user-visible string literals. Each text is a whole sentence built from one template with
+  placeholders (`format!` with the values filled in), never joined from separately translated
+  pieces, so another language can change the word order. Numbers that need singular/plural
+  (such as ` +N språk`) are formatted inside the same function.
 - **Rules:** rules 3–7 and 10–12. No `Cargo.toml` change. Nothing in `pw-metadata` changes.
 - **Tests to add** (unit tests on hand-built `MetadataRead`): `property_label` for a listed, an
   unlisted and an unknown id, each with `Sv` and `En` (`dc:creator` gives "Fotograf" and
   "Creator"; a contact field gives "E-post" and the table's field name); `value_text` for every `Value` kind (Lang Alt with `x-default` only,
   without `x-default`, with two other languages; a list; a date with and without a zone; a contact
-  structure; two Location Created); every rule text; every notice text above once; the order of
-  values follows the table.
+  structure; two Location Created); every rule text; every notice text above once; every
+  `PanelText` once; the order of values follows the table.
 - **Done when:** `.\tools\check.ps1` is all OK; `docs/test-inventory.md` is updated;
   `git diff --stat` shows only the files above.
 
@@ -4718,12 +4729,16 @@ leaves the stored `IPTCDigest` out of date (`Validate`: `IPTCDigest is not curre
   3. **`main.rs`:** a panel on the right (`egui::SidePanel::right`, width 320, resizable, its own
      scroll area), shown and hidden with `M`, hidden at start, not remembered between runs. The
      image is the loupe's current image, or in the contact sheet the single selected image; with
-     several selected "<n> bilder markerade", with none "Ingen bild vald". Contents:
-     "Läser metadata …" while loading; "Metadata kunde inte läsas: <fel>" on an error; otherwise
-     the file name and three sections from T102's `info_panel`: "Metadata" (label, value, origin
-     in grey), "Konflikter" (shown only when there are any, in the warning colour) and
-     "Meddelanden" (only when there are any). A file kind without metadata support shows
-     `UNSUPPORTED_TEXT`.
+     several selected `PanelText::Selected(n)`, with none `PanelText::NoneSelected`. Contents:
+     `PanelText::Loading` while loading; `PanelText::ReadError(fel)` on an error; otherwise
+     the file name and three sections from T102's `info_panel`, headed by `PanelText::Values`
+     (label, value, origin in grey), `PanelText::Conflicts` (shown only when there are any, in the
+     warning colour) and `PanelText::Notices` (only when there are any). A file kind without
+     metadata support shows `UNSUPPORTED_TEXT`.
+- **Text rule** (as T102): the panel's drawing code in `main.rs` holds no user-visible string
+  literals; every text comes from `info_panel.rs` (`info_panel`, `panel_text`). A text that turns
+  out to be missing is not written in `main.rs`: report it in the hand-over, and it is added to
+  `info_panel.rs` as a whole-sentence template. The panel does not assume a fixed text width (labels and values wrap).
 - **Rules:** rules 3–7 and 10–12. No `Cargo.toml` change. The rating path is unchanged.
 - **Tests to add:** `key_action` for `M` (with and without Ctrl); `metadata.rs` with the existing
   fake submitter: one read in flight, the newest image asked for after it, a stale result dropped,
@@ -4776,6 +4791,14 @@ leaves the stored `IPTCDigest` out of date (`Validate`: `IPTCDigest is not curre
      `Truncated` "<fält> kortades i IIM; XMP har hela texten"; `IimConvertedToUtf8` "IIM-texterna
      skrevs om som UTF-8"; `ConflictKept` "<fält>: konflikten är olöst och skrevs inte";
      `DigestNotWritten` "Ingen ny IIM-kontrollsumma skrevs, eftersom en konflikt är olöst".
+- **Text rule** (as T102; owner, 2026-11-12: so English can be added later in one module): every
+  text the user sees from the editor (labels, the Lang Alt note, field errors, warnings, notices)
+  is made by a function in `editor.rs` or `info_panel.rs`; property names only through
+  `property_label`. Each text is a whole sentence built from one template with placeholders
+  (`format!` with the values filled in), never joined from separately translated pieces, so
+  another language can change the word order; numbers that need singular/plural are formatted
+  inside the same function. Nothing returned by `editor.rs` is meant to be completed by string
+  joins in the window's code (T105).
 - **Rules:** rules 3–7 and 10–12. No `Cargo.toml` change. Nothing in `pw-metadata` changes.
 - **Tests to add** (unit tests on hand-built `MetadataRead`): `from_read` of every field kind and of
   a Lang Alt without `x-default`; no edits for an untouched form; a changed text, an emptied field
