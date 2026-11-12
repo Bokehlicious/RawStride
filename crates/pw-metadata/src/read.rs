@@ -7,7 +7,12 @@
 //!   sidecar `<basename>.xmp` holds the primary XMP and the XMP inside the RAW file is camera data.
 //!   A `<basename>.xmp` next to a DNG is never read (§4.1, Q5) and a `<basename>.<ext>.xmp` is
 //!   never read for any file (§4.2, Q8); both are reported. Names are compared without regard to
-//!   case.
+//!   case. On Windows the two names are looked up directly instead of listing the folder (T95):
+//!   the info panel reads one image at each step, and listing a folder of thousands of files at
+//!   every step is slow on a memory card or a network share. NTFS and FAT/exFAT compare names
+//!   without regard to case, so `IMG_1.XMP` is found for `img_1.dng`; the path reported holds the
+//!   name as it is in the folder (from `std::fs::canonicalize`). Other systems list the folder,
+//!   because their file systems may compare names with regard to case.
 //! - **XMP** is mapped by the property table's ExifTool names (`et_xmp`, and `et_tag` inside a
 //!   structure, at any depth); keys the table does not know are ignored and stay in the file. A Lang
 //!   Alt keeps the order of the JSON object. A date in ExifTool's form is read with
@@ -286,7 +291,53 @@ struct Sidecars {
     with_extension: Option<PathBuf>,
 }
 
-/// Finds the sidecars of `image` in its folder, comparing names without regard to case.
+/// Finds the sidecars of `image` in its folder, comparing names without regard to case. On
+/// Windows the two names are looked up directly; the path returned holds the name as it is in the
+/// folder (see the module comment).
+#[cfg(windows)]
+fn find_sidecars(image: &Path) -> Result<Sidecars> {
+    let mut found = Sidecars::default();
+    let (Some(stem), Some(name)) = (image.file_stem(), image.file_name()) else {
+        return Ok(found);
+    };
+    let mut plain = stem.to_os_string();
+    plain.push(".xmp");
+    let mut with_extension = name.to_os_string();
+    with_extension.push(".xmp");
+    let folder = match image.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => parent,
+        _ => Path::new("."),
+    };
+    found.plain = sidecar_as_stored(folder, &plain)?;
+    if !with_extension.eq_ignore_ascii_case(&plain) {
+        found.with_extension = sidecar_as_stored(folder, &with_extension)?;
+    }
+    Ok(found)
+}
+
+/// The file `name` in `folder` (looked up without regard to case by the file system), as
+/// `folder.join(<its name as stored>)`; `None` when there is no such file. Only a missing file is
+/// `None`; any other failure (a folder that cannot be read) is the error.
+#[cfg(windows)]
+fn sidecar_as_stored(folder: &Path, name: &std::ffi::OsStr) -> Result<Option<PathBuf>> {
+    let path = folder.join(name);
+    match std::fs::metadata(&path) {
+        Ok(metadata) if metadata.is_file() => {}
+        Ok(_) => return Ok(None),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e.into()),
+    }
+    let canonical = std::fs::canonicalize(&path)?;
+    Ok(Some(match canonical.file_name() {
+        Some(stored) => folder.join(stored),
+        None => path,
+    }))
+}
+
+/// Finds the sidecars of `image` in its folder, comparing names without regard to case. The folder
+/// is listed, because the file system may compare names with regard to case (see the module
+/// comment).
+#[cfg(not(windows))]
 fn find_sidecars(image: &Path) -> Result<Sidecars> {
     let mut found = Sidecars::default();
     let (Some(stem), Some(name)) = (image.file_stem(), image.file_name()) else {

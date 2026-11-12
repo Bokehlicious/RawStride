@@ -28,6 +28,7 @@ pub mod safe_write;
 pub mod template;
 #[cfg(test)]
 mod test_support;
+pub mod validate;
 pub mod value;
 pub mod verify;
 mod worker;

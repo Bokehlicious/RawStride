@@ -571,3 +571,104 @@ fn the_state_of_a_raw_has_no_iim_and_no_exif() {
     assert_eq!(std::fs::read(&raw).unwrap(), b"not really a raw file");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// The sidecars are found whatever the case of their names, and the path reported is the name as
+/// it is in the folder (T95): a DNG `img_1.dng` with `IMG_1.XMP` → `ForeignSidecarIgnored` naming
+/// `IMG_1.XMP`.
+#[test]
+fn a_sidecar_in_another_case_next_to_a_dng_is_reported_by_its_name_in_the_folder() {
+    let mut et = exiftool();
+    let dir = temp_dir("case-dng");
+    let dng = dir.join("img_1.dng");
+    std::fs::write(&dng, b"not really a dng file").unwrap();
+    write(
+        &mut et,
+        &dir.join("written.xmp"),
+        &["-XMP-photoshop:City=Från en främmande sidecar"],
+    );
+    std::fs::rename(dir.join("written.xmp"), dir.join("IMG_1.XMP")).unwrap();
+
+    let read = read_file(&mut et, &dng);
+    assert_eq!(read.file_notices.len(), 1, "{:?}", read.file_notices);
+    match &read.file_notices[0] {
+        FileNotice::ForeignSidecarIgnored(path) => {
+            assert_eq!(path.file_name(), Some(std::ffi::OsStr::new("IMG_1.XMP")));
+            assert_eq!(path.parent(), Some(dir.as_path()));
+        }
+        other => panic!("expected ForeignSidecarIgnored, got {other:?}"),
+    }
+    assert_eq!(get(&read, "photoshop:City"), None);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A fake RAW `img_2.arw` reads its sidecar `IMG_2.xmp`; for `x.arw` the sidecar `x.arw.XMP` is
+/// reported by its name in the folder and never read (T95).
+#[test]
+fn a_raw_finds_its_sidecars_whatever_the_case_of_their_names() {
+    let mut et = exiftool();
+    let dir = temp_dir("case-raw");
+    let raw = dir.join("img_2.arw");
+    std::fs::write(&raw, b"not really a raw file").unwrap();
+    write(
+        &mut et,
+        &dir.join("written.xmp"),
+        &["-XMP-photoshop:City=Göteborg"],
+    );
+    std::fs::rename(dir.join("written.xmp"), dir.join("IMG_2.xmp")).unwrap();
+
+    let read = read_file(&mut et, &raw);
+    assert_eq!(
+        get(&read, "photoshop:City"),
+        Some((text("Göteborg"), Origin::XmpSidecar))
+    );
+    assert!(read.file_notices.is_empty(), "{:?}", read.file_notices);
+
+    let raw_ext = dir.join("x.arw");
+    std::fs::write(&raw_ext, b"not really a raw file").unwrap();
+    write(
+        &mut et,
+        &dir.join("written-ext.xmp"),
+        &["-XMP-photoshop:City=Lund"],
+    );
+    std::fs::rename(dir.join("written-ext.xmp"), dir.join("x.arw.XMP")).unwrap();
+
+    let read = read_file(&mut et, &raw_ext);
+    assert_eq!(get(&read, "photoshop:City"), None);
+    assert_eq!(read.file_notices.len(), 1, "{:?}", read.file_notices);
+    match &read.file_notices[0] {
+        FileNotice::ExtSidecarIgnored(path) => {
+            assert_eq!(path.file_name(), Some(std::ffi::OsStr::new("x.arw.XMP")));
+            assert_eq!(path.parent(), Some(dir.as_path()));
+        }
+        other => panic!("expected ExtSidecarIgnored, got {other:?}"),
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The time of a read in a folder of 20 000 files (T95): a JPEG next to 20 000 empty files, read
+/// ten times; the time per read is printed. Ignored by default (it writes 20 000 files). Run it
+/// with `cargo test --workspace --test read -- --ignored --nocapture a_read_in_a_large_folder`.
+#[test]
+#[ignore = "timing: writes 20 000 files; run with --ignored --nocapture"]
+fn a_read_in_a_large_folder() {
+    let mut et = exiftool();
+    let (dir, file) = jpeg("large-folder");
+    for i in 0..20_000 {
+        std::fs::write(dir.join(format!("empty-{i:05}.txt")), b"").unwrap();
+    }
+    write(&mut et, &file, &["-XMP-photoshop:City=Göteborg"]);
+    let _ = read_file(&mut et, &file);
+
+    let reads = 10;
+    let start = std::time::Instant::now();
+    for _ in 0..reads {
+        let read = read_file(&mut et, &file);
+        assert_eq!(
+            get(&read, "photoshop:City"),
+            Some((text("Göteborg"), Origin::XmpEmbedded))
+        );
+    }
+    let per_read = start.elapsed() / reads;
+    println!("read_metadata in a folder of 20 001 files: {per_read:?} per read ({reads} reads)");
+    let _ = std::fs::remove_dir_all(&dir);
+}
