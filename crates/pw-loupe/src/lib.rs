@@ -4,6 +4,7 @@
 //! `pw-render`.
 
 mod browse;
+mod editor;
 mod filter;
 mod grid;
 mod import;
@@ -23,6 +24,7 @@ use std::path::{Path, PathBuf};
 use pw_viewcore::{DecodeError, Frame, Source, Status, Zoom};
 
 pub use browse::LoupeMove;
+pub use editor::{EditorField, EditorForm, OpenConflict, notice_text};
 pub use filter::{
     Filter, LABEL_CHOICES, LabelChoice, LabelFilter, STAR_CONDITIONS, STAR_FILTERS, StarCondition,
     StarFilter, label_choice_text, label_filter_text, matches, nearest_visible,
@@ -174,6 +176,8 @@ pub enum Action {
     ToggleInfo,
     /// R: RAW ↔ JPEG (G4).
     ToggleMode,
+    /// M: show or hide the info panel, in the loupe and the contact sheet (ADR 0007 I10j, D15).
+    ToggleMetadata,
 }
 
 /// Whether a loupe action is allowed for this key event (ADR 0009 §13).
@@ -202,6 +206,7 @@ pub fn key_action(key: egui::Key, ctrl: bool, alt: bool) -> Option<Action> {
         K::A => Action::ToggleAnchor,
         K::I => Action::ToggleInfo,
         K::R => Action::ToggleMode,
+        K::M => Action::ToggleMetadata,
         _ => return None,
     })
 }
@@ -542,6 +547,17 @@ mod tests {
         assert_eq!(key_action(K::O, true, false), None);
         assert_eq!(key_action(K::A, true, false), None);
         assert_eq!(key_action(K::A, false, false), Some(Action::ToggleAnchor));
+    }
+
+    #[test]
+    fn m_toggles_the_info_panel_without_ctrl_or_alt() {
+        use egui::Key as K;
+        assert_eq!(key_action(K::M, false, false), Some(Action::ToggleMetadata));
+        assert_eq!(key_action(K::M, true, false), None);
+        assert_eq!(key_action(K::M, false, true), None);
+        // M is not a key of the contact sheet or of the loupe's way back to it.
+        assert_eq!(grid_key_action(K::M, false, false, false), None);
+        assert_eq!(loupe_key_action(K::M, false, false), None);
     }
 
     #[test]

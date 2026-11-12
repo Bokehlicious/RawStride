@@ -7,6 +7,7 @@ use std::time::{Duration, Instant};
 use pw_loupe::{
     RatingKey, RatingRefused, RatingStore, RatingWriter, UNSUPPORTED_TEXT, status_text,
 };
+use pw_metadata::read::MetadataRead;
 use pw_metadata::safe_write::OriginalState;
 use pw_metadata::{
     EXIFTOOL_TOO_OLD, MIN_EXIFTOOL_VERSION, MetadataWorker, NO_JOURNAL, Rating, RequestId,
@@ -16,12 +17,19 @@ use pw_metadata::{
 pub(crate) trait MetadataSubmit: RatingWriter {
     fn read_ratings(&mut self, images: Vec<PathBuf>) -> Result<RequestId, SubmitError>;
 
+    /// All metadata of one image, for the info panel (T98, T103).
+    fn read_metadata(&mut self, image: PathBuf) -> Result<RequestId, SubmitError>;
+
     fn try_recv(&mut self) -> Result<WorkerEvent, TryRecvError>;
 }
 
 impl MetadataSubmit for MetadataWorker {
     fn read_ratings(&mut self, images: Vec<PathBuf>) -> Result<RequestId, SubmitError> {
         MetadataWorker::read_ratings(self, images)
+    }
+
+    fn read_metadata(&mut self, image: PathBuf) -> Result<RequestId, SubmitError> {
+        MetadataWorker::read_metadata(self, image)
     }
 
     fn try_recv(&mut self) -> Result<WorkerEvent, TryRecvError> {
@@ -42,6 +50,52 @@ struct ImageMetadata {
     state: LoadState,
 }
 
+/// How long an image must have been the current one before the info panel asks for its metadata,
+/// so moving quickly with the arrow keys queues nothing (ADR 0007 I10j, D15, T103).
+pub(crate) const PANEL_READ_DELAY: Duration = Duration::from_millis(200);
+/// How often a frame is asked for while the panel's read is in flight or waits to be sent.
+const PANEL_POLL_INTERVAL: Duration = Duration::from_millis(100);
+
+/// What the info panel shows for its image (T103).
+#[derive(Debug, PartialEq)]
+pub(crate) enum PanelState<'a> {
+    /// The file kind has no metadata support.
+    Unsupported,
+    /// No result yet: the read waits for `PANEL_READ_DELAY`, is in flight or not yet sent.
+    Loading,
+    Error(&'a str),
+    Ready(&'a MetadataRead),
+}
+
+/// The metadata of the one image shown in the info panel (ADR 0007 §5.1, D15, T103). At most one
+/// `read_metadata` is in flight; its result is kept only if it is for the panel's image.
+#[derive(Default)]
+struct PanelRead {
+    /// The panel's image (absolute, supported) and when it became the current one.
+    image: Option<(PathBuf, Instant)>,
+    /// The result for `image`, once one has come back.
+    result: Option<Result<MetadataRead, String>>,
+    /// `image` must be read (again): it is new, or RawStride wrote to it.
+    needs_read: bool,
+    /// The one read in flight, for whichever image it was asked for.
+    in_flight: Option<RequestId>,
+}
+
+impl PanelRead {
+    fn is_image(&self, path: &Path) -> bool {
+        self.image.as_ref().is_some_and(|(image, _)| image == path)
+    }
+
+    /// Empties the panel's metadata. A read in flight stays in flight, so a second one is not
+    /// sent before it is back; its result is then dropped.
+    fn clear(&mut self) {
+        *self = Self {
+            in_flight: self.in_flight,
+            ..Self::default()
+        };
+    }
+}
+
 #[derive(Default)]
 pub(crate) struct MetadataCache {
     images: HashMap<PathBuf, ImageMetadata>,
@@ -50,6 +104,7 @@ pub(crate) struct MetadataCache {
     /// Why the last folder read failed (ADR 0014 Q7); cleared by the next `begin_load`.
     read_error: Option<String>,
     ratings: RatingStore,
+    panel: PanelRead,
 }
 
 impl MetadataCache {
@@ -85,6 +140,11 @@ impl MetadataCache {
         self.load_request = None;
         self.pending_read = None;
         self.read_error = None;
+        // A loaded folder change empties the panel; the same folder loaded again (a switch between
+        // grid and loupe) keeps it.
+        if !files.iter().any(|path| self.panel.is_image(path)) {
+            self.panel.clear();
+        }
         let supported: Vec<PathBuf> = files
             .iter()
             .filter(|path| supports_rating(path))
@@ -146,6 +206,11 @@ impl MetadataCache {
                         self.fail_read(&message);
                     }
                     failures.extend(self.ratings.fail_sent());
+                    // The panel's read in flight can never come back either.
+                    if self.panel.in_flight.take().is_some() && self.panel.image.is_some() {
+                        self.panel.result = Some(Err(message));
+                        self.panel.needs_read = false;
+                    }
                     return;
                 }
             }
@@ -243,6 +308,75 @@ impl MetadataCache {
         self.ratings.pending()
     }
 
+    /// Called every frame with the info panel's image (absolute path) and whether the panel is
+    /// shown (ADR 0007 I10j, D15, T103). Asks for the image's metadata when the panel is shown, no
+    /// read is in flight and the image has been the current one for `PANEL_READ_DELAY`. Returns
+    /// how soon a frame is needed to go on (the rest of the delay, or a read in flight), if at all.
+    pub fn panel_request(
+        &mut self,
+        image: Option<&Path>,
+        shown: bool,
+        now: Instant,
+        worker: &mut impl MetadataSubmit,
+    ) -> Option<Duration> {
+        let image = image.filter(|path| supports_rating(path));
+        if self.panel.image.as_ref().map(|(path, _)| path.as_path()) != image {
+            self.panel.image = image.map(|path| (path.to_path_buf(), now));
+            self.panel.result = None;
+            self.panel.needs_read = image.is_some();
+        }
+        if !shown {
+            return None;
+        }
+        if self.panel.in_flight.is_some() {
+            return Some(PANEL_POLL_INTERVAL);
+        }
+        if !self.panel.needs_read {
+            return None;
+        }
+        let (path, since) = self.panel.image.clone()?;
+        let waited = now.saturating_duration_since(since);
+        if waited < PANEL_READ_DELAY {
+            return Some(PANEL_READ_DELAY - waited);
+        }
+        match worker.read_metadata(path) {
+            Ok(id) => {
+                self.panel.in_flight = Some(id);
+                self.panel.needs_read = false;
+                Some(PANEL_POLL_INTERVAL)
+            }
+            Err(SubmitError::QueueFull) => Some(PANEL_POLL_INTERVAL),
+            Err(error) => {
+                self.panel.result = Some(Err(submit_error(error)));
+                self.panel.needs_read = false;
+                None
+            }
+        }
+    }
+
+    /// What the info panel shows for `image` (absolute path).
+    pub fn panel_state(&self, image: &Path) -> PanelState<'_> {
+        if !supports_rating(image) {
+            return PanelState::Unsupported;
+        }
+        if !self.panel.is_image(image) {
+            return PanelState::Loading;
+        }
+        match &self.panel.result {
+            None => PanelState::Loading,
+            Some(Ok(read)) => PanelState::Ready(read),
+            Some(Err(error)) => PanelState::Error(error),
+        }
+    }
+
+    /// RawStride wrote to `path`: the panel reads it again if it is the panel's image. The values
+    /// read before stay shown until the new ones come back.
+    fn panel_written(&mut self, path: &Path) {
+        if self.panel.is_image(path) {
+            self.panel.needs_read = true;
+        }
+    }
+
     fn apply(&mut self, event: WorkerEvent, failures: &mut Vec<String>) {
         match event {
             WorkerEvent::RatingsRead { id, result } if Some(id) == self.load_request => {
@@ -268,6 +402,7 @@ impl MetadataCache {
             WorkerEvent::RatingWritten {
                 id, path, result, ..
             } => {
+                self.panel_written(&path);
                 if let Some(message) =
                     self.ratings
                         .written(id, &path, result.map_err(write_error_text))
@@ -276,8 +411,17 @@ impl MetadataCache {
                 }
             }
             WorkerEvent::RatingsRead { .. } => {}
-            // Not requested by the loupe yet; the info panel (T103) and the editor (T105) use them.
-            WorkerEvent::MetadataRead { .. } | WorkerEvent::EditsWritten { .. } => {}
+            WorkerEvent::MetadataRead { id, path, result } => {
+                if self.panel.in_flight == Some(id) {
+                    self.panel.in_flight = None;
+                    // A result for another image than the panel's is dropped.
+                    if self.panel.is_image(&path) {
+                        self.panel.result = Some(result);
+                    }
+                }
+            }
+            // The editor (T105) sends the writes; the panel reads the image again after one.
+            WorkerEvent::EditsWritten { path, .. } => self.panel_written(&path),
         }
     }
 }
@@ -439,6 +583,9 @@ mod tests {
         next_write_id: RequestId,
         /// When set, every accepted write is answered with this result on the next `try_recv`.
         write_result: Option<Result<(), String>>,
+        /// The images of every `read_metadata` call, with the id each was given.
+        metadata_reads: Vec<(RequestId, PathBuf)>,
+        next_metadata_id: RequestId,
     }
 
     impl FakeSubmit {
@@ -451,6 +598,8 @@ mod tests {
                 events: VecDeque::new(),
                 next_write_id: 100,
                 write_result: None,
+                metadata_reads: Vec::new(),
+                next_metadata_id: 500,
             }
         }
     }
@@ -484,6 +633,14 @@ mod tests {
             self.read_responses
                 .pop_front()
                 .unwrap_or(Err(SubmitError::QueueFull))
+        }
+
+        fn read_metadata(&mut self, image: PathBuf) -> Result<RequestId, SubmitError> {
+            self.operations.push("read_metadata");
+            let id = self.next_metadata_id;
+            self.next_metadata_id += 1;
+            self.metadata_reads.push((id, image));
+            Ok(id)
         }
 
         fn try_recv(&mut self) -> Result<WorkerEvent, TryRecvError> {
@@ -1091,5 +1248,265 @@ mod tests {
         cache.drain(|| Err(TryRecvError::Disconnected), &mut failures);
         assert_eq!(cache.read_error(), None);
         assert!(cache.ratings_ready());
+    }
+
+    // --- the info panel's metadata (ADR 0007 I10j, D15, T103) ---
+
+    /// An empty read of a JPEG without IIM, as the worker could answer it.
+    fn empty_read() -> MetadataRead {
+        use pw_metadata::iim::CodedCharset;
+        use pw_metadata::reconcile::{FileKind, IimDigest, Reconciled};
+        use pw_metadata::value::Metadata;
+        use pw_metadata::write_plan::{ExifPresent, FileState};
+        MetadataRead {
+            reconciled: Reconciled {
+                metadata: Metadata::new(),
+                notices: Vec::new(),
+                suggested_date_created: None,
+            },
+            file_notices: Vec::new(),
+            state: FileState {
+                kind: FileKind::Jpeg,
+                iim_present: false,
+                iim_charset: CodedCharset::Absent,
+                iim_values: Vec::new(),
+                digest: IimDigest::Missing,
+                exif_present: ExifPresent::default(),
+            },
+        }
+    }
+
+    fn panel_path(name: &str) -> PathBuf {
+        std::env::temp_dir().join(name)
+    }
+
+    fn metadata_read(
+        id: RequestId,
+        path: &Path,
+        result: Result<MetadataRead, String>,
+    ) -> WorkerEvent {
+        WorkerEvent::MetadataRead {
+            id,
+            path: path.to_path_buf(),
+            result,
+        }
+    }
+
+    #[test]
+    fn the_panel_asks_for_nothing_before_200_ms_or_while_hidden() {
+        let mut worker = FakeSubmit::new([]);
+        let mut cache = MetadataCache::default();
+        let image = panel_path("pw-loupe-panel-wait.ARW");
+        let start = Instant::now();
+
+        // Hidden: nothing is asked for, however long the image is current.
+        assert_eq!(
+            cache.panel_request(Some(&image), false, start, &mut worker),
+            None
+        );
+        let later = start + Duration::from_secs(5);
+        assert_eq!(
+            cache.panel_request(Some(&image), false, later, &mut worker),
+            None
+        );
+        assert!(worker.metadata_reads.is_empty());
+
+        // Another image, shown: nothing before 200 ms, and the rest of the wait is returned.
+        let other = panel_path("pw-loupe-panel-wait.jpg");
+        assert_eq!(
+            cache.panel_request(Some(&other), true, later, &mut worker),
+            Some(PANEL_READ_DELAY)
+        );
+        let almost = later + Duration::from_millis(199);
+        assert_eq!(
+            cache.panel_request(Some(&other), true, almost, &mut worker),
+            Some(Duration::from_millis(1))
+        );
+        assert!(worker.metadata_reads.is_empty());
+        assert_eq!(cache.panel_state(&other), PanelState::Loading);
+
+        // At 200 ms the one read is sent.
+        cache.panel_request(Some(&other), true, later + PANEL_READ_DELAY, &mut worker);
+        assert_eq!(worker.metadata_reads, [(500, other.clone())]);
+    }
+
+    #[test]
+    fn moving_quickly_queues_nothing_and_an_unsupported_file_is_never_read() {
+        let mut worker = FakeSubmit::new([]);
+        let mut cache = MetadataCache::default();
+        let start = Instant::now();
+        // A new image every 100 ms: none is current for 200 ms.
+        for step in 0..5u32 {
+            let image = panel_path(&format!("pw-loupe-panel-step-{step}.DNG"));
+            let now = start + Duration::from_millis(100) * step;
+            cache.panel_request(Some(&image), true, now, &mut worker);
+        }
+        assert!(worker.metadata_reads.is_empty());
+
+        let text = panel_path("pw-loupe-panel-notes.txt");
+        assert_eq!(
+            cache.panel_request(Some(&text), true, start, &mut worker),
+            None
+        );
+        let later = start + Duration::from_secs(1);
+        assert_eq!(
+            cache.panel_request(Some(&text), true, later, &mut worker),
+            None
+        );
+        assert!(worker.metadata_reads.is_empty());
+        assert_eq!(cache.panel_state(&text), PanelState::Unsupported);
+    }
+
+    #[test]
+    fn one_read_in_flight_then_the_newest_image_and_a_stale_result_is_dropped() {
+        let mut worker = FakeSubmit::new([]);
+        let mut cache = MetadataCache::default();
+        let first = panel_path("pw-loupe-panel-first.ARW");
+        let second = panel_path("pw-loupe-panel-second.ARW");
+        let third = panel_path("pw-loupe-panel-third.ARW");
+        let start = Instant::now();
+        cache.panel_request(Some(&first), true, start, &mut worker);
+        cache.panel_request(Some(&first), true, start + PANEL_READ_DELAY, &mut worker);
+        assert_eq!(worker.metadata_reads, [(500, first.clone())]);
+
+        // The image changes twice while the read runs: nothing more is sent.
+        let t = start + Duration::from_millis(300);
+        cache.panel_request(Some(&second), true, t, &mut worker);
+        let t = t + Duration::from_millis(300);
+        assert_eq!(
+            cache.panel_request(Some(&third), true, t, &mut worker),
+            Some(PANEL_POLL_INTERVAL)
+        );
+        let t = t + Duration::from_secs(1);
+        cache.panel_request(Some(&third), true, t, &mut worker);
+        assert_eq!(worker.metadata_reads.len(), 1, "one read in flight");
+
+        // The first image's result comes back: it is dropped.
+        worker
+            .events
+            .push_back(metadata_read(500, &first, Ok(empty_read())));
+        assert!(cache.poll(&mut worker).is_empty());
+        assert_eq!(cache.panel_state(&third), PanelState::Loading);
+        assert_eq!(cache.panel_state(&first), PanelState::Loading);
+
+        // Then the newest image is asked for, and its result is kept.
+        cache.panel_request(Some(&third), true, t, &mut worker);
+        assert_eq!(
+            worker.metadata_reads,
+            [(500, first.clone()), (501, third.clone())]
+        );
+        worker
+            .events
+            .push_back(metadata_read(501, &third, Ok(empty_read())));
+        assert!(cache.poll(&mut worker).is_empty());
+        assert_eq!(cache.panel_state(&third), PanelState::Ready(&empty_read()));
+        assert_eq!(
+            cache.panel_request(Some(&third), true, t, &mut worker),
+            None
+        );
+        assert_eq!(
+            worker.metadata_reads.len(),
+            2,
+            "a read image is not read again"
+        );
+    }
+
+    #[test]
+    fn a_result_with_another_id_is_dropped_and_an_error_is_shown() {
+        let mut worker = FakeSubmit::new([]);
+        let mut cache = MetadataCache::default();
+        let image = panel_path("pw-loupe-panel-error.jpg");
+        let start = Instant::now();
+        cache.panel_request(Some(&image), true, start, &mut worker);
+        cache.panel_request(Some(&image), true, start + PANEL_READ_DELAY, &mut worker);
+
+        worker
+            .events
+            .push_back(metadata_read(77, &image, Ok(empty_read())));
+        assert!(cache.poll(&mut worker).is_empty());
+        assert_eq!(cache.panel_state(&image), PanelState::Loading);
+
+        worker
+            .events
+            .push_back(metadata_read(500, &image, Err("filen saknas".to_owned())));
+        assert!(cache.poll(&mut worker).is_empty());
+        assert_eq!(cache.panel_state(&image), PanelState::Error("filen saknas"));
+    }
+
+    #[test]
+    fn the_panel_reads_its_image_again_after_a_rating_write() {
+        let mut worker = FakeSubmit::new([]);
+        worker.write_result = Some(Ok(()));
+        let mut cache = MetadataCache::default();
+        let image = panel_path("pw-loupe-panel-rated.ARW");
+        let other = panel_path("pw-loupe-panel-other.ARW");
+        let start = Instant::now();
+        cache.panel_request(Some(&image), true, start, &mut worker);
+        let t = start + PANEL_READ_DELAY;
+        cache.panel_request(Some(&image), true, t, &mut worker);
+        worker
+            .events
+            .push_back(metadata_read(500, &image, Ok(empty_read())));
+        assert!(cache.poll(&mut worker).is_empty());
+        assert_eq!(
+            cache.panel_request(Some(&image), true, t, &mut worker),
+            None
+        );
+
+        // A rating write of another image changes nothing.
+        if let Err(error) = cache.set_rating(&other, RatingKey::Stars(2)) {
+            panic!("supported rating path should be accepted: {error}");
+        }
+        assert!(cache.poll(&mut worker).is_empty(), "the write is sent");
+        assert!(cache.poll(&mut worker).is_empty(), "the write is confirmed");
+        assert_eq!(
+            cache.panel_request(Some(&image), true, t, &mut worker),
+            None
+        );
+        assert_eq!(worker.metadata_reads.len(), 1);
+
+        // A rating write of the panel's image: read again, the old values shown meanwhile.
+        if let Err(error) = cache.set_rating(&image, RatingKey::Stars(4)) {
+            panic!("supported rating path should be accepted: {error}");
+        }
+        assert!(cache.poll(&mut worker).is_empty(), "the write is sent");
+        assert!(cache.poll(&mut worker).is_empty(), "the write is confirmed");
+        assert_eq!(cache.panel_state(&image), PanelState::Ready(&empty_read()));
+        cache.panel_request(Some(&image), true, t, &mut worker);
+        assert_eq!(
+            worker.metadata_reads,
+            [(500, image.clone()), (501, image.clone())]
+        );
+    }
+
+    #[test]
+    fn a_folder_change_empties_the_panel_and_the_same_folder_keeps_it() {
+        let mut worker = FakeSubmit::new([Ok(1), Ok(2), Ok(3)]);
+        let mut cache = MetadataCache::default();
+        let image = panel_path("pw-loupe-panel-folder.ARW");
+        if let Err(error) = cache.begin_load(vec![image.clone()], &mut worker) {
+            panic!("current directory should be available: {error}");
+        }
+        let start = Instant::now();
+        cache.panel_request(Some(&image), true, start, &mut worker);
+        let t = start + PANEL_READ_DELAY;
+        cache.panel_request(Some(&image), true, t, &mut worker);
+        worker
+            .events
+            .push_back(metadata_read(500, &image, Ok(empty_read())));
+        assert!(cache.poll(&mut worker).is_empty());
+
+        // The same folder loaded again (grid ↔ loupe) keeps the values.
+        if let Err(error) = cache.begin_load(vec![image.clone()], &mut worker) {
+            panic!("current directory should be available: {error}");
+        }
+        assert_eq!(cache.panel_state(&image), PanelState::Ready(&empty_read()));
+
+        // Another folder empties them.
+        let elsewhere = panel_path("pw-loupe-panel-elsewhere.ARW");
+        if let Err(error) = cache.begin_load(vec![elsewhere], &mut worker) {
+            panic!("current directory should be available: {error}");
+        }
+        assert_eq!(cache.panel_state(&image), PanelState::Loading);
     }
 }

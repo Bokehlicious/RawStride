@@ -14,23 +14,24 @@ use std::sync::mpsc::TryRecvError;
 use std::time::{Duration, Instant};
 
 use eframe::egui;
-use metadata::MetadataCache;
+use metadata::{MetadataCache, PanelState};
 use pw_imagecheck::RawImageCheck;
 use pw_loupe::{
     Action, CellState, DEFAULT_THUMBNAIL_SIZE, DialogKey, DialogRequest, Field, Filter,
     GridKeyAction, ImportDialog, ImportDialogState, ImportEvent, ImportForm, ImportWorker,
     IptcField, LABEL_CHOICES, LabelFilter, LoupeMove, MAX_THUMBNAIL_SIZE, MIN_THUMBNAIL_SIZE,
-    MonitorProfile, Navigation, Options, READING_RATINGS_TEXT, RatingRefused, STAR_CONDITIONS,
-    STAR_FILTERS, StarFilter, SubmitError, Tab, TabAction, Tabs, ThumbGrid, UNSUPPORTED_TEXT,
-    ViewMode, WINDOW_TITLE, allowed_modes, clamp_thumbnail_size, clear_and_import_text,
-    clear_cancel_text, clear_confirmation_text, clear_confirmation_title, color_image, columns,
-    dialog_key_action, done_lines, ejecting_progress_text, error_text, grid_key_action,
-    indicator_text, iptc_progress_text, key_action, label_choice_text, label_filter_text,
-    label_name, list_folder, load_monitor_profile, loupe_key_action, marked_text, mode_label,
-    mode_text, more_lines, no_match_text, opens_import, parse_args, position_text, preview_line,
-    preview_summary, primary_monitor_profile_path, progress_text, rating_key_action, request_cell,
-    star_condition_text, star_filter_text, star_glyphs, status_line, step_allowed,
-    step_thumbnail_size, tab_action, take_wheel_steps, visible_range, wheel_factor, window_title,
+    MonitorProfile, Navigation, Options, PanelText, READING_RATINGS_TEXT, RatingRefused,
+    STAR_CONDITIONS, STAR_FILTERS, StarFilter, SubmitError, Tab, TabAction, Tabs, ThumbGrid,
+    UNSUPPORTED_TEXT, ViewMode, WINDOW_TITLE, allowed_modes, clamp_thumbnail_size,
+    clear_and_import_text, clear_cancel_text, clear_confirmation_text, clear_confirmation_title,
+    color_image, columns, dialog_key_action, done_lines, ejecting_progress_text, error_text,
+    grid_key_action, indicator_text, info_panel, iptc_progress_text, key_action, label_choice_text,
+    label_filter_text, label_name, list_folder, load_monitor_profile, loupe_key_action,
+    marked_text, mode_label, mode_text, more_lines, no_match_text, opens_import, panel_text,
+    parse_args, position_text, preview_line, preview_summary, primary_monitor_profile_path,
+    progress_text, rating_key_action, request_cell, star_condition_text, star_filter_text,
+    star_glyphs, status_line, step_allowed, step_thumbnail_size, tab_action, take_wheel_steps,
+    visible_range, wheel_factor, window_title,
 };
 use pw_metadata::edit::EditOptions;
 use pw_metadata::journal::{Journal, Recovered};
@@ -62,6 +63,44 @@ const RECOVERY_HEADING: &str =
 /// How often a frame is asked for while the metadata worker has not yet tried to start ExifTool,
 /// so the message about it is not left waiting for the next input (T101).
 const EXIFTOOL_CHECK_INTERVAL: Duration = Duration::from_millis(200);
+/// The width the info panel opens with (ADR 0007 I10j, D15); the user can resize it.
+const METADATA_PANEL_WIDTH: f32 = 320.0;
+/// The space between two rows of the info panel.
+const PANEL_ROW_SPACING: f32 = 6.0;
+
+/// What the info panel is about (ADR 0007 I10j, D15, T103): the loupe's current image, or in the
+/// contact sheet the single selected one.
+#[derive(Debug, PartialEq)]
+enum PanelSubject {
+    /// The image, as the metadata cache keys it.
+    Image(PathBuf),
+    /// Several images are selected in the contact sheet.
+    Selected(usize),
+    /// No image is shown or selected.
+    NoneSelected,
+}
+
+/// The subject of the info panel for the active tab. In the contact sheet several marked images
+/// give `Selected`; otherwise the current image, if it is shown (`cwd` resolves a relative path as
+/// the metadata cache does).
+fn panel_subject(tab: Option<&Tab>, cwd: Option<&Path>) -> PanelSubject {
+    let Some(tab) = tab else {
+        return PanelSubject::NoneSelected;
+    };
+    if tab.mode == ViewMode::Grid {
+        let marked = tab.selection.marked_in(&tab.visible).len();
+        if marked > 1 {
+            return PanelSubject::Selected(marked);
+        }
+    }
+    match tab.position().and_then(|_| tab.files.get(tab.current)) {
+        Some(path) => PanelSubject::Image(match cwd {
+            Some(cwd) => resolve_path(cwd, path),
+            None => path.clone(),
+        }),
+        None => PanelSubject::NoneSelected,
+    }
+}
 
 struct Loupe {
     core: ViewCore<NativeBackend>,
@@ -93,6 +132,8 @@ struct Loupe {
     textures: Textures,
     anchor_at_pointer: bool,
     show_info: bool,
+    /// The info panel is shown (M, ADR 0007 I10j, D15): hidden at start, not remembered.
+    show_metadata: bool,
     message: Option<String>,
     indicator_after: Duration,
     tabs: Tabs,
@@ -1406,7 +1447,41 @@ impl Loupe {
             Action::ToggleAnchor => self.anchor_at_pointer = !self.anchor_at_pointer,
             Action::ToggleInfo => self.show_info = !self.show_info,
             Action::ToggleMode => self.core.toggle_mode(),
+            Action::ToggleMetadata => self.show_metadata = !self.show_metadata,
         }
+    }
+
+    /// The info panel on the right (ADR 0007 §5.1, §6.2, I10j, D15, T103). Its image is followed
+    /// every frame, also while it is hidden, so the metadata cache knows how long the image has
+    /// been the current one; it asks for metadata only while the panel is shown.
+    fn draw_metadata_panel(&mut self, ui: &mut egui::Ui) {
+        let cwd = std::env::current_dir().ok();
+        let subject = panel_subject(self.tabs.active(), cwd.as_deref());
+        let image = match &subject {
+            PanelSubject::Image(path) => Some(path.as_path()),
+            PanelSubject::Selected(_) | PanelSubject::NoneSelected => None,
+        };
+        if let Some(wait) = self.metadata.panel_request(
+            image,
+            self.show_metadata,
+            Instant::now(),
+            &mut self.metadata_worker,
+        ) {
+            ui.ctx().request_repaint_after(wait);
+        }
+        if !self.show_metadata {
+            return;
+        }
+        let metadata = &self.metadata;
+        egui::Panel::right("metadata-panel")
+            .default_size(METADATA_PANEL_WIDTH)
+            .resizable(true)
+            .show(ui, |ui| {
+                egui::ScrollArea::vertical()
+                    .id_salt("metadata-panel-scroll")
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| draw_panel_contents(ui, &subject, metadata));
+            });
     }
 
     fn draw(&mut self, ui: &mut egui::Ui) {
@@ -1618,6 +1693,16 @@ impl Loupe {
                         Err(error) => self.message = Some(error.to_string()),
                     }
                 }
+                continue;
+            }
+
+            // M shows or hides the info panel in the loupe and the contact sheet (D15). The panel
+            // is laid out before this pass, so the change is drawn in the next frame.
+            if !ctx.egui_wants_keyboard_input()
+                && key_action(key, ctrl, alt) == Some(Action::ToggleMetadata)
+            {
+                self.act(Action::ToggleMetadata, key_anchor);
+                ctx.request_repaint();
                 continue;
             }
 
@@ -1852,6 +1937,81 @@ fn index_span(indexes: impl Iterator<Item = usize> + Clone) -> std::ops::Range<u
 fn resolve_paths(files: &[PathBuf]) -> Result<Vec<PathBuf>, String> {
     let cwd = std::env::current_dir().map_err(|e| format!("cannot resolve image paths: {e}"))?;
     Ok(files.iter().map(|path| resolve_path(&cwd, path)).collect())
+}
+
+/// The contents of the info panel (T103). Every text comes from `info_panel.rs` (`panel_text`,
+/// `info_panel`) or is data (the file name); labels and values wrap at the panel's width.
+fn draw_panel_contents(ui: &mut egui::Ui, subject: &PanelSubject, metadata: &MetadataCache) {
+    let path = match subject {
+        PanelSubject::Image(path) => path,
+        PanelSubject::Selected(n) => {
+            ui.label(panel_text(&PanelText::Selected(*n)));
+            return;
+        }
+        PanelSubject::NoneSelected => {
+            ui.label(panel_text(&PanelText::NoneSelected));
+            return;
+        }
+    };
+    let read = match metadata.panel_state(path) {
+        PanelState::Unsupported => {
+            ui.label(UNSUPPORTED_TEXT);
+            return;
+        }
+        PanelState::Loading => {
+            ui.label(panel_text(&PanelText::Loading));
+            return;
+        }
+        PanelState::Error(error) => {
+            ui.label(panel_text(&PanelText::ReadError(error.to_owned())));
+            return;
+        }
+        PanelState::Ready(read) => read,
+    };
+    let panel = info_panel(read);
+    let grey = ui.visuals().weak_text_color();
+    let warning = ui.visuals().warn_fg_color;
+    let file_name = path.file_name().map_or_else(
+        || path.display().to_string(),
+        |name| name.to_string_lossy().into_owned(),
+    );
+    ui.label(egui::RichText::new(file_name).strong().size(16.0));
+
+    ui.separator();
+    ui.label(egui::RichText::new(panel_text(&PanelText::Values)).heading());
+    for row in &panel.values {
+        ui.label(egui::RichText::new(&row.label).strong());
+        ui.label(&row.value);
+        ui.label(egui::RichText::new(&row.origin).color(grey).small());
+        ui.add_space(PANEL_ROW_SPACING);
+    }
+
+    if !panel.conflicts.is_empty() {
+        ui.separator();
+        ui.label(
+            egui::RichText::new(panel_text(&PanelText::Conflicts))
+                .heading()
+                .color(warning),
+        );
+        for conflict in &panel.conflicts {
+            ui.label(egui::RichText::new(&conflict.label).strong().color(warning));
+            for value in &conflict.values {
+                ui.label(egui::RichText::new(&value.value).color(warning));
+                ui.label(egui::RichText::new(&value.origin).color(grey).small());
+            }
+            ui.label(egui::RichText::new(&conflict.rule).color(warning).italics());
+            ui.add_space(PANEL_ROW_SPACING);
+        }
+    }
+
+    if !panel.notices.is_empty() {
+        ui.separator();
+        ui.label(egui::RichText::new(panel_text(&PanelText::Notices)).heading());
+        for notice in &panel.notices {
+            ui.label(notice);
+            ui.add_space(PANEL_ROW_SPACING);
+        }
+    }
 }
 
 /// One path as `resolve_paths` resolves it: a relative path is taken from `cwd`, an absolute one
@@ -2141,6 +2301,7 @@ impl eframe::App for Loupe {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.poll_import_worker(ui.ctx());
         self.check_exiftool(ui.ctx());
+        self.draw_metadata_panel(ui);
         egui::CentralPanel::default()
             .frame(egui::Frame::NONE)
             .show(ui, |ui| {
@@ -2334,6 +2495,7 @@ fn run(options: Options) -> Result<(), String> {
                 textures: Textures::new(),
                 anchor_at_pointer: true,
                 show_info: true,
+                show_metadata: false,
                 message: None,
                 indicator_after,
                 tabs: Tabs::default(),
