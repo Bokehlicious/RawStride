@@ -3,7 +3,7 @@
 //! the decoding runs on the workers.
 
 use std::fmt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -319,6 +319,16 @@ impl<B: Backend> ViewCore<B> {
         std::mem::take(&mut self.shared.state().records)
     }
 
+    // ---------- writing metadata (ADR 0007 §9.1 point 2) ----------
+
+    /// A handle that closes the sessions of a file before its metadata is written. It can be
+    /// cloned and sent to another thread.
+    pub fn releaser(&self) -> Releaser<B> {
+        Releaser {
+            shared: self.shared.clone(),
+        }
+    }
+
     /// Stops the workers and waits for them. Called by `Drop`.
     pub fn shutdown(&mut self) {
         self.shared.state().stop = true;
@@ -333,5 +343,264 @@ impl<B: Backend> ViewCore<B> {
 impl<B: Backend> Drop for ViewCore<B> {
     fn drop(&mut self) {
         self.shutdown();
+    }
+}
+
+/// Closes the sessions of a file in the view core before its metadata is written (ADR 0007 §9.1
+/// point 2): a session keeps its file open for its whole life, and a write needs the file closed.
+/// From [`ViewCore::releaser`]; it holds the core's shared state, so it can be cloned and used
+/// from any thread.
+pub struct Releaser<B: Backend> {
+    shared: Arc<Shared<B>>,
+}
+
+impl<B: Backend> Clone for Releaser<B> {
+    fn clone(&self) -> Self {
+        Releaser {
+            shared: self.shared.clone(),
+        }
+    }
+}
+
+impl<B: Backend> fmt::Debug for Releaser<B> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Releaser").finish_non_exhaustive()
+    }
+}
+
+impl<B: Backend> Releaser<B> {
+    /// Closes every session of `path` (compared as stored in the file list) and waits until
+    /// none is left, at most `timeout`. Returns `true` when no session of `path` is left, at once
+    /// when the core has none.
+    ///
+    /// Owned sessions are dropped and their bytes taken off the session budget, as an eviction
+    /// does; a session lent to a decode is dropped when it comes back. While it waits, no new
+    /// session of `path` is opened. The views of `path` are kept: writing metadata does not change
+    /// the image data, and the next RAW render opens a new session as usual. Recorded as
+    /// `"release"`.
+    pub fn release(&self, path: &Path, timeout: Duration) -> bool {
+        // a timeout too large for the clock waits without a deadline
+        let deadline = Instant::now().checked_add(timeout);
+        let mut changed = false;
+        let mut g = self.shared.state();
+        g.record("release");
+        g.begin_release(path);
+        let none_left = loop {
+            let (dropped, none_left) = g.release(path);
+            if dropped {
+                changed = true;
+                // a worker may now open what the plan wants
+                self.shared.cv.notify_all();
+            }
+            if none_left {
+                break true;
+            }
+            let wait = match deadline {
+                Some(d) => {
+                    let now = Instant::now();
+                    if d <= now {
+                        break false;
+                    }
+                    d - now
+                }
+                None => IDLE_WAIT,
+            };
+            g = match self.shared.cv.wait_timeout(g, wait) {
+                Ok((g, _)) => g,
+                Err(e) => e.into_inner().0,
+            };
+        };
+        g.end_release(path);
+        drop(g);
+        // the plan may open the file again now
+        self.shared.cv.notify_all();
+        if changed {
+            self.shared.wake_ui();
+        }
+        none_left
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::backend::Rgb;
+    use crate::geometry::{ImageSize, Rect};
+    use std::sync::mpsc;
+
+    /// A simulated decoder whose renders wait at a gate until the test opens it, so a session
+    /// stays lent for as long as the test wants.
+    #[derive(Clone, Default)]
+    struct Gate {
+        inner: Arc<(Mutex<GateState>, Condvar)>,
+    }
+
+    #[derive(Default)]
+    struct GateState {
+        open: bool,
+        waiting: usize,
+    }
+
+    impl Gate {
+        fn pass(&self) {
+            let (m, cv) = &*self.inner;
+            let mut g = lock(m);
+            g.waiting += 1;
+            cv.notify_all();
+            while !g.open {
+                g = match cv.wait(g) {
+                    Ok(g) => g,
+                    Err(e) => e.into_inner(),
+                };
+            }
+            g.waiting -= 1;
+        }
+
+        fn open(&self) {
+            let (m, cv) = &*self.inner;
+            lock(m).open = true;
+            cv.notify_all();
+        }
+
+        /// Waits until a render is held at the gate (a session is lent).
+        fn wait_for_a_render(&self) {
+            let (m, cv) = &*self.inner;
+            let end = Instant::now() + Duration::from_secs(10);
+            let mut g = lock(m);
+            while g.waiting == 0 {
+                let now = Instant::now();
+                assert!(now < end, "no render reached the gate");
+                g = match cv.wait_timeout(g, end - now) {
+                    Ok((g, _)) => g,
+                    Err(e) => e.into_inner().0,
+                };
+            }
+        }
+    }
+
+    fn rgb(w: u32, h: u32) -> Rgb {
+        Rgb {
+            width: w,
+            height: h,
+            data: vec![0; (w * h * 3) as usize],
+        }
+    }
+
+    impl Backend for Gate {
+        type Session = u32;
+
+        fn open(&self, _path: &Path, _source: Source) -> Result<(u32, ImageSize), DecodeError> {
+            Ok((
+                0,
+                ImageSize {
+                    w: 400,
+                    h: 300,
+                    flip: 0,
+                },
+            ))
+        }
+
+        fn render_half(&self, _session: &mut u32) -> Result<Rgb, DecodeError> {
+            self.pass();
+            Ok(rgb(200, 150))
+        }
+
+        fn render_region(&self, _session: &mut u32, r: Rect) -> Result<Rgb, DecodeError> {
+            self.pass();
+            Ok(rgb(r.w, r.h))
+        }
+    }
+
+    const A: &str = "a.raw";
+
+    /// A core on one file whose first render is held at the gate. Dropping it opens the gate
+    /// first (also after a failed assertion), so the workers can stop.
+    struct Lent {
+        gate: Gate,
+        core: ViewCore<Gate>,
+    }
+
+    impl Drop for Lent {
+        fn drop(&mut self) {
+            self.gate.open();
+        }
+    }
+
+    fn core_with_a_lent_session() -> Lent {
+        let gate = Gate::default();
+        let config = Config {
+            record: true,
+            ..Config::default()
+        };
+        let core = match ViewCore::start(gate.clone(), config) {
+            Ok(c) => c,
+            Err(e) => panic!("start: {e}"),
+        };
+        let lent = Lent { gate, core };
+        lent.core.open_folder(vec![PathBuf::from(A)]);
+        lent.gate.wait_for_a_render();
+        assert!(
+            lent.core.memory().0 > 0,
+            "the session is counted while lent"
+        );
+        lent
+    }
+
+    #[test]
+    fn a_releaser_can_be_cloned_and_sent_to_another_thread() {
+        fn check<T: Clone + Send + Sync + 'static>() {}
+        check::<Releaser<Gate>>();
+    }
+
+    #[test]
+    fn release_returns_true_only_after_the_lent_session_came_back() {
+        let lent = core_with_a_lent_session();
+        let releaser = lent.core.releaser().clone();
+        let (tx, rx) = mpsc::channel();
+        let waiter = std::thread::spawn(move || {
+            let _ = tx.send(releaser.release(Path::new(A), Duration::from_secs(10)));
+        });
+        assert_eq!(
+            rx.recv_timeout(Duration::from_millis(300)),
+            Err(mpsc::RecvTimeoutError::Timeout),
+            "release returned while the session was lent"
+        );
+        lent.gate.open();
+        assert_eq!(rx.recv_timeout(Duration::from_secs(10)), Ok(true));
+        assert!(waiter.join().is_ok());
+        assert!(
+            lent.core
+                .take_records()
+                .iter()
+                .any(|r| r.label == "release")
+        );
+    }
+
+    #[test]
+    fn release_returns_false_after_the_timeout_when_the_session_does_not_come_back() {
+        let lent = core_with_a_lent_session();
+        let timeout = Duration::from_millis(300);
+        let t0 = Instant::now();
+        assert!(!lent.core.releaser().release(Path::new(A), timeout));
+        let took = t0.elapsed();
+        assert!(took >= timeout, "returned after {took:?}");
+        assert!(
+            took < timeout + Duration::from_secs(2),
+            "returned after {took:?}"
+        );
+    }
+
+    #[test]
+    fn release_of_a_path_without_sessions_returns_true_at_once() {
+        let lent = core_with_a_lent_session();
+        let t0 = Instant::now();
+        assert!(
+            lent.core
+                .releaser()
+                .release(Path::new("b.raw"), Duration::from_secs(10))
+        );
+        assert!(t0.elapsed() < Duration::from_secs(1));
+        // the session of the other file is still lent and counted
+        assert!(lent.core.memory().0 > 0);
     }
 }

@@ -13,9 +13,11 @@ use std::path::{Path, PathBuf};
 
 use pw_metadata::ExifTool;
 use pw_metadata::date::IptcDate;
-use pw_metadata::iim::Fallback;
+use pw_metadata::iim::{CodedCharset, Fallback};
 use pw_metadata::read::{FileNotice, MetadataRead};
+use pw_metadata::reconcile::{FileKind, IimDigest};
 use pw_metadata::value::{ConflictRule, LangAlt, Origin, StructValue, Value};
+use pw_metadata::write_plan::ExifPresent;
 
 /// The small baseline JPEG of `crates/pw-thumbcache/src/jpeg_fixture.rs`, copied.
 const SMALL: &[u8] = &[
@@ -465,5 +467,107 @@ fn a_sidecar_next_to_a_real_dng_is_ignored() {
         Some(text("Från en främmande sidecar")),
         "the sidecar's value is not used"
     );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The file state of a JPEG with IIM City and a written `IPTCDigest` (T87): IIM present, declared
+/// UTF-8, the City among its values and the checksum matching.
+#[test]
+fn the_state_of_a_jpeg_with_iim_has_its_values_charset_and_digest() {
+    let mut et = exiftool();
+    let (dir, file) = jpeg("state-iim");
+    write(
+        &mut et,
+        &file,
+        &[
+            "-IPTC:CodedCharacterSet=UTF8",
+            "-IPTC:City=Göteborg",
+            "-IPTCDigest=new",
+        ],
+    );
+
+    let state = read_file(&mut et, &file).state;
+    assert_eq!(state.kind, FileKind::Jpeg);
+    assert!(state.iim_present);
+    assert_eq!(state.iim_charset, CodedCharset::Utf8);
+    assert!(
+        state
+            .iim_values
+            .contains(&("photoshop:City".to_string(), text("Göteborg"))),
+        "{:?}",
+        state.iim_values
+    );
+    assert_eq!(state.digest, IimDigest::Matches);
+    assert_eq!(state.exif_present, ExifPresent::default());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The file state of a JPEG without IIM (T87): no IIM and no checksum.
+#[test]
+fn the_state_of_a_jpeg_without_iim_has_no_iim() {
+    let mut et = exiftool();
+    let (dir, file) = jpeg("state-no-iim");
+    write(&mut et, &file, &["-XMP-photoshop:City=Göteborg"]);
+
+    let state = read_file(&mut et, &file).state;
+    assert_eq!(state.kind, FileKind::Jpeg);
+    assert!(!state.iim_present);
+    assert_eq!(state.iim_charset, CodedCharset::Absent);
+    assert!(state.iim_values.is_empty(), "{:?}", state.iim_values);
+    assert_eq!(state.digest, IimDigest::Missing);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The file state of a JPEG with Exif ImageDescription and Artist (T87): only those two fields are
+/// present.
+#[test]
+fn the_state_of_a_jpeg_names_only_the_exif_fields_it_has() {
+    let mut et = exiftool();
+    let (dir, file) = jpeg("state-exif");
+    write(
+        &mut et,
+        &file,
+        &[
+            "-IFD0:ImageDescription=Solnedgång",
+            "-IFD0:Artist=Anna Åberg",
+        ],
+    );
+
+    let state = read_file(&mut et, &file).state;
+    assert_eq!(
+        state.exif_present,
+        ExifPresent {
+            image_description: true,
+            copyright: false,
+            artist: true,
+            photographer: false,
+        }
+    );
+    assert!(!state.iim_present);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The file state of a manufacturer RAW with a sidecar (T87): kind `Raw`, no IIM and no Exif
+/// fields, because the plan never writes the RAW file.
+#[test]
+fn the_state_of_a_raw_has_no_iim_and_no_exif() {
+    let mut et = exiftool();
+    let dir = temp_dir("state-raw");
+    let raw = dir.join("TN0001.ARW");
+    std::fs::write(&raw, b"not really a raw file").unwrap();
+    write(
+        &mut et,
+        &dir.join("TN0001.xmp"),
+        &["-XMP-photoshop:City=Göteborg", "-XMP-xmp:Rating=4"],
+    );
+
+    let state = read_file(&mut et, &raw).state;
+    assert_eq!(state.kind, FileKind::Raw);
+    assert!(!state.iim_present);
+    assert_eq!(state.iim_charset, CodedCharset::Absent);
+    assert!(state.iim_values.is_empty(), "{:?}", state.iim_values);
+    assert_eq!(state.digest, IimDigest::Missing);
+    assert_eq!(state.exif_present, ExifPresent::default());
+    assert_eq!(std::fs::read(&raw).unwrap(), b"not really a raw file");
     let _ = std::fs::remove_dir_all(&dir);
 }

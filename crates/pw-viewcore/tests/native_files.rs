@@ -358,3 +358,57 @@ fn a_camera_raw_is_converted_to_the_monitor_profile_in_both_modes() {
         );
     }
 }
+
+/// ADR 0007 §9.1 point 2 (T89): a LibRaw session keeps its file open, so a DNG shown in RAW mode
+/// cannot be opened exclusively (as a metadata write needs) until the core releases it.
+#[cfg(windows)]
+#[test]
+#[ignore = "needs real camera files: set PW_TESTDATA and run with --ignored"]
+fn release_closes_the_libraw_session_of_a_dng_so_it_can_be_opened_exclusively() {
+    use std::os::windows::fs::OpenOptionsExt;
+    let exclusive =
+        |p: &std::path::Path| std::fs::OpenOptions::new().read(true).share_mode(0).open(p);
+    let Some(dng) = test_files("").into_iter().find(|p| {
+        p.extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| e.eq_ignore_ascii_case("dng"))
+    }) else {
+        panic!("no DNG test file was found in PW_TESTDATA");
+    };
+    let core = start();
+    core.set_mode(Source::Raw);
+    core.open_folder(vec![dng.clone()]);
+    let mut screen = Screen {
+        core: &core,
+        textures: HashMap::new(),
+    };
+    let f = screen.until_ready();
+    assert_eq!(f.status, Status::Ready, "{}", dng.display());
+    assert_eq!(f.source, Source::Raw);
+    // let the plan settle (every wanted view rendered), so nothing opens the file again
+    let end = Instant::now() + WAIT;
+    let mut last = (core.stats().unpacks, core.stats().renders);
+    let mut since = Instant::now();
+    while since.elapsed() < Duration::from_secs(1) {
+        assert!(Instant::now() < end, "the plan did not settle");
+        screen.frame();
+        let now = (core.stats().unpacks, core.stats().renders);
+        if now != last {
+            last = now;
+            since = Instant::now();
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert!(core.memory().0 > 0, "a session of the DNG exists");
+    assert!(
+        exclusive(&dng).is_err(),
+        "the DNG could be opened exclusively while a LibRaw session holds it"
+    );
+    assert!(core.releaser().release(&dng, Duration::from_secs(5)));
+    let opened = exclusive(&dng);
+    assert!(
+        opened.is_ok(),
+        "the DNG could not be opened exclusively after release: {:?}",
+        opened.err()
+    );
+}

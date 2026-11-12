@@ -14,6 +14,7 @@
 //! - `properties`: the IPTC property table generated from the TechReference (ADR 0007 §3).
 
 pub mod date;
+pub mod edit;
 mod exiftool;
 mod fileops;
 pub mod iim;

@@ -31,7 +31,7 @@ pub mod scale;
 mod state;
 
 pub use crate::backend::{Backend, DecodeError, Rgb, Source};
-pub use crate::core::ViewCore;
+pub use crate::core::{Releaser, ViewCore};
 pub use crate::geometry::{ImageSize, Rect};
 pub use crate::state::{
     Config, Draw, Frame, HALF_DENSITY, MAX_SCALE, Record, Resident, Stats, Status, ViewKind,

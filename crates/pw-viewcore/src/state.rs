@@ -322,6 +322,17 @@ pub(crate) struct State<S> {
     /// and key they were lent under, with their bytes. They still count in `session_bytes` and are
     /// dropped when they come back.
     detached: HashMap<(u64, Key), u64>,
+    /// The file of every session lent to a worker, by the generation, key and view it was lent
+    /// under (a view is rendered once at a time), so [`State::release`] knows which sessions
+    /// still hold a file, also those lent under an older list of files.
+    lent_paths: HashMap<(u64, Key, JobView), PathBuf>,
+    /// Sessions lent in their generation that [`State::release`] marked to be dropped when they
+    /// come back, by the generation, key and view they were lent under, with their bytes. They
+    /// still count in `session_bytes`.
+    released: HashMap<(u64, Key, JobView), u64>,
+    /// The paths a [`crate::Releaser::release`] is waiting for (once per call): no new session
+    /// of them is opened meanwhile.
+    releasing: Vec<PathBuf>,
     session_bytes_of: HashMap<Key, u64>,
     session_lru: Vec<Key>,
     pub session_bytes: u64,
@@ -365,6 +376,9 @@ impl<S> State<S> {
             sessions: HashMap::new(),
             lent: HashMap::new(),
             detached: HashMap::new(),
+            lent_paths: HashMap::new(),
+            released: HashMap::new(),
+            releasing: Vec::new(),
             session_bytes_of: HashMap::new(),
             session_lru: Vec::new(),
             session_bytes: 0,
@@ -531,6 +545,7 @@ impl<S> State<S> {
         self.centre = [0.5, 0.5];
         self.sessions.retain(|_, s| s.is_none());
         self.detached.clear();
+        self.released.clear();
         self.session_bytes_of.clear();
         self.session_lru.clear();
         self.session_bytes = 0;
@@ -939,6 +954,66 @@ impl<S> State<S> {
         }
     }
 
+    // ---------- releasing a file (ADR 0007 §9.1 point 2) ----------
+
+    /// Closes the sessions of `path` before its metadata is written: every owned session of it is
+    /// dropped (its bytes taken off as an eviction does), and every session of it lent in the
+    /// current generation is marked to be dropped when it comes back (sessions lent under an
+    /// older generation are dropped then anyway). Paths are compared as stored in the file list.
+    /// The views of `path` are kept. Returns `(changed, none_left)`: whether a session was dropped
+    /// or marked, and whether no session of `path` is lent any more.
+    pub fn release(&mut self, path: &std::path::Path) -> (bool, bool) {
+        let mut changed = false;
+        let owned: Vec<Key> = self
+            .sessions
+            .iter()
+            .filter(|(k, slot)| {
+                slot.is_some() && self.files.get(k.0).is_some_and(|p| p.as_path() == path)
+            })
+            .map(|(k, _)| *k)
+            .collect();
+        for k in owned {
+            self.drop_session(k);
+            changed = true;
+        }
+        let generation = self.generation;
+        let lent: Vec<(u64, Key, JobView)> = self
+            .lent_paths
+            .iter()
+            .filter(|((g, key, _), p)| {
+                *g == generation
+                    && p.as_path() == path
+                    && self.lent.get(key) == Some(&generation)
+                    && matches!(self.sessions.get(key), Some(None))
+            })
+            .map(|(id, _)| *id)
+            .collect();
+        for id in lent {
+            let key = id.1;
+            self.sessions.remove(&key);
+            self.lent.remove(&key);
+            self.session_lru.retain(|x| *x != key);
+            let bytes = self.session_bytes_of.remove(&key).unwrap_or(0);
+            self.released.insert(id, bytes);
+            changed = true;
+        }
+        let none_left = !self.lent_paths.values().any(|p| p.as_path() == path);
+        (changed, none_left)
+    }
+
+    /// A release of `path` starts waiting: until [`State::end_release`], no new session of it is
+    /// opened (the plan would otherwise open it again while the release waits).
+    pub fn begin_release(&mut self, path: &std::path::Path) {
+        self.releasing.push(path.to_path_buf());
+    }
+
+    /// The release of `path` is over: its sessions are opened again as usual.
+    pub fn end_release(&mut self, path: &std::path::Path) {
+        if let Some(i) = self.releasing.iter().position(|p| p.as_path() == path) {
+            self.releasing.swap_remove(i);
+        }
+    }
+
     // ---------- the workers' side ----------
 
     /// Picks the next task. The interactive worker only takes the current image in the current
@@ -958,6 +1033,14 @@ impl<S> State<S> {
                         .running
                         .iter()
                         .any(|(g, j)| *g == generation && j.key() == key)
+                    {
+                        continue;
+                    }
+                    // a file being released for a metadata write is not opened meanwhile
+                    if self
+                        .files
+                        .get(key.0)
+                        .is_some_and(|p| self.releasing.contains(p))
                     {
                         continue;
                     }
@@ -990,6 +1073,10 @@ impl<S> State<S> {
                     let Some(session) = slot.take() else {
                         continue;
                     };
+                    if let Some(path) = self.files.get(key.0) {
+                        self.lent_paths
+                            .insert((generation, key, view), path.clone());
+                    }
                     self.lent.insert(key, generation);
                     self.running.insert((generation, job));
                     self.inflight.push(Inflight {
@@ -1067,7 +1154,8 @@ impl<S> State<S> {
         }
     }
 
-    /// A render finished. The session comes back; the view goes to the outbox.
+    /// A render finished. The session comes back (or is dropped if [`State::release`] marked
+    /// it); the view goes to the outbox.
     pub fn finish_render(
         &mut self,
         generation: u64,
@@ -1078,13 +1166,23 @@ impl<S> State<S> {
         ms: f64,
     ) {
         self.running.remove(&(generation, Job::Render(key, view)));
+        self.lent_paths.remove(&(generation, key, view));
         self.stats.renders += 1;
         self.stats
             .render_ms
             .entry(view.kind.name())
             .or_default()
             .push(ms);
-        if generation != self.generation {
+        if let Some(bytes) = self.released.remove(&(generation, key, view)) {
+            // released for a metadata write: the session is dropped and its slot (gone, or
+            // holding a newer session) is left alone; the view itself is still good
+            self.session_bytes = self.session_bytes.saturating_sub(bytes);
+            drop(session);
+            if generation != self.generation {
+                self.stats.discarded += 1;
+                return;
+            }
+        } else if generation != self.generation {
             // the session is dropped; only the slot it was lent from is cleared, never a session
             // that now has the same key (ADR 0014 §4.4)
             if let Some(bytes) = self.detached.remove(&(generation, key)) {
@@ -1097,13 +1195,14 @@ impl<S> State<S> {
             }
             self.stats.discarded += 1;
             return;
+        } else {
+            self.lent.remove(&key);
+            if let Some(slot) = self.sessions.get_mut(&key) {
+                *slot = Some(session);
+            }
+            self.session_lru.retain(|x| *x != key);
+            self.session_lru.push(key);
         }
-        self.lent.remove(&key);
-        if let Some(slot) = self.sessions.get_mut(&key) {
-            *slot = Some(session);
-        }
-        self.session_lru.retain(|x| *x != key);
-        self.session_lru.push(key);
         match result {
             Ok(image) => {
                 let hash = self.config.record.then(|| fnv(&image.data));
@@ -2223,6 +2322,152 @@ mod tests {
         let f = s.frame(VIEW);
         assert_eq!(f.status, Status::Empty);
         assert!(f.draw.is_none());
+    }
+
+    // ---------- releasing a file before a metadata write (ADR 0007 §9.1, T89) ----------
+
+    /// `session_bytes` is the sum of the sessions held, the detached ones and the released ones
+    /// still lent.
+    fn exact_released(s: &State<u32>) -> bool {
+        s.session_bytes
+            == s.session_bytes_of.values().sum::<u64>()
+                + s.detached.values().sum::<u64>()
+                + s.released.values().sum::<u64>()
+    }
+
+    fn img() -> Rgb {
+        Rgb {
+            width: 1,
+            height: 1,
+            data: vec![0; 3],
+        }
+    }
+
+    /// Opens image `pos` (the current one) in RAW mode and lends its session to a render.
+    fn lend(s: &mut State<u32>, pos: usize) -> (u64, Key, JobView, u32) {
+        s.finish_open(s.generation, k(pos), Ok((pos as u32, SIZE)), mb24, 1.0);
+        match s.pick(true) {
+            Some(Task::Render {
+                generation,
+                key,
+                view,
+                session,
+            }) => (generation, key, view, session),
+            other => panic!("expected a render task, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn release_drops_the_owned_sessions_of_the_path_and_keeps_its_views_and_other_sessions() {
+        let mut s = state(1024);
+        s.finish_open(s.generation, k(10), Ok((10, SIZE)), mb24, 1.0);
+        s.finish_open(s.generation, (10, Source::Jpeg), Ok((10, SIZE)), mb24, 1.0);
+        s.finish_open(s.generation, k(11), Ok((11, SIZE)), mb24, 1.0);
+        let id = s.accept(&out(&s, 10, Want::Fit), 100);
+        assert!(id.is_some());
+        assert_eq!(s.session_bytes, 72 << 20);
+        assert_eq!(s.release(&path(10)), (true, true));
+        // both sessions of the path are gone and their bytes with them
+        assert!(!s.sessions.contains_key(&k(10)));
+        assert!(!s.sessions.contains_key(&(10, Source::Jpeg)));
+        assert_eq!(s.session_bytes, 24 << 20);
+        assert!(!s.session_lru.contains(&k(10)));
+        assert!(exact_released(&s));
+        // another path keeps its session
+        assert!(matches!(s.sessions.get(&k(11)), Some(Some(11))));
+        assert_eq!(s.session_lru, vec![k(11)]);
+        // the views of the path are kept and still drawn
+        assert!(s.take_dropped().is_empty());
+        assert!(s.resident.iter().any(|r| Some(r.id) == id && r.pos == 10));
+        assert_eq!(s.texture_bytes, 100);
+        assert_eq!(s.frame(VIEW).draw.map(|d| d.id), id);
+        assert_eq!(s.sizes.get(&k(10)), Some(&SIZE));
+    }
+
+    #[test]
+    fn release_of_a_path_the_core_does_not_know_changes_nothing() {
+        let mut s = state(1024);
+        s.finish_open(s.generation, k(10), Ok((10, SIZE)), mb24, 1.0);
+        assert_eq!(s.release(std::path::Path::new("other.raw")), (false, true));
+        assert!(matches!(s.sessions.get(&k(10)), Some(Some(10))));
+        assert_eq!(s.session_bytes, 24 << 20);
+        // compared as stored: another spelling of the path is another path
+        assert_eq!(
+            s.release(std::path::Path::new("./img10.raw")),
+            (false, true)
+        );
+        assert_eq!(s.session_bytes, 24 << 20);
+    }
+
+    #[test]
+    fn a_lent_session_is_dropped_when_it_comes_back_and_its_view_is_still_delivered() {
+        let mut s = state(1024);
+        let (generation, key, view, session) = lend(&mut s, 10);
+        assert_eq!(key, k(10));
+        assert_eq!(s.release(&path(10)), (true, false));
+        // marked, still counted until it comes back
+        assert!(!s.sessions.contains_key(&k(10)));
+        assert_eq!(s.session_bytes, 24 << 20);
+        assert!(exact_released(&s));
+        // a second release while it is out finds nothing new to do and still waits
+        assert_eq!(s.release(&path(10)), (false, false));
+        s.finish_render(generation, key, view, session, Ok(img()), 1.0);
+        assert_eq!(s.session_bytes, 0);
+        assert!(!s.sessions.contains_key(&k(10)));
+        assert!(s.released.is_empty() && s.lent.is_empty());
+        assert_eq!(s.outbox.len(), 1);
+        assert_eq!(s.release(&path(10)), (false, true));
+    }
+
+    #[test]
+    fn a_released_session_coming_back_leaves_a_newer_session_of_the_same_key_alone() {
+        let mut s = state(1024);
+        let (generation, key, view, session) = lend(&mut s, 10);
+        assert_eq!(s.release(&path(10)), (true, false));
+        // the image is opened again after the release
+        s.finish_open(s.generation, k(10), Ok((99, SIZE)), mb24, 1.0);
+        assert_eq!(s.session_bytes, 48 << 20);
+        s.finish_render(generation, key, view, session, Ok(img()), 1.0);
+        assert!(matches!(s.sessions.get(&k(10)), Some(Some(99))));
+        assert_eq!(s.session_bytes, 24 << 20);
+        assert!(exact_released(&s));
+    }
+
+    #[test]
+    fn release_waits_for_a_session_lent_under_an_older_list_of_files() {
+        let mut s = state(1024);
+        let (generation, key, view, session) = lend(&mut s, 10);
+        // image 3 drops out: image 10 is now at position 9; its lent session is detached
+        s.set_files(without(20, &[3]), 9);
+        assert_eq!(s.release(&path(10)), (false, false));
+        assert_eq!(s.release(&path(11)), (false, true));
+        s.finish_render(generation, key, view, session, Ok(img()), 1.0);
+        assert_eq!(s.release(&path(10)), (false, true));
+        assert_eq!(s.session_bytes, 0);
+        // and after a new folder too
+        let mut s = state(1024);
+        let (generation, key, view, session) = lend(&mut s, 10);
+        s.open_folder(files(20));
+        assert_eq!(s.release(&path(10)), (false, false));
+        s.finish_render(generation, key, view, session, Ok(img()), 1.0);
+        assert_eq!(s.release(&path(10)), (false, true));
+        assert!(s.lent_paths.is_empty());
+    }
+
+    #[test]
+    fn a_file_being_released_is_not_opened_until_the_release_ends() {
+        let mut s = state(1024);
+        s.begin_release(&path(10));
+        let picked: Vec<Key> = std::iter::from_fn(|| match s.pick(false) {
+            Some(Task::Open { key, .. }) => Some(key),
+            _ => None,
+        })
+        .collect();
+        assert!(!picked.is_empty());
+        assert!(!picked.contains(&k(10)));
+        assert!(!picked.contains(&(10, Source::Jpeg)));
+        s.end_release(&path(10));
+        assert!(matches!(s.pick(true), Some(Task::Open { key, .. }) if key == k(10)));
     }
 
     // ---------- an embedded profile that cannot be used (ADR 0016 §5, T73) ----------

@@ -3829,6 +3829,15 @@ name = "pw-core"
 version = "0.1.0"
 
 [[package]]
+name = "pw-imagecheck"
+version = "0.1.0"
+dependencies = [
+ "pw-libraw",
+ "pw-metadata",
+ "pw-raw",
+]
+
+[[package]]
 name = "pw-ingest"
 version = "0.1.0"
 dependencies = [

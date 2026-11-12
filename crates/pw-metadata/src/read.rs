@@ -25,6 +25,12 @@
 //! number still becomes a `Number`.
 //!
 //! `Cleared` (owner decision D1) is not read yet; `Readings::cleared` stays empty.
+//!
+//! [`MetadataRead::state`] is the [`FileState`] the write plan needs (T87), filled from the same
+//! readings before the reconciliation takes them: for a JPEG, TIFF or DNG whether the file has a
+//! readable IIM block (an unreadable one counts as none), its declared encoding, its values and its
+//! checksum, and which Exif "both ways" fields exist; for a manufacturer RAW no IIM and no Exif,
+//! because the plan never writes the RAW file and its sidecar holds neither (§4.2).
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -39,6 +45,7 @@ use crate::reconcile::{
     ExifFields, FileKind, IimDigest, IimRead, Notice, Readings, Reconciled, reconcile,
 };
 use crate::value::{LangAlt, Origin, StructValue, Value};
+use crate::write_plan::{ExifPresent, FileState};
 use crate::{Error, ExifTool, Result};
 
 /// The language of the Lang Alt entry ExifTool names without a language suffix.
@@ -81,6 +88,8 @@ const IMAGE_TAGS: &[&str] = &[
 pub struct MetadataRead {
     pub reconciled: Reconciled,
     pub file_notices: Vec<FileNotice>,
+    /// What the write plan needs to know about the file as it is now (see the module comment).
+    pub state: FileState,
 }
 
 /// Something about the files next to the image, or the image's IIM block, the user is told.
@@ -153,18 +162,21 @@ impl ExifTool {
             })
             .collect();
 
+        let exif = exif_fields(&file, fallback);
+        let state = file_state(kind, iim.as_ref(), &exif);
         let mut reconciled = reconcile(Readings {
             kind,
             xmp: primary.values,
             camera_xmp: camera.values,
             iim,
-            exif: exif_fields(&file, fallback),
+            exif,
             cleared: BTreeSet::new(),
         });
         reconciled.notices.extend(unreadable);
         Ok(MetadataRead {
             reconciled,
             file_notices,
+            state,
         })
     }
 
@@ -197,6 +209,34 @@ impl ExifTool {
             },
             _ => Err(unreadable("not a JSON array".to_string())),
         }
+    }
+}
+
+/// The [`FileState`] of a file of `kind` with the IIM `iim` (`None` when it has no readable IIM
+/// block) and the Exif fields `exif` (see the module comment).
+fn file_state(kind: FileKind, iim: Option<&IimRead>, exif: &ExifFields) -> FileState {
+    match (kind, iim) {
+        (FileKind::Raw, _) => FileState {
+            kind,
+            iim_present: false,
+            iim_charset: CodedCharset::Absent,
+            iim_values: Vec::new(),
+            digest: IimDigest::Missing,
+            exif_present: ExifPresent::default(),
+        },
+        (_, iim) => FileState {
+            kind,
+            iim_present: iim.is_some(),
+            iim_charset: iim.map_or(CodedCharset::Absent, |read| read.values.charset.clone()),
+            iim_values: iim.map_or_else(Vec::new, |read| read.values.values.clone()),
+            digest: iim.map_or(IimDigest::Missing, |read| read.digest),
+            exif_present: ExifPresent {
+                image_description: exif.image_description.is_some(),
+                copyright: exif.copyright.is_some(),
+                artist: exif.artist.is_some(),
+                photographer: exif.photographer.is_some(),
+            },
+        },
     }
 }
 
