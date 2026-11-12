@@ -48,7 +48,7 @@ pub use import_text::{
 pub use import_worker::{ImportDone, ImportEvent, ImportWorker, RequestId, SubmitError};
 pub use info_panel::{
     ConflictRow, ConflictValue, InfoPanel, Language, PanelText, ValueRow, info_panel, origin_text,
-    panel_text, property_label, rule_text, value_text,
+    other_values, panel_text, property_label, rule_text, value_text,
 };
 pub use monitor_profile::{
     MonitorProfile, ProfileSource, load_monitor_profile, primary_monitor_profile_path, window_title,
@@ -176,10 +176,9 @@ pub enum Action {
     ToggleInfo,
     /// R: RAW ↔ JPEG (G4).
     ToggleMode,
-    /// M: show or hide the info panel, in the loupe and the contact sheet (ADR 0007 I10j, D15).
-    ToggleMetadata,
-    /// E: open the editor of the info panel's image (ADR 0007 I10l, D12, D15).
-    EditMetadata,
+    /// M: open the metadata window of the current image, in the loupe and the contact sheet
+    /// (ADR 0007 I10n, D16).
+    OpenMetadata,
 }
 
 /// Whether a loupe action is allowed for this key event (ADR 0009 §13).
@@ -208,8 +207,7 @@ pub fn key_action(key: egui::Key, ctrl: bool, alt: bool) -> Option<Action> {
         K::A => Action::ToggleAnchor,
         K::I => Action::ToggleInfo,
         K::R => Action::ToggleMode,
-        K::M => Action::ToggleMetadata,
-        K::E => Action::EditMetadata,
+        K::M => Action::OpenMetadata,
         _ => return None,
     })
 }
@@ -553,9 +551,9 @@ mod tests {
     }
 
     #[test]
-    fn m_toggles_the_info_panel_without_ctrl_or_alt() {
+    fn m_opens_the_metadata_window_without_ctrl_or_alt() {
         use egui::Key as K;
-        assert_eq!(key_action(K::M, false, false), Some(Action::ToggleMetadata));
+        assert_eq!(key_action(K::M, false, false), Some(Action::OpenMetadata));
         assert_eq!(key_action(K::M, true, false), None);
         assert_eq!(key_action(K::M, false, true), None);
         // M is not a key of the contact sheet or of the loupe's way back to it.
@@ -564,9 +562,10 @@ mod tests {
     }
 
     #[test]
-    fn e_opens_the_editor_without_ctrl_or_alt() {
+    fn e_does_nothing() {
         use egui::Key as K;
-        assert_eq!(key_action(K::E, false, false), Some(Action::EditMetadata));
+        // E opened the editor before D16; the metadata window is opened with M only.
+        assert_eq!(key_action(K::E, false, false), None);
         assert_eq!(key_action(K::E, true, false), None);
         assert_eq!(key_action(K::E, false, true), None);
         // E is not a key of the contact sheet or of the loupe's way back to it.

@@ -540,38 +540,35 @@ pub fn notice_text(notice: &WriteNotice) -> String {
     }
 }
 
-/// A fixed text of the editor window (T105), as [`PanelText`](crate::PanelText) for the panel.
+/// A fixed text of the metadata window (T105, T107), as [`PanelText`](crate::PanelText) for the
+/// texts it shares with the former info panel.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum EditorText {
-    /// The button at the top of the info panel that opens the editor.
-    EditButton,
     /// The window's title; `file` is the image's file name.
-    WindowTitle {
-        file: String,
-    },
+    WindowTitle { file: String },
     /// The heading of the unresolved conflicts.
     ConflictsHeading,
     /// One radio button of a conflict: a value and its origin.
-    ConflictChoice {
-        value: String,
-        origin: String,
-    },
+    ConflictChoice { value: String, origin: String },
     /// The heading of the warnings.
     WarningsHeading,
-    Save,
-    Close,
+    /// The heading of the read-only list of the properties that are not fields.
+    OtherValuesHeading,
+    /// The button that writes the edits and closes the window.
+    Ok,
     /// Shown while the write runs.
     Saving,
     /// Shown after a write that succeeded.
     Saved,
     /// A write that failed; `reason` as `write_error_text` gives it for ratings.
-    SaveFailed {
-        file: String,
-        reason: String,
-    },
-    /// Asked when the window is closed with unsaved edits.
-    UnsavedQuestion,
+    SaveFailed { file: String, reason: String },
+    /// Asked when Escape is pressed with unsaved edits.
+    DiscardQuestion,
+    /// The answer to `DiscardQuestion` that closes the window without writing.
     Discard,
+    /// The answer to `DiscardQuestion` that keeps the window open.
+    KeepEditing,
+    /// The button that closes the window without writing.
     Cancel,
     /// The title of the message at program exit listing the rating and editor writes that were
     /// not saved (owner decision 2026-11-12: one message for both).
@@ -581,20 +578,20 @@ pub enum EditorText {
 /// The text of a fixed text of the editor window, each a whole sentence from one template.
 pub fn editor_text(text: &EditorText) -> String {
     match text {
-        EditorText::EditButton => "Redigera".to_string(),
-        EditorText::WindowTitle { file } => format!("Redigera metadata – {file}"),
+        EditorText::WindowTitle { file } => format!("Metadata – {file}"),
         EditorText::ConflictsHeading => "Olösta konflikter".to_string(),
         EditorText::ConflictChoice { value, origin } => format!("{value} ({origin})"),
         EditorText::WarningsHeading => "Varningar".to_string(),
-        EditorText::Save => "Spara".to_string(),
-        EditorText::Close => "Stäng".to_string(),
+        EditorText::OtherValuesHeading => "Övrig metadata".to_string(),
+        EditorText::Ok => "OK".to_string(),
         EditorText::Saving => "Sparar …".to_string(),
         EditorText::Saved => "Sparat.".to_string(),
         EditorText::SaveFailed { file, reason } => {
             format!("Kunde inte spara metadata för {file}: {reason}")
         }
-        EditorText::UnsavedQuestion => "Spara ändringarna?".to_string(),
+        EditorText::DiscardQuestion => "Släng ändringarna?".to_string(),
         EditorText::Discard => "Släng".to_string(),
+        EditorText::KeepEditing => "Fortsätt redigera".to_string(),
         EditorText::Cancel => "Avbryt".to_string(),
         EditorText::UnsavedAtExitTitle => "Ändringar som inte sparades".to_string(),
     }
@@ -1199,12 +1196,11 @@ mod tests {
     #[test]
     fn every_editor_text() {
         let cases = [
-            (EditorText::EditButton, "Redigera"),
             (
                 EditorText::WindowTitle {
                     file: "bild.jpg".into(),
                 },
-                "Redigera metadata – bild.jpg",
+                "Metadata – bild.jpg",
             ),
             (EditorText::ConflictsHeading, "Olösta konflikter"),
             (
@@ -1215,8 +1211,8 @@ mod tests {
                 "Solnedgång (IIM)",
             ),
             (EditorText::WarningsHeading, "Varningar"),
-            (EditorText::Save, "Spara"),
-            (EditorText::Close, "Stäng"),
+            (EditorText::OtherValuesHeading, "Övrig metadata"),
+            (EditorText::Ok, "OK"),
             (EditorText::Saving, "Sparar …"),
             (EditorText::Saved, "Sparat."),
             (
@@ -1226,8 +1222,9 @@ mod tests {
                 },
                 "Kunde inte spara metadata för bild.ARW: filen är skrivskyddad",
             ),
-            (EditorText::UnsavedQuestion, "Spara ändringarna?"),
+            (EditorText::DiscardQuestion, "Släng ändringarna?"),
             (EditorText::Discard, "Släng"),
+            (EditorText::KeepEditing, "Fortsätt redigera"),
             (EditorText::Cancel, "Avbryt"),
             (
                 EditorText::UnsavedAtExitTitle,

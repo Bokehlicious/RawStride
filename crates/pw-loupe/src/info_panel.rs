@@ -227,6 +227,8 @@ pub struct ConflictRow {
     pub label: String,
     pub values: Vec<ConflictValue>,
     pub rule: String,
+    /// The rule is `Open`: no rule decided it, the user chooses (D16, T107).
+    pub open: bool,
 }
 
 /// The texts of the info panel for one image.
@@ -237,10 +239,11 @@ pub struct InfoPanel {
     pub notices: Vec<String>,
 }
 
-/// The info panel of one image: its values in table order, its conflicts and its notices.
-pub fn info_panel(read: &MetadataRead) -> InfoPanel {
+/// The rows of the properties with a value, in table order, for the properties `keep` accepts.
+fn value_rows(read: &MetadataRead, keep: impl Fn(&str) -> bool) -> Vec<ValueRow> {
     let metadata = &read.reconciled.metadata;
-    let values = properties::properties()
+    properties::properties()
+        .filter(|def| keep(def.xmp_id))
         .filter_map(|def| {
             metadata.get(def.xmp_id).map(|found| ValueRow {
                 label: property_label(def.xmp_id, Language::Sv),
@@ -248,7 +251,19 @@ pub fn info_panel(read: &MetadataRead) -> InfoPanel {
                 origin: origin_text(found.origin).to_string(),
             })
         })
-        .collect();
+        .collect()
+}
+
+/// The `values` of [`info_panel`] without the properties in `editor_properties`: the other
+/// metadata of the metadata window (D16, T107), in table order.
+pub fn other_values(read: &MetadataRead, editor_properties: &[&str]) -> Vec<ValueRow> {
+    value_rows(read, |id| !editor_properties.contains(&id))
+}
+
+/// The info panel of one image: its values in table order, its conflicts and its notices.
+pub fn info_panel(read: &MetadataRead) -> InfoPanel {
+    let metadata = &read.reconciled.metadata;
+    let values = value_rows(read, |_| true);
     let conflicts = metadata
         .conflicts()
         .iter()
@@ -263,6 +278,7 @@ pub fn info_panel(read: &MetadataRead) -> InfoPanel {
                 })
                 .collect(),
             rule: rule_text(conflict.rule).to_string(),
+            open: matches!(conflict.rule, ConflictRule::Open),
         })
         .collect();
     InfoPanel {
@@ -758,6 +774,7 @@ mod tests {
                         },
                     ],
                     rule: "IIM används (kontrollsumman stämmer inte)".into(),
+                    open: false,
                 },
                 ConflictRow {
                     label: "Beskrivning".into(),
@@ -772,9 +789,118 @@ mod tests {
                         },
                     ],
                     rule: "Olöst: välj värde i redigeraren".into(),
+                    open: true,
                 },
             ]
         );
+    }
+
+    #[test]
+    fn conflict_row_is_open_only_for_the_open_rule() {
+        for (rule, open) in [
+            (ConflictRule::Xmp, false),
+            (ConflictRule::Iim, false),
+            (ConflictRule::Exif, false),
+            (ConflictRule::Open, true),
+        ] {
+            let mut metadata = Metadata::new();
+            metadata.add_conflict(Conflict {
+                property: "photoshop:City".into(),
+                values: vec![
+                    (Origin::XmpEmbedded, text("Umeå")),
+                    (Origin::Iim, text("Umea")),
+                ],
+                rule,
+            });
+            let panel = info_panel(&read_with(metadata, Vec::new(), Vec::new()));
+            assert_eq!(panel.conflicts.len(), 1);
+            assert_eq!(panel.conflicts[0].open, open, "{rule:?}");
+        }
+    }
+
+    // --- other_values ---
+
+    /// A read with a title, a city, a creator, contact info and a headline, inserted out of table
+    /// order.
+    fn read_for_other_values() -> MetadataRead {
+        let mut metadata = Metadata::new();
+        metadata
+            .insert_read(
+                "dc:title",
+                lang_alt(&[("x-default", "Älv")]),
+                Origin::XmpEmbedded,
+            )
+            .unwrap();
+        metadata
+            .insert_read("photoshop:City", text("Umeå"), Origin::Iim)
+            .unwrap();
+        metadata
+            .insert_read(
+                "Iptc4xmpCore:CreatorContactInfo",
+                Value::Struct(StructValue {
+                    fields: vec![
+                        ("Iptc4xmpCore:CiAdrCity".to_string(), text("Umeå")),
+                        (
+                            "Iptc4xmpCore:CiEmailWork".to_string(),
+                            text("anna@example.com"),
+                        ),
+                    ],
+                }),
+                Origin::XmpEmbedded,
+            )
+            .unwrap();
+        metadata
+            .insert_read(
+                "dc:creator",
+                Value::List(vec!["Anna".into()]),
+                Origin::XmpSidecar,
+            )
+            .unwrap();
+        metadata
+            .insert_read("photoshop:Headline", text("Rubrik"), Origin::Iim)
+            .unwrap();
+        read_with(metadata, Vec::new(), Vec::new())
+    }
+
+    #[test]
+    fn other_values_leave_out_the_editor_properties_in_table_order() {
+        let read = read_for_other_values();
+        let all = info_panel(&read).values;
+
+        let rows = other_values(&read, &["dc:title", "dc:creator"]);
+
+        // The rows of `info_panel` in the same (table) order, without the two properties.
+        let expected: Vec<ValueRow> = all
+            .iter()
+            .filter(|row| row.label != "Titel" && row.label != "Fotograf")
+            .cloned()
+            .collect();
+        assert_eq!(rows, expected);
+        assert_eq!(rows.len(), all.len() - 2);
+        let labels: Vec<&str> = rows.iter().map(|row| row.label.as_str()).collect();
+        assert!(!labels.contains(&"Titel"));
+        assert!(!labels.contains(&"Fotograf"));
+        assert!(labels.contains(&"Stad"));
+        assert!(labels.contains(&"Rubrik"));
+        // Nothing left out: the same as the panel's values.
+        assert_eq!(other_values(&read, &[]), all);
+    }
+
+    #[test]
+    fn other_values_keep_the_contact_info_when_it_is_not_left_out() {
+        let read = read_for_other_values();
+        let contact = property_label("Iptc4xmpCore:CreatorContactInfo", Language::Sv);
+
+        // The window leaves out the editor's properties but not the contact structure, whose
+        // address fields are not editor fields.
+        let rows = other_values(&read, &["dc:title", "photoshop:City", "dc:creator"]);
+        let kept: Vec<&ValueRow> = rows.iter().filter(|row| row.label == contact).collect();
+        assert_eq!(kept.len(), 1);
+        assert_eq!(kept[0].origin, "XMP");
+        assert!(kept[0].value.contains("anna@example.com"));
+
+        let rows = other_values(&read, &["Iptc4xmpCore:CreatorContactInfo"]);
+        assert!(rows.iter().all(|row| row.label != contact));
     }
 
     #[test]
