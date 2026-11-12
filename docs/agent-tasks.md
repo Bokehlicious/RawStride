@@ -2744,6 +2744,40 @@ a Xiaomi DNG from `PW_TESTDATA`, a JPEG, a Panasonic RW2 and its sidecar, in a t
   `XMP-tiff`, …). A new sidecar must be written without a source file: ExifTool then creates an
   XMP file holding only the given tags.
 
+**What the reviewer measured with ExifTool 13.59 before writing T87–T91** (2026-11-12, on copies
+in a temporary folder of a Ricoh GR III DNG with Photo Mechanic XMP (`TN002512.DNG`, 36 MB), a
+Xiaomi DNG (`IMG_20261026_092351.dng`, 20 MB), a DxO JPEG (`TN005701_DxO.jpg`, 16 MB) and a
+scanned TIFF with IIM and a matching `IPTCDigest` (`TN002683.tif`, 41 MB), all from
+`PW_TESTDATA`; arguments through UTF-8 argument files):
+- `-XMP-xmp:Rating=3 -XMP-xmp:Label=Red -o <copy>`: `ImageDataHash` equal for all four. The
+  listing differs only in Rating, Label, `XMP-x:XMPToolkit` (JPEG and TIFF: another program's
+  toolkit text replaced), pointers ending in `Offsets`/`Start` (DNG: `IFD0:StripOffsets`,
+  `SubIFD:StripOffsets`, `Pentax:PreviewImageStart`, `SubIFD1:PreviewImageStart`,
+  `SubIFD:PreviewImageStart`; TIFF: `IFD0:StripOffsets`, `SubIFD:StripOffsets`) and, for the TIFF,
+  `Validate` going from 6 to 5 warnings. All of it is allowed by T84's `verify_copy`.
+- Clearing both again (`-XMP-xmp:Rating= -XMP-xmp:Label=`) gives back the original listing
+  exactly, pointers included. A JPEG without XMP gets only `XMPToolkit` and the Rating; clearing
+  the Rating removes both again.
+- The embedded previews are **byte for byte equal** after the write (both DNGs' `PreviewImage`,
+  3 032 721 and 8 546 141 bytes; the JPEG's IFD1 thumbnail); only their offsets move.
+- Time per ExifTool call (a new process each time; its start, ~270 ms, subtracted): a T84 snapshot
+  230–400 ms, the `-o` write 310–430 ms; today's in-place write 340–500 ms. With `read_metadata`,
+  two snapshots and the final read, a rating on a DNG will take about 1.5–2 s instead of about
+  0.5 s, plus LibRaw (~0.3 s for 61 MP, T90). The worker queues ratings, so the user does not
+  wait, but a batch of 100 DNGs takes a few minutes.
+- A structure written whole (`-XMP-iptcCore:CreatorContactInfo={CiEmailWork=…,CiTelWork=…,
+  CiUrlWork=…}`) changes only that key; `-XMP-dc:Subject` given four times replaces the list and
+  leaves `lr:HierarchicalSubject` as it was.
+- `xmpRights:Marked`, which today's template writes as `True` with a copyright, is **not in the
+  property table**, so the plan cannot write it (D6). The TIFF and the Ricoh DNG already carry it
+  from Lightroom and Photo Mechanic.
+- **Windows** (PowerShell, `[IO.File]::Replace`, which calls `ReplaceFileW`): while another handle
+  has the original open for reading with the share mode Read or ReadWrite, the replace fails ("används
+  i en annan process") and the original is unchanged; with ReadWrite + Delete it succeeds. Opening
+  with share mode 0 (T85's `is_locked`) fails in all three cases. So **any** open handle makes
+  `can_write` refuse the file as `Locked`. A LibRaw session keeps its file open until it is closed
+  (`pw-libraw/csrc/pwlr.cpp`), so the view core must close its sessions first (T89).
+
 | Step | Task | Content | ADR 0007 | Can start |
 |---|---|---|---|---|
 | P1 | owner/reviewer | Save the IPTC TechReference 2025.1 JSON (`iptc-pmd-techreference_2025.1.json`, link in `docs/references.md`) in `D:\PhotoWorkflowData\references\`, with bytes and SHA-256 in its `README.md`. **Done 2026-11-11:** 140 839 bytes, SHA-256 `592c37b0…433128a8` | §3 | done |
@@ -2761,7 +2795,15 @@ a Xiaomi DNG from `PW_TESTDATA`, a JPEG, a Panasonic RW2 and its sidecar, in a t
 | D3 | owner | `windows-sys` (=0.61.2, already in `Cargo.lock` through `pw-loupe`, so no new package) as a Windows-only dependency of `pw-metadata`, features `Win32_Foundation` and `Win32_Storage_FileSystem`, for `ReplaceFileW`, `MoveFileExW`, free space and read-only volumes. **Approved by the owner on 2026-11-12** | §9 | done |
 | I8b | T85 | Windows file operations (`ReplaceFileW` with the rename fallback, free space, read-only volume, locks) and the write journal with recovery | §9.1, §9.4, §9.5 | now |
 | I8c | T86 | The safe write transaction for embedded metadata and sidecars, with an `ImageCheck` the caller gives | §9 | after T84 and T85 |
-| I9 | – | Ratings, labels and the ingest template through I7/I8; template modes Keep/Replace/Append/Clear; the real `ImageCheck` (previews with `pw-raw`, the DNG opened with LibRaw, §9.3 points 3–4) in a crate that has both | §9.3, §10, §15 | after I8 |
+| I9a | T87 | Ratings and labels through the write plan and the safe write (`write_rating_safely`); the reader also gives the plan's `FileState` | §8, §9, §15 | now |
+| D4 | owner | A new workspace crate **`pw-imagecheck`** for the real `ImageCheck`, depending on `pw-metadata`, `pw-raw` and `pw-libraw` (all workspace crates: no new package from crates.io; `Cargo.lock` gains only the crate itself). Root `Cargo.toml`: `pw-imagecheck = { path = "crates/pw-imagecheck" }` under `[workspace.dependencies]`; `pw-loupe`: `pw-imagecheck.workspace = true` (T91). Why not elsewhere: `pw-metadata` must not depend on `pw-raw`/LibRaw (§9.3); in `pw-viewcore` the view core would depend on `pw-metadata`; in `pw-loupe` it would need `pw-libraw` as a direct dependency (also a `Cargo.toml` change) and the Tauri app could not use it | §9.3 | – |
+| D5 | owner | The separator of `Append` and `Prefix` for a single text or Lang Alt (§10 says "a separator" without naming it). Reviewer's proposal: one space for every property | §10 | – |
+| D6 | owner | `xmpRights:Marked` ("Copyrighted" in Lightroom and Photo Mechanic): today's template writes `True` when a copyright is given, but the property is not in the table, so the plan cannot write it. Reviewer's proposal: add it to the table as a non-IPTC entry (as `xmp:Label`) and let `Iptc::to_template` set `True` with a Copyright Notice, as today. The alternative is to stop writing it | §10, §15 | – |
+| D7 | owner | The **Tauri app** (`src-tauri`) also writes ratings and the ingest template. Reviewer's proposal: it keeps today's in-place write (`write_rating`, `write_iptc`) until it is retired (GR8), as RawStride is the program in use; moving it as well needs a release of `pw-rawview`'s LibRaw sessions and its own task | §9, §15 | – |
+| I9b | T88 | The ingest template with the modes Keep, Replace, Append, Prefix and Clear (`template::apply`, `apply_template_safely`, `Iptc::to_template`); lists of structures, variables and template files later | §8, §10, §15 | **Blocked** on D5 and D6; then after T87 |
+| I9c | T89 | The view core closes the RAW sessions of a file before it is written (`Releaser::release`) | §9.1 | now |
+| I9d | T90 | The real `ImageCheck` in `pw-imagecheck`: previews byte for byte with `pw-raw`, the DNG opened with LibRaw (§9.3 points 3–4) | §9.1, §9.3 | **Blocked** on D4 |
+| I9e | T91 | RawStride: the metadata worker and the ingest write through T87/T88 with the journal (recovery at start) and T90's check; Swedish texts. The choice of mode in the import dialog comes with I10 | §9, §9.5, §15 | after T87–T90 |
 | I10 | – | RawStride: info panel with conflicts and notices, editor, settings (create IIM, fallback encoding), ExifTool version check at start | §5.2, §5.4, §11 | after I6 (panel), I9 (editor) |
 | I11 | – | PLUS fields as fixed choice lists | §11, Q9 | **after the PLUS controlled vocabulary is read** (§16.4) |
 | I12 | – | Real-file tests with the owner's level-C samples | §12, Q11 | when the owner provides the samples |
@@ -3712,6 +3754,343 @@ a Xiaomi DNG from `PW_TESTDATA`, a JPEG, a Panasonic RW2 and its sidecar, in a t
 - **Done when:** `.\tools\check.ps1` is all OK; `docs/test-inventory.md` is updated;
   `git diff --stat` shows only the files above.
 
+### T87. ADR 0007 I9a: ratings and labels through the write plan and the safe write — Open
+
+- **Can start now.** No dependency change. Can run at the same time as T89 (no shared files).
+- **Crates:** `pw-metadata` only. Nothing in RawStride uses the new function yet (T91 wires it in).
+  The old `write_rating`, `write_iptc` and `write_tags` stay **unchanged** (the Tauri app still
+  uses them; owner decision D7).
+- **Files:** `crates/pw-metadata/src/read.rs`; new `crates/pw-metadata/src/edit.rs`;
+  `crates/pw-metadata/src/lib.rs` (the `mod` line only); new `crates/pw-metadata/tests/edit.rs`;
+  `crates/pw-metadata/tests/read.rs` (new tests only); `docs/test-inventory.md`.
+- **Why:** ADR 0007 §15 (embedded writes of ratings and labels move from
+  `-overwrite_original_in_place` to §9), §9.2, §8 (Rating: written only when the user changes it;
+  a missing value counts as 0), §4.2 (a RAW is never written). The write plan (T83) needs a
+  `FileState`, which no code builds from a real file yet (`FileState` is built by hand in the
+  tests). Measured by the reviewer with ExifTool 13.59 (see the step plan).
+- **What:**
+  1. **`read.rs`:** `MetadataRead` gains `pub state: FileState` (`write_plan::FileState`), filled
+     from what `read_metadata` already reads, before `reconcile` takes the readings:
+     - `kind`: the file kind;
+     - for `Jpeg`, `Tiff` and `Dng`: `iim_present` when the file has a readable IIM block (an
+       unreadable block, `FileNotice::IimBlockUnreadable`, counts as none), `iim_charset` and
+       `iim_values` from its `IimValues` (`charset`, `values`), `digest` from its `IimRead`
+       (`Missing` without IIM); `exif_present` from `ExifFields` (`image_description`,
+       `copyright`, `artist`, `photographer`: `is_some()`);
+     - for `Raw`: `iim_present: false`, `iim_charset: CodedCharset::Absent`, no `iim_values`,
+       `digest: Missing`, `exif_present` all `false` (the plan never writes the RAW file; the
+       sidecar has no IIM and no Exif).
+     Update the module comment. Nothing else in `read.rs` changes.
+  2. **`edit.rs`** (`pub mod edit`):
+     - `pub struct EditOptions { pub settings: WriteSettings, pub fallback: Fallback }`
+       (`Default`: both defaults; the settings screen is I10);
+     - `pub enum EditError { Unsupported(String), Read(Error), Value(ValueError), Plan(PlanError),
+       Write(SafeWriteError) }` with `Display` in English (each variant's own text; `Write` is the
+       `SafeWriteError` text) and `std::error::Error`;
+     - **`ExifTool::write_rating_safely(&mut self, image: &Path, rating: &Rating, options:
+       &EditOptions, checks: &dyn ImageCheck, journal: &Journal) -> Result<WriteReport,
+       EditError>`:**
+       - `supports_rating(image)` false → `Unsupported` (same text as `write_rating`); stars
+         outside −1…5 → `Unsupported` (same text as `write_rating`); nothing is read or written;
+       - `read_metadata(image, options.fallback)`; an error is `Read`;
+       - **Rating** (`xmp:Rating`): `Some(n)` → `Metadata::set("xmp:Rating",
+         Value::Number(n.to_string()))`; `None` → `Metadata::clear("xmp:Rating")`. **Not a
+         change** (nothing is set or cleared): the read value is the same number
+         (`reconcile::same_value`), or `None` while the file has no Rating or a Rating whose
+         number is 0 (§8: a missing value counts as 0, so a `0` written by another program is
+         not removed);
+       - **Label** (`xmp:Label`): `Some(text)` → `set("xmp:Label", Value::Text(text))`, `None` →
+         `clear`; not a change when the read value is the same text, or `None` while the file has
+         no Label;
+       - `write_plan::plan(&metadata, &read.state, options.settings)`; an error is `Plan`;
+       - `write_safely(image, &plan, checks, journal)`; an error is `Write`. An empty plan gives
+         `WriteReport::Unchanged` there, so a rating that is already in the file writes nothing
+         and a RAW without a sidecar gets none for `Rating::default()`.
+       Errors of `set`/`clear` are `Value`.
+  3. Module comment in `edit.rs` explaining the above, with the reference to §8, §9, §15.
+- **Rules:** rules 3–7 and 10–12. No `Cargo.toml` change. Do not change `write_plan.rs`,
+  `safe_write.rs`, `verify.rs`, `fileops.rs`, `journal.rs` or the old write functions; if one of
+  them must change, stop and explain.
+- **Tests to add:**
+  - `tests/read.rs` (new tests, ExifTool required, files made as the existing tests make them):
+    a JPEG with IIM (City, `IPTCDigest` written) → `state.iim_present`, `iim_charset` `Utf8`,
+    the City in `iim_values`, `digest` `Matches`; a JPEG without IIM → `iim_present` false and
+    `digest` `Missing`; a JPEG with `IFD0:ImageDescription` and `IFD0:Artist` → only those two
+    `exif_present` flags; the fake RAW with a sidecar → `kind` `Raw`, no IIM, no Exif flags;
+  - `tests/edit.rs` (integration, **ExifTool required**; the JPEG fixture and the fake RAW of T82
+    in temporary folders; a temporary journal folder; `NoImageCheck`):
+    - a JPEG: 3 stars and `Red` → `Written`; `read_ratings` gives 3 and `Red`; the modification
+      time is the original's; no `pwtmp`/`pwbak` file; the journal folder is empty;
+    - the same rating again → `Unchanged`, the file's bytes unchanged;
+    - `Rating::default()` on that JPEG → `Written`, `read_ratings` gives nothing;
+    - a JPEG whose `xmp:Rating` is `0` (written with `ExifTool::execute`) and
+      `Rating::default()` → `Unchanged`, the `0` still in the file;
+    - −1 (rejected) is written and read back as −1;
+    - 6 stars → `Unsupported`, the file's bytes unchanged;
+    - a JPEG with IIM (City) and a matching `IPTCDigest`: after a rating, `read_metadata` shows
+      `digest` `Matches` and the City unchanged in IIM and XMP;
+    - the fake RAW without a sidecar and `Rating::default()` → `Unchanged`, no sidecar; with 2
+      stars → the sidecar is created holding Rating 2, the RAW's bytes unchanged;
+    - a read-only JPEG → `EditError::Write` with `Stage::Precheck`, the file unchanged;
+    - one test **ignored by default**: every DNG, JPEG and TIFF in `PW_TESTDATA`, copied to a
+      temporary folder: 3 stars and `Red` → `Written`, `ImageDataHash` unchanged (`snapshot`),
+      read back with `read_ratings`; report the time per file in the log row.
+- **Done when:** `.\tools\check.ps1` is all OK; `docs/test-inventory.md` is updated;
+  `git diff --stat` shows only the files above.
+
+### T88. ADR 0007 I9b: the ingest template with the modes Keep, Replace, Append, Prefix and Clear — Blocked
+
+- **Blocked on owner decisions D5 (the separator of Append and Prefix) and D6 (`xmpRights:Marked`).**
+  Then it can start after T87 is accepted.
+- **Crates:** `pw-metadata` only. Nothing in RawStride uses it yet (T91). The old `Iptc`,
+  `Iptc::tags` and `write_iptc` stay unchanged (D7).
+- **Files:** new `crates/pw-metadata/src/template.rs`; `crates/pw-metadata/src/edit.rs`;
+  `crates/pw-metadata/src/lib.rs` (the `mod` line and `Iptc::to_template` only); if D6 is "yes":
+  `crates/pw-metadata/src/properties.rs` (one hand-written entry, as `xmp:Label`); new
+  `crates/pw-metadata/tests/template.rs`; `docs/test-inventory.md`.
+- **Why:** ADR 0007 §10 (the four modes, Prefix as a form of Append; an empty field never clears;
+  no Clear for copyright-management fields, §8), §15 (today's template is "Keep for empty fields,
+  Replace for filled ones", which stays compatible), §9.5 (ingest writes with the safe procedure).
+- **What:**
+  1. **`template.rs`** (`pub mod template`):
+     - `pub enum Mode { Keep, Replace, Append, Prefix, Clear }`;
+     - `pub struct TemplateField { pub property: String, pub field: Option<String>, pub mode: Mode,
+       pub value: Option<Value> }`: `property` is an XMP id of the table; `field` the XMP id of a
+       sub-field when `property` is a **single** structure (`ValueKind::Struct`, e.g.
+       `Iptc4xmpCore:CreatorContactInfo` / `Iptc4xmpCore:CiEmailWork`);
+     - `pub struct Template { pub fields: Vec<TemplateField> }`;
+     - `pub enum TemplateError { UnknownProperty(String), CannotClear(String), ModeNotAllowed {
+       property: String, mode: Mode }, Value(ValueError) }` with `Display` in English and
+       `std::error::Error`;
+     - **`pub fn apply(template: &Template, metadata: &mut Metadata) -> Result<(),
+       TemplateError>`**, field by field in order, by §10:
+       - `Keep` → nothing. `Replace`, `Append` or `Prefix` with no value or a value without
+         content (empty text or only spaces, an empty list) → nothing (§10: an empty field never
+         clears);
+       - `Replace`: the new value with `Metadata::set` (a Lang Alt sets `x-default` and keeps the
+         other languages, as `set` already does; a list is replaced by the template's list);
+       - `Append` / `Prefix` on `Text` and on a Lang Alt (its shown text, `LangAlt::display`): the
+         old text, the separator of D5 and the new text (`Prefix`: new, separator, old); without
+         an old text only the new text. On a `List` (`Append` only): the template's entries
+         that are missing are added at the end, in order, without duplicates (exact text);
+         `Prefix` on a list is `ModeNotAllowed`. On a `Date`, a `Number` or a whole structure
+         both are `ModeNotAllowed`;
+       - a sub-field (`field` is `Some`): the structure's current value (or an empty one), the
+         mode applied to that field as above, then `set` of the whole structure; a sub-field of
+         a **list** of structures (Location Created, Image Creator, Copyright Owner, Licensor) is
+         `ModeNotAllowed` for every mode but `Keep` (later, with the template editor);
+       - `Clear`: `CannotClear` for the copyright-management properties of §8 (`dc:rights`,
+         `dc:creator`, `photoshop:Credit`, `xmpRights:UsageTerms`, `xmpRights:WebStatement`,
+         `plus:CopyrightOwner`, `plus:Licensor`, `plus:ImageCreator`) and their sub-fields;
+         otherwise `Metadata::clear`, or for a sub-field the field removed (the property cleared
+         when no field is left). Nothing to clear (no value) → nothing;
+       - a result equal to the current value (`reconcile::same_value`) is **not** set, so a
+         template that is already in the file gives an empty plan;
+       - the cardinality limits come from `set` (`TooMany`, as `Value`).
+     The confirmation before a Clear (§10, once per template) is the user interface's (I10);
+     variables (`{date}` …) and template files in XMP (§10) come later.
+  2. **`edit.rs`:** `EditError` gains `Template(TemplateError)`; **`ExifTool::apply_template_safely(
+     &mut self, image: &Path, template: &Template, options: &EditOptions, checks: &dyn
+     ImageCheck, journal: &Journal) -> Result<WriteReport, EditError>`**: `supports_rating(image)`
+     false → `Unsupported` (same text as `write_iptc`); `read_metadata`, `template::apply`,
+     `plan`, `write_safely`, as in T87.
+  3. **`Iptc::to_template(&self) -> Template`** (`lib.rs`): each field that `Iptc::tags` writes
+     today, with `Replace` and its value, the others `Keep`: `creator` → `dc:creator` as a list
+     of one name; `title`, `description`, `copyright` → `dc:title`, `dc:description`, `dc:rights`
+     (`x-default`); `credit` → `photoshop:Credit`; `email`, `phone`, `url` →
+     `Iptc4xmpCore:CreatorContactInfo` with the fields `Iptc4xmpCore:CiEmailWork`,
+     `Iptc4xmpCore:CiTelWork`, `Iptc4xmpCore:CiUrlWork`; `xmpRights:Marked` as D6 decides. Values
+     are trimmed; **line breaks are kept** (the plan writes them with `-ec`; `tags` turned them
+     into spaces).
+- **Rules:** rules 3–7 and 10–12. No `Cargo.toml` change. Do not change `write_plan.rs` or
+  `safe_write.rs`.
+- **Tests to add:**
+  - unit tests in `template.rs` on hand-built `Metadata`: every mode for a `Text`, a Lang Alt (an
+    `sv` entry kept by `Replace` and `Append`; `Clear` removes every language), a list (`Append`
+    keeps the order and adds no duplicates) and a sub-field of `CreatorContactInfo` (the other
+    fields kept; the last field cleared clears the property); `Keep` and an empty value change
+    nothing (`changes()` empty); `CannotClear` for each of the eight properties of §8;
+    `ModeNotAllowed` for `Append` on a `Date` and a `Number`, `Prefix` on a list, and a sub-field
+    of `plus:ImageCreator`; `TooMany` for four Image Creators; a template equal to the file gives
+    no change;
+  - unit tests of `Iptc::to_template` (`lib.rs`): a full template, an empty one (every field
+    `Keep`), a description with a line break kept;
+  - `tests/template.rs` (integration, **ExifTool required**; the JPEG fixture and the fake RAW of
+    T82; `NoImageCheck`; a temporary journal): `Iptc::to_template` on a JPEG → the values read
+    back with `read_metadata` (Creator, Copyright Notice, Credit, the three contact fields); the
+    same again → `Unchanged`; a JPEG with `IFD0:Copyright` → Exif Copyright updated too (§6.3);
+    `Append` of a keyword to a JPEG with two keywords → three, in order; `Clear` of
+    `photoshop:City` on a JPEG with IIM → gone from XMP and IIM; the fake RAW → only the sidecar
+    written, the RAW's bytes unchanged.
+- **Done when:** `.\tools\check.ps1` is all OK; `docs/test-inventory.md` is updated;
+  `git diff --stat` shows only the files above.
+
+### T89. ADR 0007 I9c: the view core closes the RAW sessions of a file before it is written — Open
+
+- **Can start now.** No dependency change. Can run at the same time as T87 (no shared files).
+- **Crates:** `pw-viewcore` only.
+- **Files:** `crates/pw-viewcore/src/core.rs`; `crates/pw-viewcore/src/state.rs`;
+  `crates/pw-viewcore/src/lib.rs` (the `pub use` line only); `crates/pw-viewcore/tests/native_files.rs`
+  (one new test); `docs/test-inventory.md`.
+- **Why:** ADR 0007 §9.1 point 2 ("the file is not open in RawStride's own RAW engine (sessions
+  for it are closed first)"). A LibRaw session keeps its file open for its whole life
+  (`pw-libraw/csrc/pwlr.cpp`: the stream is closed in `pwlr_close`). Measured by the reviewer:
+  while any other handle has the file open, `can_write` (T85) refuses it as `Locked`, and
+  `ReplaceFileW` fails unless that handle allows deleting. So a rating on the DNG shown in RAW
+  mode fails today as soon as T91 switches to the safe write.
+- **What:**
+  1. **`ViewCore::releaser(&self) -> Releaser<B>`**: a handle that can be cloned and sent to
+     another thread (`Clone + Send + Sync`; it holds the core's shared state).
+  2. **`Releaser::release(&self, path: &Path, timeout: Duration) -> bool`** (returns at once when
+     the core has no session of `path`):
+     - every **owned** session of `path` is dropped (and its bytes taken off the session budget,
+       as an eviction does);
+     - a **lent** session of `path` (a decode is using it) is marked to be dropped when it comes
+       back, as `set_files` already does for lent sessions (`detached`);
+     - it waits (on the core's condition variable, never by polling with sleep) until no session
+       of `path` is lent any more, or `timeout` has passed; `true` when none is left;
+     - the views (textures) of `path` are **kept**: the image data does not change when metadata
+       is written. The next RAW render opens a new session as usual;
+     - recorded as `"release"` (`record`), so the trace shows it;
+     - paths are compared as stored in the file list (the same `PathBuf` the loupe gave).
+  3. `pub use` of `Releaser` in `lib.rs`.
+- **Rules:** rules 3–7 and 10–12. No `Cargo.toml` change. No change to the decoding or the
+  budgets otherwise.
+- **Tests to add:**
+  - unit tests with the existing fake backend: an owned session of the path is dropped and the
+    session bytes go down; the sessions of other paths are kept; a lent session is dropped when
+    it comes back and `release` (on another thread) returns `true` only after that; with a lent
+    session that never comes back within the time, `release` returns `false` after about the
+    timeout; a path the core does not know returns `true` at once; the views of the path are still
+    there after `release`;
+  - `tests/native_files.rs`, one test **ignored by default** (`PW_TESTDATA`, `NativeBackend`,
+    LibRaw): open a folder with one DNG in RAW mode until a session exists; while it exists,
+    opening the DNG with `std::os::windows::fs::OpenOptionsExt::share_mode(0)` fails; after
+    `release(path, 5 s)` returns `true`, the same open succeeds (Windows only).
+- **Done when:** `.\tools\check.ps1` is all OK; `docs/test-inventory.md` is updated;
+  `git diff --stat` shows only the files above.
+
+### T90. ADR 0007 I9d: the real image check — previews with `pw-raw`, the DNG opened with LibRaw — Blocked
+
+- **Blocked on owner decision D4** (the new crate `pw-imagecheck`). Then it can start; it needs
+  only the `ImageCheck` trait of T86, so it can run at the same time as T87–T89.
+- **Crates:** new `pw-imagecheck`.
+- **Files:** `Cargo.toml` (root: the D4 line under `[workspace.dependencies]`); `Cargo.lock` (by
+  cargo); new `crates/pw-imagecheck/Cargo.toml`; new `crates/pw-imagecheck/src/lib.rs`; new
+  `crates/pw-imagecheck/src/tests.rs`; new `crates/pw-imagecheck/tests/real_files.rs`;
+  `docs/test-inventory.md`.
+- **Why:** ADR 0007 §9.3 point 3 ("pw-raw finds the same previews (count, sizes, decodable JPEG)")
+  and point 4 ("for DNG, LibRaw opens and unpacks the copy without a 'damaged' report"), §9.1
+  point 2 (sessions closed first). `pw-metadata` must not depend on `pw-raw` or LibRaw, so T86
+  takes the check from the caller; this crate has both. The rest of §9.3 point 3 (`DNGVersion`,
+  `NewSubfileType`, the IFD chain) is already covered by T84's listing comparison, where any
+  changed or missing key outside the allowed ones is an error. Measured by the reviewer: after a
+  metadata write the embedded previews are **byte for byte equal**, only their offsets move.
+- **What:**
+  1. **`Cargo.toml` of the crate** (as D4): `pw-metadata`, `pw-raw`, `pw-libraw` (all
+     `.workspace = true`), `[lints] workspace = true`, the workspace package fields as the other
+     crates. Check with `git diff Cargo.lock`: only the `pw-imagecheck` package is added, **no
+     other package**; otherwise stop and report.
+  2. **`pub struct RawImageCheck`** with `RawImageCheck::new(release: impl Fn(&Path) + Send +
+     Sync + 'static)` and `RawImageCheck::without_release()`; it implements
+     `pw_metadata::safe_write::ImageCheck` and is `Send`:
+     - `release(image)` calls the closure (the loupe passes T89's `Releaser`, T91);
+     - **`check_copy(original, copy, kind)`:**
+       - **previews** (every kind): `pw_raw::inspect` of both. When the original cannot be
+         inspected (for example a BigTIFF), the preview check is skipped. Otherwise the copy
+         must be inspected too, with the same number of previews, and each preview (by index)
+         the same width, height and length and the **same bytes** (`pw_raw::read_preview`).
+         Equal bytes decode exactly as the original's; this is the reviewer's reading of
+         "decodable JPEG", and it never refuses a file whose own preview was already broken;
+       - **`Dng`:** `pw_libraw::Session::open_with_diagnostics(copy)`; the session is dropped
+         at once (the file is closed before the replace). When the copy does not open, the
+         original is opened the same way: when it fails too, the check passes (the write did not
+         make it worse); otherwise the error is the copy's LibRaw message;
+       - an error is a text in English naming the check (`"preview 2 differs"`, `"the copy has 1
+         preview, the original 2"`, `"LibRaw: damaged: …"`); the Swedish texts are T91's.
+  3. Module comment with the reasons above (§9.3 points 3–4, why the bytes are compared).
+- **Rules:** rules 3–7 and 10–12. The D4 lines are the only dependency change. The crate has no
+  build script.
+- **Tests to add:**
+  - `src/tests.rs` (the JPEG fixture of `pw-thumbcache` via `#[path]`, as other crates do; files
+    in a temporary folder): a file and an identical copy pass; a copy with one byte changed
+    inside its embedded thumbnail (found with `pw_raw::inspect`) → an error naming the preview; a
+    copy without the thumbnail → the count error; an original that cannot be inspected (a few
+    bytes of text named `.tif`) → passes whatever the copy is; `release` calls the closure with
+    the path; `without_release` does nothing;
+  - `tests/real_files.rs`, **ignored by default** (`PW_TESTDATA`): every DNG copied and written
+    with a City plan through `ExifTool::write_safely` with `RawImageCheck::without_release()` →
+    `Written` (report the time of `check_copy` per file in the log row); every DNG with a copy cut
+    inside its RAW data (as `pw-libraw/tests/damaged.rs` cuts) → `check_copy` fails with LibRaw's
+    `damaged:` text; the cut copy checked against a cut original → passes; a DNG copy whose
+    largest preview has one byte changed → the preview error.
+- **Done when:** `.\tools\check.ps1` is all OK; `docs/test-inventory.md` is updated;
+  `git diff --stat` shows only the files above.
+
+### T91. ADR 0007 I9e: RawStride writes ratings and the ingest template safely — Blocked
+
+- **Can start after T87, T88, T89 and T90 are accepted** (so after D4, D5 and D6).
+- **Crates:** `pw-metadata` (the worker), `pw-loupe`.
+- **Files:** `crates/pw-metadata/src/worker.rs`; `crates/pw-metadata/src/lib.rs` (`WriteError` only);
+  `crates/pw-loupe/Cargo.toml` (the D4 line only); `Cargo.lock` (by cargo);
+  `crates/pw-loupe/src/main.rs`; `crates/pw-loupe/src/metadata.rs`;
+  `crates/pw-loupe/src/import_worker.rs`; `docs/test-inventory.md`.
+- **Why:** ADR 0007 §9 for every embedded write RawStride makes, §9.5 (the journal and recovery at
+  start; ingest writes only to the verified copy, with this procedure), §15.
+- **What:**
+  1. **The worker** (`worker.rs`): `pub struct WriteSetup { pub journal: Journal, pub checks:
+     Box<dyn ImageCheck + Send>, pub options: EditOptions }`; `MetadataWorker::start(setup)` and
+     `start_with(program, pre_args, setup)` take it; a rating write runs
+     `write_rating_safely(&path, &rating, &setup.options, &*setup.checks, &setup.journal)`.
+     Reading (`read_ratings`) is unchanged. The existing calls of `start_with` in tests
+     (`worker.rs`, `pw-loupe/src/metadata.rs`) get a setup with `NoImageCheck` and a temporary
+     journal; nothing else in those tests changes.
+  2. **`WriteError`** (`lib.rs`) gains `NotSafe { stage: Stage, original: OriginalState, reason:
+     String }`; `From<EditError>`: `Unsupported`, `Read`, `Value`, `Plan`, `Template` → `Other`
+     with the error text (`Read` through `From<Error>` as today, so `ReadOnly`/`NotWritten` keep
+     their kind); `Write` with `Stage::Precheck` while the target exists and is read-only (as
+     `refused_write_error` checks) → `ReadOnly`; any other `Write` → `NotSafe`. `Display` in
+     English.
+  3. **`pw-loupe` start** (`main.rs`): the journal folder is `%LOCALAPPDATA%\RawStride\journal`
+     (`Journal::open`). **Before** the workers start, `Journal::recover` runs once; when it
+     returns `NeedsUser`, `Failed` or `Unreadable` entries, a message box (as the exit message,
+     T44) says "RawStride avslutades mitt i en metadataskrivning. Kontrollera de här filerna:" and
+     one line per entry (`<original>` and, when there is one, `(säkerhetskopia: <backup>)`);
+     `Cleaned` and `Restored` are not shown. When the folder cannot be opened (no
+     `LOCALAPPDATA`, an error), RawStride still starts; every rating write and ingest template
+     then fails with "skrivloggen kunde inte öppnas" and writes nothing.
+  4. **The image check:** one `pw_imagecheck::RawImageCheck::new` whose closure calls
+     `releaser.release(path, 5 s)` (T89's `Releaser` of the loupe's core) for the metadata worker,
+     and one for the import worker.
+  5. **Texts** (`metadata.rs`, `write_error_text`, after "Kunde inte spara betyget för <fil>: "):
+     `NotSafe` with `Intact` → "metadata kunde inte skrivas säkert, filen är oförändrad";
+     `AtBackup(backup)` → "metadata kunde inte skrivas säkert, originalet ligger nu som <filnamn
+     på backup>"; `Replaced` → "filen skrevs men slutkontrollen misslyckades, den tidigare
+     versionen finns kvar som säkerhetskopia". `ReadOnly`, `NotWritten` and `Other` as today.
+  6. **Ingest** (`import_worker.rs`): `ImportWorker::start` takes a journal and a
+     `Box<dyn ImageCheck + Send>`; `apply_iptc` uses `apply_template_safely(current,
+     &iptc.to_template(), &EditOptions::default(), …)` instead of `write_iptc`; a failure is listed
+     as today (`"<file>: <error>"`). The existing tests that start the import worker get
+     `NoImageCheck` and a temporary journal.
+  7. **`Cargo.toml`** of `pw-loupe`: `pw-imagecheck.workspace = true` (D4); `git diff Cargo.lock`
+     shows only that line in `pw-loupe`'s list.
+- **Rules:** rules 3–7 and 10–12. Nothing in `src-tauri` changes (D7). `write_rating` and
+  `write_iptc` stay for the Tauri app.
+- **Tests to add:**
+  - `worker.rs`: a rating written through the worker with a JPEG and a temporary journal arrives
+    as `RatingWritten` with `Ok`, and the journal folder is empty afterwards; a read-only JPEG
+    gives `WriteError::ReadOnly`; an `ImageCheck` that fails gives `NotSafe` with `Intact`;
+  - `lib.rs`: `From<EditError>` for each case of point 2;
+  - `pw-loupe` `metadata.rs`: the three `NotSafe` texts (`write_error_text`);
+  - `pw-loupe` `main.rs` (or where the start code is testable): the recovery message for a
+    `NeedsUser` entry with and without a backup, and none for `Cleaned`/`Restored`;
+  - `pw-loupe` `import_worker.rs`: an import of the JPEG fixture with a creator in the template
+    writes it (read back with `read_metadata`) and leaves no `pwtmp` file.
+- **Done when:** `.\tools\check.ps1` is all OK; `docs/test-inventory.md` is updated;
+  `git diff --stat` shows only the files above. The owner checks by hand in RawStride: a rating on
+  a DNG shown in RAW mode is saved and the image is still shown; the same on a JPEG and an ARW
+  (sidecar).
+
 ### T7. Format the files that `cargo fmt --check` reports — Done
 
 - **Crates:** `photoworkflow` (`src-tauri`), `preview-bench` (`tools/preview-bench`).
@@ -3874,10 +4253,14 @@ and reviewer:
 - A timeout when ExifTool hangs (process supervision across threads).
 - Suppressing the Windows "no disk in drive" dialog when scanning empty card readers (needs a
   Windows API call and a new dependency).
-- ADR 0007 (IPTC metadata) steps I9–I13 and the `Cleared` task: I9 and later are written after
-  T86 is accepted (see "Milestone 8 (ADR 0007, IPTC metadata): steps"); `Cleared` waits for D1; I11 waits for the PLUS controlled
+- ADR 0007 (IPTC metadata) steps I10–I13 and the `Cleared` task (see "Milestone 8 (ADR 0007, IPTC
+  metadata): steps"; I9 is T87–T91): `Cleared` waits for D1; I11 waits for the PLUS controlled
   vocabulary; I12 waits for the level-C samples. Also later: Exif ImageEditor ↔ Contributor and
-  GPS → Location Created (§6.1), left out of T81; keyword qualifiers (§8), left out of T83.
+  GPS → Location Created (§6.1), left out of T81; keyword qualifiers (§8), left out of T83; from
+  §10, left out of T88: template sub-fields of lists of structures (Location Created, Image
+  Creator, Copyright Owner, Licensor), variables (`{date}` …), template files in XMP with the
+  modes in a RawStride namespace (needs the same kind of namespace decision as D1), the
+  confirmation before a Clear and the choice of mode in the import dialog (I10).
 - The import dialog fields for title and description in `ui/` (frontend).
 - ADR 0010 steps M3–M7 (the rest of the import) wait until the contact sheet (ADR 0011) is done
   (owner decision, 2026-11-08). M4 and M7 are added to this list then.
@@ -4176,3 +4559,4 @@ and reviewer:
 | 2026-11-12 | T86 | In progress | Implemented: new `src/safe_write.rs` (`ImageCheck`, `NoImageCheck`, `ExifTool::write_safely`, `WriteReport`, `SafeWriteError`, `Stage`, `OriginalState`), the `mod` line in `lib.rs`, new `tests/safe_write.rs` (`#![cfg(windows)]`, 11 tests, 1 ignored), `docs/test-inventory.md` (the unit row 235 → 242 and a new row; the header total not updated, no complete run). Not set to Ready for review on the owner's decision: Smart App Control (`os error 4551`) refused programs in `check.ps1` and in the separate runs of rule 6. Last `check.ps1`: fmt OK, clippy OK, test FAILED only because 6 programs were refused (`pw-loupe --lib`, `--bin pw-loupe`, `pw-metadata --lib`, `--test sidecar`, `--test verify`, `--test write_plan`); the programs that ran: 299 passed, 0 failed, 32 ignored, among them `tests/safe_write.rs` 10 passed, 1 ignored. Separate runs: `pw-metadata --lib` 240 passed, 1 failed, 1 ignored (all 7 new `safe_write` unit tests pass; the failure is the unchanged `worker::tests::retries_a_failed_start_with_the_next_request`, whose copy of the test program in `%TEMP%` Smart App Control refuses), `--test sidecar` 7 passed, 1 ignored, `--test verify` 3 passed, 1 ignored, `pw-loupe --bin pw-loupe` 25 passed; **never ran** (refused every time): `pw-metadata --test write_plan` (7) and `pw-loupe --lib` (220). Total: 574 passed, 1 failed, 35 ignored, 227 not run. Ignored DNG test (`PW_TESTDATA=D:\PhotoWorkflowData\RAW`): all 9 DNGs (5 Xiaomi `IMG_20261026_*`, 4 `TN00251x`) `Written`, hash unchanged, City and Description read back. Owner decisions in this session: (1) measured with ExifTool 13.59, a sidecar made without a source file always holds `XMP-x:XMPToolkit`, so a new sidecar is checked with T84's allowed rules (keys outside `System`, `ExifTool`, `File` must be allowed by `verify_copy` for the plan; done against an "empty original", `verify.rs` unchanged); (2) a failed final check ends the journal entry so recovery does not delete the kept backup; (3) `SafeWriteError` has a `file` field (the target) so `Display` can name it. Other choices to review: the file kind by extension is a copy of the reader's private `file_kind` (`read.rs` not changed); "one file created and no warning" = `write_succeeded`, exactly one `image files created` and no `Warning` line (measured: an unknown tag gives `1 image files copied` and a warning, and the copy exists, so it is deleted); `can_write` gets the plan's argument bytes as `extra_bytes`; a new sidecar needs the arguments + 10 % + 4096 bytes free; a failed journal `begin` is `WriteCopy`; after `OriginalIntact` the copy and a backup (if any) are deleted and the entry ended only when both deletions worked, otherwise it is kept for recovery; after success a backup that cannot be deleted keeps the entry open (recovery deletes it) and the result is still `Written`; `OriginalAtBackup` that is renamed back gives `Intact`. `OriginalAtBackup` and `FinalCheck` have no integration test (no way to provoke them without fault injection) |
 | 2026-11-12 | T86 | Ready for review | Review: code accepted, **not committed**: AGENTS.md allows commits only with green tests, and Windows Smart App Control now refuses most rebuilt test programs, including ones it ran an hour earlier and the `crc32fast` build script of a single-crate build, so rule 6's exception no longer gets them to run. The transaction follows §9 and the task; the agent stopped correctly. The owner's three decisions are right (a new sidecar checked with T84's rules against an "empty original"; a failed final check ends the journal entry so recovery keeps the backup; `SafeWriteError::file`). **Reviewer's fix:** `check_copy` was also called for an existing sidecar (`kind` `Raw`), against the `ImageCheck` contract ("never for a sidecar"); now only for JPEG, TIFF and DNG; new test `the_image_check_is_not_called_for_an_existing_sidecar` (a failing check, the sidecar still updated); `docs/test-inventory.md` `tests/safe_write.rs` 11 → 12. What ran in the reviewer's `check.ps1` (fmt and clippy OK): 532 passed, 2 failed, 32 ignored; the `pw-metadata` unit tests ran (239 passed, among them the 7 `safe_write` and 23 `verify` unit tests) and the 2 failures are the unchanged `worker` tests `retries_a_failed_start_with_the_next_request` and `restarts_exiftool_after_it_exits`, which time out because their copy of the test program in `%TEMP%` is refused; `tests/safe_write.rs` 11 passed, 1 ignored (the new test included); refused: `photoworkflow`, both `pw-loupe` programs, `tests/read.rs`, `sidecar.rs`, `verify.rs`, `write_plan.rs`. Separate runs: `tests/verify.rs` 3 passed, 1 ignored and `tests/safe_write.rs` again 11 passed; everything else refused. Not run since T85: `pw-loupe`, `photoworkflow`, `tests/read.rs`, `sidecar.rs`, `write_plan.rs` (none changed by T86). The agent's ignored DNG run: 9 DNGs written, hashes unchanged. Waiting for the owner's decision on Smart App Control before a full test run and the commit |
 | 2026-11-12 | T86 | Done | Smart App Control no longer blocked the test programs. The reviewer's `check.ps1`: fmt, test and clippy OK, **803 passed, 0 failed, 35 ignored**, every program ran (the two `worker` tests pass again); `docs/test-inventory.md` header updated. Committed |
+| 2026-11-12 | T87–T91 | Open / Blocked | Added after T86 was done: ADR 0007 I9 split in five. T87 ratings and labels through the write plan and the safe write, with the plan's `FileState` from the reader (can start now); T88 the ingest template with the modes of §10 (**Blocked** on D5, the separator of Append/Prefix, and D6, `xmpRights:Marked`); T89 the view core closes the RAW sessions of a file before it is written (can start now, at the same time as T87); T90 the real `ImageCheck` in a new crate `pw-imagecheck` (**Blocked** on D4, the new crate); T91 RawStride writes ratings and the ingest template safely, with the journal and recovery at start (after T87–T90). D7 (the Tauri app keeps today's write until it is retired) does not block a task. The step plan gains I9a–I9e and D4–D7 and records the reviewer's ExifTool 13.59 and Windows measurements for I9 (a reader holding the file open makes the safe write refuse it, so LibRaw sessions must be closed first; previews are byte for byte equal after a write; a DNG rating will take about 1.5–2 s) |
