@@ -112,6 +112,7 @@ enum Request {
     Run {
         id: RequestId,
         form: ImportForm,
+        options: EditOptions,
     },
     Cards {
         id: RequestId,
@@ -212,13 +213,19 @@ impl ImportWorker {
         Ok(id)
     }
 
-    /// Queues a fresh scan and copy. A previous cancellation is cleared for this run.
-    pub fn run(&mut self, form: ImportForm) -> Result<RequestId, SubmitError> {
+    /// Queues a fresh scan and copy. A previous cancellation is cleared for this run. The ingest
+    /// template is written with `options`, the settings at the start of this import (create IIM,
+    /// fallback encoding; ADR 0007 §5.2, §5.4, T106).
+    pub fn run(
+        &mut self,
+        form: ImportForm,
+        options: EditOptions,
+    ) -> Result<RequestId, SubmitError> {
         let id = self.next_request_id();
         // The worker waits for this gate before it starts a run, so it cannot start copying
         // before the cancel flag of an earlier run is cleared below.
         let _gate = lock_recover(&self.run_gate);
-        self.submit(Request::Run { id, form })?;
+        self.submit(Request::Run { id, form, options })?;
         self.cancel.store(false, Ordering::Relaxed);
         Ok(id)
     }
@@ -285,12 +292,15 @@ fn run(
                 id,
                 result: preview(&form, rescan, &mut cached_scan),
             },
-            Request::Run { id, form } => {
+            Request::Run { id, form, options } => {
                 // Wait until `ImportWorker::run` has cleared the cancel flag for this run.
                 drop(lock_recover(&run_gate));
                 run_import(
                     id,
-                    &form,
+                    ImportRun {
+                        form: &form,
+                        options,
+                    },
                     &cancel,
                     &mut cached_scan,
                     &events,
@@ -343,9 +353,15 @@ fn preview(
     Ok(Preview::new(&shots, &plan))
 }
 
+/// What one import is asked to do: the dialog's form and the settings at its start (T106).
+struct ImportRun<'a> {
+    form: &'a ImportForm,
+    options: EditOptions,
+}
+
 fn run_import(
     id: RequestId,
-    form: &ImportForm,
+    ImportRun { form, options }: ImportRun<'_>,
     cancel: &AtomicBool,
     cached_scan: &mut Option<(PathBuf, Arc<Vec<pw_ingest::Shot>>)>,
     events: &mpsc::Sender<ImportEvent>,
@@ -416,6 +432,7 @@ fn run_import(
     };
     let mut iptc_runtime = IptcRuntime {
         id,
+        options,
         cancel,
         events,
         exiftool,
@@ -450,6 +467,8 @@ fn run_import(
 
 struct IptcRuntime<'a> {
     id: RequestId,
+    /// The settings of this import (T106).
+    options: EditOptions,
     cancel: &'a AtomicBool,
     events: &'a mpsc::Sender<ImportEvent>,
     exiftool: &'a mut Option<ExifTool>,
@@ -563,7 +582,7 @@ fn apply_iptc(
         let written = tool.apply_template_safely(
             current,
             &template,
-            &EditOptions::default(),
+            &runtime.options,
             &*runtime.write.checks,
             journal,
         );
@@ -760,7 +779,9 @@ mod tests {
         let mut worker = ImportWorker::start(Some(test_journal()), Box::new(NoImageCheck)).unwrap();
         let options = dirs.options("imported");
 
-        let id = worker.run(dirs.form("imported")).unwrap();
+        let id = worker
+            .run(dirs.form("imported"), EditOptions::default())
+            .unwrap();
         let mut progress_count = 0;
         let done = loop {
             match next_event(&worker) {
@@ -812,11 +833,15 @@ mod tests {
         dirs.write_image("A001.ARW", b"image bytes");
         let mut worker = ImportWorker::start(Some(test_journal()), Box::new(NoImageCheck)).unwrap();
 
-        let first = worker.run(dirs.form("imported")).unwrap();
+        let first = worker
+            .run(dirs.form("imported"), EditOptions::default())
+            .unwrap();
         let first_done = done_event(&worker, first);
         assert_eq!(first_done.copied, 1);
 
-        let second = worker.run(dirs.form("imported")).unwrap();
+        let second = worker
+            .run(dirs.form("imported"), EditOptions::default())
+            .unwrap();
         let second_done = done_event(&worker, second);
         assert_eq!((second_done.copied, second_done.present), (0, 1));
     }
@@ -874,7 +899,7 @@ mod tests {
         let mut worker = ImportWorker::start(Some(test_journal()), Box::new(NoImageCheck)).unwrap();
         let mut form = dirs.form("");
         form.dest.clear();
-        let id = worker.run(form).unwrap();
+        let id = worker.run(form, EditOptions::default()).unwrap();
 
         let done = done_event(&worker, id);
         assert_eq!(done.error.as_deref(), Some("Välj ett mål."));
@@ -897,7 +922,7 @@ mod tests {
             Box::new(NoImageCheck),
         )
         .unwrap();
-        let id = worker.run(dirs.form("")).unwrap();
+        let id = worker.run(dirs.form(""), EditOptions::default()).unwrap();
 
         let done = done_event(&worker, id);
         assert_eq!(done.copied, 1);
@@ -922,7 +947,7 @@ mod tests {
         .unwrap();
         let mut form = dirs.form("");
         form.iptc.creator = "Fotograf".to_string();
-        let id = worker.run(form).unwrap();
+        let id = worker.run(form, EditOptions::default()).unwrap();
 
         let done = done_event(&worker, id);
         assert_eq!(done.copied, 1);
@@ -1017,7 +1042,7 @@ mod tests {
         .unwrap();
         let mut form = dirs.form("");
         form.iptc.creator = "Fotograf".to_string();
-        let id = worker.run(form).unwrap();
+        let id = worker.run(form, EditOptions::default()).unwrap();
 
         let done = done_event(&worker, id);
         assert_eq!(done.copied, 1);
@@ -1047,7 +1072,7 @@ mod tests {
                 .unwrap();
         let mut form = dirs.form("");
         form.iptc.creator = "Fotograf".to_string();
-        let id = worker.run(form).unwrap();
+        let id = worker.run(form, EditOptions::default()).unwrap();
 
         let done = done_event(&worker, id);
         assert_eq!(done.copied, 1);
@@ -1082,7 +1107,7 @@ mod tests {
         let mut worker = ImportWorker::start(Some(journal), Box::new(NoImageCheck)).unwrap();
         let mut form = dirs.form("");
         form.iptc.creator = "Fotograf".to_string();
-        let id = worker.run(form).unwrap();
+        let id = worker.run(form, EditOptions::default()).unwrap();
 
         let done = done_event(&worker, id);
         assert_eq!(done.copied, 1);
@@ -1150,7 +1175,7 @@ mod tests {
         let mut worker = ImportWorker::start(Some(journal), Box::new(NoImageCheck)).unwrap();
         let mut form = dirs.form("");
         form.iptc = iptc;
-        let id = worker.run(form).unwrap();
+        let id = worker.run(form, EditOptions::default()).unwrap();
 
         let done = done_event(&worker, id);
         assert_eq!(done.copied, 1);
@@ -1252,6 +1277,75 @@ mod tests {
         );
     }
 
+    /// The IIM of the imported copy, as ExifTool lists it with `-IPTC:all -s` (one `Tag: value`
+    /// line per IIM tag; nothing without IIM).
+    #[cfg(windows)]
+    fn iim_lines(exiftool: &mut ExifTool, image: &Path) -> String {
+        exiftool
+            .execute(&[
+                "-IPTC:all".to_string(),
+                "-s".to_string(),
+                image.to_string_lossy().into_owned(),
+            ])
+            .unwrap()
+    }
+
+    /// Imports the JPEG fixture (which has no IIM) with Fotograf set and `options` (T106).
+    #[cfg(windows)]
+    fn import_creator_with(tag: &str, options: EditOptions) -> (TempDirs, PathBuf) {
+        let dirs = TempDirs::new(tag);
+        dirs.write_image("A001.jpg", jpeg_fixture::SMALL);
+        let journal = Journal::open(&dirs.root.join("journal")).unwrap();
+        let mut worker = ImportWorker::start(Some(journal), Box::new(NoImageCheck)).unwrap();
+        let mut form = dirs.form("");
+        form.iptc.creator = "Fotograf".to_string();
+        let id = worker.run(form, options).unwrap();
+
+        let done = done_event(&worker, id);
+        assert_eq!(done.copied, 1);
+        assert!(done.iptc_errors.is_empty(), "{:?}", done.iptc_errors);
+        let image = dirs.dest.join("A001.jpg");
+        (dirs, image)
+    }
+
+    /// The import's options decide whether IIM is created (ADR 0007 §5.2, T106): with
+    /// `create_iim` the copy of a JPEG without IIM gets IIM By-line, with the default options it
+    /// gets no IIM. Needs ExifTool on PATH; the safe write uses Windows file operations.
+    #[cfg(windows)]
+    #[test]
+    fn the_imports_create_iim_setting_decides_whether_iim_is_written() {
+        let mut exiftool = required_exiftool();
+        let fixture = fixture_iim_lines(&mut exiftool);
+        assert_eq!(fixture.trim(), "", "the JPEG fixture must have no IIM");
+
+        let create = EditOptions {
+            settings: pw_metadata::write_plan::WriteSettings { create_iim: true },
+            ..EditOptions::default()
+        };
+        let (_created_dirs, created) = import_creator_with("iptc-create-iim", create);
+        let lines = iim_lines(&mut exiftool, &created);
+        assert!(
+            lines
+                .lines()
+                .any(|line| line.starts_with("By-line") && line.ends_with(": Fotograf")),
+            "{lines}"
+        );
+
+        let (_default_dirs, default) = import_creator_with("iptc-no-iim", EditOptions::default());
+        assert_eq!(iim_lines(&mut exiftool, &default).trim(), "");
+    }
+
+    /// The IIM of the JPEG fixture itself, written to a temporary file.
+    #[cfg(windows)]
+    fn fixture_iim_lines(exiftool: &mut ExifTool) -> String {
+        let dirs = TempDirs::new("iptc-fixture-iim");
+        dirs.write_image("A001.jpg", jpeg_fixture::SMALL);
+        iim_lines(
+            exiftool,
+            &dirs.source.join("DCIM").join("100TEST").join("A001.jpg"),
+        )
+    }
+
     #[test]
     fn iptc_targets_images_in_destination_and_backup_but_not_companions_or_failures() {
         let dirs = TempDirs::new("iptc-targets");
@@ -1332,6 +1426,7 @@ mod tests {
         };
         let mut runtime = IptcRuntime {
             id: 1,
+            options: EditOptions::default(),
             cancel: &cancel,
             events: &events,
             exiftool: &mut exiftool,
@@ -1375,7 +1470,10 @@ mod tests {
 
         let ImportEvent::Done { done, .. } = run_import(
             7,
-            &form,
+            ImportRun {
+                form: &form,
+                options: EditOptions::default(),
+            },
             &cancel,
             &mut cached_scan,
             &events,
@@ -1415,7 +1513,10 @@ mod tests {
 
         let ImportEvent::Done { done, .. } = run_import(
             8,
-            &form,
+            ImportRun {
+                form: &form,
+                options: EditOptions::default(),
+            },
             &cancel,
             &mut cached_scan,
             &events,
@@ -1450,7 +1551,7 @@ mod tests {
         }
         let mut worker = ImportWorker::start(Some(test_journal()), Box::new(NoImageCheck)).unwrap();
         let options = dirs.options("");
-        let id = worker.run(dirs.form("")).unwrap();
+        let id = worker.run(dirs.form(""), EditOptions::default()).unwrap();
         worker.cancel();
 
         let done = done_event(&worker, id);
@@ -1496,7 +1597,7 @@ mod tests {
         let dirs = TempDirs::new("drop");
         dirs.write_image("A001.ARW", &vec![3; 16 * 1024 * 1024]);
         let mut worker = ImportWorker::start(Some(test_journal()), Box::new(NoImageCheck)).unwrap();
-        worker.run(dirs.form("")).unwrap();
+        worker.run(dirs.form(""), EditOptions::default()).unwrap();
 
         let started = Instant::now();
         drop(worker);

@@ -21,19 +21,21 @@ use pw_loupe::{
     EditorText, Field, Filter, GridKeyAction, ImportDialog, ImportDialogState, ImportEvent,
     ImportForm, ImportWorker, IptcField, LABEL_CHOICES, LabelFilter, LoupeMove, MAX_THUMBNAIL_SIZE,
     MIN_THUMBNAIL_SIZE, MonitorProfile, Navigation, Options, PanelText, READING_RATINGS_TEXT,
-    RatingRefused, STAR_CONDITIONS, STAR_FILTERS, StarFilter, SubmitError, Tab, TabAction, Tabs,
-    ThumbGrid, UNSUPPORTED_TEXT, ViewMode, WINDOW_TITLE, allowed_modes, clamp_thumbnail_size,
-    clear_and_import_text, clear_cancel_text, clear_confirmation_text, clear_confirmation_title,
-    color_image, columns, dialog_key_action, done_lines, editor_text, ejecting_progress_text,
-    error_text, grid_key_action, indicator_text, info_panel, iptc_progress_text, key_action,
-    label_choice_text, label_filter_text, label_name, list_folder, load_monitor_profile,
-    loupe_key_action, marked_text, mode_label, mode_text, more_lines, no_match_text, notice_text,
-    opens_import, other_values, panel_text, parse_args, position_text, preview_line,
-    preview_summary, primary_monitor_profile_path, progress_text, rating_key_action, request_cell,
-    star_condition_text, star_filter_text, star_glyphs, status_line, step_allowed,
-    step_thumbnail_size, tab_action, take_wheel_steps, visible_range, wheel_factor, window_title,
+    RatingRefused, STAR_CONDITIONS, STAR_FILTERS, Settings, StarFilter, SubmitError, Tab,
+    TabAction, Tabs, ThumbGrid, UNSUPPORTED_TEXT, ViewMode, WINDOW_TITLE, allowed_modes,
+    clamp_thumbnail_size, clear_and_import_text, clear_cancel_text, clear_confirmation_text,
+    clear_confirmation_title, color_image, columns, dialog_key_action, done_lines, editor_text,
+    ejecting_progress_text, error_text, grid_key_action, indicator_text, info_panel,
+    iptc_progress_text, key_action, label_choice_text, label_filter_text, label_name, list_folder,
+    load_monitor_profile, load_settings, loupe_key_action, marked_text, mode_label, mode_text,
+    more_lines, no_match_text, notice_text, opens_import, other_values, panel_text, parse_args,
+    position_text, preview_line, preview_summary, primary_monitor_profile_path, progress_text,
+    rating_key_action, request_cell, save_settings, settings_path, star_condition_text,
+    star_filter_text, star_glyphs, status_line, step_allowed, step_thumbnail_size, tab_action,
+    take_wheel_steps, visible_range, wheel_factor, window_title,
 };
 use pw_metadata::edit::EditOptions;
+use pw_metadata::iim::Fallback;
 use pw_metadata::journal::{Journal, Recovered};
 use pw_metadata::read::MetadataRead;
 use pw_metadata::template::Mode;
@@ -220,6 +222,15 @@ struct Loupe {
     /// The result of the metadata worker's first ExifTool start has been looked at, and the
     /// message about it shown when needed (ADR 0007 §11, D9, T101): it is shown at most once.
     exiftool_checked: bool,
+    /// The settings in use (ADR 0007 §5.2, §5.4, T106): read at start, changed by "Spara" in the
+    /// settings window even when the file could not be saved.
+    settings: Settings,
+    /// The settings file; `None` without LOCALAPPDATA (nothing can be saved).
+    settings_path: Option<PathBuf>,
+    /// The settings window's choices while it is open.
+    settings_window: Option<Settings>,
+    /// New options not yet taken by the metadata worker (its queue was full).
+    pending_options: Option<EditOptions>,
     metadata: MetadataCache,
     import_worker: ImportWorker,
     import_dialog: Option<ImportDialog>,
@@ -291,6 +302,99 @@ impl Loupe {
             });
         if let Err(error) = shown {
             eprintln!("pw-loupe: the ExifTool message could not be shown: {error}");
+        }
+    }
+
+    /// Opens the settings window with the settings in use. Not while the metadata window holds
+    /// the program (D16).
+    fn open_settings_window(&mut self) {
+        if self.metadata_window.is_none() && self.settings_window.is_none() {
+            self.settings_window = Some(self.settings);
+        }
+    }
+
+    /// "Spara" in the settings window (T106): the settings apply at once (ratings, the metadata
+    /// window and the next import) and are saved to the file. When they cannot be saved, they
+    /// still apply until RawStride closes and a message says so. The metadata window reads its
+    /// image when it opens, so no read made with the old settings is kept (it cannot be open
+    /// while the settings window is).
+    fn save_settings_window(&mut self, chosen: Settings) {
+        self.settings = chosen;
+        self.pending_options = Some(chosen.edit_options());
+        self.send_pending_options();
+        let saved = match &self.settings_path {
+            Some(path) => save_settings(path, &chosen).map_err(|error| error.to_string()),
+            None => Err(settings_text(SettingsText::NoFolder).to_string()),
+        };
+        if let Err(error) = saved {
+            show_warning(
+                settings_text(SettingsText::Title),
+                settings_save_error_text(&error),
+            );
+        }
+    }
+
+    /// Sends new options to the metadata worker (`set_options`, T98); kept for the next frame
+    /// while its queue is full. Returns whether options still wait.
+    fn send_pending_options(&mut self) -> bool {
+        let Some(options) = self.pending_options else {
+            return false;
+        };
+        match self.metadata_worker.set_options(options) {
+            Ok(()) => self.pending_options = None,
+            Err(pw_metadata::SubmitError::QueueFull) => {}
+            Err(pw_metadata::SubmitError::Stopped) => {
+                eprintln!("pw-loupe: the metadata worker has stopped; the settings were not sent");
+                self.pending_options = None;
+            }
+        }
+        self.pending_options.is_some()
+    }
+
+    /// The settings window "Inställningar" (ADR 0007 §5.2, §5.4/Q10, T106). Every text comes
+    /// from `settings_text` or `fallback_text`.
+    fn draw_settings_window(&mut self, ctx: &egui::Context) {
+        let Some(mut chosen) = self.settings_window else {
+            return;
+        };
+        let mut save = false;
+        let mut cancel = false;
+        egui::Window::new(settings_text(SettingsText::Title))
+            .collapsible(false)
+            .resizable(false)
+            .show(ctx, |ui| {
+                ui.checkbox(
+                    &mut chosen.create_iim,
+                    settings_text(SettingsText::CreateIim),
+                );
+                ui.label(egui::RichText::new(settings_text(SettingsText::CreateIimNote)).small());
+                ui.add_space(PANEL_ROW_SPACING);
+                ui.label(settings_text(SettingsText::Encoding));
+                egui::ComboBox::from_id_salt("fallback-encoding")
+                    .selected_text(fallback_text(chosen.fallback))
+                    .show_ui(ui, |ui| {
+                        for text in FALLBACK_CHOICES.map(fallback_text) {
+                            let selected = text == fallback_text(chosen.fallback);
+                            if ui.selectable_label(selected, text).clicked()
+                                && let Some(fallback) = fallback_from_text(text)
+                            {
+                                chosen.fallback = fallback;
+                            }
+                        }
+                    });
+                ui.add_space(PANEL_ROW_SPACING);
+                ui.horizontal(|ui| {
+                    save = ui.button(settings_text(SettingsText::Save)).clicked();
+                    cancel = ui.button(settings_text(SettingsText::Cancel)).clicked();
+                });
+            });
+        if save {
+            self.settings_window = None;
+            self.save_settings_window(chosen);
+        } else if cancel {
+            self.settings_window = None;
+        } else {
+            self.settings_window = Some(chosen);
         }
     }
 
@@ -493,7 +597,7 @@ impl Loupe {
         if active_cleared {
             self.load_active_tab();
         }
-        match self.import_worker.run(form) {
+        match self.import_worker.run(form, self.settings.edit_options()) {
             Ok(id) => {
                 if let Some(dialog) = &mut self.import_dialog {
                     dialog.sent(id);
@@ -1567,7 +1671,8 @@ impl Loupe {
     /// its metadata at once. Nothing happens with several images marked in the contact sheet, no
     /// image shown, a kind without metadata support, or a window already open.
     fn open_metadata_window(&mut self) {
-        if self.metadata_window.is_some() {
+        // Not while the settings window is open: the window's read must use the saved settings.
+        if self.metadata_window.is_some() || self.settings_window.is_some() {
             return;
         }
         let cwd = std::env::current_dir().ok();
@@ -1613,7 +1718,7 @@ impl Loupe {
         let escape = std::mem::take(&mut window.escape);
         let asking = window.confirm_discard;
         let has_form = matches!(window.body, WindowBody::Form(_));
-        let create_iim = EditOptions::default().settings.create_iim;
+        let create_iim = self.settings.create_iim;
         let warnings = match &window.body {
             WindowBody::Form(state) => state.form.warnings(&state.read, create_iim),
             WindowBody::Loading | WindowBody::ReadError(_) => Vec::new(),
@@ -1848,6 +1953,7 @@ impl Loupe {
         let active = self.tabs.active_index();
         let mut selected = None;
         let mut open_import_clicked = false;
+        let mut open_settings_clicked = false;
         let filter = self.tabs.active().map(|tab| tab.filter).unwrap_or_default();
         let mut new_filter = None;
         egui::ScrollArea::horizontal()
@@ -1860,6 +1966,7 @@ impl Loupe {
                         }
                     }
                     open_import_clicked = ui.button("Importera…").clicked();
+                    open_settings_clicked = ui.button(settings_text(SettingsText::Title)).clicked();
                     // The filter of the active tab (ADR 0014 §5.2, amendment 1): condition, stars,
                     // label. The condition applies only to a number of stars; it keeps its value
                     // while disabled.
@@ -1901,6 +2008,9 @@ impl Loupe {
             });
         if open_import_clicked {
             self.open_import();
+        }
+        if open_settings_clicked {
+            self.open_settings_window();
         }
         let mut scroll_to = None;
         if let Some(filter) = new_filter {
@@ -2680,11 +2790,15 @@ impl eframe::App for Loupe {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.poll_import_worker(ui.ctx());
         self.check_exiftool(ui.ctx());
+        if self.send_pending_options() {
+            ui.ctx().request_repaint_after(WINDOW_POLL_INTERVAL);
+        }
         egui::CentralPanel::default()
             .frame(egui::Frame::NONE)
             .show(ui, |ui| {
                 self.draw(ui);
                 self.draw_import_dialog(ui.ctx());
+                self.draw_settings_window(ui.ctx());
                 self.draw_metadata_window(ui.ctx());
             });
     }
@@ -2802,6 +2916,91 @@ fn exiftool_message(result: &Result<ToolVersion, String>) -> Option<(&'static st
     }
 }
 
+/// A fixed text of the settings window (ADR 0007 §5.2, §5.4/Q10, T106).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SettingsText {
+    /// The button in the top bar and the window's title.
+    Title,
+    /// The check box of §5.2.
+    CreateIim,
+    /// The small text under the check box.
+    CreateIimNote,
+    /// The label of the encoding drop-down (§5.4, Q10).
+    Encoding,
+    Save,
+    Cancel,
+    /// The reason the file could not be saved when there is no settings folder (no LOCALAPPDATA).
+    NoFolder,
+}
+
+/// The text of `text` in the settings window.
+fn settings_text(text: SettingsText) -> &'static str {
+    match text {
+        SettingsText::Title => "Inställningar",
+        SettingsText::CreateIim => "Skapa IPTC-IIM för kompatibilitet med äldre system",
+        SettingsText::CreateIimNote => "Gäller JPEG, TIFF och DNG som saknar IIM. Av som standard.",
+        SettingsText::Encoding => "Teckenkodning för äldre IPTC- och Exif-text",
+        SettingsText::Save => "Spara",
+        SettingsText::Cancel => "Avbryt",
+        SettingsText::NoFolder => "mappen för inställningar är okänd (LOCALAPPDATA saknas)",
+    }
+}
+
+/// The message shown when the settings file could not be saved; the settings still apply until
+/// RawStride closes (T106).
+fn settings_save_error_text(error: &str) -> String {
+    format!("Inställningarna kunde inte sparas: {error}")
+}
+
+/// The fallback encodings of the settings window's drop-down, in its order.
+const FALLBACK_CHOICES: [Fallback; 2] = [Fallback::Windows1252, Fallback::Latin1];
+
+/// The text of a fallback encoding in the settings window's drop-down.
+fn fallback_text(fallback: Fallback) -> &'static str {
+    match fallback {
+        Fallback::Windows1252 => "Windows-1252 (västeuropeisk)",
+        Fallback::Latin1 => "ISO 8859-1 (Latin-1)",
+    }
+}
+
+/// The fallback encoding whose drop-down text is `text`; `None` for any other text.
+fn fallback_from_text(text: &str) -> Option<Fallback> {
+    FALLBACK_CHOICES
+        .into_iter()
+        .find(|fallback| fallback_text(*fallback) == text)
+}
+
+/// The settings at start (T106): read from `path` with each problem written to the log; the
+/// defaults without a path.
+fn start_settings(path: Option<&Path>) -> Settings {
+    let Some(path) = path else {
+        eprintln!("pw-loupe: LOCALAPPDATA is not set; the default settings are used");
+        return Settings::default();
+    };
+    let (settings, problems) = load_settings(path);
+    for problem in problems {
+        eprintln!("pw-loupe: {problem}");
+    }
+    settings
+}
+
+/// Shows a warning box from its own thread, so the frame is not held up.
+fn show_warning(title: &'static str, text: String) {
+    let shown = std::thread::Builder::new()
+        .name("pw-warning-message".into())
+        .spawn(move || {
+            let _ = rfd::MessageDialog::new()
+                .set_level(rfd::MessageLevel::Warning)
+                .set_title(title)
+                .set_description(text)
+                .set_buttons(rfd::MessageButtons::Ok)
+                .show();
+        });
+    if let Err(error) = shown {
+        eprintln!("pw-loupe: a warning could not be shown: {error}");
+    }
+}
+
 /// The image check of the safe write (I9d): it closes the view core's RAW sessions of the file
 /// first (T89), waiting at most [`RELEASE_TIMEOUT`].
 fn image_check(core: &ViewCore<NativeBackend>) -> RawImageCheck {
@@ -2813,6 +3012,8 @@ fn image_check(core: &ViewCore<NativeBackend>) -> RawImageCheck {
 
 fn run(options: Options) -> Result<(), String> {
     let journal = open_journal();
+    let settings_path = settings_path();
+    let settings = start_settings(settings_path.as_deref());
     let config = Config {
         core_budget: options.core_mb << 20,
         texture_budget: options.texture_mb << 20,
@@ -2829,7 +3030,7 @@ fn run(options: Options) -> Result<(), String> {
     let setup = journal.clone().map(|journal| WriteSetup {
         journal,
         checks: Box::new(image_check(&core)),
-        options: EditOptions::default(),
+        options: settings.edit_options(),
     });
     let metadata_worker = MetadataWorker::start(setup).map_err(|e| e.to_string())?;
     let import_worker =
@@ -2855,6 +3056,10 @@ fn run(options: Options) -> Result<(), String> {
                 core,
                 metadata_worker,
                 exiftool_checked: false,
+                settings,
+                settings_path,
+                settings_window: None,
+                pending_options: None,
                 metadata: MetadataCache::default(),
                 import_worker,
                 import_dialog: None,
@@ -2912,11 +3117,13 @@ fn main() -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::{
-        exiftool_message, index_span, label_color, label_pill, recovery_text, resolve_path,
-        resolve_paths, window_editor_properties,
+        FALLBACK_CHOICES, SettingsText, exiftool_message, fallback_from_text, fallback_text,
+        index_span, label_color, label_pill, recovery_text, resolve_path, resolve_paths,
+        settings_save_error_text, settings_text, window_editor_properties,
     };
     use egui::{Color32, Rect, pos2};
     use pw_metadata::ToolVersion;
+    use pw_metadata::iim::Fallback;
     use pw_metadata::journal::{Entry, Recovered};
     use std::path::{Path, PathBuf};
 
@@ -2965,6 +3172,44 @@ mod tests {
         for (major, minor) in [(12, 67), (13, 59)] {
             assert_eq!(exiftool_message(&Ok(ToolVersion { major, minor })), None);
         }
+    }
+
+    #[test]
+    fn the_two_encodings_have_their_texts_and_come_back_from_them() {
+        assert_eq!(FALLBACK_CHOICES, [Fallback::Windows1252, Fallback::Latin1]);
+        assert_eq!(
+            fallback_text(Fallback::Windows1252),
+            "Windows-1252 (västeuropeisk)"
+        );
+        assert_eq!(fallback_text(Fallback::Latin1), "ISO 8859-1 (Latin-1)");
+        for fallback in FALLBACK_CHOICES {
+            assert_eq!(fallback_from_text(fallback_text(fallback)), Some(fallback));
+        }
+        assert_eq!(fallback_from_text("UTF-8"), None);
+        assert_eq!(fallback_from_text(""), None);
+    }
+
+    #[test]
+    fn the_settings_window_has_the_texts_of_the_task() {
+        assert_eq!(settings_text(SettingsText::Title), "Inställningar");
+        assert_eq!(
+            settings_text(SettingsText::CreateIim),
+            "Skapa IPTC-IIM för kompatibilitet med äldre system"
+        );
+        assert_eq!(
+            settings_text(SettingsText::CreateIimNote),
+            "Gäller JPEG, TIFF och DNG som saknar IIM. Av som standard."
+        );
+        assert_eq!(
+            settings_text(SettingsText::Encoding),
+            "Teckenkodning för äldre IPTC- och Exif-text"
+        );
+        assert_eq!(settings_text(SettingsText::Save), "Spara");
+        assert_eq!(settings_text(SettingsText::Cancel), "Avbryt");
+        assert_eq!(
+            settings_save_error_text("åtkomst nekad"),
+            "Inställningarna kunde inte sparas: åtkomst nekad"
+        );
     }
 
     #[test]
