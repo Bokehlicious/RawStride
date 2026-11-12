@@ -2795,6 +2795,13 @@ copies of `TN002683.tif`, the Ricoh and the Xiaomi DNG):
   (`File:CurrentIPTCDigest`, the IIM tags and record versions, `Photoshop:IPTCDigest`, the
   written XMP, `SubIFD:PreviewImageStart`).
 
+**What the reviewer measured with ExifTool 13.59 for T93** (2026-11-12, after the review of T88;
+a JPEG given City in IIM and XMP and a checksum, so `Validate` is `OK`): clearing City with
+`-XMP-photoshop:City= -IPTC:CodedCharacterSet=UTF8 -IPTC:City=` removes the whole XMP packet and
+leaves the stored `IPTCDigest` out of date (`Validate`: `IPTCDigest is not current`); with
+`-IPTCDigest=new` added the stored and the current checksum are equal and `Validate` is `OK`
+(`-IPTCDigest=` removes the checksum, also `OK`).
+
 | Step | Task | Content | ADR 0007 | Can start |
 |---|---|---|---|---|
 | P1 | owner/reviewer | Save the IPTC TechReference 2025.1 JSON (`iptc-pmd-techreference_2025.1.json`, link in `docs/references.md`) in `D:\PhotoWorkflowData\references\`, with bytes and SHA-256 in its `README.md`. **Done 2026-11-11:** 140 839 bytes, SHA-256 `592c37b0…433128a8` | §3 | done |
@@ -2823,6 +2830,7 @@ copies of `TN002683.tif`, the Ricoh and the Xiaomi DNG):
 | I9e | T91 | RawStride: the metadata worker and the ingest write through T87/T88 with the journal (recovery at start) and T90's check; Swedish texts. The choice of mode in the import dialog comes with I10 | §9, §9.5, §15 | after T87–T90 |
 | D8 | owner | When the safe write creates the Photoshop block of a TIFF or DNG (to store a new `IPTCDigest`), ExifTool adds the validation warning `Non-standard format (undef) for IFD0 0x8649 PhotoshopSettings`, and T84's check refuses the copy for having one more warning. Reviewer's proposal: allow exactly one more warning (not error) in that case: the copy has `Photoshop:IPTCDigest`, the original has not, the file is a TIFF or DNG and the plan writes `-IPTCDigest=new`. The alternative, not writing a checksum in a TIFF/DNG without one, breaks §5.2. **Approved by the owner on 2026-11-12** | §5.2, §9.3 | done |
 | I9f | T92 | A current IIM checksum in TIFF and DNG: a second ExifTool call on the copy writes `IPTCDigest`, and the D8 allowance in `verify_copy` | §5.2, §9.3, §12 | now |
+| I9g | T93 | The IIM checksum stays current when a write changes IIM and no XMP is left (a file with a stored checksum) | §5.2, §12 | now |
 | I10 | – | RawStride: info panel with conflicts and notices, editor, settings (create IIM, fallback encoding), ExifTool version check at start | §5.2, §5.4, §11 | after I6 (panel), I9 (editor) |
 | I11 | – | PLUS fields as fixed choice lists | §11, Q9 | **after the PLUS controlled vocabulary is read** (§16.4) |
 | I12 | – | Real-file tests with the owner's level-C samples | §12, Q11 | when the owner provides the samples |
@@ -4165,6 +4173,49 @@ copies of `TN002683.tif`, the Ricoh and the Xiaomi DNG):
 - **Done when:** `.\tools\check.ps1` is all OK; both ignored runs pass; `docs/test-inventory.md`
   is updated; `git diff --stat` shows only the files above.
 
+### T93. ADR 0007 I9g: the IIM checksum stays current when no XMP is left — Open
+
+- **Can start now.** No dependency change. Can run at the same time as T91 (no shared files).
+- **Crates:** `pw-metadata` only.
+- **Files:** `crates/pw-metadata/src/write_plan.rs`; `crates/pw-metadata/tests/write_plan.rs`
+  (new tests only); `crates/pw-metadata/tests/template.rs` (one new test only);
+  `docs/test-inventory.md`.
+- **Why:** ADR 0007 §5.2 and §12 (the checksum is updated by every write that changes IIM). Found
+  in T88: in a JPEG with IIM and a stored `IPTCDigest` whose only XMP value is City, a template
+  `Clear` of City writes `-XMP-photoshop:City=` and `-IPTC:City=` but no `-IPTCDigest=new`
+  (`plan` writes the checksum only when IIM **and XMP** exist after the write). The old checksum
+  is then out of date, ExifTool's validation warns, and the copy check (T84) refuses the write
+  (the original is untouched, but the Clear can never be saved). Measured by the reviewer with
+  ExifTool 13.59 (see the step plan): with `-IPTCDigest=new` added the stored and the current
+  checksum are equal and `Validate` is `OK`.
+- **What:**
+  1. **`write_plan.rs`, the checksum rule:** besides today's case (IIM and XMP both exist after
+     the write), `-IPTCDigest=new` is written when the plan **writes IIM** and the file **has a
+     stored checksum** (`state.digest` is `Matches` or `Differs`), even when no XMP is left. Q1 is
+     unchanged: an unresolved (`Open`) conflict still gives `DigestNotWritten` (such conflicts
+     only exist without a stored checksum, so the new case never meets one). A file without a
+     stored checksum and without XMP after the write still gets none. Update the module comment
+     (the checksum bullet) and the comment at the rule.
+  2. Nothing else changes; for a TIFF or DNG the digest pass of T92 follows from the argument.
+- **Rules:** rules 3–7 and 10–12. No `Cargo.toml` change. Do not change `safe_write.rs`,
+  `verify.rs` or `template.rs`; do not change existing tests (the T88 test that gives the JPEG a
+  keyword stays as it is).
+- **Tests to add:**
+  - unit tests in `write_plan.rs`: a JPEG with IIM, `digest` `Matches`, City the only value,
+    City cleared → the plan holds `-XMP-photoshop:City=`, `-IPTC:City=` and `-IPTCDigest=new`;
+    the same with `digest` `Differs` → also `-IPTCDigest=new`; with `digest` `Missing` and no XMP
+    left → no `-IPTCDigest=new` and no `DigestNotWritten`; a TIFF with the same change → also
+    `-IPTCDigest=new`; a plan that does not write IIM (only `xmp:Rating` in a file whose XMP
+    is otherwise empty and whose IIM is in line) → unchanged from today;
+  - `tests/write_plan.rs` (ExifTool required): the JPEG fixture given City in IIM and XMP and a
+    checksum (`-IPTCDigest=new`), then the plan that clears City applied with `-o`: `IPTCDigest`
+    equals `CurrentIPTCDigest` and `read_metadata` shows no City;
+  - `tests/template.rs` (ExifTool required): the same JPEG (City the only XMP value, **no**
+    keyword) and a template `Clear` of `photoshop:City` through `apply_template_safely` →
+    `Written`, City gone from XMP and IIM, the checksum current.
+- **Done when:** `.\tools\check.ps1` is all OK; `docs/test-inventory.md` is updated;
+  `git diff --stat` shows only the files above.
+
 ### T7. Format the files that `cargo fmt --check` reports — Done
 
 - **Crates:** `photoworkflow` (`src-tauri`), `preview-bench` (`tools/preview-bench`).
@@ -4645,3 +4696,4 @@ and reviewer:
 | 2026-11-12 | T88 | Ready for review | (Agent) New `src/template.rs` (`Mode`, `TemplateField`, `Template`, `TemplateError`, `template::apply`); `edit.rs`: `EditError::Template` and `ExifTool::apply_template_safely`; `lib.rs`: the `mod` line and `Iptc::to_template` (plus its unit tests); `properties.rs`: `xmpRights:Marked` as a hand-written entry (D6), with the existing count assertion `66 + 4` → `66 + 5` (the D6 entry) and a new test; new `tests/template.rs` (5); `docs/test-inventory.md` (unit row 250 → 272, a new row; header total not updated, because the run includes T92's uncommitted work). `check.ps1` all OK (fmt, test, clippy): **874 passed, 0 failed, 41 ignored** in 53 programs, T92's work in progress in the same worktree included. **Found:** with City as the only XMP value, Clear on a JPEG with IIM fails the copy check: `write_plan.rs` (T83) writes no `-IPTCDigest=new` when no XMP is left, so the old `IPTCDigest` stays out of date ("IPTCDigest is not current", one more warning). Owner chose to give the test JPEG a keyword in XMP as well; `write_plan.rs` not changed, the bug is for a follow-up |
 | 2026-11-12 | T92 | Ready for review | (Agent) `safe_write.rs`: the digest pass (`-IPTCDigest=new -overwrite_original <copy>` for a `Tiff`/`Dng` plan with `-IPTCDigest=new`; one file updated and no warning, else `WriteCopy`); `verify.rs`: D8 (one more warning when a TIFF/DNG copy gets a new `Photoshop:IPTCDigest` and the plan writes `-IPTCDigest=new`). **Found and decided with the owner (choice A, outside the task text):** the digest pass alone did not make `TN002683.tif` pass. Measured with ExifTool 13.59: the written copy is correct (read in a new process: 5/3 warnings, digest current), but after a `-stay_open` process has written `-IPTCDigest=new` to a TIFF whose Photoshop block holds an `IPTCDigest` followed by an `AgHg` resource (0x1f40; Lightroom/Photo Mechanic), that process reads the block of every such TIFF wrongly until it ends (+2 warnings: `[minor] Non-standard Photoshop at TIFF-IFD0-Photoshop-IPTCDigest`, `Bad Photoshop IRB resource "<first 4 digest bytes>"`), also files it never wrote; JPEG and DNG writes do not do this. So the owner approved changing **`exiftool.rs`** too: new `ExifTool::restart` (same program and arguments; a failed restart marks the instance broken), and `write_safely` restarts ExifTool after a TIFF write with `-IPTCDigest=new` (also a failed one) before the copy is read (about 0.25 s). The other TIFFs had only passed before because both of their snapshots were already misread (TN002694 read 8/4, really 6/3). Tests: unit `verify.rs` +2, `safe_write.rs` +3, `exiftool.rs` +3; `tests/safe_write.rs` +3 (minimal TIFF with IIM; without IIM and "create IIM" (D8); with an `IPTCDigest` + `AgHg` block, which fails in `Verify` without the restart) + 1 ignored. Ignored runs (`PW_TESTDATA=D:\PhotoWorkflowData\RAW`): `every_real_tiff_and_dng_gets_a_current_digest` passed (18 files, all written with a current digest; TN002683 6/3 → 5/3; DNGs one more warning by D8), T87's `every_real_dng_jpeg_and_tiff_is_rated_safely` passed (25 of 25, TN002683 included). `check.ps1` all OK: **879 passed, 0 failed, 41 ignored** in 53 programs, with T88's uncommitted work in the same worktree; `docs/test-inventory.md` header updated to that run. `git diff --stat` also shows T88's files. Suggestion: report the misread to ExifTool's author |
 | 2026-11-12 | T88, T92 | Done | Review: both accepted. **T88:** `template::apply` follows §10 and the task (one space as the separator, D5; no Clear of the eight copyright-management properties; a sub-field of a list of structures refused; a result equal to the file is not set), `apply_template_safely`, `Iptc::to_template` with `xmpRights:Marked` `True` beside a copyright (D6, a hand-written entry in `properties.rs`). **T92:** the digest pass on the copy for a TIFF/DNG plan with `-IPTCDigest=new`, and the D8 allowance in `verify_copy`. The owner's choice A during the task, which also changes `exiftool.rs` (`ExifTool::restart`, used by `write_safely` after a TIFF write with `-IPTCDigest=new`), is right: the reviewer reproduced it with one `-stay_open` ExifTool 13.59 process and argument files: an untouched copy of `TN002683.tif` reads `6 Warnings (3 minor)` before the process writes `-IPTCDigest=new` to another copy and `8 Warnings (4 minor)` after it, while a new process reads 6 again. The reviewer's `check.ps1`: fmt, test and clippy OK, **879 passed, 0 failed, 41 ignored**; ignored runs (`PW_TESTDATA=D:\PhotoWorkflowData\RAW`): `edit` `every_real_dng_jpeg_and_tiff_is_rated_safely` passed (25 files, `TN002683.tif` included), `safe_write` `every_real_dng_is_written_safely` and `every_real_tiff_and_dng_gets_a_current_digest` passed. **Left for a follow-up** (found in T88, in `write_plan.rs` of T83): clearing the only XMP value of a JPEG with IIM writes no `-IPTCDigest=new`, so the old checksum stays out of date and the copy check refuses the write (the original is untouched). Also suggested: report the `-stay_open` misread to ExifTool's author. Committed |
+| 2026-11-12 | T93 | Open | Added after the review of T88: `write_plan` writes `-IPTCDigest=new` only when IIM and XMP both exist after the write, so clearing the only XMP value of a file with IIM and a stored checksum leaves the checksum out of date and the copy check refuses the write. T93 also writes it when the plan writes IIM and the file has a stored checksum. No owner decision needed (§5.2, §12). Can run at the same time as T91 |
