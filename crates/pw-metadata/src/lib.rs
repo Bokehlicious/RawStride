@@ -38,9 +38,10 @@ use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 use std::path::{Path, PathBuf};
 
-pub use exiftool::ExifTool;
+pub use exiftool::{ExifTool, MIN_EXIFTOOL_VERSION, ToolVersion};
 pub use worker::{
-    Event as WorkerEvent, MetadataWorker, NO_JOURNAL, RequestId, SubmitError, WriteSetup,
+    EXIFTOOL_TOO_OLD, Event as WorkerEvent, MetadataWorker, NO_JOURNAL, RequestId, SubmitError,
+    WriteSetup,
 };
 
 use edit::EditError;

@@ -4,14 +4,22 @@
 //! [`ExifTool::write_rating_safely`] with the [`WriteSetup`] given at the start. Without a setup
 //! (the program could not open its write journal) every rating write fails with [`NO_JOURNAL`]
 //! and nothing is written; reading ratings works either way.
+//!
+//! The ExifTool version (ADR 0007 §11, D9; T94): the worker thread starts ExifTool at once and
+//! asks [`ExifTool::version`] each time it starts a process. The first result is kept for
+//! [`MetadataWorker::exiftool_version`]. While the running process is older than
+//! [`MIN_EXIFTOOL_VERSION`] or its version could not be read, every rating write fails with
+//! [`EXIFTOOL_TOO_OLD`] and nothing is written; reading ratings works as before.
 
 use std::collections::HashMap;
 use std::fmt;
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, SyncSender, TryRecvError, TrySendError};
+use std::sync::{Arc, OnceLock};
 use std::thread::JoinHandle;
 
 use crate::edit::EditOptions;
+use crate::exiftool::{MIN_EXIFTOOL_VERSION, ToolVersion};
 use crate::journal::Journal;
 use crate::safe_write::ImageCheck;
 use crate::{ExifTool, Rating, Result, WriteError};
@@ -20,6 +28,13 @@ const REQUEST_CAPACITY: usize = 8;
 
 /// The text of [`WriteError::Other`] for a rating write when the worker has no [`WriteSetup`].
 pub const NO_JOURNAL: &str = "the write journal could not be opened";
+
+/// The text of [`WriteError::Other`] for a rating write while the running ExifTool is older than
+/// [`MIN_EXIFTOOL_VERSION`] or its version could not be read (D9).
+pub const EXIFTOOL_TOO_OLD: &str = "ExifTool is older than 12.67";
+
+/// The first result of a start: the version, or the start or version error as text.
+type VersionResult = std::result::Result<ToolVersion, String>;
 
 /// What a rating write needs (T91): the app's write journal, its image checks and the edit
 /// options.
@@ -85,6 +100,8 @@ pub struct MetadataWorker {
     events: Receiver<Event>,
     thread: Option<JoinHandle<()>>,
     next_id: RequestId,
+    /// Set once by the worker thread after its first start (T94).
+    version: Arc<OnceLock<VersionResult>>,
 }
 
 impl MetadataWorker {
@@ -100,15 +117,34 @@ impl MetadataWorker {
         let (event_tx, event_rx) = mpsc::sync_channel(REQUEST_CAPACITY);
         let program = program.to_string();
         let pre_args: Vec<String> = pre_args.iter().map(|arg| (*arg).to_string()).collect();
+        let version = Arc::new(OnceLock::new());
+        let first_version = Arc::clone(&version);
         let thread = std::thread::Builder::new()
             .name("pw-metadata".into())
-            .spawn(move || run(&program, &pre_args, setup.as_ref(), &request_rx, &event_tx))?;
+            .spawn(move || {
+                run(
+                    &program,
+                    &pre_args,
+                    setup.as_ref(),
+                    &first_version,
+                    &request_rx,
+                    &event_tx,
+                );
+            })?;
         Ok(Self {
             requests: Some(request_tx),
             events: event_rx,
             thread: Some(thread),
             next_id: 0,
+            version,
         })
+    }
+
+    /// The version of the first ExifTool process the worker started: `None` until the first
+    /// start has been tried, then the version, or the start or version error as text. Later
+    /// restarts do not change it.
+    pub fn exiftool_version(&self) -> Option<std::result::Result<ToolVersion, String>> {
+        self.version.get().cloned()
     }
 
     /// Queues a batch read without blocking. The bounded queue reports back-pressure explicitly.
@@ -162,28 +198,69 @@ impl Drop for MetadataWorker {
     }
 }
 
+/// A started ExifTool process and whether its version allows writes (D9).
+struct Running {
+    tool: ExifTool,
+    may_write: bool,
+}
+
+/// Starts ExifTool and asks its version. The first result (the version, the version error or
+/// the start error) is kept in `first`. A process that broke while answering is dropped and its
+/// error returned, so the next request starts a new one.
+fn start_tool(
+    program: &str,
+    pre_args: &[&str],
+    first: &OnceLock<VersionResult>,
+) -> std::result::Result<Running, String> {
+    let mut tool = match ExifTool::start_with(program, pre_args) {
+        Ok(tool) => tool,
+        Err(error) => {
+            let text = error.to_string();
+            let _ = first.set(Err(text.clone()));
+            return Err(text);
+        }
+    };
+    let version = tool.version().map_err(|error| error.to_string());
+    let may_write = version
+        .as_ref()
+        .is_ok_and(|version| *version >= MIN_EXIFTOOL_VERSION);
+    let broken = tool.is_broken();
+    let error = version.as_ref().err().cloned();
+    let _ = first.set(version);
+    if broken {
+        return Err(error.unwrap_or_else(|| "ExifTool process is unusable".into()));
+    }
+    Ok(Running { tool, may_write })
+}
+
 /// The worker loop: runs until the request sender is dropped or the event receiver is gone.
 fn run(
     program: &str,
     pre_args: &[String],
     setup: Option<&WriteSetup>,
+    first_version: &OnceLock<VersionResult>,
     requests: &Receiver<Request>,
     events: &SyncSender<Event>,
 ) {
     let pre_args: Vec<&str> = pre_args.iter().map(String::as_str).collect();
-    let mut exiftool: Option<ExifTool> = None;
+    // Start at once, so the version is known before the first request (T94). A failed start is
+    // tried again with the next request.
+    let mut exiftool = start_tool(program, &pre_args, first_version).ok();
     while let Ok(request) = requests.recv() {
-        // (Re)start lazily, so a missing or crashed ExifTool is retried with each request.
+        // Restart when needed, so a missing or crashed ExifTool is retried with each request.
         let mut start_error = None;
         if exiftool.is_none() {
-            match ExifTool::start_with(program, &pre_args) {
-                Ok(tool) => exiftool = Some(tool),
-                Err(error) => start_error = Some(error.to_string()),
+            match start_tool(program, &pre_args, first_version) {
+                Ok(running) => exiftool = Some(running),
+                Err(error) => start_error = Some(error),
             }
         }
         let event = handle(exiftool.as_mut(), start_error, setup, request);
         // A broken process cannot be trusted with another command; dropping it shuts it down.
-        if exiftool.as_ref().is_some_and(ExifTool::is_broken) {
+        if exiftool
+            .as_ref()
+            .is_some_and(|running| running.tool.is_broken())
+        {
             exiftool = None;
         }
         if events.send(event).is_err() {
@@ -193,7 +270,7 @@ fn run(
 }
 
 fn handle(
-    tool: Option<&mut ExifTool>,
+    running: Option<&mut Running>,
     start_error: Option<String>,
     setup: Option<&WriteSetup>,
     request: Request,
@@ -201,16 +278,23 @@ fn handle(
     let unavailable = || start_error.unwrap_or_else(|| "ExifTool worker is unavailable".into());
     match request {
         Request::Read { id, images } => {
-            let result = match tool {
-                Some(tool) => tool.read_ratings(&images).map_err(|e| e.to_string()),
+            let result = match running {
+                Some(running) => running
+                    .tool
+                    .read_ratings(&images)
+                    .map_err(|e| e.to_string()),
                 None => Err(unavailable()),
             };
             Event::RatingsRead { id, result }
         }
         Request::Write { id, path, rating } => {
-            let result = match (setup, tool) {
+            let result = match (setup, running) {
                 (None, _) => Err(WriteError::Other(NO_JOURNAL.to_string())),
-                (Some(setup), Some(tool)) => tool
+                (Some(_), Some(running)) if !running.may_write => {
+                    Err(WriteError::Other(EXIFTOOL_TOO_OLD.to_string()))
+                }
+                (Some(setup), Some(running)) => running
+                    .tool
                     .write_rating_safely(
                         &path,
                         &rating,
@@ -394,7 +478,9 @@ mod tests {
         let folder = TempDir::new("restart");
         let journal = TempDir::new("restart-journal");
         let raw = raw_with_sidecar(folder.path());
-        let (program, args) = fake_exiftool("exit-after-first");
+        // T94 (owner's decision): the worker asks `-ver` when it starts a process, so this fake
+        // answers `-ver` and exits at the second other command.
+        let (program, args) = fake_exiftool("exit-after-first-request");
         let args: Vec<&str> = args.iter().map(String::as_str).collect();
         let mut worker =
             MetadataWorker::start_with(&program, &args, Some(test_setup(journal.path())))
@@ -459,6 +545,113 @@ mod tests {
             Err(WriteError::Other(NO_JOURNAL.to_string()))
         );
         assert!(!folder.path().join("TN0001.xmp").exists());
+    }
+
+    /// Waits up to `limit` for the first start's result of `worker`.
+    fn wait_for_version(
+        worker: &MetadataWorker,
+        limit: Duration,
+    ) -> Option<std::result::Result<ToolVersion, String>> {
+        let deadline = Instant::now() + limit;
+        loop {
+            if let Some(version) = worker.exiftool_version() {
+                return Some(version);
+            }
+            if Instant::now() >= deadline {
+                return None;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    /// A worker with a fake ExifTool that answers `-ver` with `answer`, and a journal in `journal`.
+    fn start_with_version(answer: &str, journal: &Path) -> MetadataWorker {
+        let (program, args) = fake_exiftool(&format!("version={answer}"));
+        let args: Vec<&str> = args.iter().map(String::as_str).collect();
+        MetadataWorker::start_with(&program, &args, Some(test_setup(journal)))
+            .expect("worker should start")
+    }
+
+    #[test]
+    fn the_version_is_known_without_any_request() {
+        let journal = TempDir::new("version-new-journal");
+        let worker = start_with_version("13.59", journal.path());
+        assert_eq!(
+            wait_for_version(&worker, Duration::from_secs(10)),
+            Some(Ok(ToolVersion {
+                major: 13,
+                minor: 59
+            }))
+        );
+    }
+
+    #[test]
+    fn an_old_exiftool_refuses_rating_writes_but_reads() {
+        let folder = TempDir::new("version-old");
+        let journal = TempDir::new("version-old-journal");
+        let raw = raw_with_sidecar(folder.path());
+        let sidecar = folder.path().join("TN0001.xmp");
+        let mut worker = start_with_version("12.40", journal.path());
+        assert_eq!(
+            wait_for_version(&worker, Duration::from_secs(10)),
+            Some(Ok(ToolVersion {
+                major: 12,
+                minor: 40
+            }))
+        );
+
+        assert_eq!(
+            write_result(&mut worker, &raw),
+            Err(WriteError::Other(EXIFTOOL_TOO_OLD.to_string()))
+        );
+        assert_eq!(
+            std::fs::read(&sidecar).expect("read the sidecar"),
+            b"<x:xmpmeta/>"
+        );
+        assert_eq!(
+            read_result(&mut worker, std::slice::from_ref(&raw)),
+            Ok(HashMap::new())
+        );
+    }
+
+    #[test]
+    fn an_unreadable_version_counts_as_too_old() {
+        let folder = TempDir::new("version-abc");
+        let journal = TempDir::new("version-abc-journal");
+        let raw = raw_with_sidecar(folder.path());
+        let mut worker = start_with_version("abc", journal.path());
+        match wait_for_version(&worker, Duration::from_secs(10)) {
+            Some(Err(error)) => assert_eq!(error, "ExifTool: unreadable ExifTool version: abc"),
+            other => panic!("expected an unreadable version, got {other:?}"),
+        }
+
+        assert_eq!(
+            write_result(&mut worker, &raw),
+            Err(WriteError::Other(EXIFTOOL_TOO_OLD.to_string()))
+        );
+        assert_eq!(
+            read_result(&mut worker, std::slice::from_ref(&raw)),
+            Ok(HashMap::new())
+        );
+    }
+
+    #[test]
+    fn a_missing_program_gives_the_start_error_as_the_version() {
+        let journal = TempDir::new("version-missing-journal");
+        let program = std::env::temp_dir().join(format!(
+            "pw-metadata-no-exiftool-version-{}",
+            std::process::id()
+        ));
+        let worker = MetadataWorker::start_with(
+            &program.to_string_lossy(),
+            &[],
+            Some(test_setup(journal.path())),
+        )
+        .expect("worker thread should start");
+        match wait_for_version(&worker, Duration::from_secs(10)) {
+            Some(Err(error)) => assert!(error.contains("could not start"), "{error}"),
+            other => panic!("expected the start error, got {other:?}"),
+        }
     }
 
     /// The tests below write through a real ExifTool (`exiftool` on PATH, or `PW_EXIFTOOL_PL`
@@ -532,6 +725,23 @@ mod tests {
                 _kind: FileKind,
             ) -> std::result::Result<(), String> {
                 Err("the test check refuses the copy".to_string())
+            }
+        }
+
+        #[test]
+        fn the_real_exiftool_is_new_enough_within_five_seconds() {
+            let journal = TempDir::new("real-version-journal");
+            let (program, args) = exiftool();
+            let args: Vec<&str> = args.iter().map(String::as_str).collect();
+            let worker =
+                MetadataWorker::start_with(&program, &args, Some(test_setup(journal.path())))
+                    .expect("worker should start");
+            match wait_for_version(&worker, Duration::from_secs(5)) {
+                Some(Ok(version)) => assert!(
+                    version >= MIN_EXIFTOOL_VERSION,
+                    "ExifTool {version} is older than {MIN_EXIFTOOL_VERSION}"
+                ),
+                other => panic!("expected the version within 5 s, got {other:?}"),
             }
         }
 

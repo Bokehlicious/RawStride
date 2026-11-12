@@ -13,6 +13,7 @@ mod import_worker;
 mod monitor_profile;
 mod ratings;
 mod selection;
+mod settings;
 mod tabs;
 mod thumbs;
 
@@ -32,8 +33,9 @@ pub use grid::{
     loupe_key_action, navigate, row, step_thumbnail_size, take_wheel_steps, visible_range,
 };
 pub use import::{
-    Field, FieldError, ImportForm, IptcForm, ItemAction, Preview, PreviewLine, Validated,
-    result_folder,
+    Field, FieldError, ImportForm, IptcField, IptcForm, IptcModes, ItemAction, Preview,
+    PreviewLine, Validated, allowed_modes, clear_and_import_text, clear_cancel_text,
+    clear_confirmation_text, clear_confirmation_title, mode_text, result_folder,
 };
 pub use import_dialog::{DialogRequest, ImportDialog, ImportDialogState};
 pub use import_text::{
@@ -49,6 +51,7 @@ pub use ratings::{
     rating_key_action, star_glyphs, status_text,
 };
 pub use selection::Selection;
+pub use settings::{Settings, load_settings, save_settings, settings_path};
 pub use tabs::{Tab, Tabs, ViewMode};
 pub use thumbs::{CellState, ThumbGrid, color_image, request_cell};
 

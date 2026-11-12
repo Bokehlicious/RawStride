@@ -1,5 +1,11 @@
 //! A persistent ExifTool process in `-stay_open` mode.
+//!
+//! [`ExifTool::version`] asks the running process for its version (ADR 0007 §11: "ExifTool
+//! version: at least 12.67, checked at start", from IPTC §5.1). [`MIN_EXIFTOOL_VERSION`] is that
+//! minimum; the safe write (§9) also relies on newer features (`-api ImageHashType`,
+//! `ImageDataHash`). The metadata worker asks it each time it starts a process (T94).
 
+use std::fmt;
 use std::fmt::Write as _;
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
@@ -10,6 +16,43 @@ use crate::{Error, Result};
 
 /// How long `Drop` waits for ExifTool to exit on its own before killing it.
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// An ExifTool version as ExifTool prints it with `-ver` (`13.59`). The field order makes the
+/// derived order numeric: 12.67 < 13.10.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct ToolVersion {
+    pub major: u32,
+    pub minor: u32,
+}
+
+/// The oldest ExifTool the program writes with (ADR 0007 §11, D9).
+pub const MIN_EXIFTOOL_VERSION: ToolVersion = ToolVersion {
+    major: 12,
+    minor: 67,
+};
+
+impl ToolVersion {
+    /// Parses the answer to `-ver`: the trimmed text must be two runs of ASCII digits around one
+    /// `.` (`13.59`). Anything else (`13`, `13.5.1`, `v13.59`, an empty text) is `None`.
+    pub fn parse(text: &str) -> Option<ToolVersion> {
+        let (major, minor) = text.trim().split_once('.')?;
+        let digits = |part: &str| !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit());
+        if !digits(major) || !digits(minor) {
+            return None;
+        }
+        Some(ToolVersion {
+            major: major.parse().ok()?,
+            minor: minor.parse().ok()?,
+        })
+    }
+}
+
+impl fmt::Display for ToolVersion {
+    /// `major.minor` with the minor part in two digits (`12.67`, `13.05`).
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}.{:02}", self.major, self.minor)
+    }
+}
 
 /// One running `exiftool -stay_open True -@ -` process. Commands are serialised; wrap it in a
 /// `Mutex` to share it between threads.
@@ -129,6 +172,17 @@ impl ExifTool {
         }
     }
 
+    /// Asks the running process for its version (`-ver`). The last non-empty line of the standard
+    /// output (owner's decision in T94) must be accepted by [`ToolVersion::parse`]; otherwise
+    /// the answer is an [`Error::ExifTool`] naming that line. Messages on stderr and text before
+    /// the version (the test fake's libtest header) do not make a good version unreadable.
+    pub fn version(&mut self) -> Result<ToolVersion> {
+        let answer = self.execute(&["-ver".to_string()])?;
+        let line = version_line(&answer);
+        ToolVersion::parse(line)
+            .ok_or_else(|| Error::ExifTool(format!("unreadable ExifTool version: {line}")))
+    }
+
     /// True after an I/O failure or unexpected exit; the instance then rejects all commands.
     pub fn is_broken(&self) -> bool {
         self.broken
@@ -201,6 +255,18 @@ impl ExifTool {
             out.push_str(&line);
         }
     }
+}
+
+/// The last non-empty line, trimmed, of the standard-output part of an [`ExifTool::execute`]
+/// answer (the part before the `--- stderr ---` line), or an empty text when there is none.
+fn version_line(answer: &str) -> &str {
+    answer
+        .lines()
+        .take_while(|line| *line != "--- stderr ---")
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .last()
+        .unwrap_or("")
 }
 
 impl Drop for ExifTool {
@@ -298,6 +364,73 @@ mod tests {
         assert!(et.restart().is_err());
         assert!(et.is_broken());
         assert!(et.execute(&["-ver".into()]).is_err());
+    }
+
+    fn version(major: u32, minor: u32) -> ToolVersion {
+        ToolVersion { major, minor }
+    }
+
+    #[test]
+    fn a_version_is_two_runs_of_digits_around_one_dot() {
+        assert_eq!(ToolVersion::parse("13.59"), Some(version(13, 59)));
+        assert_eq!(ToolVersion::parse("12.67"), Some(version(12, 67)));
+        assert_eq!(ToolVersion::parse("  13.59 "), Some(version(13, 59)));
+        assert_eq!(ToolVersion::parse("13.59\n"), Some(version(13, 59)));
+        assert_eq!(ToolVersion::parse("\r\n 12.40\r\n"), Some(version(12, 40)));
+    }
+
+    #[test]
+    fn other_version_texts_are_not_accepted() {
+        for text in [
+            "13", "13.5.1", "v13.59", "", " \n", "13.", ".59", "13.5a", "1 3.59", "13,59",
+        ] {
+            assert_eq!(ToolVersion::parse(text), None, "{text:?}");
+        }
+    }
+
+    #[test]
+    fn versions_are_ordered_by_number() {
+        assert!(version(12, 66) < version(12, 67));
+        assert!(version(12, 67) < version(13, 0));
+        assert!(version(12, 99) < version(13, 0));
+        assert!(version(12, 67) < version(13, 10));
+        assert_eq!(MIN_EXIFTOOL_VERSION, version(12, 67));
+    }
+
+    #[test]
+    fn a_version_is_shown_with_a_two_digit_minor_part() {
+        assert_eq!(version(13, 5).to_string(), "13.05");
+        assert_eq!(version(12, 67).to_string(), "12.67");
+        assert_eq!(MIN_EXIFTOOL_VERSION.to_string(), "12.67");
+    }
+
+    #[test]
+    fn the_version_is_the_last_line_of_standard_output() {
+        assert_eq!(version_line("13.59\n"), "13.59");
+        assert_eq!(version_line("\nrunning 1 test\n13.59\n"), "13.59");
+        assert_eq!(
+            version_line("13.59\n--- stderr ---\nWarning: something\n"),
+            "13.59"
+        );
+        assert_eq!(version_line("abc\n\n  \n"), "abc");
+        assert_eq!(version_line(""), "");
+        assert_eq!(version_line("--- stderr ---\n13.59\n"), "");
+    }
+
+    #[test]
+    fn version_asks_the_process() {
+        let mut et = start_fake("version=13.59");
+        assert_eq!(et.version().ok(), Some(version(13, 59)));
+    }
+
+    #[test]
+    fn an_unreadable_version_answer_is_an_error() {
+        let mut et = start_fake("version=abc");
+        match et.version() {
+            Err(Error::ExifTool(m)) => assert_eq!(m, "unreadable ExifTool version: abc"),
+            other => panic!("expected an unreadable version, got {other:?}"),
+        }
+        assert!(!et.is_broken());
     }
 
     #[test]

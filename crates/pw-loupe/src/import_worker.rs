@@ -7,11 +7,11 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use crate::{Field, FieldError, ImportForm, Preview};
+use crate::{Field, FieldError, ImportForm, IptcForm, Preview};
+use pw_metadata::ExifTool;
 use pw_metadata::edit::EditOptions;
 use pw_metadata::journal::Journal;
 use pw_metadata::safe_write::ImageCheck;
-use pw_metadata::{ExifTool, Iptc};
 
 const REQUEST_CAPACITY: usize = 8;
 
@@ -389,7 +389,7 @@ fn run_import(
         &plan,
         &report.failed,
         &validated.options,
-        &form.iptc.to_iptc(),
+        &form.iptc,
         &mut iptc_runtime,
         &mut done,
     );
@@ -453,15 +453,17 @@ fn apply_iptc(
     plan: &pw_ingest::Plan,
     failed: &[(PathBuf, String)],
     options: &pw_ingest::Options,
-    iptc: &Iptc,
+    iptc: &IptcForm,
     runtime: &mut IptcRuntime<'_>,
     done: &mut ImportDone,
 ) {
-    if done.cancelled || iptc.is_empty() {
+    // A template that does nothing does not start ExifTool.
+    if done.cancelled || iptc.template_is_empty() {
         return;
     }
 
     let targets = iptc_targets(plan, failed, options);
+    // Each field with the mode chosen in the dialog (ADR 0007 §10, D13).
     let template = iptc.to_template();
     for (index, current) in targets.iter().enumerate() {
         if runtime.cancel.load(Ordering::Relaxed) {
@@ -956,6 +958,147 @@ mod tests {
         assert_eq!(files_below(&journal_folder), Vec::<PathBuf>::new());
     }
 
+    /// ExifTool on PATH for the tests below, or a failure with an explanation (docs/TESTING.md
+    /// §4.5).
+    #[cfg(windows)]
+    fn required_exiftool() -> ExifTool {
+        ExifTool::start()
+            .and_then(|mut tool| tool.execute(&["-ver".to_string()]).map(|_| tool))
+            .unwrap_or_else(|error| {
+                panic!(
+                    "ExifTool is required for this test but `exiftool` on PATH does not answer: \
+                     {error}. Install ExifTool (docs/TESTING.md §4.5)."
+                )
+            })
+    }
+
+    /// Writes the JPEG fixture to the card as `A001.jpg` with `tags` already in it, written by
+    /// ExifTool before the import.
+    #[cfg(windows)]
+    fn write_jpeg_with(dirs: &TempDirs, exiftool: &mut ExifTool, tags: &[&str]) {
+        dirs.write_image("A001.jpg", jpeg_fixture::SMALL);
+        let image = dirs.source.join("DCIM").join("100TEST").join("A001.jpg");
+        let mut args: Vec<String> = tags.iter().map(|tag| tag.to_string()).collect();
+        args.push("-overwrite_original".to_string());
+        args.push(image.to_string_lossy().into_owned());
+        let output = exiftool.execute(&args).unwrap();
+        assert!(output.contains("1 image files updated"), "{output}");
+    }
+
+    /// Imports the card of `dirs` with `iptc` and the write journal of `dirs`, and reads the
+    /// imported `A001.jpg` back.
+    #[cfg(windows)]
+    fn import_and_read(
+        dirs: &TempDirs,
+        exiftool: &mut ExifTool,
+        iptc: crate::IptcForm,
+    ) -> pw_metadata::read::MetadataRead {
+        let journal = Journal::open(&dirs.root.join("journal")).unwrap();
+        let mut worker = ImportWorker::start(Some(journal), Box::new(NoImageCheck)).unwrap();
+        let mut form = dirs.form("");
+        form.iptc = iptc;
+        let id = worker.run(form).unwrap();
+
+        let done = done_event(&worker, id);
+        assert_eq!(done.copied, 1);
+        assert!(done.iptc_errors.is_empty(), "{:?}", done.iptc_errors);
+        exiftool
+            .read_metadata(
+                &dirs.dest.join("A001.jpg"),
+                pw_metadata::iim::Fallback::Windows1252,
+            )
+            .unwrap()
+    }
+
+    /// E-post in Clear removes the work e-mail the file already had (ADR 0007 §10, D13). Needs
+    /// ExifTool on PATH; the safe write uses Windows file operations.
+    #[cfg(windows)]
+    #[test]
+    fn a_cleared_email_is_removed_from_the_imported_jpeg() {
+        use pw_metadata::value::Value;
+
+        let mut exiftool = required_exiftool();
+        let dirs = TempDirs::new("iptc-clear-email");
+        write_jpeg_with(
+            &dirs,
+            &mut exiftool,
+            &[
+                "-XMP-iptcCore:CreatorWorkEmail=gammal@example.com",
+                "-XMP-iptcCore:CreatorWorkTelephone=+46 31 12 34 56",
+            ],
+        );
+        let contact = |read: &pw_metadata::read::MetadataRead| {
+            read.reconciled
+                .metadata
+                .get("Iptc4xmpCore:CreatorContactInfo")
+                .map(|stored| stored.value.clone())
+        };
+        let email_of = |value: &Option<Value>| match value {
+            Some(Value::Struct(fields)) => fields
+                .fields
+                .iter()
+                .find(|(id, _)| id == "Iptc4xmpCore:CiEmailWork")
+                .map(|(_, value)| value.clone()),
+            _ => None,
+        };
+        let before = exiftool
+            .read_metadata(
+                &dirs.source.join("DCIM").join("100TEST").join("A001.jpg"),
+                pw_metadata::iim::Fallback::Windows1252,
+            )
+            .unwrap();
+        assert_eq!(
+            email_of(&contact(&before)),
+            Some(Value::Text("gammal@example.com".to_string()))
+        );
+
+        let mut iptc = crate::IptcForm::default();
+        iptc.modes.email = pw_metadata::template::Mode::Clear;
+        let read = import_and_read(&dirs, &mut exiftool, iptc);
+
+        let after = contact(&read);
+        assert_eq!(email_of(&after), None, "{after:?}");
+        // The other field of the structure is kept.
+        let Some(Value::Struct(fields)) = &after else {
+            panic!("the contact details are gone: {after:?}");
+        };
+        assert_eq!(
+            fields.fields,
+            [(
+                "Iptc4xmpCore:CiTelWork".to_string(),
+                Value::Text("+46 31 12 34 56".to_string())
+            )]
+        );
+    }
+
+    /// Fotograf in Append adds the name after the creator the file already had (ADR 0007 §10,
+    /// D13). Needs ExifTool on PATH; the safe write uses Windows file operations.
+    #[cfg(windows)]
+    #[test]
+    fn an_appended_creator_follows_the_files_creator() {
+        let mut exiftool = required_exiftool();
+        let dirs = TempDirs::new("iptc-append-creator");
+        write_jpeg_with(&dirs, &mut exiftool, &["-XMP-dc:Creator=Första Fotograf"]);
+
+        let mut iptc = crate::IptcForm {
+            creator: "Andra Fotograf".to_string(),
+            ..crate::IptcForm::default()
+        };
+        iptc.modes.creator = pw_metadata::template::Mode::Append;
+        let read = import_and_read(&dirs, &mut exiftool, iptc);
+
+        assert_eq!(
+            read.reconciled
+                .metadata
+                .get("dc:creator")
+                .map(|stored| stored.value.clone()),
+            Some(pw_metadata::value::Value::List(vec![
+                "Första Fotograf".to_string(),
+                "Andra Fotograf".to_string()
+            ]))
+        );
+    }
+
     #[test]
     fn iptc_targets_images_in_destination_and_backup_but_not_companions_or_failures() {
         let dirs = TempDirs::new("iptc-targets");
@@ -1054,8 +1197,7 @@ mod tests {
             &crate::IptcForm {
                 creator: "Fotograf".to_string(),
                 ..crate::IptcForm::default()
-            }
-            .to_iptc(),
+            },
             &mut runtime,
             &mut done,
         );

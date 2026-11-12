@@ -19,20 +19,22 @@ use pw_imagecheck::RawImageCheck;
 use pw_loupe::{
     Action, CellState, DEFAULT_THUMBNAIL_SIZE, DialogKey, DialogRequest, Field, Filter,
     GridKeyAction, ImportDialog, ImportDialogState, ImportEvent, ImportForm, ImportWorker,
-    LABEL_CHOICES, LabelFilter, LoupeMove, MAX_THUMBNAIL_SIZE, MIN_THUMBNAIL_SIZE, MonitorProfile,
-    Navigation, Options, READING_RATINGS_TEXT, RatingRefused, STAR_CONDITIONS, STAR_FILTERS,
-    StarFilter, SubmitError, Tab, TabAction, Tabs, ThumbGrid, UNSUPPORTED_TEXT, ViewMode,
-    WINDOW_TITLE, clamp_thumbnail_size, color_image, columns, dialog_key_action, done_lines,
-    ejecting_progress_text, error_text, grid_key_action, indicator_text, iptc_progress_text,
-    key_action, label_choice_text, label_filter_text, label_name, list_folder,
-    load_monitor_profile, loupe_key_action, marked_text, mode_label, more_lines, no_match_text,
-    opens_import, parse_args, position_text, preview_line, preview_summary,
-    primary_monitor_profile_path, progress_text, rating_key_action, request_cell,
+    IptcField, LABEL_CHOICES, LabelFilter, LoupeMove, MAX_THUMBNAIL_SIZE, MIN_THUMBNAIL_SIZE,
+    MonitorProfile, Navigation, Options, READING_RATINGS_TEXT, RatingRefused, STAR_CONDITIONS,
+    STAR_FILTERS, StarFilter, SubmitError, Tab, TabAction, Tabs, ThumbGrid, UNSUPPORTED_TEXT,
+    ViewMode, WINDOW_TITLE, allowed_modes, clamp_thumbnail_size, clear_and_import_text,
+    clear_cancel_text, clear_confirmation_text, clear_confirmation_title, color_image, columns,
+    dialog_key_action, done_lines, ejecting_progress_text, error_text, grid_key_action,
+    indicator_text, iptc_progress_text, key_action, label_choice_text, label_filter_text,
+    label_name, list_folder, load_monitor_profile, loupe_key_action, marked_text, mode_label,
+    mode_text, more_lines, no_match_text, opens_import, parse_args, position_text, preview_line,
+    preview_summary, primary_monitor_profile_path, progress_text, rating_key_action, request_cell,
     star_condition_text, star_filter_text, star_glyphs, status_line, step_allowed,
     step_thumbnail_size, tab_action, take_wheel_steps, visible_range, wheel_factor, window_title,
 };
 use pw_metadata::edit::EditOptions;
 use pw_metadata::journal::{Journal, Recovered};
+use pw_metadata::template::Mode;
 use pw_metadata::{MetadataWorker, Rating, WriteSetup};
 use pw_render::{Textures, view_px};
 use pw_thumbcache::{ThumbWorker, ThumbnailRequest};
@@ -65,6 +67,9 @@ struct Loupe {
     import_worker: ImportWorker,
     import_dialog: Option<ImportDialog>,
     last_form: ImportForm,
+    /// The window "Rensa fält?" is open: the import was started with fields in Clear and waits
+    /// for the user's answer (ADR 0007 §10, D14).
+    import_clear_confirm: bool,
     detected_cards: Vec<PathBuf>,
     import_submit_error: Option<String>,
     import_hidden: bool,
@@ -269,9 +274,27 @@ impl Loupe {
             self.last_form = dialog.form().clone();
         }
         self.import_hidden = false;
+        self.import_clear_confirm = false;
+    }
+
+    /// The start button or Enter (D14): with fields in Clear the window "Rensa fält?" asks first,
+    /// once for this import; otherwise the import starts at once.
+    fn request_import_start(&mut self) {
+        let Some(dialog) = self.import_dialog.as_ref() else {
+            return;
+        };
+        if !dialog.can_start() {
+            return;
+        }
+        if dialog.form().iptc.cleared_fields().is_empty() {
+            self.start_import();
+        } else {
+            self.import_clear_confirm = true;
+        }
     }
 
     fn start_import(&mut self) {
+        self.import_clear_confirm = false;
         let request = self.import_dialog.as_mut().and_then(ImportDialog::start);
         let Some(DialogRequest::Run { form }) = request else {
             return;
@@ -398,6 +421,9 @@ impl Loupe {
         let can_close = dialog.can_close();
         let can_start = dialog.can_start();
         let running = dialog.cancel();
+        // While "Rensa fält?" is open the form cannot change, so the import starts with the
+        // fields the window lists (D14).
+        let confirming = self.import_clear_confirm && can_start;
         let cards = self.detected_cards.clone();
         let mut rescan = false;
         let mut close = false;
@@ -410,7 +436,7 @@ impl Loupe {
             .collapsible(false)
             .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
             .show(ctx, |ui| {
-                ui.add_enabled_ui(!running, |ui| {
+                ui.add_enabled_ui(!running && !confirming, |ui| {
                     ui.label("Källa");
                     ui.horizontal(|ui| {
                         ui.text_edit_singleline(&mut form.source);
@@ -494,33 +520,31 @@ impl Loupe {
                     );
 
                     ui.collapsing("IPTC-mall", |ui| {
-                        ui.horizontal(|ui| {
-                            ui.label("Fotograf");
-                            ui.text_edit_singleline(&mut form.iptc.creator);
-                        });
-                        ui.horizontal(|ui| {
-                            ui.label("Copyright");
-                            ui.add(
-                                egui::TextEdit::singleline(&mut form.iptc.copyright)
-                                    .hint_text("© 2026 Namn"),
-                            );
-                        });
-                        ui.horizontal(|ui| {
-                            ui.label("Credit");
-                            ui.text_edit_singleline(&mut form.iptc.credit);
-                        });
-                        ui.horizontal(|ui| {
-                            ui.label("E-post");
-                            ui.text_edit_singleline(&mut form.iptc.email);
-                        });
-                        ui.horizontal(|ui| {
-                            ui.label("Telefon");
-                            ui.text_edit_singleline(&mut form.iptc.phone);
-                        });
-                        ui.horizontal(|ui| {
-                            ui.label("Webb");
-                            ui.text_edit_singleline(&mut form.iptc.url);
-                        });
+                        // Each field with a drop-down list of its modes (D13); the text cannot
+                        // be edited in Behåll or Rensa, which do not use it.
+                        for field in IptcField::ALL {
+                            ui.horizontal(|ui| {
+                                ui.label(field.label());
+                                let uses_text =
+                                    !matches!(form.iptc.modes.get(field), Mode::Keep | Mode::Clear);
+                                ui.add_enabled_ui(uses_text, |ui| {
+                                    let mut edit =
+                                        egui::TextEdit::singleline(form.iptc.text_mut(field));
+                                    if field == IptcField::Copyright {
+                                        edit = edit.hint_text("© 2026 Namn");
+                                    }
+                                    ui.add(edit);
+                                });
+                                let mode = form.iptc.modes.get_mut(field);
+                                egui::ComboBox::from_id_salt(("import-iptc-mode", field))
+                                    .selected_text(mode_text(*mode))
+                                    .show_ui(ui, |ui| {
+                                        for &choice in allowed_modes(field) {
+                                            ui.selectable_value(mode, choice, mode_text(choice));
+                                        }
+                                    });
+                            });
+                        }
                         ui.label(
                             egui::RichText::new(
                                 "Skrivs till .xmp-sidofilen för RAW och in i DNG/JPG/TIF. \
@@ -630,13 +654,16 @@ impl Loupe {
                         }
                         ui.horizontal(|ui| {
                             if ui
-                                .add_enabled(can_start, egui::Button::new("Starta import"))
+                                .add_enabled(
+                                    can_start && !confirming,
+                                    egui::Button::new("Starta import"),
+                                )
                                 .clicked()
                             {
                                 start = true;
                             }
                             if ui
-                                .add_enabled(can_close, egui::Button::new("Stäng"))
+                                .add_enabled(can_close && !confirming, egui::Button::new("Stäng"))
                                 .clicked()
                             {
                                 close = true;
@@ -651,6 +678,29 @@ impl Loupe {
                 }
             });
 
+        // D14: asked once per started import, before anything is copied.
+        let mut confirm_start = false;
+        let mut confirm_cancel = false;
+        if confirming {
+            let cleared = form.iptc.cleared_fields();
+            egui::Window::new(clear_confirmation_title())
+                .collapsible(false)
+                .resizable(false)
+                .order(egui::Order::Foreground)
+                .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+                .show(ctx, |ui| {
+                    ui.label(clear_confirmation_text(&cleared));
+                    ui.horizontal(|ui| {
+                        if ui.button(clear_and_import_text()).clicked() {
+                            confirm_start = true;
+                        }
+                        if ui.button(clear_cancel_text()).clicked() {
+                            confirm_cancel = true;
+                        }
+                    });
+                });
+        }
+
         if let Some(dialog) = &mut self.import_dialog
             && form != original_form
         {
@@ -662,7 +712,15 @@ impl Loupe {
             self.import_submit_error = None;
         }
         if start {
+            self.request_import_start();
+        }
+        if confirm_start {
             self.start_import();
+        }
+        // "Avbryt", or the import can no longer start (for example a new preview): back to the
+        // dialog, nothing started.
+        if confirm_cancel || (self.import_clear_confirm && !can_start) {
+            self.import_clear_confirm = false;
         }
         if cancel
             && self
@@ -1454,6 +1512,11 @@ impl Loupe {
         for (tab_action, key, ctrl, shift, alt, repeat) in key_actions {
             if dialog_consumes_keys {
                 match dialog_key_action(key, ctrl, alt) {
+                    // Escape in "Rensa fält?" is its "Avbryt"; Enter does not answer it.
+                    Some(DialogKey::Close) if self.import_clear_confirm => {
+                        self.import_clear_confirm = false;
+                    }
+                    Some(DialogKey::Start) if self.import_clear_confirm => {}
                     Some(DialogKey::Close)
                         if self
                             .import_dialog
@@ -1561,7 +1624,7 @@ impl Loupe {
             }
         }
         if start_import {
-            self.start_import();
+            self.request_import_start();
         }
         if self
             .tabs
@@ -2195,6 +2258,7 @@ fn run(options: Options) -> Result<(), String> {
                 import_worker,
                 import_dialog: None,
                 last_form: ImportForm::default(),
+                import_clear_confirm: false,
                 detected_cards: Vec::new(),
                 import_submit_error: None,
                 import_hidden: false,
