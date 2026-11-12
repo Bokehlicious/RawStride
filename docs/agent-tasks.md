@@ -2844,24 +2844,24 @@ leaves the stored `IPTCDigest` out of date (`Validate`: `IPTCDigest is not curre
 | D8 | owner | When the safe write creates the Photoshop block of a TIFF or DNG (to store a new `IPTCDigest`), ExifTool adds the validation warning `Non-standard format (undef) for IFD0 0x8649 PhotoshopSettings`, and T84's check refuses the copy for having one more warning. Reviewer's proposal: allow exactly one more warning (not error) in that case: the copy has `Photoshop:IPTCDigest`, the original has not, the file is a TIFF or DNG and the plan writes `-IPTCDigest=new`. The alternative, not writing a checksum in a TIFF/DNG without one, breaks §5.2. **Approved by the owner on 2026-11-12** | §5.2, §9.3 | done |
 | I9f | T92 | A current IIM checksum in TIFF and DNG: a second ExifTool call on the copy writes `IPTCDigest`, and the D8 allowance in `verify_copy` | §5.2, §9.3, §12 | now |
 | I9g | T93 | The IIM checksum stays current when a write changes IIM and no XMP is left (a file with a stored checksum) | §5.2, §12 | now |
-| D9 | owner | What RawStride does when ExifTool is missing or older than 12.67 (§11 only says "checked at start"). Reviewer's proposal: RawStride starts anyway and shows one message at start; reading works as today; every write (ratings, the editor, the ingest template) is refused with a clear text until ExifTool is updated; a version that cannot be read counts as too old. The alternative is a warning only, with writes allowed | §11, §9 | – |
-| D10 | owner | Where and how RawStride's settings are stored (it has no settings file yet). Reviewer's proposal: a text file `%LOCALAPPDATA%\RawStride\settings.txt` (the folder of the write journal), one `key = value` per line, no new dependency; for this user on this computer only | §5.2, §5.4 | – |
-| D11 | owner | The Swedish names of the IPTC properties in the info panel and the editor. Reviewer's proposal: the import dialog's names where they exist, and for the rest: Titel (`dc:title`), Rubrik (`photoshop:Headline`), Beskrivning (`dc:description`), Alternativtext (`Iptc4xmpCore:AltTextAccessibility`), Nyckelord (`dc:subject`), Fotograf (`dc:creator`), Fotografens titel (`photoshop:AuthorsPosition`), Fotografens kontaktuppgifter (`Iptc4xmpCore:CreatorContactInfo`, its fields E-post, Telefon, Webb), Copyright (`dc:rights`), Credit (`photoshop:Credit`), Källa (`photoshop:Source`), Användarvillkor (`xmpRights:UsageTerms`), Webbadress för rättigheter (`xmpRights:WebStatement`), Skapad (`photoshop:DateCreated`), Plats (`Iptc4xmpCore:Location`), Stad (`photoshop:City`), Län/delstat (`photoshop:State`), Land (`photoshop:Country`), Landskod (`Iptc4xmpCore:CountryCode`), Instruktioner (`photoshop:Instructions`), Jobb-id (`photoshop:TransmissionReference`), Beskrivningens författare (`photoshop:CaptionWriter`), Betyg (`xmp:Rating`), Etikett (`xmp:Label`), Upphovsrättsskyddad (`xmpRights:Marked`), Plats där bilden togs (`Iptc4xmpExt:LocationCreated`), Plats som visas (`Iptc4xmpExt:LocationShown`), Bildskapare (`plus:ImageCreator`), Upphovsrättsinnehavare (`plus:CopyrightOwner`), Licensgivare (`plus:Licensor`), Person i bilden (`Iptc4xmpExt:PersonInImage`), Händelse (`Iptc4xmpExt:Event`), Digital källtyp (`Iptc4xmpExt:DigitalSourceType`), Prioritet, Kategori, Tilläggskategorier (the deprecated `photoshop:Urgency`, `photoshop:Category`, `photoshop:SupplementalCategories`); every other property with IPTC's English name | §3 | – |
-| D12 | owner | What the editor edits in I10. Reviewer's proposal: **one image at a time** (several images later, as a template on the selection); these 22 fields in this order: Titel, Rubrik, Beskrivning, Alternativtext, Nyckelord, Fotograf, Fotografens titel, E-post, Telefon, Webb, Copyright, Credit, Källa, Användarvillkor, Skapad, Plats, Stad, Län/delstat, Land, Landskod, Instruktioner, Jobb-id; plus a choice for every unresolved conflict. Later: lists of structures (Location Created, Image Creator, …), PLUS fields (I11), the other properties | §8, §10, §11 | – |
-| D13 | owner | The modes in the import dialog (§10). Reviewer's proposal: the Swedish names Behåll, Ersätt, Lägg till efter, Lägg till före, Rensa; the default Ersätt for every field (an empty field then does nothing, exactly as today); Fotograf offers Behåll, Ersätt, Lägg till efter; Copyright and Credit also Lägg till före; E-post, Telefon and Webb all five (no Rensa of copyright-management fields, §8; no "before" on a list). The modes are remembered during the session like the texts, not between runs | §8, §10 | – |
-| D14 | owner | The confirmation before a Clear (§10: "once per template"). Reviewer's proposal: when an import is started with at least one field in Rensa, one window lists those fields ("Rensa och importera" / "Avbryt"); asked once per started import, never per image. The editor does not ask (emptying a field there is the user's own choice for one image) | §10 | – |
-| D15 | owner | The place of the info panel and the keys. Reviewer's proposal: a panel on the right side, in the loupe and in the contact sheet (the selected image), shown and hidden with `M`, hidden at start; the editor opens with `E` or the button "Redigera" in the panel, in its own window | – | – |
-| I10a | T94 | The ExifTool version (at least 12.67) checked when the metadata worker starts; writes refused below it (D9) | §11 | after D9 |
+| D9 | owner | What RawStride does when ExifTool is missing or older than 12.67 (§11 only says "checked at start"). Reviewer's proposal: RawStride starts anyway and shows one message at start; reading works as today; every write (ratings, the editor, the ingest template) is refused with a clear text until ExifTool is updated; a version that cannot be read counts as too old. The alternative is a warning only, with writes allowed. **Approved by the owner on 2026-11-12** | §11, §9 | done |
+| D10 | owner | Where and how RawStride's settings are stored (it has no settings file yet). Reviewer's proposal: a text file `%LOCALAPPDATA%\RawStride\settings.txt` (the folder of the write journal), one `key = value` per line, no new dependency; for this user on this computer only. **Approved by the owner on 2026-11-12** | §5.2, §5.4 | done |
+| D11 | owner | The Swedish names of the IPTC properties in the info panel and the editor. Reviewer's proposal: the import dialog's names where they exist, and for the rest: Titel (`dc:title`), Rubrik (`photoshop:Headline`), Beskrivning (`dc:description`), Alternativtext (`Iptc4xmpCore:AltTextAccessibility`), Nyckelord (`dc:subject`), Fotograf (`dc:creator`), Fotografens titel (`photoshop:AuthorsPosition`), Fotografens kontaktuppgifter (`Iptc4xmpCore:CreatorContactInfo`, its fields E-post, Telefon, Webb), Copyright (`dc:rights`), Credit (`photoshop:Credit`), Källa (`photoshop:Source`), Användarvillkor (`xmpRights:UsageTerms`), Webbadress för rättigheter (`xmpRights:WebStatement`), Skapad (`photoshop:DateCreated`), Plats (`Iptc4xmpCore:Location`), Stad (`photoshop:City`), Län/delstat (`photoshop:State`), Land (`photoshop:Country`), Landskod (`Iptc4xmpCore:CountryCode`), Instruktioner (`photoshop:Instructions`), Jobb-id (`photoshop:TransmissionReference`), Beskrivningens författare (`photoshop:CaptionWriter`), Betyg (`xmp:Rating`), Etikett (`xmp:Label`), Upphovsrättsskyddad (`xmpRights:Marked`), Plats där bilden togs (`Iptc4xmpExt:LocationCreated`), Plats som visas (`Iptc4xmpExt:LocationShown`), Bildskapare (`plus:ImageCreator`), Upphovsrättsinnehavare (`plus:CopyrightOwner`), Licensgivare (`plus:Licensor`), Person i bilden (`Iptc4xmpExt:PersonInImage`), Händelse (`Iptc4xmpExt:Event`), Digital källtyp (`Iptc4xmpExt:DigitalSourceType`), Prioritet, Kategori, Tilläggskategorier (the deprecated `photoshop:Urgency`, `photoshop:Category`, `photoshop:SupplementalCategories`); every other property with IPTC's English name. **Approved by the owner on 2026-11-12** | §3 | done |
+| D12 | owner | What the editor edits in I10. Reviewer's proposal: **one image at a time** (several images later, as a template on the selection); these 22 fields in this order: Titel, Rubrik, Beskrivning, Alternativtext, Nyckelord, Fotograf, Fotografens titel, E-post, Telefon, Webb, Copyright, Credit, Källa, Användarvillkor, Skapad, Plats, Stad, Län/delstat, Land, Landskod, Instruktioner, Jobb-id; plus a choice for every unresolved conflict. Later: lists of structures (Location Created, Image Creator, …), PLUS fields (I11), the other properties. **Approved by the owner on 2026-11-12** | §8, §10, §11 | done |
+| D13 | owner | The modes in the import dialog (§10). Reviewer's proposal: the Swedish names Behåll, Ersätt, Lägg till efter, Lägg till före, Rensa; the default Ersätt for every field (an empty field then does nothing, exactly as today); Fotograf offers Behåll, Ersätt, Lägg till efter; Copyright and Credit also Lägg till före; E-post, Telefon and Webb all five (no Rensa of copyright-management fields, §8; no "before" on a list). The modes are remembered during the session like the texts, not between runs. **Approved by the owner on 2026-11-12** | §8, §10 | done |
+| D14 | owner | The confirmation before a Clear (§10: "once per template"). Reviewer's proposal: when an import is started with at least one field in Rensa, one window lists those fields ("Rensa och importera" / "Avbryt"); asked once per started import, never per image. The editor does not ask (emptying a field there is the user's own choice for one image). **Approved by the owner on 2026-11-12** | §10 | done |
+| D15 | owner | The place of the info panel and the keys. Reviewer's proposal: a panel on the right side, in the loupe and in the contact sheet (the selected image), shown and hidden with `M`, hidden at start; the editor opens with `E` or the button "Redigera" in the panel, in its own window. **Approved by the owner on 2026-11-12** | – | done |
+| I10a | T94 | The ExifTool version (at least 12.67) checked when the metadata worker starts; writes refused below it (D9) | §11 | now |
 | I10b | T95 | The reader looks up the two sidecar names directly instead of listing the folder for every image (from T82) | §4.1, §4.2 | now |
 | I10c | T96 | Validation warnings (§11): IIM byte limits, Alt Text length, Country Code form, Jobtitle without Creator, Digital Source Type, Image Registry Entry, Rating | §11 | now |
 | I10d | T97 | Edits of single properties and sub-fields (`Edit`, `apply_edits`, `write_edits_safely`) with the plan's write notices; choosing a value decides an `Open` conflict | §5.1, §5.2, §8, §9 | now |
 | I10e | T98 | The metadata worker reads the whole `MetadataRead`, writes edits and takes new `EditOptions` | §9 | after T94 and T97 |
-| I10f | T99 | RawStride's settings file: create IIM, fallback encoding (D10) | §5.2, §5.4 | after D10 |
-| I10g | T100 | The import dialog: a mode per template field and the confirmation before a Clear (left over from T88/T91) | §10 | after D13 and D14 |
-| I10h | T101 | RawStride tells the user at start when ExifTool is missing or too old; the import worker checks it too | §11 | after T94, T100 and D9 |
-| I10i | T102 | The texts of the info panel: values with origin, conflicts with the rule, notices (D11) | §5.1, §5.4, §6.2, §6.4, §7 | after D11 |
-| I10j | T103 | The info panel in RawStride (one read in flight, after 200 ms) | §5.1, §6.2 | after T98, T101, T102 and D15 |
-| I10k | T104 | The editor's form: fields, conflict choices, edits, warnings in Swedish (D12) | §5.1, §7, §8, §11 | after T96, T97, T102 and D12 |
+| I10f | T99 | RawStride's settings file: create IIM, fallback encoding (D10) | §5.2, §5.4 | now |
+| I10g | T100 | The import dialog: a mode per template field and the confirmation before a Clear (left over from T88/T91) | §10 | now |
+| I10h | T101 | RawStride tells the user at start when ExifTool is missing or too old; the import worker checks it too | §11 | after T94 and T100 |
+| I10i | T102 | The texts of the info panel: values with origin, conflicts with the rule, notices (D11) | §5.1, §5.4, §6.2, §6.4, §7 | now |
+| I10j | T103 | The info panel in RawStride (one read in flight, after 200 ms) | §5.1, §6.2 | after T98, T101 and T102 |
+| I10k | T104 | The editor's form: fields, conflict choices, edits, warnings in Swedish (D12) | §5.1, §7, §8, §11 | after T96, T97 and T102 |
 | I10l | T105 | The editor window in RawStride, saved through the worker | §9 | after T103 and T104 |
 | I10m | T106 | The settings window; the settings used by ratings, the editor, the panel and the import | §5.2, §5.4 | after T98, T99 and T101 |
 | I11 | – | PLUS fields as fixed choice lists | §11, Q9 | **after the PLUS controlled vocabulary is read** (§16.4) |
@@ -4248,11 +4248,10 @@ leaves the stored `IPTCDigest` out of date (`Validate`: `IPTCDigest is not curre
 - **Done when:** `.\tools\check.ps1` is all OK; `docs/test-inventory.md` is updated;
   `git diff --stat` shows only the files above.
 
-### T94. ADR 0007 I10a: the ExifTool version is checked when the metadata worker starts — Blocked
+### T94. ADR 0007 I10a: the ExifTool version is checked when the metadata worker starts — Open
 
-- **Blocked on owner decision D9** (what RawStride does with an ExifTool older than 12.67). Then it
-  can start at once, at the same time as T95, T97 and T99 (no shared files). Not at the same time
-  as T96 (both change `lib.rs`).
+- **Can start now.** The owner approved D9 on 2026-11-12. Can run at the same time as T99 (no
+  shared files).
 - **Crates:** `pw-metadata` only. RawStride shows nothing yet (T101).
 - **Files:** `crates/pw-metadata/src/exiftool.rs`; `crates/pw-metadata/src/worker.rs`;
   `crates/pw-metadata/src/lib.rs` (the `pub use exiftool::…` and `pub use worker::…` lines only);
@@ -4513,10 +4512,10 @@ leaves the stored `IPTCDigest` out of date (`Validate`: `IPTCDigest is not curre
 - **Done when:** `.\tools\check.ps1` is all OK; `docs/test-inventory.md` is updated;
   `git diff --stat` shows only the files above.
 
-### T99. ADR 0007 I10f: RawStride's settings file (create IIM, fallback encoding) — Blocked
+### T99. ADR 0007 I10f: RawStride's settings file (create IIM, fallback encoding) — Open
 
-- **Blocked on owner decision D10** (where and how the settings are stored). Then it can start at
-  once, at the same time as T94–T97 (other crate). T100 and T102 also add lines to `lib.rs`; if
+- **Can start now.** The owner approved D10 on 2026-11-12. Can run at the same time as T94 (other
+  crate). T100 and T102 also add lines to `lib.rs`; if
   they run at the same time, each agent adds only its own `mod` line and its own `pub use` line.
 - **Crates:** `pw-loupe` only. Nothing uses the file yet (T106).
 - **Files:** new `crates/pw-loupe/src/settings.rs`; `crates/pw-loupe/src/lib.rs` (one `mod` line,
@@ -4549,10 +4548,9 @@ leaves the stored `IPTCDigest` out of date (`Validate`: `IPTCDigest is not curre
 - **Done when:** `.\tools\check.ps1` is all OK; `docs/test-inventory.md` is updated;
   `git diff --stat` shows only the files above.
 
-### T100. ADR 0007 I10g: the import dialog chooses the mode of each template field, and asks before a Clear — Blocked
+### T100. ADR 0007 I10g: the import dialog chooses the mode of each template field, and asks before a Clear — Open
 
-- **Blocked on owner decisions D13** (names, defaults and allowed modes) **and D14** (the
-  confirmation). Then it can start; it needs nothing new in `pw-metadata` (T88's `Template`
+- **Can start now.** The owner approved D13 and D14 on 2026-11-12. It needs nothing new in `pw-metadata` (T88's `Template`
   exists). It can run at the same time as T94–T99 and T102 (only `lib.rs` lines shared, see T99);
   not at the same time as T101, T103, T105 or T106 (all change `main.rs`).
 - **Crates:** `pw-loupe` only.
@@ -4616,9 +4614,9 @@ leaves the stored `IPTCDigest` out of date (`Validate`: `IPTCDigest is not curre
   `git diff --stat` shows only the files above. The owner checks by hand: an import with a
   cleared Webb asks once and clears it in every imported image.
 
-### T101. ADR 0007 I10h: RawStride tells the user at start when ExifTool is missing or too old — Blocked
+### T101. ADR 0007 I10h: RawStride tells the user at start when ExifTool is missing or too old — Open
 
-- **Can start after T94 and T100 are accepted** and D9 is decided. Not at the same time as T103,
+- **Can start after T94 and T100 are accepted** (D9 approved on 2026-11-12). Not at the same time as T103,
   T105 or T106 (`main.rs`).
 - **Crates:** `pw-loupe` only.
 - **Files:** `crates/pw-loupe/src/main.rs`; `crates/pw-loupe/src/import_worker.rs`;
@@ -4651,10 +4649,9 @@ leaves the stored `IPTCDigest` out of date (`Validate`: `IPTCDigest is not curre
 - **Done when:** `.\tools\check.ps1` is all OK; `docs/test-inventory.md` is updated;
   `git diff --stat` shows only the files above.
 
-### T102. ADR 0007 I10i: the texts of the info panel (values, conflicts, notices) — Blocked
+### T102. ADR 0007 I10i: the texts of the info panel (values, conflicts, notices) — Open
 
-- **Blocked on owner decision D11** (the Swedish names of the properties). Then it can start at
-  once; it only needs the reader's types (T82), so it can run at the same time as T94–T100 (only
+- **Can start now.** The owner approved D11 on 2026-11-12. It only needs the reader's types (T82), so it can run at the same time as T94–T100 (only
   `lib.rs` lines shared, see T99).
 - **Crates:** `pw-loupe` only. Drawing the panel is T103.
 - **Files:** new `crates/pw-loupe/src/info_panel.rs`; `crates/pw-loupe/src/lib.rs` (one `mod` line,
@@ -4721,9 +4718,9 @@ leaves the stored `IPTCDigest` out of date (`Validate`: `IPTCDigest is not curre
 - **Done when:** `.\tools\check.ps1` is all OK; `docs/test-inventory.md` is updated;
   `git diff --stat` shows only the files above.
 
-### T103. ADR 0007 I10j: the info panel in RawStride — Blocked
+### T103. ADR 0007 I10j: the info panel in RawStride — Open
 
-- **Can start after T98, T101 and T102 are accepted** and D15 is decided. Not at the same time as
+- **Can start after T98, T101 and T102 are accepted** (D15 approved on 2026-11-12). Not at the same time as
   T105 or T106 (`main.rs`).
 - **Crates:** `pw-loupe` only.
 - **Files:** `crates/pw-loupe/src/main.rs`; `crates/pw-loupe/src/metadata.rs`;
@@ -4761,9 +4758,9 @@ leaves the stored `IPTCDigest` out of date (`Validate`: `IPTCDigest is not curre
   values of a JPEG, a DNG and an ARW with a sidecar, and a conflict (a file from the level-C samples
   or one made by the reviewer).
 
-### T104. ADR 0007 I10k: the editor's form with its fields, conflict choices, edits and warnings — Blocked
+### T104. ADR 0007 I10k: the editor's form with its fields, conflict choices, edits and warnings — Open
 
-- **Can start after T96, T97 and T102 are accepted** and D12 is decided. It changes no file of
+- **Can start after T96, T97 and T102 are accepted** (D12 approved on 2026-11-12). It changes no file of
   T98, T101 or T103, so it can run at the same time as them (only `lib.rs` lines shared, see T99).
 - **Crates:** `pw-loupe` only. The window is T105.
 - **Files:** new `crates/pw-loupe/src/editor.rs`; `crates/pw-loupe/src/lib.rs` (one `mod` line, one
@@ -5392,3 +5389,4 @@ and reviewer:
 | 2026-11-12 | T97 | Ready for review | (Agent) `edit.rs`: `Edit`, `apply_edits`, `EditReport`, `write_edits_safely` (the plan's notices when `Written`, empty when `Unchanged`), module comment (§5.1/Q1, §5.2, §8); `template.rs` unchanged (the sub-field logic is in `edit.rs`). Not in the task text: an unknown field of a single structure is `Value(UnknownProperty("<property>/<field>"))`; a Lang Alt field edits `x-default` only (as the template). Point 6 (`verify.rs`, `drops_exif_block`): **owner decision 2026-11-12, five keys instead of two** — with the JFIF fixture ExifTool 13.59 also creates `IFD0:XResolution`, `IFD0:YResolution` and `IFD0:ResolutionUnit` with the Copyright and drops them with the block, so `EXIF_BLOCK_KEYS` holds `File:ExifByteOrder`, those three and `IFD0:YCbCrPositioning` (removal only, no Exif key left). Tests: 12 `edit::` and 4 `verify::` unit tests, `tests/edits.rs` 5 (ExifTool), all passed; `docs/test-inventory.md` updated. `check.ps1`: fmt OK, test OK (941 passed, 0 failed, 42 ignored), clippy OK |
 | 2026-11-12 | T97 | Done | Review: accepted. `Edit`, `apply_edits` (the `Open` conflict rule of Q1, Clear of copyright fields allowed, sub-fields of a single structure in the structure's order), `EditReport` and `write_edits_safely` with the plan's notices follow the task; `write_rating_safely` and `apply_template_safely` unchanged. The two additions outside the text are accepted: an unknown field of a single structure is `Value(UnknownProperty("<property>/<field>"))`, and a Lang Alt field edits `x-default` only (as the template). Point 6: the owner's decision for five keys is right; the reviewer measured it with ExifTool 13.59 on a JPEG with only a JFIF density: `IFD0:Copyright` written gives `XResolution`, `YResolution`, `ResolutionUnit` and `YCbCrPositioning` too, and clearing it removes all of them and `File:ExifByteOrder`. Reviewer fix: the comment of `drops_exif_block` said the block stays with `IFD0:XResolution` left; it now says that holds for a resolution of its own (300), and the line over 100 characters is wrapped. The reviewer's `check.ps1`: fmt, test and clippy OK, **941 passed, 0 failed, 42 ignored** in 54 programs. Committed |
 | 2026-11-12 | – | Decision | Owner added rule 13 to "How to work on a task": every text the user sees is made by a function in its area's text module as a whole-sentence template with placeholders, no user-visible string literals in drawing code, property names only through `property_label`, no fixed text width; existing hard-coded texts stay unless a task moves them. It applies to every task that adds or changes such a text, whichever rules the task lists. T102–T104 already state the same rule for the info panel and the editor (commit fc5b3e0) |
+| 2026-11-12 | T94, T99–T104 | Open | The owner approved D9–D15 as proposed: D9 an ExifTool that is missing or older than 12.67 gives one message at start and refuses every write, reading as today; D10 the settings in `%LOCALAPPDATA%\RawStride\settings.txt`, `key = value`; D11 the Swedish property names of the list (the others IPTC's English name); D12 the editor edits one image at a time with the 22 fields and the conflict choices; D13 the modes Behåll, Ersätt, Lägg till efter, Lägg till före, Rensa, default Ersätt, the allowed modes per field; D14 one confirmation per started import that clears fields; D15 the panel on the right with `M`, the editor with `E` or "Redigera". T94, T99, T100 and T102 can start now; T101, T103 and T104 wait for the tasks they name |
