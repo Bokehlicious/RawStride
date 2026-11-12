@@ -25,6 +25,7 @@ pub mod reconcile;
 mod test_support;
 pub mod value;
 mod worker;
+pub mod write_plan;
 
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
