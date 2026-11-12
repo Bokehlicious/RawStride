@@ -2719,6 +2719,23 @@ JPEGs in a temporary folder):
   `-stay_open` as UTF-8 and is not affected; **tests must use the `ExifTool` type, never a command
   line**. An argument file (`-@`) in UTF-8 also works.
 
+**What the reviewer measured with ExifTool 13.59 before writing T84–T86** (2026-11-12, on a copy of
+a Xiaomi DNG from `PW_TESTDATA`, a JPEG, a Panasonic RW2 and its sidecar, in a temporary folder):
+- `-api ImageHashType=SHA256 -ImageDataHash` works for JPEG and DNG, and the DNG's hash is the same
+  after a metadata write with `-o`.
+- `-o <new file>` refuses a name that exists ("already exists", nothing written).
+- The listing of a DNG copy written with `-o` differs only in `System` keys, `IFD0:TileOffsets`
+  (its binary placeholder), `SubIFD:PreviewImageStart` and the written XMP plus
+  `XMP-x:XMPToolkit`. Creating IIM in a JPEG adds `File:CurrentIPTCDigest`,
+  `IPTC:EnvelopeRecordVersion`, `IPTC:ApplicationRecordVersion`, `IPTC:CodedCharacterSet`,
+  `Photoshop:IPTCDigest` and the written tags.
+- The Xiaomi DNG has 7 validation warnings of its own (`ExifTool:Validate` is `0 7 1` with `-n`),
+  so the check is "no new warnings". In `-j -a` output only one `ExifTool:Warning` key survives,
+  so the count comes from `Validate`.
+- `-o x.xmp` with a RAW as the source copies the RAW's Exif into the new sidecar (`XMP-exif`,
+  `XMP-tiff`, …). A new sidecar must be written without a source file: ExifTool then creates an
+  XMP file holding only the given tags.
+
 | Step | Task | Content | ADR 0007 | Can start |
 |---|---|---|---|---|
 | P1 | owner/reviewer | Save the IPTC TechReference 2025.1 JSON (`iptc-pmd-techreference_2025.1.json`, link in `docs/references.md`) in `D:\PhotoWorkflowData\references\`, with bytes and SHA-256 in its `README.md`. **Done 2026-11-11:** 140 839 bytes, SHA-256 `592c37b0…433128a8` | §3 | done |
@@ -2732,8 +2749,11 @@ JPEGs in a temporary folder):
 | D2 | owner | `serde_json` (=1.0.154, already in `Cargo.lock` through the Tauri app, so nothing new is compiled) as a dependency of `pw-metadata`, to read ExifTool's `-j -struct` output. **Approved by the owner on 2026-11-11** | – | done |
 | I6 | T82 | Reader with ExifTool for every format; sidecar rules and notices (foreign sidecar next to DNG, `<name>.<ext>.xmp`) | §4, §4.2 | after T81 |
 | I7 | T83 | Write plan: XMP, IIM if present (or with the setting), existing Exif overlap fields, clearing, unresolved conflicts without checksum; checked against ExifTool | §5.2, §6.3, §8 | after T82 |
-| I8 | – | Safe write transaction: temporary copy, verification, `ReplaceFileW`, journal and recovery. Needs `windows-sys` in `pw-metadata` (**owner approval of the `Cargo.toml` change first**) | §9 | after I7 |
-| I9 | – | Ratings, labels and the ingest template through I7/I8; template modes Keep/Replace/Append/Clear | §10, §15 | after I8 |
+| I8a | T84 | The file snapshot (one ExifTool call: listing, `ImageDataHash`, `Validate`) and the verification of a written copy | §9.1, §9.3 | now |
+| D3 | owner | `windows-sys` (=0.61.2, already in `Cargo.lock` through `pw-loupe`, so no new package) as a Windows-only dependency of `pw-metadata`, features `Win32_Foundation` and `Win32_Storage_FileSystem`, for `ReplaceFileW`, `MoveFileExW`, free space and read-only volumes. **Approved by the owner on 2026-11-12** | §9 | done |
+| I8b | T85 | Windows file operations (`ReplaceFileW` with the rename fallback, free space, read-only volume, locks) and the write journal with recovery | §9.1, §9.4, §9.5 | now |
+| I8c | T86 | The safe write transaction for embedded metadata and sidecars, with an `ImageCheck` the caller gives | §9 | after T84 and T85 |
+| I9 | – | Ratings, labels and the ingest template through I7/I8; template modes Keep/Replace/Append/Clear; the real `ImageCheck` (previews with `pw-raw`, the DNG opened with LibRaw, §9.3 points 3–4) in a crate that has both | §9.3, §10, §15 | after I8 |
 | I10 | – | RawStride: info panel with conflicts and notices, editor, settings (create IIM, fallback encoding), ExifTool version check at start | §5.2, §5.4, §11 | after I6 (panel), I9 (editor) |
 | I11 | – | PLUS fields as fixed choice lists | §11, Q9 | **after the PLUS controlled vocabulary is read** (§16.4) |
 | I12 | – | Real-file tests with the owner's level-C samples | §12, Q11 | when the owner provides the samples |
@@ -3458,6 +3478,232 @@ JPEGs in a temporary folder):
 - **Done when:** `.\tools\check.ps1` is all OK; `docs/test-inventory.md` is updated;
   `git diff --stat` shows only the files above.
 
+### T84. ADR 0007 I8a: the file snapshot and the verification of a written copy — Open
+
+- **Can start now.** No dependency change.
+- **Crates:** `pw-metadata` only. Nothing uses it yet: T86 builds the safe write on it; the old
+  `write_rating`/`write_iptc` stay unchanged until I9.
+- **Files:** new `crates/pw-metadata/src/verify.rs`; `crates/pw-metadata/src/lib.rs` (the `mod`
+  line only); new `crates/pw-metadata/tests/verify.rs`; `docs/test-inventory.md`.
+- **Why:** ADR 0007 §9.1 points 1 and 3 (the file identified by content, its state recorded) and
+  §9.3 points 1–3 (the copy checked: image data unchanged, metadata changed only where written,
+  structure intact). Measured by the reviewer with ExifTool 13.59 (see the step plan).
+- **What:** `pub mod verify` with:
+  1. **`FileSnapshot { file_type: String, size: u64, modified: SystemTime, image_data_hash:
+     Option<String>, validate: Option<Validate>, listing: BTreeMap<String, String> }`** and
+     `Validate { errors: u32, warnings: u32, minor: u32 }`.
+  2. **`ExifTool::snapshot(&mut self, file: &Path) -> Result<FileSnapshot>`:** `size` and
+     `modified` from `std::fs::metadata`; everything else from **one** `self.execute` call:
+     `-j -a -G1 -n -struct -api structformat=jsonq -api ImageHashType=SHA256 -all -ImageDataHash
+     -validate -warning <file>` (as in T82, never a command line).
+     - `file_type` is `File:FileType` (`JPEG`, `TIFF`, `DNG`, `XMP`; ExifTool decides by content);
+     - `image_data_hash` is `File:ImageDataHash` (none for XMP);
+     - `validate` from `ExifTool:Validate`, which `-n` prints as three numbers (`"0 7 1"`: errors,
+       warnings, minor warnings);
+     - `listing`: every other key with its value as text (a JSON string as it is, any other JSON
+       value as its JSON text, so a structure is compared whole). The keys `SourceFile`,
+       `ExifTool:Warning` (JSON keeps only one of several; the count is in `validate`) and
+       `ExifTool:Validate` are left out.
+     A missing or unreadable file is the error ExifTool reports, as in `read_metadata`.
+  3. **`check_file_type(expected: FileKind, snapshot: &FileSnapshot) -> Result<(), VerifyError>`**
+     (§9.1 point 1): `Jpeg` needs `JPEG`, `Tiff` `TIFF`, `Dng` `DNG`, and `Raw` (whose sidecar is
+     written) `XMP`; anything else is `WrongFileType { expected, found }`. So a JPEG renamed `.dng`
+     is refused.
+  4. **`verify_copy(original: &FileSnapshot, copy: &FileSnapshot, plan: &WritePlan) -> Result<(),
+     VerifyError>`** (§9.3):
+     - `file_type` equal, otherwise `FileTypeChanged`;
+     - `image_data_hash` equal, otherwise `ImageDataChanged`;
+     - `validate` of the copy not higher than the original's in errors or warnings, otherwise
+       `NewWarnings { before, after }` (the reviewer's Xiaomi DNG already has `0 7 1`, so "no
+       warnings" cannot be the rule);
+     - **every** key added, removed or changed in `listing` must be allowed, otherwise
+       `Unexpected { key, before: Option<String>, after: Option<String> }` for the first one in key
+       order. Allowed:
+       - the groups `System`, `ExifTool` and `Composite` (file name, size and dates; tool data;
+         values ExifTool derives, not stored);
+       - `File:CurrentIPTCDigest`;
+       - tags whose name ends in `Offset`, `Offsets` or `Start`, in any group (measured: a write
+         moves `IFD0:TileOffsets` and `SubIFD:PreviewImageStart` of a DNG); a pointer that
+         changes and has another name is reported to the owner, not added on your own;
+       - `XMP-x:XMPToolkit`, `XMP-xmp:MetadataDate`, `XMP-xmp:ModifyDate`;
+       - the tags of the plan's `args`: for each `-<Group>:<Tag>…=` the key `<Group>:<Tag>` and
+         every key `<Group>:<Tag>-<language>`, where `<Tag>` is cut at the first `-` and a
+         trailing `#` is dropped (`-XMP-dc:Description-x-default=` allows `XMP-dc:Description` and
+         `XMP-dc:Description-sv`; `-IPTC:DateCreated#=` allows `IPTC:DateCreated`); `-IPTCDigest=`
+         allows `Photoshop:IPTCDigest`;
+       - when the plan writes IIM (`-IPTC:CodedCharacterSet=UTF8` is in it):
+         `IPTC:EnvelopeRecordVersion` and `IPTC:ApplicationRecordVersion` (measured: ExifTool adds
+         them when it creates IIM).
+  5. `VerifyError` with `Display` texts in English that name the key or check (they are shown in
+     T86's error), and `std::error::Error`.
+- **Rules:** rules 3–7 and 10–12. No `Cargo.toml` change.
+- **Tests to add:**
+  - unit tests in `verify.rs` with hand-built snapshots: an unchanged copy passes; each allowed
+    kind of difference passes (a `System` key, `File:CurrentIPTCDigest`, `SubIFD:PreviewImageStart`,
+    `XMP-x:XMPToolkit`, a Lang Alt in two languages for `-XMP-dc:Description-x-default=`, a
+    structure, `IPTC:DateCreated` for `-IPTC:DateCreated#=`, the IIM record versions only with
+    `-IPTC:CodedCharacterSet=UTF8`, `Photoshop:IPTCDigest` for `-IPTCDigest=new`); an added, a
+    removed and a changed key outside the plan are `Unexpected` with both values;
+    `XMP-photoshop:CityCode` is not allowed by `-XMP-photoshop:City=` (a whole tag, not a prefix);
+    a different hash, a different file type, one more warning and one more error are errors, fewer
+    warnings pass; `check_file_type` for every `FileKind`; the `Validate` text `"0 7 1"` and a
+    missing `Validate`;
+  - `tests/verify.rs` (integration, **ExifTool required**, the JPEG fixture of T82 copied in): a
+    plan from `write_plan::plan` (City, a Description in two languages, keywords, IIM created with
+    the setting) written with `ExifTool::execute` and `-o <name>.pwtmp-1.jpg` to a new file;
+    `snapshot` of both; `verify_copy` passes, and the hash is equal. The same copy against a plan
+    without the City arguments is `Unexpected` for `XMP-photoshop:City`. A JPEG renamed `.dng` is
+    `WrongFileType`. One test **ignored by default**: every DNG in `PW_TESTDATA`, copied to a
+    temporary folder, written with a City plan and `-o`, passes `verify_copy` (report the
+    `Validate` counts and the allowed keys that changed for each file in the log row).
+- **Done when:** `.\tools\check.ps1` is all OK; `docs/test-inventory.md` is updated;
+  `git diff --stat` shows only the files above.
+
+### T85. ADR 0007 I8b: Windows file operations and the write journal — Open
+
+- **Can start now.** D3 (`windows-sys` in `pw-metadata`) was approved by the owner on 2026-11-12.
+  Can run at the same time as T84 (no shared files).
+- **Crates:** `pw-metadata` only.
+- **Files:** `crates/pw-metadata/Cargo.toml` (only the D3 lines); `Cargo.lock` (by cargo); new
+  `crates/pw-metadata/src/fileops.rs`; new `crates/pw-metadata/src/journal.rs`;
+  `crates/pw-metadata/src/lib.rs` (the two `mod` lines only); `docs/test-inventory.md`.
+- **Why:** ADR 0007 §9.1 point 2 (writable and safe to write), §9.3 point 5 (flush), §9.4 (atomic
+  replace, modification time) and §9.5 (errors, journal, recovery).
+- **What:**
+  1. **`Cargo.toml`:** under a new `[target.'cfg(windows)'.dependencies]`:
+     `windows-sys = { version = "=0.61.2", features = ["Win32_Foundation",
+     "Win32_Storage_FileSystem"] }`. Check with `git diff Cargo.lock`: `windows-sys` added to
+     `pw-metadata`'s list, **no new package**; otherwise stop and report.
+  2. **`fileops.rs`** (`pub(crate)`; the Windows calls behind `#[cfg(windows)]`; on other
+     platforms each function returns `Error::Unsupported`):
+     - `free_space(folder) -> Result<u64>` (`GetDiskFreeSpaceExW`, bytes available to the user);
+     - `is_read_only_volume(path) -> Result<bool>` (`GetVolumePathNameW`, then
+       `GetVolumeInformationW` and `FILE_READ_ONLY_VOLUME`);
+     - `is_locked(path) -> Result<bool>`: opening the file for reading and writing with
+       `std::os::windows::fs::OpenOptionsExt::share_mode(0)` fails with a sharing violation
+       (`ERROR_SHARING_VIOLATION`, `ERROR_LOCK_VIOLATION`) → `true`; another error is an error;
+     - `can_write(original, extra_bytes) -> Result<(), Refusal>` (§9.1 point 2) with `Refusal {
+       ReadOnlyFile, ReadOnlyVolume, Locked, NoSpace { needed, free } }`: needed is the file size
+       + 10 % (+ `extra_bytes`);
+     - `set_modified(file, time)` and `flush(file)` with `std` (`File::set_modified`,
+       `File::sync_all`, which calls `FlushFileBuffers`);
+     - `replace(original, copy, backup) -> Result<(), ReplaceError>` with `ReplaceFileW` (no
+       flags, `backup` as the backup name) and `ReplaceError { OriginalIntact(String),
+       OriginalAtBackup(String) }`: `ERROR_UNABLE_TO_MOVE_REPLACEMENT` and every other failure where
+       the original still exists → `OriginalIntact`; `ERROR_UNABLE_TO_MOVE_REPLACEMENT_2` →
+       `OriginalAtBackup`. For `ERROR_INVALID_FUNCTION` and `ERROR_NOT_SUPPORTED` (a volume
+       without `ReplaceFileW`, §9.4) it uses `replace_by_rename`;
+     - `replace_by_rename(original, copy, backup)`: `MoveFileExW(original → backup,
+       MOVEFILE_WRITE_THROUGH)`, then `MoveFileExW(copy → original, MOVEFILE_WRITE_THROUGH)`; if the
+       second fails, the first is undone (`OriginalIntact`), or `OriginalAtBackup` if that fails
+       too;
+     - `move_new(copy, target)`: `MoveFileExW` with `MOVEFILE_WRITE_THROUGH` and **without**
+       `MOVEFILE_REPLACE_EXISTING` (a new sidecar never overwrites a file that appeared meanwhile);
+     - `temp_name(original, tag) -> PathBuf`: `<stem>.<tag>-<16 hex>.<ext>` in the same folder
+       (`pwtmp`, `pwbak`), the hex from the time, the process id and a counter (no new
+       dependency); a name that exists is never returned.
+  3. **`journal.rs`:** `Journal::open(folder) -> Result<Journal>` (creates the folder); one file
+     `<id>.json` per transaction, written and flushed **before** the copy is made (§9.5), with
+     `Entry { original, copy, backup, original_existed: bool }` (`serde_json`); `begin(&Entry) ->
+     Result<EntryId>`, `end(EntryId) -> Result<()>` (deletes the file); `recover(&self) ->
+     Result<Vec<Recovered>>` for each open entry, by §9.5:
+     - original present → the copy is deleted if present, the backup is deleted if present
+       (it can only exist after a completed replace or a completed second rename);
+     - original missing and backup present → the backup is renamed back, the copy deleted;
+     - `original_existed == false` → the copy is deleted if present;
+     - anything else (original and backup missing, the copy present) → nothing is deleted, the
+       entry is kept and reported as `Recovered::NeedsUser { entry }`;
+     `Recovered` says what was done per entry; an entry file that cannot be read is reported, not
+     deleted.
+- **Rules:** rules 3–7 and 10–12. The D3 lines are the only dependency change. `unsafe` only around
+  the Windows calls, each with a `// SAFETY:` comment; paths are passed as NUL-terminated UTF-16.
+- **Tests to add** (unit tests in the two files, on temporary folders; Windows only where they
+  call Windows):
+  - `free_space` of the temporary folder is above 0; `is_read_only_volume` is `false` for it;
+    `is_locked` is `true` while the test holds the file with `share_mode(0)` and `false` after;
+    `can_write` refuses a read-only file, a locked file, and `NoSpace` when `extra_bytes` is
+    larger than the free space;
+  - `replace`: the original's content is the copy's afterwards; its **creation time** (set to
+    2020-01-01 with `FileTimesExt::set_created` first), its **hidden attribute** and an
+    **alternate data stream** (`<file>:pw.test`, written with `std::fs`) are kept; the modification
+    time set on the copy with `set_modified` is the result's; the backup holds the old content;
+  - `replace` with the original held open with `share_mode(0)`: `OriginalIntact`, original
+    content unchanged, copy still there;
+  - `replace_by_rename` gives the same content result; with the copy missing it is
+    `OriginalIntact` and the original is back under its name;
+  - `move_new` refuses an existing target;
+  - `temp_name` keeps the folder and extension and never returns an existing name;
+  - the journal: `begin` writes a file and `end` removes it; `recover` for each case of point 3
+    with files made by hand, including `NeedsUser` and an unreadable entry file.
+- **Done when:** `.\tools\check.ps1` is all OK; `docs/test-inventory.md` is updated;
+  `git diff --stat` shows only the files above.
+
+### T86. ADR 0007 I8c: the safe write transaction — Open
+
+- **Can start after T84 and T85 are accepted.**
+- **Crates:** `pw-metadata` only. The old `write_rating`/`write_iptc` stay unchanged (I9 moves them
+  to this). The previews and LibRaw checks of §9.3 points 3–4 need `pw-raw` and LibRaw, which
+  `pw-metadata` must not depend on: the transaction calls a check the caller gives
+  (`ImageCheck`); the real one is written in I9.
+- **Files:** new `crates/pw-metadata/src/safe_write.rs`; `crates/pw-metadata/src/lib.rs` (the `mod`
+  line only); new `crates/pw-metadata/tests/safe_write.rs`; `docs/test-inventory.md`.
+- **Why:** ADR 0007 §9 as a whole, §4.2 (a RAW is never changed; its sidecar gets the same
+  transaction, §9.5).
+- **What:**
+  1. **`pub trait ImageCheck`** with `fn release(&self, image: &Path)` (close RAW engine sessions
+     for the file, §9.1 point 2) and `fn check_copy(&self, original: &Path, copy: &Path, kind:
+     FileKind) -> Result<(), String>` (§9.3 points 3–4); `NoImageCheck` does nothing (for tests and
+     sidecars).
+  2. **`ExifTool::write_safely(&mut self, image: &Path, plan: &WritePlan, checks: &dyn ImageCheck,
+     journal: &Journal) -> Result<WriteReport, SafeWriteError>`**:
+     - an empty plan writes nothing: `WriteReport::Unchanged`;
+     - the target: the image for `Jpeg`/`Tiff`/`Dng`; for `Raw` the sidecar `<basename>.xmp`
+       (`sidecar_path`); the RAW file itself is never written;
+     - **9.1:** `checks.release(image)`; `can_write` (T85; for a new sidecar only the free space and
+       the volume); `snapshot` and `check_file_type` (T84) of an existing target;
+     - **journal** `begin` (T85) with the copy name `temp_name(target, "pwtmp")` and the backup name
+       `temp_name(target, "pwbak")`;
+     - **9.2:** one `execute` with `plan.options`, `plan.args`, `-o <copy>` and the target (an
+       existing target is only read). A new sidecar is made **without a source file** (`plan`'s
+       arguments and the copy name only): measured, `-o x.xmp` from a RAW copies the RAW's Exif into
+       the sidecar. ExifTool's answer must report one file created and no warning (as
+       `write_succeeded`), otherwise `WriteCopy`;
+     - **9.3:** `snapshot` of the copy and `verify_copy` against the original's; for a new sidecar
+       only `check_file_type` and that every key outside `System`, `ExifTool`, `File` comes from
+       the plan; then `checks.check_copy` for `Jpeg`/`Tiff`/`Dng`; then `set_modified` (the
+       original's time) and `flush`;
+     - **9.4:** `replace` (T85), or `move_new` for a new sidecar; then the **final read**: size and
+       `ImageDataHash` of the target equal the copy's; then the backup is deleted and the journal
+       entry ended;
+     - every failure leaves no `pwtmp` file and ends the journal entry when the original is intact;
+       `OriginalAtBackup` keeps the entry and tries once to rename the backup back (§9.5).
+  3. **`WriteReport { Written { target: PathBuf }, Unchanged }`** and **`SafeWriteError { stage:
+     Stage, original: OriginalState, reason: String }`** with `Stage { Precheck, WriteCopy, Verify,
+     ImageCheck, Replace, FinalCheck }` and `OriginalState { Intact, AtBackup(PathBuf), Replaced }`;
+     `Display` in English naming the file, the stage and the reason (the Swedish texts are I10's).
+     A failed final check keeps the backup and gives `Replaced`.
+- **Rules:** rules 3–7 and 10–12. No `Cargo.toml` change.
+- **Tests to add** (`tests/safe_write.rs`, integration, **ExifTool required**; the JPEG fixture and
+  the fake RAW of T82 in temporary folders; a temporary journal folder):
+  - a JPEG with a plan (City, a two-line Description, keywords, IIM created): the values are read
+    back with `read_metadata`, the modification time is the original's, the folder holds no
+    `pwtmp`/`pwbak` file and the journal folder is empty;
+  - an empty plan: `Unchanged`, the file's bytes unchanged;
+  - a RAW without a sidecar: the sidecar is created with only the plan's values (no `XMP-exif`
+    keys), the RAW's bytes unchanged; a RAW with a sidecar: the sidecar updated, its other values
+    kept;
+  - failures, each leaving the original **byte for byte** unchanged, no `pwtmp` file and an empty
+    journal: a plan with an argument ExifTool refuses → `WriteCopy`; a plan with `-XMP:all=` on a
+    file with XMP → `Verify`; an `ImageCheck` that returns an error → `ImageCheck`; an
+    `ImageCheck` that opens the original with `share_mode(0)` and keeps it open → `Replace` with
+    `Intact`; the original opened with `share_mode(0)` before the call → `Precheck`; a read-only
+    original → `Precheck`;
+  - one test **ignored by default**: every DNG in `PW_TESTDATA`, copied, written with a City and
+    Description plan and `NoImageCheck`: `Written`, `ImageDataHash` unchanged, the values read
+    back.
+- **Done when:** `.\tools\check.ps1` is all OK; `docs/test-inventory.md` is updated;
+  `git diff --stat` shows only the files above.
+
 ### T7. Format the files that `cargo fmt --check` reports — Done
 
 - **Crates:** `photoworkflow` (`src-tauri`), `preview-bench` (`tools/preview-bench`).
@@ -3620,9 +3866,8 @@ and reviewer:
 - A timeout when ExifTool hangs (process supervision across threads).
 - Suppressing the Windows "no disk in drive" dialog when scanning empty card readers (needs a
   Windows API call and a new dependency).
-- ADR 0007 (IPTC metadata) steps I8–I13 and the `Cleared` task: their tasks are written after T83
-  is accepted (see "Milestone 8 (ADR 0007, IPTC metadata): steps"). I8 needs the owner's approval
-  of `windows-sys` in `pw-metadata`; `Cleared` waits for D1; I11 waits for the PLUS controlled
+- ADR 0007 (IPTC metadata) steps I9–I13 and the `Cleared` task: I9 and later are written after
+  T86 is accepted (see "Milestone 8 (ADR 0007, IPTC metadata): steps"); `Cleared` waits for D1; I11 waits for the PLUS controlled
   vocabulary; I12 waits for the level-C samples. Also later: Exif ImageEditor ↔ Contributor and
   GPS → Location Created (§6.1), left out of T81; keyword qualifiers (§8), left out of T83.
 - The import dialog fields for title and description in `ui/` (frontend).
@@ -3914,3 +4159,5 @@ and reviewer:
 | 2026-11-12 | T83 | Ready for review | New `pw-metadata::write_plan` (`ExifPresent`, `FileState`, `WriteSettings`, `WritePlan`, `WriteNotice`, `PlanError`, `plan`) with 30 unit tests; `lib.rs` the `mod` line; new `tests/write_plan.rs` (6 tests, ExifTool required); `docs/test-inventory.md`. `FileState::from_read` was not needed (the tests build `FileState` by hand). Checked with ExifTool 13.59: `-ec` turns `\n`, `\r` and `\\` into characters (every argument is escaped when a value holds a line break); `-<et_xmp>=` removes every language of a Lang Alt, with or without `x-default`; `-IPTC:DateCreated#=` / `-IPTC:TimeCreated#=` store exactly the `to_iim()` text. **Deviations approved by the owner during the task:** (1) a Lang Alt is written as `-<et_xmp>-x-default=<text>`, because `-<et_xmp>=<text>` makes ExifTool replace the whole Lang Alt (the `sv` entry was lost in the integration test); the named form keeps the other languages and inserts `x-default` first when it is missing (Q7); (2) a conversion to UTF-8 (§5.4) also writes the IIM text of an undecided (`Open`) conflict again, unchanged and only re-encoded, so its Latin-1 bytes are not left under a UTF-8 1:90; the conflict is not decided and no checksum is written; (3) structure values also get `|` before a leading space, which ExifTool otherwise drops. Other choices for review: without changes the plan is empty; a clear in a file without IIM writes no IIM (it would only create an empty block); IIM is created with the setting only for a change with an IIM dataset; "XMP after the write" is a written XMP value or an embedded XMP value or conflict in the `Metadata` (`FileState` has no XMP flag); the IIM of a cleared Date Created removes 2:55 and 2:60. `check.ps1`: fmt, test and clippy OK, 725 passed, 0 failed, 33 ignored |
 | 2026-11-12 | T83 | Open | **Sent back by the owner** (2026-11-12). Review: the owner's three answers during the task are right (Lang Alt as `-<et_xmp>-x-default=`, re-encoding the IIM text of an `Open` conflict on the UTF-8 conversion, `|` before a leading space); the reviewer's `check.ps1`: fmt, test and clippy OK, 725 passed, 0 failed, 33 ignored. The gap, from the task text and not the agent: the plan writes only the user's changes, so in a `Differs` file where the IIM City won, an edit of only the Rating writes a new digest while XMP keeps the old City; the next read then has a matching checksum and XMP wins, silently undoing the IIM edit (§5.1: the marker stays until a write brings both forms in line; §12: IIM = XMP after every write). What is left, and nothing else: the new bullet "bring both forms in line" in point 4 and its tests under "Tests to add". Keep everything else of T83 as it is; update `docs/test-inventory.md`; then `check.ps1`, the heading status and one log row as usual |
 | 2026-11-12 | T83 | Ready for review | Second review: accepted. The agent made the correction but could not set the status: Windows Smart App Control (`os error 4551`, "En programkontrollprincip har blockerat den här filen") refused to run the `pw-metadata` unit-test binary of the workspace build, so `check.ps1` reported the test step as FAILED; the agent asked the owner (rule 7) instead of building elsewhere, and the reviewer set the status. The fix: `bring_in_line` (only for a JPEG, TIFF or DNG with IIM, and only when the plan has changes) writes an unchanged property with an IIM conflict of rule `Iim`, or a value with origin `Iim` and no conflict, to XMP, and one with rule `Xmp` to IIM (predicted and cut); `Open` (Q1) and `Exif` conflicts, XMP/Exif-only conflicts and deprecated IIM properties are left out; a value brought to IIM is not written again with its old text by the UTF-8 conversion; such properties no longer block the digest. Tests: the unit tests of the task text, and `an_iim_value_that_won_by_the_checksum_stays_after_the_write` (IIM City `Malmö` won over XMP `Lund`, only the Rating edited → City `Malmö` from XMP, no conflict, digests equal). The reviewer's `check.ps1`: fmt and clippy OK; the test step showed the same block for the `pw-metadata` unit-test binary with every other binary passing (548 passed, 0 failed, 32 ignored); `cargo test -p pw-metadata --lib` (another build, not blocked) passed 185, 1 ignored; together 733 passed, 0 failed, 33 ignored, as in `docs/test-inventory.md` |
+| 2026-11-12 | T84–T86 | Open / Blocked | Added after T83 was done: ADR 0007 I8 split in three. T84 the file snapshot and the verification of a written copy (can start now); T85 the Windows file operations and the write journal (**Blocked** on owner decision D3, `windows-sys` =0.61.2 in `pw-metadata`, no new package); T86 the safe write transaction, after T84 and T85, with an `ImageCheck` the caller gives (the real one with `pw-raw` and LibRaw moves to I9). The step plan gains I8a–I8c and D3 and records the reviewer's ExifTool 13.59 measurements for I8. T84 and T85 touch different files and can run at the same time |
+| 2026-11-12 | T85 | Open | Owner approved D3 (`windows-sys` =0.61.2, Windows only, features `Win32_Foundation` and `Win32_Storage_FileSystem`, in `pw-metadata`); T85 can start, at the same time as T84 |
