@@ -8,10 +8,10 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use crate::{Field, FieldError, ImportForm, IptcForm, Preview};
-use pw_metadata::ExifTool;
 use pw_metadata::edit::EditOptions;
 use pw_metadata::journal::Journal;
 use pw_metadata::safe_write::ImageCheck;
+use pw_metadata::{ExifTool, MIN_EXIFTOOL_VERSION, ToolVersion};
 
 const REQUEST_CAPACITY: usize = 8;
 
@@ -19,13 +19,36 @@ const REQUEST_CAPACITY: usize = 8;
 /// start; nothing is written (T91).
 const NO_JOURNAL_TEXT: &str = "skrivloggen kunde inte öppnas";
 
+/// The line listed for the ingest template when the started ExifTool is older than
+/// [`MIN_EXIFTOOL_VERSION`]; nothing is written (ADR 0007 §11, D9, T101).
+fn exiftool_too_old_text(file: &str, version: ToolVersion) -> String {
+    format!("{file}: ExifTool {version} är för gammal (minst {MIN_EXIFTOOL_VERSION})")
+}
+
 /// What the ingest template's safe write needs (ADR 0007 §9.5, T91): the ExifTool program
 /// (`None` for `exiftool` on PATH), the app's write journal (`None` when it could not be opened)
 /// and its image checks.
 struct WriteContext {
-    exiftool_program: Option<String>,
+    exiftool_program: Option<ExifToolProgram>,
     journal: Option<Journal>,
     checks: Box<dyn ImageCheck + Send>,
+}
+
+/// An ExifTool program with the arguments put before ExifTool's own (T101: a test starts its
+/// fake ExifTool, the test program itself, this way).
+struct ExifToolProgram {
+    program: String,
+    args: Vec<String>,
+}
+
+impl WriteContext {
+    /// The arguments put before ExifTool's own; none for `exiftool` on PATH.
+    fn exiftool_args(&self) -> Vec<&str> {
+        self.exiftool_program
+            .as_ref()
+            .map(|tool| tool.args.iter().map(String::as_str).collect())
+            .unwrap_or_default()
+    }
 }
 
 pub type RequestId = u64;
@@ -132,8 +155,22 @@ impl ImportWorker {
         journal: Option<Journal>,
         checks: Box<dyn ImageCheck + Send>,
     ) -> io::Result<Self> {
+        Self::start_with_exiftool_args(program, &[], journal, checks)
+    }
+
+    /// Starts the worker with a specific ExifTool program and arguments put before ExifTool's
+    /// own, primarily for tests (T101: a fake ExifTool).
+    pub fn start_with_exiftool_args(
+        program: &str,
+        args: &[&str],
+        journal: Option<Journal>,
+        checks: Box<dyn ImageCheck + Send>,
+    ) -> io::Result<Self> {
         Self::start_inner(WriteContext {
-            exiftool_program: Some(program.to_string()),
+            exiftool_program: Some(ExifToolProgram {
+                program: program.to_string(),
+                args: args.iter().map(|arg| (*arg).to_string()).collect(),
+            }),
             journal,
             checks,
         })
@@ -382,7 +419,10 @@ fn run_import(
         cancel,
         events,
         exiftool,
-        exiftool_program: write.exiftool_program.as_deref(),
+        exiftool_program: write
+            .exiftool_program
+            .as_ref()
+            .map(|tool| tool.program.as_str()),
         write,
     };
     apply_iptc(
@@ -478,11 +518,27 @@ fn apply_iptc(
         };
         if runtime.exiftool.is_none() {
             let started = match runtime.exiftool_program {
-                Some(program) => ExifTool::start_with(program, &[]),
+                Some(program) => ExifTool::start_with(program, &runtime.write.exiftool_args()),
                 None => ExifTool::start(),
             };
-            match started {
-                Ok(tool) => *runtime.exiftool = Some(tool),
+            let mut tool = match started {
+                Ok(tool) => tool,
+                Err(error) => {
+                    done.iptc_errors
+                        .push(format!("{}: {error}", file_name(current)));
+                    break;
+                }
+            };
+            // §11, D9 (T101): an ExifTool older than 12.67, or one whose version cannot be read,
+            // does not write the template. It is listed once, as a failed start, and not kept, so
+            // the next import starts and asks again; the copied files stay.
+            match tool.version() {
+                Ok(version) if version >= MIN_EXIFTOOL_VERSION => *runtime.exiftool = Some(tool),
+                Ok(version) => {
+                    done.iptc_errors
+                        .push(exiftool_too_old_text(&file_name(current), version));
+                    break;
+                }
                 Err(error) => {
                     done.iptc_errors
                         .push(format!("{}: {error}", file_name(current)));
@@ -878,6 +934,103 @@ mod tests {
             done.iptc_errors
         );
         assert!(dirs.dest.join("A001.ARW").exists());
+    }
+
+    /// The test name of [`fake_exiftool_entry`], for libtest's `--exact` filter.
+    const FAKE_ENTRY: &str = "import_worker::tests::fake_exiftool_entry";
+    const FAKE_MODE_PREFIX: &str = "fake-exiftool-version=";
+
+    /// The leading arguments that make this test program a fake ExifTool answering `-ver` with
+    /// `version` (the pattern of `pw-metadata`'s `test_support`, T101). Everything after `--` is
+    /// a test-name filter for libtest, including the `-stay_open True -@ -` that
+    /// `ExifTool::start_with` appends; only `FAKE_ENTRY` matches.
+    fn fake_exiftool_args(version: &str) -> Vec<String> {
+        vec![
+            "--ignored".into(),
+            "--exact".into(),
+            "--test-threads=1".into(),
+            "--quiet".into(),
+            "--".into(),
+            FAKE_ENTRY.into(),
+            format!("{FAKE_MODE_PREFIX}{version}"),
+        ]
+    }
+
+    /// The fake ExifTool started by the tests below: speaks the `-stay_open` protocol, answers
+    /// `-ver` with the version of its arguments and every other command with "1 image files
+    /// updated".
+    #[test]
+    #[ignore = "helper process for other tests; they start it, it is not a test itself"]
+    fn fake_exiftool_entry() {
+        use std::io::{BufRead, Write};
+
+        let Some(version) =
+            std::env::args().find_map(|arg| arg.strip_prefix(FAKE_MODE_PREFIX).map(str::to_owned))
+        else {
+            return;
+        };
+        // Write through the raw handle: libtest only captures the print! macros.
+        let mut out = std::io::stdout();
+        let mut asks_version = false;
+        for line in std::io::stdin().lock().lines() {
+            let Ok(line) = line else { break };
+            if line == "False" {
+                break;
+            }
+            if line == "-ver" {
+                asks_version = true;
+            }
+            let Some(seq) = line.strip_prefix("-execute") else {
+                continue;
+            };
+            let answer = if std::mem::take(&mut asks_version) {
+                format!("{version}\n{{ready{seq}}}\n")
+            } else {
+                format!("    1 image files updated\n{{ready{seq}}}\n")
+            };
+            if out
+                .write_all(answer.as_bytes())
+                .and_then(|()| out.flush())
+                .is_err()
+            {
+                break;
+            }
+        }
+        std::process::exit(0);
+    }
+
+    /// ADR 0007 §11, D9 (T101): an ExifTool that answers `-ver` with 12.40 writes no template;
+    /// one line names its version, and the copied file stays as it was.
+    #[test]
+    fn a_too_old_exiftool_lists_one_line_and_writes_nothing() {
+        let dirs = TempDirs::new("iptc-old-exiftool");
+        dirs.write_image("A001.jpg", b"image bytes");
+        let program = std::env::current_exe().unwrap();
+        let args = fake_exiftool_args("12.40");
+        let args: Vec<&str> = args.iter().map(String::as_str).collect();
+        let mut worker = ImportWorker::start_with_exiftool_args(
+            &program.to_string_lossy(),
+            &args,
+            Some(test_journal()),
+            Box::new(NoImageCheck),
+        )
+        .unwrap();
+        let mut form = dirs.form("");
+        form.iptc.creator = "Fotograf".to_string();
+        let id = worker.run(form).unwrap();
+
+        let done = done_event(&worker, id);
+        assert_eq!(done.copied, 1);
+        assert!(done.failed.is_empty());
+        assert_eq!(
+            done.iptc_errors,
+            ["A001.jpg: ExifTool 12.40 är för gammal (minst 12.67)"]
+        );
+        assert_eq!(
+            fs::read(dirs.dest.join("A001.jpg")).unwrap(),
+            b"image bytes"
+        );
+        assert_eq!(files_below(&dirs.dest), [PathBuf::from("A001.jpg")]);
     }
 
     #[test]

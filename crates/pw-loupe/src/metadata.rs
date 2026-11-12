@@ -9,8 +9,8 @@ use pw_loupe::{
 };
 use pw_metadata::safe_write::OriginalState;
 use pw_metadata::{
-    MetadataWorker, NO_JOURNAL, Rating, RequestId, SubmitError, WorkerEvent, WriteError,
-    supports_rating,
+    EXIFTOOL_TOO_OLD, MIN_EXIFTOOL_VERSION, MetadataWorker, NO_JOURNAL, Rating, RequestId,
+    SubmitError, WorkerEvent, WriteError, supports_rating,
 };
 
 pub(crate) trait MetadataSubmit: RatingWriter {
@@ -276,6 +276,8 @@ impl MetadataCache {
                 }
             }
             WorkerEvent::RatingsRead { .. } => {}
+            // Not requested by the loupe yet; the info panel (T103) and the editor (T105) use them.
+            WorkerEvent::MetadataRead { .. } | WorkerEvent::EditsWritten { .. } => {}
         }
     }
 }
@@ -374,6 +376,11 @@ fn write_error_text(error: WriteError) -> String {
         WriteError::ReadOnly => READ_ONLY_TEXT.into(),
         WriteError::NotWritten(_) => NOT_WRITTEN_TEXT.into(),
         WriteError::Other(text) if text == NO_JOURNAL => NO_JOURNAL_TEXT.into(),
+        // The metadata worker refuses rating writes while ExifTool is too old or its version
+        // could not be read (ADR 0007 §11, D9, T101).
+        WriteError::Other(text) if text == EXIFTOOL_TOO_OLD => {
+            format!("ExifTool är för gammal (minst {MIN_EXIFTOOL_VERSION})")
+        }
         WriteError::Other(text) => text,
         WriteError::NotSafe { original, .. } => match original {
             OriginalState::Intact => {
@@ -919,6 +926,14 @@ mod tests {
         assert_eq!(
             write_error_text(WriteError::Other(NO_JOURNAL.into())),
             "skrivloggen kunde inte öppnas"
+        );
+    }
+
+    #[test]
+    fn a_write_refused_for_an_old_exiftool_gives_the_swedish_text() {
+        assert_eq!(
+            write_error_text(WriteError::Other(EXIFTOOL_TOO_OLD.into())),
+            "ExifTool är för gammal (minst 12.67)"
         );
     }
 

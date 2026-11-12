@@ -35,7 +35,7 @@ use pw_loupe::{
 use pw_metadata::edit::EditOptions;
 use pw_metadata::journal::{Journal, Recovered};
 use pw_metadata::template::Mode;
-use pw_metadata::{MetadataWorker, Rating, WriteSetup};
+use pw_metadata::{MIN_EXIFTOOL_VERSION, MetadataWorker, Rating, ToolVersion, WriteSetup};
 use pw_render::{Textures, view_px};
 use pw_thumbcache::{ThumbWorker, ThumbnailRequest};
 use pw_viewcore::native::NativeBackend;
@@ -59,10 +59,16 @@ const RECOVERY_TITLE: &str = "Metadataskrivning avbröts";
 /// The first line of that message.
 const RECOVERY_HEADING: &str =
     "RawStride avslutades mitt i en metadataskrivning. Kontrollera de här filerna:";
+/// How often a frame is asked for while the metadata worker has not yet tried to start ExifTool,
+/// so the message about it is not left waiting for the next input (T101).
+const EXIFTOOL_CHECK_INTERVAL: Duration = Duration::from_millis(200);
 
 struct Loupe {
     core: ViewCore<NativeBackend>,
     metadata_worker: MetadataWorker,
+    /// The result of the metadata worker's first ExifTool start has been looked at, and the
+    /// message about it shown when needed (ADR 0007 §11, D9, T101): it is shown at most once.
+    exiftool_checked: bool,
     metadata: MetadataCache,
     import_worker: ImportWorker,
     import_dialog: Option<ImportDialog>,
@@ -105,6 +111,36 @@ struct Loupe {
 }
 
 impl Loupe {
+    /// Until it has been done once: asks the metadata worker for the result of its first ExifTool
+    /// start, and when ExifTool is missing or too old shows one message window about it (ADR 0007
+    /// §11, D9, T101). The window is shown from its own thread, so the frame is not held up.
+    fn check_exiftool(&mut self, ctx: &egui::Context) {
+        if self.exiftool_checked {
+            return;
+        }
+        let Some(result) = self.metadata_worker.exiftool_version() else {
+            ctx.request_repaint_after(EXIFTOOL_CHECK_INTERVAL);
+            return;
+        };
+        self.exiftool_checked = true;
+        let Some((title, text)) = exiftool_message(&result) else {
+            return;
+        };
+        let shown = std::thread::Builder::new()
+            .name("pw-exiftool-message".into())
+            .spawn(move || {
+                let _ = rfd::MessageDialog::new()
+                    .set_level(rfd::MessageLevel::Warning)
+                    .set_title(title)
+                    .set_description(text)
+                    .set_buttons(rfd::MessageButtons::Ok)
+                    .show();
+            });
+        if let Err(error) = shown {
+            eprintln!("pw-loupe: the ExifTool message could not be shown: {error}");
+        }
+    }
+
     /// Whether the filter of the active tab can use the ratings (ADR 0014 Q7): they have been read,
     /// and the folder read did not fail. A read error counts as not ready, so an active filter
     /// shows nothing.
@@ -2104,6 +2140,7 @@ fn submit_error_text(error: SubmitError) -> String {
 impl eframe::App for Loupe {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.poll_import_worker(ui.ctx());
+        self.check_exiftool(ui.ctx());
         egui::CentralPanel::default()
             .frame(egui::Frame::NONE)
             .show(ui, |ui| {
@@ -2202,6 +2239,29 @@ fn recovery_text(recovered: &[Recovered], exists: impl Fn(&Path) -> bool) -> Opt
     Some(format!("{RECOVERY_HEADING}\n{}", lines.join("\n")))
 }
 
+/// The title and text of the message about the metadata worker's first ExifTool start (ADR 0007
+/// §11, D9, T101): `None` when the version is at least [`MIN_EXIFTOOL_VERSION`].
+fn exiftool_message(result: &Result<ToolVersion, String>) -> Option<(&'static str, String)> {
+    match result {
+        Err(text) => Some((
+            "ExifTool saknas",
+            format!(
+                "ExifTool kunde inte startas: {text}. Betyg och metadata kan inte läsas eller \
+                 sparas."
+            ),
+        )),
+        Ok(version) if *version < MIN_EXIFTOOL_VERSION => Some((
+            "ExifTool är för gammal",
+            format!(
+                "ExifTool {version} är för gammal. RawStride behöver version \
+                 {MIN_EXIFTOOL_VERSION} eller senare. Betyg och metadata sparas inte förrän \
+                 ExifTool har uppdaterats."
+            ),
+        )),
+        Ok(_) => None,
+    }
+}
+
 /// The image check of the safe write (I9d): it closes the view core's RAW sessions of the file
 /// first (T89), waiting at most [`RELEASE_TIMEOUT`].
 fn image_check(core: &ViewCore<NativeBackend>) -> RawImageCheck {
@@ -2254,6 +2314,7 @@ fn run(options: Options) -> Result<(), String> {
             let mut loupe = Loupe {
                 core,
                 metadata_worker,
+                exiftool_checked: false,
                 metadata: MetadataCache::default(),
                 import_worker,
                 import_dialog: None,
@@ -2309,8 +2370,12 @@ fn main() -> ExitCode {
 
 #[cfg(test)]
 mod tests {
-    use super::{index_span, label_color, label_pill, recovery_text, resolve_path, resolve_paths};
+    use super::{
+        exiftool_message, index_span, label_color, label_pill, recovery_text, resolve_path,
+        resolve_paths,
+    };
     use egui::{Color32, Rect, pos2};
+    use pw_metadata::ToolVersion;
     use pw_metadata::journal::{Entry, Recovered};
     use std::path::{Path, PathBuf};
 
@@ -2320,6 +2385,44 @@ mod tests {
             copy: folder.join("bild.pwtmp-1.jpg"),
             backup: folder.join("bild.pwbak-1.jpg"),
             original_existed: true,
+        }
+    }
+
+    #[test]
+    fn exiftool_message_names_a_start_error() {
+        let result = Err("ExifTool: could not start exiftool: program not found".to_string());
+        assert_eq!(
+            exiftool_message(&result),
+            Some((
+                "ExifTool saknas",
+                "ExifTool kunde inte startas: ExifTool: could not start exiftool: program not \
+                 found. Betyg och metadata kan inte läsas eller sparas."
+                    .to_string()
+            ))
+        );
+    }
+
+    #[test]
+    fn exiftool_message_says_that_12_40_is_too_old() {
+        let result = Ok(ToolVersion {
+            major: 12,
+            minor: 40,
+        });
+        assert_eq!(
+            exiftool_message(&result),
+            Some((
+                "ExifTool är för gammal",
+                "ExifTool 12.40 är för gammal. RawStride behöver version 12.67 eller senare. \
+                 Betyg och metadata sparas inte förrän ExifTool har uppdaterats."
+                    .to_string()
+            ))
+        );
+    }
+
+    #[test]
+    fn exiftool_message_is_none_from_12_67() {
+        for (major, minor) in [(12, 67), (13, 59)] {
+            assert_eq!(exiftool_message(&Ok(ToolVersion { major, minor })), None);
         }
     }
 

@@ -10,6 +10,7 @@ mod import;
 mod import_dialog;
 mod import_text;
 mod import_worker;
+mod info_panel;
 mod monitor_profile;
 mod ratings;
 mod selection;
@@ -43,6 +44,10 @@ pub use import_text::{
     preview_summary, progress_text,
 };
 pub use import_worker::{ImportDone, ImportEvent, ImportWorker, RequestId, SubmitError};
+pub use info_panel::{
+    ConflictRow, ConflictValue, InfoPanel, Language, PanelText, ValueRow, info_panel, origin_text,
+    panel_text, property_label, rule_text, value_text,
+};
 pub use monitor_profile::{
     MonitorProfile, ProfileSource, load_monitor_profile, primary_monitor_profile_path, window_title,
 };
