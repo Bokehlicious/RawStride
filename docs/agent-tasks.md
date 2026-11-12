@@ -4381,7 +4381,8 @@ leaves the stored `IPTCDigest` out of date (`Validate`: `IPTCDigest is not curre
 - **Crates:** `pw-metadata` only. The worker gets it in T98, the editor in T104/T105.
 - **Files:** `crates/pw-metadata/src/edit.rs`; `crates/pw-metadata/src/template.rs` (only to make
   its sub-field helper `pub(crate)` if you reuse it; no behaviour change); new
-  `crates/pw-metadata/tests/edits.rs`; `docs/test-inventory.md`.
+  `crates/pw-metadata/tests/edits.rs`; `crates/pw-metadata/src/verify.rs` (point 6 only, owner
+  decision 2026-11-12); `docs/test-inventory.md`.
 - **Why:** ADR 0007 §8 (clearing removes every representation; Lang Alt edits `x-default` only),
   §5.1 and Q1 (an `Open` conflict is decided by the user: an edit of that property writes both forms),
   §5.2 and §5.4 (the user is told when IIM was cut or converted: today the plan's
@@ -4416,6 +4417,20 @@ leaves the stored `IPTCDigest` out of date (`Validate`: `IPTCDigest is not curre
      `write_safely`; the report with the plan's `notices` (empty when `Unchanged`).
   5. Module comment extended (§5.1/Q1, §5.2, §8).
   `write_rating_safely` and `apply_template_safely` are unchanged.
+  6. **The Exif block that ExifTool drops** (`verify.rs`; owner decision A, 2026-11-12, found in
+     this task): in a JPEG whose only Exif is `IFD0:Copyright`, clearing it (`-IFD0:Copyright=`)
+     makes ExifTool 13.59 drop the whole Exif block, so `File:ExifByteOrder` and
+     `IFD0:YCbCrPositioning` (which ExifTool adds itself when it creates Exif) are removed too and
+     `verify_copy` refuses the write as `Unexpected` (measured by the reviewer: with any other Exif
+     tag left, such as `IFD0:Make`, `IFD0:XResolution` or `ExifIFD:ExifVersion`, the block and
+     both keys stay). New private `fn drops_exif_block(original, copy, plan) -> bool`: the plan
+     has an argument that clears an `IFD0:` or `ExifIFD:` tag (`-IFD0:<tag>=` or
+     `-ExifIFD:<tag>=` with an empty value), the original has `File:ExifByteOrder`, and the copy
+     has no `File:ExifByteOrder` and no key in the groups `IFD0`, `ExifIFD`, `IFD1`, `GPS` or
+     `InteropIFD`. When it is true, the **removal** (a value before, none after) of exactly
+     `File:ExifByteOrder` and `IFD0:YCbCrPositioning` is allowed in the key loop of
+     `verify_copy`; a changed value of either key is still `Unexpected`. Comment with the
+     measurement. Nothing else in `verify.rs` changes.
 - **Rules:** rules 3–7 and 10–12. No `Cargo.toml` change. Do not change `write_plan.rs`,
   `safe_write.rs` or `value.rs`.
 - **Tests to add:**
@@ -4435,6 +4450,13 @@ leaves the stored `IPTCDigest` out of date (`Validate`: `IPTCDigest is not curre
       the XMP value set again → `Written`, both forms equal afterwards and no conflict when read;
     - `dc:rights` cleared on a JPEG with `IFD0:Copyright` → gone from XMP and Exif (§8);
     - the fake RAW: a Title set → only the sidecar written, the RAW's bytes unchanged.
+  - `verify.rs` unit tests (point 6, with the existing helpers): the two keys removed with
+    `-IFD0:Copyright=` in the plan and no Exif key left → passes; the same with `IFD0:Make` still
+    in the copy → `Unexpected` for `File:ExifByteOrder`; the same without a clearing argument (a
+    plan that sets `-IFD0:Copyright=x`) → `Unexpected`; `File:ExifByteOrder` changed from `MM` to
+    `II` with the clearing argument → `Unexpected`.
+  - `tests/edits.rs` `clearing_the_copyright_notice_removes_it_from_xmp_and_exif` (the JPEG whose
+    only Exif is Copyright) passes unchanged.
 - **Done when:** `.\tools\check.ps1` is all OK; `docs/test-inventory.md` is updated;
   `git diff --stat` shows only the files above.
 
@@ -5330,3 +5352,4 @@ and reviewer:
 | 2026-11-12 | T96 | In progress | (Agent) New `validate.rs` (`pub mod validate` in `lib.rs`): `Warning` with the seven warnings, `validate(&Metadata, iim_written)` in table order, English `Display`, module comment (§11; left out PLUS/I11, other vocabularies, dates). `TooLongForIim` through `iim::predict` with `iim_read::iim_format` (shown text of a Lang Alt, each list entry, the property once). A blank value (`iim::is_blank`) counts as missing, also for Creator in `JobtitleWithoutCreator`; a Digital Source Type code is one or more ASCII letters or digits. Owner decision 2026-11-12: `abc` cannot be stored as `xmp:Rating` in a `Metadata` (`check_kind`), so it is tested through the private `rating_warning` that `validate` uses. 15 unit tests, all passed; `docs/test-inventory.md` row 290 → 305, header 920 passed / 42 ignored. `check.ps1`: fmt OK, clippy OK, **test FAILED only in `tests/edits.rs`** (another agent's unfinished T97, untracked; `clearing_the_copyright_notice_removes_it_from_xmp_and_exif`); 936 passed, 1 failed, 42 ignored; `pw_metadata` lib 316 passed, 1 ignored. Waits for a green `check.ps1` |
 | 2026-11-12 | T102, T104 | Blocked | Owner decision on D11 and translation: `property_label` takes a language (`Language::Sv`, `Language::En`); English always gives the IPTC name from the property table, Swedish the D11 name where there is one. The Swedish names stay in one table in `info_panel.rs`; T104 takes its labels from it. Swedish names for every property (no English fallback in the Swedish panel) are kept as a future improvement under "Not for agents yet". D11 itself (the proposed names) is still open |
 | 2026-11-12 | T95, T96 | Done | Review: both accepted. **T95:** on Windows `find_sidecars` looks up `<basename>.xmp` and `<basename>.<ext>.xmp` directly and reports the name as stored (`canonicalize`); other systems keep the listing. The small deviation from the task text is accepted: `std::fs::metadata` instead of `is_file()`, so only `NotFound` means "no sidecar" and any other failure is the error, as the task asks for an unreadable folder. Measured by the agent: 21.0 ms → 5.7 ms per read next to 20 000 files. **T96:** `validate.rs` with the seven warnings in table order, English `Display`; the owner's decision to test `abc` through the private `rating_warning` (a `Metadata` cannot hold it as `xmp:Rating`) is right. The reviewer's `check.ps1`: fmt and clippy OK; test 936 passed, **1 failed**, 42 ignored, the failure only in T97's unfinished `tests/edits.rs` (untracked, not committed); without T97's 17 tests that is 920 passed, 42 ignored, as `docs/test-inventory.md` says. Committed only T95's and T96's files |
+| 2026-11-12 | T97 | Open | Stopped by the agent: `tests/edits.rs` `clearing_the_copyright_notice_removes_it_from_xmp_and_exif` fails in `verify_copy` (`File:ExifByteOrder changed unexpectedly from "MM" to (none)`). Measured by the reviewer with ExifTool 13.59: a JPEG whose only Exif is `IFD0:Copyright` loses the whole Exif block when it is cleared, with `File:ExifByteOrder` and `IFD0:YCbCrPositioning`; with any other Exif tag left the block stays. **Owner decision A (2026-11-12):** `verify.rs` allows the removal of exactly those two keys when the plan clears an `IFD0`/`ExifIFD` tag and the copy has no Exif left; added to T97 as point 6 with its tests and `verify.rs` in its files. T97's other code was read by the reviewer and follows the task so far; it is reviewed when Ready for review |
