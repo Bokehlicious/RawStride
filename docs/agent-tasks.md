@@ -2796,13 +2796,13 @@ scanned TIFF with IIM and a matching `IPTCDigest` (`TN002683.tif`, 41 MB), all f
 | I8b | T85 | Windows file operations (`ReplaceFileW` with the rename fallback, free space, read-only volume, locks) and the write journal with recovery | §9.1, §9.4, §9.5 | now |
 | I8c | T86 | The safe write transaction for embedded metadata and sidecars, with an `ImageCheck` the caller gives | §9 | after T84 and T85 |
 | I9a | T87 | Ratings and labels through the write plan and the safe write (`write_rating_safely`); the reader also gives the plan's `FileState` | §8, §9, §15 | now |
-| D4 | owner | A new workspace crate **`pw-imagecheck`** for the real `ImageCheck`, depending on `pw-metadata`, `pw-raw` and `pw-libraw` (all workspace crates: no new package from crates.io; `Cargo.lock` gains only the crate itself). Root `Cargo.toml`: `pw-imagecheck = { path = "crates/pw-imagecheck" }` under `[workspace.dependencies]`; `pw-loupe`: `pw-imagecheck.workspace = true` (T91). Why not elsewhere: `pw-metadata` must not depend on `pw-raw`/LibRaw (§9.3); in `pw-viewcore` the view core would depend on `pw-metadata`; in `pw-loupe` it would need `pw-libraw` as a direct dependency (also a `Cargo.toml` change) and the Tauri app could not use it | §9.3 | – |
-| D5 | owner | The separator of `Append` and `Prefix` for a single text or Lang Alt (§10 says "a separator" without naming it). Reviewer's proposal: one space for every property | §10 | – |
-| D6 | owner | `xmpRights:Marked` ("Copyrighted" in Lightroom and Photo Mechanic): today's template writes `True` when a copyright is given, but the property is not in the table, so the plan cannot write it. Reviewer's proposal: add it to the table as a non-IPTC entry (as `xmp:Label`) and let `Iptc::to_template` set `True` with a Copyright Notice, as today. The alternative is to stop writing it | §10, §15 | – |
-| D7 | owner | The **Tauri app** (`src-tauri`) also writes ratings and the ingest template. Reviewer's proposal: it keeps today's in-place write (`write_rating`, `write_iptc`) until it is retired (GR8), as RawStride is the program in use; moving it as well needs a release of `pw-rawview`'s LibRaw sessions and its own task | §9, §15 | – |
-| I9b | T88 | The ingest template with the modes Keep, Replace, Append, Prefix and Clear (`template::apply`, `apply_template_safely`, `Iptc::to_template`); lists of structures, variables and template files later | §8, §10, §15 | **Blocked** on D5 and D6; then after T87 |
+| D4 | owner | A new workspace crate **`pw-imagecheck`** for the real `ImageCheck`, depending on `pw-metadata`, `pw-raw` and `pw-libraw` (all workspace crates: no new package from crates.io; `Cargo.lock` gains only the crate itself). Root `Cargo.toml`: `pw-imagecheck = { path = "crates/pw-imagecheck" }` under `[workspace.dependencies]`; `pw-loupe`: `pw-imagecheck.workspace = true` (T91). Why not elsewhere: `pw-metadata` must not depend on `pw-raw`/LibRaw (§9.3); in `pw-viewcore` the view core would depend on `pw-metadata`; in `pw-loupe` it would need `pw-libraw` as a direct dependency (also a `Cargo.toml` change) and the Tauri app could not use it. **Approved by the owner on 2026-11-12** | §9.3 | done |
+| D5 | owner | The separator of `Append` and `Prefix` for a single text or Lang Alt (§10 says "a separator" without naming it). Reviewer's proposal: one space for every property. **Approved by the owner on 2026-11-12**: one space | §10 | done |
+| D6 | owner | `xmpRights:Marked` ("Copyrighted" in Lightroom and Photo Mechanic): today's template writes `True` when a copyright is given, but the property is not in the table, so the plan cannot write it. Reviewer's proposal: add it to the table as a non-IPTC entry (as `xmp:Label`) and let `Iptc::to_template` set `True` with a Copyright Notice, as today. The alternative is to stop writing it. **Approved by the owner on 2026-11-12**: added to the table, `True` with a Copyright Notice | §10, §15 | done |
+| D7 | owner | The **Tauri app** (`src-tauri`) also writes ratings and the ingest template. Reviewer's proposal: it keeps today's in-place write (`write_rating`, `write_iptc`) until it is retired (GR8), as RawStride is the program in use; moving it as well needs a release of `pw-rawview`'s LibRaw sessions and its own task. **Approved by the owner on 2026-11-12**: the Tauri app keeps today's write | §9, §15 | done |
+| I9b | T88 | The ingest template with the modes Keep, Replace, Append, Prefix and Clear (`template::apply`, `apply_template_safely`, `Iptc::to_template`); lists of structures, variables and template files later | §8, §10, §15 | after T87 |
 | I9c | T89 | The view core closes the RAW sessions of a file before it is written (`Releaser::release`) | §9.1 | now |
-| I9d | T90 | The real `ImageCheck` in `pw-imagecheck`: previews byte for byte with `pw-raw`, the DNG opened with LibRaw (§9.3 points 3–4) | §9.1, §9.3 | **Blocked** on D4 |
+| I9d | T90 | The real `ImageCheck` in `pw-imagecheck`: previews byte for byte with `pw-raw`, the DNG opened with LibRaw (§9.3 points 3–4) | §9.1, §9.3 | now (D4 approved) |
 | I9e | T91 | RawStride: the metadata worker and the ingest write through T87/T88 with the journal (recovery at start) and T90's check; Swedish texts. The choice of mode in the import dialog comes with I10 | §9, §9.5, §15 | after T87–T90 |
 | I10 | – | RawStride: info panel with conflicts and notices, editor, settings (create IIM, fallback encoding), ExifTool version check at start | §5.2, §5.4, §11 | after I6 (panel), I9 (editor) |
 | I11 | – | PLUS fields as fixed choice lists | §11, Q9 | **after the PLUS controlled vocabulary is read** (§16.4) |
@@ -3838,15 +3838,15 @@ scanned TIFF with IIM and a matching `IPTCDigest` (`TN002683.tif`, 41 MB), all f
 - **Done when:** `.\tools\check.ps1` is all OK; `docs/test-inventory.md` is updated;
   `git diff --stat` shows only the files above.
 
-### T88. ADR 0007 I9b: the ingest template with the modes Keep, Replace, Append, Prefix and Clear — Blocked
+### T88. ADR 0007 I9b: the ingest template with the modes Keep, Replace, Append, Prefix and Clear — Open
 
-- **Blocked on owner decisions D5 (the separator of Append and Prefix) and D6 (`xmpRights:Marked`).**
-  Then it can start after T87 is accepted.
+- **Can start after T87 is accepted.** The owner approved D5 (the separator is one space) and D6
+  (`xmpRights:Marked` added to the table) on 2026-11-12.
 - **Crates:** `pw-metadata` only. Nothing in RawStride uses it yet (T91). The old `Iptc`,
   `Iptc::tags` and `write_iptc` stay unchanged (D7).
 - **Files:** new `crates/pw-metadata/src/template.rs`; `crates/pw-metadata/src/edit.rs`;
-  `crates/pw-metadata/src/lib.rs` (the `mod` line and `Iptc::to_template` only); if D6 is "yes":
-  `crates/pw-metadata/src/properties.rs` (one hand-written entry, as `xmp:Label`); new
+  `crates/pw-metadata/src/lib.rs` (the `mod` line and `Iptc::to_template` only);
+  `crates/pw-metadata/src/properties.rs` (D6: one hand-written entry, as `xmp:Label`); new
   `crates/pw-metadata/tests/template.rs`; `docs/test-inventory.md`.
 - **Why:** ADR 0007 §10 (the four modes, Prefix as a form of Append; an empty field never clears;
   no Clear for copyright-management fields, §8), §15 (today's template is "Keep for empty fields,
@@ -3870,7 +3870,7 @@ scanned TIFF with IIM and a matching `IPTCDigest` (`TN002683.tif`, 41 MB), all f
        - `Replace`: the new value with `Metadata::set` (a Lang Alt sets `x-default` and keeps the
          other languages, as `set` already does; a list is replaced by the template's list);
        - `Append` / `Prefix` on `Text` and on a Lang Alt (its shown text, `LangAlt::display`): the
-         old text, the separator of D5 and the new text (`Prefix`: new, separator, old); without
+         old text, one space (D5) and the new text (`Prefix`: new, separator, old); without
          an old text only the new text. On a `List` (`Append` only): the template's entries
          that are missing are added at the end, in order, without duplicates (exact text);
          `Prefix` on a list is `ModeNotAllowed`. On a `Date`, a `Number` or a whole structure
@@ -3899,7 +3899,8 @@ scanned TIFF with IIM and a matching `IPTCDigest` (`TN002683.tif`, 41 MB), all f
      of one name; `title`, `description`, `copyright` → `dc:title`, `dc:description`, `dc:rights`
      (`x-default`); `credit` → `photoshop:Credit`; `email`, `phone`, `url` →
      `Iptc4xmpCore:CreatorContactInfo` with the fields `Iptc4xmpCore:CiEmailWork`,
-     `Iptc4xmpCore:CiTelWork`, `Iptc4xmpCore:CiUrlWork`; `xmpRights:Marked` as D6 decides. Values
+     `Iptc4xmpCore:CiTelWork`, `Iptc4xmpCore:CiUrlWork`; `xmpRights:Marked` `True` with `Replace` when `copyright` is given (D6: add `xmpRights:Marked`
+     to `properties.rs` as a non-IPTC entry like `xmp:Label`, kind Text, no IIM, no Exif). Values
      are trimmed; **line breaks are kept** (the plan writes them with `-ec`; `tags` turned them
      into spaces).
 - **Rules:** rules 3–7 and 10–12. No `Cargo.toml` change. Do not change `write_plan.rs` or
@@ -3970,9 +3971,9 @@ scanned TIFF with IIM and a matching `IPTCDigest` (`TN002683.tif`, 41 MB), all f
 - **Done when:** `.\tools\check.ps1` is all OK; `docs/test-inventory.md` is updated;
   `git diff --stat` shows only the files above.
 
-### T90. ADR 0007 I9d: the real image check — previews with `pw-raw`, the DNG opened with LibRaw — Blocked
+### T90. ADR 0007 I9d: the real image check — previews with `pw-raw`, the DNG opened with LibRaw — Open
 
-- **Blocked on owner decision D4** (the new crate `pw-imagecheck`). Then it can start; it needs
+- **Can start now.** The owner approved D4 (the new crate `pw-imagecheck`) on 2026-11-12. It needs
   only the `ImageCheck` trait of T86, so it can run at the same time as T87–T89.
 - **Crates:** new `pw-imagecheck`.
 - **Files:** `Cargo.toml` (root: the D4 line under `[workspace.dependencies]`); `Cargo.lock` (by
@@ -4027,9 +4028,9 @@ scanned TIFF with IIM and a matching `IPTCDigest` (`TN002683.tif`, 41 MB), all f
 - **Done when:** `.\tools\check.ps1` is all OK; `docs/test-inventory.md` is updated;
   `git diff --stat` shows only the files above.
 
-### T91. ADR 0007 I9e: RawStride writes ratings and the ingest template safely — Blocked
+### T91. ADR 0007 I9e: RawStride writes ratings and the ingest template safely — Open
 
-- **Can start after T87, T88, T89 and T90 are accepted** (so after D4, D5 and D6).
+- **Can start after T87, T88, T89 and T90 are accepted.** D4, D5 and D6 were approved on 2026-11-12.
 - **Crates:** `pw-metadata` (the worker), `pw-loupe`.
 - **Files:** `crates/pw-metadata/src/worker.rs`; `crates/pw-metadata/src/lib.rs` (`WriteError` only);
   `crates/pw-loupe/Cargo.toml` (the D4 line only); `Cargo.lock` (by cargo);
@@ -4560,3 +4561,4 @@ and reviewer:
 | 2026-11-12 | T86 | Ready for review | Review: code accepted, **not committed**: AGENTS.md allows commits only with green tests, and Windows Smart App Control now refuses most rebuilt test programs, including ones it ran an hour earlier and the `crc32fast` build script of a single-crate build, so rule 6's exception no longer gets them to run. The transaction follows §9 and the task; the agent stopped correctly. The owner's three decisions are right (a new sidecar checked with T84's rules against an "empty original"; a failed final check ends the journal entry so recovery keeps the backup; `SafeWriteError::file`). **Reviewer's fix:** `check_copy` was also called for an existing sidecar (`kind` `Raw`), against the `ImageCheck` contract ("never for a sidecar"); now only for JPEG, TIFF and DNG; new test `the_image_check_is_not_called_for_an_existing_sidecar` (a failing check, the sidecar still updated); `docs/test-inventory.md` `tests/safe_write.rs` 11 → 12. What ran in the reviewer's `check.ps1` (fmt and clippy OK): 532 passed, 2 failed, 32 ignored; the `pw-metadata` unit tests ran (239 passed, among them the 7 `safe_write` and 23 `verify` unit tests) and the 2 failures are the unchanged `worker` tests `retries_a_failed_start_with_the_next_request` and `restarts_exiftool_after_it_exits`, which time out because their copy of the test program in `%TEMP%` is refused; `tests/safe_write.rs` 11 passed, 1 ignored (the new test included); refused: `photoworkflow`, both `pw-loupe` programs, `tests/read.rs`, `sidecar.rs`, `verify.rs`, `write_plan.rs`. Separate runs: `tests/verify.rs` 3 passed, 1 ignored and `tests/safe_write.rs` again 11 passed; everything else refused. Not run since T85: `pw-loupe`, `photoworkflow`, `tests/read.rs`, `sidecar.rs`, `write_plan.rs` (none changed by T86). The agent's ignored DNG run: 9 DNGs written, hashes unchanged. Waiting for the owner's decision on Smart App Control before a full test run and the commit |
 | 2026-11-12 | T86 | Done | Smart App Control no longer blocked the test programs. The reviewer's `check.ps1`: fmt, test and clippy OK, **803 passed, 0 failed, 35 ignored**, every program ran (the two `worker` tests pass again); `docs/test-inventory.md` header updated. Committed |
 | 2026-11-12 | T87–T91 | Open / Blocked | Added after T86 was done: ADR 0007 I9 split in five. T87 ratings and labels through the write plan and the safe write, with the plan's `FileState` from the reader (can start now); T88 the ingest template with the modes of §10 (**Blocked** on D5, the separator of Append/Prefix, and D6, `xmpRights:Marked`); T89 the view core closes the RAW sessions of a file before it is written (can start now, at the same time as T87); T90 the real `ImageCheck` in a new crate `pw-imagecheck` (**Blocked** on D4, the new crate); T91 RawStride writes ratings and the ingest template safely, with the journal and recovery at start (after T87–T90). D7 (the Tauri app keeps today's write until it is retired) does not block a task. The step plan gains I9a–I9e and D4–D7 and records the reviewer's ExifTool 13.59 and Windows measurements for I9 (a reader holding the file open makes the safe write refuse it, so LibRaw sessions must be closed first; previews are byte for byte equal after a write; a DNG rating will take about 1.5–2 s) |
+| 2026-11-12 | T88, T90, T91 | Open | The owner approved D4–D7 as proposed: D4 the new crate `pw-imagecheck` (`pw-metadata`, `pw-raw`, `pw-libraw`; no new package); D5 the separator of Append and Prefix is one space; D6 `xmpRights:Marked` is added to the property table as a non-IPTC entry and set to `True` by `Iptc::to_template` with a copyright, as today; D7 the Tauri app keeps today's in-place write until it is retired. T88 can start after T87, T90 now, T91 after T87–T90 |
