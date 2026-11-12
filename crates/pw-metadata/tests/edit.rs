@@ -15,13 +15,13 @@
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use pw_metadata::edit::{EditError, EditOptions};
+use pw_metadata::edit::{Edit, EditError, EditOptions};
 use pw_metadata::iim::Fallback;
 use pw_metadata::journal::Journal;
 use pw_metadata::reconcile::IimDigest;
 use pw_metadata::safe_write::{NoImageCheck, Stage, WriteReport};
 use pw_metadata::value::Value;
-use pw_metadata::{ExifTool, Rating};
+use pw_metadata::{ExifTool, Rating, WriteError};
 
 /// The small baseline JPEG of `crates/pw-thumbcache/src/jpeg_fixture.rs`, copied.
 const SMALL: &[u8] = &[
@@ -431,6 +431,54 @@ fn a_read_only_jpeg_fails_in_precheck() {
     match result {
         Err(EditError::Write(error)) => assert_eq!(error.stage, Stage::Precheck, "{error}"),
         other => panic!("expected a write error in Precheck, got {other:?}"),
+    }
+    assert_eq!(std::fs::read(&file).unwrap(), SMALL);
+    s.assert_clean();
+    s.remove();
+}
+
+/// A JPEG that another program holds open for reading, sharing reading and writing but not
+/// deleting (as Photo Mechanic did in the owner's check of T107, T108): the metadata is still
+/// read, the editor's write is refused before writing, the error is `WriteError::Locked`, and the
+/// file is unchanged. (Held open for writing as well, ExifTool cannot even read the file.)
+#[test]
+fn edits_to_a_jpeg_held_open_by_another_program_are_locked() {
+    use std::os::windows::fs::OpenOptionsExt;
+    /// `FILE_SHARE_READ | FILE_SHARE_WRITE` from `winnt.h`: no `FILE_SHARE_DELETE`.
+    const SHARE_READ_WRITE: u32 = 0x1 | 0x2;
+
+    let mut et = exiftool();
+    let s = Scratch::new("locked");
+    let file = s.jpeg();
+    let held = std::fs::OpenOptions::new()
+        .read(true)
+        .share_mode(SHARE_READ_WRITE)
+        .open(&file)
+        .unwrap();
+    let edits = [Edit::Set {
+        property: "photoshop:City".to_string(),
+        field: None,
+        value: Value::Text("Umeå".to_string()),
+    }];
+
+    let result = et.write_edits_safely(
+        &file,
+        &edits,
+        &EditOptions::default(),
+        &NoImageCheck,
+        &s.journal,
+    );
+    drop(held);
+
+    match result {
+        Err(error) => {
+            let EditError::Write(write_error) = &error else {
+                panic!("expected a write error, got {error}");
+            };
+            assert_eq!(write_error.stage, Stage::Precheck, "{write_error}");
+            assert_eq!(WriteError::from(error), WriteError::Locked);
+        }
+        Ok(report) => panic!("expected Locked, the file was written: {report:?}"),
     }
     assert_eq!(std::fs::read(&file).unwrap(), SMALL);
     s.assert_clean();

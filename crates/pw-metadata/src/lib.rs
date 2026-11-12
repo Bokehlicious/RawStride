@@ -81,6 +81,8 @@ impl std::error::Error for Error {}
 pub enum WriteError {
     /// The file that holds the rating is read-only.
     ReadOnly,
+    /// Another program holds the file open, so the safe write refused before writing (T108).
+    Locked,
     /// ExifTool refused the write for another reason; holds ExifTool's answer.
     NotWritten(String),
     /// Anything else (ExifTool could not start or crashed, I/O); holds the error text.
@@ -105,9 +107,11 @@ impl From<Error> for WriteError {
 }
 
 /// The kind of a failed safe edit (T91): a read error keeps its kind as [`From<Error>`] does; a
-/// safe write refused before writing because the target is read-only is [`WriteError::ReadOnly`]
-/// (checked as [`refused_write_error`] does); any other failed safe write is
-/// [`WriteError::NotSafe`]; everything else is [`WriteError::Other`] with the error's text.
+/// safe write refused before writing because another program holds the target open is
+/// [`WriteError::Locked`] (from the refusal's kind carried on the error, T108); one refused
+/// before writing because the target is read-only is [`WriteError::ReadOnly`] (checked as
+/// [`refused_write_error`] does); any other failed safe write is [`WriteError::NotSafe`];
+/// everything else is [`WriteError::Other`] with the error's text.
 impl From<EditError> for WriteError {
     fn from(error: EditError) -> Self {
         match error {
@@ -116,7 +120,9 @@ impl From<EditError> for WriteError {
                 let read_only = error.stage == Stage::Precheck
                     && std::fs::metadata(&error.file)
                         .is_ok_and(|meta| meta.permissions().readonly());
-                if read_only {
+                if error.stage == Stage::Precheck && error.locked {
+                    WriteError::Locked
+                } else if read_only {
                     WriteError::ReadOnly
                 } else {
                     WriteError::NotSafe {
@@ -138,6 +144,7 @@ impl fmt::Display for WriteError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             WriteError::ReadOnly => write!(f, "the file is read-only"),
+            WriteError::Locked => write!(f, "the file is open in another program"),
             WriteError::NotWritten(m) => write!(f, "ExifTool did not write the file: {m}"),
             WriteError::Other(m) => write!(f, "{m}"),
             WriteError::NotSafe {
@@ -674,7 +681,63 @@ mod edit_error_tests {
             stage,
             original,
             reason: "the reason".to_string(),
+            locked: false,
         })
+    }
+
+    /// A safe write refused before writing, with `reason` and the refusal's kind `locked`.
+    fn precheck_refusal(file: &Path, reason: &str, locked: bool) -> EditError {
+        EditError::Write(SafeWriteError {
+            file: file.to_path_buf(),
+            stage: Stage::Precheck,
+            original: OriginalState::Intact,
+            reason: reason.to_string(),
+            locked,
+        })
+    }
+
+    #[test]
+    fn a_precheck_refusal_for_a_file_open_in_another_program_is_locked() {
+        let path = temp_file("locked");
+        let error = WriteError::from(precheck_refusal(
+            &path,
+            "the file is open in another program",
+            true,
+        ));
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(error, WriteError::Locked);
+        assert_eq!(error.to_string(), "the file is open in another program");
+    }
+
+    #[test]
+    fn another_precheck_refusal_is_not_safe() {
+        // The kind decides, not the text: the same reason without the kind is not Locked.
+        let path = temp_file("other-refusal");
+        let cases = [
+            "not enough free space on the volume: 10 bytes needed, 5 free",
+            "the volume is read-only or write-protected",
+            "the file is open in another program",
+        ];
+        let results: Vec<_> = cases
+            .iter()
+            .map(|reason| {
+                (
+                    WriteError::from(precheck_refusal(&path, reason, false)),
+                    *reason,
+                )
+            })
+            .collect();
+        let _ = std::fs::remove_file(&path);
+        for (error, reason) in results {
+            assert_eq!(
+                error,
+                WriteError::NotSafe {
+                    stage: Stage::Precheck,
+                    original: OriginalState::Intact,
+                    reason: reason.to_string(),
+                }
+            );
+        }
     }
 
     #[test]

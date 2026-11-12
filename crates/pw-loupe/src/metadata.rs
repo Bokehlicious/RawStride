@@ -630,6 +630,9 @@ pub(crate) fn unsaved_list_text(lines: &[String]) -> String {
 
 /// Shown after "Kunde inte spara betyget för <fil>: " when the file is read-only (T49).
 const READ_ONLY_TEXT: &str = "filen är skrivskyddad";
+/// Shown after "Kunde inte spara betyget för <fil>: " or "Kunde inte spara metadata för <fil>: "
+/// when another program holds the file open (T108).
+const LOCKED_TEXT: &str = "filen är öppen i ett annat program";
 /// Shown after "Kunde inte spara betyget för <fil>: " when ExifTool refused the write (T49).
 const NOT_WRITTEN_TEXT: &str = "filen kunde inte skrivas";
 
@@ -641,6 +644,7 @@ pub(crate) const NO_JOURNAL_TEXT: &str = "skrivloggen kunde inte öppnas";
 fn write_error_text(error: WriteError) -> String {
     match error {
         WriteError::ReadOnly => READ_ONLY_TEXT.into(),
+        WriteError::Locked => LOCKED_TEXT.into(),
         WriteError::NotWritten(_) => NOT_WRITTEN_TEXT.into(),
         WriteError::Other(text) if text == NO_JOURNAL => NO_JOURNAL_TEXT.into(),
         // The metadata worker refuses rating writes while ExifTool is too old or its version
@@ -1232,6 +1236,50 @@ mod tests {
             "filen skrevs men slutkontrollen misslyckades, den tidigare versionen finns kvar som \
              säkerhetskopia"
         );
+    }
+
+    #[test]
+    fn a_write_to_a_file_open_in_another_program_gives_the_reason() {
+        assert_eq!(
+            write_error_text(WriteError::Locked),
+            "filen är öppen i ett annat program"
+        );
+        // The editor's message (T107's window).
+        assert_eq!(
+            save_failed_text(
+                Path::new("konflikt-stad.jpg"),
+                write_error_text(WriteError::Locked)
+            ),
+            "Kunde inte spara metadata för konflikt-stad.jpg: filen är öppen i ett annat program"
+        );
+    }
+
+    #[test]
+    fn a_locked_rating_write_gives_the_reason_through_poll() {
+        let mut worker = FakeSubmit::new([]);
+        let mut cache = cache_with_writes(&["pw-loupe-locked.JPG"]);
+        assert!(cache.poll(&mut worker).is_empty(), "the first poll sends");
+        assert_eq!(worker.write_attempts.len(), 1);
+        let id = worker.next_write_id - 1;
+        worker.events.push_back(WorkerEvent::RatingWritten {
+            id,
+            path: std::env::temp_dir().join("pw-loupe-locked.JPG"),
+            rating: Rating {
+                stars: Some(2),
+                label: None,
+            },
+            result: Err(WriteError::Locked),
+        });
+
+        let failures = cache.poll(&mut worker);
+
+        assert_eq!(
+            failures,
+            [
+                "Kunde inte spara betyget för pw-loupe-locked.JPG: filen är öppen i ett annat program"
+            ]
+        );
+        assert_eq!(cache.pending_writes(), 0);
     }
 
     #[test]

@@ -142,7 +142,8 @@ impl EditorField {
         property_label(self.struct_field().unwrap_or(self.property()), Language::Sv)
     }
 
-    /// True for the fields shown as a box of several lines.
+    /// True for the fields shown as a box of several lines. Keywords and Creator are one line
+    /// with their entries separated by commas (T108).
     pub fn multiline(self) -> bool {
         matches!(
             self,
@@ -150,8 +151,6 @@ impl EditorField {
                 | EditorField::AltText
                 | EditorField::Instructions
                 | EditorField::UsageTerms
-                | EditorField::Keywords
-                | EditorField::Creator
         )
     }
 
@@ -192,8 +191,12 @@ impl EditorField {
     }
 }
 
+/// The separator of the entries of a list field on its one line (T108).
+const LIST_SEPARATOR: &str = ", ";
+
 /// The text of a value in the form: a text and a number as they are; a Lang Alt its shown text; a
-/// list one entry per line; a date in XMP form; anything else as the info panel shows it.
+/// list its entries joined with `", "` on one line (T108); a date in XMP form; anything else as
+/// the info panel shows it.
 fn form_text(value: &Value) -> String {
     match value {
         Value::Text(text) | Value::Number(text) => text.clone(),
@@ -201,7 +204,7 @@ fn form_text(value: &Value) -> String {
             .display()
             .map(|(text, _)| text.to_string())
             .unwrap_or_default(),
-        Value::List(entries) => entries.join("\n"),
+        Value::List(entries) => entries.join(LIST_SEPARATOR),
         Value::Date(date) => date.to_xmp(),
         Value::Struct(_) | Value::StructList(_) => value_text(value),
     }
@@ -453,15 +456,26 @@ impl EditorForm {
     }
 }
 
+/// The entries of a list field's text: split at `,`, each part trimmed, empty parts dropped
+/// (T108). An entry cannot hold a comma.
+fn list_entries(text: &str) -> Vec<String> {
+    text.split(',')
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
 /// The edit of a changed field with the text `text`, or the field's error.
 fn field_edit(field: EditorField, text: &str) -> Result<Edit, String> {
     let property = field.property().to_string();
     let struct_field = field.struct_field().map(str::to_string);
+    let clear = || Edit::Clear {
+        property: property.clone(),
+        field: struct_field.clone(),
+    };
     if text.trim().is_empty() {
-        return Ok(Edit::Clear {
-            property,
-            field: struct_field,
-        });
+        return Ok(clear());
     }
     let value = match field.kind() {
         FieldKind::Text => Value::Text(text.to_string()),
@@ -469,13 +483,14 @@ fn field_edit(field: EditorField, text: &str) -> Result<Edit, String> {
             X_DEFAULT.to_string(),
             text.to_string(),
         )])),
-        FieldKind::List => Value::List(
-            text.lines()
-                .map(str::trim)
-                .filter(|line| !line.is_empty())
-                .map(str::to_string)
-                .collect(),
-        ),
+        FieldKind::List => {
+            let entries = list_entries(text);
+            // Only spaces and commas: the list is emptied.
+            if entries.is_empty() {
+                return Ok(clear());
+            }
+            Value::List(entries)
+        }
         FieldKind::Date => {
             Value::Date(IptcDate::parse_xmp(text.trim()).map_err(|_| date_error_text())?)
         }
@@ -723,12 +738,16 @@ mod tests {
             [
                 EditorField::Description,
                 EditorField::AltText,
-                EditorField::Keywords,
-                EditorField::Creator,
                 EditorField::UsageTerms,
                 EditorField::Instructions,
             ]
         );
+    }
+
+    #[test]
+    fn keywords_and_creator_are_one_line() {
+        assert!(!EditorField::Keywords.multiline());
+        assert!(!EditorField::Creator.multiline());
     }
 
     #[test]
@@ -790,8 +809,8 @@ mod tests {
         assert_eq!(form.text(EditorField::Headline), "Rubriken");
         assert_eq!(form.text(EditorField::Title), "Hej");
         assert_eq!(form.note(EditorField::Title), None);
-        assert_eq!(form.text(EditorField::Keywords), "sol\nhav");
-        assert_eq!(form.text(EditorField::Creator), "Anna\nPer");
+        assert_eq!(form.text(EditorField::Keywords), "sol, hav");
+        assert_eq!(form.text(EditorField::Creator), "Anna, Per");
         assert_eq!(
             form.text(EditorField::DateCreated),
             "2026-11-12T10:15+01:00"
@@ -868,12 +887,77 @@ mod tests {
     }
 
     #[test]
-    fn two_keywords_on_three_lines_with_one_blank() {
+    fn two_keywords_with_spaces_and_empty_parts() {
         let mut form = form_with(Metadata::new());
-        type_into(&mut form, EditorField::Keywords, " sol \n\n hav");
+        type_into(&mut form, EditorField::Keywords, "sol, hav ,, ");
         assert_eq!(
             form.edits(),
             Ok(vec![set("dc:subject", list(&["sol", "hav"]))])
+        );
+    }
+
+    #[test]
+    fn creators_are_split_at_commas() {
+        let mut form = form_with(Metadata::new());
+        type_into(&mut form, EditorField::Creator, " Anna Berg,Per ");
+        assert_eq!(
+            form.edits(),
+            Ok(vec![set("dc:creator", list(&["Anna Berg", "Per"]))])
+        );
+    }
+
+    #[test]
+    fn only_spaces_and_commas_clear_the_list() {
+        let mut metadata = Metadata::new();
+        insert(&mut metadata, "dc:subject", list(&["sol", "hav"]));
+        let mut form = form_with(metadata);
+        type_into(&mut form, EditorField::Keywords, " , ,, ");
+        assert_eq!(
+            form.edits(),
+            Ok(vec![Edit::Clear {
+                property: "dc:subject".into(),
+                field: None,
+            }])
+        );
+    }
+
+    #[test]
+    fn an_unchanged_list_gives_no_edit() {
+        let mut metadata = Metadata::new();
+        insert(
+            &mut metadata,
+            "dc:subject",
+            list(&["fågel", "fåglar", "test", "inte bra", "slaguggla"]),
+        );
+        insert(&mut metadata, "dc:creator", list(&["Anna", "Per"]));
+        let mut form = form_with(metadata);
+        assert_eq!(
+            form.text(EditorField::Keywords),
+            "fågel, fåglar, test, inte bra, slaguggla"
+        );
+        assert_eq!(form.edits(), Ok(Vec::new()));
+        // Typed back as it was shown: still no edit.
+        type_into(
+            &mut form,
+            EditorField::Keywords,
+            "fågel, fåglar, test, inte bra, slaguggla",
+        );
+        assert_eq!(form.edits(), Ok(Vec::new()));
+    }
+
+    #[test]
+    fn an_entry_with_a_comma_is_split_when_the_field_is_changed() {
+        // Accepted by the owner (T108): a read keyword holding a comma is shown as it is and
+        // gives no edit untouched, but becomes two keywords when the field is changed.
+        let mut metadata = Metadata::new();
+        insert(&mut metadata, "dc:subject", list(&["Umeå, Sverige"]));
+        let mut form = form_with(metadata);
+        assert_eq!(form.text(EditorField::Keywords), "Umeå, Sverige");
+        assert_eq!(form.edits(), Ok(Vec::new()));
+        type_into(&mut form, EditorField::Keywords, "Umeå, Sverige, sol");
+        assert_eq!(
+            form.edits(),
+            Ok(vec![set("dc:subject", list(&["Umeå", "Sverige", "sol"]))])
         );
     }
 

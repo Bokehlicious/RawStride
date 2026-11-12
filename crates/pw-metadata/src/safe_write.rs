@@ -148,6 +148,9 @@ pub struct SafeWriteError {
     pub stage: Stage,
     pub original: OriginalState,
     pub reason: String,
+    /// True when the check before writing refused because another program holds the file open
+    /// (T108), so a program can say so without reading `reason`.
+    pub locked: bool,
 }
 
 impl fmt::Display for SafeWriteError {
@@ -192,6 +195,7 @@ impl ExifTool {
                 stage: Stage::Precheck,
                 original: OriginalState::Intact,
                 reason: "the file is not a JPEG, TIFF, DNG or manufacturer RAW".to_string(),
+                locked: false,
             });
         };
         let target = if kind == FileKind::Raw {
@@ -248,6 +252,7 @@ impl Transaction<'_> {
             stage,
             original,
             reason,
+            locked: false,
         }
     }
 
@@ -276,7 +281,10 @@ impl Transaction<'_> {
             .sum();
         let original = if exists {
             if let Err(refusal) = fileops::can_write(self.target, plan_bytes) {
-                return Err(self.precheck(refusal.to_string()));
+                return Err(SafeWriteError {
+                    locked: refusal == fileops::Refusal::Locked,
+                    ..self.precheck(refusal.to_string())
+                });
             }
             let snapshot = match self.et.snapshot(self.target) {
                 Ok(snapshot) => snapshot,
@@ -800,6 +808,7 @@ mod tests {
             stage: Stage::Verify,
             original: OriginalState::Intact,
             reason: "metadata check failed".to_string(),
+            locked: false,
         };
         assert_eq!(
             error.to_string(),
