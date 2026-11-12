@@ -23,6 +23,7 @@ pub mod journal;
 pub mod properties;
 pub mod read;
 pub mod reconcile;
+pub mod safe_write;
 #[cfg(test)]
 mod test_support;
 pub mod value;
