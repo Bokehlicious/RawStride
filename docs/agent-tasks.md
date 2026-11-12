@@ -2831,7 +2831,26 @@ leaves the stored `IPTCDigest` out of date (`Validate`: `IPTCDigest is not curre
 | D8 | owner | When the safe write creates the Photoshop block of a TIFF or DNG (to store a new `IPTCDigest`), ExifTool adds the validation warning `Non-standard format (undef) for IFD0 0x8649 PhotoshopSettings`, and T84's check refuses the copy for having one more warning. Reviewer's proposal: allow exactly one more warning (not error) in that case: the copy has `Photoshop:IPTCDigest`, the original has not, the file is a TIFF or DNG and the plan writes `-IPTCDigest=new`. The alternative, not writing a checksum in a TIFF/DNG without one, breaks §5.2. **Approved by the owner on 2026-11-12** | §5.2, §9.3 | done |
 | I9f | T92 | A current IIM checksum in TIFF and DNG: a second ExifTool call on the copy writes `IPTCDigest`, and the D8 allowance in `verify_copy` | §5.2, §9.3, §12 | now |
 | I9g | T93 | The IIM checksum stays current when a write changes IIM and no XMP is left (a file with a stored checksum) | §5.2, §12 | now |
-| I10 | – | RawStride: info panel with conflicts and notices, editor, settings (create IIM, fallback encoding), ExifTool version check at start | §5.2, §5.4, §11 | after I6 (panel), I9 (editor) |
+| D9 | owner | What RawStride does when ExifTool is missing or older than 12.67 (§11 only says "checked at start"). Reviewer's proposal: RawStride starts anyway and shows one message at start; reading works as today; every write (ratings, the editor, the ingest template) is refused with a clear text until ExifTool is updated; a version that cannot be read counts as too old. The alternative is a warning only, with writes allowed | §11, §9 | – |
+| D10 | owner | Where and how RawStride's settings are stored (it has no settings file yet). Reviewer's proposal: a text file `%LOCALAPPDATA%\RawStride\settings.txt` (the folder of the write journal), one `key = value` per line, no new dependency; for this user on this computer only | §5.2, §5.4 | – |
+| D11 | owner | The Swedish names of the IPTC properties in the info panel and the editor. Reviewer's proposal: the import dialog's names where they exist, and for the rest: Titel (`dc:title`), Rubrik (`photoshop:Headline`), Beskrivning (`dc:description`), Alternativtext (`Iptc4xmpCore:AltTextAccessibility`), Nyckelord (`dc:subject`), Fotograf (`dc:creator`), Fotografens titel (`photoshop:AuthorsPosition`), Fotografens kontaktuppgifter (`Iptc4xmpCore:CreatorContactInfo`, its fields E-post, Telefon, Webb), Copyright (`dc:rights`), Credit (`photoshop:Credit`), Källa (`photoshop:Source`), Användarvillkor (`xmpRights:UsageTerms`), Webbadress för rättigheter (`xmpRights:WebStatement`), Skapad (`photoshop:DateCreated`), Plats (`Iptc4xmpCore:Location`), Stad (`photoshop:City`), Län/delstat (`photoshop:State`), Land (`photoshop:Country`), Landskod (`Iptc4xmpCore:CountryCode`), Instruktioner (`photoshop:Instructions`), Jobb-id (`photoshop:TransmissionReference`), Beskrivningens författare (`photoshop:CaptionWriter`), Betyg (`xmp:Rating`), Etikett (`xmp:Label`), Upphovsrättsskyddad (`xmpRights:Marked`), Plats där bilden togs (`Iptc4xmpExt:LocationCreated`), Plats som visas (`Iptc4xmpExt:LocationShown`), Bildskapare (`plus:ImageCreator`), Upphovsrättsinnehavare (`plus:CopyrightOwner`), Licensgivare (`plus:Licensor`), Person i bilden (`Iptc4xmpExt:PersonInImage`), Händelse (`Iptc4xmpExt:Event`), Digital källtyp (`Iptc4xmpExt:DigitalSourceType`), Prioritet, Kategori, Tilläggskategorier (the deprecated `photoshop:Urgency`, `photoshop:Category`, `photoshop:SupplementalCategories`); every other property with IPTC's English name | §3 | – |
+| D12 | owner | What the editor edits in I10. Reviewer's proposal: **one image at a time** (several images later, as a template on the selection); these 22 fields in this order: Titel, Rubrik, Beskrivning, Alternativtext, Nyckelord, Fotograf, Fotografens titel, E-post, Telefon, Webb, Copyright, Credit, Källa, Användarvillkor, Skapad, Plats, Stad, Län/delstat, Land, Landskod, Instruktioner, Jobb-id; plus a choice for every unresolved conflict. Later: lists of structures (Location Created, Image Creator, …), PLUS fields (I11), the other properties | §8, §10, §11 | – |
+| D13 | owner | The modes in the import dialog (§10). Reviewer's proposal: the Swedish names Behåll, Ersätt, Lägg till efter, Lägg till före, Rensa; the default Ersätt for every field (an empty field then does nothing, exactly as today); Fotograf offers Behåll, Ersätt, Lägg till efter; Copyright and Credit also Lägg till före; E-post, Telefon and Webb all five (no Rensa of copyright-management fields, §8; no "before" on a list). The modes are remembered during the session like the texts, not between runs | §8, §10 | – |
+| D14 | owner | The confirmation before a Clear (§10: "once per template"). Reviewer's proposal: when an import is started with at least one field in Rensa, one window lists those fields ("Rensa och importera" / "Avbryt"); asked once per started import, never per image. The editor does not ask (emptying a field there is the user's own choice for one image) | §10 | – |
+| D15 | owner | The place of the info panel and the keys. Reviewer's proposal: a panel on the right side, in the loupe and in the contact sheet (the selected image), shown and hidden with `M`, hidden at start; the editor opens with `E` or the button "Redigera" in the panel, in its own window | – | – |
+| I10a | T94 | The ExifTool version (at least 12.67) checked when the metadata worker starts; writes refused below it (D9) | §11 | after D9 |
+| I10b | T95 | The reader looks up the two sidecar names directly instead of listing the folder for every image (from T82) | §4.1, §4.2 | now |
+| I10c | T96 | Validation warnings (§11): IIM byte limits, Alt Text length, Country Code form, Jobtitle without Creator, Digital Source Type, Image Registry Entry, Rating | §11 | now |
+| I10d | T97 | Edits of single properties and sub-fields (`Edit`, `apply_edits`, `write_edits_safely`) with the plan's write notices; choosing a value decides an `Open` conflict | §5.1, §5.2, §8, §9 | now |
+| I10e | T98 | The metadata worker reads the whole `MetadataRead`, writes edits and takes new `EditOptions` | §9 | after T94 and T97 |
+| I10f | T99 | RawStride's settings file: create IIM, fallback encoding (D10) | §5.2, §5.4 | after D10 |
+| I10g | T100 | The import dialog: a mode per template field and the confirmation before a Clear (left over from T88/T91) | §10 | after D13 and D14 |
+| I10h | T101 | RawStride tells the user at start when ExifTool is missing or too old; the import worker checks it too | §11 | after T94, T100 and D9 |
+| I10i | T102 | The texts of the info panel: values with origin, conflicts with the rule, notices (D11) | §5.1, §5.4, §6.2, §6.4, §7 | after D11 |
+| I10j | T103 | The info panel in RawStride (one read in flight, after 200 ms) | §5.1, §6.2 | after T98, T101, T102 and D15 |
+| I10k | T104 | The editor's form: fields, conflict choices, edits, warnings in Swedish (D12) | §5.1, §7, §8, §11 | after T96, T97, T102 and D12 |
+| I10l | T105 | The editor window in RawStride, saved through the worker | §9 | after T103 and T104 |
+| I10m | T106 | The settings window; the settings used by ratings, the editor, the panel and the import | §5.2, §5.4 | after T98, T99 and T101 |
 | I11 | – | PLUS fields as fixed choice lists | §11, Q9 | **after the PLUS controlled vocabulary is read** (§16.4) |
 | I12 | – | Real-file tests with the owner's level-C samples | §12, Q11 | when the owner provides the samples |
 | I13 | – | Documentation after milestone 8 | – | last |
@@ -4216,6 +4235,598 @@ leaves the stored `IPTCDigest` out of date (`Validate`: `IPTCDigest is not curre
 - **Done when:** `.\tools\check.ps1` is all OK; `docs/test-inventory.md` is updated;
   `git diff --stat` shows only the files above.
 
+### T94. ADR 0007 I10a: the ExifTool version is checked when the metadata worker starts — Blocked
+
+- **Blocked on owner decision D9** (what RawStride does with an ExifTool older than 12.67). Then it
+  can start at once, at the same time as T95, T97 and T99 (no shared files). Not at the same time
+  as T96 (both change `lib.rs`).
+- **Crates:** `pw-metadata` only. RawStride shows nothing yet (T101).
+- **Files:** `crates/pw-metadata/src/exiftool.rs`; `crates/pw-metadata/src/worker.rs`;
+  `crates/pw-metadata/src/lib.rs` (the `pub use exiftool::…` and `pub use worker::…` lines only);
+  `docs/test-inventory.md`.
+- **Why:** ADR 0007 §11 ("ExifTool version: at least 12.67, checked at start", from IPTC §5.1).
+  Nothing checks the version today. The safe write (§9) also relies on newer ExifTool features
+  (`-api ImageHashType`, `ImageDataHash`), so an old ExifTool must not write.
+- **What:**
+  1. **`exiftool.rs`:**
+     - `pub struct ToolVersion { pub major: u32, pub minor: u32 }` (`Clone, Copy, Debug, PartialEq,
+       Eq, PartialOrd, Ord`; the field order makes 12.67 < 13.10); `Display` as `major.minor` with
+       the minor part in two digits (`12.67`, `13.05`);
+     - `ToolVersion::parse(text: &str) -> Option<ToolVersion>`: the text trimmed, two runs of ASCII
+       digits around one `.` (`13.59`, `12.67`); anything else is `None` (`13`, `13.5.1`, `v13.59`,
+       an empty text);
+     - `pub const MIN_EXIFTOOL_VERSION: ToolVersion` = 12.67;
+     - **`ExifTool::version(&mut self) -> Result<ToolVersion>`**: `execute` with `-ver`; an answer
+       that `parse` does not accept is `Error::ExifTool("unreadable ExifTool version: <text>")`.
+  2. **`worker.rs`:**
+     - the worker thread starts ExifTool **at once** when it starts (before the first request),
+       and asks `version()` each time it starts a process (at the start and at every restart);
+     - the result is kept in a slot shared with `MetadataWorker` (`Arc<OnceLock<…>>` or
+       `Arc<Mutex<…>>`, no new dependency): **`MetadataWorker::exiftool_version(&self) ->
+       Option<std::result::Result<ToolVersion, String>>`** is `None` until the first start has been
+       tried, then the version, or the start or version error as text. The first result is kept;
+       later restarts do not change it;
+     - by D9: while the version of the running process is below `MIN_EXIFTOOL_VERSION` or could
+       not be read, every rating write fails with `WriteError::Other(EXIFTOOL_TOO_OLD.into())` and
+       nothing is written; `pub const EXIFTOOL_TOO_OLD: &str = "ExifTool is older than 12.67"`.
+       Reading ratings works as today;
+     - **no new `Event` variant** (RawStride matches every variant; T101 asks
+       `exiftool_version`);
+     - when the first start fails, the next request still retries the start, as today.
+  3. `lib.rs`: export `ToolVersion`, `MIN_EXIFTOOL_VERSION` and `EXIFTOOL_TOO_OLD`.
+  4. Module comments of both files updated (§11).
+- **Rules:** rules 3–7 and 10–12. No `Cargo.toml` change. If an existing test of the worker
+  expects ExifTool to be started only by the first request (for example a test that counts the
+  starts of a fake process), **stop and report**; do not change the test.
+- **Tests to add:**
+  - unit tests of `ToolVersion::parse` (the forms above, with spaces and a line feed around) and
+    of the order (12.66 < 12.67 < 13.00; 12.99 < 13.00; `Display` of major 13, minor 5 is
+    `13.05`);
+  - `worker.rs` with the fake ExifTool of `test_support` (as the existing worker tests): a fake
+    that answers `-ver` with `13.59` gives `Some(Ok(13.59))` without any request; a fake that
+    answers `12.40` gives `Some(Ok(12.40))` and a rating write fails with `EXIFTOOL_TOO_OLD`
+    while a read still answers; a fake that answers `abc` behaves as too old; a program that does
+    not exist gives `Some(Err(…))` holding the start error;
+  - with the real ExifTool (required, as the other worker tests): `exiftool_version()` is at least
+    `MIN_EXIFTOOL_VERSION` within 5 s of the start.
+- **Done when:** `.\tools\check.ps1` is all OK; `docs/test-inventory.md` is updated;
+  `git diff --stat` shows only the files above.
+
+### T95. ADR 0007 I10b: the reader looks up the two sidecar names instead of listing the folder — Open
+
+- **Can start now.** No dependency change. Can run at the same time as T94, T96, T97 and T99 (no
+  shared files).
+- **Crates:** `pw-metadata` only.
+- **Files:** `crates/pw-metadata/src/read.rs` (`find_sidecars` and the module comment only);
+  `crates/pw-metadata/tests/read.rs` (new tests only); `docs/test-inventory.md`.
+- **Why:** found in T82: `find_sidecars` reads the whole folder (`read_dir`) for every image it
+  reads, to find `<basename>.xmp` and `<basename>.<ext>.xmp` without regard to case (§4.1, §4.2,
+  Q5, Q8). The info panel (T103) reads one image each time the user moves to the next, so in a
+  folder of thousands of files every step lists them all (slow on a memory card or a network
+  share).
+- **What:**
+  1. **`find_sidecars` on Windows:** the two names are looked up directly
+     (`folder.join(name)`, `is_file()`); NTFS and FAT/exFAT compare names without regard to case,
+     so `IMG_1.XMP` is found for `img_1.dng`. The path returned is the name **as it is in the
+     folder** (the reader reports it to the user): `folder.join(<file name of
+     std::fs::canonicalize(found)>)`, since Windows gives the stored case there; check it in the
+     test below. No `read_dir`. A folder that cannot be read is the error it is today.
+  2. **Other systems** (`#[cfg(not(windows))]`): the listing stays as it is (their file systems
+     may compare case).
+  3. The module comment says why.
+- **Rules:** rules 3–7 and 10–12. No other change in `read.rs`; what `read_metadata` returns must
+  be the same for every existing test.
+- **Tests to add** (`tests/read.rs`, ExifTool required, files made as the existing tests make them):
+  - a DNG with `IMG_1.XMP` (other case) next to it → `ForeignSidecarIgnored` with the name
+    `IMG_1.XMP` as in the folder; a fake RAW `img_2.arw` with `IMG_2.xmp` → the sidecar is read;
+    `x.arw.XMP` → `ExtSidecarIgnored`;
+  - one test **ignored by default**: a temporary folder with 20 000 empty files and one JPEG;
+    `read_metadata` of the JPEG ten times; report the time per read in the log row (before and
+    after the change if you can).
+- **Done when:** `.\tools\check.ps1` is all OK; `docs/test-inventory.md` is updated;
+  `git diff --stat` shows only the files above.
+
+### T96. ADR 0007 I10c: validation warnings for edited metadata (§11) — Open
+
+- **Can start now.** No dependency change. Can run at the same time as T95, T97 and T99; not at
+  the same time as T94 (both change `lib.rs`).
+- **Crates:** `pw-metadata` only. The editor shows the warnings (T104).
+- **Files:** new `crates/pw-metadata/src/validate.rs`; `crates/pw-metadata/src/lib.rs` (the `mod`
+  line only); `docs/test-inventory.md`.
+- **Why:** ADR 0007 §11: warnings, never refusals. PLUS values (I11) and the controlled vocabularies
+  other than Digital Source Type are not part of this task; dates are checked when the editor turns
+  a text into a date (T104).
+- **What:**
+  1. **`validate.rs`** (`pub mod validate`):
+     - `pub enum Warning` (`Clone, Debug, PartialEq, Eq`):
+       - `TooLongForIim { property: String, max_bytes: u16 }`: a value of a property with an IIM
+         dataset and a byte limit whose IIM form would be cut
+         (`iim::predict(text, iim_read::iim_format(property), max_bytes).truncated`; for a Lang Alt
+         its shown text, for a list each entry, the property once);
+       - `AltTextTooLong { characters: usize }`: `Iptc4xmpCore:AltTextAccessibility` (shown text)
+         over 250 characters (`chars().count()`);
+       - `CountryCodeForm { code: String }`: `Iptc4xmpCore:CountryCode` that is not 2 or 3 ASCII
+         letters (§11: ISO 3166-1; the list of codes itself is not checked);
+       - `JobtitleWithoutCreator`: `photoshop:AuthorsPosition` without `dc:creator`;
+       - `DigitalSourceTypeUnknown { uri: String }`: `Iptc4xmpExt:DigitalSourceType` that does
+         not start with `http://cv.iptc.org/newscodes/digitalsourcetype/` followed by a code;
+       - `RegistryEntryIncomplete { index: usize }`: an entry of `Iptc4xmpExt:RegistryId` without
+         `Iptc4xmpExt:RegItemId` or `Iptc4xmpExt:RegOrgId` (a blank text counts as missing; the
+         index from 0);
+       - `RatingOutOfRange { value: String }`: `xmp:Rating` that is not a number between −1 and 5
+         (a real number inside is fine, §8);
+     - **`pub fn validate(metadata: &Metadata, iim_written: bool) -> Vec<Warning>`**: the warnings
+       of every value in `metadata`, the properties in table order (`properties::properties()`);
+       `TooLongForIim` only when `iim_written` (the file has IIM, or the setting creates it);
+     - `Display` in English for `Warning` (the Swedish texts are T104's).
+  2. Module comment with §11 and what is left out (PLUS, I11; the other vocabularies; dates).
+- **Rules:** rules 3–7 and 10–12. No `Cargo.toml` change. Do not change `iim.rs`, `iim_read.rs`
+  or `properties.rs`; if `iim_format` or `predict` cannot be used as they are, stop and explain.
+- **Tests to add** (unit tests in `validate.rs` on hand-built `Metadata`): every warning once with
+  its exact content; a 33-byte City with `iim_written` → `TooLongForIim` with 32, without it
+  nothing; `ä` × 16 (32 bytes) in City → nothing, × 17 → the warning; a keyword list with one long
+  entry → one warning; Alt Text of 250 characters nothing, 251 the warning; country codes `SE`,
+  `SWE`, `se` nothing, `S`, `SVER`, `S1`, `Sverige` the warning; Jobtitle with and without Creator;
+  a Digital Source Type `http://cv.iptc.org/newscodes/digitalsourcetype/digitalCapture` nothing,
+  the bare prefix and `digitalCapture` the warning; two registry entries, the second without an
+  organisation → index 1; ratings `-1`, `0`, `2.5`, `5` nothing, `6`, `-2`, `abc` the warning; an
+  empty `Metadata` gives nothing; the order follows the table.
+- **Done when:** `.\tools\check.ps1` is all OK; `docs/test-inventory.md` is updated;
+  `git diff --stat` shows only the files above.
+
+### T97. ADR 0007 I10d: edits of single properties written safely, with the write notices — Open
+
+- **Can start now.** No dependency change. Can run at the same time as T94, T95, T96 and T99 (no
+  shared files).
+- **Crates:** `pw-metadata` only. The worker gets it in T98, the editor in T104/T105.
+- **Files:** `crates/pw-metadata/src/edit.rs`; `crates/pw-metadata/src/template.rs` (only to make
+  its sub-field helper `pub(crate)` if you reuse it; no behaviour change); new
+  `crates/pw-metadata/tests/edits.rs`; `docs/test-inventory.md`.
+- **Why:** ADR 0007 §8 (clearing removes every representation; Lang Alt edits `x-default` only),
+  §5.1 and Q1 (an `Open` conflict is decided by the user: an edit of that property writes both forms),
+  §5.2 and §5.4 (the user is told when IIM was cut or converted: today the plan's
+  `WriteNotice`s are dropped by `write_safely`), §9. The editor needs to set and clear any property
+  of the table, which the template (§10: no Clear of copyright fields) does not allow.
+- **What** (all in `edit.rs`):
+  1. `pub enum Edit { Set { property: String, field: Option<String>, value: Value }, Clear {
+     property: String, field: Option<String> } }`; `field` is the XMP id of a sub-field of a
+     **single** structure (as `TemplateField::field`, T88).
+  2. **`pub fn apply_edits(metadata: &mut Metadata, edits: &[Edit]) -> Result<(), EditError>`**,
+     edit by edit in order:
+     - `Set` without `field`: `Metadata::set`, **except** when the value equals the current value
+       (`reconcile::same_value`) **and** the property has no conflict with the rule `Open` (then
+       nothing is set). So choosing the value already shown in an `Open` conflict still decides it
+       (both forms written, Q1);
+     - `Set` with `field`: the structure's current value (or an empty one), the field set (a new
+       field in the order of the structure's fields, as T88), then `set` of the whole structure,
+       with the same rule;
+     - `Clear` without `field`: `Metadata::clear` when the property has a value or an `Open`
+       conflict; otherwise nothing. **Copyright fields may be cleared here** (§8 forbids it for
+       templates only);
+     - `Clear` with `field`: the field removed; the property cleared when no field is left;
+       nothing when the field is not there;
+     - a field of a **list** of structures, or a `field` on a property that is not a single
+       structure → `EditError::Unsupported("<property>/<field> cannot be edited field by field")`;
+     - errors of `set`/`clear` are `EditError::Value`.
+  3. `pub struct EditReport { pub report: WriteReport, pub notices: Vec<WriteNotice> }`.
+  4. **`ExifTool::write_edits_safely(&mut self, image: &Path, edits: &[Edit], options:
+     &EditOptions, checks: &dyn ImageCheck, journal: &Journal) -> Result<EditReport, EditError>`**:
+     `supports_rating(image)` false → `Unsupported` (same text as `write_iptc`); `read_metadata`
+     with `options.fallback`; `apply_edits`; `write_plan::plan` with `options.settings`;
+     `write_safely`; the report with the plan's `notices` (empty when `Unchanged`).
+  5. Module comment extended (§5.1/Q1, §5.2, §8).
+  `write_rating_safely` and `apply_template_safely` are unchanged.
+- **Rules:** rules 3–7 and 10–12. No `Cargo.toml` change. Do not change `write_plan.rs`,
+  `safe_write.rs` or `value.rs`.
+- **Tests to add:**
+  - unit tests of `apply_edits` in `edit.rs` on hand-built `Metadata`: a text set; the same text →
+    no change (`changes()` empty); the same text on a property with an `Open` conflict → changed;
+    a Lang Alt with an `sv` entry keeps it; a clear of `dc:rights` (allowed here); a clear of an
+    absent property → nothing; a contact field set (other fields kept), cleared, the last field
+    cleared clears the property; a field of `plus:ImageCreator` and a `field` on `photoshop:City`
+    → `Unsupported`; an unknown property → `Value`;
+  - `tests/edits.rs` (integration, **ExifTool required**; the JPEG fixture and the fake RAW of
+    T82 in temporary folders; `NoImageCheck`; a temporary journal):
+    - Headline and City set on a JPEG → `Written`, read back with `read_metadata`; the same again
+      → `Unchanged`;
+    - a JPEG with IIM (City) and a matching digest, a 40-byte City → `Written` with
+      `WriteNotice::Truncated` for `photoshop:City`, XMP holding all 40 bytes;
+    - a JPEG with City in IIM and another City in XMP and **no** checksum (an `Open` conflict),
+      the XMP value set again → `Written`, both forms equal afterwards and no conflict when read;
+    - `dc:rights` cleared on a JPEG with `IFD0:Copyright` → gone from XMP and Exif (§8);
+    - the fake RAW: a Title set → only the sidecar written, the RAW's bytes unchanged.
+- **Done when:** `.\tools\check.ps1` is all OK; `docs/test-inventory.md` is updated;
+  `git diff --stat` shows only the files above.
+
+### T98. ADR 0007 I10e: the metadata worker reads all metadata, writes edits and takes new settings — Open
+
+- **Can start after T94 and T97 are accepted** (both change what this task builds on;
+  `worker.rs` is T94's). No owner decision of its own.
+- **Crates:** `pw-metadata`, and in `pw-loupe` only the arms that ignore the new events.
+- **Files:** `crates/pw-metadata/src/worker.rs`; `crates/pw-loupe/src/metadata.rs` (the match in
+  `MetadataCache::apply` only: the two new events are ignored until T103/T105);
+  `docs/test-inventory.md`.
+- **Why:** the info panel (T103) needs the whole `MetadataRead` of the image shown, and the
+  editor (T105) writes through the worker, which owns the ExifTool process and the write setup
+  (G2: the UI only polls). The settings screen (T106) changes the `EditOptions` while RawStride
+  runs.
+- **What** (`worker.rs`):
+  1. `MetadataWorker::read_metadata(&mut self, path: PathBuf) -> Result<RequestId, SubmitError>` →
+     `Event::MetadataRead { id, path, result: std::result::Result<MetadataRead, String> }`,
+     read with the current options' `fallback` (`Fallback::default()` without a setup).
+  2. `MetadataWorker::write_edits(&mut self, path: PathBuf, edits: Vec<Edit>) ->
+     Result<RequestId, SubmitError>` → `Event::EditsWritten { id, path, result:
+     std::result::Result<EditReport, WriteError> }` through `write_edits_safely` with the setup;
+     without a setup `WriteError::Other(NO_JOURNAL)`, with a too old ExifTool
+     `EXIFTOOL_TOO_OLD` (T94); errors through `From<EditError>` as for ratings.
+  3. `MetadataWorker::set_options(&mut self, options: EditOptions) -> Result<(), SubmitError>`:
+     a request without an event; every request after it uses the new options (rating writes,
+     edits and reads). Requests run in order, so a write queued before it uses the old options.
+  4. Module comment updated.
+- **Rules:** rules 3–7 and 10–12. No `Cargo.toml` change. The existing requests and events are
+  unchanged.
+- **Tests to add** (`worker.rs`; ExifTool required where a real file is written, Windows as the
+  existing write tests):
+  - `read_metadata` of a JPEG with a Headline → `MetadataRead` holding it; of a missing file →
+    `Err`;
+  - `write_edits` of a Headline → `EditsWritten` with `Ok` and `Written`, read back with
+    `read_metadata`; without a setup → `NO_JOURNAL`, the file unchanged;
+  - `set_options` with `create_iim: true`, then `write_edits` of a City on a JPEG without IIM →
+    the City is in IIM afterwards; the same without `set_options` → no IIM;
+  - `set_options` with `Fallback::Latin1` changes how a JPEG with IIM 0x80 in City and no 1:90 is
+    read (`€` with Windows-1252, U+0080 with Latin-1).
+- **Done when:** `.\tools\check.ps1` is all OK; `docs/test-inventory.md` is updated;
+  `git diff --stat` shows only the files above.
+
+### T99. ADR 0007 I10f: RawStride's settings file (create IIM, fallback encoding) — Blocked
+
+- **Blocked on owner decision D10** (where and how the settings are stored). Then it can start at
+  once, at the same time as T94–T97 (other crate). T100 and T102 also add lines to `lib.rs`; if
+  they run at the same time, each agent adds only its own `mod` line and its own `pub use` line.
+- **Crates:** `pw-loupe` only. Nothing uses the file yet (T106).
+- **Files:** new `crates/pw-loupe/src/settings.rs`; `crates/pw-loupe/src/lib.rs` (one `mod` line,
+  one `pub use` line); `docs/test-inventory.md`.
+- **Why:** ADR 0007 §5.2 (the setting "Skapa IPTC-IIM för kompatibilitet med äldre system", off by
+  default) and §5.4/Q10 (the fallback encoding, Windows-1252 by default, changeable). RawStride
+  has no settings file yet.
+- **What** (`settings.rs`), as D10:
+  1. `pub struct Settings { pub create_iim: bool, pub fallback: Fallback }`; `Default`: `false`
+     and `Fallback::Windows1252`; `Settings::edit_options(&self) -> EditOptions`.
+  2. `pub fn settings_path() -> Option<PathBuf>`: `%LOCALAPPDATA%\RawStride\settings.txt` (`None`
+     without `LOCALAPPDATA`).
+  3. `pub fn load_settings(path: &Path) -> (Settings, Vec<String>)`: a missing file gives the
+     defaults and no problem. The file is UTF-8 text, one `key = value` per line; spaces around
+     both are ignored; empty lines and lines starting with `#` are skipped. Keys:
+     `create_iim` (`true`/`false`) and `fallback_encoding` (`windows-1252`/`iso-8859-1`). An
+     unknown key, a bad value or a line without `=` keeps the default for it and gives one problem
+     text in English naming the line number (for the log, `eprintln!` by the caller); a file that
+     cannot be read gives the defaults and one problem.
+  4. `pub fn save_settings(path: &Path, settings: &Settings) -> io::Result<()>`: creates the
+     folder, writes both keys (with a first comment line `# RawStride`) to `settings.txt.tmp` in
+     the same folder, then `std::fs::rename` onto `settings.txt` (replaces it on Windows), so a
+     crash never leaves half a file.
+- **Rules:** rules 3–7 and 10–12. No `Cargo.toml` change (no serde in `pw-loupe`).
+- **Tests to add** (unit tests in `settings.rs`, temporary folders): defaults for a missing file;
+  save then load gives the same settings for all four combinations; a file with comments, empty
+  lines and spaces; an unknown key, a bad value and a line without `=` each give one problem with
+  its line number and the defaults for that key while the other key is read; `save` into a folder
+  that does not exist creates it; no `.tmp` file is left after `save`; `edit_options`.
+- **Done when:** `.\tools\check.ps1` is all OK; `docs/test-inventory.md` is updated;
+  `git diff --stat` shows only the files above.
+
+### T100. ADR 0007 I10g: the import dialog chooses the mode of each template field, and asks before a Clear — Blocked
+
+- **Blocked on owner decisions D13** (names, defaults and allowed modes) **and D14** (the
+  confirmation). Then it can start; it needs nothing new in `pw-metadata` (T88's `Template`
+  exists). It can run at the same time as T94–T99 and T102 (only `lib.rs` lines shared, see T99);
+  not at the same time as T101, T103, T105 or T106 (all change `main.rs`).
+- **Crates:** `pw-loupe` only.
+- **Files:** `crates/pw-loupe/src/import.rs`; `crates/pw-loupe/src/import_worker.rs`;
+  `crates/pw-loupe/src/main.rs` (the IPTC part of the import dialog and the start of the import
+  only); `crates/pw-loupe/src/lib.rs` (the `pub use import::…` line only);
+  `docs/test-inventory.md`.
+- **Why:** ADR 0007 §10 (each template field has a mode; an empty field never clears; no Clear for
+  copyright-management fields; "Clearing any other field asks for confirmation once per
+  template"). Left over from T88 and T91: today the import dialog's six fields always use
+  `Iptc::to_template` (Replace for a filled field, Keep for an empty one).
+- **What** (as D13 and D14):
+  1. **`import.rs`:**
+     - `pub enum IptcField { Creator, Copyright, Credit, Email, Phone, Url }` with
+       `IptcField::ALL` in this order and `label()` giving the dialog's texts ("Fotograf",
+       "Copyright", "Credit", "E-post", "Telefon", "Webb");
+     - `IptcForm` gains `pub modes: IptcModes`, one `pw_metadata::template::Mode` per field,
+       default `Replace` for all six (D13; with an empty text that does nothing, so a form nobody
+       touches behaves exactly as today);
+     - `pub fn allowed_modes(field: IptcField) -> &'static [Mode]`: Creator `Keep, Replace,
+       Append`; Copyright and Credit `Keep, Replace, Append, Prefix`; Email, Phone and Url all
+       five (§8/§10: no Clear of Creator, Copyright Notice or Credit Line; no Prefix on a list);
+     - `pub fn mode_text(mode: Mode) -> &'static str`: the Swedish names of D13 ("Behåll",
+       "Ersätt", "Lägg till efter", "Lägg till före", "Rensa");
+     - **`IptcForm::to_template(&self) -> Template`**: per field its mode and its trimmed text
+       (`None` when empty) on the same properties as `Iptc::to_template` (Creator a list of one
+       name on `dc:creator`; Copyright `dc:rights` `x-default`; Credit `photoshop:Credit`; the
+       three contact fields as fields of `Iptc4xmpCore:CreatorContactInfo`); `Clear` without a
+       value; `xmpRights:Marked` `True` with `Replace` when Copyright has a text and the mode
+       `Replace`, `Append` or `Prefix` (D6);
+     - `IptcForm::template_is_empty(&self) -> bool`: true when no field would do anything (each
+       is `Keep`, or `Replace`/`Append`/`Prefix` with an empty text);
+     - `IptcForm::cleared_fields(&self) -> Vec<IptcField>`: the fields in `Clear`, in order;
+     - `pub fn clear_confirmation_text(fields: &[IptcField]) -> String` (D14): "Mallen tömmer de
+       här fälten i alla bilder som importeras:" and one line per field with its label;
+     - `to_iptc` stays (its tests unchanged).
+  2. **`import_worker.rs`:** `apply_iptc` takes the form's `to_template()` instead of
+     `Iptc::to_template`, and skips the ExifTool start when `template_is_empty()` (as
+     `iptc.is_empty()` does today, so `empty_iptc_template_does_not_start_exiftool` keeps
+     passing).
+  3. **`main.rs`, the dialog:** after each of the six fields a drop-down list of its
+     `allowed_modes` with `mode_text`; the text field is disabled when the mode is `Behåll` or
+     `Rensa`. The modes are kept with the rest of the form between imports in the session
+     (`last_form`), as the texts are.
+  4. **`main.rs`, the start (D14):** when `cleared_fields()` is not empty, pressing the start
+     button first opens a window "Rensa fält?" with `clear_confirmation_text` and the buttons
+     "Rensa och importera" (starts the import) and "Avbryt" (back to the dialog, nothing
+     started). Asked once per start of an import, never per image.
+- **Rules:** rules 3–7 and 10–12. No `Cargo.toml` change. Nothing in `pw-metadata` changes.
+- **Tests to add:**
+  - `import.rs`: `to_template` of the default form with texts gives the same template as
+    `to_iptc().to_template()` (all six filled; none filled); Append on Creator, Prefix on Credit,
+    Clear on E-post (no value) and Keep on a filled Copyright (no `xmpRights:Marked`);
+    `allowed_modes` for each field; `template_is_empty` (all Keep; all Replace with empty texts;
+    one Clear → false); `cleared_fields` and `clear_confirmation_text` for two fields;
+  - `import_worker.rs` (ExifTool required, as the existing IPTC import test): an import of the
+    JPEG fixture whose file already has a work e-mail, with E-post in `Clear`, leaves no e-mail
+    (read back with `read_metadata`); Creator in `Append` on a file with a creator gives both
+    names in order.
+- **Done when:** `.\tools\check.ps1` is all OK; `docs/test-inventory.md` is updated;
+  `git diff --stat` shows only the files above. The owner checks by hand: an import with a
+  cleared Webb asks once and clears it in every imported image.
+
+### T101. ADR 0007 I10h: RawStride tells the user at start when ExifTool is missing or too old — Blocked
+
+- **Can start after T94 and T100 are accepted** and D9 is decided. Not at the same time as T103,
+  T105 or T106 (`main.rs`).
+- **Crates:** `pw-loupe` only.
+- **Files:** `crates/pw-loupe/src/main.rs`; `crates/pw-loupe/src/import_worker.rs`;
+  `crates/pw-loupe/src/metadata.rs` (`write_error_text` only); `docs/test-inventory.md`.
+- **Why:** ADR 0007 §11 (checked at start) and D9. T94 gives the result; nothing shows it yet, and
+  the import worker starts its own ExifTool for the template.
+- **What:**
+  1. **`main.rs`:** each frame until it has been shown, `metadata_worker.exiftool_version()`;
+     when it is `Some`, at most one message window (as the recovery message, T91):
+     - `Err(text)`: title "ExifTool saknas", text "ExifTool kunde inte startas: <text>. Betyg och
+       metadata kan inte läsas eller sparas.";
+     - `Ok(v)` below `MIN_EXIFTOOL_VERSION`: title "ExifTool är för gammal", text "ExifTool <v> är
+       för gammal. RawStride behöver version 12.67 eller senare. Betyg och metadata sparas inte
+       förrän ExifTool har uppdaterats.";
+     - `Ok(v)` at least 12.67: nothing.
+     A pure function `exiftool_message(&Result<ToolVersion, String>) -> Option<(&str, String)>`
+     makes the title and text, so it can be tested.
+  2. **`import_worker.rs`:** after the import worker has started its ExifTool for the template, it
+     asks `version()` once; below 12.67 or unreadable, the template is not written and one line
+     `"<file>: ExifTool <v> är för gammal (minst 12.67)"` (or the error text) is listed, as a
+     failed start is today; the copied files are kept.
+  3. **`metadata.rs`:** the rating writes refused by T94 (`WriteError::Other` holding
+     `EXIFTOOL_TOO_OLD`) get the Swedish reason "ExifTool är för gammal (minst 12.67)" in
+     `write_error_text`, as `NO_JOURNAL` gets its text today.
+- **Rules:** rules 3–7 and 10–12. No `Cargo.toml` change.
+- **Tests to add:** `exiftool_message` for an error, 12.40, 12.67 and 13.59; the
+  `write_error_text` of `EXIFTOOL_TOO_OLD`; the import worker with
+  a fake ExifTool program that answers `-ver` with `12.40` (as the existing fake-program tests of
+  the import worker, or the `test_support` pattern) lists the line and writes nothing.
+- **Done when:** `.\tools\check.ps1` is all OK; `docs/test-inventory.md` is updated;
+  `git diff --stat` shows only the files above.
+
+### T102. ADR 0007 I10i: the texts of the info panel (values, conflicts, notices) — Blocked
+
+- **Blocked on owner decision D11** (the Swedish names of the properties). Then it can start at
+  once; it only needs the reader's types (T82), so it can run at the same time as T94–T100 (only
+  `lib.rs` lines shared, see T99).
+- **Crates:** `pw-loupe` only. Drawing the panel is T103.
+- **Files:** new `crates/pw-loupe/src/info_panel.rs`; `crates/pw-loupe/src/lib.rs` (one `mod` line,
+  one `pub use` line); `docs/test-inventory.md`.
+- **Why:** ADR 0007 §5.1 ("conflicts always visible": both values and the rule applied, until the
+  next write by RawStride), §6.2, §6.4 ("hidden by the user"), §5.4 (converted text marked), Q5/Q8
+  (ignored sidecars reported), §7 (suggested Date Created).
+- **What** (`info_panel.rs`, pure functions, no egui):
+  1. `pub fn property_label(xmp_id: &str) -> String`: the Swedish name of D11 for the properties in
+     its list, otherwise the table's `name` (`properties::property`), otherwise the id.
+  2. `pub fn value_text(value: &Value) -> String`: `Text` and `Number` as they are; a Lang Alt its
+     shown text, with ` (<språk>)` when it is not `x-default` and ` +N språk` when it has N other
+     entries; a list its entries joined with `; `; a date `IptcDate::to_xmp()`; a structure
+     `fält: värde` joined with `, ` (field labels by `property_label` of the field id); a list of
+     structures one structure per line.
+  3. `pub fn origin_text(origin: Origin) -> &'static str`: "XMP", "XMP-sidofil", "IIM", "Exif",
+     "Ändrad".
+  4. **`pub fn info_panel(read: &MetadataRead) -> InfoPanel`** with
+     `InfoPanel { values: Vec<ValueRow>, conflicts: Vec<ConflictRow>, notices: Vec<String> }`:
+     - `values`: each property with a value, in table order: `label`, `value_text`,
+       `origin_text`;
+     - `conflicts`: each conflict: `label`, each value with its origin, and the rule text:
+       `Xmp` "XMP används", `Iim` "IIM används (kontrollsumman stämmer inte)", `Exif` "Exif
+       används", `Open` "Olöst: välj värde i redigeraren";
+     - `notices`, in this order (texts exactly so):
+       - `FileNotice::ForeignSidecarIgnored(p)`: "<filnamn> bredvid DNG-filen används inte (skriven
+         av ett annat program)"; `ExtSidecarIgnored(p)`: "<filnamn> läses inte (RawStride använder
+         <basnamn>.xmp)"; `IimBlockUnreadable(r)`: "IIM-blocket kunde inte läsas: <r>";
+       - `Notice::Iim(Converted)`: "<fält>: IIM-texten hade okänd teckenkodning och har
+         konverterats"; `Repeated`: "<fält>: fanns flera gånger i IIM, det första värdet används";
+         `Unreadable`: "<fält>: kunde inte läsas (<text>)";
+       - `Notice::Refused`: "<fält> från <ursprung> lästes inte: <skäl>" with the reason in
+         Swedish per `ValueError` ("fel form", "för många värden", "tomt värde", "okänt fält");
+       - `Notice::HiddenByUser`: "<fält>: kamerans värde <värde> är dolt av användaren";
+       - `Notice::Unreadable`: "<fält> från <ursprung> kunde inte läsas (<text>)";
+       - `suggested_date_created`: "Förslag till Skapad från kameran: <datum>";
+       - the IIM checksum when the file has IIM (`state`): `Matches` nothing, `Differs` "IIM har
+         ändrats av ett annat program efter XMP (kontrollsumman stämmer inte)", `Missing` "IIM
+         saknar kontrollsumma".
+- **Rules:** rules 3–7 and 10–12. No `Cargo.toml` change. Nothing in `pw-metadata` changes.
+- **Tests to add** (unit tests on hand-built `MetadataRead`): `property_label` for a listed, an
+  unlisted and an unknown id; `value_text` for every `Value` kind (Lang Alt with `x-default` only,
+  without `x-default`, with two other languages; a list; a date with and without a zone; a contact
+  structure; two Location Created); every rule text; every notice text above once; the order of
+  values follows the table.
+- **Done when:** `.\tools\check.ps1` is all OK; `docs/test-inventory.md` is updated;
+  `git diff --stat` shows only the files above.
+
+### T103. ADR 0007 I10j: the info panel in RawStride — Blocked
+
+- **Can start after T98, T101 and T102 are accepted** and D15 is decided. Not at the same time as
+  T105 or T106 (`main.rs`).
+- **Crates:** `pw-loupe` only.
+- **Files:** `crates/pw-loupe/src/main.rs`; `crates/pw-loupe/src/metadata.rs`;
+  `crates/pw-loupe/src/lib.rs` (`Action` and `key_action` only); `docs/test-inventory.md`.
+- **Why:** ADR 0007 §5.1 and §6.2 (conflicts visible), I10 in the step plan.
+- **What** (as D15):
+  1. **`lib.rs`:** `Action::ToggleMetadata` on the key `M` (no Ctrl or Alt), in the loupe and the
+     contact sheet.
+  2. **`metadata.rs`:** the cache keeps the `MetadataRead` (or the error) of **one** image, the one
+     shown in the panel. Requests through `MetadataWorker::read_metadata` (T98), at most **one in
+     flight**: when the image changes while a read runs, the newest image is asked for when it
+     comes back, and results for another image are dropped. A read is asked for only while the
+     panel is shown and after the image has been the current one for 200 ms (moving quickly with
+     the arrow keys queues nothing). After `RatingWritten` or `EditsWritten` for the image, it is
+     read again. A loaded folder change empties it.
+  3. **`main.rs`:** a panel on the right (`egui::SidePanel::right`, width 320, resizable, its own
+     scroll area), shown and hidden with `M`, hidden at start, not remembered between runs. The
+     image is the loupe's current image, or in the contact sheet the single selected image; with
+     several selected "<n> bilder markerade", with none "Ingen bild vald". Contents:
+     "Läser metadata …" while loading; "Metadata kunde inte läsas: <fel>" on an error; otherwise
+     the file name and three sections from T102's `info_panel`: "Metadata" (label, value, origin
+     in grey), "Konflikter" (shown only when there are any, in the warning colour) and
+     "Meddelanden" (only when there are any). A file kind without metadata support shows
+     `UNSUPPORTED_TEXT`.
+- **Rules:** rules 3–7 and 10–12. No `Cargo.toml` change. The rating path is unchanged.
+- **Tests to add:** `key_action` for `M` (with and without Ctrl); `metadata.rs` with the existing
+  fake submitter: one read in flight, the newest image asked for after it, a stale result dropped,
+  no read before 200 ms or while hidden, a new read after a rating write of the image.
+- **Done when:** `.\tools\check.ps1` is all OK; `docs/test-inventory.md` is updated;
+  `git diff --stat` shows only the files above. The owner checks by hand: the panel shows the
+  values of a JPEG, a DNG and an ARW with a sidecar, and a conflict (a file from the level-C samples
+  or one made by the reviewer).
+
+### T104. ADR 0007 I10k: the editor's form with its fields, conflict choices, edits and warnings — Blocked
+
+- **Can start after T96, T97 and T102 are accepted** and D12 is decided. It changes no file of
+  T98, T101 or T103, so it can run at the same time as them (only `lib.rs` lines shared, see T99).
+- **Crates:** `pw-loupe` only. The window is T105.
+- **Files:** new `crates/pw-loupe/src/editor.rs`; `crates/pw-loupe/src/lib.rs` (one `mod` line, one
+  `pub use` line); `docs/test-inventory.md`.
+- **Why:** ADR 0007 §8 (Lang Alt: `x-default` only; clearing removes every representation),
+  §5.1/Q1 (the user decides an `Open` conflict), §7 (truncated dates, no zone invented), §11
+  (warnings).
+- **What** (`editor.rs`, pure, no egui), with the fields of D12:
+  1. `pub enum EditorField` with the D12 fields in the D12 order; `label()` from T102's
+     `property_label` (the contact fields "E-post", "Telefon", "Webb"); `multiline()` true for
+     Beskrivning, Alternativtext, Instruktioner, Användarvillkor, Nyckelord and Fotograf.
+  2. **`EditorForm::from_read(read: &MetadataRead) -> EditorForm`:** one text per field: a text as
+     it is; a Lang Alt its shown text (and a note "(<språk>)" when it has no `x-default`, so saving
+     adds `x-default`, Q7); a list one entry per line (Nyckelord, Fotograf); a date `to_xmp()`;
+     the contact fields from `CreatorContactInfo`.
+  3. **Conflicts:** `EditorForm::open_conflicts()` lists every `Open` conflict of the file (also on
+     properties that are not editor fields): label and each value with its origin.
+     `EditorForm::choose(conflict_index, value_index)` records the choice; for an editor field it
+     also puts the value's text in the field.
+  4. **`EditorForm::edits(&self) -> Result<Vec<Edit>, Vec<(EditorField, String)>>`:** for each
+     changed field (the text differs from the one `from_read` gave): an empty text (after trim) →
+     `Edit::Clear`; otherwise `Edit::Set` with the value of the field's kind: a text; a Lang Alt
+     `x-default`; a list from the non-empty trimmed lines; a date by `IptcDate::parse_xmp`, an error
+     "Skriv datumet som ÅÅÅÅ, ÅÅÅÅ-MM, ÅÅÅÅ-MM-DD eller ÅÅÅÅ-MM-DDTtt:mm[:ss], med tidszon bara om
+     den är känd"; the contact fields as `field` edits of `Iptc4xmpCore:CreatorContactInfo`. A
+     chosen conflict value is an `Edit::Set` of that value even when the text did not change (T97
+     then writes both forms). All field errors are returned together.
+  5. **Warnings:** `EditorForm::warnings(&self, read: &MetadataRead, create_iim: bool) ->
+     Vec<String>`: the edits applied to a copy of the read metadata with T97's `apply_edits`, then
+     T96's `validate` with `iim_written` = the file has IIM, or `create_iim` and the file is not a
+     manufacturer RAW; Swedish texts: "<fält> blir avkortat i IIM (högst <n> byte); XMP får hela
+     texten", "Alternativtexten är längre än 250 tecken (<n>)", "Landskoden <kod> ska vara två
+     eller tre bokstäver (ISO 3166-1)", "Fotografens titel utan Fotograf", "Digital källtyp <uri>
+     finns inte i IPTC:s lista", "Registerpost <n> saknar post-id eller organisation", "Betyget
+     <v> ligger utanför −1 till 5".
+  6. `pub fn notice_text(notice: &WriteNotice) -> String` for the editor's result (T105):
+     `Truncated` "<fält> kortades i IIM; XMP har hela texten"; `IimConvertedToUtf8` "IIM-texterna
+     skrevs om som UTF-8"; `ConflictKept` "<fält>: konflikten är olöst och skrevs inte";
+     `DigestNotWritten` "Ingen ny IIM-kontrollsumma skrevs, eftersom en konflikt är olöst".
+- **Rules:** rules 3–7 and 10–12. No `Cargo.toml` change. Nothing in `pw-metadata` changes.
+- **Tests to add** (unit tests on hand-built `MetadataRead`): `from_read` of every field kind and of
+  a Lang Alt without `x-default`; no edits for an untouched form; a changed text, an emptied field
+  (`Clear`), two keywords on three lines with one blank, a date `2026-11` and a bad date (error
+  text), several errors at once, an e-mail as a `field` edit; a chosen `Open` conflict value with
+  an unchanged text gives a `Set`; a conflict on a non-editor property is listed and chosen;
+  each warning text once; each notice text.
+- **Done when:** `.\tools\check.ps1` is all OK; `docs/test-inventory.md` is updated;
+  `git diff --stat` shows only the files above.
+
+### T105. ADR 0007 I10l: the editor window in RawStride, saved through the worker — Open
+
+- **Can start after T103 and T104 are accepted.** Not at the same time as T106 (`main.rs`).
+- **Crates:** `pw-loupe` only.
+- **Files:** `crates/pw-loupe/src/main.rs`; `crates/pw-loupe/src/metadata.rs`;
+  `crates/pw-loupe/src/lib.rs` (`Action` and `key_action` only); `docs/test-inventory.md`.
+- **Why:** I10 in the step plan: the editor, written with §9 through T97/T98.
+- **What** (as D12 and D15):
+  1. **Opening:** `Action::EditMetadata` on the key `E` (no Ctrl or Alt), and a button "Redigera"
+     at the top of the info panel; only for one image whose kind can hold metadata
+     (`supports_rating`), and only when its `MetadataRead` is loaded (otherwise the key does
+     nothing). The window "Redigera metadata – <filnamn>" belongs to that image; moving to another
+     image does not change it.
+  2. **Contents:** the fields of `EditorForm` (a multi-line box where `multiline()`), the field
+     errors under their fields, the "Olösta konflikter" section with a choice per conflict (radio
+     buttons with origin and value), the warnings (in the warning colour), and the buttons
+     "Spara" and "Stäng".
+  3. **Saving:** "Spara" with field errors does nothing but show them; with no edits it does
+     nothing; otherwise `write_edits` (T98). While it runs the form is read-only with "Sparar …".
+     `EditsWritten`: `Ok(report)` → "Sparat." and the notice texts (T104), the panel's read is
+     renewed (T103) and the form is filled again from the new read; `Err(e)` → "Kunde inte spara
+     metadata för <fil>: <skäl>" with the reason as `write_error_text` gives it for ratings
+     (`metadata.rs`), the form kept as typed.
+  4. **Closing** with unsaved edits asks "Spara ändringarna?" with "Spara", "Släng" and "Avbryt".
+     At program exit an editor write still running is waited for as rating writes are (T44's
+     exit wait, the same limit), and listed if it does not finish.
+- **Rules:** rules 3–7 and 10–12. No `Cargo.toml` change. Keys typed into the editor's text fields
+  must not reach the rating and navigation keys (as the import dialog already prevents).
+- **Tests to add:** `key_action` for `E`; `metadata.rs` with the fake submitter: an edits request
+  sent with the form's edits, `EditsWritten` `Ok` asks for a new read of the image, `Err` keeps the
+  pending state cleared and gives the Swedish text; the exit wait counts a running edits write.
+- **Done when:** `.\tools\check.ps1` is all OK; `docs/test-inventory.md` is updated;
+  `git diff --stat` shows only the files above. The owner checks by hand in RawStride: a Title and a
+  keyword on a JPEG, a DNG shown in RAW mode and an ARW (sidecar), read back in the panel and in
+  another program (Photo Mechanic or Lightroom); an emptied Description; a conflict chosen.
+
+### T106. ADR 0007 I10m: the settings window (create IIM, fallback encoding) — Open
+
+- **Can start after T98, T99 and T101 are accepted.** Not at the same time as T103 or T105
+  (`main.rs`); the reviewer decides the order of T103, T105 and T106.
+- **Crates:** `pw-loupe` only.
+- **Files:** `crates/pw-loupe/src/main.rs`; `crates/pw-loupe/src/import_worker.rs`;
+  `crates/pw-loupe/src/metadata.rs` (only if the panel's read must be renewed after a change);
+  `docs/test-inventory.md`.
+- **Why:** ADR 0007 §5.2 (the setting "Skapa IPTC-IIM för kompatibilitet med äldre system", off by
+  default) and §5.4/Q10 (the fallback encoding, changeable in the settings).
+- **What:**
+  1. **At start** (`run`): `load_settings(settings_path())` (T99), each problem written with
+     `eprintln!`; the settings' `edit_options()` go into the metadata worker's `WriteSetup` and
+     into each import (point 3) instead of `EditOptions::default()`.
+  2. **The window "Inställningar"**, opened with a button "Inställningar" in the top bar (next to
+     the import button): a check box with the exact text "Skapa IPTC-IIM för kompatibilitet med
+     äldre system" and under it, in small text, "Gäller JPEG, TIFF och DNG som saknar IIM. Av som
+     standard."; a drop-down "Teckenkodning för äldre IPTC- och Exif-text" with "Windows-1252
+     (västeuropeisk)" and "ISO 8859-1 (Latin-1)"; the buttons "Spara" and "Avbryt". "Spara" saves
+     the file, sends `set_options` to the metadata worker (T98) and empties the panel's cache so
+     the image is read again with the new encoding; when the file cannot be saved, the settings
+     still apply until RawStride closes and the message "Inställningarna kunde inte sparas: <fel>"
+     is shown.
+  3. **Import:** `ImportWorker::run` takes the `EditOptions` of the settings for that import (a
+     new parameter, or a field next to the form), used by `apply_template_safely`.
+- **Rules:** rules 3–7 and 10–12. No `Cargo.toml` change.
+- **Tests to add:** `import_worker.rs` (ExifTool required, as the existing IPTC import test): an
+  import with `create_iim: true` of the JPEG fixture (no IIM) and a Creator gives IIM By-line in
+  the copy, with the default options no IIM; a pure function in `main.rs` (or `settings.rs` if
+  you need it, then say so) for the two encoding texts and back.
+- **Done when:** `.\tools\check.ps1` is all OK; `docs/test-inventory.md` is updated;
+  `git diff --stat` shows only the files above. The owner checks by hand: the setting survives a
+  restart, and with "Skapa IPTC-IIM" on, a Title written in the editor to a JPEG without IIM
+  appears in IIM (ExifTool `-IPTC:all`).
+
 ### T7. Format the files that `cargo fmt --check` reports — Done
 
 - **Crates:** `photoworkflow` (`src-tauri`), `preview-bench` (`tools/preview-bench`).
@@ -4378,14 +4989,15 @@ and reviewer:
 - A timeout when ExifTool hangs (process supervision across threads).
 - Suppressing the Windows "no disk in drive" dialog when scanning empty card readers (needs a
   Windows API call and a new dependency).
-- ADR 0007 (IPTC metadata) steps I10–I13 and the `Cleared` task (see "Milestone 8 (ADR 0007, IPTC
-  metadata): steps"; I9 is T87–T91): `Cleared` waits for D1; I11 waits for the PLUS controlled
+- ADR 0007 (IPTC metadata) steps I11–I13 and the `Cleared` task (see "Milestone 8 (ADR 0007, IPTC
+  metadata): steps"; I9 is T87–T93, I10 is T94–T106): `Cleared` waits for D1; I11 waits for the PLUS controlled
   vocabulary; I12 waits for the level-C samples. Also later: Exif ImageEditor ↔ Contributor and
   GPS → Location Created (§6.1), left out of T81; keyword qualifiers (§8), left out of T83; from
   §10, left out of T88: template sub-fields of lists of structures (Location Created, Image
   Creator, Copyright Owner, Licensor), variables (`{date}` …), template files in XMP with the
-  modes in a RawStride namespace (needs the same kind of namespace decision as D1), the
-  confirmation before a Clear and the choice of mode in the import dialog (I10).
+  modes in a RawStride namespace (needs the same kind of namespace decision as D1). Left out of
+  I10: editing several images at once, lists of structures in the editor, the other controlled
+  vocabularies of §11.
 - The import dialog fields for title and description in `ui/` (frontend).
 - ADR 0010 steps M3–M7 (the rest of the import) wait until the contact sheet (ADR 0011) is done
   (owner decision, 2026-11-08). M4 and M7 are added to this list then.
@@ -4701,3 +5313,4 @@ and reviewer:
 | 2026-11-12 | T91 | Ready for review | (Agent) `worker.rs`: `WriteSetup` (journal, checks, options); a rating write runs `write_rating_safely`. `lib.rs`: `WriteError::NotSafe` and `From<EditError>` as in point 2, English `Display`; also the `pub use` line (exports `WriteSetup` and `NO_JOURNAL`, needed by `pw-loupe`). `pw-loupe`: `main.rs` opens `%LOCALAPPDATA%\RawStride\journal`, runs `Journal::recover` before the workers and shows the Swedish message box (title "Metadataskrivning avbröts"); one `RawImageCheck` with `releaser.release(path, 5 s)` per worker; `metadata.rs`: the three `NotSafe` texts; `import_worker.rs`: `apply_template_safely`; `Cargo.toml` + `Cargo.lock`: only `pw-imagecheck`. **Decided with the owner during the task (outside the task text):** (1) the fake-ExifTool tests `restarts_exiftool_after_it_exits` and `retries_a_failed_start_with_the_next_request` drive the worker with `read_ratings` of a RAW with a sidecar (a safe write needs a JSON read, which the fake cannot answer); what they check is unchanged; (2) without a journal `MetadataWorker::start`/`start_with` take `Option<WriteSetup>` and `ImportWorker::start` `Option<Journal>`: reading works, a rating write gives `WriteError::Other(NO_JOURNAL)` shown as "skrivloggen kunde inte öppnas", the template step lists that text once (as a failed ExifTool start) and writes nothing; (3) the recovery line names the backup only when the backup file exists. `Failed` entries are listed like `NeedsUser`, `Unreadable` by the journal file; a journal that opens but cannot be read is only reported on stderr. 17 new tests (pw-metadata unit +9, pw-loupe lib +2, bin +6). `check.ps1` all OK: 903 passed, 0 failed, 41 ignored in 53 programs; clippy without warnings. Not run: the owner's manual check in RawStride (DNG in RAW mode, JPEG, ARW) |
 | 2026-11-12 | T91, T93 | Done / Ready for review | Review: both accepted. **T93** (Done): `-IPTCDigest=new` also when the plan writes IIM to a file with a stored checksum and no XMP is left; the owner's change of the existing unit test `the_digest_needs_xmp_after_the_write` (its state now `missing_digest()`) is right, because that test asserted exactly the case T93 corrects. **T91** (code accepted, stays Ready for review until the owner's hand check of its Done when): `WriteSetup` and `write_rating_safely` in the worker, `WriteError::NotSafe` and `From<EditError>`, the journal in `%LOCALAPPDATA%\RawStride\journal` with recovery before the workers start, one `RawImageCheck` with `Releaser::release` (5 s) per worker, the Swedish texts, the ingest through `apply_template_safely`; `Cargo.toml`/`Cargo.lock` add only `pw-imagecheck` to `pw-loupe`. The owner's three decisions during the task are accepted: the two fake-ExifTool worker tests now drive the worker with `read_ratings` (a safe write needs a JSON read the fake cannot answer; what they check is unchanged); without a journal the workers start with `None` and every write fails with "skrivloggen kunde inte öppnas"; the recovery line names the backup only when it exists. The reviewer's `check.ps1`: fmt, test and clippy OK, **903 passed, 0 failed, 41 ignored**; ignored runs (`PW_TESTDATA`): `edit` (25 files) and both `safe_write` real-file tests passed. Committed. Left: the owner's hand check in RawStride (a rating on a DNG shown in RAW mode, on a JPEG and on an ARW with a sidecar) |
 | 2026-11-12 | T91 | Done | Owner hand check in RawStride: works (the Done when check: a rating on a DNG shown in RAW mode, on a JPEG and on an ARW with a sidecar). T91 is complete |
+| 2026-11-12 | T94–T106 | Open / Blocked | Added after T91 was done: ADR 0007 I10 split in thirteen. `pw-metadata`: T94 the ExifTool version checked when the worker starts (**Blocked** on D9); T95 the two sidecar names looked up directly instead of listing the folder for every image (from T82); T96 the validation warnings of §11; T97 edits of single properties and sub-fields written safely, with the plan's write notices (`Edit`, `apply_edits`, `write_edits_safely`); T98 the worker reads the whole `MetadataRead`, writes edits and takes new options (after T94, T97). `pw-loupe`: T99 the settings file (**Blocked** on D10); T100 a mode per field in the import dialog and the confirmation before a Clear (**Blocked** on D13, D14; left over from T88/T91); T101 the start message for a missing or too old ExifTool (after T94, T100); T102 the texts of the info panel (**Blocked** on D11); T103 the info panel (after T98, T101, T102, D15); T104 the editor's form (after T96, T97, T102, D12); T105 the editor window (after T103, T104); T106 the settings window (after T98, T99, T101). T95, T96 and T97 can start now and at the same time (T96 not with T94: both change `lib.rs`); T101, T103, T105 and T106 one at a time (`main.rs`). Owner decisions D9–D15 added to the step plan; D1 still open |
