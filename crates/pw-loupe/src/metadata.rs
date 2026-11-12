@@ -7,8 +7,10 @@ use std::time::{Duration, Instant};
 use pw_loupe::{
     RatingKey, RatingRefused, RatingStore, RatingWriter, UNSUPPORTED_TEXT, status_text,
 };
+use pw_metadata::safe_write::OriginalState;
 use pw_metadata::{
-    MetadataWorker, Rating, RequestId, SubmitError, WorkerEvent, WriteError, supports_rating,
+    MetadataWorker, NO_JOURNAL, Rating, RequestId, SubmitError, WorkerEvent, WriteError,
+    supports_rating,
 };
 
 pub(crate) trait MetadataSubmit: RatingWriter {
@@ -362,12 +364,32 @@ const READ_ONLY_TEXT: &str = "filen är skrivskyddad";
 /// Shown after "Kunde inte spara betyget för <fil>: " when ExifTool refused the write (T49).
 const NOT_WRITTEN_TEXT: &str = "filen kunde inte skrivas";
 
+/// Shown after "Kunde inte spara betyget för <fil>: " when the write journal could not be opened
+/// at the start, so nothing is written (T91).
+pub(crate) const NO_JOURNAL_TEXT: &str = "skrivloggen kunde inte öppnas";
+
 /// The reason in the message for a failed rating write. Other errors keep their own text.
 fn write_error_text(error: WriteError) -> String {
     match error {
         WriteError::ReadOnly => READ_ONLY_TEXT.into(),
         WriteError::NotWritten(_) => NOT_WRITTEN_TEXT.into(),
+        WriteError::Other(text) if text == NO_JOURNAL => NO_JOURNAL_TEXT.into(),
         WriteError::Other(text) => text,
+        WriteError::NotSafe { original, .. } => match original {
+            OriginalState::Intact => {
+                "metadata kunde inte skrivas säkert, filen är oförändrad".into()
+            }
+            OriginalState::AtBackup(backup) => {
+                let name = backup.file_name().map_or_else(
+                    || backup.display().to_string(),
+                    |name| name.to_string_lossy().into_owned(),
+                );
+                format!("metadata kunde inte skrivas säkert, originalet ligger nu som {name}")
+            }
+            OriginalState::Replaced => "filen skrevs men slutkontrollen misslyckades, den \
+                                        tidigare versionen finns kvar som säkerhetskopia"
+                .into(),
+        },
     }
 }
 
@@ -382,7 +404,24 @@ fn submit_error(error: SubmitError) -> String {
 mod tests {
     use super::*;
     use pw_metadata::Rating;
+    use pw_metadata::WriteSetup;
+    use pw_metadata::edit::EditOptions;
+    use pw_metadata::journal::Journal;
+    use pw_metadata::safe_write::{NoImageCheck, Stage};
     use std::collections::{HashMap, VecDeque};
+
+    /// A write setup with `NoImageCheck` and a temporary journal (T91); these tests never write.
+    fn test_setup() -> WriteSetup {
+        let folder =
+            std::env::temp_dir().join(format!("pw-loupe-metadata-journal-{}", std::process::id()));
+        let journal = Journal::open(&folder)
+            .unwrap_or_else(|error| panic!("could not open {}: {error}", folder.display()));
+        WriteSetup {
+            journal,
+            checks: Box::new(NoImageCheck),
+            options: EditOptions::default(),
+        }
+    }
 
     struct FakeSubmit {
         read_responses: VecDeque<Result<RequestId, SubmitError>>,
@@ -449,10 +488,11 @@ mod tests {
     fn metadata_cache_uses_absolute_paths_and_starts_loading() {
         let program =
             std::env::temp_dir().join(format!("pw-loupe-missing-exiftool-{}", std::process::id()));
-        let mut worker = match MetadataWorker::start_with(&program.to_string_lossy(), &[]) {
-            Ok(worker) => worker,
-            Err(error) => panic!("worker thread should start: {error}"),
-        };
+        let mut worker =
+            match MetadataWorker::start_with(&program.to_string_lossy(), &[], Some(test_setup())) {
+                Ok(worker) => worker,
+                Err(error) => panic!("worker thread should start: {error}"),
+            };
         let mut cache = MetadataCache::default();
         let files = match cache.begin_load(vec![PathBuf::from("photo.ARW")], &mut worker) {
             Ok(files) => files,
@@ -471,10 +511,11 @@ mod tests {
     fn metadata_state_queries_are_false_for_unsupported_files_and_missing_paths() {
         let program =
             std::env::temp_dir().join(format!("pw-loupe-unsupported-{}", std::process::id()));
-        let mut worker = match MetadataWorker::start_with(&program.to_string_lossy(), &[]) {
-            Ok(worker) => worker,
-            Err(error) => panic!("worker thread should start: {error}"),
-        };
+        let mut worker =
+            match MetadataWorker::start_with(&program.to_string_lossy(), &[], Some(test_setup())) {
+                Ok(worker) => worker,
+                Err(error) => panic!("worker thread should start: {error}"),
+            };
         let mut cache = MetadataCache::default();
         let files = match cache.begin_load(vec![PathBuf::from("notes.txt")], &mut worker) {
             Ok(files) => files,
@@ -495,10 +536,11 @@ mod tests {
     fn disconnected_worker_turns_loading_into_a_swedish_error() {
         let program =
             std::env::temp_dir().join(format!("pw-loupe-stopped-worker-{}", std::process::id()));
-        let mut worker = match MetadataWorker::start_with(&program.to_string_lossy(), &[]) {
-            Ok(worker) => worker,
-            Err(error) => panic!("worker thread should start: {error}"),
-        };
+        let mut worker =
+            match MetadataWorker::start_with(&program.to_string_lossy(), &[], Some(test_setup())) {
+                Ok(worker) => worker,
+                Err(error) => panic!("worker thread should start: {error}"),
+            };
         let mut cache = MetadataCache::default();
         let files = match cache.begin_load(
             vec![PathBuf::from("photo.ARW"), PathBuf::from("notes.txt")],
@@ -527,10 +569,11 @@ mod tests {
     fn ratings_survive_loading_another_folder() {
         let program =
             std::env::temp_dir().join(format!("pw-loupe-preserved-rating-{}", std::process::id()));
-        let mut worker = match MetadataWorker::start_with(&program.to_string_lossy(), &[]) {
-            Ok(worker) => worker,
-            Err(error) => panic!("worker thread should start: {error}"),
-        };
+        let mut worker =
+            match MetadataWorker::start_with(&program.to_string_lossy(), &[], Some(test_setup())) {
+                Ok(worker) => worker,
+                Err(error) => panic!("worker thread should start: {error}"),
+            };
         let mut cache = MetadataCache::default();
         let old_path = std::env::temp_dir().join("pw-loupe-preserved.ARW");
         if let Err(error) = cache.begin_load(vec![old_path.clone()], &mut worker) {
@@ -556,10 +599,11 @@ mod tests {
     fn rating_summary_uses_the_swedish_rating_text() {
         let program =
             std::env::temp_dir().join(format!("pw-loupe-rating-summary-{}", std::process::id()));
-        let mut worker = match MetadataWorker::start_with(&program.to_string_lossy(), &[]) {
-            Ok(worker) => worker,
-            Err(error) => panic!("worker thread should start: {error}"),
-        };
+        let mut worker =
+            match MetadataWorker::start_with(&program.to_string_lossy(), &[], Some(test_setup())) {
+                Ok(worker) => worker,
+                Err(error) => panic!("worker thread should start: {error}"),
+            };
         let mut cache = MetadataCache::default();
         let path = std::env::temp_dir().join("pw-loupe-summary.ARW");
         let files = match cache.begin_load(vec![path.clone()], &mut worker) {
@@ -837,6 +881,44 @@ mod tests {
         assert_eq!(
             write_error_text(WriteError::Other("ExifTool exited unexpectedly".into())),
             "ExifTool exited unexpectedly"
+        );
+    }
+
+    #[test]
+    fn write_error_texts_are_swedish_for_writes_that_were_not_safe() {
+        assert_eq!(
+            write_error_text(WriteError::NotSafe {
+                stage: Stage::ImageCheck,
+                original: OriginalState::Intact,
+                reason: "preview 2 differs".into(),
+            }),
+            "metadata kunde inte skrivas säkert, filen är oförändrad"
+        );
+        let backup = std::env::temp_dir().join("bild.pwbak-0123.jpg");
+        assert_eq!(
+            write_error_text(WriteError::NotSafe {
+                stage: Stage::Replace,
+                original: OriginalState::AtBackup(backup),
+                reason: "access denied".into(),
+            }),
+            "metadata kunde inte skrivas säkert, originalet ligger nu som bild.pwbak-0123.jpg"
+        );
+        assert_eq!(
+            write_error_text(WriteError::NotSafe {
+                stage: Stage::FinalCheck,
+                original: OriginalState::Replaced,
+                reason: "Rating is 2".into(),
+            }),
+            "filen skrevs men slutkontrollen misslyckades, den tidigare versionen finns kvar som \
+             säkerhetskopia"
+        );
+    }
+
+    #[test]
+    fn a_write_without_the_journal_gives_the_swedish_text() {
+        assert_eq!(
+            write_error_text(WriteError::Other(NO_JOURNAL.into())),
+            "skrivloggen kunde inte öppnas"
         );
     }
 

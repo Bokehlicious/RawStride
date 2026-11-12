@@ -680,3 +680,58 @@ fn latin1_iim_is_converted_to_utf8_on_the_first_write() {
     assert_eq!(stored, current);
     let _ = std::fs::remove_dir_all(dir);
 }
+
+/// City is the only value, in XMP and in IIM, with a checksum. Clearing it leaves no XMP, but the
+/// file has a stored checksum, so the plan writes a new one (T93): applied with `-o`, the stored
+/// and the current checksum of the copy are equal and City is gone (§5.2, §12).
+#[test]
+fn clearing_the_only_xmp_value_keeps_the_stored_digest_current() {
+    let mut et = exiftool();
+    let (dir, file) = jpeg("clear-only-value");
+    write(
+        &mut et,
+        &file,
+        &[
+            "-XMP-photoshop:City=Lund",
+            "-IPTC:CodedCharacterSet=UTF8",
+            "-IPTC:City=Lund",
+            "-IPTCDigest=new",
+        ],
+    );
+    let before = read_file(&mut et, &file);
+    assert_eq!(before.state.digest, IimDigest::Matches, "precondition");
+    assert_eq!(
+        get(&before, "photoshop:City"),
+        Some((text("Lund"), Origin::XmpEmbedded)),
+        "precondition"
+    );
+
+    let mut metadata = before.reconciled.metadata.clone();
+    metadata.clear("photoshop:City").unwrap();
+    let plan = make_plan(&metadata, &before.state);
+    for arg in ["-XMP-photoshop:City=", "-IPTC:City=", "-IPTCDigest=new"] {
+        assert!(plan.args.contains(&arg.to_string()), "{arg} in {plan:?}");
+    }
+
+    let copy = dir.join("kopia ä.jpg");
+    let mut args = plan.options.clone();
+    args.extend(plan.args.iter().cloned());
+    args.push("-o".to_string());
+    args.push(copy.to_string_lossy().into_owned());
+    args.push(file.to_string_lossy().into_owned());
+    let out = et.execute(&args).unwrap();
+    assert!(
+        out.contains("1 image files created") && copy.is_file(),
+        "ExifTool did not write {} from {}: {out}",
+        copy.display(),
+        file.display()
+    );
+
+    let (stored, current) = digests(&mut et, &copy);
+    assert_ne!(stored, "-");
+    assert_eq!(stored, current);
+    let after = read_file(&mut et, &copy);
+    assert_eq!(get(&after, "photoshop:City"), None);
+    assert_eq!(after.state.digest, IimDigest::Matches);
+    let _ = std::fs::remove_dir_all(dir);
+}

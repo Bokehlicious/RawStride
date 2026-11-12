@@ -38,7 +38,12 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 
 pub use exiftool::ExifTool;
-pub use worker::{Event as WorkerEvent, MetadataWorker, RequestId, SubmitError};
+pub use worker::{
+    Event as WorkerEvent, MetadataWorker, NO_JOURNAL, RequestId, SubmitError, WriteSetup,
+};
+
+use edit::EditError;
+use safe_write::{OriginalState, Stage};
 
 /// Errors from metadata operations.
 #[derive(Debug)]
@@ -78,6 +83,13 @@ pub enum WriteError {
     NotWritten(String),
     /// Anything else (ExifTool could not start or crashed, I/O); holds the error text.
     Other(String),
+    /// The safe write (ADR 0007 §9) failed at `stage`; `original` says where the original is
+    /// now, `reason` why the step failed (T91).
+    NotSafe {
+        stage: Stage,
+        original: OriginalState,
+        reason: String,
+    },
 }
 
 impl From<Error> for WriteError {
@@ -90,12 +102,61 @@ impl From<Error> for WriteError {
     }
 }
 
+/// The kind of a failed safe edit (T91): a read error keeps its kind as [`From<Error>`] does; a
+/// safe write refused before writing because the target is read-only is [`WriteError::ReadOnly`]
+/// (checked as [`refused_write_error`] does); any other failed safe write is
+/// [`WriteError::NotSafe`]; everything else is [`WriteError::Other`] with the error's text.
+impl From<EditError> for WriteError {
+    fn from(error: EditError) -> Self {
+        match error {
+            EditError::Read(error) => WriteError::from(error),
+            EditError::Write(error) => {
+                let read_only = error.stage == Stage::Precheck
+                    && std::fs::metadata(&error.file)
+                        .is_ok_and(|meta| meta.permissions().readonly());
+                if read_only {
+                    WriteError::ReadOnly
+                } else {
+                    WriteError::NotSafe {
+                        stage: error.stage,
+                        original: error.original,
+                        reason: error.reason,
+                    }
+                }
+            }
+            other @ (EditError::Unsupported(_)
+            | EditError::Value(_)
+            | EditError::Plan(_)
+            | EditError::Template(_)) => WriteError::Other(other.to_string()),
+        }
+    }
+}
+
 impl fmt::Display for WriteError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             WriteError::ReadOnly => write!(f, "the file is read-only"),
             WriteError::NotWritten(m) => write!(f, "ExifTool did not write the file: {m}"),
             WriteError::Other(m) => write!(f, "{m}"),
+            WriteError::NotSafe {
+                stage,
+                original,
+                reason,
+            } => {
+                write!(
+                    f,
+                    "metadata could not be written safely: {stage} failed: {reason}; "
+                )?;
+                match original {
+                    OriginalState::Intact => write!(f, "the original is unchanged"),
+                    OriginalState::AtBackup(backup) => write!(
+                        f,
+                        "the original could not be put back and is now {}",
+                        backup.display()
+                    ),
+                    OriginalState::Replaced => write!(f, "the original has been replaced"),
+                }
+            }
         }
     }
 }
@@ -576,6 +637,162 @@ mod refused_write_tests {
         assert_eq!(
             WriteError::from(Error::ExifTool("ExifTool exited unexpectedly".into())),
             WriteError::Other("ExifTool: ExifTool exited unexpectedly".into())
+        );
+    }
+}
+
+#[cfg(test)]
+mod edit_error_tests {
+    use super::{Error, WriteError};
+    use crate::edit::EditError;
+    use crate::safe_write::{OriginalState, SafeWriteError, Stage};
+    use crate::template::TemplateError;
+    use crate::value::ValueError;
+    use crate::write_plan::PlanError;
+    use std::path::{Path, PathBuf};
+
+    fn temp_file(name: &str) -> PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "pw-metadata-edit-error-{name}-{}.jpg",
+            std::process::id()
+        ));
+        std::fs::write(&path, b"not really a jpeg").unwrap();
+        path
+    }
+
+    fn set_read_only(path: &Path, read_only: bool) {
+        let mut permissions = std::fs::metadata(path).unwrap().permissions();
+        permissions.set_readonly(read_only);
+        std::fs::set_permissions(path, permissions).unwrap();
+    }
+
+    fn write_error(file: &Path, stage: Stage, original: OriginalState) -> EditError {
+        EditError::Write(SafeWriteError {
+            file: file.to_path_buf(),
+            stage,
+            original,
+            reason: "the reason".to_string(),
+        })
+    }
+
+    #[test]
+    fn unsupported_value_plan_and_template_are_other_with_the_error_text() {
+        let cases = [
+            EditError::Unsupported("ratings are not supported for a.txt".to_string()),
+            EditError::Value(ValueError::Empty("xmp:Label".to_string())),
+            EditError::Plan(PlanError::NotEditable("photoshop:Urgency".to_string())),
+            EditError::Template(TemplateError::CannotClear("dc:rights".to_string())),
+        ];
+        for error in cases {
+            let text = error.to_string();
+            assert_eq!(WriteError::from(error), WriteError::Other(text));
+        }
+    }
+
+    #[test]
+    fn a_read_error_keeps_its_kind() {
+        assert_eq!(
+            WriteError::from(EditError::Read(Error::ReadOnly("a.xmp".into()))),
+            WriteError::ReadOnly
+        );
+        assert_eq!(
+            WriteError::from(EditError::Read(Error::NotWritten("0 image files".into()))),
+            WriteError::NotWritten("0 image files".into())
+        );
+        assert_eq!(
+            WriteError::from(EditError::Read(Error::ExifTool("no answer".into()))),
+            WriteError::Other("ExifTool: no answer".into())
+        );
+    }
+
+    #[test]
+    fn a_precheck_failure_on_a_read_only_target_is_read_only() {
+        let path = temp_file("read-only");
+        set_read_only(&path, true);
+
+        let error = WriteError::from(write_error(&path, Stage::Precheck, OriginalState::Intact));
+
+        set_read_only(&path, false);
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(error, WriteError::ReadOnly);
+    }
+
+    #[test]
+    fn any_other_write_failure_is_not_safe() {
+        let writable = temp_file("writable");
+        let read_only = temp_file("later-stage");
+        set_read_only(&read_only, true);
+        let missing = std::env::temp_dir().join(format!(
+            "pw-metadata-edit-error-missing-{}.jpg",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&missing);
+
+        let cases = [
+            (&writable, Stage::Precheck, OriginalState::Intact),
+            (&missing, Stage::Precheck, OriginalState::Intact),
+            (&read_only, Stage::Verify, OriginalState::Intact),
+            (
+                &writable,
+                Stage::Replace,
+                OriginalState::AtBackup(PathBuf::from("a.pwbak-1.jpg")),
+            ),
+            (&writable, Stage::FinalCheck, OriginalState::Replaced),
+        ];
+        let results: Vec<_> = cases
+            .iter()
+            .map(|(path, stage, original)| {
+                let error = write_error(path, *stage, original.clone());
+                (WriteError::from(error), *stage, original.clone())
+            })
+            .collect();
+
+        set_read_only(&read_only, false);
+        let _ = std::fs::remove_file(&writable);
+        let _ = std::fs::remove_file(&read_only);
+        for (error, stage, original) in results {
+            assert_eq!(
+                error,
+                WriteError::NotSafe {
+                    stage,
+                    original,
+                    reason: "the reason".to_string(),
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn not_safe_is_shown_in_english() {
+        let error = WriteError::NotSafe {
+            stage: Stage::ImageCheck,
+            original: OriginalState::Intact,
+            reason: "preview 2 differs".to_string(),
+        };
+        assert_eq!(
+            error.to_string(),
+            "metadata could not be written safely: the image check of the copy failed: preview 2 \
+             differs; the original is unchanged"
+        );
+        let error = WriteError::NotSafe {
+            stage: Stage::Replace,
+            original: OriginalState::AtBackup(PathBuf::from("a.pwbak-1.jpg")),
+            reason: "access denied".to_string(),
+        };
+        assert_eq!(
+            error.to_string(),
+            "metadata could not be written safely: replacing the original failed: access denied; \
+             the original could not be put back and is now a.pwbak-1.jpg"
+        );
+        let error = WriteError::NotSafe {
+            stage: Stage::FinalCheck,
+            original: OriginalState::Replaced,
+            reason: "Rating is 2".to_string(),
+        };
+        assert_eq!(
+            error.to_string(),
+            "metadata could not be written safely: the final check of the written file failed: \
+             Rating is 2; the original has been replaced"
         );
     }
 }

@@ -8,9 +8,25 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use crate::{Field, FieldError, ImportForm, Preview};
+use pw_metadata::edit::EditOptions;
+use pw_metadata::journal::Journal;
+use pw_metadata::safe_write::ImageCheck;
 use pw_metadata::{ExifTool, Iptc};
 
 const REQUEST_CAPACITY: usize = 8;
+
+/// The reason listed for the ingest template when the write journal could not be opened at the
+/// start; nothing is written (T91).
+const NO_JOURNAL_TEXT: &str = "skrivloggen kunde inte öppnas";
+
+/// What the ingest template's safe write needs (ADR 0007 §9.5, T91): the ExifTool program
+/// (`None` for `exiftool` on PATH), the app's write journal (`None` when it could not be opened)
+/// and its image checks.
+struct WriteContext {
+    exiftool_program: Option<String>,
+    journal: Option<Journal>,
+    checks: Box<dyn ImageCheck + Send>,
+}
 
 pub type RequestId = u64;
 
@@ -99,17 +115,31 @@ impl std::fmt::Debug for ImportWorker {
 }
 
 impl ImportWorker {
-    /// Starts the single import worker thread.
-    pub fn start() -> io::Result<Self> {
-        Self::start_inner(None)
+    /// Starts the single import worker thread. The ingest template is written safely with
+    /// `journal` and `checks`; when `journal` is `None` (it could not be opened), every template
+    /// write fails and nothing is written.
+    pub fn start(journal: Option<Journal>, checks: Box<dyn ImageCheck + Send>) -> io::Result<Self> {
+        Self::start_inner(WriteContext {
+            exiftool_program: None,
+            journal,
+            checks,
+        })
     }
 
     /// Starts the worker with a specific ExifTool program, primarily for tests.
-    pub fn start_with_exiftool(program: &str) -> io::Result<Self> {
-        Self::start_inner(Some(program.to_string()))
+    pub fn start_with_exiftool(
+        program: &str,
+        journal: Option<Journal>,
+        checks: Box<dyn ImageCheck + Send>,
+    ) -> io::Result<Self> {
+        Self::start_inner(WriteContext {
+            exiftool_program: Some(program.to_string()),
+            journal,
+            checks,
+        })
     }
 
-    fn start_inner(exiftool_program: Option<String>) -> io::Result<Self> {
+    fn start_inner(write: WriteContext) -> io::Result<Self> {
         let (request_sender, request_receiver) = mpsc::sync_channel(REQUEST_CAPACITY);
         let (event_sender, event_receiver) = mpsc::channel();
         let cancel = Arc::new(AtomicBool::new(false));
@@ -124,7 +154,7 @@ impl ImportWorker {
                     event_sender,
                     worker_cancel,
                     worker_run_gate,
-                    exiftool_program,
+                    write,
                 )
             })?;
 
@@ -208,7 +238,7 @@ fn run(
     events: mpsc::Sender<ImportEvent>,
     cancel: Arc<AtomicBool>,
     run_gate: Arc<Mutex<()>>,
-    exiftool_program: Option<String>,
+    write: WriteContext,
 ) {
     let mut cached_scan: Option<(PathBuf, Arc<Vec<pw_ingest::Shot>>)> = None;
     let mut exiftool: Option<ExifTool> = None;
@@ -228,7 +258,7 @@ fn run(
                     &mut cached_scan,
                     &events,
                     &mut exiftool,
-                    exiftool_program.as_deref(),
+                    &write,
                 )
             }
             Request::Cards { id } => ImportEvent::Cards {
@@ -283,7 +313,7 @@ fn run_import(
     cached_scan: &mut Option<(PathBuf, Arc<Vec<pw_ingest::Shot>>)>,
     events: &mpsc::Sender<ImportEvent>,
     exiftool: &mut Option<ExifTool>,
-    exiftool_program: Option<&str>,
+    write: &WriteContext,
 ) -> ImportEvent {
     let started = Instant::now();
     let validated = match form.validate() {
@@ -352,7 +382,8 @@ fn run_import(
         cancel,
         events,
         exiftool,
-        exiftool_program,
+        exiftool_program: write.exiftool_program.as_deref(),
+        write,
     };
     apply_iptc(
         &plan,
@@ -383,6 +414,7 @@ struct IptcRuntime<'a> {
     events: &'a mpsc::Sender<ImportEvent>,
     exiftool: &'a mut Option<ExifTool>,
     exiftool_program: Option<&'a str>,
+    write: &'a WriteContext,
 }
 
 fn iptc_targets(
@@ -430,11 +462,18 @@ fn apply_iptc(
     }
 
     let targets = iptc_targets(plan, failed, options);
+    let template = iptc.to_template();
     for (index, current) in targets.iter().enumerate() {
         if runtime.cancel.load(Ordering::Relaxed) {
             done.cancelled = true;
             break;
         }
+        // Without the journal nothing may be written (§9.5); listed once, as a failed start.
+        let Some(journal) = runtime.write.journal.as_ref() else {
+            done.iptc_errors
+                .push(format!("{}: {NO_JOURNAL_TEXT}", file_name(current)));
+            break;
+        };
         if runtime.exiftool.is_none() {
             let started = match runtime.exiftool_program {
                 Some(program) => ExifTool::start_with(program, &[]),
@@ -462,7 +501,15 @@ fn apply_iptc(
             total: targets.len(),
             current: current.clone(),
         });
-        if let Err(error) = tool.write_iptc(current, iptc) {
+        // §9.5: the template is written to the verified copy with the safe write.
+        let written = tool.apply_template_safely(
+            current,
+            &template,
+            &EditOptions::default(),
+            &*runtime.write.checks,
+            journal,
+        );
+        if let Err(error) = written {
             done.iptc_errors
                 .push(format!("{}: {error}", file_name(current)));
         }
@@ -478,7 +525,13 @@ fn file_name(path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pw_metadata::safe_write::NoImageCheck;
     use std::fs;
+
+    /// The small baseline JPEG of `pw-thumbcache`, shared as `pw-imagecheck` and `pw-libjpeg` do.
+    #[cfg(windows)]
+    #[path = "../../../../pw-thumbcache/src/jpeg_fixture.rs"]
+    mod jpeg_fixture;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Instant;
 
@@ -540,6 +593,32 @@ mod tests {
         }
     }
 
+    /// A temporary write journal (T91), shared by the tests of this process.
+    fn test_journal() -> Journal {
+        let folder =
+            std::env::temp_dir().join(format!("pw-loupe-import-journal-{}", std::process::id()));
+        Journal::open(&folder)
+            .unwrap_or_else(|error| panic!("could not open {}: {error}", folder.display()))
+    }
+
+    /// The files in `folder` and below, as paths relative to it.
+    fn files_below(folder: &Path) -> Vec<PathBuf> {
+        let mut files = Vec::new();
+        let mut folders = vec![folder.to_path_buf()];
+        while let Some(current) = folders.pop() {
+            for entry in fs::read_dir(&current).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    folders.push(path);
+                } else {
+                    files.push(path.strip_prefix(folder).unwrap().to_path_buf());
+                }
+            }
+        }
+        files.sort();
+        files
+    }
+
     fn next_event(worker: &ImportWorker) -> ImportEvent {
         let deadline = Instant::now() + Duration::from_secs(10);
         loop {
@@ -576,7 +655,7 @@ mod tests {
     fn preview_reports_counts_and_rescan_controls_cache_reuse() {
         let dirs = TempDirs::new("preview-cache");
         dirs.write_image("A001.ARW", b"first image");
-        let mut worker = ImportWorker::start().unwrap();
+        let mut worker = ImportWorker::start(Some(test_journal()), Box::new(NoImageCheck)).unwrap();
 
         let id = worker.preview(dirs.form(""), false).unwrap();
         match next_event(&worker) {
@@ -620,7 +699,7 @@ mod tests {
     fn run_copies_reports_progress_and_summarizes_destination_folders() {
         let dirs = TempDirs::new("run");
         dirs.write_image("A001.ARW", b"image bytes");
-        let mut worker = ImportWorker::start().unwrap();
+        let mut worker = ImportWorker::start(Some(test_journal()), Box::new(NoImageCheck)).unwrap();
         let options = dirs.options("imported");
 
         let id = worker.run(dirs.form("imported")).unwrap();
@@ -673,7 +752,7 @@ mod tests {
     fn subsequent_run_reports_files_already_present() {
         let dirs = TempDirs::new("present");
         dirs.write_image("A001.ARW", b"image bytes");
-        let mut worker = ImportWorker::start().unwrap();
+        let mut worker = ImportWorker::start(Some(test_journal()), Box::new(NoImageCheck)).unwrap();
 
         let first = worker.run(dirs.form("imported")).unwrap();
         let first_done = done_event(&worker, first);
@@ -688,7 +767,7 @@ mod tests {
     fn missing_source_returns_validation_error() {
         let dirs = TempDirs::new("missing");
         let missing = dirs.root.join("missing");
-        let mut worker = ImportWorker::start().unwrap();
+        let mut worker = ImportWorker::start(Some(test_journal()), Box::new(NoImageCheck)).unwrap();
         let mut form = dirs.form("");
         form.source = missing.to_string_lossy().into_owned();
         let id = worker.preview(form, true).unwrap();
@@ -712,7 +791,7 @@ mod tests {
     #[test]
     fn invalid_form_returns_destination_error_from_preview() {
         let dirs = TempDirs::new("invalid-preview");
-        let mut worker = ImportWorker::start().unwrap();
+        let mut worker = ImportWorker::start(Some(test_journal()), Box::new(NoImageCheck)).unwrap();
         let mut form = dirs.form("");
         form.dest.clear();
         let id = worker.preview(form, true).unwrap();
@@ -734,7 +813,7 @@ mod tests {
     fn invalid_run_finishes_with_validation_error_without_copying() {
         let dirs = TempDirs::new("invalid-run");
         dirs.write_image("A001.ARW", b"image bytes");
-        let mut worker = ImportWorker::start().unwrap();
+        let mut worker = ImportWorker::start(Some(test_journal()), Box::new(NoImageCheck)).unwrap();
         let mut form = dirs.form("");
         form.dest.clear();
         let id = worker.run(form).unwrap();
@@ -754,7 +833,12 @@ mod tests {
             .join("missing-exiftool")
             .to_string_lossy()
             .into_owned();
-        let mut worker = ImportWorker::start_with_exiftool(&missing_exiftool).unwrap();
+        let mut worker = ImportWorker::start_with_exiftool(
+            &missing_exiftool,
+            Some(test_journal()),
+            Box::new(NoImageCheck),
+        )
+        .unwrap();
         let id = worker.run(dirs.form("")).unwrap();
 
         let done = done_event(&worker, id);
@@ -772,7 +856,12 @@ mod tests {
             .join("missing-exiftool")
             .to_string_lossy()
             .into_owned();
-        let mut worker = ImportWorker::start_with_exiftool(&missing_exiftool).unwrap();
+        let mut worker = ImportWorker::start_with_exiftool(
+            &missing_exiftool,
+            Some(test_journal()),
+            Box::new(NoImageCheck),
+        )
+        .unwrap();
         let mut form = dirs.form("");
         form.iptc.creator = "Fotograf".to_string();
         let id = worker.run(form).unwrap();
@@ -787,6 +876,84 @@ mod tests {
             done.iptc_errors
         );
         assert!(dirs.dest.join("A001.ARW").exists());
+    }
+
+    #[test]
+    fn without_a_journal_the_template_is_not_written() {
+        let dirs = TempDirs::new("iptc-no-journal");
+        dirs.write_image("A001.jpg", b"image bytes");
+        let missing_exiftool = dirs
+            .root
+            .join("missing-exiftool")
+            .to_string_lossy()
+            .into_owned();
+        let mut worker =
+            ImportWorker::start_with_exiftool(&missing_exiftool, None, Box::new(NoImageCheck))
+                .unwrap();
+        let mut form = dirs.form("");
+        form.iptc.creator = "Fotograf".to_string();
+        let id = worker.run(form).unwrap();
+
+        let done = done_event(&worker, id);
+        assert_eq!(done.copied, 1);
+        assert_eq!(
+            done.iptc_errors,
+            ["A001.jpg: skrivloggen kunde inte öppnas"]
+        );
+        assert_eq!(
+            fs::read(dirs.dest.join("A001.jpg")).unwrap(),
+            b"image bytes"
+        );
+        assert_eq!(files_below(&dirs.dest), [PathBuf::from("A001.jpg")]);
+    }
+
+    /// Needs ExifTool on PATH (the import worker starts `exiftool`); fails with an explanation
+    /// when it is missing (docs/TESTING.md §4.5). The safe write uses Windows file operations.
+    #[cfg(windows)]
+    #[test]
+    fn the_template_is_written_safely_to_an_imported_jpeg() {
+        let mut exiftool = ExifTool::start()
+            .and_then(|mut tool| tool.execute(&["-ver".to_string()]).map(|_| tool))
+            .unwrap_or_else(|error| {
+                panic!(
+                    "ExifTool is required for this test but `exiftool` on PATH does not answer: \
+                     {error}. Install ExifTool (docs/TESTING.md §4.5)."
+                )
+            });
+        let dirs = TempDirs::new("iptc-safe-jpeg");
+        dirs.write_image("A001.jpg", jpeg_fixture::SMALL);
+        let journal_folder = dirs.root.join("journal");
+        let journal = Journal::open(&journal_folder).unwrap();
+        let mut worker = ImportWorker::start(Some(journal), Box::new(NoImageCheck)).unwrap();
+        let mut form = dirs.form("");
+        form.iptc.creator = "Fotograf".to_string();
+        let id = worker.run(form).unwrap();
+
+        let done = done_event(&worker, id);
+        assert_eq!(done.copied, 1);
+        assert!(done.iptc_errors.is_empty(), "{:?}", done.iptc_errors);
+        let image = dirs.dest.join("A001.jpg");
+        let read = exiftool
+            .read_metadata(&image, pw_metadata::iim::Fallback::Windows1252)
+            .unwrap();
+        assert_eq!(
+            read.reconciled
+                .metadata
+                .get("dc:creator")
+                .map(|stored| stored.value.clone()),
+            Some(pw_metadata::value::Value::List(vec![
+                "Fotograf".to_string()
+            ]))
+        );
+        let files = files_below(&dirs.dest);
+        assert_eq!(files, [PathBuf::from("A001.jpg")]);
+        assert!(
+            !files
+                .iter()
+                .any(|file| file.to_string_lossy().contains("pwtmp")),
+            "{files:?}"
+        );
+        assert_eq!(files_below(&journal_folder), Vec::<PathBuf>::new());
     }
 
     #[test]
@@ -862,12 +1029,18 @@ mod tests {
         let cancel = AtomicBool::new(true);
         let mut exiftool = None;
         let (events, _receiver) = mpsc::channel();
+        let write = WriteContext {
+            exiftool_program: None,
+            journal: Some(test_journal()),
+            checks: Box::new(NoImageCheck),
+        };
         let mut runtime = IptcRuntime {
             id: 1,
             cancel: &cancel,
             events: &events,
             exiftool: &mut exiftool,
             exiftool_program: Some("missing-exiftool"),
+            write: &write,
         };
         let mut done = ImportDone {
             copied: 1,
@@ -912,7 +1085,11 @@ mod tests {
             &mut cached_scan,
             &events,
             &mut exiftool,
-            None,
+            &WriteContext {
+                exiftool_program: None,
+                journal: Some(test_journal()),
+                checks: Box::new(NoImageCheck),
+            },
         ) else {
             panic!("run_import did not return Done");
         };
@@ -948,7 +1125,11 @@ mod tests {
             &mut cached_scan,
             &events,
             &mut exiftool,
-            None,
+            &WriteContext {
+                exiftool_program: None,
+                journal: Some(test_journal()),
+                checks: Box::new(NoImageCheck),
+            },
         ) else {
             panic!("run_import did not return Done");
         };
@@ -972,7 +1153,7 @@ mod tests {
         for index in 0..96 {
             dirs.write_image(&format!("A{index:03}.ARW"), &bytes);
         }
-        let mut worker = ImportWorker::start().unwrap();
+        let mut worker = ImportWorker::start(Some(test_journal()), Box::new(NoImageCheck)).unwrap();
         let options = dirs.options("");
         let id = worker.run(dirs.form("")).unwrap();
         worker.cancel();
@@ -1007,7 +1188,7 @@ mod tests {
 
     #[test]
     fn cards_answers_with_its_id() {
-        let mut worker = ImportWorker::start().unwrap();
+        let mut worker = ImportWorker::start(Some(test_journal()), Box::new(NoImageCheck)).unwrap();
         let id = worker.cards().unwrap();
         match next_event(&worker) {
             ImportEvent::Cards { id: event_id, .. } => assert_eq!(event_id, id),
@@ -1019,7 +1200,7 @@ mod tests {
     fn dropping_worker_does_not_wait_for_a_copy() {
         let dirs = TempDirs::new("drop");
         dirs.write_image("A001.ARW", &vec![3; 16 * 1024 * 1024]);
-        let mut worker = ImportWorker::start().unwrap();
+        let mut worker = ImportWorker::start(Some(test_journal()), Box::new(NoImageCheck)).unwrap();
         worker.run(dirs.form("")).unwrap();
 
         let started = Instant::now();

@@ -19,6 +19,7 @@ pw-viewcore = { workspace = true, features = ["native"] }
 pw-render.workspace = true
 pw-raw.workspace = true
 pw-metadata.workspace = true
+pw-imagecheck.workspace = true
 pw-thumbcache.workspace = true
 pw-ingest.workspace = true
 pw-core.workspace = true

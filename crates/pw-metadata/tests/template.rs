@@ -430,6 +430,57 @@ fn clear_removes_city_from_xmp_and_iim() {
     s.remove();
 }
 
+/// Clear of City on a JPEG with IIM and a checksum where City is the only XMP value (no keyword):
+/// no XMP is left, but the write plan writes a new `IPTCDigest` because the file has a stored one
+/// (T93), so the copy check accepts it and the checksum is current (§5.2, §12).
+#[test]
+fn clear_of_the_only_xmp_value_keeps_the_checksum_current() {
+    let mut et = exiftool();
+    let s = Scratch::new("clear-only");
+    let file = s.jpeg();
+    write(
+        &mut et,
+        &file,
+        &[
+            "-XMP-photoshop:City=Göteborg",
+            "-IPTC:CodedCharacterSet=UTF8",
+            "-IPTC:City=Göteborg",
+            "-IPTCDigest=new",
+        ],
+    );
+    assert_eq!(tag(&mut et, &file, "IPTC:City"), "Göteborg", "precondition");
+    assert_eq!(tag(&mut et, &file, "XMP-dc:Subject"), "-", "precondition");
+
+    assert_report(
+        s.apply(
+            &mut et,
+            &file,
+            &one_field("photoshop:City", Mode::Clear, None),
+        ),
+        written(&file),
+    );
+
+    assert_eq!(tag(&mut et, &file, "XMP-photoshop:City"), "-");
+    assert_eq!(tag(&mut et, &file, "IPTC:City"), "-");
+    let stored = tag(&mut et, &file, "Photoshop:IPTCDigest");
+    assert_ne!(stored, "-");
+    assert_eq!(stored, tag(&mut et, &file, "CurrentIPTCDigest"));
+    let after = read(&mut et, &file);
+    assert_eq!(value(&after, "photoshop:City"), None);
+    assert_eq!(after.state.digest, IimDigest::Matches);
+    assert!(
+        !after
+            .state
+            .iim_values
+            .iter()
+            .any(|(xmp_id, _)| xmp_id == "photoshop:City"),
+        "{:?}",
+        after.state.iim_values
+    );
+    s.assert_clean();
+    s.remove();
+}
+
 /// The fake RAW: only its sidecar is written (created), the RAW's bytes are unchanged.
 #[test]
 fn a_raw_gets_only_its_sidecar_written() {

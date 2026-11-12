@@ -13,7 +13,9 @@
 //!   IIM, or when the setting "create IIM" is on. Values are the predicted IIM values
 //!   ([`iim::predict`]), cut to the byte limit; always UTF-8 with 1:90. Existing IIM in another
 //!   encoding is converted on the first write. The checksum is written when IIM and XMP both exist
-//!   after the write, unless an unresolved (`Open`) conflict remains (Q1). Every write also brings
+//!   after the write, and when the plan writes IIM to a file with a stored checksum even if no XMP
+//!   is left (so the stored one never goes out of date, §12), unless an unresolved (`Open`)
+//!   conflict remains (Q1). Every write also brings
 //!   both forms in line (§5.1, §12): unchanged properties whose IIM value won (rule `Iim`) or that
 //!   only IIM held are written to XMP, and those whose XMP value won (rule `Xmp`) to IIM, so the
 //!   new checksum never hands a property back to a stale form.
@@ -247,10 +249,15 @@ pub fn plan(
             }
         }
 
-        // The checksum (§5.2, Q1).
+        // The checksum (§5.2, §12, Q1): written when IIM and XMP both exist after the write, and
+        // also when the plan writes IIM to a file with a stored checksum (`Matches` or `Differs`)
+        // even if no XMP is left, so the stored checksum is never left out of date (T93). An
+        // `Open` conflict only exists without a stored checksum, so the second case never meets
+        // one.
         let iim_after = state.iim_present || writes_iim;
         let xmp_after = writes_xmp_value || has_xmp(metadata);
-        if iim_after && xmp_after {
+        let has_stored_digest = matches!(state.digest, IimDigest::Matches | IimDigest::Differs);
+        if (iim_after && xmp_after) || (writes_iim && has_stored_digest) {
             if kept.is_empty() {
                 out.args.push(NEW_DIGEST.to_string());
             } else {
@@ -1607,13 +1614,14 @@ mod tests {
 
     #[test]
     fn the_digest_needs_xmp_after_the_write() {
-        // Only clears and no XMP value left: IIM without XMP gets no checksum.
+        // Only clears and no XMP value left: IIM without XMP and without a stored checksum gets
+        // no checksum.
         let mut metadata = Metadata::new();
         metadata
             .insert_read("photoshop:City", text("Lund"), Origin::Iim)
             .unwrap();
         metadata.clear("photoshop:City").unwrap();
-        let plan = run(&metadata, &jpeg_with_iim());
+        let plan = run(&metadata, &missing_digest());
         assert_eq!(
             args(&plan),
             [
@@ -1622,5 +1630,88 @@ mod tests {
                 "-IPTC:City=",
             ]
         );
+    }
+
+    /// City read from embedded XMP (the only XMP value) and from IIM, then cleared.
+    fn city_only_cleared() -> Metadata {
+        let mut metadata = Metadata::new();
+        metadata
+            .insert_read("photoshop:City", text("Lund"), Origin::XmpEmbedded)
+            .unwrap();
+        metadata.clear("photoshop:City").unwrap();
+        metadata
+    }
+
+    fn iim_with_city(state: FileState) -> FileState {
+        FileState {
+            iim_values: vec![("photoshop:City".into(), text("Lund"))],
+            ..state
+        }
+    }
+
+    const CITY_CLEARED_WITH_DIGEST: [&str; 4] = [
+        "-XMP-photoshop:City=",
+        "-IPTC:CodedCharacterSet=UTF8",
+        "-IPTC:City=",
+        "-IPTCDigest=new",
+    ];
+
+    #[test]
+    fn a_stored_matching_digest_is_written_again_when_no_xmp_is_left() {
+        let plan = run(&city_only_cleared(), &iim_with_city(jpeg_with_iim()));
+        assert_eq!(args(&plan), CITY_CLEARED_WITH_DIGEST);
+        assert!(plan.notices.is_empty());
+    }
+
+    #[test]
+    fn a_stored_differing_digest_is_written_again_when_no_xmp_is_left() {
+        let state = FileState {
+            digest: IimDigest::Differs,
+            ..iim_with_city(jpeg_with_iim())
+        };
+        let plan = run(&city_only_cleared(), &state);
+        assert_eq!(args(&plan), CITY_CLEARED_WITH_DIGEST);
+        assert!(plan.notices.is_empty());
+    }
+
+    #[test]
+    fn without_a_stored_digest_and_without_xmp_no_digest_is_written() {
+        let plan = run(&city_only_cleared(), &iim_with_city(missing_digest()));
+        assert_eq!(
+            args(&plan),
+            [
+                "-XMP-photoshop:City=",
+                "-IPTC:CodedCharacterSet=UTF8",
+                "-IPTC:City=",
+            ]
+        );
+        assert!(!plan.notices.contains(&WriteNotice::DigestNotWritten));
+        assert!(plan.notices.is_empty());
+    }
+
+    #[test]
+    fn a_tiff_with_a_stored_digest_gets_the_digest_when_no_xmp_is_left() {
+        let state = FileState {
+            kind: FileKind::Tiff,
+            ..iim_with_city(jpeg_with_iim())
+        };
+        let plan = run(&city_only_cleared(), &state);
+        assert_eq!(args(&plan), CITY_CLEARED_WITH_DIGEST);
+        assert!(plan.notices.is_empty());
+    }
+
+    #[test]
+    fn a_plan_without_iim_is_unchanged_with_a_stored_digest() {
+        // Only Rating, in a file whose XMP is otherwise empty and whose IIM is in line: no IIM
+        // is written, and the checksum is written as before (IIM and XMP exist after the write).
+        let mut metadata = Metadata::new();
+        metadata
+            .set("xmp:Rating", Value::Number("3".into()))
+            .unwrap();
+        for state in [jpeg_with_iim(), missing_digest()] {
+            let plan = run(&metadata, &state);
+            assert_eq!(args(&plan), ["-XMP-xmp:Rating=3", "-IPTCDigest=new"]);
+            assert!(plan.notices.is_empty());
+        }
     }
 }

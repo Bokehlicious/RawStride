@@ -15,6 +15,7 @@ use std::time::{Duration, Instant};
 
 use eframe::egui;
 use metadata::MetadataCache;
+use pw_imagecheck::RawImageCheck;
 use pw_loupe::{
     Action, CellState, DEFAULT_THUMBNAIL_SIZE, DialogKey, DialogRequest, Field, Filter,
     GridKeyAction, ImportDialog, ImportDialogState, ImportEvent, ImportForm, ImportWorker,
@@ -30,8 +31,9 @@ use pw_loupe::{
     star_condition_text, star_filter_text, star_glyphs, status_line, step_allowed,
     step_thumbnail_size, tab_action, take_wheel_steps, visible_range, wheel_factor, window_title,
 };
-use pw_metadata::MetadataWorker;
-use pw_metadata::Rating;
+use pw_metadata::edit::EditOptions;
+use pw_metadata::journal::{Journal, Recovered};
+use pw_metadata::{MetadataWorker, Rating, WriteSetup};
 use pw_render::{Textures, view_px};
 use pw_thumbcache::{ThumbWorker, ThumbnailRequest};
 use pw_viewcore::native::NativeBackend;
@@ -48,6 +50,13 @@ const GRID_LABEL_HEIGHT: f32 = 18.0;
 /// The outline and, faint, the fill of a marked cell (ADR 0014 §5.1: the label blue).
 const MARKED_BLUE: egui::Color32 = egui::Color32::from_rgb(0x4c, 0x8d, 0xff);
 const MARKED_FILL: egui::Color32 = egui::Color32::from_rgba_premultiplied(0x0f, 0x1c, 0x33, 0x33);
+/// How long the image check waits for the view core to close the RAW sessions of a file (T91).
+const RELEASE_TIMEOUT: Duration = Duration::from_secs(5);
+/// The title of the message about writes left unfinished at the last exit (T91).
+const RECOVERY_TITLE: &str = "Metadataskrivning avbröts";
+/// The first line of that message.
+const RECOVERY_HEADING: &str =
+    "RawStride avslutades mitt i en metadataskrivning. Kontrollera de här filerna:";
 
 struct Loupe {
     core: ViewCore<NativeBackend>,
@@ -2060,7 +2069,87 @@ impl eframe::App for Loupe {
     }
 }
 
+/// The write journal folder (ADR 0007 §9.5): `%LOCALAPPDATA%\RawStride\journal`.
+fn journal_folder() -> Option<PathBuf> {
+    std::env::var_os("LOCALAPPDATA")
+        .map(|data| PathBuf::from(data).join("RawStride").join("journal"))
+}
+
+/// Opens the write journal and resolves the writes left open at the last exit (§9.5), before any
+/// worker starts. Files that need the user are shown in a message box. `None` when the journal
+/// cannot be opened: RawStride still starts, but writes nothing (T91).
+fn open_journal() -> Option<Journal> {
+    let folder = journal_folder()?;
+    let journal = match Journal::open(&folder) {
+        Ok(journal) => journal,
+        Err(error) => {
+            eprintln!(
+                "pw-loupe: the write journal {} could not be opened: {error}",
+                folder.display()
+            );
+            return None;
+        }
+    };
+    match journal.recover() {
+        Ok(recovered) => {
+            if let Some(text) = recovery_text(&recovered, |path| path.exists()) {
+                let _ = rfd::MessageDialog::new()
+                    .set_level(rfd::MessageLevel::Warning)
+                    .set_title(RECOVERY_TITLE)
+                    .set_description(text)
+                    .set_buttons(rfd::MessageButtons::Ok)
+                    .show();
+            }
+        }
+        Err(error) => {
+            eprintln!(
+                "pw-loupe: the write journal {} could not be read: {error}",
+                folder.display()
+            );
+        }
+    }
+    Some(journal)
+}
+
+/// The message about the writes [`Journal::recover`] could not resolve (`NeedsUser`, `Failed`,
+/// `Unreadable`): one line per entry with the original and, when the backup file exists
+/// (`exists`), the backup. `Cleaned` and `Restored` are not shown; `None` when nothing is left.
+fn recovery_text(recovered: &[Recovered], exists: impl Fn(&Path) -> bool) -> Option<String> {
+    let lines: Vec<String> = recovered
+        .iter()
+        .filter_map(|item| match item {
+            Recovered::Cleaned { .. } | Recovered::Restored { .. } => None,
+            Recovered::NeedsUser { entry } | Recovered::Failed { entry, .. } => {
+                Some(if exists(&entry.backup) {
+                    format!(
+                        "{} (säkerhetskopia: {})",
+                        entry.original.display(),
+                        entry.backup.display()
+                    )
+                } else {
+                    entry.original.display().to_string()
+                })
+            }
+            Recovered::Unreadable { file, .. } => Some(file.display().to_string()),
+        })
+        .collect();
+    if lines.is_empty() {
+        return None;
+    }
+    Some(format!("{RECOVERY_HEADING}\n{}", lines.join("\n")))
+}
+
+/// The image check of the safe write (I9d): it closes the view core's RAW sessions of the file
+/// first (T89), waiting at most [`RELEASE_TIMEOUT`].
+fn image_check(core: &ViewCore<NativeBackend>) -> RawImageCheck {
+    let releaser = core.releaser();
+    RawImageCheck::new(move |path| {
+        let _ = releaser.release(path, RELEASE_TIMEOUT);
+    })
+}
+
 fn run(options: Options) -> Result<(), String> {
+    let journal = open_journal();
     let config = Config {
         core_budget: options.core_mb << 20,
         texture_budget: options.texture_mb << 20,
@@ -2074,8 +2163,14 @@ fn run(options: Options) -> Result<(), String> {
             .with_monitor_profile(monitor_profile.profile.clone()),
         config,
     )?;
-    let metadata_worker = MetadataWorker::start().map_err(|e| e.to_string())?;
-    let import_worker = ImportWorker::start().map_err(|e| e.to_string())?;
+    let setup = journal.clone().map(|journal| WriteSetup {
+        journal,
+        checks: Box::new(image_check(&core)),
+        options: EditOptions::default(),
+    });
+    let metadata_worker = MetadataWorker::start(setup).map_err(|e| e.to_string())?;
+    let import_worker =
+        ImportWorker::start(journal, Box::new(image_check(&core))).map_err(|e| e.to_string())?;
     let thumb_worker = ThumbWorker::start_with_monitor_profile(monitor_profile.profile.clone())
         .map_err(|e| e.to_string())?;
     let native = eframe::NativeOptions {
@@ -2150,9 +2245,108 @@ fn main() -> ExitCode {
 
 #[cfg(test)]
 mod tests {
-    use super::{index_span, label_color, label_pill, resolve_path, resolve_paths};
+    use super::{index_span, label_color, label_pill, recovery_text, resolve_path, resolve_paths};
     use egui::{Color32, Rect, pos2};
+    use pw_metadata::journal::{Entry, Recovered};
     use std::path::{Path, PathBuf};
+
+    fn entry(folder: &Path) -> Entry {
+        Entry {
+            original: folder.join("bild.jpg"),
+            copy: folder.join("bild.pwtmp-1.jpg"),
+            backup: folder.join("bild.pwbak-1.jpg"),
+            original_existed: true,
+        }
+    }
+
+    #[test]
+    fn recovery_lists_a_file_that_needs_the_user_without_a_backup() {
+        let folder = std::env::temp_dir().join("pw-loupe-recovery");
+        let recovered = [Recovered::NeedsUser {
+            entry: entry(&folder),
+        }];
+
+        let text = recovery_text(&recovered, |_| false);
+
+        assert_eq!(
+            text,
+            Some(format!(
+                "RawStride avslutades mitt i en metadataskrivning. Kontrollera de här filerna:\n{}",
+                folder.join("bild.jpg").display()
+            ))
+        );
+    }
+
+    #[test]
+    fn recovery_names_the_backup_when_it_exists() {
+        let folder = std::env::temp_dir().join("pw-loupe-recovery");
+        let backup = folder.join("bild.pwbak-1.jpg");
+        let recovered = [Recovered::NeedsUser {
+            entry: entry(&folder),
+        }];
+
+        let text = recovery_text(&recovered, |path| path == backup);
+
+        assert_eq!(
+            text,
+            Some(format!(
+                "RawStride avslutades mitt i en metadataskrivning. Kontrollera de här \
+                 filerna:\n{} (säkerhetskopia: {})",
+                folder.join("bild.jpg").display(),
+                backup.display()
+            ))
+        );
+    }
+
+    #[test]
+    fn recovery_shows_nothing_for_cleaned_and_restored_entries() {
+        let folder = std::env::temp_dir().join("pw-loupe-recovery");
+        let recovered = [
+            Recovered::Cleaned {
+                entry: entry(&folder),
+                deleted: vec![folder.join("bild.pwtmp-1.jpg")],
+            },
+            Recovered::Restored {
+                entry: entry(&folder),
+                deleted: Vec::new(),
+            },
+        ];
+
+        assert_eq!(recovery_text(&recovered, |_| true), None);
+        assert_eq!(recovery_text(&[], |_| true), None);
+    }
+
+    #[test]
+    fn recovery_lists_failed_and_unreadable_entries_but_not_cleaned_ones() {
+        let folder = std::env::temp_dir().join("pw-loupe-recovery");
+        let journal_file = folder.join("journal").join("0001.json");
+        let recovered = [
+            Recovered::Cleaned {
+                entry: entry(&folder),
+                deleted: Vec::new(),
+            },
+            Recovered::Failed {
+                entry: entry(&folder),
+                error: "access denied".to_string(),
+            },
+            Recovered::Unreadable {
+                file: journal_file.clone(),
+                error: "not JSON".to_string(),
+            },
+        ];
+
+        let text = recovery_text(&recovered, |_| false);
+
+        assert_eq!(
+            text,
+            Some(format!(
+                "RawStride avslutades mitt i en metadataskrivning. Kontrollera de här \
+                 filerna:\n{}\n{}",
+                folder.join("bild.jpg").display(),
+                journal_file.display()
+            ))
+        );
+    }
 
     #[test]
     fn a_relative_path_is_resolved_from_the_current_folder_and_an_absolute_one_is_kept() {
