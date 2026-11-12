@@ -2866,6 +2866,7 @@ leaves the stored `IPTCDigest` out of date (`Validate`: `IPTCDigest is not curre
 | I10l | T105 | The editor window in RawStride, saved through the worker | §9 | after T103 and T104 |
 | I10m | T106 | The settings window; the settings used by ratings, the editor, the panel and the import | §5.2, §5.4 | after T98, T99 and T101 |
 | I10n | T107 | One metadata window locked to its image, opened with `M`: the 22 fields edited directly with OK and Avbryt, the conflicts, warnings, the other metadata and the notices (D16; replaces the panel of T103 and the window of T105) | §5.1, §6.2, §9 | now; not with T106 |
+| I10o | T108 | Nyckelord and Fotograf on one line separated by commas; the reason "filen är öppen i ett annat program" when a write is refused because another program holds the file (owner's check of T107) | §5.1, §9 | now |
 | I11 | – | PLUS fields as fixed choice lists | §11, Q9 | **after the PLUS controlled vocabulary is read** (§16.4) |
 | I12 | – | Real-file tests with the owner's level-C samples | §12, Q11 | when the owner provides the samples |
 | I13 | – | Documentation after milestone 8 | – | last |
@@ -4991,6 +4992,57 @@ leaves the stored `IPTCDigest` out of date (`Validate`: `IPTCDigest is not curre
   `D:\PhotoWorkflowData\Konflikttest\konflikt-stad.jpg`; Avbryt drops the edits; Escape with
   edits asks first.
 
+### T108. ADR 0007 I10o: keywords and creator on one line, the reason of a refused write (owner's check of T107) — Open
+
+- **Can start now** (T106 and T107 are committed). Nothing else is open in these files.
+- **Crates:** `pw-loupe`, `pw-metadata`.
+- **Files:** `crates/pw-loupe/src/editor.rs`; `crates/pw-loupe/src/metadata.rs` (`write_error_text`
+  and its tests only); `crates/pw-metadata/src/lib.rs` (`WriteError` and `From<EditError>`);
+  `crates/pw-metadata/src/safe_write.rs` and `crates/pw-metadata/src/fileops.rs` (only if the
+  refusal must be carried as a kind, point 2); `crates/pw-metadata/tests/edit.rs` (the new test);
+  `docs/test-inventory.md`.
+- **Why:** the owner's hand check of T107 on 2026-11-12:
+  - Nyckelord shows one keyword per line; the owner wants them on one line separated by commas
+    ("fågel, fåglar, test, inte bra, slaguggla"), as in other photo programs. Fotograf shall
+    likewise be one line, like E-post.
+  - A write to a JPEG that Photo Mechanic held open failed with "Kunde inte spara metadata för
+    konflikt-stad.jpg: metadata kunde inte skrivas säkert, filen är oförändrad". The safe write
+    refused rightly at its precheck (`Refusal::Locked`, "the file is open in another program"),
+    but the message drops the reason, so the user cannot know what to do.
+- **What:**
+  1. **One line with commas** (`editor.rs`): `EditorField::Keywords` and `EditorField::Creator`
+     are no longer `multiline()`. A list value is shown as its entries joined with `", "`; the
+     text of a list field is split at `,`, each part trimmed, empty parts dropped (`"sol, hav ,,
+     "` gives `["sol", "hav"]`; only spaces and commas is `Clear`). A keyword or name that
+     itself holds a comma cannot be entered (accepted by the owner's choice; say in the
+     hand-over if the read shows one, which is then split when the field is changed). The
+     comparison with the read text (`start_text`) uses the same joining, so an unchanged field
+     gives no edit.
+  2. **The reason of a refused write:** a safe write refused at its precheck because another
+     program holds the file open gives `WriteError::Locked` (new variant, as `ReadOnly` is for a
+     read-only file), decided from the refusal's kind, **not** by comparing the English reason
+     text (carry the kind on `SafeWriteError` or check with `fileops` as `From<EditError>` does
+     for read-only; say which in the hand-over). It covers rating writes and editor writes alike.
+     `write_error_text` gives "filen är öppen i ett annat program", so the window shows "Kunde
+     inte spara metadata för <fil>: filen är öppen i ett annat program" and a rating "Kunde inte
+     spara betyget för <fil>: filen är öppen i ett annat program". Every other refusal keeps its
+     text.
+- **Rules:** rules 3–7 and 10–13. No `Cargo.toml` change (holding a file open in the test uses
+  `std::os::windows::fs::OpenOptionsExt::share_mode`).
+- **Tests to add / change:** `editor.rs`: the text of a read list (`"sol, hav"`), splitting with
+  spaces and empty parts, only commas as `Clear`, an unchanged list gives no edit, `multiline()`
+  false for both fields (the existing tests that use `"\n"` rewritten; say which);
+  `metadata.rs`: `write_error_text(WriteError::Locked)`; `pw-metadata`: `From<EditError>` gives
+  `Locked` for the locked refusal and `NotSafe` for another precheck refusal, and an integration
+  test in `tests/edit.rs` (ExifTool required, Windows) that writes edits to a JPEG held open
+  without delete sharing and gets `Locked` with the file unchanged.
+- **Done when:** `.\tools\check.ps1` is all OK; `docs/test-inventory.md` is updated;
+  `git diff --stat` shows only the files above. The owner checks by hand in RawStride: Nyckelord
+  and Fotograf are one line each with commas; keywords typed with commas are read back as
+  separate keywords (ExifTool or Photo Mechanic); `OK` on an image open in Photo Mechanic shows
+  "… filen är öppen i ett annat program"; and the conflict step of T107 (the reviewer recreates
+  the conflict file).
+
 ### T7. Format the files that `cargo fmt --check` reports — Done
 
 - **Crates:** `photoworkflow` (`src-tauri`), `preview-bench` (`tools/preview-bench`).
@@ -5512,3 +5564,4 @@ and reviewer:
 | 2026-11-12 | T107 | Reviewed, waits for the owner | Reviewer: the code matches the task (modal window on `M`, the backdrop takes clicks and wheel, every key stops at the window, drops wait, read at once and one in flight, stale results dropped, OK/Avbryt/Escape as D16, "Sparat." kept with notices since the refill comes before the change check, other metadata without the 19 field properties, open conflicts only as choices); `check.ps1` all OK, 1061 passed, 43 ignored, 0 failed; clippy clean. Committed; stays Ready for review until the owner's hand checks of T107 (which also cover T103 and T105) |
 | 2026-11-12 | T106 | Ready for review | (Agent) `main.rs`: settings loaded at start with `load_settings(settings_path())` (each problem `eprintln!`; without LOCALAPPDATA the defaults and one log line), their `edit_options()` in `WriteSetup`, in each import and as `create_iim` for the metadata window's warnings; button "Inställningar" after "Importera…" opens the window (check box, small text, drop-down, Spara/Avbryt; not while the metadata window is open, and `M` does nothing while it is open); "Spara" applies the settings, sends `set_options` (retried next frame on a full queue) and saves; a failed save shows "Inställningarna kunde inte sparas: <fel>" in a warning box and the settings still apply. Texts from `settings_text`, `settings_save_error_text`, `fallback_text`/`fallback_from_text` in `main.rs` (rule 13). `metadata.rs` unchanged: since D16 there is no panel cache, the window reads its image each time it opens. `import_worker.rs`: `ImportWorker::run(form, options)`, used by `apply_template_safely` (existing calls pass `EditOptions::default()`; `run_import` takes an `ImportRun` for clippy's argument limit). Tests: 1 ExifTool import test, 2 in `main.rs`. `check.ps1` all OK, 1064 passed, 0 failed, 43 ignored in 54 programs |
 | 2026-11-12 | T106 | Reviewed, waits for the owner | Reviewer: the code matches the task (settings read at start with problems logged, their options in `WriteSetup`, in each import and in the metadata window's warnings; the window "Inställningar" with the exact texts, "Spara" applies at once, sends `set_options` (kept for the next frame when the queue is full) and saves, a save error shown as "Inställningarna kunde inte sparas: <fel>"; the metadata window cannot open while the settings window is open and reads its image when it opens, so no read with old settings is kept and `metadata.rs` needed no change); `check.ps1` all OK, 1064 passed, 43 ignored, 0 failed; clippy clean. Committed; stays Ready for review until the owner's hand checks |
+| 2026-11-12 | T107, T108 | Owner's check / Open | Owner's hand check of T107: Nyckelord shown one per line, the owner wants one line with commas, and Fotograf one line like E-post; a conflict choice on a JPEG open in Photo Mechanic failed with "filen är oförändrad" and no reason. Reviewer reproduced it: the safe write refuses at its precheck (`Refusal::Locked`) and `write_error_text` drops the reason; the same write succeeds when the file is not open. Added T108 (I10o). T107 stays Ready for review until the rest of its hand check |
