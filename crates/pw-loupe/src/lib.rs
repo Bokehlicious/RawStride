@@ -24,7 +24,7 @@ use std::path::{Path, PathBuf};
 use pw_viewcore::{DecodeError, Frame, Source, Status, Zoom};
 
 pub use browse::LoupeMove;
-pub use editor::{EditorField, EditorForm, OpenConflict, notice_text};
+pub use editor::{EditorField, EditorForm, EditorText, OpenConflict, editor_text, notice_text};
 pub use filter::{
     Filter, LABEL_CHOICES, LabelChoice, LabelFilter, STAR_CONDITIONS, STAR_FILTERS, StarCondition,
     StarFilter, label_choice_text, label_filter_text, matches, nearest_visible,
@@ -178,6 +178,8 @@ pub enum Action {
     ToggleMode,
     /// M: show or hide the info panel, in the loupe and the contact sheet (ADR 0007 I10j, D15).
     ToggleMetadata,
+    /// E: open the editor of the info panel's image (ADR 0007 I10l, D12, D15).
+    EditMetadata,
 }
 
 /// Whether a loupe action is allowed for this key event (ADR 0009 §13).
@@ -207,6 +209,7 @@ pub fn key_action(key: egui::Key, ctrl: bool, alt: bool) -> Option<Action> {
         K::I => Action::ToggleInfo,
         K::R => Action::ToggleMode,
         K::M => Action::ToggleMetadata,
+        K::E => Action::EditMetadata,
         _ => return None,
     })
 }
@@ -558,6 +561,17 @@ mod tests {
         // M is not a key of the contact sheet or of the loupe's way back to it.
         assert_eq!(grid_key_action(K::M, false, false, false), None);
         assert_eq!(loupe_key_action(K::M, false, false), None);
+    }
+
+    #[test]
+    fn e_opens_the_editor_without_ctrl_or_alt() {
+        use egui::Key as K;
+        assert_eq!(key_action(K::E, false, false), Some(Action::EditMetadata));
+        assert_eq!(key_action(K::E, true, false), None);
+        assert_eq!(key_action(K::E, false, true), None);
+        // E is not a key of the contact sheet or of the loupe's way back to it.
+        assert_eq!(grid_key_action(K::E, false, false, false), None);
+        assert_eq!(loupe_key_action(K::E, false, false), None);
     }
 
     #[test]

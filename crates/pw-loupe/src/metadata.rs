@@ -5,10 +5,13 @@ use std::sync::mpsc::TryRecvError;
 use std::time::{Duration, Instant};
 
 use pw_loupe::{
-    RatingKey, RatingRefused, RatingStore, RatingWriter, UNSUPPORTED_TEXT, status_text,
+    EditorText, RatingKey, RatingRefused, RatingStore, RatingWriter, UNSUPPORTED_TEXT, editor_text,
+    status_text,
 };
+use pw_metadata::edit::Edit;
 use pw_metadata::read::MetadataRead;
 use pw_metadata::safe_write::OriginalState;
+use pw_metadata::write_plan::WriteNotice;
 use pw_metadata::{
     EXIFTOOL_TOO_OLD, MIN_EXIFTOOL_VERSION, MetadataWorker, NO_JOURNAL, Rating, RequestId,
     SubmitError, WorkerEvent, WriteError, supports_rating,
@@ -20,6 +23,9 @@ pub(crate) trait MetadataSubmit: RatingWriter {
     /// All metadata of one image, for the info panel (T98, T103).
     fn read_metadata(&mut self, image: PathBuf) -> Result<RequestId, SubmitError>;
 
+    /// The editor's edits of one image (T98, T105).
+    fn write_edits(&mut self, image: PathBuf, edits: Vec<Edit>) -> Result<RequestId, SubmitError>;
+
     fn try_recv(&mut self) -> Result<WorkerEvent, TryRecvError>;
 }
 
@@ -30,6 +36,10 @@ impl MetadataSubmit for MetadataWorker {
 
     fn read_metadata(&mut self, image: PathBuf) -> Result<RequestId, SubmitError> {
         MetadataWorker::read_metadata(self, image)
+    }
+
+    fn write_edits(&mut self, image: PathBuf, edits: Vec<Edit>) -> Result<RequestId, SubmitError> {
+        MetadataWorker::write_edits(self, image, edits)
     }
 
     fn try_recv(&mut self) -> Result<WorkerEvent, TryRecvError> {
@@ -96,6 +106,37 @@ impl PanelRead {
     }
 }
 
+/// What the editor window learns about its write (ADR 0007 I10l, D12, T105).
+#[derive(Debug, PartialEq)]
+pub(crate) enum EditorEvent {
+    /// The write of `path` succeeded; a new read of it is asked for.
+    Saved {
+        path: PathBuf,
+        notices: Vec<WriteNotice>,
+    },
+    /// The write of `path` failed; `message` is the text the window shows.
+    Failed { path: PathBuf, message: String },
+    /// The new read of `path` after a write that succeeded.
+    Reloaded {
+        path: PathBuf,
+        result: Result<MetadataRead, String>,
+    },
+}
+
+/// The editor's write and the read after it (T105). One write at a time: the window is read-only
+/// while it runs.
+#[derive(Default)]
+struct EditorSave {
+    /// The write in flight.
+    writing: Option<(RequestId, PathBuf)>,
+    /// The image to read again after a write, while the read waits to be sent (queue full).
+    reload: Option<PathBuf>,
+    /// The read in flight after a write.
+    reading: Option<(RequestId, PathBuf)>,
+    /// What happened since the window last asked.
+    events: Vec<EditorEvent>,
+}
+
 #[derive(Default)]
 pub(crate) struct MetadataCache {
     images: HashMap<PathBuf, ImageMetadata>,
@@ -105,6 +146,7 @@ pub(crate) struct MetadataCache {
     read_error: Option<String>,
     ratings: RatingStore,
     panel: PanelRead,
+    editor: EditorSave,
 }
 
 impl MetadataCache {
@@ -164,6 +206,7 @@ impl MetadataCache {
         let mut failures = Vec::new();
         self.drain(|| worker.try_recv(), &mut failures);
         self.retry_pending_read(worker);
+        self.send_editor_reload(worker);
         failures.extend(self.ratings.pump(worker));
         failures
     }
@@ -208,8 +251,22 @@ impl MetadataCache {
                     failures.extend(self.ratings.fail_sent());
                     // The panel's read in flight can never come back either.
                     if self.panel.in_flight.take().is_some() && self.panel.image.is_some() {
-                        self.panel.result = Some(Err(message));
+                        self.panel.result = Some(Err(message.clone()));
                         self.panel.needs_read = false;
+                    }
+                    // Nor can the editor's write or the read after it.
+                    if let Some((_, path)) = self.editor.writing.take() {
+                        let message = save_failed_text(&path, message.clone());
+                        self.editor
+                            .events
+                            .push(EditorEvent::Failed { path, message });
+                    }
+                    let reload = self.editor.reading.take().map(|(_, path)| path);
+                    if let Some(path) = reload.or_else(|| self.editor.reload.take()) {
+                        self.editor.events.push(EditorEvent::Reloaded {
+                            path,
+                            result: Err(message),
+                        });
                     }
                     return;
                 }
@@ -369,6 +426,65 @@ impl MetadataCache {
         }
     }
 
+    /// Sends the editor's edits of `path` (absolute) to the worker (T105). An error is the text
+    /// the window shows: the write could not be sent. Nothing is sent while a write runs.
+    pub fn save_edits(
+        &mut self,
+        path: &Path,
+        edits: Vec<Edit>,
+        worker: &mut impl MetadataSubmit,
+    ) -> Result<(), String> {
+        if self.editor.writing.is_some() {
+            return Ok(());
+        }
+        match worker.write_edits(path.to_path_buf(), edits) {
+            Ok(id) => {
+                self.editor.writing = Some((id, path.to_path_buf()));
+                Ok(())
+            }
+            Err(error) => Err(save_failed_text(path, submit_error(error))),
+        }
+    }
+
+    /// Whether the editor's write is in flight.
+    pub fn editor_saving(&self) -> bool {
+        self.editor.writing.is_some()
+    }
+
+    /// Whether the read after the editor's write is waiting or in flight.
+    pub fn editor_reloading(&self) -> bool {
+        self.editor.reload.is_some() || self.editor.reading.is_some()
+    }
+
+    /// What happened to the editor's write since the last call.
+    pub fn take_editor_events(&mut self) -> Vec<EditorEvent> {
+        std::mem::take(&mut self.editor.events)
+    }
+
+    /// Sends the read after an editor write that succeeded, once the queue takes it.
+    fn send_editor_reload(&mut self, worker: &mut impl MetadataSubmit) {
+        if self.editor.reading.is_some() {
+            return;
+        }
+        let Some(path) = self.editor.reload.clone() else {
+            return;
+        };
+        match worker.read_metadata(path.clone()) {
+            Ok(id) => {
+                self.editor.reading = Some((id, path));
+                self.editor.reload = None;
+            }
+            Err(SubmitError::QueueFull) => {}
+            Err(error) => {
+                self.editor.reload = None;
+                self.editor.events.push(EditorEvent::Reloaded {
+                    path,
+                    result: Err(submit_error(error)),
+                });
+            }
+        }
+    }
+
     /// RawStride wrote to `path`: the panel reads it again if it is the panel's image. The values
     /// read before stay shown until the new ones come back.
     fn panel_written(&mut self, path: &Path) {
@@ -411,6 +527,18 @@ impl MetadataCache {
                 }
             }
             WorkerEvent::RatingsRead { .. } => {}
+            WorkerEvent::MetadataRead { id, path, result }
+                if self
+                    .editor
+                    .reading
+                    .as_ref()
+                    .is_some_and(|(reading, _)| *reading == id) =>
+            {
+                self.editor.reading = None;
+                self.editor
+                    .events
+                    .push(EditorEvent::Reloaded { path, result });
+            }
             WorkerEvent::MetadataRead { id, path, result } => {
                 if self.panel.in_flight == Some(id) {
                     self.panel.in_flight = None;
@@ -420,22 +548,46 @@ impl MetadataCache {
                     }
                 }
             }
-            // The editor (T105) sends the writes; the panel reads the image again after one.
-            WorkerEvent::EditsWritten { path, .. } => self.panel_written(&path),
+            // The editor's write (T105): the panel reads the image again after it, and after one
+            // that succeeded the editor's form is filled from a new read.
+            WorkerEvent::EditsWritten { id, path, result } => {
+                self.panel_written(&path);
+                if self
+                    .editor
+                    .writing
+                    .as_ref()
+                    .is_some_and(|(writing, _)| *writing == id)
+                {
+                    self.editor.writing = None;
+                    match result {
+                        Ok(report) => {
+                            self.editor.reload = Some(path.clone());
+                            self.editor.events.push(EditorEvent::Saved {
+                                path,
+                                notices: report.notices,
+                            });
+                        }
+                        Err(error) => {
+                            let message = save_failed_text(&path, write_error_text(error));
+                            self.editor
+                                .events
+                                .push(EditorEvent::Failed { path, message });
+                        }
+                    }
+                }
+            }
         }
     }
 }
 
-/// The longest wait for rating writes when the program exits (ADR 0013 Q6).
+/// The longest wait for rating writes and the editor's write when the program exits (ADR 0013
+/// Q6, T105).
 pub(crate) const EXIT_WAIT_LIMIT: Duration = Duration::from_secs(5);
 /// The pause between two polls while waiting at exit.
 pub(crate) const EXIT_POLL_INTERVAL: Duration = Duration::from_millis(20);
 /// The most lines listed in the exit message box before "… och {n} till".
 const UNSAVED_LIST_LIMIT: usize = 20;
-/// Title of the message box listing ratings that were not saved at exit.
-pub(crate) const UNSAVED_TITLE: &str = "Betyg som inte sparades";
-
-/// What is left after waiting for the rating writes at exit.
+/// What is left after waiting for the rating writes and the editor's write at exit.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub(crate) struct UnsavedRatings {
     /// Messages for writes that failed during the wait; each names its file.
@@ -455,8 +607,9 @@ impl UnsavedRatings {
     }
 }
 
-/// Keeps sending and confirming rating writes until none is pending or `EXIT_WAIT_LIMIT` has
-/// passed. The clock and the sleep are passed in so the wait can be tested without real time.
+/// Keeps sending and confirming rating writes until none is pending, and the editor's write is
+/// done, or `EXIT_WAIT_LIMIT` has passed (T44, T105). The clock and the sleep are passed in so
+/// the wait can be tested without real time.
 pub(crate) fn finish_pending_writes(
     cache: &mut MetadataCache,
     worker: &mut impl MetadataSubmit,
@@ -464,28 +617,30 @@ pub(crate) fn finish_pending_writes(
     mut sleep: impl FnMut(Duration),
 ) -> UnsavedRatings {
     let mut unsaved = UnsavedRatings::default();
-    if cache.pending_writes() == 0 {
+    let waiting = |cache: &MetadataCache| cache.pending_writes() > 0 || cache.editor_saving();
+    if !waiting(cache) {
         return unsaved;
     }
     let start = now();
     loop {
         unsaved.failed.extend(cache.poll(worker));
-        if cache.pending_writes() == 0 || now().saturating_duration_since(start) >= EXIT_WAIT_LIMIT
-        {
+        for event in cache.take_editor_events() {
+            if let EditorEvent::Failed { message, .. } = event {
+                unsaved.failed.push(message);
+            }
+        }
+        if !waiting(cache) || now().saturating_duration_since(start) >= EXIT_WAIT_LIMIT {
             break;
         }
         sleep(EXIT_POLL_INTERVAL);
     }
+    let editor = cache.editor.writing.as_ref().map(|(_, path)| path);
     unsaved.pending = cache
         .ratings
         .pending_paths()
         .iter()
-        .map(|path| {
-            path.file_name()
-                .unwrap_or(path.as_os_str())
-                .to_string_lossy()
-                .into_owned()
-        })
+        .chain(editor)
+        .map(|path| file_name(path))
         .collect();
     unsaved
 }
@@ -544,6 +699,22 @@ fn write_error_text(error: WriteError) -> String {
     }
 }
 
+/// The file name of `path`, or the whole path when it has none.
+fn file_name(path: &Path) -> String {
+    path.file_name()
+        .unwrap_or(path.as_os_str())
+        .to_string_lossy()
+        .into_owned()
+}
+
+/// "Kunde inte spara metadata för <fil>: <skäl>" (T105).
+fn save_failed_text(path: &Path, reason: String) -> String {
+    editor_text(&EditorText::SaveFailed {
+        file: file_name(path),
+        reason,
+    })
+}
+
 fn submit_error(error: SubmitError) -> String {
     match error {
         SubmitError::QueueFull => "metadatakön är full".into(),
@@ -586,6 +757,9 @@ mod tests {
         /// The images of every `read_metadata` call, with the id each was given.
         metadata_reads: Vec<(RequestId, PathBuf)>,
         next_metadata_id: RequestId,
+        /// The image and edits of every `write_edits` call, with the id each was given.
+        edits_writes: Vec<(RequestId, PathBuf, Vec<Edit>)>,
+        next_edits_id: RequestId,
     }
 
     impl FakeSubmit {
@@ -600,6 +774,8 @@ mod tests {
                 write_result: None,
                 metadata_reads: Vec::new(),
                 next_metadata_id: 500,
+                edits_writes: Vec::new(),
+                next_edits_id: 900,
             }
         }
     }
@@ -640,6 +816,18 @@ mod tests {
             let id = self.next_metadata_id;
             self.next_metadata_id += 1;
             self.metadata_reads.push((id, image));
+            Ok(id)
+        }
+
+        fn write_edits(
+            &mut self,
+            image: PathBuf,
+            edits: Vec<Edit>,
+        ) -> Result<RequestId, SubmitError> {
+            self.operations.push("write_edits");
+            let id = self.next_edits_id;
+            self.next_edits_id += 1;
+            self.edits_writes.push((id, image, edits));
             Ok(id)
         }
 
@@ -1508,5 +1696,259 @@ mod tests {
             panic!("current directory should be available: {error}");
         }
         assert_eq!(cache.panel_state(&image), PanelState::Loading);
+    }
+
+    // --- the editor's write (ADR 0007 I10l, D12, T105) ---
+
+    /// The edits of a form of `empty_read` with a title typed in.
+    fn title_edits() -> Vec<Edit> {
+        let mut form = pw_loupe::EditorForm::from_read(&empty_read());
+        match form.text_mut(pw_loupe::EditorField::Title) {
+            Some(text) => *text = "Solnedgång".to_owned(),
+            None => panic!("the form has a title field"),
+        }
+        match form.edits() {
+            Ok(edits) => edits,
+            Err(errors) => panic!("a title has no field error: {errors:?}"),
+        }
+    }
+
+    fn edits_written(
+        id: RequestId,
+        path: &Path,
+        result: Result<pw_metadata::edit::EditReport, WriteError>,
+    ) -> WorkerEvent {
+        WorkerEvent::EditsWritten {
+            id,
+            path: path.to_path_buf(),
+            result,
+        }
+    }
+
+    fn report(notices: Vec<WriteNotice>) -> pw_metadata::edit::EditReport {
+        pw_metadata::edit::EditReport {
+            report: pw_metadata::safe_write::WriteReport::Unchanged,
+            notices,
+        }
+    }
+
+    #[test]
+    fn an_edits_request_is_sent_with_the_forms_edits() {
+        let mut worker = FakeSubmit::new([]);
+        let mut cache = MetadataCache::default();
+        let image = panel_path("pw-loupe-editor-send.jpg");
+        let edits = title_edits();
+        assert!(!edits.is_empty());
+
+        assert_eq!(cache.save_edits(&image, edits.clone(), &mut worker), Ok(()));
+
+        assert_eq!(worker.edits_writes, [(900, image.clone(), edits.clone())]);
+        assert!(cache.editor_saving());
+        // A second save while the write runs sends nothing.
+        assert_eq!(cache.save_edits(&image, edits, &mut worker), Ok(()));
+        assert_eq!(worker.edits_writes.len(), 1);
+        assert!(cache.take_editor_events().is_empty());
+    }
+
+    #[test]
+    fn edits_written_ok_asks_for_a_new_read_of_the_image() {
+        let mut worker = FakeSubmit::new([]);
+        let mut cache = MetadataCache::default();
+        let image = panel_path("pw-loupe-editor-ok.DNG");
+        assert_eq!(cache.save_edits(&image, title_edits(), &mut worker), Ok(()));
+        worker.events.push_back(edits_written(
+            900,
+            &image,
+            Ok(report(vec![WriteNotice::DigestNotWritten])),
+        ));
+
+        assert!(cache.poll(&mut worker).is_empty());
+
+        assert!(!cache.editor_saving());
+        assert_eq!(
+            cache.take_editor_events(),
+            [EditorEvent::Saved {
+                path: image.clone(),
+                notices: vec![WriteNotice::DigestNotWritten],
+            }]
+        );
+        assert_eq!(worker.metadata_reads, [(500, image.clone())]);
+        assert!(cache.editor_reloading());
+
+        // The new read fills the form again.
+        worker
+            .events
+            .push_back(metadata_read(500, &image, Ok(empty_read())));
+        assert!(cache.poll(&mut worker).is_empty());
+        assert!(!cache.editor_reloading());
+        assert_eq!(
+            cache.take_editor_events(),
+            [EditorEvent::Reloaded {
+                path: image,
+                result: Ok(empty_read()),
+            }]
+        );
+    }
+
+    #[test]
+    fn edits_written_ok_also_renews_the_panels_read_of_the_image() {
+        let mut worker = FakeSubmit::new([]);
+        let mut cache = MetadataCache::default();
+        let image = panel_path("pw-loupe-editor-panel.jpg");
+        let start = Instant::now();
+        let t = start + PANEL_READ_DELAY;
+        cache.panel_request(Some(&image), true, start, &mut worker);
+        cache.panel_request(Some(&image), true, t, &mut worker);
+        worker
+            .events
+            .push_back(metadata_read(500, &image, Ok(empty_read())));
+        assert!(cache.poll(&mut worker).is_empty());
+        assert_eq!(cache.save_edits(&image, title_edits(), &mut worker), Ok(()));
+        worker
+            .events
+            .push_back(edits_written(900, &image, Ok(report(Vec::new()))));
+
+        assert!(cache.poll(&mut worker).is_empty());
+        cache.panel_request(Some(&image), true, t, &mut worker);
+
+        // One read for the editor's form, one for the panel.
+        assert_eq!(
+            worker.metadata_reads,
+            [
+                (500, image.clone()),
+                (501, image.clone()),
+                (502, image.clone())
+            ]
+        );
+    }
+
+    #[test]
+    fn edits_written_err_clears_the_pending_state_and_gives_the_swedish_text() {
+        let mut worker = FakeSubmit::new([]);
+        let mut cache = MetadataCache::default();
+        let image = panel_path("pw-loupe-editor-err.ARW");
+        assert_eq!(cache.save_edits(&image, title_edits(), &mut worker), Ok(()));
+        worker
+            .events
+            .push_back(edits_written(900, &image, Err(WriteError::ReadOnly)));
+
+        assert!(cache.poll(&mut worker).is_empty());
+
+        assert!(!cache.editor_saving());
+        assert!(!cache.editor_reloading());
+        assert_eq!(
+            cache.take_editor_events(),
+            [EditorEvent::Failed {
+                path: image,
+                message: "Kunde inte spara metadata för pw-loupe-editor-err.ARW: filen är \
+                          skrivskyddad"
+                    .to_owned(),
+            }]
+        );
+        assert!(worker.metadata_reads.is_empty(), "nothing is read again");
+    }
+
+    #[test]
+    fn an_edits_result_with_another_id_is_not_the_editors() {
+        let mut worker = FakeSubmit::new([]);
+        let mut cache = MetadataCache::default();
+        let image = panel_path("pw-loupe-editor-other-id.jpg");
+        assert_eq!(cache.save_edits(&image, title_edits(), &mut worker), Ok(()));
+        worker
+            .events
+            .push_back(edits_written(17, &image, Err(WriteError::ReadOnly)));
+
+        assert!(cache.poll(&mut worker).is_empty());
+
+        assert!(cache.editor_saving());
+        assert!(cache.take_editor_events().is_empty());
+    }
+
+    #[test]
+    fn a_stopped_worker_fails_the_editors_write() {
+        let mut worker = FakeSubmit::new([]);
+        let mut cache = MetadataCache::default();
+        let image = panel_path("pw-loupe-editor-stopped.jpg");
+        assert_eq!(cache.save_edits(&image, title_edits(), &mut worker), Ok(()));
+        let mut failures = Vec::new();
+
+        cache.drain(|| Err(TryRecvError::Disconnected), &mut failures);
+
+        assert!(!cache.editor_saving());
+        assert_eq!(
+            cache.take_editor_events(),
+            [EditorEvent::Failed {
+                path: image,
+                message: "Kunde inte spara metadata för pw-loupe-editor-stopped.jpg: \
+                          metadataarbetaren har stannat"
+                    .to_owned(),
+            }]
+        );
+    }
+
+    #[test]
+    fn the_exit_wait_counts_a_running_edits_write() {
+        let mut worker = FakeSubmit::new([]);
+        let mut cache = MetadataCache::default();
+        let image = panel_path("pw-loupe-exit-editor.jpg");
+        assert_eq!(cache.save_edits(&image, title_edits(), &mut worker), Ok(()));
+        assert_eq!(cache.pending_writes(), 0, "no rating write is pending");
+        let clock = std::cell::Cell::new(Instant::now());
+        let start = clock.get();
+
+        let unsaved = finish_pending_writes(
+            &mut cache,
+            &mut worker,
+            || clock.get(),
+            |pause| clock.set(clock.get() + pause),
+        );
+
+        assert_eq!(
+            clock.get() - start,
+            EXIT_WAIT_LIMIT,
+            "it waited the full limit"
+        );
+        assert!(unsaved.failed.is_empty());
+        assert_eq!(unsaved.pending, ["pw-loupe-exit-editor.jpg"]);
+    }
+
+    #[test]
+    fn the_exit_wait_ends_with_the_editors_write_and_lists_its_failure() {
+        // Confirmed: nothing to list.
+        let mut worker = FakeSubmit::new([]);
+        let mut cache = MetadataCache::default();
+        let image = panel_path("pw-loupe-exit-editor-ok.jpg");
+        assert_eq!(cache.save_edits(&image, title_edits(), &mut worker), Ok(()));
+        worker
+            .events
+            .push_back(edits_written(900, &image, Ok(report(Vec::new()))));
+        let clock = std::cell::Cell::new(Instant::now());
+        let start = clock.get();
+        let unsaved = finish_pending_writes(
+            &mut cache,
+            &mut worker,
+            || clock.get(),
+            |pause| clock.set(clock.get() + pause),
+        );
+        assert_eq!(unsaved, UnsavedRatings::default());
+        assert_eq!(clock.get(), start, "no pause was needed");
+
+        // Failed: listed with its reason.
+        let image = panel_path("pw-loupe-exit-editor-err.jpg");
+        assert_eq!(cache.save_edits(&image, title_edits(), &mut worker), Ok(()));
+        worker
+            .events
+            .push_back(edits_written(901, &image, Err(WriteError::ReadOnly)));
+        let unsaved = finish_pending_writes(
+            &mut cache,
+            &mut worker,
+            || clock.get(),
+            |pause| clock.set(clock.get() + pause),
+        );
+        assert!(unsaved.pending.is_empty());
+        assert_eq!(
+            unsaved.failed,
+            ["Kunde inte spara metadata för pw-loupe-exit-editor-err.jpg: filen är skrivskyddad"]
+        );
     }
 }

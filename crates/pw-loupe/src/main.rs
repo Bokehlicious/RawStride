@@ -14,27 +14,28 @@ use std::sync::mpsc::TryRecvError;
 use std::time::{Duration, Instant};
 
 use eframe::egui;
-use metadata::{MetadataCache, PanelState};
+use metadata::{EditorEvent, MetadataCache, PanelState};
 use pw_imagecheck::RawImageCheck;
 use pw_loupe::{
-    Action, CellState, DEFAULT_THUMBNAIL_SIZE, DialogKey, DialogRequest, Field, Filter,
-    GridKeyAction, ImportDialog, ImportDialogState, ImportEvent, ImportForm, ImportWorker,
-    IptcField, LABEL_CHOICES, LabelFilter, LoupeMove, MAX_THUMBNAIL_SIZE, MIN_THUMBNAIL_SIZE,
-    MonitorProfile, Navigation, Options, PanelText, READING_RATINGS_TEXT, RatingRefused,
-    STAR_CONDITIONS, STAR_FILTERS, StarFilter, SubmitError, Tab, TabAction, Tabs, ThumbGrid,
-    UNSUPPORTED_TEXT, ViewMode, WINDOW_TITLE, allowed_modes, clamp_thumbnail_size,
+    Action, CellState, DEFAULT_THUMBNAIL_SIZE, DialogKey, DialogRequest, EditorField, EditorForm,
+    EditorText, Field, Filter, GridKeyAction, ImportDialog, ImportDialogState, ImportEvent,
+    ImportForm, ImportWorker, IptcField, LABEL_CHOICES, LabelFilter, LoupeMove, MAX_THUMBNAIL_SIZE,
+    MIN_THUMBNAIL_SIZE, MonitorProfile, Navigation, Options, PanelText, READING_RATINGS_TEXT,
+    RatingRefused, STAR_CONDITIONS, STAR_FILTERS, StarFilter, SubmitError, Tab, TabAction, Tabs,
+    ThumbGrid, UNSUPPORTED_TEXT, ViewMode, WINDOW_TITLE, allowed_modes, clamp_thumbnail_size,
     clear_and_import_text, clear_cancel_text, clear_confirmation_text, clear_confirmation_title,
-    color_image, columns, dialog_key_action, done_lines, ejecting_progress_text, error_text,
-    grid_key_action, indicator_text, info_panel, iptc_progress_text, key_action, label_choice_text,
-    label_filter_text, label_name, list_folder, load_monitor_profile, loupe_key_action,
-    marked_text, mode_label, mode_text, more_lines, no_match_text, opens_import, panel_text,
-    parse_args, position_text, preview_line, preview_summary, primary_monitor_profile_path,
-    progress_text, rating_key_action, request_cell, star_condition_text, star_filter_text,
-    star_glyphs, status_line, step_allowed, step_thumbnail_size, tab_action, take_wheel_steps,
-    visible_range, wheel_factor, window_title,
+    color_image, columns, dialog_key_action, done_lines, editor_text, ejecting_progress_text,
+    error_text, grid_key_action, indicator_text, info_panel, iptc_progress_text, key_action,
+    label_choice_text, label_filter_text, label_name, list_folder, load_monitor_profile,
+    loupe_key_action, marked_text, mode_label, mode_text, more_lines, no_match_text, notice_text,
+    opens_import, panel_text, parse_args, position_text, preview_line, preview_summary,
+    primary_monitor_profile_path, progress_text, rating_key_action, request_cell,
+    star_condition_text, star_filter_text, star_glyphs, status_line, step_allowed,
+    step_thumbnail_size, tab_action, take_wheel_steps, visible_range, wheel_factor, window_title,
 };
 use pw_metadata::edit::EditOptions;
 use pw_metadata::journal::{Journal, Recovered};
+use pw_metadata::read::MetadataRead;
 use pw_metadata::template::Mode;
 use pw_metadata::{MIN_EXIFTOOL_VERSION, MetadataWorker, Rating, ToolVersion, WriteSetup};
 use pw_render::{Textures, view_px};
@@ -102,6 +103,92 @@ fn panel_subject(tab: Option<&Tab>, cwd: Option<&Path>) -> PanelSubject {
     }
 }
 
+/// The width the editor window opens with (T105); the user can resize it.
+const EDITOR_WIDTH: f32 = 420.0;
+/// The height the editor window's scroll area opens with; the window can be resized.
+const EDITOR_HEIGHT: f32 = 560.0;
+
+/// What the editor window says below its form (T105).
+#[derive(Debug, PartialEq)]
+enum EditorStatus {
+    Idle,
+    /// "Sparat." and the notice texts of the write.
+    Saved(Vec<String>),
+    /// A failed write, or a failed read after a write; the whole text.
+    Failed(String),
+}
+
+/// The editor window (ADR 0007 I10l, D12, D15, T105). It belongs to one image: moving to another
+/// image does not change it.
+struct EditorWindow {
+    /// The image, as the metadata cache keys it.
+    path: PathBuf,
+    file: String,
+    /// The read the form was filled from; the warnings are checked against it.
+    read: MetadataRead,
+    form: EditorForm,
+    /// The field errors of the last "Spara".
+    errors: Vec<(EditorField, String)>,
+    status: EditorStatus,
+    /// "Spara ändringarna?" is open.
+    confirm_close: bool,
+    /// "Spara" in "Spara ändringarna?": the window closes when the write succeeds.
+    close_after_save: bool,
+}
+
+impl EditorWindow {
+    fn new(path: PathBuf, read: MetadataRead) -> Self {
+        let file = path.file_name().map_or_else(
+            || path.display().to_string(),
+            |name| name.to_string_lossy().into_owned(),
+        );
+        Self {
+            path,
+            file,
+            form: EditorForm::from_read(&read),
+            read,
+            errors: Vec::new(),
+            status: EditorStatus::Idle,
+            confirm_close: false,
+            close_after_save: false,
+        }
+    }
+
+    /// Whether the form holds edits that are not saved (a field with an error counts).
+    fn has_unsaved_edits(&self) -> bool {
+        self.form.edits().map_or(true, |edits| !edits.is_empty())
+    }
+
+    /// Applies what the metadata cache says about the window's write. True when the window is to
+    /// close (a save asked for by "Spara ändringarna?" succeeded).
+    fn apply(&mut self, event: EditorEvent) -> bool {
+        match event {
+            EditorEvent::Saved { path, notices } if path == self.path => {
+                self.status = EditorStatus::Saved(notices.iter().map(notice_text).collect());
+                return self.close_after_save;
+            }
+            EditorEvent::Failed { path, message } if path == self.path => {
+                self.status = EditorStatus::Failed(message);
+                self.close_after_save = false;
+            }
+            EditorEvent::Reloaded { path, result } if path == self.path => match result {
+                Ok(read) => {
+                    self.form = EditorForm::from_read(&read);
+                    self.read = read;
+                    self.errors.clear();
+                }
+                Err(error) => {
+                    self.status = EditorStatus::Failed(panel_text(&PanelText::ReadError(error)));
+                }
+            },
+            EditorEvent::Saved { .. }
+            | EditorEvent::Failed { .. }
+            | EditorEvent::Reloaded { .. } => {}
+        }
+        false
+    }
+}
+
 struct Loupe {
     core: ViewCore<NativeBackend>,
     metadata_worker: MetadataWorker,
@@ -134,6 +221,8 @@ struct Loupe {
     show_info: bool,
     /// The info panel is shown (M, ADR 0007 I10j, D15): hidden at start, not remembered.
     show_metadata: bool,
+    /// The editor window (E or "Redigera", T105); at most one.
+    editor: Option<EditorWindow>,
     message: Option<String>,
     indicator_after: Duration,
     tabs: Tabs,
@@ -1448,7 +1537,230 @@ impl Loupe {
             Action::ToggleInfo => self.show_info = !self.show_info,
             Action::ToggleMode => self.core.toggle_mode(),
             Action::ToggleMetadata => self.show_metadata = !self.show_metadata,
+            Action::EditMetadata => self.open_editor(),
         }
+    }
+
+    /// Opens the editor for the info panel's image (T105): only for one image whose kind can hold
+    /// metadata and whose `MetadataRead` is loaded, and only while no editor is open; otherwise
+    /// nothing happens.
+    fn open_editor(&mut self) {
+        if self.editor.is_some() {
+            return;
+        }
+        let cwd = std::env::current_dir().ok();
+        let PanelSubject::Image(path) = panel_subject(self.tabs.active(), cwd.as_deref()) else {
+            return;
+        };
+        // `panel_state` is `Ready` only for a kind that can hold metadata (`supports_rating`).
+        let PanelState::Ready(read) = self.metadata.panel_state(&path) else {
+            return;
+        };
+        let read = read.clone();
+        self.editor = Some(EditorWindow::new(path, read));
+    }
+
+    /// The editor window (ADR 0007 I10l, D12, T105) and its "Spara ändringarna?" question. Every
+    /// text comes from `editor_text`, the form (labels, notes, field errors, warnings),
+    /// `notice_text` or `panel_text`, or is data (the file name, values).
+    fn draw_editor(&mut self, ctx: &egui::Context) {
+        // Taken every frame, so nothing is left over from a window that was closed meanwhile.
+        let events = self.metadata.take_editor_events();
+        let Some(mut editor) = self.editor.take() else {
+            return;
+        };
+        for event in events {
+            if editor.apply(event) {
+                return;
+            }
+        }
+        let saving = self.metadata.editor_saving();
+        let locked = saving || self.metadata.editor_reloading();
+        if locked {
+            ctx.request_repaint_after(Duration::from_millis(100));
+        }
+        let asking = editor.confirm_close;
+        let create_iim = EditOptions::default().settings.create_iim;
+        let warnings = editor.form.warnings(&editor.read, create_iim);
+        let form_before = editor.form.clone();
+        let mut choice = None;
+        let mut save = false;
+        let mut close = false;
+
+        egui::Window::new(editor_text(&EditorText::WindowTitle {
+            file: editor.file.clone(),
+        }))
+        .collapsible(false)
+        .default_width(EDITOR_WIDTH)
+        .show(ctx, |ui| {
+            let warning = ui.visuals().warn_fg_color;
+            let error_color = ui.visuals().error_fg_color;
+            let grey = ui.visuals().weak_text_color();
+            egui::ScrollArea::vertical()
+                .id_salt("metadata-editor-scroll")
+                .max_height(EDITOR_HEIGHT)
+                .show(ui, |ui| {
+                    ui.add_enabled_ui(!locked && !asking, |ui| {
+                        for field in EditorField::ALL {
+                            ui.label(egui::RichText::new(field.label()).strong());
+                            if let Some(note) = editor.form.note(field) {
+                                ui.label(egui::RichText::new(note).color(grey).small());
+                            }
+                            if let Some(text) = editor.form.text_mut(field) {
+                                let edit = if field.multiline() {
+                                    egui::TextEdit::multiline(text).desired_rows(3)
+                                } else {
+                                    egui::TextEdit::singleline(text)
+                                };
+                                ui.add(edit.desired_width(f32::INFINITY));
+                            }
+                            for (_, error) in editor.errors.iter().filter(|(f, _)| *f == field) {
+                                ui.label(egui::RichText::new(error).color(error_color));
+                            }
+                            ui.add_space(PANEL_ROW_SPACING);
+                        }
+
+                        let conflicts = editor.form.open_conflicts();
+                        if !conflicts.is_empty() {
+                            ui.separator();
+                            ui.label(
+                                egui::RichText::new(editor_text(&EditorText::ConflictsHeading))
+                                    .heading()
+                                    .color(warning),
+                            );
+                            for (conflict_index, conflict) in conflicts.iter().enumerate() {
+                                ui.label(egui::RichText::new(&conflict.label).strong());
+                                for (value_index, value) in conflict.values.iter().enumerate() {
+                                    let text = editor_text(&EditorText::ConflictChoice {
+                                        value: value.value.clone(),
+                                        origin: value.origin.clone(),
+                                    });
+                                    if ui
+                                        .radio(conflict.chosen == Some(value_index), text)
+                                        .clicked()
+                                    {
+                                        choice = Some((conflict_index, value_index));
+                                    }
+                                }
+                                ui.add_space(PANEL_ROW_SPACING);
+                            }
+                        }
+
+                        if !warnings.is_empty() {
+                            ui.separator();
+                            ui.label(
+                                egui::RichText::new(editor_text(&EditorText::WarningsHeading))
+                                    .heading()
+                                    .color(warning),
+                            );
+                            for text in &warnings {
+                                ui.label(egui::RichText::new(text).color(warning));
+                            }
+                        }
+                    });
+                });
+
+            ui.separator();
+            if saving {
+                ui.label(editor_text(&EditorText::Saving));
+            } else {
+                match &editor.status {
+                    EditorStatus::Idle => {}
+                    EditorStatus::Saved(notices) => {
+                        ui.label(editor_text(&EditorText::Saved));
+                        for notice in notices {
+                            ui.label(notice);
+                        }
+                    }
+                    EditorStatus::Failed(message) => {
+                        ui.label(egui::RichText::new(message).color(error_color));
+                    }
+                }
+            }
+            ui.horizontal(|ui| {
+                let enabled = !locked && !asking;
+                if ui
+                    .add_enabled(enabled, egui::Button::new(editor_text(&EditorText::Save)))
+                    .clicked()
+                {
+                    save = true;
+                }
+                if ui
+                    .add_enabled(enabled, egui::Button::new(editor_text(&EditorText::Close)))
+                    .clicked()
+                {
+                    close = true;
+                }
+            });
+        });
+
+        // Closing with unsaved edits asks first (T105 point 4).
+        let mut answer_save = false;
+        let mut discard = false;
+        let mut cancel = false;
+        if asking {
+            egui::Window::new(editor_text(&EditorText::UnsavedQuestion))
+                .collapsible(false)
+                .resizable(false)
+                .order(egui::Order::Foreground)
+                .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        answer_save = ui.button(editor_text(&EditorText::Save)).clicked();
+                        discard = ui.button(editor_text(&EditorText::Discard)).clicked();
+                        cancel = ui.button(editor_text(&EditorText::Cancel)).clicked();
+                    });
+                });
+        }
+
+        if let Some((conflict_index, value_index)) = choice {
+            editor.form.choose(conflict_index, value_index);
+        }
+        if editor.form != form_before {
+            // "Sparat." or an error no longer describes the form.
+            editor.status = EditorStatus::Idle;
+        }
+        if discard {
+            return;
+        }
+        if cancel {
+            editor.confirm_close = false;
+        }
+        if close {
+            if editor.has_unsaved_edits() {
+                editor.confirm_close = true;
+            } else {
+                return;
+            }
+        }
+        if save || answer_save {
+            editor.confirm_close = false;
+            match editor.form.edits() {
+                // Field errors: nothing is saved, the errors are shown under their fields.
+                Err(errors) => editor.errors = errors,
+                Ok(edits) if edits.is_empty() => {
+                    editor.errors.clear();
+                    if answer_save {
+                        return;
+                    }
+                }
+                Ok(edits) => {
+                    editor.errors.clear();
+                    editor.status = EditorStatus::Idle;
+                    match self
+                        .metadata
+                        .save_edits(&editor.path, edits, &mut self.metadata_worker)
+                    {
+                        Ok(()) => {
+                            editor.close_after_save = answer_save;
+                            ctx.request_repaint();
+                        }
+                        Err(message) => editor.status = EditorStatus::Failed(message),
+                    }
+                }
+            }
+        }
+        self.editor = Some(editor);
     }
 
     /// The info panel on the right (ADR 0007 §5.1, §6.2, I10j, D15, T103). Its image is followed
@@ -1473,6 +1785,8 @@ impl Loupe {
             return;
         }
         let metadata = &self.metadata;
+        let can_edit = self.editor.is_none();
+        let mut edit = false;
         egui::Panel::right("metadata-panel")
             .default_size(METADATA_PANEL_WIDTH)
             .resizable(true)
@@ -1480,8 +1794,13 @@ impl Loupe {
                 egui::ScrollArea::vertical()
                     .id_salt("metadata-panel-scroll")
                     .auto_shrink([false, false])
-                    .show(ui, |ui| draw_panel_contents(ui, &subject, metadata));
+                    .show(ui, |ui| {
+                        edit = draw_panel_contents(ui, &subject, metadata, can_edit);
+                    });
             });
+        if edit {
+            self.act(Action::EditMetadata, None);
+        }
     }
 
     fn draw(&mut self, ui: &mut egui::Ui) {
@@ -1641,6 +1960,11 @@ impl Loupe {
                 }
                 continue;
             }
+            // Keys typed into the editor's text fields reach no rating, navigation or other
+            // key (T105), as the import dialog's keys do not.
+            if self.editor.is_some() && ctx.egui_wants_keyboard_input() {
+                continue;
+            }
             if opens_import(key, ctrl, shift, alt) {
                 self.open_import();
                 dialog_consumes_keys = true;
@@ -1702,6 +2026,15 @@ impl Loupe {
                 && key_action(key, ctrl, alt) == Some(Action::ToggleMetadata)
             {
                 self.act(Action::ToggleMetadata, key_anchor);
+                ctx.request_repaint();
+                continue;
+            }
+            // E opens the editor of the info panel's image, in the loupe and the contact sheet
+            // (T105); nothing happens when its metadata is not loaded.
+            if !ctx.egui_wants_keyboard_input()
+                && key_action(key, ctrl, alt) == Some(Action::EditMetadata)
+            {
+                self.act(Action::EditMetadata, key_anchor);
                 ctx.request_repaint();
                 continue;
             }
@@ -1940,34 +2273,47 @@ fn resolve_paths(files: &[PathBuf]) -> Result<Vec<PathBuf>, String> {
 }
 
 /// The contents of the info panel (T103). Every text comes from `info_panel.rs` (`panel_text`,
-/// `info_panel`) or is data (the file name); labels and values wrap at the panel's width.
-fn draw_panel_contents(ui: &mut egui::Ui, subject: &PanelSubject, metadata: &MetadataCache) {
+/// `info_panel`) or is data (the file name); labels and values wrap at the panel's width. The
+/// button "Redigera" (T105, from `editor_text`) is at the top when the image's metadata is loaded,
+/// enabled when `can_edit`; returns whether it was clicked.
+fn draw_panel_contents(
+    ui: &mut egui::Ui,
+    subject: &PanelSubject,
+    metadata: &MetadataCache,
+    can_edit: bool,
+) -> bool {
     let path = match subject {
         PanelSubject::Image(path) => path,
         PanelSubject::Selected(n) => {
             ui.label(panel_text(&PanelText::Selected(*n)));
-            return;
+            return false;
         }
         PanelSubject::NoneSelected => {
             ui.label(panel_text(&PanelText::NoneSelected));
-            return;
+            return false;
         }
     };
     let read = match metadata.panel_state(path) {
         PanelState::Unsupported => {
             ui.label(UNSUPPORTED_TEXT);
-            return;
+            return false;
         }
         PanelState::Loading => {
             ui.label(panel_text(&PanelText::Loading));
-            return;
+            return false;
         }
         PanelState::Error(error) => {
             ui.label(panel_text(&PanelText::ReadError(error.to_owned())));
-            return;
+            return false;
         }
         PanelState::Ready(read) => read,
     };
+    let edit = ui
+        .add_enabled(
+            can_edit,
+            egui::Button::new(editor_text(&EditorText::EditButton)),
+        )
+        .clicked();
     let panel = info_panel(read);
     let grey = ui.visuals().weak_text_color();
     let warning = ui.visuals().warn_fg_color;
@@ -2012,6 +2358,7 @@ fn draw_panel_contents(ui: &mut egui::Ui, subject: &PanelSubject, metadata: &Met
             ui.add_space(PANEL_ROW_SPACING);
         }
     }
+    edit
 }
 
 /// One path as `resolve_paths` resolves it: a relative path is taken from `cwd`, an absolute one
@@ -2307,11 +2654,12 @@ impl eframe::App for Loupe {
             .show(ui, |ui| {
                 self.draw(ui);
                 self.draw_import_dialog(ui.ctx());
+                self.draw_editor(ui.ctx());
             });
     }
 
-    /// Waits up to 5 s for rating writes still on their way to disk, then lists the ones that
-    /// were not saved (ADR 0013 Q6, R4).
+    /// Waits up to 5 s for rating writes and the editor's write still on their way to disk, then
+    /// lists the ones that were not saved (ADR 0013 Q6, R4, T105).
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
         let unsaved = metadata::finish_pending_writes(
             &mut self.metadata,
@@ -2322,7 +2670,7 @@ impl eframe::App for Loupe {
         if !unsaved.is_empty() {
             let _ = rfd::MessageDialog::new()
                 .set_level(rfd::MessageLevel::Warning)
-                .set_title(metadata::UNSAVED_TITLE)
+                .set_title(editor_text(&EditorText::UnsavedAtExitTitle))
                 .set_description(metadata::unsaved_list_text(&unsaved.lines()))
                 .set_buttons(rfd::MessageButtons::Ok)
                 .show();
@@ -2496,6 +2844,7 @@ fn run(options: Options) -> Result<(), String> {
                 anchor_at_pointer: true,
                 show_info: true,
                 show_metadata: false,
+                editor: None,
                 message: None,
                 indicator_after,
                 tabs: Tabs::default(),
