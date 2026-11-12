@@ -2778,6 +2778,23 @@ scanned TIFF with IIM and a matching `IPTCDigest` (`TN002683.tif`, 41 MB), all f
   `can_write` refuse the file as `Locked`. A LibRaw session keeps its file open until it is closed
   (`pw-libraw/csrc/pwlr.cpp`), so the view core must close its sessions first (T89).
 
+**What the reviewer measured with ExifTool 13.59 for T92** (2026-11-12, after the review of T87;
+copies of `TN002683.tif`, the Ricoh and the Xiaomi DNG):
+- In a **TIFF or DNG**, `-IPTCDigest=new` given in the same call as an IIM write stores the MD5 of
+  the new IIM block without the NUL padding ExifTool adds in the TIFF structure: the 292-byte block
+  of `TN002683.tif` after a Rating write with `-IPTC:CodedCharacterSet=UTF8` has
+  `CurrentIPTCDigest` `2c586d07…`, while the stored `IPTCDigest` `f379e478…` is the MD5 of the
+  block less its last 3 bytes; `Validate` then has the warning `IPTCDigest is not current`. The
+  same when IIM is created in a DNG or a TIFF without IIM. A JPEG is not affected (stored and
+  current equal).
+- A second call with only `-IPTCDigest=new -overwrite_original` on the written copy stores the
+  current checksum; `ImageDataHash` unchanged (TIFF and Ricoh DNG).
+- When the file had no Photoshop block, creating it adds the warning `Non-standard format (undef)
+  for IFD0 0x8649 PhotoshopSettings` (Xiaomi DNG `0 7 1` → `0 8 1`, Ricoh DNG one more as well)
+  even after the second call. Its listing changes only in keys T84 already allows
+  (`File:CurrentIPTCDigest`, the IIM tags and record versions, `Photoshop:IPTCDigest`, the
+  written XMP, `SubIFD:PreviewImageStart`).
+
 | Step | Task | Content | ADR 0007 | Can start |
 |---|---|---|---|---|
 | P1 | owner/reviewer | Save the IPTC TechReference 2025.1 JSON (`iptc-pmd-techreference_2025.1.json`, link in `docs/references.md`) in `D:\PhotoWorkflowData\references\`, with bytes and SHA-256 in its `README.md`. **Done 2026-11-11:** 140 839 bytes, SHA-256 `592c37b0…433128a8` | §3 | done |
@@ -2804,6 +2821,8 @@ scanned TIFF with IIM and a matching `IPTCDigest` (`TN002683.tif`, 41 MB), all f
 | I9c | T89 | The view core closes the RAW sessions of a file before it is written (`Releaser::release`) | §9.1 | now |
 | I9d | T90 | The real `ImageCheck` in `pw-imagecheck`: previews byte for byte with `pw-raw`, the DNG opened with LibRaw (§9.3 points 3–4) | §9.1, §9.3 | now (D4 approved) |
 | I9e | T91 | RawStride: the metadata worker and the ingest write through T87/T88 with the journal (recovery at start) and T90's check; Swedish texts. The choice of mode in the import dialog comes with I10 | §9, §9.5, §15 | after T87–T90 |
+| D8 | owner | When the safe write creates the Photoshop block of a TIFF or DNG (to store a new `IPTCDigest`), ExifTool adds the validation warning `Non-standard format (undef) for IFD0 0x8649 PhotoshopSettings`, and T84's check refuses the copy for having one more warning. Reviewer's proposal: allow exactly one more warning (not error) in that case: the copy has `Photoshop:IPTCDigest`, the original has not, the file is a TIFF or DNG and the plan writes `-IPTCDigest=new`. The alternative, not writing a checksum in a TIFF/DNG without one, breaks §5.2 | §5.2, §9.3 | – |
+| I9f | T92 | A current IIM checksum in TIFF and DNG: a second ExifTool call on the copy writes `IPTCDigest`, and the D8 allowance in `verify_copy` | §5.2, §9.3, §12 | **Blocked** on D8 |
 | I10 | – | RawStride: info panel with conflicts and notices, editor, settings (create IIM, fallback encoding), ExifTool version check at start | §5.2, §5.4, §11 | after I6 (panel), I9 (editor) |
 | I11 | – | PLUS fields as fixed choice lists | §11, Q9 | **after the PLUS controlled vocabulary is read** (§16.4) |
 | I12 | – | Real-file tests with the owner's level-C samples | §12, Q11 | when the owner provides the samples |
@@ -4092,6 +4111,60 @@ scanned TIFF with IIM and a matching `IPTCDigest` (`TN002683.tif`, 41 MB), all f
   a DNG shown in RAW mode is saved and the image is still shown; the same on a JPEG and an ARW
   (sidecar).
 
+### T92. ADR 0007 I9f: a current IIM checksum in TIFF and DNG — Blocked
+
+- **Blocked on owner decision D8** (one more validation warning allowed when the safe write
+  creates the Photoshop block of a TIFF or DNG). Then it can start; it can run at the same time as
+  T88 (no shared files).
+- **Crates:** `pw-metadata` only.
+- **Files:** `crates/pw-metadata/src/safe_write.rs`; `crates/pw-metadata/src/verify.rs`;
+  `crates/pw-metadata/tests/safe_write.rs`; `docs/test-inventory.md`.
+- **Why:** ADR 0007 §5.2 and §12 (the checksum is written and current after every write that has
+  IIM and XMP), §9.3 (the copy is verified). Found in the review of T87: the ignored real-file
+  test refuses `TN002683.tif` (a TIFF with IIM and a matching `IPTCDigest`) in `Verify` with one
+  more warning, `IPTCDigest is not current`. Measured by the reviewer with ExifTool 13.59 (see the
+  step plan): in a **TIFF or DNG**, `-IPTCDigest=new` in the same call as an IIM write stores the
+  MD5 of the IIM block **without** the padding ExifTool adds to it in the TIFF structure, while
+  `CurrentIPTCDigest` (what the reader compares, §5.1) includes it. A JPEG is not affected. A
+  second call with only `-IPTCDigest=new` on the written copy stores the right checksum, with the
+  `ImageDataHash` unchanged. And when the file had no Photoshop block (`Photoshop:IPTCDigest`
+  missing), creating it adds the warning `Non-standard format (undef) for IFD0 0x8649
+  PhotoshopSettings`, so T84's "no more warnings" refuses it (D8).
+- **What:**
+  1. **`safe_write.rs`, the digest pass:** after ExifTool has written the copy (9.2) and before
+     its snapshot (9.3), when the target is a `Tiff` or `Dng` and the plan's `args` hold
+     `-IPTCDigest=new`, a second `execute` on the copy only: `-IPTCDigest=new
+     -overwrite_original <copy>` (the copy is RawStride's own temporary file; the original is still
+     only read, §9.2). ExifTool's answer must report one file updated and no warning (as
+     `write_succeeded`, and no `Warning` line), otherwise `Stage::WriteCopy`, the copy deleted as
+     for any failure. Never for a JPEG or a sidecar. Update the module comment (9.2) with the
+     reason.
+  2. **`verify.rs`, D8:** in `verify_copy`, one more warning (not error) is allowed when the copy
+     has the key `Photoshop:IPTCDigest`, the original has not, the `file_type` is `TIFF` or
+     `DNG`, and the plan's `args` hold `-IPTCDigest=new`. Everything else of the check stays as it
+     is. Document it at the check with the measured warning text.
+- **Rules:** rules 3–7 and 10–12. No `Cargo.toml` change. Do not change `write_plan.rs`.
+- **Tests to add:**
+  - unit tests in `verify.rs`: one more warning passes with a new `Photoshop:IPTCDigest` in a
+    `TIFF` and a `DNG` copy with `-IPTCDigest=new` in the plan; it is still `NewWarnings` for a
+    `JPEG`, without `-IPTCDigest=new`, when the original already had `Photoshop:IPTCDigest`, with
+    two more warnings, and with one more error;
+  - unit test in `safe_write.rs` for the choice of the digest pass (`Tiff`/`Dng` with
+    `-IPTCDigest=new` yes; `Jpeg`, `Raw` and a plan without it no);
+  - `tests/safe_write.rs` (ExifTool required): a minimal TIFF built in the test (a header and one
+    IFD with a 1 × 1 strip, enough for ExifTool to write it), first given IIM (City) and a
+    digest with `ExifTool::execute` in two calls so the digest is current; then
+    `write_safely` with a plan from `write_plan::plan` that changes the City (read with
+    `read_metadata`, `state` from T87) → `Written`; `IPTCDigest` equals `CurrentIPTCDigest`
+    afterwards and `read_metadata` shows `digest` `Matches`; the same TIFF without IIM and a plan
+    with the setting "create IIM" → `Written` with a current digest (D8);
+  - one test **ignored by default**: every TIFF and DNG in `PW_TESTDATA`, copied, with a City plan
+    and `WriteSettings { create_iim: true }` through `write_safely` → `Written` and a current
+    digest. Also run T87's ignored test `every_real_dng_jpeg_and_tiff_is_rated_safely` and report
+    that `TN002683.tif` passes.
+- **Done when:** `.\tools\check.ps1` is all OK; both ignored runs pass; `docs/test-inventory.md`
+  is updated; `git diff --stat` shows only the files above.
+
 ### T7. Format the files that `cargo fmt --check` reports — Done
 
 - **Crates:** `photoworkflow` (`src-tauri`), `preview-bench` (`tools/preview-bench`).
@@ -4567,3 +4640,4 @@ and reviewer:
 | 2026-11-12 | T89 | Ready for review | (Agent) `ViewCore::releaser` and `Releaser::release(path, timeout)` in `core.rs` (waits on the core's condition variable), `pub use` in `lib.rs`; `state.rs`: `State::release` drops owned sessions of the path and marks sessions lent in the current generation (new maps `lent_paths` and `released`, keyed by generation, key and view), `finish_render` drops a marked session but still delivers its view, `open_folder` clears `released`. Addition to check: while a release waits, `pick` opens no new session of that path (`begin_release`/`end_release`), so the plan does not reopen it during the wait; an open already running when `release` starts is not waited for. Tests: `state.rs` +6, `core.rs` +4 (a test backend with a gate in `core.rs`, since `tests/engine.rs` is not in the task's files), `native_files.rs` +1 ignored (passed with `--ignored` on a DNG in `PW_TESTDATA`). `check.ps1` all OK (841 passed, 40 ignored, 0 failed, with T87 and T90 in the same worktree); `docs/test-inventory.md` updated including the header total |
 | 2026-11-12 | T87 | Ready for review | (Agent) Re-check after T89 and T90 were ready: no code change to the T87 files (`read.rs`, `edit.rs`, `lib.rs`, `tests/read.rs`, `tests/edit.rs`). `check.ps1` is now **all OK** (fmt, test, clippy): **841 passed, 0 failed, 40 ignored** in 52 programs, as in the header of `docs/test-inventory.md` (`test-output.txt` holds two complete runs with these counts because another agent ran `check.ps1` at the same time). pw-metadata: unit 245 passed + 1 ignored, `tests/edit.rs` 9 + 1 ignored, `tests/read.rs` 9 + 1 ignored. Ignored real-file test run again (`PW_TESTDATA` = `D:\PhotoWorkflowData\RAW`, debug build): 24 of 25 written, image data hash unchanged, read back; DNG 237–763 ms (9), JPEG 664–976 ms (7), TIFF 867–4166 ms (8); **TN002683.tif again refused in `Verify`** (original intact; 7 warnings/4 minor against 6/3). Still for the owner: the cause is in `write_plan.rs` or `verify.rs`, which T87 may not change |
 | 2026-11-12 | T87, T89, T90 | Done | Review: all three accepted. **T89:** `Releaser::release` drops owned sessions, marks lent ones (`released`, also across `set_files`/`open_folder`), waits on the condition variable and blocks new opens of the path meanwhile (`begin_release`/`end_release`, an addition beyond the task text, accepted); views kept; the ignored DNG test shows the exclusive open failing with a session and working after `release`. Known limit for T91: the core may reopen the file after `release` returns and before the write, or a short pw-raw/thumbnail open may race; the safe write then refuses it as `Locked` with the file untouched. **T90:** the crate and the D4 lines exactly, `Cargo.lock` gains only `pw-imagecheck`; previews compared by count, size and bytes, LibRaw on the DNG copy (and on the original only when the copy fails). The agent's two choices are accepted by the reviewer, but they were **not owner decisions** as the code said: a preview at offset 0 (a plain JPEG, which `pw_raw::inspect` lists as its own preview) is left out on both sides, and the unit tests hold the JPEG fixture as the thumbnail of a hand-built TIFF; the reviewer changed the wording to "accepted in the review, 2026-11-12" in `lib.rs`, `tests.rs` and `docs/test-inventory.md`. **T87:** `MetadataRead::state` and `write_rating_safely` follow the task; the ignored real-file test writes 24 of 25 files. **Finding outside T87** (reviewer, ExifTool 13.59): `TN002683.tif` (TIFF with IIM and a matching `IPTCDigest`) is refused in `Verify` with one more warning, `IPTCDigest is not current`. In a TIFF, `-IPTCDigest=new` in the same call as an IIM write is the MD5 of the new IIM block **without** the padding ExifTool adds in the TIFF (3 NUL bytes here: `f379e478…` is the MD5 of the 292-byte block less 3 bytes), while `CurrentIPTCDigest` includes them (`2c586d07…`); a second call with only `-IPTCDigest=new` on the copy gives a matching digest; a JPEG is not affected. So every write that touches IIM in a TIFF (and probably a DNG with IIM) is refused, correctly, by T84's check: a fix in the write plan or the safe write needs its own task. The reviewer's `check.ps1` after the wording change: fmt, test and clippy OK, **841 passed, 0 failed, 40 ignored**. Committed |
+| 2026-11-12 | T92 | Blocked | Added after the review of T87: in a TIFF or DNG, `-IPTCDigest=new` in the same call as an IIM write leaves the checksum out of date (MD5 without the TIFF padding), so T84's check refuses every write that touches IIM there (`TN002683.tif`). T92 adds a second ExifTool call on the copy for the checksum and, after owner decision D8, allows the one warning ExifTool adds when it creates the Photoshop block of a TIFF or DNG. The step plan gains I9f and D8 and records the reviewer's measurements. T91 does not wait for T92 |
