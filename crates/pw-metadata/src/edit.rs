@@ -28,6 +28,29 @@
 //! above. A template that is already in the file gives an empty plan and
 //! [`WriteReport::Unchanged`].
 //!
+//! [`ExifTool::write_edits_safely`] writes the editor's [`Edit`]s of single properties (I10d,
+//! T97): a file kind that cannot hold metadata is [`EditError::Unsupported`] with the same text as
+//! [`ExifTool::write_iptc`]; then the file is read, [`apply_edits`] applies the edits in order, and
+//! the plan is made and written as above. The result is an [`EditReport`]: the safe write's report
+//! and the plan's [`WriteNotice`]s, which the user is told about (§5.2: an IIM value cut to its
+//! byte limit; §5.4: IIM converted to UTF-8; Q1: a conflict kept and no checksum written). They are
+//! empty when nothing was written.
+//!
+//! - **Set** stores the value with [`Metadata::set`]; a Lang Alt edits `x-default` only and keeps
+//!   the other languages (§8, Q7). A value equal to the current one ([`same_value`]) is no change,
+//!   **unless** the property has an unresolved (`Open`) conflict (§5.1, Q1): then the user has
+//!   decided it by choosing a value, even the one already shown, and the plan writes both forms.
+//! - **Clear** removes every representation of the property (§8: every language of a Lang Alt,
+//!   IIM, and the Exif fields that exist). Unlike a template (§10), an edit may clear the
+//!   copyright-management properties. Nothing to clear (no value and no `Open` conflict) is no
+//!   change.
+//! - **A field of a single structure** (`field`, e.g. `Iptc4xmpCore:CiEmailWork` of
+//!   `Iptc4xmpCore:CreatorContactInfo`) is set in, or removed from, the structure's current value
+//!   (or an empty one), the other fields kept and a new field placed in the order of the
+//!   structure's fields; then the whole structure is set (with the rule above) or, when no field is
+//!   left, cleared. A field of a list of structures, or a `field` on a property that is not a
+//!   structure, is [`EditError::Unsupported`].
+//!
 //! The old `write_rating`, `write_iptc` and `write_tags` are unchanged; the Tauri app still uses
 //! them (owner decision D7).
 //!
@@ -38,11 +61,12 @@ use std::path::Path;
 
 use crate::iim::Fallback;
 use crate::journal::Journal;
+use crate::properties::{self, Occurrence, ValueKind};
 use crate::reconcile::same_value;
 use crate::safe_write::{ImageCheck, SafeWriteError, WriteReport};
 use crate::template::{self, Template, TemplateError};
-use crate::value::{Metadata, Value, ValueError};
-use crate::write_plan::{self, PlanError, WriteSettings};
+use crate::value::{ConflictRule, Metadata, StructValue, Value, ValueError};
+use crate::write_plan::{self, PlanError, WriteNotice, WriteSettings};
 use crate::{Error, ExifTool, Rating, supports_rating};
 
 /// The Rating property (§8).
@@ -92,6 +116,163 @@ impl fmt::Display for EditError {
 }
 
 impl std::error::Error for EditError {}
+
+/// One edit of the editor: a property of the table set or cleared.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Edit {
+    /// Sets `value` on `property`, or on its field `field` when `property` is a single structure.
+    Set {
+        /// The XMP id of a property of the table.
+        property: String,
+        /// The XMP id of a field of a **single** structure (as [`template::TemplateField::field`]).
+        field: Option<String>,
+        value: Value,
+    },
+    /// Clears `property` (every representation, §8), or removes its field `field`.
+    Clear {
+        /// The XMP id of a property of the table.
+        property: String,
+        /// The XMP id of a field of a **single** structure.
+        field: Option<String>,
+    },
+}
+
+/// The result of [`ExifTool::write_edits_safely`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EditReport {
+    /// What the safe write did.
+    pub report: WriteReport,
+    /// What the user is told about the write (§5.2, §5.4, Q1); empty when nothing was written.
+    pub notices: Vec<WriteNotice>,
+}
+
+/// Applies `edits` to `metadata`, edit by edit in order (see the module comment). On an error the
+/// edits before it have been applied; the caller writes nothing then.
+pub fn apply_edits(metadata: &mut Metadata, edits: &[Edit]) -> Result<(), EditError> {
+    for edit in edits {
+        apply_edit(metadata, edit)?;
+    }
+    Ok(())
+}
+
+/// Applies one edit.
+fn apply_edit(metadata: &mut Metadata, edit: &Edit) -> Result<(), EditError> {
+    let (property, field, value) = match edit {
+        Edit::Set {
+            property,
+            field,
+            value,
+        } => (property.as_str(), field.as_deref(), Some(value)),
+        Edit::Clear { property, field } => (property.as_str(), field.as_deref(), None),
+    };
+    let def = properties::property(property)
+        .ok_or_else(|| EditError::Value(ValueError::UnknownProperty(property.to_string())))?;
+    match (field, value) {
+        (None, Some(value)) => set_if_changed(metadata, property, value.clone()),
+        (None, None) => {
+            if metadata.get(property).is_some() || has_open_conflict(metadata, property) {
+                metadata.clear(property).map_err(EditError::Value)?;
+            }
+            Ok(())
+        }
+        (Some(field), value) => {
+            let unsupported = || {
+                EditError::Unsupported(format!(
+                    "{property}/{field} cannot be edited field by field"
+                ))
+            };
+            let ValueKind::Struct(name) = def.kind else {
+                return Err(unsupported());
+            };
+            if def.occurrence == Occurrence::Multi {
+                return Err(unsupported());
+            }
+            let unknown_field =
+                || EditError::Value(ValueError::UnknownProperty(format!("{property}/{field}")));
+            let struct_def = properties::struct_def(name).ok_or_else(unknown_field)?;
+            if !struct_def.fields.iter().any(|def| def.xmp_id == field) {
+                return Err(unknown_field());
+            }
+            let current = match metadata.get(property).map(|stored| &stored.value) {
+                Some(Value::Struct(fields)) => fields.clone(),
+                _ => StructValue::default(),
+            };
+            let had_field = current.fields.iter().any(|(id, _)| id == field);
+            let mut result = current;
+            match value {
+                Some(value) => {
+                    let new_field = match (result.fields.iter().find(|(id, _)| id == field), value)
+                    {
+                        // Inside a structure `set` does not merge a Lang Alt, so do it here:
+                        // `x-default` changes, the other languages stay (§8, Q7).
+                        (Some((_, Value::LangAlt(old))), Value::LangAlt(new)) => {
+                            match new.display() {
+                                Some((text, _)) => {
+                                    let mut merged = old.clone();
+                                    merged.set_default(text).map_err(EditError::Value)?;
+                                    Value::LangAlt(merged)
+                                }
+                                None => value.clone(),
+                            }
+                        }
+                        _ => value.clone(),
+                    };
+                    match result.fields.iter_mut().find(|(id, _)| id == field) {
+                        Some((_, old)) => *old = new_field,
+                        None => result.fields.push((field.to_string(), new_field)),
+                    }
+                    // Fields in the order of the structure, as the reader gives them, so a
+                    // structure that is already in the file compares equal (as T88).
+                    let position = |id: &str| {
+                        struct_def
+                            .fields
+                            .iter()
+                            .position(|candidate| candidate.xmp_id == id)
+                            .unwrap_or(usize::MAX)
+                    };
+                    result.fields.sort_by_key(|(id, _)| position(id));
+                    set_if_changed(metadata, property, Value::Struct(result))
+                }
+                None => {
+                    if !had_field {
+                        return Ok(());
+                    }
+                    result.fields.retain(|(id, _)| id != field);
+                    if result.fields.is_empty() {
+                        return metadata.clear(property).map_err(EditError::Value);
+                    }
+                    match set_if_changed(metadata, property, Value::Struct(result)) {
+                        // Only fields without content are left: no field is left to keep.
+                        Err(EditError::Value(ValueError::Empty(_))) => {
+                            metadata.clear(property).map_err(EditError::Value)
+                        }
+                        other => other,
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Sets `value` on `property`, except when it equals the current value and the property has no
+/// `Open` conflict (choosing the value already shown in an `Open` conflict decides it, Q1).
+fn set_if_changed(metadata: &mut Metadata, property: &str, value: Value) -> Result<(), EditError> {
+    let unchanged = metadata
+        .get(property)
+        .is_some_and(|stored| same_value(property, &stored.value, &value));
+    if unchanged && !has_open_conflict(metadata, property) {
+        return Ok(());
+    }
+    metadata.set(property, value).map_err(EditError::Value)
+}
+
+/// True when `property` has a conflict with the rule `Open` (§5.1, Q1).
+fn has_open_conflict(metadata: &Metadata, property: &str) -> bool {
+    metadata
+        .conflicts()
+        .iter()
+        .any(|conflict| conflict.property == property && conflict.rule == ConflictRule::Open)
+}
 
 impl ExifTool {
     /// Writes `rating` (stars and label) to `image` through the write plan and the safe write (see
@@ -166,6 +347,40 @@ impl ExifTool {
             write_plan::plan(&metadata, &read.state, options.settings).map_err(EditError::Plan)?;
         self.write_safely(image, &plan, checks, journal)
             .map_err(EditError::Write)
+    }
+
+    /// Writes the editor's `edits` to `image` through the write plan and the safe write, and
+    /// returns the report with the plan's notices (see the module comment). `checks` are the
+    /// caller's image checks; `journal` is the app's write journal.
+    pub fn write_edits_safely(
+        &mut self,
+        image: &Path,
+        edits: &[Edit],
+        options: &EditOptions,
+        checks: &dyn ImageCheck,
+        journal: &Journal,
+    ) -> Result<EditReport, EditError> {
+        if !supports_rating(image) {
+            return Err(EditError::Unsupported(format!(
+                "metadata is not supported for {}",
+                image.display()
+            )));
+        }
+        let read = self
+            .read_metadata(image, options.fallback)
+            .map_err(EditError::Read)?;
+        let mut metadata = read.reconciled.metadata;
+        apply_edits(&mut metadata, edits)?;
+        let plan =
+            write_plan::plan(&metadata, &read.state, options.settings).map_err(EditError::Plan)?;
+        let report = self
+            .write_safely(image, &plan, checks, journal)
+            .map_err(EditError::Write)?;
+        let notices = match report {
+            WriteReport::Unchanged => Vec::new(),
+            WriteReport::Written { .. } => plan.notices,
+        };
+        Ok(EditReport { report, notices })
     }
 }
 
@@ -246,6 +461,250 @@ mod tests {
         assert!(label_changes(None, Some(&text("Red"))));
         assert!(label_changes(Some(&text("Red")), None));
         assert!(!label_changes(None, None));
+    }
+
+    const CONTACT: &str = "Iptc4xmpCore:CreatorContactInfo";
+    const EMAIL: &str = "Iptc4xmpCore:CiEmailWork";
+    const PHONE: &str = "Iptc4xmpCore:CiTelWork";
+
+    fn lang_alt(entries: &[(&str, &str)]) -> Value {
+        Value::LangAlt(crate::value::LangAlt::from_entries(
+            entries
+                .iter()
+                .map(|(language, text)| (language.to_string(), text.to_string()))
+                .collect(),
+        ))
+    }
+
+    fn structure(fields: &[(&str, Value)]) -> Value {
+        Value::Struct(StructValue {
+            fields: fields
+                .iter()
+                .map(|(id, value)| (id.to_string(), value.clone()))
+                .collect(),
+        })
+    }
+
+    fn set(property: &str, value: Value) -> Edit {
+        Edit::Set {
+            property: property.to_string(),
+            field: None,
+            value,
+        }
+    }
+
+    fn set_field(property: &str, field: &str, value: Value) -> Edit {
+        Edit::Set {
+            property: property.to_string(),
+            field: Some(field.to_string()),
+            value,
+        }
+    }
+
+    fn clear(property: &str) -> Edit {
+        Edit::Clear {
+            property: property.to_string(),
+            field: None,
+        }
+    }
+
+    fn clear_field(property: &str, field: &str) -> Edit {
+        Edit::Clear {
+            property: property.to_string(),
+            field: Some(field.to_string()),
+        }
+    }
+
+    /// Metadata as read from a file: the values, nothing changed.
+    fn read(values: &[(&str, Value)]) -> Metadata {
+        let mut metadata = Metadata::new();
+        for (xmp_id, value) in values {
+            if let Err(error) =
+                metadata.insert_read(xmp_id, value.clone(), crate::value::Origin::XmpEmbedded)
+            {
+                panic!("{xmp_id}: {error}");
+            }
+        }
+        metadata
+    }
+
+    fn edited(metadata: &mut Metadata, edits: &[Edit]) {
+        if let Err(error) = apply_edits(metadata, edits) {
+            panic!("the edits were not applied: {error}");
+        }
+    }
+
+    fn changes(metadata: &Metadata) -> Vec<(String, Option<Value>)> {
+        metadata
+            .changes()
+            .map(|(xmp_id, value)| (xmp_id.to_string(), value.cloned()))
+            .collect()
+    }
+
+    #[test]
+    fn a_text_is_set() {
+        let mut metadata = read(&[("photoshop:Headline", text("Gammal"))]);
+        edited(&mut metadata, &[set("photoshop:Headline", text("Ny"))]);
+        assert_eq!(
+            changes(&metadata),
+            [("photoshop:Headline".to_string(), Some(text("Ny")))]
+        );
+    }
+
+    #[test]
+    fn the_same_text_is_no_change() {
+        let mut metadata = read(&[("photoshop:Headline", text("Samma"))]);
+        edited(&mut metadata, &[set("photoshop:Headline", text("Samma"))]);
+        assert_eq!(changes(&metadata), []);
+    }
+
+    #[test]
+    fn the_same_text_with_an_open_conflict_is_a_change() {
+        let mut metadata = read(&[("photoshop:City", text("Lund"))]);
+        metadata.add_conflict(crate::value::Conflict {
+            property: "photoshop:City".to_string(),
+            values: vec![
+                (crate::value::Origin::XmpEmbedded, text("Lund")),
+                (crate::value::Origin::Iim, text("Malmö")),
+            ],
+            rule: ConflictRule::Open,
+        });
+        edited(&mut metadata, &[set("photoshop:City", text("Lund"))]);
+        assert_eq!(
+            changes(&metadata),
+            [("photoshop:City".to_string(), Some(text("Lund")))]
+        );
+    }
+
+    #[test]
+    fn a_lang_alt_keeps_its_other_languages() {
+        let mut metadata = read(&[(
+            "dc:title",
+            lang_alt(&[("x-default", "Gammal"), ("sv", "Svensk")]),
+        )]);
+        edited(
+            &mut metadata,
+            &[set("dc:title", lang_alt(&[("x-default", "Ny")]))],
+        );
+        assert_eq!(
+            changes(&metadata),
+            [(
+                "dc:title".to_string(),
+                Some(lang_alt(&[("x-default", "Ny"), ("sv", "Svensk")]))
+            )]
+        );
+    }
+
+    #[test]
+    fn a_copyright_notice_may_be_cleared_by_an_edit() {
+        let mut metadata = read(&[("dc:rights", lang_alt(&[("x-default", "© A")]))]);
+        edited(&mut metadata, &[clear("dc:rights")]);
+        assert_eq!(changes(&metadata), [("dc:rights".to_string(), None)]);
+        assert!(metadata.get("dc:rights").is_none());
+    }
+
+    #[test]
+    fn clearing_an_absent_property_is_no_change() {
+        let mut metadata = read(&[("photoshop:Headline", text("Kvar"))]);
+        edited(&mut metadata, &[clear("photoshop:City")]);
+        assert_eq!(changes(&metadata), []);
+    }
+
+    #[test]
+    fn a_contact_field_is_set_and_the_other_fields_kept() {
+        let mut metadata = read(&[(CONTACT, structure(&[(PHONE, text("123"))]))]);
+        edited(&mut metadata, &[set_field(CONTACT, EMAIL, text("a@b.se"))]);
+        assert_eq!(
+            changes(&metadata),
+            [(
+                CONTACT.to_string(),
+                Some(structure(&[(EMAIL, text("a@b.se")), (PHONE, text("123"))]))
+            )]
+        );
+    }
+
+    #[test]
+    fn the_same_contact_field_is_no_change() {
+        let mut metadata = read(&[(
+            CONTACT,
+            structure(&[(EMAIL, text("a@b.se")), (PHONE, text("123"))]),
+        )]);
+        edited(&mut metadata, &[set_field(CONTACT, EMAIL, text("a@b.se"))]);
+        assert_eq!(changes(&metadata), []);
+    }
+
+    #[test]
+    fn a_contact_field_is_cleared_and_the_last_field_clears_the_property() {
+        let mut metadata = read(&[(
+            CONTACT,
+            structure(&[(EMAIL, text("a@b.se")), (PHONE, text("123"))]),
+        )]);
+        edited(&mut metadata, &[clear_field(CONTACT, EMAIL)]);
+        assert_eq!(
+            changes(&metadata),
+            [(
+                CONTACT.to_string(),
+                Some(structure(&[(PHONE, text("123"))]))
+            )]
+        );
+
+        edited(&mut metadata, &[clear_field(CONTACT, PHONE)]);
+        assert_eq!(changes(&metadata), [(CONTACT.to_string(), None)]);
+        assert!(metadata.get(CONTACT).is_none());
+    }
+
+    #[test]
+    fn clearing_an_absent_contact_field_is_no_change() {
+        let mut metadata = read(&[(CONTACT, structure(&[(PHONE, text("123"))]))]);
+        edited(&mut metadata, &[clear_field(CONTACT, EMAIL)]);
+        assert_eq!(changes(&metadata), []);
+    }
+
+    #[test]
+    fn fields_of_a_list_of_structures_or_of_a_text_are_unsupported() {
+        let mut metadata = Metadata::new();
+        match apply_edits(
+            &mut metadata,
+            &[set_field(
+                "plus:ImageCreator",
+                "plus:ImageCreatorName",
+                text("A"),
+            )],
+        ) {
+            Err(EditError::Unsupported(reason)) => assert_eq!(
+                reason,
+                "plus:ImageCreator/plus:ImageCreatorName cannot be edited field by field"
+            ),
+            other => panic!("expected Unsupported, got {other:?}"),
+        }
+        match apply_edits(
+            &mut metadata,
+            &[clear_field("photoshop:City", "Iptc4xmpCore:CiAdrCity")],
+        ) {
+            Err(EditError::Unsupported(reason)) => assert_eq!(
+                reason,
+                "photoshop:City/Iptc4xmpCore:CiAdrCity cannot be edited field by field"
+            ),
+            other => panic!("expected Unsupported, got {other:?}"),
+        }
+        assert_eq!(changes(&metadata), []);
+    }
+
+    #[test]
+    fn an_unknown_property_is_a_value_error() {
+        let mut metadata = Metadata::new();
+        match apply_edits(&mut metadata, &[set("xmp:Nonsense", text("A"))]) {
+            Err(EditError::Value(ValueError::UnknownProperty(property))) => {
+                assert_eq!(property, "xmp:Nonsense")
+            }
+            other => panic!("expected a Value error, got {other:?}"),
+        }
+        match apply_edits(&mut metadata, &[clear("xmp:Nonsense")]) {
+            Err(EditError::Value(ValueError::UnknownProperty(property))) => {
+                assert_eq!(property, "xmp:Nonsense")
+            }
+            other => panic!("expected a Value error, got {other:?}"),
+        }
     }
 
     #[test]

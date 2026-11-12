@@ -70,6 +70,22 @@ const IIM_RECORD_VERSIONS: &[&str] = &[
     "IPTC:EnvelopeRecordVersion",
     "IPTC:ApplicationRecordVersion",
 ];
+/// The key of the Exif byte order, which exists while the file has an Exif block.
+const EXIF_BYTE_ORDER: &str = "File:ExifByteOrder";
+/// The keys that go with the Exif block ExifTool drops (point 6 of T97, [`drops_exif_block`]).
+/// Owner decision 2026-11-12: all five, because ExifTool also adds the resolution when it creates
+/// Exif in a JFIF file (measured in `tests/edits.rs`).
+const EXIF_BLOCK_KEYS: &[&str] = &[
+    EXIF_BYTE_ORDER,
+    "IFD0:XResolution",
+    "IFD0:YResolution",
+    "IFD0:ResolutionUnit",
+    "IFD0:YCbCrPositioning",
+];
+/// The groups of a plan argument that clears an Exif tag.
+const EXIF_CLEAR_GROUPS: &[&str] = &["IFD0", "ExifIFD"];
+/// The groups of the keys of an Exif block.
+const EXIF_GROUPS: &[&str] = &["IFD0", "ExifIFD", "IFD1", "GPS", "InteropIFD"];
 /// The plan argument tag that writes the IIM checksum, and the key it changes.
 const DIGEST_TAG: &str = "IPTCDigest";
 const DIGEST_KEY: &str = "Photoshop:IPTCDigest";
@@ -364,13 +380,18 @@ pub fn verify_copy(
     }
 
     let allowed = Allowed::from_plan(plan);
+    let exif_block_dropped = drops_exif_block(original, copy, plan);
     let mut keys: Vec<&String> = original.listing.keys().chain(copy.listing.keys()).collect();
     keys.sort();
     keys.dedup();
     for key in keys {
         let before = original.listing.get(key);
         let after = copy.listing.get(key);
-        if before != after && !allowed.allows(key) {
+        let dropped_with_block = exif_block_dropped
+            && EXIF_BLOCK_KEYS.contains(&key.as_str())
+            && before.is_some()
+            && after.is_none();
+        if before != after && !allowed.allows(key) && !dropped_with_block {
             return Err(VerifyError::Unexpected {
                 key: key.clone(),
                 before: before.cloned(),
@@ -388,6 +409,33 @@ fn creates_photoshop_tag(original: &FileSnapshot, copy: &FileSnapshot, plan: &Wr
         && copy.listing.contains_key(DIGEST_KEY)
         && !original.listing.contains_key(DIGEST_KEY)
         && writes_new_digest(plan)
+}
+
+/// Point 6 of T97 (owner decision A, 2026-11-12): in a JPEG whose only Exif is `IFD0:Copyright`,
+/// clearing it makes ExifTool 13.59 drop the whole Exif block, and with it `File:ExifByteOrder`
+/// and `IFD0:YCbCrPositioning` (which ExifTool adds itself when it creates Exif), and in a JFIF
+/// file also `IFD0:XResolution`, `IFD0:YResolution` and `IFD0:ResolutionUnit`, which ExifTool
+/// adds from the JFIF density when it creates the Exif (measured with the JPEG of
+/// `tests/edits.rs`; owner decision 2026-11-12 to allow all five). Measured by the reviewer: with
+/// another Exif tag left (`IFD0:Make`, an `IFD0:XResolution` of its own such as 300,
+/// `ExifIFD:ExifVersion`) the block stays, so the check below finds Exif in the copy. True when the plan clears an `IFD0:` or `ExifIFD:` tag (an empty
+/// value), the original has `File:ExifByteOrder`, and the copy has no `File:ExifByteOrder` and no
+/// key of an Exif group; then the removal of exactly [`EXIF_BLOCK_KEYS`] is allowed.
+fn drops_exif_block(original: &FileSnapshot, copy: &FileSnapshot, plan: &WritePlan) -> bool {
+    let clears_exif_tag = plan.args.iter().any(|arg| {
+        arg.strip_prefix('-')
+            .and_then(|rest| rest.strip_suffix('='))
+            .and_then(|name| name.split_once(':'))
+            .is_some_and(|(group, tag)| {
+                EXIF_CLEAR_GROUPS.contains(&group) && !tag.is_empty() && !tag.contains('=')
+            })
+    });
+    let no_exif_left = !copy.listing.contains_key(EXIF_BYTE_ORDER)
+        && !copy.listing.keys().any(|key| {
+            key.split_once(':')
+                .is_some_and(|(group, _)| EXIF_GROUPS.contains(&group))
+        });
+    clears_exif_tag && original.listing.contains_key(EXIF_BYTE_ORDER) && no_exif_left
 }
 
 /// The keys a plan may change besides the ones always allowed.
@@ -531,6 +579,92 @@ mod tests {
             warnings,
             minor,
         })
+    }
+
+    /// A JPEG whose only Exif is `IFD0:Copyright` (point 6 of T97), with `extra` keys.
+    fn only_copyright_exif(extra: &[(&str, &str)]) -> FileSnapshot {
+        let mut entries = vec![
+            ("File:FileType", "JPEG"),
+            ("File:ExifByteOrder", "Big-endian (Motorola, MM)"),
+            ("IFD0:XResolution", "1"),
+            ("IFD0:YResolution", "1"),
+            ("IFD0:ResolutionUnit", "1"),
+            ("IFD0:Copyright", "© Fotograf"),
+            ("IFD0:YCbCrPositioning", "Centered"),
+            ("XMP-dc:Rights", "© Fotograf"),
+        ];
+        entries.extend_from_slice(extra);
+        snapshot(&entries)
+    }
+
+    /// The copy after ExifTool dropped the Exif block (and XMP Rights), with `extra` keys.
+    fn exif_block_dropped(extra: &[(&str, &str)]) -> FileSnapshot {
+        let mut entries = vec![("File:FileType", "JPEG")];
+        entries.extend_from_slice(extra);
+        snapshot(&entries)
+    }
+
+    const CLEAR_COPYRIGHT: &[&str] = &["-XMP-dc:Rights=", "-IFD0:Copyright="];
+
+    #[test]
+    fn the_exif_block_exiftool_drops_when_its_last_tag_is_cleared_passes() {
+        assert_eq!(
+            verify_copy(
+                &only_copyright_exif(&[]),
+                &exif_block_dropped(&[]),
+                &plan(CLEAR_COPYRIGHT)
+            ),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn the_exif_byte_order_may_not_go_while_an_exif_key_is_left() {
+        assert_eq!(
+            verify_copy(
+                &only_copyright_exif(&[("IFD0:Make", "Kamera")]),
+                &exif_block_dropped(&[("IFD0:Make", "Kamera")]),
+                &plan(CLEAR_COPYRIGHT)
+            ),
+            Err(VerifyError::Unexpected {
+                key: "File:ExifByteOrder".to_string(),
+                before: Some("Big-endian (Motorola, MM)".to_string()),
+                after: None,
+            })
+        );
+    }
+
+    #[test]
+    fn the_exif_byte_order_may_not_go_without_a_clearing_argument() {
+        assert_eq!(
+            verify_copy(
+                &only_copyright_exif(&[]),
+                &exif_block_dropped(&[]),
+                &plan(&["-XMP-dc:Rights=", "-IFD0:Copyright=x"])
+            ),
+            Err(VerifyError::Unexpected {
+                key: "File:ExifByteOrder".to_string(),
+                before: Some("Big-endian (Motorola, MM)".to_string()),
+                after: None,
+            })
+        );
+    }
+
+    #[test]
+    fn a_changed_exif_byte_order_is_unexpected_even_with_a_clearing_argument() {
+        let mut copy = only_copyright_exif(&[]);
+        copy.listing.insert(
+            "File:ExifByteOrder".to_string(),
+            "Little-endian (Intel, II)".to_string(),
+        );
+        assert_eq!(
+            verify_copy(&only_copyright_exif(&[]), &copy, &plan(CLEAR_COPYRIGHT)),
+            Err(VerifyError::Unexpected {
+                key: "File:ExifByteOrder".to_string(),
+                before: Some("Big-endian (Motorola, MM)".to_string()),
+                after: Some("Little-endian (Intel, II)".to_string()),
+            })
+        );
     }
 
     #[test]
