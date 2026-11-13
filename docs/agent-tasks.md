@@ -5484,10 +5484,10 @@ it is accepted. Stage A changes the shell in `pw-loupe` only; the core crates ar
     the window as it was; started with a file path, RawStride opens in the preview (full screen),
     which changes how `latency.ps1` sees the window?
 
-### T112. ADR 0017 U12, first part: previous/next and "spara och nästa" in the metadata window — Blocked
+### T112. ADR 0017 U12, first part: previous/next and "spara och nästa" in the metadata window — Open
 
-- **Waits for the owner's answers to U12-Q1–U12-Q5** (at the end of this task) **and for T110 to be
-  Done** (both change `main.rs` and `metadata.rs`). The reviewer's proposals are written into the
+- **Can start after T110 is Done** (both change `main.rs` and `metadata.rs`). The owner approved the
+  proposals of U12-Q1–U12-Q5 (at the end of this task) on 2026-11-13; they are written into the
   points below. It does not depend on T111 and can come before or after it, but not at the same
   time as any other task that changes `main.rs`.
 - **Crates:** `pw-loupe` only.
@@ -5576,7 +5576,7 @@ it is accepted. Stage A changes the shell in `pw-loupe` only; the core crates ar
   Mechanic); an edit and Nästa asks Spara / Släng / Avbryt and each does what it says; Escape and
   Avbryt with edits ask the same; a write refused while another program holds the file keeps the
   window on the image with the text; the same from the loupe.
-- **Questions (for the owner; the proposals are written into the points above):**
+- **Questions (answered by the owner, 2026-11-13: every proposal approved):**
   - **U12-Q1** The keys (point 6): Ctrl+PageDown next, Ctrl+PageUp previous, Ctrl+Enter "spara och
     nästa"? They work while typing in a field; plain arrows and Enter stay with the fields.
   - **U12-Q2** The current image follows the window (point 4): after a move the contact sheet's
@@ -6129,3 +6129,4 @@ and reviewer:
 | 2026-11-13 | T111 | Blocked | Added: ADR 0017 U3, the preview as a full-screen mode of the main window (title line, image area, its own right column with Info and Zoom, the filmstrip with "only the marked"), the marking kept on a step (replaces ADR 0014 Q5 for the preview), filmstrip thumbnails only while the shown image is drawn. Starts after T110 is Done; the reviewer's proposals are in the task; it waits for the owner's answers to U3-Q1–U3-Q6 |
 | 2026-11-13 | T111 | Open | The owner approved the proposals of U3-Q1–U3-Q6: only the title line, image, right column and filmstrip in the full-screen preview, with Ctrl+O, Ctrl+I, Ctrl+W, the tab keys and F11 inactive there; the preview's right column open by default and remembered apart, `I` and `H` as proposed; the filmstrip with "only the marked" on `S` and a button (from two marked images); filmstrip thumbnails only while the shown image is drawn; the Zoom section; the window restored on closing and a file path opening the preview in full screen. T111 can start after T110 is Done |
 | 2026-11-13 | T112 | Blocked | Added: ADR 0017 U12, the first part (stage A): Föregående, Nästa and "Spara och nästa" in the metadata window (buttons and Ctrl+PageUp, Ctrl+PageDown, Ctrl+Enter), over the shown images skipping kinds without metadata support, the current image following the window with the marking kept, "Spara ändringarna?" (Spara / Släng / Avbryt) for a move, Escape and Avbryt. Starts after T110 is Done; the reviewer's proposals are in the task; it waits for the owner's answers to U12-Q1–U12-Q5 |
+| 2026-11-13 | T112 | Open | The owner approved the proposals of U12-Q1–U12-Q5: Ctrl+PageDown, Ctrl+PageUp and Ctrl+Enter, taken before the form so they work while typing; the current image follows the window with the marking kept; no wrap, disabled at the first and last supported image; "Spara ändringarna?" (Spara / Släng / Avbryt) for a move, Escape and Avbryt, OK unchanged, "Spara och nästa" never asks; after a write with notices the move waits for the next press of a move. T112 can start after T110 is Done |
