@@ -5696,7 +5696,7 @@ it is accepted. Stage A changes the shell in `pw-loupe` only; the core crates ar
   `M` window shows "Yrkestitel", the heading "Kontaktuppgifter" above E-post, Telefon and Webb,
   and no origin line under the values of "Övrig metadata".
 
-### T115. `latency.ps1`: read the screen with DXGI Desktop Duplication, so the full-screen preview can be measured — Ready for review
+### T115. `latency.ps1`: read the screen with DXGI Desktop Duplication, so the full-screen preview can be measured — Done
 
 - **Can start now.** Owner's request 2026-11-13. No repository code changes; it does not touch
   `pw-loupe` and can run beside any task. T111's acceptance waits for this task's measurement.
@@ -6291,3 +6291,4 @@ and reviewer:
 | 2026-11-13 | T115 | Open | Added: `latency.ps1` cannot see T111's full-screen OpenGL preview (GDI and `PrintWindow` give a white area; all `t111-…` rows show no change although the owner saw the images change). Task: DXGI Desktop Duplication in `latency.ps1`, checked against GDI on the maximized window, then the T111 measurement |
 | 2026-11-13 | T115 | Ready for review | `latency.ps1` (outside the repository; old copy `latency-gdi.ps1`): `Lat.Grab` reads DXGI Desktop Duplication (COM through vtables, no DLL/package), `-Capture gdi\|dxgi` (default `dxgi`), stops with a message if duplication cannot start, no GDI fallback. Check 1 (A1 contact sheet, maximized, RIGHT ×10): with the default region both GDI and DXGI saw 0 of 10 steps (a step changes only ~0.2 % of the screen); owner chose `-Region "0.85,0.1,0.14,0.6"` (right column): GDI 10/10, `first` median 16,9 ms (max 23,6), DXGI 10/10, median 26,1 ms (max 33,3). Check 2 (`latency-t111-dxgi.csv`, full-screen preview, DXGI), `first` median/max ms: RAW fit 5,0/9,1 (T110 17,6/26,6, T109 17,2/28,7), JPEG fit 4,7/6,5 (T110 16,7/20,3, T109 17,2/25,1), filmstrip hidden RAW 4,5/8,3, JPEG 4,5/6,7; 7 steps/s RAW 2 of 13 changed (T110 2, T109 2), JPEG 2 of 13 (T110 2, T109 3). Full screen bypasses desktop composition, so T111's times are not directly comparable with T109/T110's windowed ones |
 | 2026-11-13 | T111 | Done | The owner confirmed the hand checks of T111. Closing the program in the preview has no visible control (no menu bar, U3-Q1); the owner accepted Alt+F4, Windows' own key, as the way to do it |
+| 2026-11-13 | T115 | Done | The owner confirmed T115: `latency.ps1` with DXGI Desktop Duplication measures the full-screen preview |
