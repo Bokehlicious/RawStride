@@ -23,6 +23,34 @@ pub enum LoupeMove {
     To(usize),
 }
 
+/// The image the metadata window moves to with "Föregående" or "Nästa" (ADR 0017 §2.3.1, U12-Q3,
+/// T112), as a file index: the nearest image after (`forward`) or before `current` in `visible`
+/// (the shown images in the contact sheet's order) whose kind has metadata support (`supported`
+/// of a file index). Unsupported kinds are skipped; there is no wrap. `None` at the first or last
+/// supported image, when no other shown image is supported, or when `current` is not shown.
+pub fn metadata_neighbour(
+    visible: &[usize],
+    current: usize,
+    forward: bool,
+    supported: impl Fn(usize) -> bool,
+) -> Option<usize> {
+    let position = visible.iter().position(|&index| index == current)?;
+    if forward {
+        visible
+            .iter()
+            .skip(position.saturating_add(1))
+            .copied()
+            .find(|&index| supported(index))
+    } else {
+        visible
+            .iter()
+            .take(position)
+            .rev()
+            .copied()
+            .find(|&index| supported(index))
+    }
+}
+
 impl Tab {
     /// Recomputes `visible`: every file without an active filter; nothing with an active filter
     /// while the ratings are not read yet (Q7); otherwise the files that match, plus `keep` (the
@@ -1024,5 +1052,64 @@ mod tests {
         t.preview_move(LoupeMove::To(5), false, true, &r);
         assert_eq!(t.preview_start(true), 5, "a marked current image stays");
         assert_eq!(t.selection.marked_in(&t.visible), [2, 5, 9]);
+    }
+
+    // --- the metadata window's previous / next (ADR 0017 §2.3.1, U12-Q3, T112) ---
+
+    #[test]
+    fn metadata_neighbour_steps_forward_and_back_over_the_shown_images() {
+        // A filtered visible list in the contact sheet's order; every kind supported.
+        let visible = [1, 2, 4, 7];
+        let all = |_: usize| true;
+        assert_eq!(metadata_neighbour(&visible, 2, true, all), Some(4));
+        assert_eq!(metadata_neighbour(&visible, 4, true, all), Some(7));
+        assert_eq!(metadata_neighbour(&visible, 4, false, all), Some(2));
+        assert_eq!(metadata_neighbour(&visible, 2, false, all), Some(1));
+        // A hidden file between them (3) is never visited.
+        assert_ne!(metadata_neighbour(&visible, 2, true, all), Some(3));
+    }
+
+    #[test]
+    fn metadata_neighbour_skips_kinds_without_metadata_support() {
+        let visible = [0, 1, 2, 3, 4];
+        let supported = |index: usize| index != 1 && index != 3;
+        assert_eq!(metadata_neighbour(&visible, 0, true, supported), Some(2));
+        assert_eq!(metadata_neighbour(&visible, 2, true, supported), Some(4));
+        assert_eq!(metadata_neighbour(&visible, 4, false, supported), Some(2));
+        assert_eq!(metadata_neighbour(&visible, 2, false, supported), Some(0));
+    }
+
+    #[test]
+    fn metadata_neighbour_has_none_at_the_first_and_last_supported_image() {
+        // The ends are unsupported kinds: the first and last supported images are 1 and 3.
+        let visible = [0, 1, 2, 3, 4];
+        let supported = |index: usize| (1..=3).contains(&index);
+        assert_eq!(metadata_neighbour(&visible, 1, false, supported), None);
+        assert_eq!(metadata_neighbour(&visible, 3, true, supported), None);
+        assert_eq!(metadata_neighbour(&visible, 1, true, supported), Some(2));
+        assert_eq!(metadata_neighbour(&visible, 3, false, supported), Some(2));
+        // No wrap at the ends of the list.
+        let all = |_: usize| true;
+        assert_eq!(metadata_neighbour(&visible, 0, false, all), None);
+        assert_eq!(metadata_neighbour(&visible, 4, true, all), None);
+    }
+
+    #[test]
+    fn metadata_neighbour_has_none_without_a_supported_image_or_a_shown_current_one() {
+        let visible = [0, 1, 2];
+        let none = |_: usize| false;
+        assert_eq!(metadata_neighbour(&visible, 1, true, none), None);
+        assert_eq!(metadata_neighbour(&visible, 1, false, none), None);
+        assert_eq!(metadata_neighbour(&[], 0, true, |_| true), None);
+        // The current image is not shown (hidden by the filter).
+        assert_eq!(metadata_neighbour(&visible, 5, true, |_| true), None);
+    }
+
+    #[test]
+    fn metadata_neighbour_moves_on_from_an_unsupported_current_image() {
+        let visible = [0, 1, 2, 3];
+        let supported = |index: usize| index != 1;
+        assert_eq!(metadata_neighbour(&visible, 1, true, supported), Some(2));
+        assert_eq!(metadata_neighbour(&visible, 1, false, supported), Some(0));
     }
 }

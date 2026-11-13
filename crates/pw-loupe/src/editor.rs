@@ -577,14 +577,22 @@ pub enum EditorText {
     Saved,
     /// A write that failed; `reason` as `write_error_text` gives it for ratings.
     SaveFailed { file: String, reason: String },
-    /// Asked when Escape is pressed with unsaved edits.
-    DiscardQuestion,
-    /// The answer to `DiscardQuestion` that closes the window without writing.
+    /// Asked when the window is to leave an image with unsaved edits: a move, Escape or the
+    /// window's "Avbryt" (ADR 0017 §2.3.1, U12-Q4, T112).
+    SaveQuestion,
+    /// The answer to `SaveQuestion` that writes the edits, then moves or closes.
+    Save,
+    /// The answer to `SaveQuestion` that drops the edits, then moves or closes.
     Discard,
-    /// The answer to `DiscardQuestion` that keeps the window open.
-    KeepEditing,
-    /// The button that closes the window without writing.
+    /// The button that closes the window without writing, and the answer to `SaveQuestion` that
+    /// goes back to the window with the edits kept.
     Cancel,
+    /// The button that moves the window to the previous image with metadata support (T112).
+    Previous,
+    /// The button that moves the window to the next image with metadata support (T112).
+    Next,
+    /// The button that writes the edits and moves to the next image (T112).
+    SaveAndNext,
     /// The title of the message at program exit listing the rating and editor writes that were
     /// not saved (owner decision 2026-11-12: one message for both).
     UnsavedAtExitTitle,
@@ -604,10 +612,13 @@ pub fn editor_text(text: &EditorText) -> String {
         EditorText::SaveFailed { file, reason } => {
             format!("Kunde inte spara metadata för {file}: {reason}")
         }
-        EditorText::DiscardQuestion => "Släng ändringarna?".to_string(),
+        EditorText::SaveQuestion => "Spara ändringarna?".to_string(),
+        EditorText::Save => "Spara".to_string(),
         EditorText::Discard => "Släng".to_string(),
-        EditorText::KeepEditing => "Fortsätt redigera".to_string(),
         EditorText::Cancel => "Avbryt".to_string(),
+        EditorText::Previous => "Föregående".to_string(),
+        EditorText::Next => "Nästa".to_string(),
+        EditorText::SaveAndNext => "Spara och nästa".to_string(),
         EditorText::UnsavedAtExitTitle => "Ändringar som inte sparades".to_string(),
     }
 }
@@ -1306,10 +1317,13 @@ mod tests {
                 },
                 "Kunde inte spara metadata för bild.ARW: filen är skrivskyddad",
             ),
-            (EditorText::DiscardQuestion, "Släng ändringarna?"),
+            (EditorText::SaveQuestion, "Spara ändringarna?"),
+            (EditorText::Save, "Spara"),
             (EditorText::Discard, "Släng"),
-            (EditorText::KeepEditing, "Fortsätt redigera"),
             (EditorText::Cancel, "Avbryt"),
+            (EditorText::Previous, "Föregående"),
+            (EditorText::Next, "Nästa"),
+            (EditorText::SaveAndNext, "Spara och nästa"),
             (
                 EditorText::UnsavedAtExitTitle,
                 "Ändringar som inte sparades",

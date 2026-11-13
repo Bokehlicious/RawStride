@@ -20,21 +20,22 @@ use metadata::{EditorEvent, InspectorState, MetadataCache};
 use pw_imagecheck::RawImageCheck;
 use pw_loupe::{
     Action, CellState, DEFAULT_THUMBNAIL_SIZE, DialogKey, DialogRequest, EditorField, EditorForm,
-    EditorText, Field, Filter, GridKeyAction, ImportDialog, ImportDialogState, ImportEvent,
-    ImportForm, ImportWorker, IptcField, LABEL_CHOICES, LabelFilter, Language, LoupeMove,
-    MAX_THUMBNAIL_SIZE, MIN_THUMBNAIL_SIZE, MonitorProfile, Navigation, Options, PanelText,
-    READING_RATINGS_TEXT, RatingRefused, STAR_CONDITIONS, STAR_FILTERS, Settings, StarFilter,
-    SubmitError, Tab, TabAction, Tabs, ThumbGrid, UNSUPPORTED_TEXT, ViewMode, WINDOW_TITLE,
-    allowed_modes, clamp_thumbnail_size, clear_and_import_text, clear_cancel_text,
+    EditorKeyAction, EditorText, Field, Filter, GridKeyAction, ImportDialog, ImportDialogState,
+    ImportEvent, ImportForm, ImportWorker, IptcField, LABEL_CHOICES, LabelFilter, Language,
+    LoupeMove, MAX_THUMBNAIL_SIZE, MIN_THUMBNAIL_SIZE, MonitorProfile, Navigation, Options,
+    PanelText, READING_RATINGS_TEXT, RatingRefused, STAR_CONDITIONS, STAR_FILTERS, Settings,
+    StarFilter, SubmitError, Tab, TabAction, Tabs, ThumbGrid, UNSUPPORTED_TEXT, ViewMode,
+    WINDOW_TITLE, allowed_modes, clamp_thumbnail_size, clear_and_import_text, clear_cancel_text,
     clear_confirmation_text, clear_confirmation_title, color_image, columns, dialog_key_action,
-    done_lines, editor_text, ejecting_progress_text, error_text, grid_key_action, indicator_text,
-    info_panel, iptc_progress_text, key_action, label_choice_text, label_filter_text, label_name,
-    list_folder, load_monitor_profile, load_settings, loupe_key_action, marked_text, mode_label,
-    mode_text, more_lines, no_match_text, notice_text, opens_import, other_values, panel_text,
-    parse_args, position_text, preview_line, preview_summary, primary_monitor_profile_path,
-    progress_text, property_label, rating_key_action, request_cell, save_settings, settings_path,
-    star_condition_text, star_filter_text, star_glyphs, status_line, step_allowed,
-    step_thumbnail_size, tab_action, take_wheel_steps, visible_range, wheel_factor, window_title,
+    done_lines, editor_key_action, editor_text, ejecting_progress_text, error_text,
+    grid_key_action, indicator_text, info_panel, iptc_progress_text, key_action, label_choice_text,
+    label_filter_text, label_name, list_folder, load_monitor_profile, load_settings,
+    loupe_key_action, marked_text, metadata_neighbour, mode_label, mode_text, more_lines,
+    no_match_text, notice_text, opens_import, other_values, panel_text, parse_args, position_text,
+    preview_line, preview_summary, primary_monitor_profile_path, progress_text, property_label,
+    rating_key_action, request_cell, save_settings, settings_path, star_condition_text,
+    star_filter_text, star_glyphs, status_line, step_allowed, step_thumbnail_size, tab_action,
+    take_wheel_steps, visible_range, wheel_factor, window_title,
 };
 use pw_loupe::{
     COLLAPSED_WIDTH, ColumnState, Command, MENUS, MenuEntry, MenuItem, RatingKey, STATUS_TEXT_SIZE,
@@ -54,7 +55,9 @@ use pw_metadata::iim::Fallback;
 use pw_metadata::journal::{Journal, Recovered};
 use pw_metadata::read::MetadataRead;
 use pw_metadata::template::Mode;
-use pw_metadata::{MIN_EXIFTOOL_VERSION, MetadataWorker, Rating, ToolVersion, WriteSetup};
+use pw_metadata::{
+    MIN_EXIFTOOL_VERSION, MetadataWorker, Rating, ToolVersion, WriteSetup, supports_rating,
+};
 use pw_render::{Textures, view_px};
 use pw_thumbcache::{ThumbWorker, ThumbnailRequest};
 use pw_viewcore::native::NativeBackend;
@@ -169,19 +172,92 @@ enum WindowBody {
     Form(Box<FormState>),
 }
 
+/// What takes the metadata window away from its image (ADR 0017 §2.3.1, T112).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum WindowLeave {
+    /// "Föregående" (`forward` false) or "Nästa" / "Spara och nästa" (`forward` true).
+    Move { forward: bool },
+    /// OK, Escape or the window's "Avbryt".
+    Close,
+}
+
+/// The answer to "Spara ändringarna?" (U12-Q4), or what "Spara och nästa" and OK do (`Save`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SaveAnswer {
+    Save,
+    Discard,
+    Cancel,
+}
+
+/// How the window's write of its edits ended.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum WriteOutcome {
+    /// Written without notices.
+    Success,
+    /// Written, with notices to show (§2.3.1, U12-Q5).
+    Notices,
+    /// The write failed or could not be sent.
+    Failure,
+    /// A field has an error: nothing was written.
+    FieldErrors,
+}
+
+/// What the metadata window does about a move or a close (§2.3.1, U12-Q4, U12-Q5).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LeaveDecision {
+    /// The move or the close is done.
+    Leave,
+    /// The edits are written first; the decision follows from how the write ends.
+    Write,
+    /// The window stays on the image with the edits kept.
+    StayWithEdits,
+    /// The window stays on the image, refilled from the new read, showing "Sparat." and the
+    /// notices; the next press of a move moves on.
+    StayShowingNotices,
+}
+
+/// The decision of a move or a close of the metadata window (ADR 0017 §2.3.1, U12-Q4, U12-Q5,
+/// T112): `has_edits` whether the form holds unsaved edits, `answer` the answer to "Spara
+/// ändringarna?" (or `Save` for "Spara och nästa"), `outcome` how the write ended, `None` while
+/// no write has been done. Without edits the move or the close is done at once.
+fn leave_decision(
+    has_edits: bool,
+    answer: SaveAnswer,
+    outcome: Option<WriteOutcome>,
+) -> LeaveDecision {
+    if !has_edits {
+        return LeaveDecision::Leave;
+    }
+    match (answer, outcome) {
+        (SaveAnswer::Discard, _) | (SaveAnswer::Save, Some(WriteOutcome::Success)) => {
+            LeaveDecision::Leave
+        }
+        (SaveAnswer::Cancel, _)
+        | (SaveAnswer::Save, Some(WriteOutcome::Failure | WriteOutcome::FieldErrors)) => {
+            LeaveDecision::StayWithEdits
+        }
+        (SaveAnswer::Save, None) => LeaveDecision::Write,
+        (SaveAnswer::Save, Some(WriteOutcome::Notices)) => LeaveDecision::StayShowingNotices,
+    }
+}
+
 /// The metadata window (ADR 0007 I10n, D16, T107): one image's metadata seen and edited in one
-/// floating window, locked to its image until OK or Avbryt. It replaces the info panel of T103 and
-/// the editor window of T105.
+/// floating window. It replaces the info panel of T103 and the editor window of T105. Since T112
+/// (ADR 0017 §2.3.1) it is not locked to its image: "Föregående", "Nästa" and "Spara och nästa"
+/// move it over the shown images that have metadata support.
 struct MetadataWindow {
     /// The image, as the metadata cache keys it.
     path: PathBuf,
     file: String,
     body: WindowBody,
-    /// The field errors of the last "OK".
+    /// The field errors of the last write asked for.
     errors: Vec<(EditorField, String)>,
     status: EditorStatus,
-    /// "Släng ändringarna?" is shown (Escape with edits).
-    confirm_discard: bool,
+    /// "Spara ändringarna?" is shown for this move or close (unsaved edits, U12-Q4).
+    question: Option<WindowLeave>,
+    /// The move or close done once the window's write has succeeded without notices (OK, "Spara"
+    /// in the question, "Spara och nästa").
+    after_save: Option<WindowLeave>,
     /// Escape was pressed this frame; the keys are read before the window is drawn.
     escape: bool,
     /// The window's write succeeded with notices: the read after it refills the form.
@@ -200,7 +276,8 @@ impl MetadataWindow {
             body: WindowBody::Loading,
             errors: Vec::new(),
             status: EditorStatus::Idle,
-            confirm_discard: false,
+            question: None,
+            after_save: None,
             escape: false,
             expect_reload: false,
         }
@@ -235,18 +312,30 @@ impl MetadataWindow {
         }
     }
 
-    /// Applies what the metadata cache says about the window's write. True when the window is to
-    /// close (a write without notices succeeded).
-    fn apply(&mut self, event: EditorEvent) -> bool {
+    /// Applies what the metadata cache says about the window's write. The move or close to do
+    /// when a write without notices succeeded (`after_save`; a close if none was asked for).
+    fn apply(&mut self, event: EditorEvent) -> Option<WindowLeave> {
         match event {
             EditorEvent::Saved { path, notices } if path == self.path => {
-                if notices.is_empty() {
-                    return true;
+                let outcome = if notices.is_empty() {
+                    WriteOutcome::Success
+                } else {
+                    WriteOutcome::Notices
+                };
+                let then = self.after_save.take();
+                match leave_decision(true, SaveAnswer::Save, Some(outcome)) {
+                    LeaveDecision::Leave => return Some(then.unwrap_or(WindowLeave::Close)),
+                    LeaveDecision::Write
+                    | LeaveDecision::StayWithEdits
+                    | LeaveDecision::StayShowingNotices => {}
                 }
+                // The asked-for move is not done; the next press of a move moves on (U12-Q5).
                 self.status = EditorStatus::Saved(notices.iter().map(notice_text).collect());
                 self.expect_reload = true;
             }
             EditorEvent::Failed { path, message } if path == self.path => {
+                // The window stays on the image with the edits kept (§2.3.1).
+                self.after_save = None;
                 self.status = EditorStatus::Failed(message);
             }
             EditorEvent::Reloaded { path, result } if path == self.path && self.expect_reload => {
@@ -263,7 +352,7 @@ impl MetadataWindow {
             | EditorEvent::Failed { .. }
             | EditorEvent::Reloaded { .. } => {}
         }
-        false
+        None
     }
 }
 
@@ -1670,10 +1759,125 @@ impl Loupe {
         self.metadata.close_window();
     }
 
-    /// The metadata window (ADR 0007 I10n, D16, T107): modal, movable and resizable, its contents
-    /// in a scroll area and the buttons below it. Every text comes from `editor_text`, the form
-    /// (labels, notes, field errors, warnings), `notice_text`, `panel_text` or `info_panel.rs`, or
-    /// is data (the file name, values).
+    /// The image the metadata window on `path` moves to with "Föregående" (`forward` false) or
+    /// "Nästa" (ADR 0017 §2.3.1, U12-Q3, T112): its file index in the active tab and its path as
+    /// the metadata cache keys it. The shown images of the active tab, skipping kinds without
+    /// metadata support; `None` at the first or last such image.
+    fn window_neighbour(&self, path: &Path, forward: bool) -> Option<(usize, PathBuf)> {
+        let tab = self.tabs.active()?;
+        let cwd = std::env::current_dir().ok();
+        let key = |file: &PathBuf| match cwd.as_deref() {
+            Some(cwd) => resolve_path(cwd, file),
+            None => file.clone(),
+        };
+        let current = tab.files.iter().position(|file| key(file) == path)?;
+        let index = metadata_neighbour(&tab.visible, current, forward, |index| {
+            tab.files
+                .get(index)
+                .is_some_and(|file| supports_rating(file))
+        })?;
+        Some((index, key(tab.files.get(index)?)))
+    }
+
+    /// Does a move or a close of the metadata window (`window`, taken out of `self`). A move
+    /// that finds no image in its direction keeps the window on its image.
+    fn leave_metadata_window(
+        &mut self,
+        ctx: &egui::Context,
+        mut window: MetadataWindow,
+        leave: WindowLeave,
+    ) {
+        match leave {
+            WindowLeave::Close => self.close_metadata_window(),
+            WindowLeave::Move { forward } => {
+                let target = self.window_neighbour(&window.path, forward);
+                if let Some((index, path)) = target
+                    && self.metadata.move_window(&path, &mut self.metadata_worker)
+                {
+                    // The window stays open at its place and size (its id does not change); the
+                    // form is emptied while the new image's read runs.
+                    self.metadata_window = Some(MetadataWindow::new(path));
+                    self.current_follows_window(index);
+                } else {
+                    // Nowhere to go (the shown images changed meanwhile). After a write that
+                    // succeeded, the read after it refills the form.
+                    if self.metadata.editor_reloading() {
+                        window.expect_reload = true;
+                    }
+                    self.metadata_window = Some(window);
+                }
+                ctx.request_repaint();
+            }
+        }
+    }
+
+    /// After the metadata window moved to file `index` (ADR 0017 §2.3.1, U12-Q2, T112): it is the
+    /// current image of the active tab, scrolled into view in the contact sheet or shown in the
+    /// preview as a step shows it. The marking is not changed (§2.2, review finding 6).
+    fn current_follows_window(&mut self, index: usize) {
+        let Some(tab) = self.tabs.active_mut() else {
+            return;
+        };
+        tab.current = index;
+        let (mode, position) = (tab.mode, tab.position());
+        match (mode, position) {
+            (ViewMode::Grid, _) => self.scroll_request = position,
+            (ViewMode::Loupe, Some(position)) => self.core.go(position),
+            (ViewMode::Loupe, None) => {}
+        }
+    }
+
+    /// Writes the window's edits as OK writes them (T105, T107); `then` is the move or close to
+    /// do once the write succeeded without notices. Field errors are shown and nothing is written;
+    /// a write that cannot be sent shows why. Returns `then` when there is nothing to write.
+    fn write_window(
+        &mut self,
+        ctx: &egui::Context,
+        window: &mut MetadataWindow,
+        then: WindowLeave,
+    ) -> Option<WindowLeave> {
+        let edits = match &window.body {
+            WindowBody::Form(state) => state.form.edits(),
+            WindowBody::Loading | WindowBody::ReadError(_) => return Some(then),
+        };
+        let outcome = match edits {
+            Ok(edits) if edits.is_empty() => return Some(then),
+            // Field errors: nothing is written, the errors are shown under their fields.
+            Err(errors) => {
+                window.errors = errors;
+                WriteOutcome::FieldErrors
+            }
+            Ok(edits) => {
+                window.errors.clear();
+                window.status = EditorStatus::Idle;
+                match self
+                    .metadata
+                    .save_edits(&window.path, edits, &mut self.metadata_worker)
+                {
+                    Ok(()) => {
+                        window.after_save = Some(then);
+                        ctx.request_repaint();
+                        return None;
+                    }
+                    Err(message) => {
+                        window.status = EditorStatus::Failed(message);
+                        WriteOutcome::Failure
+                    }
+                }
+            }
+        };
+        match leave_decision(true, SaveAnswer::Save, Some(outcome)) {
+            LeaveDecision::Leave => Some(then),
+            LeaveDecision::Write
+            | LeaveDecision::StayWithEdits
+            | LeaveDecision::StayShowingNotices => None,
+        }
+    }
+
+    /// The metadata window (ADR 0007 I10n, D16, T107, ADR 0017 §2.3.1, T112): modal, movable and
+    /// resizable, its contents in a scroll area and the buttons below it. Every text comes from
+    /// `editor_text`, the form (labels, notes, field errors, warnings), `notice_text`,
+    /// `panel_text` or `info_panel.rs`, or is data (the file name, values).
     fn draw_metadata_window(&mut self, ctx: &egui::Context) {
         // Taken every frame, so nothing is left over from a window that was closed meanwhile.
         let events = self.metadata.take_editor_events();
@@ -1682,8 +1886,8 @@ impl Loupe {
             return;
         };
         for event in events {
-            if window.apply(event) {
-                self.close_metadata_window();
+            if let Some(leave) = window.apply(event) {
+                self.leave_metadata_window(ctx, window, leave);
                 return;
             }
         }
@@ -1692,12 +1896,41 @@ impl Loupe {
         if let Some(result) = read {
             window.read_arrived(result, locked);
         }
-        if locked || self.metadata.window_waiting() {
+        let waiting = self.metadata.window_waiting();
+        if locked || waiting {
             ctx.request_repaint_after(WINDOW_POLL_INTERVAL);
         }
+        // The window's keys (U12-Q1) are taken before the form is drawn, so they work while a
+        // field has the keyboard and never reach it.
+        let keys: Vec<EditorKeyAction> = ctx.input_mut(|input| {
+            let mut keys = Vec::new();
+            input.events.retain(|event| match event {
+                egui::Event::Key {
+                    key,
+                    pressed: true,
+                    modifiers,
+                    ..
+                } => {
+                    let ctrl = modifiers.ctrl || modifiers.command;
+                    match editor_key_action(*key, ctrl, modifiers.shift, modifiers.alt) {
+                        Some(action) => {
+                            keys.push(action);
+                            false
+                        }
+                        None => true,
+                    }
+                }
+                _ => true,
+            });
+            keys
+        });
         let escape = std::mem::take(&mut window.escape);
-        let asking = window.confirm_discard;
+        let asking = window.question.is_some();
         let has_form = matches!(window.body, WindowBody::Form(_));
+        // No move while the read or a write runs, nor at the first or last supported image.
+        let busy = locked || waiting;
+        let can_previous = !busy && self.window_neighbour(&window.path, false).is_some();
+        let can_next = !busy && self.window_neighbour(&window.path, true).is_some();
         let create_iim = self.settings.create_iim;
         let warnings = match &window.body {
             WindowBody::Form(state) => state.form.warnings(&state.read, create_iim),
@@ -1710,8 +1943,20 @@ impl Loupe {
         let mut choice = None;
         let mut ok = false;
         let mut cancel = false;
-        let mut discard = false;
-        let mut keep_editing = false;
+        let mut previous = false;
+        let mut next = false;
+        let mut save_and_next = false;
+        let mut answer = None;
+        // While the question is shown the window's keys do nothing.
+        if !asking {
+            for key in keys {
+                match key {
+                    EditorKeyAction::Previous => previous |= can_previous,
+                    EditorKeyAction::Next => next |= can_next,
+                    EditorKeyAction::SaveAndNext => save_and_next |= can_next,
+                }
+            }
+        }
 
         // Modal (D16): the program behind takes no clicks, drags or wheel while the window is open.
         let screen = ctx.content_rect();
@@ -1755,15 +2000,39 @@ impl Loupe {
                         }
                     }
                     if asking {
-                        ui.label(editor_text(&EditorText::DiscardQuestion));
-                        ui.horizontal(|ui| {
-                            discard = ui.button(editor_text(&EditorText::Discard)).clicked();
-                            keep_editing =
-                                ui.button(editor_text(&EditorText::KeepEditing)).clicked();
+                        ui.label(editor_text(&EditorText::SaveQuestion));
+                        ui.horizontal_wrapped(|ui| {
+                            if ui.button(editor_text(&EditorText::Save)).clicked() {
+                                answer = Some(SaveAnswer::Save);
+                            }
+                            if ui.button(editor_text(&EditorText::Discard)).clicked() {
+                                answer = Some(SaveAnswer::Discard);
+                            }
+                            if ui.button(editor_text(&EditorText::Cancel)).clicked() {
+                                answer = Some(SaveAnswer::Cancel);
+                            }
                         });
                     } else {
-                        ui.horizontal(|ui| {
-                            // Until the read is back, or when it failed, only "Avbryt".
+                        ui.horizontal_wrapped(|ui| {
+                            previous |= ui
+                                .add_enabled(
+                                    can_previous,
+                                    egui::Button::new(editor_text(&EditorText::Previous)),
+                                )
+                                .clicked();
+                            next |= ui
+                                .add_enabled(
+                                    can_next,
+                                    egui::Button::new(editor_text(&EditorText::Next)),
+                                )
+                                .clicked();
+                            save_and_next |= ui
+                                .add_enabled(
+                                    can_next,
+                                    egui::Button::new(editor_text(&EditorText::SaveAndNext)),
+                                )
+                                .clicked();
+                            // Until the read is back, or when it failed, no "OK".
                             if has_form {
                                 ok = ui
                                     .add_enabled(
@@ -1826,54 +2095,59 @@ impl Loupe {
             // "Sparat." or an error no longer describes the form.
             window.status = EditorStatus::Idle;
         }
-        if discard {
-            self.close_metadata_window();
-            return;
+        // Escape while asking is the question's "Avbryt" (back to the window).
+        if escape && asking && answer.is_none() {
+            answer = Some(SaveAnswer::Cancel);
         }
-        if keep_editing {
-            window.confirm_discard = false;
-        }
-        // Escape is "Avbryt", but with edits it asks first; while the write runs it does nothing.
-        // Escape while asking is "Fortsätt redigera".
-        if escape && !saving {
-            if window.confirm_discard {
-                window.confirm_discard = false;
-            } else if window.has_unsaved_edits() {
-                window.confirm_discard = true;
-            } else {
-                self.close_metadata_window();
-                return;
-            }
-        }
-        if cancel {
-            self.close_metadata_window();
-            return;
-        }
-        if ok {
-            let edits = match &window.body {
-                WindowBody::Form(state) => Some(state.form.edits()),
-                WindowBody::Loading | WindowBody::ReadError(_) => None,
+        // The answer to "Spara ändringarna?" (U12-Q4).
+        if let (Some(answer), Some(leave)) = (answer, window.question) {
+            window.question = None;
+            let leave_now = match leave_decision(window.has_unsaved_edits(), answer, None) {
+                LeaveDecision::Leave => Some(leave),
+                LeaveDecision::Write => self.write_window(ctx, &mut window, leave),
+                LeaveDecision::StayWithEdits | LeaveDecision::StayShowingNotices => None,
             };
-            match edits {
-                None => {}
-                // Field errors: nothing is written, the errors are shown under their fields.
-                Some(Err(errors)) => window.errors = errors,
-                Some(Ok(edits)) if edits.is_empty() => {
-                    self.close_metadata_window();
-                    return;
-                }
-                Some(Ok(edits)) => {
-                    window.errors.clear();
-                    window.status = EditorStatus::Idle;
-                    match self
-                        .metadata
-                        .save_edits(&window.path, edits, &mut self.metadata_worker)
-                    {
-                        Ok(()) => ctx.request_repaint(),
-                        Err(message) => window.status = EditorStatus::Failed(message),
-                    }
-                }
+            match leave_now {
+                Some(leave) => self.leave_metadata_window(ctx, window, leave),
+                None => self.metadata_window = Some(window),
             }
+            return;
+        }
+        // A move, Escape or "Avbryt": with unsaved edits the question is asked first; without, the
+        // move or the close is done at once. Escape and "Avbryt" do nothing while the write runs.
+        let leave = if previous {
+            Some(WindowLeave::Move { forward: false })
+        } else if next {
+            Some(WindowLeave::Move { forward: true })
+        } else if (escape || cancel) && !saving && !asking {
+            Some(WindowLeave::Close)
+        } else {
+            None
+        };
+        if let Some(leave) = leave {
+            if window.has_unsaved_edits() {
+                window.question = Some(leave);
+                self.metadata_window = Some(window);
+            } else {
+                self.leave_metadata_window(ctx, window, leave);
+            }
+            return;
+        }
+        // "Spara och nästa" never asks: it writes the edits (when there are any) and moves on
+        // success; with field errors, a failure or notices it stays as "Spara" does. OK writes and
+        // closes (T107, unchanged).
+        let write = if save_and_next {
+            Some(WindowLeave::Move { forward: true })
+        } else if ok {
+            Some(WindowLeave::Close)
+        } else {
+            None
+        };
+        if let Some(then) = write
+            && let Some(leave) = self.write_window(ctx, &mut window, then)
+        {
+            self.leave_metadata_window(ctx, window, leave);
+            return;
         }
         self.metadata_window = Some(window);
     }
@@ -4436,6 +4710,7 @@ mod tests {
         fallback_text, index_span, label_color, label_pill, recovery_text, resolve_path,
         resolve_paths, settings_save_error_text, settings_text, window_editor_properties,
     };
+    use super::{LeaveDecision, SaveAnswer, WriteOutcome, leave_decision};
     use egui::{Color32, Rect, pos2};
     use pw_loupe::{TEXT_CONTRAST, contrast_ratio};
     use pw_metadata::ToolVersion;
@@ -4449,6 +4724,79 @@ mod tests {
             copy: folder.join("bild.pwtmp-1.jpg"),
             backup: folder.join("bild.pwbak-1.jpg"),
             original_existed: true,
+        }
+    }
+
+    // --- the metadata window's move and close (ADR 0017 §2.3.1, U12-Q4, U12-Q5, T112) ---
+
+    #[test]
+    fn without_edits_a_move_or_close_is_done_at_once_whatever_the_answer_or_outcome() {
+        let outcomes = [
+            None,
+            Some(WriteOutcome::Success),
+            Some(WriteOutcome::Notices),
+            Some(WriteOutcome::Failure),
+            Some(WriteOutcome::FieldErrors),
+        ];
+        for answer in [SaveAnswer::Save, SaveAnswer::Discard, SaveAnswer::Cancel] {
+            for outcome in outcomes {
+                assert_eq!(
+                    leave_decision(false, answer, outcome),
+                    LeaveDecision::Leave,
+                    "{answer:?} {outcome:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn with_edits_spara_writes_first_and_its_outcome_decides() {
+        assert_eq!(
+            leave_decision(true, SaveAnswer::Save, None),
+            LeaveDecision::Write
+        );
+        assert_eq!(
+            leave_decision(true, SaveAnswer::Save, Some(WriteOutcome::Success)),
+            LeaveDecision::Leave,
+            "success without notices: the move or the close is done"
+        );
+        assert_eq!(
+            leave_decision(true, SaveAnswer::Save, Some(WriteOutcome::Failure)),
+            LeaveDecision::StayWithEdits,
+            "a failure keeps the window on the image with the edits"
+        );
+        assert_eq!(
+            leave_decision(true, SaveAnswer::Save, Some(WriteOutcome::FieldErrors)),
+            LeaveDecision::StayWithEdits,
+            "field errors: nothing written, no move"
+        );
+        assert_eq!(
+            leave_decision(true, SaveAnswer::Save, Some(WriteOutcome::Notices)),
+            LeaveDecision::StayShowingNotices,
+            "notices: the window stays and shows them"
+        );
+    }
+
+    #[test]
+    fn with_edits_slang_leaves_and_avbryt_stays_with_the_edits() {
+        let outcomes = [
+            None,
+            Some(WriteOutcome::Success),
+            Some(WriteOutcome::Notices),
+            Some(WriteOutcome::Failure),
+            Some(WriteOutcome::FieldErrors),
+        ];
+        for outcome in outcomes {
+            assert_eq!(
+                leave_decision(true, SaveAnswer::Discard, outcome),
+                LeaveDecision::Leave,
+                "{outcome:?}"
+            );
+            assert_eq!(
+                leave_decision(true, SaveAnswer::Cancel, outcome),
+                LeaveDecision::StayWithEdits,
+                "{outcome:?}"
+            );
         }
     }
 

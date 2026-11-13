@@ -63,7 +63,8 @@ struct ImageMetadata {
 }
 
 /// The metadata of the one image of the metadata window (ADR 0007 §5.1, D16, T107). It is asked
-/// for at once when the window opens, never while moving between images. At most one
+/// for at once when the window opens or moves to another image (ADR 0017 §2.3.1, T112), never
+/// while moving between images behind a closed window. At most one
 /// `read_metadata` is in flight; its result is kept only if it is for the window's image.
 #[derive(Default)]
 struct WindowRead {
@@ -411,6 +412,27 @@ impl MetadataCache {
         if !supports_rating(image) {
             return false;
         }
+        self.set_window_image(image, worker);
+        true
+    }
+
+    /// Moves the open metadata window's read to `image` (absolute path, ADR 0017 §2.3.1, T112)
+    /// without closing it: the new image's read is asked for at once, as when the window opens,
+    /// unless a read is still in flight (its result, for the earlier image, is then dropped and
+    /// this one sent by the next `poll`). The editor's write of the earlier image is unaffected
+    /// and still reads that image back. False, and nothing changed, when no window is open or the
+    /// file kind has no metadata support.
+    pub fn move_window(&mut self, image: &Path, worker: &mut impl MetadataSubmit) -> bool {
+        if self.window.image.is_none() || !supports_rating(image) {
+            return false;
+        }
+        self.set_window_image(image, worker);
+        true
+    }
+
+    /// The window's image is now `image`: a result for the earlier one is dropped and the read of
+    /// this one asked for at once. A read in flight stays in flight (one at a time).
+    fn set_window_image(&mut self, image: &Path, worker: &mut impl MetadataSubmit) {
         self.window = WindowRead {
             image: Some(image.to_path_buf()),
             result: None,
@@ -418,7 +440,6 @@ impl MetadataCache {
             in_flight: self.window.in_flight,
         };
         self.send_window_read(worker);
-        true
     }
 
     /// The window closed: a result still to come is dropped. A read in flight stays in flight,
@@ -1842,6 +1863,156 @@ mod tests {
         worker
             .events
             .push_back(metadata_read(500, &image, Ok(empty_read())));
+        assert!(cache.poll(&mut worker).is_empty());
+        assert_eq!(cache.take_window_read(), Some(Ok(empty_read())));
+    }
+
+    // --- moving the window to another image (ADR 0017 §2.3.1, T112) ---
+
+    #[test]
+    fn moving_the_window_asks_for_the_new_images_read_at_once() {
+        let mut worker = FakeSubmit::new([]);
+        let mut cache = MetadataCache::default();
+        let first = image_path("pw-loupe-move-first.jpg");
+        let second = image_path("pw-loupe-move-second.ARW");
+
+        // No window open: nothing is moved or read.
+        assert!(!cache.move_window(&second, &mut worker));
+        assert!(worker.metadata_reads.is_empty());
+        assert!(!cache.window_waiting());
+
+        assert!(cache.open_window(&first, &mut worker));
+        worker
+            .events
+            .push_back(metadata_read(500, &first, Ok(empty_read())));
+        assert!(cache.poll(&mut worker).is_empty());
+        assert_eq!(cache.take_window_read(), Some(Ok(empty_read())));
+
+        // Moved: the new image's read is sent in the same call, without a wait.
+        assert!(cache.move_window(&second, &mut worker));
+        assert_eq!(
+            worker.metadata_reads,
+            [(500, first.clone()), (501, second.clone())]
+        );
+        assert!(cache.window_waiting());
+        assert_eq!(cache.take_window_read(), None, "nothing is back yet");
+
+        worker
+            .events
+            .push_back(metadata_read(501, &second, Ok(empty_read())));
+        assert!(cache.poll(&mut worker).is_empty());
+        assert_eq!(cache.take_window_read(), Some(Ok(empty_read())));
+
+        // A kind without metadata support: no move, the window keeps its image.
+        let text = image_path("pw-loupe-move-notes.txt");
+        assert!(!cache.move_window(&text, &mut worker));
+        assert_eq!(worker.metadata_reads.len(), 2);
+        assert!(cache.window.is_image(&second));
+    }
+
+    #[test]
+    fn moving_the_window_drops_a_result_for_the_earlier_image() {
+        let mut worker = FakeSubmit::new([]);
+        let mut cache = MetadataCache::default();
+        let first = image_path("pw-loupe-move-stale-first.jpg");
+        let second = image_path("pw-loupe-move-stale-second.jpg");
+        assert!(cache.open_window(&first, &mut worker));
+
+        // Moved while the first read runs: one read in flight, nothing more is sent.
+        assert!(cache.move_window(&second, &mut worker));
+        assert_eq!(worker.metadata_reads, [(500, first.clone())]);
+        assert!(cache.window_waiting());
+
+        // The first image's result is dropped, and the second image is read.
+        worker
+            .events
+            .push_back(metadata_read(500, &first, Ok(empty_read())));
+        assert!(cache.poll(&mut worker).is_empty());
+        assert_eq!(cache.take_window_read(), None);
+        assert_eq!(
+            worker.metadata_reads,
+            [(500, first.clone()), (501, second.clone())]
+        );
+
+        worker
+            .events
+            .push_back(metadata_read(501, &second, Err("filen saknas".to_owned())));
+        assert!(cache.poll(&mut worker).is_empty());
+        assert_eq!(
+            cache.take_window_read(),
+            Some(Err("filen saknas".to_owned()))
+        );
+    }
+
+    #[test]
+    fn the_write_of_the_earlier_image_still_reads_that_image_back_after_a_move() {
+        let mut worker = FakeSubmit::new([]);
+        let mut cache = MetadataCache::default();
+        let first = image_path("pw-loupe-move-write-first.jpg");
+        let second = image_path("pw-loupe-move-write-second.ARW");
+        assert!(cache.open_window(&first, &mut worker));
+        worker
+            .events
+            .push_back(metadata_read(500, &first, Ok(empty_read())));
+        assert!(cache.poll(&mut worker).is_empty());
+        assert_eq!(cache.take_window_read(), Some(Ok(empty_read())));
+
+        // "Spara och nästa": the first image's edits are written, then the window moves.
+        assert_eq!(cache.save_edits(&first, title_edits(), &mut worker), Ok(()));
+        worker
+            .events
+            .push_back(edits_written(900, &first, Ok(report(Vec::new()))));
+        assert!(cache.poll(&mut worker).is_empty());
+        assert_eq!(
+            cache.take_editor_events(),
+            [EditorEvent::Saved {
+                path: first.clone(),
+                notices: Vec::new(),
+            }]
+        );
+        // The write asked for the read after it (501) and, as the window still showed the first
+        // image, the window's new read of it (502).
+        assert_eq!(
+            worker.metadata_reads,
+            [
+                (500, first.clone()),
+                (501, first.clone()),
+                (502, first.clone())
+            ]
+        );
+        assert!(cache.move_window(&second, &mut worker));
+        assert_eq!(worker.metadata_reads.len(), 3, "one window read in flight");
+
+        // The read after the write still reads the first image back for the editor; the window's
+        // result for the first image is dropped, and the second image is read.
+        worker
+            .events
+            .push_back(metadata_read(501, &first, Ok(empty_read())));
+        worker
+            .events
+            .push_back(metadata_read(502, &first, Ok(empty_read())));
+        assert!(cache.poll(&mut worker).is_empty());
+        assert_eq!(
+            cache.take_editor_events(),
+            [EditorEvent::Reloaded {
+                path: first.clone(),
+                result: Ok(empty_read()),
+            }]
+        );
+        assert!(!cache.editor_reloading());
+        assert_eq!(cache.take_window_read(), None);
+        assert_eq!(
+            worker.metadata_reads,
+            [
+                (500, first.clone()),
+                (501, first.clone()),
+                (502, first),
+                (503, second.clone())
+            ]
+        );
+        worker
+            .events
+            .push_back(metadata_read(503, &second, Ok(empty_read())));
         assert!(cache.poll(&mut worker).is_empty());
         assert_eq!(cache.take_window_read(), Some(Ok(empty_read())));
     }

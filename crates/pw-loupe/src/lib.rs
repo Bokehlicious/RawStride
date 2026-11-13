@@ -27,7 +27,7 @@ use std::path::{Path, PathBuf};
 
 use pw_viewcore::{DecodeError, Frame, Source, Status, Zoom};
 
-pub use browse::LoupeMove;
+pub use browse::{LoupeMove, metadata_neighbour};
 pub use editor::{EditorField, EditorForm, EditorText, OpenConflict, editor_text, notice_text};
 pub use filter::{
     Filter, LABEL_CHOICES, LabelChoice, LabelFilter, STAR_CONDITIONS, STAR_FILTERS, StarCondition,
@@ -470,6 +470,34 @@ pub fn preview_key_action(
 /// Whether the key combination opens the import dialog (Ctrl+I, no shift or alt).
 pub fn opens_import(key: egui::Key, ctrl: bool, shift: bool, alt: bool) -> bool {
     key == egui::Key::I && ctrl && !shift && !alt
+}
+
+/// A key of the metadata window's own (ADR 0017 §2.3.1, U12-Q1, T112). The keys are taken before
+/// the window's form is drawn, so they work while a field has the keyboard and never reach it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EditorKeyAction {
+    /// Ctrl+PageUp: "Föregående".
+    Previous,
+    /// Ctrl+PageDown: "Nästa".
+    Next,
+    /// Ctrl+Enter: "Spara och nästa".
+    SaveAndNext,
+}
+
+/// The metadata window's key of a key press, each with exactly Ctrl; `None` with Shift or Alt and
+/// for every other key, so plain arrows, Page Up/Down, Home, End and Enter stay with the fields.
+pub fn editor_key_action(
+    key: egui::Key,
+    ctrl: bool,
+    shift: bool,
+    alt: bool,
+) -> Option<EditorKeyAction> {
+    match (key, ctrl, shift, alt) {
+        (egui::Key::PageUp, true, false, false) => Some(EditorKeyAction::Previous),
+        (egui::Key::PageDown, true, false, false) => Some(EditorKeyAction::Next),
+        (egui::Key::Enter, true, false, false) => Some(EditorKeyAction::SaveAndNext),
+        _ => None,
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1002,6 +1030,37 @@ mod tests {
         assert!(!opens_import(K::I, true, false, true));
         assert!(!opens_import(K::I, false, false, true));
         assert!(!opens_import(K::O, true, false, false));
+    }
+
+    #[test]
+    fn the_metadata_windows_keys_are_ctrl_page_up_page_down_and_enter() {
+        use egui::Key as K;
+        assert_eq!(
+            editor_key_action(K::PageDown, true, false, false),
+            Some(EditorKeyAction::Next)
+        );
+        assert_eq!(
+            editor_key_action(K::PageUp, true, false, false),
+            Some(EditorKeyAction::Previous)
+        );
+        assert_eq!(
+            editor_key_action(K::Enter, true, false, false),
+            Some(EditorKeyAction::SaveAndNext)
+        );
+        for key in [K::PageDown, K::PageUp, K::Enter] {
+            // Without Ctrl (plain Page Up/Down and Enter stay with the fields), or with Shift or
+            // Alt: nothing.
+            assert_eq!(editor_key_action(key, false, false, false), None, "{key:?}");
+            assert_eq!(editor_key_action(key, true, true, false), None, "{key:?}");
+            assert_eq!(editor_key_action(key, true, false, true), None, "{key:?}");
+            assert_eq!(editor_key_action(key, false, true, false), None, "{key:?}");
+            assert_eq!(editor_key_action(key, false, false, true), None, "{key:?}");
+        }
+        // Other keys with Ctrl, and the plain keys the fields use.
+        for key in [K::ArrowLeft, K::ArrowRight, K::Home, K::End, K::Tab, K::M] {
+            assert_eq!(editor_key_action(key, true, false, false), None, "{key:?}");
+            assert_eq!(editor_key_action(key, false, false, false), None, "{key:?}");
+        }
     }
 
     #[test]
