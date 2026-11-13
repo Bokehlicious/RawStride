@@ -168,6 +168,8 @@ Proposal: **C**. `open_folder` is unchanged and still used for a new folder or t
 
 - The current cell keeps its yellow outline. A marked cell gets a blue outline (`#4c8dff`, the
   label blue) and a faint blue fill behind the thumbnail; the current cell inside a marking has both.
+  *Changed by the owner, 2026-11-13 (ADR 0017 U1, T109):* the current cell's outline has the same
+  blue as the marked cells, so the frame looks the same with one or several images marked.
 
 ### 5.2 Filter controls
 

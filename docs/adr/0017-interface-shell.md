@@ -97,7 +97,9 @@ Workflow: contact sheet → preview → metadata, all from the keyboard.
   Editing stays in its own window (§2.3).
 - **Status bar:** selection and total, active filter, the source of the shown image (G1), progress.
 - Both side columns can be resized, collapsed and hidden with one key (named in U1; not Tab, which
-  changes tab today); their state is remembered (§2.5).
+  changes tab today); their state is remembered (§2.5). The right column starts collapsed and is
+  opened from Visa (owner, 2026-11-13): the inspector is mainly for judging an image, which the
+  preview's right column serves.
 
 ### 2.2 Preview
 

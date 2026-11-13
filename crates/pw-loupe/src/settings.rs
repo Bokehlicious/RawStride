@@ -4,7 +4,8 @@
 //! next to the write journal, for this user on this computer only: UTF-8 text with one
 //! `key = value` per line. Loading never fails: what cannot be read keeps its default and gives a
 //! problem text in English for the log. Saving writes a temporary file and renames it onto the
-//! settings file, so a crash never leaves half a file. Nothing uses the file yet (T106).
+//! settings file, so a crash never leaves half a file. The main window's remembered state (ADR
+//! 0017 §2.5, U1, T109: theme, window, full screen, side columns) is kept in the same file.
 
 use std::fs::File;
 use std::io::{self, Write};
@@ -14,6 +15,8 @@ use pw_metadata::edit::EditOptions;
 use pw_metadata::iim::Fallback;
 use pw_metadata::write_plan::WriteSettings;
 
+use crate::shell::{ColumnState, DEFAULT_LEFT_WIDTH, DEFAULT_RIGHT_WIDTH, Theme};
+
 /// The key of the setting "Skapa IPTC-IIM för kompatibilitet med äldre system".
 const CREATE_IIM: &str = "create_iim";
 /// The key of the fallback encoding.
@@ -22,14 +25,26 @@ const FALLBACK_ENCODING: &str = "fallback_encoding";
 const WINDOWS_1252: &str = "windows-1252";
 /// The value of [`FALLBACK_ENCODING`] for ISO 8859-1 (Latin-1).
 const ISO_8859_1: &str = "iso-8859-1";
+/// The keys of the main window's remembered state (T109).
+const THEME: &str = "theme";
+const WINDOW: &str = "window";
+const WINDOW_MAXIMIZED: &str = "window_maximized";
+const FULLSCREEN: &str = "fullscreen";
+const LEFT_COLUMN_WIDTH: &str = "left_column_width";
+const RIGHT_COLUMN_WIDTH: &str = "right_column_width";
+const LEFT_COLUMN: &str = "left_column";
+const RIGHT_COLUMN: &str = "right_column";
+const COLUMNS_HIDDEN: &str = "columns_hidden";
 
 /// RawStride's settings.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Settings {
     /// Create IIM in a JPEG, TIFF or DNG that has none (§5.2).
     pub create_iim: bool,
     /// The encoding for IIM and Exif text that is neither ASCII nor UTF-8 (§5.4, Q10).
     pub fallback: Fallback,
+    /// The main window's remembered state (ADR 0017 §2.5, T109).
+    pub shell: ShellSettings,
 }
 
 impl Default for Settings {
@@ -37,6 +52,53 @@ impl Default for Settings {
         Self {
             create_iim: false,
             fallback: Fallback::Windows1252,
+            shell: ShellSettings::default(),
+        }
+    }
+}
+
+/// The window's last normal (not maximized, not full screen) place: the outer position and the
+/// inner size in points, as eframe reports them, and the points-to-pixels scale at that time.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct WindowRect {
+    pub x: i32,
+    pub y: i32,
+    pub width: u32,
+    pub height: u32,
+    pub scale: f32,
+}
+
+/// The main window's remembered state (ADR 0017 §2.5, U1, T109).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ShellSettings {
+    pub theme: Theme,
+    /// `None` until the window has had a normal size; the window then opens maximized.
+    pub window: Option<WindowRect>,
+    pub window_maximized: bool,
+    pub fullscreen: bool,
+    /// The side columns' widths in points.
+    pub left_column_width: u32,
+    pub right_column_width: u32,
+    pub left_column: ColumnState,
+    pub right_column: ColumnState,
+    /// Both side columns hidden with the hide key.
+    pub columns_hidden: bool,
+}
+
+impl Default for ShellSettings {
+    fn default() -> Self {
+        Self {
+            theme: Theme::Dark,
+            window: None,
+            window_maximized: false,
+            fullscreen: false,
+            left_column_width: DEFAULT_LEFT_WIDTH,
+            right_column_width: DEFAULT_RIGHT_WIDTH,
+            left_column: ColumnState::Open,
+            // The main window starts without the inspector; it is opened from Visa (owner,
+            // 2026-11-13).
+            right_column: ColumnState::Collapsed,
+            columns_hidden: false,
         }
     }
 }
@@ -94,11 +156,18 @@ pub fn load_settings(path: &Path) -> (Settings, Vec<String>) {
             continue;
         };
         let (key, value) = (key.trim(), value.trim());
+        let bad = |expected: &str| {
+            format!(
+                "settings file {}, line {number}: bad value \"{value}\" for {key} (expected \
+                 {expected}), default used",
+                path.display()
+            )
+        };
+        let shell = &mut settings.shell;
         match key {
-            CREATE_IIM => match value {
-                "true" => settings.create_iim = true,
-                "false" => settings.create_iim = false,
-                _ => problems.push(format!(
+            CREATE_IIM => match parse_bool(value) {
+                Some(on) => settings.create_iim = on,
+                None => problems.push(format!(
                     "settings file {}, line {number}: bad value \"{value}\" for {CREATE_IIM} \
                      (expected true or false), default used",
                     path.display()
@@ -112,6 +181,32 @@ pub fn load_settings(path: &Path) -> (Settings, Vec<String>) {
                     path.display()
                 )),
             },
+            THEME => match parse_theme(value) {
+                Some(theme) => shell.theme = theme,
+                None => problems.push(bad("dark or light")),
+            },
+            WINDOW => match parse_window(value) {
+                Some(window) => shell.window = Some(window),
+                None => problems.push(bad("x,y,width,height,scale")),
+            },
+            WINDOW_MAXIMIZED | FULLSCREEN | COLUMNS_HIDDEN => match parse_bool(value) {
+                Some(on) => match key {
+                    WINDOW_MAXIMIZED => shell.window_maximized = on,
+                    FULLSCREEN => shell.fullscreen = on,
+                    _ => shell.columns_hidden = on,
+                },
+                None => problems.push(bad("true or false")),
+            },
+            LEFT_COLUMN_WIDTH | RIGHT_COLUMN_WIDTH => match value.parse::<u32>() {
+                Ok(width) if key == LEFT_COLUMN_WIDTH => shell.left_column_width = width,
+                Ok(width) => shell.right_column_width = width,
+                Err(_) => problems.push(bad("a width in points")),
+            },
+            LEFT_COLUMN | RIGHT_COLUMN => match parse_column(value) {
+                Some(state) if key == LEFT_COLUMN => shell.left_column = state,
+                Some(state) => shell.right_column = state,
+                None => problems.push(bad("open or collapsed")),
+            },
             _ => problems.push(format!(
                 "settings file {}, line {number}: unknown key \"{key}\", line ignored",
                 path.display()
@@ -121,8 +216,8 @@ pub fn load_settings(path: &Path) -> (Settings, Vec<String>) {
     (settings, problems)
 }
 
-/// Writes the settings: creates the folder, writes both keys (after the comment line
-/// `# RawStride`) to `<file name>.tmp` in the same folder, then renames it onto the settings file
+/// Writes the settings: creates the folder, writes every key (after the comment line
+/// `# RawStride`; `window` only when there is one) to `<file name>.tmp` in the same folder, then renames it onto the settings file
 /// (which replaces it on Windows), so a crash never leaves half a file.
 pub fn save_settings(path: &Path, settings: &Settings) -> io::Result<()> {
     let Some(file_name) = path.file_name() else {
@@ -137,11 +232,12 @@ pub fn save_settings(path: &Path, settings: &Settings) -> io::Result<()> {
     let mut temp_name = file_name.to_os_string();
     temp_name.push(".tmp");
     let temp = path.with_file_name(temp_name);
-    let text = format!(
+    let mut text = format!(
         "# RawStride\n{CREATE_IIM} = {}\n{FALLBACK_ENCODING} = {}\n",
         settings.create_iim,
         fallback_value(settings.fallback)
     );
+    text.push_str(&shell_lines(&settings.shell));
     let written = write_synced(&temp, text.as_bytes()).and_then(|()| std::fs::rename(&temp, path));
     if written.is_err() {
         // Best effort: the error of the write or the rename is the one reported.
@@ -156,6 +252,87 @@ fn write_synced(path: &Path, bytes: &[u8]) -> io::Result<()> {
     let mut file = File::create(path)?;
     file.write_all(bytes)?;
     file.sync_all()
+}
+
+/// The lines of the main window's remembered state.
+fn shell_lines(shell: &ShellSettings) -> String {
+    let mut text = format!("{THEME} = {}\n", theme_value(shell.theme));
+    if let Some(w) = shell.window {
+        text.push_str(&format!(
+            "{WINDOW} = {},{},{},{},{}\n",
+            w.x, w.y, w.width, w.height, w.scale
+        ));
+    }
+    text.push_str(&format!(
+        "{WINDOW_MAXIMIZED} = {}\n{FULLSCREEN} = {}\n{LEFT_COLUMN_WIDTH} = {}\n\
+         {RIGHT_COLUMN_WIDTH} = {}\n{LEFT_COLUMN} = {}\n{RIGHT_COLUMN} = {}\n\
+         {COLUMNS_HIDDEN} = {}\n",
+        shell.window_maximized,
+        shell.fullscreen,
+        shell.left_column_width,
+        shell.right_column_width,
+        column_value(shell.left_column),
+        column_value(shell.right_column),
+        shell.columns_hidden
+    ));
+    text
+}
+
+fn parse_bool(value: &str) -> Option<bool> {
+    match value {
+        "true" => Some(true),
+        "false" => Some(false),
+        _ => None,
+    }
+}
+
+fn theme_value(theme: Theme) -> &'static str {
+    match theme {
+        Theme::Dark => "dark",
+        Theme::Light => "light",
+    }
+}
+
+fn parse_theme(value: &str) -> Option<Theme> {
+    match value {
+        "dark" => Some(Theme::Dark),
+        "light" => Some(Theme::Light),
+        _ => None,
+    }
+}
+
+fn column_value(state: ColumnState) -> &'static str {
+    match state {
+        ColumnState::Open => "open",
+        ColumnState::Collapsed => "collapsed",
+    }
+}
+
+fn parse_column(value: &str) -> Option<ColumnState> {
+    match value {
+        "open" => Some(ColumnState::Open),
+        "collapsed" => Some(ColumnState::Collapsed),
+        _ => None,
+    }
+}
+
+/// `x,y,width,height,scale`: whole points and a positive, finite scale.
+fn parse_window(value: &str) -> Option<WindowRect> {
+    let parts: Vec<&str> = value.split(',').map(str::trim).collect();
+    let [x, y, width, height, scale] = parts.as_slice() else {
+        return None;
+    };
+    let scale: f32 = scale.parse().ok()?;
+    if !scale.is_finite() || scale <= 0.0 {
+        return None;
+    }
+    Some(WindowRect {
+        x: x.parse().ok()?,
+        y: y.parse().ok()?,
+        width: width.parse().ok()?,
+        height: height.parse().ok()?,
+        scale,
+    })
 }
 
 /// The file value of an encoding.
@@ -184,7 +361,8 @@ mod tests {
     use pw_metadata::iim::Fallback;
     use pw_metadata::write_plan::WriteSettings;
 
-    use super::{Settings, load_settings, save_settings, settings_path};
+    use super::{Settings, ShellSettings, WindowRect, load_settings, save_settings, settings_path};
+    use crate::shell::{ColumnState, Theme};
 
     static NEXT_TEMP: AtomicUsize = AtomicUsize::new(0);
 
@@ -260,6 +438,7 @@ mod tests {
                 let settings = Settings {
                     create_iim,
                     fallback,
+                    ..Settings::default()
                 };
                 save_settings(&path, &settings).unwrap();
                 let (loaded, problems) = load_settings(&path);
@@ -270,17 +449,21 @@ mod tests {
     }
 
     #[test]
-    fn saved_file_has_the_comment_line_and_both_keys() {
+    fn saved_file_has_the_comment_line_and_every_key() {
         let dir = TempDir::new();
         let path = dir.0.join("settings.txt");
         let settings = Settings {
             create_iim: true,
             fallback: Fallback::Latin1,
+            ..Settings::default()
         };
         save_settings(&path, &settings).unwrap();
         assert_eq!(
             std::fs::read_to_string(&path).unwrap(),
-            "# RawStride\ncreate_iim = true\nfallback_encoding = iso-8859-1\n"
+            "# RawStride\ncreate_iim = true\nfallback_encoding = iso-8859-1\ntheme = dark\n\
+             window_maximized = false\nfullscreen = false\nleft_column_width = 240\n\
+             right_column_width = 300\nleft_column = open\nright_column = collapsed\n\
+             columns_hidden = false\n"
         );
     }
 
@@ -297,6 +480,7 @@ mod tests {
             Settings {
                 create_iim: true,
                 fallback: Fallback::Latin1,
+                ..Settings::default()
             }
         );
     }
@@ -314,6 +498,7 @@ mod tests {
             Settings {
                 create_iim: true,
                 fallback: Fallback::Latin1,
+                ..Settings::default()
             }
         );
     }
@@ -388,6 +573,7 @@ mod tests {
             &Settings {
                 create_iim: true,
                 fallback: Fallback::Latin1,
+                ..Settings::default()
             },
         )
         .unwrap();
@@ -400,6 +586,7 @@ mod tests {
         let settings = Settings {
             create_iim: true,
             fallback: Fallback::Latin1,
+            ..Settings::default()
         };
         assert_eq!(
             settings.edit_options(),
@@ -419,6 +606,100 @@ mod tests {
                 Some(PathBuf::from(data).join("RawStride").join("settings.txt"))
             ),
             None => assert_eq!(settings_path(), None),
+        }
+    }
+
+    fn changed_shell() -> ShellSettings {
+        ShellSettings {
+            theme: Theme::Light,
+            window: Some(WindowRect {
+                x: -8,
+                y: 40,
+                width: 1600,
+                height: 900,
+                scale: 1.25,
+            }),
+            window_maximized: true,
+            fullscreen: true,
+            left_column_width: 210,
+            right_column_width: 355,
+            left_column: ColumnState::Collapsed,
+            right_column: ColumnState::Collapsed,
+            columns_hidden: true,
+        }
+    }
+
+    #[test]
+    fn shell_defaults_are_dark_left_column_open_and_right_collapsed() {
+        let shell = Settings::default().shell;
+        assert_eq!(shell.theme, Theme::Dark);
+        assert_eq!(shell.window, None);
+        assert!(!shell.window_maximized);
+        assert!(!shell.fullscreen);
+        assert_eq!(shell.left_column_width, 240);
+        assert_eq!(shell.right_column_width, 300);
+        assert_eq!(shell.left_column, ColumnState::Open);
+        assert_eq!(shell.right_column, ColumnState::Collapsed);
+        assert!(!shell.columns_hidden);
+    }
+
+    #[test]
+    fn every_shell_key_round_trips_through_save_and_load() {
+        let dir = TempDir::new();
+        let path = dir.0.join("settings.txt");
+        for shell in [ShellSettings::default(), changed_shell()] {
+            let settings = Settings {
+                create_iim: true,
+                fallback: Fallback::Latin1,
+                shell,
+            };
+            save_settings(&path, &settings).unwrap();
+            let (loaded, problems) = load_settings(&path);
+            assert!(problems.is_empty(), "{problems:?}");
+            assert_eq!(loaded, settings);
+        }
+        assert!(
+            std::fs::read_to_string(&path)
+                .unwrap()
+                .contains("window = -8,40,1600,900,1.25\n")
+        );
+    }
+
+    #[test]
+    fn a_file_with_only_the_two_metadata_keys_gives_the_shell_defaults_and_no_problem() {
+        let (_dir, path) =
+            TempDir::with_file("# RawStride\ncreate_iim = true\nfallback_encoding = iso-8859-1\n");
+        let (settings, problems) = load_settings(&path);
+        assert!(problems.is_empty(), "{problems:?}");
+        assert_eq!(settings.shell, ShellSettings::default());
+        assert!(settings.create_iim);
+    }
+
+    #[test]
+    fn a_bad_value_of_each_shell_key_keeps_its_default_and_names_the_line() {
+        let bad = [
+            ("theme", "blue"),
+            ("window", "1,2,3,4"),
+            ("window", "1,2,3,4,0"),
+            ("window", "1,2,-3,4,1"),
+            ("window", "a,2,3,4,1"),
+            ("window_maximized", "yes"),
+            ("fullscreen", "1"),
+            ("left_column_width", "-5"),
+            ("right_column_width", "wide"),
+            ("left_column", "hidden"),
+            ("right_column", ""),
+            ("columns_hidden", "no"),
+        ];
+        for (key, value) in bad {
+            let (_dir, path) = TempDir::with_file(&format!(
+                "# RawStride\ncreate_iim = true\n{key} = {value}\n"
+            ));
+            let (settings, problems) = load_settings(&path);
+            assert_one_problem_on_line(&problems, 3);
+            assert!(problems[0].contains(key), "{problems:?}");
+            assert_eq!(settings.shell, ShellSettings::default(), "{key} = {value}");
+            assert!(settings.create_iim, "{key} = {value}");
         }
     }
 }

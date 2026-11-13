@@ -16,6 +16,8 @@ mod monitor_profile;
 mod ratings;
 mod selection;
 mod settings;
+mod shell;
+mod shell_text;
 mod tabs;
 mod thumbs;
 
@@ -58,7 +60,19 @@ pub use ratings::{
     rating_key_action, star_glyphs, status_text,
 };
 pub use selection::Selection;
-pub use settings::{Settings, load_settings, save_settings, settings_path};
+pub use settings::{
+    Settings, ShellSettings, WindowRect, load_settings, save_settings, settings_path,
+};
+pub use shell::{
+    COLLAPSED_WIDTH, ColumnState, Command, HIDE_KEY, KeyChord, MENUS, Menu, MenuEntry, MenuItem,
+    MenuKind, NON_TEXT_CONTRAST, Palette, STATUS_TEXT_SIZE, StartWindow, SubmenuKind,
+    TEXT_CONTRAST, THEMES, Theme, Where, apply_text_sizes, clamp_column_width, column_width_range,
+    contrast_ratio, image_area, menu_items, non_text_pairs, palette, rect_on_a_screen,
+    start_window, text_pairs, visuals,
+};
+pub use shell_text::{
+    ShellText, command_text, key_text, menu_text, shell_text, submenu_text, theme_text,
+};
 pub use tabs::{Tab, Tabs, ViewMode};
 pub use thumbs::{CellState, ThumbGrid, color_image, request_cell};
 
@@ -188,8 +202,8 @@ pub fn step_allowed(action: Action, repeat: bool, status: &Status) -> bool {
         && matches!(status, Status::Preparing { .. }))
 }
 
-/// The action of a key press. Keys that are reserved for later milestones (Escape, G, Enter,
-/// Ctrl+O, Ctrl+A, digits) give `None`.
+/// The action of a key press in the loupe. Keys handled elsewhere (Escape, G, Enter, Ctrl+O,
+/// Ctrl+A, digits) give `None`.
 pub fn key_action(key: egui::Key, ctrl: bool, alt: bool) -> Option<Action> {
     use egui::Key as K;
     if ctrl || alt {
@@ -378,6 +392,28 @@ pub fn mode_label(mode: Source) -> &'static str {
     match mode {
         Source::Raw => "Läge: RAW (R)",
         Source::Jpeg => "Läge: JPEG (R)",
+    }
+}
+
+/// A key of the main window's shell (ADR 0017 §2.4, U1, T109).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ShellAction {
+    /// Ctrl+O: the folder dialog ("Öppna mapp").
+    OpenFolder,
+    /// F11: full screen for the main window.
+    ToggleFullscreen,
+    /// The hide key ([`HIDE_KEY`], U1-Q2): hides both side columns, or brings them back.
+    ToggleColumns,
+}
+
+/// The shell action of a key press: Ctrl+O, F11 and the hide key, each with exactly those
+/// modifiers. Tab is not used (Ctrl+Tab changes tab, and egui moves the focus with Tab).
+pub fn shell_key_action(key: egui::Key, ctrl: bool, shift: bool, alt: bool) -> Option<ShellAction> {
+    match (key, ctrl, shift, alt) {
+        (egui::Key::O, true, false, false) => Some(ShellAction::OpenFolder),
+        (egui::Key::F11, false, false, false) => Some(ShellAction::ToggleFullscreen),
+        (key, false, false, false) if key == HIDE_KEY => Some(ShellAction::ToggleColumns),
+        _ => None,
     }
 }
 
@@ -900,5 +936,145 @@ mod tests {
         assert_eq!(dialog_key_action(K::Escape, false, true), None);
         assert_eq!(dialog_key_action(K::Enter, false, true), None);
         assert_eq!(dialog_key_action(K::A, false, false), None);
+    }
+
+    #[test]
+    fn shell_keys_are_ctrl_o_f11_and_h() {
+        use egui::Key as K;
+        assert_eq!(
+            shell_key_action(K::O, true, false, false),
+            Some(ShellAction::OpenFolder)
+        );
+        assert_eq!(
+            shell_key_action(K::F11, false, false, false),
+            Some(ShellAction::ToggleFullscreen)
+        );
+        assert_eq!(
+            shell_key_action(K::H, false, false, false),
+            Some(ShellAction::ToggleColumns)
+        );
+        for (ctrl, shift, alt) in [
+            (false, false, false),
+            (true, true, false),
+            (true, false, true),
+            (false, true, false),
+        ] {
+            assert_eq!(shell_key_action(K::O, ctrl, shift, alt), None);
+        }
+        for (ctrl, shift, alt) in [
+            (true, false, false),
+            (false, true, false),
+            (false, false, true),
+        ] {
+            assert_eq!(shell_key_action(K::F11, ctrl, shift, alt), None);
+            assert_eq!(shell_key_action(K::H, ctrl, shift, alt), None);
+        }
+        // Tab is not the hide key, with or without Ctrl; Ctrl+Tab still changes tab.
+        for (ctrl, shift) in [(false, false), (true, false), (false, true), (true, true)] {
+            assert_eq!(shell_key_action(K::Tab, ctrl, shift, false), None);
+        }
+        assert_eq!(
+            tab_action(K::Tab, true, false, false),
+            Some(TabAction::Next)
+        );
+        // The shell keys do nothing in the loupe's key map.
+        assert_eq!(key_action(K::H, false, false), None);
+        assert_eq!(key_action(K::F11, false, false), None);
+        assert_eq!(key_action(K::O, true, false), None);
+    }
+
+    /// The command a key gives in `view`, through the key functions in the order `main.rs` asks
+    /// them (shell keys, import, tabs, ratings, `M`, then the view's own keys).
+    fn command_of_key(chord: KeyChord, view: ViewMode) -> Option<Command> {
+        let KeyChord {
+            key,
+            ctrl,
+            shift,
+            alt,
+        } = chord;
+        if let Some(action) = shell_key_action(key, ctrl, shift, alt) {
+            return Some(match action {
+                ShellAction::OpenFolder => Command::OpenFolder,
+                ShellAction::ToggleFullscreen => Command::Fullscreen,
+                ShellAction::ToggleColumns => Command::ToggleColumns,
+            });
+        }
+        if opens_import(key, ctrl, shift, alt) {
+            return Some(Command::Import);
+        }
+        if let Some(action) = tab_action(key, ctrl, shift, alt) {
+            return Some(match action {
+                TabAction::Next => Command::NextTab,
+                TabAction::Previous => Command::PreviousTab,
+                TabAction::Close => Command::CloseTab,
+            });
+        }
+        if let Some(rating) = rating_key_action(key, ctrl, shift, alt) {
+            return Some(match rating {
+                RatingKey::Stars(stars) => Command::Stars(stars),
+                RatingKey::Label(label) => Command::Label(label),
+                RatingKey::ClearLabel => Command::ClearLabel,
+                RatingKey::Reject => Command::Reject,
+            });
+        }
+        if key_action(key, ctrl, alt) == Some(Action::OpenMetadata) {
+            return Some(Command::Metadata);
+        }
+        match view {
+            ViewMode::Grid => match grid_key_action(key, ctrl, shift, alt)? {
+                GridKeyAction::OpenLoupe => Some(Command::ToggleView),
+                GridKeyAction::SelectAll => Some(Command::SelectAll),
+                GridKeyAction::ClearSelection => Some(Command::ClearSelection),
+                GridKeyAction::Navigate(_) | GridKeyAction::Extend(_) => None,
+            },
+            ViewMode::Loupe => {
+                if shift {
+                    return None;
+                }
+                if loupe_key_action(key, ctrl, alt).is_some() {
+                    return Some(Command::ToggleView);
+                }
+                match key_action(key, ctrl, alt)? {
+                    Action::Fit => Some(Command::Fit),
+                    Action::ToggleZoom => Some(Command::ToggleZoom),
+                    Action::ZoomStep(1) => Some(Command::ZoomIn),
+                    Action::ZoomStep(-1) => Some(Command::ZoomOut),
+                    Action::ToggleAnchor => Some(Command::ToggleAnchor),
+                    Action::ToggleInfo => Some(Command::ToggleInfo),
+                    Action::ToggleMode => Some(Command::ToggleMode),
+                    _ => None,
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn every_menu_key_gives_its_items_command() {
+        let mut checked = 0;
+        for item in shell::menu_items() {
+            let Some(chord) = item.key else {
+                continue;
+            };
+            // Alt+F4 is Windows' own key for closing the window, not RawStride's.
+            if item.command == Command::Quit {
+                continue;
+            }
+            let views: &[ViewMode] = match item.command.acts_in() {
+                Where::Both => &[ViewMode::Grid, ViewMode::Loupe],
+                Where::Grid => &[ViewMode::Grid],
+                Where::Loupe => &[ViewMode::Loupe],
+            };
+            for &view in views {
+                assert_eq!(
+                    command_of_key(chord, view),
+                    Some(item.command),
+                    "{} shows {} in {view:?}",
+                    command_text(item.command),
+                    key_text(chord)
+                );
+                checked += 1;
+            }
+        }
+        assert!(checked > 30, "only {checked} keys checked");
     }
 }

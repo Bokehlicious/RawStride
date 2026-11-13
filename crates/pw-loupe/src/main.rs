@@ -34,6 +34,13 @@ use pw_loupe::{
     star_filter_text, star_glyphs, status_line, step_allowed, step_thumbnail_size, tab_action,
     take_wheel_steps, visible_range, wheel_factor, window_title,
 };
+use pw_loupe::{
+    COLLAPSED_WIDTH, ColumnState, Command, MENUS, MenuEntry, MenuItem, RatingKey, STATUS_TEXT_SIZE,
+    ShellAction, ShellSettings, ShellText, StartWindow, THEMES, Theme, Where, WindowRect,
+    apply_text_sizes, clamp_column_width, column_width_range, command_text, image_area, key_text,
+    menu_text, palette, rect_on_a_screen, shell_key_action, shell_text, start_window, submenu_text,
+    theme_text, visuals,
+};
 use pw_metadata::edit::EditOptions;
 use pw_metadata::iim::Fallback;
 use pw_metadata::journal::{Journal, Recovered};
@@ -47,14 +54,16 @@ use pw_viewcore::{Config, Status, ViewCore};
 
 mod metadata;
 
-const BACKGROUND: egui::Color32 = egui::Color32::from_gray(32);
-const STATUS_HEIGHT: f32 = 24.0;
+/// The contact sheet's and the loupe's background: the same neutral dark grey in both themes
+/// (ADR 0017 §2.5, U1-Q4).
+const BACKGROUND: egui::Color32 = image_area::BACKGROUND;
 /// Width of the narrow star-condition list ("≥", "=", "≤", ADR 0014 §5.2, amendment 1).
 const CONDITION_COMBO_WIDTH: f32 = 40.0;
 const GRID_SPACING: f32 = 8.0;
 const GRID_LABEL_HEIGHT: f32 = 18.0;
-/// The outline and, faint, the fill of a marked cell (ADR 0014 §5.1: the label blue).
-const MARKED_BLUE: egui::Color32 = egui::Color32::from_rgb(0x4c, 0x8d, 0xff);
+/// The outline and, faint, the fill of a marked cell (ADR 0014 §5.1: the label blue, which is
+/// also the dark theme's accent, ADR 0017 §2.5).
+const MARKED_BLUE: egui::Color32 = image_area::MARKED;
 const MARKED_FILL: egui::Color32 = egui::Color32::from_rgba_premultiplied(0x0f, 0x1c, 0x33, 0x33);
 /// How long the image check waits for the view core to close the RAW sessions of a file (T91).
 const RELEASE_TIMEOUT: Duration = Duration::from_secs(5);
@@ -90,6 +99,23 @@ fn metadata_subject(tab: Option<&Tab>, cwd: Option<&Path>) -> Option<PathBuf> {
         Some(cwd) => resolve_path(cwd, path),
         None => path.clone(),
     })
+}
+
+/// The status bar's content (ADR 0017 §2.1, T109): made while the central area is drawn, shown
+/// by the bottom panel. A change asks for one more frame, so the bar is never left a frame behind.
+#[derive(Clone, Debug, Default, PartialEq)]
+struct StatusBar {
+    line: String,
+    /// The RAW/JPEG control's text in the loupe (G4: a key and a control).
+    mode: Option<&'static str>,
+}
+
+/// egui's theme for one of RawStride's.
+fn egui_theme(theme: Theme) -> egui::Theme {
+    match theme {
+        Theme::Dark => egui::Theme::Dark,
+        Theme::Light => egui::Theme::Light,
+    }
 }
 
 /// What the metadata window says above its buttons (T105, T107).
@@ -255,6 +281,12 @@ struct Loupe {
     textures: Textures,
     anchor_at_pointer: bool,
     show_info: bool,
+    /// The status bar's content of the last frame, and the one made this frame (T109).
+    status_bar: StatusBar,
+    next_status: StatusBar,
+    /// A position the contact sheet scrolls to on the next frame: a menu command or the command
+    /// bar changed the current image or the filter (T109).
+    scroll_request: Option<usize>,
     /// The metadata window (M, D16, T107); at most one. While it is open it holds the program.
     metadata_window: Option<MetadataWindow>,
     message: Option<String>,
@@ -319,6 +351,15 @@ impl Loupe {
     /// image when it opens, so no read made with the old settings is kept (it cannot be open
     /// while the settings window is).
     fn save_settings_window(&mut self, chosen: Settings) {
+        // The window was opened with the layout of that moment: only its theme is taken, so the
+        // file gets the current window and columns (T109).
+        let chosen = Settings {
+            shell: ShellSettings {
+                theme: chosen.shell.theme,
+                ..self.settings.shell
+            },
+            ..chosen
+        };
         self.settings = chosen;
         self.pending_options = Some(chosen.edit_options());
         self.send_pending_options();
@@ -383,6 +424,15 @@ impl Loupe {
                         }
                     });
                 ui.add_space(PANEL_ROW_SPACING);
+                ui.label(shell_text(ShellText::ThemeLabel));
+                egui::ComboBox::from_id_salt("theme")
+                    .selected_text(theme_text(chosen.shell.theme))
+                    .show_ui(ui, |ui| {
+                        for theme in THEMES {
+                            ui.selectable_value(&mut chosen.shell.theme, theme, theme_text(theme));
+                        }
+                    });
+                ui.add_space(PANEL_ROW_SPACING);
                 ui.horizontal(|ui| {
                     save = ui.button(settings_text(SettingsText::Save)).clicked();
                     cancel = ui.button(settings_text(SettingsText::Cancel)).clicked();
@@ -391,6 +441,7 @@ impl Loupe {
         if save {
             self.settings_window = None;
             self.save_settings_window(chosen);
+            ctx.set_theme(egui_theme(self.settings.shell.theme));
         } else if cancel {
             self.settings_window = None;
         } else {
@@ -1330,7 +1381,7 @@ impl Loupe {
                         if marked {
                             painter.rect_filled(cell_rect, 0.0, MARKED_FILL);
                         }
-                        painter.rect_filled(image_rect, 0.0, egui::Color32::from_gray(64));
+                        painter.rect_filled(image_rect, 0.0, image_area::CELL);
                         match self.thumb_grid.state(index) {
                             CellState::Ready => {
                                 if let Some(texture) = self.thumb_textures.get(&index) {
@@ -1367,7 +1418,7 @@ impl Loupe {
                                     egui::Align2::CENTER_CENTER,
                                     text,
                                     egui::FontId::proportional(12.0),
-                                    egui::Color32::LIGHT_GRAY,
+                                    image_area::TEXT,
                                 );
                             }
                             CellState::Missing | CellState::Requested => {}
@@ -1397,7 +1448,7 @@ impl Loupe {
                         let text_color = if matches!(label, Some("Yellow" | "Green")) {
                             egui::Color32::from_gray(24)
                         } else {
-                            egui::Color32::LIGHT_GRAY
+                            image_area::TEXT
                         };
                         let glyphs = star_glyphs(rating.and_then(|rating| rating.stars));
                         let glyph_width = paint_rating_glyphs(
@@ -1415,8 +1466,9 @@ impl Loupe {
                             text_color,
                         );
 
-                        // A marked cell has a blue outline outside the cell; the current cell keeps
-                        // its yellow outline inside, so a current marked cell shows both (§5.1).
+                        // One frame colour for the current cell and the marked cells (owner,
+                        // 2026-11-13): a marked cell has its outline outside the cell, the current
+                        // cell inside, so a current marked cell shows both.
                         if marked {
                             painter.rect_stroke(
                                 cell_rect,
@@ -1429,7 +1481,7 @@ impl Loupe {
                             painter.rect_stroke(
                                 cell_rect,
                                 0.0,
-                                egui::Stroke::new(2.0, egui::Color32::YELLOW),
+                                egui::Stroke::new(2.0, MARKED_BLUE),
                                 egui::StrokeKind::Inside,
                             );
                         }
@@ -1500,12 +1552,11 @@ impl Loupe {
                 egui::Align2::CENTER_CENTER,
                 text,
                 egui::FontId::proportional(18.0),
-                egui::Color32::LIGHT_GRAY,
+                image_area::TEXT,
             );
         }
         let import_status = self.hidden_import_status();
         if self.show_info || import_status.is_some() {
-            let bar = egui::Rect::from_min_max(egui::pos2(full.min.x, rect.max.y), full.max);
             let current_path = tab
                 .position()
                 .and_then(|_| tab.files.get(tab.current))
@@ -1546,42 +1597,8 @@ impl Loupe {
                     format!("{line}  ·  {status}")
                 };
             }
-            if self.show_info {
-                let slider = egui::Rect::from_min_max(
-                    egui::pos2((bar.max.x - 180.0).max(bar.min.x), bar.min.y + 2.0),
-                    egui::pos2(bar.max.x - 8.0, bar.max.y - 2.0),
-                );
-                painter
-                    .with_clip_rect(egui::Rect::from_min_max(
-                        bar.min,
-                        egui::pos2((slider.min.x - 8.0).max(bar.min.x), bar.max.y),
-                    ))
-                    .text(
-                        egui::pos2(bar.min.x + 8.0, bar.center().y),
-                        egui::Align2::LEFT_CENTER,
-                        line,
-                        egui::FontId::monospace(12.0),
-                        egui::Color32::from_gray(210),
-                    );
-                ui.put(
-                    slider,
-                    egui::Slider::new(
-                        &mut self.thumb_size,
-                        MIN_THUMBNAIL_SIZE..=MAX_THUMBNAIL_SIZE,
-                    )
-                    .text("Storlek")
-                    .show_value(true),
-                );
-                self.thumb_size = clamp_thumbnail_size(self.thumb_size);
-            } else {
-                painter.text(
-                    egui::pos2(bar.min.x + 8.0, bar.center().y),
-                    egui::Align2::LEFT_CENTER,
-                    line,
-                    egui::FontId::monospace(12.0),
-                    egui::Color32::from_gray(210),
-                );
-            }
+            // The thumbnail size moved to the command bar (T109).
+            self.next_status = StatusBar { line, mode: None };
         }
     }
 
@@ -1898,6 +1915,565 @@ impl Loupe {
         self.metadata_window = Some(window);
     }
 
+    /// Whether a dialog holds the program: the metadata window (modal, D16), the settings window,
+    /// or a shown import dialog.
+    fn dialog_open(&self) -> bool {
+        self.metadata_window.is_some()
+            || self.settings_window.is_some()
+            || (self.import_dialog.is_some() && !self.import_hidden)
+    }
+
+    /// Keeps the window's state for `settings.txt` (ADR 0017 §2.5, T109): full screen, maximized,
+    /// and the last normal position and size. Nothing is taken while the window is minimized.
+    fn remember_window(&mut self, ctx: &egui::Context) {
+        let (outer, inner, maximized, fullscreen, scale, minimized) = ctx.input(|input| {
+            let viewport = input.viewport();
+            (
+                viewport.outer_rect,
+                viewport.inner_rect,
+                viewport.maximized,
+                viewport.fullscreen,
+                viewport.native_pixels_per_point,
+                viewport.minimized,
+            )
+        });
+        if minimized == Some(true) {
+            return;
+        }
+        let shell = &mut self.settings.shell;
+        if let Some(fullscreen) = fullscreen {
+            shell.fullscreen = fullscreen;
+        }
+        if shell.fullscreen {
+            return;
+        }
+        if let Some(maximized) = maximized {
+            shell.window_maximized = maximized;
+        }
+        if shell.window_maximized {
+            return;
+        }
+        if let (Some(outer), Some(inner), Some(scale)) = (outer, inner, scale) {
+            shell.window = Some(WindowRect {
+                x: outer.min.x.round() as i32,
+                y: outer.min.y.round() as i32,
+                width: inner.width().round().max(0.0) as u32,
+                height: inner.height().round().max(0.0) as u32,
+                scale,
+            });
+        }
+    }
+
+    /// Ctrl+O, F11 and the hide key (ADR 0017 §2.4, T109), and their menu items.
+    fn shell_action(&mut self, ctx: &egui::Context, action: ShellAction) {
+        match action {
+            ShellAction::OpenFolder => self.open_folder_dialog(),
+            ShellAction::ToggleFullscreen => {
+                let now = ctx
+                    .input(|input| input.viewport().fullscreen)
+                    .unwrap_or(self.settings.shell.fullscreen);
+                ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(!now));
+            }
+            ShellAction::ToggleColumns => {
+                self.settings.shell.columns_hidden = !self.settings.shell.columns_hidden;
+            }
+        }
+    }
+
+    /// "Öppna mapp" (Ctrl+O, ADR 0017 §2.1, T109): the folder dialog, starting in the active
+    /// tab's folder; the chosen folder opens as a dropped folder does (GR12, GR13). Not while a
+    /// dialog holds the program.
+    fn open_folder_dialog(&mut self) {
+        if self.dialog_open() {
+            return;
+        }
+        let start = self.tabs.active().and_then(|tab| tab.folder.clone());
+        if let Some(folder) =
+            pick_folder(shell_text(ShellText::OpenFolderTitle), "", start.as_ref())
+        {
+            self.open(&folder, true);
+        }
+    }
+
+    /// Visa ▸ Tema (ADR 0017 §2.5, T109): applied at once and saved.
+    fn set_theme(&mut self, ctx: &egui::Context, theme: Theme) {
+        self.settings.shell.theme = theme;
+        ctx.set_theme(egui_theme(theme));
+        if let Some(path) = &self.settings_path
+            && let Err(error) = save_settings(path, &self.settings)
+        {
+            eprintln!("pw-loupe: the theme could not be saved: {error}");
+        }
+    }
+
+    /// Visa ▸ Vänster kolumn / Höger kolumn: opens or collapses the column; a hidden pair is
+    /// shown again with that column open.
+    fn toggle_column(&mut self, left: bool) {
+        let shell = &mut self.settings.shell;
+        let column = if left {
+            &mut shell.left_column
+        } else {
+            &mut shell.right_column
+        };
+        if shell.columns_hidden {
+            shell.columns_hidden = false;
+            *column = ColumnState::Open;
+        } else {
+            *column = column.toggled();
+        }
+    }
+
+    /// Ctrl+A in the contact sheet: marks every visible image (ADR 0014 §4.5).
+    fn select_all(&mut self) {
+        if let Some(tab) = self.tabs.active_mut() {
+            tab.selection.all(&tab.visible);
+        }
+    }
+
+    /// Escape in the contact sheet: clears the marking.
+    fn clear_selection(&mut self) {
+        if let Some(tab) = self.tabs.active_mut() {
+            tab.selection.clear();
+        }
+    }
+
+    /// A rating or label key, or its menu item: the marked images in the grid, else the current
+    /// one (ADR 0014 §2.6); nothing when the current image is not shown. An accepted key removes
+    /// the images that stopped matching at once (§2.2, amendment 1); a refused key changes
+    /// nothing. Returns `Some` with the position the contact sheet scrolls to when the visible
+    /// list changed.
+    fn rate(&mut self, action: RatingKey) -> Option<Option<usize>> {
+        let paths: Vec<PathBuf> = self
+            .tabs
+            .active()
+            .filter(|tab| tab.position().is_some())
+            .map(|tab| {
+                tab.selection
+                    .targets(&tab.visible, tab.current, tab.mode)
+                    .into_iter()
+                    .filter_map(|index| tab.files.get(index).cloned())
+                    .collect()
+            })
+            .unwrap_or_default();
+        if paths.is_empty() {
+            return None;
+        }
+        match self.metadata.set_ratings(&paths, action) {
+            Ok(_) => {
+                if self.rated_active() {
+                    let tab = self.tabs.active();
+                    let position = tab.and_then(Tab::position);
+                    match tab.map(|tab| tab.mode) {
+                        Some(ViewMode::Grid) => return Some(position),
+                        // The core gets the new visible list, so the next image comes from the
+                        // prefetched views (§4.4); nothing left to show: back to the grid (§2.3).
+                        Some(ViewMode::Loupe) => return Some(self.loupe_follows_visible()),
+                        None => {}
+                    }
+                }
+            }
+            Err(RatingRefused::Unsupported) => {
+                self.message = Some(UNSUPPORTED_TEXT.to_owned());
+            }
+            Err(error) => self.message = Some(error.to_string()),
+        }
+        None
+    }
+
+    /// A new filter from the command bar or Visa ▸ Filter (ADR 0014 §5.2): no widget keeps the
+    /// keyboard focus, so arrows and digits work at once (§4.5), and the contact sheet scrolls to
+    /// the current image.
+    fn apply_filter(&mut self, ctx: &egui::Context, filter: Filter) {
+        self.set_filter(filter);
+        if let Some(id) = ctx.memory(|memory| memory.focused()) {
+            ctx.memory_mut(|memory| memory.surrender_focus(id));
+        }
+        self.scroll_request = self.tabs.active().and_then(Tab::position);
+    }
+
+    /// Whether a menu item can be chosen now (a disabled item is shown, not hidden).
+    fn command_enabled(&self, command: Command) -> bool {
+        let tab = self.tabs.active();
+        let view = tab.map(|tab| tab.mode);
+        match command.acts_in() {
+            Where::Grid if view != Some(ViewMode::Grid) => return false,
+            Where::Loupe if view != Some(ViewMode::Loupe) => return false,
+            Where::Both | Where::Grid | Where::Loupe => {}
+        }
+        match command {
+            Command::CloseTab
+            | Command::NextTab
+            | Command::PreviousTab
+            | Command::SelectAll
+            | Command::ClearSelection => tab.is_some(),
+            Command::Metadata => {
+                let cwd = std::env::current_dir().ok();
+                metadata_subject(tab, cwd.as_deref()).is_some()
+            }
+            Command::Stars(_) | Command::Reject | Command::Label(_) | Command::ClearLabel => {
+                tab.is_some_and(|tab| tab.position().is_some())
+            }
+            Command::ToggleView => tab.is_some_and(|tab| !tab.visible.is_empty()),
+            _ => true,
+        }
+    }
+
+    /// Whether a check or radio item is on; `None` for a plain item.
+    fn command_checked(&self, command: Command) -> Option<bool> {
+        let shell = &self.settings.shell;
+        match command {
+            Command::ToggleAnchor => Some(self.anchor_at_pointer),
+            Command::ToggleInfo => Some(self.show_info),
+            Command::ToggleColumns => Some(!shell.columns_hidden),
+            Command::LeftColumn => {
+                Some(!shell.columns_hidden && shell.left_column == ColumnState::Open)
+            }
+            Command::RightColumn => {
+                Some(!shell.columns_hidden && shell.right_column == ColumnState::Open)
+            }
+            Command::Fullscreen => Some(shell.fullscreen),
+            Command::Theme(theme) => Some(shell.theme == theme),
+            _ => None,
+        }
+    }
+
+    /// A command of the menu bar, the command bar or the status bar: what its key does, through
+    /// the same function (ADR 0017 §2.1, T109). A zoom from the menu uses the image's centre.
+    fn run_command(&mut self, ctx: &egui::Context, command: Command) {
+        if !self.command_enabled(command) || self.dialog_open() {
+            return;
+        }
+        match command {
+            Command::OpenFolder => self.shell_action(ctx, ShellAction::OpenFolder),
+            Command::Import => self.open_import(),
+            Command::CloseTab => self.tab_action(TabAction::Close),
+            Command::NextTab => self.tab_action(TabAction::Next),
+            Command::PreviousTab => self.tab_action(TabAction::Previous),
+            Command::Settings => self.open_settings_window(),
+            Command::Quit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
+            Command::SelectAll => self.select_all(),
+            Command::ClearSelection => self.clear_selection(),
+            Command::Metadata => self.act(Action::OpenMetadata, None),
+            Command::Stars(stars) => self.rate_from_menu(RatingKey::Stars(stars)),
+            Command::Reject => self.rate_from_menu(RatingKey::Reject),
+            Command::Label(label) => self.rate_from_menu(RatingKey::Label(label)),
+            Command::ClearLabel => self.rate_from_menu(RatingKey::ClearLabel),
+            Command::ToggleMode => self.act(Action::ToggleMode, None),
+            Command::ToggleView => match self.tabs.active().map(|tab| tab.mode) {
+                Some(ViewMode::Grid) => {
+                    self.switch_mode(ViewMode::Loupe);
+                }
+                Some(ViewMode::Loupe) => self.scroll_request = self.switch_mode(ViewMode::Grid),
+                None => {}
+            },
+            Command::Fit => self.act(Action::Fit, None),
+            Command::ToggleZoom => self.act(Action::ToggleZoom, None),
+            Command::ZoomIn => self.act(Action::ZoomStep(1), None),
+            Command::ZoomOut => self.act(Action::ZoomStep(-1), None),
+            Command::ToggleAnchor => self.act(Action::ToggleAnchor, None),
+            Command::ToggleInfo => self.act(Action::ToggleInfo, None),
+            Command::ToggleColumns => self.shell_action(ctx, ShellAction::ToggleColumns),
+            Command::LeftColumn => self.toggle_column(true),
+            Command::RightColumn => self.toggle_column(false),
+            Command::Fullscreen => self.shell_action(ctx, ShellAction::ToggleFullscreen),
+            Command::Theme(theme) => self.set_theme(ctx, theme),
+        }
+    }
+
+    /// A rating item of the Bild menu: `rate`, with the contact sheet scrolled as after its key.
+    fn rate_from_menu(&mut self, action: RatingKey) {
+        if let Some(Some(position)) = self.rate(action) {
+            self.scroll_request = Some(position);
+        }
+    }
+
+    /// The menu bar (ADR 0017 §2.1, U1-Q1): the table `MENUS`, each item with its key.
+    /// A choice in Visa ▸ Filter is returned in `filter_choice`.
+    fn draw_menu_bar(
+        &self,
+        ui: &mut egui::Ui,
+        commands: &mut Vec<Command>,
+        filter_choice: &mut Option<Filter>,
+    ) {
+        egui::MenuBar::new().ui(ui, |ui| {
+            for menu in MENUS {
+                ui.menu_button(menu_text(menu.kind), |ui| {
+                    for entry in menu.entries {
+                        match entry {
+                            MenuEntry::Item(item) => self.menu_item(ui, *item, commands),
+                            MenuEntry::Separator => {
+                                ui.separator();
+                            }
+                            MenuEntry::Submenu(kind, items) => {
+                                ui.menu_button(submenu_text(*kind), |ui| {
+                                    for item in *items {
+                                        self.menu_item(ui, *item, commands);
+                                    }
+                                });
+                            }
+                            MenuEntry::Filter => {
+                                let has_tab = self.tabs.active().is_some();
+                                ui.add_enabled_ui(has_tab, |ui| {
+                                    ui.menu_button(shell_text(ShellText::FilterMenu), |ui| {
+                                        if let Some(filter) = self.filter_menu(ui) {
+                                            *filter_choice = Some(filter);
+                                        }
+                                    });
+                                });
+                            }
+                        }
+                    }
+                });
+            }
+        });
+    }
+
+    /// One menu item: its text, its key on the right, checked when it is a check or radio item
+    /// that is on, disabled where it does nothing.
+    fn menu_item(&self, ui: &mut egui::Ui, item: MenuItem, commands: &mut Vec<Command>) {
+        let mut button = egui::Button::new(command_text(item.command));
+        if let Some(key) = item.key {
+            button = button.shortcut_text(key_text(key));
+        }
+        if let Some(on) = self.command_checked(item.command) {
+            button = button.selected(on);
+        }
+        if ui
+            .add_enabled(self.command_enabled(item.command), button)
+            .clicked()
+        {
+            commands.push(item.command);
+        }
+    }
+
+    /// Visa ▸ Filter: "Visa alla", then the command bar's three lists as radio items (the
+    /// condition only for a number of stars) and the label check boxes (ADR 0014 §5.2).
+    fn filter_menu(&self, ui: &mut egui::Ui) -> Option<Filter> {
+        let filter = self.tabs.active().map(|tab| tab.filter)?;
+        let mut chosen = None;
+        if ui.button(shell_text(ShellText::ShowAll)).clicked() {
+            chosen = Some(Filter {
+                stars: StarFilter::All,
+                label: LabelFilter::all(),
+                ..filter
+            });
+        }
+        ui.separator();
+        let counts_stars = matches!(filter.stars, StarFilter::Stars(_));
+        ui.add_enabled_ui(counts_stars, |ui| {
+            for condition in STAR_CONDITIONS {
+                if ui
+                    .radio(
+                        filter.condition == condition,
+                        star_condition_text(condition),
+                    )
+                    .clicked()
+                {
+                    chosen = Some(Filter {
+                        condition,
+                        ..filter
+                    });
+                }
+            }
+        });
+        ui.separator();
+        for stars in STAR_FILTERS {
+            if ui
+                .radio(filter.stars == stars, star_filter_text(stars))
+                .clicked()
+            {
+                chosen = Some(Filter { stars, ..filter });
+            }
+        }
+        ui.separator();
+        let all = LabelFilter::all();
+        if ui
+            .radio(filter.label.is_all(), label_filter_text(&all))
+            .clicked()
+        {
+            chosen = Some(Filter {
+                label: all,
+                ..filter
+            });
+        }
+        for choice in LABEL_CHOICES {
+            let mut ticked = filter.label.contains(choice);
+            if ui
+                .checkbox(&mut ticked, label_choice_text(choice))
+                .changed()
+            {
+                let mut label = filter.label;
+                label.toggle(choice);
+                chosen = Some(Filter { label, ..filter });
+            }
+        }
+        chosen
+    }
+
+    /// The command bar (ADR 0017 §2.1, T109): "Importera…", "Öppna mapp…", the active tab's
+    /// filter (ADR 0014 §5.2, amendment 1) and the thumbnail size.
+    fn draw_command_bar(&mut self, ui: &mut egui::Ui, commands: &mut Vec<Command>) {
+        let accent = palette(self.settings.shell.theme).accent;
+        let tab_filter = self.tabs.active().map(|tab| tab.filter);
+        let mut new_filter = None;
+        ui.horizontal_wrapped(|ui| {
+            for command in [Command::Import, Command::OpenFolder] {
+                if ui.button(command_text(command)).clicked() {
+                    commands.push(command);
+                }
+            }
+            ui.separator();
+            ui.add_enabled_ui(tab_filter.is_some(), |ui| {
+                let filter = tab_filter.unwrap_or_default();
+                // The condition applies only to a number of stars; it keeps its value while
+                // disabled.
+                let counts_stars = matches!(filter.stars, StarFilter::Stars(_));
+                let condition = ui
+                    .add_enabled_ui(counts_stars, |ui| {
+                        filter_combo(
+                            ui,
+                            "star-condition",
+                            filter.condition,
+                            &STAR_CONDITIONS,
+                            star_condition_text,
+                            counts_stars,
+                            Some(CONDITION_COMBO_WIDTH),
+                            accent,
+                        )
+                    })
+                    .inner;
+                if let Some(condition) = condition {
+                    new_filter = Some(Filter {
+                        condition,
+                        ..filter
+                    });
+                }
+                if let Some(stars) = filter_combo(
+                    ui,
+                    "star-filter",
+                    filter.stars,
+                    &STAR_FILTERS,
+                    star_filter_text,
+                    filter.stars != StarFilter::All,
+                    None,
+                    accent,
+                ) {
+                    new_filter = Some(Filter { stars, ..filter });
+                }
+                if let Some(label) = label_combo(ui, "label-filter", filter.label, accent) {
+                    new_filter = Some(Filter { label, ..filter });
+                }
+            });
+            ui.separator();
+            let slider = ui.add(
+                egui::Slider::new(
+                    &mut self.thumb_size,
+                    MIN_THUMBNAIL_SIZE..=MAX_THUMBNAIL_SIZE,
+                )
+                .text("Storlek")
+                .show_value(true),
+            );
+            // The slider does not keep the keyboard: arrows move in the contact sheet (§4.5).
+            if slider.has_focus() && !slider.dragged() {
+                slider.surrender_focus();
+            }
+            self.thumb_size = clamp_thumbnail_size(self.thumb_size);
+        });
+        if let Some(filter) = new_filter {
+            self.apply_filter(ui.ctx(), filter);
+        }
+    }
+
+    /// The status bar (ADR 0017 §2.1, T109): the RAW/JPEG control in the loupe (G4) and the
+    /// line of the last frame, wrapped when it is long. The control is disabled while a dialog
+    /// holds the program; the text stays readable.
+    fn draw_status_bar(&self, ui: &mut egui::Ui, blocked: bool, commands: &mut Vec<Command>) {
+        ui.horizontal_wrapped(|ui| {
+            if let Some(mode) = self.status_bar.mode
+                && ui.add_enabled(!blocked, egui::Button::new(mode)).clicked()
+            {
+                commands.push(Command::ToggleMode);
+            }
+            ui.label(egui::RichText::new(&self.status_bar.line).size(STATUS_TEXT_SIZE));
+        });
+    }
+
+    /// The side columns (ADR 0017 §2.1, U1-Q3, T109): each resizable between the minimum and 40 %
+    /// of the window, collapsible to a strip with its open button, and both hidden with the hide
+    /// key. Their content comes in U2, U4 and U5; until then a heading and one line each, and the
+    /// hidden import's status under "Uppgifter".
+    fn draw_columns(&mut self, ui: &mut egui::Ui) {
+        let shell = self.settings.shell;
+        if shell.columns_hidden {
+            return;
+        }
+        let window_width = ui.ctx().content_rect().width();
+        let (min, max) = column_width_range(window_width);
+        let import_status = self.hidden_import_status();
+        match shell.left_column {
+            ColumnState::Open => {
+                let shown = egui::Panel::left("left-column")
+                    .resizable(true)
+                    .default_size(clamp_column_width(
+                        shell.left_column_width as f32,
+                        window_width,
+                    ))
+                    .size_range(min..=max)
+                    .show(ui, |ui| {
+                        let collapse =
+                            column_header(ui, ShellText::Library, ShellText::CollapseLeft);
+                        column_note(ui, shell_text(ShellText::LibraryNote));
+                        ui.add_space(PANEL_ROW_SPACING * 2.0);
+                        ui.heading(shell_text(ShellText::Tasks));
+                        match &import_status {
+                            Some(status) => {
+                                ui.label(status.as_str());
+                            }
+                            None => column_note(ui, shell_text(ShellText::NoTasks)),
+                        }
+                        collapse
+                    });
+                self.settings.shell.left_column_width =
+                    shown.response.rect.width().round().max(0.0) as u32;
+                if shown.inner {
+                    self.settings.shell.left_column = ColumnState::Collapsed;
+                }
+            }
+            ColumnState::Collapsed => {
+                if collapsed_column(ui, "left-column-collapsed", true) {
+                    self.settings.shell.left_column = ColumnState::Open;
+                }
+            }
+        }
+        match shell.right_column {
+            ColumnState::Open => {
+                let shown = egui::Panel::right("right-column")
+                    .resizable(true)
+                    .default_size(clamp_column_width(
+                        shell.right_column_width as f32,
+                        window_width,
+                    ))
+                    .size_range(min..=max)
+                    .show(ui, |ui| {
+                        let collapse =
+                            column_header(ui, ShellText::Inspector, ShellText::CollapseRight);
+                        column_note(ui, shell_text(ShellText::InspectorNote));
+                        collapse
+                    });
+                self.settings.shell.right_column_width =
+                    shown.response.rect.width().round().max(0.0) as u32;
+                if shown.inner {
+                    self.settings.shell.right_column = ColumnState::Collapsed;
+                }
+            }
+            ColumnState::Collapsed => {
+                if collapsed_column(ui, "right-column-collapsed", false) {
+                    self.settings.shell.right_column = ColumnState::Open;
+                }
+            }
+        }
+    }
+
     fn draw(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
         let failures = self.metadata.poll(&mut self.metadata_worker);
@@ -1949,13 +2525,10 @@ impl Loupe {
                     })
                     .collect()
             });
+        self.next_status = StatusBar::default();
         let titles = self.tabs.titles();
         let active = self.tabs.active_index();
         let mut selected = None;
-        let mut open_import_clicked = false;
-        let mut open_settings_clicked = false;
-        let filter = self.tabs.active().map(|tab| tab.filter).unwrap_or_default();
-        let mut new_filter = None;
         egui::ScrollArea::horizontal()
             .id_salt("folder-tabs")
             .show(ui, |ui| {
@@ -1965,62 +2538,10 @@ impl Loupe {
                             selected = Some(index);
                         }
                     }
-                    open_import_clicked = ui.button("Importera…").clicked();
-                    open_settings_clicked = ui.button(settings_text(SettingsText::Title)).clicked();
-                    // The filter of the active tab (ADR 0014 §5.2, amendment 1): condition, stars,
-                    // label. The condition applies only to a number of stars; it keeps its value
-                    // while disabled.
-                    let counts_stars = matches!(filter.stars, StarFilter::Stars(_));
-                    let condition = ui
-                        .add_enabled_ui(counts_stars, |ui| {
-                            filter_combo(
-                                ui,
-                                "star-condition",
-                                filter.condition,
-                                &STAR_CONDITIONS,
-                                star_condition_text,
-                                counts_stars,
-                                Some(CONDITION_COMBO_WIDTH),
-                            )
-                        })
-                        .inner;
-                    if let Some(condition) = condition {
-                        new_filter = Some(Filter {
-                            condition,
-                            ..filter
-                        });
-                    }
-                    if let Some(stars) = filter_combo(
-                        ui,
-                        "star-filter",
-                        filter.stars,
-                        &STAR_FILTERS,
-                        star_filter_text,
-                        filter.stars != StarFilter::All,
-                        None,
-                    ) {
-                        new_filter = Some(Filter { stars, ..filter });
-                    }
-                    if let Some(label) = label_combo(ui, "label-filter", filter.label) {
-                        new_filter = Some(Filter { label, ..filter });
-                    }
                 });
             });
-        if open_import_clicked {
-            self.open_import();
-        }
-        if open_settings_clicked {
-            self.open_settings_window();
-        }
-        let mut scroll_to = None;
-        if let Some(filter) = new_filter {
-            self.set_filter(filter);
-            // No widget keeps the keyboard focus, so arrows and digits work at once (§4.5).
-            if let Some(id) = ctx.memory(|memory| memory.focused()) {
-                ctx.memory_mut(|memory| memory.surrender_focus(id));
-            }
-            scroll_to = self.tabs.active().and_then(Tab::position);
-        }
+        // The command bar or a menu command may have asked for a scroll (T109).
+        let mut scroll_to = self.scroll_request.take();
         if let Some(index) = selected
             && index != self.tabs.active_index()
             && self.tabs.activate(index)
@@ -2029,15 +2550,8 @@ impl Loupe {
         }
         let full = ui.available_rect_before_wrap();
         let import_status = self.hidden_import_status();
-        let status_h = if self.show_info || import_status.is_some() {
-            STATUS_HEIGHT
-        } else {
-            0.0
-        };
-        let rect = egui::Rect::from_min_max(
-            full.min,
-            egui::pos2(full.max.x, (full.max.y - status_h).max(full.min.y + 1.0)),
-        );
+        // The status line is its own panel now (T109): the image area is the whole central area.
+        let rect = full;
         let ppp = ctx.pixels_per_point();
         let key_anchor = self.anchor(ctx.input(|input| input.pointer.hover_pos()), rect, ppp);
         let mut dialog_consumes_keys = self.import_dialog.is_some() && !self.import_hidden;
@@ -2081,48 +2595,20 @@ impl Loupe {
                 self.tab_action(action);
                 continue;
             }
+            // Ctrl+O, F11 and the hide key (ADR 0017 §2.4, T109); not while a text field has the
+            // keyboard.
+            if !ctx.egui_wants_keyboard_input()
+                && let Some(action) = shell_key_action(key, ctrl, shift, alt)
+            {
+                self.shell_action(&ctx, action);
+                continue;
+            }
 
             if !ctx.egui_wants_keyboard_input()
                 && let Some(action) = rating_key_action(key, ctrl, shift, alt)
             {
-                // The marked images in the grid, else the current one (ADR 0014 §2.6); nothing
-                // when the current image is not shown. An accepted key removes the images that
-                // stopped matching at once (§2.2, amendment 1); a refused key changes nothing.
-                let paths: Vec<PathBuf> = self
-                    .tabs
-                    .active()
-                    .filter(|tab| tab.position().is_some())
-                    .map(|tab| {
-                        tab.selection
-                            .targets(&tab.visible, tab.current, tab.mode)
-                            .into_iter()
-                            .filter_map(|index| tab.files.get(index).cloned())
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                if !paths.is_empty() {
-                    match self.metadata.set_ratings(&paths, action) {
-                        Ok(_) => {
-                            if self.rated_active() {
-                                let tab = self.tabs.active();
-                                let position = tab.and_then(Tab::position);
-                                match tab.map(|tab| tab.mode) {
-                                    Some(ViewMode::Grid) => scroll_to = position,
-                                    // The core gets the new visible list, so the next image
-                                    // comes from the prefetched views (§4.4); nothing left to
-                                    // show: back to the grid (§2.3).
-                                    Some(ViewMode::Loupe) => {
-                                        scroll_to = self.loupe_follows_visible();
-                                    }
-                                    None => {}
-                                }
-                            }
-                        }
-                        Err(RatingRefused::Unsupported) => {
-                            self.message = Some(UNSUPPORTED_TEXT.to_owned());
-                        }
-                        Err(error) => self.message = Some(error.to_string()),
-                    }
+                if let Some(position) = self.rate(action) {
+                    scroll_to = position;
                 }
                 continue;
             }
@@ -2152,16 +2638,8 @@ impl Loupe {
                         self.grid_move(nav, extend, visible_rows);
                         scroll_to = self.tabs.active().and_then(Tab::position);
                     }
-                    Some(GridKeyAction::SelectAll) => {
-                        if let Some(tab) = self.tabs.active_mut() {
-                            tab.selection.all(&tab.visible);
-                        }
-                    }
-                    Some(GridKeyAction::ClearSelection) => {
-                        if let Some(tab) = self.tabs.active_mut() {
-                            tab.selection.clear();
-                        }
-                    }
+                    Some(GridKeyAction::SelectAll) => self.select_all(),
+                    Some(GridKeyAction::ClearSelection) => self.clear_selection(),
                     None => {}
                 },
                 Some(ViewMode::Loupe) => {
@@ -2269,7 +2747,7 @@ impl Loupe {
                 egui::Align2::CENTER_CENTER,
                 text,
                 egui::FontId::proportional(18.0),
-                egui::Color32::LIGHT_GRAY,
+                image_area::TEXT,
             );
         };
         match &frame.status {
@@ -2300,7 +2778,6 @@ impl Loupe {
             ctx.request_repaint_after(Duration::from_millis(100));
         }
         if self.show_info || import_status.is_some() {
-            let bar = egui::Rect::from_min_max(egui::pos2(full.min.x, rect.max.y), full.max);
             let mut line = if self.show_info {
                 status_line(&frame, self.anchor_at_pointer, total)
             } else {
@@ -2328,26 +2805,11 @@ impl Loupe {
                     format!("{line}  ·  {status}")
                 };
             }
-            painter.text(
-                egui::pos2(bar.min.x + 8.0, bar.center().y),
-                egui::Align2::LEFT_CENTER,
+            // The display-mode control (G4: a key and a control) sits in the status bar.
+            self.next_status = StatusBar {
                 line,
-                egui::FontId::monospace(12.0),
-                egui::Color32::from_gray(210),
-            );
-            // the display-mode control (G4: a key and a control)
-            if self.show_info {
-                let button = egui::Rect::from_min_size(
-                    egui::pos2(bar.max.x - 130.0, bar.min.y + 2.0),
-                    egui::vec2(124.0, STATUS_HEIGHT - 4.0),
-                );
-                if ui
-                    .put(button, egui::Button::new(mode_label(frame.mode)))
-                    .clicked()
-                {
-                    self.core.toggle_mode();
-                }
-            }
+                mode: self.show_info.then(|| mode_label(frame.mode)),
+            };
         } else if matches!(frame.status, Status::Ready)
             && self.metadata.is_error(frame.path.as_deref())
             && let Some(notice) = metadata_notice
@@ -2534,6 +2996,7 @@ fn tab_rating<'a>(
 
 /// A filter drop-down list in the tab bar (ADR 0014 §5.2): an active list (not "Alla …") has a
 /// yellow outline. Returns the chosen value, if one was picked this frame.
+#[allow(clippy::too_many_arguments)] // one list of the command bar, with its look
 fn filter_combo<T: Copy + PartialEq>(
     ui: &mut egui::Ui,
     id: &str,
@@ -2542,12 +3005,15 @@ fn filter_combo<T: Copy + PartialEq>(
     text: impl Fn(T) -> &'static str,
     active: bool,
     width: Option<f32>,
+    accent: egui::Color32,
 ) -> Option<T> {
     let mut chosen = current;
     let mut picked = false;
     ui.scope(|ui| {
         if active {
-            let stroke = egui::Stroke::new(1.5, egui::Color32::YELLOW);
+            // An active list is outlined in the theme's accent (ADR 0017 §2.5: one accent for
+            // active controls; the yellow of ADR 0014 had too little contrast in the light theme).
+            let stroke = egui::Stroke::new(1.5, accent);
             let widgets = &mut ui.visuals_mut().widgets;
             widgets.inactive.bg_stroke = stroke;
             widgets.hovered.bg_stroke = stroke;
@@ -2572,15 +3038,20 @@ fn filter_combo<T: Copy + PartialEq>(
     picked.then_some(chosen)
 }
 
-/// The label drop-down list in the tab bar (ADR 0014 §5.2, amendment 2, Q10): "Alla etiketter"
-/// clears the set, and one check box per label choice. The popup stays open while ticking and closes
-/// on a click outside it. Yellow outline when the set is not empty. Returns the new set, if it
-/// changed this frame.
-fn label_combo(ui: &mut egui::Ui, id: &str, current: LabelFilter) -> Option<LabelFilter> {
+/// The label drop-down list in the command bar (ADR 0014 §5.2, amendment 2, Q10): "Alla
+/// etiketter" clears the set, and one check box per label choice. The popup stays open while
+/// ticking and closes on a click outside it. Outlined in the accent when the set is not empty.
+/// Returns the new set, if it changed this frame.
+fn label_combo(
+    ui: &mut egui::Ui,
+    id: &str,
+    current: LabelFilter,
+    accent: egui::Color32,
+) -> Option<LabelFilter> {
     let mut chosen = current;
     ui.scope(|ui| {
         if !current.is_all() {
-            let stroke = egui::Stroke::new(1.5, egui::Color32::YELLOW);
+            let stroke = egui::Stroke::new(1.5, accent);
             let widgets = &mut ui.visuals_mut().widgets;
             widgets.inactive.bg_stroke = stroke;
             widgets.hovered.bg_stroke = stroke;
@@ -2779,6 +3250,50 @@ fn pick_folder(title: &str, current: &str, fallback: Option<&PathBuf>) -> Option
     dialog.pick_folder()
 }
 
+/// A side column's heading with its collapse button on the right; returns whether the button was
+/// clicked (T109).
+fn column_header(ui: &mut egui::Ui, heading: ShellText, collapse: ShellText) -> bool {
+    ui.horizontal(|ui| {
+        ui.heading(shell_text(heading));
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.small_button(shell_text(collapse))
+                .on_hover_text(shell_text(ShellText::CollapseHover))
+                .clicked()
+        })
+        .inner
+    })
+    .inner
+}
+
+/// One line of weak text in a side column, wrapped to the column's width.
+fn column_note(ui: &mut egui::Ui, text: &str) {
+    ui.add(egui::Label::new(egui::RichText::new(text).weak()).wrap());
+}
+
+/// A collapsed side column: a thin strip with only its open button; returns whether it was
+/// clicked (T109).
+fn collapsed_column(ui: &mut egui::Ui, id: &str, left: bool) -> bool {
+    let panel = if left {
+        egui::Panel::left(id.to_owned())
+    } else {
+        egui::Panel::right(id.to_owned())
+    };
+    let glyph = if left {
+        ShellText::ExpandLeft
+    } else {
+        ShellText::ExpandRight
+    };
+    panel
+        .resizable(false)
+        .exact_size(COLLAPSED_WIDTH)
+        .show(ui, |ui| {
+            ui.small_button(shell_text(glyph))
+                .on_hover_text(shell_text(ShellText::ExpandHover))
+                .clicked()
+        })
+        .inner
+}
+
 fn submit_error_text(error: SubmitError) -> String {
     match error {
         SubmitError::QueueFull => "Importarbetarens kö är full.".to_string(),
@@ -2787,20 +3302,55 @@ fn submit_error_text(error: SubmitError) -> String {
 }
 
 impl eframe::App for Loupe {
+    /// The main window (ADR 0017 §2.1, T109): the menu bar, the command bar, the status bar, the
+    /// side columns and, in the middle, the folder tabs with the contact sheet or the loupe.
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        self.poll_import_worker(ui.ctx());
-        self.check_exiftool(ui.ctx());
+        let ctx = ui.ctx().clone();
+        self.poll_import_worker(&ctx);
+        self.check_exiftool(&ctx);
         if self.send_pending_options() {
-            ui.ctx().request_repaint_after(WINDOW_POLL_INTERVAL);
+            ctx.request_repaint_after(WINDOW_POLL_INTERVAL);
         }
-        egui::CentralPanel::default()
-            .frame(egui::Frame::NONE)
-            .show(ui, |ui| {
-                self.draw(ui);
-                self.draw_import_dialog(ui.ctx());
-                self.draw_settings_window(ui.ctx());
-                self.draw_metadata_window(ui.ctx());
+        self.remember_window(&ctx);
+        // The bars take no clicks while a dialog holds the program: the metadata window is modal
+        // (D16), and the import and settings windows keep the program as their keys do.
+        let blocked = self.dialog_open();
+        let mut commands = Vec::new();
+        let mut filter_choice = None;
+        egui::Panel::top("menu-bar").show(ui, |ui| {
+            ui.add_enabled_ui(!blocked, |ui| {
+                self.draw_menu_bar(ui, &mut commands, &mut filter_choice);
             });
+        });
+        egui::Panel::top("command-bar").show(ui, |ui| {
+            ui.add_enabled_ui(!blocked, |ui| self.draw_command_bar(ui, &mut commands));
+        });
+        egui::Panel::bottom("status-bar").show(ui, |ui| {
+            self.draw_status_bar(ui, blocked, &mut commands);
+        });
+        if let Some(filter) = filter_choice
+            && !blocked
+        {
+            self.apply_filter(&ctx, filter);
+        }
+        self.draw_columns(ui);
+        let fill = ui.visuals().panel_fill;
+        egui::CentralPanel::default()
+            .frame(egui::Frame::NONE.fill(fill))
+            .show(ui, |ui| self.draw(ui));
+        self.draw_import_dialog(&ctx);
+        self.draw_settings_window(&ctx);
+        self.draw_metadata_window(&ctx);
+        if !commands.is_empty() {
+            for command in commands {
+                self.run_command(&ctx, command);
+            }
+            ctx.request_repaint();
+        }
+        if self.next_status != self.status_bar {
+            self.status_bar = self.next_status.clone();
+            ctx.request_repaint();
+        }
     }
 
     /// Waits up to 5 s for rating writes and the editor's write still on their way to disk, then
@@ -2819,6 +3369,13 @@ impl eframe::App for Loupe {
                 .set_description(metadata::unsaved_list_text(&unsaved.lines()))
                 .set_buttons(rfd::MessageButtons::Ok)
                 .show();
+        }
+        // The window, full screen and the columns as they are now (ADR 0017 §2.5, T109); a
+        // failure is only logged, no dialog at exit.
+        if let Some(path) = &self.settings_path
+            && let Err(error) = save_settings(path, &self.settings)
+        {
+            eprintln!("pw-loupe: the settings could not be saved at exit: {error}");
         }
     }
 }
@@ -3037,11 +3594,22 @@ fn run(options: Options) -> Result<(), String> {
         ImportWorker::start(journal, Box::new(image_check(&core))).map_err(|e| e.to_string())?;
     let thumb_worker = ThumbWorker::start_with_monitor_profile(monitor_profile.profile.clone())
         .map_err(|e| e.to_string())?;
+    // The window as it was left (ADR 0017 §2.5, T109): maximized unless a normal size on a
+    // screen was saved; full screen on top.
+    let mut viewport = egui::ViewportBuilder::default()
+        .with_title(title)
+        .with_drag_and_drop(true);
+    viewport = match start_window(&settings.shell, rect_on_a_screen) {
+        StartWindow::Maximized => viewport.with_maximized(true),
+        StartWindow::At { position, size } => {
+            viewport.with_position(position).with_inner_size(size)
+        }
+    };
+    if settings.shell.fullscreen {
+        viewport = viewport.with_fullscreen(true);
+    }
     let native = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_title(title)
-            .with_maximized(true)
-            .with_drag_and_drop(true),
+        viewport,
         renderer: eframe::Renderer::Glow,
         ..Default::default()
     };
@@ -3050,6 +3618,13 @@ fn run(options: Options) -> Result<(), String> {
         WINDOW_TITLE,
         native,
         Box::new(move |cc| {
+            // Both themes and the text sizes before the first frame (ADR 0017 §2.5, T109).
+            cc.egui_ctx
+                .set_visuals_of(egui::Theme::Dark, visuals(Theme::Dark));
+            cc.egui_ctx
+                .set_visuals_of(egui::Theme::Light, visuals(Theme::Light));
+            cc.egui_ctx.all_styles_mut(apply_text_sizes);
+            cc.egui_ctx.set_theme(egui_theme(settings.shell.theme));
             let ctx = cc.egui_ctx.clone();
             core.set_wake(move || ctx.request_repaint());
             let mut loupe = Loupe {
@@ -3079,6 +3654,9 @@ fn run(options: Options) -> Result<(), String> {
                 textures: Textures::new(),
                 anchor_at_pointer: true,
                 show_info: true,
+                status_bar: StatusBar::default(),
+                next_status: StatusBar::default(),
+                scroll_request: None,
                 metadata_window: None,
                 message: None,
                 indicator_after,
