@@ -15,6 +15,9 @@
   - menu names are decided in U1 (finding 21, §2.1).
 
   The remaining findings were clarifications, written in on the owner's go-ahead the same day.
+- **Recorded 2026-11-13 (no new decision):** the owner's answers to the questions of U1, U2, U3
+  and U12, approved in the tasks T109–T112, are in §6.1; the inspector's Metadata section shows no
+  origin line under its values (T114, §2.1).
 - Date: 2026-11-12; amended 2026-11-13
 - Related:
   - [GUI_REQUIREMENTS.md](../GUI_REQUIREMENTS.md) (GR1–GR13), in particular GR6 (keyboard first),
@@ -87,8 +90,9 @@ Workflow: contact sheet → preview → metadata, all from the keyboard.
   - **Info:** an Exif summary (camera, lens, focal length, aperture, exposure time, ISO, capture
     date). This is new function: the program shows no Exif today. The source per file type is
     decided in U2 (`pw-raw` already reads lens, exposure time and ISO for RAW files).
-  - **Metadata:** every value the image has, with its origin, as the `M` window shows them but
-    read-only: the 22 fields of D12 and the rest, the open and decided conflicts and the notices.
+  - **Metadata:** every value the image has, as the `M` window shows them but read-only, without an
+    origin line under each value; the conflicts keep theirs (owner, 2026-11-13, T114: less text in
+    the windows): the 22 fields of D12 and the rest, the open and decided conflicts and the notices.
     Read with the rules of T103 for a panel that follows the current image: a 200 ms wait, at most
     one read at a time, old answers discarded. With several images selected it shows the current
     image.
@@ -363,6 +367,35 @@ without the study notes as a template.
 | U-Q6 | Move on reject/select: what happens to a file already moved when its rating is changed back? | It is moved back to the image's folder; a move can be undone with Ctrl+Z (§2.6) |
 | U-Q7 | Focus marking colour and strength | One colour (configurable later), one strength; tuned on the owner's test files in U9 |
 | U-Q8 | D16 locked the window to one image until OK or Avbryt. May the window instead move between images, asking about unsaved edits? | Yes: previous/next and "spara och nästa", with Spara / Släng / Avbryt when there are unsaved edits; rules in §2.3.1 |
+
+### 6.1 Questions of the steps (answered by the owner, 2026-11-13: every proposal approved)
+
+Asked in the tasks of stage A (T109–T112, `docs/tasks/done/`) and answered there; recorded here so
+the decisions do not live only in the tasks.
+
+| # | Decision (as proposed) |
+|---|---|
+| U1-Q1 | The menus are **Arkiv, Redigera, Bild, Visa**, in that order, with names from RawStride's own commands (§2.1) |
+| U1-Q2 | The hide key is **`H`**; Tab stays free for egui's focus moves (any key can be chosen later, U8) |
+| U1-Q3 | Before U2, U4 and U5 the side columns hold headings and one line each, with the hidden import's status under "Uppgifter" |
+| U1-Q4 | egui's bundled font; body text 14, small text 11, headings 16 points, the status bar in the proportional font at 13; egui's default spacing; the image area and contact sheet stay a neutral dark grey in **both** themes, so an image is judged against the same surround (the light theme lightens menus, bars and columns) |
+| U1-Q5 | Neither "Visa (alla/markerade/…)" in the command bar nor the selection's size in MB in the status bar is in U1; both are placed when the owner reorders after stage A |
+| U2-Q1 | Info comes from `pw_raw::inspect` for every listed file type, on a background thread, without ExifTool |
+| U2-Q2 | Info shows the seven values of §2.1; the camera without a repeated make; a decimal comma; the date as `2026-10-30 14:03:12`; a missing value gives no row. Exposure compensation and image size are left out |
+| U2-Q3 | `I` opens and collapses the right column (also from `H`'s hidden state); "Information" and "Höger kolumn" become one menu item "Inspektör"; the status line, rating badge and RAW/JPEG control are always shown, so the old meaning of `I` ends in U2 |
+| U2-Q4 | The Exif labels (Kamera, Objektiv, …) are not IPTC properties and are made in `inspector_text.rs`, not by `property_label` (rule 13) |
+| U2-Q5 | Both inspector sections are open by default; the column itself starts collapsed |
+| U3-Q1 | The preview has no menu bar, command bar, tabs, status bar or side columns; a title line holds the loupe's status line and the RAW/JPEG control; Ctrl+O, Ctrl+I, Ctrl+W, the tab keys and F11 do nothing until the preview is closed |
+| U3-Q2 | The preview's right column is open by default and remembered apart from the main window's; `I` opens and collapses it, `H` hides it together with the filmstrip |
+| U3-Q3 | The filmstrip is one row of 96-point thumbnails with the label bar and the current and marked frames; "only the marked" on `S` and a button, offered from two marked images; then steps go only between the marked |
+| U3-Q4 | In the preview the thumbnail worker runs only while the shown image is drawn and pauses on each step until the new one is drawn, so stepping stays as fast as before and the filmstrip fills in when the user stops |
+| U3-Q5 | The Zoom section shows the zoom as text, buttons Anpassa, Anpassa ↔ 100 %, Zooma in, Zooma ut, and the check box Zooma vid pekaren |
+| U3-Q6 | The preview is always full screen; closing it returns the window as it was; started with a file path, RawStride opens in the preview |
+| U12-Q1 | Ctrl+PageDown is next, Ctrl+PageUp previous and Ctrl+Enter "Spara och nästa"; they work while typing in a field; plain arrows and Enter stay with the fields |
+| U12-Q2 | After a move the contact sheet's current image (and the loupe or preview) is the window's image; the marking is not changed |
+| U12-Q3 | No wrap: the button and key are disabled at the first and last image that has metadata support |
+| U12-Q4 | "Spara ändringarna?" (Spara / Släng / Avbryt) is asked for a move, for Escape and for Avbryt; OK is unchanged; "Spara och nästa" never asks; D16's "Släng ändringarna?" goes away |
+| U12-Q5 | After a write with notices the window stays and shows them; the move happens on the next press of a move button or key, not on any key |
 
 ## 7. Steps
 

@@ -131,6 +131,11 @@ an image.
 - With a label, the row's background is the label colour (the Tauri colours: Red `#e5484d`, Yellow
   `#f5c400`, Green `#3fb950`, Blue `#4c8dff`, Purple `#a371f7`), with dark text where needed for
   contrast.
+  - **Later changes:** the label colour is drawn as a rounded, inset bar (a pill) in the grid row
+    and in the loupe badge (owner, 2026-11-09, T46). The text on every label pill and labelled
+    rating badge is dark (`#181818`), at least 4.5:1 (WCAG AA) on all five colours: red 4.5, blue
+    5.6, purple 5.3; before, red, blue and purple had light text below 4.5:1 (owner, 2026-11-13,
+    in the review of T109).
 - A rejected image's thumbnail is drawn dimmed.
 - A cell whose write is still pending looks the same as a confirmed one (no spinner); a failure rolls
   it back (rule 4).
