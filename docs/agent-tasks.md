@@ -5339,10 +5339,10 @@ it is accepted. Stage A changes the shell in `pw-loupe` only; the core crates ar
     (Kamera, Objektiv, …) are not IPTC properties: may they be made in `inspector_text.rs`?
   - **U2-Q5** Both sections open by default (point 7)? The column itself starts collapsed (T109).
 
-### T111. ADR 0017 U3: the preview as a full-screen mode, its right column and the filmstrip — Blocked
+### T111. ADR 0017 U3: the preview as a full-screen mode, its right column and the filmstrip — Open
 
-- **Waits for the owner's answers to U3-Q1–U3-Q6** (at the end of this task) **and for T110 to be
-  Done** (it reuses T110's Info section and changes the same files). The reviewer's proposals are
+- **Can start after T110 is Done** (it reuses T110's Info section and changes the same files). The
+  owner approved the proposals of U3-Q1–U3-Q6 (at the end of this task) on 2026-11-13; they are
   written into the points below. Not at the same time as any other task that changes `main.rs`.
 - **Crates:** `pw-loupe` only.
 - **Files:** `crates/pw-loupe/src/main.rs`; `crates/pw-loupe/src/lib.rs` (the preview's keys,
@@ -5465,7 +5465,7 @@ it is accepted. Stage A changes the shell in `pw-loupe` only; the core crates ar
   in the preview with the filmstrip shown and hidden, as in T75** (V1–V8 not slowed by the
   filmstrip; RawStride started with a file path now opens the preview in full screen, so the
   owner checks that the measurement still finds the window).
-- **Questions (for the owner; the proposals are written into the points above):**
+- **Questions (answered by the owner, 2026-11-13: every proposal approved):**
   - **U3-Q1** In the preview (point 2): no menu bar, command bar, tabs, status bar or side
     columns; a title line with today's loupe status line and the RAW/JPEG control; Ctrl+O,
     Ctrl+I, Ctrl+W, the tab keys and F11 do nothing until the preview is closed?
@@ -6020,3 +6020,4 @@ and reviewer:
 | 2026-11-13 | T110 | Blocked | Added: ADR 0017 U2, the inspector in the right column: Info (an Exif summary from `pw_raw::inspect` for every listed file type, on a background thread) and Metadata (every value read-only, as the `M` window shows them, read with T103's rules), `I` shows and hides it, the sections remembered in `settings.txt`. The right column still starts collapsed (owner, T109). The reviewer's proposals are in the task; it waits for the owner's answers to U2-Q1–U2-Q5 |
 | 2026-11-13 | T110 | Open | The owner approved the proposals of U2-Q1–U2-Q5: Info from `pw_raw::inspect` for every listed file type on a background thread, without ExifTool; the seven values with a decimal comma, the camera without a repeated make and no row for a missing value; `I` opens and collapses the right column (also from `H`'s hidden state), "Information" and "Höger kolumn" become one item "Inspektör", and today's meaning of `I` ends in U2; the Exif labels made in `inspector_text.rs`; both sections open by default. T110 can start |
 | 2026-11-13 | T111 | Blocked | Added: ADR 0017 U3, the preview as a full-screen mode of the main window (title line, image area, its own right column with Info and Zoom, the filmstrip with "only the marked"), the marking kept on a step (replaces ADR 0014 Q5 for the preview), filmstrip thumbnails only while the shown image is drawn. Starts after T110 is Done; the reviewer's proposals are in the task; it waits for the owner's answers to U3-Q1–U3-Q6 |
+| 2026-11-13 | T111 | Open | The owner approved the proposals of U3-Q1–U3-Q6: only the title line, image, right column and filmstrip in the full-screen preview, with Ctrl+O, Ctrl+I, Ctrl+W, the tab keys and F11 inactive there; the preview's right column open by default and remembered apart, `I` and `H` as proposed; the filmstrip with "only the marked" on `S` and a button (from two marked images); filmstrip thumbnails only while the shown image is drawn; the Zoom section; the window restored on closing and a file path opening the preview in full screen. T111 can start after T110 is Done |
