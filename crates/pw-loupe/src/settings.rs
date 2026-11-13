@@ -35,6 +35,9 @@ const RIGHT_COLUMN_WIDTH: &str = "right_column_width";
 const LEFT_COLUMN: &str = "left_column";
 const RIGHT_COLUMN: &str = "right_column";
 const COLUMNS_HIDDEN: &str = "columns_hidden";
+/// The keys of the inspector's sections, open or collapsed (ADR 0017 §2.1, §2.5, T110).
+const INSPECTOR_INFO: &str = "inspector_info";
+const INSPECTOR_METADATA: &str = "inspector_metadata";
 
 /// RawStride's settings.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -83,6 +86,9 @@ pub struct ShellSettings {
     pub right_column: ColumnState,
     /// Both side columns hidden with the hide key.
     pub columns_hidden: bool,
+    /// The inspector's Info and Metadata sections (T110).
+    pub inspector_info: ColumnState,
+    pub inspector_metadata: ColumnState,
 }
 
 impl Default for ShellSettings {
@@ -99,6 +105,9 @@ impl Default for ShellSettings {
             // 2026-11-13).
             right_column: ColumnState::Collapsed,
             columns_hidden: false,
+            // Both sections open (U2-Q5).
+            inspector_info: ColumnState::Open,
+            inspector_metadata: ColumnState::Open,
         }
     }
 }
@@ -207,6 +216,11 @@ pub fn load_settings(path: &Path) -> (Settings, Vec<String>) {
                 Some(state) => shell.right_column = state,
                 None => problems.push(bad("open or collapsed")),
             },
+            INSPECTOR_INFO | INSPECTOR_METADATA => match parse_column(value) {
+                Some(state) if key == INSPECTOR_INFO => shell.inspector_info = state,
+                Some(state) => shell.inspector_metadata = state,
+                None => problems.push(bad("open or collapsed")),
+            },
             _ => problems.push(format!(
                 "settings file {}, line {number}: unknown key \"{key}\", line ignored",
                 path.display()
@@ -266,14 +280,16 @@ fn shell_lines(shell: &ShellSettings) -> String {
     text.push_str(&format!(
         "{WINDOW_MAXIMIZED} = {}\n{FULLSCREEN} = {}\n{LEFT_COLUMN_WIDTH} = {}\n\
          {RIGHT_COLUMN_WIDTH} = {}\n{LEFT_COLUMN} = {}\n{RIGHT_COLUMN} = {}\n\
-         {COLUMNS_HIDDEN} = {}\n",
+         {COLUMNS_HIDDEN} = {}\n{INSPECTOR_INFO} = {}\n{INSPECTOR_METADATA} = {}\n",
         shell.window_maximized,
         shell.fullscreen,
         shell.left_column_width,
         shell.right_column_width,
         column_value(shell.left_column),
         column_value(shell.right_column),
-        shell.columns_hidden
+        shell.columns_hidden,
+        column_value(shell.inspector_info),
+        column_value(shell.inspector_metadata)
     ));
     text
 }
@@ -463,7 +479,7 @@ mod tests {
             "# RawStride\ncreate_iim = true\nfallback_encoding = iso-8859-1\ntheme = dark\n\
              window_maximized = false\nfullscreen = false\nleft_column_width = 240\n\
              right_column_width = 300\nleft_column = open\nright_column = collapsed\n\
-             columns_hidden = false\n"
+             columns_hidden = false\ninspector_info = open\ninspector_metadata = open\n"
         );
     }
 
@@ -626,6 +642,8 @@ mod tests {
             left_column: ColumnState::Collapsed,
             right_column: ColumnState::Collapsed,
             columns_hidden: true,
+            inspector_info: ColumnState::Collapsed,
+            inspector_metadata: ColumnState::Collapsed,
         }
     }
 
@@ -641,6 +659,55 @@ mod tests {
         assert_eq!(shell.left_column, ColumnState::Open);
         assert_eq!(shell.right_column, ColumnState::Collapsed);
         assert!(!shell.columns_hidden);
+        assert_eq!(shell.inspector_info, ColumnState::Open);
+        assert_eq!(shell.inspector_metadata, ColumnState::Open);
+    }
+
+    #[test]
+    fn the_inspector_sections_round_trip_one_at_a_time() {
+        let dir = TempDir::new();
+        let path = dir.0.join("settings.txt");
+        for (info, metadata) in [
+            (ColumnState::Collapsed, ColumnState::Open),
+            (ColumnState::Open, ColumnState::Collapsed),
+        ] {
+            let settings = Settings {
+                shell: ShellSettings {
+                    inspector_info: info,
+                    inspector_metadata: metadata,
+                    ..ShellSettings::default()
+                },
+                ..Settings::default()
+            };
+            save_settings(&path, &settings).unwrap();
+            let (loaded, problems) = load_settings(&path);
+            assert!(problems.is_empty(), "{problems:?}");
+            assert_eq!(loaded, settings);
+        }
+    }
+
+    #[test]
+    fn a_file_without_the_inspector_keys_gives_both_sections_open_and_no_problem() {
+        let (_dir, path) = TempDir::with_file(
+            "# RawStride\ncreate_iim = false\ntheme = light\nright_column = open\n",
+        );
+        let (settings, problems) = load_settings(&path);
+        assert!(problems.is_empty(), "{problems:?}");
+        assert_eq!(settings.shell.inspector_info, ColumnState::Open);
+        assert_eq!(settings.shell.inspector_metadata, ColumnState::Open);
+        assert_eq!(settings.shell.right_column, ColumnState::Open);
+    }
+
+    #[test]
+    fn a_bad_inspector_value_keeps_open_and_names_the_line() {
+        let (_dir, path) = TempDir::with_file(
+            "# RawStride\ninspector_info = collapsed\ninspector_metadata = closed\n",
+        );
+        let (settings, problems) = load_settings(&path);
+        assert_one_problem_on_line(&problems, 3);
+        assert!(problems[0].contains("inspector_metadata"), "{problems:?}");
+        assert_eq!(settings.shell.inspector_info, ColumnState::Collapsed);
+        assert_eq!(settings.shell.inspector_metadata, ColumnState::Open);
     }
 
     #[test]
@@ -690,6 +757,8 @@ mod tests {
             ("left_column", "hidden"),
             ("right_column", ""),
             ("columns_hidden", "no"),
+            ("inspector_info", "shut"),
+            ("inspector_metadata", "true"),
         ];
         for (key, value) in bad {
             let (_dir, path) = TempDir::with_file(&format!(

@@ -5202,7 +5202,7 @@ it is accepted. Stage A changes the shell in `pw-loupe` only; the core crates ar
     in MB in the status bar (the folder listing keeps no file sizes). Proposal: neither in U1;
     both are placed when the owner reorders after stage A.
 
-### T110. ADR 0017 U2: the inspector – Info (Exif summary) and Metadata, `I`, sections remembered — Open
+### T110. ADR 0017 U2: the inspector – Info (Exif summary) and Metadata, `I`, sections remembered — Done
 
 - **Can start now.** The owner approved the proposals of U2-Q1–U2-Q5 (at the end of this task) on
   2026-11-13; they are written into the points below. Not at the same time as any other task that
@@ -6238,3 +6238,5 @@ and reviewer:
 | 2026-11-13 | T113 | Open | Added after the owner's hand check of T110: rating a Sony ARW (A1, A7R IVA) gave a conflict between the sidecar's rating and the `xmp:Rating` 0 the camera writes into the ARW's XMP for an unrated image. Owner's decision: a camera rating of 0 inside a RAW file counts as no rating (it neither fills nor gives a conflict); other camera ratings unchanged. `pw-metadata` `reconcile.rs` and ADR 0007 §4.2; can run beside T111 or T112 |
 | 2026-11-13 | T114 | Open | Added after the owner's hand check of T110: "Fotografens titel" → "Yrkestitel" (not "Titel", which is `dc:title`) and "Fotografens kontaktuppgifter" → "Kontaktuppgifter" in `SV_LABELS`; a heading "Kontaktuppgifter" above E-post, Telefon and Webb in the `M` window; no origin line under the inspector's values (the conflicts keep theirs). Starts after T110 is Done |
 | 2026-11-13 | T114 | Open | Owner: "Övrig metadata" in the `M` window follows the inspector's rule, no origin line under its values (the conflicts keep theirs) |
+| 2026-11-13 | T110 | Ready for review | The inspector in the right column: the current image's file name, Info (Exif summary from `pw_raw::inspect` on its own thread, `inspector.rs`) and Metadata (the inspector's own read in `metadata.rs`, T103's rules, none while the `M` window is open), both collapsible and remembered as `inspector_info`/`inspector_metadata`; `I` and Visa ▸ Inspektör open and collapse the column, "Information" and "Höger kolumn" removed, the status line, rating badge and RAW/JPEG control always shown; texts in `inspector_text.rs`. `check.ps1` all OK (1129 passed, 43 ignored, 0 failed); not checked by hand in RawStride |
+| 2026-11-13 | T110 | Done | The owner confirmed the hand checks of T110. `latency.ps1` (reviewer, release build of the T110 working tree, A1 folder, inspector open with Info and Metadata, labels `t110-…` in `latency-t110.csv`): RAW fit next median 17.6 ms (max 26.6), JPEG fit next 16.7 ms (max 20.3), as T109 (17.2 and 17.2); at 100 % and 7 steps/s the same pattern as T109 (only the first 2 of 13 steps drawn within 70 ms, RAW and JPEG; T109: 2 and 3), so the inspector does not slow stepping |

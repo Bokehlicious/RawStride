@@ -17,6 +17,8 @@ use pw_metadata::{
     SubmitError, WorkerEvent, WriteError, supports_rating,
 };
 
+use crate::inspector::{INSPECTOR_POLL_INTERVAL, INSPECTOR_READ_DELAY};
+
 pub(crate) trait MetadataSubmit: RatingWriter {
     fn read_ratings(&mut self, images: Vec<PathBuf>) -> Result<RequestId, SubmitError>;
 
@@ -81,6 +83,48 @@ impl WindowRead {
     }
 }
 
+/// What the inspector's Metadata section shows for its image (ADR 0017 §2.1, T110).
+#[derive(Debug, PartialEq)]
+pub(crate) enum InspectorState<'a> {
+    /// The file kind has no metadata support.
+    Unsupported,
+    /// No result yet: the read waits for `INSPECTOR_READ_DELAY`, is in flight or not yet sent.
+    Loading,
+    Error(&'a str),
+    Ready(&'a MetadataRead),
+}
+
+/// The metadata of the inspector's one image (ADR 0017 §2.1, T110), read with the rules of T103:
+/// only while the Metadata section is shown, after the image has been the current one for
+/// `INSPECTOR_READ_DELAY`, at most one `read_metadata` in flight, its result kept only if it is
+/// for the inspector's image. It is apart from the metadata window's read (T107).
+#[derive(Default)]
+struct InspectorRead {
+    /// The inspector's image (absolute, supported) and when it became the current one.
+    image: Option<(PathBuf, Instant)>,
+    /// The result for `image`, once one has come back.
+    result: Option<Result<MetadataRead, String>>,
+    /// `image` must be read (again): it is new, or RawStride wrote to it.
+    needs_read: bool,
+    /// The one read in flight, for whichever image it was asked for.
+    in_flight: Option<RequestId>,
+}
+
+impl InspectorRead {
+    fn is_image(&self, path: &Path) -> bool {
+        self.image.as_ref().is_some_and(|(image, _)| image == path)
+    }
+
+    /// Empties the inspector's metadata. A read in flight stays in flight, so a second one is not
+    /// sent before it is back; its result is then dropped.
+    fn clear(&mut self) {
+        *self = Self {
+            in_flight: self.in_flight,
+            ..Self::default()
+        };
+    }
+}
+
 /// What the editor window learns about its write (ADR 0007 I10l, D12, T105).
 #[derive(Debug, PartialEq)]
 pub(crate) enum EditorEvent {
@@ -121,6 +165,7 @@ pub(crate) struct MetadataCache {
     read_error: Option<String>,
     ratings: RatingStore,
     window: WindowRead,
+    inspector: InspectorRead,
     editor: EditorSave,
 }
 
@@ -157,6 +202,11 @@ impl MetadataCache {
         self.load_request = None;
         self.pending_read = None;
         self.read_error = None;
+        // A loaded folder change empties the inspector; the same folder loaded again (a switch
+        // between the contact sheet and the loupe) keeps it (T110).
+        if !files.iter().any(|path| self.inspector.is_image(path)) {
+            self.inspector.clear();
+        }
         let supported: Vec<PathBuf> = files
             .iter()
             .filter(|path| supports_rating(path))
@@ -196,7 +246,16 @@ impl MetadataCache {
         }
     }
 
+    /// Drops what is kept for images no longer open: their ratings, and the inspector's image.
     pub fn prune(&mut self, keep: impl Fn(&Path) -> bool) {
+        if self
+            .inspector
+            .image
+            .as_ref()
+            .is_some_and(|(image, _)| !keep(image))
+        {
+            self.inspector.clear();
+        }
         self.ratings.prune(keep);
     }
 
@@ -224,6 +283,11 @@ impl MetadataCache {
                     if self.window.in_flight.take().is_some() && self.window.image.is_some() {
                         self.window.result = Some(Err(message.clone()));
                         self.window.needs_read = false;
+                    }
+                    // Nor can the inspector's.
+                    if self.inspector.in_flight.take().is_some() && self.inspector.image.is_some() {
+                        self.inspector.result = Some(Err(message.clone()));
+                        self.inspector.needs_read = false;
                     }
                     // Nor can the editor's write or the read after it.
                     if let Some((_, path)) = self.editor.writing.take() {
@@ -292,6 +356,9 @@ impl MetadataCache {
             .is_some_and(|metadata| matches!(&metadata.state, LoadState::Loading))
     }
 
+    // Since T110 the status line is always shown, so the loupe no longer puts a metadata error
+    // in the middle of the image; the tests still use this one.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn is_error(&self, path: Option<&Path>) -> bool {
         path.and_then(|path| self.images.get(path))
             .is_some_and(|metadata| matches!(&metadata.state, LoadState::Error(_)))
@@ -394,6 +461,72 @@ impl MetadataCache {
         }
     }
 
+    /// Called every frame with the inspector's image (absolute path), whether its Metadata section
+    /// is shown (the right column and the section open) and whether the metadata window is open
+    /// (ADR 0017 §2.1, T110). Asks for the image's metadata when the section is shown, no read of
+    /// the inspector is in flight and the image has been the current one for
+    /// `INSPECTOR_READ_DELAY`. While the window is open the inspector keeps its image and asks for
+    /// no new read. Returns how soon a frame is needed to go on (the rest of the delay, or a read
+    /// in flight), if at all.
+    pub fn inspector_request(
+        &mut self,
+        image: Option<&Path>,
+        shown: bool,
+        window_open: bool,
+        now: Instant,
+        worker: &mut impl MetadataSubmit,
+    ) -> Option<Duration> {
+        let image = image.filter(|path| supports_rating(path));
+        let inspector = &mut self.inspector;
+        if !window_open && inspector.image.as_ref().map(|(path, _)| path.as_path()) != image {
+            inspector.image = image.map(|path| (path.to_path_buf(), now));
+            inspector.result = None;
+            inspector.needs_read = image.is_some();
+        }
+        if !shown {
+            return None;
+        }
+        if inspector.in_flight.is_some() {
+            return Some(INSPECTOR_POLL_INTERVAL);
+        }
+        if window_open || !inspector.needs_read {
+            return None;
+        }
+        let (path, since) = inspector.image.clone()?;
+        let waited = now.saturating_duration_since(since);
+        if waited < INSPECTOR_READ_DELAY {
+            return Some(INSPECTOR_READ_DELAY - waited);
+        }
+        match worker.read_metadata(path) {
+            Ok(id) => {
+                inspector.in_flight = Some(id);
+                inspector.needs_read = false;
+                Some(INSPECTOR_POLL_INTERVAL)
+            }
+            Err(SubmitError::QueueFull) => Some(INSPECTOR_POLL_INTERVAL),
+            Err(error) => {
+                inspector.result = Some(Err(submit_error(error)));
+                inspector.needs_read = false;
+                None
+            }
+        }
+    }
+
+    /// What the inspector's Metadata section shows for `image` (absolute path).
+    pub fn inspector_state(&self, image: &Path) -> InspectorState<'_> {
+        if !supports_rating(image) {
+            return InspectorState::Unsupported;
+        }
+        if !self.inspector.is_image(image) {
+            return InspectorState::Loading;
+        }
+        match &self.inspector.result {
+            None => InspectorState::Loading,
+            Some(Ok(read)) => InspectorState::Ready(read),
+            Some(Err(error)) => InspectorState::Error(error),
+        }
+    }
+
     /// Sends the editor's edits of `path` (absolute) to the worker (T105). An error is the text
     /// the window shows: the write could not be sent. Nothing is sent while a write runs.
     pub fn save_edits(
@@ -461,6 +594,14 @@ impl MetadataCache {
         }
     }
 
+    /// RawStride wrote to `path`: the inspector reads it again if it is the inspector's image
+    /// (T110). The values read before stay shown until the new ones come back.
+    fn inspector_written(&mut self, path: &Path) {
+        if self.inspector.is_image(path) {
+            self.inspector.needs_read = true;
+        }
+    }
+
     fn apply(&mut self, event: WorkerEvent, failures: &mut Vec<String>) {
         match event {
             WorkerEvent::RatingsRead { id, result } if Some(id) == self.load_request => {
@@ -487,6 +628,7 @@ impl MetadataCache {
                 id, path, result, ..
             } => {
                 self.window_written(&path);
+                self.inspector_written(&path);
                 if let Some(message) =
                     self.ratings
                         .written(id, &path, result.map_err(write_error_text))
@@ -514,12 +656,19 @@ impl MetadataCache {
                     if self.window.is_image(&path) {
                         self.window.result = Some(result);
                     }
+                } else if self.inspector.in_flight == Some(id) {
+                    self.inspector.in_flight = None;
+                    // A result for another image than the inspector's is dropped.
+                    if self.inspector.is_image(&path) {
+                        self.inspector.result = Some(result);
+                    }
                 }
             }
             // The editor's write (T105): the window reads the image again after it, and after one
             // that succeeded the editor's form is filled from a new read.
             WorkerEvent::EditsWritten { id, path, result } => {
                 self.window_written(&path);
+                self.inspector_written(&path);
                 if self
                     .editor
                     .writing
@@ -1946,5 +2095,363 @@ mod tests {
             unsaved.failed,
             ["Kunde inte spara metadata för pw-loupe-exit-editor-err.jpg: filen är skrivskyddad"]
         );
+    }
+
+    // --- the inspector's metadata (ADR 0017 §2.1, T110; the rules of T103) ---
+
+    /// Makes `image` the inspector's image at `start` and sends its read at `start + 200 ms`;
+    /// returns that time.
+    fn inspector_read_sent(
+        cache: &mut MetadataCache,
+        image: &Path,
+        start: Instant,
+        worker: &mut FakeSubmit,
+    ) -> Instant {
+        cache.inspector_request(Some(image), true, false, start, worker);
+        let t = start + INSPECTOR_READ_DELAY;
+        cache.inspector_request(Some(image), true, false, t, worker);
+        t
+    }
+
+    #[test]
+    fn the_inspector_asks_for_nothing_before_200_ms_or_while_collapsed() {
+        let mut worker = FakeSubmit::new([]);
+        let mut cache = MetadataCache::default();
+        let image = image_path("pw-loupe-inspector-wait.ARW");
+        let start = Instant::now();
+
+        // Collapsed (the column or the section): nothing, however long the image is current.
+        assert_eq!(
+            cache.inspector_request(Some(&image), false, false, start, &mut worker),
+            None
+        );
+        let later = start + Duration::from_secs(5);
+        assert_eq!(
+            cache.inspector_request(Some(&image), false, false, later, &mut worker),
+            None
+        );
+        assert!(worker.metadata_reads.is_empty());
+
+        // Another image, shown: nothing before 200 ms, and the rest of the wait is returned.
+        let other = image_path("pw-loupe-inspector-wait.jpg");
+        assert_eq!(
+            cache.inspector_request(Some(&other), true, false, later, &mut worker),
+            Some(INSPECTOR_READ_DELAY)
+        );
+        let almost = later + Duration::from_millis(199);
+        assert_eq!(
+            cache.inspector_request(Some(&other), true, false, almost, &mut worker),
+            Some(Duration::from_millis(1))
+        );
+        assert!(worker.metadata_reads.is_empty());
+        assert_eq!(cache.inspector_state(&other), InspectorState::Loading);
+
+        // At 200 ms the one read is sent.
+        cache.inspector_request(
+            Some(&other),
+            true,
+            false,
+            later + INSPECTOR_READ_DELAY,
+            &mut worker,
+        );
+        assert_eq!(worker.metadata_reads, [(500, other.clone())]);
+    }
+
+    #[test]
+    fn moving_quickly_queues_nothing_and_an_unsupported_file_is_never_read_by_the_inspector() {
+        let mut worker = FakeSubmit::new([]);
+        let mut cache = MetadataCache::default();
+        let start = Instant::now();
+        // A new image every 100 ms: none is current for 200 ms.
+        for step in 0..5u32 {
+            let image = image_path(&format!("pw-loupe-inspector-step-{step}.DNG"));
+            let now = start + Duration::from_millis(100) * step;
+            cache.inspector_request(Some(&image), true, false, now, &mut worker);
+        }
+        assert!(worker.metadata_reads.is_empty());
+
+        let text = image_path("pw-loupe-inspector-notes.txt");
+        cache.inspector_request(Some(&text), true, false, start, &mut worker);
+        let later = start + Duration::from_secs(1);
+        assert_eq!(
+            cache.inspector_request(Some(&text), true, false, later, &mut worker),
+            None
+        );
+        assert!(worker.metadata_reads.is_empty());
+        assert_eq!(cache.inspector_state(&text), InspectorState::Unsupported);
+    }
+
+    #[test]
+    fn the_inspector_has_one_read_in_flight_then_the_newest_image_and_drops_a_stale_result() {
+        let mut worker = FakeSubmit::new([]);
+        let mut cache = MetadataCache::default();
+        let first = image_path("pw-loupe-inspector-first.ARW");
+        let second = image_path("pw-loupe-inspector-second.ARW");
+        let third = image_path("pw-loupe-inspector-third.ARW");
+        let start = Instant::now();
+        inspector_read_sent(&mut cache, &first, start, &mut worker);
+        assert_eq!(worker.metadata_reads, [(500, first.clone())]);
+
+        // The image changes twice while the read runs: nothing more is sent.
+        let t = start + Duration::from_millis(300);
+        cache.inspector_request(Some(&second), true, false, t, &mut worker);
+        let t = t + Duration::from_millis(300);
+        assert_eq!(
+            cache.inspector_request(Some(&third), true, false, t, &mut worker),
+            Some(INSPECTOR_POLL_INTERVAL)
+        );
+        let t = t + Duration::from_secs(1);
+        cache.inspector_request(Some(&third), true, false, t, &mut worker);
+        assert_eq!(worker.metadata_reads.len(), 1, "one read in flight");
+
+        // The first image's result comes back: it is dropped.
+        worker
+            .events
+            .push_back(metadata_read(500, &first, Ok(empty_read())));
+        assert!(cache.poll(&mut worker).is_empty());
+        assert_eq!(cache.inspector_state(&third), InspectorState::Loading);
+        assert_eq!(cache.inspector_state(&first), InspectorState::Loading);
+
+        // Then the newest image is asked for, and its result is kept.
+        cache.inspector_request(Some(&third), true, false, t, &mut worker);
+        assert_eq!(
+            worker.metadata_reads,
+            [(500, first.clone()), (501, third.clone())]
+        );
+        worker
+            .events
+            .push_back(metadata_read(501, &third, Ok(empty_read())));
+        assert!(cache.poll(&mut worker).is_empty());
+        assert_eq!(
+            cache.inspector_state(&third),
+            InspectorState::Ready(&empty_read())
+        );
+        assert_eq!(
+            cache.inspector_request(Some(&third), true, false, t, &mut worker),
+            None
+        );
+        assert_eq!(
+            worker.metadata_reads.len(),
+            2,
+            "a read image is not read again"
+        );
+    }
+
+    #[test]
+    fn the_inspector_shows_an_error_and_a_stopped_worker_fails_its_read() {
+        let mut worker = FakeSubmit::new([]);
+        let mut cache = MetadataCache::default();
+        let image = image_path("pw-loupe-inspector-error.jpg");
+        inspector_read_sent(&mut cache, &image, Instant::now(), &mut worker);
+        worker
+            .events
+            .push_back(metadata_read(77, &image, Ok(empty_read())));
+        assert!(cache.poll(&mut worker).is_empty());
+        assert_eq!(cache.inspector_state(&image), InspectorState::Loading);
+        worker
+            .events
+            .push_back(metadata_read(500, &image, Err("filen saknas".to_owned())));
+        assert!(cache.poll(&mut worker).is_empty());
+        assert_eq!(
+            cache.inspector_state(&image),
+            InspectorState::Error("filen saknas")
+        );
+
+        let other = image_path("pw-loupe-inspector-stopped.jpg");
+        inspector_read_sent(&mut cache, &other, Instant::now(), &mut worker);
+        let mut failures = Vec::new();
+        cache.drain(|| Err(TryRecvError::Disconnected), &mut failures);
+        assert_eq!(
+            cache.inspector_state(&other),
+            InspectorState::Error("metadataarbetaren har stannat")
+        );
+    }
+
+    #[test]
+    fn the_inspector_reads_its_image_again_after_a_rating_write() {
+        let mut worker = FakeSubmit::new([]);
+        worker.write_result = Some(Ok(()));
+        let mut cache = MetadataCache::default();
+        let image = image_path("pw-loupe-inspector-rated.ARW");
+        let other = image_path("pw-loupe-inspector-other.ARW");
+        let t = inspector_read_sent(&mut cache, &image, Instant::now(), &mut worker);
+        worker
+            .events
+            .push_back(metadata_read(500, &image, Ok(empty_read())));
+        assert!(cache.poll(&mut worker).is_empty());
+
+        // A rating write of another image changes nothing.
+        if let Err(error) = cache.set_rating(&other, RatingKey::Stars(2)) {
+            panic!("supported rating path should be accepted: {error}");
+        }
+        assert!(cache.poll(&mut worker).is_empty(), "the write is sent");
+        assert!(cache.poll(&mut worker).is_empty(), "the write is confirmed");
+        assert_eq!(
+            cache.inspector_request(Some(&image), true, false, t, &mut worker),
+            None
+        );
+        assert_eq!(worker.metadata_reads.len(), 1);
+
+        // A rating write of the inspector's image: read again, the old values shown meanwhile.
+        if let Err(error) = cache.set_rating(&image, RatingKey::Stars(4)) {
+            panic!("supported rating path should be accepted: {error}");
+        }
+        assert!(cache.poll(&mut worker).is_empty(), "the write is sent");
+        assert!(cache.poll(&mut worker).is_empty(), "the write is confirmed");
+        assert_eq!(
+            cache.inspector_state(&image),
+            InspectorState::Ready(&empty_read())
+        );
+        cache.inspector_request(Some(&image), true, false, t, &mut worker);
+        assert_eq!(
+            worker.metadata_reads,
+            [(500, image.clone()), (501, image.clone())]
+        );
+    }
+
+    #[test]
+    fn the_inspector_reads_again_after_the_windows_save_once_the_window_closes() {
+        let mut worker = FakeSubmit::new([]);
+        let mut cache = MetadataCache::default();
+        let image = image_path("pw-loupe-inspector-saved.jpg");
+        let t = inspector_read_sent(&mut cache, &image, Instant::now(), &mut worker);
+        worker
+            .events
+            .push_back(metadata_read(500, &image, Ok(empty_read())));
+        assert!(cache.poll(&mut worker).is_empty());
+
+        // The window opens on the image: its own read is sent at once, the inspector's is not.
+        assert!(cache.open_window(&image, &mut worker));
+        assert_eq!(worker.metadata_reads.len(), 2);
+        worker
+            .events
+            .push_back(metadata_read(501, &image, Ok(empty_read())));
+        assert!(cache.poll(&mut worker).is_empty());
+        assert_eq!(
+            cache.take_window_read(),
+            Some(Ok(empty_read())),
+            "the window's read"
+        );
+
+        // A save in the window: the editor's read after it; the inspector asks for nothing while
+        // the window is open, and keeps showing its image even when asked about another.
+        assert_eq!(cache.save_edits(&image, title_edits(), &mut worker), Ok(()));
+        worker
+            .events
+            .push_back(edits_written(900, &image, Ok(report(Vec::new()))));
+        assert!(cache.poll(&mut worker).is_empty());
+        let reads_while_open = worker.metadata_reads.len();
+        let elsewhere = image_path("pw-loupe-inspector-elsewhere.jpg");
+        let later = t + Duration::from_secs(1);
+        assert_eq!(
+            cache.inspector_request(Some(&elsewhere), true, true, later, &mut worker),
+            None
+        );
+        assert_eq!(
+            cache.inspector_request(Some(&image), true, true, later, &mut worker),
+            None
+        );
+        assert_eq!(worker.metadata_reads.len(), reads_while_open);
+        assert_eq!(
+            cache.inspector_state(&image),
+            InspectorState::Ready(&empty_read())
+        );
+
+        // The window closes: the inspector reads its image again at once.
+        cache.close_window();
+        cache.inspector_request(Some(&image), true, false, later, &mut worker);
+        assert_eq!(worker.metadata_reads.len(), reads_while_open + 1);
+        assert_eq!(
+            worker.metadata_reads.last().map(|(_, path)| path),
+            Some(&image)
+        );
+    }
+
+    #[test]
+    fn the_windows_read_is_unaffected_by_the_inspectors() {
+        let mut worker = FakeSubmit::new([]);
+        let mut cache = MetadataCache::default();
+        let shown = image_path("pw-loupe-inspector-beside-a.ARW");
+        let window = image_path("pw-loupe-inspector-beside-b.ARW");
+        inspector_read_sent(&mut cache, &shown, Instant::now(), &mut worker);
+        assert_eq!(worker.metadata_reads, [(500, shown.clone())]);
+
+        // The window's read is sent at once although the inspector's is in flight.
+        assert!(cache.open_window(&window, &mut worker));
+        assert_eq!(
+            worker.metadata_reads,
+            [(500, shown.clone()), (501, window.clone())]
+        );
+
+        // Each result goes to its own reader.
+        worker
+            .events
+            .push_back(metadata_read(501, &window, Err("fönstrets fel".to_owned())));
+        worker
+            .events
+            .push_back(metadata_read(500, &shown, Ok(empty_read())));
+        assert!(cache.poll(&mut worker).is_empty());
+        assert_eq!(
+            cache.take_window_read(),
+            Some(Err("fönstrets fel".to_owned()))
+        );
+        assert_eq!(
+            cache.inspector_state(&shown),
+            InspectorState::Ready(&empty_read())
+        );
+    }
+
+    #[test]
+    fn a_folder_change_empties_the_inspector_and_the_same_folder_keeps_it() {
+        let mut worker = FakeSubmit::new([Ok(1), Ok(2), Ok(3)]);
+        let mut cache = MetadataCache::default();
+        let image = image_path("pw-loupe-inspector-folder.ARW");
+        if let Err(error) = cache.begin_load(vec![image.clone()], &mut worker) {
+            panic!("current directory should be available: {error}");
+        }
+        inspector_read_sent(&mut cache, &image, Instant::now(), &mut worker);
+        worker
+            .events
+            .push_back(metadata_read(500, &image, Ok(empty_read())));
+        assert!(cache.poll(&mut worker).is_empty());
+
+        // The same folder loaded again (contact sheet ↔ loupe) keeps the values.
+        if let Err(error) = cache.begin_load(vec![image.clone()], &mut worker) {
+            panic!("current directory should be available: {error}");
+        }
+        assert_eq!(
+            cache.inspector_state(&image),
+            InspectorState::Ready(&empty_read())
+        );
+
+        // Pruning keeps an image still open.
+        cache.prune(|path| path == image);
+        assert_eq!(
+            cache.inspector_state(&image),
+            InspectorState::Ready(&empty_read())
+        );
+
+        // Another folder empties them.
+        let elsewhere = image_path("pw-loupe-inspector-elsewhere.ARW");
+        if let Err(error) = cache.begin_load(vec![elsewhere], &mut worker) {
+            panic!("current directory should be available: {error}");
+        }
+        assert_eq!(cache.inspector_state(&image), InspectorState::Loading);
+    }
+
+    #[test]
+    fn pruning_a_closed_image_empties_the_inspector() {
+        let mut worker = FakeSubmit::new([]);
+        let mut cache = MetadataCache::default();
+        let image = image_path("pw-loupe-inspector-pruned.ARW");
+        inspector_read_sent(&mut cache, &image, Instant::now(), &mut worker);
+        worker
+            .events
+            .push_back(metadata_read(500, &image, Ok(empty_read())));
+        assert!(cache.poll(&mut worker).is_empty());
+
+        cache.prune(|_| false);
+
+        assert_eq!(cache.inspector_state(&image), InspectorState::Loading);
     }
 }

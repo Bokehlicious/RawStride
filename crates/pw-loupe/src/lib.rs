@@ -186,7 +186,9 @@ pub enum Action {
     ZoomStep(i32),
     /// A: zoom around the pointer or the image centre.
     ToggleAnchor,
-    /// I: show or hide the information.
+    /// I: open or collapse the inspector (the right column), in the loupe and the contact sheet;
+    /// from the hidden side columns (`H`) it brings both back with the inspector open (ADR 0017
+    /// §2.4, U2-Q3).
     ToggleInfo,
     /// R: RAW ↔ JPEG (G4).
     ToggleMode,
@@ -202,8 +204,9 @@ pub fn step_allowed(action: Action, repeat: bool, status: &Status) -> bool {
         && matches!(status, Status::Preparing { .. }))
 }
 
-/// The action of a key press in the loupe. Keys handled elsewhere (Escape, G, Enter, Ctrl+O,
-/// Ctrl+A, digits) give `None`.
+/// The action of a key press in the loupe. `M` (the metadata window) and `I` (the inspector open
+/// ↔ collapsed, ADR 0017 §2.4, U2-Q3) act in the contact sheet as well. Keys handled elsewhere
+/// (Escape, G, Enter, Ctrl+O, Ctrl+A, Ctrl+I, digits) give `None`.
 pub fn key_action(key: egui::Key, ctrl: bool, alt: bool) -> Option<Action> {
     use egui::Key as K;
     if ctrl || alt {
@@ -598,6 +601,40 @@ mod tests {
     }
 
     #[test]
+    fn i_toggles_the_inspector_without_ctrl_or_alt_and_ctrl_i_stays_import() {
+        use egui::Key as K;
+        assert_eq!(key_action(K::I, false, false), Some(Action::ToggleInfo));
+        assert_eq!(key_action(K::I, true, false), None);
+        assert_eq!(key_action(K::I, false, true), None);
+        assert!(opens_import(K::I, true, false, false));
+        assert!(!opens_import(K::I, false, false, false));
+        // I is not a key of the contact sheet or of the loupe's way back to it.
+        assert_eq!(grid_key_action(K::I, false, false, false), None);
+        assert_eq!(loupe_key_action(K::I, false, false), None);
+        // From the contact sheet and the loupe alike, I gives Visa ▸ Inspektör.
+        let i = KeyChord {
+            key: K::I,
+            ctrl: false,
+            shift: false,
+            alt: false,
+        };
+        assert_eq!(command_of_key(i, ViewMode::Grid), Some(Command::ToggleInfo));
+        assert_eq!(
+            command_of_key(i, ViewMode::Loupe),
+            Some(Command::ToggleInfo)
+        );
+        let ctrl_i = KeyChord { ctrl: true, ..i };
+        assert_eq!(
+            command_of_key(ctrl_i, ViewMode::Grid),
+            Some(Command::Import)
+        );
+        assert_eq!(
+            command_of_key(ctrl_i, ViewMode::Loupe),
+            Some(Command::Import)
+        );
+    }
+
+    #[test]
     fn e_does_nothing() {
         use egui::Key as K;
         // E opened the editor before D16; the metadata window is opened with M only.
@@ -984,7 +1021,7 @@ mod tests {
     }
 
     /// The command a key gives in `view`, through the key functions in the order `main.rs` asks
-    /// them (shell keys, import, tabs, ratings, `M`, then the view's own keys).
+    /// them (shell keys, import, tabs, ratings, `M`, `I`, then the view's own keys).
     fn command_of_key(chord: KeyChord, view: ViewMode) -> Option<Command> {
         let KeyChord {
             key,
@@ -1020,6 +1057,9 @@ mod tests {
         if key_action(key, ctrl, alt) == Some(Action::OpenMetadata) {
             return Some(Command::Metadata);
         }
+        if key_action(key, ctrl, alt) == Some(Action::ToggleInfo) {
+            return Some(Command::ToggleInfo);
+        }
         match view {
             ViewMode::Grid => match grid_key_action(key, ctrl, shift, alt)? {
                 GridKeyAction::OpenLoupe => Some(Command::ToggleView),
@@ -1040,7 +1080,6 @@ mod tests {
                     Action::ZoomStep(1) => Some(Command::ZoomIn),
                     Action::ZoomStep(-1) => Some(Command::ZoomOut),
                     Action::ToggleAnchor => Some(Command::ToggleAnchor),
-                    Action::ToggleInfo => Some(Command::ToggleInfo),
                     Action::ToggleMode => Some(Command::ToggleMode),
                     _ => None,
                 }

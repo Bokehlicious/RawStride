@@ -432,12 +432,12 @@ pub enum Command {
     ZoomIn,
     ZoomOut,
     ToggleAnchor,
+    /// The inspector (the right column) open ↔ collapsed, as `I` (ADR 0017 §2.4, U2-Q3, T110).
     ToggleInfo,
     NextTab,
     PreviousTab,
     ToggleColumns,
     LeftColumn,
-    RightColumn,
     Fullscreen,
     Theme(Theme),
 }
@@ -461,8 +461,7 @@ impl Command {
             | Self::ToggleZoom
             | Self::ZoomIn
             | Self::ZoomOut
-            | Self::ToggleAnchor
-            | Self::ToggleInfo => Where::Loupe,
+            | Self::ToggleAnchor => Where::Loupe,
             _ => Where::Both,
         }
     }
@@ -630,7 +629,6 @@ pub const MENUS: &[Menu] = &[
             item(Command::ZoomOut, plain(Key::Minus)),
             item(Command::ToggleAnchor, plain(Key::A)),
             MenuEntry::Separator,
-            item(Command::ToggleInfo, plain(Key::I)),
             MenuEntry::Filter,
             MenuEntry::Separator,
             item(Command::NextTab, ctrl(Key::Tab)),
@@ -646,7 +644,7 @@ pub const MENUS: &[Menu] = &[
             MenuEntry::Separator,
             item(Command::ToggleColumns, plain(HIDE_KEY)),
             item(Command::LeftColumn, None),
-            item(Command::RightColumn, None),
+            item(Command::ToggleInfo, plain(Key::I)),
             item(Command::Fullscreen, plain(Key::F11)),
             MenuEntry::Separator,
             MenuEntry::Submenu(SubmenuKind::Theme, THEME_ITEMS),
@@ -927,6 +925,7 @@ mod tests {
         assert_eq!(Command::ToggleMode.acts_in(), Where::Loupe);
         assert_eq!(Command::Stars(3).acts_in(), Where::Both);
         assert_eq!(Command::Metadata.acts_in(), Where::Both);
+        assert_eq!(Command::ToggleInfo.acts_in(), Where::Both);
         assert_eq!(Command::OpenFolder.acts_in(), Where::Both);
     }
 }

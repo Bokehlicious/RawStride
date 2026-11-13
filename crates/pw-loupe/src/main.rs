@@ -14,7 +14,9 @@ use std::sync::mpsc::TryRecvError;
 use std::time::{Duration, Instant};
 
 use eframe::egui;
-use metadata::{EditorEvent, MetadataCache};
+use inspector::{ExifInspector, ExifReader, ExifShown, exif_state_text};
+use inspector_text::{InspectorText, exif_label, inspector_text};
+use metadata::{EditorEvent, InspectorState, MetadataCache};
 use pw_imagecheck::RawImageCheck;
 use pw_loupe::{
     Action, CellState, DEFAULT_THUMBNAIL_SIZE, DialogKey, DialogRequest, EditorField, EditorForm,
@@ -52,6 +54,8 @@ use pw_thumbcache::{ThumbWorker, ThumbnailRequest};
 use pw_viewcore::native::NativeBackend;
 use pw_viewcore::{Config, Status, ViewCore};
 
+mod inspector;
+mod inspector_text;
 mod metadata;
 
 /// The contact sheet's and the loupe's background: the same neutral dark grey in both themes
@@ -94,6 +98,18 @@ fn metadata_subject(tab: Option<&Tab>, cwd: Option<&Path>) -> Option<PathBuf> {
     if tab.mode == ViewMode::Grid && tab.selection.marked_in(&tab.visible).len() > 1 {
         return None;
     }
+    let path = tab.position().and_then(|_| tab.files.get(tab.current))?;
+    Some(match cwd {
+        Some(cwd) => resolve_path(cwd, path),
+        None => path.clone(),
+    })
+}
+
+/// The inspector's image (ADR 0017 §2.1, §2.2, T110): the active tab's current image when it is
+/// shown, as the metadata cache keys it (`cwd` resolves a relative path). In the contact sheet it
+/// is the current cell also when several images are marked.
+fn inspector_subject(tab: Option<&Tab>, cwd: Option<&Path>) -> Option<PathBuf> {
+    let tab = tab?;
     let path = tab.position().and_then(|_| tab.files.get(tab.current))?;
     Some(match cwd {
         Some(cwd) => resolve_path(cwd, path),
@@ -280,7 +296,9 @@ struct Loupe {
     wheel_notches: f32,
     textures: Textures,
     anchor_at_pointer: bool,
-    show_info: bool,
+    /// The inspector's Exif reader and summary (ADR 0017 §2.1, T110).
+    exif_reader: ExifReader,
+    exif: ExifInspector,
     /// The status bar's content of the last frame, and the one made this frame (T109).
     status_bar: StatusBar,
     next_status: StatusBar,
@@ -1185,6 +1203,8 @@ impl Loupe {
                 return;
             }
         };
+        // Another folder empties the inspector's Exif summary, as its metadata (T110).
+        self.exif.folder_loaded(&files);
         if tab.mode == ViewMode::Loupe {
             self.open_loupe_core(&files);
         } else {
@@ -1556,14 +1576,13 @@ impl Loupe {
             );
         }
         let import_status = self.hidden_import_status();
-        if self.show_info || import_status.is_some() {
+        // The status line is always shown in full (T110: `I` toggles the inspector now).
+        {
             let current_path = tab
                 .position()
                 .and_then(|_| tab.files.get(tab.current))
                 .cloned();
-            let mut line = if !self.show_info {
-                String::new()
-            } else if let (Some(position), Some(path)) = (tab.position(), &current_path) {
+            let mut line = if let (Some(position), Some(path)) = (tab.position(), &current_path) {
                 // "3 / 12 (av 31) · 12 markerade · TN100423.ARW": the marking before the name
                 // (owner decision 2026-11-10; ADR 0014 §5.3 lists the parts).
                 let name = path
@@ -1580,14 +1599,10 @@ impl Loupe {
             } else {
                 self.nothing_shown_text(&tab)
             };
-            if self.show_info
-                && let Some(message) = &self.message
-            {
+            if let Some(message) = &self.message {
                 line = format!("{line}  ·  {message}");
             }
-            if self.show_info
-                && let Some(notice) = self.metadata.notice(current_path.as_deref())
-            {
+            if let Some(notice) = self.metadata.notice(current_path.as_deref()) {
                 line = format!("{line}  ·  {notice}");
             }
             if let Some(status) = import_status {
@@ -1678,7 +1693,8 @@ impl Loupe {
             Action::Fit => self.core.fit(),
             Action::ZoomStep(n) => self.core.zoom_steps(n, anchor),
             Action::ToggleAnchor => self.anchor_at_pointer = !self.anchor_at_pointer,
-            Action::ToggleInfo => self.show_info = !self.show_info,
+            // The inspector open ↔ collapsed, as Visa ▸ Inspektör (U2-Q3, T110).
+            Action::ToggleInfo => self.toggle_column(false),
             Action::ToggleMode => self.core.toggle_mode(),
             Action::OpenMetadata => self.open_metadata_window(),
         }
@@ -2006,8 +2022,8 @@ impl Loupe {
         }
     }
 
-    /// Visa ▸ Vänster kolumn / Höger kolumn: opens or collapses the column; a hidden pair is
-    /// shown again with that column open.
+    /// Visa ▸ Vänster kolumn, and Visa ▸ Inspektör and `I` for the right column (T110): opens or
+    /// collapses the column; a hidden pair is shown again with that column open.
     fn toggle_column(&mut self, left: bool) {
         let shell = &mut self.settings.shell;
         let column = if left {
@@ -2020,6 +2036,35 @@ impl Loupe {
             *column = ColumnState::Open;
         } else {
             *column = column.toggled();
+        }
+    }
+
+    /// Follows the inspector's image every frame, also while the inspector is collapsed, so the
+    /// Exif summary and the metadata cache know how long the image has been the current one
+    /// (ADR 0017 §2.1, T110). Each section asks for its read only while the right column and the
+    /// section are open; the metadata waits while the metadata window is open. Called after the
+    /// frame's keys, so an image changed by a key is followed in the same frame.
+    fn follow_inspector(&mut self, ctx: &egui::Context) {
+        let cwd = std::env::current_dir().ok();
+        let image = inspector_subject(self.tabs.active(), cwd.as_deref());
+        let shell = self.settings.shell;
+        let column_open = !shell.columns_hidden && shell.right_column == ColumnState::Open;
+        let now = Instant::now();
+        let exif_wait = self.exif.request(
+            image.as_deref(),
+            column_open && shell.inspector_info == ColumnState::Open,
+            now,
+            &mut self.exif_reader,
+        );
+        let metadata_wait = self.metadata.inspector_request(
+            image.as_deref(),
+            column_open && shell.inspector_metadata == ColumnState::Open,
+            self.metadata_window.is_some(),
+            now,
+            &mut self.metadata_worker,
+        );
+        if let Some(wait) = exif_wait.into_iter().chain(metadata_wait).min() {
+            ctx.request_repaint_after(wait);
         }
     }
 
@@ -2123,13 +2168,12 @@ impl Loupe {
         let shell = &self.settings.shell;
         match command {
             Command::ToggleAnchor => Some(self.anchor_at_pointer),
-            Command::ToggleInfo => Some(self.show_info),
+            Command::ToggleInfo => {
+                Some(!shell.columns_hidden && shell.right_column == ColumnState::Open)
+            }
             Command::ToggleColumns => Some(!shell.columns_hidden),
             Command::LeftColumn => {
                 Some(!shell.columns_hidden && shell.left_column == ColumnState::Open)
-            }
-            Command::RightColumn => {
-                Some(!shell.columns_hidden && shell.right_column == ColumnState::Open)
             }
             Command::Fullscreen => Some(shell.fullscreen),
             Command::Theme(theme) => Some(shell.theme == theme),
@@ -2174,7 +2218,6 @@ impl Loupe {
             Command::ToggleInfo => self.act(Action::ToggleInfo, None),
             Command::ToggleColumns => self.shell_action(ctx, ShellAction::ToggleColumns),
             Command::LeftColumn => self.toggle_column(true),
-            Command::RightColumn => self.toggle_column(false),
             Command::Fullscreen => self.shell_action(ctx, ShellAction::ToggleFullscreen),
             Command::Theme(theme) => self.set_theme(ctx, theme),
         }
@@ -2400,8 +2443,8 @@ impl Loupe {
 
     /// The side columns (ADR 0017 §2.1, U1-Q3, T109): each resizable between the minimum and 40 %
     /// of the window, collapsible to a strip with its open button, and both hidden with the hide
-    /// key. Their content comes in U2, U4 and U5; until then a heading and one line each, and the
-    /// hidden import's status under "Uppgifter".
+    /// key. The right one is the inspector (U2, T110); the left one's content comes in U4 and U5,
+    /// until then a heading and one line, and the hidden import's status under "Uppgifter".
     fn draw_columns(&mut self, ui: &mut egui::Ui) {
         let shell = self.settings.shell;
         if shell.columns_hidden {
@@ -2447,6 +2490,12 @@ impl Loupe {
         }
         match shell.right_column {
             ColumnState::Open => {
+                // The inspector (ADR 0017 §2.1, T110): the current image's file name, then Info
+                // and Metadata, the whole column in one scroll area.
+                let cwd = std::env::current_dir().ok();
+                let image = inspector_subject(self.tabs.active(), cwd.as_deref());
+                let (exif, metadata) = (&self.exif, &self.metadata);
+                let mut toggled = [false, false];
                 let shown = egui::Panel::right("right-column")
                     .resizable(true)
                     .default_size(clamp_column_width(
@@ -2457,13 +2506,26 @@ impl Loupe {
                     .show(ui, |ui| {
                         let collapse =
                             column_header(ui, ShellText::Inspector, ShellText::CollapseRight);
-                        column_note(ui, shell_text(ShellText::InspectorNote));
+                        egui::ScrollArea::vertical()
+                            .id_salt("inspector-scroll")
+                            .auto_shrink([false, false])
+                            .show(ui, |ui| {
+                                toggled =
+                                    draw_inspector(ui, image.as_deref(), &shell, exif, metadata);
+                            });
                         collapse
                     });
                 self.settings.shell.right_column_width =
                     shown.response.rect.width().round().max(0.0) as u32;
                 if shown.inner {
                     self.settings.shell.right_column = ColumnState::Collapsed;
+                }
+                let sections = &mut self.settings.shell;
+                if toggled[0] {
+                    sections.inspector_info = sections.inspector_info.toggled();
+                }
+                if toggled[1] {
+                    sections.inspector_metadata = sections.inspector_metadata.toggled();
                 }
             }
             ColumnState::Collapsed => {
@@ -2624,6 +2686,19 @@ impl Loupe {
                 continue;
             }
 
+            // I opens and collapses the inspector in the loupe and the contact sheet (ADR 0017
+            // §2.4, U2-Q3, T110); not while a text field has the keyboard or a dialog holds the
+            // program.
+            if !ctx.egui_wants_keyboard_input()
+                && key_action(key, ctrl, alt) == Some(Action::ToggleInfo)
+            {
+                if !self.dialog_open() {
+                    self.act(Action::ToggleInfo, None);
+                    ctx.request_repaint();
+                }
+                continue;
+            }
+
             match self.tabs.active().map(|tab| tab.mode) {
                 Some(ViewMode::Grid) => match grid_key_action(key, ctrl, shift, alt) {
                     Some(GridKeyAction::OpenLoupe) => {
@@ -2732,11 +2807,11 @@ impl Loupe {
         let painter = ui.painter().clone();
         painter.rect_filled(full, 0.0, BACKGROUND);
         self.textures.paint(&painter, rect, ppp, &frame);
-        if self.show_info
-            && let Some(rating) = frame
-                .path
-                .as_deref()
-                .and_then(|path| self.metadata.shown_rating(path))
+        // The rating badge is always shown (T110).
+        if let Some(rating) = frame
+            .path
+            .as_deref()
+            .and_then(|path| self.metadata.shown_rating(path))
             && (rating.stars.is_some() || rating.label.is_some())
         {
             paint_rating_badge(&painter, rect, rating);
@@ -2777,45 +2852,25 @@ impl Loupe {
         if self.metadata.is_loading(metadata_path) {
             ctx.request_repaint_after(Duration::from_millis(100));
         }
-        if self.show_info || import_status.is_some() {
-            let mut line = if self.show_info {
-                status_line(&frame, self.anchor_at_pointer, total)
-            } else {
-                String::new()
-            };
-            if self.show_info
-                && let Some(m) = &self.message
-            {
-                line = format!("{line}  ·  {m}");
-            }
-            if self.show_info
-                && let Some(notice) = &metadata_notice
-            {
-                line = format!("{line}  ·  {notice}");
-            }
-            if self.show_info
-                && let Some(rating) = self.metadata.rating_summary(frame.path.as_deref())
-            {
-                line = format!("{line}  ·  {rating}");
-            }
-            if let Some(status) = import_status {
-                line = if line.is_empty() {
-                    status
-                } else {
-                    format!("{line}  ·  {status}")
-                };
-            }
-            // The display-mode control (G4: a key and a control) sits in the status bar.
-            self.next_status = StatusBar {
-                line,
-                mode: self.show_info.then(|| mode_label(frame.mode)),
-            };
-        } else if matches!(frame.status, Status::Ready)
-            && self.metadata.is_error(frame.path.as_deref())
-            && let Some(notice) = metadata_notice
-        {
-            centre_text(&notice);
+        // The status line is always shown in full, with the RAW/JPEG control (T110).
+        let mut line = status_line(&frame, self.anchor_at_pointer, total);
+        if let Some(m) = &self.message {
+            line = format!("{line}  ·  {m}");
         }
+        if let Some(notice) = &metadata_notice {
+            line = format!("{line}  ·  {notice}");
+        }
+        if let Some(rating) = self.metadata.rating_summary(frame.path.as_deref()) {
+            line = format!("{line}  ·  {rating}");
+        }
+        if let Some(status) = import_status {
+            line = format!("{line}  ·  {status}");
+        }
+        // The display-mode control (G4: a key and a control) sits in the status bar.
+        self.next_status = StatusBar {
+            line,
+            mode: Some(mode_label(frame.mode)),
+        };
     }
 }
 
@@ -3274,6 +3329,132 @@ fn column_note(ui: &mut egui::Ui, text: &str) {
     ui.add(egui::Label::new(egui::RichText::new(text).weak()).wrap());
 }
 
+/// The inspector's contents (ADR 0017 §2.1, T110): the file name of the current image (wrapped,
+/// never cut), then the sections Info and Metadata, open or collapsed as `shell` says. Every text
+/// comes from `inspector_text.rs`, `info_panel.rs` (`panel_text`, `info_panel`) or
+/// `UNSUPPORTED_TEXT`, or is data; labels and values wrap at the column's width. Returns which
+/// section headers were clicked (Info, Metadata).
+fn draw_inspector(
+    ui: &mut egui::Ui,
+    image: Option<&Path>,
+    shell: &ShellSettings,
+    exif: &ExifInspector,
+    metadata: &MetadataCache,
+) -> [bool; 2] {
+    let Some(path) = image else {
+        column_note(ui, &inspector_text(&InspectorText::NoImage));
+        return [false, false];
+    };
+    let file_name = path.file_name().map_or_else(
+        || path.display().to_string(),
+        |name| name.to_string_lossy().into_owned(),
+    );
+    ui.add(egui::Label::new(egui::RichText::new(file_name).strong()).wrap());
+    ui.add_space(PANEL_ROW_SPACING);
+    let info = egui::CollapsingHeader::new(inspector_text(&InspectorText::Info))
+        .id_salt("inspector-info")
+        .open(Some(shell.inspector_info == ColumnState::Open))
+        .show(ui, |ui| draw_exif_rows(ui, &exif.shown(path)));
+    let values = egui::CollapsingHeader::new(inspector_text(&InspectorText::Metadata))
+        .id_salt("inspector-metadata")
+        .open(Some(shell.inspector_metadata == ColumnState::Open))
+        .show(ui, |ui| draw_inspector_metadata(ui, path, metadata));
+    [
+        info.header_response.clicked(),
+        values.header_response.clicked(),
+    ]
+}
+
+/// The Info section: the Exif rows (label, value), or the text of loading, an error or no values.
+fn draw_exif_rows(ui: &mut egui::Ui, shown: &ExifShown<'_>) {
+    if let Some(text) = exif_state_text(shown) {
+        ui.add(egui::Label::new(text).wrap());
+        return;
+    }
+    if let ExifShown::Rows(rows) = shown {
+        for row in *rows {
+            ui.add(egui::Label::new(egui::RichText::new(exif_label(row.label)).weak()).wrap());
+            ui.add(egui::Label::new(row.value.as_str()).wrap());
+            ui.add_space(PANEL_ROW_SPACING);
+        }
+    }
+}
+
+/// The Metadata section, as the metadata window shows the values (T103's panel, D16): the values
+/// with their origin, the conflicts (open and decided) in the warning colour and the notices, each
+/// of the last two only when there are any; read-only.
+fn draw_inspector_metadata(ui: &mut egui::Ui, path: &Path, metadata: &MetadataCache) {
+    let read = match metadata.inspector_state(path) {
+        InspectorState::Unsupported => {
+            ui.add(egui::Label::new(UNSUPPORTED_TEXT).wrap());
+            return;
+        }
+        InspectorState::Loading => {
+            ui.add(egui::Label::new(panel_text(&PanelText::Loading)).wrap());
+            return;
+        }
+        InspectorState::Error(error) => {
+            ui.add(egui::Label::new(panel_text(&PanelText::ReadError(error.to_owned()))).wrap());
+            return;
+        }
+        InspectorState::Ready(read) => read,
+    };
+    let panel = info_panel(read);
+    let grey = ui.visuals().weak_text_color();
+    let warning = ui.visuals().warn_fg_color;
+    let wrapped = |ui: &mut egui::Ui, text: egui::RichText| {
+        ui.add(egui::Label::new(text).wrap());
+    };
+
+    wrapped(
+        ui,
+        egui::RichText::new(panel_text(&PanelText::Values)).strong(),
+    );
+    for row in &panel.values {
+        wrapped(ui, egui::RichText::new(&row.label).strong());
+        wrapped(ui, egui::RichText::new(&row.value));
+        wrapped(ui, egui::RichText::new(&row.origin).color(grey).small());
+        ui.add_space(PANEL_ROW_SPACING);
+    }
+
+    if !panel.conflicts.is_empty() {
+        ui.separator();
+        wrapped(
+            ui,
+            egui::RichText::new(panel_text(&PanelText::Conflicts))
+                .strong()
+                .color(warning),
+        );
+        for conflict in &panel.conflicts {
+            wrapped(
+                ui,
+                egui::RichText::new(&conflict.label).strong().color(warning),
+            );
+            for value in &conflict.values {
+                wrapped(ui, egui::RichText::new(&value.value).color(warning));
+                wrapped(ui, egui::RichText::new(&value.origin).color(grey).small());
+            }
+            wrapped(
+                ui,
+                egui::RichText::new(&conflict.rule).color(warning).italics(),
+            );
+            ui.add_space(PANEL_ROW_SPACING);
+        }
+    }
+
+    if !panel.notices.is_empty() {
+        ui.separator();
+        wrapped(
+            ui,
+            egui::RichText::new(panel_text(&PanelText::Notices)).strong(),
+        );
+        for notice in &panel.notices {
+            wrapped(ui, egui::RichText::new(notice));
+            ui.add_space(PANEL_ROW_SPACING);
+        }
+    }
+}
+
 /// A collapsed side column: a thin strip with only its open button; returns whether it was
 /// clicked (T109).
 fn collapsed_column(ui: &mut egui::Ui, id: &str, left: bool) -> bool {
@@ -3351,6 +3532,7 @@ impl eframe::App for Loupe {
             }
             ctx.request_repaint();
         }
+        self.follow_inspector(&ctx);
         if self.next_status != self.status_bar {
             self.status_bar = self.next_status.clone();
             ctx.request_repaint();
@@ -3657,7 +3839,8 @@ fn run(options: Options) -> Result<(), String> {
                 wheel_notches: 0.0,
                 textures: Textures::new(),
                 anchor_at_pointer: true,
-                show_info: true,
+                exif_reader: ExifReader::start(),
+                exif: ExifInspector::default(),
                 status_bar: StatusBar::default(),
                 next_status: StatusBar::default(),
                 scroll_request: None,
