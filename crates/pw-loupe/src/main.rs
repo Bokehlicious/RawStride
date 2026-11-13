@@ -21,20 +21,20 @@ use pw_imagecheck::RawImageCheck;
 use pw_loupe::{
     Action, CellState, DEFAULT_THUMBNAIL_SIZE, DialogKey, DialogRequest, EditorField, EditorForm,
     EditorText, Field, Filter, GridKeyAction, ImportDialog, ImportDialogState, ImportEvent,
-    ImportForm, ImportWorker, IptcField, LABEL_CHOICES, LabelFilter, LoupeMove, MAX_THUMBNAIL_SIZE,
-    MIN_THUMBNAIL_SIZE, MonitorProfile, Navigation, Options, PanelText, READING_RATINGS_TEXT,
-    RatingRefused, STAR_CONDITIONS, STAR_FILTERS, Settings, StarFilter, SubmitError, Tab,
-    TabAction, Tabs, ThumbGrid, UNSUPPORTED_TEXT, ViewMode, WINDOW_TITLE, allowed_modes,
-    clamp_thumbnail_size, clear_and_import_text, clear_cancel_text, clear_confirmation_text,
-    clear_confirmation_title, color_image, columns, dialog_key_action, done_lines, editor_text,
-    ejecting_progress_text, error_text, grid_key_action, indicator_text, info_panel,
-    iptc_progress_text, key_action, label_choice_text, label_filter_text, label_name, list_folder,
-    load_monitor_profile, load_settings, loupe_key_action, marked_text, mode_label, mode_text,
-    more_lines, no_match_text, notice_text, opens_import, other_values, panel_text, parse_args,
-    position_text, preview_line, preview_summary, primary_monitor_profile_path, progress_text,
-    rating_key_action, request_cell, save_settings, settings_path, star_condition_text,
-    star_filter_text, star_glyphs, status_line, step_allowed, step_thumbnail_size, tab_action,
-    take_wheel_steps, visible_range, wheel_factor, window_title,
+    ImportForm, ImportWorker, IptcField, LABEL_CHOICES, LabelFilter, Language, LoupeMove,
+    MAX_THUMBNAIL_SIZE, MIN_THUMBNAIL_SIZE, MonitorProfile, Navigation, Options, PanelText,
+    READING_RATINGS_TEXT, RatingRefused, STAR_CONDITIONS, STAR_FILTERS, Settings, StarFilter,
+    SubmitError, Tab, TabAction, Tabs, ThumbGrid, UNSUPPORTED_TEXT, ViewMode, WINDOW_TITLE,
+    allowed_modes, clamp_thumbnail_size, clear_and_import_text, clear_cancel_text,
+    clear_confirmation_text, clear_confirmation_title, color_image, columns, dialog_key_action,
+    done_lines, editor_text, ejecting_progress_text, error_text, grid_key_action, indicator_text,
+    info_panel, iptc_progress_text, key_action, label_choice_text, label_filter_text, label_name,
+    list_folder, load_monitor_profile, load_settings, loupe_key_action, marked_text, mode_label,
+    mode_text, more_lines, no_match_text, notice_text, opens_import, other_values, panel_text,
+    parse_args, position_text, preview_line, preview_summary, primary_monitor_profile_path,
+    progress_text, property_label, rating_key_action, request_cell, save_settings, settings_path,
+    star_condition_text, star_filter_text, star_glyphs, status_line, step_allowed,
+    step_thumbnail_size, tab_action, take_wheel_steps, visible_range, wheel_factor, window_title,
 };
 use pw_loupe::{
     COLLAPSED_WIDTH, ColumnState, Command, MENUS, MenuEntry, MenuItem, RatingKey, STATUS_TEXT_SIZE,
@@ -2903,8 +2903,10 @@ fn window_editor_properties() -> Vec<&'static str> {
 
 /// The contents of the metadata window's form (D16, T107), top to bottom: the 22 fields, the open
 /// conflicts with a choice each and the warnings (editable when `enabled`); then read-only, in
-/// small text, the other metadata, the conflicts a rule decided and the notices, each only when it
-/// has rows. Labels and values wrap at the window's width. Returns the conflict value chosen.
+/// small text, the other metadata (without an origin line, T114), the conflicts a rule decided
+/// (each value with its origin) and the notices, each only when it has rows. The contact fields
+/// (E-post, Telefon, Webb) are drawn under the heading of their structure, "Kontaktuppgifter"
+/// (T114). Labels and values wrap at the window's width. Returns the conflict value chosen.
 fn draw_window_form(
     ui: &mut egui::Ui,
     state: &mut FormState,
@@ -2916,8 +2918,16 @@ fn draw_window_form(
     let error_color = ui.visuals().error_fg_color;
     let grey = ui.visuals().weak_text_color();
     let mut choice = None;
+    let first_contact_field = EditorField::ALL
+        .into_iter()
+        .find(|field| field.struct_field().is_some());
     ui.add_enabled_ui(enabled, |ui| {
         for field in EditorField::ALL {
+            if Some(field) == first_contact_field {
+                ui.label(
+                    egui::RichText::new(property_label(field.property(), Language::Sv)).strong(),
+                );
+            }
             ui.label(egui::RichText::new(field.label()).strong());
             if let Some(note) = state.form.note(field) {
                 ui.label(egui::RichText::new(note).color(grey).small());
@@ -2983,7 +2993,6 @@ fn draw_window_form(
         for row in &others {
             ui.label(egui::RichText::new(&row.label).strong().small());
             ui.label(egui::RichText::new(&row.value).small());
-            ui.label(egui::RichText::new(&row.origin).color(grey).small());
             ui.add_space(PANEL_ROW_SPACING);
         }
     }
@@ -3381,8 +3390,8 @@ fn draw_exif_rows(ui: &mut egui::Ui, shown: &ExifShown<'_>) {
 }
 
 /// The Metadata section, as the metadata window shows the values (T103's panel, D16): the values
-/// with their origin, the conflicts (open and decided) in the warning colour and the notices, each
-/// of the last two only when there are any; read-only.
+/// without an origin line (T114), the conflicts (open and decided, each value with its origin) in
+/// the warning colour and the notices, each of the last two only when there are any; read-only.
 fn draw_inspector_metadata(ui: &mut egui::Ui, path: &Path, metadata: &MetadataCache) {
     let read = match metadata.inspector_state(path) {
         InspectorState::Unsupported => {
@@ -3413,7 +3422,6 @@ fn draw_inspector_metadata(ui: &mut egui::Ui, path: &Path, metadata: &MetadataCa
     for row in &panel.values {
         wrapped(ui, egui::RichText::new(&row.label).strong());
         wrapped(ui, egui::RichText::new(&row.value));
-        wrapped(ui, egui::RichText::new(&row.origin).color(grey).small());
         ui.add_space(PANEL_ROW_SPACING);
     }
 

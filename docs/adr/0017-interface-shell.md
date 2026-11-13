@@ -166,8 +166,8 @@ a full photo-desk caption window.
 - **Sections in a long scrolling form**, each collapsible, in this order:
   1. Innehåll: Titel, Rubrik, Beskrivning, Alternativtext, Utökad beskrivning, Beskrivningens
      författare, Nyckelord, Person i bilden, Organisation i bilden (namn, kod), Händelse;
-  2. Fotograf och rättigheter: Fotograf, Fotografens titel, kontaktuppgifter, Copyright, Credit,
-     Källa, Användarvillkor, Webbadress för rättigheter, Upphovsrättsskyddad;
+  2. Fotograf och rättigheter: Fotograf, Yrkestitel, Kontaktuppgifter, Copyright, Credit, Källa,
+     Användarvillkor, Webbadress för rättigheter, Upphovsrättsskyddad;
   3. Tid och plats: Skapad; **Plats, Stad, Län/delstat, Land, Landskod** (the older IPTC Core
      fields, also written to IIM, as today; review finding 2); Plats där bilden togs (underplats,
      stad, län/delstat, land, landskod, världsdel, plats-id); Plats som visas (several, with
@@ -180,7 +180,8 @@ a full photo-desk caption window.
   6. Betyg och etikett.
 
   The user chooses which sections and fields are shown and in which order (Settings), so unused
-  fields take no room. The Swedish names follow D11; new names are proposed with the step. The
+  fields take no room. The Swedish names follow D11 (Yrkestitel and Kontaktuppgifter: owner,
+  2026-11-13); new names are proposed with the step. The
   PLUS fields are built in U10 together with milestone 8's I11, after the PLUS vocabulary is read
   (ADR 0007 §16.4).
 - **Lists and structures** (persons, locations, creators, licensors) get one row per entry with add

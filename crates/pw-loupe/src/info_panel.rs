@@ -40,11 +40,8 @@ const SV_LABELS: &[(&str, &str)] = &[
     ("Iptc4xmpCore:AltTextAccessibility", "Alternativtext"),
     ("dc:subject", "Nyckelord"),
     ("dc:creator", "Fotograf"),
-    ("photoshop:AuthorsPosition", "Fotografens titel"),
-    (
-        "Iptc4xmpCore:CreatorContactInfo",
-        "Fotografens kontaktuppgifter",
-    ),
+    ("photoshop:AuthorsPosition", "Yrkestitel"),
+    ("Iptc4xmpCore:CreatorContactInfo", "Kontaktuppgifter"),
     ("Iptc4xmpCore:CiEmailWork", "E-post"),
     ("Iptc4xmpCore:CiTelWork", "Telefon"),
     ("Iptc4xmpCore:CiUrlWork", "Webb"),
@@ -522,6 +519,27 @@ mod tests {
     fn label_of_listed_property() {
         assert_eq!(property_label("dc:creator", Language::Sv), "Fotograf");
         assert_eq!(property_label("dc:creator", Language::En), "Creator");
+    }
+
+    #[test]
+    fn label_of_jobtitle_and_contact_info() {
+        assert_eq!(
+            property_label("photoshop:AuthorsPosition", Language::Sv),
+            "Yrkestitel"
+        );
+        assert_eq!(
+            property_label("Iptc4xmpCore:CreatorContactInfo", Language::Sv),
+            "Kontaktuppgifter"
+        );
+        // The English names are IPTC's, unchanged.
+        assert_eq!(
+            property_label("photoshop:AuthorsPosition", Language::En),
+            "Creator's jobtitle"
+        );
+        assert_eq!(
+            property_label("Iptc4xmpCore:CreatorContactInfo", Language::En),
+            "Creator's Contact Info"
+        );
     }
 
     #[test]

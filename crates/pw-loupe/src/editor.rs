@@ -707,7 +707,7 @@ mod tests {
                 "Alternativtext",
                 "Nyckelord",
                 "Fotograf",
-                "Fotografens titel",
+                "Yrkestitel",
                 "E-post",
                 "Telefon",
                 "Webb",
@@ -1198,7 +1198,7 @@ mod tests {
     fn jobtitle_without_creator_warning() {
         let mut metadata = Metadata::new();
         insert(&mut metadata, "photoshop:AuthorsPosition", text("Fotograf"));
-        assert_eq!(warnings_of(metadata), ["Fotografens titel utan Fotograf"]);
+        assert_eq!(warnings_of(metadata), ["Yrkestitel utan Fotograf"]);
     }
 
     #[test]
