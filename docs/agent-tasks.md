@@ -5202,11 +5202,11 @@ it is accepted. Stage A changes the shell in `pw-loupe` only; the core crates ar
     in MB in the status bar (the folder listing keeps no file sizes). Proposal: neither in U1;
     both are placed when the owner reorders after stage A.
 
-### T110. ADR 0017 U2: the inspector – Info (Exif summary) and Metadata, `I`, sections remembered — Blocked
+### T110. ADR 0017 U2: the inspector – Info (Exif summary) and Metadata, `I`, sections remembered — Open
 
-- **Waits for the owner's answers to U2-Q1–U2-Q5** (at the end of this task). The reviewer's
-  proposals are written into the points below. Not at the same time as any other task that changes
-  `main.rs`.
+- **Can start now.** The owner approved the proposals of U2-Q1–U2-Q5 (at the end of this task) on
+  2026-11-13; they are written into the points below. Not at the same time as any other task that
+  changes `main.rs`.
 - **Crates:** `pw-loupe` only.
 - **Files:** `crates/pw-loupe/src/main.rs`; `crates/pw-loupe/src/lib.rs` (`Action::ToggleInfo`
   and the doc comment of `key_action` only); `crates/pw-loupe/src/metadata.rs` (the inspector's
@@ -5324,7 +5324,7 @@ it is accepted. Stage A changes the shell in `pw-loupe` only; the core crates ar
   once; holding an arrow key through a folder queues no reads (the inspector catches up when the
   key is released); after a restart the right column and the two sections are as they were;
   `latency.ps1` stepping in the loupe with the inspector open as in T75.
-- **Questions (for the owner; the proposals are written into the points above):**
+- **Questions (answered by the owner, 2026-11-13: every proposal approved):**
   - **U2-Q1** The source of Info (point 2): `pw_raw::inspect` for every file type, on a background
     thread, without ExifTool? (ExifTool would give more fields but is slower and shares the worker
     with the metadata reads.)
@@ -5873,3 +5873,4 @@ and reviewer:
 | 2026-11-13 | T109 | Done | Owner's decision on the last review point: dark text (`#181818`) on every label pill and labelled rating badge, at least 4.5:1 on all five label colours (red 4.5, blue 5.6, purple 5.3); before, red, blue and purple had light text below 4.5:1. Test `label_text_meets_wcag_aa_on_every_label_colour`; `check.ps1` all OK, 1101 passed, 43 ignored |
 | 2026-11-13 | T67 | Done | Committed in 25caaf7 (accepted in the review of 2026-11-11) |
 | 2026-11-13 | T110 | Blocked | Added: ADR 0017 U2, the inspector in the right column: Info (an Exif summary from `pw_raw::inspect` for every listed file type, on a background thread) and Metadata (every value read-only, as the `M` window shows them, read with T103's rules), `I` shows and hides it, the sections remembered in `settings.txt`. The right column still starts collapsed (owner, T109). The reviewer's proposals are in the task; it waits for the owner's answers to U2-Q1–U2-Q5 |
+| 2026-11-13 | T110 | Open | The owner approved the proposals of U2-Q1–U2-Q5: Info from `pw_raw::inspect` for every listed file type on a background thread, without ExifTool; the seven values with a decimal comma, the camera without a repeated make and no row for a missing value; `I` opens and collapses the right column (also from `H`'s hidden state), "Information" and "Höger kolumn" become one item "Inspektör", and today's meaning of `I` ends in U2; the Exif labels made in `inspector_text.rs`; both sections open by default. T110 can start |
