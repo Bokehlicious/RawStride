@@ -5050,12 +5050,11 @@ ADR 0017 was accepted by the owner on 2026-11-12 and amended on 2026-11-13. Its 
 first part of U12, §7.1). Each step becomes one or more tasks here, written when the step before
 it is accepted. Stage A changes the shell in `pw-loupe` only; the core crates are not touched.
 
-### T109. ADR 0017 U1: the shell – menu bar, command bar, status bar, side columns, themes — Blocked
+### T109. ADR 0017 U1: the shell – menu bar, command bar, status bar, side columns, themes — Open
 
-- **Blocked until the owner has answered U1-Q1–U1-Q5** (at the end of this task). The reviewer's
-  proposals are written into the points below; if the owner approves them as proposed, the status
-  becomes Open with no other change. Not at the same time as any other task that changes
-  `main.rs`.
+- **Can start now.** The owner approved the proposals of U1-Q1–U1-Q5 (at the end of this task) on
+  2026-11-13; they are written into the points below. Not at the same time as any other task that
+  changes `main.rs`.
 - **Crates:** `pw-loupe` only.
 - **Files:** `crates/pw-loupe/src/main.rs`; `crates/pw-loupe/src/lib.rs` (the new key function of
   point 10, the doc comment of `key_action`, and the `mod`/`pub use` lines); new
@@ -5192,7 +5191,7 @@ it is accepted. Stage A changes the shell in `pw-loupe` only; the core crates ar
   back; F11 and back; every text readable in both themes; after a restart the theme, the window's
   size and position, full screen and the columns are as they were; `latency.ps1` stepping in the
   loupe as in T75 (V1–V8 not slowed by the shell).
-- **Open questions for the owner (the proposals are in the points above):**
+- **Questions (answered by the owner, 2026-11-13: every proposal approved):**
   - **U1-Q1** The menus and their items (point 2): Arkiv, Redigera, Bild, Visa, in that order?
   - **U1-Q2** The hide key (points 6 and 10): `H`?
   - **U1-Q3** The side columns' content before U2, U4 and U5 (point 6): headings and one line each,
@@ -5730,3 +5729,4 @@ and reviewer:
 | 2026-11-12 | T107, T108 | Done | The owner confirmed the hand checks of T107 (which cover T103 and T105) and T108: the metadata window on `M`, locked to its image, OK and Avbryt, the conflict chosen in `konflikt-stad.jpg`, Nyckelord and Fotograf on one line with commas, and the write refused while another program holds the file (a write while Photo Mechanic only had the file closed went through, as it should) |
 | 2026-11-12 | T106 | Done | The owner confirmed the hand checks of T106: the setting survives a restart, and with "Skapa IPTC-IIM" on a Title written with `M` to a JPEG without IIM (`Konflikttest/iim-test.jpg`) is in IIM (ExifTool: ObjectName and IPTCDigest). Every task of I10 (T94–T108) is done; I11–I13 remain |
 | 2026-11-13 | T109 | Blocked | Added: ADR 0017 U1, the shell (menu bar, command bar with "Öppna mapp" on Ctrl+O, status bar, side columns with a hide key and F11, dark and light theme with WCAG AA contrast, the state remembered in `settings.txt`); no sort order (U14). The reviewer's proposals are in the task; it waits for the owner's answers to U1-Q1–U1-Q5 |
+| 2026-11-13 | T109 | Open | The owner approved the proposals of U1-Q1–U1-Q5: the menus Arkiv, Redigera, Bild and Visa; `H` as the hide key (Tab stays free for egui's focus moves; any key can be chosen later in U8); headings and one line in the side columns; the font sizes and a neutral dark image area in both themes; neither "Visa (alla/markerade/…)" nor the size in MB in U1. T109 can start |
