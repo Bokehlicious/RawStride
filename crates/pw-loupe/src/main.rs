@@ -1445,8 +1445,8 @@ impl Loupe {
                         if let Some(color) = color {
                             painter.rect_filled(pill, pill.height() * 0.5, color);
                         }
-                        let text_color = if matches!(label, Some("Yellow" | "Green")) {
-                            egui::Color32::from_gray(24)
+                        let text_color = if color.is_some() {
+                            LABEL_TEXT
                         } else {
                             image_area::TEXT
                         };
@@ -3092,6 +3092,10 @@ fn field_error(state: &ImportDialogState, field: Field) -> Option<&str> {
     }
 }
 
+/// The text on a label pill and a labelled rating badge: dark on every label colour, at least
+/// 4.5:1 (WCAG AA; owner, 2026-11-13). Light text stays below 4.5:1 on red, blue and purple.
+const LABEL_TEXT: egui::Color32 = egui::Color32::from_gray(24);
+
 fn label_color(label: &str) -> Option<egui::Color32> {
     let (red, green, blue) = match label {
         "Red" => (0xe5, 0x48, 0x4d),
@@ -3189,8 +3193,8 @@ fn paint_rating_glyphs(
 
 fn paint_rating_badge(painter: &egui::Painter, image_rect: egui::Rect, rating: &Rating) {
     let glyphs = star_glyphs(rating.stars);
-    let text_color = if matches!(rating.label.as_deref(), Some("Yellow" | "Green")) {
-        egui::Color32::from_gray(24)
+    let text_color = if rating.label.as_deref().and_then(label_color).is_some() {
+        LABEL_TEXT
     } else {
         egui::Color32::WHITE
     };
@@ -3695,11 +3699,12 @@ fn main() -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::{
-        FALLBACK_CHOICES, SettingsText, exiftool_message, fallback_from_text, fallback_text,
-        index_span, label_color, label_pill, recovery_text, resolve_path, resolve_paths,
-        settings_save_error_text, settings_text, window_editor_properties,
+        FALLBACK_CHOICES, LABEL_TEXT, SettingsText, exiftool_message, fallback_from_text,
+        fallback_text, index_span, label_color, label_pill, recovery_text, resolve_path,
+        resolve_paths, settings_save_error_text, settings_text, window_editor_properties,
     };
     use egui::{Color32, Rect, pos2};
+    use pw_loupe::{TEXT_CONTRAST, contrast_ratio};
     use pw_metadata::ToolVersion;
     use pw_metadata::iim::Fallback;
     use pw_metadata::journal::{Entry, Recovered};
@@ -3958,5 +3963,13 @@ mod tests {
             assert_eq!(label_color(label), Some(expected), "{label}");
         }
         assert_eq!(label_color("unknown"), None);
+    }
+
+    #[test]
+    fn label_text_meets_wcag_aa_on_every_label_colour() {
+        for label in ["Red", "Yellow", "Green", "Blue", "Purple"] {
+            let ratio = contrast_ratio(LABEL_TEXT, label_color(label).unwrap());
+            assert!(ratio >= TEXT_CONTRAST, "{label}: {ratio:.2}");
+        }
     }
 }
