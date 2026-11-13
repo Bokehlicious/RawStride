@@ -1,0 +1,197 @@
+# Glossary: the user interface in English
+
+- Module: `pw-loupe` (the texts the user sees), with the property names of `pw-metadata`
+- Question: which English word replaces each Swedish UI term, so that English can become the
+  interface's base language (owner, 2026-11-13) and every later task translates the same way.
+- Status: **approved by the owner (2026-11-13)**, with G1–G8 (§8) as proposed. English is the
+  interface's base language (GUI_REQUIREMENTS GR14); Swedish texts are translated with these terms.
+- Kept up to date: a task that adds a UI term not listed here adds it to this file
+  (`docs/tasks/README.md`, rule 13).
+- Source: every string literal in the non-test code of `crates/pw-loupe/src/` (commit `241263c`),
+  about 300 user-visible texts; IPTC names from `pw-metadata`'s property table, checked against
+  IPTC Photo Metadata Standard 2025.1 (`D:\PhotoWorkflowData\references\`).
+
+This lists **terms**, not every sentence. Task B translates the sentences with these terms; whole
+sentences stay whole (rule 13).
+
+## 1. IPTC and other metadata properties
+
+English mode already shows IPTC's name from the property table (`property_label`,
+`Language::En`, ADR 0007 §17.1). The column "Proposed label" is what the UI should show (G1).
+
+| Property | Swedish (D11) | IPTC 2025.1 official name | Proposed label |
+|---|---|---|---|
+| `dc:title` | Titel | Title | Title |
+| `photoshop:Headline` | Rubrik | Headline | Headline |
+| `dc:description` | Beskrivning | Description | Description |
+| `Iptc4xmpCore:AltTextAccessibility` | Alternativtext | Alt Text (Accessibility) | Alt Text (Accessibility) |
+| `dc:subject` | Nyckelord | Keywords | Keywords |
+| `dc:creator` | Fotograf | Creator | Creator |
+| `photoshop:AuthorsPosition` | Yrkestitel | Creator's jobtitle | Creator's jobtitle |
+| `Iptc4xmpCore:CreatorContactInfo` | Kontaktuppgifter | Creator's Contact Info | Creator's Contact Info |
+| `…:CiEmailWork` | E-post | Email address(es) | Email (G1) |
+| `…:CiTelWork` | Telefon | Phone number(s) | Phone (G1) |
+| `…:CiUrlWork` | Webb | Web URL(s) | Web URL (G1) |
+| `dc:rights` | Copyright | Copyright Notice | Copyright Notice |
+| `photoshop:Credit` | Credit | Credit Line | Credit Line |
+| `photoshop:Source` | Källa | Source (Supply Chain) | Source (Supply Chain) |
+| `xmpRights:UsageTerms` | Användarvillkor | Rights Usage Terms | Rights Usage Terms |
+| `xmpRights:WebStatement` | Webbadress för rättigheter | Web Statement of Rights | Web Statement of Rights |
+| `photoshop:DateCreated` | Skapad | Date Created | Date Created |
+| `Iptc4xmpCore:Location` | Plats | Sublocation (legacy) | Sublocation (G1) |
+| `photoshop:City` | Stad | City (legacy) | City (G1) |
+| `photoshop:State` | Län/delstat | Province or State (legacy) | Province or State (G1) |
+| `photoshop:Country` | Land | Country (legacy) | Country (G1) |
+| `Iptc4xmpCore:CountryCode` | Landskod | Country Code (legacy) | Country Code (G1) |
+| `photoshop:Instructions` | Instruktioner | Instructions | Instructions |
+| `photoshop:TransmissionReference` | Jobb-id | Job Id | Job Id |
+| `photoshop:CaptionWriter` | Beskrivningens författare | Description Writer | Description Writer |
+| `xmp:Rating` | Betyg | Image Rating | Rating (G1) |
+| `Iptc4xmpExt:LocationCreated` | Plats där bilden togs | Location Created | Location Created |
+| `Iptc4xmpExt:LocationShown` | Plats som visas | Location Shown in the Image | Location Shown in the Image |
+| `plus:ImageCreator` | Bildskapare | Image Creator | Image Creator |
+| `plus:CopyrightOwner` | Upphovsrättsinnehavare | Copyright Owner | Copyright Owner |
+| `plus:Licensor` | Licensgivare | Licensor | Licensor |
+| `Iptc4xmpExt:PersonInImage` | Person i bilden | Person Shown in the Image | Person Shown in the Image |
+| `Iptc4xmpExt:Event` | Händelse | Event Name | Event Name |
+| `Iptc4xmpExt:DigitalSourceType` | Digital källtyp | Digital Source Type | Digital Source Type |
+| `xmp:Label` | Etikett | – (not IPTC; XMP Basic "Label") | Label |
+| `xmpRights:Marked` | Upphovsrättsskyddad | – (not IPTC; XMP Rights "Marked") | Copyrighted (G2) |
+| `photoshop:Urgency` | Prioritet | – (deprecated; IIM 2:10 "Urgency") | Urgency |
+| `photoshop:Category` | Kategori | – (deprecated; IIM 2:15 "Category") | Category |
+| `photoshop:SupplementalCategories` | Tilläggskategorier | – (deprecated; IIM 2:20 "Supplemental Category") | Supplemental Categories |
+
+Every other property already uses IPTC's English name in both languages.
+
+## 2. Ratings, labels, marking and filters
+
+| Swedish | English | Note |
+|---|---|---|
+| betyg, Betyg: … | rating, Rating: … | |
+| 1 stjärna / {n} stjärnor | 1 star / {n} stars | singular/plural in one function (rule 13) |
+| Inga stjärnor | No stars | menu item |
+| Ej betygsatt | Unrated | |
+| Avvisa / Avvisad / Avvisade | Reject / Rejected / Rejected | rating −1 (G3) |
+| Alla betyg | All ratings | |
+| Alla utom avvisade | All but rejected | |
+| etikett / Ingen etikett / Alla etiketter / {n} etiketter | label / No label / All labels / {n} labels | |
+| Röd, Gul, Grön, Blå, Lila | Red, Yellow, Green, Blue, Purple | the stored `xmp:Label` values are already these English words |
+| markera, markerad, Markera alla, Avmarkera | mark, marked, Mark All, Unmark All | the set chosen with the mouse/keys (G4) |
+| vald (Ingen bild vald) | selected (No image selected) | the current image (G4) |
+| Bara markerade | Marked only | |
+| Filter, Visa alla | Filter, Show All | |
+
+## 3. Window, menus and commands
+
+| Swedish | English | Note |
+|---|---|---|
+| Arkiv, Redigera, Bild, Visa | File, Edit, Image, View | menu titles (Windows convention) |
+| Öppna mapp… / Importera… / Stäng flik / Inställningar… / Avsluta | Open Folder… / Import… / Close Tab / Settings… / Exit | |
+| Nästa flik / Föregående flik | Next Tab / Previous Tab | |
+| Bibliotek, Uppgifter, Inspektör | Library, Tasks, Inspector | column titles |
+| Sidokolumner, Vänster kolumn | Side Columns, Left Column | |
+| Fäll ihop kolumnen / Visa kolumnen | Collapse Column / Show Column | |
+| Helskärm | Full Screen | |
+| Tema, Mörkt, Ljust | Theme, Dark, Light | |
+| Tom (flik) | Empty | |
+| Läge: RAW / JPEG | Mode: RAW / JPEG | |
+| Storlek | Size | thumbnail size |
+| mapp | folder | |
+
+## 4. Viewer and zoom
+
+| Swedish | English |
+|---|---|
+| Anpassa / Anpassad | Fit / Fit (as an adjective: "Zoom: Fit") |
+| Anpassa ↔ 100 % | Fit ↔ 100% |
+| Zooma in / Zooma ut | Zoom In / Zoom Out |
+| Zooma vid pekaren / zoom mot pekaren / zoom mot mitten | Zoom at Pointer / zoom to pointer / zoom to centre (G5) |
+| Förbereder RAW … | Preparing RAW … |
+| RAW-rendering, Inbäddad JPEG (kamerans rendering) | RAW rendering, Embedded JPEG (camera rendering) |
+| förhandsbild / förhandsvisning | preview |
+| miniatyr | thumbnail |
+| färgprofil, skärmprofil | colour profile, display profile (G5) |
+| kamerainformation | camera information |
+| Kamera, Objektiv, Brännvidd, Bländare, Exponeringstid, ISO, Tagen | Camera, Lens, Focal Length, Aperture, Exposure Time, ISO, Taken |
+
+## 5. Import
+
+| Swedish | English | Note |
+|---|---|---|
+| Importera, Starta import, Ny import | Import, Start Import, New Import | |
+| Källa, Mål, Backup | Source, Destination, Backup | |
+| Välj…, Välj källa / mål / backupmål | Choose…, Choose Source / Destination / Backup Destination | |
+| Mappmall, Filnamnsmall | Folder Template, File Name Template | |
+| Jobb, Första nr | Job, First Number | |
+| Förhandsvisning, Förhandsvisar …, Sök igen | Preview, Previewing …, Search Again | |
+| Kopierar och verifierar | Copying and verifying | |
+| namnkrock, finns redan, bara backup | name conflict, already exists, backup only | |
+| Mata ut kortet … (inget raderas från kortet) | Eject the card … (nothing is deleted from the card) | |
+| Klar / Avbruten / Misslyckades | Done / Cancelled / Failed | |
+| Behåll, Ersätt, Lägg till efter, Lägg till före, Rensa | Keep, Replace, Append, Prefix, Clear | the template modes; the same words as ADR 0007 §10 |
+| Rensa och importera | Clear and Import | |
+| Dölj, Stäng | Hide, Close | |
+
+## 6. Metadata window, info and settings
+
+| Swedish | English | Note |
+|---|---|---|
+| Metadata – {fil} | Metadata – {file} | |
+| Olösta konflikter / Konflikter / olöst | Unresolved Conflicts / Conflicts / unresolved | |
+| Varningar, Meddelanden | Warnings, Notices | |
+| Övrig metadata | Other Metadata | |
+| OK, Avbryt, Spara, Släng | OK, Cancel, Save, Discard | |
+| Föregående, Nästa, Spara och nästa | Previous, Next, Save and Next | |
+| Spara ändringarna? / Ändringar som inte sparades | Save changes? / Unsaved changes | |
+| Sparar … / Sparat. | Saving … / Saved. | |
+| Ändrad | Changed | |
+| kontrollsumma | checksum | IIM digest (ADR 0007 §5.1) |
+| teckenkodning | character encoding | |
+| avkortat / kortades | truncated | |
+| säkerhetskopia | backup | the `.pwbak` file (ADR 0007 §9.4) |
+| skrivskyddad | read-only | |
+| Inställningar | Settings | |
+| Skapa IPTC-IIM för kompatibilitet med äldre system | Create IPTC-IIM for compatibility with older systems | ADR 0007 §5.2 quotes the Swedish text; it changes with the translation |
+| Teckenkodning för äldre IPTC- och Exif-text | Character encoding for older IPTC and Exif text | |
+| västeuropeisk | Western European | |
+
+## 7. Recurring sentence parts
+
+| Swedish | English |
+|---|---|
+| Kunde inte … / kunde inte läsas / sparas / skrivas | Could not … / could not be read / saved / written |
+| … saknas | … is missing |
+| … är för gammal (minst {v}) | … is too old (at least {v} is needed) |
+| … har stannat / har stoppats | … has stopped |
+| … kön är full | … queue is full |
+| Läser … | Reading … |
+| arbetare (Importarbetaren, metadataarbetaren) | worker → in the UI "the import" / "metadata writing" (G6) |
+
+## 8. Owner decisions G1–G8 (approved as proposed, 2026-11-13)
+
+- **G1, IPTC names:** show IPTC's official names exactly, or the short forms above? Proposal:
+  the official name, except that " (legacy)" is left out, the contact fields are Email, Phone and
+  Web URL, and `xmp:Rating` is "Rating". Reason: "(legacy)" only says that a newer structure
+  exists (Location Created), which the user cannot act on; "Email address(es)" is long for a
+  field holding one address. The full name can be shown as a tooltip.
+- **G2, `xmpRights:Marked`:** "Copyrighted" (Lightroom and Photo Mechanic; ADR 0007 D6) or
+  "Copyright Status" (Adobe Bridge)? Proposal: Copyrighted.
+- **G3, rating −1:** "Rejected" (proposal; Lightroom's word) or "Reject"?
+- **G4, marked and selected:** "mark" for the set (Mark All, Unmark All, Marked only) and
+  "selected" only for the current image? Proposal: yes, as today's Swedish keeps them apart.
+  The alternative "select" for the set (as in most programs) would need another word for the
+  current image.
+- **G5, spelling:** British (colour, centre) or American (color, center)? Proposal: American,
+  the more common UI convention, and the spelling of the IPTC and Adobe names.
+- **G6, the word "worker":** error texts name internal parts ("Importarbetaren har stoppat").
+  Proposal: say what stopped for the user ("Import has stopped") instead of "worker".
+- **G7, keyboard names:** Ctrl, Shift, Alt, Esc are already English; no change.
+- **G8, where the glossary lives:** `docs/glossary.md` (this file), referred to by rule 13 and
+  `AGENTS.md`, and kept up to date by every task that adds a UI term.
+
+## 9. Follow-up
+
+Tasks T116 (move the remaining hard-coded texts into the text modules), T117 (translate the text
+modules and update the tests) and T118 (uniform English error messages in the lower crates).
+There is no language choice in the program for now; Swedish may come back later as a second
+language through the same text functions.

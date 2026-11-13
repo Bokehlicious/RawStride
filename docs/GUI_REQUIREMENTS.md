@@ -43,6 +43,7 @@ ADR 0003) and the presenter decision B2-res (WebView2 shared buffer into WebGL2,
 | GR11 | **Testable.** UI logic (view model, key handling, dialog state) is kept in plain Rust that can be tested with `cargo test`, apart from drawing. |
 | GR12 | **Imported folders open in a new tab.** When an import finishes, the imported folder opens automatically in a new tab in the viewer (owner requirement, 2026-11-08; ADR 0010). If that folder is already open in a tab, that tab is activated instead. |
 | GR13 | **Opened folders start as a contact sheet.** A folder dropped on the window or opened by an import is shown as a grid of thumbnails first, not in the loupe (owner requirement, 2026-11-08; ADR 0011). |
+| GR14 | **English is the interface's base language** (owner decision, 2026-11-13). Every text the user sees is English, with the terms of `glossary.md` (approved the same day, G1–G8). Texts are made by text functions (`docs/tasks/README.md`, rule 13), so another language can be added later; there is no language choice for now. Today's Swedish texts are moved and translated by T116–T118. |
 
 ## 3. What stays
 

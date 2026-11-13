@@ -3,6 +3,7 @@
 - [architecture.md](architecture.md) – crates, data flow and performance goals
 - [requirements-image-viewer.md](requirements-image-viewer.md) – image viewer requirements V1–V8 with targets, baseline and method (approved 2026-11-04)
 - [GUI_REQUIREMENTS.md](GUI_REQUIREMENTS.md) – the GUI is pure Rust with eframe + egui (owner decision, 2026-11-07)
+- [glossary.md](glossary.md) – the English terms of the user interface and the IPTC property labels (approved 2026-11-13)
 - [clean-room.md](clean-room.md) – rules for studying other products
 - [dev-setup.md](dev-setup.md) – toolchain and machine setup
 - [rea-workflow.md](rea-workflow.md) – how REA/Ghidra, WPR and benchmarks are used

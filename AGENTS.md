@@ -41,3 +41,8 @@
 - When the owner decides something during a task or review (a decision, an approved Q proposal, a changed requirement), the reviewer writes it into the ADR or requirement document it affects, with the date, before the task is set to Done.
 - The task log may refer to the decision but must not be the only place it is written down.
 - A task agent does not edit ADRs or requirement documents unless the task names them (`docs/tasks/README.md`, rule 12); it reports the decision so the reviewer can record it.
+
+## 7. Language
+- The documentation, code, comments, commit messages and task texts are in English.
+- **Every text the user sees is English** (owner, 2026-11-13; `docs/GUI_REQUIREMENTS.md` GR14), with
+  the terms of `docs/glossary.md`, and is made as `docs/tasks/README.md` rule 13 says.

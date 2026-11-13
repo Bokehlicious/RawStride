@@ -669,6 +669,11 @@ listed under the table (§17.1).
   Swedish gives the D11 name where there is one and otherwise the IPTC name. The Swedish names are
   kept in one table in `pw-loupe`'s `info_panel.rs`. Swedish names for **every** property, so the
   Swedish panel shows no English IPTC names, is a future improvement (`docs/tasks/backlog.md`).
+- **D11, English labels** (owner, 2026-11-13, `docs/glossary.md` G1): English is the interface's
+  base language (GUI_REQUIREMENTS GR14). The English label is IPTC's name from the property table,
+  except that " (legacy)" is left out, the contact fields are **Email**, **Phone** and **Web URL**,
+  `xmp:Rating` is **Rating** and `xmpRights:Marked` is **Copyrighted** (G2); the full IPTC name may
+  be shown as a tooltip. Changed in code by T117.
 - **D11 and D12, names** (owner, 2026-11-13, T114): "Fotografens titel" (`photoshop:AuthorsPosition`)
   is now **Yrkestitel**, and "Fotografens kontaktuppgifter" (`Iptc4xmpCore:CreatorContactInfo`) is
   now **Kontaktuppgifter** (ADR 0017 §2.3.1).
@@ -697,3 +702,4 @@ listed under the table (§17.1).
 | 10 | 2026-11-13 | §4.2: a camera `xmp:Rating` of 0 inside a RAW file counts as no rating (it neither fills nor gives a conflict); owner decision after the hand check of T110 (T113) |
 | 11 | 2026-11-13 | §17: the owner's decisions D1–D16 of the implementation, moved unchanged from the step list, with the later changes (§17.1); no new decision |
 | 12 | 2026-11-13 | Owner decisions on safe writing that lived only in task logs, written in; no new decision:<br>- §5.2: both forms brought in line after every write (review of T83); an edit decides an unresolved conflict, and re-encoding to UTF-8 does not (T83, Q1); the checksum of a TIFF or DNG in a second call (T92);<br>- §9.2: the checksum pass (T92);<br>- §9.3: ExifTool restarted before a TIFF copy is read (T92, choice A);<br>- §9.4: a failed final read keeps the backup (T86);<br>- §9.5: a new sidecar checked against an empty original; every error names its file (T86); the tests bullet brought up to date with the tests written in T84–T92 |
+| 13 | 2026-11-13 | §17.1: the English labels of D11 (`docs/glossary.md` G1, G2); no change to the rules of the ADR |

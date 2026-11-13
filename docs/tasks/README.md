@@ -66,6 +66,9 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
     the task names one.
 13. **Texts the user sees** (so another language can be added later in one place). This rule applies
     to every task that adds or changes a text shown to the user, whichever rules the task lists:
+    - **the language is English** (owner, 2026-11-13; `docs/GUI_REQUIREMENTS.md` GR14), with the
+      terms of `docs/glossary.md`; a term the glossary lacks is added to it in the same task and
+      named in the report;
     - each such text is made by a function in its area's text module (for example `info_panel.rs`
       or `editor.rs`, as the task names); drawing code (egui) holds no user-visible string literals;
     - each text is a whole sentence built from one template with placeholders (`format!` with the
@@ -76,6 +79,7 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
     Existing hard-coded texts (for example `UNSUPPORTED_TEXT` and the loupe's texts) stay where they
     are unless the task says to move them. If a text the task needs has no function in a file the
+    task names, do not write it in drawing code: stop and ask.
 
 ## Status legend
 
@@ -91,12 +95,14 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status |
 |---|---|---|
-| – | No open tasks | – |
+| [T116](T116-move-the-loupes-ui-texts-into-text-modules.md) | Move pw-loupe's remaining UI texts into text modules | Open |
+| [T117](T117-translate-the-loupes-ui-texts-to-english.md) | Translate pw-loupe's UI texts to English (after T116) | Open |
+| [T118](T118-english-messages-in-the-lower-crates.md) | English messages in the lower crates (after T117) | Open |
 
 ## Writing a task (owner and reviewer)
 
-- **Number:** the next free number after the highest in this folder and `done/` (T116 next).
-- **File:** `docs/tasks/T116-<a-few-words>.md`; three digits, lower case, words joined by `-`.
+- **Number:** the next free number after the highest in this folder and `done/` (T119 next).
+- **File:** `docs/tasks/T119-<a-few-words>.md`; three digits, lower case, words joined by `-`.
 - **Index:** add a row to "Open tasks" above and keep its status in step with the file's heading.
 - **When it is Done and committed:** `git mv` the file to `done/`, move its row to `done/README.md`.
 - **Owner decisions** (decisions, approved Q proposals) are written into the ADR or requirement
@@ -105,7 +111,7 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 Skeleton (the fields recent tasks use; leave out those that do not apply):
 
 ```markdown
-# T116. <Title> — Open
+# T119. <Title> — Open
 
 - **Why:** …
 - **Crates:** … **Files:** …
