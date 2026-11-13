@@ -792,7 +792,7 @@ impl Loupe {
                         }
                     });
                     if let Some(message) = field_error(&state, Field::Source) {
-                        ui.colored_label(egui::Color32::RED, message);
+                        ui.colored_label(ui.visuals().error_fg_color, message);
                     }
                     ui.horizontal_wrapped(|ui| {
                         for card in &cards {
@@ -813,7 +813,7 @@ impl Loupe {
                         }
                     });
                     if let Some(message) = field_error(&state, Field::Dest) {
-                        ui.colored_label(egui::Color32::RED, message);
+                        ui.colored_label(ui.visuals().error_fg_color, message);
                     }
                     ui.horizontal(|ui| {
                         ui.checkbox(&mut form.backup_on, "Backup");
@@ -830,21 +830,21 @@ impl Loupe {
                         });
                     });
                     if let Some(message) = field_error(&state, Field::Backup) {
-                        ui.colored_label(egui::Color32::RED, message);
+                        ui.colored_label(ui.visuals().error_fg_color, message);
                     }
 
                     ui.add_space(8.0);
                     ui.label("Mappmall");
                     ui.text_edit_singleline(&mut form.folder);
                     if let Some(message) = field_error(&state, Field::Folder) {
-                        ui.colored_label(egui::Color32::RED, message);
+                        ui.colored_label(ui.visuals().error_fg_color, message);
                     }
 
                     ui.add_space(8.0);
                     ui.label("Filnamnsmall");
                     ui.text_edit_singleline(&mut form.name);
                     if let Some(message) = field_error(&state, Field::Name) {
-                        ui.colored_label(egui::Color32::RED, message);
+                        ui.colored_label(ui.visuals().error_fg_color, message);
                     }
 
                     ui.add_space(8.0);
@@ -860,7 +860,7 @@ impl Loupe {
                              {date} {time} {make} {model} {name} {seq} {seq:4} {job}",
                         )
                         .small()
-                        .color(egui::Color32::GRAY),
+                        .color(ui.visuals().weak_text_color()),
                     );
 
                     ui.collapsing("IPTC-mall", |ui| {
@@ -895,7 +895,7 @@ impl Loupe {
                                  Tomma fält lämnas orörda.",
                             )
                             .small()
-                            .color(egui::Color32::GRAY),
+                            .color(ui.visuals().weak_text_color()),
                         );
                     });
                     ui.checkbox(
@@ -980,7 +980,7 @@ impl Loupe {
                     ImportDialogState::Done { done } => {
                         for line in done_lines(done) {
                             if line.error {
-                                ui.colored_label(egui::Color32::RED, line.text);
+                                ui.colored_label(ui.visuals().error_fg_color, line.text);
                             } else {
                                 ui.label(line.text);
                             }
@@ -994,7 +994,7 @@ impl Loupe {
                     }
                     ImportDialogState::Editing { .. } | ImportDialogState::Previewing => {
                         if let Some(error) = &self.import_submit_error {
-                            ui.colored_label(egui::Color32::RED, error);
+                            ui.colored_label(ui.visuals().error_fg_color, error);
                         }
                         ui.horizontal(|ui| {
                             if ui
@@ -1018,7 +1018,7 @@ impl Loupe {
                 if matches!(state, ImportDialogState::Done { .. })
                     && let Some(error) = &self.import_submit_error
                 {
-                    ui.colored_label(egui::Color32::RED, error);
+                    ui.colored_label(ui.visuals().error_fg_color, error);
                 }
             });
 
