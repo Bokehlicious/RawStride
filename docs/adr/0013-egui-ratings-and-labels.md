@@ -160,7 +160,7 @@ Proposed as behaviour requirements now and targets after a first measurement, as
 | **R5** | Stepping in the loupe and scrolling the grid keep the display frame rate while writes run (V1–V8 unchanged) | By hand while holding a rating key and stepping |
 | **R6** | Values written by RawStride are read by Lightroom Classic and Photo Mechanic, and theirs by RawStride | By hand in B5 (also closes ADR 0004's open "clean-room level C check") |
 
-Results (2026-11-10, from the log in `docs/agent-tasks.md`):
+Results (2026-11-10, from the log in `docs/tasks/done/log-2026-11-08-to-2026-11-13.md`):
 
 | # | Result |
 |---|---|
@@ -208,7 +208,7 @@ Results (2026-11-10, from the log in `docs/agent-tasks.md`):
 | **B5** | Acceptance by hand (§8.2), including the Lightroom/Photo Mechanic check | **Done** by the owner's hand checks; R6 with Photo Mechanic on 2026-11-10, Lightroom not checked (§7) |
 | **B6** | Documentation: architecture.md, test inventory, ADR 0004 (open check closed), GR8 status | **Done:** T50 |
 
-Steps B1–B4 are agent tasks T41–T44 (`docs/agent-tasks.md`). T47–T49 were found in the hand checks.
+Steps B1–B4 are agent tasks T41–T44 (`docs/tasks/done/`). T47–T49 were found in the hand checks.
 
 ### 9.1 Findings during implementation
 

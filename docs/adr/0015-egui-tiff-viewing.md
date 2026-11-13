@@ -151,7 +151,7 @@ ADR 0014 §7:
 | **E6** | Ratings and labels work on TIFF in grid and loupe, and survive a reopen | By hand; the existing `pw-metadata` test covers the write |
 
 Results (D5, 2026-11-11, the owner's acceptance; the reviewer's checks from the log in
-`docs/agent-tasks.md`):
+`docs/tasks/done/log-2026-11-08-to-2026-11-13.md`):
 
 | # | Result |
 |---|---|

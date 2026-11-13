@@ -170,7 +170,7 @@ on the worker threads, before the pixels become a texture. One screen, one profi
 | **F6** | Stepping to a prefetched image still meets V1 (median ≤ 30 ms) | `latency.ps1` on the owner's TIFF and RAW sets |
 
 Results (C5, 2026-11-11, the owner's acceptance; the reviewer's checks from the log in
-`docs/agent-tasks.md`):
+`docs/tasks/done/log-2026-11-08-to-2026-11-13.md`):
 
 | # | Result |
 |---|---|

@@ -149,7 +149,7 @@ that milestone comes (§3.2).
 | **K5** | Acceptance by hand and the first measurement for C1–C2 | **Done 2026-11-09:** passed; targets in §7 |
 | **K6** | Documentation: architecture.md (`pw-thumbcache`), test inventory, ADR 0010 (imports open in the grid) | **Done 2026-11-09:** documentation commit |
 
-Steps K1–K4 were done as agent tasks T23–T29 (`docs/agent-tasks.md`); K4 was split into T26–T29.
+Steps K1–K4 were done as agent tasks T23–T29 (`docs/tasks/done/`); K4 was split into T26–T29.
 
 ## 10. Risks
 

@@ -205,7 +205,7 @@ ADR 0013 §7:
 | **S5** | The marking never contains a hidden image, and the targets never include one | Tests |
 | **S6** | Every check of `ui/tests/filter-select.test.js` that is not Tauri-specific has a `cargo test` counterpart that passes, **except the check "a rated image stays until the user moves on", which amendment 1 replaces** (the Tauri app keeps the old behaviour) | Test list in the T task |
 
-Results (2026-11-10, from the log in `docs/agent-tasks.md`):
+Results (2026-11-10, from the log in `docs/tasks/done/log-2026-11-08-to-2026-11-13.md`):
 
 | # | Result |
 |---|---|
@@ -266,7 +266,7 @@ T59 comes after T56 and before T57; T60 after T57 (all three change `main.rs`). 
 and T56. Until T57, the loupe opens on the visible list with `open_folder` (§4.4, way A) as an
 interim step.
 
-Steps F1–F6 and the amendments are agent tasks T51–T57 and T59–T61 (`docs/agent-tasks.md`).
+Steps F1–F6 and the amendments are agent tasks T51–T57 and T59–T61 (`docs/tasks/done/`).
 Amendment 2 came from the owner's hand check of T60.
 
 ### 9.1 Findings during implementation

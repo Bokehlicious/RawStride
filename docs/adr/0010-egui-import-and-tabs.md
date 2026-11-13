@@ -14,7 +14,7 @@
     later milestones get their own ADRs);
   - ADR 0005 (ingest engine and today's Tauri dialog);
   - ADR 0007 (metadata, proposed), for the IPTC template in step 2;
-  - `docs/agent-tasks.md` (owner requirement of 2026-11-08: the imported folder opens automatically in
+  - `docs/tasks/done/` (owner requirement of 2026-11-08: the imported folder opens automatically in
     a new tab).
 
 ## 1. Context
@@ -182,7 +182,7 @@ dialogs give the same answers. The Tauri app keeps its own Tauri glue only.
 | **M7** | Step B: backup, job and running number, IPTC template, eject | **Done 2026-11-09** (T37–T40, each checked by hand) |
 | **M8** | Documentation: ADR 0005 dialog section, architecture.md, test inventory | **Done 2026-11-09:** documentation commit |
 
-Steps M1, M2, M4 and M7 are suited to the agent task list (`docs/agent-tasks.md`): M1 is T20, M2
+Steps M1, M2, M4 and M7 are suited to the agent task list (`docs/tasks/done/`): M1 is T20, M2
 is T21, M4 is T30–T33, M5 is T34–T36 and M7 is T37–T40.
 
 ## 10. Risks
