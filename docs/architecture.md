@@ -3,6 +3,10 @@
 > **2026-11-09 (owner):** the product is called **RawStride** (ADR 0012). Crate names keep the `pw-`
 > prefix.
 
+> **2026-11-12 (owner):** the interface is decided in [ADR 0017](adr/0017-interface-shell.md): a main
+> window (library, folder tabs with the contact sheet, inspector, tasks), a full-screen preview (a separate window later) and
+> a full metadata window. The crates below are unchanged; only the shell in `pw-loupe` is rebuilt.
+
 > **2026-11-07 (owner):** the GUI is built in pure Rust with eframe + egui
 > ([GUI_REQUIREMENTS.md](GUI_REQUIREMENTS.md)). The app crate below replaces `src-tauri` when the egui GUI
 > takes over. Until then, the current Tauri app keeps working.
