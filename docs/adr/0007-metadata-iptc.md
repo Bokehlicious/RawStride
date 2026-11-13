@@ -180,15 +180,40 @@ IIM block in PSIR 1061 [MWG §4.2.3.2].
 - **Checksum:** "If IPTC-IIM and XMP are both present, whether changed or not, a Changer MUST
   create or update the checksum" [MWG §4.2.3.2]. It is computed over the whole IIM block after
   conversion.
+  - **TIFF and DNG:** the checksum is written by a second ExifTool call on the temporary copy
+    (§9.2), because ExifTool 13.59 stores an out-of-date checksum there when it is written in the
+    same call as the IIM (T92).
+- **Both forms in line after every write** **(owner 2026-11-12, review of T83)**: §5.1 keeps a
+  conflict marker until a write brings both forms in line, and §12 asks for IIM = XMP after every
+  write. So when a JPEG, TIFF or DNG has IIM after the write and the write changes anything, these
+  properties the user did **not** change are written too:
+  - a conflict decided for IIM (differing checksum), and a value found only in IIM: the IIM value
+    is written to XMP;
+  - a conflict decided for XMP (matching checksum): the XMP value is written to IIM (predicted and
+    cut as for any IIM write).
+
+  Unresolved conflicts (below), conflicts with Exif and deprecated IIM datasets (§5.5) are left
+  out. Reason: otherwise the new checksum would make XMP win at the next read and silently undo an
+  IIM edit made by another program.
 - **Unresolved conflicts when writing** (the no-checksum case of §5.1) **(Q1, owner 2026-11-11):**
   - writing other properties is allowed;
-  - for each property with an unresolved conflict, both forms are left as they are;
+  - for each property with an unresolved conflict, both forms keep their values (the IIM text may
+    be re-encoded, see below);
   - **no new checksum is written** while any conflict in the file is unresolved, so the write does
     not silently decide the conflict;
   - batch operations list such files in their summary.
   - **[Product ≠ std]:** MWG §4.2.3.2 says a Changer MUST create or update the checksum "whether
     changed or not". This is a deliberate exception, limited to files with an unresolved conflict
     (§13).
+  - **An edit decides the conflict** **(owner 2026-11-11, T83)**: when the user changes a property
+    that has an unresolved conflict, the change is the user's decision. The new value is written
+    to both forms, and that conflict no longer keeps the checksum from being written. Only the
+    conflicts the user has not touched do: the file then stays without a checksum, and those
+    conflicts are shown again at the next read.
+  - **Re-encoding is not a decision** **(owner 2026-11-12, T83)**: when the IIM is converted to
+    UTF-8 (§5.4), the IIM text of an unresolved conflict is written again unchanged, only
+    re-encoded, so no Latin-1 bytes are left under the UTF-8 marker (1:90). The conflict stays
+    unresolved and no checksum is written.
 - **Values longer than the IIM limit** are kept in full in XMP and cut at a UTF-8 character
   boundary in IIM. The user is told. The limit counts **bytes, not characters**. [IPTC §15.1]
 
@@ -381,8 +406,20 @@ written original. [Product]
 - No `-overwrite_original_in_place`.
   - *Change from ADR 0004:* today's ratings write uses it.
   - In-place copying back can leave a half-written original if it is interrupted.
+- **The checksum pass (TIFF and DNG, T92):** when the write includes a new IIM checksum, a second
+  ExifTool call (`-IPTCDigest=new -overwrite_original <copy>`) stores it on the copy (§5.2). It
+  must report one file updated and no warning; otherwise the write fails like any write of the
+  copy.
 
 ### 9.3 Verify the temporary copy
+
+**Restart ExifTool before reading a TIFF copy** **(owner 2026-11-12, T92, "choice A")**: after a
+TIFF write that includes a new IIM checksum (also a failed one), ExifTool is restarted before the
+copy is read (about 0.25 s). Reason, measured with ExifTool 13.59: after a running ExifTool
+process (`-stay_open`) has written the checksum to a TIFF whose Photoshop block holds a checksum
+followed by an `AgHg` resource (written by Lightroom and Photo Mechanic), that process reads the
+block of every such TIFF wrongly until it ends, so a correct copy would be refused. JPEG and DNG
+writes do not do this. If the restart fails, the write fails and ExifTool is marked as broken.
 
 1. **Image data unchanged:** `ImageDataHash` equals the original's.
 2. **Metadata as intended:**
@@ -404,6 +441,9 @@ written original. [Product]
   creation time, attributes, ACL and alternate data streams.
 - **The modification time** is set back to the original's (as `-P` does today; ADR 0004).
 - **On success:** the backup is deleted after a final read of the new file (size, `ImageDataHash`).
+- **If the final read fails** **(owner 2026-11-12, T86)**: the backup is kept, the journal entry is
+  ended (so the recovery at the next start does not delete the backup), and the error names the
+  backup as the previous version of the file.
 - **If the volume does not support `ReplaceFileW`** (some network shares): rename the original
   to the backup name, rename the copy to the original name (`MoveFileExW` with
   `MOVEFILE_WRITE_THROUGH`), then delete the backup. Each step is reversible.
@@ -421,12 +461,35 @@ written original. [Product]
 
 - **The same transaction is used for XMP sidecars** (temp + verify + atomic replace), except the
   image-data checks.
+  - **A new sidecar** (none existed) is checked with the rules of §9.3 against an empty original:
+    everything in it must be what the write was meant to make. ExifTool always adds
+    `XMP-x:XMPToolkit` to a new sidecar, which is allowed. **(owner 2026-11-12, T86)**
+- **Every error names the file** it concerns (the original's path), so a batch summary can list
+  it. **(owner 2026-11-12, T86)**
 - **Ingest:** metadata is only written to the *copied* file, after its copy has been verified
   (ADR 0005), with this procedure.
-- **Tests** (to be written with the implementation; none yet):
-  - fault injection at each step (stop ExifTool, full disk, locked file, failing replace);
-  - camera DNGs and **Xiaomi 17 Ultra DNGs** (preview at the end of the file), checked with
-    ImageDataHash, previews, LibRaw and a byte comparison of all non-metadata ranges.
+- **Tests** (planned here before the implementation; written with T84–T92, state 2026-11-13; the
+  tests are described in `docs/test-inventory.md`):
+  - **failures at each step**, in `pw-metadata` (`src/fileops.rs`, `src/journal.rs`,
+    `src/safe_write.rs`, `tests/safe_write.rs`):
+    - a locked or read-only original is refused before writing;
+    - too little free space is refused (the space check itself; a real full disk is not
+      simulated);
+    - ExifTool refusing an argument fails while the copy is written;
+    - a copy that fails the metadata check or the image check is refused;
+    - an original locked just before the replace stays intact;
+    - a replace by renaming puts the original back when the copy is missing;
+    - every journal recovery case (the original intact; only the backup left; nothing left);
+  - **camera DNGs and Xiaomi 17 Ultra DNGs** (preview at the end of the file), with real files
+    (`PW_TESTDATA`, run with `--ignored`): written with an unchanged `ImageDataHash` and the values
+    read back (`pw-metadata` `tests/safe_write.rs`), and with RawStride's real image check
+    (`pw-imagecheck` `tests/real_files.rs`: previews byte for byte equal, LibRaw opens the copy; a
+    copy cut inside its RAW data and a copy with one byte changed in a preview are refused);
+  - **not tested as planned:**
+    - ExifTool stopping in the middle of a safe write (only the ExifTool worker's restart after
+      ExifTool exits is tested);
+    - a byte comparison of all non-metadata ranges; `ImageDataHash` and the byte-equal previews
+      are used instead.
 
 ## 10. Templates (ingest and batch)
 
@@ -633,3 +696,4 @@ listed under the table (§17.1).
 | 9 | 2026-11-11 | Owner approved the ADR (status "accepted"); no change to the rules |
 | 10 | 2026-11-13 | §4.2: a camera `xmp:Rating` of 0 inside a RAW file counts as no rating (it neither fills nor gives a conflict); owner decision after the hand check of T110 (T113) |
 | 11 | 2026-11-13 | §17: the owner's decisions D1–D16 of the implementation, moved unchanged from the step list, with the later changes (§17.1); no new decision |
+| 12 | 2026-11-13 | Owner decisions on safe writing that lived only in task logs, written in; no new decision:<br>- §5.2: both forms brought in line after every write (review of T83); an edit decides an unresolved conflict, and re-encoding to UTF-8 does not (T83, Q1); the checksum of a TIFF or DNG in a second call (T92);<br>- §9.2: the checksum pass (T92);<br>- §9.3: ExifTool restarted before a TIFF copy is read (T92, choice A);<br>- §9.4: a failed final read keeps the backup (T86);<br>- §9.5: a new sidecar checked against an empty original; every error names its file (T86); the tests bullet brought up to date with the tests written in T84–T92 |
