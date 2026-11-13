@@ -5644,6 +5644,55 @@ it is accepted. Stage A changes the shell in `pw-loupe` only; the core crates ar
   unrated Sony ARW (A1 and A7R IVA) shows no conflict in the inspector or the `M` window; an ARW
   rated in the camera and given another rating in RawStride still shows the conflict.
 
+### T114. Names "Yrkestitel" and "Kontaktuppgifter", no origin line under the inspector's values — Open
+
+- **Can start after T110 is Done** (it changes the inspector T110 adds, in `main.rs`). Owner's
+  decisions of 2026-11-13, after the hand check of T110. Not at the same time as any other task
+  that changes `main.rs` (T111, T112).
+- **Crates:** `pw-loupe` only.
+- **Files:** `crates/pw-loupe/src/info_panel.rs` (`SV_LABELS` and its tests);
+  `crates/pw-loupe/src/editor.rs` (tests only, point 4); `crates/pw-loupe/src/main.rs` (points 2
+  and 3); `docs/adr/0017-interface-shell.md` (§2.3.1, point 5); `docs/test-inventory.md`.
+- **Why:** the owner found two Swedish names too long, and the origin line ("XMP", "XMP-sidofil")
+  under every value in the inspector more noise than help. The origin line is correct (it names
+  where that value was read: a RAW file's values come from its sidecar, but a value only the camera
+  wrote comes from the XMP inside the RAW, so one image can show both), but the owner does not want
+  it in the inspector.
+- **What:**
+  1. **Names** (`info_panel.rs`, `SV_LABELS`; the D11 names they replace):
+     - `photoshop:AuthorsPosition`: "Fotografens titel" → **"Yrkestitel"** (not "Titel", which is
+       `dc:title`'s name; two fields with one name would be ambiguous);
+     - `Iptc4xmpCore:CreatorContactInfo`: "Fotografens kontaktuppgifter" → **"Kontaktuppgifter"**.
+
+     Every place that names these properties through `property_label` follows: the inspector, the
+     metadata window's field and its warning ("Yrkestitel utan Fotograf"), "Övrig metadata" and
+     the conflicts.
+  2. **The metadata window** (`main.rs`): the field "Fotografens titel" is shown as "Yrkestitel"
+     (point 1), and a heading **"Kontaktuppgifter"** (from `property_label` of
+     `Iptc4xmpCore:CreatorContactInfo`, in the strong style of the window's other headings) is
+     drawn above the fields E-post, Telefon and Webb, which keep their names. Nothing else in the
+     window changes: its origin lines in "Övrig metadata" and in the conflicts stay.
+  3. **The inspector's Metadata section** (`main.rs`, T110's `draw_inspector_metadata`): no origin
+     line under a value. In the **conflicts** each value keeps its origin (it is what tells the
+     values apart), and the rule text stays.
+  4. **Existing tests** that state the old names may be changed for the new names, and only that:
+     the label list in `editor.rs` (`"Fotografens titel"` → `"Yrkestitel"`), the warning test in
+     `editor.rs` (`"Fotografens titel utan Fotograf"` → `"Yrkestitel utan Fotograf"`), and any
+     test in `info_panel.rs` with either old name. No other assertion changes (rule 5).
+  5. **ADR 0017 §2.3.1**, section 2 of the list ("Fotograf och rättigheter"): "Fotografens titel,
+     kontaktuppgifter" becomes "Yrkestitel, Kontaktuppgifter", and the bullet "The Swedish names
+     follow D11" gains "(Yrkestitel and Kontaktuppgifter: owner, 2026-11-13)". Nothing else in the
+     ADR changes.
+- **Rules:** rules 3–7 and 10–13. No `Cargo.toml` change. Property names only from
+  `property_label` (rule 13).
+- **Tests to add:** `property_label` gives "Yrkestitel" and "Kontaktuppgifter" in Swedish; the
+  English names are unchanged.
+- **Done when:** `.\tools\check.ps1` is all OK; `docs/test-inventory.md` is updated;
+  `git diff --stat` shows only the files above. The owner checks by hand in RawStride: the
+  inspector shows "Yrkestitel" and "Kontaktuppgifter" and no "XMP" or "XMP-sidofil" under the
+  values (a JPEG and an ARW with a sidecar), while a conflict still shows each value's origin; the
+  `M` window shows "Yrkestitel" and the heading "Kontaktuppgifter" above E-post, Telefon and Webb.
+
 ### T7. Format the files that `cargo fmt --check` reports — Done
 
 - **Crates:** `photoworkflow` (`src-tauri`), `preview-bench` (`tools/preview-bench`).
@@ -6184,3 +6233,4 @@ and reviewer:
 | 2026-11-13 | T112 | Blocked | Added: ADR 0017 U12, the first part (stage A): Föregående, Nästa and "Spara och nästa" in the metadata window (buttons and Ctrl+PageUp, Ctrl+PageDown, Ctrl+Enter), over the shown images skipping kinds without metadata support, the current image following the window with the marking kept, "Spara ändringarna?" (Spara / Släng / Avbryt) for a move, Escape and Avbryt. Starts after T110 is Done; the reviewer's proposals are in the task; it waits for the owner's answers to U12-Q1–U12-Q5 |
 | 2026-11-13 | T112 | Open | The owner approved the proposals of U12-Q1–U12-Q5: Ctrl+PageDown, Ctrl+PageUp and Ctrl+Enter, taken before the form so they work while typing; the current image follows the window with the marking kept; no wrap, disabled at the first and last supported image; "Spara ändringarna?" (Spara / Släng / Avbryt) for a move, Escape and Avbryt, OK unchanged, "Spara och nästa" never asks; after a write with notices the move waits for the next press of a move. T112 can start after T110 is Done |
 | 2026-11-13 | T113 | Open | Added after the owner's hand check of T110: rating a Sony ARW (A1, A7R IVA) gave a conflict between the sidecar's rating and the `xmp:Rating` 0 the camera writes into the ARW's XMP for an unrated image. Owner's decision: a camera rating of 0 inside a RAW file counts as no rating (it neither fills nor gives a conflict); other camera ratings unchanged. `pw-metadata` `reconcile.rs` and ADR 0007 §4.2; can run beside T111 or T112 |
+| 2026-11-13 | T114 | Open | Added after the owner's hand check of T110: "Fotografens titel" → "Yrkestitel" (not "Titel", which is `dc:title`) and "Fotografens kontaktuppgifter" → "Kontaktuppgifter" in `SV_LABELS`; a heading "Kontaktuppgifter" above E-post, Telefon and Webb in the `M` window; no origin line under the inspector's values (the conflicts keep theirs). Starts after T110 is Done |
