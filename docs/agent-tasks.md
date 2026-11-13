@@ -5591,7 +5591,7 @@ it is accepted. Stage A changes the shell in `pw-loupe` only; the core crates ar
     happens only on the next press of a move button or key? (The ADR says "moves on only on the
     next key press"; this reads it as the next press of a move, not any key.)
 
-### T113. ADR 0007 §4.2: the camera's rating 0 inside a RAW file counts as no rating — Open
+### T113. ADR 0007 §4.2: the camera's rating 0 inside a RAW file counts as no rating — Done
 
 - **Can start now** (owner decision 2026-11-13, after the hand check of T110). It does not touch
   `pw-loupe` and can run at the same time as a `pw-loupe` task (T111 or T112).
@@ -6240,3 +6240,5 @@ and reviewer:
 | 2026-11-13 | T114 | Open | Owner: "Övrig metadata" in the `M` window follows the inspector's rule, no origin line under its values (the conflicts keep theirs) |
 | 2026-11-13 | T110 | Ready for review | The inspector in the right column: the current image's file name, Info (Exif summary from `pw_raw::inspect` on its own thread, `inspector.rs`) and Metadata (the inspector's own read in `metadata.rs`, T103's rules, none while the `M` window is open), both collapsible and remembered as `inspector_info`/`inspector_metadata`; `I` and Visa ▸ Inspektör open and collapse the column, "Information" and "Höger kolumn" removed, the status line, rating badge and RAW/JPEG control always shown; texts in `inspector_text.rs`. `check.ps1` all OK (1129 passed, 43 ignored, 0 failed); not checked by hand in RawStride |
 | 2026-11-13 | T110 | Done | The owner confirmed the hand checks of T110. `latency.ps1` (reviewer, release build of the T110 working tree, A1 folder, inspector open with Info and Metadata, labels `t110-…` in `latency-t110.csv`): RAW fit next median 17.6 ms (max 26.6), JPEG fit next 16.7 ms (max 20.3), as T109 (17.2 and 17.2); at 100 % and 7 steps/s the same pattern as T109 (only the first 2 of 13 steps drawn within 70 ms, RAW and JPEG; T109: 2 and 3), so the inspector does not slow stepping |
+| 2026-11-13 | T113 | Ready for review | `reconcile.rs`: in step 3 (camera XMP, `Raw` only) an `xmp:Rating` that is a `Value::Number` equal to zero after trimming (`0`, `0.0`, ` 0 `) is skipped like a blank value (new `is_camera_no_rating`, constant `RATING`), so it neither fills, gives a conflict nor `HiddenByUser`; module comment point 3 updated; 7 tests added (sidecar 1 vs camera 0, camera 0 alone, `0.0`/` 0 `, camera 3 still a conflict with rule `Xmp`, camera −1 fills as `XmpEmbedded`, cleared rating gives no `HiddenByUser`, JPEG primary 0 still a value). ADR 0007 §4.2 one sentence and revision 10. `docs/test-inventory.md`: pw-metadata unit 342 → 349, total 1136. `check.ps1`: fmt, test, clippy OK; 1136 passed, 0 failed, 43 ignored; no clippy warnings |
+| 2026-11-13 | T113 | Done | The owner confirmed the hand check of T113: rating an unrated Sony ARW (A1, A7R IVA) in RawStride shows no conflict |

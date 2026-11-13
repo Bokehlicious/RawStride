@@ -133,7 +133,9 @@ Where in the file to read and write [MWG §4.2.3.4]:
 - **RAW+JPEG pairs:** only the RAW reads and writes `<basename>.xmp`; the JPEG keeps its embedded
   metadata.
 - **Embedded metadata in the RAW** (Exif, XMP written by the camera) is read-only. It only fills
-  properties the sidecar lacks, and differences are shown as conflicts (§6.4).
+  properties the sidecar lacks, and differences are shown as conflicts (§6.4). A camera
+  `xmp:Rating` of 0 counts as no rating: it neither fills nor gives a conflict (owner, 2026-11-13;
+  Sony writes 0 for an unrated image).
 
 ## 5. IIM and XMP
 
@@ -583,3 +585,4 @@ silently. All other deviations concern SHOULD-level recommendations; each is mar
 | 7 | 2026-11-08 | Consistency fixes after review, no new decisions:<br>- §6.3/§6.5: Artist and Photographer are only written if they exist (Q6);<br>- §6.3: only "both ways" fields of §6.1 are written;<br>- §8: Lang Alt reading rule without `x-default`; source label for Q7 marked as to be verified, §13 row added;<br>- §2: clearing a Lang Alt field removes all languages;<br>- §4: cross-reference to §5.2, IIM checksum location (PSIR 1061 in tag 34377);<br>- Q6 resolution names DNG; SDK link pinned to v2025.03; spelling "synchronise" |
 | 8 | 2026-11-11 | Owner answered Q1–Q3 and Q8–Q13, all as proposed; Q2 after a comparison with Lightroom and Photo Mechanic:<br>- answers written into §4.2 (Q8), §5.2 (Q1, Q13), §5.3 and §7 (Q3, Q12), §5.4 (Q10), §6.4 (Q2), §11 (Q9), §12 (Q11);<br>- §13: the Q1 checksum rule is recorded as a deliberate deviation from a MWG MUST;<br>- §16: what is left before implementation;<br>- product name RawStride (ADR 0012) instead of the former name; paths, crate names and file suffixes unchanged |
 | 9 | 2026-11-11 | Owner approved the ADR (status "accepted"); no change to the rules |
+| 10 | 2026-11-13 | §4.2: a camera `xmp:Rating` of 0 inside a RAW file counts as no rating (it neither fills nor gives a conflict); owner decision after the hand check of T110 (T113) |

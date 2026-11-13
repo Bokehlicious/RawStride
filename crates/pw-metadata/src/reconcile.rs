@@ -7,7 +7,8 @@
 //! 2. **IIM** (§5.1): fills a property XMP lacks. A difference is always a [`Conflict`] with both
 //!    values and the rule applied by the IIM checksum: matching → XMP, differing → IIM, missing →
 //!    open (the user decides). In a RAW file the IIM is camera data and only fills (§4.2, §6.4).
-//! 3. **Camera XMP** inside a RAW file only fills (§4.2).
+//! 3. **Camera XMP** inside a RAW file only fills (§4.2). Its `xmp:Rating` 0 counts as no rating:
+//!    it neither fills nor gives a conflict (§4.2).
 //! 4. **Exif** (§6.1, §6.2, §6.5): Description, Copyright Notice and Creator fill a property XMP and
 //!    IIM lack; a difference is a conflict. Against an IIM value the checksum decides (§6.2). The
 //!    Digital Image GUID only fills from ImageUniqueID.
@@ -36,6 +37,8 @@ const CREATOR: &str = "dc:creator";
 const DIGITAL_IMAGE_GUID: &str = "Iptc4xmpExt:DigImageGUID";
 /// Date Created, only suggested from Exif (§7).
 const DATE_CREATED: &str = "photoshop:DateCreated";
+/// Rating; a camera rating of 0 inside a RAW file counts as no rating (§4.2).
+const RATING: &str = "xmp:Rating";
 /// The language of the one Lang Alt entry an Exif value gives.
 const X_DEFAULT: &str = "x-default";
 /// The separator between the names of an Exif Artist (MWG §5.7).
@@ -231,7 +234,7 @@ pub fn reconcile(readings: Readings) -> Reconciled {
     // 3. Camera XMP (`Raw` only, §4.2).
     if raw {
         for (property, value) in camera_xmp {
-            if !is_blank_value(&value) {
+            if !is_blank_value(&value) && !is_camera_no_rating(&property, &value) {
                 reconcile_camera_xmp(&mut work, &property, value);
             }
         }
@@ -309,6 +312,14 @@ fn reconcile_camera_xmp(work: &mut Work<'_>, property: &str, value: Value) {
     if origin == Origin::Iim {
         work.insert(property, value, Origin::XmpEmbedded);
     }
+}
+
+/// True for a camera `xmp:Rating` that is a number equal to zero (`0`, `0.0`, ` 0 `): it counts as
+/// no rating, so it neither fills nor gives a conflict (§4.2; owner, 2026-11-13: Sony writes 0 for
+/// an unrated image). A value that is not a number is not affected.
+fn is_camera_no_rating(property: &str, value: &Value) -> bool {
+    property == RATING
+        && matches!(value, Value::Number(text) if text.trim().parse::<f64>() == Ok(0.0))
 }
 
 /// The Exif fields (§6.1, §6.2, §6.5).
@@ -1302,6 +1313,108 @@ mod tests {
                 .notices
                 .iter()
                 .any(|n| matches!(n, Notice::HiddenByUser { .. }))
+        );
+    }
+
+    // --- Camera rating 0 (§4.2, T113) ---
+
+    fn number(s: &str) -> Value {
+        Value::Number(s.to_string())
+    }
+
+    fn raw_rating(sidecar: Option<&str>, camera: &str) -> Reconciled {
+        reconcile(Readings {
+            xmp: sidecar.map_or_else(Vec::new, |r| values(&[(RATING, number(r))])),
+            camera_xmp: values(&[(RATING, number(camera))]),
+            ..readings(FileKind::Raw)
+        })
+    }
+
+    #[test]
+    fn a_camera_rating_0_gives_no_conflict_with_the_sidecar_rating() {
+        let result = raw_rating(Some("1"), "0");
+        assert_eq!(
+            value_of(&result, RATING),
+            Some((number("1"), Origin::XmpSidecar))
+        );
+        assert!(result.metadata.conflicts().is_empty());
+    }
+
+    #[test]
+    fn a_camera_rating_0_does_not_fill() {
+        let result = raw_rating(None, "0");
+        assert_eq!(value_of(&result, RATING), None);
+        assert!(result.metadata.conflicts().is_empty());
+    }
+
+    #[test]
+    fn a_camera_rating_0_0_or_spaced_0_is_the_same_as_0() {
+        for camera in ["0.0", " 0 "] {
+            let result = raw_rating(Some("1"), camera);
+            assert_eq!(
+                value_of(&result, RATING),
+                Some((number("1"), Origin::XmpSidecar)),
+                "{camera:?}"
+            );
+            assert!(result.metadata.conflicts().is_empty(), "{camera:?}");
+            let result = raw_rating(None, camera);
+            assert_eq!(value_of(&result, RATING), None, "{camera:?}");
+            assert!(result.metadata.conflicts().is_empty(), "{camera:?}");
+        }
+    }
+
+    #[test]
+    fn a_different_nonzero_camera_rating_is_still_a_conflict_of_rule_xmp() {
+        let result = raw_rating(Some("1"), "3");
+        assert_eq!(
+            value_of(&result, RATING),
+            Some((number("1"), Origin::XmpSidecar))
+        );
+        assert_eq!(
+            result.metadata.conflicts(),
+            [Conflict {
+                property: RATING.into(),
+                values: vec![
+                    (Origin::XmpSidecar, number("1")),
+                    (Origin::XmpEmbedded, number("3"))
+                ],
+                rule: ConflictRule::Xmp,
+            }]
+        );
+    }
+
+    #[test]
+    fn a_camera_rating_minus_1_fills() {
+        let result = raw_rating(None, "-1");
+        assert_eq!(
+            value_of(&result, RATING),
+            Some((number("-1"), Origin::XmpEmbedded))
+        );
+        assert!(result.metadata.conflicts().is_empty());
+    }
+
+    #[test]
+    fn a_cleared_rating_and_a_camera_rating_0_give_no_hidden_notice() {
+        let result = reconcile(Readings {
+            camera_xmp: values(&[(RATING, number("0"))]),
+            cleared: BTreeSet::from([RATING.to_string()]),
+            ..readings(FileKind::Raw)
+        });
+        assert_eq!(value_of(&result, RATING), None);
+        assert!(
+            !result
+                .notices
+                .iter()
+                .any(|n| matches!(n, Notice::HiddenByUser { .. }))
+        );
+    }
+
+    #[test]
+    fn a_rating_0_in_a_jpeg_primary_xmp_is_still_a_value() {
+        let result = reconcile(jpeg(&[(RATING, number("0"))], None));
+        assert_eq!(
+            value_of(&result, RATING),
+            Some((number("0"), Origin::XmpEmbedded))
         );
     }
 
