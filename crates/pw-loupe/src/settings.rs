@@ -38,6 +38,19 @@ const COLUMNS_HIDDEN: &str = "columns_hidden";
 /// The keys of the inspector's sections, open or collapsed (ADR 0017 §2.1, §2.5, T110).
 const INSPECTOR_INFO: &str = "inspector_info";
 const INSPECTOR_METADATA: &str = "inspector_metadata";
+/// The keys of the preview's remembered state (ADR 0017 §2.2, U3, T111).
+const PREVIEW_COLUMN: &str = "preview_column";
+const PREVIEW_COLUMN_WIDTH: &str = "preview_column_width";
+const PREVIEW_INFO: &str = "preview_info";
+const PREVIEW_ZOOM: &str = "preview_zoom";
+const FILMSTRIP: &str = "filmstrip";
+const FILMSTRIP_MARKED: &str = "filmstrip_marked";
+const PREVIEW_HIDDEN: &str = "preview_hidden";
+/// The values of [`FILMSTRIP`] and [`FILMSTRIP_MARKED`].
+const SHOWN: &str = "shown";
+const HIDDEN: &str = "hidden";
+const ALL: &str = "all";
+const MARKED: &str = "marked";
 
 /// RawStride's settings.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -89,6 +102,19 @@ pub struct ShellSettings {
     /// The inspector's Info and Metadata sections (T110).
     pub inspector_info: ColumnState,
     pub inspector_metadata: ColumnState,
+    /// The preview's right column, remembered apart from the main window's (T111, U3-Q2).
+    pub preview_column: ColumnState,
+    /// The preview's right column's width in points.
+    pub preview_column_width: u32,
+    /// The preview column's Info and Zoom sections.
+    pub preview_info: ColumnState,
+    pub preview_zoom: ColumnState,
+    /// The filmstrip shown under the preview (`filmstrip = shown`).
+    pub filmstrip: bool,
+    /// "Only the marked" in the filmstrip (`filmstrip_marked = marked`, `S`, U3-Q3).
+    pub filmstrip_marked: bool,
+    /// The right column and the filmstrip hidden with `H` in the preview.
+    pub preview_hidden: bool,
 }
 
 impl Default for ShellSettings {
@@ -108,6 +134,15 @@ impl Default for ShellSettings {
             // Both sections open (U2-Q5).
             inspector_info: ColumnState::Open,
             inspector_metadata: ColumnState::Open,
+            // The preview's column starts open, with both sections (U3-Q2); the filmstrip is
+            // shown with every visible image (U3-Q3).
+            preview_column: ColumnState::Open,
+            preview_column_width: DEFAULT_RIGHT_WIDTH,
+            preview_info: ColumnState::Open,
+            preview_zoom: ColumnState::Open,
+            filmstrip: true,
+            filmstrip_marked: false,
+            preview_hidden: false,
         }
     }
 }
@@ -198,19 +233,25 @@ pub fn load_settings(path: &Path) -> (Settings, Vec<String>) {
                 Some(window) => shell.window = Some(window),
                 None => problems.push(bad("x,y,width,height,scale")),
             },
-            WINDOW_MAXIMIZED | FULLSCREEN | COLUMNS_HIDDEN => match parse_bool(value) {
-                Some(on) => match key {
-                    WINDOW_MAXIMIZED => shell.window_maximized = on,
-                    FULLSCREEN => shell.fullscreen = on,
-                    _ => shell.columns_hidden = on,
-                },
-                None => problems.push(bad("true or false")),
-            },
-            LEFT_COLUMN_WIDTH | RIGHT_COLUMN_WIDTH => match value.parse::<u32>() {
-                Ok(width) if key == LEFT_COLUMN_WIDTH => shell.left_column_width = width,
-                Ok(width) => shell.right_column_width = width,
-                Err(_) => problems.push(bad("a width in points")),
-            },
+            WINDOW_MAXIMIZED | FULLSCREEN | COLUMNS_HIDDEN | PREVIEW_HIDDEN => {
+                match parse_bool(value) {
+                    Some(on) => match key {
+                        WINDOW_MAXIMIZED => shell.window_maximized = on,
+                        FULLSCREEN => shell.fullscreen = on,
+                        PREVIEW_HIDDEN => shell.preview_hidden = on,
+                        _ => shell.columns_hidden = on,
+                    },
+                    None => problems.push(bad("true or false")),
+                }
+            }
+            LEFT_COLUMN_WIDTH | RIGHT_COLUMN_WIDTH | PREVIEW_COLUMN_WIDTH => {
+                match value.parse::<u32>() {
+                    Ok(width) if key == LEFT_COLUMN_WIDTH => shell.left_column_width = width,
+                    Ok(width) if key == PREVIEW_COLUMN_WIDTH => shell.preview_column_width = width,
+                    Ok(width) => shell.right_column_width = width,
+                    Err(_) => problems.push(bad("a width in points")),
+                }
+            }
             LEFT_COLUMN | RIGHT_COLUMN => match parse_column(value) {
                 Some(state) if key == LEFT_COLUMN => shell.left_column = state,
                 Some(state) => shell.right_column = state,
@@ -220,6 +261,24 @@ pub fn load_settings(path: &Path) -> (Settings, Vec<String>) {
                 Some(state) if key == INSPECTOR_INFO => shell.inspector_info = state,
                 Some(state) => shell.inspector_metadata = state,
                 None => problems.push(bad("open or collapsed")),
+            },
+            PREVIEW_COLUMN | PREVIEW_INFO | PREVIEW_ZOOM => match parse_column(value) {
+                Some(state) => match key {
+                    PREVIEW_COLUMN => shell.preview_column = state,
+                    PREVIEW_INFO => shell.preview_info = state,
+                    _ => shell.preview_zoom = state,
+                },
+                None => problems.push(bad("open or collapsed")),
+            },
+            FILMSTRIP => match value {
+                SHOWN => shell.filmstrip = true,
+                HIDDEN => shell.filmstrip = false,
+                _ => problems.push(bad("shown or hidden")),
+            },
+            FILMSTRIP_MARKED => match value {
+                MARKED => shell.filmstrip_marked = true,
+                ALL => shell.filmstrip_marked = false,
+                _ => problems.push(bad("all or marked")),
             },
             _ => problems.push(format!(
                 "settings file {}, line {number}: unknown key \"{key}\", line ignored",
@@ -280,7 +339,9 @@ fn shell_lines(shell: &ShellSettings) -> String {
     text.push_str(&format!(
         "{WINDOW_MAXIMIZED} = {}\n{FULLSCREEN} = {}\n{LEFT_COLUMN_WIDTH} = {}\n\
          {RIGHT_COLUMN_WIDTH} = {}\n{LEFT_COLUMN} = {}\n{RIGHT_COLUMN} = {}\n\
-         {COLUMNS_HIDDEN} = {}\n{INSPECTOR_INFO} = {}\n{INSPECTOR_METADATA} = {}\n",
+         {COLUMNS_HIDDEN} = {}\n{INSPECTOR_INFO} = {}\n{INSPECTOR_METADATA} = {}\n\
+         {PREVIEW_COLUMN} = {}\n{PREVIEW_COLUMN_WIDTH} = {}\n{PREVIEW_INFO} = {}\n\
+         {PREVIEW_ZOOM} = {}\n{FILMSTRIP} = {}\n{FILMSTRIP_MARKED} = {}\n{PREVIEW_HIDDEN} = {}\n",
         shell.window_maximized,
         shell.fullscreen,
         shell.left_column_width,
@@ -289,7 +350,14 @@ fn shell_lines(shell: &ShellSettings) -> String {
         column_value(shell.right_column),
         shell.columns_hidden,
         column_value(shell.inspector_info),
-        column_value(shell.inspector_metadata)
+        column_value(shell.inspector_metadata),
+        column_value(shell.preview_column),
+        shell.preview_column_width,
+        column_value(shell.preview_info),
+        column_value(shell.preview_zoom),
+        if shell.filmstrip { SHOWN } else { HIDDEN },
+        if shell.filmstrip_marked { MARKED } else { ALL },
+        shell.preview_hidden
     ));
     text
 }
@@ -479,7 +547,10 @@ mod tests {
             "# RawStride\ncreate_iim = true\nfallback_encoding = iso-8859-1\ntheme = dark\n\
              window_maximized = false\nfullscreen = false\nleft_column_width = 240\n\
              right_column_width = 300\nleft_column = open\nright_column = collapsed\n\
-             columns_hidden = false\ninspector_info = open\ninspector_metadata = open\n"
+             columns_hidden = false\ninspector_info = open\ninspector_metadata = open\n\
+             preview_column = open\npreview_column_width = 300\npreview_info = open\n\
+             preview_zoom = open\nfilmstrip = shown\nfilmstrip_marked = all\n\
+             preview_hidden = false\n"
         );
     }
 
@@ -644,6 +715,13 @@ mod tests {
             columns_hidden: true,
             inspector_info: ColumnState::Collapsed,
             inspector_metadata: ColumnState::Collapsed,
+            preview_column: ColumnState::Collapsed,
+            preview_column_width: 420,
+            preview_info: ColumnState::Collapsed,
+            preview_zoom: ColumnState::Collapsed,
+            filmstrip: false,
+            filmstrip_marked: true,
+            preview_hidden: true,
         }
     }
 
@@ -759,6 +837,133 @@ mod tests {
             ("columns_hidden", "no"),
             ("inspector_info", "shut"),
             ("inspector_metadata", "true"),
+        ];
+        for (key, value) in bad {
+            let (_dir, path) = TempDir::with_file(&format!(
+                "# RawStride\ncreate_iim = true\n{key} = {value}\n"
+            ));
+            let (settings, problems) = load_settings(&path);
+            assert_one_problem_on_line(&problems, 3);
+            assert!(problems[0].contains(key), "{problems:?}");
+            assert_eq!(settings.shell, ShellSettings::default(), "{key} = {value}");
+            assert!(settings.create_iim, "{key} = {value}");
+        }
+    }
+
+    #[test]
+    fn the_preview_keys_default_to_an_open_column_and_a_shown_filmstrip_of_all() {
+        let shell = ShellSettings::default();
+        assert_eq!(shell.preview_column, ColumnState::Open);
+        assert_eq!(shell.preview_column_width, 300);
+        assert_eq!(shell.preview_info, ColumnState::Open);
+        assert_eq!(shell.preview_zoom, ColumnState::Open);
+        assert!(shell.filmstrip);
+        assert!(!shell.filmstrip_marked);
+        assert!(!shell.preview_hidden);
+        // The main window's right column still starts collapsed; the two are apart.
+        assert_eq!(shell.right_column, ColumnState::Collapsed);
+    }
+
+    #[test]
+    fn the_preview_keys_round_trip_one_at_a_time() {
+        let dir = TempDir::new();
+        let path = dir.0.join("settings.txt");
+        let base = ShellSettings::default();
+        for shell in [
+            ShellSettings {
+                preview_column: ColumnState::Collapsed,
+                ..base
+            },
+            ShellSettings {
+                preview_column_width: 512,
+                ..base
+            },
+            ShellSettings {
+                preview_info: ColumnState::Collapsed,
+                ..base
+            },
+            ShellSettings {
+                preview_zoom: ColumnState::Collapsed,
+                ..base
+            },
+            ShellSettings {
+                filmstrip: false,
+                ..base
+            },
+            ShellSettings {
+                filmstrip_marked: true,
+                ..base
+            },
+            ShellSettings {
+                preview_hidden: true,
+                ..base
+            },
+        ] {
+            let settings = Settings {
+                shell,
+                ..Settings::default()
+            };
+            save_settings(&path, &settings).unwrap();
+            let (loaded, problems) = load_settings(&path);
+            assert!(problems.is_empty(), "{problems:?}");
+            assert_eq!(loaded, settings);
+        }
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains("preview_hidden = true\n"), "{text}");
+        assert!(text.contains("filmstrip = shown\n"), "{text}");
+        assert!(text.contains("filmstrip_marked = all\n"), "{text}");
+    }
+
+    #[test]
+    fn the_preview_keys_are_read_from_their_file_values() {
+        let (_dir, path) = TempDir::with_file(
+            "# RawStride\npreview_column = collapsed\npreview_column_width = 260\n\
+             preview_info = collapsed\npreview_zoom = collapsed\nfilmstrip = hidden\n\
+             filmstrip_marked = marked\npreview_hidden = true\n",
+        );
+        let (settings, problems) = load_settings(&path);
+        assert!(problems.is_empty(), "{problems:?}");
+        let shell = settings.shell;
+        assert_eq!(shell.preview_column, ColumnState::Collapsed);
+        assert_eq!(shell.preview_column_width, 260);
+        assert_eq!(shell.preview_info, ColumnState::Collapsed);
+        assert_eq!(shell.preview_zoom, ColumnState::Collapsed);
+        assert!(!shell.filmstrip);
+        assert!(shell.filmstrip_marked);
+        assert!(shell.preview_hidden);
+    }
+
+    #[test]
+    fn a_file_without_the_preview_keys_gives_their_defaults_and_no_problem() {
+        let (_dir, path) = TempDir::with_file(
+            "# RawStride\ncreate_iim = true\ntheme = light\nright_column = open\n\
+             inspector_info = collapsed\n",
+        );
+        let (settings, problems) = load_settings(&path);
+        assert!(problems.is_empty(), "{problems:?}");
+        let defaults = ShellSettings::default();
+        let shell = settings.shell;
+        assert_eq!(shell.preview_column, defaults.preview_column);
+        assert_eq!(shell.preview_column_width, defaults.preview_column_width);
+        assert_eq!(shell.preview_info, defaults.preview_info);
+        assert_eq!(shell.preview_zoom, defaults.preview_zoom);
+        assert_eq!(shell.filmstrip, defaults.filmstrip);
+        assert_eq!(shell.filmstrip_marked, defaults.filmstrip_marked);
+        assert_eq!(shell.preview_hidden, defaults.preview_hidden);
+    }
+
+    #[test]
+    fn a_bad_value_of_each_preview_key_keeps_its_default_and_names_the_line() {
+        let bad = [
+            ("preview_column", "hidden"),
+            ("preview_column_width", "wide"),
+            ("preview_column_width", "-1"),
+            ("preview_info", "shut"),
+            ("preview_zoom", "true"),
+            ("filmstrip", "open"),
+            ("filmstrip", "true"),
+            ("filmstrip_marked", "some"),
+            ("preview_hidden", "yes"),
         ];
         for (key, value) in bad {
             let (_dir, path) = TempDir::with_file(&format!(

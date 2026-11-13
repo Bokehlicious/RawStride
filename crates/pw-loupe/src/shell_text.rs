@@ -106,7 +106,7 @@ pub fn command_text(command: Command) -> String {
         Command::Label(label) => label_name(label).to_owned(),
         Command::ClearLabel => "Ingen etikett".to_owned(),
         Command::ToggleMode => "RAW ↔ JPEG".to_owned(),
-        Command::ToggleView => "Kontaktark ↔ lupp".to_owned(),
+        Command::ToggleView => "Förhandsvisning".to_owned(),
         Command::Fit => "Anpassa".to_owned(),
         Command::ToggleZoom => "Anpassa ↔ 100 %".to_owned(),
         Command::ZoomIn => "Zooma in".to_owned(),
@@ -224,7 +224,7 @@ mod tests {
                 "Lila",
                 "Ingen etikett",
                 "RAW ↔ JPEG",
-                "Kontaktark ↔ lupp",
+                "Förhandsvisning",
                 "Anpassa",
                 "Anpassa ↔ 100 %",
                 "Zooma in",
@@ -314,5 +314,25 @@ mod tests {
         assert_eq!(key_text(chord(true, false, true)), "Ctrl+Alt+K");
         assert_eq!(key_text(chord(false, true, true)), "Shift+Alt+K");
         assert_eq!(key_text(chord(true, true, true)), "Ctrl+Shift+Alt+K");
+    }
+
+    /// Visa ▸ Förhandsvisning (G) opens and closes the preview (ADR 0017 §2.2, T111); the old
+    /// "Kontaktark ↔ lupp" is gone.
+    #[test]
+    fn the_view_menu_opens_the_preview_with_g() {
+        let Some(view) = MENUS.iter().find(|menu| menu.kind == MenuKind::View) else {
+            panic!("there is a Visa menu");
+        };
+        let Some(MenuEntry::Item(first)) = view.entries.first() else {
+            panic!("Visa starts with an item");
+        };
+        assert_eq!(first.command, Command::ToggleView);
+        assert_eq!(command_text(first.command), "Förhandsvisning");
+        assert_eq!(first.key.map(key_text).as_deref(), Some("G"));
+        assert!(
+            menu_items()
+                .iter()
+                .all(|item| !command_text(item.command).contains("lupp"))
+        );
     }
 }

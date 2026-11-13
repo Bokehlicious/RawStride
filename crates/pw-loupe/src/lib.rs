@@ -13,6 +13,8 @@ mod import_text;
 mod import_worker;
 mod info_panel;
 mod monitor_profile;
+mod preview;
+mod preview_text;
 mod ratings;
 mod selection;
 mod settings;
@@ -55,6 +57,13 @@ pub use info_panel::{
 pub use monitor_profile::{
     MonitorProfile, ProfileSource, load_monitor_profile, primary_monitor_profile_path, window_title,
 };
+pub use preview::{
+    FILMSTRIP_CELL_WIDTH, FILMSTRIP_IMAGE_HEIGHT, FILMSTRIP_LABEL_HEIGHT, FILMSTRIP_MARGIN,
+    FILMSTRIP_SPACING, PreviewParts, Restore, ThumbGate, WindowBefore, clamp_offset,
+    filmstrip_range, filmstrip_width, hit_test, preview_info_shown, preview_parts, scroll_target,
+    thumbnail_gate, toggle_preview_column, toggle_preview_hidden,
+};
+pub use preview_text::{PreviewText, preview_text, zoom_value_text};
 pub use ratings::{
     RatingKey, RatingRefused, RatingStore, RatingWriter, UNSUPPORTED_TEXT, apply, label_name,
     rating_key_action, star_glyphs, status_text,
@@ -204,9 +213,11 @@ pub fn step_allowed(action: Action, repeat: bool, status: &Status) -> bool {
         && matches!(status, Status::Preparing { .. }))
 }
 
-/// The action of a key press in the loupe. `M` (the metadata window) and `I` (the inspector open
-/// ↔ collapsed, ADR 0017 §2.4, U2-Q3) act in the contact sheet as well. Keys handled elsewhere
-/// (Escape, G, Enter, Ctrl+O, Ctrl+A, Ctrl+I, digits) give `None`.
+/// The action of a key press in the preview (the loupe's keys, ADR 0017 §2.2, T111). `M` (the
+/// metadata window) and `I` (the inspector open ↔ collapsed, ADR 0017 §2.4, U2-Q3) act in the
+/// contact sheet as well; in the preview `I` is taken first by [`preview_key_action`] for the
+/// preview's own right column. Keys handled elsewhere (Escape, G, Enter, Ctrl+O, Ctrl+A, Ctrl+I,
+/// digits, and the preview's `S` and `H`) give `None`.
 pub fn key_action(key: egui::Key, ctrl: bool, alt: bool) -> Option<Action> {
     use egui::Key as K;
     if ctrl || alt {
@@ -416,6 +427,42 @@ pub fn shell_key_action(key: egui::Key, ctrl: bool, shift: bool, alt: bool) -> O
         (egui::Key::O, true, false, false) => Some(ShellAction::OpenFolder),
         (egui::Key::F11, false, false, false) => Some(ShellAction::ToggleFullscreen),
         (key, false, false, false) if key == HIDE_KEY => Some(ShellAction::ToggleColumns),
+        _ => None,
+    }
+}
+
+/// A key of the preview's own (ADR 0017 §2.2, §2.4, U3-Q1–Q3, T111), asked before every other key
+/// map while the preview is shown.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PreviewKey {
+    /// `S`: "only the marked" on ↔ off in the filmstrip and the steps.
+    OnlyMarked,
+    /// `H`: hides the right column and the filmstrip together, or brings them back.
+    HideParts,
+    /// `I`: the preview's right column open ↔ collapsed.
+    ToggleColumn,
+    /// Ctrl+O, Ctrl+I, Ctrl+W, Ctrl+Tab, Ctrl+Shift+Tab and F11: nothing until the preview is
+    /// closed (U3-Q1). The key is taken so no other key map acts on it.
+    Nothing,
+}
+
+/// The preview's key of a key press, each with exactly those modifiers; `None` for the keys the
+/// preview shares with the loupe and the rest of the program (steps, zoom, R, M, ratings, Escape,
+/// G, Enter).
+pub fn preview_key_action(
+    key: egui::Key,
+    ctrl: bool,
+    shift: bool,
+    alt: bool,
+) -> Option<PreviewKey> {
+    use egui::Key as K;
+    match (key, ctrl, shift, alt) {
+        (K::S, false, false, false) => Some(PreviewKey::OnlyMarked),
+        (key, false, false, false) if key == HIDE_KEY => Some(PreviewKey::HideParts),
+        (K::I, false, false, false) => Some(PreviewKey::ToggleColumn),
+        (K::O | K::I | K::W, true, false, false)
+        | (K::Tab, true, _, false)
+        | (K::F11, false, false, false) => Some(PreviewKey::Nothing),
         _ => None,
     }
 }
@@ -1115,5 +1162,75 @@ mod tests {
             }
         }
         assert!(checked > 30, "only {checked} keys checked");
+    }
+
+    #[test]
+    fn the_preview_keys_are_s_h_and_i_and_the_shell_keys_do_nothing() {
+        use egui::Key as K;
+        assert_eq!(
+            preview_key_action(K::S, false, false, false),
+            Some(PreviewKey::OnlyMarked)
+        );
+        assert_eq!(
+            preview_key_action(K::H, false, false, false),
+            Some(PreviewKey::HideParts)
+        );
+        assert_eq!(
+            preview_key_action(K::I, false, false, false),
+            Some(PreviewKey::ToggleColumn)
+        );
+        // Ctrl+O, Ctrl+I, Ctrl+W, Ctrl+Tab, Ctrl+Shift+Tab and F11 give nothing in the preview.
+        for (key, ctrl, shift) in [
+            (K::O, true, false),
+            (K::I, true, false),
+            (K::W, true, false),
+            (K::Tab, true, false),
+            (K::Tab, true, true),
+            (K::F11, false, false),
+        ] {
+            assert_eq!(
+                preview_key_action(key, ctrl, shift, false),
+                Some(PreviewKey::Nothing),
+                "{key:?} ctrl {ctrl} shift {shift}"
+            );
+        }
+        // S, H and I with a modifier are not the preview's (Ctrl+I is taken as nothing above).
+        for (ctrl, shift, alt) in [
+            (false, true, false),
+            (false, false, true),
+            (true, true, false),
+        ] {
+            assert_eq!(preview_key_action(K::S, ctrl, shift, alt), None);
+            assert_eq!(preview_key_action(K::H, ctrl, shift, alt), None);
+        }
+        // The loupe's keys, the ratings, M, R and the way back stay with their own key maps.
+        for key in [
+            K::ArrowRight,
+            K::ArrowLeft,
+            K::PageDown,
+            K::Home,
+            K::End,
+            K::Z,
+            K::F,
+            K::Plus,
+            K::Minus,
+            K::A,
+            K::R,
+            K::M,
+            K::Num3,
+            K::X,
+            K::Escape,
+            K::G,
+            K::Enter,
+        ] {
+            assert_eq!(
+                preview_key_action(key, false, false, false),
+                None,
+                "{key:?}"
+            );
+        }
+        // S is no other key of the loupe or of the ratings.
+        assert_eq!(key_action(K::S, false, false), None);
+        assert_eq!(rating_key_action(K::S, false, false, false), None);
     }
 }

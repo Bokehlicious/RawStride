@@ -43,6 +43,12 @@ use pw_loupe::{
     menu_text, palette, rect_on_a_screen, shell_key_action, shell_text, start_window, submenu_text,
     theme_text, visuals,
 };
+use pw_loupe::{
+    FILMSTRIP_CELL_WIDTH, FILMSTRIP_IMAGE_HEIGHT, FILMSTRIP_LABEL_HEIGHT, FILMSTRIP_MARGIN,
+    FILMSTRIP_SPACING, PreviewKey, PreviewText, Restore, ThumbGate, WindowBefore, clamp_offset,
+    filmstrip_range, hit_test, preview_info_shown, preview_key_action, preview_parts, preview_text,
+    scroll_target, thumbnail_gate, toggle_preview_column, toggle_preview_hidden, zoom_value_text,
+};
 use pw_metadata::edit::EditOptions;
 use pw_metadata::iim::Fallback;
 use pw_metadata::journal::{Journal, Recovered};
@@ -52,7 +58,7 @@ use pw_metadata::{MIN_EXIFTOOL_VERSION, MetadataWorker, Rating, ToolVersion, Wri
 use pw_render::{Textures, view_px};
 use pw_thumbcache::{ThumbWorker, ThumbnailRequest};
 use pw_viewcore::native::NativeBackend;
-use pw_viewcore::{Config, Status, ViewCore};
+use pw_viewcore::{Config, Status, ViewCore, Zoom};
 
 mod inspector;
 mod inspector_text;
@@ -89,6 +95,9 @@ const WINDOW_BUTTON_SPACING: f32 = 4.0;
 const BACKDROP: egui::Color32 = egui::Color32::from_black_alpha(60);
 /// How often a frame is asked for while the metadata window waits for the worker.
 const WINDOW_POLL_INTERVAL: Duration = Duration::from_millis(100);
+/// How many frames the window state is not taken after the preview closed, at most, while the
+/// system has not yet reported the window out of the preview's full screen (T111).
+const WINDOW_SETTLE_FRAMES: u32 = 30;
 
 /// The image the metadata window opens for (ADR 0007 I10n, D16, T107): the active tab's current
 /// image when it is shown, as the metadata cache keys it (`cwd` resolves a relative path); in the
@@ -319,6 +328,21 @@ struct Loupe {
     last_ratings_ready: bool,
     /// Status of the last rendered loupe frame (ADR 0009 §13).
     last_frame_status: Status,
+    /// The zoom and the effective scale of the last rendered preview frame, for the preview
+    /// column's Zoom section (T111).
+    last_zoom: Option<(Zoom, Option<f64>)>,
+    /// The window's state from before the preview made it full screen; `Some` while the preview
+    /// is shown (ADR 0017 §2.2, U3-Q1, U3-Q6, T111).
+    window_before: Option<WindowBefore>,
+    /// After the preview closed: the full-screen state the window returns to and how many frames
+    /// are left to wait for the system to report it; the window state is not taken meanwhile.
+    window_settling: Option<(bool, u32)>,
+    /// Commands for the window, sent at the end of the frame (the preview's full screen).
+    viewport_commands: Vec<egui::ViewportCommand>,
+    /// How far the filmstrip is scrolled, in points, and the current image and list length it
+    /// was last scrolled for (T111).
+    filmstrip_offset: f32,
+    filmstrip_followed: Option<(usize, usize)>,
     /// The monitor profile, read once at start (ADR 0016 §4.1, Q4); not used for pixels yet.
     #[allow(dead_code)] // used by ADR 0016 C4
     monitor_profile: MonitorProfile,
@@ -516,11 +540,14 @@ impl Loupe {
         }
     }
 
-    /// A step in the loupe over the visible list (`Tab::loupe_move`, ADR 0014 §4.4 way C). The core
-    /// follows the tab: `set_files` when the visible list changed, so the views of images still in
-    /// the list are kept, otherwise `go`. With nothing visible, back to the grid (§2.3).
+    /// A step in the preview over the visible list, or between the marked images with "only the
+    /// marked" (`Tab::preview_move`, ADR 0014 §4.4 way C, ADR 0017 §2.2, T111); the marking is
+    /// kept. The core follows the tab: `set_files` when the visible list changed, so the views of
+    /// images still in the list are kept, otherwise `go`. With nothing visible, back to the grid
+    /// (§2.3).
     fn loupe_move(&mut self, to: LoupeMove) {
         let ready = self.ratings_ready();
+        let only_marked = self.settings.shell.filmstrip_marked;
         let cwd = std::env::current_dir().ok();
         let (changed, position) = {
             let rating_of = tab_rating(&self.metadata, cwd.as_deref());
@@ -528,7 +555,7 @@ impl Loupe {
                 return;
             };
             let before = tab.visible.clone();
-            tab.loupe_move(to, ready, &rating_of);
+            tab.preview_move(to, only_marked, ready, &rating_of);
             (tab.visible != before, tab.position())
         };
         match position {
@@ -1227,11 +1254,22 @@ impl Loupe {
         };
     }
 
-    /// Switches the active tab between grid and loupe without reloading the tab, so the
-    /// thumbnails and their cache survive a visit to the loupe (ADR 0011 §4.2). The loupe opens on
-    /// the visible images (`open_folder`); with nothing visible it does not open. Returns
+    /// Switches the active tab between the contact sheet and the preview (the loupe) without
+    /// reloading the tab, so the thumbnails and their cache survive a visit to the preview (ADR
+    /// 0011 §4.2). The preview opens on the visible images (`open_folder`), on the first marked
+    /// image when "only the marked" is on and the current one is not marked; with nothing visible
+    /// it does not open. The window follows in `sync_preview_window` (full screen, T111). Returns
     /// the current image's position in the visible list, so the grid can scroll to it.
     fn switch_mode(&mut self, mode: ViewMode) -> Option<usize> {
+        let only_marked = self.settings.shell.filmstrip_marked;
+        if mode == ViewMode::Loupe
+            && let Some(tab) = self.tabs.active_mut()
+            && !tab.visible.is_empty()
+            && tab.mode != ViewMode::Loupe
+        {
+            // With "only the marked" the preview opens on a marked image (U3-Q3, T111).
+            tab.preview_start(only_marked);
+        }
         let tab = self.tabs.active().cloned()?;
         if mode == ViewMode::Loupe && tab.visible.is_empty() {
             return None;
@@ -1396,115 +1434,24 @@ impl Loupe {
                             egui::pos2(cell_rect.center().x, cell_rect.min.y + image_size * 0.5),
                             egui::vec2(image_size, image_size),
                         );
-                        let rating = shown_rating(&self.metadata, cwd.as_deref(), path);
-                        let marked = tab.selection.is_marked(index);
-                        if marked {
-                            painter.rect_filled(cell_rect, 0.0, MARKED_FILL);
-                        }
-                        painter.rect_filled(image_rect, 0.0, image_area::CELL);
-                        match self.thumb_grid.state(index) {
-                            CellState::Ready => {
-                                if let Some(texture) = self.thumb_textures.get(&index) {
-                                    let size = texture.size_vec2();
-                                    let scale = (image_size / size.x.max(1.0))
-                                        .min(image_size / size.y.max(1.0));
-                                    let fitted = size * scale;
-                                    let image_rect =
-                                        egui::Rect::from_center_size(image_rect.center(), fitted);
-                                    painter.image(
-                                        texture.id(),
-                                        image_rect,
-                                        egui::Rect::from_min_max(
-                                            egui::pos2(0.0, 0.0),
-                                            egui::pos2(1.0, 1.0),
-                                        ),
-                                        egui::Color32::WHITE,
-                                    );
-                                }
-                            }
-                            CellState::Failed(error) => {
-                                let text = if error == "ingen förhandsvisning" {
-                                    error
-                                } else {
-                                    let shortened: String = error.chars().take(32).collect();
-                                    if error.chars().count() > 32 {
-                                        format!("{shortened}…")
-                                    } else {
-                                        shortened
-                                    }
-                                };
-                                painter.text(
-                                    image_rect.center(),
-                                    egui::Align2::CENTER_CENTER,
-                                    text,
-                                    egui::FontId::proportional(12.0),
-                                    image_area::TEXT,
-                                );
-                            }
-                            CellState::Missing | CellState::Requested => {}
-                        }
-                        if rating.is_some_and(|rating| rating.stars == Some(-1)) {
-                            painter.rect_filled(
-                                image_rect,
-                                0.0,
-                                egui::Color32::from_rgba_unmultiplied(0, 0, 0, 102),
-                            );
-                        }
-
-                        let name = path
-                            .file_name()
-                            .map(|name| name.to_string_lossy().into_owned())
-                            .unwrap_or_else(|| path.display().to_string());
                         let label_rect = egui::Rect::from_min_max(
                             egui::pos2(cell_rect.min.x, cell_rect.max.y - GRID_LABEL_HEIGHT),
                             cell_rect.max,
                         );
-                        let pill = label_pill(label_rect);
-                        let label = rating.and_then(|rating| rating.label.as_deref());
-                        let color = label.and_then(label_color);
-                        if let Some(color) = color {
-                            painter.rect_filled(pill, pill.height() * 0.5, color);
-                        }
-                        let text_color = if color.is_some() {
-                            LABEL_TEXT
-                        } else {
-                            image_area::TEXT
-                        };
-                        let glyphs = star_glyphs(rating.and_then(|rating| rating.stars));
-                        let glyph_width = paint_rating_glyphs(
+                        paint_cell(
                             &painter,
-                            egui::pos2(pill.min.x + 4.0, label_rect.min.y),
-                            label_rect.height(),
-                            &glyphs,
-                            text_color,
+                            CellRects {
+                                cell: cell_rect,
+                                image: image_rect,
+                                label: label_rect,
+                            },
+                            path,
+                            shown_rating(&self.metadata, cwd.as_deref(), path),
+                            tab.selection.is_marked(index),
+                            index == tab.current,
+                            self.thumb_grid.state(index),
+                            self.thumb_textures.get(&index),
                         );
-                        painter.with_clip_rect(label_rect).text(
-                            egui::pos2(pill.min.x + 4.0 + glyph_width + 4.0, label_rect.center().y),
-                            egui::Align2::LEFT_CENTER,
-                            name,
-                            egui::FontId::proportional(12.0),
-                            text_color,
-                        );
-
-                        // One frame colour for the current cell and the marked cells (owner,
-                        // 2026-11-13): a marked cell has its outline outside the cell, the current
-                        // cell inside, so a current marked cell shows both.
-                        if marked {
-                            painter.rect_stroke(
-                                cell_rect,
-                                0.0,
-                                egui::Stroke::new(2.0, MARKED_BLUE),
-                                egui::StrokeKind::Outside,
-                            );
-                        }
-                        if index == tab.current {
-                            painter.rect_stroke(
-                                cell_rect,
-                                0.0,
-                                egui::Stroke::new(2.0, MARKED_BLUE),
-                                egui::StrokeKind::Inside,
-                            );
-                        }
                         let response = ui.interact(
                             cell_rect,
                             ui.make_persistent_id(("grid-cell", index)),
@@ -1956,6 +1903,18 @@ impl Loupe {
         if minimized == Some(true) {
             return;
         }
+        // The preview's full screen is not the window's state (T111): nothing is taken while the
+        // preview is shown, nor after it closed until the system reports the window as it was.
+        if self.window_before.is_some() {
+            return;
+        }
+        if let Some((expected, frames)) = self.window_settling {
+            if fullscreen != Some(expected) && frames > 0 {
+                self.window_settling = Some((expected, frames - 1));
+                return;
+            }
+            self.window_settling = None;
+        }
         let shell = &mut self.settings.shell;
         if let Some(fullscreen) = fullscreen {
             shell.fullscreen = fullscreen;
@@ -2042,29 +2001,424 @@ impl Loupe {
     /// Follows the inspector's image every frame, also while the inspector is collapsed, so the
     /// Exif summary and the metadata cache know how long the image has been the current one
     /// (ADR 0017 §2.1, T110). Each section asks for its read only while the right column and the
-    /// section are open; the metadata waits while the metadata window is open. Called after the
-    /// frame's keys, so an image changed by a key is followed in the same frame.
+    /// section are open (in the preview: the preview's column and its Info, T111); the metadata
+    /// waits while the metadata window is open. Called after the frame's keys, so an image changed
+    /// by a key is followed in the same frame.
     fn follow_inspector(&mut self, ctx: &egui::Context) {
         let cwd = std::env::current_dir().ok();
         let image = inspector_subject(self.tabs.active(), cwd.as_deref());
         let shell = self.settings.shell;
         let column_open = !shell.columns_hidden && shell.right_column == ColumnState::Open;
+        // In the preview its own column's Info is read with the same rules, and there is no
+        // metadata section (T111).
+        let in_preview = self.in_preview();
+        let info_shown = if in_preview {
+            preview_info_shown(&shell)
+        } else {
+            column_open && shell.inspector_info == ColumnState::Open
+        };
         let now = Instant::now();
-        let exif_wait = self.exif.request(
-            image.as_deref(),
-            column_open && shell.inspector_info == ColumnState::Open,
-            now,
-            &mut self.exif_reader,
-        );
+        let exif_wait = self
+            .exif
+            .request(image.as_deref(), info_shown, now, &mut self.exif_reader);
         let metadata_wait = self.metadata.inspector_request(
             image.as_deref(),
-            column_open && shell.inspector_metadata == ColumnState::Open,
+            !in_preview && column_open && shell.inspector_metadata == ColumnState::Open,
             self.metadata_window.is_some(),
             now,
             &mut self.metadata_worker,
         );
         if let Some(wait) = exif_wait.into_iter().chain(metadata_wait).min() {
             ctx.request_repaint_after(wait);
+        }
+    }
+
+    /// Whether the active tab shows the preview (ADR 0017 §2.2, T111).
+    fn in_preview(&self) -> bool {
+        self.tabs
+            .active()
+            .is_some_and(|tab| tab.mode == ViewMode::Loupe)
+    }
+
+    /// The window follows the preview (U3-Q1, U3-Q6, T111): when the preview opens, the window's
+    /// state is kept and the window goes full screen; when it closes, the window returns to that
+    /// state (full screen if F11 had made it so, else maximized or its position and size).
+    /// `switch_mode` opens and closes the preview; this follows it at the end of the frame, also
+    /// when a file path opened the preview.
+    fn sync_preview_window(&mut self) {
+        match (self.in_preview(), self.window_before) {
+            (true, None) => {
+                self.window_before = Some(WindowBefore::of(&self.settings.shell));
+                self.window_settling = None;
+                self.viewport_commands
+                    .push(egui::ViewportCommand::Fullscreen(true));
+            }
+            (false, Some(before)) => {
+                self.window_before = None;
+                self.window_settling = Some((before.fullscreen, WINDOW_SETTLE_FRAMES));
+                match before.restore() {
+                    Restore::StayFullscreen => {}
+                    Restore::Maximized => {
+                        self.viewport_commands
+                            .push(egui::ViewportCommand::Fullscreen(false));
+                        self.viewport_commands
+                            .push(egui::ViewportCommand::Maximized(true));
+                    }
+                    Restore::Placed(window) => {
+                        self.viewport_commands
+                            .push(egui::ViewportCommand::Fullscreen(false));
+                        self.viewport_commands
+                            .push(egui::ViewportCommand::OuterPosition(egui::pos2(
+                                window.x as f32,
+                                window.y as f32,
+                            )));
+                        self.viewport_commands
+                            .push(egui::ViewportCommand::InnerSize(egui::vec2(
+                                window.width as f32,
+                                window.height as f32,
+                            )));
+                    }
+                    Restore::Normal => {
+                        self.viewport_commands
+                            .push(egui::ViewportCommand::Fullscreen(false));
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// `S` and the filmstrip's toggle: "only the marked" on ↔ off (U3-Q3, T111).
+    fn toggle_only_marked(&mut self) {
+        let shell = &mut self.settings.shell;
+        shell.filmstrip_marked = !shell.filmstrip_marked;
+    }
+
+    /// The thumbnail worker in the preview (§5, U3-Q4, T111): it runs only while the filmstrip is
+    /// shown and the shown image is drawn (`thumbnail_gate`); a step pauses it until the new image
+    /// is drawn. Called at the end of the frame, with the status of the frame just drawn.
+    fn gate_thumbnails(&mut self) {
+        if !self.in_preview() {
+            return;
+        }
+        let run = preview_parts(&self.settings.shell).filmstrip
+            && thumbnail_gate(&self.last_frame_status) == ThumbGate::Run;
+        if run {
+            self.thumb_worker.resume();
+        } else {
+            self.thumb_worker.pause();
+        }
+    }
+
+    /// The preview (ADR 0017 §2.2, U3-Q1, T111): only the title line (today's loupe status line
+    /// with the RAW/JPEG control), the image area, the preview's right column and the filmstrip
+    /// under both; `H` leaves the title line and the image.
+    fn draw_preview(&mut self, ui: &mut egui::Ui, blocked: bool, commands: &mut Vec<Command>) {
+        let parts = preview_parts(&self.settings.shell);
+        egui::Panel::top("preview-title").show(ui, |ui| {
+            self.draw_status_bar(ui, blocked, commands);
+        });
+        if parts.filmstrip {
+            egui::Panel::bottom("filmstrip")
+                .resizable(false)
+                .show(ui, |ui| self.draw_filmstrip(ui, blocked));
+        }
+        match parts.column {
+            Some(ColumnState::Open) => self.draw_preview_column(ui, blocked),
+            // The strip is drawn whenever the column is collapsed; its button opens the column.
+            Some(ColumnState::Collapsed)
+                if collapsed_column(ui, "preview-column-collapsed", false) && !blocked =>
+            {
+                self.settings.shell.preview_column = ColumnState::Open;
+            }
+            Some(ColumnState::Collapsed) | None => {}
+        }
+        let fill = ui.visuals().panel_fill;
+        egui::CentralPanel::default()
+            .frame(egui::Frame::NONE.fill(fill))
+            .show(ui, |ui| self.draw(ui));
+    }
+
+    /// The preview's right column (§2.2, U3-Q2, U3-Q5, T111): resizable and collapsible as the
+    /// main window's columns, with the shown image's file name, Info (T110's Exif rows from the
+    /// same reader) and Zoom (the zoom as a text, and buttons and a check box that call the same
+    /// function as their keys). After a click no widget keeps the keyboard.
+    fn draw_preview_column(&mut self, ui: &mut egui::Ui, blocked: bool) {
+        let shell = self.settings.shell;
+        let window_width = ui.ctx().content_rect().width();
+        let (min, max) = column_width_range(window_width);
+        let cwd = std::env::current_dir().ok();
+        let image = inspector_subject(self.tabs.active(), cwd.as_deref());
+        let zoom = self.last_zoom;
+        let mut anchor_at_pointer = self.anchor_at_pointer;
+        let exif = &self.exif;
+        let mut actions = Vec::new();
+        let mut toggled = [false, false];
+        let shown = egui::Panel::right("preview-column")
+            .resizable(true)
+            .default_size(clamp_column_width(
+                shell.preview_column_width as f32,
+                window_width,
+            ))
+            .size_range(min..=max)
+            .show(ui, |ui| {
+                ui.add_enabled_ui(!blocked, |ui| {
+                    let collapse = ui
+                        .horizontal(|ui| {
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                ui.small_button(shell_text(ShellText::CollapseRight))
+                                    .on_hover_text(preview_text(PreviewText::CollapseColumn))
+                                    .clicked()
+                            })
+                            .inner
+                        })
+                        .inner;
+                    egui::ScrollArea::vertical()
+                        .id_salt("preview-column-scroll")
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| {
+                            let Some(path) = image.as_deref() else {
+                                column_note(ui, &inspector_text(&InspectorText::NoImage));
+                                return;
+                            };
+                            let file_name = path.file_name().map_or_else(
+                                || path.display().to_string(),
+                                |name| name.to_string_lossy().into_owned(),
+                            );
+                            ui.add(
+                                egui::Label::new(egui::RichText::new(file_name).strong()).wrap(),
+                            );
+                            ui.add_space(PANEL_ROW_SPACING);
+                            let info =
+                                egui::CollapsingHeader::new(inspector_text(&InspectorText::Info))
+                                    .id_salt("preview-info")
+                                    .open(Some(shell.preview_info == ColumnState::Open))
+                                    .show(ui, |ui| draw_exif_rows(ui, &exif.shown(path)));
+                            let zoom_section =
+                                egui::CollapsingHeader::new(preview_text(PreviewText::ZoomSection))
+                                    .id_salt("preview-zoom")
+                                    .open(Some(shell.preview_zoom == ColumnState::Open))
+                                    .show(ui, |ui| {
+                                        if let Some((zoom, scale)) = zoom {
+                                            ui.add(
+                                                egui::Label::new(zoom_value_text(zoom, scale))
+                                                    .wrap(),
+                                            );
+                                        }
+                                        ui.horizontal_wrapped(|ui| {
+                                            for (text, action) in [
+                                                (PreviewText::Fit, Action::Fit),
+                                                (PreviewText::ToggleZoom, Action::ToggleZoom),
+                                                (PreviewText::ZoomIn, Action::ZoomStep(1)),
+                                                (PreviewText::ZoomOut, Action::ZoomStep(-1)),
+                                            ] {
+                                                if ui.button(preview_text(text)).clicked() {
+                                                    actions.push(action);
+                                                }
+                                            }
+                                        });
+                                        if ui
+                                            .checkbox(
+                                                &mut anchor_at_pointer,
+                                                preview_text(PreviewText::ZoomAtPointer),
+                                            )
+                                            .changed()
+                                        {
+                                            actions.push(Action::ToggleAnchor);
+                                        }
+                                    });
+                            toggled = [
+                                info.header_response.clicked(),
+                                zoom_section.header_response.clicked(),
+                            ];
+                        });
+                    collapse
+                })
+                .inner
+            });
+        self.settings.shell.preview_column_width =
+            shown.response.rect.width().round().max(0.0) as u32;
+        if blocked {
+            return;
+        }
+        let clicked = shown.inner || toggled.contains(&true) || !actions.is_empty();
+        if shown.inner {
+            self.settings.shell.preview_column = ColumnState::Collapsed;
+        }
+        if toggled[0] {
+            self.settings.shell.preview_info = self.settings.shell.preview_info.toggled();
+        }
+        if toggled[1] {
+            self.settings.shell.preview_zoom = self.settings.shell.preview_zoom.toggled();
+        }
+        // Each button and the check box call the same function as their key; a zoom uses the
+        // image's centre, as from the menu (T109).
+        for action in actions {
+            self.act(action, None);
+        }
+        if clicked {
+            let ctx = ui.ctx();
+            if let Some(id) = ctx.memory(|memory| memory.focused()) {
+                ctx.memory_mut(|memory| memory.surrender_focus(id));
+            }
+        }
+    }
+
+    /// The filmstrip (§2.2, §5, U3-Q3, U3-Q4, T111): the toggle "only the marked" at its left
+    /// end, then one row of cells of the tab's visible list (or only the marked images) in the
+    /// contact sheet's order, drawn as the contact sheet draws them, scrolled so the current image
+    /// is in view after every step; the mouse wheel scrolls it sideways and a click shows that
+    /// image (a step: the marking is kept). Thumbnails come from the contact sheet's worker, grid
+    /// and textures, for the cells in view plus a margin, and only while the thumbnail gate lets
+    /// the worker run.
+    fn draw_filmstrip(&mut self, ui: &mut egui::Ui, blocked: bool) {
+        let ctx = ui.ctx().clone();
+        let only_marked = self.settings.shell.filmstrip_marked;
+        let Some((current, list)) = self
+            .tabs
+            .active()
+            .map(|tab| (tab.current, tab.preview_list(only_marked)))
+        else {
+            return;
+        };
+        let count = list.len();
+        let cwd = std::env::current_dir().ok();
+        let mut toggle = false;
+        let mut clicked = None;
+        ui.horizontal(|ui| {
+            ui.add_enabled_ui(!blocked, |ui| {
+                toggle = ui
+                    .selectable_label(only_marked, preview_text(PreviewText::OnlyMarked))
+                    .on_hover_text(preview_text(PreviewText::OnlyMarkedHover))
+                    .clicked();
+            });
+            let height = FILMSTRIP_IMAGE_HEIGHT + FILMSTRIP_LABEL_HEIGHT;
+            let (rect, response) = ui.allocate_exact_size(
+                egui::vec2(ui.available_width().max(0.0), height),
+                egui::Sense::click(),
+            );
+            let width = rect.width();
+            // Scrolled to the current image after every step, the list's change included; the
+            // wheel scrolls sideways in between.
+            let followed = (current, count);
+            if self.filmstrip_followed != Some(followed) {
+                self.filmstrip_followed = Some(followed);
+                if let Some(position) = list.iter().position(|&index| index == current) {
+                    self.filmstrip_offset =
+                        scroll_target(count, position, self.filmstrip_offset, width);
+                }
+            }
+            if response.hovered() && !blocked {
+                let delta = ctx.input(|input| input.smooth_scroll_delta);
+                self.filmstrip_offset -= delta.x + delta.y;
+            }
+            self.filmstrip_offset = clamp_offset(self.filmstrip_offset, count, width);
+            let offset = self.filmstrip_offset;
+
+            // The thumbnails of the cells in view plus a margin (§5), only while the worker may
+            // run (the status of the last drawn frame; the gate is set again after this frame).
+            let keep = filmstrip_range(count, offset, width, FILMSTRIP_MARGIN);
+            let keep_files = list.get(keep).unwrap_or(&[]);
+            // Only these cells are copied out of the tab (file index, path, marked), not its
+            // whole list of files: this runs on every frame of a step.
+            let cells: Vec<(usize, PathBuf, bool)> = self
+                .tabs
+                .active()
+                .map(|tab| {
+                    keep_files
+                        .iter()
+                        .filter_map(|&index| {
+                            let path = tab.files.get(index)?.clone();
+                            Some((index, path, tab.selection.is_marked(index)))
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            let cell_of = |index: usize| cells.iter().find(|(file, _, _)| *file == index);
+            if thumbnail_gate(&self.last_frame_status) == ThumbGate::Run {
+                self.thumb_worker
+                    .set_visible(index_span(keep_files.iter().copied()));
+                // The contact sheet's cell size, so the same cached thumbnails are used.
+                let cell = request_cell(self.thumb_size, ctx.pixels_per_point());
+                for index in self.thumb_grid.to_request_indexes(keep_files, cell) {
+                    if let Some((_, path, _)) = cell_of(index) {
+                        self.thumb_worker.request(ThumbnailRequest {
+                            generation: self.thumb_generation,
+                            index,
+                            path: path.clone(),
+                            cell,
+                        });
+                        self.thumb_grid.mark_requested(index, cell);
+                    }
+                }
+                self.poll_thumbnails(&ctx);
+                for index in self.thumb_grid.forget_not_in(keep_files) {
+                    self.thumb_textures.remove(&index);
+                }
+                if keep_files
+                    .iter()
+                    .any(|&index| matches!(self.thumb_grid.state(index), CellState::Requested))
+                {
+                    ctx.request_repaint_after(Duration::from_millis(50));
+                }
+            }
+
+            let painter = ui.painter_at(rect);
+            painter.rect_filled(rect, 0.0, BACKGROUND);
+            let stride = FILMSTRIP_CELL_WIDTH + FILMSTRIP_SPACING;
+            let shown = filmstrip_range(count, offset, width, 0);
+            for (position, &index) in shown.clone().zip(list.get(shown).unwrap_or(&[])) {
+                let Some((_, path, marked)) = cell_of(index) else {
+                    continue;
+                };
+                let left = rect.min.x + position as f32 * stride - offset;
+                let cell_rect = egui::Rect::from_min_size(
+                    egui::pos2(left, rect.min.y),
+                    egui::vec2(FILMSTRIP_CELL_WIDTH, height),
+                );
+                let image_rect = egui::Rect::from_min_size(
+                    cell_rect.min,
+                    egui::vec2(FILMSTRIP_CELL_WIDTH, FILMSTRIP_IMAGE_HEIGHT),
+                );
+                let label_rect = egui::Rect::from_min_max(
+                    egui::pos2(cell_rect.min.x, image_rect.max.y),
+                    cell_rect.max,
+                );
+                paint_cell(
+                    &painter,
+                    CellRects {
+                        cell: cell_rect,
+                        image: image_rect,
+                        label: label_rect,
+                    },
+                    path,
+                    shown_rating(&self.metadata, cwd.as_deref(), path),
+                    *marked,
+                    index == current,
+                    self.thumb_grid.state(index),
+                    self.thumb_textures.get(&index),
+                );
+            }
+            if response.clicked()
+                && !blocked
+                && let Some(pointer) = response.interact_pointer_pos()
+            {
+                clicked = hit_test(count, offset, pointer.x - rect.min.x)
+                    .and_then(|position| list.get(position).copied());
+            }
+        });
+        if toggle {
+            self.toggle_only_marked();
+            if let Some(id) = ctx.memory(|memory| memory.focused()) {
+                ctx.memory_mut(|memory| memory.surrender_focus(id));
+            }
+        }
+        // A click is a step to that image (point 7 of T111): it never changes the marking.
+        if let Some(index) = clicked
+            && index != current
+        {
+            self.loupe_move(LoupeMove::To(index));
+            ctx.request_repaint();
         }
     }
 
@@ -2561,10 +2915,14 @@ impl Loupe {
                 .map(|f| f.path().to_path_buf())
                 .find(|p| !p.as_os_str().is_empty())
         });
-        // Not while the metadata window holds the program (D16): its image must not change.
+        // Not while the metadata window holds the program (D16): its image must not change. A drop
+        // on the preview closes it first, then opens as in the contact sheet (T111).
         if let Some(path) = dropped
             && self.metadata_window.is_none()
         {
+            if self.in_preview() {
+                self.switch_mode(ViewMode::Grid);
+            }
             self.open(&path, true);
         }
         let key_actions: Vec<(Option<TabAction>, egui::Key, bool, bool, bool, bool)> =
@@ -2591,17 +2949,21 @@ impl Loupe {
         let titles = self.tabs.titles();
         let active = self.tabs.active_index();
         let mut selected = None;
-        egui::ScrollArea::horizontal()
-            .id_salt("folder-tabs")
-            .show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    for (index, title) in titles.iter().enumerate() {
-                        if ui.selectable_label(index == active, title).clicked() {
-                            selected = Some(index);
+        // The preview shows no folder tabs (U3-Q1, T111).
+        let mode_before = self.tabs.active().map(|tab| tab.mode);
+        if mode_before != Some(ViewMode::Loupe) {
+            egui::ScrollArea::horizontal()
+                .id_salt("folder-tabs")
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        for (index, title) in titles.iter().enumerate() {
+                            if ui.selectable_label(index == active, title).clicked() {
+                                selected = Some(index);
+                            }
                         }
-                    }
+                    });
                 });
-            });
+        }
         // The command bar or a menu command may have asked for a scroll (T109).
         let mut scroll_to = self.scroll_request.take();
         if let Some(index) = selected
@@ -2645,6 +3007,25 @@ impl Loupe {
                     }
                     Some(DialogKey::Start) => start_import = true,
                     _ => {}
+                }
+                continue;
+            }
+            // The preview's own keys first (ADR 0017 §2.2, §2.4, U3-Q1–Q3, T111): S, H and I,
+            // and nothing for Ctrl+O, Ctrl+I, Ctrl+W, the tab keys and F11. Not while a text
+            // field has the keyboard or a dialog holds the program.
+            if self.in_preview()
+                && let Some(preview_key) = preview_key_action(key, ctrl, shift, alt)
+            {
+                if !ctx.egui_wants_keyboard_input() && !self.dialog_open() {
+                    match preview_key {
+                        PreviewKey::OnlyMarked => self.toggle_only_marked(),
+                        PreviewKey::HideParts => toggle_preview_hidden(&mut self.settings.shell),
+                        PreviewKey::ToggleColumn => {
+                            toggle_preview_column(&mut self.settings.shell);
+                        }
+                        PreviewKey::Nothing => {}
+                    }
+                    ctx.request_repaint();
                 }
                 continue;
             }
@@ -2732,6 +3113,17 @@ impl Loupe {
         if start_import {
             self.request_import_start();
         }
+        // The preview opened or closed by a key this frame (T111): the next frame draws the new
+        // layout, and the contact sheet scrolls to the last shown image there.
+        let mode_after = self.tabs.active().map(|tab| tab.mode);
+        if mode_after != mode_before {
+            if mode_after == Some(ViewMode::Grid) {
+                self.scroll_request = scroll_to;
+            }
+            ui.painter().rect_filled(full, 0.0, BACKGROUND);
+            ctx.request_repaint();
+            return;
+        }
         if self
             .tabs
             .active()
@@ -2801,6 +3193,7 @@ impl Loupe {
         self.textures.sync(&ctx, &self.core, max_side);
         let frame = self.core.frame(view_px(rect, ppp));
         self.last_frame_status = frame.status.clone();
+        self.last_zoom = Some((frame.zoom, frame.scale));
         // The tab's current image comes from the tab, not from `frame.pos`: every step goes through
         // the tab and the core follows it (ADR 0014 §4.4). The status line counts the whole folder.
         let total = self.tabs.active().map_or(0, |tab| tab.files.len());
@@ -3183,6 +3576,133 @@ fn label_pill(row: egui::Rect) -> egui::Rect {
     row.shrink2(egui::vec2(LABEL_PILL_INSET_X, LABEL_PILL_INSET_Y))
 }
 
+/// The parts of one thumbnail cell: the whole cell, the image area and the label bar.
+#[derive(Clone, Copy)]
+struct CellRects {
+    cell: egui::Rect,
+    image: egui::Rect,
+    label: egui::Rect,
+}
+
+/// One thumbnail cell of the contact sheet or the filmstrip (ADR 0011, ADR 0013, ADR 0014 §5.1):
+/// the faint fill of a marked cell, the thumbnail fitted into the image area (aspect kept), or the
+/// error of a failed one, the dimming of a rejected image, the label bar (label pill, stars, file
+/// name), then the frames: a marked cell has its outline outside the cell, the current cell
+/// inside, so a current marked cell shows both (owner, 2026-11-13).
+#[allow(clippy::too_many_arguments)] // one cell, with everything it shows
+fn paint_cell(
+    painter: &egui::Painter,
+    rects: CellRects,
+    path: &Path,
+    rating: Option<&Rating>,
+    marked: bool,
+    current: bool,
+    state: CellState,
+    texture: Option<&egui::TextureHandle>,
+) {
+    let CellRects {
+        cell: cell_rect,
+        image: image_rect,
+        label: label_rect,
+    } = rects;
+    if marked {
+        painter.rect_filled(cell_rect, 0.0, MARKED_FILL);
+    }
+    painter.rect_filled(image_rect, 0.0, image_area::CELL);
+    match state {
+        CellState::Ready => {
+            if let Some(texture) = texture {
+                let size = texture.size_vec2();
+                let scale = (image_rect.width() / size.x.max(1.0))
+                    .min(image_rect.height() / size.y.max(1.0));
+                let fitted = size * scale;
+                let fitted_rect = egui::Rect::from_center_size(image_rect.center(), fitted);
+                painter.image(
+                    texture.id(),
+                    fitted_rect,
+                    egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                    egui::Color32::WHITE,
+                );
+            }
+        }
+        CellState::Failed(error) => {
+            let text = if error == "ingen förhandsvisning" {
+                error
+            } else {
+                let shortened: String = error.chars().take(32).collect();
+                if error.chars().count() > 32 {
+                    format!("{shortened}…")
+                } else {
+                    shortened
+                }
+            };
+            painter.text(
+                image_rect.center(),
+                egui::Align2::CENTER_CENTER,
+                text,
+                egui::FontId::proportional(12.0),
+                image_area::TEXT,
+            );
+        }
+        CellState::Missing | CellState::Requested => {}
+    }
+    if rating.is_some_and(|rating| rating.stars == Some(-1)) {
+        painter.rect_filled(
+            image_rect,
+            0.0,
+            egui::Color32::from_rgba_unmultiplied(0, 0, 0, 102),
+        );
+    }
+
+    let name = path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.display().to_string());
+    let pill = label_pill(label_rect);
+    let label = rating.and_then(|rating| rating.label.as_deref());
+    let color = label.and_then(label_color);
+    if let Some(color) = color {
+        painter.rect_filled(pill, pill.height() * 0.5, color);
+    }
+    let text_color = if color.is_some() {
+        LABEL_TEXT
+    } else {
+        image_area::TEXT
+    };
+    let glyphs = star_glyphs(rating.and_then(|rating| rating.stars));
+    let glyph_width = paint_rating_glyphs(
+        painter,
+        egui::pos2(pill.min.x + 4.0, label_rect.min.y),
+        label_rect.height(),
+        &glyphs,
+        text_color,
+    );
+    painter.with_clip_rect(label_rect).text(
+        egui::pos2(pill.min.x + 4.0 + glyph_width + 4.0, label_rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        name,
+        egui::FontId::proportional(12.0),
+        text_color,
+    );
+
+    if marked {
+        painter.rect_stroke(
+            cell_rect,
+            0.0,
+            egui::Stroke::new(2.0, MARKED_BLUE),
+            egui::StrokeKind::Outside,
+        );
+    }
+    if current {
+        painter.rect_stroke(
+            cell_rect,
+            0.0,
+            egui::Stroke::new(2.0, MARKED_BLUE),
+            egui::StrokeKind::Inside,
+        );
+    }
+}
+
 fn paint_rating_glyphs(
     painter: &egui::Painter,
     origin: egui::Pos2,
@@ -3509,28 +4029,34 @@ impl eframe::App for Loupe {
         // (D16), and the import and settings windows keep the program as their keys do.
         let blocked = self.dialog_open();
         let mut commands = Vec::new();
-        let mut filter_choice = None;
-        egui::Panel::top("menu-bar").show(ui, |ui| {
-            ui.add_enabled_ui(!blocked, |ui| {
-                self.draw_menu_bar(ui, &mut commands, &mut filter_choice);
+        if self.in_preview() {
+            // Only the preview: no menu bar, command bar, tabs, status bar or side columns
+            // (U3-Q1, T111).
+            self.draw_preview(ui, blocked, &mut commands);
+        } else {
+            let mut filter_choice = None;
+            egui::Panel::top("menu-bar").show(ui, |ui| {
+                ui.add_enabled_ui(!blocked, |ui| {
+                    self.draw_menu_bar(ui, &mut commands, &mut filter_choice);
+                });
             });
-        });
-        egui::Panel::top("command-bar").show(ui, |ui| {
-            ui.add_enabled_ui(!blocked, |ui| self.draw_command_bar(ui, &mut commands));
-        });
-        egui::Panel::bottom("status-bar").show(ui, |ui| {
-            self.draw_status_bar(ui, blocked, &mut commands);
-        });
-        if let Some(filter) = filter_choice
-            && !blocked
-        {
-            self.apply_filter(&ctx, filter);
+            egui::Panel::top("command-bar").show(ui, |ui| {
+                ui.add_enabled_ui(!blocked, |ui| self.draw_command_bar(ui, &mut commands));
+            });
+            egui::Panel::bottom("status-bar").show(ui, |ui| {
+                self.draw_status_bar(ui, blocked, &mut commands);
+            });
+            if let Some(filter) = filter_choice
+                && !blocked
+            {
+                self.apply_filter(&ctx, filter);
+            }
+            self.draw_columns(ui);
+            let fill = ui.visuals().panel_fill;
+            egui::CentralPanel::default()
+                .frame(egui::Frame::NONE.fill(fill))
+                .show(ui, |ui| self.draw(ui));
         }
-        self.draw_columns(ui);
-        let fill = ui.visuals().panel_fill;
-        egui::CentralPanel::default()
-            .frame(egui::Frame::NONE.fill(fill))
-            .show(ui, |ui| self.draw(ui));
         self.draw_import_dialog(&ctx);
         self.draw_settings_window(&ctx);
         self.draw_metadata_window(&ctx);
@@ -3541,6 +4067,11 @@ impl eframe::App for Loupe {
             ctx.request_repaint();
         }
         self.follow_inspector(&ctx);
+        self.gate_thumbnails();
+        self.sync_preview_window();
+        for command in self.viewport_commands.drain(..) {
+            ctx.send_viewport_cmd(command);
+        }
         if self.next_status != self.status_bar {
             self.status_bar = self.next_status.clone();
             ctx.request_repaint();
@@ -3563,6 +4094,11 @@ impl eframe::App for Loupe {
                 .set_description(metadata::unsaved_list_text(&unsaved.lines()))
                 .set_buttons(rfd::MessageButtons::Ok)
                 .show();
+        }
+        // Closed in the preview: the window as it was before the preview, not its full screen
+        // (U3-Q6, T111).
+        if let Some(before) = self.window_before {
+            self.settings.shell = before.saved(&self.settings.shell);
         }
         // The window, full screen and the columns as they are now (ADR 0017 §2.5, T109); a
         // failure is only logged, no dialog at exit.
@@ -3859,6 +4395,12 @@ fn run(options: Options) -> Result<(), String> {
                 ratings_read: false,
                 last_ratings_ready: false,
                 last_frame_status: Status::Empty,
+                last_zoom: None,
+                window_before: None,
+                window_settling: None,
+                viewport_commands: Vec::new(),
+                filmstrip_offset: 0.0,
+                filmstrip_followed: None,
                 monitor_profile,
             };
             if let Some(p) = path {

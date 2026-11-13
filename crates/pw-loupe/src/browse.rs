@@ -11,13 +11,16 @@ use crate::filter::{matches, nearest_visible, visible};
 use crate::grid::{Navigation, navigate};
 use crate::tabs::Tab;
 
-/// A step in the loupe, over the visible list.
+/// A step in the preview (the loupe), over the visible list or, with "only the marked", over the
+/// marked images (ADR 0017 §2.2, T111).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LoupeMove {
     Next,
     Previous,
     First,
     Last,
+    /// A click in the filmstrip: the image of file index `0`, if it is visible.
+    To(usize),
 }
 
 impl Tab {
@@ -150,36 +153,104 @@ impl Tab {
         self.current
     }
 
-    /// A step in the loupe, as `go()` in `app.js`: first `refilter` keeping the current image (it
-    /// drops images whose rating changed without a key, see `refilter_before_move`), then the step
-    /// over that visible list. A step clears the marking (Q5). Ends with `refilter` keeping the new
-    /// current image (§4.2). With nothing visible, nothing changes. Returns the new current file
-    /// index.
+    /// A step in the preview, as `go()` in `app.js`: `preview_move` without "only the marked".
     pub fn loupe_move(
         &mut self,
         to: LoupeMove,
         ratings_ready: bool,
         rating_of: &dyn Fn(&Path) -> Option<Rating>,
     ) -> usize {
+        self.preview_move(to, false, ratings_ready, rating_of)
+    }
+
+    /// A step in the preview (arrows, Page Up/Down, Home, End, a click in the filmstrip), as `go()`
+    /// in `app.js`: first `refilter` keeping the current image (it drops images whose rating
+    /// changed without a key, see `refilter_before_move`), then the step over that visible list.
+    /// With `only_marked` and at least two visible images marked, the step goes only between the
+    /// marked images (Home and End to the first and last marked); otherwise over every visible
+    /// image. A step does not change the marking (ADR 0017 §2.2, owner 2026-11-13; this replaces
+    /// ADR 0014 Q5 for the preview). Ends with `refilter` keeping the new current image (§4.2).
+    /// With nothing visible, or a click on an image that is not visible, nothing changes. Returns
+    /// the new current file index.
+    pub fn preview_move(
+        &mut self,
+        to: LoupeMove,
+        only_marked: bool,
+        ratings_ready: bool,
+        rating_of: &dyn Fn(&Path) -> Option<Rating>,
+    ) -> usize {
         if !self.refilter_before_move(ratings_ready, rating_of) {
             return self.current;
         }
-        let Some(last) = self.visible.len().checked_sub(1) else {
+        let Some(index) = self.step_target(to, only_marked) else {
             return self.current;
         };
-        let from = self.position().unwrap_or(0).min(last);
-        let to = match to {
-            LoupeMove::Next => from.saturating_add(1).min(last),
-            LoupeMove::Previous => from.saturating_sub(1),
-            LoupeMove::First => 0,
-            LoupeMove::Last => last,
-        };
-        let Some(&index) = self.visible.get(to) else {
-            return self.current;
-        };
-        self.selection.click(index);
         self.current = index;
         self.refilter(ratings_ready, rating_of, Some(self.current));
+        self.current
+    }
+
+    /// The images the preview steps through and its filmstrip shows (ADR 0017 §2.2, U3-Q3), as
+    /// file indexes in display order: with `only_marked` and at least two visible images marked,
+    /// the marked ones; otherwise every visible image.
+    pub fn preview_list(&self, only_marked: bool) -> Vec<usize> {
+        if only_marked {
+            let marked = self.selection.marked_in(&self.visible);
+            if marked.len() >= 2 {
+                return marked;
+            }
+        }
+        self.visible.clone()
+    }
+
+    /// The image a step lands on, as a file index; `None` when nothing is visible or a click hits
+    /// an image that is not in the list.
+    fn step_target(&self, to: LoupeMove, only_marked: bool) -> Option<usize> {
+        let list = self.preview_list(only_marked);
+        if let LoupeMove::To(index) = to {
+            return list.contains(&index).then_some(index);
+        }
+        let last = list.len().checked_sub(1)?;
+        let position = match list.iter().position(|&index| index == self.current) {
+            Some(position) => match to {
+                LoupeMove::Next => position.saturating_add(1).min(last),
+                LoupeMove::Previous => position.saturating_sub(1),
+                LoupeMove::First => 0,
+                LoupeMove::Last => last,
+                LoupeMove::To(_) => position,
+            },
+            // The current image is not in the list (it is not marked): the nearest marked image
+            // in the direction of the step, by display order; none there, no step (no wrap).
+            None => {
+                let from = self.position().unwrap_or(0);
+                let shown = |index: &usize| self.visible.iter().position(|v| v == index);
+                match to {
+                    LoupeMove::Next => list
+                        .iter()
+                        .position(|index| shown(index).is_some_and(|at| at > from))?,
+                    LoupeMove::Previous => list
+                        .iter()
+                        .rposition(|index| shown(index).is_some_and(|at| at < from))?,
+                    LoupeMove::First | LoupeMove::To(_) => 0,
+                    LoupeMove::Last => last,
+                }
+            }
+        };
+        list.get(position).copied()
+    }
+
+    /// The image the preview opens on (ADR 0017 §2.2, U3-Q3): when the current image is not in
+    /// `preview_list` (with `only_marked`, at least two visible images marked and the current one
+    /// not marked), the first marked image in the visible order becomes current; otherwise the
+    /// current image stays. Returns the current file
+    /// index.
+    pub fn preview_start(&mut self, only_marked: bool) -> usize {
+        let list = self.preview_list(only_marked);
+        if !list.contains(&self.current)
+            && let Some(&first) = list.first()
+        {
+            self.current = first;
+        }
         self.current
     }
 }
@@ -509,7 +580,7 @@ mod tests {
     }
 
     #[test]
-    fn loupe_moves_step_within_the_filter_and_clear_the_marking() {
+    fn loupe_moves_step_within_the_filter_and_keep_the_marking() {
         let (mut tabs, ratings) = setup();
         set(
             &mut tabs,
@@ -533,8 +604,8 @@ mod tests {
         t.loupe_move(LoupeMove::Previous, true, &r);
         assert_eq!(
             t.selection.count(),
-            0,
-            "a step in the loupe clears the marking (Q5)"
+            2,
+            "a step in the preview keeps the marking (ADR 0017 §2.2, T111)"
         );
 
         // Nothing visible: a step changes nothing and shows no hidden image.
@@ -836,5 +907,122 @@ mod tests {
             [1, 2],
             "≥ 3 and Red + Ingen etikett"
         );
+    }
+
+    /// The `setup` folder of 12 images with 2, 5 and 9 marked (a click, then Ctrl+clicks), current 9.
+    fn three_marked(tabs: &mut Tabs, ratings: &HashMap<PathBuf, Rating>) {
+        let r = of(ratings);
+        let t = tab(tabs);
+        t.click(2, false, false, true, &r);
+        t.click(5, true, false, true, &r);
+        t.click(9, true, false, true, &r);
+        assert_eq!(t.selection.marked_in(&t.visible), [2, 5, 9]);
+    }
+
+    #[test]
+    fn a_step_in_the_preview_keeps_the_marking() {
+        let (mut tabs, ratings) = setup();
+        three_marked(&mut tabs, &ratings);
+        let r = of(&ratings);
+        let t = tab(&mut tabs);
+        for to in [
+            LoupeMove::Next,
+            LoupeMove::Previous,
+            LoupeMove::Last,
+            LoupeMove::First,
+            LoupeMove::To(7),
+        ] {
+            t.preview_move(to, false, true, &r);
+            assert_eq!(t.selection.marked_in(&t.visible), [2, 5, 9], "{to:?}");
+        }
+        assert_eq!(t.current, 7, "a click in the filmstrip shows that image");
+        // A click on an image that is not visible changes nothing.
+        set(
+            &mut tabs,
+            &ratings,
+            filter(
+                StarFilter::All,
+                LabelFilter::only(LabelChoice::Label("Red")),
+            ),
+        );
+        let t = tab(&mut tabs);
+        let current = t.current;
+        assert_eq!(t.preview_move(LoupeMove::To(7), false, true, &r), current);
+    }
+
+    #[test]
+    fn with_only_the_marked_steps_go_only_between_the_marked() {
+        let (mut tabs, ratings) = setup();
+        three_marked(&mut tabs, &ratings);
+        let r = of(&ratings);
+        let t = tab(&mut tabs);
+        assert_eq!(t.preview_list(true), [2, 5, 9]);
+        assert_eq!(t.preview_move(LoupeMove::First, true, true, &r), 2);
+        assert_eq!(t.preview_move(LoupeMove::Next, true, true, &r), 5);
+        assert_eq!(t.preview_move(LoupeMove::Next, true, true, &r), 9);
+        assert_eq!(
+            t.preview_move(LoupeMove::Next, true, true, &r),
+            9,
+            "no wrap"
+        );
+        assert_eq!(t.preview_move(LoupeMove::Previous, true, true, &r), 5);
+        assert_eq!(t.preview_move(LoupeMove::Previous, true, true, &r), 2);
+        assert_eq!(t.preview_move(LoupeMove::Previous, true, true, &r), 2);
+        assert_eq!(t.preview_move(LoupeMove::Last, true, true, &r), 9);
+        assert_eq!(t.preview_move(LoupeMove::First, true, true, &r), 2);
+        // A click on an unmarked image while only the marked are shown changes nothing.
+        assert_eq!(t.preview_move(LoupeMove::To(3), true, true, &r), 2);
+        assert_eq!(t.selection.marked_in(&t.visible), [2, 5, 9]);
+        // From an unmarked current image, the next and previous marked ones by display order.
+        t.preview_move(LoupeMove::To(7), false, true, &r);
+        assert_eq!(t.preview_move(LoupeMove::Next, true, true, &r), 9);
+        t.preview_move(LoupeMove::To(7), false, true, &r);
+        assert_eq!(t.preview_move(LoupeMove::Previous, true, true, &r), 5);
+        // No marked image after it: Next stays (no wrap); Previous goes to the last marked.
+        t.preview_move(LoupeMove::To(11), false, true, &r);
+        assert_eq!(t.preview_move(LoupeMove::Next, true, true, &r), 11);
+        assert_eq!(t.preview_move(LoupeMove::Previous, true, true, &r), 9);
+        t.preview_move(LoupeMove::To(0), false, true, &r);
+        assert_eq!(t.preview_move(LoupeMove::Previous, true, true, &r), 0);
+    }
+
+    #[test]
+    fn with_fewer_than_two_marked_only_the_marked_steps_through_all() {
+        let (mut tabs, ratings) = setup();
+        let r = of(&ratings);
+        let t = tab(&mut tabs);
+        t.click(4, false, false, true, &r);
+        t.click(6, true, false, true, &r);
+        t.click(4, true, false, true, &r);
+        assert_eq!(t.selection.marked_in(&t.visible), [6]);
+        assert_eq!(t.preview_list(true), t.visible);
+        assert_eq!(t.preview_move(LoupeMove::First, true, true, &r), 0);
+        assert_eq!(t.preview_move(LoupeMove::Next, true, true, &r), 1);
+        assert_eq!(t.preview_move(LoupeMove::Next, true, true, &r), 2);
+        assert_eq!(t.preview_move(LoupeMove::Last, true, true, &r), 11);
+        assert_eq!(t.preview_move(LoupeMove::Previous, true, true, &r), 10);
+        assert_eq!(t.preview_move(LoupeMove::To(3), true, true, &r), 3);
+    }
+
+    #[test]
+    fn the_preview_opens_on_the_first_marked_image_when_the_current_one_is_not_marked() {
+        let (mut tabs, ratings) = setup();
+        three_marked(&mut tabs, &ratings);
+        let r = of(&ratings);
+        let t = tab(&mut tabs);
+        t.preview_move(LoupeMove::To(7), false, true, &r);
+        assert_eq!(
+            t.preview_start(false),
+            7,
+            "without only the marked it stays"
+        );
+        assert_eq!(
+            t.preview_start(true),
+            2,
+            "the first marked in the visible order"
+        );
+        t.preview_move(LoupeMove::To(5), false, true, &r);
+        assert_eq!(t.preview_start(true), 5, "a marked current image stays");
+        assert_eq!(t.selection.marked_in(&t.visible), [2, 5, 9]);
     }
 }

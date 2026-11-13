@@ -425,7 +425,7 @@ pub enum Command {
     Label(&'static str),
     ClearLabel,
     ToggleMode,
-    /// The contact sheet ↔ the loupe.
+    /// The preview open ↔ closed (Visa ▸ Förhandsvisning, G; ADR 0017 §2.2, T111).
     ToggleView,
     Fit,
     ToggleZoom,
