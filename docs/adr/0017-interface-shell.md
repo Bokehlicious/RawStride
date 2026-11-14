@@ -18,6 +18,8 @@
 - **Recorded 2026-11-13 (no new decision):** the owner's answers to the questions of U1, U2, U3
   and U12, approved in the tasks T109–T112, are in §6.1; the inspector's Metadata section shows no
   origin line under its values (T114, §2.1).
+- **Recorded 2026-11-14 (no new decision):** the owner's answers to the questions of U10 (T123) are
+  in §6.1; the section names of §2.3.1 are English in the program (GR14, U10-Q1).
 - Date: 2026-11-12; amended 2026-11-13
 - Related:
   - [GUI_REQUIREMENTS.md](../GUI_REQUIREMENTS.md) (GR1–GR13), in particular GR6 (keyboard first),
@@ -370,7 +372,7 @@ without the study notes as a template.
 
 ### 6.1 Questions of the steps (answered by the owner, 2026-11-13: every proposal approved)
 
-Asked in the tasks of stage A (T109–T112, `docs/tasks/done/`) and answered there; recorded here so
+Asked in the tasks of stage A (T109–T112, `docs/tasks/done/`) and of U10 (T123, 2026-11-14) and answered there; recorded here so
 the decisions do not live only in the tasks.
 
 | # | Decision (as proposed) |
@@ -396,6 +398,12 @@ the decisions do not live only in the tasks.
 | U12-Q3 | No wrap: the button and key are disabled at the first and last image that has metadata support |
 | U12-Q4 | "Spara ändringarna?" (Spara / Släng / Avbryt) is asked for a move, for Escape and for Avbryt; OK is unchanged; "Spara och nästa" never asks; D16's "Släng ändringarna?" goes away |
 | U12-Q5 | After a write with notices the window stays and shows them; the move happens on the next press of a move button or key, not on any key |
+| U10-Q1 | The sections are named **Content**, **Creator and Rights**, **Time and Place**, **Assignment**, later **Licence (PLUS)** and **Rating and Label** (GR14; in place of the Swedish names of §2.3.1) |
+| U10-Q2 | Person Shown, the organisation fields, Subject Code and Scene Code are one line separated by commas, as Keywords (T108); an entry cannot hold a comma for now |
+| U10-Q3 | Copyrighted (`xmpRights:Marked`) is a check box writing `True` or `False`; a file without it shows it unchecked |
+| U10-Q4 | Genre in Assignment is the structure `Iptc4xmpExt:Genre` and comes in U11; Intellectual Genre (legacy) stays under Other Metadata |
+| U10-Q5 | Rating and Label come into the window in a later small task (U10c), written through the rating path, not the form's edits |
+| U10-Q6 | Each section's open or collapsed state is remembered in `settings.txt`; all open at first |
 
 ## 7. Steps
 
