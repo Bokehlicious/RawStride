@@ -153,5 +153,5 @@ leaves the stored `IPTCDigest` out of date (`Validate`: `IPTCDigest is not curre
 | I10n | T107 | One metadata window locked to its image, opened with `M`: the 22 fields edited directly with OK and Avbryt, the conflicts, warnings, the other metadata and the notices (D16; replaces the panel of T103 and the window of T105) | §5.1, §6.2, §9 | now; not with T106 |
 | I10o | T108 | Nyckelord and Fotograf on one line separated by commas; the reason "filen är öppen i ett annat program" when a write is refused because another program holds the file (owner's check of T107) | §5.1, §9 | now |
 | I11 | – | PLUS fields as fixed choice lists | §11, Q9 | the PLUS controlled vocabulary was read 2026-11-14 (ADR 0017 plan, R1); built with U10d |
-| I12 | – | Real-file tests with the owner's level-C samples (changed 2026-11-14: Photo Mechanic files, a Xiaomi 17 Ultra DNG, mixed Photo Mechanic / Lightroom Classic archive files) | §12, Q11 | when the owner provides the samples |
+| I12 | T127 | Real-file tests with the owner's level-C samples (changed 2026-11-14: Photo Mechanic files, a Xiaomi 17 Ultra DNG, mixed Photo Mechanic / Lightroom Classic archive files) | §12, Q11 | now (samples in `PW_TESTDATA\level-c`, 2026-11-14) |
 | I13 | – | Documentation after milestone 8 | – | last |
