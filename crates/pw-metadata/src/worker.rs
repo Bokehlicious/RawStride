@@ -2,22 +2,22 @@
 //!
 //! A rating is written through the write plan and the safe write (ADR 0007 §9, §15; T91):
 //! [`ExifTool::write_rating_safely`] with the [`WriteSetup`] given at the start. Without a setup
-//! (the program could not open its write journal) every rating write fails with [`NO_JOURNAL`]
-//! and nothing is written; reading ratings works either way.
+//! (the program could not open its write journal) every rating write fails with
+//! [`WriteError::NoJournal`] and nothing is written; reading ratings works either way.
 //!
 //! The ExifTool version (ADR 0007 §11, D9; T94): the worker thread starts ExifTool at once and
 //! asks [`ExifTool::version`] each time it starts a process. The first result is kept for
 //! [`MetadataWorker::exiftool_version`]. While the running process is older than
 //! [`MIN_EXIFTOOL_VERSION`] or its version could not be read, every rating write fails with
-//! [`EXIFTOOL_TOO_OLD`] and nothing is written; reading ratings works as before.
+//! [`WriteError::ExifToolTooOld`] and nothing is written; reading ratings works as before.
 //!
 //! All metadata, edits and options (ADR 0007 I10e; T98):
 //! - [`MetadataWorker::read_metadata`] reads and reconciles all metadata of one image
 //!   ([`ExifTool::read_metadata`]) and answers with [`Event::MetadataRead`].
 //! - [`MetadataWorker::write_edits`] writes the editor's edits through
 //!   [`ExifTool::write_edits_safely`] and answers with [`Event::EditsWritten`]. It fails as a
-//!   rating write does: [`NO_JOURNAL`] without a setup, [`EXIFTOOL_TOO_OLD`] with a too old
-//!   ExifTool.
+//!   rating write does: [`WriteError::NoJournal`] without a setup, [`WriteError::ExifToolTooOld`]
+//!   with a too old ExifTool.
 //! - [`MetadataWorker::set_options`] changes the [`EditOptions`] without an event. The worker
 //!   starts with the setup's options (the default without a setup); every request queued after
 //!   `set_options` uses the new options for rating writes, edits and reads (the `fallback`).
@@ -39,10 +39,10 @@ use crate::{ExifTool, Rating, Result, WriteError};
 
 const REQUEST_CAPACITY: usize = 8;
 
-/// The text of [`WriteError::Other`] for a rating write when the worker has no [`WriteSetup`].
+/// The text of [`WriteError::NoJournal`]: a write when the worker has no [`WriteSetup`].
 pub const NO_JOURNAL: &str = "the write journal could not be opened";
 
-/// The text of [`WriteError::Other`] for a rating write while the running ExifTool is older than
+/// The text of [`WriteError::ExifToolTooOld`]: a write while the running ExifTool is older than
 /// [`MIN_EXIFTOOL_VERSION`] or its version could not be read (D9).
 pub const EXIFTOOL_TOO_OLD: &str = "ExifTool is older than 12.67";
 
@@ -148,7 +148,7 @@ pub struct MetadataWorker {
 
 impl MetadataWorker {
     /// Starts a worker using `exiftool` from PATH. `setup` is `None` when the write journal could
-    /// not be opened; rating writes then fail with [`NO_JOURNAL`].
+    /// not be opened; rating writes then fail with [`WriteError::NoJournal`].
     pub fn start(setup: Option<WriteSetup>) -> Result<Self> {
         Self::start_with("exiftool", &[], setup)
     }
@@ -371,10 +371,8 @@ fn handle(
         }
         Request::Write { id, path, rating } => {
             let result = match (setup, running) {
-                (None, _) => Err(WriteError::Other(NO_JOURNAL.to_string())),
-                (Some(_), Some(running)) if !running.may_write => {
-                    Err(WriteError::Other(EXIFTOOL_TOO_OLD.to_string()))
-                }
+                (None, _) => Err(WriteError::NoJournal),
+                (Some(_), Some(running)) if !running.may_write => Err(WriteError::ExifToolTooOld),
                 (Some(setup), Some(running)) => running
                     .tool
                     .write_rating_safely(&path, &rating, options, &*setup.checks, &setup.journal)
@@ -401,10 +399,8 @@ fn handle(
         }
         Request::WriteEdits { id, path, edits } => {
             let result = match (setup, running) {
-                (None, _) => Err(WriteError::Other(NO_JOURNAL.to_string())),
-                (Some(_), Some(running)) if !running.may_write => {
-                    Err(WriteError::Other(EXIFTOOL_TOO_OLD.to_string()))
-                }
+                (None, _) => Err(WriteError::NoJournal),
+                (Some(_), Some(running)) if !running.may_write => Err(WriteError::ExifToolTooOld),
                 (Some(setup), Some(running)) => running
                     .tool
                     .write_edits_safely(&path, &edits, options, &*setup.checks, &setup.journal)
@@ -697,10 +693,7 @@ mod tests {
         let mut worker =
             MetadataWorker::start_with(&program, &args, None).expect("worker should start");
 
-        assert_eq!(
-            write_result(&mut worker, &raw),
-            Err(WriteError::Other(NO_JOURNAL.to_string()))
-        );
+        assert_eq!(write_result(&mut worker, &raw), Err(WriteError::NoJournal));
         assert!(!folder.path().join("TN0001.xmp").exists());
     }
 
@@ -720,7 +713,7 @@ mod tests {
                 &image,
                 vec![set_text("photoshop:Headline", "Rubrik")]
             ),
-            Err(WriteError::Other(NO_JOURNAL.to_string()))
+            Err(WriteError::NoJournal)
         );
         assert_eq!(
             std::fs::read(&image).expect("read the file"),
@@ -789,7 +782,7 @@ mod tests {
 
         assert_eq!(
             write_result(&mut worker, &raw),
-            Err(WriteError::Other(EXIFTOOL_TOO_OLD.to_string()))
+            Err(WriteError::ExifToolTooOld)
         );
         assert_eq!(
             std::fs::read(&sidecar).expect("read the sidecar"),
@@ -798,6 +791,34 @@ mod tests {
         assert_eq!(
             read_result(&mut worker, std::slice::from_ref(&raw)),
             Ok(HashMap::new())
+        );
+    }
+
+    #[test]
+    fn an_old_exiftool_refuses_edits_with_the_typed_kind() {
+        let folder = TempDir::new("version-old-edits");
+        let journal = TempDir::new("version-old-edits-journal");
+        let image = folder.path().join("bild.jpg");
+        std::fs::write(&image, b"not really a jpeg").expect("write the fake JPEG");
+        let mut worker = start_with_version("12.40", journal.path());
+        assert!(matches!(
+            wait_for_version(&worker, Duration::from_secs(10)),
+            Some(Ok(_))
+        ));
+
+        let result = edits_result(
+            &mut worker,
+            &image,
+            vec![set_text("photoshop:Headline", "Headline")],
+        );
+        assert_eq!(result, Err(WriteError::ExifToolTooOld));
+        assert_eq!(
+            result.err().map(|error| error.to_string()).as_deref(),
+            Some(EXIFTOOL_TOO_OLD)
+        );
+        assert_eq!(
+            std::fs::read(&image).expect("read the file"),
+            b"not really a jpeg"
         );
     }
 
@@ -814,7 +835,7 @@ mod tests {
 
         assert_eq!(
             write_result(&mut worker, &raw),
-            Err(WriteError::Other(EXIFTOOL_TOO_OLD.to_string()))
+            Err(WriteError::ExifToolTooOld)
         );
         assert_eq!(
             read_result(&mut worker, std::slice::from_ref(&raw)),
@@ -1156,5 +1177,212 @@ mod tests {
             assert_eq!(value(&before, "photoshop:City"), text("€"));
             assert_eq!(value(&after, "photoshop:City"), text("\u{80}"));
         }
+    }
+
+    // --- no Swedish letters in the crate's non-test string literals (T118, as T117's check) ---
+
+    /// The letters that only a Swedish text has.
+    const SWEDISH_LETTERS: [char; 6] = ['å', 'ä', 'ö', 'Å', 'Ä', 'Ö'];
+
+    /// `source` with every top-level `#[cfg(test)]` item blanked (its lines kept, empty, so the
+    /// line numbers stay), and the files those items declare (`mod name;` or `#[path = "…"]`).
+    fn non_test_code(source: &str) -> (String, Vec<String>) {
+        let source = source.replace("\r\n", "\n");
+        let lines: Vec<&str> = source.lines().collect();
+        let mut kept = Vec::with_capacity(lines.len());
+        let mut declared = Vec::new();
+        let mut at = 0;
+        while at < lines.len() {
+            if lines[at] != "#[cfg(test)]" {
+                kept.push(lines[at]);
+                at += 1;
+                continue;
+            }
+            let start = at;
+            at += 1;
+            let mut path = None;
+            while at < lines.len() && lines[at].starts_with("#[") {
+                if let Some(file) = lines[at]
+                    .strip_prefix("#[path = \"")
+                    .and_then(|rest| rest.strip_suffix("\"]"))
+                {
+                    path = Some(file.rsplit('/').next().unwrap_or(file).to_string());
+                }
+                at += 1;
+            }
+            let item = lines.get(at).copied().unwrap_or("");
+            if let Some(name) = item.strip_prefix("mod ").and_then(|r| r.strip_suffix(';')) {
+                declared.push(path.unwrap_or_else(|| format!("{name}.rs")));
+            } else if item.ends_with('{') {
+                while at < lines.len() && lines[at] != "}" {
+                    at += 1;
+                }
+            }
+            at += 1;
+            kept.extend(std::iter::repeat_n("", at.min(lines.len()) - start));
+        }
+        (kept.join("\n"), declared)
+    }
+
+    /// The places in `code` where a string literal holds a Swedish letter, as "file:line";
+    /// comments, character literals and lifetimes are skipped.
+    fn swedish_letters_in_literals(file: &str, code: &str) -> Vec<String> {
+        let chars: Vec<char> = code.chars().collect();
+        let mut found = Vec::new();
+        let mut line = 1;
+        let mut at = 0;
+        // Moves past `chars[at]`, counting lines.
+        let step = |at: &mut usize, line: &mut usize| {
+            if chars[*at] == '\n' {
+                *line += 1;
+            }
+            *at += 1;
+        };
+        while at < chars.len() {
+            match chars[at] {
+                '/' if chars.get(at + 1) == Some(&'/') => {
+                    while at < chars.len() && chars[at] != '\n' {
+                        step(&mut at, &mut line);
+                    }
+                }
+                '/' if chars.get(at + 1) == Some(&'*') => {
+                    while at < chars.len() && !(chars[at] == '*' && chars.get(at + 1) == Some(&'/'))
+                    {
+                        step(&mut at, &mut line);
+                    }
+                    at += 2;
+                }
+                '\'' if chars.get(at + 1) == Some(&'\\') => {
+                    // An escaped character literal: up to its closing quote.
+                    at += 2;
+                    while at < chars.len() && chars[at] != '\'' {
+                        at += 1;
+                    }
+                    at += 1;
+                }
+                '\'' if chars.get(at + 2) == Some(&'\'') => at += 3,
+                // A raw string `r"…"` or `r#"…"#`: no escapes inside.
+                'r' if matches!(chars.get(at + 1), Some('"') | Some('#'))
+                    && !chars
+                        .get(at.wrapping_sub(1))
+                        .is_some_and(|c| c.is_alphanumeric() || *c == '_') =>
+                {
+                    let mut hashes = 0;
+                    at += 1;
+                    while chars.get(at) == Some(&'#') {
+                        hashes += 1;
+                        at += 1;
+                    }
+                    if chars.get(at) != Some(&'"') {
+                        continue;
+                    }
+                    at += 1;
+                    loop {
+                        if at >= chars.len() {
+                            break;
+                        }
+                        if chars[at] == '"' && (1..=hashes).all(|n| chars.get(at + n) == Some(&'#'))
+                        {
+                            at += 1 + hashes;
+                            break;
+                        }
+                        if SWEDISH_LETTERS.contains(&chars[at]) {
+                            found.push(format!("{file}:{line}"));
+                        }
+                        step(&mut at, &mut line);
+                    }
+                }
+                '"' => {
+                    at += 1;
+                    while at < chars.len() && chars[at] != '"' {
+                        if chars[at] == '\\' {
+                            step(&mut at, &mut line);
+                        } else if SWEDISH_LETTERS.contains(&chars[at]) {
+                            found.push(format!("{file}:{line}"));
+                        }
+                        if at < chars.len() {
+                            step(&mut at, &mut line);
+                        }
+                    }
+                    at += 1;
+                }
+                _ => step(&mut at, &mut line),
+            }
+        }
+        found.dedup();
+        found
+    }
+
+    /// Adds the `.rs` files under `folder`, with their sources, to `out`, sorted by path.
+    fn rust_sources(folder: &std::path::Path, out: &mut Vec<(std::path::PathBuf, String)>) {
+        let mut entries: Vec<std::path::PathBuf> = std::fs::read_dir(folder)
+            .unwrap_or_else(|error| panic!("read {}: {error}", folder.display()))
+            .map(|entry| entry.unwrap_or_else(|error| panic!("{error}")).path())
+            .collect();
+        entries.sort();
+        for path in entries {
+            if path.is_dir() {
+                rust_sources(&path, out);
+            } else if path.extension().is_some_and(|extension| extension == "rs") {
+                let source = std::fs::read_to_string(&path)
+                    .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+                out.push((path, source));
+            }
+        }
+    }
+
+    #[test]
+    fn the_check_finds_a_swedish_letter_in_a_non_test_string_literal() {
+        let source = "// \"Stäng\" in a comment\n\
+                      #[cfg(test)]\n\
+                      mod test_support;\n\
+                      fn a() -> &'static str {\n\
+                      let c = 'ä';\n\
+                      \"Close\"\n\
+                      }\n\
+                      fn b() -> String { format!(\"Öppna {x}\") }\n\
+                      #[cfg(test)]\n\
+                      #[path = \"fixture_file.rs\"]\n\
+                      mod fixture;\n\
+                      const R: &str = r#\"Mål\"#;\n\
+                      #[cfg(test)]\n\
+                      mod tests {\n    \"Avbryt\";\n}\n\
+                      const S: &str = \"Källa\";\n";
+        let (code, declared) = non_test_code(source);
+        assert_eq!(declared, ["test_support.rs", "fixture_file.rs"]);
+        assert_eq!(
+            swedish_letters_in_literals("x.rs", &code),
+            ["x.rs:8", "x.rs:12", "x.rs:17"]
+        );
+    }
+
+    #[test]
+    fn the_crate_has_no_swedish_letters_in_its_non_test_string_literals() {
+        let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut files = Vec::new();
+        rust_sources(&src, &mut files);
+        assert!(files.len() > 1, "no sources found in {}", src.display());
+        let mut test_only = vec!["tests.rs".to_string()];
+        let code: Vec<(String, String)> = files
+            .iter()
+            .map(|(path, source)| {
+                let (code, declared) = non_test_code(source);
+                test_only.extend(declared);
+                let name = path.strip_prefix(&src).unwrap_or(path);
+                (name.display().to_string(), code)
+            })
+            .collect();
+        let found: Vec<String> = code
+            .iter()
+            .filter(|(name, _)| {
+                let file = name.rsplit(['/', '\\']).next().unwrap_or(name);
+                !test_only.iter().any(|test| test == file)
+            })
+            .flat_map(|(name, code)| swedish_letters_in_literals(name, code))
+            .collect();
+        assert!(
+            found.is_empty(),
+            "string literals with a Swedish letter: {found:?}"
+        );
     }
 }

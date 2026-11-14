@@ -1,4 +1,4 @@
-# T118. English messages in the lower crates — Open
+# T118. English messages in the lower crates — Done
 
 - **Starts after T117 is Done** (both change the expected texts of the same `pw-loupe` tests).
 - **Why:** English is the interface's base language (`docs/GUI_REQUIREMENTS.md` GR14, owner
@@ -58,3 +58,6 @@
 |---|---|---|
 | 2026-11-13 | Open | Added; starts after T117 |
 | 2026-11-13 | Open | Reviewer: point 4 added (the two comparisons of error texts that T116 found) |
+| 2026-11-14 | Ready for review | Agent: done. Owner approved three files outside the list: `pw-metadata/src/lib.rs` (the two `WriteError` variants), `pw-loupe/src/preview.rs` (`no_embedded_jpeg: false` in a test's struct literal), `docs/glossary.md` (five terms). check.ps1 OK: 1218 passed, 0 failed, 43 ignored |
+| 2026-11-14 | Ready for review | Reviewer: accepted, not committed. Every Swedish message of the listed files is English with the glossary's terms; shown-as-is messages are whole sentences, `Display` texts lower case without a full stop; `DecodeError::no_embedded_jpeg` and `WriteError::NoJournal` / `ExifToolTooOld` replace the two text comparisons, the user's texts unchanged; the three files outside the list were approved by the owner. Notes, not blocking: the Swedish-letter check is copied into four crates (about 200 lines each); two `pw-loupe` test names still say "swedish_text". The reviewer's `check.ps1`: fmt, test and clippy OK, 1218 passed, 0 failed, 43 ignored. Waits for the owner's approval |
+| 2026-11-14 | Done | Owner: hand check done and approved; committed by the reviewer |

@@ -85,6 +85,12 @@ pub enum WriteError {
     Locked,
     /// ExifTool refused the write for another reason; holds ExifTool's answer.
     NotWritten(String),
+    /// The worker has no write setup: the write journal could not be opened, so nothing is
+    /// written ([`NO_JOURNAL`] is its text; T118).
+    NoJournal,
+    /// The running ExifTool is older than [`MIN_EXIFTOOL_VERSION`] or its version could not be
+    /// read, so the worker refuses the write (D9; [`EXIFTOOL_TOO_OLD`] is its text; T118).
+    ExifToolTooOld,
     /// Anything else (ExifTool could not start or crashed, I/O); holds the error text.
     Other(String),
     /// The safe write (ADR 0007 §9) failed at `stage`; `original` says where the original is
@@ -146,6 +152,8 @@ impl fmt::Display for WriteError {
             WriteError::ReadOnly => write!(f, "the file is read-only"),
             WriteError::Locked => write!(f, "the file is open in another program"),
             WriteError::NotWritten(m) => write!(f, "ExifTool did not write the file: {m}"),
+            WriteError::NoJournal => f.write_str(NO_JOURNAL),
+            WriteError::ExifToolTooOld => f.write_str(EXIFTOOL_TOO_OLD),
             WriteError::Other(m) => write!(f, "{m}"),
             WriteError::NotSafe {
                 stage,
@@ -647,6 +655,18 @@ mod refused_write_tests {
             WriteError::from(Error::ExifTool("ExifTool exited unexpectedly".into())),
             WriteError::Other("ExifTool: ExifTool exited unexpectedly".into())
         );
+    }
+
+    /// The two kinds that replaced `WriteError::Other` with a fixed text (T118) keep that text.
+    #[test]
+    fn the_typed_worker_refusals_keep_their_texts() {
+        assert_eq!(WriteError::NoJournal.to_string(), crate::NO_JOURNAL);
+        assert_eq!(
+            WriteError::ExifToolTooOld.to_string(),
+            crate::EXIFTOOL_TOO_OLD
+        );
+        assert_eq!(crate::NO_JOURNAL, "the write journal could not be opened");
+        assert_eq!(crate::EXIFTOOL_TOO_OLD, "ExifTool is older than 12.67");
     }
 }
 

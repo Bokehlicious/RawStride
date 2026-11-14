@@ -686,7 +686,7 @@ mod tests {
     fn done_includes_eject_message_after_iptc_errors_as_a_normal_line() {
         let done = ImportDone {
             iptc_errors: vec!["A001.ARW: metadata error".to_string()],
-            eject: Some("Kortet matades ut.".to_string()),
+            eject: Some("E: has been ejected and can be removed.".to_string()),
             ..ImportDone::default()
         };
 
@@ -694,7 +694,7 @@ mod tests {
 
         assert_eq!(lines[1].text, "IPTC: A001.ARW: metadata error");
         assert!(lines[1].error);
-        assert_eq!(lines[2].text, "Kortet matades ut.");
+        assert_eq!(lines[2].text, "E: has been ejected and can be removed.");
         assert!(!lines[2].error);
     }
 

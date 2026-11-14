@@ -858,7 +858,7 @@ mod tests {
                 assert_eq!(error.field, Field::Source);
                 assert_eq!(
                     error.message,
-                    format!("Källan {} finns inte.", missing.display())
+                    format!("The source {} does not exist.", missing.display())
                 );
             }
             event => panic!("unexpected missing-source event: {event:?}"),
@@ -880,7 +880,7 @@ mod tests {
             } => {
                 assert_eq!(event_id, id);
                 assert_eq!(error.field, Field::Dest);
-                assert_eq!(error.message, "Välj ett mål.");
+                assert_eq!(error.message, "Choose a destination.");
             }
             event => panic!("unexpected invalid preview event: {event:?}"),
         }
@@ -896,7 +896,7 @@ mod tests {
         let id = worker.run(form, EditOptions::default()).unwrap();
 
         let done = done_event(&worker, id);
-        assert_eq!(done.error.as_deref(), Some("Välj ett mål."));
+        assert_eq!(done.error.as_deref(), Some("Choose a destination."));
         assert_eq!(done.copied, 0);
         assert!(!dirs.dest.exists());
     }

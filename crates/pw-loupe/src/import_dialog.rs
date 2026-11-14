@@ -388,7 +388,7 @@ mod tests {
         dialog.sent(13);
         let error = FieldError {
             field: Field::Source,
-            message: "Välj en källa.".to_string(),
+            message: "Choose a source.".to_string(),
         };
         dialog.apply(&ImportEvent::Previewed {
             id: 13,
@@ -615,7 +615,7 @@ mod tests {
         ));
 
         let done = ImportDone {
-            eject: Some("Kortet matades ut.".to_string()),
+            eject: Some("E: has been ejected and can be removed.".to_string()),
             ..ImportDone::default()
         };
         dialog.apply(&ImportEvent::Done {
@@ -686,7 +686,7 @@ mod tests {
         dialog.sent(15);
         let error = FieldError {
             field: Field::Folder,
-            message: "Mappmall: ogiltig".to_string(),
+            message: "Folder Template: invalid".to_string(),
         };
         dialog.apply(&ImportEvent::Previewed {
             id: 15,
@@ -807,7 +807,7 @@ mod tests {
             preview: Some(preview(1)),
             error: Some(FieldError {
                 field: Field::Dest,
-                message: "Välj ett mål.".to_string(),
+                message: "Choose a destination.".to_string(),
             }),
         };
         assert!(!dialog.can_start());

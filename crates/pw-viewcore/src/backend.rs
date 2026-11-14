@@ -33,6 +33,9 @@ pub struct DecodeError {
     pub message: String,
     /// The file's RAW data is missing or corrupt (G3). An intact preview is then never replaced.
     pub damaged: bool,
+    /// The file has no embedded JPEG to show in JPEG mode (G4; T118), so a program can say so
+    /// without reading `message`.
+    pub no_embedded_jpeg: bool,
 }
 
 impl DecodeError {
@@ -40,6 +43,7 @@ impl DecodeError {
         DecodeError {
             message: message.into(),
             damaged: false,
+            no_embedded_jpeg: false,
         }
     }
 
@@ -47,6 +51,16 @@ impl DecodeError {
         DecodeError {
             message: message.into(),
             damaged: true,
+            no_embedded_jpeg: false,
+        }
+    }
+
+    /// A file without an embedded JPEG, opened in JPEG mode (T118).
+    pub fn no_embedded_jpeg(message: impl Into<String>) -> DecodeError {
+        DecodeError {
+            message: message.into(),
+            damaged: false,
+            no_embedded_jpeg: true,
         }
     }
 }

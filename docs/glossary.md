@@ -111,6 +111,7 @@ Every other property already uses IPTC's English name in both languages.
 | förhandsbild / förhandsvisning | preview |
 | miniatyr | thumbnail |
 | färgprofil, skärmprofil | colour profile, display profile (G5) |
+| minnesbudget | memory budget ("the TIFF file is too large for the memory budget"; added by T118) |
 | kamerainformation | camera information |
 | Kamera, Objektiv, Brännvidd, Bländare, Exponeringstid, ISO, Tagen | Camera, Lens, Focal Length, Aperture, Exposure Time, ISO, Taken |
 
@@ -132,6 +133,10 @@ Every other property already uses IPTC's English name in both languages.
 | Rensa och importera | Clear and Import | |
 | Dölj, Stäng | Hide, Close | |
 | IPTC-mall, Mallen, Variabler | IPTC Template, the template, Variables | added by T117 |
+| enhet | drive | "The source is not a drive"; added by T118 |
+| mata ut, utmatat | eject, ejected | "E: has been ejected and can be removed."; added by T118 |
+| Utforskaren | File Explorer | Windows' own name; added by T118 |
+| fullständig sökväg | full path | "The source must be a full path: …"; added by T118 |
 
 ## 6. Metadata window, info and settings
 

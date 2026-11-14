@@ -227,6 +227,7 @@ mod tests {
         let error = DecodeError {
             message: "broken".to_owned(),
             damaged: true,
+            no_embedded_jpeg: false,
         };
         assert_eq!(thumbnail_gate(&Status::Error(error)), ThumbGate::Run);
         for indicator in [false, true] {

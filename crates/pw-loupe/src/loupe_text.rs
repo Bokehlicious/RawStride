@@ -131,7 +131,7 @@ pub fn error_text(e: &DecodeError, mode: Source) -> String {
     if e.damaged {
         "RAW data is missing or damaged. Switch to JPEG mode (R) to see the camera's preview."
             .to_string()
-    } else if mode == Source::Jpeg && e.message.contains("no embedded JPEG") {
+    } else if mode == Source::Jpeg && e.no_embedded_jpeg {
         "The file has no embedded JPEG. Switch to RAW mode (R).".to_string()
     } else {
         format!("The file cannot be shown: {}", e.message)
@@ -246,6 +246,27 @@ mod tests {
         assert!(error_text(&none, Source::Jpeg).contains("no embedded JPEG"));
         assert!(error_text(&DecodeError::new("boom"), Source::Raw).contains("boom"));
         assert_eq!(mode_label(Source::Jpeg), "Mode: JPEG (R)");
+    }
+
+    /// The message for a file without an embedded JPEG follows the typed kind of `pw-viewcore`
+    /// (T118), not the error's text; the texts are the same as before.
+    #[test]
+    fn the_no_embedded_jpeg_message_follows_the_typed_kind() {
+        let none = DecodeError::no_embedded_jpeg("x: the file has no embedded JPEG");
+        assert_eq!(
+            error_text(&none, Source::Jpeg),
+            "The file has no embedded JPEG. Switch to RAW mode (R)."
+        );
+        assert_eq!(
+            error_text(&none, Source::Raw),
+            "The file cannot be shown: x: the file has no embedded JPEG"
+        );
+        // the same words without the kind are an ordinary error
+        let text_only = DecodeError::new("x: the file has no embedded JPEG");
+        assert_eq!(
+            error_text(&text_only, Source::Jpeg),
+            "The file cannot be shown: x: the file has no embedded JPEG"
+        );
     }
 
     fn tiff_frame(status: Status, mode: Source) -> Frame {

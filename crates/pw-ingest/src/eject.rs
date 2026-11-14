@@ -31,7 +31,7 @@ fn eject_script(drive: &str) -> String {
 /// Ejects the drive containing `source` on Windows.
 pub fn eject(source: &Path) -> String {
     let Some(drive) = drive_of(source) else {
-        return "Källan är ingen enhet, så inget matades ut.".into();
+        return "The source is not a drive, so nothing was ejected.".into();
     };
     #[cfg(windows)]
     {
@@ -43,7 +43,7 @@ pub fn eject(source: &Path) -> String {
         const EJECT_POLL_INTERVAL: Duration = Duration::from_millis(250);
 
         let Some(system_root) = std::env::var_os("SystemRoot") else {
-            return "Utmatning kunde inte startas: miljövariabeln SystemRoot saknas.".into();
+            return "The eject could not be started: the environment variable SystemRoot is missing.".into();
         };
         let powershell = PathBuf::from(system_root)
             .join("System32")
@@ -59,10 +59,10 @@ pub fn eject(source: &Path) -> String {
                     .args(["-NoProfile", "-NonInteractive", "-Command", &script])
                     .creation_flags(CREATE_NO_WINDOW)
                     .status()
-                    .map_err(|error| format!("{drive} kunde inte matas ut: {error}"))?;
+                    .map_err(|error| format!("{drive} could not be ejected: {error}."))?;
                 if !status.success() {
                     return Err(format!(
-                        "{drive} kunde inte matas ut: PowerShell avslutades med felstatus {status}."
+                        "{drive} could not be ejected: PowerShell ended with an error ({status})."
                     ));
                 }
                 Ok(())
@@ -71,16 +71,16 @@ pub fn eject(source: &Path) -> String {
             EJECT_TIMEOUT,
             EJECT_POLL_INTERVAL,
         ) {
-            Ok(true) => format!("{drive} är utmatat och kan tas ut."),
+            Ok(true) => format!("{drive} has been ejected and can be removed."),
             Ok(false) => format!(
-                "{drive} kunde inte matas ut (används den av ett annat program?). Mata ut i Utforskaren. Antal försök: {EJECT_ATTEMPTS}."
+                "{drive} could not be ejected (is it in use by another program?). Eject it in File Explorer. Attempts: {EJECT_ATTEMPTS}."
             ),
             Err(error) => error,
         }
     }
     #[cfg(not(windows))]
     {
-        format!("Utmatning av {drive} stöds bara på Windows.")
+        format!("Ejecting {drive} is only supported on Windows.")
     }
 }
 

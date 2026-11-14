@@ -13,8 +13,7 @@ use pw_metadata::read::MetadataRead;
 use pw_metadata::safe_write::OriginalState;
 use pw_metadata::write_plan::WriteNotice;
 use pw_metadata::{
-    EXIFTOOL_TOO_OLD, MetadataWorker, NO_JOURNAL, Rating, RequestId, SubmitError, WorkerEvent,
-    WriteError, supports_rating,
+    MetadataWorker, Rating, RequestId, SubmitError, WorkerEvent, WriteError, supports_rating,
 };
 
 use crate::inspector::{INSPECTOR_POLL_INTERVAL, INSPECTOR_READ_DELAY};
@@ -807,10 +806,10 @@ fn write_error_text(error: WriteError) -> String {
         WriteError::ReadOnly => WriteReason::ReadOnly,
         WriteError::Locked => WriteReason::Locked,
         WriteError::NotWritten(_) => WriteReason::NotWritten,
-        WriteError::Other(text) if text == NO_JOURNAL => WriteReason::NoJournal,
+        WriteError::NoJournal => WriteReason::NoJournal,
         // The metadata worker refuses rating writes while ExifTool is too old or its version
         // could not be read (ADR 0007 §11, D9, T101).
-        WriteError::Other(text) if text == EXIFTOOL_TOO_OLD => WriteReason::ExifToolTooOld,
+        WriteError::ExifToolTooOld => WriteReason::ExifToolTooOld,
         WriteError::Other(text) => return text,
         WriteError::NotSafe { original, .. } => match original {
             OriginalState::Intact => WriteReason::NotSafeIntact,
@@ -1441,7 +1440,7 @@ mod tests {
     #[test]
     fn a_write_without_the_journal_gives_the_swedish_text() {
         assert_eq!(
-            write_error_text(WriteError::Other(NO_JOURNAL.into())),
+            write_error_text(WriteError::NoJournal),
             "the write log could not be opened"
         );
     }
@@ -1449,7 +1448,7 @@ mod tests {
     #[test]
     fn a_write_refused_for_an_old_exiftool_gives_the_swedish_text() {
         assert_eq!(
-            write_error_text(WriteError::Other(EXIFTOOL_TOO_OLD.into())),
+            write_error_text(WriteError::ExifToolTooOld),
             "ExifTool is too old (at least 12.67 is needed)"
         );
     }

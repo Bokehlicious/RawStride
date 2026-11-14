@@ -25,13 +25,10 @@ pub fn inside(a: &Path, b: &Path) -> bool {
 /// Parent-directory components are rejected rather than being resolved.
 pub fn resolve(p: &Path, what: &str) -> Result<PathBuf, String> {
     if !p.is_absolute() {
-        return Err(format!(
-            "{what} måste vara en fullständig sökväg: {}",
-            p.display()
-        ));
+        return Err(format!("{what} must be a full path: {}.", p.display()));
     }
     if p.components().any(|c| matches!(c, Component::ParentDir)) {
-        return Err(format!("{what} får inte innehålla \"..\": {}", p.display()));
+        return Err(format!("{what} must not contain \"..\": {}.", p.display()));
     }
     let mut existing = p;
     let mut missing = Vec::new();
@@ -71,16 +68,16 @@ mod tests {
 
     #[test]
     fn resolve_rejects_relative_and_parent_paths() {
-        assert!(resolve(Path::new("Foto"), "Målet").is_err());
+        assert!(resolve(Path::new("Foto"), "The destination").is_err());
         let up = std::env::temp_dir().join("a").join("..").join("b");
-        assert!(resolve(&up, "Målet").is_err());
+        assert!(resolve(&up, "The destination").is_err());
     }
 
     #[test]
     fn resolve_keeps_missing_folders_below_an_existing_parent() {
         let base = std::env::temp_dir();
         let wanted = base.join("pw-ingest-resolve-missing").join("2026");
-        let resolved = match resolve(&wanted, "Målet") {
+        let resolved = match resolve(&wanted, "The destination") {
             Ok(p) => p,
             Err(e) => panic!("{e}"),
         };
@@ -102,8 +99,8 @@ mod tests {
         if let Err(e) = std::fs::create_dir_all(base.join("card")) {
             panic!("{e}");
         }
-        let a = resolve(&base.join("card"), "Källan");
-        let b = resolve(&base.join(".").join("card"), "Målet");
+        let a = resolve(&base.join("card"), "The source");
+        let b = resolve(&base.join(".").join("card"), "The destination");
         match (a, b) {
             (Ok(a), Ok(b)) => assert!(inside(&a, &b) && inside(&b, &a)),
             other => panic!("{other:?}"),

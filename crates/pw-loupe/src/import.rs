@@ -753,7 +753,7 @@ mod tests {
     fn empty_source_has_source_field_error() {
         let error = ImportForm::default().validate().unwrap_err();
         assert_eq!(error.field, Field::Source);
-        assert_eq!(error.message, "Välj en källa.");
+        assert_eq!(error.message, "Choose a source.");
     }
 
     #[test]
@@ -764,7 +764,7 @@ mod tests {
 
         let error = form.validate().unwrap_err();
         assert_eq!(error.field, Field::Dest);
-        assert_eq!(error.message, "Välj ett mål.");
+        assert_eq!(error.message, "Choose a destination.");
     }
 
     #[test]
@@ -782,7 +782,7 @@ mod tests {
         assert!(
             error
                 .message
-                .contains("får inte ligga på eller över källan.")
+                .contains("must not be on or above the source.")
         );
     }
 
@@ -908,7 +908,7 @@ mod tests {
         assert_eq!(error.field, Field::Backup);
         assert_eq!(
             error.message,
-            "Backupmålet måste vara en annan mapp än målet."
+            "The backup destination must be a different folder from the destination."
         );
     }
 
