@@ -96,11 +96,12 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 | Task | Title | Status |
 |---|---|---|
 | [T127](T127-level-c-real-file-tests.md) | ADR 0007 I12: real-file tests with the level-C samples | Open |
+| [T128](T128-licence-section-plus-choice-lists.md) | ADR 0017 U10d with ADR 0007 I11: the Licence (PLUS) section with fixed choice lists | Open |
 
 ## Writing a task (owner and reviewer)
 
-- **Number:** the next free number after the highest in this folder and `done/` (T128 next).
-- **File:** `docs/tasks/T128-<a-few-words>.md`; three digits, lower case, words joined by `-`.
+- **Number:** the next free number after the highest in this folder and `done/` (T129 next).
+- **File:** `docs/tasks/T129-<a-few-words>.md`; three digits, lower case, words joined by `-`.
 - **Index:** add a row to "Open tasks" above and keep its status in step with the file's heading.
 - **When it is Done and committed:** `git mv` the file to `done/`, move its row to `done/README.md`.
 - **Owner decisions** (decisions, approved Q proposals) are written into the ADR or requirement
@@ -109,7 +110,7 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 Skeleton (the fields recent tasks use; leave out those that do not apply):
 
 ```markdown
-# T128. <Title> — Open
+# T129. <Title> — Open
 
 - **Why:** …
 - **Crates:** … **Files:** …

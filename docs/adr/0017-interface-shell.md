@@ -373,7 +373,7 @@ without the study notes as a template.
 
 ### 6.1 Questions of the steps (answered by the owner, 2026-11-13: every proposal approved)
 
-Asked in the tasks of stage A (T109–T112, `docs/tasks/done/`) and of U10, U12b and U12c (T123–T126, 2026-11-14) and answered there; recorded here so
+Asked in the tasks of stage A (T109–T112, `docs/tasks/done/`) and of U10, U12b, U12c and U10d (T123–T126, T128, 2026-11-14) and answered there; recorded here so
 the decisions do not live only in the tasks.
 
 | # | Decision (as proposed) |
@@ -422,6 +422,12 @@ the decisions do not live only in the tasks.
 | U12c-Q5 | One safe write per file (ADR 0007 §9.5); the window shows "Writing {i} of {n} …" and is locked until all have answered; then the window's image is read again |
 | U12c-Q6 | The summary: "Written to {w} of {n} images", the failed files with their reasons, and the files where an unresolved conflict was kept |
 | U12c-Q7 | The wait at program exit includes the batch's writes |
+| U10d-Q1 | The Licence (PLUS) section edits all four PLUS choice lists: Model and Property Release Status, Minor Model Age Disclosure and Data Mining, with the two release ids; Model Age stays under Other Metadata |
+| U10d-Q2 | Digital Source Type is a choice list from IPTC's NewsCodes vocabulary, saved by the reviewer in `D:\PhotoWorkflowData\references\` (R2, 2026-11-14) |
+| U10d-Q3 | The choices show the vocabularies' own English labels, the full URI as tooltip (GR14; ADR 0007 Q9 updated) |
+| U10d-Q4 | A value not in the vocabulary is shown as the extra entry "Unknown value: {uri}", selected, with a warning; never removed unless the user picks another entry (ADR 0007 §8, §11) |
+| U10d-Q5 | The Licence section's fields join "Copy All Fields", "Paste All Fields" and "Apply to All Marked", with the rules of U12b and U12c |
+| U10d-Q6 | The section keeps the name "Licence (PLUS)" (U10-Q1), although Digital Source Type is an IPTC property |
 
 ## 7. Steps
 
