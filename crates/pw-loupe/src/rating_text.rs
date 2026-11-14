@@ -41,13 +41,22 @@ pub fn label_name(label: &str) -> &str {
     label
 }
 
+/// A number of stars: "1 star" or "{n} stars" (glossary §2: singular and plural in one function).
+/// Used by the status line and the metadata window's buttons (T124).
+pub fn star_count_text(stars: u8) -> String {
+    if stars == 1 {
+        "1 star".to_owned()
+    } else {
+        format!("{stars} stars")
+    }
+}
+
 /// The status-line text of a rating, for example "Rating: 3 stars, Red".
 pub fn status_text(rating: Option<&Rating>) -> String {
     let stars = rating.and_then(|rating| rating.stars);
     let mut text = match stars {
         Some(-1) => "Rating: Rejected".to_owned(),
-        Some(1) => "Rating: 1 star".to_owned(),
-        Some(stars) if stars > 1 => format!("Rating: {stars} stars"),
+        Some(stars @ 1..) => format!("Rating: {}", star_count_text(stars.unsigned_abs())),
         _ => "Rating: Unrated".to_owned(),
     };
     if let Some(label) = rating.and_then(|rating| rating.label.as_deref()) {

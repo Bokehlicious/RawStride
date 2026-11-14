@@ -32,8 +32,8 @@ use pw_viewcore::Status;
 
 pub use browse::{LoupeMove, metadata_neighbour};
 pub use editor::{
-    EditorField, EditorForm, EditorSection, EditorText, OpenConflict, WriteReason, editor_text,
-    notice_text, write_reason_text,
+    EditorField, EditorForm, EditorSection, EditorText, OpenConflict, RatingButton, WriteReason,
+    editor_text, notice_text, write_reason_text,
 };
 pub use filter::{
     Filter, LABEL_CHOICES, LabelChoice, LabelFilter, STAR_CONDITIONS, STAR_FILTERS, StarCondition,
@@ -375,6 +375,17 @@ pub fn editor_key_action(
     }
 }
 
+/// A rating key of the metadata window (ADR 0017 U10c-Q2, T124): Alt+0–5 stars and Ctrl+0–5
+/// labels, as in the contact sheet, for the window's image. `None` with Shift or Ctrl+Alt, and
+/// for plain digits, 6–9 and `X`, which stay with the text fields. Taken before the form is drawn,
+/// as `editor_key_action`'s keys.
+pub fn editor_rating_key(key: egui::Key, ctrl: bool, shift: bool, alt: bool) -> Option<RatingKey> {
+    if shift || ctrl == alt {
+        return None;
+    }
+    rating_key_action(key, ctrl, false, alt)
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DialogKey {
     Close,
@@ -706,6 +717,51 @@ mod tests {
         for key in [K::ArrowLeft, K::ArrowRight, K::Home, K::End, K::Tab, K::M] {
             assert_eq!(editor_key_action(key, true, false, false), None, "{key:?}");
             assert_eq!(editor_key_action(key, false, false, false), None, "{key:?}");
+        }
+    }
+
+    #[test]
+    fn the_metadata_windows_rating_keys_are_alt_and_ctrl_zero_to_five() {
+        use egui::Key as K;
+        let digits = [K::Num0, K::Num1, K::Num2, K::Num3, K::Num4, K::Num5];
+        let stars = [0, 1, 2, 3, 4, 5].map(RatingKey::Stars);
+        let labels = [
+            RatingKey::ClearLabel,
+            RatingKey::Label("Red"),
+            RatingKey::Label("Yellow"),
+            RatingKey::Label("Green"),
+            RatingKey::Label("Blue"),
+            RatingKey::Label("Purple"),
+        ];
+        for ((key, star), label) in digits.into_iter().zip(stars).zip(labels) {
+            assert_eq!(editor_rating_key(key, false, false, true), Some(star));
+            assert_eq!(editor_rating_key(key, true, false, false), Some(label));
+            // Shift, Ctrl+Alt (AltGr) or a plain digit: nothing; the digit stays with the field.
+            assert_eq!(editor_rating_key(key, false, true, true), None, "{key:?}");
+            assert_eq!(editor_rating_key(key, true, true, false), None, "{key:?}");
+            assert_eq!(editor_rating_key(key, false, true, false), None, "{key:?}");
+            assert_eq!(editor_rating_key(key, true, false, true), None, "{key:?}");
+            assert_eq!(editor_rating_key(key, false, false, false), None, "{key:?}");
+        }
+        // 6–9 and X with any modifiers, and the window's own keys: nothing.
+        for key in [K::Num6, K::Num7, K::Num8, K::Num9, K::X] {
+            for (ctrl, shift, alt) in [
+                (false, false, false),
+                (true, false, false),
+                (false, false, true),
+                (false, true, false),
+                (true, false, true),
+            ] {
+                assert_eq!(
+                    editor_rating_key(key, ctrl, shift, alt),
+                    None,
+                    "{key:?} {ctrl} {shift} {alt}"
+                );
+            }
+        }
+        for key in [K::PageUp, K::PageDown, K::Enter, K::A] {
+            assert_eq!(editor_rating_key(key, true, false, false), None, "{key:?}");
+            assert_eq!(editor_rating_key(key, false, false, true), None, "{key:?}");
         }
     }
 

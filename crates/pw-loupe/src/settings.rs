@@ -53,6 +53,8 @@ const EDITOR_CONTENT: &str = "editor_content";
 const EDITOR_CREATOR_RIGHTS: &str = "editor_creator_rights";
 const EDITOR_TIME_PLACE: &str = "editor_time_place";
 const EDITOR_ASSIGNMENT: &str = "editor_assignment";
+/// The key of the metadata window's Rating and Label section (U10c-Q5, T124).
+const EDITOR_RATING_LABEL: &str = "editor_rating_label";
 /// The values of [`FILMSTRIP`] and [`FILMSTRIP_MARKED`].
 const SHOWN: &str = "shown";
 const HIDDEN: &str = "hidden";
@@ -123,11 +125,12 @@ pub struct ShellSettings {
     /// The right column and the filmstrip hidden with `H` in the preview.
     pub preview_hidden: bool,
     /// The metadata window's sections (T123, U10-Q6): Content, Creator and Rights, Time and
-    /// Place, Assignment.
+    /// Place, Assignment; Rating and Label (T124, U10c-Q5).
     pub editor_content: ColumnState,
     pub editor_creator_rights: ColumnState,
     pub editor_time_place: ColumnState,
     pub editor_assignment: ColumnState,
+    pub editor_rating_label: ColumnState,
 }
 
 impl Default for ShellSettings {
@@ -161,6 +164,7 @@ impl Default for ShellSettings {
             editor_creator_rights: ColumnState::Open,
             editor_time_place: ColumnState::Open,
             editor_assignment: ColumnState::Open,
+            editor_rating_label: ColumnState::Open,
         }
     }
 }
@@ -173,6 +177,7 @@ impl ShellSettings {
             EditorSection::CreatorRights => self.editor_creator_rights,
             EditorSection::TimePlace => self.editor_time_place,
             EditorSection::Assignment => self.editor_assignment,
+            EditorSection::RatingLabel => self.editor_rating_label,
         }
     }
 
@@ -183,6 +188,7 @@ impl ShellSettings {
             EditorSection::CreatorRights => &mut self.editor_creator_rights,
             EditorSection::TimePlace => &mut self.editor_time_place,
             EditorSection::Assignment => &mut self.editor_assignment,
+            EditorSection::RatingLabel => &mut self.editor_rating_label,
         };
         *state = state.toggled();
     }
@@ -303,17 +309,20 @@ pub fn load_settings(path: &Path) -> (Settings, Vec<String>) {
                 Some(state) => shell.inspector_metadata = state,
                 None => problems.push(bad("open or collapsed")),
             },
-            EDITOR_CONTENT | EDITOR_CREATOR_RIGHTS | EDITOR_TIME_PLACE | EDITOR_ASSIGNMENT => {
-                match parse_column(value) {
-                    Some(state) => match key {
-                        EDITOR_CONTENT => shell.editor_content = state,
-                        EDITOR_CREATOR_RIGHTS => shell.editor_creator_rights = state,
-                        EDITOR_TIME_PLACE => shell.editor_time_place = state,
-                        _ => shell.editor_assignment = state,
-                    },
-                    None => problems.push(bad("open or collapsed")),
-                }
-            }
+            EDITOR_CONTENT
+            | EDITOR_CREATOR_RIGHTS
+            | EDITOR_TIME_PLACE
+            | EDITOR_ASSIGNMENT
+            | EDITOR_RATING_LABEL => match parse_column(value) {
+                Some(state) => match key {
+                    EDITOR_CONTENT => shell.editor_content = state,
+                    EDITOR_CREATOR_RIGHTS => shell.editor_creator_rights = state,
+                    EDITOR_TIME_PLACE => shell.editor_time_place = state,
+                    EDITOR_ASSIGNMENT => shell.editor_assignment = state,
+                    _ => shell.editor_rating_label = state,
+                },
+                None => problems.push(bad("open or collapsed")),
+            },
             PREVIEW_COLUMN | PREVIEW_INFO | PREVIEW_ZOOM => match parse_column(value) {
                 Some(state) => match key {
                     PREVIEW_COLUMN => shell.preview_column = state,
@@ -413,11 +422,12 @@ fn shell_lines(shell: &ShellSettings) -> String {
     ));
     text.push_str(&format!(
         "{EDITOR_CONTENT} = {}\n{EDITOR_CREATOR_RIGHTS} = {}\n{EDITOR_TIME_PLACE} = {}\n\
-         {EDITOR_ASSIGNMENT} = {}\n",
+         {EDITOR_ASSIGNMENT} = {}\n{EDITOR_RATING_LABEL} = {}\n",
         column_value(shell.editor_content),
         column_value(shell.editor_creator_rights),
         column_value(shell.editor_time_place),
-        column_value(shell.editor_assignment)
+        column_value(shell.editor_assignment),
+        column_value(shell.editor_rating_label)
     ));
     text
 }
@@ -612,7 +622,8 @@ mod tests {
              preview_column = open\npreview_column_width = 300\npreview_info = open\n\
              preview_zoom = open\nfilmstrip = shown\nfilmstrip_marked = all\n\
              preview_hidden = false\neditor_content = open\neditor_creator_rights = open\n\
-             editor_time_place = open\neditor_assignment = open\n"
+             editor_time_place = open\neditor_assignment = open\n\
+             editor_rating_label = open\n"
         );
     }
 
@@ -788,6 +799,7 @@ mod tests {
             editor_creator_rights: ColumnState::Collapsed,
             editor_time_place: ColumnState::Collapsed,
             editor_assignment: ColumnState::Collapsed,
+            editor_rating_label: ColumnState::Collapsed,
         }
     }
 
@@ -1066,6 +1078,7 @@ mod tests {
             (EditorSection::CreatorRights, "editor_creator_rights"),
             (EditorSection::TimePlace, "editor_time_place"),
             (EditorSection::Assignment, "editor_assignment"),
+            (EditorSection::RatingLabel, "editor_rating_label"),
         ];
         for (section, key) in keys {
             let mut shell = ShellSettings::default();
@@ -1110,6 +1123,24 @@ mod tests {
         assert_eq!(shell.editor_creator_rights, ColumnState::Open);
         assert_eq!(shell.editor_time_place, ColumnState::Collapsed);
         assert_eq!(shell.editor_assignment, ColumnState::Open);
+        assert_eq!(shell.editor_rating_label, ColumnState::Open);
+    }
+
+    #[test]
+    fn the_rating_and_label_section_key_is_read_and_written() {
+        let (_dir, path) = TempDir::with_file("# RawStride\neditor_rating_label = collapsed\n");
+        let (settings, problems) = load_settings(&path);
+        assert!(problems.is_empty(), "{problems:?}");
+        assert_eq!(
+            settings.shell.editor_section(EditorSection::RatingLabel),
+            ColumnState::Collapsed
+        );
+        save_settings(&path, &settings).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains("editor_rating_label = collapsed\n"), "{text}");
+        let (loaded, problems) = load_settings(&path);
+        assert!(problems.is_empty(), "{problems:?}");
+        assert_eq!(loaded, settings);
     }
 
     #[test]
@@ -1119,6 +1150,7 @@ mod tests {
             "editor_creator_rights",
             "editor_time_place",
             "editor_assignment",
+            "editor_rating_label",
         ] {
             let (_dir, path) =
                 TempDir::with_file(&format!("# RawStride\ncreate_iim = true\n{key} = closed\n"));

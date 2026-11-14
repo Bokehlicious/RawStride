@@ -24,7 +24,6 @@
 //! `info_panel.rs`, each a whole sentence from one template with its values filled in; property
 //! names come only from [`property_label`].
 
-use pw_metadata::MIN_EXIFTOOL_VERSION;
 use pw_metadata::date::IptcDate;
 use pw_metadata::edit::{Edit, apply_edits};
 use pw_metadata::properties::{self, Occurrence, ValueKind};
@@ -33,10 +32,14 @@ use pw_metadata::reconcile::FileKind;
 use pw_metadata::validate::{Warning, validate};
 use pw_metadata::value::{Conflict, ConflictRule, LangAlt, Value};
 use pw_metadata::write_plan::WriteNotice;
+use pw_metadata::{MIN_EXIFTOOL_VERSION, Rating};
 
+use crate::filter::{LABEL_CHOICES, LabelChoice};
 use crate::info_panel::{
     ConflictValue, Language, origin_text, property_label, property_tooltip, value_text,
 };
+use crate::rating_text::{label_choice_text, label_name, star_count_text};
+use crate::ratings::RatingKey;
 
 /// The language of the default entry of a Lang Alt value.
 const X_DEFAULT: &str = "x-default";
@@ -51,16 +54,89 @@ pub enum EditorSection {
     CreatorRights,
     TimePlace,
     Assignment,
+    /// The rating and the label (T124, U10c-Q5): no fields of the form; its buttons
+    /// ([`RatingButton`]) rate through the rating path, never through the form's edits.
+    RatingLabel,
 }
 
 impl EditorSection {
     /// Every section in the order of the form.
-    pub const ALL: [EditorSection; 4] = [
+    pub const ALL: [EditorSection; 5] = [
         EditorSection::Content,
         EditorSection::CreatorRights,
         EditorSection::TimePlace,
         EditorSection::Assignment,
+        EditorSection::RatingLabel,
     ];
+}
+
+/// A button of the metadata window's Rating and Label section (ADR 0017 U10c-Q1, T124), for the
+/// window's image only.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RatingButton {
+    /// "No stars".
+    NoStars,
+    /// 1–5 stars.
+    Stars(u8),
+    Reject,
+    /// A label by its XMP name ("Red", …).
+    Label(&'static str),
+    /// "No label".
+    NoLabel,
+}
+
+impl RatingButton {
+    /// The star buttons in the order drawn: no stars, 1–5, Reject.
+    pub const STARS: [RatingButton; 7] = [
+        RatingButton::NoStars,
+        RatingButton::Stars(1),
+        RatingButton::Stars(2),
+        RatingButton::Stars(3),
+        RatingButton::Stars(4),
+        RatingButton::Stars(5),
+        RatingButton::Reject,
+    ];
+
+    /// The label buttons in the order drawn: the choices of `LABEL_CHOICES` (the five labels,
+    /// then no label), so the window and the filter list the same labels.
+    pub const LABELS: [RatingButton; LABEL_CHOICES.len()] = {
+        let mut buttons = [RatingButton::NoLabel; LABEL_CHOICES.len()];
+        let mut index = 0;
+        while index < LABEL_CHOICES.len() {
+            buttons[index] = match LABEL_CHOICES[index] {
+                LabelChoice::Label(label) => RatingButton::Label(label),
+                LabelChoice::NoLabel => RatingButton::NoLabel,
+            };
+            index += 1;
+        }
+        buttons
+    };
+
+    /// The rating key the button gives: the one its key gives (Alt+0–5, `X`, Ctrl+0–5), so
+    /// `apply`'s rules hold (a second press of the current label or of Reject clears it).
+    pub fn key(self) -> RatingKey {
+        match self {
+            RatingButton::NoStars => RatingKey::Stars(0),
+            RatingButton::Stars(stars) => RatingKey::Stars(stars),
+            RatingButton::Reject => RatingKey::Reject,
+            RatingButton::Label(label) => RatingKey::Label(label),
+            RatingButton::NoLabel => RatingKey::ClearLabel,
+        }
+    }
+
+    /// Whether the button shows the image's shown rating (`None`: not rated). An unknown label
+    /// selects no label button.
+    pub fn selected(self, rating: Option<&Rating>) -> bool {
+        let stars = rating.and_then(|rating| rating.stars);
+        let label = rating.and_then(|rating| rating.label.as_deref());
+        match self {
+            RatingButton::NoStars => matches!(stars, None | Some(0)),
+            RatingButton::Stars(n) => i8::try_from(n).is_ok_and(|n| stars == Some(n)),
+            RatingButton::Reject => stars == Some(-1),
+            RatingButton::Label(name) => label == Some(name),
+            RatingButton::NoLabel => label.is_none(),
+        }
+    }
 }
 
 /// A field of the editor (D12, ADR 0017 U10), in the order of the form.
@@ -792,6 +868,8 @@ pub enum EditorText {
     WindowTitle { file: String },
     /// The heading of a section of the form (U10-Q1).
     SectionHeading(EditorSection),
+    /// The text of a button of the Rating and Label section (T124, U10c-Q1).
+    RatingButton(RatingButton),
     /// The heading of the unresolved conflicts.
     ConflictsHeading,
     /// One radio button of a conflict: a value and its origin.
@@ -846,8 +924,16 @@ pub fn editor_text(text: &EditorText) -> String {
             EditorSection::CreatorRights => "Creator and Rights",
             EditorSection::TimePlace => "Time and Place",
             EditorSection::Assignment => "Assignment",
+            EditorSection::RatingLabel => "Rating and Label",
         }
         .to_string(),
+        EditorText::RatingButton(button) => match button {
+            RatingButton::NoStars => "No stars".to_string(),
+            RatingButton::Stars(stars) => star_count_text(*stars),
+            RatingButton::Reject => "Reject".to_string(),
+            RatingButton::Label(label) => label_name(label).to_string(),
+            RatingButton::NoLabel => label_choice_text(LabelChoice::NoLabel).to_string(),
+        },
         EditorText::ConflictsHeading => "Unresolved Conflicts".to_string(),
         EditorText::ConflictChoice { value, origin } => format!("{value} ({origin})"),
         EditorText::WarningsHeading => "Warnings".to_string(),
@@ -1111,7 +1197,7 @@ mod tests {
     #[test]
     fn every_field_is_in_its_section_in_form_order() {
         use EditorField::*;
-        let expected: [(EditorSection, &[EditorField]); 4] = [
+        let expected: [(EditorSection, &[EditorField]); 5] = [
             (
                 EditorSection::Content,
                 &[
@@ -1165,6 +1251,8 @@ mod tests {
                     SupplementalCategories,
                 ],
             ),
+            // Last, without fields: the rating path's buttons (T124, U10c-Q5).
+            (EditorSection::RatingLabel, &[]),
         ];
         assert_eq!(
             EditorSection::ALL.to_vec(),
@@ -2267,8 +2355,140 @@ mod tests {
                 "Content",
                 "Creator and Rights",
                 "Time and Place",
-                "Assignment"
+                "Assignment",
+                "Rating and Label"
             ]
+        );
+        assert_eq!(EditorSection::ALL.last(), Some(&EditorSection::RatingLabel));
+    }
+
+    /// Each button of the Rating and Label section gives its key's `RatingKey` (T124, U10c-Q1).
+    #[test]
+    fn each_rating_button_gives_the_rating_key_of_its_key() {
+        let stars: Vec<RatingKey> = RatingButton::STARS.iter().map(|b| b.key()).collect();
+        assert_eq!(
+            stars,
+            [
+                RatingKey::Stars(0),
+                RatingKey::Stars(1),
+                RatingKey::Stars(2),
+                RatingKey::Stars(3),
+                RatingKey::Stars(4),
+                RatingKey::Stars(5),
+                RatingKey::Reject,
+            ]
+        );
+        let labels: Vec<RatingKey> = RatingButton::LABELS.iter().map(|b| b.key()).collect();
+        assert_eq!(
+            labels,
+            [
+                RatingKey::Label("Red"),
+                RatingKey::Label("Yellow"),
+                RatingKey::Label("Green"),
+                RatingKey::Label("Blue"),
+                RatingKey::Label("Purple"),
+                RatingKey::ClearLabel,
+            ]
+        );
+        // The same keys as Alt+0–5 and Ctrl+0–5 in the contact sheet, and `X` for Reject.
+        use egui::Key as K;
+        let digits = [K::Num0, K::Num1, K::Num2, K::Num3, K::Num4, K::Num5];
+        for (button, key) in RatingButton::STARS.iter().zip(digits) {
+            assert_eq!(
+                Some(button.key()),
+                crate::rating_key_action(key, false, false, true)
+            );
+        }
+        assert_eq!(
+            Some(RatingButton::Reject.key()),
+            crate::rating_key_action(K::X, false, false, false)
+        );
+        let label_keys = [K::Num1, K::Num2, K::Num3, K::Num4, K::Num5, K::Num0];
+        for (button, key) in RatingButton::LABELS.iter().zip(label_keys) {
+            assert_eq!(
+                Some(button.key()),
+                crate::rating_key_action(key, true, false, false)
+            );
+        }
+    }
+
+    /// The button of the shown rating is selected; nothing else in its row (T124, U10c-Q1).
+    #[test]
+    fn the_buttons_of_the_shown_rating_are_selected() {
+        let rating = |stars: Option<i8>, label: Option<&str>| Rating {
+            stars,
+            label: label.map(str::to_string),
+        };
+        let selected = |value: Option<&Rating>, buttons: &[RatingButton]| -> Vec<RatingButton> {
+            buttons
+                .iter()
+                .copied()
+                .filter(|button| button.selected(value))
+                .collect()
+        };
+        let cases = [
+            (None, RatingButton::NoStars, RatingButton::NoLabel),
+            (
+                Some(rating(None, None)),
+                RatingButton::NoStars,
+                RatingButton::NoLabel,
+            ),
+            (
+                Some(rating(Some(3), Some("Red"))),
+                RatingButton::Stars(3),
+                RatingButton::Label("Red"),
+            ),
+            (
+                Some(rating(Some(5), Some("Purple"))),
+                RatingButton::Stars(5),
+                RatingButton::Label("Purple"),
+            ),
+            (
+                Some(rating(Some(-1), Some("Blue"))),
+                RatingButton::Reject,
+                RatingButton::Label("Blue"),
+            ),
+            (
+                Some(rating(Some(1), None)),
+                RatingButton::Stars(1),
+                RatingButton::NoLabel,
+            ),
+        ];
+        for (value, star, label) in cases {
+            assert_eq!(
+                selected(value.as_ref(), &RatingButton::STARS),
+                [star],
+                "{value:?}"
+            );
+            assert_eq!(
+                selected(value.as_ref(), &RatingButton::LABELS),
+                [label],
+                "{value:?}"
+            );
+        }
+        // A label RawStride does not offer selects no label button.
+        let orange = rating(Some(2), Some("Orange"));
+        assert!(selected(Some(&orange), &RatingButton::LABELS).is_empty());
+    }
+
+    /// The buttons' texts are the glossary's terms (§2), as the Image menu has them (T124).
+    #[test]
+    fn the_rating_button_texts() {
+        let texts = |buttons: &[RatingButton]| -> Vec<String> {
+            buttons
+                .iter()
+                .map(|button| editor_text(&EditorText::RatingButton(*button)))
+                .collect()
+        };
+        assert_eq!(
+            texts(&RatingButton::STARS),
+            [
+                "No stars", "1 star", "2 stars", "3 stars", "4 stars", "5 stars", "Reject"
+            ]
+        );
+        assert_eq!(
+            texts(&RatingButton::LABELS),
+            ["Red", "Yellow", "Green", "Blue", "Purple", "No label"]
         );
     }
 

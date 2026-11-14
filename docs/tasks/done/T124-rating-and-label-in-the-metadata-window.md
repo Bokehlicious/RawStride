@@ -1,4 +1,4 @@
-# T124. ADR 0017 U10c: Rating and Label in the metadata window — Open
+# T124. ADR 0017 U10c: Rating and Label in the metadata window — Done
 
 - **Can start now.** The owner approved the proposals of U10c-Q1–U10c-Q5 (at the end of this
   task) on 2026-11-14; they are written into the points below and into ADR 0017 §6.1. Not at the
@@ -82,3 +82,6 @@
 |---|---|---|
 | 2026-11-14 | Blocked | Written by the reviewer (ADR 0017 U10c, after T123); waits for U10c-Q1–U10c-Q5 |
 | 2026-11-14 | Open | Owner: U10c-Q1–U10c-Q5 approved as proposed; written into the points and ADR 0017 §6.1 |
+| 2026-11-14 | Ready for review | Task agent: section, buttons, Alt/Ctrl+0–5, deferred refilter (`window_refilter`) and Other Metadata done; `check.ps1` all OK (1248 passed, 43 ignored). Glossary: "Rating and Label" heading added |
+| 2026-11-14 | Ready for review | Reviewer: code accepted. Every point and test of the task present; the refilter decision (`window_refilter`) a pure function; the window's only close path goes through `WindowLeave::Close`. Owner-approved fixes by the reviewer: the button texts from `rating_text.rs` (new `star_count_text`, also used by `status_text`, so singular/plural stay in one function; "No label" from `label_choice_text`), the label buttons built from `LABEL_CHOICES`, one doc comment wrapped. `rating_text.rs` changed outside the file list (the task names it as the source of the names). The reviewer's `check.ps1`: fmt, test and clippy OK, 1248 passed, 0 failed, 43 ignored |
+| 2026-11-14 | Done | Owner: hand check done and approved; committed by the reviewer |

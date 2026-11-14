@@ -157,6 +157,7 @@ Every other property already uses IPTC's English name in both languages.
 | Varningar, Meddelanden | Warnings, Notices | |
 | Övrig metadata | Other Metadata | |
 | – | Content, Creator and Rights, Time and Place, Assignment | the metadata window's section headings (ADR 0017 U10-Q1); added by T123 |
+| – | Rating and Label | the sixth section heading of the metadata window (ADR 0017 U10-Q1, U10c); added by T124. Its buttons use the terms of §2 (No stars, 1 star / {n} stars, Reject, the label names, No label) |
 | OK, Avbryt, Spara, Släng | OK, Cancel, Save, Discard | |
 | Föregående, Nästa, Spara och nästa | Previous, Next, Save and Next | |
 | Spara ändringarna? / Ändringar som inte sparades | Save changes? / Unsaved changes | |

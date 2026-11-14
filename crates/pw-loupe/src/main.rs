@@ -23,12 +23,12 @@ use pw_loupe::{
     EditorKeyAction, EditorSection, EditorText, Field, Filter, GridKeyAction, ImportDialog,
     ImportDialogState, ImportEvent, ImportForm, ImportWorker, IptcField, LABEL_CHOICES,
     LabelFilter, Language, LoupeMove, MAX_THUMBNAIL_SIZE, MIN_THUMBNAIL_SIZE, MonitorProfile,
-    Navigation, Options, PanelText, READING_RATINGS_TEXT, RatingRefused, STAR_CONDITIONS,
-    STAR_FILTERS, Settings, StarFilter, SubmitError, Tab, TabAction, Tabs, ThumbGrid,
-    UNSUPPORTED_TEXT, ViewMode, WINDOW_TITLE, allowed_modes, clamp_thumbnail_size,
+    Navigation, Options, PanelText, READING_RATINGS_TEXT, RatingButton, RatingRefused,
+    STAR_CONDITIONS, STAR_FILTERS, Settings, StarFilter, SubmitError, Tab, TabAction, Tabs,
+    ThumbGrid, UNSUPPORTED_TEXT, ViewMode, WINDOW_TITLE, allowed_modes, clamp_thumbnail_size,
     clear_and_import_text, clear_cancel_text, clear_confirmation_text, clear_confirmation_title,
-    color_image, columns, dialog_key_action, done_lines, editor_key_action, editor_text,
-    ejecting_progress_text, error_text, grid_key_action, indicator_text, info_panel,
+    color_image, columns, dialog_key_action, done_lines, editor_key_action, editor_rating_key,
+    editor_text, ejecting_progress_text, error_text, grid_key_action, indicator_text, info_panel,
     iptc_progress_text, key_action, label_choice_text, label_filter_text, label_name, list_folder,
     load_monitor_profile, load_settings, loupe_key_action, marked_text, metadata_neighbour,
     mode_label, mode_text, more_lines, no_match_text, notice_text, opens_import, other_values,
@@ -244,6 +244,38 @@ fn leave_decision(
     }
 }
 
+/// What the active tab does about ratings chosen in the metadata window (ADR 0017 U10c-Q4, T124).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum WindowRefilter {
+    /// Nothing is refiltered: nothing was rated in the window, or the window stays on its image.
+    Nothing,
+    /// The window moved to file `index`, found in the visible list as it was: the tab is
+    /// refiltered keeping it.
+    KeepNeighbour(usize),
+    /// The window closed: the tab is refiltered as after a rating key in the contact sheet.
+    AsAfterKey,
+}
+
+/// The refilter of the active tab when the metadata window leaves its image (ADR 0017 U10c-Q4,
+/// T124). A rating chosen in the window does not refilter the tab at once, so the window's image
+/// stays in the visible list and "Previous" / "Next" have something to start from. `rated`: a
+/// rating or label was chosen in the window on its image; `leave`: the move or close done, `None`
+/// while the window stays; `neighbour`: the file index the move found in the visible list before
+/// any refilter, `None` when the move found nothing (the window stays).
+fn window_refilter(
+    rated: bool,
+    leave: Option<WindowLeave>,
+    neighbour: Option<usize>,
+) -> WindowRefilter {
+    match (rated, leave, neighbour) {
+        (false, _, _) | (true, None, _) | (true, Some(WindowLeave::Move { .. }), None) => {
+            WindowRefilter::Nothing
+        }
+        (true, Some(WindowLeave::Move { .. }), Some(index)) => WindowRefilter::KeepNeighbour(index),
+        (true, Some(WindowLeave::Close), _) => WindowRefilter::AsAfterKey,
+    }
+}
+
 /// The metadata window (ADR 0007 I10n, D16, T107): one image's metadata seen and edited in one
 /// floating window. It replaces the info panel of T103 and the editor window of T105. Since T112
 /// (ADR 0017 §2.3.1) it is not locked to its image: "Föregående", "Nästa" and "Spara och nästa"
@@ -265,6 +297,9 @@ struct MetadataWindow {
     escape: bool,
     /// The window's write succeeded with notices: the read after it refills the form.
     expect_reload: bool,
+    /// A rating or label was chosen in the window on this image (T124): the tab is refiltered
+    /// when the window moves or closes (`window_refilter`).
+    rated: bool,
 }
 
 impl MetadataWindow {
@@ -283,6 +318,7 @@ impl MetadataWindow {
             after_save: None,
             escape: false,
             expect_reload: false,
+            rated: false,
         }
     }
 
@@ -1790,16 +1826,26 @@ impl Loupe {
         leave: WindowLeave,
     ) {
         match leave {
-            WindowLeave::Close => self.close_metadata_window(),
+            WindowLeave::Close => {
+                let refilter = window_refilter(window.rated, Some(leave), None);
+                self.close_metadata_window();
+                if refilter == WindowRefilter::AsAfterKey
+                    && let Some(Some(position)) = self.after_rating()
+                {
+                    self.scroll_request = Some(position);
+                }
+            }
             WindowLeave::Move { forward } => {
+                // Found in the visible list as it is, before any refilter (U10c-Q4).
                 let target = self.window_neighbour(&window.path, forward);
                 if let Some((index, path)) = target
                     && self.metadata.move_window(&path, &mut self.metadata_worker)
                 {
+                    let refilter = window_refilter(window.rated, Some(leave), Some(index));
                     // The window stays open at its place and size (its id does not change); the
                     // form is emptied while the new image's read runs.
                     self.metadata_window = Some(MetadataWindow::new(path));
-                    self.current_follows_window(index);
+                    self.current_follows_window(index, refilter);
                 } else {
                     // Nowhere to go (the shown images changed meanwhile). After a write that
                     // succeeded, the read after it refills the form.
@@ -1815,17 +1861,48 @@ impl Loupe {
 
     /// After the metadata window moved to file `index` (ADR 0017 §2.3.1, U12-Q2, T112): it is the
     /// current image of the active tab, scrolled into view in the contact sheet or shown in the
-    /// preview as a step shows it. The marking is not changed (§2.2, review finding 6).
-    fn current_follows_window(&mut self, index: usize) {
+    /// preview as a step shows it. The marking is not changed (§2.2, review finding 6). With
+    /// `KeepNeighbour` (a rating was chosen in the window, U10c-Q4, T124) the tab is first
+    /// refiltered keeping that image; a shown preview then gets the new visible list.
+    fn current_follows_window(&mut self, index: usize, refilter: WindowRefilter) {
         let Some(tab) = self.tabs.active_mut() else {
             return;
         };
         tab.current = index;
+        let changed = match refilter {
+            WindowRefilter::KeepNeighbour(keep) => self.refilter_active(Some(keep)),
+            WindowRefilter::Nothing | WindowRefilter::AsAfterKey => false,
+        };
+        let Some(tab) = self.tabs.active() else {
+            return;
+        };
         let (mode, position) = (tab.mode, tab.position());
         match (mode, position) {
             (ViewMode::Grid, _) => self.scroll_request = position,
+            (ViewMode::Loupe, _) if changed => {
+                if let Some(position) = self.loupe_follows_visible() {
+                    self.scroll_request = Some(position);
+                }
+            }
             (ViewMode::Loupe, Some(position)) => self.core.go(position),
             (ViewMode::Loupe, None) => {}
+        }
+    }
+
+    /// A rating or label for the metadata window's image (ADR 0017 U10c-Q1–Q3, T124), from its
+    /// buttons or its keys: queued at once through the path of the keys (`set_ratings` with the
+    /// one image), refused as the keys refuse it. Not part of the form's edits, and the tab is not
+    /// refiltered until the window moves or closes (U10c-Q4).
+    fn rate_window(&mut self, window: &mut MetadataWindow, action: RatingKey) {
+        match self
+            .metadata
+            .set_ratings(std::slice::from_ref(&window.path), action)
+        {
+            Ok(_) => window.rated = true,
+            Err(RatingRefused::Unsupported) => {
+                self.message = Some(UNSUPPORTED_TEXT.to_owned());
+            }
+            Err(error) => self.message = Some(error.to_string()),
         }
     }
 
@@ -1902,10 +1979,11 @@ impl Loupe {
         if locked || waiting {
             ctx.request_repaint_after(WINDOW_POLL_INTERVAL);
         }
-        // The window's keys (U12-Q1) are taken before the form is drawn, so they work while a
-        // field has the keyboard and never reach it.
-        let keys: Vec<EditorKeyAction> = ctx.input_mut(|input| {
+        // The window's keys (U12-Q1) and its rating keys (U10c-Q2, T124) are taken before the
+        // form is drawn, so they work while a field has the keyboard and never reach it.
+        let (keys, rating_keys): (Vec<EditorKeyAction>, Vec<RatingKey>) = ctx.input_mut(|input| {
             let mut keys = Vec::new();
+            let mut rating_keys = Vec::new();
             input.events.retain(|event| match event {
                 egui::Event::Key {
                     key,
@@ -1914,17 +1992,23 @@ impl Loupe {
                     ..
                 } => {
                     let ctrl = modifiers.ctrl || modifiers.command;
-                    match editor_key_action(*key, ctrl, modifiers.shift, modifiers.alt) {
-                        Some(action) => {
-                            keys.push(action);
-                            false
-                        }
-                        None => true,
+                    if let Some(action) =
+                        editor_key_action(*key, ctrl, modifiers.shift, modifiers.alt)
+                    {
+                        keys.push(action);
+                        false
+                    } else if let Some(action) =
+                        editor_rating_key(*key, ctrl, modifiers.shift, modifiers.alt)
+                    {
+                        rating_keys.push(action);
+                        false
+                    } else {
+                        true
                     }
                 }
                 _ => true,
             });
-            keys
+            (keys, rating_keys)
         });
         let escape = std::mem::take(&mut window.escape);
         let asking = window.question.is_some();
@@ -1945,6 +2029,9 @@ impl Loupe {
         let mut choice = None;
         // The sections whose heading was clicked (T123), and their state as it is now.
         let mut toggled_sections = Vec::new();
+        // The rating and label buttons show the store's value, as the badges do (T124).
+        let rating = self.metadata.shown_rating(&window.path).cloned();
+        let mut rating_choice = None;
         let shell = self.settings.shell;
         let mut ok = false;
         let mut cancel = false;
@@ -2075,14 +2162,19 @@ impl Loupe {
                                 );
                             }
                             WindowBody::Form(state) => {
-                                (choice, toggled_sections) = draw_window_form(
+                                let response = draw_window_form(
                                     ui,
                                     state,
                                     &window.errors,
                                     &warnings,
                                     !locked && !asking,
                                     &shell,
+                                    rating.as_ref(),
+                                    !asking,
                                 );
+                                choice = response.choice;
+                                toggled_sections = response.toggled;
+                                rating_choice = response.rating;
                             }
                         });
                 });
@@ -2091,6 +2183,17 @@ impl Loupe {
         // Remembered in settings.txt at exit, as the inspector's sections (U10-Q6).
         for section in toggled_sections {
             self.settings.shell.toggle_editor_section(section);
+        }
+        // A rating or label is queued at once (U10c-Q3); while the question is shown the rating
+        // keys do nothing (the buttons are disabled then).
+        if !asking {
+            let chosen: Vec<RatingKey> = rating_keys.into_iter().chain(rating_choice).collect();
+            if !chosen.is_empty() {
+                for action in chosen {
+                    self.rate_window(&mut window, action);
+                }
+                ctx.request_repaint();
+            }
         }
         if let (Some((conflict_index, value_index)), WindowBody::Form(state)) =
             (choice, &mut window.body)
@@ -2744,23 +2847,29 @@ impl Loupe {
             return None;
         }
         match self.metadata.set_ratings(&paths, action) {
-            Ok(_) => {
-                if self.rated_active() {
-                    let tab = self.tabs.active();
-                    let position = tab.and_then(Tab::position);
-                    match tab.map(|tab| tab.mode) {
-                        Some(ViewMode::Grid) => return Some(position),
-                        // The core gets the new visible list, so the next image comes from the
-                        // prefetched views (§4.4); nothing left to show: back to the grid (§2.3).
-                        Some(ViewMode::Loupe) => return Some(self.loupe_follows_visible()),
-                        None => {}
-                    }
-                }
-            }
+            Ok(_) => return self.after_rating(),
             Err(RatingRefused::Unsupported) => {
                 self.message = Some(UNSUPPORTED_TEXT.to_owned());
             }
             Err(error) => self.message = Some(error.to_string()),
+        }
+        None
+    }
+
+    /// After accepted ratings: the images that stopped matching leave at once (§2.2, amendment
+    /// 1). Returns `Some` with the position the contact sheet scrolls to when the visible list
+    /// changed. Used by `rate` and when the metadata window closes after a rating (T124).
+    fn after_rating(&mut self) -> Option<Option<usize>> {
+        if self.rated_active() {
+            let tab = self.tabs.active();
+            let position = tab.and_then(Tab::position);
+            match tab.map(|tab| tab.mode) {
+                Some(ViewMode::Grid) => return Some(position),
+                // The core gets the new visible list, so the next image comes from the
+                // prefetched views (§4.4); nothing left to show: back to the grid (§2.3).
+                Some(ViewMode::Loupe) => return Some(self.loupe_follows_visible()),
+                None => {}
+            }
         }
         None
     }
@@ -3573,7 +3682,8 @@ fn resolve_paths(files: &[PathBuf]) -> Result<Vec<PathBuf>, String> {
 /// The properties of the editor's fields, left out of the window's other metadata (D16, T107,
 /// T123): every field's property once, also `Iptc4xmpCore:CreatorContactInfo`, whose fields are
 /// all editor fields, and the read-only Urgency, Category and Supplemental Categories, which are
-/// shown in the Assignment section.
+/// shown in the Assignment section; and `xmp:Rating` and `xmp:Label`, shown by the Rating and
+/// Label section (T124). Conflicts on any of them are still listed.
 fn window_editor_properties() -> Vec<&'static str> {
     let mut properties: Vec<&'static str> = Vec::new();
     for field in EditorField::ALL {
@@ -3581,17 +3691,30 @@ fn window_editor_properties() -> Vec<&'static str> {
             properties.push(field.property());
         }
     }
+    properties.extend(["xmp:Rating", "xmp:Label"]);
     properties
 }
 
-/// The contents of the metadata window's form (D16, T107, T123), top to bottom: the fields in
-/// their four sections, each a collapsible heading open or collapsed as `shell` has it; the open
-/// conflicts with a choice each and the warnings (editable when `enabled`); then read-only, in
-/// small text, the other metadata (without an origin line, T114), the conflicts a rule decided
-/// (each value with its origin) and the notices, each only when it has rows. The contact fields
-/// are drawn under the heading of their structure, "Creator's Contact Info" (T114). Labels and
-/// values wrap at the window's width. Returns the conflict value chosen and the sections whose
-/// heading was clicked.
+/// What the metadata window's form reports after it was drawn.
+struct FormResponse {
+    /// The conflict value chosen: the conflict's and the value's index.
+    choice: Option<(usize, usize)>,
+    /// The sections whose heading was clicked.
+    toggled: Vec<EditorSection>,
+    /// The rating or label button pressed (T124).
+    rating: Option<RatingKey>,
+}
+
+/// The contents of the metadata window's form (D16, T107, T123, T124), top to bottom: the fields
+/// in their four sections and the Rating and Label section, each a collapsible heading open or
+/// collapsed as `shell` has it; the open conflicts with a choice each and the warnings (editable
+/// when `enabled`); then read-only, in small text, the other metadata (without an origin line,
+/// T114), the conflicts a rule decided (each value with its origin) and the notices, each only
+/// when it has rows. The contact fields are drawn under the heading of their structure, "Creator's
+/// Contact Info" (T114). Labels and values wrap at the window's width. The last section, Rating
+/// and Label (T124), holds the buttons of the image's shown `rating` instead of fields, usable
+/// when `rating_enabled` (also while the form's write runs, not while "Save changes?" is asked).
+#[allow(clippy::too_many_arguments)] // the window's form, its state and its two enabled flags
 fn draw_window_form(
     ui: &mut egui::Ui,
     state: &mut FormState,
@@ -3599,29 +3722,43 @@ fn draw_window_form(
     warnings: &[String],
     enabled: bool,
     shell: &ShellSettings,
-) -> (Option<(usize, usize)>, Vec<EditorSection>) {
+    rating: Option<&Rating>,
+    rating_enabled: bool,
+) -> FormResponse {
     let warning = ui.visuals().warn_fg_color;
     let mut choice = None;
     let mut toggled = Vec::new();
-    ui.add_enabled_ui(enabled, |ui| {
-        for section in EditorSection::ALL {
-            let shown =
+    let mut rating_choice = None;
+    for section in EditorSection::ALL {
+        let section_enabled = if section == EditorSection::RatingLabel {
+            rating_enabled
+        } else {
+            enabled
+        };
+        let shown = ui
+            .add_enabled_ui(section_enabled, |ui| {
                 egui::CollapsingHeader::new(editor_text(&EditorText::SectionHeading(section)))
                     .id_salt(("metadata-window-section", section))
                     .open(Some(shell.editor_section(section) == ColumnState::Open))
                     .show(ui, |ui| {
+                        if section == EditorSection::RatingLabel {
+                            rating_choice = draw_rating_buttons(ui, rating);
+                        }
                         for field in EditorField::ALL
                             .into_iter()
                             .filter(|field| field.section() == section)
                         {
                             draw_window_field(ui, &mut state.form, field, errors);
                         }
-                    });
-            if shown.header_response.clicked() {
-                toggled.push(section);
-            }
+                    })
+            })
+            .inner;
+        if shown.header_response.clicked() {
+            toggled.push(section);
         }
+    }
 
+    ui.add_enabled_ui(enabled, |ui| {
         let conflicts = state.form.open_conflicts();
         if !conflicts.is_empty() {
             ui.separator();
@@ -3703,7 +3840,30 @@ fn draw_window_form(
             ui.add_space(PANEL_ROW_SPACING);
         }
     }
-    (choice, toggled)
+    FormResponse {
+        choice,
+        toggled,
+        rating: rating_choice,
+    }
+}
+
+/// The buttons of the Rating and Label section (ADR 0017 U10c-Q1, T124): a row of no stars, 1–5
+/// and Reject, then a row of the five labels and no label, the button of the shown `rating`
+/// selected. The rows wrap at the window's width. Returns the rating key of the button pressed.
+fn draw_rating_buttons(ui: &mut egui::Ui, rating: Option<&Rating>) -> Option<RatingKey> {
+    let mut chosen = None;
+    for row in [&RatingButton::STARS[..], &RatingButton::LABELS[..]] {
+        ui.horizontal_wrapped(|ui| {
+            for button in row {
+                let text = editor_text(&EditorText::RatingButton(*button));
+                if ui.selectable_label(button.selected(rating), text).clicked() {
+                    chosen = Some(button.key());
+                }
+            }
+        });
+        ui.add_space(PANEL_ROW_SPACING);
+    }
+    chosen
 }
 
 /// One field of the metadata window's form (T107, T123): its name (with the full IPTC name as a
@@ -4673,6 +4833,7 @@ mod tests {
         other_values, resolve_path, resolve_paths, window_editor_properties,
     };
     use super::{LeaveDecision, SaveAnswer, WriteOutcome, leave_decision};
+    use super::{WindowLeave, WindowRefilter, window_refilter};
     use egui::{Color32, Rect, pos2};
     use pw_loupe::{TEXT_CONTRAST, contrast_ratio};
     use pw_metadata::iim::Fallback;
@@ -4921,8 +5082,9 @@ mod tests {
         let properties = window_editor_properties();
 
         // 40 fields, eight of them (the address, Email, Phone, Web URL) in the contact structure,
-        // which is now left out as a whole (T123, point 7).
-        assert_eq!(properties.len(), 33);
+        // which is now left out as a whole (T123, point 7); and the rating and the label, shown in
+        // the Rating and Label section (T124, point 6).
+        assert_eq!(properties.len(), 35);
         for id in [
             "dc:title",
             "dc:description",
@@ -4942,6 +5104,8 @@ mod tests {
             "photoshop:Urgency",
             "photoshop:Category",
             "photoshop:SupplementalCategories",
+            "xmp:Rating",
+            "xmp:Label",
         ] {
             assert!(properties.contains(&id), "{id}");
         }
@@ -4954,8 +5118,6 @@ mod tests {
         for id in [
             "Iptc4xmpCore:IntellectualGenre",
             "Iptc4xmpExt:LocationCreated",
-            "xmp:Rating",
-            "xmp:Label",
         ] {
             assert!(!properties.contains(&id), "{id}");
         }
@@ -4988,6 +5150,9 @@ mod tests {
                 }),
             ),
             ("Iptc4xmpCore:IntellectualGenre", text("Nyhet")),
+            // Shown by the Rating and Label section (T124, point 6).
+            ("xmp:Rating", Value::Number("3".into())),
+            ("xmp:Label", text("Red")),
         ] {
             metadata
                 .insert_read(id, value, Origin::XmpEmbedded)
@@ -5012,6 +5177,45 @@ mod tests {
         let rows = other_values(&read, &window_editor_properties());
         let labels: Vec<&str> = rows.iter().map(|row| row.label.as_str()).collect();
         assert_eq!(labels, ["Intellectual Genre"]);
+    }
+
+    // --- the filter while the metadata window is open (ADR 0017 U10c-Q4, T124) ---
+
+    #[test]
+    fn a_rating_in_the_window_refilters_only_when_the_window_moves_or_closes() {
+        let previous = Some(WindowLeave::Move { forward: false });
+        let next = Some(WindowLeave::Move { forward: true });
+        let close = Some(WindowLeave::Close);
+        // Rated: a move keeps the neighbour it found in the list as it was; a close refilters
+        // as after a key in the contact sheet.
+        assert_eq!(
+            window_refilter(true, next, Some(7)),
+            WindowRefilter::KeepNeighbour(7)
+        );
+        assert_eq!(
+            window_refilter(true, previous, Some(2)),
+            WindowRefilter::KeepNeighbour(2)
+        );
+        assert_eq!(
+            window_refilter(true, close, None),
+            WindowRefilter::AsAfterKey
+        );
+        // While the window stays (no move or close, or a move that found nothing): nothing.
+        assert_eq!(window_refilter(true, None, None), WindowRefilter::Nothing);
+        assert_eq!(window_refilter(true, next, None), WindowRefilter::Nothing);
+        // Nothing rated in the window: nothing, whatever the window does.
+        for (leave, neighbour) in [
+            (None, None),
+            (next, Some(7)),
+            (previous, Some(2)),
+            (close, None),
+        ] {
+            assert_eq!(
+                window_refilter(false, leave, neighbour),
+                WindowRefilter::Nothing,
+                "{leave:?}"
+            );
+        }
     }
 
     #[test]
