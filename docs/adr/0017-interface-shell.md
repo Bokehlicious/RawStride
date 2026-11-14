@@ -20,6 +20,7 @@
   origin line under its values (T114, §2.1).
 - **Recorded 2026-11-14 (no new decision):** the owner's answers to the questions of U10 (T123) and
   U10c (T124) are in §6.1; the section names of §2.3.1 are English in the program (GR14, U10-Q1).
+  The answers to the questions of U12b (T125) are in §6.1 too.
 - Date: 2026-11-12; amended 2026-11-13
 - Related:
   - [GUI_REQUIREMENTS.md](../GUI_REQUIREMENTS.md) (GR1–GR13), in particular GR6 (keyboard first),
@@ -372,7 +373,7 @@ without the study notes as a template.
 
 ### 6.1 Questions of the steps (answered by the owner, 2026-11-13: every proposal approved)
 
-Asked in the tasks of stage A (T109–T112, `docs/tasks/done/`) and of U10 (T123, T124, 2026-11-14) and answered there; recorded here so
+Asked in the tasks of stage A (T109–T112, `docs/tasks/done/`) and of U10 and U12b (T123–T125, 2026-11-14) and answered there; recorded here so
 the decisions do not live only in the tasks.
 
 | # | Decision (as proposed) |
@@ -409,6 +410,11 @@ the decisions do not live only in the tasks.
 | U10c-Q3 | A rating or label from the window is written at once, as a key in the contact sheet; Cancel and Discard do not undo it |
 | U10c-Q4 | The window keeps its image when a new rating puts it outside the filter; the contact sheet is refiltered when the window moves or closes |
 | U10c-Q5 | The section is last in the form, open at first, its state remembered |
+| U12b-Q1 | "Copy All Fields" takes the form as shown (unsaved edits included): every editable field of sections 1–4 and Copyrighted, not the read-only fields, the rating and label or the conflict choices; the copy is kept in memory until the next copy or the end of the program (not the Windows clipboard, not saved) |
+| U12b-Q2 | "Paste All Fields" fills the form as unsaved edits (nothing written until OK, Save or "Save and Next"); only non-empty copied fields are pasted, so a paste never empties a field |
+| U12b-Q3 | The two buttons sit in the button row before "Previous"; the Paste button's tooltip names the number of fields and the source file |
+| U12b-Q4 | Ctrl+Shift+C copies and Ctrl+Shift+V pastes while the window is open, also while typing in a field; Ctrl+C and Ctrl+V stay with the fields |
+| U12b-Q5 | English "Copy All Fields" / "Paste All Fields" (Swedish "Kopiera alla fält" / "Klistra in alla fält"), in the glossary |
 
 ## 7. Steps
 
