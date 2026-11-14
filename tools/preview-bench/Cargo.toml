@@ -4,6 +4,7 @@ description = "Measures read and JPEG decode time of embedded RAW previews (deve
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+license.workspace = true
 publish = false
 
 [lints]

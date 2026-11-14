@@ -4,6 +4,7 @@ description = "RAW rendering jobs: priorities, cancellation and memory budget (A
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+license.workspace = true
 publish.workspace = true
 authors.workspace = true
 

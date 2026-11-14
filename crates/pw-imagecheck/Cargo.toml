@@ -4,6 +4,7 @@ description = "The real image check of the safe metadata write: previews with pw
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+license.workspace = true
 publish.workspace = true
 authors.workspace = true
 

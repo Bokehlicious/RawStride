@@ -4,6 +4,7 @@ description = "EXIF/IPTC/XMP read and write via a persistent ExifTool process"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+license.workspace = true
 publish.workspace = true
 authors.workspace = true
 

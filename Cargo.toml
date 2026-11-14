@@ -9,7 +9,7 @@ rust-version = "1.99"
 publish = false
 authors = ["Tobias Nykänen"]
 repository = ""
-# license = "TBD" – see docs/adr/0002-licensing.md
+license = "GPL-3.0-or-later" # docs/adr/0002-licensing.md
 
 [workspace.dependencies]
 # Internal crates
