@@ -12,6 +12,7 @@ about your machine beyond that.
 | vcpkg | builds LibRaw and libjpeg-turbo, the native libraries | clone [vcpkg](https://github.com/microsoft/vcpkg), run its `bootstrap-vcpkg.bat`, and put the folder on `PATH` (or set `VCPKG_ROOT`) |
 | Git | the source | enable long paths: `git config --global core.longpaths true` |
 | ExifTool | reading and writing metadata, at run time and in the tests | the Windows package from [exiftool.org](https://exiftool.org), version 12.67 or newer; put `exiftool.exe` (with its `exiftool_files` folder) on `PATH` |
+| cargo-audit (optional) | checks the dependencies in `Cargo.lock` against known security advisories, in `.\tools\check.ps1` | `cargo install cargo-audit --locked` |
 
 Windows' long-path support (`LongPathsEnabled`) helps with vcpkg's deep build folders. Some
 antivirus programs slow the build down a lot; that is a choice for your own machine, not a
@@ -50,9 +51,12 @@ line: `cargo run --release -p pw-loupe -- "D:\Photos\2026-11-14"`.
 .\tools\check.ps1
 ```
 
-It runs `cargo fmt --all --check`, `cargo test --workspace` and
+It runs `cargo fmt --all --check`, `cargo audit`, `cargo test --workspace` and
 `cargo clippy --workspace --all-targets`, and writes the whole output to `test-output.txt`. It must
-end with every step OK before a change is committed (`CONTRIBUTING.md`). If PowerShell refuses to
+end with every step OK before a change is committed (`CONTRIBUTING.md`). `cargo audit` fetches the
+RustSec advisory database, so it needs the network; it fails only on a known vulnerability, not on
+warnings such as unmaintained crates. Without cargo-audit installed the step is reported as
+`SKIPPED` and does not fail the check. If PowerShell refuses to
 run the script, run it with `powershell -ExecutionPolicy Bypass -File .\tools\check.ps1`.
 
 Some tests need more than the source:

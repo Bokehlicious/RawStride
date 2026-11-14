@@ -79,6 +79,23 @@ try {
 
     Invoke-CheckStep -Name 'cargo fmt --all --check' -Arguments @('fmt', '--all', '--check')
 
+    # Checks Cargo.lock against the RustSec advisory database (fetched over the network). A known
+    # vulnerability fails the step; warnings such as unmaintained crates do not. Skipped, without
+    # failing the check, when cargo-audit is not installed.
+    & cargo audit --version *> $null
+    if ($LASTEXITCODE -eq 0) {
+        Invoke-CheckStep -Name 'cargo audit' -Arguments @('audit')
+    }
+    else {
+        Write-ReportLine ''
+        Write-ReportLine '=== cargo audit ==='
+        Write-ReportLine 'cargo-audit is not installed (cargo install cargo-audit --locked); step skipped.'
+        $script:results += [pscustomobject]@{
+            Name = 'cargo audit'
+            Status = 'SKIPPED'
+        }
+    }
+
     # --no-fail-fast: run every test binary even after a failure, so the report covers all crates.
     $testArguments = @('test', '--workspace', '--no-fail-fast')
     if ($Ignored) {
