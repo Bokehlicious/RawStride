@@ -1,7 +1,7 @@
 # ADR 0007: Metadata handling according to the IPTC standards
 
 - Status: **accepted by the owner (2026-11-11, revision 9).** All open questions are answered
-  (§14); what is left before the implementation is in §16.
+  (§14); what is left after milestone 8 is in §18.
   - The owner's decisions of 2026-11-04 are written in.
   - Planned as milestone 8 of the egui program after its approval (owner, 2026-11-10; ADR 0015 §2;
     moved from milestone 7 by ADR 0016 Q1, 2026-11-11).
@@ -16,6 +16,10 @@
     when the name changed, so ADR 0012 §5 ("earlier ADRs keep the old name") does not apply to it.
     Paths, crate names and technical file suffixes keep their old names (ADR 0012 §4).
   - The owner approved the ADR on 2026-11-11 together with the answers (revision 9).
+  - **Implemented (2026-11-14):** the steps of `docs/tasks/plans/adr-0007-milestone-8-steps.md`
+    and their tasks: I1 T76, I2 T77, I3 T78, I4 T79, I5 T80–T81, I6 T82, I7 T83, I8 T84–T86,
+    I9 T87–T93, I10 T94–T108, I11 T128 (with ADR 0017 U10d), I12 T127 (with T129, T130, T132),
+    I13 T133; the owner's decisions D1–D16 are in §17.
 - Date: 2026-11-04 (revision 1: storage, IIM policy and the role of XMP; revision 2: all owner
   decisions of 2026-11-04, MWG 2.0, the full IPTC specification and the Mapping Guidelines;
   revision 3: Q4 answered by the owner on 2026-11-08; revision 4: Q5 answered by the owner on
@@ -579,6 +583,26 @@ Each template field has one of four modes. The default is **Keep**. [Product]
   - IIM prefixes and byte limits;
   - the four template modes;
   - fault injection (§9.5).
+
+  **Where each test is** (from the rows of `docs/test-inventory.md`; paths under
+  `crates/pw-metadata/` unless another crate is named; tests on `PW_TESTDATA` are ignored by
+  default):
+
+  | Test | Where |
+  |---|---|
+  | Round trip per format | JPEG: `tests/write_plan.rs`, `tests/safe_write.rs`, `tests/edits.rs`; TIFF: `tests/safe_write.rs` (a minimal TIFF; every TIFF in `PW_TESTDATA`), `tests/edit.rs` (`PW_TESTDATA`); DNG: `tests/safe_write.rs`, `tests/edit.rs` (`PW_TESTDATA`); manufacturer RAW with sidecar: `tests/safe_write.rs`, `tests/edit.rs`, `tests/edits.rs`; the level-C samples: `tests/level_c.rs` |
+  | IIM = XMP after every write, and the checksum updated | `tests/write_plan.rs` (both forms changed, the two digests equal), `tests/edit.rs` (the checksum still `Matches` after a rating), `tests/template.rs` (Clear), `tests/edits.rs` (a cut City), `tests/safe_write.rs` (a TIFF, T92), `tests/level_c.rs`; `src/write_plan.rs` (both forms brought in line, the checksum written or not, T93) |
+  | All three checksum cases of §5.1, including the predicted-IIM comparison | `src/reconcile.rs` (the three cases, equality on the predicted IIM value), `src/iim.rs` (the predicted IIM value); with ExifTool `tests/read.rs` |
+  | Exif/XMP conflicts shown | `src/reconcile.rs` (Artist, ImageDescription, RAW Exif); shown: `crates/pw-loupe/src/info_panel.rs` (conflict rows with each value, its origin and the rule) |
+  | RAW bytes unchanged (hash) | `tests/read.rs`, `tests/safe_write.rs`, `tests/edit.rs`, `tests/template.rs`, `tests/edits.rs` (a fake RAW), `tests/level_c.rs` (the ARW) |
+  | DNG/JPEG/TIFF image data unchanged (ImageDataHash) | `tests/verify.rs`, `tests/safe_write.rs`, `tests/edit.rs`, `tests/level_c.rs`; `src/verify.rs` (`ImageDataChanged`) |
+  | Hierarchical keywords, unknown namespaces, other languages and deprecated IIM datasets kept | hierarchical keywords: not covered; unknown namespaces: `tests/level_c.rs` (`photomechanic:`, `xmpMM`); other languages: `tests/write_plan.rs`, `src/value.rs`, `src/template.rs`, `src/edit.rs`; deprecated IIM datasets: `src/write_plan.rs` (`NotEditable`, not brought in line), kept in a written file: not covered |
+  | Zone-less dates stay zone-less | `src/date.rs` (a zone never added through XMP, IIM and back), `src/write_plan.rs`, `tests/write_plan.rs` (no 2:60) |
+  | Truncated dates | `src/date.rs`, `tests/write_plan.rs` (`2026-11` as `20261100`), `tests/read.rs` (`2026-11` read back) |
+  | IIM prefixes and byte limits | `src/iim.rs`, `src/iim_read.rs` (prefixes removed when reading), `src/write_plan.rs` (`Truncated`, prefixes), `src/validate.rs` (`TooLongForIim`), `src/reconcile.rs` (over-limit values, T129), `tests/edits.rs` (a 40-byte City) |
+  | The four template modes | `src/template.rs` (every mode), `tests/template.rs` (with ExifTool: `Iptc::to_template`, Append, Clear), `crates/pw-loupe/src/import.rs` (the modes of the import dialog, T100) |
+  | Fault injection (§9.5) | `tests/safe_write.rs` (a failure in each stage, the original unchanged), `tests/edit.rs` (read-only and locked files), `src/fileops.rs` (a held original, a missing copy), `src/journal.rs` (recovery), `src/safe_write.rs` (refused ExifTool answers) |
+
 - **Level-C samples** (outside the repo, in `PW_TESTDATA`) from the owner **(Q11, owner
   2026-11-11; changed 2026-11-14)**; they are needed before the implementation can be tested, not
   before approval:
@@ -653,7 +677,7 @@ silently. All other deviations concern SHOULD-level recommendations; each is mar
 - **Not part of this ADR:** editing hierarchical keywords (they are only preserved), a
   catalog/index of metadata, C2PA, and Schema.org output.
 
-## 16. Before implementation
+## 16. Before implementation (what is left after milestone 8 is in §18)
 
 1. ~~The owner decides D5 and the IIM default~~ – decided 2026-11-04.
 2. ~~Read the IPTC spec 9–17, the Mapping Guidelines and MWG 2.0~~ – done 2026-11-04 (analysis
@@ -720,6 +744,20 @@ listed under the table (§17.1).
   - "Övrig metadata" shows its values without an origin line under each one; the conflicts keep
     theirs (owner, 2026-11-13, T114).
 
+## 18. What is left after milestone 8
+
+- `Cleared` (§6.4, Q2): not read or written; waits for D1 (`docs/tasks/backlog.md`).
+- §6.1 Exif ImageEditor ↔ Contributor and GPS → Location Created (`docs/tasks/backlog.md`; GPS gets
+  the next metadata ADR after ADR 0017, its §7.2).
+- Keyword qualifiers (§8; `docs/tasks/backlog.md`).
+- From §10: template sub-fields of lists of structures, variables, template files in XMP
+  (`docs/tasks/backlog.md`; ADR 0017 U13).
+- The other controlled vocabularies of §11 (`docs/tasks/backlog.md`).
+- Lists of structures and editing several images (ADR 0017 U11, U12).
+- §16 point 5: XMP Part 1, MWG §5.2, XMP Part 3 and IIM 4.2 not read, so Q3, Q7 and Q8 and the
+  Lang Alt row of §13 stay "to verify".
+- The Tauri app keeps its in-place write (D7) until it is retired (GR8).
+
 ## Revision history
 
 | Revision | Date | Changes |
@@ -741,3 +779,4 @@ listed under the table (§17.1).
 | 15 | 2026-11-14 | Owner decision (ADR 0017 U10d-Q3): §11 and Q9, the PLUS choice lists show the vocabulary's English labels instead of Swedish ones (GR14); Digital Source Type also becomes a choice list (U10d-Q2, IPTC NewsCodes saved as R2) |
 | 16 | 2026-11-14 | After the first run of the level-C tests (T127), owner approved: §5.1, an IIM value equal to the whole XMP text is not a conflict (T129); §11, RawStride holds the PLUS codes, ExifTool adds the URI prefix; URI values written with `#=` (T128) |
 | 17 | 2026-11-14 | I12 done (T127): what the level-C samples showed written into §4.2 (Q8, Photo Mechanic's `<basename>.XMP`) and §6.4 (Photo Mechanic removes an emptied field, keeps empty structure sub-fields); §16 point 6 done |
+| 18 | 2026-11-14 | I13 (T133): implemented status, where each §12 test is, §18 what is left; no new decision |

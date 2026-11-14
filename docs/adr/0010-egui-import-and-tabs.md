@@ -89,7 +89,7 @@
   ADR 0011 (done 2026-11-09).
 - A settings window and a settings file (§11, Q5).
 - Writing IPTC through the safe write procedure of ADR 0007 §9 (it applies once ADR 0007 is accepted;
-  step B uses today's `write_iptc`, as the Tauri app does).
+  step B uses today's `write_iptc`, as the Tauri app does) (done: ADR 0007 I9, T91, 2026-11-12).
 - Changes to the Tauri app's behaviour. It keeps working until the switch (GR8).
 - Opening several tabs at start from the command line.
 

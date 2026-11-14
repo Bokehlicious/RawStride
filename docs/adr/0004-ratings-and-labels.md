@@ -128,4 +128,6 @@ The owner confirmed this ADR's storage rules in ADR 0007 (metadata per IPTC):
 - XMP as the primary representation
 
 ADR 0007 adds one thing: existing IPTC-IIM in JPEG/TIFF/DNG is kept in sync with XMP. Ratings and
-labels have no IIM dataset, so this ADR's behaviour is unchanged.
+labels have no IIM dataset, so this ADR's behaviour is unchanged. In RawStride, embedded ratings and
+labels (DNG, JPEG, TIFF) are written through ADR 0007's safe write since T87/T91 (2026-11-12); the
+Tauri app keeps the in-place write (ADR 0007 D7).

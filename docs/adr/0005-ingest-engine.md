@@ -67,6 +67,8 @@ The sandbox disk is not the PC. Measure on thanos with a real card before tuning
 4. **IPTC template on ingest:** creator, copyright (+ `xmpRights:Marked`), credit, e-mail,
    telephone, web. IPTC Core in XMP, stored like ratings (ADR 0004): sidecar for RAW, embedded
    for DNG/JPEG/TIFF. Only non-empty fields are written; written to the new copies only.
+   In RawStride the template has the modes of ADR 0007 §10 (Keep, Replace, Append, Prefix, Clear;
+   T88, T100) and is written through the safe write (T91); the Tauri app is unchanged (D7).
 5. **No videos.** Ingest copies still images only (and their sidecars); `.MP4`, Sony
    `PRIVATE/M4ROOT` and audio notes stay on the card. This is a decision, not a gap.
 

@@ -65,7 +65,8 @@
 
 - **Filter and multi-selection** (ADR 0004 addendum 2026-11-04); a separate milestone (§11, Q1). The
   write queue (§4.2) is designed so that one key can later target several images.
-- Keywords, title, description and other IPTC editing (ADR 0007).
+- Keywords, title, description and other IPTC editing (ADR 0007) (done: ADR 0007 milestone 8,
+  2026-11-14; the metadata window of ADR 0017).
 - Sorting by rating.
 - Moving rejected or picked images to `_rejected` / `_picked` folders (§13; a later decision).
 - Noticing changes made by other programs while a folder is open (no file watching). A tab reads the

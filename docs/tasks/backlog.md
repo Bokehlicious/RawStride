@@ -7,10 +7,8 @@ and reviewer:
   timeout (`SHUTDOWN_TIMEOUT` in `pw-metadata`'s `exiftool.rs`).
 - Suppressing the Windows "no disk in drive" dialog when scanning empty card readers (needs a
   Windows API call and a new dependency).
-- ADR 0007 (IPTC metadata) steps I11–I13 and the `Cleared` task (step list:
-  `plans/adr-0007-milestone-8-steps.md`; I9 is T87–T93, I10 is T94–T106): `Cleared` waits for D1
-  (ADR 0007 §17); I11 waits for the PLUS controlled vocabulary and moves with the PLUS fields to
-  ADR 0017 U10 (U-Q4); I12 waits for the level-C samples; I13 documents milestone 8. Also later:
+- ADR 0007 (IPTC metadata): milestone 8 is done (I1–I13, 2026-11-14; what is left is in ADR 0007
+  §18). The `Cleared` task waits for D1 (ADR 0007 §17). Also later:
   Exif ImageEditor ↔ Contributor and GPS → Location Created (§6.1), left out of T81; keyword
   qualifiers (§8), left out of T83; from §10, left out of T88: template sub-fields of lists of
   structures (Location Created, Image Creator, Copyright Owner, Licensor), variables (`{date}` …),

@@ -138,4 +138,5 @@ was when the task was done, so "this file", "below" and "the Log" in T1–T115 m
 | [T130](T130-hide-empty-structure-fields.md) | Empty structure fields are not shown as values |
 | [T131](T131-metadata-window-centred-on-image-area.md) | The metadata window opens in the middle of the image area |
 | [T132](T132-keep-the-sidecar-name.md) | A write keeps the sidecar's name as it is on disk |
+| [T133](T133-milestone-8-documentation.md) | ADR 0007 I13: documentation after milestone 8 |
 | [T120](T120-exiftool-from-the-program-folder.md) | ExifTool from the program folder first |

@@ -154,4 +154,4 @@ leaves the stored `IPTCDigest` out of date (`Validate`: `IPTCDigest is not curre
 | I10o | T108 | Nyckelord and Fotograf on one line separated by commas; the reason "filen är öppen i ett annat program" when a write is refused because another program holds the file (owner's check of T107) | §5.1, §9 | now |
 | I11 | – | PLUS fields as fixed choice lists | §11, Q9 | done (T128 with ADR 0017 U10d, 2026-11-14) |
 | I12 | T127 | Real-file tests with the owner's level-C samples (changed 2026-11-14: Photo Mechanic files, a Xiaomi 17 Ultra DNG, mixed Photo Mechanic / Lightroom Classic archive files) | §12, Q11 | done (T127, 2026-11-14; its first run led to T129 and T130) |
-| I13 | – | Documentation after milestone 8 | – | last |
+| I13 | T133 | Documentation after milestone 8 | – | done (T133, 2026-11-14) |
