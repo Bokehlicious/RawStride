@@ -1,4 +1,4 @@
-//! RAW and JPEG inspection for PhotoWorkflow.
+//! RAW and JPEG inspection for RawStride.
 //!
 //! Fast path for culling: locate the embedded JPEG previews and the basic EXIF fields by
 //! walking the TIFF structure, without decoding any image data. The previews are returned

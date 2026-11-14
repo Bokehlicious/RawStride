@@ -1,4 +1,4 @@
-//! Metadata handling for PhotoWorkflow.
+//! Metadata handling for RawStride.
 //!
 //! Milestone 3 (first part): star ratings and colour labels in XMP sidecar files, written and
 //! read through a persistent ExifTool process (`-stay_open`), so there is one process for the
@@ -202,7 +202,7 @@ pub struct Rating {
 ///
 /// The map is ordered by language tag so iteration and serialized plans are deterministic.
 ///
-/// Only the `x-default` entry is written (ADR 0007, Q7: PhotoWorkflow edits `x-default` only and
+/// Only the `x-default` entry is written (ADR 0007, Q7: RawStride edits `x-default` only and
 /// preserves all other language entries in the file). Other entries are kept in the model for
 /// reading, but they are not written and do not make a template non-empty.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -232,7 +232,7 @@ impl LocalizedValue {
         self.values.values().all(|value| value.trim().is_empty())
     }
 
-    /// A value with only the `x-default` entry, the one PhotoWorkflow writes.
+    /// A value with only the `x-default` entry, the one RawStride writes.
     pub fn x_default(value: impl Into<String>) -> Self {
         let mut out = Self::new();
         out.insert(X_DEFAULT, value);
@@ -245,7 +245,7 @@ impl LocalizedValue {
     }
 }
 
-/// The Lang Alt entry PhotoWorkflow reads first and writes (ADR 0007 §8, Q7).
+/// The Lang Alt entry RawStride reads first and writes (ADR 0007 §8, Q7).
 pub const X_DEFAULT: &str = "x-default";
 
 /// IPTC fields applied to every image of an ingest (photographer, copyright, contact).

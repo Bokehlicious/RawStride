@@ -1,6 +1,6 @@
 # REA workflow
 
-REA ("Reverse Engineer Anything") is used in PhotoWorkflow as a real analysis tool.
+REA ("Reverse Engineer Anything") is used in RawStride as a real analysis tool.
 We use it to verify what the compiler actually produced, to find bottlenecks, and to
 compare builds before and after an optimisation. It is not a box to tick:
 use it when it answers a question better than reading the source or running a profiler.

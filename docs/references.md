@@ -2,7 +2,7 @@
 
 ## Normative: metadata (owner's decision, 2026-11-04)
 
-PhotoWorkflow follows the IPTC standards for photo metadata. It does **not** imitate any other
+RawStride follows the IPTC standards for photo metadata. It does **not** imitate any other
 product's internal implementation. Where other tools are mentioned (Lightroom, Photo Mechanic), it
 is only to stay interoperable with files they read and write, based on their public documentation
 (clean-room level D).

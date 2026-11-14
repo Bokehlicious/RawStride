@@ -2,7 +2,7 @@
 
 A small binary with known source code. It is used to check what REA and Ghidra
 report on Windows (functions, strings, imports, decompiled loops) before we rely
-on them for real PhotoWorkflow binaries. See `docs/rea-workflow.md`.
+on them for real RawStride binaries. See `docs/rea-workflow.md`.
 
 ```powershell
 cargo build -p rea-probe --profile profiling

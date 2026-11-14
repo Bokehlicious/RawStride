@@ -3,7 +3,7 @@
 - Status: **decided by the owner (2026-11-07).** Versions and features approved the same day (§6).
   The renderer and the memory budget were decided after P7, also the same day (§7). `wgpu` was
   removed from the feature list on 2026-11-07 (ADR 0009, step S0).
-- Scope: the whole graphical user interface of PhotoWorkflow. That covers the window, the loupe and
+- Scope: the whole graphical user interface of RawStride. That covers the window, the loupe and
   stepping, the contact sheet, ratings and labels, the ingest dialog, the metadata views and settings.
 - Related:
   - ADR 0001 (technology stack, amended);

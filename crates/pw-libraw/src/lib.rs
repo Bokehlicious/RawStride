@@ -1,4 +1,4 @@
-//! LibRaw binding for PhotoWorkflow's RAW rendering pipeline (ADR 0006).
+//! LibRaw binding for RawStride's RAW rendering pipeline (ADR 0006).
 //!
 //! - One [`Session`] = one opened and unpacked RAW file. Unpacking (~0.3 s for a 61 MP Sony) is
 //!   done once; any number of regions can then be rendered from it.

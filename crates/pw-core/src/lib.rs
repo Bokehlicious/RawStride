@@ -1,4 +1,4 @@
-//! Shared types, error handling and configuration used by every PhotoWorkflow crate.
+//! Shared types, error handling and configuration used by every RawStride crate.
 //!
 //! Responsibilities (planned):
 //! - Common identifiers (asset id, volume id, session id)

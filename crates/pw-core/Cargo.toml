@@ -1,6 +1,6 @@
 [package]
 name = "pw-core"
-description = "Shared types, errors and configuration for PhotoWorkflow"
+description = "Shared types, errors and configuration for RawStride"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

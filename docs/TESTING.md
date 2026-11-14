@@ -2,7 +2,7 @@
 
 ## 1. Purpose
 
-This document defines how PhotoWorkflow is tested, how test results are evaluated, and how implementation correctness is verified against approved project requirements.
+This document defines how RawStride is tested, how test results are evaluated, and how implementation correctness is verified against approved project requirements.
 
 The testing strategy must:
 - Verify observable product behavior rather than merely implementation details.

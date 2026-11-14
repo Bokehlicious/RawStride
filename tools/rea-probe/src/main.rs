@@ -2,7 +2,7 @@
 //!
 //! It exists only so we can check that REA/Ghidra reports what we expect
 //! (functions, strings, imports, call graph) before relying on it for real
-//! PhotoWorkflow binaries. It is not part of the application.
+//! RawStride binaries. It is not part of the application.
 //!
 //! Build: `cargo build -p rea-probe --profile profiling`
 //! Output: `target\profiling\rea-probe.exe` (+ `.pdb`)
@@ -38,7 +38,7 @@ fn make_test_image() -> Vec<u8> {
     img
 }
 
-/// 3x3 box blur – the kind of per-pixel kernel PhotoWorkflow will profile later.
+/// 3x3 box blur – the kind of per-pixel kernel RawStride will profile later.
 #[inline(never)]
 fn box_blur_3x3(src: &[u8], width: usize, height: usize) -> Vec<u8> {
     let mut dst = vec![0u8; src.len()];
