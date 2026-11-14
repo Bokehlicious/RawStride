@@ -22,5 +22,5 @@ the one before it is accepted.
 | U10d | – | Licence section: Model and Property Release Status, the release ids and Digital Source Type as fixed choice lists (with I11) | now (R1 done) |
 | U11a | – | Lists of structures in the form, one row per entry with add and remove, within ADR 0007 §8's cardinalities: Location Created, Location Shown (with "copy from Location Created"), Genre, Image Creator, Copyright Owner, Licensor, Image Supplier | after T123 |
 | U12a | – | Recent values and the user's own values per field (▼ beside the field) | after T123 |
-| U12b | T125 | Copy and paste all fields between images | now (U12b-Q1–U12b-Q5 approved 2026-11-14) |
-| U12c | – | "Apply to all marked": the edited fields written to every marked image as a batch (ADR 0007 §9.5), with one confirmation; the copyright and conflict rules of §2.3.1 | after U12b |
+| U12b | T125 | Copy and paste all fields between images | done (T125, 2026-11-14) |
+| U12c | – | "Apply to all marked": the edited fields written to every marked image as a batch (ADR 0007 §9.5), with one confirmation; the copyright and conflict rules of §2.3.1 | now (U12b done) |

@@ -19,24 +19,24 @@ use inspector_text::{InspectorText, exif_label, inspector_text};
 use metadata::{EditorEvent, InspectorState, MetadataCache};
 use pw_imagecheck::RawImageCheck;
 use pw_loupe::{
-    Action, CellState, DEFAULT_THUMBNAIL_SIZE, DialogKey, DialogRequest, EditorField, EditorForm,
-    EditorKeyAction, EditorSection, EditorText, Field, Filter, GridKeyAction, ImportDialog,
-    ImportDialogState, ImportEvent, ImportForm, ImportWorker, IptcField, LABEL_CHOICES,
-    LabelFilter, Language, LoupeMove, MAX_THUMBNAIL_SIZE, MIN_THUMBNAIL_SIZE, MonitorProfile,
-    Navigation, Options, PanelText, READING_RATINGS_TEXT, RatingButton, RatingRefused,
-    STAR_CONDITIONS, STAR_FILTERS, Settings, StarFilter, SubmitError, Tab, TabAction, Tabs,
-    ThumbGrid, UNSUPPORTED_TEXT, ViewMode, WINDOW_TITLE, allowed_modes, clamp_thumbnail_size,
-    clear_and_import_text, clear_cancel_text, clear_confirmation_text, clear_confirmation_title,
-    color_image, columns, dialog_key_action, done_lines, editor_key_action, editor_rating_key,
-    editor_text, ejecting_progress_text, error_text, grid_key_action, indicator_text, info_panel,
-    iptc_progress_text, key_action, label_choice_text, label_filter_text, label_name, list_folder,
-    load_monitor_profile, load_settings, loupe_key_action, marked_text, metadata_neighbour,
-    mode_label, mode_text, more_lines, no_match_text, notice_text, opens_import, other_values,
-    panel_text, parse_args, position_text, preview_line, preview_summary,
-    primary_monitor_profile_path, progress_text, property_label, rating_key_action, request_cell,
-    save_settings, settings_path, star_condition_text, star_filter_text, star_glyphs, status_line,
-    step_allowed, step_thumbnail_size, tab_action, take_wheel_steps, visible_range, wheel_factor,
-    window_title,
+    Action, CellState, CopiedFields, DEFAULT_THUMBNAIL_SIZE, DialogKey, DialogRequest, EditorField,
+    EditorForm, EditorKeyAction, EditorSection, EditorText, Field, Filter, GridKeyAction,
+    ImportDialog, ImportDialogState, ImportEvent, ImportForm, ImportWorker, IptcField,
+    LABEL_CHOICES, LabelFilter, Language, LoupeMove, MAX_THUMBNAIL_SIZE, MIN_THUMBNAIL_SIZE,
+    MonitorProfile, Navigation, Options, PanelText, READING_RATINGS_TEXT, RatingButton,
+    RatingRefused, STAR_CONDITIONS, STAR_FILTERS, Settings, StarFilter, SubmitError, Tab,
+    TabAction, Tabs, ThumbGrid, UNSUPPORTED_TEXT, ViewMode, WINDOW_TITLE, allowed_modes,
+    clamp_thumbnail_size, clear_and_import_text, clear_cancel_text, clear_confirmation_text,
+    clear_confirmation_title, color_image, columns, dialog_key_action, done_lines,
+    editor_key_action, editor_rating_key, editor_text, ejecting_progress_text, error_text,
+    grid_key_action, indicator_text, info_panel, iptc_progress_text, key_action, label_choice_text,
+    label_filter_text, label_name, list_folder, load_monitor_profile, load_settings,
+    loupe_key_action, marked_text, metadata_neighbour, mode_label, mode_text, more_lines,
+    no_match_text, notice_text, opens_import, other_values, panel_text, parse_args, position_text,
+    preview_line, preview_summary, primary_monitor_profile_path, progress_text, property_label,
+    rating_key_action, request_cell, save_settings, settings_path, star_condition_text,
+    star_filter_text, star_glyphs, status_line, step_allowed, step_thumbnail_size, tab_action,
+    take_wheel_steps, visible_range, wheel_factor, window_title,
 };
 use pw_loupe::{
     COLLAPSED_WIDTH, ColumnState, Command, MENUS, MenuEntry, MenuItem, RatingKey, STATUS_TEXT_SIZE,
@@ -444,6 +444,9 @@ struct Loupe {
     scroll_request: Option<usize>,
     /// The metadata window (M, D16, T107); at most one. While it is open it holds the program.
     metadata_window: Option<MetadataWindow>,
+    /// The fields of the last "Copy All Fields" (U12b-Q1, T125): kept here, not in the window, so
+    /// they outlive closing and moving it; until the next copy or the end of the program.
+    copied_fields: Option<CopiedFields>,
     message: Option<String>,
     indicator_after: Duration,
     tabs: Tabs,
@@ -2039,6 +2042,18 @@ impl Loupe {
         let mut next = false;
         let mut save_and_next = false;
         let mut answer = None;
+        // "Copy All Fields" while the form is shown; "Paste All Fields" when something is copied
+        // and the form is enabled (U12b-Q3, T125). Both buttons are hidden while asking.
+        let can_copy = has_form;
+        let can_paste = self.copied_fields.is_some() && has_form && !locked && !asking;
+        let paste_tooltip = self.copied_fields.as_ref().map(|copied| {
+            editor_text(&EditorText::PasteTooltip {
+                fields: copied.count(),
+                file: copied.file().to_string(),
+            })
+        });
+        let mut copy = false;
+        let mut paste = false;
         // While the question is shown the window's keys do nothing.
         if !asking {
             for key in keys {
@@ -2046,6 +2061,8 @@ impl Loupe {
                     EditorKeyAction::Previous => previous |= can_previous,
                     EditorKeyAction::Next => next |= can_next,
                     EditorKeyAction::SaveAndNext => save_and_next |= can_next,
+                    EditorKeyAction::CopyAllFields => copy |= can_copy,
+                    EditorKeyAction::PasteAllFields => paste |= can_paste,
                 }
             }
         }
@@ -2106,6 +2123,22 @@ impl Loupe {
                         });
                     } else {
                         ui.horizontal_wrapped(|ui| {
+                            copy |= ui
+                                .add_enabled(
+                                    can_copy,
+                                    egui::Button::new(editor_text(&EditorText::CopyAllFields)),
+                                )
+                                .clicked();
+                            let mut paste_button = ui.add_enabled(
+                                can_paste,
+                                egui::Button::new(editor_text(&EditorText::PasteAllFields)),
+                            );
+                            if let Some(tooltip) = &paste_tooltip {
+                                paste_button = paste_button
+                                    .on_hover_text(tooltip)
+                                    .on_disabled_hover_text(tooltip);
+                            }
+                            paste |= paste_button.clicked();
                             previous |= ui
                                 .add_enabled(
                                     can_previous,
@@ -2199,6 +2232,17 @@ impl Loupe {
             (choice, &mut window.body)
         {
             state.form.choose(conflict_index, value_index);
+        }
+        // Copy, then paste, as the buttons and keys asked (T125). A paste is unsaved edits, as
+        // typing gives; the status below is cleared when it changed the form.
+        if let WindowBody::Form(state) = &mut window.body {
+            if copy {
+                self.copied_fields = Some(state.form.copy(&window.file));
+            }
+            if paste && let Some(copied) = &self.copied_fields {
+                state.form.paste(copied);
+                ctx.request_repaint();
+            }
         }
         let form_after = match &window.body {
             WindowBody::Form(state) => Some(&state.form),
@@ -4786,6 +4830,7 @@ fn run(options: Options) -> Result<(), String> {
                 next_status: StatusBar::default(),
                 scroll_request: None,
                 metadata_window: None,
+                copied_fields: None,
                 message: None,
                 indicator_after,
                 tabs: Tabs::default(),

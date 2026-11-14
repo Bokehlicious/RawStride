@@ -32,8 +32,8 @@ use pw_viewcore::Status;
 
 pub use browse::{LoupeMove, metadata_neighbour};
 pub use editor::{
-    EditorField, EditorForm, EditorSection, EditorText, OpenConflict, RatingButton, WriteReason,
-    editor_text, notice_text, write_reason_text,
+    CopiedFields, EditorField, EditorForm, EditorSection, EditorText, OpenConflict, RatingButton,
+    WriteReason, editor_text, notice_text, write_reason_text,
 };
 pub use filter::{
     Filter, LABEL_CHOICES, LabelChoice, LabelFilter, STAR_CONDITIONS, STAR_FILTERS, StarCondition,
@@ -357,10 +357,16 @@ pub enum EditorKeyAction {
     Next,
     /// Ctrl+Enter: "Spara och nästa".
     SaveAndNext,
+    /// Ctrl+Shift+C: "Copy All Fields" (U12b-Q4, T125).
+    CopyAllFields,
+    /// Ctrl+Shift+V: "Paste All Fields" (U12b-Q4, T125).
+    PasteAllFields,
 }
 
-/// The metadata window's key of a key press, each with exactly Ctrl; `None` with Shift or Alt and
-/// for every other key, so plain arrows, Page Up/Down, Home, End and Enter stay with the fields.
+/// The metadata window's key of a key press: Ctrl+PageUp, Ctrl+PageDown and Ctrl+Enter with
+/// exactly Ctrl, Ctrl+Shift+C and Ctrl+Shift+V with exactly Ctrl and Shift; `None` with Alt and
+/// for every other key, so plain arrows, Page Up/Down, Home, End and Enter, and Ctrl+C and Ctrl+V
+/// (the text fields' copy and paste), stay with the fields.
 pub fn editor_key_action(
     key: egui::Key,
     ctrl: bool,
@@ -371,6 +377,8 @@ pub fn editor_key_action(
         (egui::Key::PageUp, true, false, false) => Some(EditorKeyAction::Previous),
         (egui::Key::PageDown, true, false, false) => Some(EditorKeyAction::Next),
         (egui::Key::Enter, true, false, false) => Some(EditorKeyAction::SaveAndNext),
+        (egui::Key::C, true, true, false) => Some(EditorKeyAction::CopyAllFields),
+        (egui::Key::V, true, true, false) => Some(EditorKeyAction::PasteAllFields),
         _ => None,
     }
 }
@@ -718,6 +726,51 @@ mod tests {
             assert_eq!(editor_key_action(key, true, false, false), None, "{key:?}");
             assert_eq!(editor_key_action(key, false, false, false), None, "{key:?}");
         }
+    }
+
+    #[test]
+    fn the_metadata_windows_copy_and_paste_keys_are_ctrl_shift_c_and_v() {
+        use egui::Key as K;
+        assert_eq!(
+            editor_key_action(K::C, true, true, false),
+            Some(EditorKeyAction::CopyAllFields)
+        );
+        assert_eq!(
+            editor_key_action(K::V, true, true, false),
+            Some(EditorKeyAction::PasteAllFields)
+        );
+        for key in [K::C, K::V] {
+            for (ctrl, shift, alt) in [
+                // Ctrl+C and Ctrl+V stay with the text fields.
+                (true, false, false),
+                (false, false, false),
+                (false, true, false),
+                (false, false, true),
+                (true, false, true),
+                (true, true, true),
+                (false, true, true),
+            ] {
+                assert_eq!(
+                    editor_key_action(key, ctrl, shift, alt),
+                    None,
+                    "{key:?} {ctrl} {shift} {alt}"
+                );
+            }
+        }
+        // T112's keys are unchanged.
+        assert_eq!(
+            editor_key_action(K::PageUp, true, false, false),
+            Some(EditorKeyAction::Previous)
+        );
+        assert_eq!(
+            editor_key_action(K::PageDown, true, false, false),
+            Some(EditorKeyAction::Next)
+        );
+        assert_eq!(
+            editor_key_action(K::Enter, true, false, false),
+            Some(EditorKeyAction::SaveAndNext)
+        );
+        assert_eq!(editor_key_action(K::Enter, true, true, false), None);
     }
 
     #[test]

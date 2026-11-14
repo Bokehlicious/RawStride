@@ -503,6 +503,38 @@ pub struct OpenConflict {
     pub chosen: Option<usize>,
 }
 
+/// The fields copied by "Copy All Fields" (ADR 0017 §2.3.1, U12b-Q1, T125): the source file's
+/// name and the shown text of every editable field (the check box's `True` or empty). Kept by the
+/// program until the next copy; not saved and not on the Windows clipboard.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CopiedFields {
+    file: String,
+    texts: Vec<(EditorField, String)>,
+}
+
+impl CopiedFields {
+    /// The name of the file the fields were copied from.
+    pub fn file(&self) -> &str {
+        &self.file
+    }
+
+    /// The copied text of `field`; `None` for a field that was not copied (read-only, deprecated).
+    pub fn text(&self, field: EditorField) -> Option<&str> {
+        self.texts
+            .iter()
+            .find(|(f, _)| *f == field)
+            .map(|(_, text)| text.as_str())
+    }
+
+    /// How many copied fields are not empty: the fields a paste puts in (U12b-Q2).
+    pub fn count(&self) -> usize {
+        self.texts
+            .iter()
+            .filter(|(_, text)| !text.is_empty())
+            .count()
+    }
+}
+
 /// The editor's form for one image.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EditorForm {
@@ -598,6 +630,41 @@ impl EditorForm {
             } else {
                 String::new()
             };
+        }
+    }
+
+    /// "Copy All Fields" (U12b-Q1, T125): the text of every editable field as the form shows it,
+    /// unsaved edits included, and the Copyrighted check box. Not the read-only fields (the
+    /// deprecated ones, a check box with another value), the conflict choices or the errors. A
+    /// Lang Alt gives its text, which is the `x-default` text the window edits (Q7).
+    pub fn copy(&self, file: &str) -> CopiedFields {
+        let texts = self
+            .fields
+            .iter()
+            .filter(|state| state.field.editable() && self.read_only_text(state.field).is_none())
+            .map(|state| (state.field, state.text.clone()))
+            .collect();
+        CopiedFields {
+            file: file.to_string(),
+            texts,
+        }
+    }
+
+    /// "Paste All Fields" (U12b-Q2, T125): every copied text that is not empty goes into its field
+    /// as if typed, an unsaved edit; the other fields keep their text, and a field shown read-only
+    /// here is left as it is. The edits, errors and conflict decisions then follow as for typing.
+    pub fn paste(&mut self, copied: &CopiedFields) {
+        for (field, text) in &copied.texts {
+            if text.is_empty() {
+                continue;
+            }
+            if field.check_box() {
+                self.set_checked(*field, text == CHECKED);
+            } else if self.read_only_text(*field).is_none()
+                && let Some(target) = self.text_mut(*field)
+            {
+                target.clone_from(text);
+            }
         }
     }
 
@@ -902,6 +969,12 @@ pub enum EditorText {
     Next,
     /// The button that writes the edits and moves to the next image (T112).
     SaveAndNext,
+    /// The button that copies every editable field of the form (U12b-Q3, T125).
+    CopyAllFields,
+    /// The button that pastes the copied fields into the form (U12b-Q3, T125).
+    PasteAllFields,
+    /// The tooltip of "Paste All Fields": how many fields it holds and from which file.
+    PasteTooltip { fields: usize, file: String },
     /// The title of the message at program exit listing the rating and editor writes that were
     /// not saved (owner decision 2026-11-12: one message for both).
     UnsavedAtExitTitle,
@@ -951,6 +1024,15 @@ pub fn editor_text(text: &EditorText) -> String {
         EditorText::Previous => "Previous".to_string(),
         EditorText::Next => "Next".to_string(),
         EditorText::SaveAndNext => "Save and Next".to_string(),
+        EditorText::CopyAllFields => "Copy All Fields".to_string(),
+        EditorText::PasteAllFields => "Paste All Fields".to_string(),
+        EditorText::PasteTooltip { fields, file } => {
+            if *fields == 1 {
+                format!("1 field from {file}")
+            } else {
+                format!("{fields} fields from {file}")
+            }
+        }
         EditorText::UnsavedAtExitTitle => "Unsaved Changes".to_string(),
         EditorText::MoreUnsaved { more } => format!("… and {more} more"),
         EditorText::ReadingMetadata => "Reading metadata…".to_string(),
@@ -2118,6 +2200,218 @@ mod tests {
         assert_eq!(
             form.edits(),
             Ok(vec![set("photoshop:CaptionWriter", text("Per"))])
+        );
+    }
+
+    // --- copy and paste all fields (T125) ---
+
+    /// A form with a text, a Lang Alt with `x-default` and another language, a list, the
+    /// Copyrighted check box, every deprecated field, a rating and a label.
+    fn source_metadata() -> Metadata {
+        let mut metadata = Metadata::new();
+        insert(&mut metadata, "photoshop:City", text("Göteborg"));
+        insert(
+            &mut metadata,
+            "dc:title",
+            lang_alt(&[("sv", "Solnedgång"), ("x-default", "Sunset")]),
+        );
+        insert(&mut metadata, "dc:subject", list(&["hav", "kväll"]));
+        insert(&mut metadata, "xmpRights:Marked", text("True"));
+        insert(
+            &mut metadata,
+            "photoshop:Urgency",
+            Value::Number("5".into()),
+        );
+        insert(&mut metadata, "photoshop:Category", text("SPO"));
+        insert(
+            &mut metadata,
+            "photoshop:SupplementalCategories",
+            list(&["fotboll"]),
+        );
+        insert(&mut metadata, "xmp:Rating", Value::Number("4".into()));
+        insert(&mut metadata, "xmp:Label", text("Red"));
+        metadata
+    }
+
+    #[test]
+    fn copy_takes_every_editable_fields_shown_text_and_nothing_read_only() {
+        let mut form = form_with(source_metadata());
+        // An unsaved edit is copied as the window shows it.
+        type_into(&mut form, EditorField::Headline, "Kväll vid havet");
+        let copied = form.copy("a.jpg");
+        assert_eq!(copied.file(), "a.jpg");
+        assert_eq!(copied.text(EditorField::City), Some("Göteborg"));
+        assert_eq!(copied.text(EditorField::Headline), Some("Kväll vid havet"));
+        // The Lang Alt's x-default text, the list on one line, the checked box.
+        assert_eq!(copied.text(EditorField::Title), Some("Sunset"));
+        assert_eq!(copied.text(EditorField::Keywords), Some("hav, kväll"));
+        assert_eq!(copied.text(EditorField::Copyrighted), Some("True"));
+        // An empty editable field is copied empty.
+        assert_eq!(copied.text(EditorField::Credit), Some(""));
+        // No deprecated field, and every editable field once, in form order.
+        for field in [
+            EditorField::Urgency,
+            EditorField::Category,
+            EditorField::SupplementalCategories,
+        ] {
+            assert_eq!(copied.text(field), None, "{field:?}");
+        }
+        let fields: Vec<EditorField> = copied.texts.iter().map(|(field, _)| *field).collect();
+        let editable: Vec<EditorField> = EditorField::ALL
+            .into_iter()
+            .filter(|field| field.editable())
+            .collect();
+        assert_eq!(fields, editable);
+        // No rating or label: no copied field is one of their properties.
+        assert!(
+            copied
+                .texts
+                .iter()
+                .all(|(field, _)| !["xmp:Rating", "xmp:Label"].contains(&field.property()))
+        );
+        // The non-empty fields: City, Headline, Title, Keywords, Copyrighted.
+        assert_eq!(copied.count(), 5);
+    }
+
+    #[test]
+    fn copy_leaves_out_a_copyrighted_box_shown_read_only() {
+        let mut metadata = Metadata::new();
+        insert(&mut metadata, "xmpRights:Marked", text("Ja"));
+        let copied = form_with(metadata).copy("a.jpg");
+        assert_eq!(copied.text(EditorField::Copyrighted), None);
+    }
+
+    #[test]
+    fn paste_leaves_the_fields_empty_in_the_copy_as_they_were() {
+        let mut source = Metadata::new();
+        insert(&mut source, "photoshop:City", text("Lund"));
+        let copied = form_with(source).copy("a.jpg");
+        let mut target = Metadata::new();
+        insert(&mut target, "photoshop:City", text("Malmö"));
+        insert(&mut target, "photoshop:Credit", text("Anna"));
+        insert(&mut target, "dc:title", lang_alt(&[("x-default", "Hamn")]));
+        insert(&mut target, "xmpRights:Marked", text("True"));
+        let mut form = form_with(target);
+        form.paste(&copied);
+        assert_eq!(form.text(EditorField::City), "Lund");
+        // Empty in the copy (Credit, Title, an unchecked Copyrighted): not touched.
+        assert_eq!(form.text(EditorField::Credit), "Anna");
+        assert_eq!(form.text(EditorField::Title), "Hamn");
+        assert!(form.checked(EditorField::Copyrighted));
+        assert_eq!(form.edits(), Ok(vec![set("photoshop:City", text("Lund"))]));
+    }
+
+    #[test]
+    fn a_pasted_text_equal_to_the_start_text_gives_no_edit_and_a_different_one_a_set() {
+        let mut source = Metadata::new();
+        insert(&mut source, "photoshop:City", text("Göteborg"));
+        insert(&mut source, "photoshop:Credit", text("Per"));
+        insert(&mut source, "xmpRights:Marked", text("True"));
+        let copied = form_with(source).copy("a.jpg");
+        let mut target = Metadata::new();
+        insert(&mut target, "photoshop:City", text("Göteborg"));
+        insert(&mut target, "photoshop:Credit", text("Anna"));
+        let mut form = form_with(target);
+        form.paste(&copied);
+        assert_eq!(
+            form.edits(),
+            Ok(vec![
+                set("photoshop:Credit", text("Per")),
+                set("xmpRights:Marked", text("True")),
+            ])
+        );
+    }
+
+    #[test]
+    fn a_pasted_bad_date_gives_the_fields_error() {
+        let mut form = form_with(Metadata::new());
+        type_into(&mut form, EditorField::DateCreated, "igår");
+        let copied = form.copy("a.jpg");
+        let mut target = form_with(Metadata::new());
+        target.paste(&copied);
+        assert_eq!(target.text(EditorField::DateCreated), "igår");
+        assert_eq!(
+            target.edits(),
+            Err(vec![(EditorField::DateCreated, date_error_text())])
+        );
+    }
+
+    #[test]
+    fn a_field_shown_read_only_on_the_target_is_not_changed() {
+        let copied = form_with(source_metadata()).copy("a.jpg");
+        let mut target = Metadata::new();
+        insert(&mut target, "xmpRights:Marked", text("Ja"));
+        insert(&mut target, "photoshop:Category", text("NYH"));
+        let mut form = form_with(target);
+        form.paste(&copied);
+        assert_eq!(form.read_only_text(EditorField::Copyrighted), Some("Ja"));
+        assert!(!form.checked(EditorField::Copyrighted));
+        assert_eq!(form.read_only_text(EditorField::Category), Some("NYH"));
+        // Only the editable fields of the copy give edits.
+        let edits = form.edits().unwrap();
+        assert!(
+            edits.iter().all(|edit| !matches!(
+                edit,
+                Edit::Set { property, .. } | Edit::Clear { property, .. }
+                    if property == "xmpRights:Marked" || property == "photoshop:Category"
+            )),
+            "{edits:?}"
+        );
+        // City, Title and Keywords.
+        assert_eq!(edits.len(), 3);
+    }
+
+    #[test]
+    fn a_pasted_list_is_split_at_commas() {
+        let mut form = form_with(Metadata::new());
+        type_into(&mut form, EditorField::Keywords, "hav,  kväll ,, sol");
+        let copied = form.copy("a.jpg");
+        let mut target = form_with(Metadata::new());
+        target.paste(&copied);
+        assert_eq!(
+            target.edits(),
+            Ok(vec![set("dc:subject", list(&["hav", "kväll", "sol"]))])
+        );
+    }
+
+    #[test]
+    fn a_pasted_value_on_a_property_with_an_open_conflict_decides_it() {
+        let mut source = Metadata::new();
+        insert(&mut source, "photoshop:City", text("Lund"));
+        let copied = form_with(source).copy("a.jpg");
+        let mut form = form_with(metadata_with_city_conflict());
+        form.paste(&copied);
+        assert_eq!(form.text(EditorField::City), "Lund");
+        // The Set on the conflicted property decides it, as typing does (T83, Q1).
+        assert_eq!(form.edits(), Ok(vec![set("photoshop:City", text("Lund"))]));
+    }
+
+    #[test]
+    fn copy_then_paste_on_the_same_form_gives_no_edits() {
+        let mut form = form_with(source_metadata());
+        let copied = form.copy("a.jpg");
+        form.paste(&copied);
+        assert_eq!(form.edits(), Ok(Vec::new()));
+        assert_eq!(form, form_with(source_metadata()));
+    }
+
+    #[test]
+    fn the_copy_and_paste_texts() {
+        assert_eq!(editor_text(&EditorText::CopyAllFields), "Copy All Fields");
+        assert_eq!(editor_text(&EditorText::PasteAllFields), "Paste All Fields");
+        assert_eq!(
+            editor_text(&EditorText::PasteTooltip {
+                fields: 1,
+                file: "a.jpg".into()
+            }),
+            "1 field from a.jpg"
+        );
+        assert_eq!(
+            editor_text(&EditorText::PasteTooltip {
+                fields: 12,
+                file: "DSC01234.ARW".into()
+            }),
+            "12 fields from DSC01234.ARW"
         );
     }
 

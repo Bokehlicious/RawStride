@@ -1,4 +1,4 @@
-# T125. ADR 0017 U12b: Copy and paste all fields between images — Open
+# T125. ADR 0017 U12b: Copy and paste all fields between images — Done
 
 - **Can start now.** The owner approved the proposals of U12b-Q1–U12b-Q5 (at the end of this
   task) on 2026-11-14; they are written into the points below and into ADR 0017 §6.1. Not at the
@@ -88,3 +88,6 @@
 |---|---|---|
 | 2026-11-14 | Blocked | Written by the reviewer (ADR 0017 U12b, after T124); waits for U12b-Q1–U12b-Q5 |
 | 2026-11-14 | Open | Owner: U12b-Q1–U12b-Q5 approved as proposed; written into ADR 0017 §6.1 |
+| 2026-11-14 | Ready for review | Task agent: copy and paste on `EditorForm` (`CopiedFields`), the buttons, Ctrl+Shift+C/V; 11 new tests; `check.ps1` all OK (1259 passed, 43 ignored) |
+| 2026-11-14 | Ready for review | Reviewer: code accepted as written, no changes. Copy takes every editable field as shown (unsaved edits included) and Copyrighted, no read-only field, rating or label; paste only non-empty fields, read-only fields on the target left, edits, errors, lists and conflicts as typing; the copy kept in `Loupe`; buttons before "Previous", Paste disabled while writing or asking, its tooltip also when disabled; Ctrl+Shift+C/V through `editor_key_action`, Ctrl+C/V left to the fields. `test-output.txt` newer than the code: fmt, test and clippy OK, 1259 passed, 0 failed, 43 ignored |
+| 2026-11-14 | Done | Owner: hand check done and approved; committed by the reviewer |

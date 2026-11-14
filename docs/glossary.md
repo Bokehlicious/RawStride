@@ -160,6 +160,7 @@ Every other property already uses IPTC's English name in both languages.
 | – | Rating and Label | the sixth section heading of the metadata window (ADR 0017 U10-Q1, U10c); added by T124. Its buttons use the terms of §2 (No stars, 1 star / {n} stars, Reject, the label names, No label) |
 | OK, Avbryt, Spara, Släng | OK, Cancel, Save, Discard | |
 | Föregående, Nästa, Spara och nästa | Previous, Next, Save and Next | |
+| Kopiera alla fält, Klistra in alla fält | Copy All Fields, Paste All Fields | the metadata window's buttons (ADR 0017 §2.3.1, U12b-Q5); added by T125. The Paste tooltip: "1 field from {file}" / "{n} fields from {file}" |
 | Spara ändringarna? / Ändringar som inte sparades | Save changes? / Unsaved changes | |
 | Sparar … / Sparat. | Saving … / Saved. | |
 | Ändrad | Changed | |
