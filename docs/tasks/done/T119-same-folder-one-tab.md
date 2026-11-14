@@ -1,4 +1,4 @@
-# T119. The same folder opens in one tab, however its path is written — Open
+# T119. The same folder opens in one tab, however its path is written — Done
 
 - **Starts after T116 is Done** (both change `crates/pw-loupe/src/tabs.rs`).
 - **Why:** `Tabs::open_new` finds an open folder by comparing paths exactly, so `C:\Foto` and
@@ -40,3 +40,7 @@
 | Date | Status | Note |
 |---|---|---|
 | 2026-11-13 | Open | Added from the backlog ("Same folder, two tabs"); starts after T116 |
+| 2026-11-14 | Ready for review | `same_folder` in `tabs.rs`, used by `open_new`; five tests (the case test on Windows only); the relative case uses the crate's `src` folder (no change of the current directory); `check.ps1` all OK, 1223 passed, 43 ignored |
+| 2026-11-14 | Ready for review | Reviewer: code accepted, not committed. `same_folder` compares `std::path::absolute` + `pw_ingest::resolve` forms and falls back to the path as given; the tab keeps the path given (point 3); the five tests cover the task's cases. Point 4 was not answered in the report; the reviewer's answer: `path_starts_with` compares components exactly, but std upper-cases the drive letter and the card root is a drive, so a folder on the card is still found; a different letter case in a folder name below the root would not be (low risk, not changed). The reviewer's `check.ps1` ran while T121's agent was working: no test failed, but `cargo fmt` stopped on T121's unfinished `info_panel.rs` and the two runs wrote into the same `test-output.txt`; a clean run is needed after T121 |
+| 2026-11-14 | Ready for review | Reviewer: clean `check.ps1` after T121 (T119 and T121 together): fmt, test and clippy OK, 1215 passed, 0 failed, 43 ignored. Waits for the owner's approval |
+| 2026-11-14 | Done | Owner: hand check done and approved; committed by the reviewer |

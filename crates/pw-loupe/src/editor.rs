@@ -1455,7 +1455,7 @@ mod tests {
 
     /// The texts moved here from `metadata.rs` and `import_worker.rs` (T116) keep their wording.
     #[test]
-    fn the_moved_metadata_texts_keep_their_swedish_wording() {
+    fn the_moved_metadata_texts_keep_their_wording() {
         assert_eq!(
             editor_text(&EditorText::MoreUnsaved { more: 3 }),
             "… and 3 more"

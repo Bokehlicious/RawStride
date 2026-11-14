@@ -719,7 +719,7 @@ mod tests {
 
     /// One example of each text moved here by T116, as it was before.
     #[test]
-    fn every_moved_import_text_keeps_its_swedish_wording() {
+    fn every_moved_import_text_keeps_its_wording() {
         let texts = [
             (ImportText::Title, "Import"),
             (ImportText::Source, "Source"),

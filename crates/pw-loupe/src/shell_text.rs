@@ -693,7 +693,7 @@ mod tests {
 
     /// One example of each text moved here by T116, as it was before.
     #[test]
-    fn every_moved_shell_text_keeps_its_swedish_wording() {
+    fn every_moved_shell_text_keeps_its_wording() {
         let texts = [
             (ShellText::EmptyTab, "Empty"),
             (ShellText::DropHere, "Drag a folder or an image here"),

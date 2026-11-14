@@ -78,11 +78,11 @@ impl Tabs {
     /// refreshed instead (GR12); if the active tab is empty, the folder fills it instead of leaving
     /// an empty tab behind.
     pub fn open_new(&mut self, folder: PathBuf, files: Vec<PathBuf>, pos: usize) {
-        if let Some(index) = self
-            .tabs
-            .iter()
-            .position(|tab| tab.folder.as_ref() == Some(&folder))
-        {
+        if let Some(index) = self.tabs.iter().position(|tab| {
+            tab.folder
+                .as_deref()
+                .is_some_and(|open| same_folder(open, &folder))
+        }) {
             self.active = index;
             if let Some(tab) = self.tabs.get_mut(index) {
                 tab.open(folder, files, pos);
@@ -222,6 +222,21 @@ impl Tabs {
             })
             .collect()
     }
+}
+
+/// Whether `a` and `b` name the same folder, however they are written (GR12): each is made
+/// absolute and then resolved with `pw_ingest::resolve`, so case, trailing separators, `\\?\`
+/// and `subst` drives do not matter. A path whose absolute or resolved form cannot be made is
+/// compared as it is. Only the comparison uses the resolved forms; the tab keeps the path given.
+fn same_folder(a: &Path, b: &Path) -> bool {
+    resolved_folder(a) == resolved_folder(b)
+}
+
+fn resolved_folder(path: &Path) -> PathBuf {
+    std::path::absolute(path)
+        .ok()
+        .and_then(|absolute| pw_ingest::resolve(&absolute, "folder").ok())
+        .unwrap_or_else(|| path.to_path_buf())
 }
 
 fn path_starts_with(path: &Path, root: &Path) -> bool {
@@ -523,5 +538,124 @@ mod tests {
 
         assert!(tabs.clear_inside(Path::new(r"E:\DCIM")));
         assert_eq!(tabs.tabs(), &[Tab::default()]);
+    }
+
+    /// A temporary folder made by the test, removed when dropped.
+    struct TempFolder(PathBuf);
+
+    impl TempFolder {
+        fn new(name: &str) -> Self {
+            let root =
+                std::env::temp_dir().join(format!("pw-loupe-tabs-{name}-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&root);
+            std::fs::create_dir_all(root.join("Foto")).expect("temporary folder is made");
+            Self(root)
+        }
+
+        fn foto(&self) -> PathBuf {
+            self.0.join("Foto")
+        }
+    }
+
+    impl Drop for TempFolder {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    /// Opens `first` in the start tab, `other` in a second tab and then `again` with `open_new`.
+    fn open_twice(first: &Path, again: &Path) -> Tabs {
+        let mut tabs = Tabs::default();
+        tabs.open_in_active(first.to_path_buf(), files("first", 2), 0);
+        tabs.open_new(PathBuf::from("other"), files("other", 1), 0);
+        tabs.open_new(again.to_path_buf(), files("again", 3), 2);
+        tabs
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn the_same_folder_in_other_letter_case_opens_in_one_tab() {
+        let temp = TempFolder::new("case");
+        let first = temp.foto();
+        let again = PathBuf::from(first.to_string_lossy().to_uppercase());
+        assert_ne!(first, again);
+
+        let tabs = open_twice(&first, &again);
+
+        assert_eq!(tabs.tabs().len(), 2);
+        assert_eq!(tabs.active_index(), 0, "the first tab is active");
+        // The tab keeps the path given the second time (point 2), not the resolved form.
+        assert_eq!(tabs.tabs()[0].folder, Some(again));
+        assert_eq!(tabs.tabs()[0].current, 2);
+        assert_eq!(
+            tabs.tabs()[0].files.first(),
+            Some(&PathBuf::from("again-0.arw"))
+        );
+    }
+
+    #[test]
+    fn the_same_folder_with_a_trailing_separator_opens_in_one_tab() {
+        let temp = TempFolder::new("trailing");
+        let first = temp.foto();
+        let again = PathBuf::from(format!("{}{}", first.display(), std::path::MAIN_SEPARATOR));
+        assert_ne!(first.as_os_str(), again.as_os_str());
+
+        let tabs = open_twice(&first, &again);
+
+        assert_eq!(tabs.tabs().len(), 2);
+        assert_eq!(tabs.active_index(), 0);
+        assert_eq!(tabs.tabs()[0].folder, Some(again));
+    }
+
+    /// The relative path is made from the current directory without changing it: changing the
+    /// current directory would affect the other tests running at the same time, and writing a
+    /// folder there would write into the source tree. `cargo test` runs this test in the crate's
+    /// folder, so its existing `src` folder is used, read only.
+    #[test]
+    fn a_relative_path_to_an_open_folder_opens_in_one_tab() {
+        let current = std::env::current_dir().expect("current directory is known");
+        let relative = PathBuf::from("src");
+        let absolute = current.join(&relative);
+        assert!(absolute.is_dir(), "the test runs in the crate's folder");
+
+        let tabs = open_twice(&absolute, &relative);
+
+        assert_eq!(tabs.tabs().len(), 2);
+        assert_eq!(tabs.active_index(), 0);
+        assert_eq!(tabs.tabs()[0].folder, Some(relative));
+    }
+
+    #[test]
+    fn two_different_folders_open_in_two_tabs() {
+        let temp = TempFolder::new("different");
+        let first = temp.foto();
+        let second = temp.0.join("Other");
+        std::fs::create_dir_all(&second).expect("second folder is made");
+
+        let mut tabs = Tabs::default();
+        tabs.open_new(first.clone(), files("first", 1), 0);
+        tabs.open_new(second.clone(), files("second", 1), 0);
+
+        assert_eq!(tabs.tabs().len(), 2);
+        assert_eq!(tabs.active_index(), 1);
+        assert_eq!(tabs.tabs()[0].folder, Some(first));
+        assert_eq!(tabs.tabs()[1].folder, Some(second));
+    }
+
+    #[test]
+    fn a_folder_that_does_not_exist_compared_with_itself_opens_in_one_tab() {
+        let temp = TempFolder::new("missing");
+        let missing = temp.0.join("missing").join("Foto");
+        assert!(!missing.exists());
+
+        let tabs = open_twice(&missing, &missing);
+        assert_eq!(tabs.tabs().len(), 2);
+        assert_eq!(tabs.active_index(), 0);
+        assert_eq!(tabs.tabs()[0].folder, Some(missing));
+
+        // `pw_ingest::resolve` refuses a path with `..` (kept by `absolute` outside Windows); such a
+        // path is then compared as it is.
+        let parent = temp.0.join("missing").join("..").join("gone");
+        assert!(same_folder(&parent, &parent));
     }
 }

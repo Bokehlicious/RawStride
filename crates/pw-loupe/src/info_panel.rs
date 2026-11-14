@@ -1280,34 +1280,61 @@ mod tests {
         }
     }
 
-    // --- no Swedish letters in the text modules (T117) ---
-
-    /// The text modules of `pw-loupe` (rule 13), with their sources.
-    const TEXT_MODULES: [(&str, &str); 8] = [
-        ("shell_text.rs", include_str!("shell_text.rs")),
-        ("import_text.rs", include_str!("import_text.rs")),
-        ("loupe_text.rs", include_str!("loupe_text.rs")),
-        ("rating_text.rs", include_str!("rating_text.rs")),
-        ("inspector_text.rs", include_str!("inspector_text.rs")),
-        ("preview_text.rs", include_str!("preview_text.rs")),
-        ("info_panel.rs", include_str!("info_panel.rs")),
-        ("editor.rs", include_str!("editor.rs")),
-    ];
+    // --- no Swedish letters in the workspace's non-test string literals (T117, T118, T121) ---
 
     /// The letters that only a Swedish text has.
     const SWEDISH_LETTERS: [char; 6] = ['å', 'ä', 'ö', 'Å', 'Ä', 'Ö'];
 
-    /// The places in `source` (before its `#[cfg(test)]` module) where a string literal holds a
-    /// Swedish letter, as "file:line"; comments, character literals and lifetimes are skipped, and
-    /// so are the lines of `SV_LABELS` in `info_panel.rs`.
-    fn swedish_letters_in_literals(file: &str, source: &str) -> Vec<String> {
-        let code = source
-            .split("\n#[cfg(test)]\nmod tests")
-            .next()
-            .unwrap_or(source);
+    /// The one file whose table `SV_LABELS` may hold Swedish letters, as the check names it.
+    const SV_LABELS_FILE: &str = "pw-loupe/src/info_panel.rs";
+
+    /// `source` with every top-level `#[cfg(test)]` item blanked (its lines kept, empty, so the
+    /// line numbers stay), and the files those items declare (`mod name;` or `#[path = "…"]`).
+    fn non_test_code(source: &str) -> (String, Vec<String>) {
+        let source = source.replace("\r\n", "\n");
+        let lines: Vec<&str> = source.lines().collect();
+        let mut kept = Vec::with_capacity(lines.len());
+        let mut declared = Vec::new();
+        let mut at = 0;
+        while at < lines.len() {
+            if lines[at] != "#[cfg(test)]" {
+                kept.push(lines[at]);
+                at += 1;
+                continue;
+            }
+            let start = at;
+            at += 1;
+            let mut path = None;
+            while at < lines.len() && lines[at].starts_with("#[") {
+                if let Some(file) = lines[at]
+                    .strip_prefix("#[path = \"")
+                    .and_then(|rest| rest.strip_suffix("\"]"))
+                {
+                    path = Some(file.rsplit('/').next().unwrap_or(file).to_string());
+                }
+                at += 1;
+            }
+            let item = lines.get(at).copied().unwrap_or("");
+            if let Some(name) = item.strip_prefix("mod ").and_then(|r| r.strip_suffix(';')) {
+                declared.push(path.unwrap_or_else(|| format!("{name}.rs")));
+            } else if item.ends_with('{') {
+                while at < lines.len() && lines[at] != "}" {
+                    at += 1;
+                }
+            }
+            at += 1;
+            kept.extend(std::iter::repeat_n("", at.min(lines.len()) - start));
+        }
+        (kept.join("\n"), declared)
+    }
+
+    /// The places in `code` where a string literal holds a Swedish letter, as "file:line";
+    /// comments, character literals and lifetimes are skipped, and so are the lines of
+    /// `SV_LABELS` when `file` is [`SV_LABELS_FILE`].
+    fn swedish_letters_in_literals(file: &str, code: &str) -> Vec<String> {
         // The lines of the table `SV_LABELS`, from its first line to its closing `];`.
         let mut skipped = std::ops::Range::default();
-        if file == "info_panel.rs" {
+        if file == SV_LABELS_FILE {
             let lines: Vec<&str> = code.lines().collect();
             if let Some(start) = lines
                 .iter()
@@ -1403,38 +1430,99 @@ mod tests {
         found
     }
 
+    /// Adds the `.rs` files under `folder`, with their sources, to `out`, sorted by path.
+    fn rust_sources(folder: &std::path::Path, out: &mut Vec<(std::path::PathBuf, String)>) {
+        let mut entries: Vec<std::path::PathBuf> = std::fs::read_dir(folder)
+            .unwrap_or_else(|error| panic!("read {}: {error}", folder.display()))
+            .map(|entry| entry.unwrap_or_else(|error| panic!("{error}")).path())
+            .collect();
+        entries.sort();
+        for path in entries {
+            if path.is_dir() {
+                rust_sources(&path, out);
+            } else if path.extension().is_some_and(|extension| extension == "rs") {
+                let source = std::fs::read_to_string(&path)
+                    .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+                out.push((path, source));
+            }
+        }
+    }
+
     #[test]
-    fn the_check_finds_a_swedish_letter_in_a_string_literal() {
+    fn the_check_finds_a_swedish_letter_in_a_non_test_string_literal() {
         let source = "// \"Stäng\" in a comment\n\
+                      #[cfg(test)]\n\
+                      mod test_support;\n\
                       fn a() -> &'static str {\n\
                       let c = 'ä';\n\
                       \"Close\"\n\
                       }\n\
                       fn b() -> String { format!(\"Öppna {x}\") }\n\
+                      #[cfg(test)]\n\
+                      #[path = \"fixture_file.rs\"]\n\
+                      mod fixture;\n\
                       const R: &str = r#\"Mål\"#;\n\
-                      #[cfg(test)]\nmod tests {\n    \"Avbryt\";\n}\n";
+                      #[cfg(test)]\n\
+                      mod tests {\n    \"Avbryt\";\n}\n\
+                      const S: &str = \"Källa\";\n";
+        let (code, declared) = non_test_code(source);
+        assert_eq!(declared, ["test_support.rs", "fixture_file.rs"]);
         assert_eq!(
-            swedish_letters_in_literals("x.rs", source),
-            ["x.rs:6", "x.rs:7"]
+            swedish_letters_in_literals("x.rs", &code),
+            ["x.rs:8", "x.rs:12", "x.rs:17"]
         );
         let table = "const SV_LABELS: &[(&str, &str)] = &[\n    (\"a\", \"Källa\"),\n];\n\
                      const B: &str = \"Källa\";\n";
         assert_eq!(
-            swedish_letters_in_literals("info_panel.rs", table),
-            ["info_panel.rs:4"]
+            swedish_letters_in_literals(SV_LABELS_FILE, table),
+            [format!("{SV_LABELS_FILE}:4")]
         );
         assert_eq!(
-            swedish_letters_in_literals("other.rs", table),
-            ["other.rs:2", "other.rs:4"]
+            swedish_letters_in_literals("pw-other/src/info_panel.rs", table),
+            [
+                "pw-other/src/info_panel.rs:2",
+                "pw-other/src/info_panel.rs:4"
+            ]
         );
     }
 
     #[test]
-    fn the_text_modules_hold_no_swedish_letters_in_their_string_literals() {
-        let found: Vec<String> = TEXT_MODULES
-            .iter()
-            .flat_map(|(file, source)| swedish_letters_in_literals(file, source))
+    fn the_workspace_has_no_swedish_letters_in_its_non_test_string_literals() {
+        let crates = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap_or_else(|| panic!("no folder above {}", env!("CARGO_MANIFEST_DIR")));
+        let mut folders: Vec<std::path::PathBuf> = std::fs::read_dir(crates)
+            .unwrap_or_else(|error| panic!("read {}: {error}", crates.display()))
+            .map(|entry| entry.unwrap_or_else(|error| panic!("{error}")).path())
+            .filter(|path| path.join("src").is_dir())
             .collect();
+        folders.sort();
+        assert!(folders.len() > 1, "no crates found in {}", crates.display());
+        let mut found = Vec::new();
+        for folder in folders {
+            let mut files = Vec::new();
+            rust_sources(&folder.join("src"), &mut files);
+            // The files a crate's `#[cfg(test)]` items declare are test code, matched by name
+            // within that crate.
+            let mut test_only = vec!["tests.rs".to_string()];
+            let code: Vec<(String, String)> = files
+                .iter()
+                .map(|(path, source)| {
+                    let (code, declared) = non_test_code(source);
+                    test_only.extend(declared);
+                    let name = path.strip_prefix(crates).unwrap_or(path);
+                    (name.display().to_string().replace('\\', "/"), code)
+                })
+                .collect();
+            found.extend(
+                code.iter()
+                    .filter(|(name, _)| {
+                        let file = name.rsplit('/').next().unwrap_or(name);
+                        !test_only.iter().any(|test| test == file)
+                    })
+                    .flat_map(|(name, code)| swedish_letters_in_literals(name, code)),
+            );
+        }
         assert!(
             found.is_empty(),
             "string literals with a Swedish letter: {found:?}"

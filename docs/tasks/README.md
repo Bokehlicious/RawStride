@@ -12,7 +12,7 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 | `T<nnn>-<name>.md` (this folder) | Open tasks, one file each |
 | [`backlog.md`](backlog.md) | Not for agents yet: needs a decision, a dependency or an ADR first |
 | [`plans/`](plans/) | Step lists for ADRs that have none of their own (ADR 0007 milestone 8, ADR 0017) |
-| [`done/`](done/README.md) | Finished tasks T1–T118 and the log they were kept in until 2026-11-13 |
+| [`done/`](done/README.md) | Finished tasks T1–T121 except T120, and the log they were kept in until 2026-11-13 |
 
 
 ## How to work on a task
@@ -95,9 +95,7 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status |
 |---|---|---|
-| [T119](T119-same-folder-one-tab.md) | The same folder opens in one tab, however its path is written (after T116) | Open |
-| [T120](T120-exiftool-from-the-program-folder.md) | ExifTool from the program folder first (not with T121) | Open |
-| [T121](T121-one-check-for-swedish-letters-and-test-names.md) | One check for Swedish letters; test names that say English (not with T120) | Open |
+| [T120](T120-exiftool-from-the-program-folder.md) | ExifTool from the program folder first | Open |
 
 ## Writing a task (owner and reviewer)
 

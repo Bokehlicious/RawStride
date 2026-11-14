@@ -25,12 +25,9 @@ and reviewer:
   ADR 0014 §15): a row "0★ 1★ 2★ 3★ 4★ 5★" and a row of colour swatches, each clicked on and off,
   with a check box per row that turns the row on or off. Needs an amendment of ADR 0014 first: the
   star part would become a set of star values instead of the ≥ / = / ≤ condition (T60).
-- **Same folder, two tabs:** `Tabs::open_new` compares folders exactly, and `pw-loupe` does not
-  resolve the paths it opens, so `C:\Foto` and `c:\foto\` open two tabs (from a drop, the folder
-  dialog or an import). Compare by the resolved form (`pw_ingest::resolve`). Small enough to become
-  a task.
 
 Removed on 2026-11-13 because they are done or planned elsewhere: ADR 0010 steps M3–M7 (done,
 T30–T40); ADR 0011 step K4 (done, T26–T29); moving rejected or picked images to `_rejected` /
 `_picked` (ADR 0013 §13), now ADR 0017 U9 (§2.6, U-Q6); the import dialog fields for title and description in the Tauri
-app's `ui/` (owner: dropped, the Tauri app is retired at the switch, GR8).
+app's `ui/` (owner: dropped, the Tauri app is retired at the switch, GR8). Removed on 2026-11-14:
+"Same folder, two tabs" (done, T119).

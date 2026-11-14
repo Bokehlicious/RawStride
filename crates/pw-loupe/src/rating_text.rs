@@ -133,7 +133,7 @@ mod tests {
     }
 
     #[test]
-    fn swedish_label_names() {
+    fn english_label_names() {
         for (label, name) in [
             ("Red", "Red"),
             ("Yellow", "Yellow"),
@@ -187,7 +187,7 @@ mod tests {
     }
 
     #[test]
-    fn unsupported_text_is_swedish() {
+    fn unsupported_text_is_english() {
         assert_eq!(
             UNSUPPORTED_TEXT,
             "Ratings and labels cannot be saved for this file type."
@@ -196,7 +196,7 @@ mod tests {
 
     /// One example of each moved text, as it was before T116.
     #[test]
-    fn every_moved_text_keeps_its_swedish_wording() {
+    fn every_moved_text_keeps_its_wording() {
         assert_eq!(
             path_resolution_text("nekad"),
             "Could not look up the image's path: nekad"

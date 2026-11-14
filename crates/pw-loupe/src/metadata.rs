@@ -1012,7 +1012,7 @@ mod tests {
     }
 
     #[test]
-    fn disconnected_worker_turns_loading_into_a_swedish_error() {
+    fn disconnected_worker_turns_loading_into_an_english_error() {
         let program =
             std::env::temp_dir().join(format!("pw-loupe-stopped-worker-{}", std::process::id()));
         let mut worker =
@@ -1075,7 +1075,7 @@ mod tests {
     }
 
     #[test]
-    fn rating_summary_uses_the_swedish_rating_text() {
+    fn rating_summary_uses_the_english_rating_text() {
         let program =
             std::env::temp_dir().join(format!("pw-loupe-rating-summary-{}", std::process::id()));
         let mut worker =
@@ -1346,7 +1346,7 @@ mod tests {
     }
 
     #[test]
-    fn write_error_texts_are_swedish_for_read_only_and_refused_writes() {
+    fn write_error_texts_are_english_for_read_only_and_refused_writes() {
         assert_eq!(
             write_error_text(WriteError::ReadOnly),
             "the file is read-only"
@@ -1364,7 +1364,7 @@ mod tests {
     }
 
     #[test]
-    fn write_error_texts_are_swedish_for_writes_that_were_not_safe() {
+    fn write_error_texts_are_english_for_writes_that_were_not_safe() {
         assert_eq!(
             write_error_text(WriteError::NotSafe {
                 stage: Stage::ImageCheck,
@@ -1438,7 +1438,7 @@ mod tests {
     }
 
     #[test]
-    fn a_write_without_the_journal_gives_the_swedish_text() {
+    fn a_write_without_the_journal_gives_the_english_text() {
         assert_eq!(
             write_error_text(WriteError::NoJournal),
             "the write log could not be opened"
@@ -1446,7 +1446,7 @@ mod tests {
     }
 
     #[test]
-    fn a_write_refused_for_an_old_exiftool_gives_the_swedish_text() {
+    fn a_write_refused_for_an_old_exiftool_gives_the_english_text() {
         assert_eq!(
             write_error_text(WriteError::ExifToolTooOld),
             "ExifTool is too old (at least 12.67 is needed)"
@@ -1454,7 +1454,7 @@ mod tests {
     }
 
     #[test]
-    fn a_read_only_write_result_gives_the_swedish_message_through_poll() {
+    fn a_read_only_write_result_gives_the_english_message_through_poll() {
         let mut worker = FakeSubmit::new([]);
         let mut cache = cache_with_writes(&["pw-loupe-read-only.ARW"]);
         assert!(cache.poll(&mut worker).is_empty(), "the first poll sends");
@@ -2124,7 +2124,7 @@ mod tests {
     }
 
     #[test]
-    fn edits_written_err_clears_the_pending_state_and_gives_the_swedish_text() {
+    fn edits_written_err_clears_the_pending_state_and_gives_the_english_text() {
         let mut worker = FakeSubmit::new([]);
         let mut cache = MetadataCache::default();
         let image = image_path("pw-loupe-editor-err.ARW");

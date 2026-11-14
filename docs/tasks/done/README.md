@@ -125,3 +125,5 @@ was when the task was done, so "this file", "below" and "the Log" in T1–T115 m
 | [T116](T116-move-the-loupes-ui-texts-into-text-modules.md) | Move pw-loupe's remaining UI texts into text modules |
 | [T117](T117-translate-the-loupes-ui-texts-to-english.md) | Translate pw-loupe's UI texts to English |
 | [T118](T118-english-messages-in-the-lower-crates.md) | English messages in the lower crates |
+| [T119](T119-same-folder-one-tab.md) | The same folder opens in one tab, however its path is written |
+| [T121](T121-one-check-for-swedish-letters-and-test-names.md) | One check for Swedish letters; test names that say English |

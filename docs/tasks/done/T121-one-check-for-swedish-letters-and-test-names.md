@@ -1,4 +1,4 @@
-# T121. One check for Swedish letters; test names that say English — Open
+# T121. One check for Swedish letters; test names that say English — Done
 
 - **Not at the same time as T120** (both change `crates/pw-metadata/src/worker.rs`).
 - **Why:** T117 and T118 left two loose ends (reviewer notes, 2026-11-14):
@@ -52,3 +52,6 @@
 | Date | Status | Note |
 |---|---|---|
 | 2026-11-14 | Open | Added from the reviewer's notes on T117 and T118 |
+| 2026-11-14 | Ready for review | One workspace check in `info_panel.rs` (no Swedish letter found outside `SV_LABELS`); four copies and their 8 tests removed; 15 tests renamed; `check.ps1` all OK, 1215 passed, 43 ignored, 0 failed |
+| 2026-11-14 | Ready for review | Reviewer: accepted, not committed. The four copies removed were only the check and its two tests (8 tests); the one check in `info_panel.rs` takes T118's scanner and now reads the non-test code of every crate under `crates/` (`pw-loupe` included, where T117's check read only the text modules), `SV_LABELS` the only exception; 15 test names changed, bodies untouched. The reviewer's `check.ps1` (with T119): fmt, test and clippy OK, 1215 passed, 0 failed, 43 ignored. Waits for the owner's approval |
+| 2026-11-14 | Done | Owner: hand check done and approved; committed by the reviewer |

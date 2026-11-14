@@ -445,7 +445,7 @@ mod tests {
     }
 
     #[test]
-    fn focal_length_and_aperture_have_a_decimal_comma_and_at_most_one_decimal() {
+    fn focal_length_and_aperture_have_a_decimal_point_and_at_most_one_decimal() {
         let with = |focal_length: f64, f_number: f64| ImageInfo {
             focal_length: Some(focal_length),
             f_number: Some(f_number),
@@ -476,7 +476,7 @@ mod tests {
     }
 
     #[test]
-    fn exposure_time_follows_pw_raw_with_a_decimal_comma() {
+    fn exposure_time_follows_pw_raw_with_a_decimal_point() {
         let time = |num, den| {
             value_of(
                 &ImageInfo {
