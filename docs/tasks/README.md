@@ -95,11 +95,12 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status |
 |---|---|---|
+| [T126](T126-apply-to-all-marked.md) | ADR 0017 U12c: Apply to all marked | Open |
 
 ## Writing a task (owner and reviewer)
 
-- **Number:** the next free number after the highest in this folder and `done/` (T126 next).
-- **File:** `docs/tasks/T126-<a-few-words>.md`; three digits, lower case, words joined by `-`.
+- **Number:** the next free number after the highest in this folder and `done/` (T127 next).
+- **File:** `docs/tasks/T127-<a-few-words>.md`; three digits, lower case, words joined by `-`.
 - **Index:** add a row to "Open tasks" above and keep its status in step with the file's heading.
 - **When it is Done and committed:** `git mv` the file to `done/`, move its row to `done/README.md`.
 - **Owner decisions** (decisions, approved Q proposals) are written into the ADR or requirement
@@ -108,7 +109,7 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 Skeleton (the fields recent tasks use; leave out those that do not apply):
 
 ```markdown
-# T126. <Title> — Open
+# T127. <Title> — Open
 
 - **Why:** …
 - **Crates:** … **Files:** …

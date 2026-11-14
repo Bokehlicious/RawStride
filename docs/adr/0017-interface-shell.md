@@ -20,7 +20,7 @@
   origin line under its values (T114, §2.1).
 - **Recorded 2026-11-14 (no new decision):** the owner's answers to the questions of U10 (T123) and
   U10c (T124) are in §6.1; the section names of §2.3.1 are English in the program (GR14, U10-Q1).
-  The answers to the questions of U12b (T125) are in §6.1 too.
+  The answers to the questions of U12b (T125) and U12c (T126) are in §6.1 too.
 - Date: 2026-11-12; amended 2026-11-13
 - Related:
   - [GUI_REQUIREMENTS.md](../GUI_REQUIREMENTS.md) (GR1–GR13), in particular GR6 (keyboard first),
@@ -373,7 +373,7 @@ without the study notes as a template.
 
 ### 6.1 Questions of the steps (answered by the owner, 2026-11-13: every proposal approved)
 
-Asked in the tasks of stage A (T109–T112, `docs/tasks/done/`) and of U10 and U12b (T123–T125, 2026-11-14) and answered there; recorded here so
+Asked in the tasks of stage A (T109–T112, `docs/tasks/done/`) and of U10, U12b and U12c (T123–T126, 2026-11-14) and answered there; recorded here so
 the decisions do not live only in the tasks.
 
 | # | Decision (as proposed) |
@@ -415,6 +415,13 @@ the decisions do not live only in the tasks.
 | U12b-Q3 | The two buttons sit in the button row before "Previous"; the Paste button's tooltip names the number of fields and the source file |
 | U12b-Q4 | Ctrl+Shift+C copies and Ctrl+Shift+V pastes while the window is open, also while typing in a field; Ctrl+C and Ctrl+V stay with the fields |
 | U12b-Q5 | English "Copy All Fields" / "Paste All Fields" (Swedish "Kopiera alla fält" / "Klistra in alla fält"), in the glossary |
+| U12c-Q1 | With two or more images marked, `M` opens the window on the current image if it is marked, else on the first marked one, showing that image's values and "{n} images marked" |
+| U12c-Q2 | "Apply to {n} Marked" sits beside the other buttons; OK and Save still write only the window's image |
+| U12c-Q3 | Only the fields changed in the form go to the other marked images; never the chosen conflict values, and no emptied copyright-management field (emptied on the window's image only, ADR 0007 §8) |
+| U12c-Q4 | One confirmation before anything is written, naming the count, the changed fields, the emptied fields, the copyright fields emptied only on this image and the skipped files; "Write" / "Cancel" |
+| U12c-Q5 | One safe write per file (ADR 0007 §9.5); the window shows "Writing {i} of {n} …" and is locked until all have answered; then the window's image is read again |
+| U12c-Q6 | The summary: "Written to {w} of {n} images", the failed files with their reasons, and the files where an unresolved conflict was kept |
+| U12c-Q7 | The wait at program exit includes the batch's writes |
 
 ## 7. Steps
 
