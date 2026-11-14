@@ -132,7 +132,8 @@ Where in the file to read and write [MWG §4.2.3.4]:
   - **Confirmed for Photo Mechanic (T127, 2026-11-14):** Photo Mechanic 2026.6 names the sidecar
     `<basename>.XMP` with an upper-case extension (`PM-raw.XMP`); RawStride finds it as
     `<basename>.xmp` and reports no foreign sidecar. After a write by RawStride the file is named
-    `PM-raw.xmp` (lower case): one file, but its name changed (an open finding of the review).
+    `PM-raw.xmp` (lower case): one file, but its name changed; T132 makes a write keep the name as
+    it is on disk.
     Lightroom alone stays unconfirmed.
 - **Created** on the first change; **edited in place** afterwards (unknown content kept), with the
   same transaction (§9.5).
