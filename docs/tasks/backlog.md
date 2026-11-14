@@ -21,6 +21,16 @@ and reviewer:
   and structure field in T102's name table, so the Swedish info panel and editor show no English
   IPTC names. Today D11 names about 35 of them; the rest fall back to IPTC's English name. Needs
   the owner's approval of the full list.
+- **A second language: a text catalog with keys** (owner, 2026-11-14). Only when a second language
+  is wanted (GR14: no language choice for now). Done already by T116–T121: every text the user
+  sees is made by a function in a text module (rule 13), whole sentences from one template, the
+  tests check the texts through those functions, and one test keeps Swedish letters out of the
+  code. Left: one catalog with keys in place of the text modules; typed kinds instead of finished
+  English sentences from the lower crates (`pw-ingest`'s form checks and eject results, the error
+  texts of `pw-metadata`, `pw-viewcore`, `pw-thumbcache`); the tests then check the key or the
+  catalog, no weaker than today. Needs an ADR first: a library (Fluent, rust-i18n; a new
+  dependency, the owner's approval) or our own simple table. The Swedish names of the item above
+  would become the second language's catalog.
 - **A filter bar of toggle buttons instead of drop-down lists** (owner idea, 2026-11-10, after T61;
   ADR 0014 §15): a row "0★ 1★ 2★ 3★ 4★ 5★" and a row of colour swatches, each clicked on and off,
   with a check box per row that turns the row on or off. Needs an amendment of ADR 0014 first: the
