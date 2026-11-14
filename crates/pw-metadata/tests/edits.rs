@@ -282,6 +282,63 @@ fn headline_and_city_are_written_and_the_same_again_is_unchanged() {
     s.remove();
 }
 
+/// The XMP packet of `file` as ExifTool gives it (`-b -XMP`). The packet does not end with a line
+/// break, so `-echo3` prints a line after it; otherwise ExifTool's `{ready}` marker would follow on
+/// the same line and `execute` would wait for it forever.
+fn xmp_packet(et: &mut ExifTool, file: &Path) -> String {
+    et.execute(&[
+        "-b".to_string(),
+        "-XMP".to_string(),
+        "-echo3".to_string(),
+        "--end of XMP--".to_string(),
+        file.to_string_lossy().into_owned(),
+    ])
+    .unwrap()
+}
+
+/// The choice lists' values through ExifTool (T128, point 8): a PLUS edit holds the code alone,
+/// ExifTool adds the vocabulary's prefix once and removes it on read; Digital Source Type is the
+/// full URI, stored once and read back unchanged.
+#[test]
+fn a_plus_code_and_a_digital_source_type_uri_are_stored_once_and_read_back() {
+    const PLUS_PREFIX: &str = "http://ns.useplus.org/ldf/vocab/";
+    const DIGITAL_CAPTURE: &str = "http://cv.iptc.org/newscodes/digitalsourcetype/digitalCapture";
+    let mut et = exiftool();
+    let s = Scratch::new("plus-codes");
+    let file = s.jpeg();
+    let edits = [
+        set("plus:ModelReleaseStatus", text("MR-UMR")),
+        set("Iptc4xmpExt:DigitalSourceType", text(DIGITAL_CAPTURE)),
+    ];
+
+    assert_edit(s.edit(&mut et, &file, &edits), written(&file), &[]);
+    let xmp = xmp_packet(&mut et, &file);
+    assert_eq!(
+        xmp.matches(&format!("{PLUS_PREFIX}MR-UMR")).count(),
+        1,
+        "{xmp}"
+    );
+    assert!(
+        !xmp.contains(&format!("{PLUS_PREFIX}{PLUS_PREFIX}")),
+        "the PLUS prefix twice: {xmp}"
+    );
+    assert_eq!(xmp.matches(DIGITAL_CAPTURE).count(), 1, "{xmp}");
+    assert!(
+        !xmp.contains("digitalsourcetype/http://"),
+        "the Digital Source Type prefix twice: {xmp}"
+    );
+    assert_eq!(
+        read_value(&mut et, &file, "plus:ModelReleaseStatus"),
+        Some(text("MR-UMR"))
+    );
+    assert_eq!(
+        read_value(&mut et, &file, "Iptc4xmpExt:DigitalSourceType"),
+        Some(text(DIGITAL_CAPTURE))
+    );
+    s.assert_clean();
+    s.remove();
+}
+
 /// A JPEG with IIM City and a matching checksum: a City of 40 bytes is written with the notice
 /// that IIM was cut to 32 bytes (§5.2); XMP holds all 40.
 #[test]

@@ -19,7 +19,7 @@ the one before it is accepted.
 | U10b | – | Settings: which sections and fields are shown, and in which order | after T123 |
 | U10c | T124 | Rating and Label in the window (section 6), written through the rating path (U10-Q5) | done (T124, 2026-11-14) |
 | R1 | reviewer | Read the PLUS controlled vocabulary (ADR 0007 §16.4, Q9) and save it in `D:\PhotoWorkflowData\references\` as P1 was. **Done 2026-11-14:** `LDFXMP-1_2_0-ControlledVocabulary.xml` (7 764 bytes, SHA-256 `26961ebe…08c92fa2`) with Model and Property Release Status and Minor Model Age Disclosure; Data Mining (PLUS 2.0.1, not in that file) taken from the PLUS XMP specification page into the folder's `README.md` | done |
-| U10d | T128 | Licence section: Model and Property Release Status, the release ids and Digital Source Type as fixed choice lists (with I11) | now (U10d-Q1–Q6 approved and R2 done, 2026-11-14) |
+| U10d | T128 | Licence section: Model and Property Release Status, the release ids and Digital Source Type as fixed choice lists (with I11) | done (T128, 2026-11-14) |
 | U11a | – | Lists of structures in the form, one row per entry with add and remove, within ADR 0007 §8's cardinalities: Location Created, Location Shown (with "copy from Location Created"), Genre, Image Creator, Copyright Owner, Licensor, Image Supplier | after T123 |
 | U12a | – | Recent values and the user's own values per field (▼ beside the field) | after T123 |
 | U12b | T125 | Copy and paste all fields between images | done (T125, 2026-11-14) |

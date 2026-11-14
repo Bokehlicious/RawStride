@@ -1,4 +1,4 @@
-# T130. Empty structure fields are not shown as values — Open
+# T130. Empty structure fields are not shown as values — Done
 
 - **Can start now.** Found in the review of T127 (finding 3); the owner approved the fix on
   2026-11-14. It may run beside T128 and T129 (other files); all three change
@@ -38,3 +38,6 @@
 | Date | Status | Note |
 |---|---|---|
 | 2026-11-14 | Open | Written by the reviewer after the review of T127 (finding 3); owner approved |
+| 2026-11-14 | Ready for review | `struct_text` leaves out blank fields, no line for an all-blank structure; 4 tests. check.ps1: test and clippy OK, fmt FAILED only in `editor.rs` (T128 in progress); inventory total left to the last of T128–T130 |
+| 2026-11-14 | Ready for review | Reviewer: code and tests accepted, not committed; `check.ps1` all OK with T128–T129 (1318 passed, 53 ignored). Waits for the owner's hand check |
+| 2026-11-14 | Done | Owner: hand check done and approved (`PM-jpg.JPG` shows only City and Country Name); committed by the reviewer |

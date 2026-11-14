@@ -16,8 +16,9 @@
 //!    the RAW file; the value it would have got is reported as hidden by the user.
 //! 6. **Date Created** (§7) is only *suggested* from DateTimeOriginal, never inserted.
 //!
-//! Equality ([`same_value`]) is tested on the predicted IIM value (§5.1) and, against Exif, on the
-//! shown text and the first creator (§6.5). Nothing here runs ExifTool or reads a file.
+//! Equality ([`same_value`]) is tested on the predicted IIM value (§5.1) "or the whole XMP text, as
+//! a program that ignores the IIM limit writes it" (§5.1, T129) and, against Exif, on the shown text
+//! and the first creator (§6.5). Nothing here runs ExifTool or reads a file.
 
 use std::collections::BTreeSet;
 
@@ -444,7 +445,10 @@ fn is_blank_value(value: &Value) -> bool {
 /// IIM value RawStride would write from `a`:
 /// - `Text` and `Number`: [`iim::predict`] of `a` with [`iim_format`] and the property's byte limit,
 ///   against `b` ([`iim::same_as_predicted`]). The prefix of 2:04 and 2:12 is removed from the
-///   prediction, because the IIM value was read without it (T80);
+///   prediction, because the IIM value was read without it (T80). `b` is also the same when it
+///   equals the prediction without the byte limit: "or the whole XMP text, as a program that
+///   ignores the IIM limit writes it" (§5.1, T129; Photo Mechanic writes a whole 2191-byte
+///   Description to 2:120). A text cut anywhere else is still different;
 /// - Lang Alt: by the shown text ([`LangAlt::display`]) through the same prediction as `Text`, so
 ///   a Title cut to 64 bytes in 2:05 is not a conflict;
 /// - `List`: item by item in order, as `Text`; the lengths must be equal;
@@ -484,18 +488,22 @@ fn shown_text(lang_alt: &LangAlt) -> &str {
 }
 
 /// True when the IIM value `actual` (read without its prefix) is what RawStride would write from
-/// the XMP text `xmp` (§5.1–§5.3).
+/// the XMP text `xmp` (§5.1–§5.3), or the whole XMP text as a program that ignores the IIM byte
+/// limit writes it (§5.1, T129): the same prediction without `max_bytes`.
 fn same_on_prediction(xmp_id: &str, xmp: &str, actual: &str) -> bool {
     let format = iim_format(xmp_id);
     let max_bytes = properties::property(xmp_id)
         .and_then(|def| def.iim)
         .and_then(|dataset| dataset.max_bytes);
-    let predicted = iim::predict(xmp, format, max_bytes);
-    let without_prefix = iim::Predicted {
-        value: iim::strip_prefix(&predicted.value, format).to_string(),
-        truncated: predicted.truncated,
+    let same = |max_bytes: Option<u16>| {
+        let predicted = iim::predict(xmp, format, max_bytes);
+        let without_prefix = iim::Predicted {
+            value: iim::strip_prefix(&predicted.value, format).to_string(),
+            truncated: predicted.truncated,
+        };
+        iim::same_as_predicted(actual, &without_prefix)
     };
-    iim::same_as_predicted(actual, &without_prefix)
+    same(max_bytes) || (max_bytes.is_some() && same(None))
 }
 
 /// Splits an Exif Artist into names (MWG §5.7): names are separated by `"; "`; a name in double
@@ -843,6 +851,116 @@ mod tests {
     fn text_equality_is_exact() {
         assert!(!same_value(CITY, &text("Lund"), &text("lund")));
         assert!(!same_value(CITY, &text("Lund"), &text("Lund ")));
+    }
+
+    // --- An IIM value equal to the whole XMP text (§5.1, T129) ---
+
+    /// A text of exactly `bytes` bytes with Swedish letters, longer than the IIM limit it is used
+    /// with.
+    fn long_swedish(bytes: usize) -> String {
+        let mut text = String::new();
+        while text.len() + "Båtar vid ön, ängen på Åland. ".len() <= bytes {
+            text.push_str("Båtar vid ön, ängen på Åland. ");
+        }
+        while text.len() < bytes {
+            text.push('x');
+        }
+        text
+    }
+
+    #[test]
+    fn a_whole_over_limit_description_in_iim_is_not_a_conflict_for_any_checksum() {
+        // As Photo Mechanic writes it in the level-C sample PM-jpg.JPG (T127).
+        let long = long_swedish(2191);
+        assert_eq!(long.len(), 2191);
+        assert!(long.contains('å') && long.contains('ä') && long.contains('ö'));
+        for digest in [IimDigest::Missing, IimDigest::Matches, IimDigest::Differs] {
+            let result = reconcile(jpeg(
+                &[(DESCRIPTION, x_default(&long))],
+                iim(&[(DESCRIPTION, x_default(&long))], digest),
+            ));
+            assert!(result.metadata.conflicts().is_empty(), "{digest:?}");
+            assert_eq!(
+                value_of(&result, DESCRIPTION),
+                Some((x_default(&long), Origin::XmpEmbedded)),
+                "{digest:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_whole_over_limit_city_in_iim_is_not_a_conflict() {
+        let long = long_swedish(40);
+        assert!(long.len() > 32);
+        assert!(no_conflict((CITY, text(&long)), text(&long)));
+    }
+
+    #[test]
+    fn a_whole_over_limit_keyword_in_iim_is_not_a_conflict() {
+        let long = long_swedish(70);
+        assert!(long.len() > 64);
+        assert!(no_conflict(
+            ("dc:subject", list(&["hav", long.as_str()])),
+            list(&["hav", long.as_str()]),
+        ));
+    }
+
+    #[test]
+    fn an_over_limit_description_cut_elsewhere_or_changed_after_the_limit_is_a_conflict() {
+        let long = long_swedish(2191);
+        // Cut neither at the limit (2000) nor whole.
+        let (cut, truncated) = iim::truncate_utf8(&long, 2100);
+        assert!(truncated);
+        assert!(cut.len() > 2000);
+        assert!(!no_conflict(
+            (DESCRIPTION, x_default(&long)),
+            x_default(cut)
+        ));
+        // One character changed after byte 2000.
+        let mut changed = long.clone();
+        changed.pop();
+        changed.push('y');
+        assert_ne!(changed, long);
+        assert_eq!(changed.get(..2000), long.get(..2000));
+        let result = reconcile(jpeg(
+            &[(DESCRIPTION, x_default(&long))],
+            iim(&[(DESCRIPTION, x_default(&changed))], IimDigest::Missing),
+        ));
+        assert_eq!(
+            result.metadata.conflicts(),
+            [Conflict {
+                property: DESCRIPTION.into(),
+                values: vec![
+                    (Origin::XmpEmbedded, x_default(&long)),
+                    (Origin::Iim, x_default(&changed))
+                ],
+                rule: ConflictRule::Open,
+            }]
+        );
+    }
+
+    #[test]
+    fn same_value_of_over_limit_texts_is_exact_after_the_limit() {
+        let long = long_swedish(2191);
+        let mut changed = long.clone();
+        changed.pop();
+        changed.push('y');
+        assert!(same_value(
+            DESCRIPTION,
+            &x_default(&long),
+            &x_default(&long)
+        ));
+        assert!(!same_value(
+            DESCRIPTION,
+            &x_default(&long),
+            &x_default(&changed)
+        ));
+        let city = long_swedish(40);
+        let mut other_city = city.clone();
+        other_city.pop();
+        other_city.push('y');
+        assert!(same_value(CITY, &text(&city), &text(&city)));
+        assert!(!same_value(CITY, &text(&city), &text(&other_city)));
     }
 
     // --- IIM fills ---

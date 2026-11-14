@@ -3950,8 +3950,9 @@ struct FormResponse {
     rating: Option<RatingKey>,
 }
 
-/// The contents of the metadata window's form (D16, T107, T123, T124), top to bottom: the fields
-/// in their four sections and the Rating and Label section, each a collapsible heading open or
+/// The contents of the metadata window's form (D16, T107, T123, T124, T128), top to bottom: the
+/// fields in their five sections (the Licence (PLUS) section's choice lists, T128) and the Rating
+/// and Label section, each a collapsible heading open or
 /// collapsed as `shell` has it; the open conflicts with a choice each and the warnings (editable
 /// when `enabled`); then read-only, in small text, the other metadata (without an origin line,
 /// T114), the conflicts a rule decided (each value with its origin) and the notices, each only
@@ -4113,7 +4114,8 @@ fn draw_rating_buttons(ui: &mut egui::Ui, rating: Option<&Rating>) -> Option<Rat
 
 /// One field of the metadata window's form (T107, T123): its name (with the full IPTC name as a
 /// tooltip where the name shortens it, T117), the note of a Lang Alt without `x-default`, then a
-/// text box, a check box (Copyrighted, U10-Q3) or, for a read-only field, its text; then its
+/// text box, a check box (Copyrighted, U10-Q3), a drop-down (a choice list, T128) or, for a
+/// read-only field, its text; then its
 /// errors. The heading "Creator's Contact Info" comes before the first contact field (T114). A
 /// deprecated field the file does not have is not drawn.
 fn draw_window_field(
@@ -4152,6 +4154,9 @@ fn draw_window_field(
             Some(text) => {
                 ui.add(egui::Label::new(text).wrap());
             }
+            None if field.choice_list().is_some() => {
+                draw_choice_list(ui, form, field);
+            }
             None => {
                 if let Some(text) = form.text_mut(field) {
                     let edit = if field.multiline() {
@@ -4169,6 +4174,39 @@ fn draw_window_field(
         ui.label(egui::RichText::new(error).color(error_color));
     }
     ui.add_space(PANEL_ROW_SPACING);
+}
+
+/// The drop-down of a choice-list field (ADR 0017 U10d-Q3, T128): the form's entries (the empty
+/// entry, the vocabulary's values, an unknown or retired value of the file), the field's value
+/// selected, each entry's full URI as its tooltip. As wide as the window; the entries wrap.
+fn draw_choice_list(ui: &mut egui::Ui, form: &mut EditorForm, field: EditorField) {
+    let entries = form.choice_entries(field);
+    let current = form.text(field).to_string();
+    let selected = entries
+        .iter()
+        .find(|entry| entry.value == current)
+        .map(|entry| entry.text.clone())
+        .unwrap_or_default();
+    let mut chosen = None;
+    egui::ComboBox::from_id_salt(("metadata-window-choice", field))
+        .selected_text(selected)
+        .width(ui.available_width())
+        .wrap_mode(egui::TextWrapMode::Wrap)
+        .show_ui(ui, |ui| {
+            for entry in &entries {
+                let response = ui.selectable_label(entry.value == current, &entry.text);
+                let response = match &entry.tooltip {
+                    Some(tooltip) => response.on_hover_text(tooltip),
+                    None => response,
+                };
+                if response.clicked() {
+                    chosen = Some(entry.value.clone());
+                }
+            }
+        });
+    if let Some(value) = chosen {
+        form.set_choice(field, &value);
+    }
 }
 
 /// One path as `resolve_paths` resolves it: a relative path is taken from `cwd`, an absolute one
@@ -5535,10 +5573,11 @@ mod tests {
     fn the_windows_other_metadata_leaves_out_every_field_and_the_contact_info() {
         let properties = window_editor_properties();
 
-        // 40 fields, eight of them (the address, Email, Phone, Web URL) in the contact structure,
+        // 47 fields, eight of them (the address, Email, Phone, Web URL) in the contact structure,
         // which is now left out as a whole (T123, point 7); and the rating and the label, shown in
-        // the Rating and Label section (T124, point 6).
-        assert_eq!(properties.len(), 35);
+        // the Rating and Label section (T124, point 6). The seven fields of the Licence (PLUS)
+        // section (T128) are seven of them.
+        assert_eq!(properties.len(), 42);
         for id in [
             "dc:title",
             "dc:description",
@@ -5631,6 +5670,73 @@ mod tests {
         let rows = other_values(&read, &window_editor_properties());
         let labels: Vec<&str> = rows.iter().map(|row| row.label.as_str()).collect();
         assert_eq!(labels, ["Intellectual Genre"]);
+    }
+
+    /// The Licence (PLUS) section's properties are fields, left out of Other Metadata (T128,
+    /// point 7); Model Age and the PLUS structures stay there.
+    #[test]
+    fn other_metadata_leaves_out_the_licence_fields() {
+        use pw_metadata::iim::CodedCharset;
+        use pw_metadata::read::MetadataRead;
+        use pw_metadata::reconcile::{FileKind, IimDigest, Reconciled};
+        use pw_metadata::value::{Metadata, Origin, Value};
+        use pw_metadata::write_plan::{ExifPresent, FileState};
+
+        let properties = window_editor_properties();
+        let licence = [
+            "plus:ModelReleaseStatus",
+            "plus:ModelReleaseID",
+            "plus:MinorModelAgeDisclosure",
+            "plus:PropertyReleaseStatus",
+            "plus:PropertyReleaseID",
+            "plus:DataMining",
+            "Iptc4xmpExt:DigitalSourceType",
+        ];
+        for id in licence {
+            assert!(properties.contains(&id), "{id}");
+        }
+        for id in ["Iptc4xmpExt:ModelAge", "plus:Licensor", "plus:ImageCreator"] {
+            assert!(!properties.contains(&id), "{id}");
+        }
+
+        let text = |s: &str| Value::Text(s.to_string());
+        let mut metadata = Metadata::new();
+        for (id, value) in [
+            ("plus:ModelReleaseStatus", text("MR-NAP")),
+            ("plus:ModelReleaseID", Value::List(vec!["MR-1".into()])),
+            ("plus:MinorModelAgeDisclosure", text("AG-A25")),
+            ("plus:PropertyReleaseStatus", text("PR-NON")),
+            ("plus:PropertyReleaseID", Value::List(vec!["PR-1".into()])),
+            ("plus:DataMining", text("DMI-UNSPECIFIED")),
+            (
+                "Iptc4xmpExt:DigitalSourceType",
+                text("http://cv.iptc.org/newscodes/digitalsourcetype/digitalCapture"),
+            ),
+            ("Iptc4xmpExt:ModelAge", Value::List(vec!["25".into()])),
+        ] {
+            metadata
+                .insert_read(id, value, Origin::XmpEmbedded)
+                .unwrap();
+        }
+        let read = MetadataRead {
+            reconciled: Reconciled {
+                metadata,
+                notices: Vec::new(),
+                suggested_date_created: None,
+            },
+            file_notices: Vec::new(),
+            state: FileState {
+                kind: FileKind::Jpeg,
+                iim_present: false,
+                iim_charset: CodedCharset::Absent,
+                iim_values: Vec::new(),
+                digest: IimDigest::Missing,
+                exif_present: ExifPresent::default(),
+            },
+        };
+        let rows = other_values(&read, &properties);
+        let labels: Vec<&str> = rows.iter().map(|row| row.label.as_str()).collect();
+        assert_eq!(labels, ["Model Age"]);
     }
 
     // --- the filter while the metadata window is open (ADR 0017 U10c-Q4, T124) ---

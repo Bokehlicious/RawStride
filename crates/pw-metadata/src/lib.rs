@@ -31,6 +31,7 @@ mod test_support;
 pub mod validate;
 pub mod value;
 pub mod verify;
+pub mod vocabulary;
 mod worker;
 pub mod write_plan;
 

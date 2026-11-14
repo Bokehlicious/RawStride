@@ -132,4 +132,7 @@ was when the task was done, so "this file", "below" and "the Log" in T1–T115 m
 | [T124](T124-rating-and-label-in-the-metadata-window.md) | ADR 0017 U10c: Rating and Label in the metadata window |
 | [T125](T125-copy-and-paste-all-fields.md) | ADR 0017 U12b: Copy and paste all fields between images |
 | [T126](T126-apply-to-all-marked.md) | ADR 0017 U12c: Apply to all marked |
+| [T128](T128-licence-section-plus-choice-lists.md) | ADR 0017 U10d with ADR 0007 I11: the Licence (PLUS) section with fixed choice lists |
+| [T129](T129-iim-value-over-the-limit-is-no-conflict.md) | ADR 0007 §5.1: an IIM value equal to the whole XMP text is no conflict |
+| [T130](T130-hide-empty-structure-fields.md) | Empty structure fields are not shown as values |
 | [T120](T120-exiftool-from-the-program-folder.md) | ExifTool from the program folder first |

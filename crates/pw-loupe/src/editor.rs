@@ -2,11 +2,16 @@
 //! its unresolved conflicts, the edits they give, the warnings and the texts of the write notices.
 //! Pure functions, no egui; T105 draws the window.
 //!
-//! - **Fields** (D12, ADR 0017 U10, T123): 40 fields in a fixed order and four sections,
+//! - **Fields** (D12, ADR 0017 U10, T123, T128): 47 fields in a fixed order and five sections,
 //!   [`EditorField::ALL`], [`EditorSection`]. Each is a property of the table, or (the address,
 //!   Email, Phone, Web URL) a field of `Iptc4xmpCore:CreatorContactInfo`. The value kind (text,
 //!   Lang Alt, list, date) comes from the property table. Copyrighted is a check box (`True` or
 //!   `False`, U10-Q3); Urgency, Category and Supplemental Categories are read-only.
+//! - **Choice lists** (U10d, T128): the PLUS release statuses, Minor Model Age Disclosure, Data
+//!   Mining and Digital Source Type hold one value of their vocabulary
+//!   ([`pw_metadata::vocabulary`]: the code for PLUS, the full URI for Digital Source Type),
+//!   chosen from [`EditorForm::choice_entries`]. A value of the file outside the vocabulary is an
+//!   extra entry, kept until another entry is chosen.
 //! - **From the read** ([`EditorForm::from_read`]): one text per field. A Lang Alt shows its shown
 //!   text; without `x-default` it gets a note with its language, because saving adds `x-default`
 //!   (§8, Q7).
@@ -31,6 +36,7 @@ use pw_metadata::read::MetadataRead;
 use pw_metadata::reconcile::FileKind;
 use pw_metadata::validate::{Warning, validate};
 use pw_metadata::value::{Conflict, ConflictRule, LangAlt, Value};
+use pw_metadata::vocabulary;
 use pw_metadata::write_plan::WriteNotice;
 use pw_metadata::{MIN_EXIFTOOL_VERSION, Rating};
 
@@ -54,6 +60,8 @@ pub enum EditorSection {
     CreatorRights,
     TimePlace,
     Assignment,
+    /// The PLUS release fields, Data Mining and Digital Source Type (U10d, T128).
+    Licence,
     /// The rating and the label (T124, U10c-Q5): no fields of the form; its buttons
     /// ([`RatingButton`]) rate through the rating path, never through the form's edits.
     RatingLabel,
@@ -61,11 +69,12 @@ pub enum EditorSection {
 
 impl EditorSection {
     /// Every section in the order of the form.
-    pub const ALL: [EditorSection; 5] = [
+    pub const ALL: [EditorSection; 6] = [
         EditorSection::Content,
         EditorSection::CreatorRights,
         EditorSection::TimePlace,
         EditorSection::Assignment,
+        EditorSection::Licence,
         EditorSection::RatingLabel,
     ];
 }
@@ -182,6 +191,13 @@ pub enum EditorField {
     Urgency,
     Category,
     SupplementalCategories,
+    ModelReleaseStatus,
+    ModelReleaseId,
+    MinorModelAge,
+    PropertyReleaseStatus,
+    PropertyReleaseId,
+    DataMining,
+    DigitalSourceType,
 }
 
 /// The kind of value a field holds, from the property table.
@@ -199,8 +215,8 @@ const CHECKED: &str = "True";
 const UNCHECKED: &str = "False";
 
 impl EditorField {
-    /// Every field in the order of the form (D12, ADR 0017 U10-Q1, U10-Q4).
-    pub const ALL: [EditorField; 40] = [
+    /// Every field in the order of the form (D12, ADR 0017 U10-Q1, U10-Q4, U10d).
+    pub const ALL: [EditorField; 47] = [
         EditorField::Title,
         EditorField::Headline,
         EditorField::Description,
@@ -241,6 +257,13 @@ impl EditorField {
         EditorField::Urgency,
         EditorField::Category,
         EditorField::SupplementalCategories,
+        EditorField::ModelReleaseStatus,
+        EditorField::ModelReleaseId,
+        EditorField::MinorModelAge,
+        EditorField::PropertyReleaseStatus,
+        EditorField::PropertyReleaseId,
+        EditorField::DataMining,
+        EditorField::DigitalSourceType,
     ];
 
     /// The section the field is drawn in (U10-Q1).
@@ -286,6 +309,13 @@ impl EditorField {
             | EditorField::Urgency
             | EditorField::Category
             | EditorField::SupplementalCategories => EditorSection::Assignment,
+            EditorField::ModelReleaseStatus
+            | EditorField::ModelReleaseId
+            | EditorField::MinorModelAge
+            | EditorField::PropertyReleaseStatus
+            | EditorField::PropertyReleaseId
+            | EditorField::DataMining
+            | EditorField::DigitalSourceType => EditorSection::Licence,
         }
     }
 
@@ -332,6 +362,13 @@ impl EditorField {
             EditorField::Urgency => "photoshop:Urgency",
             EditorField::Category => "photoshop:Category",
             EditorField::SupplementalCategories => "photoshop:SupplementalCategories",
+            EditorField::ModelReleaseStatus => vocabulary::MODEL_RELEASE_STATUS,
+            EditorField::ModelReleaseId => "plus:ModelReleaseID",
+            EditorField::MinorModelAge => vocabulary::MINOR_MODEL_AGE_DISCLOSURE,
+            EditorField::PropertyReleaseStatus => vocabulary::PROPERTY_RELEASE_STATUS,
+            EditorField::PropertyReleaseId => "plus:PropertyReleaseID",
+            EditorField::DataMining => vocabulary::DATA_MINING,
+            EditorField::DigitalSourceType => vocabulary::DIGITAL_SOURCE_TYPE,
         }
     }
 
@@ -378,6 +415,16 @@ impl EditorField {
     /// unchecked `False`.
     pub fn check_box(self) -> bool {
         matches!(self, EditorField::Copyrighted)
+    }
+
+    /// The values of a choice-list field (U10d-Q3, T128) in the vocabulary's order: the codes
+    /// for the PLUS fields, the full URIs (the current codes) for Digital Source Type; `None`
+    /// for every other field.
+    pub fn choice_list(self) -> Option<&'static [&'static str]> {
+        match self.struct_field() {
+            None => vocabulary::choices(self.property()),
+            Some(_) => None,
+        }
     }
 
     /// False for the deprecated IIM properties Urgency, Category and Supplemental Categories
@@ -515,6 +562,21 @@ pub struct OpenConflict {
     pub values: Vec<ConflictValue>,
     /// The index of the chosen value, if one is chosen.
     pub chosen: Option<usize>,
+}
+
+/// One entry of a choice-list field's drop-down (U10d-Q3, T128), from
+/// [`EditorForm::choice_entries`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ChoiceEntry {
+    /// The value the entry gives the field: empty for the empty entry, else the code (PLUS) or
+    /// the full URI (Digital Source Type), or the file's value as read.
+    pub value: String,
+    /// The entry's text: empty for the empty entry, the vocabulary's English label, or
+    /// "Unknown value: …" for a value outside the vocabulary.
+    pub text: String,
+    /// The entry's tooltip: the full URI of a vocabulary value; `None` for the empty entry and an
+    /// unknown value.
+    pub tooltip: Option<String>,
 }
 
 /// The fields copied by "Copy All Fields" (ADR 0017 §2.3.1, U12b-Q1, T125): the source file's
@@ -657,9 +719,10 @@ impl EditorForm {
         self.state(field).map_or("", |state| state.text.as_str())
     }
 
-    /// The text of `field`, to be edited; `None` for a check box and a read-only field.
+    /// The text of `field`, to be edited; `None` for a check box, a choice list
+    /// ([`EditorForm::set_choice`]) and a read-only field.
     pub fn text_mut(&mut self, field: EditorField) -> Option<&mut String> {
-        if field.check_box() || !field.editable() {
+        if field.check_box() || field.choice_list().is_some() || !field.editable() {
             return None;
         }
         self.fields
@@ -701,6 +764,64 @@ impl EditorForm {
         }
     }
 
+    /// The entries of the choice-list field `field` (U10d-Q3, U10d-Q4, T128), in order: the empty
+    /// entry, the vocabulary's values, then, when it is not one of them, the file's value and the
+    /// field's present value (each once, not empty). Such an extra entry is a retired Digital
+    /// Source Type with its own label, or else "Unknown value: {value}". Empty for another field.
+    pub fn choice_entries(&self, field: EditorField) -> Vec<ChoiceEntry> {
+        let (Some(values), Some(state)) = (field.choice_list(), self.state(field)) else {
+            return Vec::new();
+        };
+        let property = field.property();
+        let mut entries = vec![ChoiceEntry {
+            value: String::new(),
+            text: String::new(),
+            tooltip: None,
+        }];
+        for value in values {
+            entries.push(ChoiceEntry {
+                value: (*value).to_string(),
+                text: choice_label(value).unwrap_or_default().to_string(),
+                tooltip: vocabulary::full_uri(property, value),
+            });
+        }
+        for extra in [&state.original, &state.text] {
+            if extra.is_empty() || entries.iter().any(|entry| entry.value == *extra) {
+                continue;
+            }
+            let retired = field == EditorField::DigitalSourceType
+                && vocabulary::is_retired_digital_source_type(extra);
+            let text = match choice_label(extra) {
+                Some(label) if retired => label.to_string(),
+                _ => editor_text(&EditorText::UnknownValue {
+                    value: extra.clone(),
+                }),
+            };
+            let tooltip = if retired {
+                vocabulary::full_uri(property, extra)
+            } else {
+                None
+            };
+            entries.push(ChoiceEntry {
+                value: extra.clone(),
+                text,
+                tooltip,
+            });
+        }
+        entries
+    }
+
+    /// Chooses the entry with `value` of the choice-list field `field` (an empty `value` is the
+    /// empty entry); nothing for another field.
+    pub fn set_choice(&mut self, field: EditorField, value: &str) {
+        if field.choice_list().is_none() {
+            return;
+        }
+        if let Some(state) = self.fields.iter_mut().find(|state| state.field == field) {
+            value.clone_into(&mut state.text);
+        }
+    }
+
     /// "Copy All Fields" (U12b-Q1, T125): the text of every editable field as the form shows it,
     /// unsaved edits included, and the Copyrighted check box. Not the read-only fields (the
     /// deprecated ones, a check box with another value), the conflict choices or the errors. A
@@ -728,6 +849,8 @@ impl EditorForm {
             }
             if field.check_box() {
                 self.set_checked(*field, text == CHECKED);
+            } else if field.choice_list().is_some() {
+                self.set_choice(*field, text);
             } else if self.read_only_text(*field).is_none()
                 && let Some(target) = self.text_mut(*field)
             {
@@ -1011,7 +1134,88 @@ fn warning_text(warning: &Warning) -> String {
         Warning::RatingOutOfRange { value } => {
             format!("Rating {value} is outside −1 to 5")
         }
+        Warning::VocabularyValueUnknown { property, value } => format!(
+            "{field} {value} is not in the PLUS list",
+            field = property_label(property, Language::En)
+        ),
     }
+}
+
+/// The English label of a value of a choice list (U10d-Q3, T128), the vocabulary's own: a PLUS
+/// code or a full Digital Source Type URI ([`vocabulary`]), the retired Digital Source Types
+/// included. `None` for any other value.
+fn choice_label(value: &str) -> Option<&'static str> {
+    if let Some(code) = value.strip_prefix(vocabulary::DIGITAL_SOURCE_TYPE_PREFIX) {
+        return digital_source_type_label(code);
+    }
+    let label = match value {
+        "MR-NON" | "PR-NON" => "None",
+        "MR-NAP" | "PR-NAP" => "Not Applicable",
+        "MR-UMR" => "Unlimited Model Releases",
+        "MR-LMR" => "Limited or Incomplete Model Releases",
+        "PR-UPR" => "Unlimited Property Releases",
+        "PR-LPR" => "Limited or Incomplete Property Releases",
+        "AG-UNK" => "Age Unknown",
+        "AG-A25" => "Age 25 or Over",
+        "AG-A24" => "Age 24",
+        "AG-A23" => "Age 23",
+        "AG-A22" => "Age 22",
+        "AG-A21" => "Age 21",
+        "AG-A20" => "Age 20",
+        "AG-A19" => "Age 19",
+        "AG-A18" => "Age 18",
+        "AG-A17" => "Age 17",
+        "AG-A16" => "Age 16",
+        "AG-A15" => "Age 15",
+        "AG-U14" => "Age 14 or Under",
+        "DMI-UNSPECIFIED" => "Unspecified - no prohibition defined",
+        "DMI-ALLOWED" => "Allowed",
+        "DMI-PROHIBITED-AIMLTRAINING" => "Prohibited for AI/ML training",
+        "DMI-PROHIBITED-GENAIMLTRAINING" => "Prohibited for Generative AI/ML training",
+        "DMI-PROHIBITED-EXCEPTSEARCHENGINEINDEXING" => {
+            "Prohibited except for search engine indexing"
+        }
+        "DMI-PROHIBITED" => "Prohibited",
+        "DMI-PROHIBITED-SEECONSTRAINT" => "Prohibited, see Other Constraints property",
+        "DMI-PROHIBITED-SEEEMBEDDEDRIGHTSEXPR" => {
+            "Prohibited, see Embedded Encoded Rights Expression property"
+        }
+        "DMI-PROHIBITED-SEELINKEDRIGHTSEXPR" => {
+            "Prohibited, see Linked Encoded Rights Expression property"
+        }
+        _ => return None,
+    };
+    Some(label)
+}
+
+/// The English label of a Digital Source Type code (the part after the prefix), current or
+/// retired.
+fn digital_source_type_label(code: &str) -> Option<&'static str> {
+    let label = match code {
+        "digitalCapture" => "Digital capture sampled from real life",
+        "computationalCapture" => "Multi-frame computational capture sampled from real life",
+        "negativeFilm" => "Digitised from a transparent negative",
+        "positiveFilm" => "Digitised from a transparent positive",
+        "print" => "Digitised from a non-transparent medium",
+        "humanEdits" => "Human-edited media",
+        "compositeWithTrainedAlgorithmicMedia" => "Edited using Generative AI",
+        "algorithmicallyEnhanced" => "Algorithmically-altered media",
+        "digitalCreation" => "Digital creation",
+        "dataDrivenMedia" => "Data-driven media",
+        "trainedAlgorithmicMedia" => "Created using Generative AI",
+        "algorithmicMedia" => "Pure algorithmic media",
+        "screenCapture" => "Screen capture",
+        "virtualRecording" => "Virtual event recording",
+        "composite" => "Composite of elements",
+        "compositeCapture" => "Composite of captured elements",
+        "compositeSynthetic" => "Composite including generative AI elements",
+        // Retired: still valid in a file, not offered.
+        "minorHumanEdits" => "Original media with minor human edits",
+        "softwareImage" => "Created by software",
+        "digitalArt" => "Digital art",
+        _ => return None,
+    };
+    Some(label)
 }
 
 /// The text of a notice of an editor write (T105).
@@ -1050,6 +1254,9 @@ pub enum EditorText {
     WarningsHeading,
     /// The heading of the read-only list of the properties that are not fields.
     OtherValuesHeading,
+    /// The entry of a choice list for a value outside its vocabulary (U10d-Q4, T128); `value` as
+    /// read.
+    UnknownValue { value: String },
     /// The button that writes the edits and closes the window.
     Ok,
     /// Shown while the write runs.
@@ -1135,6 +1342,7 @@ pub fn editor_text(text: &EditorText) -> String {
             EditorSection::CreatorRights => "Creator and Rights",
             EditorSection::TimePlace => "Time and Place",
             EditorSection::Assignment => "Assignment",
+            EditorSection::Licence => "Licence (PLUS)",
             EditorSection::RatingLabel => "Rating and Label",
         }
         .to_string(),
@@ -1149,6 +1357,7 @@ pub fn editor_text(text: &EditorText) -> String {
         EditorText::ConflictChoice { value, origin } => format!("{value} ({origin})"),
         EditorText::WarningsHeading => "Warnings".to_string(),
         EditorText::OtherValuesHeading => "Other Metadata".to_string(),
+        EditorText::UnknownValue { value } => format!("Unknown value: {value}"),
         EditorText::Ok => "OK".to_string(),
         EditorText::Saving => "Saving …".to_string(),
         EditorText::Saved => "Saved.".to_string(),
@@ -1399,6 +1608,13 @@ mod tests {
                 "Urgency",
                 "Category",
                 "Supplemental Categories",
+                "Model Release Status",
+                "Model Release Id",
+                "Minor Model Age Disclosure",
+                "Property Release Status",
+                "Property Release Id",
+                "Data Mining",
+                "Digital Source Type",
             ]
         );
     }
@@ -1445,7 +1661,9 @@ mod tests {
                 | EditorField::OrganisationCode
                 | EditorField::SubjectCode
                 | EditorField::SceneCode
-                | EditorField::SupplementalCategories => FieldKind::List,
+                | EditorField::SupplementalCategories
+                | EditorField::ModelReleaseId
+                | EditorField::PropertyReleaseId => FieldKind::List,
                 EditorField::DateCreated => FieldKind::Date,
                 _ => FieldKind::Text,
             };
@@ -1457,7 +1675,7 @@ mod tests {
     #[test]
     fn every_field_is_in_its_section_in_form_order() {
         use EditorField::*;
-        let expected: [(EditorSection, &[EditorField]); 5] = [
+        let expected: [(EditorSection, &[EditorField]); 6] = [
             (
                 EditorSection::Content,
                 &[
@@ -1509,6 +1727,18 @@ mod tests {
                     Urgency,
                     Category,
                     SupplementalCategories,
+                ],
+            ),
+            (
+                EditorSection::Licence,
+                &[
+                    ModelReleaseStatus,
+                    ModelReleaseId,
+                    MinorModelAge,
+                    PropertyReleaseStatus,
+                    PropertyReleaseId,
+                    DataMining,
+                    DigitalSourceType,
                 ],
             ),
             // Last, without fields: the rating path's buttons (T124, U10c-Q5).
@@ -2828,6 +3058,7 @@ mod tests {
                 "Creator and Rights",
                 "Time and Place",
                 "Assignment",
+                "Licence (PLUS)",
                 "Rating and Label"
             ]
         );
@@ -3350,5 +3581,580 @@ mod tests {
         for (text, expected) in cases {
             assert_eq!(editor_text(&text), expected, "{text:?}");
         }
+    }
+
+    // --- the Licence (PLUS) section and its choice lists (T128, U10d) ---
+
+    const DST: &str = "http://cv.iptc.org/newscodes/digitalsourcetype/";
+
+    /// The choice-list fields and their XMP ids.
+    const CHOICE_FIELDS: [(EditorField, &str); 5] = [
+        (EditorField::ModelReleaseStatus, "plus:ModelReleaseStatus"),
+        (EditorField::MinorModelAge, "plus:MinorModelAgeDisclosure"),
+        (
+            EditorField::PropertyReleaseStatus,
+            "plus:PropertyReleaseStatus",
+        ),
+        (EditorField::DataMining, "plus:DataMining"),
+        (
+            EditorField::DigitalSourceType,
+            "Iptc4xmpExt:DigitalSourceType",
+        ),
+    ];
+
+    /// The level-C sample `PM-jpg.JPG`'s PLUS values as ExifTool reads them (codes), and a
+    /// Digital Source Type.
+    fn licence_metadata() -> Metadata {
+        let mut metadata = Metadata::new();
+        insert(&mut metadata, "plus:ModelReleaseStatus", text("MR-NAP"));
+        insert(&mut metadata, "plus:PropertyReleaseStatus", text("PR-NON"));
+        insert(
+            &mut metadata,
+            "plus:MinorModelAgeDisclosure",
+            text("AG-A25"),
+        );
+        insert(&mut metadata, "plus:DataMining", text("DMI-UNSPECIFIED"));
+        insert(
+            &mut metadata,
+            "Iptc4xmpExt:DigitalSourceType",
+            text(&format!("{DST}digitalCapture")),
+        );
+        metadata
+    }
+
+    #[test]
+    fn the_licence_fields_property_kind_and_choice_list() {
+        use EditorField::*;
+        let cases = [
+            (
+                ModelReleaseStatus,
+                "plus:ModelReleaseStatus",
+                FieldKind::Text,
+                true,
+            ),
+            (
+                ModelReleaseId,
+                "plus:ModelReleaseID",
+                FieldKind::List,
+                false,
+            ),
+            (
+                MinorModelAge,
+                "plus:MinorModelAgeDisclosure",
+                FieldKind::Text,
+                true,
+            ),
+            (
+                PropertyReleaseStatus,
+                "plus:PropertyReleaseStatus",
+                FieldKind::Text,
+                true,
+            ),
+            (
+                PropertyReleaseId,
+                "plus:PropertyReleaseID",
+                FieldKind::List,
+                false,
+            ),
+            (DataMining, "plus:DataMining", FieldKind::Text, true),
+            (
+                DigitalSourceType,
+                "Iptc4xmpExt:DigitalSourceType",
+                FieldKind::Text,
+                true,
+            ),
+        ];
+        for (field, property, kind, choice) in cases {
+            assert_eq!(field.property(), property, "{field:?}");
+            assert_eq!(field.struct_field(), None, "{field:?}");
+            assert_eq!(field.kind(), kind, "{field:?}");
+            assert_eq!(field.section(), EditorSection::Licence, "{field:?}");
+            assert_eq!(field.choice_list().is_some(), choice, "{field:?}");
+            assert!(field.editable(), "{field:?}");
+            assert!(!field.multiline(), "{field:?}");
+            assert!(!field.check_box(), "{field:?}");
+            assert!(!field.copyright_management(), "{field:?}");
+        }
+        // Only these five fields are choice lists; their lists are the vocabulary's.
+        let choice_fields: Vec<EditorField> = EditorField::ALL
+            .into_iter()
+            .filter(|field| field.choice_list().is_some())
+            .collect();
+        assert_eq!(
+            choice_fields,
+            CHOICE_FIELDS.map(|(field, _)| field).to_vec()
+        );
+        for (field, property) in CHOICE_FIELDS {
+            assert_eq!(
+                field.choice_list(),
+                vocabulary::choices(property),
+                "{field:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_choice_list_has_the_empty_entry_then_the_vocabulary_with_labels_and_full_uris() {
+        let form = form_with(Metadata::new());
+        for (field, property) in CHOICE_FIELDS {
+            let entries = form.choice_entries(field);
+            let values = vocabulary::choices(property).unwrap();
+            assert_eq!(entries.len(), values.len() + 1, "{field:?}");
+            assert_eq!(
+                entries[0],
+                ChoiceEntry {
+                    value: String::new(),
+                    text: String::new(),
+                    tooltip: None
+                },
+                "{field:?}"
+            );
+            for (entry, value) in entries[1..].iter().zip(values) {
+                assert_eq!(entry.value, *value, "{field:?}");
+                assert_eq!(Some(entry.text.as_str()), choice_label(value), "{value}");
+                let uri = if field == EditorField::DigitalSourceType {
+                    value.to_string()
+                } else {
+                    format!("http://ns.useplus.org/ldf/vocab/{value}")
+                };
+                assert_eq!(entry.tooltip.as_deref(), Some(uri.as_str()), "{value}");
+            }
+        }
+        // Not a choice list: no entries.
+        assert!(form.choice_entries(EditorField::City).is_empty());
+        assert!(form.choice_entries(EditorField::ModelReleaseId).is_empty());
+    }
+
+    /// The level-C sample's values (codes, as ExifTool reads them) are the selected entries, with
+    /// no extra entry and no warning.
+    #[test]
+    fn the_files_codes_are_selected_without_an_extra_entry() {
+        let read = read_of(licence_metadata());
+        let form = EditorForm::from_read(&read);
+        let digital_capture = format!("{DST}digitalCapture");
+        for (field, value, label) in [
+            (EditorField::ModelReleaseStatus, "MR-NAP", "Not Applicable"),
+            (EditorField::PropertyReleaseStatus, "PR-NON", "None"),
+            (EditorField::MinorModelAge, "AG-A25", "Age 25 or Over"),
+            (
+                EditorField::DataMining,
+                "DMI-UNSPECIFIED",
+                "Unspecified - no prohibition defined",
+            ),
+            (
+                EditorField::DigitalSourceType,
+                digital_capture.as_str(),
+                "Digital capture sampled from real life",
+            ),
+        ] {
+            assert_eq!(form.text(field), value, "{field:?}");
+            let entries = form.choice_entries(field);
+            let selected: Vec<&ChoiceEntry> = entries
+                .iter()
+                .filter(|entry| entry.value == value)
+                .collect();
+            assert_eq!(selected.len(), 1, "{field:?}");
+            assert_eq!(selected[0].text, label, "{field:?}");
+            assert_eq!(
+                entries.len(),
+                field.choice_list().unwrap().len() + 1,
+                "{field:?}"
+            );
+        }
+        assert_eq!(form.edits(), Ok(Vec::new()));
+        assert!(form.warnings(&read, false).is_empty());
+    }
+
+    #[test]
+    fn a_choice_list_is_not_typed_into() {
+        let mut form = form_with(licence_metadata());
+        for (field, _) in CHOICE_FIELDS {
+            assert!(form.text_mut(field).is_none(), "{field:?}");
+        }
+        assert!(form.text_mut(EditorField::ModelReleaseId).is_some());
+        // `set_choice` changes nothing on another field.
+        form.set_choice(EditorField::City, "MR-NAP");
+        assert_eq!(form.text(EditorField::City), "");
+    }
+
+    #[test]
+    fn another_entry_is_a_set_of_its_exact_value_and_the_empty_entry_a_clear() {
+        let mut form = form_with(licence_metadata());
+        form.set_choice(EditorField::ModelReleaseStatus, "MR-UMR");
+        form.set_choice(EditorField::MinorModelAge, "");
+        form.set_choice(EditorField::DigitalSourceType, &format!("{DST}humanEdits"));
+        // Chosen again as it was: no edit.
+        form.set_choice(EditorField::DataMining, "DMI-UNSPECIFIED");
+        assert_eq!(
+            form.edits(),
+            Ok(vec![
+                // The PLUS code alone (ExifTool adds the prefix when it writes).
+                set("plus:ModelReleaseStatus", text("MR-UMR")),
+                Edit::Clear {
+                    property: "plus:MinorModelAgeDisclosure".into(),
+                    field: None,
+                },
+                // Digital Source Type: the full URI.
+                set(
+                    "Iptc4xmpExt:DigitalSourceType",
+                    text(&format!("{DST}humanEdits"))
+                ),
+            ])
+        );
+        // An empty field given a value.
+        let mut empty = form_with(Metadata::new());
+        empty.set_choice(EditorField::PropertyReleaseStatus, "PR-LPR");
+        assert_eq!(
+            empty.edits(),
+            Ok(vec![set("plus:PropertyReleaseStatus", text("PR-LPR"))])
+        );
+    }
+
+    /// A value outside the vocabulary (ADR 0007 §11, U10d-Q4): its own entry, selected; kept when
+    /// untouched (also while another field is edited); replaced only by another entry; a warning.
+    #[test]
+    fn an_unknown_value_is_its_own_entry_kept_until_replaced() {
+        let mut metadata = Metadata::new();
+        // The full URI is not what ExifTool reads, so it is unknown too.
+        let full = "http://ns.useplus.org/ldf/vocab/MR-NAP";
+        insert(&mut metadata, "plus:ModelReleaseStatus", text(full));
+        insert(&mut metadata, "plus:DataMining", text("DMI-SOMETHING"));
+        let read = read_of(metadata);
+        let mut form = EditorForm::from_read(&read);
+
+        let entries = form.choice_entries(EditorField::DataMining);
+        assert_eq!(entries.len(), 9 + 2);
+        assert_eq!(
+            entries.last(),
+            Some(&ChoiceEntry {
+                value: "DMI-SOMETHING".into(),
+                text: "Unknown value: DMI-SOMETHING".into(),
+                tooltip: None,
+            })
+        );
+        assert_eq!(form.text(EditorField::DataMining), "DMI-SOMETHING");
+        assert_eq!(
+            form.choice_entries(EditorField::ModelReleaseStatus)
+                .last()
+                .map(|entry| entry.text.clone()),
+            Some(format!("Unknown value: {full}"))
+        );
+        // Untouched: no edit, and the warnings name both values (in table order).
+        type_into(&mut form, EditorField::City, "Lund");
+        assert_eq!(form.edits(), Ok(vec![set("photoshop:City", text("Lund"))]));
+        assert_eq!(
+            form.warnings(&read, false),
+            [
+                "Data Mining DMI-SOMETHING is not in the PLUS list".to_string(),
+                format!("Model Release Status {full} is not in the PLUS list"),
+            ]
+        );
+        // Replaced by another entry: a `Set`; the unknown entry stays in the list to go back to.
+        form.set_choice(EditorField::DataMining, "DMI-PROHIBITED-AIMLTRAINING");
+        assert_eq!(
+            form.edits(),
+            Ok(vec![
+                set("photoshop:City", text("Lund")),
+                set("plus:DataMining", text("DMI-PROHIBITED-AIMLTRAINING")),
+            ])
+        );
+        assert!(
+            form.choice_entries(EditorField::DataMining)
+                .iter()
+                .any(|entry| entry.value == "DMI-SOMETHING")
+        );
+        assert_eq!(
+            form.warnings(&read, false),
+            [format!(
+                "Model Release Status {full} is not in the PLUS list"
+            )]
+        );
+        // Chosen back: no edit.
+        form.set_choice(EditorField::DataMining, "DMI-SOMETHING");
+        assert_eq!(form.edits(), Ok(vec![set("photoshop:City", text("Lund"))]));
+    }
+
+    /// A retired Digital Source Type in a file: its own entry with its label and full URI,
+    /// selected, no warning, kept; never offered otherwise.
+    #[test]
+    fn a_retired_digital_source_type_is_shown_with_its_label_and_kept() {
+        let retired = format!("{DST}digitalArt");
+        let mut metadata = Metadata::new();
+        insert(
+            &mut metadata,
+            "Iptc4xmpExt:DigitalSourceType",
+            text(&retired),
+        );
+        let read = read_of(metadata);
+        let mut form = EditorForm::from_read(&read);
+        let entries = form.choice_entries(EditorField::DigitalSourceType);
+        assert_eq!(entries.len(), 17 + 2);
+        assert_eq!(
+            entries.last(),
+            Some(&ChoiceEntry {
+                value: retired.clone(),
+                text: "Digital art".into(),
+                tooltip: Some(retired.clone()),
+            })
+        );
+        assert_eq!(form.edits(), Ok(Vec::new()));
+        assert!(form.warnings(&read, false).is_empty());
+        // Another file: no retired entry.
+        let fresh = form_with(Metadata::new());
+        for code in ["minorHumanEdits", "softwareImage", "digitalArt"] {
+            assert!(
+                fresh
+                    .choice_entries(EditorField::DigitalSourceType)
+                    .iter()
+                    .all(|entry| entry.value != format!("{DST}{code}")),
+                "{code}"
+            );
+        }
+        // Replaced: a `Set` of the new URI.
+        form.set_choice(
+            EditorField::DigitalSourceType,
+            &format!("{DST}digitalCreation"),
+        );
+        assert_eq!(
+            form.edits(),
+            Ok(vec![set(
+                "Iptc4xmpExt:DigitalSourceType",
+                text(&format!("{DST}digitalCreation"))
+            )])
+        );
+    }
+
+    /// A retired Digital Source Type code is not a retired value of a PLUS field: there it is
+    /// unknown.
+    #[test]
+    fn a_digital_source_type_value_in_a_plus_field_is_unknown() {
+        let retired = format!("{DST}digitalArt");
+        let mut metadata = Metadata::new();
+        insert(&mut metadata, "plus:ModelReleaseStatus", text(&retired));
+        let form = form_with(metadata);
+        assert_eq!(
+            form.choice_entries(EditorField::ModelReleaseStatus)
+                .last()
+                .map(|entry| (entry.text.clone(), entry.tooltip.clone())),
+            Some((format!("Unknown value: {retired}"), None))
+        );
+    }
+
+    #[test]
+    fn the_release_id_lists_unchanged_changed_and_emptied() {
+        let mut metadata = Metadata::new();
+        insert(
+            &mut metadata,
+            "plus:ModelReleaseID",
+            list(&["MR-1", "MR-2"]),
+        );
+        insert(&mut metadata, "plus:PropertyReleaseID", list(&["PR-1"]));
+        let mut form = form_with(metadata);
+        assert_eq!(form.text(EditorField::ModelReleaseId), "MR-1, MR-2");
+        assert_eq!(form.text(EditorField::PropertyReleaseId), "PR-1");
+        assert_eq!(form.edits(), Ok(Vec::new()));
+        type_into(&mut form, EditorField::ModelReleaseId, "MR-1, MR-3 ,, ");
+        type_into(&mut form, EditorField::PropertyReleaseId, " , ");
+        assert_eq!(
+            form.edits(),
+            Ok(vec![
+                set("plus:ModelReleaseID", list(&["MR-1", "MR-3"])),
+                Edit::Clear {
+                    property: "plus:PropertyReleaseID".into(),
+                    field: None,
+                },
+            ])
+        );
+        let mut metadata = licence_metadata();
+        apply_edits(&mut metadata, &form.edits().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn the_licence_edits_are_accepted_by_apply_edits() {
+        let mut form = form_with(licence_metadata());
+        form.set_choice(EditorField::ModelReleaseStatus, "MR-LMR");
+        form.set_choice(EditorField::DigitalSourceType, "");
+        type_into(&mut form, EditorField::PropertyReleaseId, "PR-9");
+        let mut metadata = licence_metadata();
+        apply_edits(&mut metadata, &form.edits().unwrap()).unwrap();
+        assert_eq!(
+            metadata.get("plus:ModelReleaseStatus").map(|s| &s.value),
+            Some(&text("MR-LMR"))
+        );
+        assert_eq!(metadata.get("Iptc4xmpExt:DigitalSourceType"), None);
+        assert_eq!(
+            metadata.get("plus:PropertyReleaseID").map(|s| &s.value),
+            Some(&list(&["PR-9"]))
+        );
+    }
+
+    #[test]
+    fn a_conflict_on_a_choice_field_is_decided_by_choosing_its_value() {
+        let mut metadata = Metadata::new();
+        insert(&mut metadata, "plus:ModelReleaseStatus", text("MR-NAP"));
+        metadata.add_conflict(Conflict {
+            property: "plus:ModelReleaseStatus".into(),
+            values: vec![
+                (Origin::XmpEmbedded, text("MR-NAP")),
+                (Origin::XmpSidecar, text("MR-UMR")),
+            ],
+            rule: ConflictRule::Open,
+        });
+        let mut form = form_with(metadata);
+        assert!(form.choose(0, 1));
+        assert_eq!(form.text(EditorField::ModelReleaseStatus), "MR-UMR");
+        assert_eq!(
+            form.edits(),
+            Ok(vec![set("plus:ModelReleaseStatus", text("MR-UMR"))])
+        );
+    }
+
+    #[test]
+    fn copy_and_paste_carry_a_changed_choice_and_the_id_lists() {
+        let mut source = form_with(licence_metadata());
+        source.set_choice(EditorField::ModelReleaseStatus, "MR-UMR");
+        type_into(&mut source, EditorField::ModelReleaseId, "MR-7");
+        let copied = source.copy("a.jpg");
+        assert_eq!(copied.text(EditorField::ModelReleaseStatus), Some("MR-UMR"));
+        assert_eq!(copied.text(EditorField::ModelReleaseId), Some("MR-7"));
+        assert_eq!(
+            copied.text(EditorField::DigitalSourceType),
+            Some(format!("{DST}digitalCapture").as_str())
+        );
+
+        let mut target_metadata = Metadata::new();
+        insert(
+            &mut target_metadata,
+            "plus:ModelReleaseStatus",
+            text("MR-NON"),
+        );
+        insert(
+            &mut target_metadata,
+            "plus:PropertyReleaseStatus",
+            text("PR-NAP"),
+        );
+        let mut target = form_with(target_metadata);
+        // The copy's empty Property Release Id leaves nothing; its PR-NON replaces PR-NAP.
+        target.paste(&copied);
+        assert_eq!(target.text(EditorField::ModelReleaseStatus), "MR-UMR");
+        assert_eq!(target.text(EditorField::PropertyReleaseStatus), "PR-NON");
+        assert_eq!(
+            target.edits(),
+            Ok(vec![
+                set("plus:ModelReleaseStatus", text("MR-UMR")),
+                set("plus:ModelReleaseID", list(&["MR-7"])),
+                set("plus:MinorModelAgeDisclosure", text("AG-A25")),
+                set("plus:PropertyReleaseStatus", text("PR-NON")),
+                set("plus:DataMining", text("DMI-UNSPECIFIED")),
+                set(
+                    "Iptc4xmpExt:DigitalSourceType",
+                    text(&format!("{DST}digitalCapture"))
+                ),
+            ])
+        );
+    }
+
+    /// Paste never empties a choice: an empty copied choice leaves the target's value.
+    #[test]
+    fn an_empty_copied_choice_leaves_the_targets_value() {
+        let copied = form_with(Metadata::new()).copy("a.jpg");
+        let mut target = form_with(licence_metadata());
+        target.paste(&copied);
+        assert_eq!(target.text(EditorField::ModelReleaseStatus), "MR-NAP");
+        assert_eq!(target.edits(), Ok(Vec::new()));
+    }
+
+    #[test]
+    fn apply_to_all_marked_carries_only_a_changed_choice() {
+        let mut form = form_with(licence_metadata());
+        form.set_choice(EditorField::DataMining, "DMI-PROHIBITED");
+        form.set_choice(EditorField::ModelReleaseStatus, "");
+        let batch = batch_of(&form);
+        let expected = vec![
+            Edit::Clear {
+                property: "plus:ModelReleaseStatus".into(),
+                field: None,
+            },
+            set("plus:DataMining", text("DMI-PROHIBITED")),
+        ];
+        assert_eq!(batch.this_image, expected);
+        // Not a copyright-management field: the emptied choice is emptied on every image.
+        assert_eq!(batch.others, expected);
+        assert_eq!(batch.changed, [EditorField::DataMining]);
+        assert_eq!(batch.emptied, [EditorField::ModelReleaseStatus]);
+        assert!(batch.emptied_here_only.is_empty());
+    }
+
+    /// Every value of every list, the retired Digital Source Types included, has a label, none
+    /// empty; the labels of point 5 of T128 are spot-checked.
+    #[test]
+    fn every_vocabulary_value_has_a_label() {
+        for (field, property) in CHOICE_FIELDS {
+            for value in vocabulary::choices(property).unwrap() {
+                let label = choice_label(value);
+                assert!(label.is_some_and(|l| !l.is_empty()), "{field:?} {value}");
+            }
+        }
+        for uri in vocabulary::RETIRED_DIGITAL_SOURCE_TYPE_URIS {
+            assert!(choice_label(uri).is_some_and(|l| !l.is_empty()), "{uri}");
+        }
+        for (value, label) in [
+            ("MR-LMR", "Limited or Incomplete Model Releases"),
+            ("PR-UPR", "Unlimited Property Releases"),
+            ("AG-A19", "Age 19"),
+            ("AG-U14", "Age 14 or Under"),
+            (
+                "DMI-PROHIBITED-SEEEMBEDDEDRIGHTSEXPR",
+                "Prohibited, see Embedded Encoded Rights Expression property",
+            ),
+            (
+                "DMI-PROHIBITED-GENAIMLTRAINING",
+                "Prohibited for Generative AI/ML training",
+            ),
+        ] {
+            assert_eq!(choice_label(value), Some(label), "{value}");
+        }
+        for (code, label) in [
+            (
+                "compositeWithTrainedAlgorithmicMedia",
+                "Edited using Generative AI",
+            ),
+            ("print", "Digitised from a non-transparent medium"),
+            ("minorHumanEdits", "Original media with minor human edits"),
+            ("softwareImage", "Created by software"),
+        ] {
+            assert_eq!(choice_label(&format!("{DST}{code}")), Some(label), "{code}");
+        }
+        // Not a vocabulary value: no label (a full PLUS URI, a bare Digital Source Type code).
+        for value in [
+            "",
+            "MR-XXX",
+            "http://ns.useplus.org/ldf/vocab/MR-NAP",
+            "digitalCapture",
+            "mr-nap",
+        ] {
+            assert_eq!(choice_label(value), None, "{value:?}");
+        }
+    }
+
+    #[test]
+    fn the_unknown_value_and_warning_texts() {
+        assert_eq!(
+            editor_text(&EditorText::UnknownValue {
+                value: "MR-XXX".into()
+            }),
+            "Unknown value: MR-XXX"
+        );
+        assert_eq!(
+            warning_text(&Warning::VocabularyValueUnknown {
+                property: "plus:MinorModelAgeDisclosure".into(),
+                value: "AG-99".into(),
+            }),
+            "Minor Model Age Disclosure AG-99 is not in the PLUS list"
+        );
+        assert_eq!(
+            editor_text(&EditorText::SectionHeading(EditorSection::Licence)),
+            "Licence (PLUS)"
+        );
     }
 }

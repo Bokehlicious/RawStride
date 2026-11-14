@@ -1,4 +1,4 @@
-# T129. ADR 0007 §5.1: an IIM value equal to the whole XMP text is no conflict — Open
+# T129. ADR 0007 §5.1: an IIM value equal to the whole XMP text is no conflict — Done
 
 - **Can start now.** Found by T127 on the level-C sample `PM-jpg.JPG`; the owner approved the fix
   on 2026-11-14. T127 waits for this task. Not at the same time as another task that changes
@@ -50,3 +50,5 @@
 | Date | Status | Note |
 |---|---|---|
 | 2026-11-14 | Open | Written by the reviewer after the review of T127 (finding 2); owner approved the fix; ADR 0007 §5.1 changed the same day |
+| 2026-11-14 | Ready for review | Reviewer: code and tests accepted, not committed (the task agent did not set the status). `same_on_prediction` also accepts the prediction without the byte limit; five new unit tests. `check.ps1` with T128–T130: fmt, test and clippy OK, 1318 passed, 0 failed, 53 ignored. Level-C: the `PM-jpg.JPG` Description conflict is gone |
+| 2026-11-14 | Done | Owner approved; committed by the reviewer |

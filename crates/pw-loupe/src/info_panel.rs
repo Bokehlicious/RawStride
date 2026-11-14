@@ -17,6 +17,7 @@
 
 use std::path::Path;
 
+use pw_metadata::iim::is_blank;
 use pw_metadata::iim_read::IimNotice;
 use pw_metadata::properties::{self, ValueKind};
 use pw_metadata::read::{FileNotice, MetadataRead};
@@ -191,8 +192,8 @@ fn field_name(xmp_id: &str) -> Option<&'static str> {
 /// The text of a value: `Text` and `Number` as they are; a Lang Alt its shown text, with
 /// ` (<language>)` when it is not `x-default` and ` +N languages` when it has N other entries; a
 /// list its entries joined with `; `; a date in XMP form; a structure `field: value` joined with
-/// `, `; a list
-/// of structures one structure per line.
+/// `, `, without its blank fields; a list
+/// of structures one structure per line, without lines for structures that have no field left.
 pub fn value_text(value: &Value) -> String {
     match value {
         Value::Text(text) | Value::Number(text) => text.clone(),
@@ -200,7 +201,12 @@ pub fn value_text(value: &Value) -> String {
         Value::List(entries) => entries.join("; "),
         Value::Date(date) => date.to_xmp(),
         Value::Struct(fields) => struct_text(fields),
-        Value::StructList(list) => list.iter().map(struct_text).collect::<Vec<_>>().join("\n"),
+        Value::StructList(list) => list
+            .iter()
+            .map(struct_text)
+            .filter(|line| !line.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n"),
     }
 }
 
@@ -221,11 +227,13 @@ fn lang_alt_text(lang_alt: &LangAlt) -> String {
     }
 }
 
-/// A structure as `field: value` joined with `, `.
+/// A structure as `field: value` joined with `, `, leaving out the blank fields (T130; a blank
+/// value counts as missing, ADR 0007 §5.1). A structure with no field left gives an empty text.
 fn struct_text(value: &StructValue) -> String {
     value
         .fields
         .iter()
+        .filter(|(_, field)| !is_blank_field(field))
         .map(|(id, field)| {
             format!(
                 "{label}: {text}",
@@ -235,6 +243,19 @@ fn struct_text(value: &StructValue) -> String {
         })
         .collect::<Vec<_>>()
         .join(", ")
+}
+
+/// Whether a structure's field is blank and so left out of its text (T130): a `Text` or `Number`
+/// that is empty or only spaces and/or NUL ([`is_blank`]), a Lang Alt whose shown text is blank,
+/// an empty list, and a structure or list of structures whose own text is empty.
+fn is_blank_field(field: &Value) -> bool {
+    match field {
+        Value::Text(text) | Value::Number(text) => is_blank(text),
+        Value::LangAlt(lang_alt) => lang_alt.display().is_none_or(|(text, _)| is_blank(text)),
+        Value::List(entries) => entries.is_empty(),
+        Value::Date(_) => false,
+        Value::Struct(_) | Value::StructList(_) => value_text(field).is_empty(),
+    }
 }
 
 /// Where a value came from.
@@ -734,6 +755,95 @@ mod tests {
         assert_eq!(
             value_text(&locations),
             "City: Umeå, Country Name: Sverige\nCity: Oslo, Country Name: Norge"
+        );
+    }
+
+    /// A Location Created with every field blank (empty, only spaces, only NUL), as Photo
+    /// Mechanic writes the empty sub-fields.
+    fn blank_location() -> StructValue {
+        StructValue {
+            fields: vec![
+                ("Iptc4xmpExt:Sublocation".to_string(), text("")),
+                ("Iptc4xmpExt:City".to_string(), text("   ")),
+                ("Iptc4xmpExt:ProvinceState".to_string(), text("")),
+                ("Iptc4xmpExt:CountryName".to_string(), text("\0\0")),
+                ("Iptc4xmpExt:WorldRegion".to_string(), text("")),
+            ],
+        }
+    }
+
+    #[test]
+    fn value_text_of_location_leaves_out_blank_fields() {
+        let location = Value::Struct(StructValue {
+            fields: vec![
+                ("Iptc4xmpExt:Sublocation".to_string(), text("")),
+                ("Iptc4xmpExt:City".to_string(), text("Exempelstad")),
+                ("Iptc4xmpExt:ProvinceState".to_string(), text("")),
+                ("Iptc4xmpExt:CountryName".to_string(), text("Sverige")),
+                ("Iptc4xmpExt:WorldRegion".to_string(), text("")),
+                ("Iptc4xmpExt:CountryCode".to_string(), text("  ")),
+                ("Iptc4xmpExt:LocationId".to_string(), text("\0")),
+            ],
+        });
+        assert_eq!(
+            value_text(&location),
+            "City: Exempelstad, Country Name: Sverige"
+        );
+    }
+
+    #[test]
+    fn value_text_of_all_blank_structure_is_empty() {
+        assert_eq!(value_text(&Value::Struct(blank_location())), "");
+    }
+
+    #[test]
+    fn value_text_of_two_locations_where_the_first_is_blank() {
+        let locations = Value::StructList(vec![blank_location(), location("Oslo", "Norge")]);
+        assert_eq!(value_text(&locations), "City: Oslo, Country Name: Norge");
+    }
+
+    #[test]
+    fn value_text_of_contact_structure_leaves_out_an_empty_field() {
+        let contact = StructValue {
+            fields: vec![
+                (
+                    "Iptc4xmpCore:CiEmailWork".to_string(),
+                    text("foto@example.com"),
+                ),
+                ("Iptc4xmpCore:CiTelWork".to_string(), text("")),
+                ("Iptc4xmpCore:CiAdrCity".to_string(), text("Umeå")),
+            ],
+        };
+        assert_eq!(
+            value_text(&Value::Struct(contact.clone())),
+            "Email: foto@example.com, City: Umeå"
+        );
+        // Nested in another structure: the empty field is left out there too, and a nested
+        // structure, Lang Alt or list that is blank is left out as a whole.
+        let outer = Value::Struct(StructValue {
+            fields: vec![
+                (
+                    "Iptc4xmpCore:CreatorContactInfo".to_string(),
+                    Value::Struct(contact),
+                ),
+                (
+                    "Iptc4xmpExt:LocationCreated".to_string(),
+                    Value::Struct(blank_location()),
+                ),
+                (
+                    "Iptc4xmpExt:LocationShown".to_string(),
+                    Value::StructList(vec![blank_location()]),
+                ),
+                ("dc:title".to_string(), lang_alt(&[("x-default", " \0")])),
+                ("dc:subject".to_string(), Value::List(Vec::new())),
+            ],
+        });
+        assert_eq!(
+            value_text(&outer),
+            format!(
+                "{}: Email: foto@example.com, City: Umeå",
+                property_label("Iptc4xmpCore:CreatorContactInfo", Language::En)
+            )
         );
     }
 

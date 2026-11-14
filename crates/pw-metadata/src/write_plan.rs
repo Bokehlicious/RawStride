@@ -279,9 +279,20 @@ pub fn plan(
 }
 
 /// The XMP arguments for a new value of a property.
+///
+/// A property of the kind `ValueKind::Uri` is written with `#=` (T128, point 9), a single value
+/// and each entry of a list: the reader asks for values without ExifTool's print conversion
+/// (`-n`), so they are written without it too. ExifTool otherwise expects the label of a PLUS
+/// code ("Unlimited Model Releases") and refuses the code; `#=` turns off only the print
+/// conversion, so ExifTool still adds the PLUS prefix once. Clearing (`-<tag>=`) is unchanged.
 fn xmp_args(et_xmp: &str, kind: ValueKind, value: &Value, args: &mut Vec<String>) {
+    let assign = if matches!(kind, ValueKind::Uri) {
+        "#="
+    } else {
+        "="
+    };
     match value {
-        Value::Text(text) | Value::Number(text) => args.push(format!("-{et_xmp}={text}")),
+        Value::Text(text) | Value::Number(text) => args.push(format!("-{et_xmp}{assign}{text}")),
         Value::Date(date) => args.push(format!("-{et_xmp}={}", date.to_xmp())),
         Value::LangAlt(lang_alt) => {
             // Q7: only `x-default`. The language must be named: ExifTool 13.59 replaces the whole
@@ -296,7 +307,7 @@ fn xmp_args(et_xmp: &str, kind: ValueKind, value: &Value, args: &mut Vec<String>
         }
         Value::List(items) => {
             args.push(format!("-{et_xmp}="));
-            args.extend(items.iter().map(|item| format!("-{et_xmp}={item}")));
+            args.extend(items.iter().map(|item| format!("-{et_xmp}{assign}{item}")));
         }
         Value::Struct(fields) => {
             if let ValueKind::Struct(name) = kind {
@@ -733,7 +744,8 @@ mod tests {
             args(&plan),
             [
                 "-XMP-xmp:Rating=2.5",
-                "-XMP-xmpRights:WebStatement=https://example.com/r",
+                // A URI without ExifTool's print conversion (T128, point 9).
+                "-XMP-xmpRights:WebStatement#=https://example.com/r",
             ]
         );
     }
@@ -1713,5 +1725,50 @@ mod tests {
             assert_eq!(args(&plan), ["-XMP-xmp:Rating=3", "-IPTCDigest=new"]);
             assert!(plan.notices.is_empty());
         }
+    }
+
+    /// URI properties are written with `#=`, without ExifTool's print conversion (T128, point 9):
+    /// a PLUS code, a Digital Source Type URI, Web Statement of Rights and each Event Id; a Text
+    /// property and the clearing of a list keep `=`.
+    #[test]
+    fn uri_values_are_written_without_print_conversion() {
+        let args_of = |xmp_id: &str, value: Value| {
+            let def = properties::property(xmp_id).unwrap();
+            let mut args = Vec::new();
+            xmp_args(def.et_xmp.unwrap(), def.kind, &value, &mut args);
+            args
+        };
+        assert_eq!(
+            args_of("plus:ModelReleaseStatus", text("MR-UMR")),
+            ["-XMP-plus:ModelReleaseStatus#=MR-UMR"]
+        );
+        assert_eq!(
+            args_of(
+                "Iptc4xmpExt:DigitalSourceType",
+                text("http://cv.iptc.org/newscodes/digitalsourcetype/digitalCapture")
+            ),
+            [
+                "-XMP-iptcExt:DigitalSourceType#=http://cv.iptc.org/newscodes/digitalsourcetype/digitalCapture"
+            ]
+        );
+        assert_eq!(
+            args_of("xmpRights:WebStatement", text("https://example.com/rights")),
+            ["-XMP-xmpRights:WebStatement#=https://example.com/rights"]
+        );
+        assert_eq!(
+            args_of(
+                "Iptc4xmpExt:EventId",
+                list(&["https://example.com/e1", "https://example.com/e2"])
+            ),
+            [
+                "-XMP-iptcExt:EventID=",
+                "-XMP-iptcExt:EventID#=https://example.com/e1",
+                "-XMP-iptcExt:EventID#=https://example.com/e2",
+            ]
+        );
+        assert_eq!(
+            args_of("photoshop:City", text("Lund")),
+            ["-XMP-photoshop:City=Lund"]
+        );
     }
 }

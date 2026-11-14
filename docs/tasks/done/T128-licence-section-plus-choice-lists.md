@@ -1,4 +1,4 @@
-# T128. ADR 0017 U10d and ADR 0007 I11: the Licence (PLUS) section with fixed choice lists — Open
+# T128. ADR 0017 U10d and ADR 0007 I11: the Licence (PLUS) section with fixed choice lists — Done
 
 - **Can start now.** The owner approved the proposals of U10d-Q1–U10d-Q6 (at the end of this task)
   on 2026-11-14; they are written into the points below, into ADR 0017 §6.1 and ADR 0007 §11 (Q9).
@@ -202,3 +202,6 @@
 | 2026-11-14 | Open | Owner: U10d-Q1–U10d-Q6 approved as proposed; written into the points, ADR 0017 §6.1 and ADR 0007 §11 (Q9). R2 done by the reviewer on the owner's yes: `IPTC-NewsCodes-digitalsourcetype.json` (12 753 bytes, SHA-256 `1caaa5bb…88e7cca4fe52b9bb4d65701da4fb1d6`), 17 current and 3 retired codes, listed in points 1 and 5 |
 | 2026-11-14 | Open | Reviewer, after the review of T127 (owner approved): the PLUS values are codes, since ExifTool removes and adds the prefix (a full URI is stored twice); Digital Source Type keeps full URIs; new point 8 (write test in `tests/edits.rs`). The agent paused; it reads the file again and continues |
 | 2026-11-14 | Open | Reviewer: first review of the work so far: point 8's test fails because the write plan sends XMP values through ExifTool's print conversion ("not in PrintConv"); new point 9 (`#=` for URI properties in `write_plan.rs`), owner approved. Also left: `cargo fmt` in `editor.rs`, `docs/glossary.md` |
+| 2026-11-14 | Ready for review | Agent: points 1–9 done; `check.ps1` all OK (fmt, test, clippy); 1318 passed, 53 ignored, 0 failed. Point 8's helper adds `-echo3` after `-b -XMP` (the packet has no final line break, so `execute` would wait for `{ready}`). Existing tests extended for the new field, section and key; the URI test in `write_plan.rs` now expects `#=` (point 9) |
+| 2026-11-14 | Ready for review | Reviewer: points 1–9 accepted, not committed. `#=` for URI properties; the existing Web Statement test in `write_plan.rs` changed to `#=`, as point 9 requires. Reviewer's `check.ps1`: fmt, test and clippy OK, 1318 passed, 0 failed, 53 ignored; level-C 10 of 10 pass. Waits for the owner's hand check |
+| 2026-11-14 | Done | Owner: hand check done and approved (points 1–9 of the reviewer's list on copies of the level-C samples: reading, JPEG, ARW sidecar, DNG, Photo Mechanic, clearing, copy and paste, section state); point 10 (an unknown value) not possible on the samples, covered by the unit tests; committed by the reviewer |

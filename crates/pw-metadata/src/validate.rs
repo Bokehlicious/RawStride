@@ -12,14 +12,16 @@
 //!   Whether the code is in ISO 3166-1 is not checked.
 //! - **Creator's Jobtitle** without a Creator [User Guide; §8].
 //! - **Digital Source Type:** a URI of the IPTC NewsCodes vocabulary [IPTC §11.13].
+//! - **PLUS choice lists** (I11, T128): Model Release Status, Property Release Status, Minor Model
+//!   Age Disclosure and Data Mining, one of the codes of their PLUS vocabulary ([`vocabulary`],
+//!   exact; ExifTool gives the code without the URI's prefix).
 //! - **Image Registry Entry:** both Item Id and Organisation Id [IPTC §11.21].
 //! - **Rating:** a number from −1 to 5; a real number inside the range is fine (§8).
 //!
 //! A blank value (only spaces and/or NUL, [`iim::is_blank`]) counts as missing (§5.1).
 //!
 //! Left out here:
-//! - the PLUS properties and their controlled vocabulary (I11);
-//! - the controlled vocabularies other than Digital Source Type;
+//! - the controlled vocabularies other than Digital Source Type and the PLUS choice lists;
 //! - dates: the editor checks a date when it turns a text into a date (T104).
 
 use std::fmt;
@@ -28,6 +30,7 @@ use crate::iim;
 use crate::iim_read;
 use crate::properties::{self, IimDataset};
 use crate::value::{Metadata, StructValue, Value};
+use crate::vocabulary;
 
 const ALT_TEXT: &str = "Iptc4xmpCore:AltTextAccessibility";
 const COUNTRY_CODE: &str = "Iptc4xmpCore:CountryCode";
@@ -68,6 +71,9 @@ pub enum Warning {
     RegistryEntryIncomplete { index: usize },
     /// The rating is not a number from −1 to 5 (§8); `value` is the text as stored.
     RatingOutOfRange { value: String },
+    /// The value of the PLUS choice-list property `property` (XMP id) is not one of the codes of
+    /// its PLUS vocabulary (I11, T128); `value` is the text as read. Kept, never refused.
+    VocabularyValueUnknown { property: String, value: String },
 }
 
 impl fmt::Display for Warning {
@@ -103,6 +109,10 @@ impl fmt::Display for Warning {
             Warning::RatingOutOfRange { value } => {
                 write!(f, "Rating \"{value}\" is not a number from -1 to 5")
             }
+            Warning::VocabularyValueUnknown { property, value } => write!(
+                f,
+                "{property}: \"{value}\" is not in the PLUS controlled vocabulary"
+            ),
         }
     }
 }
@@ -134,6 +144,7 @@ pub fn validate(metadata: &Metadata, iim_written: bool) -> Vec<Warning> {
             COUNTRY_CODE => country_code_warning(value),
             JOBTITLE => jobtitle_warning(metadata, value),
             DIGITAL_SOURCE_TYPE => digital_source_type_warning(value),
+            id if vocabulary::PLUS_PROPERTIES.contains(&id) => vocabulary_warning(id, value),
             RATING => match value {
                 Value::Number(text) => rating_warning(text),
                 _ => None,
@@ -231,6 +242,16 @@ fn digital_source_type_warning(value: &Value) -> Option<Warning> {
         });
     (!known).then(|| Warning::DigitalSourceTypeUnknown {
         uri: uri.to_string(),
+    })
+}
+
+/// `VocabularyValueUnknown` when the text of the PLUS choice-list property `xmp_id` is not blank
+/// and not in its vocabulary (exact comparison).
+fn vocabulary_warning(xmp_id: &str, value: &Value) -> Option<Warning> {
+    let text = present_text(value)?;
+    (!vocabulary::is_choice(xmp_id, text)).then(|| Warning::VocabularyValueUnknown {
+        property: xmp_id.to_string(),
+        value: text.to_string(),
     })
 }
 
@@ -534,6 +555,82 @@ mod tests {
         Ok(())
     }
 
+    /// The PLUS choice lists (I11, T128): an unknown value warns with its property and its text
+    /// as read; a known code and a blank value give nothing.
+    #[test]
+    fn plus_choice_lists_warn_only_for_a_value_outside_the_vocabulary() -> Result<(), ValueError> {
+        let cases = [
+            (vocabulary::MODEL_RELEASE_STATUS, "MR-NAP"),
+            (vocabulary::PROPERTY_RELEASE_STATUS, "PR-NON"),
+            (vocabulary::MINOR_MODEL_AGE_DISCLOSURE, "AG-A25"),
+            (vocabulary::DATA_MINING, "DMI-UNSPECIFIED"),
+        ];
+        for (property, known) in cases {
+            assert_eq!(
+                warnings_of(property, text(known), true)?,
+                Vec::new(),
+                "{property}"
+            );
+            for blank in ["", "  "] {
+                assert_eq!(
+                    warnings_of(property, text(blank), true)?,
+                    Vec::new(),
+                    "{property} {blank:?}"
+                );
+            }
+            // An unknown code, another case, a trailing space, the full URI (ExifTool gives the
+            // code alone, so a full URI in the read is not a known value).
+            let unknown = [
+                "XX-UNKNOWN".to_string(),
+                known.to_lowercase(),
+                format!("{known} "),
+                format!("{}{known}", vocabulary::PLUS_PREFIX),
+            ];
+            for value in unknown {
+                assert_eq!(
+                    warnings_of(property, text(&value), true)?,
+                    vec![Warning::VocabularyValueUnknown {
+                        property: property.to_string(),
+                        value: value.clone(),
+                    }],
+                    "{property} {value:?}"
+                );
+            }
+        }
+        // A code of another PLUS list is unknown here.
+        assert_eq!(
+            warnings_of(vocabulary::PROPERTY_RELEASE_STATUS, text("MR-NAP"), false)?,
+            vec![Warning::VocabularyValueUnknown {
+                property: vocabulary::PROPERTY_RELEASE_STATUS.to_string(),
+                value: "MR-NAP".to_string(),
+            }]
+        );
+        Ok(())
+    }
+
+    /// Digital Source Type keeps its own warning (T128 point 4): a retired code and a NewsCodes
+    /// URI that is not in the list give nothing, and it never gives `VocabularyValueUnknown`.
+    #[test]
+    fn digital_source_type_keeps_its_own_warning() -> Result<(), ValueError> {
+        for uri in [
+            "http://cv.iptc.org/newscodes/digitalsourcetype/digitalArt",
+            "http://cv.iptc.org/newscodes/digitalsourcetype/notACode",
+        ] {
+            assert_eq!(
+                warnings_of(DIGITAL_SOURCE_TYPE, text(uri), false)?,
+                Vec::new(),
+                "{uri}"
+            );
+        }
+        assert_eq!(
+            warnings_of(DIGITAL_SOURCE_TYPE, text("http://example.com/x"), false)?,
+            vec![Warning::DigitalSourceTypeUnknown {
+                uri: "http://example.com/x".to_string()
+            }]
+        );
+        Ok(())
+    }
+
     #[test]
     fn a_registry_entry_without_organisation() -> Result<(), ValueError> {
         let entries = Value::StructList(vec![
@@ -638,6 +735,18 @@ mod tests {
                 "Image Registry Entry 2 lacks its Item Id or its Organisation Id",
                 "Rating \"6\" is not a number from -1 to 5",
             ]
+        );
+    }
+
+    #[test]
+    fn the_english_text_of_an_unknown_vocabulary_value() {
+        let warning = Warning::VocabularyValueUnknown {
+            property: vocabulary::MODEL_RELEASE_STATUS.to_string(),
+            value: "MR-XXX".to_string(),
+        };
+        assert_eq!(
+            warning.to_string(),
+            "plus:ModelReleaseStatus: \"MR-XXX\" is not in the PLUS controlled vocabulary"
         );
     }
 }

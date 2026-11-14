@@ -1,4 +1,4 @@
-# T127. ADR 0007 I12: real-file tests with the level-C samples — Blocked
+# T127. ADR 0007 I12: real-file tests with the level-C samples — Open
 
 - **Blocked until T129 is Done** (changed 2026-11-14 after the first run; owner approved). The
   first run found three things (see the log): the PLUS values and the empty sub-fields are
@@ -92,3 +92,4 @@
 | 2026-11-14 | Open | Written by the reviewer (ADR 0007 I12) after the owner put the level-C samples in `PW_TESTDATA\level-c` |
 | 2026-11-14 | Open | Task agent: `level_c.rs` written; stopped on failing tests (rule 5), not finished |
 | 2026-11-14 | Blocked | Reviewer ran the tests (4 passed, 6 failed) and found three causes; owner approved the proposals. (1) PLUS: the files hold full URIs, but ExifTool gives the codes when it reads and adds the prefix when it writes; the task's expectation was wrong: points 4 and 5 corrected. (2) `PM-jpg.JPG`: Photo Mechanic wrote the 2191-byte Description also to IIM; the reconciliation compares IIM with the value cut to 2000 bytes and reports an Open conflict between identical texts, so the write keeps the conflict and writes no digest: bug, fixed by T129 (ADR 0007 §5.1). (3) The empty sub-fields of Location Created are read as empty texts, which is right for the reader; the inspector showing "Sublocation: " is T130. Waits for T129 |
+| 2026-11-14 | Open | Reviewer: T129's code is reviewed and accepted (not yet committed), so T127 can be finished. The reviewer's run with T128–T130 in the tree: all 10 level-C tests pass. Left: `xmp_packet` runs ExifTool as a separate process; use the `ExifTool` type with `-echo3` after `-b -XMP` as T128's `tests/edits.rs` does (tests drive ExifTool through that type); the `level_c` row and the total in `docs/test-inventory.md`; the report |
