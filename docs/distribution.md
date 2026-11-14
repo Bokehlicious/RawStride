@@ -42,7 +42,8 @@ cleaned environment.
 
 To install ExifTool, use the Windows package from exiftool.org (for example under
 `%LOCALAPPDATA%\Programs\ExifTool`) and put its folder on the user's PATH. ExifTool has its own
-licence (Perl Artistic / GPL) and is deliberately not shipped with PhotoWorkflow.
+licence (Perl Artistic / GPL). This folder (the Tauri app) does not include it; RawStride will ship
+it (ADR 0002 §2.5).
 
 ## What the app writes, and where
 
@@ -73,12 +74,14 @@ licence (Perl Artistic / GPL) and is deliberately not shipped with PhotoWorkflow
 ## Before giving it to someone else (open points)
 
 1. **Licence notices** have to go with the folder (a `THIRD-PARTY-NOTICES.txt`):
-   - LibRaw: LGPL-2.1 or CDDL-1.0, linked statically; the choice is still open (ADR 0002). With
-     LGPL and static linking, relinking must be possible.
+   - LibRaw: used under LGPL-2.1 (ADR 0002, 2026-11-13), linked statically; relinking is possible
+     because RawStride's source (`GPL-3.0-or-later`) and build instructions are public.
    - LittleCMS (MIT), JasPer (JasPer License 2.0), libjpeg-turbo (IJG/BSD-3/zlib) and zlib.
    - Rust crates and Tauri (MIT/Apache-2.0).
    - The MSVC runtime files, which are redistributable under the Visual Studio licence.
-2. **ExifTool:** document the installation, or decide whether to bundle it (a licence question).
+2. **ExifTool:** decided (owner, 2026-11-13, ADR 0002 §2.5): the tested version ships unmodified
+   in the program folder, and RawStride looks there before PATH (T120). The Tauri app's folder
+   above keeps needing ExifTool on PATH; RawStride's own distribution folder is still to be made.
 3. **Code signing:** the exe is unsigned. Expect SmartScreen to warn the first time, and the
    virus scanner delays the first start of a new exe by 4–12 s (measured).
 4. **A clean PC:** the verification ran on the development machine with a cleaned environment and

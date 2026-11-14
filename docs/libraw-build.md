@@ -19,7 +19,7 @@ restored. Nothing in the app (M1 viewer, ratings, ingest) links LibRaw yet; only
 | LibRaw libraries | `lib\raw_r.lib` (thread-safe, 30 890 120 bytes, used), `lib\manual-link\raw.lib` |
 | LibRaw dependencies | jasper 4.2.9 (ABI `1f1607ea…`), lcms 2.19.1#1 (`bbf4aef6…`), zlib 1.3.2#2 (`e363a108…`, `zs.lib`) |
 | Also installed | libjpeg-turbo 3.2.0#1 (`d2132288…`), libspng 0.7.4#1 (`39205b51…`) |
-| Licence | LibRaw: LGPL-2.1 **or** CDDL-1.0 (choice postponed, ADR 0002) |
+| Licence | LibRaw: LGPL-2.1 **or** CDDL-1.0; used under **LGPL-2.1** (owner, 2026-11-13, ADR 0002) |
 | Binary cache | `%LOCALAPPDATA%\vcpkg\archives` (restoring all 10 packages took 0.6 s) |
 
 How `raw-decode-bench` links it (`tools/raw-decode-bench/build.rs`):

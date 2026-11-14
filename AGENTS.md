@@ -46,3 +46,7 @@
 - The documentation, code, comments, commit messages and task texts are in English.
 - **Every text the user sees is English** (owner, 2026-11-13; `docs/GUI_REQUIREMENTS.md` GR14), with
   the terms of `docs/glossary.md`, and is made as `docs/tasks/README.md` rule 13 says.
+
+## 8. Licence
+- RawStride is licensed under `GPL-3.0-or-later` (`LICENSE`, ADR 0002). A new dependency's
+  licence must be compatible with it.
