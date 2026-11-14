@@ -96,12 +96,13 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 | Task | Title | Status |
 |---|---|---|
 | [T119](T119-same-folder-one-tab.md) | The same folder opens in one tab, however its path is written (after T116) | Open |
-| [T120](T120-exiftool-from-the-program-folder.md) | ExifTool from the program folder first (not with T118) | Open |
+| [T120](T120-exiftool-from-the-program-folder.md) | ExifTool from the program folder first (not with T121) | Open |
+| [T121](T121-one-check-for-swedish-letters-and-test-names.md) | One check for Swedish letters; test names that say English (not with T120) | Open |
 
 ## Writing a task (owner and reviewer)
 
-- **Number:** the next free number after the highest in this folder and `done/` (T121 next).
-- **File:** `docs/tasks/T121-<a-few-words>.md`; three digits, lower case, words joined by `-`.
+- **Number:** the next free number after the highest in this folder and `done/` (T122 next).
+- **File:** `docs/tasks/T122-<a-few-words>.md`; three digits, lower case, words joined by `-`.
 - **Index:** add a row to "Open tasks" above and keep its status in step with the file's heading.
 - **When it is Done and committed:** `git mv` the file to `done/`, move its row to `done/README.md`.
 - **Owner decisions** (decisions, approved Q proposals) are written into the ADR or requirement
@@ -110,7 +111,7 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 Skeleton (the fields recent tasks use; leave out those that do not apply):
 
 ```markdown
-# T121. <Title> — Open
+# T122. <Title> — Open
 
 - **Why:** …
 - **Crates:** … **Files:** …

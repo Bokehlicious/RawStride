@@ -1,6 +1,6 @@
 # T120. ExifTool from the program folder first — Open
 
-- **Not at the same time as T118** (both change `crates/pw-metadata/src/worker.rs`).
+- **Not at the same time as T121** (both change `crates/pw-metadata/src/worker.rs`; T118 is Done).
 - **Why:** ExifTool ships with RawStride, unmodified, in the program folder (ADR 0002 §2.5, owner
   2026-11-13). Today `pw-metadata` starts `exiftool` from PATH only, so a shipped copy would not be
   found. A developer build and a user's own installation on PATH must keep working.
