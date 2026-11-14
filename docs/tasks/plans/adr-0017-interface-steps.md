@@ -17,7 +17,7 @@ the one before it is accepted.
 |---|---|---|---|
 | U10a | T123 | Every simple text, date and list field of sections 1–4 editable (the fields of §2.3.1 that are not structures), the contact address fields and Copyrighted; the form in collapsible sections whose state is remembered; the deprecated IIM fields read-only in their section | done (T123, 2026-11-14) |
 | U10b | – | Settings: which sections and fields are shown, and in which order | after T123 |
-| U10c | – | Rating and Label in the window (section 6), written through the rating path (U10-Q5) | after T123 |
+| U10c | T124 | Rating and Label in the window (section 6), written through the rating path (U10-Q5) | now (U10c-Q1–U10c-Q5 approved 2026-11-14) |
 | R1 | reviewer | Read the PLUS controlled vocabulary (ADR 0007 §16.4, Q9) and save it in `D:\PhotoWorkflowData\references\` as P1 was | now |
 | U10d | – | Licence section: Model and Property Release Status, the release ids and Digital Source Type as fixed choice lists (with I11) | after R1 and T123 |
 | U11a | – | Lists of structures in the form, one row per entry with add and remove, within ADR 0007 §8's cardinalities: Location Created, Location Shown (with "copy from Location Created"), Genre, Image Creator, Copyright Owner, Licensor, Image Supplier | after T123 |

@@ -18,8 +18,8 @@
 - **Recorded 2026-11-13 (no new decision):** the owner's answers to the questions of U1, U2, U3
   and U12, approved in the tasks T109–T112, are in §6.1; the inspector's Metadata section shows no
   origin line under its values (T114, §2.1).
-- **Recorded 2026-11-14 (no new decision):** the owner's answers to the questions of U10 (T123) are
-  in §6.1; the section names of §2.3.1 are English in the program (GR14, U10-Q1).
+- **Recorded 2026-11-14 (no new decision):** the owner's answers to the questions of U10 (T123) and
+  U10c (T124) are in §6.1; the section names of §2.3.1 are English in the program (GR14, U10-Q1).
 - Date: 2026-11-12; amended 2026-11-13
 - Related:
   - [GUI_REQUIREMENTS.md](../GUI_REQUIREMENTS.md) (GR1–GR13), in particular GR6 (keyboard first),
@@ -372,7 +372,7 @@ without the study notes as a template.
 
 ### 6.1 Questions of the steps (answered by the owner, 2026-11-13: every proposal approved)
 
-Asked in the tasks of stage A (T109–T112, `docs/tasks/done/`) and of U10 (T123, 2026-11-14) and answered there; recorded here so
+Asked in the tasks of stage A (T109–T112, `docs/tasks/done/`) and of U10 (T123, T124, 2026-11-14) and answered there; recorded here so
 the decisions do not live only in the tasks.
 
 | # | Decision (as proposed) |
@@ -404,6 +404,11 @@ the decisions do not live only in the tasks.
 | U10-Q4 | Genre in Assignment is the structure `Iptc4xmpExt:Genre` and comes in U11; Intellectual Genre (legacy) stays under Other Metadata |
 | U10-Q5 | Rating and Label come into the window in a later small task (U10c), written through the rating path, not the form's edits |
 | U10-Q6 | Each section's open or collapsed state is remembered in `settings.txt`; all open at first |
+| U10c-Q1 | The Rating and Label section has buttons for no stars, 1–5 and Reject, and for the five labels and no label, each acting as its key (a second press of the current label or Reject clears it) |
+| U10c-Q2 | While the window is open, Alt+0–5 set stars and Ctrl+0–5 labels, also while typing in a field; plain digits, 6–9 and X stay with the text fields |
+| U10c-Q3 | A rating or label from the window is written at once, as a key in the contact sheet; Cancel and Discard do not undo it |
+| U10c-Q4 | The window keeps its image when a new rating puts it outside the filter; the contact sheet is refiltered when the window moves or closes |
+| U10c-Q5 | The section is last in the form, open at first, its state remembered |
 
 ## 7. Steps
 
