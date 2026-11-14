@@ -95,11 +95,13 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status |
 |---|---|---|
+| [T135](T135-library-folders-favourites-recent.md) | ADR 0017 U4: the Library: folder tree, favourites and recent folders | Open |
+| [T136](T136-locations-as-lists-of-structures.md) | ADR 0017 U11a, first part: Location Created and Location Shown in the metadata window | Open |
 
 ## Writing a task (owner and reviewer)
 
-- **Number:** the next free number after the highest in this folder and `done/` (T135 next).
-- **File:** `docs/tasks/T135-<a-few-words>.md`; three digits, lower case, words joined by `-`.
+- **Number:** the next free number after the highest in this folder and `done/` (T137 next).
+- **File:** `docs/tasks/T137-<a-few-words>.md`; three digits, lower case, words joined by `-`.
 - **Index:** add a row to "Open tasks" above and keep its status in step with the file's heading.
 - **When it is Done and committed:** `git mv` the file to `done/`, move its row to `done/README.md`.
 - **Owner decisions** (decisions, approved Q proposals) are written into the ADR or requirement
@@ -108,7 +110,7 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 Skeleton (the fields recent tasks use; leave out those that do not apply):
 
 ```markdown
-# T135. <Title> — Open
+# T137. <Title> — Open
 
 - **Why:** …
 - **Crates:** … **Files:** …

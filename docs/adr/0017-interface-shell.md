@@ -373,7 +373,7 @@ without the study notes as a template.
 
 ### 6.1 Questions of the steps (answered by the owner, 2026-11-13: every proposal approved)
 
-Asked in the tasks of stage A (T109–T112, `docs/tasks/done/`) and of U10, U12b, U12c and U10d (T123–T126, T128, 2026-11-14) and answered there; recorded here so
+Asked in the tasks of stage A (T109–T112, `docs/tasks/done/`) and of U10, U12b, U12c and U10d (T123–T126, T128, 2026-11-14) and of U4 and U11a (T135, T136, 2026-11-14) and answered there; recorded here so
 the decisions do not live only in the tasks.
 
 | # | Decision (as proposed) |
@@ -428,6 +428,19 @@ the decisions do not live only in the tasks.
 | U10d-Q4 | A value not in the vocabulary is shown as the extra entry "Unknown value: {uri}", selected, with a warning; never removed unless the user picks another entry (ADR 0007 §8, §11) |
 | U10d-Q5 | The Licence section's fields join "Copy All Fields", "Paste All Fields" and "Apply to All Marked", with the rules of U12b and U12c |
 | U10d-Q6 | The section keeps the name "Licence (PLUS)" (U10-Q1), although Digital Source Type is an IPTC property |
+| U4-Q1 | The drives come from `GetLogicalDrives`, `GetDriveTypeW` and `GetVolumeInformationW`, and the program calls `SetErrorMode(SEM_FAILCRITICALERRORS)` at start, so an empty card reader gives no "no disk" dialog: two more features (`Win32_Storage_FileSystem`, `Win32_System_Diagnostics_Debug`) of `pw-loupe`'s existing `windows-sys` =0.61.2, no new package (T135) |
+| U4-Q2 | The tree shows drives, then folders only; hidden and system folders left out; sorted by name; a folder read when expanded, never in the background |
+| U4-Q3 | Favourites are added with "Add to Favourites" (right-click on a tree folder or a tab, and in Arkiv) and removed with "Remove from Favourites"; kept in the order added as `favourite = <path>` lines in `settings.txt`; a missing one is greyed |
+| U4-Q4 | Recent folders: the last 10 opened in any way, most recent first, `recent = <path>` lines; "Clear Recent Folders" |
+| U4-Q5 | The tree highlights the active tab's folder when it is visible and does not expand by itself |
+| U4-Q6 | A click opens the folder in a new tab, or in the tab that already shows it, as Ctrl+O and a drop (GR12, GR13) |
+| U4-Q7 | The library has the sections **Folders**, **Favourites** and **Recent** (GR14), each collapsible and remembered; Tasks below as before |
+| U11a-Q1 | U11a in two tasks: Location Created and Location Shown first (T136); Genre, Image Creator, Copyright Owner, Licensor and Image Supplier next |
+| U11a-Q2 | The locations are in Time and Place after the older fields; one framed group per entry with seven sub-fields (Sublocation, City, Province/State, Country Name, Country ISO Code, World Region, Location Identifier) and "Remove"; "Add Location" under each list |
+| U11a-Q3 | An all-empty entry is not written; removing every entry clears the property; no reordering; sub-fields the form does not show are kept (ADR 0007 §8) |
+| U11a-Q4 | "Copy from Location Created" adds a new Location Shown entry from the first Location Created entry and never changes an existing one |
+| U11a-Q5 | The two lists join "Copy All Fields", "Paste All Fields" and "Apply to All Marked", each as one field that replaces the whole list; empty lists are not pasted |
+| U11a-Q6 | IPTC's English names (GR14); "Add Location", "Remove" and "Copy from Location Created" in the glossary |
 
 ## 7. Steps
 
