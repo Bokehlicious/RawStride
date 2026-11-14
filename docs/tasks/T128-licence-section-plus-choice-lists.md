@@ -15,7 +15,8 @@
   already done for the section, the fields, the settings and the labels stays as it is.
 - **Crates:** `pw-metadata`, `pw-loupe`. **Files:** `crates/pw-metadata/src/vocabulary.rs` (new);
   `crates/pw-metadata/src/lib.rs` (the module, one `pub mod` line);
-  `crates/pw-metadata/src/validate.rs` (point 4); `crates/pw-metadata/tests/edits.rs` (point 8); `crates/pw-loupe/src/editor.rs`;
+  `crates/pw-metadata/src/validate.rs` (point 4); `crates/pw-metadata/tests/edits.rs` (point 8);
+  `crates/pw-metadata/src/write_plan.rs` (`xmp_args`, point 9; added 2026-11-14, owner approved); `crates/pw-loupe/src/editor.rs`;
   `crates/pw-loupe/src/main.rs` (`draw_window_form`, `window_editor_properties`);
   `crates/pw-loupe/src/settings.rs` (the new section's state); `docs/glossary.md`;
   `docs/test-inventory.md`.
@@ -124,11 +125,23 @@
      XMP of the file (`-b -XMP`) then holds `http://ns.useplus.org/ldf/vocab/MR-UMR` exactly once
      and the prefix never twice, and `read_metadata` gives back `MR-UMR`. The same for Digital
      Source Type with the full URI of `digitalCapture` (stored once, read back unchanged).
+  9. **URI values written without ExifTool's print conversion** (added 2026-11-14 after the
+     review, owner approved). The reader asks ExifTool for values without print conversion
+     (`-n`), but the write plan gave XMP values *with* it, so ExifTool expected the label
+     ("Unlimited Model Releases") and refused the code: "Can't convert XMP-plus:ModelReleaseStatus
+     (not in PrintConv)", seen in point 8's test. In `xmp_args`, a property whose kind in the
+     property table is `ValueKind::Uri` is written with `#=` instead of `=` (`-<tag>#=<value>`),
+     for a single value and for each entry of a list; this turns off only the print conversion,
+     so ExifTool still adds the PLUS prefix once (the reviewer checked it on a copy). Clearing
+     (`-<tag>=`), the other kinds, the IIM arguments and the structures' fields are unchanged.
+     A unit test in `write_plan.rs` checks the arguments for a PLUS code, a Digital Source Type
+     URI, Web Statement of Rights and a list of Event Ids (`#=` each), and that a Text property
+     still uses `=`; point 8's test then passes.
 - **Not in this task:** Image Creator, Copyright Owner, Licensor, Image Supplier and the other
   structures (U11a); Model Age (`Iptc4xmpExt:ModelAge`, stays under Other Metadata); the other
   PLUS vocabularies of the LDF file (Credit Line Required, Adult Content Warning, Image Type …);
   choosing and ordering the fields (U10b); recent values (U12a); any change in the write path or
-  in `pw-metadata` beyond points 1 and 4.
+  in `pw-metadata` beyond points 1, 4 and 9.
 - **Rules:** `docs/tasks/README.md` rules 1–13.
 - **Tests to add / change:**
   - `pw-metadata`: each list of point 1 has the expected count, starts and ends with the expected
@@ -188,3 +201,4 @@
 | 2026-11-14 | Blocked | Written by the reviewer (ADR 0017 U10d with ADR 0007 I11) while T127 runs; waits for U10d-Q1–U10d-Q6 and R2 |
 | 2026-11-14 | Open | Owner: U10d-Q1–U10d-Q6 approved as proposed; written into the points, ADR 0017 §6.1 and ADR 0007 §11 (Q9). R2 done by the reviewer on the owner's yes: `IPTC-NewsCodes-digitalsourcetype.json` (12 753 bytes, SHA-256 `1caaa5bb…88e7cca4fe52b9bb4d65701da4fb1d6`), 17 current and 3 retired codes, listed in points 1 and 5 |
 | 2026-11-14 | Open | Reviewer, after the review of T127 (owner approved): the PLUS values are codes, since ExifTool removes and adds the prefix (a full URI is stored twice); Digital Source Type keeps full URIs; new point 8 (write test in `tests/edits.rs`). The agent paused; it reads the file again and continues |
+| 2026-11-14 | Open | Reviewer: first review of the work so far: point 8's test fails because the write plan sends XMP values through ExifTool's print conversion ("not in PrintConv"); new point 9 (`#=` for URI properties in `write_plan.rs`), owner approved. Also left: `cargo fmt` in `editor.rs`, `docs/glossary.md` |
