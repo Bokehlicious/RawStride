@@ -129,6 +129,11 @@ Where in the file to read and write [MWG §4.2.3.4]:
     as for a foreign sidecar next to a DNG (Q5).
   - To confirm with the level-C samples (Q11; Photo Mechanic and the mixed archive files, no file
     written by Lightroom alone, §12); Adobe XMP Part 3 is read if available (§16).
+  - **Confirmed for Photo Mechanic (T127, 2026-11-14):** Photo Mechanic 2026.6 names the sidecar
+    `<basename>.XMP` with an upper-case extension (`PM-raw.XMP`); RawStride finds it as
+    `<basename>.xmp` and reports no foreign sidecar. After a write by RawStride the file is named
+    `PM-raw.xmp` (lower case): one file, but its name changed (an open finding of the review).
+    Lightroom alone stays unconfirmed.
 - **Created** on the first change; **edited in place** afterwards (unknown content kept), with the
   same transaction (§9.5).
 - **RAW+JPEG pairs:** only the RAW reads and writes `<basename>.xmp`; the JPEG keeps its embedded
@@ -333,6 +338,12 @@ Urgency (2:10), Category (2:15) and Supplemental Categories (2:20):
     that Lightroom and Photo Mechanic then keep the field empty. The level-C samples (Q11) can show
     it for Photo Mechanic only; there is no file written by Lightroom alone (§12, 2026-11-14), so
     for Lightroom it stays untested.
+  - **What the samples showed (T127, 2026-11-14):** Photo Mechanic 2026.6 removes a top-level
+    field the user emptied (no top-level XMP property with an empty value in `PM-jpg.JPG`, whose
+    fields were filled, saved, emptied and saved again), but writes the empty sub-fields of a
+    structure as empty strings (Location Created: Sublocation, Province/State, World Region).
+    Whether Photo Mechanic keeps a field empty when the sidecar holds an explicitly empty value is
+    not shown by the samples.
 
 ### 6.5 Creator ↔ Artist/Photographer
 
@@ -653,7 +664,9 @@ silently. All other deviations concern SHOULD-level recommendations; each is mar
    XMP specification 2.0.1, in the folder's `README.md`).
 5. Read **XMP Part 1** (ISO 16684-1) and **MWG §5.2** to verify the Q7 policy, **XMP Part 3** (Q8)
    and **IIM 4.2** (Q3) if the owner provides them.
-6. **Level-C samples** (Q11, the set changed 2026-11-14, §12), before the implementation is tested.
+6. ~~**Level-C samples**~~ (Q11, the set changed 2026-11-14, §12) – received 2026-11-14 and
+   tested by T127 (`crates/pw-metadata/tests/level_c.rs`); what they showed is in §4.2 and §6.4,
+   and they led to T129 (§5.1) and to the PLUS codes of §11.
 
 ## 17. Decisions during implementation (D1–D16)
 
@@ -726,3 +739,4 @@ listed under the table (§17.1).
 | 14 | 2026-11-14 | Owner decision: the level-C samples (§12, Q11) are Photo Mechanic files, a Xiaomi 17 Ultra DNG and mixed Photo Mechanic / Lightroom Classic archive files (the owner has no Lightroom Classic); the IIM-only JPEG is dropped; §4 (Q8) and §6.4 note what stays unconfirmed for Lightroom. §16 point 4: the PLUS vocabulary read (R1) |
 | 15 | 2026-11-14 | Owner decision (ADR 0017 U10d-Q3): §11 and Q9, the PLUS choice lists show the vocabulary's English labels instead of Swedish ones (GR14); Digital Source Type also becomes a choice list (U10d-Q2, IPTC NewsCodes saved as R2) |
 | 16 | 2026-11-14 | After the first run of the level-C tests (T127), owner approved: §5.1, an IIM value equal to the whole XMP text is not a conflict (T129); §11, RawStride holds the PLUS codes, ExifTool adds the URI prefix; URI values written with `#=` (T128) |
+| 17 | 2026-11-14 | I12 done (T127): what the level-C samples showed written into §4.2 (Q8, Photo Mechanic's `<basename>.XMP`) and §6.4 (Photo Mechanic removes an emptied field, keeps empty structure sub-fields); §16 point 6 done |
