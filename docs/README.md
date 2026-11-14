@@ -5,7 +5,8 @@
 - [GUI_REQUIREMENTS.md](GUI_REQUIREMENTS.md) – the GUI is pure Rust with eframe + egui (owner decision, 2026-11-07)
 - [glossary.md](glossary.md) – the English terms of the user interface and the IPTC property labels (approved 2026-11-13)
 - [clean-room.md](clean-room.md) – rules for studying other products
-- [dev-setup.md](dev-setup.md) – toolchain and machine setup
+- [building.md](building.md) – building RawStride and running the checks on any Windows machine
+- [dev-setup.md](dev-setup.md) – the maintainer's machine: exact tool versions, local paths, worktrees
 - [rea-workflow.md](rea-workflow.md) – how REA/Ghidra, WPR and benchmarks are used
 - [analyses/](analyses/) – recorded analyses (measured vs. interpreted)
 - [references.md](references.md) – external references; **IPTC Photo Metadata Standard is normative for metadata**

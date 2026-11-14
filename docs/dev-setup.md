@@ -1,6 +1,8 @@
-# Developer setup (Windows 11)
+# Developer setup (the maintainer's machine)
 
-Verified on the reference machine "thanos" on 2026-11-03.
+To build RawStride on your own machine, follow [building.md](building.md). This file records the
+maintainer's reference machine "thanos" (verified 2026-11-03): exact tool versions, local paths and
+settings, and the setup of the Git worktrees.
 
 ## Toolchain
 

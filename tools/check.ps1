@@ -56,12 +56,18 @@ try {
     Set-Location $repositoryRoot
 
     if ([string]::IsNullOrWhiteSpace($env:VCPKG_INSTALLED_DIR)) {
+        # The repository's own folder (made by `vcpkg install` in the repository root) first, then
+        # the main checkout's next to this worktree (docs/building.md).
+        $ownVcpkgDir = Join-Path $repositoryRoot 'vcpkg_installed'
         $fallbackVcpkgDir = Join-Path (Split-Path $repositoryRoot -Parent) 'PhotoWorkflow\vcpkg_installed'
-        if (Test-Path -LiteralPath $fallbackVcpkgDir -PathType Container) {
+        if (Test-Path -LiteralPath $ownVcpkgDir -PathType Container) {
+            $env:VCPKG_INSTALLED_DIR = (Resolve-Path -LiteralPath $ownVcpkgDir).Path
+        }
+        elseif (Test-Path -LiteralPath $fallbackVcpkgDir -PathType Container) {
             $env:VCPKG_INSTALLED_DIR = (Resolve-Path -LiteralPath $fallbackVcpkgDir).Path
         }
         else {
-            throw "VCPKG_INSTALLED_DIR is not set and the fallback folder does not exist: $fallbackVcpkgDir"
+            throw "VCPKG_INSTALLED_DIR is not set and neither $ownVcpkgDir nor $fallbackVcpkgDir exists. Run 'vcpkg install' in the repository root (docs/building.md)."
         }
     }
 

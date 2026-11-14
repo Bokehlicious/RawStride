@@ -1,50 +1,75 @@
 # RawStride
 
-A fast and lightweight photo culling and ingest application for Windows.
+A fast and lightweight photo culling and ingest program for Windows: copy the photos off the card,
+step through them quickly, rate and label them, and add IPTC metadata.
 
-The project was called PhotoWorkflow until 2026-11-09 (ADR 0012). Folder, branch and crate names
-(`pw-*`) keep the old name for now; the existing Tauri app is still titled PhotoWorkflow.
-It covers card ingest, culling, rating and metadata.
+> **Status: in development, not released.** The new program (`pw-loupe`, window title "RawStride",
+> eframe + egui) has the loupe and preview, the contact sheet, folder tabs, the import dialog,
+> ratings and labels, filter and multi-selection, TIFF viewing, colour management and the metadata
+> window. An older Tauri app is still in the repository until the switch
+> ([GUI_REQUIREMENTS](docs/GUI_REQUIREMENTS.md) GR8). There are no installers yet.
 
-**Camera support:** the goal is to support most cameras, through LibRaw.
-During development we start with Sony A1 and A7R IVA (ARW), Panasonic (RW2) and DNG.
+The project was called PhotoWorkflow until 2026-11-09 ([ADR 0012](docs/adr/0012-product-name-rawstride.md)).
+Folder and crate names (`pw-*`) keep the old name for now.
 
-> Status: the new eframe + egui program (binary `pw-loupe`, window title "RawStride") has the loupe,
-> the contact sheet, folder tabs, the full import dialog, ratings and labels, filter and
-> multi-selection, TIFF viewing, and colour management (conversion to the monitor profile). The
-> existing Tauri app remains in place until the switch
-> (GUI_REQUIREMENTS GR8).
+## What it does
 
-## Stack
+- **Import:** copies from a memory card to a destination and an optional backup, with folder and
+  file name templates, and can write an IPTC template into the copies and eject the card.
+- **Culling:** a contact sheet and a loupe built for speed: RAW files are shown from their embedded
+  preview or rendered with LibRaw, and the next image is prepared ahead.
+- **Ratings and labels:** stars, reject and colour labels in XMP (`xmp:Rating`, `xmp:Label`), read
+  and written the way other photo programs do.
+- **Metadata:** IPTC Core and Extension in XMP, and the older IIM, following the IPTC standards. A
+  proprietary RAW file is never modified: its metadata goes into an XMP sidecar. DNG, JPEG and TIFF
+  get the metadata inside the file, written safely (a backup and a check after every write).
 
-| Area | Choice |
-|---|---|
-| App | RawStride: eframe + egui (`pw-loupe`); the existing Tauri 2 app until the switch |
-| Core | Rust (workspace in `crates/`) |
-| RAW decoding | LibRaw (vcpkg, static), plus our own embedded-preview fast path |
-| Metadata | ExifTool (one persistent `-stay_open` process) |
-| Catalog | SQLite (planned; `pw-catalog` is not implemented yet) |
-| Rendering | eframe renderer (glow) for the new GUI |
+**Cameras:** the goal is most cameras, through LibRaw. Development and testing use Sony (ARW),
+Panasonic (RW2) and DNG files.
+
+## Building
+
+Windows 10 or 11, x64. See [docs/building.md](docs/building.md): Visual Studio Build Tools, Rust,
+vcpkg and ExifTool, then
+
+```powershell
+vcpkg install
+cargo run --release -p pw-loupe
+```
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md). Open an issue before a larger change.
 
 ## Layout
 
 ```
-crates/        Rust libraries and the RawStride egui program (pw-loupe)
-src-tauri/     Existing Tauri app shell
-ui/            Existing Tauri frontend
-docs/          Architecture, ADRs, clean-room policy, developer setup
+crates/        Rust libraries and the RawStride program (pw-loupe)
+src-tauri/     The older Tauri app (until the switch)
+ui/            The older Tauri app's frontend
+docs/          Architecture, requirements, ADRs, building, testing
 third_party/   Notes, pins and licences for native dependencies
 tools/         Developer scripts and benchmarks
 tests/fixtures Small, licence-clean test files only
 ```
 
-Large RAW test sets, caches and catalogs live outside the repo, in `D:\PhotoWorkflowData`.
+## Stack
 
-## Getting started
+| Area | Choice |
+|---|---|
+| Program | Rust, eframe + egui (renderer glow) |
+| RAW decoding | LibRaw (vcpkg, static), plus a fast path for the embedded preview |
+| JPEG decoding | libjpeg-turbo (vcpkg, static) |
+| Metadata | ExifTool (one persistent `-stay_open` process) |
 
-See [docs/dev-setup.md](docs/dev-setup.md).
+## Licence
 
-## Important
+RawStride is licensed under the GNU General Public License, version 3 or later
+([LICENSE](LICENSE), [ADR 0002](docs/adr/0002-licensing.md)). LibRaw is used under the LGPL-2.1;
+ExifTool is a separate program, used unmodified.
 
-This project is developed under a **clean-room policy** (see [docs/clean-room.md](docs/clean-room.md)).
-No code, assets or decompiled material from other products may enter this repository.
+## Clean room
+
+RawStride is developed under a [clean-room policy](docs/clean-room.md). No code, assets or
+decompiled material from other products may enter this repository. Product names mentioned in the
+repository are trademarks of their respective owners; RawStride is not affiliated with them.
