@@ -373,7 +373,7 @@ without the study notes as a template.
 
 ### 6.1 Questions of the steps (answered by the owner, 2026-11-13: every proposal approved)
 
-Asked in the tasks of stage A (T109–T112, `docs/tasks/done/`) and of U10, U12b, U12c and U10d (T123–T126, T128, 2026-11-14) and of U4 and U11a (T135, T136, 2026-11-14) and answered there; recorded here so
+Asked in the tasks of stage A (T109–T112, `docs/tasks/done/`) and of U10, U12b, U12c and U10d (T123–T126, T128, 2026-11-14) and of U4, U11a and U14 (T135, T136, T138, T139, 2026-11-14) and answered there; recorded here so
 the decisions do not live only in the tasks.
 
 | # | Decision (as proposed) |
@@ -441,6 +441,19 @@ the decisions do not live only in the tasks.
 | U11a-Q4 | "Copy from Location Created" adds a new Location Shown entry from the first Location Created entry and never changes an existing one |
 | U11a-Q5 | The two lists join "Copy All Fields", "Paste All Fields" and "Apply to All Marked", each as one field that replaces the whole list; empty lists are not pasted |
 | U11a-Q6 | IPTC's English names (GR14); "Add Location", "Remove" and "Copy from Location Created" in the glossary |
+| U11b-Q1 | The location lists of T136 become one general structure list; Genre and the four PLUS structures use it (T139) |
+| U11b-Q2 | Genre is free text (CV-Term Name, ID, CV ID) for now; IPTC's Genre vocabulary as a choice list later |
+| U11b-Q3 | Licensor shows Name, ID, Email, URL and the two telephones open, each telephone type a choice list from the PLUS vocabulary (work, cell, fax, home, pager); the six address fields under a collapsed "Address" line in each entry |
+| U11b-Q4 | "Copy from Creator" under Image Creator adds an entry per Creator name not already there, within the limit; nothing synchronised automatically (ADR 0007 §8) |
+| U11b-Q5 | The five lists join copy, paste and Apply to All Marked as the locations; Image Creator, Copyright Owner and Licensor emptied only on the window's image (copyright-management fields, ADR 0007 §8) |
+| U11b-Q6 | IPTC's English names (GR14); Image Supplier at most 1 entry, Image Creator, Copyright Owner and Licensor at most 3; "Copy from Creator", "Address", "At most {n} entries" in the glossary |
+| U14-Q1 | Sort keys: File Name (default), Capture Time, Modified, File Type, Rating (stars, then label); ties by file name (T138) |
+| U14-Q2 | Ascending or descending for every key, one button beside the drop-down |
+| U14-Q3 | One sort order for all tabs, remembered in `settings.txt` |
+| U14-Q4 | Capture times read with `pw_raw::inspect` on a background thread, visible images first; the tab keeps its order and shows "{i} of {n}" until all are read, then is reordered once; no date sorts last |
+| U14-Q5 | A rating key, a write or a refresh does not move an image; the order is applied when a sort is chosen, a folder is opened or a key read completes |
+| U14-Q6 | Reordering keeps the current image (scrolled to) and the marking, and applies the filter again |
+| U14-Q7 | Command bar: "Sort: {key}" drop-down and an ↑/↓ button; Visa ▸ "Sort By" with the keys and "Descending"; no key yet |
 
 ## 7. Steps
 
