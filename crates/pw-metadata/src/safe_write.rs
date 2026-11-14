@@ -4,7 +4,8 @@
 //! either replaced by a verified copy or left exactly as it was:
 //!
 //! - **Target** (§4.2): the image for a JPEG, TIFF or DNG; for a manufacturer RAW its sidecar
-//!   `<basename>.xmp`. The RAW file itself is never written.
+//!   `<basename>.xmp`, an existing one under its name as stored in the folder (any case, for
+//!   example Photo Mechanic's `.XMP`; T132). The RAW file itself is never written.
 //! - **9.1, before writing:** the caller's [`ImageCheck::release`] closes RAW engine sessions for
 //!   the image; the target must be writable (not read-only, not locked, not on a read-only volume,
 //!   enough free space; for a new sidecar only the volume and the free space); an existing target
@@ -198,8 +199,22 @@ impl ExifTool {
                 locked: false,
             });
         };
+        // A manufacturer RAW's `<basename>.xmp` is written under its name as stored (for example
+        // Photo Mechanic's `.XMP`, T132); only a new sidecar is named by `sidecar_path`.
         let target = if kind == FileKind::Raw {
-            sidecar_path(image)
+            match crate::read::plain_sidecar(image) {
+                Ok(Some(stored)) => stored,
+                Ok(None) => sidecar_path(image),
+                Err(e) => {
+                    return Err(SafeWriteError {
+                        file: sidecar_path(image),
+                        stage: Stage::Precheck,
+                        original: OriginalState::Intact,
+                        reason: format!("the sidecar could not be looked up: {e}"),
+                        locked: false,
+                    });
+                }
+            }
         } else {
             image.to_path_buf()
         };

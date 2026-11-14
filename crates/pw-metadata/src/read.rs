@@ -291,6 +291,13 @@ struct Sidecars {
     with_extension: Option<PathBuf>,
 }
 
+/// The `<basename>.xmp` sidecar of `image` with its name as stored in the folder (found without
+/// regard to case, as [`find_sidecars`]); `None` when there is none. A folder that cannot be read
+/// is the error. Used by the safe write to keep the sidecar's name (T132).
+pub(crate) fn plain_sidecar(image: &Path) -> Result<Option<PathBuf>> {
+    Ok(find_sidecars(image)?.plain)
+}
+
 /// Finds the sidecars of `image` in its folder, comparing names without regard to case. On
 /// Windows the two names are looked up directly; the path returned holds the name as it is in the
 /// folder (see the module comment).

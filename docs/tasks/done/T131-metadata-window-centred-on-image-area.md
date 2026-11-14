@@ -1,4 +1,4 @@
-# T131. The metadata window opens in the middle of the image area — Open
+# T131. The metadata window opens in the middle of the image area — Done
 
 - **Can start now.** Asked for by the owner on 2026-11-14. It may run beside T128, T129 and T130
   only if none of them is changing `crates/pw-loupe/src/main.rs` at the same time; otherwise after.
@@ -46,3 +46,6 @@
 | Date | Status | Note |
 |---|---|---|
 | 2026-11-14 | Open | Added at the owner's request |
+| 2026-11-14 | Ready for review | `metadata_window_position` and one-frame `current_pos` on opening; 4 tests; check.ps1 all OK (1322 passed, 53 ignored) |
+| 2026-11-14 | Ready for review | Reviewer: code and tests accepted, not committed. The position is set once with `current_pos` on the first frame after opening (so egui's remembered position does not win), from the central panel's rectangle of the same frame; the size the window had last time is used. Reviewer's `check.ps1` with T132: fmt, test and clippy OK, 1325 passed, 0 failed, 53 ignored. Waits for the owner's hand check |
+| 2026-11-14 | Done | Reviewer's fixes after the owner's hand check (point 4 failed twice): `close_metadata_window` resets `metadata_window_shown` (`M` can reopen the window before a frame is drawn without it); and the remembered area position is replaced too, because egui 0.37 puts a window moved by its title bar back at its remembered position after `current_pos` (`Window::show_dyn`, `pivot_pos_before_begin`). `check.ps1` all OK (1325 passed, 53 ignored). Owner: hand check done and approved; committed by the reviewer |

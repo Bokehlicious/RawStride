@@ -334,6 +334,28 @@ enum WindowRefilter {
     AsAfterKey,
 }
 
+/// The top-left corner the metadata window opens at (T131): its centre on the centre of
+/// `image_area` (the main window's central panel), then moved inside `screen` (the program
+/// window) as far as it fits. A window larger than `screen` keeps its top-left corner inside, so
+/// its title bar is never above the program window's top edge.
+fn metadata_window_position(
+    image_area: egui::Rect,
+    window_size: egui::Vec2,
+    screen: egui::Rect,
+) -> egui::Pos2 {
+    let centred = image_area.center() - window_size / 2.0;
+    // The far edges first, then the near ones, so the near ones win when it does not fit.
+    let x = centred
+        .x
+        .min(screen.max.x - window_size.x)
+        .max(screen.min.x);
+    let y = centred
+        .y
+        .min(screen.max.y - window_size.y)
+        .max(screen.min.y);
+    egui::pos2(x, y)
+}
+
 /// The refilter of the active tab when the metadata window leaves its image (ADR 0017 U10c-Q4,
 /// T124). A rating chosen in the window does not refilter the tab at once, so the window's image
 /// stays in the visible list and "Previous" / "Next" have something to start from. `rated`: a
@@ -542,6 +564,13 @@ struct Loupe {
     scroll_request: Option<usize>,
     /// The metadata window (M, D16, T107); at most one. While it is open it holds the program.
     metadata_window: Option<MetadataWindow>,
+    /// Whether the metadata window was drawn in the last frame: when it was not, the window has
+    /// just opened and is placed in the middle of the image area (T131). A move to another image
+    /// keeps it set, so the window stays where the user put it.
+    metadata_window_shown: bool,
+    /// The rectangle of the main window's central panel (the contact sheet or the loupe) in this
+    /// frame (T131); `None` before it is drawn and in the preview.
+    image_area: Option<egui::Rect>,
     /// The fields of the last "Copy All Fields" (U12b-Q1, T125): kept here, not in the window, so
     /// they outlive closing and moving it; until the next copy or the end of the program.
     copied_fields: Option<CopiedFields>,
@@ -1897,6 +1926,10 @@ impl Loupe {
     /// Closes the metadata window without writing.
     fn close_metadata_window(&mut self) {
         self.metadata_window = None;
+        // The next opening is placed in the middle of the image area again (T131). Reset here,
+        // not only when a frame is drawn without the window: `M` may open it again in the very
+        // next frame, before the window is drawn (reviewer's fix).
+        self.metadata_window_shown = false;
         self.metadata.close_window();
     }
 
@@ -2066,6 +2099,7 @@ impl Loupe {
         let events = self.metadata.take_editor_events();
         let read = self.metadata.take_window_read();
         let Some(mut window) = self.metadata_window.take() else {
+            self.metadata_window_shown = false;
             return;
         };
         for event in events {
@@ -2198,15 +2232,41 @@ impl Loupe {
                 ui.painter().rect_filled(response.rect, 0.0, BACKDROP);
             });
 
-        egui::Window::new(editor_text(&EditorText::WindowTitle {
+        let window_id = egui::Id::unique("metadata-window");
+        let mut metadata_window = egui::Window::new(editor_text(&EditorText::WindowTitle {
             file: window.file.clone(),
         }))
-        .id(egui::Id::unique("metadata-window"))
+        .id(window_id)
         .order(egui::Order::Foreground)
         .collapsible(false)
         .resizable(true)
-        .default_size(WINDOW_SIZE)
-        .show(ctx, |ui| {
+        .default_size(WINDOW_SIZE);
+        // Placed in the middle of the image area on the first frame it is drawn (T131), and left
+        // to the user after that: egui remembers the position by the window's id, so it is set
+        // here once rather than given as a default, which the remembered position would win over.
+        if !std::mem::replace(&mut self.metadata_window_shown, true) {
+            // The size the window had when it was last open, else the size it opens with.
+            let size = ctx
+                .memory(|memory| memory.area_rect(window_id))
+                .map_or_else(|| egui::Vec2::from(WINDOW_SIZE), |rect| rect.size());
+            let image_area = self.image_area.unwrap_or(screen);
+            let position = metadata_window_position(image_area, size, screen);
+            metadata_window = metadata_window.current_pos(position);
+            // egui 0.37 puts a window that is moved by its title bar back at the position it
+            // remembers after `current_pos` was applied (`Window::show_dyn`,
+            // `pivot_pos_before_begin`), so the remembered position is replaced too (reviewer's
+            // fix after the owner's hand check).
+            if let Some(mut state) = egui::AreaState::load(ctx, window_id) {
+                state.set_left_top_pos(position);
+                ctx.memory_mut(|memory| {
+                    memory.areas_mut().set_state(
+                        egui::LayerId::new(egui::Order::Foreground, window_id),
+                        state,
+                    );
+                });
+            }
+        }
+        metadata_window.show(ctx, |ui| {
             let error_color = ui.visuals().error_fg_color;
             egui::Panel::bottom("metadata-window-buttons")
                 .resizable(false)
@@ -4811,6 +4871,8 @@ impl eframe::App for Loupe {
         // (D16), and the import and settings windows keep the program as their keys do.
         let blocked = self.dialog_open();
         let mut commands = Vec::new();
+        // Set again below when the central panel is drawn (T131).
+        self.image_area = None;
         if self.in_preview() {
             // Only the preview: no menu bar, command bar, tabs, status bar or side columns
             // (U3-Q1, T111).
@@ -4835,9 +4897,10 @@ impl eframe::App for Loupe {
             }
             self.draw_columns(ui);
             let fill = ui.visuals().panel_fill;
-            egui::CentralPanel::default()
+            let central = egui::CentralPanel::default()
                 .frame(egui::Frame::NONE.fill(fill))
                 .show(ui, |ui| self.draw(ui));
+            self.image_area = Some(central.response.rect);
         }
         self.draw_import_dialog(&ctx);
         self.draw_settings_window(&ctx);
@@ -5069,6 +5132,8 @@ fn run(options: Options) -> Result<(), String> {
                 next_status: StatusBar::default(),
                 scroll_request: None,
                 metadata_window: None,
+                metadata_window_shown: false,
+                image_area: None,
                 copied_fields: None,
                 message: None,
                 indicator_after,
@@ -5118,12 +5183,76 @@ mod tests {
         other_values, resolve_path, resolve_paths, window_editor_properties,
     };
     use super::{LeaveDecision, SaveAnswer, WriteOutcome, leave_decision};
-    use super::{WindowLeave, WindowRefilter, window_refilter};
-    use egui::{Color32, Rect, pos2};
+    use super::{WindowLeave, WindowRefilter, metadata_window_position, window_refilter};
+    use egui::{Color32, Rect, pos2, vec2};
     use pw_loupe::{EditorField, EditorForm, Tab, ViewMode};
     use pw_loupe::{TEXT_CONTRAST, contrast_ratio};
     use pw_metadata::iim::Fallback;
     use std::path::{Path, PathBuf};
+
+    // --- Where the metadata window opens (T131) ---
+
+    /// The program window the placement tests use: 1600 × 1000 at the origin.
+    fn placement_screen() -> Rect {
+        Rect::from_min_size(pos2(0.0, 0.0), vec2(1600.0, 1000.0))
+    }
+
+    #[test]
+    fn metadata_window_opens_centred_on_a_larger_image_area() {
+        let screen = placement_screen();
+        let image_area = Rect::from_min_max(pos2(0.0, 60.0), pos2(1600.0, 970.0));
+        let size = vec2(460.0, 640.0);
+        let position = metadata_window_position(image_area, size, screen);
+        let window = Rect::from_min_size(position, size);
+        assert_eq!(window.center(), image_area.center());
+        assert_eq!(position, pos2(570.0, 195.0));
+    }
+
+    #[test]
+    fn metadata_window_opens_centred_on_an_image_area_beside_a_left_column() {
+        let screen = placement_screen();
+        // A left column 300 wide: the image area's centre is not the screen's.
+        let image_area = Rect::from_min_max(pos2(300.0, 60.0), pos2(1600.0, 970.0));
+        let size = vec2(460.0, 640.0);
+        let position = metadata_window_position(image_area, size, screen);
+        let window = Rect::from_min_size(position, size);
+        assert_eq!(window.center(), image_area.center());
+        assert_ne!(window.center().x, screen.center().x);
+        assert_eq!(position, pos2(720.0, 195.0));
+    }
+
+    #[test]
+    fn metadata_window_taller_than_the_image_area_keeps_its_top_inside_the_program_window() {
+        // An image area 400 high in a program window 500 high: the window (640 high) is taller
+        // than both, so centring alone would put its title bar above the program window.
+        let screen = Rect::from_min_size(pos2(0.0, 0.0), vec2(1600.0, 500.0));
+        let image_area = Rect::from_min_max(pos2(300.0, 60.0), pos2(1600.0, 460.0));
+        let size = vec2(460.0, 640.0);
+        let position = metadata_window_position(image_area, size, screen);
+        assert!(
+            position.y >= screen.top(),
+            "top {} above the screen",
+            position.y
+        );
+        assert_eq!(position.y, 0.0);
+        // Still centred across.
+        assert_eq!(position.x + size.x / 2.0, image_area.center().x);
+    }
+
+    #[test]
+    fn metadata_window_lower_than_the_window_stays_centred_on_the_image_area() {
+        // An image area lower than the window but a program window tall enough: the window is
+        // centred on the area and stays inside the program window.
+        let screen = Rect::from_min_size(pos2(0.0, 0.0), vec2(1600.0, 800.0));
+        let image_area = Rect::from_min_max(pos2(0.0, 300.0), pos2(1600.0, 700.0));
+        let size = vec2(460.0, 640.0);
+        let position = metadata_window_position(image_area, size, screen);
+        let window = Rect::from_min_size(position, size);
+        assert!(window.top() >= screen.top());
+        assert!(screen.contains_rect(window));
+        // Centring alone would end at 820, below the program window: moved up to fit.
+        assert_eq!(position.y, 160.0);
+    }
 
     // --- `M` and "Apply to All Marked" with several images marked (ADR 0017 U12c, T126) ---
 

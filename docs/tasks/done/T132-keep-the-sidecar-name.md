@@ -1,4 +1,4 @@
-# T132. A write keeps the sidecar's name as it is on disk — Open
+# T132. A write keeps the sidecar's name as it is on disk — Done
 
 - **Can start now.** Found in the review of T127 (2026-11-14); the owner approved a task for it.
   Not at the same time as another task that changes `safe_write.rs` or `read.rs`.
@@ -47,3 +47,6 @@
 | Date | Status | Note |
 |---|---|---|
 | 2026-11-14 | Open | Written by the reviewer after the review of T127 (a write renamed `PM-raw.XMP` to `PM-raw.xmp`); owner approved a task for it |
+| 2026-11-14 | Ready for review | Target of a RAW is the stored `<basename>.xmp` (`read::plain_sidecar`), lookup failure a `Precheck` error; 3 tests in `tests/sidecar.rs` (fail without the fix); check.ps1 all OK, 1325 passed, 53 ignored |
+| 2026-11-14 | Ready for review | Reviewer: code and tests accepted, not committed. Reviewer's `check.ps1`: all OK, 1325 passed, 0 failed, 53 ignored; level-C 10 of 10, the copy's sidecar still named `PM-raw.XMP` after the write (target `…\PM-raw.XMP`) |
+| 2026-11-14 | Done | Owner approved; committed by the reviewer |

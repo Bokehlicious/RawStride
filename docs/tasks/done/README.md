@@ -136,4 +136,6 @@ was when the task was done, so "this file", "below" and "the Log" in T1–T115 m
 | [T128](T128-licence-section-plus-choice-lists.md) | ADR 0017 U10d with ADR 0007 I11: the Licence (PLUS) section with fixed choice lists |
 | [T129](T129-iim-value-over-the-limit-is-no-conflict.md) | ADR 0007 §5.1: an IIM value equal to the whole XMP text is no conflict |
 | [T130](T130-hide-empty-structure-fields.md) | Empty structure fields are not shown as values |
+| [T131](T131-metadata-window-centred-on-image-area.md) | The metadata window opens in the middle of the image area |
+| [T132](T132-keep-the-sidecar-name.md) | A write keeps the sidecar's name as it is on disk |
 | [T120](T120-exiftool-from-the-program-folder.md) | ExifTool from the program folder first |
