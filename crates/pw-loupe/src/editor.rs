@@ -390,6 +390,20 @@ impl EditorField {
         )
     }
 
+    /// True for a copyright-management field (ADR 0007 §8): Creator, Copyright Notice, Credit
+    /// Line, Rights Usage Terms and Web Statement of Rights. "Apply to All Marked" empties such a
+    /// field on the window's image only (U12c-Q3, T126).
+    pub fn copyright_management(self) -> bool {
+        matches!(
+            self,
+            EditorField::Creator
+                | EditorField::Copyright
+                | EditorField::Credit
+                | EditorField::UsageTerms
+                | EditorField::WebStatement
+        )
+    }
+
     /// The kind of the field's value, from the property table (a text when it is not found).
     fn kind(self) -> FieldKind {
         let def = match self.struct_field() {
@@ -533,6 +547,60 @@ impl CopiedFields {
             .filter(|(_, text)| !text.is_empty())
             .count()
     }
+}
+
+/// What "Apply to All Marked" writes (ADR 0017 §2.3.1, U12c-Q3, T126), from
+/// [`EditorForm::batch_edits`].
+#[derive(Clone, Debug, PartialEq)]
+pub struct BatchEdits {
+    /// The edits of the window's image: [`EditorForm::edits`], the chosen conflict values
+    /// included.
+    pub this_image: Vec<Edit>,
+    /// The edits of every other marked image: only the changed fields, never a chosen conflict
+    /// value, and no `Clear` of a copyright-management field.
+    pub others: Vec<Edit>,
+    /// The changed fields given a value, in form order.
+    pub changed: Vec<EditorField>,
+    /// The emptied fields that are emptied on every image, in form order.
+    pub emptied: Vec<EditorField>,
+    /// The emptied copyright-management fields, emptied on the window's image only.
+    pub emptied_here_only: Vec<EditorField>,
+}
+
+impl BatchEdits {
+    /// How many fields were changed: given a value, emptied, or emptied on this image only.
+    pub fn field_count(&self) -> usize {
+        self.changed.len() + self.emptied.len() + self.emptied_here_only.len()
+    }
+}
+
+/// The lines of the confirmation of "Apply to All Marked" (U12c-Q4, T126): the question for
+/// `images` images, then the changed, emptied and copyright-only fields by name and the `skipped`
+/// marked files without metadata support, each line only when it has something to name.
+pub fn apply_confirmation(batch: &BatchEdits, images: usize, skipped: usize) -> Vec<String> {
+    let mut lines = vec![editor_text(&EditorText::ApplyQuestion {
+        fields: batch.field_count(),
+        images,
+    })];
+    if !batch.changed.is_empty() {
+        lines.push(editor_text(&EditorText::ChangedFields(
+            batch.changed.clone(),
+        )));
+    }
+    if !batch.emptied.is_empty() {
+        lines.push(editor_text(&EditorText::EmptiedFields(
+            batch.emptied.clone(),
+        )));
+    }
+    if !batch.emptied_here_only.is_empty() {
+        lines.push(editor_text(&EditorText::EmptiedHereOnly(
+            batch.emptied_here_only.clone(),
+        )));
+    }
+    if skipped > 0 {
+        lines.push(editor_text(&EditorText::SkippedFiles { files: skipped }));
+    }
+    lines
 }
 
 /// The editor's form for one image.
@@ -790,6 +858,43 @@ impl EditorForm {
         }
     }
 
+    /// What "Apply to All Marked" writes (U12c-Q3, T126): for the window's image the edits of
+    /// [`EditorForm::edits`]; for every other marked image only the edits of the changed fields
+    /// (a field whose text differs from its start text), never a chosen conflict value, and no
+    /// `Clear` of a copyright-management field (ADR 0007 §8), which is emptied on the window's
+    /// image only. Every field error together, and no batch, when a field has one.
+    pub fn batch_edits(&self) -> Result<BatchEdits, Vec<(EditorField, String)>> {
+        let mut batch = BatchEdits {
+            this_image: self.edits()?,
+            others: Vec::new(),
+            changed: Vec::new(),
+            emptied: Vec::new(),
+            emptied_here_only: Vec::new(),
+        };
+        for state in &self.fields {
+            if !state.field.editable() || self.read_only_text(state.field).is_some() {
+                continue;
+            }
+            if state.text == self.start_text(state) {
+                continue;
+            }
+            // `edits` had no error, so neither has this field.
+            let edit = field_edit(state.field, &state.text).map_err(|e| vec![(state.field, e)])?;
+            let cleared = matches!(edit, Edit::Clear { .. });
+            if cleared && state.field.copyright_management() {
+                batch.emptied_here_only.push(state.field);
+                continue;
+            }
+            if cleared {
+                batch.emptied.push(state.field);
+            } else {
+                batch.changed.push(state.field);
+            }
+            batch.others.push(edit);
+        }
+        Ok(batch)
+    }
+
     /// The warnings (§11) of the read metadata with the form's edits applied (a field with an
     /// error is left out). IIM lengths count when the file has IIM, or `create_iim` and the file
     /// is not a manufacturer RAW.
@@ -986,6 +1091,39 @@ pub enum EditorText {
     /// The status-line notice of a metadata read that failed (moved from `metadata.rs` and
     /// `main.rs`, T116).
     MetadataError { error: String },
+    /// The line under the window's title with two or more images marked (U12c-Q1, T126).
+    MarkedImages { images: usize },
+    /// The button that writes the edits to every marked image (U12c-Q2, T126).
+    ApplyToMarked { images: usize },
+    /// The title of the confirmation of "Apply to All Marked" (U12c-Q4, T126).
+    ApplyTitle,
+    /// The confirmation's question: `fields` changed fields to `images` images.
+    ApplyQuestion { fields: usize, images: usize },
+    /// The confirmation's line naming the changed fields given a value.
+    ChangedFields(Vec<EditorField>),
+    /// The confirmation's line naming the fields emptied on every image.
+    EmptiedFields(Vec<EditorField>),
+    /// The confirmation's line naming the copyright fields emptied on the window's image only.
+    EmptiedHereOnly(Vec<EditorField>),
+    /// The confirmation's line counting the marked files without metadata support.
+    SkippedFiles { files: usize },
+    /// The confirmation's button that starts the writes.
+    Write,
+    /// Shown while the batch runs (U12c-Q5): the write `current` of `total`.
+    Writing { current: usize, total: usize },
+    /// The first line of the batch's summary (U12c-Q6).
+    BatchWritten { written: usize, total: usize },
+    /// A line of the summary: an unresolved conflict on `property` (its XMP id) kept in `file`.
+    ConflictKept { file: String, property: String },
+}
+
+/// The names of `fields` in form order, separated by commas.
+fn field_names(fields: &[EditorField]) -> String {
+    fields
+        .iter()
+        .map(|field| field.label())
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// The text of a fixed text of the editor window, each a whole sentence from one template.
@@ -1037,6 +1175,46 @@ pub fn editor_text(text: &EditorText) -> String {
         EditorText::MoreUnsaved { more } => format!("… and {more} more"),
         EditorText::ReadingMetadata => "Reading metadata…".to_string(),
         EditorText::MetadataError { error } => format!("Metadata error: {error}"),
+        EditorText::MarkedImages { images } => {
+            if *images == 1 {
+                "1 image marked".to_string()
+            } else {
+                format!("{images} images marked")
+            }
+        }
+        EditorText::ApplyToMarked { images } => format!("Apply to {images} Marked"),
+        EditorText::ApplyTitle => "Apply to All Marked".to_string(),
+        EditorText::ApplyQuestion { fields, images } => match (*fields == 1, *images == 1) {
+            (true, true) => "Write 1 changed field to 1 image?".to_string(),
+            (true, false) => format!("Write 1 changed field to {images} images?"),
+            (false, true) => format!("Write {fields} changed fields to 1 image?"),
+            (false, false) => format!("Write {fields} changed fields to {images} images?"),
+        },
+        EditorText::ChangedFields(fields) => format!("Changed: {}", field_names(fields)),
+        EditorText::EmptiedFields(fields) => format!("Emptied: {}", field_names(fields)),
+        EditorText::EmptiedHereOnly(fields) => {
+            format!("Emptied only on this image: {}", field_names(fields))
+        }
+        EditorText::SkippedFiles { files } => {
+            if *files == 1 {
+                "Skipped: 1 file".to_string()
+            } else {
+                format!("Skipped: {files} files")
+            }
+        }
+        EditorText::Write => "Write".to_string(),
+        EditorText::Writing { current, total } => format!("Writing {current} of {total} …"),
+        EditorText::BatchWritten { written, total } => {
+            if *total == 1 {
+                format!("Written to {written} of 1 image.")
+            } else {
+                format!("Written to {written} of {total} images.")
+            }
+        }
+        EditorText::ConflictKept { file, property } => format!(
+            "Unresolved conflict kept: {file} ({field})",
+            field = property_label(property, Language::En)
+        ),
     }
 }
 
@@ -2832,6 +3010,345 @@ mod tests {
         ];
         for (reason, expected) in reasons {
             assert_eq!(write_reason_text(&reason), expected, "{reason:?}");
+        }
+    }
+
+    // --- "Apply to All Marked" (ADR 0017 §2.3.1, U12c, T126) ---
+
+    fn clear(property: &str) -> Edit {
+        Edit::Clear {
+            property: property.to_string(),
+            field: None,
+        }
+    }
+
+    fn batch_of(form: &EditorForm) -> BatchEdits {
+        match form.batch_edits() {
+            Ok(batch) => batch,
+            Err(errors) => panic!("no field error expected: {errors:?}"),
+        }
+    }
+
+    #[test]
+    fn the_copyright_management_fields_are_the_five_of_adr_0007_section_8() {
+        let fields: Vec<EditorField> = EditorField::ALL
+            .into_iter()
+            .filter(|field| field.copyright_management())
+            .collect();
+        assert_eq!(
+            fields,
+            [
+                EditorField::Creator,
+                EditorField::Copyright,
+                EditorField::Credit,
+                EditorField::UsageTerms,
+                EditorField::WebStatement,
+            ]
+        );
+    }
+
+    #[test]
+    fn an_unchanged_field_is_written_to_no_image() {
+        let mut metadata = Metadata::new();
+        insert(&mut metadata, "photoshop:Headline", text("Sol"));
+        insert(&mut metadata, "photoshop:City", text("Lund"));
+        let form = form_with(metadata);
+
+        let batch = batch_of(&form);
+
+        assert!(batch.this_image.is_empty());
+        assert!(batch.others.is_empty());
+        assert_eq!(batch.field_count(), 0);
+    }
+
+    #[test]
+    fn a_changed_text_lang_alt_list_and_check_box_go_to_every_image() {
+        let mut metadata = Metadata::new();
+        insert(&mut metadata, "photoshop:Headline", text("Sol"));
+        insert(&mut metadata, "photoshop:City", text("Lund"));
+        let mut form = form_with(metadata);
+        type_into(&mut form, EditorField::Title, "Kväll");
+        type_into(&mut form, EditorField::Headline, "Hav");
+        type_into(&mut form, EditorField::Keywords, "sol, hav");
+        form.set_checked(EditorField::Copyrighted, true);
+
+        let batch = batch_of(&form);
+
+        let expected = vec![
+            set("dc:title", lang_alt(&[("x-default", "Kväll")])),
+            set("photoshop:Headline", text("Hav")),
+            set("dc:subject", list(&["sol", "hav"])),
+            set("xmpRights:Marked", text("True")),
+        ];
+        assert_eq!(batch.this_image, expected);
+        assert_eq!(
+            batch.others, expected,
+            "City is unchanged and written nowhere"
+        );
+        assert_eq!(
+            batch.changed,
+            [
+                EditorField::Title,
+                EditorField::Headline,
+                EditorField::Keywords,
+                EditorField::Copyrighted,
+            ]
+        );
+        assert!(batch.emptied.is_empty());
+        assert!(batch.emptied_here_only.is_empty());
+    }
+
+    #[test]
+    fn a_chosen_conflict_value_goes_only_to_the_windows_image() {
+        let mut form = form_with(metadata_with_city_conflict());
+        assert!(form.choose(0, 1));
+        type_into(&mut form, EditorField::Headline, "Hav");
+
+        let batch = batch_of(&form);
+
+        assert_eq!(
+            batch.this_image,
+            [
+                set("photoshop:City", text("Malmö")),
+                set("photoshop:Headline", text("Hav")),
+            ]
+        );
+        assert_eq!(batch.others, [set("photoshop:Headline", text("Hav"))]);
+        assert_eq!(batch.changed, [EditorField::Headline]);
+
+        // A text typed over the choice is a changed field: every image gets it, and it decides
+        // the conflict there too.
+        type_into(&mut form, EditorField::City, "Lund");
+        let batch = batch_of(&form);
+        assert_eq!(
+            batch.others,
+            [
+                set("photoshop:Headline", text("Hav")),
+                set("photoshop:City", text("Lund")),
+            ]
+        );
+        assert!(
+            batch
+                .this_image
+                .contains(&set("photoshop:City", text("Lund")))
+        );
+    }
+
+    #[test]
+    fn an_emptied_copyright_field_is_emptied_only_on_the_windows_image() {
+        let mut metadata = Metadata::new();
+        insert(&mut metadata, "dc:creator", list(&["Anna"]));
+        insert(
+            &mut metadata,
+            "dc:rights",
+            lang_alt(&[("x-default", "© Anna")]),
+        );
+        insert(&mut metadata, "photoshop:Credit", text("Anna AB"));
+        insert(
+            &mut metadata,
+            "xmpRights:UsageTerms",
+            lang_alt(&[("x-default", "Ask first")]),
+        );
+        insert(
+            &mut metadata,
+            "xmpRights:WebStatement",
+            text("https://example.org/rights"),
+        );
+        insert(&mut metadata, "photoshop:City", text("Lund"));
+        let mut form = form_with(metadata);
+        for field in [
+            EditorField::Creator,
+            EditorField::Copyright,
+            EditorField::Credit,
+            EditorField::UsageTerms,
+            EditorField::WebStatement,
+            EditorField::City,
+        ] {
+            type_into(&mut form, field, "");
+        }
+
+        let batch = batch_of(&form);
+
+        assert_eq!(
+            batch.this_image,
+            [
+                clear("dc:creator"),
+                clear("dc:rights"),
+                clear("photoshop:Credit"),
+                clear("xmpRights:UsageTerms"),
+                clear("xmpRights:WebStatement"),
+                clear("photoshop:City"),
+            ]
+        );
+        // An emptied other field (City) is emptied on every image.
+        assert_eq!(batch.others, [clear("photoshop:City")]);
+        assert_eq!(batch.emptied, [EditorField::City]);
+        assert_eq!(
+            batch.emptied_here_only,
+            [
+                EditorField::Creator,
+                EditorField::Copyright,
+                EditorField::Credit,
+                EditorField::UsageTerms,
+                EditorField::WebStatement,
+            ]
+        );
+        assert!(batch.changed.is_empty());
+        assert_eq!(batch.field_count(), 6);
+    }
+
+    #[test]
+    fn a_copyright_field_given_a_value_goes_to_every_image() {
+        let mut form = form_with(Metadata::new());
+        type_into(&mut form, EditorField::Credit, "Anna AB");
+
+        let batch = batch_of(&form);
+
+        assert_eq!(batch.others, [set("photoshop:Credit", text("Anna AB"))]);
+        assert_eq!(batch.changed, [EditorField::Credit]);
+    }
+
+    #[test]
+    fn field_errors_give_no_batch() {
+        let mut form = form_with(Metadata::new());
+        type_into(&mut form, EditorField::Headline, "Hav");
+        type_into(&mut form, EditorField::DateCreated, "igår");
+
+        assert_eq!(
+            form.batch_edits(),
+            Err(vec![(EditorField::DateCreated, date_error_text())])
+        );
+    }
+
+    #[test]
+    fn the_confirmation_names_the_changed_emptied_and_copyright_only_fields_and_the_skipped_files()
+    {
+        let batch = BatchEdits {
+            this_image: Vec::new(),
+            others: Vec::new(),
+            changed: vec![EditorField::Headline, EditorField::City],
+            emptied: vec![EditorField::Country],
+            emptied_here_only: vec![EditorField::Copyright, EditorField::Credit],
+        };
+        assert_eq!(
+            apply_confirmation(&batch, 4, 1),
+            [
+                "Write 5 changed fields to 4 images?",
+                "Changed: Headline, City",
+                "Emptied: Country",
+                "Emptied only on this image: Copyright Notice, Credit Line",
+                "Skipped: 1 file",
+            ]
+        );
+
+        // Only the lines with something to name.
+        let batch = BatchEdits {
+            changed: vec![EditorField::Headline],
+            emptied: Vec::new(),
+            emptied_here_only: Vec::new(),
+            ..batch
+        };
+        assert_eq!(
+            apply_confirmation(&batch, 2, 0),
+            ["Write 1 changed field to 2 images?", "Changed: Headline"]
+        );
+        let batch = BatchEdits {
+            changed: Vec::new(),
+            emptied: vec![EditorField::City],
+            ..batch
+        };
+        assert_eq!(
+            apply_confirmation(&batch, 3, 2),
+            [
+                "Write 1 changed field to 3 images?",
+                "Emptied: City",
+                "Skipped: 2 files",
+            ]
+        );
+    }
+
+    #[test]
+    fn every_apply_to_all_marked_text_in_singular_and_plural() {
+        let cases = [
+            (EditorText::MarkedImages { images: 1 }, "1 image marked"),
+            (EditorText::MarkedImages { images: 4 }, "4 images marked"),
+            (EditorText::ApplyToMarked { images: 1 }, "Apply to 1 Marked"),
+            (EditorText::ApplyToMarked { images: 4 }, "Apply to 4 Marked"),
+            (EditorText::ApplyTitle, "Apply to All Marked"),
+            (
+                EditorText::ApplyQuestion {
+                    fields: 1,
+                    images: 1,
+                },
+                "Write 1 changed field to 1 image?",
+            ),
+            (
+                EditorText::ApplyQuestion {
+                    fields: 1,
+                    images: 4,
+                },
+                "Write 1 changed field to 4 images?",
+            ),
+            (
+                EditorText::ApplyQuestion {
+                    fields: 3,
+                    images: 1,
+                },
+                "Write 3 changed fields to 1 image?",
+            ),
+            (
+                EditorText::ApplyQuestion {
+                    fields: 3,
+                    images: 4,
+                },
+                "Write 3 changed fields to 4 images?",
+            ),
+            (
+                EditorText::ChangedFields(vec![EditorField::Headline]),
+                "Changed: Headline",
+            ),
+            (
+                EditorText::EmptiedFields(vec![EditorField::City, EditorField::Country]),
+                "Emptied: City, Country",
+            ),
+            (
+                EditorText::EmptiedHereOnly(vec![EditorField::Copyright]),
+                "Emptied only on this image: Copyright Notice",
+            ),
+            (EditorText::SkippedFiles { files: 1 }, "Skipped: 1 file"),
+            (EditorText::SkippedFiles { files: 3 }, "Skipped: 3 files"),
+            (EditorText::Write, "Write"),
+            (
+                EditorText::Writing {
+                    current: 2,
+                    total: 4,
+                },
+                "Writing 2 of 4 …",
+            ),
+            (
+                EditorText::BatchWritten {
+                    written: 1,
+                    total: 1,
+                },
+                "Written to 1 of 1 image.",
+            ),
+            (
+                EditorText::BatchWritten {
+                    written: 3,
+                    total: 4,
+                },
+                "Written to 3 of 4 images.",
+            ),
+            (
+                EditorText::ConflictKept {
+                    file: "b.jpg".into(),
+                    property: "photoshop:City".into(),
+                },
+                "Unresolved conflict kept: b.jpg (City)",
+            ),
+        ];
+        for (text, expected) in cases {
+            assert_eq!(editor_text(&text), expected, "{text:?}");
         }
     }
 }

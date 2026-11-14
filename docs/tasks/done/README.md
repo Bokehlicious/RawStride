@@ -131,4 +131,5 @@ was when the task was done, so "this file", "below" and "the Log" in T1–T115 m
 | [T123](T123-metadata-window-every-simple-field.md) | ADR 0017 U10, first part: every simple field of the metadata window, in sections |
 | [T124](T124-rating-and-label-in-the-metadata-window.md) | ADR 0017 U10c: Rating and Label in the metadata window |
 | [T125](T125-copy-and-paste-all-fields.md) | ADR 0017 U12b: Copy and paste all fields between images |
+| [T126](T126-apply-to-all-marked.md) | ADR 0017 U12c: Apply to all marked |
 | [T120](T120-exiftool-from-the-program-folder.md) | ExifTool from the program folder first |

@@ -32,8 +32,8 @@ use pw_viewcore::Status;
 
 pub use browse::{LoupeMove, metadata_neighbour};
 pub use editor::{
-    CopiedFields, EditorField, EditorForm, EditorSection, EditorText, OpenConflict, RatingButton,
-    WriteReason, editor_text, notice_text, write_reason_text,
+    BatchEdits, CopiedFields, EditorField, EditorForm, EditorSection, EditorText, OpenConflict,
+    RatingButton, WriteReason, apply_confirmation, editor_text, notice_text, write_reason_text,
 };
 pub use filter::{
     Filter, LABEL_CHOICES, LabelChoice, LabelFilter, STAR_CONDITIONS, STAR_FILTERS, StarCondition,

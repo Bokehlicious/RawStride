@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::TryRecvError;
@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 
 use pw_loupe::{
     EditorText, RatingKey, RatingRefused, RatingStore, RatingWriter, UNSUPPORTED_TEXT, WriteReason,
-    editor_text, path_resolution_error_text, status_text, write_reason_text,
+    editor_text, notice_text, path_resolution_error_text, status_text, write_reason_text,
 };
 use pw_metadata::edit::Edit;
 use pw_metadata::read::MetadataRead;
@@ -135,11 +135,78 @@ pub(crate) enum EditorEvent {
     },
     /// The write of `path` failed; `message` is the text the window shows.
     Failed { path: PathBuf, message: String },
-    /// The new read of `path` after a write that succeeded.
+    /// The new read of `path` after a write that succeeded, or after a batch.
     Reloaded {
         path: PathBuf,
         result: Result<MetadataRead, String>,
     },
+    /// Every write of "Apply to All Marked" has answered (U12c-Q6, T126); a new read of the
+    /// window's image is asked for.
+    BatchDone(BatchSummary),
+}
+
+/// What a batch of "Apply to All Marked" gave (ADR 0017 §2.3.1, U12c-Q6, T126).
+#[derive(Debug, PartialEq)]
+pub(crate) struct BatchSummary {
+    /// How many images were written.
+    pub written: usize,
+    /// How many images the batch had.
+    pub total: usize,
+    /// The failed files, each with its reason ("Could not save metadata for <file>: …").
+    pub failed: Vec<String>,
+    /// The other images where an unresolved conflict was kept ("Unresolved conflict kept: …").
+    pub kept: Vec<String>,
+    /// The notices of the window's own image, shown as after its own write.
+    pub notices: Vec<WriteNotice>,
+}
+
+impl BatchSummary {
+    /// The lines the window shows: the written count, the failed files, the kept conflicts, then
+    /// the window's image's notices.
+    pub fn lines(&self) -> Vec<String> {
+        let written = editor_text(&EditorText::BatchWritten {
+            written: self.written,
+            total: self.total,
+        });
+        std::iter::once(written)
+            .chain(self.failed.iter().cloned())
+            .chain(self.kept.iter().cloned())
+            .chain(self.notices.iter().map(notice_text))
+            .collect()
+    }
+}
+
+/// A batch of "Apply to All Marked" (ADR 0007 §9.5, U12c-Q5, T126): each image its own
+/// `write_edits`, sent as the worker's queue takes them; one failure stops nothing else.
+struct EditorBatch {
+    /// The window's image, read again when every write has answered.
+    window_image: PathBuf,
+    /// How many images the batch has.
+    total: usize,
+    /// The writes not yet sent, in order.
+    queue: VecDeque<(PathBuf, Vec<Edit>)>,
+    /// The writes sent and not yet answered.
+    in_flight: Vec<(RequestId, PathBuf)>,
+    written: usize,
+    failed: Vec<String>,
+    kept: Vec<String>,
+    notices: Vec<WriteNotice>,
+}
+
+impl EditorBatch {
+    /// How many writes have answered (a write that could not be sent counts as answered).
+    fn answered(&self) -> usize {
+        self.total
+            .saturating_sub(self.queue.len() + self.in_flight.len())
+    }
+
+    /// The files of the writes not yet answered, the sent ones first.
+    fn pending_paths(&self) -> impl Iterator<Item = &PathBuf> {
+        self.in_flight
+            .iter()
+            .map(|(_, path)| path)
+            .chain(self.queue.iter().map(|(path, _)| path))
+    }
 }
 
 /// The editor's write and the read after it (T105). One write at a time: the window is read-only
@@ -152,6 +219,9 @@ struct EditorSave {
     reload: Option<PathBuf>,
     /// The read in flight after a write.
     reading: Option<(RequestId, PathBuf)>,
+    /// The batch of "Apply to All Marked" while it runs (T126); never at the same time as
+    /// `writing`.
+    batch: Option<EditorBatch>,
     /// What happened since the window last asked.
     events: Vec<EditorEvent>,
 }
@@ -226,6 +296,7 @@ impl MetadataCache {
         let mut failures = Vec::new();
         self.drain(|| worker.try_recv(), &mut failures);
         self.retry_pending_read(worker);
+        self.send_batch(worker);
         self.send_editor_reload(worker);
         self.send_window_read(worker);
         failures.extend(self.ratings.pump(worker));
@@ -296,6 +367,19 @@ impl MetadataCache {
                             .events
                             .push(EditorEvent::Failed { path, message });
                     }
+                    // Nor can the batch's writes, sent or not (T126); the batch then ends.
+                    if let Some(batch) = self.editor.batch.as_mut() {
+                        let paths: Vec<PathBuf> = batch
+                            .in_flight
+                            .drain(..)
+                            .map(|(_, path)| path)
+                            .chain(batch.queue.drain(..).map(|(path, _)| path))
+                            .collect();
+                        for path in paths {
+                            batch.failed.push(save_failed_text(&path, message.clone()));
+                        }
+                    }
+                    self.finish_batch();
                     let reload = self.editor.reading.take().map(|(_, path)| path);
                     if let Some(path) = reload.or_else(|| self.editor.reload.take()) {
                         self.editor.events.push(EditorEvent::Reloaded {
@@ -557,7 +641,7 @@ impl MetadataCache {
         edits: Vec<Edit>,
         worker: &mut impl MetadataSubmit,
     ) -> Result<(), String> {
-        if self.editor.writing.is_some() {
+        if self.editor.writing.is_some() || self.editor.batch.is_some() {
             return Ok(());
         }
         match worker.write_edits(path.to_path_buf(), edits) {
@@ -572,6 +656,141 @@ impl MetadataCache {
     /// Whether the editor's write is in flight.
     pub fn editor_saving(&self) -> bool {
         self.editor.writing.is_some()
+    }
+
+    /// Starts "Apply to All Marked" (ADR 0017 §2.3.1, U12c-Q5, T126): `this_image` written to the
+    /// window's image (absolute) and each of `others` (absolute path, edits) to its image, each
+    /// one its own `write_edits` (ADR 0007 §9.5), sent as the queue takes them, the window's image
+    /// first. A write that cannot be sent fails that image only. When every write has answered,
+    /// `EditorEvent::BatchDone` is given and the window's image is read again. False, and nothing
+    /// sent, while the editor's write or another batch runs.
+    pub fn start_batch(
+        &mut self,
+        window_image: &Path,
+        this_image: Vec<Edit>,
+        others: Vec<(PathBuf, Vec<Edit>)>,
+        worker: &mut impl MetadataSubmit,
+    ) -> bool {
+        if self.editor.writing.is_some() || self.editor.batch.is_some() {
+            return false;
+        }
+        let queue: VecDeque<(PathBuf, Vec<Edit>)> =
+            std::iter::once((window_image.to_path_buf(), this_image))
+                .chain(others)
+                .collect();
+        self.editor.batch = Some(EditorBatch {
+            window_image: window_image.to_path_buf(),
+            total: queue.len(),
+            queue,
+            in_flight: Vec::new(),
+            written: 0,
+            failed: Vec::new(),
+            kept: Vec::new(),
+            notices: Vec::new(),
+        });
+        self.send_batch(worker);
+        true
+    }
+
+    /// Whether a batch of "Apply to All Marked" runs.
+    pub fn batch_running(&self) -> bool {
+        self.editor.batch.is_some()
+    }
+
+    /// The progress of the running batch for "Writing {i} of {n} …": the write being waited for
+    /// (the answered ones plus one, at most the total) and the total.
+    pub fn batch_progress(&self) -> Option<(usize, usize)> {
+        self.editor
+            .batch
+            .as_ref()
+            .map(|batch| ((batch.answered() + 1).min(batch.total), batch.total))
+    }
+
+    /// Sends the batch's writes not yet sent until the queue is full; a write the worker refuses
+    /// otherwise fails its image. Ends the batch when every write has answered.
+    fn send_batch(&mut self, worker: &mut impl MetadataSubmit) {
+        let Some(batch) = self.editor.batch.as_mut() else {
+            return;
+        };
+        while let Some((path, edits)) = batch.queue.front() {
+            match worker.write_edits(path.clone(), edits.clone()) {
+                Ok(id) => {
+                    batch.in_flight.push((id, path.clone()));
+                    batch.queue.pop_front();
+                }
+                Err(SubmitError::QueueFull) => break,
+                Err(error) => {
+                    let message = save_failed_text(path, submit_error(error));
+                    batch.failed.push(message);
+                    batch.queue.pop_front();
+                }
+            }
+        }
+        self.finish_batch();
+    }
+
+    /// Ends the batch when every write has answered: its summary is given and the window's image
+    /// is read again (as after OK).
+    fn finish_batch(&mut self) {
+        let done = self
+            .editor
+            .batch
+            .as_ref()
+            .is_some_and(|batch| batch.queue.is_empty() && batch.in_flight.is_empty());
+        if !done {
+            return;
+        }
+        let Some(batch) = self.editor.batch.take() else {
+            return;
+        };
+        self.editor.reload = Some(batch.window_image);
+        self.editor
+            .events
+            .push(EditorEvent::BatchDone(BatchSummary {
+                written: batch.written,
+                total: batch.total,
+                failed: batch.failed,
+                kept: batch.kept,
+                notices: batch.notices,
+            }));
+    }
+
+    /// One of the batch's writes answered (T126): counted as written or failed; an unresolved
+    /// conflict kept in another image than the window's is listed.
+    fn batch_written(
+        &mut self,
+        id: RequestId,
+        path: &Path,
+        result: Result<pw_metadata::edit::EditReport, WriteError>,
+    ) {
+        let Some(batch) = self.editor.batch.as_mut() else {
+            return;
+        };
+        let Some(index) = batch.in_flight.iter().position(|(sent, _)| *sent == id) else {
+            return;
+        };
+        batch.in_flight.remove(index);
+        match result {
+            Ok(report) => {
+                batch.written += 1;
+                if path == batch.window_image {
+                    batch.notices = report.notices;
+                } else {
+                    for notice in &report.notices {
+                        if let WriteNotice::ConflictKept { property } = notice {
+                            batch.kept.push(editor_text(&EditorText::ConflictKept {
+                                file: file_name(path),
+                                property: property.clone(),
+                            }));
+                        }
+                    }
+                }
+            }
+            Err(error) => batch
+                .failed
+                .push(save_failed_text(path, write_error_text(error))),
+        }
+        self.finish_batch();
     }
 
     /// Whether the read after the editor's write is waiting or in flight.
@@ -693,6 +912,13 @@ impl MetadataCache {
                 self.inspector_written(&path);
                 if self
                     .editor
+                    .batch
+                    .as_ref()
+                    .is_some_and(|batch| batch.in_flight.iter().any(|(sent, _)| *sent == id))
+                {
+                    self.batch_written(id, &path, result);
+                } else if self
+                    .editor
                     .writing
                     .as_ref()
                     .is_some_and(|(writing, _)| *writing == id)
@@ -719,8 +945,8 @@ impl MetadataCache {
     }
 }
 
-/// The longest wait for rating writes and the editor's write when the program exits (ADR 0013
-/// Q6, T105).
+/// The longest wait for rating writes, the editor's write and the batch's writes when the program
+/// exits (ADR 0013 Q6, T105, T126).
 pub(crate) const EXIT_WAIT_LIMIT: Duration = Duration::from_secs(5);
 /// The pause between two polls while waiting at exit.
 pub(crate) const EXIT_POLL_INTERVAL: Duration = Duration::from_millis(20);
@@ -746,9 +972,9 @@ impl UnsavedRatings {
     }
 }
 
-/// Keeps sending and confirming rating writes until none is pending, and the editor's write is
-/// done, or `EXIT_WAIT_LIMIT` has passed (T44, T105). The clock and the sleep are passed in so
-/// the wait can be tested without real time.
+/// Keeps sending and confirming rating writes until none is pending, and the editor's write and
+/// the batch of "Apply to All Marked" are done, or `EXIT_WAIT_LIMIT` has passed (T44, T105,
+/// T126). The clock and the sleep are passed in so the wait can be tested without real time.
 pub(crate) fn finish_pending_writes(
     cache: &mut MetadataCache,
     worker: &mut impl MetadataSubmit,
@@ -756,7 +982,9 @@ pub(crate) fn finish_pending_writes(
     mut sleep: impl FnMut(Duration),
 ) -> UnsavedRatings {
     let mut unsaved = UnsavedRatings::default();
-    let waiting = |cache: &MetadataCache| cache.pending_writes() > 0 || cache.editor_saving();
+    let waiting = |cache: &MetadataCache| {
+        cache.pending_writes() > 0 || cache.editor_saving() || cache.batch_running()
+    };
     if !waiting(cache) {
         return unsaved;
     }
@@ -764,8 +992,10 @@ pub(crate) fn finish_pending_writes(
     loop {
         unsaved.failed.extend(cache.poll(worker));
         for event in cache.take_editor_events() {
-            if let EditorEvent::Failed { message, .. } = event {
-                unsaved.failed.push(message);
+            match event {
+                EditorEvent::Failed { message, .. } => unsaved.failed.push(message),
+                EditorEvent::BatchDone(summary) => unsaved.failed.extend(summary.failed),
+                EditorEvent::Saved { .. } | EditorEvent::Reloaded { .. } => {}
             }
         }
         if !waiting(cache) || now().saturating_duration_since(start) >= EXIT_WAIT_LIMIT {
@@ -781,6 +1011,11 @@ pub(crate) fn finish_pending_writes(
         .chain(editor)
         .map(|path| file_name(path))
         .collect();
+    if let Some(batch) = &cache.editor.batch {
+        unsaved
+            .pending
+            .extend(batch.pending_paths().map(|path| file_name(path)));
+    }
     unsaved
 }
 
@@ -887,6 +1122,10 @@ mod tests {
         /// The image and edits of every `write_edits` call, with the id each was given.
         edits_writes: Vec<(RequestId, PathBuf, Vec<Edit>)>,
         next_edits_id: RequestId,
+        /// When set, `write_edits` answers `QueueFull` once this many writes were accepted (T126).
+        edits_capacity: Option<usize>,
+        /// When true, `write_edits` answers `Stopped` (T126).
+        edits_stopped: bool,
     }
 
     impl FakeSubmit {
@@ -903,6 +1142,8 @@ mod tests {
                 next_metadata_id: 500,
                 edits_writes: Vec::new(),
                 next_edits_id: 900,
+                edits_capacity: None,
+                edits_stopped: false,
             }
         }
     }
@@ -951,6 +1192,15 @@ mod tests {
             image: PathBuf,
             edits: Vec<Edit>,
         ) -> Result<RequestId, SubmitError> {
+            if self.edits_stopped {
+                return Err(SubmitError::Stopped);
+            }
+            if self
+                .edits_capacity
+                .is_some_and(|capacity| self.edits_writes.len() >= capacity)
+            {
+                return Err(SubmitError::QueueFull);
+            }
             self.operations.push("write_edits");
             let id = self.next_edits_id;
             self.next_edits_id += 1;
@@ -2593,6 +2843,324 @@ mod tests {
             panic!("current directory should be available: {error}");
         }
         assert_eq!(cache.inspector_state(&image), InspectorState::Loading);
+    }
+
+    // --- "Apply to All Marked" (ADR 0017 §2.3.1, U12c, T126) ---
+
+    /// The edits the other marked images get in these tests.
+    fn headline_edits() -> Vec<Edit> {
+        vec![Edit::Set {
+            property: "photoshop:Headline".to_owned(),
+            field: None,
+            value: pw_metadata::value::Value::Text("Hav".to_owned()),
+        }]
+    }
+
+    /// The three images of a batch: the window's JPEG, an ARW and a DNG.
+    fn batch_images() -> (PathBuf, PathBuf, PathBuf) {
+        (
+            image_path("pw-loupe-batch-a.jpg"),
+            image_path("pw-loupe-batch-b.ARW"),
+            image_path("pw-loupe-batch-c.DNG"),
+        )
+    }
+
+    fn start_three(
+        cache: &mut MetadataCache,
+        worker: &mut FakeSubmit,
+    ) -> (PathBuf, PathBuf, PathBuf) {
+        let (a, b, c) = batch_images();
+        let others = vec![(b.clone(), headline_edits()), (c.clone(), headline_edits())];
+        assert!(cache.start_batch(&a, title_edits(), others, worker));
+        (a, b, c)
+    }
+
+    #[test]
+    fn a_batch_sends_one_write_per_file_as_the_queue_takes_them() {
+        let mut worker = FakeSubmit::new([]);
+        worker.edits_capacity = Some(2);
+        let mut cache = MetadataCache::default();
+
+        let (a, b, c) = start_three(&mut cache, &mut worker);
+
+        // The window's image first with its own edits, then the others with the changed fields.
+        assert_eq!(
+            worker.edits_writes,
+            [
+                (900, a.clone(), title_edits()),
+                (901, b.clone(), headline_edits())
+            ]
+        );
+        assert!(cache.batch_running());
+        assert_eq!(cache.batch_progress(), Some((1, 3)));
+        // The queue is still full: nothing more is sent.
+        assert!(cache.poll(&mut worker).is_empty());
+        assert_eq!(worker.edits_writes.len(), 2);
+        // The queue takes the third.
+        worker.edits_capacity = None;
+        assert!(cache.poll(&mut worker).is_empty());
+        assert_eq!(
+            worker.edits_writes.get(2),
+            Some(&(902, c.clone(), headline_edits()))
+        );
+
+        // Neither the window's own write nor a second batch is sent while it runs.
+        assert_eq!(cache.save_edits(&a, title_edits(), &mut worker), Ok(()));
+        assert!(!cache.start_batch(&a, title_edits(), Vec::new(), &mut worker));
+        assert_eq!(worker.edits_writes.len(), 3);
+        assert!(cache.take_editor_events().is_empty());
+        assert!(cache.batch_running());
+    }
+
+    #[test]
+    fn no_batch_starts_while_the_windows_write_runs() {
+        let mut worker = FakeSubmit::new([]);
+        let mut cache = MetadataCache::default();
+        let (a, b, _) = batch_images();
+        assert_eq!(cache.save_edits(&a, title_edits(), &mut worker), Ok(()));
+
+        assert!(!cache.start_batch(&a, title_edits(), vec![(b, headline_edits())], &mut worker));
+
+        assert_eq!(worker.edits_writes.len(), 1);
+        assert!(!cache.batch_running());
+    }
+
+    #[test]
+    fn one_failure_stops_nothing_and_the_summary_counts_failures_and_kept_conflicts() {
+        let mut worker = FakeSubmit::new([]);
+        let mut cache = MetadataCache::default();
+        let (a, b, c) = start_three(&mut cache, &mut worker);
+        assert_eq!(worker.edits_writes.len(), 3);
+        assert_eq!(cache.batch_progress(), Some((1, 3)));
+
+        // The ARW fails; the others still answer.
+        worker
+            .events
+            .push_back(edits_written(901, &b, Err(WriteError::ReadOnly)));
+        assert!(cache.poll(&mut worker).is_empty());
+        assert_eq!(cache.batch_progress(), Some((2, 3)));
+        let window_notices = vec![
+            WriteNotice::DigestNotWritten,
+            WriteNotice::ConflictKept {
+                property: "photoshop:State".to_owned(),
+            },
+        ];
+        worker
+            .events
+            .push_back(edits_written(900, &a, Ok(report(window_notices.clone()))));
+        assert!(cache.poll(&mut worker).is_empty());
+        assert_eq!(cache.batch_progress(), Some((3, 3)));
+        assert!(cache.take_editor_events().is_empty());
+        assert!(
+            worker.metadata_reads.is_empty(),
+            "the window's image is read again only when every write has answered"
+        );
+
+        worker.events.push_back(edits_written(
+            902,
+            &c,
+            Ok(report(vec![
+                WriteNotice::ConflictKept {
+                    property: "photoshop:City".to_owned(),
+                },
+                WriteNotice::DigestNotWritten,
+            ])),
+        ));
+        assert!(cache.poll(&mut worker).is_empty());
+
+        assert!(!cache.batch_running());
+        assert_eq!(cache.batch_progress(), None);
+        let summary = BatchSummary {
+            written: 2,
+            total: 3,
+            failed: vec![
+                "Could not save metadata for pw-loupe-batch-b.ARW: the file is read-only"
+                    .to_owned(),
+            ],
+            kept: vec!["Unresolved conflict kept: pw-loupe-batch-c.DNG (City)".to_owned()],
+            notices: window_notices,
+        };
+        assert_eq!(
+            summary.lines(),
+            [
+                "Written to 2 of 3 images.",
+                "Could not save metadata for pw-loupe-batch-b.ARW: the file is read-only",
+                "Unresolved conflict kept: pw-loupe-batch-c.DNG (City)",
+                "No new IIM checksum was written, because a conflict is unresolved",
+                "Province or State: the conflict is unresolved and was not written",
+            ]
+        );
+        assert_eq!(
+            cache.take_editor_events(),
+            [EditorEvent::BatchDone(summary)]
+        );
+
+        // Then the window's image is read again and the read refills the form.
+        assert_eq!(worker.metadata_reads, [(500, a.clone())]);
+        assert!(cache.editor_reloading());
+        worker
+            .events
+            .push_back(metadata_read(500, &a, Ok(empty_read())));
+        assert!(cache.poll(&mut worker).is_empty());
+        assert!(!cache.editor_reloading());
+        assert_eq!(
+            cache.take_editor_events(),
+            [EditorEvent::Reloaded {
+                path: a,
+                result: Ok(empty_read()),
+            }]
+        );
+    }
+
+    #[test]
+    fn the_window_reads_its_image_again_after_the_batch_as_after_its_own_write() {
+        let mut worker = FakeSubmit::new([]);
+        let mut cache = MetadataCache::default();
+        let (a, b, _) = batch_images();
+        assert!(cache.open_window(&a, &mut worker));
+        worker
+            .events
+            .push_back(metadata_read(500, &a, Ok(empty_read())));
+        assert!(cache.poll(&mut worker).is_empty());
+        assert_eq!(cache.take_window_read(), Some(Ok(empty_read())));
+        assert!(cache.start_batch(
+            &a,
+            title_edits(),
+            vec![(b.clone(), headline_edits())],
+            &mut worker
+        ));
+
+        // Another image written: the window reads nothing.
+        worker
+            .events
+            .push_back(edits_written(901, &b, Ok(report(Vec::new()))));
+        assert!(cache.poll(&mut worker).is_empty());
+        assert_eq!(worker.metadata_reads.len(), 1);
+
+        // The window's image written, the last answer: the read after the batch (501) and the
+        // window's own new read (502).
+        worker
+            .events
+            .push_back(edits_written(900, &a, Ok(report(Vec::new()))));
+        assert!(cache.poll(&mut worker).is_empty());
+        assert_eq!(
+            worker.metadata_reads,
+            [(500, a.clone()), (501, a.clone()), (502, a)]
+        );
+    }
+
+    #[test]
+    fn a_stopped_worker_fails_the_rest_of_the_batch() {
+        // Refused when sent: every image fails at once, and the batch ends.
+        let mut worker = FakeSubmit::new([]);
+        worker.edits_stopped = true;
+        let mut cache = MetadataCache::default();
+        let (a, _, _) = start_three(&mut cache, &mut worker);
+        assert!(!cache.batch_running());
+        assert_eq!(
+            cache.take_editor_events(),
+            [EditorEvent::BatchDone(BatchSummary {
+                written: 0,
+                total: 3,
+                failed: vec![
+                    "Could not save metadata for pw-loupe-batch-a.jpg: metadata writing has \
+                     stopped"
+                        .to_owned(),
+                    "Could not save metadata for pw-loupe-batch-b.ARW: metadata writing has \
+                     stopped"
+                        .to_owned(),
+                    "Could not save metadata for pw-loupe-batch-c.DNG: metadata writing has \
+                     stopped"
+                        .to_owned(),
+                ],
+                kept: Vec::new(),
+                notices: Vec::new(),
+            })]
+        );
+        assert!(cache.poll(&mut worker).is_empty());
+        assert_eq!(worker.metadata_reads, [(500, a)]);
+
+        // Stopped while one is sent and two wait: all three fail.
+        let mut worker = FakeSubmit::new([]);
+        worker.edits_capacity = Some(1);
+        let mut cache = MetadataCache::default();
+        let (a, _, _) = start_three(&mut cache, &mut worker);
+        assert_eq!(worker.edits_writes.len(), 1);
+        let mut failures = Vec::new();
+        cache.drain(|| Err(TryRecvError::Disconnected), &mut failures);
+        assert!(!cache.batch_running());
+        let events = cache.take_editor_events();
+        let Some(EditorEvent::BatchDone(summary)) = events.first() else {
+            panic!("the batch should end: {events:?}");
+        };
+        assert_eq!(summary.written, 0);
+        assert_eq!(summary.failed.len(), 3);
+        assert_eq!(
+            events.get(1),
+            Some(&EditorEvent::Reloaded {
+                path: a,
+                result: Err("metadata writing has stopped".to_owned()),
+            })
+        );
+    }
+
+    #[test]
+    fn the_exit_wait_counts_the_batch_and_lists_its_pending_and_failed_files() {
+        // One sent and one waiting: the full wait, then both listed.
+        let mut worker = FakeSubmit::new([]);
+        worker.edits_capacity = Some(1);
+        let mut cache = MetadataCache::default();
+        let (a, b, _) = batch_images();
+        assert!(cache.start_batch(
+            &a,
+            title_edits(),
+            vec![(b.clone(), headline_edits())],
+            &mut worker
+        ));
+        let clock = std::cell::Cell::new(Instant::now());
+        let start = clock.get();
+        let unsaved = finish_pending_writes(
+            &mut cache,
+            &mut worker,
+            || clock.get(),
+            |pause| clock.set(clock.get() + pause),
+        );
+        assert_eq!(clock.get() - start, EXIT_WAIT_LIMIT);
+        assert!(unsaved.failed.is_empty());
+        assert_eq!(
+            unsaved.pending,
+            ["pw-loupe-batch-a.jpg", "pw-loupe-batch-b.ARW"]
+        );
+
+        // Both answered, one failed: it is listed with its reason and the wait ends.
+        let mut worker = FakeSubmit::new([]);
+        let mut cache = MetadataCache::default();
+        assert!(cache.start_batch(
+            &a,
+            title_edits(),
+            vec![(b.clone(), headline_edits())],
+            &mut worker
+        ));
+        worker
+            .events
+            .push_back(edits_written(900, &a, Ok(report(Vec::new()))));
+        worker
+            .events
+            .push_back(edits_written(901, &b, Err(WriteError::ReadOnly)));
+        let clock = std::cell::Cell::new(Instant::now());
+        let start = clock.get();
+        let unsaved = finish_pending_writes(
+            &mut cache,
+            &mut worker,
+            || clock.get(),
+            |pause| clock.set(clock.get() + pause),
+        );
+        assert_eq!(clock.get(), start, "no pause was needed");
+        assert!(unsaved.pending.is_empty());
+        assert_eq!(
+            unsaved.failed,
+            ["Could not save metadata for pw-loupe-batch-b.ARW: the file is read-only"]
+        );
     }
 
     #[test]

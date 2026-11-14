@@ -1,4 +1,4 @@
-# T126. ADR 0017 U12c: Apply to all marked — Open
+# T126. ADR 0017 U12c: Apply to all marked — Done
 
 - **Can start now.** The owner approved the proposals of U12c-Q1–U12c-Q7 (at the end of this
   task) on 2026-11-14; they are written into the points below and into ADR 0017 §6.1. Not at the
@@ -109,3 +109,6 @@
 |---|---|---|
 | 2026-11-14 | Blocked | Written by the reviewer (ADR 0017 U12c, after T125); waits for U12c-Q1–U12c-Q7 |
 | 2026-11-14 | Open | Owner: U12c-Q1–U12c-Q7 approved as proposed; written into ADR 0017 §6.1 |
+| 2026-11-14 | Ready for review | Agent: points 1–8 done in `editor.rs`, `metadata.rs`, `main.rs`, `lib.rs`; 18 tests added; glossary and test inventory updated; `.\tools\check.ps1` run |
+| 2026-11-14 | Ready for review | Reviewer: code accepted with two fixes, approved by the owner: the button was enabled after Previous / Next to an unmarked image (that image was written with the marking) and when the other images had nothing to get (only an emptied copyright field or a chosen conflict value: each other image got a write without edits). New `apply_allowed` in `main.rs` (window image marked, no field error, `batch_edits().others` not empty) with its test. The reviewer's `check.ps1`: fmt, test and clippy OK, 1278 passed, 0 failed, 43 ignored |
+| 2026-11-14 | Done | Owner: hand check done and approved (also the two fixes, and the Copyrighted check box going to every image); committed by the reviewer |

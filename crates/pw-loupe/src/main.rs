@@ -26,17 +26,17 @@ use pw_loupe::{
     MonitorProfile, Navigation, Options, PanelText, READING_RATINGS_TEXT, RatingButton,
     RatingRefused, STAR_CONDITIONS, STAR_FILTERS, Settings, StarFilter, SubmitError, Tab,
     TabAction, Tabs, ThumbGrid, UNSUPPORTED_TEXT, ViewMode, WINDOW_TITLE, allowed_modes,
-    clamp_thumbnail_size, clear_and_import_text, clear_cancel_text, clear_confirmation_text,
-    clear_confirmation_title, color_image, columns, dialog_key_action, done_lines,
-    editor_key_action, editor_rating_key, editor_text, ejecting_progress_text, error_text,
-    grid_key_action, indicator_text, info_panel, iptc_progress_text, key_action, label_choice_text,
-    label_filter_text, label_name, list_folder, load_monitor_profile, load_settings,
-    loupe_key_action, marked_text, metadata_neighbour, mode_label, mode_text, more_lines,
-    no_match_text, notice_text, opens_import, other_values, panel_text, parse_args, position_text,
-    preview_line, preview_summary, primary_monitor_profile_path, progress_text, property_label,
-    rating_key_action, request_cell, save_settings, settings_path, star_condition_text,
-    star_filter_text, star_glyphs, status_line, step_allowed, step_thumbnail_size, tab_action,
-    take_wheel_steps, visible_range, wheel_factor, window_title,
+    apply_confirmation, clamp_thumbnail_size, clear_and_import_text, clear_cancel_text,
+    clear_confirmation_text, clear_confirmation_title, color_image, columns, dialog_key_action,
+    done_lines, editor_key_action, editor_rating_key, editor_text, ejecting_progress_text,
+    error_text, grid_key_action, indicator_text, info_panel, iptc_progress_text, key_action,
+    label_choice_text, label_filter_text, label_name, list_folder, load_monitor_profile,
+    load_settings, loupe_key_action, marked_text, metadata_neighbour, mode_label, mode_text,
+    more_lines, no_match_text, notice_text, opens_import, other_values, panel_text, parse_args,
+    position_text, preview_line, preview_summary, primary_monitor_profile_path, progress_text,
+    property_label, rating_key_action, request_cell, save_settings, settings_path,
+    star_condition_text, star_filter_text, star_glyphs, status_line, step_allowed,
+    step_thumbnail_size, tab_action, take_wheel_steps, visible_range, wheel_factor, window_title,
 };
 use pw_loupe::{
     COLLAPSED_WIDTH, ColumnState, Command, MENUS, MenuEntry, MenuItem, RatingKey, STATUS_TEXT_SIZE,
@@ -57,7 +57,7 @@ use pw_loupe::{
     ImportText, failed_cell_text, hidden_done_text, hidden_progress_text, import_text,
     no_preview_text,
 };
-use pw_metadata::edit::EditOptions;
+use pw_metadata::edit::{Edit, EditOptions};
 use pw_metadata::iim::Fallback;
 use pw_metadata::journal::Journal;
 use pw_metadata::read::MetadataRead;
@@ -105,19 +105,94 @@ const WINDOW_POLL_INTERVAL: Duration = Duration::from_millis(100);
 /// system has not yet reported the window out of the preview's full screen (T111).
 const WINDOW_SETTLE_FRAMES: u32 = 30;
 
-/// The image the metadata window opens for (ADR 0007 I10n, D16, T107): the active tab's current
-/// image when it is shown, as the metadata cache keys it (`cwd` resolves a relative path); in the
-/// contact sheet only when at most one image is marked.
+/// The image the metadata window opens for (ADR 0007 I10n, D16, T107), as the metadata cache keys
+/// it (`cwd` resolves a relative path): the active tab's current image when it is shown. With two
+/// or more images marked, in the contact sheet or the preview (ADR 0017 U12c-Q1, T126), the
+/// current image when it is marked, else the first marked image in the shown order.
 fn metadata_subject(tab: Option<&Tab>, cwd: Option<&Path>) -> Option<PathBuf> {
     let tab = tab?;
-    if tab.mode == ViewMode::Grid && tab.selection.marked_in(&tab.visible).len() > 1 {
-        return None;
-    }
-    let path = tab.position().and_then(|_| tab.files.get(tab.current))?;
+    let marked = tab.selection.marked_in(&tab.visible);
+    let index = if marked.len() > 1 && !marked.contains(&tab.current) {
+        *marked.first()?
+    } else {
+        tab.position().map(|_| tab.current)?
+    };
+    let path = tab.files.get(index)?;
     Some(match cwd {
         Some(cwd) => resolve_path(cwd, path),
         None => path.clone(),
     })
+}
+
+/// The marked images of the active tab in the shown order, as the metadata cache keys them, when
+/// two or more are marked (ADR 0017 U12c-Q1, T126); empty otherwise. Kinds without metadata
+/// support are included: "Apply to All Marked" names them as skipped.
+fn marked_subjects(tab: Option<&Tab>, cwd: Option<&Path>) -> Vec<PathBuf> {
+    let Some(tab) = tab else {
+        return Vec::new();
+    };
+    let marked = tab.selection.marked_in(&tab.visible);
+    if marked.len() < 2 {
+        return Vec::new();
+    }
+    marked
+        .iter()
+        .filter_map(|&index| tab.files.get(index))
+        .map(|path| match cwd {
+            Some(cwd) => resolve_path(cwd, path),
+            None => path.clone(),
+        })
+        .collect()
+}
+
+/// Whether "Apply to {n} Marked" can be used for the form of the window on `path` (U12c-Q2,
+/// T126, review): two or more images marked, the window's image one of them (Previous / Next can
+/// move the window to an image that is not marked), no field error, and something to write to
+/// the other images (not only a chosen conflict value or an emptied copyright field, which stay
+/// on the window's image; the other images would otherwise get a write without edits).
+fn apply_allowed(form: &EditorForm, path: &Path, marked: &[PathBuf]) -> bool {
+    marked.len() > 1
+        && marked.iter().any(|image| image.as_path() == path)
+        && form
+            .batch_edits()
+            .is_ok_and(|batch| !batch.others.is_empty())
+}
+
+/// "Apply to All Marked" as the confirmation asked it (U12c-Q3, U12c-Q4, T126): the edits of the
+/// window's image, the other marked images with metadata support and their edits, and the lines
+/// of the question.
+struct ApplyPlan {
+    this_image: Vec<Edit>,
+    others: Vec<(PathBuf, Vec<Edit>)>,
+    lines: Vec<String>,
+}
+
+impl ApplyPlan {
+    /// The plan for the form of the window on `path` with `marked` (the marked images, shown
+    /// order); every other marked image with metadata support gets the changed fields, the kinds
+    /// without support are counted as skipped. The field errors when a field has one.
+    fn new(
+        form: &EditorForm,
+        path: &Path,
+        marked: &[PathBuf],
+    ) -> Result<ApplyPlan, Vec<(EditorField, String)>> {
+        let batch = form.batch_edits()?;
+        let others: Vec<(PathBuf, Vec<Edit>)> = marked
+            .iter()
+            .filter(|other| other.as_path() != path && supports_rating(other))
+            .map(|other| (other.clone(), batch.others.clone()))
+            .collect();
+        let skipped = marked
+            .iter()
+            .filter(|other| !supports_rating(other))
+            .count();
+        let lines = apply_confirmation(&batch, others.len() + 1, skipped);
+        Ok(ApplyPlan {
+            this_image: batch.this_image,
+            others,
+            lines,
+        })
+    }
 }
 
 /// The inspector's image (ADR 0017 §2.1, §2.2, T110): the active tab's current image when it is
@@ -155,6 +230,9 @@ enum EditorStatus {
     Idle,
     /// "Sparat." and the notice texts of the write.
     Saved(Vec<String>),
+    /// The summary of "Apply to All Marked" (U12c-Q6, T126), each line as `BatchSummary::lines`
+    /// gives it, and a failed read after the batch.
+    Batch(Vec<String>),
     /// A failed write, or a failed read after a write; the whole text.
     Failed(String),
 }
@@ -300,10 +378,16 @@ struct MetadataWindow {
     /// A rating or label was chosen in the window on this image (T124): the tab is refiltered
     /// when the window moves or closes (`window_refilter`).
     rated: bool,
+    /// The marked images of the active tab when the window opened, two or more, in the shown
+    /// order (U12c-Q1, T126); empty with one or none. The marking does not change while the
+    /// window is open, so this is kept when it moves.
+    marked: Vec<PathBuf>,
+    /// The confirmation of "Apply to All Marked" is shown with this plan (U12c-Q4, T126).
+    apply_question: Option<ApplyPlan>,
 }
 
 impl MetadataWindow {
-    fn new(path: PathBuf) -> Self {
+    fn new(path: PathBuf, marked: Vec<PathBuf>) -> Self {
         let file = path.file_name().map_or_else(
             || path.display().to_string(),
             |name| name.to_string_lossy().into_owned(),
@@ -319,6 +403,8 @@ impl MetadataWindow {
             escape: false,
             expect_reload: false,
             rated: false,
+            marked,
+            apply_question: None,
         }
     }
 
@@ -381,11 +467,23 @@ impl MetadataWindow {
                 self.expect_reload = false;
                 match result {
                     Ok(read) => self.fill(read),
-                    Err(error) => {
-                        self.status =
-                            EditorStatus::Failed(panel_text(&PanelText::ReadError(error)));
-                    }
+                    // After a batch the summary stays, with the read's error under it.
+                    Err(error) => match &mut self.status {
+                        EditorStatus::Batch(lines) => {
+                            lines.push(panel_text(&PanelText::ReadError(error)));
+                        }
+                        _ => {
+                            self.status =
+                                EditorStatus::Failed(panel_text(&PanelText::ReadError(error)));
+                        }
+                    },
                 }
+            }
+            // Every write of "Apply to All Marked" answered (U12c-Q6, T126): the summary is
+            // shown and the read of the window's image after it refills the form.
+            EditorEvent::BatchDone(summary) => {
+                self.status = EditorStatus::Batch(summary.lines());
+                self.expect_reload = true;
             }
             EditorEvent::Saved { .. }
             | EditorEvent::Failed { .. }
@@ -1778,8 +1876,9 @@ impl Loupe {
     }
 
     /// Opens the metadata window for the current image (ADR 0007 I10n, D16, T107) and asks for
-    /// its metadata at once. Nothing happens with several images marked in the contact sheet, no
-    /// image shown, a kind without metadata support, or a window already open.
+    /// its metadata at once; with two or more images marked on the current image if it is marked,
+    /// else on the first marked one (U12c-Q1, T126). Nothing happens with no image shown, a kind
+    /// without metadata support, or a window already open.
     fn open_metadata_window(&mut self) {
         // Not while the settings window is open: the window's read must use the saved settings.
         if self.metadata_window.is_some() || self.settings_window.is_some() {
@@ -1789,8 +1888,9 @@ impl Loupe {
         let Some(path) = metadata_subject(self.tabs.active(), cwd.as_deref()) else {
             return;
         };
+        let marked = marked_subjects(self.tabs.active(), cwd.as_deref());
         if self.metadata.open_window(&path, &mut self.metadata_worker) {
-            self.metadata_window = Some(MetadataWindow::new(path));
+            self.metadata_window = Some(MetadataWindow::new(path, marked));
         }
     }
 
@@ -1846,8 +1946,9 @@ impl Loupe {
                 {
                     let refilter = window_refilter(window.rated, Some(leave), Some(index));
                     // The window stays open at its place and size (its id does not change); the
-                    // form is emptied while the new image's read runs.
-                    self.metadata_window = Some(MetadataWindow::new(path));
+                    // form is emptied while the new image's read runs. The marking is kept.
+                    let marked = std::mem::take(&mut window.marked);
+                    self.metadata_window = Some(MetadataWindow::new(path, marked));
                     self.current_follows_window(index, refilter);
                 } else {
                     // Nowhere to go (the shown images changed meanwhile). After a write that
@@ -1973,7 +2074,9 @@ impl Loupe {
                 return;
             }
         }
-        let saving = self.metadata.editor_saving();
+        // The batch of "Apply to All Marked" locks the window as its own write does (U12c-Q5).
+        let batch_progress = self.metadata.batch_progress();
+        let saving = self.metadata.editor_saving() || batch_progress.is_some();
         let locked = saving || self.metadata.editor_reloading();
         if let Some(result) = read {
             window.read_arrived(result, locked);
@@ -2014,8 +2117,26 @@ impl Loupe {
             (keys, rating_keys)
         });
         let escape = std::mem::take(&mut window.escape);
-        let asking = window.question.is_some();
+        let asking_save = window.question.is_some();
+        // The confirmation of "Apply to All Marked" (U12c-Q4, T126) is asked as the save question.
+        let apply_lines = window
+            .apply_question
+            .as_ref()
+            .map(|plan| plan.lines.clone());
+        let asking = asking_save || apply_lines.is_some();
         let has_form = matches!(window.body, WindowBody::Form(_));
+        // "Apply to {n} Marked" with two or more marked, enabled when `apply_allowed` (the
+        // window's image is marked, no field errors, something to write to the other images), no
+        // write runs and no question is asked (U12c-Q2).
+        let marked_count = window.marked.len();
+        let can_apply = !locked
+            && !asking
+            && match &window.body {
+                WindowBody::Form(state) => apply_allowed(&state.form, &window.path, &window.marked),
+                WindowBody::Loading | WindowBody::ReadError(_) => false,
+            };
+        let mut apply = false;
+        let mut apply_answer = None;
         // No move while the read or a write runs, nor at the first or last supported image.
         let busy = locked || waiting;
         let can_previous = !busy && self.window_neighbour(&window.path, false).is_some();
@@ -2092,7 +2213,9 @@ impl Loupe {
                 .frame(egui::Frame::NONE)
                 .show(ui, |ui| {
                     ui.add_space(WINDOW_BUTTON_SPACING);
-                    if saving {
+                    if let Some((current, total)) = batch_progress {
+                        ui.label(editor_text(&EditorText::Writing { current, total }));
+                    } else if saving {
                         ui.label(editor_text(&EditorText::Saving));
                     } else {
                         match &window.status {
@@ -2103,12 +2226,32 @@ impl Loupe {
                                     ui.label(notice);
                                 }
                             }
+                            EditorStatus::Batch(lines) => {
+                                for line in lines {
+                                    ui.label(line);
+                                }
+                            }
                             EditorStatus::Failed(message) => {
                                 ui.label(egui::RichText::new(message).color(error_color));
                             }
                         }
                     }
-                    if asking {
+                    if let Some(lines) = &apply_lines {
+                        ui.label(
+                            egui::RichText::new(editor_text(&EditorText::ApplyTitle)).strong(),
+                        );
+                        for line in lines {
+                            ui.label(line);
+                        }
+                        ui.horizontal_wrapped(|ui| {
+                            if ui.button(editor_text(&EditorText::Write)).clicked() {
+                                apply_answer = Some(true);
+                            }
+                            if ui.button(editor_text(&EditorText::Cancel)).clicked() {
+                                apply_answer = Some(false);
+                            }
+                        });
+                    } else if asking_save {
                         ui.label(editor_text(&EditorText::SaveQuestion));
                         ui.horizontal_wrapped(|ui| {
                             if ui.button(editor_text(&EditorText::Save)).clicked() {
@@ -2157,6 +2300,18 @@ impl Loupe {
                                     egui::Button::new(editor_text(&EditorText::SaveAndNext)),
                                 )
                                 .clicked();
+                            if marked_count > 1 {
+                                apply |= ui
+                                    .add_enabled(
+                                        can_apply,
+                                        egui::Button::new(editor_text(
+                                            &EditorText::ApplyToMarked {
+                                                images: marked_count,
+                                            },
+                                        )),
+                                    )
+                                    .clicked();
+                            }
                             // Until the read is back, or when it failed, no "OK".
                             if has_form {
                                 ok = ui
@@ -2179,6 +2334,12 @@ impl Loupe {
             egui::CentralPanel::default()
                 .frame(egui::Frame::NONE)
                 .show(ui, |ui| {
+                    // Under the title: how many images are marked (U12c-Q1).
+                    if marked_count > 1 {
+                        ui.label(editor_text(&EditorText::MarkedImages {
+                            images: marked_count,
+                        }));
+                    }
                     egui::ScrollArea::vertical()
                         .id_salt("metadata-window-scroll")
                         .auto_shrink([false, false])
@@ -2253,8 +2414,48 @@ impl Loupe {
             window.status = EditorStatus::Idle;
         }
         // Escape while asking is the question's "Avbryt" (back to the window).
-        if escape && asking && answer.is_none() {
+        if escape && asking_save && answer.is_none() {
             answer = Some(SaveAnswer::Cancel);
+        }
+        // The answer to the confirmation of "Apply to All Marked" (U12c-Q4, U12c-Q5, T126):
+        // "Write" starts the batch, "Cancel" and Escape go back with the edits kept.
+        if apply_lines.is_some() {
+            if escape && apply_answer.is_none() {
+                apply_answer = Some(false);
+            }
+            match apply_answer {
+                Some(true) => {
+                    if let Some(plan) = window.apply_question.take() {
+                        window.errors.clear();
+                        window.status = EditorStatus::Idle;
+                        self.metadata.start_batch(
+                            &window.path,
+                            plan.this_image,
+                            plan.others,
+                            &mut self.metadata_worker,
+                        );
+                        ctx.request_repaint();
+                    }
+                }
+                Some(false) => window.apply_question = None,
+                None => {}
+            }
+            self.metadata_window = Some(window);
+            return;
+        }
+        // "Apply to {n} Marked": the confirmation is asked before anything is written; a field
+        // error is shown under its field instead.
+        if apply && let WindowBody::Form(state) = &window.body {
+            match ApplyPlan::new(&state.form, &window.path, &window.marked) {
+                Ok(plan) => {
+                    window.status = EditorStatus::Idle;
+                    window.apply_question = Some(plan);
+                }
+                Err(errors) => window.errors = errors,
+            }
+            ctx.request_repaint();
+            self.metadata_window = Some(window);
+            return;
         }
         // The answer to "Spara ändringarna?" (U12-Q4).
         if let (Some(answer), Some(leave)) = (answer, window.question) {
@@ -3496,8 +3697,8 @@ impl Loupe {
             }
 
             // M opens the metadata window of the current image in the loupe and the contact sheet
-            // (D16); with several images marked, or a kind without metadata support, nothing
-            // happens.
+            // (D16); with several images marked on the current or the first marked image (U12c-Q1,
+            // T126); with a kind without metadata support nothing happens.
             if !ctx.egui_wants_keyboard_input()
                 && key_action(key, ctrl, alt) == Some(Action::OpenMetadata)
             {
@@ -4873,6 +5074,7 @@ fn main() -> ExitCode {
 
 #[cfg(test)]
 mod tests {
+    use super::{ApplyPlan, apply_allowed, marked_subjects, metadata_subject};
     use super::{
         FALLBACK_CHOICES, LABEL_TEXT, fallback_text, index_span, label_color, label_pill,
         other_values, resolve_path, resolve_paths, window_editor_properties,
@@ -4880,9 +5082,216 @@ mod tests {
     use super::{LeaveDecision, SaveAnswer, WriteOutcome, leave_decision};
     use super::{WindowLeave, WindowRefilter, window_refilter};
     use egui::{Color32, Rect, pos2};
+    use pw_loupe::{EditorField, EditorForm, Tab, ViewMode};
     use pw_loupe::{TEXT_CONTRAST, contrast_ratio};
     use pw_metadata::iim::Fallback;
     use std::path::{Path, PathBuf};
+
+    // --- `M` and "Apply to All Marked" with several images marked (ADR 0017 U12c, T126) ---
+
+    /// A tab of six files shown in reverse order (5, 4, … 0), `current` the current one and
+    /// `marked` Ctrl+clicked in that order.
+    fn tab_with(mode: ViewMode, current: usize, marked: &[usize]) -> Tab {
+        let mut tab = Tab {
+            files: (0..6)
+                .map(|n| PathBuf::from(format!("img{n}.jpg")))
+                .collect(),
+            current,
+            mode,
+            visible: (0..6).rev().collect(),
+            ..Tab::default()
+        };
+        for &index in marked {
+            tab.selection.ctrl_click(index, index);
+        }
+        tab
+    }
+
+    #[test]
+    fn with_several_marked_m_opens_on_the_current_image_if_marked_else_the_first_marked_shown() {
+        for mode in [ViewMode::Grid, ViewMode::Loupe] {
+            // The current image is marked: it is the window's image.
+            let tab = tab_with(mode, 3, &[1, 3, 4]);
+            assert_eq!(tab.selection.count(), 3);
+            assert_eq!(
+                metadata_subject(Some(&tab), None),
+                Some(PathBuf::from("img3.jpg")),
+                "{mode:?}"
+            );
+            // It is not: the first marked image in the shown order (4, not 1).
+            let tab = tab_with(mode, 0, &[1, 3, 4]);
+            assert_eq!(
+                metadata_subject(Some(&tab), None),
+                Some(PathBuf::from("img4.jpg")),
+                "{mode:?}"
+            );
+            // The marked images in the shown order.
+            assert_eq!(
+                marked_subjects(Some(&tab), None),
+                [
+                    PathBuf::from("img4.jpg"),
+                    PathBuf::from("img3.jpg"),
+                    PathBuf::from("img1.jpg")
+                ],
+                "{mode:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn with_one_marked_or_none_m_opens_on_the_current_image_as_before() {
+        for mode in [ViewMode::Grid, ViewMode::Loupe] {
+            let one = tab_with(mode, 2, &[4]);
+            assert_eq!(one.selection.count(), 1);
+            assert_eq!(
+                metadata_subject(Some(&one), None),
+                Some(PathBuf::from("img2.jpg")),
+                "{mode:?}"
+            );
+            assert!(marked_subjects(Some(&one), None).is_empty());
+            let none = tab_with(mode, 5, &[]);
+            assert_eq!(
+                metadata_subject(Some(&none), None),
+                Some(PathBuf::from("img5.jpg")),
+                "{mode:?}"
+            );
+            assert!(marked_subjects(Some(&none), None).is_empty());
+            // A current image that is not shown opens nothing.
+            let mut hidden = tab_with(mode, 5, &[]);
+            hidden.visible.retain(|&index| index != 5);
+            assert_eq!(metadata_subject(Some(&hidden), None), None, "{mode:?}");
+        }
+        assert_eq!(metadata_subject(None, None), None);
+        assert!(marked_subjects(None, None).is_empty());
+    }
+
+    #[test]
+    fn the_apply_plan_writes_the_other_supported_marked_images_and_counts_the_skipped() {
+        let read = pw_metadata::read::MetadataRead {
+            reconciled: pw_metadata::reconcile::Reconciled {
+                metadata: pw_metadata::value::Metadata::new(),
+                notices: Vec::new(),
+                suggested_date_created: None,
+            },
+            file_notices: Vec::new(),
+            state: pw_metadata::write_plan::FileState {
+                kind: pw_metadata::reconcile::FileKind::Jpeg,
+                iim_present: false,
+                iim_charset: pw_metadata::iim::CodedCharset::Absent,
+                iim_values: Vec::new(),
+                digest: pw_metadata::reconcile::IimDigest::Missing,
+                exif_present: pw_metadata::write_plan::ExifPresent::default(),
+            },
+        };
+        let mut form = EditorForm::from_read(&read);
+        match form.text_mut(EditorField::Headline) {
+            Some(text) => *text = "Hav".to_owned(),
+            None => panic!("the form has a headline field"),
+        }
+        let marked = [
+            PathBuf::from("a.jpg"),
+            PathBuf::from("b.png"),
+            PathBuf::from("c.ARW"),
+            PathBuf::from("d.DNG"),
+        ];
+
+        let plan = match ApplyPlan::new(&form, Path::new("a.jpg"), &marked) {
+            Ok(plan) => plan,
+            Err(errors) => panic!("no field error expected: {errors:?}"),
+        };
+
+        let others: Vec<&PathBuf> = plan.others.iter().map(|(path, _)| path).collect();
+        assert_eq!(others, [&marked[2], &marked[3]]);
+        assert!(
+            plan.others
+                .iter()
+                .all(|(_, edits)| *edits == plan.this_image)
+        );
+        assert_eq!(
+            plan.lines,
+            [
+                "Write 1 changed field to 3 images?",
+                "Changed: Headline",
+                "Skipped: 1 file",
+            ]
+        );
+
+        // A field error gives no plan.
+        match form.text_mut(EditorField::DateCreated) {
+            Some(text) => *text = "igår".to_owned(),
+            None => panic!("the form has a date field"),
+        }
+        assert!(ApplyPlan::new(&form, Path::new("a.jpg"), &marked).is_err());
+    }
+
+    /// "Apply to {n} Marked" only for a marked window image with something to write to the other
+    /// images (review of T126).
+    #[test]
+    fn apply_needs_a_marked_window_image_and_something_for_the_other_images() {
+        let mut metadata = pw_metadata::value::Metadata::new();
+        for (id, value) in [("photoshop:Headline", "Hav"), ("dc:rights", "Copyright")] {
+            let value = if id == "dc:rights" {
+                pw_metadata::value::Value::LangAlt(pw_metadata::value::LangAlt::from_entries(vec![
+                    ("x-default".to_owned(), value.to_owned()),
+                ]))
+            } else {
+                pw_metadata::value::Value::Text(value.to_owned())
+            };
+            if let Err(error) =
+                metadata.insert_read(id, value, pw_metadata::value::Origin::XmpEmbedded)
+            {
+                panic!("{id} inserted: {error:?}");
+            }
+        }
+        let read = pw_metadata::read::MetadataRead {
+            reconciled: pw_metadata::reconcile::Reconciled {
+                metadata,
+                notices: Vec::new(),
+                suggested_date_created: None,
+            },
+            file_notices: Vec::new(),
+            state: pw_metadata::write_plan::FileState {
+                kind: pw_metadata::reconcile::FileKind::Jpeg,
+                iim_present: false,
+                iim_charset: pw_metadata::iim::CodedCharset::Absent,
+                iim_values: Vec::new(),
+                digest: pw_metadata::reconcile::IimDigest::Missing,
+                exif_present: pw_metadata::write_plan::ExifPresent::default(),
+            },
+        };
+        let marked = [PathBuf::from("a.jpg"), PathBuf::from("b.jpg")];
+        let set_text =
+            |form: &mut EditorForm, field: EditorField, text: &str| match form.text_mut(field) {
+                Some(target) => *target = text.to_owned(),
+                None => panic!("{field:?} is editable"),
+            };
+
+        // Nothing changed: nothing to apply.
+        let untouched = EditorForm::from_read(&read);
+        assert!(!apply_allowed(&untouched, Path::new("a.jpg"), &marked));
+
+        // A changed field on a marked window image: allowed.
+        let mut changed = EditorForm::from_read(&read);
+        set_text(&mut changed, EditorField::Headline, "Kväll");
+        assert!(apply_allowed(&changed, Path::new("a.jpg"), &marked));
+        // The window moved to an image that is not marked: not allowed.
+        assert!(!apply_allowed(&changed, Path::new("c.jpg"), &marked));
+        // One image marked: not allowed.
+        assert!(!apply_allowed(&changed, Path::new("a.jpg"), &marked[..1]));
+
+        // Only an emptied copyright field, which stays on the window's image: nothing to write to
+        // the other images, so not allowed (no write without edits to them).
+        let mut copyright_only = EditorForm::from_read(&read);
+        set_text(&mut copyright_only, EditorField::Copyright, "");
+        assert!(copyright_only.edits().is_ok_and(|edits| !edits.is_empty()));
+        assert!(!apply_allowed(&copyright_only, Path::new("a.jpg"), &marked));
+
+        // A field error: not allowed.
+        let mut bad_date = EditorForm::from_read(&read);
+        set_text(&mut bad_date, EditorField::Headline, "Kväll");
+        set_text(&mut bad_date, EditorField::DateCreated, "igår");
+        assert!(!apply_allowed(&bad_date, Path::new("a.jpg"), &marked));
+    }
 
     // --- no user-visible string literal in the drawing code (T116, rule 13) ---
 
