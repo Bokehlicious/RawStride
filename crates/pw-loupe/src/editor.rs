@@ -35,7 +35,7 @@ use pw_metadata::properties::{self, Occurrence, ValueKind};
 use pw_metadata::read::MetadataRead;
 use pw_metadata::reconcile::FileKind;
 use pw_metadata::validate::{Warning, validate};
-use pw_metadata::value::{Conflict, ConflictRule, LangAlt, Value};
+use pw_metadata::value::{Conflict, ConflictRule, LangAlt, StructValue, Value};
 use pw_metadata::vocabulary;
 use pw_metadata::write_plan::WriteNotice;
 use pw_metadata::{MIN_EXIFTOOL_VERSION, Rating};
@@ -579,13 +579,125 @@ pub struct ChoiceEntry {
     pub tooltip: Option<String>,
 }
 
+/// Location Created (ADR 0017 U11a, T136): where the image was taken.
+const LOCATION_CREATED: &str = "Iptc4xmpExt:LocationCreated";
+/// Location Shown (ADR 0017 U11a, T136): what the image shows.
+const LOCATION_SHOWN: &str = "Iptc4xmpExt:LocationShown";
+/// The sub-field of a location that is a list of URIs, one line separated by commas (U10-Q2).
+const LOCATION_ID: &str = "Iptc4xmpExt:LocationId";
+/// The shown sub-fields of a location in the order of the form (U11a-Q2).
+const LOCATION_FIELDS: [&str; 7] = [
+    "Iptc4xmpExt:Sublocation",
+    "Iptc4xmpExt:City",
+    "Iptc4xmpExt:ProvinceState",
+    "Iptc4xmpExt:CountryName",
+    "Iptc4xmpExt:CountryCode",
+    "Iptc4xmpExt:WorldRegion",
+    LOCATION_ID,
+];
+/// The field after which the location lists are drawn and their edits made (U11a-Q2).
+const LOCATIONS_AFTER: EditorField = EditorField::CountryCode;
+
+/// One entry of a location list (U11a, T136): the texts of its seven shown sub-fields and the
+/// structure it started from, which keeps the sub-fields the form does not show (ADR 0007 §8).
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct LocationEntry {
+    /// The texts in the order of [`LOCATION_FIELDS`].
+    texts: [String; 7],
+    /// The entry as read, pasted or copied; empty for an added entry.
+    base: StructValue,
+}
+
+impl LocationEntry {
+    /// The entry of the structure `base`: each shown sub-field's text as the form shows it.
+    fn of(base: &StructValue) -> LocationEntry {
+        LocationEntry {
+            texts: LOCATION_FIELDS.map(|field| {
+                base.fields
+                    .iter()
+                    .find(|(id, _)| id == field)
+                    .map(|(_, value)| form_text(value))
+                    .unwrap_or_default()
+            }),
+            base: base.clone(),
+        }
+    }
+
+    /// The structure the entry writes: its base with each shown sub-field from its text. A text
+    /// equal to the base's keeps the base's value; an empty text removes the sub-field; Location
+    /// Identifier is split at commas. `None` when no sub-field is left (U11a-Q3).
+    fn value(&self) -> Option<StructValue> {
+        let mut fields = self.base.fields.clone();
+        for (field, text) in LOCATION_FIELDS.iter().zip(&self.texts) {
+            let position = fields.iter().position(|(id, _)| id == field);
+            let unchanged = position
+                .and_then(|index| fields.get(index))
+                .is_some_and(|(_, value)| form_text(value) == *text);
+            let value = if text.trim().is_empty() {
+                None
+            } else if *field == LOCATION_ID {
+                let entries = list_entries(text);
+                (!entries.is_empty()).then_some(Value::List(entries))
+            } else {
+                Some(Value::Text(text.clone()))
+            };
+            match (position, value) {
+                (Some(_), Some(_)) if unchanged => {}
+                (Some(index), Some(value)) => {
+                    if let Some(slot) = fields.get_mut(index) {
+                        slot.1 = value;
+                    }
+                }
+                (Some(index), None) => {
+                    fields.remove(index);
+                }
+                (None, Some(value)) => fields.push(((*field).to_string(), value)),
+                (None, None) => {}
+            }
+        }
+        (!fields.is_empty()).then_some(StructValue { fields })
+    }
+}
+
+/// The entries of a location list's value; `None` for a value that is not a structure.
+fn location_entries(value: &Value) -> Option<Vec<LocationEntry>> {
+    match value {
+        Value::StructList(list) => Some(list.iter().map(LocationEntry::of).collect()),
+        Value::Struct(fields) => Some(vec![LocationEntry::of(fields)]),
+        _ => None,
+    }
+}
+
+/// The structures `entries` write, the empty ones dropped (U11a-Q3).
+fn location_values(entries: &[LocationEntry]) -> Vec<StructValue> {
+    entries.iter().filter_map(LocationEntry::value).collect()
+}
+
+/// One location list of the form (U11a, T136).
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct LocationState {
+    /// The XMP id of the list.
+    property: &'static str,
+    /// The entries as the user has them.
+    entries: Vec<LocationEntry>,
+    /// The entries `from_read` gave.
+    original: Vec<LocationEntry>,
+    /// The text of the read value; shown when the list is read-only.
+    read_text: String,
+    /// True when the read value is not a structure, so the form cannot edit it.
+    unsupported: bool,
+}
+
 /// The fields copied by "Copy All Fields" (ADR 0017 §2.3.1, U12b-Q1, T125): the source file's
-/// name and the shown text of every editable field (the check box's `True` or empty). Kept by the
-/// program until the next copy; not saved and not on the Windows clipboard.
+/// name and the shown text of every editable field (the check box's `True` or empty), and the
+/// entries of each location list that is not read-only (U11a-Q5, T136). Kept by the program until
+/// the next copy; not saved and not on the Windows clipboard.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CopiedFields {
     file: String,
     texts: Vec<(EditorField, String)>,
+    /// Each location list with the structures it writes (the empty entries dropped).
+    locations: Vec<(&'static str, Vec<StructValue>)>,
 }
 
 impl CopiedFields {
@@ -602,12 +714,18 @@ impl CopiedFields {
             .map(|(_, text)| text.as_str())
     }
 
-    /// How many copied fields are not empty: the fields a paste puts in (U12b-Q2).
+    /// How many copied fields are not empty: the fields a paste puts in (U12b-Q2), each location
+    /// list with an entry counted as one field (U11a-Q5).
     pub fn count(&self) -> usize {
         self.texts
             .iter()
             .filter(|(_, text)| !text.is_empty())
             .count()
+            + self
+                .locations
+                .iter()
+                .filter(|(_, entries)| !entries.is_empty())
+                .count()
     }
 }
 
@@ -630,29 +748,57 @@ pub struct BatchEdits {
 }
 
 impl BatchEdits {
-    /// How many fields were changed: given a value, emptied, or emptied on this image only.
+    /// How many fields were changed: given a value, emptied, or emptied on this image only; each
+    /// changed location list counts as one field (U11a-Q5).
     pub fn field_count(&self) -> usize {
-        self.changed.len() + self.emptied.len() + self.emptied_here_only.len()
+        let (changed_lists, emptied_lists) = self.location_lists();
+        self.changed.len()
+            + self.emptied.len()
+            + self.emptied_here_only.len()
+            + changed_lists.len()
+            + emptied_lists.len()
+    }
+
+    /// The location lists the other images get (U11a-Q5, T136): those given entries and those
+    /// emptied, each from its edit in `others` (a location list is never a copyright-management
+    /// field, so every changed list is written to every image).
+    fn location_lists(&self) -> (Vec<&'static str>, Vec<&'static str>) {
+        let mut changed = Vec::new();
+        let mut emptied = Vec::new();
+        for list in EditorForm::LOCATION_LISTS {
+            for edit in &self.others {
+                match edit {
+                    Edit::Set { property, .. } if property == list => changed.push(list),
+                    Edit::Clear { property, .. } if property == list => emptied.push(list),
+                    _ => {}
+                }
+            }
+        }
+        (changed, emptied)
     }
 }
 
 /// The lines of the confirmation of "Apply to All Marked" (U12c-Q4, T126): the question for
-/// `images` images, then the changed, emptied and copyright-only fields by name and the `skipped`
-/// marked files without metadata support, each line only when it has something to name.
+/// `images` images, then the changed, emptied and copyright-only fields by name (the location
+/// lists among them, U11a-Q5) and the `skipped` marked files without metadata support, each line
+/// only when it has something to name.
 pub fn apply_confirmation(batch: &BatchEdits, images: usize, skipped: usize) -> Vec<String> {
     let mut lines = vec![editor_text(&EditorText::ApplyQuestion {
         fields: batch.field_count(),
         images,
     })];
-    if !batch.changed.is_empty() {
-        lines.push(editor_text(&EditorText::ChangedFields(
-            batch.changed.clone(),
-        )));
+    let (changed_lists, emptied_lists) = batch.location_lists();
+    if !batch.changed.is_empty() || !changed_lists.is_empty() {
+        lines.push(editor_text(&EditorText::Changed {
+            fields: batch.changed.clone(),
+            lists: changed_lists,
+        }));
     }
-    if !batch.emptied.is_empty() {
-        lines.push(editor_text(&EditorText::EmptiedFields(
-            batch.emptied.clone(),
-        )));
+    if !batch.emptied.is_empty() || !emptied_lists.is_empty() {
+        lines.push(editor_text(&EditorText::Emptied {
+            fields: batch.emptied.clone(),
+            lists: emptied_lists,
+        }));
     }
     if !batch.emptied_here_only.is_empty() {
         lines.push(editor_text(&EditorText::EmptiedHereOnly(
@@ -673,9 +819,23 @@ pub struct EditorForm {
     conflicts: Vec<Conflict>,
     /// The chosen value of each conflict.
     chosen: Vec<Option<usize>>,
+    /// Location Created and Location Shown (U11a, T136), in that order.
+    locations: Vec<LocationState>,
 }
 
 impl EditorForm {
+    /// The XMP id of Location Created (ADR 0017 U11a, T136).
+    pub const LOCATION_CREATED: &'static str = LOCATION_CREATED;
+    /// The XMP id of Location Shown (ADR 0017 U11a, T136).
+    pub const LOCATION_SHOWN: &'static str = LOCATION_SHOWN;
+    /// The location lists in the order of the form, drawn in Time and Place after Country Code
+    /// (U11a-Q2).
+    pub const LOCATION_LISTS: [&'static str; 2] = [LOCATION_CREATED, LOCATION_SHOWN];
+    /// The XMP ids of a location entry's seven shown sub-fields in the order of the form
+    /// (U11a-Q2); their names come from `property_label`. Location Identifier is one line with
+    /// its URIs separated by commas.
+    pub const LOCATION_FIELDS: [&'static str; 7] = LOCATION_FIELDS;
+
     /// The form of `read`: one text per field, and the file's `Open` conflicts, none chosen.
     pub fn from_read(read: &MetadataRead) -> EditorForm {
         let metadata = &read.reconciled.metadata;
@@ -703,11 +863,175 @@ impl EditorForm {
             .cloned()
             .collect();
         let chosen = vec![None; conflicts.len()];
+        let locations = Self::LOCATION_LISTS
+            .iter()
+            .map(|&property| {
+                let value = metadata.get(property).map(|stored| &stored.value);
+                let entries = value.map_or(Some(Vec::new()), location_entries);
+                LocationState {
+                    property,
+                    entries: entries.clone().unwrap_or_default(),
+                    original: entries.clone().unwrap_or_default(),
+                    read_text: value.map(value_text).unwrap_or_default(),
+                    unsupported: entries.is_none(),
+                }
+            })
+            .collect();
         EditorForm {
             fields,
             conflicts,
             chosen,
+            locations,
         }
+    }
+
+    fn location(&self, list: &str) -> Option<&LocationState> {
+        self.locations.iter().find(|state| state.property == list)
+    }
+
+    /// The location list `list` when it can be edited: not a value the form cannot show and no
+    /// open conflict that is not decided yet.
+    fn location_editable(&mut self, list: &str) -> Option<&mut LocationState> {
+        if self.location_read_only(list).is_some() {
+            return None;
+        }
+        self.locations
+            .iter_mut()
+            .find(|state| state.property == list)
+    }
+
+    /// The text of the location list `list` (an XMP id of [`EditorForm::LOCATION_LISTS`]) when it
+    /// is shown read-only (U11a, point 6 of T136): while an open conflict on it is not decided,
+    /// or when its value is not a structure. `None` when its entries can be edited.
+    pub fn location_read_only(&self, list: &str) -> Option<&str> {
+        let state = self.location(list)?;
+        let undecided = self
+            .conflicts
+            .iter()
+            .zip(&self.chosen)
+            .any(|(conflict, chosen)| conflict.property == list && chosen.is_none());
+        (state.unsupported || undecided).then_some(state.read_text.as_str())
+    }
+
+    /// How many entries the location list `list` has, the empty ones included.
+    pub fn location_count(&self, list: &str) -> usize {
+        self.location(list).map_or(0, |state| state.entries.len())
+    }
+
+    /// The text of the sub-field `field` (of [`EditorForm::LOCATION_FIELDS`]) of entry `entry` of
+    /// the location list `list`; empty when there is no such entry or field.
+    pub fn location_text(&self, list: &str, entry: usize, field: &str) -> &str {
+        let index = LOCATION_FIELDS.iter().position(|id| *id == field);
+        self.location(list)
+            .and_then(|state| state.entries.get(entry))
+            .zip(index)
+            .and_then(|(entry, index)| entry.texts.get(index))
+            .map_or("", String::as_str)
+    }
+
+    /// The text of a location sub-field, to be edited; `None` when there is no such entry or
+    /// field, or the list is read-only.
+    pub fn location_text_mut(
+        &mut self,
+        list: &str,
+        entry: usize,
+        field: &str,
+    ) -> Option<&mut String> {
+        let index = LOCATION_FIELDS.iter().position(|id| *id == field)?;
+        self.location_editable(list)?
+            .entries
+            .get_mut(entry)?
+            .texts
+            .get_mut(index)
+    }
+
+    /// "Add Location" (U11a-Q2): a new empty entry at the end of the list; nothing when the list
+    /// is read-only. An entry left empty is not written (U11a-Q3).
+    pub fn add_location(&mut self, list: &str) {
+        if let Some(state) = self.location_editable(list) {
+            state
+                .entries
+                .push(LocationEntry::of(&StructValue::default()));
+        }
+    }
+
+    /// "Remove" (U11a-Q2): removes entry `entry`; the others keep their order. Nothing when the
+    /// list is read-only or has no such entry.
+    pub fn remove_location(&mut self, list: &str, entry: usize) {
+        if let Some(state) = self.location_editable(list)
+            && entry < state.entries.len()
+        {
+            state.entries.remove(entry);
+        }
+    }
+
+    /// The first entry of Location Created that writes something, as it would be written.
+    fn first_location_created(&self) -> Option<StructValue> {
+        self.location(LOCATION_CREATED)?
+            .entries
+            .iter()
+            .find_map(LocationEntry::value)
+    }
+
+    /// Whether "Copy from Location Created" can be used (U11a-Q4): Location Created has an entry
+    /// that is not empty and Location Shown is not read-only.
+    pub fn can_copy_location_created(&self) -> bool {
+        self.location_read_only(LOCATION_SHOWN).is_none() && self.first_location_created().is_some()
+    }
+
+    /// "Copy from Location Created" (U11a-Q4): adds one new Location Shown entry with the fields
+    /// of the first Location Created entry that is not empty; no existing entry changes. Nothing
+    /// when [`EditorForm::can_copy_location_created`] is false.
+    pub fn copy_location_created(&mut self) {
+        let Some(first) = self.first_location_created() else {
+            return;
+        };
+        if let Some(state) = self.location_editable(LOCATION_SHOWN) {
+            state.entries.push(LocationEntry::of(&first));
+        }
+    }
+
+    /// The entries a location list is compared with: the chosen conflict value's, else those the
+    /// read gave.
+    fn location_start(&self, state: &LocationState) -> Vec<StructValue> {
+        match self.chosen_value(state.property).and_then(location_entries) {
+            Some(entries) => location_values(&entries),
+            None => location_values(&state.original),
+        }
+    }
+
+    /// The edit of a location list (U11a-Q3, point 6 of T136): `None` when it is read-only or
+    /// writes the same structures as at the start; a `Clear` when no entry writes anything; else
+    /// a `Set` of the whole list.
+    fn location_edit(&self, state: &LocationState) -> Option<Edit> {
+        if self.location_read_only(state.property).is_some() {
+            return None;
+        }
+        let values = location_values(&state.entries);
+        if values == self.location_start(state) {
+            return None;
+        }
+        let property = state.property.to_string();
+        Some(if values.is_empty() {
+            Edit::Clear {
+                property,
+                field: None,
+            }
+        } else {
+            Edit::Set {
+                property,
+                field: None,
+                value: Value::StructList(values),
+            }
+        })
+    }
+
+    /// The edits of the location lists, in form order.
+    fn location_edits(&self) -> Vec<Edit> {
+        self.locations
+            .iter()
+            .filter_map(|state| self.location_edit(state))
+            .collect()
     }
 
     fn state(&self, field: EditorField) -> Option<&FieldState> {
@@ -833,9 +1157,16 @@ impl EditorForm {
             .filter(|state| state.field.editable() && self.read_only_text(state.field).is_none())
             .map(|state| (state.field, state.text.clone()))
             .collect();
+        let locations = self
+            .locations
+            .iter()
+            .filter(|state| self.location_read_only(state.property).is_none())
+            .map(|state| (state.property, location_values(&state.entries)))
+            .collect();
         CopiedFields {
             file: file.to_string(),
             texts,
+            locations,
         }
     }
 
@@ -855,6 +1186,16 @@ impl EditorForm {
                 && let Some(target) = self.text_mut(*field)
             {
                 target.clone_from(text);
+            }
+        }
+        // A copied location list with entries replaces the whole list (U11a-Q5); an empty one is
+        // not pasted (U12b-Q2), and a list shown read-only here is left as it is.
+        for (list, values) in &copied.locations {
+            if values.is_empty() {
+                continue;
+            }
+            if let Some(state) = self.location_editable(list) {
+                state.entries = values.iter().map(LocationEntry::of).collect();
             }
         }
     }
@@ -902,6 +1243,14 @@ impl EditorForm {
                 state.text = state.field.text_of(value);
             }
         }
+        // A location list gets the chosen value's entries (U11a, point 6 of T136).
+        if let Some(entries) = location_entries(value) {
+            for state in &mut self.locations {
+                if state.property == conflict.property {
+                    state.entries.clone_from(&entries);
+                }
+            }
+        }
         if let Some(chosen) = self.chosen.get_mut(conflict_index) {
             *chosen = Some(value_index);
         }
@@ -945,6 +1294,8 @@ impl EditorForm {
                 state.field.property() == conflict.property
                     && state.field.struct_field().is_none()
                     && state.text != state.field.text_of(value)
+            }) || self.locations.iter().any(|state| {
+                state.property == conflict.property && self.location_edit(state).is_some()
             });
             if !changed_after_choice {
                 edits.push(Edit::Set {
@@ -956,22 +1307,23 @@ impl EditorForm {
         }
         for state in &self.fields {
             // A read-only field never gives an edit (point 4, U10-Q3).
-            if !state.field.editable() || self.read_only_text(state.field).is_some() {
-                continue;
+            let read_only = !state.field.editable() || self.read_only_text(state.field).is_some();
+            if !read_only && state.text != self.start_text(state) {
+                match field_edit(state.field, &state.text) {
+                    Ok(edit) => edits.push(edit),
+                    Err(error) => errors.push((state.field, error)),
+                }
             }
-            if state.text == self.start_text(state) {
-                continue;
-            }
-            match field_edit(state.field, &state.text) {
-                Ok(edit) => edits.push(edit),
-                Err(error) => errors.push((state.field, error)),
+            if state.field == LOCATIONS_AFTER {
+                edits.extend(self.location_edits());
             }
         }
         (edits, errors)
     }
 
     /// The edits of the form: a `Set` or `Clear` for each changed field (in field order, after
-    /// the chosen conflict values), or every field error together.
+    /// the chosen conflict values; a changed location list after Country Code as one `Set` of the
+    /// whole list, or a `Clear` when no entry is left, U11a-Q3), or every field error together.
     pub fn edits(&self) -> Result<Vec<Edit>, Vec<(EditorField, String)>> {
         let (edits, errors) = self.collect();
         if errors.is_empty() {
@@ -995,27 +1347,42 @@ impl EditorForm {
             emptied_here_only: Vec::new(),
         };
         for state in &self.fields {
-            if !state.field.editable() || self.read_only_text(state.field).is_some() {
-                continue;
+            self.batch_field(state, &mut batch)?;
+            if state.field == LOCATIONS_AFTER {
+                // A changed location list replaces the whole list on every image, and an emptied
+                // one is emptied on every image (U11a-Q5); `apply_confirmation` names them.
+                batch.others.extend(self.location_edits());
             }
-            if state.text == self.start_text(state) {
-                continue;
-            }
-            // `edits` had no error, so neither has this field.
-            let edit = field_edit(state.field, &state.text).map_err(|e| vec![(state.field, e)])?;
-            let cleared = matches!(edit, Edit::Clear { .. });
-            if cleared && state.field.copyright_management() {
-                batch.emptied_here_only.push(state.field);
-                continue;
-            }
-            if cleared {
-                batch.emptied.push(state.field);
-            } else {
-                batch.changed.push(state.field);
-            }
-            batch.others.push(edit);
         }
         Ok(batch)
+    }
+
+    /// The part of `batch` that one field gives (see [`EditorForm::batch_edits`]).
+    fn batch_field(
+        &self,
+        state: &FieldState,
+        batch: &mut BatchEdits,
+    ) -> Result<(), Vec<(EditorField, String)>> {
+        if !state.field.editable() || self.read_only_text(state.field).is_some() {
+            return Ok(());
+        }
+        if state.text == self.start_text(state) {
+            return Ok(());
+        }
+        // `edits` had no error, so neither has this field.
+        let edit = field_edit(state.field, &state.text).map_err(|e| vec![(state.field, e)])?;
+        let cleared = matches!(edit, Edit::Clear { .. });
+        if cleared && state.field.copyright_management() {
+            batch.emptied_here_only.push(state.field);
+            return Ok(());
+        }
+        if cleared {
+            batch.emptied.push(state.field);
+        } else {
+            batch.changed.push(state.field);
+        }
+        batch.others.push(edit);
+        Ok(())
     }
 
     /// The warnings (§11) of the read metadata with the form's edits applied (a field with an
@@ -1312,6 +1679,24 @@ pub enum EditorText {
     EmptiedFields(Vec<EditorField>),
     /// The confirmation's line naming the copyright fields emptied on the window's image only.
     EmptiedHereOnly(Vec<EditorField>),
+    /// The confirmation's line naming the changed fields and location lists (XMP ids of
+    /// [`EditorForm::LOCATION_LISTS`]) given a value, in form order (U11a-Q5, T136).
+    Changed {
+        fields: Vec<EditorField>,
+        lists: Vec<&'static str>,
+    },
+    /// The confirmation's line naming the fields and location lists emptied on every image.
+    Emptied {
+        fields: Vec<EditorField>,
+        lists: Vec<&'static str>,
+    },
+    /// The button under a location list that adds an empty entry (U11a-Q2, T136).
+    AddLocation,
+    /// The button of a location entry that removes it (U11a-Q2, T136).
+    RemoveLocation,
+    /// The button under Location Shown that adds a copy of the first Location Created entry
+    /// (U11a-Q4, T136).
+    CopyFromLocationCreated,
     /// The confirmation's line counting the marked files without metadata support.
     SkippedFiles { files: usize },
     /// The confirmation's button that starts the writes.
@@ -1329,6 +1714,33 @@ fn field_names(fields: &[EditorField]) -> String {
     fields
         .iter()
         .map(|field| field.label())
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// The names of `fields` and of the location lists `lists` (XMP ids) in form order, separated by
+/// commas: the lists come after Country Code (U11a-Q2), each named by [`property_label`].
+fn item_names(fields: &[EditorField], lists: &[&'static str]) -> String {
+    if lists.is_empty() {
+        return field_names(fields);
+    }
+    let after = EditorField::ALL
+        .iter()
+        .position(|field| *field == LOCATIONS_AFTER)
+        .unwrap_or(EditorField::ALL.len());
+    let position = |field: &EditorField| {
+        EditorField::ALL
+            .iter()
+            .position(|f| f == field)
+            .unwrap_or(EditorField::ALL.len())
+    };
+    let (before, rest): (Vec<&EditorField>, Vec<&EditorField>) =
+        fields.iter().partition(|field| position(field) <= after);
+    before
+        .into_iter()
+        .map(|field| field.label())
+        .chain(lists.iter().map(|list| property_label(list, Language::En)))
+        .chain(rest.into_iter().map(|field| field.label()))
         .collect::<Vec<_>>()
         .join(", ")
 }
@@ -1404,6 +1816,18 @@ pub fn editor_text(text: &EditorText) -> String {
         EditorText::EmptiedHereOnly(fields) => {
             format!("Emptied only on this image: {}", field_names(fields))
         }
+        EditorText::Changed { fields, lists } => {
+            format!("Changed: {}", item_names(fields, lists))
+        }
+        EditorText::Emptied { fields, lists } => {
+            format!("Emptied: {}", item_names(fields, lists))
+        }
+        EditorText::AddLocation => "Add Location".to_string(),
+        EditorText::RemoveLocation => "Remove".to_string(),
+        EditorText::CopyFromLocationCreated => format!(
+            "Copy from {list}",
+            list = property_label(LOCATION_CREATED, Language::En)
+        ),
         EditorText::SkippedFiles { files } => {
             if *files == 1 {
                 "Skipped: 1 file".to_string()
@@ -4156,5 +4580,517 @@ mod tests {
             editor_text(&EditorText::SectionHeading(EditorSection::Licence)),
             "Licence (PLUS)"
         );
+    }
+
+    // --- Location Created and Location Shown (ADR 0017 U11a, T136) ---
+
+    const CREATED: &str = "Iptc4xmpExt:LocationCreated";
+    const SHOWN: &str = "Iptc4xmpExt:LocationShown";
+    const SUBLOCATION: &str = "Iptc4xmpExt:Sublocation";
+    const CITY: &str = "Iptc4xmpExt:City";
+    const STATE: &str = "Iptc4xmpExt:ProvinceState";
+    const COUNTRY: &str = "Iptc4xmpExt:CountryName";
+    const CODE: &str = "Iptc4xmpExt:CountryCode";
+    const REGION: &str = "Iptc4xmpExt:WorldRegion";
+    const ID: &str = "Iptc4xmpExt:LocationId";
+    const NAME: &str = "Iptc4xmpExt:LocationName";
+
+    /// A structure of text sub-fields.
+    fn place(fields: &[(&str, &str)]) -> StructValue {
+        StructValue {
+            fields: fields
+                .iter()
+                .map(|(id, t)| (id.to_string(), text(t)))
+                .collect(),
+        }
+    }
+
+    fn places(entries: Vec<StructValue>) -> Value {
+        Value::StructList(entries)
+    }
+
+    /// Umeå with every shown sub-field (Location Identifier a list of two URIs).
+    fn umea() -> StructValue {
+        let mut umea = place(&[
+            (SUBLOCATION, "Rådhustorget"),
+            (CITY, "Umeå"),
+            (STATE, "Västerbotten"),
+            (COUNTRY, "Sverige"),
+            (CODE, "SE"),
+            (REGION, "Europa"),
+        ]);
+        umea.fields.push((
+            ID.to_string(),
+            list(&["https://example.org/umea", "https://example.org/se"]),
+        ));
+        umea
+    }
+
+    /// Oslo with a city and a country.
+    fn oslo() -> StructValue {
+        place(&[(CITY, "Oslo"), (COUNTRY, "Norge")])
+    }
+
+    fn located(created: Vec<StructValue>, shown: Vec<StructValue>) -> Metadata {
+        let mut metadata = Metadata::new();
+        if !created.is_empty() {
+            insert(&mut metadata, CREATED, places(created));
+        }
+        if !shown.is_empty() {
+            insert(&mut metadata, SHOWN, places(shown));
+        }
+        metadata
+    }
+
+    fn type_location(form: &mut EditorForm, list: &str, entry: usize, field: &str, text: &str) {
+        *form.location_text_mut(list, entry, field).unwrap() = text.to_string();
+    }
+
+    #[test]
+    fn the_location_lists_and_their_seven_fields_with_names() {
+        assert_eq!(EditorForm::LOCATION_LISTS, [CREATED, SHOWN]);
+        assert_eq!(EditorForm::LOCATION_CREATED, CREATED);
+        assert_eq!(EditorForm::LOCATION_SHOWN, SHOWN);
+        assert_eq!(
+            EditorForm::LOCATION_FIELDS,
+            [SUBLOCATION, CITY, STATE, COUNTRY, CODE, REGION, ID]
+        );
+        // Names from `property_label` (IPTC's names from the property table, U11a-Q6).
+        let names: Vec<String> = EditorForm::LOCATION_LISTS
+            .iter()
+            .chain(EditorForm::LOCATION_FIELDS.iter())
+            .map(|id| property_label(id, Language::En))
+            .collect();
+        assert_eq!(
+            names,
+            [
+                "Location Created",
+                "Location Shown in the Image",
+                "Sublocation",
+                "City",
+                "Province or State",
+                "Country Name",
+                "Country ISO-Code",
+                "World Region",
+                "Location Identifier",
+            ]
+        );
+        // The lists come after Country Code, the last of the older fields (U11a-Q2).
+        assert_eq!(
+            EditorField::ALL
+                .into_iter()
+                .rfind(|field| field.section() == EditorSection::TimePlace),
+            Some(LOCATIONS_AFTER)
+        );
+    }
+
+    #[test]
+    fn a_read_list_is_shown_as_its_entries_with_the_seven_fields() {
+        let form = form_with(located(vec![umea(), oslo()], Vec::new()));
+        assert_eq!(form.location_count(CREATED), 2);
+        assert_eq!(form.location_count(SHOWN), 0);
+        let texts: Vec<&str> = EditorForm::LOCATION_FIELDS
+            .iter()
+            .map(|field| form.location_text(CREATED, 0, field))
+            .collect();
+        assert_eq!(
+            texts,
+            [
+                "Rådhustorget",
+                "Umeå",
+                "Västerbotten",
+                "Sverige",
+                "SE",
+                "Europa",
+                // Location Identifier on one line, separated by commas (U10-Q2).
+                "https://example.org/umea, https://example.org/se",
+            ]
+        );
+        assert_eq!(form.location_text(CREATED, 1, CITY), "Oslo");
+        assert_eq!(form.location_text(CREATED, 1, SUBLOCATION), "");
+        // No such entry or field.
+        assert_eq!(form.location_text(CREATED, 2, CITY), "");
+        assert_eq!(form.location_text(CREATED, 0, NAME), "");
+        assert_eq!(form.location_read_only(CREATED), None);
+        // Shown untouched, the lists give no edit.
+        assert_eq!(form.edits(), Ok(Vec::new()));
+    }
+
+    #[test]
+    fn an_edited_field_gives_one_struct_list_edit_with_the_other_entries_unchanged() {
+        let mut form = form_with(located(vec![umea(), oslo()], vec![oslo()]));
+        type_location(&mut form, CREATED, 1, CITY, "Bergen");
+        type_location(&mut form, CREATED, 1, REGION, "Europa");
+        assert_eq!(
+            form.edits(),
+            Ok(vec![set(
+                CREATED,
+                places(vec![
+                    umea(),
+                    place(&[(CITY, "Bergen"), (COUNTRY, "Norge"), (REGION, "Europa")]),
+                ])
+            )])
+        );
+    }
+
+    #[test]
+    fn location_identifier_is_split_at_commas_and_emptied_by_commas_only() {
+        let mut form = form_with(located(vec![umea()], Vec::new()));
+        type_location(
+            &mut form,
+            CREATED,
+            0,
+            ID,
+            " https://a.example ,, https://b.example ",
+        );
+        let mut expected = umea();
+        if let Some(slot) = expected.fields.iter_mut().find(|(id, _)| id == ID) {
+            slot.1 = list(&["https://a.example", "https://b.example"]);
+        }
+        assert_eq!(form.edits(), Ok(vec![set(CREATED, places(vec![expected]))]));
+
+        type_location(&mut form, CREATED, 0, ID, " , ,");
+        let mut expected = umea();
+        expected.fields.retain(|(id, _)| id != ID);
+        assert_eq!(form.edits(), Ok(vec![set(CREATED, places(vec![expected]))]));
+    }
+
+    #[test]
+    fn add_then_ok_with_nothing_typed_gives_no_edit() {
+        let mut form = form_with(Metadata::new());
+        form.add_location(CREATED);
+        form.add_location(SHOWN);
+        assert_eq!(form.location_count(CREATED), 1);
+        assert_eq!(form.location_text(CREATED, 0, CITY), "");
+        assert_eq!(form.edits(), Ok(Vec::new()));
+        // Spaces only are empty too.
+        type_location(&mut form, SHOWN, 0, CITY, "   ");
+        assert_eq!(form.edits(), Ok(Vec::new()));
+
+        // An empty entry added to a read list is dropped when the edits are made.
+        let mut form = form_with(located(vec![oslo()], Vec::new()));
+        form.add_location(CREATED);
+        assert_eq!(form.edits(), Ok(Vec::new()));
+        type_location(&mut form, CREATED, 1, CITY, "Lund");
+        assert_eq!(
+            form.edits(),
+            Ok(vec![set(
+                CREATED,
+                places(vec![oslo(), place(&[(CITY, "Lund")])])
+            )])
+        );
+    }
+
+    #[test]
+    fn an_added_entry_on_an_empty_list_is_written() {
+        let mut form = form_with(Metadata::new());
+        form.add_location(SHOWN);
+        type_location(&mut form, SHOWN, 0, CITY, "Lund");
+        type_location(&mut form, SHOWN, 0, CODE, "SE");
+        assert_eq!(
+            form.edits(),
+            Ok(vec![set(
+                SHOWN,
+                places(vec![place(&[(CITY, "Lund"), (CODE, "SE")])])
+            )])
+        );
+    }
+
+    #[test]
+    fn removing_every_entry_clears_and_removing_one_keeps_the_order() {
+        let stockholm = place(&[(CITY, "Stockholm")]);
+        let mut form = form_with(located(vec![umea(), oslo(), stockholm.clone()], Vec::new()));
+        form.remove_location(CREATED, 1);
+        assert_eq!(form.location_count(CREATED), 2);
+        assert_eq!(
+            form.edits(),
+            Ok(vec![set(CREATED, places(vec![umea(), stockholm]))])
+        );
+        // No such entry: nothing changes.
+        form.remove_location(CREATED, 5);
+        assert_eq!(form.location_count(CREATED), 2);
+        form.remove_location(CREATED, 0);
+        form.remove_location(CREATED, 0);
+        assert_eq!(form.location_count(CREATED), 0);
+        assert_eq!(form.edits(), Ok(vec![clear(CREATED)]));
+
+        // Emptying every field of every entry clears too.
+        let mut form = form_with(located(vec![oslo()], Vec::new()));
+        type_location(&mut form, CREATED, 0, CITY, "");
+        type_location(&mut form, CREATED, 0, COUNTRY, " ");
+        assert_eq!(form.edits(), Ok(vec![clear(CREATED)]));
+    }
+
+    #[test]
+    fn unknown_sub_fields_are_kept_through_an_edit() {
+        let mut entry = place(&[(CITY, "Umeå")]);
+        entry.fields.insert(
+            0,
+            (NAME.to_string(), lang_alt(&[("x-default", "Rådhuset")])),
+        );
+        entry
+            .fields
+            .push(("exif:GPSAltitude".to_string(), Value::Number("12".into())));
+        let mut form = form_with(located(vec![entry.clone()], Vec::new()));
+        type_location(&mut form, CREATED, 0, CITY, "Luleå");
+        type_location(&mut form, CREATED, 0, COUNTRY, "Sverige");
+        let mut expected = entry.clone();
+        expected.fields[1].1 = text("Luleå");
+        expected.fields.push((COUNTRY.to_string(), text("Sverige")));
+        assert_eq!(form.edits(), Ok(vec![set(CREATED, places(vec![expected]))]));
+
+        // An entry with such fields is never dropped, also with every shown field emptied.
+        type_location(&mut form, CREATED, 0, CITY, "");
+        type_location(&mut form, CREATED, 0, COUNTRY, "");
+        let mut expected = entry;
+        expected.fields.remove(1);
+        assert_eq!(form.edits(), Ok(vec![set(CREATED, places(vec![expected]))]));
+    }
+
+    #[test]
+    fn copy_from_location_created_adds_an_entry_and_changes_no_other() {
+        // Not enabled without a Location Created entry that is not empty.
+        let mut form = form_with(Metadata::new());
+        assert!(!form.can_copy_location_created());
+        form.add_location(CREATED);
+        assert!(!form.can_copy_location_created());
+        form.copy_location_created();
+        assert_eq!(form.location_count(SHOWN), 0);
+
+        let mut form = form_with(located(vec![umea(), oslo()], vec![oslo()]));
+        assert!(form.can_copy_location_created());
+        form.copy_location_created();
+        assert_eq!(form.location_count(SHOWN), 2);
+        for field in EditorForm::LOCATION_FIELDS {
+            assert_eq!(
+                form.location_text(SHOWN, 1, field),
+                form.location_text(CREATED, 0, field),
+                "{field}"
+            );
+        }
+        // The existing Location Shown entry and Location Created are unchanged.
+        assert_eq!(
+            form.edits(),
+            Ok(vec![set(SHOWN, places(vec![oslo(), umea()]))])
+        );
+
+        // An unsaved entry is copied as the form shows it; an empty first entry is skipped.
+        let mut form = form_with(Metadata::new());
+        form.add_location(CREATED);
+        form.add_location(CREATED);
+        type_location(&mut form, CREATED, 1, CITY, "Lund");
+        assert!(form.can_copy_location_created());
+        form.copy_location_created();
+        assert_eq!(form.location_count(SHOWN), 1);
+        assert_eq!(form.location_text(SHOWN, 0, CITY), "Lund");
+    }
+
+    fn created_conflict() -> Metadata {
+        let mut metadata = located(vec![umea()], Vec::new());
+        metadata.add_conflict(Conflict {
+            property: CREATED.into(),
+            values: vec![
+                (Origin::XmpEmbedded, places(vec![umea()])),
+                (Origin::XmpSidecar, places(vec![oslo()])),
+            ],
+            rule: ConflictRule::Open,
+        });
+        metadata
+    }
+
+    #[test]
+    fn a_list_with_an_open_conflict_is_read_only_until_it_is_decided() {
+        let mut form = form_with(created_conflict());
+        let read_text = value_text(&places(vec![umea()]));
+        assert_eq!(form.location_read_only(CREATED), Some(read_text.as_str()));
+        assert_eq!(form.location_read_only(SHOWN), None);
+        assert!(form.location_text_mut(CREATED, 0, CITY).is_none());
+        form.add_location(CREATED);
+        form.remove_location(CREATED, 0);
+        assert_eq!(form.location_count(CREATED), 1);
+        assert_eq!(form.edits(), Ok(Vec::new()));
+        // Not copied either, so it is not pasted elsewhere.
+        assert!(
+            form.copy("a.jpg")
+                .locations
+                .iter()
+                .all(|(list, _)| *list != CREATED)
+        );
+
+        // Choosing a value shows its entries and writes it.
+        assert!(form.choose(0, 1));
+        assert_eq!(form.location_read_only(CREATED), None);
+        assert_eq!(form.location_text(CREATED, 0, CITY), "Oslo");
+        assert_eq!(form.edits(), Ok(vec![set(CREATED, places(vec![oslo()]))]));
+        // An edit after the choice gives the list's edit instead of the chosen value.
+        type_location(&mut form, CREATED, 0, CITY, "Bergen");
+        assert_eq!(
+            form.edits(),
+            Ok(vec![set(
+                CREATED,
+                places(vec![place(&[(CITY, "Bergen"), (COUNTRY, "Norge")])])
+            )])
+        );
+    }
+
+    #[test]
+    fn copy_and_paste_carry_each_list_as_one_field_that_replaces_the_whole_list() {
+        let mut source = form_with(located(vec![umea()], Vec::new()));
+        // An unsaved entry is copied; an empty one is dropped.
+        source.add_location(SHOWN);
+        source.add_location(SHOWN);
+        type_location(&mut source, SHOWN, 1, CITY, "Lund");
+        let copied = source.copy("a.jpg");
+        assert_eq!(
+            copied.locations,
+            [
+                (CREATED, vec![umea()]),
+                (SHOWN, vec![place(&[(CITY, "Lund")])]),
+            ]
+        );
+        // Each list with an entry is one field.
+        assert_eq!(copied.count(), 2);
+
+        let mut target = form_with(located(vec![oslo(), oslo()], vec![oslo()]));
+        target.paste(&copied);
+        assert_eq!(target.location_count(CREATED), 1);
+        assert_eq!(target.location_text(CREATED, 0, CITY), "Umeå");
+        assert_eq!(
+            target.edits(),
+            Ok(vec![
+                set(CREATED, places(vec![umea()])),
+                set(SHOWN, places(vec![place(&[(CITY, "Lund")])])),
+            ])
+        );
+
+        // An empty list is not pasted (U12b-Q2): the target keeps its list.
+        let copied = form_with(Metadata::new()).copy("b.jpg");
+        assert_eq!(copied.count(), 0);
+        let mut target = form_with(located(vec![oslo()], Vec::new()));
+        target.paste(&copied);
+        assert_eq!(target.location_count(CREATED), 1);
+        assert_eq!(target.edits(), Ok(Vec::new()));
+
+        // A list shown read-only on the target is left as it is.
+        let copied = form_with(located(vec![oslo()], Vec::new())).copy("c.jpg");
+        let mut target = form_with(created_conflict());
+        target.paste(&copied);
+        assert_eq!(target.edits(), Ok(Vec::new()));
+    }
+
+    #[test]
+    fn copy_then_paste_of_lists_on_the_same_form_gives_no_edits() {
+        let mut form = form_with(located(vec![umea(), oslo()], vec![oslo()]));
+        let copied = form.copy("a.jpg");
+        form.paste(&copied);
+        assert_eq!(form.edits(), Ok(Vec::new()));
+    }
+
+    #[test]
+    fn apply_to_all_marked_replaces_a_changed_list_and_empties_an_emptied_one() {
+        let mut form = form_with(located(vec![umea(), oslo()], vec![oslo()]));
+        type_into(&mut form, EditorField::Headline, "Hav");
+        type_into(&mut form, EditorField::Instructions, "Embargo");
+        type_location(&mut form, CREATED, 1, CITY, "Bergen");
+        form.remove_location(SHOWN, 0);
+
+        let batch = batch_of(&form);
+
+        let created = places(vec![umea(), place(&[(CITY, "Bergen"), (COUNTRY, "Norge")])]);
+        let expected = vec![
+            set("photoshop:Headline", text("Hav")),
+            set(CREATED, created),
+            clear(SHOWN),
+            set("photoshop:Instructions", text("Embargo")),
+        ];
+        assert_eq!(batch.this_image, expected);
+        // The whole list goes to every image, and the emptied list is emptied on every image.
+        assert_eq!(batch.others, expected);
+        assert_eq!(batch.field_count(), 4);
+        assert_eq!(
+            apply_confirmation(&batch, 3, 0),
+            [
+                "Write 4 changed fields to 3 images?",
+                "Changed: Headline, Location Created, Instructions",
+                "Emptied: Location Shown in the Image",
+            ]
+        );
+
+        // An added entry left empty changes nothing anywhere.
+        let mut form = form_with(Metadata::new());
+        form.add_location(CREATED);
+        let batch = batch_of(&form);
+        assert!(batch.others.is_empty());
+        assert_eq!(batch.field_count(), 0);
+    }
+
+    #[test]
+    fn a_chosen_location_conflict_goes_only_to_the_windows_image() {
+        let mut form = form_with(created_conflict());
+        assert!(form.choose(0, 1));
+        let batch = batch_of(&form);
+        assert_eq!(batch.this_image, [set(CREATED, places(vec![oslo()]))]);
+        assert!(batch.others.is_empty());
+        assert_eq!(batch.field_count(), 0);
+    }
+
+    #[test]
+    fn the_location_edits_are_accepted_by_apply_edits() {
+        let mut form = form_with(located(vec![umea()], vec![oslo()]));
+        type_location(&mut form, CREATED, 0, CITY, "Luleå");
+        form.remove_location(SHOWN, 0);
+        let edits = form.edits().unwrap();
+        let mut metadata = located(vec![umea()], vec![oslo()]);
+        assert!(apply_edits(&mut metadata, &edits).is_ok());
+        let mut expected = umea();
+        expected.fields[1].1 = text("Luleå");
+        assert_eq!(
+            metadata.get(CREATED).map(|stored| &stored.value),
+            Some(&places(vec![expected]))
+        );
+        assert!(metadata.get(SHOWN).is_none());
+    }
+
+    #[test]
+    fn the_location_texts() {
+        assert_eq!(editor_text(&EditorText::AddLocation), "Add Location");
+        assert_eq!(editor_text(&EditorText::RemoveLocation), "Remove");
+        assert_eq!(
+            editor_text(&EditorText::CopyFromLocationCreated),
+            "Copy from Location Created"
+        );
+        let cases = [
+            (
+                EditorText::Changed {
+                    fields: vec![EditorField::Title, EditorField::Instructions],
+                    lists: vec![CREATED, SHOWN],
+                },
+                "Changed: Title, Location Created, Location Shown in the Image, Instructions",
+            ),
+            (
+                EditorText::Changed {
+                    fields: vec![EditorField::Headline],
+                    lists: Vec::new(),
+                },
+                "Changed: Headline",
+            ),
+            (
+                EditorText::Emptied {
+                    fields: Vec::new(),
+                    lists: vec![SHOWN],
+                },
+                "Emptied: Location Shown in the Image",
+            ),
+            (
+                EditorText::Emptied {
+                    fields: vec![EditorField::City, EditorField::Country],
+                    lists: Vec::new(),
+                },
+                "Emptied: City, Country",
+            ),
+        ];
+        for (text, expected) in cases {
+            assert_eq!(editor_text(&text), expected, "{text:?}");
+        }
     }
 }

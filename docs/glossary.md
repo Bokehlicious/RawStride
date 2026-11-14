@@ -57,6 +57,13 @@ English mode already shows IPTC's name from the property table (`property_label`
 | `xmp:Rating` | Betyg | Image Rating | Rating (G1) |
 | `Iptc4xmpExt:LocationCreated` | Plats där bilden togs | Location Created | Location Created |
 | `Iptc4xmpExt:LocationShown` | Plats som visas | Location Shown in the Image | Location Shown in the Image |
+| `…:Sublocation` | – | Sublocation | Sublocation (T136; in a Location Created or Location Shown entry) |
+| `…:City` | – | City | City (T136; in a location entry) |
+| `…:ProvinceState` | – | Province or State | Province or State (T136; in a location entry) |
+| `…:CountryName` | – | Country Name | Country Name (T136) |
+| `…:CountryCode` (location) | – | Country ISO-Code | Country ISO-Code (T136) |
+| `…:WorldRegion` | – | World Region | World Region (T136) |
+| `…:LocationId` | – | Location Identifier | Location Identifier (T136; its URIs on one line separated by commas) |
 | `plus:ImageCreator` | Bildskapare | Image Creator | Image Creator |
 | `plus:CopyrightOwner` | Upphovsrättsinnehavare | Copyright Owner | Copyright Owner |
 | `plus:Licensor` | Licensgivare | Licensor | Licensor |
@@ -107,6 +114,11 @@ Every other property already uses IPTC's English name in both languages.
 | Läge: RAW / JPEG | Mode: RAW / JPEG | |
 | Storlek | Size | thumbnail size |
 | mapp | folder | |
+| – | Folders, Favourites, Recent | the Library's sections in the left column (ADR 0017 U4-Q7); added by T135 |
+| – | Add to Favourites / Remove from Favourites / Clear Recent Folders | the right-click menus of a folder in the tree, a folder tab, a favourite and the Recent section, and the File menu item (U4-Q3, U4-Q4); added by T135 |
+| – | Refresh | reads the drives again (also F5 over the Library); added by T135 |
+| – | {letter}: (no disk) | an empty card reader or DVD drive in the folder tree (U4-Q1); added by T135 |
+| – | Folder not found | the hover text of a favourite or recent folder that no longer exists, and an expand that fails because the folder is gone; added by T135 |
 
 ## 4. Viewer and zoom
 
@@ -174,6 +186,7 @@ Every other property already uses IPTC's English name in both languages.
 | – | Write, Writing {i} of {n} … | the confirmation's button and the progress of "Apply to All Marked"; added by T126. The question: "Write {k} changed fields to {n} images?" (singular "1 changed field", "1 image") |
 | – | Changed: …, Emptied: …, Emptied only on this image: …, Skipped: {m} files | the confirmation's lines (U12c-Q4); added by T126. "Skipped: 1 file" in singular |
 | – | Written to {w} of {n} images.; Unresolved conflict kept: {file} ({property}) | the summary of "Apply to All Marked" (U12c-Q6); added by T126. "Written to {w} of 1 image." in singular |
+| – | Add Location, Remove, Copy from Location Created | the buttons of the location lists in Time and Place: under each list, on each entry, and under Location Shown (ADR 0017 U11a-Q2, U11a-Q4, U11a-Q6); added by T136. "Copy from {list}" takes the list's name from `property_label` |
 | Spara ändringarna? / Ändringar som inte sparades | Save changes? / Unsaved changes | |
 | Sparar … / Sparat. | Saving … / Saved. | |
 | Ändrad | Changed | |

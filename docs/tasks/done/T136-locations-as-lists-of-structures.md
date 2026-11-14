@@ -1,4 +1,4 @@
-# T136. ADR 0017 U11a, first part: Location Created and Location Shown in the metadata window — Open
+# T136. ADR 0017 U11a, first part: Location Created and Location Shown in the metadata window — Done
 
 - **Can start now.** The owner approved the proposals of U11a-Q1–U11a-Q6 (at the end of this task)
   on 2026-11-14; they are written into the points below and into ADR 0017 §6.1.
@@ -76,3 +76,5 @@
 |---|---|---|
 | 2026-11-14 | Blocked | Added; waits for U11a-Q1–U11a-Q6 |
 | 2026-11-14 | Open | The owner approved U11a-Q1–U11a-Q6 as proposed |
+| 2026-11-14 | Ready for review | Agent: lists, edits, copy/paste/apply and texts in `editor.rs` (16 tests), `draw_location_lists` in `main.rs`; `check.ps1` all OK. Open: the lists are still also under Other Metadata, because a `main.rs` test keeps `LocationCreated` out of `window_editor_properties` |
+| 2026-11-14 | Done | Reviewed; reviewer fix: Location Created and Location Shown left out of Other Metadata (`window_editor_properties`; its test updated for the new fields). Owner hand check done. check.ps1 all OK (1370 passed, 53 ignored) |

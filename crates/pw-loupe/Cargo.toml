@@ -30,7 +30,7 @@ eframe.workspace = true
 rfd = { version = "=0.17.2", default-features = false }
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "=0.61.2", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_UI_ColorSystem"] }
+windows-sys = { version = "=0.61.2", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_Storage_FileSystem", "Win32_System_Diagnostics_Debug", "Win32_UI_ColorSystem"] }
 
 [dev-dependencies]
 moxcms = "=0.8.1"

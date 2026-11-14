@@ -140,4 +140,7 @@ was when the task was done, so "this file", "below" and "the Log" in T1–T115 m
 | [T132](T132-keep-the-sidecar-name.md) | A write keeps the sidecar's name as it is on disk |
 | [T133](T133-milestone-8-documentation.md) | ADR 0007 I13: documentation after milestone 8 |
 | [T134](T134-hierarchical-keywords-and-deprecated-iim-kept.md) | ADR 0007 §12: hierarchical keywords and deprecated IIM datasets kept after a write |
+| [T135](T135-library-folders-favourites-recent.md) | ADR 0017 U4: the Library: folder tree, favourites and recent folders |
+| [T136](T136-locations-as-lists-of-structures.md) | ADR 0017 U11a, first part: Location Created and Location Shown in the metadata window |
+| [T137](T137-cargo-audit-in-the-check.md) | `cargo audit` in the check script |
 | [T120](T120-exiftool-from-the-program-folder.md) | ExifTool from the program folder first |

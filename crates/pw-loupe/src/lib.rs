@@ -13,6 +13,8 @@ mod import_dialog;
 mod import_text;
 mod import_worker;
 mod info_panel;
+pub mod library;
+pub mod library_text;
 mod loupe_text;
 mod monitor_profile;
 mod preview;
@@ -82,7 +84,8 @@ pub use rating_text::{
 pub use ratings::{RatingKey, RatingRefused, RatingStore, RatingWriter, apply, rating_key_action};
 pub use selection::Selection;
 pub use settings::{
-    Settings, ShellSettings, WindowRect, load_settings, save_settings, settings_path,
+    SavedLibrary, Settings, ShellSettings, WindowRect, load_settings, load_settings_and_library,
+    save_settings, save_settings_with_library, settings_path,
 };
 pub use shell::{
     COLLAPSED_WIDTH, ColumnState, Command, HIDE_KEY, KeyChord, MENUS, Menu, MenuEntry, MenuItem,

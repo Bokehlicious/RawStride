@@ -18,6 +18,11 @@ use inspector::{ExifInspector, ExifReader, ExifShown, exif_state_text};
 use inspector_text::{InspectorText, exif_label, inspector_text};
 use metadata::{EditorEvent, InspectorState, MetadataCache};
 use pw_imagecheck::RawImageCheck;
+use pw_loupe::SavedLibrary;
+use pw_loupe::library::{
+    FolderList, Library, TreeRowKind, folder_key, read_drives, suppress_no_disk_dialogs,
+};
+use pw_loupe::library_text::{LibraryText, library_text};
 use pw_loupe::{
     Action, CellState, CopiedFields, DEFAULT_THUMBNAIL_SIZE, DialogKey, DialogRequest, EditorField,
     EditorForm, EditorKeyAction, EditorSection, EditorText, Field, Filter, GridKeyAction,
@@ -31,11 +36,11 @@ use pw_loupe::{
     done_lines, editor_key_action, editor_rating_key, editor_text, ejecting_progress_text,
     error_text, grid_key_action, indicator_text, info_panel, iptc_progress_text, key_action,
     label_choice_text, label_filter_text, label_name, list_folder, load_monitor_profile,
-    load_settings, loupe_key_action, marked_text, metadata_neighbour, mode_label, mode_text,
-    more_lines, no_match_text, notice_text, opens_import, other_values, panel_text, parse_args,
-    position_text, preview_line, preview_summary, primary_monitor_profile_path, progress_text,
-    property_label, rating_key_action, request_cell, save_settings, settings_path,
-    star_condition_text, star_filter_text, star_glyphs, status_line, step_allowed,
+    load_settings_and_library, loupe_key_action, marked_text, metadata_neighbour, mode_label,
+    mode_text, more_lines, no_match_text, notice_text, opens_import, other_values, panel_text,
+    parse_args, position_text, preview_line, preview_summary, primary_monitor_profile_path,
+    progress_text, property_label, rating_key_action, request_cell, save_settings_with_library,
+    settings_path, star_condition_text, star_filter_text, star_glyphs, status_line, step_allowed,
     step_thumbnail_size, tab_action, take_wheel_steps, visible_range, wheel_factor, window_title,
 };
 use pw_loupe::{
@@ -604,6 +609,9 @@ struct Loupe {
     /// The monitor profile, read once at start (ADR 0016 §4.1, Q4); not used for pixels yet.
     #[allow(dead_code)] // used by ADR 0016 C4
     monitor_profile: MonitorProfile,
+    /// The library in the left column (ADR 0017 §2.1, U4, T135): the folder tree, the favourites
+    /// and the recent folders; the lists are saved in `settings.txt` with the settings.
+    library: Library,
 }
 
 impl Loupe {
@@ -664,7 +672,8 @@ impl Loupe {
         self.pending_options = Some(chosen.edit_options());
         self.send_pending_options();
         let saved = match &self.settings_path {
-            Some(path) => save_settings(path, &chosen).map_err(|error| error.to_string()),
+            Some(path) => save_settings_with_library(path, &chosen, &self.library.saved())
+                .map_err(|error| error.to_string()),
             None => Err(settings_text(SettingsText::NoFolder).to_string()),
         };
         if let Err(error) = saved {
@@ -1441,6 +1450,11 @@ impl Loupe {
                         .unwrap_or(Path::new("."))
                         .to_path_buf()
                 };
+                // Every folder opened, in any way, is the first recent folder (U4-Q4, T135); a
+                // relative one from the command line as its full path.
+                self.library
+                    .recent
+                    .record(std::path::absolute(&folder).unwrap_or_else(|_| folder.clone()));
                 if new_tab {
                     self.tabs.open_new(folder, files, pos);
                 } else {
@@ -1452,8 +1466,20 @@ impl Loupe {
                     ViewMode::Loupe
                 });
                 self.load_active_tab();
+                self.save_library();
             }
             Err(e) => self.message = Some(open_error_text(&e)),
+        }
+    }
+
+    /// Saves the settings with the library's lists after a change of a list (T135); a failure is
+    /// only logged, as a theme change's.
+    fn save_library(&self) {
+        if let Some(path) = &self.settings_path
+            && let Err(error) =
+                save_settings_with_library(path, &self.settings, &self.library.saved())
+        {
+            eprintln!("pw-loupe: the library could not be saved: {error}");
         }
     }
 
@@ -2669,7 +2695,8 @@ impl Loupe {
         self.settings.shell.theme = theme;
         ctx.set_theme(egui_theme(theme));
         if let Some(path) = &self.settings_path
-            && let Err(error) = save_settings(path, &self.settings)
+            && let Err(error) =
+                save_settings_with_library(path, &self.settings, &self.library.saved())
         {
             eprintln!("pw-loupe: the theme could not be saved: {error}");
         }
@@ -3285,19 +3312,33 @@ impl Loupe {
     }
 
     /// The menu bar (ADR 0017 §2.1, U1-Q1): the table `MENUS`, each item with its key.
-    /// A choice in Visa ▸ Filter is returned in `filter_choice`.
+    /// A choice in Visa ▸ Filter is returned in `filter_choice`. File ▸ "Add to Favourites" (after
+    /// "Close Tab", U4-Q3, T135) returns the active tab's folder in `favourite`.
     fn draw_menu_bar(
         &self,
         ui: &mut egui::Ui,
         commands: &mut Vec<Command>,
         filter_choice: &mut Option<Filter>,
+        favourite: &mut Option<PathBuf>,
     ) {
         egui::MenuBar::new().ui(ui, |ui| {
             for menu in MENUS {
                 ui.menu_button(menu_text(menu.kind), |ui| {
                     for entry in menu.entries {
                         match entry {
-                            MenuEntry::Item(item) => self.menu_item(ui, *item, commands),
+                            MenuEntry::Item(item) => {
+                                self.menu_item(ui, *item, commands);
+                                if item.command == Command::CloseTab {
+                                    let folder =
+                                        self.tabs.active().and_then(|tab| tab.folder.clone());
+                                    let button = egui::Button::new(library_text(
+                                        LibraryText::AddToFavourites,
+                                    ));
+                                    if ui.add_enabled(folder.is_some(), button).clicked() {
+                                        *favourite = folder;
+                                    }
+                                }
+                            }
                             MenuEntry::Separator => {
                                 ui.separator();
                             }
@@ -3495,10 +3536,54 @@ impl Loupe {
         });
     }
 
+    /// Does what was clicked in the library, a folder tab's right-click menu or File ▸ "Add to
+    /// Favourites" (U4, T135). A changed list is saved at once; a section's state at exit, as the
+    /// other sections'.
+    fn library_action(&mut self, action: LibraryAction) {
+        match action {
+            LibraryAction::Open(folder) => {
+                // As Ctrl+O (U4-Q6): not while a dialog holds the program.
+                if !self.dialog_open() {
+                    self.open(&folder, true);
+                    // A folder that turned out to be gone is greyed now.
+                    self.library.favourites.check_folders();
+                    self.library.recent.check_folders();
+                }
+            }
+            LibraryAction::Toggle(path) => {
+                self.library.toggle(&path);
+            }
+            LibraryAction::AddFavourite(folder) => {
+                if self.library.favourites.add(folder) {
+                    self.save_library();
+                }
+            }
+            LibraryAction::RemoveFavourite(folder) => {
+                if self.library.favourites.remove(&folder) {
+                    self.save_library();
+                }
+            }
+            LibraryAction::ClearRecent => {
+                self.library.recent.clear();
+                self.save_library();
+            }
+            LibraryAction::Refresh => self.library.refresh(&read_drives()),
+            LibraryAction::ToggleSection(section) => {
+                let shell = &mut self.settings.shell;
+                let state = match section {
+                    LibrarySection::Folders => &mut shell.library_folders,
+                    LibrarySection::Favourites => &mut shell.library_favourites,
+                    LibrarySection::Recent => &mut shell.library_recent,
+                };
+                *state = state.toggled();
+            }
+        }
+    }
+
     /// The side columns (ADR 0017 §2.1, U1-Q3, T109): each resizable between the minimum and 40 %
     /// of the window, collapsible to a strip with its open button, and both hidden with the hide
-    /// key. The right one is the inspector (U2, T110); the left one's content comes in U4 and U5,
-    /// until then a heading and one line, and the hidden import's status under "Uppgifter".
+    /// key. The right one is the inspector (U2, T110); the left one is the library (U4, T135)
+    /// and, under "Tasks", the hidden import's status (until U5).
     fn draw_columns(&mut self, ui: &mut egui::Ui) {
         let shell = self.settings.shell;
         if shell.columns_hidden {
@@ -3509,6 +3594,14 @@ impl Loupe {
         let import_status = self.hidden_import_status();
         match shell.left_column {
             ColumnState::Open => {
+                // The library (U4, T135): what was clicked is done after the column is drawn.
+                let mut library_actions = Vec::new();
+                let active_folder = self
+                    .tabs
+                    .active()
+                    .and_then(|tab| tab.folder.as_deref())
+                    .map(folder_key);
+                let library = &self.library;
                 let shown = egui::Panel::left("left-column")
                     .resizable(true)
                     .default_size(clamp_column_width(
@@ -3519,7 +3612,13 @@ impl Loupe {
                     .show(ui, |ui| {
                         let collapse =
                             column_header(ui, ShellText::Library, ShellText::CollapseLeft);
-                        column_note(ui, shell_text(ShellText::LibraryNote));
+                        draw_library(
+                            ui,
+                            library,
+                            &shell,
+                            active_folder.as_deref(),
+                            &mut library_actions,
+                        );
                         ui.add_space(PANEL_ROW_SPACING * 2.0);
                         ui.heading(shell_text(ShellText::Tasks));
                         match &import_status {
@@ -3530,10 +3629,24 @@ impl Loupe {
                         }
                         collapse
                     });
+                // F5 while the library has the pointer reads the drives again (U4-Q1).
+                let ctx = ui.ctx().clone();
+                let pointer_in_column = ctx
+                    .pointer_hover_pos()
+                    .is_some_and(|pos| shown.response.rect.contains(pos));
+                if pointer_in_column
+                    && !ctx.egui_wants_keyboard_input()
+                    && ctx.input(|input| input.key_pressed(egui::Key::F5))
+                {
+                    library_actions.push(LibraryAction::Refresh);
+                }
                 self.settings.shell.left_column_width =
                     shown.response.rect.width().round().max(0.0) as u32;
                 if shown.inner {
                     self.settings.shell.left_column = ColumnState::Collapsed;
+                }
+                for action in library_actions {
+                    self.library_action(action);
                 }
             }
             ColumnState::Collapsed => {
@@ -3649,20 +3762,38 @@ impl Loupe {
         let titles = self.tabs.titles();
         let active = self.tabs.active_index();
         let mut selected = None;
+        // A folder tab's right-click menu: "Add to Favourites" (U4-Q3, T135).
+        let mut favourite = None;
         // The preview shows no folder tabs (U3-Q1, T111).
         let mode_before = self.tabs.active().map(|tab| tab.mode);
         if mode_before != Some(ViewMode::Loupe) {
+            let tabs = self.tabs.tabs();
             egui::ScrollArea::horizontal()
                 .id_salt("folder-tabs")
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
                         for (index, title) in titles.iter().enumerate() {
-                            if ui.selectable_label(index == active, title).clicked() {
+                            let tab = ui.selectable_label(index == active, title);
+                            if tab.clicked() {
                                 selected = Some(index);
+                            }
+                            if let Some(folder) = tabs.get(index).and_then(|t| t.folder.as_ref()) {
+                                tab.context_menu(|ui| {
+                                    if ui
+                                        .button(library_text(LibraryText::AddToFavourites))
+                                        .clicked()
+                                    {
+                                        favourite = Some(folder.clone());
+                                        ui.close();
+                                    }
+                                });
                             }
                         }
                     });
                 });
+        }
+        if let Some(folder) = favourite {
+            self.library_action(LibraryAction::AddFavourite(folder));
         }
         // The command bar or a menu command may have asked for a scroll (T109).
         let mut scroll_to = self.scroll_request.take();
@@ -3997,6 +4128,8 @@ fn window_editor_properties() -> Vec<&'static str> {
         }
     }
     properties.extend(["xmp:Rating", "xmp:Label"]);
+    // Location Created and Location Shown are edited in Time and Place (U11a, T136).
+    properties.extend(EditorForm::LOCATION_LISTS);
     properties
 }
 
@@ -4017,9 +4150,11 @@ struct FormResponse {
 /// when `enabled`); then read-only, in small text, the other metadata (without an origin line,
 /// T114), the conflicts a rule decided (each value with its origin) and the notices, each only
 /// when it has rows. The contact fields are drawn under the heading of their structure, "Creator's
-/// Contact Info" (T114). Labels and values wrap at the window's width. The last section, Rating
-/// and Label (T124), holds the buttons of the image's shown `rating` instead of fields, usable
-/// when `rating_enabled` (also while the form's write runs, not while "Save changes?" is asked).
+/// Contact Info" (T114). Time and Place ends with Location Created and Location Shown
+/// (`draw_location_lists`, T136). Labels and values wrap at the window's width. The last section,
+/// Rating and Label (T124), holds the buttons of the image's shown `rating` instead of fields,
+/// usable when `rating_enabled` (also while the form's write runs, not while "Save changes?" is
+/// asked).
 #[allow(clippy::too_many_arguments)] // the window's form, its state and its two enabled flags
 fn draw_window_form(
     ui: &mut egui::Ui,
@@ -4055,6 +4190,9 @@ fn draw_window_form(
                             .filter(|field| field.section() == section)
                         {
                             draw_window_field(ui, &mut state.form, field, errors);
+                        }
+                        if section == EditorSection::TimePlace {
+                            draw_location_lists(ui, &mut state.form);
                         }
                     })
             })
@@ -4234,6 +4372,61 @@ fn draw_window_field(
         ui.label(egui::RichText::new(error).color(error_color));
     }
     ui.add_space(PANEL_ROW_SPACING);
+}
+
+/// Location Created and Location Shown at the end of Time and Place (ADR 0017 U11a-Q2, T136):
+/// each list's name, then one framed group per entry with its seven sub-fields (names from
+/// `property_label`, one-line text boxes as wide as the window) and "Remove", then "Add
+/// Location"; under Location Shown also "Copy from Location Created" (U11a-Q4), enabled when
+/// Location Created has an entry that is not empty. A list with an undecided conflict, or a value
+/// the form cannot show, is its read-only text instead.
+fn draw_location_lists(ui: &mut egui::Ui, form: &mut EditorForm) {
+    for list in EditorForm::LOCATION_LISTS {
+        ui.label(egui::RichText::new(property_label(list, Language::En)).strong());
+        if let Some(text) = form.location_read_only(list).map(str::to_string) {
+            ui.add(egui::Label::new(text).wrap());
+            ui.add_space(PANEL_ROW_SPACING);
+            continue;
+        }
+        let mut removed = None;
+        for entry in 0..form.location_count(list) {
+            ui.push_id(("metadata-window-location", list, entry), |ui| {
+                egui::Frame::group(ui.style()).show(ui, |ui| {
+                    for field in EditorForm::LOCATION_FIELDS {
+                        ui.label(egui::RichText::new(property_label(field, Language::En)).strong());
+                        if let Some(text) = form.location_text_mut(list, entry, field) {
+                            ui.add(egui::TextEdit::singleline(text).desired_width(f32::INFINITY));
+                        }
+                    }
+                    if ui
+                        .button(editor_text(&EditorText::RemoveLocation))
+                        .clicked()
+                    {
+                        removed = Some(entry);
+                    }
+                });
+            });
+            ui.add_space(PANEL_ROW_SPACING);
+        }
+        if let Some(entry) = removed {
+            form.remove_location(list, entry);
+        }
+        ui.horizontal_wrapped(|ui| {
+            if ui.button(editor_text(&EditorText::AddLocation)).clicked() {
+                form.add_location(list);
+            }
+            if list == EditorForm::LOCATION_SHOWN {
+                let copy = ui.add_enabled(
+                    form.can_copy_location_created(),
+                    egui::Button::new(editor_text(&EditorText::CopyFromLocationCreated)),
+                );
+                if copy.clicked() {
+                    form.copy_location_created();
+                }
+            }
+        });
+        ui.add_space(PANEL_ROW_SPACING);
+    }
 }
 
 /// The drop-down of a choice-list field (ADR 0017 U10d-Q3, T128): the form's entries (the empty
@@ -4700,6 +4893,216 @@ fn column_note(ui: &mut egui::Ui, text: &str) {
     ui.add(egui::Label::new(egui::RichText::new(text).weak()).wrap());
 }
 
+/// A section of the library (U4-Q7).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LibrarySection {
+    Folders,
+    Favourites,
+    Recent,
+}
+
+/// What was clicked in the library, done after the column is drawn (`Loupe::library_action`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum LibraryAction {
+    /// A folder in the tree, a favourite or a recent folder (U4-Q6).
+    Open(PathBuf),
+    /// A triangle in the tree.
+    Toggle(PathBuf),
+    AddFavourite(PathBuf),
+    RemoveFavourite(PathBuf),
+    ClearRecent,
+    /// "Refresh" or F5.
+    Refresh,
+    ToggleSection(LibrarySection),
+}
+
+/// How far each level of the tree is indented, in points.
+const TREE_INDENT: f32 = 12.0;
+/// The share of the column's height each section's scroll area may take when it is long: the
+/// tree, then each list.
+const TREE_HEIGHT_SHARE: f32 = 0.45;
+const LIST_HEIGHT_SHARE: f32 = 0.2;
+
+/// The library (ADR 0017 §2.1, U4-Q7, T135): the sections Folders, Favourites and Recent, each
+/// collapsible as `shell` says and in its own scroll area when long. `active` is the
+/// [`folder_key`] of the active tab's folder, highlighted in the tree when it is visible. Every
+/// text comes from `library_text.rs`; names and paths are data.
+fn draw_library(
+    ui: &mut egui::Ui,
+    library: &Library,
+    shell: &ShellSettings,
+    active: Option<&str>,
+    actions: &mut Vec<LibraryAction>,
+) {
+    let height = ui.available_height().max(0.0);
+    let folders = egui::CollapsingHeader::new(library_text(LibraryText::Folders))
+        .id_salt("library-folders")
+        .open(Some(shell.library_folders == ColumnState::Open))
+        .show(ui, |ui| {
+            if ui
+                .small_button(library_text(LibraryText::Refresh))
+                .on_hover_text(library_text(LibraryText::RefreshHover))
+                .clicked()
+            {
+                actions.push(LibraryAction::Refresh);
+            }
+            egui::ScrollArea::both()
+                .id_salt("library-tree")
+                .max_height(height * TREE_HEIGHT_SHARE)
+                .auto_shrink([false, true])
+                .show(ui, |ui| draw_tree(ui, library, active, actions));
+        });
+    if folders.header_response.clicked() {
+        actions.push(LibraryAction::ToggleSection(LibrarySection::Folders));
+    }
+    let favourites = egui::CollapsingHeader::new(library_text(LibraryText::Favourites))
+        .id_salt("library-favourites")
+        .open(Some(shell.library_favourites == ColumnState::Open))
+        .show(ui, |ui| {
+            draw_folder_list(
+                ui,
+                &library.favourites,
+                LibrarySection::Favourites,
+                height * LIST_HEIGHT_SHARE,
+                actions,
+            );
+        });
+    if favourites.header_response.clicked() {
+        actions.push(LibraryAction::ToggleSection(LibrarySection::Favourites));
+    }
+    let recent = egui::CollapsingHeader::new(library_text(LibraryText::Recent))
+        .id_salt("library-recent")
+        .open(Some(shell.library_recent == ColumnState::Open))
+        .show(ui, |ui| {
+            draw_folder_list(
+                ui,
+                &library.recent,
+                LibrarySection::Recent,
+                height * LIST_HEIGHT_SHARE,
+                actions,
+            );
+        });
+    if recent.header_response.clicked() {
+        actions.push(LibraryAction::ToggleSection(LibrarySection::Recent));
+    }
+    recent.header_response.context_menu(|ui| {
+        if ui.button(library_text(LibraryText::ClearRecent)).clicked() {
+            actions.push(LibraryAction::ClearRecent);
+            ui.close();
+        }
+    });
+}
+
+/// The folder tree's rows (U4-Q2): a triangle that only expands or collapses, and the name, whose
+/// click opens the folder and whose right-click menu adds it to the favourites. A drive without a
+/// disk has neither triangle nor click; a failed expand is one greyed line.
+fn draw_tree(
+    ui: &mut egui::Ui,
+    library: &Library,
+    active: Option<&str>,
+    actions: &mut Vec<LibraryAction>,
+) {
+    let icon_size = egui::vec2(ui.spacing().icon_width, ui.spacing().icon_width);
+    for row in library.tree.visible_rows() {
+        ui.horizontal(|ui| {
+            ui.add_space(row.depth as f32 * TREE_INDENT);
+            match row.kind {
+                TreeRowKind::Failed(reason) => {
+                    ui.add_space(icon_size.x);
+                    ui.label(egui::RichText::new(reason).weak());
+                }
+                TreeRowKind::Folder(node) if !node.expandable => {
+                    ui.add_space(icon_size.x);
+                    ui.label(egui::RichText::new(node.text.as_str()).weak());
+                }
+                TreeRowKind::Folder(node) => {
+                    let (_, icon) = ui.allocate_exact_size(icon_size, egui::Sense::click());
+                    let openness = if node.expanded { 1.0 } else { 0.0 };
+                    egui::collapsing_header::paint_default_icon(ui, openness, &icon);
+                    if icon.clicked() {
+                        actions.push(LibraryAction::Toggle(node.path.clone()));
+                    }
+                    let highlighted = active.is_some_and(|key| node.is_folder(key));
+                    let name = ui.selectable_label(highlighted, node.text.as_str());
+                    if name.clicked() {
+                        actions.push(LibraryAction::Open(node.path.clone()));
+                    }
+                    name.context_menu(|ui| {
+                        if ui
+                            .button(library_text(LibraryText::AddToFavourites))
+                            .clicked()
+                        {
+                            actions.push(LibraryAction::AddFavourite(node.path.clone()));
+                            ui.close();
+                        }
+                    });
+                }
+            }
+        });
+    }
+}
+
+/// The favourites or the recent folders (U4-Q3, U4-Q4): each by its name with the full path as
+/// hover text; one that no longer exists is greyed with "Folder not found" and cannot be opened.
+/// The right-click menu removes a favourite, or clears the recent folders.
+fn draw_folder_list(
+    ui: &mut egui::Ui,
+    list: &FolderList,
+    section: LibrarySection,
+    max_height: f32,
+    actions: &mut Vec<LibraryAction>,
+) {
+    if list.is_empty() {
+        let empty = if section == LibrarySection::Favourites {
+            LibraryText::NoFavourites
+        } else {
+            LibraryText::NoRecent
+        };
+        column_note(ui, library_text(empty));
+        return;
+    }
+    let salt = if section == LibrarySection::Favourites {
+        "library-favourites-list"
+    } else {
+        "library-recent-list"
+    };
+    egui::ScrollArea::vertical()
+        .id_salt(salt)
+        .max_height(max_height)
+        .auto_shrink([false, true])
+        .show(ui, |ui| {
+            for entry in list.entries() {
+                let item = if entry.exists {
+                    ui.selectable_label(false, entry.name.as_str())
+                        .on_hover_text(entry.path.display().to_string())
+                } else {
+                    ui.add(
+                        egui::Label::new(egui::RichText::new(entry.name.as_str()).weak())
+                            .sense(egui::Sense::click()),
+                    )
+                    .on_hover_text(library_text(LibraryText::FolderNotFound))
+                };
+                if entry.exists && item.clicked() {
+                    actions.push(LibraryAction::Open(entry.path.clone()));
+                }
+                item.context_menu(|ui| {
+                    let (text, action) = if section == LibrarySection::Favourites {
+                        (
+                            LibraryText::RemoveFromFavourites,
+                            LibraryAction::RemoveFavourite(entry.path.clone()),
+                        )
+                    } else {
+                        (LibraryText::ClearRecent, LibraryAction::ClearRecent)
+                    };
+                    if ui.button(library_text(text)).clicked() {
+                        actions.push(action);
+                        ui.close();
+                    }
+                });
+            }
+        });
+}
+
 /// The inspector's contents (ADR 0017 §2.1, T110): the file name of the current image (wrapped,
 /// never cut), then the sections Info and Metadata, open or collapsed as `shell` says. Every text
 /// comes from `inspector_text.rs`, `info_panel.rs` (`panel_text`, `info_panel`) or
@@ -4879,11 +5282,15 @@ impl eframe::App for Loupe {
             self.draw_preview(ui, blocked, &mut commands);
         } else {
             let mut filter_choice = None;
+            let mut favourite = None;
             egui::Panel::top("menu-bar").show(ui, |ui| {
                 ui.add_enabled_ui(!blocked, |ui| {
-                    self.draw_menu_bar(ui, &mut commands, &mut filter_choice);
+                    self.draw_menu_bar(ui, &mut commands, &mut filter_choice, &mut favourite);
                 });
             });
+            if let Some(folder) = favourite {
+                self.library_action(LibraryAction::AddFavourite(folder));
+            }
             egui::Panel::top("command-bar").show(ui, |ui| {
                 ui.add_enabled_ui(!blocked, |ui| self.draw_command_bar(ui, &mut commands));
             });
@@ -4948,7 +5355,8 @@ impl eframe::App for Loupe {
         // The window, full screen and the columns as they are now (ADR 0017 §2.5, T109); a
         // failure is only logged, no dialog at exit.
         if let Some(path) = &self.settings_path
-            && let Err(error) = save_settings(path, &self.settings)
+            && let Err(error) =
+                save_settings_with_library(path, &self.settings, &self.library.saved())
         {
             eprintln!("pw-loupe: the settings could not be saved at exit: {error}");
         }
@@ -5000,18 +5408,18 @@ fn open_journal() -> Option<Journal> {
 /// The fallback encodings of the settings window's drop-down, in its order.
 const FALLBACK_CHOICES: [Fallback; 2] = [Fallback::Windows1252, Fallback::Latin1];
 
-/// The settings at start (T106): read from `path` with each problem written to the log; the
-/// defaults without a path.
-fn start_settings(path: Option<&Path>) -> Settings {
+/// The settings and the library's lists at start (T106, T135): read from `path` with each problem
+/// written to the log; the defaults without a path.
+fn start_settings(path: Option<&Path>) -> (Settings, SavedLibrary) {
     let Some(path) = path else {
         eprintln!("pw-loupe: LOCALAPPDATA is not set; the default settings are used");
-        return Settings::default();
+        return (Settings::default(), SavedLibrary::default());
     };
-    let (settings, problems) = load_settings(path);
+    let (settings, library, problems) = load_settings_and_library(path);
     for problem in problems {
         eprintln!("pw-loupe: {problem}");
     }
-    settings
+    (settings, library)
 }
 
 /// Shows a warning box from its own thread, so the frame is not held up.
@@ -5041,9 +5449,13 @@ fn image_check(core: &ViewCore<NativeBackend>) -> RawImageCheck {
 }
 
 fn run(options: Options) -> Result<(), String> {
+    // First: no Windows "There is no disk in the drive" dialog for an empty card reader or DVD
+    // drive anywhere in the program, the drive list included (U4-Q1, T135).
+    suppress_no_disk_dialogs();
     let journal = open_journal();
     let settings_path = settings_path();
-    let settings = start_settings(settings_path.as_deref());
+    let (settings, saved_library) = start_settings(settings_path.as_deref());
+    let library = Library::new(&read_drives(), &saved_library);
     let config = Config {
         core_budget: options.core_mb << 20,
         texture_budget: options.texture_mb << 20,
@@ -5148,6 +5560,7 @@ fn run(options: Options) -> Result<(), String> {
                 filmstrip_offset: 0.0,
                 filmstrip_followed: None,
                 monitor_profile,
+                library,
             };
             if let Some(p) = path {
                 loupe.open(&p, false);
@@ -5705,8 +6118,9 @@ mod tests {
         // 47 fields, eight of them (the address, Email, Phone, Web URL) in the contact structure,
         // which is now left out as a whole (T123, point 7); and the rating and the label, shown in
         // the Rating and Label section (T124, point 6). The seven fields of the Licence (PLUS)
-        // section (T128) are seven of them.
-        assert_eq!(properties.len(), 42);
+        // section (T128) are seven of them. Location Created and Location Shown, edited in Time
+        // and Place (T136), are left out too.
+        assert_eq!(properties.len(), 44);
         for id in [
             "dc:title",
             "dc:description",
@@ -5728,6 +6142,8 @@ mod tests {
             "photoshop:SupplementalCategories",
             "xmp:Rating",
             "xmp:Label",
+            "Iptc4xmpExt:LocationCreated",
+            "Iptc4xmpExt:LocationShown",
         ] {
             assert!(properties.contains(&id), "{id}");
         }
@@ -5736,10 +6152,12 @@ mod tests {
         unique.sort_unstable();
         unique.dedup();
         assert_eq!(unique.len(), properties.len());
-        // Structures (U11) and Intellectual Genre (U10-Q4) stay under Other Metadata.
+        // The other structures (the rest of U11) and Intellectual Genre (U10-Q4) stay under Other
+        // Metadata.
         for id in [
             "Iptc4xmpCore:IntellectualGenre",
-            "Iptc4xmpExt:LocationCreated",
+            "Iptc4xmpExt:Genre",
+            "plus:ImageCreator",
         ] {
             assert!(!properties.contains(&id), "{id}");
         }

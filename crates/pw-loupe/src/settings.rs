@@ -6,7 +6,8 @@
 //! problem text in English for the log. Saving writes a temporary file and renames it onto the
 //! settings file, so a crash never leaves half a file. The main window's remembered state (ADR
 //! 0017 §2.5, U1, T109: theme, window, full screen, side columns; the metadata window's sections,
-//! T123) is kept in the same file.
+//! T123) is kept in the same file, and so are the library's favourites and recent folders and
+//! its sections' states (ADR 0017 §2.1, U4, T135).
 
 use std::fs::File;
 use std::io::{self, Write};
@@ -57,6 +58,14 @@ const EDITOR_ASSIGNMENT: &str = "editor_assignment";
 const EDITOR_RATING_LABEL: &str = "editor_rating_label";
 /// The key of the metadata window's Licence (PLUS) section (U10d, T128).
 const EDITOR_LICENCE: &str = "editor_licence";
+/// The keys of the library's sections (T135, U4-Q7).
+const LIBRARY_FOLDERS: &str = "library_folders";
+const LIBRARY_FAVOURITES: &str = "library_favourites";
+const LIBRARY_RECENT: &str = "library_recent";
+/// The keys of a favourite and of a recent folder: one line per folder, in the list's order
+/// (T135, U4-Q3, U4-Q4).
+const FAVOURITE: &str = "favourite";
+const RECENT: &str = "recent";
 /// The values of [`FILMSTRIP`] and [`FILMSTRIP_MARKED`].
 const SHOWN: &str = "shown";
 const HIDDEN: &str = "hidden";
@@ -134,6 +143,19 @@ pub struct ShellSettings {
     pub editor_assignment: ColumnState,
     pub editor_rating_label: ColumnState,
     pub editor_licence: ColumnState,
+    /// The library's sections Folders, Favourites and Recent (T135, U4-Q7).
+    pub library_folders: ColumnState,
+    pub library_favourites: ColumnState,
+    pub library_recent: ColumnState,
+}
+
+/// The library's lists as `settings.txt` keeps them (T135, U4-Q3, U4-Q4): the favourites in the
+/// order they were added and the recent folders, most recent first. Kept apart from [`Settings`],
+/// which is `Copy`.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SavedLibrary {
+    pub favourites: Vec<PathBuf>,
+    pub recent: Vec<PathBuf>,
 }
 
 impl Default for ShellSettings {
@@ -169,6 +191,10 @@ impl Default for ShellSettings {
             editor_assignment: ColumnState::Open,
             editor_rating_label: ColumnState::Open,
             editor_licence: ColumnState::Open,
+            // Every section of the library open.
+            library_folders: ColumnState::Open,
+            library_favourites: ColumnState::Open,
+            library_recent: ColumnState::Open,
         }
     }
 }
@@ -219,22 +245,32 @@ pub fn settings_path() -> Option<PathBuf> {
         .map(|data| PathBuf::from(data).join("RawStride").join("settings.txt"))
 }
 
+/// Reads the settings file without the library's lists ([`load_settings_and_library`]).
+pub fn load_settings(path: &Path) -> (Settings, Vec<String>) {
+    let (settings, _, problems) = load_settings_and_library(path);
+    (settings, problems)
+}
+
 /// Reads the settings file. A missing file gives the defaults and no problem. An unknown key, a
 /// bad value or a line without `=` keeps the default for it and gives one problem naming the line
 /// number; a file that cannot be read gives the defaults and one problem. The problems are English,
-/// for the log (`eprintln!` by the caller).
-pub fn load_settings(path: &Path) -> (Settings, Vec<String>) {
+/// for the log (`eprintln!` by the caller). The `favourite` and `recent` lines give the library's
+/// lists in their order; a path that is empty or not a full path is skipped with a problem.
+pub fn load_settings_and_library(path: &Path) -> (Settings, SavedLibrary, Vec<String>) {
     let mut settings = Settings::default();
+    let mut library = SavedLibrary::default();
     let mut problems = Vec::new();
     let text = match std::fs::read_to_string(path) {
         Ok(text) => text,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return (settings, problems),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            return (settings, library, problems);
+        }
         Err(error) => {
             problems.push(format!(
                 "settings file {} could not be read, defaults used: {error}",
                 path.display()
             ));
-            return (settings, problems);
+            return (settings, library, problems);
         }
     };
     // A byte order mark written by an editor is not part of the first key.
@@ -349,19 +385,47 @@ pub fn load_settings(path: &Path) -> (Settings, Vec<String>) {
                 ALL => shell.filmstrip_marked = false,
                 _ => problems.push(bad("all or marked")),
             },
+            LIBRARY_FOLDERS | LIBRARY_FAVOURITES | LIBRARY_RECENT => match parse_column(value) {
+                Some(state) => match key {
+                    LIBRARY_FOLDERS => shell.library_folders = state,
+                    LIBRARY_FAVOURITES => shell.library_favourites = state,
+                    _ => shell.library_recent = state,
+                },
+                None => problems.push(bad("open or collapsed")),
+            },
+            FAVOURITE | RECENT => match parse_folder(value) {
+                Some(folder) if key == FAVOURITE => library.favourites.push(folder),
+                Some(folder) => library.recent.push(folder),
+                None => problems.push(format!(
+                    "settings file {}, line {number}: bad value \"{value}\" for {key} (expected \
+                     a full folder path), line ignored",
+                    path.display()
+                )),
+            },
             _ => problems.push(format!(
                 "settings file {}, line {number}: unknown key \"{key}\", line ignored",
                 path.display()
             )),
         }
     }
-    (settings, problems)
+    (settings, library, problems)
+}
+
+/// Writes the settings without favourites or recent folders ([`save_settings_with_library`]).
+pub fn save_settings(path: &Path, settings: &Settings) -> io::Result<()> {
+    save_settings_with_library(path, settings, &SavedLibrary::default())
 }
 
 /// Writes the settings: creates the folder, writes every key (after the comment line
 /// `# RawStride`; `window` only when there is one) to `<file name>.tmp` in the same folder, then renames it onto the settings file
-/// (which replaces it on Windows), so a crash never leaves half a file.
-pub fn save_settings(path: &Path, settings: &Settings) -> io::Result<()> {
+/// (which replaces it on Windows), so a crash never leaves half a file. The library's favourites
+/// and recent folders follow, one line each in their order; a path that could not be read back
+/// as it is (not UTF-8, a line break in it, spaces at either end, not a full path) is left out.
+pub fn save_settings_with_library(
+    path: &Path,
+    settings: &Settings,
+    library: &SavedLibrary,
+) -> io::Result<()> {
     let Some(file_name) = path.file_name() else {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -380,6 +444,7 @@ pub fn save_settings(path: &Path, settings: &Settings) -> io::Result<()> {
         fallback_value(settings.fallback)
     );
     text.push_str(&shell_lines(&settings.shell));
+    text.push_str(&library_lines(library));
     let written = write_synced(&temp, text.as_bytes()).and_then(|()| std::fs::rename(&temp, path));
     if written.is_err() {
         // Best effort: the error of the write or the rename is the one reported.
@@ -438,7 +503,40 @@ fn shell_lines(shell: &ShellSettings) -> String {
         column_value(shell.editor_rating_label),
         column_value(shell.editor_licence)
     ));
+    text.push_str(&format!(
+        "{LIBRARY_FOLDERS} = {}\n{LIBRARY_FAVOURITES} = {}\n{LIBRARY_RECENT} = {}\n",
+        column_value(shell.library_folders),
+        column_value(shell.library_favourites),
+        column_value(shell.library_recent)
+    ));
     text
+}
+
+/// The `favourite` and `recent` lines, each list in its order; a path that [`parse_folder`] would
+/// not give back as it is, is left out.
+fn library_lines(library: &SavedLibrary) -> String {
+    let mut text = String::new();
+    for (key, folders) in [(FAVOURITE, &library.favourites), (RECENT, &library.recent)] {
+        for folder in folders {
+            if let Some(value) = folder.to_str()
+                && parse_folder(value).as_deref() == Some(folder.as_path())
+            {
+                text.push_str(&format!("{key} = {value}\n"));
+            }
+        }
+    }
+    text
+}
+
+/// The folder of a `favourite` or `recent` line: a full path without a line break or spaces at
+/// either end (they would be lost when the line is read).
+fn parse_folder(value: &str) -> Option<PathBuf> {
+    let folder = Path::new(value);
+    let readable = !value.is_empty()
+        && value.trim() == value
+        && !value.contains(['\n', '\r'])
+        && folder.is_absolute();
+    readable.then(|| folder.to_path_buf())
 }
 
 fn parse_bool(value: &str) -> Option<bool> {
@@ -524,7 +622,10 @@ mod tests {
     use pw_metadata::iim::Fallback;
     use pw_metadata::write_plan::WriteSettings;
 
-    use super::{Settings, ShellSettings, WindowRect, load_settings, save_settings, settings_path};
+    use super::{
+        SavedLibrary, Settings, ShellSettings, WindowRect, load_settings,
+        load_settings_and_library, save_settings, save_settings_with_library, settings_path,
+    };
     use crate::editor::EditorSection;
     use crate::shell::{ColumnState, Theme};
 
@@ -632,7 +733,8 @@ mod tests {
              preview_zoom = open\nfilmstrip = shown\nfilmstrip_marked = all\n\
              preview_hidden = false\neditor_content = open\neditor_creator_rights = open\n\
              editor_time_place = open\neditor_assignment = open\n\
-             editor_rating_label = open\neditor_licence = open\n"
+             editor_rating_label = open\neditor_licence = open\nlibrary_folders = open\n\
+             library_favourites = open\nlibrary_recent = open\n"
         );
     }
 
@@ -810,6 +912,9 @@ mod tests {
             editor_assignment: ColumnState::Collapsed,
             editor_rating_label: ColumnState::Collapsed,
             editor_licence: ColumnState::Collapsed,
+            library_folders: ColumnState::Collapsed,
+            library_favourites: ColumnState::Collapsed,
+            library_recent: ColumnState::Collapsed,
         }
     }
 
@@ -1199,5 +1304,164 @@ mod tests {
             assert!(problems[0].contains(key), "{problems:?}");
             assert_eq!(settings.shell, ShellSettings::default(), "{key}");
         }
+    }
+
+    // --- The library (T135, U4-Q3, U4-Q4, U4-Q7) ---
+
+    /// A full path that need not exist.
+    fn full(name: &str) -> PathBuf {
+        std::env::temp_dir().join("pw-loupe-library").join(name)
+    }
+
+    #[test]
+    fn the_library_sections_are_open_by_default_and_round_trip_one_at_a_time() {
+        let shell = ShellSettings::default();
+        assert_eq!(shell.library_folders, ColumnState::Open);
+        assert_eq!(shell.library_favourites, ColumnState::Open);
+        assert_eq!(shell.library_recent, ColumnState::Open);
+        let dir = TempDir::new();
+        let path = dir.0.join("settings.txt");
+        for (key, shell) in [
+            (
+                "library_folders",
+                ShellSettings {
+                    library_folders: ColumnState::Collapsed,
+                    ..ShellSettings::default()
+                },
+            ),
+            (
+                "library_favourites",
+                ShellSettings {
+                    library_favourites: ColumnState::Collapsed,
+                    ..ShellSettings::default()
+                },
+            ),
+            (
+                "library_recent",
+                ShellSettings {
+                    library_recent: ColumnState::Collapsed,
+                    ..ShellSettings::default()
+                },
+            ),
+        ] {
+            let settings = Settings {
+                shell,
+                ..Settings::default()
+            };
+            save_settings(&path, &settings).unwrap();
+            let text = std::fs::read_to_string(&path).unwrap();
+            assert!(text.contains(&format!("{key} = collapsed\n")), "{text}");
+            let (loaded, problems) = load_settings(&path);
+            assert!(problems.is_empty(), "{problems:?}");
+            assert_eq!(loaded, settings, "{key}");
+        }
+    }
+
+    #[test]
+    fn a_bad_value_of_each_library_section_key_keeps_open_and_names_the_line() {
+        for key in ["library_folders", "library_favourites", "library_recent"] {
+            let (_dir, path) =
+                TempDir::with_file(&format!("# RawStride\ncreate_iim = true\n{key} = closed\n"));
+            let (settings, problems) = load_settings(&path);
+            assert_one_problem_on_line(&problems, 3);
+            assert!(problems[0].contains(key), "{problems:?}");
+            assert_eq!(settings.shell, ShellSettings::default(), "{key}");
+        }
+    }
+
+    #[test]
+    fn favourites_and_recent_folders_are_saved_and_loaded_in_their_order() {
+        let dir = TempDir::new();
+        let path = dir.0.join("settings.txt");
+        let library = SavedLibrary {
+            favourites: vec![full("Zebra"), full("alpha"), full("Mitt arkiv 2026")],
+            recent: vec![full("Last"), full("Zebra"), full("First")],
+        };
+        let settings = Settings {
+            create_iim: true,
+            ..Settings::default()
+        };
+        save_settings_with_library(&path, &settings, &library).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        let expected_lines = format!(
+            "favourite = {}\nfavourite = {}\nfavourite = {}\nrecent = {}\nrecent = {}\n\
+             recent = {}\n",
+            full("Zebra").display(),
+            full("alpha").display(),
+            full("Mitt arkiv 2026").display(),
+            full("Last").display(),
+            full("Zebra").display(),
+            full("First").display()
+        );
+        assert!(text.ends_with(&expected_lines), "{text}");
+        let (loaded, loaded_library, problems) = load_settings_and_library(&path);
+        assert!(problems.is_empty(), "{problems:?}");
+        assert_eq!(loaded, settings);
+        assert_eq!(loaded_library, library);
+        // `load_settings` reads the same file and leaves the lists out.
+        let (only_settings, problems) = load_settings(&path);
+        assert!(problems.is_empty(), "{problems:?}");
+        assert_eq!(only_settings, settings);
+    }
+
+    #[test]
+    fn a_file_without_library_lines_gives_empty_lists_and_save_settings_writes_none() {
+        let dir = TempDir::new();
+        let path = dir.0.join("settings.txt");
+        save_settings(&path, &Settings::default()).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            !text
+                .lines()
+                .any(|line| line.starts_with("favourite =") || line.starts_with("recent =")),
+            "{text}"
+        );
+        let (_, library, problems) = load_settings_and_library(&path);
+        assert!(problems.is_empty(), "{problems:?}");
+        assert_eq!(library, SavedLibrary::default());
+    }
+
+    #[test]
+    fn an_unreadable_favourite_or_recent_line_is_skipped_with_a_problem_naming_the_line() {
+        let good = full("Good");
+        let (_dir, path) = TempDir::with_file(&format!(
+            "# RawStride\nfavourite = {}\nfavourite = relative\\folder\nfavourite =\n\
+             recent = not full\nrecent = {}\n",
+            good.display(),
+            good.display()
+        ));
+        let (settings, library, problems) = load_settings_and_library(&path);
+        assert_eq!(problems.len(), 3, "{problems:?}");
+        for (problem, line) in problems.iter().zip([3, 4, 5]) {
+            assert!(problem.contains(&format!("line {line}:")), "{problem}");
+            assert!(problem.contains("line ignored"), "{problem}");
+        }
+        assert!(problems[0].contains("favourite"), "{problems:?}");
+        assert!(problems[2].contains("recent"), "{problems:?}");
+        assert_eq!(library.favourites, vec![good.clone()]);
+        assert_eq!(library.recent, vec![good]);
+        assert_eq!(settings, Settings::default());
+    }
+
+    #[test]
+    fn a_path_that_could_not_be_read_back_is_left_out_when_saving() {
+        let dir = TempDir::new();
+        let path = dir.0.join("settings.txt");
+        let kept = full("Kept");
+        let library = SavedLibrary {
+            favourites: vec![
+                full("line\nbreak"),
+                kept.clone(),
+                PathBuf::from("relative"),
+                // A space inside a name is kept; only one at the end of the line would be lost.
+                full("with space inside"),
+            ],
+            recent: vec![full("trailing space ")],
+        };
+        save_settings_with_library(&path, &Settings::default(), &library).unwrap();
+        let (_, loaded, problems) = load_settings_and_library(&path);
+        assert!(problems.is_empty(), "{problems:?}");
+        assert_eq!(loaded.favourites, vec![kept, full("with space inside")]);
+        assert!(loaded.recent.is_empty(), "{:?}", loaded.recent);
     }
 }

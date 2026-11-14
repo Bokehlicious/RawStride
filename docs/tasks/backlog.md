@@ -5,8 +5,6 @@ and reviewer:
 
 - A timeout when ExifTool hangs (process supervision across threads). Today only the shutdown has a
   timeout (`SHUTDOWN_TIMEOUT` in `pw-metadata`'s `exiftool.rs`).
-- Suppressing the Windows "no disk in drive" dialog when scanning empty card readers (needs a
-  Windows API call and a new dependency).
 - ADR 0007 (IPTC metadata): milestone 8 is done (I1–I13, 2026-11-14; what is left is in ADR 0007
   §18). The `Cleared` task waits for D1 (ADR 0007 §17). Also later:
   Exif ImageEditor ↔ Contributor and GPS → Location Created (§6.1), left out of T81; keyword
@@ -55,4 +53,4 @@ Removed on 2026-11-13 because they are done or planned elsewhere: ADR 0010 steps
 T30–T40); ADR 0011 step K4 (done, T26–T29); moving rejected or picked images to `_rejected` /
 `_picked` (ADR 0013 §13), now ADR 0017 U9 (§2.6, U-Q6); the import dialog fields for title and description in the Tauri
 app's `ui/` (owner: dropped, the Tauri app is retired at the switch, GR8). Removed on 2026-11-14:
-"Same folder, two tabs" (done, T119).
+"Same folder, two tabs" (done, T119); suppressing the Windows "no disk in drive" dialog (done, T135: `SetErrorMode` at start).

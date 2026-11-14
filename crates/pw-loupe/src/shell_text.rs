@@ -28,8 +28,6 @@ pub enum ShellText {
     Tasks,
     /// The right column's heading.
     Inspector,
-    /// The line under "Library" until U4 fills it.
-    LibraryNote,
     /// The line under "Tasks" when no import runs hidden.
     NoTasks,
     /// The folder dialog's title (Open Folder, Ctrl+O).
@@ -73,7 +71,6 @@ pub fn shell_text(text: ShellText) -> &'static str {
         ShellText::Library => "Library",
         ShellText::Tasks => "Tasks",
         ShellText::Inspector => "Inspector",
-        ShellText::LibraryNote => "Open a folder with Ctrl+O or drag it to the window.",
         ShellText::NoTasks => "No tasks in progress.",
         ShellText::OpenFolderTitle => "Open Folder",
         ShellText::FilterMenu => "Filter",
@@ -341,10 +338,6 @@ mod tests {
             (ShellText::Library, "Library"),
             (ShellText::Tasks, "Tasks"),
             (ShellText::Inspector, "Inspector"),
-            (
-                ShellText::LibraryNote,
-                "Open a folder with Ctrl+O or drag it to the window.",
-            ),
             (ShellText::NoTasks, "No tasks in progress."),
             (ShellText::OpenFolderTitle, "Open Folder"),
             (ShellText::FilterMenu, "Filter"),

@@ -1,4 +1,4 @@
-# T135. ADR 0017 U4: the Library: folder tree, favourites and recent folders — Open
+# T135. ADR 0017 U4: the Library: folder tree, favourites and recent folders — Done
 
 - **Can start now.** The owner approved the proposals of U4-Q1–U4-Q7 (at the end of this task) on
   2026-11-14, including the two `windows-sys` features of U4-Q1; they are written into the points
@@ -91,3 +91,5 @@
 |---|---|---|
 | 2026-11-14 | Blocked | Added; waits for U4-Q1–U4-Q7 |
 | 2026-11-14 | Open | The owner approved U4-Q1–U4-Q7 as proposed |
+| 2026-11-14 | Ready for review | Done as written; `check.ps1` all OK (pw-loupe 621 passed, 1 ignored). Beyond the four functions the coordination note names, `main.rs` also changed where point 3 and saving need it: the tab bar's right-click menu, `draw_menu_bar` (File ▸ Add to Favourites after Close Tab, drawn in `main.rs` because the menu table is in `shell.rs`, not in this task's files), the three `save_settings` calls (now with the library), `start_settings`/`run`, and the new `library_action`, `save_library` and drawing functions. `lib.rs` also re-exports the two new settings functions and `SavedLibrary` |
+| 2026-11-14 | Done | Reviewed; reviewer fixes: a network drive's label is not read (a disconnected mapped drive can block the start), one clippy warning in a test. Owner hand check done (tree, favourites, recent; an empty Blu-ray drive shows "(no disk)" without a dialog). check.ps1 all OK (1370 passed, 53 ignored) |
