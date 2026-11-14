@@ -5,7 +5,8 @@
 //! `key = value` per line. Loading never fails: what cannot be read keeps its default and gives a
 //! problem text in English for the log. Saving writes a temporary file and renames it onto the
 //! settings file, so a crash never leaves half a file. The main window's remembered state (ADR
-//! 0017 §2.5, U1, T109: theme, window, full screen, side columns) is kept in the same file.
+//! 0017 §2.5, U1, T109: theme, window, full screen, side columns; the metadata window's sections,
+//! T123) is kept in the same file.
 
 use std::fs::File;
 use std::io::{self, Write};
@@ -15,6 +16,7 @@ use pw_metadata::edit::EditOptions;
 use pw_metadata::iim::Fallback;
 use pw_metadata::write_plan::WriteSettings;
 
+use crate::editor::EditorSection;
 use crate::shell::{ColumnState, DEFAULT_LEFT_WIDTH, DEFAULT_RIGHT_WIDTH, Theme};
 
 /// The key of the setting "Skapa IPTC-IIM för kompatibilitet med äldre system".
@@ -46,6 +48,11 @@ const PREVIEW_ZOOM: &str = "preview_zoom";
 const FILMSTRIP: &str = "filmstrip";
 const FILMSTRIP_MARKED: &str = "filmstrip_marked";
 const PREVIEW_HIDDEN: &str = "preview_hidden";
+/// The keys of the metadata window's sections, open or collapsed (ADR 0017 U10-Q6, T123).
+const EDITOR_CONTENT: &str = "editor_content";
+const EDITOR_CREATOR_RIGHTS: &str = "editor_creator_rights";
+const EDITOR_TIME_PLACE: &str = "editor_time_place";
+const EDITOR_ASSIGNMENT: &str = "editor_assignment";
 /// The values of [`FILMSTRIP`] and [`FILMSTRIP_MARKED`].
 const SHOWN: &str = "shown";
 const HIDDEN: &str = "hidden";
@@ -115,6 +122,12 @@ pub struct ShellSettings {
     pub filmstrip_marked: bool,
     /// The right column and the filmstrip hidden with `H` in the preview.
     pub preview_hidden: bool,
+    /// The metadata window's sections (T123, U10-Q6): Content, Creator and Rights, Time and
+    /// Place, Assignment.
+    pub editor_content: ColumnState,
+    pub editor_creator_rights: ColumnState,
+    pub editor_time_place: ColumnState,
+    pub editor_assignment: ColumnState,
 }
 
 impl Default for ShellSettings {
@@ -143,7 +156,35 @@ impl Default for ShellSettings {
             filmstrip: true,
             filmstrip_marked: false,
             preview_hidden: false,
+            // Every section of the metadata window open (U10-Q6).
+            editor_content: ColumnState::Open,
+            editor_creator_rights: ColumnState::Open,
+            editor_time_place: ColumnState::Open,
+            editor_assignment: ColumnState::Open,
         }
+    }
+}
+
+impl ShellSettings {
+    /// The state of a section of the metadata window (T123).
+    pub fn editor_section(&self, section: EditorSection) -> ColumnState {
+        match section {
+            EditorSection::Content => self.editor_content,
+            EditorSection::CreatorRights => self.editor_creator_rights,
+            EditorSection::TimePlace => self.editor_time_place,
+            EditorSection::Assignment => self.editor_assignment,
+        }
+    }
+
+    /// Opens a collapsed section of the metadata window, or collapses an open one.
+    pub fn toggle_editor_section(&mut self, section: EditorSection) {
+        let state = match section {
+            EditorSection::Content => &mut self.editor_content,
+            EditorSection::CreatorRights => &mut self.editor_creator_rights,
+            EditorSection::TimePlace => &mut self.editor_time_place,
+            EditorSection::Assignment => &mut self.editor_assignment,
+        };
+        *state = state.toggled();
     }
 }
 
@@ -262,6 +303,17 @@ pub fn load_settings(path: &Path) -> (Settings, Vec<String>) {
                 Some(state) => shell.inspector_metadata = state,
                 None => problems.push(bad("open or collapsed")),
             },
+            EDITOR_CONTENT | EDITOR_CREATOR_RIGHTS | EDITOR_TIME_PLACE | EDITOR_ASSIGNMENT => {
+                match parse_column(value) {
+                    Some(state) => match key {
+                        EDITOR_CONTENT => shell.editor_content = state,
+                        EDITOR_CREATOR_RIGHTS => shell.editor_creator_rights = state,
+                        EDITOR_TIME_PLACE => shell.editor_time_place = state,
+                        _ => shell.editor_assignment = state,
+                    },
+                    None => problems.push(bad("open or collapsed")),
+                }
+            }
             PREVIEW_COLUMN | PREVIEW_INFO | PREVIEW_ZOOM => match parse_column(value) {
                 Some(state) => match key {
                     PREVIEW_COLUMN => shell.preview_column = state,
@@ -359,6 +411,14 @@ fn shell_lines(shell: &ShellSettings) -> String {
         if shell.filmstrip_marked { MARKED } else { ALL },
         shell.preview_hidden
     ));
+    text.push_str(&format!(
+        "{EDITOR_CONTENT} = {}\n{EDITOR_CREATOR_RIGHTS} = {}\n{EDITOR_TIME_PLACE} = {}\n\
+         {EDITOR_ASSIGNMENT} = {}\n",
+        column_value(shell.editor_content),
+        column_value(shell.editor_creator_rights),
+        column_value(shell.editor_time_place),
+        column_value(shell.editor_assignment)
+    ));
     text
 }
 
@@ -446,6 +506,7 @@ mod tests {
     use pw_metadata::write_plan::WriteSettings;
 
     use super::{Settings, ShellSettings, WindowRect, load_settings, save_settings, settings_path};
+    use crate::editor::EditorSection;
     use crate::shell::{ColumnState, Theme};
 
     static NEXT_TEMP: AtomicUsize = AtomicUsize::new(0);
@@ -550,7 +611,8 @@ mod tests {
              columns_hidden = false\ninspector_info = open\ninspector_metadata = open\n\
              preview_column = open\npreview_column_width = 300\npreview_info = open\n\
              preview_zoom = open\nfilmstrip = shown\nfilmstrip_marked = all\n\
-             preview_hidden = false\n"
+             preview_hidden = false\neditor_content = open\neditor_creator_rights = open\n\
+             editor_time_place = open\neditor_assignment = open\n"
         );
     }
 
@@ -722,6 +784,10 @@ mod tests {
             filmstrip: false,
             filmstrip_marked: true,
             preview_hidden: true,
+            editor_content: ColumnState::Collapsed,
+            editor_creator_rights: ColumnState::Collapsed,
+            editor_time_place: ColumnState::Collapsed,
+            editor_assignment: ColumnState::Collapsed,
         }
     }
 
@@ -974,6 +1040,92 @@ mod tests {
             assert!(problems[0].contains(key), "{problems:?}");
             assert_eq!(settings.shell, ShellSettings::default(), "{key} = {value}");
             assert!(settings.create_iim, "{key} = {value}");
+        }
+    }
+
+    // --- the metadata window's sections (T123, U10-Q6) ---
+
+    #[test]
+    fn the_editor_sections_are_open_by_default() {
+        let shell = ShellSettings::default();
+        for section in EditorSection::ALL {
+            assert_eq!(
+                shell.editor_section(section),
+                ColumnState::Open,
+                "{section:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn each_editor_section_toggles_alone_and_round_trips_through_its_key() {
+        let dir = TempDir::new();
+        let path = dir.0.join("settings.txt");
+        let keys = [
+            (EditorSection::Content, "editor_content"),
+            (EditorSection::CreatorRights, "editor_creator_rights"),
+            (EditorSection::TimePlace, "editor_time_place"),
+            (EditorSection::Assignment, "editor_assignment"),
+        ];
+        for (section, key) in keys {
+            let mut shell = ShellSettings::default();
+            shell.toggle_editor_section(section);
+            for other in EditorSection::ALL {
+                let expected = if other == section {
+                    ColumnState::Collapsed
+                } else {
+                    ColumnState::Open
+                };
+                assert_eq!(
+                    shell.editor_section(other),
+                    expected,
+                    "{section:?}/{other:?}"
+                );
+            }
+            let settings = Settings {
+                shell,
+                ..Settings::default()
+            };
+            save_settings(&path, &settings).unwrap();
+            let text = std::fs::read_to_string(&path).unwrap();
+            assert!(text.contains(&format!("{key} = collapsed\n")), "{text}");
+            let (loaded, problems) = load_settings(&path);
+            assert!(problems.is_empty(), "{problems:?}");
+            assert_eq!(loaded, settings);
+            // Toggled again: open.
+            shell.toggle_editor_section(section);
+            assert_eq!(shell.editor_section(section), ColumnState::Open);
+        }
+    }
+
+    #[test]
+    fn the_editor_section_keys_are_read_and_a_missing_key_is_open() {
+        let (_dir, path) = TempDir::with_file(
+            "# RawStride\neditor_content = collapsed\neditor_time_place = collapsed\n",
+        );
+        let (settings, problems) = load_settings(&path);
+        assert!(problems.is_empty(), "{problems:?}");
+        let shell = settings.shell;
+        assert_eq!(shell.editor_content, ColumnState::Collapsed);
+        assert_eq!(shell.editor_creator_rights, ColumnState::Open);
+        assert_eq!(shell.editor_time_place, ColumnState::Collapsed);
+        assert_eq!(shell.editor_assignment, ColumnState::Open);
+    }
+
+    #[test]
+    fn a_bad_value_of_each_editor_section_key_keeps_open_and_names_the_line() {
+        for key in [
+            "editor_content",
+            "editor_creator_rights",
+            "editor_time_place",
+            "editor_assignment",
+        ] {
+            let (_dir, path) =
+                TempDir::with_file(&format!("# RawStride\ncreate_iim = true\n{key} = closed\n"));
+            let (settings, problems) = load_settings(&path);
+            assert_one_problem_on_line(&problems, 3);
+            assert!(problems[0].contains(key), "{problems:?}");
+            assert_eq!(settings.shell, ShellSettings::default(), "{key}");
         }
     }
 }

@@ -15,7 +15,7 @@ the one before it is accepted.
 
 | Step | Task | Content | Can start |
 |---|---|---|---|
-| U10a | T123 | Every simple text, date and list field of sections 1–4 editable (the fields of §2.3.1 that are not structures), the contact address fields and Copyrighted; the form in collapsible sections whose state is remembered; the deprecated IIM fields read-only in their section | now (U10-Q1–U10-Q6 approved 2026-11-14) |
+| U10a | T123 | Every simple text, date and list field of sections 1–4 editable (the fields of §2.3.1 that are not structures), the contact address fields and Copyrighted; the form in collapsible sections whose state is remembered; the deprecated IIM fields read-only in their section | done (T123, 2026-11-14) |
 | U10b | – | Settings: which sections and fields are shown, and in which order | after T123 |
 | U10c | – | Rating and Label in the window (section 6), written through the rating path (U10-Q5) | after T123 |
 | R1 | reviewer | Read the PLUS controlled vocabulary (ADR 0007 §16.4, Q9) and save it in `D:\PhotoWorkflowData\references\` as P1 was | now |

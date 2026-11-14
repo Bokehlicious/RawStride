@@ -128,4 +128,5 @@ was when the task was done, so "this file", "below" and "the Log" in T1–T115 m
 | [T119](T119-same-folder-one-tab.md) | The same folder opens in one tab, however its path is written |
 | [T121](T121-one-check-for-swedish-letters-and-test-names.md) | One check for Swedish letters; test names that say English |
 | [T122](T122-robust-free-space-test.md) | A free-space test that does not fail by chance |
+| [T123](T123-metadata-window-every-simple-field.md) | ADR 0017 U10, first part: every simple field of the metadata window, in sections |
 | [T120](T120-exiftool-from-the-program-folder.md) | ExifTool from the program folder first |

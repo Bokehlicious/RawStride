@@ -2,9 +2,11 @@
 //! its unresolved conflicts, the edits they give, the warnings and the texts of the write notices.
 //! Pure functions, no egui; T105 draws the window.
 //!
-//! - **Fields** (D12): 22 fields in a fixed order, [`EditorField::ALL`]. Each is a property of the
-//!   table, or (Email, Phone, Web URL) a field of `Iptc4xmpCore:CreatorContactInfo`. The value
-//!   kind (text, Lang Alt, list, date) comes from the property table.
+//! - **Fields** (D12, ADR 0017 U10, T123): 40 fields in a fixed order and four sections,
+//!   [`EditorField::ALL`], [`EditorSection`]. Each is a property of the table, or (the address,
+//!   Email, Phone, Web URL) a field of `Iptc4xmpCore:CreatorContactInfo`. The value kind (text,
+//!   Lang Alt, list, date) comes from the property table. Copyrighted is a check box (`True` or
+//!   `False`, U10-Q3); Urgency, Category and Supplemental Categories are read-only.
 //! - **From the read** ([`EditorForm::from_read`]): one text per field. A Lang Alt shows its shown
 //!   text; without `x-default` it gets a note with its language, because saving adds `x-default`
 //!   (§8, Q7).
@@ -41,16 +43,47 @@ const X_DEFAULT: &str = "x-default";
 /// The structure of the contact fields.
 const CONTACT_INFO: &str = "Iptc4xmpCore:CreatorContactInfo";
 
-/// A field of the editor (D12), in the order of the form.
+/// A section of the metadata window's form (ADR 0017 §2.3.1, U10-Q1, U10-Q6), in the order of the
+/// form; each is a collapsible heading.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum EditorSection {
+    Content,
+    CreatorRights,
+    TimePlace,
+    Assignment,
+}
+
+impl EditorSection {
+    /// Every section in the order of the form.
+    pub const ALL: [EditorSection; 4] = [
+        EditorSection::Content,
+        EditorSection::CreatorRights,
+        EditorSection::TimePlace,
+        EditorSection::Assignment,
+    ];
+}
+
+/// A field of the editor (D12, ADR 0017 U10), in the order of the form.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum EditorField {
     Title,
     Headline,
     Description,
     AltText,
+    ExtDescription,
+    DescriptionWriter,
     Keywords,
+    PersonShown,
+    OrganisationName,
+    OrganisationCode,
+    Event,
     Creator,
     CreatorJobtitle,
+    Address,
+    ContactCity,
+    ContactRegion,
+    PostalCode,
+    ContactCountry,
     Email,
     Phone,
     Web,
@@ -58,6 +91,8 @@ pub enum EditorField {
     Credit,
     Source,
     UsageTerms,
+    WebStatement,
+    Copyrighted,
     DateCreated,
     Sublocation,
     City,
@@ -66,6 +101,11 @@ pub enum EditorField {
     CountryCode,
     Instructions,
     JobId,
+    SubjectCode,
+    SceneCode,
+    Urgency,
+    Category,
+    SupplementalCategories,
 }
 
 /// The kind of value a field holds, from the property table.
@@ -77,16 +117,32 @@ enum FieldKind {
     Date,
 }
 
+/// The text of a checked check box (Copyrighted, U10-Q3); an unchecked box has an empty text.
+const CHECKED: &str = "True";
+/// The value an unchecked check box writes.
+const UNCHECKED: &str = "False";
+
 impl EditorField {
-    /// Every field in the order of D12.
-    pub const ALL: [EditorField; 22] = [
+    /// Every field in the order of the form (D12, ADR 0017 U10-Q1, U10-Q4).
+    pub const ALL: [EditorField; 40] = [
         EditorField::Title,
         EditorField::Headline,
         EditorField::Description,
         EditorField::AltText,
+        EditorField::ExtDescription,
+        EditorField::DescriptionWriter,
         EditorField::Keywords,
+        EditorField::PersonShown,
+        EditorField::OrganisationName,
+        EditorField::OrganisationCode,
+        EditorField::Event,
         EditorField::Creator,
         EditorField::CreatorJobtitle,
+        EditorField::Address,
+        EditorField::ContactCity,
+        EditorField::ContactRegion,
+        EditorField::PostalCode,
+        EditorField::ContactCountry,
         EditorField::Email,
         EditorField::Phone,
         EditorField::Web,
@@ -94,6 +150,8 @@ impl EditorField {
         EditorField::Credit,
         EditorField::Source,
         EditorField::UsageTerms,
+        EditorField::WebStatement,
+        EditorField::Copyrighted,
         EditorField::DateCreated,
         EditorField::Sublocation,
         EditorField::City,
@@ -102,7 +160,58 @@ impl EditorField {
         EditorField::CountryCode,
         EditorField::Instructions,
         EditorField::JobId,
+        EditorField::SubjectCode,
+        EditorField::SceneCode,
+        EditorField::Urgency,
+        EditorField::Category,
+        EditorField::SupplementalCategories,
     ];
+
+    /// The section the field is drawn in (U10-Q1).
+    pub fn section(self) -> EditorSection {
+        match self {
+            EditorField::Title
+            | EditorField::Headline
+            | EditorField::Description
+            | EditorField::AltText
+            | EditorField::ExtDescription
+            | EditorField::DescriptionWriter
+            | EditorField::Keywords
+            | EditorField::PersonShown
+            | EditorField::OrganisationName
+            | EditorField::OrganisationCode
+            | EditorField::Event => EditorSection::Content,
+            EditorField::Creator
+            | EditorField::CreatorJobtitle
+            | EditorField::Address
+            | EditorField::ContactCity
+            | EditorField::ContactRegion
+            | EditorField::PostalCode
+            | EditorField::ContactCountry
+            | EditorField::Email
+            | EditorField::Phone
+            | EditorField::Web
+            | EditorField::Copyright
+            | EditorField::Credit
+            | EditorField::Source
+            | EditorField::UsageTerms
+            | EditorField::WebStatement
+            | EditorField::Copyrighted => EditorSection::CreatorRights,
+            EditorField::DateCreated
+            | EditorField::Sublocation
+            | EditorField::City
+            | EditorField::State
+            | EditorField::Country
+            | EditorField::CountryCode => EditorSection::TimePlace,
+            EditorField::Instructions
+            | EditorField::JobId
+            | EditorField::SubjectCode
+            | EditorField::SceneCode
+            | EditorField::Urgency
+            | EditorField::Category
+            | EditorField::SupplementalCategories => EditorSection::Assignment,
+        }
+    }
 
     /// The XMP id of the property the field edits (the structure for a contact field).
     pub fn property(self) -> &'static str {
@@ -111,14 +220,29 @@ impl EditorField {
             EditorField::Headline => "photoshop:Headline",
             EditorField::Description => "dc:description",
             EditorField::AltText => "Iptc4xmpCore:AltTextAccessibility",
+            EditorField::ExtDescription => "Iptc4xmpCore:ExtDescrAccessibility",
+            EditorField::DescriptionWriter => "photoshop:CaptionWriter",
             EditorField::Keywords => "dc:subject",
+            EditorField::PersonShown => "Iptc4xmpExt:PersonInImage",
+            EditorField::OrganisationName => "Iptc4xmpExt:OrganisationInImageName",
+            EditorField::OrganisationCode => "Iptc4xmpExt:OrganisationInImageCode",
+            EditorField::Event => "Iptc4xmpExt:Event",
             EditorField::Creator => "dc:creator",
             EditorField::CreatorJobtitle => "photoshop:AuthorsPosition",
-            EditorField::Email | EditorField::Phone | EditorField::Web => CONTACT_INFO,
+            EditorField::Address
+            | EditorField::ContactCity
+            | EditorField::ContactRegion
+            | EditorField::PostalCode
+            | EditorField::ContactCountry
+            | EditorField::Email
+            | EditorField::Phone
+            | EditorField::Web => CONTACT_INFO,
             EditorField::Copyright => "dc:rights",
             EditorField::Credit => "photoshop:Credit",
             EditorField::Source => "photoshop:Source",
             EditorField::UsageTerms => "xmpRights:UsageTerms",
+            EditorField::WebStatement => "xmpRights:WebStatement",
+            EditorField::Copyrighted => "xmpRights:Marked",
             EditorField::DateCreated => "photoshop:DateCreated",
             EditorField::Sublocation => "Iptc4xmpCore:Location",
             EditorField::City => "photoshop:City",
@@ -127,12 +251,22 @@ impl EditorField {
             EditorField::CountryCode => "Iptc4xmpCore:CountryCode",
             EditorField::Instructions => "photoshop:Instructions",
             EditorField::JobId => "photoshop:TransmissionReference",
+            EditorField::SubjectCode => "Iptc4xmpCore:SubjectCode",
+            EditorField::SceneCode => "Iptc4xmpCore:Scene",
+            EditorField::Urgency => "photoshop:Urgency",
+            EditorField::Category => "photoshop:Category",
+            EditorField::SupplementalCategories => "photoshop:SupplementalCategories",
         }
     }
 
     /// The XMP id of the structure field a contact field edits; `None` for the other fields.
     pub fn struct_field(self) -> Option<&'static str> {
         match self {
+            EditorField::Address => Some("Iptc4xmpCore:CiAdrExtadr"),
+            EditorField::ContactCity => Some("Iptc4xmpCore:CiAdrCity"),
+            EditorField::ContactRegion => Some("Iptc4xmpCore:CiAdrRegion"),
+            EditorField::PostalCode => Some("Iptc4xmpCore:CiAdrPcode"),
+            EditorField::ContactCountry => Some("Iptc4xmpCore:CiAdrCtry"),
             EditorField::Email => Some("Iptc4xmpCore:CiEmailWork"),
             EditorField::Phone => Some("Iptc4xmpCore:CiTelWork"),
             EditorField::Web => Some("Iptc4xmpCore:CiUrlWork"),
@@ -151,15 +285,32 @@ impl EditorField {
         property_tooltip(self.struct_field().unwrap_or(self.property()))
     }
 
-    /// True for the fields shown as a box of several lines. Keywords and Creator are one line
-    /// with their entries separated by commas (T108).
+    /// True for the fields shown as a box of several lines. Keywords, Creator and the other list
+    /// fields are one line with their entries separated by commas (T108, U10-Q2).
     pub fn multiline(self) -> bool {
         matches!(
             self,
             EditorField::Description
                 | EditorField::AltText
+                | EditorField::ExtDescription
                 | EditorField::Instructions
                 | EditorField::UsageTerms
+        )
+    }
+
+    /// True for a field shown as a check box (Copyrighted, U10-Q3): checked writes `True`,
+    /// unchecked `False`.
+    pub fn check_box(self) -> bool {
+        matches!(self, EditorField::Copyrighted)
+    }
+
+    /// False for the deprecated IIM properties Urgency, Category and Supplemental Categories
+    /// (ADR 0007 §5.5, ADR 0017 §2.3.1): shown read-only, only when the file has them, never an
+    /// edit.
+    pub fn editable(self) -> bool {
+        !matches!(
+            self,
+            EditorField::Urgency | EditorField::Category | EditorField::SupplementalCategories
         )
     }
 
@@ -183,9 +334,21 @@ impl EditorField {
         }
     }
 
-    /// The text of this field for `value`, a value of the field's property.
+    /// The text of this field for `value`, a value of the field's property. A check box's text is
+    /// `True` for `True` and empty for `False` (any case); any other value keeps its text and is
+    /// shown read-only.
     fn text_of(self, value: &Value) -> String {
         match self.struct_field() {
+            None if self.check_box() => {
+                let text = form_text(value);
+                if text.eq_ignore_ascii_case(CHECKED) {
+                    CHECKED.to_string()
+                } else if text.eq_ignore_ascii_case(UNCHECKED) {
+                    String::new()
+                } else {
+                    text
+                }
+            }
             None => form_text(value),
             Some(field) => match value {
                 Value::Struct(fields) => fields
@@ -318,12 +481,48 @@ impl EditorForm {
         self.state(field).map_or("", |state| state.text.as_str())
     }
 
-    /// The text of `field`, to be edited.
+    /// The text of `field`, to be edited; `None` for a check box and a read-only field.
     pub fn text_mut(&mut self, field: EditorField) -> Option<&mut String> {
+        if field.check_box() || !field.editable() {
+            return None;
+        }
         self.fields
             .iter_mut()
             .find(|state| state.field == field)
             .map(|state| &mut state.text)
+    }
+
+    /// The text of a field shown read-only: a deprecated field the file has (point 4 of T123),
+    /// or a check box whose value is neither `True` nor `False` (U10-Q3). `None` for every
+    /// other field, also a deprecated field the file does not have (it is not shown).
+    pub fn read_only_text(&self, field: EditorField) -> Option<&str> {
+        let state = self.state(field)?;
+        let read_only = if field.check_box() {
+            !state.original.is_empty() && state.original != CHECKED
+        } else {
+            !field.editable() && !state.original.is_empty()
+        };
+        read_only.then_some(state.original.as_str())
+    }
+
+    /// True when the check box `field` is checked.
+    pub fn checked(&self, field: EditorField) -> bool {
+        field.check_box() && self.text(field) == CHECKED
+    }
+
+    /// Checks or unchecks the check box `field`; nothing for another field or a check box shown
+    /// read-only.
+    pub fn set_checked(&mut self, field: EditorField, checked: bool) {
+        if !field.check_box() || self.read_only_text(field).is_some() {
+            return;
+        }
+        if let Some(state) = self.fields.iter_mut().find(|state| state.field == field) {
+            state.text = if checked {
+                CHECKED.to_string()
+            } else {
+                String::new()
+            };
+        }
     }
 
     /// The note of a Lang Alt field that has no `x-default`: its language, `(<language>)`; saving
@@ -422,6 +621,10 @@ impl EditorForm {
             }
         }
         for state in &self.fields {
+            // A read-only field never gives an edit (point 4, U10-Q3).
+            if !state.field.editable() || self.read_only_text(state.field).is_some() {
+                continue;
+            }
             if state.text == self.start_text(state) {
                 continue;
             }
@@ -483,6 +686,14 @@ fn field_edit(field: EditorField, text: &str) -> Result<Edit, String> {
         property: property.clone(),
         field: struct_field.clone(),
     };
+    if field.check_box() {
+        let value = if text == CHECKED { CHECKED } else { UNCHECKED };
+        return Ok(Edit::Set {
+            property,
+            field: struct_field,
+            value: Value::Text(value.to_string()),
+        });
+    }
     if text.trim().is_empty() {
         return Ok(clear());
     }
@@ -579,6 +790,8 @@ pub fn notice_text(notice: &WriteNotice) -> String {
 pub enum EditorText {
     /// The window's title; `file` is the image's file name.
     WindowTitle { file: String },
+    /// The heading of a section of the form (U10-Q1).
+    SectionHeading(EditorSection),
     /// The heading of the unresolved conflicts.
     ConflictsHeading,
     /// One radio button of a conflict: a value and its origin.
@@ -628,6 +841,13 @@ pub enum EditorText {
 pub fn editor_text(text: &EditorText) -> String {
     match text {
         EditorText::WindowTitle { file } => format!("Metadata – {file}"),
+        EditorText::SectionHeading(section) => match section {
+            EditorSection::Content => "Content",
+            EditorSection::CreatorRights => "Creator and Rights",
+            EditorSection::TimePlace => "Time and Place",
+            EditorSection::Assignment => "Assignment",
+        }
+        .to_string(),
         EditorText::ConflictsHeading => "Unresolved Conflicts".to_string(),
         EditorText::ConflictChoice { value, origin } => format!("{value} ({origin})"),
         EditorText::WarningsHeading => "Warnings".to_string(),
@@ -797,9 +1017,20 @@ mod tests {
                 "Headline",
                 "Description",
                 "Alt Text (Accessibility)",
+                "Extended Description (Accessibility)",
+                "Description Writer",
                 "Keywords",
+                "Person Shown in the Image",
+                "Name of Organisation Featured in the Image",
+                "Code of Organisation Featured in the Image",
+                "Event Name",
                 "Creator",
                 "Creator's jobtitle",
+                "Address",
+                "City",
+                "State/Province",
+                "Postal Code",
+                "Country",
                 "Email",
                 "Phone",
                 "Web URL",
@@ -807,6 +1038,8 @@ mod tests {
                 "Credit Line",
                 "Source (Supply Chain)",
                 "Rights Usage Terms",
+                "Web Statement of Rights",
+                "Copyrighted",
                 "Date Created",
                 "Sublocation",
                 "City",
@@ -815,6 +1048,11 @@ mod tests {
                 "Country Code",
                 "Instructions",
                 "Job Id",
+                "Subject Code",
+                "Scene Code",
+                "Urgency",
+                "Category",
+                "Supplemental Categories",
             ]
         );
     }
@@ -830,6 +1068,7 @@ mod tests {
             [
                 EditorField::Description,
                 EditorField::AltText,
+                EditorField::ExtDescription,
                 EditorField::UsageTerms,
                 EditorField::Instructions,
             ]
@@ -849,13 +1088,224 @@ mod tests {
                 EditorField::Title
                 | EditorField::Description
                 | EditorField::AltText
+                | EditorField::ExtDescription
+                | EditorField::Event
                 | EditorField::Copyright
                 | EditorField::UsageTerms => FieldKind::LangAlt,
-                EditorField::Keywords | EditorField::Creator => FieldKind::List,
+                EditorField::Keywords
+                | EditorField::Creator
+                | EditorField::PersonShown
+                | EditorField::OrganisationName
+                | EditorField::OrganisationCode
+                | EditorField::SubjectCode
+                | EditorField::SceneCode
+                | EditorField::SupplementalCategories => FieldKind::List,
                 EditorField::DateCreated => FieldKind::Date,
                 _ => FieldKind::Text,
             };
             assert_eq!(field.kind(), expected, "{field:?}");
+        }
+    }
+
+    /// The fields of each section in the order of the form (T123, U10-Q1, U10-Q4).
+    #[test]
+    fn every_field_is_in_its_section_in_form_order() {
+        use EditorField::*;
+        let expected: [(EditorSection, &[EditorField]); 4] = [
+            (
+                EditorSection::Content,
+                &[
+                    Title,
+                    Headline,
+                    Description,
+                    AltText,
+                    ExtDescription,
+                    DescriptionWriter,
+                    Keywords,
+                    PersonShown,
+                    OrganisationName,
+                    OrganisationCode,
+                    Event,
+                ],
+            ),
+            (
+                EditorSection::CreatorRights,
+                &[
+                    Creator,
+                    CreatorJobtitle,
+                    Address,
+                    ContactCity,
+                    ContactRegion,
+                    PostalCode,
+                    ContactCountry,
+                    Email,
+                    Phone,
+                    Web,
+                    Copyright,
+                    Credit,
+                    Source,
+                    UsageTerms,
+                    WebStatement,
+                    Copyrighted,
+                ],
+            ),
+            (
+                EditorSection::TimePlace,
+                &[DateCreated, Sublocation, City, State, Country, CountryCode],
+            ),
+            (
+                EditorSection::Assignment,
+                &[
+                    Instructions,
+                    JobId,
+                    SubjectCode,
+                    SceneCode,
+                    Urgency,
+                    Category,
+                    SupplementalCategories,
+                ],
+            ),
+        ];
+        assert_eq!(
+            EditorSection::ALL.to_vec(),
+            expected
+                .iter()
+                .map(|(section, _)| *section)
+                .collect::<Vec<_>>()
+        );
+        // The sections follow each other in `ALL`: concatenated they are `ALL`.
+        let concatenated: Vec<EditorField> = expected
+            .iter()
+            .flat_map(|(_, fields)| fields.iter().copied())
+            .collect();
+        assert_eq!(concatenated, EditorField::ALL.to_vec());
+        for (section, fields) in expected {
+            for field in fields {
+                assert_eq!(field.section(), section, "{field:?}");
+            }
+        }
+    }
+
+    /// The property, structure field and kind of each field T123 adds.
+    #[test]
+    fn the_new_fields_property_structure_field_and_kind() {
+        use EditorField::*;
+        let cases = [
+            (
+                ExtDescription,
+                "Iptc4xmpCore:ExtDescrAccessibility",
+                None,
+                FieldKind::LangAlt,
+            ),
+            (
+                DescriptionWriter,
+                "photoshop:CaptionWriter",
+                None,
+                FieldKind::Text,
+            ),
+            (
+                PersonShown,
+                "Iptc4xmpExt:PersonInImage",
+                None,
+                FieldKind::List,
+            ),
+            (
+                OrganisationName,
+                "Iptc4xmpExt:OrganisationInImageName",
+                None,
+                FieldKind::List,
+            ),
+            (
+                OrganisationCode,
+                "Iptc4xmpExt:OrganisationInImageCode",
+                None,
+                FieldKind::List,
+            ),
+            (Event, "Iptc4xmpExt:Event", None, FieldKind::LangAlt),
+            (
+                Address,
+                CONTACT_INFO,
+                Some("Iptc4xmpCore:CiAdrExtadr"),
+                FieldKind::Text,
+            ),
+            (
+                ContactCity,
+                CONTACT_INFO,
+                Some("Iptc4xmpCore:CiAdrCity"),
+                FieldKind::Text,
+            ),
+            (
+                ContactRegion,
+                CONTACT_INFO,
+                Some("Iptc4xmpCore:CiAdrRegion"),
+                FieldKind::Text,
+            ),
+            (
+                PostalCode,
+                CONTACT_INFO,
+                Some("Iptc4xmpCore:CiAdrPcode"),
+                FieldKind::Text,
+            ),
+            (
+                ContactCountry,
+                CONTACT_INFO,
+                Some("Iptc4xmpCore:CiAdrCtry"),
+                FieldKind::Text,
+            ),
+            (
+                WebStatement,
+                "xmpRights:WebStatement",
+                None,
+                FieldKind::Text,
+            ),
+            (Copyrighted, "xmpRights:Marked", None, FieldKind::Text),
+            (
+                SubjectCode,
+                "Iptc4xmpCore:SubjectCode",
+                None,
+                FieldKind::List,
+            ),
+            (SceneCode, "Iptc4xmpCore:Scene", None, FieldKind::List),
+            (Urgency, "photoshop:Urgency", None, FieldKind::Text),
+            (Category, "photoshop:Category", None, FieldKind::Text),
+            (
+                SupplementalCategories,
+                "photoshop:SupplementalCategories",
+                None,
+                FieldKind::List,
+            ),
+        ];
+        for (field, property, struct_field, kind) in cases {
+            assert_eq!(field.property(), property, "{field:?}");
+            assert_eq!(field.struct_field(), struct_field, "{field:?}");
+            assert_eq!(field.kind(), kind, "{field:?}");
+            // Every property is in the table, so the kind is not the fallback.
+            assert!(properties::property(property).is_some(), "{property}");
+        }
+        // Only Copyrighted is a check box; only the three deprecated fields are read-only.
+        let check_boxes: Vec<EditorField> = EditorField::ALL
+            .into_iter()
+            .filter(|f| f.check_box())
+            .collect();
+        assert_eq!(check_boxes, [Copyrighted]);
+        let read_only: Vec<EditorField> = EditorField::ALL
+            .into_iter()
+            .filter(|f| !f.editable())
+            .collect();
+        assert_eq!(read_only, [Urgency, Category, SupplementalCategories]);
+    }
+
+    #[test]
+    fn the_new_list_fields_are_one_line() {
+        for field in [
+            EditorField::PersonShown,
+            EditorField::OrganisationName,
+            EditorField::OrganisationCode,
+            EditorField::SubjectCode,
+            EditorField::SceneCode,
+            EditorField::Event,
+        ] {
+            assert!(!field.multiline(), "{field:?}");
         }
     }
 
@@ -1130,6 +1580,356 @@ mod tests {
         );
     }
 
+    // --- edits of the fields T123 adds ---
+
+    /// A Lang Alt field (Event Name, Extended Description): unchanged → no edit, changed → `Set`
+    /// of `x-default`, emptied → `Clear`.
+    #[test]
+    fn new_lang_alt_fields_unchanged_changed_and_emptied() {
+        for (field, property) in [
+            (EditorField::Event, "Iptc4xmpExt:Event"),
+            (
+                EditorField::ExtDescription,
+                "Iptc4xmpCore:ExtDescrAccessibility",
+            ),
+        ] {
+            let mut metadata = Metadata::new();
+            insert(&mut metadata, property, lang_alt(&[("x-default", "Före")]));
+            let mut form = form_with(metadata);
+            assert_eq!(form.text(field), "Före", "{field:?}");
+            assert_eq!(form.edits(), Ok(Vec::new()), "{field:?}");
+            type_into(&mut form, field, "Efter");
+            assert_eq!(
+                form.edits(),
+                Ok(vec![set(property, lang_alt(&[("x-default", "Efter")]))]),
+                "{field:?}"
+            );
+            type_into(&mut form, field, " ");
+            assert_eq!(
+                form.edits(),
+                Ok(vec![Edit::Clear {
+                    property: property.into(),
+                    field: None,
+                }]),
+                "{field:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_new_lang_alt_field_without_x_default_has_a_note() {
+        let mut metadata = Metadata::new();
+        insert(
+            &mut metadata,
+            "Iptc4xmpExt:Event",
+            lang_alt(&[("sv", "Midsommar")]),
+        );
+        let form = form_with(metadata);
+        assert_eq!(form.text(EditorField::Event), "Midsommar");
+        assert_eq!(form.note(EditorField::Event), Some("(sv)".to_string()));
+        assert_eq!(form.edits(), Ok(Vec::new()));
+    }
+
+    /// A list field: unchanged → no edit, changed → `Set` of the entries split at commas,
+    /// emptied → `Clear`.
+    #[test]
+    fn new_list_fields_unchanged_changed_and_emptied() {
+        for (field, property) in [
+            (EditorField::PersonShown, "Iptc4xmpExt:PersonInImage"),
+            (
+                EditorField::OrganisationName,
+                "Iptc4xmpExt:OrganisationInImageName",
+            ),
+            (
+                EditorField::OrganisationCode,
+                "Iptc4xmpExt:OrganisationInImageCode",
+            ),
+            (EditorField::SubjectCode, "Iptc4xmpCore:SubjectCode"),
+            (EditorField::SceneCode, "Iptc4xmpCore:Scene"),
+        ] {
+            let mut metadata = Metadata::new();
+            insert(&mut metadata, property, list(&["a1", "b2"]));
+            let mut form = form_with(metadata);
+            assert_eq!(form.text(field), "a1, b2", "{field:?}");
+            assert_eq!(form.edits(), Ok(Vec::new()), "{field:?}");
+            type_into(&mut form, field, "a1, b2,c3 ,");
+            assert_eq!(
+                form.edits(),
+                Ok(vec![set(property, list(&["a1", "b2", "c3"]))]),
+                "{field:?}"
+            );
+            type_into(&mut form, field, "");
+            assert_eq!(
+                form.edits(),
+                Ok(vec![Edit::Clear {
+                    property: property.into(),
+                    field: None,
+                }]),
+                "{field:?}"
+            );
+        }
+    }
+
+    /// A text field (Description Writer, Web Statement of Rights).
+    #[test]
+    fn new_text_fields_unchanged_changed_and_emptied() {
+        for (field, property) in [
+            (EditorField::DescriptionWriter, "photoshop:CaptionWriter"),
+            (EditorField::WebStatement, "xmpRights:WebStatement"),
+        ] {
+            let mut metadata = Metadata::new();
+            insert(&mut metadata, property, text("https://example.com/a"));
+            let mut form = form_with(metadata);
+            assert_eq!(form.edits(), Ok(Vec::new()), "{field:?}");
+            type_into(&mut form, field, "https://example.com/b");
+            assert_eq!(
+                form.edits(),
+                Ok(vec![set(property, text("https://example.com/b"))]),
+                "{field:?}"
+            );
+            type_into(&mut form, field, "");
+            assert_eq!(
+                form.edits(),
+                Ok(vec![Edit::Clear {
+                    property: property.into(),
+                    field: None,
+                }]),
+                "{field:?}"
+            );
+        }
+    }
+
+    /// A contact address field is a `Set` or `Clear` of its structure field, as Email is.
+    #[test]
+    fn contact_address_fields_unchanged_changed_and_emptied() {
+        let fields = [
+            (EditorField::Address, "Iptc4xmpCore:CiAdrExtadr"),
+            (EditorField::ContactCity, "Iptc4xmpCore:CiAdrCity"),
+            (EditorField::ContactRegion, "Iptc4xmpCore:CiAdrRegion"),
+            (EditorField::PostalCode, "Iptc4xmpCore:CiAdrPcode"),
+            (EditorField::ContactCountry, "Iptc4xmpCore:CiAdrCtry"),
+        ];
+        for (field, struct_field) in fields {
+            let mut metadata = Metadata::new();
+            insert(
+                &mut metadata,
+                CONTACT_INFO,
+                contact(&[
+                    (struct_field, "Före"),
+                    ("Iptc4xmpCore:CiEmailWork", "foto@example.com"),
+                ]),
+            );
+            let mut form = form_with(metadata);
+            assert_eq!(form.text(field), "Före", "{field:?}");
+            assert_eq!(form.text(EditorField::Email), "foto@example.com");
+            assert_eq!(form.edits(), Ok(Vec::new()), "{field:?}");
+            type_into(&mut form, field, "Efter");
+            assert_eq!(
+                form.edits(),
+                Ok(vec![Edit::Set {
+                    property: CONTACT_INFO.into(),
+                    field: Some(struct_field.into()),
+                    value: text("Efter"),
+                }]),
+                "{field:?}"
+            );
+            type_into(&mut form, field, "");
+            assert_eq!(
+                form.edits(),
+                Ok(vec![Edit::Clear {
+                    property: CONTACT_INFO.into(),
+                    field: Some(struct_field.into()),
+                }]),
+                "{field:?}"
+            );
+        }
+    }
+
+    /// Every editable new field's `Set` is accepted by `pw-metadata` as it is (no change there,
+    /// point 2 of T123), with Copyrighted checked.
+    #[test]
+    fn the_new_fields_edits_are_accepted_by_apply_edits() {
+        let mut form = form_with(Metadata::new());
+        for field in [
+            EditorField::ExtDescription,
+            EditorField::DescriptionWriter,
+            EditorField::PersonShown,
+            EditorField::OrganisationName,
+            EditorField::OrganisationCode,
+            EditorField::Event,
+            EditorField::Address,
+            EditorField::ContactCity,
+            EditorField::ContactRegion,
+            EditorField::PostalCode,
+            EditorField::ContactCountry,
+            EditorField::WebStatement,
+            EditorField::SubjectCode,
+            EditorField::SceneCode,
+        ] {
+            type_into(&mut form, field, "https://example.com/x");
+        }
+        form.set_checked(EditorField::Copyrighted, true);
+        let edits = form.edits().unwrap();
+        assert_eq!(edits.len(), 15);
+        let mut metadata = Metadata::new();
+        let applied = apply_edits(&mut metadata, &edits);
+        assert!(applied.is_ok(), "{applied:?}");
+        assert_eq!(
+            metadata
+                .get("xmpRights:Marked")
+                .map(|stored| stored.value.clone()),
+            Some(text("True"))
+        );
+    }
+
+    #[test]
+    fn copyrighted_absent_is_unchecked_and_checking_sets_true() {
+        let mut form = form_with(Metadata::new());
+        assert!(!form.checked(EditorField::Copyrighted));
+        assert_eq!(form.read_only_text(EditorField::Copyrighted), None);
+        // A check box has no text box.
+        assert!(form.text_mut(EditorField::Copyrighted).is_none());
+        assert_eq!(form.edits(), Ok(Vec::new()));
+        form.set_checked(EditorField::Copyrighted, true);
+        assert!(form.checked(EditorField::Copyrighted));
+        assert_eq!(
+            form.edits(),
+            Ok(vec![set("xmpRights:Marked", text("True"))])
+        );
+        // Unchecked again, as it was read: no edit.
+        form.set_checked(EditorField::Copyrighted, false);
+        assert_eq!(form.edits(), Ok(Vec::new()));
+    }
+
+    #[test]
+    fn copyrighted_true_in_any_case_is_checked_and_unchecking_sets_false() {
+        for value in ["True", "true", "TRUE"] {
+            let mut metadata = Metadata::new();
+            insert(&mut metadata, "xmpRights:Marked", text(value));
+            let mut form = form_with(metadata);
+            assert!(form.checked(EditorField::Copyrighted), "{value}");
+            assert_eq!(form.read_only_text(EditorField::Copyrighted), None);
+            assert_eq!(form.edits(), Ok(Vec::new()), "{value}");
+            form.set_checked(EditorField::Copyrighted, false);
+            assert_eq!(
+                form.edits(),
+                Ok(vec![set("xmpRights:Marked", text("False"))]),
+                "{value}"
+            );
+        }
+    }
+
+    #[test]
+    fn copyrighted_false_in_any_case_is_unchecked_and_checking_sets_true() {
+        for value in ["False", "false"] {
+            let mut metadata = Metadata::new();
+            insert(&mut metadata, "xmpRights:Marked", text(value));
+            let mut form = form_with(metadata);
+            assert!(!form.checked(EditorField::Copyrighted), "{value}");
+            assert_eq!(form.edits(), Ok(Vec::new()), "{value}");
+            form.set_checked(EditorField::Copyrighted, true);
+            assert_eq!(
+                form.edits(),
+                Ok(vec![set("xmpRights:Marked", text("True"))]),
+                "{value}"
+            );
+        }
+    }
+
+    #[test]
+    fn copyrighted_with_another_value_is_read_only_and_gives_no_edit() {
+        let mut metadata = Metadata::new();
+        insert(&mut metadata, "xmpRights:Marked", text("Ja"));
+        let mut form = form_with(metadata);
+        assert_eq!(form.read_only_text(EditorField::Copyrighted), Some("Ja"));
+        assert!(!form.checked(EditorField::Copyrighted));
+        // Neither checking nor unchecking changes it.
+        form.set_checked(EditorField::Copyrighted, true);
+        assert!(!form.checked(EditorField::Copyrighted));
+        form.set_checked(EditorField::Copyrighted, false);
+        assert_eq!(form.edits(), Ok(Vec::new()));
+    }
+
+    #[test]
+    fn the_deprecated_fields_are_read_only_when_present_and_never_give_an_edit() {
+        let mut metadata = Metadata::new();
+        insert(
+            &mut metadata,
+            "photoshop:Urgency",
+            Value::Number("5".into()),
+        );
+        insert(&mut metadata, "photoshop:Category", text("SPO"));
+        insert(
+            &mut metadata,
+            "photoshop:SupplementalCategories",
+            list(&["fotboll", "sport"]),
+        );
+        let mut form = form_with(metadata);
+        assert_eq!(form.read_only_text(EditorField::Urgency), Some("5"));
+        assert_eq!(form.read_only_text(EditorField::Category), Some("SPO"));
+        assert_eq!(
+            form.read_only_text(EditorField::SupplementalCategories),
+            Some("fotboll, sport")
+        );
+        for field in [
+            EditorField::Urgency,
+            EditorField::Category,
+            EditorField::SupplementalCategories,
+        ] {
+            assert!(form.text_mut(field).is_none(), "{field:?}");
+            form.set_checked(field, true);
+        }
+        assert_eq!(form.edits(), Ok(Vec::new()));
+
+        // Absent: not shown, and still no edit.
+        let form = form_with(Metadata::new());
+        for field in [
+            EditorField::Urgency,
+            EditorField::Category,
+            EditorField::SupplementalCategories,
+        ] {
+            assert_eq!(form.read_only_text(field), None, "{field:?}");
+        }
+        assert_eq!(form.edits(), Ok(Vec::new()));
+    }
+
+    #[test]
+    fn an_editable_field_is_never_read_only() {
+        let mut metadata = Metadata::new();
+        insert(&mut metadata, "photoshop:City", text("Umeå"));
+        insert(&mut metadata, "Iptc4xmpExt:PersonInImage", list(&["Anna"]));
+        let form = form_with(metadata);
+        for field in EditorField::ALL {
+            if field.editable() && !field.check_box() {
+                assert_eq!(form.read_only_text(field), None, "{field:?}");
+            }
+        }
+    }
+
+    /// A conflict on a property that is not a field (T107), now that Description Writer is a
+    /// field: Intellectual Genre stays under Other Metadata (U10-Q4).
+    #[test]
+    fn conflict_on_intellectual_genre_which_is_not_a_field() {
+        let mut metadata = Metadata::new();
+        insert(&mut metadata, "Iptc4xmpCore:IntellectualGenre", text("A"));
+        metadata.add_conflict(Conflict {
+            property: "Iptc4xmpCore:IntellectualGenre".into(),
+            values: vec![(Origin::XmpEmbedded, text("A")), (Origin::Iim, text("B"))],
+            rule: ConflictRule::Open,
+        });
+        let mut form = form_with(metadata);
+        assert!(
+            EditorField::ALL
+                .iter()
+                .all(|f| f.property() != "Iptc4xmpCore:IntellectualGenre")
+        );
+        assert!(form.choose(0, 1));
+        assert_eq!(
+            form.edits(),
+            Ok(vec![set("Iptc4xmpCore:IntellectualGenre", text("B"))])
+        );
+    }
+
     // --- conflicts ---
 
     fn city_conflict(rule: ConflictRule) -> Conflict {
@@ -1295,6 +2095,7 @@ mod tests {
             (EditorField::State, "Province or State (legacy)"),
             (EditorField::Country, "Country (legacy)"),
             (EditorField::CountryCode, "Country Code (legacy)"),
+            (EditorField::SubjectCode, "Subject Code (legacy)"),
         ]
         .map(|(field, tooltip)| (field, tooltip.to_string()));
         assert_eq!(tooltips, expected);
@@ -1451,6 +2252,24 @@ mod tests {
         for (text, expected) in cases {
             assert_eq!(editor_text(&text), expected, "{text:?}");
         }
+    }
+
+    /// The headings of the form's sections (T123, U10-Q1).
+    #[test]
+    fn the_section_headings() {
+        let headings: Vec<String> = EditorSection::ALL
+            .into_iter()
+            .map(|section| editor_text(&EditorText::SectionHeading(section)))
+            .collect();
+        assert_eq!(
+            headings,
+            [
+                "Content",
+                "Creator and Rights",
+                "Time and Place",
+                "Assignment"
+            ]
+        );
     }
 
     /// The texts moved here from `metadata.rs` and `import_worker.rs` (T116) keep their wording.

@@ -1,4 +1,4 @@
-# T123. ADR 0017 U10, first part: every simple field of the metadata window, in sections — Open
+# T123. ADR 0017 U10, first part: every simple field of the metadata window, in sections — Done
 
 - **Can start now.** The owner approved the proposals of U10-Q1–U10-Q6 (at the end of this task)
   on 2026-11-14; they are written into the points below and into ADR 0017 §6.1. Not at the same
@@ -104,3 +104,6 @@
 |---|---|---|
 | 2026-11-14 | Blocked | Written by the reviewer on the owner's request (U10–U12 before I12 and I13); waits for U10-Q1–U10-Q6 |
 | 2026-11-14 | Open | Owner: U10-Q1–U10-Q6 approved as proposed; written into the points and ADR 0017 §6.1 |
+| 2026-11-14 | Ready for review | Task agent: done as written; `lib.rs` re-exports `EditorSection` (one line, owner approved 2026-11-14); `check.ps1` all OK |
+| 2026-11-14 | Ready for review | Reviewer: code accepted, not committed. 40 fields in four sections (18 new) with property, structure field and kind as listed; Copyrighted a check box (`True`/`False`, other text read-only, untouched no edit); Urgency, Category and Supplemental Categories read-only and only when present, never an edit; Other Metadata leaves out every field property and the contact structure; sections collapsible, remembered in `settings.txt` (four keys, missing → open). `lib.rs` changed outside the file list (one `pub use` of `EditorSection`, needed by `main.rs`; approved by the owner, confirmed to the reviewer 2026-11-14). Subject Code goes to IIM 2:12 with the `IPTC:` prefix through the existing write plan. The reviewer's `check.ps1`: fmt, test and clippy OK, 1242 passed, 0 failed, 43 ignored. Waits for the owner's hand check |
+| 2026-11-14 | Done | Owner: hand check done and approved; committed by the reviewer |

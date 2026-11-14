@@ -25,10 +25,16 @@ English mode already shows IPTC's name from the property table (`property_label`
 | `photoshop:Headline` | Rubrik | Headline | Headline |
 | `dc:description` | Beskrivning | Description | Description |
 | `Iptc4xmpCore:AltTextAccessibility` | Alternativtext | Alt Text (Accessibility) | Alt Text (Accessibility) |
+| `Iptc4xmpCore:ExtDescrAccessibility` | – | Extended Description (Accessibility) | Extended Description (Accessibility) (T123) |
 | `dc:subject` | Nyckelord | Keywords | Keywords |
 | `dc:creator` | Fotograf | Creator | Creator |
 | `photoshop:AuthorsPosition` | Yrkestitel | Creator's jobtitle | Creator's jobtitle |
 | `Iptc4xmpCore:CreatorContactInfo` | Kontaktuppgifter | Creator's Contact Info | Creator's Contact Info |
+| `…:CiAdrExtadr` | – | Address | Address (T123) |
+| `…:CiAdrCity` | – | City | City (T123; under Creator's Contact Info) |
+| `…:CiAdrRegion` | – | State/Province | State/Province (T123) |
+| `…:CiAdrPcode` | – | Postal Code | Postal Code (T123) |
+| `…:CiAdrCtry` | – | Country | Country (T123; under Creator's Contact Info) |
 | `…:CiEmailWork` | E-post | Email address(es) | Email (G1) |
 | `…:CiTelWork` | Telefon | Phone number(s) | Phone (G1) |
 | `…:CiUrlWork` | Webb | Web URL(s) | Web URL (G1) |
@@ -45,6 +51,8 @@ English mode already shows IPTC's name from the property table (`property_label`
 | `Iptc4xmpCore:CountryCode` | Landskod | Country Code (legacy) | Country Code (G1) |
 | `photoshop:Instructions` | Instruktioner | Instructions | Instructions |
 | `photoshop:TransmissionReference` | Jobb-id | Job Id | Job Id |
+| `Iptc4xmpCore:SubjectCode` | – | Subject Code (legacy) | Subject Code (G1; T123) |
+| `Iptc4xmpCore:Scene` | – | Scene Code | Scene Code (T123) |
 | `photoshop:CaptionWriter` | Beskrivningens författare | Description Writer | Description Writer |
 | `xmp:Rating` | Betyg | Image Rating | Rating (G1) |
 | `Iptc4xmpExt:LocationCreated` | Plats där bilden togs | Location Created | Location Created |
@@ -53,6 +61,8 @@ English mode already shows IPTC's name from the property table (`property_label`
 | `plus:CopyrightOwner` | Upphovsrättsinnehavare | Copyright Owner | Copyright Owner |
 | `plus:Licensor` | Licensgivare | Licensor | Licensor |
 | `Iptc4xmpExt:PersonInImage` | Person i bilden | Person Shown in the Image | Person Shown in the Image |
+| `Iptc4xmpExt:OrganisationInImageName` | – | Name of Organisation Featured in the Image | Name of Organisation Featured in the Image (T123) |
+| `Iptc4xmpExt:OrganisationInImageCode` | – | Code of Organisation Featured in the Image | Code of Organisation Featured in the Image (T123) |
 | `Iptc4xmpExt:Event` | Händelse | Event Name | Event Name |
 | `Iptc4xmpExt:DigitalSourceType` | Digital källtyp | Digital Source Type | Digital Source Type |
 | `xmp:Label` | Etikett | – (not IPTC; XMP Basic "Label") | Label |
@@ -146,6 +156,7 @@ Every other property already uses IPTC's English name in both languages.
 | Olösta konflikter / Konflikter / olöst | Unresolved Conflicts / Conflicts / unresolved | |
 | Varningar, Meddelanden | Warnings, Notices | |
 | Övrig metadata | Other Metadata | |
+| – | Content, Creator and Rights, Time and Place, Assignment | the metadata window's section headings (ADR 0017 U10-Q1); added by T123 |
 | OK, Avbryt, Spara, Släng | OK, Cancel, Save, Discard | |
 | Föregående, Nästa, Spara och nästa | Previous, Next, Save and Next | |
 | Spara ändringarna? / Ändringar som inte sparades | Save changes? / Unsaved changes | |

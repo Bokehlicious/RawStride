@@ -20,22 +20,23 @@ use metadata::{EditorEvent, InspectorState, MetadataCache};
 use pw_imagecheck::RawImageCheck;
 use pw_loupe::{
     Action, CellState, DEFAULT_THUMBNAIL_SIZE, DialogKey, DialogRequest, EditorField, EditorForm,
-    EditorKeyAction, EditorText, Field, Filter, GridKeyAction, ImportDialog, ImportDialogState,
-    ImportEvent, ImportForm, ImportWorker, IptcField, LABEL_CHOICES, LabelFilter, Language,
-    LoupeMove, MAX_THUMBNAIL_SIZE, MIN_THUMBNAIL_SIZE, MonitorProfile, Navigation, Options,
-    PanelText, READING_RATINGS_TEXT, RatingRefused, STAR_CONDITIONS, STAR_FILTERS, Settings,
-    StarFilter, SubmitError, Tab, TabAction, Tabs, ThumbGrid, UNSUPPORTED_TEXT, ViewMode,
-    WINDOW_TITLE, allowed_modes, clamp_thumbnail_size, clear_and_import_text, clear_cancel_text,
-    clear_confirmation_text, clear_confirmation_title, color_image, columns, dialog_key_action,
-    done_lines, editor_key_action, editor_text, ejecting_progress_text, error_text,
-    grid_key_action, indicator_text, info_panel, iptc_progress_text, key_action, label_choice_text,
-    label_filter_text, label_name, list_folder, load_monitor_profile, load_settings,
-    loupe_key_action, marked_text, metadata_neighbour, mode_label, mode_text, more_lines,
-    no_match_text, notice_text, opens_import, other_values, panel_text, parse_args, position_text,
-    preview_line, preview_summary, primary_monitor_profile_path, progress_text, property_label,
-    rating_key_action, request_cell, save_settings, settings_path, star_condition_text,
-    star_filter_text, star_glyphs, status_line, step_allowed, step_thumbnail_size, tab_action,
-    take_wheel_steps, visible_range, wheel_factor, window_title,
+    EditorKeyAction, EditorSection, EditorText, Field, Filter, GridKeyAction, ImportDialog,
+    ImportDialogState, ImportEvent, ImportForm, ImportWorker, IptcField, LABEL_CHOICES,
+    LabelFilter, Language, LoupeMove, MAX_THUMBNAIL_SIZE, MIN_THUMBNAIL_SIZE, MonitorProfile,
+    Navigation, Options, PanelText, READING_RATINGS_TEXT, RatingRefused, STAR_CONDITIONS,
+    STAR_FILTERS, Settings, StarFilter, SubmitError, Tab, TabAction, Tabs, ThumbGrid,
+    UNSUPPORTED_TEXT, ViewMode, WINDOW_TITLE, allowed_modes, clamp_thumbnail_size,
+    clear_and_import_text, clear_cancel_text, clear_confirmation_text, clear_confirmation_title,
+    color_image, columns, dialog_key_action, done_lines, editor_key_action, editor_text,
+    ejecting_progress_text, error_text, grid_key_action, indicator_text, info_panel,
+    iptc_progress_text, key_action, label_choice_text, label_filter_text, label_name, list_folder,
+    load_monitor_profile, load_settings, loupe_key_action, marked_text, metadata_neighbour,
+    mode_label, mode_text, more_lines, no_match_text, notice_text, opens_import, other_values,
+    panel_text, parse_args, position_text, preview_line, preview_summary,
+    primary_monitor_profile_path, progress_text, property_label, rating_key_action, request_cell,
+    save_settings, settings_path, star_condition_text, star_filter_text, star_glyphs, status_line,
+    step_allowed, step_thumbnail_size, tab_action, take_wheel_steps, visible_range, wheel_factor,
+    window_title,
 };
 use pw_loupe::{
     COLLAPSED_WIDTH, ColumnState, Command, MENUS, MenuEntry, MenuItem, RatingKey, STATUS_TEXT_SIZE,
@@ -1942,6 +1943,9 @@ impl Loupe {
             WindowBody::Loading | WindowBody::ReadError(_) => None,
         };
         let mut choice = None;
+        // The sections whose heading was clicked (T123), and their state as it is now.
+        let mut toggled_sections = Vec::new();
+        let shell = self.settings.shell;
         let mut ok = false;
         let mut cancel = false;
         let mut previous = false;
@@ -2071,18 +2075,23 @@ impl Loupe {
                                 );
                             }
                             WindowBody::Form(state) => {
-                                choice = draw_window_form(
+                                (choice, toggled_sections) = draw_window_form(
                                     ui,
                                     state,
                                     &window.errors,
                                     &warnings,
                                     !locked && !asking,
+                                    &shell,
                                 );
                             }
                         });
                 });
         });
 
+        // Remembered in settings.txt at exit, as the inspector's sections (U10-Q6).
+        for section in toggled_sections {
+            self.settings.shell.toggle_editor_section(section);
+        }
         if let (Some((conflict_index, value_index)), WindowBody::Form(state)) =
             (choice, &mut window.body)
         {
@@ -3561,64 +3570,56 @@ fn resolve_paths(files: &[PathBuf]) -> Result<Vec<PathBuf>, String> {
     Ok(files.iter().map(|path| resolve_path(&cwd, path)).collect())
 }
 
-/// The properties of the editor's fields, left out of the window's other metadata (D16, T107):
-/// every field's property except `Iptc4xmpCore:CreatorContactInfo` (the contact fields), whose
-/// address fields are not editor fields, so the structure stays in the list.
+/// The properties of the editor's fields, left out of the window's other metadata (D16, T107,
+/// T123): every field's property once, also `Iptc4xmpCore:CreatorContactInfo`, whose fields are
+/// all editor fields, and the read-only Urgency, Category and Supplemental Categories, which are
+/// shown in the Assignment section.
 fn window_editor_properties() -> Vec<&'static str> {
-    EditorField::ALL
-        .iter()
-        .filter(|field| field.struct_field().is_none())
-        .map(|field| field.property())
-        .collect()
+    let mut properties: Vec<&'static str> = Vec::new();
+    for field in EditorField::ALL {
+        if !properties.contains(&field.property()) {
+            properties.push(field.property());
+        }
+    }
+    properties
 }
 
-/// The contents of the metadata window's form (D16, T107), top to bottom: the 22 fields, the open
+/// The contents of the metadata window's form (D16, T107, T123), top to bottom: the fields in
+/// their four sections, each a collapsible heading open or collapsed as `shell` has it; the open
 /// conflicts with a choice each and the warnings (editable when `enabled`); then read-only, in
 /// small text, the other metadata (without an origin line, T114), the conflicts a rule decided
 /// (each value with its origin) and the notices, each only when it has rows. The contact fields
-/// (E-post, Telefon, Webb) are drawn under the heading of their structure, "Kontaktuppgifter"
-/// (T114). Labels and values wrap at the window's width. Returns the conflict value chosen.
+/// are drawn under the heading of their structure, "Creator's Contact Info" (T114). Labels and
+/// values wrap at the window's width. Returns the conflict value chosen and the sections whose
+/// heading was clicked.
 fn draw_window_form(
     ui: &mut egui::Ui,
     state: &mut FormState,
     errors: &[(EditorField, String)],
     warnings: &[String],
     enabled: bool,
-) -> Option<(usize, usize)> {
+    shell: &ShellSettings,
+) -> (Option<(usize, usize)>, Vec<EditorSection>) {
     let warning = ui.visuals().warn_fg_color;
-    let error_color = ui.visuals().error_fg_color;
-    let grey = ui.visuals().weak_text_color();
     let mut choice = None;
-    let first_contact_field = EditorField::ALL
-        .into_iter()
-        .find(|field| field.struct_field().is_some());
+    let mut toggled = Vec::new();
     ui.add_enabled_ui(enabled, |ui| {
-        for field in EditorField::ALL {
-            if Some(field) == first_contact_field {
-                ui.label(
-                    egui::RichText::new(property_label(field.property(), Language::En)).strong(),
-                );
+        for section in EditorSection::ALL {
+            let shown =
+                egui::CollapsingHeader::new(editor_text(&EditorText::SectionHeading(section)))
+                    .id_salt(("metadata-window-section", section))
+                    .open(Some(shell.editor_section(section) == ColumnState::Open))
+                    .show(ui, |ui| {
+                        for field in EditorField::ALL
+                            .into_iter()
+                            .filter(|field| field.section() == section)
+                        {
+                            draw_window_field(ui, &mut state.form, field, errors);
+                        }
+                    });
+            if shown.header_response.clicked() {
+                toggled.push(section);
             }
-            let label = ui.label(egui::RichText::new(field.label()).strong());
-            // The full IPTC name of a shortened name (glossary G1, T117).
-            if let Some(tooltip) = field.tooltip() {
-                label.on_hover_text(tooltip);
-            }
-            if let Some(note) = state.form.note(field) {
-                ui.label(egui::RichText::new(note).color(grey).small());
-            }
-            if let Some(text) = state.form.text_mut(field) {
-                let edit = if field.multiline() {
-                    egui::TextEdit::multiline(text).desired_rows(3)
-                } else {
-                    egui::TextEdit::singleline(text)
-                };
-                ui.add(edit.desired_width(f32::INFINITY));
-            }
-            for (_, error) in errors.iter().filter(|(f, _)| *f == field) {
-                ui.label(egui::RichText::new(error).color(error_color));
-            }
-            ui.add_space(PANEL_ROW_SPACING);
         }
 
         let conflicts = state.form.open_conflicts();
@@ -3661,6 +3662,7 @@ fn draw_window_form(
     });
 
     // Read-only, from the read the form was filled from.
+    let grey = ui.visuals().weak_text_color();
     let others = other_values(&state.read, &window_editor_properties());
     if !others.is_empty() {
         ui.separator();
@@ -3701,7 +3703,67 @@ fn draw_window_form(
             ui.add_space(PANEL_ROW_SPACING);
         }
     }
-    choice
+    (choice, toggled)
+}
+
+/// One field of the metadata window's form (T107, T123): its name (with the full IPTC name as a
+/// tooltip where the name shortens it, T117), the note of a Lang Alt without `x-default`, then a
+/// text box, a check box (Copyrighted, U10-Q3) or, for a read-only field, its text; then its
+/// errors. The heading "Creator's Contact Info" comes before the first contact field (T114). A
+/// deprecated field the file does not have is not drawn.
+fn draw_window_field(
+    ui: &mut egui::Ui,
+    form: &mut EditorForm,
+    field: EditorField,
+    errors: &[(EditorField, String)],
+) {
+    let read_only = form.read_only_text(field).map(str::to_string);
+    if read_only.is_none() && !field.editable() {
+        return;
+    }
+    let first_contact_field = EditorField::ALL
+        .into_iter()
+        .find(|field| field.struct_field().is_some());
+    if Some(field) == first_contact_field {
+        ui.label(egui::RichText::new(property_label(field.property(), Language::En)).strong());
+    }
+    if field.check_box() && read_only.is_none() {
+        let mut checked = form.checked(field);
+        let response = ui.checkbox(&mut checked, field.label());
+        if response.changed() {
+            form.set_checked(field, checked);
+        }
+    } else {
+        let label = ui.label(egui::RichText::new(field.label()).strong());
+        // The full IPTC name of a shortened name (glossary G1, T117).
+        if let Some(tooltip) = field.tooltip() {
+            label.on_hover_text(tooltip);
+        }
+        if let Some(note) = form.note(field) {
+            let grey = ui.visuals().weak_text_color();
+            ui.label(egui::RichText::new(note).color(grey).small());
+        }
+        match read_only {
+            Some(text) => {
+                ui.add(egui::Label::new(text).wrap());
+            }
+            None => {
+                if let Some(text) = form.text_mut(field) {
+                    let edit = if field.multiline() {
+                        egui::TextEdit::multiline(text).desired_rows(3)
+                    } else {
+                        egui::TextEdit::singleline(text)
+                    };
+                    ui.add(edit.desired_width(f32::INFINITY));
+                }
+            }
+        }
+    }
+    let error_color = ui.visuals().error_fg_color;
+    for (_, error) in errors.iter().filter(|(f, _)| *f == field) {
+        ui.label(egui::RichText::new(error).color(error_color));
+    }
+    ui.add_space(PANEL_ROW_SPACING);
 }
 
 /// One path as `resolve_paths` resolves it: a relative path is taken from `cwd`, an absolute one
@@ -4608,7 +4670,7 @@ fn main() -> ExitCode {
 mod tests {
     use super::{
         FALLBACK_CHOICES, LABEL_TEXT, fallback_text, index_span, label_color, label_pill,
-        resolve_path, resolve_paths, window_editor_properties,
+        other_values, resolve_path, resolve_paths, window_editor_properties,
     };
     use super::{LeaveDecision, SaveAnswer, WriteOutcome, leave_decision};
     use egui::{Color32, Rect, pos2};
@@ -4855,15 +4917,101 @@ mod tests {
     }
 
     #[test]
-    fn the_windows_other_metadata_leaves_out_the_fields_but_keeps_the_contact_info() {
+    fn the_windows_other_metadata_leaves_out_every_field_and_the_contact_info() {
         let properties = window_editor_properties();
 
-        // 22 fields, three of them (E-post, Telefon, Webb) in the contact structure.
-        assert_eq!(properties.len(), 19);
-        assert!(!properties.contains(&"Iptc4xmpCore:CreatorContactInfo"));
-        for id in ["dc:title", "dc:description", "dc:subject", "photoshop:City"] {
+        // 40 fields, eight of them (the address, Email, Phone, Web URL) in the contact structure,
+        // which is now left out as a whole (T123, point 7).
+        assert_eq!(properties.len(), 33);
+        for id in [
+            "dc:title",
+            "dc:description",
+            "dc:subject",
+            "photoshop:City",
+            "Iptc4xmpCore:CreatorContactInfo",
+            "Iptc4xmpCore:ExtDescrAccessibility",
+            "photoshop:CaptionWriter",
+            "Iptc4xmpExt:PersonInImage",
+            "Iptc4xmpExt:OrganisationInImageName",
+            "Iptc4xmpExt:OrganisationInImageCode",
+            "Iptc4xmpExt:Event",
+            "xmpRights:WebStatement",
+            "xmpRights:Marked",
+            "Iptc4xmpCore:SubjectCode",
+            "Iptc4xmpCore:Scene",
+            "photoshop:Urgency",
+            "photoshop:Category",
+            "photoshop:SupplementalCategories",
+        ] {
             assert!(properties.contains(&id), "{id}");
         }
+        // Each property once.
+        let mut unique = properties.clone();
+        unique.sort_unstable();
+        unique.dedup();
+        assert_eq!(unique.len(), properties.len());
+        // Structures (U11) and Intellectual Genre (U10-Q4) stay under Other Metadata.
+        for id in [
+            "Iptc4xmpCore:IntellectualGenre",
+            "Iptc4xmpExt:LocationCreated",
+            "xmp:Rating",
+            "xmp:Label",
+        ] {
+            assert!(!properties.contains(&id), "{id}");
+        }
+    }
+
+    /// Other Metadata of a read with new fields, the deprecated fields, the contact structure and
+    /// one property that is not a field: only that one is listed (T123, point 7).
+    #[test]
+    fn other_metadata_lists_no_new_field() {
+        use pw_metadata::iim::CodedCharset;
+        use pw_metadata::read::MetadataRead;
+        use pw_metadata::reconcile::{FileKind, IimDigest, Reconciled};
+        use pw_metadata::value::{Metadata, Origin, StructValue, Value};
+        use pw_metadata::write_plan::{ExifPresent, FileState};
+
+        let text = |s: &str| Value::Text(s.to_string());
+        let mut metadata = Metadata::new();
+        for (id, value) in [
+            ("photoshop:CaptionWriter", text("Anna")),
+            ("Iptc4xmpExt:PersonInImage", Value::List(vec!["Per".into()])),
+            ("Iptc4xmpCore:Scene", Value::List(vec!["011900".into()])),
+            ("xmpRights:WebStatement", text("https://example.com")),
+            ("xmpRights:Marked", text("True")),
+            ("photoshop:Urgency", Value::Number("5".into())),
+            ("photoshop:Category", text("SPO")),
+            (
+                "Iptc4xmpCore:CreatorContactInfo",
+                Value::Struct(StructValue {
+                    fields: vec![("Iptc4xmpCore:CiAdrCity".into(), text("Umeå"))],
+                }),
+            ),
+            ("Iptc4xmpCore:IntellectualGenre", text("Nyhet")),
+        ] {
+            metadata
+                .insert_read(id, value, Origin::XmpEmbedded)
+                .unwrap();
+        }
+        let read = MetadataRead {
+            reconciled: Reconciled {
+                metadata,
+                notices: Vec::new(),
+                suggested_date_created: None,
+            },
+            file_notices: Vec::new(),
+            state: FileState {
+                kind: FileKind::Jpeg,
+                iim_present: false,
+                iim_charset: CodedCharset::Absent,
+                iim_values: Vec::new(),
+                digest: IimDigest::Missing,
+                exif_present: ExifPresent::default(),
+            },
+        };
+        let rows = other_values(&read, &window_editor_properties());
+        let labels: Vec<&str> = rows.iter().map(|row| row.label.as_str()).collect();
+        assert_eq!(labels, ["Intellectual Genre"]);
     }
 
     #[test]
