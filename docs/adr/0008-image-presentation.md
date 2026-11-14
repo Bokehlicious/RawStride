@@ -36,6 +36,8 @@
     installed. libjpeg-turbo was approved for prototype P0 on 2026-11-05; using it in the app is a
     separate decision.
 - Date: 2026-11-04 (section 9 FastRawViewer reference, G4 and the prototype plan updated the same day)
+- 2026-11-14 (owner): the measured figures of FastRawViewer in section 9 were moved out of the
+  repository; the conclusions and the documented design stay.
 - Basis:
   - [requirements-image-viewer.md](../requirements-image-viewer.md) (V1–V8, G1–G4; approved 2026-11-04, G4 and the V2 clarification added 2026-11-04/05);
   - ADR 0003 (M1 viewer), ADR 0006 (RAW pipeline M2);
@@ -341,7 +343,7 @@ No new tools or libraries are installed or added by this proposal.
 | **P5** | Memory budget: 2/3/4 GB under fast switching and repeated zooms, both display modes cached | peak RAM/VRAM, evictions, hit rate | The default for V8 | **done 2026-11-05**; 4 GB decided (section 12) |
 | **P2** | Presenter B2: WebView2 shared buffer → WebGL2 (and WebGPU if the runtime has it); 100 % view (≈ 6–12 MB) and a full A1 image (199 MB) | swap latency on screen, upload ms, memory, buffer lifetime | Can WebView2 present finished images within the 30 ms targets? | **done 2026-11-05**; chosen as B2-res (section 13) |
 | **P3** | Presenter A: wgpu surface for the image area under a transparent Tauri webview; same images | swap latency, resize/DPI/focus behaviour, GPU power | Can wgpu be integrated cleanly, and how much faster is a swap? | **done 2026-11-05**; not chosen (section 13). wgpu stays in the prototype only |
-| **P6** | **GPU demosaicing in our own presenter:** upload the unpacked Bayer data (≈ 2 bytes per pixel) and demosaic plus colour-convert in a shader. Variants: P3 (wgpu compute/render) and P2 (WebGPU/WebGL in WebView2). Visible region first. Compared with the CPU (P4b) on the same files | time from image change and from Z to the visible sharp view; upload time; CPU/GPU/VRAM; quality (8.3) | Whether the GPU path shortens image change and zoom, as OpenGL did in FastRawViewer (9.9a), and in which presenter | **done 2026-11-05** in B2 (WebGL2); results in section 14. P6b (PPG shader) planned, not started |
+| **P6** | **GPU demosaicing in our own presenter:** upload the unpacked Bayer data (≈ 2 bytes per pixel) and demosaic plus colour-convert in a shader. Variants: P3 (wgpu compute/render) and P2 (WebGPU/WebGL in WebView2). Visible region first. Compared with the CPU (P4b) on the same files | time from image change and from Z to the visible sharp view; upload time; CPU/GPU/VRAM; quality (8.3) | Whether the GPU path shortens image change and zoom, as with OpenGL in the FastRawViewer reference (9.9a), and in which presenter | **done 2026-11-05** in B2 (WebGL2); results in section 14. P6b (PPG shader) planned, not started |
 | **P1** | Optional quick fix: JS `createImageBitmap` prefetch of large previews in today's app, behind a flag | `latency.ps1` V1/V3 in JPEG mode | Is a cheap interim fix worth doing? | **approved**; lowest priority |
 
 ### 8.3 How the prototypes are compared
@@ -423,24 +425,13 @@ after a pause and immediately on arrival.
 
 - Sources:
   - **[D]** the official documentation;
-  - **[M]** hands-on use on the development PC, timed with the same pixel method (`latency.ps1`), the same
-    A7R IVA files and the same image region as PhotoWorkflow;
-  - passive process counters (CPU time, private memory, threads).
+  - **[M]** hands-on use on the development PC (clean-room level A), timed with the same pixel
+    method (`latency.ps1`) and the same 61 Mpix A7R IVA files as our own viewer;
+  - passive process counters (level B).
 - No decompilation, disassembly, debugger, code injection or analysis of its binaries.
-- No setting was changed.
-- Raw notes and log: `D:\PhotoWorkflowData\pm-study\results\run-log-frv.txt` (outside the repo).
-- **Version:** FastRawViewer 2.0.11, build 2088 (x64, DirectX 9, AVX2), © LibRaw LLC (the authors of
-  LibRaw). Trial licence. [M]
-- **Settings in use (unchanged):**
-  - RAW shown, not the embedded JPEG: status "R", image size 9492 × 6328;
-  - "Process RAW data on GPU" = **None** (demosaicing on the CPU);
-  - graphics engine DirectX 9;
-  - cache 40 RAW + 40 RGB files;
-  - prefetch depth 8, with 2 parallel prefetches auto-extending to 8;
-  - "Image zoom on next file: Keep zoom ratio";
-  - Toggle Zoom = 100 %.
-  
-  [M]
+- Settings were changed only for the reference tests the owner approved (9.9), and restored afterwards.
+- **The measured figures are kept outside the repository** (owner, 2026-11-14), with the raw notes
+  and logs. This section keeps only what the measurements meant for RawStride's design.
 
 ### 9.2 Documented design [D]
 
@@ -453,39 +444,29 @@ after a pause and immediately on arrival.
 | Speed | Target "5–7 RAW files per second" on recommended hardware. No benchmark numbers are published |
 | Not documented | The decoder internals, whether half-size comes first, default sizes, whether zoom re-decodes |
 
-### 9.3 Measured on the A7R IVA (61 Mpix) [M]
+### 9.3 Observed [M]
 
-| Test | FastRawViewer | PhotoWorkflow M2 (B.2a / pw-raw100) |
-|---|---|---|
-| Z fit ↔ 100 % on the image already shown | **14–33 ms**, one change, sharp; ~16 ms CPU | after 3–4 s pause: sharp after **682–699 ms** (blurred first) |
-| Next/previous image at fit | **195–211 ms** (first one 340 ms), one change, no intermediate frame; **375–1250 ms CPU per step** (≈ 2–6 cores) | 32 ms first change (embedded 1616 px preview), still after 81–97 ms; half-size RAW later |
-| Z 50 ms after RIGHT (timed from Z) | final view **82–94 ms** after Z (2 changes), i.e. ≈ 130–145 ms after RIGHT | not measured |
-| Next image at 100 % (zoom kept), 1.5 s apart | **200–209 ms**, one change, sharp | zoom not kept (V6) |
-| Rapid at 100 %, no pause | **198–201 ms** per image, sharp | – |
-| Process | private memory 2.5 → 3.8 GB; 47–51 threads | – |
+- Zooming between fit and 100 % on the image already shown took about one frame.
+- Every image change showed one sharp view, with no intermediate frame.
+- On 61 Mpix RAW on this PC, an image change took far longer than our 30 ms target, in every
+  configuration tried (9.9, 9.9a).
 
 ### 9.4 What this shows
 
-- **[M]** FastRawViewer shows a **sharp, real RAW 100 % on every image change, in about 200 ms**, with
-  no intermediate frame. Fit ↔ 100 % on the shown image costs **one frame**.
-- **[T]** The shown image is kept as a processed full-resolution image (zoom only resamples on the GPU),
-  and every image change re-processes the RAW (≈ 200 ms of wall time with several cores). Its prefetch
-  seems to keep decoded RAW data rather than finished RGB images; the documented cache sizes (2 MB/Mpix
-  Bayer) fit this reading. A Z pressed while the image is still being processed finished ≈ 90 ms later.
-  This may mean that the visible region is processed first, or simply that the job was already running.
-- **[M]** Even this specialised viewer **does not reach ≤ 30 ms** for "next image" or "sharp 100 % right
-  after arriving" on 61 Mpix RAW, in its CPU mode on this PC. GPU mode was not tested: it needs a setting
-  change (owner approval).
+- **[T]** It fits a design where the shown image is kept fully processed at full resolution (zoom
+  only resamples on the GPU) and each image change processes the RAW again.
+- **[M]** ≤ 30 ms per image change on 61 Mpix RAW needs images prepared ahead (2.3); neither caching
+  of the shown image nor GPU processing alone reaches it.
 
 ### 9.5 Principles we can reuse (ideas only, no code or implementation copied)
 
-| Principle | Evidence | Use in PhotoWorkflow |
+| Principle | Evidence | Use in RawStride |
 |---|---|---|
-| Keep the **current image fully rendered** at full resolution; fit/100 % is then only resampling | [M] 14–33 ms | Core 2.1: after a short dwell, render the whole current image, or at least the zoom target plus a ring. V3/V7 "after a moment" |
+| Keep the **current image fully rendered** at full resolution; fit/100 % is then only resampling | [M] one-frame zoom | Core 2.1: after a short dwell, render the whole current image, or at least the zoom target plus a ring. V3/V7 "after a moment" |
 | **Atomic swap**, never an intermediate frame | [M] one change per step | Core swap rule (V2), as planned |
 | **Fast demosaicing for browsing**; quality modes separate | [D] | Today we render tiles with AHD (~62 ms per 1024² tile ≈ 60 ns/px [M]). A whole A7R image in AHD is ≈ 3.6 s single-threaded [T from M]. A fast demosaic for the "browse" view, with AHD as a later refinement or on demand, is worth measuring (P4b) |
 | **Prefetch of decoded RAW data in the direction of travel**, cache counted in files with a memory budget | [D] | Core 2.3 (neighbour unpack), V8 budget |
-| **GPU-side RAW processing** as an option | [D], not measured | A possible later step (P6). It favours option A (wgpu compute) or WebGPU in option B; it is not a reason to choose now |
+| **GPU-side RAW processing** as an option | [D], [M] 9.9 | A possible later step (P6). It favours option A (wgpu compute) or WebGPU in option B; it is not a reason to choose now |
 
 ### 9.6 Does pre-decoding plus a cache of finished RAW tiles remove our ~0.7 s?
 
@@ -493,10 +474,10 @@ after a pause and immediately on arrival.
   - Our 682–699 ms is spent unpacking (if not done), rendering 4+ tiles after Z, then JPEG-encoding and
     decoding them [M].
   - If the zoom target is already rendered and kept unencoded (core 2.3), Z only swaps textures. That is
-    the same mechanism that gives FastRawViewer 14–33 ms.
+    the mechanism behind one-frame zoom (9.3).
   - To be confirmed by P4.
 - **Immediately on arrival: not by caching alone.**
-  - FastRawViewer itself needs ≈ 200 ms per image switch, and ≈ 90 ms after an immediate Z, on 61 Mpix.
+  - Even a specialised viewer needs far more than 30 ms per image change on 61 Mpix (9.3).
   - Meeting 30 ms there requires that the **next** image's zoom target was finished *before* arrival
     (neighbour pre-render).
   - That is bounded by CPU throughput: ≈ 0.4–0.65 s of work per A7R image today [T].
@@ -522,89 +503,37 @@ too slow. It confirms that the presentation must hold *finished, resident textur
 
 1. **Unchanged:** build the core first. Choose A or B2 only after P2/P3.
 2. **Strengthened:** the core keeps a **fully rendered current image** (or zoom target + ring),
-   unencoded, as the primary means to meet V3/V7. FastRawViewer shows that this gives one-frame zoom.
+   unencoded, as the primary means to meet V3/V7. The reference shows that this gives one-frame zoom.
 3. **Prototype P4b** (approved 2026-11-04): faster demosaicing against AHD; see section 8.
 4. **Prototype P6** (approved 2026-11-04): GPU demosaicing in our own presenter; see section 8.
-5. **Reference measurement with "Process RAW data on GPU" on:** done (9.9). In DirectX 9 mode it was
-   about 3× slower per image change.
+5. **Reference test with GPU processing on:** done (9.9).
 
-### 9.9 GPU reference measurement (owner-approved, 2026-11-04) [M]
+### 9.9 GPU reference test (owner-approved, 2026-11-04) [M]
 
-**Procedure:**
-1. The original setting was documented: "Process RAW data on GPU" = None, graphics engine "Legacy:
-   DirectX 9".
-2. Only that one setting was changed, to "Bayer RAW only".
-3. FastRawViewer then warned that GPU processing with DirectX 9 is a *suboptimal configuration* and
-   recommended OpenGL or DirectX 11. The graphics engine was **not** changed, because that was not
-   approved.
-4. After the test the setting was restored to None. This was verified by reopening the dialog: the GPU
-   page is identical to the original.
-
-Same A7R IVA files, script and image region as before, plus a sampler of Windows performance counters
-(≈ 1.5 s per sample):
-
-| Test | CPU mode (re-run) | GPU mode, DirectX 9 |
-|---|---|---|
-| Z fit ↔ 100 % on the image shown | 15–35 ms | 18–33 ms |
-| Next/previous at fit | **195–229 ms** (0.3–0.5 s CPU per step) | **595–662 ms** (0.6–0.95 s CPU per step) |
-| Z 50 ms after RIGHT (timed from Z) | 65–81 ms | 455–477 ms |
-| Next/previous at 100 % | 195–216 ms | 595–616 ms |
-| Private memory | 6.2 GB | 11.0 GB |
-| GPU dedicated memory (VRAM) | 1.2 GB | 4.1 GB |
-| GPU 3D utilisation (coarse) | ≤ 13 % | ≤ 17 % |
-
-**Conclusion [M + T]** (superseded in part by 9.9a, where OpenGL + GPU was the fastest configuration):
-- In the configuration we were allowed to test, GPU processing was about **3× slower** per image change
-  and used more RAM and VRAM. Zooming the shown image was unchanged.
-- The vendor's own warning means this does **not** show that GPU demosaicing is slow in general. With
-  DirectX 11/OpenGL it is untested.
-- What the measurement shows is narrower: **moving RAW data to the GPU per image has a cost that can
-  outweigh the gain**. For PhotoWorkflow, GPU demosaicing (P6) stays optional and must be measured, never
-  assumed. CPU rendering ahead of time (P4/P4b) remains the main path.
+- Only the GPU processing setting was changed, with the default graphics engine (DirectX 9), and the
+  same tests were run. The program itself warned that this combination is suboptimal. The original
+  setting was restored and the restore verified.
+- In this configuration GPU processing was slower per image change than the CPU mode and used more
+  memory. Because of the warning, this does **not** show that GPU demosaicing is slow in general.
+- What it shows is narrower: **moving RAW data to the GPU per image has a cost that can outweigh the
+  gain**. GPU demosaicing (P6) must be measured, never assumed.
 
 ### 9.9a Second reference test: DirectX 11 and OpenGL (owner-approved, 2026-11-04) [M]
 
-**Setup and restore:**
-- The graphics engine and "Process RAW data on GPU" were changed, and FastRawViewer was restarted after
-  each engine change.
-- At the start, the dialog already showed a pending change to DirectX 11. It was not made by these
-  tests: the verification at 20:14 showed DirectX 9.
-- Afterwards the original state was restored and verified after a restart: **Legacy DirectX 9 + None**,
-  with no change pending.
-
-Same A7R IVA files, tests and sampler:
-
-| Configuration | Z fit ↔ 100 % | Next/prev at fit | Z 50 ms after RIGHT (from Z) | Next at 100 % | VRAM | GPU 3D max |
-|---|---|---|---|---|---|---|
-| DirectX 9 + CPU | 15–35 ms | 195–229 ms | 65–81 ms | 195–216 ms | 1.2 GB | 13 % |
-| DirectX 9 + GPU | 18–33 | 595–662 | 455–477 | 595–616 | 4.1 GB | 17 % |
-| DirectX 11 + CPU | 27–48 | 295–331 | 203–218 | 304–336 | 2.4 GB | 24 % |
-| DirectX 11 + GPU | 25–47 | 210–224 | 80–98 | 211–228 | 2.2 GB | 33 % |
-| **OpenGL + GPU** | **15–27** | **142–166** | **30–33, one change** | **112–165** | 2.0 GB | 6 % |
-
-RAM (private) was 4–5 GB in the DirectX 11/OpenGL runs. Sessions differ, so RAM is not strictly
-comparable.
-
-**What this shows:**
-- **[M]** The best configuration (OpenGL with GPU demosaicing) is about **25–40 % faster** than the
-  default CPU mode per image change.
-- **[M]** With it, a Z pressed 50 ms after RIGHT gave the sharp 100 % view **30–33 ms after Z**, in one
-  change. That is about 80 ms after the image change, close to our V7 target.
-- **Hypothesis [T], not verified:** FastRawViewer may process the **visible region first** when zoomed. The
-  only basis is a measured fact: a Z right after arrival finished *faster* (≈ 80 ms from RIGHT) than a full
-  image at fit (142–166 ms).
-- **[M]** The presentation path matters as much as the demosaicing location. The same GPU processing was
-  3× slower with DirectX 9 and 1.3–1.5× faster with OpenGL. Under DirectX 11 the CPU mode got slower.
-  This supports measuring presenters (P2/P3) rather than assuming.
-- **[M]** Even the best configuration needs **112–166 ms per image change** on 61 Mpix. ≤ 30 ms per image
-  change (V1 for RAW display) therefore still requires images prepared ahead (2.3). GPU processing alone
-  does not reach it.
-
-**Effect on this ADR (proposed):**
-- P6 (GPU demosaicing) moves from "optional, only if needed" to **"worth prototyping"**. It must be
-  measured in our own presenter, because the result depends strongly on the presentation path.
-- A further principle to test in P4: **render the visible region first** after a zoom or image change,
-  then the rest.
+- The graphics engine and the GPU processing setting were changed one at a time, with a restart after
+  each engine change. The original settings were restored and verified after a restart.
+- **What this showed for RawStride:**
+  - **The presentation path matters as much as where the demosaicing runs.** The same GPU processing
+    was slower than the CPU mode with one graphics engine and faster with another (OpenGL). This
+    supports measuring presenters (P2/P3) rather than assuming.
+  - In the fastest configuration, a zoom pressed right after an image change finished sooner than a
+    whole image at fit. **Hypothesis [T], not verified:** the visible region may be processed first.
+  - Even the fastest configuration did not reach ≤ 30 ms per image change on 61 Mpix (9.4).
+- **Effect on this ADR (proposed):**
+  - P6 (GPU demosaicing) moves from "optional, only if needed" to **"worth prototyping"**. It must be
+    measured in our own presenter, because the result depends strongly on the presentation path.
+  - A further principle to test in P4: **render the visible region first** after a zoom or image change,
+    then the rest.
 
 ### 9.10 Owner decisions of 2026-11-04 on section 9
 

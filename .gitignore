@@ -43,7 +43,7 @@ node_modules/
 # Clean-room material must never enter this repository
 /pm-clean-room/
 *.cany
-# Session outputs (e.g. the Photo Mechanic study report); kept outside the repo
+# Session outputs (e.g. study reports); kept outside the repo
 /Claude outputs/
 
 # Editors / OS
