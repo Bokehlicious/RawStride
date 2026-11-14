@@ -1,4 +1,4 @@
-# T120. ExifTool from the program folder first — Open
+# T120. ExifTool from the program folder first — Done
 
 - **Why:** ExifTool ships with RawStride, unmodified, in the program folder (ADR 0002 §2.5, owner
   2026-11-13). Today `pw-metadata` starts `exiftool` from PATH only, so a shipped copy would not be
@@ -39,3 +39,6 @@
 | Date | Status | Note |
 |---|---|---|
 | 2026-11-13 | Open | Added (owner decision: ExifTool ships with RawStride, ADR 0002 §2.5) |
+| 2026-11-14 | Ready for review | `exiftool_program` (program folder, else PATH) used by `ExifTool::start` and `MetadataWorker::start`; new start error text; 5 unit tests; check.ps1 all OK (1220 passed, 43 ignored) |
+| 2026-11-14 | Ready for review | Reviewer: accepted, not committed. `exiftool_program` / `exiftool_program_in` as the task says (only a file `exiftool.exe` next to the running program, else `exiftool`); `ExifTool::start` and `MetadataWorker::start` use it, `start_with` and `restart` unchanged. **Reviewer's fix:** the start error said "ExifTool was found neither in the program folder nor on PATH", which is wrong when the shipped copy exists but fails to start; it now says "(ExifTool is looked for in the program folder, then on PATH)", test updated. The reviewer's `check.ps1`: fmt, test and clippy OK, 1220 passed, 0 failed, 43 ignored (one earlier run failed `fileops::can_write_refuses_when_the_extra_bytes_exceed_the_free_space`, which reads the free disk space twice and fails when the disk gains space in between; not related to T120, passed on the next run). Waits for the owner's approval |
+| 2026-11-14 | Done | Owner: approved; committed by the reviewer |

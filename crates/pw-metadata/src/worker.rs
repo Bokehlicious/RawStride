@@ -31,7 +31,7 @@ use std::sync::{Arc, OnceLock};
 use std::thread::JoinHandle;
 
 use crate::edit::{Edit, EditOptions, EditReport};
-use crate::exiftool::{MIN_EXIFTOOL_VERSION, ToolVersion};
+use crate::exiftool::{MIN_EXIFTOOL_VERSION, ToolVersion, exiftool_program};
 use crate::journal::Journal;
 use crate::read::MetadataRead;
 use crate::safe_write::ImageCheck;
@@ -147,10 +147,11 @@ pub struct MetadataWorker {
 }
 
 impl MetadataWorker {
-    /// Starts a worker using `exiftool` from PATH. `setup` is `None` when the write journal could
-    /// not be opened; rating writes then fail with [`WriteError::NoJournal`].
+    /// Starts a worker using the ExifTool given by [`exiftool_program`]: the copy in the program
+    /// folder, or `exiftool` from PATH. `setup` is `None` when the write journal could not be
+    /// opened; rating writes then fail with [`WriteError::NoJournal`].
     pub fn start(setup: Option<WriteSetup>) -> Result<Self> {
-        Self::start_with("exiftool", &[], setup)
+        Self::start_with(&exiftool_program(), &[], setup)
     }
 
     /// Starts a worker using an explicit ExifTool program and leading arguments.

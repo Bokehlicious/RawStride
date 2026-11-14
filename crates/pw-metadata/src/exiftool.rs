@@ -8,11 +8,48 @@
 use std::fmt;
 use std::fmt::Write as _;
 use std::io::{BufRead, BufReader, Write};
+use std::path::Path;
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use crate::{Error, Result};
+
+/// The ExifTool program started when no copy is found in the program folder; Windows looks for it
+/// on PATH.
+const EXIFTOOL_ON_PATH: &str = "exiftool";
+
+/// The file name of the ExifTool shipped in the program folder (ADR 0002 §2.5). Its
+/// `exiftool_files` folder belongs next to it, as in the Windows package; it is not checked here.
+const EXIFTOOL_FILE_NAME: &str = "exiftool.exe";
+
+/// The ExifTool program to start: the full path of `exiftool.exe` in the folder of the running
+/// program when that folder holds such a file (the copy shipped with RawStride, ADR 0002 §2.5),
+/// otherwise `exiftool` from PATH. Also `exiftool` when the running program's path cannot be
+/// found.
+pub fn exiftool_program() -> String {
+    let exe = std::env::current_exe().ok();
+    exiftool_program_in(exe.as_deref().and_then(Path::parent))
+}
+
+/// The choice of [`exiftool_program`] for a given program folder. Only a file named
+/// `exiftool.exe` counts (not a folder of that name). A path that is not valid Unicode cannot be
+/// passed on as text, so it also gives `exiftool` from PATH.
+fn exiftool_program_in(folder: Option<&Path>) -> String {
+    folder
+        .map(|folder| folder.join(EXIFTOOL_FILE_NAME))
+        .filter(|path| path.is_file())
+        .and_then(|path| path.to_str().map(str::to_string))
+        .unwrap_or_else(|| EXIFTOOL_ON_PATH.to_string())
+}
+
+/// The error text when `program` could not be started: it names the program and both places
+/// ExifTool is looked for (T120).
+fn start_error_text(program: &str, error: &std::io::Error) -> String {
+    format!(
+        "could not start {program}: {error} (ExifTool is looked for in the program folder, then on PATH)"
+    )
+}
 
 /// How long `Drop` waits for ExifTool to exit on its own before killing it.
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
@@ -78,9 +115,10 @@ pub struct ExifTool {
 }
 
 impl ExifTool {
-    /// Starts `exiftool` from PATH.
+    /// Starts the ExifTool given by [`exiftool_program`]: the copy in the program folder, or
+    /// `exiftool` from PATH.
     pub fn start() -> Result<Self> {
-        Self::start_with("exiftool", &[])
+        Self::start_with(&exiftool_program(), &[])
     }
 
     /// Starts ExifTool with an explicit program and leading arguments
@@ -98,11 +136,9 @@ impl ExifTool {
             const CREATE_NO_WINDOW: u32 = 0x0800_0000;
             cmd.creation_flags(CREATE_NO_WINDOW);
         }
-        let mut child = cmd.spawn().map_err(|e| {
-            Error::ExifTool(format!(
-                "could not start {program}: {e} (is ExifTool on PATH?)"
-            ))
-        })?;
+        let mut child = cmd
+            .spawn()
+            .map_err(|e| Error::ExifTool(start_error_text(program, &e)))?;
         let (stdin, stdout) = match (child.stdin.take(), child.stdout.take()) {
             (Some(stdin), Some(stdout)) => (stdin, BufReader::new(stdout)),
             (stdin, stdout) => {
@@ -364,6 +400,75 @@ mod tests {
         assert!(et.restart().is_err());
         assert!(et.is_broken());
         assert!(et.execute(&["-ver".into()]).is_err());
+    }
+
+    /// A temporary folder for one test, removed at the end.
+    struct TempDir(std::path::PathBuf);
+
+    impl TempDir {
+        fn new(name: &str) -> TempDir {
+            let path = std::env::temp_dir().join(format!(
+                "pw-metadata-exiftool-{name}-{}",
+                std::process::id()
+            ));
+            let _ = std::fs::remove_dir_all(&path);
+            std::fs::create_dir_all(&path).expect("create the temporary folder");
+            TempDir(path)
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn an_exiftool_exe_in_the_program_folder_is_chosen() {
+        let folder = TempDir::new("with-exe");
+        let exe = folder.0.join("exiftool.exe");
+        std::fs::write(&exe, b"not really a program").expect("write exiftool.exe");
+        assert_eq!(
+            exiftool_program_in(Some(&folder.0)),
+            exe.to_str().expect("a Unicode temporary path")
+        );
+    }
+
+    #[test]
+    fn a_program_folder_without_exiftool_exe_gives_exiftool_on_path() {
+        let folder = TempDir::new("without-exe");
+        assert_eq!(exiftool_program_in(Some(&folder.0)), "exiftool");
+    }
+
+    #[test]
+    fn no_program_folder_gives_exiftool_on_path() {
+        assert_eq!(exiftool_program_in(None), "exiftool");
+    }
+
+    #[test]
+    fn a_folder_named_exiftool_exe_is_not_chosen() {
+        let folder = TempDir::new("exe-folder");
+        std::fs::create_dir_all(folder.0.join("exiftool.exe")).expect("create the folder");
+        assert_eq!(exiftool_program_in(Some(&folder.0)), "exiftool");
+    }
+
+    #[test]
+    fn the_start_error_names_the_program_and_both_places() {
+        let program = "pw-no-such-exiftool-program";
+        match ExifTool::start_with(program, &[]) {
+            Err(Error::ExifTool(message)) => {
+                assert!(
+                    message.starts_with("could not start pw-no-such-exiftool-program: "),
+                    "{message}"
+                );
+                assert!(
+                    message
+                        .ends_with("(ExifTool is looked for in the program folder, then on PATH)"),
+                    "{message}"
+                );
+            }
+            other => panic!("expected a start error, got {other:?}"),
+        }
     }
 
     fn version(major: u32, minor: u32) -> ToolVersion {
