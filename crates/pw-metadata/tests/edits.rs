@@ -484,3 +484,178 @@ fn a_title_on_a_raw_writes_only_the_sidecar() {
     s.assert_clean();
     s.remove();
 }
+
+/// ExifTool's JSON output (`-j` and `tags`) for `file`, less the `SourceFile` key, so the same
+/// output of a file before and after a write can be compared.
+fn json_without_source_file(et: &mut ExifTool, file: &Path, tags: &[&str]) -> serde_json::Value {
+    let mut args = vec!["-j".to_string()];
+    args.extend(tags.iter().map(|tag| tag.to_string()));
+    args.push(file.to_string_lossy().into_owned());
+    let out = et.execute(&args).unwrap();
+    let mut json: serde_json::Value = match serde_json::from_str(&out) {
+        Ok(json) => json,
+        Err(e) => panic!("ExifTool's -j output is not JSON ({e}): {out}"),
+    };
+    let objects = json.as_array_mut().unwrap();
+    assert_eq!(objects.len(), 1, "{out}");
+    let object = objects[0].as_object_mut().unwrap();
+    assert!(object.remove("SourceFile").is_some(), "{out}");
+    serde_json::Value::Object(object.clone())
+}
+
+fn list(entries: &[&str]) -> Value {
+    Value::List(entries.iter().map(|entry| entry.to_string()).collect())
+}
+
+/// Hierarchical keywords in a JPEG (`lr:hierarchicalSubject` and an `mwg-kw:KeywordInfo` structure of
+/// three levels) are kept unchanged when the flat keywords (`dc:subject`) are edited: ADR 0007 §12,
+/// §8 (MWG §5.10 "MUST preserve all nested information").
+#[test]
+fn hierarchical_keywords_in_a_jpeg_are_kept_when_the_keywords_are_edited() {
+    const HIERARCHY: &[&str] = &["-struct", "-XMP-lr:all", "-XMP-mwg-kw:all"];
+    let mut et = exiftool();
+    let s = Scratch::new("hierarchical-jpeg");
+    let file = s.jpeg();
+    write(
+        &mut et,
+        &file,
+        &[
+            "-XMP-dc:Subject=Göteborg",
+            "-XMP-dc:Subject=Fåglar",
+            "-XMP-lr:HierarchicalSubject=Platser|Sverige|Göteborg",
+            "-XMP-lr:HierarchicalSubject=Djur|Fåglar",
+            "-XMP-mwg-kw:KeywordInfo={Hierarchy=[{Keyword=Platser,Children=[{Keyword=Sverige,\
+             Children=[{Keyword=Göteborg}]}]}]}",
+        ],
+    );
+    let before = json_without_source_file(&mut et, &file, HIERARCHY);
+    let text_before = before.to_string();
+    assert!(
+        text_before.contains("Platser|Sverige|Göteborg") && text_before.contains("Djur|Fåglar"),
+        "precondition: {before}"
+    );
+    assert!(
+        text_before.contains("\"Keyword\":\"Göteborg\""),
+        "precondition: {before}"
+    );
+
+    assert_edit(
+        s.edit(
+            &mut et,
+            &file,
+            &[set("dc:subject", list(&["Göteborg", "Fåglar", "Hamn"]))],
+        ),
+        written(&file),
+        &[],
+    );
+    assert_eq!(
+        read_value(&mut et, &file, "dc:subject"),
+        Some(list(&["Göteborg", "Fåglar", "Hamn"]))
+    );
+    assert_eq!(json_without_source_file(&mut et, &file, HIERARCHY), before);
+    s.assert_clean();
+    s.remove();
+}
+
+/// Hierarchical keywords (`lr:hierarchicalSubject`) in a RAW's sidecar are kept unchanged when
+/// another field (the Title) is edited; the RAW's bytes are unchanged: ADR 0007 §12, §8.
+#[test]
+fn hierarchical_keywords_in_a_sidecar_are_kept_when_the_title_is_edited() {
+    const HIERARCHY: &[&str] = &["-struct", "-XMP-lr:all"];
+    let mut et = exiftool();
+    let s = Scratch::new("hierarchical-sidecar");
+    let raw = s.raw();
+    let sidecar = s.dir.join("TN0001.xmp");
+    write(
+        &mut et,
+        &sidecar,
+        &[
+            "-XMP-dc:Subject=Göteborg",
+            "-XMP-dc:Subject=Fåglar",
+            "-XMP-lr:HierarchicalSubject=Platser|Sverige|Göteborg",
+            "-XMP-lr:HierarchicalSubject=Djur|Fåglar",
+        ],
+    );
+    let before = json_without_source_file(&mut et, &sidecar, HIERARCHY);
+    let text_before = before.to_string();
+    assert!(
+        text_before.contains("Platser|Sverige|Göteborg") && text_before.contains("Djur|Fåglar"),
+        "precondition: {before}"
+    );
+
+    assert_edit(
+        s.edit(&mut et, &raw, &[set("dc:title", x_default("Titel"))]),
+        written(&sidecar),
+        &[],
+    );
+    assert_eq!(tag(&mut et, &sidecar, "XMP-dc:Title"), "Titel");
+    assert_eq!(
+        read_value(&mut et, &raw, "dc:title"),
+        Some(x_default("Titel"))
+    );
+    assert_eq!(
+        json_without_source_file(&mut et, &sidecar, HIERARCHY),
+        before
+    );
+    assert_eq!(std::fs::read(&raw).unwrap(), FAKE_RAW);
+    s.assert_clean();
+    s.remove();
+}
+
+/// The deprecated IIM datasets Urgency, Category and Supplemental Categories, in both IIM and
+/// XMP with a matching checksum, are kept unchanged when another field (the Headline) is edited and
+/// both forms are written; the checksum still matches: ADR 0007 §12, §5.5.
+#[test]
+fn deprecated_iim_datasets_are_kept_when_the_headline_is_edited() {
+    // `-G1 -a`: the IIM and XMP tags have the same names; without them ExifTool prints one of each.
+    const DEPRECATED: &[&str] = &[
+        "-G1",
+        "-a",
+        "-IPTC:Urgency",
+        "-IPTC:Category",
+        "-IPTC:SupplementalCategories",
+        "-XMP-photoshop:Urgency",
+        "-XMP-photoshop:Category",
+        "-XMP-photoshop:SupplementalCategories",
+    ];
+    let mut et = exiftool();
+    let s = Scratch::new("deprecated-iim");
+    let file = s.jpeg();
+    write(
+        &mut et,
+        &file,
+        &[
+            "-IPTC:CodedCharacterSet=UTF8",
+            "-IPTC:Urgency=5",
+            "-IPTC:Category=SPO",
+            "-IPTC:SupplementalCategories=Fotboll",
+            "-IPTC:SupplementalCategories=Allsvenskan",
+            "-XMP-photoshop:Urgency=5",
+            "-XMP-photoshop:Category=SPO",
+            "-XMP-photoshop:SupplementalCategories=Fotboll",
+            "-XMP-photoshop:SupplementalCategories=Allsvenskan",
+            "-IPTCDigest=new",
+        ],
+    );
+    let read_before = et.read_metadata(&file, Fallback::Windows1252).unwrap();
+    assert_eq!(read_before.state.digest, IimDigest::Matches, "precondition");
+    let before = json_without_source_file(&mut et, &file, DEPRECATED);
+    assert_eq!(
+        before.as_object().map(|object| object.len()),
+        Some(6),
+        "precondition: {before}"
+    );
+
+    assert_edit(
+        s.edit(&mut et, &file, &[set("photoshop:Headline", text("Rubrik"))]),
+        written(&file),
+        &[],
+    );
+    assert_eq!(tag(&mut et, &file, "XMP-photoshop:Headline"), "Rubrik");
+    assert_eq!(tag(&mut et, &file, "IPTC:Headline"), "Rubrik");
+    assert_eq!(json_without_source_file(&mut et, &file, DEPRECATED), before);
+    let read_after = et.read_metadata(&file, Fallback::Windows1252).unwrap();
+    assert_eq!(read_after.state.digest, IimDigest::Matches);
+    s.assert_clean();
+    s.remove();
+}
