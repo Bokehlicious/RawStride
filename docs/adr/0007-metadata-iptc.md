@@ -629,8 +629,9 @@ silently. All other deviations concern SHOULD-level recommendations; each is mar
    §8–§9).
 3. ~~Answer the remaining open questions~~ – Q1–Q3 and Q8–Q13 answered 2026-11-11 (§14).
    The ADR was approved by the owner the same day.
-4. **Read the PLUS controlled vocabulary** (Q9) before the agent task for the PLUS fields is
-   written.
+4. ~~**Read the PLUS controlled vocabulary**~~ (Q9) – read 2026-11-14 and saved in
+   `D:\PhotoWorkflowData\references\` (the LDF 1.2.0 vocabulary file; Data Mining from the PLUS
+   XMP specification 2.0.1, in the folder's `README.md`).
 5. Read **XMP Part 1** (ISO 16684-1) and **MWG §5.2** to verify the Q7 policy, **XMP Part 3** (Q8)
    and **IIM 4.2** (Q3) if the owner provides them.
 6. **Level-C samples** (Q11), before the implementation is tested.
