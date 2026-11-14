@@ -43,19 +43,19 @@ pub(crate) fn exif_rows(info: &ImageInfo) -> Vec<ExifRow> {
     push(
         ExifLabel::FocalLength,
         positive(info.focal_length)
-            .map(|mm| exif_value_text(&ExifValue::FocalLength(decimal_comma(mm)))),
+            .map(|mm| exif_value_text(&ExifValue::FocalLength(one_decimal(mm)))),
     );
     push(
         ExifLabel::Aperture,
         positive(info.f_number)
-            .map(|number| exif_value_text(&ExifValue::Aperture(decimal_comma(number)))),
+            .map(|number| exif_value_text(&ExifValue::Aperture(one_decimal(number)))),
     );
     push(
         ExifLabel::ExposureTime,
         info.exposure_time
             .filter(|time| time.num != 0 && time.den != 0)
-            // The rounding of `ExposureTime`'s `Display` in `pw-raw`, with a decimal comma.
-            .map(|time| time.to_string().replace('.', ",")),
+            // The rounding of `ExposureTime`'s `Display` in `pw-raw`, with its decimal point.
+            .map(|time| time.to_string()),
     );
     push(
         ExifLabel::Iso,
@@ -97,11 +97,11 @@ fn positive(value: Option<f64>) -> Option<f64> {
     value.filter(|value| value.is_finite() && *value > 0.0)
 }
 
-/// At most one decimal, `,0` dropped, with a decimal comma: 35 → "35", 24.5 → "24,5",
-/// 2.8 → "2,8".
-fn decimal_comma(value: f64) -> String {
+/// At most one decimal, `.0` dropped, with a decimal point: 35 → "35", 24.5 → "24.5",
+/// 2.8 → "2.8".
+fn one_decimal(value: f64) -> String {
     let text = format!("{value:.1}");
-    text.strip_suffix(".0").unwrap_or(&text).replace('.', ",")
+    text.strip_suffix(".0").unwrap_or(&text).to_owned()
 }
 
 /// DateTimeOriginal as `2026-10-30 14:03:12`; a value that is not `YYYY:MM:DD HH:MM:SS` is shown
@@ -382,7 +382,7 @@ mod tests {
                 row(ExifLabel::Camera, "SONY ILCE-7RM5"),
                 row(ExifLabel::Lens, "FE 24-70mm F2.8 GM II"),
                 row(ExifLabel::FocalLength, "35 mm"),
-                row(ExifLabel::Aperture, "f/2,8"),
+                row(ExifLabel::Aperture, "f/2.8"),
                 row(ExifLabel::ExposureTime, "1/250 s"),
                 row(ExifLabel::Iso, "ISO 400"),
                 row(ExifLabel::Taken, "2026-10-30 14:03:12"),
@@ -463,15 +463,15 @@ mod tests {
         );
         assert_eq!(
             shown(&with(24.5, 2.8)),
-            (Some("24,5 mm".to_owned()), Some("f/2,8".to_owned()))
+            (Some("24.5 mm".to_owned()), Some("f/2.8".to_owned()))
         );
         assert_eq!(
             shown(&with(70.04, 5.6)),
-            (Some("70 mm".to_owned()), Some("f/5,6".to_owned()))
+            (Some("70 mm".to_owned()), Some("f/5.6".to_owned()))
         );
         assert_eq!(
             shown(&with(18.66, 1.4)),
-            (Some("18,7 mm".to_owned()), Some("f/1,4".to_owned()))
+            (Some("18.7 mm".to_owned()), Some("f/1.4".to_owned()))
         );
     }
 
@@ -487,12 +487,36 @@ mod tests {
             )
         };
         assert_eq!(time(1, 250).as_deref(), Some("1/250 s"));
-        assert_eq!(time(1, 2).as_deref(), Some("0,5 s"));
+        assert_eq!(time(1, 2).as_deref(), Some("0.5 s"));
         assert_eq!(time(2, 1).as_deref(), Some("2 s"));
-        assert_eq!(time(13, 10).as_deref(), Some("1,3 s"));
+        assert_eq!(time(13, 10).as_deref(), Some("1.3 s"));
         // pw-raw's "?" for a zero value is no value.
         assert_eq!(time(0, 1), None);
         assert_eq!(time(1, 0), None);
+    }
+
+    /// English numbers (T117): focal length, aperture and exposure time have a decimal point and
+    /// never a decimal comma.
+    #[test]
+    fn focal_length_aperture_and_exposure_time_have_a_decimal_point() {
+        let info = ImageInfo {
+            focal_length: Some(24.5),
+            f_number: Some(2.8),
+            exposure_time: Some(ExposureTime { num: 1, den: 2 }),
+            ..ImageInfo::default()
+        };
+        let focal_length = value_of(&info, ExifLabel::FocalLength);
+        let aperture = value_of(&info, ExifLabel::Aperture);
+        let exposure_time = value_of(&info, ExifLabel::ExposureTime);
+        assert_eq!(focal_length.as_deref(), Some("24.5 mm"));
+        assert_eq!(aperture.as_deref(), Some("f/2.8"));
+        assert_eq!(exposure_time.as_deref(), Some("0.5 s"));
+        for value in [focal_length, aperture, exposure_time]
+            .into_iter()
+            .flatten()
+        {
+            assert!(!value.contains(','), "{value}");
+        }
     }
 
     #[test]
@@ -535,7 +559,7 @@ mod tests {
         assert!(exif_rows(&ImageInfo::default()).is_empty());
         assert_eq!(
             exif_state_text(&ExifShown::Rows(&[])).as_deref(),
-            Some("Filen har ingen kamerainformation.")
+            Some("The file has no camera information.")
         );
         assert_eq!(
             exif_state_text(&ExifShown::Rows(&[row(ExifLabel::Iso, "ISO 100")])),
@@ -543,11 +567,11 @@ mod tests {
         );
         assert_eq!(
             exif_state_text(&ExifShown::Loading).as_deref(),
-            Some("Läser kamerainformation…")
+            Some("Reading camera information…")
         );
         assert_eq!(
             exif_state_text(&ExifShown::Error("I/O error: gone")).as_deref(),
-            Some("Kamerainformationen kunde inte läsas: I/O error: gone")
+            Some("The camera information could not be read: I/O error: gone")
         );
     }
 
@@ -721,7 +745,7 @@ mod tests {
         exif.request(Some(&other), true, t + INSPECTOR_READ_DELAY, &mut reader);
         assert_eq!(
             exif.shown(&other),
-            ExifShown::Error("Exif-läsaren har stannat")
+            ExifShown::Error("Exif reading has stopped")
         );
 
         // A read asked of a stopped reader.
@@ -731,7 +755,7 @@ mod tests {
         exif.request(Some(&last), true, t + INSPECTOR_READ_DELAY, &mut reader);
         assert_eq!(
             exif.shown(&last),
-            ExifShown::Error("Exif-läsaren har stannat")
+            ExifShown::Error("Exif reading has stopped")
         );
     }
 

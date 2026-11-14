@@ -122,3 +122,5 @@ was when the task was done, so "this file", "below" and "the Log" in T1–T115 m
 | [T113](T113-adr-0007-4-2-the-camera-s-rating-0-inside-a-raw.md) | ADR 0007 §4.2: the camera's rating 0 inside a RAW file counts as no rating |
 | [T114](T114-names-yrkestitel-and-kontaktuppgifter-no-origin.md) | Names "Yrkestitel" and "Kontaktuppgifter", no origin line under read-only values |
 | [T115](T115-latency-ps1-read-the-screen-with-dxgi-desktop.md) | `latency.ps1`: read the screen with DXGI Desktop Duplication, so the full-screen preview can be measured |
+| [T116](T116-move-the-loupes-ui-texts-into-text-modules.md) | Move pw-loupe's remaining UI texts into text modules |
+| [T117](T117-translate-the-loupes-ui-texts-to-english.md) | Translate pw-loupe's UI texts to English |

@@ -11,19 +11,14 @@ use crate::{Field, FieldError, ImportForm, IptcForm, Preview};
 use pw_metadata::edit::EditOptions;
 use pw_metadata::journal::Journal;
 use pw_metadata::safe_write::ImageCheck;
-use pw_metadata::{ExifTool, MIN_EXIFTOOL_VERSION, ToolVersion};
+use pw_metadata::{ExifTool, MIN_EXIFTOOL_VERSION};
+
+use crate::editor::{WriteReason, write_reason_text};
+use crate::import_text::{
+    ImportText, exiftool_too_old_text, exiftool_unavailable_text, import_text, scan_error_text,
+};
 
 const REQUEST_CAPACITY: usize = 8;
-
-/// The reason listed for the ingest template when the write journal could not be opened at the
-/// start; nothing is written (T91).
-const NO_JOURNAL_TEXT: &str = "skrivloggen kunde inte öppnas";
-
-/// The line listed for the ingest template when the started ExifTool is older than
-/// [`MIN_EXIFTOOL_VERSION`]; nothing is written (ADR 0007 §11, D9, T101).
-fn exiftool_too_old_text(file: &str, version: ToolVersion) -> String {
-    format!("{file}: ExifTool {version} är för gammal (minst {MIN_EXIFTOOL_VERSION})")
-}
 
 /// What the ingest template's safe write needs (ADR 0007 §9.5, T91): the ExifTool program
 /// (`None` for `exiftool` on PATH), the app's write journal (`None` when it could not be opened)
@@ -332,8 +327,7 @@ fn shots(
     }
 
     let scanned = Arc::new(
-        pw_ingest::scan(source)
-            .map_err(|error| format!("Kunde inte läsa {}: {error}", source.display()))?,
+        pw_ingest::scan(source).map_err(|error| scan_error_text(source, &error.to_string()))?,
     );
     *cached_scan = Some((source.to_path_buf(), Arc::clone(&scanned)));
     Ok(scanned)
@@ -452,8 +446,7 @@ fn run_import(
     );
     if form.eject {
         if done.cancelled || !done.failed.is_empty() || done.error.is_some() {
-            done.eject =
-                Some("Kortet matades inte ut eftersom importen inte blev komplett.".to_string());
+            done.eject = Some(import_text(ImportText::EjectSkipped).to_string());
         } else {
             *cached_scan = None;
             let _ = events.send(ImportEvent::Ejecting { id });
@@ -531,8 +524,11 @@ fn apply_iptc(
         }
         // Without the journal nothing may be written (§9.5); listed once, as a failed start.
         let Some(journal) = runtime.write.journal.as_ref() else {
-            done.iptc_errors
-                .push(format!("{}: {NO_JOURNAL_TEXT}", file_name(current)));
+            done.iptc_errors.push(format!(
+                "{}: {}",
+                file_name(current),
+                write_reason_text(&WriteReason::NoJournal)
+            ));
             break;
         };
         if runtime.exiftool.is_none() {
@@ -566,10 +562,8 @@ fn apply_iptc(
             }
         }
         let Some(tool) = runtime.exiftool.as_mut() else {
-            done.iptc_errors.push(format!(
-                "{}: ExifTool worker is unavailable",
-                file_name(current)
-            ));
+            done.iptc_errors
+                .push(exiftool_unavailable_text(&file_name(current)));
             break;
         };
         let _ = runtime.events.send(ImportEvent::IptcProgress {
@@ -1049,7 +1043,7 @@ mod tests {
         assert!(done.failed.is_empty());
         assert_eq!(
             done.iptc_errors,
-            ["A001.jpg: ExifTool 12.40 är för gammal (minst 12.67)"]
+            ["A001.jpg: ExifTool 12.40 is too old (at least 12.67 is needed)"]
         );
         assert_eq!(
             fs::read(dirs.dest.join("A001.jpg")).unwrap(),
@@ -1078,7 +1072,7 @@ mod tests {
         assert_eq!(done.copied, 1);
         assert_eq!(
             done.iptc_errors,
-            ["A001.jpg: skrivloggen kunde inte öppnas"]
+            ["A001.jpg: the write log could not be opened"]
         );
         assert_eq!(
             fs::read(dirs.dest.join("A001.jpg")).unwrap(),
@@ -1490,7 +1484,7 @@ mod tests {
         assert!(done.cancelled);
         assert_eq!(
             done.eject.as_deref(),
-            Some("Kortet matades inte ut eftersom importen inte blev komplett.")
+            Some("The card was not ejected because the import was not complete.")
         );
         assert!(
             receiver
@@ -1533,7 +1527,7 @@ mod tests {
         assert!(!done.failed.is_empty());
         assert_eq!(
             done.eject.as_deref(),
-            Some("Kortet matades inte ut eftersom importen inte blev komplett.")
+            Some("The card was not ejected because the import was not complete.")
         );
         assert!(
             receiver

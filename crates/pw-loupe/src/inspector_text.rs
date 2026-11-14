@@ -27,13 +27,13 @@ pub(crate) fn inspector_text(text: &InspectorText) -> String {
     match text {
         InspectorText::Info => "Info".to_owned(),
         InspectorText::Metadata => "Metadata".to_owned(),
-        InspectorText::NoImage => "Ingen bild vald.".to_owned(),
-        InspectorText::NoExif => "Filen har ingen kamerainformation.".to_owned(),
+        InspectorText::NoImage => "No image selected.".to_owned(),
+        InspectorText::NoExif => "The file has no camera information.".to_owned(),
         InspectorText::ExifError(reason) => {
-            format!("Kamerainformationen kunde inte läsas: {reason}")
+            format!("The camera information could not be read: {reason}")
         }
-        InspectorText::ExifLoading => "Läser kamerainformation…".to_owned(),
-        InspectorText::ReaderStopped => "Exif-läsaren har stannat".to_owned(),
+        InspectorText::ExifLoading => "Reading camera information…".to_owned(),
+        InspectorText::ReaderStopped => "Exif reading has stopped".to_owned(),
     }
 }
 
@@ -52,17 +52,17 @@ pub(crate) enum ExifLabel {
 /// The label of an Exif row.
 pub(crate) fn exif_label(label: ExifLabel) -> &'static str {
     match label {
-        ExifLabel::Camera => "Kamera",
-        ExifLabel::Lens => "Objektiv",
-        ExifLabel::FocalLength => "Brännvidd",
-        ExifLabel::Aperture => "Bländare",
-        ExifLabel::ExposureTime => "Exponeringstid",
+        ExifLabel::Camera => "Camera",
+        ExifLabel::Lens => "Lens",
+        ExifLabel::FocalLength => "Focal Length",
+        ExifLabel::Aperture => "Aperture",
+        ExifLabel::ExposureTime => "Exposure Time",
         ExifLabel::Iso => "ISO",
-        ExifLabel::Taken => "Tagen",
+        ExifLabel::Taken => "Taken",
     }
 }
 
-/// An Exif value with its unit or form; the numbers are already written with a decimal comma.
+/// An Exif value with its unit or form; the numbers are already written with a decimal point.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum ExifValue {
     /// The make and the model, when the model does not begin with the make.
@@ -70,9 +70,9 @@ pub(crate) enum ExifValue {
         make: String,
         model: String,
     },
-    /// The focal length in millimetres ("24,5").
+    /// The focal length in millimeters ("24.5").
     FocalLength(String),
-    /// The f-number ("2,8").
+    /// The f-number ("2.8").
     Aperture(String),
     Iso(u32),
     /// DateTimeOriginal's parts ("2026", "10", "30", "14:03:12").
@@ -109,14 +109,14 @@ mod tests {
         let texts = [
             (InspectorText::Info, "Info"),
             (InspectorText::Metadata, "Metadata"),
-            (InspectorText::NoImage, "Ingen bild vald."),
-            (InspectorText::NoExif, "Filen har ingen kamerainformation."),
+            (InspectorText::NoImage, "No image selected."),
+            (InspectorText::NoExif, "The file has no camera information."),
             (
                 InspectorText::ExifError("format error: not a TIFF file".to_owned()),
-                "Kamerainformationen kunde inte läsas: format error: not a TIFF file",
+                "The camera information could not be read: format error: not a TIFF file",
             ),
-            (InspectorText::ExifLoading, "Läser kamerainformation…"),
-            (InspectorText::ReaderStopped, "Exif-läsaren har stannat"),
+            (InspectorText::ExifLoading, "Reading camera information…"),
+            (InspectorText::ReaderStopped, "Exif reading has stopped"),
         ];
         for (text, expected) in texts {
             assert_eq!(inspector_text(&text), expected, "{text:?}");
@@ -126,13 +126,13 @@ mod tests {
     #[test]
     fn every_exif_label() {
         let labels = [
-            (ExifLabel::Camera, "Kamera"),
-            (ExifLabel::Lens, "Objektiv"),
-            (ExifLabel::FocalLength, "Brännvidd"),
-            (ExifLabel::Aperture, "Bländare"),
-            (ExifLabel::ExposureTime, "Exponeringstid"),
+            (ExifLabel::Camera, "Camera"),
+            (ExifLabel::Lens, "Lens"),
+            (ExifLabel::FocalLength, "Focal Length"),
+            (ExifLabel::Aperture, "Aperture"),
+            (ExifLabel::ExposureTime, "Exposure Time"),
             (ExifLabel::Iso, "ISO"),
-            (ExifLabel::Taken, "Tagen"),
+            (ExifLabel::Taken, "Taken"),
         ];
         for (label, expected) in labels {
             assert_eq!(exif_label(label), expected, "{label:?}");

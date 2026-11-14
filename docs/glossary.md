@@ -131,6 +131,7 @@ Every other property already uses IPTC's English name in both languages.
 | Behåll, Ersätt, Lägg till efter, Lägg till före, Rensa | Keep, Replace, Append, Prefix, Clear | the template modes; the same words as ADR 0007 §10 |
 | Rensa och importera | Clear and Import | |
 | Dölj, Stäng | Hide, Close | |
+| IPTC-mall, Mallen, Variabler | IPTC Template, the template, Variables | added by T117 |
 
 ## 6. Metadata window, info and settings
 
@@ -154,6 +155,12 @@ Every other property already uses IPTC's English name in both languages.
 | Skapa IPTC-IIM för kompatibilitet med äldre system | Create IPTC-IIM for compatibility with older systems | ADR 0007 §5.2 quotes the Swedish text; it changes with the translation |
 | Teckenkodning för äldre IPTC- och Exif-text | Character encoding for older IPTC and Exif text | |
 | västeuropeisk | Western European | |
+| sidofil, XMP-sidofil | sidecar, XMP sidecar | the `.xmp` file next to a RAW file; added by T117 |
+| skrivlogg | write log | the write journal (T91); added by T117 |
+| slutkontroll | final check | the check after a safe write (ADR 0007 §9.5); added by T117 |
+| Registerpost, post-id, organisation | Registry entry, item ID, organization ID | the IPTC Registry Entry; added by T117 |
+| Förslag till … | Suggested … | "Suggested Date Created from the camera"; added by T117 |
+| Metadatafel | Metadata error | added by T117 |
 
 ## 7. Recurring sentence parts
 
@@ -166,6 +173,7 @@ Every other property already uses IPTC's English name in both languages.
 | … kön är full | … queue is full |
 | Läser … | Reading … |
 | arbetare (Importarbetaren, metadataarbetaren) | worker → in the UI "the import" / "metadata writing" (G6) |
+| Exif-läsaren, Förhandsvisningsarbetaren | in the UI "Exif reading", "thumbnail loading" (G6; added by T117) |
 
 ## 8. Owner decisions G1–G8 (approved as proposed, 2026-11-13)
 

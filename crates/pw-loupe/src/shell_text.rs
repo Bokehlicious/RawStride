@@ -1,11 +1,23 @@
 //! The texts of the main window's shell (ADR 0017 U1, T109; rule 13): the menu bar, the command
-//! bar, the side columns and the folder dialog. Each text is made here, whole; the drawing code in
-//! `main.rs` holds none of them.
+//! bar, the side columns, the folder dialog, the tabs, the window title, the settings window, the
+//! messages at start (the recovery after an interrupted metadata write, ExifTool) and the general
+//! status messages (T116). Each text is made here, whole; the drawing code in `main.rs` holds none
+//! of them.
+
+use std::borrow::Borrow;
+use std::path::Path;
 
 use egui::Key;
+use pw_metadata::iim::Fallback;
+use pw_metadata::journal::Recovered;
+use pw_metadata::{MIN_EXIFTOOL_VERSION, ToolVersion};
 
-use crate::ratings::label_name;
+use crate::monitor_profile::ProfileSource;
+use crate::rating_text::label_name;
 use crate::shell::{Command, KeyChord, MenuKind, SubmenuKind, Theme};
+
+/// The separator between the parts of the status line.
+const STATUS_SEPARATOR: &str = "  ·  ";
 
 /// A fixed text of the shell.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -16,15 +28,15 @@ pub enum ShellText {
     Tasks,
     /// The right column's heading.
     Inspector,
-    /// The line under "Bibliotek" until U4 fills it.
+    /// The line under "Library" until U4 fills it.
     LibraryNote,
-    /// The line under "Uppgifter" when no import runs hidden.
+    /// The line under "Tasks" when no import runs hidden.
     NoTasks,
-    /// The folder dialog's title (Öppna mapp, Ctrl+O).
+    /// The folder dialog's title (Open Folder, Ctrl+O).
     OpenFolderTitle,
-    /// Visa ▸ Filter.
+    /// View ▸ Filter.
     FilterMenu,
-    /// Visa ▸ Filter ▸ Visa alla (clears the filter).
+    /// View ▸ Filter ▸ Show All (clears the filter).
     ShowAll,
     /// The settings window's theme list.
     ThemeLabel,
@@ -38,86 +50,251 @@ pub enum ShellText {
     /// The open button of a collapsed right column (a glyph).
     ExpandRight,
     ExpandHover,
+    /// The title of a tab without a folder (T116, from `tabs.rs`).
+    EmptyTab,
+    /// The empty contact sheet without a folder (T116, from `main.rs`).
+    DropHere,
+    /// The status line of a tab without images (T116, from `main.rs`).
+    NoImageSelected,
+    /// A thumbnail whose pixels could not be used (T116, from `main.rs`).
+    InvalidThumbnail,
+    /// The thumbnail worker has stopped (T116, from `main.rs`).
+    ThumbnailWorkerStopped,
+    /// The thumbnail-size slider in the command bar (T116, from `main.rs`).
+    ThumbnailSize,
+    /// The title of the message about writes left unfinished at the last exit (T91; T116, from
+    /// `main.rs`).
+    RecoveryTitle,
 }
 
 /// The text of `text`.
 pub fn shell_text(text: ShellText) -> &'static str {
     match text {
-        ShellText::Library => "Bibliotek",
-        ShellText::Tasks => "Uppgifter",
-        ShellText::Inspector => "Inspektör",
-        ShellText::LibraryNote => "Öppna en mapp med Ctrl+O eller dra den till fönstret.",
-        ShellText::NoTasks => "Inga pågående uppgifter.",
-        ShellText::OpenFolderTitle => "Öppna mapp",
+        ShellText::Library => "Library",
+        ShellText::Tasks => "Tasks",
+        ShellText::Inspector => "Inspector",
+        ShellText::LibraryNote => "Open a folder with Ctrl+O or drag it to the window.",
+        ShellText::NoTasks => "No tasks in progress.",
+        ShellText::OpenFolderTitle => "Open Folder",
         ShellText::FilterMenu => "Filter",
-        ShellText::ShowAll => "Visa alla",
-        ShellText::ThemeLabel => "Tema",
+        ShellText::ShowAll => "Show All",
+        ShellText::ThemeLabel => "Theme",
         ShellText::CollapseLeft => "«",
         ShellText::CollapseRight => "»",
-        ShellText::CollapseHover => "Fäll ihop kolumnen",
+        ShellText::CollapseHover => "Collapse Column",
         ShellText::ExpandLeft => "»",
         ShellText::ExpandRight => "«",
-        ShellText::ExpandHover => "Visa kolumnen",
+        ShellText::ExpandHover => "Show Column",
+        ShellText::EmptyTab => "Empty",
+        ShellText::DropHere => "Drag a folder or an image here",
+        ShellText::NoImageSelected => "No image selected",
+        ShellText::InvalidThumbnail => "Invalid thumbnail data",
+        ShellText::ThumbnailWorkerStopped => "Thumbnail loading has stopped",
+        ShellText::ThumbnailSize => "Size",
+        ShellText::RecoveryTitle => "Metadata writing was interrupted",
+    }
+}
+
+/// The status line (the contact sheet's and the loupe's): its parts in order, joined with the
+/// separator " · " with two spaces on each side.
+pub fn status_line_text<S: Borrow<str>>(parts: &[S]) -> String {
+    parts.join(STATUS_SEPARATOR)
+}
+
+/// The status message when a folder or a file cannot be opened.
+pub fn open_error_text(error: &str) -> String {
+    format!("Cannot open: {error}")
+}
+
+/// The status message when the opened folder has no images; `None` names no folder ("the folder").
+pub fn no_images_text(folder: Option<&Path>) -> String {
+    match folder {
+        Some(folder) => format!("No images in {}", folder.display()),
+        None => "No images in the folder".to_string(),
+    }
+}
+
+/// The status message when the metadata of closed tabs cannot be cleaned up.
+pub fn prune_error_text(error: &str) -> String {
+    format!("Cannot clean up metadata: {error}")
+}
+
+/// The status message when the current folder is unknown, so relative image paths cannot be
+/// resolved (`main.rs` and `metadata.rs`).
+pub fn path_resolution_error_text(error: &str) -> String {
+    format!("cannot resolve image paths: {error}")
+}
+
+/// The window title naming the monitor profile (ADR 0016 §5; T116, from `monitor_profile.rs`).
+pub fn window_title(source: &ProfileSource) -> String {
+    match source {
+        ProfileSource::File(name) => format!("RawStride  ·  Display profile: {name}"),
+        ProfileSource::Missing => "RawStride  ·  No display profile – shown as sRGB".to_string(),
+        ProfileSource::Unusable(_) => {
+            "RawStride  ·  The display profile could not be used – shown as sRGB".to_string()
+        }
+    }
+}
+
+/// The first line of the recovery message (T91; T116, from `main.rs`).
+/// The first line of that message.
+const RECOVERY_HEADING: &str =
+    "RawStride closed in the middle of a metadata write. Check these files:";
+
+/// The message about the writes [`Journal::recover`](pw_metadata::journal::Journal::recover) could not resolve (`NeedsUser`, `Failed`,
+/// `Unreadable`): one line per entry with the original and, when the backup file exists
+/// (`exists`), the backup. `Cleaned` and `Restored` are not shown; `None` when nothing is left.
+pub fn recovery_text(recovered: &[Recovered], exists: impl Fn(&Path) -> bool) -> Option<String> {
+    let lines: Vec<String> = recovered
+        .iter()
+        .filter_map(|item| match item {
+            Recovered::Cleaned { .. } | Recovered::Restored { .. } => None,
+            Recovered::NeedsUser { entry } | Recovered::Failed { entry, .. } => {
+                Some(if exists(&entry.backup) {
+                    format!(
+                        "{} (backup: {})",
+                        entry.original.display(),
+                        entry.backup.display()
+                    )
+                } else {
+                    entry.original.display().to_string()
+                })
+            }
+            Recovered::Unreadable { file, .. } => Some(file.display().to_string()),
+        })
+        .collect();
+    if lines.is_empty() {
+        return None;
+    }
+    Some(format!("{RECOVERY_HEADING}\n{}", lines.join("\n")))
+}
+
+/// The title and text of the message about the metadata worker's first ExifTool start (ADR 0007
+/// §11, D9, T101): `None` when the version is at least [`MIN_EXIFTOOL_VERSION`].
+pub fn exiftool_message(result: &Result<ToolVersion, String>) -> Option<(&'static str, String)> {
+    match result {
+        Err(text) => Some((
+            "ExifTool is missing",
+            format!(
+                "ExifTool could not be started: {text}. Ratings and metadata cannot be read or \
+                 saved."
+            ),
+        )),
+        Ok(version) if *version < MIN_EXIFTOOL_VERSION => Some((
+            "ExifTool is too old",
+            format!(
+                "ExifTool {version} is too old. RawStride needs version \
+                 {MIN_EXIFTOOL_VERSION} or later. Ratings and metadata are not saved until \
+                 ExifTool has been updated."
+            ),
+        )),
+        Ok(_) => None,
+    }
+}
+
+/// A fixed text of the settings window (ADR 0007 §5.2, §5.4/Q10, T106).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SettingsText {
+    /// The button in the top bar and the window's title.
+    Title,
+    /// The check box of §5.2.
+    CreateIim,
+    /// The small text under the check box.
+    CreateIimNote,
+    /// The label of the encoding drop-down (§5.4, Q10).
+    Encoding,
+    Save,
+    Cancel,
+    /// The reason the file could not be saved when there is no settings folder (no LOCALAPPDATA).
+    NoFolder,
+}
+
+/// The text of `text` in the settings window.
+pub fn settings_text(text: SettingsText) -> &'static str {
+    match text {
+        SettingsText::Title => "Settings",
+        SettingsText::CreateIim => "Create IPTC-IIM for compatibility with older systems",
+        SettingsText::CreateIimNote => {
+            "Applies to JPEG, TIFF and DNG files without IIM. Off by default."
+        }
+        SettingsText::Encoding => "Character encoding for older IPTC and Exif text",
+        SettingsText::Save => "Save",
+        SettingsText::Cancel => "Cancel",
+        SettingsText::NoFolder => "the settings folder is unknown (LOCALAPPDATA is missing)",
+    }
+}
+
+/// The message shown when the settings file could not be saved; the settings still apply until
+/// RawStride closes (T106).
+pub fn settings_save_error_text(error: &str) -> String {
+    format!("The settings could not be saved: {error}")
+}
+
+/// The text of a fallback encoding in the settings window's drop-down.
+pub fn fallback_text(fallback: Fallback) -> &'static str {
+    match fallback {
+        Fallback::Windows1252 => "Windows-1252 (Western European)",
+        Fallback::Latin1 => "ISO 8859-1 (Latin-1)",
     }
 }
 
 /// The name of a menu in the menu bar.
 pub fn menu_text(menu: MenuKind) -> &'static str {
     match menu {
-        MenuKind::File => "Arkiv",
-        MenuKind::Edit => "Redigera",
-        MenuKind::Image => "Bild",
-        MenuKind::View => "Visa",
+        MenuKind::File => "File",
+        MenuKind::Edit => "Edit",
+        MenuKind::Image => "Image",
+        MenuKind::View => "View",
     }
 }
 
 /// The name of a submenu.
 pub fn submenu_text(submenu: SubmenuKind) -> &'static str {
     match submenu {
-        SubmenuKind::Rating => "Betyg",
-        SubmenuKind::Label => "Etikett",
-        SubmenuKind::Theme => "Tema",
+        SubmenuKind::Rating => "Rating",
+        SubmenuKind::Label => "Label",
+        SubmenuKind::Theme => "Theme",
     }
 }
 
 /// The name of a theme (the menu and the settings window).
 pub fn theme_text(theme: Theme) -> &'static str {
     match theme {
-        Theme::Dark => "Mörkt",
-        Theme::Light => "Ljust",
+        Theme::Dark => "Dark",
+        Theme::Light => "Light",
     }
 }
 
-/// The text of a menu item (also the command bar's buttons "Importera…" and "Öppna mapp…").
+/// The text of a menu item (also the command bar's buttons "Import…" and "Open Folder…").
 pub fn command_text(command: Command) -> String {
     match command {
-        Command::OpenFolder => "Öppna mapp…".to_owned(),
-        Command::Import => "Importera…".to_owned(),
-        Command::CloseTab => "Stäng flik".to_owned(),
-        Command::Settings => "Inställningar…".to_owned(),
-        Command::Quit => "Avsluta".to_owned(),
-        Command::SelectAll => "Markera alla".to_owned(),
-        Command::ClearSelection => "Avmarkera".to_owned(),
+        Command::OpenFolder => "Open Folder…".to_owned(),
+        Command::Import => "Import…".to_owned(),
+        Command::CloseTab => "Close Tab".to_owned(),
+        Command::Settings => "Settings…".to_owned(),
+        Command::Quit => "Exit".to_owned(),
+        Command::SelectAll => "Mark All".to_owned(),
+        Command::ClearSelection => "Unmark All".to_owned(),
         Command::Metadata => "Metadata…".to_owned(),
-        Command::Stars(0) => "Inga stjärnor".to_owned(),
-        Command::Stars(1) => "1 stjärna".to_owned(),
-        Command::Stars(stars) => format!("{stars} stjärnor"),
-        Command::Reject => "Avvisa".to_owned(),
+        Command::Stars(0) => "No stars".to_owned(),
+        Command::Stars(1) => "1 star".to_owned(),
+        Command::Stars(stars) => format!("{stars} stars"),
+        Command::Reject => "Reject".to_owned(),
         Command::Label(label) => label_name(label).to_owned(),
-        Command::ClearLabel => "Ingen etikett".to_owned(),
+        Command::ClearLabel => "No label".to_owned(),
         Command::ToggleMode => "RAW ↔ JPEG".to_owned(),
-        Command::ToggleView => "Förhandsvisning".to_owned(),
-        Command::Fit => "Anpassa".to_owned(),
-        Command::ToggleZoom => "Anpassa ↔ 100 %".to_owned(),
-        Command::ZoomIn => "Zooma in".to_owned(),
-        Command::ZoomOut => "Zooma ut".to_owned(),
-        Command::ToggleAnchor => "Zooma vid pekaren".to_owned(),
-        Command::ToggleInfo => "Inspektör".to_owned(),
-        Command::NextTab => "Nästa flik".to_owned(),
-        Command::PreviousTab => "Föregående flik".to_owned(),
-        Command::ToggleColumns => "Sidokolumner".to_owned(),
-        Command::LeftColumn => "Vänster kolumn".to_owned(),
-        Command::Fullscreen => "Helskärm".to_owned(),
+        Command::ToggleView => "Preview".to_owned(),
+        Command::Fit => "Fit".to_owned(),
+        Command::ToggleZoom => "Fit ↔ 100%".to_owned(),
+        Command::ZoomIn => "Zoom In".to_owned(),
+        Command::ZoomOut => "Zoom Out".to_owned(),
+        Command::ToggleAnchor => "Zoom at Pointer".to_owned(),
+        Command::ToggleInfo => "Inspector".to_owned(),
+        Command::NextTab => "Next Tab".to_owned(),
+        Command::PreviousTab => "Previous Tab".to_owned(),
+        Command::ToggleColumns => "Side Columns".to_owned(),
+        Command::LeftColumn => "Left Column".to_owned(),
+        Command::Fullscreen => "Full Screen".to_owned(),
         Command::Theme(theme) => theme_text(theme).to_owned(),
     }
 }
@@ -156,41 +333,42 @@ pub fn key_text(chord: KeyChord) -> String {
 mod tests {
     use super::*;
     use crate::shell::{MENUS, MenuEntry, menu_items};
+    use pw_metadata::journal::Entry;
 
     #[test]
     fn every_fixed_text_of_the_shell() {
         let texts = [
-            (ShellText::Library, "Bibliotek"),
-            (ShellText::Tasks, "Uppgifter"),
-            (ShellText::Inspector, "Inspektör"),
+            (ShellText::Library, "Library"),
+            (ShellText::Tasks, "Tasks"),
+            (ShellText::Inspector, "Inspector"),
             (
                 ShellText::LibraryNote,
-                "Öppna en mapp med Ctrl+O eller dra den till fönstret.",
+                "Open a folder with Ctrl+O or drag it to the window.",
             ),
-            (ShellText::NoTasks, "Inga pågående uppgifter."),
-            (ShellText::OpenFolderTitle, "Öppna mapp"),
+            (ShellText::NoTasks, "No tasks in progress."),
+            (ShellText::OpenFolderTitle, "Open Folder"),
             (ShellText::FilterMenu, "Filter"),
-            (ShellText::ShowAll, "Visa alla"),
-            (ShellText::ThemeLabel, "Tema"),
+            (ShellText::ShowAll, "Show All"),
+            (ShellText::ThemeLabel, "Theme"),
             (ShellText::CollapseLeft, "«"),
             (ShellText::CollapseRight, "»"),
-            (ShellText::CollapseHover, "Fäll ihop kolumnen"),
+            (ShellText::CollapseHover, "Collapse Column"),
             (ShellText::ExpandLeft, "»"),
             (ShellText::ExpandRight, "«"),
-            (ShellText::ExpandHover, "Visa kolumnen"),
+            (ShellText::ExpandHover, "Show Column"),
         ];
         for (text, expected) in texts {
             assert_eq!(shell_text(text), expected, "{text:?}");
         }
-        assert_eq!(menu_text(MenuKind::File), "Arkiv");
-        assert_eq!(menu_text(MenuKind::Edit), "Redigera");
-        assert_eq!(menu_text(MenuKind::Image), "Bild");
-        assert_eq!(menu_text(MenuKind::View), "Visa");
-        assert_eq!(submenu_text(SubmenuKind::Rating), "Betyg");
-        assert_eq!(submenu_text(SubmenuKind::Label), "Etikett");
-        assert_eq!(submenu_text(SubmenuKind::Theme), "Tema");
-        assert_eq!(theme_text(Theme::Dark), "Mörkt");
-        assert_eq!(theme_text(Theme::Light), "Ljust");
+        assert_eq!(menu_text(MenuKind::File), "File");
+        assert_eq!(menu_text(MenuKind::Edit), "Edit");
+        assert_eq!(menu_text(MenuKind::Image), "Image");
+        assert_eq!(menu_text(MenuKind::View), "View");
+        assert_eq!(submenu_text(SubmenuKind::Rating), "Rating");
+        assert_eq!(submenu_text(SubmenuKind::Label), "Label");
+        assert_eq!(submenu_text(SubmenuKind::Theme), "Theme");
+        assert_eq!(theme_text(Theme::Dark), "Dark");
+        assert_eq!(theme_text(Theme::Light), "Light");
     }
 
     #[test]
@@ -202,42 +380,42 @@ mod tests {
         assert_eq!(
             texts,
             vec![
-                "Öppna mapp…",
-                "Importera…",
-                "Stäng flik",
-                "Inställningar…",
-                "Avsluta",
-                "Markera alla",
-                "Avmarkera",
+                "Open Folder…",
+                "Import…",
+                "Close Tab",
+                "Settings…",
+                "Exit",
+                "Mark All",
+                "Unmark All",
                 "Metadata…",
-                "Inga stjärnor",
-                "1 stjärna",
-                "2 stjärnor",
-                "3 stjärnor",
-                "4 stjärnor",
-                "5 stjärnor",
-                "Avvisa",
-                "Röd",
-                "Gul",
-                "Grön",
-                "Blå",
-                "Lila",
-                "Ingen etikett",
+                "No stars",
+                "1 star",
+                "2 stars",
+                "3 stars",
+                "4 stars",
+                "5 stars",
+                "Reject",
+                "Red",
+                "Yellow",
+                "Green",
+                "Blue",
+                "Purple",
+                "No label",
                 "RAW ↔ JPEG",
-                "Förhandsvisning",
-                "Anpassa",
-                "Anpassa ↔ 100 %",
-                "Zooma in",
-                "Zooma ut",
-                "Zooma vid pekaren",
-                "Nästa flik",
-                "Föregående flik",
-                "Sidokolumner",
-                "Vänster kolumn",
-                "Inspektör",
-                "Helskärm",
-                "Mörkt",
-                "Ljust",
+                "Preview",
+                "Fit",
+                "Fit ↔ 100%",
+                "Zoom In",
+                "Zoom Out",
+                "Zoom at Pointer",
+                "Next Tab",
+                "Previous Tab",
+                "Side Columns",
+                "Left Column",
+                "Inspector",
+                "Full Screen",
+                "Dark",
+                "Light",
             ]
         );
     }
@@ -327,12 +505,233 @@ mod tests {
             panic!("Visa starts with an item");
         };
         assert_eq!(first.command, Command::ToggleView);
-        assert_eq!(command_text(first.command), "Förhandsvisning");
+        assert_eq!(command_text(first.command), "Preview");
         assert_eq!(first.key.map(key_text).as_deref(), Some("G"));
         assert!(
             menu_items()
                 .iter()
                 .all(|item| !command_text(item.command).contains("lupp"))
+        );
+    }
+
+    #[test]
+    fn the_window_title_names_the_profile() {
+        assert_eq!(
+            window_title(&ProfileSource::File(
+                "CX240(…)08CAL (DP).icc".to_string()
+            )),
+            "RawStride  ·  Display profile: CX240(…)08CAL (DP).icc"
+        );
+        assert_eq!(
+            window_title(&ProfileSource::Missing),
+            "RawStride  ·  No display profile – shown as sRGB"
+        );
+        assert_eq!(
+            window_title(&ProfileSource::Unusable("detail".to_string())),
+            "RawStride  ·  The display profile could not be used – shown as sRGB"
+        );
+    }
+
+    fn entry(folder: &Path) -> Entry {
+        Entry {
+            original: folder.join("bild.jpg"),
+            copy: folder.join("bild.pwtmp-1.jpg"),
+            backup: folder.join("bild.pwbak-1.jpg"),
+            original_existed: true,
+        }
+    }
+
+    #[test]
+    fn exiftool_message_names_a_start_error() {
+        let result = Err("ExifTool: could not start exiftool: program not found".to_string());
+        assert_eq!(
+            exiftool_message(&result),
+            Some((
+                "ExifTool is missing",
+                "ExifTool could not be started: ExifTool: could not start exiftool: program not \
+                 found. Ratings and metadata cannot be read or saved."
+                    .to_string()
+            ))
+        );
+    }
+
+    #[test]
+    fn exiftool_message_says_that_12_40_is_too_old() {
+        let result = Ok(ToolVersion {
+            major: 12,
+            minor: 40,
+        });
+        assert_eq!(
+            exiftool_message(&result),
+            Some((
+                "ExifTool is too old",
+                "ExifTool 12.40 is too old. RawStride needs version 12.67 or later. \
+                 Ratings and metadata are not saved until ExifTool has been updated."
+                    .to_string()
+            ))
+        );
+    }
+
+    #[test]
+    fn exiftool_message_is_none_from_12_67() {
+        for (major, minor) in [(12, 67), (13, 59)] {
+            assert_eq!(exiftool_message(&Ok(ToolVersion { major, minor })), None);
+        }
+    }
+
+    #[test]
+    fn the_settings_window_has_the_texts_of_the_task() {
+        assert_eq!(settings_text(SettingsText::Title), "Settings");
+        assert_eq!(
+            settings_text(SettingsText::CreateIim),
+            "Create IPTC-IIM for compatibility with older systems"
+        );
+        assert_eq!(
+            settings_text(SettingsText::CreateIimNote),
+            "Applies to JPEG, TIFF and DNG files without IIM. Off by default."
+        );
+        assert_eq!(
+            settings_text(SettingsText::Encoding),
+            "Character encoding for older IPTC and Exif text"
+        );
+        assert_eq!(settings_text(SettingsText::Save), "Save");
+        assert_eq!(settings_text(SettingsText::Cancel), "Cancel");
+        assert_eq!(
+            settings_save_error_text("åtkomst nekad"),
+            "The settings could not be saved: åtkomst nekad"
+        );
+    }
+
+    #[test]
+    fn recovery_lists_a_file_that_needs_the_user_without_a_backup() {
+        let folder = std::env::temp_dir().join("pw-loupe-recovery");
+        let recovered = [Recovered::NeedsUser {
+            entry: entry(&folder),
+        }];
+
+        let text = recovery_text(&recovered, |_| false);
+
+        assert_eq!(
+            text,
+            Some(format!(
+                "RawStride closed in the middle of a metadata write. Check these files:\n{}",
+                folder.join("bild.jpg").display()
+            ))
+        );
+    }
+
+    #[test]
+    fn recovery_names_the_backup_when_it_exists() {
+        let folder = std::env::temp_dir().join("pw-loupe-recovery");
+        let backup = folder.join("bild.pwbak-1.jpg");
+        let recovered = [Recovered::NeedsUser {
+            entry: entry(&folder),
+        }];
+
+        let text = recovery_text(&recovered, |path| path == backup);
+
+        assert_eq!(
+            text,
+            Some(format!(
+                "RawStride closed in the middle of a metadata write. Check these \
+                 files:\n{} (backup: {})",
+                folder.join("bild.jpg").display(),
+                backup.display()
+            ))
+        );
+    }
+
+    #[test]
+    fn recovery_shows_nothing_for_cleaned_and_restored_entries() {
+        let folder = std::env::temp_dir().join("pw-loupe-recovery");
+        let recovered = [
+            Recovered::Cleaned {
+                entry: entry(&folder),
+                deleted: vec![folder.join("bild.pwtmp-1.jpg")],
+            },
+            Recovered::Restored {
+                entry: entry(&folder),
+                deleted: Vec::new(),
+            },
+        ];
+
+        assert_eq!(recovery_text(&recovered, |_| true), None);
+        assert_eq!(recovery_text(&[], |_| true), None);
+    }
+
+    #[test]
+    fn recovery_lists_failed_and_unreadable_entries_but_not_cleaned_ones() {
+        let folder = std::env::temp_dir().join("pw-loupe-recovery");
+        let journal_file = folder.join("journal").join("0001.json");
+        let recovered = [
+            Recovered::Cleaned {
+                entry: entry(&folder),
+                deleted: Vec::new(),
+            },
+            Recovered::Failed {
+                entry: entry(&folder),
+                error: "access denied".to_string(),
+            },
+            Recovered::Unreadable {
+                file: journal_file.clone(),
+                error: "not JSON".to_string(),
+            },
+        ];
+
+        let text = recovery_text(&recovered, |_| false);
+
+        assert_eq!(
+            text,
+            Some(format!(
+                "RawStride closed in the middle of a metadata write. Check these \
+                 files:\n{}\n{}",
+                folder.join("bild.jpg").display(),
+                journal_file.display()
+            ))
+        );
+    }
+
+    /// One example of each text moved here by T116, as it was before.
+    #[test]
+    fn every_moved_shell_text_keeps_its_swedish_wording() {
+        let texts = [
+            (ShellText::EmptyTab, "Empty"),
+            (ShellText::DropHere, "Drag a folder or an image here"),
+            (ShellText::NoImageSelected, "No image selected"),
+            (ShellText::InvalidThumbnail, "Invalid thumbnail data"),
+            (
+                ShellText::ThumbnailWorkerStopped,
+                "Thumbnail loading has stopped",
+            ),
+            (ShellText::ThumbnailSize, "Size"),
+            (ShellText::RecoveryTitle, "Metadata writing was interrupted"),
+        ];
+        for (text, expected) in texts {
+            assert_eq!(shell_text(text), expected, "{text:?}");
+        }
+        assert_eq!(
+            status_line_text(&["3 / 31", "TN100423.ARW", "Läser betyg …"]),
+            "3 / 31  ·  TN100423.ARW  ·  Läser betyg …"
+        );
+        assert_eq!(
+            status_line_text(&["Ingen bild vald".to_string()]),
+            "Ingen bild vald"
+        );
+        assert_eq!(open_error_text("D:/x: nekad"), "Cannot open: D:/x: nekad");
+        assert_eq!(
+            no_images_text(Some(Path::new("D:/Foto"))),
+            "No images in D:/Foto"
+        );
+        assert_eq!(no_images_text(None), "No images in the folder");
+        assert_eq!(prune_error_text("nekad"), "Cannot clean up metadata: nekad");
+        assert_eq!(
+            path_resolution_error_text("denied"),
+            "cannot resolve image paths: denied"
+        );
+        assert_eq!(fallback_text(Fallback::Latin1), "ISO 8859-1 (Latin-1)");
+        assert_eq!(
+            settings_text(SettingsText::NoFolder),
+            "the settings folder is unknown (LOCALAPPDATA is missing)"
         );
     }
 }

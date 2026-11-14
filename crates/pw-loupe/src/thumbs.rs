@@ -2,7 +2,7 @@ use std::collections::HashSet;
 use std::ops::Range;
 
 use egui::ColorImage;
-use pw_thumbcache::{Rgb8, ThumbnailEvent};
+use pw_thumbcache::{Rgb8, ThumbError, ThumbnailEvent};
 
 /// The bookkeeping state of one thumbnail cell.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -10,6 +10,9 @@ pub enum CellState {
     Missing,
     Requested,
     Ready,
+    /// The file has no embedded preview to make a thumbnail from (T116: its own state, so the
+    /// drawing code does not compare an error text).
+    NoPreview,
     Failed(String),
 }
 
@@ -18,6 +21,7 @@ enum Entry {
     Missing,
     Requested(u32),
     Ready(Option<u32>),
+    NoPreview,
     Failed(String),
 }
 
@@ -26,7 +30,7 @@ impl Entry {
         match self {
             Entry::Requested(cell) => Some(*cell),
             Entry::Ready(cell) => *cell,
-            Entry::Missing | Entry::Failed(_) => None,
+            Entry::Missing | Entry::NoPreview | Entry::Failed(_) => None,
         }
     }
 
@@ -35,23 +39,24 @@ impl Entry {
             Entry::Missing => CellState::Missing,
             Entry::Requested(_) => CellState::Requested,
             Entry::Ready(_) => CellState::Ready,
+            Entry::NoPreview => CellState::NoPreview,
             Entry::Failed(message) => CellState::Failed(message.clone()),
         }
     }
 
     /// Whether this entry should be submitted for `cell`: missing, requested (a retry), or ready at
-    /// another cell size. A failed entry is not retried.
+    /// another cell size. A failed entry (also one without a preview) is not retried.
     fn wants(&self, cell: u32) -> bool {
         match self {
             Entry::Missing | Entry::Requested(_) => true,
             Entry::Ready(ready_cell) => *ready_cell != Some(cell),
-            Entry::Failed(_) => false,
+            Entry::NoPreview | Entry::Failed(_) => false,
         }
     }
 
     /// Resets a ready or failed entry to missing; returns whether it did (its texture is released).
     fn forget(&mut self) -> bool {
-        if matches!(self, Entry::Ready(_) | Entry::Failed(_)) {
+        if matches!(self, Entry::Ready(_) | Entry::NoPreview | Entry::Failed(_)) {
             *self = Entry::Missing;
             true
         } else {
@@ -121,6 +126,7 @@ impl ThumbGrid {
         let cell = entry.cell();
         *entry = match &event.result {
             Ok(_) => Entry::Ready(cell),
+            Err(ThumbError::NoPreview) => Entry::NoPreview,
             Err(error) => Entry::Failed(error.to_string()),
         };
         true
@@ -189,7 +195,6 @@ pub fn color_image(image: &Rgb8) -> Option<ColorImage> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pw_thumbcache::ThumbError;
     use std::path::PathBuf;
 
     fn event(generation: u64, index: usize, result: Result<Rgb8, ThumbError>) -> ThumbnailEvent {
@@ -227,11 +232,28 @@ mod tests {
         let mut grid = ThumbGrid::new(1, 2);
         grid.mark_requested(0, 128);
         assert!(grid.apply(&event(1, 0, Err(ThumbError::NoPreview))));
-        assert_eq!(
-            grid.state(0),
-            CellState::Failed("ingen förhandsvisning".to_string())
-        );
+        assert_eq!(grid.state(0), CellState::NoPreview);
         assert!(grid.to_request(0..1, 128).is_empty());
+    }
+
+    /// A file without a preview gets its own state (T116); any other error keeps its text.
+    #[test]
+    fn only_a_missing_preview_gives_no_preview() {
+        let mut grid = ThumbGrid::new(1, 2);
+        grid.mark_requested(0, 128);
+        grid.mark_requested(1, 128);
+        assert!(grid.apply(&event(1, 0, Err(ThumbError::NoPreview))));
+        assert!(grid.apply(&event(
+            1,
+            1,
+            Err(ThumbError::Unreadable("broken".to_string()))
+        )));
+        assert_eq!(grid.state(0), CellState::NoPreview);
+        assert_eq!(
+            grid.state(1),
+            CellState::Failed("unreadable thumbnail: broken".to_string())
+        );
+        assert!(grid.to_request(0..2, 128).is_empty());
     }
 
     #[test]
@@ -267,10 +289,7 @@ mod tests {
         assert_eq!(grid.forget_outside(1..4), vec![0, 4]);
         assert_eq!(grid.state(0), CellState::Missing);
         assert_eq!(grid.state(2), CellState::Ready);
-        assert_eq!(
-            grid.state(3),
-            CellState::Failed("ingen förhandsvisning".to_string())
-        );
+        assert_eq!(grid.state(3), CellState::NoPreview);
         assert_eq!(grid.state(4), CellState::Missing);
     }
 
@@ -320,10 +339,7 @@ mod tests {
         assert_eq!(grid.state(1), CellState::Requested);
         assert_eq!(grid.state(2), CellState::Missing);
         assert_eq!(grid.state(3), CellState::Ready);
-        assert_eq!(
-            grid.state(4),
-            CellState::Failed("ingen förhandsvisning".to_string())
-        );
+        assert_eq!(grid.state(4), CellState::NoPreview);
         // Keeping nothing forgets the ready and failed rest.
         assert_eq!(grid.forget_not_in(&[]), vec![3, 4]);
         assert_eq!(grid.state(4), CellState::Missing);

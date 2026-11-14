@@ -1,4 +1,4 @@
-# T117. Translate pw-loupe's UI texts to English — Open
+# T117. Translate pw-loupe's UI texts to English — Done
 
 - **Starts after T116 is Done** (the texts must be in the text modules first).
 - **Why:** English is the interface's base language (`docs/GUI_REQUIREMENTS.md` GR14, owner
@@ -59,3 +59,6 @@
 | Date | Status | Note |
 |---|---|---|
 | 2026-11-13 | Open | Added; starts after T116 |
+| 2026-11-14 | Ready for review | Texts of the text modules in English with the glossary terms; `Language::En` everywhere with the G1/G2 exceptions and the full IPTC name as tooltip; decimal point; singular/plural; Swedish-letter check; 8 rows of terms added to the glossary; check.ps1 all OK (1205 passed, 43 ignored) |
+| 2026-11-14 | Ready for review | Reviewer: accepted, not committed. No Swedish left in `pw-loupe`'s non-test string literals except `SV_LABELS`; no test removed (465 → 489), test changes are expected texts plus the `label_name` assertion that point 3 reverses; `main.rs` only the two `Language::En` callers and the tooltip. **Reviewer's fix (G1):** "Intellectual Genre (legacy)" and "Subject Code (legacy)" also lose " (legacy)" (the task text named only five), with the full name as tooltip; new test `no_english_label_says_legacy` over the whole property table. The reviewer's `check.ps1`: fmt, test and clippy OK, 1206 passed, 0 failed, 43 ignored; `docs/test-inventory.md` 489 → 490. Waits for the owner's hand check and approval |
+| 2026-11-14 | Done | Owner: hand check done and approved; committed by the reviewer |

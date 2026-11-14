@@ -3,7 +3,7 @@
 //! Pure functions, no egui; T105 draws the window.
 //!
 //! - **Fields** (D12): 22 fields in a fixed order, [`EditorField::ALL`]. Each is a property of the
-//!   table, or (E-post, Telefon, Webb) a field of `Iptc4xmpCore:CreatorContactInfo`. The value
+//!   table, or (Email, Phone, Web URL) a field of `Iptc4xmpCore:CreatorContactInfo`. The value
 //!   kind (text, Lang Alt, list, date) comes from the property table.
 //! - **From the read** ([`EditorForm::from_read`]): one text per field. A Lang Alt shows its shown
 //!   text; without `x-default` it gets a note with its language, because saving adds `x-default`
@@ -22,6 +22,7 @@
 //! `info_panel.rs`, each a whole sentence from one template with its values filled in; property
 //! names come only from [`property_label`].
 
+use pw_metadata::MIN_EXIFTOOL_VERSION;
 use pw_metadata::date::IptcDate;
 use pw_metadata::edit::{Edit, apply_edits};
 use pw_metadata::properties::{self, Occurrence, ValueKind};
@@ -31,7 +32,9 @@ use pw_metadata::validate::{Warning, validate};
 use pw_metadata::value::{Conflict, ConflictRule, LangAlt, Value};
 use pw_metadata::write_plan::WriteNotice;
 
-use crate::info_panel::{ConflictValue, Language, origin_text, property_label, value_text};
+use crate::info_panel::{
+    ConflictValue, Language, origin_text, property_label, property_tooltip, value_text,
+};
 
 /// The language of the default entry of a Lang Alt value.
 const X_DEFAULT: &str = "x-default";
@@ -137,9 +140,15 @@ impl EditorField {
         }
     }
 
-    /// The field's name ([`property_label`] in Swedish).
+    /// The field's name ([`property_label`] in English).
     pub fn label(self) -> String {
-        property_label(self.struct_field().unwrap_or(self.property()), Language::Sv)
+        property_label(self.struct_field().unwrap_or(self.property()), Language::En)
+    }
+
+    /// The tooltip of the field's name: the full IPTC name when the name leaves part of it out
+    /// (the legacy properties and the contact fields; [`property_tooltip`], T117).
+    pub fn tooltip(self) -> Option<String> {
+        property_tooltip(self.struct_field().unwrap_or(self.property()))
     }
 
     /// True for the fields shown as a box of several lines. Keywords and Creator are one line
@@ -227,8 +236,8 @@ fn lang_alt_note(language: &str) -> String {
 
 /// The error of a date that cannot be read.
 fn date_error_text() -> String {
-    "Skriv datumet som ÅÅÅÅ, ÅÅÅÅ-MM, ÅÅÅÅ-MM-DD eller ÅÅÅÅ-MM-DDTtt:mm[:ss], med tidszon bara om \
-     den är känd"
+    "Write the date as YYYY, YYYY-MM, YYYY-MM-DD or YYYY-MM-DDThh:mm[:ss], with a time zone only \
+     when it is known"
         .to_string()
 }
 
@@ -317,7 +326,7 @@ impl EditorForm {
             .map(|state| &mut state.text)
     }
 
-    /// The note of a Lang Alt field that has no `x-default`: its language, `(<språk>)`; saving
+    /// The note of a Lang Alt field that has no `x-default`: its language, `(<language>)`; saving
     /// adds `x-default` (Q7).
     pub fn note(&self, field: EditorField) -> Option<String> {
         self.state(field)
@@ -332,7 +341,7 @@ impl EditorForm {
             .iter()
             .zip(&self.chosen)
             .map(|(conflict, chosen)| OpenConflict {
-                label: property_label(&conflict.property, Language::Sv),
+                label: property_label(&conflict.property, Language::En),
                 values: conflict
                     .values
                     .iter()
@@ -502,37 +511,46 @@ fn field_edit(field: EditorField, text: &str) -> Result<Edit, String> {
     })
 }
 
-/// The Swedish text of a warning (§11).
+/// The text of a warning (§11).
 fn warning_text(warning: &Warning) -> String {
     match warning {
         Warning::TooLongForIim {
             property,
             max_bytes,
-        } => format!(
-            "{field} blir avkortat i IIM (högst {max_bytes} byte); XMP får hela texten",
-            field = property_label(property, Language::Sv)
+        } => {
+            let field = property_label(property, Language::En);
+            if *max_bytes == 1 {
+                format!("{field} is truncated in IIM (at most 1 byte); XMP gets the whole text")
+            } else {
+                format!(
+                    "{field} is truncated in IIM (at most {max_bytes} bytes); XMP gets the whole \
+                     text"
+                )
+            }
+        }
+        Warning::AltTextTooLong { characters } => format!(
+            "{field} is longer than 250 characters ({characters})",
+            field = property_label("Iptc4xmpCore:AltTextAccessibility", Language::En)
         ),
-        Warning::AltTextTooLong { characters } => {
-            format!("Alternativtexten är längre än 250 tecken ({characters})")
-        }
-        Warning::CountryCodeForm { code } => {
-            format!("Landskoden {code} ska vara två eller tre bokstäver (ISO 3166-1)")
-        }
+        Warning::CountryCodeForm { code } => format!(
+            "{field} {code} should be two or three letters (ISO 3166-1)",
+            field = property_label("Iptc4xmpCore:CountryCode", Language::En)
+        ),
         Warning::JobtitleWithoutCreator => format!(
-            "{jobtitle} utan {creator}",
-            jobtitle = property_label("photoshop:AuthorsPosition", Language::Sv),
-            creator = property_label("dc:creator", Language::Sv)
+            "{jobtitle} without {creator}",
+            jobtitle = property_label("photoshop:AuthorsPosition", Language::En),
+            creator = property_label("dc:creator", Language::En)
         ),
         Warning::DigitalSourceTypeUnknown { uri } => format!(
-            "{field} {uri} finns inte i IPTC:s lista",
-            field = property_label("Iptc4xmpExt:DigitalSourceType", Language::Sv)
+            "{field} {uri} is not in IPTC's list",
+            field = property_label("Iptc4xmpExt:DigitalSourceType", Language::En)
         ),
         Warning::RegistryEntryIncomplete { index } => format!(
-            "Registerpost {n} saknar post-id eller organisation",
+            "Registry entry {n} is missing an item ID or an organization ID",
             n = index + 1
         ),
         Warning::RatingOutOfRange { value } => {
-            format!("Betyget {value} ligger utanför −1 till 5")
+            format!("Rating {value} is outside −1 to 5")
         }
     }
 }
@@ -541,16 +559,16 @@ fn warning_text(warning: &Warning) -> String {
 pub fn notice_text(notice: &WriteNotice) -> String {
     match notice {
         WriteNotice::Truncated { property } => format!(
-            "{field} kortades i IIM; XMP har hela texten",
-            field = property_label(property, Language::Sv)
+            "{field} was truncated in IIM; XMP has the whole text",
+            field = property_label(property, Language::En)
         ),
-        WriteNotice::IimConvertedToUtf8 => "IIM-texterna skrevs om som UTF-8".to_string(),
+        WriteNotice::IimConvertedToUtf8 => "The IIM texts were rewritten as UTF-8".to_string(),
         WriteNotice::ConflictKept { property } => format!(
-            "{field}: konflikten är olöst och skrevs inte",
-            field = property_label(property, Language::Sv)
+            "{field}: the conflict is unresolved and was not written",
+            field = property_label(property, Language::En)
         ),
         WriteNotice::DigestNotWritten => {
-            "Ingen ny IIM-kontrollsumma skrevs, eftersom en konflikt är olöst".to_string()
+            "No new IIM checksum was written, because a conflict is unresolved".to_string()
         }
     }
 }
@@ -578,7 +596,7 @@ pub enum EditorText {
     /// A write that failed; `reason` as `write_error_text` gives it for ratings.
     SaveFailed { file: String, reason: String },
     /// Asked when the window is to leave an image with unsaved edits: a move, Escape or the
-    /// window's "Avbryt" (ADR 0017 §2.3.1, U12-Q4, T112).
+    /// window's "Cancel" (ADR 0017 §2.3.1, U12-Q4, T112).
     SaveQuestion,
     /// The answer to `SaveQuestion` that writes the edits, then moves or closes.
     Save,
@@ -596,30 +614,93 @@ pub enum EditorText {
     /// The title of the message at program exit listing the rating and editor writes that were
     /// not saved (owner decision 2026-11-12: one message for both).
     UnsavedAtExitTitle,
+    /// The last line of that message when it lists more files than it shows (moved from
+    /// `metadata.rs`, T116).
+    MoreUnsaved { more: usize },
+    /// The status-line notice while an image's metadata is read (moved from `metadata.rs`, T116).
+    ReadingMetadata,
+    /// The status-line notice of a metadata read that failed (moved from `metadata.rs` and
+    /// `main.rs`, T116).
+    MetadataError { error: String },
 }
 
 /// The text of a fixed text of the editor window, each a whole sentence from one template.
 pub fn editor_text(text: &EditorText) -> String {
     match text {
         EditorText::WindowTitle { file } => format!("Metadata – {file}"),
-        EditorText::ConflictsHeading => "Olösta konflikter".to_string(),
+        EditorText::ConflictsHeading => "Unresolved Conflicts".to_string(),
         EditorText::ConflictChoice { value, origin } => format!("{value} ({origin})"),
-        EditorText::WarningsHeading => "Varningar".to_string(),
-        EditorText::OtherValuesHeading => "Övrig metadata".to_string(),
+        EditorText::WarningsHeading => "Warnings".to_string(),
+        EditorText::OtherValuesHeading => "Other Metadata".to_string(),
         EditorText::Ok => "OK".to_string(),
-        EditorText::Saving => "Sparar …".to_string(),
-        EditorText::Saved => "Sparat.".to_string(),
+        EditorText::Saving => "Saving …".to_string(),
+        EditorText::Saved => "Saved.".to_string(),
         EditorText::SaveFailed { file, reason } => {
-            format!("Kunde inte spara metadata för {file}: {reason}")
+            format!("Could not save metadata for {file}: {reason}")
         }
-        EditorText::SaveQuestion => "Spara ändringarna?".to_string(),
-        EditorText::Save => "Spara".to_string(),
-        EditorText::Discard => "Släng".to_string(),
-        EditorText::Cancel => "Avbryt".to_string(),
-        EditorText::Previous => "Föregående".to_string(),
-        EditorText::Next => "Nästa".to_string(),
-        EditorText::SaveAndNext => "Spara och nästa".to_string(),
-        EditorText::UnsavedAtExitTitle => "Ändringar som inte sparades".to_string(),
+        EditorText::SaveQuestion => "Save changes?".to_string(),
+        EditorText::Save => "Save".to_string(),
+        EditorText::Discard => "Discard".to_string(),
+        EditorText::Cancel => "Cancel".to_string(),
+        EditorText::Previous => "Previous".to_string(),
+        EditorText::Next => "Next".to_string(),
+        EditorText::SaveAndNext => "Save and Next".to_string(),
+        EditorText::UnsavedAtExitTitle => "Unsaved Changes".to_string(),
+        EditorText::MoreUnsaved { more } => format!("… and {more} more"),
+        EditorText::ReadingMetadata => "Reading metadata…".to_string(),
+        EditorText::MetadataError { error } => format!("Metadata error: {error}"),
+    }
+}
+
+/// The reason in the message for a failed metadata write: a rating (`Could not save the rating for
+/// <file>: `), the metadata window (`Could not save metadata for <file>: `) or the import's
+/// template. Moved from `metadata.rs` and `import_worker.rs` (T116).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum WriteReason {
+    /// The file is read-only (T49).
+    ReadOnly,
+    /// Another program holds the file open (T108).
+    Locked,
+    /// ExifTool refused the write (T49).
+    NotWritten,
+    /// The write journal could not be opened at the start, so nothing is written (T91).
+    NoJournal,
+    /// The metadata worker refuses writes while ExifTool is too old or its version could not be
+    /// read (ADR 0007 §11, D9, T101).
+    ExifToolTooOld,
+    /// The safe write failed and the file is unchanged (ADR 0007 §9.5).
+    NotSafeIntact,
+    /// The safe write failed and the original is now the backup file `name`.
+    NotSafeAtBackup { name: String },
+    /// The file was written but the final check failed; the earlier version is kept as a backup.
+    NotSafeReplaced,
+    /// The metadata worker's queue is full.
+    QueueFull,
+    /// The metadata worker has stopped.
+    WorkerStopped,
+}
+
+/// The text of a write reason, each a whole sentence part from one template.
+pub fn write_reason_text(reason: &WriteReason) -> String {
+    match reason {
+        WriteReason::ReadOnly => "the file is read-only".to_string(),
+        WriteReason::Locked => "the file is open in another program".to_string(),
+        WriteReason::NotWritten => "the file could not be written".to_string(),
+        WriteReason::NoJournal => "the write log could not be opened".to_string(),
+        WriteReason::ExifToolTooOld => {
+            format!("ExifTool is too old (at least {MIN_EXIFTOOL_VERSION} is needed)")
+        }
+        WriteReason::NotSafeIntact => {
+            "the metadata could not be written safely; the file is unchanged".to_string()
+        }
+        WriteReason::NotSafeAtBackup { name } => {
+            format!("the metadata could not be written safely; the original is now {name}")
+        }
+        WriteReason::NotSafeReplaced => "the file was written but the final check failed; the \
+                                         earlier version is kept as a backup"
+            .to_string(),
+        WriteReason::QueueFull => "the metadata queue is full".to_string(),
+        WriteReason::WorkerStopped => "metadata writing has stopped".to_string(),
     }
 }
 
@@ -712,28 +793,28 @@ mod tests {
         assert_eq!(
             labels,
             [
-                "Titel",
-                "Rubrik",
-                "Beskrivning",
-                "Alternativtext",
-                "Nyckelord",
-                "Fotograf",
-                "Yrkestitel",
-                "E-post",
-                "Telefon",
-                "Webb",
-                "Copyright",
-                "Credit",
-                "Källa",
-                "Användarvillkor",
-                "Skapad",
-                "Plats",
-                "Stad",
-                "Län/delstat",
-                "Land",
-                "Landskod",
-                "Instruktioner",
-                "Jobb-id",
+                "Title",
+                "Headline",
+                "Description",
+                "Alt Text (Accessibility)",
+                "Keywords",
+                "Creator",
+                "Creator's jobtitle",
+                "Email",
+                "Phone",
+                "Web URL",
+                "Copyright Notice",
+                "Credit Line",
+                "Source (Supply Chain)",
+                "Rights Usage Terms",
+                "Date Created",
+                "Sublocation",
+                "City",
+                "Province or State",
+                "Country",
+                "Country Code",
+                "Instructions",
+                "Job Id",
             ]
         );
     }
@@ -998,8 +1079,8 @@ mod tests {
             form.edits(),
             Err(vec![(
                 EditorField::DateCreated,
-                "Skriv datumet som ÅÅÅÅ, ÅÅÅÅ-MM, ÅÅÅÅ-MM-DD eller ÅÅÅÅ-MM-DDTtt:mm[:ss], med \
-                 tidszon bara om den är känd"
+                "Write the date as YYYY, YYYY-MM, YYYY-MM-DD or YYYY-MM-DDThh:mm[:ss], with a \
+                 time zone only when it is known"
                     .to_string()
             )])
         );
@@ -1080,7 +1161,7 @@ mod tests {
         assert_eq!(
             form.open_conflicts(),
             [OpenConflict {
-                label: "Stad".into(),
+                label: "City".into(),
                 values: vec![
                     ConflictValue {
                         value: "Göteborg".into(),
@@ -1144,7 +1225,7 @@ mod tests {
         let mut form = form_with(metadata);
         let conflicts = form.open_conflicts();
         assert_eq!(conflicts.len(), 1);
-        assert_eq!(conflicts[0].label, "Beskrivningens författare");
+        assert_eq!(conflicts[0].label, "Description Writer");
         assert!(form.choose(0, 1));
         assert_eq!(
             form.edits(),
@@ -1166,7 +1247,7 @@ mod tests {
         insert(&mut metadata, "photoshop:City", text(&long_city));
         let mut read = read_of(metadata);
         let form = EditorForm::from_read(&read);
-        let expected = ["Stad blir avkortat i IIM (högst 32 byte); XMP får hela texten"];
+        let expected = ["City is truncated in IIM (at most 32 bytes); XMP gets the whole text"];
         // A JPEG without IIM: only with create_iim.
         assert!(form.warnings(&read, false).is_empty());
         assert_eq!(form.warnings(&read, true), expected);
@@ -1178,6 +1259,47 @@ mod tests {
         assert!(form.warnings(&read, true).is_empty());
     }
 
+    /// The byte limit of the IIM warning in singular and plural (T117).
+    #[test]
+    fn too_long_for_iim_has_singular_and_plural_bytes() {
+        let warning = |max_bytes| {
+            warning_text(&Warning::TooLongForIim {
+                property: "photoshop:Urgency".into(),
+                max_bytes,
+            })
+        };
+        assert_eq!(
+            warning(1),
+            "Urgency is truncated in IIM (at most 1 byte); XMP gets the whole text"
+        );
+        assert_eq!(
+            warning(2),
+            "Urgency is truncated in IIM (at most 2 bytes); XMP gets the whole text"
+        );
+    }
+
+    /// The tooltip of a field's name is the full IPTC name where the name leaves part of it out
+    /// (T117, glossary G1).
+    #[test]
+    fn the_legacy_and_contact_fields_have_the_full_iptc_name_as_tooltip() {
+        let tooltips: Vec<(EditorField, String)> = EditorField::ALL
+            .into_iter()
+            .filter_map(|field| field.tooltip().map(|tooltip| (field, tooltip)))
+            .collect();
+        let expected = [
+            (EditorField::Email, "Email address(es)"),
+            (EditorField::Phone, "Phone number(s)"),
+            (EditorField::Web, "Web URL(s)"),
+            (EditorField::Sublocation, "Sublocation (legacy)"),
+            (EditorField::City, "City (legacy)"),
+            (EditorField::State, "Province or State (legacy)"),
+            (EditorField::Country, "Country (legacy)"),
+            (EditorField::CountryCode, "Country Code (legacy)"),
+        ]
+        .map(|(field, tooltip)| (field, tooltip.to_string()));
+        assert_eq!(tooltips, expected);
+    }
+
     #[test]
     fn warnings_see_the_edits() {
         let read = read_of(Metadata::new());
@@ -1185,7 +1307,7 @@ mod tests {
         type_into(&mut form, EditorField::CountryCode, "S1");
         assert_eq!(
             form.warnings(&read, false),
-            ["Landskoden S1 ska vara två eller tre bokstäver (ISO 3166-1)"]
+            ["Country Code S1 should be two or three letters (ISO 3166-1)"]
         );
         type_into(&mut form, EditorField::CountryCode, "SWE");
         assert!(form.warnings(&read, false).is_empty());
@@ -1201,7 +1323,7 @@ mod tests {
         );
         assert_eq!(
             warnings_of(metadata),
-            ["Alternativtexten är längre än 250 tecken (251)"]
+            ["Alt Text (Accessibility) is longer than 250 characters (251)"]
         );
     }
 
@@ -1209,7 +1331,10 @@ mod tests {
     fn jobtitle_without_creator_warning() {
         let mut metadata = Metadata::new();
         insert(&mut metadata, "photoshop:AuthorsPosition", text("Fotograf"));
-        assert_eq!(warnings_of(metadata), ["Yrkestitel utan Fotograf"]);
+        assert_eq!(
+            warnings_of(metadata),
+            ["Creator's jobtitle without Creator"]
+        );
     }
 
     #[test]
@@ -1222,7 +1347,7 @@ mod tests {
         );
         assert_eq!(
             warnings_of(metadata),
-            ["Digital källtyp http://example.com/kamera finns inte i IPTC:s lista"]
+            ["Digital Source Type http://example.com/kamera is not in IPTC's list"]
         );
     }
 
@@ -1246,7 +1371,7 @@ mod tests {
         );
         assert_eq!(
             warnings_of(metadata),
-            ["Registerpost 2 saknar post-id eller organisation"]
+            ["Registry entry 2 is missing an item ID or an organization ID"]
         );
     }
 
@@ -1254,10 +1379,7 @@ mod tests {
     fn rating_warning() {
         let mut metadata = Metadata::new();
         insert(&mut metadata, "xmp:Rating", Value::Number("7".into()));
-        assert_eq!(
-            warnings_of(metadata),
-            ["Betyget 7 ligger utanför −1 till 5"]
-        );
+        assert_eq!(warnings_of(metadata), ["Rating 7 is outside −1 to 5"]);
     }
 
     // --- notices ---
@@ -1268,21 +1390,21 @@ mod tests {
             notice_text(&WriteNotice::Truncated {
                 property: "photoshop:Headline".into()
             }),
-            "Rubrik kortades i IIM; XMP har hela texten"
+            "Headline was truncated in IIM; XMP has the whole text"
         );
         assert_eq!(
             notice_text(&WriteNotice::IimConvertedToUtf8),
-            "IIM-texterna skrevs om som UTF-8"
+            "The IIM texts were rewritten as UTF-8"
         );
         assert_eq!(
             notice_text(&WriteNotice::ConflictKept {
                 property: "photoshop:City".into()
             }),
-            "Stad: konflikten är olöst och skrevs inte"
+            "City: the conflict is unresolved and was not written"
         );
         assert_eq!(
             notice_text(&WriteNotice::DigestNotWritten),
-            "Ingen ny IIM-kontrollsumma skrevs, eftersom en konflikt är olöst"
+            "No new IIM checksum was written, because a conflict is unresolved"
         );
     }
 
@@ -1297,7 +1419,7 @@ mod tests {
                 },
                 "Metadata – bild.jpg",
             ),
-            (EditorText::ConflictsHeading, "Olösta konflikter"),
+            (EditorText::ConflictsHeading, "Unresolved Conflicts"),
             (
                 EditorText::ConflictChoice {
                     value: "Solnedgång".into(),
@@ -1305,32 +1427,78 @@ mod tests {
                 },
                 "Solnedgång (IIM)",
             ),
-            (EditorText::WarningsHeading, "Varningar"),
-            (EditorText::OtherValuesHeading, "Övrig metadata"),
+            (EditorText::WarningsHeading, "Warnings"),
+            (EditorText::OtherValuesHeading, "Other Metadata"),
             (EditorText::Ok, "OK"),
-            (EditorText::Saving, "Sparar …"),
-            (EditorText::Saved, "Sparat."),
+            (EditorText::Saving, "Saving …"),
+            (EditorText::Saved, "Saved."),
             (
                 EditorText::SaveFailed {
                     file: "bild.ARW".into(),
                     reason: "filen är skrivskyddad".into(),
                 },
-                "Kunde inte spara metadata för bild.ARW: filen är skrivskyddad",
+                "Could not save metadata for bild.ARW: filen är skrivskyddad",
             ),
-            (EditorText::SaveQuestion, "Spara ändringarna?"),
-            (EditorText::Save, "Spara"),
-            (EditorText::Discard, "Släng"),
-            (EditorText::Cancel, "Avbryt"),
-            (EditorText::Previous, "Föregående"),
-            (EditorText::Next, "Nästa"),
-            (EditorText::SaveAndNext, "Spara och nästa"),
-            (
-                EditorText::UnsavedAtExitTitle,
-                "Ändringar som inte sparades",
-            ),
+            (EditorText::SaveQuestion, "Save changes?"),
+            (EditorText::Save, "Save"),
+            (EditorText::Discard, "Discard"),
+            (EditorText::Cancel, "Cancel"),
+            (EditorText::Previous, "Previous"),
+            (EditorText::Next, "Next"),
+            (EditorText::SaveAndNext, "Save and Next"),
+            (EditorText::UnsavedAtExitTitle, "Unsaved Changes"),
         ];
         for (text, expected) in cases {
             assert_eq!(editor_text(&text), expected, "{text:?}");
+        }
+    }
+
+    /// The texts moved here from `metadata.rs` and `import_worker.rs` (T116) keep their wording.
+    #[test]
+    fn the_moved_metadata_texts_keep_their_swedish_wording() {
+        assert_eq!(
+            editor_text(&EditorText::MoreUnsaved { more: 3 }),
+            "… and 3 more"
+        );
+        assert_eq!(
+            editor_text(&EditorText::ReadingMetadata),
+            "Reading metadata…"
+        );
+        assert_eq!(
+            editor_text(&EditorText::MetadataError {
+                error: "boom".into()
+            }),
+            "Metadata error: boom"
+        );
+        let reasons = [
+            (WriteReason::ReadOnly, "the file is read-only"),
+            (WriteReason::Locked, "the file is open in another program"),
+            (WriteReason::NotWritten, "the file could not be written"),
+            (WriteReason::NoJournal, "the write log could not be opened"),
+            (
+                WriteReason::ExifToolTooOld,
+                "ExifTool is too old (at least 12.67 is needed)",
+            ),
+            (
+                WriteReason::NotSafeIntact,
+                "the metadata could not be written safely; the file is unchanged",
+            ),
+            (
+                WriteReason::NotSafeAtBackup {
+                    name: "bild.pwbak-1.jpg".into(),
+                },
+                "the metadata could not be written safely; the original is now bild.pwbak-1.jpg",
+            ),
+            (
+                WriteReason::NotSafeReplaced,
+                "the file was written but the final check failed; the earlier version is kept as \
+                 a backup",
+            ),
+            (WriteReason::QueueFull, "the metadata queue is full"),
+            (WriteReason::WorkerStopped, "metadata writing has stopped"),
+        ];
+        for (reason, expected) in reasons {
+            assert_eq!(write_reason_text(&reason), expected, "{reason:?}");
         }
     }
 }

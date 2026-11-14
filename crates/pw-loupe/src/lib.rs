@@ -1,7 +1,8 @@
 //! RawStride (ADR 0012; the egui program of ADR 0009–0011): the parts of the program that are plain
-//! Rust and tested without a window (GR11): command-line options, the folder listing, the key map
-//! and the texts of the status line. `main.rs` wires them to eframe, `pw-viewcore` and
-//! `pw-render`.
+//! Rust and tested without a window (GR11): command-line options, the folder listing and the key
+//! map; the texts the user sees are made in the text modules (`loupe_text.rs`, `shell_text.rs`,
+//! `import_text.rs`, `rating_text.rs`, `editor.rs`, …; T116). `main.rs` wires them to eframe,
+//! `pw-viewcore` and `pw-render`.
 
 mod browse;
 mod editor;
@@ -12,9 +13,11 @@ mod import_dialog;
 mod import_text;
 mod import_worker;
 mod info_panel;
+mod loupe_text;
 mod monitor_profile;
 mod preview;
 mod preview_text;
+mod rating_text;
 mod ratings;
 mod selection;
 mod settings;
@@ -25,14 +28,16 @@ mod thumbs;
 
 use std::path::{Path, PathBuf};
 
-use pw_viewcore::{DecodeError, Frame, Source, Status, Zoom};
+use pw_viewcore::Status;
 
 pub use browse::{LoupeMove, metadata_neighbour};
-pub use editor::{EditorField, EditorForm, EditorText, OpenConflict, editor_text, notice_text};
+pub use editor::{
+    EditorField, EditorForm, EditorText, OpenConflict, WriteReason, editor_text, notice_text,
+    write_reason_text,
+};
 pub use filter::{
     Filter, LABEL_CHOICES, LabelChoice, LabelFilter, STAR_CONDITIONS, STAR_FILTERS, StarCondition,
-    StarFilter, label_choice_text, label_filter_text, matches, nearest_visible,
-    star_condition_text, star_filter_text, visible,
+    StarFilter, matches, nearest_visible, visible,
 };
 pub use grid::{
     DEFAULT_THUMBNAIL_SIZE, GridKeyAction, LoupeKeyAction, MAX_THUMBNAIL_SIZE, MIN_THUMBNAIL_SIZE,
@@ -41,12 +46,13 @@ pub use grid::{
 };
 pub use import::{
     Field, FieldError, ImportForm, IptcField, IptcForm, IptcModes, ItemAction, Preview,
-    PreviewLine, Validated, allowed_modes, clear_and_import_text, clear_cancel_text,
-    clear_confirmation_text, clear_confirmation_title, mode_text, result_folder,
+    PreviewLine, Validated, allowed_modes, result_folder,
 };
 pub use import_dialog::{DialogRequest, ImportDialog, ImportDialogState};
 pub use import_text::{
-    DoneLine, done_lines, ejecting_progress_text, iptc_progress_text, more_lines, preview_line,
+    DoneLine, ImportText, clear_and_import_text, clear_cancel_text, clear_confirmation_text,
+    clear_confirmation_title, done_lines, ejecting_progress_text, hidden_done_text,
+    hidden_progress_text, import_text, iptc_progress_text, mode_text, more_lines, preview_line,
     preview_summary, progress_text,
 };
 pub use import_worker::{ImportDone, ImportEvent, ImportWorker, RequestId, SubmitError};
@@ -54,8 +60,13 @@ pub use info_panel::{
     ConflictRow, ConflictValue, InfoPanel, Language, PanelText, ValueRow, info_panel, origin_text,
     other_values, panel_text, property_label, rule_text, value_text,
 };
+pub use loupe_text::{
+    PROFILE_UNUSABLE_TEXT, READING_RATINGS_TEXT, error_text, failed_cell_text, indicator_text,
+    marked_text, mode_label, no_match_text, no_preview_text, position_text, source_text,
+    status_line, zoom_text,
+};
 pub use monitor_profile::{
-    MonitorProfile, ProfileSource, load_monitor_profile, primary_monitor_profile_path, window_title,
+    MonitorProfile, ProfileSource, load_monitor_profile, primary_monitor_profile_path,
 };
 pub use preview::{
     FILMSTRIP_CELL_WIDTH, FILMSTRIP_IMAGE_HEIGHT, FILMSTRIP_LABEL_HEIGHT, FILMSTRIP_MARGIN,
@@ -64,10 +75,11 @@ pub use preview::{
     thumbnail_gate, toggle_preview_column, toggle_preview_hidden,
 };
 pub use preview_text::{PreviewText, preview_text, zoom_value_text};
-pub use ratings::{
-    RatingKey, RatingRefused, RatingStore, RatingWriter, UNSUPPORTED_TEXT, apply, label_name,
-    rating_key_action, star_glyphs, status_text,
+pub use rating_text::{
+    UNSUPPORTED_TEXT, label_choice_text, label_filter_text, label_name, star_condition_text,
+    star_filter_text, star_glyphs, status_text,
 };
+pub use ratings::{RatingKey, RatingRefused, RatingStore, RatingWriter, apply, rating_key_action};
 pub use selection::Selection;
 pub use settings::{
     Settings, ShellSettings, WindowRect, load_settings, save_settings, settings_path,
@@ -80,7 +92,10 @@ pub use shell::{
     start_window, text_pairs, visuals,
 };
 pub use shell_text::{
-    ShellText, command_text, key_text, menu_text, shell_text, submenu_text, theme_text,
+    SettingsText, ShellText, command_text, exiftool_message, fallback_text, key_text, menu_text,
+    no_images_text, open_error_text, path_resolution_error_text, prune_error_text, recovery_text,
+    settings_save_error_text, settings_text, shell_text, status_line_text, submenu_text,
+    theme_text, window_title,
 };
 pub use tabs::{Tab, Tabs, ViewMode};
 pub use thumbs::{CellState, ThumbGrid, color_image, request_cell};
@@ -269,146 +284,6 @@ pub fn wheel_factor(dy: f32) -> f64 {
     if f.is_finite() && f > 0.0 { f } else { 1.0 }
 }
 
-fn file_name(frame: &Frame) -> String {
-    frame
-        .path
-        .as_ref()
-        .and_then(|p| p.file_name())
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_default()
-}
-
-/// Whether the frame shows a TIFF file. The core keys a TIFF `Source::Jpeg` (ADR 0015 §4.2), so the
-/// texts look at the path.
-fn is_tiff(frame: &Frame) -> bool {
-    frame.path.as_deref().is_some_and(pw_raw::is_tiff_file)
-}
-
-/// What is shown (G1, honest source): RAW rendering, embedded JPEG, a JPEG file or a TIFF file,
-/// with size.
-pub fn source_text(frame: &Frame) -> String {
-    let size = frame
-        .size
-        .map(|s| {
-            let (w, h) = s.oriented();
-            format!(" {w} × {h}")
-        })
-        .unwrap_or_default();
-    let plain = frame
-        .path
-        .as_deref()
-        .is_some_and(pw_viewcore::is_plain_jpeg);
-    match frame.source {
-        Source::Raw => format!("RAW-rendering (LibRaw, PPG){size}"),
-        Source::Jpeg if is_tiff(frame) => format!("TIFF-fil{size}"),
-        Source::Jpeg if plain => format!("JPEG-fil{size}"),
-        Source::Jpeg => format!("Inbäddad JPEG{size} (kamerans rendering, inte RAW)"),
-    }
-}
-
-/// The zoom part of the status line: "Zoom 37 %", and "(anpassad)" at fit.
-pub fn zoom_text(frame: &Frame) -> String {
-    match (frame.zoom, frame.scale) {
-        (Zoom::Fit, Some(s)) => format!("Zoom {:.0} % (anpassad)", s * 100.0),
-        (Zoom::Fit, None) => "Zoom anpassad".to_string(),
-        (Zoom::Scale(s), _) => format!("Zoom {:.0} %", s * 100.0),
-    }
-}
-
-/// The status-line part after the source text when the image's embedded colour profile could not
-/// be used (ADR 0016 §5).
-pub const PROFILE_UNUSABLE_TEXT: &str = "Inbäddad färgprofil kunde inte användas";
-
-/// The status line of the loupe. It starts with `position_text`, as in the grid (ADR 0014 §5.3,
-/// amendment 1): the core holds the visible list, so `frame.count` is the number shown, and `total`
-/// is the number of images in the folder ("3 / 12 (av 31)", or "3 / 31" without a filter).
-pub fn status_line(frame: &Frame, anchor_at_pointer: bool, total: usize) -> String {
-    let Some(pos) = frame.pos else {
-        return "Ingen mapp öppen. Dra en mapp eller en bild hit, eller ange den på kommandoraden."
-            .to_string();
-    };
-    let anchor = if anchor_at_pointer {
-        "zoom mot pekaren"
-    } else {
-        "zoom mot mitten"
-    };
-    let what = match &frame.status {
-        Status::Error(_) => "kan inte visas".to_string(),
-        Status::Preparing { .. } if frame.size.is_none() => match frame.source {
-            Source::Raw => "förbereder RAW".to_string(),
-            Source::Jpeg if is_tiff(frame) => "förbereder TIFF".to_string(),
-            Source::Jpeg => "förbereder JPEG".to_string(),
-        },
-        // ADR 0016 §5: the colours rest on a fallback because the file's own profile was broken
-        _ if frame.profile_unusable => {
-            format!("{}  ·  {PROFILE_UNUSABLE_TEXT}", source_text(frame))
-        }
-        _ => source_text(frame),
-    };
-    format!(
-        "{}  ·  {}  ·  {}  ·  {}  ·  {}",
-        position_text(pos, frame.count, total),
-        file_name(frame),
-        what,
-        zoom_text(frame),
-        anchor
-    )
-}
-
-/// The position part of the status line (ADR 0014 §5.3): "3 / 12 (av 31)" under a filter, or
-/// "3 / 31" when every image is shown. `pos` is the zero-based position in the visible list.
-pub fn position_text(pos: usize, shown: usize, total: usize) -> String {
-    let number = pos.saturating_add(1);
-    if shown == total {
-        format!("{number} / {total}")
-    } else {
-        format!("{number} / {shown} (av {total})")
-    }
-}
-
-/// The text when the filter lets nothing through (ADR 0014 §2.4, §5.3), in the status line and the
-/// empty grid.
-pub fn no_match_text(total: usize) -> String {
-    format!("Inga bilder matchar filtret ({total} i mappen)")
-}
-
-/// The marking part of the status line (ADR 0014 §5.3): only when more than one image is marked.
-pub fn marked_text(n: usize) -> Option<String> {
-    (n > 1).then(|| format!("{n} markerade"))
-}
-
-/// Shown in the grid and the status line while an active filter waits for the ratings (Q7).
-pub const READING_RATINGS_TEXT: &str = "Läser betyg …";
-
-/// The neutral loading indicator (V2): no image content, only what is being prepared.
-pub fn indicator_text(frame: &Frame) -> String {
-    match frame.source {
-        Source::Raw => "Förbereder RAW …".to_string(),
-        Source::Jpeg if is_tiff(frame) => "Förbereder TIFF …".to_string(),
-        Source::Jpeg => "Förbereder JPEG …".to_string(),
-    }
-}
-
-/// The message for a file that cannot be shown (G3, G4).
-pub fn error_text(e: &DecodeError, mode: Source) -> String {
-    if e.damaged {
-        "RAW-data saknas eller är skadad. Byt till JPEG-läget (R) för att se kamerans förhandsbild."
-            .to_string()
-    } else if mode == Source::Jpeg && e.message.contains("no embedded JPEG") {
-        "Filen har ingen inbäddad JPEG. Byt till RAW-läget (R).".to_string()
-    } else {
-        format!("Filen kan inte visas: {}", e.message)
-    }
-}
-
-/// The label of the display-mode control (G4: "with a key and a control").
-pub fn mode_label(mode: Source) -> &'static str {
-    match mode {
-        Source::Raw => "Läge: RAW (R)",
-        Source::Jpeg => "Läge: JPEG (R)",
-    }
-}
-
 /// A key of the main window's shell (ADR 0017 §2.4, U1, T109).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ShellAction {
@@ -521,31 +396,11 @@ pub fn dialog_key_action(key: egui::Key, ctrl: bool, alt: bool) -> Option<Dialog
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pw_viewcore::ImageSize;
+    use pw_viewcore::DecodeError;
     use std::time::Instant;
 
     fn args(v: &[&str]) -> Result<Options, String> {
         parse_args(v.iter().map(|s| s.to_string()))
-    }
-
-    fn frame(status: Status, source: Source) -> Frame {
-        Frame {
-            draw: None,
-            status,
-            pos: Some(2),
-            count: 31,
-            path: Some(PathBuf::from("D:/RAW/TN100423.ARW")),
-            mode: source,
-            source,
-            size: Some(ImageSize {
-                w: 9568,
-                h: 6376,
-                flip: 5,
-            }),
-            zoom: Zoom::Fit,
-            scale: Some(0.1129),
-            profile_unusable: false,
-        }
     }
 
     #[test]
@@ -747,47 +602,6 @@ mod tests {
         assert_eq!(wheel_factor(f32::NAN), 1.0);
     }
 
-    #[test]
-    fn the_status_line_says_what_is_shown() {
-        let f = frame(Status::Ready, Source::Raw);
-        let s = status_line(&f, true, 31);
-        assert!(s.starts_with("3 / 31  ·  "), "{s}");
-        assert!(s.contains("TN100423.ARW"));
-        assert!(s.contains("RAW-rendering (LibRaw, PPG) 6376 × 9568"), "{s}");
-        assert!(s.contains("Zoom 11 % (anpassad)"));
-        assert!(s.contains("zoom mot pekaren"));
-        let j = frame(Status::Ready, Source::Jpeg);
-        assert!(
-            status_line(&j, false, 31).contains("Inbäddad JPEG 6376 × 9568 (kamerans rendering")
-        );
-        let mut plain = frame(Status::Ready, Source::Jpeg);
-        plain.path = Some(PathBuf::from("photo.JPG"));
-        assert!(source_text(&plain).starts_with("JPEG-fil"));
-        let mut z = frame(Status::Ready, Source::Raw);
-        z.zoom = Zoom::Scale(2.0);
-        assert_eq!(zoom_text(&z), "Zoom 200 %");
-        let mut empty = frame(Status::Empty, Source::Raw);
-        empty.pos = None;
-        assert!(status_line(&empty, true, 31).starts_with("Ingen mapp"));
-    }
-
-    #[test]
-    fn the_loupe_status_line_starts_with_the_position_in_the_filter() {
-        // Without a filter the core shows the whole folder: "3 / 31".
-        let all = frame(Status::Ready, Source::Raw);
-        assert_eq!(
-            status_line(&all, true, 31),
-            "3 / 31  ·  TN100423.ARW  ·  RAW-rendering (LibRaw, PPG) 6376 × 9568  ·  \
-             Zoom 11 % (anpassad)  ·  zoom mot pekaren"
-        );
-        // Under a filter the core shows the 12 visible images of 31 (ADR 0014 §5.3).
-        let mut filtered = frame(Status::Ready, Source::Raw);
-        filtered.count = 12;
-        let s = status_line(&filtered, false, 31);
-        assert!(s.starts_with("3 / 12 (av 31)  ·  TN100423.ARW  ·  "), "{s}");
-        assert!(s.ends_with("zoom mot mitten"), "{s}");
-    }
-
     /// The `app.js` case "loupe within filter" (`ui/tests/filter-select.test.js`) on
     /// `Tab::loupe_move`: with the `browse.rs` setup (1: 3 stars, 2: 5 stars Red, 3: rejected,
     /// 4: Red only), filter Red, Home, Enter, step right → IMG_002, then IMG_004.
@@ -847,178 +661,10 @@ mod tests {
     }
 
     #[test]
-    fn preparing_and_errors_are_described_without_image_content() {
-        let mut f = frame(
-            Status::Preparing {
-                since: Instant::now(),
-                indicator: true,
-            },
-            Source::Raw,
-        );
-        f.size = None;
-        assert!(status_line(&f, true, 31).contains("förbereder RAW"));
-        assert_eq!(indicator_text(&f), "Förbereder RAW …");
-        let damaged = DecodeError::damaged("damaged: cut");
-        assert!(error_text(&damaged, Source::Raw).contains("JPEG-läget"));
-        let none = DecodeError::new("x: the file has no embedded JPEG");
-        assert!(error_text(&none, Source::Jpeg).contains("ingen inbäddad JPEG"));
-        assert!(error_text(&DecodeError::new("boom"), Source::Raw).contains("boom"));
-        assert_eq!(mode_label(Source::Jpeg), "Läge: JPEG (R)");
-    }
-
-    #[test]
     fn tiff_files_are_listed() {
         for n in ["a.tif", "b.TIFF", "c.tiff"] {
             assert!(is_listed(Path::new(n)), "{n}");
         }
-    }
-
-    fn tiff_frame(status: Status, mode: Source) -> Frame {
-        Frame {
-            draw: None,
-            status,
-            pos: Some(0),
-            count: 9,
-            path: Some(PathBuf::from("D:/Scans/Scan 01.tif")),
-            mode,
-            source: Source::Jpeg,
-            size: Some(ImageSize {
-                w: 7741,
-                h: 5161,
-                flip: 6,
-            }),
-            zoom: Zoom::Fit,
-            scale: Some(0.2),
-            profile_unusable: false,
-        }
-    }
-
-    #[test]
-    fn a_tiff_frame_is_named_tiff_file_with_its_oriented_size_in_both_modes() {
-        for mode in [Source::Raw, Source::Jpeg] {
-            let f = tiff_frame(Status::Ready, mode);
-            assert_eq!(source_text(&f), "TIFF-fil 5161 × 7741", "{mode:?}");
-            let s = status_line(&f, true, 9);
-            assert!(
-                s.contains("Scan 01.tif  ·  TIFF-fil 5161 × 7741  ·  "),
-                "{s}"
-            );
-        }
-    }
-
-    #[test]
-    fn a_preparing_tiff_frame_says_tiff() {
-        let mut f = tiff_frame(
-            Status::Preparing {
-                since: Instant::now(),
-                indicator: true,
-            },
-            Source::Raw,
-        );
-        f.size = None;
-        let s = status_line(&f, true, 9);
-        assert!(s.contains("förbereder TIFF"), "{s}");
-        assert!(!s.contains("JPEG"), "{s}");
-        assert_eq!(indicator_text(&f), "Förbereder TIFF …");
-    }
-
-    #[test]
-    fn a_jpeg_file_keeps_its_texts() {
-        let mut f = frame(
-            Status::Preparing {
-                since: Instant::now(),
-                indicator: true,
-            },
-            Source::Jpeg,
-        );
-        f.path = Some(PathBuf::from("D:/Photos/photo.JPG"));
-        assert_eq!(indicator_text(&f), "Förbereder JPEG …");
-        assert_eq!(source_text(&f), "JPEG-fil 6376 × 9568");
-        f.size = None;
-        assert!(status_line(&f, true, 31).contains("förbereder JPEG"));
-    }
-
-    #[test]
-    fn the_filter_texts_of_the_status_line() {
-        assert_eq!(position_text(2, 12, 31), "3 / 12 (av 31)");
-        assert_eq!(position_text(2, 31, 31), "3 / 31");
-        assert_eq!(position_text(0, 2, 12), "1 / 2 (av 12)");
-        assert_eq!(
-            no_match_text(31),
-            "Inga bilder matchar filtret (31 i mappen)"
-        );
-        assert_eq!(marked_text(0), None);
-        assert_eq!(marked_text(1), None);
-        assert_eq!(marked_text(2).as_deref(), Some("2 markerade"));
-        assert_eq!(marked_text(12).as_deref(), Some("12 markerade"));
-        assert_eq!(READING_RATINGS_TEXT, "Läser betyg …");
-    }
-
-    // ---------- an embedded profile that cannot be used (ADR 0016 §5, T73) ----------
-
-    fn small_tiff_frame(status: Status) -> Frame {
-        let mut f = tiff_frame(status, Source::Jpeg);
-        f.size = Some(ImageSize {
-            w: 6,
-            h: 4,
-            flip: 0,
-        });
-        f
-    }
-
-    #[test]
-    fn the_status_line_says_when_the_embedded_profile_cannot_be_used() {
-        let mut f = small_tiff_frame(Status::Ready);
-        let without = status_line(&f, true, 9);
-        f.profile_unusable = true;
-        let with = status_line(&f, true, 9);
-        assert!(
-            with.contains("TIFF-fil 6 × 4  ·  Inbäddad färgprofil kunde inte användas  ·  "),
-            "{with}"
-        );
-        // nothing else in the line changes
-        assert_eq!(
-            with.replace("  ·  Inbäddad färgprofil kunde inte användas", ""),
-            without
-        );
-
-        let mut j = frame(Status::Ready, Source::Jpeg);
-        j.path = Some(PathBuf::from("D:/RAW/TN005701_DxO.jpg"));
-        j.profile_unusable = true;
-        let s = status_line(&j, false, 31);
-        assert!(
-            s.contains("JPEG-fil 6376 × 9568  ·  Inbäddad färgprofil kunde inte användas  ·  "),
-            "{s}"
-        );
-    }
-
-    #[test]
-    fn without_the_flag_the_status_line_is_unchanged() {
-        let f = small_tiff_frame(Status::Ready);
-        assert!(!f.profile_unusable);
-        assert_eq!(
-            status_line(&f, true, 9),
-            "1 / 9  ·  Scan 01.tif  ·  TIFF-fil 6 × 4  ·  Zoom 20 % (anpassad)  ·  zoom mot pekaren"
-        );
-    }
-
-    #[test]
-    fn preparing_and_error_frames_do_not_show_the_profile_part() {
-        let mut preparing = small_tiff_frame(Status::Preparing {
-            since: Instant::now(),
-            indicator: true,
-        });
-        preparing.size = None;
-        preparing.profile_unusable = true;
-        let s = status_line(&preparing, true, 9);
-        assert!(s.contains("förbereder TIFF"), "{s}");
-        assert!(!s.contains(PROFILE_UNUSABLE_TEXT), "{s}");
-
-        let mut error = small_tiff_frame(Status::Error(DecodeError::new("boom")));
-        error.profile_unusable = true;
-        let s = status_line(&error, true, 9);
-        assert!(s.contains("kan inte visas"), "{s}");
-        assert!(!s.contains(PROFILE_UNUSABLE_TEXT), "{s}");
     }
 
     #[test]

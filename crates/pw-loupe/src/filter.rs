@@ -1,10 +1,9 @@
 //! The filter of a folder tab (ADR 0014 §2.1–§2.3, §4.1, §5.2): which images a rating and a set of
 //! labels (amendment 2, §14) let through, the visible list with the keep-current rule, the nearest
-//! visible image, and the Swedish texts of the drop-down lists. Plain Rust, no I/O (GR11).
+//! visible image; the texts of the drop-down lists are in `rating_text.rs` (T116). Plain Rust, no
+//! I/O (GR11).
 
 use pw_metadata::Rating;
-
-use crate::label_name;
 
 /// How a number of stars (`StarFilter::Stars`) is compared (ADR 0014 §2.1, amendment 1).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -87,7 +86,7 @@ impl LabelFilter {
     }
 
     /// The ticked choices, in `LABEL_CHOICES` order.
-    fn choices(&self) -> impl Iterator<Item = LabelChoice> + '_ {
+    pub(crate) fn choices(&self) -> impl Iterator<Item = LabelChoice> + '_ {
         LABEL_CHOICES
             .into_iter()
             .filter(|choice| self.contains(*choice))
@@ -204,36 +203,12 @@ pub const STAR_FILTERS: [StarFilter; 9] = [
     StarFilter::NotRejected,
 ];
 
-/// The text of a star choice. `Stars` outside 1–5 gives the text of the nearest valid value.
-pub fn star_filter_text(filter: StarFilter) -> &'static str {
-    match filter {
-        StarFilter::All => "Alla betyg",
-        StarFilter::Stars(0..=1) => "1 stjärna",
-        StarFilter::Stars(2) => "2 stjärnor",
-        StarFilter::Stars(3) => "3 stjärnor",
-        StarFilter::Stars(4) => "4 stjärnor",
-        StarFilter::Stars(_) => "5 stjärnor",
-        StarFilter::Unrated => "Ej betygsatt",
-        StarFilter::Rejected => "Avvisade",
-        StarFilter::NotRejected => "Alla utom avvisade",
-    }
-}
-
 /// The star conditions in the order of their drop-down list (ADR 0014 §5.2, amendment 1).
 pub const STAR_CONDITIONS: [StarCondition; 3] = [
     StarCondition::AtLeast,
     StarCondition::Exactly,
     StarCondition::AtMost,
 ];
-
-/// The text of a star condition.
-pub fn star_condition_text(condition: StarCondition) -> &'static str {
-    match condition {
-        StarCondition::AtLeast => "≥",
-        StarCondition::Exactly => "=",
-        StarCondition::AtMost => "≤",
-    }
-}
 
 /// The label choices in the order of the check boxes of the drop-down list (ADR 0014 §5.2,
 /// amendment 2): the five labels in `pw_metadata::LABELS` order, then no label.
@@ -246,28 +221,12 @@ pub const LABEL_CHOICES: [LabelChoice; 6] = [
     LabelChoice::NoLabel,
 ];
 
-/// The text of a label choice: the Swedish label name of `label_name`, or "Ingen etikett".
-pub fn label_choice_text(choice: LabelChoice) -> &'static str {
-    match choice {
-        LabelChoice::Label(label) => label_name(label),
-        LabelChoice::NoLabel => "Ingen etikett",
-    }
-}
-
-/// The text of the closed label list (ADR 0014 Q10): "Alla etiketter" for the empty set, the one
-/// name, two names joined with ", ", and "{n} etiketter" from three.
-pub fn label_filter_text(filter: &LabelFilter) -> String {
-    let names: Vec<&str> = filter.choices().map(label_choice_text).collect();
-    match names.len() {
-        0 => "Alla etiketter".to_owned(),
-        1 | 2 => names.join(", "),
-        n => format!("{n} etiketter"),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::rating_text::{
+        label_choice_text, label_filter_text, star_condition_text, star_filter_text,
+    };
 
     fn rating(stars: Option<i8>, label: Option<&str>) -> Rating {
         Rating {
@@ -524,24 +483,17 @@ mod tests {
         assert_eq!(
             texts,
             vec![
-                "Alla betyg",
-                "1 stjärna",
-                "2 stjärnor",
-                "3 stjärnor",
-                "4 stjärnor",
-                "5 stjärnor",
-                "Ej betygsatt",
-                "Avvisade",
-                "Alla utom avvisade",
+                "All ratings",
+                "1 star",
+                "2 stars",
+                "3 stars",
+                "4 stars",
+                "5 stars",
+                "Unrated",
+                "Rejected",
+                "All but rejected",
             ]
         );
-    }
-
-    #[test]
-    fn star_filter_text_outside_one_to_five_uses_the_nearest_valid_value() {
-        assert_eq!(star_filter_text(StarFilter::Stars(0)), "1 stjärna");
-        assert_eq!(star_filter_text(StarFilter::Stars(6)), "5 stjärnor");
-        assert_eq!(star_filter_text(StarFilter::Stars(u8::MAX)), "5 stjärnor");
     }
 
     /// Unrated, 1–5 stars and rejected.
@@ -709,14 +661,14 @@ mod tests {
         assert_eq!(labels, pw_metadata::LABELS);
         assert_eq!(LABEL_CHOICES.last(), Some(&LabelChoice::NoLabel));
 
-        assert_eq!(label_filter_text(&LabelFilter::all()), "Alla etiketter");
+        assert_eq!(label_filter_text(&LabelFilter::all()), "All labels");
         let texts: Vec<&str> = LABEL_CHOICES
             .iter()
             .map(|c| label_choice_text(*c))
             .collect();
         assert_eq!(
             texts,
-            vec!["Röd", "Gul", "Grön", "Blå", "Lila", "Ingen etikett"]
+            vec!["Red", "Yellow", "Green", "Blue", "Purple", "No label"]
         );
     }
 
@@ -871,23 +823,23 @@ mod tests {
 
     #[test]
     fn label_filter_text_for_zero_one_two_and_three_choices() {
-        assert_eq!(label_filter_text(&LabelFilter::all()), "Alla etiketter");
-        assert_eq!(label_filter_text(&set_of(&[RED])), "Röd");
+        assert_eq!(label_filter_text(&LabelFilter::all()), "All labels");
+        assert_eq!(label_filter_text(&set_of(&[RED])), "Red");
         assert_eq!(
             label_filter_text(&set_of(&[LabelChoice::NoLabel])),
-            "Ingen etikett"
+            "No label"
         );
         // Two names in list order, whatever order they were ticked in.
-        assert_eq!(label_filter_text(&set_of(&[GREEN, RED])), "Röd, Grön");
+        assert_eq!(label_filter_text(&set_of(&[GREEN, RED])), "Red, Green");
         assert_eq!(
             label_filter_text(&set_of(&[RED, LabelChoice::NoLabel])),
-            "Röd, Ingen etikett"
+            "Red, No label"
         );
         assert_eq!(
             label_filter_text(&set_of(&[RED, YELLOW, GREEN])),
-            "3 etiketter"
+            "3 labels"
         );
         let five: Vec<LabelChoice> = LABEL_CHOICES.into_iter().take(5).collect();
-        assert_eq!(label_filter_text(&set_of(&five)), "5 etiketter");
+        assert_eq!(label_filter_text(&set_of(&five)), "5 labels");
     }
 }

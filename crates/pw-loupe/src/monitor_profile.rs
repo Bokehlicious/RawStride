@@ -1,6 +1,7 @@
 //! The monitor profile (ADR 0016 §4.1 "Reading the monitor profile", §5, Q4): the ICC profile
-//! Windows associates with the primary monitor, read once at start, and the window title that names
-//! it. Without a usable profile the program shows its images as sRGB, as before (F3).
+//! Windows associates with the primary monitor, read once at start; the window title that names it
+//! is made in `shell_text.rs` (T116). Without a usable profile the program shows its images as
+//! sRGB, as before (F3).
 
 use std::path::PathBuf;
 
@@ -58,17 +59,6 @@ pub fn load_monitor_profile(path: Result<Option<PathBuf>, String>) -> MonitorPro
             }
         }
         Err(e) => unusable(format!("{}: {e}", path.display())),
-    }
-}
-
-/// The window title naming the monitor profile (ADR 0016 §5).
-pub fn window_title(source: &ProfileSource) -> String {
-    match source {
-        ProfileSource::File(name) => format!("RawStride  ·  Skärmprofil: {name}"),
-        ProfileSource::Missing => "RawStride  ·  Ingen skärmprofil – visas som sRGB".to_string(),
-        ProfileSource::Unusable(_) => {
-            "RawStride  ·  Skärmprofilen kunde inte användas – visas som sRGB".to_string()
-        }
     }
 }
 
@@ -170,7 +160,7 @@ mod tests {
     use moxcms::ColorProfile;
     use pw_colour::{Profile, Transform};
 
-    use super::{ProfileSource, load_monitor_profile, primary_monitor_profile_path, window_title};
+    use super::{ProfileSource, load_monitor_profile, primary_monitor_profile_path};
 
     /// A file in the temporary folder with the process id in its name, removed when dropped.
     struct TempFile(PathBuf);
@@ -257,24 +247,6 @@ mod tests {
         assert_eq!(
             load_monitor_profile(Err("x".to_string())).source,
             ProfileSource::Unusable("x".to_string())
-        );
-    }
-
-    #[test]
-    fn the_window_title_names_the_profile() {
-        assert_eq!(
-            window_title(&ProfileSource::File(
-                "CX240(…)08CAL (DP).icc".to_string()
-            )),
-            "RawStride  ·  Skärmprofil: CX240(…)08CAL (DP).icc"
-        );
-        assert_eq!(
-            window_title(&ProfileSource::Missing),
-            "RawStride  ·  Ingen skärmprofil – visas som sRGB"
-        );
-        assert_eq!(
-            window_title(&ProfileSource::Unusable("detail".to_string())),
-            "RawStride  ·  Skärmprofilen kunde inte användas – visas som sRGB"
         );
     }
 

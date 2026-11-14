@@ -365,7 +365,7 @@ mod tests {
             [1, 2]
         );
         assert_eq!(tab(&mut tabs).current, 1);
-        assert_eq!(status(tab(&mut tabs)), "1 / 2 (av 12)");
+        assert_eq!(status(tab(&mut tabs)), "1 / 2 (of 12)");
         assert_eq!(
             set(
                 &mut tabs,
@@ -392,7 +392,7 @@ mod tests {
         );
         assert_eq!(
             status(tab(&mut tabs)),
-            "Inga bilder matchar filtret (12 i mappen)"
+            "No images match the filter (12 in the folder)"
         );
         assert_eq!(
             tab(&mut tabs).current,
@@ -425,7 +425,7 @@ mod tests {
         assert_eq!(t.selection.count(), 4, "range 4 marked");
         assert_eq!(
             marked_text(t.selection.count()).as_deref(),
-            Some("4 markerade")
+            Some("4 marked")
         );
         t.click(10, true, false, true, &of(&ratings));
         assert_eq!(t.selection.count(), 5, "ctrl adds");

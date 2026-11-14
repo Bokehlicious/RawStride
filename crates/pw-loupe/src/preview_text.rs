@@ -28,28 +28,28 @@ pub enum PreviewText {
 pub fn preview_text(text: PreviewText) -> &'static str {
     match text {
         PreviewText::ZoomSection => "Zoom",
-        PreviewText::Fit => "Anpassa (F)",
-        PreviewText::ToggleZoom => "Anpassa ↔ 100 % (Z)",
-        PreviewText::ZoomIn => "Zooma in (+)",
-        PreviewText::ZoomOut => "Zooma ut (−)",
-        PreviewText::ZoomAtPointer => "Zooma vid pekaren (A)",
-        PreviewText::OnlyMarked => "Bara markerade (S)",
+        PreviewText::Fit => "Fit (F)",
+        PreviewText::ToggleZoom => "Fit ↔ 100% (Z)",
+        PreviewText::ZoomIn => "Zoom In (+)",
+        PreviewText::ZoomOut => "Zoom Out (−)",
+        PreviewText::ZoomAtPointer => "Zoom at Pointer (A)",
+        PreviewText::OnlyMarked => "Marked only (S)",
         PreviewText::OnlyMarkedHover => {
-            "Visa och stega bara mellan de markerade bilderna, när minst två är markerade."
+            "Show and step only between the marked images, when at least two are marked."
         }
-        PreviewText::CollapseColumn => "Fäll ihop kolumnen (I)",
-        PreviewText::ExpandColumn => "Visa kolumnen (I)",
+        PreviewText::CollapseColumn => "Collapse Column (I)",
+        PreviewText::ExpandColumn => "Show Column (I)",
     }
 }
 
-/// The zoom of the shown image in the Zoom section (U3-Q5): "Anpassad (34 %)" at fit (only
-/// "Anpassad" before the image's size is known), otherwise "100 %", "200 %". `scale` is the
+/// The zoom of the shown image in the Zoom section (U3-Q5): "Fit (34%)" at fit (only
+/// "Fit" before the image's size is known), otherwise "100%", "200%". `scale` is the
 /// effective scale with fit resolved (`Frame::scale`).
 pub fn zoom_value_text(zoom: Zoom, scale: Option<f64>) -> String {
     match (zoom, scale) {
-        (Zoom::Fit, Some(scale)) => format!("Anpassad ({:.0} %)", scale * 100.0),
-        (Zoom::Fit, None) => "Anpassad".to_owned(),
-        (Zoom::Scale(scale), _) => format!("{:.0} %", scale * 100.0),
+        (Zoom::Fit, Some(scale)) => format!("Fit ({:.0}%)", scale * 100.0),
+        (Zoom::Fit, None) => "Fit".to_owned(),
+        (Zoom::Scale(scale), _) => format!("{:.0}%", scale * 100.0),
     }
 }
 
@@ -61,18 +61,18 @@ mod tests {
     fn every_fixed_text_of_the_preview() {
         let texts = [
             (PreviewText::ZoomSection, "Zoom"),
-            (PreviewText::Fit, "Anpassa (F)"),
-            (PreviewText::ToggleZoom, "Anpassa ↔ 100 % (Z)"),
-            (PreviewText::ZoomIn, "Zooma in (+)"),
-            (PreviewText::ZoomOut, "Zooma ut (−)"),
-            (PreviewText::ZoomAtPointer, "Zooma vid pekaren (A)"),
-            (PreviewText::OnlyMarked, "Bara markerade (S)"),
+            (PreviewText::Fit, "Fit (F)"),
+            (PreviewText::ToggleZoom, "Fit ↔ 100% (Z)"),
+            (PreviewText::ZoomIn, "Zoom In (+)"),
+            (PreviewText::ZoomOut, "Zoom Out (−)"),
+            (PreviewText::ZoomAtPointer, "Zoom at Pointer (A)"),
+            (PreviewText::OnlyMarked, "Marked only (S)"),
             (
                 PreviewText::OnlyMarkedHover,
-                "Visa och stega bara mellan de markerade bilderna, när minst två är markerade.",
+                "Show and step only between the marked images, when at least two are marked.",
             ),
-            (PreviewText::CollapseColumn, "Fäll ihop kolumnen (I)"),
-            (PreviewText::ExpandColumn, "Visa kolumnen (I)"),
+            (PreviewText::CollapseColumn, "Collapse Column (I)"),
+            (PreviewText::ExpandColumn, "Show Column (I)"),
         ];
         for (text, expected) in texts {
             assert_eq!(preview_text(text), expected, "{text:?}");
@@ -81,10 +81,10 @@ mod tests {
 
     #[test]
     fn the_zoom_value_is_fitted_with_its_percent_or_a_percent() {
-        assert_eq!(zoom_value_text(Zoom::Fit, Some(0.3404)), "Anpassad (34 %)");
-        assert_eq!(zoom_value_text(Zoom::Fit, None), "Anpassad");
-        assert_eq!(zoom_value_text(Zoom::Scale(1.0), Some(1.0)), "100 %");
-        assert_eq!(zoom_value_text(Zoom::Scale(2.0), None), "200 %");
-        assert_eq!(zoom_value_text(Zoom::Scale(0.126), Some(0.126)), "13 %");
+        assert_eq!(zoom_value_text(Zoom::Fit, Some(0.3404)), "Fit (34%)");
+        assert_eq!(zoom_value_text(Zoom::Fit, None), "Fit");
+        assert_eq!(zoom_value_text(Zoom::Scale(1.0), Some(1.0)), "100%");
+        assert_eq!(zoom_value_text(Zoom::Scale(2.0), None), "200%");
+        assert_eq!(zoom_value_text(Zoom::Scale(0.126), Some(0.126)), "13%");
     }
 }

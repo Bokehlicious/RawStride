@@ -1,5 +1,6 @@
-//! Star ratings and colour labels in RawStride (ADR 0013): the key map, optimistic rating store,
-//! and Swedish rating texts. Plain Rust without I/O (GR11); drawing comes in step B3.
+//! Star ratings and colour labels in RawStride (ADR 0013): the key map and the optimistic rating
+//! store; their texts are in `rating_text.rs` (T116). Plain Rust without I/O (GR11); drawing comes
+//! in step B3.
 
 use std::collections::{HashMap, VecDeque};
 use std::fmt;
@@ -7,8 +8,9 @@ use std::path::{Path, PathBuf};
 
 use pw_metadata::{MetadataWorker, Rating, RequestId, SubmitError, supports_rating};
 
-/// The status-line message when a rating key is pressed on a file that cannot carry ratings.
-pub const UNSUPPORTED_TEXT: &str = "Betyg och etiketter kan inte sparas för den här filtypen.";
+use crate::rating_text::{
+    UNSUPPORTED_TEXT, failure_message, failures_text, path_resolution_text, worker_stopped_text,
+};
 
 /// A rating or label change requested by a keyboard shortcut.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -114,9 +116,7 @@ impl fmt::Display for RatingRefused {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Unsupported => formatter.write_str(UNSUPPORTED_TEXT),
-            Self::PathResolution(error) => {
-                write!(formatter, "Kunde inte slå upp bildens sökväg: {error}")
-            }
+            Self::PathResolution(error) => formatter.write_str(&path_resolution_text(error)),
         }
     }
 }
@@ -232,10 +232,7 @@ impl RatingStore {
         match self.failure_count {
             0 => None,
             1 => Some(failure_message(&last.name, &last.error)),
-            count => Some(format!(
-                "Kunde inte spara betyget för {count} bilder. Senast: {}: {}",
-                last.name, last.error
-            )),
+            count => Some(failures_text(count, &last.name, &last.error)),
         }
     }
 
@@ -283,11 +280,9 @@ impl RatingStore {
                 Err(SubmitError::QueueFull) => break,
                 Err(SubmitError::Stopped) => {
                     let _ = self.queued.pop_front();
-                    if let Some(message) = self.fail_write(
-                        &write.path,
-                        None,
-                        "metadataarbetaren har stannat".to_owned(),
-                    ) {
+                    if let Some(message) =
+                        self.fail_write(&write.path, None, worker_stopped_text().to_owned())
+                    {
                         failures.push(message);
                     }
                 }
@@ -385,11 +380,7 @@ impl RatingStore {
         ids.into_iter()
             .filter_map(|id| {
                 let write = self.sent.remove(&id)?;
-                self.fail_write(
-                    &write.path,
-                    Some(id),
-                    "metadataarbetaren har stannat".to_owned(),
-                )
+                self.fail_write(&write.path, Some(id), worker_stopped_text().to_owned())
             })
             .collect()
     }
@@ -426,11 +417,6 @@ impl RatingStore {
     }
 }
 
-/// The message for one failed write, as returned by `pump`, `written` and `fail_sent`.
-fn failure_message(name: &str, error: &str) -> String {
-    format!("Kunde inte spara betyget för {name}: {error}")
-}
-
 fn absolute_path(path: &Path) -> Result<PathBuf, RatingRefused> {
     if path.is_absolute() {
         Ok(path.to_path_buf())
@@ -441,53 +427,9 @@ fn absolute_path(path: &Path) -> Result<PathBuf, RatingRefused> {
     }
 }
 
-/// The Swedish name of an Adobe label name; an unknown label is returned as it is.
-pub fn label_name(label: &str) -> &str {
-    match label {
-        "Red" => "Röd",
-        "Yellow" => "Gul",
-        "Green" => "Grön",
-        "Blue" => "Blå",
-        "Purple" => "Lila",
-        other => other,
-    }
-}
-
-/// The status-line text of a rating, for example "Betyg: 3 stjärnor, Röd".
-pub fn status_text(rating: Option<&Rating>) -> String {
-    let stars = rating.and_then(|rating| rating.stars);
-    let mut text = match stars {
-        Some(-1) => "Betyg: Avvisad".to_owned(),
-        Some(1) => "Betyg: 1 stjärna".to_owned(),
-        Some(stars) if stars > 1 => format!("Betyg: {stars} stjärnor"),
-        _ => "Betyg: Ej betygsatt".to_owned(),
-    };
-    if let Some(label) = rating.and_then(|rating| rating.label.as_deref()) {
-        text.push_str(", ");
-        text.push_str(label_name(label));
-    }
-    text
-}
-
-/// The stars drawn under a thumbnail: "★★★••" for three stars, "✕" for rejected, nothing when
-/// unrated.
-pub fn star_glyphs(stars: Option<i8>) -> String {
-    match stars {
-        Some(-1) => "✕".to_owned(),
-        Some(stars @ 1..=5) => {
-            let filled = usize::from(stars.unsigned_abs());
-            format!("{}{}", "★".repeat(filled), "•".repeat(5 - filled))
-        }
-        _ => String::new(),
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{
-        RatingKey, RatingRefused, RatingStore, RatingWriter, UNSUPPORTED_TEXT, apply, label_name,
-        rating_key_action, star_glyphs, status_text,
-    };
+    use super::{RatingKey, RatingRefused, RatingStore, RatingWriter, apply, rating_key_action};
     use egui::Key as K;
     use pw_metadata::{Rating, RequestId, SubmitError};
     use std::collections::VecDeque;
@@ -708,68 +650,6 @@ mod tests {
         assert_eq!(apply(&starred, RatingKey::ClearLabel), starred);
     }
 
-    #[test]
-    fn swedish_label_names() {
-        for (label, name) in [
-            ("Red", "Röd"),
-            ("Yellow", "Gul"),
-            ("Green", "Grön"),
-            ("Blue", "Blå"),
-            ("Purple", "Lila"),
-            ("Orange", "Orange"),
-            ("", ""),
-        ] {
-            assert_eq!(label_name(label), name);
-        }
-        for label in pw_metadata::LABELS {
-            assert_ne!(label_name(label), *label, "{label} has a Swedish name");
-        }
-    }
-
-    #[test]
-    fn status_texts() {
-        for (value, text) in [
-            (None, "Betyg: Ej betygsatt"),
-            (Some(rating(None, None)), "Betyg: Ej betygsatt"),
-            (Some(rating(Some(-1), None)), "Betyg: Avvisad"),
-            (Some(rating(Some(1), None)), "Betyg: 1 stjärna"),
-            (Some(rating(Some(3), Some("Red"))), "Betyg: 3 stjärnor, Röd"),
-            (Some(rating(Some(5), None)), "Betyg: 5 stjärnor"),
-            (
-                Some(rating(Some(-1), Some("Yellow"))),
-                "Betyg: Avvisad, Gul",
-            ),
-            (Some(rating(None, Some("Blue"))), "Betyg: Ej betygsatt, Blå"),
-            (
-                Some(rating(None, Some("Orange"))),
-                "Betyg: Ej betygsatt, Orange",
-            ),
-        ] {
-            assert_eq!(status_text(value.as_ref()), text);
-        }
-    }
-
-    #[test]
-    fn star_glyphs_for_each_value() {
-        assert_eq!(star_glyphs(None), "");
-        assert_eq!(star_glyphs(Some(-1)), "✕");
-        assert_eq!(star_glyphs(Some(1)), "★••••");
-        assert_eq!(star_glyphs(Some(3)), "★★★••");
-        assert_eq!(star_glyphs(Some(5)), "★★★★★");
-        // Values that cannot come from the keys or `read_ratings` draw nothing instead of panicking.
-        assert_eq!(star_glyphs(Some(0)), "");
-        assert_eq!(star_glyphs(Some(6)), "");
-        assert_eq!(star_glyphs(Some(-2)), "");
-    }
-
-    #[test]
-    fn unsupported_text_is_swedish() {
-        assert_eq!(
-            UNSUPPORTED_TEXT,
-            "Betyg och etiketter kan inte sparas för den här filtypen."
-        );
-    }
-
     #[derive(Clone, Copy)]
     enum WriteResponse {
         Accept,
@@ -927,7 +807,7 @@ mod tests {
         assert_eq!(
             failures,
             [
-                "Kunde inte spara betyget för pw-loupe-rating-stopped.ARW: metadataarbetaren har stannat"
+                "Could not save the rating for pw-loupe-rating-stopped.ARW: metadata writing has stopped"
             ]
         );
     }
@@ -945,7 +825,9 @@ mod tests {
 
         assert_eq!(
             store.written(id, &path, Err("write failed".to_owned())),
-            Some("Kunde inte spara betyget för pw-loupe-rating-newer.ARW: write failed".to_owned())
+            Some(
+                "Could not save the rating for pw-loupe-rating-newer.ARW: write failed".to_owned()
+            )
         );
         assert_eq!(store.shown(&path), Some(&loaded_rating(3)));
     }
@@ -1376,26 +1258,26 @@ mod tests {
 
         assert_eq!(
             store.written(ids[0], &a, Err("fel A".to_owned())),
-            Some("Kunde inte spara betyget för pw-loupe-batch-failure-a.ARW: fel A".to_owned())
+            Some("Could not save the rating for pw-loupe-batch-failure-a.ARW: fel A".to_owned())
         );
         assert_eq!(
             store.failure_text().as_deref(),
-            Some("Kunde inte spara betyget för pw-loupe-batch-failure-a.ARW: fel A")
+            Some("Could not save the rating for pw-loupe-batch-failure-a.ARW: fel A")
         );
 
         // The per-write messages are unchanged; only `failure_text` sums them up.
         assert_eq!(
             store.written(ids[1], &b, Err("fel B".to_owned())),
-            Some("Kunde inte spara betyget för pw-loupe-batch-failure-b.ARW: fel B".to_owned())
+            Some("Could not save the rating for pw-loupe-batch-failure-b.ARW: fel B".to_owned())
         );
         assert_eq!(
             store.written(ids[2], &c, Err("fel C".to_owned())),
-            Some("Kunde inte spara betyget för pw-loupe-batch-failure-c.ARW: fel C".to_owned())
+            Some("Could not save the rating for pw-loupe-batch-failure-c.ARW: fel C".to_owned())
         );
         assert_eq!(
             store.failure_text().as_deref(),
             Some(
-                "Kunde inte spara betyget för 3 bilder. Senast: pw-loupe-batch-failure-c.ARW: fel C"
+                "Could not save the rating for 3 images. Last: pw-loupe-batch-failure-c.ARW: fel C"
             )
         );
 

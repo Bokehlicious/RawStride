@@ -11,8 +11,9 @@
 //!
 //! Text rule (owner, 2026-11-12): every text the user sees in the info panel is made here. Each
 //! text is a whole sentence built from one template with its values filled in, so another language
-//! can change the word order. Property names come only from [`property_label`], whose Swedish names
-//! (owner decision D11) are in the one table [`SV_LABELS`].
+//! can change the word order. Property names come only from [`property_label`]: English (glossary
+//! G1, G2; T117), with its exceptions in the one table [`EN_LABELS`]; the Swedish names of owner
+//! decision D11 stay in the one table [`SV_LABELS`] for a second language later.
 
 use std::path::Path;
 
@@ -27,7 +28,7 @@ use pw_metadata::value::{ConflictRule, LangAlt, Origin, StructValue, Value, Valu
 pub enum Language {
     /// Swedish: the names of D11, IPTC's English name for every other property.
     Sv,
-    /// English: IPTC's name from the property table.
+    /// English: IPTC's name from the property table, with the exceptions of glossary G1 and G2.
     En,
 }
 
@@ -75,16 +76,66 @@ const SV_LABELS: &[(&str, &str)] = &[
     ("photoshop:SupplementalCategories", "Tilläggskategorier"),
 ];
 
-/// The name of a property or structure field (owner, 2026-11-12):
-/// - `Sv`: the Swedish name of D11 for the properties and fields in its list, otherwise as `En`;
-/// - `En`: IPTC's name from the property table (`name` of the property, or of the field in its
-///   structure), otherwise the id.
+/// The English names that differ from the property table's name (glossary G1, G2; T117): the
+/// legacy properties without " (legacy)", the short contact fields, and the names of the
+/// properties that are not IPTC's or are deprecated. Keyed by XMP id.
+const EN_LABELS: &[(&str, &str)] = &[
+    ("Iptc4xmpCore:Location", "Sublocation"),
+    ("photoshop:City", "City"),
+    ("photoshop:State", "Province or State"),
+    ("photoshop:Country", "Country"),
+    ("Iptc4xmpCore:CountryCode", "Country Code"),
+    ("Iptc4xmpCore:IntellectualGenre", "Intellectual Genre"),
+    ("Iptc4xmpCore:SubjectCode", "Subject Code"),
+    ("Iptc4xmpCore:CiEmailWork", "Email"),
+    ("Iptc4xmpCore:CiTelWork", "Phone"),
+    ("Iptc4xmpCore:CiUrlWork", "Web URL"),
+    ("xmp:Rating", "Rating"),
+    ("xmpRights:Marked", "Copyrighted"),
+    ("xmp:Label", "Label"),
+    ("photoshop:Urgency", "Urgency"),
+    ("photoshop:Category", "Category"),
+    (
+        "photoshop:SupplementalCategories",
+        "Supplemental Categories",
+    ),
+];
+
+/// The properties and fields whose full IPTC name is shown as the tooltip of their shorter label
+/// (T117): the legacy properties and the contact fields.
+const FULL_NAME_TOOLTIPS: &[&str] = &[
+    "Iptc4xmpCore:Location",
+    "photoshop:City",
+    "photoshop:State",
+    "photoshop:Country",
+    "Iptc4xmpCore:CountryCode",
+    "Iptc4xmpCore:IntellectualGenre",
+    "Iptc4xmpCore:SubjectCode",
+    "Iptc4xmpCore:CiEmailWork",
+    "Iptc4xmpCore:CiTelWork",
+    "Iptc4xmpCore:CiUrlWork",
+];
+
+/// The name of a property or structure field (owner, 2026-11-12; T117):
+/// - `Sv`: the Swedish name of D11 for the properties and fields in its list, otherwise IPTC's
+///   name from the property table;
+/// - `En`: the name of [`EN_LABELS`] for the properties and fields in its list, otherwise IPTC's
+///   name from the property table;
+/// - IPTC's name is the `name` of the property, or of the field in its structure; an unknown id is
+///   its own name.
 pub fn property_label(xmp_id: &str, language: Language) -> String {
-    if language == Language::Sv
-        && let Some((_, label)) = SV_LABELS.iter().find(|(id, _)| *id == xmp_id)
-    {
+    let labels = match language {
+        Language::Sv => SV_LABELS,
+        Language::En => EN_LABELS,
+    };
+    if let Some((_, label)) = labels.iter().find(|(id, _)| *id == xmp_id) {
         return (*label).to_string();
     }
+    iptc_name(xmp_id)
+}
+
+/// IPTC's name of a property or structure field from the property table, otherwise the id.
+fn iptc_name(xmp_id: &str) -> String {
     if let Some(def) = properties::property(xmp_id) {
         return def.name.to_string();
     }
@@ -92,6 +143,17 @@ pub fn property_label(xmp_id: &str, language: Language) -> String {
         Some(name) => name.to_string(),
         None => xmp_id.to_string(),
     }
+}
+
+/// The tooltip of a property's English label in the metadata window: the full IPTC name of a
+/// legacy property or a contact field, whose label leaves part of it out (glossary G1; T117).
+/// `None` for every other property and field.
+pub fn property_tooltip(xmp_id: &str) -> Option<String> {
+    if !FULL_NAME_TOOLTIPS.contains(&xmp_id) {
+        return None;
+    }
+    let full = iptc_name(xmp_id);
+    (full != property_label(xmp_id, Language::En)).then_some(full)
 }
 
 /// The IPTC name of the structure field `xmp_id`, from the first structure (reached from the
@@ -127,8 +189,9 @@ fn field_name(xmp_id: &str) -> Option<&'static str> {
 }
 
 /// The text of a value: `Text` and `Number` as they are; a Lang Alt its shown text, with
-/// ` (<språk>)` when it is not `x-default` and ` +N språk` when it has N other entries; a list its
-/// entries joined with `; `; a date in XMP form; a structure `fält: värde` joined with `, `; a list
+/// ` (<language>)` when it is not `x-default` and ` +N languages` when it has N other entries; a
+/// list its entries joined with `; `; a date in XMP form; a structure `field: value` joined with
+/// `, `; a list
 /// of structures one structure per line.
 pub fn value_text(value: &Value) -> String {
     match value {
@@ -150,13 +213,15 @@ fn lang_alt_text(lang_alt: &LangAlt) -> String {
     let others = lang_alt.entries().len().saturating_sub(1);
     match (language, others) {
         (None, 0) => text.to_string(),
-        (None, n) => format!("{text} +{n} språk"),
+        (None, 1) => format!("{text} +1 language"),
+        (None, n) => format!("{text} +{n} languages"),
         (Some(language), 0) => format!("{text} ({language})"),
-        (Some(language), n) => format!("{text} ({language}) +{n} språk"),
+        (Some(language), 1) => format!("{text} ({language}) +1 language"),
+        (Some(language), n) => format!("{text} ({language}) +{n} languages"),
     }
 }
 
-/// A structure as `fält: värde` joined with `, `.
+/// A structure as `field: value` joined with `, `.
 fn struct_text(value: &StructValue) -> String {
     value
         .fields
@@ -164,7 +229,7 @@ fn struct_text(value: &StructValue) -> String {
         .map(|(id, field)| {
             format!(
                 "{label}: {text}",
-                label = property_label(id, Language::Sv),
+                label = property_label(id, Language::En),
                 text = value_text(field)
             )
         })
@@ -176,30 +241,30 @@ fn struct_text(value: &StructValue) -> String {
 pub fn origin_text(origin: Origin) -> &'static str {
     match origin {
         Origin::XmpEmbedded => "XMP",
-        Origin::XmpSidecar => "XMP-sidofil",
+        Origin::XmpSidecar => "XMP sidecar",
         Origin::Iim => "IIM",
         Origin::Exif => "Exif",
-        Origin::Edited => "Ändrad",
+        Origin::Edited => "Changed",
     }
 }
 
 /// The rule that decided a conflict (§5.1).
 pub fn rule_text(rule: ConflictRule) -> &'static str {
     match rule {
-        ConflictRule::Xmp => "XMP används",
-        ConflictRule::Iim => "IIM används (kontrollsumman stämmer inte)",
-        ConflictRule::Exif => "Exif används",
-        ConflictRule::Open => "Olöst: välj värde i redigeraren",
+        ConflictRule::Xmp => "XMP is used",
+        ConflictRule::Iim => "IIM is used (the checksum does not match)",
+        ConflictRule::Exif => "Exif is used",
+        ConflictRule::Open => "Unresolved: choose a value in the editor",
     }
 }
 
-/// Why a value was refused, in Swedish.
+/// Why a value was refused.
 fn refused_reason(error: &ValueError) -> &'static str {
     match error {
-        ValueError::Kind { .. } => "fel form",
-        ValueError::TooMany { .. } => "för många värden",
-        ValueError::Empty(_) => "tomt värde",
-        ValueError::UnknownProperty(_) => "okänt fält",
+        ValueError::Kind { .. } => "wrong form",
+        ValueError::TooMany { .. } => "too many values",
+        ValueError::Empty(_) => "empty value",
+        ValueError::UnknownProperty(_) => "unknown field",
     }
 }
 
@@ -243,7 +308,7 @@ fn value_rows(read: &MetadataRead, keep: impl Fn(&str) -> bool) -> Vec<ValueRow>
         .filter(|def| keep(def.xmp_id))
         .filter_map(|def| {
             metadata.get(def.xmp_id).map(|found| ValueRow {
-                label: property_label(def.xmp_id, Language::Sv),
+                label: property_label(def.xmp_id, Language::En),
                 value: value_text(&found.value),
                 origin: origin_text(found.origin).to_string(),
             })
@@ -265,7 +330,7 @@ pub fn info_panel(read: &MetadataRead) -> InfoPanel {
         .conflicts()
         .iter()
         .map(|conflict| ConflictRow {
-            label: property_label(&conflict.property, Language::Sv),
+            label: property_label(&conflict.property, Language::En),
             values: conflict
                 .values
                 .iter()
@@ -300,8 +365,8 @@ fn notices(read: &MetadataRead) -> Vec<String> {
             origin,
             error,
         } => Some(format!(
-            "{field} från {origin} lästes inte: {reason}",
-            field = property_label(property, Language::Sv),
+            "{field} from {origin} was not read: {reason}",
+            field = property_label(property, Language::En),
             origin = origin_text(*origin),
             reason = refused_reason(error)
         )),
@@ -311,8 +376,8 @@ fn notices(read: &MetadataRead) -> Vec<String> {
         Notice::HiddenByUser {
             property, value, ..
         } => Some(format!(
-            "{field}: kamerans värde {value} är dolt av användaren",
-            field = property_label(property, Language::Sv),
+            "{field}: the camera's value {value} is hidden by the user",
+            field = property_label(property, Language::En),
             value = value_text(value)
         )),
         _ => None,
@@ -323,15 +388,16 @@ fn notices(read: &MetadataRead) -> Vec<String> {
             origin,
             text,
         } => Some(format!(
-            "{field} från {origin} kunde inte läsas ({text})",
-            field = property_label(property, Language::Sv),
+            "{field} from {origin} could not be read ({text})",
+            field = property_label(property, Language::En),
             origin = origin_text(*origin)
         )),
         _ => None,
     }));
     if let Some(date) = &reconciled.suggested_date_created {
         out.push(format!(
-            "Förslag till Skapad från kameran: {date}",
+            "Suggested {field} from the camera: {date}",
+            field = property_label("photoshop:DateCreated", Language::En),
             date = date.to_xmp()
         ));
     }
@@ -339,10 +405,10 @@ fn notices(read: &MetadataRead) -> Vec<String> {
         match read.state.digest {
             IimDigest::Matches => {}
             IimDigest::Differs => out.push(
-                "IIM har ändrats av ett annat program efter XMP (kontrollsumman stämmer inte)"
+                "IIM has been changed by another program after XMP (the checksum does not match)"
                     .to_string(),
             ),
-            IimDigest::Missing => out.push("IIM saknar kontrollsumma".to_string()),
+            IimDigest::Missing => out.push("IIM has no checksum".to_string()),
         }
     }
     out
@@ -352,16 +418,16 @@ fn notices(read: &MetadataRead) -> Vec<String> {
 fn file_notice_text(notice: &FileNotice) -> String {
     match notice {
         FileNotice::ForeignSidecarIgnored(path) => format!(
-            "{file} bredvid DNG-filen används inte (skriven av ett annat program)",
+            "{file} next to the DNG file is not used (written by another program)",
             file = file_name(path)
         ),
         FileNotice::ExtSidecarIgnored(path) => format!(
-            "{file} läses inte (RawStride använder {base}.xmp)",
+            "{file} is not read (RawStride uses {base}.xmp)",
             file = file_name(path),
             base = base_name(path)
         ),
         FileNotice::IimBlockUnreadable(reason) => {
-            format!("IIM-blocket kunde inte läsas: {reason}")
+            format!("The IIM block could not be read: {reason}")
         }
     }
 }
@@ -370,16 +436,16 @@ fn file_notice_text(notice: &FileNotice) -> String {
 fn iim_notice_text(notice: &IimNotice) -> String {
     match notice {
         IimNotice::Converted { property } => format!(
-            "{field}: IIM-texten hade okänd teckenkodning och har konverterats",
-            field = property_label(property, Language::Sv)
+            "{field}: the IIM text had an unknown character encoding and has been converted",
+            field = property_label(property, Language::En)
         ),
         IimNotice::Repeated { property } => format!(
-            "{field}: fanns flera gånger i IIM, det första värdet används",
-            field = property_label(property, Language::Sv)
+            "{field}: appeared more than once in IIM; the first value is used",
+            field = property_label(property, Language::En)
         ),
         IimNotice::Unreadable { property, text } => format!(
-            "{field}: kunde inte läsas ({text})",
-            field = property_label(property, Language::Sv)
+            "{field}: could not be read ({text})",
+            field = property_label(property, Language::En)
         ),
     }
 }
@@ -422,14 +488,14 @@ pub enum PanelText {
 /// The text of a fixed text of the panel.
 pub fn panel_text(text: &PanelText) -> String {
     match text {
-        PanelText::Selected(1) => "1 bild markerad".to_string(),
-        PanelText::Selected(n) => format!("{n} bilder markerade"),
-        PanelText::NoneSelected => "Ingen bild vald".to_string(),
-        PanelText::Loading => "Läser metadata …".to_string(),
-        PanelText::ReadError(error) => format!("Metadata kunde inte läsas: {error}"),
+        PanelText::Selected(1) => "1 image marked".to_string(),
+        PanelText::Selected(n) => format!("{n} images marked"),
+        PanelText::NoneSelected => "No image selected".to_string(),
+        PanelText::Loading => "Reading metadata …".to_string(),
+        PanelText::ReadError(error) => format!("The metadata could not be read: {error}"),
         PanelText::Values => "Metadata".to_string(),
-        PanelText::Conflicts => "Konflikter".to_string(),
-        PanelText::Notices => "Meddelanden".to_string(),
+        PanelText::Conflicts => "Conflicts".to_string(),
+        PanelText::Notices => "Notices".to_string(),
     }
 }
 
@@ -562,7 +628,7 @@ mod tests {
         );
         assert_eq!(
             property_label("Iptc4xmpCore:CiEmailWork", Language::En),
-            "Email address(es)"
+            "Email"
         );
     }
 
@@ -606,7 +672,7 @@ mod tests {
         );
         assert_eq!(
             value_text(&lang_alt(&[("en-US", "Hello"), ("de", "Hallo")])),
-            "Hello (en-US) +1 språk"
+            "Hello (en-US) +1 language"
         );
     }
 
@@ -618,7 +684,7 @@ mod tests {
                 ("x-default", "Hej"),
                 ("de", "Hallo")
             ])),
-            "Hej +2 språk"
+            "Hej +2 languages"
         );
     }
 
@@ -657,7 +723,7 @@ mod tests {
         });
         assert_eq!(
             value_text(&contact),
-            "E-post: foto@example.com, Telefon: +46 8 123, City: Umeå"
+            "Email: foto@example.com, Phone: +46 8 123, City: Umeå"
         );
     }
 
@@ -676,23 +742,23 @@ mod tests {
     #[test]
     fn every_origin_text() {
         assert_eq!(origin_text(Origin::XmpEmbedded), "XMP");
-        assert_eq!(origin_text(Origin::XmpSidecar), "XMP-sidofil");
+        assert_eq!(origin_text(Origin::XmpSidecar), "XMP sidecar");
         assert_eq!(origin_text(Origin::Iim), "IIM");
         assert_eq!(origin_text(Origin::Exif), "Exif");
-        assert_eq!(origin_text(Origin::Edited), "Ändrad");
+        assert_eq!(origin_text(Origin::Edited), "Changed");
     }
 
     #[test]
     fn every_rule_text() {
-        assert_eq!(rule_text(ConflictRule::Xmp), "XMP används");
+        assert_eq!(rule_text(ConflictRule::Xmp), "XMP is used");
         assert_eq!(
             rule_text(ConflictRule::Iim),
-            "IIM används (kontrollsumman stämmer inte)"
+            "IIM is used (the checksum does not match)"
         );
-        assert_eq!(rule_text(ConflictRule::Exif), "Exif används");
+        assert_eq!(rule_text(ConflictRule::Exif), "Exif is used");
         assert_eq!(
             rule_text(ConflictRule::Open),
-            "Olöst: välj värde i redigeraren"
+            "Unresolved: choose a value in the editor"
         );
     }
 
@@ -724,29 +790,29 @@ mod tests {
             .map(|def| def.xmp_id)
             .filter(|id| ["dc:title", "photoshop:City", "dc:creator"].contains(id))
             .map(|id| match id {
-                "dc:title" => "Titel",
-                "photoshop:City" => "Stad",
-                _ => "Fotograf",
+                "dc:title" => "Title",
+                "photoshop:City" => "City",
+                _ => "Creator",
             })
             .collect();
         let labels: Vec<&str> = panel.values.iter().map(|row| row.label.as_str()).collect();
         assert_eq!(labels, expected_order);
-        assert_eq!(labels, ["Stad", "Fotograf", "Titel"]);
+        assert_eq!(labels, ["City", "Creator", "Title"]);
         assert_eq!(
             panel.values,
             [
                 ValueRow {
-                    label: "Stad".into(),
+                    label: "City".into(),
                     value: "Umeå".into(),
                     origin: "IIM".into(),
                 },
                 ValueRow {
-                    label: "Fotograf".into(),
+                    label: "Creator".into(),
                     value: "Anna".into(),
-                    origin: "XMP-sidofil".into(),
+                    origin: "XMP sidecar".into(),
                 },
                 ValueRow {
-                    label: "Titel".into(),
+                    label: "Title".into(),
                     value: "Älv".into(),
                     origin: "XMP".into(),
                 },
@@ -780,7 +846,7 @@ mod tests {
             panel.conflicts,
             [
                 ConflictRow {
-                    label: "Stad".into(),
+                    label: "City".into(),
                     values: vec![
                         ConflictValue {
                             value: "Umeå".into(),
@@ -791,11 +857,11 @@ mod tests {
                             origin: "IIM".into(),
                         },
                     ],
-                    rule: "IIM används (kontrollsumman stämmer inte)".into(),
+                    rule: "IIM is used (the checksum does not match)".into(),
                     open: false,
                 },
                 ConflictRow {
-                    label: "Beskrivning".into(),
+                    label: "Description".into(),
                     values: vec![
                         ConflictValue {
                             value: "A".into(),
@@ -806,7 +872,7 @@ mod tests {
                             origin: "Exif".into(),
                         },
                     ],
-                    rule: "Olöst: välj värde i redigeraren".into(),
+                    rule: "Unresolved: choose a value in the editor".into(),
                     open: true,
                 },
             ]
@@ -890,16 +956,16 @@ mod tests {
         // The rows of `info_panel` in the same (table) order, without the two properties.
         let expected: Vec<ValueRow> = all
             .iter()
-            .filter(|row| row.label != "Titel" && row.label != "Fotograf")
+            .filter(|row| row.label != "Title" && row.label != "Creator")
             .cloned()
             .collect();
         assert_eq!(rows, expected);
         assert_eq!(rows.len(), all.len() - 2);
         let labels: Vec<&str> = rows.iter().map(|row| row.label.as_str()).collect();
-        assert!(!labels.contains(&"Titel"));
-        assert!(!labels.contains(&"Fotograf"));
-        assert!(labels.contains(&"Stad"));
-        assert!(labels.contains(&"Rubrik"));
+        assert!(!labels.contains(&"Title"));
+        assert!(!labels.contains(&"Creator"));
+        assert!(labels.contains(&"City"));
+        assert!(labels.contains(&"Headline"));
         // Nothing left out: the same as the panel's values.
         assert_eq!(other_values(&read, &[]), all);
     }
@@ -907,7 +973,7 @@ mod tests {
     #[test]
     fn other_values_keep_the_contact_info_when_it_is_not_left_out() {
         let read = read_for_other_values();
-        let contact = property_label("Iptc4xmpCore:CreatorContactInfo", Language::Sv);
+        let contact = property_label("Iptc4xmpCore:CreatorContactInfo", Language::En);
 
         // The window leaves out the editor's properties but not the contact structure, whose
         // address fields are not editor fields.
@@ -983,20 +1049,20 @@ mod tests {
         assert_eq!(
             info_panel(&read).notices,
             [
-                "IMG_1.xmp bredvid DNG-filen används inte (skriven av ett annat program)",
-                "DSC01234.ARW.xmp läses inte (RawStride använder DSC01234.xmp)",
-                "IIM-blocket kunde inte läsas: datasetet är för kort",
-                "Stad: IIM-texten hade okänd teckenkodning och har konverterats",
-                "Rubrik: fanns flera gånger i IIM, det första värdet används",
-                "Prioritet: kunde inte läsas (x)",
-                "Stad från XMP-sidofil lästes inte: fel form",
-                "Licensgivare från XMP lästes inte: för många värden",
-                "Titel från IIM lästes inte: tomt värde",
-                "foo:Bar från Exif lästes inte: okänt fält",
-                "Fotograf: kamerans värde Kamera Ägare är dolt av användaren",
-                "Skapad från Exif kunde inte läsas (2026:13:04 10:15:30)",
-                "Förslag till Skapad från kameran: 2026-11-12T10:15:30",
-                "IIM har ändrats av ett annat program efter XMP (kontrollsumman stämmer inte)",
+                "IMG_1.xmp next to the DNG file is not used (written by another program)",
+                "DSC01234.ARW.xmp is not read (RawStride uses DSC01234.xmp)",
+                "The IIM block could not be read: datasetet är för kort",
+                "City: the IIM text had an unknown character encoding and has been converted",
+                "Headline: appeared more than once in IIM; the first value is used",
+                "Urgency: could not be read (x)",
+                "City from XMP sidecar was not read: wrong form",
+                "Licensor from XMP was not read: too many values",
+                "Title from IIM was not read: empty value",
+                "foo:Bar from Exif was not read: unknown field",
+                "Creator: the camera's value Kamera Ägare is hidden by the user",
+                "Date Created from Exif could not be read (2026:13:04 10:15:30)",
+                "Suggested Date Created from the camera: 2026-11-12T10:15:30",
+                "IIM has been changed by another program after XMP (the checksum does not match)",
             ]
         );
     }
@@ -1007,11 +1073,11 @@ mod tests {
         read.state = state(true, IimDigest::Matches);
         assert!(info_panel(&read).notices.is_empty());
         read.state = state(true, IimDigest::Missing);
-        assert_eq!(info_panel(&read).notices, ["IIM saknar kontrollsumma"]);
+        assert_eq!(info_panel(&read).notices, ["IIM has no checksum"]);
         read.state = state(true, IimDigest::Differs);
         assert_eq!(
             info_panel(&read).notices,
-            ["IIM har ändrats av ett annat program efter XMP (kontrollsumman stämmer inte)"]
+            ["IIM has been changed by another program after XMP (the checksum does not match)"]
         );
     }
 
@@ -1028,16 +1094,350 @@ mod tests {
 
     #[test]
     fn every_panel_text() {
-        assert_eq!(panel_text(&PanelText::Selected(3)), "3 bilder markerade");
-        assert_eq!(panel_text(&PanelText::Selected(1)), "1 bild markerad");
-        assert_eq!(panel_text(&PanelText::NoneSelected), "Ingen bild vald");
-        assert_eq!(panel_text(&PanelText::Loading), "Läser metadata …");
+        assert_eq!(panel_text(&PanelText::Selected(3)), "3 images marked");
+        assert_eq!(panel_text(&PanelText::Selected(1)), "1 image marked");
+        assert_eq!(panel_text(&PanelText::NoneSelected), "No image selected");
+        assert_eq!(panel_text(&PanelText::Loading), "Reading metadata …");
         assert_eq!(
             panel_text(&PanelText::ReadError("ExifTool svarade inte".into())),
-            "Metadata kunde inte läsas: ExifTool svarade inte"
+            "The metadata could not be read: ExifTool svarade inte"
         );
         assert_eq!(panel_text(&PanelText::Values), "Metadata");
-        assert_eq!(panel_text(&PanelText::Conflicts), "Konflikter");
-        assert_eq!(panel_text(&PanelText::Notices), "Meddelanden");
+        assert_eq!(panel_text(&PanelText::Conflicts), "Conflicts");
+        assert_eq!(panel_text(&PanelText::Notices), "Notices");
+    }
+
+    // --- English property names (T117, glossary G1 and G2) ---
+
+    #[test]
+    fn english_label_of_a_plain_iptc_property_is_its_iptc_name() {
+        assert_eq!(property_label("dc:title", Language::En), "Title");
+    }
+
+    #[test]
+    fn english_label_of_sublocation_leaves_out_legacy() {
+        assert_eq!(
+            property_label("Iptc4xmpCore:Location", Language::En),
+            "Sublocation"
+        );
+    }
+
+    #[test]
+    fn english_label_of_city_leaves_out_legacy() {
+        assert_eq!(property_label("photoshop:City", Language::En), "City");
+    }
+
+    #[test]
+    fn english_label_of_province_or_state_leaves_out_legacy() {
+        assert_eq!(
+            property_label("photoshop:State", Language::En),
+            "Province or State"
+        );
+    }
+
+    #[test]
+    fn english_label_of_country_leaves_out_legacy() {
+        assert_eq!(property_label("photoshop:Country", Language::En), "Country");
+    }
+
+    #[test]
+    fn english_label_of_country_code_leaves_out_legacy() {
+        assert_eq!(
+            property_label("Iptc4xmpCore:CountryCode", Language::En),
+            "Country Code"
+        );
+    }
+
+    #[test]
+    fn english_label_of_the_email_field_is_email() {
+        assert_eq!(
+            property_label("Iptc4xmpCore:CiEmailWork", Language::En),
+            "Email"
+        );
+    }
+
+    #[test]
+    fn english_label_of_the_phone_field_is_phone() {
+        assert_eq!(
+            property_label("Iptc4xmpCore:CiTelWork", Language::En),
+            "Phone"
+        );
+    }
+
+    #[test]
+    fn english_label_of_the_web_field_is_web_url() {
+        assert_eq!(
+            property_label("Iptc4xmpCore:CiUrlWork", Language::En),
+            "Web URL"
+        );
+    }
+
+    #[test]
+    fn english_label_of_xmp_rating_is_rating() {
+        assert_eq!(property_label("xmp:Rating", Language::En), "Rating");
+    }
+
+    #[test]
+    fn english_label_of_xmp_rights_marked_is_copyrighted() {
+        assert_eq!(
+            property_label("xmpRights:Marked", Language::En),
+            "Copyrighted"
+        );
+    }
+
+    #[test]
+    fn english_label_of_xmp_label_is_label() {
+        assert_eq!(property_label("xmp:Label", Language::En), "Label");
+    }
+
+    #[test]
+    fn english_label_of_urgency_is_urgency() {
+        assert_eq!(property_label("photoshop:Urgency", Language::En), "Urgency");
+    }
+
+    #[test]
+    fn english_label_of_category_is_category() {
+        assert_eq!(
+            property_label("photoshop:Category", Language::En),
+            "Category"
+        );
+    }
+
+    #[test]
+    fn english_label_of_supplemental_categories_is_supplemental_categories() {
+        assert_eq!(
+            property_label("photoshop:SupplementalCategories", Language::En),
+            "Supplemental Categories"
+        );
+    }
+
+    #[test]
+    fn the_swedish_labels_of_the_english_exceptions_are_unchanged() {
+        for (id, swedish) in [
+            ("Iptc4xmpCore:Location", "Plats"),
+            ("photoshop:City", "Stad"),
+            ("Iptc4xmpCore:CiEmailWork", "E-post"),
+            ("xmp:Rating", "Betyg"),
+            ("xmpRights:Marked", "Upphovsrättsskyddad"),
+            ("photoshop:Urgency", "Prioritet"),
+        ] {
+            assert_eq!(property_label(id, Language::Sv), swedish, "{id}");
+        }
+    }
+
+    #[test]
+    fn the_tooltip_is_the_full_iptc_name_of_a_legacy_property_or_a_contact_field() {
+        for (id, full) in [
+            ("Iptc4xmpCore:Location", "Sublocation (legacy)"),
+            ("photoshop:City", "City (legacy)"),
+            ("photoshop:State", "Province or State (legacy)"),
+            ("photoshop:Country", "Country (legacy)"),
+            ("Iptc4xmpCore:CountryCode", "Country Code (legacy)"),
+            ("Iptc4xmpCore:CiEmailWork", "Email address(es)"),
+            ("Iptc4xmpCore:CiTelWork", "Phone number(s)"),
+            ("Iptc4xmpCore:CiUrlWork", "Web URL(s)"),
+        ] {
+            assert_eq!(property_tooltip(id).as_deref(), Some(full), "{id}");
+        }
+        for id in ["dc:title", "xmp:Rating", "xmpRights:Marked", "foo:Bar"] {
+            assert_eq!(property_tooltip(id), None, "{id}");
+        }
+    }
+
+    /// Glossary G1 leaves " (legacy)" out of every English label, also of the two legacy
+    /// properties T117's task text did not name (reviewer, 2026-11-14); the full name is the
+    /// tooltip.
+    #[test]
+    fn no_english_label_says_legacy() {
+        for def in properties::properties() {
+            let label = property_label(def.xmp_id, Language::En);
+            assert!(!label.contains("(legacy)"), "{}: {label}", def.xmp_id);
+        }
+        for (id, label, full) in [
+            (
+                "Iptc4xmpCore:IntellectualGenre",
+                "Intellectual Genre",
+                "Intellectual Genre (legacy)",
+            ),
+            (
+                "Iptc4xmpCore:SubjectCode",
+                "Subject Code",
+                "Subject Code (legacy)",
+            ),
+        ] {
+            assert_eq!(property_label(id, Language::En), label, "{id}");
+            assert_eq!(property_tooltip(id).as_deref(), Some(full), "{id}");
+        }
+    }
+
+    #[test]
+    fn every_english_label_is_a_known_property_or_field() {
+        for (id, _) in EN_LABELS {
+            assert!(
+                properties::property(id).is_some() || field_name(id).is_some(),
+                "{id} is not in the property table"
+            );
+        }
+    }
+
+    // --- no Swedish letters in the text modules (T117) ---
+
+    /// The text modules of `pw-loupe` (rule 13), with their sources.
+    const TEXT_MODULES: [(&str, &str); 8] = [
+        ("shell_text.rs", include_str!("shell_text.rs")),
+        ("import_text.rs", include_str!("import_text.rs")),
+        ("loupe_text.rs", include_str!("loupe_text.rs")),
+        ("rating_text.rs", include_str!("rating_text.rs")),
+        ("inspector_text.rs", include_str!("inspector_text.rs")),
+        ("preview_text.rs", include_str!("preview_text.rs")),
+        ("info_panel.rs", include_str!("info_panel.rs")),
+        ("editor.rs", include_str!("editor.rs")),
+    ];
+
+    /// The letters that only a Swedish text has.
+    const SWEDISH_LETTERS: [char; 6] = ['å', 'ä', 'ö', 'Å', 'Ä', 'Ö'];
+
+    /// The places in `source` (before its `#[cfg(test)]` module) where a string literal holds a
+    /// Swedish letter, as "file:line"; comments, character literals and lifetimes are skipped, and
+    /// so are the lines of `SV_LABELS` in `info_panel.rs`.
+    fn swedish_letters_in_literals(file: &str, source: &str) -> Vec<String> {
+        let code = source
+            .split("\n#[cfg(test)]\nmod tests")
+            .next()
+            .unwrap_or(source);
+        // The lines of the table `SV_LABELS`, from its first line to its closing `];`.
+        let mut skipped = std::ops::Range::default();
+        if file == "info_panel.rs" {
+            let lines: Vec<&str> = code.lines().collect();
+            if let Some(start) = lines
+                .iter()
+                .position(|line| line.starts_with("const SV_LABELS"))
+                && let Some(length) = lines[start..].iter().position(|line| *line == "];")
+            {
+                skipped = start + 1..start + length + 2;
+            }
+        }
+        let chars: Vec<char> = code.chars().collect();
+        let mut found = Vec::new();
+        let mut line = 1;
+        let mut at = 0;
+        // Moves past `chars[at]`, counting lines.
+        let step = |at: &mut usize, line: &mut usize| {
+            if chars[*at] == '\n' {
+                *line += 1;
+            }
+            *at += 1;
+        };
+        while at < chars.len() {
+            match chars[at] {
+                '/' if chars.get(at + 1) == Some(&'/') => {
+                    while at < chars.len() && chars[at] != '\n' {
+                        step(&mut at, &mut line);
+                    }
+                }
+                '/' if chars.get(at + 1) == Some(&'*') => {
+                    while at < chars.len() && !(chars[at] == '*' && chars.get(at + 1) == Some(&'/'))
+                    {
+                        step(&mut at, &mut line);
+                    }
+                    at += 2;
+                }
+                '\'' if chars.get(at + 1) == Some(&'\\') => {
+                    // An escaped character literal: up to its closing quote.
+                    at += 2;
+                    while at < chars.len() && chars[at] != '\'' {
+                        at += 1;
+                    }
+                    at += 1;
+                }
+                '\'' if chars.get(at + 2) == Some(&'\'') => at += 3,
+                // A raw string `r"…"` or `r#"…"#`: no escapes inside.
+                'r' if matches!(chars.get(at + 1), Some('"') | Some('#'))
+                    && !chars
+                        .get(at.wrapping_sub(1))
+                        .is_some_and(|c| c.is_alphanumeric() || *c == '_') =>
+                {
+                    let mut hashes = 0;
+                    at += 1;
+                    while chars.get(at) == Some(&'#') {
+                        hashes += 1;
+                        at += 1;
+                    }
+                    if chars.get(at) != Some(&'"') {
+                        continue;
+                    }
+                    at += 1;
+                    loop {
+                        if at >= chars.len() {
+                            break;
+                        }
+                        if chars[at] == '"' && (1..=hashes).all(|n| chars.get(at + n) == Some(&'#'))
+                        {
+                            at += 1 + hashes;
+                            break;
+                        }
+                        if SWEDISH_LETTERS.contains(&chars[at]) && !skipped.contains(&line) {
+                            found.push(format!("{file}:{line}"));
+                        }
+                        step(&mut at, &mut line);
+                    }
+                }
+                '"' => {
+                    at += 1;
+                    while at < chars.len() && chars[at] != '"' {
+                        if chars[at] == '\\' {
+                            step(&mut at, &mut line);
+                        } else if SWEDISH_LETTERS.contains(&chars[at]) && !skipped.contains(&line) {
+                            found.push(format!("{file}:{line}"));
+                        }
+                        if at < chars.len() {
+                            step(&mut at, &mut line);
+                        }
+                    }
+                    at += 1;
+                }
+                _ => step(&mut at, &mut line),
+            }
+        }
+        found.dedup();
+        found
+    }
+
+    #[test]
+    fn the_check_finds_a_swedish_letter_in_a_string_literal() {
+        let source = "// \"Stäng\" in a comment\n\
+                      fn a() -> &'static str {\n\
+                      let c = 'ä';\n\
+                      \"Close\"\n\
+                      }\n\
+                      fn b() -> String { format!(\"Öppna {x}\") }\n\
+                      const R: &str = r#\"Mål\"#;\n\
+                      #[cfg(test)]\nmod tests {\n    \"Avbryt\";\n}\n";
+        assert_eq!(
+            swedish_letters_in_literals("x.rs", source),
+            ["x.rs:6", "x.rs:7"]
+        );
+        let table = "const SV_LABELS: &[(&str, &str)] = &[\n    (\"a\", \"Källa\"),\n];\n\
+                     const B: &str = \"Källa\";\n";
+        assert_eq!(
+            swedish_letters_in_literals("info_panel.rs", table),
+            ["info_panel.rs:4"]
+        );
+        assert_eq!(
+            swedish_letters_in_literals("other.rs", table),
+            ["other.rs:2", "other.rs:4"]
+        );
+    }
+
+    #[test]
+    fn the_text_modules_hold_no_swedish_letters_in_their_string_literals() {
+        let found: Vec<String> = TEXT_MODULES
+            .iter()
+            .flat_map(|(file, source)| swedish_letters_in_literals(file, source))
+            .collect();
+        assert!(
+            found.is_empty(),
+            "string literals with a Swedish letter: {found:?}"
+        );
     }
 }

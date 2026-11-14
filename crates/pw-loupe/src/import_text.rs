@@ -1,57 +1,273 @@
-use crate::{ImportDone, ItemAction, Preview, PreviewLine};
+//! The texts of the import (ADR 0010, T116, rule 13): the dialog, its preview and progress, the
+//! finished import, the template's field and mode names, the Clear confirmation and the messages
+//! of the import worker. The drawing code in `main.rs` holds none of them.
+
+use crate::{ImportDone, IptcField, ItemAction, Preview, PreviewLine};
 use pw_core::format_bytes;
+use pw_metadata::template::Mode;
+use pw_metadata::{MIN_EXIFTOOL_VERSION, ToolVersion};
 use std::path::Path;
 
-/// Returns the Swedish preview summary as in the Tauri app.
+/// A fixed text of the import dialog and of the import's messages (moved from `main.rs`,
+/// `import_dialog.rs` and `import_worker.rs`, T116).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ImportText {
+    /// The dialog's title.
+    Title,
+    /// The source folder's label.
+    Source,
+    /// The destination folder's label.
+    Destination,
+    /// The backup check box.
+    Backup,
+    /// The button that opens a folder dialog.
+    Choose,
+    /// The folder dialog's title for the source.
+    ChooseSource,
+    /// The folder dialog's title for the destination.
+    ChooseDestination,
+    /// The folder dialog's title for the backup.
+    ChooseBackup,
+    /// The folder template's label.
+    FolderTemplate,
+    /// The file-name template's label.
+    NameTemplate,
+    /// The job's label.
+    Job,
+    /// The first sequence number's label.
+    FirstNumber,
+    /// The list of the templates' variables.
+    Variables,
+    /// The heading of the IPTC template's fields.
+    IptcTemplate,
+    /// The placeholder of the copyright field.
+    CopyrightHint,
+    /// The note under the IPTC template's fields.
+    IptcNote,
+    /// The check box that ejects the card after the import.
+    Eject,
+    /// The preview's label.
+    Preview,
+    /// The button that scans the source again.
+    Rescan,
+    /// Shown while the preview is made.
+    Previewing,
+    /// The progress bar's text before the first progress.
+    Importing,
+    /// The button that cancels a running import.
+    Cancel,
+    /// The button that hides the dialog while the import runs.
+    Hide,
+    /// The button that starts a new import after one finished.
+    NewImport,
+    /// The button that closes the dialog.
+    Close,
+    /// The button that starts the import.
+    Start,
+    /// The import worker's queue is full.
+    QueueFull,
+    /// The import worker has stopped (a request could not be sent).
+    WorkerStopped,
+    /// The preview or the import ended because the worker stopped (`import_dialog.rs`).
+    StoppedMessage,
+    /// The card was not ejected because the import was not complete.
+    EjectSkipped,
+}
+
+/// The text of `text`.
+pub fn import_text(text: ImportText) -> &'static str {
+    match text {
+        ImportText::Title => "Import",
+        ImportText::Source => "Source",
+        ImportText::Destination => "Destination",
+        ImportText::Backup => "Backup",
+        ImportText::Choose => "Choose…",
+        ImportText::ChooseSource => "Choose Source",
+        ImportText::ChooseDestination => "Choose Destination",
+        ImportText::ChooseBackup => "Choose Backup Destination",
+        ImportText::FolderTemplate => "Folder Template",
+        ImportText::NameTemplate => "File Name Template",
+        ImportText::Job => "Job",
+        ImportText::FirstNumber => "First Number",
+        ImportText::Variables => {
+            "Variables: {year} {year2} {month} {day} {hour} {minute} {second} \
+             {date} {time} {make} {model} {name} {seq} {seq:4} {job}"
+        }
+        ImportText::IptcTemplate => "IPTC Template",
+        ImportText::CopyrightHint => "© 2026 Name",
+        ImportText::IptcNote => {
+            "Written to the .xmp sidecar for RAW and into DNG/JPG/TIF. \
+             Empty fields are left untouched."
+        }
+        ImportText::Eject => {
+            "Eject the card when the import is done (nothing is deleted from the card)"
+        }
+        ImportText::Preview => "Preview",
+        ImportText::Rescan => "Search Again",
+        ImportText::Previewing => "Previewing …",
+        ImportText::Importing => "Importing …",
+        ImportText::Cancel => "Cancel",
+        ImportText::Hide => "Hide",
+        ImportText::NewImport => "New Import",
+        ImportText::Close => "Close",
+        ImportText::Start => "Start Import",
+        ImportText::QueueFull => "The import queue is full.",
+        ImportText::WorkerStopped => "Import has stopped.",
+        ImportText::StoppedMessage => "The import stopped before it was finished.",
+        ImportText::EjectSkipped => "The card was not ejected because the import was not complete.",
+    }
+}
+
+/// The status-line text of an import that runs hidden: the files copied of all.
+pub fn hidden_progress_text(files_done: usize, files_total: usize) -> String {
+    format!("Importing {files_done} / {files_total}")
+}
+
+/// The status-line text of a hidden import that has finished or was cancelled.
+pub fn hidden_done_text(copied: usize, cancelled: bool) -> String {
+    match (cancelled, copied) {
+        (true, 1) => "Import cancelled: 1 file".to_owned(),
+        (true, _) => format!("Import cancelled: {copied} files"),
+        (false, 1) => "Import done: 1 file".to_owned(),
+        (false, _) => format!("Import done: {copied} files"),
+    }
+}
+
+/// The error of a folder template that cannot be parsed.
+pub fn folder_template_error_text(error: &str) -> String {
+    format!("Folder Template: {error}")
+}
+
+/// The error of a file-name template that cannot be parsed.
+pub fn name_template_error_text(error: &str) -> String {
+    format!("File Name Template: {error}")
+}
+
+/// The error when the source cannot be scanned.
+pub fn scan_error_text(source: &Path, error: &str) -> String {
+    format!("Could not read {}: {error}", source.display())
+}
+
+/// The line listed for the ingest template when the started ExifTool is older than
+/// [`MIN_EXIFTOOL_VERSION`]; nothing is written (ADR 0007 §11, D9, T101).
+pub fn exiftool_too_old_text(file: &str, version: ToolVersion) -> String {
+    format!("{file}: ExifTool {version} is too old (at least {MIN_EXIFTOOL_VERSION} is needed)")
+}
+
+/// The line listed for the ingest template when no ExifTool is at hand to write it.
+pub fn exiftool_unavailable_text(file: &str) -> String {
+    format!("{file}: ExifTool is not available")
+}
+
+impl IptcField {
+    /// The field's label in the dialog.
+    pub fn label(self) -> &'static str {
+        match self {
+            IptcField::Creator => "Creator",
+            IptcField::Copyright => "Copyright Notice",
+            IptcField::Credit => "Credit Line",
+            IptcField::Email => "Email",
+            IptcField::Phone => "Phone",
+            IptcField::Url => "Web URL",
+        }
+    }
+}
+
+/// The name of a mode in the dialog (D13).
+pub fn mode_text(mode: Mode) -> &'static str {
+    match mode {
+        Mode::Keep => "Keep",
+        Mode::Replace => "Replace",
+        Mode::Append => "Append",
+        Mode::Prefix => "Prefix",
+        Mode::Clear => "Clear",
+    }
+}
+
+/// The text of the window that asks before an import with cleared fields (D14): one line per
+/// field with its label.
+pub fn clear_confirmation_text(fields: &[IptcField]) -> String {
+    let labels = fields
+        .iter()
+        .map(|field| field.label())
+        .collect::<Vec<_>>()
+        .join("\n");
+    format!("The template clears these fields in every imported image:\n{labels}")
+}
+
+/// The title of the window that asks before an import with cleared fields (D14).
+pub fn clear_confirmation_title() -> &'static str {
+    "Clear Fields?"
+}
+
+/// The button of that window that starts the import (D14).
+pub fn clear_and_import_text() -> &'static str {
+    "Clear and Import"
+}
+
+/// The button of that window that goes back to the dialog without starting anything (D14).
+pub fn clear_cancel_text() -> &'static str {
+    "Cancel"
+}
+
+/// Returns the preview summary as in the Tauri app.
 pub fn preview_summary(p: &Preview) -> String {
     if p.shots == 0 {
-        return "Inga bilder hittades i källan.".to_string();
+        return "No images were found in the source.".to_string();
     }
+    let bytes = format_bytes(p.bytes_to_copy);
     let mut parts = vec![
-        format!("{} bilder", p.shots),
-        format!(
-            "{} filer att kopiera ({})",
-            p.files_to_copy,
-            format_bytes(p.bytes_to_copy)
-        ),
+        match p.shots {
+            1 => "1 image".to_string(),
+            shots => format!("{shots} images"),
+        },
+        match p.files_to_copy {
+            1 => format!("1 file to copy ({bytes})"),
+            files => format!("{files} files to copy ({bytes})"),
+        },
     ];
-    if p.present > 0 {
-        parts.push(format!("{} finns redan", p.present));
+    match p.present {
+        0 => {}
+        1 => parts.push("1 already exists".to_string()),
+        present => parts.push(format!("{present} already exist")),
     }
     if p.renamed > 0 {
-        parts.push(format!("{} får nytt namn pga namnkrock", p.renamed));
+        parts.push(format!("{} renamed because of a name conflict", p.renamed));
     }
     if p.no_exif > 0 {
-        parts.push(format!("{} utan EXIF-datum (fildatum används)", p.no_exif));
+        parts.push(format!(
+            "{} without an EXIF date (the file date is used)",
+            p.no_exif
+        ));
     }
     parts.join(" · ")
 }
 
-/// Returns one Swedish line for the preview plan.
+/// Returns one line for the preview plan.
 pub fn preview_line(line: &PreviewLine) -> String {
     let mut text = format!("{}  →  {}", line.source_name, line.rel);
     match line.action {
-        ItemAction::Renamed => text.push_str("  (namnkrock)"),
-        ItemAction::Present => text.push_str("  (finns redan)"),
-        ItemAction::BackupOnly => text.push_str("  (bara backup)"),
+        ItemAction::Renamed => text.push_str("  (name conflict)"),
+        ItemAction::Present => text.push_str("  (already exists)"),
+        ItemAction::BackupOnly => text.push_str("  (backup only)"),
         ItemAction::Copy => {}
     }
     text
 }
 
-/// Returns the Swedish "and {n} more" line if applicable.
+/// Returns the "and {n} more" line if applicable.
 pub fn more_lines(p: &Preview) -> Option<String> {
     if p.items_total > p.lines.len() {
-        Some(format!("… och {} till", p.items_total - p.lines.len()))
+        Some(format!("… and {} more", p.items_total - p.lines.len()))
     } else {
         None
     }
 }
 
-/// Returns the Swedish progress text during an import.
+/// Returns the progress text during an import.
 pub fn progress_text(p: &pw_ingest::Progress) -> String {
     format!(
-        "Kopierar och verifierar {} / {} · {} av {} · {}",
+        "Copying and verifying {} / {} · {} of {} · {}",
         p.files_done,
         p.files_total,
         format_bytes(p.bytes_done),
@@ -63,10 +279,10 @@ pub fn progress_text(p: &pw_ingest::Progress) -> String {
     )
 }
 
-/// Returns the Swedish progress text while writing IPTC metadata.
+/// Returns the progress text while writing IPTC metadata.
 pub fn iptc_progress_text(done: usize, total: usize, current: &Path) -> String {
     format!(
-        "Skriver IPTC {} / {} · {}",
+        "Writing IPTC {} / {} · {}",
         done.saturating_add(1),
         total,
         current
@@ -76,9 +292,9 @@ pub fn iptc_progress_text(done: usize, total: usize, current: &Path) -> String {
     )
 }
 
-/// Returns the Swedish progress text while ejecting the source card.
+/// Returns the progress text while ejecting the source card.
 pub fn ejecting_progress_text(source: &Path) -> String {
-    format!("Matar ut {} …", source.display())
+    format!("Ejecting {} …", source.display())
 }
 
 #[derive(Debug)]
@@ -87,7 +303,7 @@ pub struct DoneLine {
     pub error: bool,
 }
 
-/// Returns Swedish summary lines for a finished import.
+/// Returns the summary lines for a finished import.
 pub fn done_lines(done: &ImportDone) -> Vec<DoneLine> {
     if let Some(error) = &done.error {
         return vec![DoneLine {
@@ -97,11 +313,6 @@ pub fn done_lines(done: &ImportDone) -> Vec<DoneLine> {
     }
 
     let mut lines = Vec::new();
-    let prefix = if done.cancelled {
-        "Avbruten: "
-    } else {
-        "Klar: "
-    };
     let seconds = done.elapsed.as_secs_f64();
     let speed = if seconds > 0.0 {
         // Rounded, as `toFixed(0)` in the Tauri dialog.
@@ -109,13 +320,26 @@ pub fn done_lines(done: &ImportDone) -> Vec<DoneLine> {
     } else {
         "".to_string()
     };
-    let mut summary = format!(
-        "{prefix}{} filer kopierade och verifierade ({} på {seconds:.1} s{speed})",
-        done.copied,
-        format_bytes(done.bytes),
-    );
+    let bytes = format_bytes(done.bytes);
+    let copied = done.copied;
+    let mut summary = match (done.cancelled, copied) {
+        (true, 1) => {
+            format!("Cancelled: 1 file copied and verified ({bytes} in {seconds:.1} s{speed})")
+        }
+        (true, _) => {
+            format!(
+                "Cancelled: {copied} files copied and verified ({bytes} in {seconds:.1} s{speed})"
+            )
+        }
+        (false, 1) => {
+            format!("Done: 1 file copied and verified ({bytes} in {seconds:.1} s{speed})")
+        }
+        (false, _) => {
+            format!("Done: {copied} files copied and verified ({bytes} in {seconds:.1} s{speed})")
+        }
+    };
     if done.present > 0 {
-        summary.push_str(&format!(", {} fanns redan", done.present));
+        summary.push_str(&format!(", {} already existed", done.present));
     }
     summary.push('.');
     lines.push(DoneLine {
@@ -126,13 +350,13 @@ pub fn done_lines(done: &ImportDone) -> Vec<DoneLine> {
     for (i, failure) in done.failed.iter().enumerate() {
         if i >= 20 {
             lines.push(DoneLine {
-                text: format!("… och {} till", done.failed.len() - 20),
+                text: format!("… and {} more", done.failed.len() - 20),
                 error: true,
             });
             break;
         }
         lines.push(DoneLine {
-            text: format!("Misslyckades: {failure}"),
+            text: format!("Failed: {failure}"),
             error: true,
         });
     }
@@ -158,7 +382,7 @@ pub fn done_lines(done: &ImportDone) -> Vec<DoneLine> {
             .map(|(name, count)| format!("{name} ({count})"))
             .collect();
         lines.push(DoneLine {
-            text: format!("Mappar: {}", folder_texts.join(", ")),
+            text: format!("Folders: {}", folder_texts.join(", ")),
             error: false,
         });
     }
@@ -171,6 +395,35 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
     use std::time::Duration;
+
+    #[test]
+    fn mode_texts_and_field_labels() {
+        assert_eq!(
+            [
+                Mode::Keep,
+                Mode::Replace,
+                Mode::Append,
+                Mode::Prefix,
+                Mode::Clear
+            ]
+            .map(mode_text),
+            ["Keep", "Replace", "Append", "Prefix", "Clear"]
+        );
+        assert_eq!(
+            IptcField::ALL.map(IptcField::label),
+            [
+                "Creator",
+                "Copyright Notice",
+                "Credit Line",
+                "Email",
+                "Phone",
+                "Web URL"
+            ]
+        );
+        assert_eq!(clear_confirmation_title(), "Clear Fields?");
+        assert_eq!(clear_and_import_text(), "Clear and Import");
+        assert_eq!(clear_cancel_text(), "Cancel");
+    }
 
     fn empty_preview() -> Preview {
         Preview {
@@ -191,7 +444,7 @@ mod tests {
             shots: 0,
             ..empty_preview()
         };
-        assert_eq!(preview_summary(&p), "Inga bilder hittades i källan.");
+        assert_eq!(preview_summary(&p), "No images were found in the source.");
     }
 
     #[test]
@@ -207,7 +460,66 @@ mod tests {
         };
         assert_eq!(
             preview_summary(&p),
-            "10 bilder · 15 filer att kopiera (1.0 MB) · 5 finns redan · 2 får nytt namn pga namnkrock · 3 utan EXIF-datum (fildatum används)"
+            "10 images · 15 files to copy (1.0 MB) · 5 already exist · 2 renamed because of a name conflict · 3 without an EXIF date (the file date is used)"
+        );
+    }
+
+    /// Singular and plural of the counted texts (T117).
+    #[test]
+    fn counted_texts_have_singular_and_plural() {
+        let one = Preview {
+            shots: 1,
+            files_to_copy: 1,
+            bytes_to_copy: 1024,
+            present: 1,
+            renamed: 1,
+            no_exif: 1,
+            ..empty_preview()
+        };
+        assert_eq!(
+            preview_summary(&one),
+            "1 image · 1 file to copy (1.0 KB) · 1 already exists · 1 renamed because of a name \
+             conflict · 1 without an EXIF date (the file date is used)"
+        );
+        let two = Preview {
+            shots: 2,
+            files_to_copy: 2,
+            bytes_to_copy: 1024,
+            present: 2,
+            ..empty_preview()
+        };
+        assert_eq!(
+            preview_summary(&two),
+            "2 images · 2 files to copy (1.0 KB) · 2 already exist"
+        );
+        assert_eq!(hidden_done_text(1, false), "Import done: 1 file");
+        assert_eq!(hidden_done_text(2, false), "Import done: 2 files");
+        assert_eq!(hidden_done_text(1, true), "Import cancelled: 1 file");
+        assert_eq!(hidden_done_text(2, true), "Import cancelled: 2 files");
+        let done = |copied, cancelled| {
+            done_lines(&ImportDone {
+                copied,
+                cancelled,
+                ..ImportDone::default()
+            })[0]
+                .text
+                .clone()
+        };
+        assert_eq!(
+            done(1, false),
+            "Done: 1 file copied and verified (0 B in 0.0 s)."
+        );
+        assert_eq!(
+            done(2, false),
+            "Done: 2 files copied and verified (0 B in 0.0 s)."
+        );
+        assert_eq!(
+            done(1, true),
+            "Cancelled: 1 file copied and verified (0 B in 0.0 s)."
+        );
+        assert_eq!(
+            done(2, true),
+            "Cancelled: 2 files copied and verified (0 B in 0.0 s)."
         );
     }
 
@@ -218,20 +530,23 @@ mod tests {
             rel: "folder/A.ARW".to_string(),
             action: ItemAction::Renamed,
         };
-        assert_eq!(preview_line(&line), "A.ARW  →  folder/A.ARW  (namnkrock)");
+        assert_eq!(
+            preview_line(&line),
+            "A.ARW  →  folder/A.ARW  (name conflict)"
+        );
         assert_eq!(
             preview_line(&PreviewLine {
                 action: ItemAction::Present,
                 ..line.clone()
             }),
-            "A.ARW  →  folder/A.ARW  (finns redan)"
+            "A.ARW  →  folder/A.ARW  (already exists)"
         );
         assert_eq!(
             preview_line(&PreviewLine {
                 action: ItemAction::BackupOnly,
                 ..line.clone()
             }),
-            "A.ARW  →  folder/A.ARW  (bara backup)"
+            "A.ARW  →  folder/A.ARW  (backup only)"
         );
         assert_eq!(
             preview_line(&PreviewLine {
@@ -246,7 +561,7 @@ mod tests {
             lines: vec![line; 20],
             ..empty_preview()
         };
-        assert_eq!(more_lines(&p), Some("… och 5 till".to_string()));
+        assert_eq!(more_lines(&p), Some("… and 5 more".to_string()));
         assert_eq!(more_lines(&empty_preview()), None);
     }
 
@@ -261,11 +576,11 @@ mod tests {
         };
         assert_eq!(
             progress_text(&p),
-            "Kopierar och verifierar 5 / 10 · 512.0 KB av 1.0 MB · image.ARW"
+            "Copying and verifying 5 / 10 · 512.0 KB of 1.0 MB · image.ARW"
         );
         assert_eq!(
             progress_text(&pw_ingest::Progress::default()),
-            "Kopierar och verifierar 0 / 0 · 0 B av 0 B · "
+            "Copying and verifying 0 / 0 · 0 B of 0 B · "
         );
     }
 
@@ -273,11 +588,11 @@ mod tests {
     fn iptc_progress_uses_one_based_file_number_and_name() {
         assert_eq!(
             iptc_progress_text(2, 5, Path::new("destination/image.ARW")),
-            "Skriver IPTC 3 / 5 · image.ARW"
+            "Writing IPTC 3 / 5 · image.ARW"
         );
         assert_eq!(
             iptc_progress_text(0, 0, Path::new("")),
-            "Skriver IPTC 1 / 0 · "
+            "Writing IPTC 1 / 0 · "
         );
     }
 
@@ -285,7 +600,7 @@ mod tests {
     fn ejecting_progress_includes_the_source_path() {
         assert_eq!(
             ejecting_progress_text(Path::new(r"E:\DCIM")),
-            "Matar ut E:\\DCIM …"
+            "Ejecting E:\\DCIM …"
         );
     }
 
@@ -302,7 +617,7 @@ mod tests {
         assert_eq!(lines.len(), 1);
         assert_eq!(
             lines[0].text,
-            "Klar: 10 filer kopierade och verifierade (9.5 MB på 2.0 s · 5 MB/s)."
+            "Done: 10 files copied and verified (9.5 MB in 2.0 s · 5 MB/s)."
         );
         assert!(!lines[0].error);
     }
@@ -313,7 +628,7 @@ mod tests {
         assert_eq!(lines.len(), 1);
         assert_eq!(
             lines[0].text,
-            "Klar: 0 filer kopierade och verifierade (0 B på 0.0 s)."
+            "Done: 0 files copied and verified (0 B in 0.0 s)."
         );
         assert!(!lines[0].error);
     }
@@ -333,12 +648,12 @@ mod tests {
         let lines = done_lines(&done);
         assert_eq!(
             lines[0].text,
-            "Avbruten: 1 filer kopierade och verifierade (976.6 KB på 1.0 s · 1 MB/s), 2 fanns redan."
+            "Cancelled: 1 file copied and verified (976.6 KB in 1.0 s · 1 MB/s), 2 already existed."
         );
-        assert_eq!(lines[1].text, "Misslyckades: img0.jpg");
+        assert_eq!(lines[1].text, "Failed: img0.jpg");
         assert!(lines[1].error);
-        assert_eq!(lines[21].text, "… och 5 till");
-        assert_eq!(lines[22].text, "Mappar: F1 (1), F2 (1)");
+        assert_eq!(lines[21].text, "… and 5 more");
+        assert_eq!(lines[22].text, "Folders: F1 (1), F2 (1)");
     }
 
     #[test]
@@ -351,7 +666,7 @@ mod tests {
         };
         assert_eq!(
             done_lines(&done)[0].text,
-            "Klar: 1 filer kopierade och verifierade (4.4 MB på 1.0 s · 5 MB/s)."
+            "Done: 1 file copied and verified (4.4 MB in 1.0 s · 5 MB/s)."
         );
     }
 
@@ -394,11 +709,97 @@ mod tests {
         };
         let lines = done_lines(&done);
 
-        assert_eq!(lines[1].text, "Misslyckades: copy failure");
+        assert_eq!(lines[1].text, "Failed: copy failure");
         assert!(lines[1].error);
         assert_eq!(lines.len(), 12);
         assert_eq!(lines[2].text, "IPTC: image0.ARW: error");
         assert_eq!(lines[11].text, "IPTC: image9.ARW: error");
         assert!(lines[2..].iter().all(|line| line.error));
+    }
+
+    /// One example of each text moved here by T116, as it was before.
+    #[test]
+    fn every_moved_import_text_keeps_its_swedish_wording() {
+        let texts = [
+            (ImportText::Title, "Import"),
+            (ImportText::Source, "Source"),
+            (ImportText::Destination, "Destination"),
+            (ImportText::Backup, "Backup"),
+            (ImportText::Choose, "Choose…"),
+            (ImportText::ChooseSource, "Choose Source"),
+            (ImportText::ChooseDestination, "Choose Destination"),
+            (ImportText::ChooseBackup, "Choose Backup Destination"),
+            (ImportText::FolderTemplate, "Folder Template"),
+            (ImportText::NameTemplate, "File Name Template"),
+            (ImportText::Job, "Job"),
+            (ImportText::FirstNumber, "First Number"),
+            (
+                ImportText::Variables,
+                "Variables: {year} {year2} {month} {day} {hour} {minute} {second} {date} {time} \
+                 {make} {model} {name} {seq} {seq:4} {job}",
+            ),
+            (ImportText::IptcTemplate, "IPTC Template"),
+            (ImportText::CopyrightHint, "© 2026 Name"),
+            (
+                ImportText::IptcNote,
+                "Written to the .xmp sidecar for RAW and into DNG/JPG/TIF. Empty fields are left untouched.",
+            ),
+            (
+                ImportText::Eject,
+                "Eject the card when the import is done (nothing is deleted from the card)",
+            ),
+            (ImportText::Preview, "Preview"),
+            (ImportText::Rescan, "Search Again"),
+            (ImportText::Previewing, "Previewing …"),
+            (ImportText::Importing, "Importing …"),
+            (ImportText::Cancel, "Cancel"),
+            (ImportText::Hide, "Hide"),
+            (ImportText::NewImport, "New Import"),
+            (ImportText::Close, "Close"),
+            (ImportText::Start, "Start Import"),
+            (ImportText::QueueFull, "The import queue is full."),
+            (ImportText::WorkerStopped, "Import has stopped."),
+            (
+                ImportText::StoppedMessage,
+                "The import stopped before it was finished.",
+            ),
+            (
+                ImportText::EjectSkipped,
+                "The card was not ejected because the import was not complete.",
+            ),
+        ];
+        for (text, expected) in texts {
+            assert_eq!(import_text(text), expected, "{text:?}");
+        }
+        assert_eq!(hidden_progress_text(0, 0), "Importing 0 / 0");
+        assert_eq!(hidden_progress_text(3, 12), "Importing 3 / 12");
+        assert_eq!(hidden_done_text(5, false), "Import done: 5 files");
+        assert_eq!(hidden_done_text(5, true), "Import cancelled: 5 files");
+        assert_eq!(
+            folder_template_error_text("ogiltig"),
+            "Folder Template: ogiltig"
+        );
+        assert_eq!(
+            name_template_error_text("ogiltig"),
+            "File Name Template: ogiltig"
+        );
+        assert_eq!(
+            scan_error_text(Path::new("E:/DCIM"), "nekad"),
+            "Could not read E:/DCIM: nekad"
+        );
+        assert_eq!(
+            exiftool_too_old_text(
+                "A001.jpg",
+                ToolVersion {
+                    major: 12,
+                    minor: 40
+                }
+            ),
+            "A001.jpg: ExifTool 12.40 is too old (at least 12.67 is needed)"
+        );
+        assert_eq!(
+            exiftool_unavailable_text("A001.jpg"),
+            "A001.jpg: ExifTool is not available"
+        );
     }
 }

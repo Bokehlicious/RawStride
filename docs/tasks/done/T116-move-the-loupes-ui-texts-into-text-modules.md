@@ -1,4 +1,4 @@
-# T116. Move pw-loupe's remaining UI texts into text modules — Open
+# T116. Move pw-loupe's remaining UI texts into text modules — Done
 
 - **Why:** English becomes the interface's base language (`docs/GUI_REQUIREMENTS.md` GR14,
   owner 2026-11-13). T117 translates the texts, and it should only have to touch text modules.
@@ -45,12 +45,26 @@
      place. Each text keeps exactly its present wording, placeholders and singular/plural
      handling. Drawing code (`main.rs` and the drawing parts of other files) then holds no
      user-visible string literal. Two `NO_JOURNAL_TEXT`s with the same text (`import_worker.rs`,
-     `metadata.rs`) become one function.
+     `metadata.rs`) become one function in `editor.rs` (it is a metadata-write text; the import
+     calls it from there).
+     **The status line** (`main.rs`, `format!("{line}  ·  {x}")`): the separator `"  ·  "` is
+     user-visible. Give `shell_text.rs` one function that joins the status line's parts with it,
+     and use it in every place that builds the status line today.
   3. **No logic on a text:** `main.rs` decides how to draw a failed thumbnail by comparing the
      error text with `"ingen förhandsvisning"`, which `thumbs.rs` writes in three places. Give
      `CellState` its own variant for "no preview" (for example `CellState::NoPreview`), set it in
-     those three places, and draw it with the text from `loupe_text.rs`. Nothing else may compare
-     a user-visible text; if you find another comparison, stop and report it.
+     those three places, and draw it with the text from `loupe_text.rs`.
+     **The encoding choice** of the settings window (`main.rs`: `fallback_from_text` and
+     `text == fallback_text(chosen.fallback)`): choose the entry by its `Fallback` value instead
+     of by its text (for example with `selectable_value`), and remove `fallback_from_text`. Its
+     test of the round trip through the text goes with it; add a test that every
+     `FALLBACK_CHOICES` entry has a text (reviewer, 2026-11-13).
+     **Two comparisons stay for now**, because they compare another crate's English error text,
+     not a text of `pw-loupe`, and need a typed error in that crate: `lib.rs` `error_text`
+     (`"no embedded JPEG"` from `pw-viewcore`) and `metadata.rs` `write_error_text`
+     (`NO_JOURNAL`, `EXIFTOOL_TOO_OLD` from `pw-metadata`). T118 replaces them; leave them as they
+     are. Nothing else may compare a user-visible text; if you find another comparison, stop and
+     report it.
   4. Not user-visible, so they stay where they are: egui ids (`"metadata-window"`, …), settings
      keys and values (`settings.rs`), the colour-role names in `shell.rs`, environment-variable
      names, thread names, `eprintln!` lines starting with `pw-loupe:`, and the command-line help in
@@ -77,3 +91,10 @@
 | Date | Status | Note |
 |---|---|---|
 | 2026-11-13 | Open | Added (owner decision GR14 and the glossary, 2026-11-13) |
+| 2026-11-13 | In progress | Task agent started |
+| 2026-11-13 | Blocked | Stopped before any code change (What 3): three more comparisons of user-visible texts found, in `main.rs` (`fallback_from_text`), `lib.rs` (`error_text`) and `metadata.rs` (`write_error_text`); waiting for the owner |
+| 2026-11-13 | Open | Reviewer: What 2 and 3 amended after the stop: the encoding choice by value, the status-line separator in `shell_text.rs`, `NO_JOURNAL_TEXT` in `editor.rs`; the two cross-crate comparisons go to T118 |
+| 2026-11-13 | In progress | Task agent started again after the amendment |
+| 2026-11-14 | Ready for review | Task agent: texts moved into `loupe_text.rs`, `rating_text.rs`, `import_text.rs`, `shell_text.rs`, `editor.rs`; `CellState::NoPreview`; encoding chosen by value; status line joined in `shell_text.rs`; check.ps1 all OK (1181 passed, 43 ignored) |
+| 2026-11-14 | Ready for review | Reviewer: accepted, not committed. Every non-test string literal of `pw-loupe` compared before and after: the same texts, only placeholders renamed and the status line joined by `status_line_text` (same output); no new panic paths; the reviewer's `check.ps1`: fmt, test and clippy OK, 1181 passed, 0 failed, 43 ignored. Waits for the owner's hand check (import dialog, settings window, a contact sheet with a file without a preview) and approval. T117 started on top of it with the owner's go-ahead |
+| 2026-11-14 | Done | Owner: hand check done and approved; committed by the reviewer |

@@ -5,16 +5,16 @@ use std::sync::mpsc::TryRecvError;
 use std::time::{Duration, Instant};
 
 use pw_loupe::{
-    EditorText, RatingKey, RatingRefused, RatingStore, RatingWriter, UNSUPPORTED_TEXT, editor_text,
-    status_text,
+    EditorText, RatingKey, RatingRefused, RatingStore, RatingWriter, UNSUPPORTED_TEXT, WriteReason,
+    editor_text, path_resolution_error_text, status_text, write_reason_text,
 };
 use pw_metadata::edit::Edit;
 use pw_metadata::read::MetadataRead;
 use pw_metadata::safe_write::OriginalState;
 use pw_metadata::write_plan::WriteNotice;
 use pw_metadata::{
-    EXIFTOOL_TOO_OLD, MIN_EXIFTOOL_VERSION, MetadataWorker, NO_JOURNAL, Rating, RequestId,
-    SubmitError, WorkerEvent, WriteError, supports_rating,
+    EXIFTOOL_TOO_OLD, MetadataWorker, NO_JOURNAL, Rating, RequestId, SubmitError, WorkerEvent,
+    WriteError, supports_rating,
 };
 
 use crate::inspector::{INSPECTOR_POLL_INTERVAL, INSPECTOR_READ_DELAY};
@@ -178,7 +178,7 @@ impl MetadataCache {
         worker: &mut impl MetadataSubmit,
     ) -> Result<Vec<PathBuf>, String> {
         let cwd =
-            std::env::current_dir().map_err(|e| format!("cannot resolve image paths: {e}"))?;
+            std::env::current_dir().map_err(|e| path_resolution_error_text(&e.to_string()))?;
         let files: Vec<PathBuf> = files
             .into_iter()
             .map(|path| {
@@ -345,10 +345,12 @@ impl MetadataCache {
     pub fn notice(&self, path: Option<&Path>) -> Option<String> {
         let metadata = self.images.get(path?)?;
         match &metadata.state {
-            LoadState::Loading => Some("Läser metadata…".into()),
+            LoadState::Loading => Some(editor_text(&EditorText::ReadingMetadata)),
             LoadState::Ready => None,
             LoadState::Unsupported => Some(UNSUPPORTED_TEXT.into()),
-            LoadState::Error(error) => Some(format!("Metadatafel: {error}")),
+            LoadState::Error(error) => Some(editor_text(&EditorText::MetadataError {
+                error: error.clone(),
+            })),
         }
     }
 
@@ -793,52 +795,36 @@ pub(crate) fn unsaved_list_text(lines: &[String]) -> String {
         .join("\n");
     let more = lines.len().saturating_sub(UNSAVED_LIST_LIMIT);
     if more > 0 {
-        let _ = write!(text, "\n… och {more} till");
+        let _ = write!(text, "\n{}", editor_text(&EditorText::MoreUnsaved { more }));
     }
     text
 }
 
-/// Shown after "Kunde inte spara betyget för <fil>: " when the file is read-only (T49).
-const READ_ONLY_TEXT: &str = "filen är skrivskyddad";
-/// Shown after "Kunde inte spara betyget för <fil>: " or "Kunde inte spara metadata för <fil>: "
-/// when another program holds the file open (T108).
-const LOCKED_TEXT: &str = "filen är öppen i ett annat program";
-/// Shown after "Kunde inte spara betyget för <fil>: " when ExifTool refused the write (T49).
-const NOT_WRITTEN_TEXT: &str = "filen kunde inte skrivas";
-
-/// Shown after "Kunde inte spara betyget för <fil>: " when the write journal could not be opened
-/// at the start, so nothing is written (T91).
-pub(crate) const NO_JOURNAL_TEXT: &str = "skrivloggen kunde inte öppnas";
-
-/// The reason in the message for a failed rating write. Other errors keep their own text.
+/// The reason in the message for a failed rating write (its texts are in `editor.rs`, T116).
+/// Other errors keep their own text.
 fn write_error_text(error: WriteError) -> String {
-    match error {
-        WriteError::ReadOnly => READ_ONLY_TEXT.into(),
-        WriteError::Locked => LOCKED_TEXT.into(),
-        WriteError::NotWritten(_) => NOT_WRITTEN_TEXT.into(),
-        WriteError::Other(text) if text == NO_JOURNAL => NO_JOURNAL_TEXT.into(),
+    let reason = match error {
+        WriteError::ReadOnly => WriteReason::ReadOnly,
+        WriteError::Locked => WriteReason::Locked,
+        WriteError::NotWritten(_) => WriteReason::NotWritten,
+        WriteError::Other(text) if text == NO_JOURNAL => WriteReason::NoJournal,
         // The metadata worker refuses rating writes while ExifTool is too old or its version
         // could not be read (ADR 0007 §11, D9, T101).
-        WriteError::Other(text) if text == EXIFTOOL_TOO_OLD => {
-            format!("ExifTool är för gammal (minst {MIN_EXIFTOOL_VERSION})")
-        }
-        WriteError::Other(text) => text,
+        WriteError::Other(text) if text == EXIFTOOL_TOO_OLD => WriteReason::ExifToolTooOld,
+        WriteError::Other(text) => return text,
         WriteError::NotSafe { original, .. } => match original {
-            OriginalState::Intact => {
-                "metadata kunde inte skrivas säkert, filen är oförändrad".into()
-            }
+            OriginalState::Intact => WriteReason::NotSafeIntact,
             OriginalState::AtBackup(backup) => {
                 let name = backup.file_name().map_or_else(
                     || backup.display().to_string(),
                     |name| name.to_string_lossy().into_owned(),
                 );
-                format!("metadata kunde inte skrivas säkert, originalet ligger nu som {name}")
+                WriteReason::NotSafeAtBackup { name }
             }
-            OriginalState::Replaced => "filen skrevs men slutkontrollen misslyckades, den \
-                                        tidigare versionen finns kvar som säkerhetskopia"
-                .into(),
+            OriginalState::Replaced => WriteReason::NotSafeReplaced,
         },
-    }
+    };
+    write_reason_text(&reason)
 }
 
 /// The file name of `path`, or the whole path when it has none.
@@ -849,7 +835,7 @@ fn file_name(path: &Path) -> String {
         .into_owned()
 }
 
-/// "Kunde inte spara metadata för <fil>: <skäl>" (T105).
+/// "Could not save metadata for <file>: <reason>" (T105).
 fn save_failed_text(path: &Path, reason: String) -> String {
     editor_text(&EditorText::SaveFailed {
         file: file_name(path),
@@ -859,8 +845,8 @@ fn save_failed_text(path: &Path, reason: String) -> String {
 
 fn submit_error(error: SubmitError) -> String {
     match error {
-        SubmitError::QueueFull => "metadatakön är full".into(),
-        SubmitError::Stopped => "metadataarbetaren har stannat".into(),
+        SubmitError::QueueFull => write_reason_text(&WriteReason::QueueFull),
+        SubmitError::Stopped => write_reason_text(&WriteReason::WorkerStopped),
     }
 }
 
@@ -997,7 +983,7 @@ mod tests {
         assert!(!cache.is_error(Some(&files[0])));
         assert_eq!(
             cache.notice(Some(&files[0])).as_deref(),
-            Some("Läser metadata…")
+            Some("Reading metadata…")
         );
     }
 
@@ -1050,7 +1036,7 @@ mod tests {
         assert!(cache.is_error(Some(&files[0])));
         assert_eq!(
             cache.notice(Some(&files[0])).as_deref(),
-            Some("Metadatafel: metadataarbetaren har stannat")
+            Some("Metadata error: metadata writing has stopped")
         );
         assert_eq!(
             cache.notice(Some(&files[1])).as_deref(),
@@ -1126,7 +1112,7 @@ mod tests {
         assert_eq!(cache.notice(Some(&files[0])), None);
         assert_eq!(
             cache.rating_summary(Some(&files[0])).as_deref(),
-            Some("Betyg: 3 stjärnor, Röd")
+            Some("Rating: 3 stars, Red")
         );
     }
 
@@ -1143,7 +1129,7 @@ mod tests {
         assert!(!cache.is_error(Some(&files[0])));
         assert_eq!(
             cache.notice(Some(&files[0])).as_deref(),
-            Some("Läser metadata…")
+            Some("Reading metadata…")
         );
         assert_eq!(cache.pending_read, Some(files));
     }
@@ -1185,7 +1171,7 @@ mod tests {
         assert!(cache.is_error(Some(&files[0])));
         assert_eq!(
             cache.notice(Some(&files[0])).as_deref(),
-            Some("Metadatafel: metadataarbetaren har stannat")
+            Some("Metadata error: metadata writing has stopped")
         );
     }
 
@@ -1337,7 +1323,7 @@ mod tests {
         assert!(unsaved.pending.is_empty());
         assert_eq!(
             unsaved.failed,
-            ["Kunde inte spara betyget för pw-loupe-exit-e.ARW: skrivskyddad"]
+            ["Could not save the rating for pw-loupe-exit-e.ARW: skrivskyddad"]
         );
         assert_eq!(unsaved.lines(), unsaved.failed);
     }
@@ -1352,7 +1338,7 @@ mod tests {
         assert_eq!(shown.len(), 21);
         assert_eq!(shown.first(), Some(&"bild1.ARW"));
         assert_eq!(shown.get(19), Some(&"bild20.ARW"));
-        assert_eq!(shown.last(), Some(&"… och 3 till"));
+        assert_eq!(shown.last(), Some(&"… and 3 more"));
         assert_eq!(
             unsaved_list_text(&lines[..20]).lines().count(),
             20,
@@ -1364,13 +1350,13 @@ mod tests {
     fn write_error_texts_are_swedish_for_read_only_and_refused_writes() {
         assert_eq!(
             write_error_text(WriteError::ReadOnly),
-            "filen är skrivskyddad"
+            "the file is read-only"
         );
         assert_eq!(
             write_error_text(WriteError::NotWritten(
                 "0 image files updated\n1 files weren't updated due to errors".into()
             )),
-            "filen kunde inte skrivas"
+            "the file could not be written"
         );
         assert_eq!(
             write_error_text(WriteError::Other("ExifTool exited unexpectedly".into())),
@@ -1386,7 +1372,7 @@ mod tests {
                 original: OriginalState::Intact,
                 reason: "preview 2 differs".into(),
             }),
-            "metadata kunde inte skrivas säkert, filen är oförändrad"
+            "the metadata could not be written safely; the file is unchanged"
         );
         let backup = std::env::temp_dir().join("bild.pwbak-0123.jpg");
         assert_eq!(
@@ -1395,7 +1381,7 @@ mod tests {
                 original: OriginalState::AtBackup(backup),
                 reason: "access denied".into(),
             }),
-            "metadata kunde inte skrivas säkert, originalet ligger nu som bild.pwbak-0123.jpg"
+            "the metadata could not be written safely; the original is now bild.pwbak-0123.jpg"
         );
         assert_eq!(
             write_error_text(WriteError::NotSafe {
@@ -1403,8 +1389,8 @@ mod tests {
                 original: OriginalState::Replaced,
                 reason: "Rating is 2".into(),
             }),
-            "filen skrevs men slutkontrollen misslyckades, den tidigare versionen finns kvar som \
-             säkerhetskopia"
+            "the file was written but the final check failed; the earlier version is kept as a \
+             backup"
         );
     }
 
@@ -1412,7 +1398,7 @@ mod tests {
     fn a_write_to_a_file_open_in_another_program_gives_the_reason() {
         assert_eq!(
             write_error_text(WriteError::Locked),
-            "filen är öppen i ett annat program"
+            "the file is open in another program"
         );
         // The editor's message (T107's window).
         assert_eq!(
@@ -1420,7 +1406,7 @@ mod tests {
                 Path::new("konflikt-stad.jpg"),
                 write_error_text(WriteError::Locked)
             ),
-            "Kunde inte spara metadata för konflikt-stad.jpg: filen är öppen i ett annat program"
+            "Could not save metadata for konflikt-stad.jpg: the file is open in another program"
         );
     }
 
@@ -1446,7 +1432,7 @@ mod tests {
         assert_eq!(
             failures,
             [
-                "Kunde inte spara betyget för pw-loupe-locked.JPG: filen är öppen i ett annat program"
+                "Could not save the rating for pw-loupe-locked.JPG: the file is open in another program"
             ]
         );
         assert_eq!(cache.pending_writes(), 0);
@@ -1456,7 +1442,7 @@ mod tests {
     fn a_write_without_the_journal_gives_the_swedish_text() {
         assert_eq!(
             write_error_text(WriteError::Other(NO_JOURNAL.into())),
-            "skrivloggen kunde inte öppnas"
+            "the write log could not be opened"
         );
     }
 
@@ -1464,7 +1450,7 @@ mod tests {
     fn a_write_refused_for_an_old_exiftool_gives_the_swedish_text() {
         assert_eq!(
             write_error_text(WriteError::Other(EXIFTOOL_TOO_OLD.into())),
-            "ExifTool är för gammal (minst 12.67)"
+            "ExifTool is too old (at least 12.67 is needed)"
         );
     }
 
@@ -1489,7 +1475,7 @@ mod tests {
 
         assert_eq!(
             failures,
-            ["Kunde inte spara betyget för pw-loupe-read-only.ARW: filen är skrivskyddad"]
+            ["Could not save the rating for pw-loupe-read-only.ARW: the file is read-only"]
         );
         assert_eq!(cache.pending_writes(), 0);
     }
@@ -1516,7 +1502,7 @@ mod tests {
         assert_eq!(
             cache.failure_text().as_deref(),
             Some(
-                "Kunde inte spara betyget för 2 bilder. Senast: pw-loupe-cache-batch-c.DNG: skrivskyddad"
+                "Could not save the rating for 2 images. Last: pw-loupe-cache-batch-c.DNG: skrivskyddad"
             )
         );
         assert_eq!(
@@ -1591,7 +1577,7 @@ mod tests {
         }
         assert_eq!(
             cache.read_error().as_deref(),
-            Some("metadataarbetaren har stannat")
+            Some("metadata writing has stopped")
         );
         assert!(cache.ratings_ready());
 
@@ -1605,7 +1591,7 @@ mod tests {
         cache.drain(|| Err(TryRecvError::Disconnected), &mut failures);
         assert_eq!(
             cache.read_error().as_deref(),
-            Some("metadataarbetaren har stannat")
+            Some("metadata writing has stopped")
         );
 
         // The worker stops after the read was answered: the ratings were read, no read error.
@@ -1806,7 +1792,7 @@ mod tests {
         assert!(!cache.window_waiting());
         assert_eq!(
             cache.take_window_read(),
-            Some(Err("metadataarbetaren har stannat".to_owned()))
+            Some(Err("metadata writing has stopped".to_owned()))
         );
     }
 
@@ -2156,8 +2142,8 @@ mod tests {
             cache.take_editor_events(),
             [EditorEvent::Failed {
                 path: image,
-                message: "Kunde inte spara metadata för pw-loupe-editor-err.ARW: filen är \
-                          skrivskyddad"
+                message: "Could not save metadata for pw-loupe-editor-err.ARW: the file is \
+                          read-only"
                     .to_owned(),
             }]
         );
@@ -2195,8 +2181,8 @@ mod tests {
             cache.take_editor_events(),
             [EditorEvent::Failed {
                 path: image,
-                message: "Kunde inte spara metadata för pw-loupe-editor-stopped.jpg: \
-                          metadataarbetaren har stannat"
+                message: "Could not save metadata for pw-loupe-editor-stopped.jpg: \
+                          metadata writing has stopped"
                     .to_owned(),
             }]
         );
@@ -2264,7 +2250,7 @@ mod tests {
         assert!(unsaved.pending.is_empty());
         assert_eq!(
             unsaved.failed,
-            ["Kunde inte spara metadata för pw-loupe-exit-editor-err.jpg: filen är skrivskyddad"]
+            ["Could not save metadata for pw-loupe-exit-editor-err.jpg: the file is read-only"]
         );
     }
 
@@ -2434,7 +2420,7 @@ mod tests {
         cache.drain(|| Err(TryRecvError::Disconnected), &mut failures);
         assert_eq!(
             cache.inspector_state(&other),
-            InspectorState::Error("metadataarbetaren har stannat")
+            InspectorState::Error("metadata writing has stopped")
         );
     }
 

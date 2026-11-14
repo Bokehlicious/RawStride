@@ -39,10 +39,12 @@ use pw_loupe::{
 };
 use pw_loupe::{
     COLLAPSED_WIDTH, ColumnState, Command, MENUS, MenuEntry, MenuItem, RatingKey, STATUS_TEXT_SIZE,
-    ShellAction, ShellSettings, ShellText, StartWindow, THEMES, Theme, Where, WindowRect,
-    apply_text_sizes, clamp_column_width, column_width_range, command_text, image_area, key_text,
-    menu_text, palette, rect_on_a_screen, shell_key_action, shell_text, start_window, submenu_text,
-    theme_text, visuals,
+    SettingsText, ShellAction, ShellSettings, ShellText, StartWindow, THEMES, Theme, Where,
+    WindowRect, apply_text_sizes, clamp_column_width, column_width_range, command_text,
+    exiftool_message, fallback_text, image_area, key_text, menu_text, no_images_text,
+    open_error_text, palette, path_resolution_error_text, prune_error_text, recovery_text,
+    rect_on_a_screen, settings_save_error_text, settings_text, shell_key_action, shell_text,
+    start_window, status_line_text, submenu_text, theme_text, visuals,
 };
 use pw_loupe::{
     FILMSTRIP_CELL_WIDTH, FILMSTRIP_IMAGE_HEIGHT, FILMSTRIP_LABEL_HEIGHT, FILMSTRIP_MARGIN,
@@ -50,14 +52,16 @@ use pw_loupe::{
     filmstrip_range, hit_test, preview_info_shown, preview_key_action, preview_parts, preview_text,
     scroll_target, thumbnail_gate, toggle_preview_column, toggle_preview_hidden, zoom_value_text,
 };
+use pw_loupe::{
+    ImportText, failed_cell_text, hidden_done_text, hidden_progress_text, import_text,
+    no_preview_text,
+};
 use pw_metadata::edit::EditOptions;
 use pw_metadata::iim::Fallback;
-use pw_metadata::journal::{Journal, Recovered};
+use pw_metadata::journal::Journal;
 use pw_metadata::read::MetadataRead;
 use pw_metadata::template::Mode;
-use pw_metadata::{
-    MIN_EXIFTOOL_VERSION, MetadataWorker, Rating, ToolVersion, WriteSetup, supports_rating,
-};
+use pw_metadata::{MetadataWorker, Rating, WriteSetup, supports_rating};
 use pw_render::{Textures, view_px};
 use pw_thumbcache::{ThumbWorker, ThumbnailRequest};
 use pw_viewcore::native::NativeBackend;
@@ -78,13 +82,11 @@ const GRID_LABEL_HEIGHT: f32 = 18.0;
 /// also the dark theme's accent, ADR 0017 §2.5).
 const MARKED_BLUE: egui::Color32 = image_area::MARKED;
 const MARKED_FILL: egui::Color32 = egui::Color32::from_rgba_premultiplied(0x0f, 0x1c, 0x33, 0x33);
+/// The folder dialog's starting folder as text when there is none (not shown; `pick_folder` then
+/// starts in the open tab's folder).
+const NO_FOLDER_TEXT: &str = "";
 /// How long the image check waits for the view core to close the RAW sessions of a file (T91).
 const RELEASE_TIMEOUT: Duration = Duration::from_secs(5);
-/// The title of the message about writes left unfinished at the last exit (T91).
-const RECOVERY_TITLE: &str = "Metadataskrivning avbröts";
-/// The first line of that message.
-const RECOVERY_HEADING: &str =
-    "RawStride avslutades mitt i en metadataskrivning. Kontrollera de här filerna:";
 /// How often a frame is asked for while the metadata worker has not yet tried to start ExifTool,
 /// so the message about it is not left waiting for the next input (T101).
 const EXIFTOOL_CHECK_INTERVAL: Duration = Duration::from_millis(200);
@@ -524,7 +526,8 @@ impl Loupe {
     }
 
     /// The settings window "Inställningar" (ADR 0007 §5.2, §5.4/Q10, T106). Every text comes
-    /// from `settings_text` or `fallback_text`.
+    /// from `settings_text` or `fallback_text` (`shell_text.rs`); an encoding is chosen by its
+    /// value (T116).
     fn draw_settings_window(&mut self, ctx: &egui::Context) {
         let Some(mut chosen) = self.settings_window else {
             return;
@@ -545,13 +548,12 @@ impl Loupe {
                 egui::ComboBox::from_id_salt("fallback-encoding")
                     .selected_text(fallback_text(chosen.fallback))
                     .show_ui(ui, |ui| {
-                        for text in FALLBACK_CHOICES.map(fallback_text) {
-                            let selected = text == fallback_text(chosen.fallback);
-                            if ui.selectable_label(selected, text).clicked()
-                                && let Some(fallback) = fallback_from_text(text)
-                            {
-                                chosen.fallback = fallback;
-                            }
+                        for fallback in FALLBACK_CHOICES {
+                            ui.selectable_value(
+                                &mut chosen.fallback,
+                                fallback,
+                                fallback_text(fallback),
+                            );
                         }
                     });
                 ui.add_space(PANEL_ROW_SPACING);
@@ -813,12 +815,9 @@ impl Loupe {
                     .map(|(done, total, current)| iptc_progress_text(*done, *total, current))
                     .unwrap_or_else(|| {
                         progress.as_ref().map_or_else(
-                            || "Importerar 0 / 0".to_string(),
+                            || hidden_progress_text(0, 0),
                             |progress| {
-                                format!(
-                                    "Importerar {} / {}",
-                                    progress.files_done, progress.files_total
-                                )
+                                hidden_progress_text(progress.files_done, progress.files_total)
                             },
                         )
                     }),
@@ -827,10 +826,8 @@ impl Loupe {
             ImportDialogState::Done { done } => {
                 if let Some(error) = &done.error {
                     Some(error.clone())
-                } else if done.cancelled {
-                    Some(format!("Importen avbruten: {} filer", done.copied))
                 } else {
-                    Some(format!("Importen klar: {} filer", done.copied))
+                    Some(hidden_done_text(done.copied, done.cancelled))
                 }
             }
             _ => None,
@@ -910,17 +907,20 @@ impl Loupe {
         let mut hide = false;
         let mut new_import = false;
 
-        egui::Window::new("Importera")
+        egui::Window::new(import_text(ImportText::Title))
             .collapsible(false)
             .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
             .show(ctx, |ui| {
                 ui.add_enabled_ui(!running && !confirming, |ui| {
-                    ui.label("Källa");
+                    ui.label(import_text(ImportText::Source));
                     ui.horizontal(|ui| {
                         ui.text_edit_singleline(&mut form.source);
-                        if ui.button("Välj…").clicked()
-                            && let Some(path) =
-                                pick_folder("Välj källa", &form.source, cards.first())
+                        if ui.button(import_text(ImportText::Choose)).clicked()
+                            && let Some(path) = pick_folder(
+                                import_text(ImportText::ChooseSource),
+                                &form.source,
+                                cards.first(),
+                            )
                         {
                             form.source = path.to_string_lossy().into_owned();
                         }
@@ -937,11 +937,15 @@ impl Loupe {
                     });
 
                     ui.add_space(8.0);
-                    ui.label("Mål");
+                    ui.label(import_text(ImportText::Destination));
                     ui.horizontal(|ui| {
                         ui.text_edit_singleline(&mut form.dest);
-                        if ui.button("Välj…").clicked()
-                            && let Some(path) = pick_folder("Välj mål", &form.dest, None)
+                        if ui.button(import_text(ImportText::Choose)).clicked()
+                            && let Some(path) = pick_folder(
+                                import_text(ImportText::ChooseDestination),
+                                &form.dest,
+                                None,
+                            )
                         {
                             form.dest = path.to_string_lossy().into_owned();
                         }
@@ -950,13 +954,16 @@ impl Loupe {
                         ui.colored_label(ui.visuals().error_fg_color, message);
                     }
                     ui.horizontal(|ui| {
-                        ui.checkbox(&mut form.backup_on, "Backup");
+                        ui.checkbox(&mut form.backup_on, import_text(ImportText::Backup));
                         ui.add_enabled_ui(form.backup_on, |ui| {
                             ui.horizontal(|ui| {
                                 ui.text_edit_singleline(&mut form.backup);
-                                if ui.button("Välj…").clicked()
-                                    && let Some(path) =
-                                        pick_folder("Välj backupmål", &form.backup, None)
+                                if ui.button(import_text(ImportText::Choose)).clicked()
+                                    && let Some(path) = pick_folder(
+                                        import_text(ImportText::ChooseBackup),
+                                        &form.backup,
+                                        None,
+                                    )
                                 {
                                     form.backup = path.to_string_lossy().into_owned();
                                 }
@@ -968,14 +975,14 @@ impl Loupe {
                     }
 
                     ui.add_space(8.0);
-                    ui.label("Mappmall");
+                    ui.label(import_text(ImportText::FolderTemplate));
                     ui.text_edit_singleline(&mut form.folder);
                     if let Some(message) = field_error(&state, Field::Folder) {
                         ui.colored_label(ui.visuals().error_fg_color, message);
                     }
 
                     ui.add_space(8.0);
-                    ui.label("Filnamnsmall");
+                    ui.label(import_text(ImportText::NameTemplate));
                     ui.text_edit_singleline(&mut form.name);
                     if let Some(message) = field_error(&state, Field::Name) {
                         ui.colored_label(ui.visuals().error_fg_color, message);
@@ -983,21 +990,18 @@ impl Loupe {
 
                     ui.add_space(8.0);
                     ui.horizontal(|ui| {
-                        ui.label("Jobb");
+                        ui.label(import_text(ImportText::Job));
                         ui.text_edit_singleline(&mut form.job);
-                        ui.label("Första nr");
+                        ui.label(import_text(ImportText::FirstNumber));
                         ui.add(egui::DragValue::new(&mut form.first_seq).range(0..=999_999));
                     });
                     ui.label(
-                        egui::RichText::new(
-                            "Variabler: {year} {year2} {month} {day} {hour} {minute} {second} \
-                             {date} {time} {make} {model} {name} {seq} {seq:4} {job}",
-                        )
-                        .small()
-                        .color(ui.visuals().weak_text_color()),
+                        egui::RichText::new(import_text(ImportText::Variables))
+                            .small()
+                            .color(ui.visuals().weak_text_color()),
                     );
 
-                    ui.collapsing("IPTC-mall", |ui| {
+                    ui.collapsing(import_text(ImportText::IptcTemplate), |ui| {
                         // Each field with a drop-down list of its modes (D13); the text cannot
                         // be edited in Behåll or Rensa, which do not use it.
                         for field in IptcField::ALL {
@@ -1009,7 +1013,8 @@ impl Loupe {
                                     let mut edit =
                                         egui::TextEdit::singleline(form.iptc.text_mut(field));
                                     if field == IptcField::Copyright {
-                                        edit = edit.hint_text("© 2026 Namn");
+                                        edit =
+                                            edit.hint_text(import_text(ImportText::CopyrightHint));
                                     }
                                     ui.add(edit);
                                 });
@@ -1024,28 +1029,22 @@ impl Loupe {
                             });
                         }
                         ui.label(
-                            egui::RichText::new(
-                                "Skrivs till .xmp-sidofilen för RAW och in i DNG/JPG/TIF. \
-                                 Tomma fält lämnas orörda.",
-                            )
-                            .small()
-                            .color(ui.visuals().weak_text_color()),
+                            egui::RichText::new(import_text(ImportText::IptcNote))
+                                .small()
+                                .color(ui.visuals().weak_text_color()),
                         );
                     });
-                    ui.checkbox(
-                        &mut form.eject,
-                        "Mata ut kortet när importen är klar (inget raderas från kortet)",
-                    );
+                    ui.checkbox(&mut form.eject, import_text(ImportText::Eject));
 
                     ui.horizontal(|ui| {
-                        ui.label("Förhandsvisning");
-                        if ui.button("Sök igen").clicked() {
+                        ui.label(import_text(ImportText::Preview));
+                        if ui.button(import_text(ImportText::Rescan)).clicked() {
                             rescan = true;
                         }
                     });
                     match &state {
                         ImportDialogState::Previewing => {
-                            ui.label("Förhandsvisar …");
+                            ui.label(import_text(ImportText::Previewing));
                         }
                         ImportDialogState::Editing {
                             preview: Some(preview),
@@ -1092,22 +1091,22 @@ impl Loupe {
                             let text = progress
                                 .as_ref()
                                 .map(progress_text)
-                                .unwrap_or_else(|| "Importerar …".to_string());
+                                .unwrap_or_else(|| import_text(ImportText::Importing).to_string());
                             (fraction, text)
                         };
                         ui.add(egui::ProgressBar::new(fraction).text(text));
                         ui.horizontal(|ui| {
-                            if ui.button("Avbryt").clicked() {
+                            if ui.button(import_text(ImportText::Cancel)).clicked() {
                                 cancel = true;
                             }
-                            if ui.button("Dölj").clicked() {
+                            if ui.button(import_text(ImportText::Hide)).clicked() {
                                 hide = true;
                             }
                         });
                     }
                     ImportDialogState::Ejecting { source } => {
                         ui.add(egui::ProgressBar::new(0.0).text(ejecting_progress_text(source)));
-                        if ui.button("Dölj").clicked() {
+                        if ui.button(import_text(ImportText::Hide)).clicked() {
                             hide = true;
                         }
                     }
@@ -1119,10 +1118,10 @@ impl Loupe {
                                 ui.label(line.text);
                             }
                         }
-                        if ui.button("Ny import").clicked() {
+                        if ui.button(import_text(ImportText::NewImport)).clicked() {
                             new_import = true;
                         }
-                        if ui.button("Stäng").clicked() {
+                        if ui.button(import_text(ImportText::Close)).clicked() {
                             close = true;
                         }
                     }
@@ -1134,14 +1133,17 @@ impl Loupe {
                             if ui
                                 .add_enabled(
                                     can_start && !confirming,
-                                    egui::Button::new("Starta import"),
+                                    egui::Button::new(import_text(ImportText::Start)),
                                 )
                                 .clicked()
                             {
                                 start = true;
                             }
                             if ui
-                                .add_enabled(can_close && !confirming, egui::Button::new("Stäng"))
+                                .add_enabled(
+                                    can_close && !confirming,
+                                    egui::Button::new(import_text(ImportText::Close)),
+                                )
                                 .clicked()
                             {
                                 close = true;
@@ -1284,7 +1286,7 @@ impl Loupe {
                 });
                 self.load_active_tab();
             }
-            Err(e) => self.message = Some(format!("Kan inte öppna: {e}")),
+            Err(e) => self.message = Some(open_error_text(&e)),
         }
     }
 
@@ -1331,13 +1333,7 @@ impl Loupe {
             .active()
             .is_some_and(|active| active.files.is_empty())
         {
-            Some(format!(
-                "Inga bilder i {}",
-                tab.folder
-                    .as_deref()
-                    .map(|folder| folder.display().to_string())
-                    .unwrap_or_else(|| "mappen".to_string())
-            ))
+            Some(no_images_text(tab.folder.as_deref()))
         } else {
             None
         };
@@ -1400,7 +1396,8 @@ impl Loupe {
                                 );
                                 self.thumb_textures.insert(event.index, texture);
                             } else {
-                                self.message = Some("Ogiltig miniatyrdata".to_string());
+                                self.message =
+                                    Some(shell_text(ShellText::InvalidThumbnail).to_string());
                             }
                         }
                         Err(_) => {
@@ -1410,7 +1407,7 @@ impl Loupe {
                 }
                 Err(TryRecvError::Empty) => break,
                 Err(TryRecvError::Disconnected) => {
-                    self.message = Some("Förhandsvisningsarbetaren avslutades".to_string());
+                    self.message = Some(shell_text(ShellText::ThumbnailWorkerStopped).to_string());
                     break;
                 }
             }
@@ -1599,7 +1596,7 @@ impl Loupe {
             let text = if tab.files.is_empty() {
                 self.message
                     .clone()
-                    .unwrap_or_else(|| "Dra en mapp eller en bild hit".to_string())
+                    .unwrap_or_else(|| shell_text(ShellText::DropHere).to_string())
             } else {
                 self.nothing_shown_text(&tab)
             };
@@ -1618,36 +1615,40 @@ impl Loupe {
                 .position()
                 .and_then(|_| tab.files.get(tab.current))
                 .cloned();
-            let mut line = if let (Some(position), Some(path)) = (tab.position(), &current_path) {
+            let mut parts = if let (Some(position), Some(path)) = (tab.position(), &current_path) {
                 // "3 / 12 (av 31) · 12 markerade · TN100423.ARW": the marking before the name
                 // (owner decision 2026-11-10; ADR 0014 §5.3 lists the parts).
                 let name = path
                     .file_name()
                     .map(|name| name.to_string_lossy().into_owned())
                     .unwrap_or_else(|| path.display().to_string());
-                let mut line = position_text(position, tab.visible.len(), tab.files.len());
+                let mut parts = vec![position_text(position, tab.visible.len(), tab.files.len())];
                 if let Some(marked) = marked_text(tab.selection.count()) {
-                    line = format!("{line}  ·  {marked}");
+                    parts.push(marked);
                 }
-                format!("{line}  ·  {name}")
+                parts.push(name);
+                parts
             } else if tab.files.is_empty() {
-                "Ingen bild vald".to_string()
+                vec![shell_text(ShellText::NoImageSelected).to_string()]
             } else {
-                self.nothing_shown_text(&tab)
+                vec![self.nothing_shown_text(&tab)]
             };
             if let Some(message) = &self.message {
-                line = format!("{line}  ·  {message}");
+                parts.push(message.clone());
             }
             if let Some(notice) = self.metadata.notice(current_path.as_deref()) {
-                line = format!("{line}  ·  {notice}");
+                parts.push(notice);
             }
             if let Some(status) = import_status {
-                line = if line.is_empty() {
-                    status
-                } else {
-                    format!("{line}  ·  {status}")
-                };
+                // An empty line takes the import status alone, without a separator.
+                if let [only] = parts.as_slice()
+                    && only.is_empty()
+                {
+                    parts.clear();
+                }
+                parts.push(status);
             }
+            let line = status_line_text(&parts);
             // The thumbnail size moved to the command bar (T109).
             self.next_status = StatusBar { line, mode: None };
         }
@@ -1658,7 +1659,7 @@ impl Loupe {
     fn nothing_shown_text(&self, tab: &Tab) -> String {
         if tab.filter.is_active() {
             if let Some(error) = self.metadata.read_error() {
-                return format!("Metadatafel: {error}");
+                return editor_text(&EditorText::MetadataError { error });
             }
             if !self.ratings_ready() {
                 return READING_RATINGS_TEXT.to_string();
@@ -1685,7 +1686,7 @@ impl Loupe {
         let current_dir = match std::env::current_dir() {
             Ok(current_dir) => current_dir,
             Err(error) => {
-                self.message = Some(format!("Kan inte städa metadata: {error}"));
+                self.message = Some(prune_error_text(&error.to_string()));
                 return;
             }
         };
@@ -2237,9 +2238,11 @@ impl Loupe {
             return;
         }
         let start = self.tabs.active().and_then(|tab| tab.folder.clone());
-        if let Some(folder) =
-            pick_folder(shell_text(ShellText::OpenFolderTitle), "", start.as_ref())
-        {
+        if let Some(folder) = pick_folder(
+            shell_text(ShellText::OpenFolderTitle),
+            NO_FOLDER_TEXT,
+            start.as_ref(),
+        ) {
             self.open(&folder, true);
         }
     }
@@ -3041,7 +3044,7 @@ impl Loupe {
                     &mut self.thumb_size,
                     MIN_THUMBNAIL_SIZE..=MAX_THUMBNAIL_SIZE,
                 )
-                .text("Storlek")
+                .text(shell_text(ShellText::ThumbnailSize))
                 .show_value(true),
             );
             // The slider does not keep the keyboard: arrows move in the contact sheet (§4.5).
@@ -3520,19 +3523,20 @@ impl Loupe {
             ctx.request_repaint_after(Duration::from_millis(100));
         }
         // The status line is always shown in full, with the RAW/JPEG control (T110).
-        let mut line = status_line(&frame, self.anchor_at_pointer, total);
+        let mut parts = vec![status_line(&frame, self.anchor_at_pointer, total)];
         if let Some(m) = &self.message {
-            line = format!("{line}  ·  {m}");
+            parts.push(m.clone());
         }
         if let Some(notice) = &metadata_notice {
-            line = format!("{line}  ·  {notice}");
+            parts.push(notice.clone());
         }
         if let Some(rating) = self.metadata.rating_summary(frame.path.as_deref()) {
-            line = format!("{line}  ·  {rating}");
+            parts.push(rating);
         }
         if let Some(status) = import_status {
-            line = format!("{line}  ·  {status}");
+            parts.push(status);
         }
+        let line = status_line_text(&parts);
         // The display-mode control (G4: a key and a control) sits in the status bar.
         self.next_status = StatusBar {
             line,
@@ -3553,7 +3557,7 @@ fn index_span(indexes: impl Iterator<Item = usize> + Clone) -> std::ops::Range<u
 /// The paths as the metadata cache keys them (`MetadataCache::begin_load`): relative paths are
 /// taken from the current folder.
 fn resolve_paths(files: &[PathBuf]) -> Result<Vec<PathBuf>, String> {
-    let cwd = std::env::current_dir().map_err(|e| format!("cannot resolve image paths: {e}"))?;
+    let cwd = std::env::current_dir().map_err(|e| path_resolution_error_text(&e.to_string()))?;
     Ok(files.iter().map(|path| resolve_path(&cwd, path)).collect())
 }
 
@@ -3592,10 +3596,14 @@ fn draw_window_form(
         for field in EditorField::ALL {
             if Some(field) == first_contact_field {
                 ui.label(
-                    egui::RichText::new(property_label(field.property(), Language::Sv)).strong(),
+                    egui::RichText::new(property_label(field.property(), Language::En)).strong(),
                 );
             }
-            ui.label(egui::RichText::new(field.label()).strong());
+            let label = ui.label(egui::RichText::new(field.label()).strong());
+            // The full IPTC name of a shortened name (glossary G1, T117).
+            if let Some(tooltip) = field.tooltip() {
+                label.on_hover_text(tooltip);
+            }
             if let Some(note) = state.form.note(field) {
                 ui.label(egui::RichText::new(note).color(grey).small());
             }
@@ -3850,6 +3858,17 @@ fn label_pill(row: egui::Rect) -> egui::Rect {
     row.shrink2(egui::vec2(LABEL_PILL_INSET_X, LABEL_PILL_INSET_Y))
 }
 
+/// The text of a cell without a thumbnail, in the middle of its image area.
+fn cell_text(painter: &egui::Painter, image_rect: egui::Rect, text: String) {
+    painter.text(
+        image_rect.center(),
+        egui::Align2::CENTER_CENTER,
+        text,
+        egui::FontId::proportional(12.0),
+        image_area::TEXT,
+    );
+}
+
 /// The parts of one thumbnail cell: the whole cell, the image area and the label bar.
 #[derive(Clone, Copy)]
 struct CellRects {
@@ -3899,25 +3918,9 @@ fn paint_cell(
                 );
             }
         }
-        CellState::Failed(error) => {
-            let text = if error == "ingen förhandsvisning" {
-                error
-            } else {
-                let shortened: String = error.chars().take(32).collect();
-                if error.chars().count() > 32 {
-                    format!("{shortened}…")
-                } else {
-                    shortened
-                }
-            };
-            painter.text(
-                image_rect.center(),
-                egui::Align2::CENTER_CENTER,
-                text,
-                egui::FontId::proportional(12.0),
-                image_area::TEXT,
-            );
-        }
+        // A file without a preview has its own state (T116); a failed one shows its error.
+        CellState::NoPreview => cell_text(painter, image_rect, no_preview_text().to_string()),
+        CellState::Failed(error) => cell_text(painter, image_rect, failed_cell_text(&error)),
         CellState::Missing | CellState::Requested => {}
     }
     if rating.is_some_and(|rating| rating.stars == Some(-1)) {
@@ -4283,8 +4286,8 @@ fn collapsed_column(ui: &mut egui::Ui, id: &str, left: bool) -> bool {
 
 fn submit_error_text(error: SubmitError) -> String {
     match error {
-        SubmitError::QueueFull => "Importarbetarens kö är full.".to_string(),
-        SubmitError::Stopped => "Importarbetaren har stoppat.".to_string(),
+        SubmitError::QueueFull => import_text(ImportText::QueueFull).to_string(),
+        SubmitError::Stopped => import_text(ImportText::WorkerStopped).to_string(),
     }
 }
 
@@ -4410,7 +4413,7 @@ fn open_journal() -> Option<Journal> {
             if let Some(text) = recovery_text(&recovered, |path| path.exists()) {
                 let _ = rfd::MessageDialog::new()
                     .set_level(rfd::MessageLevel::Warning)
-                    .set_title(RECOVERY_TITLE)
+                    .set_title(shell_text(ShellText::RecoveryTitle))
                     .set_description(text)
                     .set_buttons(rfd::MessageButtons::Ok)
                     .show();
@@ -4426,110 +4429,8 @@ fn open_journal() -> Option<Journal> {
     Some(journal)
 }
 
-/// The message about the writes [`Journal::recover`] could not resolve (`NeedsUser`, `Failed`,
-/// `Unreadable`): one line per entry with the original and, when the backup file exists
-/// (`exists`), the backup. `Cleaned` and `Restored` are not shown; `None` when nothing is left.
-fn recovery_text(recovered: &[Recovered], exists: impl Fn(&Path) -> bool) -> Option<String> {
-    let lines: Vec<String> = recovered
-        .iter()
-        .filter_map(|item| match item {
-            Recovered::Cleaned { .. } | Recovered::Restored { .. } => None,
-            Recovered::NeedsUser { entry } | Recovered::Failed { entry, .. } => {
-                Some(if exists(&entry.backup) {
-                    format!(
-                        "{} (säkerhetskopia: {})",
-                        entry.original.display(),
-                        entry.backup.display()
-                    )
-                } else {
-                    entry.original.display().to_string()
-                })
-            }
-            Recovered::Unreadable { file, .. } => Some(file.display().to_string()),
-        })
-        .collect();
-    if lines.is_empty() {
-        return None;
-    }
-    Some(format!("{RECOVERY_HEADING}\n{}", lines.join("\n")))
-}
-
-/// The title and text of the message about the metadata worker's first ExifTool start (ADR 0007
-/// §11, D9, T101): `None` when the version is at least [`MIN_EXIFTOOL_VERSION`].
-fn exiftool_message(result: &Result<ToolVersion, String>) -> Option<(&'static str, String)> {
-    match result {
-        Err(text) => Some((
-            "ExifTool saknas",
-            format!(
-                "ExifTool kunde inte startas: {text}. Betyg och metadata kan inte läsas eller \
-                 sparas."
-            ),
-        )),
-        Ok(version) if *version < MIN_EXIFTOOL_VERSION => Some((
-            "ExifTool är för gammal",
-            format!(
-                "ExifTool {version} är för gammal. RawStride behöver version \
-                 {MIN_EXIFTOOL_VERSION} eller senare. Betyg och metadata sparas inte förrän \
-                 ExifTool har uppdaterats."
-            ),
-        )),
-        Ok(_) => None,
-    }
-}
-
-/// A fixed text of the settings window (ADR 0007 §5.2, §5.4/Q10, T106).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum SettingsText {
-    /// The button in the top bar and the window's title.
-    Title,
-    /// The check box of §5.2.
-    CreateIim,
-    /// The small text under the check box.
-    CreateIimNote,
-    /// The label of the encoding drop-down (§5.4, Q10).
-    Encoding,
-    Save,
-    Cancel,
-    /// The reason the file could not be saved when there is no settings folder (no LOCALAPPDATA).
-    NoFolder,
-}
-
-/// The text of `text` in the settings window.
-fn settings_text(text: SettingsText) -> &'static str {
-    match text {
-        SettingsText::Title => "Inställningar",
-        SettingsText::CreateIim => "Skapa IPTC-IIM för kompatibilitet med äldre system",
-        SettingsText::CreateIimNote => "Gäller JPEG, TIFF och DNG som saknar IIM. Av som standard.",
-        SettingsText::Encoding => "Teckenkodning för äldre IPTC- och Exif-text",
-        SettingsText::Save => "Spara",
-        SettingsText::Cancel => "Avbryt",
-        SettingsText::NoFolder => "mappen för inställningar är okänd (LOCALAPPDATA saknas)",
-    }
-}
-
-/// The message shown when the settings file could not be saved; the settings still apply until
-/// RawStride closes (T106).
-fn settings_save_error_text(error: &str) -> String {
-    format!("Inställningarna kunde inte sparas: {error}")
-}
-
 /// The fallback encodings of the settings window's drop-down, in its order.
 const FALLBACK_CHOICES: [Fallback; 2] = [Fallback::Windows1252, Fallback::Latin1];
-
-/// The text of a fallback encoding in the settings window's drop-down.
-fn fallback_text(fallback: Fallback) -> &'static str {
-    match fallback {
-        Fallback::Windows1252 => "Windows-1252 (västeuropeisk)",
-        Fallback::Latin1 => "ISO 8859-1 (Latin-1)",
-    }
-}
-
-/// The fallback encoding whose drop-down text is `text`; `None` for any other text.
-fn fallback_from_text(text: &str) -> Option<Fallback> {
-    FALLBACK_CHOICES
-        .into_iter()
-        .find(|fallback| fallback_text(*fallback) == text)
-}
 
 /// The settings at start (T106): read from `path` with each problem written to the log; the
 /// defaults without a path.
@@ -4706,25 +4607,110 @@ fn main() -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::{
-        FALLBACK_CHOICES, LABEL_TEXT, SettingsText, exiftool_message, fallback_from_text,
-        fallback_text, index_span, label_color, label_pill, recovery_text, resolve_path,
-        resolve_paths, settings_save_error_text, settings_text, window_editor_properties,
+        FALLBACK_CHOICES, LABEL_TEXT, fallback_text, index_span, label_color, label_pill,
+        resolve_path, resolve_paths, window_editor_properties,
     };
     use super::{LeaveDecision, SaveAnswer, WriteOutcome, leave_decision};
     use egui::{Color32, Rect, pos2};
     use pw_loupe::{TEXT_CONTRAST, contrast_ratio};
-    use pw_metadata::ToolVersion;
     use pw_metadata::iim::Fallback;
-    use pw_metadata::journal::{Entry, Recovered};
     use std::path::{Path, PathBuf};
 
-    fn entry(folder: &Path) -> Entry {
-        Entry {
-            original: folder.join("bild.jpg"),
-            copy: folder.join("bild.pwtmp-1.jpg"),
-            backup: folder.join("bild.pwbak-1.jpg"),
-            original_existed: true,
+    // --- no user-visible string literal in the drawing code (T116, rule 13) ---
+
+    /// The calls whose text argument must come from a text module, not a string literal.
+    const TEXT_CALLS: [&str; 9] = [
+        "label(",
+        "button(",
+        "Button::new(",
+        "checkbox(",
+        "on_hover_text(",
+        "hint_text(",
+        "selectable_label(",
+        "selectable_value(",
+        "pick_folder(",
+    ];
+
+    /// The lines of `source` (before its `#[cfg(test)]` module, comment lines left out) where a
+    /// string literal is passed straight to one of [`TEXT_CALLS`]: as one of the call's own
+    /// arguments, also on a later line of the call. A literal inside a nested call (for example
+    /// `format!`) is not passed straight. Each finding names its line.
+    fn literal_text_calls(source: &str) -> Vec<String> {
+        let code = source
+            .split("\n#[cfg(test)]\nmod tests")
+            .next()
+            .unwrap_or(source);
+        // The non-comment lines as one text, and the 1-based line number of each byte in it.
+        let mut text = String::new();
+        let mut line_of = Vec::new();
+        for (index, line) in code.lines().enumerate() {
+            if line.trim_start().starts_with("//") {
+                continue;
+            }
+            text.push_str(line);
+            text.push('\n');
+            line_of.extend(std::iter::repeat_n(index + 1, line.len() + 1));
         }
+        let bytes = text.as_bytes();
+        let mut found = Vec::new();
+        for call in TEXT_CALLS {
+            for (start, _) in text.match_indices(call) {
+                let mut at = start + call.len();
+                let mut depth = 1;
+                while at < bytes.len() && depth > 0 {
+                    match bytes[at] {
+                        b'"' if depth == 1 => {
+                            found.push(format!(
+                                "main.rs:{}: a string literal is passed to `{call}`",
+                                line_of[start]
+                            ));
+                            break;
+                        }
+                        b'"' => {
+                            // Skip a nested string, with its escapes.
+                            at += 1;
+                            while at < bytes.len() && bytes[at] != b'"' {
+                                if bytes[at] == b'\\' {
+                                    at += 1;
+                                }
+                                at += 1;
+                            }
+                        }
+                        b'\'' if bytes.get(at + 2) == Some(&b'\'') => at += 2,
+                        b'(' | b'[' | b'{' => depth += 1,
+                        b')' | b']' | b'}' => depth -= 1,
+                        _ => {}
+                    }
+                    at += 1;
+                }
+            }
+        }
+        found
+    }
+
+    #[test]
+    fn the_check_finds_a_literal_passed_to_a_text_call() {
+        let source = "fn draw(ui: &mut egui::Ui) {\n\
+                      ui.label(\"Källa\");\n\
+                      ui.checkbox(\n    &mut on,\n    \"Backup\",\n);\n\
+                      // ui.button(\"Stäng\");\n\
+                      ui.label(text);\n\
+                      ui.label(format!(\"{n}\"));\n\
+                      }\n\
+                      #[cfg(test)]\nmod tests {\n    ui.label(\"test\");\n}\n";
+        assert_eq!(
+            literal_text_calls(source),
+            [
+                "main.rs:2: a string literal is passed to `label(`",
+                "main.rs:3: a string literal is passed to `checkbox(`",
+            ]
+        );
+    }
+
+    #[test]
+    fn the_drawing_code_passes_no_string_literal_to_a_text_call() {
+        let found = literal_text_calls(include_str!("main.rs"));
+        assert!(found.is_empty(), "{}", found.join("\n"));
     }
 
     // --- the metadata window's move and close (ADR 0017 §2.3.1, U12-Q4, U12-Q5, T112) ---
@@ -4801,168 +4787,16 @@ mod tests {
     }
 
     #[test]
-    fn exiftool_message_names_a_start_error() {
-        let result = Err("ExifTool: could not start exiftool: program not found".to_string());
-        assert_eq!(
-            exiftool_message(&result),
-            Some((
-                "ExifTool saknas",
-                "ExifTool kunde inte startas: ExifTool: could not start exiftool: program not \
-                 found. Betyg och metadata kan inte läsas eller sparas."
-                    .to_string()
-            ))
-        );
-    }
-
-    #[test]
-    fn exiftool_message_says_that_12_40_is_too_old() {
-        let result = Ok(ToolVersion {
-            major: 12,
-            minor: 40,
-        });
-        assert_eq!(
-            exiftool_message(&result),
-            Some((
-                "ExifTool är för gammal",
-                "ExifTool 12.40 är för gammal. RawStride behöver version 12.67 eller senare. \
-                 Betyg och metadata sparas inte förrän ExifTool har uppdaterats."
-                    .to_string()
-            ))
-        );
-    }
-
-    #[test]
-    fn exiftool_message_is_none_from_12_67() {
-        for (major, minor) in [(12, 67), (13, 59)] {
-            assert_eq!(exiftool_message(&Ok(ToolVersion { major, minor })), None);
-        }
-    }
-
-    #[test]
-    fn the_two_encodings_have_their_texts_and_come_back_from_them() {
+    fn every_encoding_choice_has_a_text() {
         assert_eq!(FALLBACK_CHOICES, [Fallback::Windows1252, Fallback::Latin1]);
         assert_eq!(
             fallback_text(Fallback::Windows1252),
-            "Windows-1252 (västeuropeisk)"
+            "Windows-1252 (Western European)"
         );
         assert_eq!(fallback_text(Fallback::Latin1), "ISO 8859-1 (Latin-1)");
         for fallback in FALLBACK_CHOICES {
-            assert_eq!(fallback_from_text(fallback_text(fallback)), Some(fallback));
+            assert!(!fallback_text(fallback).is_empty(), "{fallback:?}");
         }
-        assert_eq!(fallback_from_text("UTF-8"), None);
-        assert_eq!(fallback_from_text(""), None);
-    }
-
-    #[test]
-    fn the_settings_window_has_the_texts_of_the_task() {
-        assert_eq!(settings_text(SettingsText::Title), "Inställningar");
-        assert_eq!(
-            settings_text(SettingsText::CreateIim),
-            "Skapa IPTC-IIM för kompatibilitet med äldre system"
-        );
-        assert_eq!(
-            settings_text(SettingsText::CreateIimNote),
-            "Gäller JPEG, TIFF och DNG som saknar IIM. Av som standard."
-        );
-        assert_eq!(
-            settings_text(SettingsText::Encoding),
-            "Teckenkodning för äldre IPTC- och Exif-text"
-        );
-        assert_eq!(settings_text(SettingsText::Save), "Spara");
-        assert_eq!(settings_text(SettingsText::Cancel), "Avbryt");
-        assert_eq!(
-            settings_save_error_text("åtkomst nekad"),
-            "Inställningarna kunde inte sparas: åtkomst nekad"
-        );
-    }
-
-    #[test]
-    fn recovery_lists_a_file_that_needs_the_user_without_a_backup() {
-        let folder = std::env::temp_dir().join("pw-loupe-recovery");
-        let recovered = [Recovered::NeedsUser {
-            entry: entry(&folder),
-        }];
-
-        let text = recovery_text(&recovered, |_| false);
-
-        assert_eq!(
-            text,
-            Some(format!(
-                "RawStride avslutades mitt i en metadataskrivning. Kontrollera de här filerna:\n{}",
-                folder.join("bild.jpg").display()
-            ))
-        );
-    }
-
-    #[test]
-    fn recovery_names_the_backup_when_it_exists() {
-        let folder = std::env::temp_dir().join("pw-loupe-recovery");
-        let backup = folder.join("bild.pwbak-1.jpg");
-        let recovered = [Recovered::NeedsUser {
-            entry: entry(&folder),
-        }];
-
-        let text = recovery_text(&recovered, |path| path == backup);
-
-        assert_eq!(
-            text,
-            Some(format!(
-                "RawStride avslutades mitt i en metadataskrivning. Kontrollera de här \
-                 filerna:\n{} (säkerhetskopia: {})",
-                folder.join("bild.jpg").display(),
-                backup.display()
-            ))
-        );
-    }
-
-    #[test]
-    fn recovery_shows_nothing_for_cleaned_and_restored_entries() {
-        let folder = std::env::temp_dir().join("pw-loupe-recovery");
-        let recovered = [
-            Recovered::Cleaned {
-                entry: entry(&folder),
-                deleted: vec![folder.join("bild.pwtmp-1.jpg")],
-            },
-            Recovered::Restored {
-                entry: entry(&folder),
-                deleted: Vec::new(),
-            },
-        ];
-
-        assert_eq!(recovery_text(&recovered, |_| true), None);
-        assert_eq!(recovery_text(&[], |_| true), None);
-    }
-
-    #[test]
-    fn recovery_lists_failed_and_unreadable_entries_but_not_cleaned_ones() {
-        let folder = std::env::temp_dir().join("pw-loupe-recovery");
-        let journal_file = folder.join("journal").join("0001.json");
-        let recovered = [
-            Recovered::Cleaned {
-                entry: entry(&folder),
-                deleted: Vec::new(),
-            },
-            Recovered::Failed {
-                entry: entry(&folder),
-                error: "access denied".to_string(),
-            },
-            Recovered::Unreadable {
-                file: journal_file.clone(),
-                error: "not JSON".to_string(),
-            },
-        ];
-
-        let text = recovery_text(&recovered, |_| false);
-
-        assert_eq!(
-            text,
-            Some(format!(
-                "RawStride avslutades mitt i en metadataskrivning. Kontrollera de här \
-                 filerna:\n{}\n{}",
-                folder.join("bild.jpg").display(),
-                journal_file.display()
-            ))
-        );
     }
 
     #[test]

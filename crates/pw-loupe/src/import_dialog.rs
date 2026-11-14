@@ -1,12 +1,12 @@
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
+use crate::import_text::{ImportText, import_text};
 use crate::{
     Field, FieldError, ImportDone, ImportEvent, ImportForm, Preview, RequestId, result_folder,
 };
 
 const PREVIEW_DELAY: Duration = Duration::from_millis(300);
-const STOPPED_MESSAGE: &str = "Importen avbröts: arbetaren har stoppats.";
 
 /// The request the UI should submit to the import worker.
 #[derive(Clone, Debug)]
@@ -214,7 +214,7 @@ impl ImportDialog {
                     preview: None,
                     error: Some(FieldError {
                         field: Field::Source,
-                        message: STOPPED_MESSAGE.to_string(),
+                        message: import_text(ImportText::StoppedMessage).to_string(),
                     }),
                 };
             }
@@ -222,7 +222,7 @@ impl ImportDialog {
                 self.request_id = None;
                 self.state = ImportDialogState::Done {
                     done: ImportDone {
-                        error: Some(STOPPED_MESSAGE.to_string()),
+                        error: Some(import_text(ImportText::StoppedMessage).to_string()),
                         ..ImportDone::default()
                     },
                 };
@@ -647,7 +647,7 @@ mod tests {
                     message
                 }),
                 ..
-            } if message == STOPPED_MESSAGE
+            } if message == import_text(ImportText::StoppedMessage)
         ));
     }
 
@@ -727,7 +727,7 @@ mod tests {
                     error: Some(message),
                     ..
                 }
-            } if message == STOPPED_MESSAGE
+            } if message == import_text(ImportText::StoppedMessage)
         ));
         assert!(dialog.can_close());
     }

@@ -4,6 +4,8 @@ use pw_metadata::template::{Mode, Template, TemplateField};
 use pw_metadata::value::{LangAlt, Value};
 use pw_metadata::{Iptc, LocalizedValue, X_DEFAULT};
 
+use crate::import_text::{folder_template_error_text, name_template_error_text};
+
 /// The editable fields used to prepare an import.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ImportForm {
@@ -53,18 +55,6 @@ impl IptcField {
         IptcField::Phone,
         IptcField::Url,
     ];
-
-    /// The field's label in the dialog.
-    pub fn label(self) -> &'static str {
-        match self {
-            IptcField::Creator => "Fotograf",
-            IptcField::Copyright => "Copyright",
-            IptcField::Credit => "Credit",
-            IptcField::Email => "E-post",
-            IptcField::Phone => "Telefon",
-            IptcField::Url => "Webb",
-        }
-    }
 }
 
 /// The mode of each field of the import dialog's template (D13). The default is `Replace` for
@@ -136,43 +126,6 @@ pub fn allowed_modes(field: IptcField) -> &'static [Mode] {
             Mode::Clear,
         ],
     }
-}
-
-/// The Swedish name of a mode in the dialog (D13).
-pub fn mode_text(mode: Mode) -> &'static str {
-    match mode {
-        Mode::Keep => "Behåll",
-        Mode::Replace => "Ersätt",
-        Mode::Append => "Lägg till efter",
-        Mode::Prefix => "Lägg till före",
-        Mode::Clear => "Rensa",
-    }
-}
-
-/// The text of the window that asks before an import with cleared fields (D14): one line per
-/// field with its label.
-pub fn clear_confirmation_text(fields: &[IptcField]) -> String {
-    let labels = fields
-        .iter()
-        .map(|field| field.label())
-        .collect::<Vec<_>>()
-        .join("\n");
-    format!("Mallen tömmer de här fälten i alla bilder som importeras:\n{labels}")
-}
-
-/// The title of the window that asks before an import with cleared fields (D14).
-pub fn clear_confirmation_title() -> &'static str {
-    "Rensa fält?"
-}
-
-/// The button of that window that starts the import (D14).
-pub fn clear_and_import_text() -> &'static str {
-    "Rensa och importera"
-}
-
-/// The button of that window that goes back to the dialog without starting anything (D14).
-pub fn clear_cancel_text() -> &'static str {
-    "Avbryt"
 }
 
 /// The structure of the creator's contact details (IPTC Core), as in `Iptc::to_template`.
@@ -350,11 +303,11 @@ impl ImportForm {
 
         pw_ingest::Template::parse(&self.folder).map_err(|error| FieldError {
             field: Field::Folder,
-            message: format!("Mappmall: {error}"),
+            message: folder_template_error_text(&error.to_string()),
         })?;
         pw_ingest::Template::parse(&self.name).map_err(|error| FieldError {
             field: Field::Name,
-            message: format!("Filnamnsmall: {error}"),
+            message: name_template_error_text(&error.to_string()),
         })?;
 
         let mut options = pw_ingest::validate_options(pw_ingest::OptionsInput {
@@ -474,6 +427,7 @@ pub fn result_folder(copied: usize, folders: &[(String, usize)]) -> Option<PathB
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::import_text::clear_confirmation_text;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::SystemTime;
 
@@ -733,41 +687,6 @@ mod tests {
     }
 
     #[test]
-    fn mode_texts_and_field_labels() {
-        assert_eq!(
-            [
-                Mode::Keep,
-                Mode::Replace,
-                Mode::Append,
-                Mode::Prefix,
-                Mode::Clear
-            ]
-            .map(mode_text),
-            [
-                "Behåll",
-                "Ersätt",
-                "Lägg till efter",
-                "Lägg till före",
-                "Rensa"
-            ]
-        );
-        assert_eq!(
-            IptcField::ALL.map(IptcField::label),
-            [
-                "Fotograf",
-                "Copyright",
-                "Credit",
-                "E-post",
-                "Telefon",
-                "Webb"
-            ]
-        );
-        assert_eq!(clear_confirmation_title(), "Rensa fält?");
-        assert_eq!(clear_and_import_text(), "Rensa och importera");
-        assert_eq!(clear_cancel_text(), "Avbryt");
-    }
-
-    #[test]
     fn modes_and_texts_are_reached_by_field() {
         let mut form = IptcForm::default();
         for (index, field) in IptcField::ALL.into_iter().enumerate() {
@@ -826,7 +745,7 @@ mod tests {
         assert_eq!(cleared, [IptcField::Email, IptcField::Url]);
         assert_eq!(
             clear_confirmation_text(&cleared),
-            "Mallen tömmer de här fälten i alla bilder som importeras:\nE-post\nWebb"
+            "The template clears these fields in every imported image:\nEmail\nWeb URL"
         );
     }
 
@@ -875,7 +794,7 @@ mod tests {
 
         let error = form.validate().unwrap_err();
         assert_eq!(error.field, Field::Folder);
-        assert!(error.message.starts_with("Mappmall: "));
+        assert!(error.message.starts_with("Folder Template: "));
     }
 
     #[test]
@@ -886,7 +805,7 @@ mod tests {
 
         let error = form.validate().unwrap_err();
         assert_eq!(error.field, Field::Name);
-        assert!(error.message.starts_with("Filnamnsmall: "));
+        assert!(error.message.starts_with("File Name Template: "));
     }
 
     #[test]

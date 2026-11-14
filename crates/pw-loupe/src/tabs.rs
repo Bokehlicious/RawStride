@@ -2,6 +2,7 @@ use std::path::{Component, Path, PathBuf};
 
 use crate::filter::Filter;
 use crate::selection::Selection;
+use crate::shell_text::{ShellText, shell_text};
 
 /// The per-tab view shown for a folder.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -217,7 +218,7 @@ impl Tabs {
                             .as_deref()
                             .map(|folder| folder.display().to_string())
                     })
-                    .unwrap_or_else(|| "Tom".to_string())
+                    .unwrap_or_else(|| shell_text(ShellText::EmptyTab).to_string())
             })
             .collect()
     }
@@ -316,7 +317,7 @@ mod tests {
         assert_eq!(tabs.active_index(), 1);
         tabs.close_active();
         tabs.close_active();
-        assert_eq!(tabs.titles(), vec!["Tom"]);
+        assert_eq!(tabs.titles(), vec!["Empty"]);
         tabs.open_new(PathBuf::from("third"), files("third", 1), 0);
         assert_eq!(tabs.titles(), vec!["third"]);
     }
@@ -343,7 +344,7 @@ mod tests {
         tabs.open_in_active(PathBuf::from("first"), files("first", 2), 1);
         tabs.close_active();
         assert_eq!(tabs.tabs(), &[Tab::default()]);
-        assert_eq!(tabs.titles(), vec!["Tom"]);
+        assert_eq!(tabs.titles(), vec!["Empty"]);
     }
 
     #[test]
@@ -382,7 +383,7 @@ mod tests {
         tabs.close_active();
         assert_eq!(tabs.titles(), vec!["first"]);
         tabs.close_active();
-        assert_eq!(tabs.titles(), vec!["Tom"]);
+        assert_eq!(tabs.titles(), vec!["Empty"]);
     }
 
     #[test]
