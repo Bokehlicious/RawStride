@@ -555,14 +555,18 @@ mod tests {
     fn can_write_refuses_when_the_extra_bytes_exceed_the_free_space() {
         let folder = TempFolder::new("can-write-space");
         let file = folder.file("a.jpg", &[0u8; 100]);
-        let free = free_space(&folder.0).unwrap();
-        match can_write(&file, free + 1) {
+        // A margin of 1 TiB above the free space read here, so that no change of the free space
+        // between this reading and the one inside `can_write` changes the result. Not `u64::MAX`:
+        // `needed` would saturate and the sum would no longer be checked.
+        const MARGIN: u64 = 1 << 40;
+        let extra = free_space(&folder.0).unwrap().saturating_add(MARGIN);
+        match can_write(&file, extra) {
             Err(Refusal::NoSpace {
                 needed,
                 free: reported,
             }) => {
                 // 100 bytes + 10 % + the extra bytes.
-                assert_eq!(needed, 110 + free + 1);
+                assert_eq!(needed, 110 + extra);
                 assert!(reported < needed);
             }
             other => panic!("expected NoSpace, got {other:?}"),

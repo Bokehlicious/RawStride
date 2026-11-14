@@ -1,4 +1,4 @@
-# T122. A free-space test that does not fail by chance — Open
+# T122. A free-space test that does not fail by chance — Done
 
 - **Why:** `fileops::tests::can_write_refuses_when_the_extra_bytes_exceed_the_free_space` failed
   once during T108 (log 2026-11-12) and passed in the next run. The test reads the free space,
@@ -35,3 +35,6 @@
 | Date | Status | Note |
 |---|---|---|
 | 2026-11-14 | Open | Added by the owner, from the flaky failure noted on T108 (2026-11-12) |
+| 2026-11-14 | Ready for review | Test asks for free space + 1 TiB (`saturating_add`); same name and checks. No other test with the pattern. `check.ps1` all OK |
+| 2026-11-14 | Ready for review | Reviewer: accepted, not committed. Only the test changed: extra bytes = free space + 1 TiB (`saturating_add`), `needed == 110 + extra` and `reported < needed` kept, not `u64::MAX`; name unchanged. Point 4 confirmed: the other disk readings in `pw-metadata`'s tests are modification times of files only the test touches. The reviewer's `check.ps1`: fmt, test and clippy OK, 1220 passed, 0 failed, 43 ignored. Waits for the owner's approval |
+| 2026-11-14 | Done | Owner: approved; committed by the reviewer |
