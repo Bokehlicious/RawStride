@@ -154,6 +154,10 @@ IIM block in PSIR 1061 [MWG §4.2.3.2].
 
 - **Equality is always tested on the predicted IIM value.** A value that only differs because of
   IIM truncation or encoding is not a conflict. [MWG §4.2.3.2]
+- **An IIM value equal to the whole XMP text is not a conflict either** (owner, 2026-11-14, T129):
+  some programs ignore the IIM byte limit (Photo Mechanic wrote a 2191-byte Description to IIM
+  2:120, level-C sample, T127). Such a value is not rewritten unless the property is edited; then
+  it is cut to the limit as §5.2 says. [Product]
 - **Conflict marker** [Product]:
   - **Every** difference between IIM and XMP is recorded as a conflict with both values and the
     rule that was applied: XMP (matching checksum), IIM (differing checksum), or open (no
@@ -528,7 +532,11 @@ Each template field has one of four modes. The default is **Keep**. [Product]
 - **PLUS properties** (Model Release Status, Property Release Status, Minor Model Age Disclosure,
   Data Mining) **(Q9, owner 2026-11-11):**
   - edited as a fixed choice list with the vocabulary's English labels (GR14; ADR 0017 U10d-Q3,
-    owner 2026-11-14, in place of the Swedish labels of 2026-11-11); the full PLUS URI is stored;
+    owner 2026-11-14, in place of the Swedish labels of 2026-11-11); the full PLUS URI is stored
+    in the file. ExifTool removes the prefix `http://ns.useplus.org/ldf/vocab/` when it reads and
+    adds it when it writes, so RawStride holds and edits the code alone (`MR-NAP`); a full URI
+    given to ExifTool would be stored with the prefix twice (found in the review of T127,
+    2026-11-14);
   - the allowed values are taken from the PLUS controlled vocabulary into the mapping table (§3);
     the IPTC spec only refers to it ("must be one of the URIs listed in the Controlled Vocabulary
     section of the PLUS specification", [IPTC §11.11]). The list is read before implementation
@@ -716,3 +724,4 @@ listed under the table (§17.1).
 | 13 | 2026-11-13 | §17.1: the English labels of D11 (`docs/glossary.md` G1, G2); no change to the rules of the ADR |
 | 14 | 2026-11-14 | Owner decision: the level-C samples (§12, Q11) are Photo Mechanic files, a Xiaomi 17 Ultra DNG and mixed Photo Mechanic / Lightroom Classic archive files (the owner has no Lightroom Classic); the IIM-only JPEG is dropped; §4 (Q8) and §6.4 note what stays unconfirmed for Lightroom. §16 point 4: the PLUS vocabulary read (R1) |
 | 15 | 2026-11-14 | Owner decision (ADR 0017 U10d-Q3): §11 and Q9, the PLUS choice lists show the vocabulary's English labels instead of Swedish ones (GR14); Digital Source Type also becomes a choice list (U10d-Q2, IPTC NewsCodes saved as R2) |
+| 16 | 2026-11-14 | After the first run of the level-C tests (T127), owner approved: §5.1, an IIM value equal to the whole XMP text is not a conflict (T129); §11, RawStride holds the PLUS codes, ExifTool adds the URI prefix |

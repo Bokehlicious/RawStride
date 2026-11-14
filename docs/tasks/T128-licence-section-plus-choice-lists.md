@@ -7,9 +7,15 @@
   also listed in point 1, so the task can be done without the file). It may run beside T127: T127 changes only `crates/pw-metadata/tests/level_c.rs`
   and the `pw-metadata` rows of `docs/test-inventory.md`; the one finished second brings the total
   up to date. Not at the same time as another task that changes `main.rs` or `editor.rs`.
+- **Changed 2026-11-14 after the review of T127 (owner approved):** the PLUS fields hold **codes**,
+  not full URIs (points 1, 3, 4 and the tests). ExifTool removes the prefix
+  `http://ns.useplus.org/ldf/vocab/` when it reads a PLUS value (also with `-n`) and adds it when
+  it writes one; a full URI given to ExifTool is stored with the prefix twice (the reviewer tried
+  it on a copy). Digital Source Type is not converted by ExifTool and keeps its full URI. Work
+  already done for the section, the fields, the settings and the labels stays as it is.
 - **Crates:** `pw-metadata`, `pw-loupe`. **Files:** `crates/pw-metadata/src/vocabulary.rs` (new);
   `crates/pw-metadata/src/lib.rs` (the module, one `pub mod` line);
-  `crates/pw-metadata/src/validate.rs` (point 4); `crates/pw-loupe/src/editor.rs`;
+  `crates/pw-metadata/src/validate.rs` (point 4); `crates/pw-metadata/tests/edits.rs` (point 8); `crates/pw-loupe/src/editor.rs`;
   `crates/pw-loupe/src/main.rs` (`draw_window_form`, `window_editor_properties`);
   `crates/pw-loupe/src/settings.rs` (the new section's state); `docs/glossary.md`;
   `docs/test-inventory.md`.
@@ -22,7 +28,7 @@
 - **What:**
   1. **The vocabulary** (`pw-metadata`, new module `vocabulary.rs`; ADR 0007 §11: "the allowed
      values are taken from the PLUS controlled vocabulary into the mapping table"): for each
-     choice-list property its XMP id and its allowed URIs in the vocabulary's order, as constants
+     choice-list property its XMP id and its allowed values in the vocabulary's order, as constants
      written by hand from the saved files, with a comment naming the file and its SHA-256:
      - `plus:ModelReleaseStatus`: `MR-NON`, `MR-NAP`, `MR-UMR`, `MR-LMR`;
      - `plus:PropertyReleaseStatus`: `PR-NON`, `PR-NAP`, `PR-UPR`, `PR-LPR`;
@@ -38,37 +44,49 @@
        `compositeSynthetic`; and, separately, the three **retired** codes `minorHumanEdits`,
        `softwareImage`, `digitalArt` (point 3).
 
-     Each PLUS URI is `http://ns.useplus.org/ldf/vocab/` followed by the code; each Digital Source
-     Type URI is `http://cv.iptc.org/newscodes/digitalsourcetype/` followed by the code. The module holds
-     URIs only, no texts for the user (rule 13); a function gives the list of a property and one
-     tells whether a URI is in it (exact comparison, no case folding, no trimming).
+     **The values are the form RawStride reads and writes through ExifTool:**
+     - for the four PLUS properties the **code alone** (`MR-NAP`, `AG-A25`, `DMI-UNSPECIFIED` …).
+       The file holds `http://ns.useplus.org/ldf/vocab/` followed by the code, but ExifTool
+       removes that prefix when it reads and adds it when it writes, so the code is what
+       `read_metadata` gives and what an edit must hold; an edit with the full URI would store the
+       prefix twice;
+     - for Digital Source Type the **full URI**,
+       `http://cv.iptc.org/newscodes/digitalsourcetype/` followed by the code (ExifTool does not
+       convert it).
+
+     The module also gives each property's full URI of a value (for the tooltip, point 3) from one
+     constant prefix per vocabulary. It holds no texts for the user (rule 13); a function gives the
+     list of a property and one tells whether a value is in it (exact comparison, no case folding,
+     no trimming).
   2. **The fields** (`EditorField`, `EditorField::ALL`), a new section **Licence (PLUS)**
      (`EditorSection::Licence`, U10-Q1) between Assignment and Rating and Label, in this order:
      Model Release Status; Model Release Id (`plus:ModelReleaseID`, list); Minor Model Age
      Disclosure (U10d-Q1); Property Release Status; Property Release Id
      (`plus:PropertyReleaseID`, list); Data Mining (U10d-Q1); Digital Source Type. The two Id
      fields are one line with their entries separated by commas, as Keywords (T108, U10-Q2).
-  3. **A choice list** (U10d-Q3) for each URI field of point 1: a drop-down whose entries are
+  3. **A choice list** (U10d-Q3) for each field of point 1: a drop-down whose entries are
      the empty entry (no value) and the vocabulary's values in its order, each shown by its
-     English label (point 5); the file's value selected. Choosing an entry is a `Set` of its URI
-     (`Value::Text`); choosing the empty entry is a `Clear`; an untouched list gives no edit.
+     English label (point 5); the file's value selected. Choosing an entry is a `Set` of its value
+     as point 1 gives it (`Value::Text`; the code for PLUS, the full URI for Digital Source Type);
+     choosing the empty entry is a `Clear`; an untouched list gives no edit.
      **A value not in the vocabulary** (ADR 0007 §11: "kept and shown with a warning, never
      refused or removed"): the list shows one more entry, selected, with the value's text
-     (U10d-Q4: "Unknown value: {uri}", the warning of point 4 below the form); left as it is it
+     (U10d-Q4: "Unknown value: {value}", with the value as read; the warning of point 4 below the form); left as it is it
      gives no edit; it is only replaced when the user picks another entry. **A retired Digital
      Source Type code** in a file is still a valid value: it is shown as an extra entry with its
      own label, selected, with no warning, and kept the same way; the retired codes are not
-     offered otherwise. Each entry's tooltip is its full URI (U10d-Q3). Edits, conflicts, warnings, copy and paste, and "Apply to All Marked" work for the new
+     offered otherwise. Each entry's tooltip is its full URI (U10d-Q3; for PLUS the prefix and the
+     code, from point 1). Edits, conflicts, warnings, copy and paste, and "Apply to All Marked" work for the new
      fields as for the others (`from_read`, `choose`, `edits`, `warnings`, `CopiedFields`,
      `BatchEdits`; U10d-Q5). None of the new fields is a copyright-management field (§8).
-  4. **The warning** (`validate.rs`): a new `Warning::VocabularyValueUnknown { property, uri }`
-     for a PLUS choice-list property whose value is not in the vocabulary; `Display` in English
+  4. **The warning** (`validate.rs`): a new `Warning::VocabularyValueUnknown { property, value }`
+     for a PLUS choice-list property whose value is not one of its codes (point 1); `Display` in English
      as the other variants; the module comment's "Left out here" list no longer names the PLUS
      properties. Digital Source Type keeps its present warning
      (`DigitalSourceTypeUnknown`, unchanged).
   5. **Texts** (rule 13): the section heading from `editor_text` (`EditorText`); the field names
-     from `property_label`; each choice's label from one function in `editor.rs`, taking the URI
-     and giving the vocabulary's own English label (U10d-Q3), exactly as listed here:
+     from `property_label`; each choice's label from one function in `editor.rs`, taking the value
+     of point 1 and giving the vocabulary's own English label (U10d-Q3), exactly as listed here:
      - `MR-NON` None, `MR-NAP` Not Applicable, `MR-UMR` Unlimited Model Releases, `MR-LMR`
        Limited or Incomplete Model Releases; `PR-NON` None, `PR-NAP` Not Applicable, `PR-UPR`
        Unlimited Property Releases, `PR-LPR` Limited or Incomplete Property Releases;
@@ -101,6 +119,11 @@
   6. **The section** is collapsible and its state remembered in `settings.txt` as the other
      sections (U10-Q6, T123), open at first; a missing key gives open.
   7. **Other Metadata** no longer lists the properties that are now fields.
+  8. **The write through ExifTool** (`tests/edits.rs`, against a real ExifTool as the other tests
+     there): an edit `Set` `plus:ModelReleaseStatus` = `MR-UMR` on the small JPEG; ExifTool's
+     XMP of the file (`-b -XMP`) then holds `http://ns.useplus.org/ldf/vocab/MR-UMR` exactly once
+     and the prefix never twice, and `read_metadata` gives back `MR-UMR`. The same for Digital
+     Source Type with the full URI of `digitalCapture` (stored once, read back unchanged).
 - **Not in this task:** Image Creator, Copyright Owner, Licensor, Image Supplier and the other
   structures (U11a); Model Age (`Iptc4xmpExt:ModelAge`, stays under Other Metadata); the other
   PLUS vocabularies of the LDF file (Credit Line Required, Adult Content Warning, Image Type …);
@@ -109,16 +132,18 @@
 - **Rules:** `docs/tasks/README.md` rules 1–13.
 - **Tests to add / change:**
   - `pw-metadata`: each list of point 1 has the expected count, starts and ends with the expected
-    URIs and has no duplicate; the membership test is exact (a different case, a trailing space or
-    the `https` form is not in the list); `validate` gives `VocabularyValueUnknown` for an unknown
+    values and has no duplicate; the PLUS lists hold codes without a prefix, the Digital Source
+    Type list full URIs; the membership test is exact (a different case, a trailing space, the
+    full PLUS URI or the `https` form of a Digital Source Type is not in the list); the full URI of
+    a PLUS code; the write test of point 8; `validate` gives `VocabularyValueUnknown` for an unknown
     PLUS value and nothing for a known one or a blank one; Digital Source Type unchanged.
   - `pw-loupe`: `EditorField::ALL` order and sections with the new section; the property and kind
     of each new field; `from_read` → `edits` for a choice list: unchanged → no edit, another entry
-    → `Set` of its exact URI, the empty entry → `Clear`; an unknown value shown as its own entry,
+    → `Set` of its exact value (the code for PLUS), the empty entry → `Clear`; an unknown value shown as its own entry,
     untouched → no edit, replaced → `Set`; the Id lists as T123's lists; copy and paste and
     "Apply to All Marked" carry a changed choice; `window_editor_properties` and Other Metadata
     without the new fields; the section's key in `settings.rs` (missing → open); `editor_text` of
-    the heading; a label for every vocabulary URI (no URI without a label, no empty label); the
+    the heading; a label for every vocabulary value (no value without a label, no empty label); the
     label test covers every field.
 - **Done when:** `.\tools\check.ps1` is all OK, `docs/test-inventory.md` and `docs/glossary.md`
   are updated, and `git diff --stat` shows only the files above. The owner checks by hand on a
@@ -162,3 +187,4 @@
 |---|---|---|
 | 2026-11-14 | Blocked | Written by the reviewer (ADR 0017 U10d with ADR 0007 I11) while T127 runs; waits for U10d-Q1–U10d-Q6 and R2 |
 | 2026-11-14 | Open | Owner: U10d-Q1–U10d-Q6 approved as proposed; written into the points, ADR 0017 §6.1 and ADR 0007 §11 (Q9). R2 done by the reviewer on the owner's yes: `IPTC-NewsCodes-digitalsourcetype.json` (12 753 bytes, SHA-256 `1caaa5bb…88e7cca4fe52b9bb4d65701da4fb1d6`), 17 current and 3 retired codes, listed in points 1 and 5 |
+| 2026-11-14 | Open | Reviewer, after the review of T127 (owner approved): the PLUS values are codes, since ExifTool removes and adds the prefix (a full URI is stored twice); Digital Source Type keeps full URIs; new point 8 (write test in `tests/edits.rs`). The agent paused; it reads the file again and continues |
