@@ -29,6 +29,15 @@ and reviewer:
   count double against the free quota, and `check.ps1` already runs before every commit. While
   private, run it only by hand (`workflow_dispatch`) and on pull requests to `main`; on every push
   once public. The first run also tests `docs/building.md` on a clean machine.
+- **Review the git history before the repository becomes public** (owner, 2026-11-14): go
+  through every commit on every branch to be published (not only the current files) for things
+  that should not be public: personal data (names, e-mail addresses, paths with user names),
+  keys, tokens or passwords, private test images and their metadata, copyrighted reference specs
+  (for example the IPTC files kept outside the repository), and large binaries. Decide per finding
+  whether to remove it from the history (a history rewrite of all branches, which changes every
+  commit hash and needs the owner's approval) or to leave it; a tool such as `gitleaks` for the
+  secrets part would be a new dependency. Do this before the CI item above makes the repository
+  public.
 - **A second language: a text catalog with keys** (owner, 2026-11-14). Only when a second language
   is wanted (GR14: no language choice for now). Done already by T116–T121: every text the user
   sees is made by a function in a text module (rule 13), whole sentences from one template, the
