@@ -127,7 +127,8 @@ Where in the file to read and write [MWG §4.2.3.4]:
   - A sidecar named `<basename>.<ext>.xmp` (e.g. `DSC01234.ARW.xmp`, written by darktable and
     similar tools) is never read or written; the info panel reports that it exists and is ignored,
     as for a foreign sidecar next to a DNG (Q5).
-  - To confirm with the level-C samples (Q11); Adobe XMP Part 3 is read if available (§16).
+  - To confirm with the level-C samples (Q11; Photo Mechanic and the mixed archive files, no file
+    written by Lightroom alone, §12); Adobe XMP Part 3 is read if available (§16).
 - **Created** on the first change; **edited in place** afterwards (unknown content kept), with the
   same transaction (§9.5).
 - **RAW+JPEG pairs:** only the RAW reads and writes `<basename>.xmp`; the JPEG keeps its embedded
@@ -324,8 +325,10 @@ Urgency (2:10), Category (2:15) and Supplemental Categories (2:20):
     same problem today: it may use the camera's ImageDescription of a raw file on export after the
     caption was cleared (a known bug report since Lightroom 3). Photo Mechanic documents no
     behaviour for this case.
-  - **Possible later addition:** writing an explicitly empty value in the sidecar, if the level-C
-    samples (Q11) show that Lightroom and Photo Mechanic then keep the field empty.
+  - **Possible later addition:** writing an explicitly empty value in the sidecar, if it is shown
+    that Lightroom and Photo Mechanic then keep the field empty. The level-C samples (Q11) can show
+    it for Photo Mechanic only; there is no file written by Lightroom alone (§12, 2026-11-14), so
+    for Lightroom it stays untested.
 
 ### 6.5 Creator ↔ Artist/Photographer
 
@@ -554,12 +557,18 @@ Each template field has one of four modes. The default is **Keep**. [Product]
   - IIM prefixes and byte limits;
   - the four template modes;
   - fault injection (§9.5).
-- **Level-C samples** (outside the repo) from the owner **(Q11, owner 2026-11-11)**; they are needed
-  before the implementation can be tested, not before approval:
-  - an ARW with sidecar, a JPEG and a DNG written by Lightroom, and the same written by Photo
-    Mechanic;
-  - one IIM-only JPEG edited by an old tool (checksum mismatch);
-  - a Xiaomi 17 Ultra DNG.
+- **Level-C samples** (outside the repo, in `PW_TESTDATA`) from the owner **(Q11, owner
+  2026-11-11; changed 2026-11-14)**; they are needed before the implementation can be tested, not
+  before approval:
+  - an ARW with sidecar, a JPEG and a DNG whose metadata only Photo Mechanic has written;
+  - a Xiaomi 17 Ultra DNG;
+  - files from the owner's archive as they are, written by both Photo Mechanic and Lightroom
+    Classic (an ARW with sidecar and a JPEG): read without error, conflicts shown, unknown content
+    kept.
+
+  **Changed 2026-11-14 (owner):** the owner has no Lightroom Classic, so there are no files written
+  by Lightroom alone; the mixed archive files take their place. The IIM-only JPEG with a checksum
+  mismatch is dropped: the case is tested on built data in `pw-metadata` (`reconcile.rs`).
 
 ## 13. Consistency check of the standards in this architecture
 
@@ -602,7 +611,7 @@ silently. All other deviations concern SHOULD-level recommendations; each is mar
 | ~~**Q8**~~ | Normative sidecar naming (`name.xmp` vs `name.ARW.xmp`) and RAW+JPEG pairs | **Resolved 2026-11-11:** `<basename>.xmp`, as ADR 0004 and the default of Lightroom and Photo Mechanic. A `<basename>.<ext>.xmp` is never read or written and is reported, as in Q5. RAW+JPEG pairs as §4.2. To confirm with the level-C samples; Adobe XMP Part 3 is read if available |
 | ~~**Q9**~~ | Allowed URI values of PLUS properties (release status, minor model age, data mining) | **Resolved 2026-11-11:** a fixed choice list with Swedish labels, values taken from the PLUS controlled vocabulary; unknown values kept with a warning (§11). The vocabulary itself must be read before implementation (§16) |
 | ~~**Q10**~~ | Fallback encoding for IIM/Exif text that is neither ASCII nor UTF-8 | **Resolved 2026-11-11:** Windows-1252 by default, changeable in the settings; the value is marked as converted (§5.4) |
-| ~~**Q11**~~ | Test files | **Resolved 2026-11-11:** the level-C samples of §12, provided by the owner before the implementation is tested |
+| ~~**Q11**~~ | Test files | **Resolved 2026-11-11:** the level-C samples of §12, provided by the owner before the implementation is tested. **Changed 2026-11-14:** Photo Mechanic files, a Xiaomi DNG and mixed Photo Mechanic / Lightroom Classic archive files; no Lightroom-only files, no IIM-only JPEG (§12) |
 | ~~**Q12**~~ | A manual "correct camera time" feature (MWG: such corrections SHOULD be exported to Exif) | **Resolved 2026-11-11:** Out of scope now; would be the only way DateTimeOriginal ever changes, and only on the user's explicit command (§7) |
 | ~~**Q13**~~ | "New IIM only when backward compatibility requires it": how is that detected besides the setting? | **Resolved 2026-11-11:** Only the setting (and possibly a future export profile); no automatic detection (§5.2) |
 
@@ -634,7 +643,7 @@ silently. All other deviations concern SHOULD-level recommendations; each is mar
    XMP specification 2.0.1, in the folder's `README.md`).
 5. Read **XMP Part 1** (ISO 16684-1) and **MWG §5.2** to verify the Q7 policy, **XMP Part 3** (Q8)
    and **IIM 4.2** (Q3) if the owner provides them.
-6. **Level-C samples** (Q11), before the implementation is tested.
+6. **Level-C samples** (Q11, the set changed 2026-11-14, §12), before the implementation is tested.
 
 ## 17. Decisions during implementation (D1–D16)
 
@@ -704,3 +713,4 @@ listed under the table (§17.1).
 | 11 | 2026-11-13 | §17: the owner's decisions D1–D16 of the implementation, moved unchanged from the step list, with the later changes (§17.1); no new decision |
 | 12 | 2026-11-13 | Owner decisions on safe writing that lived only in task logs, written in; no new decision:<br>- §5.2: both forms brought in line after every write (review of T83); an edit decides an unresolved conflict, and re-encoding to UTF-8 does not (T83, Q1); the checksum of a TIFF or DNG in a second call (T92);<br>- §9.2: the checksum pass (T92);<br>- §9.3: ExifTool restarted before a TIFF copy is read (T92, choice A);<br>- §9.4: a failed final read keeps the backup (T86);<br>- §9.5: a new sidecar checked against an empty original; every error names its file (T86); the tests bullet brought up to date with the tests written in T84–T92 |
 | 13 | 2026-11-13 | §17.1: the English labels of D11 (`docs/glossary.md` G1, G2); no change to the rules of the ADR |
+| 14 | 2026-11-14 | Owner decision: the level-C samples (§12, Q11) are Photo Mechanic files, a Xiaomi 17 Ultra DNG and mixed Photo Mechanic / Lightroom Classic archive files (the owner has no Lightroom Classic); the IIM-only JPEG is dropped; §4 (Q8) and §6.4 note what stays unconfirmed for Lightroom. §16 point 4: the PLUS vocabulary read (R1) |
