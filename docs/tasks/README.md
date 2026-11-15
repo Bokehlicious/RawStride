@@ -95,7 +95,7 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status |
 |---|---|---|
-| [T144](T144-inspector-histogram.md) | ADR 0017 U7, the inspector's Histogram: statistics of its own, and the 100 % view first | Blocked |
+| [T144](T144-inspector-histogram.md) | ADR 0017 U7, the inspector's Histogram: statistics of its own, and the 100 % view first | Open |
 
 ## Writing a task (owner and reviewer)
 

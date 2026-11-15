@@ -376,7 +376,7 @@ without the study notes as a template.
 
 ### 6.1 Questions of the steps (answered by the owner, 2026-11-13: every proposal approved)
 
-Asked in the tasks of stage A (T109–T112, `docs/tasks/done/`) and of U10, U12b, U12c and U10d (T123–T126, T128, 2026-11-14) and of U4, U11a and U14 (T135, T136, T138, T139, 2026-11-14) and of U5, U12a, U7 and U11 (T140–T143, 2026-11-15) and answered there; recorded here so
+Asked in the tasks of stage A (T109–T112, `docs/tasks/done/`) and of U10, U12b, U12c and U10d (T123–T126, T128, 2026-11-14) and of U4, U11a and U14 (T135, T136, T138, T139, 2026-11-14) and of U5, U12a, U7 and U11 (T140–T143, 2026-11-15) and of U7's inspector part (T144, 2026-11-15) and answered there; recorded here so
 the decisions do not live only in the tasks.
 
 | # | Decision (as proposed) |
@@ -479,6 +479,12 @@ the decisions do not live only in the tasks.
 | U7-Q6 | Once per opened image, after its first image is shown, so the first image is not slower; `latency.ps1` checked |
 | U7-Q7 | A collapsible "Histogram" section in the preview's right column (under Info and Zoom) and in the inspector (under Metadata), each remembered; the clipped shares per channel and the deep-shadow share under it |
 | U7-Q8 | Histogram, RAW data, Embedded JPEG, TIFF, Clipped, Deep shadows, Reading …, No histogram for this file; English (GR14), in the glossary |
+| U7c-Q1 | The inspector's Histogram uses the preview's statistics when its last frame showed the same image and mode; otherwise the reader of U7c-Q2 |
+| U7c-Q2 | A reader thread of its own in `pw-loupe`, with the Exif reader's rules (shown, 200 ms, one in flight, newest wins), opening the file with the same `NativeBackend` and dropping the session at once; not the view core |
+| U7c-Q3 | The last 64 results by path and mode, in memory; another folder empties them; a changed file is read again |
+| U7c-Q4 | A metadata write of the file being read waits for the read; the result is kept |
+| U7c-Q5 | A wanted 100 % view of the current image is picked before its statistics in the view core; `latency.ps1` before and after, the 100 % run reported |
+| U7c-Q6 | No new texts: T142's, a failed read as "No histogram for this file" |
 | U11c-Q1 | Person Shown with Details, Product Shown, Artwork or Object, Contributor, CV-Term About Image, Image Registry Entry; not Image Region (needs drawing on the image) nor the rights expressions |
 | U11c-Q2 | Content after Person Shown: Person with Details, Product, Artwork; Creator and Rights at the end: Contributor; Assignment after Genre: CV-Term About Image, at the end: Image Registry Entry |
 | U11c-Q3 | Title, Creator, Date Created, Source, Source Inventory Number and Copyright Notice open; the other eleven under a collapsed "More" line |

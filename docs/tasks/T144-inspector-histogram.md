@@ -1,6 +1,7 @@
-# T144. ADR 0017 U7, the inspector's Histogram: statistics of its own, and the 100 % view first — Blocked
+# T144. ADR 0017 U7, the inspector's Histogram: statistics of its own, and the 100 % view first — Open
 
-- **Waits for the owner** on the proposals U7c-Q1–U7c-Q6 (at the end of this task).
+- **Can start now.** The owner approved the proposals of U7c-Q1–U7c-Q6 (at the end of this task)
+  on 2026-11-15; they are written into the points below and into ADR 0017 §6.1.
 - **Why:** T142 gave the preview's right column and the inspector a Histogram section (ADR 0017
   §2.6, U7-Q7). The statistics come from the view core, which opens images only for the preview
   and the loupe. The inspector is drawn in the contact sheet, where the view core has no image open,
@@ -59,7 +60,7 @@
 - **Done when:** `.\tools\check.ps1` is all OK, V1 (fit and 100 %) is not worse than before this
   task, and `git diff --stat` shows only the files above.
 
-## Questions (the reviewer's proposals)
+## Questions (the reviewer's proposals; written into the points above)
 
 | # | Question | Proposal |
 |---|---|---|
@@ -75,3 +76,4 @@
 | Date | Status | Note |
 |---|---|---|
 | 2026-11-15 | Blocked | Added after the review of T142; waits for U7c-Q1–U7c-Q6 |
+| 2026-11-15 | Open | The owner approved U7c-Q1–U7c-Q6 as proposed |
