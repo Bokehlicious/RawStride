@@ -12,7 +12,7 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 | `T<nnn>-<name>.md` (this folder) | Open tasks, one file each |
 | [`backlog.md`](backlog.md) | Not for agents yet: needs a decision, a dependency or an ADR first |
 | [`plans/`](plans/) | Step lists for ADRs that have none of their own (ADR 0007 milestone 8, ADR 0017) |
-| [`done/`](done/README.md) | Finished tasks T1–T143 and the log they were kept in until 2026-11-13 |
+| [`done/`](done/README.md) | Finished tasks T1–T144 and the log they were kept in until 2026-11-13 |
 
 
 ## How to work on a task
@@ -95,12 +95,12 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status |
 |---|---|---|
-| [T144](T144-inspector-histogram.md) | ADR 0017 U7, the inspector's Histogram: statistics of its own, and the 100 % view first | Open |
+| [T145](T145-histogram-kept-after-own-writes.md) | ADR 0017 U7, the inspector's Histogram kept after RawStride's own metadata writes | Open |
 
 ## Writing a task (owner and reviewer)
 
-- **Number:** the next free number after the highest in this folder and `done/` (T145 next).
-- **File:** `docs/tasks/T145-<a-few-words>.md`; three digits, lower case, words joined by `-`.
+- **Number:** the next free number after the highest in this folder and `done/` (T146 next).
+- **File:** `docs/tasks/T146-<a-few-words>.md`; three digits, lower case, words joined by `-`.
 - **Index:** add a row to "Open tasks" above and keep its status in step with the file's heading.
 - **When it is Done and committed:** `git mv` the file to `done/`, move its row to `done/README.md`.
 - **Owner decisions** (decisions, approved Q proposals) are written into the ADR or requirement
@@ -109,7 +109,7 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 Skeleton (the fields recent tasks use; leave out those that do not apply):
 
 ```markdown
-# T145. <Title> — Open
+# T146. <Title> — Open
 
 - **Why:** …
 - **Crates:** … **Files:** …

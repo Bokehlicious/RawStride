@@ -32,6 +32,6 @@ the one before it is accepted.
 |---|---|---|---|
 | U4 | T135 | Library: folder tree, favourites and recent folders (U4-Q1–U4-Q7) | done (T135, 2026-11-14) |
 | U14 | T138 | Sort order: File Name, Capture Time, Modified, File Type, Rating, ascending or descending (U14-Q1–U14-Q7) | done (T138, 2026-11-15) |
-| U7a | T142, T144 | RAW histogram and exposure statistics in the preview and the inspector (U7-Q1–U7-Q8); the inspector's section shows statistics only when the preview showed the same image, so T144 gives it its own | done in the preview (T142, 2026-11-15); the inspector in T144 |
+| U7a | T142, T144, T145 | RAW histogram and exposure statistics in the preview and the inspector (U7-Q1–U7-Q8); the inspector's section shows statistics only when the preview showed the same image, so T144 gives it its own | done (T142, T144, 2026-11-15); T145 (kept histograms after RawStride's own writes) open |
 | U7b | – | Clipping overlay on the image (§2.6), on T142's clipping level | after T142 |
 | U5 | T140 | Tasks area: import progress per file, stop button, pending writes, error list (U5-Q1–U5-Q7) | done (T140, 2026-11-15) |
