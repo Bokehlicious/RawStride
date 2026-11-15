@@ -1,7 +1,8 @@
-# T147. ADR 0017 U7b, second part: the clipping map in the view core — Blocked
+# T147. ADR 0017 U7b, second part: the clipping map in the view core — Open
 
-- **Blocked: waits for T146** (the RAW map in `pw-libraw`), which waits for the owner's answers to
-  U7b-Q1–U7b-Q10 in `docs/tasks/T146-clipping-map-of-raw-data.md`. Chain: T146 → T147 → T148 →
+- **Can start now.** T146 (the RAW map in `pw-libraw`, `Session::clipping_map`) is Done; the
+  owner's answers to U7b-Q1–U7b-Q10 are in `docs/tasks/done/T146-clipping-map-of-raw-data.md`
+  and ADR 0017 §6.1. Chain: T146 → T147 → T148 →
   T149.
 - **Why:** ADR 0017 §2.6, step U7b. T146 gives the map of an opened RAW file. The view core must
   ask for it at the right time, make the same map for JPEG and TIFF, keep a few, and give the
@@ -83,3 +84,4 @@
 |---|---|---|
 | 2026-11-15 | Blocked | Added with T146, T148 and T149 (the chain of U7b); waits for T146 |
 | 2026-11-15 | Blocked | Cold read (fresh agent): `loupe_text.rs`'s two test frames added to the files; the JPEG/TIFF decode rule restated (a new decode whenever the session's pixels are converted); the order after `statistics_job`, the lending and the moving of kept maps in `set_files` made explicit; "ready" also while the current image's zoom is prepared; `Arc` identity for the shell |
+| 2026-11-15 | Open | T146 is Done |

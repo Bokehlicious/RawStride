@@ -1,4 +1,4 @@
-# T146. ADR 0017 U7b, first part: the clipping map of the RAW data — Open
+# T146. ADR 0017 U7b, first part: the clipping map of the RAW data — Done
 
 - **Can start now.** The owner approved the proposals of U7b-Q1–U7b-Q10 (at the end of this
   task) on 2026-11-15; they are written into the tasks of the chain and into ADR 0017 §6.1. They
@@ -68,6 +68,21 @@
   the one without has none; a render before and after does not change the map; T142's statistics
   tests pass unchanged. The edge cells cannot be tested without a file (the shim has no test seam);
   if the fixture files' sizes are all divisible by 2, say so in the report.
+  **Added in the review (owner, 2026-11-15): X-Trans.** The owner added five Fujifilm X-T30 files
+  to `PW_TESTDATA` (`_DSF4243.RAF`, `_DSF4248.RAF`, `_DSF4252.RAF`, `_DSF4254.RAF`, `_DSF4271.RAF`;
+  6246 × 4170, X-Trans). Add, in `tests/statistics.rs` and ignored without `PW_TESTDATA` as the
+  others, a test over every `.raf` file in the folder (none found is a failure, so the test
+  cannot pass empty): statistics and a map for each; the statistics add up (the bins of each
+  channel are its `pixels`, the three `pixels` together are `Session::width() × height()`,
+  `shadow_pixels` is the whole 3×3 cells' photosites, shares within 0–1); the map's cell is 3, its
+  size `ceil(width / 3)` × `ceil(height / 3)`, only bits 0–3; the whole cells with the deep-shadow
+  bit times 9 equal the statistics' `deep_shadows`; each channel has clipped cells exactly when the
+  statistics have clipped photosites of it, and no more cells than photosites; the map is the same
+  after `render_half`. And for the named files: `_DSF4271.RAF` has clipped cells in R and G and
+  none in B, and the other four have no clipped cells (the reviewer's probe found this). Do not
+  add `.raf` to the existing every-file test (its checks assume a Bayer pattern); keep it as it
+  is. Update the test's module comment and `docs/test-inventory.md` with the new test. The sizes
+  are divisible by 3, so the edge cells stay untested; say so in the report.
 - **Not in this task:** the view core (T147), keys and texts (T148), the drawing (T149), JPEG and
   TIFF (T147), any change to what `pwlr_statistics` and `Session::statistics` give, or to the
   render.
@@ -101,3 +116,7 @@
 | 2026-11-15 | Blocked | Added with T147–T149 (the chain of U7b); waits for U7b-Q1–U7b-Q10 |
 | 2026-11-15 | Blocked | Cold read (fresh agent, of T146–T148): helpers shared with `pwlr_statistics_of` allowed, its results unchanged; the two-call buffer protocol made required; the deep-shadow comparison limited to mosaics; the fixture files named and a grid check against `Session::width()` added; the damaged-file test and the edge-cell unit test removed (`pwlr_open` refuses damaged files; the shim has no test seam). T148 was too big and is split into T148 and T149; U7b-Q1, Q5, Q8–Q10 changed with it ("Deep shadows" as the Histogram section's term, the texture's memory stated) |
 | 2026-11-15 | Open | The owner approved U7b-Q1–U7b-Q10 as proposed; written into ADR 0017 §6.1 |
+| 2026-11-15 | Ready for review | Done by the task agent: `pwlr_clipping_map` (two calls, the map's own rows as work space) and the shared helpers `pwlr_layout_of` and `pwlr_limits` in `pwlr.cpp` (`pwlr_statistics_of` now calls them, same checks in the same order and same results); `ClippingMap` and `Session::clipping_map` in `lib.rs` with 2 unit tests; 3 fixture tests in `tests/statistics.rs`. `check.ps1` all OK (1519 passed, 61 ignored, 0 failed); the `statistics` fixture tests with `PW_TESTDATA`: 7 passed. Every fixture file's width and height are even, so the edge cells are not tested. Needs the independent review of the diff (shim change) |
+| 2026-11-15 | Open | Reviewed: the diff is right (the reviewer's own reading and an independent review agent found no bugs; `check.ps1` all OK; the `statistics` fixture tests with `PW_TESTDATA`: 7 passed). The independent review noted, not blocking: the clipped-bit check in the test is rough (the statistics cannot show every clipped photosite's cell; the deep-shadow check is exact); edge cells, X-Trans and three- or four-colour RAW are untested. **Sent back for one thing:** the owner added five Fujifilm X-T30 RAF files (X-Trans); a reviewer's probe (not kept) found statistics and map right on all five. Left: the X-Trans test added under **Tests to add** ("Added in the review"); nothing else is to change |
+| 2026-11-15 | Ready for review | X-Trans test added by the task agent: `fujifilm_files_have_statistics_and_a_clipping_map_that_agree` in `tests/statistics.rs` over every `.raf` file (none found fails), with the checks of "Added in the review" and the named files (`_DSF4271.RAF` clipped cells in R and G, none in B; the other four none; each named file must be found); module comment and `docs/test-inventory.md` updated; the every-file test unchanged. All five files are 6246 × 4170, divisible by 3, so the edge cells stay untested. The `statistics` fixture tests with `PW_TESTDATA`: 8 passed; `check.ps1` all OK. No change to `pwlr.cpp` or `lib.rs` in this round |
+| 2026-11-15 | Done | Reviewed again: the X-Trans test does what the review asked; `check.ps1` all OK (1519 passed, 0 failed, 62 ignored); the `statistics` fixture tests with `PW_TESTDATA`: 8 passed, run again by the reviewer. Approved by the owner. Leftovers: the edge cells, a black level per position and three- or four-colour RAW data are in `docs/test-inventory.md`'s "Not covered" line (the sample files in `docs/tasks/backlog.md`); the rough clipped-bit check is noted there too by the statement of what the test checks. Next: T147 |

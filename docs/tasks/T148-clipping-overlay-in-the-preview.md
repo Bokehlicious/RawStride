@@ -1,7 +1,7 @@
 # T148. ADR 0017 U7b, third part: the clipping keys, menu items and section — Blocked
 
 - **Blocked: waits for T147** (the map's state in the view core's frame), which waits for T146.
-  The owner's answers to U7b-Q1–U7b-Q10 are in `docs/tasks/T146-clipping-map-of-raw-data.md`.
+  The owner's answers to U7b-Q1–U7b-Q10 are in `docs/tasks/done/T146-clipping-map-of-raw-data.md`.
   Chain: T146 → T147 → T148 → T149.
 - **Why:** ADR 0017 §2.6, step U7b: the clipped highlights and the deepest shadows marked on the
   image in the preview, each with its own key. This task gives the user the two on/off choices

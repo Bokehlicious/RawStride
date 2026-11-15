@@ -236,24 +236,58 @@ static double pwlr_curve(double x) {
 }
 
 /* The levels of one CFA colour (0..3): black (LibRaw's common level, the colour's own and
- * `common`, the part every value of a black level pattern shares), white, the deep-shadow limit
- * (a value after black subtraction) and the histogram bin of every value after black
- * subtraction. */
+ * `common`, the part every value of a black level pattern shares), white and the deep-shadow
+ * limit (a value after black subtraction). */
+struct PwLimits {
+  unsigned black, white, shadow;
+};
+
+/* The levels of one CFA colour and the histogram bin of every value after black subtraction. */
 struct PwLevels {
   unsigned black, white, shadow;
   unsigned char bin[65536];
 };
 
-static void pwlr_levels(const libraw_colordata_t &C, unsigned common, const float mul[4],
-                        PwLevels *lv) {
+/* What the statistics and the clipping map read from the unpacked RAW data, once its layout has
+ * passed the checks of pwlr_layout_of. */
+struct PwLayout {
+  unsigned width, height; /* the visible image */
+  PwLimits lim[4];        /* per CFA colour */
+  /* A black level pattern on top of the per-colour level (prows x pcols values): `rest` is what
+   * is left per position after `common` (in lim[].black), `pattern` whether any is. */
+  unsigned prows, pcols;
+  bool pattern;
+  unsigned rest[LIBRAW_CBLACK_SIZE];
+  /* A mosaic (raw_image): one colour per photosite, cfa[row % frows][col % fcols]. Otherwise a
+   * three- or four-colour image (color3_image or color4_image) with n values per pixel. */
+  bool mosaic;
+  unsigned char cfa[8][6];
+  unsigned frows, fcols;
+  unsigned n;
+  /* Photosites per side of a cell that holds every colour: 2 for a Bayer pattern and for a
+   * three- or four-colour image, 3 for X-Trans. */
+  unsigned cell;
+};
+
+static void pwlr_limits(const libraw_colordata_t &C, unsigned common, PwLimits *lim) {
   for (int c = 0; c < 4; c++) {
-    PwLevels &l = lv[c];
+    PwLimits &l = lim[c];
     l.black = C.black + C.cblack[c] + common;
     l.white = C.linear_max[c] ? C.linear_max[c] : C.maximum;
     if (l.white > 65535u) l.white = 65535u;
     double span = l.white > l.black ? (double)(l.white - l.black) : 1.0;
     /* "below 1/256 of the white level above black" */
     l.shadow = (unsigned)ceil(span / 256.0);
+  }
+}
+
+static void pwlr_levels(const PwLimits *lim, const float mul[4], PwLevels *lv) {
+  for (int c = 0; c < 4; c++) {
+    PwLevels &l = lv[c];
+    l.black = lim[c].black;
+    l.white = lim[c].white;
+    l.shadow = lim[c].shadow;
+    double span = l.white > l.black ? (double)(l.white - l.black) : 1.0;
     for (unsigned v = 0; v < 65536u; v++) {
       int b = (int)(pwlr_curve((double)v / span * (double)mul[c]) * 256.0);
       l.bin[v] = (unsigned char)(b > 255 ? 255 : b);
@@ -261,15 +295,15 @@ static void pwlr_levels(const libraw_colordata_t &C, unsigned common, const floa
   }
 }
 
-/* The statistics of unpacked RAW data: 1 with *out filled, 0 when the layout is not one they are
- * made for (error says which). `lv` has room for four PwLevels and `bright` for one byte per
- * column of the visible image. Allocates nothing and throws nothing. */
-static int pwlr_statistics_of(const libraw_rawdata_t &R, PwLevels *lv, unsigned char *bright,
-                              pwlr_stats *out, char *error) {
+/* The layout checks shared by the statistics and the clipping map: 1 with *L filled, 0 when the
+ * layout is not one they are made for (error says which). Allocates nothing and throws nothing. */
+static int pwlr_layout_of(const libraw_rawdata_t &R, PwLayout *L, char *error) {
   const libraw_image_sizes_t &S = R.sizes;
   const libraw_iparams_t &P = R.iparams;
   const libraw_colordata_t &C = R.color;
   const unsigned width = S.width, height = S.height;
+  L->width = width;
+  L->height = height;
   if (width == 0 || height == 0) { strcpy(error, "no image"); return 0; }
   if (P.colors != 3 || strncmp(P.cdesc, "RGB", 3) != 0) {
     strcpy(error, "not an RGB sensor");
@@ -284,6 +318,78 @@ static int pwlr_statistics_of(const libraw_rawdata_t &R, PwLevels *lv, unsigned 
     strcpy(error, "the visible image is not inside the RAW data");
     return 0;
   }
+  /* A black level pattern on top of the per-channel level (cblack[4] x cblack[5] values). The
+   * part all its values share belongs to the black level itself (so the white level above black
+   * is right); `rest` is what is left per position, and `pattern` whether any is. */
+  const unsigned prows = C.cblack[4], pcols = C.cblack[5];
+  if ((prows || pcols) && (!prows || !pcols || prows > LIBRAW_CBLACK_SIZE ||
+                           pcols > LIBRAW_CBLACK_SIZE || prows * pcols > LIBRAW_CBLACK_SIZE - 6)) {
+    strcpy(error, "unknown black level pattern");
+    return 0;
+  }
+  L->prows = prows;
+  L->pcols = pcols;
+  L->pattern = false;
+  unsigned common = 0;
+  if (prows && pcols) {
+    common = C.cblack[6];
+    for (unsigned i = 1; i < prows * pcols; i++)
+      if (C.cblack[6 + i] < common) common = C.cblack[6 + i];
+    for (unsigned i = 0; i < prows * pcols; i++) {
+      L->rest[i] = C.cblack[6 + i] - common;
+      if (L->rest[i]) L->pattern = true;
+    }
+  }
+  pwlr_limits(C, common, L->lim);
+
+  if (R.raw_image) {
+    L->mosaic = true;
+    L->n = 1;
+    if (S.raw_pitch < (unsigned)S.raw_width * 2u) { strcpy(error, "short RAW rows"); return 0; }
+    if (P.filters >= 1000) {
+      L->frows = 8; L->fcols = 2; L->cell = 2;
+      for (unsigned r = 0; r < 8; r++)
+        for (unsigned c = 0; c < 2; c++)
+          L->cfa[r][c] = (unsigned char)((P.filters >> ((((r << 1) & 14) | (c & 1)) << 1)) & 3);
+    } else if (P.filters == 9) {
+      L->frows = 6; L->fcols = 6; L->cell = 3;
+      for (unsigned r = 0; r < 6; r++)
+        for (unsigned c = 0; c < 6; c++) {
+          int x = P.xtrans[r][c];
+          if (x < 0 || x > 2) { strcpy(error, "unknown X-Trans pattern"); return 0; }
+          L->cfa[r][c] = (unsigned char)x;
+        }
+    } else {
+      strcpy(error, "not a Bayer or X-Trans pattern");
+      return 0;
+    }
+  } else if (R.color3_image || R.color4_image) {
+    /* Three or four values per pixel (the fourth is not a colour of an RGB file). */
+    L->mosaic = false;
+    L->n = R.color4_image ? 4 : 3;
+    L->frows = L->fcols = 0;
+    L->cell = 2;
+    if ((size_t)S.raw_pitch < (size_t)((unsigned)S.left_margin + width) * L->n * sizeof(ushort)) {
+      strcpy(error, "short RAW rows");
+      return 0;
+    }
+  } else {
+    strcpy(error, "no integer RAW data");
+    return 0;
+  }
+  return 1;
+}
+
+/* The statistics of unpacked RAW data: 1 with *out filled, 0 when the layout is not one they are
+ * made for (error says which). `L` and `lv` are work space (one PwLayout, four PwLevels) and
+ * `bright` has room for one byte per column of the visible image. Allocates nothing and throws
+ * nothing. */
+static int pwlr_statistics_of(const libraw_rawdata_t &R, PwLayout *L, PwLevels *lv,
+                              unsigned char *bright, pwlr_stats *out, char *error) {
+  if (!pwlr_layout_of(R, L, error)) return 0;
+  const libraw_image_sizes_t &S = R.sizes;
+  const libraw_colordata_t &C = R.color;
+  const unsigned width = L->width, height = L->height;
   /* The camera's white balance with the smallest multiplier 1, as the render uses it; a file
    * without one gets LibRaw's daylight multipliers, else none. */
   float mul[4] = {1.0f, 1.0f, 1.0f, 1.0f};
@@ -297,56 +403,19 @@ static int pwlr_statistics_of(const libraw_rawdata_t &R, PwLevels *lv, unsigned 
     for (int c = 0; c < 3; c++) mul[c] = wb[c] / low;
     mul[3] = (wb[3] > tiny ? wb[3] : wb[1]) / low;
   }
-  /* A black level pattern on top of the per-channel level (cblack[4] x cblack[5] values). The
-   * part all its values share belongs to the black level itself (so the white level above black
-   * is right); `rest` is what is left per position, and `pattern` whether any is. */
-  const unsigned prows = C.cblack[4], pcols = C.cblack[5];
-  if ((prows || pcols) && (!prows || !pcols || prows > LIBRAW_CBLACK_SIZE ||
-                           pcols > LIBRAW_CBLACK_SIZE || prows * pcols > LIBRAW_CBLACK_SIZE - 6)) {
-    strcpy(error, "unknown black level pattern");
-    return 0;
-  }
-  unsigned rest[LIBRAW_CBLACK_SIZE];
-  unsigned common = 0;
-  bool pattern = false;
-  if (prows && pcols) {
-    common = C.cblack[6];
-    for (unsigned i = 1; i < prows * pcols; i++)
-      if (C.cblack[6 + i] < common) common = C.cblack[6 + i];
-    for (unsigned i = 0; i < prows * pcols; i++) {
-      rest[i] = C.cblack[6 + i] - common;
-      if (rest[i]) pattern = true;
-    }
-  }
-  pwlr_levels(C, common, mul, lv);
+  pwlr_levels(L->lim, mul, lv);
+  const bool pattern = L->pattern;
+  const unsigned prows = L->prows, pcols = L->pcols;
+  const unsigned *rest = L->rest;
 
-  if (R.raw_image) {
+  if (L->mosaic) {
     /* A mosaic: one colour per photosite. */
-    if (S.raw_pitch < (unsigned)S.raw_width * 2u) { strcpy(error, "short RAW rows"); return 0; }
-    unsigned char cfa[8][6]; /* the colour (0..3) of row % frows, column % fcols */
-    unsigned frows, fcols, cell;
-    if (P.filters >= 1000) {
-      frows = 8; fcols = 2; cell = 2;
-      for (unsigned r = 0; r < 8; r++)
-        for (unsigned c = 0; c < 2; c++)
-          cfa[r][c] = (unsigned char)((P.filters >> ((((r << 1) & 14) | (c & 1)) << 1)) & 3);
-    } else if (P.filters == 9) {
-      frows = 6; fcols = 6; cell = 3;
-      for (unsigned r = 0; r < 6; r++)
-        for (unsigned c = 0; c < 6; c++) {
-          int x = P.xtrans[r][c];
-          if (x < 0 || x > 2) { strcpy(error, "unknown X-Trans pattern"); return 0; }
-          cfa[r][c] = (unsigned char)x;
-        }
-    } else {
-      strcpy(error, "not a Bayer or X-Trans pattern");
-      return 0;
-    }
+    const unsigned frows = L->frows, fcols = L->fcols, cell = L->cell;
     const unsigned cells_x = width / cell, cells_y = height / cell;
     const size_t pitch = S.raw_pitch / 2;
     for (unsigned row = 0; row < height; row++) {
       const ushort *src = R.raw_image + (size_t)(row + S.top_margin) * pitch + S.left_margin;
-      const unsigned char *colours = cfa[row % frows];
+      const unsigned char *colours = L->cfa[row % frows];
       const unsigned *prow = pattern ? &rest[(row % prows) * pcols] : 0;
       const bool in_cells = row / cell < cells_y;
       if (in_cells && row % cell == 0) memset(bright, 0, cells_x);
@@ -371,14 +440,10 @@ static int pwlr_statistics_of(const libraw_rawdata_t &R, PwLevels *lv, unsigned 
           if (!bright[cx]) out->deep_shadows += (unsigned long long)cell * cell;
     }
     out->shadow_pixels = (unsigned long long)cells_x * cells_y * cell * cell;
-  } else if (R.color3_image || R.color4_image) {
+  } else {
     /* Three or four values per pixel (the fourth is not a colour of an RGB file). */
-    const unsigned n = R.color4_image ? 4 : 3;
+    const unsigned n = L->n;
     const size_t pitch = S.raw_pitch; /* bytes */
-    if (pitch < (size_t)((unsigned)S.left_margin + width) * n * sizeof(ushort)) {
-      strcpy(error, "short RAW rows");
-      return 0;
-    }
     const unsigned char *base = R.color4_image ? (const unsigned char *)R.color4_image
                                                : (const unsigned char *)R.color3_image;
     for (unsigned row = 0; row < height; row++) {
@@ -401,9 +466,6 @@ static int pwlr_statistics_of(const libraw_rawdata_t &R, PwLevels *lv, unsigned 
       }
     }
     out->shadow_pixels = (unsigned long long)width * height;
-  } else {
-    strcpy(error, "no integer RAW data");
-    return 0;
   }
   for (int c = 0; c < 3; c++)
     for (int b = 0; b < 256; b++) out->pixels[c] += out->histogram[c][b];
@@ -419,13 +481,134 @@ int pwlr_statistics(void *session, pwlr_stats *out, char *error) {
   PwSession *s = (PwSession *)session;
   if (!s || !s->lr) { strcpy(error, "statistics: no session"); return -1; }
   const libraw_rawdata_t &R = s->lr->imgdata.rawdata;
+  PwLayout *layout = new (std::nothrow) PwLayout;
   PwLevels *lv = new (std::nothrow) PwLevels[4];
   unsigned char *bright = new (std::nothrow) unsigned char[(size_t)R.sizes.width + 1];
   int result = -1;
-  if (lv && bright) result = pwlr_statistics_of(R, lv, bright, out, error);
+  if (layout && lv && bright) result = pwlr_statistics_of(R, layout, lv, bright, out, error);
   else strcpy(error, "statistics: out of memory");
+  delete layout;
   delete[] lv;
   delete[] bright;
+  return result;
+}
+
+/* ---- The clipping map of the unpacked RAW data (ADR 0017 section 2.6, U7b; T146) ----
+ *
+ * Where T142's clipped and deep-shadow pixels are: the visible image (sensor orientation, no flip
+ * applied) in cells of cell x cell photosites (2 for a Bayer pattern and a three- or four-colour
+ * image, 3 for X-Trans), counted from its top left corner. The map has ceil(width / cell) x
+ * ceil(height / cell) cells, one byte each, row by row; a cell at the right or bottom edge is
+ * judged on the photosites it holds. Same data, levels and layout checks as the statistics:
+ * - bit 0, 1, 2 (PWLR_MAP_CLIPPED << channel): at least one photosite of R, G, B (both greens of
+ *   a mosaic are G) in the cell has a raw value at or above the white level, before white
+ *   balance;
+ * - bit 3 (PWLR_MAP_DEEP): every photosite of the cell, in every channel, is below the
+ *   deep-shadow limit above black;
+ * - bits 4-7: 0. */
+static const unsigned char PWLR_MAP_CLIPPED = 1;
+static const unsigned char PWLR_MAP_DEEP = 8;
+
+/* Fills `map` (cells_x x cells_y bytes, already checked) from the RAW data. The map's own row is
+ * the work space of a row of cells: it starts as "deep shadows, nothing clipped" and every
+ * photosite of the cell can only add a clipped bit or clear the deep-shadow bit. */
+static void pwlr_clipping_map_of(const libraw_rawdata_t &R, const PwLayout &L, unsigned cells_x,
+                                 unsigned char *map) {
+  const libraw_image_sizes_t &S = R.sizes;
+  const unsigned width = L.width, height = L.height, cell = L.cell;
+  const unsigned *prow = 0;
+  if (L.mosaic) {
+    const size_t pitch = S.raw_pitch / 2;
+    for (unsigned row = 0; row < height; row++) {
+      const ushort *src = R.raw_image + (size_t)(row + S.top_margin) * pitch + S.left_margin;
+      const unsigned char *colours = L.cfa[row % L.frows];
+      prow = L.pattern ? &L.rest[(row % L.prows) * L.pcols] : 0;
+      unsigned char *cells = map + (size_t)(row / cell) * cells_x;
+      if (row % cell == 0) memset(cells, PWLR_MAP_DEEP, cells_x);
+      unsigned k = 0;    /* col % fcols */
+      unsigned cx = 0;   /* col / cell */
+      unsigned in = 0;   /* col % cell */
+      for (unsigned col = 0; col < width; col++) {
+        const unsigned c4 = colours[k];
+        if (++k == L.fcols) k = 0;
+        const PwLimits &l = L.lim[c4];
+        const unsigned ch = c4 == 3 ? 1 : c4;
+        const unsigned v = src[col];
+        const unsigned black = l.black + (prow ? prow[col % L.pcols] : 0);
+        const unsigned above = v > black ? v - black : 0;
+        unsigned char m = cells[cx];
+        if (v >= l.white) m = (unsigned char)(m | (PWLR_MAP_CLIPPED << ch));
+        if (above >= l.shadow) m = (unsigned char)(m & ~PWLR_MAP_DEEP);
+        cells[cx] = m;
+        if (++in == cell) { in = 0; cx++; }
+      }
+    }
+  } else {
+    const unsigned n = L.n;
+    const size_t pitch = S.raw_pitch; /* bytes */
+    const unsigned char *base = R.color4_image ? (const unsigned char *)R.color4_image
+                                               : (const unsigned char *)R.color3_image;
+    for (unsigned row = 0; row < height; row++) {
+      const ushort *src = (const ushort *)(base + (size_t)(row + S.top_margin) * pitch) +
+                          (size_t)S.left_margin * n;
+      prow = L.pattern ? &L.rest[(row % L.prows) * L.pcols] : 0;
+      unsigned char *cells = map + (size_t)(row / cell) * cells_x;
+      if (row % cell == 0) memset(cells, PWLR_MAP_DEEP, cells_x);
+      unsigned cx = 0, in = 0;
+      for (unsigned col = 0; col < width; col++, src += n) {
+        const unsigned extra = prow ? prow[col % L.pcols] : 0;
+        unsigned char m = cells[cx];
+        for (unsigned c = 0; c < 3; c++) {
+          const PwLimits &l = L.lim[c];
+          const unsigned v = src[c];
+          const unsigned black = l.black + extra;
+          const unsigned above = v > black ? v - black : 0;
+          if (v >= l.white) m = (unsigned char)(m | (PWLR_MAP_CLIPPED << c));
+          if (above >= l.shadow) m = (unsigned char)(m & ~PWLR_MAP_DEEP);
+        }
+        cells[cx] = m;
+        if (++in == cell) { in = 0; cx++; }
+      }
+    }
+  }
+}
+
+/* The clipping map, in two calls. With map == NULL: the layout checks only, and *cell, *width and
+ * *height (the map's size in cells) are set. With a buffer: the same, then `length` must be
+ * exactly *width x *height (else -1 and nothing is written to the buffer) and the buffer is
+ * filled. Returns 1 on success; 0 when the file's RAW data has a layout the map is not made for
+ * (error says which, as pwlr_statistics); -1 on an internal failure. It calls no LibRaw function,
+ * uses no exceptions (the work space is allocated with nothrow) and keeps no pointer to the
+ * buffer. */
+int pwlr_clipping_map(void *session, unsigned char *map, size_t length, unsigned *cell,
+                      unsigned *width, unsigned *height, char *error) {
+  *cell = 0;
+  *width = 0;
+  *height = 0;
+  error[0] = 0;
+  PwSession *s = (PwSession *)session;
+  if (!s || !s->lr) { strcpy(error, "clipping map: no session"); return -1; }
+  const libraw_rawdata_t &R = s->lr->imgdata.rawdata;
+  PwLayout *layout = new (std::nothrow) PwLayout;
+  if (!layout) { strcpy(error, "clipping map: out of memory"); return -1; }
+  int result = pwlr_layout_of(R, layout, error);
+  if (result == 1) {
+    const unsigned c = layout->cell;
+    const unsigned cells_x = (layout->width + c - 1) / c;
+    const unsigned cells_y = (layout->height + c - 1) / c;
+    *cell = c;
+    *width = cells_x;
+    *height = cells_y;
+    if (map) {
+      if (length != (size_t)cells_x * cells_y) {
+        strcpy(error, "clipping map: the buffer's length is not the map's size");
+        result = -1;
+      } else {
+        pwlr_clipping_map_of(R, *layout, cells_x, map);
+      }
+    }
+  }
+  delete layout;
   return result;
 }
 

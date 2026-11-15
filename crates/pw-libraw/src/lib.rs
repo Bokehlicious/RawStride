@@ -16,6 +16,8 @@
 //! - Images come out in **sensor orientation**; the viewer rotates them like the M1 previews.
 //! - [`Session::statistics`] gives the histogram and the exposure statistics of the unpacked RAW
 //!   data itself (ADR 0017 §2.6, U7): no new decode, and independent of any render.
+//! - [`Session::clipping_map`] says where in the image the clipped and the deep-shadow parts of
+//!   those statistics are ([`ClippingMap`], ADR 0017 U7b), from the same data by the same rules.
 
 use std::ffi::{CStr, c_char, c_int, c_uint, c_void};
 use std::fmt;
@@ -132,6 +134,70 @@ impl RawStatistics {
     }
 }
 
+/// Where the clipped highlights and the deepest shadows of a file's unpacked RAW data are
+/// (ADR 0017 §2.6, U7b), by the same rules as [`RawStatistics`].
+///
+/// The visible image (the grid of [`Session::width`] × [`Session::height`], in sensor orientation,
+/// no flip applied) is divided into cells of `cell` × `cell` photosites (2 for a Bayer mosaic and
+/// a three- or four-colour image, 3 for X-Trans), counted from its top left corner. The map has
+/// `width` × `height` cells (the image's size divided by `cell`, rounded up; a cell at the right
+/// or bottom edge holds fewer photosites and is judged on those) and `data` holds one byte per
+/// cell, row by row:
+/// - [`CLIPPED_R`](Self::CLIPPED_R), [`CLIPPED_G`](Self::CLIPPED_G),
+///   [`CLIPPED_B`](Self::CLIPPED_B) (bits 0–2): at least one photosite of that colour in the cell
+///   has a raw value at or above the white level, before white balance (the two greens of a
+///   Bayer sensor are G);
+/// - [`DEEP_SHADOWS`](Self::DEEP_SHADOWS) (bit 3): every photosite of the cell, in every channel,
+///   is below 1/256 of the white level above black;
+/// - bits 4–7 are 0.
+#[derive(Clone, PartialEq, Eq)]
+pub struct ClippingMap {
+    pub cell: u32,
+    pub width: u32,
+    pub height: u32,
+    pub data: Vec<u8>,
+}
+
+impl fmt::Debug for ClippingMap {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "ClippingMap({}x{} cells of {}x{}, {} bytes)",
+            self.width,
+            self.height,
+            self.cell,
+            self.cell,
+            self.data.len()
+        )
+    }
+}
+
+impl ClippingMap {
+    /// A photosite of R in the cell is at the clipping level.
+    pub const CLIPPED_R: u8 = 1;
+    /// A photosite of G in the cell is at the clipping level.
+    pub const CLIPPED_G: u8 = 2;
+    /// A photosite of B in the cell is at the clipping level.
+    pub const CLIPPED_B: u8 = 4;
+    /// The clipped bit of each channel, in the order R, G, B (as [`RawStatistics::clipped`]).
+    pub const CLIPPED: [u8; 3] = [Self::CLIPPED_R, Self::CLIPPED_G, Self::CLIPPED_B];
+    /// Every photosite of the cell is in the deep shadows.
+    pub const DEEP_SHADOWS: u8 = 8;
+    /// The bits a cell can have; the others are 0.
+    pub const USED_BITS: u8 = 0x0f;
+
+    /// The byte of the cell in column `x` and row `y` (in cells); `None` outside the map.
+    pub fn at(&self, x: u32, y: u32) -> Option<u8> {
+        if x >= self.width || y >= self.height {
+            return None;
+        }
+        let index = (y as usize)
+            .checked_mul(self.width as usize)?
+            .checked_add(x as usize)?;
+        self.data.get(index).copied()
+    }
+}
+
 /// Prefix of the error for a file whose RAW data is missing or corrupt.
 pub const DAMAGED: &str = "damaged:";
 
@@ -158,6 +224,15 @@ unsafe extern "C" {
     );
     fn pwlr_free(img: *mut c_void);
     fn pwlr_statistics(session: *mut c_void, out: *mut Stats, error: *mut c_char) -> c_int;
+    fn pwlr_clipping_map(
+        session: *mut c_void,
+        map: *mut u8,
+        length: usize,
+        cell: *mut c_uint,
+        width: *mut c_uint,
+        height: *mut c_uint,
+        error: *mut c_char,
+    ) -> c_int;
     fn pwlr_close(session: *mut c_void);
 }
 
@@ -400,6 +475,74 @@ impl Session {
         }
     }
 
+    /// Where the clipped highlights and the deepest shadows are ([`ClippingMap`]), by the same
+    /// rules and from the same unpacked data as [`statistics`](Self::statistics): nothing is
+    /// decoded again, and a render before or after does not change it. `Ok(None)` for the
+    /// layouts `statistics` gives `Ok(None)` for; `Err` on an internal failure.
+    pub fn clipping_map(&mut self) -> Result<Option<ClippingMap>> {
+        let mut err = [0 as c_char; 200];
+        let (mut cell, mut width, mut height): (c_uint, c_uint, c_uint) = (0, 0, 0);
+        // SAFETY: live session (exclusive &mut); no buffer, so the shim only reads the session and
+        // writes the three out-values and the error buffer, all valid.
+        let rc = unsafe {
+            pwlr_clipping_map(
+                self.ptr,
+                std::ptr::null_mut(),
+                0,
+                &mut cell,
+                &mut width,
+                &mut height,
+                err.as_mut_ptr(),
+            )
+        };
+        match rc {
+            1 => {}
+            0 => return Ok(None),
+            _ => return Err(Error(c_text(&err))),
+        }
+        let length = (width as usize)
+            .checked_mul(height as usize)
+            .ok_or_else(|| Error(format!("clipping map: {width}x{height} cells is too large")))?;
+        let mut data = Vec::new();
+        data.try_reserve_exact(length)
+            .map_err(|_| Error(format!("clipping map: out of memory for {length} bytes")))?;
+        data.resize(length, 0u8);
+        let (mut cell2, mut width2, mut height2): (c_uint, c_uint, c_uint) = (0, 0, 0);
+        // SAFETY: live session (exclusive &mut); `data` is a valid buffer of exactly `data.len()`
+        // bytes that the shim fills and does not keep; the out-values and error buffer are valid.
+        let rc = unsafe {
+            pwlr_clipping_map(
+                self.ptr,
+                data.as_mut_ptr(),
+                data.len(),
+                &mut cell2,
+                &mut width2,
+                &mut height2,
+                err.as_mut_ptr(),
+            )
+        };
+        if rc != 1 {
+            let reason = c_text(&err);
+            return Err(Error(if reason.is_empty() {
+                "clipping map: the second call failed".into()
+            } else {
+                reason
+            }));
+        }
+        if (cell2, width2, height2) != (cell, width, height) {
+            return Err(Error(format!(
+                "clipping map: the size changed between the calls ({width}x{height} cells of \
+                 {cell}, then {width2}x{height2} of {cell2})"
+            )));
+        }
+        Ok(Some(ClippingMap {
+            cell,
+            width,
+            height,
+            data,
+        }))
+    }
+
     fn render(&mut self, half: bool, r: Option<Rect>, demosaic: Demosaic) -> Result<Rgb8> {
         let r = r.unwrap_or(Rect::new(0, 0, 0, 0));
         let mut err = [0 as c_char; 200];
@@ -523,6 +666,46 @@ mod tests {
         assert_eq!(stats.deep_shadow_share(), 0.25);
         stats.shadow_pixels = 0;
         assert_eq!(stats.deep_shadow_share(), 0.0);
+    }
+
+    #[test]
+    fn the_clipping_map_bits_are_the_four_low_bits() {
+        let bits = [
+            ClippingMap::CLIPPED_R,
+            ClippingMap::CLIPPED_G,
+            ClippingMap::CLIPPED_B,
+            ClippingMap::DEEP_SHADOWS,
+        ];
+        assert_eq!(bits, [1, 2, 4, 8]);
+        assert_eq!(ClippingMap::CLIPPED, [1, 2, 4]);
+        assert_eq!(
+            bits.iter().fold(0, |all, bit| all | bit),
+            ClippingMap::USED_BITS
+        );
+    }
+
+    #[test]
+    fn a_cell_of_the_clipping_map_is_read_by_column_and_row() {
+        let map = ClippingMap {
+            cell: 2,
+            width: 3,
+            height: 2,
+            data: vec![0, 1, 2, 4, 8, 9],
+        };
+        assert_eq!(map.at(0, 0), Some(0));
+        assert_eq!(map.at(2, 0), Some(2));
+        assert_eq!(map.at(0, 1), Some(4));
+        assert_eq!(map.at(2, 1), Some(9));
+        // outside the map
+        assert_eq!(map.at(3, 0), None);
+        assert_eq!(map.at(0, 2), None);
+        assert_eq!(map.at(u32::MAX, u32::MAX), None);
+        // a map whose data is shorter than its size gives None, not a panic
+        let short = ClippingMap {
+            data: vec![0, 1],
+            ..map
+        };
+        assert_eq!(short.at(2, 1), None);
     }
 
     #[test]

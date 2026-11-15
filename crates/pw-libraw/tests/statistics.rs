@@ -9,10 +9,18 @@
 //! - `TN006067.ARW` (a bird against a blown-out sky) has clipped pixels, `TN100426.ARW` (a pylon
 //!   in front of a dark forest) has deep shadows, and `TN006331.ARW` has neither.
 //! - A file cut short inside its RAW data gives an error, not a panic and not statistics.
+//! - The clipping map (ADR 0017 U7b, T146) of the three named files: 2×2 cells on the grid of
+//!   `Session::width()` × `height()`, only bits 0–3, the deep-shadow cells among the whole cells
+//!   are the statistics' `deep_shadows`, the clipped bits agree with the statistics' clipped
+//!   pixels, and a render before or after does not change it.
+//! - Every Fujifilm X-Trans file (`.RAF`, at least one): statistics that add up and a clipping map
+//!   of 3×3 cells that agrees with them; `_DSF4271.RAF` has clipped cells in R and G and none in
+//!   B, the other four named files have none. (The every-file test above skips `.RAF`: its checks
+//!   assume a Bayer pattern.)
 
 use std::path::{Path, PathBuf};
 
-use pw_libraw::{DAMAGED, Demosaic, RawStatistics, Rect, Session};
+use pw_libraw::{ClippingMap, DAMAGED, Demosaic, RawStatistics, Rect, Session};
 
 fn testdata() -> PathBuf {
     let Some(dir) = std::env::var_os("PW_TESTDATA") else {
@@ -247,4 +255,277 @@ fn a_file_that_is_no_raw_gives_an_error_and_no_statistics() {
     let result = Session::open(&f).and_then(|mut session| session.statistics());
     assert!(result.is_err(), "{result:?}");
     let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// The files T142's statistics tests name: with clipping, without, and dark.
+const MAP_FILES: [&str; 3] = ["TN006067.ARW", "TN006331.ARW", "TN100426.ARW"];
+
+/// The session's size, its statistics and its clipping map.
+fn map_of(path: &Path) -> (u32, u32, RawStatistics, ClippingMap) {
+    let mut session = Session::open(path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+    let stats = match session.statistics() {
+        Ok(Some(stats)) => stats,
+        other => panic!("{}: no statistics: {other:?}", path.display()),
+    };
+    let map = match session.clipping_map() {
+        Ok(Some(map)) => map,
+        other => panic!("{}: no clipping map: {other:?}", path.display()),
+    };
+    (session.width(), session.height(), stats, map)
+}
+
+/// The number of cells with `bit`; with `whole_only`, only the cells not cut by the right or
+/// bottom edge of an image of `width` × `height` photosites.
+fn cells_with(map: &ClippingMap, bit: u8, width: u32, height: u32, whole_only: bool) -> u64 {
+    let (cols, rows) = if whole_only {
+        (width / map.cell, height / map.cell)
+    } else {
+        (map.width, map.height)
+    };
+    let mut n = 0;
+    for y in 0..rows {
+        for x in 0..cols {
+            let cell = map.at(x, y).expect("a cell inside the map");
+            if cell & bit != 0 {
+                n += 1;
+            }
+        }
+    }
+    n
+}
+
+#[test]
+#[ignore = "needs real camera files: set PW_TESTDATA and run with --ignored"]
+fn the_clipping_map_covers_the_image_and_agrees_with_the_statistics() {
+    for name in MAP_FILES {
+        let (width, height, stats, map) = map_of(&named(name));
+        eprintln!(
+            "{name:<14} {width}x{height} (divisible by 2: {}) map {map:?}",
+            width % 2 == 0 && height % 2 == 0
+        );
+        // a Bayer file: 2×2 cells on the render's grid
+        assert_eq!(map.cell, 2, "{name}");
+        assert!(map.width * map.cell >= width, "{name}");
+        assert!(map.width * map.cell < width + map.cell, "{name}");
+        assert!(map.height * map.cell >= height, "{name}");
+        assert!(map.height * map.cell < height + map.cell, "{name}");
+        assert_eq!(
+            map.data.len() as u64,
+            u64::from(map.width) * u64::from(map.height),
+            "{name}"
+        );
+        // only bits 0–3
+        assert!(
+            map.data.iter().all(|&b| b & !ClippingMap::USED_BITS == 0),
+            "{name}: a bit above 3 is set"
+        );
+        // the deep shadows: the whole cells with the bit are what the statistics count
+        let deep = cells_with(&map, ClippingMap::DEEP_SHADOWS, width, height, true);
+        assert_eq!(deep * 4, stats.deep_shadows, "{name}: deep shadows");
+        // the clipped bits: a cell has one only if it holds a clipped photosite of that colour,
+        // and every clipped photosite is in a cell with the bit
+        for c in 0..3 {
+            let bit = ClippingMap::CLIPPED[c];
+            let cells = cells_with(&map, bit, width, height, false);
+            assert!(
+                cells <= stats.clipped[c],
+                "{name}: channel {c}: {cells} cells, {} clipped photosites",
+                stats.clipped[c]
+            );
+            assert_eq!(
+                cells > 0,
+                stats.clipped[c] > 0,
+                "{name}: channel {c}: {cells} cells, {} clipped photosites",
+                stats.clipped[c]
+            );
+        }
+    }
+}
+
+#[test]
+#[ignore = "needs real camera files: set PW_TESTDATA and run with --ignored"]
+fn the_clipping_map_marks_clipping_and_deep_shadows_where_the_files_have_them() {
+    let any_clipped = ClippingMap::CLIPPED_R | ClippingMap::CLIPPED_G | ClippingMap::CLIPPED_B;
+    // A bird against a blown-out sky.
+    let (w, h, _, bright) = map_of(&named("TN006067.ARW"));
+    let clipped = cells_with(&bright, any_clipped, w, h, false);
+    assert!(clipped > 0, "TN006067.ARW: no clipped cells");
+    assert!(cells_with(&bright, ClippingMap::CLIPPED_G, w, h, false) > 0);
+    // An ordinary exposure.
+    let (w, h, _, plain) = map_of(&named("TN006331.ARW"));
+    assert_eq!(
+        cells_with(&plain, any_clipped, w, h, false),
+        0,
+        "TN006331.ARW: clipped cells"
+    );
+    // A pylon in front of a dark forest.
+    let (w, h, _, dark) = map_of(&named("TN100426.ARW"));
+    assert!(
+        cells_with(&dark, ClippingMap::DEEP_SHADOWS, w, h, true) > 0,
+        "TN100426.ARW: no deep-shadow cells"
+    );
+}
+
+#[test]
+#[ignore = "needs real camera files: set PW_TESTDATA and run with --ignored"]
+fn the_clipping_map_is_the_same_before_and_after_renders() {
+    for name in MAP_FILES {
+        let file = named(name);
+        let mut session = Session::open(&file).unwrap();
+        let before = session.clipping_map().unwrap().unwrap();
+        session.render_half().unwrap();
+        assert_eq!(
+            session.clipping_map().unwrap().unwrap(),
+            before,
+            "{name}: half-size render"
+        );
+        session
+            .render_region_with(Rect::new(64, 64, 256, 128), 16, Demosaic::Ppg)
+            .unwrap();
+        assert_eq!(
+            session.clipping_map().unwrap().unwrap(),
+            before,
+            "{name}: region render"
+        );
+        let mut rendered_first = Session::open(&file).unwrap();
+        rendered_first.render_half().unwrap();
+        assert_eq!(
+            rendered_first.clipping_map().unwrap().unwrap(),
+            before,
+            "{name}: rendered before the first map"
+        );
+    }
+}
+
+/// The Fujifilm files (`.RAF`) in `PW_TESTDATA`; there must be at least one.
+fn fujifilm_files() -> Vec<PathBuf> {
+    let dir = testdata();
+    let entries = std::fs::read_dir(&dir).unwrap_or_else(|error| {
+        panic!(
+            "could not read PW_TESTDATA folder {}: {error}",
+            dir.display()
+        )
+    });
+    let mut files: Vec<PathBuf> = entries
+        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .filter(|p| {
+            p.is_file()
+                && p.extension()
+                    .and_then(|e| e.to_str())
+                    .is_some_and(|e| e.eq_ignore_ascii_case("raf"))
+        })
+        .collect();
+    files.sort();
+    assert!(
+        !files.is_empty(),
+        "no Fujifilm (.RAF) test files were found in PW_TESTDATA folder {}",
+        dir.display()
+    );
+    files
+}
+
+#[test]
+#[ignore = "needs real camera files: set PW_TESTDATA and run with --ignored"]
+fn fujifilm_files_have_statistics_and_a_clipping_map_that_agree() {
+    // The named files: with clipped highlights in R and G (none in B), and without any.
+    let clipped_in_r_and_g = "_DSF4271.RAF";
+    let mut not_clipped = vec![
+        "_DSF4243.RAF",
+        "_DSF4248.RAF",
+        "_DSF4252.RAF",
+        "_DSF4254.RAF",
+    ];
+    let mut found_clipped = false;
+    for file in fujifilm_files() {
+        let name = file.display();
+        let file_name = file
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or_default()
+            .to_owned();
+        let (width, height, stats, map) = map_of(&file);
+        eprintln!(
+            "{file_name:<16} {width}x{height} (divisible by 3: {}) map {map:?} clipped R {} G {} \
+             B {} deep shadows {} of {}",
+            width % 3 == 0 && height % 3 == 0,
+            stats.clipped[0],
+            stats.clipped[1],
+            stats.clipped[2],
+            stats.deep_shadows,
+            stats.shadow_pixels
+        );
+        // the statistics add up: every photosite of the mosaic in exactly one channel
+        let all = u64::from(width) * u64::from(height);
+        assert_eq!(stats.pixels.iter().sum::<u64>(), all, "{name}");
+        for c in 0..3 {
+            let sum: u64 = stats.histogram[c].iter().sum();
+            assert_eq!(sum, stats.pixels[c], "{name}: bins of channel {c}");
+            assert!(stats.pixels[c] > 0, "{name}: channel {c} has no pixels");
+            let share = stats.clipped_share(c);
+            assert!((0.0..=1.0).contains(&share), "{name}: clipped {share}");
+        }
+        // the deep shadows are judged in whole 3×3 cells
+        let whole = u64::from(width / 3) * u64::from(height / 3);
+        assert_eq!(stats.shadow_pixels, whole * 9, "{name}");
+        let share = stats.deep_shadow_share();
+        assert!((0.0..=1.0).contains(&share), "{name}: deep shadows {share}");
+        // an X-Trans map: 3×3 cells, ceil(width / 3) × ceil(height / 3), only bits 0–3
+        assert_eq!(map.cell, 3, "{name}: not judged as X-Trans");
+        assert_eq!(map.width, width.div_ceil(3), "{name}");
+        assert_eq!(map.height, height.div_ceil(3), "{name}");
+        assert_eq!(
+            map.data.len() as u64,
+            u64::from(map.width) * u64::from(map.height),
+            "{name}"
+        );
+        assert!(
+            map.data.iter().all(|&b| b & !ClippingMap::USED_BITS == 0),
+            "{name}: a bit above 3 is set"
+        );
+        // the whole cells with the deep-shadow bit are what the statistics count
+        let deep = cells_with(&map, ClippingMap::DEEP_SHADOWS, width, height, true);
+        assert_eq!(deep * 9, stats.deep_shadows, "{name}: deep shadows");
+        // each channel has clipped cells exactly when it has clipped photosites, and no more
+        let mut clipped_cells = [0u64; 3];
+        for c in 0..3 {
+            let cells = cells_with(&map, ClippingMap::CLIPPED[c], width, height, false);
+            clipped_cells[c] = cells;
+            assert!(
+                cells <= stats.clipped[c],
+                "{name}: channel {c}: {cells} cells, {} clipped photosites",
+                stats.clipped[c]
+            );
+            assert_eq!(
+                cells > 0,
+                stats.clipped[c] > 0,
+                "{name}: channel {c}: {cells} cells, {} clipped photosites",
+                stats.clipped[c]
+            );
+        }
+        if file_name == clipped_in_r_and_g {
+            found_clipped = true;
+            assert!(clipped_cells[0] > 0, "{name}: no cells clipped in R");
+            assert!(clipped_cells[1] > 0, "{name}: no cells clipped in G");
+            assert_eq!(clipped_cells[2], 0, "{name}: cells clipped in B");
+        } else if let Some(i) = not_clipped.iter().position(|n| *n == file_name) {
+            not_clipped.remove(i);
+            assert_eq!(clipped_cells, [0, 0, 0], "{name}: clipped cells");
+        }
+        // the map is the same after a half-size render
+        let mut session = Session::open(&file).unwrap();
+        session.render_half().unwrap();
+        assert_eq!(
+            session.clipping_map().unwrap().unwrap(),
+            map,
+            "{name}: after a half-size render"
+        );
+    }
+    assert!(
+        found_clipped,
+        "the test file {clipped_in_r_and_g} was not found"
+    );
+    assert!(
+        not_clipped.is_empty(),
+        "the test files {not_clipped:?} were not found"
+    );
 }

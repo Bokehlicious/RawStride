@@ -1,7 +1,7 @@
 # T149. ADR 0017 U7b, last part: the clipping marks drawn on the image — Blocked
 
 - **Blocked: waits for T148** (the keys, settings and section), which waits for T147 and T146.
-  The owner's answers to U7b-Q1–U7b-Q10 are in `docs/tasks/T146-clipping-map-of-raw-data.md`.
+  The owner's answers to U7b-Q1–U7b-Q10 are in `docs/tasks/done/T146-clipping-map-of-raw-data.md`.
   Chain: T146 → T147 → T148 → T149.
 - **Why:** ADR 0017 §2.6, step U7b. T147 gives the current image's clipping map with the
   coordinates that place it on the drawn image, and T148 the user's two on/off choices. This task
