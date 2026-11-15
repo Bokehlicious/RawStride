@@ -111,6 +111,17 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
   tasks "Blocked: waits for T146" until the one before is Done. The step's row in `plans/` names
   the whole chain. Writing the last task's file first is how a gap is found before code is written
   (T142's inspector part was found only after T142 was done).
+- **A cold read before Open (owner, 2026-11-15):** before a task is set to Open, the reviewer has
+  a fresh agent, with none of the reviewer's history, read only `AGENTS.md`, this README and the
+  task's file, and answer: can the task be done with only the named files and points; what is
+  missing, unclear or contradicts the code; which other files would have to change. The reviewer
+  fixes the task's text (or asks the owner) and notes the cold read in the log ("Cold read: …",
+  what was changed). The fresh agent changes nothing.
+- **An extra code review for large or risky tasks:** a task that changes the C++ shim, the safe
+  write (`pw-metadata`), more than one crate, or more than about eight files gets, besides the
+  reviewer's own review, an independent review of the diff (`/code-review` or a fresh review
+  agent) before the owner is asked to approve. Its findings and what was done with them go in
+  the log's review row.
 - **When it is Done and committed:** `git mv` the file to `done/`, move its row to `done/README.md`.
 - **Leftovers:** before a task is set to Done, everything its log calls left, not covered, noted
   or not changed gets a home: a new task, a row in `plans/`, an item in `backlog.md`, or a line in
