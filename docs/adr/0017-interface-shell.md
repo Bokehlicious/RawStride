@@ -376,7 +376,7 @@ without the study notes as a template.
 
 ### 6.1 Questions of the steps (answered by the owner, 2026-11-13: every proposal approved)
 
-Asked in the tasks of stage A (T109–T112, `docs/tasks/done/`) and of U10, U12b, U12c and U10d (T123–T126, T128, 2026-11-14) and of U4, U11a and U14 (T135, T136, T138, T139, 2026-11-14) and of U5 and U12a (T140, T141, 2026-11-15) and answered there; recorded here so
+Asked in the tasks of stage A (T109–T112, `docs/tasks/done/`) and of U10, U12b, U12c and U10d (T123–T126, T128, 2026-11-14) and of U4, U11a and U14 (T135, T136, T138, T139, 2026-11-14) and of U5, U12a, U7 and U11 (T140–T143, 2026-11-15) and answered there; recorded here so
 the decisions do not live only in the tasks.
 
 | # | Decision (as proposed) |
@@ -471,6 +471,22 @@ the decisions do not live only in the tasks.
 | U12a-Q5 | A "▼" button right of the field, or Alt+↓ in the field; ↑/↓ and Enter choose, Escape closes only the list |
 | U12a-Q6 | `field-values.txt` beside `settings.txt`, one line per value, written safely when changed; only on this computer |
 | U12a-Q7 | Recent, My Values, Add to My Values, No values yet, tooltip "Recent and saved values"; English (GR14), in the glossary |
+| U7-Q1 | Two: the histogram and statistics now, the clipping overlay next, on the same clipping level |
+| U7-Q2 | Three channels R, G, B drawn over each other, partly transparent; no luminance curve |
+| U7-Q3 | After black subtraction and the camera's white balance, scaled to the white level, with an sRGB-like curve so the shadows spread out as in an ordinary histogram |
+| U7-Q4 | Clipped: a raw value at or above the white level, before white balance, per channel. Deepest shadows: every channel below 1/256 of the white level (eight stops under clipping) |
+| U7-Q5 | The same numbers from the embedded JPEG (or the TIFF) before the screen-profile conversion; clipped at 255, shadows at 0; the panel names the source |
+| U7-Q6 | Once per opened image, after its first image is shown, so the first image is not slower; `latency.ps1` checked |
+| U7-Q7 | A collapsible "Histogram" section in the preview's right column (under Info and Zoom) and in the inspector (under Metadata), each remembered; the clipped shares per channel and the deep-shadow share under it |
+| U7-Q8 | Histogram, RAW data, Embedded JPEG, TIFF, Clipped, Deep shadows, Reading …, No histogram for this file; English (GR14), in the glossary |
+| U11c-Q1 | Person Shown with Details, Product Shown, Artwork or Object, Contributor, CV-Term About Image, Image Registry Entry; not Image Region (needs drawing on the image) nor the rights expressions |
+| U11c-Q2 | Content after Person Shown: Person with Details, Product, Artwork; Creator and Rights at the end: Contributor; Assignment after Genre: CV-Term About Image, at the end: Image Registry Entry |
+| U11c-Q3 | Title, Creator, Date Created, Source, Source Inventory Number and Copyright Notice open; the other eleven under a collapsed "More" line |
+| U11c-Q4 | Lang Alt edits `x-default`; multi-value sub-fields one line split at commas; Artwork's Date Created checked as an IPTC date; Circa free text |
+| U11c-Q5 | Not edited; kept unchanged |
+| U11c-Q6 | A button "Copy from Person Shown"; nothing synchronised automatically |
+| U11c-Q7 | As the other lists; none is a copyright-management field, so an emptied list is emptied on every image |
+| U11c-Q8 | IPTC's English names (GR14); "More", "Copy from Person Shown" in the glossary |
 
 ## 7. Steps
 
