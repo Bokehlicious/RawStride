@@ -471,7 +471,9 @@ impl HistogramInspector {
     /// results that came back, then asks for the image's statistics when it is shown, has no
     /// fresh kept result, no read is in flight and it has been the current one for the delay.
     /// Returns how soon a frame is needed to go on (the rest of the delay, or a read in flight),
-    /// if at all.
+    /// if at all; at once (`Duration::ZERO`) when the shown section changed in this call (a
+    /// result of the image came back, or the reader stopped), since the section was drawn
+    /// earlier in the frame and would otherwise say "Reading …" until the next input.
     pub fn request(
         &mut self,
         image: Option<&Path>,
@@ -480,7 +482,25 @@ impl HistogramInspector {
         now: Instant,
         reader: &mut impl HistogramSubmit,
     ) -> Option<Duration> {
-        self.drain(reader);
+        let arrived = self.drain(reader);
+        let wait = self.ask(image, mode, shown, now, reader);
+        if shown && arrived {
+            Some(Duration::ZERO)
+        } else {
+            wait
+        }
+    }
+
+    /// The part of [`Self::request`] after the results are taken: follows the image and asks
+    /// for its read when it is due.
+    fn ask(
+        &mut self,
+        image: Option<&Path>,
+        mode: Source,
+        shown: bool,
+        now: Instant,
+        reader: &mut impl HistogramSubmit,
+    ) -> Option<Duration> {
         let subject = image.map(|path| (path, histogram_source(path, mode)));
         let current = self
             .image
@@ -516,19 +536,22 @@ impl HistogramInspector {
             }
             Err(HistogramReaderStopped) => {
                 self.stopped = Some(ImageStatistics::Unavailable);
-                None
+                Some(Duration::ZERO)
             }
         }
     }
 
     /// Takes every result that came back; a result for another image is dropped. A stopped
-    /// reader fails the read in flight.
-    fn drain(&mut self, reader: &mut impl HistogramSubmit) {
+    /// reader fails the read in flight. Returns whether the current image's section changed (its
+    /// result came back, or the reader stopped while reading).
+    fn drain(&mut self, reader: &mut impl HistogramSubmit) -> bool {
+        let mut changed = false;
         loop {
             match reader.try_recv() {
                 Ok(read) => {
                     self.in_flight = false;
                     if self.is_image(&read.path, read.source) {
+                        changed = true;
                         self.needs_read = false;
                         self.keep(Kept {
                             path: read.path,
@@ -538,13 +561,14 @@ impl HistogramInspector {
                         });
                     }
                 }
-                Err(TryRecvError::Empty) => return,
+                Err(TryRecvError::Empty) => return changed,
                 Err(TryRecvError::Disconnected) => {
                     if std::mem::take(&mut self.in_flight) && self.image.is_some() {
                         self.stopped = Some(ImageStatistics::Unavailable);
                         self.needs_read = false;
+                        changed = true;
                     }
-                    return;
+                    return changed;
                 }
             }
         }
@@ -918,14 +942,17 @@ mod tests {
             HistogramPanel::Reading
         );
 
-        // its result is shown and not read again
+        // its result is shown (one more frame at once, so it is drawn) and not read again
         reader.answer(&third, Source::Raw, found(0.3));
+        assert_eq!(
+            histograms.request(Some(&third), Source::Raw, true, t, &mut reader),
+            Some(Duration::ZERO)
+        );
+        assert_eq!(histograms.shown(&third, Source::Raw), ready(0.3));
         assert_eq!(
             histograms.request(Some(&third), Source::Raw, true, t, &mut reader),
             None
         );
-        assert_eq!(histograms.shown(&third, Source::Raw), ready(0.3));
-        histograms.request(Some(&third), Source::Raw, true, t, &mut reader);
         assert_eq!(reader.reads.len(), 2, "a read image is not read again");
 
         // a result of the same image in the other mode is another image's result
@@ -942,6 +969,79 @@ mod tests {
         assert_eq!(
             histograms.shown(&second, Source::Raw),
             HistogramPanel::Reading
+        );
+    }
+
+    /// The section is drawn before the results are taken in a frame, so the frame that takes the
+    /// image's result (or finds the reader stopped) asks for one more frame at once; without it
+    /// "Reading …" stayed until the next input (found in the owner's hand check of T144).
+    #[test]
+    fn a_frame_is_asked_for_at_once_when_the_shown_section_changes() {
+        let mut reader = FakeReader::default();
+        let mut histograms = inspector();
+        let path = image("pw-loupe-histogram-repaint.ARW");
+        let other = image("pw-loupe-histogram-repaint-other.ARW");
+        let t = read_now(&mut histograms, &mut reader, &path, Instant::now());
+        assert_eq!(
+            histograms.request(Some(&path), Source::Raw, true, t, &mut reader),
+            Some(POLL)
+        );
+        reader.answer(&path, Source::Raw, found(0.5));
+        assert_eq!(
+            histograms.request(Some(&path), Source::Raw, true, t, &mut reader),
+            Some(Duration::ZERO)
+        );
+        assert_eq!(
+            histograms.request(Some(&path), Source::Raw, true, t, &mut reader),
+            None
+        );
+
+        // hidden: no frame is asked for
+        let t = read_now(&mut histograms, &mut reader, &other, t);
+        reader.answer(&other, Source::Raw, found(0.6));
+        assert_eq!(
+            histograms.request(Some(&other), Source::Raw, false, t, &mut reader),
+            None
+        );
+
+        // a result of another image: the newest image's read is sent, polled as usual
+        let third = image("pw-loupe-histogram-repaint-third.ARW");
+        let t = read_now(
+            &mut histograms,
+            &mut reader,
+            &third,
+            t + Duration::from_secs(1),
+        );
+        histograms.request(Some(&path), Source::Raw, true, t, &mut reader);
+        reader.answer(&third, Source::Raw, found(0.7));
+        assert_eq!(
+            histograms.request(Some(&path), Source::Raw, true, t, &mut reader),
+            None,
+            "the image's kept result is shown already"
+        );
+
+        // the reader stops while reading, and a read asked of a stopped reader
+        let fourth = image("pw-loupe-histogram-repaint-fourth.ARW");
+        let t = read_now(
+            &mut histograms,
+            &mut reader,
+            &fourth,
+            t + Duration::from_secs(1),
+        );
+        reader.stopped = true;
+        assert_eq!(
+            histograms.request(Some(&fourth), Source::Raw, true, t, &mut reader),
+            Some(Duration::ZERO)
+        );
+        let fifth = image("pw-loupe-histogram-repaint-fifth.ARW");
+        histograms.request(Some(&fifth), Source::Raw, true, t, &mut reader);
+        assert_eq!(
+            histograms.request(Some(&fifth), Source::Raw, true, t + DELAY, &mut reader),
+            Some(Duration::ZERO)
+        );
+        assert_eq!(
+            histograms.shown(&fifth, Source::Raw),
+            HistogramPanel::NoHistogram
         );
     }
 

@@ -108,6 +108,10 @@ struct InspectorRead {
     needs_read: bool,
     /// The one read in flight, for whichever image it was asked for.
     in_flight: Option<RequestId>,
+    /// `result` changed since the last `inspector_request` (it came back, or the worker
+    /// stopped): the section was drawn before the results were taken in that frame, so one more
+    /// frame is asked for at once (found with the Histogram section, T144).
+    arrived: bool,
 }
 
 impl InspectorRead {
@@ -370,6 +374,7 @@ impl MetadataCache {
                     if self.inspector.in_flight.take().is_some() && self.inspector.image.is_some() {
                         self.inspector.result = Some(Err(message.clone()));
                         self.inspector.needs_read = false;
+                        self.inspector.arrived = true;
                     }
                     // Nor can the editor's write or the read after it.
                     if let Some((_, path)) = self.editor.writing.take() {
@@ -584,8 +589,29 @@ impl MetadataCache {
     /// the inspector is in flight and the image has been the current one for
     /// `INSPECTOR_READ_DELAY`. While the window is open the inspector keeps its image and asks for
     /// no new read. Returns how soon a frame is needed to go on (the rest of the delay, or a read
-    /// in flight), if at all.
+    /// in flight), if at all; at once (`Duration::ZERO`) when the shown section's result changed
+    /// since the last call, since the section was drawn before the results were taken in that
+    /// frame and would otherwise wait for the next input.
     pub fn inspector_request(
+        &mut self,
+        image: Option<&Path>,
+        shown: bool,
+        window_open: bool,
+        now: Instant,
+        worker: &mut impl MetadataSubmit,
+    ) -> Option<Duration> {
+        let arrived = std::mem::take(&mut self.inspector.arrived);
+        let wait = self.inspector_ask(image, shown, window_open, now, worker);
+        if shown && arrived {
+            Some(Duration::ZERO)
+        } else {
+            wait
+        }
+    }
+
+    /// The part of [`Self::inspector_request`] that follows the image and asks for its read when
+    /// it is due.
+    fn inspector_ask(
         &mut self,
         image: Option<&Path>,
         shown: bool,
@@ -624,7 +650,7 @@ impl MetadataCache {
             Err(error) => {
                 inspector.result = Some(Err(submit_error(error)));
                 inspector.needs_read = false;
-                None
+                Some(Duration::ZERO)
             }
         }
     }
@@ -923,6 +949,7 @@ impl MetadataCache {
                     // A result for another image than the inspector's is dropped.
                     if self.inspector.is_image(&path) {
                         self.inspector.result = Some(result);
+                        self.inspector.arrived = true;
                     }
                 }
             }
@@ -2657,6 +2684,11 @@ mod tests {
             cache.inspector_state(&third),
             InspectorState::Ready(&empty_read())
         );
+        // one more frame at once, so the result is drawn
+        assert_eq!(
+            cache.inspector_request(Some(&third), true, false, t, &mut worker),
+            Some(Duration::ZERO)
+        );
         assert_eq!(
             cache.inspector_request(Some(&third), true, false, t, &mut worker),
             None
@@ -2665,6 +2697,75 @@ mod tests {
             worker.metadata_reads.len(),
             2,
             "a read image is not read again"
+        );
+    }
+
+    /// The section is drawn before the worker's answers are taken in a frame, so the next
+    /// request after the inspector's result came back (or the worker stopped) asks for one more
+    /// frame at once, and only then; without it the result waited for the next input (found with
+    /// the Histogram section, T144).
+    #[test]
+    fn the_inspector_asks_for_a_frame_at_once_when_its_result_comes() {
+        let mut worker = FakeSubmit::new([]);
+        let mut cache = MetadataCache::default();
+        let image = image_path("pw-loupe-inspector-repaint.ARW");
+        let t = inspector_read_sent(&mut cache, &image, Instant::now(), &mut worker);
+        assert_eq!(
+            cache.inspector_request(Some(&image), true, false, t, &mut worker),
+            Some(INSPECTOR_POLL_INTERVAL)
+        );
+        worker
+            .events
+            .push_back(metadata_read(500, &image, Ok(empty_read())));
+        assert!(cache.poll(&mut worker).is_empty());
+        assert_eq!(
+            cache.inspector_request(Some(&image), true, false, t, &mut worker),
+            Some(Duration::ZERO)
+        );
+        assert_eq!(
+            cache.inspector_request(Some(&image), true, false, t, &mut worker),
+            None
+        );
+
+        // a result for another image (dropped) asks for nothing
+        let stale = image_path("pw-loupe-inspector-repaint-stale.ARW");
+        let newest = image_path("pw-loupe-inspector-repaint-newest.ARW");
+        let t = inspector_read_sent(&mut cache, &stale, t, &mut worker);
+        cache.inspector_request(Some(&newest), true, false, t, &mut worker);
+        worker
+            .events
+            .push_back(metadata_read(501, &stale, Ok(empty_read())));
+        assert!(cache.poll(&mut worker).is_empty());
+        assert_ne!(
+            cache.inspector_request(Some(&newest), true, false, t, &mut worker),
+            Some(Duration::ZERO)
+        );
+
+        // collapsed: nothing is asked for
+        let hidden = image_path("pw-loupe-inspector-repaint-hidden.ARW");
+        let t = t + Duration::from_secs(1);
+        let t = inspector_read_sent(&mut cache, &hidden, t, &mut worker);
+        let Some(&(id, _)) = worker.metadata_reads.last() else {
+            panic!("no read sent");
+        };
+        worker
+            .events
+            .push_back(metadata_read(id, &hidden, Ok(empty_read())));
+        assert!(cache.poll(&mut worker).is_empty());
+        assert_eq!(
+            cache.inspector_request(Some(&hidden), false, false, t, &mut worker),
+            None
+        );
+
+        // the worker stops while the inspector's read is in flight
+        let stopped = image_path("pw-loupe-inspector-repaint-stopped.ARW");
+        let t = t + Duration::from_secs(1);
+        let t = inspector_read_sent(&mut cache, &stopped, t, &mut worker);
+        let mut failures = Vec::new();
+        cache.drain(|| Err(TryRecvError::Disconnected), &mut failures);
+        assert_eq!(
+            cache.inspector_request(Some(&stopped), true, false, t, &mut worker),
+            Some(Duration::ZERO)
         );
     }
 
@@ -2710,6 +2811,11 @@ mod tests {
             .events
             .push_back(metadata_read(500, &image, Ok(empty_read())));
         assert!(cache.poll(&mut worker).is_empty());
+        // the frame after the result asks for one more at once, so it is drawn
+        assert_eq!(
+            cache.inspector_request(Some(&image), true, false, t, &mut worker),
+            Some(Duration::ZERO)
+        );
 
         // A rating write of another image changes nothing.
         if let Err(error) = cache.set_rating(&other, RatingKey::Stars(2)) {
@@ -2750,6 +2856,11 @@ mod tests {
             .events
             .push_back(metadata_read(500, &image, Ok(empty_read())));
         assert!(cache.poll(&mut worker).is_empty());
+        // the frame after the result asks for one more at once, so it is drawn
+        assert_eq!(
+            cache.inspector_request(Some(&image), true, false, t, &mut worker),
+            Some(Duration::ZERO)
+        );
 
         // The window opens on the image: its own read is sent at once, the inspector's is not.
         assert!(cache.open_window(&image, &mut worker));

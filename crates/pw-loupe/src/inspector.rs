@@ -246,7 +246,10 @@ impl ExifInspector {
     /// shown (the right column and the section open). Takes the results that came back, then asks
     /// for the image's summary when it is shown, no read is in flight and the image has been the
     /// current one for `INSPECTOR_READ_DELAY`. Returns how soon a frame is needed to go on (the
-    /// rest of the delay, or a read in flight), if at all.
+    /// rest of the delay, or a read in flight), if at all; at once (`Duration::ZERO`) when the
+    /// shown section changed in this call (the image's result came back, or the reader stopped),
+    /// since the section was drawn earlier in the frame and would otherwise wait for the next
+    /// input (found with the Histogram section, T144).
     pub fn request(
         &mut self,
         image: Option<&Path>,
@@ -254,7 +257,24 @@ impl ExifInspector {
         now: Instant,
         reader: &mut impl ExifSubmit,
     ) -> Option<Duration> {
-        self.drain(reader);
+        let arrived = self.drain(reader);
+        let wait = self.ask(image, shown, now, reader);
+        if shown && arrived {
+            Some(Duration::ZERO)
+        } else {
+            wait
+        }
+    }
+
+    /// The part of [`Self::request`] after the results are taken: follows the image and asks
+    /// for its read when it is due.
+    fn ask(
+        &mut self,
+        image: Option<&Path>,
+        shown: bool,
+        now: Instant,
+        reader: &mut impl ExifSubmit,
+    ) -> Option<Duration> {
         let image = image.filter(|path| exif_supported(path));
         if self.image.as_ref().map(|(path, _)| path.as_path()) != image {
             self.image = image.map(|path| (path.to_path_buf(), now));
@@ -283,14 +303,16 @@ impl ExifInspector {
             }
             Err(ReaderStopped) => {
                 self.result = Some(Err(inspector_text(&InspectorText::ReaderStopped)));
-                None
+                Some(Duration::ZERO)
             }
         }
     }
 
     /// Takes every result that came back; a result for another image is dropped. A stopped
-    /// reader fails the read in flight.
-    fn drain(&mut self, reader: &mut impl ExifSubmit) {
+    /// reader fails the read in flight. Returns whether the current image's section changed (its
+    /// result came back, or the reader stopped while reading).
+    fn drain(&mut self, reader: &mut impl ExifSubmit) -> bool {
+        let mut changed = false;
         loop {
             match reader.try_recv() {
                 Ok(ExifRead { path, result }) => {
@@ -298,15 +320,17 @@ impl ExifInspector {
                     if self.is_image(&path) {
                         self.result = Some(result.map(|info| exif_rows(&info)));
                         self.needs_read = false;
+                        changed = true;
                     }
                 }
-                Err(TryRecvError::Empty) => return,
+                Err(TryRecvError::Empty) => return changed,
                 Err(TryRecvError::Disconnected) => {
                     if std::mem::take(&mut self.in_flight) && self.image.is_some() {
                         self.result = Some(Err(inspector_text(&InspectorText::ReaderStopped)));
                         self.needs_read = false;
+                        changed = true;
                     }
-                    return;
+                    return changed;
                 }
             }
         }
@@ -652,6 +676,54 @@ mod tests {
         assert_eq!(reader.reads, [other]);
     }
 
+    /// The section is drawn before the results are taken in a frame, so the frame that takes the
+    /// image's result (or finds the reader stopped) asks for one more frame at once; without it
+    /// the result waited for the next input (found with the Histogram section, T144).
+    #[test]
+    fn a_frame_is_asked_for_at_once_when_the_shown_section_changes() {
+        let mut reader = FakeReader::default();
+        let mut exif = ExifInspector::default();
+        let path = image("pw-loupe-exif-repaint.ARW");
+        let start = Instant::now();
+        let t = start + INSPECTOR_READ_DELAY;
+        exif.request(Some(&path), true, start, &mut reader);
+        assert_eq!(
+            exif.request(Some(&path), true, t, &mut reader),
+            Some(INSPECTOR_POLL_INTERVAL)
+        );
+        reader.answer(&path, Err("gone".into()));
+        assert_eq!(
+            exif.request(Some(&path), true, t, &mut reader),
+            Some(Duration::ZERO)
+        );
+        assert_eq!(exif.request(Some(&path), true, t, &mut reader), None);
+
+        // hidden: no frame is asked for
+        let hidden = image("pw-loupe-exif-repaint-hidden.ARW");
+        exif.request(Some(&hidden), true, t, &mut reader);
+        let t = t + INSPECTOR_READ_DELAY;
+        exif.request(Some(&hidden), true, t, &mut reader);
+        reader.answer(&hidden, Err("gone".into()));
+        assert_eq!(exif.request(Some(&hidden), false, t, &mut reader), None);
+
+        // the reader stops while reading, and a read asked of a stopped reader
+        let stopped = image("pw-loupe-exif-repaint-stopped.ARW");
+        exif.request(Some(&stopped), true, t, &mut reader);
+        let t = t + INSPECTOR_READ_DELAY;
+        exif.request(Some(&stopped), true, t, &mut reader);
+        reader.stopped = true;
+        assert_eq!(
+            exif.request(Some(&stopped), true, t, &mut reader),
+            Some(Duration::ZERO)
+        );
+        let last = image("pw-loupe-exif-repaint-last.ARW");
+        exif.request(Some(&last), true, t, &mut reader);
+        assert_eq!(
+            exif.request(Some(&last), true, t + INSPECTOR_READ_DELAY, &mut reader),
+            Some(Duration::ZERO)
+        );
+    }
+
     #[test]
     fn moving_quickly_reads_nothing() {
         let mut reader = FakeReader::default();
@@ -711,9 +783,13 @@ mod tests {
         assert_eq!(exif.shown(&third), ExifShown::Loading);
         assert_eq!(exif.shown(&first), ExifShown::Loading);
 
-        // Its result is kept until the image changes, and not read again.
+        // Its result is kept until the image changes (one more frame at once, so it is drawn),
+        // and not read again.
         reader.answer(&third, Ok(info()));
-        assert_eq!(exif.request(Some(&third), true, t, &mut reader), None);
+        assert_eq!(
+            exif.request(Some(&third), true, t, &mut reader),
+            Some(Duration::ZERO)
+        );
         assert_eq!(exif.shown(&third), ExifShown::Rows(&exif_rows(&info())));
         assert_eq!(exif.request(Some(&third), true, t, &mut reader), None);
         assert_eq!(reader.reads.len(), 2, "a read image is not read again");
