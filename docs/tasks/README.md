@@ -95,11 +95,15 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status |
 |---|---|---|
+| [T146](T146-clipping-map-of-raw-data.md) | ADR 0017 U7b: the clipping map of the RAW data | Open |
+| [T147](T147-clipping-map-in-the-view-core.md) | ADR 0017 U7b: the clipping map in the view core | Blocked |
+| [T148](T148-clipping-overlay-in-the-preview.md) | ADR 0017 U7b: the clipping keys, menu items and section | Blocked |
+| [T149](T149-clipping-marks-drawn-on-the-image.md) | ADR 0017 U7b: the clipping marks drawn on the image | Blocked |
 
 ## Writing a task (owner and reviewer)
 
-- **Number:** the next free number after the highest in this folder and `done/` (T146 next).
-- **File:** `docs/tasks/T146-<a-few-words>.md`; three digits, lower case, words joined by `-`.
+- **Number:** the next free number after the highest in this folder and `done/` (T150 next).
+- **File:** `docs/tasks/T150-<a-few-words>.md`; three digits, lower case, words joined by `-`.
 - **Index:** add a row to "Open tasks" above and keep its status in step with the file's heading.
 - **Size (owner, 2026-11-15, after T142):** one task is one layer (a C++ shim or a core crate, or
   the shell in `pw-loupe`), about eight files at most, and gives one result the owner can check by
@@ -139,7 +143,7 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 Skeleton (the fields recent tasks use; leave out those that do not apply):
 
 ```markdown
-# T146. <Title> — Open
+# T150. <Title> — Open
 
 - **Why:** …
 - **Crates:** … **Files:** …

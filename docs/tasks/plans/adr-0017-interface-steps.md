@@ -33,7 +33,7 @@ the one before it is accepted.
 | U4 | T135 | Library: folder tree, favourites and recent folders (U4-Q1–U4-Q7) | done (T135, 2026-11-14) |
 | U14 | T138 | Sort order: File Name, Capture Time, Modified, File Type, Rating, ascending or descending (U14-Q1–U14-Q7) | done (T138, 2026-11-15) |
 | U7a | T142, T144, T145 | RAW histogram and exposure statistics in the preview and the inspector (U7-Q1–U7-Q8); the inspector's section shows statistics only when the preview showed the same image, so T144 gives it its own | done (T142, T144, T145, 2026-11-15); hand-checked by the owner on 2026-11-15 (the inspector's section with T144, T145; the preview's section, T142) |
-| U7b | – | Clipping overlay on the image (§2.6), on T142's clipping level | after T142 |
+| U7b | T146, T147, T148, T149 | Clipping overlay on the image (§2.6), on T142's clipping level: the map from the RAW data (T146), the view core (T147), the keys, menu items and section (T148), the marks drawn on the image (T149); the owner's hand check after T149 | T146 open (the owner approved U7b-Q1–U7b-Q10, 2026-11-15); T147–T149 blocked, one after the other |
 | U5 | T140 | Tasks area: import progress per file, stop button, pending writes, error list (U5-Q1–U5-Q7) | done (T140, 2026-11-15) |
 | U6 | – | Compare two images: side by side, above/below, locked zoom | not written |
 | U13 | – | Templates from the metadata window (with the modes of ADR 0007 §10) and variables in text fields; the import's template in a window of its own, saved as an XMP template file (owner, 2026-11-15) | needs the namespace of the modes decided first (as D1 of ADR 0007) |

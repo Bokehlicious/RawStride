@@ -376,7 +376,7 @@ without the study notes as a template.
 
 ### 6.1 Questions of the steps (answered by the owner, 2026-11-13: every proposal approved)
 
-Asked in the tasks of stage A (T109–T112, `docs/tasks/done/`) and of U10, U12b, U12c and U10d (T123–T126, T128, 2026-11-14) and of U4, U11a and U14 (T135, T136, T138, T139, 2026-11-14) and of U5, U12a, U7 and U11 (T140–T143, 2026-11-15) and of U7's inspector part (T144, 2026-11-15) and answered there; recorded here so
+Asked in the tasks of stage A (T109–T112, `docs/tasks/done/`) and of U10, U12b, U12c and U10d (T123–T126, T128, 2026-11-14) and of U4, U11a and U14 (T135, T136, T138, T139, 2026-11-14) and of U5, U12a, U7 and U11 (T140–T143, 2026-11-15) and of U7's inspector part (T144, 2026-11-15) and of U7b (T146, 2026-11-15) and answered there; recorded here so
 the decisions do not live only in the tasks.
 
 | # | Decision (as proposed) |
@@ -486,6 +486,16 @@ the decisions do not live only in the tasks.
 | U7c-Q5 | A wanted 100 % view of the current image is picked before its statistics in the view core; `latency.ps1` before and after, the 100 % run reported. **Owner, 2026-11-15 (T144):** "wanted" includes the 100 % view the plan prefetches while the image is shown at fit (`Want::Target`), not only the shown view at 100 %, so Z pressed while the statistics would run finds that view ready; the T142 test helper `open_and_show` puts that view on the screen too. T144's 100 % run (7.5 → 10.0 ms median) is accepted: the step to a neighbour finds its 100 % view already prefetched, so that run does not show the case this decision is for |
 | U7c-Q6 | No new texts: T142's, a failed read as "No histogram for this file" |
 | U7c-Q7 | A kept histogram is not read again after RawStride's own metadata write of its file (owner, 2026-11-15, T145): a write does not change the pixels, so a kept result whose stamp equals the file's stamp just before that write takes the file's new stamp; a file changed in any other way is still read again (U7c-Q3) |
+| U7b-Q1 | Four tasks: T146 the map from the RAW data (C++ shim, `pw-libraw`); T147 the view core asks for it and gives it with the frame, and makes it for JPEG and TIFF; T148 the keys, menu items, settings, section and texts in the preview; T149 the overlay drawn on the image; the owner's hand check after T149 |
+| U7b-Q2 | Clipped: a part where at least one channel is at the clipping level, by T142's rule (RAW: a raw value at or above the white level, before white balance; JPEG/TIFF: 255); the map keeps which channel, so a colour per channel can come later |
+| U7b-Q3 | Deep shadows: T142's rule, every channel below 1/256 of the white level above black (JPEG/TIFF: every channel 0), so the marks are what the panel's number counts |
+| U7b-Q4 | Clipped highlights solid red, deep shadows solid blue, drawn over the image; nothing else of the image changes |
+| U7b-Q5 | **J** clipped highlights on/off, **Shift+J** deep shadows on/off; both in the View menu, ticked when on, with their keys; they act in the preview |
+| U7b-Q6 | In the preview only; each overlay stays on when stepping and is remembered after a restart (`settings.txt`) |
+| U7b-Q7 | One mark per cell of 2×2 photosites (3×3 for X-Trans) in RAW mode, 2×2 pixels in JPEG and TIFF mode |
+| U7b-Q8 | Computed only while an overlay is on, for the current image after its first view (as U7-Q6); the maps of the last 4 images shown kept; nothing marked until the map is ready; the overlay is one GPU texture of 4 bytes per cell, outside the view's texture budget |
+| U7b-Q9 | A section "Clipping" under Histogram in the preview's right column, collapsible and remembered, with check boxes "Clipped highlights (J)" and "Deep shadows (Shift+J)"; "Reading …" while the map is computed, "No clipping map for this file" when there is none |
+| U7b-Q10 | Clipping, Clipped highlights, Deep shadows, Show Clipped Highlights, Show Deep Shadows, No clipping map for this file; "Reading …" as today; English (GR14), in the glossary |
 | U11c-Q1 | Person Shown with Details, Product Shown, Artwork or Object, Contributor, CV-Term About Image, Image Registry Entry; not Image Region (needs drawing on the image) nor the rights expressions |
 | U11c-Q2 | Content after Person Shown: Person with Details, Product, Artwork; Creator and Rights at the end: Contributor; Assignment after Genre: CV-Term About Image, at the end: Image Registry Entry |
 | U11c-Q3 | Title, Creator, Date Created, Source, Source Inventory Number and Copyright Notice open; the other eleven under a collapsed "More" line |
