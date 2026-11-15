@@ -72,6 +72,7 @@ use pw_loupe::{
     value_choices,
 };
 use pw_loupe::{HISTOGRAM_BINS, HistogramPanel, HistogramText, histogram_panel, histogram_text};
+use pw_loupe::{HistogramInspector, HistogramReader, HistogramReads};
 use pw_loupe::{
     ImportText, failed_cell_text, hidden_done_text, hidden_progress_text, import_text,
     no_preview_text,
@@ -85,7 +86,7 @@ use pw_metadata::{MetadataWorker, Rating, WriteSetup, supports_rating};
 use pw_render::{Textures, view_px};
 use pw_thumbcache::{ThumbWorker, ThumbnailRequest};
 use pw_viewcore::native::NativeBackend;
-use pw_viewcore::{Config, ImageStatistics, Status, ViewCore, Zoom};
+use pw_viewcore::{Config, ImageStatistics, Source, Status, ViewCore, Zoom};
 
 mod inspector;
 mod inspector_text;
@@ -603,6 +604,9 @@ struct Loupe {
     /// The inspector's Exif reader and summary (ADR 0017 §2.1, T110).
     exif_reader: ExifReader,
     exif: ExifInspector,
+    /// The inspector's histogram reader and its kept results (ADR 0017 §2.6, U7c, T144).
+    histogram_reader: HistogramReader,
+    histograms: HistogramInspector,
     /// The capture-time reader of the sort (ADR 0017 U14-Q4, T138) and the files asked for whose
     /// answer has not come back.
     capture_reader: CaptureReader,
@@ -648,6 +652,9 @@ struct Loupe {
     /// The image of the last rendered preview frame, as `inspector_subject` names it, and its
     /// statistics once they are ready, for the Histogram sections (ADR 0017 §2.6, U7, T142).
     last_statistics: Option<(PathBuf, Option<ImageStatistics>)>,
+    /// The display mode (RAW or JPEG) of the last rendered preview frame, which the inspector's
+    /// Histogram section follows (U7c-Q1, T144); RAW before the first frame, as the view core.
+    display_mode: Source,
     /// The window's state from before the preview made it full screen; `Some` while the preview
     /// is shown (ADR 0017 §2.2, U3-Q1, U3-Q6, T111).
     window_before: Option<WindowBefore>,
@@ -1693,8 +1700,10 @@ impl Loupe {
                 return;
             }
         };
-        // Another folder empties the inspector's Exif summary, as its metadata (T110).
+        // Another folder empties the inspector's Exif summary, as its metadata (T110), and its
+        // kept histograms (T144).
         self.exif.folder_loaded(&files);
+        self.histograms.folder_loaded(&files);
         if tab.mode == ViewMode::Loupe {
             self.open_loupe_core(&files);
         } else {
@@ -2983,7 +2992,20 @@ impl Loupe {
             now,
             &mut self.metadata_worker,
         );
-        if let Some(wait) = exif_wait.into_iter().chain(metadata_wait).min() {
+        // The Histogram section reads with the same rules, in the tab's display mode (T144).
+        let histogram_wait = self.histograms.request(
+            image.as_deref(),
+            self.display_mode,
+            !in_preview && column_open && shell.inspector_histogram == ColumnState::Open,
+            now,
+            &mut self.histogram_reader,
+        );
+        if let Some(wait) = exif_wait
+            .into_iter()
+            .chain(metadata_wait)
+            .chain(histogram_wait)
+            .min()
+        {
             ctx.request_repaint_after(wait);
         }
     }
@@ -4000,7 +4022,10 @@ impl Loupe {
                 // Metadata and Histogram (T142), the whole column in one scroll area.
                 let cwd = std::env::current_dir().ok();
                 let image = inspector_subject(self.tabs.active(), cwd.as_deref());
-                let histogram = self.histogram_for(image.as_deref());
+                // The inspector's own statistics, the preview's included (U7c-Q1, T144).
+                let histogram = image.as_deref().map_or(HistogramPanel::Reading, |image| {
+                    self.histograms.shown(image, self.display_mode)
+                });
                 let (exif, metadata) = (&self.exif, &self.metadata);
                 let mut toggled = [false; 3];
                 let shown = egui::Panel::right("right-column")
@@ -4398,6 +4423,12 @@ impl Loupe {
             };
             (path, frame.statistics.clone())
         });
+        // The inspector keeps them too, so it reads nothing for this image (U7c-Q1, T144).
+        self.display_mode = frame.mode;
+        if let Some((path, Some(statistics))) = &self.last_statistics {
+            self.histograms
+                .preview_result(path, frame.source, statistics);
+        }
         // The tab's current image comes from the tab, not from `frame.pos`: every step goes through
         // the tab and the core follows it (ADR 0014 §4.4). The status line counts the whole folder.
         let total = self.tabs.active().map_or(0, |tab| tab.files.len());
@@ -6327,11 +6358,29 @@ fn show_warning(title: &'static str, text: String) {
 }
 
 /// The image check of the safe write (I9d): it closes the view core's RAW sessions of the file
-/// first (T89), waiting at most [`RELEASE_TIMEOUT`].
-fn image_check(core: &ViewCore<NativeBackend>) -> RawImageCheck {
+/// first (T89) and waits for the inspector's histogram read of it (U7c-Q4, T144), each at most
+/// [`RELEASE_TIMEOUT`].
+fn image_check(core: &ViewCore<NativeBackend>, histogram_reads: &HistogramReads) -> RawImageCheck {
     let releaser = core.releaser();
+    release_before_write(
+        move |path| {
+            let _ = releaser.release(path, RELEASE_TIMEOUT);
+        },
+        histogram_reads.clone(),
+    )
+}
+
+/// The image check whose release first calls `release_core` (the view core's sessions) and then
+/// waits until the histogram reader no longer holds the file (U7c-Q4, T144), so a metadata write
+/// never meets a file the reader has open. The read's result is still used: a metadata write
+/// does not change the pixels.
+fn release_before_write(
+    release_core: impl Fn(&Path) + Send + Sync + 'static,
+    histogram_reads: HistogramReads,
+) -> RawImageCheck {
     RawImageCheck::new(move |path| {
-        let _ = releaser.release(path, RELEASE_TIMEOUT);
+        release_core(path);
+        let _ = histogram_reads.wait_for(path, RELEASE_TIMEOUT);
     })
 }
 
@@ -6353,19 +6402,21 @@ fn run(options: Options) -> Result<(), String> {
     let indicator_after = config.indicator_after;
     let monitor_profile = load_monitor_profile(primary_monitor_profile_path());
     let title = window_title(&monitor_profile.source);
-    let core = ViewCore::start(
+    // One backend for the view core and the inspector's histogram reader (U7c-Q2, T144).
+    let backend =
         NativeBackend::with_tiff_limit(usize::try_from(config.core_budget).unwrap_or(usize::MAX))
-            .with_monitor_profile(monitor_profile.profile.clone()),
-        config,
-    )?;
+            .with_monitor_profile(monitor_profile.profile.clone());
+    let core = ViewCore::start(backend.clone(), config)?;
+    let histogram_reads = HistogramReads::default();
     let setup = journal.clone().map(|journal| WriteSetup {
         journal,
-        checks: Box::new(image_check(&core)),
+        checks: Box::new(image_check(&core, &histogram_reads)),
         options: settings.edit_options(),
     });
     let metadata_worker = MetadataWorker::start(setup).map_err(|e| e.to_string())?;
     let import_worker =
-        ImportWorker::start(journal, Box::new(image_check(&core))).map_err(|e| e.to_string())?;
+        ImportWorker::start(journal, Box::new(image_check(&core, &histogram_reads)))
+            .map_err(|e| e.to_string())?;
     let thumb_worker = ThumbWorker::start_with_monitor_profile(monitor_profile.profile.clone())
         .map_err(|e| e.to_string())?;
     // The window as it was left (ADR 0017 §2.5, T109): maximized unless a normal size on a
@@ -6430,6 +6481,11 @@ fn run(options: Options) -> Result<(), String> {
                 anchor_at_pointer: true,
                 exif_reader: ExifReader::start(),
                 exif: ExifInspector::default(),
+                histogram_reader: HistogramReader::start(backend, histogram_reads),
+                histograms: HistogramInspector::new(
+                    inspector::INSPECTOR_READ_DELAY,
+                    inspector::INSPECTOR_POLL_INTERVAL,
+                ),
                 capture_reader: CaptureReader::start(),
                 capture_in_flight: HashSet::new(),
                 status_bar: StatusBar::default(),
@@ -6449,6 +6505,7 @@ fn run(options: Options) -> Result<(), String> {
                 last_frame_status: Status::Empty,
                 last_zoom: None,
                 last_statistics: None,
+                display_mode: Source::Raw,
                 window_before: None,
                 window_settling: None,
                 viewport_commands: Vec::new(),
@@ -6497,6 +6554,169 @@ mod tests {
     use pw_loupe::{TEXT_CONTRAST, contrast_ratio};
     use pw_metadata::iim::Fallback;
     use std::path::{Path, PathBuf};
+
+    // --- A metadata write waits for the inspector's histogram read (U7c-Q4, T144) ---
+
+    mod write_waits_for_the_histogram_read {
+        use super::super::release_before_write;
+        use pw_loupe::{HistogramReader, HistogramReads, HistogramSubmit};
+        use pw_metadata::safe_write::ImageCheck;
+        use pw_viewcore::{
+            Backend, DecodeError, ImageSize, Rect, Rgb, Source, Statistics, StatisticsOrigin,
+        };
+        use std::path::{Path, PathBuf};
+        use std::sync::{Arc, Condvar, Mutex, mpsc};
+        use std::time::{Duration, Instant};
+
+        type Log = Arc<Mutex<Vec<&'static str>>>;
+
+        fn note(log: &Log, step: &'static str) {
+            log.lock().unwrap_or_else(|e| e.into_inner()).push(step);
+        }
+
+        fn steps(log: &Log) -> Vec<&'static str> {
+            log.lock().unwrap_or_else(|e| e.into_inner()).clone()
+        }
+
+        /// A test reader's backend that records the order of its steps; its statistics wait at a
+        /// gate until the test opens it.
+        #[derive(Clone)]
+        struct Recording {
+            log: Log,
+            gate: Arc<(Mutex<(bool, bool)>, Condvar)>,
+        }
+
+        impl Recording {
+            fn wait_until_reading(&self) {
+                let (state, changed) = &*self.gate;
+                let end = Instant::now() + Duration::from_secs(10);
+                let mut state = state.lock().unwrap_or_else(|e| e.into_inner());
+                while !state.0 {
+                    let now = Instant::now();
+                    assert!(now < end, "the read did not start");
+                    state = match changed.wait_timeout(state, end - now) {
+                        Ok((state, _)) => state,
+                        Err(e) => e.into_inner().0,
+                    };
+                }
+            }
+
+            fn open_gate(&self) {
+                let (state, changed) = &*self.gate;
+                state.lock().unwrap_or_else(|e| e.into_inner()).1 = true;
+                changed.notify_all();
+            }
+        }
+
+        /// The session notes when it is dropped, so the test sees the file let go.
+        struct Session(Log);
+
+        impl Drop for Session {
+            fn drop(&mut self) {
+                note(&self.0, "session dropped");
+            }
+        }
+
+        impl Backend for Recording {
+            type Session = Session;
+            fn open(&self, _: &Path, _: Source) -> Result<(Session, ImageSize), DecodeError> {
+                note(&self.log, "opened");
+                Ok((
+                    Session(self.log.clone()),
+                    ImageSize {
+                        w: 2,
+                        h: 2,
+                        flip: 0,
+                    },
+                ))
+            }
+            fn render_half(&self, _: &mut Session) -> Result<Rgb, DecodeError> {
+                Err(DecodeError::new("nothing is rendered"))
+            }
+            fn render_region(&self, _: &mut Session, _: Rect) -> Result<Rgb, DecodeError> {
+                Err(DecodeError::new("nothing is rendered"))
+            }
+            fn statistics(&self, _: &mut Session) -> Option<Statistics> {
+                let (state, changed) = &*self.gate;
+                let mut state = state.lock().unwrap_or_else(|e| e.into_inner());
+                state.0 = true;
+                changed.notify_all();
+                while !state.1 {
+                    state = match changed.wait(state) {
+                        Ok(state) => state,
+                        Err(e) => e.into_inner(),
+                    };
+                }
+                drop(state);
+                note(&self.log, "statistics");
+                Some(Statistics::of_rgb8(StatisticsOrigin::Tiff, &[0; 12]))
+            }
+        }
+
+        #[test]
+        fn a_write_of_the_file_being_read_waits_for_the_read() {
+            let log: Log = Arc::default();
+            let backend = Recording {
+                log: log.clone(),
+                gate: Arc::default(),
+            };
+            let reads = HistogramReads::default();
+            let mut reader = HistogramReader::start(backend.clone(), reads.clone());
+            let path = std::env::temp_dir().join("pw-loupe-write-waits.DNG");
+            assert!(reader.read_histogram(path.clone(), Source::Raw).is_ok());
+            backend.wait_until_reading();
+
+            let core_log = log.clone();
+            let check =
+                release_before_write(move |_: &Path| note(&core_log, "view core released"), reads);
+            let (done, finished) = mpsc::channel();
+            let write_log = log.clone();
+            let write_path: PathBuf = path.clone();
+            let writer = std::thread::spawn(move || {
+                check.release(&write_path);
+                note(&write_log, "written");
+                let _ = done.send(());
+            });
+            // the write waits while the read holds the file
+            assert_eq!(
+                finished.recv_timeout(Duration::from_millis(300)),
+                Err(mpsc::RecvTimeoutError::Timeout)
+            );
+            backend.open_gate();
+            assert_eq!(finished.recv_timeout(Duration::from_secs(10)), Ok(()));
+            assert!(writer.join().is_ok());
+            assert_eq!(
+                steps(&log),
+                [
+                    "opened",
+                    "view core released",
+                    "statistics",
+                    "session dropped",
+                    "written"
+                ]
+            );
+            // the read's result still comes back
+            let end = Instant::now() + Duration::from_secs(10);
+            let read = loop {
+                if let Ok(read) = reader.try_recv() {
+                    break read;
+                }
+                assert!(Instant::now() < end, "no result");
+                std::thread::sleep(Duration::from_millis(5));
+            };
+            assert_eq!(read.path, path);
+            assert!(matches!(
+                read.statistics,
+                pw_viewcore::ImageStatistics::Available(_)
+            ));
+
+            // a write of another file does not wait
+            let other = release_before_write(|_: &Path| {}, HistogramReads::default());
+            let t0 = Instant::now();
+            other.release(Path::new("elsewhere.DNG"));
+            assert!(t0.elapsed() < Duration::from_secs(1));
+        }
+    }
 
     // --- Where the metadata window opens (T131) ---
 

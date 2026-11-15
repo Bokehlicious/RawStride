@@ -56,8 +56,10 @@ pub use grid::{
     loupe_key_action, navigate, row, step_thumbnail_size, take_wheel_steps, visible_range,
 };
 pub use histogram::{
-    HISTOGRAM_BINS, HistogramBars, HistogramPanel, HistogramView, histogram_bars, histogram_panel,
-    histogram_source_text, histogram_view,
+    FileStamp, HISTOGRAM_BINS, HistogramBars, HistogramInspector, HistogramPanel, HistogramRead,
+    HistogramReader, HistogramReaderStopped, HistogramReads, HistogramSubmit, HistogramView,
+    KEPT_HISTOGRAMS, file_stamp, histogram_bars, histogram_panel, histogram_source,
+    histogram_source_text, histogram_view, read_statistics,
 };
 pub use import::{
     Field, FieldError, ImportForm, IptcField, IptcForm, IptcModes, ItemAction, Preview,

@@ -915,6 +915,11 @@ impl<S> State<S> {
     /// asked once per opened image, only after its view is on the screen (so the first image is
     /// never delayed), after the dwell and not during a zoom gesture (so stepping through images
     /// starts none). An image whose session was closed meanwhile is opened again first.
+    ///
+    /// The 100 % view first (ADR 0017 U7c-Q5, T144): while the plan wants a view of the current
+    /// image at 100 % or more (the shown view when zoomed in, or the 100 % view prefetched at
+    /// fit) that is not on the screen yet, the statistics wait, so Z right then does not wait for
+    /// them.
     fn statistics_job(&self) -> Option<Job> {
         let key = self.cur_key()?;
         if self.statistics.contains_key(&key) || self.failed.contains_key(&key) {
@@ -925,10 +930,24 @@ impl<S> State<S> {
         }
         let shown = self.req(key, Want::Shown)?;
         self.serving(&shown)?;
+        if self.wants_a_full_size_view(key) {
+            return None;
+        }
         Some(if self.sessions.contains_key(&key) {
             Job::Statistics(key)
         } else {
             Job::Open(key)
+        })
+    }
+
+    /// Whether the plan wants a view of `key` at 100 % or more (a 100 % region) that no resident
+    /// view serves yet (U7c-Q5).
+    fn wants_a_full_size_view(&self, key: Key) -> bool {
+        self.wanted(false).into_iter().any(|(k, want)| {
+            k == key
+                && self.req(k, want).is_some_and(|req| {
+                    req.job.kind == ViewKind::Zoom && self.serving(&req).is_none()
+                })
         })
     }
 
@@ -1076,8 +1095,8 @@ impl<S> State<S> {
         let ck = self.cur_key();
         let generation = self.generation;
         let mut jobs = self.plan();
-        // The statistics come first once they are due: the shown view is on the screen by then,
-        // and for a JPEG they leave the full decode behind that the 100 % view then uses.
+        // The statistics come first once they are due: the shown view and a wanted 100 % view of
+        // the current image are on the screen by then (U7c-Q5).
         if let Some(job) = self.statistics_job()
             && !jobs.contains(&job)
         {
@@ -2663,11 +2682,14 @@ mod tests {
         ImageStatistics::Available(Arc::new(statistics(share)))
     }
 
-    /// Opens image `pos` in RAW mode and puts its shown (fit) view on the screen.
+    /// Opens image `pos` in RAW mode and puts its shown (fit) view on the screen, and its 100 %
+    /// view, which the plan wants before the statistics (U7c-Q5, T144).
     fn open_and_show(s: &mut State<u32>, pos: usize) {
         s.finish_open(s.generation, k(pos), Ok((pos as u32, SIZE)), mb24, 1.0);
         let view = out(s, pos, Want::Shown);
         assert!(s.accept(&view, 1 << 20).is_some());
+        let target = out(s, pos, Want::Target);
+        assert!(s.accept(&target, 1 << 20).is_some());
     }
 
     /// The statistics task the interactive worker gets now.
@@ -2709,6 +2731,10 @@ mod tests {
         assert!(s.accept(&views[0], 1 << 20).is_some());
         assert_eq!(s.frame(VIEW).status, Status::Ready);
         assert_eq!(s.frame(VIEW).statistics, None);
+        // the wanted 100 % view comes before them (U7c-Q5, T144)
+        assert_eq!(s.statistics_job(), None);
+        let target = out(&s, 10, Want::Target);
+        assert!(s.accept(&target, 1 << 20).is_some());
 
         // now they are asked, before anything else, and of the current image
         assert_eq!(s.statistics_job(), Some(Job::Statistics(k(10))));
@@ -2731,6 +2757,63 @@ mod tests {
         }
         assert_eq!(s.stats.statistics, 1);
         assert_eq!(s.stats.statistics_ms, vec![3.0]);
+    }
+
+    /// The render task the interactive worker gets now, finished and put on the screen.
+    fn render_and_show(s: &mut State<u32>) -> JobView {
+        let (generation, key, view, session) = match s.pick(true) {
+            Some(Task::Render {
+                generation,
+                key,
+                view,
+                session,
+            }) => (generation, key, view, session),
+            other => panic!("expected a render, got {other:?}"),
+        };
+        s.finish_render(generation, key, view, session, Ok(img()), 1.0);
+        for view in std::mem::take(&mut s.outbox) {
+            assert!(s.accept(&view, 1 << 20).is_some());
+        }
+        view
+    }
+
+    #[test]
+    fn a_wanted_100_percent_view_is_picked_before_the_statistics_which_follow_once_it_is_shown() {
+        // at fit: the fit view is on the screen, the 100 % view the plan prefetches is not
+        let mut s = state(1024);
+        s.finish_open(s.generation, k(10), Ok((10, SIZE)), mb24, 1.0);
+        let view = out(&s, 10, Want::Shown);
+        assert!(s.accept(&view, 1 << 20).is_some());
+        assert_eq!(s.statistics_job(), None);
+        let picked = render_and_show(&mut s);
+        assert_eq!(picked.kind, ViewKind::Zoom);
+        assert_eq!(s.statistics_job(), Some(Job::Statistics(k(10))));
+        assert!(is_statistics(&s.pick(true)));
+
+        // zoomed in to 100 % (Z): the shown 100 % view first, then the statistics
+        let mut s = state(1024);
+        s.finish_open(s.generation, k(10), Ok((10, SIZE)), mb24, 1.0);
+        let view = out(&s, 10, Want::Shown);
+        assert!(s.accept(&view, 1 << 20).is_some());
+        s.toggle_zoom(None);
+        s.since = Instant::now() - Duration::from_secs(1);
+        assert_eq!(s.zoom, Zoom::Scale(1.0));
+        assert_eq!(s.statistics_job(), None);
+        let picked = render_and_show(&mut s);
+        assert_eq!(picked.kind, ViewKind::Zoom);
+        assert_eq!(s.frame(VIEW).status, Status::Ready);
+        assert_eq!(s.statistics_job(), Some(Job::Statistics(k(10))));
+        assert!(is_statistics(&s.pick(true)));
+
+        // a 100 % view of another image does not hold back the current image's statistics
+        let mut s = state(1024);
+        open_and_show(&mut s, 10);
+        assert!(
+            s.wanted(false)
+                .iter()
+                .any(|(key, want)| key.0 == 11 && *want == Want::Target)
+        );
+        assert_eq!(s.statistics_job(), Some(Job::Statistics(k(10))));
     }
 
     #[test]

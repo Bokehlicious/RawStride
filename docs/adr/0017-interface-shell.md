@@ -483,7 +483,7 @@ the decisions do not live only in the tasks.
 | U7c-Q2 | A reader thread of its own in `pw-loupe`, with the Exif reader's rules (shown, 200 ms, one in flight, newest wins), opening the file with the same `NativeBackend` and dropping the session at once; not the view core |
 | U7c-Q3 | The last 64 results by path and mode, in memory; another folder empties them; a changed file is read again |
 | U7c-Q4 | A metadata write of the file being read waits for the read; the result is kept |
-| U7c-Q5 | A wanted 100 % view of the current image is picked before its statistics in the view core; `latency.ps1` before and after, the 100 % run reported |
+| U7c-Q5 | A wanted 100 % view of the current image is picked before its statistics in the view core; `latency.ps1` before and after, the 100 % run reported. **Owner, 2026-11-15 (T144):** "wanted" includes the 100 % view the plan prefetches while the image is shown at fit (`Want::Target`), not only the shown view at 100 %, so Z pressed while the statistics would run finds that view ready; the T142 test helper `open_and_show` puts that view on the screen too. T144's 100 % run (7.5 → 10.0 ms median) is accepted: the step to a neighbour finds its 100 % view already prefetched, so that run does not show the case this decision is for |
 | U7c-Q6 | No new texts: T142's, a failed read as "No histogram for this file" |
 | U11c-Q1 | Person Shown with Details, Product Shown, Artwork or Object, Contributor, CV-Term About Image, Image Registry Entry; not Image Region (needs drawing on the image) nor the rights expressions |
 | U11c-Q2 | Content after Person Shown: Person with Details, Product, Artwork; Creator and Rights at the end: Contributor; Assignment after Genre: CV-Term About Image, at the end: Image Registry Entry |

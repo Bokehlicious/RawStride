@@ -150,3 +150,4 @@ was when the task was done, so "this file", "below" and "the Log" in T1–T115 m
 | [T141](T141-recent-and-own-values.md) | ADR 0017 U12a: recent values and the user's own values per field in the metadata window |
 | [T142](T142-histogram-and-exposure-statistics.md) | ADR 0017 U7, first part: the RAW histogram and exposure statistics |
 | [T143](T143-persons-artwork-products-contributors.md) | ADR 0017 U11, last part: persons with details, artwork, products, contributors and the other structures |
+| [T144](T144-inspector-histogram.md) | ADR 0017 U7, the inspector's Histogram: statistics of its own, and the 100 % view first |
