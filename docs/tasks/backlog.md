@@ -44,6 +44,17 @@ and reviewer:
   catalog, no weaker than today. Needs an ADR first: a library (Fluent, rust-i18n; a new
   dependency, the owner's approval) or our own simple table. The Swedish names of the item above
   would become the second language's catalog.
+- **Leftovers from the review of T142–T145 (2026-11-15):**
+  - *A wrong Artwork Date Created* (T143, noted, not changed): with a date that is not a valid IPTC
+    date, OK writes nothing and the reason is shown only under that box; "Copy All Fields" then
+    copies the file's earlier date. Needs the owner's view on how the window should tell it.
+  - *RAW statistics test files* (T142): no test file covers X-Trans, a black level per position,
+    or three- or four-colour RAW data. Needs sample files from the owner in `PW_TESTDATA`
+    (`docs/test-inventory.md`, `statistics.rs`).
+  - *The 100 % view first, measured* (T144, ADR 0017 U7c-Q5): `latency.ps1`'s 100 % run steps to a
+    neighbour whose 100 % view is already prefetched, so it cannot show the gain of U7c-Q5. A
+    measurement of Z pressed right after an image is opened would need a change to the script, so
+    a task first (tool changes go through `docs/tasks/`).
 - **A filter bar of toggle buttons instead of drop-down lists** (owner idea, 2026-11-10, after T61;
   ADR 0014 §15): a row "0★ 1★ 2★ 3★ 4★ 5★" and a row of colour swatches, each clicked on and off,
   with a check box per row that turns the row on or off. Needs an amendment of ADR 0014 first: the

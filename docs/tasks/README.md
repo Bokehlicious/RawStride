@@ -101,7 +101,27 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 - **Number:** the next free number after the highest in this folder and `done/` (T146 next).
 - **File:** `docs/tasks/T146-<a-few-words>.md`; three digits, lower case, words joined by `-`.
 - **Index:** add a row to "Open tasks" above and keep its status in step with the file's heading.
+- **Size (owner, 2026-11-15, after T142):** one task is one layer (a C++ shim or a core crate, or
+  the shell in `pw-loupe`), about eight files at most, and gives one result the owner can check by
+  hand or a test can show. A step that needs more (for example new statistics in `pw-libraw`, the
+  view core asking for them, and a panel drawing them) is split. A latency measurement and a new
+  panel are not in the same task. If a task's agent must change files outside the task's list, the
+  task was too big or its list was guessed: note it in the log, and split the next one.
+- **Chains:** a split step is written as a chain at once (for example T146 → T147 → T148), the later
+  tasks "Blocked: waits for T146" until the one before is Done. The step's row in `plans/` names
+  the whole chain. Writing the last task's file first is how a gap is found before code is written
+  (T142's inspector part was found only after T142 was done).
 - **When it is Done and committed:** `git mv` the file to `done/`, move its row to `done/README.md`.
+- **Leftovers:** before a task is set to Done, everything its log calls left, not covered, noted
+  or not changed gets a home: a new task, a row in `plans/`, an item in `backlog.md`, or a line in
+  `docs/test-inventory.md`. The Done row of the log says where. A done task's log is not read again
+  when the next task is written, so nothing may live only there.
+- **Hand check:** a step's row in `plans/` says "done" only after the owner's hand check
+  (ADR 0017 §7); until then it says "awaiting the owner's hand check". A fix found in the hand check
+  is a log row in the task it belongs to.
+- **Parallel tasks:** two tasks may run at the same time only if they change different functions
+  (as T142 and T143 did); `.\tools\check.ps1` is run by one at a time, and each task is reviewed
+  and committed on its own, one commit per task.
 - **Owner decisions** (decisions, approved Q proposals) are written into the ADR or requirement
   they change before the task is Done, not only into the task's log (`AGENTS.md` §6).
 
