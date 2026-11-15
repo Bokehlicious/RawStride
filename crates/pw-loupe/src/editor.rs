@@ -628,6 +628,20 @@ const COPYRIGHT_OWNER: &str = "plus:CopyrightOwner";
 const LICENSOR: &str = "plus:Licensor";
 /// Image Supplier (PLUS, T139).
 const IMAGE_SUPPLIER: &str = "plus:ImageSupplier";
+/// Person Shown in the Image with Details (ADR 0017 U11, T143).
+const PERSON_DETAILS: &str = "Iptc4xmpExt:PersonInImageWDetails";
+/// The name of a Person Shown with Details entry (a Lang Alt).
+const PERSON_NAME: &str = "Iptc4xmpExt:PersonName";
+/// Product Shown in the Image (T143).
+const PRODUCT: &str = "Iptc4xmpExt:ProductInImage";
+/// Artwork or Object in the Image (T143).
+const ARTWORK: &str = "Iptc4xmpExt:ArtworkOrObject";
+/// Contributor (T143).
+const CONTRIBUTOR: &str = "Iptc4xmpExt:Contributor";
+/// CV-Term About Image (T143): CV terms as Genre's.
+const ABOUT_CV_TERM: &str = "Iptc4xmpExt:AboutCvTerm";
+/// Image Registry Entry (T143).
+const REGISTRY: &str = "Iptc4xmpExt:RegistryId";
 
 /// One kind of list of structures in the form (U11b-Q1, T139): the list's XMP id, its shown
 /// sub-fields in the order of the form and where it is drawn. Its most entries come from
@@ -639,13 +653,17 @@ struct ListSpec {
     /// The XMP ids of the shown sub-fields in the order of the form; names from
     /// [`property_label`].
     fields: &'static [&'static str],
-    /// How many of `fields` are shown open in each entry; the rest are under a collapsed
-    /// "Address" line (U11b-Q3).
+    /// How many of `fields` are shown open in each entry; the rest are under a collapsed line:
+    /// "Address" for a Licensor (U11b-Q3), "More" for an Artwork or Object (U11c-Q3, T143).
     open: usize,
     /// The section the list is drawn in.
     section: EditorSection,
-    /// The field after which the list is drawn; `None` at the start of its section.
+    /// The field after which the list is drawn; `None` at the start of its section. For a list
+    /// with `after_list`, the anchor list's field (it gives the place of the edits).
     after: Option<EditorField>,
+    /// The list right after which this list is drawn, instead of right after the field `after`
+    /// (CV-Term About Image after Genre, U11c-Q2, T143); `None` for every other list.
+    after_list: Option<&'static str>,
 }
 
 /// The sub-fields of a CV term as Genre shows them (U11b-Q2).
@@ -679,17 +697,98 @@ const LICENSOR_FIELDS: [&str; 14] = [
 const LICENSOR_OPEN: usize = 8;
 /// The sub-fields of an Image Supplier entry.
 const IMAGE_SUPPLIER_FIELDS: [&str; 2] = ["plus:ImageSupplierName", "plus:ImageSupplierID"];
+/// The sub-fields of a Person Shown with Details entry (U11c-Q1). Its Characteristics (a list of
+/// CV terms) are not shown and kept unchanged (U11c-Q5).
+const PERSON_DETAILS_FIELDS: [&str; 3] = [
+    PERSON_NAME,
+    "Iptc4xmpExt:PersonId",
+    "Iptc4xmpExt:PersonDescription",
+];
+/// The sub-fields of a Product Shown entry (U11c-Q1).
+const PRODUCT_FIELDS: [&str; 4] = [
+    "Iptc4xmpExt:ProductName",
+    "Iptc4xmpExt:ProductGTIN",
+    "Iptc4xmpExt:ProductId",
+    "Iptc4xmpExt:ProductDescription",
+];
+/// The 17 sub-fields of an Artwork or Object entry (U11c-Q3): six open, then the eleven under
+/// "More".
+const ARTWORK_FIELDS: [&str; 17] = [
+    "Iptc4xmpExt:AOTitle",
+    "Iptc4xmpExt:AOCreator",
+    "Iptc4xmpExt:AODateCreated",
+    "Iptc4xmpExt:AOSource",
+    "Iptc4xmpExt:AOSourceInvNo",
+    "Iptc4xmpExt:AOCopyrightNotice",
+    "Iptc4xmpExt:AOCircaDateCreated",
+    "Iptc4xmpExt:AOStylePeriod",
+    "Iptc4xmpExt:AOContentDescription",
+    "Iptc4xmpExt:AOContributionDescription",
+    "Iptc4xmpExt:AOPhysicalDescription",
+    "Iptc4xmpExt:AOCreatorId",
+    "Iptc4xmpExt:AOCurrentCopyrightOwnerName",
+    "Iptc4xmpExt:AOCurrentCopyrightOwnerId",
+    "Iptc4xmpExt:AOCurrentLicensorName",
+    "Iptc4xmpExt:AOCurrentLicensorId",
+    "Iptc4xmpExt:AOSourceInvURL",
+];
+/// How many of an Artwork or Object entry's sub-fields are shown open (U11c-Q3).
+const ARTWORK_OPEN: usize = 6;
+/// The sub-fields of a Contributor entry (U11c-Q1).
+const CONTRIBUTOR_FIELDS: [&str; 3] = ["Iptc4xmpExt:Name", "Iptc4xmpExt:Role", "xmp:Identifier"];
+/// The sub-fields of an Image Registry Entry (U11c-Q1), IPTC's names.
+const REGISTRY_FIELDS: [&str; 3] = [
+    "Iptc4xmpExt:RegOrgId",
+    "Iptc4xmpExt:RegItemId",
+    "Iptc4xmpExt:RegEntryRole",
+];
 
-/// Every structure list of the form in form order (U11b-Q1): the locations at the end of Time
-/// and Place (U11a-Q2), Genre after Scene Code, and the four PLUS lists at the start of Licence
-/// (PLUS), before the release fields (T139, point 2).
-static LIST_SPECS: [ListSpec; 7] = [
+/// Every structure list of the form in form order (U11b-Q1, U11c-Q2): Person Shown with Details,
+/// Product Shown and Artwork or Object after Person Shown (T143), Contributor at the end of
+/// Creator and Rights (T143), the locations at the end of Time and Place (U11a-Q2), Genre and
+/// CV-Term About Image after Scene Code, Image Registry Entry at the end of Assignment (T143), and
+/// the four PLUS lists at the start of Licence (PLUS), before the release fields (T139, point 2).
+/// Lists with the same place give their edits in this order.
+static LIST_SPECS: [ListSpec; 13] = [
+    ListSpec {
+        property: PERSON_DETAILS,
+        fields: &PERSON_DETAILS_FIELDS,
+        open: PERSON_DETAILS_FIELDS.len(),
+        section: EditorSection::Content,
+        after: Some(EditorField::PersonShown),
+        after_list: None,
+    },
+    ListSpec {
+        property: PRODUCT,
+        fields: &PRODUCT_FIELDS,
+        open: PRODUCT_FIELDS.len(),
+        section: EditorSection::Content,
+        after: Some(EditorField::PersonShown),
+        after_list: None,
+    },
+    ListSpec {
+        property: ARTWORK,
+        fields: &ARTWORK_FIELDS,
+        open: ARTWORK_OPEN,
+        section: EditorSection::Content,
+        after: Some(EditorField::PersonShown),
+        after_list: None,
+    },
+    ListSpec {
+        property: CONTRIBUTOR,
+        fields: &CONTRIBUTOR_FIELDS,
+        open: CONTRIBUTOR_FIELDS.len(),
+        section: EditorSection::CreatorRights,
+        after: Some(EditorField::Copyrighted),
+        after_list: None,
+    },
     ListSpec {
         property: LOCATION_CREATED,
         fields: &LOCATION_FIELDS,
         open: LOCATION_FIELDS.len(),
         section: EditorSection::TimePlace,
         after: Some(LOCATIONS_AFTER),
+        after_list: None,
     },
     ListSpec {
         property: LOCATION_SHOWN,
@@ -697,6 +796,7 @@ static LIST_SPECS: [ListSpec; 7] = [
         open: LOCATION_FIELDS.len(),
         section: EditorSection::TimePlace,
         after: Some(LOCATIONS_AFTER),
+        after_list: None,
     },
     ListSpec {
         property: GENRE,
@@ -704,6 +804,23 @@ static LIST_SPECS: [ListSpec; 7] = [
         open: GENRE_FIELDS.len(),
         section: EditorSection::Assignment,
         after: Some(EditorField::SceneCode),
+        after_list: None,
+    },
+    ListSpec {
+        property: ABOUT_CV_TERM,
+        fields: &GENRE_FIELDS,
+        open: GENRE_FIELDS.len(),
+        section: EditorSection::Assignment,
+        after: Some(EditorField::SceneCode),
+        after_list: Some(GENRE),
+    },
+    ListSpec {
+        property: REGISTRY,
+        fields: &REGISTRY_FIELDS,
+        open: REGISTRY_FIELDS.len(),
+        section: EditorSection::Assignment,
+        after: Some(EditorField::SupplementalCategories),
+        after_list: None,
     },
     ListSpec {
         property: IMAGE_CREATOR,
@@ -711,6 +828,7 @@ static LIST_SPECS: [ListSpec; 7] = [
         open: IMAGE_CREATOR_FIELDS.len(),
         section: EditorSection::Licence,
         after: None,
+        after_list: None,
     },
     ListSpec {
         property: COPYRIGHT_OWNER,
@@ -718,6 +836,7 @@ static LIST_SPECS: [ListSpec; 7] = [
         open: COPYRIGHT_OWNER_FIELDS.len(),
         section: EditorSection::Licence,
         after: None,
+        after_list: None,
     },
     ListSpec {
         property: LICENSOR,
@@ -725,6 +844,7 @@ static LIST_SPECS: [ListSpec; 7] = [
         open: LICENSOR_OPEN,
         section: EditorSection::Licence,
         after: None,
+        after_list: None,
     },
     ListSpec {
         property: IMAGE_SUPPLIER,
@@ -732,6 +852,7 @@ static LIST_SPECS: [ListSpec; 7] = [
         open: IMAGE_SUPPLIER_FIELDS.len(),
         section: EditorSection::Licence,
         after: None,
+        after_list: None,
     },
 ];
 
@@ -775,6 +896,9 @@ enum SubFieldKind {
     LangAlt,
     /// A choice from a vocabulary (the telephone types of a Licensor entry, U11b-Q3).
     Choice,
+    /// An IPTC date, checked as the form's Date Created (an Artwork or Object's Date Created,
+    /// U11c-Q4, T143).
+    Date,
 }
 
 /// The kind of the sub-field `field` of the list `list`, from the vocabulary and the property
@@ -792,6 +916,7 @@ fn sub_field_kind(list: &str, field: &str) -> SubFieldKind {
     match def.map(|def| (def.kind, def.occurrence)) {
         Some((_, Occurrence::Multi)) => SubFieldKind::List,
         Some((ValueKind::LangAlt, _)) => SubFieldKind::LangAlt,
+        Some((ValueKind::Date, _)) => SubFieldKind::Date,
         _ => SubFieldKind::Text,
     }
 }
@@ -823,10 +948,35 @@ impl ListEntry {
         }
     }
 
+    /// The error of the sub-field `field` (U11c-Q4, T143): a date sub-field whose text was
+    /// changed and is not an IPTC date gives the error of the form's Date Created; `None` for
+    /// every other sub-field and text.
+    fn error(&self, field: &str) -> Option<String> {
+        if sub_field_kind(self.spec.property, field) != SubFieldKind::Date {
+            return None;
+        }
+        let index = self.spec.fields.iter().position(|id| *id == field)?;
+        let text = self.texts.get(index)?;
+        let unchanged = sub_field_text(&self.base, field) == *text;
+        let wrong =
+            !unchanged && !text.trim().is_empty() && IptcDate::parse_xmp(text.trim()).is_err();
+        wrong.then(date_error_text)
+    }
+
+    /// True when a shown sub-field of the entry has an error ([`ListEntry::error`]).
+    fn has_error(&self) -> bool {
+        self.spec
+            .fields
+            .iter()
+            .any(|field| self.error(field).is_some())
+    }
+
     /// The structure the entry writes: its base with each shown sub-field from its text. A text
     /// equal to the base's keeps the base's value; an empty text removes the sub-field; a list
     /// sub-field is split at commas; a Lang Alt gets its `x-default` set and keeps its other
-    /// languages. `None` when no sub-field is left (U11a-Q3).
+    /// languages; a date is read as an IPTC date (a date with an error keeps the base's value,
+    /// and the list gives no edit while it has one, T143). `None` when no sub-field is left
+    /// (U11a-Q3).
     fn value(&self) -> Option<StructValue> {
         let mut fields = self.base.fields.clone();
         for (field, text) in self.spec.fields.iter().zip(&self.texts) {
@@ -854,6 +1004,10 @@ impl ListEntry {
                             .ok()
                             .map(|()| Value::LangAlt(lang_alt))
                     }
+                    SubFieldKind::Date => match IptcDate::parse_xmp(text.trim()) {
+                        Ok(date) => Some(Value::Date(date)),
+                        Err(_) => old.cloned(),
+                    },
                     SubFieldKind::Text | SubFieldKind::Choice => Some(Value::Text(text.clone())),
                 }
             };
@@ -1021,7 +1175,7 @@ impl BatchEdits {
                 Edit::Clear { property, .. } => clear && property == list,
             })
         };
-        for list in EditorForm::STRUCTURE_LISTS {
+        for list in EditorForm::ALL_LISTS {
             if has(&self.others, list, false) {
                 lists.changed.push(list);
             }
@@ -1077,8 +1231,8 @@ pub struct EditorForm {
     conflicts: Vec<Conflict>,
     /// The chosen value of each conflict.
     chosen: Vec<Option<usize>>,
-    /// The structure lists (U11a, T136; U11b-Q1, T139) in the order of
-    /// [`EditorForm::STRUCTURE_LISTS`].
+    /// The structure lists (U11a, T136; U11b-Q1, T139; U11c-Q1, T143) in the order of
+    /// [`EditorForm::ALL_LISTS`].
     lists: Vec<ListState>,
 }
 
@@ -1096,12 +1250,34 @@ impl EditorForm {
     /// (U11a-Q2); their names come from `property_label`. Location Identifier is one line with
     /// its URIs separated by commas.
     pub const LOCATION_FIELDS: [&'static str; 7] = LOCATION_FIELDS;
-    /// Every structure list in form order (U11b-Q1, T139): Location Created, Location Shown,
-    /// Genre, Image Creator, Copyright Owner, Licensor, Image Supplier.
+    /// The structure lists of T136 and T139 in form order (U11b-Q1): Location Created, Location
+    /// Shown, Genre, Image Creator, Copyright Owner, Licensor, Image Supplier. Every list,
+    /// T143's included, is in [`EditorForm::ALL_LISTS`].
     pub const STRUCTURE_LISTS: [&'static str; 7] = [
         LOCATION_CREATED,
         LOCATION_SHOWN,
         GENRE,
+        IMAGE_CREATOR,
+        COPYRIGHT_OWNER,
+        LICENSOR,
+        IMAGE_SUPPLIER,
+    ];
+    /// The XMP id of Person Shown in the Image with Details (ADR 0017 U11c, T143): "Copy from
+    /// Person Shown" is drawn under it.
+    pub const PERSON_DETAILS: &'static str = PERSON_DETAILS;
+    /// Every structure list in form order (U11c-Q2, T143): T139's seven
+    /// ([`EditorForm::STRUCTURE_LISTS`]) and Person Shown with Details, Product Shown, Artwork or
+    /// Object, Contributor, CV-Term About Image and Image Registry Entry, each in its place.
+    pub const ALL_LISTS: [&'static str; 13] = [
+        PERSON_DETAILS,
+        PRODUCT,
+        ARTWORK,
+        CONTRIBUTOR,
+        LOCATION_CREATED,
+        LOCATION_SHOWN,
+        GENRE,
+        ABOUT_CV_TERM,
+        REGISTRY,
         IMAGE_CREATOR,
         COPYRIGHT_OWNER,
         LICENSOR,
@@ -1161,11 +1337,24 @@ impl EditorForm {
     }
 
     /// The structure lists drawn in `section` right after the field `after`, or at the start of
-    /// the section for `None` (U11a-Q2, T139 point 2), in form order.
+    /// the section for `None` (U11a-Q2, T139 point 2), in form order. A list drawn after another
+    /// list is not among them ([`EditorForm::lists_after_list`]).
     pub fn lists_at(section: EditorSection, after: Option<EditorField>) -> Vec<&'static str> {
         LIST_SPECS
             .iter()
-            .filter(|spec| spec.section == section && spec.after == after)
+            .filter(|spec| {
+                spec.section == section && spec.after == after && spec.after_list.is_none()
+            })
+            .map(|spec| spec.property)
+            .collect()
+    }
+
+    /// The structure lists drawn right after the list `list` (CV-Term About Image after Genre,
+    /// U11c-Q2, T143), in form order; empty for every other list.
+    pub fn lists_after_list(list: &str) -> Vec<&'static str> {
+        LIST_SPECS
+            .iter()
+            .filter(|spec| spec.after_list == Some(list))
             .map(|spec| spec.property)
             .collect()
     }
@@ -1181,6 +1370,23 @@ impl EditorForm {
     /// The sub-fields of the list `list` under the collapsed "Address" line of each entry (a
     /// Licensor's address, U11b-Q3); empty for every other list.
     pub fn list_address_fields(list: &str) -> &'static [&'static str] {
+        if list != LICENSOR {
+            return &[];
+        }
+        Self::collapsed_fields(list)
+    }
+
+    /// The sub-fields of the list `list` under the collapsed "More" line of each entry (the
+    /// eleven of an Artwork or Object, U11c-Q3, T143); empty for every other list.
+    pub fn list_more_fields(list: &str) -> &'static [&'static str] {
+        if list == LICENSOR {
+            return &[];
+        }
+        Self::collapsed_fields(list)
+    }
+
+    /// The sub-fields of the list `list` after those shown open.
+    fn collapsed_fields(list: &str) -> &'static [&'static str] {
         list_spec(list)
             .and_then(|spec| spec.fields.get(spec.open..))
             .unwrap_or(&[])
@@ -1205,7 +1411,7 @@ impl EditorForm {
         self.lists.iter_mut().find(|state| state.property() == list)
     }
 
-    /// The text of the structure list `list` (an XMP id of [`EditorForm::STRUCTURE_LISTS`]) when
+    /// The text of the structure list `list` (an XMP id of [`EditorForm::ALL_LISTS`]) when
     /// it is shown read-only (U11a, point 6 of T136): while an open conflict on it is not decided,
     /// or when its value is not a structure. `None` when its entries can be edited.
     pub fn list_read_only(&self, list: &str) -> Option<&str> {
@@ -1236,6 +1442,25 @@ impl EditorForm {
             .zip(index)
             .and_then(|(entry, index)| entry.texts.get(index))
             .map_or("", String::as_str)
+    }
+
+    /// The error of the sub-field `field` of entry `entry` of the list `list` (U11c-Q4, T143): an
+    /// Artwork or Object's Date Created that is not an IPTC date gets the error of the form's Date
+    /// Created, shown while the text is wrong; [`EditorForm::edits`] then writes nothing. `None`
+    /// for a right text, another sub-field, a read-only list or an entry that does not exist.
+    pub fn list_error(&self, list: &str, entry: usize, field: &str) -> Option<String> {
+        if self.list_read_only(list).is_some() {
+            return None;
+        }
+        self.list(list)?.entries.get(entry)?.error(field)
+    }
+
+    /// True when an entry of an editable structure list has a sub-field with an error.
+    fn has_list_error(&self) -> bool {
+        self.lists.iter().any(|state| {
+            self.list_read_only(state.property()).is_none()
+                && state.entries.iter().any(ListEntry::has_error)
+        })
     }
 
     /// The text of a sub-field, to be edited; `None` when there is no such entry or field, the
@@ -1451,6 +1676,50 @@ impl EditorForm {
         }
     }
 
+    /// The names of Person Shown in the Image (`Iptc4xmpExt:PersonInImage`) as the form has
+    /// them, unsaved edits included.
+    fn person_shown_names(&self) -> Vec<String> {
+        list_entries(self.text(EditorField::PersonShown))
+    }
+
+    /// Whether "Copy from Person Shown" can be used (U11c-Q6, T143): Person Shown has a name and
+    /// Person Shown with Details is not read-only.
+    pub fn can_copy_person_shown(&self) -> bool {
+        !self.person_shown_names().is_empty() && self.can_add_entry(PERSON_DETAILS)
+    }
+
+    /// "Copy from Person Shown" (U11c-Q6, T143), as "Copy from Creator": adds one Person Shown
+    /// with Details entry per Person Shown name that is not already a Name there (its `x-default`
+    /// text), in Person Shown's order; never changes an existing entry. Nothing when
+    /// [`EditorForm::can_copy_person_shown`] is false. Nothing is synchronised automatically.
+    pub fn copy_person_shown(&mut self) {
+        if !self.can_copy_person_shown() {
+            return;
+        }
+        let names = self.person_shown_names();
+        let Some(state) = self.list_editable(PERSON_DETAILS) else {
+            return;
+        };
+        let index = state.spec.fields.iter().position(|id| *id == PERSON_NAME);
+        for name in names {
+            let present = state.entries.iter().any(|entry| {
+                index
+                    .and_then(|index| entry.texts.get(index))
+                    .is_some_and(|text| text.trim() == name)
+            });
+            if present {
+                continue;
+            }
+            let base = StructValue {
+                fields: vec![(
+                    PERSON_NAME.to_string(),
+                    Value::LangAlt(LangAlt::from_entries(vec![(X_DEFAULT.to_string(), name)])),
+                )],
+            };
+            state.entries.push(ListEntry::of(state.spec, &base));
+        }
+    }
+
     /// The entries a list is compared with: the chosen conflict value's, else those the read
     /// gave.
     fn list_start(&self, state: &ListState) -> Vec<StructValue> {
@@ -1464,10 +1733,13 @@ impl EditorForm {
     }
 
     /// The edit of a structure list (U11a-Q3, point 6 of T136): `None` when it is read-only or
-    /// writes the same structures as at the start; a `Clear` when no entry writes anything; else
-    /// a `Set` of the whole list.
+    /// writes the same structures as at the start, or (T143) while a sub-field has an error; a
+    /// `Clear` when no entry writes anything; else a `Set` of the whole list.
     fn list_edit(&self, state: &ListState) -> Option<Edit> {
         if self.list_read_only(state.property()).is_some() {
+            return None;
+        }
+        if state.entries.iter().any(ListEntry::has_error) {
             return None;
         }
         let values = list_values(&state.entries);
@@ -1852,10 +2124,12 @@ impl EditorForm {
     /// The edits of the form: a `Set` or `Clear` for each changed field (in field order, after
     /// the chosen conflict values; a changed structure list in its place among the fields, as one
     /// `Set` of the whole list, or a `Clear` when no entry is left, U11a-Q3), or every field error
-    /// together.
+    /// together. A structure list's sub-field with an error (an Artwork or Object's Date Created,
+    /// T143) also gives `Err`, so nothing is written; its error is not a field's, so it is not in
+    /// the list (it may then be empty) but comes from [`EditorForm::list_error`].
     pub fn edits(&self) -> Result<Vec<Edit>, Vec<(EditorField, String)>> {
         let (edits, errors) = self.collect();
-        if errors.is_empty() {
+        if errors.is_empty() && !self.has_list_error() {
             Ok(edits)
         } else {
             Err(errors)
@@ -2241,7 +2515,7 @@ pub enum EditorText {
     /// The confirmation's line naming the copyright fields emptied on the window's image only.
     EmptiedHereOnly(Vec<EditorField>),
     /// The confirmation's line naming the changed fields and structure lists (XMP ids of
-    /// [`EditorForm::STRUCTURE_LISTS`]) given a value, in form order (U11a-Q5, T136; U11b-Q5).
+    /// [`EditorForm::ALL_LISTS`]) given a value, in form order (U11a-Q5, T136; U11b-Q5).
     Changed {
         fields: Vec<EditorField>,
         lists: Vec<&'static str>,
@@ -2273,6 +2547,12 @@ pub enum EditorText {
     CopyFromCreator,
     /// The collapsed line over a Licensor entry's address fields (U11b-Q3, T139).
     Address,
+    /// The collapsed line over the eleven further sub-fields of an Artwork or Object entry
+    /// (U11c-Q3, T143).
+    More,
+    /// The button under Person Shown with Details that adds an entry per Person Shown name
+    /// (U11c-Q6, T143).
+    CopyFromPersonShown,
     /// The confirmation's line counting the marked files without metadata support.
     SkippedFiles { files: usize },
     /// The confirmation's button that starts the writes.
@@ -2440,6 +2720,11 @@ pub fn editor_text(text: &EditorText) -> String {
             field = property_label(EditorField::Creator.property(), Language::En)
         ),
         EditorText::Address => "Address".to_string(),
+        EditorText::More => "More".to_string(),
+        EditorText::CopyFromPersonShown => format!(
+            "Copy from {field}",
+            field = property_label(EditorField::PersonShown.property(), Language::En)
+        ),
         EditorText::SkippedFiles { files } => {
             if *files == 1 {
                 "Skipped: 1 file".to_string()
@@ -6606,6 +6891,678 @@ mod tests {
             (EditorText::AddToMyValues, "Add to My Values"),
             (EditorText::NoValuesYet, "No values yet"),
             (EditorText::RemoveValue, "×"),
+        ];
+        for (text, expected) in cases {
+            assert_eq!(editor_text(&text), expected, "{text:?}");
+        }
+    }
+
+    // --- persons with details, products, artwork, contributors, CV terms, registry (U11c, T143) ---
+
+    const PERSON_LIST: &str = "Iptc4xmpExt:PersonInImageWDetails";
+    const P_NAME: &str = "Iptc4xmpExt:PersonName";
+    const P_ID: &str = "Iptc4xmpExt:PersonId";
+    const P_DESCRIPTION: &str = "Iptc4xmpExt:PersonDescription";
+    const P_CHARACTERISTIC: &str = "Iptc4xmpExt:PersonCharacteristic";
+    const PRODUCT_LIST: &str = "Iptc4xmpExt:ProductInImage";
+    const PR_NAME: &str = "Iptc4xmpExt:ProductName";
+    const PR_GTIN: &str = "Iptc4xmpExt:ProductGTIN";
+    const PR_DESCRIPTION: &str = "Iptc4xmpExt:ProductDescription";
+    const ARTWORK_LIST: &str = "Iptc4xmpExt:ArtworkOrObject";
+    const AO_TITLE: &str = "Iptc4xmpExt:AOTitle";
+    const AO_CREATOR: &str = "Iptc4xmpExt:AOCreator";
+    const AO_DATE: &str = "Iptc4xmpExt:AODateCreated";
+    const AO_CIRCA: &str = "Iptc4xmpExt:AOCircaDateCreated";
+    const AO_SOURCE: &str = "Iptc4xmpExt:AOSource";
+    const AO_LICENSOR_NAME: &str = "Iptc4xmpExt:AOCurrentLicensorName";
+    const CONTRIBUTOR_LIST: &str = "Iptc4xmpExt:Contributor";
+    const C_NAME: &str = "Iptc4xmpExt:Name";
+    const C_ROLE: &str = "Iptc4xmpExt:Role";
+    const C_IDENTIFIER: &str = "xmp:Identifier";
+    const ABOUT_LIST: &str = "Iptc4xmpExt:AboutCvTerm";
+    const REGISTRY_LIST: &str = "Iptc4xmpExt:RegistryId";
+    const R_ORG: &str = "Iptc4xmpExt:RegOrgId";
+    const R_ITEM: &str = "Iptc4xmpExt:RegItemId";
+    /// The six lists of T143 in form order.
+    const T143_LISTS: [&str; 6] = [
+        PERSON_LIST,
+        PRODUCT_LIST,
+        ARTWORK_LIST,
+        CONTRIBUTOR_LIST,
+        ABOUT_LIST,
+        REGISTRY_LIST,
+    ];
+
+    fn date(xmp: &str) -> Value {
+        Value::Date(IptcDate::parse_xmp(xmp).unwrap())
+    }
+
+    /// A structure of the given sub-fields and values.
+    fn entry(fields: Vec<(&str, Value)>) -> StructValue {
+        StructValue {
+            fields: fields
+                .into_iter()
+                .map(|(id, value)| (id.to_string(), value))
+                .collect(),
+        }
+    }
+
+    /// A person with a name in `x-default` and Swedish, an identifier and one characteristic.
+    fn anna_person() -> StructValue {
+        entry(vec![
+            (P_NAME, lang_alt(&[("x-default", "Anna"), ("sv", "Anna S")])),
+            (P_ID, list(&["urn:anna"])),
+            (
+                P_CHARACTERISTIC,
+                places(vec![entry(vec![(
+                    "Iptc4xmpExt:CvTermName",
+                    lang_alt(&[("x-default", "adult")]),
+                )])]),
+            ),
+        ])
+    }
+
+    /// A painting with a title, two creators, a date and a current licensor (under "More").
+    fn painting() -> StructValue {
+        entry(vec![
+            (
+                AO_TITLE,
+                lang_alt(&[("x-default", "Skriet"), ("no", "Skrik")]),
+            ),
+            (AO_CREATOR, list(&["Edvard Munch"])),
+            (AO_DATE, date("1893")),
+            (AO_LICENSOR_NAME, text("Museet")),
+        ])
+    }
+
+    /// One entry of each of the six lists of T143.
+    fn t143_metadata() -> Metadata {
+        with_lists(&[
+            (PERSON_LIST, vec![anna_person()]),
+            (
+                PRODUCT_LIST,
+                vec![entry(vec![
+                    (PR_NAME, lang_alt(&[("x-default", "Cykel")])),
+                    (PR_GTIN, text("7310000000001")),
+                ])],
+            ),
+            (ARTWORK_LIST, vec![painting()]),
+            (
+                CONTRIBUTOR_LIST,
+                vec![entry(vec![
+                    (C_NAME, lang_alt(&[("x-default", "Per")])),
+                    (C_ROLE, list(&["editor"])),
+                ])],
+            ),
+            (ABOUT_LIST, vec![sport()]),
+            (
+                REGISTRY_LIST,
+                vec![entry(vec![(R_ORG, text("org")), (R_ITEM, text("1"))])],
+            ),
+        ])
+    }
+
+    #[test]
+    fn the_six_new_lists_their_places_and_sub_fields_with_names() {
+        // Every list in form order: T139's seven unchanged, the six of T143 in their places.
+        assert_eq!(
+            EditorForm::ALL_LISTS,
+            [
+                PERSON_LIST,
+                PRODUCT_LIST,
+                ARTWORK_LIST,
+                CONTRIBUTOR_LIST,
+                CREATED,
+                SHOWN,
+                GENRE_LIST,
+                ABOUT_LIST,
+                REGISTRY_LIST,
+                CREATOR_LIST,
+                OWNER_LIST,
+                LICENSOR_LIST,
+                SUPPLIER_LIST,
+            ]
+        );
+        assert_eq!(EditorForm::PERSON_DETAILS, PERSON_LIST);
+        // Content after Person Shown; Creator and Rights at the end (after Copyrighted, its last
+        // field); Assignment after Genre (after Scene Code) and at the end (after Supplemental
+        // Categories, its last field) (U11c-Q2).
+        assert_eq!(
+            EditorForm::lists_at(EditorSection::Content, Some(EditorField::PersonShown)),
+            [PERSON_LIST, PRODUCT_LIST, ARTWORK_LIST]
+        );
+        assert_eq!(
+            EditorForm::lists_at(EditorSection::CreatorRights, Some(EditorField::Copyrighted)),
+            [CONTRIBUTOR_LIST]
+        );
+        // CV-Term About Image is drawn right after the list Genre, so Genre alone follows Scene
+        // Code (T139's place unchanged).
+        assert_eq!(
+            EditorForm::lists_at(EditorSection::Assignment, Some(EditorField::SceneCode)),
+            [GENRE_LIST]
+        );
+        assert_eq!(EditorForm::lists_after_list(GENRE_LIST), [ABOUT_LIST]);
+        for list in EditorForm::ALL_LISTS {
+            if list != GENRE_LIST {
+                assert!(EditorForm::lists_after_list(list).is_empty(), "{list}");
+            }
+        }
+        assert_eq!(
+            EditorForm::lists_at(
+                EditorSection::Assignment,
+                Some(EditorField::SupplementalCategories)
+            ),
+            [REGISTRY_LIST]
+        );
+        let last = |section: EditorSection| {
+            EditorField::ALL
+                .into_iter()
+                .rfind(|field| field.section() == section)
+        };
+        assert_eq!(
+            last(EditorSection::CreatorRights),
+            Some(EditorField::Copyrighted)
+        );
+        assert_eq!(
+            last(EditorSection::Assignment),
+            Some(EditorField::SupplementalCategories)
+        );
+
+        // The list names and the sub-fields' names (IPTC's, from `property_label`).
+        let names = |fields: &[&str]| -> Vec<String> {
+            fields
+                .iter()
+                .map(|id| property_label(id, Language::En))
+                .collect()
+        };
+        assert_eq!(
+            names(&T143_LISTS),
+            [
+                "Person Shown in the Image with Details",
+                "Product Shown in the Image",
+                "Artwork or Object in the Image",
+                "Contributor",
+                "CV-Term About Image",
+                "Image Registry Entry",
+            ]
+        );
+        assert_eq!(
+            EditorForm::list_fields(PERSON_LIST),
+            [P_NAME, P_ID, P_DESCRIPTION]
+        );
+        assert_eq!(
+            names(EditorForm::list_fields(PERSON_LIST)),
+            ["Name", "Identifier", "Description"]
+        );
+        assert_eq!(
+            names(EditorForm::list_fields(PRODUCT_LIST)),
+            ["Name", "GTIN", "Identifier", "Description"]
+        );
+        assert_eq!(
+            EditorForm::list_fields(CONTRIBUTOR_LIST),
+            [C_NAME, C_ROLE, C_IDENTIFIER]
+        );
+        assert_eq!(
+            names(EditorForm::list_fields(CONTRIBUTOR_LIST)),
+            ["Name", "Role", "Identifier"]
+        );
+        assert_eq!(
+            EditorForm::list_fields(ABOUT_LIST),
+            EditorForm::list_fields(GENRE_LIST)
+        );
+        assert_eq!(
+            names(EditorForm::list_fields(REGISTRY_LIST)),
+            ["Organisation Id", "Item Id", "Role"]
+        );
+        // Artwork or Object (U11c-Q3): six open, eleven under "More".
+        assert_eq!(
+            names(EditorForm::list_fields(ARTWORK_LIST)),
+            [
+                "Title",
+                "Creator",
+                "Date Created",
+                "Source",
+                "Source Inventory Number",
+                "Copyright Notice",
+            ]
+        );
+        assert_eq!(
+            names(EditorForm::list_more_fields(ARTWORK_LIST)),
+            [
+                "Circa Date Created",
+                "Style Period",
+                "Content Description",
+                "Contribution Description",
+                "Physical Description",
+                "Creator ID",
+                "Current Copyright Owner Name",
+                "Current Copyright Owner ID",
+                "Current Licensor Name",
+                "Current Licensor ID",
+                "Source Inventory URL",
+            ]
+        );
+        // "More" only for Artwork, "Address" only for Licensor.
+        assert!(EditorForm::list_address_fields(ARTWORK_LIST).is_empty());
+        assert!(EditorForm::list_more_fields(LICENSOR_LIST).is_empty());
+        for list in EditorForm::ALL_LISTS {
+            if list != ARTWORK_LIST {
+                assert!(EditorForm::list_more_fields(list).is_empty(), "{list}");
+            }
+            if list != LICENSOR_LIST {
+                assert!(EditorForm::list_address_fields(list).is_empty(), "{list}");
+            }
+        }
+        // No IPTC limit on any of the six.
+        for list in T143_LISTS {
+            assert_eq!(EditorForm::max_entries(list), None, "{list}");
+        }
+    }
+
+    #[test]
+    fn each_t143_list_is_read_edited_and_written_as_one_struct_list_edit() {
+        let mut form = form_with(t143_metadata());
+        for list in T143_LISTS {
+            assert_eq!(form.list_count(list), 1, "{list}");
+            assert_eq!(form.list_read_only(list), None, "{list}");
+        }
+        assert_eq!(form.list_text(PERSON_LIST, 0, P_NAME), "Anna");
+        assert_eq!(form.list_text(PERSON_LIST, 0, P_ID), "urn:anna");
+        assert_eq!(form.list_text(PRODUCT_LIST, 0, PR_GTIN), "7310000000001");
+        assert_eq!(form.list_text(ARTWORK_LIST, 0, AO_DATE), "1893");
+        assert_eq!(form.list_text(ARTWORK_LIST, 0, AO_LICENSOR_NAME), "Museet");
+        assert_eq!(form.list_text(CONTRIBUTOR_LIST, 0, C_ROLE), "editor");
+        assert_eq!(form.list_text(ABOUT_LIST, 0, CV_NAME), "Sport");
+        assert_eq!(form.list_text(REGISTRY_LIST, 0, R_ITEM), "1");
+        // Shown untouched, the lists give no edit.
+        assert_eq!(form.edits(), Ok(Vec::new()));
+
+        type_entry(&mut form, PERSON_LIST, 0, P_DESCRIPTION, "Till vänster");
+        type_entry(&mut form, PRODUCT_LIST, 0, PR_GTIN, "7310000000002");
+        // A sub-field under "More".
+        type_entry(&mut form, ARTWORK_LIST, 0, AO_LICENSOR_NAME, "Galleriet");
+        type_entry(&mut form, CONTRIBUTOR_LIST, 0, C_NAME, "Per Ek");
+        type_entry(&mut form, ABOUT_LIST, 0, CV_ID, "http://example.org/x");
+        type_entry(&mut form, REGISTRY_LIST, 0, R_ORG, "");
+        type_into(&mut form, EditorField::Keywords, "sky");
+        type_into(&mut form, EditorField::Event, "Vernissage");
+        type_into(&mut form, EditorField::DateCreated, "2026-11-15");
+        type_into(&mut form, EditorField::Instructions, "Embargo");
+
+        let mut person = anna_person();
+        person.fields.push((
+            P_DESCRIPTION.to_string(),
+            lang_alt(&[("x-default", "Till vänster")]),
+        ));
+        let product = entry(vec![
+            (PR_NAME, lang_alt(&[("x-default", "Cykel")])),
+            (PR_GTIN, text("7310000000002")),
+        ]);
+        let mut artwork = painting();
+        artwork.fields[3].1 = text("Galleriet");
+        let contributor = entry(vec![
+            (C_NAME, lang_alt(&[("x-default", "Per Ek")])),
+            (C_ROLE, list(&["editor"])),
+        ]);
+        let mut about = sport();
+        about.fields[1].1 = text("http://example.org/x");
+        let registry = entry(vec![(R_ITEM, text("1"))]);
+        let edits = form.edits().unwrap();
+        // One `Set` of the whole list each, in its place among the fields.
+        assert_eq!(
+            edits,
+            vec![
+                set("dc:subject", list(&["sky"])),
+                set(PERSON_LIST, places(vec![person])),
+                set(PRODUCT_LIST, places(vec![product])),
+                set(ARTWORK_LIST, places(vec![artwork])),
+                set(
+                    "Iptc4xmpExt:Event",
+                    lang_alt(&[("x-default", "Vernissage")])
+                ),
+                set(CONTRIBUTOR_LIST, places(vec![contributor])),
+                set("photoshop:DateCreated", date("2026-11-15")),
+                set("photoshop:Instructions", text("Embargo")),
+                set(ABOUT_LIST, places(vec![about])),
+                set(REGISTRY_LIST, places(vec![registry])),
+            ]
+        );
+        // Accepted by `apply_edits`, the Characteristics (a nested list) included.
+        let mut metadata = t143_metadata();
+        assert!(apply_edits(&mut metadata, &edits).is_ok());
+
+        // The confirmation names each list in its place.
+        let batch = batch_of(&form);
+        assert_eq!(batch.others, edits);
+        assert_eq!(
+            apply_confirmation(&batch, 2, 0),
+            [
+                "Write 10 changed fields to 2 images?".to_string(),
+                format!(
+                    "Changed: {}, Person Shown in the Image with Details, Product Shown in the \
+                     Image, Artwork or Object in the Image, {}, Contributor, {}, {}, CV-Term About \
+                     Image, Image Registry Entry",
+                    EditorField::Keywords.label(),
+                    EditorField::Event.label(),
+                    EditorField::DateCreated.label(),
+                    EditorField::Instructions.label(),
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn an_emptied_t143_list_is_emptied_on_every_image_and_named() {
+        let mut form = form_with(t143_metadata());
+        for list in T143_LISTS {
+            form.remove_entry(list, 0);
+        }
+        let batch = batch_of(&form);
+        let clears: Vec<Edit> = T143_LISTS.iter().map(|list| clear(list)).collect();
+        assert_eq!(batch.this_image, clears);
+        // None is a copyright-management field (U11c-Q7): emptied on every image.
+        assert_eq!(batch.others, clears);
+        assert_eq!(
+            apply_confirmation(&batch, 3, 0),
+            [
+                "Write 6 changed fields to 3 images?",
+                "Emptied: Person Shown in the Image with Details, Product Shown in the Image, \
+                 Artwork or Object in the Image, Contributor, CV-Term About Image, Image Registry \
+                 Entry",
+            ]
+        );
+    }
+
+    #[test]
+    fn add_then_ok_with_nothing_typed_gives_no_edit_on_a_t143_list() {
+        let mut form = form_with(Metadata::new());
+        for list in T143_LISTS {
+            assert!(form.can_add_entry(list), "{list}");
+            form.add_entry(list);
+            assert_eq!(form.list_count(list), 1, "{list}");
+        }
+        assert_eq!(form.edits(), Ok(Vec::new()));
+        // A first sub-field typed in each gives a written list, accepted by `apply_edits`.
+        for list in T143_LISTS {
+            let field = EditorForm::list_fields(list)[0];
+            type_entry(&mut form, list, 0, field, "Namn");
+        }
+        let edits = form.edits().unwrap();
+        assert_eq!(edits.len(), 6);
+        let mut metadata = Metadata::new();
+        assert!(apply_edits(&mut metadata, &edits).is_ok());
+    }
+
+    #[test]
+    fn a_lang_alt_sub_field_edits_only_x_default() {
+        let mut form = form_with(t143_metadata());
+        type_entry(&mut form, PERSON_LIST, 0, P_NAME, "Anna Svensson");
+        type_entry(&mut form, ARTWORK_LIST, 0, AO_TITLE, "Skriet II");
+        let edits = form.edits().unwrap();
+        let mut person = anna_person();
+        person.fields[0].1 = lang_alt(&[("x-default", "Anna Svensson"), ("sv", "Anna S")]);
+        let mut artwork = painting();
+        artwork.fields[0].1 = lang_alt(&[("x-default", "Skriet II"), ("no", "Skrik")]);
+        assert_eq!(
+            edits,
+            [
+                set(PERSON_LIST, places(vec![person])),
+                set(ARTWORK_LIST, places(vec![artwork])),
+            ]
+        );
+        // A new Lang Alt sub-field gets only `x-default`.
+        let mut form = form_with(Metadata::new());
+        form.add_entry(PRODUCT_LIST);
+        type_entry(&mut form, PRODUCT_LIST, 0, PR_DESCRIPTION, "Röd");
+        assert_eq!(
+            form.edits(),
+            Ok(vec![set(
+                PRODUCT_LIST,
+                places(vec![entry(vec![(
+                    PR_DESCRIPTION,
+                    lang_alt(&[("x-default", "Röd")])
+                )])])
+            )])
+        );
+    }
+
+    #[test]
+    fn a_multi_value_sub_field_is_split_at_commas() {
+        let mut form = form_with(t143_metadata());
+        type_entry(
+            &mut form,
+            ARTWORK_LIST,
+            0,
+            AO_CREATOR,
+            "Edvard Munch, , Okänd ,",
+        );
+        type_entry(&mut form, CONTRIBUTOR_LIST, 0, C_ROLE, "editor, translator");
+        type_entry(&mut form, CONTRIBUTOR_LIST, 0, C_IDENTIFIER, "urn:a,urn:b");
+        type_entry(&mut form, PERSON_LIST, 0, P_ID, " , ");
+        let mut artwork = painting();
+        artwork.fields[1].1 = list(&["Edvard Munch", "Okänd"]);
+        let contributor = entry(vec![
+            (C_NAME, lang_alt(&[("x-default", "Per")])),
+            (C_ROLE, list(&["editor", "translator"])),
+            (C_IDENTIFIER, list(&["urn:a", "urn:b"])),
+        ]);
+        // Only commas and spaces remove the sub-field.
+        let mut person = anna_person();
+        person.fields.remove(1);
+        assert_eq!(
+            form.edits(),
+            Ok(vec![
+                set(PERSON_LIST, places(vec![person])),
+                set(ARTWORK_LIST, places(vec![artwork])),
+                set(CONTRIBUTOR_LIST, places(vec![contributor])),
+            ])
+        );
+    }
+
+    #[test]
+    fn a_wrong_artwork_date_created_is_an_error_and_gives_no_edit() {
+        let mut form = form_with(t143_metadata());
+        // The read date is no error.
+        assert_eq!(form.list_error(ARTWORK_LIST, 0, AO_DATE), None);
+        type_entry(&mut form, ARTWORK_LIST, 0, AO_DATE, "förra året");
+        assert_eq!(
+            form.list_error(ARTWORK_LIST, 0, AO_DATE),
+            Some(date_error_text())
+        );
+        // Nothing is written: no field error, but no edits either, and no batch.
+        assert_eq!(form.edits(), Err(Vec::new()));
+        assert!(form.batch_edits().is_err());
+        // With a field error too, the field's error is returned.
+        type_into(&mut form, EditorField::DateCreated, "igår");
+        assert_eq!(
+            form.edits(),
+            Err(vec![(EditorField::DateCreated, date_error_text())])
+        );
+        type_into(&mut form, EditorField::DateCreated, "");
+        // Another sub-field has no error; Circa Date Created is free text.
+        type_entry(&mut form, ARTWORK_LIST, 0, AO_CIRCA, "omkring 1890");
+        assert_eq!(form.list_error(ARTWORK_LIST, 0, AO_CIRCA), None);
+        assert_eq!(form.list_error(ARTWORK_LIST, 0, AO_SOURCE), None);
+
+        // A right date (a truncated one) is written as a date.
+        type_entry(&mut form, ARTWORK_LIST, 0, AO_DATE, "1893-05");
+        assert_eq!(form.list_error(ARTWORK_LIST, 0, AO_DATE), None);
+        let mut artwork = painting();
+        artwork.fields[2].1 = date("1893-05");
+        artwork
+            .fields
+            .push((AO_CIRCA.to_string(), text("omkring 1890")));
+        assert_eq!(
+            form.edits(),
+            Ok(vec![set(ARTWORK_LIST, places(vec![artwork]))])
+        );
+        // An emptied date removes the sub-field.
+        type_entry(&mut form, ARTWORK_LIST, 0, AO_DATE, "");
+        assert_eq!(form.list_error(ARTWORK_LIST, 0, AO_DATE), None);
+        let mut artwork = painting();
+        artwork.fields.remove(2);
+        artwork
+            .fields
+            .push((AO_CIRCA.to_string(), text("omkring 1890")));
+        assert_eq!(
+            form.edits(),
+            Ok(vec![set(ARTWORK_LIST, places(vec![artwork]))])
+        );
+        // No error for an entry or a list that does not exist.
+        assert_eq!(form.list_error(ARTWORK_LIST, 5, AO_DATE), None);
+        assert_eq!(form.list_error("dc:title", 0, AO_DATE), None);
+    }
+
+    #[test]
+    fn person_characteristics_are_kept_when_the_name_is_edited() {
+        let mut form = form_with(t143_metadata());
+        // Not a shown sub-field.
+        assert!(!EditorForm::list_fields(PERSON_LIST).contains(&P_CHARACTERISTIC));
+        assert!(
+            form.list_text_mut(PERSON_LIST, 0, P_CHARACTERISTIC)
+                .is_none()
+        );
+        type_entry(&mut form, PERSON_LIST, 0, P_NAME, "Anna Berg");
+        let Ok(edits) = form.edits() else {
+            panic!("no error expected");
+        };
+        let Some(Edit::Set {
+            value: Value::StructList(entries),
+            ..
+        }) = edits.first()
+        else {
+            panic!("a Set of the list expected: {edits:?}");
+        };
+        let characteristic = anna_person().fields[2].clone();
+        assert_eq!(entries.len(), 1);
+        assert!(entries[0].fields.contains(&characteristic));
+        assert_eq!(
+            entries[0].fields[0].1,
+            lang_alt(&[("x-default", "Anna Berg"), ("sv", "Anna S")])
+        );
+    }
+
+    #[test]
+    fn copy_from_person_shown_adds_the_missing_names() {
+        // Not enabled without a Person Shown name.
+        let mut form = form_with(Metadata::new());
+        assert!(!form.can_copy_person_shown());
+        form.copy_person_shown();
+        assert_eq!(form.list_count(PERSON_LIST), 0);
+
+        // Two names, one already a Name there (its entry stays as it is).
+        let mut metadata = with_lists(&[(PERSON_LIST, vec![anna_person()])]);
+        insert(
+            &mut metadata,
+            "Iptc4xmpExt:PersonInImage",
+            list(&["Anna", "Per Ek"]),
+        );
+        let mut form = form_with(metadata);
+        assert!(form.can_copy_person_shown());
+        form.copy_person_shown();
+        assert_eq!(form.list_count(PERSON_LIST), 2);
+        assert_eq!(form.list_text(PERSON_LIST, 1, P_NAME), "Per Ek");
+        assert_eq!(
+            form.edits(),
+            Ok(vec![set(
+                PERSON_LIST,
+                places(vec![
+                    anna_person(),
+                    entry(vec![(P_NAME, lang_alt(&[("x-default", "Per Ek")]))]),
+                ])
+            )])
+        );
+        // A second press adds nothing.
+        form.copy_person_shown();
+        assert_eq!(form.list_count(PERSON_LIST), 2);
+        // An unsaved Person Shown text counts; Person Shown itself is unchanged.
+        type_into(&mut form, EditorField::PersonShown, "Lisa");
+        form.copy_person_shown();
+        assert_eq!(form.list_count(PERSON_LIST), 3);
+        assert_eq!(form.list_text(PERSON_LIST, 2, P_NAME), "Lisa");
+        assert_eq!(form.text(EditorField::PersonShown), "Lisa");
+    }
+
+    #[test]
+    fn a_t143_list_with_an_open_conflict_is_read_only_and_copy_and_paste_carry_it() {
+        let lisa = entry(vec![(P_NAME, lang_alt(&[("x-default", "Lisa")]))]);
+        let mut metadata = with_lists(&[(PERSON_LIST, vec![anna_person()])]);
+        insert(&mut metadata, "Iptc4xmpExt:PersonInImage", list(&["Per"]));
+        metadata.add_conflict(Conflict {
+            property: PERSON_LIST.into(),
+            values: vec![
+                (Origin::XmpEmbedded, places(vec![anna_person()])),
+                (Origin::XmpSidecar, places(vec![lisa.clone()])),
+            ],
+            rule: ConflictRule::Open,
+        });
+        let mut form = form_with(metadata);
+        assert!(form.list_read_only(PERSON_LIST).is_some());
+        assert!(!form.can_add_entry(PERSON_LIST));
+        assert!(!form.can_copy_person_shown());
+        assert!(form.list_text_mut(PERSON_LIST, 0, P_NAME).is_none());
+        // A read-only list is not copied.
+        assert!(form.copy("a.jpg").locations.is_empty());
+        assert!(form.choose(0, 1));
+        assert_eq!(form.list_text(PERSON_LIST, 0, P_NAME), "Lisa");
+        assert_eq!(form.edits(), Ok(vec![set(PERSON_LIST, places(vec![lisa]))]));
+
+        // Copy and paste carry each list as one field that replaces the whole list.
+        let source = form_with(t143_metadata());
+        let copied = source.copy("a.jpg");
+        assert_eq!(copied.count(), 6);
+        let mut target = form_with(with_lists(&[(
+            CONTRIBUTOR_LIST,
+            vec![entry(vec![(C_NAME, lang_alt(&[("x-default", "Ola")]))])],
+        )]));
+        target.paste(&copied);
+        assert_eq!(target.list_text(CONTRIBUTOR_LIST, 0, C_NAME), "Per");
+        assert_eq!(target.list_count(CONTRIBUTOR_LIST), 1);
+        let edits = target.edits().unwrap();
+        assert_eq!(edits.len(), 6);
+        assert!(edits.contains(&set(ARTWORK_LIST, places(vec![painting()]))));
+        // Copy then paste on the same form gives no edits.
+        let mut same = form_with(t143_metadata());
+        same.paste(&copied);
+        assert_eq!(same.edits(), Ok(Vec::new()));
+    }
+
+    #[test]
+    fn the_texts_of_the_t143_lists() {
+        let cases = [
+            (
+                EditorText::AddEntry { list: PERSON_LIST },
+                "Add Person Shown in the Image with Details",
+            ),
+            (
+                EditorText::AddEntry { list: PRODUCT_LIST },
+                "Add Product Shown in the Image",
+            ),
+            (
+                EditorText::AddEntry { list: ARTWORK_LIST },
+                "Add Artwork or Object in the Image",
+            ),
+            (
+                EditorText::AddEntry {
+                    list: CONTRIBUTOR_LIST,
+                },
+                "Add Contributor",
+            ),
+            (
+                EditorText::AddEntry { list: ABOUT_LIST },
+                "Add CV-Term About Image",
+            ),
+            (
+                EditorText::AddEntry {
+                    list: REGISTRY_LIST,
+                },
+                "Add Image Registry Entry",
+            ),
+            (EditorText::More, "More"),
+            (
+                EditorText::CopyFromPersonShown,
+                "Copy from Person Shown in the Image",
+            ),
         ];
         for (text, expected) in cases {
             assert_eq!(editor_text(&text), expected, "{text:?}");

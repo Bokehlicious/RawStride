@@ -186,6 +186,7 @@ mod tests {
             zoom: Zoom::Fit,
             scale: Some(0.1129),
             profile_unusable: false,
+            statistics: None,
         }
     }
 
@@ -286,6 +287,7 @@ mod tests {
             zoom: Zoom::Fit,
             scale: Some(0.2),
             profile_unusable: false,
+            statistics: None,
         }
     }
 

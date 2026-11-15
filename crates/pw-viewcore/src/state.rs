@@ -4,9 +4,10 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use crate::backend::{DecodeError, Rgb, Source};
+use crate::backend::{DecodeError, ImageStatistics, Rgb, Source, Statistics};
 use crate::geometry::{self, ImageSize, Rect};
 
 /// Settings of the core. Both budgets are user settings (V8); in milestone 1 they come from the
@@ -163,6 +164,10 @@ pub struct Frame {
     /// The current image's embedded colour profile was present but could not be used, so its
     /// colours rest on a fallback (ADR 0016 §5). Known once the image is opened.
     pub profile_unusable: bool,
+    /// The histogram and the exposure statistics of the current image in its display mode (ADR
+    /// 0017 §2.6, U7-Q6): `None` until they are ready. They are asked once per opened image,
+    /// after its first view is on the screen.
+    pub statistics: Option<ImageStatistics>,
 }
 
 /// One user request, for measurement (ADR 0009 §5.2; the P5 event format).
@@ -194,6 +199,9 @@ pub struct Stats {
     pub peak_session_bytes: u64,
     pub render_ms: HashMap<&'static str, Vec<f64>>,
     pub unpack_ms: Vec<f64>,
+    /// How many times an image's statistics were asked of the backend, and how long each took.
+    pub statistics: u64,
+    pub statistics_ms: Vec<f64>,
 }
 
 /// An image in one display mode: a position in the folder and where the pixels come from.
@@ -244,15 +252,25 @@ pub(crate) struct Req {
 pub(crate) enum Job {
     Open(Key),
     Render(Key, JobView),
+    /// The statistics of an opened image (ADR 0017 U7-Q6).
+    Statistics(Key),
 }
 
 impl Job {
     pub fn key(self) -> Key {
         match self {
-            Job::Open(k) | Job::Render(k, _) => k,
+            Job::Open(k) | Job::Render(k, _) | Job::Statistics(k) => k,
         }
     }
 }
+
+/// What a session lent for its statistics is booked under where a lent session is booked by the
+/// view it renders (`lent_paths`, `released`): no view, which no render job has.
+const STATISTICS_LEND: JobView = JobView {
+    kind: ViewKind::Half,
+    region: Rect::new(0, 0, 0, 0),
+    density_q: 0,
+};
 
 /// A view being rendered, or rendered and not yet accepted.
 #[derive(Clone, Copy, Debug)]
@@ -275,6 +293,11 @@ pub(crate) enum Task<S> {
         generation: u64,
         key: Key,
         view: JobView,
+        session: S,
+    },
+    Statistics {
+        generation: u64,
+        key: Key,
         session: S,
     },
 }
@@ -315,6 +338,9 @@ pub(crate) struct State<S> {
     /// The opened images whose embedded colour profile could not be used (ADR 0016 §5). Kept,
     /// cleared and moved like `sizes`.
     pub profile_unusable: HashSet<Key>,
+    /// The statistics of the opened images that were asked for them (ADR 0017 U7-Q6): once per
+    /// image and display mode. Kept, cleared and moved like `sizes`.
+    pub statistics: HashMap<Key, ImageStatistics>,
     sessions: HashMap<Key, Option<S>>,
     /// The generation each lent session (`None` in `sessions`) was lent in.
     lent: HashMap<Key, u64>,
@@ -373,6 +399,7 @@ impl<S> State<S> {
             view_px: [1920, 1080],
             sizes: HashMap::new(),
             profile_unusable: HashSet::new(),
+            statistics: HashMap::new(),
             sessions: HashMap::new(),
             lent: HashMap::new(),
             detached: HashMap::new(),
@@ -551,6 +578,7 @@ impl<S> State<S> {
         self.session_bytes = 0;
         self.sizes.clear();
         self.profile_unusable.clear();
+        self.statistics.clear();
         self.failed.clear();
         self.inflight.clear();
         self.outbox.clear();
@@ -647,6 +675,11 @@ impl<S> State<S> {
             .filter_map(|(k, v)| to(k).map(|n| (n, v)))
             .collect();
         self.profile_unusable = self.profile_unusable.drain().filter_map(to).collect();
+        self.statistics = self
+            .statistics
+            .drain()
+            .filter_map(|(k, v)| to(k).map(|n| (n, v)))
+            .collect();
         self.failed = self
             .failed
             .drain()
@@ -878,6 +911,27 @@ impl<S> State<S> {
         v
     }
 
+    /// The job for the current image's statistics, when it is due (ADR 0017 U7-Q6): they are
+    /// asked once per opened image, only after its view is on the screen (so the first image is
+    /// never delayed), after the dwell and not during a zoom gesture (so stepping through images
+    /// starts none). An image whose session was closed meanwhile is opened again first.
+    fn statistics_job(&self) -> Option<Job> {
+        let key = self.cur_key()?;
+        if self.statistics.contains_key(&key) || self.failed.contains_key(&key) {
+            return None;
+        }
+        if self.in_gesture() || self.since.elapsed() < self.config.dwell {
+            return None;
+        }
+        let shown = self.req(key, Want::Shown)?;
+        self.serving(&shown)?;
+        Some(if self.sessions.contains_key(&key) {
+            Job::Statistics(key)
+        } else {
+            Job::Open(key)
+        })
+    }
+
     // ---------- budgets ----------
 
     fn protected_keys(&self) -> HashSet<Key> {
@@ -1021,7 +1075,15 @@ impl<S> State<S> {
     pub fn pick(&mut self, interactive: bool) -> Option<Task<S>> {
         let ck = self.cur_key();
         let generation = self.generation;
-        for job in self.plan() {
+        let mut jobs = self.plan();
+        // The statistics come first once they are due: the shown view is on the screen by then,
+        // and for a JPEG they leave the full decode behind that the 100 % view then uses.
+        if let Some(job) = self.statistics_job()
+            && !jobs.contains(&job)
+        {
+            jobs.insert(0, job);
+        }
+        for job in jobs {
             let key = job.key();
             if self.running.contains(&(generation, job)) || (interactive && Some(key) != ck) {
                 continue;
@@ -1089,6 +1151,25 @@ impl<S> State<S> {
                         generation: self.generation,
                         key,
                         view,
+                        session,
+                    });
+                }
+                Job::Statistics(key) => {
+                    let Some(slot) = self.sessions.get_mut(&key) else {
+                        continue;
+                    };
+                    let Some(session) = slot.take() else {
+                        continue;
+                    };
+                    if let Some(path) = self.files.get(key.0) {
+                        self.lent_paths
+                            .insert((generation, key, STATISTICS_LEND), path.clone());
+                    }
+                    self.lent.insert(key, generation);
+                    self.running.insert((generation, job));
+                    return Some(Task::Statistics {
+                        generation,
+                        key,
                         session,
                     });
                 }
@@ -1166,42 +1247,15 @@ impl<S> State<S> {
         ms: f64,
     ) {
         self.running.remove(&(generation, Job::Render(key, view)));
-        self.lent_paths.remove(&(generation, key, view));
         self.stats.renders += 1;
         self.stats
             .render_ms
             .entry(view.kind.name())
             .or_default()
             .push(ms);
-        if let Some(bytes) = self.released.remove(&(generation, key, view)) {
-            // released for a metadata write: the session is dropped and its slot (gone, or
-            // holding a newer session) is left alone; the view itself is still good
-            self.session_bytes = self.session_bytes.saturating_sub(bytes);
-            drop(session);
-            if generation != self.generation {
-                self.stats.discarded += 1;
-                return;
-            }
-        } else if generation != self.generation {
-            // the session is dropped; only the slot it was lent from is cleared, never a session
-            // that now has the same key (ADR 0014 §4.4)
-            if let Some(bytes) = self.detached.remove(&(generation, key)) {
-                self.session_bytes = self.session_bytes.saturating_sub(bytes);
-            } else if self.lent.get(&key) == Some(&generation)
-                && matches!(self.sessions.get(&key), Some(None))
-            {
-                self.sessions.remove(&key);
-                self.lent.remove(&key);
-            }
+        if !self.return_session(generation, key, view, session) {
             self.stats.discarded += 1;
             return;
-        } else {
-            self.lent.remove(&key);
-            if let Some(slot) = self.sessions.get_mut(&key) {
-                *slot = Some(session);
-            }
-            self.session_lru.retain(|x| *x != key);
-            self.session_lru.push(key);
         }
         match result {
             Ok(image) => {
@@ -1232,6 +1286,64 @@ impl<S> State<S> {
                 self.failed.insert(key, e);
             }
         }
+    }
+
+    /// A session lent in `generation` for `view` (or [`STATISTICS_LEND`]) comes back: it returns
+    /// to its slot, or is dropped if [`State::release`] marked it or the list of files changed
+    /// meanwhile. Returns whether the work it was lent for belongs to the current list of files.
+    fn return_session(&mut self, generation: u64, key: Key, view: JobView, session: S) -> bool {
+        self.lent_paths.remove(&(generation, key, view));
+        if let Some(bytes) = self.released.remove(&(generation, key, view)) {
+            // released for a metadata write: the session is dropped and its slot (gone, or
+            // holding a newer session) is left alone; the view itself is still good
+            self.session_bytes = self.session_bytes.saturating_sub(bytes);
+            drop(session);
+            generation == self.generation
+        } else if generation != self.generation {
+            // the session is dropped; only the slot it was lent from is cleared, never a session
+            // that now has the same key (ADR 0014 §4.4)
+            if let Some(bytes) = self.detached.remove(&(generation, key)) {
+                self.session_bytes = self.session_bytes.saturating_sub(bytes);
+            } else if self.lent.get(&key) == Some(&generation)
+                && matches!(self.sessions.get(&key), Some(None))
+            {
+                self.sessions.remove(&key);
+                self.lent.remove(&key);
+            }
+            false
+        } else {
+            self.lent.remove(&key);
+            if let Some(slot) = self.sessions.get_mut(&key) {
+                *slot = Some(session);
+            }
+            self.session_lru.retain(|x| *x != key);
+            self.session_lru.push(key);
+            true
+        }
+    }
+
+    /// The statistics of an opened image were computed (`ms` = how long it took; `None` = the
+    /// file has none). The session comes back as after a render; the result is kept for the
+    /// image, so it is not asked again, unless the list of files changed meanwhile.
+    pub fn finish_statistics(
+        &mut self,
+        generation: u64,
+        key: Key,
+        session: S,
+        result: Option<Statistics>,
+        ms: f64,
+    ) {
+        self.running.remove(&(generation, Job::Statistics(key)));
+        self.stats.statistics += 1;
+        self.stats.statistics_ms.push(ms);
+        if !self.return_session(generation, key, STATISTICS_LEND, session) {
+            return;
+        }
+        let statistics = match result {
+            Some(statistics) => ImageStatistics::Available(Arc::new(statistics)),
+            None => ImageStatistics::Unavailable,
+        };
+        self.statistics.insert(key, statistics);
     }
 
     fn remove_inflight(&mut self, generation: u64, key: Key, kind: ViewKind, region: Rect) {
@@ -1341,6 +1453,7 @@ impl<S> State<S> {
             zoom: self.zoom,
             scale: key.and_then(|k| self.scale_of(k)),
             profile_unusable: key.is_some_and(|k| self.profile_unusable.contains(&k)),
+            statistics: key.and_then(|k| self.statistics.get(&k).cloned()),
         };
         let Some(key) = key else {
             self.last_draw = None;
@@ -2531,6 +2644,233 @@ mod tests {
         let f = s.frame(VIEW);
         assert_eq!(f.path, Some(path(10)));
         assert!(!f.profile_unusable);
+    }
+
+    // ---------- statistics (ADR 0017 §2.6, U7-Q6, T142) ----------
+
+    use crate::backend::StatisticsOrigin;
+
+    fn statistics(share: f64) -> Statistics {
+        Statistics {
+            origin: StatisticsOrigin::RawData,
+            histogram: [[0; 256]; 3],
+            clipped: [share; 3],
+            deep_shadows: share,
+        }
+    }
+
+    fn available(share: f64) -> ImageStatistics {
+        ImageStatistics::Available(Arc::new(statistics(share)))
+    }
+
+    /// Opens image `pos` in RAW mode and puts its shown (fit) view on the screen.
+    fn open_and_show(s: &mut State<u32>, pos: usize) {
+        s.finish_open(s.generation, k(pos), Ok((pos as u32, SIZE)), mb24, 1.0);
+        let view = out(s, pos, Want::Shown);
+        assert!(s.accept(&view, 1 << 20).is_some());
+    }
+
+    /// The statistics task the interactive worker gets now.
+    fn lend_for_statistics(s: &mut State<u32>) -> (u64, Key, u32) {
+        match s.pick(true) {
+            Some(Task::Statistics {
+                generation,
+                key,
+                session,
+            }) => (generation, key, session),
+            other => panic!("expected a statistics task, got {other:?}"),
+        }
+    }
+
+    fn is_statistics(task: &Option<Task<u32>>) -> bool {
+        matches!(task, Some(Task::Statistics { .. }))
+    }
+
+    #[test]
+    fn the_statistics_are_asked_after_the_first_view_is_shown_and_only_once() {
+        let mut s = state(1024);
+        s.finish_open(s.generation, k(10), Ok((10, SIZE)), mb24, 1.0);
+        // opened but nothing shown yet: the view comes first
+        assert_eq!(s.statistics_job(), None);
+        let (generation, key, view, session) = match s.pick(true) {
+            Some(Task::Render {
+                generation,
+                key,
+                view,
+                session,
+            }) => (generation, key, view, session),
+            other => panic!("expected the shown view's render, got {other:?}"),
+        };
+        assert_eq!(view.kind, ViewKind::Half);
+        s.finish_render(generation, key, view, session, Ok(img()), 1.0);
+        // rendered, but not on the screen until the presentation accepted it
+        assert_eq!(s.statistics_job(), None);
+        let views = std::mem::take(&mut s.outbox);
+        assert!(s.accept(&views[0], 1 << 20).is_some());
+        assert_eq!(s.frame(VIEW).status, Status::Ready);
+        assert_eq!(s.frame(VIEW).statistics, None);
+
+        // now they are asked, before anything else, and of the current image
+        assert_eq!(s.statistics_job(), Some(Job::Statistics(k(10))));
+        let (generation, key, session) = lend_for_statistics(&mut s);
+        assert_eq!((key, session), (k(10), 10));
+        // while they are computed they are not asked a second time, by either worker
+        assert!(!is_statistics(&s.pick(true)));
+        assert!(!is_statistics(&s.pick(false)));
+        assert_eq!(s.frame(VIEW).statistics, None);
+
+        s.finish_statistics(generation, key, session, Some(statistics(0.25)), 3.0);
+        assert_eq!(s.frame(VIEW).statistics, Some(available(0.25)));
+        // the session is back, and the statistics are never asked again for this image
+        assert!(matches!(s.sessions.get(&k(10)), Some(Some(10))));
+        assert!(s.lent.is_empty() && s.lent_paths.is_empty());
+        assert_eq!(s.statistics_job(), None);
+        for _ in 0..8 {
+            assert!(!is_statistics(&s.pick(true)));
+            assert!(!is_statistics(&s.pick(false)));
+        }
+        assert_eq!(s.stats.statistics, 1);
+        assert_eq!(s.stats.statistics_ms, vec![3.0]);
+    }
+
+    #[test]
+    fn the_statistics_wait_for_the_dwell_and_for_a_zoom_gesture_to_end() {
+        let mut s = state(1024);
+        open_and_show(&mut s, 10);
+        // the image just became current: stepping through images starts no statistics
+        s.since = Instant::now();
+        assert_eq!(s.statistics_job(), None);
+        assert!(!is_statistics(&s.pick(true)));
+        s.since = Instant::now() - Duration::from_secs(1);
+        // a zoom gesture under way
+        s.gesture_at = Some(Instant::now());
+        assert_eq!(s.statistics_job(), None);
+        s.gesture_at = None;
+        assert_eq!(s.statistics_job(), Some(Job::Statistics(k(10))));
+        assert!(is_statistics(&s.pick(true)));
+    }
+
+    #[test]
+    fn the_background_worker_may_compute_the_statistics_of_the_current_image() {
+        let mut s = state(1024);
+        open_and_show(&mut s, 10);
+        match s.pick(false) {
+            Some(Task::Statistics { key, .. }) => assert_eq!(key, k(10)),
+            other => panic!("expected a statistics task, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn the_frame_has_the_statistics_of_its_own_image_and_mode_only() {
+        let mut s = state(1024);
+        open_and_show(&mut s, 10);
+        let (generation, key, session) = lend_for_statistics(&mut s);
+        s.finish_statistics(generation, key, session, Some(statistics(0.5)), 1.0);
+        assert_eq!(s.frame(VIEW).statistics, Some(available(0.5)));
+        // another image has none (it is not even opened)
+        s.go(11);
+        assert_eq!(s.frame(VIEW).statistics, None);
+        // back: still there, not asked again
+        s.go(10);
+        s.since = Instant::now() - Duration::from_secs(1);
+        assert_eq!(s.frame(VIEW).statistics, Some(available(0.5)));
+        assert_eq!(s.statistics_job(), None);
+        // the same image in the other display mode is another opened image
+        s.set_mode(Source::Jpeg);
+        assert_eq!(s.frame(VIEW).statistics, None);
+        s.set_mode(Source::Raw);
+        assert_eq!(s.frame(VIEW).statistics, Some(available(0.5)));
+        assert_eq!(s.stats.statistics, 1);
+    }
+
+    #[test]
+    fn a_file_without_statistics_says_so_and_is_not_asked_again() {
+        let mut s = state(1024);
+        open_and_show(&mut s, 10);
+        let (generation, key, session) = lend_for_statistics(&mut s);
+        s.finish_statistics(generation, key, session, None, 1.0);
+        assert_eq!(s.frame(VIEW).statistics, Some(ImageStatistics::Unavailable));
+        assert_eq!(s.statistics_job(), None);
+        assert!(!is_statistics(&s.pick(true)));
+    }
+
+    #[test]
+    fn a_failed_image_has_no_statistics_job() {
+        let mut s = state(1024);
+        open_and_show(&mut s, 10);
+        s.failed.insert(k(10), DecodeError::new("too large"));
+        assert_eq!(s.statistics_job(), None);
+    }
+
+    #[test]
+    fn an_image_whose_session_was_closed_is_opened_again_for_its_statistics() {
+        let mut s = state(1024);
+        open_and_show(&mut s, 10);
+        s.drop_session(k(10));
+        assert_eq!(s.statistics_job(), Some(Job::Open(k(10))));
+        assert!(matches!(
+            s.pick(true),
+            Some(Task::Open {
+                key: (10, Source::Raw),
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn statistics_follow_the_path_through_set_files_and_a_new_folder_clears_them() {
+        let mut s = state(1024);
+        open_and_show(&mut s, 10);
+        let (generation, key, session) = lend_for_statistics(&mut s);
+        s.finish_statistics(generation, key, session, Some(statistics(0.125)), 1.0);
+        // image 3 drops out: image 10 is now at position 9
+        s.set_files(without(20, &[3]), 9);
+        assert_eq!(s.statistics.get(&k(9)), Some(&available(0.125)));
+        assert!(!s.statistics.contains_key(&k(10)));
+        assert_eq!(s.frame(VIEW).statistics, Some(available(0.125)));
+        // the image itself drops out: its statistics go with it
+        s.set_files(without(20, &[3, 10]), 9);
+        assert!(s.statistics.is_empty());
+        assert_eq!(s.frame(VIEW).statistics, None);
+
+        let mut s = state(1024);
+        s.statistics.insert(k(10), available(0.5));
+        s.open_folder(files(20));
+        assert!(s.statistics.is_empty());
+    }
+
+    #[test]
+    fn statistics_finished_after_set_files_are_discarded_and_their_session_is_dropped() {
+        let mut s = state(1024);
+        open_and_show(&mut s, 10);
+        let (generation, key, session) = lend_for_statistics(&mut s);
+        assert_eq!(s.session_bytes, 24 << 20);
+        s.set_files(without(20, &[3]), 9);
+        s.finish_statistics(generation, key, session, Some(statistics(0.5)), 1.0);
+        // neither the old key nor the image's new one got them, and the session is gone
+        assert!(s.statistics.is_empty());
+        assert_eq!(s.session_bytes, 0);
+        assert!(s.detached.is_empty() && s.lent_paths.is_empty());
+        assert!(!s.sessions.contains_key(&k(9)));
+    }
+
+    #[test]
+    fn a_session_lent_for_statistics_is_released_when_it_comes_back() {
+        let mut s = state(1024);
+        open_and_show(&mut s, 10);
+        let (generation, key, session) = lend_for_statistics(&mut s);
+        // a metadata write of the file waits for the session
+        assert_eq!(s.release(&path(10)), (true, false));
+        assert!(!s.sessions.contains_key(&k(10)));
+        assert_eq!(s.session_bytes, 24 << 20);
+        assert_eq!(s.release(&path(10)), (false, false));
+        s.finish_statistics(generation, key, session, Some(statistics(0.5)), 1.0);
+        assert_eq!(s.session_bytes, 0);
+        assert!(!s.sessions.contains_key(&k(10)));
+        assert!(s.released.is_empty() && s.lent.is_empty() && s.lent_paths.is_empty());
+        assert_eq!(s.release(&path(10)), (false, true));
+        // the statistics themselves are still good
+        assert_eq!(s.frame(VIEW).statistics, Some(available(0.5)));
     }
 
     #[test]

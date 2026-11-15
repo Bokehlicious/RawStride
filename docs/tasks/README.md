@@ -12,7 +12,7 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 | `T<nnn>-<name>.md` (this folder) | Open tasks, one file each |
 | [`backlog.md`](backlog.md) | Not for agents yet: needs a decision, a dependency or an ADR first |
 | [`plans/`](plans/) | Step lists for ADRs that have none of their own (ADR 0007 milestone 8, ADR 0017) |
-| [`done/`](done/README.md) | Finished tasks T1–T141 and the log they were kept in until 2026-11-13 |
+| [`done/`](done/README.md) | Finished tasks T1–T143 and the log they were kept in until 2026-11-13 |
 
 
 ## How to work on a task
@@ -95,8 +95,6 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status |
 |---|---|---|
-| [T142](T142-histogram-and-exposure-statistics.md) | ADR 0017 U7, first part: the RAW histogram and exposure statistics | Open |
-| [T143](T143-persons-artwork-products-contributors.md) | ADR 0017 U11, last part: persons with details, artwork, products, contributors and the other structures | Open |
 
 ## Writing a task (owner and reviewer)
 

@@ -412,3 +412,69 @@ fn release_closes_the_libraw_session_of_a_dng_so_it_can_be_opened_exclusively() 
         opened.err()
     );
 }
+
+/// Frames until the current image's statistics are in the frame (or the timeout).
+fn until_statistics(screen: &mut Screen<'_>) -> Frame {
+    let end = Instant::now() + WAIT;
+    loop {
+        let f = screen.frame();
+        if f.statistics.is_some() || Instant::now() > end {
+            return f;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+/// ADR 0017 §2.6, U7 (T142): the core gives the statistics of the current image after its first
+/// view: in RAW mode those of the unpacked RAW data, as `pw-libraw` computes them; in JPEG mode
+/// those of the embedded JPEG.
+#[test]
+#[ignore = "needs real camera files: set PW_TESTDATA and run with --ignored"]
+fn a_camera_raw_gets_its_statistics_in_both_modes() {
+    use pw_viewcore::{ImageStatistics, StatisticsOrigin};
+
+    let file = test_files("TN006067").remove(0);
+    let raw = pw_libraw::Session::open(&file)
+        .unwrap()
+        .statistics()
+        .unwrap()
+        .unwrap();
+
+    let core = start();
+    core.open_folder(vec![file.clone()]);
+    let mut screen = Screen {
+        core: &core,
+        textures: HashMap::new(),
+    };
+    let f = screen.until_ready();
+    assert_eq!(f.status, Status::Ready);
+    let f = until_statistics(&mut screen);
+    let Some(ImageStatistics::Available(stats)) = f.statistics else {
+        panic!("no RAW statistics: {:?}", f.statistics);
+    };
+    assert_eq!(stats.origin, StatisticsOrigin::RawData);
+    assert_eq!(stats.histogram, raw.histogram);
+    for c in 0..3 {
+        assert_eq!(stats.clipped[c], raw.clipped_share(c));
+    }
+    assert_eq!(stats.deep_shadows, raw.deep_shadow_share());
+    // the blown-out sky clips the green channel
+    assert!(stats.clipped[1] > 0.02, "{:?}", stats.clipped);
+
+    core.toggle_mode();
+    let f = screen.until_ready();
+    assert_eq!(f.source, Source::Jpeg);
+    let f = until_statistics(&mut screen);
+    let Some(ImageStatistics::Available(stats)) = f.statistics else {
+        panic!("no JPEG statistics: {:?}", f.statistics);
+    };
+    assert_eq!(stats.origin, StatisticsOrigin::EmbeddedJpeg);
+    let size = f.size.unwrap();
+    let pixels = u64::from(size.w) * u64::from(size.h);
+    for channel in &stats.histogram {
+        assert_eq!(channel.iter().sum::<u64>(), pixels);
+    }
+    assert!(stats.clipped[1] > 0.02, "{:?}", stats.clipped);
+    eprintln!("statistics ms: {:?}", core.stats().statistics_ms);
+    assert_eq!(core.stats().statistics, 2);
+}

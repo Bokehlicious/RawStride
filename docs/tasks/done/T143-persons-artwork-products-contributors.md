@@ -1,4 +1,4 @@
-# T143. ADR 0017 U11, last part: persons with details, artwork, products, contributors and the other structures — Open
+# T143. ADR 0017 U11, last part: persons with details, artwork, products, contributors and the other structures — Done
 
 - **Can start now.** The owner approved the proposals of U11c-Q1–U11c-Q8 (at the end of this task)
   on 2026-11-15; they are written into the points below and into ADR 0017 §6.1.
@@ -86,3 +86,5 @@
 |---|---|---|
 | 2026-11-15 | Blocked | Added; waits for U11c-Q1–U11c-Q8 |
 | 2026-11-15 | Open | The owner approved U11c-Q1–U11c-Q8 as proposed |
+| 2026-11-15 | Ready for review | Done by the agent. CV-Term About Image is anchored after the list Genre (`lists_after_list`), since T139's test pins Genre alone after Scene Code; a wrong Artwork Date Created gives `Err` with no field error and is shown live under its box (`list_error`); the button reads "Copy from Person Shown in the Image" (`property_label`) |
+| 2026-11-15 | Done | Reviewed: `check.ps1` all OK (1495 passed, 0 failed, 58 ignored). Noted, not changed: with a wrong Artwork Date Created, OK writes nothing and the reason is shown only under that box; Copy All Fields then copies the file's earlier date. |

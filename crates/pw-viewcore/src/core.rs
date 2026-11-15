@@ -107,6 +107,16 @@ impl<B: Backend> Shared<B> {
                     let mut s = self.state();
                     s.finish_render(generation, key, view, session, result, ms);
                 }
+                Task::Statistics {
+                    generation,
+                    key,
+                    mut session,
+                } => {
+                    let result = self.backend.statistics(&mut session);
+                    let ms = t0.elapsed().as_secs_f64() * 1000.0;
+                    let mut s = self.state();
+                    s.finish_statistics(generation, key, session, result, ms);
+                }
             }
             self.cv.notify_all();
             self.wake_ui();

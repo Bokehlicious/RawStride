@@ -71,6 +71,7 @@ use pw_loupe::{
     FieldValues, ValueChoice, ValueList, field_values_path, load_field_values, save_field_values,
     value_choices,
 };
+use pw_loupe::{HISTOGRAM_BINS, HistogramPanel, HistogramText, histogram_panel, histogram_text};
 use pw_loupe::{
     ImportText, failed_cell_text, hidden_done_text, hidden_progress_text, import_text,
     no_preview_text,
@@ -84,7 +85,7 @@ use pw_metadata::{MetadataWorker, Rating, WriteSetup, supports_rating};
 use pw_render::{Textures, view_px};
 use pw_thumbcache::{ThumbWorker, ThumbnailRequest};
 use pw_viewcore::native::NativeBackend;
-use pw_viewcore::{Config, Status, ViewCore, Zoom};
+use pw_viewcore::{Config, ImageStatistics, Status, ViewCore, Zoom};
 
 mod inspector;
 mod inspector_text;
@@ -644,6 +645,9 @@ struct Loupe {
     /// The zoom and the effective scale of the last rendered preview frame, for the preview
     /// column's Zoom section (T111).
     last_zoom: Option<(Zoom, Option<f64>)>,
+    /// The image of the last rendered preview frame, as `inspector_subject` names it, and its
+    /// statistics once they are ready, for the Histogram sections (ADR 0017 §2.6, U7, T142).
+    last_statistics: Option<(PathBuf, Option<ImageStatistics>)>,
     /// The window's state from before the preview made it full screen; `Some` while the preview
     /// is shown (ADR 0017 §2.2, U3-Q1, U3-Q6, T111).
     window_before: Option<WindowBefore>,
@@ -2984,6 +2988,17 @@ impl Loupe {
         }
     }
 
+    /// What the Histogram section shows for `image` (ADR 0017 §2.6, U7-Q7, T142): the statistics
+    /// the view core gave in the last rendered preview frame, when that frame showed this image;
+    /// "Reading …" until then.
+    fn histogram_for(&self, image: Option<&Path>) -> HistogramPanel {
+        let statistics = match (&self.last_statistics, image) {
+            (Some((path, statistics)), Some(image)) if path == image => statistics.as_ref(),
+            _ => None,
+        };
+        histogram_panel(statistics)
+    }
+
     /// Whether the active tab shows the preview (ADR 0017 §2.2, T111).
     fn in_preview(&self) -> bool {
         self.tabs
@@ -3092,8 +3107,9 @@ impl Loupe {
 
     /// The preview's right column (§2.2, U3-Q2, U3-Q5, T111): resizable and collapsible as the
     /// main window's columns, with the shown image's file name, Info (T110's Exif rows from the
-    /// same reader) and Zoom (the zoom as a text, and buttons and a check box that call the same
-    /// function as their keys). After a click no widget keeps the keyboard.
+    /// same reader), Zoom (the zoom as a text, and buttons and a check box that call the same
+    /// function as their keys) and Histogram (the shown image's histogram and exposure
+    /// statistics, §2.6, U7-Q7, T142). After a click no widget keeps the keyboard.
     fn draw_preview_column(&mut self, ui: &mut egui::Ui, blocked: bool) {
         let shell = self.settings.shell;
         let window_width = ui.ctx().content_rect().width();
@@ -3101,10 +3117,11 @@ impl Loupe {
         let cwd = std::env::current_dir().ok();
         let image = inspector_subject(self.tabs.active(), cwd.as_deref());
         let zoom = self.last_zoom;
+        let histogram = self.histogram_for(image.as_deref());
         let mut anchor_at_pointer = self.anchor_at_pointer;
         let exif = &self.exif;
         let mut actions = Vec::new();
-        let mut toggled = [false, false];
+        let mut toggled = [false; 3];
         let shown = egui::Panel::right("preview-column")
             .resizable(true)
             .default_size(clamp_column_width(
@@ -3178,9 +3195,15 @@ impl Loupe {
                                             actions.push(Action::ToggleAnchor);
                                         }
                                     });
+                            let histogram_section =
+                                egui::CollapsingHeader::new(histogram_text(HistogramText::Section))
+                                    .id_salt("preview-histogram")
+                                    .open(Some(shell.preview_histogram == ColumnState::Open))
+                                    .show(ui, |ui| draw_histogram(ui, &histogram));
                             toggled = [
                                 info.header_response.clicked(),
                                 zoom_section.header_response.clicked(),
+                                histogram_section.header_response.clicked(),
                             ];
                         });
                     collapse
@@ -3201,6 +3224,9 @@ impl Loupe {
         }
         if toggled[1] {
             self.settings.shell.preview_zoom = self.settings.shell.preview_zoom.toggled();
+        }
+        if toggled[2] {
+            self.settings.shell.preview_histogram = self.settings.shell.preview_histogram.toggled();
         }
         // Each button and the check box call the same function as their key; a zoom uses the
         // image's centre, as from the menu (T109).
@@ -3970,12 +3996,13 @@ impl Loupe {
         }
         match shell.right_column {
             ColumnState::Open => {
-                // The inspector (ADR 0017 §2.1, T110): the current image's file name, then Info
-                // and Metadata, the whole column in one scroll area.
+                // The inspector (ADR 0017 §2.1, T110): the current image's file name, then Info,
+                // Metadata and Histogram (T142), the whole column in one scroll area.
                 let cwd = std::env::current_dir().ok();
                 let image = inspector_subject(self.tabs.active(), cwd.as_deref());
+                let histogram = self.histogram_for(image.as_deref());
                 let (exif, metadata) = (&self.exif, &self.metadata);
-                let mut toggled = [false, false];
+                let mut toggled = [false; 3];
                 let shown = egui::Panel::right("right-column")
                     .resizable(true)
                     .default_size(clamp_column_width(
@@ -3990,8 +4017,14 @@ impl Loupe {
                             .id_salt("inspector-scroll")
                             .auto_shrink([false, false])
                             .show(ui, |ui| {
-                                toggled =
-                                    draw_inspector(ui, image.as_deref(), &shell, exif, metadata);
+                                toggled = draw_inspector(
+                                    ui,
+                                    image.as_deref(),
+                                    &shell,
+                                    exif,
+                                    metadata,
+                                    &histogram,
+                                );
                             });
                         collapse
                     });
@@ -4006,6 +4039,9 @@ impl Loupe {
                 }
                 if toggled[1] {
                     sections.inspector_metadata = sections.inspector_metadata.toggled();
+                }
+                if toggled[2] {
+                    sections.inspector_histogram = sections.inspector_histogram.toggled();
                 }
             }
             ColumnState::Collapsed => {
@@ -4352,6 +4388,16 @@ impl Loupe {
         let frame = self.core.frame(view_px(rect, ppp));
         self.last_frame_status = frame.status.clone();
         self.last_zoom = Some((frame.zoom, frame.scale));
+        // The statistics of the shown image, for the Histogram sections (T142); the path as
+        // `inspector_subject` resolves it, so the sections can tell whose they are.
+        let cwd = std::env::current_dir().ok();
+        self.last_statistics = frame.path.as_deref().map(|path| {
+            let path = match cwd.as_deref() {
+                Some(cwd) => resolve_path(cwd, path),
+                None => path.to_path_buf(),
+            };
+            (path, frame.statistics.clone())
+        });
         // The tab's current image comes from the tab, not from `frame.pos`: every step goes through
         // the tab and the core follows it (ADR 0014 §4.4). The status line counts the whole folder.
         let total = self.tabs.active().map_or(0, |tab| tab.files.len());
@@ -4449,8 +4495,8 @@ fn resolve_paths(files: &[PathBuf]) -> Result<Vec<PathBuf>, String> {
 /// T123): every field's property once, also `Iptc4xmpCore:CreatorContactInfo`, whose fields are
 /// all editor fields, and the read-only Urgency, Category and Supplemental Categories, which are
 /// shown in the Assignment section; `xmp:Rating` and `xmp:Label`, shown by the Rating and
-/// Label section (T124); and the structure lists edited in the form (T136, T139). Conflicts on
-/// any of them are still listed.
+/// Label section (T124); and the structure lists edited in the form (T136, T139, T143). Conflicts
+/// on any of them are still listed.
 fn window_editor_properties() -> Vec<&'static str> {
     let mut properties: Vec<&'static str> = Vec::new();
     for field in EditorField::ALL {
@@ -4461,8 +4507,10 @@ fn window_editor_properties() -> Vec<&'static str> {
     properties.extend(["xmp:Rating", "xmp:Label"]);
     // Location Created and Location Shown are edited in Time and Place (U11a, T136); Genre,
     // Image Creator, Copyright Owner, Licensor and Image Supplier in Assignment and Licence (PLUS)
-    // (U11b, T139).
-    properties.extend(EditorForm::STRUCTURE_LISTS);
+    // (U11b, T139); Person Shown with Details, Product Shown, Artwork or Object, Contributor,
+    // CV-Term About Image and Image Registry Entry in Content, Creator and Rights and Assignment
+    // (U11c, T143).
+    properties.extend(EditorForm::ALL_LISTS);
     properties
 }
 
@@ -4888,22 +4936,32 @@ fn values_button(ui: &mut egui::Ui) -> egui::Response {
 }
 
 /// The structure lists drawn in `section` after the field `after` (or at the start of the section
-/// for `None`): Location Created and Location Shown at the end of Time and Place (ADR 0017
-/// U11a-Q2, T136), Genre after Scene Code, and Image Creator, Copyright Owner, Licensor and Image
-/// Supplier at the start of Licence (PLUS) (U11b, T139). Each list's name, then one framed group
-/// per entry with its sub-fields (names from `property_label`, one-line text boxes as wide as the
-/// window, a drop-down for a Licensor's telephone types, a Licensor's address under a collapsed
-/// "Address" line) and "Remove", then "Add Location" or "Add {list}", disabled at the list's
-/// limit with the tooltip "At most {n} entries"; under Location Shown also "Copy from Location
-/// Created" (U11a-Q4), under Image Creator "Copy from Creator" (U11b-Q4). A list with an
-/// undecided conflict, or a value the form cannot show, is its read-only text instead.
+/// for `None`): Person Shown with Details, Product Shown and Artwork or Object after Person Shown,
+/// Contributor at the end of Creator and Rights (U11c-Q2, T143), Location Created and Location
+/// Shown at the end of Time and Place (ADR 0017 U11a-Q2, T136), Genre and CV-Term About Image
+/// after Scene Code, Image Registry Entry at the end of Assignment (T143), and Image Creator,
+/// Copyright Owner, Licensor and Image Supplier at the start of Licence (PLUS) (U11b, T139). Each
+/// list's name, then one framed group per entry with its sub-fields (names from `property_label`,
+/// one-line text boxes as wide as the window, a drop-down for a Licensor's telephone types, a
+/// Licensor's address under a collapsed "Address" line, an Artwork or Object's further sub-fields
+/// under a collapsed "More" line) and "Remove", then "Add Location" or "Add {list}", disabled at
+/// the list's limit with the tooltip "At most {n} entries"; under Location Shown also "Copy from
+/// Location Created" (U11a-Q4), under Image Creator "Copy from Creator" (U11b-Q4), under Person
+/// Shown with Details "Copy from Person Shown" (U11c-Q6). A list with an undecided conflict, or a
+/// value the form cannot show, is its read-only text instead.
 fn draw_structure_lists(
     ui: &mut egui::Ui,
     form: &mut EditorForm,
     section: EditorSection,
     after: Option<EditorField>,
 ) {
-    for list in EditorForm::lists_at(section, after) {
+    // Each list followed by the lists drawn right after it (CV-Term About Image after Genre,
+    // U11c-Q2, T143).
+    let lists: Vec<&'static str> = EditorForm::lists_at(section, after)
+        .into_iter()
+        .flat_map(|list| std::iter::once(list).chain(EditorForm::lists_after_list(list)))
+        .collect();
+    for list in lists {
         ui.label(egui::RichText::new(property_label(list, Language::En)).strong());
         if let Some(text) = form.list_read_only(list).map(str::to_string) {
             ui.add(egui::Label::new(text).wrap());
@@ -4924,6 +4982,18 @@ fn draw_structure_lists(
                             .default_open(false)
                             .show(ui, |ui| {
                                 for field in address {
+                                    draw_list_field(ui, form, list, entry, field);
+                                }
+                            });
+                    }
+                    // An Artwork or Object's eleven further sub-fields (U11c-Q3, T143).
+                    let more = EditorForm::list_more_fields(list);
+                    if !more.is_empty() {
+                        egui::CollapsingHeader::new(editor_text(&EditorText::More))
+                            .id_salt("more")
+                            .default_open(false)
+                            .show(ui, |ui| {
+                                for field in more {
                                     draw_list_field(ui, form, list, entry, field);
                                 }
                             });
@@ -4975,6 +5045,15 @@ fn draw_structure_lists(
                     form.copy_creator();
                 }
             }
+            if list == EditorForm::PERSON_DETAILS {
+                let copy = ui.add_enabled(
+                    form.can_copy_person_shown(),
+                    egui::Button::new(editor_text(&EditorText::CopyFromPersonShown)),
+                );
+                if copy.clicked() {
+                    form.copy_person_shown();
+                }
+            }
         });
         ui.add_space(PANEL_ROW_SPACING);
     }
@@ -4983,7 +5062,8 @@ fn draw_structure_lists(
 /// One sub-field of a structure list's entry (T136, T139): its name from `property_label`, then a
 /// one-line text box as wide as the window, or a drop-down for a choice (a Licensor's telephone
 /// types, U11b-Q3): the empty entry, the PLUS values with their full URIs as tooltips, and an
-/// unknown value of the file as "Unknown value: {uri}" (U10d-Q4).
+/// unknown value of the file as "Unknown value: {uri}" (U10d-Q4). Under a text box its error, in
+/// the error colour, while it has one (an Artwork or Object's Date Created, U11c-Q4, T143).
 fn draw_list_field(
     ui: &mut egui::Ui,
     form: &mut EditorForm,
@@ -4996,6 +5076,10 @@ fn draw_list_field(
     if entries.is_empty() {
         if let Some(text) = form.list_text_mut(list, entry, field) {
             ui.add(egui::TextEdit::singleline(text).desired_width(f32::INFINITY));
+        }
+        if let Some(error) = form.list_error(list, entry, field) {
+            let error_color = ui.visuals().error_fg_color;
+            ui.add(egui::Label::new(egui::RichText::new(error).color(error_color)).wrap());
         }
         return;
     }
@@ -5831,20 +5915,22 @@ fn draw_folder_list(
 }
 
 /// The inspector's contents (ADR 0017 §2.1, T110): the file name of the current image (wrapped,
-/// never cut), then the sections Info and Metadata, open or collapsed as `shell` says. Every text
-/// comes from `inspector_text.rs`, `info_panel.rs` (`panel_text`, `info_panel`) or
-/// `UNSUPPORTED_TEXT`, or is data; labels and values wrap at the column's width. Returns which
-/// section headers were clicked (Info, Metadata).
+/// never cut), then the sections Info, Metadata and Histogram (§2.6, U7-Q7, T142), open or
+/// collapsed as `shell` says. Every text comes from `inspector_text.rs`, `info_panel.rs`
+/// (`panel_text`, `info_panel`), `preview_text.rs` (`histogram_text`) or `UNSUPPORTED_TEXT`, or
+/// is data; labels and values wrap at the column's width. Returns which section headers were
+/// clicked (Info, Metadata, Histogram).
 fn draw_inspector(
     ui: &mut egui::Ui,
     image: Option<&Path>,
     shell: &ShellSettings,
     exif: &ExifInspector,
     metadata: &MetadataCache,
-) -> [bool; 2] {
+    histogram: &HistogramPanel,
+) -> [bool; 3] {
     let Some(path) = image else {
         column_note(ui, &inspector_text(&InspectorText::NoImage));
-        return [false, false];
+        return [false; 3];
     };
     let file_name = path.file_name().map_or_else(
         || path.display().to_string(),
@@ -5860,10 +5946,71 @@ fn draw_inspector(
         .id_salt("inspector-metadata")
         .open(Some(shell.inspector_metadata == ColumnState::Open))
         .show(ui, |ui| draw_inspector_metadata(ui, path, metadata));
+    let histogram_section = egui::CollapsingHeader::new(histogram_text(HistogramText::Section))
+        .id_salt("inspector-histogram")
+        .open(Some(shell.inspector_histogram == ColumnState::Open))
+        .show(ui, |ui| draw_histogram(ui, histogram));
     [
         info.header_response.clicked(),
         values.header_response.clicked(),
+        histogram_section.header_response.clicked(),
     ]
+}
+
+/// The height of the histogram in points.
+const HISTOGRAM_HEIGHT: f32 = 96.0;
+/// The histogram's background: dark in both themes, so the channels' colours mix on it.
+const HISTOGRAM_BACKGROUND: egui::Color32 = egui::Color32::from_gray(22);
+/// The colours of the R, G and B channels: partly transparent (premultiplied), so where the
+/// channels overlap their colours mix.
+const HISTOGRAM_COLOURS: [egui::Color32; 3] = [
+    egui::Color32::from_rgba_premultiplied(200, 45, 45, 110),
+    egui::Color32::from_rgba_premultiplied(45, 175, 45, 110),
+    egui::Color32::from_rgba_premultiplied(55, 80, 225, 110),
+];
+
+/// The Histogram section (ADR 0017 §2.6, U7-Q7, T142), in the preview's column and in the
+/// inspector: the three channels drawn over each other at the column's width, and under them
+/// where the numbers come from, the clipped share per channel and the deep-shadow share; or the
+/// text that the statistics are being read, or that the file has none. `panel` holds the bar
+/// heights and the finished texts (`histogram.rs`, `preview_text.rs`); the lines wrap.
+fn draw_histogram(ui: &mut egui::Ui, panel: &HistogramPanel) {
+    let view = match panel {
+        HistogramPanel::Reading => {
+            ui.add(egui::Label::new(histogram_text(HistogramText::Reading)).wrap());
+            return;
+        }
+        HistogramPanel::NoHistogram => {
+            ui.add(egui::Label::new(histogram_text(HistogramText::NoHistogram)).wrap());
+            return;
+        }
+        HistogramPanel::Ready(view) => view,
+    };
+    let width = ui.available_width().max(1.0);
+    let (rect, _) =
+        ui.allocate_exact_size(egui::vec2(width, HISTOGRAM_HEIGHT), egui::Sense::hover());
+    let painter = ui.painter_at(rect);
+    painter.rect_filled(rect, 2.0, HISTOGRAM_BACKGROUND);
+    let bin_width = rect.width() / HISTOGRAM_BINS as f32;
+    for (bars, colour) in view.bars.iter().zip(HISTOGRAM_COLOURS) {
+        let mut mesh = egui::Mesh::default();
+        for (bin, height) in bars.iter().enumerate() {
+            if *height <= 0.0 {
+                continue;
+            }
+            let left = rect.left() + bin as f32 * bin_width;
+            let bar = egui::Rect::from_min_max(
+                egui::pos2(left, rect.bottom() - height * rect.height()),
+                egui::pos2(left + bin_width, rect.bottom()),
+            );
+            mesh.add_colored_rect(bar, colour);
+        }
+        painter.add(egui::Shape::mesh(mesh));
+    }
+    ui.add_space(PANEL_ROW_SPACING);
+    ui.add(egui::Label::new(egui::RichText::new(histogram_text(view.source)).weak()).wrap());
+    ui.add(egui::Label::new(view.clipped.as_str()).wrap());
+    ui.add(egui::Label::new(view.deep_shadows.as_str()).wrap());
 }
 
 /// The Info section: the Exif rows (label, value), or the text of loading, an error or no values.
@@ -6301,6 +6448,7 @@ fn run(options: Options) -> Result<(), String> {
                 last_ratings_ready: false,
                 last_frame_status: Status::Empty,
                 last_zoom: None,
+                last_statistics: None,
                 window_before: None,
                 window_settling: None,
                 viewport_commands: Vec::new(),
@@ -6867,8 +7015,10 @@ mod tests {
         // the Rating and Label section (T124, point 6). The seven fields of the Licence (PLUS)
         // section (T128) are seven of them. Location Created and Location Shown, edited in Time
         // and Place (T136), and Genre, Image Creator, Copyright Owner, Licensor and Image
-        // Supplier, edited in Assignment and Licence (PLUS) (T139), are left out too.
-        assert_eq!(properties.len(), 49);
+        // Supplier, edited in Assignment and Licence (PLUS) (T139), are left out too, and so are
+        // Person Shown with Details, Product Shown, Artwork or Object, Contributor, CV-Term About
+        // Image and Image Registry Entry (T143).
+        assert_eq!(properties.len(), 55);
         for id in [
             "dc:title",
             "dc:description",
@@ -6897,6 +7047,12 @@ mod tests {
             "plus:CopyrightOwner",
             "plus:Licensor",
             "plus:ImageSupplier",
+            "Iptc4xmpExt:PersonInImageWDetails",
+            "Iptc4xmpExt:ProductInImage",
+            "Iptc4xmpExt:ArtworkOrObject",
+            "Iptc4xmpExt:Contributor",
+            "Iptc4xmpExt:AboutCvTerm",
+            "Iptc4xmpExt:RegistryId",
         ] {
             assert!(properties.contains(&id), "{id}");
         }
@@ -6905,12 +7061,13 @@ mod tests {
         unique.sort_unstable();
         unique.dedup();
         assert_eq!(unique.len(), properties.len());
-        // The other structures (the rest of U11) and Intellectual Genre (U10-Q4) stay under Other
-        // Metadata.
+        // The other structures (Image Region and the rights expressions, not in U11c-Q1) and
+        // Intellectual Genre (U10-Q4) stay under Other Metadata.
         for id in [
             "Iptc4xmpCore:IntellectualGenre",
-            "Iptc4xmpExt:PersonInImageWDetails",
-            "Iptc4xmpExt:ArtworkOrObject",
+            "Iptc4xmpExt:ImageRegion",
+            "Iptc4xmpExt:EmbdEncRightsExpr",
+            "Iptc4xmpExt:LinkedEncRightsExpr",
         ] {
             assert!(!properties.contains(&id), "{id}");
         }

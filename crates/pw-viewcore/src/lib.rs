@@ -30,7 +30,9 @@ pub mod native;
 pub mod scale;
 mod state;
 
-pub use crate::backend::{Backend, DecodeError, Rgb, Source};
+pub use crate::backend::{
+    Backend, DecodeError, ImageStatistics, Rgb, Source, Statistics, StatisticsOrigin,
+};
 pub use crate::core::{Releaser, ViewCore};
 pub use crate::geometry::{ImageSize, Rect};
 pub use crate::state::{

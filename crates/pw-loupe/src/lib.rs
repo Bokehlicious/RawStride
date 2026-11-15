@@ -9,6 +9,7 @@ mod editor;
 mod field_values;
 mod filter;
 mod grid;
+mod histogram;
 mod import;
 mod import_dialog;
 mod import_text;
@@ -54,6 +55,10 @@ pub use grid::{
     Navigation, THUMBNAIL_SIZE_STEP, clamp_thumbnail_size, columns, grid_key_action,
     loupe_key_action, navigate, row, step_thumbnail_size, take_wheel_steps, visible_range,
 };
+pub use histogram::{
+    HISTOGRAM_BINS, HistogramBars, HistogramPanel, HistogramView, histogram_bars, histogram_panel,
+    histogram_source_text, histogram_view,
+};
 pub use import::{
     Field, FieldError, ImportForm, IptcField, IptcForm, IptcModes, ItemAction, Preview,
     PreviewLine, Validated, allowed_modes, result_folder,
@@ -84,7 +89,10 @@ pub use preview::{
     filmstrip_range, filmstrip_width, hit_test, preview_info_shown, preview_parts, scroll_target,
     thumbnail_gate, toggle_preview_column, toggle_preview_hidden,
 };
-pub use preview_text::{PreviewText, preview_text, zoom_value_text};
+pub use preview_text::{
+    HistogramText, PreviewText, clipped_text, deep_shadows_text, histogram_text, preview_text,
+    zoom_value_text,
+};
 pub use rating_text::{
     UNSUPPORTED_TEXT, label_choice_text, label_filter_text, label_name, star_condition_text,
     star_filter_text, star_glyphs, status_text,

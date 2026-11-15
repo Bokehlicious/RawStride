@@ -21,7 +21,7 @@ the one before it is accepted.
 | R1 | reviewer | Read the PLUS controlled vocabulary (ADR 0007 §16.4, Q9) and save it in `D:\PhotoWorkflowData\references\` as P1 was. **Done 2026-11-14:** `LDFXMP-1_2_0-ControlledVocabulary.xml` (7 764 bytes, SHA-256 `26961ebe…08c92fa2`) with Model and Property Release Status and Minor Model Age Disclosure; Data Mining (PLUS 2.0.1, not in that file) taken from the PLUS XMP specification page into the folder's `README.md` | done |
 | U10d | T128 | Licence section: Model and Property Release Status, the release ids and Digital Source Type as fixed choice lists (with I11) | done (T128, 2026-11-14) |
 | U11a | T136, T139 | Lists of structures in the form, one row per entry with add and remove, within ADR 0007 §8's cardinalities: Location Created, Location Shown (with "copy from Location Created"), Genre, Image Creator, Copyright Owner, Licensor, Image Supplier | done (T136, 2026-11-14: Location Created and Location Shown; T139, 2026-11-15: Genre, Image Creator, Copyright Owner, Licensor and Image Supplier) |
-| U11b | T143 | The rest of the structures: Person Shown with Details, Product Shown, Artwork or Object, Contributor, CV-Term About Image, Image Registry Entry (U11c-Q1–U11c-Q8); Image Region later | open (T143; U11c-Q1–U11c-Q8 approved 2026-11-15) |
+| U11b | T143 | The rest of the structures: Person Shown with Details, Product Shown, Artwork or Object, Contributor, CV-Term About Image, Image Registry Entry (U11c-Q1–U11c-Q8); Image Region later | done (T143, 2026-11-15) |
 | U12a | T141 | Recent values and the user's own values per field (▼ beside the field) | done (T141, 2026-11-15) |
 | U12b | T125 | Copy and paste all fields between images | done (T125, 2026-11-14) |
 | U12c | T126 | "Apply to all marked": the edited fields written to every marked image as a batch (ADR 0007 §9.5), with one confirmation; the copyright and conflict rules of §2.3.1 | done (T126, 2026-11-14) |
@@ -32,6 +32,6 @@ the one before it is accepted.
 |---|---|---|---|
 | U4 | T135 | Library: folder tree, favourites and recent folders (U4-Q1–U4-Q7) | done (T135, 2026-11-14) |
 | U14 | T138 | Sort order: File Name, Capture Time, Modified, File Type, Rating, ascending or descending (U14-Q1–U14-Q7) | done (T138, 2026-11-15) |
-| U7a | T142 | RAW histogram and exposure statistics in the preview and the inspector (U7-Q1–U7-Q8) | open (T142; U7-Q1–U7-Q8 approved 2026-11-15) |
+| U7a | T142, T144 | RAW histogram and exposure statistics in the preview and the inspector (U7-Q1–U7-Q8); the inspector's section shows statistics only when the preview showed the same image, so T144 gives it its own | done in the preview (T142, 2026-11-15); the inspector in T144 |
 | U7b | – | Clipping overlay on the image (§2.6), on T142's clipping level | after T142 |
 | U5 | T140 | Tasks area: import progress per file, stop button, pending writes, error list (U5-Q1–U5-Q7) | done (T140, 2026-11-15) |

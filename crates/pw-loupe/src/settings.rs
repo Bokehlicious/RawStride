@@ -51,6 +51,10 @@ const PREVIEW_ZOOM: &str = "preview_zoom";
 const FILMSTRIP: &str = "filmstrip";
 const FILMSTRIP_MARKED: &str = "filmstrip_marked";
 const PREVIEW_HIDDEN: &str = "preview_hidden";
+/// The keys of the Histogram sections of the preview's column and of the inspector, open or
+/// collapsed (ADR 0017 §2.6, U7-Q7, T142).
+const PREVIEW_HISTOGRAM: &str = "preview_histogram";
+const INSPECTOR_HISTOGRAM: &str = "inspector_histogram";
 /// The keys of the metadata window's sections, open or collapsed (ADR 0017 U10-Q6, T123).
 const EDITOR_CONTENT: &str = "editor_content";
 const EDITOR_CREATOR_RIGHTS: &str = "editor_creator_rights";
@@ -158,6 +162,9 @@ pub struct ShellSettings {
     pub library_tasks: ColumnState,
     /// The sort order of every tab (U14-Q3, T138): `sort` and `sort_descending`.
     pub sort: SortOrder,
+    /// The Histogram sections of the preview's column and of the inspector (T142, U7-Q7).
+    pub preview_histogram: ColumnState,
+    pub inspector_histogram: ColumnState,
 }
 
 /// The library's lists as `settings.txt` keeps them (T135, U4-Q3, U4-Q4): the favourites in the
@@ -210,6 +217,9 @@ impl Default for ShellSettings {
             library_tasks: ColumnState::Open,
             // File-name order, ascending: the order before T138 (U14-Q1).
             sort: SortOrder::default(),
+            // Both Histogram sections open, as the other sections of their columns.
+            preview_histogram: ColumnState::Open,
+            inspector_histogram: ColumnState::Open,
         }
     }
 }
@@ -395,6 +405,11 @@ pub fn load_settings_and_library(path: &Path) -> (Settings, SavedLibrary, Vec<St
                 },
                 None => problems.push(bad("open or collapsed")),
             },
+            PREVIEW_HISTOGRAM | INSPECTOR_HISTOGRAM => match parse_column(value) {
+                Some(state) if key == PREVIEW_HISTOGRAM => shell.preview_histogram = state,
+                Some(state) => shell.inspector_histogram = state,
+                None => problems.push(bad("open or collapsed")),
+            },
             FILMSTRIP => match value {
                 SHOWN => shell.filmstrip = true,
                 HIDDEN => shell.filmstrip = false,
@@ -538,6 +553,11 @@ fn shell_lines(shell: &ShellSettings) -> String {
         "{SORT} = {}\n{SORT_DESCENDING} = {}\n",
         sort_key_value(shell.sort.key),
         shell.sort.descending
+    ));
+    text.push_str(&format!(
+        "{PREVIEW_HISTOGRAM} = {}\n{INSPECTOR_HISTOGRAM} = {}\n",
+        column_value(shell.preview_histogram),
+        column_value(shell.inspector_histogram)
     ));
     text
 }
@@ -788,7 +808,7 @@ mod tests {
              editor_rating_label = open\neditor_licence = open\nlibrary_folders = open\n\
              library_favourites = open\nlibrary_recent = open\nlibrary_tasks = open\n\
              sort = name\n\
-             sort_descending = false\n"
+             sort_descending = false\npreview_histogram = open\ninspector_histogram = open\n"
         );
     }
 
@@ -974,6 +994,8 @@ mod tests {
                 key: SortKey::Capture,
                 descending: true,
             },
+            preview_histogram: ColumnState::Collapsed,
+            inspector_histogram: ColumnState::Collapsed,
         }
     }
 
@@ -1631,5 +1653,108 @@ mod tests {
                 descending: false
             }
         );
+    }
+
+    // ---------- the Histogram sections (ADR 0017 §2.6, U7-Q7, T142) ----------
+
+    #[test]
+    fn the_histogram_sections_default_to_open() {
+        let shell = ShellSettings::default();
+        assert_eq!(shell.preview_histogram, ColumnState::Open);
+        assert_eq!(shell.inspector_histogram, ColumnState::Open);
+    }
+
+    #[test]
+    fn the_histogram_sections_round_trip_one_at_a_time() {
+        let dir = TempDir::new();
+        let path = dir.0.join("settings.txt");
+        let base = ShellSettings::default();
+        for (shell, preview, inspector) in [
+            (
+                ShellSettings {
+                    preview_histogram: ColumnState::Collapsed,
+                    ..base
+                },
+                "collapsed",
+                "open",
+            ),
+            (
+                ShellSettings {
+                    inspector_histogram: ColumnState::Collapsed,
+                    ..base
+                },
+                "open",
+                "collapsed",
+            ),
+            (base, "open", "open"),
+        ] {
+            let settings = Settings {
+                shell,
+                ..Settings::default()
+            };
+            save_settings(&path, &settings).unwrap();
+            let text = std::fs::read_to_string(&path).unwrap();
+            assert!(
+                text.contains(&format!("\npreview_histogram = {preview}\n")),
+                "{text}"
+            );
+            assert!(
+                text.contains(&format!("\ninspector_histogram = {inspector}\n")),
+                "{text}"
+            );
+            let (loaded, problems) = load_settings(&path);
+            assert!(problems.is_empty(), "{problems:?}");
+            assert_eq!(loaded, settings);
+        }
+    }
+
+    #[test]
+    fn the_histogram_sections_are_read_from_their_file_values() {
+        let (_dir, path) = TempDir::with_file(
+            "# RawStride\npreview_histogram = collapsed\ninspector_histogram = collapsed\n",
+        );
+        let (settings, problems) = load_settings(&path);
+        assert!(problems.is_empty(), "{problems:?}");
+        assert_eq!(settings.shell.preview_histogram, ColumnState::Collapsed);
+        assert_eq!(settings.shell.inspector_histogram, ColumnState::Collapsed);
+        // only the two sections changed
+        assert_eq!(
+            ShellSettings {
+                preview_histogram: ColumnState::Open,
+                inspector_histogram: ColumnState::Open,
+                ..settings.shell
+            },
+            ShellSettings::default()
+        );
+    }
+
+    #[test]
+    fn a_file_without_the_histogram_sections_gives_their_defaults_and_no_problem() {
+        let (_dir, path) = TempDir::with_file(
+            "# RawStride\ncreate_iim = true\npreview_info = collapsed\ninspector_info = collapsed\n",
+        );
+        let (settings, problems) = load_settings(&path);
+        assert!(problems.is_empty(), "{problems:?}");
+        assert_eq!(settings.shell.preview_histogram, ColumnState::Open);
+        assert_eq!(settings.shell.inspector_histogram, ColumnState::Open);
+    }
+
+    #[test]
+    fn a_bad_value_of_a_histogram_section_keeps_its_default_and_names_the_line() {
+        for (key, value) in [
+            ("preview_histogram", "hidden"),
+            ("preview_histogram", "true"),
+            ("inspector_histogram", "shut"),
+            ("inspector_histogram", ""),
+        ] {
+            let (_dir, path) = TempDir::with_file(&format!(
+                "# RawStride\ncreate_iim = true\n{key} = {value}\n"
+            ));
+            let (settings, problems) = load_settings(&path);
+            assert_one_problem_on_line(&problems, 3);
+            assert!(problems[0].contains(key), "{problems:?}");
+            assert_eq!(settings.shell, ShellSettings::default(), "{key} = {value}");
+            assert!(settings.create_iim, "{key} = {value}");
+        }
     }
 }

@@ -14,6 +14,8 @@
 //!   for both (`tests/regions.rs`).
 //! - LibRaw is built with OpenMP: one render uses all cores.
 //! - Images come out in **sensor orientation**; the viewer rotates them like the M1 previews.
+//! - [`Session::statistics`] gives the histogram and the exposure statistics of the unpacked RAW
+//!   data itself (ADR 0017 §2.6, U7): no new decode, and independent of any render.
 
 use std::ffi::{CStr, c_char, c_int, c_uint, c_void};
 use std::fmt;
@@ -64,6 +66,72 @@ pub struct Diagnostics {
     pub damaged: bool,
 }
 
+/// The shim's `pwlr_stats` (see `csrc/pwlr.cpp`).
+#[repr(C)]
+struct Stats {
+    histogram: [[u64; 256]; 3],
+    pixels: [u64; 3],
+    clipped: [u64; 3],
+    shadow_pixels: u64,
+    deep_shadows: u64,
+}
+
+/// The histogram and the exposure statistics of a file's unpacked RAW data (ADR 0017 §2.6, U7),
+/// per colour channel in the order R, G, B; the two greens of a Bayer sensor are one G.
+///
+/// - `histogram`: 256 bins of the values after the black level is subtracted and the camera's
+///   white balance applied, scaled so the white level is the top bin, on an sRGB-like curve
+///   (U7-Q3).
+/// - `pixels`: the pixels counted per channel, the sum of its bins. A mosaic has one channel per
+///   photosite, so the three add up to the image's pixel count; a three- or four-colour image has
+///   every pixel in every channel.
+/// - `clipped`: of them, the pixels at the clipping level: a raw value at or above the white
+///   level LibRaw reports (`linear_max` of the channel when the file gives it, else `maximum`),
+///   before white balance (U7-Q4).
+/// - `deep_shadows` of `shadow_pixels`: the pixels where every channel is below 1/256 of the
+///   white level above black, eight stops under clipping (U7-Q4). A mosaic is judged in cells
+///   that hold every colour (2×2 for a Bayer pattern, 3×3 for X-Trans): a cell is in the deep
+///   shadows when all its photosites are, and `shadow_pixels` is the pixels of the whole cells.
+#[derive(Clone, PartialEq, Eq)]
+pub struct RawStatistics {
+    pub histogram: [[u64; 256]; 3],
+    pub pixels: [u64; 3],
+    pub clipped: [u64; 3],
+    pub shadow_pixels: u64,
+    pub deep_shadows: u64,
+}
+
+impl fmt::Debug for RawStatistics {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RawStatistics")
+            .field("pixels", &self.pixels)
+            .field("clipped", &self.clipped)
+            .field("shadow_pixels", &self.shadow_pixels)
+            .field("deep_shadows", &self.deep_shadows)
+            .finish_non_exhaustive()
+    }
+}
+
+impl RawStatistics {
+    /// The share (0 to 1) of channel `channel`'s pixels at the clipping level; 0 for a channel
+    /// without pixels or a channel number above 2.
+    pub fn clipped_share(&self, channel: usize) -> f64 {
+        match (self.clipped.get(channel), self.pixels.get(channel)) {
+            (Some(&clipped), Some(&pixels)) if pixels > 0 => clipped as f64 / pixels as f64,
+            _ => 0.0,
+        }
+    }
+
+    /// The share (0 to 1) of the pixels in the deepest shadows.
+    pub fn deep_shadow_share(&self) -> f64 {
+        if self.shadow_pixels == 0 {
+            0.0
+        } else {
+            self.deep_shadows as f64 / self.shadow_pixels as f64
+        }
+    }
+}
+
 /// Prefix of the error for a file whose RAW data is missing or corrupt.
 pub const DAMAGED: &str = "damaged:";
 
@@ -89,6 +157,7 @@ unsafe extern "C" {
         size: *mut c_uint,
     );
     fn pwlr_free(img: *mut c_void);
+    fn pwlr_statistics(session: *mut c_void, out: *mut Stats, error: *mut c_char) -> c_int;
     fn pwlr_close(session: *mut c_void);
 }
 
@@ -302,6 +371,35 @@ impl Session {
         self.flip
     }
 
+    /// The histogram and the exposure statistics of the unpacked RAW data ([`RawStatistics`]).
+    /// Computed from the data [`open`](Self::open) unpacked: nothing is decoded again, and a
+    /// render before or after does not change the result. `Ok(None)` for a file whose RAW data
+    /// is not a Bayer or X-Trans mosaic or a three- or four-colour image of an RGB sensor (for
+    /// example floating-point data or a four-colour sensor).
+    pub fn statistics(&mut self) -> Result<Option<RawStatistics>> {
+        let mut stats = Box::new(Stats {
+            histogram: [[0; 256]; 3],
+            pixels: [0; 3],
+            clipped: [0; 3],
+            shadow_pixels: 0,
+            deep_shadows: 0,
+        });
+        let mut err = [0 as c_char; 200];
+        // SAFETY: live session (exclusive &mut), a valid out-pointer and error buffer.
+        let rc = unsafe { pwlr_statistics(self.ptr, &mut *stats, err.as_mut_ptr()) };
+        match rc {
+            1 => Ok(Some(RawStatistics {
+                histogram: stats.histogram,
+                pixels: stats.pixels,
+                clipped: stats.clipped,
+                shadow_pixels: stats.shadow_pixels,
+                deep_shadows: stats.deep_shadows,
+            })),
+            0 => Ok(None),
+            _ => Err(Error(c_text(&err))),
+        }
+    }
+
     fn render(&mut self, half: bool, r: Option<Rect>, demosaic: Demosaic) -> Result<Rgb8> {
         let r = r.unwrap_or(Rect::new(0, 0, 0, 0));
         let mut err = [0 as c_char; 200];
@@ -406,6 +504,25 @@ mod tests {
         assert_eq!(Demosaic::default(), Demosaic::Ahd);
         assert_eq!(Demosaic::Ahd.user_qual(), 3);
         assert_eq!(Demosaic::Ppg.user_qual(), 2);
+    }
+
+    #[test]
+    fn shares_are_parts_of_the_counted_pixels() {
+        let mut stats = RawStatistics {
+            histogram: [[0; 256]; 3],
+            pixels: [200, 400, 0],
+            clipped: [50, 4, 0],
+            shadow_pixels: 800,
+            deep_shadows: 200,
+        };
+        assert_eq!(stats.clipped_share(0), 0.25);
+        assert_eq!(stats.clipped_share(1), 0.01);
+        // a channel without pixels, and a channel that does not exist
+        assert_eq!(stats.clipped_share(2), 0.0);
+        assert_eq!(stats.clipped_share(3), 0.0);
+        assert_eq!(stats.deep_shadow_share(), 0.25);
+        stats.shadow_pixels = 0;
+        assert_eq!(stats.deep_shadow_share(), 0.0);
     }
 
     #[test]

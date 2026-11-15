@@ -387,3 +387,193 @@ fn a_plain_jpeg_file_is_shown_in_raw_mode_too() {
     let f = screen.until(WAIT, ready);
     assert_eq!((f.mode, f.source), (Source::Raw, Source::Jpeg));
 }
+
+// ---------- statistics (ADR 0017 §2.6, U7-Q6, T142) ----------
+
+use pw_viewcore::{ImageStatistics, Statistics, StatisticsOrigin};
+
+/// A decoder that records the order of its calls and has statistics for every file whose name
+/// does not start with "none". A session is the file's name and display mode.
+#[derive(Clone, Default)]
+struct Recorder {
+    calls: Arc<Mutex<Vec<String>>>,
+}
+
+impl Recorder {
+    fn record(&self, call: String) {
+        if let Ok(mut calls) = self.calls.lock() {
+            calls.push(call);
+        }
+    }
+
+    fn calls(&self) -> Vec<String> {
+        self.calls.lock().map(|c| c.clone()).unwrap_or_default()
+    }
+
+    fn count(&self, call: &str) -> usize {
+        self.calls().iter().filter(|c| *c == call).count()
+    }
+
+    fn position(&self, call: &str) -> usize {
+        self.calls()
+            .iter()
+            .position(|c| c == call)
+            .unwrap_or_else(|| panic!("no call {call:?} in {:?}", self.calls()))
+    }
+}
+
+/// The statistics the recorder gives a session: its name and mode can be read from them.
+fn recorded_statistics(session: &str) -> Statistics {
+    let mut histogram = [[0u64; 256]; 3];
+    histogram[0][0] = session.len() as u64;
+    histogram[1][255] = u64::from(session.as_bytes()[0]);
+    Statistics {
+        origin: if session.ends_with("Raw") {
+            StatisticsOrigin::RawData
+        } else {
+            StatisticsOrigin::EmbeddedJpeg
+        },
+        histogram,
+        clipped: [0.5, 0.25, 0.0],
+        deep_shadows: 0.125,
+    }
+}
+
+impl Backend for Recorder {
+    type Session = String;
+
+    fn open(&self, path: &Path, source: Source) -> Result<(String, ImageSize), DecodeError> {
+        let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        let session = format!("{name} {source:?}");
+        self.record(format!("open {session}"));
+        Ok((
+            session,
+            ImageSize {
+                w: 4000,
+                h: 3000,
+                flip: 0,
+            },
+        ))
+    }
+
+    fn render_half(&self, session: &mut String) -> Result<Rgb, DecodeError> {
+        self.record(format!("half {session}"));
+        Ok(Rgb {
+            width: 2000,
+            height: 1500,
+            data: vec![0; 2000 * 1500 * 3],
+        })
+    }
+
+    fn render_region(&self, session: &mut String, r: Rect) -> Result<Rgb, DecodeError> {
+        self.record(format!("region {session}"));
+        Ok(Rgb {
+            width: r.w,
+            height: r.h,
+            data: vec![0; (r.w * r.h * 3) as usize],
+        })
+    }
+
+    fn statistics(&self, session: &mut String) -> Option<Statistics> {
+        self.record(format!("statistics {session}"));
+        (!session.starts_with("none")).then(|| recorded_statistics(session))
+    }
+}
+
+fn start_recorder(recorder: &Recorder) -> ViewCore<Recorder> {
+    match ViewCore::start(recorder.clone(), Config::default()) {
+        Ok(c) => c,
+        Err(e) => panic!("start: {e}"),
+    }
+}
+
+fn has_statistics(f: &Frame) -> bool {
+    f.statistics.is_some()
+}
+
+fn available(session: &str) -> Option<ImageStatistics> {
+    Some(ImageStatistics::Available(Arc::new(recorded_statistics(
+        session,
+    ))))
+}
+
+#[test]
+fn statistics_are_asked_once_per_opened_image_after_its_first_view() {
+    let recorder = Recorder::default();
+    let core = start_recorder(&recorder);
+    core.open_folder(files(&["a", "b", "c"]));
+    let mut screen = Screen::new(&core);
+    // the first image is shown without its statistics
+    let f = screen.until(WAIT, ready);
+    assert_eq!(f.status, Status::Ready);
+    assert_eq!(f.statistics, None);
+    assert_eq!(recorder.count("statistics a Raw"), 0);
+    // then they come, in the frame of that image
+    let f = screen.until(WAIT, has_statistics);
+    assert_eq!(f.pos, Some(0));
+    assert_eq!(f.statistics, available("a Raw"));
+    // asked after the open and after the first view was rendered
+    assert!(recorder.position("open a Raw") < recorder.position("half a Raw"));
+    assert!(recorder.position("half a Raw") < recorder.position("statistics a Raw"));
+
+    // the neighbours are opened ahead, but only the current image's statistics are asked
+    screen.until(WAIT, |_| recorder.count("open b Raw") == 1);
+    std::thread::sleep(Duration::from_millis(300));
+    screen.frame();
+    assert_eq!(recorder.count("statistics b Raw"), 0);
+    assert_eq!(recorder.count("statistics a Raw"), 1);
+
+    // the next image: its frame has no statistics until its own are ready
+    core.step(1);
+    let f = screen.frame();
+    assert_eq!(f.pos, Some(1));
+    assert_eq!(f.statistics, None);
+    let f = screen.until(WAIT, has_statistics);
+    assert_eq!(f.pos, Some(1));
+    assert_eq!(f.statistics, available("b Raw"));
+
+    // back: the first image's statistics are there at once and are not asked again
+    core.step(-1);
+    let f = screen.frame();
+    assert_eq!(f.pos, Some(0));
+    assert_eq!(f.statistics, available("a Raw"));
+    std::thread::sleep(Duration::from_millis(400));
+    screen.frame();
+    assert_eq!(recorder.count("statistics a Raw"), 1);
+    assert_eq!(recorder.count("statistics b Raw"), 1);
+    assert_eq!(core.stats().statistics, 2);
+}
+
+#[test]
+fn the_other_display_mode_has_its_own_statistics() {
+    let recorder = Recorder::default();
+    let core = start_recorder(&recorder);
+    core.open_folder(files(&["a"]));
+    let mut screen = Screen::new(&core);
+    let f = screen.until(WAIT, has_statistics);
+    assert_eq!(f.statistics, available("a Raw"));
+    core.toggle_mode();
+    let f = screen.until(WAIT, |f| f.source == Source::Jpeg && has_statistics(f));
+    assert_eq!(f.statistics, available("a Jpeg"));
+    // back in RAW mode: the first ones, not asked again
+    core.toggle_mode();
+    let f = screen.frame();
+    assert_eq!(f.statistics, available("a Raw"));
+    std::thread::sleep(Duration::from_millis(400));
+    screen.frame();
+    assert_eq!(recorder.count("statistics a Raw"), 1);
+    assert_eq!(recorder.count("statistics a Jpeg"), 1);
+}
+
+#[test]
+fn a_file_without_statistics_says_so_and_is_asked_once() {
+    let recorder = Recorder::default();
+    let core = start_recorder(&recorder);
+    core.open_folder(files(&["none"]));
+    let mut screen = Screen::new(&core);
+    let f = screen.until(WAIT, has_statistics);
+    assert_eq!(f.statistics, Some(ImageStatistics::Unavailable));
+    std::thread::sleep(Duration::from_millis(400));
+    screen.frame();
+    assert_eq!(recorder.count("statistics none Raw"), 1);
+}

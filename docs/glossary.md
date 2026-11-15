@@ -74,6 +74,18 @@ English mode already shows IPTC's name from the property table (`property_label`
 | `plus:LicensorName`, `…ID`, `…Email`, `…URL`, `…Telephone1`, `…TelephoneType1`, `…Telephone2`, `…TelephoneType2` | – | Licensor Name, Licensor ID, Licensor Email, Licensor URL, Licensor Telephone 1, Licensor Telephone Type 1, Licensor Telephone 2, Licensor Telephone Type 2 | the same (T139; in a Licensor entry) |
 | `plus:LicensorStreetAddress`, `…ExtendedAddress`, `…City`, `…Region`, `…PostalCode`, `…Country` | – | Licensor Address, Licensor Adress Detail, Licensor City, Licensor State or Province, Licensor Postal Code, Licensor Country | the same (T139; under "Address" in a Licensor entry; "Adress" is the spelling of IPTC's table) |
 | `Iptc4xmpExt:PersonInImage` | Person i bilden | Person Shown in the Image | Person Shown in the Image |
+| `Iptc4xmpExt:PersonInImageWDetails` | – | Person Shown in the Image with Details | the same (T143; a list in Content after Person Shown) |
+| `…:PersonName`, `…:PersonId`, `…:PersonDescription` | – | Name, Identifier, Description | the same (T143; in a Person Shown with Details entry; its Characteristics are not shown and kept) |
+| `Iptc4xmpExt:ProductInImage` | – | Product Shown in the Image | the same (T143; a list in Content) |
+| `…:ProductName`, `…:ProductGTIN`, `…:ProductId`, `…:ProductDescription` | – | Name, GTIN, Identifier, Description | the same (T143; in a Product Shown entry) |
+| `Iptc4xmpExt:ArtworkOrObject` | – | Artwork or Object in the Image | the same (T143; a list in Content) |
+| `…:AOTitle`, `…:AOCreator`, `…:AODateCreated`, `…:AOSource`, `…:AOSourceInvNo`, `…:AOCopyrightNotice` | – | Title, Creator, Date Created, Source, Source Inventory Number, Copyright Notice | the same (T143; open in an Artwork or Object entry) |
+| `…:AOCircaDateCreated`, `…:AOStylePeriod`, `…:AOContentDescription`, `…:AOContributionDescription`, `…:AOPhysicalDescription`, `…:AOCreatorId`, `…:AOCurrentCopyrightOwnerName`, `…Id`, `…:AOCurrentLicensorName`, `…Id`, `…:AOSourceInvURL` | – | Circa Date Created, Style Period, Content Description, Contribution Description, Physical Description, Creator ID, Current Copyright Owner Name, Current Copyright Owner ID, Current Licensor Name, Current Licensor ID, Source Inventory URL | the same (T143; under "More" in an Artwork or Object entry) |
+| `Iptc4xmpExt:Contributor` | – | Contributor | the same (T143; a list at the end of Creator and Rights) |
+| `…:Name`, `…:Role`, `xmp:Identifier` | – | Name, Role, Identifier | the same (T143; in a Contributor entry) |
+| `Iptc4xmpExt:AboutCvTerm` | – | CV-Term About Image | the same (T143; a list in Assignment right after Genre, with Genre's three sub-fields) |
+| `Iptc4xmpExt:RegistryId` | – | Image Registry Entry | the same (T143; a list at the end of Assignment) |
+| `…:RegOrgId`, `…:RegItemId`, `…:RegEntryRole` | – | Organisation Id, Item Id, Role | the same (T143; in an Image Registry Entry; IPTC's names, U11c-Q1; the warning of T117 keeps "item ID" and "organization ID") |
 | `Iptc4xmpExt:OrganisationInImageName` | – | Name of Organisation Featured in the Image | Name of Organisation Featured in the Image (T123) |
 | `Iptc4xmpExt:OrganisationInImageCode` | – | Code of Organisation Featured in the Image | Code of Organisation Featured in the Image (T123) |
 | `Iptc4xmpExt:Event` | Händelse | Event Name | Event Name |
@@ -200,6 +212,7 @@ Every other property already uses IPTC's English name in both languages.
 | – | Add Location, Remove, Copy from Location Created | the buttons of the location lists in Time and Place: under each list, on each entry, and under Location Shown (ADR 0017 U11a-Q2, U11a-Q4, U11a-Q6); added by T136. "Copy from {list}" takes the list's name from `property_label` |
 | – | Add {list}, At most {n} entries, Copy from Creator, Address | the structure lists of T139 (ADR 0017 U11b-Q6): "Add Genre", "Add Image Creator", … under each list (the locations keep "Add Location"; "Remove" on each entry as there); the tooltip of a disabled Add at the list's limit ("At most 1 entry" in singular); the button under Image Creator (U11b-Q4; "Creator" from `property_label`); the collapsed line over a Licensor entry's address (U11b-Q3); added by T139 |
 | – | Work, Cell, Fax, Home, Pager | the telephone types of a Licensor entry (PLUS `work`, `cell`, `fax`, `home`, `pager`), the LDF file's labels with a capital letter; an unknown value is "Unknown value: {uri}"; added by T139 |
+| – | Add {list}, More, Copy from Person Shown | the structure lists of T143 (ADR 0017 U11c-Q8): "Add Person Shown in the Image with Details", "Add Product Shown in the Image", "Add Artwork or Object in the Image", "Add Contributor", "Add CV-Term About Image", "Add Image Registry Entry" under each list; the collapsed line over an Artwork or Object entry's eleven further sub-fields (U11c-Q3); the button under Person Shown with Details (U11c-Q6), shown as "Copy from Person Shown in the Image" because the name comes from `property_label`, as "Copy from Creator"; added by T143 |
 | Spara ändringarna? / Ändringar som inte sparades | Save changes? / Unsaved changes | |
 | Sparar … / Sparat. | Saving … / Saved. | |
 | Ändrad | Changed | |
@@ -219,6 +232,7 @@ Every other property already uses IPTC's English name in both languages.
 | Förslag till … | Suggested … | "Suggested Date Created from the camera"; added by T117 |
 | Metadatafel | Metadata error | added by T117 |
 | – | Recent, My Values, Add to My Values, No values yet, ▼, × | the list of recent and saved values beside a one-line field of the metadata window (ADR 0017 U12a-Q5, U12a-Q7): its two headings, its last entry and its line with no values; the button "▼" (tooltip "Recent and saved values", also opened with Alt+↓) and "×" beside an own value, which removes it; added by T141 |
+| – | Histogram, RAW data, Embedded JPEG, TIFF, Clipped: R {r} %  G {g} %  B {b} %, Deep shadows: {s} %, No histogram for this file | the Histogram section of the preview's right column and of the inspector (ADR 0017 §2.6, U7-Q7, U7-Q8): its heading; under the histogram where the numbers come from (the unpacked RAW data, the embedded JPEG or a JPEG file, the TIFF file's image), the share of each channel's pixels at the clipping level and the share of the pixels in the deepest shadows, in percent with two decimals; the line for a file with no statistics. While the statistics are read the section shows "Reading …" (§7); added by T142 |
 
 ## 7. Recurring sentence parts
 

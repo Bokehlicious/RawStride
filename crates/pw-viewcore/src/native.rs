@@ -10,8 +10,12 @@
 //! With the default destination sRGB, sRGB sources are identity transforms and the pixels are
 //! unchanged (F3). A session remembers whether the file's embedded profile could not be used
 //! (ADR 0016 §5), for the loupe's status line.
+//!
+//! The histogram and the exposure statistics (ADR 0017 §2.6, U7) come from the data **before**
+//! that conversion: RAW from the unpacked RAW data (`pw-libraw`), a JPEG from its full decode and
+//! a TIFF from its own decoded image.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use pw_colour::{ColourError, Profile, Transform, TransformCache, jpeg_source_profile_checked};
@@ -19,7 +23,7 @@ use pw_libjpeg::{Decoder, Scale};
 use pw_libraw::{DAMAGED, Demosaic, Session};
 use pw_raw::ExifColourSpace;
 
-use crate::backend::{Backend, DecodeError, Rgb, Source};
+use crate::backend::{Backend, DecodeError, Rgb, Source, Statistics, StatisticsOrigin};
 use crate::geometry::{ImageSize, Rect};
 use crate::scale;
 
@@ -109,6 +113,11 @@ pub struct TiffSession {
     image: Rgb,
     /// The file's embedded ICC profile could not be used (`SourceColour::Unusable`, ADR 0016 §5).
     profile_unusable: bool,
+    /// The file, for the statistics of an image that was converted when it was opened.
+    path: PathBuf,
+    /// `image` holds the file's own values: it was treated as sRGB and the destination is sRGB,
+    /// so the conversion changed nothing.
+    unconverted: bool,
 }
 
 #[derive(Debug)]
@@ -119,6 +128,8 @@ pub struct JpegSession {
     transform: Arc<Transform>,
     /// The full decode, already converted.
     full: Option<Rgb>,
+    /// The statistics of the full decode before its conversion, once they were computed.
+    statistics: Option<Box<Statistics>>,
     /// The JPEG's embedded ICC profile could not be used, or no transform could be built from its
     /// source profile (ADR 0016 §5).
     profile_unusable: bool,
@@ -227,6 +238,7 @@ fn open_jpeg(
         decoder,
         transform,
         full: None,
+        statistics: None,
         profile_unusable: icc_unusable || fell_back,
     };
     Ok((session, ImageSize { w, h, flip }))
@@ -258,11 +270,72 @@ fn open_tiff(
         h: img.height,
         flip: flip_of_orientation(orientation),
     };
+    // Pixels treated as sRGB are unchanged when the destination is sRGB (F3); an embedded
+    // profile may have changed them.
+    let unconverted = !matches!(source, pw_tiff::SourceColour::Embedded)
+        && backend
+            .transform(&Profile::srgb())
+            .is_ok_and(|transform| transform.is_identity());
     let session = TiffSession {
         image: img,
         profile_unusable: matches!(source, pw_tiff::SourceColour::Unusable(_)),
+        path: path.to_path_buf(),
+        unconverted,
     };
     Ok((session, size))
+}
+
+/// The statistics of a RAW file's unpacked data in the core's form.
+fn raw_statistics(raw: &pw_libraw::RawStatistics) -> Statistics {
+    Statistics {
+        origin: StatisticsOrigin::RawData,
+        histogram: raw.histogram,
+        clipped: [
+            raw.clipped_share(0),
+            raw.clipped_share(1),
+            raw.clipped_share(2),
+        ],
+        deep_shadows: raw.deep_shadow_share(),
+    }
+}
+
+/// The statistics of a JPEG from its full decode **before** the conversion to the destination
+/// (ADR 0017 U7-Q5), computed once per session. A session without a full decode gets it here,
+/// and keeps it converted for the 100 % views, as `render_region` would; a session that already
+/// holds a converted one is decoded once more, unless the conversion changes nothing.
+fn jpeg_statistics(j: &mut JpegSession) -> Option<Statistics> {
+    if let Some(statistics) = &j.statistics {
+        return Some(statistics.as_ref().clone());
+    }
+    let origin = StatisticsOrigin::EmbeddedJpeg;
+    let statistics = match &j.full {
+        Some(full) if j.transform.is_identity() => Statistics::of_rgb8(origin, &full.data),
+        Some(_) => {
+            let full = j.decoder.decode(&j.data, Scale::Full).ok()?;
+            Statistics::of_rgb8(origin, &full.data)
+        }
+        None => {
+            let full = j.decoder.decode(&j.data, Scale::Full).map(rgb_jpeg).ok()?;
+            let statistics = Statistics::of_rgb8(origin, &full.data);
+            // a failed conversion leaves no full decode; a 100 % view then reports it
+            j.full = convert(&j.transform, full).ok();
+            statistics
+        }
+    };
+    j.statistics = Some(Box::new(statistics.clone()));
+    Some(statistics)
+}
+
+/// The statistics of a TIFF from its own decoded image **before** the conversion to the
+/// destination (ADR 0017 U7-Q5). The session holds the converted image (ADR 0015 §4.2), so a
+/// file whose pixels the conversion may have changed is decoded once more, without it.
+fn tiff_statistics(backend: &NativeBackend, tiff: &TiffSession) -> Option<Statistics> {
+    let origin = StatisticsOrigin::Tiff;
+    if tiff.unconverted {
+        return Some(Statistics::of_rgb8(origin, &tiff.image.data));
+    }
+    let image = pw_tiff::decode_rgb8(&tiff.path, Some(backend.tiff_limit)).ok()?;
+    Some(Statistics::of_rgb8(origin, &image.data))
 }
 
 impl Backend for NativeBackend {
@@ -350,6 +423,15 @@ impl Backend for NativeBackend {
                 scale::crop(img, r.x, r.y, r.w, r.h)
                     .ok_or_else(|| DecodeError::new(format!("region {r:?} is outside the TIFF")))
             }
+        }
+    }
+
+    fn statistics(&self, session: &mut NativeSession) -> Option<Statistics> {
+        match session {
+            // an error and a layout without statistics both leave the panel without a histogram
+            NativeSession::Raw(s, _) => s.statistics().ok().flatten().as_ref().map(raw_statistics),
+            NativeSession::Jpeg(j) => jpeg_statistics(j),
+            NativeSession::Tiff(t) => tiff_statistics(self, t),
         }
     }
 
@@ -827,6 +909,136 @@ mod tests {
         );
         assert_eq!(half.data, expected_half);
         assert_eq!(region.data, converted(plain_region.data, &adobe, &srgb));
+    }
+
+    // ---------- statistics before the conversion (ADR 0017 §2.6, U7-Q5, T142) ----------
+
+    /// The statistics of the fixture JPEG's plain full decode.
+    fn plain_jpeg_statistics() -> Statistics {
+        let mut decoder = Decoder::new().unwrap();
+        let full = decoder.decode(jpeg_fixture::SMALL, Scale::Full).unwrap();
+        Statistics::of_rgb8(StatisticsOrigin::EmbeddedJpeg, &full.data)
+    }
+
+    #[test]
+    fn jpeg_statistics_are_taken_before_the_conversion_whatever_was_rendered_first() {
+        let path = temp_file("statistics.jpg", jpeg_fixture::SMALL);
+        let (srgb, adobe) = (Profile::srgb(), Profile::adobe_rgb());
+        let expected = plain_jpeg_statistics();
+        assert_eq!(expected.origin, StatisticsOrigin::EmbeddedJpeg);
+        let mut decoder = Decoder::new().unwrap();
+        let plain = rgb_jpeg(decoder.decode(jpeg_fixture::SMALL, Scale::Full).unwrap());
+        let converted_data = converted(plain.data.clone(), &srgb, &adobe);
+        // the conversion changes the statistics, so the comparisons below mean something
+        assert_ne!(
+            Statistics::of_rgb8(StatisticsOrigin::EmbeddedJpeg, &converted_data),
+            expected
+        );
+        let converted_region = scale::crop(
+            &Rgb {
+                data: converted_data,
+                ..plain.clone()
+            },
+            4,
+            2,
+            8,
+            4,
+        )
+        .unwrap();
+        let backend = NativeBackend::default().with_monitor_profile(adobe);
+
+        // 1. before any render: the statistics decode the JPEG and leave the converted full
+        //    decode for the 100 % views
+        let (mut session, _) = backend.open(&path, Source::Jpeg).unwrap();
+        assert_eq!(backend.statistics(&mut session), Some(expected.clone()));
+        let region = backend
+            .render_region(&mut session, Rect::new(4, 2, 8, 4))
+            .unwrap();
+        assert_eq!(region, converted_region);
+
+        // 2. after a half-size render
+        let (mut session, _) = backend.open(&path, Source::Jpeg).unwrap();
+        backend.render_half(&mut session).unwrap();
+        assert_eq!(backend.statistics(&mut session), Some(expected.clone()));
+
+        // 3. after a 100 % view, when the session already holds the converted full decode
+        let (mut session, _) = backend.open(&path, Source::Jpeg).unwrap();
+        let region = backend
+            .render_region(&mut session, Rect::new(4, 2, 8, 4))
+            .unwrap();
+        assert_eq!(region, converted_region);
+        assert_eq!(backend.statistics(&mut session), Some(expected.clone()));
+        // asked again, the same (kept in the session)
+        assert_eq!(backend.statistics(&mut session), Some(expected.clone()));
+        let again = backend
+            .render_region(&mut session, Rect::new(4, 2, 8, 4))
+            .unwrap();
+        assert_eq!(again, converted_region);
+
+        // destination sRGB (no conversion): the same statistics
+        let backend = NativeBackend::default();
+        let (mut session, _) = backend.open(&path, Source::Jpeg).unwrap();
+        backend
+            .render_region(&mut session, Rect::new(4, 2, 8, 4))
+            .unwrap();
+        assert_eq!(backend.statistics(&mut session), Some(expected));
+    }
+
+    #[test]
+    fn tiff_statistics_are_of_the_files_own_values() {
+        let (w, h) = (6, 4);
+        // a white, a black and a red-clipped pixel among the test pixels
+        let mut data = pixels(w, h);
+        data[0..9].copy_from_slice(&[255, 255, 255, 0, 0, 0, 255, 3, 0]);
+        let expected = Statistics::of_rgb8(StatisticsOrigin::Tiff, &data);
+        assert_eq!(expected.clipped[0], 2.0 / 24.0);
+        assert_eq!(expected.deep_shadows, 1.0 / 24.0);
+
+        // without a profile and with destination sRGB: from the session's image
+        let plain = temp_file("statistics-plain.tif", &rgb_tiff(w, h, &data, None));
+        let backend = NativeBackend::default();
+        let (mut session, _) = backend.open(&plain, Source::Jpeg).unwrap();
+        assert!(matches!(&session, NativeSession::Tiff(t) if t.unconverted));
+        assert_eq!(backend.statistics(&mut session), Some(expected.clone()));
+
+        // with an embedded profile the opened image is converted; the statistics are not
+        let profiled = temp_file(
+            "statistics-pro-photo.tif",
+            &rgb_tiff_with_icc(w, h, &data, &pro_photo_icc()),
+        );
+        let (mut session, size) = backend.open(&profiled, Source::Jpeg).unwrap();
+        assert!(matches!(&session, NativeSession::Tiff(t) if !t.unconverted));
+        let shown = whole(&backend, &mut session, size);
+        assert_ne!(shown.data, data, "the conversion changes the pixels");
+        assert_ne!(
+            Statistics::of_rgb8(StatisticsOrigin::Tiff, &shown.data),
+            expected
+        );
+        assert_eq!(backend.statistics(&mut session), Some(expected.clone()));
+
+        // without a profile but with another destination: also the file's own values
+        let backend = NativeBackend::default().with_monitor_profile(Profile::adobe_rgb());
+        let (mut session, _) = backend.open(&plain, Source::Jpeg).unwrap();
+        assert!(matches!(&session, NativeSession::Tiff(t) if !t.unconverted));
+        assert_eq!(backend.statistics(&mut session), Some(expected));
+    }
+
+    #[test]
+    fn raw_statistics_keep_the_histogram_and_become_shares() {
+        let mut raw = pw_libraw::RawStatistics {
+            histogram: [[0; 256]; 3],
+            pixels: [100, 200, 100],
+            clipped: [1, 50, 0],
+            shadow_pixels: 400,
+            deep_shadows: 40,
+        };
+        raw.histogram[1][255] = 50;
+        raw.histogram[2][7] = 100;
+        let s = raw_statistics(&raw);
+        assert_eq!(s.origin, StatisticsOrigin::RawData);
+        assert_eq!(s.histogram, raw.histogram);
+        assert_eq!(s.clipped, [0.01, 0.25, 0.0]);
+        assert_eq!(s.deep_shadows, 0.1);
     }
 
     // ---------- an embedded profile that cannot be used (ADR 0016 §5, T73) ----------

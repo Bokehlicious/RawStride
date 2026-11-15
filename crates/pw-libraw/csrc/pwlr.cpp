@@ -16,6 +16,8 @@
 #define LIBRAW_NODLL
 #include <libraw/libraw.h>
 #include <atomic>
+#include <math.h>
+#include <new>
 #include <stdio.h>
 #include <string.h>
 
@@ -203,6 +205,229 @@ void pwlr_image(const libraw_processed_image_t *img, int *w, int *h, const unsig
 }
 
 void pwlr_free(libraw_processed_image_t *img) { LibRaw::dcraw_clear_mem(img); }
+
+/* ---- Statistics of the unpacked RAW data (ADR 0017 section 2.6, U7; T142) ----
+ *
+ * Read from the data pwlr_open unpacked (imgdata.rawdata), with the sizes, colours and levels
+ * LibRaw saved there at the end of the unpack: a render changes imgdata.color, imgdata.idata and
+ * the image buffer, never these. Nothing is decoded and no LibRaw function is called.
+ *
+ * Per colour channel (R, G, B; both greens of a mosaic count as G):
+ * - histogram: 256 bins of the value after the black level is subtracted and the camera's white
+ *   balance applied (smallest multiplier 1, as the render), scaled so the white level is the top
+ *   bin, on an sRGB-like curve;
+ * - clipped: pixels whose raw value is at or above the white level (linear_max of the channel
+ *   when the file gives it, else maximum), before white balance.
+ * Deep shadows: pixels where every channel is below 1/256 of the white level above black. A
+ * mosaic has one channel per photosite, so it is counted in cells that hold every colour (2x2
+ * for a Bayer pattern, 3x3 for X-Trans): a cell is dark when all its photosites are. */
+typedef struct {
+  unsigned long long histogram[3][256];
+  unsigned long long pixels[3];      /* pixels counted per channel (the sum of its bins) */
+  unsigned long long clipped[3];     /* of them, at or above the white level */
+  unsigned long long shadow_pixels;  /* pixels judged for the deep shadows */
+  unsigned long long deep_shadows;   /* of them, with every channel in the deep shadows */
+} pwlr_stats;
+
+static double pwlr_curve(double x) {
+  if (x <= 0.0) return 0.0;
+  if (x >= 1.0) return 1.0;
+  return x <= 0.0031308 ? 12.92 * x : 1.055 * pow(x, 1.0 / 2.4) - 0.055;
+}
+
+/* The levels of one CFA colour (0..3): black (LibRaw's common level, the colour's own and
+ * `common`, the part every value of a black level pattern shares), white, the deep-shadow limit
+ * (a value after black subtraction) and the histogram bin of every value after black
+ * subtraction. */
+struct PwLevels {
+  unsigned black, white, shadow;
+  unsigned char bin[65536];
+};
+
+static void pwlr_levels(const libraw_colordata_t &C, unsigned common, const float mul[4],
+                        PwLevels *lv) {
+  for (int c = 0; c < 4; c++) {
+    PwLevels &l = lv[c];
+    l.black = C.black + C.cblack[c] + common;
+    l.white = C.linear_max[c] ? C.linear_max[c] : C.maximum;
+    if (l.white > 65535u) l.white = 65535u;
+    double span = l.white > l.black ? (double)(l.white - l.black) : 1.0;
+    /* "below 1/256 of the white level above black" */
+    l.shadow = (unsigned)ceil(span / 256.0);
+    for (unsigned v = 0; v < 65536u; v++) {
+      int b = (int)(pwlr_curve((double)v / span * (double)mul[c]) * 256.0);
+      l.bin[v] = (unsigned char)(b > 255 ? 255 : b);
+    }
+  }
+}
+
+/* The statistics of unpacked RAW data: 1 with *out filled, 0 when the layout is not one they are
+ * made for (error says which). `lv` has room for four PwLevels and `bright` for one byte per
+ * column of the visible image. Allocates nothing and throws nothing. */
+static int pwlr_statistics_of(const libraw_rawdata_t &R, PwLevels *lv, unsigned char *bright,
+                              pwlr_stats *out, char *error) {
+  const libraw_image_sizes_t &S = R.sizes;
+  const libraw_iparams_t &P = R.iparams;
+  const libraw_colordata_t &C = R.color;
+  const unsigned width = S.width, height = S.height;
+  if (width == 0 || height == 0) { strcpy(error, "no image"); return 0; }
+  if (P.colors != 3 || strncmp(P.cdesc, "RGB", 3) != 0) {
+    strcpy(error, "not an RGB sensor");
+    return 0;
+  }
+  if (R.ph1_cblack || R.ph1_rblack) {
+    strcpy(error, "black level per row and column");
+    return 0;
+  }
+  if ((unsigned)S.top_margin + height > S.raw_height ||
+      (unsigned)S.left_margin + width > S.raw_width) {
+    strcpy(error, "the visible image is not inside the RAW data");
+    return 0;
+  }
+  /* The camera's white balance with the smallest multiplier 1, as the render uses it; a file
+   * without one gets LibRaw's daylight multipliers, else none. */
+  float mul[4] = {1.0f, 1.0f, 1.0f, 1.0f};
+  const float tiny = 0.00001f;
+  const float *wb = 0;
+  if (C.cam_mul[0] > tiny && C.cam_mul[1] > tiny && C.cam_mul[2] > tiny) wb = C.cam_mul;
+  else if (C.pre_mul[0] > tiny && C.pre_mul[1] > tiny && C.pre_mul[2] > tiny) wb = C.pre_mul;
+  if (wb) {
+    float low = wb[0] < wb[1] ? wb[0] : wb[1];
+    if (wb[2] < low) low = wb[2];
+    for (int c = 0; c < 3; c++) mul[c] = wb[c] / low;
+    mul[3] = (wb[3] > tiny ? wb[3] : wb[1]) / low;
+  }
+  /* A black level pattern on top of the per-channel level (cblack[4] x cblack[5] values). The
+   * part all its values share belongs to the black level itself (so the white level above black
+   * is right); `rest` is what is left per position, and `pattern` whether any is. */
+  const unsigned prows = C.cblack[4], pcols = C.cblack[5];
+  if ((prows || pcols) && (!prows || !pcols || prows > LIBRAW_CBLACK_SIZE ||
+                           pcols > LIBRAW_CBLACK_SIZE || prows * pcols > LIBRAW_CBLACK_SIZE - 6)) {
+    strcpy(error, "unknown black level pattern");
+    return 0;
+  }
+  unsigned rest[LIBRAW_CBLACK_SIZE];
+  unsigned common = 0;
+  bool pattern = false;
+  if (prows && pcols) {
+    common = C.cblack[6];
+    for (unsigned i = 1; i < prows * pcols; i++)
+      if (C.cblack[6 + i] < common) common = C.cblack[6 + i];
+    for (unsigned i = 0; i < prows * pcols; i++) {
+      rest[i] = C.cblack[6 + i] - common;
+      if (rest[i]) pattern = true;
+    }
+  }
+  pwlr_levels(C, common, mul, lv);
+
+  if (R.raw_image) {
+    /* A mosaic: one colour per photosite. */
+    if (S.raw_pitch < (unsigned)S.raw_width * 2u) { strcpy(error, "short RAW rows"); return 0; }
+    unsigned char cfa[8][6]; /* the colour (0..3) of row % frows, column % fcols */
+    unsigned frows, fcols, cell;
+    if (P.filters >= 1000) {
+      frows = 8; fcols = 2; cell = 2;
+      for (unsigned r = 0; r < 8; r++)
+        for (unsigned c = 0; c < 2; c++)
+          cfa[r][c] = (unsigned char)((P.filters >> ((((r << 1) & 14) | (c & 1)) << 1)) & 3);
+    } else if (P.filters == 9) {
+      frows = 6; fcols = 6; cell = 3;
+      for (unsigned r = 0; r < 6; r++)
+        for (unsigned c = 0; c < 6; c++) {
+          int x = P.xtrans[r][c];
+          if (x < 0 || x > 2) { strcpy(error, "unknown X-Trans pattern"); return 0; }
+          cfa[r][c] = (unsigned char)x;
+        }
+    } else {
+      strcpy(error, "not a Bayer or X-Trans pattern");
+      return 0;
+    }
+    const unsigned cells_x = width / cell, cells_y = height / cell;
+    const size_t pitch = S.raw_pitch / 2;
+    for (unsigned row = 0; row < height; row++) {
+      const ushort *src = R.raw_image + (size_t)(row + S.top_margin) * pitch + S.left_margin;
+      const unsigned char *colours = cfa[row % frows];
+      const unsigned *prow = pattern ? &rest[(row % prows) * pcols] : 0;
+      const bool in_cells = row / cell < cells_y;
+      if (in_cells && row % cell == 0) memset(bright, 0, cells_x);
+      unsigned k = 0; /* col % fcols */
+      for (unsigned col = 0; col < width; col++) {
+        const unsigned c4 = colours[k];
+        if (++k == fcols) k = 0;
+        const PwLevels &l = lv[c4];
+        const unsigned ch = c4 == 3 ? 1 : c4;
+        const unsigned v = src[col];
+        const unsigned black = l.black + (prow ? prow[col % pcols] : 0);
+        const unsigned above = v > black ? v - black : 0;
+        out->histogram[ch][l.bin[above]]++;
+        if (v >= l.white) out->clipped[ch]++;
+        if (above >= l.shadow && in_cells) {
+          const unsigned cx = col / cell;
+          if (cx < cells_x) bright[cx] = 1;
+        }
+      }
+      if (in_cells && row % cell == cell - 1)
+        for (unsigned cx = 0; cx < cells_x; cx++)
+          if (!bright[cx]) out->deep_shadows += (unsigned long long)cell * cell;
+    }
+    out->shadow_pixels = (unsigned long long)cells_x * cells_y * cell * cell;
+  } else if (R.color3_image || R.color4_image) {
+    /* Three or four values per pixel (the fourth is not a colour of an RGB file). */
+    const unsigned n = R.color4_image ? 4 : 3;
+    const size_t pitch = S.raw_pitch; /* bytes */
+    if (pitch < (size_t)((unsigned)S.left_margin + width) * n * sizeof(ushort)) {
+      strcpy(error, "short RAW rows");
+      return 0;
+    }
+    const unsigned char *base = R.color4_image ? (const unsigned char *)R.color4_image
+                                               : (const unsigned char *)R.color3_image;
+    for (unsigned row = 0; row < height; row++) {
+      const ushort *src = (const ushort *)(base + (size_t)(row + S.top_margin) * pitch) +
+                          (size_t)S.left_margin * n;
+      const unsigned *prow = pattern ? &rest[(row % prows) * pcols] : 0;
+      for (unsigned col = 0; col < width; col++, src += n) {
+        const unsigned extra = prow ? prow[col % pcols] : 0;
+        bool dark = true;
+        for (unsigned c = 0; c < 3; c++) {
+          const PwLevels &l = lv[c];
+          const unsigned v = src[c];
+          const unsigned black = l.black + extra;
+          const unsigned above = v > black ? v - black : 0;
+          out->histogram[c][l.bin[above]]++;
+          if (v >= l.white) out->clipped[c]++;
+          if (above >= l.shadow) dark = false;
+        }
+        if (dark) out->deep_shadows++;
+      }
+    }
+    out->shadow_pixels = (unsigned long long)width * height;
+  } else {
+    strcpy(error, "no integer RAW data");
+    return 0;
+  }
+  for (int c = 0; c < 3; c++)
+    for (int b = 0; b < 256; b++) out->pixels[c] += out->histogram[c][b];
+  return 1;
+}
+
+/* Returns 1 with *out filled; 0 when the file's RAW data has a layout the statistics are not made
+ * for (error says which); -1 on an internal failure. It calls no LibRaw function and uses no
+ * exceptions (the work buffers are allocated with nothrow). */
+int pwlr_statistics(void *session, pwlr_stats *out, char *error) {
+  memset(out, 0, sizeof *out);
+  error[0] = 0;
+  PwSession *s = (PwSession *)session;
+  if (!s || !s->lr) { strcpy(error, "statistics: no session"); return -1; }
+  const libraw_rawdata_t &R = s->lr->imgdata.rawdata;
+  PwLevels *lv = new (std::nothrow) PwLevels[4];
+  unsigned char *bright = new (std::nothrow) unsigned char[(size_t)R.sizes.width + 1];
+  int result = -1;
+  if (lv && bright) result = pwlr_statistics_of(R, lv, bright, out, error);
+  else strcpy(error, "statistics: out of memory");
+  delete[] lv;
+  delete[] bright;
+  return result;
+}
 
 void pwlr_close(void *session) {
   PwSession *s = (PwSession *)session;
