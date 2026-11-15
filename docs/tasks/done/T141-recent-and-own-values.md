@@ -1,4 +1,4 @@
-# T141. ADR 0017 U12a: recent values and the user's own values per field in the metadata window — Open
+# T141. ADR 0017 U12a: recent values and the user's own values per field in the metadata window — Done
 
 - **Can start now.** The owner approved the proposals of U12a-Q1–U12a-Q7 (at the end of this task)
   on 2026-11-15; they are written into the points below and into ADR 0017 §6.1.
@@ -25,9 +25,10 @@
   2. **Recent values** (U12a-Q2): what a write that succeeded put in a field, from OK, "Save and
      Next" and "Apply to All Marked": the last 10 per field, newest first, no value twice (the same
      text moves first). A list field (Keywords, Person Shown …) keeps each entry on its own, so a
-     keyword is offered alone. An emptied field adds nothing.
+     keyword is offered alone; only the entries the write adds count (reviewer: an image's many
+     old keywords would push the new one out of the 10). An emptied field adds nothing.
   3. **Own values** (U12a-Q3): per field a list the user keeps: "Add to My Values" in the ▼ list
-     adds the field's present text (each entry on its own for a list field); "✕" beside an own value
+     adds the field's present text (each entry on its own for a list field); "×" beside an own value
      removes it. No limit; sorted alphabetically, ignoring case.
   4. **Choosing** (U12a-Q4): a value chosen replaces a text field's text; for a list field it is
      added as a new entry at the end when it is not already there. The field shows "Changed" as
@@ -64,7 +65,7 @@
 |---|---|---|
 | U12a-Q1 | Which fields get a ▼? | Every editable one-line text and list field (contact fields included); not the multi-line fields, the date, the check box, the choice lists or the structure lists' sub-fields |
 | U12a-Q2 | What is a recent value? | What a successful write (OK, Save and Next, Apply to All Marked) put in the field; the last 10, newest first, no duplicates; a list field's entries one by one |
-| U12a-Q3 | How are own values kept? | "Add to My Values" in the ▼ list adds the field's text; "✕" removes one; no limit; alphabetical |
+| U12a-Q3 | How are own values kept? | "Add to My Values" in the ▼ list adds the field's text; "×" removes one; no limit; alphabetical |
 | U12a-Q4 | What does choosing a value do? | Replaces a text field's text; adds an entry at the end of a list field when it is not already there; written with the window's write as typing is |
 | U12a-Q5 | How is the list opened? | A "▼" button right of the field, or Alt+↓ in the field; ↑/↓ and Enter choose, Escape closes only the list |
 | U12a-Q6 | Where are the values kept? | `field-values.txt` beside `settings.txt`, one line per value, written safely when changed; only on this computer |
@@ -76,3 +77,5 @@
 |---|---|---|
 | 2026-11-15 | Blocked | Added; waits for U12a-Q1–U12a-Q7 |
 | 2026-11-15 | Open | The owner approved U12a-Q1–U12a-Q7 as proposed |
+| 2026-11-15 | Ready for review | Done by the agent: `field_values.rs` (new), `editor.rs`, `lib.rs`, `main.rs` (metadata window; also its Escape routing in the key loop and the values loaded in `run`), glossary, test inventory; `check.ps1` all OK |
+| 2026-11-15 | Done | Reviewed: a list field records only the entries the write adds; after the owner's hand check the field row's height fixed and the ▼ painted (no glyph in the fonts), ✕ changed to ×; approved |

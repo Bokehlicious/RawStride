@@ -451,6 +451,24 @@ impl EditorField {
         )
     }
 
+    /// True for a field with a "▼" of recent and own values (ADR 0017 U12a-Q1, T141): every
+    /// editable one-line text field and list field, the contact fields included; not the
+    /// multi-line fields, Date Created, the check box, the choice lists, nor the deprecated
+    /// read-only fields. (The structure lists' sub-fields are not `EditorField`s.)
+    pub fn has_values(self) -> bool {
+        self.editable()
+            && !self.multiline()
+            && !self.check_box()
+            && self.choice_list().is_none()
+            && self.kind() != FieldKind::Date
+    }
+
+    /// True for a list field (Keywords, Person Shown, Creator …): one line with its entries
+    /// separated by commas (T108).
+    pub fn is_list(self) -> bool {
+        self.kind() == FieldKind::List
+    }
+
     /// The kind of the field's value, from the property table (a text when it is not found).
     fn kind(self) -> FieldKind {
         let def = match self.struct_field() {
@@ -1515,6 +1533,64 @@ impl EditorForm {
         read_only.then_some(state.original.as_str())
     }
 
+    /// True when `field` shows a "▼" (U12a-Q1, T141): a field with values
+    /// ([`EditorField::has_values`]) that is not shown read-only.
+    pub fn values_shown(&self, field: EditorField) -> bool {
+        field.has_values() && self.read_only_text(field).is_none()
+    }
+
+    /// The values of `field`'s present text for "Add to My Values" (U12a-Q3): each entry on its
+    /// own for a list field, else the text; nothing when it is empty or only spaces.
+    pub fn present_values(&self, field: EditorField) -> Vec<String> {
+        text_values(field, self.text(field))
+    }
+
+    /// A value chosen in the "▼" list of `field` (U12a-Q4, T141): it replaces a text field's
+    /// text; for a list field it is added as a new entry at the end when it is not already there.
+    /// The field is changed as after typing; nothing is written until the window's write. Nothing
+    /// for a field without a "▼" or shown read-only.
+    pub fn use_value(&mut self, field: EditorField, value: &str) {
+        if !self.values_shown(field) {
+            return;
+        }
+        let Some(text) = self.text_mut(field) else {
+            return;
+        };
+        if !field.is_list() {
+            *text = value.to_string();
+            return;
+        }
+        let value = value.trim();
+        let mut entries = list_entries(text);
+        if value.is_empty() || entries.iter().any(|entry| entry == value) {
+            return;
+        }
+        entries.push(value.to_string());
+        *text = entries.join(LIST_SEPARATOR);
+    }
+
+    /// What a write of the form puts in the fields with a "▼" (U12a-Q2, T141), for their recent
+    /// values once the write has succeeded: each changed field (its text differs from its start
+    /// text) with its values; for a list field only the entries the write adds (not in its start
+    /// text), each on its own, so a keyword added to a long list is not pushed out of the recent
+    /// values by the entries the image already had. An emptied field gives nothing.
+    pub fn written_values(&self) -> Vec<(EditorField, Vec<String>)> {
+        self.fields
+            .iter()
+            .filter(|state| self.values_shown(state.field))
+            .filter(|state| state.text != self.start_text(state))
+            .map(|state| {
+                let mut values = text_values(state.field, &state.text);
+                if state.field.is_list() {
+                    let start = list_entries(&self.start_text(state));
+                    values.retain(|value| !start.contains(value));
+                }
+                (state.field, values)
+            })
+            .filter(|(_, values)| !values.is_empty())
+            .collect()
+    }
+
     /// True when the check box `field` is checked.
     pub fn checked(&self, field: EditorField) -> bool {
         field.check_box() && self.text(field) == CHECKED
@@ -1883,6 +1959,18 @@ fn list_entries(text: &str) -> Vec<String> {
         .collect()
 }
 
+/// The values of `text` in `field` (U12a, T141): a list field's entries, else the text itself;
+/// nothing for a text that is empty or only spaces.
+fn text_values(field: EditorField, text: &str) -> Vec<String> {
+    if field.is_list() {
+        list_entries(text)
+    } else if text.trim().is_empty() {
+        Vec::new()
+    } else {
+        vec![text.to_string()]
+    }
+}
+
 /// The edit of a changed field with the text `text`, or the field's error.
 fn field_edit(field: EditorField, text: &str) -> Result<Edit, String> {
     let property = field.property().to_string();
@@ -2195,6 +2283,19 @@ pub enum EditorText {
     BatchWritten { written: usize, total: usize },
     /// A line of the summary: an unresolved conflict on `property` (its XMP id) kept in `file`.
     ConflictKept { file: String, property: String },
+    /// The tooltip of the "▼" button right of a field that opens its list of values (U12a-Q5,
+    /// U12a-Q7, T141; the triangle is painted, not a text).
+    ValuesTooltip,
+    /// The heading of a field's recent values in its list (U12a-Q2).
+    Recent,
+    /// The heading of a field's own values in its list (U12a-Q3).
+    MyValues,
+    /// The entry of the list that adds the field's present text to its own values (U12a-Q3).
+    AddToMyValues,
+    /// The list's line when the field has neither recent nor own values (U12a-Q5).
+    NoValuesYet,
+    /// The button beside an own value that removes it (U12a-Q3).
+    RemoveValue,
 }
 
 /// The names of `fields` in form order, separated by commas.
@@ -2359,6 +2460,12 @@ pub fn editor_text(text: &EditorText) -> String {
             "Unresolved conflict kept: {file} ({field})",
             field = property_label(property, Language::En)
         ),
+        EditorText::ValuesTooltip => "Recent and saved values".to_string(),
+        EditorText::Recent => "Recent".to_string(),
+        EditorText::MyValues => "My Values".to_string(),
+        EditorText::AddToMyValues => "Add to My Values".to_string(),
+        EditorText::NoValuesYet => "No values yet".to_string(),
+        EditorText::RemoveValue => "×".to_string(),
     }
 }
 
@@ -6317,5 +6424,191 @@ mod tests {
                 EditorField::ModelReleaseStatus.label()
             )
         );
+    }
+
+    // --- recent and own values (U12a, T141) ---
+
+    #[test]
+    fn the_fields_with_a_list_of_values() {
+        use EditorField::*;
+        let with: Vec<EditorField> = EditorField::ALL
+            .into_iter()
+            .filter(|field| field.has_values())
+            .collect();
+        assert_eq!(
+            with,
+            [
+                Title,
+                Headline,
+                DescriptionWriter,
+                Keywords,
+                PersonShown,
+                OrganisationName,
+                OrganisationCode,
+                Event,
+                Creator,
+                CreatorJobtitle,
+                Address,
+                ContactCity,
+                ContactRegion,
+                PostalCode,
+                ContactCountry,
+                Email,
+                Phone,
+                Web,
+                Copyright,
+                Credit,
+                Source,
+                WebStatement,
+                Sublocation,
+                City,
+                State,
+                Country,
+                CountryCode,
+                JobId,
+                SubjectCode,
+                SceneCode,
+                ModelReleaseId,
+                PropertyReleaseId,
+            ]
+        );
+        // Not the multi-line fields, the date, the check box, the choice lists, nor the
+        // deprecated read-only fields.
+        for field in [
+            Description,
+            AltText,
+            ExtDescription,
+            Instructions,
+            UsageTerms,
+            DateCreated,
+            Copyrighted,
+            ModelReleaseStatus,
+            MinorModelAge,
+            PropertyReleaseStatus,
+            DataMining,
+            DigitalSourceType,
+            Urgency,
+            Category,
+            SupplementalCategories,
+        ] {
+            assert!(!field.has_values(), "{field:?}");
+        }
+        let form = form_with(Metadata::new());
+        assert!(form.values_shown(City));
+        assert!(!form.values_shown(Description));
+    }
+
+    #[test]
+    fn a_read_only_field_shows_no_list() {
+        let mut metadata = Metadata::new();
+        insert(&mut metadata, "photoshop:Category", text("SPO"));
+        let form = form_with(metadata);
+        assert_eq!(form.read_only_text(EditorField::Category), Some("SPO"));
+        assert!(!form.values_shown(EditorField::Category));
+    }
+
+    #[test]
+    fn a_chosen_value_replaces_a_texts_text() {
+        let mut metadata = Metadata::new();
+        insert(&mut metadata, "photoshop:City", text("Oslo"));
+        let mut form = form_with(metadata);
+        form.use_value(EditorField::City, "Bergen");
+        assert_eq!(form.text(EditorField::City), "Bergen");
+        // Changed as after typing: an edit, not yet written.
+        assert_eq!(
+            form.edits().unwrap(),
+            [set("photoshop:City", text("Bergen"))]
+        );
+    }
+
+    #[test]
+    fn a_chosen_value_is_appended_to_a_list_once() {
+        let mut metadata = Metadata::new();
+        insert(&mut metadata, "dc:subject", list(&["sky", "sea"]));
+        let mut form = form_with(metadata);
+        form.use_value(EditorField::Keywords, "boat");
+        assert_eq!(form.text(EditorField::Keywords), "sky, sea, boat");
+        form.use_value(EditorField::Keywords, "sky");
+        assert_eq!(form.text(EditorField::Keywords), "sky, sea, boat");
+        let mut empty = form_with(Metadata::new());
+        empty.use_value(EditorField::PersonShown, "Anna");
+        assert_eq!(empty.text(EditorField::PersonShown), "Anna");
+    }
+
+    #[test]
+    fn a_value_is_not_chosen_into_a_field_without_a_list() {
+        let mut form = form_with(Metadata::new());
+        form.use_value(EditorField::Description, "text");
+        form.use_value(EditorField::DateCreated, "2026");
+        assert_eq!(form.text(EditorField::Description), "");
+        assert_eq!(form.text(EditorField::DateCreated), "");
+    }
+
+    #[test]
+    fn the_present_values_of_a_text_and_a_list_field() {
+        let mut form = form_with(Metadata::new());
+        type_into(&mut form, EditorField::City, "Oslo");
+        type_into(&mut form, EditorField::Keywords, "sky, , sea");
+        assert_eq!(form.present_values(EditorField::City), ["Oslo"]);
+        assert_eq!(form.present_values(EditorField::Keywords), ["sky", "sea"]);
+        type_into(&mut form, EditorField::City, "   ");
+        assert!(form.present_values(EditorField::City).is_empty());
+    }
+
+    #[test]
+    fn the_written_values_are_the_changed_fields_with_a_list() {
+        let mut metadata = Metadata::new();
+        insert(&mut metadata, "photoshop:City", text("Oslo"));
+        insert(&mut metadata, "photoshop:Headline", text("Old"));
+        insert(&mut metadata, "photoshop:Country", text("Norway"));
+        let mut form = form_with(metadata);
+        type_into(&mut form, EditorField::Keywords, "sky, sea");
+        type_into(&mut form, EditorField::Headline, "New");
+        type_into(&mut form, EditorField::Description, "A caption");
+        // Emptied: nothing.
+        type_into(&mut form, EditorField::Country, "");
+        assert_eq!(
+            form.written_values(),
+            [
+                (EditorField::Headline, vec!["New".to_string()]),
+                (
+                    EditorField::Keywords,
+                    vec!["sky".to_string(), "sea".to_string()]
+                ),
+            ]
+        );
+        assert!(form_with(Metadata::new()).written_values().is_empty());
+
+        // A list field gives only the entries the write adds; one only removed gives nothing.
+        let mut metadata = Metadata::new();
+        insert(
+            &mut metadata,
+            "dc:subject",
+            Value::List(vec!["sky".into(), "sea".into()]),
+        );
+        let mut form = form_with(metadata.clone());
+        type_into(&mut form, EditorField::Keywords, "sky, sea, gull");
+        assert_eq!(
+            form.written_values(),
+            [(EditorField::Keywords, vec!["gull".to_string()])]
+        );
+        let mut form = form_with(metadata);
+        type_into(&mut form, EditorField::Keywords, "sky");
+        assert!(form.written_values().is_empty());
+    }
+
+    #[test]
+    fn the_texts_of_the_list_of_values() {
+        let cases = [
+            (EditorText::ValuesTooltip, "Recent and saved values"),
+            (EditorText::Recent, "Recent"),
+            (EditorText::MyValues, "My Values"),
+            (EditorText::AddToMyValues, "Add to My Values"),
+            (EditorText::NoValuesYet, "No values yet"),
+            (EditorText::RemoveValue, "×"),
+        ];
+        for (text, expected) in cases {
+            assert_eq!(editor_text(&text), expected, "{text:?}");
+        }
     }
 }

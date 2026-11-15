@@ -455,15 +455,15 @@ the decisions do not live only in the tasks.
 | U14-Q6 | Reordering keeps the current image (scrolled to) and the marking, and applies the filter again |
 | U14-Q7 | Command bar: "Sort: {key}" drop-down and an ↑/↓ button; Visa ▸ "Sort By" with the keys and "Descending"; no key yet |
 | U5-Q1 | In the left column under the Library, collapsible like the Library's sections, its state remembered |
-| U5-Q2 | Source → destination, a progress bar by bytes and "Importing {i} of {n}: {file}" (IPTC and ejecting steps as in the dialog); a click shows the dialog; when done "Import done: {n} files" with failures counted, kept until "✕" or the next import |
+| U5-Q2 | Source → destination, a progress bar by bytes and "Importing {i} of {n}: {file}" (IPTC and ejecting steps as in the dialog); a click shows the dialog; when done "Import done: {n} files" with failures counted, kept until "×" or the next import |
 | U5-Q3 | "Stop" asks nothing: it does what the dialog's Cancel does; the files copied so far are kept |
 | U5-Q4 | Rating writes ("Writing ratings: {n}"), "Apply to All Marked" ("Saving metadata: {i} of {n}") and the window's own save, each only while it runs |
 | U5-Q5 | Failed rating writes and reads, an import's failed files and errors; newest first with the time; at most 200; "Clear"; not saved at exit |
 | U5-Q6 | Only background errors go to the list; the boxes that need an answer (ExifTool missing or too old, unfinished writes at the last exit) stay |
 | U5-Q7 | Tasks, No tasks, Stop, Errors ({n}), Clear, Writing ratings: {n}, Saving metadata (: {i} of {n}); English (GR14), in the glossary |
 | U12a-Q1 | Every editable one-line text and list field (contact fields included); not the multi-line fields, the date, the check box, the choice lists or the structure lists' sub-fields |
-| U12a-Q2 | What a successful write (OK, Save and Next, Apply to All Marked) put in the field; the last 10, newest first, no duplicates; a list field's entries one by one |
-| U12a-Q3 | "Add to My Values" in the ▼ list adds the field's text; "✕" removes one; no limit; alphabetical |
+| U12a-Q2 | What a successful write (OK, Save and Next, Apply to All Marked) put in the field; the last 10, newest first, no duplicates; a list field's entries one by one, only those the write adds (reviewer, T141) |
+| U12a-Q3 | "Add to My Values" in the ▼ list adds the field's text; "×" removes one; no limit; alphabetical |
 | U12a-Q4 | Replaces a text field's text; adds an entry at the end of a list field when it is not already there; written with the window's write as typing is |
 | U12a-Q5 | A "▼" button right of the field, or Alt+↓ in the field; ↑/↓ and Enter choose, Escape closes only the list |
 | U12a-Q6 | `field-values.txt` beside `settings.txt`, one line per value, written safely when changed; only on this computer |

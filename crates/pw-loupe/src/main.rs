@@ -57,10 +57,19 @@ use pw_loupe::{
     sort_button_text, sort_direction_hover, sort_direction_text, sort_key_text, sorting_text,
 };
 use pw_loupe::{
+    ClockTime, ImportRow, ImportStep, PendingWrite, Tasks, TasksText, error_entry_text,
+    errors_heading_text, import_done_text, import_route_text, importing_text, pending_write_text,
+    pending_writes, tasks_text,
+};
+use pw_loupe::{
     FILMSTRIP_CELL_WIDTH, FILMSTRIP_IMAGE_HEIGHT, FILMSTRIP_LABEL_HEIGHT, FILMSTRIP_MARGIN,
     FILMSTRIP_SPACING, PreviewKey, PreviewText, Restore, ThumbGate, WindowBefore, clamp_offset,
     filmstrip_range, hit_test, preview_info_shown, preview_key_action, preview_parts, preview_text,
     scroll_target, thumbnail_gate, toggle_preview_column, toggle_preview_hidden, zoom_value_text,
+};
+use pw_loupe::{
+    FieldValues, ValueChoice, ValueList, field_values_path, load_field_values, save_field_values,
+    value_choices,
 };
 use pw_loupe::{
     ImportText, failed_cell_text, hidden_done_text, hidden_progress_text, import_text,
@@ -417,6 +426,15 @@ struct MetadataWindow {
     marked: Vec<PathBuf>,
     /// The confirmation of "Apply to All Marked" is shown with this plan (U12c-Q4, T126).
     apply_question: Option<ApplyPlan>,
+    /// The open "▼" list of recent and own values (ADR 0017 U12a-Q5, T141), if any.
+    value_list: Option<ValueList>,
+    /// Escape was pressed this frame while the "▼" list was open: it closes only the list.
+    value_list_escape: bool,
+    /// What the write sent (OK, "Save and Next", "Apply to All Marked") puts in the fields with a
+    /// "▼" (U12a-Q2, T141); moved to `recorded` when it succeeds.
+    written: Vec<(EditorField, Vec<String>)>,
+    /// The values of a write that succeeded, not yet added to the recent values.
+    recorded: Vec<(EditorField, Vec<String>)>,
 }
 
 impl MetadataWindow {
@@ -438,6 +456,10 @@ impl MetadataWindow {
             rated: false,
             marked,
             apply_question: None,
+            value_list: None,
+            value_list_escape: false,
+            written: Vec::new(),
+            recorded: Vec::new(),
         }
     }
 
@@ -475,6 +497,8 @@ impl MetadataWindow {
     fn apply(&mut self, event: EditorEvent) -> Option<WindowLeave> {
         match event {
             EditorEvent::Saved { path, notices } if path == self.path => {
+                // The values written become recent values (U12a-Q2, T141), notices or not.
+                self.recorded.append(&mut self.written);
                 let outcome = if notices.is_empty() {
                     WriteOutcome::Success
                 } else {
@@ -494,6 +518,7 @@ impl MetadataWindow {
             EditorEvent::Failed { path, message } if path == self.path => {
                 // The window stays on the image with the edits kept (§2.3.1).
                 self.after_save = None;
+                self.written.clear();
                 self.status = EditorStatus::Failed(message);
             }
             EditorEvent::Reloaded { path, result } if path == self.path && self.expect_reload => {
@@ -515,6 +540,13 @@ impl MetadataWindow {
             // Every write of "Apply to All Marked" answered (U12c-Q6, T126): the summary is
             // shown and the read of the window's image after it refills the form.
             EditorEvent::BatchDone(summary) => {
+                // Every image got the changed fields: when any write succeeded, they were used
+                // (U12a-Q2, T141).
+                if summary.written > 0 {
+                    self.recorded.append(&mut self.written);
+                } else {
+                    self.written.clear();
+                }
                 self.status = EditorStatus::Batch(summary.lines());
                 self.expect_reload = true;
             }
@@ -552,6 +584,9 @@ struct Loupe {
     import_submit_error: Option<String>,
     import_hidden: bool,
     import_result_opened: bool,
+    /// The Tasks area under the library (ADR 0017 §2.1, U5, T140): the import's row and the
+    /// error list.
+    tasks: Tasks,
     thumb_worker: ThumbWorker,
     thumb_grid: ThumbGrid,
     thumb_generation: u64,
@@ -589,6 +624,11 @@ struct Loupe {
     /// The fields of the last "Copy All Fields" (U12b-Q1, T125): kept here, not in the window, so
     /// they outlive closing and moving it; until the next copy or the end of the program.
     copied_fields: Option<CopiedFields>,
+    /// The recent and own values of the metadata window's fields (ADR 0017 U12a, T141), read at
+    /// start and saved to `field_values_path` when a value is added or removed.
+    field_values: FieldValues,
+    /// `field-values.txt`; `None` without LOCALAPPDATA (nothing can be saved).
+    field_values_path: Option<PathBuf>,
     message: Option<String>,
     indicator_after: Duration,
     tabs: Tabs,
@@ -1081,6 +1121,7 @@ impl Loupe {
             return;
         };
         let previous_tabs = self.tabs.clone();
+        let (source, destination) = (form.source.clone(), form.dest.clone());
         let active_cleared = form.eject && self.tabs.clear_inside(Path::new(form.source.trim()));
         if active_cleared {
             self.load_active_tab();
@@ -1090,6 +1131,7 @@ impl Loupe {
                 if let Some(dialog) = &mut self.import_dialog {
                     dialog.sent(id);
                 }
+                self.tasks.import_started(id, &source, &destination);
                 self.import_result_opened = false;
                 self.import_submit_error = None;
             }
@@ -1140,6 +1182,8 @@ impl Loupe {
             match self.import_worker.try_recv() {
                 Ok(ImportEvent::Cards { cards, .. }) => self.detected_cards = cards,
                 Ok(event) => {
+                    // The Tasks area's row, and an import's failures in its error list (U5-Q5).
+                    self.tasks.apply(&event, ClockTime::now());
                     let refresh_cards = matches!(
                         &event,
                         ImportEvent::Done { done, .. } if done.eject.is_some()
@@ -1171,6 +1215,8 @@ impl Loupe {
                     if let Some(dialog) = &mut self.import_dialog {
                         dialog.disconnected();
                     }
+                    self.tasks
+                        .import_stopped(import_text(ImportText::StoppedMessage), ClockTime::now());
                     break;
                 }
             }
@@ -2201,6 +2247,24 @@ impl Loupe {
         }
     }
 
+    /// Adds the values of the metadata window's write that succeeded to the recent values (ADR
+    /// 0017 U12a-Q2, T141), and saves them when they changed.
+    fn record_window_values(&mut self, window: &mut MetadataWindow) {
+        let recorded = std::mem::take(&mut window.recorded);
+        if self.field_values.add_written(&recorded) {
+            self.save_field_values();
+        }
+    }
+
+    /// Saves `field-values.txt` (U12a-Q6, T141); a failure is written to the log.
+    fn save_field_values(&self) {
+        if let Some(path) = &self.field_values_path
+            && let Err(error) = save_field_values(path, &self.field_values)
+        {
+            eprintln!("pw-loupe: the field values could not be saved: {error}");
+        }
+    }
+
     /// Writes the window's edits as OK writes them (T105, T107); `then` is the move or close to
     /// do once the write succeeded without notices. Field errors are shown and nothing is written;
     /// a write that cannot be sent shows why. Returns `then` when there is nothing to write.
@@ -2210,8 +2274,8 @@ impl Loupe {
         window: &mut MetadataWindow,
         then: WindowLeave,
     ) -> Option<WindowLeave> {
-        let edits = match &window.body {
-            WindowBody::Form(state) => state.form.edits(),
+        let (edits, written) = match &window.body {
+            WindowBody::Form(state) => (state.form.edits(), state.form.written_values()),
             WindowBody::Loading | WindowBody::ReadError(_) => return Some(then),
         };
         let outcome = match edits {
@@ -2230,6 +2294,8 @@ impl Loupe {
                 {
                     Ok(()) => {
                         window.after_save = Some(then);
+                        // Recent values once the write has succeeded (U12a-Q2, T141).
+                        window.written = written;
                         ctx.request_repaint();
                         return None;
                     }
@@ -2262,10 +2328,12 @@ impl Loupe {
         };
         for event in events {
             if let Some(leave) = window.apply(event) {
+                self.record_window_values(&mut window);
                 self.leave_metadata_window(ctx, window, leave);
                 return;
             }
         }
+        self.record_window_values(&mut window);
         // The batch of "Apply to All Marked" locks the window as its own write does (U12c-Q5).
         let batch_progress = self.metadata.batch_progress();
         let saving = self.metadata.editor_saving() || batch_progress.is_some();
@@ -2309,6 +2377,9 @@ impl Loupe {
             (keys, rating_keys)
         });
         let escape = std::mem::take(&mut window.escape);
+        if std::mem::take(&mut window.value_list_escape) {
+            window.value_list = None;
+        }
         let asking_save = window.question.is_some();
         // The confirmation of "Apply to All Marked" (U12c-Q4, T126) is asked as the save question.
         let apply_lines = window
@@ -2424,6 +2495,12 @@ impl Loupe {
                 });
             }
         }
+        // The "▼" lists of recent and own values (U12a, T141).
+        let mut value_ui = ValueUi {
+            values: &self.field_values,
+            list: &mut window.value_list,
+            actions: Vec::new(),
+        };
         metadata_window.show(ctx, |ui| {
             let error_color = ui.visuals().error_fg_color;
             egui::Panel::bottom("metadata-window-buttons")
@@ -2583,6 +2660,7 @@ impl Loupe {
                                     &shell,
                                     rating.as_ref(),
                                     !asking,
+                                    &mut value_ui,
                                 );
                                 choice = response.choice;
                                 toggled_sections = response.toggled;
@@ -2592,6 +2670,18 @@ impl Loupe {
                 });
         });
 
+        // "Add to My Values" and "×" (U12a-Q3, T141), saved at once.
+        let ValueUi { actions, .. } = value_ui;
+        let mut values_changed = false;
+        for action in actions {
+            values_changed |= match action {
+                ValueAction::AddOwn(field, values) => self.field_values.add_own(field, &values),
+                ValueAction::RemoveOwn(field, value) => self.field_values.remove_own(field, &value),
+            };
+        }
+        if values_changed {
+            self.save_field_values();
+        }
         // Remembered in settings.txt at exit, as the inspector's sections (U10-Q6).
         for section in toggled_sections {
             self.settings.shell.toggle_editor_section(section);
@@ -2646,12 +2736,20 @@ impl Loupe {
                     if let Some(plan) = window.apply_question.take() {
                         window.errors.clear();
                         window.status = EditorStatus::Idle;
-                        self.metadata.start_batch(
+                        // Recent values once a write of the batch has succeeded (U12a-Q2, T141).
+                        window.written = match &window.body {
+                            WindowBody::Form(state) => state.form.written_values(),
+                            WindowBody::Loading | WindowBody::ReadError(_) => Vec::new(),
+                        };
+                        let started = self.metadata.start_batch(
                             &window.path,
                             plan.this_image,
                             plan.others,
                             &mut self.metadata_worker,
                         );
+                        if !started {
+                            window.written.clear();
+                        }
                         ctx.request_repaint();
                     }
                 }
@@ -3767,10 +3865,35 @@ impl Loupe {
         }
     }
 
+    /// Does what was clicked in the Tasks area (U5, T140).
+    fn task_action(&mut self, action: TaskAction) {
+        match action {
+            TaskAction::ToggleSection => {
+                let state = &mut self.settings.shell.library_tasks;
+                *state = state.toggled();
+            }
+            // The import dialog again (U5-Q2): the running or finished import's, or a new one
+            // when it was closed.
+            TaskAction::ShowImport => self.open_import(),
+            // As the dialog's Cancel, without a question (U5-Q3): the files copied so far stay.
+            TaskAction::Stop => {
+                if self
+                    .import_dialog
+                    .as_ref()
+                    .is_some_and(ImportDialog::cancel)
+                {
+                    self.import_worker.cancel();
+                }
+            }
+            TaskAction::DismissImport => self.tasks.dismiss_import(),
+            TaskAction::ClearErrors => self.tasks.clear_errors(),
+        }
+    }
+
     /// The side columns (ADR 0017 §2.1, U1-Q3, T109): each resizable between the minimum and 40 %
     /// of the window, collapsible to a strip with its open button, and both hidden with the hide
     /// key. The right one is the inspector (U2, T110); the left one is the library (U4, T135)
-    /// and, under "Tasks", the hidden import's status (until U5).
+    /// and, under it, the Tasks area (U5, T140).
     fn draw_columns(&mut self, ui: &mut egui::Ui) {
         let shell = self.settings.shell;
         if shell.columns_hidden {
@@ -3778,17 +3901,23 @@ impl Loupe {
         }
         let window_width = ui.ctx().content_rect().width();
         let (min, max) = column_width_range(window_width);
-        let import_status = self.hidden_import_status();
+        let pending = pending_writes(
+            self.metadata.pending_writes(),
+            self.metadata.batch_progress(),
+            self.metadata.editor_saving(),
+        );
         match shell.left_column {
             ColumnState::Open => {
                 // The library (U4, T135): what was clicked is done after the column is drawn.
                 let mut library_actions = Vec::new();
+                let mut task_actions = Vec::new();
                 let active_folder = self
                     .tabs
                     .active()
                     .and_then(|tab| tab.folder.as_deref())
                     .map(folder_key);
                 let library = &self.library;
+                let tasks = &self.tasks;
                 let shown = egui::Panel::left("left-column")
                     .resizable(true)
                     .default_size(clamp_column_width(
@@ -3807,13 +3936,7 @@ impl Loupe {
                             &mut library_actions,
                         );
                         ui.add_space(PANEL_ROW_SPACING * 2.0);
-                        ui.heading(shell_text(ShellText::Tasks));
-                        match &import_status {
-                            Some(status) => {
-                                ui.label(status.as_str());
-                            }
-                            None => column_note(ui, shell_text(ShellText::NoTasks)),
-                        }
+                        draw_tasks(ui, tasks, &shell, &pending, &mut task_actions);
                         collapse
                     });
                 // F5 while the library has the pointer reads the drives again (U4-Q1).
@@ -3834,6 +3957,9 @@ impl Loupe {
                 }
                 for action in library_actions {
                     self.library_action(action);
+                }
+                for action in task_actions {
+                    self.task_action(action);
                 }
             }
             ColumnState::Collapsed => {
@@ -3893,6 +4019,13 @@ impl Loupe {
     fn draw(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
         let failures = self.metadata.poll(&mut self.metadata_worker);
+        // Every failure also goes to the Tasks area's error list (U5-Q5).
+        if !failures.is_empty() {
+            let now = ClockTime::now();
+            for failure in &failures {
+                self.tasks.add_error(failure, now);
+            }
+        }
         if let Some(message) = failures.last() {
             // One line for every failure since the last rating key (ADR 0014 Q6).
             self.message = Some(
@@ -4006,7 +4139,12 @@ impl Loupe {
             // "Avbryt"; Enter does not press OK.
             if let Some(window) = &mut self.metadata_window {
                 if key == egui::Key::Escape && !ctrl && !alt {
-                    window.escape = true;
+                    // An open "▼" list takes Escape; the window's own Escape is not done (T141).
+                    if window.value_list.is_some() {
+                        window.value_list_escape = true;
+                    } else {
+                        window.escape = true;
+                    }
                 }
                 continue;
             }
@@ -4362,6 +4500,7 @@ fn draw_window_form(
     shell: &ShellSettings,
     rating: Option<&Rating>,
     rating_enabled: bool,
+    values: &mut ValueUi<'_>,
 ) -> FormResponse {
     let warning = ui.visuals().warn_fg_color;
     let mut choice = None;
@@ -4389,7 +4528,7 @@ fn draw_window_form(
                             .into_iter()
                             .filter(|field| field.section() == section)
                         {
-                            draw_window_field(ui, &mut state.form, field, errors);
+                            draw_window_field(ui, &mut state.form, field, errors, values);
                             draw_structure_lists(ui, &mut state.form, section, Some(field));
                         }
                     })
@@ -4519,6 +4658,7 @@ fn draw_window_field(
     form: &mut EditorForm,
     field: EditorField,
     errors: &[(EditorField, String)],
+    values: &mut ValueUi<'_>,
 ) {
     let read_only = form.read_only_text(field).map(str::to_string);
     if read_only.is_none() && !field.editable() {
@@ -4553,6 +4693,9 @@ fn draw_window_field(
             None if field.choice_list().is_some() => {
                 draw_choice_list(ui, form, field);
             }
+            None if form.values_shown(field) => {
+                draw_values_field(ui, form, field, values);
+            }
             None => {
                 if let Some(text) = form.text_mut(field) {
                     let edit = if field.multiline() {
@@ -4570,6 +4713,178 @@ fn draw_window_field(
         ui.label(egui::RichText::new(error).color(error_color));
     }
     ui.add_space(PANEL_ROW_SPACING);
+}
+
+/// The "▼" lists of the metadata window's form while it is drawn (ADR 0017 U12a, T141): the
+/// recent and own values, the open list, and what was pressed in it.
+struct ValueUi<'a> {
+    values: &'a FieldValues,
+    list: &'a mut Option<ValueList>,
+    /// "Add to My Values" and "×" pressed this frame, applied after the form is drawn.
+    actions: Vec<ValueAction>,
+}
+
+/// What was pressed in a "▼" list that changes the own values (U12a-Q3, T141).
+enum ValueAction {
+    /// "Add to My Values": the field's present values.
+    AddOwn(EditorField, Vec<String>),
+    /// "×" beside an own value.
+    RemoveOwn(EditorField, String),
+}
+
+/// A one-line field with a "▼" (ADR 0017 U12a-Q5, T141): the text box as wide as the window
+/// beside a small "▼" (tooltip "Recent and saved values") that opens and closes its list; Alt+↓
+/// in the field opens it too. The open list is drawn under the field: "Recent" and "My Values",
+/// each only with values ("No values yet" when both are empty), a "×" beside each own value, then
+/// "Add to My Values" (disabled when the field is empty). A click, or ↑/↓ and Enter, chooses a
+/// value into the field ([`EditorForm::use_value`]) and closes the list; Escape closes it (taken
+/// before the window's own Escape).
+fn draw_values_field(
+    ui: &mut egui::Ui,
+    form: &mut EditorForm,
+    field: EditorField,
+    values: &mut ValueUi<'_>,
+) {
+    let store = values.values;
+    let id = ui.make_persistent_id(("metadata-window-field", field));
+    // Alt+↓ in the field opens its list (the Windows custom for a drop-down); before the text
+    // box is drawn, so the key does not reach it.
+    let focused = ui.memory(|memory| memory.has_focus(id));
+    if focused
+        && ui.input_mut(|input| input.consume_key(egui::Modifiers::ALT, egui::Key::ArrowDown))
+    {
+        *values.list = Some(ValueList::new(field));
+    }
+    let choices: Vec<ValueChoice> = value_choices(store, field);
+    let mut chosen: Option<String> = None;
+    let mut chosen_by_key = false;
+    if let Some(list) = values.list.as_mut().filter(|list| list.field == field) {
+        ui.input_mut(|input| {
+            if input.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown) {
+                list.step(true, choices.len());
+            }
+            if input.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp) {
+                list.step(false, choices.len());
+            }
+            if let Some(value) = list.chosen(&choices)
+                && input.consume_key(egui::Modifiers::NONE, egui::Key::Enter)
+            {
+                chosen = Some(value.to_string());
+                chosen_by_key = true;
+            }
+        });
+    }
+    let open = values.list.is_some_and(|list| list.field == field);
+    let mut toggle = false;
+    // One row as high as a text box: a right-to-left layout alone would take the rest of the
+    // section's height (the owner's hand check of T141).
+    let row = egui::vec2(ui.available_width(), ui.spacing().interact_size.y);
+    ui.allocate_ui_with_layout(
+        row,
+        egui::Layout::right_to_left(egui::Align::Center),
+        |ui| {
+            toggle = values_button(ui)
+                .on_hover_text(editor_text(&EditorText::ValuesTooltip))
+                .clicked();
+            if let Some(text) = form.text_mut(field) {
+                ui.add(
+                    egui::TextEdit::singleline(text)
+                        .id(id)
+                        .desired_width(f32::INFINITY),
+                );
+            }
+        },
+    );
+    if toggle {
+        *values.list = if open {
+            None
+        } else {
+            Some(ValueList::new(field))
+        };
+    }
+    let highlighted = match *values.list {
+        Some(list) if list.field == field => Some(list.highlighted),
+        _ => None,
+    };
+    if let Some(highlighted) = highlighted {
+        let recent = store.recent(field).len();
+        let present = form.present_values(field);
+        egui::Frame::group(ui.style()).show(ui, |ui| {
+            if choices.is_empty() {
+                let grey = ui.visuals().weak_text_color();
+                ui.label(egui::RichText::new(editor_text(&EditorText::NoValuesYet)).color(grey));
+            }
+            for (index, choice) in choices.iter().enumerate() {
+                if index == 0 && recent > 0 {
+                    ui.label(egui::RichText::new(editor_text(&EditorText::Recent)).strong());
+                }
+                if index == recent {
+                    ui.label(egui::RichText::new(editor_text(&EditorText::MyValues)).strong());
+                }
+                ui.horizontal_wrapped(|ui| {
+                    if ui
+                        .selectable_label(highlighted == Some(index), &choice.value)
+                        .clicked()
+                    {
+                        chosen = Some(choice.value.clone());
+                    }
+                    if choice.own
+                        && ui
+                            .small_button(editor_text(&EditorText::RemoveValue))
+                            .clicked()
+                    {
+                        values
+                            .actions
+                            .push(ValueAction::RemoveOwn(field, choice.value.clone()));
+                    }
+                });
+            }
+            ui.separator();
+            let add = ui.add_enabled(
+                !present.is_empty(),
+                egui::Button::new(editor_text(&EditorText::AddToMyValues)),
+            );
+            if add.clicked() {
+                values.actions.push(ValueAction::AddOwn(field, present));
+            }
+        });
+    }
+    if let Some(value) = chosen {
+        form.use_value(field, &value);
+        *values.list = None;
+        if chosen_by_key {
+            ui.memory_mut(|memory| memory.request_focus(id));
+        }
+    }
+}
+
+/// The "▼" button of a field with values (U12a-Q5): a square button with a downward triangle
+/// painted on it, as the default fonts have no "▼" glyph (the owner's hand check of T141).
+fn values_button(ui: &mut egui::Ui) -> egui::Response {
+    let side = ui.spacing().interact_size.y;
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(side, side), egui::Sense::click());
+    if ui.is_rect_visible(rect) {
+        let visuals = ui.style().interact(&response);
+        ui.painter().rect(
+            rect,
+            visuals.corner_radius,
+            visuals.bg_fill,
+            visuals.bg_stroke,
+            egui::StrokeKind::Inside,
+        );
+        let centre = rect.center();
+        let half = side * 0.2;
+        ui.painter().add(egui::Shape::convex_polygon(
+            vec![
+                centre + egui::vec2(-half, -half * 0.5),
+                centre + egui::vec2(half, -half * 0.5),
+                centre + egui::vec2(0.0, half * 0.7),
+            ],
+            visuals.fg_stroke.color,
+            egui::Stroke::NONE,
+        ));
+    }
+    response
 }
 
 /// The structure lists drawn in `section` after the field `after` (or at the start of the section
@@ -5067,7 +5382,7 @@ fn paint_rating_glyphs(
                 );
                 x += 11.0;
             }
-            '✕' => {
+            '×' => {
                 let center = egui::pos2(x + 6.0, center_y);
                 let radius = height.min(14.0) * 0.34;
                 let stroke = egui::Stroke::new(1.8, color);
@@ -5274,6 +5589,135 @@ fn draw_library(
             ui.close();
         }
     });
+}
+
+/// What was clicked in the Tasks area, done after the column is drawn (`Loupe::task_action`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TaskAction {
+    ToggleSection,
+    /// A click on the import's row.
+    ShowImport,
+    Stop,
+    /// "×" on a finished import's row.
+    DismissImport,
+    ClearErrors,
+}
+
+/// The least height of the error list's scroll area, in points, when the column is full.
+const TASKS_ERRORS_MIN_HEIGHT: f32 = 80.0;
+
+/// The Tasks area (ADR 0017 §2.1, U5, T140), a collapsible section under the library as `shell`
+/// says: the import's row, the pending writes and the error list, or "No tasks" with nothing to
+/// show. Every text comes from `tasks_text.rs` and `import_text.rs`; paths and errors are data.
+fn draw_tasks(
+    ui: &mut egui::Ui,
+    tasks: &Tasks,
+    shell: &ShellSettings,
+    pending: &[PendingWrite],
+    actions: &mut Vec<TaskAction>,
+) {
+    let section = egui::CollapsingHeader::new(tasks_text(TasksText::Tasks))
+        .id_salt("library-tasks")
+        .open(Some(shell.library_tasks == ColumnState::Open))
+        .show(ui, |ui| {
+            if tasks.is_empty() && pending.is_empty() {
+                column_note(ui, tasks_text(TasksText::NoTasks));
+                return;
+            }
+            if let Some(row) = tasks.import() {
+                draw_import_row(ui, row, actions);
+            }
+            for write in pending {
+                column_note(ui, &pending_write_text(*write));
+            }
+            let count = tasks.errors().len();
+            if count > 0 {
+                ui.add_space(PANEL_ROW_SPACING);
+                ui.horizontal_wrapped(|ui| {
+                    ui.strong(errors_heading_text(count));
+                    if ui.small_button(tasks_text(TasksText::Clear)).clicked() {
+                        actions.push(TaskAction::ClearErrors);
+                    }
+                });
+                let error_colour = ui.visuals().error_fg_color;
+                egui::ScrollArea::vertical()
+                    .id_salt("tasks-errors")
+                    .max_height(ui.available_height().max(TASKS_ERRORS_MIN_HEIGHT))
+                    .auto_shrink([false, true])
+                    .show(ui, |ui| {
+                        for error in tasks.errors() {
+                            let text = error_entry_text(error.time, &error.text);
+                            ui.add(
+                                egui::Label::new(egui::RichText::new(text).color(error_colour))
+                                    .wrap(),
+                            );
+                        }
+                    });
+            }
+        });
+    if section.header_response.clicked() {
+        actions.push(TaskAction::ToggleSection);
+    }
+}
+
+/// The import's row (U5-Q2, U5-Q3): source → destination, the progress bar by bytes and the
+/// step's line, "Stop" while it runs and "×" when it is done; a click on the texts shows the
+/// import dialog.
+fn draw_import_row(ui: &mut egui::Ui, row: &ImportRow, actions: &mut Vec<TaskAction>) {
+    let step = match &row.step {
+        ImportStep::Copying {
+            files_done,
+            files_total,
+            current,
+            ..
+        } => importing_text(*files_done, *files_total, current.as_deref()),
+        ImportStep::Iptc {
+            done,
+            total,
+            current,
+        } => iptc_progress_text(*done, *total, current),
+        ImportStep::Ejecting => ejecting_progress_text(Path::new(&row.source)),
+        ImportStep::Done {
+            error: Some(error), ..
+        } => error.clone(),
+        ImportStep::Done {
+            copied,
+            failed,
+            cancelled,
+            error: None,
+        } => import_done_text(*copied, *failed, *cancelled),
+    };
+    let route = ui.add(
+        egui::Label::new(import_route_text(&row.source, &row.destination))
+            .sense(egui::Sense::click())
+            .wrap(),
+    );
+    let mut show = route
+        .on_hover_text(tasks_text(TasksText::ShowImport))
+        .clicked();
+    if row.running() {
+        ui.add(egui::ProgressBar::new(row.fraction()));
+    }
+    ui.horizontal_wrapped(|ui| {
+        let line = ui.add(egui::Label::new(step).sense(egui::Sense::click()).wrap());
+        show |= line
+            .on_hover_text(tasks_text(TasksText::ShowImport))
+            .clicked();
+        if row.running() {
+            if ui.small_button(tasks_text(TasksText::Stop)).clicked() {
+                actions.push(TaskAction::Stop);
+            }
+        } else if ui
+            .small_button(tasks_text(TasksText::Dismiss))
+            .on_hover_text(tasks_text(TasksText::DismissHover))
+            .clicked()
+        {
+            actions.push(TaskAction::DismissImport);
+        }
+    });
+    if show {
+        actions.push(TaskAction::ShowImport);
+    }
 }
 
 /// The folder tree's rows (U4-Q2): a triangle that only expands or collapses, and the name, whose
@@ -5705,6 +6149,19 @@ fn start_settings(path: Option<&Path>) -> (Settings, SavedLibrary) {
     (settings, library)
 }
 
+/// The recent and own values of the metadata window's fields (ADR 0017 U12a-Q6, T141) from
+/// `field-values.txt`, each problem written to the log; none without a path.
+fn start_field_values(path: Option<&Path>) -> FieldValues {
+    let Some(path) = path else {
+        return FieldValues::default();
+    };
+    let (values, problems) = load_field_values(path);
+    for problem in problems {
+        eprintln!("pw-loupe: {problem}");
+    }
+    values
+}
+
 /// Shows a warning box from its own thread, so the frame is not held up.
 fn show_warning(title: &'static str, text: String) {
     let shown = std::thread::Builder::new()
@@ -5738,6 +6195,8 @@ fn run(options: Options) -> Result<(), String> {
     let journal = open_journal();
     let settings_path = settings_path();
     let (settings, saved_library) = start_settings(settings_path.as_deref());
+    let field_values_path = field_values_path();
+    let field_values = start_field_values(field_values_path.as_deref());
     let library = Library::new(&read_drives(), &saved_library);
     let config = Config {
         core_budget: options.core_mb << 20,
@@ -5806,6 +6265,7 @@ fn run(options: Options) -> Result<(), String> {
                 metadata: MetadataCache::default(),
                 import_worker,
                 import_dialog: None,
+                tasks: Tasks::new(),
                 last_form: ImportForm::default(),
                 import_clear_confirm: false,
                 detected_cards: Vec::new(),
@@ -5832,6 +6292,8 @@ fn run(options: Options) -> Result<(), String> {
                 metadata_window_shown: false,
                 image_area: None,
                 copied_fields: None,
+                field_values,
+                field_values_path,
                 message: None,
                 indicator_after,
                 tabs: Tabs::default(),

@@ -146,3 +146,5 @@ was when the task was done, so "this file", "below" and "the Log" in T1–T115 m
 | [T138](T138-sort-order.md) | ADR 0017 U14: sort order in the command bar and the contact sheet |
 | [T139](T139-genre-and-plus-structures.md) | ADR 0017 U11a, second part: Genre and the PLUS structures in the metadata window |
 | [T120](T120-exiftool-from-the-program-folder.md) | ExifTool from the program folder first |
+| [T140](T140-tasks-area.md) | ADR 0017 U5: the Tasks area: import progress, stop, pending writes and errors |
+| [T141](T141-recent-and-own-values.md) | ADR 0017 U12a: recent values and the user's own values per field in the metadata window |

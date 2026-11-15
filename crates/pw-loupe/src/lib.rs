@@ -6,6 +6,7 @@
 
 mod browse;
 mod editor;
+mod field_values;
 mod filter;
 mod grid;
 mod import;
@@ -27,6 +28,8 @@ mod shell;
 mod shell_text;
 mod sort;
 mod tabs;
+mod tasks;
+mod tasks_text;
 mod thumbs;
 
 use std::path::{Path, PathBuf};
@@ -37,6 +40,10 @@ pub use browse::{LoupeMove, metadata_neighbour};
 pub use editor::{
     BatchEdits, CopiedFields, EditorField, EditorForm, EditorSection, EditorText, OpenConflict,
     RatingButton, WriteReason, apply_confirmation, editor_text, notice_text, write_reason_text,
+};
+pub use field_values::{
+    FIELD_VALUES_FILE, FieldValues, RECENT_LIMIT, ValueChoice, ValueList, field_id,
+    field_values_path, load_field_values, save_field_values, value_choices,
 };
 pub use filter::{
     Filter, LABEL_CHOICES, LabelChoice, LabelFilter, STAR_CONDITIONS, STAR_FILTERS, StarCondition,
@@ -107,6 +114,13 @@ pub use sort::{
     modified_time, read_order,
 };
 pub use tabs::{SortFollow, Tab, Tabs, ViewMode};
+pub use tasks::{
+    ClockTime, ImportRow, ImportStep, MAX_ERRORS, PendingWrite, TaskError, Tasks, pending_writes,
+};
+pub use tasks_text::{
+    TasksText, error_entry_text, errors_heading_text, import_done_text, import_route_text,
+    importing_text, pending_write_text, tasks_text,
+};
 pub use thumbs::{CellState, ThumbGrid, color_image, request_cell};
 
 /// The window title: the product name (ADR 0012). `latency.ps1` finds the window by it (ADR 0009

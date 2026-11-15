@@ -1,4 +1,4 @@
-# T140. ADR 0017 U5: the Tasks area: import progress, stop, pending writes and errors — Open
+# T140. ADR 0017 U5: the Tasks area: import progress, stop, pending writes and errors — Done
 
 - **Can start now.** The owner approved the proposals of U5-Q1–U5-Q7 (at the end of this task)
   on 2026-11-15; they are written into the points below and into ADR 0017 §6.1.
@@ -31,7 +31,7 @@
      them, `iptc_progress_text`, `ejecting_progress_text`). A click on the row shows the import
      dialog again. When it is done the row says "Import done: {n} files" (or "Import cancelled: {n}
      files", `hidden_done_text`), with the failed files counted, and stays until the next import
-     or "✕" on the row.
+     or "×" on the row.
   3. **Stop** (U5-Q3): a "Stop" button on the running import's row does what the dialog's Cancel
      does (`ImportDialog::cancel` and `ImportWorker::cancel`), without a question; the files copied
      so far are kept, as today.
@@ -51,7 +51,7 @@
      metadata: {i} of {n}, Saving metadata; English (GR14), in `tasks_text.rs` and the glossary.
 - **Tests to add** (`tasks.rs`, `tasks_text.rs`, `settings.rs`): the import row from each
   `ImportEvent` (progress, IPTC step, ejecting, done, cancelled, with failed files); the row kept
-  after done until "✕" or a new import; the pending-write lines appear and go; errors newest first,
+  after done until "×" or a new import; the pending-write lines appear and go; errors newest first,
   the limit of 200, Clear; an import's failures added once; the section state saved and loaded, an
   unknown value warned and ignored; the texts through their functions.
 - **Not in this task:** a history of earlier imports; saving the error list; a separate window
@@ -66,7 +66,7 @@
 | # | Question | Proposal |
 |---|---|---|
 | U5-Q1 | Where is the Tasks area? | In the left column under the Library, collapsible like the Library's sections, its state remembered |
-| U5-Q2 | What does the import row show? | Source → destination, a progress bar by bytes and "Importing {i} of {n}: {file}" (IPTC and ejecting steps as in the dialog); a click shows the dialog; when done "Import done: {n} files" with failures counted, kept until "✕" or the next import |
+| U5-Q2 | What does the import row show? | Source → destination, a progress bar by bytes and "Importing {i} of {n}: {file}" (IPTC and ejecting steps as in the dialog); a click shows the dialog; when done "Import done: {n} files" with failures counted, kept until "×" or the next import |
 | U5-Q3 | Does Stop ask first? | No: it does what the dialog's Cancel does; the files copied so far are kept |
 | U5-Q4 | Which pending writes are shown? | Rating writes ("Writing ratings: {n}"), "Apply to All Marked" ("Saving metadata: {i} of {n}") and the window's own save, each only while it runs |
 | U5-Q5 | What goes into the error list, and how long is it kept? | Failed rating writes and reads, an import's failed files and errors; newest first with the time; at most 200; "Clear"; not saved at exit |
@@ -79,3 +79,5 @@
 |---|---|---|
 | 2026-11-15 | Blocked | Added; waits for U5-Q1–U5-Q7 |
 | 2026-11-15 | Open | The owner approved U5-Q1–U5-Q7 as proposed |
+| 2026-11-15 | Ready for review | Done by the agent. `check.ps1`: audit and clippy OK; fmt and tests fail only in T141's files, which T141's agent was changing at the same time (`field_values.rs`, its `use` block in `main.rs`; tests `editor::tests::a_read_only_field_shows_no_list`, `field_values::tests::an_emptied_field_adds_nothing`); T140's own tests pass |
+| 2026-11-15 | Done | Reviewed; the owner checked it by hand and approved it |

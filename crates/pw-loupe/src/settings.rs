@@ -64,6 +64,8 @@ const EDITOR_LICENCE: &str = "editor_licence";
 const LIBRARY_FOLDERS: &str = "library_folders";
 const LIBRARY_FAVOURITES: &str = "library_favourites";
 const LIBRARY_RECENT: &str = "library_recent";
+/// The key of the Tasks section under the library (T140, U5-Q1).
+const LIBRARY_TASKS: &str = "library_tasks";
 /// The keys of the sort order of every tab (U14-Q3, T138).
 const SORT: &str = "sort";
 const SORT_DESCENDING: &str = "sort_descending";
@@ -152,6 +154,8 @@ pub struct ShellSettings {
     pub library_folders: ColumnState,
     pub library_favourites: ColumnState,
     pub library_recent: ColumnState,
+    /// The Tasks section under the library (T140, U5-Q1).
+    pub library_tasks: ColumnState,
     /// The sort order of every tab (U14-Q3, T138): `sort` and `sort_descending`.
     pub sort: SortOrder,
 }
@@ -202,6 +206,8 @@ impl Default for ShellSettings {
             library_folders: ColumnState::Open,
             library_favourites: ColumnState::Open,
             library_recent: ColumnState::Open,
+            // The Tasks section open (U5-Q1).
+            library_tasks: ColumnState::Open,
             // File-name order, ascending: the order before T138 (U14-Q1).
             sort: SortOrder::default(),
         }
@@ -399,14 +405,17 @@ pub fn load_settings_and_library(path: &Path) -> (Settings, SavedLibrary, Vec<St
                 ALL => shell.filmstrip_marked = false,
                 _ => problems.push(bad("all or marked")),
             },
-            LIBRARY_FOLDERS | LIBRARY_FAVOURITES | LIBRARY_RECENT => match parse_column(value) {
-                Some(state) => match key {
-                    LIBRARY_FOLDERS => shell.library_folders = state,
-                    LIBRARY_FAVOURITES => shell.library_favourites = state,
-                    _ => shell.library_recent = state,
-                },
-                None => problems.push(bad("open or collapsed")),
-            },
+            LIBRARY_FOLDERS | LIBRARY_FAVOURITES | LIBRARY_RECENT | LIBRARY_TASKS => {
+                match parse_column(value) {
+                    Some(state) => match key {
+                        LIBRARY_FOLDERS => shell.library_folders = state,
+                        LIBRARY_FAVOURITES => shell.library_favourites = state,
+                        LIBRARY_RECENT => shell.library_recent = state,
+                        _ => shell.library_tasks = state,
+                    },
+                    None => problems.push(bad("open or collapsed")),
+                }
+            }
             FAVOURITE | RECENT => match parse_folder(value) {
                 Some(folder) if key == FAVOURITE => library.favourites.push(folder),
                 Some(folder) => library.recent.push(folder),
@@ -518,10 +527,12 @@ fn shell_lines(shell: &ShellSettings) -> String {
         column_value(shell.editor_licence)
     ));
     text.push_str(&format!(
-        "{LIBRARY_FOLDERS} = {}\n{LIBRARY_FAVOURITES} = {}\n{LIBRARY_RECENT} = {}\n",
+        "{LIBRARY_FOLDERS} = {}\n{LIBRARY_FAVOURITES} = {}\n{LIBRARY_RECENT} = {}\n\
+         {LIBRARY_TASKS} = {}\n",
         column_value(shell.library_folders),
         column_value(shell.library_favourites),
-        column_value(shell.library_recent)
+        column_value(shell.library_recent),
+        column_value(shell.library_tasks)
     ));
     text.push_str(&format!(
         "{SORT} = {}\n{SORT_DESCENDING} = {}\n",
@@ -775,7 +786,8 @@ mod tests {
              preview_hidden = false\neditor_content = open\neditor_creator_rights = open\n\
              editor_time_place = open\neditor_assignment = open\n\
              editor_rating_label = open\neditor_licence = open\nlibrary_folders = open\n\
-             library_favourites = open\nlibrary_recent = open\nsort = name\n\
+             library_favourites = open\nlibrary_recent = open\nlibrary_tasks = open\n\
+             sort = name\n\
              sort_descending = false\n"
         );
     }
@@ -957,6 +969,7 @@ mod tests {
             library_folders: ColumnState::Collapsed,
             library_favourites: ColumnState::Collapsed,
             library_recent: ColumnState::Collapsed,
+            library_tasks: ColumnState::Collapsed,
             sort: SortOrder {
                 key: SortKey::Capture,
                 descending: true,
@@ -1413,6 +1426,37 @@ mod tests {
             assert!(problems[0].contains(key), "{problems:?}");
             assert_eq!(settings.shell, ShellSettings::default(), "{key}");
         }
+    }
+
+    #[test]
+    fn the_tasks_section_is_open_by_default_and_its_state_is_saved_and_loaded() {
+        assert_eq!(ShellSettings::default().library_tasks, ColumnState::Open);
+        let dir = TempDir::new();
+        let path = dir.0.join("settings.txt");
+        let settings = Settings {
+            shell: ShellSettings {
+                library_tasks: ColumnState::Collapsed,
+                ..ShellSettings::default()
+            },
+            ..Settings::default()
+        };
+        save_settings(&path, &settings).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains("library_tasks = collapsed\n"), "{text}");
+        let (loaded, problems) = load_settings(&path);
+        assert!(problems.is_empty(), "{problems:?}");
+        assert_eq!(loaded, settings);
+    }
+
+    #[test]
+    fn an_unknown_value_of_the_tasks_section_is_warned_and_ignored() {
+        let (_dir, path) =
+            TempDir::with_file("# RawStride\ncreate_iim = true\nlibrary_tasks = hidden\n");
+        let (settings, problems) = load_settings(&path);
+        assert_one_problem_on_line(&problems, 3);
+        assert!(problems[0].contains("library_tasks"), "{problems:?}");
+        assert_eq!(settings.shell.library_tasks, ColumnState::Open);
+        assert_eq!(settings.shell, ShellSettings::default());
     }
 
     #[test]

@@ -127,6 +127,9 @@ Every other property already uses IPTC's English name in both languages.
 | – | Refresh | reads the drives again (also F5 over the Library); added by T135 |
 | – | {letter}: (no disk) | an empty card reader or DVD drive in the folder tree (U4-Q1); added by T135 |
 | – | Folder not found | the hover text of a favourite or recent folder that no longer exists, and an expand that fails because the folder is gone; added by T135 |
+| – | No tasks, Stop, ×, Errors ({n}), Clear | the Tasks area under the Library (ADR 0017 U5-Q1–U5-Q5): the line with nothing to show (the text is still "No tasks in progress."), the running import's button, the finished import's button (hover "Remove this line"), the error list's heading and its button; added by T140 |
+| – | {source} → {destination}; Importing {i} of {n}: {file}; Import done: {n} files, {f} failed / Import cancelled: {n} files, {f} failed | the import's row in the Tasks area (U5-Q2; hover "Show the import window"); without failures "Import done: {n} files" as before; added by T140 |
+| – | Writing ratings: {n}; Saving metadata: {i} of {n}; Saving metadata | the pending writes in the Tasks area: rating writes, "Apply to All Marked" and the metadata window's own write (U5-Q4); added by T140 |
 
 ## 4. Viewer and zoom
 
@@ -215,6 +218,7 @@ Every other property already uses IPTC's English name in both languages.
 | Registerpost, post-id, organisation | Registry entry, item ID, organization ID | the IPTC Registry Entry; added by T117 |
 | Förslag till … | Suggested … | "Suggested Date Created from the camera"; added by T117 |
 | Metadatafel | Metadata error | added by T117 |
+| – | Recent, My Values, Add to My Values, No values yet, ▼, × | the list of recent and saved values beside a one-line field of the metadata window (ADR 0017 U12a-Q5, U12a-Q7): its two headings, its last entry and its line with no values; the button "▼" (tooltip "Recent and saved values", also opened with Alt+↓) and "×" beside an own value, which removes it; added by T141 |
 
 ## 7. Recurring sentence parts
 
