@@ -21,6 +21,9 @@
 - **Recorded 2026-11-14 (no new decision):** the owner's answers to the questions of U10 (T123) and
   U10c (T124) are in §6.1; the section names of §2.3.1 are English in the program (GR14, U10-Q1).
   The answers to the questions of U12b (T125) and U12c (T126) are in §6.1 too.
+- **Wishes added by the owner (2026-11-15):** the import's IPTC template is filled in a window of
+  its own and saved as an XMP template file, as Photo Mechanic does (U13, §7); and the imported
+  images appear in their tab while the import runs, not only when it is done (§7.2).
 - Date: 2026-11-12; amended 2026-11-13
 - Related:
   - [GUI_REQUIREMENTS.md](../GUI_REQUIREMENTS.md) (GR1–GR13), in particular GR6 (keyboard first),
@@ -488,7 +491,7 @@ Each step ends with tests (GR11), the owner's hand check and, where an image is 
 | **U10** | Metadata window: every simple text and date field of the six sections editable, with the PLUS fields (merged with I11; the PLUS vocabulary read first, ADR 0007 §16.4); sections and the user's choice of fields (§2.3.1) |
 | **U11** | Metadata window: lists and structures (persons, locations, creators, licensors, releases) with add and remove |
 | **U12** | Metadata window: previous/next and "spara och nästa" (the first part in stage A), recent values, copy/paste of all fields, "använd på alla markerade" with the batch rules (§2.3.1) |
-| **U13** | Metadata window: templates from the window (with the modes of ADR 0007 §10) and variables in text fields |
+| **U13** | Metadata window: templates from the window (with the modes of ADR 0007 §10) and variables in text fields. **Also the import's template (owner, 2026-11-15):** instead of the template fields in the import dialog, a template window of its own (the metadata window's form with each field's mode), opened from the import dialog; the template is saved as an XMP template file (ADR 0007 §10) and chosen by name in the import. Needs the namespace of the modes decided first (as D1 of ADR 0007) |
 | **U14** | Sort order in the command bar and the contact sheet |
 
 ### 7.1 Order: a usable version first (owner, 2026-11-12)
@@ -521,6 +524,7 @@ separate window waits (§7.2).
 | Chosen fields as text lines under each thumbnail | Later, after stage A (owner, 2026-11-12) | The thumbnail shows the file name until then |
 | Temporary exposure and white balance for assessment | Later, after stage A (owner, 2026-11-12) | Needs RAW processing options the view core does not have today |
 | The separate preview window (U0), movable to a second screen with that screen's DPI and colour profile | When the owner has a second screen to test with (owner, 2026-11-12 and 2026-11-13) | Review finding 5: colour conversion is per start screen today (ADR 0016) |
+| **Images shown while importing**: the destination tab opens when the first file is copied and verified, and fills as the import goes on, as Photo Mechanic does; today it opens when the copy is done (ADR 0010, "Open the result") | Not yet placed (owner, 2026-11-15) | Changes ADR 0010's rule. The IPTC template is written after the copy, so an image is shown for a while before the template's values are in it; the contact sheet must take the folder's new files without a reload of the tab |
 | Code replacements (short codes expanded to text while captioning) | Not yet placed (review, 2026-11-13) | From the study's list of missing functions |
 | A catalogue across folders (`pw-catalog`) | Not yet placed (review, 2026-11-13) | From the study's list of missing functions |
 | Floating, freely placed panels | Future requirement (requirements-image-viewer.md, "Not covered") | |
