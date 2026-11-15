@@ -11,7 +11,8 @@
 //! Written by hand from the reference copies in `D:\PhotoWorkflowData\references\` (R1, R2):
 //! - `LDFXMP-1_2_0-ControlledVocabulary.xml` (SHA-256
 //!   `26961ebed377caf0b347ed6a703f7a0ce80c10974c017490f34ac3bd08c92fa2`): Model Release Status,
-//!   Property Release Status, Minor Model Age Disclosure;
+//!   Property Release Status, Minor Model Age Disclosure, and the two telephone types of a
+//!   Licensor entry (`LicensorTelephoneType1`, `LicensorTelephoneType2`, T139);
 //! - `README.md` of that folder, section "PLUS controlled vocabulary": Data Mining, which is not
 //!   in the LDF file (it came with PLUS 2.0.1; taken from the PLUS XMP specification 2.0.1 page);
 //! - `IPTC-NewsCodes-digitalsourcetype.json` (SHA-256
@@ -36,6 +37,11 @@ pub const DATA_MINING: &str = "plus:DataMining";
 /// The XMP id of Digital Source Type.
 pub const DIGITAL_SOURCE_TYPE: &str = "Iptc4xmpExt:DigitalSourceType";
 
+/// The XMP id of a Licensor entry's first telephone type (a sub-field of `plus:Licensor`, T139).
+pub const LICENSOR_TELEPHONE_TYPE_1: &str = "plus:LicensorTelephoneType1";
+/// The XMP id of a Licensor entry's second telephone type (a sub-field of `plus:Licensor`, T139).
+pub const LICENSOR_TELEPHONE_TYPE_2: &str = "plus:LicensorTelephoneType2";
+
 /// The PLUS choice-list properties (the ones [`crate::validate`] checks against their list).
 pub const PLUS_PROPERTIES: [&str; 4] = [
     MODEL_RELEASE_STATUS,
@@ -55,6 +61,9 @@ const MINOR_MODEL_AGE_DISCLOSURE_CODES: [&str; 13] = [
     "AG-UNK", "AG-A25", "AG-A24", "AG-A23", "AG-A22", "AG-A21", "AG-A20", "AG-A19", "AG-A18",
     "AG-A17", "AG-A16", "AG-A15", "AG-U14",
 ];
+
+/// The telephone types of a Licensor entry, both lists alike (LDF file).
+const LICENSOR_TELEPHONE_TYPE_CODES: [&str; 5] = ["work", "cell", "fax", "home", "pager"];
 
 /// Data Mining (the references folder's `README.md`).
 const DATA_MINING_CODES: [&str; 9] = [
@@ -97,15 +106,18 @@ pub const RETIRED_DIGITAL_SOURCE_TYPE_URIS: [&str; 3] = [
     "http://cv.iptc.org/newscodes/digitalsourcetype/digitalArt",
 ];
 
-/// The allowed values of the choice-list property `xmp_id`, in the vocabulary's order: codes for
-/// PLUS, full URIs for Digital Source Type (the current codes only); `None` for any other
-/// property.
+/// The allowed values of the choice-list property or structure field `xmp_id`, in the
+/// vocabulary's order: codes for PLUS (the telephone types of a Licensor entry included), full
+/// URIs for Digital Source Type (the current codes only); `None` for any other property.
 pub fn choices(xmp_id: &str) -> Option<&'static [&'static str]> {
     match xmp_id {
         MODEL_RELEASE_STATUS => Some(&MODEL_RELEASE_STATUS_CODES),
         PROPERTY_RELEASE_STATUS => Some(&PROPERTY_RELEASE_STATUS_CODES),
         MINOR_MODEL_AGE_DISCLOSURE => Some(&MINOR_MODEL_AGE_DISCLOSURE_CODES),
         DATA_MINING => Some(&DATA_MINING_CODES),
+        LICENSOR_TELEPHONE_TYPE_1 | LICENSOR_TELEPHONE_TYPE_2 => {
+            Some(&LICENSOR_TELEPHONE_TYPE_CODES)
+        }
         DIGITAL_SOURCE_TYPE => Some(&DIGITAL_SOURCE_TYPE_URIS),
         _ => None,
     }
@@ -121,7 +133,12 @@ pub fn is_choice(xmp_id: &str, value: &str) -> bool {
 /// retired Digital Source Type): [`PLUS_PREFIX`] and the code for PLUS, the value itself for
 /// Digital Source Type. `None` for a value that is in neither list.
 pub fn full_uri(xmp_id: &str, value: &str) -> Option<String> {
-    if is_choice(xmp_id, value) && PLUS_PROPERTIES.contains(&xmp_id) {
+    let plus = PLUS_PROPERTIES.contains(&xmp_id)
+        || matches!(
+            xmp_id,
+            LICENSOR_TELEPHONE_TYPE_1 | LICENSOR_TELEPHONE_TYPE_2
+        );
+    if is_choice(xmp_id, value) && plus {
         return Some(format!("{PLUS_PREFIX}{value}"));
     }
     let digital_source_type = xmp_id == DIGITAL_SOURCE_TYPE
@@ -275,6 +292,37 @@ mod tests {
         assert_eq!(full_uri(PROPERTY_RELEASE_STATUS, "MR-NAP"), None);
         assert_eq!(full_uri(MINOR_MODEL_AGE_DISCLOSURE, &retired), None);
         assert_eq!(full_uri("photoshop:City", "MR-NAP"), None);
+    }
+
+    /// The telephone types of a Licensor entry (T139): the five codes of the LDF file in its
+    /// order, the same for both, each with its full PLUS URI; compared exactly.
+    #[test]
+    fn the_licensor_telephone_types() {
+        for xmp_id in [LICENSOR_TELEPHONE_TYPE_1, LICENSOR_TELEPHONE_TYPE_2] {
+            assert_eq!(
+                choices(xmp_id),
+                Some(&["work", "cell", "fax", "home", "pager"][..]),
+                "{xmp_id}"
+            );
+            assert_eq!(
+                full_uri(xmp_id, "cell").as_deref(),
+                Some("http://ns.useplus.org/ldf/vocab/cell")
+            );
+            for value in ["Work", "mobile", "http://ns.useplus.org/ldf/vocab/work", ""] {
+                assert!(!is_choice(xmp_id, value), "{xmp_id} {value:?}");
+                assert_eq!(full_uri(xmp_id, value), None, "{xmp_id} {value:?}");
+            }
+        }
+        // Not a property validate checks: a sub-field of Licensor, not in the property table.
+        assert!(!PLUS_PROPERTIES.contains(&LICENSOR_TELEPHONE_TYPE_1));
+        // A sub-field of the Licensor structure in the property table.
+        let licensor = crate::properties::struct_def("Licensor").unwrap();
+        for xmp_id in [LICENSOR_TELEPHONE_TYPE_1, LICENSOR_TELEPHONE_TYPE_2] {
+            assert!(
+                licensor.fields.iter().any(|field| field.xmp_id == xmp_id),
+                "{xmp_id}"
+            );
+        }
     }
 
     #[test]

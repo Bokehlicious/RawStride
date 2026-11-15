@@ -3,12 +3,13 @@
 //! in the grid and the loupe that recompute the list before and after the move. Plain Rust, no I/O
 //! (GR11); the shown rating of each file comes through a closure.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use pw_metadata::Rating;
 
 use crate::filter::{matches, nearest_visible, visible};
 use crate::grid::{Navigation, navigate};
+use crate::selection::Selection;
 use crate::tabs::Tab;
 
 /// A step in the preview (the loupe), over the visible list or, with "only the marked", over the
@@ -97,6 +98,57 @@ impl Tab {
         rating_of: &dyn Fn(&Path) -> Option<Rating>,
     ) -> bool {
         self.refilter(ratings_ready, rating_of, None)
+    }
+
+    /// Puts the files in a new order (ADR 0017 U14-Q6, T138): entry `i` of `order` is the old
+    /// file index that comes `i`th. The current image stays current (and shown, when it was), the
+    /// marked images and the anchor stay marked, and the filter is applied again to the new order
+    /// (`refilter`). An `order` that is not a reordering of every file changes nothing. Returns
+    /// whether a file changed place.
+    pub fn reorder(
+        &mut self,
+        order: &[usize],
+        ratings_ready: bool,
+        rating_of: &dyn Fn(&Path) -> Option<Rating>,
+    ) -> bool {
+        let count = self.files.len();
+        if order.len() != count {
+            return false;
+        }
+        // The new index of each old file index.
+        let mut new_of_old = vec![usize::MAX; count];
+        for (new, &old) in order.iter().enumerate() {
+            match new_of_old.get_mut(old) {
+                Some(slot) if *slot == usize::MAX => *slot = new,
+                _ => return false,
+            }
+        }
+        if order.iter().enumerate().all(|(new, &old)| new == old) {
+            return false;
+        }
+        let moved = |old: usize| new_of_old.get(old).copied();
+        let all: Vec<usize> = (0..count).collect();
+        let marked: Vec<usize> = self
+            .selection
+            .marked_in(&all)
+            .into_iter()
+            .filter_map(moved)
+            .collect();
+        let mut selection = Selection::default();
+        if let Some(anchor) = self.selection.anchor().and_then(moved) {
+            selection.click(anchor);
+        }
+        selection.all(&marked);
+        let was_shown = self.position().is_some();
+        let files: Vec<PathBuf> = order
+            .iter()
+            .filter_map(|&old| self.files.get(old).cloned())
+            .collect();
+        self.files = files;
+        self.selection = selection;
+        self.current = moved(self.current).unwrap_or(0);
+        self.refilter(ratings_ready, rating_of, was_shown.then_some(self.current));
+        true
     }
 
     /// The position of the current image in `visible`, if it is shown.
@@ -1111,5 +1163,73 @@ mod tests {
         let supported = |index: usize| index != 1;
         assert_eq!(metadata_neighbour(&visible, 1, true, supported), Some(2));
         assert_eq!(metadata_neighbour(&visible, 1, false, supported), Some(0));
+    }
+
+    // --- reordering a tab (ADR 0017 U14-Q6, T138) ---
+
+    #[test]
+    fn reordering_keeps_the_current_image_and_the_marking_and_reapplies_the_filter() {
+        let (mut tabs, ratings) = setup();
+        // Under "3 stars or more" (1 and 2 shown): a click on 1, then Shift+click on 2 marks both;
+        // 2 is current and 1 the anchor.
+        set(
+            &mut tabs,
+            &ratings,
+            filter(StarFilter::Stars(3), LabelFilter::all()),
+        );
+        let t = tab(&mut tabs);
+        t.click(1, false, false, true, &of(&ratings));
+        t.click(2, false, true, true, &of(&ratings));
+        assert_eq!(t.selection.marked_in(&t.visible), [1, 2]);
+
+        // The reverse order: old file i becomes 11 − i.
+        let order: Vec<usize> = (0..12).rev().collect();
+        assert!(t.reorder(&order, true, &of(&ratings)));
+
+        assert_eq!(t.files.first(), Some(&name(11)));
+        assert_eq!(t.files.get(t.current), Some(&name(2)), "the same image");
+        // The filter applied to the new order: IMG_002 now comes before IMG_001.
+        assert_eq!(t.visible, [9, 10]);
+        assert_eq!(t.position(), Some(0));
+        assert_eq!(t.selection.marked_in(&t.visible), [9, 10]);
+        assert_eq!(t.selection.anchor(), Some(10), "the anchor follows IMG_001");
+        assert_eq!(status(t), "1 / 2 (of 12)");
+    }
+
+    #[test]
+    fn reordering_without_a_filter_keeps_every_image_shown_and_the_current_one_in_view() {
+        let (mut tabs, ratings) = setup();
+        let t = tab(&mut tabs);
+        t.click(5, false, false, true, &of(&ratings));
+        t.click(7, true, false, true, &of(&ratings));
+        // The last file first.
+        let mut order: Vec<usize> = vec![11];
+        order.extend(0..11);
+        assert!(t.reorder(&order, true, &of(&ratings)));
+        assert_eq!(t.visible, (0..12).collect::<Vec<_>>());
+        assert_eq!(t.files.get(t.current), Some(&name(7)));
+        assert_eq!(t.current, 8);
+        // Ctrl+click marked the current image 5 first, then 7.
+        assert_eq!(t.selection.marked_in(&t.visible), [6, 8]);
+    }
+
+    #[test]
+    fn a_reorder_that_moves_nothing_or_is_not_a_reordering_changes_nothing() {
+        let (mut tabs, ratings) = setup();
+        let t = tab(&mut tabs);
+        t.click(3, false, false, true, &of(&ratings));
+        let before = t.clone();
+        assert!(!t.reorder(&(0..12).collect::<Vec<_>>(), true, &of(&ratings)));
+        assert!(!t.reorder(&[0, 1, 2], true, &of(&ratings)), "too short");
+        let mut twice: Vec<usize> = (0..12).collect();
+        twice[11] = 0;
+        assert!(!t.reorder(&twice, true, &of(&ratings)), "a file twice");
+        let mut outside: Vec<usize> = (0..12).collect();
+        outside[11] = 12;
+        assert!(
+            !t.reorder(&outside, true, &of(&ratings)),
+            "an index outside"
+        );
+        assert_eq!(*t, before);
     }
 }

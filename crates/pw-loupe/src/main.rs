@@ -7,7 +7,7 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::mpsc::TryRecvError;
@@ -51,6 +51,10 @@ use pw_loupe::{
     open_error_text, palette, path_resolution_error_text, prune_error_text, recovery_text,
     rect_on_a_screen, settings_save_error_text, settings_text, shell_key_action, shell_text,
     start_window, status_line_text, submenu_text, theme_text, visuals,
+};
+use pw_loupe::{
+    CaptureReader, SORT_KEYS, SortFollow, SortKey, SortOrder, modified_time, read_order,
+    sort_button_text, sort_direction_hover, sort_direction_text, sort_key_text, sorting_text,
 };
 use pw_loupe::{
     FILMSTRIP_CELL_WIDTH, FILMSTRIP_IMAGE_HEIGHT, FILMSTRIP_LABEL_HEIGHT, FILMSTRIP_MARGIN,
@@ -106,6 +110,8 @@ const WINDOW_BUTTON_SPACING: f32 = 4.0;
 const BACKDROP: egui::Color32 = egui::Color32::from_black_alpha(60);
 /// How often a frame is asked for while the metadata window waits for the worker.
 const WINDOW_POLL_INTERVAL: Duration = Duration::from_millis(100);
+/// How often a frame is asked for while capture times are being read for the sort (T138).
+const CAPTURE_POLL_INTERVAL: Duration = Duration::from_millis(50);
 /// How many frames the window state is not taken after the preview closed, at most, while the
 /// system has not yet reported the window out of the preview's full screen (T111).
 const WINDOW_SETTLE_FRAMES: u32 = 30;
@@ -561,6 +567,10 @@ struct Loupe {
     /// The inspector's Exif reader and summary (ADR 0017 §2.1, T110).
     exif_reader: ExifReader,
     exif: ExifInspector,
+    /// The capture-time reader of the sort (ADR 0017 U14-Q4, T138) and the files asked for whose
+    /// answer has not come back.
+    capture_reader: CaptureReader,
+    capture_in_flight: HashSet<PathBuf>,
     /// The status bar's content of the last frame, and the one made this frame (T109).
     status_bar: StatusBar,
     next_status: StatusBar,
@@ -862,6 +872,121 @@ impl Loupe {
                 self.loupe_follows_visible();
             }
         }
+    }
+
+    /// A sort chosen in the command bar or View ▸ Sort By (ADR 0017 U14, T138): remembered in
+    /// `settings.txt` for every tab (U14-Q3) and applied at once to every tab whose keys are read
+    /// (U14-Q5). Choosing the order the tabs are in already applies it again. No widget keeps the
+    /// keyboard focus, as after a filter.
+    fn set_sort(&mut self, ctx: &egui::Context, order: SortOrder) {
+        if self.settings.shell.sort == order {
+            self.tabs.forget_sort();
+        } else {
+            self.settings.shell.sort = order;
+            if let Some(path) = &self.settings_path
+                && let Err(error) =
+                    save_settings_with_library(path, &self.settings, &self.library.saved())
+            {
+                eprintln!("pw-loupe: the sort order could not be saved: {error}");
+            }
+        }
+        if let Some(id) = ctx.memory(|memory| memory.focused()) {
+            ctx.memory_mut(|memory| memory.surrender_focus(id));
+        }
+        self.follow_sort(ctx);
+    }
+
+    /// The sort's follow-up of a frame (U14-Q4): takes the capture times that came back, asks
+    /// for the active tab's missing ones when sorting by capture time, and applies the order to
+    /// every tab whose keys are all read. A frame is asked for while reads are on their way.
+    fn follow_sort(&mut self, ctx: &egui::Context) {
+        while let Some(read) = self.capture_reader.try_recv() {
+            self.capture_in_flight.remove(&read.path);
+            self.tabs.record_capture(&read.path, read.time);
+        }
+        if self.settings.shell.sort.key == SortKey::Capture {
+            self.request_capture_times();
+        }
+        if self.sort_tabs(self.ratings_ready()) {
+            self.active_reordered();
+        }
+        if !self.capture_in_flight.is_empty() {
+            ctx.request_repaint_after(CAPTURE_POLL_INTERVAL);
+        }
+    }
+
+    /// Asks the reader for every capture time of the active tab not read or asked for yet, the
+    /// shown images first (`read_order`). When the reader has stopped, a file counts as having no
+    /// date, so the sort still completes.
+    fn request_capture_times(&mut self) {
+        let Some(tab) = self.tabs.active() else {
+            return;
+        };
+        if tab.sorted == Some(self.settings.shell.sort) {
+            return;
+        }
+        let in_flight = &self.capture_in_flight;
+        let wanted: Vec<PathBuf> =
+            read_order(tab.files.len(), &tab.visible, tab.current, |index| {
+                tab.files
+                    .get(index)
+                    .is_none_or(|path| tab.capture.is_read(path) || in_flight.contains(path))
+            })
+            .into_iter()
+            .filter_map(|index| tab.files.get(index).cloned())
+            .collect();
+        for path in wanted {
+            if self.capture_reader.request(path.clone()) {
+                self.capture_in_flight.insert(path);
+            } else {
+                self.tabs.record_capture(&path, None);
+            }
+        }
+    }
+
+    /// `Tabs::follow_sort` with the chosen order, the shown ratings and the files' modification
+    /// times. Returns whether a file of the active tab changed place.
+    fn sort_tabs(&mut self, ratings_ready: bool) -> bool {
+        let order = self.settings.shell.sort;
+        let cwd = std::env::current_dir().ok();
+        let rating_of = tab_rating(&self.metadata, cwd.as_deref());
+        matches!(
+            self.tabs
+                .follow_sort(order, ratings_ready, &rating_of, &modified_time),
+            SortFollow::Reordered { moved: true }
+        )
+    }
+
+    /// After the active tab was reordered (U14-Q6): its thumbnails are asked for again in the new
+    /// order (they are kept by file index; the thumbnail cache keeps the images, as on a tab
+    /// switch), a shown preview gets the new list through `set_files` (its decoded images are
+    /// kept, as after a filter), and the contact sheet scrolls to the current image.
+    fn active_reordered(&mut self) {
+        let count = self.tabs.active().map_or(0, |tab| tab.files.len());
+        self.thumb_generation = self.thumb_generation.wrapping_add(1);
+        self.thumb_worker.set_generation(self.thumb_generation);
+        self.thumb_grid = ThumbGrid::new(self.thumb_generation, count);
+        self.thumb_textures.clear();
+        if self.tabs.active().map(|tab| tab.mode) == Some(ViewMode::Loupe) {
+            if let Some(position) = self.loupe_follows_visible() {
+                self.scroll_request = Some(position);
+            }
+        } else {
+            self.scroll_request = self.tabs.active().and_then(Tab::position);
+        }
+    }
+
+    /// The status bar's part while the active tab waits for its capture times (U14-Q4).
+    fn sort_status(&self) -> Option<String> {
+        let order = self.settings.shell.sort;
+        let tab = self.tabs.active()?;
+        if order.key != SortKey::Capture || tab.sorted == Some(order) || tab.files.is_empty() {
+            return None;
+        }
+        Some(sorting_text(
+            tab.capture.read_count(&tab.files),
+            tab.files.len(),
+        ))
     }
 
     /// Opens the view core on the visible images of the active tab and goes to the current one:
@@ -1484,6 +1609,10 @@ impl Loupe {
     }
 
     fn load_active_tab(&mut self) {
+        // A folder opened (or opened again) or another tab: the order is applied now when its keys
+        // need nothing read (U14-Q5), so the thumbnails below are asked for in it. The ratings
+        // of this tab are not read yet; a rating or capture-time order follows in `follow_sort`.
+        self.sort_tabs(false);
         self.thumb_generation = self.thumb_generation.wrapping_add(1);
         self.thumb_worker.set_generation(self.thumb_generation);
         let Some(tab) = self.tabs.active().cloned() else {
@@ -1828,6 +1957,9 @@ impl Loupe {
             };
             if let Some(message) = &self.message {
                 parts.push(message.clone());
+            }
+            if let Some(sorting) = self.sort_status() {
+                parts.push(sorting);
             }
             if let Some(notice) = self.metadata.notice(current_path.as_deref()) {
                 parts.push(notice);
@@ -3258,6 +3390,8 @@ impl Loupe {
             }
             Command::Fullscreen => Some(shell.fullscreen),
             Command::Theme(theme) => Some(shell.theme == theme),
+            Command::Sort(key) => Some(shell.sort.key == key),
+            Command::SortDescending => Some(shell.sort.descending),
             _ => None,
         }
     }
@@ -3301,6 +3435,20 @@ impl Loupe {
             Command::LeftColumn => self.toggle_column(true),
             Command::Fullscreen => self.shell_action(ctx, ShellAction::ToggleFullscreen),
             Command::Theme(theme) => self.set_theme(ctx, theme),
+            Command::Sort(key) => self.set_sort(
+                ctx,
+                SortOrder {
+                    key,
+                    ..self.settings.shell.sort
+                },
+            ),
+            Command::SortDescending => self.set_sort(
+                ctx,
+                SortOrder {
+                    descending: !self.settings.shell.sort.descending,
+                    ..self.settings.shell.sort
+                },
+            ),
         }
     }
 
@@ -3347,6 +3495,23 @@ impl Loupe {
                                     for item in *items {
                                         self.menu_item(ui, *item, commands);
                                     }
+                                });
+                            }
+                            MenuEntry::Sort => {
+                                ui.menu_button(shell_text(ShellText::SortMenu), |ui| {
+                                    for key in SORT_KEYS {
+                                        let item = MenuItem {
+                                            command: Command::Sort(key),
+                                            key: None,
+                                        };
+                                        self.menu_item(ui, item, commands);
+                                    }
+                                    ui.separator();
+                                    let item = MenuItem {
+                                        command: Command::SortDescending,
+                                        key: None,
+                                    };
+                                    self.menu_item(ui, item, commands);
                                 });
                             }
                             MenuEntry::Filter => {
@@ -3502,6 +3667,28 @@ impl Loupe {
                     new_filter = Some(Filter { label, ..filter });
                 }
             });
+            ui.separator();
+            // The sort order of every tab (ADR 0017 U14-Q7, T138): the key and the direction.
+            let sort = self.settings.shell.sort;
+            egui::ComboBox::from_id_salt("sort-key")
+                .selected_text(sort_button_text(sort.key))
+                .show_ui(ui, |ui| {
+                    for key in SORT_KEYS {
+                        if ui
+                            .selectable_label(sort.key == key, sort_key_text(key))
+                            .clicked()
+                        {
+                            commands.push(Command::Sort(key));
+                        }
+                    }
+                });
+            if ui
+                .button(sort_direction_text(sort.descending))
+                .on_hover_text(sort_direction_hover(sort.descending))
+                .clicked()
+            {
+                commands.push(Command::SortDescending);
+            }
             ui.separator();
             let slider = ui.add(
                 egui::Slider::new(
@@ -3717,6 +3904,8 @@ impl Loupe {
         // A rolled-back write does not refilter (ADR 0014 §2.2; the next move drops the image); the
         // ratings becoming ready does.
         self.refilter_when_ratings_change();
+        // The sort order follows its keys as they are read (U14-Q4, T138).
+        self.follow_sort(&ctx);
         // A folder or a file dropped on the window opens in a new tab (owner decision 2026-11-08,
         // ADR 0010 Q3). An empty active tab is filled instead, and an already open folder is
         // activated (GR12). Modifier keys are not used: Windows does not report them reliably
@@ -4081,6 +4270,9 @@ impl Loupe {
         if let Some(m) = &self.message {
             parts.push(m.clone());
         }
+        if let Some(sorting) = self.sort_status() {
+            parts.push(sorting);
+        }
         if let Some(notice) = &metadata_notice {
             parts.push(notice.clone());
         }
@@ -4118,8 +4310,9 @@ fn resolve_paths(files: &[PathBuf]) -> Result<Vec<PathBuf>, String> {
 /// The properties of the editor's fields, left out of the window's other metadata (D16, T107,
 /// T123): every field's property once, also `Iptc4xmpCore:CreatorContactInfo`, whose fields are
 /// all editor fields, and the read-only Urgency, Category and Supplemental Categories, which are
-/// shown in the Assignment section; and `xmp:Rating` and `xmp:Label`, shown by the Rating and
-/// Label section (T124). Conflicts on any of them are still listed.
+/// shown in the Assignment section; `xmp:Rating` and `xmp:Label`, shown by the Rating and
+/// Label section (T124); and the structure lists edited in the form (T136, T139). Conflicts on
+/// any of them are still listed.
 fn window_editor_properties() -> Vec<&'static str> {
     let mut properties: Vec<&'static str> = Vec::new();
     for field in EditorField::ALL {
@@ -4128,8 +4321,10 @@ fn window_editor_properties() -> Vec<&'static str> {
         }
     }
     properties.extend(["xmp:Rating", "xmp:Label"]);
-    // Location Created and Location Shown are edited in Time and Place (U11a, T136).
-    properties.extend(EditorForm::LOCATION_LISTS);
+    // Location Created and Location Shown are edited in Time and Place (U11a, T136); Genre,
+    // Image Creator, Copyright Owner, Licensor and Image Supplier in Assignment and Licence (PLUS)
+    // (U11b, T139).
+    properties.extend(EditorForm::STRUCTURE_LISTS);
     properties
 }
 
@@ -4150,8 +4345,10 @@ struct FormResponse {
 /// when `enabled`); then read-only, in small text, the other metadata (without an origin line,
 /// T114), the conflicts a rule decided (each value with its origin) and the notices, each only
 /// when it has rows. The contact fields are drawn under the heading of their structure, "Creator's
-/// Contact Info" (T114). Time and Place ends with Location Created and Location Shown
-/// (`draw_location_lists`, T136). Labels and values wrap at the window's width. The last section,
+/// Contact Info" (T114). The structure lists (`draw_structure_lists`) are drawn in their places:
+/// Time and Place ends with Location Created and Location Shown (T136), Genre follows Scene Code
+/// and Licence (PLUS) starts with Image Creator, Copyright Owner, Licensor and Image Supplier
+/// (T139). Labels and values wrap at the window's width. The last section,
 /// Rating and Label (T124), holds the buttons of the image's shown `rating` instead of fields,
 /// usable when `rating_enabled` (also while the form's write runs, not while "Save changes?" is
 /// asked).
@@ -4185,14 +4382,15 @@ fn draw_window_form(
                         if section == EditorSection::RatingLabel {
                             rating_choice = draw_rating_buttons(ui, rating);
                         }
+                        // The structure lists at the start of the section (T139), then each
+                        // field followed by the lists drawn after it (T136, T139).
+                        draw_structure_lists(ui, &mut state.form, section, None);
                         for field in EditorField::ALL
                             .into_iter()
                             .filter(|field| field.section() == section)
                         {
                             draw_window_field(ui, &mut state.form, field, errors);
-                        }
-                        if section == EditorSection::TimePlace {
-                            draw_location_lists(ui, &mut state.form);
+                            draw_structure_lists(ui, &mut state.form, section, Some(field));
                         }
                     })
             })
@@ -4374,29 +4572,46 @@ fn draw_window_field(
     ui.add_space(PANEL_ROW_SPACING);
 }
 
-/// Location Created and Location Shown at the end of Time and Place (ADR 0017 U11a-Q2, T136):
-/// each list's name, then one framed group per entry with its seven sub-fields (names from
-/// `property_label`, one-line text boxes as wide as the window) and "Remove", then "Add
-/// Location"; under Location Shown also "Copy from Location Created" (U11a-Q4), enabled when
-/// Location Created has an entry that is not empty. A list with an undecided conflict, or a value
-/// the form cannot show, is its read-only text instead.
-fn draw_location_lists(ui: &mut egui::Ui, form: &mut EditorForm) {
-    for list in EditorForm::LOCATION_LISTS {
+/// The structure lists drawn in `section` after the field `after` (or at the start of the section
+/// for `None`): Location Created and Location Shown at the end of Time and Place (ADR 0017
+/// U11a-Q2, T136), Genre after Scene Code, and Image Creator, Copyright Owner, Licensor and Image
+/// Supplier at the start of Licence (PLUS) (U11b, T139). Each list's name, then one framed group
+/// per entry with its sub-fields (names from `property_label`, one-line text boxes as wide as the
+/// window, a drop-down for a Licensor's telephone types, a Licensor's address under a collapsed
+/// "Address" line) and "Remove", then "Add Location" or "Add {list}", disabled at the list's
+/// limit with the tooltip "At most {n} entries"; under Location Shown also "Copy from Location
+/// Created" (U11a-Q4), under Image Creator "Copy from Creator" (U11b-Q4). A list with an
+/// undecided conflict, or a value the form cannot show, is its read-only text instead.
+fn draw_structure_lists(
+    ui: &mut egui::Ui,
+    form: &mut EditorForm,
+    section: EditorSection,
+    after: Option<EditorField>,
+) {
+    for list in EditorForm::lists_at(section, after) {
         ui.label(egui::RichText::new(property_label(list, Language::En)).strong());
-        if let Some(text) = form.location_read_only(list).map(str::to_string) {
+        if let Some(text) = form.list_read_only(list).map(str::to_string) {
             ui.add(egui::Label::new(text).wrap());
             ui.add_space(PANEL_ROW_SPACING);
             continue;
         }
         let mut removed = None;
-        for entry in 0..form.location_count(list) {
-            ui.push_id(("metadata-window-location", list, entry), |ui| {
+        for entry in 0..form.list_count(list) {
+            ui.push_id(("metadata-window-list", list, entry), |ui| {
                 egui::Frame::group(ui.style()).show(ui, |ui| {
-                    for field in EditorForm::LOCATION_FIELDS {
-                        ui.label(egui::RichText::new(property_label(field, Language::En)).strong());
-                        if let Some(text) = form.location_text_mut(list, entry, field) {
-                            ui.add(egui::TextEdit::singleline(text).desired_width(f32::INFINITY));
-                        }
+                    for field in EditorForm::list_fields(list) {
+                        draw_list_field(ui, form, list, entry, field);
+                    }
+                    let address = EditorForm::list_address_fields(list);
+                    if !address.is_empty() {
+                        egui::CollapsingHeader::new(editor_text(&EditorText::Address))
+                            .id_salt("address")
+                            .default_open(false)
+                            .show(ui, |ui| {
+                                for field in address {
+                                    draw_list_field(ui, form, list, entry, field);
+                                }
+                            });
                     }
                     if ui
                         .button(editor_text(&EditorText::RemoveLocation))
@@ -4409,11 +4624,23 @@ fn draw_location_lists(ui: &mut egui::Ui, form: &mut EditorForm) {
             ui.add_space(PANEL_ROW_SPACING);
         }
         if let Some(entry) = removed {
-            form.remove_location(list, entry);
+            form.remove_entry(list, entry);
         }
         ui.horizontal_wrapped(|ui| {
-            if ui.button(editor_text(&EditorText::AddLocation)).clicked() {
-                form.add_location(list);
+            let add_text = if EditorForm::LOCATION_LISTS.contains(&list) {
+                editor_text(&EditorText::AddLocation)
+            } else {
+                editor_text(&EditorText::AddEntry { list })
+            };
+            let add = ui.add_enabled(form.can_add_entry(list), egui::Button::new(add_text));
+            let add = match EditorForm::max_entries(list) {
+                Some(max) => {
+                    add.on_disabled_hover_text(editor_text(&EditorText::AtMostEntries { max }))
+                }
+                None => add,
+            };
+            if add.clicked() {
+                form.add_entry(list);
             }
             if list == EditorForm::LOCATION_SHOWN {
                 let copy = ui.add_enabled(
@@ -4424,8 +4651,64 @@ fn draw_location_lists(ui: &mut egui::Ui, form: &mut EditorForm) {
                     form.copy_location_created();
                 }
             }
+            if list == EditorForm::IMAGE_CREATOR {
+                let copy = ui.add_enabled(
+                    form.can_copy_creator(),
+                    egui::Button::new(editor_text(&EditorText::CopyFromCreator)),
+                );
+                if copy.clicked() {
+                    form.copy_creator();
+                }
+            }
         });
         ui.add_space(PANEL_ROW_SPACING);
+    }
+}
+
+/// One sub-field of a structure list's entry (T136, T139): its name from `property_label`, then a
+/// one-line text box as wide as the window, or a drop-down for a choice (a Licensor's telephone
+/// types, U11b-Q3): the empty entry, the PLUS values with their full URIs as tooltips, and an
+/// unknown value of the file as "Unknown value: {uri}" (U10d-Q4).
+fn draw_list_field(
+    ui: &mut egui::Ui,
+    form: &mut EditorForm,
+    list: &'static str,
+    entry: usize,
+    field: &'static str,
+) {
+    ui.label(egui::RichText::new(property_label(field, Language::En)).strong());
+    let entries = form.list_choice_entries(list, entry, field);
+    if entries.is_empty() {
+        if let Some(text) = form.list_text_mut(list, entry, field) {
+            ui.add(egui::TextEdit::singleline(text).desired_width(f32::INFINITY));
+        }
+        return;
+    }
+    let current = form.list_text(list, entry, field).to_string();
+    let selected = entries
+        .iter()
+        .find(|choice| choice.value == current)
+        .map(|choice| choice.text.clone())
+        .unwrap_or_default();
+    let mut chosen = None;
+    egui::ComboBox::from_id_salt(("metadata-window-list-choice", field))
+        .selected_text(selected)
+        .width(ui.available_width())
+        .wrap_mode(egui::TextWrapMode::Wrap)
+        .show_ui(ui, |ui| {
+            for choice in &entries {
+                let response = ui.selectable_label(choice.value == current, &choice.text);
+                let response = match &choice.tooltip {
+                    Some(tooltip) => response.on_hover_text(tooltip),
+                    None => response,
+                };
+                if response.clicked() {
+                    chosen = Some(choice.value.clone());
+                }
+            }
+        });
+    if let Some(value) = chosen {
+        form.set_list_choice(list, entry, field, &value);
     }
 }
 
@@ -5540,6 +5823,8 @@ fn run(options: Options) -> Result<(), String> {
                 anchor_at_pointer: true,
                 exif_reader: ExifReader::start(),
                 exif: ExifInspector::default(),
+                capture_reader: CaptureReader::start(),
+                capture_in_flight: HashSet::new(),
                 status_bar: StatusBar::default(),
                 next_status: StatusBar::default(),
                 scroll_request: None,
@@ -6119,8 +6404,9 @@ mod tests {
         // which is now left out as a whole (T123, point 7); and the rating and the label, shown in
         // the Rating and Label section (T124, point 6). The seven fields of the Licence (PLUS)
         // section (T128) are seven of them. Location Created and Location Shown, edited in Time
-        // and Place (T136), are left out too.
-        assert_eq!(properties.len(), 44);
+        // and Place (T136), and Genre, Image Creator, Copyright Owner, Licensor and Image
+        // Supplier, edited in Assignment and Licence (PLUS) (T139), are left out too.
+        assert_eq!(properties.len(), 49);
         for id in [
             "dc:title",
             "dc:description",
@@ -6144,6 +6430,11 @@ mod tests {
             "xmp:Label",
             "Iptc4xmpExt:LocationCreated",
             "Iptc4xmpExt:LocationShown",
+            "Iptc4xmpExt:Genre",
+            "plus:ImageCreator",
+            "plus:CopyrightOwner",
+            "plus:Licensor",
+            "plus:ImageSupplier",
         ] {
             assert!(properties.contains(&id), "{id}");
         }
@@ -6156,8 +6447,8 @@ mod tests {
         // Metadata.
         for id in [
             "Iptc4xmpCore:IntellectualGenre",
-            "Iptc4xmpExt:Genre",
-            "plus:ImageCreator",
+            "Iptc4xmpExt:PersonInImageWDetails",
+            "Iptc4xmpExt:ArtworkOrObject",
         ] {
             assert!(!properties.contains(&id), "{id}");
         }
@@ -6220,13 +6511,14 @@ mod tests {
     }
 
     /// The Licence (PLUS) section's properties are fields, left out of Other Metadata (T128,
-    /// point 7); Model Age and the PLUS structures stay there.
+    /// point 7), and so are its PLUS structures, edited as lists (T139, point 5); Model Age stays
+    /// there.
     #[test]
     fn other_metadata_leaves_out_the_licence_fields() {
         use pw_metadata::iim::CodedCharset;
         use pw_metadata::read::MetadataRead;
         use pw_metadata::reconcile::{FileKind, IimDigest, Reconciled};
-        use pw_metadata::value::{Metadata, Origin, Value};
+        use pw_metadata::value::{Metadata, Origin, StructValue, Value};
         use pw_metadata::write_plan::{ExifPresent, FileState};
 
         let properties = window_editor_properties();
@@ -6242,9 +6534,15 @@ mod tests {
         for id in licence {
             assert!(properties.contains(&id), "{id}");
         }
-        for id in ["Iptc4xmpExt:ModelAge", "plus:Licensor", "plus:ImageCreator"] {
-            assert!(!properties.contains(&id), "{id}");
+        for id in [
+            "plus:ImageCreator",
+            "plus:CopyrightOwner",
+            "plus:Licensor",
+            "plus:ImageSupplier",
+        ] {
+            assert!(properties.contains(&id), "{id}");
         }
+        assert!(!properties.contains(&"Iptc4xmpExt:ModelAge"));
 
         let text = |s: &str| Value::Text(s.to_string());
         let mut metadata = Metadata::new();
@@ -6260,6 +6558,12 @@ mod tests {
                 text("http://cv.iptc.org/newscodes/digitalsourcetype/digitalCapture"),
             ),
             ("Iptc4xmpExt:ModelAge", Value::List(vec!["25".into()])),
+            (
+                "plus:Licensor",
+                Value::StructList(vec![StructValue {
+                    fields: vec![("plus:LicensorName".into(), text("Bildbyrån"))],
+                }]),
+            ),
         ] {
             metadata
                 .insert_read(id, value, Origin::XmpEmbedded)

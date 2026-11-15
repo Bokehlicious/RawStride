@@ -6,6 +6,7 @@
 use egui::{Color32, Key};
 
 use crate::settings::{ShellSettings, WindowRect};
+use crate::sort::SortKey;
 
 /// The theme of the menus, bars, columns and dialogs (ADR 0017 §2.5, U-Q3). The contact sheet and
 /// the image area keep the same neutral dark grey in both (U1-Q4), so an image is always judged
@@ -440,6 +441,11 @@ pub enum Command {
     LeftColumn,
     Fullscreen,
     Theme(Theme),
+    /// Sort every tab by a key (View ▸ Sort By and the command bar's drop-down; ADR 0017 U14,
+    /// T138).
+    Sort(SortKey),
+    /// Descending ↔ ascending (View ▸ Sort By ▸ Descending and the command bar's ↑/↓ button).
+    SortDescending,
 }
 
 /// The view a command acts in.
@@ -504,6 +510,9 @@ pub enum MenuEntry {
     /// Visa ▸ Filter: the command bar's three lists as radio items and "Visa alla", drawn from the
     /// filter's own choices (ADR 0014).
     Filter,
+    /// View ▸ Sort By: the sort keys as radio items and "Descending" as a check item (ADR 0017
+    /// U14-Q7, T138), drawn from `SORT_KEYS`. No key (U8 may add one).
+    Sort,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -630,6 +639,7 @@ pub const MENUS: &[Menu] = &[
             item(Command::ToggleAnchor, plain(Key::A)),
             MenuEntry::Separator,
             MenuEntry::Filter,
+            MenuEntry::Sort,
             MenuEntry::Separator,
             item(Command::NextTab, ctrl(Key::Tab)),
             item(
@@ -660,7 +670,7 @@ pub fn menu_items() -> Vec<MenuItem> {
             match entry {
                 MenuEntry::Item(item) => items.push(*item),
                 MenuEntry::Submenu(_, sub) => items.extend_from_slice(sub),
-                MenuEntry::Separator | MenuEntry::Filter => {}
+                MenuEntry::Separator | MenuEntry::Filter | MenuEntry::Sort => {}
             }
         }
     }

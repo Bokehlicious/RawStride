@@ -67,6 +67,12 @@ English mode already shows IPTC's name from the property table (`property_label`
 | `plus:ImageCreator` | Bildskapare | Image Creator | Image Creator |
 | `plus:CopyrightOwner` | Upphovsrättsinnehavare | Copyright Owner | Copyright Owner |
 | `plus:Licensor` | Licensgivare | Licensor | Licensor |
+| `Iptc4xmpExt:Genre` | – | Genre | Genre (T139; a list of CV terms in Assignment) |
+| `…:CvTermName`, `…:CvTermId`, `…:CvId` | – | CV-Term name, CV-Term ID, CV-Term CV ID | the same (T139; in a Genre entry; IPTC's table writes "name" in lower case) |
+| `plus:ImageSupplier` | – | Image Supplier | Image Supplier (T139) |
+| `plus:ImageCreatorName`, `…ID`; `plus:CopyrightOwnerName`, `…ID`; `plus:ImageSupplierName`, `…ID` | – | Image Creator Name, Image Creator ID; Copyright Owner Name, Copyright Owner ID; Image Supplier Name, Image Supplier ID | the same (T139; in an entry of the list) |
+| `plus:LicensorName`, `…ID`, `…Email`, `…URL`, `…Telephone1`, `…TelephoneType1`, `…Telephone2`, `…TelephoneType2` | – | Licensor Name, Licensor ID, Licensor Email, Licensor URL, Licensor Telephone 1, Licensor Telephone Type 1, Licensor Telephone 2, Licensor Telephone Type 2 | the same (T139; in a Licensor entry) |
+| `plus:LicensorStreetAddress`, `…ExtendedAddress`, `…City`, `…Region`, `…PostalCode`, `…Country` | – | Licensor Address, Licensor Adress Detail, Licensor City, Licensor State or Province, Licensor Postal Code, Licensor Country | the same (T139; under "Address" in a Licensor entry; "Adress" is the spelling of IPTC's table) |
 | `Iptc4xmpExt:PersonInImage` | Person i bilden | Person Shown in the Image | Person Shown in the Image |
 | `Iptc4xmpExt:OrganisationInImageName` | – | Name of Organisation Featured in the Image | Name of Organisation Featured in the Image (T123) |
 | `Iptc4xmpExt:OrganisationInImageCode` | – | Code of Organisation Featured in the Image | Code of Organisation Featured in the Image (T123) |
@@ -97,6 +103,8 @@ Every other property already uses IPTC's English name in both languages.
 | vald (Ingen bild vald) | selected (No image selected) | the current image (G4) |
 | Bara markerade | Marked only | |
 | Filter, Visa alla | Filter, Show All | |
+| – | Sort By, Sort: {key}; File Name, Capture Time, Modified, File Type, Rating; Ascending / Descending (↑ / ↓) | the sort order in View and the command bar (ADR 0017 U14-Q1, U14-Q7); added by T138 |
+| – | Sorting by capture time: {i} of {n} | the status bar while a tab's capture times are read (U14-Q4); added by T138 |
 
 ## 3. Window, menus and commands
 
@@ -187,6 +195,8 @@ Every other property already uses IPTC's English name in both languages.
 | – | Changed: …, Emptied: …, Emptied only on this image: …, Skipped: {m} files | the confirmation's lines (U12c-Q4); added by T126. "Skipped: 1 file" in singular |
 | – | Written to {w} of {n} images.; Unresolved conflict kept: {file} ({property}) | the summary of "Apply to All Marked" (U12c-Q6); added by T126. "Written to {w} of 1 image." in singular |
 | – | Add Location, Remove, Copy from Location Created | the buttons of the location lists in Time and Place: under each list, on each entry, and under Location Shown (ADR 0017 U11a-Q2, U11a-Q4, U11a-Q6); added by T136. "Copy from {list}" takes the list's name from `property_label` |
+| – | Add {list}, At most {n} entries, Copy from Creator, Address | the structure lists of T139 (ADR 0017 U11b-Q6): "Add Genre", "Add Image Creator", … under each list (the locations keep "Add Location"; "Remove" on each entry as there); the tooltip of a disabled Add at the list's limit ("At most 1 entry" in singular); the button under Image Creator (U11b-Q4; "Creator" from `property_label`); the collapsed line over a Licensor entry's address (U11b-Q3); added by T139 |
+| – | Work, Cell, Fax, Home, Pager | the telephone types of a Licensor entry (PLUS `work`, `cell`, `fax`, `home`, `pager`), the LDF file's labels with a capital letter; an unknown value is "Unknown value: {uri}"; added by T139 |
 | Spara ändringarna? / Ändringar som inte sparades | Save changes? / Unsaved changes | |
 | Sparar … / Sparat. | Saving … / Saved. | |
 | Ändrad | Changed | |

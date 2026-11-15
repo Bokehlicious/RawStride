@@ -25,6 +25,7 @@ mod selection;
 mod settings;
 mod shell;
 mod shell_text;
+mod sort;
 mod tabs;
 mod thumbs;
 
@@ -97,10 +98,15 @@ pub use shell::{
 pub use shell_text::{
     SettingsText, ShellText, command_text, exiftool_message, fallback_text, key_text, menu_text,
     no_images_text, open_error_text, path_resolution_error_text, prune_error_text, recovery_text,
-    settings_save_error_text, settings_text, shell_text, status_line_text, submenu_text,
-    theme_text, window_title,
+    settings_save_error_text, settings_text, shell_text, sort_button_text, sort_direction_hover,
+    sort_direction_text, sort_key_text, sorting_text, status_line_text, submenu_text, theme_text,
+    window_title,
 };
-pub use tabs::{Tab, Tabs, ViewMode};
+pub use sort::{
+    CaptureRead, CaptureReader, CaptureTime, CaptureTimes, SORT_KEYS, SortKey, SortOrder, SortPlan,
+    modified_time, read_order,
+};
+pub use tabs::{SortFollow, Tab, Tabs, ViewMode};
 pub use thumbs::{CellState, ThumbGrid, color_image, request_cell};
 
 /// The window title: the product name (ADR 0012). `latency.ps1` finds the window by it (ADR 0009

@@ -598,48 +598,246 @@ const LOCATION_FIELDS: [&str; 7] = [
 /// The field after which the location lists are drawn and their edits made (U11a-Q2).
 const LOCATIONS_AFTER: EditorField = EditorField::CountryCode;
 
-/// One entry of a location list (U11a, T136): the texts of its seven shown sub-fields and the
-/// structure it started from, which keeps the sub-fields the form does not show (ADR 0007 §8).
+/// Genre (ADR 0017 U11, T139): a list of CV terms.
+const GENRE: &str = "Iptc4xmpExt:Genre";
+/// Image Creator (PLUS, T139).
+const IMAGE_CREATOR: &str = "plus:ImageCreator";
+/// The name of an Image Creator entry.
+const IMAGE_CREATOR_NAME: &str = "plus:ImageCreatorName";
+/// Copyright Owner (PLUS, T139).
+const COPYRIGHT_OWNER: &str = "plus:CopyrightOwner";
+/// Licensor (PLUS, T139).
+const LICENSOR: &str = "plus:Licensor";
+/// Image Supplier (PLUS, T139).
+const IMAGE_SUPPLIER: &str = "plus:ImageSupplier";
+
+/// One kind of list of structures in the form (U11b-Q1, T139): the list's XMP id, its shown
+/// sub-fields in the order of the form and where it is drawn. Its most entries come from
+/// [`properties::max_entries`]. Location Created and Location Shown (T136) are two of them.
+#[derive(Debug, PartialEq, Eq)]
+struct ListSpec {
+    /// The XMP id of the list.
+    property: &'static str,
+    /// The XMP ids of the shown sub-fields in the order of the form; names from
+    /// [`property_label`].
+    fields: &'static [&'static str],
+    /// How many of `fields` are shown open in each entry; the rest are under a collapsed
+    /// "Address" line (U11b-Q3).
+    open: usize,
+    /// The section the list is drawn in.
+    section: EditorSection,
+    /// The field after which the list is drawn; `None` at the start of its section.
+    after: Option<EditorField>,
+}
+
+/// The sub-fields of a CV term as Genre shows them (U11b-Q2).
+const GENRE_FIELDS: [&str; 3] = [
+    "Iptc4xmpExt:CvTermName",
+    "Iptc4xmpExt:CvTermId",
+    "Iptc4xmpExt:CvId",
+];
+/// The sub-fields of an Image Creator entry.
+const IMAGE_CREATOR_FIELDS: [&str; 2] = [IMAGE_CREATOR_NAME, "plus:ImageCreatorID"];
+/// The sub-fields of a Copyright Owner entry.
+const COPYRIGHT_OWNER_FIELDS: [&str; 2] = ["plus:CopyrightOwnerName", "plus:CopyrightOwnerID"];
+/// The sub-fields of a Licensor entry (U11b-Q3): eight open, then the six of the address.
+const LICENSOR_FIELDS: [&str; 14] = [
+    "plus:LicensorName",
+    "plus:LicensorID",
+    "plus:LicensorEmail",
+    "plus:LicensorURL",
+    "plus:LicensorTelephone1",
+    vocabulary::LICENSOR_TELEPHONE_TYPE_1,
+    "plus:LicensorTelephone2",
+    vocabulary::LICENSOR_TELEPHONE_TYPE_2,
+    "plus:LicensorStreetAddress",
+    "plus:LicensorExtendedAddress",
+    "plus:LicensorCity",
+    "plus:LicensorRegion",
+    "plus:LicensorPostalCode",
+    "plus:LicensorCountry",
+];
+/// How many of a Licensor entry's sub-fields are shown open (U11b-Q3).
+const LICENSOR_OPEN: usize = 8;
+/// The sub-fields of an Image Supplier entry.
+const IMAGE_SUPPLIER_FIELDS: [&str; 2] = ["plus:ImageSupplierName", "plus:ImageSupplierID"];
+
+/// Every structure list of the form in form order (U11b-Q1): the locations at the end of Time
+/// and Place (U11a-Q2), Genre after Scene Code, and the four PLUS lists at the start of Licence
+/// (PLUS), before the release fields (T139, point 2).
+static LIST_SPECS: [ListSpec; 7] = [
+    ListSpec {
+        property: LOCATION_CREATED,
+        fields: &LOCATION_FIELDS,
+        open: LOCATION_FIELDS.len(),
+        section: EditorSection::TimePlace,
+        after: Some(LOCATIONS_AFTER),
+    },
+    ListSpec {
+        property: LOCATION_SHOWN,
+        fields: &LOCATION_FIELDS,
+        open: LOCATION_FIELDS.len(),
+        section: EditorSection::TimePlace,
+        after: Some(LOCATIONS_AFTER),
+    },
+    ListSpec {
+        property: GENRE,
+        fields: &GENRE_FIELDS,
+        open: GENRE_FIELDS.len(),
+        section: EditorSection::Assignment,
+        after: Some(EditorField::SceneCode),
+    },
+    ListSpec {
+        property: IMAGE_CREATOR,
+        fields: &IMAGE_CREATOR_FIELDS,
+        open: IMAGE_CREATOR_FIELDS.len(),
+        section: EditorSection::Licence,
+        after: None,
+    },
+    ListSpec {
+        property: COPYRIGHT_OWNER,
+        fields: &COPYRIGHT_OWNER_FIELDS,
+        open: COPYRIGHT_OWNER_FIELDS.len(),
+        section: EditorSection::Licence,
+        after: None,
+    },
+    ListSpec {
+        property: LICENSOR,
+        fields: &LICENSOR_FIELDS,
+        open: LICENSOR_OPEN,
+        section: EditorSection::Licence,
+        after: None,
+    },
+    ListSpec {
+        property: IMAGE_SUPPLIER,
+        fields: &IMAGE_SUPPLIER_FIELDS,
+        open: IMAGE_SUPPLIER_FIELDS.len(),
+        section: EditorSection::Licence,
+        after: None,
+    },
+];
+
+/// The spec of the structure list `list`.
+fn list_spec(list: &str) -> Option<&'static ListSpec> {
+    LIST_SPECS.iter().find(|spec| spec.property == list)
+}
+
+/// The place of a list among the fields: the index in [`EditorField::ALL`] of the first field
+/// drawn after it. Its edits come just before that field's (U11a-Q2).
+fn list_slot(spec: &ListSpec) -> usize {
+    let index = |field: EditorField| {
+        EditorField::ALL
+            .iter()
+            .position(|f| *f == field)
+            .unwrap_or(EditorField::ALL.len())
+    };
+    match spec.after {
+        Some(field) => index(field) + 1,
+        None => EditorField::ALL
+            .iter()
+            .position(|field| field.section() == spec.section)
+            .unwrap_or(EditorField::ALL.len()),
+    }
+}
+
+/// True for a copyright-management list (ADR 0007 §8, U11b-Q5): Image Creator, Copyright Owner
+/// and Licensor. "Apply to All Marked" empties such a list on the window's image only.
+fn list_copyright_management(list: &str) -> bool {
+    matches!(list, IMAGE_CREATOR | COPYRIGHT_OWNER | LICENSOR)
+}
+
+/// How a sub-field of a structure list is edited.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SubFieldKind {
+    /// One line of text.
+    Text,
+    /// A list on one line, split at commas (Location Identifier, U10-Q2).
+    List,
+    /// A Lang Alt: the line edits `x-default` and keeps the other languages (ADR 0007 §8).
+    LangAlt,
+    /// A choice from a vocabulary (the telephone types of a Licensor entry, U11b-Q3).
+    Choice,
+}
+
+/// The kind of the sub-field `field` of the list `list`, from the vocabulary and the property
+/// table (a text when it is not found).
+fn sub_field_kind(list: &str, field: &str) -> SubFieldKind {
+    if vocabulary::choices(field).is_some() {
+        return SubFieldKind::Choice;
+    }
+    let def = properties::property(list)
+        .and_then(|def| match def.kind {
+            ValueKind::Struct(name) => properties::struct_def(name),
+            _ => None,
+        })
+        .and_then(|def| def.fields.iter().find(|def| def.xmp_id == field));
+    match def.map(|def| (def.kind, def.occurrence)) {
+        Some((_, Occurrence::Multi)) => SubFieldKind::List,
+        Some((ValueKind::LangAlt, _)) => SubFieldKind::LangAlt,
+        _ => SubFieldKind::Text,
+    }
+}
+
+/// One entry of a structure list (U11a, T136; U11b-Q1, T139): the texts of its shown
+/// sub-fields and the structure it started from, which keeps the sub-fields the form does not
+/// show and the other languages of a Lang Alt (ADR 0007 §8).
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct LocationEntry {
-    /// The texts in the order of [`LOCATION_FIELDS`].
-    texts: [String; 7],
+struct ListEntry {
+    /// The list's spec.
+    spec: &'static ListSpec,
+    /// The texts in the order of the spec's fields (a choice's code as it is stored).
+    texts: Vec<String>,
     /// The entry as read, pasted or copied; empty for an added entry.
     base: StructValue,
 }
 
-impl LocationEntry {
+impl ListEntry {
     /// The entry of the structure `base`: each shown sub-field's text as the form shows it.
-    fn of(base: &StructValue) -> LocationEntry {
-        LocationEntry {
-            texts: LOCATION_FIELDS.map(|field| {
-                base.fields
-                    .iter()
-                    .find(|(id, _)| id == field)
-                    .map(|(_, value)| form_text(value))
-                    .unwrap_or_default()
-            }),
+    fn of(spec: &'static ListSpec, base: &StructValue) -> ListEntry {
+        ListEntry {
+            spec,
+            texts: spec
+                .fields
+                .iter()
+                .map(|field| sub_field_text(base, field))
+                .collect(),
             base: base.clone(),
         }
     }
 
     /// The structure the entry writes: its base with each shown sub-field from its text. A text
-    /// equal to the base's keeps the base's value; an empty text removes the sub-field; Location
-    /// Identifier is split at commas. `None` when no sub-field is left (U11a-Q3).
+    /// equal to the base's keeps the base's value; an empty text removes the sub-field; a list
+    /// sub-field is split at commas; a Lang Alt gets its `x-default` set and keeps its other
+    /// languages. `None` when no sub-field is left (U11a-Q3).
     fn value(&self) -> Option<StructValue> {
         let mut fields = self.base.fields.clone();
-        for (field, text) in LOCATION_FIELDS.iter().zip(&self.texts) {
+        for (field, text) in self.spec.fields.iter().zip(&self.texts) {
             let position = fields.iter().position(|(id, _)| id == field);
-            let unchanged = position
+            let old = position
                 .and_then(|index| fields.get(index))
-                .is_some_and(|(_, value)| form_text(value) == *text);
+                .map(|(_, value)| value);
+            let unchanged = old.is_some_and(|value| form_text(value) == *text);
             let value = if text.trim().is_empty() {
                 None
-            } else if *field == LOCATION_ID {
-                let entries = list_entries(text);
-                (!entries.is_empty()).then_some(Value::List(entries))
             } else {
-                Some(Value::Text(text.clone()))
+                match sub_field_kind(self.spec.property, field) {
+                    SubFieldKind::List => {
+                        let entries = list_entries(text);
+                        (!entries.is_empty()).then_some(Value::List(entries))
+                    }
+                    SubFieldKind::LangAlt => {
+                        let mut lang_alt = match old {
+                            Some(Value::LangAlt(lang_alt)) => lang_alt.clone(),
+                            _ => LangAlt::default(),
+                        };
+                        // Not empty (checked above), so `set_default` accepts it.
+                        lang_alt
+                            .set_default(text)
+                            .ok()
+                            .map(|()| Value::LangAlt(lang_alt))
+                    }
+                    SubFieldKind::Text | SubFieldKind::Choice => Some(Value::Text(text.clone())),
+                }
             };
             match (position, value) {
                 (Some(_), Some(_)) if unchanged => {}
@@ -659,44 +857,63 @@ impl LocationEntry {
     }
 }
 
-/// The entries of a location list's value; `None` for a value that is not a structure.
-fn location_entries(value: &Value) -> Option<Vec<LocationEntry>> {
+/// The text of the sub-field `field` of `base` as the form shows it; empty when it has none.
+fn sub_field_text(base: &StructValue, field: &str) -> String {
+    base.fields
+        .iter()
+        .find(|(id, _)| id == field)
+        .map(|(_, value)| form_text(value))
+        .unwrap_or_default()
+}
+
+/// The entries of a structure list's value; `None` for a value that is not a structure.
+fn list_entries_of(spec: &'static ListSpec, value: &Value) -> Option<Vec<ListEntry>> {
     match value {
-        Value::StructList(list) => Some(list.iter().map(LocationEntry::of).collect()),
-        Value::Struct(fields) => Some(vec![LocationEntry::of(fields)]),
+        Value::StructList(list) => Some(list.iter().map(|s| ListEntry::of(spec, s)).collect()),
+        Value::Struct(fields) => Some(vec![ListEntry::of(spec, fields)]),
         _ => None,
     }
 }
 
 /// The structures `entries` write, the empty ones dropped (U11a-Q3).
-fn location_values(entries: &[LocationEntry]) -> Vec<StructValue> {
-    entries.iter().filter_map(LocationEntry::value).collect()
+fn list_values(entries: &[ListEntry]) -> Vec<StructValue> {
+    entries.iter().filter_map(ListEntry::value).collect()
 }
 
-/// One location list of the form (U11a, T136).
+/// One structure list of the form (U11a, T136; U11b-Q1, T139).
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct LocationState {
-    /// The XMP id of the list.
-    property: &'static str,
+struct ListState {
+    /// The list's spec.
+    spec: &'static ListSpec,
     /// The entries as the user has them.
-    entries: Vec<LocationEntry>,
+    entries: Vec<ListEntry>,
     /// The entries `from_read` gave.
-    original: Vec<LocationEntry>,
+    original: Vec<ListEntry>,
     /// The text of the read value; shown when the list is read-only.
     read_text: String,
     /// True when the read value is not a structure, so the form cannot edit it.
     unsupported: bool,
 }
 
+impl ListState {
+    /// The XMP id of the list.
+    fn property(&self) -> &'static str {
+        self.spec.property
+    }
+}
+
 /// The fields copied by "Copy All Fields" (ADR 0017 §2.3.1, U12b-Q1, T125): the source file's
 /// name and the shown text of every editable field (the check box's `True` or empty), and the
-/// entries of each location list that is not read-only (U11a-Q5, T136). Kept by the program until
-/// the next copy; not saved and not on the Windows clipboard.
+/// entries of each structure list that is not read-only and has an entry (U11a-Q5, T136;
+/// U11b-Q5, T139). Kept by the program until the next copy; not saved and not on the Windows
+/// clipboard.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CopiedFields {
     file: String,
     texts: Vec<(EditorField, String)>,
-    /// Each location list with the structures it writes (the empty entries dropped).
+    /// Each structure list with the structures it writes (the empty entries dropped), in form
+    /// order; a list without an entry is left out, as it is not pasted (U12b-Q2). The name is
+    /// T136's, from when the location lists were the only structure lists.
     locations: Vec<(&'static str, Vec<StructValue>)>,
 }
 
@@ -714,8 +931,8 @@ impl CopiedFields {
             .map(|(_, text)| text.as_str())
     }
 
-    /// How many copied fields are not empty: the fields a paste puts in (U12b-Q2), each location
-    /// list with an entry counted as one field (U11a-Q5).
+    /// How many copied fields are not empty: the fields a paste puts in (U12b-Q2), each structure
+    /// list with an entry counted as one field (U11a-Q5, U11b-Q5).
     pub fn count(&self) -> usize {
         self.texts
             .iter()
@@ -747,63 +964,86 @@ pub struct BatchEdits {
     pub emptied_here_only: Vec<EditorField>,
 }
 
+/// The structure lists of a batch by what happens to them (U11a-Q5, U11b-Q5), each in form
+/// order.
+struct BatchLists {
+    /// Given entries on every image.
+    changed: Vec<&'static str>,
+    /// Emptied on every image.
+    emptied: Vec<&'static str>,
+    /// Copyright-management lists emptied on the window's image only.
+    emptied_here_only: Vec<&'static str>,
+}
+
 impl BatchEdits {
     /// How many fields were changed: given a value, emptied, or emptied on this image only; each
-    /// changed location list counts as one field (U11a-Q5).
+    /// changed structure list counts as one field (U11a-Q5, U11b-Q5).
     pub fn field_count(&self) -> usize {
-        let (changed_lists, emptied_lists) = self.location_lists();
+        let lists = self.lists();
         self.changed.len()
             + self.emptied.len()
             + self.emptied_here_only.len()
-            + changed_lists.len()
-            + emptied_lists.len()
+            + lists.changed.len()
+            + lists.emptied.len()
+            + lists.emptied_here_only.len()
     }
 
-    /// The location lists the other images get (U11a-Q5, T136): those given entries and those
-    /// emptied, each from its edit in `others` (a location list is never a copyright-management
-    /// field, so every changed list is written to every image).
-    fn location_lists(&self) -> (Vec<&'static str>, Vec<&'static str>) {
-        let mut changed = Vec::new();
-        let mut emptied = Vec::new();
-        for list in EditorForm::LOCATION_LISTS {
-            for edit in &self.others {
-                match edit {
-                    Edit::Set { property, .. } if property == list => changed.push(list),
-                    Edit::Clear { property, .. } if property == list => emptied.push(list),
-                    _ => {}
-                }
+    /// The structure lists of the batch (U11a-Q5, T136; U11b-Q5, T139): those given entries and
+    /// those emptied, each from its edit in `others`, and the copyright-management lists emptied
+    /// on the window's image only: a `Clear` in `this_image` that `others` does not have.
+    fn lists(&self) -> BatchLists {
+        let mut lists = BatchLists {
+            changed: Vec::new(),
+            emptied: Vec::new(),
+            emptied_here_only: Vec::new(),
+        };
+        let has = |edits: &[Edit], list: &str, clear: bool| {
+            edits.iter().any(|edit| match edit {
+                Edit::Set { property, .. } => !clear && property == list,
+                Edit::Clear { property, .. } => clear && property == list,
+            })
+        };
+        for list in EditorForm::STRUCTURE_LISTS {
+            if has(&self.others, list, false) {
+                lists.changed.push(list);
+            }
+            if has(&self.others, list, true) {
+                lists.emptied.push(list);
+            } else if list_copyright_management(list) && has(&self.this_image, list, true) {
+                lists.emptied_here_only.push(list);
             }
         }
-        (changed, emptied)
+        lists
     }
 }
 
 /// The lines of the confirmation of "Apply to All Marked" (U12c-Q4, T126): the question for
-/// `images` images, then the changed, emptied and copyright-only fields by name (the location
-/// lists among them, U11a-Q5) and the `skipped` marked files without metadata support, each line
-/// only when it has something to name.
+/// `images` images, then the changed, emptied and copyright-only fields by name (the structure
+/// lists among them, U11a-Q5, U11b-Q5) and the `skipped` marked files without metadata support,
+/// each line only when it has something to name.
 pub fn apply_confirmation(batch: &BatchEdits, images: usize, skipped: usize) -> Vec<String> {
     let mut lines = vec![editor_text(&EditorText::ApplyQuestion {
         fields: batch.field_count(),
         images,
     })];
-    let (changed_lists, emptied_lists) = batch.location_lists();
-    if !batch.changed.is_empty() || !changed_lists.is_empty() {
+    let lists = batch.lists();
+    if !batch.changed.is_empty() || !lists.changed.is_empty() {
         lines.push(editor_text(&EditorText::Changed {
             fields: batch.changed.clone(),
-            lists: changed_lists,
+            lists: lists.changed,
         }));
     }
-    if !batch.emptied.is_empty() || !emptied_lists.is_empty() {
+    if !batch.emptied.is_empty() || !lists.emptied.is_empty() {
         lines.push(editor_text(&EditorText::Emptied {
             fields: batch.emptied.clone(),
-            lists: emptied_lists,
+            lists: lists.emptied,
         }));
     }
-    if !batch.emptied_here_only.is_empty() {
-        lines.push(editor_text(&EditorText::EmptiedHereOnly(
-            batch.emptied_here_only.clone(),
-        )));
+    if !batch.emptied_here_only.is_empty() || !lists.emptied_here_only.is_empty() {
+        lines.push(editor_text(&EditorText::EmptiedHere {
+            fields: batch.emptied_here_only.clone(),
+            lists: lists.emptied_here_only,
+        }));
     }
     if skipped > 0 {
         lines.push(editor_text(&EditorText::SkippedFiles { files: skipped }));
@@ -819,8 +1059,9 @@ pub struct EditorForm {
     conflicts: Vec<Conflict>,
     /// The chosen value of each conflict.
     chosen: Vec<Option<usize>>,
-    /// Location Created and Location Shown (U11a, T136), in that order.
-    locations: Vec<LocationState>,
+    /// The structure lists (U11a, T136; U11b-Q1, T139) in the order of
+    /// [`EditorForm::STRUCTURE_LISTS`].
+    lists: Vec<ListState>,
 }
 
 impl EditorForm {
@@ -828,6 +1069,8 @@ impl EditorForm {
     pub const LOCATION_CREATED: &'static str = LOCATION_CREATED;
     /// The XMP id of Location Shown (ADR 0017 U11a, T136).
     pub const LOCATION_SHOWN: &'static str = LOCATION_SHOWN;
+    /// The XMP id of Image Creator (ADR 0017 U11, T139): "Copy from Creator" is drawn under it.
+    pub const IMAGE_CREATOR: &'static str = IMAGE_CREATOR;
     /// The location lists in the order of the form, drawn in Time and Place after Country Code
     /// (U11a-Q2).
     pub const LOCATION_LISTS: [&'static str; 2] = [LOCATION_CREATED, LOCATION_SHOWN];
@@ -835,6 +1078,17 @@ impl EditorForm {
     /// (U11a-Q2); their names come from `property_label`. Location Identifier is one line with
     /// its URIs separated by commas.
     pub const LOCATION_FIELDS: [&'static str; 7] = LOCATION_FIELDS;
+    /// Every structure list in form order (U11b-Q1, T139): Location Created, Location Shown,
+    /// Genre, Image Creator, Copyright Owner, Licensor, Image Supplier.
+    pub const STRUCTURE_LISTS: [&'static str; 7] = [
+        LOCATION_CREATED,
+        LOCATION_SHOWN,
+        GENRE,
+        IMAGE_CREATOR,
+        COPYRIGHT_OWNER,
+        LICENSOR,
+        IMAGE_SUPPLIER,
+    ];
 
     /// The form of `read`: one text per field, and the file's `Open` conflicts, none chosen.
     pub fn from_read(read: &MetadataRead) -> EditorForm {
@@ -863,13 +1117,16 @@ impl EditorForm {
             .cloned()
             .collect();
         let chosen = vec![None; conflicts.len()];
-        let locations = Self::LOCATION_LISTS
+        let lists = LIST_SPECS
             .iter()
-            .map(|&property| {
-                let value = metadata.get(property).map(|stored| &stored.value);
-                let entries = value.map_or(Some(Vec::new()), location_entries);
-                LocationState {
-                    property,
+            .map(|spec| {
+                let value = metadata.get(spec.property).map(|stored| &stored.value);
+                let entries = match value {
+                    Some(value) => list_entries_of(spec, value),
+                    None => Some(Vec::new()),
+                };
+                ListState {
+                    spec,
                     entries: entries.clone().unwrap_or_default(),
                     original: entries.clone().unwrap_or_default(),
                     read_text: value.map(value_text).unwrap_or_default(),
@@ -881,30 +1138,60 @@ impl EditorForm {
             fields,
             conflicts,
             chosen,
-            locations,
+            lists,
         }
     }
 
-    fn location(&self, list: &str) -> Option<&LocationState> {
-        self.locations.iter().find(|state| state.property == list)
+    /// The structure lists drawn in `section` right after the field `after`, or at the start of
+    /// the section for `None` (U11a-Q2, T139 point 2), in form order.
+    pub fn lists_at(section: EditorSection, after: Option<EditorField>) -> Vec<&'static str> {
+        LIST_SPECS
+            .iter()
+            .filter(|spec| spec.section == section && spec.after == after)
+            .map(|spec| spec.property)
+            .collect()
     }
 
-    /// The location list `list` when it can be edited: not a value the form cannot show and no
-    /// open conflict that is not decided yet.
-    fn location_editable(&mut self, list: &str) -> Option<&mut LocationState> {
-        if self.location_read_only(list).is_some() {
+    /// The sub-fields of the list `list` shown open in each entry, in the order of the form;
+    /// empty for another property.
+    pub fn list_fields(list: &str) -> &'static [&'static str] {
+        list_spec(list)
+            .and_then(|spec| spec.fields.get(..spec.open))
+            .unwrap_or(&[])
+    }
+
+    /// The sub-fields of the list `list` under the collapsed "Address" line of each entry (a
+    /// Licensor's address, U11b-Q3); empty for every other list.
+    pub fn list_address_fields(list: &str) -> &'static [&'static str] {
+        list_spec(list)
+            .and_then(|spec| spec.fields.get(spec.open..))
+            .unwrap_or(&[])
+    }
+
+    /// The most entries the list `list` may hold (IPTC's limits, ADR 0007 §8): 3 for Image
+    /// Creator, Copyright Owner and Licensor, 1 for Image Supplier; `None` without a limit.
+    pub fn max_entries(list: &str) -> Option<usize> {
+        properties::max_entries(list)
+    }
+
+    fn list(&self, list: &str) -> Option<&ListState> {
+        self.lists.iter().find(|state| state.property() == list)
+    }
+
+    /// The list `list` when it can be edited: not a value the form cannot show and no open
+    /// conflict that is not decided yet.
+    fn list_editable(&mut self, list: &str) -> Option<&mut ListState> {
+        if self.list_read_only(list).is_some() {
             return None;
         }
-        self.locations
-            .iter_mut()
-            .find(|state| state.property == list)
+        self.lists.iter_mut().find(|state| state.property() == list)
     }
 
-    /// The text of the location list `list` (an XMP id of [`EditorForm::LOCATION_LISTS`]) when it
-    /// is shown read-only (U11a, point 6 of T136): while an open conflict on it is not decided,
+    /// The text of the structure list `list` (an XMP id of [`EditorForm::STRUCTURE_LISTS`]) when
+    /// it is shown read-only (U11a, point 6 of T136): while an open conflict on it is not decided,
     /// or when its value is not a structure. `None` when its entries can be edited.
-    pub fn location_read_only(&self, list: &str) -> Option<&str> {
-        let state = self.location(list)?;
+    pub fn list_read_only(&self, list: &str) -> Option<&str> {
+        let state = self.list(list)?;
         let undecided = self
             .conflicts
             .iter()
@@ -913,70 +1200,177 @@ impl EditorForm {
         (state.unsupported || undecided).then_some(state.read_text.as_str())
     }
 
-    /// How many entries the location list `list` has, the empty ones included.
-    pub fn location_count(&self, list: &str) -> usize {
-        self.location(list).map_or(0, |state| state.entries.len())
+    /// How many entries the list `list` has, the empty ones included.
+    pub fn list_count(&self, list: &str) -> usize {
+        self.list(list).map_or(0, |state| state.entries.len())
     }
 
-    /// The text of the sub-field `field` (of [`EditorForm::LOCATION_FIELDS`]) of entry `entry` of
-    /// the location list `list`; empty when there is no such entry or field.
-    pub fn location_text(&self, list: &str, entry: usize, field: &str) -> &str {
-        let index = LOCATION_FIELDS.iter().position(|id| *id == field);
-        self.location(list)
-            .and_then(|state| state.entries.get(entry))
+    /// The text of the sub-field `field` of entry `entry` of the list `list` (a choice's code as
+    /// it is stored); empty when there is no such entry or field.
+    pub fn list_text(&self, list: &str, entry: usize, field: &str) -> &str {
+        let Some(state) = self.list(list) else {
+            return "";
+        };
+        let index = state.spec.fields.iter().position(|id| *id == field);
+        state
+            .entries
+            .get(entry)
             .zip(index)
             .and_then(|(entry, index)| entry.texts.get(index))
             .map_or("", String::as_str)
     }
 
-    /// The text of a location sub-field, to be edited; `None` when there is no such entry or
-    /// field, or the list is read-only.
-    pub fn location_text_mut(
-        &mut self,
-        list: &str,
-        entry: usize,
-        field: &str,
-    ) -> Option<&mut String> {
-        let index = LOCATION_FIELDS.iter().position(|id| *id == field)?;
-        self.location_editable(list)?
-            .entries
-            .get_mut(entry)?
-            .texts
-            .get_mut(index)
+    /// The text of a sub-field, to be edited; `None` when there is no such entry or field, the
+    /// sub-field is a choice ([`EditorForm::set_list_choice`]), or the list is read-only.
+    pub fn list_text_mut(&mut self, list: &str, entry: usize, field: &str) -> Option<&mut String> {
+        if sub_field_kind(list, field) == SubFieldKind::Choice {
+            return None;
+        }
+        let state = self.list_editable(list)?;
+        let index = state.spec.fields.iter().position(|id| *id == field)?;
+        state.entries.get_mut(entry)?.texts.get_mut(index)
     }
 
-    /// "Add Location" (U11a-Q2): a new empty entry at the end of the list; nothing when the list
-    /// is read-only. An entry left empty is not written (U11a-Q3).
-    pub fn add_location(&mut self, list: &str) {
-        if let Some(state) = self.location_editable(list) {
+    /// The entries of the drop-down of the choice sub-field `field` of entry `entry` of the list
+    /// `list` (a Licensor's telephone types, U11b-Q3), as [`EditorForm::choice_entries`]: the
+    /// empty entry, the vocabulary's values with their labels and full URIs, then, when it is not
+    /// one of them, the entry's value as read and its present value, each "Unknown value: {uri}"
+    /// (U10d-Q4). Empty for a sub-field that is not a choice or an entry that does not exist.
+    pub fn list_choice_entries(&self, list: &str, entry: usize, field: &str) -> Vec<ChoiceEntry> {
+        let Some(values) = vocabulary::choices(field) else {
+            return Vec::new();
+        };
+        let Some(list_entry) = self.list(list).and_then(|state| state.entries.get(entry)) else {
+            return Vec::new();
+        };
+        let mut entries = vec![ChoiceEntry {
+            value: String::new(),
+            text: String::new(),
+            tooltip: None,
+        }];
+        for value in values {
+            entries.push(ChoiceEntry {
+                value: (*value).to_string(),
+                text: choice_label(value).unwrap_or_default().to_string(),
+                tooltip: vocabulary::full_uri(field, value),
+            });
+        }
+        let original = sub_field_text(&list_entry.base, field);
+        let present = self.list_text(list, entry, field).to_string();
+        for extra in [original, present] {
+            if extra.is_empty() || entries.iter().any(|entry| entry.value == extra) {
+                continue;
+            }
+            entries.push(ChoiceEntry {
+                text: editor_text(&EditorText::UnknownValue {
+                    value: extra.clone(),
+                }),
+                value: extra,
+                tooltip: None,
+            });
+        }
+        entries
+    }
+
+    /// Chooses `value` (empty for the empty entry) for the choice sub-field `field` of entry
+    /// `entry` of the list `list`; nothing for another sub-field or a read-only list.
+    pub fn set_list_choice(&mut self, list: &str, entry: usize, field: &str, value: &str) {
+        if sub_field_kind(list, field) != SubFieldKind::Choice {
+            return;
+        }
+        let Some(state) = self.list_editable(list) else {
+            return;
+        };
+        let Some(index) = state.spec.fields.iter().position(|id| *id == field) else {
+            return;
+        };
+        if let Some(text) = state
+            .entries
+            .get_mut(entry)
+            .and_then(|entry| entry.texts.get_mut(index))
+        {
+            value.clone_into(text);
+        }
+    }
+
+    /// Whether "Add" can be used on the list `list`: it is not read-only and has fewer entries
+    /// than its limit ([`EditorForm::max_entries`], T139 point 2).
+    pub fn can_add_entry(&self, list: &str) -> bool {
+        self.list_read_only(list).is_none()
+            && self.list(list).is_some()
+            && Self::max_entries(list).is_none_or(|max| self.list_count(list) < max)
+    }
+
+    /// "Add" (U11a-Q2): a new empty entry at the end of the list; nothing when
+    /// [`EditorForm::can_add_entry`] is false. An entry left empty is not written (U11a-Q3).
+    pub fn add_entry(&mut self, list: &str) {
+        if !self.can_add_entry(list) {
+            return;
+        }
+        if let Some(state) = self.list_editable(list) {
             state
                 .entries
-                .push(LocationEntry::of(&StructValue::default()));
+                .push(ListEntry::of(state.spec, &StructValue::default()));
         }
     }
 
     /// "Remove" (U11a-Q2): removes entry `entry`; the others keep their order. Nothing when the
     /// list is read-only or has no such entry.
-    pub fn remove_location(&mut self, list: &str, entry: usize) {
-        if let Some(state) = self.location_editable(list)
+    pub fn remove_entry(&mut self, list: &str, entry: usize) {
+        if let Some(state) = self.list_editable(list)
             && entry < state.entries.len()
         {
             state.entries.remove(entry);
         }
     }
 
+    /// [`EditorForm::list_read_only`] for a location list (T136's name).
+    pub fn location_read_only(&self, list: &str) -> Option<&str> {
+        self.list_read_only(list)
+    }
+
+    /// [`EditorForm::list_count`] for a location list (T136's name).
+    pub fn location_count(&self, list: &str) -> usize {
+        self.list_count(list)
+    }
+
+    /// [`EditorForm::list_text`] for a location list (T136's name).
+    pub fn location_text(&self, list: &str, entry: usize, field: &str) -> &str {
+        self.list_text(list, entry, field)
+    }
+
+    /// [`EditorForm::list_text_mut`] for a location list (T136's name).
+    pub fn location_text_mut(
+        &mut self,
+        list: &str,
+        entry: usize,
+        field: &str,
+    ) -> Option<&mut String> {
+        self.list_text_mut(list, entry, field)
+    }
+
+    /// [`EditorForm::add_entry`] for a location list (T136's name).
+    pub fn add_location(&mut self, list: &str) {
+        self.add_entry(list);
+    }
+
+    /// [`EditorForm::remove_entry`] for a location list (T136's name).
+    pub fn remove_location(&mut self, list: &str, entry: usize) {
+        self.remove_entry(list, entry);
+    }
+
     /// The first entry of Location Created that writes something, as it would be written.
     fn first_location_created(&self) -> Option<StructValue> {
-        self.location(LOCATION_CREATED)?
+        self.list(LOCATION_CREATED)?
             .entries
             .iter()
-            .find_map(LocationEntry::value)
+            .find_map(ListEntry::value)
     }
 
     /// Whether "Copy from Location Created" can be used (U11a-Q4): Location Created has an entry
     /// that is not empty and Location Shown is not read-only.
     pub fn can_copy_location_created(&self) -> bool {
-        self.location_read_only(LOCATION_SHOWN).is_none() && self.first_location_created().is_some()
+        self.list_read_only(LOCATION_SHOWN).is_none() && self.first_location_created().is_some()
     }
 
     /// "Copy from Location Created" (U11a-Q4): adds one new Location Shown entry with the fields
@@ -986,32 +1380,83 @@ impl EditorForm {
         let Some(first) = self.first_location_created() else {
             return;
         };
-        if let Some(state) = self.location_editable(LOCATION_SHOWN) {
-            state.entries.push(LocationEntry::of(&first));
+        if let Some(state) = self.list_editable(LOCATION_SHOWN) {
+            state.entries.push(ListEntry::of(state.spec, &first));
         }
     }
 
-    /// The entries a location list is compared with: the chosen conflict value's, else those the
-    /// read gave.
-    fn location_start(&self, state: &LocationState) -> Vec<StructValue> {
-        match self.chosen_value(state.property).and_then(location_entries) {
-            Some(entries) => location_values(&entries),
-            None => location_values(&state.original),
+    /// The names of Creator (`dc:creator`) as the form has them, unsaved edits included.
+    fn creator_names(&self) -> Vec<String> {
+        list_entries(self.text(EditorField::Creator))
+    }
+
+    /// Whether "Copy from Creator" can be used (U11b-Q4): Creator has a name and Image Creator
+    /// is not read-only and has room (fewer than 3 entries).
+    pub fn can_copy_creator(&self) -> bool {
+        !self.creator_names().is_empty() && self.can_add_entry(IMAGE_CREATOR)
+    }
+
+    /// "Copy from Creator" (U11b-Q4, ADR 0007 §8 "synchronisation is offered"): adds one Image
+    /// Creator entry per Creator name that is not already an Image Creator Name, in Creator's
+    /// order, up to the limit; never changes an existing entry. Nothing when
+    /// [`EditorForm::can_copy_creator`] is false. Nothing is synchronised automatically.
+    pub fn copy_creator(&mut self) {
+        if !self.can_copy_creator() {
+            return;
+        }
+        let names = self.creator_names();
+        let limit = Self::max_entries(IMAGE_CREATOR);
+        let Some(state) = self.list_editable(IMAGE_CREATOR) else {
+            return;
+        };
+        let index = state
+            .spec
+            .fields
+            .iter()
+            .position(|id| *id == IMAGE_CREATOR_NAME);
+        for name in names {
+            if limit.is_some_and(|max| state.entries.len() >= max) {
+                break;
+            }
+            let present = state.entries.iter().any(|entry| {
+                index
+                    .and_then(|index| entry.texts.get(index))
+                    .is_some_and(|text| text.trim() == name)
+            });
+            if present {
+                continue;
+            }
+            let base = StructValue {
+                fields: vec![(IMAGE_CREATOR_NAME.to_string(), Value::Text(name))],
+            };
+            state.entries.push(ListEntry::of(state.spec, &base));
         }
     }
 
-    /// The edit of a location list (U11a-Q3, point 6 of T136): `None` when it is read-only or
+    /// The entries a list is compared with: the chosen conflict value's, else those the read
+    /// gave.
+    fn list_start(&self, state: &ListState) -> Vec<StructValue> {
+        match self
+            .chosen_value(state.property())
+            .and_then(|value| list_entries_of(state.spec, value))
+        {
+            Some(entries) => list_values(&entries),
+            None => list_values(&state.original),
+        }
+    }
+
+    /// The edit of a structure list (U11a-Q3, point 6 of T136): `None` when it is read-only or
     /// writes the same structures as at the start; a `Clear` when no entry writes anything; else
     /// a `Set` of the whole list.
-    fn location_edit(&self, state: &LocationState) -> Option<Edit> {
-        if self.location_read_only(state.property).is_some() {
+    fn list_edit(&self, state: &ListState) -> Option<Edit> {
+        if self.list_read_only(state.property()).is_some() {
             return None;
         }
-        let values = location_values(&state.entries);
-        if values == self.location_start(state) {
+        let values = list_values(&state.entries);
+        if values == self.list_start(state) {
             return None;
         }
-        let property = state.property.to_string();
+        let property = state.property().to_string();
         Some(if values.is_empty() {
             Edit::Clear {
                 property,
@@ -1026,11 +1471,13 @@ impl EditorForm {
         })
     }
 
-    /// The edits of the location lists, in form order.
-    fn location_edits(&self) -> Vec<Edit> {
-        self.locations
+    /// The edits of the structure lists placed just before the field with index `slot` in
+    /// [`EditorField::ALL`] (or after the last field for its length), in form order.
+    fn list_edits_at(&self, slot: usize) -> Vec<Edit> {
+        self.lists
             .iter()
-            .filter_map(|state| self.location_edit(state))
+            .filter(|state| list_slot(state.spec) == slot)
+            .filter_map(|state| self.list_edit(state))
             .collect()
     }
 
@@ -1157,11 +1604,13 @@ impl EditorForm {
             .filter(|state| state.field.editable() && self.read_only_text(state.field).is_none())
             .map(|state| (state.field, state.text.clone()))
             .collect();
+        // Each structure list with an entry (U11a-Q5, U11b-Q5); an empty one is not pasted.
         let locations = self
-            .locations
+            .lists
             .iter()
-            .filter(|state| self.location_read_only(state.property).is_none())
-            .map(|state| (state.property, location_values(&state.entries)))
+            .filter(|state| self.list_read_only(state.property()).is_none())
+            .map(|state| (state.property(), list_values(&state.entries)))
+            .filter(|(_, values)| !values.is_empty())
             .collect();
         CopiedFields {
             file: file.to_string(),
@@ -1188,14 +1637,17 @@ impl EditorForm {
                 target.clone_from(text);
             }
         }
-        // A copied location list with entries replaces the whole list (U11a-Q5); an empty one is
-        // not pasted (U12b-Q2), and a list shown read-only here is left as it is.
+        // A copied structure list with entries replaces the whole list (U11a-Q5, U11b-Q5); an
+        // empty one is not pasted (U12b-Q2), and a list shown read-only here is left as it is.
         for (list, values) in &copied.locations {
             if values.is_empty() {
                 continue;
             }
-            if let Some(state) = self.location_editable(list) {
-                state.entries = values.iter().map(LocationEntry::of).collect();
+            if let Some(state) = self.list_editable(list) {
+                state.entries = values
+                    .iter()
+                    .map(|s| ListEntry::of(state.spec, s))
+                    .collect();
             }
         }
     }
@@ -1243,12 +1695,12 @@ impl EditorForm {
                 state.text = state.field.text_of(value);
             }
         }
-        // A location list gets the chosen value's entries (U11a, point 6 of T136).
-        if let Some(entries) = location_entries(value) {
-            for state in &mut self.locations {
-                if state.property == conflict.property {
-                    state.entries.clone_from(&entries);
-                }
+        // A structure list gets the chosen value's entries (U11a, point 6 of T136).
+        for state in &mut self.lists {
+            if state.property() == conflict.property
+                && let Some(entries) = list_entries_of(state.spec, value)
+            {
+                state.entries = entries;
             }
         }
         if let Some(chosen) = self.chosen.get_mut(conflict_index) {
@@ -1294,8 +1746,8 @@ impl EditorForm {
                 state.field.property() == conflict.property
                     && state.field.struct_field().is_none()
                     && state.text != state.field.text_of(value)
-            }) || self.locations.iter().any(|state| {
-                state.property == conflict.property && self.location_edit(state).is_some()
+            }) || self.lists.iter().any(|state| {
+                state.property() == conflict.property && self.list_edit(state).is_some()
             });
             if !changed_after_choice {
                 edits.push(Edit::Set {
@@ -1305,7 +1757,9 @@ impl EditorForm {
                 });
             }
         }
-        for state in &self.fields {
+        for (index, state) in self.fields.iter().enumerate() {
+            // The structure lists drawn before this field (U11a-Q2, T139 point 2).
+            edits.extend(self.list_edits_at(index));
             // A read-only field never gives an edit (point 4, U10-Q3).
             let read_only = !state.field.editable() || self.read_only_text(state.field).is_some();
             if !read_only && state.text != self.start_text(state) {
@@ -1314,16 +1768,15 @@ impl EditorForm {
                     Err(error) => errors.push((state.field, error)),
                 }
             }
-            if state.field == LOCATIONS_AFTER {
-                edits.extend(self.location_edits());
-            }
         }
+        edits.extend(self.list_edits_at(self.fields.len()));
         (edits, errors)
     }
 
     /// The edits of the form: a `Set` or `Clear` for each changed field (in field order, after
-    /// the chosen conflict values; a changed location list after Country Code as one `Set` of the
-    /// whole list, or a `Clear` when no entry is left, U11a-Q3), or every field error together.
+    /// the chosen conflict values; a changed structure list in its place among the fields, as one
+    /// `Set` of the whole list, or a `Clear` when no entry is left, U11a-Q3), or every field error
+    /// together.
     pub fn edits(&self) -> Result<Vec<Edit>, Vec<(EditorField, String)>> {
         let (edits, errors) = self.collect();
         if errors.is_empty() {
@@ -1346,15 +1799,29 @@ impl EditorForm {
             emptied: Vec::new(),
             emptied_here_only: Vec::new(),
         };
-        for state in &self.fields {
+        for (index, state) in self.fields.iter().enumerate() {
+            self.batch_lists(index, &mut batch);
             self.batch_field(state, &mut batch)?;
-            if state.field == LOCATIONS_AFTER {
-                // A changed location list replaces the whole list on every image, and an emptied
-                // one is emptied on every image (U11a-Q5); `apply_confirmation` names them.
-                batch.others.extend(self.location_edits());
+        }
+        self.batch_lists(self.fields.len(), &mut batch);
+        Ok(batch)
+    }
+
+    /// The part of `batch` the structure lists placed before the field with index `slot` give: a
+    /// changed list replaces the whole list on every image, and an emptied one is emptied on
+    /// every image (U11a-Q5), except a copyright-management list (Image Creator, Copyright Owner,
+    /// Licensor), which is emptied on the window's image only (U11b-Q5, U12c-Q3);
+    /// `apply_confirmation` names them.
+    fn batch_lists(&self, slot: usize, batch: &mut BatchEdits) {
+        for edit in self.list_edits_at(slot) {
+            let here_only = match &edit {
+                Edit::Clear { property, .. } => list_copyright_management(property),
+                Edit::Set { .. } => false,
+            };
+            if !here_only {
+                batch.others.push(edit);
             }
         }
-        Ok(batch)
     }
 
     /// The part of `batch` that one field gives (see [`EditorForm::batch_edits`]).
@@ -1508,9 +1975,9 @@ fn warning_text(warning: &Warning) -> String {
     }
 }
 
-/// The English label of a value of a choice list (U10d-Q3, T128), the vocabulary's own: a PLUS
-/// code or a full Digital Source Type URI ([`vocabulary`]), the retired Digital Source Types
-/// included. `None` for any other value.
+/// The English label of a value of a choice list (U10d-Q3, T128; the Licensor telephone types,
+/// T139), the vocabulary's own: a PLUS code or a full Digital Source Type URI ([`vocabulary`]),
+/// the retired Digital Source Types included. `None` for any other value.
 fn choice_label(value: &str) -> Option<&'static str> {
     if let Some(code) = value.strip_prefix(vocabulary::DIGITAL_SOURCE_TYPE_PREFIX) {
         return digital_source_type_label(code);
@@ -1535,6 +2002,12 @@ fn choice_label(value: &str) -> Option<&'static str> {
         "AG-A16" => "Age 16",
         "AG-A15" => "Age 15",
         "AG-U14" => "Age 14 or Under",
+        // The telephone types of a Licensor entry (T139): the LDF file's labels, capitalised.
+        "work" => "Work",
+        "cell" => "Cell",
+        "fax" => "Fax",
+        "home" => "Home",
+        "pager" => "Pager",
         "DMI-UNSPECIFIED" => "Unspecified - no prohibition defined",
         "DMI-ALLOWED" => "Allowed",
         "DMI-PROHIBITED-AIMLTRAINING" => "Prohibited for AI/ML training",
@@ -1679,14 +2152,20 @@ pub enum EditorText {
     EmptiedFields(Vec<EditorField>),
     /// The confirmation's line naming the copyright fields emptied on the window's image only.
     EmptiedHereOnly(Vec<EditorField>),
-    /// The confirmation's line naming the changed fields and location lists (XMP ids of
-    /// [`EditorForm::LOCATION_LISTS`]) given a value, in form order (U11a-Q5, T136).
+    /// The confirmation's line naming the changed fields and structure lists (XMP ids of
+    /// [`EditorForm::STRUCTURE_LISTS`]) given a value, in form order (U11a-Q5, T136; U11b-Q5).
     Changed {
         fields: Vec<EditorField>,
         lists: Vec<&'static str>,
     },
-    /// The confirmation's line naming the fields and location lists emptied on every image.
+    /// The confirmation's line naming the fields and structure lists emptied on every image.
     Emptied {
+        fields: Vec<EditorField>,
+        lists: Vec<&'static str>,
+    },
+    /// The confirmation's line naming the copyright-management fields and lists emptied on the
+    /// window's image only (U12c-Q4; Image Creator, Copyright Owner and Licensor, U11b-Q5, T139).
+    EmptiedHere {
         fields: Vec<EditorField>,
         lists: Vec<&'static str>,
     },
@@ -1697,6 +2176,15 @@ pub enum EditorText {
     /// The button under Location Shown that adds a copy of the first Location Created entry
     /// (U11a-Q4, T136).
     CopyFromLocationCreated,
+    /// The button under a structure list other than the locations that adds an empty entry
+    /// (T139 point 2); `list` is its XMP id.
+    AddEntry { list: &'static str },
+    /// The tooltip of a disabled "Add" at the list's limit (T139 point 2).
+    AtMostEntries { max: usize },
+    /// The button under Image Creator that adds an entry per Creator name (U11b-Q4, T139).
+    CopyFromCreator,
+    /// The collapsed line over a Licensor entry's address fields (U11b-Q3, T139).
+    Address,
     /// The confirmation's line counting the marked files without metadata support.
     SkippedFiles { files: usize },
     /// The confirmation's button that starts the writes.
@@ -1718,29 +2206,34 @@ fn field_names(fields: &[EditorField]) -> String {
         .join(", ")
 }
 
-/// The names of `fields` and of the location lists `lists` (XMP ids) in form order, separated by
-/// commas: the lists come after Country Code (U11a-Q2), each named by [`property_label`].
+/// The names of `fields` and of the structure lists `lists` (XMP ids) in form order, separated
+/// by commas: each list in its place among the fields (the locations after Country Code,
+/// U11a-Q2; Genre after Scene Code; the PLUS lists before the release fields, T139), each named by
+/// [`property_label`].
 fn item_names(fields: &[EditorField], lists: &[&'static str]) -> String {
     if lists.is_empty() {
         return field_names(fields);
     }
-    let after = EditorField::ALL
-        .iter()
-        .position(|field| *field == LOCATIONS_AFTER)
-        .unwrap_or(EditorField::ALL.len());
     let position = |field: &EditorField| {
         EditorField::ALL
             .iter()
             .position(|f| f == field)
             .unwrap_or(EditorField::ALL.len())
     };
-    let (before, rest): (Vec<&EditorField>, Vec<&EditorField>) =
-        fields.iter().partition(|field| position(field) <= after);
-    before
+    // A field at index i sorts as 2i + 1, a list placed before field i as 2i: lists before
+    // their field, fields and lists each in the order given (a stable sort).
+    let mut items: Vec<(usize, String)> = fields
+        .iter()
+        .map(|field| (2 * position(field) + 1, field.label()))
+        .chain(lists.iter().map(|list| {
+            let slot = list_spec(list).map_or(EditorField::ALL.len(), list_slot);
+            (2 * slot, property_label(list, Language::En))
+        }))
+        .collect();
+    items.sort_by_key(|(key, _)| *key);
+    items
         .into_iter()
-        .map(|field| field.label())
-        .chain(lists.iter().map(|list| property_label(list, Language::En)))
-        .chain(rest.into_iter().map(|field| field.label()))
+        .map(|(_, name)| name)
         .collect::<Vec<_>>()
         .join(", ")
 }
@@ -1828,6 +2321,24 @@ pub fn editor_text(text: &EditorText) -> String {
             "Copy from {list}",
             list = property_label(LOCATION_CREATED, Language::En)
         ),
+        EditorText::EmptiedHere { fields, lists } => {
+            format!("Emptied only on this image: {}", item_names(fields, lists))
+        }
+        EditorText::AddEntry { list } => {
+            format!("Add {list}", list = property_label(list, Language::En))
+        }
+        EditorText::AtMostEntries { max } => {
+            if *max == 1 {
+                "At most 1 entry".to_string()
+            } else {
+                format!("At most {max} entries")
+            }
+        }
+        EditorText::CopyFromCreator => format!(
+            "Copy from {field}",
+            field = property_label(EditorField::Creator.property(), Language::En)
+        ),
+        EditorText::Address => "Address".to_string(),
         EditorText::SkippedFiles { files } => {
             if *files == 1 {
                 "Skipped: 1 file".to_string()
@@ -5092,5 +5603,719 @@ mod tests {
         for (text, expected) in cases {
             assert_eq!(editor_text(&text), expected, "{text:?}");
         }
+    }
+
+    // --- Genre and the PLUS structures (ADR 0017 U11b, T139) ---
+
+    const GENRE_LIST: &str = "Iptc4xmpExt:Genre";
+    const CV_NAME: &str = "Iptc4xmpExt:CvTermName";
+    const CV_ID: &str = "Iptc4xmpExt:CvTermId";
+    const CV_CV_ID: &str = "Iptc4xmpExt:CvId";
+    const CREATOR_LIST: &str = "plus:ImageCreator";
+    const CREATOR_NAME: &str = "plus:ImageCreatorName";
+    const CREATOR_ID: &str = "plus:ImageCreatorID";
+    const OWNER_LIST: &str = "plus:CopyrightOwner";
+    const OWNER_NAME: &str = "plus:CopyrightOwnerName";
+    const OWNER_ID: &str = "plus:CopyrightOwnerID";
+    const LICENSOR_LIST: &str = "plus:Licensor";
+    const LICENSOR_NAME: &str = "plus:LicensorName";
+    const LICENSOR_EMAIL: &str = "plus:LicensorEmail";
+    const TEL_1: &str = "plus:LicensorTelephone1";
+    const TEL_TYPE_1: &str = "plus:LicensorTelephoneType1";
+    const TEL_2: &str = "plus:LicensorTelephone2";
+    const TEL_TYPE_2: &str = "plus:LicensorTelephoneType2";
+    const STREET: &str = "plus:LicensorStreetAddress";
+    const LICENSOR_CITY: &str = "plus:LicensorCity";
+    const POSTAL_CODE: &str = "plus:LicensorPostalCode";
+    const SUPPLIER_LIST: &str = "plus:ImageSupplier";
+    const SUPPLIER_NAME: &str = "plus:ImageSupplierName";
+    const SUPPLIER_ID: &str = "plus:ImageSupplierID";
+
+    /// A Genre entry: a name in `x-default` and Swedish, a term ID and a CV ID.
+    fn sport() -> StructValue {
+        StructValue {
+            fields: vec![
+                (
+                    CV_NAME.to_string(),
+                    lang_alt(&[("x-default", "Sport"), ("sv", "Idrott")]),
+                ),
+                (
+                    CV_ID.to_string(),
+                    text("http://cv.iptc.org/newscodes/genre/Sport"),
+                ),
+                (
+                    CV_CV_ID.to_string(),
+                    text("http://cv.iptc.org/newscodes/genre/"),
+                ),
+            ],
+        }
+    }
+
+    /// A Licensor with a telephone and its type, an unknown second type and an address.
+    fn licensor() -> StructValue {
+        place(&[
+            (LICENSOR_NAME, "Bildbyrån AB"),
+            (TEL_1, "+46 90 12 34 56"),
+            (TEL_TYPE_1, "cell"),
+            (TEL_TYPE_2, "mobile"),
+            (STREET, "Storgatan 1"),
+            (LICENSOR_CITY, "Umeå"),
+            (POSTAL_CODE, "903 26"),
+        ])
+    }
+
+    fn with_lists(lists: &[(&str, Vec<StructValue>)]) -> Metadata {
+        let mut metadata = Metadata::new();
+        for (list, entries) in lists {
+            insert(&mut metadata, list, places(entries.clone()));
+        }
+        metadata
+    }
+
+    fn type_entry(form: &mut EditorForm, list: &str, entry: usize, field: &str, text: &str) {
+        *form.list_text_mut(list, entry, field).unwrap() = text.to_string();
+    }
+
+    #[test]
+    fn the_seven_structure_lists_their_places_and_sub_fields_with_names() {
+        assert_eq!(
+            EditorForm::STRUCTURE_LISTS,
+            [
+                CREATED,
+                SHOWN,
+                GENRE_LIST,
+                CREATOR_LIST,
+                OWNER_LIST,
+                LICENSOR_LIST,
+                SUPPLIER_LIST
+            ]
+        );
+        assert_eq!(EditorForm::IMAGE_CREATOR, CREATOR_LIST);
+        // The locations after Country Code, Genre after Scene Code, the PLUS lists at the start of
+        // Licence (PLUS), before the release fields (point 2).
+        assert_eq!(
+            EditorForm::lists_at(EditorSection::TimePlace, Some(EditorField::CountryCode)),
+            [CREATED, SHOWN]
+        );
+        assert_eq!(
+            EditorForm::lists_at(EditorSection::Assignment, Some(EditorField::SceneCode)),
+            [GENRE_LIST]
+        );
+        assert_eq!(
+            EditorForm::lists_at(EditorSection::Licence, None),
+            [CREATOR_LIST, OWNER_LIST, LICENSOR_LIST, SUPPLIER_LIST]
+        );
+        assert!(EditorForm::lists_at(EditorSection::Content, None).is_empty());
+        assert!(
+            EditorForm::lists_at(
+                EditorSection::Licence,
+                Some(EditorField::ModelReleaseStatus)
+            )
+            .is_empty()
+        );
+        assert_eq!(
+            EditorField::ALL
+                .into_iter()
+                .find(|field| field.section() == EditorSection::Licence),
+            Some(EditorField::ModelReleaseStatus)
+        );
+
+        // The sub-fields in the order of the form, names from `property_label` (IPTC's names).
+        let names = |fields: &[&str]| -> Vec<String> {
+            fields
+                .iter()
+                .map(|id| property_label(id, Language::En))
+                .collect()
+        };
+        assert_eq!(
+            EditorForm::list_fields(CREATED),
+            EditorForm::LOCATION_FIELDS
+        );
+        assert_eq!(
+            names(EditorForm::list_fields(GENRE_LIST)),
+            ["CV-Term name", "CV-Term ID", "CV-Term CV ID"]
+        );
+        assert_eq!(
+            names(EditorForm::list_fields(CREATOR_LIST)),
+            ["Image Creator Name", "Image Creator ID"]
+        );
+        assert_eq!(
+            names(EditorForm::list_fields(OWNER_LIST)),
+            ["Copyright Owner Name", "Copyright Owner ID"]
+        );
+        assert_eq!(
+            names(EditorForm::list_fields(SUPPLIER_LIST)),
+            ["Image Supplier Name", "Image Supplier ID"]
+        );
+        // Licensor (U11b-Q3): eight open, the six of the address under "Address".
+        assert_eq!(
+            EditorForm::list_fields(LICENSOR_LIST),
+            [
+                LICENSOR_NAME,
+                "plus:LicensorID",
+                LICENSOR_EMAIL,
+                "plus:LicensorURL",
+                TEL_1,
+                TEL_TYPE_1,
+                TEL_2,
+                TEL_TYPE_2,
+            ]
+        );
+        assert_eq!(
+            EditorForm::list_address_fields(LICENSOR_LIST),
+            [
+                STREET,
+                "plus:LicensorExtendedAddress",
+                LICENSOR_CITY,
+                "plus:LicensorRegion",
+                POSTAL_CODE,
+                "plus:LicensorCountry",
+            ]
+        );
+        for list in EditorForm::STRUCTURE_LISTS {
+            if list != LICENSOR_LIST {
+                assert!(EditorForm::list_address_fields(list).is_empty(), "{list}");
+            }
+        }
+        // The list names.
+        assert_eq!(
+            names(&EditorForm::STRUCTURE_LISTS[2..]),
+            [
+                "Genre",
+                "Image Creator",
+                "Copyright Owner",
+                "Licensor",
+                "Image Supplier"
+            ]
+        );
+        // Another property has no sub-fields.
+        assert!(EditorForm::list_fields("dc:title").is_empty());
+    }
+
+    #[test]
+    fn each_new_list_is_read_edited_and_written_as_one_struct_list_edit() {
+        let anna = place(&[(CREATOR_NAME, "Anna Berg"), (CREATOR_ID, "urn:anna")]);
+        let owner = place(&[(OWNER_NAME, "Anna Berg AB")]);
+        let supplier = place(&[(SUPPLIER_NAME, "Bildbyrån"), (SUPPLIER_ID, "B-1")]);
+        let metadata = with_lists(&[
+            (GENRE_LIST, vec![sport()]),
+            (CREATOR_LIST, vec![anna.clone()]),
+            (OWNER_LIST, vec![owner.clone()]),
+            (LICENSOR_LIST, vec![licensor()]),
+            (SUPPLIER_LIST, vec![supplier.clone()]),
+        ]);
+        let mut form = form_with(metadata);
+        for list in &EditorForm::STRUCTURE_LISTS[2..] {
+            assert_eq!(form.list_count(list), 1, "{list}");
+            assert_eq!(form.list_read_only(list), None, "{list}");
+        }
+        assert_eq!(form.list_text(GENRE_LIST, 0, CV_NAME), "Sport");
+        assert_eq!(
+            form.list_text(GENRE_LIST, 0, CV_CV_ID),
+            "http://cv.iptc.org/newscodes/genre/"
+        );
+        assert_eq!(form.list_text(CREATOR_LIST, 0, CREATOR_ID), "urn:anna");
+        assert_eq!(form.list_text(OWNER_LIST, 0, OWNER_ID), "");
+        assert_eq!(form.list_text(LICENSOR_LIST, 0, LICENSOR_CITY), "Umeå");
+        assert_eq!(form.list_text(SUPPLIER_LIST, 0, SUPPLIER_ID), "B-1");
+        // Shown untouched, the lists give no edit.
+        assert_eq!(form.edits(), Ok(Vec::new()));
+
+        type_entry(
+            &mut form,
+            GENRE_LIST,
+            0,
+            CV_ID,
+            "http://example.org/genre/x",
+        );
+        type_entry(&mut form, CREATOR_LIST, 0, CREATOR_NAME, "Anna Berg-Ek");
+        type_entry(&mut form, OWNER_LIST, 0, OWNER_ID, "urn:owner");
+        type_entry(&mut form, LICENSOR_LIST, 0, LICENSOR_NAME, "Bildbyrån");
+        type_entry(&mut form, SUPPLIER_LIST, 0, SUPPLIER_ID, "");
+
+        let mut genre = sport();
+        genre.fields[1].1 = text("http://example.org/genre/x");
+        let mut creator = anna;
+        creator.fields[0].1 = text("Anna Berg-Ek");
+        let mut owner = owner;
+        owner.fields.push((OWNER_ID.to_string(), text("urn:owner")));
+        let mut licensor = licensor();
+        licensor.fields[0].1 = text("Bildbyrån");
+        let supplier = place(&[(SUPPLIER_NAME, "Bildbyrån")]);
+        // One `Set` of the whole list each, Genre in Assignment before the PLUS lists.
+        assert_eq!(
+            form.edits(),
+            Ok(vec![
+                set(GENRE_LIST, places(vec![genre])),
+                set(CREATOR_LIST, places(vec![creator])),
+                set(OWNER_LIST, places(vec![owner])),
+                set(LICENSOR_LIST, places(vec![licensor])),
+                set(SUPPLIER_LIST, places(vec![supplier])),
+            ])
+        );
+    }
+
+    #[test]
+    fn the_new_list_edits_are_accepted_by_apply_edits() {
+        let mut form = form_with(Metadata::new());
+        for list in &EditorForm::STRUCTURE_LISTS[2..] {
+            form.add_entry(list);
+            let field = EditorForm::list_fields(list)[0];
+            type_entry(&mut form, list, 0, field, "Namn");
+        }
+        let edits = form.edits().unwrap();
+        assert_eq!(edits.len(), 5);
+        let mut metadata = Metadata::new();
+        assert!(apply_edits(&mut metadata, &edits).is_ok());
+        assert_eq!(
+            metadata.get(GENRE_LIST).map(|stored| &stored.value),
+            Some(&places(vec![StructValue {
+                fields: vec![(CV_NAME.to_string(), lang_alt(&[("x-default", "Namn")]))],
+            }]))
+        );
+        assert_eq!(
+            metadata.get(SUPPLIER_LIST).map(|stored| &stored.value),
+            Some(&places(vec![place(&[(SUPPLIER_NAME, "Namn")])]))
+        );
+    }
+
+    #[test]
+    fn add_is_disabled_at_the_limit_of_3_and_of_1() {
+        assert_eq!(EditorForm::max_entries(CREATOR_LIST), Some(3));
+        assert_eq!(EditorForm::max_entries(OWNER_LIST), Some(3));
+        assert_eq!(EditorForm::max_entries(LICENSOR_LIST), Some(3));
+        assert_eq!(EditorForm::max_entries(SUPPLIER_LIST), Some(1));
+        assert_eq!(EditorForm::max_entries(GENRE_LIST), None);
+        assert_eq!(EditorForm::max_entries(CREATED), None);
+
+        let one = |name: &str| place(&[(CREATOR_NAME, name)]);
+        let mut form = form_with(with_lists(&[(CREATOR_LIST, vec![one("A"), one("B")])]));
+        assert!(form.can_add_entry(CREATOR_LIST));
+        form.add_entry(CREATOR_LIST);
+        assert_eq!(form.list_count(CREATOR_LIST), 3);
+        // At 3, also with the third entry empty: Add does nothing.
+        assert!(!form.can_add_entry(CREATOR_LIST));
+        form.add_entry(CREATOR_LIST);
+        assert_eq!(form.list_count(CREATOR_LIST), 3);
+        // Removing one makes room again.
+        form.remove_entry(CREATOR_LIST, 2);
+        assert!(form.can_add_entry(CREATOR_LIST));
+
+        // Licensor and Copyright Owner alike.
+        let mut form = form_with(Metadata::new());
+        for list in [OWNER_LIST, LICENSOR_LIST] {
+            for _ in 0..5 {
+                form.add_entry(list);
+            }
+            assert_eq!(form.list_count(list), 3, "{list}");
+            assert!(!form.can_add_entry(list), "{list}");
+        }
+
+        // Image Supplier: at most 1.
+        let mut form = form_with(Metadata::new());
+        assert!(form.can_add_entry(SUPPLIER_LIST));
+        form.add_entry(SUPPLIER_LIST);
+        form.add_entry(SUPPLIER_LIST);
+        assert_eq!(form.list_count(SUPPLIER_LIST), 1);
+        assert!(!form.can_add_entry(SUPPLIER_LIST));
+        let form = form_with(with_lists(&[(
+            SUPPLIER_LIST,
+            vec![place(&[(SUPPLIER_NAME, "Bildbyrån")])],
+        )]));
+        assert!(!form.can_add_entry(SUPPLIER_LIST));
+
+        // Genre and the locations have no limit.
+        let mut form = form_with(Metadata::new());
+        for _ in 0..5 {
+            form.add_entry(GENRE_LIST);
+            form.add_entry(CREATED);
+        }
+        assert_eq!(form.list_count(GENRE_LIST), 5);
+        assert!(form.can_add_entry(GENRE_LIST));
+        assert!(form.can_add_entry(CREATED));
+        // Another property is no list.
+        assert!(!form.can_add_entry("dc:title"));
+    }
+
+    #[test]
+    fn genres_name_edits_only_x_default_and_keeps_the_other_languages() {
+        let mut form = form_with(with_lists(&[(GENRE_LIST, vec![sport()])]));
+        type_entry(&mut form, GENRE_LIST, 0, CV_NAME, "Sports");
+        let mut expected = sport();
+        expected.fields[0].1 = lang_alt(&[("x-default", "Sports"), ("sv", "Idrott")]);
+        assert_eq!(
+            form.edits(),
+            Ok(vec![set(GENRE_LIST, places(vec![expected]))])
+        );
+
+        // Without `x-default` the first language is shown; an edit adds `x-default` first.
+        let swedish = StructValue {
+            fields: vec![(CV_NAME.to_string(), lang_alt(&[("sv", "Idrott")]))],
+        };
+        let mut form = form_with(with_lists(&[(GENRE_LIST, vec![swedish])]));
+        assert_eq!(form.list_text(GENRE_LIST, 0, CV_NAME), "Idrott");
+        assert_eq!(form.edits(), Ok(Vec::new()));
+        type_entry(&mut form, GENRE_LIST, 0, CV_NAME, "Sport");
+        assert_eq!(
+            form.edits(),
+            Ok(vec![set(
+                GENRE_LIST,
+                places(vec![StructValue {
+                    fields: vec![(
+                        CV_NAME.to_string(),
+                        lang_alt(&[("x-default", "Sport"), ("sv", "Idrott")])
+                    )],
+                }])
+            )])
+        );
+
+        // Emptied, the name is removed as a whole; the entry keeps its IDs.
+        let mut form = form_with(with_lists(&[(GENRE_LIST, vec![sport()])]));
+        type_entry(&mut form, GENRE_LIST, 0, CV_NAME, " ");
+        let mut expected = sport();
+        expected.fields.remove(0);
+        assert_eq!(
+            form.edits(),
+            Ok(vec![set(GENRE_LIST, places(vec![expected]))])
+        );
+    }
+
+    #[test]
+    fn a_licensor_with_an_address_and_telephone_types_is_written_back_unchanged() {
+        let mut form = form_with(with_lists(&[(LICENSOR_LIST, vec![licensor()])]));
+        assert_eq!(form.list_text(LICENSOR_LIST, 0, TEL_TYPE_1), "cell");
+        assert_eq!(form.list_text(LICENSOR_LIST, 0, TEL_TYPE_2), "mobile");
+        assert_eq!(form.list_text(LICENSOR_LIST, 0, STREET), "Storgatan 1");
+        // A choice is not typed into.
+        assert!(form.list_text_mut(LICENSOR_LIST, 0, TEL_TYPE_1).is_none());
+        type_entry(
+            &mut form,
+            LICENSOR_LIST,
+            0,
+            LICENSOR_EMAIL,
+            "info@example.org",
+        );
+        let mut expected = licensor();
+        expected
+            .fields
+            .push((LICENSOR_EMAIL.to_string(), text("info@example.org")));
+        // Every other sub-field (address, telephones, the unknown type) as read.
+        assert_eq!(
+            form.edits(),
+            Ok(vec![set(LICENSOR_LIST, places(vec![expected]))])
+        );
+    }
+
+    #[test]
+    fn the_telephone_types_are_choices_and_an_unknown_type_is_kept() {
+        let mut form = form_with(with_lists(&[(LICENSOR_LIST, vec![licensor()])]));
+        let entries = form.list_choice_entries(LICENSOR_LIST, 0, TEL_TYPE_2);
+        let values: Vec<&str> = entries.iter().map(|entry| entry.value.as_str()).collect();
+        assert_eq!(
+            values,
+            ["", "work", "cell", "fax", "home", "pager", "mobile"]
+        );
+        let texts: Vec<&str> = entries.iter().map(|entry| entry.text.as_str()).collect();
+        assert_eq!(
+            texts,
+            [
+                "",
+                "Work",
+                "Cell",
+                "Fax",
+                "Home",
+                "Pager",
+                "Unknown value: mobile"
+            ]
+        );
+        assert_eq!(
+            entries.get(1).and_then(|entry| entry.tooltip.as_deref()),
+            Some("http://ns.useplus.org/ldf/vocab/work")
+        );
+        assert_eq!(entries.last().and_then(|entry| entry.tooltip.clone()), None);
+        // A known value has no extra entry.
+        assert_eq!(
+            form.list_choice_entries(LICENSOR_LIST, 0, TEL_TYPE_1).len(),
+            6
+        );
+        // A sub-field that is not a choice, or an entry that does not exist: none.
+        assert!(
+            form.list_choice_entries(LICENSOR_LIST, 0, LICENSOR_CITY)
+                .is_empty()
+        );
+        assert!(
+            form.list_choice_entries(LICENSOR_LIST, 3, TEL_TYPE_1)
+                .is_empty()
+        );
+
+        // Another type chosen, then the unknown one chosen back: written as read.
+        form.set_list_choice(LICENSOR_LIST, 0, TEL_TYPE_2, "fax");
+        assert_eq!(form.list_text(LICENSOR_LIST, 0, TEL_TYPE_2), "fax");
+        // The unknown value stays in the list until the form is left.
+        assert_eq!(
+            form.list_choice_entries(LICENSOR_LIST, 0, TEL_TYPE_2).len(),
+            7
+        );
+        form.set_list_choice(LICENSOR_LIST, 0, TEL_TYPE_2, "mobile");
+        assert_eq!(form.edits(), Ok(Vec::new()));
+
+        // The code is written; the empty entry removes the type.
+        form.set_list_choice(LICENSOR_LIST, 0, TEL_TYPE_1, "work");
+        form.set_list_choice(LICENSOR_LIST, 0, TEL_TYPE_2, "");
+        let mut expected = licensor();
+        expected.fields[2].1 = text("work");
+        expected.fields.remove(3);
+        assert_eq!(
+            form.edits(),
+            Ok(vec![set(LICENSOR_LIST, places(vec![expected]))])
+        );
+        // `set_list_choice` does nothing on a sub-field that is not a choice.
+        form.set_list_choice(LICENSOR_LIST, 0, LICENSOR_CITY, "work");
+        assert_eq!(form.list_text(LICENSOR_LIST, 0, LICENSOR_CITY), "Umeå");
+    }
+
+    #[test]
+    fn copy_from_creator_adds_the_missing_names_up_to_the_limit() {
+        // Not enabled without a Creator name.
+        let mut form = form_with(Metadata::new());
+        assert!(!form.can_copy_creator());
+        form.copy_creator();
+        assert_eq!(form.list_count(CREATOR_LIST), 0);
+
+        // Two creators, one already an Image Creator (with an ID, which stays).
+        let per = place(&[(CREATOR_NAME, "Per Ek"), (CREATOR_ID, "urn:per")]);
+        let mut metadata = with_lists(&[(CREATOR_LIST, vec![per.clone()])]);
+        insert(&mut metadata, "dc:creator", list(&["Anna Berg", "Per Ek"]));
+        let mut form = form_with(metadata);
+        assert!(form.can_copy_creator());
+        form.copy_creator();
+        assert_eq!(form.list_count(CREATOR_LIST), 2);
+        assert_eq!(form.list_text(CREATOR_LIST, 1, CREATOR_NAME), "Anna Berg");
+        assert_eq!(
+            form.edits(),
+            Ok(vec![set(
+                CREATOR_LIST,
+                places(vec![per, place(&[(CREATOR_NAME, "Anna Berg")])])
+            )])
+        );
+        // A second press adds nothing: both names are there.
+        form.copy_creator();
+        assert_eq!(form.list_count(CREATOR_LIST), 2);
+
+        // The limit: two entries and two new names give one new entry.
+        let one = |name: &str| place(&[(CREATOR_NAME, name)]);
+        let mut form = form_with(with_lists(&[(CREATOR_LIST, vec![one("A"), one("B")])]));
+        // An unsaved Creator text counts.
+        type_into(&mut form, EditorField::Creator, "C, D");
+        assert!(form.can_copy_creator());
+        form.copy_creator();
+        assert_eq!(form.list_count(CREATOR_LIST), 3);
+        assert_eq!(form.list_text(CREATOR_LIST, 2, CREATOR_NAME), "C");
+        // Full: not enabled.
+        assert!(!form.can_copy_creator());
+        form.copy_creator();
+        assert_eq!(form.list_count(CREATOR_LIST), 3);
+        // Creator itself is unchanged.
+        assert_eq!(form.text(EditorField::Creator), "C, D");
+    }
+
+    #[test]
+    fn an_emptied_image_creator_is_emptied_on_the_windows_image_only() {
+        let anna = place(&[(CREATOR_NAME, "Anna Berg")]);
+        let mut metadata = with_lists(&[
+            (GENRE_LIST, vec![sport()]),
+            (CREATOR_LIST, vec![anna]),
+            (OWNER_LIST, vec![place(&[(OWNER_NAME, "Anna Berg AB")])]),
+        ]);
+        insert(
+            &mut metadata,
+            "dc:rights",
+            lang_alt(&[("x-default", "© Anna")]),
+        );
+        let mut form = form_with(metadata);
+        form.remove_entry(GENRE_LIST, 0);
+        form.remove_entry(CREATOR_LIST, 0);
+        type_entry(&mut form, OWNER_LIST, 0, OWNER_ID, "urn:owner");
+        type_into(&mut form, EditorField::Copyright, "");
+
+        let batch = batch_of(&form);
+        let owner = places(vec![place(&[
+            (OWNER_NAME, "Anna Berg AB"),
+            (OWNER_ID, "urn:owner"),
+        ])]);
+        assert_eq!(
+            batch.this_image,
+            [
+                clear("dc:rights"),
+                clear(GENRE_LIST),
+                clear(CREATOR_LIST),
+                set(OWNER_LIST, owner.clone()),
+            ]
+        );
+        // The emptied Image Creator (and Copyright Notice) stay on the window's image; the
+        // emptied Genre and the changed Copyright Owner go to every image.
+        assert_eq!(batch.others, [clear(GENRE_LIST), set(OWNER_LIST, owner)]);
+        assert_eq!(batch.emptied_here_only, [EditorField::Copyright]);
+        assert_eq!(batch.field_count(), 4);
+        assert_eq!(
+            apply_confirmation(&batch, 3, 0),
+            [
+                "Write 4 changed fields to 3 images?",
+                "Changed: Copyright Owner",
+                "Emptied: Genre",
+                "Emptied only on this image: Copyright Notice, Image Creator",
+            ]
+        );
+
+        // Copyright Owner and Licensor alike.
+        let mut form = form_with(with_lists(&[
+            (OWNER_LIST, vec![place(&[(OWNER_NAME, "Anna Berg AB")])]),
+            (LICENSOR_LIST, vec![licensor()]),
+        ]));
+        form.remove_entry(OWNER_LIST, 0);
+        form.remove_entry(LICENSOR_LIST, 0);
+        let batch = batch_of(&form);
+        assert_eq!(batch.this_image, [clear(OWNER_LIST), clear(LICENSOR_LIST)]);
+        assert!(batch.others.is_empty());
+        assert_eq!(
+            apply_confirmation(&batch, 2, 0),
+            [
+                "Write 2 changed fields to 2 images?",
+                "Emptied only on this image: Copyright Owner, Licensor",
+            ]
+        );
+
+        // An emptied Image Supplier is not a copyright-management field: emptied everywhere.
+        let mut form = form_with(with_lists(&[(
+            SUPPLIER_LIST,
+            vec![place(&[(SUPPLIER_NAME, "Bildbyrån")])],
+        )]));
+        form.remove_entry(SUPPLIER_LIST, 0);
+        let batch = batch_of(&form);
+        assert_eq!(batch.others, [clear(SUPPLIER_LIST)]);
+    }
+
+    #[test]
+    fn copy_and_paste_carry_the_new_lists_and_leave_out_the_empty_ones() {
+        let mut source = form_with(with_lists(&[(LICENSOR_LIST, vec![licensor()])]));
+        source.add_entry(SUPPLIER_LIST);
+        type_entry(&mut source, SUPPLIER_LIST, 0, SUPPLIER_NAME, "Bildbyrån");
+        source.add_entry(GENRE_LIST);
+        let copied = source.copy("a.jpg");
+        // The empty Genre entry is dropped and the lists without an entry left out.
+        assert_eq!(
+            copied.locations,
+            [
+                (LICENSOR_LIST, vec![licensor()]),
+                (SUPPLIER_LIST, vec![place(&[(SUPPLIER_NAME, "Bildbyrån")])]),
+            ]
+        );
+        assert_eq!(copied.count(), 2);
+
+        let mut target = form_with(with_lists(&[(GENRE_LIST, vec![sport()])]));
+        target.paste(&copied);
+        assert_eq!(target.list_count(LICENSOR_LIST), 1);
+        assert_eq!(target.list_text(LICENSOR_LIST, 0, TEL_TYPE_2), "mobile");
+        // Genre was not copied, so it keeps its entry.
+        assert_eq!(target.list_count(GENRE_LIST), 1);
+        assert_eq!(
+            target.edits(),
+            Ok(vec![
+                set(LICENSOR_LIST, places(vec![licensor()])),
+                set(
+                    SUPPLIER_LIST,
+                    places(vec![place(&[(SUPPLIER_NAME, "Bildbyrån")])])
+                ),
+            ])
+        );
+    }
+
+    #[test]
+    fn a_new_list_with_an_open_conflict_is_read_only_until_it_is_decided() {
+        let anna = place(&[(CREATOR_NAME, "Anna Berg")]);
+        let per = place(&[(CREATOR_NAME, "Per Ek")]);
+        let mut metadata = with_lists(&[(CREATOR_LIST, vec![anna.clone()])]);
+        insert(&mut metadata, "dc:creator", list(&["Lisa"]));
+        metadata.add_conflict(Conflict {
+            property: CREATOR_LIST.into(),
+            values: vec![
+                (Origin::XmpEmbedded, places(vec![anna])),
+                (Origin::XmpSidecar, places(vec![per.clone()])),
+            ],
+            rule: ConflictRule::Open,
+        });
+        let mut form = form_with(metadata);
+        assert!(form.list_read_only(CREATOR_LIST).is_some());
+        assert!(!form.can_add_entry(CREATOR_LIST));
+        assert!(!form.can_copy_creator());
+        assert!(form.list_text_mut(CREATOR_LIST, 0, CREATOR_NAME).is_none());
+        assert!(form.choose(0, 1));
+        assert_eq!(form.list_text(CREATOR_LIST, 0, CREATOR_NAME), "Per Ek");
+        assert_eq!(form.edits(), Ok(vec![set(CREATOR_LIST, places(vec![per]))]));
+        assert!(form.can_copy_creator());
+    }
+
+    #[test]
+    fn the_texts_of_the_new_lists() {
+        let cases = [
+            (EditorText::AddEntry { list: GENRE_LIST }, "Add Genre"),
+            (
+                EditorText::AddEntry { list: CREATOR_LIST },
+                "Add Image Creator",
+            ),
+            (
+                EditorText::AddEntry { list: OWNER_LIST },
+                "Add Copyright Owner",
+            ),
+            (
+                EditorText::AddEntry {
+                    list: LICENSOR_LIST,
+                },
+                "Add Licensor",
+            ),
+            (
+                EditorText::AddEntry {
+                    list: SUPPLIER_LIST,
+                },
+                "Add Image Supplier",
+            ),
+            (EditorText::AtMostEntries { max: 3 }, "At most 3 entries"),
+            (EditorText::AtMostEntries { max: 1 }, "At most 1 entry"),
+            (EditorText::CopyFromCreator, "Copy from Creator"),
+            (EditorText::Address, "Address"),
+            (
+                EditorText::EmptiedHere {
+                    fields: vec![EditorField::Creator],
+                    lists: vec![CREATOR_LIST, LICENSOR_LIST],
+                },
+                "Emptied only on this image: Creator, Image Creator, Licensor",
+            ),
+            (
+                EditorText::EmptiedHere {
+                    fields: vec![EditorField::Copyright],
+                    lists: Vec::new(),
+                },
+                "Emptied only on this image: Copyright Notice",
+            ),
+        ];
+        for (text, expected) in cases {
+            assert_eq!(editor_text(&text), expected, "{text:?}");
+        }
+        // Each list in its place among the fields.
+        assert_eq!(
+            editor_text(&EditorText::Changed {
+                fields: vec![
+                    EditorField::Title,
+                    EditorField::Instructions,
+                    EditorField::ModelReleaseStatus
+                ],
+                lists: vec![CREATED, GENRE_LIST, CREATOR_LIST, SUPPLIER_LIST],
+            }),
+            format!(
+                "Changed: Title, Location Created, Instructions, Genre, Image Creator, Image \
+                 Supplier, {}",
+                EditorField::ModelReleaseStatus.label()
+            )
+        );
     }
 }

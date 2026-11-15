@@ -15,6 +15,7 @@ use pw_metadata::{MIN_EXIFTOOL_VERSION, ToolVersion};
 use crate::monitor_profile::ProfileSource;
 use crate::rating_text::label_name;
 use crate::shell::{Command, KeyChord, MenuKind, SubmenuKind, Theme};
+use crate::sort::SortKey;
 
 /// The separator between the parts of the status line.
 const STATUS_SEPARATOR: &str = "  ·  ";
@@ -63,6 +64,8 @@ pub enum ShellText {
     /// The title of the message about writes left unfinished at the last exit (T91; T116, from
     /// `main.rs`).
     RecoveryTitle,
+    /// View ▸ Sort By (ADR 0017 U14-Q7, T138).
+    SortMenu,
 }
 
 /// The text of `text`.
@@ -89,7 +92,43 @@ pub fn shell_text(text: ShellText) -> &'static str {
         ShellText::ThumbnailWorkerStopped => "Thumbnail loading has stopped",
         ShellText::ThumbnailSize => "Size",
         ShellText::RecoveryTitle => "Metadata writing was interrupted",
+        ShellText::SortMenu => "Sort By",
     }
+}
+
+/// The name of a sort key (View ▸ Sort By and the command bar's drop-down; U14-Q1, T138).
+pub fn sort_key_text(key: SortKey) -> &'static str {
+    match key {
+        SortKey::Name => "File Name",
+        SortKey::Capture => "Capture Time",
+        SortKey::Modified => "Modified",
+        SortKey::Type => "File Type",
+        SortKey::Rating => "Rating",
+    }
+}
+
+/// The command bar's sort drop-down when closed: "Sort: {key}" (U14-Q7).
+pub fn sort_button_text(key: SortKey) -> String {
+    format!("Sort: {}", sort_key_text(key))
+}
+
+/// The command bar's direction button: "↑" ascending, "↓" descending (U14-Q7).
+pub fn sort_direction_text(descending: bool) -> &'static str {
+    if descending { "↓" } else { "↑" }
+}
+
+/// The hover text of the direction button: the direction it shows.
+pub fn sort_direction_hover(descending: bool) -> &'static str {
+    if descending {
+        "Descending"
+    } else {
+        "Ascending"
+    }
+}
+
+/// The status bar while a tab waits for its capture times (U14-Q4): "{read} of {total}" read.
+pub fn sorting_text(read: usize, total: usize) -> String {
+    format!("Sorting by capture time: {read} of {total}")
 }
 
 /// The status line (the contact sheet's and the loupe's): its parts in order, joined with the
@@ -293,6 +332,8 @@ pub fn command_text(command: Command) -> String {
         Command::LeftColumn => "Left Column".to_owned(),
         Command::Fullscreen => "Full Screen".to_owned(),
         Command::Theme(theme) => theme_text(theme).to_owned(),
+        Command::Sort(key) => sort_key_text(key).to_owned(),
+        Command::SortDescending => "Descending".to_owned(),
     }
 }
 
@@ -466,6 +507,39 @@ mod tests {
             MENUS
                 .iter()
                 .any(|menu| menu.entries.contains(&MenuEntry::Filter))
+        );
+    }
+
+    #[test]
+    fn the_sort_texts_of_the_command_bar_the_menu_and_the_status_bar() {
+        use crate::sort::SORT_KEYS;
+        let names: Vec<&str> = SORT_KEYS.into_iter().map(sort_key_text).collect();
+        assert_eq!(
+            names,
+            [
+                "File Name",
+                "Capture Time",
+                "Modified",
+                "File Type",
+                "Rating"
+            ]
+        );
+        for key in SORT_KEYS {
+            assert_eq!(command_text(Command::Sort(key)), sort_key_text(key));
+        }
+        assert_eq!(sort_button_text(SortKey::Capture), "Sort: Capture Time");
+        assert_eq!(sort_button_text(SortKey::Name), "Sort: File Name");
+        assert_eq!(shell_text(ShellText::SortMenu), "Sort By");
+        assert_eq!(command_text(Command::SortDescending), "Descending");
+        assert_eq!(sort_direction_text(false), "↑");
+        assert_eq!(sort_direction_text(true), "↓");
+        assert_eq!(sort_direction_hover(false), "Ascending");
+        assert_eq!(sort_direction_hover(true), "Descending");
+        assert_eq!(sorting_text(3, 120), "Sorting by capture time: 3 of 120");
+        assert!(
+            MENUS
+                .iter()
+                .any(|menu| menu.entries.contains(&MenuEntry::Sort))
         );
     }
 

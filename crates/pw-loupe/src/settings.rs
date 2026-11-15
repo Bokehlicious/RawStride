@@ -7,7 +7,8 @@
 //! settings file, so a crash never leaves half a file. The main window's remembered state (ADR
 //! 0017 §2.5, U1, T109: theme, window, full screen, side columns; the metadata window's sections,
 //! T123) is kept in the same file, and so are the library's favourites and recent folders and
-//! its sections' states (ADR 0017 §2.1, U4, T135).
+//! its sections' states (ADR 0017 §2.1, U4, T135), and the sort order of the tabs (ADR 0017
+//! §6.1, U14, T138).
 
 use std::fs::File;
 use std::io::{self, Write};
@@ -19,6 +20,7 @@ use pw_metadata::write_plan::WriteSettings;
 
 use crate::editor::EditorSection;
 use crate::shell::{ColumnState, DEFAULT_LEFT_WIDTH, DEFAULT_RIGHT_WIDTH, Theme};
+use crate::sort::{SortKey, SortOrder};
 
 /// The key of the setting "Skapa IPTC-IIM för kompatibilitet med äldre system".
 const CREATE_IIM: &str = "create_iim";
@@ -62,6 +64,9 @@ const EDITOR_LICENCE: &str = "editor_licence";
 const LIBRARY_FOLDERS: &str = "library_folders";
 const LIBRARY_FAVOURITES: &str = "library_favourites";
 const LIBRARY_RECENT: &str = "library_recent";
+/// The keys of the sort order of every tab (U14-Q3, T138).
+const SORT: &str = "sort";
+const SORT_DESCENDING: &str = "sort_descending";
 /// The keys of a favourite and of a recent folder: one line per folder, in the list's order
 /// (T135, U4-Q3, U4-Q4).
 const FAVOURITE: &str = "favourite";
@@ -147,6 +152,8 @@ pub struct ShellSettings {
     pub library_folders: ColumnState,
     pub library_favourites: ColumnState,
     pub library_recent: ColumnState,
+    /// The sort order of every tab (U14-Q3, T138): `sort` and `sort_descending`.
+    pub sort: SortOrder,
 }
 
 /// The library's lists as `settings.txt` keeps them (T135, U4-Q3, U4-Q4): the favourites in the
@@ -195,6 +202,8 @@ impl Default for ShellSettings {
             library_folders: ColumnState::Open,
             library_favourites: ColumnState::Open,
             library_recent: ColumnState::Open,
+            // File-name order, ascending: the order before T138 (U14-Q1).
+            sort: SortOrder::default(),
         }
     }
 }
@@ -322,12 +331,17 @@ pub fn load_settings_and_library(path: &Path) -> (Settings, SavedLibrary, Vec<St
                 Some(window) => shell.window = Some(window),
                 None => problems.push(bad("x,y,width,height,scale")),
             },
-            WINDOW_MAXIMIZED | FULLSCREEN | COLUMNS_HIDDEN | PREVIEW_HIDDEN => {
+            SORT => match parse_sort_key(value) {
+                Some(key) => shell.sort.key = key,
+                None => problems.push(bad("name, capture, modified, type or rating")),
+            },
+            WINDOW_MAXIMIZED | FULLSCREEN | COLUMNS_HIDDEN | PREVIEW_HIDDEN | SORT_DESCENDING => {
                 match parse_bool(value) {
                     Some(on) => match key {
                         WINDOW_MAXIMIZED => shell.window_maximized = on,
                         FULLSCREEN => shell.fullscreen = on,
                         PREVIEW_HIDDEN => shell.preview_hidden = on,
+                        SORT_DESCENDING => shell.sort.descending = on,
                         _ => shell.columns_hidden = on,
                     },
                     None => problems.push(bad("true or false")),
@@ -509,6 +523,11 @@ fn shell_lines(shell: &ShellSettings) -> String {
         column_value(shell.library_favourites),
         column_value(shell.library_recent)
     ));
+    text.push_str(&format!(
+        "{SORT} = {}\n{SORT_DESCENDING} = {}\n",
+        sort_key_value(shell.sort.key),
+        shell.sort.descending
+    ));
     text
 }
 
@@ -558,6 +577,27 @@ fn parse_theme(value: &str) -> Option<Theme> {
     match value {
         "dark" => Some(Theme::Dark),
         "light" => Some(Theme::Light),
+        _ => None,
+    }
+}
+
+fn sort_key_value(key: SortKey) -> &'static str {
+    match key {
+        SortKey::Name => "name",
+        SortKey::Capture => "capture",
+        SortKey::Modified => "modified",
+        SortKey::Type => "type",
+        SortKey::Rating => "rating",
+    }
+}
+
+fn parse_sort_key(value: &str) -> Option<SortKey> {
+    match value {
+        "name" => Some(SortKey::Name),
+        "capture" => Some(SortKey::Capture),
+        "modified" => Some(SortKey::Modified),
+        "type" => Some(SortKey::Type),
+        "rating" => Some(SortKey::Rating),
         _ => None,
     }
 }
@@ -628,6 +668,7 @@ mod tests {
     };
     use crate::editor::EditorSection;
     use crate::shell::{ColumnState, Theme};
+    use crate::sort::{SORT_KEYS, SortKey, SortOrder};
 
     static NEXT_TEMP: AtomicUsize = AtomicUsize::new(0);
 
@@ -734,7 +775,8 @@ mod tests {
              preview_hidden = false\neditor_content = open\neditor_creator_rights = open\n\
              editor_time_place = open\neditor_assignment = open\n\
              editor_rating_label = open\neditor_licence = open\nlibrary_folders = open\n\
-             library_favourites = open\nlibrary_recent = open\n"
+             library_favourites = open\nlibrary_recent = open\nsort = name\n\
+             sort_descending = false\n"
         );
     }
 
@@ -915,6 +957,10 @@ mod tests {
             library_folders: ColumnState::Collapsed,
             library_favourites: ColumnState::Collapsed,
             library_recent: ColumnState::Collapsed,
+            sort: SortOrder {
+                key: SortKey::Capture,
+                descending: true,
+            },
         }
     }
 
@@ -1463,5 +1509,83 @@ mod tests {
         assert!(problems.is_empty(), "{problems:?}");
         assert_eq!(loaded.favourites, vec![kept, full("with space inside")]);
         assert!(loaded.recent.is_empty(), "{:?}", loaded.recent);
+    }
+
+    #[test]
+    fn the_sort_order_is_file_name_ascending_by_default_and_round_trips_for_every_key() {
+        assert_eq!(
+            Settings::default().shell.sort,
+            SortOrder {
+                key: SortKey::Name,
+                descending: false
+            }
+        );
+        let dir = TempDir::new();
+        let path = dir.0.join("settings.txt");
+        for (key, value) in SORT_KEYS
+            .into_iter()
+            .zip(["name", "capture", "modified", "type", "rating"])
+        {
+            for descending in [false, true] {
+                let settings = Settings {
+                    shell: ShellSettings {
+                        sort: SortOrder { key, descending },
+                        ..ShellSettings::default()
+                    },
+                    ..Settings::default()
+                };
+                save_settings(&path, &settings).unwrap();
+                let text = std::fs::read_to_string(&path).unwrap();
+                assert!(text.contains(&format!("\nsort = {value}\n")), "{text}");
+                assert!(
+                    text.contains(&format!("\nsort_descending = {descending}\n")),
+                    "{text}"
+                );
+                let (loaded, problems) = load_settings(&path);
+                assert!(problems.is_empty(), "{problems:?}");
+                assert_eq!(loaded, settings);
+            }
+        }
+    }
+
+    #[test]
+    fn the_sort_keys_are_read_and_a_file_without_them_gives_the_default() {
+        let (_dir, path) =
+            TempDir::with_file("# RawStride\nsort = rating\nsort_descending = true\n");
+        let (settings, problems) = load_settings(&path);
+        assert!(problems.is_empty(), "{problems:?}");
+        assert_eq!(
+            settings.shell.sort,
+            SortOrder {
+                key: SortKey::Rating,
+                descending: true
+            }
+        );
+        let (_dir, path) = TempDir::with_file("# RawStride\ntheme = light\n");
+        let (settings, problems) = load_settings(&path);
+        assert!(problems.is_empty(), "{problems:?}");
+        assert_eq!(settings.shell.sort, SortOrder::default());
+    }
+
+    #[test]
+    fn an_unknown_sort_value_is_warned_about_and_ignored() {
+        let (_dir, path) = TempDir::with_file("# RawStride\nsort = date\nsort_descending = true\n");
+        let (settings, problems) = load_settings(&path);
+        assert_one_problem_on_line(&problems, 2);
+        assert!(problems[0].contains("\"date\" for sort"), "{problems:?}");
+        assert_eq!(settings.shell.sort.key, SortKey::Name);
+        assert!(settings.shell.sort.descending);
+
+        let (_dir, path) = TempDir::with_file("# RawStride\nsort = type\nsort_descending = yes\n");
+        let (settings, problems) = load_settings(&path);
+        assert_one_problem_on_line(&problems, 3);
+        assert!(problems[0].contains("sort_descending"), "{problems:?}");
+        assert_eq!(
+            settings.shell.sort,
+            SortOrder {
+                key: SortKey::Type,
+                descending: false
+            }
+        );
     }
 }

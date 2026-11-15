@@ -1,4 +1,4 @@
-# T138. ADR 0017 U14: sort order in the command bar and the contact sheet — Open
+# T138. ADR 0017 U14: sort order in the command bar and the contact sheet — Done
 
 - **Can start now.** The owner approved the proposals of U14-Q1–U14-Q7 (at the end of this task)
   on 2026-11-14; they are written into the points below and into ADR 0017 §6.1.
@@ -77,3 +77,5 @@
 |---|---|---|
 | 2026-11-14 | Blocked | Added; waits for U14-Q1–U14-Q7 |
 | 2026-11-14 | Open | The owner approved U14-Q1–U14-Q7 as proposed |
+| 2026-11-14 | Ready for review | Done by the task agent; `check.ps1` all OK (1404 passed, 53 ignored, 0 failed, with T139's changes in progress in the same tree) |
+| 2026-11-15 | Done | Reviewed; the owner checked it by hand and approved it |

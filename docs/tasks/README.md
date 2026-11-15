@@ -12,7 +12,7 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 | `T<nnn>-<name>.md` (this folder) | Open tasks, one file each |
 | [`backlog.md`](backlog.md) | Not for agents yet: needs a decision, a dependency or an ADR first |
 | [`plans/`](plans/) | Step lists for ADRs that have none of their own (ADR 0007 milestone 8, ADR 0017) |
-| [`done/`](done/README.md) | Finished tasks T1–T137 and the log they were kept in until 2026-11-13 |
+| [`done/`](done/README.md) | Finished tasks T1–T139 and the log they were kept in until 2026-11-13 |
 
 
 ## How to work on a task
@@ -95,8 +95,6 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status |
 |---|---|---|
-| [T138](T138-sort-order.md) | ADR 0017 U14: sort order in the command bar and the contact sheet | Open |
-| [T139](T139-genre-and-plus-structures.md) | ADR 0017 U11a, second part: Genre and the PLUS structures in the metadata window | Open |
 
 ## Writing a task (owner and reviewer)
 

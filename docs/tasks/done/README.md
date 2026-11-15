@@ -143,4 +143,6 @@ was when the task was done, so "this file", "below" and "the Log" in T1–T115 m
 | [T135](T135-library-folders-favourites-recent.md) | ADR 0017 U4: the Library: folder tree, favourites and recent folders |
 | [T136](T136-locations-as-lists-of-structures.md) | ADR 0017 U11a, first part: Location Created and Location Shown in the metadata window |
 | [T137](T137-cargo-audit-in-the-check.md) | `cargo audit` in the check script |
+| [T138](T138-sort-order.md) | ADR 0017 U14: sort order in the command bar and the contact sheet |
+| [T139](T139-genre-and-plus-structures.md) | ADR 0017 U11a, second part: Genre and the PLUS structures in the metadata window |
 | [T120](T120-exiftool-from-the-program-folder.md) | ExifTool from the program folder first |

@@ -1,8 +1,12 @@
 use std::path::{Component, Path, PathBuf};
+use std::time::SystemTime;
+
+use pw_metadata::Rating;
 
 use crate::filter::Filter;
 use crate::selection::Selection;
 use crate::shell_text::{ShellText, shell_text};
+use crate::sort::{CaptureTime, CaptureTimes, SortOrder, SortPlan, plan};
 
 /// The per-tab view shown for a folder.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -27,12 +31,21 @@ pub struct Tab {
     /// (a rating key removes the images that stop matching at once, §2.2) and the moves of
     /// `browse.rs`, never by drawing.
     pub visible: Vec<usize>,
+    /// The sort order `files` are in (ADR 0017 U14, T138); `None` until one has been applied
+    /// since the folder was opened. The order is applied only when it differs from the chosen one
+    /// (U14-Q5), so a rating, a write or a new read never moves an image.
+    pub sorted: Option<SortOrder>,
+    /// The capture times read for this tab (U14-Q4), kept while it is open.
+    pub capture: CaptureTimes,
 }
 
 impl Tab {
     fn open(&mut self, folder: PathBuf, files: Vec<PathBuf>, pos: usize) {
         self.filter = Filter::default();
         self.selection = Selection::default();
+        // The folder in file-name order from `list_folder`: the sort is applied again (U14-Q5).
+        self.sorted = None;
+        self.capture.clear();
         self.folder = Some(folder);
         self.files = files;
         self.current = self
@@ -48,6 +61,53 @@ impl Tab {
     fn clear(&mut self) {
         *self = Self::default();
     }
+
+    /// Applies `order` once when the files are not in it yet (U14-Q4, U14-Q5): when its keys are
+    /// all read, the files are reordered (`reorder`, keeping the current image, the marking and
+    /// the filter) and the order is remembered; until then the tab keeps its order. Returns what
+    /// happened.
+    pub fn follow_sort(
+        &mut self,
+        order: SortOrder,
+        ratings_ready: bool,
+        rating_of: &dyn Fn(&Path) -> Option<Rating>,
+        modified_of: &dyn Fn(&Path) -> Option<SystemTime>,
+    ) -> SortFollow {
+        if self.sorted == Some(order) {
+            return SortFollow::Sorted;
+        }
+        match plan(
+            &self.files,
+            order,
+            &self.capture,
+            ratings_ready,
+            rating_of,
+            modified_of,
+        ) {
+            SortPlan::Order(new_order) => {
+                let moved = self.reorder(&new_order, ratings_ready, rating_of);
+                self.sorted = Some(order);
+                SortFollow::Reordered { moved }
+            }
+            SortPlan::ReadingCaptureTimes { read, total } => {
+                SortFollow::ReadingCaptureTimes { read, total }
+            }
+            SortPlan::WaitingForRatings => SortFollow::WaitingForRatings,
+        }
+    }
+}
+
+/// What `Tab::follow_sort` did.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SortFollow {
+    /// The files were already in the order.
+    Sorted,
+    /// The order was applied now; `moved` when a file changed place.
+    Reordered { moved: bool },
+    /// Waiting for the capture times: `read` of `total` have come back.
+    ReadingCaptureTimes { read: usize, total: usize },
+    /// Waiting for the ratings.
+    WaitingForRatings,
 }
 
 /// A collection of folder tabs sharing one view core.
@@ -189,6 +249,44 @@ impl Tabs {
         }
     }
 
+    /// Applies `order` to every tab whose keys are read (U14-Q3): the active tab with
+    /// `active_ratings_ready`, the others without ratings (theirs are read when they are
+    /// activated). Returns what happened to the active tab.
+    pub fn follow_sort(
+        &mut self,
+        order: SortOrder,
+        active_ratings_ready: bool,
+        rating_of: &dyn Fn(&Path) -> Option<Rating>,
+        modified_of: &dyn Fn(&Path) -> Option<SystemTime>,
+    ) -> SortFollow {
+        let mut active = SortFollow::Sorted;
+        for (index, tab) in self.tabs.iter_mut().enumerate() {
+            let ready = index == self.active && active_ratings_ready;
+            let follow = tab.follow_sort(order, ready, rating_of, modified_of);
+            if index == self.active {
+                active = follow;
+            }
+        }
+        active
+    }
+
+    /// Forgets the order every tab is in, so the next `follow_sort` applies the chosen one again:
+    /// choosing the sort the tabs are in already (U14-Q5). The capture times are kept.
+    pub fn forget_sort(&mut self) {
+        for tab in &mut self.tabs {
+            tab.sorted = None;
+        }
+    }
+
+    /// Records a capture time that has come back in every tab listing `path` (U14-Q4).
+    pub fn record_capture(&mut self, path: &Path, time: Option<CaptureTime>) {
+        for tab in &mut self.tabs {
+            if tab.files.iter().any(|file| file == path) {
+                tab.capture.insert(path.to_path_buf(), time.clone());
+            }
+        }
+    }
+
     pub fn active_index(&self) -> usize {
         self.active
     }
@@ -284,7 +382,12 @@ fn components_equal(left: Component<'_>, right: Component<'_>) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::RefCell;
+    use std::collections::HashMap;
+
     use super::*;
+    use crate::shell_text::sorting_text;
+    use crate::sort::SortKey;
 
     fn files(prefix: &str, count: usize) -> Vec<PathBuf> {
         (0..count)
@@ -657,5 +760,187 @@ mod tests {
         // path is then compared as it is.
         let parent = temp.0.join("missing").join("..").join("gone");
         assert!(same_folder(&parent, &parent));
+    }
+
+    // --- the sort order (ADR 0017 U14, T138) ---
+
+    fn by(key: SortKey, descending: bool) -> SortOrder {
+        SortOrder { key, descending }
+    }
+
+    fn no_time(_: &Path) -> Option<SystemTime> {
+        None
+    }
+
+    fn no_rating(_: &Path) -> Option<Rating> {
+        None
+    }
+
+    fn named(names: &[&str]) -> Vec<PathBuf> {
+        names.iter().map(PathBuf::from).collect()
+    }
+
+    fn file_names(tab: &Tab) -> Vec<String> {
+        tab.files
+            .iter()
+            .map(|path| path.display().to_string())
+            .collect()
+    }
+
+    fn stars(stars: i8) -> Rating {
+        Rating {
+            stars: Some(stars),
+            label: None,
+        }
+    }
+
+    fn active(tabs: &Tabs) -> &Tab {
+        match tabs.active() {
+            Some(tab) => tab,
+            None => panic!("there is always an active tab"),
+        }
+    }
+
+    #[test]
+    fn the_order_is_applied_once_and_a_rating_change_does_not_reorder() {
+        let mut tabs = Tabs::default();
+        tabs.open_in_active(
+            PathBuf::from("first"),
+            named(&["a.arw", "b.arw", "c.arw"]),
+            0,
+        );
+        let ratings = RefCell::new(HashMap::from([
+            (PathBuf::from("a.arw"), stars(1)),
+            (PathBuf::from("b.arw"), stars(5)),
+            (PathBuf::from("c.arw"), stars(3)),
+        ]));
+        let rating_of = |path: &Path| ratings.borrow().get(path).cloned();
+        let best_first = by(SortKey::Rating, true);
+
+        assert_eq!(
+            tabs.follow_sort(best_first, true, &rating_of, &no_time),
+            SortFollow::Reordered { moved: true }
+        );
+        let tab = active(&tabs);
+        assert_eq!(file_names(tab), ["b.arw", "c.arw", "a.arw"]);
+        assert_eq!(tab.files.get(tab.current), Some(&PathBuf::from("a.arw")));
+        assert_eq!(tab.sorted, Some(best_first));
+
+        // Culling: a.arw gets 5 stars. Neither the rating nor the next frame moves it (U14-Q5).
+        ratings
+            .borrow_mut()
+            .insert(PathBuf::from("a.arw"), stars(5));
+        if let Some(tab) = tabs.active_mut() {
+            tab.rated(true, &rating_of);
+        }
+        assert_eq!(
+            tabs.follow_sort(best_first, true, &rating_of, &no_time),
+            SortFollow::Sorted
+        );
+        assert_eq!(file_names(active(&tabs)), ["b.arw", "c.arw", "a.arw"]);
+
+        // Choosing the order again applies it again.
+        tabs.forget_sort();
+        assert_eq!(
+            tabs.follow_sort(best_first, true, &rating_of, &no_time),
+            SortFollow::Reordered { moved: true }
+        );
+        assert_eq!(file_names(active(&tabs)), ["a.arw", "b.arw", "c.arw"]);
+    }
+
+    #[test]
+    fn a_tab_waiting_for_its_capture_times_keeps_its_order_and_reports_how_many_are_read() {
+        let mut tabs = Tabs::default();
+        tabs.open_in_active(
+            PathBuf::from("first"),
+            named(&["a.arw", "b.arw", "c.arw"]),
+            1,
+        );
+        let capture = by(SortKey::Capture, false);
+
+        tabs.record_capture(
+            Path::new("a.arw"),
+            CaptureTime::parse("2026:10:30 14:03:15"),
+        );
+        let follow = tabs.follow_sort(capture, true, &no_rating, &no_time);
+        assert_eq!(
+            follow,
+            SortFollow::ReadingCaptureTimes { read: 1, total: 3 }
+        );
+        let SortFollow::ReadingCaptureTimes { read, total } = follow else {
+            panic!("the tab waits");
+        };
+        assert_eq!(sorting_text(read, total), "Sorting by capture time: 1 of 3");
+        assert_eq!(file_names(active(&tabs)), ["a.arw", "b.arw", "c.arw"]);
+        assert_eq!(active(&tabs).sorted, None);
+
+        tabs.record_capture(Path::new("b.arw"), None);
+        tabs.record_capture(
+            Path::new("c.arw"),
+            CaptureTime::parse("2026:10:30 14:03:12"),
+        );
+        assert_eq!(
+            tabs.follow_sort(capture, true, &no_rating, &no_time),
+            SortFollow::Reordered { moved: true }
+        );
+        let tab = active(&tabs);
+        // b.arw has no date: last.
+        assert_eq!(file_names(tab), ["c.arw", "a.arw", "b.arw"]);
+        assert_eq!(tab.files.get(tab.current), Some(&PathBuf::from("b.arw")));
+    }
+
+    #[test]
+    fn every_open_tab_follows_the_order_and_opening_a_folder_again_applies_it_again() {
+        let mut tabs = Tabs::default();
+        tabs.open_in_active(PathBuf::from("first"), named(&["a.jpg", "b.arw"]), 0);
+        tabs.open_new(PathBuf::from("second"), named(&["c.jpg", "d.arw"]), 0);
+        let by_type = by(SortKey::Type, false);
+
+        assert_eq!(
+            tabs.follow_sort(by_type, false, &no_rating, &no_time),
+            SortFollow::Reordered { moved: true }
+        );
+        let names: Vec<Vec<String>> = tabs.tabs().iter().map(file_names).collect();
+        assert_eq!(names, [["b.arw", "a.jpg"], ["d.arw", "c.jpg"]]);
+
+        // A rating order waits for the ratings, which only the active tab has.
+        let rated = by(SortKey::Rating, false);
+        assert_eq!(
+            tabs.follow_sort(rated, true, &no_rating, &no_time),
+            SortFollow::Reordered { moved: true }
+        );
+        assert_eq!(tabs.tabs()[0].sorted, Some(by_type), "the other tab waits");
+        assert_eq!(tabs.tabs()[1].sorted, Some(rated));
+
+        // Opening the folder again lists it by name and applies the order again.
+        tabs.open_new(
+            PathBuf::from("second"),
+            named(&["c.jpg", "d.arw", "e.arw"]),
+            0,
+        );
+        assert_eq!(active(&tabs).sorted, None);
+        assert_eq!(
+            tabs.follow_sort(by_type, false, &no_rating, &no_time),
+            SortFollow::Reordered { moved: true }
+        );
+        assert_eq!(file_names(active(&tabs)), ["d.arw", "e.arw", "c.jpg"]);
+    }
+
+    #[test]
+    fn a_capture_time_is_kept_by_the_tabs_listing_the_file_until_the_folder_is_opened_again() {
+        let mut tabs = Tabs::default();
+        tabs.open_in_active(PathBuf::from("first"), named(&["a.arw"]), 0);
+        tabs.open_new(PathBuf::from("second"), named(&["b.arw"]), 0);
+        tabs.record_capture(
+            Path::new("a.arw"),
+            CaptureTime::parse("2026:10:30 14:03:12"),
+        );
+        assert!(tabs.tabs()[0].capture.is_read(Path::new("a.arw")));
+        assert!(!tabs.tabs()[1].capture.is_read(Path::new("a.arw")));
+        // Switching tabs keeps it; opening the folder again empties it.
+        tabs.next();
+        assert!(tabs.tabs()[0].capture.is_read(Path::new("a.arw")));
+        tabs.open_new(PathBuf::from("first"), named(&["a.arw"]), 0);
+        assert!(!tabs.tabs()[0].capture.is_read(Path::new("a.arw")));
     }
 }
