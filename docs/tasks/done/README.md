@@ -153,3 +153,4 @@ was when the task was done, so "this file", "below" and "the Log" in T1–T115 m
 | [T144](T144-inspector-histogram.md) | ADR 0017 U7, the inspector's Histogram: statistics of its own, and the 100 % view first |
 | [T145](T145-histogram-kept-after-own-writes.md) | ADR 0017 U7, the inspector's Histogram kept after RawStride's own metadata writes |
 | [T146](T146-clipping-map-of-raw-data.md) | ADR 0017 U7b: the clipping map of the RAW data |
+| [T147](T147-clipping-map-in-the-view-core.md) | ADR 0017 U7b: the clipping map in the view core |

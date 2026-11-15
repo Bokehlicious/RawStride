@@ -20,7 +20,8 @@
      cell is marked when any of its cells is) until it fits. A side with an odd number of cells
      gives a joined grid that reaches past the map by half a joined cell; the texture coordinates
      are scaled for it (for example by `w / (2 · ceil(w / 2))` per joining), so the marks stay in
-     place.
+     place. A map whose `data` length is not `width × height` is not drawn (no panic); this
+     cannot happen today, but the texture must not trust it (from T147's review).
   3. **Made once:** the texture is made again only when the map (T147's `Arc`, compared by
      `Arc::ptr_eq`) or the overlay choice changes, not every frame, and released when no overlay is
      shown. Its memory is outside the view's texture budget (U7b-Q8); one texture at a time.
@@ -50,3 +51,4 @@
 | Date | Status | Note |
 |---|---|---|
 | 2026-11-15 | Blocked | Split from T148 after the cold read (the drawing part); waits for T148 |
+| 2026-11-15 | Blocked | From T147's review: a map with the wrong data length is not drawn (point 2) |

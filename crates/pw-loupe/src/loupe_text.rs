@@ -187,6 +187,7 @@ mod tests {
             scale: Some(0.1129),
             profile_unusable: false,
             statistics: None,
+            clipping: pw_viewcore::ClippingState::NotWanted,
         }
     }
 
@@ -288,6 +289,7 @@ mod tests {
             scale: Some(0.2),
             profile_unusable: false,
             statistics: None,
+            clipping: pw_viewcore::ClippingState::NotWanted,
         }
     }
 

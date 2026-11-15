@@ -478,3 +478,112 @@ fn a_camera_raw_gets_its_statistics_in_both_modes() {
     eprintln!("statistics ms: {:?}", core.stats().statistics_ms);
     assert_eq!(core.stats().statistics, 2);
 }
+
+/// Frames until the current image's clipping state is no longer "reading" (or the timeout).
+fn until_clipping(screen: &mut Screen<'_>) -> Frame {
+    let end = Instant::now() + WAIT;
+    loop {
+        let f = screen.frame();
+        if f.clipping != pw_viewcore::ClippingState::Reading || Instant::now() > end {
+            return f;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+/// ADR 0017 §2.6, U7b (T147): with the wish on, the core gives the clipping map of the current
+/// image after its statistics: in RAW mode the map `pw-libraw` makes of the unpacked RAW data
+/// (T146), with its size; in JPEG mode one of the embedded JPEG in cells of 2 × 2 pixels. Without
+/// the wish none is asked for.
+#[test]
+#[ignore = "needs real camera files: set PW_TESTDATA and run with --ignored"]
+fn a_camera_raw_gets_its_clipping_map_in_both_modes_when_it_is_wanted() {
+    use pw_viewcore::{ClippingMap, ClippingState};
+
+    let file = test_files("TN006067").remove(0);
+    let (raw, raw_width, raw_height) = {
+        let mut session = pw_libraw::Session::open(&file).unwrap();
+        let map = session.clipping_map().unwrap().unwrap();
+        (map, session.width(), session.height())
+    };
+    assert_eq!(raw.width, raw_width.div_ceil(raw.cell));
+    assert_eq!(raw.height, raw_height.div_ceil(raw.cell));
+
+    // straight from the backend: T146's map, with its size
+    let backend = NativeBackend::default();
+    let (mut session, size) = backend.open(&file, Source::Raw).unwrap();
+    let map = backend.clipping_map(&mut session).unwrap();
+    assert_eq!((size.w, size.h), (raw_width, raw_height));
+    assert_eq!(
+        (map.cell, map.width, map.height),
+        (raw.cell, raw.width, raw.height)
+    );
+    assert_eq!(map.data, raw.data);
+    drop(session);
+
+    let core = start();
+    core.open_folder(vec![file.clone()]);
+    let mut screen = Screen {
+        core: &core,
+        textures: HashMap::new(),
+    };
+    let f = screen.until_ready();
+    assert_eq!(f.status, Status::Ready);
+    // not wanted: the statistics come, no map is asked for
+    let f = until_statistics(&mut screen);
+    assert!(f.statistics.is_some());
+    std::thread::sleep(Duration::from_millis(300));
+    assert_eq!(screen.frame().clipping, ClippingState::NotWanted);
+    assert_eq!(core.stats().clipping_maps, 0);
+
+    core.set_clipping_wanted(true);
+    let f = until_clipping(&mut screen);
+    let ClippingState::Ready { map, uv } = &f.clipping else {
+        panic!("no RAW clipping map: {:?}", f.clipping);
+    };
+    assert_eq!(
+        (map.cell, map.width, map.height),
+        (raw.cell, raw.width, raw.height)
+    );
+    assert_eq!(map.data, raw.data);
+    // the blown-out sky clips the green channel
+    assert!(map.data.iter().any(|c| c & ClippingMap::CLIPPED_G != 0));
+    // at fit the whole image is drawn: every corner of the map's grid, within a cell
+    for corner in uv {
+        for c in corner {
+            assert!(*c == 0.0 || (0.999..=1.0).contains(c), "{uv:?}");
+        }
+    }
+    assert_eq!(core.stats().clipping_maps, 1);
+
+    core.toggle_mode();
+    let f = screen.until_ready();
+    assert_eq!(f.source, Source::Jpeg);
+    let f = until_clipping(&mut screen);
+    let ClippingState::Ready { map, .. } = &f.clipping else {
+        panic!("no JPEG clipping map: {:?}", f.clipping);
+    };
+    let size = f.size.unwrap();
+    assert_eq!(
+        (map.cell, map.width, map.height),
+        (2, size.w.div_ceil(2), size.h.div_ceil(2))
+    );
+    assert_eq!(
+        map.data.len() as u64,
+        u64::from(map.width) * u64::from(map.height)
+    );
+    assert!(map.data.iter().any(|c| c & ClippingMap::CLIPPED_G != 0));
+    eprintln!("clipping map ms: {:?}", core.stats().clipping_ms);
+    assert_eq!(core.stats().clipping_maps, 2);
+
+    // back in RAW mode the kept map is given again without being asked again
+    core.toggle_mode();
+    let f = screen.until_ready();
+    assert_eq!(f.source, Source::Raw);
+    let f = until_clipping(&mut screen);
+    let ClippingState::Ready { map, .. } = &f.clipping else {
+        panic!("the RAW clipping map was not kept: {:?}", f.clipping);
+    };
+    assert_eq!(map.data, raw.data);
+    assert_eq!(core.stats().clipping_maps, 2);
+}

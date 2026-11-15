@@ -7,8 +7,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use crate::backend::{DecodeError, ImageStatistics, Rgb, Source, Statistics};
-use crate::geometry::{self, ImageSize, Rect};
+use crate::backend::{ClippingMap, DecodeError, ImageStatistics, Rgb, Source, Statistics};
+use crate::geometry::{self, ImageSize, Rect, RectF};
 
 /// Settings of the core. Both budgets are user settings (V8); in milestone 1 they come from the
 /// command line (ADR 0009 §11).
@@ -143,6 +143,31 @@ pub enum Status {
     Error(DecodeError),
 }
 
+/// The clipping map of the current image in its display mode, for the highlight and shadow
+/// overlays (ADR 0017 §2.6, U7b).
+#[derive(Clone, Debug, PartialEq)]
+pub enum ClippingState {
+    /// No overlay wants a map ([`crate::ViewCore::set_clipping_wanted`]); none is asked for.
+    NotWanted,
+    /// Wanted and not there yet: the map is being made, or the view on the screen is still an
+    /// earlier image's.
+    Reading,
+    /// This file has none (its data is of no kind a map is made from, making it failed, the file
+    /// cannot be shown, or there is no image).
+    Unavailable,
+    /// The map, to be drawn over the image of [`Frame::draw`].
+    Ready {
+        /// The same `Arc` for as long as the map is kept, so a new map is told from the one
+        /// already uploaded with `Arc::ptr_eq`.
+        map: Arc<ClippingMap>,
+        /// The map's texture coordinates at the corners of the drawn image ([`Draw::dest`]): top
+        /// left, top right, bottom right, bottom left, as [`Draw::uv`] (orientation, zoom and
+        /// position are in these). 1.0 is the map's right or bottom edge, which may lie past the
+        /// image's by less than a cell.
+        uv: [[f32; 2]; 4],
+    },
+}
+
 /// Everything the presentation needs for one frame.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Frame {
@@ -168,6 +193,9 @@ pub struct Frame {
     /// 0017 §2.6, U7-Q6): `None` until they are ready. They are asked once per opened image,
     /// after its first view is on the screen.
     pub statistics: Option<ImageStatistics>,
+    /// The clipping map of the current image in its display mode, when an overlay wants one
+    /// (ADR 0017 §2.6, U7b).
+    pub clipping: ClippingState,
 }
 
 /// One user request, for measurement (ADR 0009 §5.2; the P5 event format).
@@ -202,7 +230,13 @@ pub struct Stats {
     /// How many times an image's statistics were asked of the backend, and how long each took.
     pub statistics: u64,
     pub statistics_ms: Vec<f64>,
+    /// How many times an image's clipping map was asked of the backend, and how long each took.
+    pub clipping_maps: u64,
+    pub clipping_ms: Vec<f64>,
 }
+
+/// How many clipping maps are kept: those of the images shown last (ADR 0017 U7b-Q8).
+pub(crate) const KEPT_CLIPPING_MAPS: usize = 4;
 
 /// An image in one display mode: a position in the folder and where the pixels come from.
 pub(crate) type Key = (usize, Source);
@@ -254,18 +288,22 @@ pub(crate) enum Job {
     Render(Key, JobView),
     /// The statistics of an opened image (ADR 0017 U7-Q6).
     Statistics(Key),
+    /// The clipping map of an opened image (ADR 0017 U7b-Q8).
+    Clipping(Key),
 }
 
 impl Job {
     pub fn key(self) -> Key {
         match self {
-            Job::Open(k) | Job::Render(k, _) | Job::Statistics(k) => k,
+            Job::Open(k) | Job::Render(k, _) | Job::Statistics(k) | Job::Clipping(k) => k,
         }
     }
 }
 
-/// What a session lent for its statistics is booked under where a lent session is booked by the
-/// view it renders (`lent_paths`, `released`): no view, which no render job has.
+/// What a session lent for its statistics or its clipping map is booked under where a lent
+/// session is booked by the view it renders (`lent_paths`, `released`): no view, which no render
+/// job has. The two share it: an image's session is lent to one job at a time, and no new session
+/// of the image is opened while a job of it runs, so the two are never booked at the same time.
 const STATISTICS_LEND: JobView = JobView {
     kind: ViewKind::Half,
     region: Rect::new(0, 0, 0, 0),
@@ -296,6 +334,11 @@ pub(crate) enum Task<S> {
         session: S,
     },
     Statistics {
+        generation: u64,
+        key: Key,
+        session: S,
+    },
+    Clipping {
         generation: u64,
         key: Key,
         session: S,
@@ -341,6 +384,15 @@ pub(crate) struct State<S> {
     /// The statistics of the opened images that were asked for them (ADR 0017 U7-Q6): once per
     /// image and display mode. Kept, cleared and moved like `sizes`.
     pub statistics: HashMap<Key, ImageStatistics>,
+    /// An overlay wants the current image's clipping map (ADR 0017 U7b-Q8). Set by the shell;
+    /// a new folder or list of files does not change it.
+    pub clipping_wanted: bool,
+    /// The clipping maps of the images shown last, the one shown longest ago first; at most
+    /// [`KEPT_CLIPPING_MAPS`]. Cleared and moved like `statistics`.
+    pub clipping_maps: Vec<(Key, Arc<ClippingMap>)>,
+    /// The opened images that were asked for a clipping map and have none (or making it
+    /// failed): not asked again. Cleared and moved like `statistics`.
+    pub clipping_none: HashSet<Key>,
     sessions: HashMap<Key, Option<S>>,
     /// The generation each lent session (`None` in `sessions`) was lent in.
     lent: HashMap<Key, u64>,
@@ -376,6 +428,8 @@ pub(crate) struct State<S> {
     refused: HashSet<(u64, Key)>,
     pub outbox: Vec<ViewOut>,
     last_draw: Option<Draw>,
+    /// The upright rectangle of the image that `last_draw` shows (set with it).
+    last_vis: Option<RectF>,
     waiting_since: Option<Instant>,
     pub records: Vec<Record>,
     open_record: Option<usize>,
@@ -400,6 +454,9 @@ impl<S> State<S> {
             sizes: HashMap::new(),
             profile_unusable: HashSet::new(),
             statistics: HashMap::new(),
+            clipping_wanted: false,
+            clipping_maps: Vec::new(),
+            clipping_none: HashSet::new(),
             sessions: HashMap::new(),
             lent: HashMap::new(),
             detached: HashMap::new(),
@@ -422,6 +479,7 @@ impl<S> State<S> {
             refused: HashSet::new(),
             outbox: Vec::new(),
             last_draw: None,
+            last_vis: None,
             waiting_since: None,
             records: Vec::new(),
             open_record: None,
@@ -579,12 +637,15 @@ impl<S> State<S> {
         self.sizes.clear();
         self.profile_unusable.clear();
         self.statistics.clear();
+        self.clipping_maps.clear();
+        self.clipping_none.clear();
         self.failed.clear();
         self.inflight.clear();
         self.outbox.clear();
         self.dropped.extend(self.resident.drain(..).map(|r| r.id));
         self.texture_bytes = 0;
         self.last_draw = None;
+        self.last_vis = None;
         self.waiting_since = None;
         if !self.files.is_empty() {
             self.go(0);
@@ -680,6 +741,13 @@ impl<S> State<S> {
             .drain()
             .filter_map(|(k, v)| to(k).map(|n| (n, v)))
             .collect();
+        // in the same order: the one shown longest ago stays first
+        self.clipping_maps = self
+            .clipping_maps
+            .drain(..)
+            .filter_map(|(k, v)| to(k).map(|n| (n, v)))
+            .collect();
+        self.clipping_none = self.clipping_none.drain().filter_map(to).collect();
         self.failed = self
             .failed
             .drain()
@@ -712,11 +780,13 @@ impl<S> State<S> {
             && !self.resident.iter().any(|r| r.id == d.id)
         {
             self.last_draw = None;
+            self.last_vis = None;
         }
 
         if self.files.is_empty() {
             self.cur = None;
             self.last_draw = None;
+            self.last_vis = None;
             self.waiting_since = None;
             return;
         }
@@ -940,6 +1010,63 @@ impl<S> State<S> {
         })
     }
 
+    /// The job for the current image's clipping map, when it is due (ADR 0017 U7b-Q8): only
+    /// while an overlay wants a map, once per image and display mode, never for another image
+    /// (no prefetch). It is due when the image's statistics are (after its view is on the
+    /// screen, after the dwell, not during a zoom gesture, and after a wanted 100 % view;
+    /// U7-Q6, U7c-Q5), and it comes after them: [`State::pick`] puts it behind the statistics'
+    /// job, and it waits while that job of the same image runs. A map that was kept and has been
+    /// dropped since (more than [`KEPT_CLIPPING_MAPS`] images shown) is asked again; an image
+    /// that has none is not.
+    fn clipping_job(&self) -> Option<Job> {
+        if !self.clipping_wanted {
+            return None;
+        }
+        let key = self.cur_key()?;
+        if self.clipping_map(key).is_some()
+            || self.clipping_none.contains(&key)
+            || self.failed.contains_key(&key)
+        {
+            return None;
+        }
+        if self
+            .running
+            .contains(&(self.generation, Job::Statistics(key)))
+        {
+            return None;
+        }
+        if self.in_gesture() || self.since.elapsed() < self.config.dwell {
+            return None;
+        }
+        let shown = self.req(key, Want::Shown)?;
+        self.serving(&shown)?;
+        if self.wants_a_full_size_view(key) {
+            return None;
+        }
+        Some(if self.sessions.contains_key(&key) {
+            Job::Clipping(key)
+        } else {
+            Job::Open(key)
+        })
+    }
+
+    /// The kept clipping map of `key`.
+    fn clipping_map(&self, key: Key) -> Option<&Arc<ClippingMap>> {
+        self.clipping_maps
+            .iter()
+            .find(|(k, _)| *k == key)
+            .map(|(_, map)| map)
+    }
+
+    /// Keeps `map` as the map of the image shown last; of more than [`KEPT_CLIPPING_MAPS`], the
+    /// one shown longest ago is dropped (U7b-Q8).
+    fn keep_clipping_map(&mut self, key: Key, map: Arc<ClippingMap>) {
+        self.clipping_maps.retain(|(k, _)| *k != key);
+        self.clipping_maps.push((key, map));
+        let over = self.clipping_maps.len().saturating_sub(KEPT_CLIPPING_MAPS);
+        self.clipping_maps.drain(..over);
+    }
+
     /// Whether the plan wants a view of `key` at 100 % or more (a 100 % region) that no resident
     /// view serves yet (U7c-Q5).
     fn wants_a_full_size_view(&self, key: Key) -> bool {
@@ -1097,10 +1224,18 @@ impl<S> State<S> {
         let mut jobs = self.plan();
         // The statistics come first once they are due: the shown view and a wanted 100 % view of
         // the current image are on the screen by then (U7c-Q5).
+        let mut first = 0;
         if let Some(job) = self.statistics_job()
             && !jobs.contains(&job)
         {
             jobs.insert(0, job);
+            first = 1;
+        }
+        // The clipping map, when an overlay wants it, right after them (U7b-Q8).
+        if let Some(job) = self.clipping_job()
+            && !jobs.contains(&job)
+        {
+            jobs.insert(first, job);
         }
         for job in jobs {
             let key = job.key();
@@ -1187,6 +1322,25 @@ impl<S> State<S> {
                     self.lent.insert(key, generation);
                     self.running.insert((generation, job));
                     return Some(Task::Statistics {
+                        generation,
+                        key,
+                        session,
+                    });
+                }
+                Job::Clipping(key) => {
+                    let Some(slot) = self.sessions.get_mut(&key) else {
+                        continue;
+                    };
+                    let Some(session) = slot.take() else {
+                        continue;
+                    };
+                    if let Some(path) = self.files.get(key.0) {
+                        self.lent_paths
+                            .insert((generation, key, STATISTICS_LEND), path.clone());
+                    }
+                    self.lent.insert(key, generation);
+                    self.running.insert((generation, job));
+                    return Some(Task::Clipping {
                         generation,
                         key,
                         session,
@@ -1365,6 +1519,32 @@ impl<S> State<S> {
         self.statistics.insert(key, statistics);
     }
 
+    /// The clipping map of an opened image was made (`ms` = how long it took; `None` = the file
+    /// has none, or making it failed). The session comes back as after a render; the map is kept
+    /// as the newest of the kept ones, and "none" is remembered so it is not asked again, unless
+    /// the list of files changed meanwhile.
+    pub fn finish_clipping(
+        &mut self,
+        generation: u64,
+        key: Key,
+        session: S,
+        result: Option<ClippingMap>,
+        ms: f64,
+    ) {
+        self.running.remove(&(generation, Job::Clipping(key)));
+        self.stats.clipping_maps += 1;
+        self.stats.clipping_ms.push(ms);
+        if !self.return_session(generation, key, STATISTICS_LEND, session) {
+            return;
+        }
+        match result {
+            Some(map) => self.keep_clipping_map(key, Arc::new(map)),
+            None => {
+                self.clipping_none.insert(key);
+            }
+        }
+    }
+
     fn remove_inflight(&mut self, generation: u64, key: Key, kind: ViewKind, region: Rect) {
         if let Some(i) = self.inflight.iter().position(|f| {
             f.generation == generation
@@ -1473,9 +1653,16 @@ impl<S> State<S> {
             scale: key.and_then(|k| self.scale_of(k)),
             profile_unusable: key.is_some_and(|k| self.profile_unusable.contains(&k)),
             statistics: key.and_then(|k| self.statistics.get(&k).cloned()),
+            // no image, or one that cannot be shown, has no map
+            clipping: if self.clipping_wanted {
+                ClippingState::Unavailable
+            } else {
+                ClippingState::NotWanted
+            },
         };
         let Some(key) = key else {
             self.last_draw = None;
+            self.last_vis = None;
             return frame;
         };
         if let Some(e) = self.failed.get(&key) {
@@ -1483,6 +1670,7 @@ impl<S> State<S> {
             // without an embedded JPEG says so in JPEG mode
             frame.status = Status::Error(e.clone());
             self.last_draw = None;
+            self.last_vis = None;
             self.waiting_since = None;
             return frame;
         }
@@ -1492,17 +1680,19 @@ impl<S> State<S> {
             let r = self.serving(&req)?;
             let vis = geometry::visible(size, view_px, scale, self.centre);
             let d = geometry::dest(vis, view_px, scale);
-            Some(Draw {
+            let draw = Draw {
                 id: r.id,
                 dest: [d[0] as f32, d[1] as f32, d[2] as f32, d[3] as f32],
                 uv: geometry::corner_uvs(size, r.region, vis),
                 nearest: scale > 1.0 + EPS,
-            })
+            };
+            Some((draw, vis))
         });
         match ready {
-            Some(draw) => {
+            Some((draw, vis)) => {
                 self.touch(draw.id);
                 self.last_draw = Some(draw);
+                self.last_vis = Some(vis);
                 self.waiting_since = None;
                 self.mark_shown();
                 frame.draw = Some(draw);
@@ -1517,7 +1707,46 @@ impl<S> State<S> {
                 };
             }
         }
+        if self.clipping_wanted {
+            frame.clipping = self.clipping_state(key, frame.draw);
+        }
         frame
+    }
+
+    /// The clipping state of the current image `key` while a map is wanted and the image can be
+    /// shown, for a frame that draws `draw`. The map is given whenever the drawn view is of the
+    /// current image, also the kept one while a new zoom or position of it is prepared (the
+    /// overlay does not flicker while zooming), placed by the rectangle that view was drawn
+    /// with; it is not given while an earlier image's view is kept on the screen (V2).
+    fn clipping_state(&mut self, key: Key, draw: Option<Draw>) -> ClippingState {
+        if self.clipping_none.contains(&key) {
+            return ClippingState::Unavailable;
+        }
+        let of_current = |d: &Draw| {
+            self.resident.iter().any(|r| {
+                r.id == d.id && r.generation == self.generation && (r.pos, r.source) == key
+            })
+        };
+        let placed = draw
+            .filter(of_current)
+            .and(self.last_vis)
+            .zip(self.sizes.get(&key).copied())
+            .zip(self.clipping_map(key).cloned());
+        let Some(((vis, size), map)) = placed else {
+            return ClippingState::Reading;
+        };
+        // the map's grid in pixels; it may reach past the image's right and bottom edges by
+        // less than a cell
+        let grid = Rect::new(
+            0,
+            0,
+            map.width.saturating_mul(map.cell),
+            map.height.saturating_mul(map.cell),
+        );
+        let uv = geometry::corner_uvs(size, grid, vis);
+        // shown now: the last of the kept maps to be dropped
+        self.keep_clipping_map(key, map.clone());
+        ClippingState::Ready { map, uv }
     }
 
     fn touch(&mut self, id: u64) {
@@ -2954,6 +3183,495 @@ mod tests {
         assert_eq!(s.release(&path(10)), (false, true));
         // the statistics themselves are still good
         assert_eq!(s.frame(VIEW).statistics, Some(available(0.5)));
+    }
+
+    // ---------- the clipping map (ADR 0017 §2.6, U7b-Q8, T147) ----------
+
+    /// A map of an image of `SIZE` (cells of 2 × 2) whose first cell is `first`, to tell maps
+    /// apart.
+    fn map(first: u8) -> ClippingMap {
+        let (width, height) = (SIZE.w / 2, SIZE.h / 2);
+        let mut data = vec![0; (width * height) as usize];
+        data[0] = first;
+        ClippingMap {
+            cell: 2,
+            width,
+            height,
+            data,
+        }
+    }
+
+    fn is_clipping(task: &Option<Task<u32>>) -> bool {
+        matches!(task, Some(Task::Clipping { .. }))
+    }
+
+    /// The clipping task the interactive worker gets now.
+    fn lend_for_clipping(s: &mut State<u32>) -> (u64, Key, u32) {
+        match s.pick(true) {
+            Some(Task::Clipping {
+                generation,
+                key,
+                session,
+            }) => (generation, key, session),
+            other => panic!("expected a clipping task, got {other:?}"),
+        }
+    }
+
+    /// [`open_and_show`], and the image's statistics are there.
+    fn show_with_statistics(s: &mut State<u32>, pos: usize) {
+        open_and_show(s, pos);
+        let (generation, key, session) = lend_for_statistics(s);
+        s.finish_statistics(generation, key, session, Some(statistics(0.5)), 1.0);
+    }
+
+    /// Goes to image `pos`, shows it, and makes its clipping map `map(first)` as the workers do.
+    fn show_with_map(s: &mut State<u32>, pos: usize, first: u8) {
+        s.go(pos);
+        s.since = Instant::now() - Duration::from_secs(1);
+        show_with_statistics(s, pos);
+        let (generation, key, session) = lend_for_clipping(s);
+        assert_eq!(key, k(pos));
+        s.finish_clipping(generation, key, session, Some(map(first)), 1.0);
+        assert_eq!(ready_map(&s.frame(VIEW)), Some(Arc::new(map(first))));
+    }
+
+    /// The map of a frame whose clipping state is "ready".
+    fn ready_map(frame: &Frame) -> Option<Arc<ClippingMap>> {
+        match &frame.clipping {
+            ClippingState::Ready { map, .. } => Some(map.clone()),
+            _ => None,
+        }
+    }
+
+    /// The keys of the kept maps, the one shown longest ago first.
+    fn kept(s: &State<u32>) -> Vec<Key> {
+        s.clipping_maps.iter().map(|(key, _)| *key).collect()
+    }
+
+    #[test]
+    fn no_clipping_map_is_asked_while_no_overlay_wants_one() {
+        let mut s = state(1024);
+        assert!(!s.clipping_wanted);
+        show_with_statistics(&mut s, 10);
+        assert_eq!(s.clipping_job(), None);
+        assert_eq!(s.frame(VIEW).clipping, ClippingState::NotWanted);
+        // a map kept from before is not given either
+        s.keep_clipping_map(k(10), Arc::new(map(1)));
+        assert_eq!(s.frame(VIEW).status, Status::Ready);
+        assert_eq!(s.frame(VIEW).clipping, ClippingState::NotWanted);
+        s.clipping_maps.clear();
+        for _ in 0..8 {
+            assert!(!is_clipping(&s.pick(true)));
+            assert!(!is_clipping(&s.pick(false)));
+        }
+        assert_eq!(s.stats.clipping_maps, 0);
+        assert!(s.clipping_maps.is_empty() && s.clipping_none.is_empty());
+    }
+
+    #[test]
+    fn a_wanted_clipping_map_is_asked_once_after_the_first_view_and_the_statistics() {
+        let mut s = state(1024);
+        s.clipping_wanted = true;
+        s.finish_open(s.generation, k(10), Ok((10, SIZE)), mb24, 1.0);
+        // opened but nothing shown yet: the view comes first
+        assert_eq!(s.clipping_job(), None);
+        assert_eq!(s.frame(VIEW).clipping, ClippingState::Reading);
+        let view = out(&s, 10, Want::Shown);
+        assert!(s.accept(&view, 1 << 20).is_some());
+        // the wanted 100 % view comes before the statistics and the map (U7c-Q5)
+        assert_eq!(s.clipping_job(), None);
+        let target = out(&s, 10, Want::Target);
+        assert!(s.accept(&target, 1 << 20).is_some());
+
+        // both are due now; the statistics are picked first
+        assert_eq!(s.statistics_job(), Some(Job::Statistics(k(10))));
+        assert_eq!(s.clipping_job(), Some(Job::Clipping(k(10))));
+        let (generation, key, session) = lend_for_statistics(&mut s);
+        // while the statistics are computed the map waits, on both workers
+        assert_eq!(s.clipping_job(), None);
+        assert!(!is_clipping(&s.pick(true)));
+        assert!(!is_clipping(&s.pick(false)));
+        s.finish_statistics(generation, key, session, Some(statistics(0.5)), 1.0);
+
+        // then the map, of the current image, with its session lent as for the statistics
+        assert_eq!(s.clipping_job(), Some(Job::Clipping(k(10))));
+        let (generation, key, session) = lend_for_clipping(&mut s);
+        assert_eq!((key, session), (k(10), 10));
+        assert_eq!(
+            s.lent_paths.get(&(generation, key, STATISTICS_LEND)),
+            Some(&path(10))
+        );
+        // while it is made it is not asked a second time, by either worker
+        assert!(!is_clipping(&s.pick(true)));
+        assert!(!is_clipping(&s.pick(false)));
+        assert_eq!(s.frame(VIEW).clipping, ClippingState::Reading);
+
+        s.finish_clipping(generation, key, session, Some(map(1)), 2.0);
+        assert_eq!(ready_map(&s.frame(VIEW)), Some(Arc::new(map(1))));
+        // the session is back, and the map is not asked again for this image
+        assert!(matches!(s.sessions.get(&k(10)), Some(Some(10))));
+        assert!(s.lent.is_empty() && s.lent_paths.is_empty());
+        assert_eq!(s.clipping_job(), None);
+        for _ in 0..8 {
+            assert!(!is_clipping(&s.pick(true)));
+            assert!(!is_clipping(&s.pick(false)));
+        }
+        assert_eq!(s.stats.clipping_maps, 1);
+        assert_eq!(s.stats.clipping_ms, vec![2.0]);
+    }
+
+    #[test]
+    fn the_clipping_map_waits_for_the_dwell_and_for_a_zoom_gesture_to_end() {
+        let mut s = state(1024);
+        s.clipping_wanted = true;
+        show_with_statistics(&mut s, 10);
+        // the image just became current: stepping through images starts no map
+        s.since = Instant::now();
+        assert_eq!(s.clipping_job(), None);
+        assert!(!is_clipping(&s.pick(true)));
+        s.since = Instant::now() - Duration::from_secs(1);
+        s.gesture_at = Some(Instant::now());
+        assert_eq!(s.clipping_job(), None);
+        s.gesture_at = None;
+        assert_eq!(s.clipping_job(), Some(Job::Clipping(k(10))));
+        // the background worker may make it too
+        assert!(is_clipping(&s.pick(false)));
+    }
+
+    #[test]
+    fn the_overlay_turned_on_later_asks_the_map_of_the_image_already_shown() {
+        let mut s = state(1024);
+        show_with_statistics(&mut s, 10);
+        assert_eq!(s.clipping_job(), None);
+        s.clipping_wanted = true;
+        assert_eq!(s.frame(VIEW).clipping, ClippingState::Reading);
+        let (generation, key, session) = lend_for_clipping(&mut s);
+        s.finish_clipping(generation, key, session, Some(map(3)), 1.0);
+        assert_eq!(ready_map(&s.frame(VIEW)), Some(Arc::new(map(3))));
+        // turned off: not given; turned on again: the kept map, not asked again
+        s.clipping_wanted = false;
+        assert_eq!(s.frame(VIEW).clipping, ClippingState::NotWanted);
+        s.clipping_wanted = true;
+        assert_eq!(ready_map(&s.frame(VIEW)), Some(Arc::new(map(3))));
+        assert_eq!(s.clipping_job(), None);
+        assert_eq!(s.stats.clipping_maps, 1);
+    }
+
+    #[test]
+    fn no_clipping_map_is_asked_for_a_neighbour() {
+        let mut s = state(1024);
+        s.clipping_wanted = true;
+        show_with_statistics(&mut s, 10);
+        // the neighbours the plan prefetches are opened and have their views, as the current one
+        for pos in [9, 11, 12] {
+            open_and_show(&mut s, pos);
+        }
+        let mut asked = Vec::new();
+        for turn in 0..64 {
+            match s.pick(turn % 2 == 0) {
+                Some(Task::Clipping {
+                    generation,
+                    key,
+                    session,
+                }) => {
+                    asked.push(key);
+                    s.finish_clipping(generation, key, session, Some(map(1)), 1.0);
+                }
+                Some(_) => {}
+                None => {}
+            }
+        }
+        assert_eq!(asked, vec![k(10)]);
+        assert_eq!(kept(&s), vec![k(10)]);
+    }
+
+    #[test]
+    fn a_file_without_a_clipping_map_says_so_and_is_not_asked_again() {
+        let mut s = state(1024);
+        s.clipping_wanted = true;
+        show_with_statistics(&mut s, 10);
+        let (generation, key, session) = lend_for_clipping(&mut s);
+        // no map for this file, or making it failed
+        s.finish_clipping(generation, key, session, None, 1.0);
+        assert_eq!(s.frame(VIEW).clipping, ClippingState::Unavailable);
+        assert!(matches!(s.sessions.get(&k(10)), Some(Some(10))));
+        assert_eq!(s.clipping_job(), None);
+        for _ in 0..8 {
+            assert!(!is_clipping(&s.pick(true)));
+            assert!(!is_clipping(&s.pick(false)));
+        }
+        assert_eq!(s.stats.clipping_maps, 1);
+        // remembered for that image and mode only, also when it is shown again
+        s.go(11);
+        s.go(10);
+        s.since = Instant::now() - Duration::from_secs(1);
+        assert_eq!(s.frame(VIEW).clipping, ClippingState::Unavailable);
+        assert_eq!(s.clipping_job(), None);
+        s.set_mode(Source::Jpeg);
+        assert_eq!(s.frame(VIEW).clipping, ClippingState::Reading);
+
+        // a file that cannot be shown has no map and no job
+        let mut s = state(1024);
+        s.clipping_wanted = true;
+        show_with_statistics(&mut s, 10);
+        s.failed.insert(k(10), DecodeError::new("too large"));
+        assert_eq!(s.clipping_job(), None);
+        assert_eq!(s.frame(VIEW).clipping, ClippingState::Unavailable);
+    }
+
+    #[test]
+    fn an_image_whose_session_was_closed_is_opened_again_for_its_clipping_map() {
+        let mut s = state(1024);
+        s.clipping_wanted = true;
+        show_with_statistics(&mut s, 10);
+        s.drop_session(k(10));
+        assert_eq!(s.clipping_job(), Some(Job::Open(k(10))));
+        assert!(matches!(
+            s.pick(true),
+            Some(Task::Open {
+                key: (10, Source::Raw),
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn the_fifth_images_clipping_map_drops_the_one_shown_longest_ago_which_is_asked_again() {
+        let mut s = state(1024);
+        s.clipping_wanted = true;
+        for (pos, first) in [(10, 1), (11, 2), (12, 3), (13, 4)] {
+            show_with_map(&mut s, pos, first);
+        }
+        assert_eq!(kept(&s), vec![k(10), k(11), k(12), k(13)]);
+        // the fifth: image 10 was shown longest ago
+        show_with_map(&mut s, 14, 5);
+        assert_eq!(kept(&s), vec![k(11), k(12), k(13), k(14)]);
+
+        // image 11 is shown again: its map is still there and is now the one shown last
+        s.go(11);
+        s.since = Instant::now() - Duration::from_secs(1);
+        assert_eq!(s.clipping_job(), None);
+        assert_eq!(ready_map(&s.frame(VIEW)), Some(Arc::new(map(2))));
+        assert_eq!(kept(&s), vec![k(12), k(13), k(14), k(11)]);
+
+        // image 10 is shown again: its map is asked again, and image 12's is dropped
+        s.go(10);
+        s.since = Instant::now() - Duration::from_secs(1);
+        assert_eq!(s.frame(VIEW).status, Status::Ready);
+        assert_eq!(s.frame(VIEW).clipping, ClippingState::Reading);
+        assert_eq!(s.clipping_job(), Some(Job::Clipping(k(10))));
+        let (generation, key, session) = lend_for_clipping(&mut s);
+        s.finish_clipping(generation, key, session, Some(map(6)), 1.0);
+        assert_eq!(ready_map(&s.frame(VIEW)), Some(Arc::new(map(6))));
+        assert_eq!(kept(&s), vec![k(13), k(14), k(11), k(10)]);
+        assert_eq!(s.stats.clipping_maps, 6);
+
+        // with the overlay off, a dropped map is not asked again
+        s.clipping_wanted = false;
+        s.go(12);
+        s.since = Instant::now() - Duration::from_secs(1);
+        assert_eq!(s.frame(VIEW).status, Status::Ready);
+        assert_eq!(s.clipping_job(), None);
+    }
+
+    #[test]
+    fn clipping_maps_follow_the_path_through_set_files_and_a_new_folder_empties_them() {
+        let mut s = state(1024);
+        s.clipping_wanted = true;
+        show_with_map(&mut s, 10, 1);
+        show_with_map(&mut s, 11, 2);
+        s.clipping_none.insert(k(12));
+        // image 3 drops out: images 10, 11 and 12 are now at positions 9, 10 and 11
+        s.set_files(without(20, &[3]), 9);
+        assert_eq!(
+            s.clipping_maps,
+            vec![(k(9), Arc::new(map(1))), (k(10), Arc::new(map(2)))]
+        );
+        assert_eq!(s.clipping_none, HashSet::from([k(11)]));
+        let f = s.frame(VIEW);
+        assert_eq!(f.path, Some(path(10)));
+        assert_eq!(ready_map(&f), Some(Arc::new(map(1))));
+        assert_eq!(s.clipping_job(), None);
+        s.go(11);
+        assert_eq!(s.frame(VIEW).path, Some(path(12)));
+        assert_eq!(s.frame(VIEW).clipping, ClippingState::Unavailable);
+        // image 10 itself drops out: its map goes with it
+        s.set_files(without(20, &[3, 10]), 9);
+        assert_eq!(s.clipping_maps, vec![(k(9), Arc::new(map(2)))]);
+        assert_eq!(s.clipping_none, HashSet::from([k(10)]));
+
+        // another folder empties them; the wish stays
+        s.open_folder(files(20));
+        assert!(s.clipping_maps.is_empty() && s.clipping_none.is_empty());
+        assert!(s.clipping_wanted);
+        assert_eq!(s.frame(VIEW).clipping, ClippingState::Reading);
+        // no image: no map
+        s.open_folder(Vec::new());
+        assert_eq!(s.frame(VIEW).clipping, ClippingState::Unavailable);
+        s.clipping_wanted = false;
+        assert_eq!(s.frame(VIEW).clipping, ClippingState::NotWanted);
+    }
+
+    #[test]
+    fn a_clipping_map_finished_after_set_files_is_discarded_and_its_session_is_dropped() {
+        let mut s = state(1024);
+        s.clipping_wanted = true;
+        show_with_statistics(&mut s, 10);
+        let (generation, key, session) = lend_for_clipping(&mut s);
+        assert_eq!(s.session_bytes, 24 << 20);
+        s.set_files(without(20, &[3]), 9);
+        s.finish_clipping(generation, key, session, Some(map(1)), 1.0);
+        // neither the old key nor the image's new one got it, and the session is gone
+        assert!(s.clipping_maps.is_empty() && s.clipping_none.is_empty());
+        assert_eq!(s.session_bytes, 0);
+        assert!(s.detached.is_empty() && s.lent_paths.is_empty());
+        assert!(!s.sessions.contains_key(&k(9)));
+    }
+
+    #[test]
+    fn a_session_lent_for_the_clipping_map_is_released_when_it_comes_back() {
+        let mut s = state(1024);
+        s.clipping_wanted = true;
+        show_with_statistics(&mut s, 10);
+        let (generation, key, session) = lend_for_clipping(&mut s);
+        // a metadata write of the file waits for the session
+        assert_eq!(s.release(&path(10)), (true, false));
+        assert!(!s.sessions.contains_key(&k(10)));
+        assert_eq!(s.session_bytes, 24 << 20);
+        assert_eq!(s.release(&path(10)), (false, false));
+        s.finish_clipping(generation, key, session, Some(map(1)), 1.0);
+        assert_eq!(s.session_bytes, 0);
+        assert!(!s.sessions.contains_key(&k(10)));
+        assert!(s.released.is_empty() && s.lent.is_empty() && s.lent_paths.is_empty());
+        assert_eq!(s.release(&path(10)), (false, true));
+        // the map itself is still good
+        assert_eq!(ready_map(&s.frame(VIEW)), Some(Arc::new(map(1))));
+    }
+
+    #[test]
+    fn the_frame_gives_the_map_placed_on_the_drawn_view_of_the_current_image_only() {
+        let mut s = state(1024);
+        s.clipping_wanted = true;
+        // an image turned on its side (flip 6) with an odd width and height: the map's grid of
+        // 2 × 2 cells is one pixel wider and higher than the image
+        let size = ImageSize {
+            w: 4001,
+            h: 3001,
+            flip: 6,
+        };
+        s.sizes.insert(k(10), size);
+        let half = s.accept(&out(&s, 10, Want::Fit), 100);
+        assert!(half.is_some());
+        let map = Arc::new(ClippingMap {
+            cell: 2,
+            width: 2001,
+            height: 1501,
+            data: vec![0; 2001 * 1501],
+        });
+        s.keep_clipping_map(k(10), map.clone());
+        let grid = Rect::new(0, 0, 4002, 3002);
+
+        // at fit: the whole image, with the coordinates of `corner_uvs`
+        let f = s.frame(VIEW);
+        assert_eq!(f.status, Status::Ready);
+        let draw = f.draw.unwrap();
+        assert_eq!(draw.id, half.unwrap());
+        let fit_vis = geometry::visible(size, VIEW, geometry::fit_scale(size, VIEW), s.centre);
+        let fit_uv = geometry::corner_uvs(size, grid, fit_vis);
+        let ClippingState::Ready { map: given, uv } = &f.clipping else {
+            panic!("expected the map, got {:?}", f.clipping);
+        };
+        // the kept map itself, not a copy
+        assert!(Arc::ptr_eq(given, &map));
+        assert_eq!(*uv, fit_uv);
+        // the orientation is in them: the upright top left corner is the sensor's bottom left,
+        // and the image ends 1 pixel before the map's right and bottom edges
+        let (right, bottom) = (4001.0 / 4002.0, 3001.0 / 3002.0);
+        let expected = [[0.0, bottom], [0.0, 0.0], [right, 0.0], [right, bottom]];
+        for (corner, (got, want)) in fit_uv.iter().zip(expected).enumerate() {
+            for axis in 0..2 {
+                assert!(
+                    (f64::from(got[axis]) - want[axis]).abs() < 1e-6,
+                    "corner {corner}: {got:?}, expected {want:?}"
+                );
+            }
+        }
+        // the same corners as the image's own texture, which ends at the image's edges
+        assert_eq!(
+            draw.uv,
+            [[0.0, 1.0], [0.0, 0.0], [1.0, 0.0], [1.0, 1.0]],
+            "the half-size view of the whole image"
+        );
+
+        // a new zoom level is being prepared: the fit view stays on the screen (V2), and the
+        // map stays with it, placed as that view is
+        s.zoom = Zoom::Scale(0.7);
+        let f = s.frame(VIEW);
+        assert!(matches!(f.status, Status::Preparing { .. }));
+        assert_eq!(f.draw, Some(draw));
+        assert_eq!(
+            f.clipping,
+            ClippingState::Ready {
+                map: map.clone(),
+                uv: fit_uv
+            }
+        );
+        // the sharp view arrives: the map is placed on the zoomed view
+        let scaled = s.accept(&out(&s, 10, Want::Shown), 100);
+        let f = s.frame(VIEW);
+        assert_eq!(f.status, Status::Ready);
+        assert_eq!(f.draw.map(|d| d.id), scaled);
+        let zoomed_uv =
+            geometry::corner_uvs(size, grid, geometry::visible(size, VIEW, 0.7, s.centre));
+        assert_ne!(zoomed_uv, fit_uv);
+        assert_eq!(
+            f.clipping,
+            ClippingState::Ready {
+                map: map.clone(),
+                uv: zoomed_uv
+            }
+        );
+        // a new position (a pan) is being prepared: still the map, placed as the kept view is
+        s.pan([-3000.0, 0.0]);
+        let f = s.frame(VIEW);
+        assert!(matches!(f.status, Status::Preparing { .. }));
+        assert_eq!(f.draw.map(|d| d.id), scaled);
+        assert_eq!(
+            f.clipping,
+            ClippingState::Ready {
+                map: map.clone(),
+                uv: zoomed_uv
+            }
+        );
+
+        // the next image: the earlier image's view is kept on the screen (V2), so no map is
+        // given, not even the next image's own, until its view is drawn
+        s.go(11);
+        s.sizes.insert(k(11), SIZE);
+        s.keep_clipping_map(k(11), Arc::new(self::map(2)));
+        let f = s.frame(VIEW);
+        assert!(matches!(f.status, Status::Preparing { .. }));
+        assert_eq!(f.draw.map(|d| d.id), scaled);
+        assert_eq!(f.clipping, ClippingState::Reading);
+        let next = s.accept(&out(&s, 11, Want::Shown), 100);
+        let f = s.frame(VIEW);
+        assert_eq!(f.draw.map(|d| d.id), next);
+        assert_eq!(ready_map(&f), Some(Arc::new(self::map(2))));
+
+        // the other display mode: the earlier mode's view is kept, so no map either
+        s.set_mode(Source::Jpeg);
+        s.sizes.insert((11, Source::Jpeg), SIZE);
+        s.keep_clipping_map((11, Source::Jpeg), Arc::new(self::map(3)));
+        let f = s.frame(VIEW);
+        assert!(matches!(f.status, Status::Preparing { .. }));
+        assert_eq!(f.draw.map(|d| d.id), next);
+        assert_eq!(f.clipping, ClippingState::Reading);
+        // an error: nothing is drawn, and there is no map
+        s.failed
+            .insert((11, Source::Jpeg), DecodeError::new("no embedded JPEG"));
+        let f = s.frame(VIEW);
+        assert!(matches!(f.status, Status::Error(_)));
+        assert_eq!(f.clipping, ClippingState::Unavailable);
     }
 
     #[test]

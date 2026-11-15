@@ -31,11 +31,11 @@ pub mod scale;
 mod state;
 
 pub use crate::backend::{
-    Backend, DecodeError, ImageStatistics, Rgb, Source, Statistics, StatisticsOrigin,
+    Backend, ClippingMap, DecodeError, ImageStatistics, Rgb, Source, Statistics, StatisticsOrigin,
 };
 pub use crate::core::{Releaser, ViewCore};
 pub use crate::geometry::{ImageSize, Rect};
 pub use crate::state::{
-    Config, Draw, Frame, HALF_DENSITY, MAX_SCALE, Record, Resident, Stats, Status, ViewKind,
-    ViewOut, ZOOM_STEP, Zoom, fnv, is_plain_jpeg, is_shown_as_itself,
+    ClippingState, Config, Draw, Frame, HALF_DENSITY, MAX_SCALE, Record, Resident, Stats, Status,
+    ViewKind, ViewOut, ZOOM_STEP, Zoom, fnv, is_plain_jpeg, is_shown_as_itself,
 };

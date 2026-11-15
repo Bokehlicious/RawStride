@@ -1,7 +1,7 @@
-# T148. ADR 0017 U7b, third part: the clipping keys, menu items and section — Blocked
+# T148. ADR 0017 U7b, third part: the clipping keys, menu items and section — Open
 
-- **Blocked: waits for T147** (the map's state in the view core's frame), which waits for T146.
-  The owner's answers to U7b-Q1–U7b-Q10 are in `docs/tasks/done/T146-clipping-map-of-raw-data.md`.
+- **Can start now.** T147 (the map's state in the view core's frame, `Frame::clipping`,
+  `ViewCore::set_clipping_wanted`) and T146 are Done. The owner's answers to U7b-Q1–U7b-Q10 are in `docs/tasks/done/T146-clipping-map-of-raw-data.md`.
   Chain: T146 → T147 → T148 → T149.
 - **Why:** ADR 0017 §2.6, step U7b: the clipped highlights and the deepest shadows marked on the
   image in the preview, each with its own key. This task gives the user the two on/off choices
@@ -15,7 +15,7 @@
   `crates/pw-loupe/src/main.rs` (only: the two commands in `run_command` and `command_checked`,
   the keys in the key dispatch, the wish given to the view core, the frame's clipping state kept
   for the column, and the section in `draw_preview_column`); `docs/glossary.md`;
-  `docs/test-inventory.md`.
+  `docs/test-inventory.md`; `crates/pw-libraw/tests/statistics.rs` (only point 6).
 - **What:**
   1. **Two commands** (U7b-Q5): "Show Clipped Highlights" with **J** and "Show Deep Shadows" with
      **Shift+J**, in the View menu after the zoom items, ticked when on (`command_checked`, as
@@ -38,6 +38,11 @@
      Clipped Highlights, Show Deep Shadows, No clipping map for this file; each from a function in
      `preview_text.rs` (the section) or `shell_text.rs` (the menu); the new terms in
      `docs/glossary.md` (Deep shadows is already there, T142's row; add to it, do not rewrite it).
+  6. **A clippy warning left by T146** (from T147's review): `cargo clippy` warns
+     `needless_range_loop` in `crates/pw-libraw/tests/statistics.rs`, in the X-Trans test
+     (`for c in 0..3` indexing `clipped_cells`). Rewrite that loop so the warning goes, without
+     changing what the test checks; nothing else in that file. This is the one file outside
+     `pw-loupe` this task changes.
 - **Tests to add:** `settings.rs`: the three new keys saved and loaded, their defaults, an unknown
   value ignored (and the test that lists every key); `shell.rs` / `lib.rs`: the two commands have
   J and Shift+J, no other menu item has those keys, J does not give the Shift+J command and Shift+J
@@ -53,3 +58,4 @@
 |---|---|---|
 | 2026-11-15 | Blocked | Added with T146, T147 and T149 (the chain of U7b); waits for T147 |
 | 2026-11-15 | Blocked | Cold read (fresh agent): too big as first written (keys, menu, settings, GPU drawing and a section); split: the drawing went to T149. `lib.rs` (key mapping, `command_of_key` and Shift), `run_command`, `command_checked` and the key dispatch named; "ticked when on" as the menu already does; `Where::Loupe`; the texts follow the Histogram section's "Deep shadows" |
+| 2026-11-15 | Open | T147 is Done; point 6 (T146's clippy warning) added from T147's review |

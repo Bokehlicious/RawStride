@@ -117,6 +117,16 @@ impl<B: Backend> Shared<B> {
                     let mut s = self.state();
                     s.finish_statistics(generation, key, session, result, ms);
                 }
+                Task::Clipping {
+                    generation,
+                    key,
+                    mut session,
+                } => {
+                    let result = self.backend.clipping_map(&mut session);
+                    let ms = t0.elapsed().as_secs_f64() * 1000.0;
+                    let mut s = self.state();
+                    s.finish_clipping(generation, key, session, result, ms);
+                }
             }
             self.cv.notify_all();
             self.wake_ui();
@@ -267,6 +277,22 @@ impl<B: Backend> ViewCore<B> {
     /// Drags the image by `delta` view pixels.
     pub fn pan(&self, delta: [f64; 2]) {
         self.act("pan", |s| s.pan(delta));
+    }
+
+    /// Whether an overlay wants the current image's clipping map (ADR 0017 U7b-Q8): the shell
+    /// sets it while the highlight or the shadow overlay is on. While it is set, the map of the
+    /// current image is made after its statistics and given in [`Frame::clipping`]; while it is
+    /// not, no map is asked for. Not a user request: nothing is recorded.
+    pub fn set_clipping_wanted(&self, wanted: bool) {
+        {
+            let mut s = self.shared.state();
+            if s.clipping_wanted == wanted {
+                return;
+            }
+            s.clipping_wanted = wanted;
+        }
+        self.shared.cv.notify_all();
+        self.shared.wake_ui();
     }
 
     // ---------- the presentation ----------
@@ -598,6 +624,99 @@ mod tests {
             took < timeout + Duration::from_secs(2),
             "returned after {took:?}"
         );
+    }
+
+    // ---------- the clipping map (ADR 0017 U7b, T147) ----------
+
+    use crate::backend::{ClippingMap, ImageStatistics};
+    use crate::state::ClippingState;
+
+    /// A simulated decoder that renders at once and has a clipping map (and no statistics).
+    struct Mapped;
+
+    impl Backend for Mapped {
+        type Session = u32;
+
+        fn open(&self, _path: &Path, _source: Source) -> Result<(u32, ImageSize), DecodeError> {
+            Ok((
+                0,
+                ImageSize {
+                    w: 400,
+                    h: 300,
+                    flip: 0,
+                },
+            ))
+        }
+
+        fn render_half(&self, _session: &mut u32) -> Result<Rgb, DecodeError> {
+            Ok(rgb(200, 150))
+        }
+
+        fn render_region(&self, _session: &mut u32, r: Rect) -> Result<Rgb, DecodeError> {
+            Ok(rgb(r.w, r.h))
+        }
+
+        fn clipping_map(&self, _session: &mut u32) -> Option<ClippingMap> {
+            Some(ClippingMap {
+                cell: 2,
+                width: 200,
+                height: 150,
+                data: vec![ClippingMap::CLIPPED_G; 200 * 150],
+            })
+        }
+    }
+
+    /// Frames of an 800 × 600 view, with every finished view accepted, until `done` (or 10 s).
+    fn frames_until(core: &ViewCore<Mapped>, done: impl Fn(&Frame) -> bool) -> Frame {
+        let end = Instant::now() + Duration::from_secs(10);
+        loop {
+            for view in core.take_views() {
+                let _ = core.accept(&view, 1024);
+            }
+            let _ = core.take_dropped();
+            let frame = core.frame([800, 600]);
+            if done(&frame) || Instant::now() > end {
+                return frame;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    #[test]
+    fn the_workers_make_the_clipping_map_only_while_it_is_wanted() {
+        let core = match ViewCore::start(Mapped, Config::default()) {
+            Ok(c) => c,
+            Err(e) => panic!("start: {e}"),
+        };
+        core.open_folder(vec![PathBuf::from(A)]);
+        // not wanted: the statistics are asked (this decoder has none), no map
+        let f = frames_until(&core, |f| f.statistics.is_some());
+        assert_eq!(f.statistics, Some(ImageStatistics::Unavailable));
+        assert_eq!(f.clipping, ClippingState::NotWanted);
+        std::thread::sleep(Duration::from_millis(100));
+        assert_eq!(core.stats().clipping_maps, 0);
+
+        core.set_clipping_wanted(true);
+        let f = frames_until(&core, |f| f.clipping != ClippingState::Reading);
+        let ClippingState::Ready { map, uv } = f.clipping else {
+            panic!("expected the map, got {:?}", f.clipping);
+        };
+        assert_eq!((map.cell, map.width, map.height), (2, 200, 150));
+        // the whole image is drawn, and the map's grid is the image's
+        assert_eq!(uv, [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]]);
+        assert_eq!(core.stats().clipping_maps, 1);
+        assert_eq!(core.stats().clipping_ms.len(), 1);
+
+        // off and on again: the same map, not made again
+        core.set_clipping_wanted(false);
+        assert_eq!(core.frame([800, 600]).clipping, ClippingState::NotWanted);
+        core.set_clipping_wanted(true);
+        let ClippingState::Ready { map: again, .. } = core.frame([800, 600]).clipping else {
+            panic!("the map was not kept");
+        };
+        assert!(Arc::ptr_eq(&map, &again));
+        std::thread::sleep(Duration::from_millis(100));
+        assert_eq!(core.stats().clipping_maps, 1);
     }
 
     #[test]

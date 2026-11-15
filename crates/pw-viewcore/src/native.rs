@@ -13,7 +13,7 @@
 //!
 //! The histogram and the exposure statistics (ADR 0017 §2.6, U7) come from the data **before**
 //! that conversion: RAW from the unpacked RAW data (`pw-libraw`), a JPEG from its full decode and
-//! a TIFF from its own decoded image.
+//! a TIFF from its own decoded image. The clipping map (U7b) comes from the same data.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -23,7 +23,9 @@ use pw_libjpeg::{Decoder, Scale};
 use pw_libraw::{DAMAGED, Demosaic, Session};
 use pw_raw::ExifColourSpace;
 
-use crate::backend::{Backend, DecodeError, Rgb, Source, Statistics, StatisticsOrigin};
+use crate::backend::{
+    Backend, ClippingMap, DecodeError, Rgb, Source, Statistics, StatisticsOrigin,
+};
 use crate::geometry::{ImageSize, Rect};
 use crate::scale;
 
@@ -338,6 +340,43 @@ fn tiff_statistics(backend: &NativeBackend, tiff: &TiffSession) -> Option<Statis
     Some(Statistics::of_rgb8(origin, &image.data))
 }
 
+/// The clipping map of a RAW file's unpacked data in the core's form (the same layout).
+fn raw_clipping_map(raw: pw_libraw::ClippingMap) -> ClippingMap {
+    ClippingMap {
+        cell: raw.cell,
+        width: raw.width,
+        height: raw.height,
+        data: raw.data,
+    }
+}
+
+/// The clipping map of a JPEG from its full decode **before** the conversion to the destination
+/// (ADR 0017 U7b, U7-Q5): the session's full decode when the conversion changes nothing,
+/// otherwise a new decode of the JPEG. The session's own pixels are not changed.
+fn jpeg_clipping_map(j: &mut JpegSession) -> Option<ClippingMap> {
+    match &j.full {
+        Some(full) if j.transform.is_identity() => {
+            ClippingMap::of_rgb8(full.width, full.height, &full.data)
+        }
+        _ => {
+            let full = j.decoder.decode(&j.data, Scale::Full).ok()?;
+            ClippingMap::of_rgb8(full.width, full.height, &full.data)
+        }
+    }
+}
+
+/// The clipping map of a TIFF from its own decoded image **before** the conversion to the
+/// destination (ADR 0017 U7b, U7-Q5): the session's image when the conversion changed nothing,
+/// otherwise a new decode of the file, as [`tiff_statistics`].
+fn tiff_clipping_map(backend: &NativeBackend, tiff: &TiffSession) -> Option<ClippingMap> {
+    if tiff.unconverted {
+        let image = &tiff.image;
+        return ClippingMap::of_rgb8(image.width, image.height, &image.data);
+    }
+    let image = pw_tiff::decode_rgb8(&tiff.path, Some(backend.tiff_limit)).ok()?;
+    ClippingMap::of_rgb8(image.width, image.height, &image.data)
+}
+
 impl Backend for NativeBackend {
     type Session = NativeSession;
 
@@ -432,6 +471,15 @@ impl Backend for NativeBackend {
             NativeSession::Raw(s, _) => s.statistics().ok().flatten().as_ref().map(raw_statistics),
             NativeSession::Jpeg(j) => jpeg_statistics(j),
             NativeSession::Tiff(t) => tiff_statistics(self, t),
+        }
+    }
+
+    fn clipping_map(&self, session: &mut NativeSession) -> Option<ClippingMap> {
+        match session {
+            // an error and a layout without a map both leave the overlays without one
+            NativeSession::Raw(s, _) => s.clipping_map().ok().flatten().map(raw_clipping_map),
+            NativeSession::Jpeg(j) => jpeg_clipping_map(j),
+            NativeSession::Tiff(t) => tiff_clipping_map(self, t),
         }
     }
 
@@ -1039,6 +1087,163 @@ mod tests {
         assert_eq!(s.histogram, raw.histogram);
         assert_eq!(s.clipped, [0.01, 0.25, 0.0]);
         assert_eq!(s.deep_shadows, 0.1);
+    }
+
+    // ---------- the clipping map before the conversion (ADR 0017 §2.6, U7b, T147) ----------
+
+    #[test]
+    fn a_jpegs_clipping_map_is_made_before_the_conversion_whatever_was_rendered_first() {
+        // the fixture marked as Adobe RGB (Exif): shown on an sRGB screen its red half clips
+        let path = temp_file(
+            "clipping-exif-adobe.jpg",
+            &fixture_with_segment(&app1_exif_adobe_rgb()),
+        );
+        let (srgb, adobe) = (Profile::srgb(), Profile::adobe_rgb());
+        let mut decoder = Decoder::new().unwrap();
+        let plain = rgb_jpeg(decoder.decode(jpeg_fixture::SMALL, Scale::Full).unwrap());
+        let expected = ClippingMap::of_rgb8(plain.width, plain.height, &plain.data).unwrap();
+        assert_eq!(
+            (expected.cell, expected.width, expected.height),
+            (2, 8, 4),
+            "cells of 2 × 2 pixels of the 16 × 8 fixture"
+        );
+        // the JPEG's own values clip nowhere
+        assert!(expected.data.iter().all(|cell| *cell == 0));
+        let converted_data = converted(plain.data.clone(), &adobe, &srgb);
+        // the conversion changes the map (red clips in the left half), so the comparisons below
+        // mean something
+        let of_converted =
+            ClippingMap::of_rgb8(plain.width, plain.height, &converted_data).unwrap();
+        assert_eq!(of_converted.at(0, 0), Some(ClippingMap::CLIPPED_R));
+        assert_ne!(of_converted, expected);
+        let converted_region = scale::crop(
+            &Rgb {
+                data: converted_data,
+                ..plain.clone()
+            },
+            4,
+            2,
+            8,
+            4,
+        )
+        .unwrap();
+        let backend = NativeBackend::default();
+
+        // 1. before any render: the map decodes the JPEG; the session's own pixels are not
+        //    changed, and a 100 % view after it is the converted one
+        let (mut session, _) = backend.open(&path, Source::Jpeg).unwrap();
+        assert_eq!(backend.clipping_map(&mut session), Some(expected.clone()));
+        assert!(matches!(&session, NativeSession::Jpeg(j) if j.full.is_none()));
+        let region = backend
+            .render_region(&mut session, Rect::new(4, 2, 8, 4))
+            .unwrap();
+        assert_eq!(region, converted_region);
+
+        // 2. after a half-size render
+        let (mut session, _) = backend.open(&path, Source::Jpeg).unwrap();
+        backend.render_half(&mut session).unwrap();
+        assert_eq!(backend.clipping_map(&mut session), Some(expected.clone()));
+
+        // 3. after a 100 % view and the statistics, when the session holds the converted full
+        //    decode: the map is still of the JPEG's own values, and the session's pixels stay
+        let (mut session, _) = backend.open(&path, Source::Jpeg).unwrap();
+        let region = backend
+            .render_region(&mut session, Rect::new(4, 2, 8, 4))
+            .unwrap();
+        assert_eq!(region, converted_region);
+        assert!(backend.statistics(&mut session).is_some());
+        assert_eq!(backend.clipping_map(&mut session), Some(expected.clone()));
+        assert_eq!(backend.clipping_map(&mut session), Some(expected.clone()));
+        let again = backend
+            .render_region(&mut session, Rect::new(4, 2, 8, 4))
+            .unwrap();
+        assert_eq!(again, converted_region);
+
+        // a destination that is the JPEG's own profile (no conversion): the same map, from a
+        // new decode and from the session's own full decode
+        let backend = NativeBackend::default().with_monitor_profile(adobe);
+        let (mut session, _) = backend.open(&path, Source::Jpeg).unwrap();
+        assert!(matches!(&session, NativeSession::Jpeg(j) if j.transform.is_identity()));
+        assert_eq!(backend.clipping_map(&mut session), Some(expected.clone()));
+        let region = backend
+            .render_region(&mut session, Rect::new(4, 2, 8, 4))
+            .unwrap();
+        assert_eq!(region, scale::crop(&plain, 4, 2, 8, 4).unwrap());
+        assert!(matches!(&session, NativeSession::Jpeg(j) if j.full.is_some()));
+        assert_eq!(backend.clipping_map(&mut session), Some(expected));
+    }
+
+    #[test]
+    fn a_tiffs_clipping_map_is_of_the_files_own_values() {
+        let (w, h) = (6, 4);
+        // a white, a black and a red-clipped pixel among the test pixels, a black cell, and a
+        // strong red below 255 (pixel (0, 2)) that clips only when ProPhoto is converted to sRGB
+        let mut data = pixels(w, h);
+        data[0..9].copy_from_slice(&[255, 255, 255, 0, 0, 0, 255, 3, 0]);
+        data[36..39].copy_from_slice(&[240, 20, 20]);
+        for (x, y) in [(4, 2), (5, 2), (4, 3), (5, 3)] {
+            let at = ((y * w + x) * 3) as usize;
+            data[at..at + 3].copy_from_slice(&[0, 0, 0]);
+        }
+        let expected = ClippingMap::of_rgb8(w, h, &data).unwrap();
+        assert_eq!((expected.cell, expected.width, expected.height), (2, 3, 2));
+        assert_eq!(expected.at(0, 0), Some(7));
+        assert_eq!(expected.at(1, 0), Some(ClippingMap::CLIPPED_R));
+        assert_eq!(expected.at(2, 1), Some(ClippingMap::DEEP_SHADOWS));
+        assert_eq!(expected.at(0, 1), Some(0));
+
+        // without a profile and with destination sRGB: from the session's image
+        let plain = temp_file("clipping-plain.tif", &rgb_tiff(w, h, &data, None));
+        let backend = NativeBackend::default();
+        let (mut session, _) = backend.open(&plain, Source::Jpeg).unwrap();
+        assert!(matches!(&session, NativeSession::Tiff(t) if t.unconverted));
+        assert_eq!(backend.clipping_map(&mut session), Some(expected.clone()));
+
+        // with an embedded profile the opened image is converted; the map is not
+        let profiled = temp_file(
+            "clipping-pro-photo.tif",
+            &rgb_tiff_with_icc(w, h, &data, &pro_photo_icc()),
+        );
+        let (mut session, size) = backend.open(&profiled, Source::Jpeg).unwrap();
+        assert!(matches!(&session, NativeSession::Tiff(t) if !t.unconverted));
+        let shown = whole(&backend, &mut session, size);
+        let of_shown = ClippingMap::of_rgb8(w, h, &shown.data).unwrap();
+        assert_eq!(
+            of_shown.at(0, 1),
+            Some(ClippingMap::CLIPPED_R),
+            "the conversion changes the map"
+        );
+        assert_ne!(of_shown, expected);
+        assert_eq!(backend.clipping_map(&mut session), Some(expected.clone()));
+        // the session's own pixels are not changed
+        assert_eq!(whole(&backend, &mut session, size), shown);
+
+        // without a profile but with another destination: also the file's own values
+        let backend = NativeBackend::default().with_monitor_profile(Profile::adobe_rgb());
+        let (mut session, _) = backend.open(&plain, Source::Jpeg).unwrap();
+        assert!(matches!(&session, NativeSession::Tiff(t) if !t.unconverted));
+        assert_eq!(backend.clipping_map(&mut session), Some(expected));
+    }
+
+    #[test]
+    fn a_raw_clipping_map_keeps_its_layout() {
+        let raw = pw_libraw::ClippingMap {
+            cell: 3,
+            width: 2,
+            height: 2,
+            data: vec![1, 2, 4, 8],
+        };
+        let map = raw_clipping_map(raw.clone());
+        assert_eq!(
+            (map.cell, map.width, map.height, &map.data),
+            (raw.cell, raw.width, raw.height, &raw.data)
+        );
+        // the bits mean the same in both
+        assert_eq!(ClippingMap::CLIPPED, pw_libraw::ClippingMap::CLIPPED);
+        assert_eq!(
+            ClippingMap::DEEP_SHADOWS,
+            pw_libraw::ClippingMap::DEEP_SHADOWS
+        );
     }
 
     // ---------- an embedded profile that cannot be used (ADR 0016 §5, T73) ----------
