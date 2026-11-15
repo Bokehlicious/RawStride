@@ -4080,6 +4080,14 @@ impl Loupe {
     fn draw(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
         let failures = self.metadata.poll(&mut self.metadata_worker);
+        // A kept histogram follows RawStride's own metadata writes of its file (U7c-Q7, T145).
+        for written in self.metadata.take_written() {
+            self.histograms.written(
+                &written.path,
+                written.succeeded,
+                self.histogram_reader.reads(),
+            );
+        }
         // Every failure also goes to the Tasks area's error list (U5-Q5).
         if !failures.is_empty() {
             let now = ClockTime::now();
@@ -6359,28 +6367,41 @@ fn show_warning(title: &'static str, text: String) {
 
 /// The image check of the safe write (I9d): it closes the view core's RAW sessions of the file
 /// first (T89) and waits for the inspector's histogram read of it (U7c-Q4, T144), each at most
-/// [`RELEASE_TIMEOUT`].
-fn image_check(core: &ViewCore<NativeBackend>, histogram_reads: &HistogramReads) -> RawImageCheck {
+/// [`RELEASE_TIMEOUT`]. With `note_stamp` (the metadata worker's writes, whose answers reach the
+/// inspector) the file's stamp just before the write is noted as well (U7c-Q7, T145); the
+/// import's writes make new files and note nothing.
+fn image_check(
+    core: &ViewCore<NativeBackend>,
+    histogram_reads: &HistogramReads,
+    note_stamp: bool,
+) -> RawImageCheck {
     let releaser = core.releaser();
     release_before_write(
         move |path| {
             let _ = releaser.release(path, RELEASE_TIMEOUT);
         },
         histogram_reads.clone(),
+        note_stamp,
     )
 }
 
 /// The image check whose release first calls `release_core` (the view core's sessions) and then
 /// waits until the histogram reader no longer holds the file (U7c-Q4, T144), so a metadata write
 /// never meets a file the reader has open. The read's result is still used: a metadata write
-/// does not change the pixels.
+/// does not change the pixels. With `note_stamp`, the file's stamp just before the write is
+/// noted in `histogram_reads` before the release returns, so a kept histogram follows the write
+/// (U7c-Q7, T145).
 fn release_before_write(
     release_core: impl Fn(&Path) + Send + Sync + 'static,
     histogram_reads: HistogramReads,
+    note_stamp: bool,
 ) -> RawImageCheck {
     RawImageCheck::new(move |path| {
         release_core(path);
         let _ = histogram_reads.wait_for(path, RELEASE_TIMEOUT);
+        if note_stamp {
+            histogram_reads.note_before_write(path);
+        }
     })
 }
 
@@ -6410,13 +6431,15 @@ fn run(options: Options) -> Result<(), String> {
     let histogram_reads = HistogramReads::default();
     let setup = journal.clone().map(|journal| WriteSetup {
         journal,
-        checks: Box::new(image_check(&core, &histogram_reads)),
+        checks: Box::new(image_check(&core, &histogram_reads, true)),
         options: settings.edit_options(),
     });
     let metadata_worker = MetadataWorker::start(setup).map_err(|e| e.to_string())?;
-    let import_worker =
-        ImportWorker::start(journal, Box::new(image_check(&core, &histogram_reads)))
-            .map_err(|e| e.to_string())?;
+    let import_worker = ImportWorker::start(
+        journal,
+        Box::new(image_check(&core, &histogram_reads, false)),
+    )
+    .map_err(|e| e.to_string())?;
     let thumb_worker = ThumbWorker::start_with_monitor_profile(monitor_profile.profile.clone())
         .map_err(|e| e.to_string())?;
     // The window as it was left (ADR 0017 §2.5, T109): maximized unless a normal size on a
@@ -6559,7 +6582,7 @@ mod tests {
 
     mod write_waits_for_the_histogram_read {
         use super::super::release_before_write;
-        use pw_loupe::{HistogramReader, HistogramReads, HistogramSubmit};
+        use pw_loupe::{HistogramReader, HistogramReads, HistogramSubmit, file_stamp};
         use pw_metadata::safe_write::ImageCheck;
         use pw_viewcore::{
             Backend, DecodeError, ImageSize, Rect, Rgb, Source, Statistics, StatisticsOrigin,
@@ -6667,8 +6690,11 @@ mod tests {
             backend.wait_until_reading();
 
             let core_log = log.clone();
-            let check =
-                release_before_write(move |_: &Path| note(&core_log, "view core released"), reads);
+            let check = release_before_write(
+                move |_: &Path| note(&core_log, "view core released"),
+                reads,
+                true,
+            );
             let (done, finished) = mpsc::channel();
             let write_log = log.clone();
             let write_path: PathBuf = path.clone();
@@ -6711,10 +6737,43 @@ mod tests {
             ));
 
             // a write of another file does not wait
-            let other = release_before_write(|_: &Path| {}, HistogramReads::default());
+            let other = release_before_write(|_: &Path| {}, HistogramReads::default(), true);
             let t0 = Instant::now();
             other.release(Path::new("elsewhere.DNG"));
             assert!(t0.elapsed() < Duration::from_secs(1));
+        }
+
+        #[test]
+        fn the_release_notes_the_stamp_before_the_write_when_asked_to() {
+            let folder =
+                std::env::temp_dir().join(format!("pw-loupe-release-notes-{}", std::process::id()));
+            assert!(std::fs::create_dir_all(&folder).is_ok());
+            let path = folder.join("noted.DNG");
+            assert!(std::fs::write(&path, b"before").is_ok());
+            let before = file_stamp(&path);
+            assert!(before.is_some());
+
+            let log: Log = Arc::default();
+            let core_log = log.clone();
+            let reads = HistogramReads::default();
+            let check = release_before_write(
+                move |_: &Path| note(&core_log, "view core released"),
+                reads.clone(),
+                true,
+            );
+            check.release(&path);
+            // noted when the release returns, after the view core let go
+            assert_eq!(steps(&log), ["view core released"]);
+            // the write changes the file; the noted stamp is the one before it
+            assert!(std::fs::write(&path, b"after the metadata write").is_ok());
+            assert_eq!(reads.take_before_write(&path), Some(before));
+            assert_eq!(reads.take_before_write(&path), None);
+
+            // the import's check notes nothing
+            let import = release_before_write(|_: &Path| {}, reads.clone(), false);
+            import.release(&path);
+            assert_eq!(reads.take_before_write(&path), None);
+            let _ = std::fs::remove_dir_all(&folder);
         }
     }
 

@@ -9,7 +9,8 @@
 //! has been the current one for the inspector's read delay; one read in flight; the newest image
 //! asked for when it comes back; a result for another image dropped. The last
 //! [`KEPT_HISTOGRAMS`] results are kept by path and display mode ([`HistogramInspector`]), also
-//! those the preview gave, so nothing is read for an image the preview showed.
+//! those the preview gave, so nothing is read for an image the preview showed. A metadata write
+//! by RawStride does not change the pixels, so a kept result follows it (U7c-Q7, T145).
 
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
@@ -188,37 +189,67 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(|error| error.into_inner())
 }
 
+/// What [`HistogramReads`] holds.
+#[derive(Debug, Default)]
+struct ReadsState {
+    /// The files asked for and not let go of yet.
+    held: Vec<PathBuf>,
+    /// Each metadata write's file and its stamp just before the write, in the order of the
+    /// writes, until its answer comes (U7c-Q7).
+    before_write: Vec<(PathBuf, Option<FileStamp>)>,
+}
+
 /// The files the reader has been asked to read and has not let go of yet, so a metadata write
 /// of one of them waits until the read is over (U7c-Q4; as the view core's `release`, ADR 0014
-/// §4.4). A path is listed from the moment it is asked for until its session is dropped. It can
-/// be cloned and used from any thread.
+/// §4.4). A path is listed from the moment it is asked for until its session is dropped. It also
+/// holds the stamp of each file just before RawStride's metadata write of it, until the write's
+/// answer comes (U7c-Q7, T145). It can be cloned and used from any thread.
 #[derive(Clone, Debug, Default)]
 pub struct HistogramReads {
-    inner: Arc<(Mutex<Vec<PathBuf>>, Condvar)>,
+    inner: Arc<(Mutex<ReadsState>, Condvar)>,
 }
 
 impl HistogramReads {
     fn asked(&self, path: &Path) {
-        lock(&self.inner.0).push(path.to_path_buf());
+        lock(&self.inner.0).held.push(path.to_path_buf());
     }
 
     fn finished(&self, path: &Path) {
-        let (list, changed) = &*self.inner;
-        let mut list = lock(list);
-        if let Some(index) = list.iter().position(|listed| listed == path) {
-            list.swap_remove(index);
+        let (state, changed) = &*self.inner;
+        let mut state = lock(state);
+        if let Some(index) = state.held.iter().position(|listed| listed == path) {
+            state.held.swap_remove(index);
         }
         changed.notify_all();
+    }
+
+    /// Notes the stamp of `path` now, just before RawStride's metadata write of it (U7c-Q7).
+    pub fn note_before_write(&self, path: &Path) {
+        let stamp = file_stamp(path);
+        lock(&self.inner.0)
+            .before_write
+            .push((path.to_path_buf(), stamp));
+    }
+
+    /// Takes the stamp noted before the oldest write of `path` not yet answered, which is then
+    /// forgotten: `None` when none is noted; `Some(None)` when the stamp could not be read then.
+    pub fn take_before_write(&self, path: &Path) -> Option<Option<FileStamp>> {
+        let mut state = lock(&self.inner.0);
+        let index = state
+            .before_write
+            .iter()
+            .position(|(noted, _)| noted == path)?;
+        Some(state.before_write.remove(index).1)
     }
 
     /// Waits until no read of `path` is asked for or running, at most `timeout`. Returns `true`
     /// when none is left, at once when there is none.
     pub fn wait_for(&self, path: &Path, timeout: Duration) -> bool {
         let deadline = Instant::now().checked_add(timeout);
-        let (list, changed) = &*self.inner;
-        let mut list = lock(list);
+        let (state, changed) = &*self.inner;
+        let mut state = lock(state);
         loop {
-            if !list.iter().any(|listed| listed == path) {
+            if !state.held.iter().any(|listed| listed == path) {
                 return true;
             }
             let wait = match deadline {
@@ -231,8 +262,8 @@ impl HistogramReads {
                 }
                 None => Duration::from_secs(1),
             };
-            list = match changed.wait_timeout(list, wait) {
-                Ok((list, _)) => list,
+            state = match changed.wait_timeout(state, wait) {
+                Ok((state, _)) => state,
                 Err(error) => error.into_inner().0,
             };
         }
@@ -318,6 +349,13 @@ impl HistogramSubmit for HistogramReader {
 
     fn try_recv(&mut self) -> Result<HistogramRead, TryRecvError> {
         self.results.try_recv()
+    }
+}
+
+impl HistogramReader {
+    /// The list shared with the metadata writes (the stamps noted before them, U7c-Q7).
+    pub fn reads(&self) -> &HistogramReads {
+        &self.reads
     }
 }
 
@@ -509,6 +547,29 @@ impl HistogramInspector {
                     return;
                 }
             }
+        }
+    }
+
+    /// RawStride's metadata write of `path` (absolute) has answered (U7c-Q7, T145): the stamp
+    /// noted just before it is taken from `reads` and forgotten. When the write succeeded, the
+    /// kept results of `path` (both display modes) whose stamp equals the noted one take the
+    /// file's stamp as it is now, so they are not read again: the write did not change the
+    /// pixels. A kept result with another stamp (the file was changed outside RawStride before
+    /// the write) is left as it is and read again; a failed write changes nothing.
+    pub fn written(&mut self, path: &Path, succeeded: bool, reads: &HistogramReads) {
+        let Some(before) = reads.take_before_write(path) else {
+            return;
+        };
+        if !succeeded {
+            return;
+        }
+        let mut now = None;
+        for kept in self
+            .kept
+            .iter_mut()
+            .filter(|kept| kept.path == path && kept.stamp == before)
+        {
+            kept.stamp = *now.get_or_insert_with(|| file_stamp(path));
         }
     }
 
@@ -1077,6 +1138,160 @@ mod tests {
             histograms.shown(&path, Source::Raw),
             HistogramPanel::Reading
         );
+        let _ = std::fs::remove_dir_all(&folder);
+    }
+
+    /// A folder of its own for one test, with `name` written as a file of three bytes.
+    fn written_file(test: &str, name: &str) -> (PathBuf, PathBuf) {
+        let folder =
+            std::env::temp_dir().join(format!("pw-loupe-histogram-{test}-{}", std::process::id()));
+        assert!(std::fs::create_dir_all(&folder).is_ok());
+        let path = folder.join(name);
+        assert!(std::fs::write(&path, b"one").is_ok());
+        (folder, path)
+    }
+
+    /// Kept results of `path` in both display modes, as the preview gives them.
+    fn kept_in_both_modes(histograms: &mut HistogramInspector, path: &Path) {
+        histograms.preview_result(path, Source::Raw, &found(0.1));
+        histograms.preview_result(path, Source::Jpeg, &found(0.2));
+    }
+
+    /// Moves to `path` in `mode` after another image and lets the delay pass; returns how many
+    /// reads have been asked for.
+    fn visit(
+        histograms: &mut HistogramInspector,
+        reader: &mut FakeReader,
+        other: &Path,
+        path: &Path,
+        mode: Source,
+        at: Instant,
+    ) -> usize {
+        histograms.request(Some(other), mode, false, at, reader);
+        histograms.request(Some(path), mode, true, at, reader);
+        histograms.request(Some(path), mode, true, at + DELAY, reader);
+        reader.reads.len()
+    }
+
+    #[test]
+    fn a_kept_result_follows_rawstrides_own_write_in_both_modes() {
+        let (folder, path) = written_file("own-write", "own.DNG");
+        let other = folder.join("other.DNG");
+        let reads = HistogramReads::default();
+        let mut reader = FakeReader::default();
+        let mut histograms = inspector();
+        kept_in_both_modes(&mut histograms, &path);
+
+        // the stamp noted before the write, the file changed by it, the write answered
+        reads.note_before_write(&path);
+        assert!(std::fs::write(&path, b"one with metadata").is_ok());
+        histograms.written(&path, true, &reads);
+
+        let t = Instant::now();
+        assert_eq!(
+            visit(&mut histograms, &mut reader, &other, &path, Source::Raw, t),
+            0
+        );
+        assert_eq!(histograms.shown(&path, Source::Raw), ready(0.1));
+        assert_eq!(
+            visit(&mut histograms, &mut reader, &other, &path, Source::Jpeg, t),
+            0
+        );
+        assert_eq!(histograms.shown(&path, Source::Jpeg), ready(0.2));
+        // the noted stamp is forgotten
+        assert_eq!(reads.take_before_write(&path), None);
+        let _ = std::fs::remove_dir_all(&folder);
+    }
+
+    #[test]
+    fn a_file_changed_outside_rawstride_before_the_write_is_read_again() {
+        let (folder, path) = written_file("outside", "outside.DNG");
+        let other = folder.join("other.DNG");
+        let reads = HistogramReads::default();
+        let mut reader = FakeReader::default();
+        let mut histograms = inspector();
+        kept_in_both_modes(&mut histograms, &path);
+
+        // changed by another program, then written by RawStride
+        assert!(std::fs::write(&path, b"one, edited elsewhere").is_ok());
+        reads.note_before_write(&path);
+        assert!(std::fs::write(&path, b"one, edited elsewhere, with metadata").is_ok());
+        histograms.written(&path, true, &reads);
+
+        let t = Instant::now();
+        assert_eq!(
+            visit(&mut histograms, &mut reader, &other, &path, Source::Raw, t),
+            1
+        );
+        // the read comes back, so the other mode's read can be sent
+        reader.answer(&path, Source::Raw, found(0.3));
+        assert_eq!(
+            visit(&mut histograms, &mut reader, &other, &path, Source::Jpeg, t),
+            2
+        );
+        assert_eq!(reads.take_before_write(&path), None);
+        let _ = std::fs::remove_dir_all(&folder);
+    }
+
+    #[test]
+    fn a_failed_write_changes_nothing_and_its_noted_stamp_is_forgotten() {
+        let (folder, path) = written_file("failed", "failed.DNG");
+        let other = folder.join("other.DNG");
+        let reads = HistogramReads::default();
+        let mut reader = FakeReader::default();
+        let mut histograms = inspector();
+        kept_in_both_modes(&mut histograms, &path);
+
+        // a failed write of an unchanged file: still fresh
+        reads.note_before_write(&path);
+        histograms.written(&path, false, &reads);
+        assert_eq!(reads.take_before_write(&path), None);
+        let t = Instant::now();
+        assert_eq!(
+            visit(&mut histograms, &mut reader, &other, &path, Source::Raw, t),
+            0
+        );
+
+        // a failed write while the file changed: the kept stamp is not moved on
+        reads.note_before_write(&path);
+        assert!(std::fs::write(&path, b"one and more").is_ok());
+        histograms.written(&path, false, &reads);
+        assert_eq!(reads.take_before_write(&path), None);
+        assert_eq!(
+            visit(&mut histograms, &mut reader, &other, &path, Source::Raw, t),
+            1
+        );
+        let _ = std::fs::remove_dir_all(&folder);
+    }
+
+    #[test]
+    fn a_write_of_a_path_with_no_kept_result_does_nothing() {
+        let (folder, path) = written_file("not-kept", "not-kept.DNG");
+        let kept = folder.join("kept.DNG");
+        assert!(std::fs::write(&kept, b"kept").is_ok());
+        let reads = HistogramReads::default();
+        let mut reader = FakeReader::default();
+        let mut histograms = inspector();
+        kept_in_both_modes(&mut histograms, &kept);
+
+        reads.note_before_write(&path);
+        assert!(std::fs::write(&path, b"one with metadata").is_ok());
+        histograms.written(&path, true, &reads);
+        assert_eq!(reads.take_before_write(&path), None);
+        // nothing is kept for the written file, the other's result is as it was
+        assert_eq!(
+            histograms.shown(&path, Source::Raw),
+            HistogramPanel::Reading
+        );
+        assert_eq!(histograms.shown(&kept, Source::Raw), ready(0.1));
+        let t = Instant::now();
+        assert_eq!(
+            visit(&mut histograms, &mut reader, &path, &kept, Source::Raw, t),
+            0
+        );
+        // a write answered with nothing noted does nothing either
+        histograms.written(&kept, true, &reads);
+        assert_eq!(histograms.shown(&kept, Source::Raw), ready(0.1));
         let _ = std::fs::remove_dir_all(&folder);
     }
 

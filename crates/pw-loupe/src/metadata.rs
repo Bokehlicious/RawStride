@@ -237,6 +237,17 @@ pub(crate) struct MetadataCache {
     window: WindowRead,
     inspector: InspectorRead,
     editor: EditorSave,
+    /// The answers of RawStride's metadata writes since the inspector's Histogram last asked, in
+    /// the order they came (U7c-Q7, T145).
+    written: Vec<WriteAnswer>,
+}
+
+/// One answer of RawStride's metadata write (a rating or label key, an editor save, a write of
+/// "Apply to All Marked"): its file and whether it succeeded (U7c-Q7, T145).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct WriteAnswer {
+    pub path: PathBuf,
+    pub succeeded: bool,
 }
 
 impl MetadataCache {
@@ -793,6 +804,12 @@ impl MetadataCache {
         self.finish_batch();
     }
 
+    /// The answers of the metadata writes since the last call, in the order they came, so the
+    /// inspector's kept histograms follow RawStride's own writes (U7c-Q7, T145).
+    pub fn take_written(&mut self) -> Vec<WriteAnswer> {
+        std::mem::take(&mut self.written)
+    }
+
     /// Whether the read after the editor's write is waiting or in flight.
     pub fn editor_reloading(&self) -> bool {
         self.editor.reload.is_some() || self.editor.reading.is_some()
@@ -870,6 +887,10 @@ impl MetadataCache {
             } => {
                 self.window_written(&path);
                 self.inspector_written(&path);
+                self.written.push(WriteAnswer {
+                    path: path.clone(),
+                    succeeded: result.is_ok(),
+                });
                 if let Some(message) =
                     self.ratings
                         .written(id, &path, result.map_err(write_error_text))
@@ -910,6 +931,10 @@ impl MetadataCache {
             WorkerEvent::EditsWritten { id, path, result } => {
                 self.window_written(&path);
                 self.inspector_written(&path);
+                self.written.push(WriteAnswer {
+                    path: path.clone(),
+                    succeeded: result.is_ok(),
+                });
                 if self
                     .editor
                     .batch
@@ -3177,5 +3202,79 @@ mod tests {
         cache.prune(|_| false);
 
         assert_eq!(cache.inspector_state(&image), InspectorState::Loading);
+    }
+
+    // --- the answers of the writes for the inspector's Histogram (U7c-Q7, T145) ---
+
+    fn answer(path: &Path, succeeded: bool) -> WriteAnswer {
+        WriteAnswer {
+            path: path.to_path_buf(),
+            succeeded,
+        }
+    }
+
+    #[test]
+    fn the_writes_of_an_editor_save_and_a_rating_key_hand_on_their_paths() {
+        let mut worker = FakeSubmit::new([]);
+        let mut cache = MetadataCache::default();
+        assert!(cache.take_written().is_empty());
+
+        // an editor save that succeeded, then one that failed
+        let saved = image_path("pw-loupe-written-saved.DNG");
+        assert_eq!(cache.save_edits(&saved, title_edits(), &mut worker), Ok(()));
+        worker
+            .events
+            .push_back(edits_written(900, &saved, Ok(report(Vec::new()))));
+        assert!(cache.poll(&mut worker).is_empty());
+        let refused = image_path("pw-loupe-written-refused.jpg");
+        assert_eq!(
+            cache.save_edits(&refused, title_edits(), &mut worker),
+            Ok(())
+        );
+        worker
+            .events
+            .push_back(edits_written(901, &refused, Err(WriteError::ReadOnly)));
+        assert!(cache.poll(&mut worker).is_empty());
+        assert_eq!(
+            cache.take_written(),
+            [answer(&saved, true), answer(&refused, false)]
+        );
+        // taken once
+        assert!(cache.take_written().is_empty());
+
+        // a rating key that succeeded, then one that failed
+        let rated = std::env::temp_dir().join("pw-loupe-written-rated.DNG");
+        assert!(cache.set_rating(&rated, RatingKey::Stars(3)).is_ok());
+        worker.write_result = Some(Ok(()));
+        let _ = cache.poll(&mut worker);
+        let _ = cache.poll(&mut worker);
+        assert_eq!(cache.take_written(), [answer(&rated, true)]);
+        let failed = std::env::temp_dir().join("pw-loupe-written-failed.DNG");
+        assert!(cache.set_rating(&failed, RatingKey::Stars(1)).is_ok());
+        worker.write_result = Some(Err("refused".into()));
+        let _ = cache.poll(&mut worker);
+        let _ = cache.poll(&mut worker);
+        let written = cache.take_written();
+        assert_eq!(written, [answer(&failed, false)]);
+        assert!(!written.iter().any(|written| written.succeeded));
+    }
+
+    #[test]
+    fn each_write_of_apply_to_all_marked_hands_on_its_path() {
+        let mut worker = FakeSubmit::new([]);
+        let mut cache = MetadataCache::default();
+        let (a, b, c) = start_three(&mut cache, &mut worker);
+        for (id, path, result) in [
+            (900, &a, Ok(report(Vec::new()))),
+            (901, &b, Err(WriteError::ReadOnly)),
+            (902, &c, Ok(report(Vec::new()))),
+        ] {
+            worker.events.push_back(edits_written(id, path, result));
+        }
+        assert!(cache.poll(&mut worker).is_empty());
+        assert_eq!(
+            cache.take_written(),
+            [answer(&a, true), answer(&b, false), answer(&c, true)]
+        );
     }
 }

@@ -1,4 +1,4 @@
-# T145. ADR 0017 U7, the inspector's Histogram kept after RawStride's own metadata writes — Open
+# T145. ADR 0017 U7, the inspector's Histogram kept after RawStride's own metadata writes — Done
 
 - **Can start now.** The owner approved the proposal of U7c-Q7 (at the end of this task) on 2026-11-15; it is written into the points below and into ADR 0017 §6.1.
 - **Why:** T144 keeps the inspector's last 64 histograms and reads one again when its file's size
@@ -56,3 +56,5 @@
 |---|---|---|
 | 2026-11-15 | Blocked | Added after the review of T144; waits for U7c-Q7 |
 | 2026-11-15 | Open | The owner approved U7c-Q7 as proposed |
+| 2026-11-15 | Ready for review | Stamp noted in `HistogramReads` by the metadata worker's release (not the import's); `MetadataCache::take_written` hands on every write answer with its path and outcome (a failed one too, so its noted stamp is forgotten); `HistogramInspector::written`; 7 tests |
+| 2026-11-15 | Done | Reviewed: `check.ps1` all OK (1514 passed, 0 failed, 58 ignored), run again by the reviewer. A write that ends before its release (`Unchanged`, `Unsupported`, a read error) notes no stamp, so its answer can take a later write's stamp of the same file; that gives one extra read, never a wrong histogram. Not checked by eye in the running program; the owner checks T144 and T145 by hand after this commit. |
