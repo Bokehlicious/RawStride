@@ -266,10 +266,21 @@ fn secs(t: SystemTime) -> Option<u64> {
     t.duration_since(UNIX_EPOCH).ok().map(|d| d.as_secs())
 }
 
+/// Whether two modification times (whole seconds) count as the same: equal, or exactly one hour
+/// apart. FAT32 keeps a file's time as local time, and Windows converts it to UTC with today's
+/// daylight saving time, not the one of the day the file was written; after the clocks change,
+/// every file on a FAT32 card reads exactly 3600 s earlier or later (ADR 0005 choice 6, "The same
+/// time").
+pub(crate) fn same_time(a: u64, b: u64) -> bool {
+    let diff = a.abs_diff(b);
+    diff == 0 || diff == 3600
+}
+
 /// Whether `path` can receive `f`:
-/// - images: the same modification time (to the second) and the same size mean "already
-///   ingested"; for DNG/JPEG/TIFF the size may differ, because ratings and IPTC are written into
-///   those files afterwards with the date kept;
+/// - images: the same modification time (to the second) or exactly one hour apart (FAT32 and
+///   daylight saving time, [`same_time`]) and the same size mean "already ingested"; for
+///   DNG/JPEG/TIFF the size may differ, because ratings and IPTC are written into those files
+///   afterwards with the date kept;
 /// - sidecars: any existing file is `Present` (it is edited after ingest, so neither size nor date
 ///   says anything); `plan` decides from the shot's images.
 fn slot(path: &Path, f: &SourceFile) -> Slot {
@@ -283,9 +294,12 @@ fn slot(path: &Path, f: &SourceFile) -> Slot {
     if COMPANION_EXTENSIONS.contains(&ext.as_str()) {
         return Slot::Present;
     }
-    let same_time = m.modified().ok().and_then(secs) == secs(f.modified);
+    let time_matches = match (m.modified().ok().and_then(secs), secs(f.modified)) {
+        (Some(a), Some(b)) => same_time(a, b),
+        (a, b) => a == b,
+    };
     let same_size = m.len() == f.size || EMBEDDED_METADATA.contains(&ext.as_str());
-    if same_time && same_size {
+    if time_matches && same_size {
         Slot::Same
     } else {
         Slot::Taken
@@ -580,4 +594,27 @@ pub fn copy_verified(
         let _ = fs::remove_file(&part);
     }
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn same_time_allows_equal_or_exactly_one_hour_apart() {
+        let t = 1_792_996_131;
+        assert!(same_time(t, t));
+        assert!(same_time(t, t + 3600));
+        assert!(same_time(t + 3600, t));
+        assert!(same_time(t, t - 3600));
+        assert!(same_time(t - 3600, t));
+        for off in [3599, 3601, 7200] {
+            assert!(!same_time(t, t + off), "+{off}");
+            assert!(!same_time(t + off, t), "+{off} reversed");
+            assert!(!same_time(t, t - off), "-{off}");
+            assert!(!same_time(t - off, t), "-{off} reversed");
+        }
+        assert!(!same_time(0, u64::MAX));
+        assert!(!same_time(u64::MAX, 0));
+    }
 }

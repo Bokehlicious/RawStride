@@ -5,7 +5,9 @@
 //!
 //! The file is UTF-8. Its first line is the version line, then one line per file:
 //! `{path}\t{size}\t{modified}`, with the path below the register's root (`/` between the parts),
-//! the size in bytes and the modification time in whole seconds since 1970 (UTC).
+//! the size in bytes and the modification time in whole seconds since 1970 (UTC). A file matches
+//! a line with the same path and size and the same time or a time exactly one hour earlier or
+//! later: a FAT32 card reads one hour off after a change of the clocks (ADR 0005 choice 6).
 
 use std::collections::HashSet;
 use std::fs::{self, File, OpenOptions};
@@ -122,16 +124,23 @@ impl Register {
     }
 
     /// Whether `file` is in the register: the same path below `root` (without regard to case),
-    /// the same size and the same modification time to the second. A file not below `root`, or
-    /// with a time before 1970, is never in it.
+    /// the same size and the same modification time to the second or exactly one hour earlier or
+    /// later (FAT32 local time and daylight saving time, ADR 0005 choice 6). A file not below
+    /// `root`, or with a time before 1970, is never in it.
     pub fn contains(&self, root: &Path, file: &SourceFile) -> bool {
-        match (path_below(root, &file.path), secs(file.modified)) {
-            (Some(path), Some(modified)) => {
-                self.entries
-                    .contains(&(path.to_lowercase(), file.size, modified))
-            }
-            _ => false,
-        }
+        let (Some(path), Some(modified)) = (path_below(root, &file.path), secs(file.modified))
+        else {
+            return false;
+        };
+        let path = path.to_lowercase();
+        [
+            Some(modified),
+            modified.checked_add(3600),
+            modified.checked_sub(3600),
+        ]
+        .into_iter()
+        .flatten()
+        .any(|t| self.entries.contains(&(path.clone(), file.size, t)))
     }
 }
 
@@ -476,6 +485,50 @@ mod tests {
             &root.0,
             &source(&root.0, "DCIM/100MSDCF/A001.ARW", 5000, 101)
         ));
+    }
+
+    #[test]
+    fn a_time_exactly_one_hour_off_matches() {
+        let root = Root::with(GOOD);
+        let register = read_register(&root.0);
+        let a001 = |secs| source(&root.0, "DCIM/100MSDCF/A001.ARW", 5000, secs);
+        let a002 = |secs| source(&root.0, "DCIM/100MSDCF/A002.JPG", 3000, secs);
+        assert!(
+            register.contains(&root.0, &a001(100 + 3600)),
+            "an hour later"
+        );
+        assert!(
+            register.contains(&root.0, &a002(160 + 3600)),
+            "an hour later"
+        );
+        let earlier = Root::with("RawStride ingest register 1\nDCIM/A001.ARW\t5000\t10000\n");
+        let early = read_register(&earlier.0);
+        assert!(early.contains(
+            &earlier.0,
+            &source(&earlier.0, "DCIM/A001.ARW", 5000, 10000 - 3600)
+        ));
+        for off in [3599, 3601, 7200] {
+            assert!(!register.contains(&root.0, &a001(100 + off)), "+{off}");
+            assert!(
+                !early.contains(
+                    &earlier.0,
+                    &source(&earlier.0, "DCIM/A001.ARW", 5000, 10000 - off)
+                ),
+                "-{off}"
+            );
+        }
+    }
+
+    #[test]
+    fn time_zero_matches_a_line_one_hour_later_without_a_panic() {
+        let root = Root::with(
+            "RawStride ingest register 1\n\
+             A001.ARW\t5000\t3600\n\
+             A002.ARW\t5000\t100\n",
+        );
+        let register = read_register(&root.0);
+        assert!(register.contains(&root.0, &source(&root.0, "A001.ARW", 5000, 0)));
+        assert!(!register.contains(&root.0, &source(&root.0, "A002.ARW", 5000, 0)));
     }
 
     #[test]

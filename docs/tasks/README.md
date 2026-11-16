@@ -12,7 +12,7 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 | `T<nnn>-<name>.md` (this folder) | Open tasks, one file each |
 | [`backlog.md`](backlog.md) | Not for agents yet: needs a decision, a dependency or an ADR first |
 | [`plans/`](plans/) | Step lists for ADRs that have none of their own (ADR 0007 milestone 8, ADR 0017) |
-| [`done/`](done/README.md) | Finished tasks T1–T157 and the log they were kept in until 2026-11-13 |
+| [`done/`](done/README.md) | Finished tasks T1–T157 and T162, and the log they were kept in until 2026-11-13 |
 
 
 ## How to work on a task
@@ -99,7 +99,6 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 | [T159](T159-raf-reader-in-pw-raw.md) | Fujifilm RAF in pw-raw: previews, size and Exif | Open |
 | [T160](T160-raf-listed-everywhere.md) | Fujifilm RAF listed: viewer, import and sidecar | Blocked: waits for T159 |
 | [T161](T161-import-dialog-finds-new-cards.md) | The import dialog finds a card inserted while it is open | Open |
-| [T162](T162-fat32-daylight-saving-shift.md) | A FAT32 card read one hour off after a change of the clocks (pw-ingest) | Open |
 
 ## Writing a task (owner and reviewer)
 

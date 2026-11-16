@@ -1,4 +1,4 @@
-# T162. A FAT32 card read one hour off after a change of the clocks (pw-ingest) — Open
+# T162. A FAT32 card read one hour off after a change of the clocks (pw-ingest) — Done
 
 - **Why:** review of T157 (2026-11-16). FAT32 keeps a file's time as local time, and Windows
   converts it to UTC with **today's** daylight saving time, not the one of the day the file was
@@ -59,3 +59,5 @@
 |---|---|---|
 | 2026-11-16 | Open | Added from the review of T157; the owner's decision is in ADR 0005 choice 6 ("The same time"). Changes only `pw-ingest`, so it may run beside T158 |
 | 2026-11-16 | Open | Cold read: the local variable `same_time` in `slot` renamed; the way to move a file's time named (`set_modified` on each scanned file, not `write`); the options' empty folder; the expected counts (4 files, `ORPHAN.xmp` not scanned) and the `_1` names with 7200 s written out; the register test's expected result given. Side effect noted: a JPEG, DNG or TIFF exactly one hour off now counts as the same, which is intended |
+| 2026-11-16 | Ready for review | `same_time` in `lib.rs` used by `slot` (local renamed `time_matches`), `Register::contains` tries `m`, `m + 3600`, `m - 3600`; 3 unit tests (2 in `register.rs`, 1 in `lib.rs`) and 4 integration tests; `docs/test-inventory.md` updated (67 and 17). `cargo test --workspace` was all OK before the parallel `pw-loupe` work (T158) appeared in the tree; the later `check.ps1` run failed only in `pw-loupe` (fmt in `settings.rs`, compile errors in `import_dialog.rs`/`import_text.rs`), files of that task, not this one. `check.ps1` must be run again when that work compiles |
+| 2026-11-16 | Done | Reviewed: no bugs. The reviewer wrapped `slot`'s doc comment and wrote the two new `register.rs` tests' strings with `\t` and `\n` instead of literal tabs and line breaks. `.\tools\check.ps1` on the tree with T158 all OK: 1670 passed, 63 ignored, 0 failed (1656 with T162 alone), clippy without warnings. No leftovers |

@@ -488,6 +488,92 @@ fn a_cancelled_run_has_a_line_only_for_the_file_that_was_copied() {
     assert_eq!(snapshot(&dst.0).len(), 1);
 }
 
+/// Moves the modification time of every scanned file on the card in `src` by `secs` seconds
+/// (later when positive), as Windows reads a FAT32 card after the clocks change. Only the time
+/// changes, not the content.
+fn shift_times(src: &Path, secs: i64) {
+    for shot in scan(src).unwrap() {
+        for f in &shot.files {
+            let by = Duration::from_secs(secs.unsigned_abs());
+            let moved = if secs >= 0 {
+                f.modified + by
+            } else {
+                f.modified - by
+            };
+            File::options()
+                .write(true)
+                .open(&f.path)
+                .unwrap()
+                .set_modified(moved)
+                .unwrap();
+        }
+    }
+}
+
+#[test]
+fn a_card_read_one_hour_later_is_already_present() {
+    let src = Tmp::new("dst-hour-src");
+    let dst = Tmp::new("dst-hour-dst");
+    card(&src.0);
+    let o = opts(&dst.0, "", "{name}");
+    let r = execute(
+        &plan(&scan(&src.0).unwrap(), &o),
+        &o,
+        &AtomicBool::new(false),
+        |_| {},
+    );
+    assert_eq!(r.copied, 4);
+    shift_times(&src.0, 3600);
+    let p = plan(&scan(&src.0).unwrap(), &o);
+    assert_eq!((p.already_present(), p.files_to_copy()), (4, 0));
+    assert!(rels(&p).iter().all(|r| !r.contains("_1")), "{:?}", rels(&p));
+}
+
+#[test]
+fn a_card_read_two_hours_later_is_a_clash() {
+    let src = Tmp::new("dst-2h-src");
+    let dst = Tmp::new("dst-2h-dst");
+    card(&src.0);
+    let o = opts(&dst.0, "", "{name}");
+    let r = execute(
+        &plan(&scan(&src.0).unwrap(), &o),
+        &o,
+        &AtomicBool::new(false),
+        |_| {},
+    );
+    assert_eq!(r.copied, 4);
+    shift_times(&src.0, 7200);
+    let p = plan(&scan(&src.0).unwrap(), &o);
+    assert_eq!(
+        rels(&p),
+        vec!["A001_1.ARW", "A001_1.xmp", "A002_1.JPG", "A003_1.ARW"]
+    );
+}
+
+#[test]
+fn a_card_read_one_hour_earlier_is_in_the_register() {
+    let src = Tmp::new("reg-hour-src");
+    let dst = Tmp::new("reg-hour-dst");
+    card(&src.0);
+    assert_eq!(import_with_register(&src.0, &dst.0).copied, 4);
+    shift_times(&src.0, -3600);
+    let (new, left_out) = new_shots(&scan(&src.0).unwrap(), &src.0, &read_register(&src.0));
+    assert!(new.is_empty());
+    assert_eq!(left_out, 4);
+}
+
+#[test]
+fn a_card_read_two_hours_earlier_is_not_in_the_register() {
+    let src = Tmp::new("reg-2h-src");
+    let dst = Tmp::new("reg-2h-dst");
+    card(&src.0);
+    assert_eq!(import_with_register(&src.0, &dst.0).copied, 4);
+    shift_times(&src.0, -7200);
+    let (new, left_out) = new_shots(&scan(&src.0).unwrap(), &src.0, &read_register(&src.0));
+    assert_eq!(new.len(), 3);
+    assert_eq!(left_out, 0);
+}
+
 #[test]
 #[ignore = "needs real camera files: set PW_TESTDATA and run with --ignored"]
 fn real_raw_uses_exif_time() {
