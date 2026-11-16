@@ -95,11 +95,16 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status |
 |---|---|---|
+| [T150](T150-locked-view-in-the-view-core.md) | ADR 0017 U6, first part: a view set from outside in the view core | Open |
+| [T151](T151-compare-model.md) | ADR 0017 U6, second part: the compare model, its settings and texts | Blocked |
+| [T152](T152-second-view-core.md) | ADR 0017 U6, third part: the second view core, and the image area drawn by one function | Blocked |
+| [T153](T153-compare-in-the-preview.md) | ADR 0017 U6, fourth part: two images in the preview | Blocked |
+| [T154](T154-locked-zoom-in-compare.md) | ADR 0017 U6, fifth part: locked zoom and position in the compare | Blocked |
 
 ## Writing a task (owner and reviewer)
 
-- **Number:** the next free number after the highest in this folder and `done/` (T150 next).
-- **File:** `docs/tasks/T150-<a-few-words>.md`; three digits, lower case, words joined by `-`.
+- **Number:** the next free number after the highest in this folder and `done/` (T155 next).
+- **File:** `docs/tasks/T155-<a-few-words>.md`; three digits, lower case, words joined by `-`.
 - **Index:** add a row to "Open tasks" above and keep its status in step with the file's heading.
 - **Size (owner, 2026-11-15, after T142):** one task is one layer (a C++ shim or a core crate, or
   the shell in `pw-loupe`), about eight files at most, and gives one result the owner can check by
@@ -139,7 +144,7 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 Skeleton (the fields recent tasks use; leave out those that do not apply):
 
 ```markdown
-# T150. <Title> — Open
+# T155. <Title> — Open
 
 - **Why:** …
 - **Crates:** … **Files:** …

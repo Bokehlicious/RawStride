@@ -376,7 +376,7 @@ without the study notes as a template.
 
 ### 6.1 Questions of the steps (answered by the owner, 2026-11-13: every proposal approved)
 
-Asked in the tasks of stage A (T109–T112, `docs/tasks/done/`) and of U10, U12b, U12c and U10d (T123–T126, T128, 2026-11-14) and of U4, U11a and U14 (T135, T136, T138, T139, 2026-11-14) and of U5, U12a, U7 and U11 (T140–T143, 2026-11-15) and of U7's inspector part (T144, 2026-11-15) and of U7b (T146, 2026-11-15) and answered there; recorded here so
+Asked in the tasks of stage A (T109–T112, `docs/tasks/done/`) and of U10, U12b, U12c and U10d (T123–T126, T128, 2026-11-14) and of U4, U11a and U14 (T135, T136, T138, T139, 2026-11-14) and of U5, U12a, U7 and U11 (T140–T143, 2026-11-15) and of U7's inspector part (T144, 2026-11-15) and of U7b (T146, 2026-11-15) and of U6 (T150, 2026-11-16) and answered there; recorded here so
 the decisions do not live only in the tasks.
 
 | # | Decision (as proposed) |
@@ -496,6 +496,18 @@ the decisions do not live only in the tasks.
 | U7b-Q8 | Computed only while an overlay is on, for the current image after its first view (as U7-Q6); the maps of the last 4 images shown kept; nothing marked until the map is ready; the overlay is one GPU texture of 4 bytes per cell, outside the view's texture budget |
 | U7b-Q9 | A section "Clipping" under Histogram in the preview's right column, collapsible and remembered, with check boxes "Clipped highlights (J)" and "Deep shadows (Shift+J)"; "Reading …" while the map is computed, "No clipping map for this file" when there is none |
 | U7b-Q10 | Clipping, Clipped highlights, Deep shadows, Show Clipped Highlights, Show Deep Shadows, No clipping map for this file; "Reading …" as today; English (GR14), in the glossary |
+| U6-Q1 | Five tasks (four as approved; T152 split by the reviewer's cold read, 2026-11-16): T150 the view core takes a zoom and position from outside and gives its position in the frame; T151 the compare model, settings and texts in `pw-loupe`; T152 the second view core and the image area drawn by one function; T153 the second image drawn in the preview with the keys and menu items (zoom free); T154 the locked zoom and position; the owner's hand check after T154 |
+| U6-Q2 | The held image is shown by a second view core, started with the program, given a list of the held image alone while comparing and an empty list otherwise; the first core and its stepping are unchanged; a metadata write releases the file in both cores |
+| U6-Q3 | The second core gets a quarter of the first one's budgets (by default 1 GiB for sessions and 256 MiB for textures) |
+| U6-Q4 | **C** in the preview: the current image becomes the held one and the current image steps to the next shown image (the previous one at the end); with "only the marked" and two marked images those two are compared; with one shown image C does nothing and the menu item is greyed |
+| U6-Q5 | The held image left (side by side) or on top (above/below); the current image right or below, framed in the accent colour |
+| U6-Q6 | **K** holds the current image; **Shift+K** swaps the held and the current image |
+| U6-Q7 | Side by side by default; **V** switches to above/below and back; remembered in `settings.txt` |
+| U6-Q8 | **L** locks and unlocks zoom and position; locked by default, remembered. Locked: the held image shows the current image's zoom level (fit or the same scale) and the same relative point; zoom and drag on either side move both. Unlocked: the keys zoom the current image, the mouse acts on the side under the pointer |
+| U6-Q9 | Ratings, labels, `M`, the title line and the right column follow the current image only; **R** switches both sides; the clipping marks are drawn on both sides |
+| U6-Q10 | Each side has a line at its top: file name, source (G1) and zoom; the rating badge on both sides; the filmstrip frames the held image's cell with a dashed frame |
+| U6-Q11 | **C** again or **Escape** closes the compare and keeps the current image in the preview; a second Escape closes the preview; closing the preview, changing tab or opening a folder closes the compare; compare is not remembered after a restart, the layout and the lock are |
+| U6-Q12 | View menu items "Compare" (C), "Hold Current Image" (K), "Swap Images" (Shift+K), "Above and Below" (V), "Lock Zoom and Position" (L), acting in the preview only; the side line "{file} · {source} · {zoom}"; Compare and Held image in the glossary |
 | U11c-Q1 | Person Shown with Details, Product Shown, Artwork or Object, Contributor, CV-Term About Image, Image Registry Entry; not Image Region (needs drawing on the image) nor the rights expressions |
 | U11c-Q2 | Content after Person Shown: Person with Details, Product, Artwork; Creator and Rights at the end: Contributor; Assignment after Genre: CV-Term About Image, at the end: Image Registry Entry |
 | U11c-Q3 | Title, Creator, Date Created, Source, Source Inventory Number and Copyright Notice open; the other eleven under a collapsed "More" line |
