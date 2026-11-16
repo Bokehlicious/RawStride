@@ -1,4 +1,4 @@
-# T158. Incremental ingest in the import dialog (pw-loupe) — Blocked: waits for T157
+# T158. Incremental ingest in the import dialog (pw-loupe) — Open
 
 - **Why:** the user part of "copy new images only". **Owner, 2026-11-16** (ADR 0005 choice 6): a
   check box in the import dialog, on by default and remembered in the settings. Files an earlier
@@ -108,3 +108,4 @@
 |---|---|---|
 | 2026-11-16 | Blocked | Added with T157 (bug 3 of 5); the owner's decision is ADR 0005 choice 6. Waits for T157 |
 | 2026-11-16 | Blocked | Cold read: `plan_new` now returns the new shots and the register; the root comes in as a closure, so the worker tests never touch `C:\`; existing worker tests run with the box off; the foreign note uses T157's `Register::problem` instead of opening a writer; `on_exit` keeps the value; the existing tests that must change are named; `import_dialog.rs` added for its `Preview` literal; "image"/"file" instead of "photo"; the joined summary parts follow the existing pattern on purpose |
+| 2026-11-16 | Open | T157 is Done. From its review: a source without a drive letter, also a `\\?\` path, has no register; point 5 (the validated source, not a resolved path) and the note `NoRegisterRoot` with its test already cover it, so the text is unchanged. T162 (the daylight saving time shift on FAT32) changes only `pw-ingest` and may run beside this task |

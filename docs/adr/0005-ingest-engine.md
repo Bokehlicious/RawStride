@@ -93,6 +93,11 @@ The sandbox disk is not the PC. Measure on thanos with a real card before tuning
      preview and the summary count them as "imported earlier".
    - **A card that cannot be written** (a locked SD card): the import runs anyway and the summary
      says that the card could not be marked. There is no register on the computer instead.
+   - **The same time (owner, 2026-11-16; T162):** for the register and for the destination check
+     of point 5 above, a modification time exactly one hour (3600 s) earlier or later also counts
+     as the same. FAT32 keeps local time, and Windows converts it with today's daylight saving
+     time, so after a change of the clocks every file on such a card reads one hour off; without
+     this, the whole card would be imported again (with `_1` names in the old destination).
    - **What changes in choice 3:** RawStride now writes one file of its own to the card. It still
      never changes or deletes an image or any other file there. The check at the destination
      (choice 2) stays.
