@@ -38,6 +38,10 @@ preview takes 0.6–1.9 ms, while reading a whole RAW file takes about 110 ms.
      so that browsers honour it for images from another origin.
 5. **EXIF.** `pw-raw` reads the few fields M1 shows (camera, lens, date, exposure, aperture, ISO, focal
    length, exposure compensation, orientation) in the same TIFF walk that finds the previews.
+   **Fujifilm RAF (owner, 2026-11-16; T159, T160):** RAF is not TIFF-based. `pw-raw` reads its own
+   header, which points to an embedded JPEG; the previews and the EXIF come from that JPEG, and the
+   size from the header's metadata. RAF is then listed, imported and rated (sidecar) like the other
+   manufacturer RAW files. CR3 waits until there are test files.
 6. **Frontend.** Plain HTML, CSS and JS in `ui/web`, with no npm and no build step. The assets are
    embedded with Tauri's `custom-protocol` feature, so `cargo run -p photoworkflow` is the whole build.
 

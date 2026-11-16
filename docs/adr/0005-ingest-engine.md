@@ -77,6 +77,25 @@ The sandbox disk is not the PC. Measure on thanos with a real card before tuning
    T88, T100) and is written through the safe write (T91); the Tauri app is unchanged (D7).
 5. **No videos.** Ingest copies still images only (and their sidecars); `.MP4`, Sony
    `PRIVATE/M4ROOT` and audio notes stay on the card. This is a decision, not a gap.
+6. **Incremental ingest (owner, 2026-11-16; T157, T158).** An option "copy new photos only"
+   skips what an earlier import already took from the same card, whatever the destination and
+   the names were then.
+   - **The register is on the card:** RawStride's own text file `.rawstride-ingest.txt` in the
+     root of the source's drive (UTF-8, a version line, then one line per file: path below the
+     root, size, modification time). It follows the card between computers and destinations, and
+     formatting the card in the camera clears it. Photo Mechanic's file on the card is never read
+     (clean room).
+   - **Written as the import goes:** a line is added after each file is copied and verified to the
+     destination and the backup; files already at the destination are added at the start. An
+     interrupted import therefore remembers how far it came.
+   - **The option is on by default** and remembered in the settings. Files in the register (same
+     path, size and time) are left out before the plan, so they get no running number, and the
+     preview and the summary count them as "imported earlier".
+   - **A card that cannot be written** (a locked SD card): the import runs anyway and the summary
+     says that the card could not be marked. There is no register on the computer instead.
+   - **What changes in choice 3:** RawStride now writes one file of its own to the card. It still
+     never changes or deletes an image or any other file there. The check at the destination
+     (choice 2) stays.
 
 ## Dialog (src-tauri/src/ingest.rs, ui/web/ingest.js)
 

@@ -17,6 +17,10 @@ and reviewer:
   and structure field in T102's name table, so the Swedish info panel and editor show no English
   IPTC names. Today D11 names about 35 of them; the rest fall back to IPTC's English name. Needs
   the owner's approval of the full list.
+- **RAF previews** (review of T159/T160, 2026-11-16): a RAF has only a 160 px thumbnail and a
+  4416 px JPEG, so `pw-thumbcache` decodes the large JPEG for each contact-sheet thumbnail. If
+  T160's hand check finds the contact sheet slow, a task decides between a scaled decode of the
+  large JPEG and a cached mid-size preview.
 - **Eject through the device: known limits** (independent review of T156, 2026-11-16; none of
   them affects the owner's readers): `reader_device` ejects the disk's direct parent, so a reader
   that is a composite USB device (`USB\VID_…&MI_00`) would be refused; walking up with
