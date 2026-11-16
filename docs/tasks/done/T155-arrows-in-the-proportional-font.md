@@ -1,4 +1,4 @@
-# T155. The arrows drawn as boxes: Hack as the last font of normal text — Open
+# T155. The arrows drawn as boxes: Hack as the last font of normal text — Done
 
 - **Why:** the owner's job test (2026-11-16) found a box in the preview's Zoom button
   "Fit ↔ 100% (Z)". The program builds egui with `default_fonts` but without
@@ -60,3 +60,5 @@
 |---|---|---|
 | 2026-11-16 | Open | Added after the owner's job test (bug 2 of 5). The owner chose Hack as the fallback over changing the texts |
 | 2026-11-16 | Open | Cold read: `ctx.run` does not exist in egui 0.37 (now `run_ui` + `drop_without_applying_deltas`); the `PreviewText` variants are listed by hand; sample `PreviewLine` given; the `default_fonts` reliance noted. The owner's decision is written into ADR 0017 §2.5 |
+| 2026-11-16 | Ready for review | `font_definitions` in `shell.rs` (Hack last in the proportional family), exported from `lib.rs`, set first in `main.rs`; three tests in `shell.rs`; `test-inventory.md` 804 → 807 and 1610 passed. `check.ps1` all OK: 1610 passed, 0 failed, 63 ignored |
+| 2026-11-16 | Done | Reviewed: as written, no findings. Owner's hand check approved on 2026-11-16 (the arrows show in the Zoom section, the menu, the sort button and the import preview). Leftovers: none (the reviewer's scan found no other missing characters in `pw-loupe`'s texts). Committed |

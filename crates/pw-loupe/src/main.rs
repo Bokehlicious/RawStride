@@ -48,10 +48,10 @@ use pw_loupe::{
     COLLAPSED_WIDTH, ColumnState, Command, MENUS, MenuEntry, MenuItem, RatingKey, STATUS_TEXT_SIZE,
     SettingsText, ShellAction, ShellSettings, ShellText, StartWindow, THEMES, Theme, Where,
     WindowRect, apply_text_sizes, clamp_column_width, column_width_range, command_text,
-    exiftool_message, fallback_text, image_area, key_text, menu_text, no_images_text,
-    open_error_text, palette, path_resolution_error_text, prune_error_text, recovery_text,
-    rect_on_a_screen, settings_save_error_text, settings_text, shell_key_action, shell_text,
-    start_window, status_line_text, submenu_text, theme_text, visuals,
+    exiftool_message, fallback_text, font_definitions, image_area, key_text, menu_text,
+    no_images_text, open_error_text, palette, path_resolution_error_text, prune_error_text,
+    recovery_text, rect_on_a_screen, settings_save_error_text, settings_text, shell_key_action,
+    shell_text, start_window, status_line_text, submenu_text, theme_text, visuals,
 };
 use pw_loupe::{
     CaptureReader, SORT_KEYS, SortFollow, SortKey, SortOrder, modified_time, read_order,
@@ -7065,7 +7065,9 @@ fn run(options: Options) -> Result<(), String> {
         WINDOW_TITLE,
         native,
         Box::new(move |cc| {
-            // Both themes and the text sizes before the first frame (ADR 0017 §2.5, T109).
+            // The fonts (Hack last for the arrows, T155), both themes and the text sizes before
+            // the first frame (ADR 0017 §2.5, T109).
+            cc.egui_ctx.set_fonts(font_definitions());
             cc.egui_ctx
                 .set_visuals_of(egui::Theme::Dark, visuals(Theme::Dark));
             cc.egui_ctx

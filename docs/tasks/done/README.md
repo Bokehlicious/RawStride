@@ -161,3 +161,4 @@ was when the task was done, so "this file", "below" and "the Log" in T1–T115 m
 | [T152](T152-second-view-core.md) | ADR 0017 U6: the second view core, and the image area drawn by one function |
 | [T153](T153-compare-in-the-preview.md) | ADR 0017 U6: two images in the preview |
 | [T154](T154-locked-zoom-in-compare.md) | ADR 0017 U6: locked zoom and position in the compare |
+| [T155](T155-arrows-in-the-proportional-font.md) | The arrows drawn as boxes: Hack as the last font of normal text |

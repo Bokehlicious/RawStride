@@ -257,6 +257,22 @@ pub fn apply_text_sizes(style: &mut egui::Style) {
     }
 }
 
+/// egui's default fonts with `Hack` added as the last font of normal (proportional) text.
+///
+/// The default proportional fonts (`Ubuntu-Light` first, then `egui-icons`) have no arrows
+/// `↔ → ↑ ↓`, which egui then draws as boxes (the Zoom button "Fit ↔ 100% (Z)", the menu,
+/// the sort direction button and the import preview). `Hack`, which egui bundles for monospace
+/// text, has them; as the last font it is used only for characters the others lack (owner,
+/// 2026-11-16, T155). The fonts come from egui's `default_fonts` feature, which `pw-loupe` gets
+/// through `eframe`. If the proportional family is missing, the defaults are returned unchanged.
+pub fn font_definitions() -> egui::FontDefinitions {
+    let mut fonts = egui::FontDefinitions::default();
+    if let Some(list) = fonts.families.get_mut(&egui::FontFamily::Proportional) {
+        list.push("Hack".to_owned());
+    }
+    fonts
+}
+
 /// The egui visuals of `theme`, built from its [`palette`].
 pub fn visuals(theme: Theme) -> egui::Visuals {
     let p = palette(theme);
@@ -1076,6 +1092,97 @@ mod tests {
                     MenuEntry::Separator,
                 ][..]
             )
+        );
+    }
+
+    #[test]
+    fn font_definitions_append_hack_last_to_proportional() {
+        use egui::FontFamily;
+        let defaults = egui::FontDefinitions::default();
+        let fonts = font_definitions();
+        let default_proportional = defaults.families.get(&FontFamily::Proportional);
+        let proportional = fonts.families.get(&FontFamily::Proportional);
+        let mut expected = default_proportional.cloned().unwrap_or_default();
+        assert!(!expected.is_empty(), "egui's default fonts are present");
+        expected.push("Hack".to_owned());
+        assert_eq!(proportional, Some(&expected));
+        assert_eq!(
+            fonts.families.get(&FontFamily::Monospace),
+            defaults.families.get(&FontFamily::Monospace)
+        );
+    }
+
+    /// The user-visible texts with arrows (T155), each from its own text function.
+    fn texts_with_arrows() -> Vec<String> {
+        use crate::import::{ItemAction, PreviewLine};
+        use crate::import_text::preview_line;
+        use crate::preview_text::{PreviewText, preview_text};
+        use crate::shell_text::{command_text, sort_direction_text};
+        use crate::tasks_text::import_route_text;
+        let mut texts: Vec<String> = [
+            PreviewText::ZoomSection,
+            PreviewText::Fit,
+            PreviewText::ToggleZoom,
+            PreviewText::ZoomIn,
+            PreviewText::ZoomOut,
+            PreviewText::ZoomAtPointer,
+            PreviewText::OnlyMarked,
+            PreviewText::OnlyMarkedHover,
+            PreviewText::CollapseColumn,
+            PreviewText::ExpandColumn,
+        ]
+        .into_iter()
+        .map(|text| preview_text(text).to_owned())
+        .collect();
+        texts.extend(
+            menu_items()
+                .into_iter()
+                .map(|item| command_text(item.command)),
+        );
+        texts.push(sort_direction_text(true).to_owned());
+        texts.push(sort_direction_text(false).to_owned());
+        for action in [
+            ItemAction::Copy,
+            ItemAction::Renamed,
+            ItemAction::Present,
+            ItemAction::BackupOnly,
+        ] {
+            texts.push(preview_line(&PreviewLine {
+                source_name: "A.ARW".to_owned(),
+                rel: "folder/A.ARW".to_owned(),
+                action,
+            }));
+        }
+        texts.push(import_route_text("E:\\DCIM", "D:\\Photos"));
+        texts
+    }
+
+    /// The texts of `texts` that miss a glyph in the proportional font at 14 points with `fonts`.
+    fn texts_missing_glyphs(fonts: egui::FontDefinitions, texts: &[String]) -> Vec<String> {
+        let ctx = egui::Context::default();
+        ctx.set_fonts(fonts);
+        ctx.run_ui(Default::default(), |_| {})
+            .drop_without_applying_deltas();
+        let font_id = egui::FontId::proportional(14.0);
+        texts
+            .iter()
+            .filter(|text| !ctx.fonts_mut(|fonts| fonts.has_glyphs(&font_id, text)))
+            .cloned()
+            .collect()
+    }
+
+    #[test]
+    fn font_definitions_have_every_glyph_of_the_texts_with_arrows() {
+        let missing = texts_missing_glyphs(font_definitions(), &texts_with_arrows());
+        assert!(missing.is_empty(), "texts missing a glyph: {missing:?}");
+    }
+
+    #[test]
+    fn default_fonts_miss_the_zoom_arrow() {
+        let missing = texts_missing_glyphs(egui::FontDefinitions::default(), &texts_with_arrows());
+        assert!(
+            missing.iter().any(|text| text == "Fit ↔ 100% (Z)"),
+            "egui's default fonts should miss the arrow of \"Fit ↔ 100% (Z)\"; missing: {missing:?}"
         );
     }
 }

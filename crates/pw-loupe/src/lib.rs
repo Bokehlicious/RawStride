@@ -112,8 +112,8 @@ pub use shell::{
     COLLAPSED_WIDTH, ColumnState, Command, HIDE_KEY, KeyChord, MENUS, Menu, MenuEntry, MenuItem,
     MenuKind, NON_TEXT_CONTRAST, Palette, STATUS_TEXT_SIZE, StartWindow, SubmenuKind,
     TEXT_CONTRAST, THEMES, Theme, Where, apply_text_sizes, clamp_column_width, column_width_range,
-    contrast_ratio, image_area, menu_items, non_text_pairs, palette, rect_on_a_screen,
-    start_window, text_pairs, visuals,
+    contrast_ratio, font_definitions, image_area, menu_items, non_text_pairs, palette,
+    rect_on_a_screen, start_window, text_pairs, visuals,
 };
 pub use shell_text::{
     SettingsText, ShellText, command_text, exiftool_message, fallback_text, key_text, menu_text,
