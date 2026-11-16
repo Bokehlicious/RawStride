@@ -88,7 +88,7 @@ use pw_metadata::{MetadataWorker, Rating, WriteSetup, supports_rating};
 use pw_render::{Textures, view_px};
 use pw_thumbcache::{ThumbWorker, ThumbnailRequest};
 use pw_viewcore::native::NativeBackend;
-use pw_viewcore::{ClippingState, Config, ImageStatistics, Source, Status, ViewCore, Zoom};
+use pw_viewcore::{ClippingState, Config, Frame, ImageStatistics, Source, Status, ViewCore, Zoom};
 
 mod inspector;
 mod inspector_text;
@@ -564,6 +564,13 @@ impl MetadataWindow {
 
 struct Loupe {
     core: ViewCore<NativeBackend>,
+    /// The second view core, for the held image of the compare (ADR 0017 §2.2, U6-Q2, U6-Q3,
+    /// T152), with its own backend, budgets, textures and clipping marks. It holds an empty list
+    /// until the compare opens a file in it. It is emptied with `set_files(vec![], 0)`, never by
+    /// being given another `Textures`.
+    second_core: ViewCore<NativeBackend>,
+    second_textures: Textures,
+    second_clip_overlay: OverlayCache<egui::TextureHandle>,
     metadata_worker: MetadataWorker,
     /// The result of the metadata worker's first ExifTool start has been looked at, and the
     /// message about it shown when needed (ADR 0007 §11, D9, T101): it is shown at most once.
@@ -2102,14 +2109,7 @@ impl Loupe {
 
     /// The anchor of a zoom: the pointer (physical pixels inside the image area) or the centre.
     fn anchor(&self, pointer: Option<egui::Pos2>, rect: egui::Rect, ppp: f32) -> Option<[f64; 2]> {
-        if !self.anchor_at_pointer {
-            return None;
-        }
-        let p = pointer.filter(|p| rect.contains(*p))?;
-        Some([
-            f64::from((p.x - rect.min.x) * ppp),
-            f64::from((p.y - rect.min.y) * ppp),
-        ])
+        zoom_anchor(self.anchor_at_pointer, pointer, rect, ppp)
     }
 
     fn act(&mut self, action: Action, anchor: Option<[f64; 2]>) {
@@ -4474,35 +4474,40 @@ impl Loupe {
             }
             // No clipping marks in the contact sheet: their texture is released (T149).
             self.clip_overlay.release();
+            self.second_clip_overlay.release();
             self.draw_grid(ui, full, rect, scroll_to);
             return;
         }
-        let response = ui.interact(
+        // The background first, then the image area (T152): the function draws one view core's
+        // image into its rectangle; what belongs to the current image only is kept here.
+        ui.painter().rect_filled(full, 0.0, BACKGROUND);
+        // The tab's current image comes from the tab, not from `frame.pos`: every step goes through
+        // the tab and the core follows it (ADR 0014 §4.4). The status line counts the whole folder.
+        let total = self.tabs.active().map_or(0, |tab| tab.files.len());
+        let frame = draw_image_area(
+            ui,
+            &self.core,
+            &mut self.textures,
+            &mut self.clip_overlay,
             rect,
             ui.scope_id().with("image"),
-            egui::Sense::click_and_drag(),
+            &ImageAreaShown {
+                anchor_at_pointer: self.anchor_at_pointer,
+                choice: ClipChoice {
+                    highlights: self.settings.shell.clip_highlights,
+                    shadows: self.settings.shell.clip_shadows,
+                },
+                metadata: &self.metadata,
+                indicator_after: self.indicator_after,
+                message: self.message.as_deref(),
+                total,
+            },
         );
-        let pointer = response.hover_pos();
-        let anchor = self.anchor(pointer, rect, ppp);
-        // mouse: double-click = Z, drag = pan, wheel = zoom
-        if response.double_clicked() {
-            self.core.toggle_zoom(anchor);
-        } else if response.dragged() {
-            let d = response.drag_delta();
-            if d != egui::Vec2::ZERO {
-                self.core.pan([f64::from(d.x * ppp), f64::from(d.y * ppp)]);
-            }
-        }
-        if response.hovered() {
-            let dy = ctx.input(|i| i.smooth_scroll_delta.y);
-            if dy != 0.0 {
-                self.core.zoom_by(wheel_factor(dy), anchor);
-            }
-        }
-        // views to textures, then the frame
+        // The second view core holds nothing yet (T152): its textures are synced as the first's,
+        // and it has no clipping marks to keep.
         let max_side = ctx.input(|i| i.max_texture_side);
-        self.textures.sync(&ctx, &self.core, max_side);
-        let frame = self.core.frame(view_px(rect, ppp));
+        self.second_textures.sync(&ctx, &self.second_core, max_side);
+        self.second_clip_overlay.release();
         self.last_frame_status = frame.status.clone();
         self.last_zoom = Some((frame.zoom, frame.scale));
         // The clipping state, for the preview column's Clipping section (T148).
@@ -4522,83 +4527,6 @@ impl Loupe {
         if let Some((path, Some(statistics))) = &self.last_statistics {
             self.histograms
                 .preview_result(path, frame.source, statistics);
-        }
-        // The tab's current image comes from the tab, not from `frame.pos`: every step goes through
-        // the tab and the core follows it (ADR 0014 §4.4). The status line counts the whole folder.
-        let total = self.tabs.active().map_or(0, |tab| tab.files.len());
-        let painter = ui.painter().clone();
-        painter.rect_filled(full, 0.0, BACKGROUND);
-        let image_shown = self.textures.paint(&painter, rect, ppp, &frame);
-        // The clipping marks over the image (ADR 0017 §2.6, U7b, T149), from this frame's map and
-        // `Draw` only, so they are never drawn on another image: the image's quad once more, with
-        // the map's texture coordinates and nearest-neighbour sampling (sharp blocks, U7b-Q7).
-        let choice = ClipChoice {
-            highlights: self.settings.shell.clip_highlights,
-            shadows: self.settings.shell.clip_shadows,
-        };
-        match (&frame.clipping, frame.draw) {
-            (ClippingState::Ready { map, uv }, Some(draw)) if image_shown && choice.any() => {
-                let marks = self.clip_overlay.texture(map, choice, max_side, |overlay| {
-                    ctx.load_texture(
-                        "clipping-marks",
-                        egui::ColorImage::from_rgba_unmultiplied(overlay.size, &overlay.rgba),
-                        egui::TextureOptions::NEAREST,
-                    )
-                });
-                if let Some((texture, uv_scale)) = marks {
-                    let draw = pw_viewcore::Draw {
-                        uv: overlay_uv(*uv, uv_scale),
-                        ..draw
-                    };
-                    painter.add(egui::Shape::mesh(pw_render::mesh(
-                        &draw,
-                        rect.min,
-                        ppp,
-                        texture.id(),
-                    )));
-                }
-            }
-            _ => self.clip_overlay.release(),
-        }
-        // The rating badge is always shown (T110).
-        if let Some(rating) = frame
-            .path
-            .as_deref()
-            .and_then(|path| self.metadata.shown_rating(path))
-            && (rating.stars.is_some() || rating.label.is_some())
-        {
-            paint_rating_badge(&painter, rect, rating);
-        }
-        let centre_text = |text: &str| {
-            painter.text(
-                rect.center(),
-                egui::Align2::CENTER_CENTER,
-                text,
-                egui::FontId::proportional(18.0),
-                image_area::TEXT,
-            );
-        };
-        match &frame.status {
-            Status::Error(e) => centre_text(&error_text(e, frame.mode)),
-            Status::Preparing {
-                indicator: true, ..
-            } => centre_text(&indicator_text(&frame)),
-            Status::Preparing {
-                since,
-                indicator: false,
-            } => {
-                // wake up when the indicator is due (V2)
-                let due = self.indicator_after.saturating_sub(since.elapsed());
-                ctx.request_repaint_after(due.max(Duration::from_millis(20)));
-            }
-            Status::Empty => {
-                let text = self
-                    .message
-                    .clone()
-                    .unwrap_or_else(|| status_line(&frame, true, total));
-                centre_text(&text);
-            }
-            Status::Ready => {}
         }
         let metadata_path = frame.path.as_deref();
         let metadata_notice = self.metadata.notice(metadata_path);
@@ -4629,6 +4557,149 @@ impl Loupe {
             mode: Some(mode_label(frame.mode)),
         };
     }
+}
+
+/// What the image area shows besides the view core's image (T152): the caller's state the
+/// drawing reads.
+struct ImageAreaShown<'a> {
+    /// Zooming goes around the pointer (otherwise around the view's centre).
+    anchor_at_pointer: bool,
+    /// The clipping overlays that are on.
+    choice: ClipChoice,
+    /// The shown ratings, for the rating badge.
+    metadata: &'a MetadataCache,
+    /// The loading indicator appears after this long (V2).
+    indicator_after: Duration,
+    /// The message shown in place of the status line when the area has no image.
+    message: Option<&'a str>,
+    /// The number of files the status line of an empty area counts.
+    total: usize,
+}
+
+/// The pointer's place in the image area in view pixels, which a zoom goes around; `None` (the
+/// view's centre) when `anchor_at_pointer` is off or the pointer is outside `rect`.
+fn zoom_anchor(
+    anchor_at_pointer: bool,
+    pointer: Option<egui::Pos2>,
+    rect: egui::Rect,
+    ppp: f32,
+) -> Option<[f64; 2]> {
+    if !anchor_at_pointer {
+        return None;
+    }
+    let p = pointer.filter(|p| rect.contains(*p))?;
+    Some([
+        f64::from((p.x - rect.min.x) * ppp),
+        f64::from((p.y - rect.min.y) * ppp),
+    ])
+}
+
+/// Draws one view core's image area into `rect` (ADR 0017 §2.2, U6, T152): the mouse
+/// (double-click = Z, drag = pan, wheel = zoom) under the interaction `id`, the sync of the
+/// core's `textures`, the frame asked of the core, the image, the clipping marks from
+/// `clip_overlay`, the rating badge, and the error, indicator and empty-area texts. The
+/// background is the caller's. Returns the core's frame.
+fn draw_image_area(
+    ui: &egui::Ui,
+    core: &ViewCore<NativeBackend>,
+    textures: &mut Textures,
+    clip_overlay: &mut OverlayCache<egui::TextureHandle>,
+    rect: egui::Rect,
+    id: egui::Id,
+    shown: &ImageAreaShown<'_>,
+) -> Frame {
+    let ctx = ui.ctx().clone();
+    let ppp = ctx.pixels_per_point();
+    let response = ui.interact(rect, id, egui::Sense::click_and_drag());
+    let pointer = response.hover_pos();
+    let anchor = zoom_anchor(shown.anchor_at_pointer, pointer, rect, ppp);
+    // mouse: double-click = Z, drag = pan, wheel = zoom
+    if response.double_clicked() {
+        core.toggle_zoom(anchor);
+    } else if response.dragged() {
+        let d = response.drag_delta();
+        if d != egui::Vec2::ZERO {
+            core.pan([f64::from(d.x * ppp), f64::from(d.y * ppp)]);
+        }
+    }
+    if response.hovered() {
+        let dy = ctx.input(|i| i.smooth_scroll_delta.y);
+        if dy != 0.0 {
+            core.zoom_by(wheel_factor(dy), anchor);
+        }
+    }
+    // views to textures, then the frame
+    let max_side = ctx.input(|i| i.max_texture_side);
+    textures.sync(&ctx, core, max_side);
+    let frame = core.frame(view_px(rect, ppp));
+    let painter = ui.painter().clone();
+    let image_shown = textures.paint(&painter, rect, ppp, &frame);
+    // The clipping marks over the image (ADR 0017 §2.6, U7b, T149), from this frame's map and
+    // `Draw` only, so they are never drawn on another image: the image's quad once more, with
+    // the map's texture coordinates and nearest-neighbour sampling (sharp blocks, U7b-Q7).
+    let choice = shown.choice;
+    match (&frame.clipping, frame.draw) {
+        (ClippingState::Ready { map, uv }, Some(draw)) if image_shown && choice.any() => {
+            let marks = clip_overlay.texture(map, choice, max_side, |overlay| {
+                ctx.load_texture(
+                    "clipping-marks",
+                    egui::ColorImage::from_rgba_unmultiplied(overlay.size, &overlay.rgba),
+                    egui::TextureOptions::NEAREST,
+                )
+            });
+            if let Some((texture, uv_scale)) = marks {
+                let draw = pw_viewcore::Draw {
+                    uv: overlay_uv(*uv, uv_scale),
+                    ..draw
+                };
+                painter.add(egui::Shape::mesh(pw_render::mesh(
+                    &draw,
+                    rect.min,
+                    ppp,
+                    texture.id(),
+                )));
+            }
+        }
+        _ => clip_overlay.release(),
+    }
+    // The rating badge is always shown (T110).
+    if let Some(rating) = frame
+        .path
+        .as_deref()
+        .and_then(|path| shown.metadata.shown_rating(path))
+        && (rating.stars.is_some() || rating.label.is_some())
+    {
+        paint_rating_badge(&painter, rect, rating);
+    }
+    let centre_text = |text: &str| {
+        painter.text(
+            rect.center(),
+            egui::Align2::CENTER_CENTER,
+            text,
+            egui::FontId::proportional(18.0),
+            image_area::TEXT,
+        );
+    };
+    match &frame.status {
+        Status::Error(e) => centre_text(&error_text(e, frame.mode)),
+        Status::Preparing {
+            indicator: true, ..
+        } => centre_text(&indicator_text(&frame)),
+        Status::Preparing {
+            since,
+            indicator: false,
+        } => {
+            // wake up when the indicator is due (V2)
+            let due = shown.indicator_after.saturating_sub(since.elapsed());
+            ctx.request_repaint_after(due.max(Duration::from_millis(20)));
+        }
+        Status::Empty => match shown.message {
+            Some(message) => centre_text(message),
+            None => centre_text(&status_line(&frame, true, shown.total)),
+        },
+        Status::Ready => {}
+    }
+    frame
 }
 
 /// The range from the smallest to the largest file index (+1), for the thumbnail worker's
@@ -6482,27 +6553,46 @@ fn show_warning(title: &'static str, text: String) {
     }
 }
 
-/// The image check of the safe write (I9d): it closes the view core's RAW sessions of the file
-/// first (T89) and waits for the inspector's histogram read of it (U7c-Q4, T144), each at most
-/// [`RELEASE_TIMEOUT`]. With `note_stamp` (the metadata worker's writes, whose answers reach the
-/// inspector) the file's stamp just before the write is noted as well (U7c-Q7, T145); the
-/// import's writes make new files and note nothing.
+/// The image check of the safe write (I9d): it closes both view cores' RAW sessions of the file
+/// first, the second core's before the first's (T89, T152), and waits for the inspector's
+/// histogram read of it (U7c-Q4, T144), each at most [`RELEASE_TIMEOUT`]. With `note_stamp`
+/// (the metadata worker's writes, whose answers reach the inspector) the file's stamp just before
+/// the write is noted as well (U7c-Q7, T145); the import's writes make new files and note nothing.
 fn image_check(
     core: &ViewCore<NativeBackend>,
+    second_core: &ViewCore<NativeBackend>,
     histogram_reads: &HistogramReads,
     note_stamp: bool,
 ) -> RawImageCheck {
     let releaser = core.releaser();
+    let second_releaser = second_core.releaser();
     release_before_write(
-        move |path| {
-            let _ = releaser.release(path, RELEASE_TIMEOUT);
-        },
+        release_in_both(
+            move |path| {
+                let _ = second_releaser.release(path, RELEASE_TIMEOUT);
+            },
+            move |path| {
+                let _ = releaser.release(path, RELEASE_TIMEOUT);
+            },
+        ),
         histogram_reads.clone(),
         note_stamp,
     )
 }
 
-/// The image check whose release first calls `release_core` (the view core's sessions) and then
+/// One `release_core` for [`release_before_write`] out of the two view cores' releases (T152):
+/// the file is released in the second core first, then in the first.
+fn release_in_both(
+    release_second: impl Fn(&Path) + Send + Sync + 'static,
+    release_first: impl Fn(&Path) + Send + Sync + 'static,
+) -> impl Fn(&Path) + Send + Sync + 'static {
+    move |path| {
+        release_second(path);
+        release_first(path);
+    }
+}
+
+/// The image check whose release first calls `release_core` (the view cores' sessions) and then
 /// waits until the histogram reader no longer holds the file (U7c-Q4, T144), so a metadata write
 /// never meets a file the reader has open. The read's result is still used: a metadata write
 /// does not change the pixels. With `note_stamp`, the file's stamp just before the write is
@@ -6544,17 +6634,30 @@ fn run(options: Options) -> Result<(), String> {
     let backend =
         NativeBackend::with_tiff_limit(usize::try_from(config.core_budget).unwrap_or(usize::MAX))
             .with_monitor_profile(monitor_profile.profile.clone());
+    // The second view core, for the held image of the compare (U6-Q2, U6-Q3, T152): a quarter of
+    // the budgets, its own backend (the same monitor profile, the TIFF limit of its own session
+    // budget). Started before the workers, whose image check releases a file in both cores.
+    let second_config = Config {
+        core_budget: config.core_budget / 4,
+        texture_budget: config.texture_budget / 4,
+        ..config.clone()
+    };
+    let second_backend = NativeBackend::with_tiff_limit(
+        usize::try_from(second_config.core_budget).unwrap_or(usize::MAX),
+    )
+    .with_monitor_profile(monitor_profile.profile.clone());
     let core = ViewCore::start(backend.clone(), config)?;
+    let second_core = ViewCore::start(second_backend, second_config)?;
     let histogram_reads = HistogramReads::default();
     let setup = journal.clone().map(|journal| WriteSetup {
         journal,
-        checks: Box::new(image_check(&core, &histogram_reads, true)),
+        checks: Box::new(image_check(&core, &second_core, &histogram_reads, true)),
         options: settings.edit_options(),
     });
     let metadata_worker = MetadataWorker::start(setup).map_err(|e| e.to_string())?;
     let import_worker = ImportWorker::start(
         journal,
-        Box::new(image_check(&core, &histogram_reads, false)),
+        Box::new(image_check(&core, &second_core, &histogram_reads, false)),
     )
     .map_err(|e| e.to_string())?;
     let thumb_worker = ThumbWorker::start_with_monitor_profile(monitor_profile.profile.clone())
@@ -6591,9 +6694,16 @@ fn run(options: Options) -> Result<(), String> {
             cc.egui_ctx.all_styles_mut(apply_text_sizes);
             cc.egui_ctx.set_theme(egui_theme(settings.shell.theme));
             let ctx = cc.egui_ctx.clone();
-            core.set_wake(move || ctx.request_repaint());
+            core.set_wake({
+                let ctx = ctx.clone();
+                move || ctx.request_repaint()
+            });
+            second_core.set_wake(move || ctx.request_repaint());
             let mut loupe = Loupe {
                 core,
+                second_core,
+                second_textures: Textures::new(),
+                second_clip_overlay: OverlayCache::default(),
                 metadata_worker,
                 exiftool_checked: false,
                 settings,
@@ -6700,7 +6810,7 @@ mod tests {
     // --- A metadata write waits for the inspector's histogram read (U7c-Q4, T144) ---
 
     mod write_waits_for_the_histogram_read {
-        use super::super::release_before_write;
+        use super::super::{release_before_write, release_in_both};
         use pw_loupe::{HistogramReader, HistogramReads, HistogramSubmit, file_stamp};
         use pw_metadata::safe_write::ImageCheck;
         use pw_viewcore::{
@@ -6860,6 +6970,63 @@ mod tests {
             let t0 = Instant::now();
             other.release(Path::new("elsewhere.DNG"));
             assert!(t0.elapsed() < Duration::from_secs(1));
+        }
+
+        #[test]
+        fn a_write_releases_the_file_in_both_view_cores_before_it_waits_for_the_read() {
+            let log: Log = Arc::default();
+            let backend = Recording {
+                log: log.clone(),
+                gate: Arc::default(),
+            };
+            let reads = HistogramReads::default();
+            let reader_reads = reads.clone();
+            let mut reader = HistogramReader::start(backend.clone(), reader_reads);
+            let path = std::env::temp_dir().join("pw-loupe-write-releases-both.DNG");
+            assert!(reader.read_histogram(path.clone(), Source::Raw).is_ok());
+            backend.wait_until_reading();
+
+            let second_log = log.clone();
+            let first_log = log.clone();
+            let check = release_before_write(
+                release_in_both(
+                    move |_: &Path| note(&second_log, "second view core released"),
+                    move |_: &Path| note(&first_log, "view core released"),
+                ),
+                reads,
+                true,
+            );
+            let (done, finished) = mpsc::channel();
+            let write_log = log.clone();
+            let write_path: PathBuf = path.clone();
+            let writer = std::thread::spawn(move || {
+                check.release(&write_path);
+                note(&write_log, "written");
+                let _ = done.send(());
+            });
+            // both cores have let go, the second first, while the write still waits for the read
+            assert_eq!(
+                finished.recv_timeout(Duration::from_millis(300)),
+                Err(mpsc::RecvTimeoutError::Timeout)
+            );
+            assert_eq!(
+                steps(&log),
+                ["opened", "second view core released", "view core released"]
+            );
+            backend.open_gate();
+            assert_eq!(finished.recv_timeout(Duration::from_secs(10)), Ok(()));
+            assert!(writer.join().is_ok());
+            assert_eq!(
+                steps(&log),
+                [
+                    "opened",
+                    "second view core released",
+                    "view core released",
+                    "statistics",
+                    "session dropped",
+                    "written"
+                ]
+            );
         }
 
         #[test]

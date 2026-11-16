@@ -1,7 +1,9 @@
-# T153. ADR 0017 U6, fourth part: two images in the preview — Blocked
+# T153. ADR 0017 U6, fourth part: two images in the preview — Open
 
-- **Blocked: waits for T152** (and T150, T151; the owner's answers to U6-Q1–U6-Q12 are in
-  `docs/tasks/done/T150-locked-view-in-the-view-core.md` and ADR 0017 §6.1). Chain: T150 → T151 →
+- **Can start now.** T152 (the second view core `second_core` with `second_textures` and
+  `second_clip_overlay`, the image check releasing both, `draw_image_area`), T151 and T150 are
+  Done. The owner's answers to U6-Q1–U6-Q12 are in
+  `docs/tasks/done/T150-locked-view-in-the-view-core.md` and ADR 0017 §6.1. Chain: T150 → T151 →
   T152 → T153 → T154.
 - **Why:** ADR 0017 §2.2 and step U6: the preview shows the held image beside (or above) the
   current one, so two images can be judged together. T152 started the second view core and made
@@ -56,6 +58,11 @@
      does). It also closes by itself, checked **every frame** (not at each entry point): when the
      preview is no longer shown, when the active tab's index or folder differs from those it was
      opened in, or when T151's "still valid" is false for the tab's files.
+     **The second core's textures (from T152's review):** `second_textures.sync` runs today only
+     in the preview's frame, not on the contact sheet's path (which returns early, as for the first
+     core). When the compare closes because the preview closed, the emptied second core's dropped
+     textures must still be taken back (`take_dropped`) and its views drained: sync
+     `second_textures` on the contact sheet's path too (with an empty list it does nothing).
   7. **The filmstrip** (U6-Q10): the held image's cell, when it is in the strip, gets a second,
      dashed frame beside the current and marked frames.
   8. **Texts** (U6-Q12, rule 13): "Compare", "Hold Current Image", "Swap Images", "Above and
@@ -86,3 +93,4 @@
 | Date | Status | Note |
 |---|---|---|
 | 2026-11-16 | Blocked | Added with T150, T151, T154 (the chain of U6) as the first T152; after the cold read split, the second core and the image area went to T152 and this became T153 (menu position, Escape before `loupe_key_action`, closing checked every frame, the held side's starting view, `command_of_key` and the menu test named); waits for T152 |
+| 2026-11-16 | Open | T152 Done; point 6 got the second core's textures on the contact sheet's path (from T152's review) |

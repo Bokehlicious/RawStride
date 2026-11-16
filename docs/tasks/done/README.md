@@ -158,3 +158,4 @@ was when the task was done, so "this file", "below" and "the Log" in T1–T115 m
 | [T149](T149-clipping-marks-drawn-on-the-image.md) | ADR 0017 U7b: the clipping marks drawn on the image |
 | [T150](T150-locked-view-in-the-view-core.md) | ADR 0017 U6: a view set from outside in the view core |
 | [T151](T151-compare-model.md) | ADR 0017 U6: the compare model, its settings and texts |
+| [T152](T152-second-view-core.md) | ADR 0017 U6: the second view core, and the image area drawn by one function |
