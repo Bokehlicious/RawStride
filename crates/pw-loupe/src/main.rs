@@ -19,6 +19,7 @@ use inspector_text::{InspectorText, exif_label, inspector_text};
 use metadata::{EditorEvent, InspectorState, MetadataCache};
 use pw_imagecheck::RawImageCheck;
 use pw_loupe::SavedLibrary;
+use pw_loupe::clipping::{ClipChoice, OverlayCache, overlay_uv};
 use pw_loupe::library::{
     FolderList, Library, TreeRowKind, folder_key, read_drives, suppress_no_disk_dialogs,
 };
@@ -656,6 +657,10 @@ struct Loupe {
     /// The clipping state of the last rendered preview frame, for the preview column's Clipping
     /// section (ADR 0017 §2.6, U7b-Q9, T148); not wanted before the first frame.
     last_clipping: ClippingState,
+    /// The texture of the clipping marks drawn over the preview's image (ADR 0017 §2.6, U7b,
+    /// T149): one at a time, made again only for another map or overlay choice and released when
+    /// no overlay is shown. Its memory is outside the view's texture budget (U7b-Q8).
+    clip_overlay: OverlayCache<egui::TextureHandle>,
     /// The display mode (RAW or JPEG) of the last rendered preview frame, which the inspector's
     /// Histogram section follows (U7c-Q1, T144); RAW before the first frame, as the view core.
     display_mode: Source,
@@ -4467,6 +4472,8 @@ impl Loupe {
             } else {
                 self.wheel_notches = 0.0;
             }
+            // No clipping marks in the contact sheet: their texture is released (T149).
+            self.clip_overlay.release();
             self.draw_grid(ui, full, rect, scroll_to);
             return;
         }
@@ -4521,7 +4528,38 @@ impl Loupe {
         let total = self.tabs.active().map_or(0, |tab| tab.files.len());
         let painter = ui.painter().clone();
         painter.rect_filled(full, 0.0, BACKGROUND);
-        self.textures.paint(&painter, rect, ppp, &frame);
+        let image_shown = self.textures.paint(&painter, rect, ppp, &frame);
+        // The clipping marks over the image (ADR 0017 §2.6, U7b, T149), from this frame's map and
+        // `Draw` only, so they are never drawn on another image: the image's quad once more, with
+        // the map's texture coordinates and nearest-neighbour sampling (sharp blocks, U7b-Q7).
+        let choice = ClipChoice {
+            highlights: self.settings.shell.clip_highlights,
+            shadows: self.settings.shell.clip_shadows,
+        };
+        match (&frame.clipping, frame.draw) {
+            (ClippingState::Ready { map, uv }, Some(draw)) if image_shown && choice.any() => {
+                let marks = self.clip_overlay.texture(map, choice, max_side, |overlay| {
+                    ctx.load_texture(
+                        "clipping-marks",
+                        egui::ColorImage::from_rgba_unmultiplied(overlay.size, &overlay.rgba),
+                        egui::TextureOptions::NEAREST,
+                    )
+                });
+                if let Some((texture, uv_scale)) = marks {
+                    let draw = pw_viewcore::Draw {
+                        uv: overlay_uv(*uv, uv_scale),
+                        ..draw
+                    };
+                    painter.add(egui::Shape::mesh(pw_render::mesh(
+                        &draw,
+                        rect.min,
+                        ppp,
+                        texture.id(),
+                    )));
+                }
+            }
+            _ => self.clip_overlay.release(),
+        }
         // The rating badge is always shown (T110).
         if let Some(rating) = frame
             .path
@@ -6608,6 +6646,7 @@ fn run(options: Options) -> Result<(), String> {
                 last_zoom: None,
                 last_statistics: None,
                 last_clipping: ClippingState::NotWanted,
+                clip_overlay: OverlayCache::default(),
                 display_mode: Source::Raw,
                 window_before: None,
                 window_settling: None,

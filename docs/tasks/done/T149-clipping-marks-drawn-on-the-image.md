@@ -1,4 +1,4 @@
-# T149. ADR 0017 U7b, last part: the clipping marks drawn on the image — Open
+# T149. ADR 0017 U7b, last part: the clipping marks drawn on the image — Done
 
 - **Can start now.** T148 (the keys, settings and section: `clip_highlights`, `clip_shadows` in
   the shell settings) and T147, T146 are Done. The owner's answers to U7b-Q1–U7b-Q10 are in `docs/tasks/done/T146-clipping-map-of-raw-data.md`.
@@ -56,3 +56,5 @@
 | 2026-11-15 | Blocked | Split from T148 after the cold read (the drawing part); waits for T148 |
 | 2026-11-15 | Blocked | From T147's review: a map with the wrong data length is not drawn (point 2) |
 | 2026-11-16 | Open | T148 is Done; point 4: the marks only from this frame's state (from T148's review) |
+| 2026-11-16 | Ready for review | `clipping.rs` (new: the overlay's pixels, the joining with its coordinate scaling, the one kept texture; 10 tests), `lib.rs` (`pub mod clipping;`), `main.rs` (the kept texture in the app; the marks drawn in `draw` right after the image, from this frame's `Frame::clipping` and `Draw`; released in the contact sheet and whenever no marks are drawn), `docs/test-inventory.md`. `check.ps1` all OK: 1560 passed, 0 failed, 63 ignored; no clippy warnings. Notes: a joined cell that holds both a clipped and a deep-shadow cell is drawn red when both overlays are on; the texture is also made again when `max_texture_side` changes; with nearest-neighbour sampling a single marked cell can fall between screen pixels when the image is reduced (at fit). Not checked by hand in the program |
+| 2026-11-16 | Done | Reviewed: `check.ps1` all OK (1560 passed, 0 failed, 63 ignored), no clippy warnings; one crate, four files, so no extra review (README). Approved by the owner. Accepted as the agent noted: a joined cell with both marks is red when both overlays are on; a single marked cell can fall between screen pixels at fit. To watch in the hand check: the overlay's pixels are built on the UI thread for each newly shown image with an overlay on (the texture is released while the frame says `Reading`), which for a 61 MP file may be felt as a short stall when stepping; if the owner sees it, a new task. The owner's hand check of U7b follows this commit (`plans/adr-0017-interface-steps.md`) |

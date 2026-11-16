@@ -5,6 +5,7 @@
 //! `pw-viewcore` and `pw-render`.
 
 mod browse;
+pub mod clipping;
 mod editor;
 mod field_values;
 mod filter;
