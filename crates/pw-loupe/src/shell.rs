@@ -460,6 +460,9 @@ pub enum Command {
     /// The compare's two images above and below each other ↔ side by side (View ▸ Above and
     /// Below, V; U6-Q7, T153).
     AboveBelow,
+    /// The held image of the compare at the current image's zoom and position ↔ free (View ▸
+    /// Lock Zoom and Position, L; U6-Q8, T154).
+    LockZoom,
     /// The inspector (the right column) open ↔ collapsed, as `I` (ADR 0017 §2.4, U2-Q3, T110).
     ToggleInfo,
     NextTab,
@@ -500,7 +503,8 @@ impl Command {
             | Self::Compare
             | Self::HoldImage
             | Self::SwapImages
-            | Self::AboveBelow => Where::Loupe,
+            | Self::AboveBelow
+            | Self::LockZoom => Where::Loupe,
             _ => Where::Both,
         }
     }
@@ -676,6 +680,7 @@ pub const MENUS: &[Menu] = &[
             item(Command::HoldImage, plain(Key::K)),
             item(Command::SwapImages, shift(Key::K)),
             item(Command::AboveBelow, plain(Key::V)),
+            item(Command::LockZoom, plain(Key::L)),
             MenuEntry::Separator,
             MenuEntry::Filter,
             MenuEntry::Sort,
@@ -1014,16 +1019,18 @@ mod tests {
         }
         assert_eq!(Command::ClipHighlights.acts_in(), Where::Loupe);
         assert_eq!(Command::ClipShadows.acts_in(), Where::Loupe);
-        // The compare's keys: C, K, Shift+K and V, and no other item shows C, K or V.
+        // The compare's keys: C, K, Shift+K, V and L, and no other item shows C, K, V or L.
         let c = KeyChord { key: Key::C, ..j };
         let k = KeyChord { key: Key::K, ..j };
         let shift_k = KeyChord { shift: true, ..k };
         let v = KeyChord { key: Key::V, ..j };
+        let l = KeyChord { key: Key::L, ..j };
         let compare_items = [
             (Command::Compare, c),
             (Command::HoldImage, k),
             (Command::SwapImages, shift_k),
             (Command::AboveBelow, v),
+            (Command::LockZoom, l),
         ];
         for (command, chord) in compare_items {
             assert_eq!(key_of(command), Some(chord), "{command:?}");
@@ -1032,7 +1039,7 @@ mod tests {
         for item in &items {
             if item
                 .key
-                .is_some_and(|chord| matches!(chord.key, Key::C | Key::K | Key::V))
+                .is_some_and(|chord| matches!(chord.key, Key::C | Key::K | Key::V | Key::L))
             {
                 assert!(
                     compare_items.iter().any(
@@ -1043,8 +1050,8 @@ mod tests {
                 );
             }
         }
-        // In the View menu, right after the last zoom item; then the compare's four in their
-        // order, before the next separator.
+        // In the View menu, right after the last zoom item; then the compare's five in their
+        // order (Lock Zoom and Position after Above and Below, T154), before the next separator.
         let Some(view) = MENUS.iter().find(|menu| menu.kind == MenuKind::View) else {
             panic!("there is a View menu");
         };
@@ -1056,7 +1063,7 @@ mod tests {
             panic!("the View menu has Zoom at Pointer");
         };
         assert_eq!(
-            view.entries.get(anchor + 1..anchor + 8),
+            view.entries.get(anchor + 1..anchor + 9),
             Some(
                 &[
                     item(Command::ClipHighlights, Some(j)),
@@ -1065,6 +1072,7 @@ mod tests {
                     item(Command::HoldImage, Some(k)),
                     item(Command::SwapImages, Some(shift_k)),
                     item(Command::AboveBelow, Some(v)),
+                    item(Command::LockZoom, Some(l)),
                     MenuEntry::Separator,
                 ][..]
             )

@@ -63,7 +63,7 @@ use pw_loupe::{
     errors_heading_text, import_done_text, import_route_text, importing_text, pending_write_text,
     pending_writes, tasks_text,
 };
-use pw_loupe::{Compare, Layout, compare_side_text, open_indexes, sides};
+use pw_loupe::{Compare, Layout, compare_side_text, follow, open_indexes, sides};
 use pw_loupe::{
     FILMSTRIP_CELL_WIDTH, FILMSTRIP_IMAGE_HEIGHT, FILMSTRIP_LABEL_HEIGHT, FILMSTRIP_MARGIN,
     FILMSTRIP_SPACING, PreviewKey, PreviewText, Restore, ThumbGate, WindowBefore, clamp_offset,
@@ -585,6 +585,13 @@ struct CompareOpen {
     view_pending: bool,
     /// The display mode last given to the second view core (U6-Q9); `None` before the first.
     mode_sent: Option<Source>,
+    /// The zoom and centre last given to the second view core while locked (U6-Q8, T154, T151's
+    /// `follow`); `None` when forgotten: at open, when the held image changes, when the lock is
+    /// turned on, and when the held side's image size first becomes known.
+    view_sent: Option<(Zoom, [f64; 2])>,
+    /// The held side's frame has given its image's size since the held image was last set
+    /// (T154): the view sent before that is sent again once.
+    held_size_known: bool,
 }
 
 struct Loupe {
@@ -3185,6 +3192,8 @@ impl Loupe {
             folder,
             view_pending: true,
             mode_sent: None,
+            view_sent: None,
+            held_size_known: false,
         });
         self.loupe_move(LoupeMove::To(current));
     }
@@ -3249,6 +3258,8 @@ impl Loupe {
         }
         open.compare.hold(&current);
         open.view_pending = true;
+        open.view_sent = None;
+        open.held_size_known = false;
         self.hold_in_second_core(&current);
     }
 
@@ -3274,6 +3285,8 @@ impl Loupe {
             return;
         };
         open.view_pending = true;
+        open.view_sent = None;
+        open.held_size_known = false;
         let held = open.compare.held().to_path_buf();
         self.hold_in_second_core(&held);
         self.loupe_move(LoupeMove::To(to));
@@ -3285,6 +3298,20 @@ impl Loupe {
         if self.compare.is_some() {
             let shell = &mut self.settings.shell;
             shell.compare_above_below = !shell.compare_above_below;
+        }
+    }
+
+    /// `L` and View ▸ Lock Zoom and Position (U6-Q8, T154): the lock on ↔ off, remembered
+    /// (`compare_locked`). Turned on, what was sent to the held side is forgotten, so it takes the
+    /// current side's view at the next frame. Nothing outside the compare.
+    fn toggle_compare_lock(&mut self) {
+        let Some(open) = &mut self.compare else {
+            return;
+        };
+        let shell = &mut self.settings.shell;
+        shell.compare_locked = !shell.compare_locked;
+        if shell.compare_locked {
+            open.view_sent = None;
         }
     }
 
@@ -3800,9 +3827,9 @@ impl Loupe {
             }
             Command::ToggleView => tab.is_some_and(|tab| !tab.visible.is_empty()),
             // Compare opens with two images in the stepped list, and closes an open compare; the
-            // other three act only in the compare (T153).
+            // other four act only in the compare (T153, T154).
             Command::Compare => self.compare.is_some() || self.compare_open_indexes().is_some(),
-            Command::HoldImage | Command::SwapImages | Command::AboveBelow => {
+            Command::HoldImage | Command::SwapImages | Command::AboveBelow | Command::LockZoom => {
                 self.compare.is_some()
             }
             _ => true,
@@ -3817,6 +3844,7 @@ impl Loupe {
             Command::ClipHighlights => Some(shell.clip_highlights),
             Command::ClipShadows => Some(shell.clip_shadows),
             Command::AboveBelow => Some(shell.compare_above_below),
+            Command::LockZoom => Some(shell.compare_locked),
             Command::ToggleInfo => {
                 Some(!shell.columns_hidden && shell.right_column == ColumnState::Open)
             }
@@ -3872,6 +3900,7 @@ impl Loupe {
             Command::HoldImage => self.hold_current_image(),
             Command::SwapImages => self.swap_images(),
             Command::AboveBelow => self.toggle_compare_layout(),
+            Command::LockZoom => self.toggle_compare_lock(),
             Command::ToggleInfo => self.act(Action::ToggleInfo, None),
             Command::ToggleColumns => self.shell_action(ctx, ShellAction::ToggleColumns),
             Command::LeftColumn => self.toggle_column(true),
@@ -4496,7 +4525,8 @@ impl Loupe {
         let rect = full;
         let ppp = ctx.pixels_per_point();
         // The zoom keys act on the current image (U6-Q8): while comparing, around the pointer
-        // only when it is on the current side.
+        // only when it is on the current side. While locked, the held side follows it below
+        // (T154).
         let key_rect = self
             .compare_sides(rect)
             .map_or(rect, |(_, current)| current);
@@ -4557,6 +4587,7 @@ impl Loupe {
                         PreviewKey::HoldImage => self.hold_current_image(),
                         PreviewKey::SwapImages => self.swap_images(),
                         PreviewKey::AboveBelow => self.toggle_compare_layout(),
+                        PreviewKey::LockZoom => self.toggle_compare_lock(),
                         PreviewKey::Nothing => {}
                     }
                     ctx.request_repaint();
@@ -4746,6 +4777,7 @@ impl Loupe {
         let frame = draw_image_area(
             ui,
             &self.core,
+            &self.core,
             &mut self.textures,
             &mut self.clip_overlay,
             current_rect,
@@ -4756,25 +4788,51 @@ impl Loupe {
             (Some((held_rect, _)), Some(open)) => {
                 // The held side starts as the current one is shown: the display mode when the
                 // compare opens and whenever `R` changes it (U6-Q9), the zoom and centre once
-                // when it opens and when the held image changes. After that each side has its
-                // own zoom and position (U6-Q8, free).
+                // when it opens and when the held image changes. Unlocked, each side has its
+                // own zoom and position after that (U6-Q8, free); locked, the held side is
+                // given the current side's zoom and centre whenever they differ from what was
+                // sent last (T151's `follow`, T154).
                 if open.mode_sent != Some(frame.mode) {
                     self.second_core.set_mode(frame.mode);
                     open.mode_sent = Some(frame.mode);
                 }
-                if open.view_pending {
+                let locked = self.settings.shell.compare_locked;
+                if let Some((zoom, centre)) =
+                    follow(locked, (frame.zoom, frame.centre), open.view_sent)
+                {
+                    self.second_core.set_view(zoom, centre);
+                    open.view_sent = Some((zoom, centre));
+                    open.view_pending = false;
+                } else if open.view_pending {
                     self.second_core.set_view(frame.zoom, frame.centre);
                     open.view_pending = false;
                 }
+                // Locked, the mouse on the held side acts on the current side's core, at the same
+                // offset in its half (the halves are equal), and the held side follows (T154).
+                let held_mouse = if locked {
+                    &self.core
+                } else {
+                    &self.second_core
+                };
                 let held_frame = draw_image_area(
                     ui,
                     &self.second_core,
+                    held_mouse,
                     &mut self.second_textures,
                     &mut self.second_clip_overlay,
                     held_rect,
                     ui.scope_id().with("held-image"),
                     &shown,
                 );
+                // The held image's size became known: the view sent before it was clamped without
+                // it (T150), so it is sent again at the next frame (T154).
+                if !open.held_size_known && held_frame.size.is_some() {
+                    open.held_size_known = true;
+                    if locked {
+                        open.view_sent = None;
+                        ui.ctx().request_repaint();
+                    }
+                }
                 // Each side's line at its top (U6-Q10), and the current side's frame.
                 paint_side_text(ui, held_rect, &compare_side_text(&held_frame));
                 paint_side_text(ui, current_rect, &compare_side_text(&frame));
@@ -4880,13 +4938,16 @@ fn zoom_anchor(
 }
 
 /// Draws one view core's image area into `rect` (ADR 0017 §2.2, U6, T152): the mouse
-/// (double-click = Z, drag = pan, wheel = zoom) under the interaction `id`, the sync of the
-/// core's `textures`, the frame asked of the core, the image, the clipping marks from
+/// (double-click = Z, drag = pan, wheel = zoom) under the interaction `id`, acting on
+/// `mouse_core` (the same core, or the current side's while the compare is locked, T154), the
+/// sync of the core's `textures`, the frame asked of the core, the image, the clipping marks from
 /// `clip_overlay`, the rating badge, and the error, indicator and empty-area texts. The
 /// background is the caller's. Returns the core's frame.
+#[allow(clippy::too_many_arguments)] // one core's area, the core its mouse acts on, its state
 fn draw_image_area(
     ui: &egui::Ui,
     core: &ViewCore<NativeBackend>,
+    mouse_core: &ViewCore<NativeBackend>,
     textures: &mut Textures,
     clip_overlay: &mut OverlayCache<egui::TextureHandle>,
     rect: egui::Rect,
@@ -4900,17 +4961,17 @@ fn draw_image_area(
     let anchor = zoom_anchor(shown.anchor_at_pointer, pointer, rect, ppp);
     // mouse: double-click = Z, drag = pan, wheel = zoom
     if response.double_clicked() {
-        core.toggle_zoom(anchor);
+        mouse_core.toggle_zoom(anchor);
     } else if response.dragged() {
         let d = response.drag_delta();
         if d != egui::Vec2::ZERO {
-            core.pan([f64::from(d.x * ppp), f64::from(d.y * ppp)]);
+            mouse_core.pan([f64::from(d.x * ppp), f64::from(d.y * ppp)]);
         }
     }
     if response.hovered() {
         let dy = ctx.input(|i| i.smooth_scroll_delta.y);
         if dy != 0.0 {
-            core.zoom_by(wheel_factor(dy), anchor);
+            mouse_core.zoom_by(wheel_factor(dy), anchor);
         }
     }
     // views to textures, then the frame

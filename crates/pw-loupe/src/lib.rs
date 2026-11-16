@@ -365,6 +365,9 @@ pub enum PreviewKey {
     SwapImages,
     /// `V`: the compare's images above and below each other ↔ side by side (U6-Q7).
     AboveBelow,
+    /// `L`: the held image's zoom and position locked to the current image's ↔ free (U6-Q8,
+    /// T154).
+    LockZoom,
     /// Ctrl+O, Ctrl+I, Ctrl+W, Ctrl+Tab, Ctrl+Shift+Tab and F11: nothing until the preview is
     /// closed (U3-Q1). The key is taken so no other key map acts on it.
     Nothing,
@@ -392,6 +395,7 @@ pub fn preview_key_action(
         (K::K, false, false, false) => Some(PreviewKey::HoldImage),
         (K::K, false, true, false) => Some(PreviewKey::SwapImages),
         (K::V, false, false, false) => Some(PreviewKey::AboveBelow),
+        (K::L, false, false, false) => Some(PreviewKey::LockZoom),
         (K::O | K::I | K::W, true, false, false)
         | (K::Tab, true, _, false)
         | (K::F11, false, false, false) => Some(PreviewKey::Nothing),
@@ -940,8 +944,8 @@ mod tests {
 
     /// The command a key gives in `view`, through the key functions in the order `main.rs` asks
     /// them (shell keys, import, tabs, ratings, `M`, `I`, then the view's own keys). The preview's
-    /// clipping keys (J and Shift+J, T148) and the compare's keys (C, K, Shift+K and V, T153) are
-    /// asked before the loupe's keys, which take no Shift chord.
+    /// clipping keys (J and Shift+J, T148) and the compare's keys (C, K, Shift+K and V, T153; L,
+    /// T154) are asked before the loupe's keys, which take no Shift chord.
     fn command_of_key(chord: KeyChord, view: ViewMode) -> Option<Command> {
         let KeyChord {
             key,
@@ -995,6 +999,7 @@ mod tests {
                     Some(PreviewKey::HoldImage) => return Some(Command::HoldImage),
                     Some(PreviewKey::SwapImages) => return Some(Command::SwapImages),
                     Some(PreviewKey::AboveBelow) => return Some(Command::AboveBelow),
+                    Some(PreviewKey::LockZoom) => return Some(Command::LockZoom),
                     _ => {}
                 }
                 if shift {
@@ -1235,6 +1240,59 @@ mod tests {
                 None,
                 "{key:?}"
             );
+        }
+    }
+
+    /// L locks the compare's zoom and position in the preview (ADR 0017 U6-Q8, T154): its own
+    /// key only with no modifier, the command Lock Zoom and Position, nothing in the contact sheet.
+    #[test]
+    fn l_is_the_lock_key_of_the_preview() {
+        use egui::Key as K;
+        assert_eq!(
+            preview_key_action(K::L, false, false, false),
+            Some(PreviewKey::LockZoom)
+        );
+        let chord = KeyChord {
+            key: K::L,
+            ctrl: false,
+            shift: false,
+            alt: false,
+        };
+        assert_eq!(
+            command_of_key(chord, ViewMode::Loupe),
+            Some(Command::LockZoom)
+        );
+        assert_eq!(command_of_key(chord, ViewMode::Grid), None);
+        // An item of the menu, so the every-menu-key test covers it.
+        assert!(
+            shell::menu_items()
+                .iter()
+                .any(|item| item.command == Command::LockZoom && item.key == Some(chord))
+        );
+        // With any modifier, L is no key of the preview.
+        for (ctrl, shift, alt) in [
+            (true, false, false),
+            (false, true, false),
+            (false, false, true),
+            (true, true, false),
+            (false, true, true),
+            (true, false, true),
+            (true, true, true),
+        ] {
+            assert_eq!(
+                preview_key_action(K::L, ctrl, shift, alt),
+                None,
+                "ctrl {ctrl} shift {shift} alt {alt}"
+            );
+        }
+        // L is no key of the loupe, the contact sheet, the ratings, the shell or the tabs.
+        assert_eq!(key_action(K::L, false, false), None);
+        assert_eq!(loupe_key_action(K::L, false, false), None);
+        for shift in [false, true] {
+            assert_eq!(grid_key_action(K::L, false, shift, false), None);
+            assert_eq!(rating_key_action(K::L, false, shift, false), None);
+            assert_eq!(shell_key_action(K::L, false, shift, false), None);
+            assert_eq!(tab_action(K::L, false, shift, false), None);
         }
     }
 

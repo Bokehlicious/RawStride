@@ -331,6 +331,7 @@ pub fn command_text(command: Command) -> String {
         Command::HoldImage => "Hold Current Image".to_owned(),
         Command::SwapImages => "Swap Images".to_owned(),
         Command::AboveBelow => "Above and Below".to_owned(),
+        Command::LockZoom => "Lock Zoom and Position".to_owned(),
         Command::ToggleInfo => "Inspector".to_owned(),
         Command::NextTab => "Next Tab".to_owned(),
         Command::PreviousTab => "Previous Tab".to_owned(),
@@ -454,6 +455,7 @@ mod tests {
                 "Hold Current Image",
                 "Swap Images",
                 "Above and Below",
+                "Lock Zoom and Position",
                 "Next Tab",
                 "Previous Tab",
                 "Side Columns",
@@ -507,6 +509,7 @@ mod tests {
             Some("K"),
             Some("Shift+K"),
             Some("V"),
+            Some("L"),
             Some("Ctrl+Tab"),
             Some("Ctrl+Shift+Tab"),
             Some("H"),
@@ -580,7 +583,7 @@ mod tests {
         assert_eq!(key_of(Command::ClipShadows).as_deref(), Some("Shift+J"));
     }
 
-    /// The compare's menu items (ADR 0017 U6-Q12, T153).
+    /// The compare's menu items (ADR 0017 U6-Q12, T153, T154).
     #[test]
     fn the_compare_menu_items_and_their_keys() {
         let key_of = |command| {
@@ -595,6 +598,7 @@ mod tests {
             (Command::HoldImage, "Hold Current Image", "K"),
             (Command::SwapImages, "Swap Images", "Shift+K"),
             (Command::AboveBelow, "Above and Below", "V"),
+            (Command::LockZoom, "Lock Zoom and Position", "L"),
         ] {
             assert_eq!(command_text(command), text);
             assert_eq!(key_of(command).as_deref(), Some(key), "{text}");
