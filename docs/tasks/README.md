@@ -95,11 +95,13 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status |
 |---|---|---|
+| [T155](T155-arrows-in-the-proportional-font.md) | The arrows drawn as boxes: Hack as the last font of normal text | Open |
+| [T156](T156-eject-a-usb-fixed-drive.md) | Eject a card reader that Windows sees as a fixed USB disk | Open |
 
 ## Writing a task (owner and reviewer)
 
-- **Number:** the next free number after the highest in this folder and `done/` (T155 next).
-- **File:** `docs/tasks/T155-<a-few-words>.md`; three digits, lower case, words joined by `-`.
+- **Number:** the next free number after the highest in this folder and `done/` (T157 next).
+- **File:** `docs/tasks/T157-<a-few-words>.md`; three digits, lower case, words joined by `-`.
 - **Index:** add a row to "Open tasks" above and keep its status in step with the file's heading.
 - **Size (owner, 2026-11-15, after T142):** one task is one layer (a C++ shim or a core crate, or
   the shell in `pw-loupe`), about eight files at most, and gives one result the owner can check by
@@ -139,7 +141,7 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 Skeleton (the fields recent tasks use; leave out those that do not apply):
 
 ```markdown
-# T155. <Title> — Open
+# T157. <Title> — Open
 
 - **Why:** …
 - **Crates:** … **Files:** …

@@ -257,6 +257,9 @@ a full photo-desk caption window.
 - A dark, colour-neutral theme for image work; a light theme as an option (U-Q3; built in U1).
 - Text contrast meets **WCAG AA** in both themes (a dark theme easily gets too little contrast).
   Font, size and spacing are chosen in U1.
+  **Owner, 2026-11-16 (T155):** normal text uses egui's bundled fonts, and egui's bundled `Hack` is the
+  last font of normal text, so that the arrows ↔ → ↑ ↓ are drawn instead of boxes. No new font and no
+  emoji fonts.
 - One accent colour for selection and active controls.
 - **Icons:** an openly licensed icon set is a new dependency. It is chosen in its step with the
   owner's approval and a licence check (GR10, ADR 0002).

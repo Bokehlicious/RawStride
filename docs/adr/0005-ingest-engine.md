@@ -64,6 +64,12 @@ The sandbox disk is not the PC. Measure on thanos with a real card before tuning
    there, because it is edited after ingest. A log or the catalog may come later.
 3. **Never delete from the card.** Ejecting is an option in the dialog, done only after a
    complete ingest (Windows "Eject" verb through PowerShell, then a check that the card is gone).
+   **Changed by the owner (2026-11-16, T156):** a CFexpress reader on USB (seen: "ABT CFX Card
+   Reader") is a *fixed* disk to Windows and has no "Eject" verb, so the eject always failed. A
+   removable drive keeps the "Eject" verb; a fixed drive on USB is ejected as "Safely Remove
+   Hardware" does (`CM_Request_Device_EjectW` on the USB device that holds the disk); any other
+   drive is not ejected. The owner approved `windows-sys` 0.61.2 (already in the workspace) as a
+   dependency of `pw-ingest` for this.
 4. **IPTC template on ingest:** creator, copyright (+ `xmpRights:Marked`), credit, e-mail,
    telephone, web. IPTC Core in XMP, stored like ratings (ADR 0004): sidecar for RAW, embedded
    for DNG/JPEG/TIFF. Only non-empty fields are written; written to the new copies only.
