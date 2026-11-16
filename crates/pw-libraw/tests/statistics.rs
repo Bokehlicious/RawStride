@@ -487,9 +487,9 @@ fn fujifilm_files_have_statistics_and_a_clipping_map_that_agree() {
         assert_eq!(deep * 9, stats.deep_shadows, "{name}: deep shadows");
         // each channel has clipped cells exactly when it has clipped photosites, and no more
         let mut clipped_cells = [0u64; 3];
-        for c in 0..3 {
+        for (c, clipped) in clipped_cells.iter_mut().enumerate() {
             let cells = cells_with(&map, ClippingMap::CLIPPED[c], width, height, false);
-            clipped_cells[c] = cells;
+            *clipped = cells;
             assert!(
                 cells <= stats.clipped[c],
                 "{name}: channel {c}: {cells} cells, {} clipped photosites",

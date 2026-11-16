@@ -1,7 +1,7 @@
-# T149. ADR 0017 U7b, last part: the clipping marks drawn on the image — Blocked
+# T149. ADR 0017 U7b, last part: the clipping marks drawn on the image — Open
 
-- **Blocked: waits for T148** (the keys, settings and section), which waits for T147 and T146.
-  The owner's answers to U7b-Q1–U7b-Q10 are in `docs/tasks/done/T146-clipping-map-of-raw-data.md`.
+- **Can start now.** T148 (the keys, settings and section: `clip_highlights`, `clip_shadows` in
+  the shell settings) and T147, T146 are Done. The owner's answers to U7b-Q1–U7b-Q10 are in `docs/tasks/done/T146-clipping-map-of-raw-data.md`.
   Chain: T146 → T147 → T148 → T149.
 - **Why:** ADR 0017 §2.6, step U7b. T147 gives the current image's clipping map with the
   coordinates that place it on the drawn image, and T148 the user's two on/off choices. This task
@@ -29,7 +29,10 @@
      rectangle and T147's four texture coordinates of the map (scaled as in point 2), with
      nearest-neighbour sampling, so each mark is a sharp block (U7b-Q7). `pw_render::mesh` may be
      used for the quad. Nothing is drawn when both overlays are off, while the frame's clipping
-     state is not "ready", or when the image area shows no image.
+     state is not "ready", or when the image area shows no image. The marks come from **this
+     frame's** `Frame::clipping` and `Draw` (the frame `draw` just got from the view core), never
+     from a state kept from an earlier frame, such as `last_clipping` (T148's, for the column),
+     so they are never drawn on another image (from T148's review).
   5. **Texts:** none (T148 has them).
 - **Tests to add:** `clipping.rs`: a highlight bit gives red only when that overlay is on, a
   shadow bit blue only when that one is on, other cells transparent; the joining marks a joined
@@ -52,3 +55,4 @@
 |---|---|---|
 | 2026-11-15 | Blocked | Split from T148 after the cold read (the drawing part); waits for T148 |
 | 2026-11-15 | Blocked | From T147's review: a map with the wrong data length is not drawn (point 2) |
+| 2026-11-16 | Open | T148 is Done; point 4: the marks only from this frame's state (from T148's review) |

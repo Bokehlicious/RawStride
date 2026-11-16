@@ -325,6 +325,8 @@ pub fn command_text(command: Command) -> String {
         Command::ZoomIn => "Zoom In".to_owned(),
         Command::ZoomOut => "Zoom Out".to_owned(),
         Command::ToggleAnchor => "Zoom at Pointer".to_owned(),
+        Command::ClipHighlights => "Show Clipped Highlights".to_owned(),
+        Command::ClipShadows => "Show Deep Shadows".to_owned(),
         Command::ToggleInfo => "Inspector".to_owned(),
         Command::NextTab => "Next Tab".to_owned(),
         Command::PreviousTab => "Previous Tab".to_owned(),
@@ -442,6 +444,8 @@ mod tests {
                 "Zoom In",
                 "Zoom Out",
                 "Zoom at Pointer",
+                "Show Clipped Highlights",
+                "Show Deep Shadows",
                 "Next Tab",
                 "Previous Tab",
                 "Side Columns",
@@ -489,6 +493,8 @@ mod tests {
             Some("+"),
             Some("−"),
             Some("A"),
+            Some("J"),
+            Some("Shift+J"),
             Some("Ctrl+Tab"),
             Some("Ctrl+Shift+Tab"),
             Some("H"),
@@ -541,6 +547,25 @@ mod tests {
                 .iter()
                 .any(|menu| menu.entries.contains(&MenuEntry::Sort))
         );
+    }
+
+    /// The clipping overlays' menu items (ADR 0017 U7b-Q10, T148).
+    #[test]
+    fn the_clipping_menu_items_and_their_keys() {
+        assert_eq!(
+            command_text(Command::ClipHighlights),
+            "Show Clipped Highlights"
+        );
+        assert_eq!(command_text(Command::ClipShadows), "Show Deep Shadows");
+        let key_of = |command| {
+            menu_items()
+                .into_iter()
+                .find(|item| item.command == command)
+                .and_then(|item| item.key)
+                .map(key_text)
+        };
+        assert_eq!(key_of(Command::ClipHighlights).as_deref(), Some("J"));
+        assert_eq!(key_of(Command::ClipShadows).as_deref(), Some("Shift+J"));
     }
 
     #[test]

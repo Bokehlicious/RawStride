@@ -92,8 +92,8 @@ pub use preview::{
     thumbnail_gate, toggle_preview_column, toggle_preview_hidden,
 };
 pub use preview_text::{
-    HistogramText, PreviewText, clipped_text, deep_shadows_text, histogram_text, preview_text,
-    zoom_value_text,
+    ClippingText, HistogramText, PreviewText, clipped_text, clipping_state_text, clipping_text,
+    deep_shadows_text, histogram_text, preview_text, zoom_value_text,
 };
 pub use rating_text::{
     UNSUPPORTED_TEXT, label_choice_text, label_filter_text, label_name, star_condition_text,
@@ -349,6 +349,11 @@ pub enum PreviewKey {
     HideParts,
     /// `I`: the preview's right column open ↔ collapsed.
     ToggleColumn,
+    /// `J`: the overlay that marks the clipped highlights on the image, on ↔ off (ADR 0017 §2.6,
+    /// U7b-Q5, T148).
+    ClipHighlights,
+    /// `Shift+J`: the overlay that marks the deepest shadows on the image, on ↔ off (U7b-Q5).
+    ClipShadows,
     /// Ctrl+O, Ctrl+I, Ctrl+W, Ctrl+Tab, Ctrl+Shift+Tab and F11: nothing until the preview is
     /// closed (U3-Q1). The key is taken so no other key map acts on it.
     Nothing,
@@ -368,6 +373,9 @@ pub fn preview_key_action(
         (K::S, false, false, false) => Some(PreviewKey::OnlyMarked),
         (key, false, false, false) if key == HIDE_KEY => Some(PreviewKey::HideParts),
         (K::I, false, false, false) => Some(PreviewKey::ToggleColumn),
+        // J and Shift+J are told apart here: the loupe's `key_action` does not look at Shift.
+        (K::J, false, false, false) => Some(PreviewKey::ClipHighlights),
+        (K::J, false, true, false) => Some(PreviewKey::ClipShadows),
         (K::O | K::I | K::W, true, false, false)
         | (K::Tab, true, _, false)
         | (K::F11, false, false, false) => Some(PreviewKey::Nothing),
@@ -915,7 +923,9 @@ mod tests {
     }
 
     /// The command a key gives in `view`, through the key functions in the order `main.rs` asks
-    /// them (shell keys, import, tabs, ratings, `M`, `I`, then the view's own keys).
+    /// them (shell keys, import, tabs, ratings, `M`, `I`, then the view's own keys). The preview's
+    /// clipping keys (J and Shift+J, T148) are asked before the loupe's keys, which take no Shift
+    /// chord.
     fn command_of_key(chord: KeyChord, view: ViewMode) -> Option<Command> {
         let KeyChord {
             key,
@@ -962,6 +972,11 @@ mod tests {
                 GridKeyAction::Navigate(_) | GridKeyAction::Extend(_) => None,
             },
             ViewMode::Loupe => {
+                match preview_key_action(key, ctrl, shift, alt) {
+                    Some(PreviewKey::ClipHighlights) => return Some(Command::ClipHighlights),
+                    Some(PreviewKey::ClipShadows) => return Some(Command::ClipShadows),
+                    _ => {}
+                }
                 if shift {
                     return None;
                 }
@@ -1009,6 +1024,90 @@ mod tests {
             }
         }
         assert!(checked > 30, "only {checked} keys checked");
+    }
+
+    /// J and Shift+J are the preview's clipping keys (ADR 0017 U7b-Q5, T148): each gives its own
+    /// command and never the other's, only in the preview and only with exactly those modifiers.
+    #[test]
+    fn j_and_shift_j_are_the_clipping_keys_of_the_preview() {
+        use egui::Key as K;
+        assert_eq!(
+            preview_key_action(K::J, false, false, false),
+            Some(PreviewKey::ClipHighlights)
+        );
+        assert_eq!(
+            preview_key_action(K::J, false, true, false),
+            Some(PreviewKey::ClipShadows)
+        );
+        // With Ctrl or Alt, J is not a key of the preview.
+        for (ctrl, shift, alt) in [
+            (true, false, false),
+            (false, false, true),
+            (true, true, false),
+            (false, true, true),
+            (true, false, true),
+            (true, true, true),
+        ] {
+            assert_eq!(
+                preview_key_action(K::J, ctrl, shift, alt),
+                None,
+                "ctrl {ctrl} shift {shift} alt {alt}"
+            );
+        }
+        // J is no key of the loupe, the contact sheet, the ratings, the shell or the tabs.
+        for shift in [false, true] {
+            assert_eq!(key_action(K::J, false, false), None);
+            assert_eq!(loupe_key_action(K::J, false, false), None);
+            assert_eq!(grid_key_action(K::J, false, shift, false), None);
+            assert_eq!(rating_key_action(K::J, false, shift, false), None);
+            assert_eq!(shell_key_action(K::J, false, shift, false), None);
+            assert_eq!(tab_action(K::J, false, shift, false), None);
+        }
+        // Through the key functions in the order `main.rs` asks them.
+        let j = KeyChord {
+            key: K::J,
+            ctrl: false,
+            shift: false,
+            alt: false,
+        };
+        let shift_j = KeyChord { shift: true, ..j };
+        assert_eq!(
+            command_of_key(j, ViewMode::Loupe),
+            Some(Command::ClipHighlights)
+        );
+        assert_eq!(
+            command_of_key(shift_j, ViewMode::Loupe),
+            Some(Command::ClipShadows)
+        );
+        assert_ne!(
+            command_of_key(j, ViewMode::Loupe),
+            Some(Command::ClipShadows)
+        );
+        assert_ne!(
+            command_of_key(shift_j, ViewMode::Loupe),
+            Some(Command::ClipHighlights)
+        );
+        // The marks are drawn only in the preview (U7b-Q6): nothing in the contact sheet.
+        assert_eq!(command_of_key(j, ViewMode::Grid), None);
+        assert_eq!(command_of_key(shift_j, ViewMode::Grid), None);
+        // The loupe's other keys still give nothing with Shift.
+        for key in [K::Z, K::F, K::A, K::R] {
+            let chord = KeyChord { key, ..shift_j };
+            assert_eq!(command_of_key(chord, ViewMode::Loupe), None, "{key:?}");
+        }
+        // Both are items of the menu, so the every-menu-key test covers them.
+        let items = shell::menu_items();
+        for (command, chord) in [
+            (Command::ClipHighlights, j),
+            (Command::ClipShadows, shift_j),
+        ] {
+            assert!(
+                items
+                    .iter()
+                    .any(|item| item.command == command && item.key == Some(chord)),
+                "{command:?}"
+            );
+        }
     }
 
     #[test]

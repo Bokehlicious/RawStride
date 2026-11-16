@@ -404,6 +404,15 @@ const fn ctrl(key: Key) -> Option<KeyChord> {
     })
 }
 
+const fn shift(key: Key) -> Option<KeyChord> {
+    Some(KeyChord {
+        key,
+        ctrl: false,
+        shift: true,
+        alt: false,
+    })
+}
+
 /// The key that hides and shows both side columns (U1-Q2: `H`; not Tab, which egui uses to move
 /// the keyboard focus and which changes tab with Ctrl).
 pub const HIDE_KEY: Key = Key::H;
@@ -433,6 +442,12 @@ pub enum Command {
     ZoomIn,
     ZoomOut,
     ToggleAnchor,
+    /// The preview's overlay that marks the clipped highlights on the image, on ↔ off (View ▸
+    /// Show Clipped Highlights, J; ADR 0017 §2.6, U7b-Q5, T148).
+    ClipHighlights,
+    /// The preview's overlay that marks the deepest shadows on the image, on ↔ off (View ▸ Show
+    /// Deep Shadows, Shift+J; U7b-Q5, T148).
+    ClipShadows,
     /// The inspector (the right column) open ↔ collapsed, as `I` (ADR 0017 §2.4, U2-Q3, T110).
     ToggleInfo,
     NextTab,
@@ -467,7 +482,9 @@ impl Command {
             | Self::ToggleZoom
             | Self::ZoomIn
             | Self::ZoomOut
-            | Self::ToggleAnchor => Where::Loupe,
+            | Self::ToggleAnchor
+            | Self::ClipHighlights
+            | Self::ClipShadows => Where::Loupe,
             _ => Where::Both,
         }
     }
@@ -637,6 +654,8 @@ pub const MENUS: &[Menu] = &[
             item(Command::ZoomIn, plain(Key::Plus)),
             item(Command::ZoomOut, plain(Key::Minus)),
             item(Command::ToggleAnchor, plain(Key::A)),
+            item(Command::ClipHighlights, plain(Key::J)),
+            item(Command::ClipShadows, shift(Key::J)),
             MenuEntry::Separator,
             MenuEntry::Filter,
             MenuEntry::Sort,
@@ -937,5 +956,62 @@ mod tests {
         assert_eq!(Command::Metadata.acts_in(), Where::Both);
         assert_eq!(Command::ToggleInfo.acts_in(), Where::Both);
         assert_eq!(Command::OpenFolder.acts_in(), Where::Both);
+    }
+
+    /// View ▸ Show Clipped Highlights (J) and Show Deep Shadows (Shift+J) come after the zoom
+    /// items, act in the preview, and no other item has their keys (ADR 0017 U7b-Q5, T148).
+    #[test]
+    fn the_clipping_commands_have_j_and_shift_j_after_the_zoom_items() {
+        let j = KeyChord {
+            key: Key::J,
+            ctrl: false,
+            shift: false,
+            alt: false,
+        };
+        let shift_j = KeyChord { shift: true, ..j };
+        assert_eq!(plain(Key::J), Some(j));
+        assert_eq!(shift(Key::J), Some(shift_j));
+        let items = menu_items();
+        let key_of = |command| {
+            items
+                .iter()
+                .find(|item| item.command == command)
+                .and_then(|item| item.key)
+        };
+        assert_eq!(key_of(Command::ClipHighlights), Some(j));
+        assert_eq!(key_of(Command::ClipShadows), Some(shift_j));
+        // No other item shows the key J, with any modifiers.
+        for item in &items {
+            if item.key.is_some_and(|chord| chord.key == Key::J) {
+                assert!(
+                    matches!(item.command, Command::ClipHighlights | Command::ClipShadows),
+                    "{:?} has J",
+                    item.command
+                );
+            }
+        }
+        assert_eq!(Command::ClipHighlights.acts_in(), Where::Loupe);
+        assert_eq!(Command::ClipShadows.acts_in(), Where::Loupe);
+        // In the View menu, right after the last zoom item and before the next separator.
+        let Some(view) = MENUS.iter().find(|menu| menu.kind == MenuKind::View) else {
+            panic!("there is a View menu");
+        };
+        let Some(anchor) = view
+            .entries
+            .iter()
+            .position(|entry| *entry == item(Command::ToggleAnchor, plain(Key::A)))
+        else {
+            panic!("the View menu has Zoom at Pointer");
+        };
+        assert_eq!(
+            view.entries.get(anchor + 1..anchor + 4),
+            Some(
+                &[
+                    item(Command::ClipHighlights, Some(j)),
+                    item(Command::ClipShadows, Some(shift_j)),
+                    MenuEntry::Separator,
+                ][..]
+            )
+        );
     }
 }

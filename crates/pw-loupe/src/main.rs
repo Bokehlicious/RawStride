@@ -56,6 +56,7 @@ use pw_loupe::{
     CaptureReader, SORT_KEYS, SortFollow, SortKey, SortOrder, modified_time, read_order,
     sort_button_text, sort_direction_hover, sort_direction_text, sort_key_text, sorting_text,
 };
+use pw_loupe::{ClippingText, clipping_state_text, clipping_text};
 use pw_loupe::{
     ClockTime, ImportRow, ImportStep, PendingWrite, Tasks, TasksText, error_entry_text,
     errors_heading_text, import_done_text, import_route_text, importing_text, pending_write_text,
@@ -86,7 +87,7 @@ use pw_metadata::{MetadataWorker, Rating, WriteSetup, supports_rating};
 use pw_render::{Textures, view_px};
 use pw_thumbcache::{ThumbWorker, ThumbnailRequest};
 use pw_viewcore::native::NativeBackend;
-use pw_viewcore::{Config, ImageStatistics, Source, Status, ViewCore, Zoom};
+use pw_viewcore::{ClippingState, Config, ImageStatistics, Source, Status, ViewCore, Zoom};
 
 mod inspector;
 mod inspector_text;
@@ -652,6 +653,9 @@ struct Loupe {
     /// The image of the last rendered preview frame, as `inspector_subject` names it, and its
     /// statistics once they are ready, for the Histogram sections (ADR 0017 §2.6, U7, T142).
     last_statistics: Option<(PathBuf, Option<ImageStatistics>)>,
+    /// The clipping state of the last rendered preview frame, for the preview column's Clipping
+    /// section (ADR 0017 §2.6, U7b-Q9, T148); not wanted before the first frame.
+    last_clipping: ClippingState,
     /// The display mode (RAW or JPEG) of the last rendered preview frame, which the inspector's
     /// Histogram section follows (U7c-Q1, T144); RAW before the first frame, as the view core.
     display_mode: Source,
@@ -3082,6 +3086,28 @@ impl Loupe {
         shell.filmstrip_marked = !shell.filmstrip_marked;
     }
 
+    /// `J`, View ▸ Show Clipped Highlights and the Clipping section's check box: the overlay
+    /// that marks the clipped highlights on the image, on ↔ off (ADR 0017 §2.6, U7b-Q5, T148).
+    fn toggle_clip_highlights(&mut self) {
+        let shell = &mut self.settings.shell;
+        shell.clip_highlights = !shell.clip_highlights;
+    }
+
+    /// `Shift+J`, View ▸ Show Deep Shadows and the Clipping section's check box: the overlay
+    /// that marks the deepest shadows on the image, on ↔ off (U7b-Q5, T148).
+    fn toggle_clip_shadows(&mut self) {
+        let shell = &mut self.settings.shell;
+        shell.clip_shadows = !shell.clip_shadows;
+    }
+
+    /// Tells the view core whether a clipping map is wanted (U7b-Q8, T148): exactly when the
+    /// preview is shown and at least one overlay is on. Called every frame.
+    fn wish_clipping_map(&self) {
+        let shell = &self.settings.shell;
+        let wanted = self.in_preview() && (shell.clip_highlights || shell.clip_shadows);
+        self.core.set_clipping_wanted(wanted);
+    }
+
     /// The thumbnail worker in the preview (§5, U3-Q4, T111): it runs only while the filmstrip is
     /// shown and the shown image is drawn (`thumbnail_gate`); a step pauses it until the new image
     /// is drawn. Called at the end of the frame, with the status of the frame just drawn.
@@ -3130,8 +3156,10 @@ impl Loupe {
     /// The preview's right column (§2.2, U3-Q2, U3-Q5, T111): resizable and collapsible as the
     /// main window's columns, with the shown image's file name, Info (T110's Exif rows from the
     /// same reader), Zoom (the zoom as a text, and buttons and a check box that call the same
-    /// function as their keys) and Histogram (the shown image's histogram and exposure
-    /// statistics, §2.6, U7-Q7, T142). After a click no widget keeps the keyboard.
+    /// function as their keys), Histogram (the shown image's histogram and exposure
+    /// statistics, §2.6, U7-Q7, T142) and Clipping (the two overlays' check boxes, which call the
+    /// same functions as their keys, and the state of the clipping map, U7b-Q9, T148). After a
+    /// click no widget keeps the keyboard.
     fn draw_preview_column(&mut self, ui: &mut egui::Ui, blocked: bool) {
         let shell = self.settings.shell;
         let window_width = ui.ctx().content_rect().width();
@@ -3141,9 +3169,19 @@ impl Loupe {
         let zoom = self.last_zoom;
         let histogram = self.histogram_for(image.as_deref());
         let mut anchor_at_pointer = self.anchor_at_pointer;
+        // The check boxes show the overlays as they are; a click is done after the column is
+        // drawn, by the keys' functions. The line under them is the last frame's clipping state,
+        // and nothing when both overlays are off.
+        let mut clip = [shell.clip_highlights, shell.clip_shadows];
+        let mut clip_clicked = [false; 2];
+        let clipping_state = if clip.contains(&true) {
+            clipping_state_text(&self.last_clipping)
+        } else {
+            None
+        };
         let exif = &self.exif;
         let mut actions = Vec::new();
-        let mut toggled = [false; 3];
+        let mut toggled = [false; 4];
         let shown = egui::Panel::right("preview-column")
             .resizable(true)
             .default_size(clamp_column_width(
@@ -3222,10 +3260,28 @@ impl Loupe {
                                     .id_salt("preview-histogram")
                                     .open(Some(shell.preview_histogram == ColumnState::Open))
                                     .show(ui, |ui| draw_histogram(ui, &histogram));
+                            let clipping_section =
+                                egui::CollapsingHeader::new(clipping_text(ClippingText::Section))
+                                    .id_salt("preview-clipping")
+                                    .open(Some(shell.preview_clipping == ColumnState::Open))
+                                    .show(ui, |ui| {
+                                        for ((on, clicked), text) in clip
+                                            .iter_mut()
+                                            .zip(clip_clicked.iter_mut())
+                                            .zip([ClippingText::Highlights, ClippingText::Shadows])
+                                        {
+                                            *clicked =
+                                                ui.checkbox(on, clipping_text(text)).changed();
+                                        }
+                                        if let Some(text) = clipping_state {
+                                            ui.add(egui::Label::new(text).wrap());
+                                        }
+                                    });
                             toggled = [
                                 info.header_response.clicked(),
                                 zoom_section.header_response.clicked(),
                                 histogram_section.header_response.clicked(),
+                                clipping_section.header_response.clicked(),
                             ];
                         });
                     collapse
@@ -3237,7 +3293,10 @@ impl Loupe {
         if blocked {
             return;
         }
-        let clicked = shown.inner || toggled.contains(&true) || !actions.is_empty();
+        let clicked = shown.inner
+            || toggled.contains(&true)
+            || !actions.is_empty()
+            || clip_clicked.contains(&true);
         if shown.inner {
             self.settings.shell.preview_column = ColumnState::Collapsed;
         }
@@ -3249,6 +3308,16 @@ impl Loupe {
         }
         if toggled[2] {
             self.settings.shell.preview_histogram = self.settings.shell.preview_histogram.toggled();
+        }
+        if toggled[3] {
+            self.settings.shell.preview_clipping = self.settings.shell.preview_clipping.toggled();
+        }
+        // The check boxes call the same functions as J and Shift+J.
+        if clip_clicked[0] {
+            self.toggle_clip_highlights();
+        }
+        if clip_clicked[1] {
+            self.toggle_clip_shadows();
         }
         // Each button and the check box call the same function as their key; a zoom uses the
         // image's centre, as from the menu (T109).
@@ -3527,6 +3596,8 @@ impl Loupe {
         let shell = &self.settings.shell;
         match command {
             Command::ToggleAnchor => Some(self.anchor_at_pointer),
+            Command::ClipHighlights => Some(shell.clip_highlights),
+            Command::ClipShadows => Some(shell.clip_shadows),
             Command::ToggleInfo => {
                 Some(!shell.columns_hidden && shell.right_column == ColumnState::Open)
             }
@@ -3576,6 +3647,8 @@ impl Loupe {
             Command::ZoomIn => self.act(Action::ZoomStep(1), None),
             Command::ZoomOut => self.act(Action::ZoomStep(-1), None),
             Command::ToggleAnchor => self.act(Action::ToggleAnchor, None),
+            Command::ClipHighlights => self.toggle_clip_highlights(),
+            Command::ClipShadows => self.toggle_clip_shadows(),
             Command::ToggleInfo => self.act(Action::ToggleInfo, None),
             Command::ToggleColumns => self.shell_action(ctx, ShellAction::ToggleColumns),
             Command::LeftColumn => self.toggle_column(true),
@@ -4250,6 +4323,8 @@ impl Loupe {
                         PreviewKey::ToggleColumn => {
                             toggle_preview_column(&mut self.settings.shell);
                         }
+                        PreviewKey::ClipHighlights => self.toggle_clip_highlights(),
+                        PreviewKey::ClipShadows => self.toggle_clip_shadows(),
                         PreviewKey::Nothing => {}
                     }
                     ctx.request_repaint();
@@ -4340,6 +4415,8 @@ impl Loupe {
         if start_import {
             self.request_import_start();
         }
+        // The clipping map is wanted exactly when the preview is shown with an overlay on (T148).
+        self.wish_clipping_map();
         // The preview opened or closed by a key this frame (T111): the next frame draws the new
         // layout, and the contact sheet scrolls to the last shown image there.
         let mode_after = self.tabs.active().map(|tab| tab.mode);
@@ -4421,6 +4498,8 @@ impl Loupe {
         let frame = self.core.frame(view_px(rect, ppp));
         self.last_frame_status = frame.status.clone();
         self.last_zoom = Some((frame.zoom, frame.scale));
+        // The clipping state, for the preview column's Clipping section (T148).
+        self.last_clipping = frame.clipping.clone();
         // The statistics of the shown image, for the Histogram sections (T142); the path as
         // `inspector_subject` resolves it, so the sections can tell whose they are.
         let cwd = std::env::current_dir().ok();
@@ -6528,6 +6607,7 @@ fn run(options: Options) -> Result<(), String> {
                 last_frame_status: Status::Empty,
                 last_zoom: None,
                 last_statistics: None,
+                last_clipping: ClippingState::NotWanted,
                 display_mode: Source::Raw,
                 window_before: None,
                 window_settling: None,

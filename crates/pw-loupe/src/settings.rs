@@ -55,6 +55,11 @@ const PREVIEW_HIDDEN: &str = "preview_hidden";
 /// collapsed (ADR 0017 §2.6, U7-Q7, T142).
 const PREVIEW_HISTOGRAM: &str = "preview_histogram";
 const INSPECTOR_HISTOGRAM: &str = "inspector_histogram";
+/// The keys of the clipping overlays of the preview, on or off, and of the Clipping section of the
+/// preview's column, open or collapsed (ADR 0017 §2.6, U7b-Q6, U7b-Q9, T148).
+const CLIP_HIGHLIGHTS: &str = "clip_highlights";
+const CLIP_SHADOWS: &str = "clip_shadows";
+const PREVIEW_CLIPPING: &str = "preview_clipping";
 /// The keys of the metadata window's sections, open or collapsed (ADR 0017 U10-Q6, T123).
 const EDITOR_CONTENT: &str = "editor_content";
 const EDITOR_CREATOR_RIGHTS: &str = "editor_creator_rights";
@@ -165,6 +170,12 @@ pub struct ShellSettings {
     /// The Histogram sections of the preview's column and of the inspector (T142, U7-Q7).
     pub preview_histogram: ColumnState,
     pub inspector_histogram: ColumnState,
+    /// The preview's overlays that mark the clipped highlights (`J`) and the deepest shadows
+    /// (`Shift+J`) on the image (T148, U7b-Q5, U7b-Q6); they stay as they are from image to image.
+    pub clip_highlights: bool,
+    pub clip_shadows: bool,
+    /// The Clipping section of the preview's column (T148, U7b-Q9).
+    pub preview_clipping: ColumnState,
 }
 
 /// The library's lists as `settings.txt` keeps them (T135, U4-Q3, U4-Q4): the favourites in the
@@ -220,6 +231,10 @@ impl Default for ShellSettings {
             // Both Histogram sections open, as the other sections of their columns.
             preview_histogram: ColumnState::Open,
             inspector_histogram: ColumnState::Open,
+            // Both overlays off (U7b-Q6); the Clipping section open (U7b-Q9).
+            clip_highlights: false,
+            clip_shadows: false,
+            preview_clipping: ColumnState::Open,
         }
     }
 }
@@ -351,18 +366,19 @@ pub fn load_settings_and_library(path: &Path) -> (Settings, SavedLibrary, Vec<St
                 Some(key) => shell.sort.key = key,
                 None => problems.push(bad("name, capture, modified, type or rating")),
             },
-            WINDOW_MAXIMIZED | FULLSCREEN | COLUMNS_HIDDEN | PREVIEW_HIDDEN | SORT_DESCENDING => {
-                match parse_bool(value) {
-                    Some(on) => match key {
-                        WINDOW_MAXIMIZED => shell.window_maximized = on,
-                        FULLSCREEN => shell.fullscreen = on,
-                        PREVIEW_HIDDEN => shell.preview_hidden = on,
-                        SORT_DESCENDING => shell.sort.descending = on,
-                        _ => shell.columns_hidden = on,
-                    },
-                    None => problems.push(bad("true or false")),
-                }
-            }
+            WINDOW_MAXIMIZED | FULLSCREEN | COLUMNS_HIDDEN | PREVIEW_HIDDEN | SORT_DESCENDING
+            | CLIP_HIGHLIGHTS | CLIP_SHADOWS => match parse_bool(value) {
+                Some(on) => match key {
+                    WINDOW_MAXIMIZED => shell.window_maximized = on,
+                    FULLSCREEN => shell.fullscreen = on,
+                    PREVIEW_HIDDEN => shell.preview_hidden = on,
+                    SORT_DESCENDING => shell.sort.descending = on,
+                    CLIP_HIGHLIGHTS => shell.clip_highlights = on,
+                    CLIP_SHADOWS => shell.clip_shadows = on,
+                    _ => shell.columns_hidden = on,
+                },
+                None => problems.push(bad("true or false")),
+            },
             LEFT_COLUMN_WIDTH | RIGHT_COLUMN_WIDTH | PREVIEW_COLUMN_WIDTH => {
                 match value.parse::<u32>() {
                     Ok(width) if key == LEFT_COLUMN_WIDTH => shell.left_column_width = width,
@@ -408,6 +424,10 @@ pub fn load_settings_and_library(path: &Path) -> (Settings, SavedLibrary, Vec<St
             PREVIEW_HISTOGRAM | INSPECTOR_HISTOGRAM => match parse_column(value) {
                 Some(state) if key == PREVIEW_HISTOGRAM => shell.preview_histogram = state,
                 Some(state) => shell.inspector_histogram = state,
+                None => problems.push(bad("open or collapsed")),
+            },
+            PREVIEW_CLIPPING => match parse_column(value) {
+                Some(state) => shell.preview_clipping = state,
                 None => problems.push(bad("open or collapsed")),
             },
             FILMSTRIP => match value {
@@ -558,6 +578,12 @@ fn shell_lines(shell: &ShellSettings) -> String {
         "{PREVIEW_HISTOGRAM} = {}\n{INSPECTOR_HISTOGRAM} = {}\n",
         column_value(shell.preview_histogram),
         column_value(shell.inspector_histogram)
+    ));
+    text.push_str(&format!(
+        "{CLIP_HIGHLIGHTS} = {}\n{CLIP_SHADOWS} = {}\n{PREVIEW_CLIPPING} = {}\n",
+        shell.clip_highlights,
+        shell.clip_shadows,
+        column_value(shell.preview_clipping)
     ));
     text
 }
@@ -808,7 +834,8 @@ mod tests {
              editor_rating_label = open\neditor_licence = open\nlibrary_folders = open\n\
              library_favourites = open\nlibrary_recent = open\nlibrary_tasks = open\n\
              sort = name\n\
-             sort_descending = false\npreview_histogram = open\ninspector_histogram = open\n"
+             sort_descending = false\npreview_histogram = open\ninspector_histogram = open\n\
+             clip_highlights = false\nclip_shadows = false\npreview_clipping = open\n"
         );
     }
 
@@ -996,6 +1023,9 @@ mod tests {
             },
             preview_histogram: ColumnState::Collapsed,
             inspector_histogram: ColumnState::Collapsed,
+            clip_highlights: true,
+            clip_shadows: true,
+            preview_clipping: ColumnState::Collapsed,
         }
     }
 
@@ -1746,6 +1776,130 @@ mod tests {
             ("preview_histogram", "true"),
             ("inspector_histogram", "shut"),
             ("inspector_histogram", ""),
+        ] {
+            let (_dir, path) = TempDir::with_file(&format!(
+                "# RawStride\ncreate_iim = true\n{key} = {value}\n"
+            ));
+            let (settings, problems) = load_settings(&path);
+            assert_one_problem_on_line(&problems, 3);
+            assert!(problems[0].contains(key), "{problems:?}");
+            assert_eq!(settings.shell, ShellSettings::default(), "{key} = {value}");
+            assert!(settings.create_iim, "{key} = {value}");
+        }
+    }
+
+    // ---------- the clipping overlays and the Clipping section (ADR 0017 §2.6, U7b, T148) ----------
+
+    #[test]
+    fn the_clipping_overlays_default_to_off_and_the_clipping_section_to_open() {
+        let shell = ShellSettings::default();
+        assert!(!shell.clip_highlights);
+        assert!(!shell.clip_shadows);
+        assert_eq!(shell.preview_clipping, ColumnState::Open);
+    }
+
+    #[test]
+    fn the_clipping_keys_round_trip_one_at_a_time() {
+        let dir = TempDir::new();
+        let path = dir.0.join("settings.txt");
+        let base = ShellSettings::default();
+        for (shell, highlights, shadows, section) in [
+            (
+                ShellSettings {
+                    clip_highlights: true,
+                    ..base
+                },
+                "true",
+                "false",
+                "open",
+            ),
+            (
+                ShellSettings {
+                    clip_shadows: true,
+                    ..base
+                },
+                "false",
+                "true",
+                "open",
+            ),
+            (
+                ShellSettings {
+                    preview_clipping: ColumnState::Collapsed,
+                    ..base
+                },
+                "false",
+                "false",
+                "collapsed",
+            ),
+            (base, "false", "false", "open"),
+        ] {
+            let settings = Settings {
+                shell,
+                ..Settings::default()
+            };
+            save_settings(&path, &settings).unwrap();
+            let text = std::fs::read_to_string(&path).unwrap();
+            assert!(
+                text.contains(&format!("\nclip_highlights = {highlights}\n")),
+                "{text}"
+            );
+            assert!(
+                text.contains(&format!("\nclip_shadows = {shadows}\n")),
+                "{text}"
+            );
+            assert!(
+                text.contains(&format!("\npreview_clipping = {section}\n")),
+                "{text}"
+            );
+            let (loaded, problems) = load_settings(&path);
+            assert!(problems.is_empty(), "{problems:?}");
+            assert_eq!(loaded, settings);
+        }
+    }
+
+    #[test]
+    fn the_clipping_keys_are_read_from_their_file_values() {
+        let (_dir, path) = TempDir::with_file(
+            "# RawStride\nclip_highlights = true\nclip_shadows = true\n\
+             preview_clipping = collapsed\n",
+        );
+        let (settings, problems) = load_settings(&path);
+        assert!(problems.is_empty(), "{problems:?}");
+        assert!(settings.shell.clip_highlights);
+        assert!(settings.shell.clip_shadows);
+        assert_eq!(settings.shell.preview_clipping, ColumnState::Collapsed);
+        // only the three changed
+        assert_eq!(
+            ShellSettings {
+                clip_highlights: false,
+                clip_shadows: false,
+                preview_clipping: ColumnState::Open,
+                ..settings.shell
+            },
+            ShellSettings::default()
+        );
+    }
+
+    #[test]
+    fn a_file_without_the_clipping_keys_gives_their_defaults_and_no_problem() {
+        let (_dir, path) =
+            TempDir::with_file("# RawStride\ncreate_iim = true\npreview_histogram = collapsed\n");
+        let (settings, problems) = load_settings(&path);
+        assert!(problems.is_empty(), "{problems:?}");
+        assert!(!settings.shell.clip_highlights);
+        assert!(!settings.shell.clip_shadows);
+        assert_eq!(settings.shell.preview_clipping, ColumnState::Open);
+    }
+
+    #[test]
+    fn a_bad_value_of_a_clipping_key_keeps_its_default_and_names_the_line() {
+        for (key, value) in [
+            ("clip_highlights", "on"),
+            ("clip_highlights", "open"),
+            ("clip_shadows", "1"),
+            ("clip_shadows", ""),
+            ("preview_clipping", "true"),
+            ("preview_clipping", "hidden"),
         ] {
             let (_dir, path) = TempDir::with_file(&format!(
                 "# RawStride\ncreate_iim = true\n{key} = {value}\n"

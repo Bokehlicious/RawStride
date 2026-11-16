@@ -3,9 +3,9 @@
 //! `main.rs` holds none of them. The Info section's texts are the inspector's
 //! (`inspector_text.rs`), the title line is the loupe's status line (`lib.rs`). The texts of the
 //! Histogram section (ADR 0017 §2.6, U7, T142) are here too; the inspector shows the same section
-//! with the same texts.
+//! with the same texts. The texts of the Clipping section (U7b, T148) are here as well.
 
-use pw_viewcore::Zoom;
+use pw_viewcore::{ClippingState, Zoom};
 
 /// A fixed text of the preview.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -90,6 +90,41 @@ pub fn deep_shadows_text(share: f64) -> String {
     format!("Deep shadows: {:.2} %", share * 100.0)
 }
 
+/// A fixed text of the Clipping section of the preview's right column (ADR 0017 §2.6, U7b-Q9,
+/// U7b-Q10, T148).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ClippingText {
+    /// The section's heading.
+    Section,
+    /// The check boxes of the two overlays, each with its key.
+    Highlights,
+    Shadows,
+    /// The file has no clipping map.
+    NoMap,
+}
+
+/// The text of `text`.
+pub fn clipping_text(text: ClippingText) -> &'static str {
+    match text {
+        ClippingText::Section => "Clipping",
+        ClippingText::Highlights => "Clipped highlights (J)",
+        ClippingText::Shadows => "Deep shadows (Shift+J)",
+        ClippingText::NoMap => "No clipping map for this file",
+    }
+}
+
+/// The line under the Clipping section's check boxes for the clipping state of the last frame
+/// (U7b-Q9): "Reading …" (the Histogram section's text) while the map is being made, "No clipping
+/// map for this file" when the file has none, and nothing when no overlay wants a map or the map
+/// is ready.
+pub fn clipping_state_text(state: &ClippingState) -> Option<&'static str> {
+    match state {
+        ClippingState::NotWanted | ClippingState::Ready { .. } => None,
+        ClippingState::Reading => Some(histogram_text(HistogramText::Reading)),
+        ClippingState::Unavailable => Some(clipping_text(ClippingText::NoMap)),
+    }
+}
+
 /// The zoom of the shown image in the Zoom section (U3-Q5): "Fit (34%)" at fit (only
 /// "Fit" before the image's size is known), otherwise "100%", "200%". `scale` is the
 /// effective scale with fit resolved (`Frame::scale`).
@@ -165,6 +200,43 @@ mod tests {
         assert_eq!(deep_shadows_text(0.0), "Deep shadows: 0.00 %");
         assert_eq!(deep_shadows_text(1.0), "Deep shadows: 100.00 %");
         assert_eq!(deep_shadows_text(0.141733), "Deep shadows: 14.17 %");
+    }
+
+    #[test]
+    fn every_fixed_text_of_the_clipping_section() {
+        let texts = [
+            (ClippingText::Section, "Clipping"),
+            (ClippingText::Highlights, "Clipped highlights (J)"),
+            (ClippingText::Shadows, "Deep shadows (Shift+J)"),
+            (ClippingText::NoMap, "No clipping map for this file"),
+        ];
+        for (text, expected) in texts {
+            assert_eq!(clipping_text(text), expected, "{text:?}");
+        }
+    }
+
+    #[test]
+    fn the_clipping_state_has_a_line_only_while_reading_or_without_a_map() {
+        use pw_viewcore::ClippingMap;
+        use std::sync::Arc;
+        assert_eq!(clipping_state_text(&ClippingState::NotWanted), None);
+        assert_eq!(
+            clipping_state_text(&ClippingState::Reading),
+            Some("Reading …")
+        );
+        assert_eq!(
+            clipping_state_text(&ClippingState::Unavailable),
+            Some("No clipping map for this file")
+        );
+        let map = ClippingMap::of_rgb8(2, 2, &[255; 12]).map(Arc::new);
+        let Some(map) = map else {
+            panic!("a 2 × 2 image has a clipping map");
+        };
+        let ready = ClippingState::Ready {
+            map,
+            uv: [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
+        };
+        assert_eq!(clipping_state_text(&ready), None);
     }
 
     #[test]
