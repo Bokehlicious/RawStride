@@ -448,6 +448,18 @@ pub enum Command {
     /// The preview's overlay that marks the deepest shadows on the image, on ↔ off (View ▸ Show
     /// Deep Shadows, Shift+J; U7b-Q5, T148).
     ClipShadows,
+    /// The compare open ↔ closed: two images in the preview, the held image beside or above the
+    /// current one (View ▸ Compare, C; ADR 0017 §2.2, U6-Q4, U6-Q11, T153).
+    Compare,
+    /// The current image becomes the held image of the compare (View ▸ Hold Current Image, K;
+    /// U6-Q6, T153).
+    HoldImage,
+    /// The held and the current image of the compare change places (View ▸ Swap Images, Shift+K;
+    /// U6-Q6, T153).
+    SwapImages,
+    /// The compare's two images above and below each other ↔ side by side (View ▸ Above and
+    /// Below, V; U6-Q7, T153).
+    AboveBelow,
     /// The inspector (the right column) open ↔ collapsed, as `I` (ADR 0017 §2.4, U2-Q3, T110).
     ToggleInfo,
     NextTab,
@@ -484,7 +496,11 @@ impl Command {
             | Self::ZoomOut
             | Self::ToggleAnchor
             | Self::ClipHighlights
-            | Self::ClipShadows => Where::Loupe,
+            | Self::ClipShadows
+            | Self::Compare
+            | Self::HoldImage
+            | Self::SwapImages
+            | Self::AboveBelow => Where::Loupe,
             _ => Where::Both,
         }
     }
@@ -656,6 +672,10 @@ pub const MENUS: &[Menu] = &[
             item(Command::ToggleAnchor, plain(Key::A)),
             item(Command::ClipHighlights, plain(Key::J)),
             item(Command::ClipShadows, shift(Key::J)),
+            item(Command::Compare, plain(Key::C)),
+            item(Command::HoldImage, plain(Key::K)),
+            item(Command::SwapImages, shift(Key::K)),
+            item(Command::AboveBelow, plain(Key::V)),
             MenuEntry::Separator,
             MenuEntry::Filter,
             MenuEntry::Sort,
@@ -959,7 +979,9 @@ mod tests {
     }
 
     /// View ▸ Show Clipped Highlights (J) and Show Deep Shadows (Shift+J) come after the zoom
-    /// items, act in the preview, and no other item has their keys (ADR 0017 U7b-Q5, T148).
+    /// items, act in the preview, and no other item has their keys (ADR 0017 U7b-Q5, T148). The
+    /// compare's four items follow them, before the separator, with C, K, Shift+K and V (U6-Q4,
+    /// U6-Q6, U6-Q7, T153).
     #[test]
     fn the_clipping_commands_have_j_and_shift_j_after_the_zoom_items() {
         let j = KeyChord {
@@ -992,7 +1014,37 @@ mod tests {
         }
         assert_eq!(Command::ClipHighlights.acts_in(), Where::Loupe);
         assert_eq!(Command::ClipShadows.acts_in(), Where::Loupe);
-        // In the View menu, right after the last zoom item and before the next separator.
+        // The compare's keys: C, K, Shift+K and V, and no other item shows C, K or V.
+        let c = KeyChord { key: Key::C, ..j };
+        let k = KeyChord { key: Key::K, ..j };
+        let shift_k = KeyChord { shift: true, ..k };
+        let v = KeyChord { key: Key::V, ..j };
+        let compare_items = [
+            (Command::Compare, c),
+            (Command::HoldImage, k),
+            (Command::SwapImages, shift_k),
+            (Command::AboveBelow, v),
+        ];
+        for (command, chord) in compare_items {
+            assert_eq!(key_of(command), Some(chord), "{command:?}");
+            assert_eq!(command.acts_in(), Where::Loupe, "{command:?}");
+        }
+        for item in &items {
+            if item
+                .key
+                .is_some_and(|chord| matches!(chord.key, Key::C | Key::K | Key::V))
+            {
+                assert!(
+                    compare_items.iter().any(
+                        |(command, chord)| item.command == *command && item.key == Some(*chord)
+                    ),
+                    "{:?} has a key of the compare",
+                    item.command
+                );
+            }
+        }
+        // In the View menu, right after the last zoom item; then the compare's four in their
+        // order, before the next separator.
         let Some(view) = MENUS.iter().find(|menu| menu.kind == MenuKind::View) else {
             panic!("there is a View menu");
         };
@@ -1004,11 +1056,15 @@ mod tests {
             panic!("the View menu has Zoom at Pointer");
         };
         assert_eq!(
-            view.entries.get(anchor + 1..anchor + 4),
+            view.entries.get(anchor + 1..anchor + 8),
             Some(
                 &[
                     item(Command::ClipHighlights, Some(j)),
                     item(Command::ClipShadows, Some(shift_j)),
+                    item(Command::Compare, Some(c)),
+                    item(Command::HoldImage, Some(k)),
+                    item(Command::SwapImages, Some(shift_k)),
+                    item(Command::AboveBelow, Some(v)),
                     MenuEntry::Separator,
                 ][..]
             )

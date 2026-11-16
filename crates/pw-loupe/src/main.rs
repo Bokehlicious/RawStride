@@ -63,6 +63,7 @@ use pw_loupe::{
     errors_heading_text, import_done_text, import_route_text, importing_text, pending_write_text,
     pending_writes, tasks_text,
 };
+use pw_loupe::{Compare, Layout, compare_side_text, open_indexes, sides};
 use pw_loupe::{
     FILMSTRIP_CELL_WIDTH, FILMSTRIP_IMAGE_HEIGHT, FILMSTRIP_LABEL_HEIGHT, FILMSTRIP_MARGIN,
     FILMSTRIP_SPACING, PreviewKey, PreviewText, Restore, ThumbGate, WindowBefore, clamp_offset,
@@ -125,6 +126,14 @@ const BACKDROP: egui::Color32 = egui::Color32::from_black_alpha(60);
 const WINDOW_POLL_INTERVAL: Duration = Duration::from_millis(100);
 /// How often a frame is asked for while capture times are being read for the sort (T138).
 const CAPTURE_POLL_INTERVAL: Duration = Duration::from_millis(50);
+/// The space around the line at the top of a side of the compare, and the plate behind it (T153).
+const SIDE_TEXT_MARGIN: f32 = 6.0;
+const SIDE_TEXT_PLATE: egui::Color32 = egui::Color32::from_black_alpha(170);
+/// The dashed frame of the held image's cell in the filmstrip (U6-Q10, T153): how far inside the
+/// cell it is drawn (inside the current cell's frame), and its dashes and gaps.
+const HELD_FRAME_INSET: f32 = 4.0;
+const HELD_FRAME_DASH: f32 = 6.0;
+const HELD_FRAME_GAP: f32 = 4.0;
 /// How many frames the window state is not taken after the preview closed, at most, while the
 /// system has not yet reported the window out of the preview's full screen (T111).
 const WINDOW_SETTLE_FRAMES: u32 = 30;
@@ -562,6 +571,22 @@ impl MetadataWindow {
     }
 }
 
+/// The open compare (ADR 0017 §2.2, U6, T153): the held image, where it was opened, and what the
+/// second view core has been told.
+struct CompareOpen {
+    /// The held image, as the tab's list of files names it.
+    compare: Compare,
+    /// The active tab's index and folder when the compare opened; it closes when either differs
+    /// (U6-Q11).
+    tab: usize,
+    folder: Option<PathBuf>,
+    /// The held side has not yet been given the current side's zoom and centre: set when the
+    /// compare opens and when the held image changes, done once at the next drawn frame.
+    view_pending: bool,
+    /// The display mode last given to the second view core (U6-Q9); `None` before the first.
+    mode_sent: Option<Source>,
+}
+
 struct Loupe {
     core: ViewCore<NativeBackend>,
     /// The second view core, for the held image of the compare (ADR 0017 §2.2, U6-Q2, U6-Q3,
@@ -571,6 +596,8 @@ struct Loupe {
     second_core: ViewCore<NativeBackend>,
     second_textures: Textures,
     second_clip_overlay: OverlayCache<egui::TextureHandle>,
+    /// The compare while it is open (T153); not remembered after a restart (U6-Q11).
+    compare: Option<CompareOpen>,
     metadata_worker: MetadataWorker,
     /// The result of the metadata worker's first ExifTool start has been looked at, and the
     /// message about it shown when needed (ADR 0007 §11, D9, T101): it is shown at most once.
@@ -3105,12 +3132,172 @@ impl Loupe {
         shell.clip_shadows = !shell.clip_shadows;
     }
 
-    /// Tells the view core whether a clipping map is wanted (U7b-Q8, T148): exactly when the
-    /// preview is shown and at least one overlay is on. Called every frame.
+    /// Tells the view cores whether a clipping map is wanted (U7b-Q8, T148): the first exactly
+    /// when the preview is shown and at least one overlay is on, the second when the compare is
+    /// open as well (U6-Q9: the marks on both sides, T153). Called every frame.
     fn wish_clipping_map(&self) {
         let shell = &self.settings.shell;
         let wanted = self.in_preview() && (shell.clip_highlights || shell.clip_shadows);
         self.core.set_clipping_wanted(wanted);
+        self.second_core
+            .set_clipping_wanted(wanted && self.compare.is_some());
+    }
+
+    /// The indexes the compare would open with, `(held, current)` (U6-Q4, T151's
+    /// `open_indexes` on the stepped list); `None` outside the preview, with fewer than two
+    /// images in the stepped list, or when the current image is not in it.
+    fn compare_open_indexes(&self) -> Option<(usize, usize)> {
+        let only_marked = self.settings.shell.filmstrip_marked;
+        let tab = self
+            .tabs
+            .active()
+            .filter(|tab| tab.mode == ViewMode::Loupe)?;
+        open_indexes(&tab.preview_list(only_marked), tab.current)
+    }
+
+    /// `C` and View ▸ Compare: opens the compare, or closes it (U6-Q4, U6-Q11, T153).
+    fn toggle_compare(&mut self) {
+        if self.compare.is_some() {
+            self.close_compare();
+        } else {
+            self.open_compare();
+        }
+    }
+
+    /// Opens the compare (U6-Q4): the current image is held and given to the second view core,
+    /// and the current image moves to the next of the stepped list (the previous at the end) as
+    /// a filmstrip click moves it. Nothing with fewer than two images in the stepped list.
+    fn open_compare(&mut self) {
+        let Some((held, current)) = self.compare_open_indexes() else {
+            return;
+        };
+        let Some((held, folder)) = self
+            .tabs
+            .active()
+            .and_then(|tab| Some((tab.files.get(held)?.clone(), tab.folder.clone())))
+        else {
+            return;
+        };
+        self.hold_in_second_core(&held);
+        self.compare = Some(CompareOpen {
+            compare: Compare::new(held),
+            tab: self.tabs.active_index(),
+            folder,
+            view_pending: true,
+            mode_sent: None,
+        });
+        self.loupe_move(LoupeMove::To(current));
+    }
+
+    /// Closes the compare (U6-Q11): the current image stays in the preview, the second view core
+    /// gets an empty list and its clipping marks are released (as the contact sheet does). Its
+    /// dropped textures are taken back at the next sync of `second_textures`.
+    fn close_compare(&mut self) {
+        if self.compare.take().is_none() {
+            return;
+        }
+        self.second_core.set_files(Vec::new(), 0);
+        self.second_core.set_clipping_wanted(false);
+        self.second_clip_overlay.release();
+    }
+
+    /// Closes the compare by itself (U6-Q11), checked every frame: when the preview is no longer
+    /// shown, when the active tab's index or folder differs from those it was opened in, or when
+    /// the held image is no longer among the tab's files.
+    fn follow_compare(&mut self) {
+        let Some(open) = &self.compare else {
+            return;
+        };
+        let valid = self.tabs.active_index() == open.tab
+            && self.tabs.active().is_some_and(|tab| {
+                tab.mode == ViewMode::Loupe
+                    && tab.folder == open.folder
+                    && open.compare.still_valid(&tab.files)
+            });
+        if !valid {
+            self.close_compare();
+        }
+    }
+
+    /// Gives the second view core the held image, `held` as the tab names it: the path is
+    /// resolved as the first core's are (`resolve_paths`), so the rating badge and the image
+    /// check find it.
+    fn hold_in_second_core(&self, held: &Path) {
+        let path = match std::env::current_dir() {
+            Ok(cwd) => resolve_path(&cwd, held),
+            Err(_) => held.to_path_buf(),
+        };
+        self.second_core.set_files(vec![path], 0);
+    }
+
+    /// `K` and View ▸ Hold Current Image (U6-Q6, T153): the current image becomes the held one
+    /// and the second view core gets it, with the current side's zoom and centre at the next
+    /// frame. Nothing outside the compare, or when the current image is already held.
+    fn hold_current_image(&mut self) {
+        let Some(current) = self
+            .tabs
+            .active()
+            .and_then(|tab| tab.files.get(tab.current).cloned())
+        else {
+            return;
+        };
+        let Some(open) = &mut self.compare else {
+            return;
+        };
+        if open.compare.held() == current {
+            return;
+        }
+        open.compare.hold(&current);
+        open.view_pending = true;
+        self.hold_in_second_core(&current);
+    }
+
+    /// `Shift+K` and View ▸ Swap Images (U6-Q6, T153): T151's swap on the stepped list. The old
+    /// current image becomes the held one and is given to the second view core, and the current
+    /// image moves to the old held image's index as a filmstrip click moves it. Nothing outside
+    /// the compare or when the swap gives `None` (the held image is not in the stepped list, or
+    /// is the current image).
+    fn swap_images(&mut self) {
+        let only_marked = self.settings.shell.filmstrip_marked;
+        let Some(tab) = self.tabs.active() else {
+            return;
+        };
+        let Some(open) = &mut self.compare else {
+            return;
+        };
+        let list: Vec<(usize, &Path)> = tab
+            .preview_list(only_marked)
+            .into_iter()
+            .filter_map(|index| Some((index, tab.files.get(index)?.as_path())))
+            .collect();
+        let Some(to) = open.compare.swap(&list, tab.current) else {
+            return;
+        };
+        open.view_pending = true;
+        let held = open.compare.held().to_path_buf();
+        self.hold_in_second_core(&held);
+        self.loupe_move(LoupeMove::To(to));
+    }
+
+    /// `V` and View ▸ Above and Below (U6-Q7, T153): the compare's layout switched and
+    /// remembered (`compare_above_below`). Nothing outside the compare.
+    fn toggle_compare_layout(&mut self) {
+        if self.compare.is_some() {
+            let shell = &mut self.settings.shell;
+            shell.compare_above_below = !shell.compare_above_below;
+        }
+    }
+
+    /// The image area's two halves while comparing, `(held, current)`, in the remembered layout
+    /// (U6-Q5, U6-Q7, T151's `sides`); `None` outside the compare.
+    fn compare_sides(&self, area: egui::Rect) -> Option<(egui::Rect, egui::Rect)> {
+        self.compare.as_ref()?;
+        let layout = if self.settings.shell.compare_above_below {
+            Layout::AboveBelow
+        } else {
+            Layout::SideBySide
+        };
+        Some(sides(area, layout))
     }
 
     /// The thumbnail worker in the preview (§5, U3-Q4, T111): it runs only while the filmstrip is
@@ -3356,6 +3543,11 @@ impl Loupe {
         };
         let count = list.len();
         let cwd = std::env::current_dir().ok();
+        // The held image of the compare, whose cell gets a dashed frame (U6-Q10, T153).
+        let held = self
+            .compare
+            .as_ref()
+            .map(|open| open.compare.held().to_path_buf());
         let mut toggle = false;
         let mut clicked = None;
         ui.horizontal(|ui| {
@@ -3471,6 +3663,21 @@ impl Loupe {
                     self.thumb_grid.state(index),
                     self.thumb_textures.get(&index),
                 );
+                if held.as_deref() == Some(path.as_path()) {
+                    let frame = cell_rect.shrink(HELD_FRAME_INSET);
+                    painter.extend(egui::Shape::dashed_line(
+                        &[
+                            frame.left_top(),
+                            frame.right_top(),
+                            frame.right_bottom(),
+                            frame.left_bottom(),
+                            frame.left_top(),
+                        ],
+                        egui::Stroke::new(2.0, MARKED_BLUE),
+                        HELD_FRAME_DASH,
+                        HELD_FRAME_GAP,
+                    ));
+                }
             }
             if response.clicked()
                 && !blocked
@@ -3592,6 +3799,12 @@ impl Loupe {
                 tab.is_some_and(|tab| tab.position().is_some())
             }
             Command::ToggleView => tab.is_some_and(|tab| !tab.visible.is_empty()),
+            // Compare opens with two images in the stepped list, and closes an open compare; the
+            // other three act only in the compare (T153).
+            Command::Compare => self.compare.is_some() || self.compare_open_indexes().is_some(),
+            Command::HoldImage | Command::SwapImages | Command::AboveBelow => {
+                self.compare.is_some()
+            }
             _ => true,
         }
     }
@@ -3603,6 +3816,7 @@ impl Loupe {
             Command::ToggleAnchor => Some(self.anchor_at_pointer),
             Command::ClipHighlights => Some(shell.clip_highlights),
             Command::ClipShadows => Some(shell.clip_shadows),
+            Command::AboveBelow => Some(shell.compare_above_below),
             Command::ToggleInfo => {
                 Some(!shell.columns_hidden && shell.right_column == ColumnState::Open)
             }
@@ -3654,6 +3868,10 @@ impl Loupe {
             Command::ToggleAnchor => self.act(Action::ToggleAnchor, None),
             Command::ClipHighlights => self.toggle_clip_highlights(),
             Command::ClipShadows => self.toggle_clip_shadows(),
+            Command::Compare => self.toggle_compare(),
+            Command::HoldImage => self.hold_current_image(),
+            Command::SwapImages => self.swap_images(),
+            Command::AboveBelow => self.toggle_compare_layout(),
             Command::ToggleInfo => self.act(Action::ToggleInfo, None),
             Command::ToggleColumns => self.shell_action(ctx, ShellAction::ToggleColumns),
             Command::LeftColumn => self.toggle_column(true),
@@ -4277,7 +4495,12 @@ impl Loupe {
         // The status line is its own panel now (T109): the image area is the whole central area.
         let rect = full;
         let ppp = ctx.pixels_per_point();
-        let key_anchor = self.anchor(ctx.input(|input| input.pointer.hover_pos()), rect, ppp);
+        // The zoom keys act on the current image (U6-Q8): while comparing, around the pointer
+        // only when it is on the current side.
+        let key_rect = self
+            .compare_sides(rect)
+            .map_or(rect, |(_, current)| current);
+        let key_anchor = self.anchor(ctx.input(|input| input.pointer.hover_pos()), key_rect, ppp);
         let mut dialog_consumes_keys = self.import_dialog.is_some() && !self.import_hidden;
         let mut start_import = false;
         for (tab_action, key, ctrl, shift, alt, repeat) in key_actions {
@@ -4330,6 +4553,10 @@ impl Loupe {
                         }
                         PreviewKey::ClipHighlights => self.toggle_clip_highlights(),
                         PreviewKey::ClipShadows => self.toggle_clip_shadows(),
+                        PreviewKey::Compare => self.toggle_compare(),
+                        PreviewKey::HoldImage => self.hold_current_image(),
+                        PreviewKey::SwapImages => self.swap_images(),
+                        PreviewKey::AboveBelow => self.toggle_compare_layout(),
                         PreviewKey::Nothing => {}
                     }
                     ctx.request_repaint();
@@ -4406,7 +4633,16 @@ impl Loupe {
                     None => {}
                 },
                 Some(ViewMode::Loupe) => {
-                    if loupe_key_action(key, ctrl, alt).is_some() {
+                    if self.compare.is_some()
+                        && key == egui::Key::Escape
+                        && loupe_key_action(key, ctrl, alt).is_some()
+                    {
+                        // Escape closes an open compare first and the current image stays in
+                        // the preview (U6-Q11, T153); G and Enter close the preview, and the
+                        // compare with it (`follow_compare`).
+                        self.close_compare();
+                        ctx.request_repaint();
+                    } else if loupe_key_action(key, ctrl, alt).is_some() {
                         scroll_to = self.switch_mode(ViewMode::Grid);
                     } else if let Some(action) = key_action(key, ctrl, alt)
                         && step_allowed(action, repeat, &self.last_frame_status)
@@ -4420,6 +4656,9 @@ impl Loupe {
         if start_import {
             self.request_import_start();
         }
+        // The compare closes by itself when its preview, tab or held image is gone (T153); checked
+        // here every frame, before anything of it is drawn.
+        self.follow_compare();
         // The clipping map is wanted exactly when the preview is shown with an overlay on (T148).
         self.wish_clipping_map();
         // The preview opened or closed by a key this frame (T111): the next frame draws the new
@@ -4475,6 +4714,11 @@ impl Loupe {
             // No clipping marks in the contact sheet: their texture is released (T149).
             self.clip_overlay.release();
             self.second_clip_overlay.release();
+            // The second view core's textures are synced here too (T153): a compare that closed
+            // with the preview emptied the core, and its dropped textures are taken back and its
+            // views drained. With an empty list and nothing dropped it does nothing.
+            let max_side = ctx.input(|i| i.max_texture_side);
+            self.second_textures.sync(&ctx, &self.second_core, max_side);
             self.draw_grid(ui, full, rect, scroll_to);
             return;
         }
@@ -4484,30 +4728,71 @@ impl Loupe {
         // The tab's current image comes from the tab, not from `frame.pos`: every step goes through
         // the tab and the core follows it (ADR 0014 §4.4). The status line counts the whole folder.
         let total = self.tabs.active().map_or(0, |tab| tab.files.len());
+        let shown = ImageAreaShown {
+            anchor_at_pointer: self.anchor_at_pointer,
+            choice: ClipChoice {
+                highlights: self.settings.shell.clip_highlights,
+                shadows: self.settings.shell.clip_shadows,
+            },
+            metadata: &self.metadata,
+            indicator_after: self.indicator_after,
+            message: self.message.as_deref(),
+            total,
+        };
+        // While comparing, the image area is two halves (U6-Q5, T153): the held image left or on
+        // top from the second view core, the current image right or below from the first.
+        let halves = self.compare_sides(rect);
+        let current_rect = halves.map_or(rect, |(_, current)| current);
         let frame = draw_image_area(
             ui,
             &self.core,
             &mut self.textures,
             &mut self.clip_overlay,
-            rect,
+            current_rect,
             ui.scope_id().with("image"),
-            &ImageAreaShown {
-                anchor_at_pointer: self.anchor_at_pointer,
-                choice: ClipChoice {
-                    highlights: self.settings.shell.clip_highlights,
-                    shadows: self.settings.shell.clip_shadows,
-                },
-                metadata: &self.metadata,
-                indicator_after: self.indicator_after,
-                message: self.message.as_deref(),
-                total,
-            },
+            &shown,
         );
-        // The second view core holds nothing yet (T152): its textures are synced as the first's,
-        // and it has no clipping marks to keep.
-        let max_side = ctx.input(|i| i.max_texture_side);
-        self.second_textures.sync(&ctx, &self.second_core, max_side);
-        self.second_clip_overlay.release();
+        match (halves, &mut self.compare) {
+            (Some((held_rect, _)), Some(open)) => {
+                // The held side starts as the current one is shown: the display mode when the
+                // compare opens and whenever `R` changes it (U6-Q9), the zoom and centre once
+                // when it opens and when the held image changes. After that each side has its
+                // own zoom and position (U6-Q8, free).
+                if open.mode_sent != Some(frame.mode) {
+                    self.second_core.set_mode(frame.mode);
+                    open.mode_sent = Some(frame.mode);
+                }
+                if open.view_pending {
+                    self.second_core.set_view(frame.zoom, frame.centre);
+                    open.view_pending = false;
+                }
+                let held_frame = draw_image_area(
+                    ui,
+                    &self.second_core,
+                    &mut self.second_textures,
+                    &mut self.second_clip_overlay,
+                    held_rect,
+                    ui.scope_id().with("held-image"),
+                    &shown,
+                );
+                // Each side's line at its top (U6-Q10), and the current side's frame.
+                paint_side_text(ui, held_rect, &compare_side_text(&held_frame));
+                paint_side_text(ui, current_rect, &compare_side_text(&frame));
+                ui.painter().rect_stroke(
+                    current_rect,
+                    0.0,
+                    egui::Stroke::new(2.0, MARKED_BLUE),
+                    egui::StrokeKind::Inside,
+                );
+            }
+            _ => {
+                // Outside the compare the second view core holds nothing: its textures are
+                // synced as the first's (T152), and it has no clipping marks to keep.
+                let max_side = ctx.input(|i| i.max_texture_side);
+                self.second_textures.sync(&ctx, &self.second_core, max_side);
+                self.second_clip_overlay.release();
+            }
+        }
         self.last_frame_status = frame.status.clone();
         self.last_zoom = Some((frame.zoom, frame.scale));
         // The clipping state, for the preview column's Clipping section (T148).
@@ -4632,7 +4917,8 @@ fn draw_image_area(
     let max_side = ctx.input(|i| i.max_texture_side);
     textures.sync(&ctx, core, max_side);
     let frame = core.frame(view_px(rect, ppp));
-    let painter = ui.painter().clone();
+    // Clipped to `rect`, so one side of the compare never draws on the other (T153).
+    let painter = ui.painter_at(rect);
     let image_shown = textures.paint(&painter, rect, ppp, &frame);
     // The clipping marks over the image (ADR 0017 §2.6, U7b, T149), from this frame's map and
     // `Draw` only, so they are never drawn on another image: the image's quad once more, with
@@ -4700,6 +4986,38 @@ fn draw_image_area(
         Status::Ready => {}
     }
     frame
+}
+
+/// The line at the top of one side of the compare (U6-Q10, T153): `text` centred at the top of
+/// `rect`, on a dark plate so it can be read over the image; a text wider than the side wraps.
+fn paint_side_text(ui: &egui::Ui, rect: egui::Rect, text: &str) {
+    if text.is_empty() {
+        return;
+    }
+    let painter = ui.painter_at(rect);
+    let galley = painter.layout(
+        text.to_owned(),
+        egui::FontId::proportional(STATUS_TEXT_SIZE),
+        image_area::TEXT,
+        (rect.width() - 4.0 * SIDE_TEXT_MARGIN).max(0.0),
+    );
+    let size = galley.size();
+    let plate = egui::Rect::from_min_size(
+        egui::pos2(
+            rect.center().x - size.x / 2.0 - SIDE_TEXT_MARGIN,
+            rect.min.y + SIDE_TEXT_MARGIN,
+        ),
+        size + egui::vec2(2.0 * SIDE_TEXT_MARGIN, SIDE_TEXT_MARGIN),
+    );
+    painter.rect_filled(plate, 3.0, SIDE_TEXT_PLATE);
+    painter.galley(
+        egui::pos2(
+            plate.min.x + SIDE_TEXT_MARGIN,
+            plate.min.y + SIDE_TEXT_MARGIN / 2.0,
+        ),
+        galley,
+        image_area::TEXT,
+    );
 }
 
 /// The range from the smallest to the largest file index (+1), for the thumbnail worker's
@@ -6704,6 +7022,7 @@ fn run(options: Options) -> Result<(), String> {
                 second_core,
                 second_textures: Textures::new(),
                 second_clip_overlay: OverlayCache::default(),
+                compare: None,
                 metadata_worker,
                 exiftool_checked: false,
                 settings,

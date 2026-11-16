@@ -327,6 +327,10 @@ pub fn command_text(command: Command) -> String {
         Command::ToggleAnchor => "Zoom at Pointer".to_owned(),
         Command::ClipHighlights => "Show Clipped Highlights".to_owned(),
         Command::ClipShadows => "Show Deep Shadows".to_owned(),
+        Command::Compare => "Compare".to_owned(),
+        Command::HoldImage => "Hold Current Image".to_owned(),
+        Command::SwapImages => "Swap Images".to_owned(),
+        Command::AboveBelow => "Above and Below".to_owned(),
         Command::ToggleInfo => "Inspector".to_owned(),
         Command::NextTab => "Next Tab".to_owned(),
         Command::PreviousTab => "Previous Tab".to_owned(),
@@ -446,6 +450,10 @@ mod tests {
                 "Zoom at Pointer",
                 "Show Clipped Highlights",
                 "Show Deep Shadows",
+                "Compare",
+                "Hold Current Image",
+                "Swap Images",
+                "Above and Below",
                 "Next Tab",
                 "Previous Tab",
                 "Side Columns",
@@ -495,6 +503,10 @@ mod tests {
             Some("A"),
             Some("J"),
             Some("Shift+J"),
+            Some("C"),
+            Some("K"),
+            Some("Shift+K"),
+            Some("V"),
             Some("Ctrl+Tab"),
             Some("Ctrl+Shift+Tab"),
             Some("H"),
@@ -566,6 +578,27 @@ mod tests {
         };
         assert_eq!(key_of(Command::ClipHighlights).as_deref(), Some("J"));
         assert_eq!(key_of(Command::ClipShadows).as_deref(), Some("Shift+J"));
+    }
+
+    /// The compare's menu items (ADR 0017 U6-Q12, T153).
+    #[test]
+    fn the_compare_menu_items_and_their_keys() {
+        let key_of = |command| {
+            menu_items()
+                .into_iter()
+                .find(|item| item.command == command)
+                .and_then(|item| item.key)
+                .map(key_text)
+        };
+        for (command, text, key) in [
+            (Command::Compare, "Compare", "C"),
+            (Command::HoldImage, "Hold Current Image", "K"),
+            (Command::SwapImages, "Swap Images", "Shift+K"),
+            (Command::AboveBelow, "Above and Below", "V"),
+        ] {
+            assert_eq!(command_text(command), text);
+            assert_eq!(key_of(command).as_deref(), Some(key), "{text}");
+        }
     }
 
     #[test]

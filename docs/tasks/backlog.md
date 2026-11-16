@@ -59,6 +59,12 @@ and reviewer:
   ADR 0014 §15): a row "0★ 1★ 2★ 3★ 4★ 5★" and a row of colour swatches, each clicked on and off,
   with a check box per row that turns the row on or off. Needs an amendment of ADR 0014 first: the
   star part would become a set of star values instead of the ≥ / = / ≤ condition (T60).
+- **The compare after a move that did not happen** (from the review of T153, 2026-11-16): opening
+  the compare and Shift+K change the compare's state before `LoupeMove::To`, which can silently
+  not move (`refilter_before_move` drops the target, for example after a rolled-back rating
+  write). Then both sides show the same image and only C or Escape leaves it. A filmstrip click
+  has the same gap today. A fix: check the tab's current image after the move and close the
+  compare (or undo the swap) when it did not move. Rare; for after the owner's hand check of U6.
 
 Removed on 2026-11-13 because they are done or planned elsewhere: ADR 0010 steps M3–M7 (done,
 T30–T40); ADR 0011 step K4 (done, T26–T29); moving rejected or picked images to `_rejected` /

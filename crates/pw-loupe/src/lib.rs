@@ -357,6 +357,14 @@ pub enum PreviewKey {
     ClipHighlights,
     /// `Shift+J`: the overlay that marks the deepest shadows on the image, on ↔ off (U7b-Q5).
     ClipShadows,
+    /// `C`: the compare open ↔ closed (ADR 0017 §2.2, U6-Q4, U6-Q11, T153).
+    Compare,
+    /// `K`: the current image becomes the held image of the compare (U6-Q6).
+    HoldImage,
+    /// `Shift+K`: the held and the current image of the compare change places (U6-Q6).
+    SwapImages,
+    /// `V`: the compare's images above and below each other ↔ side by side (U6-Q7).
+    AboveBelow,
     /// Ctrl+O, Ctrl+I, Ctrl+W, Ctrl+Tab, Ctrl+Shift+Tab and F11: nothing until the preview is
     /// closed (U3-Q1). The key is taken so no other key map acts on it.
     Nothing,
@@ -379,6 +387,11 @@ pub fn preview_key_action(
         // J and Shift+J are told apart here: the loupe's `key_action` does not look at Shift.
         (K::J, false, false, false) => Some(PreviewKey::ClipHighlights),
         (K::J, false, true, false) => Some(PreviewKey::ClipShadows),
+        // The compare's keys (T153); K and Shift+K are told apart as J and Shift+J.
+        (K::C, false, false, false) => Some(PreviewKey::Compare),
+        (K::K, false, false, false) => Some(PreviewKey::HoldImage),
+        (K::K, false, true, false) => Some(PreviewKey::SwapImages),
+        (K::V, false, false, false) => Some(PreviewKey::AboveBelow),
         (K::O | K::I | K::W, true, false, false)
         | (K::Tab, true, _, false)
         | (K::F11, false, false, false) => Some(PreviewKey::Nothing),
@@ -927,8 +940,8 @@ mod tests {
 
     /// The command a key gives in `view`, through the key functions in the order `main.rs` asks
     /// them (shell keys, import, tabs, ratings, `M`, `I`, then the view's own keys). The preview's
-    /// clipping keys (J and Shift+J, T148) are asked before the loupe's keys, which take no Shift
-    /// chord.
+    /// clipping keys (J and Shift+J, T148) and the compare's keys (C, K, Shift+K and V, T153) are
+    /// asked before the loupe's keys, which take no Shift chord.
     fn command_of_key(chord: KeyChord, view: ViewMode) -> Option<Command> {
         let KeyChord {
             key,
@@ -978,6 +991,10 @@ mod tests {
                 match preview_key_action(key, ctrl, shift, alt) {
                     Some(PreviewKey::ClipHighlights) => return Some(Command::ClipHighlights),
                     Some(PreviewKey::ClipShadows) => return Some(Command::ClipShadows),
+                    Some(PreviewKey::Compare) => return Some(Command::Compare),
+                    Some(PreviewKey::HoldImage) => return Some(Command::HoldImage),
+                    Some(PreviewKey::SwapImages) => return Some(Command::SwapImages),
+                    Some(PreviewKey::AboveBelow) => return Some(Command::AboveBelow),
                     _ => {}
                 }
                 if shift {
@@ -1109,6 +1126,114 @@ mod tests {
                     .iter()
                     .any(|item| item.command == command && item.key == Some(chord)),
                 "{command:?}"
+            );
+        }
+    }
+
+    /// C, K, Shift+K and V are the compare's keys in the preview (ADR 0017 U6-Q4, U6-Q6, U6-Q7,
+    /// U6-Q11, T153): each gives its own key, only in the preview and only with exactly those
+    /// modifiers; K never fires on Shift+K.
+    #[test]
+    fn c_k_shift_k_and_v_are_the_compare_keys_of_the_preview() {
+        use egui::Key as K;
+        let keys = [
+            (K::C, false, PreviewKey::Compare, Command::Compare),
+            (K::K, false, PreviewKey::HoldImage, Command::HoldImage),
+            (K::K, true, PreviewKey::SwapImages, Command::SwapImages),
+            (K::V, false, PreviewKey::AboveBelow, Command::AboveBelow),
+        ];
+        for (key, shift, preview_key, command) in keys {
+            assert_eq!(
+                preview_key_action(key, false, shift, false),
+                Some(preview_key),
+                "{key:?} shift {shift}"
+            );
+            // Through the key functions in the order `main.rs` asks them; nothing in the
+            // contact sheet.
+            let chord = KeyChord {
+                key,
+                ctrl: false,
+                shift,
+                alt: false,
+            };
+            assert_eq!(command_of_key(chord, ViewMode::Loupe), Some(command));
+            assert_eq!(command_of_key(chord, ViewMode::Grid), None, "{key:?}");
+            // An item of the menu, so the every-menu-key test covers it.
+            assert!(
+                shell::menu_items()
+                    .iter()
+                    .any(|item| item.command == command && item.key == Some(chord)),
+                "{command:?}"
+            );
+        }
+        // K does not fire on Shift+K, nor Shift+K on K.
+        assert_ne!(
+            preview_key_action(K::K, false, true, false),
+            Some(PreviewKey::HoldImage)
+        );
+        assert_ne!(
+            preview_key_action(K::K, false, false, false),
+            Some(PreviewKey::SwapImages)
+        );
+        // With Ctrl or Alt none of them is a key of the preview; C and V have no Shift chord.
+        for key in [K::C, K::K, K::V] {
+            for (ctrl, shift, alt) in [
+                (true, false, false),
+                (false, false, true),
+                (true, true, false),
+                (false, true, true),
+                (true, false, true),
+                (true, true, true),
+            ] {
+                assert_eq!(
+                    preview_key_action(key, ctrl, shift, alt),
+                    None,
+                    "{key:?} ctrl {ctrl} shift {shift} alt {alt}"
+                );
+            }
+        }
+        assert_eq!(preview_key_action(K::C, false, true, false), None);
+        assert_eq!(preview_key_action(K::V, false, true, false), None);
+        // They are no keys of the loupe, the contact sheet, the ratings, the shell or the tabs.
+        for key in [K::C, K::K, K::V] {
+            assert_eq!(key_action(key, false, false), None, "{key:?}");
+            assert_eq!(loupe_key_action(key, false, false), None, "{key:?}");
+            for shift in [false, true] {
+                assert_eq!(grid_key_action(key, false, shift, false), None);
+                assert_eq!(rating_key_action(key, false, shift, false), None);
+                assert_eq!(shell_key_action(key, false, shift, false), None);
+                assert_eq!(tab_action(key, false, shift, false), None);
+            }
+        }
+        // The existing preview keys are unchanged.
+        for (key, shift, preview_key) in [
+            (K::S, false, PreviewKey::OnlyMarked),
+            (K::H, false, PreviewKey::HideParts),
+            (K::I, false, PreviewKey::ToggleColumn),
+            (K::J, false, PreviewKey::ClipHighlights),
+            (K::J, true, PreviewKey::ClipShadows),
+            (K::F11, false, PreviewKey::Nothing),
+        ] {
+            assert_eq!(
+                preview_key_action(key, false, shift, false),
+                Some(preview_key),
+                "{key:?} shift {shift}"
+            );
+        }
+        for (key, shift) in [(K::O, false), (K::I, false), (K::W, false), (K::Tab, true)] {
+            assert_eq!(
+                preview_key_action(key, true, shift, false),
+                Some(PreviewKey::Nothing),
+                "Ctrl+{key:?}"
+            );
+        }
+        // Escape, G and Enter stay with the way back (Escape closes an open compare first, in
+        // `main.rs`), and the steps, zoom keys, R and M with the loupe.
+        for key in [K::Escape, K::G, K::Enter, K::ArrowRight, K::Z, K::R, K::M] {
+            assert_eq!(
+                preview_key_action(key, false, false, false),
+                None,
+                "{key:?}"
             );
         }
     }

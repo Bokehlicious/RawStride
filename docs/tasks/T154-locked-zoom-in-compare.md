@@ -1,9 +1,10 @@
-# T154. ADR 0017 U6, fifth part: locked zoom and position in the compare — Blocked
+# T154. ADR 0017 U6, fifth part: locked zoom and position in the compare — Open
 
-- **Blocked: waits for T153** (and T150–T152; the owner's answers to U6-Q1–U6-Q12 are in
-  `docs/tasks/done/T150-locked-view-in-the-view-core.md` and ADR 0017 §6.1). Chain: T150 → T151 →
-  T152 → T153 → T154. The
-  owner's hand check of U6 comes after this task.
+- **Can start now.** T153 (the compare open in the preview: `CompareOpen` in `Loupe` with
+  `view_pending` and `mode_sent`, the two sides drawn by `draw_image_area`, the keys C, K, Shift+K
+  and V), T152, T151 and T150 are Done. The owner's answers to U6-Q1–U6-Q12 are in
+  `docs/tasks/done/T150-locked-view-in-the-view-core.md` and ADR 0017 §6.1. Chain: T150 → T151 →
+  T152 → T153 → T154. The owner's hand check of U6 comes after this task.
 - **Why:** ADR 0017 §2.2 and step U6, "locked zoom": with the lock on, the held image shows the
   same zoom level and the same point of the image as the current one, so the same detail is
   judged on both. T150 gave the view core `set_view` and `Frame::centre`, T151 the rule `follow`.
@@ -48,3 +49,4 @@
 | Date | Status | Note |
 |---|---|---|
 | 2026-11-16 | Blocked | Added with T150–T152 (the chain of U6) as T153; renamed T154 when the cold read split T152; "sent" forgotten when the held image's size becomes known, the anchor on the held side spelled out (near the detail when the images differ in size or orientation), the menu place and `command_of_key` named; waits for T153 |
+| 2026-11-16 | Open | T153 Done |
