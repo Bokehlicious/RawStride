@@ -72,6 +72,12 @@ pub enum ImportText {
     StoppedMessage,
     /// The card was not ejected because the import was not complete.
     EjectSkipped,
+    /// The check box that copies new images only (T158).
+    Incremental,
+    /// The source has no drive, so it has no ingest register (T158).
+    NoRegisterRoot,
+    /// Every image of the source was imported earlier (T158).
+    AllImportedEarlier,
 }
 
 /// The text of `text`.
@@ -115,6 +121,16 @@ pub fn import_text(text: ImportText) -> &'static str {
         ImportText::WorkerStopped => "Import has stopped.",
         ImportText::StoppedMessage => "The import stopped before it was finished.",
         ImportText::EjectSkipped => "The card was not ejected because the import was not complete.",
+        ImportText::Incremental => {
+            "Copy new images only (skip what was imported from this card before)"
+        }
+        ImportText::NoRegisterRoot => {
+            "The source is not a drive, so earlier imports cannot be recognised; every image is \
+             copied."
+        }
+        ImportText::AllImportedEarlier => {
+            "Every image in the source was imported earlier; there is nothing new to copy."
+        }
     }
 }
 
@@ -130,6 +146,15 @@ pub fn hidden_done_text(copied: usize, cancelled: bool) -> String {
         (true, _) => format!("Import cancelled: {copied} files"),
         (false, 1) => "Import done: 1 file".to_owned(),
         (false, _) => format!("Import done: {copied} files"),
+    }
+}
+
+/// The line of a finished import that tells how many files an earlier import took and were left
+/// out (T158).
+pub fn earlier_done_text(n: usize) -> String {
+    match n {
+        1 => "1 file imported earlier was left out.".to_owned(),
+        _ => format!("{n} files imported earlier were left out."),
     }
 }
 
@@ -212,6 +237,9 @@ pub fn clear_cancel_text() -> &'static str {
 
 /// Returns the preview summary as in the Tauri app.
 pub fn preview_summary(p: &Preview) -> String {
+    if p.shots == 0 && p.earlier > 0 {
+        return import_text(ImportText::AllImportedEarlier).to_string();
+    }
     if p.shots == 0 {
         return "No images were found in the source.".to_string();
     }
@@ -230,6 +258,11 @@ pub fn preview_summary(p: &Preview) -> String {
         0 => {}
         1 => parts.push("1 already exists".to_string()),
         present => parts.push(format!("{present} already exist")),
+    }
+    match p.earlier {
+        0 => {}
+        1 => parts.push("1 file imported earlier".to_string()),
+        earlier => parts.push(format!("{earlier} files imported earlier")),
     }
     if p.renamed > 0 {
         parts.push(format!("{} renamed because of a name conflict", p.renamed));
@@ -346,6 +379,12 @@ pub fn done_lines(done: &ImportDone) -> Vec<DoneLine> {
         text: summary,
         error: false,
     });
+    if done.earlier > 0 {
+        lines.push(DoneLine {
+            text: earlier_done_text(done.earlier),
+            error: false,
+        });
+    }
 
     for (i, failure) in done.failed.iter().enumerate() {
         if i >= 20 {
@@ -364,6 +403,13 @@ pub fn done_lines(done: &ImportDone) -> Vec<DoneLine> {
     for error in done.iptc_errors.iter().take(10) {
         lines.push(DoneLine {
             text: format!("IPTC: {error}"),
+            error: true,
+        });
+    }
+
+    if let Some(register_error) = &done.register_error {
+        lines.push(DoneLine {
+            text: register_error.clone(),
             error: true,
         });
     }
@@ -435,6 +481,8 @@ mod tests {
             no_exif: 0,
             items_total: 0,
             lines: Vec::new(),
+            earlier: 0,
+            register_note: None,
         }
     }
 
@@ -801,5 +849,110 @@ mod tests {
             exiftool_unavailable_text("A001.jpg"),
             "A001.jpg: ExifTool is not available"
         );
+    }
+
+    // ---------- copy new images only (T158) ----------
+
+    #[test]
+    fn the_incremental_texts_keep_their_wording() {
+        assert_eq!(
+            import_text(ImportText::Incremental),
+            "Copy new images only (skip what was imported from this card before)"
+        );
+        assert_eq!(
+            import_text(ImportText::NoRegisterRoot),
+            "The source is not a drive, so earlier imports cannot be recognised; every image is \
+             copied."
+        );
+        assert_eq!(
+            import_text(ImportText::AllImportedEarlier),
+            "Every image in the source was imported earlier; there is nothing new to copy."
+        );
+        assert_eq!(
+            earlier_done_text(1),
+            "1 file imported earlier was left out."
+        );
+        assert_eq!(
+            earlier_done_text(3),
+            "3 files imported earlier were left out."
+        );
+    }
+
+    #[test]
+    fn summary_counts_the_files_imported_earlier() {
+        let one = Preview {
+            shots: 2,
+            files_to_copy: 2,
+            bytes_to_copy: 1024,
+            present: 1,
+            earlier: 1,
+            ..empty_preview()
+        };
+        assert_eq!(
+            preview_summary(&one),
+            "2 images · 2 files to copy (1.0 KB) · 1 already exists · 1 file imported earlier"
+        );
+        let many = Preview {
+            shots: 2,
+            files_to_copy: 2,
+            bytes_to_copy: 1024,
+            earlier: 4,
+            ..empty_preview()
+        };
+        assert_eq!(
+            preview_summary(&many),
+            "2 images · 2 files to copy (1.0 KB) · 4 files imported earlier"
+        );
+    }
+
+    #[test]
+    fn summary_when_every_image_was_imported_earlier() {
+        let p = Preview {
+            shots: 0,
+            earlier: 3,
+            ..empty_preview()
+        };
+        assert_eq!(
+            preview_summary(&p),
+            "Every image in the source was imported earlier; there is nothing new to copy."
+        );
+    }
+
+    #[test]
+    fn done_lines_tell_the_files_left_out_right_after_the_summary() {
+        for (earlier, text) in [
+            (1, "1 file imported earlier was left out."),
+            (5, "5 files imported earlier were left out."),
+        ] {
+            let lines = done_lines(&ImportDone {
+                failed: vec!["copy failure".to_string()],
+                earlier,
+                ..ImportDone::default()
+            });
+            assert_eq!(lines[1].text, text);
+            assert!(!lines[1].error);
+            assert_eq!(lines[2].text, "Failed: copy failure");
+        }
+        assert_eq!(done_lines(&ImportDone::default()).len(), 1);
+    }
+
+    #[test]
+    fn done_lines_put_the_register_error_right_before_the_eject_line() {
+        let done = ImportDone {
+            iptc_errors: vec!["A001.ARW: metadata error".to_string()],
+            register_error: Some("The card could not be marked as imported: denied.".to_string()),
+            eject: Some("E: has been ejected and can be removed.".to_string()),
+            ..ImportDone::default()
+        };
+        let lines = done_lines(&done);
+        assert_eq!(lines[1].text, "IPTC: A001.ARW: metadata error");
+        assert_eq!(
+            lines[2].text,
+            "The card could not be marked as imported: denied."
+        );
+        assert!(lines[2].error);
+        assert_eq!(lines[3].text, "E: has been ejected and can be removed.");
+        assert!(!lines[3].error);
+        assert_eq!(lines.len(), 4);
     }
 }

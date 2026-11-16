@@ -95,6 +95,10 @@ pub struct ImportDone {
     pub elapsed: Duration,
     pub folders: Vec<(String, usize)>,
     pub error: Option<String>,
+    /// The files left out because an earlier import took them from the card (T158).
+    pub earlier: usize,
+    /// Why the card could not be marked as imported, if so; the copy went on (T158).
+    pub register_error: Option<String>,
 }
 
 #[derive(Debug)]
@@ -285,7 +289,7 @@ fn run(
         let event = match request {
             Request::Preview { id, form, rescan } => ImportEvent::Previewed {
                 id,
-                result: preview(&form, rescan, &mut cached_scan),
+                result: preview(&form, rescan, &mut cached_scan, &pw_ingest::register_root),
             },
             Request::Run { id, form, options } => {
                 // Wait until `ImportWorker::run` has cleared the cancel flag for this run.
@@ -295,6 +299,7 @@ fn run(
                     ImportRun {
                         form: &form,
                         options,
+                        register_root: &pw_ingest::register_root,
                     },
                     &cancel,
                     &mut cached_scan,
@@ -333,29 +338,110 @@ fn shots(
     Ok(scanned)
 }
 
+/// The folder that holds the ingest register of a source, if it has one
+/// ([`pw_ingest::register_root`]; a test gives its temporary folder instead, T158).
+type RegisterRoot<'a> = &'a dyn Fn(&Path) -> Option<PathBuf>;
+
+/// The shots and plan of an import after the files an earlier import took are left out (T158).
+struct Planned {
+    shots: Vec<pw_ingest::Shot>,
+    plan: pw_ingest::Plan,
+    /// The files left out because the card's register has them.
+    earlier: usize,
+    /// Why earlier imports cannot be recognised, or the card cannot be marked.
+    note: Option<String>,
+    /// The register's folder and what it says, when the card has one to read and add to.
+    register: Option<(PathBuf, pw_ingest::Register)>,
+}
+
+/// Plans an import. With `incremental` off, every shot is planned (as before T158). With it on,
+/// the shots an earlier import took (the register in `root`) are left out; without a `root` every
+/// shot is planned and the note says that earlier imports cannot be recognised.
+fn plan_new(
+    shots: &[pw_ingest::Shot],
+    options: &pw_ingest::Options,
+    incremental: bool,
+    root: Option<PathBuf>,
+) -> Planned {
+    if !incremental {
+        return Planned {
+            shots: shots.to_vec(),
+            plan: pw_ingest::plan(shots, options),
+            earlier: 0,
+            note: None,
+            register: None,
+        };
+    }
+    let Some(root) = root else {
+        return Planned {
+            shots: shots.to_vec(),
+            plan: pw_ingest::plan(shots, options),
+            earlier: 0,
+            note: Some(import_text(ImportText::NoRegisterRoot).to_string()),
+            register: None,
+        };
+    };
+    let register = pw_ingest::read_register(&root);
+    let (new, earlier) = pw_ingest::new_shots(shots, &root, &register);
+    let plan = pw_ingest::plan(&new, options);
+    Planned {
+        shots: new,
+        plan,
+        earlier,
+        note: register.problem(),
+        register: Some((root, register)),
+    }
+}
+
+/// The register's folder of `source` when the form copies new images only.
+fn root_of(form: &ImportForm, source: &Path, register_root: RegisterRoot<'_>) -> Option<PathBuf> {
+    if form.incremental {
+        register_root(source)
+    } else {
+        None
+    }
+}
+
 fn preview(
     form: &ImportForm,
     rescan: bool,
     cached_scan: &mut Option<(PathBuf, Arc<Vec<pw_ingest::Shot>>)>,
+    register_root: RegisterRoot<'_>,
 ) -> Result<Preview, FieldError> {
     let validated = form.validate()?;
     let shots = shots(&validated.source, rescan, cached_scan).map_err(|message| FieldError {
         field: Field::Source,
         message,
     })?;
-    let plan = pw_ingest::plan(&shots, &validated.options);
-    Ok(Preview::new(&shots, &plan))
+    let planned = plan_new(
+        &shots,
+        &validated.options,
+        form.incremental,
+        root_of(form, &validated.source, register_root),
+    );
+    Ok(Preview::new(
+        &planned.shots,
+        &planned.plan,
+        planned.earlier,
+        planned.note,
+    ))
 }
 
-/// What one import is asked to do: the dialog's form and the settings at its start (T106).
+/// What one import is asked to do: the dialog's form, the settings at its start (T106) and where
+/// the card's register is (T158).
 struct ImportRun<'a> {
     form: &'a ImportForm,
     options: EditOptions,
+    register_root: RegisterRoot<'a>,
 }
 
 fn run_import(
     id: RequestId,
-    ImportRun { form, options }: ImportRun<'_>,
+    ImportRun {
+        form,
+        options,
+        register_root,
+    }: ImportRun<'_>,
     cancel: &AtomicBool,
     cached_scan: &mut Option<(PathBuf, Arc<Vec<pw_ingest::Shot>>)>,
     events: &mpsc::Sender<ImportEvent>,
@@ -390,13 +476,40 @@ fn run_import(
         }
     };
 
-    let plan = pw_ingest::plan(&shots, &validated.options);
-    let report = pw_ingest::execute(&plan, &validated.options, cancel, |progress| {
-        let _ = events.send(ImportEvent::Progress {
-            id,
-            progress: progress.clone(),
-        });
-    });
+    let planned = plan_new(
+        &shots,
+        &validated.options,
+        form.incremental,
+        root_of(form, &validated.source, register_root),
+    );
+    let plan = planned.plan;
+    // A card that cannot be marked is said in the summary, and the import runs anyway (T158).
+    let mut register_error = None;
+    let mut writer = match &planned.register {
+        Some((root, register)) => match pw_ingest::RegisterWriter::open(root, register) {
+            Ok(writer) => Some(writer),
+            Err(error) => {
+                register_error = Some(error);
+                None
+            }
+        },
+        None => None,
+    };
+    let report = pw_ingest::execute_recording(
+        &plan,
+        &validated.options,
+        cancel,
+        writer.as_mut(),
+        |progress| {
+            let _ = events.send(ImportEvent::Progress {
+                id,
+                progress: progress.clone(),
+            });
+        },
+    );
+    // The register's file is closed before the card may be ejected.
+    drop(writer);
+    let register_error = register_error.or_else(|| report.register_error.clone());
     let destination_items: Vec<&pw_ingest::PlanItem> = plan
         .items
         .iter()
@@ -422,6 +535,8 @@ fn run_import(
         elapsed: started.elapsed(),
         folders: pw_ingest::folder_summary(&destination_items, &validated.options.dest),
         error: None,
+        earlier: planned.earlier,
+        register_error,
         ..ImportDone::default()
     };
     let mut iptc_runtime = IptcRuntime {
@@ -653,6 +768,7 @@ mod tests {
                 dest: self.dest.to_string_lossy().into_owned(),
                 folder: folder.to_string(),
                 name: "{name}".to_string(),
+                incremental: false,
                 ..ImportForm::default()
             }
         }
@@ -1467,6 +1583,7 @@ mod tests {
             ImportRun {
                 form: &form,
                 options: EditOptions::default(),
+                register_root: &|_| None,
             },
             &cancel,
             &mut cached_scan,
@@ -1510,6 +1627,7 @@ mod tests {
             ImportRun {
                 form: &form,
                 options: EditOptions::default(),
+                register_root: &|_| None,
             },
             &cancel,
             &mut cached_scan,
@@ -1599,5 +1717,145 @@ mod tests {
             started.elapsed() < Duration::from_secs(1),
             "dropping the worker waited for the background operation"
         );
+    }
+
+    // ---------- copy new images only (ADR 0005 choice 6, T158) ----------
+
+    /// The form of `dirs` with "copy new images only" on.
+    fn incremental_form(dirs: &TempDirs, folder: &str) -> ImportForm {
+        ImportForm {
+            incremental: true,
+            ..dirs.form(folder)
+        }
+    }
+
+    /// `run_import` with the register in `root` (the test's own folder, never a drive's root).
+    fn import_with_root(form: &ImportForm, root: Option<&Path>) -> ImportDone {
+        let cancel = AtomicBool::new(false);
+        let (events, _receiver) = mpsc::channel();
+        let mut cached_scan = None;
+        let mut exiftool = None;
+        let root = root.map(Path::to_path_buf);
+        let register_root = move |_: &Path| root.clone();
+        let ImportEvent::Done { done, .. } = run_import(
+            9,
+            ImportRun {
+                form,
+                options: EditOptions::default(),
+                register_root: &register_root,
+            },
+            &cancel,
+            &mut cached_scan,
+            &events,
+            &mut exiftool,
+            &WriteContext {
+                exiftool_program: None,
+                journal: Some(test_journal()),
+                checks: Box::new(NoImageCheck),
+            },
+        ) else {
+            panic!("run_import did not return Done");
+        };
+        done
+    }
+
+    /// `preview` with the register in `root`.
+    fn preview_with_root(form: &ImportForm, root: Option<&Path>) -> Preview {
+        let root = root.map(Path::to_path_buf);
+        let register_root = move |_: &Path| root.clone();
+        preview(form, true, &mut None, &register_root).unwrap()
+    }
+
+    fn register_text(dirs: &TempDirs) -> Option<String> {
+        fs::read_to_string(dirs.source.join(pw_ingest::REGISTER_FILE)).ok()
+    }
+
+    #[test]
+    fn a_second_import_with_the_box_on_copies_nothing_and_counts_the_earlier_files() {
+        let dirs = TempDirs::new("incremental");
+        dirs.write_image("A001.ARW", b"first image");
+        dirs.write_image("A002.ARW", b"second image");
+
+        let first = import_with_root(&incremental_form(&dirs, "first"), Some(&dirs.source));
+        assert_eq!((first.copied, first.present, first.earlier), (2, 0, 0));
+        assert_eq!(first.register_error, None);
+        let register = register_text(&dirs).expect("the register is written");
+        assert!(register.contains("A001.ARW\t11\t"), "{register}");
+        assert!(register.contains("A002.ARW\t12\t"), "{register}");
+
+        // Another destination folder: only the register can leave the files out.
+        let preview = preview_with_root(&incremental_form(&dirs, "second"), Some(&dirs.source));
+        assert_eq!((preview.shots, preview.files_to_copy), (0, 0));
+        assert_eq!(preview.earlier, 2);
+        assert_eq!(preview.register_note, None);
+
+        let second = import_with_root(&incremental_form(&dirs, "second"), Some(&dirs.source));
+        assert_eq!((second.copied, second.present, second.earlier), (0, 0, 2));
+        assert_eq!(second.register_error, None);
+        assert!(!dirs.dest.join("second").exists());
+    }
+
+    #[test]
+    fn a_second_import_with_the_box_off_checks_the_destination_as_before() {
+        let dirs = TempDirs::new("incremental-off");
+        dirs.write_image("A001.ARW", b"first image");
+        dirs.write_image("A002.ARW", b"second image");
+        let first = import_with_root(&incremental_form(&dirs, "imported"), Some(&dirs.source));
+        assert_eq!(first.copied, 2);
+        let register = register_text(&dirs);
+
+        let preview = preview_with_root(&dirs.form("imported"), Some(&dirs.source));
+        assert_eq!((preview.shots, preview.present, preview.earlier), (2, 2, 0));
+        assert_eq!(preview.register_note, None);
+
+        let second = import_with_root(&dirs.form("imported"), Some(&dirs.source));
+        assert_eq!((second.copied, second.present, second.earlier), (0, 2, 0));
+        assert_eq!(second.register_error, None);
+        assert_eq!(register_text(&dirs), register);
+    }
+
+    #[test]
+    fn a_preview_without_a_register_root_says_every_image_is_copied() {
+        let dirs = TempDirs::new("incremental-no-root");
+        dirs.write_image("A001.ARW", b"first image");
+
+        let preview = preview_with_root(&incremental_form(&dirs, ""), None);
+        assert_eq!(
+            (preview.shots, preview.files_to_copy, preview.earlier),
+            (1, 1, 0)
+        );
+        assert_eq!(
+            preview.register_note.as_deref(),
+            Some(import_text(ImportText::NoRegisterRoot))
+        );
+
+        let done = import_with_root(&incremental_form(&dirs, ""), None);
+        assert_eq!((done.copied, done.earlier), (1, 0));
+        assert_eq!(done.register_error, None);
+        assert_eq!(register_text(&dirs), None);
+    }
+
+    #[test]
+    fn a_foreign_register_is_noted_and_the_import_copies_everything() {
+        let dirs = TempDirs::new("incremental-foreign");
+        dirs.write_image("A001.ARW", b"first image");
+        dirs.write_image("A002.ARW", b"second image");
+        let foreign = "Another program's list\nDCIM/100TEST/A001.ARW\t11\t0\n";
+        fs::write(dirs.source.join(pw_ingest::REGISTER_FILE), foreign).unwrap();
+        let note = "The card could not be marked as imported: its file .rawstride-ingest.txt \
+                    was not made by this version of RawStride.";
+
+        let preview = preview_with_root(&incremental_form(&dirs, ""), Some(&dirs.source));
+        assert_eq!(
+            (preview.shots, preview.files_to_copy, preview.earlier),
+            (2, 2, 0)
+        );
+        assert_eq!(preview.register_note.as_deref(), Some(note));
+
+        let done = import_with_root(&incremental_form(&dirs, ""), Some(&dirs.source));
+        assert_eq!((done.copied, done.earlier), (2, 0));
+        assert_eq!(done.register_error.as_deref(), Some(note));
+        assert!(done.failed.is_empty());
+        assert_eq!(register_text(&dirs).as_deref(), Some(foreign));
     }
 }

@@ -342,6 +342,8 @@ mod tests {
             no_exif: 0,
             items_total: files_to_copy,
             lines: Vec::new(),
+            earlier: 0,
+            register_note: None,
         }
     }
 

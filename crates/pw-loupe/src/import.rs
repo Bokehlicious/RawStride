@@ -19,6 +19,9 @@ pub struct ImportForm {
     pub first_seq: u32,
     pub iptc: IptcForm,
     pub eject: bool,
+    /// Copy new images only: leave out the files an earlier import took from the card (the
+    /// card's ingest register, ADR 0005 choice 6, T158).
+    pub incremental: bool,
 }
 
 /// The IPTC fields edited in the import dialog.
@@ -265,6 +268,7 @@ impl Default for ImportForm {
             first_seq: 1,
             iptc: IptcForm::default(),
             eject: false,
+            incremental: true,
         }
     }
 }
@@ -376,11 +380,22 @@ pub struct Preview {
     pub no_exif: usize,
     pub items_total: usize,
     pub lines: Vec<PreviewLine>,
+    /// The files left out because an earlier import took them (T158).
+    pub earlier: usize,
+    /// Why earlier imports cannot be recognised or the card cannot be marked, if so (T158).
+    pub register_note: Option<String>,
 }
 
 impl Preview {
-    /// Summarizes shots and the corresponding plan without touching files.
-    pub fn new(shots: &[pw_ingest::Shot], plan: &pw_ingest::Plan) -> Self {
+    /// Summarizes shots and the corresponding plan without touching files; `earlier` files were
+    /// left out because an earlier import took them, and `register_note` says why earlier
+    /// imports cannot be recognised or the card cannot be marked.
+    pub fn new(
+        shots: &[pw_ingest::Shot],
+        plan: &pw_ingest::Plan,
+        earlier: usize,
+        register_note: Option<String>,
+    ) -> Self {
         Self {
             shots: shots.len(),
             files_to_copy: plan.files_to_copy(),
@@ -412,6 +427,8 @@ impl Preview {
                     },
                 })
                 .collect(),
+            earlier,
+            register_note,
         }
     }
 }
@@ -496,8 +513,14 @@ mod tests {
                 first_seq: 1,
                 iptc: IptcForm::default(),
                 eject: false,
+                incremental: true,
             }
         );
+    }
+
+    #[test]
+    fn the_form_copies_new_images_only_by_default() {
+        assert!(ImportForm::default().incremental);
     }
 
     #[test]
@@ -957,7 +980,7 @@ mod tests {
         items.extend((4..22).map(|index| plan_item(index, true, false, false)));
         let plan = pw_ingest::Plan { items };
 
-        let preview = Preview::new(&shots, &plan);
+        let preview = Preview::new(&shots, &plan, 0, None);
         assert_eq!(preview.shots, 2);
         assert_eq!(preview.files_to_copy, 21);
         assert_eq!(preview.bytes_to_copy, 210);
@@ -985,6 +1008,15 @@ mod tests {
             preview.lines[0].rel,
             PathBuf::from("folder/image-0.raw").to_string_lossy()
         );
+    }
+
+    #[test]
+    fn preview_passes_earlier_and_the_register_note_through() {
+        let plan = pw_ingest::Plan { items: Vec::new() };
+        let preview = Preview::new(&[], &plan, 7, Some("note".to_string()));
+        assert_eq!(preview.earlier, 7);
+        assert_eq!(preview.register_note.as_deref(), Some("note"));
+        assert_eq!(preview.shots, 0);
     }
 
     #[test]

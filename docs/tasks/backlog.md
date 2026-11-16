@@ -29,6 +29,12 @@ and reviewer:
   the reader count as not USB (not ejected, safe). `CR_FAILURE` (19) is reused for "no matching
   disk" and reads like Windows error 19 in a bug report. The veto-name length is passed as
   `MAX_PATH` instead of the buffer's own length.
+- **Mark a card imported before the register** (review of T158, 2026-11-16): a card whose images
+  are all at the destination already, from an import before T157, cannot be marked. The dialog
+  will not start an import with nothing to copy (`import_dialog.rs`, `files_to_copy == 0`), so the
+  register never gets those files; they are protected only by the destination check, not when
+  importing to another destination. A fix: let the import run (or offer "Mark the card") when
+  every file is already present and the card has no line for them.
 - **CI before the repository becomes public** (owner, 2026-11-14): a GitHub Actions workflow
   (`.github/workflows/ci.yml`) on `windows-latest` that installs the pinned Rust toolchain, runs
   `vcpkg install` with vcpkg's binary cache (LibRaw built from source takes long), puts ExifTool

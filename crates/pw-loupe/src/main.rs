@@ -1154,6 +1154,8 @@ impl Loupe {
     fn close_import(&mut self) {
         if let Some(dialog) = self.import_dialog.take() {
             self.last_form = dialog.form().clone();
+            // "Copy new images only" is remembered in the settings (T158).
+            self.settings.shell.import_incremental = self.last_form.incremental;
         }
         self.import_hidden = false;
         self.import_clear_confirm = false;
@@ -1443,6 +1445,7 @@ impl Loupe {
                         );
                     });
                     ui.checkbox(&mut form.eject, import_text(ImportText::Eject));
+                    ui.checkbox(&mut form.incremental, import_text(ImportText::Incremental));
 
                     ui.horizontal(|ui| {
                         ui.label(import_text(ImportText::Preview));
@@ -1459,6 +1462,9 @@ impl Loupe {
                             ..
                         } => {
                             ui.label(preview_summary(preview));
+                            if let Some(note) = &preview.register_note {
+                                ui.label(note.as_str());
+                            }
                             egui::ScrollArea::vertical()
                                 .max_height(160.0)
                                 .show(ui, |ui| {
@@ -6832,6 +6838,10 @@ impl eframe::App for Loupe {
         if let Some(before) = self.window_before {
             self.settings.shell = before.saved(&self.settings.shell);
         }
+        // Quit with the import dialog open: its "copy new images only" is kept (T158).
+        if let Some(dialog) = &self.import_dialog {
+            self.settings.shell.import_incremental = dialog.form().incremental;
+        }
         // The window, full screen and the columns as they are now (ADR 0017 §2.5, T109); a
         // failure is only logged, no dialog at exit.
         if let Some(path) = &self.settings_path
@@ -7096,7 +7106,10 @@ fn run(options: Options) -> Result<(), String> {
                 import_worker,
                 import_dialog: None,
                 tasks: Tasks::new(),
-                last_form: ImportForm::default(),
+                last_form: ImportForm {
+                    incremental: settings.shell.import_incremental,
+                    ..ImportForm::default()
+                },
                 import_clear_confirm: false,
                 detected_cards: Vec::new(),
                 import_submit_error: None,

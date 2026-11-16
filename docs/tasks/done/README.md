@@ -166,3 +166,4 @@ was when the task was done, so "this file", "below" and "the Log" in T1–T115 m
 | [T157](T157-incremental-ingest-register.md) | Incremental ingest: the register on the card (pw-ingest) |
 | [T162](T162-fat32-daylight-saving-shift.md) | A FAT32 card read one hour off after a change of the clocks (pw-ingest) |
 | [T159](T159-raf-reader-in-pw-raw.md) | Fujifilm RAF in pw-raw: previews, size and Exif |
+| [T158](T158-incremental-ingest-in-the-dialog.md) | Incremental ingest in the import dialog (pw-loupe) |

@@ -64,6 +64,8 @@ const PREVIEW_CLIPPING: &str = "preview_clipping";
 /// zoom and position (ADR 0017 §2.2, U6-Q7, U6-Q8, T151).
 const COMPARE_ABOVE_BELOW: &str = "compare_above_below";
 const COMPARE_LOCKED: &str = "compare_locked";
+/// The key of the import dialog's "copy new images only" check box (ADR 0005 choice 6, T158).
+const IMPORT_INCREMENTAL: &str = "import_incremental";
 /// The keys of the metadata window's sections, open or collapsed (ADR 0017 U10-Q6, T123).
 const EDITOR_CONTENT: &str = "editor_content";
 const EDITOR_CREATOR_RIGHTS: &str = "editor_creator_rights";
@@ -185,6 +187,8 @@ pub struct ShellSettings {
     /// remembered (U6-Q11).
     pub compare_above_below: bool,
     pub compare_locked: bool,
+    /// The import dialog's "copy new images only" check box (ADR 0005 choice 6, T158).
+    pub import_incremental: bool,
 }
 
 /// The library's lists as `settings.txt` keeps them (T135, U4-Q3, U4-Q4): the favourites in the
@@ -247,6 +251,8 @@ impl Default for ShellSettings {
             // The compare side by side (U6-Q7) and locked (U6-Q8).
             compare_above_below: false,
             compare_locked: true,
+            // New images only (owner, 2026-11-16, ADR 0005 choice 6).
+            import_incremental: true,
         }
     }
 }
@@ -379,22 +385,22 @@ pub fn load_settings_and_library(path: &Path) -> (Settings, SavedLibrary, Vec<St
                 None => problems.push(bad("name, capture, modified, type or rating")),
             },
             WINDOW_MAXIMIZED | FULLSCREEN | COLUMNS_HIDDEN | PREVIEW_HIDDEN | SORT_DESCENDING
-            | CLIP_HIGHLIGHTS | CLIP_SHADOWS | COMPARE_ABOVE_BELOW | COMPARE_LOCKED => {
-                match parse_bool(value) {
-                    Some(on) => match key {
-                        WINDOW_MAXIMIZED => shell.window_maximized = on,
-                        FULLSCREEN => shell.fullscreen = on,
-                        PREVIEW_HIDDEN => shell.preview_hidden = on,
-                        SORT_DESCENDING => shell.sort.descending = on,
-                        CLIP_HIGHLIGHTS => shell.clip_highlights = on,
-                        CLIP_SHADOWS => shell.clip_shadows = on,
-                        COMPARE_ABOVE_BELOW => shell.compare_above_below = on,
-                        COMPARE_LOCKED => shell.compare_locked = on,
-                        _ => shell.columns_hidden = on,
-                    },
-                    None => problems.push(bad("true or false")),
-                }
-            }
+            | CLIP_HIGHLIGHTS | CLIP_SHADOWS | COMPARE_ABOVE_BELOW | COMPARE_LOCKED
+            | IMPORT_INCREMENTAL => match parse_bool(value) {
+                Some(on) => match key {
+                    WINDOW_MAXIMIZED => shell.window_maximized = on,
+                    FULLSCREEN => shell.fullscreen = on,
+                    PREVIEW_HIDDEN => shell.preview_hidden = on,
+                    SORT_DESCENDING => shell.sort.descending = on,
+                    CLIP_HIGHLIGHTS => shell.clip_highlights = on,
+                    CLIP_SHADOWS => shell.clip_shadows = on,
+                    COMPARE_ABOVE_BELOW => shell.compare_above_below = on,
+                    COMPARE_LOCKED => shell.compare_locked = on,
+                    IMPORT_INCREMENTAL => shell.import_incremental = on,
+                    _ => shell.columns_hidden = on,
+                },
+                None => problems.push(bad("true or false")),
+            },
             LEFT_COLUMN_WIDTH | RIGHT_COLUMN_WIDTH | PREVIEW_COLUMN_WIDTH => {
                 match value.parse::<u32>() {
                     Ok(width) if key == LEFT_COLUMN_WIDTH => shell.left_column_width = width,
@@ -604,6 +610,10 @@ fn shell_lines(shell: &ShellSettings) -> String {
     text.push_str(&format!(
         "{COMPARE_ABOVE_BELOW} = {}\n{COMPARE_LOCKED} = {}\n",
         shell.compare_above_below, shell.compare_locked
+    ));
+    text.push_str(&format!(
+        "{IMPORT_INCREMENTAL} = {}\n",
+        shell.import_incremental
     ));
     text
 }
@@ -856,7 +866,8 @@ mod tests {
              sort = name\n\
              sort_descending = false\npreview_histogram = open\ninspector_histogram = open\n\
              clip_highlights = false\nclip_shadows = false\npreview_clipping = open\n\
-             compare_above_below = false\ncompare_locked = true\n"
+             compare_above_below = false\ncompare_locked = true\n\
+             import_incremental = true\n"
         );
     }
 
@@ -1049,6 +1060,7 @@ mod tests {
             preview_clipping: ColumnState::Collapsed,
             compare_above_below: true,
             compare_locked: false,
+            import_incremental: false,
         }
     }
 
@@ -2036,5 +2048,48 @@ mod tests {
             assert_eq!(settings.shell, ShellSettings::default(), "{key} = {value}");
             assert!(settings.create_iim, "{key} = {value}");
         }
+    }
+
+    // ---------- the import's "copy new images only" (ADR 0005 choice 6, T158) ----------
+
+    #[test]
+    fn import_incremental_defaults_to_on() {
+        assert!(ShellSettings::default().import_incremental);
+    }
+
+    #[test]
+    fn import_incremental_is_written_and_read() {
+        let dir = TempDir::new();
+        let path = dir.0.join("settings.txt");
+        for on in [false, true] {
+            let settings = Settings {
+                shell: ShellSettings {
+                    import_incremental: on,
+                    ..ShellSettings::default()
+                },
+                ..Settings::default()
+            };
+            save_settings(&path, &settings).unwrap();
+            let text = std::fs::read_to_string(&path).unwrap();
+            assert!(
+                text.contains(&format!("\nimport_incremental = {on}\n")),
+                "{text}"
+            );
+            let (loaded, problems) = load_settings(&path);
+            assert!(problems.is_empty(), "{problems:?}");
+            assert_eq!(loaded, settings);
+        }
+        let (_dir, path) = TempDir::with_file("# RawStride\nimport_incremental = false\n");
+        let (settings, problems) = load_settings(&path);
+        assert!(problems.is_empty(), "{problems:?}");
+        assert!(!settings.shell.import_incremental);
+    }
+
+    #[test]
+    fn a_file_without_import_incremental_gives_true_and_no_problem() {
+        let (_dir, path) = TempDir::with_file("# RawStride\ncreate_iim = true\n");
+        let (settings, problems) = load_settings(&path);
+        assert!(problems.is_empty(), "{problems:?}");
+        assert!(settings.shell.import_incremental);
     }
 }
