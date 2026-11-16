@@ -16,13 +16,17 @@
 //!    source, and only then renamed to its final name. A failed or cancelled copy leaves no
 //!    final-named file behind.
 //!
-//! The source is only ever opened for reading.
+//! The source's images are only ever read. The one file written on the source is RawStride's own
+//! register in the card's root ([`REGISTER_FILE`], ADR 0005 choice 6): [`execute_recording`] adds
+//! a line to it for each verified file, and [`new_shots`] leaves those files out of the next
+//! import.
 //!
 //! Not yet: IPTC templates, catalog registration, unbuffered read-back (the read-back currently
 //! may come from the OS cache).
 
 mod eject;
 mod paths;
+mod register;
 mod request;
 mod summary;
 pub mod template;
@@ -38,6 +42,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 pub use eject::{drive_of, eject};
 pub use paths::{inside, resolve};
+pub use register::{
+    REGISTER_FILE, Register, RegisterWriter, new_shots, read_register, register_root,
+};
 pub use request::{OptionsInput, validate_options, validate_source};
 pub use summary::folder_summary;
 pub use template::{CaptureTime, Template, TemplateError};
@@ -398,6 +405,9 @@ pub struct Report {
     /// Source file and error, for files that could not be copied or verified.
     pub failed: Vec<(PathBuf, String)>,
     pub cancelled: bool,
+    /// The first error of writing the card's register ([`execute_recording`]); after it nothing
+    /// more was written there, and the copying went on.
+    pub register_error: Option<String>,
 }
 
 /// Copies according to `plan`. Stops between chunks when `cancel` is set.
@@ -405,6 +415,32 @@ pub fn execute(
     plan: &Plan,
     opt: &Options,
     cancel: &AtomicBool,
+    progress: impl FnMut(&Progress),
+) -> Report {
+    execute_recording(plan, opt, cancel, None, progress)
+}
+
+/// Adds `item` to the register, if there is one. The first error is kept in the report and ends
+/// the writing.
+fn record(register: &mut Option<&mut RegisterWriter>, report: &mut Report, item: &PlanItem) {
+    let Some(writer) = register.as_mut() else {
+        return;
+    };
+    if let Err(error) = writer.add(&item.source, item.size, item.modified) {
+        report.register_error = Some(error);
+        *register = None;
+    }
+}
+
+/// [`execute`], which also adds every finished file to the card's `register` when there is one:
+/// the files that need no copy before the first copy, and each file copied and verified to all
+/// its targets right after, before `progress` is called for it. A failed, cancelled or
+/// half-copied file is not added.
+pub fn execute_recording(
+    plan: &Plan,
+    opt: &Options,
+    cancel: &AtomicBool,
+    mut register: Option<&mut RegisterWriter>,
     mut progress: impl FnMut(&Progress),
 ) -> Report {
     let mut report = Report {
@@ -416,6 +452,9 @@ pub fn execute(
         bytes_total: plan.bytes_to_copy(),
         ..Progress::default()
     };
+    for item in plan.items.iter().filter(|i| !i.to_dest && !i.to_backup) {
+        record(&mut register, &mut report, item);
+    }
     for item in plan.items.iter().filter(|i| i.to_dest || i.to_backup) {
         if cancel.load(Ordering::Relaxed) {
             report.cancelled = true;
@@ -456,6 +495,7 @@ pub fn execute(
         }
         if ok {
             report.copied += 1;
+            record(&mut register, &mut report, item);
         }
         p.files_done += 1;
         progress(&p);
