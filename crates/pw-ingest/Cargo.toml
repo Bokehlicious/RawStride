@@ -15,3 +15,7 @@ workspace = true
 # Capture time and camera from the embedded EXIF (no ExifTool round trip per file).
 pw-raw.workspace = true
 # pw-metadata (IPTC templates) and pw-catalog (registration) are added when they are wired in.
+
+[target.'cfg(windows)'.dependencies]
+# Ejecting a card reader that Windows sees as a fixed USB disk (T156, ADR 0005 choice 3).
+windows-sys = { version = "=0.61.2", features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_IO", "Win32_System_Ioctl", "Win32_System_WindowsProgramming", "Win32_Devices_DeviceAndDriverInstallation", "Win32_Devices_Properties"] }

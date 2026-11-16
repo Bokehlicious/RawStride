@@ -17,6 +17,14 @@ and reviewer:
   and structure field in T102's name table, so the Swedish info panel and editor show no English
   IPTC names. Today D11 names about 35 of them; the rest fall back to IPTC's English name. Needs
   the owner's approval of the full list.
+- **Eject through the device: known limits** (independent review of T156, 2026-11-16; none of
+  them affects the owner's readers): `reader_device` ejects the disk's direct parent, so a reader
+  that is a composite USB device (`USB\VID_…&MI_00`) would be refused; walking up with
+  `CM_Get_Parent` to the nearest node with `DN_REMOVABLE` would fix it. `on_usb` uses a buffer of
+  exactly `STORAGE_DEVICE_DESCRIPTOR`'s size; a driver that answers `ERROR_MORE_DATA` would make
+  the reader count as not USB (not ejected, safe). `CR_FAILURE` (19) is reused for "no matching
+  disk" and reads like Windows error 19 in a bug report. The veto-name length is passed as
+  `MAX_PATH` instead of the buffer's own length.
 - **CI before the repository becomes public** (owner, 2026-11-14): a GitHub Actions workflow
   (`.github/workflows/ci.yml`) on `windows-latest` that installs the pinned Rust toolchain, runs
   `vcpkg install` with vcpkg's binary cache (LibRaw built from source takes long), puts ExifTool

@@ -180,6 +180,7 @@ Every other property already uses IPTC's English name in both languages.
 | IPTC-mall, Mallen, Variabler | IPTC Template, the template, Variables | added by T117 |
 | enhet | drive | "The source is not a drive"; added by T118 |
 | mata ut, utmatat | eject, ejected | "E: has been ejected and can be removed."; added by T118 |
+| Säker borttagning av maskinvara | Safely Remove Hardware | Windows' own name; "Use Safely Remove Hardware in the taskbar."; added by T156 |
 | Utforskaren | File Explorer | Windows' own name; added by T118 |
 | fullständig sökväg | full path | "The source must be a full path: …"; added by T118 |
 

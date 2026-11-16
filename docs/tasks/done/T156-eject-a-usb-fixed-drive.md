@@ -1,4 +1,4 @@
-# T156. Eject a card reader that Windows sees as a fixed USB disk — Open
+# T156. Eject a card reader that Windows sees as a fixed USB disk — Done
 
 - **Why:** the owner's job test (2026-11-16): with a CFexpress reader the eject after an import always
   fails with "I: could not be ejected (is it in use by another program?). Eject it in File Explorer.
@@ -114,3 +114,5 @@
 |---|---|---|
 | 2026-11-16 | Open | Added after the owner's job test (bug 1 of 5). Diagnosis with the card in: fixed USB disk without an "Eject" verb. Owner approved `windows-sys` in `pw-ingest` and the decision in ADR 0005 choice 3 |
 | 2026-11-16 | Open | Cold read: `CreateFileW` needs `Win32_Security` (now `std::fs::OpenOptions` + `access_mode(0)`); `retry_until_gone` cannot change without editing its tests (now a new `retry_until_gone_or_refused` that it calls); `DriveKind` keeps the pure part free of Windows constants; `CR_BUFFER_SMALL` handling, `CR_REMOVE_VETOED`, a 1 s pause after a refusal and the shared error text are stated; the veto name is not logged. The owner's decision is in ADR 0005 choice 3 |
+| 2026-11-16 | Ready for review | Done as written: `eject_way` chooses the verb (removable), the device (fixed on USB) or no eject; the Device way uses `CM_Request_Device_EjectW` on the parent of the matching disk interface through `retry_until_gone_or_refused`; `retry_until_gone` calls it unchanged for the verb. 14 new tests in `eject.rs` (pw-ingest unit 30 → 44); `check.ps1` all OK, 1624 passed, 63 ignored, 0 failed. Glossary: "Safely Remove Hardware". The Windows calls are untested without the reader (hand check) |
+| 2026-11-16 | Done | Reviewed, with the independent review the README asks for (FFI and `unsafe`): no bugs. Its findings are not changed here and are in `backlog.md` ("Eject through the device: known limits"): the direct parent only (a composite USB reader would be refused; the owner's CFexpress reader's parent USB device is itself removable), a bus-type buffer of exactly the struct size, `CR_FAILURE` (19) reused for "no matching disk", and the veto buffer length given by `MAX_PATH`. Owner's hand check approved on 2026-11-16: the CFexpress reader and an SD card (removable) were both ejected. Committed |
