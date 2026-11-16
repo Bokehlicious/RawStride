@@ -99,11 +99,12 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 | [T158](T158-incremental-ingest-in-the-dialog.md) | Incremental ingest in the import dialog (pw-loupe) | Blocked: waits for T157 |
 | [T159](T159-raf-reader-in-pw-raw.md) | Fujifilm RAF in pw-raw: previews, size and Exif | Open |
 | [T160](T160-raf-listed-everywhere.md) | Fujifilm RAF listed: viewer, import and sidecar | Blocked: waits for T159 |
+| [T161](T161-import-dialog-finds-new-cards.md) | The import dialog finds a card inserted while it is open | Open |
 
 ## Writing a task (owner and reviewer)
 
-- **Number:** the next free number after the highest in this folder and `done/` (T161 next).
-- **File:** `docs/tasks/T161-<a-few-words>.md`; three digits, lower case, words joined by `-`.
+- **Number:** the next free number after the highest in this folder and `done/` (T162 next).
+- **File:** `docs/tasks/T162-<a-few-words>.md`; three digits, lower case, words joined by `-`.
 - **Index:** add a row to "Open tasks" above and keep its status in step with the file's heading.
 - **Size (owner, 2026-11-15, after T142):** one task is one layer (a C++ shim or a core crate, or
   the shell in `pw-loupe`), about eight files at most, and gives one result the owner can check by
@@ -143,7 +144,7 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 Skeleton (the fields recent tasks use; leave out those that do not apply):
 
 ```markdown
-# T161. <Title> — Open
+# T162. <Title> — Open
 
 - **Why:** …
 - **Crates:** … **Files:** …

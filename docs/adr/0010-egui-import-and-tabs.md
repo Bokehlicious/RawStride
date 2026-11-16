@@ -50,7 +50,7 @@
 | Area | Content | Basis |
 |---|---|---|
 | Open the dialog | A control in the window and **Ctrl+I** (the key the Tauri app uses) | ADR 0005 |
-| Source | Detected cards (drives with `DCIM`) offered automatically; any folder through the folder dialog or drag-and-drop | ADR 0005 |
+| Source | Detected cards (drives with `DCIM`) offered automatically; any folder through the folder dialog or drag-and-drop. **Owner, 2026-11-16 (T161):** while the dialog is open and no import runs, the cards are looked for again every 2 s, so a card put in or taken out shows at once | ADR 0005 |
 | Destination | Folder dialog, typed path or drag-and-drop | – |
 | Templates | Folder and file name, with the variables of ADR 0005 point 4 and the default templates of ADR 0005 choice 1. Template errors mark the field | ADR 0005 |
 | Validation | Absolute paths, no `..`, destination not on or above the source; the same rules and messages as today, shared through `pw-ingest` (§4.3) | – |
