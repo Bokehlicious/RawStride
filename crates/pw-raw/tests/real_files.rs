@@ -2,7 +2,7 @@
 //! ExifTool survey (docs/analyses/2026-11-03-pw-raw-embedded-previews.md).
 //!
 //! These tests are ignored by default. Run them with
-//! `$env:PW_TESTDATA = "<folder>"; cargo test -p pw-raw -- --ignored`.
+//! `$env:PW_TESTDATA = "<folder>"; .\tools\check.ps1 -Ignored`.
 
 use std::path::PathBuf;
 
@@ -92,4 +92,35 @@ fn dng_preview_orientation_is_neutralized() {
     // This preview carries its own Orientation=6; WebView2 would rotate it a second time.
     let mut bytes = pw_raw::read_preview(&p, &i.previews[0]).unwrap();
     assert!(pw_raw::neutralize_orientation(&mut bytes));
+}
+
+#[test]
+#[ignore = "needs real camera files: set PW_TESTDATA and run with --ignored"]
+fn fujifilm_raf() {
+    let p = test_file("_DSF4243.RAF");
+    let i = pw_raw::inspect(&p).unwrap();
+    assert_eq!(i.format, Some(pw_raw::Format::Raf));
+    assert_eq!(i.make.as_deref(), Some("FUJIFILM"));
+    assert_eq!(i.model.as_deref(), Some("X-T30"));
+    assert_eq!(i.date_time_original.as_deref(), Some("2020:05:30 20:57:18"));
+    assert_eq!(i.exposure_time.unwrap().to_string(), "1/350 s");
+    assert!((i.f_number.unwrap() - 7.1).abs() < 0.01);
+    assert_eq!(i.iso, Some(800));
+    assert_eq!(i.orientation, 1);
+    assert_eq!((i.width, i.height), (Some(6240), Some(4160)));
+    assert_eq!(widths(&i), vec![160, 4416]);
+    let big = i.pick(pw_raw::PreviewSize::Large).unwrap();
+    let bytes = pw_raw::read_preview(&p, big).unwrap();
+    assert_eq!(&bytes[..2], &[0xFF, 0xD8]);
+}
+
+#[test]
+#[ignore = "needs real camera files: set PW_TESTDATA and run with --ignored"]
+fn fujifilm_raf_second_file() {
+    let p = test_file("_DSF4271.RAF");
+    let i = pw_raw::inspect(&p).unwrap();
+    assert_eq!(i.format, Some(pw_raw::Format::Raf));
+    assert_eq!(i.date_time_original.as_deref(), Some("2020:05:31 06:16:09"));
+    assert_eq!(i.exposure_time.unwrap().to_string(), "1/75 s");
+    assert!((i.f_number.unwrap() - 6.4).abs() < 0.01);
 }

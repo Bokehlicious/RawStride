@@ -4,10 +4,12 @@
 //! walking the TIFF structure, without decoding any image data. The previews are returned
 //! as byte ranges so callers can read exactly the bytes they need.
 //!
-//! Supported containers (development phase): Sony ARW, Panasonic RW2, DNG and plain JPEG.
+//! Supported containers (development phase): Sony ARW, Panasonic RW2, DNG, Fujifilm RAF and plain
+//! JPEG.
 //! Other TIFF-based RAW formats usually work as well. Full RAW decoding (LibRaw) comes later.
 
 mod jpeg;
+mod raf;
 mod source;
 mod tiff;
 
@@ -54,6 +56,8 @@ pub enum Format {
     Panasonic,
     /// A plain JPEG file.
     Jpeg,
+    /// Fujifilm RAF: an own header with an embedded JPEG.
+    Raf,
 }
 
 /// One embedded JPEG image (thumbnail, preview or full-size JPEG).
@@ -164,6 +168,13 @@ pub fn inspect(path: &Path) -> Result<ImageInfo> {
 
 /// Inspects any byte source (used by `inspect` and by tests).
 pub fn inspect_source<S: Source>(src: &mut S) -> Result<ImageInfo> {
+    if src.len() >= raf::MAGIC.len() as u64 {
+        let mut head = [0u8; 16];
+        src.read_at(0, &mut head)?;
+        if &head == raf::MAGIC {
+            return raf::inspect_raf(src);
+        }
+    }
     let mut magic = [0u8; 4];
     src.read_at(0, &mut magic)?;
     if magic[0] == 0xFF && magic[1] == 0xD8 {
@@ -196,11 +207,11 @@ pub fn is_tiff_file(path: &Path) -> bool {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     /// A minimal baseline JPEG header: SOI, optional APP1 Exif, SOF0 with the given size, EOI.
-    fn tiny_jpeg(w: u16, h: u16, orientation: Option<u16>) -> Vec<u8> {
+    pub(crate) fn tiny_jpeg(w: u16, h: u16, orientation: Option<u16>) -> Vec<u8> {
         let mut j = vec![0xFF, 0xD8];
         if let Some(o) = orientation {
             // TIFF (LE): header + IFD0 with one entry (Orientation, SHORT, 1, o)

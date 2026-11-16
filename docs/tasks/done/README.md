@@ -165,3 +165,4 @@ was when the task was done, so "this file", "below" and "the Log" in T1–T115 m
 | [T156](T156-eject-a-usb-fixed-drive.md) | Eject a card reader that Windows sees as a fixed USB disk |
 | [T157](T157-incremental-ingest-register.md) | Incremental ingest: the register on the card (pw-ingest) |
 | [T162](T162-fat32-daylight-saving-shift.md) | A FAT32 card read one hour off after a change of the clocks (pw-ingest) |
+| [T159](T159-raf-reader-in-pw-raw.md) | Fujifilm RAF in pw-raw: previews, size and Exif |

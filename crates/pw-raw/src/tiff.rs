@@ -299,6 +299,27 @@ pub(crate) fn fill_from_exif_tiff<S: Source>(
     }
 }
 
+/// Absolute offset and length of the Exif thumbnail (IFD1's `JPEGInterchangeFormat` and
+/// `JPEGInterchangeFormatLength`) of the TIFF structure at `base`; `None` without an IFD1 or
+/// either tag.
+pub(crate) fn exif_thumbnail<S: Source>(src: &mut S, base: u64) -> Option<(u64, u64)> {
+    let (mut p, _magic, ifd0) = Parser::new(src, base).ok()?;
+    let (_, next) = p.read_ifd(ifd0).ok()?;
+    if next == 0 {
+        return None;
+    }
+    let (entries, _) = p.read_ifd(next).ok()?;
+    let (mut offset, mut length) = (None, None);
+    for e in &entries {
+        match e.tag {
+            JPEG_IF_OFFSET => offset = p.uint(e, 0),
+            JPEG_IF_LENGTH => length = p.uint(e, 0),
+            _ => {}
+        }
+    }
+    Some((base.checked_add(u64::from(offset?))?, u64::from(length?)))
+}
+
 #[derive(Default)]
 struct IfdVals {
     subfile: Option<u32>,
@@ -493,4 +514,55 @@ pub(crate) fn inspect_tiff<S: Source>(src: &mut S) -> Result<ImageInfo> {
         return Err(Error::Format("no image data found".into()));
     }
     Ok(info)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::exif_thumbnail;
+    use crate::SliceSource;
+
+    /// Bytes before the TIFF header, so that absolute and relative offsets differ.
+    const BASE: usize = 10;
+
+    /// A little-endian TIFF at [`BASE`]: IFD0 (Orientation) and, with `ifd1`, an IFD1 whose
+    /// thumbnail is at TIFF offset 100 with length 64.
+    fn exif_tiff(ifd1: bool) -> Vec<u8> {
+        let mut t = vec![0u8; 200];
+        t[0..4].copy_from_slice(b"II*\0");
+        t[4..8].copy_from_slice(&8u32.to_le_bytes());
+        let entry = |t: &mut Vec<u8>, at: usize, tag: u16, typ: u16, value: u32| {
+            t[at..at + 2].copy_from_slice(&tag.to_le_bytes());
+            t[at + 2..at + 4].copy_from_slice(&typ.to_le_bytes());
+            t[at + 4..at + 8].copy_from_slice(&1u32.to_le_bytes());
+            t[at + 8..at + 12].copy_from_slice(&value.to_le_bytes());
+        };
+        // IFD0 at 8: one entry, next IFD at 26 (or none)
+        t[8..10].copy_from_slice(&1u16.to_le_bytes());
+        entry(&mut t, 10, 0x0112, 3, 1);
+        let next: u32 = if ifd1 { 26 } else { 0 };
+        t[22..26].copy_from_slice(&next.to_le_bytes());
+        if ifd1 {
+            t[26..28].copy_from_slice(&2u16.to_le_bytes());
+            entry(&mut t, 28, 0x0201, 4, 100);
+            entry(&mut t, 40, 0x0202, 4, 64);
+        }
+        let mut f = vec![0u8; BASE];
+        f.extend_from_slice(&t);
+        f
+    }
+
+    #[test]
+    fn exif_thumbnail_is_absolute() {
+        let data = exif_tiff(true);
+        assert_eq!(
+            exif_thumbnail(&mut SliceSource(&data), BASE as u64),
+            Some((BASE as u64 + 100, 64))
+        );
+    }
+
+    #[test]
+    fn exif_thumbnail_without_ifd1_is_none() {
+        let data = exif_tiff(false);
+        assert_eq!(exif_thumbnail(&mut SliceSource(&data), BASE as u64), None);
+    }
 }

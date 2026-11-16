@@ -1,4 +1,4 @@
-# T159. Fujifilm RAF in pw-raw: previews, size and Exif — Open
+# T159. Fujifilm RAF in pw-raw: previews, size and Exif — Done
 
 - **Why:** the owner's job test (2026-11-16): Fujifilm RAW files (`.RAF`) are not shown, and an
   import skips them without a word. **Owner, 2026-11-16** (ADR 0003, point 5): RAF is to be
@@ -98,3 +98,5 @@
 |---|---|---|
 | 2026-11-16 | Open | Added after the owner's job test (bug 4 of 5); the owner approved RAF support (ADR 0003 point 5). Chain T159 → T160 |
 | 2026-11-16 | Open | Cold read: the thumbnail offset is 3936 from the Exif base (4096 absolute); the Exif is little-endian; exposure compared as text; orientation starts at 1; `exif_thumbnail` named; a broken metadata directory gives no size instead of an error; the 16-byte magic read only for files of 16 bytes or more; the impossible `u64` overflow test replaced; `tiny_jpeg` shared; the `-Ignored` run order stated; `jpeg.rs` dropped from the list (no change needed). Left for T160 and the backlog: `PreviewSize::Medium` picks the 160 px thumbnail for RAF, and the contact sheet decodes the 4416 px JPEG per thumbnail |
+| 2026-11-16 | Ready for review | `raf.rs` added (`inspect_raf`), `Format::Raf`, the 16-byte magic checked in `inspect_source`, `tiff::exif_thumbnail`; 7 unit tests in `raf.rs`, 2 in `tiff.rs`, 2 real-file tests. `-Ignored` run: `pw-raw` 1 + 6 passed; `pw-metadata` `every_real_dng_jpeg_and_tiff_is_rated_safely` failed on `_TN06333.JPG` (read-only in the data folder; not fixed). Plain `check.ps1`: all OK, 1679 passed, 65 ignored |
+| 2026-11-16 | Done | Reviewed: no bugs. The reviewer's own runs: plain `.\tools\check.ps1` on the tree with T158 all OK (1679 passed, 65 ignored, 0 failed; 1665 with T159 and the committed tasks only), clippy without warnings; `-Ignored` with `PW_TESTDATA`: `pw-raw` 1 + 6 passed. The `pw-metadata` failure was `_TN06333.JPG` being read-only in the owner's data folder; the owner cleared the flag. The header of `docs/test-inventory.md` was set to this commit's count. Leftovers are T160's and the backlog's (named in the cold-read row) |
