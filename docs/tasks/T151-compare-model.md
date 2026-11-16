@@ -1,7 +1,7 @@
-# T151. ADR 0017 U6, second part: the compare model, its settings and texts — Blocked
+# T151. ADR 0017 U6, second part: the compare model, its settings and texts — Open
 
-- **Blocked: waits for T150** (and the owner's answers to U6-Q1–U6-Q12, in
-  `docs/tasks/T150-locked-view-in-the-view-core.md`). Chain: T150 → T151 → T152 → T153 → T154.
+- **Can start now.** T150 (`ViewCore::set_view`, `Frame::centre`) is Done. The owner's answers to
+  U6-Q1–U6-Q12 are in `docs/tasks/done/T150-locked-view-in-the-view-core.md` and ADR 0017 §6.1. Chain: T150 → T151 → T152 → T153 → T154.
 - **Why:** ADR 0017 §2.2 and step U6. The rules of comparing (which images, which side, hold,
   swap, layout, when it closes, what the locked side is sent) are plain Rust that can be tested
   without a window (GR11), as `preview.rs` holds the filmstrip's rules. T153 and T154 draw and
@@ -78,3 +78,4 @@
 |---|---|---|
 | 2026-11-16 | Blocked | Added with T150, T152, T153 (the chain of U6); waits for T150 and U6-Q1–U6-Q12 |
 | 2026-11-16 | Blocked | Cold read (with T150): the stepped list defined (visible, or the marked among them) and the functions given file indexes (`open_indexes`); a bad settings value is reported, not ignored; the saved-text test named; the side line made whole in one function, without the pixel size (rule 13); T153 and T154 renamed with the split of T152 |
+| 2026-11-16 | Open | T150 Done |

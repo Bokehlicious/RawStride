@@ -186,6 +186,10 @@ pub struct Frame {
     pub zoom: Zoom,
     /// The effective scale (fit resolved), once the size is known.
     pub scale: Option<f64>,
+    /// The position of the view as the core holds it: the relative point of the upright image at
+    /// the view's centre, 0–1 on each axis (V6). At fit, and where the image is smaller than the
+    /// view, it is held but does not move the image.
+    pub centre: [f64; 2],
     /// The current image's embedded colour profile was present but could not be used, so its
     /// colours rest on a fallback (ADR 0016 §5). Known once the image is opened.
     pub profile_unusable: bool,
@@ -547,6 +551,48 @@ impl<S> State<S> {
         }
         self.zoom = zoom;
         self.gesture_at = gesture.then(Instant::now);
+    }
+
+    /// Sets the view model's zoom level and position from outside, as if the user had zoomed and
+    /// dragged there (ADR 0017 U6: a second core that follows the first). Returns whether
+    /// anything changed.
+    ///
+    /// `Zoom::Fit` is taken as it is. A scale that is not finite or not above 0, or a centre
+    /// with a coordinate that is not finite, is ignored: nothing changes. A scale is clamped as
+    /// [`State::set_zoom`] clamps it when the current image's size is known, and to
+    /// [`MAX_SCALE`] only when it is not (the view model is not clamped again when the size
+    /// becomes known). Each coordinate of the centre is clamped to 0–1 and stored as it is: it
+    /// is not moved to the middle where the image fits the view; [`geometry::visible`] keeps the
+    /// drawn region inside the image.
+    ///
+    /// A change counts as one step of a zoom gesture: the views that depend on the position are
+    /// asked for only when the calls pause (`Config::gesture_pause`). Values equal to what is
+    /// held (after the rules above) change nothing and start no new step, so it may be called
+    /// every frame.
+    pub fn set_view(&mut self, zoom: Zoom, centre: [f64; 2]) -> bool {
+        let zoom = match zoom {
+            Zoom::Fit => Zoom::Fit,
+            Zoom::Scale(s) if s.is_finite() && s > 0.0 => {
+                let size = self.cur_key().and_then(|k| self.sizes.get(&k).copied());
+                let s = match size {
+                    Some(size) => s.max(self.min_scale(Some(size))),
+                    None => s,
+                };
+                Zoom::Scale(s.min(MAX_SCALE))
+            }
+            Zoom::Scale(_) => return false,
+        };
+        if !(centre[0].is_finite() && centre[1].is_finite()) {
+            return false;
+        }
+        let centre = [centre[0].clamp(0.0, 1.0), centre[1].clamp(0.0, 1.0)];
+        if zoom == self.zoom && centre == self.centre {
+            return false;
+        }
+        self.zoom = zoom;
+        self.centre = centre;
+        self.gesture_at = Some(Instant::now());
+        true
     }
 
     /// Whether a zoom gesture is under way (its last step is younger than the pause).
@@ -1651,6 +1697,7 @@ impl<S> State<S> {
             size: key.and_then(|k| self.sizes.get(&k).copied()),
             zoom: self.zoom,
             scale: key.and_then(|k| self.scale_of(k)),
+            centre: self.centre,
             profile_unusable: key.is_some_and(|k| self.profile_unusable.contains(&k)),
             statistics: key.and_then(|k| self.statistics.get(&k).cloned()),
             // no image, or one that cannot be shown, has no map
@@ -3672,6 +3719,162 @@ mod tests {
         let f = s.frame(VIEW);
         assert!(matches!(f.status, Status::Error(_)));
         assert_eq!(f.clipping, ClippingState::Unavailable);
+    }
+
+    // ---------- a view set from outside (ADR 0017 U6, T150) ----------
+
+    #[test]
+    fn the_frame_gives_the_centre_after_a_pan_and_a_zoom_around_an_anchor() {
+        let mut s = state(1024);
+        known(&mut s, 10);
+        assert_eq!(s.frame(VIEW).centre, [0.5, 0.5]);
+        s.set_zoom(Zoom::Scale(1.0), None, false);
+        s.pan([100.0, -50.0]);
+        let panned = geometry::pan_centre(SIZE, VIEW, 1.0, [0.5, 0.5], [100.0, -50.0]);
+        assert_ne!(panned, [0.5, 0.5]);
+        assert_eq!(s.frame(VIEW).centre, panned);
+        s.set_zoom(Zoom::Scale(2.0), Some([0.0, 0.0]), false);
+        let zoomed = geometry::zoom_centre(SIZE, VIEW, 1.0, 2.0, panned, Some([0.0, 0.0]));
+        assert_ne!(zoomed, panned);
+        assert_eq!(s.frame(VIEW).centre, zoomed);
+    }
+
+    #[test]
+    fn set_view_sets_the_zoom_and_the_centre() {
+        let mut s = state(1024);
+        known(&mut s, 10);
+        assert!(s.set_view(Zoom::Scale(1.0), [0.3, 0.6]));
+        assert_eq!(s.zoom, Zoom::Scale(1.0));
+        assert_eq!(s.centre, [0.3, 0.6]);
+        let f = s.frame(VIEW);
+        assert_eq!(f.zoom, Zoom::Scale(1.0));
+        assert_eq!(f.scale, Some(1.0));
+        assert_eq!(f.centre, [0.3, 0.6]);
+        // fit is taken as it is; the centre is stored and does not move the fitted image
+        assert!(s.set_view(Zoom::Fit, [0.2, 0.9]));
+        assert_eq!(s.zoom, Zoom::Fit);
+        assert_eq!(s.centre, [0.2, 0.9]);
+        // the view model's, not one image's: it stays when stepping (V6)
+        s.go(11);
+        assert_eq!(s.zoom, Zoom::Fit);
+        assert_eq!(s.centre, [0.2, 0.9]);
+    }
+
+    #[test]
+    fn set_view_clamps_the_scale_as_set_zoom_when_the_size_is_known() {
+        let mut s = state(1024);
+        known(&mut s, 10);
+        assert!(s.set_view(Zoom::Scale(100.0), [0.5, 0.5]));
+        assert_eq!(s.zoom, Zoom::Scale(MAX_SCALE));
+        // the smallest scale is half of fit (25 % for 4000 × 3000 in 1000 × 800)
+        assert!(s.set_view(Zoom::Scale(0.01), [0.5, 0.5]));
+        assert_eq!(s.zoom, Zoom::Scale(0.125));
+        let mut by_set_zoom = state(1024);
+        known(&mut by_set_zoom, 10);
+        by_set_zoom.set_zoom(Zoom::Scale(0.01), None, false);
+        assert_eq!(s.zoom, by_set_zoom.zoom);
+    }
+
+    #[test]
+    fn set_view_keeps_a_small_scale_while_the_size_is_not_known() {
+        let mut s = state(1024);
+        assert!(s.set_view(Zoom::Scale(0.2), [0.5, 0.5]));
+        assert_eq!(s.zoom, Zoom::Scale(0.2));
+        // only the largest scale applies
+        assert!(s.set_view(Zoom::Scale(100.0), [0.5, 0.5]));
+        assert_eq!(s.zoom, Zoom::Scale(MAX_SCALE));
+        // not clamped again when the size becomes known
+        assert!(s.set_view(Zoom::Scale(0.05), [0.5, 0.5]));
+        known(&mut s, 10);
+        assert_eq!(s.zoom, Zoom::Scale(0.05));
+        assert_eq!(s.frame(VIEW).zoom, Zoom::Scale(0.05));
+    }
+
+    #[test]
+    fn set_view_ignores_a_bad_scale_and_a_bad_centre() {
+        let mut s = state(1024);
+        known(&mut s, 10);
+        assert!(s.set_view(Zoom::Scale(1.0), [0.3, 0.6]));
+        let step = s.gesture_at;
+        for zoom in [
+            Zoom::Scale(f64::NAN),
+            Zoom::Scale(f64::INFINITY),
+            Zoom::Scale(-1.0),
+            Zoom::Scale(0.0),
+        ] {
+            assert!(!s.set_view(zoom, [0.1, 0.1]), "{zoom:?}");
+        }
+        for centre in [[f64::NAN, 0.5], [0.5, f64::NAN], [f64::INFINITY, 0.5]] {
+            // neither the centre nor the zoom given with it is taken
+            assert!(!s.set_view(Zoom::Fit, centre), "{centre:?}");
+        }
+        assert_eq!(s.zoom, Zoom::Scale(1.0));
+        assert_eq!(s.centre, [0.3, 0.6]);
+        assert_eq!(s.gesture_at, step);
+    }
+
+    #[test]
+    fn set_view_clamps_the_centre_to_the_image_and_does_not_move_it_to_the_middle() {
+        let mut s = state(1024);
+        known(&mut s, 10);
+        assert!(s.set_view(Zoom::Scale(1.0), [-1.0, 2.0]));
+        assert_eq!(s.centre, [0.0, 1.0]);
+        // where the image fits the view, the centre is stored as given (not reset to 0.5)
+        assert!(s.set_view(Zoom::Scale(0.2), [0.3, 0.6]));
+        assert_eq!(s.centre, [0.3, 0.6]);
+    }
+
+    #[test]
+    fn set_view_with_the_values_held_starts_no_new_gesture_step() {
+        let mut s = state(1024);
+        known(&mut s, 10);
+        assert!(s.set_view(Zoom::Scale(1.0), [0.3, 0.6]));
+        assert!(s.gesture_at.is_some());
+        // as if the calls had paused
+        let step = Some(Instant::now() - Duration::from_secs(1));
+        s.gesture_at = step;
+        let generation = s.generation;
+        assert!(!s.set_view(Zoom::Scale(1.0), [0.3, 0.6]));
+        assert_eq!(s.gesture_at, step);
+        assert_eq!(s.generation, generation);
+        // equal after the rules: both clamped to what is held
+        assert!(s.set_view(Zoom::Scale(100.0), [-1.0, 2.0]));
+        s.gesture_at = step;
+        assert!(!s.set_view(Zoom::Scale(50.0), [-3.0, 7.0]));
+        assert_eq!(s.gesture_at, step);
+        assert_eq!(s.generation, generation);
+        // a new value is a new step
+        assert!(s.set_view(Zoom::Scale(1.0), [0.3, 0.6]));
+        assert_ne!(s.gesture_at, step);
+        assert_eq!(s.generation, generation);
+    }
+
+    #[test]
+    fn the_views_of_a_set_view_are_asked_for_after_the_gesture_pause() {
+        let mut s = state(1024);
+        with_session(&mut s, 10);
+        assert!(s.set_view(Zoom::Scale(1.0), [0.3, 0.6]));
+        // while the calls go on, nothing that depends on the position is asked for, but it is
+        // protected
+        assert!(s.wanted(false).is_empty());
+        assert!(s.plan().is_empty());
+        assert!(s.wanted(true).contains(&(k(10), Want::Shown)));
+        assert!(s.next_deadline().is_some());
+        // the calls paused: the exact view of the new position
+        s.gesture_at = Some(Instant::now() - Duration::from_secs(1));
+        assert_eq!(s.wanted(false)[0], (k(10), Want::Shown));
+        let region = geometry::sensor_box(SIZE, geometry::visible(SIZE, VIEW, 1.0, [0.3, 0.6]));
+        assert_eq!(
+            s.plan()[0],
+            Job::Render(
+                k(10),
+                JobView {
+                    kind: ViewKind::Zoom,
+                    region,
+                    density_q: 1_000_000,
+                }
+            )
+        );
     }
 
     #[test]

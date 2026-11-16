@@ -1,7 +1,7 @@
 # T154. ADR 0017 U6, fifth part: locked zoom and position in the compare — Blocked
 
 - **Blocked: waits for T153** (and T150–T152; the owner's answers to U6-Q1–U6-Q12 are in
-  `docs/tasks/T150-locked-view-in-the-view-core.md` and ADR 0017 §6.1). Chain: T150 → T151 →
+  `docs/tasks/done/T150-locked-view-in-the-view-core.md` and ADR 0017 §6.1). Chain: T150 → T151 →
   T152 → T153 → T154. The
   owner's hand check of U6 comes after this task.
 - **Why:** ADR 0017 §2.2 and step U6, "locked zoom": with the lock on, the held image shows the

@@ -295,6 +295,29 @@ impl<B: Backend> ViewCore<B> {
         self.shared.wake_ui();
     }
 
+    /// Sets the view model's zoom level and position from outside, as if the user had zoomed and
+    /// dragged there (ADR 0017 U6): `centre` is the relative point of the upright image at the
+    /// view's centre, as [`Frame::centre`] gives it. It sets the view model, not one image's,
+    /// so it stays when stepping (V6).
+    ///
+    /// A scale that is not finite or not above 0, or a centre with a coordinate that is not
+    /// finite, is ignored. A scale is clamped as for the zoom actions when the current image's
+    /// size is known, and to 800 % only when it is not; the centre is clamped to 0–1. A change
+    /// counts as one step of a zoom gesture, so the exact view is rendered when the calls pause
+    /// (`Config::gesture_pause`); values equal to those held change nothing, so the shell may
+    /// call it every frame. Not a user request: nothing is recorded.
+    pub fn set_view(&self, zoom: Zoom, centre: [f64; 2]) {
+        {
+            let mut s = self.shared.state();
+            if !s.set_view(zoom, centre) {
+                return;
+            }
+            s.changed();
+        }
+        self.shared.cv.notify_all();
+        self.shared.wake_ui();
+    }
+
     // ---------- the presentation ----------
 
     /// Finished views to upload.

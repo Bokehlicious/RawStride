@@ -1,7 +1,7 @@
 # T152. ADR 0017 U6, third part: the second view core, and the image area drawn by one function — Blocked
 
 - **Blocked: waits for T151** (and T150; the owner's answers to U6-Q1–U6-Q12 are in
-  `docs/tasks/T150-locked-view-in-the-view-core.md` and ADR 0017 §6.1). Chain: T150 → T151 →
+  `docs/tasks/done/T150-locked-view-in-the-view-core.md` and ADR 0017 §6.1). Chain: T150 → T151 →
   T152 → T153 → T154.
 - **Why:** ADR 0017 §2.2 and step U6. The held image is shown by a second view core (U6-Q2), and
   the preview must draw two images. Today the image area is drawn inline in the shell's frame

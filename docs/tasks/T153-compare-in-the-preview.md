@@ -1,7 +1,7 @@
 # T153. ADR 0017 U6, fourth part: two images in the preview — Blocked
 
 - **Blocked: waits for T152** (and T150, T151; the owner's answers to U6-Q1–U6-Q12 are in
-  `docs/tasks/T150-locked-view-in-the-view-core.md` and ADR 0017 §6.1). Chain: T150 → T151 →
+  `docs/tasks/done/T150-locked-view-in-the-view-core.md` and ADR 0017 §6.1). Chain: T150 → T151 →
   T152 → T153 → T154.
 - **Why:** ADR 0017 §2.2 and step U6: the preview shows the held image beside (or above) the
   current one, so two images can be judged together. T152 started the second view core and made

@@ -577,3 +577,42 @@ fn a_file_without_statistics_says_so_and_is_asked_once() {
     screen.frame();
     assert_eq!(recorder.count("statistics none Raw"), 1);
 }
+
+// ---------- a view set from outside (ADR 0017 U6, T150) ----------
+
+#[test]
+fn set_view_gives_its_zoom_and_centre_in_the_frame_and_is_not_recorded() {
+    let config = Config {
+        record: true,
+        ..Config::default()
+    };
+    let core = start(Fake::default(), config);
+    core.open_folder(files(&["a"]));
+    let mut screen = Screen::new(&core);
+    let f = screen.until(WAIT, ready);
+    assert_eq!(f.zoom, Zoom::Fit);
+    assert_eq!(f.centre, [0.5, 0.5]);
+    // the records so far (the opened folder)
+    assert!(!core.take_records().is_empty());
+
+    core.set_view(Zoom::Scale(1.0), [0.3, 0.6]);
+    let f = screen.frame();
+    assert_eq!(f.zoom, Zoom::Scale(1.0));
+    assert_eq!(f.centre, [0.3, 0.6]);
+    // the same values again, as the shell does every frame: the exact view comes after the pause
+    core.set_view(Zoom::Scale(1.0), [0.3, 0.6]);
+    let f = screen.until(WAIT, ready);
+    assert_eq!(f.status, Status::Ready);
+    assert_eq!(f.zoom, Zoom::Scale(1.0));
+    assert_eq!(f.centre, [0.3, 0.6]);
+    // the view's top-left corner shows sensor pixel (700, 1400): 0.3 × 4000 − 500, 0.6 × 3000 − 400
+    let d = f.draw.unwrap_or_else(|| panic!("nothing drawn"));
+    let tex = &screen.textures[&d.id];
+    let x = tex.region.x as f64 + d.uv[0][0] as f64 * tex.region.w as f64;
+    let y = tex.region.y as f64 + d.uv[0][1] as f64 * tex.region.h as f64;
+    assert!(
+        (x - 700.0).abs() < 0.5 && (y - 1400.0).abs() < 0.5,
+        "({x}, {y})"
+    );
+    assert!(core.take_records().is_empty(), "set_view is not recorded");
+}
