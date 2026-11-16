@@ -97,11 +97,13 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 |---|---|---|
 | [T160](T160-raf-listed-everywhere.md) | Fujifilm RAF listed: viewer, import and sidecar | Open |
 | [T161](T161-import-dialog-finds-new-cards.md) | The import dialog finds a card inserted while it is open | Open |
+| [T163](T163-open-every-imported-folder.md) | After an import, every folder that got images opens in its own tab (pw-loupe) | Open |
+| [T164](T164-same-names-in-favourites-and-recent.md) | Folders with the same name told apart in Favourites and Recent (pw-loupe) | Open |
 
 ## Writing a task (owner and reviewer)
 
-- **Number:** the next free number after the highest in this folder and `done/` (T163 next).
-- **File:** `docs/tasks/T163-<a-few-words>.md`; three digits, lower case, words joined by `-`.
+- **Number:** the next free number after the highest in this folder and `done/` (T165 next).
+- **File:** `docs/tasks/T165-<a-few-words>.md`; three digits, lower case, words joined by `-`.
 - **Index:** add a row to "Open tasks" above and keep its status in step with the file's heading.
 - **Size (owner, 2026-11-15, after T142):** one task is one layer (a C++ shim or a core crate, or
   the shell in `pw-loupe`), about eight files at most, and gives one result the owner can check by
@@ -141,7 +143,7 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 Skeleton (the fields recent tasks use; leave out those that do not apply):
 
 ```markdown
-# T163. <Title> — Open
+# T165. <Title> — Open
 
 - **Why:** …
 - **Crates:** … **Files:** …

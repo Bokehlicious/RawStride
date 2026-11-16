@@ -441,6 +441,7 @@ the decisions do not live only in the tasks.
 | U4-Q5 | The tree highlights the active tab's folder when it is visible and does not expand by itself |
 | U4-Q6 | A click opens the folder in a new tab, or in the tab that already shows it, as Ctrl+O and a drop (GR12, GR13) |
 | U4-Q7 | The library has the sections **Folders**, **Favourites** and **Recent** (GR14), each collapsible and remembered; Tasks below as before |
+| U4-Q8 | (Owner, 2026-11-16, T164.) In Favourites and Recent, a folder whose name another folder in the same list also has is shown with as many of its parent folders as make the names differ, for example "2025-07-25 (import\2025)"; the full path stays the tooltip |
 | U11a-Q1 | U11a in two tasks: Location Created and Location Shown first (T136); Genre, Image Creator, Copyright Owner, Licensor and Image Supplier next |
 | U11a-Q2 | The locations are in Time and Place after the older fields; one framed group per entry with seven sub-fields (Sublocation, City, Province/State, Country Name, Country ISO Code, World Region, Location Identifier) and "Remove"; "Add Location" under each list |
 | U11a-Q3 | An all-empty entry is not written; removing every entry clears the property; no reordering; sub-fields the form does not show are kept (ADR 0007 §8) |

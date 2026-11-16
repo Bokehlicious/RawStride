@@ -140,8 +140,9 @@ The same behaviour, rebuilt in egui (GR8), accepted by the owner with a real car
 - While copying: progress, **Avbryt**, and **Dölj** to keep using the grid and loupe (the status line
   shows the progress; Ctrl+I shows the dialog again). The card is ejected only after a complete import;
   tabs showing the card are emptied first.
-- At the end, the destination folder with the most files opens automatically in a new tab as a
-  contact sheet (GR12, GR13); no tab opens when nothing was copied.
+- At the end, every destination folder that received a copied file opens automatically in its own
+  tab as a contact sheet, the newest one active (GR12, GR13; owner, 2026-11-16, T163, ADR 0010
+  "Open the result"); no tab opens when nothing was copied.
 - Settings are kept for the session only (ADR 0010 Q5); a settings file is a later decision.
 - Code: `import.rs` (form and validation), `import_worker.rs`, `import_dialog.rs` (state machine),
   `import_text.rs`, `tabs.rs` (`clear_inside`), drawing in `main.rs`. Tests: the `import*` and `tabs`

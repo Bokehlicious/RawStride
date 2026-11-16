@@ -58,7 +58,7 @@
 | Copy | `pw-ingest::execute` on a background thread; the UI only polls progress (G2, GR2) | ADR 0005 point 6 |
 | Progress and cancel | Files, bytes and current file; cancel stops between chunks and leaves no final-named file | ADR 0005 point 6 |
 | Summary | Copied, already present, failed (with reasons), time and speed, destination folders | – |
-| Open the result | When the copy is complete, the destination folder with the most files opens **in a new tab** automatically (§11, Q2 for cancel and failures), shown as a **contact sheet** (ADR 0011 §2, GR13; added 2026-11-09) | Owner requirement |
+| Open the result | When the copy is complete, **every destination folder that received a copied file** opens **in its own tab** automatically, oldest images first and the newest folder's tab active (owner, 2026-11-16, T163; until then only the folder with the most files opened) (§11, Q2 for cancel and failures), shown as a **contact sheet** (ADR 0011 §2, GR13; added 2026-11-09) | Owner requirement |
 | Settings | Remembered for the running session only. A settings file comes later (§11, Q5) | ADR 0009 decision 3 |
 
 ### 3.2 Step B
