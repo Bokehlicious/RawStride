@@ -1,4 +1,4 @@
-# T160. Fujifilm RAF listed: viewer, import and sidecar — Blocked: waits for T159
+# T160. Fujifilm RAF listed: viewer, import and sidecar — Open
 
 - **Why:** the second and last task for RAF (owner, 2026-11-16, after the job test). T159 lets
   `pw-raw` read a RAF file. This task adds `raf` to the two lists that decide what RawStride
@@ -56,3 +56,4 @@
 |---|---|---|
 | 2026-11-16 | Blocked | Added with T159 (bug 4 of 5). Waits for T159 |
 | 2026-11-16 | Blocked | Cold read: the two constants are the only production change, and every other extension check treats RAF right; the ingest test gets its own card; a new `is_listed` test; the thumbnail speed is in the hand check and the backlog ("RAF previews") |
+| 2026-11-16 | Open | T159 is Done; the text is unchanged |

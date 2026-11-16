@@ -96,7 +96,7 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 | Task | Title | Status |
 |---|---|---|
 | [T158](T158-incremental-ingest-in-the-dialog.md) | Incremental ingest in the import dialog (pw-loupe) | Open |
-| [T160](T160-raf-listed-everywhere.md) | Fujifilm RAF listed: viewer, import and sidecar | Blocked: waits for T159 |
+| [T160](T160-raf-listed-everywhere.md) | Fujifilm RAF listed: viewer, import and sidecar | Open |
 | [T161](T161-import-dialog-finds-new-cards.md) | The import dialog finds a card inserted while it is open | Open |
 
 ## Writing a task (owner and reviewer)
