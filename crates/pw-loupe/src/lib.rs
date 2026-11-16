@@ -6,6 +6,7 @@
 
 mod browse;
 pub mod clipping;
+mod compare;
 mod editor;
 mod field_values;
 mod filter;
@@ -39,6 +40,7 @@ use std::path::{Path, PathBuf};
 use pw_viewcore::Status;
 
 pub use browse::{LoupeMove, metadata_neighbour};
+pub use compare::{Compare, Layout, follow, open_indexes, sides};
 pub use editor::{
     BatchEdits, CopiedFields, EditorField, EditorForm, EditorSection, EditorText, OpenConflict,
     RatingButton, WriteReason, apply_confirmation, editor_text, notice_text, write_reason_text,
@@ -79,9 +81,9 @@ pub use info_panel::{
     other_values, panel_text, property_label, rule_text, value_text,
 };
 pub use loupe_text::{
-    PROFILE_UNUSABLE_TEXT, READING_RATINGS_TEXT, error_text, failed_cell_text, indicator_text,
-    marked_text, mode_label, no_match_text, no_preview_text, position_text, source_text,
-    status_line, zoom_text,
+    PROFILE_UNUSABLE_TEXT, READING_RATINGS_TEXT, compare_side_text, error_text, failed_cell_text,
+    indicator_text, marked_text, mode_label, no_match_text, no_preview_text, position_text,
+    source_text, status_line, zoom_text,
 };
 pub use monitor_profile::{
     MonitorProfile, ProfileSource, load_monitor_profile, primary_monitor_profile_path,

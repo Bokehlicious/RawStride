@@ -1,7 +1,9 @@
-# T152. ADR 0017 U6, third part: the second view core, and the image area drawn by one function — Blocked
+# T152. ADR 0017 U6, third part: the second view core, and the image area drawn by one function — Open
 
-- **Blocked: waits for T151** (and T150; the owner's answers to U6-Q1–U6-Q12 are in
-  `docs/tasks/done/T150-locked-view-in-the-view-core.md` and ADR 0017 §6.1). Chain: T150 → T151 →
+- **Can start now.** T151 (`compare.rs`: `Layout`, `sides`, `open_indexes`, `Compare`, `follow`;
+  the settings `compare_above_below` and `compare_locked`; `compare_side_text`) and T150 are Done.
+  The owner's answers to U6-Q1–U6-Q12 are in
+  `docs/tasks/done/T150-locked-view-in-the-view-core.md` and ADR 0017 §6.1. Chain: T150 → T151 →
   T152 → T153 → T154.
 - **Why:** ADR 0017 §2.2 and step U6. The held image is shown by a second view core (U6-Q2), and
   the preview must draw two images. Today the image area is drawn inline in the shell's frame
@@ -52,3 +54,4 @@
 | Date | Status | Note |
 |---|---|---|
 | 2026-11-16 | Blocked | Added after the cold read of the chain of U6, which split the first T152 in two (this task and T153); waits for T151 |
+| 2026-11-16 | Open | T151 Done |

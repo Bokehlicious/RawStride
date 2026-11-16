@@ -53,6 +53,61 @@ pub fn zoom_text(frame: &Frame) -> String {
     }
 }
 
+/// The line at the top of each side of the compare (ADR 0017 §2.2, U6-Q10, U6-Q12): the file name
+/// (not the folder), what is shown (G1, told apart as [`source_text`] tells it, without the pixel
+/// size) and the zoom in percent, with "(Fit)" at fit. Each line is one whole template (rule 13);
+/// with no path, or no scale yet at fit, the template is the one without the missing part.
+pub fn compare_side_text(frame: &Frame) -> String {
+    let name = frame
+        .path
+        .as_ref()
+        .and_then(|p| p.file_name())
+        .map(|n| n.to_string_lossy());
+    // The zoom in percent, and whether it is fit; `None` at fit before the scale is known.
+    let zoom = match (frame.zoom, frame.scale) {
+        (Zoom::Fit, Some(s)) => Some((s * 100.0, true)),
+        (Zoom::Fit, None) => None,
+        (Zoom::Scale(s), _) => Some((s * 100.0, false)),
+    };
+    let plain = frame
+        .path
+        .as_deref()
+        .is_some_and(pw_viewcore::is_plain_jpeg);
+    match (name, frame.source) {
+        (Some(file), Source::Raw) => match zoom {
+            Some((zoom, true)) => format!("{file} · RAW rendering · {zoom:.0}% (Fit)"),
+            Some((zoom, false)) => format!("{file} · RAW rendering · {zoom:.0}%"),
+            None => format!("{file} · RAW rendering"),
+        },
+        (Some(file), Source::Jpeg) if is_tiff(frame) => match zoom {
+            Some((zoom, true)) => format!("{file} · TIFF file · {zoom:.0}% (Fit)"),
+            Some((zoom, false)) => format!("{file} · TIFF file · {zoom:.0}%"),
+            None => format!("{file} · TIFF file"),
+        },
+        (Some(file), Source::Jpeg) if plain => match zoom {
+            Some((zoom, true)) => format!("{file} · JPEG file · {zoom:.0}% (Fit)"),
+            Some((zoom, false)) => format!("{file} · JPEG file · {zoom:.0}%"),
+            None => format!("{file} · JPEG file"),
+        },
+        (Some(file), Source::Jpeg) => match zoom {
+            Some((zoom, true)) => format!("{file} · Embedded JPEG · {zoom:.0}% (Fit)"),
+            Some((zoom, false)) => format!("{file} · Embedded JPEG · {zoom:.0}%"),
+            None => format!("{file} · Embedded JPEG"),
+        },
+        // Without a path the file cannot be told to be a JPEG or TIFF file.
+        (None, Source::Raw) => match zoom {
+            Some((zoom, true)) => format!("RAW rendering · {zoom:.0}% (Fit)"),
+            Some((zoom, false)) => format!("RAW rendering · {zoom:.0}%"),
+            None => "RAW rendering".to_string(),
+        },
+        (None, Source::Jpeg) => match zoom {
+            Some((zoom, true)) => format!("Embedded JPEG · {zoom:.0}% (Fit)"),
+            Some((zoom, false)) => format!("Embedded JPEG · {zoom:.0}%"),
+            None => "Embedded JPEG".to_string(),
+        },
+    }
+}
+
 /// The status-line part after the source text when the image's embedded colour profile could not
 /// be used (ADR 0016 §5).
 pub const PROFILE_UNUSABLE_TEXT: &str = "The embedded color profile could not be used";
@@ -436,5 +491,106 @@ mod tests {
         let long = "x".repeat(40);
         assert_eq!(failed_cell_text(&long), format!("{}…", "x".repeat(32)));
         assert_eq!(failed_cell_text(&"x".repeat(32)), "x".repeat(32));
+    }
+
+    // ---------- the side line of the compare (ADR 0017 U6-Q10, T151) ----------
+
+    /// A frame of each of the four sources (RAW rendering, embedded JPEG, JPEG file, TIFF file)
+    /// with the start of its side line.
+    fn four_sources() -> [(Frame, &'static str); 4] {
+        let mut plain = frame(Status::Ready, Source::Jpeg);
+        plain.path = Some(PathBuf::from("D:/Photos/photo.JPG"));
+        [
+            (
+                frame(Status::Ready, Source::Raw),
+                "TN100423.ARW · RAW rendering",
+            ),
+            (
+                frame(Status::Ready, Source::Jpeg),
+                "TN100423.ARW · Embedded JPEG",
+            ),
+            (plain, "photo.JPG · JPEG file"),
+            (
+                tiff_frame(Status::Ready, Source::Raw),
+                "Scan 01.tif · TIFF file",
+            ),
+        ]
+    }
+
+    #[test]
+    fn the_side_line_names_the_file_the_source_and_the_zoom_at_fit() {
+        let [raw, embedded, plain, tiff] = four_sources();
+        assert_eq!(
+            compare_side_text(&raw.0),
+            "TN100423.ARW · RAW rendering · 11% (Fit)"
+        );
+        assert_eq!(
+            compare_side_text(&embedded.0),
+            "TN100423.ARW · Embedded JPEG · 11% (Fit)"
+        );
+        assert_eq!(
+            compare_side_text(&plain.0),
+            "photo.JPG · JPEG file · 11% (Fit)"
+        );
+        assert_eq!(
+            compare_side_text(&tiff.0),
+            "Scan 01.tif · TIFF file · 20% (Fit)"
+        );
+    }
+
+    #[test]
+    fn the_side_line_at_100_percent_has_no_fit() {
+        for (mut f, start) in four_sources() {
+            f.zoom = Zoom::Scale(1.0);
+            assert_eq!(compare_side_text(&f), format!("{start} · 100%"));
+            f.zoom = Zoom::Scale(0.375);
+            assert_eq!(compare_side_text(&f), format!("{start} · 38%"));
+        }
+    }
+
+    #[test]
+    fn the_side_line_has_the_file_name_without_the_folder_and_no_pixel_size() {
+        for (f, _) in four_sources() {
+            let s = compare_side_text(&f);
+            assert!(!s.contains("D:"), "{s}");
+            assert!(!s.contains('/'), "{s}");
+            assert!(!s.contains('×'), "{s}");
+            assert!(!s.contains("6376"), "{s}");
+            assert!(!s.contains("Zoom"), "{s}");
+        }
+    }
+
+    #[test]
+    fn the_side_line_without_a_path_has_no_file_name() {
+        let mut raw = frame(Status::Empty, Source::Raw);
+        raw.path = None;
+        assert_eq!(compare_side_text(&raw), "RAW rendering · 11% (Fit)");
+        raw.zoom = Zoom::Scale(1.0);
+        assert_eq!(compare_side_text(&raw), "RAW rendering · 100%");
+        let mut jpeg = frame(Status::Empty, Source::Jpeg);
+        jpeg.path = None;
+        assert_eq!(compare_side_text(&jpeg), "Embedded JPEG · 11% (Fit)");
+        jpeg.zoom = Zoom::Scale(1.0);
+        assert_eq!(compare_side_text(&jpeg), "Embedded JPEG · 100%");
+    }
+
+    #[test]
+    fn the_side_line_without_a_scale_has_no_zoom() {
+        for (mut f, start) in four_sources() {
+            f.scale = None;
+            assert_eq!(compare_side_text(&f), start);
+            // a chosen scale is known without the image's size
+            f.zoom = Zoom::Scale(2.0);
+            assert_eq!(compare_side_text(&f), format!("{start} · 200%"));
+        }
+        // neither a path nor a scale
+        let mut raw = frame(Status::Empty, Source::Raw);
+        raw.path = None;
+        raw.scale = None;
+        assert_eq!(compare_side_text(&raw), "RAW rendering");
+        let mut jpeg = frame(Status::Empty, Source::Jpeg);
+        jpeg.path = None;
+        jpeg.scale = None;
+        assert_eq!(compare_side_text(&jpeg), "Embedded JPEG");
     }
 }

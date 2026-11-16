@@ -60,6 +60,10 @@ const INSPECTOR_HISTOGRAM: &str = "inspector_histogram";
 const CLIP_HIGHLIGHTS: &str = "clip_highlights";
 const CLIP_SHADOWS: &str = "clip_shadows";
 const PREVIEW_CLIPPING: &str = "preview_clipping";
+/// The keys of the compare's layout (above and below instead of side by side) and of its lock of
+/// zoom and position (ADR 0017 §2.2, U6-Q7, U6-Q8, T151).
+const COMPARE_ABOVE_BELOW: &str = "compare_above_below";
+const COMPARE_LOCKED: &str = "compare_locked";
 /// The keys of the metadata window's sections, open or collapsed (ADR 0017 U10-Q6, T123).
 const EDITOR_CONTENT: &str = "editor_content";
 const EDITOR_CREATOR_RIGHTS: &str = "editor_creator_rights";
@@ -176,6 +180,11 @@ pub struct ShellSettings {
     pub clip_shadows: bool,
     /// The Clipping section of the preview's column (T148, U7b-Q9).
     pub preview_clipping: ColumnState,
+    /// The compare's two images above and below each other (`V`) instead of side by side (T151,
+    /// U6-Q7), and its zoom and position locked together (`L`, U6-Q8). The compare itself is not
+    /// remembered (U6-Q11).
+    pub compare_above_below: bool,
+    pub compare_locked: bool,
 }
 
 /// The library's lists as `settings.txt` keeps them (T135, U4-Q3, U4-Q4): the favourites in the
@@ -235,6 +244,9 @@ impl Default for ShellSettings {
             clip_highlights: false,
             clip_shadows: false,
             preview_clipping: ColumnState::Open,
+            // The compare side by side (U6-Q7) and locked (U6-Q8).
+            compare_above_below: false,
+            compare_locked: true,
         }
     }
 }
@@ -367,18 +379,22 @@ pub fn load_settings_and_library(path: &Path) -> (Settings, SavedLibrary, Vec<St
                 None => problems.push(bad("name, capture, modified, type or rating")),
             },
             WINDOW_MAXIMIZED | FULLSCREEN | COLUMNS_HIDDEN | PREVIEW_HIDDEN | SORT_DESCENDING
-            | CLIP_HIGHLIGHTS | CLIP_SHADOWS => match parse_bool(value) {
-                Some(on) => match key {
-                    WINDOW_MAXIMIZED => shell.window_maximized = on,
-                    FULLSCREEN => shell.fullscreen = on,
-                    PREVIEW_HIDDEN => shell.preview_hidden = on,
-                    SORT_DESCENDING => shell.sort.descending = on,
-                    CLIP_HIGHLIGHTS => shell.clip_highlights = on,
-                    CLIP_SHADOWS => shell.clip_shadows = on,
-                    _ => shell.columns_hidden = on,
-                },
-                None => problems.push(bad("true or false")),
-            },
+            | CLIP_HIGHLIGHTS | CLIP_SHADOWS | COMPARE_ABOVE_BELOW | COMPARE_LOCKED => {
+                match parse_bool(value) {
+                    Some(on) => match key {
+                        WINDOW_MAXIMIZED => shell.window_maximized = on,
+                        FULLSCREEN => shell.fullscreen = on,
+                        PREVIEW_HIDDEN => shell.preview_hidden = on,
+                        SORT_DESCENDING => shell.sort.descending = on,
+                        CLIP_HIGHLIGHTS => shell.clip_highlights = on,
+                        CLIP_SHADOWS => shell.clip_shadows = on,
+                        COMPARE_ABOVE_BELOW => shell.compare_above_below = on,
+                        COMPARE_LOCKED => shell.compare_locked = on,
+                        _ => shell.columns_hidden = on,
+                    },
+                    None => problems.push(bad("true or false")),
+                }
+            }
             LEFT_COLUMN_WIDTH | RIGHT_COLUMN_WIDTH | PREVIEW_COLUMN_WIDTH => {
                 match value.parse::<u32>() {
                     Ok(width) if key == LEFT_COLUMN_WIDTH => shell.left_column_width = width,
@@ -584,6 +600,10 @@ fn shell_lines(shell: &ShellSettings) -> String {
         shell.clip_highlights,
         shell.clip_shadows,
         column_value(shell.preview_clipping)
+    ));
+    text.push_str(&format!(
+        "{COMPARE_ABOVE_BELOW} = {}\n{COMPARE_LOCKED} = {}\n",
+        shell.compare_above_below, shell.compare_locked
     ));
     text
 }
@@ -835,7 +855,8 @@ mod tests {
              library_favourites = open\nlibrary_recent = open\nlibrary_tasks = open\n\
              sort = name\n\
              sort_descending = false\npreview_histogram = open\ninspector_histogram = open\n\
-             clip_highlights = false\nclip_shadows = false\npreview_clipping = open\n"
+             clip_highlights = false\nclip_shadows = false\npreview_clipping = open\n\
+             compare_above_below = false\ncompare_locked = true\n"
         );
     }
 
@@ -1026,6 +1047,8 @@ mod tests {
             clip_highlights: true,
             clip_shadows: true,
             preview_clipping: ColumnState::Collapsed,
+            compare_above_below: true,
+            compare_locked: false,
         }
     }
 
@@ -1907,6 +1930,109 @@ mod tests {
             let (settings, problems) = load_settings(&path);
             assert_one_problem_on_line(&problems, 3);
             assert!(problems[0].contains(key), "{problems:?}");
+            assert_eq!(settings.shell, ShellSettings::default(), "{key} = {value}");
+            assert!(settings.create_iim, "{key} = {value}");
+        }
+    }
+
+    // ---------- the compare's layout and lock (ADR 0017 §2.2, U6-Q7, U6-Q8, T151) ----------
+
+    #[test]
+    fn the_compare_defaults_to_side_by_side_and_locked() {
+        let shell = ShellSettings::default();
+        assert!(!shell.compare_above_below);
+        assert!(shell.compare_locked);
+    }
+
+    #[test]
+    fn the_compare_keys_round_trip_one_at_a_time() {
+        let dir = TempDir::new();
+        let path = dir.0.join("settings.txt");
+        let base = ShellSettings::default();
+        for (shell, above_below, locked) in [
+            (
+                ShellSettings {
+                    compare_above_below: true,
+                    ..base
+                },
+                "true",
+                "true",
+            ),
+            (
+                ShellSettings {
+                    compare_locked: false,
+                    ..base
+                },
+                "false",
+                "false",
+            ),
+            (base, "false", "true"),
+        ] {
+            let settings = Settings {
+                shell,
+                ..Settings::default()
+            };
+            save_settings(&path, &settings).unwrap();
+            let text = std::fs::read_to_string(&path).unwrap();
+            assert!(
+                text.contains(&format!("\ncompare_above_below = {above_below}\n")),
+                "{text}"
+            );
+            assert!(
+                text.contains(&format!("\ncompare_locked = {locked}\n")),
+                "{text}"
+            );
+            let (loaded, problems) = load_settings(&path);
+            assert!(problems.is_empty(), "{problems:?}");
+            assert_eq!(loaded, settings);
+        }
+    }
+
+    #[test]
+    fn the_compare_keys_are_read_from_their_file_values() {
+        let (_dir, path) =
+            TempDir::with_file("# RawStride\ncompare_above_below = true\ncompare_locked = false\n");
+        let (settings, problems) = load_settings(&path);
+        assert!(problems.is_empty(), "{problems:?}");
+        assert!(settings.shell.compare_above_below);
+        assert!(!settings.shell.compare_locked);
+        // only the two changed
+        assert_eq!(
+            ShellSettings {
+                compare_above_below: false,
+                compare_locked: true,
+                ..settings.shell
+            },
+            ShellSettings::default()
+        );
+    }
+
+    #[test]
+    fn a_file_without_the_compare_keys_gives_their_defaults_and_no_problem() {
+        let (_dir, path) =
+            TempDir::with_file("# RawStride\ncreate_iim = true\nclip_highlights = true\n");
+        let (settings, problems) = load_settings(&path);
+        assert!(problems.is_empty(), "{problems:?}");
+        assert!(!settings.shell.compare_above_below);
+        assert!(settings.shell.compare_locked);
+    }
+
+    #[test]
+    fn a_bad_value_of_a_compare_key_keeps_its_default_and_names_the_line() {
+        for (key, value) in [
+            ("compare_above_below", "yes"),
+            ("compare_above_below", "above"),
+            ("compare_locked", "0"),
+            ("compare_locked", ""),
+            ("compare_locked", "unlocked"),
+        ] {
+            let (_dir, path) = TempDir::with_file(&format!(
+                "# RawStride\ncreate_iim = true\n{key} = {value}\n"
+            ));
+            let (settings, problems) = load_settings(&path);
+            assert_one_problem_on_line(&problems, 3);
+            assert!(problems[0].contains(key), "{problems:?}");
+            assert!(problems[0].contains("true or false"), "{problems:?}");
             assert_eq!(settings.shell, ShellSettings::default(), "{key} = {value}");
             assert!(settings.create_iim, "{key} = {value}");
         }
