@@ -1,7 +1,7 @@
 # ADR 0018: Deleting images to the Recycle Bin
 
-- Status: **proposed.** The owner answered every question on 2026-11-17 (all proposals approved,
-  §3). Nothing is built, installed or added as a dependency by this ADR. Each step in §4 becomes
+- Status: **accepted by the owner (2026-11-17):** every question answered, all proposals approved
+  (§3). Nothing is built, installed or added as a dependency by this ADR. Each step in §4 becomes
   its own task, with its own approval and commit.
 - Date: 2026-11-17
 - Related:

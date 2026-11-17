@@ -11,7 +11,7 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 |---|---|
 | `T<nnn>-<name>.md` (this folder) | Open tasks, one file each |
 | [`backlog.md`](backlog.md) | Not for agents yet: needs a decision, a dependency or an ADR first |
-| [`plans/`](plans/) | Step lists for ADRs that have none of their own (ADR 0007 milestone 8, ADR 0017) |
+| [`plans/`](plans/) | Step lists for ADRs that have none of their own (ADR 0007 milestone 8, ADR 0017, ADR 0018–0025) |
 | [`done/`](done/README.md) | Finished tasks T1–T178, and the log they were kept in until 2026-11-13 |
 
 
@@ -110,6 +110,14 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
   missing, unclear or contradicts the code; which other files would have to change. The reviewer
   fixes the task's text (or asks the owner) and notes the cold read in the log ("Cold read: …",
   what was changed). The fresh agent changes nothing.
+- **A review of the whole chain (owner, 2026-11-17, after U9b needed T177 and T178):** a chain
+  whose tasks work together across layers or in time (the metadata worker and the shell, moving
+  or deleting files, the safe write, anything that runs while the user keeps working) is read as
+  a whole by a fresh agent before its first task is set to Open, after each task's own cold read.
+  It reads `AGENTS.md`, this README and every task file of the chain, and answers: what happens
+  between the tasks (order, two things at once, a step that fails halfway, an undo), and what no
+  single task covers. The reviewer fixes the tasks (or asks the owner) and notes it in the first
+  task's log ("Chain review: …").
 - **An extra code review for large or risky tasks:** a task that changes the C++ shim, the safe
   write (`pw-metadata`), more than one crate, or more than about eight files gets, besides the
   reviewer's own review, an independent review of the diff (`/code-review` or a fresh review
@@ -123,6 +131,11 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 - **Hand check:** a step's row in `plans/` says "done" only after the owner's hand check
   (ADR 0017 §7); until then it says "awaiting the owner's hand check". A fix found in the hand check
   is a log row in the task it belongs to.
+- **The backlog is sorted after each hand check (owner, 2026-11-17):** when the owner has
+  hand-checked a step, the reviewer goes through `backlog.md`'s items that came from reviews and
+  leftovers ("Leftovers from the review of …", "Known limits …") with the owner: each becomes a
+  task, stays with a reason and a date, or is struck. The result is one commit, `Backlog: sorted
+  after <step>`.
 - **Parallel tasks:** two tasks may run at the same time only if they change different functions
   (as T142 and T143 did); `.\tools\check.ps1` is run by one at a time, and each task is reviewed
   and committed on its own, one commit per task.
