@@ -69,6 +69,13 @@ pub trait ImageCheck {
     /// Closes every RAW engine session for `image` (§9.1 point 2), before the file is checked.
     fn release(&self, image: &Path);
 
+    /// Closes every RAW engine session of `image` before a move (ADR 0017 §2.6, T177). No write
+    /// follows, so an implementation that notes something for a write's answer does not note it
+    /// here. The default calls [`ImageCheck::release`].
+    fn release_for_move(&self, image: &Path) {
+        self.release(image);
+    }
+
     /// Checks the written copy of `original` (§9.3 points 3–4: the same previews, the RAW image
     /// still opens). Called only for a JPEG, TIFF or DNG, never for a sidecar. An error is the
     /// reason shown to the user.

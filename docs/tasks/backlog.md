@@ -156,6 +156,16 @@ and reviewer:
   - *Large folders:* every name in the folder is lower-cased and sorted, though only names
     starting with `<base>.` can match. Filter on that prefix while reading if T174's hand check
     finds a reject or pick slow in a large folder.
+- **Leftovers from the review of T177** (`/code-review`, 2026-11-17; accepted, nothing breaks
+  today):
+  - *The default `release_for_move` calls `release`:* a new `ImageCheck`, or a wrapper of
+    `RawImageCheck` that forwards only `release` (as `Timed` in
+    `crates/pw-imagecheck/tests/real_files.rs` does), would note the write stamp before a move
+    again, without a warning. Making `release_for_move` a required method would make each
+    implementation decide.
+  - *A cleaner design:* the stamp is part of the write, not of the release. A write-only hook
+    (for example `ImageCheck::before_write`, called only by the safe write) would let `release`
+    be the same for writes and moves, and `with_move_release` and the second closure could go.
 - **Leftovers from the review of T170** (`/code-review`, 2026-11-17; the histogram stamp is
   T177):
   - *A view core may open the file again between the release and the move:* the worker releases

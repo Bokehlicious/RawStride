@@ -182,3 +182,4 @@ was when the task was done, so "this file", "below" and "the Log" in T1–T115 m
 | [T173](T173-move-events-in-the-metadata-cache.md) | ADR 0017 U9b, fifth part: the move requests and answers in the shell's metadata part (pw-loupe) |
 | [T175](T175-other-products-named-by-the-clean-room-rule.md) | Other products named only as the clean-room rule allows (docs) |
 | [T176](T176-focus-map-time-on-real-files.md) | ADR 0017 U9a: the focus map's time, and whether it slows stepping and Z (pw-viewcore tests) |
+| [T177](T177-release-before-a-move-without-the-write-stamp.md) | ADR 0017 U9b: the release before a move notes no write stamp (pw-metadata, pw-imagecheck, pw-loupe) |

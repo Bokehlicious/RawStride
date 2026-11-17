@@ -1,4 +1,4 @@
-# T177. ADR 0017 U9b: the release before a move notes no write stamp — Open
+# T177. ADR 0017 U9b: the release before a move notes no write stamp — Done
 
 - **Chain:** T169 → T170 → T171 → T172 → T173 → T174; this task is done before T174, which
   sends the first moves. Found in the independent review of T170 (2026-11-17).
@@ -68,3 +68,6 @@
 |---|---|---|
 | 2026-11-17 | Blocked | Added after the independent review of T170 (finding: a move's release notes a histogram stamp no answer takes); waits for its cold read; T174 waits for it |
 | 2026-11-17 | Open | Cold read: `pw-imagecheck`'s tests are in `src/tests.rs` (added to Files) and `without_release_does_nothing` checks the exact `Debug` strings (allowed to change, named); `RecordingCheck` overrides `release_for_move` with `released_for_move()`; the changed worker assertions named and allowed explicitly; the module docs of `worker.rs` and `pw-imagecheck` updated; one `histogram_reads` clone per closure; `Timed` unchanged; the main.rs test module named |
+| 2026-11-17 | Ready for review | Done as written: `ImageCheck::release_for_move` (default `release`), the worker's moves and moves back use it, `RawImageCheck::with_move_release`, the program's move release waits for the histogram read without noting a stamp; 2 tests added (1 in `pw-imagecheck`, 1 in `pw-loupe`'s binary) and `RecordingCheck` extended, the named assertions changed; `check.ps1` all OK, 1783 passed, 66 ignored, 0 failed |
+| 2026-11-17 | Review | Reviewer: as written. Independent review (`/code-review high`), no bug, 5 notes: (1) no test showed that the move release waits for the histogram read → test `a_move_of_the_file_being_read_waits_for_the_read` (`main.rs`) added by the reviewer on the owner's word; (2) the default `release_for_move` can bring the leak back through a new check or wrapper (`Timed`), and (3) a write-only hook would be a cleaner design → `backlog.md`, "Leftovers from the review of T177"; (4) the undo releases sidecars too, as T170 decided, kept. `check.ps1` all OK, 1784 passed, 66 ignored |
+| 2026-11-17 | Done | Approved by the owner; leftovers in `backlog.md` |

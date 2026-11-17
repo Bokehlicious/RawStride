@@ -1,4 +1,4 @@
-# T174. ADR 0017 U9b, last part: the keys, the menu items, the moves and the undo in the shell — Blocked: waits for T177
+# T174. ADR 0017 U9b, last part: the keys, the menu items, the moves and the undo in the shell — Open
 
 - **Chain:** T169 → T170 → T171 → T172 → T173 → T174. The owner's answers U9-Q5–U9-Q10 are in
   ADR 0017 §6.1.
@@ -116,3 +116,4 @@
 | 2026-11-17 | Blocked | Review of T170: also waits for T177 (a move's release notes no histogram stamp); the reopening between release and move named as a known limit in point 7 |
 | 2026-11-17 | Blocked | Review of T172: a finished batch's `moved` can hold an image with no moves of its own (a partner moved by another image), so its rating is restored too; its `move_back` of an empty list answers `Ok` at once and it counts in `undone_text` |
 | 2026-11-17 | Blocked | Review of T173: point 8 added (the `allow(dead_code)` of T173's seven functions removed once they are used); `metadata.rs` added to the files for it only |
+| 2026-11-17 | Open | T173 and T177 are done |

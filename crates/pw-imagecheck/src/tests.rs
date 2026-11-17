@@ -209,15 +209,49 @@ fn release_calls_the_closure_with_the_path() {
 }
 
 #[test]
+fn release_for_move_calls_the_move_closure_when_set_otherwise_the_release_closure() {
+    let released: Arc<Mutex<Vec<PathBuf>>> = Arc::default();
+    let moved: Arc<Mutex<Vec<PathBuf>>> = Arc::default();
+    let check = RawImageCheck::new({
+        let released = Arc::clone(&released);
+        move |path: &Path| released.lock().unwrap().push(path.to_path_buf())
+    })
+    .with_move_release({
+        let moved = Arc::clone(&moved);
+        move |path: &Path| moved.lock().unwrap().push(path.to_path_buf())
+    });
+    check.release_for_move(Path::new("C:/bilder/flyttad.dng"));
+    assert_eq!(
+        *moved.lock().unwrap(),
+        vec![PathBuf::from("C:/bilder/flyttad.dng")]
+    );
+    assert!(released.lock().unwrap().is_empty());
+
+    let without: Arc<Mutex<Vec<PathBuf>>> = Arc::default();
+    let check = RawImageCheck::new({
+        let without = Arc::clone(&without);
+        move |path: &Path| without.lock().unwrap().push(path.to_path_buf())
+    });
+    check.release_for_move(Path::new("C:/bilder/annan.jpg"));
+    assert_eq!(
+        *without.lock().unwrap(),
+        vec![PathBuf::from("C:/bilder/annan.jpg")]
+    );
+}
+
+#[test]
 fn without_release_does_nothing() {
     let check = RawImageCheck::without_release();
     check.release(Path::new("C:/bilder/bild.dng"));
     assert_eq!(
         format!("{check:?}"),
-        "RawImageCheck { release: false }".to_string()
+        "RawImageCheck { release: false, move_release: false }".to_string()
     );
     let with = RawImageCheck::new(|_: &Path| {});
-    assert_eq!(format!("{with:?}"), "RawImageCheck { release: true }");
+    assert_eq!(
+        format!("{with:?}"),
+        "RawImageCheck { release: true, move_release: false }"
+    );
 }
 
 #[test]

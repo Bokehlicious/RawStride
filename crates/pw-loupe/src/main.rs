@@ -7121,18 +7121,26 @@ fn release_in_both(
 /// never meets a file the reader has open. The read's result is still used: a metadata write
 /// does not change the pixels. With `note_stamp`, the file's stamp just before the write is
 /// noted in `histogram_reads` before the release returns, so a kept histogram follows the write
-/// (U7c-Q7, T145).
+/// (U7c-Q7, T145). The release before a move (ADR 0017 §2.6, T177) does the same but never notes
+/// the stamp, whatever `note_stamp` is: a move has no write answer that would take it back.
 fn release_before_write(
     release_core: impl Fn(&Path) + Send + Sync + 'static,
     histogram_reads: HistogramReads,
     note_stamp: bool,
 ) -> RawImageCheck {
+    let release_core = std::sync::Arc::new(release_core);
+    let move_core = std::sync::Arc::clone(&release_core);
+    let move_reads = histogram_reads.clone();
     RawImageCheck::new(move |path| {
         release_core(path);
         let _ = histogram_reads.wait_for(path, RELEASE_TIMEOUT);
         if note_stamp {
             histogram_reads.note_before_write(path);
         }
+    })
+    .with_move_release(move |path| {
+        move_core(path);
+        let _ = move_reads.wait_for(path, RELEASE_TIMEOUT);
     })
 }
 
@@ -7505,6 +7513,57 @@ mod tests {
             assert!(t0.elapsed() < Duration::from_secs(1));
         }
 
+        /// The release before a move waits for the histogram read too (review of T177): a move
+        /// must not meet a file the reader has open.
+        #[test]
+        fn a_move_of_the_file_being_read_waits_for_the_read() {
+            let log: Log = Arc::default();
+            let backend = Recording {
+                log: log.clone(),
+                gate: Arc::default(),
+            };
+            let reads = HistogramReads::default();
+            let mut reader = HistogramReader::start(backend.clone(), reads.clone());
+            let path = std::env::temp_dir().join("pw-loupe-move-waits.DNG");
+            assert!(reader.read_histogram(path.clone(), Source::Raw).is_ok());
+            backend.wait_until_reading();
+
+            let core_log = log.clone();
+            let check = release_before_write(
+                move |_: &Path| note(&core_log, "view core released"),
+                reads.clone(),
+                true,
+            );
+            let (done, finished) = mpsc::channel();
+            let move_log = log.clone();
+            let move_path: PathBuf = path.clone();
+            let mover = std::thread::spawn(move || {
+                check.release_for_move(&move_path);
+                note(&move_log, "moved");
+                let _ = done.send(());
+            });
+            // the move waits while the read holds the file
+            assert_eq!(
+                finished.recv_timeout(Duration::from_millis(300)),
+                Err(mpsc::RecvTimeoutError::Timeout)
+            );
+            backend.open_gate();
+            assert_eq!(finished.recv_timeout(Duration::from_secs(10)), Ok(()));
+            assert!(mover.join().is_ok());
+            assert_eq!(
+                steps(&log),
+                [
+                    "opened",
+                    "view core released",
+                    "statistics",
+                    "session dropped",
+                    "moved"
+                ]
+            );
+            // and notes no stamp
+            assert_eq!(reads.take_before_write(&path), None);
+        }
+
         #[test]
         fn a_write_releases_the_file_in_both_view_cores_before_it_waits_for_the_read() {
             let log: Log = Arc::default();
@@ -7592,6 +7651,36 @@ mod tests {
             let import = release_before_write(|_: &Path| {}, reads.clone(), false);
             import.release(&path);
             assert_eq!(reads.take_before_write(&path), None);
+            let _ = std::fs::remove_dir_all(&folder);
+        }
+
+        #[test]
+        fn the_release_before_a_move_notes_no_stamp() {
+            let folder =
+                std::env::temp_dir().join(format!("pw-loupe-move-release-{}", std::process::id()));
+            assert!(std::fs::create_dir_all(&folder).is_ok());
+            let path = folder.join("moved.DNG");
+            assert!(std::fs::write(&path, b"before").is_ok());
+            let before = file_stamp(&path);
+            assert!(before.is_some());
+
+            let log: Log = Arc::default();
+            let core_log = log.clone();
+            let reads = HistogramReads::default();
+            let check = release_before_write(
+                move |_: &Path| note(&core_log, "view core released"),
+                reads.clone(),
+                true,
+            );
+            check.release_for_move(&path);
+            // the view core let go, but no stamp is noted: no write answer would take it
+            assert_eq!(steps(&log), ["view core released"]);
+            assert_eq!(reads.take_before_write(&path), None);
+
+            // a write's release afterwards still notes one
+            check.release(&path);
+            assert_eq!(steps(&log), ["view core released", "view core released"]);
+            assert_eq!(reads.take_before_write(&path), Some(before));
             let _ = std::fs::remove_dir_all(&folder);
         }
     }

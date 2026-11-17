@@ -25,9 +25,11 @@
 //!
 //! Moving an image with its companion files (ADR 0017 §2.6, step U9b; T170):
 //! - [`MetadataWorker::move_image`] finds the image's group with [`relocate::companions`],
-//!   releases the view cores' sessions of the image files in it ([`ImageCheck::release`]) and
+//!   releases the view cores' sessions of the image files in it
+//!   ([`ImageCheck::release_for_move`], T177: no write follows, so nothing is noted for one) and
 //!   moves the group with [`relocate::move_group`]; answered with [`Event::Moved`].
-//! - [`MetadataWorker::move_back`] releases every moved file and moves the files back with
+//! - [`MetadataWorker::move_back`] releases every moved file (also with
+//!   [`ImageCheck::release_for_move`]) and moves the files back with
 //!   [`relocate::move_back`]; answered with [`Event::MovedBack`].
 //!
 //! Requests run in order, so a move sent after a rating write of the same image runs after it.
@@ -501,7 +503,7 @@ fn handle(
                 None => Err(NO_JOURNAL.to_string()),
                 Some(setup) => {
                     for step in &moved {
-                        setup.checks.release(&step.to);
+                        setup.checks.release_for_move(&step.to);
                     }
                     relocate::move_back(&moved).map_err(|error| error.to_string())
                 }
@@ -538,7 +540,7 @@ fn move_image(
                 .map(|e| e.to_string_lossy().to_lowercase())
                 .is_some_and(|e| lower.contains(&e));
         if is_image {
-            checks.release(file);
+            checks.release_for_move(file);
         }
     }
     relocate::move_group(&files, target).map_err(|error| error.to_string())
@@ -999,19 +1001,34 @@ mod tests {
         }
     }
 
-    /// An image check that records the paths given to `release` (T170).
+    /// An image check that records the paths given to `release` (T170) and, in a second list,
+    /// those given to `release_for_move` (T177).
     #[derive(Clone, Default)]
-    struct RecordingCheck(Arc<std::sync::Mutex<Vec<PathBuf>>>);
+    struct RecordingCheck(
+        Arc<std::sync::Mutex<Vec<PathBuf>>>,
+        Arc<std::sync::Mutex<Vec<PathBuf>>>,
+    );
 
     impl RecordingCheck {
         fn released(&self) -> Vec<PathBuf> {
             self.0.lock().expect("the recorded paths").clone()
+        }
+
+        fn released_for_move(&self) -> Vec<PathBuf> {
+            self.1.lock().expect("the recorded paths").clone()
         }
     }
 
     impl ImageCheck for RecordingCheck {
         fn release(&self, image: &Path) {
             self.0
+                .lock()
+                .expect("the recorded paths")
+                .push(image.to_path_buf());
+        }
+
+        fn release_for_move(&self, image: &Path) {
+            self.1
                 .lock()
                 .expect("the recorded paths")
                 .push(image.to_path_buf());
@@ -1137,7 +1154,8 @@ mod tests {
         );
         assert_eq!(names(&target), ["TN0001.ARW", "TN0001.xmp"]);
         assert_eq!(names(folder.path()), ["_rejected"]);
-        assert_eq!(check.released(), vec![raw]);
+        assert_eq!(check.released_for_move(), vec![raw]);
+        assert!(check.released().is_empty());
     }
 
     #[test]
@@ -1221,7 +1239,8 @@ mod tests {
         assert_eq!(names(&target), Vec::<String>::new());
         let mut released = vec![raw];
         released.extend(moved.iter().map(|m| m.to.clone()));
-        assert_eq!(check.released(), released);
+        assert_eq!(check.released_for_move(), released);
+        assert!(check.released().is_empty());
     }
 
     #[test]
@@ -1239,7 +1258,8 @@ mod tests {
 
         move_result(&mut worker, &image, &target).expect("the move should succeed");
 
-        assert_eq!(check.released(), vec![image]);
+        assert_eq!(check.released_for_move(), vec![image]);
+        assert!(check.released().is_empty());
         assert_eq!(names(&target), ["TN0001.tiff"]);
     }
 

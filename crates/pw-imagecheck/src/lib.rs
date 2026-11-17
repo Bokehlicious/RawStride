@@ -7,7 +7,9 @@
 //!
 //! - **§9.1 point 2, sessions closed first:** [`ImageCheck::release`] calls the closure given to
 //!   [`RawImageCheck::new`] (the loupe passes the view core's releaser, T91), so no RAW engine
-//!   session holds the file open when it is checked and replaced.
+//!   session holds the file open when it is checked and replaced. Before a move (ADR 0017 §2.6,
+//!   T177), [`ImageCheck::release_for_move`] calls the closure given to
+//!   [`RawImageCheck::with_move_release`] when one is set, otherwise the same release closure.
 //! - **§9.3 point 3, "pw-raw finds the same previews (count, sizes, decodable JPEG)":** both
 //!   files are inspected with `pw_raw::inspect`; the copy must have as many embedded previews,
 //!   and each one (by index, smallest first) the same width, height and length and the **same
@@ -49,6 +51,7 @@ type Release = Box<dyn Fn(&Path) + Send + Sync>;
 /// The [`ImageCheck`] of RawStride: previews with `pw-raw`, the DNG opened with LibRaw.
 pub struct RawImageCheck {
     release: Option<Release>,
+    move_release: Option<Release>,
 }
 
 impl RawImageCheck {
@@ -56,12 +59,29 @@ impl RawImageCheck {
     pub fn new(release: impl Fn(&Path) + Send + Sync + 'static) -> RawImageCheck {
         RawImageCheck {
             release: Some(Box::new(release)),
+            move_release: None,
         }
     }
 
     /// A check whose [`ImageCheck::release`] does nothing (no RAW engine holds files open).
     pub fn without_release() -> RawImageCheck {
-        RawImageCheck { release: None }
+        RawImageCheck {
+            release: None,
+            move_release: None,
+        }
+    }
+
+    /// The same check whose [`ImageCheck::release_for_move`] calls `release` with the image's
+    /// path in place of the release closure (T177): a move has no write answer, so its release
+    /// must not note anything for one.
+    pub fn with_move_release(
+        self,
+        release: impl Fn(&Path) + Send + Sync + 'static,
+    ) -> RawImageCheck {
+        RawImageCheck {
+            move_release: Some(Box::new(release)),
+            ..self
+        }
     }
 }
 
@@ -69,6 +89,7 @@ impl fmt::Debug for RawImageCheck {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("RawImageCheck")
             .field("release", &self.release.is_some())
+            .field("move_release", &self.move_release.is_some())
             .finish()
     }
 }
@@ -77,6 +98,13 @@ impl ImageCheck for RawImageCheck {
     fn release(&self, image: &Path) {
         if let Some(release) = &self.release {
             release(image);
+        }
+    }
+
+    fn release_for_move(&self, image: &Path) {
+        match &self.move_release {
+            Some(release) => release(image),
+            None => self.release(image),
         }
     }
 
