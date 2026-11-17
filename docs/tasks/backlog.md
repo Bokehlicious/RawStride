@@ -120,6 +120,32 @@ and reviewer:
   ADR 0014 §15): a row "0★ 1★ 2★ 3★ 4★ 5★" and a row of colour swatches, each clicked on and off,
   with a check box per row that turns the row on or off. Needs an amendment of ADR 0014 first: the
   star part would become a set of star values instead of the ≥ / = / ≤ condition (T60).
+- **Before the repository is made public** (survey, 2026-11-17; the README section "How RawStride
+  is developed" and general antivirus wording in the agent rules were done then). The licence,
+  CONTRIBUTING and the dependency survey are in place, and no secrets were found in the files or
+  the history. Left, for the owner to decide:
+  - *The owner's e-mail address* is in all commits. Keep it, or rewrite the history of both
+    branches to the GitHub noreply address (`git filter-repo --mailmap`). A rewrite changes every
+    commit hash (check the documents' references to hashes first); push it to a new, empty
+    `RawStride` repository after renaming the old one (kept private and archived), and turn on
+    "Block command line pushes that expose my email".
+  - *A trademark search* for the name RawStride (ADR 0012, ADR 0002 §4).
+  - *The clean-room policy and the documents disagree*: `docs/clean-room.md` keeps observations
+    about other products out of the repository, but about 35 files describe what Photo Mechanic
+    does (ADR 0004, 0007, 0013, 0017, `pw-metadata`'s `reconcile.rs`, done tasks). Most are
+    level-C file-format observations; either the policy text allows them or the texts are
+    reworded as neutral requirements.
+  - *Small fixes*: `repository = ""` in `Cargo.toml`; a path with the owner's user name in
+    `done/T115-…`; `docs/agent-tasks.md` (about 700 KB, replaced by `docs/tasks/`) archived or
+    removed; the done tasks' logs read once with public eyes.
+  - *Choices*: the owner's name as test data in `pw-metadata`; the one-off `tools/m2-*.cmd`
+    scripts with paths to the test-data folder; `.github/` with CI, issue templates and a
+    `SECURITY.md` (optional); CONTRIBUTING asks contributors for `Signed-off-by`, which the
+    owner's own commits do not carry.
+  - *Check on GitHub*: the repository's visibility and settings today (not checked, `gh` is not
+    installed).
+  - A binary release also needs what ADR 0002 §4 lists (distribution folder,
+    `THIRD-PARTY-NOTICES.txt`, ExifTool).
 
 Removed on 2026-11-13 because they are done or planned elsewhere: ADR 0010 steps M3–M7 (done,
 T30–T40); ADR 0011 step K4 (done, T26–T29); moving rejected or picked images to `_rejected` /
