@@ -23,6 +23,22 @@ and reviewer:
   large JPEG and a cached mid-size preview. T160's hand check (owner, 2026-11-17) had only four
   RAF files and showed no problem; too few to judge, so this waits for a folder with many RAF
   files.
+- **ORF and CR2 in `pw-raw`** (survey, 2026-11-17; owner: no need now, the cameras are gone).
+  Both are listed in `SUPPORTED_EXTENSIONS` and LibRaw 0.22.3 renders both, but `pw-raw` falls
+  short. Sample files: the owner's five ORF (OM-1, E-M1 Mark II) and three CR2 (EOS-1D X Mark II)
+  in the `RAW-ny` subfolder of the test-data folder, kept out of `PW_TESTDATA` until fixed.
+  - *ORF is refused*: `inspect_tiff` accepts only TIFF magic 42 and 0x55; Olympus uses 0x4F52
+    (`IIRO`, older 0x5352). Accepting the magic is not enough: IFD0 is the uncompressed raw data
+    and the only large preview sits in the Olympus maker note (ExifIFD → MakerNote 0x927C →
+    CameraSettings 0x2020 → PreviewImageStart/Length 0x0101/0x0102, offsets from the maker-note
+    start), which `pw-raw` does not read today.
+  - *CR2 shows only the 160 px thumbnail*: IFD0 holds a 5472 × 3648 JPEG as a strip with
+    Compression 6 but no PhotometricInterpretation tag, and `inspect_tiff` requires YCbCr for strip
+    previews. A small change; the candidate is validated as a JPEG anyway.
+  - Then: fixed cases in `pw-raw/tests/real_files.rs`, the files moved into `PW_TESTDATA`, and
+    `orf`/`cr2` in the LibRaw tests' extension filters.
+  - Later formats (CR3 above all; also NRW, RWL, 3FR, IIQ) need sample files; raw.pixls.us has
+    them (mostly CC0, check each file's licence) and LibRaw already renders them.
 - **Eject through the device: known limits** (independent review of T156, 2026-11-16; none of
   them affects the owner's readers): `reader_device` ejects the disk's direct parent, so a reader
   that is a composite USB device (`USB\VID_…&MI_00`) would be refused; walking up with
