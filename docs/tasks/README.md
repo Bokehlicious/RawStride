@@ -90,7 +90,7 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 | [T172](T172-move-rules-and-undo-list.md) | ADR 0017 U9b, fourth part: the move rules, the undo list, the tab's list and the texts | Blocked: waits for T171 |
 | [T173](T173-move-events-in-the-metadata-cache.md) | ADR 0017 U9b, fifth part: the move requests and answers in the shell's metadata part | Blocked: waits for T172 |
 | [T174](T174-move-keys-menu-and-undo.md) | ADR 0017 U9b, last part: the keys, the menu items, the moves and the undo in the shell | Blocked: waits for T173 and T177 |
-| [T177](T177-release-before-a-move-without-the-write-stamp.md) | ADR 0017 U9b: the release before a move notes no write stamp | Blocked: waits for its cold read |
+| [T177](T177-release-before-a-move-without-the-write-stamp.md) | ADR 0017 U9b: the release before a move notes no write stamp | Open |
 
 ## Writing a task (owner and reviewer)
 
