@@ -59,3 +59,4 @@
 | 2026-11-16 | Open | T159 is Done; the text is unchanged |
 | 2026-11-17 | Ready for review | `raf` added to `SUPPORTED_EXTENSIONS` and `SIDECAR_EXTENSIONS`; the four tests added; nothing else failed; `check.ps1` all OK (1681 passed, 65 ignored, 0 failed) |
 | 2026-11-17 | Done | Reviewed: no bugs. Reviewer's `.\tools\check.ps1` on the tree with T160, T161, T163 and T164: all OK, 1694 passed, 65 ignored, 0 failed; clippy without warnings; committed one task at a time, the inventory's header set to this commit's count (1681). The owner's hand check is done after the commit (owner, 2026-11-17); its result, and whether the contact sheet is slow, decides the backlog item "RAF previews" |
+| 2026-11-17 | Done | The owner's hand check approved |
