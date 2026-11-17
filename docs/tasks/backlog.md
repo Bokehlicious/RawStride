@@ -168,6 +168,10 @@ and reviewer:
     `send_moves` builds the extension list each frame; the `tab.folder == None` branch in
     `undo_done` cannot run; `replace_tab_files` gives every tab of the active folder
     `ratings_ready` (their files and ratings are the active tab's).
+  - *Left by T178* (its cold read): P then X within a frame moves the image to `_picked`
+    though rejected (the Pick batch holds it); a RAW skipped (its reject write failed) while its
+    JPG partner is sent goes along with the JPG to `_rejected`; a rating write whose answer
+    never comes keeps its image's move waiting.
 - **Leftovers from the review of T177** (`/code-review`, 2026-11-17; accepted, nothing breaks
   today):
   - *The default `release_for_move` calls `release`:* a new `ImageCheck`, or a wrapper of

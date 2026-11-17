@@ -86,7 +86,7 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status |
 |---|---|---|
-| [T178](T178-move-waits-for-the-write-answer.md) | ADR 0017 U9b: a move waits for its rating write's answer, and an image is not moved twice | Blocked: waits for its cold read |
+| [T178](T178-move-waits-for-the-write-answer.md) | ADR 0017 U9b: a move waits for its rating write's answer, and an image is not moved twice | Open |
 
 ## Writing a task (owner and reviewer)
 
