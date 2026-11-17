@@ -87,7 +87,8 @@
 ### 3.2 Out of scope
 
 - Sorting (by rating, date or name other than today's order).
-- Filters by file type, date, camera, keyword or other metadata (ADR 0007).
+- Filters by file type, date, camera, keyword or other metadata (ADR 0007). Taken up by ADR 0022
+  (2026-11-17).
 - Saving the filter between sessions (Q2): needs a settings format, which does not exist yet
   (`persistence` is off, GUI_REQUIREMENTS §6).
 - Moving rejected or picked images to `_rejected` / `_picked` (ADR 0013 §13).
