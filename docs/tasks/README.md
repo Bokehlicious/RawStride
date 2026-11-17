@@ -95,7 +95,6 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status |
 |---|---|---|
-| [T165](T165-compare-after-a-step-that-did-not-happen.md) | The compare after a step that did not happen | Open |
 | [T166](T166-mark-a-card-already-imported.md) | Mark a card whose images are at the destination already | Open |
 
 ## Writing a task (owner and reviewer)

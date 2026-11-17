@@ -1,4 +1,4 @@
-# T165. The compare after a step that did not happen — Open
+# T165. The compare after a step that did not happen — Done
 
 - **Why:** from the review of T153 (backlog, 2026-11-16). Opening the compare (C) and swapping
   (Shift+K) change the compare's state first and then step with `loupe_move(LoupeMove::To(..))`
@@ -56,3 +56,5 @@
 |---|---|---|
 | 2026-11-17 | Open | Added from the backlog item "The compare after a move that did not happen" (review of T153); the owner's decision is in ADR 0017 U6-Q11 |
 | 2026-11-17 | Open | Cold read: doable with the named files; "current equals the target" is a sound test (the old current never equals it), `follow_compare` and `loupe_follows_visible` do not touch the compare inside `loupe_move`. Changed: point 3 names the new borrow of `self.compare` after the step; new point 4 updates the doc comments. Noted, unchanged as today: a refilter that drops the held image but not the target opens the compare with the held image outside the stepped list (Shift+K then does nothing, `still_valid` keeps it open) |
+| 2026-11-17 | Ready for review | `swap_target` added and `swap` calls it; `open_compare` and `swap_images` step first and change the compare only when the active tab's `current` equals the target; doc comments updated; two tests in `compare.rs`. `check.ps1` all OK (1696 passed, 0 failed, 65 ignored) |
+| 2026-11-17 | Done | Reviewed: the diff does points 1–5 (`swap_target` without changes, `swap` through it; `open_compare` and `swap_images` step first and change the compare only when the tab's `current` is the target, with a new borrow after the step; doc comments updated); no bugs. The order in `main.rs` has no unit test (`Loupe` cannot be built in a test), checked in the diff. Reviewer's `.\tools\check.ps1` on this tree (T165 and T166): all OK, 1700 passed, 65 ignored, 0 failed; clippy without warnings; the inventory's header set to this count. Nothing left over. The owner's hand check (C, K, Shift+K, V, L as before) after the commit |

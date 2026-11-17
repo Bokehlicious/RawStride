@@ -95,14 +95,24 @@ impl Compare {
     /// (the held image's), and the old current image becomes the held one. `None`, and nothing is
     /// changed, when the held image is not in the stepped list (a filter or "only the marked"
     /// left it out), when it is the current image, or when `current` is not in the list.
+    /// `swap_target` gives the same without changing anything.
     pub fn swap(&mut self, list: &[(usize, &Path)], current: usize) -> Option<usize> {
+        let (to, new_held) = self.swap_target(list, current)?;
+        self.held = new_held;
+        Some(to)
+    }
+
+    /// What `swap` would do, without changing anything (T165): the file index the current image
+    /// moves to (the held image's) and the path that would become held (the current image's).
+    /// `None` in the same cases as `swap`. The caller steps first and holds the new path only
+    /// when the step happened.
+    pub fn swap_target(&self, list: &[(usize, &Path)], current: usize) -> Option<(usize, PathBuf)> {
         let (_, current_path) = list.iter().find(|(index, _)| *index == current)?;
         let (held_index, _) = list.iter().find(|(_, path)| *path == self.held)?;
         if *held_index == current {
             return None;
         }
-        self.held = current_path.to_path_buf();
-        Some(*held_index)
+        Some((*held_index, current_path.to_path_buf()))
     }
 
     /// Whether the compare stays open after the tab's list of files changed (U6-Q11): `files` is
@@ -337,6 +347,40 @@ mod tests {
         let mut compare = Compare::new(files[0].clone());
         assert_eq!(compare.swap(&list, 3), None);
         assert_eq!(compare, Compare::new(files[0].clone()));
+    }
+
+    #[test]
+    fn swap_target_gives_what_swap_would_without_changing_the_held_image() {
+        let files = paths();
+        for (members, held, current) in [(&[0, 1, 2, 3][..], 0, 2), (&[1, 3][..], 3, 1)] {
+            let list = stepped(&files, members);
+            let compare = Compare::new(files[held].clone());
+            let target = compare.swap_target(&list, current);
+            assert_eq!(target, Some((held, files[current].clone())));
+            // nothing changed
+            assert_eq!(compare.held(), files[held].as_path());
+            // the same index as swap gives, and swap holds the same path
+            let mut swapped = compare.clone();
+            assert_eq!(swapped.swap(&list, current), Some(held));
+            assert_eq!(swapped.held(), files[current].as_path());
+        }
+    }
+
+    #[test]
+    fn swap_target_gives_none_in_the_cases_swap_does_and_changes_nothing() {
+        let files = paths();
+        // held image filtered out, held image is the current one, current not in the list
+        let cases = [
+            (&[1, 2, 3][..], 0, 2),
+            (&[0, 1, 2, 3][..], 1, 1),
+            (&[0, 1][..], 0, 3),
+        ];
+        for (members, held, current) in cases {
+            let list = stepped(&files, members);
+            let compare = Compare::new(files[held].clone());
+            assert_eq!(compare.swap_target(&list, current), None);
+            assert_eq!(compare, Compare::new(files[held].clone()));
+        }
     }
 
     #[test]

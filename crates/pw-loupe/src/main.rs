@@ -3224,9 +3224,11 @@ impl Loupe {
         }
     }
 
-    /// Opens the compare (U6-Q4): the current image is held and given to the second view core,
-    /// and the current image moves to the next of the stepped list (the previous at the end) as
-    /// a filmstrip click moves it. Nothing with fewer than two images in the stepped list.
+    /// Opens the compare (U6-Q4): first the current image moves to the next of the stepped list
+    /// (the previous at the end) as a filmstrip click moves it; then, only if that step happened,
+    /// the image it left is held and given to the second view core. When the step did not happen
+    /// (the refilter before it dropped the target), the compare stays closed (U6-Q11, T165).
+    /// Nothing with fewer than two images in the stepped list.
     fn open_compare(&mut self) {
         let Some((held, current)) = self.compare_open_indexes() else {
             return;
@@ -3238,6 +3240,10 @@ impl Loupe {
         else {
             return;
         };
+        self.loupe_move(LoupeMove::To(current));
+        if self.tabs.active().is_none_or(|tab| tab.current != current) {
+            return;
+        }
         self.hold_in_second_core(&held);
         self.compare = Some(CompareOpen {
             compare: Compare::new(held),
@@ -3248,7 +3254,6 @@ impl Loupe {
             view_sent: None,
             held_size_known: false,
         });
-        self.loupe_move(LoupeMove::To(current));
     }
 
     /// Closes the compare (U6-Q11): the current image stays in the preview, the second view core
@@ -3316,17 +3321,19 @@ impl Loupe {
         self.hold_in_second_core(&current);
     }
 
-    /// `Shift+K` and View ▸ Swap Images (U6-Q6, T153): T151's swap on the stepped list. The old
-    /// current image becomes the held one and is given to the second view core, and the current
-    /// image moves to the old held image's index as a filmstrip click moves it. Nothing outside
-    /// the compare or when the swap gives `None` (the held image is not in the stepped list, or
-    /// is the current image).
+    /// `Shift+K` and View ▸ Swap Images (U6-Q6, T153): T151's swap on the stepped list. First the
+    /// current image moves to the held image's index as a filmstrip click moves it; then, only if
+    /// that step happened, the old current image becomes the held one and is given to the second
+    /// view core. When the step did not happen (the refilter before it dropped the target), the
+    /// held image stays as it was (U6-Q11, T165). Nothing outside the compare or when
+    /// `swap_target` gives `None` (the held image is not in the stepped list, or is the current
+    /// image).
     fn swap_images(&mut self) {
         let only_marked = self.settings.shell.filmstrip_marked;
         let Some(tab) = self.tabs.active() else {
             return;
         };
-        let Some(open) = &mut self.compare else {
+        let Some(open) = &self.compare else {
             return;
         };
         let list: Vec<(usize, &Path)> = tab
@@ -3334,15 +3341,21 @@ impl Loupe {
             .into_iter()
             .filter_map(|index| Some((index, tab.files.get(index)?.as_path())))
             .collect();
-        let Some(to) = open.compare.swap(&list, tab.current) else {
+        let Some((to, new_held)) = open.compare.swap_target(&list, tab.current) else {
             return;
         };
+        self.loupe_move(LoupeMove::To(to));
+        if self.tabs.active().is_none_or(|tab| tab.current != to) {
+            return;
+        }
+        let Some(open) = &mut self.compare else {
+            return;
+        };
+        open.compare.hold(&new_held);
         open.view_pending = true;
         open.view_sent = None;
         open.held_size_known = false;
-        let held = open.compare.held().to_path_buf();
-        self.hold_in_second_core(&held);
-        self.loupe_move(LoupeMove::To(to));
+        self.hold_in_second_core(&new_held);
     }
 
     /// `V` and View ▸ Above and Below (U6-Q7, T153): the compare's layout switched and

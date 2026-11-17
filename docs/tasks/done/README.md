@@ -171,3 +171,4 @@ was when the task was done, so "this file", "below" and "the Log" in T1–T115 m
 | [T164](T164-same-names-in-favourites-and-recent.md) | Folders with the same name told apart in Favourites and Recent (pw-loupe) |
 | [T163](T163-open-every-imported-folder.md) | After an import, every folder that got images opens in its own tab (pw-loupe) |
 | [T161](T161-import-dialog-finds-new-cards.md) | The import dialog finds a card inserted while it is open |
+| [T165](T165-compare-after-a-step-that-did-not-happen.md) | The compare after a step that did not happen (pw-loupe) |
