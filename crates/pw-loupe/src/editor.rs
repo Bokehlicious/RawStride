@@ -1118,22 +1118,73 @@ impl CopiedFields {
     }
 }
 
-/// What "Apply to All Marked" writes (ADR 0017 §2.3.1, U12c-Q3, T126), from
+/// What "Apply to {n} Marked" does to one list field (ADR 0017 U12d-Q1–U12d-Q3).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ListChange {
+    pub field: EditorField,
+    /// Added on every marked image that lacks them.
+    pub adds: Vec<String>,
+    /// Removed on every marked image that has them.
+    pub removes: Vec<String>,
+    /// Removed on the window's image only (Creator).
+    pub removes_here: Vec<String>,
+}
+
+/// What "Apply to All Marked" writes (ADR 0017 §2.3.1, U12c-Q3, T126; U12d, T180), from
 /// [`EditorForm::batch_edits`].
 #[derive(Clone, Debug, PartialEq)]
 pub struct BatchEdits {
     /// The edits of the window's image: [`EditorForm::edits`], the chosen conflict values
-    /// included.
+    /// included (a changed list field as its whole list).
     pub this_image: Vec<Edit>,
     /// The edits of every other marked image: only the changed fields, never a chosen conflict
-    /// value, and no `Clear` of a copyright-management field.
+    /// value, and no `Clear` of a copyright-management field; a changed list field (Keywords,
+    /// Creator …) only as an `Edit::Entries` of its added and removed entries (U12d-Q1), never
+    /// a removal of Creator entries (U12d-Q2).
     pub others: Vec<Edit>,
-    /// The changed fields given a value, in form order.
+    /// The changed fields given a value, in form order; never a list field (see `list_changes`).
     pub changed: Vec<EditorField>,
-    /// The emptied fields that are emptied on every image, in form order.
+    /// The emptied fields that are emptied on every image, in form order; never a list field.
     pub emptied: Vec<EditorField>,
-    /// The emptied copyright-management fields, emptied on the window's image only.
+    /// The emptied copyright-management fields, emptied on the window's image only; never a
+    /// list field (an emptied Creator is in `list_changes`, its entries in `removes_here`).
     pub emptied_here_only: Vec<EditorField>,
+    /// What each changed list field adds and removes (U12d-Q1–U12d-Q3), in form order: one per
+    /// list field whose text differs from its start text and that adds or removes an entry
+    /// (only a new order or new spaces give none). For Creator `removes` is always empty and
+    /// its removed entries are in `removes_here`; for every other field `removes_here` is
+    /// always empty.
+    pub list_changes: Vec<ListChange>,
+}
+
+/// The confirmation's lines of one list field (U12d-Q3): what it adds and removes on every image
+/// (none when neither), then what it removes on the window's image only.
+fn list_change_lines(change: &ListChange) -> Vec<String> {
+    let field = change.field;
+    let mut texts = Vec::new();
+    match (change.adds.is_empty(), change.removes.is_empty()) {
+        (false, true) => texts.push(EditorText::ListAdds {
+            field,
+            entries: change.adds.clone(),
+        }),
+        (true, false) => texts.push(EditorText::ListRemoves {
+            field,
+            entries: change.removes.clone(),
+        }),
+        (false, false) => texts.push(EditorText::ListAddsRemoves {
+            field,
+            adds: change.adds.clone(),
+            removes: change.removes.clone(),
+        }),
+        (true, true) => {}
+    }
+    if !change.removes_here.is_empty() {
+        texts.push(EditorText::ListRemovesHere {
+            field,
+            entries: change.removes_here.clone(),
+        });
+    }
+    texts.iter().map(editor_text).collect()
 }
 
 /// The structure lists of a batch by what happens to them (U11a-Q5, U11b-Q5), each in form
@@ -1149,12 +1200,14 @@ struct BatchLists {
 
 impl BatchEdits {
     /// How many fields were changed: given a value, emptied, or emptied on this image only; each
-    /// changed structure list counts as one field (U11a-Q5, U11b-Q5).
+    /// changed structure list counts as one field (U11a-Q5, U11b-Q5), and so does each list
+    /// field's [`ListChange`] (U12d, T180).
     pub fn field_count(&self) -> usize {
         let lists = self.lists();
         self.changed.len()
             + self.emptied.len()
             + self.emptied_here_only.len()
+            + self.list_changes.len()
             + lists.changed.len()
             + lists.emptied.len()
             + lists.emptied_here_only.len()
@@ -1173,7 +1226,9 @@ impl BatchEdits {
             edits.iter().any(|edit| match edit {
                 Edit::Set { property, .. } => !clear && property == list,
                 Edit::Clear { property, .. } => clear && property == list,
-                Edit::Entries { property, .. } => !clear && property == list,
+                // `Entries` is never sent for a structure list (`ALL_LISTS`); the list fields are
+                // counted through `list_changes`.
+                Edit::Entries { .. } => false,
             })
         };
         for list in EditorForm::ALL_LISTS {
@@ -1191,9 +1246,10 @@ impl BatchEdits {
 }
 
 /// The lines of the confirmation of "Apply to All Marked" (U12c-Q4, T126): the question for
-/// `images` images, then the changed, emptied and copyright-only fields by name (the structure
-/// lists among them, U11a-Q5, U11b-Q5) and the `skipped` marked files without metadata support,
-/// each line only when it has something to name.
+/// `images` images, then the changed fields by name (the structure lists among them, U11a-Q5,
+/// U11b-Q5), what each list field adds and removes (U12d-Q3, T180), the emptied and
+/// copyright-only fields by name and the `skipped` marked files without metadata support, each
+/// line only when it has something to name.
 pub fn apply_confirmation(batch: &BatchEdits, images: usize, skipped: usize) -> Vec<String> {
     let mut lines = vec![editor_text(&EditorText::ApplyQuestion {
         fields: batch.field_count(),
@@ -1205,6 +1261,9 @@ pub fn apply_confirmation(batch: &BatchEdits, images: usize, skipped: usize) -> 
             fields: batch.changed.clone(),
             lists: lists.changed,
         }));
+    }
+    for change in &batch.list_changes {
+        lines.extend(list_change_lines(change));
     }
     if !batch.emptied.is_empty() || !lists.emptied.is_empty() {
         lines.push(editor_text(&EditorText::Emptied {
@@ -2141,7 +2200,9 @@ impl EditorForm {
     /// [`EditorForm::edits`]; for every other marked image only the edits of the changed fields
     /// (a field whose text differs from its start text), never a chosen conflict value, and no
     /// `Clear` of a copyright-management field (ADR 0007 §8), which is emptied on the window's
-    /// image only. Every field error together, and no batch, when a field has one.
+    /// image only. A changed list field gives the other images only its added and removed
+    /// entries, Creator only its added ones (U12d-Q1, U12d-Q2, T180). Every field error together,
+    /// and no batch, when a field has one.
     pub fn batch_edits(&self) -> Result<BatchEdits, Vec<(EditorField, String)>> {
         let mut batch = BatchEdits {
             this_image: self.edits()?,
@@ -2149,6 +2210,7 @@ impl EditorForm {
             changed: Vec::new(),
             emptied: Vec::new(),
             emptied_here_only: Vec::new(),
+            list_changes: Vec::new(),
         };
         for (index, state) in self.fields.iter().enumerate() {
             self.batch_lists(index, &mut batch);
@@ -2185,7 +2247,12 @@ impl EditorForm {
         if !state.field.editable() || self.read_only_text(state.field).is_some() {
             return Ok(());
         }
-        if state.text == self.start_text(state) {
+        let start_text = self.start_text(state);
+        if state.text == start_text {
+            return Ok(());
+        }
+        if state.field.is_list() && state.field.struct_field().is_none() {
+            batch_list_field(state.field, &start_text, &state.text, batch);
             return Ok(());
         }
         // `edits` had no error, so neither has this field.
@@ -2223,6 +2290,48 @@ impl EditorForm {
             .map(warning_text)
             .collect()
     }
+}
+
+/// The part of `batch` a changed list field `field` gives (U12d-Q1, U12d-Q2, T180): the entries
+/// of `text` not in `start` are added on every other image, those of `start` not in `text`
+/// removed there (exact text, each once); Creator's removed entries are removed on the window's
+/// image only. The other images get an `Edit::Entries` only when it adds or removes something.
+fn batch_list_field(field: EditorField, start: &str, text: &str, batch: &mut BatchEdits) {
+    let start = list_entries(start);
+    let now = list_entries(text);
+    let adds = entries_not_in(&now, &start);
+    let removed = entries_not_in(&start, &now);
+    let (removes, removes_here) = if field.copyright_management() {
+        (Vec::new(), removed)
+    } else {
+        (removed, Vec::new())
+    };
+    if !adds.is_empty() || !removes.is_empty() {
+        batch.others.push(Edit::Entries {
+            property: field.property().to_string(),
+            add: adds.clone(),
+            remove: removes.clone(),
+        });
+    }
+    if !adds.is_empty() || !removes.is_empty() || !removes_here.is_empty() {
+        batch.list_changes.push(ListChange {
+            field,
+            adds,
+            removes,
+            removes_here,
+        });
+    }
+}
+
+/// The entries of `entries` not in `other` (exact text), in `entries`' order, each once.
+fn entries_not_in(entries: &[String], other: &[String]) -> Vec<String> {
+    let mut found: Vec<String> = Vec::new();
+    for entry in entries {
+        if !other.contains(entry) && !found.contains(entry) {
+            found.push(entry.clone());
+        }
+    }
+    found
 }
 
 /// The entries of a list field's text: split at `,`, each part trimmed, empty parts dropped
@@ -2504,6 +2613,8 @@ pub enum EditorText {
     MetadataError { error: String },
     /// The line under the window's title with two or more images marked (U12c-Q1, T126).
     MarkedImages { images: usize },
+    /// The line under `MarkedImages`: OK and Save write the window's image only (U12d-Q4, T180).
+    ThisImageOnly,
     /// The button that writes the edits to every marked image (U12c-Q2, T126).
     ApplyToMarked { images: usize },
     /// The title of the confirmation of "Apply to All Marked" (U12c-Q4, T126).
@@ -2555,6 +2666,30 @@ pub enum EditorText {
     /// The button under Person Shown with Details that adds an entry per Person Shown name
     /// (U11c-Q6, T143).
     CopyFromPersonShown,
+    /// The confirmation's line of a list field that adds `entries` on every image (U12d-Q3,
+    /// T180).
+    ListAdds {
+        field: EditorField,
+        entries: Vec<String>,
+    },
+    /// The confirmation's line of a list field that removes `entries` on every image.
+    ListRemoves {
+        field: EditorField,
+        entries: Vec<String>,
+    },
+    /// The confirmation's line of a list field that adds `adds` and removes `removes` on every
+    /// image.
+    ListAddsRemoves {
+        field: EditorField,
+        adds: Vec<String>,
+        removes: Vec<String>,
+    },
+    /// The confirmation's line of Creator's entries removed on the window's image only
+    /// (U12d-Q2).
+    ListRemovesHere {
+        field: EditorField,
+        entries: Vec<String>,
+    },
     /// The confirmation's line counting the marked files without metadata support.
     SkippedFiles { files: usize },
     /// The confirmation's button that starts the writes.
@@ -2679,6 +2814,7 @@ pub fn editor_text(text: &EditorText) -> String {
                 format!("{images} images marked")
             }
         }
+        EditorText::ThisImageOnly => "OK and Save write this image only.".to_string(),
         EditorText::ApplyToMarked { images } => format!("Apply to {images} Marked"),
         EditorText::ApplyTitle => "Apply to All Marked".to_string(),
         EditorText::ApplyQuestion { fields, images } => match (*fields == 1, *images == 1) {
@@ -2726,6 +2862,31 @@ pub fn editor_text(text: &EditorText) -> String {
         EditorText::CopyFromPersonShown => format!(
             "Copy from {field}",
             field = property_label(EditorField::PersonShown.property(), Language::En)
+        ),
+        EditorText::ListAdds { field, entries } => format!(
+            "{field}: adds {entries}",
+            field = field.label(),
+            entries = entries.join(", ")
+        ),
+        EditorText::ListRemoves { field, entries } => format!(
+            "{field}: removes {entries}",
+            field = field.label(),
+            entries = entries.join(", ")
+        ),
+        EditorText::ListAddsRemoves {
+            field,
+            adds,
+            removes,
+        } => format!(
+            "{field}: adds {adds}; removes {removes}",
+            field = field.label(),
+            adds = adds.join(", "),
+            removes = removes.join(", ")
+        ),
+        EditorText::ListRemovesHere { field, entries } => format!(
+            "{field}: removes {entries} on this image only",
+            field = field.label(),
+            entries = entries.join(", ")
         ),
         EditorText::SkippedFiles { files } => {
             if *files == 1 {
@@ -4367,6 +4528,39 @@ mod tests {
             (EditorText::Next, "Next"),
             (EditorText::SaveAndNext, "Save and Next"),
             (EditorText::UnsavedAtExitTitle, "Unsaved Changes"),
+            (
+                EditorText::ThisImageOnly,
+                "OK and Save write this image only.",
+            ),
+            (
+                EditorText::ListAdds {
+                    field: EditorField::Keywords,
+                    entries: strings(&["vinter", "älg"]),
+                },
+                "Keywords: adds vinter, älg",
+            ),
+            (
+                EditorText::ListRemoves {
+                    field: EditorField::Keywords,
+                    entries: strings(&["skog"]),
+                },
+                "Keywords: removes skog",
+            ),
+            (
+                EditorText::ListAddsRemoves {
+                    field: EditorField::Keywords,
+                    adds: strings(&["vinter", "älg"]),
+                    removes: strings(&["skog"]),
+                },
+                "Keywords: adds vinter, älg; removes skog",
+            ),
+            (
+                EditorText::ListRemovesHere {
+                    field: EditorField::Creator,
+                    entries: strings(&["Bo"]),
+                },
+                "Creator: removes Bo on this image only",
+            ),
         ];
         for (text, expected) in cases {
             assert_eq!(editor_text(&text), expected, "{text:?}");
@@ -4582,6 +4776,18 @@ mod tests {
         }
     }
 
+    fn entries(property: &str, add: &[&str], remove: &[&str]) -> Edit {
+        Edit::Entries {
+            property: property.to_string(),
+            add: add.iter().map(|entry| entry.to_string()).collect(),
+            remove: remove.iter().map(|entry| entry.to_string()).collect(),
+        }
+    }
+
+    fn strings(entries: &[&str]) -> Vec<String> {
+        entries.iter().map(|entry| entry.to_string()).collect()
+    }
+
     fn batch_of(form: &EditorForm) -> BatchEdits {
         match form.batch_edits() {
             Ok(batch) => batch,
@@ -4641,8 +4847,15 @@ mod tests {
             set("xmpRights:Marked", text("True")),
         ];
         assert_eq!(batch.this_image, expected);
+        // The list field goes to the other images as the entries it adds (U12d-Q1, T180).
         assert_eq!(
-            batch.others, expected,
+            batch.others,
+            [
+                set("dc:title", lang_alt(&[("x-default", "Kväll")])),
+                set("photoshop:Headline", text("Hav")),
+                entries("dc:subject", &["sol", "hav"], &[]),
+                set("xmpRights:Marked", text("True")),
+            ],
             "City is unchanged and written nowhere"
         );
         assert_eq!(
@@ -4650,7 +4863,6 @@ mod tests {
             [
                 EditorField::Title,
                 EditorField::Headline,
-                EditorField::Keywords,
                 EditorField::Copyrighted,
             ]
         );
@@ -4746,12 +4958,21 @@ mod tests {
         assert_eq!(
             batch.emptied_here_only,
             [
-                EditorField::Creator,
                 EditorField::Copyright,
                 EditorField::Credit,
                 EditorField::UsageTerms,
                 EditorField::WebStatement,
             ]
+        );
+        // Creator is a list field: its removed entry stays on the window's image (U12d-Q2).
+        assert_eq!(
+            batch.list_changes,
+            [ListChange {
+                field: EditorField::Creator,
+                adds: Vec::new(),
+                removes: Vec::new(),
+                removes_here: vec!["Anna".to_string()],
+            }]
         );
         assert!(batch.changed.is_empty());
         assert_eq!(batch.field_count(), 6);
@@ -4780,6 +5001,187 @@ mod tests {
         );
     }
 
+    // --- "Apply to {n} Marked" adds and removes list entries (ADR 0017 U12d, T180) ---
+
+    fn keywords_form(start: &[&str]) -> EditorForm {
+        let mut metadata = Metadata::new();
+        insert(&mut metadata, "dc:subject", list(start));
+        form_with(metadata)
+    }
+
+    #[test]
+    fn an_added_keyword_is_added_to_the_other_images() {
+        let mut form = keywords_form(&["sol", "hav"]);
+        type_into(&mut form, EditorField::Keywords, "sol, hav, vinter");
+
+        let batch = batch_of(&form);
+
+        assert_eq!(batch.others, [entries("dc:subject", &["vinter"], &[])]);
+        assert_eq!(
+            batch.this_image,
+            [set("dc:subject", list(&["sol", "hav", "vinter"]))]
+        );
+        assert_eq!(
+            batch.list_changes,
+            [ListChange {
+                field: EditorField::Keywords,
+                adds: strings(&["vinter"]),
+                removes: Vec::new(),
+                removes_here: Vec::new(),
+            }]
+        );
+        assert!(batch.changed.is_empty());
+        assert_eq!(batch.field_count(), 1);
+    }
+
+    #[test]
+    fn a_removed_keyword_is_removed_from_the_other_images() {
+        let mut form = keywords_form(&["sol", "hav"]);
+        type_into(&mut form, EditorField::Keywords, "hav");
+
+        let batch = batch_of(&form);
+
+        assert_eq!(batch.others, [entries("dc:subject", &[], &["sol"])]);
+        assert_eq!(batch.this_image, [set("dc:subject", list(&["hav"]))]);
+        assert_eq!(
+            batch.list_changes,
+            [ListChange {
+                field: EditorField::Keywords,
+                adds: Vec::new(),
+                removes: strings(&["sol"]),
+                removes_here: Vec::new(),
+            }]
+        );
+    }
+
+    #[test]
+    fn added_and_removed_keywords_in_one_edit() {
+        let mut form = keywords_form(&["sol", "hav"]);
+        type_into(&mut form, EditorField::Keywords, "hav, is");
+
+        let batch = batch_of(&form);
+
+        assert_eq!(batch.others, [entries("dc:subject", &["is"], &["sol"])]);
+        assert_eq!(batch.this_image, [set("dc:subject", list(&["hav", "is"]))]);
+        assert_eq!(
+            batch.list_changes,
+            [ListChange {
+                field: EditorField::Keywords,
+                adds: strings(&["is"]),
+                removes: strings(&["sol"]),
+                removes_here: Vec::new(),
+            }]
+        );
+        assert_eq!(batch.field_count(), 1);
+    }
+
+    #[test]
+    fn an_emptied_keyword_list_removes_only_its_own_entries() {
+        let mut form = keywords_form(&["sol", "hav"]);
+        type_into(&mut form, EditorField::Keywords, "");
+
+        let batch = batch_of(&form);
+
+        // Not a `Clear`: the other images keep their own other keywords.
+        assert_eq!(batch.others, [entries("dc:subject", &[], &["sol", "hav"])]);
+        assert_eq!(batch.this_image, [clear("dc:subject")]);
+        assert!(batch.emptied.is_empty());
+        assert_eq!(
+            batch.list_changes,
+            [ListChange {
+                field: EditorField::Keywords,
+                adds: Vec::new(),
+                removes: strings(&["sol", "hav"]),
+                removes_here: Vec::new(),
+            }]
+        );
+    }
+
+    #[test]
+    fn only_the_order_changed_sends_nothing_to_the_other_images() {
+        let mut form = keywords_form(&["sol", "hav"]);
+        type_into(&mut form, EditorField::Keywords, "hav,  sol");
+
+        let batch = batch_of(&form);
+
+        assert!(batch.others.is_empty());
+        assert!(batch.list_changes.is_empty());
+        assert_eq!(batch.field_count(), 0);
+        assert_eq!(batch.this_image, [set("dc:subject", list(&["hav", "sol"]))]);
+    }
+
+    #[test]
+    fn a_removed_creator_stays_on_the_windows_image() {
+        let mut metadata = Metadata::new();
+        insert(&mut metadata, "dc:creator", list(&["Anna", "Bo"]));
+        let mut form = form_with(metadata);
+        type_into(&mut form, EditorField::Creator, "Anna, Cecilia");
+
+        let batch = batch_of(&form);
+
+        assert_eq!(batch.others, [entries("dc:creator", &["Cecilia"], &[])]);
+        assert_eq!(
+            batch.this_image,
+            [set("dc:creator", list(&["Anna", "Cecilia"]))]
+        );
+        assert_eq!(
+            batch.list_changes,
+            [ListChange {
+                field: EditorField::Creator,
+                adds: strings(&["Cecilia"]),
+                removes: Vec::new(),
+                removes_here: strings(&["Bo"]),
+            }]
+        );
+        assert!(batch.emptied_here_only.is_empty());
+        assert_eq!(batch.field_count(), 1);
+    }
+
+    #[test]
+    fn the_confirmation_names_what_each_list_adds_and_removes() {
+        let mut metadata = Metadata::new();
+        insert(&mut metadata, "photoshop:Headline", text("Sol"));
+        insert(&mut metadata, "dc:subject", list(&["skog", "sjö"]));
+        insert(&mut metadata, "Iptc4xmpExt:PersonInImage", list(&["Anna"]));
+        insert(&mut metadata, "dc:creator", list(&["Anna", "Bo"]));
+        insert(&mut metadata, "plus:ModelReleaseID", list(&["M1", "M2"]));
+        insert(&mut metadata, "photoshop:City", text("Lund"));
+        let mut form = form_with(metadata);
+        type_into(&mut form, EditorField::Headline, "Hav");
+        type_into(&mut form, EditorField::Keywords, "sjö, vinter, älg");
+        type_into(&mut form, EditorField::PersonShown, "Anna, Bo");
+        type_into(&mut form, EditorField::Creator, "Cecilia");
+        type_into(&mut form, EditorField::ModelReleaseId, "M2");
+        type_into(&mut form, EditorField::City, "");
+
+        let batch = batch_of(&form);
+
+        assert_eq!(
+            apply_confirmation(&batch, 3, 0),
+            [
+                "Write 6 changed fields to 3 images?",
+                "Changed: Headline",
+                "Keywords: adds vinter, älg; removes skog",
+                "Person Shown in the Image: adds Bo",
+                "Creator: adds Cecilia",
+                "Creator: removes Anna, Bo on this image only",
+                &format!("{}: removes M1", EditorField::ModelReleaseId.label()),
+                "Emptied: City",
+            ]
+        );
+
+        // Only list lines: they stand where the "Changed:" line would.
+        let mut form = keywords_form(&["sol", "hav"]);
+        type_into(&mut form, EditorField::Keywords, "hav");
+        assert_eq!(
+            apply_confirmation(&batch_of(&form), 2, 0),
+            [
+                "Write 1 changed field to 2 images?",
+                "Keywords: removes sol",
+            ]
+        );
+    }
+
     #[test]
     fn the_confirmation_names_the_changed_emptied_and_copyright_only_fields_and_the_skipped_files()
     {
@@ -4789,6 +5191,7 @@ mod tests {
             changed: vec![EditorField::Headline, EditorField::City],
             emptied: vec![EditorField::Country],
             emptied_here_only: vec![EditorField::Copyright, EditorField::Credit],
+            list_changes: Vec::new(),
         };
         assert_eq!(
             apply_confirmation(&batch, 4, 1),
@@ -7235,20 +7638,23 @@ mod tests {
 
         // The confirmation names each list in its place.
         let batch = batch_of(&form);
-        assert_eq!(batch.others, edits);
+        // Keywords go to the other images as the entry they add (U12d-Q1, T180).
+        let mut others = edits.clone();
+        others[0] = entries("dc:subject", &["sky"], &[]);
+        assert_eq!(batch.others, others);
         assert_eq!(
             apply_confirmation(&batch, 2, 0),
             [
                 "Write 10 changed fields to 2 images?".to_string(),
                 format!(
-                    "Changed: {}, Person Shown in the Image with Details, Product Shown in the \
+                    "Changed: Person Shown in the Image with Details, Product Shown in the \
                      Image, Artwork or Object in the Image, {}, Contributor, {}, {}, CV-Term About \
                      Image, Image Registry Entry",
-                    EditorField::Keywords.label(),
                     EditorField::Event.label(),
                     EditorField::DateCreated.label(),
                     EditorField::Instructions.label(),
                 ),
+                format!("{}: adds sky", EditorField::Keywords.label()),
             ]
         );
     }

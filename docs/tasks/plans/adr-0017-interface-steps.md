@@ -25,7 +25,7 @@ the one before it is accepted.
 | U12a | T141 | Recent values and the user's own values per field (▼ beside the field) | done (T141, 2026-11-15) |
 | U12b | T125 | Copy and paste all fields between images | done (T125, 2026-11-14) |
 | U12c | T126 | "Apply to all marked": the edited fields written to every marked image as a batch (ADR 0007 §9.5), with one confirmation; the copyright and conflict rules of §2.3.1 | done (T126, 2026-11-14) |
-| U12d | T179, T180 | "Apply to {n} Marked" sends only the difference of a list field: added entries added, removed entries removed, each image's own kept (U12d-Q1–U12d-Q5, owner 2026-11-17 after the job test): the edit in `pw-metadata` (T179), the shell, the confirmation and "OK and Save write this image only" (T180); the owner's hand check after T180 | T179 done; T180 open after its chain review |
+| U12d | T179, T180 | "Apply to {n} Marked" sends only the difference of a list field: added entries added, removed entries removed, each image's own kept (U12d-Q1–U12d-Q5, owner 2026-11-17 after the job test): the edit in `pw-metadata` (T179), the shell, the confirmation and "OK and Save write this image only" (T180); the owner's hand check after T180 | T179, T180 done; awaiting the owner's hand check |
 
 ## Stage B, other steps
 

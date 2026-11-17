@@ -12,7 +12,7 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 | `T<nnn>-<name>.md` (this folder) | Open tasks, one file each |
 | [`backlog.md`](backlog.md) | Not for agents yet: needs a decision, a dependency or an ADR first |
 | [`plans/`](plans/) | Step lists for ADRs that have none of their own (ADR 0007 milestone 8, ADR 0017, ADR 0018–0025) |
-| [`done/`](done/README.md) | Finished tasks T1–T179, and the log they were kept in until 2026-11-13 |
+| [`done/`](done/README.md) | Finished tasks T1–T180, and the log they were kept in until 2026-11-13 |
 
 
 ## How to work on a task
@@ -86,7 +86,6 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status |
 |---|---|---|
-| [T180](T180-apply-to-marked-adds-and-removes-list-entries.md) | ADR 0017 U12d: "Apply to {n} Marked" adds and removes list entries (pw-loupe) | Open |
 | [T181](T181-nothing-saved-text-on-a-field-error.md) | The metadata window's status line says when nothing was saved because of a field error (pw-loupe) | Blocked |
 | [T182](T182-x-trans-statistics-gaps.md) | RAW statistics on X-Trans: channel shares, renders and a file cut short (pw-libraw tests) | Blocked |
 | [T183](T183-tabs-on-rejected-and-picked-and-undo-while-moving.md) | ADR 0017 U9b: a tab open on `_rejected` or `_picked` follows a move and an undo; Ctrl+Z while a move runs says so (pw-loupe) | Blocked |

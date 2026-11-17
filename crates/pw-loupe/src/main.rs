@@ -191,8 +191,11 @@ fn marked_subjects(tab: Option<&Tab>, cwd: Option<&Path>) -> Vec<PathBuf> {
 /// Whether "Apply to {n} Marked" can be used for the form of the window on `path` (U12c-Q2,
 /// T126, review): two or more images marked, the window's image one of them (Previous / Next can
 /// move the window to an image that is not marked), no field error, and something to write to
-/// the other images (not only a chosen conflict value or an emptied copyright field, which stay
-/// on the window's image; the other images would otherwise get a write without edits).
+/// the other images: a changed field, or a list field's added or removed entries as an
+/// `Edit::Entries` (U12d-Q1, T180); not only a chosen conflict value, an emptied copyright field
+/// or removed Creator entries, which stay on the window's image (U12d-Q2), nor a list field
+/// whose entries were only reordered; the other images would otherwise get a write without
+/// edits.
 fn apply_allowed(form: &EditorForm, path: &Path, marked: &[PathBuf]) -> bool {
     marked.len() > 1
         && marked.iter().any(|image| image.as_path() == path)
@@ -212,7 +215,8 @@ struct ApplyPlan {
 
 impl ApplyPlan {
     /// The plan for the form of the window on `path` with `marked` (the marked images, shown
-    /// order); every other marked image with metadata support gets the changed fields, the kinds
+    /// order); every other marked image with metadata support gets the changed fields (a list
+    /// field as an `Edit::Entries` of its added and removed entries, U12d-Q1, T180), the kinds
     /// without support are counted as skipped. The field errors when a field has one.
     fn new(
         form: &EditorForm,
@@ -2812,11 +2816,13 @@ impl Loupe {
             egui::CentralPanel::default()
                 .frame(egui::Frame::NONE)
                 .show(ui, |ui| {
-                    // Under the title: how many images are marked (U12c-Q1).
+                    // Under the title: how many images are marked (U12c-Q1), and that OK and
+                    // Save write this image only (U12d-Q4).
                     if marked_count > 1 {
                         ui.label(editor_text(&EditorText::MarkedImages {
                             images: marked_count,
                         }));
+                        ui.label(editor_text(&EditorText::ThisImageOnly));
                     }
                     egui::ScrollArea::vertical()
                         .id_salt("metadata-window-scroll")
