@@ -20,7 +20,9 @@ and reviewer:
 - **RAF previews** (review of T159/T160, 2026-11-16): a RAF has only a 160 px thumbnail and a
   4416 px JPEG, so `pw-thumbcache` decodes the large JPEG for each contact-sheet thumbnail. If
   T160's hand check finds the contact sheet slow, a task decides between a scaled decode of the
-  large JPEG and a cached mid-size preview.
+  large JPEG and a cached mid-size preview. T160's hand check (owner, 2026-11-17) had only four
+  RAF files and showed no problem; too few to judge, so this waits for a folder with many RAF
+  files.
 - **Eject through the device: known limits** (independent review of T156, 2026-11-16; none of
   them affects the owner's readers): `reader_device` ejects the disk's direct parent, so a reader
   that is a composite USB device (`USB\VID_…&MI_00`) would be refused; walking up with
