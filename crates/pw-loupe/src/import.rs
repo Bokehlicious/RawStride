@@ -433,12 +433,13 @@ impl Preview {
     }
 }
 
-/// Chooses the destination folder to open after an import.
-pub fn result_folder(copied: usize, folders: &[(String, usize)]) -> Option<PathBuf> {
+/// Chooses the destination folders to open after an import, each in its own tab (T163): none when
+/// nothing was copied (ADR 0010 Q2), else every folder the import copied into, in their order.
+pub fn result_folders(copied: usize, new_folders: &[PathBuf]) -> Vec<PathBuf> {
     if copied == 0 {
-        return None;
+        return Vec::new();
     }
-    folders.first().map(|(folder, _)| PathBuf::from(folder))
+    new_folders.to_vec()
 }
 
 #[cfg(test)]
@@ -1020,16 +1021,13 @@ mod tests {
     }
 
     #[test]
-    fn result_folder_is_none_without_copied_files_and_uses_first_folder_otherwise() {
+    fn result_folders_are_empty_without_copied_files_and_every_new_folder_otherwise() {
         let folders = vec![
-            ("destination/largest".to_string(), 3),
-            ("destination/other".to_string(), 1),
+            PathBuf::from("destination/2026-11-15"),
+            PathBuf::from("destination/2026-11-16"),
         ];
-        assert_eq!(result_folder(0, &folders), None);
-        assert_eq!(
-            result_folder(1, &folders),
-            Some(PathBuf::from("destination/largest"))
-        );
-        assert_eq!(result_folder(1, &[]), None);
+        assert_eq!(result_folders(0, &folders), Vec::<PathBuf>::new());
+        assert_eq!(result_folders(2, &folders), folders);
+        assert_eq!(result_folders(1, &[]), Vec::<PathBuf>::new());
     }
 }

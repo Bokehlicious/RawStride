@@ -1251,7 +1251,7 @@ impl Loupe {
                         &event,
                         ImportEvent::Done { done, .. } if done.eject.is_some()
                     );
-                    let folder_to_open = if let Some(dialog) = &mut self.import_dialog {
+                    let folders_to_open = if let Some(dialog) = &mut self.import_dialog {
                         let was_running = dialog.cancel();
                         dialog.apply(&event);
                         if was_running
@@ -1259,14 +1259,16 @@ impl Loupe {
                             && !self.import_result_opened
                         {
                             self.import_result_opened = true;
-                            dialog.result_folder()
+                            dialog.result_folders()
                         } else {
-                            None
+                            Vec::new()
                         }
                     } else {
-                        None
+                        Vec::new()
                     };
-                    if let Some(folder) = folder_to_open {
+                    // Every folder the import copied into, each in its own tab; the newest is
+                    // opened last and so is the active tab (T163).
+                    for folder in folders_to_open {
                         self.open(&folder, true);
                     }
                     if refresh_cards && let Err(error) = self.import_worker.cards() {

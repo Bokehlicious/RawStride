@@ -3,7 +3,7 @@ use std::time::{Duration, Instant};
 
 use crate::import_text::{ImportText, import_text};
 use crate::{
-    Field, FieldError, ImportDone, ImportEvent, ImportForm, Preview, RequestId, result_folder,
+    Field, FieldError, ImportDone, ImportEvent, ImportForm, Preview, RequestId, result_folders,
 };
 
 const PREVIEW_DELAY: Duration = Duration::from_millis(300);
@@ -255,10 +255,11 @@ impl ImportDialog {
         }
     }
 
-    pub fn result_folder(&self) -> Option<PathBuf> {
+    /// The folders to open, each in its own tab, once the import is done (T163).
+    pub fn result_folders(&self) -> Vec<PathBuf> {
         match &self.state {
-            ImportDialogState::Done { done } => result_folder(done.copied, &done.folders),
-            _ => None,
+            ImportDialogState::Done { done } => result_folders(done.copied, &done.new_folders),
+            _ => Vec::new(),
         }
     }
 
@@ -568,6 +569,10 @@ mod tests {
                 ("destination/largest".to_string(), 2),
                 ("destination/small".to_string(), 1),
             ],
+            new_folders: vec![
+                PathBuf::from("destination/small"),
+                PathBuf::from("destination/largest"),
+            ],
             ..ImportDone::default()
         };
         dialog.apply(&ImportEvent::Done {
@@ -578,8 +583,11 @@ mod tests {
             matches!(dialog.state(), ImportDialogState::Done { done: value } if value == &done)
         );
         assert_eq!(
-            dialog.result_folder(),
-            Some(PathBuf::from("destination/largest"))
+            dialog.result_folders(),
+            vec![
+                PathBuf::from("destination/small"),
+                PathBuf::from("destination/largest"),
+            ]
         );
         assert!(!dialog.cancel());
         assert!(dialog.can_close());
@@ -899,16 +907,17 @@ mod tests {
     }
 
     #[test]
-    fn result_folder_is_none_without_copied_files() {
+    fn result_folders_are_empty_without_copied_files() {
         let mut dialog = ImportDialog::new(ImportForm::default());
         dialog.state = ImportDialogState::Done {
             done: ImportDone {
                 copied: 0,
                 folders: vec![("destination/folder".to_string(), 3)],
+                new_folders: vec![PathBuf::from("destination/folder")],
                 ..ImportDone::default()
             },
         };
 
-        assert_eq!(dialog.result_folder(), None);
+        assert!(dialog.result_folders().is_empty());
     }
 }

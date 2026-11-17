@@ -1,4 +1,4 @@
-# T163. After an import, every folder that got images opens in its own tab (pw-loupe) — Open
+# T163. After an import, every folder that got images opens in its own tab (pw-loupe) — Done
 
 - **Why:** the owner's hand check of T158 (2026-11-16): an import with the folder template
   `{year}/{date}` put 39 images in `2026-11-15` and 2 new ones in `2026-11-16`, and only the folder
@@ -72,3 +72,5 @@
 |---|---|---|
 | 2026-11-16 | Open | Added from the owner's hand check of T158; the owner's decision is in ADR 0010 "Open the result" and ADR 0005 "Dialog" |
 | 2026-11-16 | Open | Cold read: `new_folders` is its own function, so the cancel case is tested on a hand-built plan (a `run_import` test cannot set the cancel flag from its progress); a destination copy with a failed backup adds its folder; `Path::parent` without `unwrap`; the dialog test belongs in `import_dialog.rs` and replaces the renamed test there; reusing a tab reopens the folder in it, and each `open` records Recent and saves the library (accepted); `{date}` takes the file's date in UTC |
+| 2026-11-17 | Ready for review | `new_folders` in `import_worker.rs`, `result_folders` in `import.rs` and the dialog, every folder opened in `main.rs`; three tests added, three changed as the task allows; `check.ps1` all OK (1690 passed, 65 ignored) |
+| 2026-11-17 | Done | Reviewed: no bugs (a failed copy leaves no file at the destination, since pw-ingest writes a `.part` file and removes it, so `exists()` is right). Reviewer's `.\tools\check.ps1` on the tree with T160, T161, T163 and T164: all OK, 1694 passed, 65 ignored, 0 failed; clippy without warnings; `import_dialog.rs`, `lib.rs` and `main.rs` split from T161 for this commit, the inventory's header set to its count (1690). The owner's hand check is done after the commit (owner, 2026-11-17). No leftovers |

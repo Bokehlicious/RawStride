@@ -66,7 +66,7 @@ pub use histogram::{
 };
 pub use import::{
     Field, FieldError, ImportForm, IptcField, IptcForm, IptcModes, ItemAction, Preview,
-    PreviewLine, Validated, allowed_modes, result_folder,
+    PreviewLine, Validated, allowed_modes, result_folders,
 };
 pub use import_dialog::{DialogRequest, ImportDialog, ImportDialogState};
 pub use import_text::{

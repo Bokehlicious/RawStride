@@ -99,6 +99,9 @@ pub struct ImportDone {
     pub earlier: usize,
     /// Why the card could not be marked as imported, if so; the copy went on (T158).
     pub register_error: Option<String>,
+    /// The destination folders this import copied images into, oldest images' folder first, each
+    /// once; these open in tabs after the import (T163).
+    pub new_folders: Vec<PathBuf>,
 }
 
 #[derive(Debug)]
@@ -534,6 +537,7 @@ fn run_import(
         cancelled: report.cancelled,
         elapsed: started.elapsed(),
         folders: pw_ingest::folder_summary(&destination_items, &validated.options.dest),
+        new_folders: new_folders(&plan, &validated.options.dest),
         error: None,
         earlier: planned.earlier,
         register_error,
@@ -571,6 +575,26 @@ fn run_import(
     done.elapsed = started.elapsed();
 
     ImportEvent::Done { id, done }
+}
+
+/// The destination folders that got files from this import, each once, in the order the plan
+/// first reaches them (T163). An item with `to_dest` was free before the copy, so a file there
+/// afterwards was copied by this import; items copied only to the backup, or already present, add
+/// no folder.
+fn new_folders(plan: &pw_ingest::Plan, dest: &Path) -> Vec<PathBuf> {
+    let mut folders: Vec<PathBuf> = Vec::new();
+    for item in plan.items.iter().filter(|item| item.to_dest) {
+        let target = dest.join(&item.rel);
+        if !target.exists() {
+            continue;
+        }
+        if let Some(folder) = target.parent()
+            && !folders.iter().any(|known| known == folder)
+        {
+            folders.push(folder.to_path_buf());
+        }
+    }
+    folders
 }
 
 struct IptcRuntime<'a> {
@@ -1857,5 +1881,100 @@ mod tests {
         assert_eq!(done.register_error.as_deref(), Some(note));
         assert!(done.failed.is_empty());
         assert_eq!(register_text(&dirs).as_deref(), Some(foreign));
+    }
+
+    // ---------- every folder that got images opens (T163) ----------
+
+    /// Noon UTC on 2026-11-15, -16 and -17, so `{date}` gives the same day in any time zone near UTC.
+    const NOV_15: u64 = 1_794_744_000;
+    const NOV_16: u64 = 1_794_830_400;
+    const NOV_17: u64 = 1_794_916_800;
+
+    /// Writes a source image whose file date is `seconds` after 1970 (the fake images have no Exif,
+    /// so `{date}` takes the file's date, in UTC).
+    fn write_image_dated(dirs: &TempDirs, name: &str, seconds: u64) {
+        dirs.write_image(name, name.as_bytes());
+        let path = dirs.source.join("DCIM").join("100TEST").join(name);
+        let file = fs::OpenOptions::new()
+            .write(true)
+            .open(&path)
+            .unwrap_or_else(|error| panic!("could not open {}: {error}", path.display()));
+        file.set_modified(std::time::UNIX_EPOCH + Duration::from_secs(seconds))
+            .unwrap_or_else(|error| panic!("could not date {}: {error}", path.display()));
+    }
+
+    #[test]
+    fn an_import_over_two_dates_lists_both_date_folders_oldest_first_each_once() {
+        let dirs = TempDirs::new("new-folders");
+        write_image_dated(&dirs, "A003.ARW", NOV_16);
+        write_image_dated(&dirs, "A001.ARW", NOV_15);
+        write_image_dated(&dirs, "A002.ARW", NOV_15 + 60);
+
+        let done = import_with_root(&dirs.form("{date}"), None);
+
+        assert_eq!(done.copied, 3);
+        assert_eq!(
+            done.new_folders,
+            vec![dirs.dest.join("2026-11-15"), dirs.dest.join("2026-11-16")]
+        );
+    }
+
+    #[test]
+    fn a_second_import_lists_only_the_folder_of_the_new_image() {
+        let dirs = TempDirs::new("new-folders-again");
+        write_image_dated(&dirs, "A001.ARW", NOV_15);
+        write_image_dated(&dirs, "A002.ARW", NOV_16);
+        let first = import_with_root(&dirs.form("{date}"), None);
+        assert_eq!(first.copied, 2);
+
+        write_image_dated(&dirs, "A003.ARW", NOV_17);
+        let second = import_with_root(&dirs.form("{date}"), None);
+
+        assert_eq!((second.copied, second.present), (1, 2));
+        assert_eq!(second.new_folders, vec![dirs.dest.join("2026-11-17")]);
+    }
+
+    #[test]
+    fn new_folders_are_those_of_destination_copies_that_exist_in_plan_order() {
+        let dirs = TempDirs::new("new-folders-plan");
+        let item = |rel: &str, to_dest: bool, to_backup: bool| pw_ingest::PlanItem {
+            source: dirs.source.join(Path::new(rel).file_name().unwrap()),
+            size: 1,
+            modified: std::time::UNIX_EPOCH,
+            rel: PathBuf::from(rel),
+            to_dest,
+            to_backup,
+            renamed_for_conflict: false,
+        };
+        let plan = pw_ingest::Plan {
+            items: vec![
+                item("b/1.ARW", true, false),
+                item("a/2.ARW", true, true),
+                item("b/3.ARW", true, false),
+                // Copied to the destination by this import, but its file is missing (a cancelled
+                // or failed run).
+                item("missing/4.ARW", true, false),
+                // Already present, and copied only to the backup: their files exist, but this
+                // import did not put them in the destination.
+                item("present/5.ARW", false, false),
+                item("backup/6.ARW", false, true),
+            ],
+        };
+        for rel in [
+            "b/1.ARW",
+            "a/2.ARW",
+            "b/3.ARW",
+            "present/5.ARW",
+            "backup/6.ARW",
+        ] {
+            let path = dirs.dest.join(rel);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(&path, b"copied").unwrap();
+        }
+
+        assert_eq!(
+            new_folders(&plan, &dirs.dest),
+            vec![dirs.dest.join("b"), dirs.dest.join("a")]
+        );
     }
 }
