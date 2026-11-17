@@ -397,7 +397,7 @@ the decisions do not live only in the tasks.
 | U1-Q4 | egui's bundled font; body text 14, small text 11, headings 16 points, the status bar in the proportional font at 13; egui's default spacing; the image area and contact sheet stay a neutral dark grey in **both** themes, so an image is judged against the same surround (the light theme lightens menus, bars and columns) |
 | U1-Q5 | Neither "Visa (alla/markerade/…)" in the command bar nor the selection's size in MB in the status bar is in U1; both are placed when the owner reorders after stage A |
 | U2-Q1 | Info comes from `pw_raw::inspect` for every listed file type, on a background thread, without ExifTool |
-| U2-Q2 | Info shows the seven values of §2.1; the camera without a repeated make; a decimal comma; the date as `2026-10-30 14:03:12`; a missing value gives no row. Exposure compensation and image size are left out |
+| U2-Q2 | Info shows the seven values of §2.1; the camera without a repeated make; a decimal comma; the date as `2026-10-30 14:03:12`; a missing value gives no row. Exposure compensation and image size are left out. **Changed by the owner, 2026-11-17 (ADR 0023 A-Q10):** both are added, and the serial number after ADR 0020 C1 |
 | U2-Q3 | `I` opens and collapses the right column (also from `H`'s hidden state); "Information" and "Höger kolumn" become one menu item "Inspektör"; the status line, rating badge and RAW/JPEG control are always shown, so the old meaning of `I` ends in U2 |
 | U2-Q4 | The Exif labels (Kamera, Objektiv, …) are not IPTC properties and are made in `inspector_text.rs`, not by `property_label` (rule 13) |
 | U2-Q5 | Both inspector sections are open by default; the column itself starts collapsed |
