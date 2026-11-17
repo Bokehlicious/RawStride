@@ -229,10 +229,7 @@ Artist mapping.
    ADR 0004).
 6. Templates: per field, one of **Keep**, **Replace**, **Append** (multi-valued: add missing
    values; Description: prefix or append text) and **Clear** (remove explicitly). An empty field
-   in a template means "Keep", never "Clear". Photo Mechanic's public template documentation has the
-   same four ideas (checkbox = touch the field, Replace by default, Append for some lists,
-   Prefix/Append for the description, "Clear Field") [read], which keeps the two tools
-   interoperable without copying anything internal.
+   in a template means "Keep", never "Clear". These modes are RawStride's own.
 
 ## 8. Comparison with the full specification and the Mapping Guidelines (2026-11-04)
 

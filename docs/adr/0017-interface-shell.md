@@ -1,10 +1,10 @@
 # ADR 0017: The RawStride interface – main window, preview and inspector
 
 - Status: **accepted by the owner (2026-11-12).** The owner approved the proposals of every open
-  question (U-Q1–U-Q4, U-Q6–U-Q8, §6), the FastRawViewer additions (§2.6), the metadata window
-  (§2.3.1), the order with a usable version first (§7.1) and the list of what is not included
-  (§7.2). Nothing is built, installed or added as a dependency by this ADR. Each step in §7 becomes
-  its own work part, with its own approval and commit.
+  question (U-Q1–U-Q4, U-Q6–U-Q8, §6), the technical assessment additions (§2.6), the metadata
+  window (§2.3.1), the order with a usable version first (§7.1) and the list of what is not
+  included (§7.2). Nothing is built, installed or added as a dependency by this ADR. Each step in
+  §7 becomes its own work part, with its own approval and commit.
 - **Amended by the owner (2026-11-13) after a review of 32 findings:**
   - the deprecated IIM fields stay read-only (finding 1, §2.3.1);
   - one screen and **one window** first: the preview is a full-screen mode of the main window, and
@@ -22,8 +22,8 @@
   U10c (T124) are in §6.1; the section names of §2.3.1 are English in the program (GR14, U10-Q1).
   The answers to the questions of U12b (T125) and U12c (T126) are in §6.1 too.
 - **Wishes added by the owner (2026-11-15):** the import's IPTC template is filled in a window of
-  its own and saved as an XMP template file, as Photo Mechanic does (U13, §7); and the imported
-  images appear in their tab while the import runs, not only when it is done (§7.2).
+  its own and saved as an XMP template file (U13, §7); and the imported images appear in their tab
+  while the import runs, not only when it is done (§7.2).
 - Date: 2026-11-12; amended 2026-11-13
 - Related:
   - [GUI_REQUIREMENTS.md](../GUI_REQUIREMENTS.md) (GR1–GR13), in particular GR6 (keyboard first),
@@ -590,7 +590,7 @@ separate window waits (§7.2).
 | Chosen fields as text lines under each thumbnail | Later, after stage A (owner, 2026-11-12) | The thumbnail shows the file name until then |
 | Temporary exposure and white balance for assessment | Later, after stage A (owner, 2026-11-12) | Needs RAW processing options the view core does not have today |
 | The separate preview window (U0), movable to a second screen with that screen's DPI and colour profile | When the owner has a second screen to test with (owner, 2026-11-12 and 2026-11-13) | Review finding 5: colour conversion is per start screen today (ADR 0016) |
-| **Images shown while importing**: the destination tab opens when the first file is copied and verified, and fills as the import goes on, as Photo Mechanic does; today it opens when the copy is done (ADR 0010, "Open the result") | Not yet placed (owner, 2026-11-15) | Changes ADR 0010's rule. The IPTC template is written after the copy, so an image is shown for a while before the template's values are in it; the contact sheet must take the folder's new files without a reload of the tab |
+| **Images shown while importing**: the destination tab opens when the first file is copied and verified, and fills as the import goes on; today it opens when the copy is done (ADR 0010, "Open the result") | Not yet placed (owner, 2026-11-15) | Changes ADR 0010's rule. The IPTC template is written after the copy, so an image is shown for a while before the template's values are in it; the contact sheet must take the folder's new files without a reload of the tab |
 | Code replacements (short codes expanded to text while captioning) | Not yet placed (review, 2026-11-13) | From the study's list of missing functions |
 | A catalogue across folders (`pw-catalog`) | Not yet placed (review, 2026-11-13) | From the study's list of missing functions |
 | Floating, freely placed panels | Future requirement (requirements-image-viewer.md, "Not covered") | |

@@ -1,4 +1,4 @@
-# T175. Other products named only as the clean-room rule allows — Open
+# T175. Other products named only as the clean-room rule allows — Done
 
 - **Why:** `docs/clean-room.md` keeps observations about other products out of the repository, but
   a few current documents describe another program's interface, keys or way of working as the
@@ -70,3 +70,5 @@
 |---|---|---|
 | 2026-11-17 | Open | Added from the backlog item "The clean-room policy and the documents disagree" (survey of 2026-11-17); the owner's rule is in `docs/clean-room.md` ("Naming other products") and `AGENTS.md` §4 |
 | 2026-11-17 | Open | Cold read: doable with the named files. Changed: two passages it found added (ADR 0004 "as in Lightroom", point 2; ADR 0013 Q5 "(Lightroom's key)", point 5); ADR 0004's keys are its own Decision 4, not ADR 0013's; its quotes and Decision 3 stay; the ADR 0013 §13 sentence to remove quoted; the analysis passage is §7 requirement 6, not a decision; the check covers every product and maker; ADR 0008 as a whole left out as allowed use 2 |
+| 2026-11-17 | Ready for review | Points 1–7 done in the five files; touched paragraphs re-wrapped to 100 columns (ADR 0004 Context, ADR 0013 §13, ADR 0017 status and 2026-11-15 wishes). Point 8: every remaining mention is interoperability or a level-D source; none unsure. Borderline but kept as the task says: the analysis's §10 rows 3a/3b and §1a row U4 ("Lightroom and Photo Mechanic practice" for storage), ADR 0013 §14's reject finding (how its files are shown). `.\tools\check.ps1` all OK |
+| 2026-11-17 | Done | Reviewed: points 1–7 done as written in the five files, only the wording changed (no decision, date, Q/U number or reference); point 8's kept mentions are interoperability or level-D sources and allowed. Reviewer re-wrapped one line of ADR 0017's status (110 columns). The agent's `.\tools\check.ps1`: all OK, 1716 passed, 65 ignored, 0 failed; documents only, not run again. Left over: none |

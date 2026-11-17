@@ -252,7 +252,7 @@ The owner accepted every proposal below as written. Q5 has an added direction fo
 | **Q2** | Language of rating texts | **Swedish**, as in the Tauri app and the import dialog: "Betyg: 3 stjärnor, Röd", "Avvisad", "Ej betygsatt", label names Röd, Gul, Grön, Blå, Lila. The three existing English metadata notices ("Metadata loading…", "Ratings unsupported for this file", "Metadata error: …") are translated in B2 |
 | **Q3** | How a grid cell shows ratings | Stars on the left of the file-name row, the row background in the label colour, rejected thumbnails dimmed (§5.1) |
 | **Q4** | How the loupe shows ratings | A badge in the lower left corner plus the status-line text; the badge follows the I key (information on/off) |
-| **Q5** | A key for "rejected"? ADR 0004 has none; the Tauri app can only show a reject written by another program | **X** sets rejected; X on a rejected image clears it (Lightroom's key). X is free in both the grid and the loupe. 0 also clears it, since it clears the stars. *Owner, 2026-11-09:* later, X is meant to move the image to `_rejected` instead (§13) |
+| **Q5** | A key for "rejected"? ADR 0004 has none; the Tauri app can only show a reject written by another program | **X** sets rejected; X on a rejected image clears it. X is free in both the grid and the loupe. 0 also clears it, since it clears the stars. *Owner, 2026-11-09:* later, X is meant to move the image to `_rejected` instead (§13) |
 | **Q6** | What happens with pending writes when the window closes | The window closes at once; the program waits up to **5 s** for the queue to empty, then exits. Writes that did not finish are listed in a message box before exit |
 | **Q7** | Does a rating key in the grid move to the next image (auto-advance)? | **No**, as in the Tauri app. A setting can come later |
 
@@ -269,14 +269,12 @@ The owner accepted every proposal below as written. Q5 has an added direction fo
 Not part of this milestone; recorded so that this milestone does not block it.
 
 - The owner's intention is that **X moves the image directly into a `_rejected` folder inside the same
-  folder**, the way the owner uses FastRawViewer. Another key would move an image to `_picked` in the
-  same way.
-- This may become an **option in the menus** (a checkbox, as in FastRawViewer), so the user chooses
-  between "X sets the rating rejected" (this milestone) and "X moves to `_rejected`".
+  folder**. Another key would move an image to `_picked` in the same way.
+- This may become an **option in the menus** (a check box), so the user chooses between "X sets the
+  rating rejected" (this milestone) and "X moves to `_rejected`".
 - It needs its own ADR before any work: what moves with the image (the `.xmp` sidecar and companion
   files such as a JPEG of a RAW+JPEG pair), undo, name collisions in the target folder, what the tab
-  and the contact sheet show after a move, and the key for `_picked`. FastRawViewer is studied only
-  from its public documentation and by using it (clean-room levels C and D, `docs/clean-room.md`).
+  and the contact sheet show after a move, and the key for `_picked`.
 - Consequence for this milestone: the X key goes through the same `RatingKey::Reject` path as the
   other keys, so changing what it does later is a change in one place.
 

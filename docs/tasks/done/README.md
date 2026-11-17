@@ -174,3 +174,4 @@ was when the task was done, so "this file", "below" and "the Log" in T1–T115 m
 | [T165](T165-compare-after-a-step-that-did-not-happen.md) | The compare after a step that did not happen (pw-loupe) |
 | [T166](T166-mark-a-card-already-imported.md) | Mark a card whose images are at the destination already (pw-loupe) |
 | [T167](T167-focus-map-in-the-view-core.md) | ADR 0017 U9a, first part: the focus map in the view core (pw-viewcore) |
+| [T175](T175-other-products-named-by-the-clean-room-rule.md) | Other products named only as the clean-room rule allows (docs) |

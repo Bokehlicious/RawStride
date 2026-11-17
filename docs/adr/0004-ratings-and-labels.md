@@ -6,15 +6,14 @@
 
 ## Context
 
-Rating images is the core of culling. Here is how Photo Mechanic handles it, according to Camera
-Bits' public documentation (clean-room level D):
+Rating images is the core of culling, and the ratings and labels must be readable by the other
+programs that open the same files. Photo Mechanic's files hold them as follows, according to
+Camera Bits' public documentation (clean-room level D):
 
-- **Storage.** For RAW files it writes to XMP sidecars by default, "the best option for speed and
+- **Storage.** For RAW files they are in XMP sidecars by default, "the best option for speed and
   compatibility with other programs". The RAW file is only modified if the user explicitly allows it.
 - **DNG.** For DNG, metadata is written into the file itself.
 - **Colour classes.** These can be synchronised with the XMP *Label* field "for better Adobe compatibility".
-- **Windows shortcuts.** Alt+1–5 sets the rating and Ctrl+1–8 the colour class. Single-key shortcuts
-  are optional.
 
 ## Decision
 
@@ -102,8 +101,8 @@ UI only; no backend change.
 - **Filter** (toolbar): stars "≥ 1 … ≥ 4", "5", "unrated", "rejected", combined with a label
   (one colour or "no label"). An active filter is outlined in the toolbar and the status bar
   shows "n / shown (of total)". The filter is remembered between sessions (browser storage).
-  An image you rate so that it no longer matches stays visible until you move on, as in
-  Lightroom, so it never vanishes under the cursor.
+  An image you rate so that it no longer matches stays visible until you move on, so it never
+  vanishes under the cursor.
 - **Multi-selection** (contact sheet): Ctrl+click toggles, Shift+click and Shift+arrows mark a
   range, Ctrl+A marks all shown images, Esc or a plain arrow clears. Rating and label keys then
   apply to every marked image (one ExifTool write each, queued in order); files that cannot carry

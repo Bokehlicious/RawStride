@@ -21,7 +21,7 @@ every copy verified, the source card never modified.
 4. **Templates** with `{year} {year2} {month} {day} {hour} {minute} {second} {date} {time}
    {make} {model} {name} {seq} {seq:N} {job}`, for the folder (may contain `/`) and the file name.
    Values are made Windows-safe (illegal characters, trailing dots, `CON`/`COM1` …).
-   The syntax is our own, not Photo Mechanic's.
+   The syntax is RawStride's own.
 5. **Never overwrite.**
    - A destination file with the same size and modification time counts as already ingested and
      is skipped. Re-running an interrupted ingest copies only what is missing.

@@ -12,7 +12,7 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 | `T<nnn>-<name>.md` (this folder) | Open tasks, one file each |
 | [`backlog.md`](backlog.md) | Not for agents yet: needs a decision, a dependency or an ADR first |
 | [`plans/`](plans/) | Step lists for ADRs that have none of their own (ADR 0007 milestone 8, ADR 0017) |
-| [`done/`](done/README.md) | Finished tasks T1–T167, and the log they were kept in until 2026-11-13 |
+| [`done/`](done/README.md) | Finished tasks T1–T167 and T175, and the log they were kept in until 2026-11-13 |
 
 
 ## How to work on a task
@@ -93,7 +93,6 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 | [T172](T172-move-rules-and-undo-list.md) | ADR 0017 U9b, fourth part: the move rules, the undo list, the tab's list and the texts | Blocked: waits for T171 |
 | [T173](T173-move-events-in-the-metadata-cache.md) | ADR 0017 U9b, fifth part: the move requests and answers in the shell's metadata part | Blocked: waits for T172 |
 | [T174](T174-move-keys-menu-and-undo.md) | ADR 0017 U9b, last part: the keys, the menu items, the moves and the undo in the shell | Blocked: waits for T173 |
-| [T175](T175-other-products-named-by-the-clean-room-rule.md) | Other products named only as the clean-room rule allows (docs) | Open |
 
 ## Writing a task (owner and reviewer)
 
