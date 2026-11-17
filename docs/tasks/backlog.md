@@ -207,6 +207,12 @@ and reviewer:
     making the change again. Kept: known limits in ADR 0017; the comma needs another way to edit
     lists (since T108); a task if either is seen in use.
 
+- **A small fault: "Apply to {n} Marked" greyed without saying why** (owner's hand check of T181,
+  2026-11-17): with a field error the button is disabled (`apply_allowed`, U12c-Q2) and nothing
+  says why; the error is shown under its field. Nothing can go wrong, since nothing is written
+  while a field has an error. A text on hover over the disabled button ("Correct the error in
+  …", as `EditorText::NotSaved` names the items) would say why. Not important.
+
 Removed on 2026-11-13 because they are done or planned elsewhere: ADR 0010 steps M3–M7 (done,
 T30–T40); ADR 0011 step K4 (done, T26–T29); moving rejected or picked images to `_rejected` /
 `_picked` (ADR 0013 §13), now ADR 0017 U9 (§2.6, U-Q6); the import dialog fields for title and description in the Tauri
