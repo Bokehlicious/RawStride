@@ -29,20 +29,11 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
    to make it pass; if a test seems wrong, stop and explain.
 6. **Before you report back,** run `.\tools\check.ps1` and keep `test-output.txt` from that run
    (it must be newer than your last change). Do not run `cargo test -p <crate>` or
-   `cargo clippy -p <crate>` on their own: a single-crate build uses a different feature set, which
-   builds new build scripts that the owner's antivirus may block (seen as linker error LNK1104). While
-   working you may run `cargo build --workspace` or `cargo test --workspace`.
-   **One exception (owner, 2026-11-12):** Windows Smart App Control sometimes refuses to run a
-   rebuilt test program (`could not execute process … (never executed)`, `os error 4551`, "En
-   programkontrollprincip har blockerat den här filen"). Then, and only for the programs it
-   refused, run them on their own (`cargo test -p <crate> --lib`, `--bin <name>` or
-   `--test <name>`). If they pass and nothing else in `check.ps1` failed, the task may be set to
-   "Ready for review". In the report, give the `check.ps1` summary, the refused programs, the
-   separate runs with their `test result` lines, and the total (the `check.ps1` run plus the
-   separate runs). Never change a Windows security setting, and never build elsewhere (rule 7).
+   `cargo clippy -p <crate>` on their own (`AGENTS.md` §5). While working you may run
+   `cargo build --workspace` or `cargo test --workspace`.
 7. **Build only in the project's own `target` folder** (`AGENTS.md` §5). Do not set `CARGO_TARGET_DIR` or
-   `--target-dir`, and do not build in a temporary folder (for example under `%TEMP%`). The
-   owner's antivirus has an exception for `target` only; builds elsewhere are quarantined.
+   `--target-dir`, and do not build in a temporary folder (for example under `%TEMP%`); a
+   development machine may exclude only `target` from antivirus scanning.
    If the program is running and `target` is locked, ask the owner to close it.
 8. **Do not commit.** Leave the changes uncommitted so they can be reviewed with `git diff`.
    Do not create checkpoint commits or refs in this repository.

@@ -31,8 +31,8 @@
 
 ## 5. Building, Testing and Verification
 - Read `docs/TESTING.md` before changing production code or tests.
-- **Verify with `.\tools\check.ps1`** (fmt, cargo audit, tests, clippy; it writes `test-output.txt`). Do not run `cargo test -p <crate>` or `cargo clippy -p <crate>` on their own: a single-crate build uses a different feature set, and its new build scripts have been blocked by the owner's antivirus (linker error LNK1104). While working, `cargo build --workspace` and `cargo test --workspace` are fine.
-- **Build only in the project's own `target` folder.** Do not set `CARGO_TARGET_DIR` or `--target-dir`, and do not build in a temporary folder: the antivirus has an exception for `target` only, and builds elsewhere are quarantined. If the program is running and `target` is locked, ask the owner to close it.
+- **Verify with `.\tools\check.ps1`** (fmt, cargo audit, tests, clippy; it writes `test-output.txt`). Do not run `cargo test -p <crate>` or `cargo clippy -p <crate>` on their own: a single-crate build uses a different feature set and builds new build scripts, which antivirus programs sometimes flag as false positives. While working, `cargo build --workspace` and `cargo test --workspace` are fine.
+- **Build only in the project's own `target` folder.** Do not set `CARGO_TARGET_DIR` or `--target-dir`, and do not build in a temporary folder; a development machine may exclude only `target` from antivirus scanning. If the program is running and `target` is locked, ask the owner to close it.
 - Never change a Windows security setting.
 - Do not claim a test passed unless it was actually executed and its result was observed.
 - Never weaken, remove, bypass, or rewrite tests merely to obtain a passing result.

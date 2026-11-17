@@ -41,6 +41,29 @@ cargo run --release -p pw-loupe
 
 See [CONTRIBUTING.md](CONTRIBUTING.md). Open an issue before a larger change.
 
+## How RawStride is developed
+
+RawStride is written with AI coding agents, directed and reviewed by its maintainer.
+
+- **The maintainer decides.** Requirements, architecture and every design decision are the
+  maintainer's, recorded with their reasons in the [ADRs](docs/adr/) and
+  [requirements](docs/GUI_REQUIREMENTS.md).
+- **Agents do small, written tasks.** Each change starts as a task file under
+  [`docs/tasks/`](docs/tasks/README.md) that states what to change, which files, and which tests
+  to add. An agent carries out one task and leaves its change uncommitted.
+- **Nothing goes in unreviewed.** Every change is reviewed against its task and must pass
+  `tools/check.ps1` (formatting, `cargo audit`, all tests, clippy without warnings) before the
+  maintainer approves it. Changes that affect what the user sees or what is written to files are
+  also checked by hand in the running program.
+- **The same rules bind people and agents.** [`AGENTS.md`](AGENTS.md) holds the rules every agent
+  follows: no panics in non-test code, no new dependencies without approval, no weakened tests,
+  and the [clean-room policy](docs/clean-room.md).
+
+The task files are kept as part of the project's history: [`docs/tasks/done/`](docs/tasks/done/)
+shows how each feature was specified and built. You do not need to read them to contribute; the
+ADRs and [CONTRIBUTING.md](CONTRIBUTING.md) are the place to start. Contributions written with or
+without AI tools are welcome under the same review.
+
 ## Layout
 
 ```

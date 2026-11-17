@@ -47,9 +47,9 @@ opt-level = 1
 opt-level = 3
 
 [profile.dev.build-override]
-# Build scripts without debug info. Some antivirus programs flag the debug build of the
-# thiserror 2.0.21 build script (Gen:Variant.Fugrafa, a false positive) and
-# blocks it even inside an excluded target folder (2026-11-11).
+# Build scripts without debug info. Some antivirus programs flag debug builds of
+# build scripts (seen with thiserror 2.0.21) as false positives, even inside a
+# target folder excluded from scanning.
 debug = false
 
 [profile.release]
