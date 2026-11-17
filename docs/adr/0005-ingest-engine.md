@@ -98,6 +98,12 @@ The sandbox disk is not the PC. Measure on thanos with a real card before tuning
      as the same. FAT32 keeps local time, and Windows converts it with today's daylight saving
      time, so after a change of the clocks every file on such a card reads one hour off; without
      this, the whole card would be imported again (with `_1` names in the old destination).
+   - **A card whose images are all at the destination already (owner, 2026-11-17; T166):** for
+     example after an import made before the register existed. With "copy new photos only" on, a
+     register that is not foreign or unreadable, nothing to copy and at least one file already at the
+     destination, the dialog's start button reads "Mark Card as Imported" and the run adds those
+     files to the register without copying anything. Eject after import applies as for any
+     import; the summary is the usual one, and no tab opens, as no folder got new images.
    - **What changes in choice 3:** RawStride now writes one file of its own to the card. It still
      never changes or deletes an image or any other file there. The check at the destination
      (choice 2) stays.
