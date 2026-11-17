@@ -39,6 +39,10 @@
        `EditError::Unsupported` with an
        English reason that names the property (for example `"{property} is not a list of
        entries"`).
+     - **A property with an `Open` conflict** (`has_open_conflict`) is no change, whatever `add`
+       and `remove` hold: nothing is set or cleared and the conflict is kept (owner, 2026-11-17,
+       ADR 0017 U12d-Q6; the file's XMP and IIM entries differ and the user has not decided them).
+       Checked after the two errors above.
      - The current entries are the read value's entries (`metadata.get(property)` as
        `Value::List`), or none when the property is absent.
      - The result is: the current entries without every entry that is in `remove` (exact text,
@@ -62,6 +66,16 @@
      - in `EditorForm::batch_lists` (about line 2167), the arm `Edit::Entries { .. } => false`.
      If any other `match` in the workspace fails to build, stop and say where instead of changing
      it.
+  5. **Telling the user** (`ExifTool::write_edits_safely` in `edit.rs`; owner, 2026-11-17,
+     ADR 0017 U12d-Q6): for each `Entries` edit left alone because its property has an `Open`
+     conflict (point 2), the `EditReport`'s `notices` hold `WriteNotice::ConflictKept { property }`,
+     also when the report is `WriteReport::Unchanged` (today `notices` is empty then) and also
+     when the file was written for other edits. A property is named once: the plan's own
+     `ConflictKept` for it is not doubled. `apply_edits`'s signature does not change (find the
+     properties in `write_edits_safely`, for example the `Entries` properties that still have an
+     `Open` conflict and are not among `metadata.changes()` after `apply_edits`). The doc
+     comment of `write_edits_safely` and the module comment say this. The shell already shows
+     every `ConflictKept` of an image's report in the batch summary (T180 checks it).
 - **Tests to add:**
   - In `edit.rs`'s `mod tests` (with the helpers `read`, `edited`, `changes` and a new
     `entries(property, add, remove) -> Edit`):
@@ -85,6 +99,11 @@
     9. `entries_on_a_text_or_a_structure_list_are_unsupported`: `photoshop:City` and
        `Iptc4xmpExt:LocationCreated` give `EditError::Unsupported`; an unknown property gives
        `EditError::Value(ValueError::UnknownProperty(..))`.
+    11. `only_blank_entries_left_clears_the_property`: `dc:subject` `["", "sol"]` (built with
+        `read`), remove `["sol"]`: the property is absent afterwards, as in test 6.
+    12. `an_open_conflict_is_left_alone`: the `Open` conflict of test 8 and an `Entries` that adds
+        `"vinter"` and removes `"sol"`: no change, the value still `["sol", "hav"]`, the
+        conflict still `Open`.
   - In `crates/pw-metadata/tests/edit.rs` (real ExifTool, the `Scratch` JPEG, as
     `edits_to_a_jpeg_held_open_by_another_program_are_locked` calls `write_edits_safely`):
     10. `keywords_are_added_to_a_jpeg_and_its_own_kept`: write `XMP-dc:Subject` `sol` and `hav`
@@ -93,6 +112,16 @@
         vinter`; the result is `Ok(report)` with `report.report == written(&file)`. The journal is
         clean and the folder removed, as the
         other tests do.
+    13. `an_open_keyword_conflict_is_left_alone_and_reported`: a JPEG with `XMP-dc:Subject`
+        `sol`, `hav` and IIM Keywords `sol`, `is` and no IIM checksum (written as
+        `tests/write_plan.rs`'s `an_open_conflict_keeps_the_digest_unchanged_until_it_is_decided`
+        writes its City), which is read as an `Open` conflict on `dc:subject` (assert it as
+        that test does). (a) `write_edits_safely` with only `Entries` adding `vinter`:
+        `Ok`, `report.report == WriteReport::Unchanged`, `notices ==
+        [ConflictKept { "dc:subject" }]`, and both forms read back unchanged. (b) The same
+        `Entries` together with a `Set` of `photoshop:Headline`: `Written`, `dc:subject`
+        named once among the notices, both keyword forms unchanged. Journal clean, folder
+        removed.
 - **Not in this task:** the shell's use of `Entries` ("Apply to {n} Marked", the confirmation,
   the line under the title) is T180. Templates (U13) are not changed.
 - **Rules:** `docs/tasks/README.md` rules 1–12; no `unwrap`/`expect` outside tests. This task
@@ -106,3 +135,6 @@
 |---|---|---|
 | 2026-11-17 | Blocked | Added from the owner's job test and U12d-Q1–U12d-Q5 (ADR 0017 §6.1); waits for its cold read |
 | 2026-11-17 | Open | Cold read: doable with the named files; every `match` on `Edit` is in `edit.rs` or the two arms of point 4 (`src-tauri` has none). Changed: the list test is `Multi` and not `Struct` (`list_kind` also answers for structure lists, so test 9 would have failed); "no change" is `==` on the entries; an absent property with nothing to add is never cleared; the conflict built with `add_conflict`; test 10 compares `report.report` with `written` |
+| 2026-11-17 | Ready for review | Done as written: `Edit::Entries` and `apply_entries` in `edit.rs`, the module comment, the two arms in `editor.rs` (no other `match` failed), tests 1–10 and `docs/test-inventory.md`. One addition: a changed result of only blank entries (e.g. a file with `""` and `sol`, `sol` removed), which `Metadata::set` refuses as `Empty`, clears the property as an empty result does (as a structure with only empty fields is cleared). `.\tools\check.ps1` all OK: 1803 passed, 66 ignored, 0 failed |
+| 2026-11-17 | Open | Review (reviewer, then `/code-review` as the safe write's crate needs): sent back. (a) The addition (only blank entries left → cleared) had no test: test 11 added. (b) An `Open` conflict was decided from the shown (XMP) entries and IIM-only entries lost; owner: no change for such a property (ADR 0017 U12d-Q6): point 2's new first-check bullet and test 12. Not to change here, homes at Done: `same_value` compares list entries on the IIM prediction, so removing a keyword over 64 bytes and adding it cut to 64 is no change (as for `Set`); `trim()` for blank `add` entries differs from `is_empty_text` and `iim::is_blank` (NUL); the append rule repeats `template.rs`'s Append; the `Entries` arm in `BatchEdits::lists` can only name structure lists, which `Entries` refuses (T180 to settle) |
+| 2026-11-17 | Open | Owner, same day (ADR 0017 U12d-Q6): the user is told of an image left alone. Point 5 added (`write_edits_safely` gives `ConflictKept` for such an `Entries`, also when nothing is written) and test 13 |

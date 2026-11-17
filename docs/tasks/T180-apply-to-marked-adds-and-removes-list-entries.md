@@ -71,6 +71,14 @@
      line (about line 2817), with the same condition (`marked_count > 1`).
   6. **`apply_allowed`** (`main.rs`) is unchanged: it allows the button when `batch.others` is not
      empty, which now also holds `Entries`.
+  7. **An image left alone** (owner, 2026-11-17, ADR 0017 U12d-Q6, T179 point 5): a marked
+     image whose list field has an `Open` conflict gets no change to that field, and its
+     report names the property in a `WriteNotice::ConflictKept`, also when nothing was
+     written. The batch summary already shows every `ConflictKept` of another image's report as
+     "Unresolved conflict kept: {file} ({field})" (`crates/pw-loupe/src/metadata.rs`, the
+     batch's write result, about line 858), whether the report is `Written` or `Unchanged`. No
+     code is to change for this; if it does not hold, stop and say so. The confirmation
+     (point 4) says nothing about conflicts (the images are not read before the write).
 - **Tests to add** (`editor.rs` unless named):
   1. `an_added_keyword_is_added_to_the_other_images`: `dc:subject` `sol, hav`, typed `sol, hav,
      vinter` → `others == [Entries { "dc:subject", add ["vinter"], remove [] }]`, `this_image` the
@@ -109,3 +117,4 @@
 |---|---|---|
 | 2026-11-17 | Blocked | Added with T179 from the owner's job test and U12d-Q1–U12d-Q5 (ADR 0017 §6.1); waits for T179 and its cold read |
 | 2026-11-17 | Blocked | Cold read: doable with the named files. Changed: the real list of editable top-level list fields (Supplemental Categories is not editable); two more existing tests named (the T143 list test and the confirmation test's full `BatchEdits` literal); `field.label()` for the name; the list texts take `Vec<String>`; `ListChange` derives; `every_editor_text` named; a Creator-only removal leaves the button disabled, as intended; the stale doc comments named. Waits for T179 |
+| 2026-11-17 | Blocked | From T179's review (owner, ADR 0017 U12d-Q6): an image with an `Open` conflict on a list field is left alone and named in the summary's "Unresolved conflict kept" line; point 7 added (no new code, the summary already shows it). Waits for T179 |
