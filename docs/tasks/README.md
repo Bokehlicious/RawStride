@@ -89,7 +89,7 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 | [T182](T182-x-trans-statistics-gaps.md) | RAW statistics on X-Trans: channel shares, renders and a file cut short (pw-libraw tests) | Open |
 | [T183](T183-tabs-on-rejected-and-picked-and-undo-while-moving.md) | ADR 0017 U9b: a tab open on `_rejected` or `_picked` follows a move and an undo; Ctrl+Z while a move runs says so (pw-loupe) | Open |
 | [T184](T184-release-for-move-a-required-method.md) | `ImageCheck::release_for_move` a required method (pw-metadata, pw-imagecheck) | Open |
-| [T185](T185-delete-group-to-recycle-bin.md) | ADR 0018 B1: an image's files to the Recycle Bin, with the drive and the files checked first (pw-metadata) | Blocked: waits for T181 |
+| [T185](T185-delete-group-to-recycle-bin.md) | ADR 0018 B1: an image's files to the Recycle Bin, with the drive and the files checked first (pw-metadata) | Open |
 | [T186](T186-delete-requests-in-the-metadata-worker.md) | ADR 0018 B2: preparing and deleting an image as requests to the metadata worker (pw-metadata) | Blocked: waits for T185 and T184 |
 | [T187](T187-delete-rules-and-texts.md) | ADR 0018 B3, first part: the delete's plan, batch and texts in the shell (pw-loupe) | Blocked: waits for T186 and T183 |
 | [T188](T188-delete-requests-and-answers-in-the-metadata-cache.md) | ADR 0018 B3, second part: the delete requests and answers in the shell's metadata part (pw-loupe) | Blocked: waits for T187 |
