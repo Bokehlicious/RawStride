@@ -20,6 +20,7 @@ use metadata::{EditorEvent, InspectorState, MetadataCache};
 use pw_imagecheck::RawImageCheck;
 use pw_loupe::SavedLibrary;
 use pw_loupe::clipping::{ClipChoice, OverlayCache, overlay_uv};
+use pw_loupe::focus::FocusCache;
 use pw_loupe::library::{
     FolderList, Library, TreeRowKind, folder_key, read_drives, suppress_no_disk_dialogs,
 };
@@ -89,7 +90,9 @@ use pw_metadata::{MetadataWorker, Rating, WriteSetup, supports_rating};
 use pw_render::{Textures, view_px};
 use pw_thumbcache::{ThumbWorker, ThumbnailRequest};
 use pw_viewcore::native::NativeBackend;
-use pw_viewcore::{ClippingState, Config, Frame, ImageStatistics, Source, Status, ViewCore, Zoom};
+use pw_viewcore::{
+    ClippingState, Config, FocusState, Frame, ImageStatistics, Source, Status, ViewCore, Zoom,
+};
 
 mod inspector;
 mod inspector_text;
@@ -603,6 +606,8 @@ struct Loupe {
     second_core: ViewCore<NativeBackend>,
     second_textures: Textures,
     second_clip_overlay: OverlayCache<egui::TextureHandle>,
+    /// The texture of the focus marking on the held image of the compare (U9-Q4, T168).
+    second_focus_overlay: FocusCache<egui::TextureHandle>,
     /// The compare while it is open (T153); not remembered after a restart (U6-Q11).
     compare: Option<CompareOpen>,
     metadata_worker: MetadataWorker,
@@ -704,6 +709,10 @@ struct Loupe {
     /// T149): one at a time, made again only for another map or overlay choice and released when
     /// no overlay is shown. Its memory is outside the view's texture budget (U7b-Q8).
     clip_overlay: OverlayCache<egui::TextureHandle>,
+    /// The texture of the focus marking drawn over the preview's image (ADR 0017 §2.6, U9a,
+    /// T168): one at a time, made again only for another map and released when the marking is
+    /// not shown.
+    focus_overlay: FocusCache<egui::TextureHandle>,
     /// The display mode (RAW or JPEG) of the last rendered preview frame, which the inspector's
     /// Histogram section follows (U7c-Q1, T144); RAW before the first frame, as the view core.
     display_mode: Source,
@@ -3198,6 +3207,13 @@ impl Loupe {
         shell.clip_shadows = !shell.clip_shadows;
     }
 
+    /// `E` and View ▸ Show Focus Marking: the edges of high local contrast marked in green on the
+    /// image, on ↔ off (ADR 0017 §2.6, U9-Q1, T168).
+    fn toggle_focus_marking(&mut self) {
+        let shell = &mut self.settings.shell;
+        shell.focus_marking = !shell.focus_marking;
+    }
+
     /// Tells the view cores whether a clipping map is wanted (U7b-Q8, T148): the first exactly
     /// when the preview is shown and at least one overlay is on, the second when the compare is
     /// open as well (U6-Q9: the marks on both sides, T153). Called every frame.
@@ -3207,6 +3223,16 @@ impl Loupe {
         self.core.set_clipping_wanted(wanted);
         self.second_core
             .set_clipping_wanted(wanted && self.compare.is_some());
+    }
+
+    /// Tells the view cores whether a focus map is wanted (U9a, T168): the first exactly when the
+    /// preview is shown and the focus marking is on, the second when the compare is open as well
+    /// (U9-Q4: the marks on both sides). Called every frame.
+    fn wish_focus_map(&self) {
+        let wanted = self.in_preview() && self.settings.shell.focus_marking;
+        self.core.set_focus_wanted(wanted);
+        self.second_core
+            .set_focus_wanted(wanted && self.compare.is_some());
     }
 
     /// The indexes the compare would open with, `(held, current)` (U6-Q4, T151's
@@ -3272,6 +3298,8 @@ impl Loupe {
         self.second_core.set_files(Vec::new(), 0);
         self.second_core.set_clipping_wanted(false);
         self.second_clip_overlay.release();
+        self.second_core.set_focus_wanted(false);
+        self.second_focus_overlay.release();
     }
 
     /// Closes the compare by itself (U6-Q11), checked every frame: when the preview is no longer
@@ -3915,6 +3943,7 @@ impl Loupe {
             Command::ToggleAnchor => Some(self.anchor_at_pointer),
             Command::ClipHighlights => Some(shell.clip_highlights),
             Command::ClipShadows => Some(shell.clip_shadows),
+            Command::FocusMarking => Some(shell.focus_marking),
             Command::AboveBelow => Some(shell.compare_above_below),
             Command::LockZoom => Some(shell.compare_locked),
             Command::ToggleInfo => {
@@ -3968,6 +3997,7 @@ impl Loupe {
             Command::ToggleAnchor => self.act(Action::ToggleAnchor, None),
             Command::ClipHighlights => self.toggle_clip_highlights(),
             Command::ClipShadows => self.toggle_clip_shadows(),
+            Command::FocusMarking => self.toggle_focus_marking(),
             Command::Compare => self.toggle_compare(),
             Command::HoldImage => self.hold_current_image(),
             Command::SwapImages => self.swap_images(),
@@ -4655,6 +4685,7 @@ impl Loupe {
                         }
                         PreviewKey::ClipHighlights => self.toggle_clip_highlights(),
                         PreviewKey::ClipShadows => self.toggle_clip_shadows(),
+                        PreviewKey::FocusMarking => self.toggle_focus_marking(),
                         PreviewKey::Compare => self.toggle_compare(),
                         PreviewKey::HoldImage => self.hold_current_image(),
                         PreviewKey::SwapImages => self.swap_images(),
@@ -4764,6 +4795,8 @@ impl Loupe {
         self.follow_compare();
         // The clipping map is wanted exactly when the preview is shown with an overlay on (T148).
         self.wish_clipping_map();
+        // The focus map likewise, with the focus marking on (T168).
+        self.wish_focus_map();
         // The preview opened or closed by a key this frame (T111): the next frame draws the new
         // layout, and the contact sheet scrolls to the last shown image there.
         let mode_after = self.tabs.active().map(|tab| tab.mode);
@@ -4814,9 +4847,12 @@ impl Loupe {
             } else {
                 self.wheel_notches = 0.0;
             }
-            // No clipping marks in the contact sheet: their texture is released (T149).
+            // No clipping marks in the contact sheet: their texture is released (T149), and so
+            // the focus marking's (T168).
             self.clip_overlay.release();
             self.second_clip_overlay.release();
+            self.focus_overlay.release();
+            self.second_focus_overlay.release();
             // The second view core's textures are synced here too (T153): a compare that closed
             // with the preview emptied the core, and its dropped textures are taken back and its
             // views drained. With an empty list and nothing dropped it does nothing.
@@ -4837,6 +4873,7 @@ impl Loupe {
                 highlights: self.settings.shell.clip_highlights,
                 shadows: self.settings.shell.clip_shadows,
             },
+            focus: self.settings.shell.focus_marking,
             metadata: &self.metadata,
             indicator_after: self.indicator_after,
             message: self.message.as_deref(),
@@ -4852,6 +4889,7 @@ impl Loupe {
             &self.core,
             &mut self.textures,
             &mut self.clip_overlay,
+            &mut self.focus_overlay,
             current_rect,
             ui.scope_id().with("image"),
             &shown,
@@ -4892,6 +4930,7 @@ impl Loupe {
                     held_mouse,
                     &mut self.second_textures,
                     &mut self.second_clip_overlay,
+                    &mut self.second_focus_overlay,
                     held_rect,
                     ui.scope_id().with("held-image"),
                     &shown,
@@ -4917,10 +4956,11 @@ impl Loupe {
             }
             _ => {
                 // Outside the compare the second view core holds nothing: its textures are
-                // synced as the first's (T152), and it has no clipping marks to keep.
+                // synced as the first's (T152), and it has no clipping or focus marks to keep.
                 let max_side = ctx.input(|i| i.max_texture_side);
                 self.second_textures.sync(&ctx, &self.second_core, max_side);
                 self.second_clip_overlay.release();
+                self.second_focus_overlay.release();
             }
         }
         self.last_frame_status = frame.status.clone();
@@ -4981,6 +5021,8 @@ struct ImageAreaShown<'a> {
     anchor_at_pointer: bool,
     /// The clipping overlays that are on.
     choice: ClipChoice,
+    /// The focus marking is on (T168).
+    focus: bool,
     /// The shown ratings, for the rating badge.
     metadata: &'a MetadataCache,
     /// The loading indicator appears after this long (V2).
@@ -5012,8 +5054,8 @@ fn zoom_anchor(
 /// Draws one view core's image area into `rect` (ADR 0017 §2.2, U6, T152): the mouse
 /// (double-click = Z, drag = pan, wheel = zoom) under the interaction `id`, acting on
 /// `mouse_core` (the same core, or the current side's while the compare is locked, T154), the
-/// sync of the core's `textures`, the frame asked of the core, the image, the clipping marks from
-/// `clip_overlay`, the rating badge, and the error, indicator and empty-area texts. The
+/// sync of the core's `textures`, the frame asked of the core, the image, the focus marking from
+/// `focus_overlay` and over it the clipping marks from `clip_overlay`, the rating badge, and the error, indicator and empty-area texts. The
 /// background is the caller's. Returns the core's frame.
 #[allow(clippy::too_many_arguments)] // one core's area, the core its mouse acts on, its state
 fn draw_image_area(
@@ -5022,6 +5064,7 @@ fn draw_image_area(
     mouse_core: &ViewCore<NativeBackend>,
     textures: &mut Textures,
     clip_overlay: &mut OverlayCache<egui::TextureHandle>,
+    focus_overlay: &mut FocusCache<egui::TextureHandle>,
     rect: egui::Rect,
     id: egui::Id,
     shown: &ImageAreaShown<'_>,
@@ -5053,6 +5096,32 @@ fn draw_image_area(
     // Clipped to `rect`, so one side of the compare never draws on the other (T153).
     let painter = ui.painter_at(rect);
     let image_shown = textures.paint(&painter, rect, ppp, &frame);
+    // The focus marking over the image (ADR 0017 §2.6, U9a, T168), drawn as the clipping marks
+    // below and before them, so a clipping mark is on top; from this frame's map and `Draw` only.
+    match (&frame.focus, frame.draw) {
+        (FocusState::Ready { map, uv }, Some(draw)) if image_shown && shown.focus => {
+            let marks = focus_overlay.texture(map, max_side, |overlay| {
+                ctx.load_texture(
+                    "focus-marks",
+                    egui::ColorImage::from_rgba_unmultiplied(overlay.size, &overlay.rgba),
+                    egui::TextureOptions::NEAREST,
+                )
+            });
+            if let Some((texture, uv_scale)) = marks {
+                let draw = pw_viewcore::Draw {
+                    uv: overlay_uv(*uv, uv_scale),
+                    ..draw
+                };
+                painter.add(egui::Shape::mesh(pw_render::mesh(
+                    &draw,
+                    rect.min,
+                    ppp,
+                    texture.id(),
+                )));
+            }
+        }
+        _ => focus_overlay.release(),
+    }
     // The clipping marks over the image (ADR 0017 §2.6, U7b, T149), from this frame's map and
     // `Draw` only, so they are never drawn on another image: the image's quad once more, with
     // the map's texture coordinates and nearest-neighbour sampling (sharp blocks, U7b-Q7).
@@ -7161,6 +7230,7 @@ fn run(options: Options) -> Result<(), String> {
                 second_core,
                 second_textures: Textures::new(),
                 second_clip_overlay: OverlayCache::default(),
+                second_focus_overlay: FocusCache::default(),
                 compare: None,
                 metadata_worker,
                 exiftool_checked: false,
@@ -7219,6 +7289,7 @@ fn run(options: Options) -> Result<(), String> {
                 last_statistics: None,
                 last_clipping: ClippingState::NotWanted,
                 clip_overlay: OverlayCache::default(),
+                focus_overlay: FocusCache::default(),
                 display_mode: Source::Raw,
                 window_before: None,
                 window_settling: None,

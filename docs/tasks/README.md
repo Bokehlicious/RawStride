@@ -12,7 +12,7 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 | `T<nnn>-<name>.md` (this folder) | Open tasks, one file each |
 | [`backlog.md`](backlog.md) | Not for agents yet: needs a decision, a dependency or an ADR first |
 | [`plans/`](plans/) | Step lists for ADRs that have none of their own (ADR 0007 milestone 8, ADR 0017) |
-| [`done/`](done/README.md) | Finished tasks T1–T167, T169 and T175, and the log they were kept in until 2026-11-13 |
+| [`done/`](done/README.md) | Finished tasks T1–T169 and T175, and the log they were kept in until 2026-11-13 |
 
 
 ## How to work on a task
@@ -86,17 +86,17 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status |
 |---|---|---|
-| [T168](T168-focus-marking-key-and-drawing.md) | ADR 0017 U9a, second part: the focus marking key, menu item and drawing | Open |
 | [T170](T170-move-request-in-the-metadata-worker.md) | ADR 0017 U9b, second part: the move as a request to the metadata worker | Open |
 | [T171](T171-move-settings.md) | ADR 0017 U9b, third part: the two move settings | Blocked: waits for T170 |
 | [T172](T172-move-rules-and-undo-list.md) | ADR 0017 U9b, fourth part: the move rules, the undo list, the tab's list and the texts | Blocked: waits for T171 |
 | [T173](T173-move-events-in-the-metadata-cache.md) | ADR 0017 U9b, fifth part: the move requests and answers in the shell's metadata part | Blocked: waits for T172 |
 | [T174](T174-move-keys-menu-and-undo.md) | ADR 0017 U9b, last part: the keys, the menu items, the moves and the undo in the shell | Blocked: waits for T173 |
+| [T176](T176-focus-map-time-on-real-files.md) | ADR 0017 U9a: the focus map's time, and whether it slows stepping and Z | Open |
 
 ## Writing a task (owner and reviewer)
 
-- **Number:** the next free number after the highest in this folder and `done/` (T176 next).
-- **File:** `docs/tasks/T176-<a-few-words>.md`; three digits, lower case, words joined by `-`.
+- **Number:** the next free number after the highest in this folder and `done/` (T177 next).
+- **File:** `docs/tasks/T177-<a-few-words>.md`; three digits, lower case, words joined by `-`.
 - **Index:** add a row to "Open tasks" above and keep its status in step with the file's heading.
 - **Size (owner, 2026-11-15, after T142):** one task is one layer (a C++ shim or a core crate, or
   the shell in `pw-loupe`), about eight files at most, and gives one result the owner can check by
@@ -136,7 +136,7 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 Skeleton (the fields recent tasks use; leave out those that do not apply):
 
 ```markdown
-# T176. <Title> — Open
+# T177. <Title> — Open
 
 - **Why:** …
 - **Crates:** … **Files:** …

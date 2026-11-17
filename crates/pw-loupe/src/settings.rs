@@ -60,6 +60,8 @@ const INSPECTOR_HISTOGRAM: &str = "inspector_histogram";
 const CLIP_HIGHLIGHTS: &str = "clip_highlights";
 const CLIP_SHADOWS: &str = "clip_shadows";
 const PREVIEW_CLIPPING: &str = "preview_clipping";
+/// The key of the preview's focus marking, on or off (ADR 0017 §2.6, U9-Q1, T168).
+const FOCUS_MARKING: &str = "focus_marking";
 /// The keys of the compare's layout (above and below instead of side by side) and of its lock of
 /// zoom and position (ADR 0017 §2.2, U6-Q7, U6-Q8, T151).
 const COMPARE_ABOVE_BELOW: &str = "compare_above_below";
@@ -180,6 +182,9 @@ pub struct ShellSettings {
     /// (`Shift+J`) on the image (T148, U7b-Q5, U7b-Q6); they stay as they are from image to image.
     pub clip_highlights: bool,
     pub clip_shadows: bool,
+    /// The preview's focus marking (`E`): the edges of high local contrast marked in green on the
+    /// image (T168, U9-Q1); it stays as it is from image to image.
+    pub focus_marking: bool,
     /// The Clipping section of the preview's column (T148, U7b-Q9).
     pub preview_clipping: ColumnState,
     /// The compare's two images above and below each other (`V`) instead of side by side (T151,
@@ -247,6 +252,8 @@ impl Default for ShellSettings {
             // Both overlays off (U7b-Q6); the Clipping section open (U7b-Q9).
             clip_highlights: false,
             clip_shadows: false,
+            // The focus marking off (T168).
+            focus_marking: false,
             preview_clipping: ColumnState::Open,
             // The compare side by side (U6-Q7) and locked (U6-Q8).
             compare_above_below: false,
@@ -385,8 +392,8 @@ pub fn load_settings_and_library(path: &Path) -> (Settings, SavedLibrary, Vec<St
                 None => problems.push(bad("name, capture, modified, type or rating")),
             },
             WINDOW_MAXIMIZED | FULLSCREEN | COLUMNS_HIDDEN | PREVIEW_HIDDEN | SORT_DESCENDING
-            | CLIP_HIGHLIGHTS | CLIP_SHADOWS | COMPARE_ABOVE_BELOW | COMPARE_LOCKED
-            | IMPORT_INCREMENTAL => match parse_bool(value) {
+            | CLIP_HIGHLIGHTS | CLIP_SHADOWS | FOCUS_MARKING | COMPARE_ABOVE_BELOW
+            | COMPARE_LOCKED | IMPORT_INCREMENTAL => match parse_bool(value) {
                 Some(on) => match key {
                     WINDOW_MAXIMIZED => shell.window_maximized = on,
                     FULLSCREEN => shell.fullscreen = on,
@@ -394,6 +401,7 @@ pub fn load_settings_and_library(path: &Path) -> (Settings, SavedLibrary, Vec<St
                     SORT_DESCENDING => shell.sort.descending = on,
                     CLIP_HIGHLIGHTS => shell.clip_highlights = on,
                     CLIP_SHADOWS => shell.clip_shadows = on,
+                    FOCUS_MARKING => shell.focus_marking = on,
                     COMPARE_ABOVE_BELOW => shell.compare_above_below = on,
                     COMPARE_LOCKED => shell.compare_locked = on,
                     IMPORT_INCREMENTAL => shell.import_incremental = on,
@@ -602,9 +610,10 @@ fn shell_lines(shell: &ShellSettings) -> String {
         column_value(shell.inspector_histogram)
     ));
     text.push_str(&format!(
-        "{CLIP_HIGHLIGHTS} = {}\n{CLIP_SHADOWS} = {}\n{PREVIEW_CLIPPING} = {}\n",
+        "{CLIP_HIGHLIGHTS} = {}\n{CLIP_SHADOWS} = {}\n{FOCUS_MARKING} = {}\n{PREVIEW_CLIPPING} = {}\n",
         shell.clip_highlights,
         shell.clip_shadows,
+        shell.focus_marking,
         column_value(shell.preview_clipping)
     ));
     text.push_str(&format!(
@@ -865,7 +874,8 @@ mod tests {
              library_favourites = open\nlibrary_recent = open\nlibrary_tasks = open\n\
              sort = name\n\
              sort_descending = false\npreview_histogram = open\ninspector_histogram = open\n\
-             clip_highlights = false\nclip_shadows = false\npreview_clipping = open\n\
+             clip_highlights = false\nclip_shadows = false\nfocus_marking = false\n\
+             preview_clipping = open\n\
              compare_above_below = false\ncompare_locked = true\n\
              import_incremental = true\n"
         );
@@ -1057,6 +1067,7 @@ mod tests {
             inspector_histogram: ColumnState::Collapsed,
             clip_highlights: true,
             clip_shadows: true,
+            focus_marking: true,
             preview_clipping: ColumnState::Collapsed,
             compare_above_below: true,
             compare_locked: false,
@@ -1944,6 +1955,71 @@ mod tests {
             assert!(problems[0].contains(key), "{problems:?}");
             assert_eq!(settings.shell, ShellSettings::default(), "{key} = {value}");
             assert!(settings.create_iim, "{key} = {value}");
+        }
+    }
+
+    // ---------- the focus marking (ADR 0017 §2.6, U9-Q1, T168) ----------
+
+    #[test]
+    fn the_focus_marking_defaults_to_off() {
+        assert!(!ShellSettings::default().focus_marking);
+    }
+
+    #[test]
+    fn the_focus_marking_is_written_and_read() {
+        let dir = TempDir::new();
+        let path = dir.0.join("settings.txt");
+        for on in [true, false] {
+            let settings = Settings {
+                shell: ShellSettings {
+                    focus_marking: on,
+                    ..ShellSettings::default()
+                },
+                ..Settings::default()
+            };
+            save_settings(&path, &settings).unwrap();
+            let text = std::fs::read_to_string(&path).unwrap();
+            assert!(
+                text.contains(&format!("\nfocus_marking = {on}\n")),
+                "{text}"
+            );
+            let (loaded, problems) = load_settings(&path);
+            assert!(problems.is_empty(), "{problems:?}");
+            assert_eq!(loaded, settings);
+        }
+        // read from the file's value; nothing else changes
+        let (_dir, path) = TempDir::with_file("# RawStride\nfocus_marking = true\n");
+        let (settings, problems) = load_settings(&path);
+        assert!(problems.is_empty(), "{problems:?}");
+        assert_eq!(
+            settings.shell,
+            ShellSettings {
+                focus_marking: true,
+                ..ShellSettings::default()
+            }
+        );
+    }
+
+    #[test]
+    fn a_file_without_the_focus_marking_gives_off_and_no_problem() {
+        let (_dir, path) =
+            TempDir::with_file("# RawStride\ncreate_iim = true\nclip_highlights = true\n");
+        let (settings, problems) = load_settings(&path);
+        assert!(problems.is_empty(), "{problems:?}");
+        assert!(!settings.shell.focus_marking);
+    }
+
+    #[test]
+    fn a_bad_value_of_the_focus_marking_keeps_off_and_names_the_line() {
+        for value in ["on", "open", "1", ""] {
+            let (_dir, path) = TempDir::with_file(&format!(
+                "# RawStride\ncreate_iim = true\nfocus_marking = {value}\n"
+            ));
+            let (settings, problems) = load_settings(&path);
+            assert_one_problem_on_line(&problems, 3);
+            assert!(problems[0].contains("focus_marking"), "{problems:?}");
+            assert_eq!(settings.shell, ShellSettings::default(), "{value}");
+            assert!(settings.create_iim, "{value}");
         }
     }
 

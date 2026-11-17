@@ -464,6 +464,9 @@ pub enum Command {
     /// The preview's overlay that marks the deepest shadows on the image, on ↔ off (View ▸ Show
     /// Deep Shadows, Shift+J; U7b-Q5, T148).
     ClipShadows,
+    /// The preview's focus marking, the edges of high local contrast marked in green on the
+    /// image, on ↔ off (View ▸ Show Focus Marking, E; ADR 0017 §2.6, U9-Q1, T168).
+    FocusMarking,
     /// The compare open ↔ closed: two images in the preview, the held image beside or above the
     /// current one (View ▸ Compare, C; ADR 0017 §2.2, U6-Q4, U6-Q11, T153).
     Compare,
@@ -516,6 +519,7 @@ impl Command {
             | Self::ToggleAnchor
             | Self::ClipHighlights
             | Self::ClipShadows
+            | Self::FocusMarking
             | Self::Compare
             | Self::HoldImage
             | Self::SwapImages
@@ -692,6 +696,7 @@ pub const MENUS: &[Menu] = &[
             item(Command::ToggleAnchor, plain(Key::A)),
             item(Command::ClipHighlights, plain(Key::J)),
             item(Command::ClipShadows, shift(Key::J)),
+            item(Command::FocusMarking, plain(Key::E)),
             item(Command::Compare, plain(Key::C)),
             item(Command::HoldImage, plain(Key::K)),
             item(Command::SwapImages, shift(Key::K)),
@@ -1079,11 +1084,12 @@ mod tests {
             panic!("the View menu has Zoom at Pointer");
         };
         assert_eq!(
-            view.entries.get(anchor + 1..anchor + 9),
+            view.entries.get(anchor + 1..anchor + 10),
             Some(
                 &[
                     item(Command::ClipHighlights, Some(j)),
                     item(Command::ClipShadows, Some(shift_j)),
+                    item(Command::FocusMarking, Some(KeyChord { key: Key::E, ..j })),
                     item(Command::Compare, Some(c)),
                     item(Command::HoldImage, Some(k)),
                     item(Command::SwapImages, Some(shift_k)),
@@ -1092,6 +1098,50 @@ mod tests {
                     MenuEntry::Separator,
                 ][..]
             )
+        );
+    }
+
+    /// View ▸ Show Focus Marking (E) comes right after Show Deep Shadows, acts in the preview, and
+    /// no other item has the key E (ADR 0017 §2.6, U9-Q1, T168).
+    #[test]
+    fn the_focus_marking_command_has_e_right_after_show_deep_shadows() {
+        let e = KeyChord {
+            key: Key::E,
+            ctrl: false,
+            shift: false,
+            alt: false,
+        };
+        assert_eq!(plain(Key::E), Some(e));
+        let items = menu_items();
+        for item in &items {
+            if item.key.is_some_and(|chord| chord.key == Key::E) {
+                assert_eq!(
+                    item.command,
+                    Command::FocusMarking,
+                    "{:?} has E",
+                    item.command
+                );
+            }
+        }
+        assert!(
+            items
+                .iter()
+                .any(|item| item.command == Command::FocusMarking && item.key == Some(e))
+        );
+        assert_eq!(Command::FocusMarking.acts_in(), Where::Loupe);
+        let Some(view) = MENUS.iter().find(|menu| menu.kind == MenuKind::View) else {
+            panic!("there is a View menu");
+        };
+        let Some(shadows) = view
+            .entries
+            .iter()
+            .position(|entry| *entry == item(Command::ClipShadows, shift(Key::J)))
+        else {
+            panic!("the View menu has Show Deep Shadows");
+        };
+        assert_eq!(
+            view.entries.get(shadows + 1),
+            Some(&item(Command::FocusMarking, Some(e)))
         );
     }
 

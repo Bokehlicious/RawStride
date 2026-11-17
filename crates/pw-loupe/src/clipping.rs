@@ -58,7 +58,7 @@ pub fn cell_rgba(bits: u8, choice: ClipChoice) -> [u8; 4] {
 /// One joining of 2 × 2 cells: `width` cells per row become `width / 2` rounded up, and so the
 /// rows. A joined cell has every bit that any of its cells has; a cell past an odd side counts
 /// as unmarked.
-fn join(width: usize, data: &[u8]) -> (usize, Vec<u8>) {
+pub(crate) fn join(width: usize, data: &[u8]) -> (usize, Vec<u8>) {
     let any = |cells: &[u8]| cells.iter().fold(0u8, |bits, cell| bits | cell);
     let joined_width = width.div_ceil(2);
     let mut joined = Vec::with_capacity(data.len().div_ceil(4));

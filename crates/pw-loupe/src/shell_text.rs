@@ -327,6 +327,7 @@ pub fn command_text(command: Command) -> String {
         Command::ToggleAnchor => "Zoom at Pointer".to_owned(),
         Command::ClipHighlights => "Show Clipped Highlights".to_owned(),
         Command::ClipShadows => "Show Deep Shadows".to_owned(),
+        Command::FocusMarking => "Show Focus Marking".to_owned(),
         Command::Compare => "Compare".to_owned(),
         Command::HoldImage => "Hold Current Image".to_owned(),
         Command::SwapImages => "Swap Images".to_owned(),
@@ -451,6 +452,7 @@ mod tests {
                 "Zoom at Pointer",
                 "Show Clipped Highlights",
                 "Show Deep Shadows",
+                "Show Focus Marking",
                 "Compare",
                 "Hold Current Image",
                 "Swap Images",
@@ -505,6 +507,7 @@ mod tests {
             Some("A"),
             Some("J"),
             Some("Shift+J"),
+            Some("E"),
             Some("C"),
             Some("K"),
             Some("Shift+K"),
@@ -581,6 +584,18 @@ mod tests {
         };
         assert_eq!(key_of(Command::ClipHighlights).as_deref(), Some("J"));
         assert_eq!(key_of(Command::ClipShadows).as_deref(), Some("Shift+J"));
+    }
+
+    /// The focus marking's menu item (ADR 0017 §2.6, U9-Q1, T168).
+    #[test]
+    fn the_focus_marking_menu_item_and_its_key() {
+        assert_eq!(command_text(Command::FocusMarking), "Show Focus Marking");
+        let key = menu_items()
+            .into_iter()
+            .find(|item| item.command == Command::FocusMarking)
+            .and_then(|item| item.key)
+            .map(key_text);
+        assert_eq!(key.as_deref(), Some("E"));
     }
 
     /// The compare's menu items (ADR 0017 U6-Q12, T153, T154).

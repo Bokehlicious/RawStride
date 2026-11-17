@@ -10,6 +10,7 @@ mod compare;
 mod editor;
 mod field_values;
 mod filter;
+pub mod focus;
 mod grid;
 mod histogram;
 mod import;
@@ -359,6 +360,9 @@ pub enum PreviewKey {
     ClipHighlights,
     /// `Shift+J`: the overlay that marks the deepest shadows on the image, on ↔ off (U7b-Q5).
     ClipShadows,
+    /// `E`: the focus marking (the edges of high local contrast marked on the image), on ↔ off
+    /// (ADR 0017 §2.6, U9-Q1, T168).
+    FocusMarking,
     /// `C`: the compare open ↔ closed (ADR 0017 §2.2, U6-Q4, U6-Q11, T153).
     Compare,
     /// `K`: the current image becomes the held image of the compare (U6-Q6).
@@ -392,6 +396,7 @@ pub fn preview_key_action(
         // J and Shift+J are told apart here: the loupe's `key_action` does not look at Shift.
         (K::J, false, false, false) => Some(PreviewKey::ClipHighlights),
         (K::J, false, true, false) => Some(PreviewKey::ClipShadows),
+        (K::E, false, false, false) => Some(PreviewKey::FocusMarking),
         // The compare's keys (T153); K and Shift+K are told apart as J and Shift+J.
         (K::C, false, false, false) => Some(PreviewKey::Compare),
         (K::K, false, false, false) => Some(PreviewKey::HoldImage),
@@ -1004,6 +1009,7 @@ mod tests {
                 match preview_key_action(key, ctrl, shift, alt) {
                     Some(PreviewKey::ClipHighlights) => return Some(Command::ClipHighlights),
                     Some(PreviewKey::ClipShadows) => return Some(Command::ClipShadows),
+                    Some(PreviewKey::FocusMarking) => return Some(Command::FocusMarking),
                     Some(PreviewKey::Compare) => return Some(Command::Compare),
                     Some(PreviewKey::HoldImage) => return Some(Command::HoldImage),
                     Some(PreviewKey::SwapImages) => return Some(Command::SwapImages),
@@ -1302,6 +1308,62 @@ mod tests {
             assert_eq!(rating_key_action(K::L, false, shift, false), None);
             assert_eq!(shell_key_action(K::L, false, shift, false), None);
             assert_eq!(tab_action(K::L, false, shift, false), None);
+        }
+    }
+
+    /// E is the preview's focus marking key (ADR 0017 §2.6, U9-Q1, T168): only with no modifier,
+    /// the command Show Focus Marking, nothing in the contact sheet, and no key of another key map.
+    #[test]
+    fn e_is_the_focus_marking_key_of_the_preview() {
+        use egui::Key as K;
+        assert_eq!(
+            preview_key_action(K::E, false, false, false),
+            Some(PreviewKey::FocusMarking)
+        );
+        let chord = KeyChord {
+            key: K::E,
+            ctrl: false,
+            shift: false,
+            alt: false,
+        };
+        assert_eq!(
+            command_of_key(chord, ViewMode::Loupe),
+            Some(Command::FocusMarking)
+        );
+        // Nothing in the contact sheet.
+        assert_eq!(command_of_key(chord, ViewMode::Grid), None);
+        // An item of the menu, so the every-menu-key test covers it.
+        assert!(
+            shell::menu_items()
+                .iter()
+                .any(|item| item.command == Command::FocusMarking && item.key == Some(chord))
+        );
+        // With any modifier, E is no key of the preview.
+        for (ctrl, shift, alt) in [
+            (true, false, false),
+            (false, true, false),
+            (false, false, true),
+            (true, true, false),
+            (false, true, true),
+            (true, false, true),
+            (true, true, true),
+        ] {
+            assert_eq!(
+                preview_key_action(K::E, ctrl, shift, alt),
+                None,
+                "ctrl {ctrl} shift {shift} alt {alt}"
+            );
+        }
+        // E is no key of the loupe, the contact sheet, the ratings, the shell or the tabs.
+        for ctrl in [false, true] {
+            assert_eq!(key_action(K::E, ctrl, false), None);
+            assert_eq!(loupe_key_action(K::E, ctrl, false), None);
+            for shift in [false, true] {
+                assert_eq!(grid_key_action(K::E, ctrl, shift, false), None);
+                assert_eq!(rating_key_action(K::E, ctrl, shift, false), None);
+                assert_eq!(shell_key_action(K::E, ctrl, shift, false), None);
+                assert_eq!(tab_action(K::E, ctrl, shift, false), None);
+            }
         }
     }
 

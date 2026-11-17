@@ -1,4 +1,4 @@
-# T168. ADR 0017 U9a, second part: the focus marking key, menu item and drawing — Open
+# T168. ADR 0017 U9a, second part: the focus marking key, menu item and drawing — Done
 
 - **Chain:** T167 → T168. The owner's answers U9-Q1–U9-Q4 are in ADR 0017 §6.1 (2026-11-17).
 - **Why:** ADR 0017 §2.6, step U9a. T167 gives the current image's focus map in the view core's
@@ -95,3 +95,6 @@
 | 2026-11-17 | Blocked | Added for ADR 0017 U9a; waits for T167. Nine files, one of them a visibility change in `clipping.rs` (reviewer: accepted rather than copying `join`) |
 | 2026-11-17 | Blocked | Cold read: doable with the named files; E is free in every key map. Changed: `Command::FocusMarking` and its places (`acts_in`, `command_text`, `command_checked`, `run_command`, `command_of_key`, the `PreviewKey` match) named; `e_does_nothing` left as it is; `close_compare` releases the second side's focus wish and texture; `pub mod focus`; the `uv_scale` rule repeated, not shared; the glossary row in the clipping rows' form; the existing list tests to extend named (point 8); `src/focus.rs` in the inventory |
 | 2026-11-17 | Open | T167 done; the point "Time of the map, before the hand check" added from its review |
+| 2026-11-17 | Ready for review | Points 1–8 and the tests done; `.\tools\check.ps1` all OK (1746 passed, 65 ignored, 0 failed; clippy no warnings). Point 8 also extended `shell_text.rs`'s list of every menu key (`every_menu_key_text_in_menu_order`, `Some("E")` added). Not done: "Time of the map, before the hand check": `latency.ps1` drives the owner's screen and keyboard, and the program does not show or log `Stats::focus_ms`, so the median needs the owner's run and a way to read the stats |
+| 2026-11-17 | Ready for review | Review: points 1–8 and the tests are approved (`focus.rs`, the key, menu item, setting and drawing as written; `.\tools\check.ps1` all OK). Two lines are over 100 characters (the doc comment of `draw_image_area`, the format string in `settings.rs`); left as they are. The point "Time of the map, before the hand check" could not be done as written (`latency.ps1` is not in the repository or under `pm-study\tools`, and `Stats::focus_ms` is not shown): it is now T176, run before the hand check. |
+| 2026-11-17 | Done | Approved by the owner and committed; the hand check of U9a follows T176. Leftovers: the time of the map is T176; the marks released while the next map is made (they may flicker when stepping) are for the hand check, noted in `plans/` row U9a; the two long lines need nothing. No owner decision to record in an ADR |
