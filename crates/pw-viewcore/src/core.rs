@@ -8,7 +8,7 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use crate::backend::{Backend, DecodeError, Source};
+use crate::backend::{Backend, DecodeError, FocusMap, Rgb, Source};
 use crate::scale;
 use crate::state::{Config, Frame, Record, State, Stats, Task, ViewKind, ViewOut, ZOOM_STEP, Zoom};
 
@@ -126,6 +126,23 @@ impl<B: Backend> Shared<B> {
                     let ms = t0.elapsed().as_secs_f64() * 1000.0;
                     let mut s = self.state();
                     s.finish_clipping(generation, key, session, result, ms);
+                }
+                Task::Focus {
+                    generation,
+                    key,
+                    mut session,
+                } => {
+                    // from the image's own half-size render, the pixels the view draws at fit
+                    // (ADR 0017 U9-Q2)
+                    let result = self
+                        .backend
+                        .render_half(&mut session)
+                        .ok()
+                        .filter(Rgb::is_consistent)
+                        .and_then(|img| FocusMap::of_rgb8(img.width, img.height, &img.data));
+                    let ms = t0.elapsed().as_secs_f64() * 1000.0;
+                    let mut s = self.state();
+                    s.finish_focus(generation, key, session, result, ms);
                 }
             }
             self.cv.notify_all();
@@ -290,6 +307,23 @@ impl<B: Backend> ViewCore<B> {
                 return;
             }
             s.clipping_wanted = wanted;
+        }
+        self.shared.cv.notify_all();
+        self.shared.wake_ui();
+    }
+
+    /// Whether the focus marking wants the current image's focus map (ADR 0017 U9a): the shell
+    /// sets it while the focus marking is on. While it is set, the map of the current image is
+    /// made from its half-size render after its statistics and its clipping map, and given in
+    /// [`Frame::focus`]; while it is not, no map is asked for. Not a user request: nothing is
+    /// recorded.
+    pub fn set_focus_wanted(&self, wanted: bool) {
+        {
+            let mut s = self.shared.state();
+            if s.focus_wanted == wanted {
+                return;
+            }
+            s.focus_wanted = wanted;
         }
         self.shared.cv.notify_all();
         self.shared.wake_ui();
@@ -740,6 +774,56 @@ mod tests {
         assert!(Arc::ptr_eq(&map, &again));
         std::thread::sleep(Duration::from_millis(100));
         assert_eq!(core.stats().clipping_maps, 1);
+    }
+
+    // ---------- the focus map (ADR 0017 U9a, T167) ----------
+
+    use crate::state::FocusState;
+
+    #[test]
+    fn the_workers_make_the_focus_map_from_the_half_size_render_only_while_it_is_wanted() {
+        let core = match ViewCore::start(Mapped, Config::default()) {
+            Ok(c) => c,
+            Err(e) => panic!("start: {e}"),
+        };
+        core.open_folder(vec![PathBuf::from(A)]);
+        // not wanted: the statistics are asked (this decoder has none), no map
+        let f = frames_until(&core, |f| f.statistics.is_some());
+        assert_eq!(f.statistics, Some(ImageStatistics::Unavailable));
+        assert_eq!(f.focus, FocusState::NotWanted);
+        std::thread::sleep(Duration::from_millis(100));
+        assert_eq!(core.stats().focus_maps, 0);
+
+        core.set_focus_wanted(true);
+        let f = frames_until(&core, |f| f.focus != FocusState::Reading);
+        let FocusState::Ready { map, uv } = f.focus else {
+            panic!("expected the map, got {:?}", f.focus);
+        };
+        // one cell of 2 × 2 per pixel of the decoder's own half-size render, 200 × 150
+        assert_eq!((map.cell, map.width, map.height), (2, 200, 150));
+        let half = rgb(200, 150);
+        assert_eq!(
+            Some(map.as_ref()),
+            FocusMap::of_rgb8(half.width, half.height, &half.data).as_ref()
+        );
+        // the whole image is drawn, and the map covers it
+        assert_eq!(uv, [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]]);
+        assert_eq!(core.stats().focus_maps, 1);
+        assert_eq!(core.stats().focus_ms.len(), 1);
+        // the clipping map was not asked for
+        assert_eq!(f.clipping, ClippingState::NotWanted);
+        assert_eq!(core.stats().clipping_maps, 0);
+
+        // off and on again: the same map, not made again
+        core.set_focus_wanted(false);
+        assert_eq!(core.frame([800, 600]).focus, FocusState::NotWanted);
+        core.set_focus_wanted(true);
+        let FocusState::Ready { map: again, .. } = core.frame([800, 600]).focus else {
+            panic!("the map was not kept");
+        };
+        assert!(Arc::ptr_eq(&map, &again));
+        std::thread::sleep(Duration::from_millis(100));
+        assert_eq!(core.stats().focus_maps, 1);
     }
 
     #[test]

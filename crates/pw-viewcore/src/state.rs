@@ -7,7 +7,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use crate::backend::{ClippingMap, DecodeError, ImageStatistics, Rgb, Source, Statistics};
+use crate::backend::{
+    ClippingMap, DecodeError, FocusMap, ImageStatistics, Rgb, Source, Statistics,
+};
 use crate::geometry::{self, ImageSize, Rect, RectF};
 
 /// Settings of the core. Both budgets are user settings (V8); in milestone 1 they come from the
@@ -168,6 +170,31 @@ pub enum ClippingState {
     },
 }
 
+/// The focus map of the current image in its display mode, for the focus marking (ADR 0017 §2.6,
+/// U9a). Given by the rules of [`ClippingState`].
+#[derive(Clone, Debug, PartialEq)]
+pub enum FocusState {
+    /// The focus marking is off ([`crate::ViewCore::set_focus_wanted`]); no map is asked for.
+    NotWanted,
+    /// Wanted and not there yet: the map is being made, or the view on the screen is still an
+    /// earlier image's.
+    Reading,
+    /// This file has none (its half-size render failed or is too small, the file cannot be
+    /// shown, or there is no image).
+    Unavailable,
+    /// The map, to be drawn over the image of [`Frame::draw`].
+    Ready {
+        /// The same `Arc` for as long as the map is kept, so a new map is told from the one
+        /// already uploaded with `Arc::ptr_eq`.
+        map: Arc<FocusMap>,
+        /// The map's texture coordinates at the corners of the drawn image ([`Draw::dest`]): top
+        /// left, top right, bottom right, bottom left, as [`Draw::uv`] (orientation, zoom and
+        /// position are in these). The map covers the whole image, as the half-size view does,
+        /// so 1.0 is the image's right or bottom edge.
+        uv: [[f32; 2]; 4],
+    },
+}
+
 /// Everything the presentation needs for one frame.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Frame {
@@ -200,6 +227,9 @@ pub struct Frame {
     /// The clipping map of the current image in its display mode, when an overlay wants one
     /// (ADR 0017 §2.6, U7b).
     pub clipping: ClippingState,
+    /// The focus map of the current image in its display mode, when the focus marking is on
+    /// (ADR 0017 §2.6, U9a).
+    pub focus: FocusState,
 }
 
 /// One user request, for measurement (ADR 0009 §5.2; the P5 event format).
@@ -237,10 +267,16 @@ pub struct Stats {
     /// How many times an image's clipping map was asked of the backend, and how long each took.
     pub clipping_maps: u64,
     pub clipping_ms: Vec<f64>,
+    /// How many times an image's focus map was made, and how long each took.
+    pub focus_maps: u64,
+    pub focus_ms: Vec<f64>,
 }
 
 /// How many clipping maps are kept: those of the images shown last (ADR 0017 U7b-Q8).
 pub(crate) const KEPT_CLIPPING_MAPS: usize = 4;
+
+/// How many focus maps are kept: those of the images shown last (ADR 0017 U9a, as U7b-Q8).
+pub(crate) const KEPT_FOCUS_MAPS: usize = 4;
 
 /// An image in one display mode: a position in the folder and where the pixels come from.
 pub(crate) type Key = (usize, Source);
@@ -294,20 +330,27 @@ pub(crate) enum Job {
     Statistics(Key),
     /// The clipping map of an opened image (ADR 0017 U7b-Q8).
     Clipping(Key),
+    /// The focus map of an opened image, from its half-size render (ADR 0017 U9a).
+    Focus(Key),
 }
 
 impl Job {
     pub fn key(self) -> Key {
         match self {
-            Job::Open(k) | Job::Render(k, _) | Job::Statistics(k) | Job::Clipping(k) => k,
+            Job::Open(k)
+            | Job::Render(k, _)
+            | Job::Statistics(k)
+            | Job::Clipping(k)
+            | Job::Focus(k) => k,
         }
     }
 }
 
-/// What a session lent for its statistics or its clipping map is booked under where a lent
-/// session is booked by the view it renders (`lent_paths`, `released`): no view, which no render
-/// job has. The two share it: an image's session is lent to one job at a time, and no new session
-/// of the image is opened while a job of it runs, so the two are never booked at the same time.
+/// What a session lent for its statistics, its clipping map or its focus map is booked under where
+/// a lent session is booked by the view it renders (`lent_paths`, `released`): no view, which no
+/// render job has. The three share it: an image's session is lent to one job at a time, and no new
+/// session of the image is opened while a job of it runs, so no two of them are ever booked at
+/// the same time.
 const STATISTICS_LEND: JobView = JobView {
     kind: ViewKind::Half,
     region: Rect::new(0, 0, 0, 0),
@@ -343,6 +386,11 @@ pub(crate) enum Task<S> {
         session: S,
     },
     Clipping {
+        generation: u64,
+        key: Key,
+        session: S,
+    },
+    Focus {
         generation: u64,
         key: Key,
         session: S,
@@ -397,6 +445,15 @@ pub(crate) struct State<S> {
     /// The opened images that were asked for a clipping map and have none (or making it
     /// failed): not asked again. Cleared and moved like `statistics`.
     pub clipping_none: HashSet<Key>,
+    /// The focus marking wants the current image's focus map (ADR 0017 U9a). Set by the shell; a
+    /// new folder or list of files does not change it.
+    pub focus_wanted: bool,
+    /// The focus maps of the images shown last, the one shown longest ago first; at most
+    /// [`KEPT_FOCUS_MAPS`]. Cleared and moved like `clipping_maps`.
+    pub focus_maps: Vec<(Key, Arc<FocusMap>)>,
+    /// The opened images that were asked for a focus map and have none (or making it failed):
+    /// not asked again. Cleared and moved like `clipping_none`.
+    pub focus_none: HashSet<Key>,
     sessions: HashMap<Key, Option<S>>,
     /// The generation each lent session (`None` in `sessions`) was lent in.
     lent: HashMap<Key, u64>,
@@ -461,6 +518,9 @@ impl<S> State<S> {
             clipping_wanted: false,
             clipping_maps: Vec::new(),
             clipping_none: HashSet::new(),
+            focus_wanted: false,
+            focus_maps: Vec::new(),
+            focus_none: HashSet::new(),
             sessions: HashMap::new(),
             lent: HashMap::new(),
             detached: HashMap::new(),
@@ -685,6 +745,8 @@ impl<S> State<S> {
         self.statistics.clear();
         self.clipping_maps.clear();
         self.clipping_none.clear();
+        self.focus_maps.clear();
+        self.focus_none.clear();
         self.failed.clear();
         self.inflight.clear();
         self.outbox.clear();
@@ -794,6 +856,12 @@ impl<S> State<S> {
             .filter_map(|(k, v)| to(k).map(|n| (n, v)))
             .collect();
         self.clipping_none = self.clipping_none.drain().filter_map(to).collect();
+        self.focus_maps = self
+            .focus_maps
+            .drain(..)
+            .filter_map(|(k, v)| to(k).map(|n| (n, v)))
+            .collect();
+        self.focus_none = self.focus_none.drain().filter_map(to).collect();
         self.failed = self
             .failed
             .drain()
@@ -1113,6 +1181,61 @@ impl<S> State<S> {
         self.clipping_maps.drain(..over);
     }
 
+    /// The job for the current image's focus map, when it is due (ADR 0017 U9a): by the rules of
+    /// [`State::clipping_job`] (only while the focus marking wants a map, once per image and
+    /// display mode, never for another image, when the image's statistics are due), and after
+    /// both: [`State::pick`] puts it behind the statistics' and the clipping job, and it waits
+    /// while either of them runs for the same image. A map that was kept and has been dropped since
+    /// (more than [`KEPT_FOCUS_MAPS`] images shown) is asked again; an image that has none is not.
+    fn focus_job(&self) -> Option<Job> {
+        if !self.focus_wanted {
+            return None;
+        }
+        let key = self.cur_key()?;
+        if self.focus_map(key).is_some()
+            || self.focus_none.contains(&key)
+            || self.failed.contains_key(&key)
+        {
+            return None;
+        }
+        if [Job::Statistics(key), Job::Clipping(key)]
+            .into_iter()
+            .any(|job| self.running.contains(&(self.generation, job)))
+        {
+            return None;
+        }
+        if self.in_gesture() || self.since.elapsed() < self.config.dwell {
+            return None;
+        }
+        let shown = self.req(key, Want::Shown)?;
+        self.serving(&shown)?;
+        if self.wants_a_full_size_view(key) {
+            return None;
+        }
+        Some(if self.sessions.contains_key(&key) {
+            Job::Focus(key)
+        } else {
+            Job::Open(key)
+        })
+    }
+
+    /// The kept focus map of `key`.
+    fn focus_map(&self, key: Key) -> Option<&Arc<FocusMap>> {
+        self.focus_maps
+            .iter()
+            .find(|(k, _)| *k == key)
+            .map(|(_, map)| map)
+    }
+
+    /// Keeps `map` as the focus map of the image shown last; of more than [`KEPT_FOCUS_MAPS`],
+    /// the one shown longest ago is dropped.
+    fn keep_focus_map(&mut self, key: Key, map: Arc<FocusMap>) {
+        self.focus_maps.retain(|(k, _)| *k != key);
+        self.focus_maps.push((key, map));
+        let over = self.focus_maps.len().saturating_sub(KEPT_FOCUS_MAPS);
+        self.focus_maps.drain(..over);
+    }
+
     /// Whether the plan wants a view of `key` at 100 % or more (a 100 % region) that no resident
     /// view serves yet (U7c-Q5).
     fn wants_a_full_size_view(&self, key: Key) -> bool {
@@ -1282,6 +1405,13 @@ impl<S> State<S> {
             && !jobs.contains(&job)
         {
             jobs.insert(first, job);
+            first += 1;
+        }
+        // The focus map, when the focus marking wants it, after both (U9a).
+        if let Some(job) = self.focus_job()
+            && !jobs.contains(&job)
+        {
+            jobs.insert(first, job);
         }
         for job in jobs {
             let key = job.key();
@@ -1387,6 +1517,25 @@ impl<S> State<S> {
                     self.lent.insert(key, generation);
                     self.running.insert((generation, job));
                     return Some(Task::Clipping {
+                        generation,
+                        key,
+                        session,
+                    });
+                }
+                Job::Focus(key) => {
+                    let Some(slot) = self.sessions.get_mut(&key) else {
+                        continue;
+                    };
+                    let Some(session) = slot.take() else {
+                        continue;
+                    };
+                    if let Some(path) = self.files.get(key.0) {
+                        self.lent_paths
+                            .insert((generation, key, STATISTICS_LEND), path.clone());
+                    }
+                    self.lent.insert(key, generation);
+                    self.running.insert((generation, job));
+                    return Some(Task::Focus {
                         generation,
                         key,
                         session,
@@ -1591,6 +1740,32 @@ impl<S> State<S> {
         }
     }
 
+    /// The focus map of an opened image was made (`ms` = how long it took; `None` = its half-size
+    /// render failed or gave no map). The session comes back as after a render; the map is kept
+    /// as the newest of the kept ones, and "none" is remembered so it is not asked again, unless
+    /// the list of files changed meanwhile.
+    pub fn finish_focus(
+        &mut self,
+        generation: u64,
+        key: Key,
+        session: S,
+        result: Option<FocusMap>,
+        ms: f64,
+    ) {
+        self.running.remove(&(generation, Job::Focus(key)));
+        self.stats.focus_maps += 1;
+        self.stats.focus_ms.push(ms);
+        if !self.return_session(generation, key, STATISTICS_LEND, session) {
+            return;
+        }
+        match result {
+            Some(map) => self.keep_focus_map(key, Arc::new(map)),
+            None => {
+                self.focus_none.insert(key);
+            }
+        }
+    }
+
     fn remove_inflight(&mut self, generation: u64, key: Key, kind: ViewKind, region: Rect) {
         if let Some(i) = self.inflight.iter().position(|f| {
             f.generation == generation
@@ -1706,6 +1881,11 @@ impl<S> State<S> {
             } else {
                 ClippingState::NotWanted
             },
+            focus: if self.focus_wanted {
+                FocusState::Unavailable
+            } else {
+                FocusState::NotWanted
+            },
         };
         let Some(key) = key else {
             self.last_draw = None;
@@ -1757,6 +1937,9 @@ impl<S> State<S> {
         if self.clipping_wanted {
             frame.clipping = self.clipping_state(key, frame.draw);
         }
+        if self.focus_wanted {
+            frame.focus = self.focus_state(key, frame.draw);
+        }
         frame
     }
 
@@ -1794,6 +1977,33 @@ impl<S> State<S> {
         // shown now: the last of the kept maps to be dropped
         self.keep_clipping_map(key, map.clone());
         ClippingState::Ready { map, uv }
+    }
+
+    /// The focus state of the current image `key` while a map is wanted and the image can be
+    /// shown, for a frame that draws `draw`, by the rules of [`State::clipping_state`]. The map
+    /// covers the whole image, as the half-size view it is made from does, whatever that
+    /// render's rounding.
+    fn focus_state(&mut self, key: Key, draw: Option<Draw>) -> FocusState {
+        if self.focus_none.contains(&key) {
+            return FocusState::Unavailable;
+        }
+        let of_current = |d: &Draw| {
+            self.resident.iter().any(|r| {
+                r.id == d.id && r.generation == self.generation && (r.pos, r.source) == key
+            })
+        };
+        let placed = draw
+            .filter(of_current)
+            .and(self.last_vis)
+            .zip(self.sizes.get(&key).copied())
+            .zip(self.focus_map(key).cloned());
+        let Some(((vis, size), map)) = placed else {
+            return FocusState::Reading;
+        };
+        let uv = geometry::corner_uvs(size, Rect::new(0, 0, size.w, size.h), vis);
+        // shown now: the last of the kept maps to be dropped
+        self.keep_focus_map(key, map.clone());
+        FocusState::Ready { map, uv }
     }
 
     fn touch(&mut self, id: u64) {
@@ -3719,6 +3929,422 @@ mod tests {
         let f = s.frame(VIEW);
         assert!(matches!(f.status, Status::Error(_)));
         assert_eq!(f.clipping, ClippingState::Unavailable);
+    }
+
+    // ---------- the focus map (ADR 0017 §2.6, U9a, T167) ----------
+
+    /// A focus map of the half-size render of an image of `SIZE` (one cell of 2 × 2 per pixel of
+    /// the render) whose first cell is `first`, to tell maps apart.
+    fn edges(first: u8) -> FocusMap {
+        let (width, height) = (SIZE.w / 2, SIZE.h / 2);
+        let mut data = vec![0; (width * height) as usize];
+        data[0] = first;
+        FocusMap {
+            cell: 2,
+            width,
+            height,
+            data,
+        }
+    }
+
+    fn is_focus(task: &Option<Task<u32>>) -> bool {
+        matches!(task, Some(Task::Focus { .. }))
+    }
+
+    /// The focus task the interactive worker gets now.
+    fn lend_for_focus(s: &mut State<u32>) -> (u64, Key, u32) {
+        match s.pick(true) {
+            Some(Task::Focus {
+                generation,
+                key,
+                session,
+            }) => (generation, key, session),
+            other => panic!("expected a focus task, got {other:?}"),
+        }
+    }
+
+    /// Goes to image `pos`, shows it, and makes its focus map `edges(first)` as the workers do.
+    fn show_with_focus_map(s: &mut State<u32>, pos: usize, first: u8) {
+        s.go(pos);
+        s.since = Instant::now() - Duration::from_secs(1);
+        show_with_statistics(s, pos);
+        let (generation, key, session) = lend_for_focus(s);
+        assert_eq!(key, k(pos));
+        s.finish_focus(generation, key, session, Some(edges(first)), 1.0);
+        assert_eq!(ready_focus(&s.frame(VIEW)), Some(Arc::new(edges(first))));
+    }
+
+    /// The map of a frame whose focus state is "ready".
+    fn ready_focus(frame: &Frame) -> Option<Arc<FocusMap>> {
+        match &frame.focus {
+            FocusState::Ready { map, .. } => Some(map.clone()),
+            _ => None,
+        }
+    }
+
+    /// The keys of the kept focus maps, the one shown longest ago first.
+    fn kept_focus(s: &State<u32>) -> Vec<Key> {
+        s.focus_maps.iter().map(|(key, _)| *key).collect()
+    }
+
+    #[test]
+    fn no_focus_map_is_asked_while_the_focus_marking_is_off() {
+        let mut s = state(1024);
+        assert!(!s.focus_wanted);
+        // the clipping map wanted does not ask for a focus map
+        s.clipping_wanted = true;
+        show_with_statistics(&mut s, 10);
+        assert_eq!(s.focus_job(), None);
+        assert_eq!(s.frame(VIEW).focus, FocusState::NotWanted);
+        // a map kept from before is not given either
+        s.keep_focus_map(k(10), Arc::new(edges(1)));
+        assert_eq!(s.frame(VIEW).status, Status::Ready);
+        assert_eq!(s.frame(VIEW).focus, FocusState::NotWanted);
+        s.focus_maps.clear();
+        for _ in 0..8 {
+            let task = s.pick(true);
+            assert!(!is_focus(&task));
+            if let Some(Task::Clipping {
+                generation,
+                key,
+                session,
+            }) = task
+            {
+                s.finish_clipping(generation, key, session, Some(map(1)), 1.0);
+            }
+            assert!(!is_focus(&s.pick(false)));
+        }
+        assert_eq!(s.stats.focus_maps, 0);
+        assert!(s.focus_maps.is_empty() && s.focus_none.is_empty());
+    }
+
+    #[test]
+    fn a_wanted_focus_map_is_asked_once_after_the_first_view_the_statistics_and_the_clipping_map() {
+        let mut s = state(1024);
+        s.focus_wanted = true;
+        s.clipping_wanted = true;
+        s.finish_open(s.generation, k(10), Ok((10, SIZE)), mb24, 1.0);
+        // opened but nothing shown yet: the view comes first
+        assert_eq!(s.focus_job(), None);
+        assert_eq!(s.frame(VIEW).focus, FocusState::Reading);
+        let view = out(&s, 10, Want::Shown);
+        assert!(s.accept(&view, 1 << 20).is_some());
+        // the wanted 100 % view comes before the statistics and both maps (U7c-Q5)
+        assert_eq!(s.focus_job(), None);
+        let target = out(&s, 10, Want::Target);
+        assert!(s.accept(&target, 1 << 20).is_some());
+
+        // all three are due now; the statistics are picked first
+        assert_eq!(s.statistics_job(), Some(Job::Statistics(k(10))));
+        assert_eq!(s.clipping_job(), Some(Job::Clipping(k(10))));
+        assert_eq!(s.focus_job(), Some(Job::Focus(k(10))));
+        let (generation, key, session) = lend_for_statistics(&mut s);
+        // while the statistics are computed the focus map waits, on both workers
+        assert_eq!(s.focus_job(), None);
+        assert!(!is_focus(&s.pick(true)));
+        assert!(!is_focus(&s.pick(false)));
+        s.finish_statistics(generation, key, session, Some(statistics(0.5)), 1.0);
+
+        // then the clipping map, before the focus map
+        assert_eq!(s.focus_job(), Some(Job::Focus(k(10))));
+        let (generation, key, session) = lend_for_clipping(&mut s);
+        // while it is made the focus map waits, on both workers
+        assert_eq!(s.focus_job(), None);
+        assert!(!is_focus(&s.pick(true)));
+        assert!(!is_focus(&s.pick(false)));
+        s.finish_clipping(generation, key, session, Some(map(1)), 1.0);
+
+        // then the focus map, of the current image, with its session lent as for the statistics
+        assert_eq!(s.focus_job(), Some(Job::Focus(k(10))));
+        let (generation, key, session) = lend_for_focus(&mut s);
+        assert_eq!((key, session), (k(10), 10));
+        assert_eq!(
+            s.lent_paths.get(&(generation, key, STATISTICS_LEND)),
+            Some(&path(10))
+        );
+        // while it is made it is not asked a second time, by either worker
+        assert!(!is_focus(&s.pick(true)));
+        assert!(!is_focus(&s.pick(false)));
+        assert_eq!(s.frame(VIEW).focus, FocusState::Reading);
+
+        s.finish_focus(generation, key, session, Some(edges(1)), 2.0);
+        assert_eq!(ready_focus(&s.frame(VIEW)), Some(Arc::new(edges(1))));
+        // the session is back, and the map is not asked again for this image
+        assert!(matches!(s.sessions.get(&k(10)), Some(Some(10))));
+        assert!(s.lent.is_empty() && s.lent_paths.is_empty());
+        assert_eq!(s.focus_job(), None);
+        for _ in 0..8 {
+            assert!(!is_focus(&s.pick(true)));
+            assert!(!is_focus(&s.pick(false)));
+        }
+        assert_eq!(s.stats.focus_maps, 1);
+        assert_eq!(s.stats.focus_ms, vec![2.0]);
+    }
+
+    #[test]
+    fn the_focus_map_waits_for_the_dwell_and_for_a_zoom_gesture_and_is_not_asked_for_a_neighbour() {
+        let mut s = state(1024);
+        s.focus_wanted = true;
+        show_with_statistics(&mut s, 10);
+        // the image just became current: stepping through images starts no map
+        s.since = Instant::now();
+        assert_eq!(s.focus_job(), None);
+        assert!(!is_focus(&s.pick(true)));
+        s.since = Instant::now() - Duration::from_secs(1);
+        s.gesture_at = Some(Instant::now());
+        assert_eq!(s.focus_job(), None);
+        s.gesture_at = None;
+        assert_eq!(s.focus_job(), Some(Job::Focus(k(10))));
+
+        // the neighbours the plan prefetches are opened and have their views; only the current
+        // image's map is asked, by either worker
+        for pos in [9, 11, 12] {
+            open_and_show(&mut s, pos);
+        }
+        let mut asked = Vec::new();
+        for turn in 0..64 {
+            if let Some(Task::Focus {
+                generation,
+                key,
+                session,
+            }) = s.pick(turn % 2 == 1)
+            {
+                asked.push(key);
+                s.finish_focus(generation, key, session, Some(edges(1)), 1.0);
+            }
+        }
+        assert_eq!(asked, vec![k(10)]);
+        assert_eq!(kept_focus(&s), vec![k(10)]);
+    }
+
+    #[test]
+    fn a_file_without_a_focus_map_says_so_and_is_not_asked_again() {
+        let mut s = state(1024);
+        s.focus_wanted = true;
+        show_with_statistics(&mut s, 10);
+        let (generation, key, session) = lend_for_focus(&mut s);
+        // its half-size render failed, or gave no map
+        s.finish_focus(generation, key, session, None, 1.0);
+        assert_eq!(s.frame(VIEW).focus, FocusState::Unavailable);
+        assert!(matches!(s.sessions.get(&k(10)), Some(Some(10))));
+        assert_eq!(s.focus_job(), None);
+        for _ in 0..8 {
+            assert!(!is_focus(&s.pick(true)));
+            assert!(!is_focus(&s.pick(false)));
+        }
+        assert_eq!(s.stats.focus_maps, 1);
+        // remembered for that image and mode only, also when it is shown again
+        s.go(11);
+        s.go(10);
+        s.since = Instant::now() - Duration::from_secs(1);
+        assert_eq!(s.frame(VIEW).focus, FocusState::Unavailable);
+        assert_eq!(s.focus_job(), None);
+        s.set_mode(Source::Jpeg);
+        assert_eq!(s.frame(VIEW).focus, FocusState::Reading);
+
+        // a file that cannot be shown has no map and no job
+        let mut s = state(1024);
+        s.focus_wanted = true;
+        show_with_statistics(&mut s, 10);
+        s.failed.insert(k(10), DecodeError::new("too large"));
+        assert_eq!(s.focus_job(), None);
+        assert_eq!(s.frame(VIEW).focus, FocusState::Unavailable);
+
+        // an image whose session was closed is opened again for its map
+        let mut s = state(1024);
+        s.focus_wanted = true;
+        show_with_statistics(&mut s, 10);
+        s.drop_session(k(10));
+        assert_eq!(s.focus_job(), Some(Job::Open(k(10))));
+    }
+
+    #[test]
+    fn the_fifth_images_focus_map_drops_the_one_shown_longest_ago_which_is_asked_again() {
+        let mut s = state(1024);
+        s.focus_wanted = true;
+        for (pos, first) in [(10, 1), (11, 2), (12, 3), (13, 4)] {
+            show_with_focus_map(&mut s, pos, first);
+        }
+        assert_eq!(kept_focus(&s), vec![k(10), k(11), k(12), k(13)]);
+        // the fifth: image 10 was shown longest ago
+        show_with_focus_map(&mut s, 14, 5);
+        assert_eq!(kept_focus(&s), vec![k(11), k(12), k(13), k(14)]);
+
+        // image 11 is shown again: its map is still there and is now the one shown last
+        s.go(11);
+        s.since = Instant::now() - Duration::from_secs(1);
+        assert_eq!(s.focus_job(), None);
+        assert_eq!(ready_focus(&s.frame(VIEW)), Some(Arc::new(edges(2))));
+        assert_eq!(kept_focus(&s), vec![k(12), k(13), k(14), k(11)]);
+
+        // image 10 is shown again: its map is asked again, and image 12's is dropped
+        s.go(10);
+        s.since = Instant::now() - Duration::from_secs(1);
+        assert_eq!(s.frame(VIEW).status, Status::Ready);
+        assert_eq!(s.frame(VIEW).focus, FocusState::Reading);
+        assert_eq!(s.focus_job(), Some(Job::Focus(k(10))));
+        let (generation, key, session) = lend_for_focus(&mut s);
+        s.finish_focus(generation, key, session, Some(edges(6)), 1.0);
+        assert_eq!(ready_focus(&s.frame(VIEW)), Some(Arc::new(edges(6))));
+        assert_eq!(kept_focus(&s), vec![k(13), k(14), k(11), k(10)]);
+        assert_eq!(s.stats.focus_maps, 6);
+
+        // with the focus marking off, a dropped map is not asked again
+        s.focus_wanted = false;
+        s.go(12);
+        s.since = Instant::now() - Duration::from_secs(1);
+        assert_eq!(s.frame(VIEW).status, Status::Ready);
+        assert_eq!(s.focus_job(), None);
+    }
+
+    #[test]
+    fn focus_maps_follow_the_path_through_set_files_and_a_new_folder_empties_them() {
+        let mut s = state(1024);
+        s.focus_wanted = true;
+        show_with_focus_map(&mut s, 10, 1);
+        show_with_focus_map(&mut s, 11, 2);
+        s.focus_none.insert(k(12));
+        // image 3 drops out: images 10, 11 and 12 are now at positions 9, 10 and 11
+        s.set_files(without(20, &[3]), 9);
+        assert_eq!(
+            s.focus_maps,
+            vec![(k(9), Arc::new(edges(1))), (k(10), Arc::new(edges(2)))]
+        );
+        assert_eq!(s.focus_none, HashSet::from([k(11)]));
+        let f = s.frame(VIEW);
+        assert_eq!(f.path, Some(path(10)));
+        assert_eq!(ready_focus(&f), Some(Arc::new(edges(1))));
+        assert_eq!(s.focus_job(), None);
+        s.go(11);
+        assert_eq!(s.frame(VIEW).path, Some(path(12)));
+        assert_eq!(s.frame(VIEW).focus, FocusState::Unavailable);
+        // image 10 itself drops out: its map goes with it
+        s.set_files(without(20, &[3, 10]), 9);
+        assert_eq!(s.focus_maps, vec![(k(9), Arc::new(edges(2)))]);
+        assert_eq!(s.focus_none, HashSet::from([k(10)]));
+
+        // another folder empties them; the wish stays
+        s.open_folder(files(20));
+        assert!(s.focus_maps.is_empty() && s.focus_none.is_empty());
+        assert!(s.focus_wanted);
+        assert_eq!(s.frame(VIEW).focus, FocusState::Reading);
+        // no image: no map
+        s.open_folder(Vec::new());
+        assert_eq!(s.frame(VIEW).focus, FocusState::Unavailable);
+        s.focus_wanted = false;
+        assert_eq!(s.frame(VIEW).focus, FocusState::NotWanted);
+    }
+
+    #[test]
+    fn a_focus_map_finished_after_set_files_is_discarded_and_its_session_is_dropped() {
+        let mut s = state(1024);
+        s.focus_wanted = true;
+        show_with_statistics(&mut s, 10);
+        let (generation, key, session) = lend_for_focus(&mut s);
+        assert_eq!(s.session_bytes, 24 << 20);
+        s.set_files(without(20, &[3]), 9);
+        s.finish_focus(generation, key, session, Some(edges(1)), 1.0);
+        // neither the old key nor the image's new one got it, and the session is gone
+        assert!(s.focus_maps.is_empty() && s.focus_none.is_empty());
+        assert_eq!(s.session_bytes, 0);
+        assert!(s.detached.is_empty() && s.lent_paths.is_empty());
+        assert!(!s.sessions.contains_key(&k(9)));
+    }
+
+    #[test]
+    fn the_frame_gives_the_focus_map_over_the_whole_drawn_image_of_the_current_image_only() {
+        let mut s = state(1024);
+        s.focus_wanted = true;
+        // an image turned on its side (flip 6) with an odd width and height: its half-size render
+        // rounds up, so the map's cells reach one pixel past the image; the map still covers the
+        // whole image, as the half-size view does
+        let size = ImageSize {
+            w: 4001,
+            h: 3001,
+            flip: 6,
+        };
+        s.sizes.insert(k(10), size);
+        let half = s.accept(&out(&s, 10, Want::Fit), 100);
+        assert!(half.is_some());
+        let map = Arc::new(FocusMap {
+            cell: 2,
+            width: 2001,
+            height: 1501,
+            data: vec![0; 2001 * 1501],
+        });
+        s.keep_focus_map(k(10), map.clone());
+        let whole = Rect::new(0, 0, 4001, 3001);
+
+        // at fit: the whole image, with the same corners as the half-size view's own texture
+        let f = s.frame(VIEW);
+        assert_eq!(f.status, Status::Ready);
+        let draw = f.draw.unwrap();
+        assert_eq!(draw.id, half.unwrap());
+        let fit_vis = geometry::visible(size, VIEW, geometry::fit_scale(size, VIEW), s.centre);
+        let fit_uv = geometry::corner_uvs(size, whole, fit_vis);
+        let FocusState::Ready { map: given, uv } = &f.focus else {
+            panic!("expected the map, got {:?}", f.focus);
+        };
+        // the kept map itself, not a copy
+        assert!(Arc::ptr_eq(given, &map));
+        assert_eq!(*uv, fit_uv);
+        assert_eq!(*uv, draw.uv);
+        // the orientation is in them, and they span the whole image: 0 to 1 on both axes
+        assert_eq!(*uv, [[0.0, 1.0], [0.0, 0.0], [1.0, 0.0], [1.0, 1.0]]);
+
+        // a new zoom level is being prepared: the fit view stays on the screen (V2), and the
+        // map stays with it, placed as that view is
+        s.zoom = Zoom::Scale(0.7);
+        let f = s.frame(VIEW);
+        assert!(matches!(f.status, Status::Preparing { .. }));
+        assert_eq!(f.draw, Some(draw));
+        assert_eq!(
+            f.focus,
+            FocusState::Ready {
+                map: map.clone(),
+                uv: fit_uv
+            }
+        );
+        // the sharp view arrives: the map is placed on the zoomed view
+        let scaled = s.accept(&out(&s, 10, Want::Shown), 100);
+        let f = s.frame(VIEW);
+        assert_eq!(f.status, Status::Ready);
+        assert_eq!(f.draw.map(|d| d.id), scaled);
+        let zoomed_uv =
+            geometry::corner_uvs(size, whole, geometry::visible(size, VIEW, 0.7, s.centre));
+        assert_ne!(zoomed_uv, fit_uv);
+        assert_eq!(
+            f.focus,
+            FocusState::Ready {
+                map: map.clone(),
+                uv: zoomed_uv
+            }
+        );
+        // turned off: not given; on again: the kept map
+        s.focus_wanted = false;
+        assert_eq!(s.frame(VIEW).focus, FocusState::NotWanted);
+        s.focus_wanted = true;
+        assert_eq!(ready_focus(&s.frame(VIEW)), Some(map.clone()));
+
+        // the next image: the earlier image's view is kept on the screen (V2), so no map is
+        // given, not even the next image's own, until its view is drawn
+        s.go(11);
+        s.sizes.insert(k(11), SIZE);
+        s.keep_focus_map(k(11), Arc::new(edges(2)));
+        let f = s.frame(VIEW);
+        assert!(matches!(f.status, Status::Preparing { .. }));
+        assert_eq!(f.draw.map(|d| d.id), scaled);
+        assert_eq!(f.focus, FocusState::Reading);
+        let next = s.accept(&out(&s, 11, Want::Shown), 100);
+        let f = s.frame(VIEW);
+        assert_eq!(f.draw.map(|d| d.id), next);
+        assert_eq!(ready_focus(&f), Some(Arc::new(edges(2))));
+
+        // an error: nothing is drawn, and there is no map
+        s.failed.insert(k(11), DecodeError::new("damaged"));
+        let f = s.frame(VIEW);
+        assert!(matches!(f.status, Status::Error(_)));
+        assert_eq!(f.focus, FocusState::Unavailable);
     }
 
     // ---------- a view set from outside (ADR 0017 U6, T150) ----------

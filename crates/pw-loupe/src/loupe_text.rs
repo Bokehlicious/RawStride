@@ -244,6 +244,7 @@ mod tests {
             profile_unusable: false,
             statistics: None,
             clipping: pw_viewcore::ClippingState::NotWanted,
+            focus: pw_viewcore::FocusState::NotWanted,
         }
     }
 
@@ -347,6 +348,7 @@ mod tests {
             profile_unusable: false,
             statistics: None,
             clipping: pw_viewcore::ClippingState::NotWanted,
+            focus: pw_viewcore::FocusState::NotWanted,
         }
     }
 

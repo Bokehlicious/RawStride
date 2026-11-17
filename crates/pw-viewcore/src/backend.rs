@@ -290,6 +290,118 @@ impl ClippingMap {
     }
 }
 
+/// Where the edges of high local contrast of an opened image are, for the focus marking (ADR 0017
+/// §2.6, U9a): made from the half-size render of the whole image, the pixels the view draws at
+/// fit (U9-Q2), not from the RAW data.
+///
+/// The layout of [`ClippingMap`]: the image's pixel grid (sensor orientation, no flip applied) is
+/// divided into cells of `cell` × `cell` pixels, counted from its top left corner; the map has
+/// `width` × `height` cells, and `data` holds one byte per cell, row by row:
+/// [`EDGE`](Self::EDGE) when the cell is on an edge, 0 when it is not.
+#[derive(Clone, PartialEq, Eq)]
+pub struct FocusMap {
+    pub cell: u32,
+    pub width: u32,
+    pub height: u32,
+    pub data: Vec<u8>,
+}
+
+impl fmt::Debug for FocusMap {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "FocusMap({}x{} cells of {}x{}, {} bytes)",
+            self.width,
+            self.height,
+            self.cell,
+            self.cell,
+            self.data.len()
+        )
+    }
+}
+
+impl FocusMap {
+    /// The cell is on an edge of high local contrast.
+    pub const EDGE: u8 = 1;
+    /// The least Sobel gradient `|gx| + |gy|` of the luminance (0–255) that marks an edge (U9-Q3;
+    /// the owner tunes it after the hand check).
+    pub const FOCUS_THRESHOLD: u16 = 160;
+    /// The side of a cell: a pixel of the half-size render covers 2 × 2 pixels of the image's
+    /// grid.
+    pub const HALF_CELL: u32 = 2;
+
+    /// The map of a half-size render of `width` × `height` 8-bit RGB pixels (3 bytes per pixel,
+    /// rows top to bottom), one cell per pixel of the render: a pixel gets [`EDGE`](Self::EDGE)
+    /// when the Sobel gradient `|gx| + |gy|` of the luminance `(54·R + 183·G + 19·B) >> 8` over
+    /// its 3 × 3 neighbours is at least [`FOCUS_THRESHOLD`](Self::FOCUS_THRESHOLD). The outermost
+    /// rows and columns have no full neighbourhood and are never marked. `None` for an image
+    /// narrower or lower than 3 pixels, or a buffer shorter than the image.
+    pub fn of_rgb8(width: u32, height: u32, data: &[u8]) -> Option<FocusMap> {
+        if width < 3 || height < 3 {
+            return None;
+        }
+        let w = usize::try_from(width).ok()?;
+        let h = usize::try_from(height).ok()?;
+        let pixels = w.checked_mul(h)?;
+        let rgb = data.get(..pixels.checked_mul(3)?)?;
+        let luminance: Vec<u8> = rgb
+            .as_chunks::<3>()
+            .0
+            .iter()
+            .map(|&[r, g, b]| {
+                let y = (54 * u32::from(r) + 183 * u32::from(g) + 19 * u32::from(b)) >> 8;
+                u8::try_from(y).unwrap_or(u8::MAX)
+            })
+            .collect();
+        let threshold = i32::from(Self::FOCUS_THRESHOLD);
+        let mut map = vec![0u8; pixels];
+        let rows: Vec<&[u8]> = luminance.chunks(w).collect();
+        // every row but the first and the last, and in it every pixel but the first and the last:
+        // those with a full neighbourhood
+        for y in 1..h - 1 {
+            let (Some(above), Some(row), Some(below)) =
+                (rows.get(y - 1), rows.get(y), rows.get(y + 1))
+            else {
+                continue;
+            };
+            let start = y * w;
+            let Some(out) = map.get_mut(start + 1..start + w - 1) else {
+                continue;
+            };
+            let neighbourhoods = above.windows(3).zip(row.windows(3)).zip(below.windows(3));
+            for (((top, middle), bottom), value) in neighbourhoods.zip(out.iter_mut()) {
+                let (&[t0, t1, t2], &[m0, _, m2], &[b0, b1, b2]) = (top, middle, bottom) else {
+                    continue;
+                };
+                let [t0, t1, t2, m0, m2, b0, b1, b2] =
+                    [t0, t1, t2, m0, m2, b0, b1, b2].map(i32::from);
+                let gx = (t2 + 2 * m2 + b2) - (t0 + 2 * m0 + b0);
+                let gy = (b0 + 2 * b1 + b2) - (t0 + 2 * t1 + t2);
+                if gx.abs() + gy.abs() >= threshold {
+                    *value = Self::EDGE;
+                }
+            }
+        }
+        Some(FocusMap {
+            cell: Self::HALF_CELL,
+            width,
+            height,
+            data: map,
+        })
+    }
+
+    /// The byte of the cell in column `x` and row `y` (in cells); `None` outside the map.
+    pub fn at(&self, x: u32, y: u32) -> Option<u8> {
+        if x >= self.width || y >= self.height {
+            return None;
+        }
+        let index = (y as usize)
+            .checked_mul(self.width as usize)?
+            .checked_add(x as usize)?;
+        self.data.get(index).copied()
+    }
+}
+
 /// A decoder: open once, then render any number of views from the session. For RAW, opening
 /// unpacks the file; for JPEG it reads the JPEG and its header, and the full decode is made when
 /// a view needs it.
@@ -502,5 +614,169 @@ mod tests {
         let mut data = vec![0u8; 12];
         data.extend_from_slice(&[255; 6]);
         assert_eq!(ClippingMap::of_rgb8(2, 2, &data).unwrap().data, vec![DARK]);
+    }
+
+    // ---------- the focus map of the half-size render (ADR 0017 U9a, T167) ----------
+
+    const EDGE: u8 = FocusMap::EDGE;
+
+    /// `width` × `height` grey pixels, `left` up to column `step` (not included) and `right` from
+    /// there on: a vertical step whose luminance is the grey value itself.
+    fn vertical_step(width: u32, height: u32, step: u32, left: u8, right: u8) -> Vec<u8> {
+        let mut data = Vec::new();
+        for _ in 0..height {
+            for x in 0..width {
+                let v = if x < step { left } else { right };
+                data.extend_from_slice(&[v, v, v]);
+            }
+        }
+        data
+    }
+
+    /// The columns marked in each row.
+    fn marked_columns(map: &FocusMap) -> Vec<Vec<u32>> {
+        (0..map.height)
+            .map(|y| {
+                (0..map.width)
+                    .filter(|&x| map.at(x, y) == Some(EDGE))
+                    .collect()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_flat_image_has_no_edges() {
+        for value in [0, 128, 255] {
+            let data = vec![value; 6 * 5 * 3];
+            let map = FocusMap::of_rgb8(6, 5, &data).unwrap();
+            assert!(map.data.iter().all(|v| *v == 0), "value {value}");
+        }
+        // also a colour, whatever its luminance
+        let data = [200u8, 30, 90].repeat(4 * 4);
+        let map = FocusMap::of_rgb8(4, 4, &data).unwrap();
+        assert!(map.data.iter().all(|v| *v == 0));
+    }
+
+    #[test]
+    fn a_vertical_step_marks_the_cells_on_both_sides_of_it_and_nothing_else() {
+        // the step lies between columns 3 and 4: both get 4 · 100 = 400, the rest 0
+        let data = vertical_step(8, 5, 4, 20, 120);
+        let map = FocusMap::of_rgb8(8, 5, &data).unwrap();
+        let none: Vec<u32> = Vec::new();
+        assert_eq!(
+            marked_columns(&map),
+            vec![none.clone(), vec![3, 4], vec![3, 4], vec![3, 4], none]
+        );
+        // the other way round (dark on the right) is the same edge
+        let data = vertical_step(8, 5, 4, 120, 20);
+        assert_eq!(FocusMap::of_rgb8(8, 5, &data).unwrap(), map);
+        // a horizontal step too, turned
+        let mut data = Vec::new();
+        for y in 0..8 {
+            let v: u8 = if y < 4 { 20 } else { 120 };
+            data.extend_from_slice(&[v; 5 * 3]);
+        }
+        let map = FocusMap::of_rgb8(5, 8, &data).unwrap();
+        for y in 0..8 {
+            for x in 0..5 {
+                let edge = (1..4).contains(&x) && (y == 3 || y == 4);
+                assert_eq!(
+                    map.at(x, y),
+                    Some(if edge { EDGE } else { 0 }),
+                    "({x}, {y})"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_outermost_rows_and_columns_are_never_marked() {
+        // stripes two pixels wide, black and white: every inner pixel is next to a step, so every
+        // inner pixel is on an edge, and no outer one is marked
+        let mut data = Vec::new();
+        for _ in 0..6u32 {
+            for x in 0..7u32 {
+                let v = if x % 4 < 2 { 0 } else { 255 };
+                data.extend_from_slice(&[v, v, v]);
+            }
+        }
+        let map = FocusMap::of_rgb8(7, 6, &data).unwrap();
+        for y in 0..6 {
+            for x in 0..7 {
+                let outer = x == 0 || y == 0 || x == 6 || y == 5;
+                let want = if outer { 0 } else { EDGE };
+                assert_eq!(map.at(x, y), Some(want), "({x}, {y})");
+            }
+        }
+        // steps at the very edges: the pixels next to them are marked, the edge pixels are not
+        let data = vertical_step(6, 4, 1, 255, 0);
+        assert_eq!(
+            marked_columns(&FocusMap::of_rgb8(6, 4, &data).unwrap()),
+            vec![vec![], vec![1], vec![1], vec![]]
+        );
+    }
+
+    #[test]
+    fn a_step_just_below_the_threshold_is_not_marked_and_one_at_it_is() {
+        let threshold = u32::from(FocusMap::FOCUS_THRESHOLD);
+        // a step of luminance d gives 4 · d on both sides of it
+        let below = u8::try_from((threshold - 1) / 4).unwrap();
+        let at = u8::try_from(threshold.div_ceil(4)).unwrap();
+        assert!(4 * u32::from(below) < threshold);
+        assert!(4 * u32::from(at) >= threshold);
+        let marked = |d: u8| {
+            let data = vertical_step(6, 3, 3, 10, 10 + d);
+            marked_columns(&FocusMap::of_rgb8(6, 3, &data).unwrap())
+        };
+        let none: Vec<u32> = Vec::new();
+        assert_eq!(
+            marked(below),
+            vec![none.clone(), none.clone(), none.clone()]
+        );
+        assert_eq!(marked(at), vec![none.clone(), vec![2, 3], none.clone()]);
+        assert_eq!(marked(at + 1), vec![none.clone(), vec![2, 3], none]);
+    }
+
+    #[test]
+    fn the_luminance_weighs_the_channels_as_rec_709() {
+        // pure green of 255 has a luminance of 182 (183 · 255 >> 8), pure blue 18: only the green
+        // step is above the threshold
+        let step = |colour: [u8; 3]| {
+            let mut data = Vec::new();
+            for _ in 0..3 {
+                for x in 0..4 {
+                    data.extend_from_slice(&if x < 2 { [0, 0, 0] } else { colour });
+                }
+            }
+            FocusMap::of_rgb8(4, 3, &data).unwrap().at(1, 1)
+        };
+        assert_eq!(step([0, 255, 0]), Some(EDGE));
+        assert_eq!(step([0, 0, 255]), Some(0));
+    }
+
+    #[test]
+    fn the_map_has_one_cell_of_two_pixels_per_pixel_of_the_render() {
+        let data = vertical_step(9, 7, 4, 0, 255);
+        let map = FocusMap::of_rgb8(9, 7, &data).unwrap();
+        assert_eq!((map.cell, map.width, map.height), (2, 9, 7));
+        assert_eq!(map.data.len(), 9 * 7);
+        assert_eq!(map.at(9, 0), None);
+        assert_eq!(map.at(0, 7), None);
+        // the debug text does not print the data
+        assert_eq!(format!("{map:?}"), "FocusMap(9x7 cells of 2x2, 63 bytes)");
+    }
+
+    #[test]
+    fn too_small_an_image_or_too_few_bytes_give_no_focus_map() {
+        assert_eq!(FocusMap::of_rgb8(2, 2, &[0; 12]), None);
+        assert_eq!(FocusMap::of_rgb8(2, 5, &[0; 30]), None);
+        assert_eq!(FocusMap::of_rgb8(5, 2, &[0; 30]), None);
+        assert_eq!(FocusMap::of_rgb8(0, 0, &[]), None);
+        assert_eq!(FocusMap::of_rgb8(3, 3, &[0; 26]), None);
+        // the smallest: one inner pixel; bytes after the image are not read
+        let mut data = vertical_step(3, 3, 1, 0, 255);
+        data.extend_from_slice(&[255; 6]);
+        let map = FocusMap::of_rgb8(3, 3, &data).unwrap();
+        assert_eq!(map.data, vec![0, 0, 0, 0, EDGE, 0, 0, 0, 0]);
     }
 }

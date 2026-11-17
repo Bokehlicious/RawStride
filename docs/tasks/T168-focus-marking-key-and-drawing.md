@@ -1,4 +1,4 @@
-# T168. ADR 0017 U9a, second part: the focus marking key, menu item and drawing — Blocked: waits for T167
+# T168. ADR 0017 U9a, second part: the focus marking key, menu item and drawing — Open
 
 - **Chain:** T167 → T168. The owner's answers U9-Q1–U9-Q4 are in ADR 0017 §6.1 (2026-11-17).
 - **Why:** ADR 0017 §2.6, step U9a. T167 gives the current image's focus map in the view core's
@@ -76,6 +76,11 @@
   `pw-viewcore`) is done after the owner's hand check, as a log row here if the value changes.
 - **Rules:** AGENTS.md §3; `docs/tasks/README.md` rule 13 for the new text (in `shell_text.rs`, the
   glossary row in this task).
+- **Time of the map, before the hand check** (review of T167): T167's map costs an extra
+  half-size render while the image's session is lent (in RAW mode a LibRaw render). With the focus
+  marking on, run `latency.ps1` (stepping and Z, as for U7) on the owner's RAW test files and
+  report the median of `Stats::focus_ms` in this file's log; if stepping or Z is slower than
+  without the marking, say so before the hand check.
 - **Hand check by the owner** (ADR 0017 §7), for the whole step U9a: a RAW file with a sharp
   subject and a blurred background, and a JPEG: E marks the sharp edges in green at fit and at
   100 %, on a vertical image, in RAW and JPEG mode; the marks stay when stepping and zooming; with
@@ -89,3 +94,4 @@
 |---|---|---|
 | 2026-11-17 | Blocked | Added for ADR 0017 U9a; waits for T167. Nine files, one of them a visibility change in `clipping.rs` (reviewer: accepted rather than copying `join`) |
 | 2026-11-17 | Blocked | Cold read: doable with the named files; E is free in every key map. Changed: `Command::FocusMarking` and its places (`acts_in`, `command_text`, `command_checked`, `run_command`, `command_of_key`, the `PreviewKey` match) named; `e_does_nothing` left as it is; `close_compare` releases the second side's focus wish and texture; `pub mod focus`; the `uv_scale` rule repeated, not shared; the glossary row in the clipping rows' form; the existing list tests to extend named (point 8); `src/focus.rs` in the inventory |
+| 2026-11-17 | Open | T167 done; the point "Time of the map, before the hand check" added from its review |
