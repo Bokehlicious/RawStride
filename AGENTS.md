@@ -28,6 +28,7 @@
 - Follow `docs/clean-room.md`. RawStride is inspired by other culling tools, including Photo Mechanic, and must contain nothing derived from their code.
 - **Level E is always forbidden:** no decompiling, disassembling, debugger attachment or other analysis of Photo Mechanic's executables and libraries, with any tool (REA, Ghidra or similar).
 - Clean-room material and session outputs about other products stay outside the repository (`.gitignore`: `/pm-clean-room/`, `/Claude outputs/`).
+- **Naming other products** (`docs/clean-room.md`, owner 2026-11-17): only for interoperability with their files, public documentation as a reference (also for their documented technical design), and where a test file came from. Never write "as X does" or describe another program's interface, keys or workflow as the reason for a RawStride feature; write the requirement in RawStride's own words.
 
 ## 5. Building, Testing and Verification
 - Read `docs/TESTING.md` before changing production code or tests.

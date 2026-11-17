@@ -6,6 +6,8 @@ It must not contain anything derived from their code.
 - Policy revised: 2026-11-03 (methods A–E, approved by the project owner)
 - Revised 2026-11-04 by the owner: **level B allowed** within the limits below; E unchanged.
   The legal review behind the policy is kept outside the repository.
+- Revised 2026-11-17 by the owner: when another product may be named in the repository (below,
+  "Naming other products").
 
 ## Methods for studying other programs
 
@@ -44,6 +46,30 @@ See [rea-workflow.md](rea-workflow.md).
   observed output files, never from program internals.
 - When unsure whether a method is allowed, do not use it. Ask the project owner and
   record the decision here.
+
+## Naming other products (owner, 2026-11-17)
+
+Text in this repository (documents, ADRs, tasks, code, comments, tests and commit messages)
+describes RawStride in its own words. Another product is named only for:
+
+1. **Interoperability (level C):** files another program writes or reads, and what RawStride does
+   with them: names, fields and values seen in its output files, and checks that its files and
+   RawStride's work both ways. Example: "a sidecar `<stem>.XMP` in upper case, as Photo Mechanic
+   writes it, is read and written under that name."
+2. **Public documentation as a reference (level D)** for a file format, a field or a value, or
+   for another program's documented technical design (decoding, caching, colour handling) cited
+   as background for a RawStride architecture decision; listed in [references.md](references.md)
+   or cited where it is used. The decision itself is stated in RawStride's own terms.
+3. **Where a test file came from:** the program and version that wrote a level-C sample.
+4. **This policy, the agent rules and the trademark notice below.**
+
+Not allowed: another program's behaviour, interface, menus, keys, workflow or speed described as a
+model or a reason for a RawStride feature ("as X does", "X's shortcut is …"). A wish inspired by
+another program is written as RawStride's own requirement, without the name; the observation
+behind it stays outside the repository (above).
+
+Finished tasks in `docs/tasks/done/` are an archive and are kept as they were written; this rule
+applies to new text and to the current documents.
 
 ## Trademarks
 

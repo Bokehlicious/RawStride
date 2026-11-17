@@ -93,11 +93,12 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 | [T172](T172-move-rules-and-undo-list.md) | ADR 0017 U9b, fourth part: the move rules, the undo list, the tab's list and the texts | Blocked: waits for T171 |
 | [T173](T173-move-events-in-the-metadata-cache.md) | ADR 0017 U9b, fifth part: the move requests and answers in the shell's metadata part | Blocked: waits for T172 |
 | [T174](T174-move-keys-menu-and-undo.md) | ADR 0017 U9b, last part: the keys, the menu items, the moves and the undo in the shell | Blocked: waits for T173 |
+| [T175](T175-other-products-named-by-the-clean-room-rule.md) | Other products named only as the clean-room rule allows (docs) | Open |
 
 ## Writing a task (owner and reviewer)
 
-- **Number:** the next free number after the highest in this folder and `done/` (T175 next).
-- **File:** `docs/tasks/T175-<a-few-words>.md`; three digits, lower case, words joined by `-`.
+- **Number:** the next free number after the highest in this folder and `done/` (T176 next).
+- **File:** `docs/tasks/T176-<a-few-words>.md`; three digits, lower case, words joined by `-`.
 - **Index:** add a row to "Open tasks" above and keep its status in step with the file's heading.
 - **Size (owner, 2026-11-15, after T142):** one task is one layer (a C++ shim or a core crate, or
   the shell in `pw-loupe`), about eight files at most, and gives one result the owner can check by
@@ -137,7 +138,7 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 Skeleton (the fields recent tasks use; leave out those that do not apply):
 
 ```markdown
-# T175. <Title> — Open
+# T176. <Title> — Open
 
 - **Why:** …
 - **Crates:** … **Files:** …

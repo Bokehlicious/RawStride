@@ -130,11 +130,6 @@ and reviewer:
     `RawStride` repository after renaming the old one (kept private and archived), and turn on
     "Block command line pushes that expose my email".
   - *A trademark search* for the name RawStride (ADR 0012, ADR 0002 §4).
-  - *The clean-room policy and the documents disagree*: `docs/clean-room.md` keeps observations
-    about other products out of the repository, but about 35 files describe what Photo Mechanic
-    does (ADR 0004, 0007, 0013, 0017, `pw-metadata`'s `reconcile.rs`, done tasks). Most are
-    level-C file-format observations; either the policy text allows them or the texts are
-    reworded as neutral requirements.
   - *Small fixes*: `repository = ""` in `Cargo.toml`; a path with the owner's user name in
     `done/T115-…`; `docs/agent-tasks.md` (about 700 KB, replaced by `docs/tasks/`) archived or
     removed; the done tasks' logs read once with public eyes.
@@ -152,4 +147,5 @@ T30–T40); ADR 0011 step K4 (done, T26–T29); moving rejected or picked images
 `_picked` (ADR 0013 §13), now ADR 0017 U9 (§2.6, U-Q6); the import dialog fields for title and description in the Tauri
 app's `ui/` (owner: dropped, the Tauri app is retired at the switch, GR8). Removed on 2026-11-14:
 "Same folder, two tabs" (done, T119); suppressing the Windows "no disk in drive" dialog (done, T135: `SetErrorMode` at start). Removed on 2026-11-17: "Mark a card imported before the
-register" (now T166) and "The compare after a move that did not happen" (now T165).
+register" (now T166) and "The compare after a move that did not happen" (now T165); "The clean-room policy and the documents
+disagree" (the owner's rule in `clean-room.md`, "Naming other products"; the rewording is T175).
