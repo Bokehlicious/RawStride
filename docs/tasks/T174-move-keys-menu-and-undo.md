@@ -1,4 +1,4 @@
-# T174. ADR 0017 U9b, last part: the keys, the menu items, the moves and the undo in the shell — Blocked: waits for T173 and T177
+# T174. ADR 0017 U9b, last part: the keys, the menu items, the moves and the undo in the shell — Blocked: waits for T177
 
 - **Chain:** T169 → T170 → T171 → T172 → T173 → T174. The owner's answers U9-Q5–U9-Q10 are in
   ADR 0017 §6.1.
@@ -7,7 +7,8 @@
   moving images, Ctrl+Z moving them back, and the tabs and the view cores following.
 - **Crates:** `pw-loupe`. **Files:** `crates/pw-loupe/src/lib.rs` (the keys),
   `crates/pw-loupe/src/shell.rs` (three commands), `crates/pw-loupe/src/shell_text.rs` (their
-  texts), `crates/pw-loupe/src/main.rs`, `docs/test-inventory.md`, and this task's own file
+  texts), `crates/pw-loupe/src/main.rs`, `crates/pw-loupe/src/metadata.rs` (only point 8),
+  `docs/test-inventory.md`, and this task's own file
   (status and log).
 - **What:**
   1. **Commands** (`shell.rs`, `shell_text.rs`): three `Command` variants, with their arms in
@@ -82,6 +83,12 @@
      open the file again (a render or prefetch of a near image); the move then fails with that
      reason. Nothing here prevents it; the hand check shows whether it happens (`backlog.md`,
      "Leftovers from the review of T170").
+  8. **`crates/pw-loupe/src/metadata.rs`** (only this; added to the files by the review of T173):
+     T173's functions carry `#[cfg_attr(not(test), allow(dead_code))]` until this task uses
+     them. Remove the attribute (and the comment line "T174 … uses these; until then only the
+     tests do" above each group) from `MetadataSubmit::move_image`, `MetadataSubmit::move_back`,
+     `take_moves`, `is_queued`, `current_rating`, `restore_rating` and `has_image`. One the
+     program still does not use keeps its attribute, and the report says which and why.
 - **Tests to add:** `lib.rs`: P and Ctrl+Z give their commands in both views with exactly those
   modifiers and are in no other key map. `shell.rs`, `shell_text.rs`: the order and texts of the
   new items (extending the existing lists). The wiring in `main.rs` has no unit test (`Loupe`
@@ -108,3 +115,4 @@
 | 2026-11-17 | Blocked | Cold read: the command arms named (`acts_in`, `command_text`, `command_enabled`, `command_checked`, `run_command`) and the menu places; a key function for P and Ctrl+Z with the usual guards; `QueueFull`/`Stopped` for `move_back`, answers of other ids ignored; the active tab by `same_folder`, `ratings_ready` false for the others; the undo's `current` in the tab's own form; `forget_sort` clears every tab (accepted); the ratings after an undo through `has_image` and a reload; failures also in the Tasks error list; an independent code review |
 | 2026-11-17 | Blocked | Review of T170: also waits for T177 (a move's release notes no histogram stamp); the reopening between release and move named as a known limit in point 7 |
 | 2026-11-17 | Blocked | Review of T172: a finished batch's `moved` can hold an image with no moves of its own (a partner moved by another image), so its rating is restored too; its `move_back` of an empty list answers `Ok` at once and it counts in `undone_text` |
+| 2026-11-17 | Blocked | Review of T173: point 8 added (the `allow(dead_code)` of T173's seven functions removed once they are used); `metadata.rs` added to the files for it only |

@@ -13,7 +13,7 @@ use pw_metadata::read::MetadataRead;
 use pw_metadata::safe_write::OriginalState;
 use pw_metadata::write_plan::WriteNotice;
 use pw_metadata::{
-    MetadataWorker, Rating, RequestId, SubmitError, WorkerEvent, WriteError, supports_rating,
+    MetadataWorker, Moved, Rating, RequestId, SubmitError, WorkerEvent, WriteError, supports_rating,
 };
 
 use crate::inspector::{INSPECTOR_POLL_INTERVAL, INSPECTOR_READ_DELAY};
@@ -26,6 +26,21 @@ pub(crate) trait MetadataSubmit: RatingWriter {
 
     /// The editor's edits of one image (T98, T105).
     fn write_edits(&mut self, image: PathBuf, edits: Vec<Edit>) -> Result<RequestId, SubmitError>;
+
+    // T174 sends the moves and uses these; until then only the tests do.
+    /// A move of `image` and its companion files into `target` (ADR 0017 U9b, T170, T173).
+    #[cfg_attr(not(test), allow(dead_code))]
+    fn move_image(
+        &mut self,
+        image: PathBuf,
+        target: PathBuf,
+        image_extensions: Vec<String>,
+        suffixes: Vec<String>,
+    ) -> Result<RequestId, SubmitError>;
+
+    /// The files of `moved` moved back where they came from (ADR 0017 U9b, T170, T173).
+    #[cfg_attr(not(test), allow(dead_code))]
+    fn move_back(&mut self, moved: Vec<Moved>) -> Result<RequestId, SubmitError>;
 
     fn try_recv(&mut self) -> Result<WorkerEvent, TryRecvError>;
 }
@@ -41,6 +56,20 @@ impl MetadataSubmit for MetadataWorker {
 
     fn write_edits(&mut self, image: PathBuf, edits: Vec<Edit>) -> Result<RequestId, SubmitError> {
         MetadataWorker::write_edits(self, image, edits)
+    }
+
+    fn move_image(
+        &mut self,
+        image: PathBuf,
+        target: PathBuf,
+        image_extensions: Vec<String>,
+        suffixes: Vec<String>,
+    ) -> Result<RequestId, SubmitError> {
+        MetadataWorker::move_image(self, image, target, image_extensions, suffixes)
+    }
+
+    fn move_back(&mut self, moved: Vec<Moved>) -> Result<RequestId, SubmitError> {
+        MetadataWorker::move_back(self, moved)
     }
 
     fn try_recv(&mut self) -> Result<WorkerEvent, TryRecvError> {
@@ -244,6 +273,27 @@ pub(crate) struct MetadataCache {
     /// The answers of RawStride's metadata writes since the inspector's Histogram last asked, in
     /// the order they came (U7c-Q7, T145).
     written: Vec<WriteAnswer>,
+    /// The answers of the moves and the moves back since `main.rs` last took them, in the order
+    /// they came (ADR 0017 U9b, T173).
+    moves: Vec<MoveAnswer>,
+}
+
+/// One answer of the metadata worker's move or move back (ADR 0017 U9b, T170, T173), with the
+/// fields of its event.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum MoveAnswer {
+    /// The answer to `MetadataSubmit::move_image`: the files moved, or why the move failed.
+    Moved {
+        id: RequestId,
+        image: PathBuf,
+        result: Result<Vec<Moved>, String>,
+    },
+    /// The answer to `MetadataSubmit::move_back`, with `moved` as it was sent.
+    MovedBack {
+        id: RequestId,
+        moved: Vec<Moved>,
+        result: Result<(), String>,
+    },
 }
 
 /// One answer of RawStride's metadata write (a rating or label key, an editor save, a write of
@@ -836,6 +886,45 @@ impl MetadataCache {
         std::mem::take(&mut self.written)
     }
 
+    // T174 acts on the answers and uses these; until then only the tests do.
+    /// The answers of the moves and the moves back since the last call, in the order they came
+    /// (ADR 0017 U9b, T173).
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn take_moves(&mut self) -> Vec<MoveAnswer> {
+        std::mem::take(&mut self.moves)
+    }
+
+    /// Whether a rating write for `path` (absolute) is queued and not yet sent (T172, T173).
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn is_queued(&self, path: &Path) -> bool {
+        self.ratings.is_queued(path)
+    }
+
+    /// The rating a key would start from for `path` (absolute), which the undo of a move restores
+    /// (ADR 0017 U9-Q8, T172, T173).
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn current_rating(&self, path: &Path) -> Rating {
+        self.ratings.current_rating(path)
+    }
+
+    /// Shows and queues exactly `rating` for `path`, for the undo of a move (ADR 0017 U9-Q8,
+    /// T172, T173).
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn restore_rating(
+        &mut self,
+        path: &Path,
+        rating: Rating,
+    ) -> Result<(), RatingRefused> {
+        self.ratings.restore(path, rating)
+    }
+
+    /// Whether `path` (absolute) is in the list of loaded images. A moved image stays in it until
+    /// the tab is loaded again, so after an undo in the same tab its rating is still known (T173).
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn has_image(&self, path: &Path) -> bool {
+        self.images.contains_key(path)
+    }
+
     /// Whether the read after the editor's write is waiting or in flight.
     pub fn editor_reloading(&self) -> bool {
         self.editor.reload.is_some() || self.editor.reading.is_some()
@@ -993,8 +1082,13 @@ impl MetadataCache {
                     }
                 }
             }
-            // The moves (T170) are not sent by the shell yet; T172 handles their answers.
-            WorkerEvent::Moved { .. } | WorkerEvent::MovedBack { .. } => {}
+            // The moves (T170): `main.rs` takes their answers with `take_moves` (T173).
+            WorkerEvent::Moved { id, image, result } => {
+                self.moves.push(MoveAnswer::Moved { id, image, result });
+            }
+            WorkerEvent::MovedBack { id, moved, result } => {
+                self.moves.push(MoveAnswer::MovedBack { id, moved, result });
+            }
         }
     }
 }
@@ -1161,6 +1255,10 @@ mod tests {
         }
     }
 
+    /// One `move_image` call of `FakeSubmit`: its id, image, target, image extensions and
+    /// suffixes (T173).
+    type MoveImageCall = (RequestId, PathBuf, PathBuf, Vec<String>, Vec<String>);
+
     struct FakeSubmit {
         read_responses: VecDeque<Result<RequestId, SubmitError>>,
         read_attempts: Vec<Vec<PathBuf>>,
@@ -1180,6 +1278,12 @@ mod tests {
         edits_capacity: Option<usize>,
         /// When true, `write_edits` answers `Stopped` (T126).
         edits_stopped: bool,
+        /// The image, target, image extensions and suffixes of every `move_image` call, with the
+        /// id each was given (T173).
+        move_images: Vec<MoveImageCall>,
+        /// The files of every `move_back` call, with the id each was given (T173).
+        move_backs: Vec<(RequestId, Vec<Moved>)>,
+        next_move_id: RequestId,
     }
 
     impl FakeSubmit {
@@ -1198,6 +1302,9 @@ mod tests {
                 next_edits_id: 900,
                 edits_capacity: None,
                 edits_stopped: false,
+                move_images: Vec::new(),
+                move_backs: Vec::new(),
+                next_move_id: 1300,
             }
         }
     }
@@ -1259,6 +1366,29 @@ mod tests {
             let id = self.next_edits_id;
             self.next_edits_id += 1;
             self.edits_writes.push((id, image, edits));
+            Ok(id)
+        }
+
+        fn move_image(
+            &mut self,
+            image: PathBuf,
+            target: PathBuf,
+            image_extensions: Vec<String>,
+            suffixes: Vec<String>,
+        ) -> Result<RequestId, SubmitError> {
+            self.operations.push("move_image");
+            let id = self.next_move_id;
+            self.next_move_id += 1;
+            self.move_images
+                .push((id, image, target, image_extensions, suffixes));
+            Ok(id)
+        }
+
+        fn move_back(&mut self, moved: Vec<Moved>) -> Result<RequestId, SubmitError> {
+            self.operations.push("move_back");
+            let id = self.next_move_id;
+            self.next_move_id += 1;
+            self.move_backs.push((id, moved));
             Ok(id)
         }
 
@@ -3389,5 +3519,152 @@ mod tests {
             cache.take_written(),
             [answer(&a, true), answer(&b, false), answer(&c, true)]
         );
+    }
+
+    // --- the moves and their undo through the cache (ADR 0017 U9b, T173) ---
+
+    fn moved(from: &Path, to: &Path) -> Moved {
+        Moved {
+            from: from.to_path_buf(),
+            to: to.to_path_buf(),
+        }
+    }
+
+    #[test]
+    fn the_fake_records_move_image_and_move_back() {
+        let mut worker = FakeSubmit::new([]);
+        let image = image_path("pw-loupe-move-record.ARW");
+        let target = image_path("_rejected");
+        let extensions = vec!["arw".to_owned(), "jpg".to_owned()];
+        let suffixes = vec!["dop".to_owned()];
+        assert_eq!(
+            MetadataSubmit::move_image(
+                &mut worker,
+                image.clone(),
+                target.clone(),
+                extensions.clone(),
+                suffixes.clone()
+            ),
+            Ok(1300)
+        );
+        let files = vec![moved(&image, &target.join("pw-loupe-move-record.ARW"))];
+        assert_eq!(
+            MetadataSubmit::move_back(&mut worker, files.clone()),
+            Ok(1301)
+        );
+        assert_eq!(
+            worker.move_images,
+            [(1300, image, target, extensions, suffixes)]
+        );
+        assert_eq!(worker.move_backs, [(1301, files)]);
+        assert_eq!(worker.operations, ["move_image", "move_back"]);
+    }
+
+    #[test]
+    fn a_move_and_a_move_back_reach_take_moves_in_order_and_once() {
+        let mut worker = FakeSubmit::new([]);
+        let mut cache = MetadataCache::default();
+        assert!(cache.take_moves().is_empty());
+        let image = image_path("pw-loupe-move-answer.ARW");
+        let target = image_path("_rejected");
+        let files = vec![moved(&image, &target.join("pw-loupe-move-answer.ARW"))];
+        worker.events.push_back(WorkerEvent::Moved {
+            id: 1300,
+            image: image.clone(),
+            result: Ok(files.clone()),
+        });
+        worker.events.push_back(WorkerEvent::MovedBack {
+            id: 1301,
+            moved: files.clone(),
+            result: Err("the file is open in another program".to_owned()),
+        });
+
+        assert!(cache.poll(&mut worker).is_empty());
+
+        assert_eq!(
+            cache.take_moves(),
+            [
+                MoveAnswer::Moved {
+                    id: 1300,
+                    image,
+                    result: Ok(files.clone()),
+                },
+                MoveAnswer::MovedBack {
+                    id: 1301,
+                    moved: files,
+                    result: Err("the file is open in another program".to_owned()),
+                },
+            ]
+        );
+        // taken once
+        assert!(cache.take_moves().is_empty());
+        // a move answer is no write answer
+        assert!(cache.take_written().is_empty());
+    }
+
+    #[test]
+    fn is_queued_and_current_rating_follow_the_rating_store() {
+        let mut worker = FakeSubmit::new([]);
+        let mut cache = MetadataCache::default();
+        let image = image_path("pw-loupe-move-queued.ARW");
+        assert!(!cache.is_queued(&image));
+        assert_eq!(cache.current_rating(&image), Rating::default());
+
+        assert!(cache.set_rating(&image, RatingKey::Stars(4)).is_ok());
+        let _ = cache.poll(&mut worker);
+        assert!(cache.set_rating(&image, RatingKey::Reject).is_ok());
+
+        // an X queued shows `is_queued` until `poll` sends it
+        assert!(cache.is_queued(&image));
+        assert_eq!(
+            cache.current_rating(&image),
+            Rating {
+                stars: Some(-1),
+                label: None,
+            }
+        );
+        assert!(cache.poll(&mut worker).is_empty());
+        assert!(!cache.is_queued(&image));
+        assert_eq!(cache.current_rating(&image).stars, Some(-1));
+        assert_eq!(worker.write_attempts, [image.clone(), image]);
+    }
+
+    #[test]
+    fn restore_rating_queues_the_rating() {
+        let mut worker = FakeSubmit::new([]);
+        let mut cache = MetadataCache::default();
+        let image = image_path("pw-loupe-move-restored.ARW");
+        let rating = Rating {
+            stars: Some(3),
+            label: Some("Green".to_owned()),
+        };
+
+        assert_eq!(cache.restore_rating(&image, rating.clone()), Ok(()));
+
+        assert!(cache.is_queued(&image));
+        assert_eq!(cache.current_rating(&image), rating);
+        assert!(cache.poll(&mut worker).is_empty());
+        assert!(!cache.is_queued(&image));
+        assert_eq!(worker.write_attempts, [image]);
+        // an unsupported file is refused, as by a rating key
+        assert_eq!(
+            cache.restore_rating(&image_path("pw-loupe-move-notes.txt"), rating),
+            Err(RatingRefused::Unsupported)
+        );
+    }
+
+    #[test]
+    fn has_image_is_true_for_a_loaded_image_and_false_for_another() {
+        let mut worker = FakeSubmit::new([Ok(7)]);
+        let mut cache = MetadataCache::default();
+        let loaded = image_path("pw-loupe-move-loaded.ARW");
+        let files = match cache.begin_load(vec![loaded.clone()], &mut worker) {
+            Ok(files) => files,
+            Err(error) => panic!("current directory should be available: {error}"),
+        };
+        assert_eq!(files, std::slice::from_ref(&loaded));
+
+        assert!(cache.has_image(&loaded));
+        assert!(!cache.has_image(&image_path("pw-loupe-move-other.ARW")));
     }
 }
