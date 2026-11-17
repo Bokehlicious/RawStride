@@ -116,6 +116,12 @@ and reviewer:
     neighbour whose 100 % view is already prefetched, so it cannot show the gain of U7c-Q5. A
     measurement of Z pressed right after an image is opened would need a change to the script, so
     a task first (tool changes go through `docs/tasks/`).
+- **Smaller functions, not important** (owner, 2026-11-17, after ADR 0018–0025): each needs an
+  ADR with the owner's answers before any task. Choosing images on the card before an import;
+  importing from several cards at once; spell checking in the metadata window; a custom sort order
+  (dragging images into an order of the user's own, beside U14's keys); printing and slide shows;
+  uploading. Deliberately left out, not to be taken up: video (ADR 0005 choice 5) and deleting
+  from the card (ADR 0005 choice 3, ADR 0018 §2.6).
 - **A filter bar of toggle buttons instead of drop-down lists** (owner idea, 2026-11-10, after T61;
   ADR 0014 §15): a row "0★ 1★ 2★ 3★ 4★ 5★" and a row of colour swatches, each clicked on and off,
   with a check box per row that turns the row on or off. Needs an amendment of ADR 0014 first: the
