@@ -312,7 +312,14 @@ described in our own words.
     named `<base>.<ext>.<suffix>` or `<base>.<suffix>`.
 
   The suffixes are a list in Settings with these as the default. The naming of each program's files
-  is checked on real files before U9 (the owner's DxO PhotoLab files first). The move is all or
+  is checked on real files before U9 (the owner's DxO PhotoLab files first).
+  **R2 (reviewer, 2026-11-17; file names only, clean-room level C):** the owner's folder of five
+  Sony ARW files edited in DxO PhotoLab holds, per image, `<base>.ARW`, `<base>.ARW.dop` and
+  `<base>.XMP`. So DxO PhotoLab names its file `<base>.<ext>.dop`, with the image's extension in
+  the image's own case and `.dop` in lower case; no `<base>.dop` was seen, and no other DxO file
+  beside the images. The `.XMP` in upper case is Photo Mechanic's (ADR 0013 §14). Names are
+  therefore compared without regard to case (Windows). No RawTherapee `.pp3` or ON1 `.on1` files
+  were available; their names stay as above (both forms are moved) until real files are seen. The move is all or
   nothing: if one file cannot be moved (open in another program, name taken in the subfolder), the
   files already moved are moved back and the reason is shown. Edit data kept outside the image's
   folder (for example a Capture One session or a Lightroom catalogue) is not moved; such a program
