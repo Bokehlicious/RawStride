@@ -182,25 +182,26 @@ and reviewer:
     group's files until the move's answer.
 
 - **Leftovers from the review of T179** (reviewer and `/code-review` twice, 2026-11-17;
-  accepted, none is reached by T180's use of `Edit::Entries`; the arm in `BatchEdits::lists` is
-  T180's):
+  accepted, none is reached by T180's use of `Edit::Entries`; the arm in `BatchEdits::lists` was
+  T180's; **kept** at the sort after U12d, 2026-11-17, as each item says):
   - *`same_value` compares list entries on the IIM prediction:* removing a keyword over 64 bytes
-    and adding it cut to 64 bytes is no change and is lost without a notice (as for `Set`).
+    and adding it cut to 64 bytes is no change and is lost without a notice (as for `Set`). Kept:
+    rare (a keyword over 64 bytes) and it is all writing, not U12d; a task if it is seen in use.
   - *Four blank tests:* `apply_entries` uses `trim()` for `add`, `Metadata::set` spaces only
     (`is_empty_text`), `iim::is_blank` spaces and NUL, `template.rs` its own `is_blank`; a
-    NUL-only or tab-only entry is treated differently on each path.
-  - *The same entry in `add` and `remove`* is removed and appended at the end: a reorder and a
-    write (T180 sends a difference, so never both).
+    NUL-only or tab-only entry is treated differently on each path. Kept with the tidying below.
   - *Tidying:* the append rule repeats `template.rs`'s list Append (a shared helper);
     `entries_left_alone` works out afterwards what `apply_entries` skipped (one source would
     keep them in step); the separate empty-result branch beside the `Empty` fallback;
-    `contains` in loops (quadratic, small at today's list sizes).
-  - *`ConflictKept` is named also when the `Entries` would have changed nothing* (it adds an
-    entry both forms hold): accepted, the conflict is kept either way.
+    `contains` in loops (quadratic, small at today's list sizes). Kept until `edit.rs` or
+    `template.rs` is next changed (for example U13, templates); none is reached from the window,
+    whose list text is trimmed and has no empty entries.
   - *From the chain review of T179 and T180* (owner, ADR 0017 U12d-Q8): an entry with a comma
     ("Lund, Sweden") is split by the window's list text, so removing it removes nothing on the
     other images while the confirmation names it; a failed file of a batch can only be retried by
-    making the change again.
+    making the change again. Kept: known limits in ADR 0017; the comma needs another way to edit
+    lists (since T108); a task if either is seen in use.
+
 Removed on 2026-11-13 because they are done or planned elsewhere: ADR 0010 steps M3–M7 (done,
 T30–T40); ADR 0011 step K4 (done, T26–T29); moving rejected or picked images to `_rejected` /
 `_picked` (ADR 0013 §13), now ADR 0017 U9 (§2.6, U-Q6); the import dialog fields for title and description in the Tauri
@@ -211,6 +212,9 @@ disagree" (the owner's rule in `clean-room.md`, "Naming other products"; the rew
 Struck at the backlog sort of 2026-11-17 (owner): the measurement of the 100 % view first (T144,
 U7c-Q5; the step is done and the gain small) and the large-folder limit of `relocate::companions`
 (not seen in the hand check of U9b).
+Struck at the backlog sort after U12d, 2026-11-17 (owner): from T179's leftovers, the same entry
+in `add` and `remove` (T180 never sends both) and `ConflictKept` named when the `Entries` would
+have changed nothing (accepted, ADR 0017 U12d-Q8).
 Written as tasks after the backlog sort of 2026-11-17: a wrong Artwork Date Created (T181), RAW
 statistics on X-Trans (T182; T146 had tested the X-Trans files, T182 covers what it left), a tab on
 `_rejected` or `_picked` and Ctrl+Z while a move runs (T183), `release_for_move` a required
