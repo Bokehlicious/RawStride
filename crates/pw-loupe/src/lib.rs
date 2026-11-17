@@ -22,6 +22,8 @@ pub mod library;
 pub mod library_text;
 mod loupe_text;
 mod monitor_profile;
+mod moves;
+mod moves_text;
 mod preview;
 mod preview_text;
 mod rating_text;
@@ -91,6 +93,13 @@ pub use loupe_text::{
 pub use monitor_profile::{
     MonitorProfile, ProfileSource, load_monitor_profile, primary_monitor_profile_path,
 };
+pub use moves::{
+    Batch, BatchResult, MoveKind, MovedImage, PICKED_FOLDER, REJECTED_FOLDER, UNDO_STEPS,
+    UndoMoves, target_folder,
+};
+pub use moves_text::{
+    move_failed_text, moves_failed_text, nothing_to_undo_text, undo_failed_text, undone_text,
+};
 pub use preview::{
     FILMSTRIP_CELL_WIDTH, FILMSTRIP_IMAGE_HEIGHT, FILMSTRIP_LABEL_HEIGHT, FILMSTRIP_MARGIN,
     FILMSTRIP_SPACING, PreviewParts, Restore, ThumbGate, WindowBefore, clamp_offset,
@@ -103,7 +112,7 @@ pub use preview_text::{
 };
 pub use rating_text::{
     UNSUPPORTED_TEXT, label_choice_text, label_filter_text, label_name, star_condition_text,
-    star_filter_text, star_glyphs, status_text,
+    star_filter_text, star_glyphs, status_text, worker_stopped_text,
 };
 pub use ratings::{RatingKey, RatingRefused, RatingStore, RatingWriter, apply, rating_key_action};
 pub use selection::Selection;
@@ -129,7 +138,7 @@ pub use sort::{
     CaptureRead, CaptureReader, CaptureTime, CaptureTimes, SORT_KEYS, SortKey, SortOrder, SortPlan,
     modified_time, read_order,
 };
-pub use tabs::{SortFollow, Tab, Tabs, ViewMode};
+pub use tabs::{SortFollow, Tab, Tabs, ViewMode, same_folder};
 pub use tasks::{
     ClockTime, ImportRow, ImportStep, MAX_ERRORS, PendingWrite, TaskError, Tasks, pending_writes,
 };

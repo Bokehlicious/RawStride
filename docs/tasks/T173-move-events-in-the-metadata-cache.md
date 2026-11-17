@@ -1,4 +1,4 @@
-# T173. ADR 0017 U9b, fifth part: the move requests and answers in the shell's metadata part — Blocked: waits for T172
+# T173. ADR 0017 U9b, fifth part: the move requests and answers in the shell's metadata part — Open
 
 - **Chain:** T169 → T170 → T171 → T172 → T173 → T174. The owner's answers U9-Q5–U9-Q10 are in
   ADR 0017 §6.1.
@@ -42,3 +42,4 @@
 |---|---|---|
 | 2026-11-17 | Blocked | Added for ADR 0017 U9b after the cold read of the first T171–T172 (events and the rating store live in `metadata.rs`); waits for T172 |
 | 2026-11-17 | Blocked | Cold read: `add_images` would need a second read slot beside the folder load's (one `load_request`, `ratings_ready` derived from it) and could wipe a shown rating; replaced by `has_image` (point 4); the types of `move_image` and `move_back` given |
+| 2026-11-17 | Open | T172 is done |

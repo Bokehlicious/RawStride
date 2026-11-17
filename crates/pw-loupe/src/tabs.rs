@@ -303,6 +303,16 @@ impl Tabs {
         &self.tabs
     }
 
+    /// The tabs whose folder is `folder`, compared by `same_folder`: after a move or an undo every
+    /// tab of the folder gets its new list (ADR 0017 U9b, T172).
+    pub fn tabs_of_folder_mut(&mut self, folder: &Path) -> impl Iterator<Item = &mut Tab> {
+        self.tabs.iter_mut().filter(move |tab| {
+            tab.folder
+                .as_deref()
+                .is_some_and(|open| same_folder(open, folder))
+        })
+    }
+
     pub fn titles(&self) -> Vec<String> {
         self.tabs
             .iter()
@@ -326,7 +336,7 @@ impl Tabs {
 /// absolute and then resolved with `pw_ingest::resolve`, so case, trailing separators, `\\?\`
 /// and `subst` drives do not matter. A path whose absolute or resolved form cannot be made is
 /// compared as it is. Only the comparison uses the resolved forms; the tab keeps the path given.
-fn same_folder(a: &Path, b: &Path) -> bool {
+pub fn same_folder(a: &Path, b: &Path) -> bool {
     resolved_folder(a) == resolved_folder(b)
 }
 
@@ -760,6 +770,39 @@ mod tests {
         // path is then compared as it is.
         let parent = temp.0.join("missing").join("..").join("gone");
         assert!(same_folder(&parent, &parent));
+    }
+
+    /// After a move every tab of the folder gets its new list (ADR 0017 U9b, T172): two tabs of
+    /// one folder, one with a trailing separator, are found, and a third of another folder is not.
+    #[test]
+    fn tabs_of_folder_mut_finds_both_tabs_of_a_folder_and_not_a_third() {
+        let temp = TempFolder::new("of-folder");
+        let foto = temp.foto();
+        let other = temp.0.join("Other");
+        std::fs::create_dir_all(&other).expect("other folder is made");
+        let again = PathBuf::from(format!("{}{}", foto.display(), std::path::MAIN_SEPARATOR));
+
+        let mut tabs = Tabs::default();
+        tabs.open_in_active(foto.clone(), files("first", 2), 0);
+        tabs.open_new(other.clone(), files("other", 1), 0);
+        // `open_new` would activate the first tab again; a third tab is opened in place.
+        tabs.open_new(temp.0.join("third"), files("third", 1), 0);
+        tabs.open_in_active(again.clone(), files("again", 3), 0);
+        assert_eq!(tabs.tabs().len(), 3);
+
+        let found: Vec<Option<PathBuf>> = tabs
+            .tabs_of_folder_mut(&foto)
+            .map(|tab| tab.folder.clone())
+            .collect();
+        assert_eq!(found, vec![Some(foto.clone()), Some(again)]);
+
+        // The tabs are changed in place.
+        for tab in tabs.tabs_of_folder_mut(&foto) {
+            tab.current = 1;
+        }
+        let currents: Vec<usize> = tabs.tabs().iter().map(|tab| tab.current).collect();
+        assert_eq!(currents, vec![1, 0, 1]);
+        assert_eq!(tabs.tabs_of_folder_mut(&temp.0.join("none")).count(), 0);
     }
 
     // --- the sort order (ADR 0017 U14, T138) ---

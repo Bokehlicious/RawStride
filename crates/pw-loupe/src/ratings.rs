@@ -236,6 +236,31 @@ impl RatingStore {
         }
     }
 
+    /// Whether a write for `path` is queued and not yet sent to the metadata worker. The store's
+    /// keys are absolute paths, so `path` is passed absolute.
+    pub fn is_queued(&self, path: &Path) -> bool {
+        self.queued.iter().any(|write| write.path == path)
+    }
+
+    /// The rating a key would start from (`path` absolute): the shown value, otherwise the
+    /// confirmed one, otherwise the default. A move by X keeps it, so the undo can restore it
+    /// (ADR 0017 U9-Q8, T172).
+    pub fn current_rating(&self, path: &Path) -> Rating {
+        self.current(path)
+    }
+
+    /// Shows and queues exactly `rating` for `path`, as `set` does after its key is applied, with
+    /// the same checks of the path: used by the undo of an X (ADR 0017 U9-Q8, T172).
+    pub fn restore(&mut self, path: &Path, rating: Rating) -> Result<(), RatingRefused> {
+        if !supports_rating(path) {
+            return Err(RatingRefused::Unsupported);
+        }
+        let path = absolute_path(path)?;
+        self.reset_failures();
+        self.put(path, rating);
+        Ok(())
+    }
+
     /// The value a key starts from: the shown value, otherwise the confirmed one.
     fn current(&self, path: &Path) -> Rating {
         self.entries
@@ -1300,6 +1325,64 @@ mod tests {
             Ok(1)
         );
         assert_eq!(store.failure_text(), None);
+    }
+
+    #[test]
+    fn is_queued_until_the_write_is_pumped() {
+        let path = image("pw-loupe-rating-is-queued.ARW");
+        let other = image("pw-loupe-rating-is-queued-other.ARW");
+        let mut store = RatingStore::default();
+        let mut writer = FakeWriter::with_responses([WriteResponse::QueueFull]);
+        assert!(!store.is_queued(&path));
+
+        assert_eq!(store.set(&path, RatingKey::Stars(2)), Ok(()));
+        assert!(store.is_queued(&path));
+        assert!(!store.is_queued(&other));
+
+        // A full worker queue keeps it queued; the next pump sends it.
+        assert!(store.pump(&mut writer).is_empty());
+        assert!(store.is_queued(&path));
+        assert!(store.pump(&mut writer).is_empty());
+        assert!(!store.is_queued(&path));
+        assert_eq!(store.pending(), 1, "sent, waiting for its answer");
+    }
+
+    #[test]
+    fn current_rating_is_the_shown_then_the_confirmed_then_the_default() {
+        let unread = image("pw-loupe-rating-current-unread.ARW");
+        let path = image("pw-loupe-rating-current.ARW");
+        let mut store = RatingStore::default();
+        assert_eq!(store.current_rating(&unread), Rating::default());
+
+        read_rating(&mut store, &path, 1, 2);
+        assert_eq!(store.current_rating(&path), loaded_rating(2));
+        assert_eq!(store.set(&path, RatingKey::Reject), Ok(()));
+        assert_eq!(store.current_rating(&path), loaded_rating(-1));
+    }
+
+    #[test]
+    fn restore_shows_and_queues_the_exact_rating() {
+        let path = image("pw-loupe-rating-restore.ARW");
+        let mut store = RatingStore::default();
+        let mut writer = FakeWriter::default();
+        read_rating(&mut store, &path, 1, 4);
+        assert_eq!(store.set(&path, RatingKey::Reject), Ok(()));
+        store.pump(&mut writer);
+
+        let before = rating(Some(4), Some("Green"));
+        assert_eq!(store.restore(&path, before.clone()), Ok(()));
+        assert_eq!(store.shown(&path), Some(&before));
+        assert!(store.is_queued(&path));
+        store.pump(&mut writer);
+        assert_eq!(writer.requests.len(), 2);
+        assert_eq!(writer.requests[1].1, path);
+        assert_eq!(writer.requests[1].2, before);
+
+        // The same checks of the path as `set`.
+        assert_eq!(
+            store.restore(Path::new("notes.txt"), Rating::default()),
+            Err(RatingRefused::Unsupported)
+        );
     }
 
     /// The `app.js` case: five marked images, one of them unsupported.

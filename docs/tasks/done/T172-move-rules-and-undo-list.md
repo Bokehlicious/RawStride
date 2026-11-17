@@ -1,4 +1,4 @@
-# T172. ADR 0017 U9b, fourth part: the move rules, the undo list, the tab's list and the texts — Open
+# T172. ADR 0017 U9b, fourth part: the move rules, the undo list, the tab's list and the texts — Done
 
 - **Chain:** T169 → T170 → T171 → T172 → T173 → T174. The owner's answers U9-Q5–U9-Q10 are in
   ADR 0017 §6.1.
@@ -97,3 +97,6 @@
 | 2026-11-17 | Blocked | Cold read: `replace_files`'s `rating_of` type and its refilter rule made exact, paths in the tab's own form for it and absolute for the store; `worker_stopped_text` exported here for T174 |
 | 2026-11-17 | Blocked | Review of T170: a failed move's files that could not be moved back are only named in the text, not undone ("Not in this task", `backlog.md`) |
 | 2026-11-17 | Open | T171 is done |
+| 2026-11-17 | Ready for review | Done by the task agent: `moves.rs`, `moves_text.rs`, `replace_files`, `tabs_of_folder_mut`, `is_queued`, `current_rating`, `restore`, the exports (also `same_folder`), the glossary and 16 tests. `replace_files`: a current image that replaced a removed one is not kept by the refilter (a following file the filter hides gives way to the nearest visible one); `moves_failed_text` with 1 gives the sentence of `move_failed_text`; `finish` leaves an image without an answer out of both lists |
+| 2026-11-17 | Review | Reviewer: as written; the agent's three notes accepted. Two fixes by the reviewer on the owner's word: (1) a partner moved by another image (the JPG of a marked RAW+JPEG pair) lost its `restore`, so an undo left it rejected; `finish` now keeps it in `moved` with no moves of its own and its `restore` (T174's `move_back` of an empty list answers `Ok` at once); (2) `replace_files` looked each file up by searching the new list (quadratic for a large marked folder); now one `HashMap`. No independent review needed (one crate, six files). `check.ps1` all OK, 1776 passed, 66 ignored |
+| 2026-11-17 | Done | Approved by the owner; nothing left |

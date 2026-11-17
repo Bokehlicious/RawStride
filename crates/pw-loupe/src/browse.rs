@@ -3,6 +3,7 @@
 //! in the grid and the loupe that recompute the list before and after the move. Plain Rust, no I/O
 //! (GR11); the shown rating of each file comes through a closure.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use pw_metadata::Rating;
@@ -149,6 +150,70 @@ impl Tab {
         self.current = moved(self.current).unwrap_or(0);
         self.refilter(ratings_ready, rating_of, was_shown.then_some(self.current));
         true
+    }
+
+    /// Gives the tab a new list of files after a move or an undo (ADR 0017 U9b, T172): `files` are
+    /// paths in the tab's own form (the caller converts). The marking and the anchor are kept for
+    /// the files still there, compared as given (the `Selection` is rebuilt, as `reorder` does).
+    /// The current image becomes `current` when it is in `files`; otherwise the old current image
+    /// when it is still there; otherwise the old file that followed it and is still there (the last
+    /// file if none followed). Then `refilter`: keeping `current` when it was given and found;
+    /// otherwise keeping the current image only when it is the old current image and was shown
+    /// before, as `reorder` ends. A current image that replaced a removed one is not kept, so a
+    /// following file the filter hides gives way to the nearest visible one. Returns whether the
+    /// list of files changed.
+    pub fn replace_files(
+        &mut self,
+        files: Vec<PathBuf>,
+        current: Option<&Path>,
+        ratings_ready: bool,
+        rating_of: &dyn Fn(&Path) -> Option<Rating>,
+    ) -> bool {
+        // One lookup per file, not a search of the list (review of T172: a large marked folder).
+        let positions: HashMap<&PathBuf, usize> = files
+            .iter()
+            .enumerate()
+            .rev()
+            .map(|(index, file)| (file, index))
+            .collect();
+        let index_of = |path: &PathBuf| positions.get(path).copied();
+        let new_index = |old: usize| self.files.get(old).and_then(index_of);
+
+        let all: Vec<usize> = (0..self.files.len()).collect();
+        let marked: Vec<usize> = self
+            .selection
+            .marked_in(&all)
+            .into_iter()
+            .filter_map(new_index)
+            .collect();
+        let mut selection = Selection::default();
+        if let Some(anchor) = self.selection.anchor().and_then(new_index) {
+            selection.click(anchor);
+        }
+        selection.all(&marked);
+
+        let was_shown = self.position().is_some();
+        let given = current.and_then(|path| files.iter().position(|file| file == path));
+        let kept = new_index(self.current);
+        let following = || {
+            self.files
+                .iter()
+                .skip(self.current.saturating_add(1))
+                .find_map(index_of)
+                .or_else(|| files.len().checked_sub(1))
+        };
+        let (new_current, keep) = match (given, kept) {
+            (Some(index), _) => (index, Some(index)),
+            (None, Some(index)) => (index, was_shown.then_some(index)),
+            (None, None) => (following().unwrap_or(0), None),
+        };
+
+        let changed = files != self.files;
+        self.files = files;
+        self.selection = selection;
+        self.current = new_current;
+        self.refilter(ratings_ready, rating_of, keep);
+        changed
     }
 
     /// The position of the current image in `visible`, if it is shown.
@@ -1231,5 +1296,152 @@ mod tests {
             "an index outside"
         );
         assert_eq!(*t, before);
+    }
+
+    /// The files of `t` without those named by `gone`.
+    fn without(t: &Tab, gone: &[usize]) -> Vec<PathBuf> {
+        t.files
+            .iter()
+            .filter(|path| !gone.iter().any(|&index| **path == name(index)))
+            .cloned()
+            .collect()
+    }
+
+    /// ADR 0017 U9b, T172: images moved away leave the list; the current image, when it left,
+    /// gives way to the one that followed it, and the marks stay on the same files.
+    #[test]
+    fn replace_files_with_files_removed_keeps_the_marks_and_takes_the_following_image() {
+        let (mut tabs, ratings) = setup();
+        let t = tab(&mut tabs);
+        t.click(3, false, false, true, &of(&ratings));
+        t.click(5, true, false, true, &of(&ratings));
+        t.click(8, true, false, true, &of(&ratings));
+        assert_eq!(t.selection.marked_in(&t.visible), [3, 5, 8]);
+        assert_eq!(t.current, 8);
+
+        // 4 and 8 (the current image) were moved.
+        let files = without(t, &[4, 8]);
+        assert!(t.replace_files(files, None, true, &of(&ratings)));
+        assert_eq!(t.files.len(), 10);
+        assert_eq!(t.visible, (0..10).collect::<Vec<_>>());
+        assert_eq!(
+            t.files.get(t.current),
+            Some(&name(9)),
+            "the following image"
+        );
+        let marked: Vec<PathBuf> = t
+            .selection
+            .marked_in(&t.visible)
+            .into_iter()
+            .filter_map(|index| t.files.get(index).cloned())
+            .collect();
+        assert_eq!(marked, [name(3), name(5)]);
+        // Ctrl+click on 8 made it the anchor; it is gone, so there is none.
+        assert_eq!(t.selection.anchor(), None);
+
+        // The last image removed: the last one left becomes current.
+        let last = t.files.len() - 1;
+        t.click(last, false, false, true, &of(&ratings));
+        assert_eq!(t.files.get(t.current), Some(&name(11)));
+        let files = without(t, &[11]);
+        assert!(t.replace_files(files, None, true, &of(&ratings)));
+        assert_eq!(t.files.get(t.current), Some(&name(10)));
+
+        // The current image still there stays current; the anchor follows its file.
+        t.click(2, false, false, true, &of(&ratings));
+        let files = without(t, &[0, 1]);
+        assert!(t.replace_files(files, None, true, &of(&ratings)));
+        assert_eq!(t.files.get(t.current), Some(&name(2)));
+        assert_eq!(t.current, 0);
+        assert_eq!(t.selection.anchor(), Some(0));
+        assert_eq!(t.position(), Some(0));
+
+        // The same list changes nothing and says so.
+        let same = t.files.clone();
+        assert!(!t.replace_files(same, None, true, &of(&ratings)));
+        assert_eq!(t.files.get(t.current), Some(&name(2)));
+    }
+
+    /// An undo puts files back: `current` (the image moved back) becomes current and is shown.
+    #[test]
+    fn replace_files_with_files_added_back_makes_the_given_image_current() {
+        let (mut tabs, ratings) = setup();
+        let t = tab(&mut tabs);
+        let all = t.files.clone();
+        t.click(5, false, false, true, &of(&ratings));
+        t.click(6, true, false, true, &of(&ratings));
+        assert!(t.replace_files(without(t, &[7, 9]), None, true, &of(&ratings)));
+        assert_eq!(t.files.get(t.current), Some(&name(6)));
+
+        let back = name(9);
+        assert!(t.replace_files(all, Some(&back), true, &of(&ratings)));
+        assert_eq!(t.files.len(), 12);
+        assert_eq!(t.current, 9);
+        assert_eq!(t.position(), Some(9));
+        assert_eq!(t.selection.marked_in(&t.visible), [5, 6]);
+
+        // A given image that is not in the list: the old current image stays.
+        let missing = PathBuf::from("IMG_099.ARW");
+        let files = t.files.clone();
+        assert!(!t.replace_files(files, Some(&missing), true, &of(&ratings)));
+        assert_eq!(t.current, 9);
+    }
+
+    /// Under a filter: an image given as `current` is kept even when the filter hides it (as the
+    /// image a move lands on, §4.2); a list where nothing matches shows nothing.
+    #[test]
+    fn replace_files_under_a_filter() {
+        let (mut tabs, mut ratings) = setup();
+        let red = filter(
+            StarFilter::All,
+            LabelFilter::only(LabelChoice::Label("Red")),
+        );
+        assert_eq!(set(&mut tabs, &ratings, red), [2, 4]);
+        let all = tab(&mut tabs).files.clone();
+        let t = tab(&mut tabs);
+        t.click(4, false, false, true, &of(&ratings));
+
+        // 2 and 4 were moved away: nothing matches; the following file is current but not shown.
+        let files = without(t, &[2, 4]);
+        assert!(t.replace_files(files, None, true, &of(&ratings)));
+        assert!(t.visible.is_empty());
+        assert_eq!(t.files.get(t.current), Some(&name(5)));
+        assert_eq!(t.position(), None);
+        assert_eq!(status(t), no_match_text(10));
+
+        // 4 comes back without its label (the undo restored another rating): kept as given.
+        ratings.remove(&name(4));
+        let back = name(4);
+        let files: Vec<PathBuf> = all.into_iter().filter(|path| *path != name(2)).collect();
+        assert!(t.replace_files(files, Some(&back), true, &of(&ratings)));
+        assert_eq!(t.files.get(t.current), Some(&back));
+        assert_eq!(t.visible, [3]);
+        assert_eq!(t.position(), Some(0));
+
+        // A removed current image is not kept: a hidden following file gives way to the nearest
+        // visible one.
+        ratings.insert(
+            name(4),
+            Rating {
+                stars: None,
+                label: Some("Red".to_owned()),
+            },
+        );
+        let t = tab(&mut tabs);
+        t.refilter(true, &of(&ratings), None);
+        assert_eq!(t.visible, [3]);
+        ratings.insert(
+            name(9),
+            Rating {
+                stars: None,
+                label: Some("Red".to_owned()),
+            },
+        );
+        t.refilter(true, &of(&ratings), None);
+        assert_eq!(t.visible, [3, 8]);
+        let files = without(t, &[4]);
+        assert!(t.replace_files(files, None, true, &of(&ratings)));
+        assert_eq!(t.visible, [7]);
+        assert_eq!(t.files.get(t.current), Some(&name(9)));
     }
 }
