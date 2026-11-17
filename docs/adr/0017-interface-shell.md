@@ -435,6 +435,11 @@ the decisions do not live only in the tasks.
 | U12c-Q5 | One safe write per file (ADR 0007 §9.5); the window shows "Writing {i} of {n} …" and is locked until all have answered; then the window's image is read again |
 | U12c-Q6 | The summary: "Written to {w} of {n} images", the failed files with their reasons, and the files where an unresolved conflict was kept |
 | U12c-Q7 | The wait at program exit includes the batch's writes |
+| U12d-Q1 | (owner, 2026-11-17, after the job test: keywords added to several marked images replaced their own) "Apply to {n} Marked" sends only the difference of a list field to the other marked images: an entry added in the window is added to each marked image that lacks it (at the end, exact text), an entry removed in the window is removed from each marked image that has it; every other entry of each image is kept. The window's image is written as before (U12c-Q3) |
+| U12d-Q2 | U12d-Q1 holds for every list field of plain text entries (Keywords, Person Shown, Subject Code …). Creator is a copyright-management field (ADR 0007 §8): its added entries go to the other images, its removed entries are removed on the window's image only. The structure lists are replaced as whole lists as before (U11a-Q5) |
+| U12d-Q3 | The confirmation (U12c-Q4) names, for each such list field, what is added and what is removed, for example "Keywords: adds vinter, älg; removes skog" |
+| U12d-Q4 | With two or more images marked, the window says under "{n} images marked" that OK and Save write this image only |
+| U12d-Q5 | Two tasks: the add and remove edit of a list in `pw-metadata`, applied to each file's own values when it is written (T179), then the shell's use of it, the confirmation and the line (T180) |
 | U10d-Q1 | The Licence (PLUS) section edits all four PLUS choice lists: Model and Property Release Status, Minor Model Age Disclosure and Data Mining, with the two release ids; Model Age stays under Other Metadata |
 | U10d-Q2 | Digital Source Type is a choice list from IPTC's NewsCodes vocabulary, saved by the reviewer in `D:\PhotoWorkflowData\references\` (R2, 2026-11-14) |
 | U10d-Q3 | The choices show the vocabularies' own English labels, the full URI as tooltip (GR14; ADR 0007 Q9 updated) |
