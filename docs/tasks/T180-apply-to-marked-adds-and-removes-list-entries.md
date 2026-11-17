@@ -1,4 +1,4 @@
-# T180. ADR 0017 U12d: "Apply to {n} Marked" adds and removes list entries (pw-loupe) — Blocked
+# T180. ADR 0017 U12d: "Apply to {n} Marked" adds and removes list entries (pw-loupe) — Open
 
 - **Chain:** T179 → T180. Blocked: waits for T179 (`Edit::Entries` in `pw-metadata`). The owner's
   hand check of U12d follows this task.
@@ -10,7 +10,7 @@
   confirmation names what is added and removed, and the window says that OK and Save write this
   image only.
 - **Crates:** `pw-loupe`. **Files:** `crates/pw-loupe/src/editor.rs`, `crates/pw-loupe/src/main.rs`
-  (the line under the title, point 5; the existing tests named below), `docs/glossary.md` (only if
+  (the line under the title, point 5; the doc comments of points 3 and 6), `docs/glossary.md` (only if
   point 4's texts need a term it lacks), `docs/test-inventory.md`, and this task's own file
   (status and log).
 - **What:**
@@ -55,9 +55,16 @@
      ```
 
      `field_count` counts each `ListChange` once. Update the doc comments of `BatchEdits`, its
-     fields and `field_count`, and of `apply_allowed` (`main.rs`), to say this.
-  4. **The confirmation** (`apply_confirmation`, U12d-Q3): after the "Changed:" line, one line per
-     `ListChange`, in order, made by new `EditorText` variants (rule 13, whole sentences; the
+     fields and `field_count`, and of `apply_allowed` (`main.rs`), to say this. For Creator
+     (`copyright_management()`) `removes` is always empty and its removed entries are in
+     `removes_here`; for every other field `removes_here` is always empty. `main.rs` does not
+     name `ListChange` (`mod editor` is private and `lib.rs` is not in this task); if it must,
+     stop and say so.
+     The arm `Edit::Entries { .. }` in the closure `has` of `BatchEdits::lists` (added by T179
+     only so the workspace built) becomes `false`, with a comment that `Entries` is never sent
+     for a structure list (`ALL_LISTS`); list fields are counted through `list_changes`.
+  4. **The confirmation** (`apply_confirmation`, U12d-Q3): directly after the "Changed:" line (in
+     its place when there is none), before the "Emptied" lines, one line per `ListChange`, in order, made by new `EditorText` variants (rule 13, whole sentences; the
      entries are `Vec<String>` in the variant, joined with ", " inside `editor_text` as data; the
      field's name is `field.label()`):
      - `ListAdds { field, entries }` → `"{field}: adds {entries}"`;
@@ -69,8 +76,9 @@
   5. **The line under the title** (U12d-Q4): a new `EditorText::ThisImageOnly` →
      `"OK and Save write this image only."`, drawn in `main.rs` right under the `MarkedImages`
      line (about line 2817), with the same condition (`marked_count > 1`).
-  6. **`apply_allowed`** (`main.rs`) is unchanged: it allows the button when `batch.others` is not
-     empty, which now also holds `Entries`.
+  6. **`apply_allowed`** (`main.rs`): its code is unchanged; it allows the button when
+     `batch.others` is not empty, which now also holds `Entries`. Its doc comment and that of
+     `ApplyPlan::new` ("gets the changed fields", about line 214) are updated to say so.
   7. **An image left alone** (owner, 2026-11-17, ADR 0017 U12d-Q6, T179 point 5): a marked
      image whose list field has an `Open` conflict gets no change to that field, and its
      report names the property in a `WriteNotice::ConflictKept`, also when nothing was
@@ -78,7 +86,11 @@
      "Unresolved conflict kept: {file} ({field})" (`crates/pw-loupe/src/metadata.rs`, the
      batch's write result, about line 858), whether the report is `Written` or `Unchanged`. No
      code is to change for this; if it does not hold, stop and say so. The confirmation
-     (point 4) says nothing about conflicts (the images are not read before the write).
+     (point 4) says nothing about conflicts (the images are not read before the write). Such an
+     image, like one that already held every added entry, counts as written in "Written to {w}
+     of {n} images" (owner, ADR 0017 U12d-Q8). The existing test
+     `one_failure_stops_nothing_and_the_summary_counts_failures_and_kept_conflicts`
+     (`metadata.rs`, about line 3189) already covers a kept conflict from an `Unchanged` report.
 - **Tests to add** (`editor.rs` unless named):
   1. `an_added_keyword_is_added_to_the_other_images`: `dc:subject` `sol, hav`, typed `sol, hav,
      vinter` → `others == [Entries { "dc:subject", add ["vinter"], remove [] }]`, `this_image` the
@@ -108,6 +120,11 @@
     only as far as this task's points ask, and name every changed assertion in the report. If
     another existing test fails, stop and say which instead of changing it.
 - **Not in this task:** structure lists (U11a-Q5); copy and paste (U12b); templates (U13).
+  Known and accepted (owner, 2026-11-17, ADR 0017 U12d-Q7, U12d-Q8): no undo of a batch (the
+  reverse change also removes an added entry from images that had it before); a pasted list's
+  difference removes the window's other entries from every marked image; an entry with a comma
+  is split by the list text, so removing it removes nothing elsewhere; a failed file is retried
+  by making the change again (the window's image is read again after the batch).
 - **Rules:** `docs/tasks/README.md` rules 1–13.
 - **Done when:** `.\tools\check.ps1` is all OK and `git diff --stat` shows only the files above.
 
@@ -119,3 +136,4 @@
 | 2026-11-17 | Blocked | Cold read: doable with the named files. Changed: the real list of editable top-level list fields (Supplemental Categories is not editable); two more existing tests named (the T143 list test and the confirmation test's full `BatchEdits` literal); `field.label()` for the name; the list texts take `Vec<String>`; `ListChange` derives; `every_editor_text` named; a Creator-only removal leaves the button disabled, as intended; the stale doc comments named. Waits for T179 |
 | 2026-11-17 | Blocked | From T179's review (owner, ADR 0017 U12d-Q6): an image with an `Open` conflict on a list field is left alone and named in the summary's "Unresolved conflict kept" line; point 7 added (no new code, the summary already shows it). Waits for T179 |
 | 2026-11-17 | Blocked | From T179's review: T179 added the arm `Edit::Entries { property, .. } => !clear && property == list` in `BatchEdits::lists` only so the workspace builds. That closure checks `EditorForm::ALL_LISTS` (structure lists), which `Entries` refuses, so the arm is never true for an edit that can be written; T180 counts list fields through `list_changes` (point 3) and may leave the arm or make it `false`, saying which in its report. T179 is Done |
+| 2026-11-17 | Open | Chain review (T179 → T180; a fresh agent read `AGENTS.md`, the README, both task files and the code they name): write order, the modal window during the batch and a failure halfway raise nothing new. Changed: the `main.rs` reason in Files; Creator's `removes`/`removes_here` said outright; `main.rs` does not name `ListChange`; the `Entries` arm in `BatchEdits::lists` becomes `false` (T179's leftover); where the list lines go in the confirmation; `apply_allowed` code unchanged, its and `ApplyPlan::new`'s doc comments updated; point 7: an unchanged image counts as written and the existing summary test named. Owner decisions ADR 0017 U12d-Q7 (no undo, paste) and U12d-Q8 (counted as written; the comma split and the retry known limits), under "Not in this task". T179 Done: set Open |

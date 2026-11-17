@@ -197,6 +197,10 @@ and reviewer:
     `contains` in loops (quadratic, small at today's list sizes).
   - *`ConflictKept` is named also when the `Entries` would have changed nothing* (it adds an
     entry both forms hold): accepted, the conflict is kept either way.
+  - *From the chain review of T179 and T180* (owner, ADR 0017 U12d-Q8): an entry with a comma
+    ("Lund, Sweden") is split by the window's list text, so removing it removes nothing on the
+    other images while the confirmation names it; a failed file of a batch can only be retried by
+    making the change again.
 Removed on 2026-11-13 because they are done or planned elsewhere: ADR 0010 steps M3–M7 (done,
 T30–T40); ADR 0011 step K4 (done, T26–T29); moving rejected or picked images to `_rejected` /
 `_picked` (ADR 0013 §13), now ADR 0017 U9 (§2.6, U-Q6); the import dialog fields for title and description in the Tauri
