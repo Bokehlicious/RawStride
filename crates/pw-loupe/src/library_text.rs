@@ -1,7 +1,8 @@
 //! The texts of the library in the left column (ADR 0017 §2.1, U4, T135; rule 13): the sections'
 //! headings, the right-click menus, the empty sections, the drives' names and the line of an
 //! expand that failed. Each text is made here, whole; the drawing code in `main.rs` holds none of
-//! them. Folder names and paths are data and are shown as they are.
+//! them. Folder names and paths are data and are shown as they are; the one template that joins
+//! them is [`folder_list_name_text`], a folder in Favourites or Recent with its parents (T164).
 
 use std::io;
 
@@ -58,6 +59,13 @@ pub fn drive_text(letter: char, label: Option<&str>, has_disk: bool) -> String {
     }
 }
 
+/// A folder in Favourites or Recent whose name another folder of the list has too, with as many
+/// of its parent folders as make the names differ (ADR 0017 U4-Q8): "{name} ({parents})", for
+/// example "2025-07-25 (import\2025)".
+pub fn folder_list_name_text(name: &str, parents: &str) -> String {
+    format!("{name} ({parents})")
+}
+
 /// The greyed line under a folder whose subfolders could not be read. The system's own message
 /// is not shown: it is in the system's language, not the program's (GR14).
 pub fn expand_error_text(error: &io::Error) -> String {
@@ -100,6 +108,14 @@ mod tests {
         assert_eq!(drive_text('E', None, false), "E: (no disk)");
         // A label left from an earlier disk is not shown when there is none now.
         assert_eq!(drive_text('E', Some("CARD"), false), "E: (no disk)");
+    }
+
+    #[test]
+    fn a_folder_in_a_list_is_named_with_its_parents() {
+        assert_eq!(
+            folder_list_name_text("2025-07-25", r"import\2025"),
+            r"2025-07-25 (import\2025)"
+        );
     }
 
     #[test]

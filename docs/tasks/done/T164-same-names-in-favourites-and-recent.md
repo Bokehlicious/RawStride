@@ -1,4 +1,4 @@
-# T164. Folders with the same name told apart in Favourites and Recent (pw-loupe) — Open
+# T164. Folders with the same name told apart in Favourites and Recent (pw-loupe) — Done
 
 - **Why:** the owner's hand check of T158 (2026-11-16): Recent seemed to list the same folder
   several times. They were different folders with the same name (`import\2025\2025-07-25`,
@@ -57,3 +57,5 @@
 |---|---|---|
 | 2026-11-16 | Open | Added from the owner's hand check of T158; the owner's decision is ADR 0017 U4-Q8 |
 | 2026-11-16 | Open | Cold read: the names are set again after `record`'s `truncate`; the tooltip is the full path only for a folder that exists; how a `Prefix` and `RootDir` are written; a drive's root keeps its name; the fallback uses every parent component instead of "the whole parent path"; the comparison follows `folder_key`; the owner's full paths, the case test's expected texts and a same-folder-on-two-drives case given; Windows tests and raw strings; the doc comment of `ListEntry::name` |
+| 2026-11-17 | Ready for review | `folder_list_name_text` in `library_text.rs`; `list_names` in `library.rs`, `FolderList` sets the names after `from_paths`, `add`, `record`, `remove` and `clear`; the tests listed added (5 in `library.rs`, 1 in `library_text.rs`); a path whose parent has no components (a relative one-part path) keeps its name like a drive's root; `check.ps1` all OK (1687 passed, 65 ignored, 0 failed) |
+| 2026-11-17 | Done | Reviewed: no bugs (a `\\?\` path would show that prefix; the library stores plain paths). Reviewer's `.\tools\check.ps1` on the tree with T160, T161, T163 and T164: all OK, 1694 passed, 65 ignored, 0 failed; clippy without warnings; the inventory's header set to this commit's count (1687). The owner's hand check is done after the commit (owner, 2026-11-17). No leftovers |

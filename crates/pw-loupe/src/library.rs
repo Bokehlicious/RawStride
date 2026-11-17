@@ -8,7 +8,7 @@
 use std::io;
 use std::path::{Path, PathBuf};
 
-use crate::library_text::{drive_text, expand_error_text};
+use crate::library_text::{drive_text, expand_error_text, folder_list_name_text};
 use crate::settings::SavedLibrary;
 
 /// How many recent folders are kept (U4-Q4).
@@ -335,6 +335,89 @@ pub fn display_name(path: &Path) -> String {
     )
 }
 
+/// The names of a list of folders (Favourites or Recent; ADR 0017 U4-Q8, T164), one per path in
+/// the same order. A folder whose [`display_name`] no other folder of the list has keeps it; a
+/// group with the same name (without regard to case on Windows) gets, for the smallest `k ≥ 1`
+/// that makes every path of the group differ, the last `k` components of each path's parent
+/// ([`folder_list_name_text`]), or all of them if no `k` does. A path without a parent (a drive's
+/// root) keeps its name.
+pub fn list_names(paths: &[PathBuf]) -> Vec<String> {
+    let mut names: Vec<String> = paths.iter().map(|path| display_name(path)).collect();
+    // The paths that have a parent: (index, name key, parent components).
+    let candidates: Vec<(usize, String, Vec<String>)> = paths
+        .iter()
+        .zip(&names)
+        .enumerate()
+        .filter_map(|(index, (path, name))| {
+            let parents = parent_components(path);
+            (!parents.is_empty()).then(|| (index, comparison_key(name), parents))
+        })
+        .collect();
+    for (index, key, parents) in &candidates {
+        let group: Vec<&[String]> = candidates
+            .iter()
+            .filter(|(_, other, _)| other == key)
+            .map(|(_, _, other)| other.as_slice())
+            .collect();
+        if group.len() < 2 {
+            continue;
+        }
+        let k = distinct_parent_count(&group);
+        if let Some(name) = names.get_mut(*index) {
+            *name = folder_list_name_text(name, &last_components(parents, k));
+        }
+    }
+    names
+}
+
+/// The components of `path`'s parent as text: a `Prefix` as it is written (`D:`), `RootDir`
+/// skipped. Empty for a path without a parent.
+fn parent_components(path: &Path) -> Vec<String> {
+    path.parent()
+        .map(|parent| {
+            parent
+                .components()
+                .filter(|component| !matches!(component, std::path::Component::RootDir))
+                .map(|component| component.as_os_str().to_string_lossy().into_owned())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// The last `k` of `components` (all of them when there are fewer), joined with `\`.
+fn last_components(components: &[String], k: usize) -> String {
+    components
+        .iter()
+        .skip(components.len().saturating_sub(k))
+        .map(String::as_str)
+        .collect::<Vec<_>>()
+        .join("\\")
+}
+
+/// The smallest `k ≥ 1` for which the last `k` parent components differ for every path of
+/// `group`, or the most components any of them has when none does (then all are used).
+fn distinct_parent_count(group: &[&[String]]) -> usize {
+    let most = group.iter().map(|parents| parents.len()).max().unwrap_or(0);
+    (1..=most)
+        .find(|&k| {
+            let suffixes: std::collections::HashSet<String> = group
+                .iter()
+                .map(|parents| comparison_key(&last_components(parents, k)))
+                .collect();
+            suffixes.len() == group.len()
+        })
+        .unwrap_or(most)
+}
+
+/// A name or part of a path as [`folder_key`] compares it: in lower case on Windows.
+fn comparison_key(text: &str) -> String {
+    if cfg!(windows) {
+        text.to_lowercase()
+    } else {
+        text.to_string()
+    }
+}
+
 /// A cheap key for "is this the same folder" in the tree's highlight (U4-Q5): the absolute path
 /// without `\\?\` and without a separator at the end, in lower case on Windows. Nothing is read
 /// from the disk, so it can be made in every frame.
@@ -368,7 +451,9 @@ fn resolved_folder(path: &Path) -> PathBuf {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ListEntry {
     pub path: PathBuf,
-    /// The folder's name ([`display_name`]); the full path is the tooltip.
+    /// The folder's name in the list ([`list_names`]): its [`display_name`], with as many of its
+    /// parent folders as tell it apart when another folder of the list has the same name. The
+    /// full path is the tooltip of a folder that exists.
     pub name: String,
     /// Whether the folder existed when the list last looked (at start, at a change of the list
     /// and at "Refresh"); a missing one is greyed and can only be removed.
@@ -402,7 +487,16 @@ impl FolderList {
             }
             list.add(path.clone());
         }
+        list.set_names();
         list
+    }
+
+    /// Sets every entry's name from [`list_names`], after each change of the list.
+    fn set_names(&mut self) {
+        let names = list_names(&self.paths());
+        for (entry, name) in self.entries.iter_mut().zip(names) {
+            entry.name = name;
+        }
     }
 
     pub fn entries(&self) -> &[ListEntry] {
@@ -437,6 +531,7 @@ impl FolderList {
             return false;
         }
         self.entries.push(ListEntry::new(path));
+        self.set_names();
         true
     }
 
@@ -448,6 +543,7 @@ impl FolderList {
         }
         self.entries.insert(0, ListEntry::new(path));
         self.entries.truncate(RECENT_LIMIT);
+        self.set_names();
     }
 
     /// Removes the folder. Returns `false` when it was not in the list.
@@ -455,6 +551,7 @@ impl FolderList {
         match self.position(path) {
             Some(index) => {
                 self.entries.remove(index);
+                self.set_names();
                 true
             }
             None => false,
@@ -463,6 +560,7 @@ impl FolderList {
 
     pub fn clear(&mut self) {
         self.entries.clear();
+        self.set_names();
     }
 
     /// Looks again whether each folder exists.
@@ -951,6 +1049,76 @@ mod tests {
         assert_eq!(recent.entries()[1].name, "f11");
         recent.clear();
         assert!(recent.is_empty());
+    }
+
+    fn names(paths: &[&str]) -> Vec<String> {
+        let paths: Vec<PathBuf> = paths.iter().map(PathBuf::from).collect();
+        list_names(&paths)
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn folders_with_the_same_name_get_as_many_parents_as_tell_them_apart() {
+        assert_eq!(
+            names(&[
+                r"C:\Photos\import\2025\2025-07-25",
+                r"D:\Data\Trip\1\2025\2025-07-25",
+                r"D:\Data\Trip\1\2\2025\2025-07-25",
+            ]),
+            [
+                r"2025-07-25 (import\2025)",
+                r"2025-07-25 (1\2025)",
+                r"2025-07-25 (2\2025)",
+            ]
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_drive_is_a_parent_component_written_as_its_prefix() {
+        assert_eq!(names(&[r"D:\a\x", r"E:\b\x"]), ["x (a)", "x (b)"]);
+        assert_eq!(names(&[r"D:\x", r"E:\x"]), ["x (D:)", "x (E:)"]);
+        assert_eq!(names(&[r"D:\a\x", r"E:\a\x"]), [r"x (D:\a)", r"x (E:\a)"]);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn names_that_differ_only_in_case_are_the_same_name() {
+        assert_eq!(
+            names(&[r"D:\a\Foto", r"D:\b\foto"]),
+            ["Foto (a)", "foto (b)"]
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_name_no_other_folder_has_and_a_drives_root_are_unchanged() {
+        assert_eq!(
+            names(&[r"D:\a\x", r"D:\Foto\only", r"E:\b\x", r"D:\"]),
+            ["x (a)", "only", "x (b)", r"D:\"]
+        );
+    }
+
+    #[test]
+    fn the_names_follow_folders_with_the_same_name_coming_and_going() {
+        let dir = TempDir::new();
+        let (a, b) = (dir.folder("a/x"), dir.folder("b/x"));
+        let mut recent = FolderList::default();
+        recent.record(a.clone());
+        assert_eq!(recent.entries()[0].name, "x");
+        recent.record(b.clone());
+        let names: Vec<&str> = recent.entries().iter().map(|e| e.name.as_str()).collect();
+        assert_eq!(names, ["x (b)", "x (a)"]);
+        assert!(recent.remove(&b));
+        assert_eq!(recent.entries()[0].name, "x");
+        // The other list kind, made from saved paths, names them the same way.
+        let favourites = FolderList::from_paths(&[a, b], None);
+        let names: Vec<&str> = favourites
+            .entries()
+            .iter()
+            .map(|e| e.name.as_str())
+            .collect();
+        assert_eq!(names, ["x (a)", "x (b)"]);
     }
 
     #[test]

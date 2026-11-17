@@ -168,3 +168,4 @@ was when the task was done, so "this file", "below" and "the Log" in T1–T115 m
 | [T159](T159-raf-reader-in-pw-raw.md) | Fujifilm RAF in pw-raw: previews, size and Exif |
 | [T158](T158-incremental-ingest-in-the-dialog.md) | Incremental ingest in the import dialog (pw-loupe) |
 | [T160](T160-raf-listed-everywhere.md) | Fujifilm RAF listed: viewer, import and sidecar |
+| [T164](T164-same-names-in-favourites-and-recent.md) | Folders with the same name told apart in Favourites and Recent (pw-loupe) |
