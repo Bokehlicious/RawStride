@@ -1,4 +1,4 @@
-# T181. The metadata window's status line says when nothing was saved because of a field error (pw-loupe) — Blocked
+# T181. The metadata window's status line says when nothing was saved because of a field error (pw-loupe) — Open
 
 - **Why:** from the review of T143: with an Artwork or Object's Date Created that is not an IPTC
   date, OK writes nothing and the reason is shown only under that box, which may be under the
@@ -41,10 +41,10 @@
      where `write_window` reads `edits()` from the form, before the `match`). Nothing else in
      `write_window` changes; the window stays as today (`WriteOutcome::FieldErrors`).
   4. **"Apply to {n} Marked"** (`main.rs`, the `Err(errors)` arm after `ApplyPlan::new`, about
-     line 2953): the same status as point 3, besides `window.errors = errors` (unchanged); no
+     line 2958): the same status as point 3, besides `window.errors = errors` (unchanged); no
      confirmation is shown, as today.
   5. The status goes back to `EditorStatus::Idle` when the form changes, as every status does
-     today (`form_after != form_before`, about line 2903; it runs before points 3 and 4 in the
+     today (`form_after != form_before`, about line 2909; it runs before points 3 and 4 in the
      frame, so the text is shown until the next change). Check this order in the code; if it is
      not so, stop and say why instead of moving code.
 - **Tests to add** (`editor.rs`'s `mod tests`):
@@ -62,7 +62,7 @@
      the Image, Date Created."` (the Artwork list sits after Person Shown, before Date Created, in
      `item_names`' order); with neither: `"Nothing was saved. Correct the errors in the
      form."`.
-  3. `every_editor_text` (about line 4334, a list of examples) gets one `NotSaved` entry with
+  3. `every_editor_text` (about line 4495, a list of examples) gets one `NotSaved` entry with
      one field, beside T180's entries.
   - No test of `Loupe` (it cannot be built in a test); the owner's hand check covers points 3–5:
     a wrong Artwork Date Created under a collapsed "More", then OK, then "Apply to {n} Marked"
@@ -82,3 +82,4 @@
 |---|---|---|
 | 2026-11-17 | Blocked | Added from the first backlog sort (owner, 2026-11-17: the status line says so too; OK and "Apply to {n} Marked", naming the fields and lists, U11c-Q9 in ADR 0017 §6.1); waits for T180 (the same files) and for its cold read |
 | 2026-11-17 | Blocked | Cold read: doable with the named files; point 5's order checked (the status reset at about line 2903 runs before the Apply arm and both calls of `write_window`); no borrow problem; the names and their order checked against `item_names`. Changed: `fields` taken before `errors` is moved, and may be empty; test 1 adds a second entry with `add_entry` and clears both dates; the plural string written out; `NotSaved` added to `every_editor_text` (test 3). T180 touches the same enum and `every_editor_text`, so the line numbers will move. Still waits for T180 |
+| 2026-11-17 | Open | T180 is Done: set Open. Line numbers checked against the code after T180 and updated (the Apply arm about line 2958, the status reset about line 2909, `every_editor_text` about line 4495); point 5's order still holds |

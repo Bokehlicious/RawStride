@@ -1,4 +1,4 @@
-# T183. ADR 0017 U9b: a tab open on `_rejected` or `_picked` follows a move and an undo; Ctrl+Z while a move runs says so (pw-loupe) — Blocked
+# T183. ADR 0017 U9b: a tab open on `_rejected` or `_picked` follows a move and an undo; Ctrl+Z while a move runs says so (pw-loupe) — Open
 
 - **Why:** from the review of T174 and the first backlog sort (owner, 2026-11-17; ADR 0017 §6.1,
   U9-Q11):
@@ -79,3 +79,4 @@
 |---|---|---|
 | 2026-11-17 | Blocked | Added from the first backlog sort (owner, 2026-11-17: the two items of the review of T174 as one task, U9-Q11 in ADR 0017 §6.1); waits for T180 (`main.rs`) and for its cold read |
 | 2026-11-17 | Blocked | Cold read: `lib.rs` must export the two new names (added to the files); no collision with T180. Changed: one `relist_tabs` for a batch and an undo, listing the `_rejected` or `_picked` tabs again rather than dropping single files (a folder spelt differently, files a failed move back left); "when a tab exists" checked with `same_folder`; the order `forget_sort`, `load_active_tab`, `follow_sort`, also in `undo_done` (it sorted the new files by ratings not read yet); the running-move text cleared after a batch without a message; Ctrl+Z not queued, as intended. Three timing gaps noted as left (`backlog.md`). Still waits for T180 |
+| 2026-11-17 | Open | T180 is Done: set Open; T180 changed `main.rs` only in `apply_allowed`'s and `ApplyPlan::new`'s doc comments and the metadata window's title lines, nothing this task names |

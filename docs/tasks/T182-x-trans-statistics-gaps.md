@@ -1,4 +1,4 @@
-# T182. RAW statistics on X-Trans: channel shares, renders and a file cut short (pw-libraw tests) — Blocked
+# T182. RAW statistics on X-Trans: channel shares, renders and a file cut short (pw-libraw tests) — Open
 
 - **Why:** from T142 and the first backlog sort (owner, 2026-11-17). T146 added
   `fujifilm_files_have_statistics_and_a_clipping_map_that_agree` in
@@ -70,3 +70,4 @@
 |---|---|---|
 | 2026-11-17 | Blocked | Added from the first backlog sort (owner, 2026-11-17): the reviewer found the X-Trans files already tested by T146; the owner chose a small task for what T146 left (the shares, the top bin, renders, a file cut short). Waits for T180 (queue order) and for its cold read |
 | 2026-11-17 | Blocked | Cold read: doable with the named files and the public API; the 2/9 and 5/9 shares checked against `pwlr.cpp` (three colours only, visible area, whole 6×6 tiles); a region render with PPG is accepted (LibRaw uses its own X-Trans interpolation). Changed: the top-bin check's condition (an equal black level per position) and an `Err` without `DAMAGED` added to the stop list; what each test prints; the module comment's run line without `-p`; the `docs/test-inventory.md` change named. Still waits for T180 (queue order) |
+| 2026-11-17 | Open | T180 is Done: set Open (tests only in `pw-libraw`; T180 changed nothing it uses) |

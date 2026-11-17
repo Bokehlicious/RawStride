@@ -86,10 +86,10 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status |
 |---|---|---|
-| [T181](T181-nothing-saved-text-on-a-field-error.md) | The metadata window's status line says when nothing was saved because of a field error (pw-loupe) | Blocked |
-| [T182](T182-x-trans-statistics-gaps.md) | RAW statistics on X-Trans: channel shares, renders and a file cut short (pw-libraw tests) | Blocked |
-| [T183](T183-tabs-on-rejected-and-picked-and-undo-while-moving.md) | ADR 0017 U9b: a tab open on `_rejected` or `_picked` follows a move and an undo; Ctrl+Z while a move runs says so (pw-loupe) | Blocked |
-| [T184](T184-release-for-move-a-required-method.md) | `ImageCheck::release_for_move` a required method (pw-metadata, pw-imagecheck) | Blocked |
+| [T181](T181-nothing-saved-text-on-a-field-error.md) | The metadata window's status line says when nothing was saved because of a field error (pw-loupe) | Open |
+| [T182](T182-x-trans-statistics-gaps.md) | RAW statistics on X-Trans: channel shares, renders and a file cut short (pw-libraw tests) | Open |
+| [T183](T183-tabs-on-rejected-and-picked-and-undo-while-moving.md) | ADR 0017 U9b: a tab open on `_rejected` or `_picked` follows a move and an undo; Ctrl+Z while a move runs says so (pw-loupe) | Open |
+| [T184](T184-release-for-move-a-required-method.md) | `ImageCheck::release_for_move` a required method (pw-metadata, pw-imagecheck) | Open |
 
 ## Writing a task (owner and reviewer)
 

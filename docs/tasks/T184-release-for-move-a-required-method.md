@@ -1,4 +1,4 @@
-# T184. `ImageCheck::release_for_move` a required method (pw-metadata, pw-imagecheck) — Blocked
+# T184. `ImageCheck::release_for_move` a required method (pw-metadata, pw-imagecheck) — Open
 
 - **Why:** from the review of T177 and the first backlog sort (owner, 2026-11-17). The default
   `ImageCheck::release_for_move` calls `release`, so a new `ImageCheck`, or a wrapper of
@@ -42,3 +42,4 @@
 |---|---|---|
 | 2026-11-17 | Blocked | Added from the first backlog sort (owner, 2026-11-17); waits for T180 (queue order) and for its cold read |
 | 2026-11-17 | Blocked | Cold read: doable with the named files; the seven implementations are all there are (no blanket impls, nothing outside `crates/`, `pw-loupe` only builds `RawImageCheck`); only `safe_write.rs` says "the default calls". Changed: the doc comment's sentence given word for word; why `Timed` forwarding changes nothing written under **Tests to add**. Still waits for T180 (queue order) |
+| 2026-11-17 | Open | T180 is Done: set Open (T180 changed nothing in `pw-metadata` or `pw-imagecheck`; T179's `edit.rs` changes do not touch `ImageCheck`) |
