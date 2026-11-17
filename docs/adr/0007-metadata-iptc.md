@@ -20,6 +20,8 @@
     and their tasks: I1 T76, I2 T77, I3 T78, I4 T79, I5 T80–T81, I6 T82, I7 T83, I8 T84–T86,
     I9 T87–T93, I10 T94–T108, I11 T128 (with ADR 0017 U10d), I12 T127 (with T129, T130, T132),
     I13 T133; the owner's decisions D1–D16 are in §17.
+  - **Amended by ADR 0020 (owner, 2026-11-17):** a manual correction of the capture time, the only
+    way DateTimeOriginal changes (§6.3, §7, Q12, rule 4).
 - Date: 2026-11-04 (revision 1: storage, IIM policy and the role of XMP; revision 2: all owner
   decisions of 2026-11-04, MWG 2.0, the full IPTC specification and the Mapping Guidelines;
   revision 3: Q4 answered by the owner on 2026-11-08; revision 4: Q5 answered by the owner on
@@ -64,7 +66,7 @@ Every rule in §3–§12 carries its basis:
 | 1 | **XMP is RawStride's primary representation** for the explicitly mapped descriptive fields | [Product]; IPTC Core/Extension are defined in XMP [IPTC §1] |
 | 2 | **IIM vs XMP:**<br>- checksum matches → XMP;<br>- checksum differs → IIM per differing field;<br>- no checksum → conflict, the user decides;<br>- conflicts always visible | [MWG §4.2.3.2] for the first two; [Product ≠ std] for the third |
 | 3 | **IIM is preserved and written back when it exists.** New IIM only with the setting | [MWG §4.2.3.2]; [Product ≠ std] against [IPTC §5.3.4] "should save … both" |
-| 4 | **Exif vs XMP:**<br>- XMP wins;<br>- conflicts detected and shown;<br>- JPEG/TIFF/DNG synchronise the corresponding existing Exif fields;<br>- RAW originals are never changed (Exif conflicts there are only shown) | [Product ≠ std] against [MWG §4.2.3.1] "prefer Exif"; sync per [MWG §4.2.3.1] and [IPTC-MG] |
+| 4 | **Exif vs XMP:**<br>- XMP wins;<br>- conflicts detected and shown;<br>- JPEG/TIFF/DNG synchronise the corresponding existing Exif fields;<br>- RAW originals are never changed (Exif conflicts there are only shown; a corrected capture time in the sidecar is not a conflict, ADR 0020) | [Product ≠ std] against [MWG §4.2.3.1] "prefer Exif"; sync per [MWG §4.2.3.1] and [IPTC-MG] |
 | 5 | **Storage (fixed):**<br>- **DNG: embedded, never a sidecar** (also Xiaomi 17 Ultra DNG);<br>- **ARW, RW2 and other manufacturer RAW: sidecar only, original never changed**;<br>- **JPEG/TIFF: embedded** | [Product] (architecture decision) |
 | 6 | **Embedded writes are transactional:** a verified temporary copy, then an atomic replace; never a partially written original | [Product] |
 | 7 | **DateTimeOriginal is never changed automatically. A time zone is never invented**; it is stored only when known | [MWG §4.2.3.4 "Time-zone handling"]; [Product] |
@@ -321,7 +323,8 @@ Urgency (2:10), Category (2:15) and Supplemental Categories (2:20):
     both IPTC-MG and MWG accept it.
 - **The Exif byte order is kept.** Exif/TIFF device tags are not duplicated into XMP `exif:` or
   `tiff:`, and no Exif checksum is written to XMP. [MWG §4.2.3.1]
-- **DateTimeOriginal is never written** (§7).
+- **DateTimeOriginal is never written** (§7), except by the manual correction of ADR 0020
+  (owner, 2026-11-17).
 
 ### 6.4 Manufacturer RAW (ARW, RW2, …)
 
@@ -379,7 +382,7 @@ Urgency (2:10), Category (2:15) and Supplemental Categories (2:20):
 | Without a time, the time part stays empty. A system that needs a time uses 00:00:00 but does not store it | [IPTC §7.10 note 1] |
 | IIM has no sub-seconds: they are dropped for IIM and kept in XMP | [IPTC-MG Exif Note on Date Created] |
 | **IIM Time Created (2:60) is left out when the zone is unknown**; only the date (2:55) is written | [Product], following MWG; to confirm against IIM 4.2 (Q3) |
-| A manual "correct camera time" feature is **out of scope**. If added later, it is the only way DateTimeOriginal ever changes, and only on the user's explicit command | [Product] (Q12); MWG says such corrections SHOULD be exported to Exif |
+| A manual "correct camera time" feature is ADR 0020 (owner, 2026-11-17; out of scope until then). It is the only way DateTimeOriginal ever changes, and only on the user's explicit command. For manufacturer RAW the corrected time is the sidecar's `exif:DateTimeOriginal`, which is read before the embedded value and is not a conflict against it | [Product] (Q12); MWG says such corrections SHOULD be exported to Exif |
 
 ## 8. Other rules
 
@@ -658,7 +661,7 @@ silently. All other deviations concern SHOULD-level recommendations; each is mar
 | ~~**Q9**~~ | Allowed URI values of PLUS properties (release status, minor model age, data mining) | **Resolved 2026-11-11:** a fixed choice list with Swedish labels (English since 2026-11-14, ADR 0017 U10d-Q3), values taken from the PLUS controlled vocabulary; unknown values kept with a warning (§11). The vocabulary itself must be read before implementation (§16) |
 | ~~**Q10**~~ | Fallback encoding for IIM/Exif text that is neither ASCII nor UTF-8 | **Resolved 2026-11-11:** Windows-1252 by default, changeable in the settings; the value is marked as converted (§5.4) |
 | ~~**Q11**~~ | Test files | **Resolved 2026-11-11:** the level-C samples of §12, provided by the owner before the implementation is tested. **Changed 2026-11-14:** Photo Mechanic files, a Xiaomi DNG and mixed Photo Mechanic / Lightroom Classic archive files; no Lightroom-only files, no IIM-only JPEG (§12) |
-| ~~**Q12**~~ | A manual "correct camera time" feature (MWG: such corrections SHOULD be exported to Exif) | **Resolved 2026-11-11:** Out of scope now; would be the only way DateTimeOriginal ever changes, and only on the user's explicit command (§7) |
+| ~~**Q12**~~ | A manual "correct camera time" feature (MWG: such corrections SHOULD be exported to Exif) | **Resolved 2026-11-11:** Out of scope now; would be the only way DateTimeOriginal ever changes, and only on the user's explicit command (§7). **Taken up 2026-11-17 (owner): ADR 0020** |
 | ~~**Q13**~~ | "New IIM only when backward compatibility requires it": how is that detected besides the setting? | **Resolved 2026-11-11:** Only the setting (and possibly a future export profile); no automatic detection (§5.2) |
 
 ## 15. Consequences
