@@ -1,6 +1,6 @@
 //! The histogram and the exposure statistics of the unpacked RAW data (ADR 0017 §2.6, U7; T142)
 //! on the real test RAWs. Run with
-//! `$env:PW_TESTDATA = "<folder>"; cargo test -p pw-libraw -- --ignored`.
+//! `$env:PW_TESTDATA = "<folder>"; cargo test --workspace -- --ignored`.
 //!
 //! - Every test file gives statistics: 256 bins per channel that add up to the channel's pixels,
 //!   the three channels of a mosaic add up to the image's pixel count, and every share is between
@@ -17,6 +17,11 @@
 //!   of 3×3 cells that agrees with them; `_DSF4271.RAF` has clipped cells in R and G and none in
 //!   B, the other four named files have none. (The every-file test above skips `.RAF`: its checks
 //!   assume a Bayer pattern.)
+//! - The Fujifilm X-Trans files (T182): every file whose width and height are divisible by 6 has
+//!   the X-Trans shares (R = B = 2/9, G = 5/9 of the photosites) and every clipped photosite in
+//!   the top bin; `_DSF4271.RAF` and `_DSF4243.RAF` have the same statistics before and after
+//!   half-size renders (not region renders: those fail on every RAF); `_DSF4243.RAF` cut short
+//!   gives an error, not a panic and not statistics.
 
 use std::path::{Path, PathBuf};
 
@@ -528,4 +533,112 @@ fn fujifilm_files_have_statistics_and_a_clipping_map_that_agree() {
         not_clipped.is_empty(),
         "the test files {not_clipped:?} were not found"
     );
+}
+
+/// Prints a Fujifilm file's name, size, pixels per channel and clipped photosites against the
+/// top bin.
+fn print_fujifilm(file: &Path, width: u32, height: u32, stats: &RawStatistics) {
+    eprintln!(
+        "{:<16} {width}x{height} pixels R {} G {} B {} clipped/top bin R {}/{} G {}/{} B {}/{}",
+        file.file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or_default(),
+        stats.pixels[0],
+        stats.pixels[1],
+        stats.pixels[2],
+        stats.clipped[0],
+        stats.histogram[0][255],
+        stats.clipped[1],
+        stats.histogram[1][255],
+        stats.clipped[2],
+        stats.histogram[2][255]
+    );
+}
+
+#[test]
+#[ignore = "needs real camera files: set PW_TESTDATA and run with --ignored"]
+fn fujifilm_channels_have_the_x_trans_shares() {
+    let mut checked = 0;
+    let mut sizes = Vec::new();
+    for file in fujifilm_files() {
+        let name = file.display();
+        let mut session = Session::open(&file).unwrap_or_else(|e| panic!("{name}: {e}"));
+        let (width, height) = (session.width(), session.height());
+        let stats = match session.statistics() {
+            Ok(Some(stats)) => stats,
+            other => panic!("{name}: no statistics: {other:?}"),
+        };
+        print_fujifilm(&file, width, height, &stats);
+        sizes.push(format!("{width}x{height}"));
+        if width % 6 != 0 || height % 6 != 0 {
+            continue;
+        }
+        checked += 1;
+        // a 6×6 X-Trans tile has 8 R, 20 G and 8 B photosites
+        let all = u64::from(width) * u64::from(height);
+        assert_eq!(all % 9, 0, "{name}: {all} photosites");
+        assert_eq!(stats.pixels[0], all * 2 / 9, "{name}: R");
+        assert_eq!(stats.pixels[2], all * 2 / 9, "{name}: B");
+        assert_eq!(stats.pixels[1], all * 5 / 9, "{name}: G");
+        // a photosite at the clipping level is in the top bin
+        for c in 0..3 {
+            assert!(
+                stats.clipped[c] <= stats.histogram[c][255],
+                "{name}: channel {c}: {} clipped, {} in the top bin",
+                stats.clipped[c],
+                stats.histogram[c][255]
+            );
+        }
+    }
+    assert!(
+        checked > 0,
+        "no Fujifilm file has a width and height divisible by 6: {sizes:?}"
+    );
+}
+
+#[test]
+#[ignore = "needs real camera files: set PW_TESTDATA and run with --ignored"]
+fn fujifilm_statistics_are_the_same_before_and_after_renders() {
+    // with clipped highlights, and without
+    for name in ["_DSF4271.RAF", "_DSF4243.RAF"] {
+        let file = named(name);
+        let mut session = Session::open(&file).unwrap();
+        let before = session.statistics().unwrap().unwrap();
+        print_fujifilm(&file, session.width(), session.height(), &before);
+        session.render_half().unwrap();
+        let after_half = session.statistics().unwrap().unwrap();
+        assert_eq!(after_half, before, "{name}: half-size render");
+        // No region render: `render_region_with` fails on every RAF with "process: Input/output
+        // error", with PPG and AHD, in a fresh session too (T182's finding, owner 2026-11-17).
+        // and a session that rendered first gives the same as one that did not
+        let mut rendered_first = Session::open(&file).unwrap();
+        rendered_first.render_half().unwrap();
+        assert_eq!(
+            rendered_first.statistics().unwrap().unwrap(),
+            before,
+            "{name}: rendered before the first statistics"
+        );
+    }
+}
+
+#[test]
+#[ignore = "needs real camera files: set PW_TESTDATA and run with --ignored"]
+fn a_fujifilm_file_cut_short_gives_an_error_and_no_statistics() {
+    let tmp = scratch("cut-raf");
+    let name = "_DSF4243.RAF";
+    let src = named(name);
+    let data = std::fs::read(&src).unwrap();
+    for part in [0.4, 0.9] {
+        let len = (data.len() as f64 * part) as usize;
+        let dst = tmp.join(format!("{}-{name}", (part * 100.0) as u32));
+        std::fs::write(&dst, &data[..len]).unwrap();
+        let result = Session::open(&dst).and_then(|mut session| session.statistics());
+        let message = match result {
+            Ok(stats) => panic!("{}: statistics of a damaged file: {stats:?}", dst.display()),
+            Err(e) => e.to_string(),
+        };
+        eprintln!("{name} cut to {len} of {} bytes: {message}", data.len());
+        assert!(message.contains(DAMAGED), "{}: {message}", dst.display());
+    }
+    let _ = std::fs::remove_dir_all(&tmp);
 }

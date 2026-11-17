@@ -1,4 +1,4 @@
-# T182. RAW statistics on X-Trans: channel shares, renders and a file cut short (pw-libraw tests) — Open
+# T182. RAW statistics on X-Trans: channel shares, renders and a file cut short (pw-libraw tests) — Done
 
 - **Why:** from T142 and the first backlog sort (owner, 2026-11-17). T146 added
   `fujifilm_files_have_statistics_and_a_clipping_map_that_agree` in
@@ -39,7 +39,8 @@
      and `_DSF4243.RAF` (without), each as the Bayer test does: the statistics, then
      `render_half`, the same statistics; then `render_region_with(Rect::new(64, 64, 256, 128), 16,
      Demosaic::Ppg)`, the same; and a second session that renders first gives the same statistics
-     as the first session's.
+     as the first session's. (Owner, 2026-11-17: the region render is left out, because
+     `render_region_with` fails on every RAF; see the log.)
   3. `a_fujifilm_file_cut_short_gives_an_error_and_no_statistics`: `_DSF4243.RAF` cut to 40 %
      and to 90 % of its length in a `scratch("cut-raf")` folder, as the ARW and RW2 test does:
      `Session::open` then `statistics` gives an `Err` whose text contains `DAMAGED`. The folder
@@ -71,3 +72,5 @@
 | 2026-11-17 | Blocked | Added from the first backlog sort (owner, 2026-11-17): the reviewer found the X-Trans files already tested by T146; the owner chose a small task for what T146 left (the shares, the top bin, renders, a file cut short). Waits for T180 (queue order) and for its cold read |
 | 2026-11-17 | Blocked | Cold read: doable with the named files and the public API; the 2/9 and 5/9 shares checked against `pwlr.cpp` (three colours only, visible area, whole 6×6 tiles); a region render with PPG is accepted (LibRaw uses its own X-Trans interpolation). Changed: the top-bin check's condition (an equal black level per position) and an `Err` without `DAMAGED` added to the stop list; what each test prints; the module comment's run line without `-p`; the `docs/test-inventory.md` change named. Still waits for T180 (queue order) |
 | 2026-11-17 | Open | T180 is Done: set Open (tests only in `pw-libraw`; T180 changed nothing it uses) |
+| 2026-11-17 | Ready for review | Finding: `render_region_with` fails on every RAF (`_DSF4271.RAF`, `_DSF4243.RAF`; PPG and AHD; in a fresh session, after `statistics` and after `render_half`) with `process: Input/output error` from `dcraw_process` with a `cropbox` (`pwlr.cpp`). The owner chose (2026-11-17) to leave the region render out of test 2; the finding needs a home of its own (a task on `pwlr.cpp` or `backlog.md`). The three tests pass with `PW_TESTDATA` |
+| 2026-11-17 | Done | Reviewed and committed once the tests passed (owner's rule, 2026-11-17: the reviewer commits after a passing review and `.\tools\check.ps1`, without asking first). Done as written, the region render left out at the owner's word. Run by the reviewer: `cargo test --workspace -- --ignored --nocapture fujifilm` with `PW_TESTDATA`, 6 passed (the shares exact, R 5787960, G 14469900, B 5787960 in all five files; `_DSF4271.RAF` clipped R 5505 of 149338 and G 10272 of 368222 in the top bin; both cut files `damaged: RAW data incomplete`); `.\tools\check.ps1` all OK, 1816 passed, 69 ignored, 0 failed. Tests only, one crate: no extra code review needed (README). Leftover: the region render failing on every RAF is an item in `backlog.md` ("A region render fails on every RAF"), likely seen in the loupe's zoom |
