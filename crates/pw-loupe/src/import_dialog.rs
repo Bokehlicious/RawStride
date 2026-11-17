@@ -291,6 +291,50 @@ impl ImportDialog {
     }
 }
 
+/// How often the open dialog asks the import worker for the cards again (T161, ADR 0010
+/// "Source"): a card put into a reader that is already plugged in does not change the drive
+/// letters, so the dialog asks on a timer.
+pub const CARD_REFRESH_INTERVAL: Duration = Duration::from_secs(2);
+
+/// When the open import dialog asks for the cards again (T161). Plain Rust; the shell makes the
+/// ask and reports the answer.
+#[derive(Debug)]
+pub struct CardRefresh {
+    asked_at: Option<Instant>,
+    waiting: bool,
+}
+
+impl CardRefresh {
+    /// Counts the ask made when the dialog opens.
+    pub fn new(now: Instant) -> Self {
+        Self {
+            asked_at: Some(now),
+            waiting: true,
+        }
+    }
+
+    /// True when the dialog is idle, no ask is waiting for its answer, and at least
+    /// `CARD_REFRESH_INTERVAL` has passed since the last ask.
+    pub fn due(&self, now: Instant, idle: bool) -> bool {
+        if !idle || self.waiting {
+            return false;
+        }
+        self.asked_at
+            .is_none_or(|asked_at| now.saturating_duration_since(asked_at) >= CARD_REFRESH_INTERVAL)
+    }
+
+    /// An ask was sent to the worker.
+    pub fn asked(&mut self, now: Instant) {
+        self.asked_at = Some(now);
+        self.waiting = true;
+    }
+
+    /// The worker answered, or the ask could not be sent.
+    pub fn answered(&mut self) {
+        self.waiting = false;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -919,5 +963,57 @@ mod tests {
         };
 
         assert!(dialog.result_folders().is_empty());
+    }
+
+    #[test]
+    fn card_refresh_is_not_due_before_the_first_answer() {
+        let now = Instant::now();
+        let refresh = CardRefresh::new(now);
+
+        assert!(!refresh.due(now, true));
+        assert!(!refresh.due(now + CARD_REFRESH_INTERVAL, true));
+        assert!(!refresh.due(now + CARD_REFRESH_INTERVAL * 100, true));
+    }
+
+    #[test]
+    fn card_refresh_is_due_at_the_interval_after_an_answer() {
+        let now = Instant::now();
+        let mut refresh = CardRefresh::new(now);
+        refresh.answered();
+
+        assert!(!refresh.due(now, true));
+        assert!(!refresh.due(now + CARD_REFRESH_INTERVAL - Duration::from_millis(1), true));
+        assert!(refresh.due(now + CARD_REFRESH_INTERVAL, true));
+
+        let later = now + CARD_REFRESH_INTERVAL;
+        refresh.asked(later);
+        assert!(!refresh.due(later + CARD_REFRESH_INTERVAL, true));
+        refresh.answered();
+        assert!(!refresh.due(
+            later + CARD_REFRESH_INTERVAL - Duration::from_millis(1),
+            true
+        ));
+        assert!(refresh.due(later + CARD_REFRESH_INTERVAL, true));
+    }
+
+    #[test]
+    fn card_refresh_waits_while_the_dialog_is_not_idle() {
+        let now = Instant::now();
+        let mut refresh = CardRefresh::new(now);
+        refresh.answered();
+        let due_at = now + CARD_REFRESH_INTERVAL * 3;
+
+        assert!(!refresh.due(due_at, false));
+        assert!(refresh.due(due_at, true));
+    }
+
+    #[test]
+    fn card_refresh_is_not_due_before_the_last_ask() {
+        let now = Instant::now() + CARD_REFRESH_INTERVAL;
+        let mut refresh = CardRefresh::new(now);
+        refresh.answered();
+
+        assert!(!refresh.due(now - CARD_REFRESH_INTERVAL, true));
+        assert!(!refresh.due(now - Duration::from_millis(1), true));
     }
 }

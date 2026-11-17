@@ -68,7 +68,9 @@ pub use import::{
     Field, FieldError, ImportForm, IptcField, IptcForm, IptcModes, ItemAction, Preview,
     PreviewLine, Validated, allowed_modes, result_folders,
 };
-pub use import_dialog::{DialogRequest, ImportDialog, ImportDialogState};
+pub use import_dialog::{
+    CARD_REFRESH_INTERVAL, CardRefresh, DialogRequest, ImportDialog, ImportDialogState,
+};
 pub use import_text::{
     DoneLine, ImportText, clear_and_import_text, clear_cancel_text, clear_confirmation_text,
     clear_confirmation_title, done_lines, ejecting_progress_text, hidden_done_text,

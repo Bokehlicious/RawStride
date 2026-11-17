@@ -25,13 +25,13 @@ use pw_loupe::library::{
 };
 use pw_loupe::library_text::{LibraryText, library_text};
 use pw_loupe::{
-    Action, CellState, CopiedFields, DEFAULT_THUMBNAIL_SIZE, DialogKey, DialogRequest, EditorField,
-    EditorForm, EditorKeyAction, EditorSection, EditorText, Field, Filter, GridKeyAction,
-    ImportDialog, ImportDialogState, ImportEvent, ImportForm, ImportWorker, IptcField,
-    LABEL_CHOICES, LabelFilter, Language, LoupeMove, MAX_THUMBNAIL_SIZE, MIN_THUMBNAIL_SIZE,
-    MonitorProfile, Navigation, Options, PanelText, READING_RATINGS_TEXT, RatingButton,
-    RatingRefused, STAR_CONDITIONS, STAR_FILTERS, Settings, StarFilter, SubmitError, Tab,
-    TabAction, Tabs, ThumbGrid, UNSUPPORTED_TEXT, ViewMode, WINDOW_TITLE, allowed_modes,
+    Action, CardRefresh, CellState, CopiedFields, DEFAULT_THUMBNAIL_SIZE, DialogKey, DialogRequest,
+    EditorField, EditorForm, EditorKeyAction, EditorSection, EditorText, Field, Filter,
+    GridKeyAction, ImportDialog, ImportDialogState, ImportEvent, ImportForm, ImportWorker,
+    IptcField, LABEL_CHOICES, LabelFilter, Language, LoupeMove, MAX_THUMBNAIL_SIZE,
+    MIN_THUMBNAIL_SIZE, MonitorProfile, Navigation, Options, PanelText, READING_RATINGS_TEXT,
+    RatingButton, RatingRefused, STAR_CONDITIONS, STAR_FILTERS, Settings, StarFilter, SubmitError,
+    Tab, TabAction, Tabs, ThumbGrid, UNSUPPORTED_TEXT, ViewMode, WINDOW_TITLE, allowed_modes,
     apply_confirmation, clamp_thumbnail_size, clear_and_import_text, clear_cancel_text,
     clear_confirmation_text, clear_confirmation_title, color_image, columns, dialog_key_action,
     done_lines, editor_key_action, editor_rating_key, editor_text, ejecting_progress_text,
@@ -626,6 +626,8 @@ struct Loupe {
     /// for the user's answer (ADR 0007 §10, D14).
     import_clear_confirm: bool,
     detected_cards: Vec<PathBuf>,
+    /// While the import dialog is open, when it asks for the cards again (T161).
+    card_refresh: Option<CardRefresh>,
     import_submit_error: Option<String>,
     import_hidden: bool,
     import_result_opened: bool,
@@ -1146,9 +1148,13 @@ impl Loupe {
         self.import_result_opened = false;
         self.import_dialog = Some(ImportDialog::new(self.last_form.clone()));
         self.import_submit_error = None;
+        let mut card_refresh = CardRefresh::new(Instant::now());
         if let Err(error) = self.import_worker.cards() {
+            // Counted as answered, so the timer asks again after the interval (T161).
+            card_refresh.answered();
             self.import_submit_error = Some(submit_error_text(error));
         }
+        self.card_refresh = Some(card_refresh);
     }
 
     fn close_import(&mut self) {
@@ -1159,6 +1165,7 @@ impl Loupe {
         }
         self.import_hidden = false;
         self.import_clear_confirm = false;
+        self.card_refresh = None;
     }
 
     /// The start button or Enter (D14): with fields in Clear the window "Rensa fält?" asks first,
@@ -1243,7 +1250,12 @@ impl Loupe {
     fn poll_import_worker(&mut self, ctx: &egui::Context) {
         loop {
             match self.import_worker.try_recv() {
-                Ok(ImportEvent::Cards { cards, .. }) => self.detected_cards = cards,
+                Ok(ImportEvent::Cards { cards, .. }) => {
+                    if let Some(card_refresh) = &mut self.card_refresh {
+                        card_refresh.answered();
+                    }
+                    self.detected_cards = cards;
+                }
                 Ok(event) => {
                     // The Tasks area's row, and an import's failures in its error list (U5-Q5).
                     self.tasks.apply(&event, ClockTime::now());
@@ -1271,8 +1283,17 @@ impl Loupe {
                     for folder in folders_to_open {
                         self.open(&folder, true);
                     }
-                    if refresh_cards && let Err(error) = self.import_worker.cards() {
-                        self.import_submit_error = Some(submit_error_text(error));
+                    if refresh_cards {
+                        let asked = self.import_worker.cards();
+                        if let Some(card_refresh) = &mut self.card_refresh {
+                            card_refresh.asked(Instant::now());
+                            if asked.is_err() {
+                                card_refresh.answered();
+                            }
+                        }
+                        if let Err(error) = asked {
+                            self.import_submit_error = Some(submit_error_text(error));
+                        }
                     }
                 }
                 Err(TryRecvError::Empty) => break,
@@ -1674,6 +1695,30 @@ impl Loupe {
                     }
                 }
                 DialogRequest::Run { .. } => {}
+            }
+        }
+        // The card buttons kept up to date by themselves (T161): ask again on a timer while the
+        // dialog is idle, so a card put in or taken out shows. An error is not shown here (the
+        // user did nothing); a stopped worker is shown by the other paths.
+        let idle = !self.import_clear_confirm
+            && self.import_dialog.as_ref().is_some_and(|dialog| {
+                matches!(
+                    dialog.state(),
+                    ImportDialogState::Editing { .. } | ImportDialogState::Done { .. }
+                )
+            });
+        let now = Instant::now();
+        if self
+            .card_refresh
+            .as_ref()
+            .is_some_and(|card_refresh| card_refresh.due(now, idle))
+        {
+            let asked = self.import_worker.cards();
+            if let Some(card_refresh) = &mut self.card_refresh {
+                card_refresh.asked(now);
+                if asked.is_err() {
+                    card_refresh.answered();
+                }
             }
         }
         ctx.request_repaint_after(Duration::from_millis(100));
@@ -7114,6 +7159,7 @@ fn run(options: Options) -> Result<(), String> {
                 },
                 import_clear_confirm: false,
                 detected_cards: Vec::new(),
+                card_refresh: None,
                 import_submit_error: None,
                 import_hidden: false,
                 import_result_opened: false,

@@ -170,3 +170,4 @@ was when the task was done, so "this file", "below" and "the Log" in T1–T115 m
 | [T160](T160-raf-listed-everywhere.md) | Fujifilm RAF listed: viewer, import and sidecar |
 | [T164](T164-same-names-in-favourites-and-recent.md) | Folders with the same name told apart in Favourites and Recent (pw-loupe) |
 | [T163](T163-open-every-imported-folder.md) | After an import, every folder that got images opens in its own tab (pw-loupe) |
+| [T161](T161-import-dialog-finds-new-cards.md) | The import dialog finds a card inserted while it is open |
