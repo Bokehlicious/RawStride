@@ -284,6 +284,14 @@ enum EditorStatus {
     Failed(String),
 }
 
+/// The status when OK, Save and Next, Save or "Apply to {n} Marked" wrote nothing because of
+/// field errors (U11c-Q9, T181): the fields of `errors` in their order and the structure lists
+/// `lists` that have an error.
+fn not_saved_status(errors: &[(EditorField, String)], lists: Vec<&'static str>) -> EditorStatus {
+    let fields = errors.iter().map(|(field, _)| *field).collect();
+    EditorStatus::Failed(editor_text(&EditorText::NotSaved { fields, lists }))
+}
+
 /// The read the form was filled from and the form.
 struct FormState {
     /// The warnings are checked against it, and the read-only sections show it.
@@ -2461,14 +2469,20 @@ impl Loupe {
         window: &mut MetadataWindow,
         then: WindowLeave,
     ) -> Option<WindowLeave> {
-        let (edits, written) = match &window.body {
-            WindowBody::Form(state) => (state.form.edits(), state.form.written_values()),
+        let (edits, written, lists_with_errors) = match &window.body {
+            WindowBody::Form(state) => (
+                state.form.edits(),
+                state.form.written_values(),
+                state.form.lists_with_errors(),
+            ),
             WindowBody::Loading | WindowBody::ReadError(_) => return Some(then),
         };
         let outcome = match edits {
             Ok(edits) if edits.is_empty() => return Some(then),
-            // Field errors: nothing is written, the errors are shown under their fields.
+            // Field errors: nothing is written, the errors are shown under their fields and the
+            // status line names them (U11c-Q9, T181).
             Err(errors) => {
+                window.status = not_saved_status(&errors, lists_with_errors);
                 window.errors = errors;
                 WriteOutcome::FieldErrors
             }
@@ -2949,14 +2963,17 @@ impl Loupe {
             return;
         }
         // "Apply to {n} Marked": the confirmation is asked before anything is written; a field
-        // error is shown under its field instead.
+        // error is shown under its field and named in the status line instead (U11c-Q9, T181).
         if apply && let WindowBody::Form(state) = &window.body {
             match ApplyPlan::new(&state.form, &window.path, &window.marked) {
                 Ok(plan) => {
                     window.status = EditorStatus::Idle;
                     window.apply_question = Some(plan);
                 }
-                Err(errors) => window.errors = errors,
+                Err(errors) => {
+                    window.status = not_saved_status(&errors, state.form.lists_with_errors());
+                    window.errors = errors;
+                }
             }
             ctx.request_repaint();
             self.metadata_window = Some(window);

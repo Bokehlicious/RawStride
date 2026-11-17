@@ -187,3 +187,4 @@ was when the task was done, so "this file", "below" and "the Log" in T1–T115 m
 | [T178](T178-move-waits-for-the-write-answer.md) | ADR 0017 U9b: a move waits for its rating write's answer, and an image is not moved twice (pw-loupe) |
 | [T179](T179-add-and-remove-list-entries-in-an-edit.md) | ADR 0017 U12d: an edit that adds and removes entries of a list (pw-metadata) |
 | [T180](T180-apply-to-marked-adds-and-removes-list-entries.md) | ADR 0017 U12d: "Apply to {n} Marked" adds and removes list entries (pw-loupe) |
+| [T181](T181-nothing-saved-text-on-a-field-error.md) | The metadata window's status line says when nothing was saved because of a field error (pw-loupe) |

@@ -1517,10 +1517,20 @@ impl EditorForm {
 
     /// True when an entry of an editable structure list has a sub-field with an error.
     fn has_list_error(&self) -> bool {
-        self.lists.iter().any(|state| {
-            self.list_read_only(state.property()).is_none()
-                && state.entries.iter().any(ListEntry::has_error)
-        })
+        !self.lists_with_errors().is_empty()
+    }
+
+    /// The XMP ids of the editable structure lists with an entry that has a sub-field with an
+    /// error ([`EditorForm::list_error`]), each once, in form order (U11c-Q9, T181).
+    pub fn lists_with_errors(&self) -> Vec<&'static str> {
+        self.lists
+            .iter()
+            .filter(|state| {
+                self.list_read_only(state.property()).is_none()
+                    && state.entries.iter().any(ListEntry::has_error)
+            })
+            .map(ListState::property)
+            .collect()
     }
 
     /// The text of a sub-field, to be edited; `None` when there is no such entry or field, the
@@ -2578,6 +2588,13 @@ pub enum EditorText {
     Saved,
     /// A write that failed; `reason` as `write_error_text` gives it for ratings.
     SaveFailed { file: String, reason: String },
+    /// The window's status line when OK, Save and Next, Save or "Apply to {n} Marked" wrote
+    /// nothing because of field errors (U11c-Q9, T181): the fields and the structure lists
+    /// (XMP ids of [`EditorForm::ALL_LISTS`]) that have an error.
+    NotSaved {
+        fields: Vec<EditorField>,
+        lists: Vec<&'static str>,
+    },
     /// Asked when the window is to leave an image with unsaved edits: a move, Escape or the
     /// window's "Cancel" (ADR 0017 §2.3.1, U12-Q4, T112).
     SaveQuestion,
@@ -2787,6 +2804,17 @@ pub fn editor_text(text: &EditorText) -> String {
         EditorText::SaveFailed { file, reason } => {
             format!("Could not save metadata for {file}: {reason}")
         }
+        EditorText::NotSaved { fields, lists } => match fields.len() + lists.len() {
+            0 => "Nothing was saved. Correct the errors in the form.".to_string(),
+            1 => format!(
+                "Nothing was saved. Correct the error in {}.",
+                item_names(fields, lists)
+            ),
+            _ => format!(
+                "Nothing was saved. Correct the errors in {}.",
+                item_names(fields, lists)
+            ),
+        },
         EditorText::SaveQuestion => "Save changes?".to_string(),
         EditorText::Save => "Save".to_string(),
         EditorText::Discard => "Discard".to_string(),
@@ -4560,6 +4588,13 @@ mod tests {
                     entries: strings(&["Bo"]),
                 },
                 "Creator: removes Bo on this image only",
+            ),
+            (
+                EditorText::NotSaved {
+                    fields: vec![EditorField::Keywords],
+                    lists: Vec::new(),
+                },
+                "Nothing was saved. Correct the error in Keywords.",
             ),
         ];
         for (text, expected) in cases {
@@ -7819,6 +7854,66 @@ mod tests {
         // No error for an entry or a list that does not exist.
         assert_eq!(form.list_error(ARTWORK_LIST, 5, AO_DATE), None);
         assert_eq!(form.list_error("dc:title", 0, AO_DATE), None);
+    }
+
+    #[test]
+    fn lists_with_errors_names_each_list_with_a_wrong_date_once() {
+        let mut form = form_with(t143_metadata());
+        assert!(form.lists_with_errors().is_empty());
+        type_entry(&mut form, ARTWORK_LIST, 0, AO_DATE, "förra året");
+        assert_eq!(form.lists_with_errors(), vec![ARTWORK_LIST]);
+        // A second entry with a wrong date too: the list is still named once.
+        form.add_entry(ARTWORK_LIST);
+        type_entry(&mut form, ARTWORK_LIST, 1, AO_DATE, "nästa år");
+        assert!(form.list_error(ARTWORK_LIST, 1, AO_DATE).is_some());
+        assert_eq!(form.lists_with_errors(), vec![ARTWORK_LIST]);
+        // The first date back to the read text, the second emptied: no list has an error.
+        type_entry(&mut form, ARTWORK_LIST, 0, AO_DATE, "1893");
+        type_entry(&mut form, ARTWORK_LIST, 1, AO_DATE, "");
+        assert!(form.lists_with_errors().is_empty());
+    }
+
+    #[test]
+    fn the_not_saved_texts() {
+        let one_field = EditorText::NotSaved {
+            fields: vec![EditorField::DateCreated],
+            lists: Vec::new(),
+        };
+        assert_eq!(
+            editor_text(&one_field),
+            format!(
+                "Nothing was saved. Correct the error in {}.",
+                EditorField::DateCreated.label()
+            )
+        );
+        let one_list = EditorText::NotSaved {
+            fields: Vec::new(),
+            lists: vec![ARTWORK_LIST],
+        };
+        assert_eq!(
+            editor_text(&one_list),
+            "Nothing was saved. Correct the error in Artwork or Object in the Image."
+        );
+        // The Artwork list sits after Person Shown, before Date Created.
+        let both = EditorText::NotSaved {
+            fields: vec![EditorField::DateCreated],
+            lists: vec![ARTWORK_LIST],
+        };
+        assert_eq!(
+            editor_text(&both),
+            format!(
+                "Nothing was saved. Correct the errors in Artwork or Object in the Image, {}.",
+                EditorField::DateCreated.label()
+            )
+        );
+        let neither = EditorText::NotSaved {
+            fields: Vec::new(),
+            lists: Vec::new(),
+        };
+        assert_eq!(
+            editor_text(&neither),
+            "Nothing was saved. Correct the errors in the form."
+        );
     }
 
     #[test]
