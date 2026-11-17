@@ -22,6 +22,7 @@
     I13 T133; the owner's decisions D1–D16 are in §17.
   - **Amended by ADR 0020 (owner, 2026-11-17):** a manual correction of the capture time, the only
     way DateTimeOriginal changes (§6.3, §7, Q12, rule 4).
+  - **Amended by ADR 0024 (owner, 2026-11-17):** a rotation writes `tiff:Orientation` (§6.3, rule 4).
 - Date: 2026-11-04 (revision 1: storage, IIM policy and the role of XMP; revision 2: all owner
   decisions of 2026-11-04, MWG 2.0, the full IPTC specification and the Mapping Guidelines;
   revision 3: Q4 answered by the owner on 2026-11-08; revision 4: Q5 answered by the owner on
@@ -66,7 +67,7 @@ Every rule in §3–§12 carries its basis:
 | 1 | **XMP is RawStride's primary representation** for the explicitly mapped descriptive fields | [Product]; IPTC Core/Extension are defined in XMP [IPTC §1] |
 | 2 | **IIM vs XMP:**<br>- checksum matches → XMP;<br>- checksum differs → IIM per differing field;<br>- no checksum → conflict, the user decides;<br>- conflicts always visible | [MWG §4.2.3.2] for the first two; [Product ≠ std] for the third |
 | 3 | **IIM is preserved and written back when it exists.** New IIM only with the setting | [MWG §4.2.3.2]; [Product ≠ std] against [IPTC §5.3.4] "should save … both" |
-| 4 | **Exif vs XMP:**<br>- XMP wins;<br>- conflicts detected and shown;<br>- JPEG/TIFF/DNG synchronise the corresponding existing Exif fields;<br>- RAW originals are never changed (Exif conflicts there are only shown; a corrected capture time in the sidecar is not a conflict, ADR 0020) | [Product ≠ std] against [MWG §4.2.3.1] "prefer Exif"; sync per [MWG §4.2.3.1] and [IPTC-MG] |
+| 4 | **Exif vs XMP:**<br>- XMP wins;<br>- conflicts detected and shown;<br>- JPEG/TIFF/DNG synchronise the corresponding existing Exif fields;<br>- RAW originals are never changed (Exif conflicts there are only shown; a corrected capture time or a rotation in the sidecar is not a conflict, ADR 0020, ADR 0024) | [Product ≠ std] against [MWG §4.2.3.1] "prefer Exif"; sync per [MWG §4.2.3.1] and [IPTC-MG] |
 | 5 | **Storage (fixed):**<br>- **DNG: embedded, never a sidecar** (also Xiaomi 17 Ultra DNG);<br>- **ARW, RW2 and other manufacturer RAW: sidecar only, original never changed**;<br>- **JPEG/TIFF: embedded** | [Product] (architecture decision) |
 | 6 | **Embedded writes are transactional:** a verified temporary copy, then an atomic replace; never a partially written original | [Product] |
 | 7 | **DateTimeOriginal is never changed automatically. A time zone is never invented**; it is stored only when known | [MWG §4.2.3.4 "Time-zone handling"]; [Product] |
@@ -322,7 +323,8 @@ Urgency (2:10), Category (2:15) and Supplemental Categories (2:20):
   - Older Exif: UTF-8 bytes in the ASCII type, as MWG advises. Formally this violates Exif 2.3x;
     both IPTC-MG and MWG accept it.
 - **The Exif byte order is kept.** Exif/TIFF device tags are not duplicated into XMP `exif:` or
-  `tiff:`, and no Exif checksum is written to XMP. [MWG §4.2.3.1]
+  `tiff:`, and no Exif checksum is written to XMP. [MWG §4.2.3.1] Exception: `tiff:Orientation`,
+  written by a rotation (ADR 0024, owner 2026-11-17).
 - **DateTimeOriginal is never written** (§7), except by the manual correction of ADR 0020
   (owner, 2026-11-17).
 
