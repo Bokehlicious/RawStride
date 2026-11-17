@@ -587,3 +587,229 @@ fn a_camera_raw_gets_its_clipping_map_in_both_modes_when_it_is_wanted() {
     assert_eq!(map.data, raw.data);
     assert_eq!(core.stats().clipping_maps, 2);
 }
+
+/// Frames until the current image's focus state is no longer "reading" (or the timeout).
+fn until_focus(screen: &mut Screen<'_>) -> Frame {
+    let end = Instant::now() + WAIT;
+    loop {
+        let f = screen.frame();
+        if f.focus != pw_viewcore::FocusState::Reading || Instant::now() > end {
+            return f;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+/// Frames until `done` holds for a frame; an error frame or a wait past `WAIT` fails the test
+/// with `what` and the file's name.
+fn until_frame(
+    screen: &mut Screen<'_>,
+    file: &std::path::Path,
+    what: &str,
+    done: impl Fn(&Frame) -> bool,
+) -> Frame {
+    let end = Instant::now() + WAIT;
+    loop {
+        let f = screen.frame();
+        if let Status::Error(e) = &f.status {
+            panic!("{}: {what}: error {e:?}", file.display());
+        }
+        if done(&f) {
+            return f;
+        }
+        assert!(
+            Instant::now() <= end,
+            "{}: {what}: not done within {WAIT:?} ({:?})",
+            file.display(),
+            f.status
+        );
+        std::thread::sleep(Duration::from_millis(1));
+    }
+}
+
+/// The median and the largest of `values` (0 when there are none).
+fn median_and_max(values: &[f64]) -> (f64, f64) {
+    let mut v = values.to_vec();
+    v.sort_by(f64::total_cmp);
+    let median = match v.len() {
+        0 => 0.0,
+        n if n % 2 == 1 => v[n / 2],
+        n => (v[n / 2 - 1] + v[n / 2]) / 2.0,
+    };
+    (median, v.last().copied().unwrap_or(0.0))
+}
+
+fn ms(d: Duration) -> f64 {
+    d.as_secs_f64() * 1000.0
+}
+
+/// How long an image stays on the screen before the next step or Z in the passes "at 200 ms"
+/// (T176): past the core's `Config::dwell` (150 ms), so the focus map has been started.
+const SHOWN_FOR: Duration = Duration::from_millis(200);
+
+/// Keeps drawing frames until `SHOWN_FOR` has passed since `from` (the image's first `Ready`
+/// frame) and gives the last frame.
+fn shown_for(screen: &mut Screen<'_>, from: Instant) -> Frame {
+    loop {
+        let f = screen.frame();
+        if from.elapsed() >= SHOWN_FOR {
+            return f;
+        }
+        std::thread::sleep(Duration::from_millis(1));
+    }
+}
+
+/// ADR 0017 U9a (T176): a measurement, not a check of times. On every TN RAW file in RAW mode,
+/// once with the focus marking off and once with it on (each on a fresh core): the time from
+/// `step(1)` to the next image shown, stepping as soon as the image before is shown, and the time
+/// of Z (fit → 100 %) once the image's statistics (and, with the marking on, its focus map) are
+/// there. Then the same stepping and Z with each image shown for 200 ms first (past the core's
+/// dwell, so the focus map is being made), counting those where the last frame before had the
+/// focus map `Reading`. Prints the median and the largest of each, and of the focus maps' own
+/// times.
+#[test]
+#[ignore = "needs real camera files: set PW_TESTDATA and run with --ignored"]
+fn focus_map_time_and_stepping_and_zoom_with_and_without_the_marking() {
+    use pw_viewcore::FocusState;
+
+    let files = test_files("TN");
+    for marking in [false, true] {
+        let label = if marking { "marking on" } else { "marking off" };
+        let core = start();
+        core.set_mode(Source::Raw);
+        if marking {
+            core.set_focus_wanted(true);
+        }
+        core.open_folder(files.clone());
+        let mut screen = Screen {
+            core: &core,
+            textures: HashMap::new(),
+        };
+        let shown = |pos: usize| move |f: &Frame| f.pos == Some(pos) && f.status == Status::Ready;
+        until_frame(&mut screen, &files[0], "open", shown(0));
+
+        // stepping: step as soon as the image before is shown
+        let mut steps = Vec::new();
+        for (pos, file) in files.iter().enumerate().skip(1) {
+            let at = Instant::now();
+            core.step(1);
+            until_frame(&mut screen, file, "step", shown(pos));
+            steps.push(ms(at.elapsed()));
+        }
+
+        // Z: back to the first file; each file's statistics (and focus map) first
+        core.go(0);
+        until_frame(&mut screen, &files[0], "go to the first", shown(0));
+        let mut zooms = Vec::new();
+        for (pos, file) in files.iter().enumerate() {
+            let f = until_statistics(&mut screen);
+            assert!(f.statistics.is_some(), "{}: no statistics", file.display());
+            if marking {
+                let f = until_focus(&mut screen);
+                assert!(
+                    matches!(f.focus, FocusState::Ready { .. }),
+                    "{}: the focus map is not ready: {:?}",
+                    file.display(),
+                    f.focus
+                );
+            }
+            let at = Instant::now();
+            core.toggle_zoom(None);
+            until_frame(&mut screen, file, "Z", |f| {
+                f.pos == Some(pos) && f.zoom != Zoom::Fit && f.status == Status::Ready
+            });
+            zooms.push(ms(at.elapsed()));
+            core.fit();
+            until_frame(&mut screen, file, "fit", |f| {
+                f.pos == Some(pos) && f.zoom == Zoom::Fit && f.status == Status::Ready
+            });
+            if pos + 1 < files.len() {
+                core.step(1);
+                until_frame(&mut screen, &files[pos + 1], "step", shown(pos + 1));
+            }
+        }
+
+        // (a) stepping at 200 ms: each image shown for `SHOWN_FOR` before the timed step
+        core.go(0);
+        until_frame(&mut screen, &files[0], "go to the first", shown(0));
+        let mut from = Instant::now();
+        let mut late_steps = Vec::new();
+        let mut late_steps_reading = 0;
+        for (pos, file) in files.iter().enumerate().skip(1) {
+            if shown_for(&mut screen, from).focus == FocusState::Reading {
+                late_steps_reading += 1;
+            }
+            let at = Instant::now();
+            core.step(1);
+            until_frame(&mut screen, file, "step at 200 ms", shown(pos));
+            from = Instant::now();
+            late_steps.push(ms(at.elapsed()));
+        }
+
+        // (b) Z at 200 ms: each image shown for `SHOWN_FOR` before the timed Z
+        core.go(0);
+        until_frame(&mut screen, &files[0], "go to the first", shown(0));
+        let mut from = Instant::now();
+        let mut late_zooms = Vec::new();
+        let mut late_zooms_reading = 0;
+        for (pos, file) in files.iter().enumerate() {
+            if shown_for(&mut screen, from).focus == FocusState::Reading {
+                late_zooms_reading += 1;
+            }
+            let at = Instant::now();
+            core.toggle_zoom(None);
+            until_frame(&mut screen, file, "Z at 200 ms", |f| {
+                f.pos == Some(pos) && f.zoom != Zoom::Fit && f.status == Status::Ready
+            });
+            late_zooms.push(ms(at.elapsed()));
+            core.fit();
+            until_frame(&mut screen, file, "fit", |f| {
+                f.pos == Some(pos) && f.zoom == Zoom::Fit && f.status == Status::Ready
+            });
+            if pos + 1 < files.len() {
+                core.step(1);
+                until_frame(&mut screen, &files[pos + 1], "step", shown(pos + 1));
+                from = Instant::now();
+            }
+        }
+
+        let (step_median, step_max) = median_and_max(&steps);
+        let (zoom_median, zoom_max) = median_and_max(&zooms);
+        eprintln!(
+            "{label}: {} files; stepping median {step_median:.1} ms, largest {step_max:.1} ms \
+             ({} steps); Z median {zoom_median:.1} ms, largest {zoom_max:.1} ms ({} Z)",
+            files.len(),
+            steps.len(),
+            zooms.len(),
+        );
+        let (late_step_median, late_step_max) = median_and_max(&late_steps);
+        eprintln!(
+            "{label}: stepping at 200 ms median {late_step_median:.1} ms, largest \
+             {late_step_max:.1} ms ({} steps, {late_steps_reading} with focus Reading)",
+            late_steps.len(),
+        );
+        let (late_zoom_median, late_zoom_max) = median_and_max(&late_zooms);
+        eprintln!(
+            "{label}: Z at 200 ms median {late_zoom_median:.1} ms, largest {late_zoom_max:.1} ms \
+             ({} Z, {late_zooms_reading} with focus Reading)",
+            late_zooms.len(),
+        );
+        let stats = core.stats();
+        if marking {
+            let (focus_median, focus_max) = median_and_max(&stats.focus_ms);
+            eprintln!(
+                "{label}: focus_maps {}; focus_ms median {focus_median:.1} ms, largest \
+                 {focus_max:.1} ms",
+                stats.focus_maps
+            );
+            assert!(
+                stats.focus_maps >= files.len() as u64,
+                "{} focus maps for {} files",
+                stats.focus_maps,
+                files.len()
+            );
+        } else {
+            assert_eq!(stats.focus_maps, 0);
+        }
+    }
+}
