@@ -74,20 +74,25 @@ struct BatchImage {
     target: PathBuf,
     restore: Option<Rating>,
     sent: bool,
+    /// Not sent and needs no answer (`skip`, T178).
+    skipped: bool,
     answer: Option<Result<Vec<Moved>, String>>,
 }
 
 /// The moves of one key press (U9-Q7): each image is moved all or nothing on its own, and the
 /// whole batch becomes one undo step.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct Batch {
+    kind: MoveKind,
     images: Vec<BatchImage>,
 }
 
 impl Batch {
-    /// A batch of `(image, target folder, rating to restore)`, in the order they are sent.
-    pub fn new(images: Vec<(PathBuf, PathBuf, Option<Rating>)>) -> Batch {
+    /// A batch of `kind` of `(image, target folder, rating to restore)`, in the order they are
+    /// sent.
+    pub fn new(kind: MoveKind, images: Vec<(PathBuf, PathBuf, Option<Rating>)>) -> Batch {
         Batch {
+            kind,
             images: images
                 .into_iter()
                 .map(|(image, target, restore)| BatchImage {
@@ -95,19 +100,38 @@ impl Batch {
                     target,
                     restore,
                     sent: false,
+                    skipped: false,
                     answer: None,
                 })
                 .collect(),
         }
     }
 
-    /// The images not yet sent whose path has no rating write still waiting in the shell's queue
-    /// (`is_queued`), with their targets, in the batch's order. An image with a queued write waits,
-    /// so its move reaches the worker after that write (T170 point 4). Marks nothing: `sent` does.
-    pub fn to_send(&self, is_queued: impl Fn(&Path) -> bool) -> Vec<(PathBuf, PathBuf)> {
+    /// The key that made the batch (T178).
+    pub fn kind(&self) -> MoveKind {
+        self.kind
+    }
+
+    /// Whether `image` is one of the batch's images and is not skipped, compared as given (T178).
+    /// A skipped image is no longer held, so a later X that rejects it again queues a new batch
+    /// for it; an image whose move failed stays held (its answer may be a JPG that its RAW
+    /// partner moved along).
+    pub fn contains(&self, image: &Path) -> bool {
         self.images
             .iter()
-            .filter(|entry| !entry.sent && entry.answer.is_none() && !is_queued(&entry.image))
+            .any(|entry| !entry.skipped && entry.image == image)
+    }
+
+    /// The images not yet sent or skipped whose path has a rating write still waiting
+    /// (`is_waiting`; the shell passes `is_pending`: queued, or sent without an answer, T178) left
+    /// out, with their targets, in the batch's order. An image with a waiting write waits, so its
+    /// move reaches the worker after that write's answer (T170 point 4). Marks nothing: `sent` does.
+    pub fn to_send(&self, is_waiting: impl Fn(&Path) -> bool) -> Vec<(PathBuf, PathBuf)> {
+        self.images
+            .iter()
+            .filter(|entry| {
+                !entry.sent && !entry.skipped && entry.answer.is_none() && !is_waiting(&entry.image)
+            })
             .map(|entry| (entry.image.clone(), entry.target.clone()))
             .collect()
     }
@@ -118,9 +142,19 @@ impl Batch {
         if let Some(entry) = self
             .images
             .iter_mut()
-            .find(|entry| !entry.sent && entry.image == image)
+            .find(|entry| !entry.sent && !entry.skipped && entry.image == image)
         {
             entry.sent = true;
+        }
+    }
+
+    /// Leaves `image` out: it is not sent and needs no answer, and `finish` lists it in neither
+    /// list (T178). An image not in the batch, or one already sent or answered, changes nothing.
+    pub fn skip(&mut self, image: &Path) {
+        if let Some(entry) = self.images.iter_mut().find(|entry| {
+            !entry.sent && !entry.skipped && entry.answer.is_none() && entry.image == image
+        }) {
+            entry.skipped = true;
         }
     }
 
@@ -130,23 +164,26 @@ impl Batch {
         if let Some(entry) = self
             .images
             .iter_mut()
-            .find(|entry| entry.answer.is_none() && entry.image == image)
+            .find(|entry| !entry.skipped && entry.answer.is_none() && entry.image == image)
         {
             entry.sent = true;
             entry.answer = Some(result);
         }
     }
 
-    /// Whether every image has its answer.
+    /// Whether every image has its answer or was skipped.
     pub fn done(&self) -> bool {
-        self.images.iter().all(|entry| entry.answer.is_some())
+        self.images
+            .iter()
+            .all(|entry| entry.skipped || entry.answer.is_some())
     }
 
     /// The batch's result, in the batch's order: the images moved and the images that failed. An
     /// image that another image of the batch moved as its partner (its path is a `from` in another
     /// answer's moves, for example the JPG of a marked RAW+JPEG pair) is not a failure: its own
     /// answer is dropped, and it is in `moved` with no moves of its own and its `restore`, so the
-    /// undo restores its rating too. An image without an answer yet is in neither list.
+    /// undo restores its rating too. An image without an answer yet, or skipped, is in neither
+    /// list.
     pub fn finish(self) -> BatchResult {
         let mut result = BatchResult::default();
         let moved_by: Vec<(usize, HashSet<&Path>)> = self
@@ -276,10 +313,13 @@ mod tests {
         let a = PathBuf::from("D:/x/a.ARW");
         let b = PathBuf::from("D:/x/b.ARW");
         let target = PathBuf::from("D:/x/_rejected");
-        let mut batch = Batch::new(vec![
-            (a.clone(), target.clone(), Some(Rating::default())),
-            (b.clone(), target.clone(), Some(Rating::default())),
-        ]);
+        let mut batch = Batch::new(
+            MoveKind::Reject,
+            vec![
+                (a.clone(), target.clone(), Some(Rating::default())),
+                (b.clone(), target.clone(), Some(Rating::default())),
+            ],
+        );
 
         // a has a rating write waiting: only b may go.
         let queued_a = |path: &Path| path == a;
@@ -311,12 +351,15 @@ mod tests {
             stars: Some(2),
             label: None,
         };
-        let mut batch = Batch::new(vec![
-            (raw.clone(), target.clone(), Some(stars.clone())),
-            (jpg.clone(), target.clone(), Some(jpg_before.clone())),
-            (other.clone(), target.clone(), None),
-            (locked.clone(), target.clone(), None),
-        ]);
+        let mut batch = Batch::new(
+            MoveKind::Reject,
+            vec![
+                (raw.clone(), target.clone(), Some(stars.clone())),
+                (jpg.clone(), target.clone(), Some(jpg_before.clone())),
+                (other.clone(), target.clone(), None),
+                (locked.clone(), target.clone(), None),
+            ],
+        );
         for image in [&raw, &jpg, &other, &locked] {
             batch.sent(image);
         }
@@ -369,9 +412,114 @@ mod tests {
     fn a_failed_image_is_not_dropped_for_its_own_moves() {
         // Only another image's moves make a failed answer a partner.
         let a = PathBuf::from("D:/x/a.ARW");
-        let mut batch = Batch::new(vec![(a.clone(), PathBuf::from("D:/x/_picked"), None)]);
+        let mut batch = Batch::new(
+            MoveKind::Pick,
+            vec![(a.clone(), PathBuf::from("D:/x/_picked"), None)],
+        );
         batch.answered(&a, Err("no".to_owned()));
         assert_eq!(batch.finish().failed, vec![(a, "no".to_owned())]);
+    }
+
+    #[test]
+    fn kind_gives_the_kind_passed_to_new() {
+        for kind in [MoveKind::Reject, MoveKind::Pick] {
+            assert_eq!(Batch::new(kind, Vec::new()).kind(), kind);
+        }
+    }
+
+    #[test]
+    fn a_skipped_image_is_not_sent_and_is_in_neither_list() {
+        let a = PathBuf::from("D:/x/a.ARW");
+        let b = PathBuf::from("D:/x/b.ARW");
+        let target = PathBuf::from("D:/x/_rejected");
+        let mut batch = Batch::new(
+            MoveKind::Reject,
+            vec![
+                (a.clone(), target.clone(), Some(Rating::default())),
+                (b.clone(), target.clone(), Some(Rating::default())),
+            ],
+        );
+        batch.skip(&a);
+        assert_eq!(batch.to_send(|_| false), vec![(b.clone(), target.clone())]);
+        // A skipped image takes no `sent` and no answer.
+        batch.sent(&a);
+        batch.answered(&a, Ok(vec![moved("D:/x/a.ARW", "D:/x/_rejected/a.ARW")]));
+        assert!(
+            batch
+                .to_send(|_| false)
+                .iter()
+                .all(|(image, _)| *image != a)
+        );
+        batch.sent(&b);
+        assert!(!batch.done());
+        let b_moves = vec![moved("D:/x/b.ARW", "D:/x/_rejected/b.ARW")];
+        batch.answered(&b, Ok(b_moves.clone()));
+        assert!(batch.done());
+
+        let result = batch.finish();
+        assert_eq!(
+            result.moved,
+            vec![MovedImage {
+                image: b,
+                moved: b_moves,
+                restore: Some(Rating::default()),
+            }]
+        );
+        assert!(result.failed.is_empty());
+    }
+
+    #[test]
+    fn skip_of_an_image_already_sent_changes_nothing() {
+        let a = PathBuf::from("D:/x/a.ARW");
+        let mut batch = Batch::new(
+            MoveKind::Pick,
+            vec![(a.clone(), PathBuf::from("D:/x/_picked"), None)],
+        );
+        batch.sent(&a);
+        batch.skip(&a);
+        assert!(!batch.done(), "still waits for its answer");
+        batch.answered(&a, Err("no".to_owned()));
+        assert!(batch.done());
+        assert_eq!(batch.finish().failed, vec![(a, "no".to_owned())]);
+    }
+
+    #[test]
+    fn contains_is_true_for_each_image_of_the_batch_only() {
+        let a = PathBuf::from("D:/x/a.ARW");
+        let b = PathBuf::from("D:/x/b.ARW");
+        let target = PathBuf::from("D:/x/_picked");
+        let batch = Batch::new(
+            MoveKind::Pick,
+            vec![(a.clone(), target.clone(), None), (b.clone(), target, None)],
+        );
+        assert!(batch.contains(&a));
+        assert!(batch.contains(&b));
+        assert!(!batch.contains(Path::new("D:/x/c.ARW")));
+    }
+
+    #[test]
+    fn contains_is_false_for_a_skipped_image_and_true_for_a_failed_one() {
+        let a = PathBuf::from("D:/x/a.ARW");
+        let b = PathBuf::from("D:/x/b.ARW");
+        let c = PathBuf::from("D:/x/c.ARW");
+        let target = PathBuf::from("D:/x/_rejected");
+        let mut batch = Batch::new(
+            MoveKind::Reject,
+            vec![
+                (a.clone(), target.clone(), Some(Rating::default())),
+                (b.clone(), target.clone(), Some(Rating::default())),
+                (c.clone(), target, Some(Rating::default())),
+            ],
+        );
+        batch.skip(&a);
+        assert!(!batch.contains(&a), "a skipped image is no longer held");
+        assert!(batch.contains(&b));
+        assert!(batch.contains(&c));
+
+        batch.sent(&b);
+        batch.answered(&b, Err("the file is open in another program".to_owned()));
+        assert!(batch.contains(&b), "a failed image stays held");
+        assert!(batch.contains(&c));
     }
 
     fn step(name: usize) -> Vec<MovedImage> {

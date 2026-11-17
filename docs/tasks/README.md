@@ -12,7 +12,7 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 | `T<nnn>-<name>.md` (this folder) | Open tasks, one file each |
 | [`backlog.md`](backlog.md) | Not for agents yet: needs a decision, a dependency or an ADR first |
 | [`plans/`](plans/) | Step lists for ADRs that have none of their own (ADR 0007 milestone 8, ADR 0017) |
-| [`done/`](done/README.md) | Finished tasks T1–T177, and the log they were kept in until 2026-11-13 |
+| [`done/`](done/README.md) | Finished tasks T1–T178, and the log they were kept in until 2026-11-13 |
 
 
 ## How to work on a task
@@ -86,7 +86,6 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status |
 |---|---|---|
-| [T178](T178-move-waits-for-the-write-answer.md) | ADR 0017 U9b: a move waits for its rating write's answer, and an image is not moved twice | Open |
 
 ## Writing a task (owner and reviewer)
 

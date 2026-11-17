@@ -1,4 +1,4 @@
-# T178. ADR 0017 U9b: a move waits for its rating write's answer, and an image is not moved twice — Open
+# T178. ADR 0017 U9b: a move waits for its rating write's answer, and an image is not moved twice — Done
 
 - **Chain:** T169 → … → T174, T177; this task comes after T174 and before the owner's hand check
   of U9b. Found in the independent review of T174 (2026-11-17).
@@ -28,7 +28,10 @@
      neither `moved` nor `failed`. An image not in the batch, or already sent or answered,
      changes nothing.
   3. **Which images a batch holds** (`moves.rs`): `pub fn contains(&self, image: &Path) ->
-     bool`: the image is one of the batch's images, compared as given.
+     bool`: the image is one of the batch's images and is not skipped, compared as given. A
+     skipped image is no longer held: a later X that rejects it again queues a new batch for it
+     (review 2026-11-17). An image whose move failed stays held (its answer may be a JPG that
+     its RAW partner moved along).
   4. **A write waiting for its answer** (`ratings.rs`): `pub fn is_pending(&self, path: &Path)
      -> bool`: a write for `path` is queued or sent and not yet answered (`queued` or `sent`).
      `is_queued` stays.
@@ -54,7 +57,8 @@
   - `moves.rs`: `kind` gives the kind passed to `new`; `skip` of an image not sent makes the
     batch `done` once the others are answered, and `finish` lists it in neither list; `skip` of
     an image already sent changes nothing; `contains` is true for each image of the batch and
-    false for another path.
+    false for another path; `contains` is false for a skipped image and still true for the
+    batch's other images, and true for an image whose answer failed.
   - `ratings.rs`: `is_pending` is true after `set` (queued), still true after `pump` (sent),
     and false after the write's answer (`written`), for success and for failure.
   - `metadata.rs`: `is_pending` follows the store: true after an X until the worker's answer
@@ -83,7 +87,8 @@
   Also left (`backlog.md`, the same item): P then X within a frame (the image is held by the
   Pick batch, so it goes to `_picked` though rejected); a RAW skipped while its JPG partner is
   sent (the JPG's move takes the RAW along; `finish` lists the RAW in neither list); a write
-  whose answer never comes keeps its image's move waiting.
+  whose answer never comes keeps its image's move waiting; a second P or X on an image whose
+  move failed in the running batch is left out until that batch is done.
 - **Rules:** AGENTS.md §3; no new texts.
 - **Done when:** `.\tools\check.ps1` is all OK and `git diff --stat` shows only the files above.
 
@@ -93,3 +98,7 @@
 |---|---|---|
 | 2026-11-17 | Blocked | Added after the independent review of T174 (findings 1–3); waits for its cold read; the owner's hand check of U9b waits for it |
 | 2026-11-17 | Open | Cold read: `skip` needs a `skipped` field (named); the kind in `moves.rs`'s tests by target folder, the three tests named; the two `metadata.rs` tests that use `is_queued` named with their exact changes (the second was missing); `is_pending` and the order in a frame checked against the code; a running undo needs no `contains`; P then X, a skipped RAW with a sent JPG partner and a write never answered noted as left; `main.rs` has tests, but none of `Loupe` |
+| 2026-11-17 | Ready for review | Points 1–8 done in `moves.rs`, `ratings.rs`, `metadata.rs`, `main.rs`; 6 tests added (4 in `moves.rs`, 1 in `ratings.rs`, 1 in `metadata.rs`: a failed X pending until its answer is polled, then rolled back) and the named existing tests changed as listed; `docs/test-inventory.md` 1792 passed. `.\tools\check.ps1` all OK, no clippy warnings. No test of `Loupe`: points 6–8 wait for the owner's hand check |
+| 2026-11-17 | Open | Review: points 1–8 and the tests as written; `.\tools\check.ps1` run again by the reviewer, all OK (1792 passed, 66 ignored, 0 failed, no clippy warnings). Sent back for a gap in point 3 (the brief's, not the agent's): `contains` held a skipped image, so an X that rejects it again while its batch still runs was left out, and the image stayed rejected but unmoved. Point 3 now leaves a skipped image out of `contains`, with a test added under **Tests to add**; a retry of a failed move while its batch runs noted as left (`backlog.md`). Left to do: only that change and its test; the rest of the diff stays |
+| 2026-11-17 | Ready for review | Point 3 after the review: `contains` leaves a skipped image out, a failed one stays held; test `contains_is_false_for_a_skipped_image_and_true_for_a_failed_one` added; `docs/test-inventory.md` 1793 passed. `.\tools\check.ps1` all OK (1793 passed, 66 ignored, 0 failed), no clippy warnings |
+| 2026-11-17 | Done | Second review: point 3 as changed (`contains` leaves a skipped image out, a failed one stays held) and its test; `.\tools\check.ps1` run again by the reviewer, all OK (1793 passed, 66 ignored, 0 failed, no clippy warnings). Approved by the owner. No owner decision to record (the change to point 3 is the review's, in this file). Left: in `backlog.md`, "Leftovers from the review of T174" (*Left by T178*, with the retry of a failed move from this review). Points 6–8 wait for the owner's hand check of U9b (`plans/adr-0017-interface-steps.md`) |

@@ -171,7 +171,9 @@ and reviewer:
   - *Left by T178* (its cold read): P then X within a frame moves the image to `_picked`
     though rejected (the Pick batch holds it); a RAW skipped (its reject write failed) while its
     JPG partner is sent goes along with the JPG to `_rejected`; a rating write whose answer
-    never comes keeps its image's move waiting.
+    never comes keeps its image's move waiting. From its review: a second P or X on an image
+    whose move failed in the running batch is left out until that batch is done (`contains`
+    holds it, since a failed answer may be a JPG its RAW partner moved along).
 - **Leftovers from the review of T177** (`/code-review`, 2026-11-17; accepted, nothing breaks
   today):
   - *The default `release_for_move` calls `release`:* a new `ImageCheck`, or a wrapper of

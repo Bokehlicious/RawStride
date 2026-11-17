@@ -889,9 +889,10 @@ impl MetadataCache {
         std::mem::take(&mut self.moves)
     }
 
-    /// Whether a rating write for `path` (absolute) is queued and not yet sent (T172, T173).
-    pub(crate) fn is_queued(&self, path: &Path) -> bool {
-        self.ratings.is_queued(path)
+    /// Whether a rating write for `path` (absolute) is queued, or sent and not yet answered; a
+    /// move of the image waits for it (T172, T173, T178).
+    pub(crate) fn is_pending(&self, path: &Path) -> bool {
+        self.ratings.is_pending(path)
     }
 
     /// The rating a key would start from for `path` (absolute), which the undo of a move restores
@@ -3594,19 +3595,25 @@ mod tests {
     }
 
     #[test]
-    fn is_queued_and_current_rating_follow_the_rating_store() {
+    fn is_pending_and_current_rating_follow_the_rating_store() {
         let mut worker = FakeSubmit::new([]);
+        // each write's answer is queued when it is sent
+        worker.write_result = Some(Ok(()));
         let mut cache = MetadataCache::default();
         let image = image_path("pw-loupe-move-queued.ARW");
-        assert!(!cache.is_queued(&image));
+        assert!(!cache.is_pending(&image));
         assert_eq!(cache.current_rating(&image), Rating::default());
 
         assert!(cache.set_rating(&image, RatingKey::Stars(4)).is_ok());
+        assert!(cache.is_pending(&image));
         let _ = cache.poll(&mut worker);
+        assert!(cache.is_pending(&image), "sent, waiting for its answer");
+        let _ = cache.poll(&mut worker);
+        assert!(!cache.is_pending(&image), "answered");
         assert!(cache.set_rating(&image, RatingKey::Reject).is_ok());
 
-        // an X queued shows `is_queued` until `poll` sends it
-        assert!(cache.is_queued(&image));
+        // an X shows `is_pending` until `poll` applies its answer
+        assert!(cache.is_pending(&image));
         assert_eq!(
             cache.current_rating(&image),
             Rating {
@@ -3615,9 +3622,30 @@ mod tests {
             }
         );
         assert!(cache.poll(&mut worker).is_empty());
-        assert!(!cache.is_queued(&image));
+        assert!(cache.is_pending(&image), "sent, waiting for its answer");
+        assert!(cache.poll(&mut worker).is_empty());
+        assert!(!cache.is_pending(&image), "answered");
         assert_eq!(cache.current_rating(&image).stars, Some(-1));
         assert_eq!(worker.write_attempts, [image.clone(), image]);
+    }
+
+    #[test]
+    fn is_pending_lasts_until_a_failed_x_is_polled_and_rolled_back() {
+        let mut worker = FakeSubmit::new([]);
+        worker.write_result = Some(Err("read-only".to_owned()));
+        let mut cache = MetadataCache::default();
+        let image = image_path("pw-loupe-move-pending-failed.ARW");
+
+        assert!(cache.set_rating(&image, RatingKey::Reject).is_ok());
+        assert!(cache.is_pending(&image));
+        assert!(cache.poll(&mut worker).is_empty());
+        assert!(cache.is_pending(&image), "sent, waiting for its answer");
+        assert_eq!(cache.current_rating(&image).stars, Some(-1));
+
+        // the answer is polled: no longer pending, and the reject is rolled back
+        assert_eq!(cache.poll(&mut worker).len(), 1);
+        assert!(!cache.is_pending(&image));
+        assert_ne!(cache.current_rating(&image).stars, Some(-1));
     }
 
     #[test]
@@ -3632,10 +3660,10 @@ mod tests {
 
         assert_eq!(cache.restore_rating(&image, rating.clone()), Ok(()));
 
-        assert!(cache.is_queued(&image));
+        assert!(cache.is_pending(&image));
         assert_eq!(cache.current_rating(&image), rating);
         assert!(cache.poll(&mut worker).is_empty());
-        assert!(!cache.is_queued(&image));
+        assert!(cache.is_pending(&image));
         assert_eq!(worker.write_attempts, [image]);
         // an unsupported file is refused, as by a rating key
         assert_eq!(

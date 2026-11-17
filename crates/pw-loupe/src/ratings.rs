@@ -242,6 +242,12 @@ impl RatingStore {
         self.queued.iter().any(|write| write.path == path)
     }
 
+    /// Whether a write for `path` is queued or sent and has no answer yet (`path` absolute): a move
+    /// of the image waits until this is false, so a failed write is rolled back first (T178).
+    pub fn is_pending(&self, path: &Path) -> bool {
+        self.is_queued(path) || self.sent.values().any(|write| write.path == path)
+    }
+
     /// The rating a key would start from (`path` absolute): the shown value, otherwise the
     /// confirmed one, otherwise the default. A move by X keeps it, so the undo can restore it
     /// (ADR 0017 U9-Q8, T172).
@@ -1345,6 +1351,29 @@ mod tests {
         assert!(store.pump(&mut writer).is_empty());
         assert!(!store.is_queued(&path));
         assert_eq!(store.pending(), 1, "sent, waiting for its answer");
+    }
+
+    #[test]
+    fn is_pending_until_the_write_has_its_answer() {
+        let path = image("pw-loupe-rating-is-pending.ARW");
+        let other = image("pw-loupe-rating-is-pending-other.ARW");
+        for result in [Ok(()), Err("disk full".to_owned())] {
+            let mut store = RatingStore::default();
+            let mut writer = FakeWriter::default();
+            assert!(!store.is_pending(&path));
+
+            assert_eq!(store.set(&path, RatingKey::Reject), Ok(()));
+            assert!(store.is_pending(&path), "queued");
+            assert!(!store.is_pending(&other));
+            assert!(store.pump(&mut writer).is_empty());
+            assert!(!store.is_queued(&path));
+            assert!(store.is_pending(&path), "sent, waiting for its answer");
+
+            let failed = result.is_err();
+            let (id, written_path, _) = writer.requests[0].clone();
+            assert_eq!(store.written(id, &written_path, result).is_some(), failed);
+            assert!(!store.is_pending(&path), "answered, failed: {failed}");
+        }
     }
 
     #[test]

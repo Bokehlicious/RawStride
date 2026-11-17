@@ -3986,17 +3986,32 @@ impl Loupe {
                         target_folder(&path, MoveKind::Pick).map(|target| (path, target, None))
                     })
                     .collect();
-                self.queue_moves(images);
+                self.queue_moves(MoveKind::Pick, images);
             }
             Err(error) => self.message = Some(error),
         }
     }
 
-    /// A batch of moves waits behind the running batch or undo; it is sent by `follow_moves`.
-    /// Nothing is queued for no images.
-    fn queue_moves(&mut self, images: MoveImages) {
+    /// A batch of moves of `kind` waits behind the running batch or undo; it is sent by
+    /// `follow_moves`. An image a waiting or the running batch holds already is left out (T178
+    /// point 7), and nothing is queued for no images. A running undo is not checked: its images
+    /// are in `_rejected` or `_picked`, where `target_folder` gives no target.
+    fn queue_moves(&mut self, kind: MoveKind, images: MoveImages) {
+        let running = match &self.moves.running {
+            Some(MoveRun::Batch { batch, .. }) => Some(batch),
+            _ => None,
+        };
+        let images: MoveImages = images
+            .into_iter()
+            .filter(|(image, _, _)| {
+                !running
+                    .into_iter()
+                    .chain(&self.moves.waiting)
+                    .any(|batch| batch.contains(image))
+            })
+            .collect();
         if !images.is_empty() {
-            self.moves.waiting.push_back(Batch::new(images));
+            self.moves.waiting.push_back(Batch::new(kind, images));
         }
     }
 
@@ -4085,8 +4100,11 @@ impl Loupe {
     }
 
     /// Sends what the running batch or undo has not sent yet (T174 point 4): a batch's image waits
-    /// while a rating write for it is queued (`Batch::to_send`); a full queue leaves the rest for
-    /// the next frame; a stopped worker answers at once as failed.
+    /// while a rating write for it is queued or sent without its answer (`Batch::to_send` with
+    /// `is_pending`, T178 point 6; the answers, and a failed write's rollback, are applied in the
+    /// metadata cache's `poll`, before this); an image of an X batch that is no longer rejected
+    /// (its write failed, or a later key cleared the reject) is skipped, with no message; a full
+    /// queue leaves the rest for the next frame; a stopped worker answers at once as failed.
     fn send_moves(&mut self) {
         let worker = &mut self.metadata_worker;
         match &mut self.moves.running {
@@ -4096,7 +4114,13 @@ impl Loupe {
                     .iter()
                     .map(|extension| (*extension).to_owned())
                     .collect();
-                for (image, target) in batch.to_send(|path| metadata.is_queued(path)) {
+                for (image, target) in batch.to_send(|path| metadata.is_pending(path)) {
+                    if batch.kind() == MoveKind::Reject
+                        && metadata.current_rating(&image).stars != Some(-1)
+                    {
+                        batch.skip(&image);
+                        continue;
+                    }
                     match MetadataSubmit::move_image(
                         worker,
                         image.clone(),
@@ -4288,9 +4312,11 @@ impl Loupe {
             self.tasks
                 .add_error(&undo_failed_text(&image_name(image), reason), now);
         }
-        self.message = Some(match failed.last() {
-            Some((image, reason)) => undo_failed_text(&image_name(image), reason),
-            None => undone_text(restored.len()),
+        // A restored rating or a folder listing that failed is shown as `batch_done` does (T178).
+        self.message = Some(match (failed.last(), errors.last()) {
+            (Some((image, reason)), _) => undo_failed_text(&image_name(image), reason),
+            (None, Some(error)) => error.clone(),
+            (None, None) => undone_text(restored.len()),
         });
     }
 
@@ -4462,7 +4488,7 @@ impl Loupe {
         if let Some(Some(position)) = scroll {
             self.scroll_request = Some(position);
         }
-        self.queue_moves(moves);
+        self.queue_moves(MoveKind::Reject, moves);
     }
 
     /// The menu bar (ADR 0017 §2.1, U1-Q1): the table `MENUS`, each item with its key.
@@ -5172,7 +5198,7 @@ impl Loupe {
                 if let Some(position) = scroll {
                     scroll_to = position;
                 }
-                self.queue_moves(moves);
+                self.queue_moves(MoveKind::Reject, moves);
                 continue;
             }
 
