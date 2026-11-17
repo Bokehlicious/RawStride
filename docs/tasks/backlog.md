@@ -64,6 +64,37 @@ and reviewer:
   commit hash and needs the owner's approval) or to leave it; a tool such as `gitleaks` for the
   secrets part would be a new dependency. Do this before the CI item above makes the repository
   public.
+- **Linux and macOS ports** (owner, 2026-11-17: only if there is interest once the repository is
+  public; the owner uses only Windows). Survey of the code, 2026-11-17, nothing built off Windows:
+  - *A small README note when public*: Windows only today, an issue where people can show interest.
+    Keep putting Windows code behind `#[cfg(windows)]` with a `not(windows)` branch, as now.
+  - *Build*: `rust-toolchain.toml` lists only the MSVC target; `.cargo/config.toml`,
+    `pw-libraw/build.rs` and `pw-libjpeg/build.rs` assume the `x64-windows-static-md` triplet and
+    `*.lib` names (`lib*.a` on Unix; `ws2_32` Windows only). LibRaw's OpenMP (ADR 0006): `libgomp`
+    on Linux; Apple clang has none, so `libomp` or an ADR 0006 exception on macOS. `pwlr.cpp` takes
+    a `wchar_t*` path and the Rust side sends UTF-16; on Unix `wchar_t` is 32 bits and LibRaw's
+    wide-path stream is Windows only, so a UTF-8 `char*` path is needed or no RAW opens.
+    `tools/check.ps1` and the `.cmd` scripts are Windows only.
+  - *The safe write does not work off Windows*: `pw-metadata`'s `fileops.rs` returns `Unsupported`
+    for `free_space`, `is_read_only_volume`, `is_locked`, `replace` and `move_new`, so nothing can
+    be saved. Unix versions: `statvfs`, `rename` + `fsync` of the folder, `renameat2`
+    (`RENAME_NOREPLACE`) / `renamex_np` (`RENAME_EXCL`). `is_locked` has no Unix equivalent
+    (advisory locks only): an ADR 0007 decision. Likely a new dependency (`libc` or `rustix`).
+    Six test files in `pw-metadata/tests/` are `#![cfg(windows)]`.
+  - *Worse off Windows today*: settings, journal and field values need `LOCALAPPDATA` (nothing is
+    saved without it; XDG / `~/Library/Application Support`); the drive tree is empty; eject is
+    Windows only (`diskutil`, `udisksctl`); the monitor profile falls back to sRGB (ColorSync;
+    colord or X11 `_ICC_PROFILE`; ADR 0016); `local_offset_seconds` in `tasks.rs` is always UTC;
+    5 shortcuts use `modifiers.ctrl` where macOS wants Cmd (`modifiers.command`).
+  - *GUI*: eframe's `wayland`/`x11` and rfd's `xdg-portal`/`gtk3` are off (GUI_REQUIREMENTS §6) and
+    one of each is needed on Linux. glow works on macOS (OpenGL 4.1, deprecated); GUI_REQUIREMENTS
+    §7's timings are Windows-only measurements.
+  - *Distribution*: `docs/distribution.md` and `package-dist.ps1` are Windows only. macOS needs an
+    `.app`, signing and notarization (Apple Developer account), `libomp.dylib` and a Mac for the
+    hand checks; Linux a tarball or AppImage. ExifTool shipping (ADR 0002 §2.5) per platform.
+  - *Size (estimate)*: Linux about 1–1.5 weeks (build, Unix fileops and settings folder, tests on
+    Unix and CI, eject and monitor profile); macOS about as much again, mostly packaging. Ongoing
+    cost: every later change to files, cards or windows tested on three platforms.
 - **A second language: a text catalog with keys** (owner, 2026-11-14). Only when a second language
   is wanted (GR14: no language choice for now). Done already by T116–T121: every text the user
   sees is made by a function in a text module (rule 13), whole sentences from one template, the
