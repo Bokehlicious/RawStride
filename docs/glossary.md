@@ -184,6 +184,7 @@ Every other property already uses IPTC's English name in both languages.
 | Utforskaren | File Explorer | Windows' own name; added by T118 |
 | fullständig sökväg | full path | "The source must be a full path: …"; added by T118 |
 | Kopiera bara nya bilder / importerade tidigare | Copy new images only / imported earlier | the import dialog's check box and the files the card's ingest register leaves out ("3 files imported earlier were left out."); added by T158 |
+| Markera kortet som importerat | Mark Card as Imported | the start button when nothing is copied (T166) |
 
 ## 6. Metadata window, info and settings
 

@@ -1169,7 +1169,8 @@ impl Loupe {
     }
 
     /// The start button or Enter (D14): with fields in Clear the window "Rensa fält?" asks first,
-    /// once for this import; otherwise the import starts at once.
+    /// once for this import; otherwise the import starts at once. A run that only marks the card
+    /// as imported (T166) copies nothing and writes no IPTC field, so it never asks.
     fn request_import_start(&mut self) {
         let Some(dialog) = self.import_dialog.as_ref() else {
             return;
@@ -1177,7 +1178,7 @@ impl Loupe {
         if !dialog.can_start() {
             return;
         }
-        if dialog.form().iptc.cleared_fields().is_empty() {
+        if dialog.marks_only() || dialog.form().iptc.cleared_fields().is_empty() {
             self.start_import();
         } else {
             self.import_clear_confirm = true;
@@ -1328,6 +1329,11 @@ impl Loupe {
         let state = dialog.state().clone();
         let can_close = dialog.can_close();
         let can_start = dialog.can_start();
+        let start_text = if dialog.marks_only() {
+            ImportText::MarkCard
+        } else {
+            ImportText::Start
+        };
         let running = dialog.cancel();
         // While "Rensa fält?" is open the form cannot change, so the import starts with the
         // fields the window lists (D14).
@@ -1570,7 +1576,7 @@ impl Loupe {
                             if ui
                                 .add_enabled(
                                     can_start && !confirming,
-                                    egui::Button::new(import_text(ImportText::Start)),
+                                    egui::Button::new(import_text(start_text)),
                                 )
                                 .clicked()
                             {

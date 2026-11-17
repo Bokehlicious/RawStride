@@ -1,4 +1,4 @@
-# T166. Mark a card whose images are at the destination already — Open
+# T166. Mark a card whose images are at the destination already — Done
 
 - **Why:** from the review of T158 (backlog, 2026-11-16). A card whose images are all at the
   destination already, for example from an import made before the register existed (T157), cannot
@@ -68,3 +68,5 @@
 |---|---|---|
 | 2026-11-17 | Open | Added from the backlog item "Mark a card imported before the register" (review of T158); the owner's decision is in ADR 0005 choice 6 |
 | 2026-11-17 | Open | Cold read: doable with the named files; a run with nothing to copy writes the present files to the register, starts no ExifTool, opens no tab and ejects as usual; `present` leaves out files in the register; `edit()` clears the preview, so it cannot go stale. Changed: the `ImportText` test named, the glossary row given its Note column, the worker test's helpers and shared folder template named, a write-protected card (button shown, run ends with `register_error`) stated as accepted |
+| 2026-11-17 | Ready for review | Done as written: `marks_only`, `can_start`/`start` in `import_dialog.rs`; `ImportText::MarkCard`; the button text and no Clear confirmation in `main.rs`; the glossary row; four new tests (three in `import_dialog.rs`, one in `import_worker.rs`) and the `MarkCard` assertion in `the_incremental_texts_keep_their_wording`. `check.ps1` all OK; `pw-loupe` 841 tests, 1 ignored |
+| 2026-11-17 | Done | Reviewed: the diff does points 1–5 (`marks_only` with the owner's conditions, `start` through `can_start`, `ImportText::MarkCard`, the button text and no Clear confirmation, the glossary row); four tests, the worker test runs the whole case through the register; no bugs. Reviewer's `.\tools\check.ps1` on this tree (T165 and T166): all OK, 1700 passed, 65 ignored, 0 failed; clippy without warnings. Left over: none (the write-protected card is accepted in point 1 and ADR 0005). The owner's hand check after the commit |

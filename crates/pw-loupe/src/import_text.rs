@@ -64,6 +64,9 @@ pub enum ImportText {
     Close,
     /// The button that starts the import.
     Start,
+    /// The start button when nothing is copied and the run only adds the files at the
+    /// destination already to the card's register (T166).
+    MarkCard,
     /// The import worker's queue is full.
     QueueFull,
     /// The import worker has stopped (a request could not be sent).
@@ -117,6 +120,7 @@ pub fn import_text(text: ImportText) -> &'static str {
         ImportText::NewImport => "New Import",
         ImportText::Close => "Close",
         ImportText::Start => "Start Import",
+        ImportText::MarkCard => "Mark Card as Imported",
         ImportText::QueueFull => "The import queue is full.",
         ImportText::WorkerStopped => "Import has stopped.",
         ImportText::StoppedMessage => "The import stopped before it was finished.",
@@ -868,6 +872,7 @@ mod tests {
             import_text(ImportText::AllImportedEarlier),
             "Every image in the source was imported earlier; there is nothing new to copy."
         );
+        assert_eq!(import_text(ImportText::MarkCard), "Mark Card as Imported");
         assert_eq!(
             earlier_done_text(1),
             "1 file imported earlier was left out."

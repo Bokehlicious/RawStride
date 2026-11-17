@@ -1838,6 +1838,35 @@ mod tests {
         assert_eq!(register_text(&dirs), register);
     }
 
+    /// T166: a card whose images are at the destination already, imported without the register,
+    /// is marked by a run that copies nothing.
+    #[test]
+    fn a_run_with_nothing_to_copy_marks_the_card_as_imported() {
+        let dirs = TempDirs::new("incremental-mark");
+        dirs.write_image("A001.ARW", b"first image");
+        dirs.write_image("A002.ARW", b"second image");
+        let first = import_with_root(&dirs.form("imported"), Some(&dirs.source));
+        assert_eq!(first.copied, 2);
+        assert_eq!(register_text(&dirs), None);
+
+        let preview = preview_with_root(&incremental_form(&dirs, "imported"), Some(&dirs.source));
+        assert_eq!(
+            (preview.files_to_copy, preview.present, preview.earlier),
+            (0, 2, 0)
+        );
+        assert_eq!(preview.register_note, None);
+
+        let marked = import_with_root(&incremental_form(&dirs, "imported"), Some(&dirs.source));
+        assert_eq!((marked.copied, marked.present), (0, 2));
+        assert_eq!(marked.register_error, None);
+        let register = register_text(&dirs).expect("the register is written");
+        assert!(register.contains("A001.ARW\t11\t"), "{register}");
+        assert!(register.contains("A002.ARW\t12\t"), "{register}");
+
+        let after = preview_with_root(&incremental_form(&dirs, "imported"), Some(&dirs.source));
+        assert_eq!((after.earlier, after.present), (2, 0));
+    }
+
     #[test]
     fn a_preview_without_a_register_root_says_every_image_is_copied() {
         let dirs = TempDirs::new("incremental-no-root");

@@ -108,16 +108,10 @@ impl ImportDialog {
         })
     }
 
-    /// Starts a copy only when the current preview contains files to copy.
+    /// Starts a run only when the current preview contains files to copy, or when the run only
+    /// marks the card as imported (`marks_only`, T166).
     pub fn start(&mut self) -> Option<DialogRequest> {
-        let ImportDialogState::Editing {
-            preview: Some(preview),
-            error: None,
-        } = &self.state
-        else {
-            return None;
-        };
-        if preview.files_to_copy == 0 {
+        if !self.can_start() {
             return None;
         }
         self.changed_at = None;
@@ -271,7 +265,26 @@ impl ImportDialog {
         else {
             return false;
         };
-        preview.files_to_copy > 0
+        preview.files_to_copy > 0 || self.marks_only()
+    }
+
+    /// True when a run would copy nothing but add the files at the destination already to the
+    /// register (T166, ADR 0005 choice 6): "copy new images only" is on, the current preview has
+    /// nothing to copy, at least one file is at the destination already, and the card's register
+    /// can be used (no register note). A write-protected card is not seen here; its run ends with
+    /// the usual `register_error`.
+    pub fn marks_only(&self) -> bool {
+        let ImportDialogState::Editing {
+            preview: Some(preview),
+            error: None,
+        } = &self.state
+        else {
+            return false;
+        };
+        self.form.incremental
+            && preview.files_to_copy == 0
+            && preview.present > 0
+            && preview.register_note.is_none()
     }
 
     pub fn rescan(&mut self, now: Instant) {
@@ -895,6 +908,83 @@ mod tests {
             dialog.state(),
             ImportDialogState::Done { done } if done == &ImportDone::default()
         ));
+    }
+
+    fn marking_preview() -> Preview {
+        Preview {
+            present: 2,
+            ..preview(0)
+        }
+    }
+
+    fn incremental_dialog(incremental: bool, preview: Preview) -> ImportDialog {
+        let mut dialog = ImportDialog::new(ImportForm {
+            incremental,
+            ..ImportForm::default()
+        });
+        dialog.state = ImportDialogState::Editing {
+            preview: Some(preview),
+            error: None,
+        };
+        dialog
+    }
+
+    #[test]
+    fn a_card_at_the_destination_already_can_be_marked_as_imported() {
+        let mut dialog = incremental_dialog(true, marking_preview());
+        assert!(dialog.marks_only());
+        assert!(dialog.can_start());
+        assert!(matches!(
+            dialog.start(),
+            Some(DialogRequest::Run { form }) if form.incremental
+        ));
+        assert!(matches!(dialog.state(), ImportDialogState::Running { .. }));
+    }
+
+    #[test]
+    fn a_card_cannot_be_marked_without_incremental_present_files_or_a_usable_register() {
+        let off = incremental_dialog(false, marking_preview());
+        assert!(!off.marks_only());
+        assert!(!off.can_start());
+
+        let none_present = incremental_dialog(true, preview(0));
+        assert!(!none_present.marks_only());
+        assert!(!none_present.can_start());
+
+        let noted = incremental_dialog(
+            true,
+            Preview {
+                register_note: Some("The card's register could not be read.".to_string()),
+                ..marking_preview()
+            },
+        );
+        assert!(!noted.marks_only());
+        assert!(!noted.can_start());
+
+        let mut field_error = incremental_dialog(true, marking_preview());
+        field_error.state = ImportDialogState::Editing {
+            preview: Some(marking_preview()),
+            error: Some(FieldError {
+                field: Field::Dest,
+                message: "Choose a destination.".to_string(),
+            }),
+        };
+        assert!(!field_error.marks_only());
+        assert!(!field_error.can_start());
+        assert!(field_error.start().is_none());
+    }
+
+    #[test]
+    fn a_preview_with_files_to_copy_starts_an_import_not_a_marking() {
+        let dialog = incremental_dialog(
+            true,
+            Preview {
+                present: 2,
+                ..preview(1)
+            },
+        );
+        assert!(!dialog.marks_only());
+        assert!(dialog.can_start());
     }
 
     #[test]
