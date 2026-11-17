@@ -182,7 +182,7 @@ impl WindowBefore {
             fullscreen: self.fullscreen,
             window_maximized: self.maximized,
             window: self.window,
-            ..*shell
+            ..shell.clone()
         }
     }
 

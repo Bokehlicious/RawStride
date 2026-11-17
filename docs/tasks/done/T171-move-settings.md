@@ -1,4 +1,4 @@
-# T171. ADR 0017 U9b, third part: the two move settings — Open
+# T171. ADR 0017 U9b, third part: the two move settings — Done
 
 - **Chain:** T169 → T170 → T171 → T172 → T173 → T174. The owner's answers U9-Q5–U9-Q10 are in
   ADR 0017 §6.1.
@@ -42,3 +42,6 @@
 | 2026-11-17 | Blocked | Added for ADR 0017 U9b, split out after the cold read of the first T171–T172; waits for T170 |
 | 2026-11-17 | Blocked | Cold read: every place that breaks without `Copy` named (`main.rs`, `preview.rs`, `settings.rs`'s tests), the doc comment, the lines' order, no report of a bad line |
 | 2026-11-17 | Open | T170 is done |
+| 2026-11-17 | Ready for review | Both settings in `settings.rs` with 7 tests; `Copy` removed, `.clone()` at every place that copied (the line numbers had moved by about 9). Also needed: a `shell.clone()` in the test `each_editor_section_toggles_alone_and_round_trips_through_its_key` (not in the cold read's list), and `main.rs` at the old 7167–7176 is in `run`, not a test |
+| 2026-11-17 | Review | Reviewer: as written; `check.ps1` all OK, 1760 passed, 66 ignored; no independent review needed (one crate, no safe write). Noted, not changed: `ShellSettings` is now cloned each frame in a few drawing functions (a small `Vec`), and `main.rs`'s `self.settings = chosen.clone()` clones once more than needed |
+| 2026-11-17 | Done | Approved by the owner; nothing left |

@@ -177,5 +177,6 @@ was when the task was done, so "this file", "below" and "the Log" in T1–T115 m
 | [T168](T168-focus-marking-key-and-drawing.md) | ADR 0017 U9a, second part: the focus marking key, menu item and drawing (pw-loupe) |
 | [T169](T169-move-an-image-with-its-companions.md) | ADR 0017 U9b, first part: moving an image with its companion files (pw-metadata) |
 | [T170](T170-move-request-in-the-metadata-worker.md) | ADR 0017 U9b, second part: the move as a request to the metadata worker (pw-metadata) |
+| [T171](T171-move-settings.md) | ADR 0017 U9b, third part: the two move settings (pw-loupe) |
 | [T175](T175-other-products-named-by-the-clean-room-rule.md) | Other products named only as the clean-room rule allows (docs) |
 | [T176](T176-focus-map-time-on-real-files.md) | ADR 0017 U9a: the focus map's time, and whether it slows stepping and Z (pw-viewcore tests) |

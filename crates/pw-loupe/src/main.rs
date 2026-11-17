@@ -771,7 +771,7 @@ impl Loupe {
     /// the program (D16).
     fn open_settings_window(&mut self) {
         if self.metadata_window.is_none() && self.settings_window.is_none() {
-            self.settings_window = Some(self.settings);
+            self.settings_window = Some(self.settings.clone());
         }
     }
 
@@ -786,11 +786,11 @@ impl Loupe {
         let chosen = Settings {
             shell: ShellSettings {
                 theme: chosen.shell.theme,
-                ..self.settings.shell
+                ..self.settings.shell.clone()
             },
             ..chosen
         };
-        self.settings = chosen;
+        self.settings = chosen.clone();
         self.pending_options = Some(chosen.edit_options());
         self.send_pending_options();
         let saved = match &self.settings_path {
@@ -827,7 +827,7 @@ impl Loupe {
     /// from `settings_text` or `fallback_text` (`shell_text.rs`); an encoding is chosen by its
     /// value (T116).
     fn draw_settings_window(&mut self, ctx: &egui::Context) {
-        let Some(mut chosen) = self.settings_window else {
+        let Some(mut chosen) = self.settings_window.clone() else {
             return;
         };
         let mut save = false;
@@ -2543,7 +2543,7 @@ impl Loupe {
         // The rating and label buttons show the store's value, as the badges do (T124).
         let rating = self.metadata.shown_rating(&window.path).cloned();
         let mut rating_choice = None;
-        let shell = self.settings.shell;
+        let shell = self.settings.shell.clone();
         let mut ok = false;
         let mut cancel = false;
         let mut previous = false;
@@ -3082,7 +3082,7 @@ impl Loupe {
     fn follow_inspector(&mut self, ctx: &egui::Context) {
         let cwd = std::env::current_dir().ok();
         let image = inspector_subject(self.tabs.active(), cwd.as_deref());
-        let shell = self.settings.shell;
+        let shell = self.settings.shell.clone();
         let column_open = !shell.columns_hidden && shell.right_column == ColumnState::Open;
         // In the preview its own column's Info is read with the same rules, and there is no
         // metadata section (T111).
@@ -3480,7 +3480,7 @@ impl Loupe {
     /// same functions as their keys, and the state of the clipping map, U7b-Q9, T148). After a
     /// click no widget keeps the keyboard.
     fn draw_preview_column(&mut self, ui: &mut egui::Ui, blocked: bool) {
-        let shell = self.settings.shell;
+        let shell = self.settings.shell.clone();
         let window_width = ui.ctx().content_rect().width();
         let (min, max) = column_width_range(window_width);
         let cwd = std::env::current_dir().ok();
@@ -4370,7 +4370,7 @@ impl Loupe {
     /// key. The right one is the inspector (U2, T110); the left one is the library (U4, T135)
     /// and, under it, the Tasks area (U5, T140).
     fn draw_columns(&mut self, ui: &mut egui::Ui) {
-        let shell = self.settings.shell;
+        let shell = self.settings.shell.clone();
         if shell.columns_hidden {
             return;
         }
@@ -7234,7 +7234,7 @@ fn run(options: Options) -> Result<(), String> {
                 compare: None,
                 metadata_worker,
                 exiftool_checked: false,
-                settings,
+                settings: settings.clone(),
                 settings_path,
                 settings_window: None,
                 pending_options: None,

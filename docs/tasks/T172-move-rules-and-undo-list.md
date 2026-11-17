@@ -1,4 +1,4 @@
-# T172. ADR 0017 U9b, fourth part: the move rules, the undo list, the tab's list and the texts — Blocked: waits for T171
+# T172. ADR 0017 U9b, fourth part: the move rules, the undo list, the tab's list and the texts — Open
 
 - **Chain:** T169 → T170 → T171 → T172 → T173 → T174. The owner's answers U9-Q5–U9-Q10 are in
   ADR 0017 §6.1.
@@ -96,3 +96,4 @@
 | 2026-11-17 | Blocked | Added for ADR 0017 U9b; rewritten after the cold read of the first T171–T172 (the batch does not mark images sent by itself, partners moved by another image are not failures, `restore` takes the rating from `current_rating`, `tabs_of_folder_mut`); waits for T171 |
 | 2026-11-17 | Blocked | Cold read: `replace_files`'s `rating_of` type and its refilter rule made exact, paths in the tab's own form for it and absolute for the store; `worker_stopped_text` exported here for T174 |
 | 2026-11-17 | Blocked | Review of T170: a failed move's files that could not be moved back are only named in the text, not undone ("Not in this task", `backlog.md`) |
+| 2026-11-17 | Open | T171 is done |

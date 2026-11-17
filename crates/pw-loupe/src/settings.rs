@@ -68,6 +68,12 @@ const COMPARE_ABOVE_BELOW: &str = "compare_above_below";
 const COMPARE_LOCKED: &str = "compare_locked";
 /// The key of the import dialog's "copy new images only" check box (ADR 0005 choice 6, T158).
 const IMPORT_INCREMENTAL: &str = "import_incremental";
+/// The keys of whether `X` and `P` move images into subfolders and of the suffixes of the
+/// companion files that move with an image (ADR 0017 §2.6, U9-Q5, U9-Q10, T171).
+const MOVE_TO_SUBFOLDERS: &str = "move_to_subfolders";
+const COMPANION_SUFFIXES: &str = "companion_suffixes";
+/// The companion suffixes by default (U9-Q10).
+const DEFAULT_COMPANION_SUFFIXES: [&str; 3] = ["dop", "pp3", "on1"];
 /// The keys of the metadata window's sections, open or collapsed (ADR 0017 U10-Q6, T123).
 const EDITOR_CONTENT: &str = "editor_content";
 const EDITOR_CREATOR_RIGHTS: &str = "editor_creator_rights";
@@ -97,7 +103,7 @@ const ALL: &str = "all";
 const MARKED: &str = "marked";
 
 /// RawStride's settings.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Settings {
     /// Create IIM in a JPEG, TIFF or DNG that has none (§5.2).
     pub create_iim: bool,
@@ -129,7 +135,7 @@ pub struct WindowRect {
 }
 
 /// The main window's remembered state (ADR 0017 §2.5, U1, T109).
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ShellSettings {
     pub theme: Theme,
     /// `None` until the window has had a normal size; the window then opens maximized.
@@ -194,11 +200,15 @@ pub struct ShellSettings {
     pub compare_locked: bool,
     /// The import dialog's "copy new images only" check box (ADR 0005 choice 6, T158).
     pub import_incremental: bool,
+    /// `X` and `P` move images into subfolders (ADR 0017 §2.6, U9-Q5, T171); off by default.
+    pub move_to_subfolders: bool,
+    /// The suffixes of the companion files that move with an image, without the dot, trimmed and
+    /// in lower case (U9-Q10, T171).
+    pub companion_suffixes: Vec<String>,
 }
 
 /// The library's lists as `settings.txt` keeps them (T135, U4-Q3, U4-Q4): the favourites in the
-/// order they were added and the recent folders, most recent first. Kept apart from [`Settings`],
-/// which is `Copy`.
+/// order they were added and the recent folders, most recent first. Kept apart from [`Settings`].
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct SavedLibrary {
     pub favourites: Vec<PathBuf>,
@@ -260,6 +270,9 @@ impl Default for ShellSettings {
             compare_locked: true,
             // New images only (owner, 2026-11-16, ADR 0005 choice 6).
             import_incremental: true,
+            // Images are not moved (U9-Q5); the companion suffixes of U9-Q10.
+            move_to_subfolders: false,
+            companion_suffixes: default_companion_suffixes(),
         }
     }
 }
@@ -393,7 +406,7 @@ pub fn load_settings_and_library(path: &Path) -> (Settings, SavedLibrary, Vec<St
             },
             WINDOW_MAXIMIZED | FULLSCREEN | COLUMNS_HIDDEN | PREVIEW_HIDDEN | SORT_DESCENDING
             | CLIP_HIGHLIGHTS | CLIP_SHADOWS | FOCUS_MARKING | COMPARE_ABOVE_BELOW
-            | COMPARE_LOCKED | IMPORT_INCREMENTAL => match parse_bool(value) {
+            | COMPARE_LOCKED | IMPORT_INCREMENTAL | MOVE_TO_SUBFOLDERS => match parse_bool(value) {
                 Some(on) => match key {
                     WINDOW_MAXIMIZED => shell.window_maximized = on,
                     FULLSCREEN => shell.fullscreen = on,
@@ -405,6 +418,7 @@ pub fn load_settings_and_library(path: &Path) -> (Settings, SavedLibrary, Vec<St
                     COMPARE_ABOVE_BELOW => shell.compare_above_below = on,
                     COMPARE_LOCKED => shell.compare_locked = on,
                     IMPORT_INCREMENTAL => shell.import_incremental = on,
+                    MOVE_TO_SUBFOLDERS => shell.move_to_subfolders = on,
                     _ => shell.columns_hidden = on,
                 },
                 None => problems.push(bad("true or false")),
@@ -460,6 +474,8 @@ pub fn load_settings_and_library(path: &Path) -> (Settings, SavedLibrary, Vec<St
                 Some(state) => shell.preview_clipping = state,
                 None => problems.push(bad("open or collapsed")),
             },
+            // A line without a valid entry gives the default; it is not reported (T171).
+            COMPANION_SUFFIXES => shell.companion_suffixes = parse_companion_suffixes(value),
             FILMSTRIP => match value {
                 SHOWN => shell.filmstrip = true,
                 HIDDEN => shell.filmstrip = false,
@@ -624,7 +640,36 @@ fn shell_lines(shell: &ShellSettings) -> String {
         "{IMPORT_INCREMENTAL} = {}\n",
         shell.import_incremental
     ));
+    text.push_str(&format!(
+        "{MOVE_TO_SUBFOLDERS} = {}\n{COMPANION_SUFFIXES} = {}\n",
+        shell.move_to_subfolders,
+        shell.companion_suffixes.join(", ")
+    ));
     text
+}
+
+/// The companion suffixes by default: `dop`, `pp3`, `on1` (U9-Q10).
+fn default_companion_suffixes() -> Vec<String> {
+    DEFAULT_COMPANION_SUFFIXES
+        .iter()
+        .map(|suffix| (*suffix).to_string())
+        .collect()
+}
+
+/// The suffixes of a `companion_suffixes` line, separated by commas: each trimmed and in lower
+/// case; an empty entry, or one holding `.`, `/`, `\`, `:` or a space, is dropped. A line with no
+/// valid entry gives the default.
+fn parse_companion_suffixes(value: &str) -> Vec<String> {
+    let suffixes: Vec<String> = value
+        .split(',')
+        .map(|entry| entry.trim().to_lowercase())
+        .filter(|entry| !entry.is_empty() && !entry.contains(['.', '/', '\\', ':', ' ']))
+        .collect();
+    if suffixes.is_empty() {
+        default_companion_suffixes()
+    } else {
+        suffixes
+    }
 }
 
 /// The `favourite` and `recent` lines, each list in its order; a path that [`parse_folder`] would
@@ -877,7 +922,8 @@ mod tests {
              clip_highlights = false\nclip_shadows = false\nfocus_marking = false\n\
              preview_clipping = open\n\
              compare_above_below = false\ncompare_locked = true\n\
-             import_incremental = true\n"
+             import_incremental = true\n\
+             move_to_subfolders = false\ncompanion_suffixes = dop, pp3, on1\n"
         );
     }
 
@@ -1072,6 +1118,8 @@ mod tests {
             compare_above_below: true,
             compare_locked: false,
             import_incremental: false,
+            move_to_subfolders: true,
+            companion_suffixes: vec!["xmp2".to_string(), "dop".to_string()],
         }
     }
 
@@ -1222,31 +1270,31 @@ mod tests {
         for shell in [
             ShellSettings {
                 preview_column: ColumnState::Collapsed,
-                ..base
+                ..base.clone()
             },
             ShellSettings {
                 preview_column_width: 512,
-                ..base
+                ..base.clone()
             },
             ShellSettings {
                 preview_info: ColumnState::Collapsed,
-                ..base
+                ..base.clone()
             },
             ShellSettings {
                 preview_zoom: ColumnState::Collapsed,
-                ..base
+                ..base.clone()
             },
             ShellSettings {
                 filmstrip: false,
-                ..base
+                ..base.clone()
             },
             ShellSettings {
                 filmstrip_marked: true,
-                ..base
+                ..base.clone()
             },
             ShellSettings {
                 preview_hidden: true,
-                ..base
+                ..base.clone()
             },
         ] {
             let settings = Settings {
@@ -1369,7 +1417,7 @@ mod tests {
                 );
             }
             let settings = Settings {
-                shell,
+                shell: shell.clone(),
                 ..Settings::default()
             };
             save_settings(&path, &settings).unwrap();
@@ -1749,7 +1797,7 @@ mod tests {
             (
                 ShellSettings {
                     preview_histogram: ColumnState::Collapsed,
-                    ..base
+                    ..base.clone()
                 },
                 "collapsed",
                 "open",
@@ -1757,7 +1805,7 @@ mod tests {
             (
                 ShellSettings {
                     inspector_histogram: ColumnState::Collapsed,
-                    ..base
+                    ..base.clone()
                 },
                 "open",
                 "collapsed",
@@ -1853,7 +1901,7 @@ mod tests {
             (
                 ShellSettings {
                     clip_highlights: true,
-                    ..base
+                    ..base.clone()
                 },
                 "true",
                 "false",
@@ -1862,7 +1910,7 @@ mod tests {
             (
                 ShellSettings {
                     clip_shadows: true,
-                    ..base
+                    ..base.clone()
                 },
                 "false",
                 "true",
@@ -1871,7 +1919,7 @@ mod tests {
             (
                 ShellSettings {
                     preview_clipping: ColumnState::Collapsed,
-                    ..base
+                    ..base.clone()
                 },
                 "false",
                 "false",
@@ -2041,7 +2089,7 @@ mod tests {
             (
                 ShellSettings {
                     compare_above_below: true,
-                    ..base
+                    ..base.clone()
                 },
                 "true",
                 "true",
@@ -2049,7 +2097,7 @@ mod tests {
             (
                 ShellSettings {
                     compare_locked: false,
-                    ..base
+                    ..base.clone()
                 },
                 "false",
                 "false",
@@ -2167,5 +2215,120 @@ mod tests {
         let (settings, problems) = load_settings(&path);
         assert!(problems.is_empty(), "{problems:?}");
         assert!(settings.shell.import_incremental);
+    }
+
+    fn default_suffixes() -> Vec<String> {
+        vec!["dop".to_string(), "pp3".to_string(), "on1".to_string()]
+    }
+
+    #[test]
+    fn the_move_settings_default_to_off_and_dop_pp3_on1() {
+        let shell = ShellSettings::default();
+        assert!(!shell.move_to_subfolders);
+        assert_eq!(shell.companion_suffixes, default_suffixes());
+    }
+
+    #[test]
+    fn the_move_settings_are_written_and_read() {
+        let dir = TempDir::new();
+        let path = dir.0.join("settings.txt");
+        for (on, suffixes, line) in [
+            (
+                false,
+                default_suffixes(),
+                "companion_suffixes = dop, pp3, on1",
+            ),
+            (true, vec!["xmp2".to_string()], "companion_suffixes = xmp2"),
+            (
+                true,
+                vec!["on1".to_string(), "dop".to_string()],
+                "companion_suffixes = on1, dop",
+            ),
+        ] {
+            let settings = Settings {
+                shell: ShellSettings {
+                    move_to_subfolders: on,
+                    companion_suffixes: suffixes,
+                    ..ShellSettings::default()
+                },
+                ..Settings::default()
+            };
+            save_settings(&path, &settings).unwrap();
+            let text = std::fs::read_to_string(&path).unwrap();
+            // The two lines come last, `move_to_subfolders` first.
+            assert!(
+                text.ends_with(&format!(
+                    "\nimport_incremental = true\nmove_to_subfolders = {on}\n{line}\n"
+                )),
+                "{text}"
+            );
+            let (loaded, problems) = load_settings(&path);
+            assert!(problems.is_empty(), "{problems:?}");
+            assert_eq!(loaded, settings);
+        }
+    }
+
+    #[test]
+    fn the_move_settings_are_read_from_a_written_file() {
+        let (_dir, path) = TempDir::with_file(
+            "# RawStride\nmove_to_subfolders = true\ncompanion_suffixes =  DOP ,Xmp2,on1  \n",
+        );
+        let (settings, problems) = load_settings(&path);
+        assert!(problems.is_empty(), "{problems:?}");
+        assert!(settings.shell.move_to_subfolders);
+        assert_eq!(
+            settings.shell.companion_suffixes,
+            vec!["dop".to_string(), "xmp2".to_string(), "on1".to_string()]
+        );
+    }
+
+    #[test]
+    fn a_file_without_the_move_keys_gives_the_defaults_and_no_problem() {
+        let (_dir, path) = TempDir::with_file("# RawStride\ncreate_iim = true\n");
+        let (settings, problems) = load_settings(&path);
+        assert!(problems.is_empty(), "{problems:?}");
+        assert!(!settings.shell.move_to_subfolders);
+        assert_eq!(settings.shell.companion_suffixes, default_suffixes());
+    }
+
+    #[test]
+    fn a_bad_move_to_subfolders_value_keeps_its_default_with_one_problem() {
+        let (_dir, path) =
+            TempDir::with_file("# RawStride\nmove_to_subfolders = yes\ncreate_iim = true\n");
+        let (settings, problems) = load_settings(&path);
+        assert_one_problem_on_line(&problems, 2);
+        assert!(problems[0].contains("yes"), "{problems:?}");
+        assert!(!settings.shell.move_to_subfolders);
+        assert!(settings.create_iim);
+    }
+
+    #[test]
+    fn bad_companion_suffix_entries_are_dropped_without_a_problem() {
+        let (_dir, path) = TempDir::with_file(
+            "# RawStride\ncompanion_suffixes = dop, , .xmp, a/b, a\\b, c:d, two words, PP3,\n",
+        );
+        let (settings, problems) = load_settings(&path);
+        assert!(problems.is_empty(), "{problems:?}");
+        assert_eq!(
+            settings.shell.companion_suffixes,
+            vec!["dop".to_string(), "pp3".to_string()]
+        );
+    }
+
+    #[test]
+    fn a_companion_suffixes_line_without_a_valid_entry_gives_the_default() {
+        for value in ["", " , ", ".dop", "a/b, c:d, x y, a\\b"] {
+            let (_dir, path) = TempDir::with_file(&format!(
+                "# RawStride\ncompanion_suffixes = {value}\nmove_to_subfolders = true\n"
+            ));
+            let (settings, problems) = load_settings(&path);
+            assert!(problems.is_empty(), "{value:?}: {problems:?}");
+            assert_eq!(
+                settings.shell.companion_suffixes,
+                default_suffixes(),
+                "{value:?}"
+            );
+            assert!(settings.shell.move_to_subfolders, "{value:?}");
+        }
     }
 }
