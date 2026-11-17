@@ -1,4 +1,4 @@
-# T187. ADR 0018 B3, first part: the delete's plan, batch and texts in the shell (pw-loupe) — Blocked: waits for T186 and T183
+# T187. ADR 0018 B3, first part: the delete's plan, batch and texts in the shell (pw-loupe) — Blocked: waits for T186
 
 - **Chain:** T185 (B1) → T186 (B2) → T187, T188 (B3) → T189 (B4) → T190 (B5). The owner's
   answers are B-Q1–B-Q15 in ADR 0018 §3; how the steps fit is ADR 0018 §2.10.
@@ -150,3 +150,4 @@
 | 2026-11-17 | Blocked: waits for T186 | From T189's and T190's cold read: `same_path` is `pub` and exported (`main.rs` is a binary crate of its own); "RAW+JPEG pair" added to the glossary rows |
 | 2026-11-17 | Blocked: waits for T186 and T183 | Chain review (fresh agent, T185–T190 read together): waits for T183 too (both change `moves.rs`, `lib.rs`'s exports and `test-inventory.md`); `DeleteBatch::skip` added for T190; `finish` puts a partly failed group's `deleted` files in `files` |
 | 2026-11-17 | Blocked: waits for T186 and T183 | Owner, from the chain review (ADR 0018 B-Q18): the plan's `partners` and `delete_partners_text` name the image files of the same name that go along (a TIFF or DNG too, not only the RAW+JPEG partner) |
+| 2026-11-17 | Blocked: waits for T186 | T183 is Done: waits for T186 only. T183 changed `moves.rs` (`moved_to_folders`), `lib.rs`'s exports and `main.rs` (`relist_tabs`, `batch_done`, `undo_done`, `undo_move`): line numbers to be checked when this task is set Open |

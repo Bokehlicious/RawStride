@@ -95,10 +95,11 @@ pub use monitor_profile::{
 };
 pub use moves::{
     Batch, BatchResult, MoveKind, MovedImage, PICKED_FOLDER, REJECTED_FOLDER, UNDO_STEPS,
-    UndoMoves, target_folder,
+    UndoMoves, moved_to_folders, target_folder,
 };
 pub use moves_text::{
-    move_failed_text, moves_failed_text, nothing_to_undo_text, undo_failed_text, undone_text,
+    move_failed_text, move_running_text, moves_failed_text, nothing_to_undo_text, undo_failed_text,
+    undone_text,
 };
 pub use preview::{
     FILMSTRIP_CELL_WIDTH, FILMSTRIP_IMAGE_HEIGHT, FILMSTRIP_LABEL_HEIGHT, FILMSTRIP_MARGIN,

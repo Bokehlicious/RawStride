@@ -1,4 +1,4 @@
-# T189. ADR 0018 B4: the Delete key, the menu item, the confirmation window and the deletes in the shell (pw-loupe) — Blocked: waits for T188 and T183
+# T189. ADR 0018 B4: the Delete key, the menu item, the confirmation window and the deletes in the shell (pw-loupe) — Blocked: waits for T188
 
 - **Chain:** T185 (B1) → T186 (B2) → T187, T188 (B3) → T189 (B4) → T190 (B5). The owner's
   answers are B-Q1–B-Q15 in ADR 0018 §3; how the steps fit is ADR 0018 §2.10.
@@ -157,3 +157,4 @@
 | 2026-11-17 | Blocked: waits for T188 and T183 | Cold read: doable in 7 files. Changed: `command_enabled` and `run_command` are in `main.rs`, `acts_in` needs no arm, the test places named; the item last in the Image menu, greyed in a tab without a folder; the window an `egui::Modal` with a key branch at the top of the key loop (since `dialog_open()` does not stop every key), Cancel focused only on the first frame, Enter deletes only when Delete has the focus; the sent ids and the focus flag kept in `Loupe`; paths compared with `same_path`, `follow_compare` needs no call, listing errors and the Tasks text placed; known limits listed (worker stopped after taking a request, quitting while running, key repeat) |
 | 2026-11-17 | Blocked: waits for T188 and T183 | Chain review (fresh agent, T185–T190 read together): `delete_folder` kept and an answer for a tab no longer active dropped (the same rule as T190); the window waits while another dialog is open; `.to_owned()`; `result.files` are the shell's paths and include a partly deleted group's files; more known limits listed |
 | 2026-11-17 | Blocked: waits for T188 and T183 | The window names the image files that go along (`plan.partners`, ADR 0018 B-Q18) |
+| 2026-11-17 | Blocked: waits for T188 | T183 is Done and committed: waits for T188 only. T183 changed `batch_done`, `undo_done` and `undo_move` in `main.rs` and added `relist_tabs`: line numbers to be checked when this task is set Open |

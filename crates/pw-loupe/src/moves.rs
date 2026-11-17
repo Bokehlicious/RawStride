@@ -231,6 +231,25 @@ impl Batch {
     }
 }
 
+/// The folders a step's files went to (ADR 0017 U9b, T183): the parent of every `Moved::to` of
+/// every image (the image and its companion files, as moved), an empty parent left out, each
+/// folder once, compared as given, in the order first met. The tabs open on them are listed again
+/// after a batch and an undo.
+pub fn moved_to_folders(images: &[MovedImage]) -> Vec<PathBuf> {
+    let mut folders: Vec<PathBuf> = Vec::new();
+    for folder in images
+        .iter()
+        .flat_map(|image| image.moved.iter())
+        .filter_map(|moved| moved.to.parent())
+        .filter(|folder| !folder.as_os_str().is_empty())
+    {
+        if !folders.iter().any(|known| known == folder) {
+            folders.push(folder.to_path_buf());
+        }
+    }
+    folders
+}
+
 /// The moves that can be undone (U9-Q8): at most `UNDO_STEPS` steps, one per batch, for the
 /// running session only; one list for the whole program, not per tab.
 #[derive(Clone, Debug, Default)]
@@ -269,6 +288,51 @@ mod tests {
             from: PathBuf::from(from),
             to: PathBuf::from(to),
         }
+    }
+
+    #[test]
+    fn moved_to_folders_gives_each_folder_once() {
+        let image = |name: &str, moved: Vec<Moved>| MovedImage {
+            image: PathBuf::from(name),
+            moved,
+            restore: None,
+        };
+        let one = vec![
+            image(
+                "D:/x/a.ARW",
+                vec![
+                    moved("D:/x/a.ARW", "D:/x/_rejected/a.ARW"),
+                    moved("D:/x/a.xmp", "D:/x/_rejected/a.xmp"),
+                ],
+            ),
+            image(
+                "D:/x/b.ARW",
+                vec![
+                    moved("D:/x/b.ARW", "D:/x/_rejected/b.ARW"),
+                    moved("D:/x/b.JPG", "D:/x/_rejected/b.JPG"),
+                ],
+            ),
+        ];
+        assert_eq!(
+            moved_to_folders(&one),
+            vec![PathBuf::from("D:/x/_rejected")]
+        );
+
+        // An image of a second folder adds its own `_rejected` after the first.
+        let mut two = one.clone();
+        two.push(image(
+            "D:/y/c.ARW",
+            vec![moved("D:/y/c.ARW", "D:/y/_rejected/c.ARW")],
+        ));
+        assert_eq!(
+            moved_to_folders(&two),
+            vec![
+                PathBuf::from("D:/x/_rejected"),
+                PathBuf::from("D:/y/_rejected")
+            ]
+        );
+
+        assert!(moved_to_folders(&[]).is_empty());
     }
 
     #[test]

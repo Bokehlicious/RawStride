@@ -172,7 +172,15 @@ and reviewer:
     while a batch runs is loaded again when the batch is done (its position, filter and
     inspector reset); a tab open on a `_rejected` folder that was deleted gives a listing error
     after every batch; an undo that partly fails is not pushed back, so its failed images can no
-    longer be undone.
+    longer be undone. From its review (`/code-review`, 2026-11-17): a move or a move back that
+    fails and whose rollback also fails (files left in `_rejected` or `_picked`) relists neither
+    that folder's tab nor the source tab when no other image of the folder succeeded
+    (`relist_tabs` takes only the moved and restored images); the active `_rejected` tab loaded
+    again (`load_active_tab`, `begin_load`) while a rating write of one of its images is in
+    flight may show that rating as unread for a moment; `undo_done` forgets and follows every
+    tab's sort twice when a `_rejected` or `_picked` tab is open, every finished batch with such a
+    tab open re-sorts every tab (modification times read again), and `relist_tabs` resolves each
+    folder with `same_folder` twice (its pre-check and `tabs_of_folder_mut`).
 - **Leftovers from the review of T177** (`/code-review`, 2026-11-17; accepted, nothing breaks
   today; the required method is T184; the design below **kept** at the sort of
   2026-11-17, for when `ImageCheck` is next changed):

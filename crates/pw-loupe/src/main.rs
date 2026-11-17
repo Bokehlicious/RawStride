@@ -47,8 +47,8 @@ use pw_loupe::{
 };
 use pw_loupe::{
     Batch, MoveKey, MoveKind, MovedImage, UndoMoves, move_failed_text, move_key_action,
-    moves_failed_text, nothing_to_undo_text, same_folder, target_folder, undo_failed_text,
-    undone_text, worker_stopped_text,
+    move_running_text, moved_to_folders, moves_failed_text, nothing_to_undo_text, same_folder,
+    target_folder, undo_failed_text, undone_text, worker_stopped_text,
 };
 use pw_loupe::{
     COLLAPSED_WIDTH, ColumnState, Command, MENUS, MenuEntry, MenuItem, RatingKey, STATUS_TEXT_SIZE,
@@ -4051,9 +4051,11 @@ impl Loupe {
     }
 
     /// Ctrl+Z or Edit ▸ Undo Move (U9-Q8, T174): the newest step of the undo list is moved back
-    /// by `follow_moves`. Nothing while a batch or an undo runs; nothing to undo shows so.
+    /// by `follow_moves`. While a batch or an undo runs or waits, the status line says so and
+    /// nothing is queued (U9-Q11, T183); nothing to undo shows so.
     fn undo_move(&mut self) {
         if self.moves.busy() {
+            self.message = Some(move_running_text().to_owned());
             return;
         }
         match self.moves.undo.pop() {
@@ -4112,7 +4114,7 @@ impl Loupe {
                 break;
             }
             match self.moves.running.take() {
-                Some(MoveRun::Batch { batch, .. }) => self.batch_done(batch),
+                Some(MoveRun::Batch { batch, .. }) => self.batch_done(ctx, batch),
                 Some(MoveRun::Undo(images)) => self.undo_done(ctx, images),
                 None => break,
             }
@@ -4217,10 +4219,51 @@ impl Loupe {
         (active, errors)
     }
 
+    /// Lists every tab open on one of `folders` again (ADR 0017 U9b, T183): after a batch or an
+    /// undo, the tabs of the `_rejected` and `_picked` folders the files went to or left. Listing
+    /// again, not dropping single files, also covers a folder spelt differently from the moved
+    /// paths and files a failed move back left behind. No file is made current; a tab without a
+    /// folder keeps its files. Then every tab's sort is forgotten, the active tab is loaded again
+    /// when it was one of them (its new files' ratings are not in the metadata cache), and the
+    /// sort is followed. With no tab open on any of `folders`, nothing is done. Returns the errors.
+    fn relist_tabs(&mut self, ctx: &egui::Context, folders: &[PathBuf]) -> Vec<String> {
+        let open: Vec<PathBuf> = folders
+            .iter()
+            .filter(|folder| {
+                self.tabs.tabs().iter().any(|tab| {
+                    tab.folder
+                        .as_deref()
+                        .is_some_and(|open| same_folder(open, folder))
+                })
+            })
+            .cloned()
+            .collect();
+        if open.is_empty() {
+            return Vec::new();
+        }
+        let (active, errors) = self.replace_tab_files(&open, |tab| {
+            let Some(folder) = tab.folder.as_deref() else {
+                return Ok((tab.files.clone(), None));
+            };
+            let (files, _) = list_folder(folder)?;
+            Ok((files, None))
+        });
+        self.tabs.forget_sort();
+        if active {
+            self.load_active_tab();
+        }
+        self.follow_sort(ctx);
+        errors
+    }
+
     /// A batch of moves has all its answers (T174 point 5): every tab of the moved images' folders
-    /// drops the moved files, the active one's view cores and thumbnails follow, the step goes on
-    /// the undo list, and the failures are shown and listed. A failed image keeps its new rating.
-    fn batch_done(&mut self, batch: Batch) {
+    /// drops the moved files, the active one's view cores and thumbnails follow, the tabs open on
+    /// the folders the files went to are listed again (T183), the step goes on the undo list, and
+    /// the failures are shown and listed. A failed image keeps its new rating. With nothing to
+    /// show and no other batch waiting (`running` is already taken, so `busy` means a waiting
+    /// batch), the text of Ctrl+Z pressed while the moves ran is cleared; while one waits, it
+    /// stays, since Ctrl+Z still does nothing.
+    fn batch_done(&mut self, ctx: &egui::Context, batch: Batch) {
         let result = batch.finish();
         let moved_from: HashSet<PathBuf> = result
             .moved
@@ -4228,7 +4271,7 @@ impl Loupe {
             .flat_map(|image| image.moved.iter().map(|moved| moved.from.clone()))
             .collect();
         let folders = image_folders(result.moved.iter().map(|image| image.image.as_path()));
-        let (active, errors) = self.replace_tab_files(&folders, |tab| {
+        let (active, mut errors) = self.replace_tab_files(&folders, |tab| {
             let resolved = resolve_paths(&tab.files)?;
             let files = tab
                 .files
@@ -4242,6 +4285,7 @@ impl Loupe {
         if active {
             self.active_reordered();
         }
+        errors.extend(self.relist_tabs(ctx, &moved_to_folders(&result.moved)));
         self.moves.undo.push(result.moved);
         let now = ClockTime::now();
         for error in &errors {
@@ -4255,6 +4299,9 @@ impl Loupe {
             [] => {
                 if let Some(error) = errors.last() {
                     self.message = Some(error.clone());
+                } else if !self.moves.busy() && self.message.as_deref() == Some(move_running_text())
+                {
+                    self.message = None;
                 }
             }
             [(image, reason)] => {
@@ -4273,8 +4320,9 @@ impl Loupe {
     /// An undo has all its answers (T174 point 6): the ratings before an X are restored, every
     /// tab of the images' folders lists its folder again with the first restored image current,
     /// the sort is applied again, and the active tab's view cores and thumbnails follow (its
-    /// ratings are read again when a restored image is no longer in the metadata cache). A failed
-    /// image stays where it is, and the step is not pushed back. The status line is set last.
+    /// ratings are read again when a restored image is no longer in the metadata cache); then the
+    /// tabs open on the folders the files left are listed again (T183). A failed image stays where
+    /// it is, and the step is not pushed back. The status line is set last.
     fn undo_done(&mut self, ctx: &egui::Context, images: Vec<UndoImage>) {
         let mut restored = Vec::new();
         let mut failed = Vec::new();
@@ -4312,9 +4360,9 @@ impl Loupe {
         });
         errors.extend(list_errors);
         if !folders.is_empty() {
-            // Every tab's sort is forgotten (accepted), so the order is applied again.
+            // Every tab's sort is forgotten (accepted), so the order is applied again; after
+            // the active tab is loaded, so its new files are not sorted by ratings not read yet.
             self.tabs.forget_sort();
-            self.follow_sort(ctx);
         }
         if active {
             if restored
@@ -4327,6 +4375,10 @@ impl Loupe {
                 self.active_reordered();
             }
         }
+        if !folders.is_empty() {
+            self.follow_sort(ctx);
+        }
+        errors.extend(self.relist_tabs(ctx, &moved_to_folders(&restored)));
         let now = ClockTime::now();
         for error in &errors {
             self.tasks.add_error(error, now);

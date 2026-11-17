@@ -36,6 +36,12 @@ pub fn nothing_to_undo_text() -> &'static str {
     "There is no move to undo."
 }
 
+/// The status-line text when Undo Move is chosen while a batch of moves or an undo runs or waits
+/// (U9-Q11, T183): nothing is queued.
+pub fn move_running_text() -> &'static str {
+    "A move is still running. Try Undo Move again when it is done."
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -62,5 +68,13 @@ mod tests {
         assert_eq!(undone_text(2), "2 images moved back.");
         assert_eq!(undone_text(12), "12 images moved back.");
         assert_eq!(nothing_to_undo_text(), "There is no move to undo.");
+    }
+
+    #[test]
+    fn the_text_while_a_move_runs() {
+        assert_eq!(
+            move_running_text(),
+            "A move is still running. Try Undo Move again when it is done."
+        );
     }
 }
