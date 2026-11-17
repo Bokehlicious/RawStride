@@ -874,7 +874,7 @@ mod tests {
         assert_eq!(exif.shown(&text), ExifShown::Rows(&[]));
         // Every listed kind is read, in either case.
         for name in [
-            "a.ARW", "a.rw2", "a.DNG", "a.nef", "a.CR2", "a.orf", "a.PEF",
+            "a.ARW", "a.rw2", "a.DNG", "a.nef", "a.CR2", "a.orf", "a.PEF", "a.RAF",
         ] {
             assert!(exif_supported(Path::new(name)), "{name}");
         }

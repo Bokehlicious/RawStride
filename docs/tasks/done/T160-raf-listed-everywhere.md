@@ -1,4 +1,4 @@
-# T160. Fujifilm RAF listed: viewer, import and sidecar — Open
+# T160. Fujifilm RAF listed: viewer, import and sidecar — Done
 
 - **Why:** the second and last task for RAF (owner, 2026-11-16, after the job test). T159 lets
   `pw-raw` read a RAF file. This task adds `raf` to the two lists that decide what RawStride
@@ -57,3 +57,5 @@
 | 2026-11-16 | Blocked | Added with T159 (bug 4 of 5). Waits for T159 |
 | 2026-11-16 | Blocked | Cold read: the two constants are the only production change, and every other extension check treats RAF right; the ingest test gets its own card; a new `is_listed` test; the thumbnail speed is in the hand check and the backlog ("RAF previews") |
 | 2026-11-16 | Open | T159 is Done; the text is unchanged |
+| 2026-11-17 | Ready for review | `raf` added to `SUPPORTED_EXTENSIONS` and `SIDECAR_EXTENSIONS`; the four tests added; nothing else failed; `check.ps1` all OK (1681 passed, 65 ignored, 0 failed) |
+| 2026-11-17 | Done | Reviewed: no bugs. Reviewer's `.\tools\check.ps1` on the tree with T160, T161, T163 and T164: all OK, 1694 passed, 65 ignored, 0 failed; clippy without warnings; committed one task at a time, the inventory's header set to this commit's count (1681). The owner's hand check is done after the commit (owner, 2026-11-17); its result, and whether the contact sheet is slow, decides the backlog item "RAF previews" |

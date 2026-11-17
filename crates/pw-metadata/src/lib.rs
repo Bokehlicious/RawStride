@@ -357,7 +357,7 @@ impl Rating {
 }
 
 /// RAW extensions (lower case) whose ratings go to an XMP sidecar.
-const SIDECAR_EXTENSIONS: &[&str] = &["arw", "rw2", "nef", "cr2", "orf", "pef", "srw"];
+const SIDECAR_EXTENSIONS: &[&str] = &["arw", "rw2", "nef", "cr2", "orf", "pef", "srw", "raf"];
 /// Extensions whose ratings are embedded in the file itself.
 const EMBEDDED_EXTENSIONS: &[&str] = &["dng", "jpg", "jpeg", "tif", "tiff"];
 

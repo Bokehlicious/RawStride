@@ -748,6 +748,13 @@ mod tests {
     }
 
     #[test]
+    fn raf_files_are_listed() {
+        for n in ["a.RAF", "a.raf"] {
+            assert!(is_listed(Path::new(n)), "{n}");
+        }
+    }
+
+    #[test]
     fn opens_import_only_on_ctrl_i() {
         use egui::Key as K;
         assert!(opens_import(K::I, true, false, false));

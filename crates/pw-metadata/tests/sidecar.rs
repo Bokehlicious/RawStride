@@ -194,6 +194,11 @@ fn unicode_and_spaces_in_paths() {
 fn which_file_holds_the_rating() {
     use std::path::Path;
     assert!(supports_sidecar(Path::new("a.ARW")) && supports_sidecar(Path::new("a.rw2")));
+    assert!(supports_sidecar(Path::new("a.RAF")));
+    assert_eq!(
+        sidecar_path(Path::new("x/_DSF4243.RAF")),
+        Path::new("x/_DSF4243.xmp")
+    );
     for f in ["a.dng", "a.JPG", "a.jpeg", "a.tif", "a.TIFF"] {
         assert!(pw_metadata::supports_embedded(Path::new(f)), "{f}");
         assert_eq!(pw_metadata::rating_file(Path::new(f)), Path::new(f));

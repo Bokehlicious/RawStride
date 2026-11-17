@@ -12,7 +12,7 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 | `T<nnn>-<name>.md` (this folder) | Open tasks, one file each |
 | [`backlog.md`](backlog.md) | Not for agents yet: needs a decision, a dependency or an ADR first |
 | [`plans/`](plans/) | Step lists for ADRs that have none of their own (ADR 0007 milestone 8, ADR 0017) |
-| [`done/`](done/README.md) | Finished tasks T1–T159 and T162, and the log they were kept in until 2026-11-13 |
+| [`done/`](done/README.md) | Finished tasks T1–T160 and T162, and the log they were kept in until 2026-11-13 |
 
 
 ## How to work on a task
@@ -95,7 +95,6 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status |
 |---|---|---|
-| [T160](T160-raf-listed-everywhere.md) | Fujifilm RAF listed: viewer, import and sidecar | Open |
 | [T161](T161-import-dialog-finds-new-cards.md) | The import dialog finds a card inserted while it is open | Open |
 | [T163](T163-open-every-imported-folder.md) | After an import, every folder that got images opens in its own tab (pw-loupe) | Open |
 | [T164](T164-same-names-in-favourites-and-recent.md) | Folders with the same name told apart in Favourites and Recent (pw-loupe) | Open |

@@ -133,6 +133,28 @@ fn scan_groups_and_ignores() {
 }
 
 #[test]
+fn raf_files_are_scanned_and_planned() {
+    let src = Tmp::new("raf-src");
+    let dst = Tmp::new("raf-dst");
+    // Fake bytes: inspecting fails, so the time falls back to the file date.
+    write(
+        &src.0.join("DCIM").join("100_FUJI").join("_DSF0001.RAF"),
+        &[7u8; 4000],
+        T0,
+    );
+    let shots = scan(&src.0).unwrap();
+    let names: Vec<_> = shots
+        .iter()
+        .map(|s| (s.stem.as_str(), s.files.len()))
+        .collect();
+    assert_eq!(names, vec![("_DSF0001", 1)]);
+    assert!(!shots[0].time_from_exif, "fake file has no EXIF");
+    let p = plan(&shots, &opts(&dst.0, "{date}", "{name}"));
+    assert_eq!(rels(&p), vec!["2026-10-26/_DSF0001.RAF"]);
+    assert_eq!((p.files_to_copy(), p.bytes_to_copy()), (1, 4000));
+}
+
+#[test]
 fn copies_verifies_and_is_incremental() {
     let src = Tmp::new("copy-src");
     let dst = Tmp::new("copy-dst");

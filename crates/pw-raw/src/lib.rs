@@ -195,7 +195,7 @@ pub fn read_preview(path: &Path, preview: &PreviewRef) -> Result<Vec<u8>> {
 
 /// File extensions (lower case, without dot) the viewer lists.
 pub const SUPPORTED_EXTENSIONS: &[&str] = &[
-    "arw", "rw2", "dng", "nef", "cr2", "orf", "pef", "srw", "jpg", "jpeg", "tif", "tiff",
+    "arw", "rw2", "dng", "nef", "cr2", "orf", "pef", "srw", "raf", "jpg", "jpeg", "tif", "tiff",
 ];
 
 /// True for plain TIFF files (`.tif`/`.tiff`). These usually carry no embedded JPEG preview,
