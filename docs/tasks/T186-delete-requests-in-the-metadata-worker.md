@@ -1,4 +1,4 @@
-# T186. ADR 0018 B2: preparing and deleting an image as requests to the metadata worker (pw-metadata) — Blocked: waits for T185 and T184
+# T186. ADR 0018 B2: preparing and deleting an image as requests to the metadata worker (pw-metadata) — Blocked: waits for T185
 
 - **Chain:** T185 (B1) → T186 (B2) → T187, T188 (B3) → T189 (B4) → T190 (B5). The owner's
   answers are B-Q1–B-Q15 in ADR 0018 §3; how the steps fit is ADR 0018 §2.10.
@@ -99,3 +99,4 @@
 | 2026-11-17 | Blocked: waits for T185 and T184 | Cold read: doable with the named files (the only exhaustive matches on `Event` are the worker test and `metadata.rs`'s `apply`). Changed: the arm written with `WorkerEvent`; companions' errors (absolute `file`, `InvalidInput` is `NotAFile`); only the release loop shared; doc comments; `#[cfg(windows)]`, the extensions and suffixes, and the drive's dependence for the tests; the ignored test named, prefixed, with a 30-second wait, and its own filter (`worker::` also matched an import-worker test) |
 | 2026-11-17 | Blocked: waits for T185 and T184 | Point 6 decided by the owner: the move's error stays text (ADR 0018 B-Q17) |
 | 2026-11-17 | Blocked: waits for T185 and T184 | Chain review (fresh agent, T185–T190 read together): the answers' paths are the shell's form (companions built from the image as sent; T185's errors give paths as given), so T187–T189 can compare them |
+| 2026-11-17 | Blocked: waits for T185 | T184 is Done and committed: waits for T185 only. T184 added an empty `release_for_move` to `FailingCheck` in `worker.rs`'s tests (about line 1376): line numbers to be checked when this task is set Open |

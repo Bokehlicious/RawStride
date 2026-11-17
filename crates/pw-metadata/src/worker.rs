@@ -1373,6 +1373,8 @@ mod tests {
         impl ImageCheck for FailingCheck {
             fn release(&self, _image: &Path) {}
 
+            fn release_for_move(&self, _image: &Path) {}
+
             fn check_copy(
                 &self,
                 _original: &Path,

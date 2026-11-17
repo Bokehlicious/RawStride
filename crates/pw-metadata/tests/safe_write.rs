@@ -350,6 +350,8 @@ struct FailingCheck;
 impl ImageCheck for FailingCheck {
     fn release(&self, _image: &Path) {}
 
+    fn release_for_move(&self, _image: &Path) {}
+
     fn check_copy(&self, _original: &Path, _copy: &Path, _kind: FileKind) -> Result<(), String> {
         Err("the previews of the copy differ".to_string())
     }
@@ -364,6 +366,8 @@ struct LockingCheck {
 
 impl ImageCheck for LockingCheck {
     fn release(&self, _image: &Path) {}
+
+    fn release_for_move(&self, _image: &Path) {}
 
     fn check_copy(&self, original: &Path, _copy: &Path, _kind: FileKind) -> Result<(), String> {
         let file = std::fs::OpenOptions::new()

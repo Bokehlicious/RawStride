@@ -105,6 +105,10 @@ impl ImageCheck for Timed {
         self.check.release(image);
     }
 
+    fn release_for_move(&self, image: &Path) {
+        self.check.release_for_move(image);
+    }
+
     fn check_copy(&self, original: &Path, copy: &Path, kind: FileKind) -> Result<(), String> {
         let start = Instant::now();
         let result = self.check.check_copy(original, copy, kind);
