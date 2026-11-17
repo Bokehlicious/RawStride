@@ -1,7 +1,9 @@
 # ADR 0018: Deleting images to the Recycle Bin
 
 - Status: **accepted by the owner (2026-11-17):** every question answered, all proposals approved
-  (§3). Nothing is built, installed or added as a dependency by this ADR. Each step in §4 becomes
+  (§3); B-Q14 and B-Q15 answered when B1 was written, B-Q16–B-Q18 when B2–B5 were
+  written (2026-11-17). Nothing is built, installed
+  or added as a dependency by this ADR. Each step in §4 becomes
   its own task, with its own approval and commit.
 - Date: 2026-11-17
 - Related:
@@ -11,7 +13,8 @@
   - ADR 0005 choice 3 (never delete from the card) and choice 5 (videos are never handled);
   - ADR 0007 §9.5 (the write journal and the order of writes), ADR 0013 (ratings, reject),
     ADR 0014 §2.7 (one key on the marked images, otherwise the current one);
-  - AGENTS.md §3 (a new `windows-sys` feature needs the owner's approval, given in B-Q11).
+  - AGENTS.md §3 (a new `windows-sys` feature needs the owner's approval, given in B-Q11 and
+    B-Q14).
 
 ## 1. Context
 
@@ -38,6 +41,8 @@
   preview: only the current image, even when several are marked (B-Q2).
 - **"Delete Rejected Images"** (B-Q9): every image of the active tab's folder whose rating is
   reject, with the same confirmation and rules; a step of its own (B5).
+  A rejected image whose RAW+JPEG partner is not rejected is refused and named in the
+  confirmation (owner, 2026-11-17, B-Q16).
 
 ### 2.2 Companion files
 
@@ -45,6 +50,9 @@
   partner, both XMP sidecar forms and the edit files named by the companion suffix list
   (`dop`, `pp3`, `on1` by default, `settings.txt`, U9-Q10). Names compared without regard to case.
 - Deleting only one file of a RAW+JPEG pair is not offered now (B-Q3).
+- Every image file of the same name goes along (a TIFF or DNG too, not only the RAW+JPEG
+  partner), as for a move; the confirmation names those besides the chosen images (owner,
+  2026-11-17, B-Q18, from the chain review of T185–T190).
 
 ### 2.3 Order
 
@@ -83,6 +91,20 @@
 - **A drive without a Recycle Bin** (B-Q6), for example a network share: refused with a message,
   since Windows would remove the files permanently. How RawStride knows this before deleting is
   tested in B1 [T].
+- **Where Windows would delete permanently** (B-Q14, owner, 2026-11-17): with `FOF_NO_UI`
+  Windows deletes a file permanently, without asking, when the Recycle Bin is turned off for the
+  drive ("Don't move files to the Recycle Bin", or the policy `NoRecycleFiles`) or the file is too
+  large for it. RawStride reads the drive's Recycle Bin settings first (the volume's
+  `NukeOnDelete` and `MaxCapacity` under the user's `Explorer\BitBucket\Volume\{GUID}` key, and
+  `NoRecycleFiles` in the user's and the machine's Explorer policies) and refuses the image when
+  the bin is off, when its files together are larger than the bin's size, or when the settings
+  cannot be read. The keys were seen for every local fixed drive on the owner's machine
+  (reviewer, 2026-11-17).
+  Known limit: if the settings change between this check and Windows' call, Windows would
+  delete permanently, since `FOF_NO_UI` asks nothing; the check right before the call is the only
+  guard (reviewer, 2026-11-17). The folder is resolved with `canonicalize` before the drive
+  check, so a junction or folder symlink is judged by the drive it points to (reviewer, chain
+  review of T185–T190, 2026-11-17).
 - RawStride never removes a file permanently, and never empties the Recycle Bin.
 
 ### 2.7 After the delete
@@ -110,8 +132,26 @@
   confirmation of its own), all files of one image in one call, from the metadata worker's
   thread; no COM is needed (B-Q11) [T, confirmed in B1].
 - This adds the feature `Win32_UI_Shell` to `pw-metadata`'s existing `windows-sys` =0.61.2; no new
-  package (owner, 2026-11-17, B-Q11). Off Windows the function returns `Unsupported`, as the safe
-  write's file operations do.
+  package (owner, 2026-11-17, B-Q11), and `Win32_System_Registry` for the Recycle Bin's settings
+  (owner, 2026-11-17, B-Q14). Off Windows the function returns `Unsupported`, as the safe write's
+  file operations do.
+- **Tests** (B-Q15, owner, 2026-11-17): the tests that send files to the real Recycle Bin are
+  `#[ignore]` and run by hand in the review with a named command, so `.\tools\check.ps1` puts
+  nothing in the user's Recycle Bin; it runs the decision and the checks.
+
+### 2.10 How the steps fit (reviewer, 2026-11-17, when B2–B5 were written as T186–T190)
+
+- **Two requests to the metadata worker** (B2): `prepare_delete` finds each image's companion
+  files and checks them without the "open in another program" check (the view cores still hold
+  the current image), for the confirmation's count and size; `delete_image` releases the
+  sessions, checks every file again with that check and deletes. A card or a drive without a
+  Recycle Bin is refused in the prepare, so no window opens; the request runs on the worker, not
+  on the UI thread (§2.3). The answers carry the structured `DeleteError`.
+- **One file operation at a time:** Delete while a move or an undo runs or waits says so and does
+  nothing; while a delete prepares, asks or runs, a waiting move batch is not started and Ctrl+Z
+  says so. X still sets the rating at once.
+- **The undo list of moves forgets deleted files:** a moved image whose file was deleted (for
+  example in `_rejected`) is dropped from its undo step, so Ctrl+Z does not try to move it back.
 
 ## 3. Questions (answered by the owner, 2026-11-17: every proposal approved)
 
@@ -130,6 +170,11 @@
 | B-Q11 | Windows API and dependency | `SHFileOperationW` with `FOF_ALLOWUNDO \| FOF_NO_UI`; the feature `Win32_UI_Shell` of the existing `windows-sys` in `pw-metadata` |
 | B-Q12 | Names | Steps B1–B5, questions B-Q1… |
 | B-Q13 | Not included | As §5 |
+| B-Q14 | Recycle Bin off for the drive, or a file too large for it (asked when B1 was written, 2026-11-17) | Refused before Windows is called, from the drive's Recycle Bin settings in the registry (§2.6); also refused when they cannot be read. Adds the feature `Win32_System_Registry` (§2.9) |
+| B-Q15 | Tests that use the real Recycle Bin (asked when B1 was written, 2026-11-17) | `#[ignore]`, run by hand in the review; `.\tools\check.ps1` does not put files in the user's Recycle Bin |
+| B-Q16 | "Delete Rejected Images" and a partner that is not rejected (asked when B5 was written, 2026-11-17) | A rejected image whose RAW+JPEG partner is not rejected is refused, and the confirmation names it; deleting it alone would break B-Q3 |
+| B-Q17 | A structured error for the move's answer too (plan row B2, 2026-11-17) | No, not now: only the delete's answer gets one; the move's stays text (the backlog item "Leftovers from the review of T170" keeps it) |
+| B-Q18 | Image files of the same name besides the RAW+JPEG partner (chain review, 2026-11-17) | They go along, as for a move, and the confirmation names them |
 
 ## 4. Steps
 

@@ -174,12 +174,17 @@ and reviewer:
     be the same for writes and moves, and `with_move_release` and the second closure could go.
 - **Leftovers from the review of T170** (`/code-review`, 2026-11-17; the histogram stamp is
   T177; the reopening **kept** at the sort of 2026-11-17, not seen in the owner's hand check of
-  U9b; the text-only error moved to ADR 0018 B2 in `plans/adr-0018-0025-steps.md`):
+  U9b; the text-only error was moved to ADR 0018 B2 and came back here: the owner decided
+  (2026-11-17, ADR 0018 B-Q17) that only the delete's answer gets a structured error now):
   - *A view core may open the file again between the release and the move:* the worker releases
     the image files one by one and then moves them; a render or prefetch in between opens a new
     session, and the move fails with "open in another program". The same gap exists before a
     safe write. If T174's hand check sees it, a task holds the view cores' reopening of the
     group's files until the move's answer.
+  - *The move's answer is text:* `Event::Moved` and `Event::MovedBack` carry `MoveError` as a
+    `String`, so its `left` (files that could not be moved back) is lost for the undo list.
+    Kept (ADR 0018 B-Q17); the delete's answer has a structured `DeleteError` (T186) to copy
+    when the moves are next changed.
 
 - **Leftovers from the review of T179** (reviewer and `/code-review` twice, 2026-11-17;
   accepted, none is reached by T180's use of `Edit::Entries`; the arm in `BatchEdits::lists` was

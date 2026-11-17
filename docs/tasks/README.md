@@ -90,11 +90,17 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 | [T182](T182-x-trans-statistics-gaps.md) | RAW statistics on X-Trans: channel shares, renders and a file cut short (pw-libraw tests) | Open |
 | [T183](T183-tabs-on-rejected-and-picked-and-undo-while-moving.md) | ADR 0017 U9b: a tab open on `_rejected` or `_picked` follows a move and an undo; Ctrl+Z while a move runs says so (pw-loupe) | Open |
 | [T184](T184-release-for-move-a-required-method.md) | `ImageCheck::release_for_move` a required method (pw-metadata, pw-imagecheck) | Open |
+| [T185](T185-delete-group-to-recycle-bin.md) | ADR 0018 B1: an image's files to the Recycle Bin, with the drive and the files checked first (pw-metadata) | Blocked: waits for T181 |
+| [T186](T186-delete-requests-in-the-metadata-worker.md) | ADR 0018 B2: preparing and deleting an image as requests to the metadata worker (pw-metadata) | Blocked: waits for T185 and T184 |
+| [T187](T187-delete-rules-and-texts.md) | ADR 0018 B3, first part: the delete's plan, batch and texts in the shell (pw-loupe) | Blocked: waits for T186 and T183 |
+| [T188](T188-delete-requests-and-answers-in-the-metadata-cache.md) | ADR 0018 B3, second part: the delete requests and answers in the shell's metadata part (pw-loupe) | Blocked: waits for T187 |
+| [T189](T189-delete-key-menu-window-and-wiring.md) | ADR 0018 B4: the Delete key, the menu item, the confirmation window and the deletes in the shell (pw-loupe) | Blocked: waits for T188 and T183 |
+| [T190](T190-delete-rejected-images.md) | ADR 0018 B5: "Delete Rejected Images" in the active tab's folder (pw-loupe) | Blocked: waits for T189 |
 
 ## Writing a task (owner and reviewer)
 
-- **Number:** the next free number after the highest in this folder and `done/` (T185 next).
-- **File:** `docs/tasks/T185-<a-few-words>.md`; three digits, lower case, words joined by `-`.
+- **Number:** the next free number after the highest in this folder and `done/` (T191 next).
+- **File:** `docs/tasks/T191-<a-few-words>.md`; three digits, lower case, words joined by `-`.
 - **Index:** add a row to "Open tasks" above and keep its status in step with the file's heading.
 - **Size (owner, 2026-11-15, after T142):** one task is one layer (a C++ shim or a core crate, or
   the shell in `pw-loupe`), about eight files at most, and gives one result the owner can check by
@@ -147,7 +153,7 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 Skeleton (the fields recent tasks use; leave out those that do not apply):
 
 ```markdown
-# T185. <Title> — Open
+# T191. <Title> — Open
 
 - **Why:** …
 - **Crates:** … **Files:** …
