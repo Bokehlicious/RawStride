@@ -574,7 +574,7 @@ fn an_open_keyword_conflict_is_left_alone_and_reported() {
     ) {
         Ok(report) => {
             assert_eq!(report.report, WriteReport::Unchanged);
-            assert_eq!(report.notices, [kept.clone()]);
+            assert_eq!(report.notices, std::slice::from_ref(&kept));
         }
         Err(error) => panic!("expected Unchanged, got the error {error}"),
     }
