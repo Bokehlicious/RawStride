@@ -586,7 +586,7 @@ separate window waits (§7.2).
 | **Keyword panel**: a flat list of approved keywords, and structured keywords (hierarchy, synonyms, import/export as text) | Further out | Lets RawStride edit the hierarchical keywords it only keeps today (ADR 0007 §8) |
 | Tagging (a yes/no mark apart from stars and labels) | Later, after stage A (owner, 2026-11-12) | |
 | Loupe under the mouse pointer in the contact sheet (100 % while a key or button is held) | Later, after stage A (owner, 2026-11-12) | |
-| Copy, move and rename tools for selected images | Later, after stage A (owner, 2026-11-12) | |
+| Copy, move and rename tools for selected images | Later, after stage A (owner, 2026-11-12) | Taken up by ADR 0021 (2026-11-17) |
 | Chosen fields as text lines under each thumbnail | Later, after stage A (owner, 2026-11-12) | The thumbnail shows the file name until then |
 | Temporary exposure and white balance for assessment | Later, after stage A (owner, 2026-11-12) | Needs RAW processing options the view core does not have today |
 | The separate preview window (U0), movable to a second screen with that screen's DPI and colour profile | When the owner has a second screen to test with (owner, 2026-11-12 and 2026-11-13) | Review finding 5: colour conversion is per start screen today (ADR 0016) |
