@@ -24,6 +24,7 @@ pub mod journal;
 pub mod properties;
 pub mod read;
 pub mod reconcile;
+pub mod relocate;
 pub mod safe_write;
 pub mod template;
 #[cfg(test)]
@@ -40,6 +41,7 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 
 pub use exiftool::{ExifTool, MIN_EXIFTOOL_VERSION, ToolVersion};
+pub use relocate::{MoveError, Moved};
 pub use worker::{
     EXIFTOOL_TOO_OLD, Event as WorkerEvent, MetadataWorker, NO_JOURNAL, RequestId, SubmitError,
     WriteSetup,

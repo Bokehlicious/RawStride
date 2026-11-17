@@ -1,4 +1,4 @@
-# T170. ADR 0017 U9b, second part: the move as a request to the metadata worker — Blocked: waits for T169
+# T170. ADR 0017 U9b, second part: the move as a request to the metadata worker — Open
 
 - **Chain:** T169 → T170 → T171 → T172 → T173 → T174. The owner's answers U9-Q5–U9-Q10 are in ADR 0017 §6.1.
 - **Why:** ADR 0017 §2.6: a pending rating or metadata write to the file or its sidecar is
@@ -59,3 +59,4 @@
 |---|---|---|
 | 2026-11-17 | Blocked | Added for ADR 0017 U9b; waits for T169 |
 | 2026-11-17 | Blocked | Cold read: the new `Event` variants break `pw-loupe`'s exhaustive match, so `metadata.rs` gets an ignoring arm here (named); the existing all-variants test is extended; a recording `ImageCheck` must be written; a move ignores ExifTool's state (the loop's start attempt stays); `NO_JOURNAL` as text; image extensions compared without case |
+| 2026-11-17 | Open | T169 is done (`pw_metadata::relocate`: `companions`, `move_group`, `move_back`, `Moved`, `MoveError`) |

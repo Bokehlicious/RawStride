@@ -147,6 +147,15 @@ and reviewer:
     installed).
   - A binary release also needs what ADR 0002 §4 lists (distribution folder,
     `THIRD-PARTY-NOTICES.txt`, ExifTool).
+- **Known limits of `relocate::companions`** (`/code-review` of T169, 2026-11-17; accepted, the
+  moves are Windows only):
+  - *Case-sensitive file systems:* a file whose name differs from the image's only in case is
+    skipped as if it were the image, so it does not move with the group.
+  - *Links and read errors:* a sidecar that is a symbolic link or junction is not listed (it
+    stays behind); one entry that cannot be read fails the whole listing.
+  - *Large folders:* every name in the folder is lower-cased and sorted, though only names
+    starting with `<base>.` can match. Filter on that prefix while reading if T174's hand check
+    finds a reject or pick slow in a large folder.
 
 Removed on 2026-11-13 because they are done or planned elsewhere: ADR 0010 steps M3–M7 (done,
 T30–T40); ADR 0011 step K4 (done, T26–T29); moving rejected or picked images to `_rejected` /

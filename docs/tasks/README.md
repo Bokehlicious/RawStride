@@ -12,7 +12,7 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 | `T<nnn>-<name>.md` (this folder) | Open tasks, one file each |
 | [`backlog.md`](backlog.md) | Not for agents yet: needs a decision, a dependency or an ADR first |
 | [`plans/`](plans/) | Step lists for ADRs that have none of their own (ADR 0007 milestone 8, ADR 0017) |
-| [`done/`](done/README.md) | Finished tasks T1–T167 and T175, and the log they were kept in until 2026-11-13 |
+| [`done/`](done/README.md) | Finished tasks T1–T167, T169 and T175, and the log they were kept in until 2026-11-13 |
 
 
 ## How to work on a task
@@ -87,8 +87,7 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 | Task | Title | Status |
 |---|---|---|
 | [T168](T168-focus-marking-key-and-drawing.md) | ADR 0017 U9a, second part: the focus marking key, menu item and drawing | Open |
-| [T169](T169-move-an-image-with-its-companions.md) | ADR 0017 U9b, first part: moving an image with its companion files | Open |
-| [T170](T170-move-request-in-the-metadata-worker.md) | ADR 0017 U9b, second part: the move as a request to the metadata worker | Blocked: waits for T169 |
+| [T170](T170-move-request-in-the-metadata-worker.md) | ADR 0017 U9b, second part: the move as a request to the metadata worker | Open |
 | [T171](T171-move-settings.md) | ADR 0017 U9b, third part: the two move settings | Blocked: waits for T170 |
 | [T172](T172-move-rules-and-undo-list.md) | ADR 0017 U9b, fourth part: the move rules, the undo list, the tab's list and the texts | Blocked: waits for T171 |
 | [T173](T173-move-events-in-the-metadata-cache.md) | ADR 0017 U9b, fifth part: the move requests and answers in the shell's metadata part | Blocked: waits for T172 |
