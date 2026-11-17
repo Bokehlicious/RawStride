@@ -61,3 +61,4 @@
 | Date | Status | Note |
 |---|---|---|
 | 2026-11-17 | Open | Added from the review of T168: its point "Time of the map, before the hand check" could not be done (`latency.ps1` is missing, `Stats::focus_ms` is not shown) |
+| 2026-11-17 | Open | No cold read (owner, 2026-11-17: not needed for this small test-only task) |
