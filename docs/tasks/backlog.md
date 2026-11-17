@@ -3,22 +3,6 @@
 These need design decisions, new dependencies or platform-specific code, and stay with the owner
 and reviewer:
 
-- **To be written as tasks** (owner, 2026-11-17, the first backlog sort; after T179 and T180):
-  1. *A wrong Artwork Date Created* (from the review of T143): **owner's decision:** when OK
-     writes nothing because of a field error, the status line says so too, not only the text
-     under the box.
-  2. *RAW statistics on X-Trans* (from T142): tests of `statistics.rs` on the five Fujifilm
-     X-T30 RAF files the owner added to `PW_TESTDATA` on 2026-11-15 (_DSF4243–_DSF4271, one
-     with clipping, _DSF4271); a black level per position and three- or four-colour RAW still
-     have no sample files.
-  3. *A tab on `_rejected` or `_picked`, and Ctrl+Z while a move runs* (from the review of
-     T174), one task: a tab open on `_rejected` or `_picked` itself is updated after a move or
-     an undo (today only the images' own folders are); Ctrl+Z while a batch or an undo runs
-     shows a text that a move is still running.
-  4. *`release_for_move` a required method* (from the review of T177): each `ImageCheck` decides
-     it, so a new check or a wrapper (as `Timed` in `crates/pw-imagecheck/tests/real_files.rs`)
-     cannot note the write stamp before a move again without a warning.
-
 - A timeout when ExifTool hangs (process supervision across threads). Today only the shutdown has a
   timeout (`SHUTDOWN_TIMEOUT` in `pw-metadata`'s `exiftool.rs`).
 - ADR 0007 (IPTC metadata): milestone 8 is done (I1–I13, 2026-11-14; what is left is in ADR 0007
@@ -163,7 +147,7 @@ and reviewer:
   - *Links and read errors:* a sidecar that is a symbolic link or junction is not listed (it
     stays behind); one entry that cannot be read fails the whole listing.
 - **Leftovers from the review of T174** (`/code-review`, 2026-11-17; findings 1–3 are T178; the
-  tab on `_rejected` and Ctrl+Z are task 3 above; the rest **kept** at the sort of 2026-11-17:
+  tab on `_rejected` and Ctrl+Z are T183; the rest **kept** at the sort of 2026-11-17:
   tidying the user does not see, and rare races a move's undo puts right):
   - *The undo's state lives in `main.rs`* (`MoveRun::Undo`, `UndoImage`) without unit tests,
     beside `Batch` in `moves.rs`; an `UndoRun` in `moves.rs` would make it testable. Also
@@ -177,8 +161,13 @@ and reviewer:
     never comes keeps its image's move waiting. From its review: a second P or X on an image
     whose move failed in the running batch is left out until that batch is done (`contains`
     holds it, since a failed answer may be a JPG its RAW partner moved along).
+  - *Left by T183* (its cold read, 2026-11-17): a tab on `_rejected` or `_picked` made active
+    while a batch runs is loaded again when the batch is done (its position, filter and
+    inspector reset); a tab open on a `_rejected` folder that was deleted gives a listing error
+    after every batch; an undo that partly fails is not pushed back, so its failed images can no
+    longer be undone.
 - **Leftovers from the review of T177** (`/code-review`, 2026-11-17; accepted, nothing breaks
-  today; the required method is task 4 above; the design below **kept** at the sort of
+  today; the required method is T184; the design below **kept** at the sort of
   2026-11-17, for when `ImageCheck` is next changed):
   - *A cleaner design:* the stamp is part of the write, not of the release. A write-only hook
     (for example `ImageCheck::before_write`, called only by the safe write) would let `release`
@@ -202,3 +191,7 @@ disagree" (the owner's rule in `clean-room.md`, "Naming other products"; the rew
 Struck at the backlog sort of 2026-11-17 (owner): the measurement of the 100 % view first (T144,
 U7c-Q5; the step is done and the gain small) and the large-folder limit of `relocate::companions`
 (not seen in the hand check of U9b).
+Written as tasks after the backlog sort of 2026-11-17: a wrong Artwork Date Created (T181), RAW
+statistics on X-Trans (T182; T146 had tested the X-Trans files, T182 covers what it left), a tab on
+`_rejected` or `_picked` and Ctrl+Z while a move runs (T183), `release_for_move` a required
+method (T184).

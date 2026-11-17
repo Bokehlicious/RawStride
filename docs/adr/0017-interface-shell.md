@@ -534,6 +534,7 @@ the decisions do not live only in the tasks.
 | U9-Q8 | **Ctrl+Z** undoes moves only: the files are moved back and the rating restored; up to 20 steps, for the running session only, one list for the whole program |
 | U9-Q9 | In a folder named `_rejected` or `_picked` the keys only set the rating; nothing is moved (no `_rejected\_rejected`) |
 | U9-Q10 | The list of companion suffixes (`dop`, `pp3`, `on1` by default) is kept in `settings.txt` for now; its page in Settings comes with U8 or U10b |
+| U9-Q11 | (owner, 2026-11-17, the first backlog sort, from the review of T174) A tab open on `_rejected` or `_picked` itself follows a move and an undo as the images' own folders' tabs do (files that came are listed, files that left are dropped); Ctrl+Z while a batch or an undo runs or waits shows in the status line that a move is still running (T183) |
 | U11c-Q1 | Person Shown with Details, Product Shown, Artwork or Object, Contributor, CV-Term About Image, Image Registry Entry; not Image Region (needs drawing on the image) nor the rights expressions |
 | U11c-Q2 | Content after Person Shown: Person with Details, Product, Artwork; Creator and Rights at the end: Contributor; Assignment after Genre: CV-Term About Image, at the end: Image Registry Entry |
 | U11c-Q3 | Title, Creator, Date Created, Source, Source Inventory Number and Copyright Notice open; the other eleven under a collapsed "More" line |
@@ -542,6 +543,7 @@ the decisions do not live only in the tasks.
 | U11c-Q6 | A button "Copy from Person Shown"; nothing synchronised automatically |
 | U11c-Q7 | As the other lists; none is a copyright-management field, so an emptied list is emptied on every image |
 | U11c-Q8 | IPTC's English names (GR14); "More", "Copy from Person Shown" in the glossary |
+| U11c-Q9 | (owner, 2026-11-17, the first backlog sort, from the review of T143) When OK, Save and Next, Save or "Apply to {n} Marked" writes nothing because of a field error (for example an Artwork or Object's Date Created under the collapsed "More"), the window's status line says so too, naming the fields and structure lists with an error; the texts under the fields stay (T181) |
 
 ## 7. Steps
 

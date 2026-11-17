@@ -88,11 +88,15 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 |---|---|---|
 | [T179](T179-add-and-remove-list-entries-in-an-edit.md) | ADR 0017 U12d: an edit that adds and removes entries of a list (pw-metadata) | Open |
 | [T180](T180-apply-to-marked-adds-and-removes-list-entries.md) | ADR 0017 U12d: "Apply to {n} Marked" adds and removes list entries (pw-loupe) | Blocked |
+| [T181](T181-nothing-saved-text-on-a-field-error.md) | The metadata window's status line says when nothing was saved because of a field error (pw-loupe) | Blocked |
+| [T182](T182-x-trans-statistics-gaps.md) | RAW statistics on X-Trans: channel shares, renders and a file cut short (pw-libraw tests) | Blocked |
+| [T183](T183-tabs-on-rejected-and-picked-and-undo-while-moving.md) | ADR 0017 U9b: a tab open on `_rejected` or `_picked` follows a move and an undo; Ctrl+Z while a move runs says so (pw-loupe) | Blocked |
+| [T184](T184-release-for-move-a-required-method.md) | `ImageCheck::release_for_move` a required method (pw-metadata, pw-imagecheck) | Blocked |
 
 ## Writing a task (owner and reviewer)
 
-- **Number:** the next free number after the highest in this folder and `done/` (T181 next).
-- **File:** `docs/tasks/T181-<a-few-words>.md`; three digits, lower case, words joined by `-`.
+- **Number:** the next free number after the highest in this folder and `done/` (T185 next).
+- **File:** `docs/tasks/T185-<a-few-words>.md`; three digits, lower case, words joined by `-`.
 - **Index:** add a row to "Open tasks" above and keep its status in step with the file's heading.
 - **Size (owner, 2026-11-15, after T142):** one task is one layer (a C++ shim or a core crate, or
   the shell in `pw-loupe`), about eight files at most, and gives one result the owner can check by
@@ -145,7 +149,7 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 Skeleton (the fields recent tasks use; leave out those that do not apply):
 
 ```markdown
-# T181. <Title> — Open
+# T185. <Title> — Open
 
 - **Why:** …
 - **Crates:** … **Files:** …
