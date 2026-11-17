@@ -27,9 +27,7 @@ pub(crate) trait MetadataSubmit: RatingWriter {
     /// The editor's edits of one image (T98, T105).
     fn write_edits(&mut self, image: PathBuf, edits: Vec<Edit>) -> Result<RequestId, SubmitError>;
 
-    // T174 sends the moves and uses these; until then only the tests do.
     /// A move of `image` and its companion files into `target` (ADR 0017 U9b, T170, T173).
-    #[cfg_attr(not(test), allow(dead_code))]
     fn move_image(
         &mut self,
         image: PathBuf,
@@ -39,7 +37,6 @@ pub(crate) trait MetadataSubmit: RatingWriter {
     ) -> Result<RequestId, SubmitError>;
 
     /// The files of `moved` moved back where they came from (ADR 0017 U9b, T170, T173).
-    #[cfg_attr(not(test), allow(dead_code))]
     fn move_back(&mut self, moved: Vec<Moved>) -> Result<RequestId, SubmitError>;
 
     fn try_recv(&mut self) -> Result<WorkerEvent, TryRecvError>;
@@ -886,30 +883,25 @@ impl MetadataCache {
         std::mem::take(&mut self.written)
     }
 
-    // T174 acts on the answers and uses these; until then only the tests do.
     /// The answers of the moves and the moves back since the last call, in the order they came
     /// (ADR 0017 U9b, T173).
-    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn take_moves(&mut self) -> Vec<MoveAnswer> {
         std::mem::take(&mut self.moves)
     }
 
     /// Whether a rating write for `path` (absolute) is queued and not yet sent (T172, T173).
-    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn is_queued(&self, path: &Path) -> bool {
         self.ratings.is_queued(path)
     }
 
     /// The rating a key would start from for `path` (absolute), which the undo of a move restores
     /// (ADR 0017 U9-Q8, T172, T173).
-    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn current_rating(&self, path: &Path) -> Rating {
         self.ratings.current_rating(path)
     }
 
     /// Shows and queues exactly `rating` for `path`, for the undo of a move (ADR 0017 U9-Q8,
     /// T172, T173).
-    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn restore_rating(
         &mut self,
         path: &Path,
@@ -920,7 +912,6 @@ impl MetadataCache {
 
     /// Whether `path` (absolute) is in the list of loaded images. A moved image stays in it until
     /// the tab is loaded again, so after an undo in the same tab its rating is still known (T173).
-    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn has_image(&self, path: &Path) -> bool {
         self.images.contains_key(path)
     }

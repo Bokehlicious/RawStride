@@ -156,6 +156,18 @@ and reviewer:
   - *Large folders:* every name in the folder is lower-cased and sorted, though only names
     starting with `<base>.` can match. Filter on that prefix while reading if T174's hand check
     finds a reject or pick slow in a large folder.
+- **Leftovers from the review of T174** (`/code-review`, 2026-11-17; findings 1–3 are T178):
+  - *A tab open on `_rejected` or `_picked` itself* is not updated after a move or an undo
+    (only the tabs of the images' own folders are); it lists files that have left, or misses
+    the new ones, until it is opened again.
+  - *Ctrl+Z while a batch or an undo runs* does nothing and shows nothing (the menu item is
+    greyed then); a text could say that a move is still running.
+  - *The undo's state lives in `main.rs`* (`MoveRun::Undo`, `UndoImage`) without unit tests,
+    beside `Batch` in `moves.rs`; an `UndoRun` in `moves.rs` would make it testable. Also
+    small: `forget_sort` after an undo clears every tab's sort, not only the listed tabs';
+    `send_moves` builds the extension list each frame; the `tab.folder == None` branch in
+    `undo_done` cannot run; `replace_tab_files` gives every tab of the active folder
+    `ratings_ready` (their files and ratings are the active tab's).
 - **Leftovers from the review of T177** (`/code-review`, 2026-11-17; accepted, nothing breaks
   today):
   - *The default `release_for_move` calls `release`:* a new `ImageCheck`, or a wrapper of

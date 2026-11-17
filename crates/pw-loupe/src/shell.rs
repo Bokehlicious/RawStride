@@ -447,6 +447,15 @@ pub enum Command {
     /// 0–5 stars (0 clears the stars).
     Stars(u8),
     Reject,
+    /// The target images moved to `_picked` in their own folder, with no rating change (Image ▸
+    /// Move to Picked, P; ADR 0017 §2.6, U9-Q6, T174). Greyed while the setting is off.
+    MovePicked,
+    /// The setting "Move Rejected and Picked Images to Subfolders", on ↔ off (Image menu, a check
+    /// box; U9-Q5, T174). Saved at once.
+    MoveToSubfolders,
+    /// The last batch of moves moved back, with the ratings before an X restored (Edit ▸ Undo
+    /// Move, Ctrl+Z; U9-Q8, T174).
+    UndoMove,
     /// A label by its XMP name ("Red", …).
     Label(&'static str),
     ClearLabel,
@@ -668,6 +677,8 @@ pub const MENUS: &[Menu] = &[
     Menu {
         kind: MenuKind::Edit,
         entries: &[
+            item(Command::UndoMove, ctrl(Key::Z)),
+            MenuEntry::Separator,
             item(Command::SelectAll, ctrl(Key::A)),
             item(Command::ClearSelection, plain(Key::Escape)),
             MenuEntry::Separator,
@@ -679,6 +690,8 @@ pub const MENUS: &[Menu] = &[
         entries: &[
             MenuEntry::Submenu(SubmenuKind::Rating, RATING_ITEMS),
             item(Command::Reject, plain(Key::X)),
+            item(Command::MovePicked, plain(Key::P)),
+            item(Command::MoveToSubfolders, None),
             MenuEntry::Submenu(SubmenuKind::Label, LABEL_ITEMS),
             MenuEntry::Separator,
             item(Command::ToggleMode, plain(Key::R)),
@@ -1002,6 +1015,59 @@ mod tests {
         assert_eq!(Command::Metadata.acts_in(), Where::Both);
         assert_eq!(Command::ToggleInfo.acts_in(), Where::Both);
         assert_eq!(Command::OpenFolder.acts_in(), Where::Both);
+        assert_eq!(Command::MovePicked.acts_in(), Where::Both);
+        assert_eq!(Command::MoveToSubfolders.acts_in(), Where::Both);
+        assert_eq!(Command::UndoMove.acts_in(), Where::Both);
+    }
+
+    /// The moves' items (ADR 0017 U9-Q5–U9-Q8, T174): Undo Move (Ctrl+Z) first in the Edit menu,
+    /// followed by a separator before Mark All; Move to Picked (P) and the setting's check box,
+    /// with no key, right after Reject in the Image menu. No other item shows P or Z with Ctrl.
+    #[test]
+    fn the_move_items_are_in_the_edit_and_image_menus() {
+        let Some(edit) = MENUS.iter().find(|menu| menu.kind == MenuKind::Edit) else {
+            panic!("there is an Edit menu");
+        };
+        assert_eq!(
+            edit.entries.get(..3),
+            Some(
+                &[
+                    item(Command::UndoMove, ctrl(Key::Z)),
+                    MenuEntry::Separator,
+                    item(Command::SelectAll, ctrl(Key::A)),
+                ][..]
+            )
+        );
+        let Some(image) = MENUS.iter().find(|menu| menu.kind == MenuKind::Image) else {
+            panic!("there is an Image menu");
+        };
+        let Some(reject) = image
+            .entries
+            .iter()
+            .position(|entry| *entry == item(Command::Reject, plain(Key::X)))
+        else {
+            panic!("the Image menu has Reject");
+        };
+        assert_eq!(
+            image.entries.get(reject + 1..reject + 3),
+            Some(
+                &[
+                    item(Command::MovePicked, plain(Key::P)),
+                    item(Command::MoveToSubfolders, None),
+                ][..]
+            )
+        );
+        for menu_item in menu_items() {
+            if menu_item.key.is_some_and(|chord| chord.key == Key::P) {
+                assert_eq!(menu_item.command, Command::MovePicked);
+            }
+            if menu_item
+                .key
+                .is_some_and(|chord| chord.key == Key::Z && chord.ctrl)
+            {
+                assert_eq!(menu_item.command, Command::UndoMove);
+            }
+        }
     }
 
     /// View ▸ Show Clipped Highlights (J) and Show Deep Shadows (Shift+J) come after the zoom

@@ -7,7 +7,7 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::mpsc::TryRecvError;
@@ -16,7 +16,7 @@ use std::time::{Duration, Instant};
 use eframe::egui;
 use inspector::{ExifInspector, ExifReader, ExifShown, exif_state_text};
 use inspector_text::{InspectorText, exif_label, inspector_text};
-use metadata::{EditorEvent, InspectorState, MetadataCache};
+use metadata::{EditorEvent, InspectorState, MetadataCache, MetadataSubmit, MoveAnswer};
 use pw_imagecheck::RawImageCheck;
 use pw_loupe::SavedLibrary;
 use pw_loupe::clipping::{ClipChoice, OverlayCache, overlay_uv};
@@ -44,6 +44,11 @@ use pw_loupe::{
     progress_text, property_label, rating_key_action, request_cell, save_settings_with_library,
     settings_path, star_condition_text, star_filter_text, star_glyphs, status_line, step_allowed,
     step_thumbnail_size, tab_action, take_wheel_steps, visible_range, wheel_factor, window_title,
+};
+use pw_loupe::{
+    Batch, MoveKey, MoveKind, MovedImage, UndoMoves, move_failed_text, move_key_action,
+    moves_failed_text, nothing_to_undo_text, same_folder, target_folder, undo_failed_text,
+    undone_text, worker_stopped_text,
 };
 use pw_loupe::{
     COLLAPSED_WIDTH, ColumnState, Command, MENUS, MenuEntry, MenuItem, RatingKey, STATUS_TEXT_SIZE,
@@ -127,6 +132,8 @@ const WINDOW_BUTTON_SPACING: f32 = 4.0;
 const BACKDROP: egui::Color32 = egui::Color32::from_black_alpha(60);
 /// How often a frame is asked for while the metadata window waits for the worker.
 const WINDOW_POLL_INTERVAL: Duration = Duration::from_millis(100);
+/// How often a frame is asked for while a batch of moves or an undo runs (ADR 0017 U9b, T174).
+const MOVE_POLL_INTERVAL: Duration = Duration::from_millis(50);
 /// How often a frame is asked for while capture times are being read for the sort (T138).
 const CAPTURE_POLL_INTERVAL: Duration = Duration::from_millis(50);
 /// The space around the line at the top of a side of the compare, and the plate behind it (T153).
@@ -597,6 +604,56 @@ struct CompareOpen {
     held_size_known: bool,
 }
 
+/// The images of one batch of moves: `(image, target folder, rating to restore)`, absolute paths
+/// (ADR 0017 U9b, T172, T174).
+type MoveImages = Vec<(PathBuf, PathBuf, Option<Rating>)>;
+
+/// The moves to subfolders and their undo (ADR 0017 §2.6, U9b, U9-Q5–U9-Q9, T174): one batch or
+/// one undo runs at a time; a later key's batch waits behind it.
+#[derive(Default)]
+struct Moves {
+    /// The batches of later keys, in key order.
+    waiting: VecDeque<Batch>,
+    running: Option<MoveRun>,
+    /// The steps that can be undone (U9-Q8).
+    undo: UndoMoves,
+}
+
+impl Moves {
+    /// Whether a batch or an undo runs or waits.
+    fn busy(&self) -> bool {
+        self.running.is_some() || !self.waiting.is_empty()
+    }
+}
+
+/// The batch or the undo that runs.
+enum MoveRun {
+    /// A batch of moves, with the ids of the requests sent for it.
+    Batch {
+        batch: Batch,
+        ids: HashSet<pw_metadata::RequestId>,
+    },
+    /// An undo step: each image's move back.
+    Undo(Vec<UndoImage>),
+}
+
+/// One image of a running undo: its moves, the id of its move back once sent, and the answer.
+struct UndoImage {
+    moved: MovedImage,
+    id: Option<pw_metadata::RequestId>,
+    answer: Option<Result<(), String>>,
+}
+
+impl MoveRun {
+    /// Whether every image has its answer.
+    fn done(&self) -> bool {
+        match self {
+            MoveRun::Batch { batch, .. } => batch.done(),
+            MoveRun::Undo(images) => images.iter().all(|image| image.answer.is_some()),
+        }
+    }
+}
+
 struct Loupe {
     core: ViewCore<NativeBackend>,
     /// The second view core, for the held image of the compare (ADR 0017 §2.2, U6-Q2, U6-Q3,
@@ -685,6 +742,8 @@ struct Loupe {
     /// `field-values.txt`; `None` without LOCALAPPDATA (nothing can be saved).
     field_values_path: Option<PathBuf>,
     message: Option<String>,
+    /// The moves to subfolders, their undo list and the batch or undo that runs (T174).
+    moves: Moves,
     indicator_after: Duration,
     tabs: Tabs,
     /// Whether the active tab's ratings have been read since the tab was loaded. A later read of
@@ -3843,14 +3902,10 @@ impl Loupe {
         }
     }
 
-    /// A rating or label key, or its menu item: the marked images in the grid, else the current
-    /// one (ADR 0014 §2.6); nothing when the current image is not shown. An accepted key removes
-    /// the images that stopped matching at once (§2.2, amendment 1); a refused key changes
-    /// nothing. Returns `Some` with the position the contact sheet scrolls to when the visible
-    /// list changed.
-    fn rate(&mut self, action: RatingKey) -> Option<Option<usize>> {
-        let paths: Vec<PathBuf> = self
-            .tabs
+    /// The images a rating key or a move acts on: the marked images in the grid, else the current
+    /// one (ADR 0014 §2.6, §2.7), as the tab names them; none when the current image is not shown.
+    fn key_targets(&self) -> Vec<PathBuf> {
+        self.tabs
             .active()
             .filter(|tab| tab.position().is_some())
             .map(|tab| {
@@ -3860,18 +3915,383 @@ impl Loupe {
                     .filter_map(|index| tab.files.get(index).cloned())
                     .collect()
             })
-            .unwrap_or_default();
+            .unwrap_or_default()
+    }
+
+    /// A rating or label key, or its menu item: the marked images in the grid, else the current
+    /// one (ADR 0014 §2.6); nothing when the current image is not shown. An accepted key removes
+    /// the images that stopped matching at once (§2.2, amendment 1); a refused key changes
+    /// nothing. Returns `Some` with the position the contact sheet scrolls to when the visible
+    /// list changed, and, for X with "Move Rejected and Picked Images to Subfolders" on (ADR 0017
+    /// U9-Q6, T174), the images to move: those now rejected that have a `_rejected` target, each
+    /// with its rating before the key. An X that clears a reject moves nothing.
+    fn rate(&mut self, action: RatingKey) -> (Option<Option<usize>>, MoveImages) {
+        let paths = self.key_targets();
         if paths.is_empty() {
-            return None;
+            return (None, Vec::new());
         }
+        // The targets as the metadata cache keys them, with their ratings before the key.
+        let before: Vec<(PathBuf, Rating)> =
+            if action == RatingKey::Reject && self.settings.shell.move_to_subfolders {
+                resolve_paths(&paths)
+                    .map(|resolved| {
+                        resolved
+                            .into_iter()
+                            .map(|path| {
+                                let rating = self.metadata.current_rating(&path);
+                                (path, rating)
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default()
+            } else {
+                Vec::new()
+            };
         match self.metadata.set_ratings(&paths, action) {
-            Ok(_) => return self.after_rating(),
+            Ok(_) => {
+                let moves = before
+                    .into_iter()
+                    .filter(|(path, _)| self.metadata.current_rating(path).stars == Some(-1))
+                    .filter_map(|(path, rating)| {
+                        target_folder(&path, MoveKind::Reject)
+                            .map(|target| (path, target, Some(rating)))
+                    })
+                    .collect();
+                return (self.after_rating(), moves);
+            }
             Err(RatingRefused::Unsupported) => {
                 self.message = Some(UNSUPPORTED_TEXT.to_owned());
             }
             Err(error) => self.message = Some(error.to_string()),
         }
-        None
+        (None, Vec::new())
+    }
+
+    /// P or Image ▸ Move to Picked (ADR 0017 §2.6, U9-Q6, T174): with the setting on, the key's
+    /// targets with a `_picked` target are moved there, with no rating change; with it off,
+    /// nothing.
+    fn move_picked(&mut self) {
+        if !self.settings.shell.move_to_subfolders {
+            return;
+        }
+        let paths = self.key_targets();
+        if paths.is_empty() {
+            return;
+        }
+        match resolve_paths(&paths) {
+            Ok(resolved) => {
+                let images = resolved
+                    .into_iter()
+                    .filter_map(|path| {
+                        target_folder(&path, MoveKind::Pick).map(|target| (path, target, None))
+                    })
+                    .collect();
+                self.queue_moves(images);
+            }
+            Err(error) => self.message = Some(error),
+        }
+    }
+
+    /// A batch of moves waits behind the running batch or undo; it is sent by `follow_moves`.
+    /// Nothing is queued for no images.
+    fn queue_moves(&mut self, images: MoveImages) {
+        if !images.is_empty() {
+            self.moves.waiting.push_back(Batch::new(images));
+        }
+    }
+
+    /// Image ▸ "Move Rejected and Picked Images to Subfolders" on ↔ off (U9-Q5, T174), saved at
+    /// once as the sort is.
+    fn toggle_move_to_subfolders(&mut self) {
+        self.settings.shell.move_to_subfolders = !self.settings.shell.move_to_subfolders;
+        if let Some(path) = &self.settings_path
+            && let Err(error) =
+                save_settings_with_library(path, &self.settings, &self.library.saved())
+        {
+            eprintln!("pw-loupe: the move setting could not be saved: {error}");
+        }
+    }
+
+    /// Ctrl+Z or Edit ▸ Undo Move (U9-Q8, T174): the newest step of the undo list is moved back
+    /// by `follow_moves`. Nothing while a batch or an undo runs; nothing to undo shows so.
+    fn undo_move(&mut self) {
+        if self.moves.busy() {
+            return;
+        }
+        match self.moves.undo.pop() {
+            Some(step) => {
+                self.moves.running = Some(MoveRun::Undo(
+                    step.into_iter()
+                        .map(|moved| UndoImage {
+                            moved,
+                            id: None,
+                            answer: None,
+                        })
+                        .collect(),
+                ));
+            }
+            None => self.message = Some(nothing_to_undo_text().to_owned()),
+        }
+    }
+
+    /// The moves' follow-up of a frame, right after the metadata cache's `poll` (T174): the
+    /// answers go to the running batch or undo (an answer of another request is ignored); a
+    /// finished one is acted on and the next waiting batch starts; the images not yet sent are
+    /// sent. A frame is asked for while one runs.
+    fn follow_moves(&mut self, ctx: &egui::Context) {
+        for answer in self.metadata.take_moves() {
+            match (answer, &mut self.moves.running) {
+                (MoveAnswer::Moved { id, image, result }, Some(MoveRun::Batch { batch, ids }))
+                    if ids.contains(&id) =>
+                {
+                    batch.answered(&image, result)
+                }
+                (MoveAnswer::MovedBack { id, result, .. }, Some(MoveRun::Undo(images))) => {
+                    if let Some(entry) = images
+                        .iter_mut()
+                        .find(|entry| entry.id == Some(id) && entry.answer.is_none())
+                    {
+                        entry.answer = Some(result);
+                    }
+                }
+                _ => {}
+            }
+        }
+        loop {
+            if self.moves.running.is_none() {
+                match self.moves.waiting.pop_front() {
+                    Some(batch) => {
+                        self.moves.running = Some(MoveRun::Batch {
+                            batch,
+                            ids: HashSet::new(),
+                        });
+                    }
+                    None => break,
+                }
+            }
+            self.send_moves();
+            if !self.moves.running.as_ref().is_some_and(MoveRun::done) {
+                break;
+            }
+            match self.moves.running.take() {
+                Some(MoveRun::Batch { batch, .. }) => self.batch_done(batch),
+                Some(MoveRun::Undo(images)) => self.undo_done(ctx, images),
+                None => break,
+            }
+        }
+        if self.moves.busy() {
+            ctx.request_repaint_after(MOVE_POLL_INTERVAL);
+        }
+    }
+
+    /// Sends what the running batch or undo has not sent yet (T174 point 4): a batch's image waits
+    /// while a rating write for it is queued (`Batch::to_send`); a full queue leaves the rest for
+    /// the next frame; a stopped worker answers at once as failed.
+    fn send_moves(&mut self) {
+        let worker = &mut self.metadata_worker;
+        match &mut self.moves.running {
+            Some(MoveRun::Batch { batch, ids }) => {
+                let metadata = &self.metadata;
+                let extensions: Vec<String> = pw_raw::SUPPORTED_EXTENSIONS
+                    .iter()
+                    .map(|extension| (*extension).to_owned())
+                    .collect();
+                for (image, target) in batch.to_send(|path| metadata.is_queued(path)) {
+                    match MetadataSubmit::move_image(
+                        worker,
+                        image.clone(),
+                        target,
+                        extensions.clone(),
+                        self.settings.shell.companion_suffixes.clone(),
+                    ) {
+                        Ok(id) => {
+                            ids.insert(id);
+                            batch.sent(&image);
+                        }
+                        Err(pw_metadata::SubmitError::QueueFull) => break,
+                        Err(pw_metadata::SubmitError::Stopped) => {
+                            batch.answered(&image, Err(worker_stopped_text().to_owned()));
+                        }
+                    }
+                }
+            }
+            Some(MoveRun::Undo(images)) => {
+                for entry in images
+                    .iter_mut()
+                    .filter(|entry| entry.id.is_none() && entry.answer.is_none())
+                {
+                    match MetadataSubmit::move_back(worker, entry.moved.moved.clone()) {
+                        Ok(id) => entry.id = Some(id),
+                        Err(pw_metadata::SubmitError::QueueFull) => break,
+                        Err(pw_metadata::SubmitError::Stopped) => {
+                            entry.answer = Some(Err(worker_stopped_text().to_owned()));
+                        }
+                    }
+                }
+            }
+            None => {}
+        }
+    }
+
+    /// Gives every tab of each of `folders` a new list of files (ADR 0017 U9b, T174): `list` makes
+    /// a tab's new files, in the tab's own form, and the file to make current. The active tab,
+    /// found by `same_folder`, gets the real `ratings_ready`, the others `false` (as
+    /// `Tabs::follow_sort` does). Returns whether a folder was the active tab's, and the errors.
+    fn replace_tab_files(
+        &mut self,
+        folders: &[PathBuf],
+        list: impl Fn(&Tab) -> Result<(Vec<PathBuf>, Option<PathBuf>), String>,
+    ) -> (bool, Vec<String>) {
+        let ready = self.ratings_ready();
+        let active_folder = self.tabs.active().and_then(|tab| tab.folder.clone());
+        let cwd = std::env::current_dir().ok();
+        let rating_of = tab_rating(&self.metadata, cwd.as_deref());
+        let mut active = false;
+        let mut errors = Vec::new();
+        for folder in folders {
+            let is_active = active_folder
+                .as_deref()
+                .is_some_and(|open| same_folder(open, folder));
+            for tab in self.tabs.tabs_of_folder_mut(folder) {
+                match list(tab) {
+                    Ok((files, current)) => {
+                        tab.replace_files(
+                            files,
+                            current.as_deref(),
+                            is_active && ready,
+                            &rating_of,
+                        );
+                    }
+                    Err(error) => errors.push(error),
+                }
+            }
+            active |= is_active;
+        }
+        (active, errors)
+    }
+
+    /// A batch of moves has all its answers (T174 point 5): every tab of the moved images' folders
+    /// drops the moved files, the active one's view cores and thumbnails follow, the step goes on
+    /// the undo list, and the failures are shown and listed. A failed image keeps its new rating.
+    fn batch_done(&mut self, batch: Batch) {
+        let result = batch.finish();
+        let moved_from: HashSet<PathBuf> = result
+            .moved
+            .iter()
+            .flat_map(|image| image.moved.iter().map(|moved| moved.from.clone()))
+            .collect();
+        let folders = image_folders(result.moved.iter().map(|image| image.image.as_path()));
+        let (active, errors) = self.replace_tab_files(&folders, |tab| {
+            let resolved = resolve_paths(&tab.files)?;
+            let files = tab
+                .files
+                .iter()
+                .zip(resolved)
+                .filter(|(_, path)| !moved_from.contains(path))
+                .map(|(file, _)| file.clone())
+                .collect();
+            Ok((files, None))
+        });
+        if active {
+            self.active_reordered();
+        }
+        self.moves.undo.push(result.moved);
+        let now = ClockTime::now();
+        for error in &errors {
+            self.tasks.add_error(error, now);
+        }
+        for (image, reason) in &result.failed {
+            self.tasks
+                .add_error(&move_failed_text(&image_name(image), reason), now);
+        }
+        match result.failed.as_slice() {
+            [] => {
+                if let Some(error) = errors.last() {
+                    self.message = Some(error.clone());
+                }
+            }
+            [(image, reason)] => {
+                self.message = Some(move_failed_text(&image_name(image), reason));
+            }
+            [.., (image, reason)] => {
+                self.message = Some(moves_failed_text(
+                    result.failed.len(),
+                    &image_name(image),
+                    reason,
+                ));
+            }
+        }
+    }
+
+    /// An undo has all its answers (T174 point 6): the ratings before an X are restored, every
+    /// tab of the images' folders lists its folder again with the first restored image current,
+    /// the sort is applied again, and the active tab's view cores and thumbnails follow (its
+    /// ratings are read again when a restored image is no longer in the metadata cache). A failed
+    /// image stays where it is, and the step is not pushed back. The status line is set last.
+    fn undo_done(&mut self, ctx: &egui::Context, images: Vec<UndoImage>) {
+        let mut restored = Vec::new();
+        let mut failed = Vec::new();
+        for entry in images {
+            match entry.answer {
+                Some(Ok(())) => restored.push(entry.moved),
+                Some(Err(reason)) => failed.push((entry.moved.image, reason)),
+                None => {}
+            }
+        }
+        let mut errors = Vec::new();
+        for image in &restored {
+            if let Some(rating) = &image.restore
+                && let Err(error) = self.metadata.restore_rating(&image.image, rating.clone())
+            {
+                errors.push(error.to_string());
+            }
+        }
+        let folders = image_folders(restored.iter().map(|image| image.image.as_path()));
+        let first = restored.first().map(|image| image.image.clone());
+        let (active, list_errors) = self.replace_tab_files(&folders, |tab| {
+            let Some(folder) = tab.folder.as_deref() else {
+                return Ok((tab.files.clone(), None));
+            };
+            let (files, _) = list_folder(folder)?;
+            let resolved = resolve_paths(&files)?;
+            let current = first.as_ref().and_then(|first| {
+                files
+                    .iter()
+                    .zip(&resolved)
+                    .find(|(_, path)| *path == first)
+                    .map(|(file, _)| file.clone())
+            });
+            Ok((files, current))
+        });
+        errors.extend(list_errors);
+        if !folders.is_empty() {
+            // Every tab's sort is forgotten (accepted), so the order is applied again.
+            self.tabs.forget_sort();
+            self.follow_sort(ctx);
+        }
+        if active {
+            if restored
+                .iter()
+                .any(|image| !self.metadata.has_image(&image.image))
+            {
+                // The tab was loaded again since the move: its ratings are read again.
+                self.load_active_tab();
+            } else {
+                self.active_reordered();
+            }
+        }
+        let now = ClockTime::now();
+        for error in &errors {
+            self.tasks.add_error(error, now);
+        }
+        for (image, reason) in &failed {
+            self.tasks
+                .add_error(&undo_failed_text(&image_name(image), reason), now);
+        }
+        self.message = Some(match failed.last() {
+            Some((image, reason)) => undo_failed_text(&image_name(image), reason),
+            None => undone_text(restored.len()),
+        });
     }
 
     /// After accepted ratings: the images that stopped matching leave at once (§2.2, amendment
@@ -3925,6 +4345,13 @@ impl Loupe {
             Command::Stars(_) | Command::Reject | Command::Label(_) | Command::ClearLabel => {
                 tab.is_some_and(|tab| tab.position().is_some())
             }
+            // Greyed while the setting is off (U9-Q6, T174).
+            Command::MovePicked => {
+                self.settings.shell.move_to_subfolders
+                    && tab.is_some_and(|tab| tab.position().is_some())
+            }
+            // Greyed while the undo list is empty or a batch or an undo runs (U9-Q8).
+            Command::UndoMove => !self.moves.undo.is_empty() && !self.moves.busy(),
             Command::ToggleView => tab.is_some_and(|tab| !tab.visible.is_empty()),
             // Compare opens with two images in the stepped list, and closes an open compare; the
             // other four act only in the compare (T153, T154).
@@ -3944,6 +4371,7 @@ impl Loupe {
             Command::ClipHighlights => Some(shell.clip_highlights),
             Command::ClipShadows => Some(shell.clip_shadows),
             Command::FocusMarking => Some(shell.focus_marking),
+            Command::MoveToSubfolders => Some(shell.move_to_subfolders),
             Command::AboveBelow => Some(shell.compare_above_below),
             Command::LockZoom => Some(shell.compare_locked),
             Command::ToggleInfo => {
@@ -3980,6 +4408,9 @@ impl Loupe {
             Command::Metadata => self.act(Action::OpenMetadata, None),
             Command::Stars(stars) => self.rate_from_menu(RatingKey::Stars(stars)),
             Command::Reject => self.rate_from_menu(RatingKey::Reject),
+            Command::MovePicked => self.move_picked(),
+            Command::MoveToSubfolders => self.toggle_move_to_subfolders(),
+            Command::UndoMove => self.undo_move(),
             Command::Label(label) => self.rate_from_menu(RatingKey::Label(label)),
             Command::ClearLabel => self.rate_from_menu(RatingKey::ClearLabel),
             Command::ToggleMode => self.act(Action::ToggleMode, None),
@@ -4027,9 +4458,11 @@ impl Loupe {
 
     /// A rating item of the Bild menu: `rate`, with the contact sheet scrolled as after its key.
     fn rate_from_menu(&mut self, action: RatingKey) {
-        if let Some(Some(position)) = self.rate(action) {
+        let (scroll, moves) = self.rate(action);
+        if let Some(Some(position)) = scroll {
             self.scroll_request = Some(position);
         }
+        self.queue_moves(moves);
     }
 
     /// The menu bar (ADR 0017 §2.1, U1-Q1): the table `MENUS`, each item with its key.
@@ -4530,6 +4963,8 @@ impl Loupe {
                     .unwrap_or_else(|| message.clone()),
             );
         }
+        // The moves to subfolders and their undo follow the answers and are sent (T174).
+        self.follow_moves(&ctx);
         // A rolled-back write does not refilter (ADR 0014 §2.2; the next move drops the image); the
         // ratings becoming ready does.
         self.refilter_when_ratings_change();
@@ -4714,13 +5149,30 @@ impl Loupe {
                 self.shell_action(&ctx, action);
                 continue;
             }
+            // P and Ctrl+Z (ADR 0017 U9-Q6, U9-Q8, T174) in the contact sheet and the preview; not
+            // while a text field has the keyboard or a dialog holds the program. P goes through its
+            // command (nothing while the setting is off); Ctrl+Z with nothing to undo says so.
+            if !ctx.egui_wants_keyboard_input()
+                && let Some(move_key) = move_key_action(key, ctrl, shift, alt)
+            {
+                if !self.dialog_open() {
+                    match move_key {
+                        MoveKey::MovePicked => self.run_command(&ctx, Command::MovePicked),
+                        MoveKey::UndoMove => self.undo_move(),
+                    }
+                    ctx.request_repaint();
+                }
+                continue;
+            }
 
             if !ctx.egui_wants_keyboard_input()
                 && let Some(action) = rating_key_action(key, ctrl, shift, alt)
             {
-                if let Some(position) = self.rate(action) {
+                let (scroll, moves) = self.rate(action);
+                if let Some(position) = scroll {
                     scroll_to = position;
                 }
+                self.queue_moves(moves);
                 continue;
             }
 
@@ -5229,6 +5681,25 @@ fn index_span(indexes: impl Iterator<Item = usize> + Clone) -> std::ops::Range<u
         (Some(first), Some(last)) => first..last.saturating_add(1),
         _ => 0..0,
     }
+}
+
+/// The folders of `images`, each once (compared as given), in the order first met (T174).
+fn image_folders<'a>(images: impl Iterator<Item = &'a Path>) -> Vec<PathBuf> {
+    let mut folders: Vec<PathBuf> = Vec::new();
+    for folder in images.filter_map(Path::parent) {
+        if !folders.iter().any(|known| known == folder) {
+            folders.push(folder.to_path_buf());
+        }
+    }
+    folders
+}
+
+/// The file name of `image` as the status line names it, or the whole path without one (T174).
+fn image_name(image: &Path) -> String {
+    image.file_name().map_or_else(
+        || image.display().to_string(),
+        |name| name.to_string_lossy().into_owned(),
+    )
 }
 
 /// The paths as the metadata cache keys them (`MetadataCache::begin_load`): relative paths are
@@ -7288,6 +7759,7 @@ fn run(options: Options) -> Result<(), String> {
                 field_values,
                 field_values_path,
                 message: None,
+                moves: Moves::default(),
                 indicator_after,
                 tabs: Tabs::default(),
                 ratings_read: false,

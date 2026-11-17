@@ -1,4 +1,4 @@
-# T174. ADR 0017 U9b, last part: the keys, the menu items, the moves and the undo in the shell — Open
+# T174. ADR 0017 U9b, last part: the keys, the menu items, the moves and the undo in the shell — Done
 
 - **Chain:** T169 → T170 → T171 → T172 → T173 → T174. The owner's answers U9-Q5–U9-Q10 are in
   ADR 0017 §6.1.
@@ -117,3 +117,6 @@
 | 2026-11-17 | Blocked | Review of T172: a finished batch's `moved` can hold an image with no moves of its own (a partner moved by another image), so its rating is restored too; its `move_back` of an empty list answers `Ok` at once and it counts in `undone_text` |
 | 2026-11-17 | Blocked | Review of T173: point 8 added (the `allow(dead_code)` of T173's seven functions removed once they are used); `metadata.rs` added to the files for it only |
 | 2026-11-17 | Open | T173 and T177 are done |
+| 2026-11-17 | Ready for review | Done as written: the three commands and menu items, `move_key_action` (P, Ctrl+Z) read after the shell keys, X/P batches and the undo in `main.rs` (`follow_moves` after `poll`), T173's seven `allow(dead_code)` removed (none kept). Ctrl+Z goes to `undo_move` directly so an empty list shows `nothing_to_undo_text`; the menu item stays greyed then. `docs/glossary.md` calls all three items "of the Image menu", but Undo Move is in the Edit menu as point 1 says (not changed here). `check.ps1` all OK, 1786 passed, 66 ignored |
+| 2026-11-17 | Review | Reviewer: as written; the glossary row's menu corrected (Undo Move is in the Edit menu). `check.ps1` all OK, 1786 passed, 66 ignored. Independent review (`/code-review high`): (1) an image whose batch waits or runs can be targeted again (two quick X move an image that is no longer rejected; two quick P fail), (2) a move waits only while its write is queued, so a failed reject write still moves the file, (3) the undo's status line hides a restore or listing error → T178, before the hand check; (4) a tab on `_rejected`/`_picked` not updated, (5) Ctrl+Z while a batch runs is silent, (6)–(10) the undo's state untested in `main.rs`, `forget_sort` on every tab, per-frame allocations, a dead branch, `ratings_ready` per folder → `backlog.md`, "Leftovers from the review of T174" |
+| 2026-11-17 | Done | Approved by the owner; leftovers in T178 and `backlog.md`; the owner's hand check of U9b (above) after T178 |

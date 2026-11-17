@@ -354,6 +354,27 @@ pub fn shell_key_action(key: egui::Key, ctrl: bool, shift: bool, alt: bool) -> O
     }
 }
 
+/// A key of the moves to subfolders (ADR 0017 §2.6, U9-Q6, U9-Q8, T174), in the contact sheet and
+/// the preview.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MoveKey {
+    /// `P`: the target images moved to `_picked` ("Move to Picked").
+    MovePicked,
+    /// `Ctrl+Z`: the last batch of moves moved back ("Undo Move").
+    UndoMove,
+}
+
+/// The move key of a key press: P with no modifier and Ctrl+Z, each with exactly those
+/// modifiers. Neither is a key of another key map (`key_action` refuses Ctrl, `grid_key_action`
+/// takes only Ctrl+A with Ctrl).
+pub fn move_key_action(key: egui::Key, ctrl: bool, shift: bool, alt: bool) -> Option<MoveKey> {
+    match (key, ctrl, shift, alt) {
+        (egui::Key::P, false, false, false) => Some(MoveKey::MovePicked),
+        (egui::Key::Z, true, false, false) => Some(MoveKey::UndoMove),
+        _ => None,
+    }
+}
+
 /// A key of the preview's own (ADR 0017 §2.2, §2.4, U3-Q1–Q3, T111), asked before every other key
 /// map while the preview is shown.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -966,7 +987,8 @@ mod tests {
     }
 
     /// The command a key gives in `view`, through the key functions in the order `main.rs` asks
-    /// them (shell keys, import, tabs, ratings, `M`, `I`, then the view's own keys). The preview's
+    /// them (shell keys, the move keys P and Ctrl+Z (T174), import, tabs, ratings, `M`, `I`, then
+    /// the view's own keys). The preview's
     /// clipping keys (J and Shift+J, T148) and the compare's keys (C, K, Shift+K and V, T153; L,
     /// T154) are asked before the loupe's keys, which take no Shift chord.
     fn command_of_key(chord: KeyChord, view: ViewMode) -> Option<Command> {
@@ -981,6 +1003,12 @@ mod tests {
                 ShellAction::OpenFolder => Command::OpenFolder,
                 ShellAction::ToggleFullscreen => Command::Fullscreen,
                 ShellAction::ToggleColumns => Command::ToggleColumns,
+            });
+        }
+        if let Some(action) = move_key_action(key, ctrl, shift, alt) {
+            return Some(match action {
+                MoveKey::MovePicked => Command::MovePicked,
+                MoveKey::UndoMove => Command::UndoMove,
             });
         }
         if opens_import(key, ctrl, shift, alt) {
@@ -1073,6 +1101,104 @@ mod tests {
             }
         }
         assert!(checked > 30, "only {checked} keys checked");
+    }
+
+    /// P and Ctrl+Z are the move keys (ADR 0017 U9-Q6, U9-Q8, T174): each gives its own command in
+    /// the contact sheet and the preview, only with exactly those modifiers, and neither is a key
+    /// of another key map.
+    #[test]
+    fn p_and_ctrl_z_are_the_move_keys_in_both_views() {
+        use egui::Key as K;
+        assert_eq!(
+            move_key_action(K::P, false, false, false),
+            Some(MoveKey::MovePicked)
+        );
+        assert_eq!(
+            move_key_action(K::Z, true, false, false),
+            Some(MoveKey::UndoMove)
+        );
+        let modifiers = [
+            (false, false, false),
+            (true, false, false),
+            (false, true, false),
+            (false, false, true),
+            (true, true, false),
+            (true, false, true),
+            (false, true, true),
+            (true, true, true),
+        ];
+        for (ctrl, shift, alt) in modifiers {
+            if (ctrl, shift, alt) != (false, false, false) {
+                assert_eq!(
+                    move_key_action(K::P, ctrl, shift, alt),
+                    None,
+                    "P with ctrl {ctrl} shift {shift} alt {alt}"
+                );
+            }
+            if (ctrl, shift, alt) != (true, false, false) {
+                assert_eq!(
+                    move_key_action(K::Z, ctrl, shift, alt),
+                    None,
+                    "Z with ctrl {ctrl} shift {shift} alt {alt}"
+                );
+            }
+        }
+        // No other key map has P (with any modifiers) or Ctrl+Z.
+        for (ctrl, shift, alt) in modifiers {
+            assert_eq!(key_action(K::P, ctrl, alt), None);
+            assert_eq!(loupe_key_action(K::P, ctrl, alt), None);
+            assert_eq!(grid_key_action(K::P, ctrl, shift, alt), None);
+            assert_eq!(rating_key_action(K::P, ctrl, shift, alt), None);
+            assert_eq!(shell_key_action(K::P, ctrl, shift, alt), None);
+            assert_eq!(preview_key_action(K::P, ctrl, shift, alt), None);
+            assert_eq!(tab_action(K::P, ctrl, shift, alt), None);
+            assert!(!opens_import(K::P, ctrl, shift, alt));
+        }
+        assert_eq!(key_action(K::Z, true, false), None);
+        assert_eq!(loupe_key_action(K::Z, true, false), None);
+        assert_eq!(grid_key_action(K::Z, true, false, false), None);
+        assert_eq!(rating_key_action(K::Z, true, false, false), None);
+        assert_eq!(shell_key_action(K::Z, true, false, false), None);
+        assert_eq!(preview_key_action(K::Z, true, false, false), None);
+        assert_eq!(tab_action(K::Z, true, false, false), None);
+        assert!(!opens_import(K::Z, true, false, false));
+        // Plain Z stays the preview's zoom key.
+        assert_eq!(move_key_action(K::Z, false, false, false), None);
+        // Through the key functions in the order `main.rs` asks them, in both views.
+        let p = KeyChord {
+            key: K::P,
+            ctrl: false,
+            shift: false,
+            alt: false,
+        };
+        let ctrl_z = KeyChord {
+            key: K::Z,
+            ctrl: true,
+            shift: false,
+            alt: false,
+        };
+        for view in [ViewMode::Grid, ViewMode::Loupe] {
+            assert_eq!(
+                command_of_key(p, view),
+                Some(Command::MovePicked),
+                "{view:?}"
+            );
+            assert_eq!(
+                command_of_key(ctrl_z, view),
+                Some(Command::UndoMove),
+                "{view:?}"
+            );
+        }
+        assert_eq!(
+            command_of_key(
+                KeyChord {
+                    ctrl: false,
+                    ..ctrl_z
+                },
+                ViewMode::Loupe
+            ),
+            Some(Command::ToggleZoom)
+        );
     }
 
     /// J and Shift+J are the preview's clipping keys (ADR 0017 U7b-Q5, T148): each gives its own
