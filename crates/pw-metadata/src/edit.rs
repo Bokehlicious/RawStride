@@ -34,7 +34,9 @@
 //! the plan is made and written as above. The result is an [`EditReport`]: the safe write's report
 //! and the plan's [`WriteNotice`]s, which the user is told about (§5.2: an IIM value cut to its
 //! byte limit; §5.4: IIM converted to UTF-8; Q1: a conflict kept and no checksum written). They are
-//! empty when nothing was written.
+//! empty when nothing was written, except that an **Entries** edit left alone because of an `Open`
+//! conflict (below) is always named in a [`WriteNotice::ConflictKept`], also when nothing was
+//! written, and only once (ADR 0017 U12d-Q6).
 //!
 //! - **Set** stores the value with [`Metadata::set`]; a Lang Alt edits `x-default` only and keeps
 //!   the other languages (§8, Q7). A value equal to the current one ([`same_value`]) is no change,
@@ -44,6 +46,13 @@
 //!   IIM, and the Exif fields that exist). Unlike a template (§10), an edit may clear the
 //!   copyright-management properties. Nothing to clear (no value and no `Open` conflict) is no
 //!   change.
+//! - **Entries** adds and removes entries of a list (a repeated property that is not a structure,
+//!   e.g. `dc:subject`) in the file's own entries (ADR 0017 U12d-Q1): every entry equal to one in
+//!   `remove` (exact text) is taken out, then each entry of `add` the list lacks is appended once,
+//!   in order (blank ones are ignored); the other entries are kept. A property with an `Open`
+//!   conflict that no earlier edit of the same call has decided (changed), or a result equal to
+//!   the file's entries, is no change (the conflict is kept, U12d-Q6); an empty result, or one of
+//!   only blank entries, clears the property; any other property is [`EditError::Unsupported`].
 //! - **A field of a single structure** (`field`, e.g. `Iptc4xmpCore:CiEmailWork` of
 //!   `Iptc4xmpCore:CreatorContactInfo`) is set in, or removed from, the structure's current value
 //!   (or an empty one), the other fields kept and a new field placed in the order of the
@@ -135,6 +144,16 @@ pub enum Edit {
         /// The XMP id of a field of a **single** structure.
         field: Option<String>,
     },
+    /// Adds and removes entries of a list `property` (a `Multi` property that is not a
+    /// structure, `Value::List`), applied to the file's own entries (ADR 0017 U12d-Q1).
+    Entries {
+        /// The XMP id of a property of the table.
+        property: String,
+        /// The entries to add, in order.
+        add: Vec<String>,
+        /// The entries to remove.
+        remove: Vec<String>,
+    },
 }
 
 /// The result of [`ExifTool::write_edits_safely`].
@@ -142,7 +161,9 @@ pub enum Edit {
 pub struct EditReport {
     /// What the safe write did.
     pub report: WriteReport,
-    /// What the user is told about the write (§5.2, §5.4, Q1); empty when nothing was written.
+    /// What the user is told about the write (§5.2, §5.4, Q1); empty when nothing was written,
+    /// except for a [`WriteNotice::ConflictKept`] of each [`Edit::Entries`] left alone because of
+    /// an `Open` conflict (U12d-Q6).
     pub notices: Vec<WriteNotice>,
 }
 
@@ -164,6 +185,11 @@ fn apply_edit(metadata: &mut Metadata, edit: &Edit) -> Result<(), EditError> {
             value,
         } => (property.as_str(), field.as_deref(), Some(value)),
         Edit::Clear { property, field } => (property.as_str(), field.as_deref(), None),
+        Edit::Entries {
+            property,
+            add,
+            remove,
+        } => return apply_entries(metadata, property, add, remove),
     };
     let def = properties::property(property)
         .ok_or_else(|| EditError::Value(ValueError::UnknownProperty(property.to_string())))?;
@@ -254,6 +280,56 @@ fn apply_edit(metadata: &mut Metadata, edit: &Edit) -> Result<(), EditError> {
     }
 }
 
+/// Applies [`Edit::Entries`]: removes the entries of `remove` from the file's own entries of the
+/// list `property`, then appends each entry of `add` it does not hold yet (see the module comment).
+fn apply_entries(
+    metadata: &mut Metadata,
+    property: &str,
+    add: &[String],
+    remove: &[String],
+) -> Result<(), EditError> {
+    let def = properties::property(property)
+        .ok_or_else(|| EditError::Value(ValueError::UnknownProperty(property.to_string())))?;
+    if def.occurrence != Occurrence::Multi || matches!(def.kind, ValueKind::Struct(_)) {
+        return Err(EditError::Unsupported(format!(
+            "{property} is not a list of entries"
+        )));
+    }
+    // The file's XMP and IIM entries differ and the user has not decided them: left alone
+    // (ADR 0017 U12d-Q6). An earlier edit of the same call that changed the property has decided
+    // the conflict, so the entries are applied to its value.
+    if has_open_conflict(metadata, property) && !is_changed(metadata, property) {
+        return Ok(());
+    }
+    let current = match metadata.get(property).map(|stored| &stored.value) {
+        Some(Value::List(entries)) => entries.clone(),
+        _ => Vec::new(),
+    };
+    let mut result: Vec<String> = current
+        .iter()
+        .filter(|entry| !remove.contains(entry))
+        .cloned()
+        .collect();
+    for entry in add {
+        if !entry.trim().is_empty() && !result.contains(entry) {
+            result.push(entry.clone());
+        }
+    }
+    if result == current {
+        return Ok(());
+    }
+    if result.is_empty() {
+        return metadata.clear(property).map_err(EditError::Value);
+    }
+    match set_if_changed(metadata, property, Value::List(result)) {
+        // Only blank entries are left: nothing is left to keep.
+        Err(EditError::Value(ValueError::Empty(_))) => {
+            metadata.clear(property).map_err(EditError::Value)
+        }
+        other => other,
+    }
+}
+
 /// Sets `value` on `property`, except when it equals the current value and the property has no
 /// `Open` conflict (choosing the value already shown in an `Open` conflict decides it, Q1).
 fn set_if_changed(metadata: &mut Metadata, property: &str, value: Value) -> Result<(), EditError> {
@@ -264,6 +340,11 @@ fn set_if_changed(metadata: &mut Metadata, property: &str, value: Value) -> Resu
         return Ok(());
     }
     metadata.set(property, value).map_err(EditError::Value)
+}
+
+/// True when an edit has changed (set or cleared) `property`.
+fn is_changed(metadata: &Metadata, property: &str) -> bool {
+    metadata.changes().any(|(changed, _)| changed == property)
 }
 
 /// True when `property` has a conflict with the rule `Open` (§5.1, Q1).
@@ -350,8 +431,11 @@ impl ExifTool {
     }
 
     /// Writes the editor's `edits` to `image` through the write plan and the safe write, and
-    /// returns the report with the plan's notices (see the module comment). `checks` are the
-    /// caller's image checks; `journal` is the app's write journal.
+    /// returns the report with the plan's notices (see the module comment). An [`Edit::Entries`]
+    /// left alone because its property has an `Open` conflict adds a
+    /// [`WriteNotice::ConflictKept`] for that property, also when the report is
+    /// [`WriteReport::Unchanged`], never twice (U12d-Q6). `checks` are the caller's image checks;
+    /// `journal` is the app's write journal.
     pub fn write_edits_safely(
         &mut self,
         image: &Path,
@@ -371,17 +455,43 @@ impl ExifTool {
             .map_err(EditError::Read)?;
         let mut metadata = read.reconciled.metadata;
         apply_edits(&mut metadata, edits)?;
+        let left_alone = entries_left_alone(&metadata, edits);
         let plan =
             write_plan::plan(&metadata, &read.state, options.settings).map_err(EditError::Plan)?;
         let report = self
             .write_safely(image, &plan, checks, journal)
             .map_err(EditError::Write)?;
-        let notices = match report {
+        let mut notices = match report {
             WriteReport::Unchanged => Vec::new(),
             WriteReport::Written { .. } => plan.notices,
         };
+        for property in left_alone {
+            let notice = WriteNotice::ConflictKept { property };
+            if !notices.contains(&notice) {
+                notices.push(notice);
+            }
+        }
         Ok(EditReport { report, notices })
     }
+}
+
+/// The properties of the [`Edit::Entries`] in `edits` that were left alone because of an `Open`
+/// conflict (U12d-Q6): those that still have one and are not changed after [`apply_edits`]. In the
+/// order of `edits`, each once.
+fn entries_left_alone(metadata: &Metadata, edits: &[Edit]) -> Vec<String> {
+    let mut left_alone: Vec<String> = Vec::new();
+    for edit in edits {
+        let Edit::Entries { property, .. } = edit else {
+            continue;
+        };
+        if has_open_conflict(metadata, property)
+            && !is_changed(metadata, property)
+            && !left_alone.contains(property)
+        {
+            left_alone.push(property.clone());
+        }
+    }
+    left_alone
 }
 
 /// Sets `value` on `property`, or clears it for `None`.
@@ -705,6 +815,192 @@ mod tests {
             }
             other => panic!("expected a Value error, got {other:?}"),
         }
+    }
+
+    const SUBJECT: &str = "dc:subject";
+
+    fn list(entries: &[&str]) -> Value {
+        Value::List(entries.iter().map(|entry| entry.to_string()).collect())
+    }
+
+    fn entries(property: &str, add: &[&str], remove: &[&str]) -> Edit {
+        Edit::Entries {
+            property: property.to_string(),
+            add: add.iter().map(|entry| entry.to_string()).collect(),
+            remove: remove.iter().map(|entry| entry.to_string()).collect(),
+        }
+    }
+
+    #[test]
+    fn entries_are_added_at_the_end_and_the_old_ones_kept() {
+        let mut metadata = read(&[(SUBJECT, list(&["sol", "hav"]))]);
+        edited(&mut metadata, &[entries(SUBJECT, &["vinter", "älg"], &[])]);
+        assert_eq!(
+            changes(&metadata),
+            [(
+                SUBJECT.to_string(),
+                Some(list(&["sol", "hav", "vinter", "älg"]))
+            )]
+        );
+    }
+
+    #[test]
+    fn an_entry_already_there_is_not_added_twice() {
+        let mut metadata = read(&[(SUBJECT, list(&["sol", "hav"]))]);
+        edited(
+            &mut metadata,
+            &[entries(SUBJECT, &["hav", "hav", "is"], &[])],
+        );
+        assert_eq!(
+            changes(&metadata),
+            [(SUBJECT.to_string(), Some(list(&["sol", "hav", "is"])))]
+        );
+    }
+
+    #[test]
+    fn entries_are_removed_and_the_others_kept() {
+        let mut metadata = read(&[(SUBJECT, list(&["sol", "hav"]))]);
+        edited(&mut metadata, &[entries(SUBJECT, &[], &["sol"])]);
+        assert_eq!(
+            changes(&metadata),
+            [(SUBJECT.to_string(), Some(list(&["hav"])))]
+        );
+
+        let mut metadata = read(&[(SUBJECT, list(&["sol", "hav"]))]);
+        edited(&mut metadata, &[entries(SUBJECT, &[], &["skog"])]);
+        assert_eq!(changes(&metadata), []);
+        assert_eq!(
+            metadata.get(SUBJECT).map(|stored| stored.value.clone()),
+            Some(list(&["sol", "hav"]))
+        );
+    }
+
+    #[test]
+    fn add_and_remove_in_one_edit() {
+        let mut metadata = read(&[(SUBJECT, list(&["sol", "hav"]))]);
+        edited(&mut metadata, &[entries(SUBJECT, &["is"], &["sol"])]);
+        assert_eq!(
+            changes(&metadata),
+            [(SUBJECT.to_string(), Some(list(&["hav", "is"])))]
+        );
+    }
+
+    #[test]
+    fn the_comparison_is_exact_text() {
+        let mut metadata = read(&[(SUBJECT, list(&["sol"]))]);
+        edited(&mut metadata, &[entries(SUBJECT, &[], &["Sol"])]);
+        assert_eq!(changes(&metadata), []);
+        assert_eq!(
+            metadata.get(SUBJECT).map(|stored| stored.value.clone()),
+            Some(list(&["sol"]))
+        );
+
+        edited(&mut metadata, &[entries(SUBJECT, &["Sol"], &[])]);
+        assert_eq!(
+            changes(&metadata),
+            [(SUBJECT.to_string(), Some(list(&["sol", "Sol"])))]
+        );
+    }
+
+    #[test]
+    fn removing_every_entry_clears_the_property() {
+        let mut metadata = read(&[(SUBJECT, list(&["sol", "hav"]))]);
+        edited(&mut metadata, &[entries(SUBJECT, &[], &["hav", "sol"])]);
+        assert_eq!(changes(&metadata), [(SUBJECT.to_string(), None)]);
+        assert!(metadata.get(SUBJECT).is_none());
+    }
+
+    #[test]
+    fn adding_to_an_absent_property_sets_it() {
+        let mut metadata = read(&[("photoshop:Headline", text("Kvar"))]);
+        edited(&mut metadata, &[entries(SUBJECT, &["is"], &[])]);
+        assert_eq!(
+            changes(&metadata),
+            [(SUBJECT.to_string(), Some(list(&["is"])))]
+        );
+
+        // Nothing to add to an absent property is no change, never a clear.
+        let mut metadata = read(&[("photoshop:Headline", text("Kvar"))]);
+        edited(&mut metadata, &[entries(SUBJECT, &["", "  "], &["sol"])]);
+        assert_eq!(changes(&metadata), []);
+    }
+
+    /// `dc:subject` `["sol", "hav"]` with an `Open` conflict against the IIM entries `["sol"]`.
+    fn subject_with_an_open_conflict() -> Metadata {
+        let mut metadata = read(&[(SUBJECT, list(&["sol", "hav"]))]);
+        metadata.add_conflict(crate::value::Conflict {
+            property: SUBJECT.to_string(),
+            values: vec![
+                (crate::value::Origin::XmpEmbedded, list(&["sol", "hav"])),
+                (crate::value::Origin::Iim, list(&["sol"])),
+            ],
+            rule: ConflictRule::Open,
+        });
+        metadata
+    }
+
+    #[test]
+    fn no_change_keeps_an_open_conflict() {
+        let mut metadata = subject_with_an_open_conflict();
+        edited(&mut metadata, &[entries(SUBJECT, &["hav"], &[])]);
+        assert_eq!(changes(&metadata), []);
+        assert!(has_open_conflict(&metadata, SUBJECT));
+    }
+
+    #[test]
+    fn only_blank_entries_left_clears_the_property() {
+        let mut metadata = read(&[(SUBJECT, list(&["", "sol"]))]);
+        edited(&mut metadata, &[entries(SUBJECT, &[], &["sol"])]);
+        assert_eq!(changes(&metadata), [(SUBJECT.to_string(), None)]);
+        assert!(metadata.get(SUBJECT).is_none());
+    }
+
+    #[test]
+    fn an_open_conflict_is_left_alone() {
+        let mut metadata = subject_with_an_open_conflict();
+        edited(&mut metadata, &[entries(SUBJECT, &["vinter"], &["sol"])]);
+        assert_eq!(changes(&metadata), []);
+        assert_eq!(
+            metadata.get(SUBJECT).map(|stored| stored.value.clone()),
+            Some(list(&["sol", "hav"]))
+        );
+        assert!(has_open_conflict(&metadata, SUBJECT));
+    }
+
+    #[test]
+    fn entries_after_a_decided_conflict_are_applied() {
+        let mut metadata = subject_with_an_open_conflict();
+        edited(
+            &mut metadata,
+            &[
+                set(SUBJECT, list(&["sol"])),
+                entries(SUBJECT, &["vinter"], &[]),
+            ],
+        );
+        assert_eq!(
+            changes(&metadata),
+            [(SUBJECT.to_string(), Some(list(&["sol", "vinter"])))]
+        );
+    }
+
+    #[test]
+    fn entries_on_a_text_or_a_structure_list_are_unsupported() {
+        let mut metadata = Metadata::new();
+        for property in ["photoshop:City", "Iptc4xmpExt:LocationCreated"] {
+            match apply_edits(&mut metadata, &[entries(property, &["A"], &[])]) {
+                Err(EditError::Unsupported(reason)) => {
+                    assert_eq!(reason, format!("{property} is not a list of entries"))
+                }
+                other => panic!("{property}: expected Unsupported, got {other:?}"),
+            }
+        }
+        match apply_edits(&mut metadata, &[entries("xmp:Nonsense", &["A"], &[])]) {
+            Err(EditError::Value(ValueError::UnknownProperty(property))) => {
+                assert_eq!(property, "xmp:Nonsense")
+            }
+            other => panic!("expected a Value error, got {other:?}"),
+        }
+        assert_eq!(changes(&metadata), []);
     }
 
     #[test]

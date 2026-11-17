@@ -20,7 +20,8 @@ use pw_metadata::iim::Fallback;
 use pw_metadata::journal::Journal;
 use pw_metadata::reconcile::IimDigest;
 use pw_metadata::safe_write::{NoImageCheck, Stage, WriteReport};
-use pw_metadata::value::Value;
+use pw_metadata::value::{ConflictRule, Value};
+use pw_metadata::write_plan::WriteNotice;
 use pw_metadata::{ExifTool, Rating, WriteError};
 
 /// The small baseline JPEG of `crates/pw-thumbcache/src/jpeg_fixture.rs`, copied.
@@ -481,6 +482,136 @@ fn edits_to_a_jpeg_held_open_by_another_program_are_locked() {
         Ok(report) => panic!("expected Locked, the file was written: {report:?}"),
     }
     assert_eq!(std::fs::read(&file).unwrap(), SMALL);
+    s.assert_clean();
+    s.remove();
+}
+
+/// Keywords `sol` and `hav` in a JPEG; an `Entries` edit that adds `vinter` and removes `sol` is
+/// applied to the file's own keywords: `hav` is kept and `vinter` appended (ADR 0017 U12d-Q1).
+#[test]
+fn keywords_are_added_to_a_jpeg_and_its_own_kept() {
+    let mut et = exiftool();
+    let s = Scratch::new("entries");
+    let file = s.jpeg();
+    write(
+        &mut et,
+        &file,
+        &["-XMP-dc:Subject=sol", "-XMP-dc:Subject=hav"],
+    );
+    assert_eq!(
+        tag(&mut et, &file, "XMP-dc:Subject"),
+        "sol, hav",
+        "precondition"
+    );
+    let edits = [Edit::Entries {
+        property: "dc:subject".to_string(),
+        add: vec!["vinter".to_string()],
+        remove: vec!["sol".to_string()],
+    }];
+
+    let result = et.write_edits_safely(
+        &file,
+        &edits,
+        &EditOptions::default(),
+        &NoImageCheck,
+        &s.journal,
+    );
+
+    match result {
+        Ok(report) => assert_eq!(report.report, written(&file)),
+        Err(error) => panic!("expected the file to be written, got the error {error}"),
+    }
+    assert_eq!(tag(&mut et, &file, "XMP-dc:Subject"), "hav, vinter");
+    s.assert_clean();
+    s.remove();
+}
+
+/// XMP keywords `sol`, `hav` and IIM Keywords `sol`, `is` without an IIM checksum: an `Open`
+/// conflict on `dc:subject`. An `Entries` edit leaves it alone and the report names it once, both
+/// when nothing is written and when another edit is (ADR 0017 U12d-Q6).
+#[test]
+fn an_open_keyword_conflict_is_left_alone_and_reported() {
+    let mut et = exiftool();
+    let s = Scratch::new("entries-conflict");
+    let file = s.jpeg();
+    write(
+        &mut et,
+        &file,
+        &[
+            "-XMP-dc:Subject=sol",
+            "-XMP-dc:Subject=hav",
+            "-IPTC:CodedCharacterSet=UTF8",
+            "-IPTC:Keywords=sol",
+            "-IPTC:Keywords=is",
+        ],
+    );
+    let before = et.read_metadata(&file, Fallback::Windows1252).unwrap();
+    let rules: Vec<_> = before
+        .reconciled
+        .metadata
+        .conflicts()
+        .iter()
+        .map(|c| (c.property.as_str(), c.rule))
+        .collect();
+    assert_eq!(rules, [("dc:subject", ConflictRule::Open)], "precondition");
+    let add_vinter = Edit::Entries {
+        property: "dc:subject".to_string(),
+        add: vec!["vinter".to_string()],
+        remove: Vec::new(),
+    };
+    let kept = WriteNotice::ConflictKept {
+        property: "dc:subject".to_string(),
+    };
+
+    // (a) Only the `Entries`: nothing is written, the conflict is still named.
+    let bytes = std::fs::read(&file).unwrap();
+    match et.write_edits_safely(
+        &file,
+        std::slice::from_ref(&add_vinter),
+        &EditOptions::default(),
+        &NoImageCheck,
+        &s.journal,
+    ) {
+        Ok(report) => {
+            assert_eq!(report.report, WriteReport::Unchanged);
+            assert_eq!(report.notices, [kept.clone()]);
+        }
+        Err(error) => panic!("expected Unchanged, got the error {error}"),
+    }
+    assert_eq!(std::fs::read(&file).unwrap(), bytes);
+    assert_eq!(tag(&mut et, &file, "XMP-dc:Subject"), "sol, hav");
+    assert_eq!(tag(&mut et, &file, "IPTC:Keywords"), "sol, is");
+
+    // (b) With a Headline: written, the conflict named once, both keyword forms unchanged.
+    let edits = [
+        add_vinter,
+        Edit::Set {
+            property: "photoshop:Headline".to_string(),
+            field: None,
+            value: Value::Text("Rubrik".to_string()),
+        },
+    ];
+    match et.write_edits_safely(
+        &file,
+        &edits,
+        &EditOptions::default(),
+        &NoImageCheck,
+        &s.journal,
+    ) {
+        Ok(report) => {
+            assert_eq!(report.report, written(&file));
+            let named = report
+                .notices
+                .iter()
+                .filter(|notice| **notice == kept)
+                .count();
+            assert_eq!(named, 1, "{:?}", report.notices);
+        }
+        Err(error) => panic!("expected the file to be written, got the error {error}"),
+    }
+    assert_eq!(tag(&mut et, &file, "XMP-photoshop:Headline"), "Rubrik");
+    assert_eq!(tag(&mut et, &file, "XMP-dc:Subject"), "sol, hav");
+    assert_eq!(tag(&mut et, &file, "IPTC:Keywords"), "sol, is");
     s.assert_clean();
     s.remove();
 }

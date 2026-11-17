@@ -181,6 +181,22 @@ and reviewer:
     safe write. If T174's hand check sees it, a task holds the view cores' reopening of the
     group's files until the move's answer.
 
+- **Leftovers from the review of T179** (reviewer and `/code-review` twice, 2026-11-17;
+  accepted, none is reached by T180's use of `Edit::Entries`; the arm in `BatchEdits::lists` is
+  T180's):
+  - *`same_value` compares list entries on the IIM prediction:* removing a keyword over 64 bytes
+    and adding it cut to 64 bytes is no change and is lost without a notice (as for `Set`).
+  - *Four blank tests:* `apply_entries` uses `trim()` for `add`, `Metadata::set` spaces only
+    (`is_empty_text`), `iim::is_blank` spaces and NUL, `template.rs` its own `is_blank`; a
+    NUL-only or tab-only entry is treated differently on each path.
+  - *The same entry in `add` and `remove`* is removed and appended at the end: a reorder and a
+    write (T180 sends a difference, so never both).
+  - *Tidying:* the append rule repeats `template.rs`'s list Append (a shared helper);
+    `entries_left_alone` works out afterwards what `apply_entries` skipped (one source would
+    keep them in step); the separate empty-result branch beside the `Empty` fallback;
+    `contains` in loops (quadratic, small at today's list sizes).
+  - *`ConflictKept` is named also when the `Entries` would have changed nothing* (it adds an
+    entry both forms hold): accepted, the conflict is kept either way.
 Removed on 2026-11-13 because they are done or planned elsewhere: ADR 0010 steps M3–M7 (done,
 T30–T40); ADR 0011 step K4 (done, T26–T29); moving rejected or picked images to `_rejected` /
 `_picked` (ADR 0013 §13), now ADR 0017 U9 (§2.6, U-Q6); the import dialog fields for title and description in the Tauri

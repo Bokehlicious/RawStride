@@ -185,3 +185,4 @@ was when the task was done, so "this file", "below" and "the Log" in T1–T115 m
 | [T176](T176-focus-map-time-on-real-files.md) | ADR 0017 U9a: the focus map's time, and whether it slows stepping and Z (pw-viewcore tests) |
 | [T177](T177-release-before-a-move-without-the-write-stamp.md) | ADR 0017 U9b: the release before a move notes no write stamp (pw-metadata, pw-imagecheck, pw-loupe) |
 | [T178](T178-move-waits-for-the-write-answer.md) | ADR 0017 U9b: a move waits for its rating write's answer, and an image is not moved twice (pw-loupe) |
+| [T179](T179-add-and-remove-list-entries-in-an-edit.md) | ADR 0017 U12d: an edit that adds and removes entries of a list (pw-metadata) |

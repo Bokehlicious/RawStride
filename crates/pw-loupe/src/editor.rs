@@ -1173,6 +1173,7 @@ impl BatchEdits {
             edits.iter().any(|edit| match edit {
                 Edit::Set { property, .. } => !clear && property == list,
                 Edit::Clear { property, .. } => clear && property == list,
+                Edit::Entries { property, .. } => !clear && property == list,
             })
         };
         for list in EditorForm::ALL_LISTS {
@@ -2167,6 +2168,7 @@ impl EditorForm {
             let here_only = match &edit {
                 Edit::Clear { property, .. } => list_copyright_management(property),
                 Edit::Set { .. } => false,
+                Edit::Entries { .. } => false,
             };
             if !here_only {
                 batch.others.push(edit);

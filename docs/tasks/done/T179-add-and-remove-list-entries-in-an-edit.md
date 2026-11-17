@@ -1,4 +1,4 @@
-# T179. ADR 0017 U12d: an edit that adds and removes entries of a list (pw-metadata) — Open
+# T179. ADR 0017 U12d: an edit that adds and removes entries of a list (pw-metadata) — Done
 
 - **Chain:** T179 → T180. This task is the core part; T180 lets "Apply to {n} Marked" use it.
 - **Why:** the owner's job test (2026-11-17): keywords added to several marked images replaced each
@@ -43,6 +43,10 @@
        and `remove` hold: nothing is set or cleared and the conflict is kept (owner, 2026-11-17,
        ADR 0017 U12d-Q6; the file's XMP and IIM entries differ and the user has not decided them).
        Checked after the two errors above.
+       A conflict that an earlier edit of the same `apply_edits` call has decided (its property is
+       among `metadata.changes()`, for example after a `Set` or `Clear` of it) is not `Open` for
+       this rule: the `Entries` is then applied to the current value as usual, and point 5 names
+       nothing for it.
      - The current entries are the read value's entries (`metadata.get(property)` as
        `Value::List`), or none when the property is absent.
      - The result is: the current entries without every entry that is in `remove` (exact text,
@@ -74,7 +78,8 @@
      `ConflictKept` for it is not doubled. `apply_edits`'s signature does not change (find the
      properties in `write_edits_safely`, for example the `Entries` properties that still have an
      `Open` conflict and are not among `metadata.changes()` after `apply_edits`). The doc
-     comment of `write_edits_safely` and the module comment say this. The shell already shows
+     comment of `write_edits_safely`, the module comment and the field comment of
+     `EditReport::notices` (today "empty when nothing was written") say this. The shell already shows
      every `ConflictKept` of an image's report in the batch summary (T180 checks it).
 - **Tests to add:**
   - In `edit.rs`'s `mod tests` (with the helpers `read`, `edited`, `changes` and a new
@@ -104,6 +109,9 @@
     12. `an_open_conflict_is_left_alone`: the `Open` conflict of test 8 and an `Entries` that adds
         `"vinter"` and removes `"sol"`: no change, the value still `["sol", "hav"]`, the
         conflict still `Open`.
+    14. `entries_after_a_decided_conflict_are_applied`: the `Open` conflict of test 8, then in one
+        `apply_edits` call a `Set` of `dc:subject` `["sol"]` and an `Entries` adding `"vinter"`:
+        `changes` is `dc:subject` `["sol", "vinter"]`.
   - In `crates/pw-metadata/tests/edit.rs` (real ExifTool, the `Scratch` JPEG, as
     `edits_to_a_jpeg_held_open_by_another_program_are_locked` calls `write_edits_safely`):
     10. `keywords_are_added_to_a_jpeg_and_its_own_kept`: write `XMP-dc:Subject` `sol` and `hav`
@@ -138,3 +146,7 @@
 | 2026-11-17 | Ready for review | Done as written: `Edit::Entries` and `apply_entries` in `edit.rs`, the module comment, the two arms in `editor.rs` (no other `match` failed), tests 1–10 and `docs/test-inventory.md`. One addition: a changed result of only blank entries (e.g. a file with `""` and `sol`, `sol` removed), which `Metadata::set` refuses as `Empty`, clears the property as an empty result does (as a structure with only empty fields is cleared). `.\tools\check.ps1` all OK: 1803 passed, 66 ignored, 0 failed |
 | 2026-11-17 | Open | Review (reviewer, then `/code-review` as the safe write's crate needs): sent back. (a) The addition (only blank entries left → cleared) had no test: test 11 added. (b) An `Open` conflict was decided from the shown (XMP) entries and IIM-only entries lost; owner: no change for such a property (ADR 0017 U12d-Q6): point 2's new first-check bullet and test 12. Not to change here, homes at Done: `same_value` compares list entries on the IIM prediction, so removing a keyword over 64 bytes and adding it cut to 64 is no change (as for `Set`); `trim()` for blank `add` entries differs from `is_empty_text` and `iim::is_blank` (NUL); the append rule repeats `template.rs`'s Append; the `Entries` arm in `BatchEdits::lists` can only name structure lists, which `Entries` refuses (T180 to settle) |
 | 2026-11-17 | Open | Owner, same day (ADR 0017 U12d-Q6): the user is told of an image left alone. Point 5 added (`write_edits_safely` gives `ConflictKept` for such an `Entries`, also when nothing is written) and test 13 |
+| 2026-11-17 | Ready for review | Sent-back points and point 5 done: `apply_entries` returns no change for a property with an `Open` conflict, checked after the two errors (U12d-Q6); `write_edits_safely` adds `ConflictKept` for each `Entries` property left alone (still `Open`, not among `changes()`; a new private `entries_left_alone`), also when `Unchanged`, not doubled with the plan's own; doc and module comments say so. Tests 11, 12 (8 and 12 share the helper `subject_with_an_open_conflict`) and 13; `docs/test-inventory.md` updated. While working, `cargo test --workspace -p pw-metadata --test edit` was run once by mistake (rule 6); the final `.\tools\check.ps1` all OK: 1806 passed, 66 ignored, 0 failed; no clippy warnings |
+| 2026-11-17 | Open | Review 2 (reviewer, then `/code-review`): sent back. (a) An `Open` conflict already decided by an earlier `Set`/`Clear` in the same edits still made `Entries` be skipped, with no notice (the conflict stays in `conflicts()`): point 2's conflict bullet now says a property among `changes()` is not left alone; test 14. (b) `EditReport::notices`' field comment still says "empty when nothing was written": named in point 5. Not changed here, homes at Done (with review 1's): `ConflictKept` is named also when the `Entries` would have changed nothing (accepted, the conflict is kept); `apply_entries` could report what it left alone instead of `entries_left_alone` working it out afterwards; the separate empty-result branch; `contains` in loops |
+| 2026-11-17 | Ready for review | Review 2 done: (a) `apply_entries` leaves a property alone only when its `Open` conflict is not decided by an earlier edit of the same call (not among `changes()`, a new private `is_changed`, also used by `entries_left_alone`), so point 5 names nothing for it; test 14 `entries_after_a_decided_conflict_are_applied`; (b) the field comment of `EditReport::notices` names the `ConflictKept` of an `Entries` left alone; the module comment says both. `docs/test-inventory.md` updated (pw-metadata unit tests 409). `.\tools\check.ps1` all OK: 1807 passed, 66 ignored, 0 failed; no clippy warnings |
+| 2026-11-17 | Done | Approved by the owner after review 3; the reviewer wrapped one long line of the module comment (owner's request) and ran `.\tools\check.ps1`. Homes: the owner's decision is ADR 0017 U12d-Q6; the leftovers of both `/code-review`s are `backlog.md` "Leftovers from the review of T179"; the `Entries` arm in `BatchEdits::lists` (it can only name structure lists, which `Entries` refuses) is in T180's log |
