@@ -37,7 +37,9 @@ the one before it is accepted.
 | U5 | T140 | Tasks area: import progress per file, stop button, pending writes, error list (U5-Q1–U5-Q7) | done (T140, 2026-11-15) |
 | U6 | T150, T151, T152, T153, T154 | Compare two images: side by side, above/below, locked zoom: the view core takes a view from outside (T150), the compare model, settings and texts (T151), the second view core and the image area as one function (T152), two images in the preview with their keys (T153), the locked zoom and position (T154); the owner's hand check after T154 | done (T150–T154, 2026-11-16); U6-Q1–U6-Q12 approved 2026-11-16; hand-checked by the owner on 2026-11-16 |
 | U13 | – | Templates from the metadata window (with the modes of ADR 0007 §10) and variables in text fields; the import's template in a window of its own, saved as an XMP template file (owner, 2026-11-15) | needs the namespace of the modes decided first (as D1 of ADR 0007) |
-| U9 | – | Focus marking; move on reject or select as a setting, with undo (§2.6); companion file names checked on real files first | not written |
+| U9a | T167, T168 | Focus marking (U9-Q1–U9-Q4): the map in the view core from the half-size render (T167), the key E, the menu item, the setting and the marks drawn (T168); the owner's hand check after T168 | T167 open; T168 after T167 |
+| R2 | reviewer | Read the companion files of other programs (DxO PhotoLab `.dop` first, RawTherapee `.pp3`, ON1 `.on1`) on the owner's real files: their names only (clean-room level C), written down before U9b | waits for the owner's files |
+| U9b | – | Move on reject or select as a setting, with undo (U9-Q5–U9-Q10, §2.6) | after R2 |
 | U8 | – | Key map file and its page in Settings | not written |
 | – | – | Images shown while importing: the destination tab opens when the first file is copied and verified and fills as the import goes on (ADR 0017 §7.2, changes ADR 0010's rule) | not placed (owner, 2026-11-15) |
 
