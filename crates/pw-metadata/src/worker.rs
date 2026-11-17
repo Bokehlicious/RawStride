@@ -22,10 +22,21 @@
 //!   starts with the setup's options (the default without a setup); every request queued after
 //!   `set_options` uses the new options for rating writes, edits and reads (the `fallback`).
 //!   Requests run in order, so a request queued before it uses the old options.
+//!
+//! Moving an image with its companion files (ADR 0017 §2.6, step U9b; T170):
+//! - [`MetadataWorker::move_image`] finds the image's group with [`relocate::companions`],
+//!   releases the view cores' sessions of the image files in it ([`ImageCheck::release`]) and
+//!   moves the group with [`relocate::move_group`]; answered with [`Event::Moved`].
+//! - [`MetadataWorker::move_back`] releases every moved file and moves the files back with
+//!   [`relocate::move_back`]; answered with [`Event::MovedBack`].
+//!
+//! Requests run in order, so a move sent after a rating write of the same image runs after it.
+//! A move does not use ExifTool; without a [`WriteSetup`] (no `checks` to release the sessions)
+//! both fail with [`NO_JOURNAL`] and nothing is moved.
 
 use std::collections::HashMap;
 use std::fmt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, SyncSender, TryRecvError, TrySendError};
 use std::sync::{Arc, OnceLock};
 use std::thread::JoinHandle;
@@ -34,6 +45,7 @@ use crate::edit::{Edit, EditOptions, EditReport};
 use crate::exiftool::{MIN_EXIFTOOL_VERSION, ToolVersion, exiftool_program};
 use crate::journal::Journal;
 use crate::read::MetadataRead;
+use crate::relocate::{self, Moved};
 use crate::safe_write::ImageCheck;
 use crate::{ExifTool, Rating, Result, WriteError};
 
@@ -100,6 +112,19 @@ pub enum Event {
         path: PathBuf,
         result: std::result::Result<EditReport, WriteError>,
     },
+    /// The answer to [`MetadataWorker::move_image`] (T170): the moves in order, or the error as
+    /// text (the folder read's error with the image's name, or [`relocate::MoveError`]'s text).
+    Moved {
+        id: RequestId,
+        image: PathBuf,
+        result: std::result::Result<Vec<Moved>, String>,
+    },
+    /// The answer to [`MetadataWorker::move_back`] (T170), with `moved` as it was sent.
+    MovedBack {
+        id: RequestId,
+        moved: Vec<Moved>,
+        result: std::result::Result<(), String>,
+    },
 }
 
 /// What the worker thread receives: a request with an event, or new options without one (T98).
@@ -128,6 +153,17 @@ enum Request {
         id: RequestId,
         path: PathBuf,
         edits: Vec<Edit>,
+    },
+    Move {
+        id: RequestId,
+        image: PathBuf,
+        target: PathBuf,
+        image_extensions: Vec<String>,
+        suffixes: Vec<String>,
+    },
+    MoveBack {
+        id: RequestId,
+        moved: Vec<Moved>,
     },
 }
 
@@ -228,6 +264,36 @@ impl MetadataWorker {
     ) -> std::result::Result<RequestId, SubmitError> {
         let id = self.next_request_id();
         self.submit(Request::WriteEdits { id, path, edits })?;
+        Ok(id)
+    }
+
+    /// Queues a move of `image` and its companion files into `target` without blocking (T170),
+    /// answered with [`Event::Moved`]. `image_extensions` are the image formats' extensions (the
+    /// image's RAW+JPEG partners and the files whose sessions are released), `suffixes` the
+    /// sidecar suffixes besides `xmp`; both without the leading dot, in any case.
+    pub fn move_image(
+        &mut self,
+        image: PathBuf,
+        target: PathBuf,
+        image_extensions: Vec<String>,
+        suffixes: Vec<String>,
+    ) -> std::result::Result<RequestId, SubmitError> {
+        let id = self.next_request_id();
+        self.submit(Request::Move {
+            id,
+            image,
+            target,
+            image_extensions,
+            suffixes,
+        })?;
+        Ok(id)
+    }
+
+    /// Queues moving the files of `moved` back where they came from without blocking (T170),
+    /// answered with [`Event::MovedBack`].
+    pub fn move_back(&mut self, moved: Vec<Moved>) -> std::result::Result<RequestId, SubmitError> {
+        let id = self.next_request_id();
+        self.submit(Request::MoveBack { id, moved })?;
         Ok(id)
     }
 
@@ -410,7 +476,72 @@ fn handle(
             };
             Event::EditsWritten { id, path, result }
         }
+        // A move does not use ExifTool (T170), so `running` and `start_error` do not matter.
+        Request::Move {
+            id,
+            image,
+            target,
+            image_extensions,
+            suffixes,
+        } => {
+            let result = match setup {
+                None => Err(NO_JOURNAL.to_string()),
+                Some(setup) => move_image(
+                    &*setup.checks,
+                    &image,
+                    &target,
+                    &image_extensions,
+                    &suffixes,
+                ),
+            };
+            Event::Moved { id, image, result }
+        }
+        Request::MoveBack { id, moved } => {
+            let result = match setup {
+                None => Err(NO_JOURNAL.to_string()),
+                Some(setup) => {
+                    for step in &moved {
+                        setup.checks.release(&step.to);
+                    }
+                    relocate::move_back(&moved).map_err(|error| error.to_string())
+                }
+            };
+            Event::MovedBack { id, moved, result }
+        }
     }
+}
+
+/// Finds `image`'s group, releases the sessions of its image files and moves the group into
+/// `target` (T170).
+fn move_image(
+    checks: &dyn ImageCheck,
+    image: &Path,
+    target: &Path,
+    image_extensions: &[String],
+    suffixes: &[String],
+) -> std::result::Result<Vec<Moved>, String> {
+    let extensions: Vec<&str> = image_extensions.iter().map(String::as_str).collect();
+    let suffixes: Vec<&str> = suffixes.iter().map(String::as_str).collect();
+    let files = relocate::companions(image, &extensions, &suffixes).map_err(|error| {
+        let name = image.file_name().map_or_else(
+            || image.display().to_string(),
+            |n| n.to_string_lossy().into_owned(),
+        );
+        format!("Could not move {name}: {error}.")
+    })?;
+    let lower: Vec<String> = extensions.iter().map(|e| e.to_lowercase()).collect();
+    for file in &files {
+        // The image itself is always released, whether or not its extension is in the list.
+        let is_image = file == image
+            || file
+                .extension()
+                .map(|e| e.to_string_lossy().to_lowercase())
+                .is_some_and(|e| lower.contains(&e));
+        if is_image {
+            checks.release(file);
+        }
+    }
+    relocate::move_group(&files, target).map_err(|error| error.to_string())
 }
 
 #[cfg(test)]
@@ -612,7 +743,12 @@ mod tests {
                     panic!("missing ExifTool unexpectedly succeeded")
                 }
                 Ok(Event::RatingWritten { .. }) => panic!("unexpected write result"),
-                Ok(other @ (Event::MetadataRead { .. } | Event::EditsWritten { .. })) => {
+                Ok(
+                    other @ (Event::MetadataRead { .. }
+                    | Event::EditsWritten { .. }
+                    | Event::Moved { .. }
+                    | Event::MovedBack { .. }),
+                ) => {
                     panic!("unexpected event {other:?}")
                 }
                 Err(TryRecvError::Disconnected) => panic!("worker disconnected unexpectedly"),
@@ -861,6 +997,294 @@ mod tests {
             Some(Err(error)) => assert!(error.contains("could not start"), "{error}"),
             other => panic!("expected the start error, got {other:?}"),
         }
+    }
+
+    /// An image check that records the paths given to `release` (T170).
+    #[derive(Clone, Default)]
+    struct RecordingCheck(Arc<std::sync::Mutex<Vec<PathBuf>>>);
+
+    impl RecordingCheck {
+        fn released(&self) -> Vec<PathBuf> {
+            self.0.lock().expect("the recorded paths").clone()
+        }
+    }
+
+    impl ImageCheck for RecordingCheck {
+        fn release(&self, image: &Path) {
+            self.0
+                .lock()
+                .expect("the recorded paths")
+                .push(image.to_path_buf());
+        }
+
+        fn check_copy(
+            &self,
+            _original: &Path,
+            _copy: &Path,
+            _kind: crate::reconcile::FileKind,
+        ) -> std::result::Result<(), String> {
+            Ok(())
+        }
+    }
+
+    /// A worker whose ExifTool program is missing (T170: a move does not need ExifTool).
+    fn start_without_exiftool(name: &str, setup: Option<WriteSetup>) -> MetadataWorker {
+        let program = std::env::temp_dir().join(format!(
+            "pw-metadata-no-exiftool-{name}-{}",
+            std::process::id()
+        ));
+        MetadataWorker::start_with(&program.to_string_lossy(), &[], setup)
+            .expect("worker thread should start")
+    }
+
+    fn strings(values: &[&str]) -> Vec<String> {
+        values.iter().map(|value| (*value).to_string()).collect()
+    }
+
+    /// Moves `image` into `target` through the worker, with ARW and JPG as image extensions and
+    /// no suffixes.
+    fn move_result(
+        worker: &mut MetadataWorker,
+        image: &Path,
+        target: &Path,
+    ) -> std::result::Result<Vec<Moved>, String> {
+        let id = worker
+            .move_image(
+                image.to_path_buf(),
+                target.to_path_buf(),
+                strings(&["ARW", "jpg"]),
+                Vec::new(),
+            )
+            .expect("request should be accepted");
+        match next_event(worker) {
+            Event::Moved {
+                id: event_id,
+                image: event_image,
+                result,
+            } => {
+                assert_eq!(event_id, id);
+                assert_eq!(event_image, image);
+                result
+            }
+            other => panic!("unexpected event {other:?}"),
+        }
+    }
+
+    /// Moves the files of `moved` back through the worker.
+    fn move_back_result(
+        worker: &mut MetadataWorker,
+        moved: &[Moved],
+    ) -> std::result::Result<(), String> {
+        let id = worker
+            .move_back(moved.to_vec())
+            .expect("request should be accepted");
+        match next_event(worker) {
+            Event::MovedBack {
+                id: event_id,
+                moved: event_moved,
+                result,
+            } => {
+                assert_eq!(event_id, id);
+                assert_eq!(event_moved, moved);
+                result
+            }
+            other => panic!("unexpected event {other:?}"),
+        }
+    }
+
+    /// The names of the entries in `folder`, sorted.
+    fn names(folder: &Path) -> Vec<String> {
+        let mut names: Vec<String> = std::fs::read_dir(folder)
+            .expect("read the folder")
+            .map(|entry| {
+                entry
+                    .expect("folder entry")
+                    .file_name()
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .collect();
+        names.sort();
+        names
+    }
+
+    #[test]
+    fn move_image_moves_the_image_and_its_sidecar_and_releases_the_image() {
+        let folder = TempDir::new("move");
+        let journal = TempDir::new("move-journal");
+        let raw = raw_with_sidecar(folder.path());
+        let target = folder.path().join("_rejected");
+        let check = RecordingCheck::default();
+        let mut worker = start_without_exiftool(
+            "move",
+            Some(setup_with(journal.path(), Box::new(check.clone()))),
+        );
+
+        let moved = move_result(&mut worker, &raw, &target).expect("the move should succeed");
+
+        assert_eq!(
+            moved,
+            vec![
+                Moved {
+                    from: raw.clone(),
+                    to: target.join("TN0001.ARW"),
+                },
+                Moved {
+                    from: folder.path().join("TN0001.xmp"),
+                    to: target.join("TN0001.xmp"),
+                },
+            ]
+        );
+        assert_eq!(names(&target), ["TN0001.ARW", "TN0001.xmp"]);
+        assert_eq!(names(folder.path()), ["_rejected"]);
+        assert_eq!(check.released(), vec![raw]);
+    }
+
+    #[test]
+    fn a_move_sent_after_a_rating_write_is_answered_after_it() {
+        let folder = TempDir::new("move-order");
+        let journal = TempDir::new("move-order-journal");
+        let raw = raw_with_sidecar(folder.path());
+        let target = folder.path().join("_rejected");
+        let mut worker = start_without_exiftool("move-order", Some(test_setup(journal.path())));
+
+        let write = worker
+            .write_rating(
+                raw.clone(),
+                Rating {
+                    stars: Some(1),
+                    label: None,
+                },
+            )
+            .expect("request should be accepted");
+        let moving = worker
+            .move_image(raw, target, strings(&["arw"]), Vec::new())
+            .expect("request should be accepted");
+
+        match next_event(&worker) {
+            Event::RatingWritten { id, .. } => assert_eq!(id, write),
+            other => panic!("expected the rating write first, got {other:?}"),
+        }
+        match next_event(&worker) {
+            Event::Moved { id, result, .. } => {
+                assert_eq!(id, moving);
+                assert!(result.is_ok(), "{result:?}");
+            }
+            other => panic!("expected the move second, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_failing_move_names_the_file_and_moves_nothing() {
+        let folder = TempDir::new("move-fails");
+        let journal = TempDir::new("move-fails-journal");
+        let raw = raw_with_sidecar(folder.path());
+        let target = folder.path().join("_rejected");
+        std::fs::create_dir(&target).expect("create the target");
+        std::fs::write(target.join("TN0001.xmp"), b"already here").expect("write the taken name");
+        let mut worker = start_without_exiftool("move-fails", Some(test_setup(journal.path())));
+
+        let result = move_result(&mut worker, &raw, &target);
+
+        let error = result.expect_err("the move should fail");
+        assert!(error.contains("TN0001.xmp"), "{error}");
+        assert_eq!(names(&target), ["TN0001.xmp"]);
+        assert_eq!(
+            std::fs::read(target.join("TN0001.xmp")).expect("read the taken name"),
+            b"already here"
+        );
+        assert_eq!(
+            names(folder.path()),
+            ["TN0001.ARW", "TN0001.xmp", "_rejected"]
+        );
+    }
+
+    #[test]
+    fn move_back_returns_the_files() {
+        let folder = TempDir::new("move-back");
+        let journal = TempDir::new("move-back-journal");
+        let raw = raw_with_sidecar(folder.path());
+        let target = folder.path().join("_rejected");
+        let check = RecordingCheck::default();
+        let mut worker = start_without_exiftool(
+            "move-back",
+            Some(setup_with(journal.path(), Box::new(check.clone()))),
+        );
+        let moved = move_result(&mut worker, &raw, &target).expect("the move should succeed");
+
+        assert_eq!(move_back_result(&mut worker, &moved), Ok(()));
+
+        assert_eq!(
+            names(folder.path()),
+            ["TN0001.ARW", "TN0001.xmp", "_rejected"]
+        );
+        assert_eq!(names(&target), Vec::<String>::new());
+        let mut released = vec![raw];
+        released.extend(moved.iter().map(|m| m.to.clone()));
+        assert_eq!(check.released(), released);
+    }
+
+    #[test]
+    fn the_image_is_released_even_when_its_extension_is_not_listed() {
+        let folder = TempDir::new("move-unlisted");
+        let journal = TempDir::new("move-unlisted-journal");
+        let image = folder.path().join("TN0001.tiff");
+        std::fs::write(&image, b"image").expect("write the image");
+        let target = folder.path().join("_rejected");
+        let check = RecordingCheck::default();
+        let mut worker = start_without_exiftool(
+            "move-unlisted",
+            Some(setup_with(journal.path(), Box::new(check.clone()))),
+        );
+
+        move_result(&mut worker, &image, &target).expect("the move should succeed");
+
+        assert_eq!(check.released(), vec![image]);
+        assert_eq!(names(&target), ["TN0001.tiff"]);
+    }
+
+    #[test]
+    fn a_missing_image_fails_with_its_name() {
+        let folder = TempDir::new("move-missing");
+        let journal = TempDir::new("move-missing-journal");
+        let image = folder.path().join("TN0009.ARW");
+        let target = folder.path().join("_rejected");
+        let mut worker = start_without_exiftool("move-missing", Some(test_setup(journal.path())));
+
+        let error = move_result(&mut worker, &image, &target).expect_err("the move should fail");
+
+        assert!(error.starts_with("Could not move TN0009.ARW: "), "{error}");
+        assert!(!target.exists());
+    }
+
+    #[test]
+    fn without_a_setup_moves_fail_and_nothing_moves() {
+        let folder = TempDir::new("move-no-journal");
+        let raw = raw_with_sidecar(folder.path());
+        let target = folder.path().join("_rejected");
+        std::fs::create_dir(&target).expect("create the target");
+        let moved_file = target.join("TN0002.ARW");
+        std::fs::write(&moved_file, b"moved earlier").expect("write the moved file");
+        let mut worker = start_without_exiftool("move-no-journal", None);
+
+        assert_eq!(
+            move_result(&mut worker, &raw, &target),
+            Err(NO_JOURNAL.to_string())
+        );
+        let back = [Moved {
+            from: folder.path().join("TN0002.ARW"),
+            to: moved_file,
+        }];
+        assert_eq!(
+            move_back_result(&mut worker, &back),
+            Err(NO_JOURNAL.to_string())
+        );
+
+        assert_eq!(
+            names(folder.path()),
+            ["TN0001.ARW", "TN0001.xmp", "_rejected"]
+        );
+        assert_eq!(names(&target), ["TN0002.ARW"]);
     }
 
     /// The tests below write through a real ExifTool (`exiftool` on PATH, or `PW_EXIFTOOL_PL`

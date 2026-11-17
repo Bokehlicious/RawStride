@@ -82,6 +82,10 @@
   for an unread image is the default; `restore` shows and queues the exact rating.
   `moves_text.rs`: each text, with 1 and with more.
 - **Not in this task:** the worker's events in the shell (T173); the keys, menu and wiring (T174).
+  A failed move's answer is text only (T170): when `move_group` could not move every file back,
+  the text names where those files are now (`MoveError`'s `Display`), but they are not in the
+  batch's moves, so the undo list cannot move them back (accepted; `backlog.md`, "Leftovers from
+  the review of T170").
 - **Rules:** AGENTS.md §3; `docs/tasks/README.md` rule 13.
 - **Done when:** `.\tools\check.ps1` is all OK and `git diff --stat` shows only the files above.
 
@@ -91,3 +95,4 @@
 |---|---|---|
 | 2026-11-17 | Blocked | Added for ADR 0017 U9b; rewritten after the cold read of the first T171–T172 (the batch does not mark images sent by itself, partners moved by another image are not failures, `restore` takes the rating from `current_rating`, `tabs_of_folder_mut`); waits for T171 |
 | 2026-11-17 | Blocked | Cold read: `replace_files`'s `rating_of` type and its refilter rule made exact, paths in the tab's own form for it and absolute for the store; `worker_stopped_text` exported here for T174 |
+| 2026-11-17 | Blocked | Review of T170: a failed move's files that could not be moved back are only named in the text, not undone ("Not in this task", `backlog.md`) |

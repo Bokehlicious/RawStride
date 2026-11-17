@@ -1,4 +1,4 @@
-# T171. ADR 0017 U9b, third part: the two move settings — Blocked: waits for T170
+# T171. ADR 0017 U9b, third part: the two move settings — Open
 
 - **Chain:** T169 → T170 → T171 → T172 → T173 → T174. The owner's answers U9-Q5–U9-Q10 are in
   ADR 0017 §6.1.
@@ -41,3 +41,4 @@
 |---|---|---|
 | 2026-11-17 | Blocked | Added for ADR 0017 U9b, split out after the cold read of the first T171–T172; waits for T170 |
 | 2026-11-17 | Blocked | Cold read: every place that breaks without `Copy` named (`main.rs`, `preview.rs`, `settings.rs`'s tests), the doc comment, the lines' order, no report of a bad line |
+| 2026-11-17 | Open | T170 is done |

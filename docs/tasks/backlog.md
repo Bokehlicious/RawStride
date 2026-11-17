@@ -156,6 +156,17 @@ and reviewer:
   - *Large folders:* every name in the folder is lower-cased and sorted, though only names
     starting with `<base>.` can match. Filter on that prefix while reading if T174's hand check
     finds a reject or pick slow in a large folder.
+- **Leftovers from the review of T170** (`/code-review`, 2026-11-17; the histogram stamp is
+  T177):
+  - *A view core may open the file again between the release and the move:* the worker releases
+    the image files one by one and then moves them; a render or prefetch in between opens a new
+    session, and the move fails with "open in another program". The same gap exists before a
+    safe write. If T174's hand check sees it, a task holds the view cores' reopening of the
+    group's files until the move's answer.
+  - *A failed move's error is text only:* `Event::Moved` and `Event::MovedBack` carry
+    `MoveError` as a `String`, so its `left` (files that could not be moved back) is lost for
+    the undo list (T172); the text names where they are. A structured error would let the shell
+    show them and offer an undo.
 
 Removed on 2026-11-13 because they are done or planned elsewhere: ADR 0010 steps M3–M7 (done,
 T30–T40); ADR 0011 step K4 (done, T26–T29); moving rejected or picked images to `_rejected` /

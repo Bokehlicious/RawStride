@@ -1,4 +1,4 @@
-# T174. ADR 0017 U9b, last part: the keys, the menu items, the moves and the undo in the shell — Blocked: waits for T173
+# T174. ADR 0017 U9b, last part: the keys, the menu items, the moves and the undo in the shell — Blocked: waits for T173 and T177
 
 - **Chain:** T169 → T170 → T171 → T172 → T173 → T174. The owner's answers U9-Q5–U9-Q10 are in
   ADR 0017 §6.1.
@@ -78,6 +78,10 @@
   7. Answers that come while the metadata window is open are handled as at any other time (the
      keys cannot start a move while it is open). Nothing else changes. A file that another program
      holds open fails with T169's reason and nothing of that image is moved (ADR 0017 §2.6).
+     Known limit (review of T170): between the worker's release and the move a view core may
+     open the file again (a render or prefetch of a near image); the move then fails with that
+     reason. Nothing here prevents it; the hand check shows whether it happens (`backlog.md`,
+     "Leftovers from the review of T170").
 - **Tests to add:** `lib.rs`: P and Ctrl+Z give their commands in both views with exactly those
   modifiers and are in no other key map. `shell.rs`, `shell_text.rs`: the order and texts of the
   new items (extending the existing lists). The wiring in `main.rs` has no unit test (`Loupe`
@@ -102,3 +106,4 @@
 |---|---|---|
 | 2026-11-17 | Blocked | Added for ADR 0017 U9b; rewritten after the cold read of the first T171–T172 (`rate()` gives the targets, absolute paths, every tab of the folder, the message set last, one batch or undo at a time); waits for T173 |
 | 2026-11-17 | Blocked | Cold read: the command arms named (`acts_in`, `command_text`, `command_enabled`, `command_checked`, `run_command`) and the menu places; a key function for P and Ctrl+Z with the usual guards; `QueueFull`/`Stopped` for `move_back`, answers of other ids ignored; the active tab by `same_folder`, `ratings_ready` false for the others; the undo's `current` in the tab's own form; `forget_sort` clears every tab (accepted); the ratings after an undo through `has_image` and a reload; failures also in the Tasks error list; an independent code review |
+| 2026-11-17 | Blocked | Review of T170: also waits for T177 (a move's release notes no histogram stamp); the reopening between release and move named as a known limit in point 7 |

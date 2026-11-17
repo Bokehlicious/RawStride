@@ -1,4 +1,4 @@
-# T170. ADR 0017 U9b, second part: the move as a request to the metadata worker — Open
+# T170. ADR 0017 U9b, second part: the move as a request to the metadata worker — Done
 
 - **Chain:** T169 → T170 → T171 → T172 → T173 → T174. The owner's answers U9-Q5–U9-Q10 are in ADR 0017 §6.1.
 - **Why:** ADR 0017 §2.6: a pending rating or metadata write to the file or its sidecar is
@@ -60,3 +60,6 @@
 | 2026-11-17 | Blocked | Added for ADR 0017 U9b; waits for T169 |
 | 2026-11-17 | Blocked | Cold read: the new `Event` variants break `pw-loupe`'s exhaustive match, so `metadata.rs` gets an ignoring arm here (named); the existing all-variants test is extended; a recording `ImageCheck` must be written; a move ignores ExifTool's state (the loop's start attempt stays); `NO_JOURNAL` as text; image extensions compared without case |
 | 2026-11-17 | Open | T169 is done (`pw_metadata::relocate`: `companions`, `move_group`, `move_back`, `Moved`, `MoveError`) |
+| 2026-11-17 | Ready for review | `move_image`/`move_back`, `Request::Move`/`MoveBack`, `Event::Moved`/`MovedBack` in `worker.rs` (no ExifTool used; `NO_JOURNAL` without a setup); `Moved` and `MoveError` were already re-exported, so `lib.rs` is unchanged; an ignoring arm in `pw-loupe`'s `apply`; five worker tests with a recording `ImageCheck`; `docs/test-inventory.md` (pw-metadata 395 incl. 1 ignored; the row said 389 before, one short). `check.ps1` all OK, 1751 passed, 66 ignored |
+| 2026-11-17 | Review | Reviewer: as written, `check.ps1` all OK. Independent review (`/code-review high`), 8 findings: (1) a move's release notes a histogram stamp in the program that no answer takes → T177, before T174; (2) a view core may reopen a file between release and move → known limit in T174 point 7 and `backlog.md`; (3) `MoveError::left` lost as text → T172 "Not in this task" and `backlog.md`; (4) the image itself now always released, (5) a failed folder read now names the image (`Could not move <name>: …`), both fixed by the reviewer on the owner's word, with two tests; (6) the ExifTool start attempt kept as the task says; (7) the names kept; (8) the order test shows only the order of events, as the task says. `check.ps1` all OK, 1753 passed, 66 ignored |
+| 2026-11-17 | Done | Approved by the owner; leftovers in T172, T174, T177 and `backlog.md` |

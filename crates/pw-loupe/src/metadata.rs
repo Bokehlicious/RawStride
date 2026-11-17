@@ -993,6 +993,8 @@ impl MetadataCache {
                     }
                 }
             }
+            // The moves (T170) are not sent by the shell yet; T172 handles their answers.
+            WorkerEvent::Moved { .. } | WorkerEvent::MovedBack { .. } => {}
         }
     }
 }
