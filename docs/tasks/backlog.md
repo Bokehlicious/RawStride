@@ -3,6 +3,22 @@
 These need design decisions, new dependencies or platform-specific code, and stay with the owner
 and reviewer:
 
+- **To be written as tasks** (owner, 2026-11-17, the first backlog sort; after T179 and T180):
+  1. *A wrong Artwork Date Created* (from the review of T143): **owner's decision:** when OK
+     writes nothing because of a field error, the status line says so too, not only the text
+     under the box.
+  2. *RAW statistics on X-Trans* (from T142): tests of `statistics.rs` on the five Fujifilm
+     X-T30 RAF files the owner added to `PW_TESTDATA` on 2026-11-15 (_DSF4243–_DSF4271, one
+     with clipping, _DSF4271); a black level per position and three- or four-colour RAW still
+     have no sample files.
+  3. *A tab on `_rejected` or `_picked`, and Ctrl+Z while a move runs* (from the review of
+     T174), one task: a tab open on `_rejected` or `_picked` itself is updated after a move or
+     an undo (today only the images' own folders are); Ctrl+Z while a batch or an undo runs
+     shows a text that a move is still running.
+  4. *`release_for_move` a required method* (from the review of T177): each `ImageCheck` decides
+     it, so a new check or a wrapper (as `Timed` in `crates/pw-imagecheck/tests/real_files.rs`)
+     cannot note the write stamp before a move again without a warning.
+
 - A timeout when ExifTool hangs (process supervision across threads). Today only the shutdown has a
   timeout (`SHUTDOWN_TIMEOUT` in `pw-metadata`'s `exiftool.rs`).
 - ADR 0007 (IPTC metadata): milestone 8 is done (I1–I13, 2026-11-14; what is left is in ADR 0007
@@ -40,7 +56,7 @@ and reviewer:
   - Later formats (CR3 above all; also NRW, RWL, 3FR, IIQ) need sample files; raw.pixls.us has
     them (mostly CC0, check each file's licence) and LibRaw already renders them.
 - **Eject through the device: known limits** (independent review of T156, 2026-11-16; none of
-  them affects the owner's readers): `reader_device` ejects the disk's direct parent, so a reader
+  them affects the owner's readers; **kept** at the sort of 2026-11-17): `reader_device` ejects the disk's direct parent, so a reader
   that is a composite USB device (`USB\VID_…&MI_00`) would be refused; walking up with
   `CM_Get_Parent` to the nearest node with `DN_REMOVABLE` would fix it. `on_usb` uses a buffer of
   exactly `STORAGE_DEVICE_DESCRIPTOR`'s size; a driver that answers `ERROR_MORE_DATA` would make
@@ -105,17 +121,6 @@ and reviewer:
   catalog, no weaker than today. Needs an ADR first: a library (Fluent, rust-i18n; a new
   dependency, the owner's approval) or our own simple table. The Swedish names of the item above
   would become the second language's catalog.
-- **Leftovers from the review of T142–T145 (2026-11-15):**
-  - *A wrong Artwork Date Created* (T143, noted, not changed): with a date that is not a valid IPTC
-    date, OK writes nothing and the reason is shown only under that box; "Copy All Fields" then
-    copies the file's earlier date. Needs the owner's view on how the window should tell it.
-  - *RAW statistics test files* (T142): no test file covers X-Trans, a black level per position,
-    or three- or four-colour RAW data. Needs sample files from the owner in `PW_TESTDATA`
-    (`docs/test-inventory.md`, `statistics.rs`).
-  - *The 100 % view first, measured* (T144, ADR 0017 U7c-Q5): `latency.ps1`'s 100 % run steps to a
-    neighbour whose 100 % view is already prefetched, so it cannot show the gain of U7c-Q5. A
-    measurement of Z pressed right after an image is opened would need a change to the script, so
-    a task first (tool changes go through `docs/tasks/`).
 - **Smaller functions, not important** (owner, 2026-11-17, after ADR 0018–0025): each needs an
   ADR with the owner's answers before any task. Choosing images on the card before an import;
   importing from several cards at once; spell checking in the metadata window; a custom sort order
@@ -152,20 +157,14 @@ and reviewer:
   - A binary release also needs what ADR 0002 §4 lists (distribution folder,
     `THIRD-PARTY-NOTICES.txt`, ExifTool).
 - **Known limits of `relocate::companions`** (`/code-review` of T169, 2026-11-17; accepted, the
-  moves are Windows only):
+  moves are Windows only; **kept** at the sort of 2026-11-17 until a Linux or macOS port):
   - *Case-sensitive file systems:* a file whose name differs from the image's only in case is
     skipped as if it were the image, so it does not move with the group.
   - *Links and read errors:* a sidecar that is a symbolic link or junction is not listed (it
     stays behind); one entry that cannot be read fails the whole listing.
-  - *Large folders:* every name in the folder is lower-cased and sorted, though only names
-    starting with `<base>.` can match. Filter on that prefix while reading if T174's hand check
-    finds a reject or pick slow in a large folder.
-- **Leftovers from the review of T174** (`/code-review`, 2026-11-17; findings 1–3 are T178):
-  - *A tab open on `_rejected` or `_picked` itself* is not updated after a move or an undo
-    (only the tabs of the images' own folders are); it lists files that have left, or misses
-    the new ones, until it is opened again.
-  - *Ctrl+Z while a batch or an undo runs* does nothing and shows nothing (the menu item is
-    greyed then); a text could say that a move is still running.
+- **Leftovers from the review of T174** (`/code-review`, 2026-11-17; findings 1–3 are T178; the
+  tab on `_rejected` and Ctrl+Z are task 3 above; the rest **kept** at the sort of 2026-11-17:
+  tidying the user does not see, and rare races a move's undo puts right):
   - *The undo's state lives in `main.rs`* (`MoveRun::Undo`, `UndoImage`) without unit tests,
     beside `Batch` in `moves.rs`; an `UndoRun` in `moves.rs` would make it testable. Also
     small: `forget_sort` after an undo clears every tab's sort, not only the listed tabs';
@@ -179,26 +178,19 @@ and reviewer:
     whose move failed in the running batch is left out until that batch is done (`contains`
     holds it, since a failed answer may be a JPG its RAW partner moved along).
 - **Leftovers from the review of T177** (`/code-review`, 2026-11-17; accepted, nothing breaks
-  today):
-  - *The default `release_for_move` calls `release`:* a new `ImageCheck`, or a wrapper of
-    `RawImageCheck` that forwards only `release` (as `Timed` in
-    `crates/pw-imagecheck/tests/real_files.rs` does), would note the write stamp before a move
-    again, without a warning. Making `release_for_move` a required method would make each
-    implementation decide.
+  today; the required method is task 4 above; the design below **kept** at the sort of
+  2026-11-17, for when `ImageCheck` is next changed):
   - *A cleaner design:* the stamp is part of the write, not of the release. A write-only hook
     (for example `ImageCheck::before_write`, called only by the safe write) would let `release`
     be the same for writes and moves, and `with_move_release` and the second closure could go.
 - **Leftovers from the review of T170** (`/code-review`, 2026-11-17; the histogram stamp is
-  T177):
+  T177; the reopening **kept** at the sort of 2026-11-17, not seen in the owner's hand check of
+  U9b; the text-only error moved to ADR 0018 B2 in `plans/adr-0018-0025-steps.md`):
   - *A view core may open the file again between the release and the move:* the worker releases
     the image files one by one and then moves them; a render or prefetch in between opens a new
     session, and the move fails with "open in another program". The same gap exists before a
     safe write. If T174's hand check sees it, a task holds the view cores' reopening of the
     group's files until the move's answer.
-  - *A failed move's error is text only:* `Event::Moved` and `Event::MovedBack` carry
-    `MoveError` as a `String`, so its `left` (files that could not be moved back) is lost for
-    the undo list (T172); the text names where they are. A structured error would let the shell
-    show them and offer an undo.
 
 Removed on 2026-11-13 because they are done or planned elsewhere: ADR 0010 steps M3–M7 (done,
 T30–T40); ADR 0011 step K4 (done, T26–T29); moving rejected or picked images to `_rejected` /
@@ -207,3 +199,6 @@ app's `ui/` (owner: dropped, the Tauri app is retired at the switch, GR8). Remov
 "Same folder, two tabs" (done, T119); suppressing the Windows "no disk in drive" dialog (done, T135: `SetErrorMode` at start). Removed on 2026-11-17: "Mark a card imported before the
 register" (now T166) and "The compare after a move that did not happen" (now T165); "The clean-room policy and the documents
 disagree" (the owner's rule in `clean-room.md`, "Naming other products"; the rewording is T175).
+Struck at the backlog sort of 2026-11-17 (owner): the measurement of the 100 % view first (T144,
+U7c-Q5; the step is done and the gain small) and the large-folder limit of `relocate::companions`
+(not seen in the hand check of U9b).
