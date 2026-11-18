@@ -23,7 +23,17 @@ Claude Code sessions. Do not repeat or reinterpret `AGENTS.md` here.
   breaks on quoting in this environment.
 - A handful of exact replacements in one file is done with the Edit tool, not a script.
 
-## 4. Completion Report
+## 4. Large Files
+- A document over about 20 kB is not read whole. Find the part needed first (`grep -n '^## '` for
+  the headings, or a search for the term) and read only that range with offset and limit.
+- `docs/adr/0007-metadata-iptc.md` (~80 kB) is read one section at a time.
+- `docs/test-inventory.md` (~145 kB, lines over 1,000 characters) is never read whole: only the
+  matching lines are searched, read with `cut -c` or an awk `substr` range, and changed by
+  script (`AGENTS.md` and §3 apply).
+- `test-output.txt` and other build or test logs are read through a search (`^test result:`,
+  `error`, `warning`), not whole.
+
+## 5. Completion Report
 - Every file modified or created, what changed in each and why.
 - The tests actually run, with the summary from `test-output.txt` (`.\tools\check.ps1`), or a
   statement that no tests were run and why.
