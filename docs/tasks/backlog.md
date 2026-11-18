@@ -7,7 +7,7 @@ and reviewer:
   timeout (`SHUTDOWN_TIMEOUT` in `pw-metadata`'s `exiftool.rs`).
 - ADR 0007 (IPTC metadata): milestone 8 is done (I1–I13, 2026-11-14; what is left is in ADR 0007
   §18). Also later:
-  GPS → Location Created (§6.1), left out of T81 (ImageEditor ↔ Contributor is T192); editing a
+  editing a
   list whose items have qualifiers with the qualifiers kept (§8; T193 only keeps such a list
   unwritten; needs RawStride to edit the XMP packet itself, since ExifTool 13.59 cannot change or
   remove a qualified item). Also from T193's chain review (2026-11-18): the import's
@@ -15,7 +15,7 @@ and reviewer:
   plan notices), and the editor gives no warning before OK that the list will not be written;
   from §10, left out of T88: template sub-fields of lists of
   structures (Location Created, Image Creator, Copyright Owner, Licensor), variables (`{date}` …),
-  template files in XMP with the modes (where the modes are stored is decided with U13). Left out of I10: the other controlled vocabularies of §11; editing several
+  template files in XMP with the modes (where the modes are stored is decided with U13). Left out of I10: editing several
   images at once and lists of structures are now ADR 0017 U12 and U11.
 - **Future improvement (owner, 2026-11-12, after D11):** Swedish names for **every** IPTC property
   and structure field in T102's name table, so the Swedish info panel and editor show no English

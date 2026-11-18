@@ -28,6 +28,9 @@
     dropped (§17.1).
   - **Sources checked (2026-11-18, revision 20):** Q3 and Q8 confirmed by IIM 4.2 and XMP Part 3;
     the Lang Alt rule (Q7) is a deliberate deviation from a "should" of XMP Part 1 (§8, §13).
+  - **Amended by the owner (2026-11-18, revision 22):** camera GPS fills the coordinates of
+    Location Created (§6.7); Scene Code, Subject Code and Genre are checked against IPTC's
+    NewsCodes (§11).
   - **Amended by the owner (2026-11-18, revision 21):** Image Editor ↔ Contributor (§6.6); a list
     whose items have qualifiers is not written (§8).
 - Date: 2026-11-04 (revision 1: storage, IIM policy and the role of XMP; revision 2: all owner
@@ -302,7 +305,7 @@ Urgency (2:10), Category (2:15) and Supplemental Categories (2:20):
 | Contributor with the role "Content Editor" | ImageEditor 0xA438 (Exif 3.0) | both ways (§6.6) | [IPTC-MG Exif Note on Contributor] |
 | Date Created | DateTimeOriginal + SubSecTimeOriginal + OffsetTimeOriginal | **Exif → IPTC only** (§7) | [IPTC-MG]; [Product] |
 | Digital Image GUID | ImageUniqueID 0xA420 | **Exif → IPTC only**; the IPTC value is then not changed | [IPTC-MG Exif Note on Digital Image GUID] |
-| Location Created | GPS tags 1–6 | Exif → IPTC, only when recorded by the camera | [IPTC-MG]; [MWG §5.8.5] |
+| Location Created | GPS tags 1–6 | Exif → IPTC, only when recorded by the camera; the coordinates only (§6.7) | [IPTC-MG]; [MWG §5.8.5] |
 | Location Shown | — | **never mapped from GPS** | [IPTC-MG Exif Note on Location Shown] |
 | Image Region | — | **never mapped from SubjectArea** | [IPTC-MG Exif Note on Image Region] |
 
@@ -402,6 +405,20 @@ Urgency (2:10), Category (2:15) and Supplemental Categories (2:20):
   written to ImageEditor if the tag exists (§6.3: never created); without a content editor
   ImageEditor is removed. It is never written to Artist. [IPTC-MG Exif Note on Contributor];
   [Product] for not creating
+
+### 6.7 Camera GPS → Location Created (owner, 2026-11-18)
+
+- **What is mapped:** only the coordinates. GPS tags 1–6 (latitude, longitude, altitude and their
+  references) fill the sub-fields GPS Latitude, GPS Longitude and GPS Altitude (with GPS Altitude
+  Ref) of Location Created. [MWG §5.8.5]; [IPTC-MG]
+- **Reading:** as every Exif field (§6.2): the camera's coordinates fill Location Created when it
+  has no coordinates; a Location Created with other coordinates is a conflict, XMP wins. The
+  other sub-fields (city, country …) are never filled from a position. How close two coordinates
+  must be to count as equal is decided in the task. [Product]
+- **Writing:** never (§6.3, "Exif → IPTC only").
+- **Not here:** filling city, country and location from a position (reverse geocoding), a GPX
+  track and a map need network or new dependencies and belong to the GPS ADR (ADR 0017 §7.2).
+  [Product]
 
 ## 7. Date, time and time zone
 
@@ -583,6 +600,17 @@ Each template field has one of four modes. The default is **Keep**. [Product]
 - **Dates:** the forms of IPTC §14.2; no time zone added (§7).
 - **URIs:** for controlled-vocabulary properties (Digital Source Type: IPTC NewsCodes [IPTC
   §11.13]).
+- **The other IPTC NewsCodes (owner 2026-11-18, revision 22):** a warning, never a refusal; an
+  unknown value is kept and shown, never removed (as the PLUS properties below).
+  - **Scene Code:** each entry 6 digits and a code of IPTC Scene NewsCodes
+    (`http://cv.iptc.org/newscodes/scene/`) [IPTC §7.21: "Required: IPTC Scene NewsCodes"];
+  - **Subject Code:** each entry 8 digits; not checked against the vocabulary, as IPTC retired it
+    before 2010 and points to Media Topics in CV-Term About Image [IPTC §7.23];
+  - **Genre** (Extension): checked against IPTC Genre NewsCodes only when the entry's CV ID is
+    that vocabulary (`http://cv.iptc.org/newscodes/genre/`); a term from another vocabulary is not
+    checked, as Genre allows any controlled vocabulary [IPTC §11.17];
+  - **Intellectual Genre** (legacy): not checked; IPTC names no required vocabulary [IPTC §7.16];
+  - the Scene and Genre vocabularies are read and saved before implementation (§16 point 7).
 - **PLUS properties** (Model Release Status, Property Release Status, Minor Model Age Disclosure,
   Data Mining) **(Q9, owner 2026-11-11):**
   - edited as a fixed choice list with the vocabulary's English labels (GR14; ADR 0017 U10d-Q3,
@@ -732,6 +760,8 @@ silently. All other deviations concern SHOULD-level recommendations; each is mar
 6. ~~**Level-C samples**~~ (Q11, the set changed 2026-11-14, §12) – received 2026-11-14 and
    tested by T127 (`crates/pw-metadata/tests/level_c.rs`); what they showed is in §4.2 and §6.4,
    and they led to T129 (§5.1) and to the PLUS codes of §11.
+7. **Read IPTC Scene NewsCodes and IPTC Genre NewsCodes** (§11, revision 22) and save them in
+   `D:\PhotoWorkflowData\references\` (R4) before the task that checks them.
 
 ## 17. Decisions during implementation (D1–D16)
 
@@ -791,11 +821,11 @@ listed under the table (§17.1).
 - §6.6 Exif ImageEditor ↔ Contributor: T192.
 - §8 lists with qualifiers not written: T193, T194. Editing such a list with its qualifiers kept
   (`docs/tasks/backlog.md`).
-- §6.1 GPS → Location Created (`docs/tasks/backlog.md`; GPS gets the next metadata ADR after
-  ADR 0017, its §7.2).
+- §6.7 camera GPS → the coordinates of Location Created: a task (not yet written). Reverse
+  geocoding, GPX and a map: the GPS ADR after ADR 0017 (its §7.2).
+- §11 the other IPTC NewsCodes (Scene Code, Subject Code, Genre): a task after §16 point 7.
 - From §10: template sub-fields of lists of structures, variables, template files in XMP
   (`docs/tasks/backlog.md`; ADR 0017 U13).
-- The other controlled vocabularies of §11 (`docs/tasks/backlog.md`).
 - Image Region (ADR 0017 U11b). The other lists of structures and editing several images are done
   (ADR 0017 U11, U12; T136–T143, T125, T126, T179, T180).
 - The Tauri app keeps its in-place write (D7) until it is retired (GR8).
@@ -825,3 +855,4 @@ listed under the table (§17.1).
 | 19 | 2026-11-18 | Owner changed Q2: a cleared field of a manufacturer RAW is not marked and is filled again from the camera's Exif (§6.4, §13, Q2); D1 dropped (§17, §17.1); §18 brought up to date (U11 and U12 done) |
 | 20 | 2026-11-18 | §16 point 5 done: XMP Part 1 (ISO 16684-1:2011), XMP Part 3, IIM 4.2 and MWG §5.2 read (R3); labels [XMP-1], [XMP-3], [IIM 4.2] (§1.1). Q3 and Q8 confirmed (§4.2, §5.3, §7, §13, §14); Q7 compatible with MWG §5.2 and marked [Product ≠ std] against an [XMP-1 §8.2.2.4] "should" (§8, §13, §14), as revision 8 foresaw; §18 brought up to date. No rule changed |
 | 21 | 2026-11-18 | Owner decisions: §6.6 Image Editor ↔ Contributor (the content editor by its Role URI, `http://` too; Exif fills an absent Contributor, otherwise a conflict whose Exif side keeps the other Contributors; ImageEditor written only if it exists); §8 a list whose items have qualifiers is shown but not written, after a check showed that ExifTool 13.59 cannot change or remove a qualified item; §18: T192, T193, T194 |
+| 22 | 2026-11-18 | Owner decisions: §6.7 camera GPS fills only the coordinates of Location Created (no network, no new dependency; reverse geocoding, GPX and a map stay with the GPS ADR); §11 Scene Code (6 digits, IPTC Scene NewsCodes), Subject Code (8 digits, format only) and Genre (IPTC Genre NewsCodes only when its CV ID is that vocabulary) give warnings, Intellectual Genre is not checked; §16 point 7 reads the two vocabularies (R4); §18 brought up to date |
