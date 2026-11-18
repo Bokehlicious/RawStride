@@ -1,4 +1,4 @@
-# T189. ADR 0018 B4: the Delete key, the menu item, the confirmation window and the deletes in the shell (pw-loupe) — Blocked: waits for T188
+# T189. ADR 0018 B4: the Delete key, the menu item, the confirmation window and the deletes in the shell (pw-loupe) — Open
 
 - **Chain:** T185 (B1) → T186 (B2) → T187, T188 (B3) → T189 (B4) → T190 (B5). The owner's
   answers are B-Q1–B-Q15 in ADR 0018 §3; how the steps fit is ADR 0018 §2.10.
@@ -16,17 +16,17 @@
      Delete, no modifier), the **last** item of the Image menu, after `Command::ToggleMode`, with
      a separator before it (`shell.rs` about line 698). Its text in `command_text`
      (`shell_text.rs`); `acts_in` gives `Where::Both` through its default arm; the arms of
-     `command_enabled` and `run_command` are in `main.rs` (about lines 4376 and 4443):
+     `command_enabled` and `run_command` are in `main.rs` (about lines 4428 and 4495):
      greyed while the active tab shows no current image (`tab.position().is_some()`, as the
      rating items) or has no folder (`tab.folder.is_none()`: such a tab's list is not followed
      after a delete, so it is not offered there). It is not greyed while a move or a delete
-     runs: then it says so (point 3). Extend the menu tests (`shell.rs` about lines 1018–1070,
+     runs: then it says so (point 3). Extend the menu tests (`shell.rs` about lines 1026–1077,
      `shell_text.rs` about lines 420 and 480; the key column shows "Delete").
   2. **Key** (`lib.rs`): `pub fn delete_key_action(key: egui::Key, ctrl: bool, shift: bool, alt:
      bool) -> bool`: `egui::Key::Delete` with no modifier. Read in `main.rs` right after the move
      keys, with the same guards (`!ctx.egui_wants_keyboard_input()`, nothing while
      `dialog_open()`), and it runs the command. Teach the test helper `command_of_key` (in `lib.rs`'s tests, about
-     line 994) the same order, in both views, so `every_menu_key_gives_its_items_command` holds.
+     line 1003) the same order, in both views, so `every_menu_key_gives_its_items_command` holds.
      Delete is a key of no other key map.
   3. **Starting a delete** (`main.rs`, a new `delete_images(&mut self)` that the command runs):
      - while a move or an undo runs or waits (`self.moves.busy()`): the status line shows
@@ -51,7 +51,7 @@
        the window is shown only (a `bool` in `Loupe`, set when the step becomes `Confirming`), so
        Tab can still move the focus to Delete;
      - **keys:** `dialog_open()` does not stop every key (it guards only some), so a branch at the
-       top of the key loop, as the metadata window's (about line 5126), takes every key while the
+       top of the key loop, as the metadata window's (about line 5178), takes every key while the
        step is `Confirming`: Escape cancels; Enter cancels unless the Delete button has the focus
        (`ctx.memory(|m| m.has_focus(id))`; then egui clicks it); every other key does nothing.
        `dialog_open()` also returns true while `Confirming`, so the menus are greyed;
@@ -159,3 +159,4 @@
 | 2026-11-17 | Blocked: waits for T188 and T183 | The window names the image files that go along (`plan.partners`, ADR 0018 B-Q18) |
 | 2026-11-17 | Blocked: waits for T188 | T183 is Done and committed: waits for T188 only. T183 changed `batch_done`, `undo_done` and `undo_move` in `main.rs` and added `relist_tabs`: line numbers to be checked when this task is set Open |
 | 2026-11-18 | Blocked: waits for T188 | From the independent review of T186: a delete that is refused at the worker (a file open in another program, or the drive or the size refused after the confirmation) has already released the view cores' sessions of the image, as a failed move does. The image reopens as after a failed move; the owner's hand check of this task looks at the image after such a refused delete. Answers are matched by `id` and the event's `image`, not by `DeleteError::file` (which for an error from `companions` is the image made absolute) |
+| 2026-11-18 | Open | T188 is Done and committed (`ac84036`): set Open. Line numbers checked after T183–T188 and corrected: `command_enabled` and `run_command` about 4428 and 4495 (were 4376, 4443), the menu tests in `shell.rs` about 1026–1077 (were 1018–1070), `command_of_key` about 1003 (was 994), the metadata window's key branch about 5178 (was 5126); the Image menu's `ToggleMode` (about 697) and the `shell_text.rs` tests (about 419, 479) are where the brief says. T188's `#[cfg_attr(not(test), allow(dead_code))]` items for point 9 are in `metadata.rs` (`MetadataSubmit::prepare_delete`, `delete_image`, `DeleteAnswer`, `take_deletes`, `forget_deleted`) |

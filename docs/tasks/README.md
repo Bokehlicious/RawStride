@@ -86,7 +86,7 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status |
 |---|---|---|
-| [T189](T189-delete-key-menu-window-and-wiring.md) | ADR 0018 B4: the Delete key, the menu item, the confirmation window and the deletes in the shell (pw-loupe) | Blocked: waits for T188 |
+| [T189](T189-delete-key-menu-window-and-wiring.md) | ADR 0018 B4: the Delete key, the menu item, the confirmation window and the deletes in the shell (pw-loupe) | Open |
 | [T190](T190-delete-rejected-images.md) | ADR 0018 B5: "Delete Rejected Images" in the active tab's folder (pw-loupe) | Blocked: waits for T189 |
 
 ## Writing a task (owner and reviewer)
