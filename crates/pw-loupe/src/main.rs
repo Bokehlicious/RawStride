@@ -76,7 +76,8 @@ use pw_loupe::{
     DeleteBatch, DeleteStep, delete_button_text, delete_cancel_text, delete_confirm_text,
     delete_failed_text, delete_key_action, delete_partly_failed_text, delete_partners_text,
     delete_refused_text, delete_running_text, delete_title_text, delete_while_moving_text,
-    deleted_text, deletes_failed_text, plan_delete, same_path,
+    deleted_text, deletes_failed_text, image_partners, no_rejected_text, plan_delete,
+    ratings_not_ready_text, refuse_unrejected_partners, rejected_images, same_path,
 };
 use pw_loupe::{
     FILMSTRIP_CELL_WIDTH, FILMSTRIP_IMAGE_HEIGHT, FILMSTRIP_LABEL_HEIGHT, FILMSTRIP_MARGIN,
@@ -774,6 +775,16 @@ struct Loupe {
     /// The active tab's folder when the delete was asked for; `None` while `delete` is `Idle`.
     /// The confirmation is not shown for another tab (T189 point 5).
     delete_folder: Option<PathBuf>,
+    /// Whether the delete under way is Image ▸ Delete Rejected Images (T190): the images no longer
+    /// rejected are left out when the prepare's answer comes and skipped while the batch runs.
+    /// Set false by a plain Delete and whenever `delete` is `Idle` again (`delete_idle`).
+    delete_rejected: bool,
+    /// For Delete Rejected Images, each kept image's partners (`image_partners` of its group in
+    /// the prepare's answer) as the tab's resolved paths (T190 point 6): while the batch runs an
+    /// image waits while one of them has a rating write pending and is skipped when one of them
+    /// is no longer rejected. Kept from the prepare's answer, since the plan does not hold the
+    /// groups; empty for a plain Delete and cleared in `delete_idle`.
+    delete_partners: ImagePartners,
     /// The ids of the deletes sent for the running batch; an answer with another id is ignored.
     /// Cleared when `delete` is `Idle` again.
     delete_ids: HashSet<pw_metadata::RequestId>,
@@ -4482,15 +4493,66 @@ impl Loupe {
             Ok(images) => {
                 self.delete = DeleteStep::Preparing { images, id: None };
                 self.delete_folder = Some(folder);
+                self.delete_rejected = false;
             }
             Err(error) => self.message = Some(error),
         }
+    }
+
+    /// Image ▸ Delete Rejected Images (ADR 0018 §2.1, B-Q9, B5, T190): the same guards as
+    /// `delete_images`; then, when the active tab's folder read failed, that error in the status
+    /// line; when its ratings are otherwise not ready, `ratings_not_ready_text`; with no rejected
+    /// image in the tab's whole list (a filter hides none), `no_rejected_text`. Otherwise the
+    /// rejected images are prepared as Delete's targets are, with `delete_rejected` set.
+    fn delete_rejected(&mut self) {
+        if self.moves.busy() {
+            self.message = Some(delete_while_moving_text().to_owned());
+            return;
+        }
+        if self.delete.busy() {
+            self.message = Some(delete_running_text().to_owned());
+            return;
+        }
+        let Some(tab) = self.tabs.active() else {
+            return;
+        };
+        let Some(folder) = tab.folder.clone() else {
+            return;
+        };
+        if let Some(error) = self.metadata.read_error() {
+            self.message = Some(editor_text(&EditorText::MetadataError { error }));
+            return;
+        }
+        if !self.ratings_ready() {
+            self.message = Some(ratings_not_ready_text().to_owned());
+            return;
+        }
+        let files = match resolve_paths(&tab.files) {
+            Ok(files) => files,
+            Err(error) => {
+                self.message = Some(error);
+                return;
+            }
+        };
+        let metadata = &self.metadata;
+        let images = rejected_images(&files, |path| {
+            metadata.current_rating(path).stars == Some(-1)
+        });
+        if images.is_empty() {
+            self.message = Some(no_rejected_text().to_owned());
+            return;
+        }
+        self.delete = DeleteStep::Preparing { images, id: None };
+        self.delete_folder = Some(folder);
+        self.delete_rejected = true;
     }
 
     /// The delete is over or dropped: the step is `Idle`, and what belongs to it is cleared.
     fn delete_idle(&mut self) {
         self.delete = DeleteStep::Idle;
         self.delete_folder = None;
+        self.delete_rejected = false;
+        self.delete_partners.clear();
         self.delete_ids.clear();
         self.delete_focus_cancel = false;
         self.delete_button = None;
@@ -4542,7 +4604,31 @@ impl Loupe {
             }
             DeleteStep::Running(batch) => {
                 let metadata = &self.metadata;
-                for image in batch.to_send(|path| metadata.is_pending(path)) {
+                let rejected_only = self.delete_rejected;
+                let partners = self.delete_partners.as_slice();
+                // Delete Rejected Images (T190 point 6): an image also waits while one of its
+                // partners has a rating write pending, so its reject is known before it is sent.
+                let waiting = |path: &Path| {
+                    metadata.is_pending(path)
+                        || (rejected_only
+                            && partners_of(partners, path)
+                                .iter()
+                                .any(|partner| metadata.is_pending(partner)))
+                };
+                for image in batch.to_send(waiting) {
+                    // Delete Rejected Images: an image whose reject, or a partner's, was cleared
+                    // since (a key during the delete, or its write failed and was rolled back) is
+                    // not sent (T190 points 4 and 6), as `send_moves` skips an X image no longer
+                    // rejected. The batch's images and the partners are the tab's own resolved
+                    // paths.
+                    if rejected_only
+                        && std::iter::once(&image)
+                            .chain(partners_of(partners, &image))
+                            .any(|path| metadata.current_rating(path).stars != Some(-1))
+                    {
+                        batch.skip(&image);
+                        continue;
+                    }
                     match MetadataSubmit::delete_image(
                         worker,
                         image.clone(),
@@ -4588,12 +4674,34 @@ impl Loupe {
     /// The worker's answer to the prepare (T189 point 5): dropped, with nothing shown, when the
     /// active tab is no longer of the delete's folder; otherwise its plan. With no image to delete
     /// the status line names the refused ones (or is left as it is when there are none) and the
-    /// step is `Idle`; else the confirmation asks.
+    /// step is `Idle`; else the confirmation asks. For Delete Rejected Images (T190) the images no
+    /// longer rejected are left out first (none left: `no_rejected_text`), and a rejected image
+    /// whose RAW+JPEG partner is not rejected is refused (`refuse_unrejected_partners`, B-Q16).
     fn delete_prepared(&mut self, prepared: Vec<PreparedDelete>) {
         if !self.delete_tab_active() {
             self.delete_idle();
             return;
         }
+        let prepared = if self.delete_rejected {
+            match self.still_rejected(prepared) {
+                Ok((prepared, _)) if prepared.is_empty() => {
+                    self.message = Some(no_rejected_text().to_owned());
+                    self.delete_idle();
+                    return;
+                }
+                Ok((prepared, partners)) => {
+                    self.delete_partners = partners;
+                    prepared
+                }
+                Err(error) => {
+                    self.message = Some(error);
+                    self.delete_idle();
+                    return;
+                }
+            }
+        } else {
+            prepared
+        };
         let plan = plan_delete(prepared, is_image_file);
         if plan.images.is_empty() {
             if let Some((image, reason)) = plan.refused.first() {
@@ -4608,6 +4716,46 @@ impl Loupe {
         }
         self.delete = DeleteStep::Confirming(plan);
         self.delete_focus_cancel = true;
+    }
+
+    /// The prepare's answers of Delete Rejected Images that are still rejected, with the partners
+    /// not rejected refused (T190 points 3 and 4). Whether a file is rejected is read through the
+    /// active tab's own path for it: the tab file whose resolved path is `same_path` with it; a
+    /// file not in the tab's list counts as not rejected. Also each kept image's partners
+    /// (`image_partners` of its `Ok` group) as the tab's own resolved paths, for the check while
+    /// the batch runs (point 6); a partner not found in the list (not possible after point 3) is
+    /// kept as the worker gave it and so counts as not rejected then. An error when the paths
+    /// cannot be resolved.
+    fn still_rejected(
+        &self,
+        prepared: Vec<PreparedDelete>,
+    ) -> Result<(Vec<PreparedDelete>, ImagePartners), String> {
+        let files = match self.tabs.active() {
+            Some(tab) => resolve_paths(&tab.files)?,
+            None => Vec::new(),
+        };
+        let tab_path = |path: &Path| files.iter().find(|file| same_path(file, path));
+        let metadata = &self.metadata;
+        let is_rejected = |path: &Path| {
+            tab_path(path).is_some_and(|file| metadata.current_rating(file).stars == Some(-1))
+        };
+        let prepared: Vec<PreparedDelete> = prepared
+            .into_iter()
+            .filter(|answer| is_rejected(&answer.image))
+            .collect();
+        let prepared = refuse_unrejected_partners(prepared, is_rejected, is_image_file);
+        let partners = prepared
+            .iter()
+            .filter_map(|answer| {
+                let group = answer.result.as_ref().ok()?;
+                let partners = image_partners(&group.files, is_image_file)
+                    .into_iter()
+                    .map(|partner| tab_path(&partner).cloned().unwrap_or(partner))
+                    .collect();
+                Some((answer.image.clone(), partners))
+            })
+            .collect();
+        Ok((prepared, partners))
     }
 
     /// The confirmation of a delete (T189 point 4), an `egui::Modal` drawn while the step is
@@ -4805,6 +4953,9 @@ impl Loupe {
             Command::DeleteToRecycleBin => {
                 tab.is_some_and(|tab| tab.position().is_some() && tab.folder.is_some())
             }
+            // Greyed while the active tab has no folder (T190); a running move or delete, ratings
+            // not read yet and no rejected image are said when chosen.
+            Command::DeleteRejected => tab.is_some_and(|tab| tab.folder.is_some()),
             Command::ToggleView => tab.is_some_and(|tab| !tab.visible.is_empty()),
             // Compare opens with two images in the stepped list, and closes an open compare; the
             // other four act only in the compare (T153, T154).
@@ -4868,6 +5019,7 @@ impl Loupe {
             Command::ClearLabel => self.rate_from_menu(RatingKey::ClearLabel),
             Command::ToggleMode => self.act(Action::ToggleMode, None),
             Command::DeleteToRecycleBin => self.delete_images(),
+            Command::DeleteRejected => self.delete_rejected(),
             Command::ToggleView => match self.tabs.active().map(|tab| tab.mode) {
                 Some(ViewMode::Grid) => {
                     self.switch_mode(ViewMode::Loupe);
@@ -6180,6 +6332,19 @@ fn image_name(image: &Path) -> String {
         || image.display().to_string(),
         |name| name.to_string_lossy().into_owned(),
     )
+}
+
+/// Each image of a Delete Rejected Images batch with its partners, as the tab's resolved paths
+/// (`Loupe::delete_partners`, T190 point 6).
+type ImagePartners = Vec<(PathBuf, Vec<PathBuf>)>;
+
+/// The partners kept for `image` (compared as `DeleteBatch` compares its images); none for an
+/// image not listed.
+fn partners_of<'a>(partners: &'a [(PathBuf, Vec<PathBuf>)], image: &Path) -> &'a [PathBuf] {
+    partners
+        .iter()
+        .find(|(known, _)| known == image)
+        .map_or(&[], |(_, files)| files.as_slice())
 }
 
 /// Whether `path` is an image file, one of `pw_raw::SUPPORTED_EXTENSIONS` without regard to case,
@@ -8259,6 +8424,8 @@ fn run(options: Options) -> Result<(), String> {
                 moves: Moves::default(),
                 delete: DeleteStep::Idle,
                 delete_folder: None,
+                delete_rejected: false,
+                delete_partners: Vec::new(),
                 delete_ids: HashSet::new(),
                 delete_focus_cancel: false,
                 delete_button: None,

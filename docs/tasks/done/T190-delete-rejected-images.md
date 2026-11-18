@@ -1,4 +1,4 @@
-# T190. ADR 0018 B5: "Delete Rejected Images" in the active tab's folder (pw-loupe) — Open
+# T190. ADR 0018 B5: "Delete Rejected Images" in the active tab's folder (pw-loupe) — Done
 
 - **Chain:** T185 (B1) → T186 (B2) → T187, T188 (B3) → T189 (B4) → T190 (B5). The owner's
   answers are B-Q1–B-Q15 in ADR 0018 §3; how the steps fit is ADR 0018 §2.10.
@@ -64,16 +64,29 @@
      in this folder."; `ratings_not_ready_text()`: "The ratings of this folder are still being
      read. Try again when they are shown."; `partner_not_rejected_text()`: "its RAW+JPEG partner
      is not rejected" (a reason, used inside `delete_refused_text`).
+  6. **The partners while the batch runs** (added after the review, 2026-11-18; B-Q16):
+     when both files of a pair are rejected, `plan_delete` keeps only the first as a batch
+     image and the other goes along in its group, so the check of point 4 on the batch's own
+     image alone does not protect the partner. In `deletes.rs`, `pub fn image_partners(files:
+     &[PathBuf], is_image: impl Fn(&Path) -> bool) -> Vec<PathBuf>`: the files after the first
+     for which `is_image` is true (used by `refuse_unrejected_partners` too, so the rule is in
+     one place). In `main.rs`, when the confirmed plan becomes `Running` for Delete Rejected
+     Images, keep in `Loupe` (beside `delete_rejected`, cleared in `delete_idle`) each batch
+     image's partners as the tab's resolved paths (the tab file that is `same_path` with the
+     partner, from the `Ok` groups of the prepare's answers). In `follow_deletes`' `Running`
+     arm, for Delete Rejected Images: an image is not sent while it **or one of its partners**
+     has a rating write pending (`is_pending`; the `to_send` closure), and it is skipped
+     (`DeleteBatch::skip`) when it or one of its partners is no longer rejected
+     (`current_rating(..).stars != Some(-1)`; a failed write rolled back counts as not
+     rejected). A plain Delete is unchanged.
 - **Tests to add:** `deletes.rs`: `rejected_images` keeps the order and leaves out the others;
   `refuse_unrejected_partners` refuses a rejected RAW whose JPG is not rejected, keeps a pair
   where both are, leaves a group without a partner as it is, and refuses a RAW whose JPG is not
   in the tab's list. `deletes_text.rs`: the three
-  texts. `shell.rs`, `shell_text.rs`: the item's order and text. The wiring in `main.rs` has no
+  texts; `image_partners` (the image itself, a sidecar and a TIFF of the same name).
+  `shell.rs`, `shell_text.rs`: the item's order and text. The wiring in `main.rs` has no
   unit test; the owner's hand check covers it.
-- **Not in this task:** deleting rejected images of several folders or tabs at once. A partner
-  whose reject is cleared while the batch runs (after the confirmation named it) still goes
-  along with its image; only the batch's own images are checked then (a known limit; to the
-  backlog when this task is Done).
+- **Not in this task:** deleting rejected images of several folders or tabs at once.
 - **Rules:** `AGENTS.md` §3; `docs/tasks/README.md` rule 13 ("Delete Rejected Images" is in the
   glossary from T187).
 - **Hand check by the owner** (ADR 0018 §4, after B5): in a copy of R2's folder with three
@@ -96,3 +109,7 @@
 | 2026-11-17 | Blocked: waits for T189 | Chain review (fresh agent, T185–T190 read together): the folder kept as T189's `delete_folder` (an `Option<PathBuf>`), the flag cleared at `Idle` and by a plain Delete; an image un-rejected while the batch runs is skipped, so the command never deletes an image the user no longer rejects |
 | 2026-11-18 | Blocked: waits for T189 | T189 is Done, hand-checked and approved (`adc18de`); the backlog sorted after B4 (`a98abfe`). Names checked against the code after T189, all present; line numbers today (about): `main.rs` the `delete_folder` field 776, `delete_tab_active` 3087, `send_moves`' skip of an X image no longer rejected 4205, `delete_images` 4465, `delete_idle` 4491, `follow_deletes` 4503 (its `Running` arm, where the deletes are sent, 4543), `delete_prepared` 4592, `command_enabled` 4775, `run_command` 4847, `is_image_file` 6187, `resolve_paths` 6203; `shell.rs` `Command` 438, the Image menu's `DeleteToRecycleBin` 702, the menu tests 1026–1051; `shell_text.rs` `command_text` 305; `deletes.rs` `plan_delete` 54, `DeleteBatch::skip` 170; `lib.rs` the `deletes` exports 49–53. T189 added `delete_tab_active` and `delete_idle`: "T189's rule for a tab no longer active" in point 4 is `delete_tab_active`, and "the step is `Idle` again" is `delete_idle` |
 | 2026-11-18 | Open | Cold read (fresh agent, after T189): doable in the named files, line numbers right. Changed: the Image menu test that T189 wrote is changed by this task (named, rule 5); the two menu text lists named; `deleted: vec![]` in the `DeleteError`; "another image file" defined as `group.files` after the first; the partner lookup lives in `main.rs`'s closure; the flag cleared in `delete_idle` and initialised in `Loupe`; none left after the prepare → `no_rejected_text()`; a partner un-rejected while the batch runs named as a known limit. Set Open |
+| 2026-11-18 | Ready for review | Task agent: points 1–5 done in the named files. `Command::DeleteRejected` after Delete to Recycle Bin (no key, greyed without a folder); `rejected_images` and `refuse_unrejected_partners` in `deletes.rs`; the three texts in `deletes_text.rs`; in `main.rs` `delete_rejected` (the guards, then the read error as `EditorText::MetadataError`, then `ratings_not_ready_text`, then `no_rejected_text`), the `delete_rejected` flag (set false in the initialiser, by a plain Delete and in `delete_idle`), `still_rejected` used by `delete_prepared` (the images no longer rejected left out, then point 3, the lookup through the tab's resolved files with `same_path`), and the skip in `follow_deletes`' `Running` arm (`current_rating` of the batch's image, which is the tab's resolved path, as `send_moves` does). The Image menu test renamed and extended as point 1 says. 6 new tests (5 `deletes.rs`, 1 `deletes_text.rs`); `.\tools\check.ps1` all OK, 1882 passed, 72 ignored, 0 failed, no clippy warnings |
+| 2026-11-18 | Open | Sent back after review (owner). Reviewer: points 1–5 done as written; `.\tools\check.ps1` all OK (1882 passed, 72 ignored, 0 failed; no clippy warnings by the `^warning` grep). Independent code review (fresh agent): no other finding (path keys, the partner check, a pair both rejected, the flag's lifetime, a tab no longer active, §3 all right). **Left to do: point 6 (new)**: the partner of a pair where both are rejected goes along in its image's group, and only the batch's own image is checked while the batch runs, so a partner whose reject is cleared by a key, or whose reject write fails and is rolled back, after the prepare is still deleted (against B-Q16). The known limit that the brief's "Not in this task" named for it is removed: the owner chose to fix it here. The uncommitted changes stay; add point 6 to them. Also noted, not for this task (inherited from T189): the worker gathers the group again at delete time, so a same-name image file that appears after the confirmation goes along unseen; to the backlog when this task is Done |
+| 2026-11-18 | Ready for review | Task agent: point 6 added to the earlier changes. `deletes.rs`: `image_partners` (also used by `refuse_unrejected_partners`) and its test. `main.rs`: `delete_partners` in `Loupe` (each kept image's partners as the tab's resolved paths; initialised empty, cleared in `delete_idle`), filled by `still_rejected` from the `Ok` groups after point 3 and stored by `delete_prepared`, since the plan the confirmation holds no longer has the groups (so it is kept from the prepare's answer through `Confirming`, not made when the step becomes `Running`; the content is the same); in `follow_deletes`' `Running` arm, for Delete Rejected Images, `to_send` also waits while a partner `is_pending`, and an image is skipped when it or a partner is no longer rejected; a plain Delete unchanged. A partner not found in the tab's list (not possible after point 3) is kept as the worker gave it, so it counts as not rejected. `lib.rs` exports `image_partners`; `docs/test-inventory.md` counts. `.\tools\check.ps1` all OK, 1883 passed, 72 ignored, 0 failed, no clippy warnings |
+| 2026-11-18 | Done | Reviewed again (reviewer): point 6 done in `deletes.rs` (`image_partners`, also used by `refuse_unrejected_partners`) and `main.rs` (`delete_partners` kept from the prepare's answer, cleared in `delete_idle`; while the batch runs an image waits while it or a partner has a rating write pending and is skipped when it or a partner is no longer rejected); points 1–5 as at the first review. `.\tools\check.ps1` all OK (1883 passed, 72 ignored, 0 failed; no clippy warnings by the `^warning` grep); `test-output.txt` newer than the changes. Independent code review (fresh agent, twice): the first found the partner unchecked while the batch runs (point 6, added and sent back); the second found no correctness bug. Leftovers, to `backlog.md` ("Known limits of the delete to the Recycle Bin"): a partner un-rejected after its image's delete was sent still goes (the check is in the shell, the rating write is queued behind the delete); the worker gathers the group again at delete time, so a same-name image file that appears after the confirmation goes along unseen (from T189); a tab closed during the batch makes its remaining images skipped silently (safe; the count is lower with no reason). Awaiting the owner's hand check (ADR 0018 §4, after B5) |

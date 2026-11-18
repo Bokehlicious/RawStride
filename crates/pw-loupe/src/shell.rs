@@ -463,6 +463,10 @@ pub enum Command {
     /// The target images and their companion files sent to the Recycle Bin after a confirmation
     /// (Image ▸ Delete to Recycle Bin, Delete; ADR 0018 §2.1, B4, T189).
     DeleteToRecycleBin,
+    /// Every image of the active tab's folder whose rating is reject sent to the Recycle Bin after
+    /// the same confirmation as Delete, no key (Image ▸ Delete Rejected Images; ADR 0018 §2.1,
+    /// B-Q9, B5, T190). Greyed while the active tab has no folder.
+    DeleteRejected,
     /// The preview open ↔ closed (Visa ▸ Förhandsvisning, G; ADR 0017 §2.2, T111).
     ToggleView,
     Fit,
@@ -700,6 +704,7 @@ pub const MENUS: &[Menu] = &[
             item(Command::ToggleMode, plain(Key::R)),
             MenuEntry::Separator,
             item(Command::DeleteToRecycleBin, plain(Key::Delete)),
+            item(Command::DeleteRejected, None),
         ],
     },
     Menu {
@@ -1026,15 +1031,16 @@ mod tests {
         assert_eq!(Command::DeleteToRecycleBin.acts_in(), Where::Both);
     }
 
-    /// Delete to Recycle Bin (Delete) is the last item of the Image menu, after RAW ↔ JPEG with a
-    /// separator before it, and no other item shows Delete (ADR 0018 B4, T189).
+    /// Delete to Recycle Bin (Delete) and Delete Rejected Images (no key) are the last items of
+    /// the Image menu, after RAW ↔ JPEG with a separator before them, and no other item shows
+    /// Delete (ADR 0018 B4, B5, T189, T190).
     #[test]
-    fn delete_to_recycle_bin_is_the_last_item_of_the_image_menu() {
+    fn the_delete_items_are_the_last_items_of_the_image_menu() {
         let Some(image) = MENUS.iter().find(|menu| menu.kind == MenuKind::Image) else {
             panic!("there is an Image menu");
         };
-        let Some(start) = image.entries.len().checked_sub(3) else {
-            panic!("the Image menu has at least three entries");
+        let Some(start) = image.entries.len().checked_sub(4) else {
+            panic!("the Image menu has at least four entries");
         };
         assert_eq!(
             image.entries.get(start..),
@@ -1043,6 +1049,7 @@ mod tests {
                     item(Command::ToggleMode, plain(Key::R)),
                     MenuEntry::Separator,
                     item(Command::DeleteToRecycleBin, plain(Key::Delete)),
+                    item(Command::DeleteRejected, None),
                 ][..]
             )
         );

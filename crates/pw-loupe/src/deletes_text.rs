@@ -105,6 +105,24 @@ pub fn delete_running_text() -> &'static str {
     "A delete is still running. Try again when it is done."
 }
 
+/// The status-line text when "Delete Rejected Images" finds no rejected image in the active tab's
+/// folder (T190).
+pub fn no_rejected_text() -> &'static str {
+    "There are no rejected images in this folder."
+}
+
+/// The status-line text when "Delete Rejected Images" is asked for before the folder's ratings
+/// have been read (T190).
+pub fn ratings_not_ready_text() -> &'static str {
+    "The ratings of this folder are still being read. Try again when they are shown."
+}
+
+/// Why "Delete Rejected Images" does not delete a rejected image whose RAW+JPEG partner is not
+/// rejected (ADR 0018 B-Q16, T190): a reason, used inside `delete_refused_text`.
+pub fn partner_not_rejected_text() -> &'static str {
+    "its RAW+JPEG partner is not rejected"
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -196,6 +214,26 @@ mod tests {
         assert_eq!(
             delete_running_text(),
             "A delete is still running. Try again when it is done."
+        );
+    }
+
+    #[test]
+    fn the_texts_of_delete_rejected_images() {
+        assert_eq!(
+            no_rejected_text(),
+            "There are no rejected images in this folder."
+        );
+        assert_eq!(
+            ratings_not_ready_text(),
+            "The ratings of this folder are still being read. Try again when they are shown."
+        );
+        assert_eq!(
+            partner_not_rejected_text(),
+            "its RAW+JPEG partner is not rejected"
+        );
+        assert_eq!(
+            delete_refused_text(1, "IMG_001.ARW", partner_not_rejected_text()),
+            "IMG_001.ARW cannot be deleted: its RAW+JPEG partner is not rejected"
         );
     }
 }

@@ -251,6 +251,12 @@ and reviewer:
     had no network drive at the hand check of B4, 2026-11-18). T185's decision tests cover
     `DRIVE_REMOTE` and a volume without a name. Kept until a network drive is at hand; part of
     the hand check of B5 (T190) if one is.
+  - *Delete Rejected Images* (T190's reviews, 2026-11-18; to be sorted after the hand check of
+    B5): a partner whose reject is cleared after its image's delete was sent still goes (the
+    check is in the shell, and the rating write is queued behind the delete); the worker gathers
+    the group again at delete time, so a same-name image file that appears after the
+    confirmation goes along unseen (also for Delete, from T189); a tab closed while the batch
+    runs makes its remaining images skipped without a word (safe; the count is lower).
 
 - **The folder follows changes on disk** (owner's wish at the hand check of B4, 2026-11-18): a
   tab shows new files (for example images put back from the Recycle Bin, or copied in by another

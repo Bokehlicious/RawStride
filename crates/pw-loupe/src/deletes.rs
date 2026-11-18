@@ -6,7 +6,9 @@
 
 use std::path::{Path, PathBuf};
 
-use pw_metadata::{DeleteError, PreparedDelete};
+use pw_metadata::{DeleteError, DeleteRefusal, PreparedDelete};
+
+use crate::deletes_text::partner_not_rejected_text;
 
 /// Whether `a` and `b` are the same path without regard to case: the same number of components,
 /// each pair equal after `to_string_lossy().to_lowercase()` (Unicode, so å and Å match). The same
@@ -89,6 +91,65 @@ pub fn plan_delete(prepared: Vec<PreparedDelete>, is_image: impl Fn(&Path) -> bo
         }
     }
     plan
+}
+
+/// The targets of "Delete Rejected Images" (ADR 0018 §2.1, B-Q9, T190): the files for which
+/// `is_rejected` is true, in the list's order. The shell gives the active tab's whole list, so a
+/// filter does not hide a rejected image from the command.
+pub fn rejected_images(files: &[PathBuf], is_rejected: impl Fn(&Path) -> bool) -> Vec<PathBuf> {
+    files
+        .iter()
+        .filter(|file| is_rejected(file))
+        .cloned()
+        .collect()
+}
+
+/// The image files that go along with an image in its group (ADR 0018 B-Q3, B-Q16, T190 point
+/// 6): the files of `files` after the first, which is the image itself (`DeleteGroup`'s order),
+/// for which `is_image` is true; companion files such as sidecars are not.
+pub fn image_partners(files: &[PathBuf], is_image: impl Fn(&Path) -> bool) -> Vec<PathBuf> {
+    files
+        .iter()
+        .skip(1)
+        .filter(|file| is_image(file))
+        .cloned()
+        .collect()
+}
+
+/// A rejected image whose RAW+JPEG partner is not rejected is refused (ADR 0018 B-Q16, T190): an
+/// `Ok` group with another image file (a file of `group.files` after the first, which is the image
+/// itself, for which `is_image` is true) that `is_rejected` says is not rejected becomes an error
+/// with the reason `partner_not_rejected_text`, so `plan_delete` lists it under `refused`.
+/// Everything else is kept as it is, in its order.
+pub fn refuse_unrejected_partners(
+    prepared: Vec<PreparedDelete>,
+    is_rejected: impl Fn(&Path) -> bool,
+    is_image: impl Fn(&Path) -> bool,
+) -> Vec<PreparedDelete> {
+    prepared
+        .into_iter()
+        .map(|answer| {
+            let refuse = match &answer.result {
+                Ok(group) => image_partners(&group.files, &is_image)
+                    .iter()
+                    .any(|file| !is_rejected(file)),
+                Err(_) => false,
+            };
+            if refuse {
+                PreparedDelete {
+                    result: Err(DeleteError {
+                        file: answer.image.clone(),
+                        reason: DeleteRefusal::Failed(partner_not_rejected_text().to_owned()),
+                        left: Vec::new(),
+                        deleted: Vec::new(),
+                    }),
+                    image: answer.image,
+                }
+            } else {
+                answer
+            }
+        })
+        .collect()
 }
 
 /// What a finished batch of deletes gives: the images deleted, every file that went to the
@@ -262,7 +323,7 @@ impl DeleteStep {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pw_metadata::{DeleteGroup, DeleteRefusal};
+    use pw_metadata::DeleteGroup;
 
     fn path(text: &str) -> PathBuf {
         PathBuf::from(text)
@@ -529,6 +590,143 @@ mod tests {
             result.failed,
             vec![(locked, locked_error), (partly, partly_error)]
         );
+    }
+
+    #[test]
+    fn rejected_images_keeps_the_order_and_leaves_out_the_others() {
+        let files = vec![
+            path("D:/x/a.ARW"),
+            path("D:/x/b.ARW"),
+            path("D:/x/c.JPG"),
+            path("D:/x/d.ARW"),
+        ];
+        let rejected = [path("D:/x/d.ARW"), path("D:/x/a.ARW")];
+        let images = rejected_images(&files, |file| rejected.iter().any(|known| known == file));
+        assert_eq!(images, vec![path("D:/x/a.ARW"), path("D:/x/d.ARW")]);
+        assert!(rejected_images(&files, |_| false).is_empty());
+        assert!(rejected_images(&[], |_| true).is_empty());
+    }
+
+    #[test]
+    fn image_partners_are_the_image_files_after_the_image_itself() {
+        let files = [
+            path("D:/x/IMG_001.ARW"),
+            path("D:/x/IMG_001.ARW.xmp"),
+            path("D:/x/IMG_001.tif"),
+            path("D:/x/IMG_001.xmp"),
+            path("D:/x/IMG_001.JPG"),
+        ];
+        assert_eq!(
+            image_partners(&files, is_image),
+            vec![path("D:/x/IMG_001.tif"), path("D:/x/IMG_001.JPG")]
+        );
+        // The image itself is never its own partner, and a group of the image alone has none.
+        assert!(image_partners(&files[..2], is_image).is_empty());
+        assert!(image_partners(&[], is_image).is_empty());
+    }
+
+    /// The tab's list as `main.rs`'s closure reads it: the file compared with `same_path`, and a
+    /// file not in the list counts as not rejected.
+    fn rejected_in(tab: &[(PathBuf, bool)]) -> impl Fn(&Path) -> bool + '_ {
+        move |file| {
+            tab.iter()
+                .find(|(known, _)| same_path(known, file))
+                .is_some_and(|(_, rejected)| *rejected)
+        }
+    }
+
+    fn partner_refused(image: &str) -> PreparedDelete {
+        refused(
+            image,
+            DeleteRefusal::Failed("its RAW+JPEG partner is not rejected".to_owned()),
+        )
+    }
+
+    #[test]
+    fn refuse_unrejected_partners_refuses_a_raw_whose_jpg_is_not_rejected() {
+        let tab = [
+            (path("D:/x/IMG_001.ARW"), true),
+            (path("D:/x/IMG_001.JPG"), false),
+            (path("D:/x/IMG_002.ARW"), true),
+        ];
+        let prepared = refuse_unrejected_partners(
+            vec![
+                // The worker's path of the partner in other case: still the tab's file.
+                ok(
+                    "D:/x/IMG_001.ARW",
+                    &["D:/x/IMG_001.ARW", "D:/x/img_001.jpg", "D:/x/IMG_001.xmp"],
+                    10,
+                ),
+                ok("D:/x/IMG_002.ARW", &["D:/x/IMG_002.ARW"], 5),
+            ],
+            rejected_in(&tab),
+            is_image,
+        );
+        assert_eq!(
+            prepared,
+            vec![
+                partner_refused("D:/x/IMG_001.ARW"),
+                ok("D:/x/IMG_002.ARW", &["D:/x/IMG_002.ARW"], 5),
+            ]
+        );
+        let plan = plan_delete(prepared, is_image);
+        assert_eq!(plan.images, vec![path("D:/x/IMG_002.ARW")]);
+        assert_eq!(
+            plan.refused,
+            vec![(
+                path("D:/x/IMG_001.ARW"),
+                "its RAW+JPEG partner is not rejected".to_owned()
+            )]
+        );
+    }
+
+    #[test]
+    fn refuse_unrejected_partners_keeps_a_pair_where_both_are_rejected() {
+        let tab = [
+            (path("D:/x/IMG_001.ARW"), true),
+            (path("D:/x/IMG_001.JPG"), true),
+        ];
+        let answers = vec![
+            ok(
+                "D:/x/IMG_001.ARW",
+                &["D:/x/IMG_001.ARW", "D:/x/IMG_001.JPG", "D:/x/IMG_001.xmp"],
+                10,
+            ),
+            ok(
+                "D:/x/IMG_001.JPG",
+                &["D:/x/IMG_001.JPG", "D:/x/IMG_001.ARW", "D:/x/IMG_001.xmp"],
+                10,
+            ),
+        ];
+        let prepared = refuse_unrejected_partners(answers.clone(), rejected_in(&tab), is_image);
+        assert_eq!(prepared, answers);
+    }
+
+    #[test]
+    fn refuse_unrejected_partners_leaves_a_group_without_a_partner_as_it_is() {
+        let answers = vec![
+            ok("D:/x/a.ARW", &["D:/x/a.ARW", "D:/x/a.ARW.xmp"], 10),
+            refused("E:/DCIM/b.ARW", DeleteRefusal::Card),
+        ];
+        // Not even the images are rejected here: only image files after the first are asked
+        // about, and an error stays as it is.
+        let prepared = refuse_unrejected_partners(answers.clone(), |_| false, is_image);
+        assert_eq!(prepared, answers);
+    }
+
+    #[test]
+    fn refuse_unrejected_partners_refuses_a_raw_whose_jpg_is_not_in_the_tab() {
+        let tab = [(path("D:/x/IMG_001.ARW"), true)];
+        let prepared = refuse_unrejected_partners(
+            vec![ok(
+                "D:/x/IMG_001.ARW",
+                &["D:/x/IMG_001.ARW", "D:/x/IMG_001.JPG"],
+                10,
+            )],
+            rejected_in(&tab),
+            is_image,
+        );
+        assert_eq!(prepared, vec![partner_refused("D:/x/IMG_001.ARW")]);
     }
 
     #[test]

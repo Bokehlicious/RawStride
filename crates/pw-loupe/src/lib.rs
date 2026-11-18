@@ -46,11 +46,15 @@ use pw_viewcore::Status;
 
 pub use browse::{LoupeMove, metadata_neighbour};
 pub use compare::{Compare, Layout, follow, open_indexes, sides};
-pub use deletes::{DeleteBatch, DeletePlan, DeleteResult, DeleteStep, plan_delete, same_path};
+pub use deletes::{
+    DeleteBatch, DeletePlan, DeleteResult, DeleteStep, image_partners, plan_delete,
+    refuse_unrejected_partners, rejected_images, same_path,
+};
 pub use deletes_text::{
     delete_button_text, delete_cancel_text, delete_confirm_text, delete_failed_text,
     delete_partly_failed_text, delete_partners_text, delete_refused_text, delete_running_text,
     delete_title_text, delete_while_moving_text, deleted_text, deletes_failed_text,
+    no_rejected_text, partner_not_rejected_text, ratings_not_ready_text,
 };
 pub use editor::{
     BatchEdits, CopiedFields, EditorField, EditorForm, EditorSection, EditorText, OpenConflict,
