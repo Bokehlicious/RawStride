@@ -1,4 +1,4 @@
-# T194. The batch names a list with qualifiers that was not written in another image (ADR 0007 §8) — Blocked: waits for T193
+# T194. The batch names a list with qualifiers that was not written in another image (ADR 0007 §8) — Open
 
 - **Why:** T193 adds `WriteNotice::QualifiersKept { property }`, returned by
   `write_edits_safely` when a changed list with qualifiers was put back instead of written
@@ -53,3 +53,4 @@
 |---|---|---|
 | 2026-11-18 | Blocked | Added: split from T193 after its cold read (the batch dropped every notice but `ConflictKept` for other images); waits for T193 |
 | 2026-11-18 | Blocked | Cold read: a fresh agent found the named places right and no other `match` on `EditorText`; `batch.kept` is private (the test checks `BatchSummary`), the test to copy is at `metadata.rs` ~3321, the `ConflictKept` text test is a table row, four doc comments still say "conflicts" only (point 3), and one notice alone would not show order or a wrong arm. Fixed: the text in the form of the `ConflictKept` line, point 3, a test with two other images and both notices in one report, exact texts |
+| 2026-11-18 | Open | T193 is Done, so the task is no longer blocked; `metadata.rs` is unchanged by T193, the line numbers in `editor.rs` are about 4 lower than now (T193 added the `QualifiersKept` arm of `notice_text`) |
