@@ -16,7 +16,7 @@ is only to stay interoperable with files they read and write, based on their pub
 | IPTC Photo Metadata Mapping Guidelines (IIM / XMP / Exif / schema.org) | current | https://www.iptc.org/std/photometadata/documentation/mappingguidelines/ |
 | IPTC Information Interchange Model (IIM) | 4.2 (2014; frozen since 1997) | https://iptc.org/standards/iim/ |
 | IPTC developers' guide to reading and writing photo metadata | 2023 | https://iptc.atlassian.net/wiki/spaces/PMD/pages/606601427/ |
-| XMP (ISO 16684-1) | – | referenced by the IPTC specification |
+| XMP (ISO 16684-1), referenced by the IPTC specification | ISO 16684-1:2011, read as Adobe XMP Specification Part 1 (April 2012); the 2019 edition not read | https://github.com/adobe/XMP-Toolkit-SDK/blob/v2025.03/docs/XMPSpecificationPart1.pdf |
 
 ## Informative
 
@@ -24,7 +24,7 @@ is only to stay interoperable with files they read and write, based on their pub
 |---|---|---|
 | Metadata Working Group, *Guidelines for Handling Image Metadata* 2.0 (2010) | IIM ↔ XMP ↔ Exif reconciliation (IPTC spec 5.3.4 refers to it; no longer maintained since 2018) | archived copy cited by ExifTool: https://web.archive.org/web/20180919181934/http://www.metadataworkinggroup.org/pdf/mwg_guidance.pdf |
 | ExifTool tag documentation (IPTC, XMP, MWG) | How the tool we use implements IIM, XMP and MWG | https://exiftool.org/TagNames/IPTC.html, https://exiftool.org/TagNames/MWG.html |
-| Adobe XMP Specification Part 3 (storage in files, sidecars) | Sidecar and embedding rules | https://developer.adobe.com/xmp/docs/ |
+| Adobe XMP Specification Part 3 (storage in files, sidecars), January 2020 | Sidecar and embedding rules | https://github.com/adobe/XMP-Toolkit-SDK/blob/v2025.03/docs/XMPSpecificationPart3.pdf |
 | Adobe Lightroom Classic help: metadata, keywords | Interoperability | https://helpx.adobe.com/lightroom-classic/help/metadata-basics-actions.html, …/keywords.html |
 | Camera Bits Photo Mechanic help (file formats, IPTC/XMP preferences, metadata template, general preferences) | Interoperability | https://docs.camerabits.com/support/solutions/articles/48000361354, …/48001146198, …/48000207623, …/48001144865 |
 

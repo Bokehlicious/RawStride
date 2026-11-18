@@ -26,6 +26,8 @@
   - **Amended by the owner (2026-11-18, revision 19):** Q2 changed: a cleared field of a
     manufacturer RAW file is not marked, and the camera's value fills it again (§6.4). D1 is
     dropped (§17.1).
+  - **Sources checked (2026-11-18, revision 20):** Q3 and Q8 confirmed by IIM 4.2 and XMP Part 3;
+    the Lang Alt rule (Q7) is a deliberate deviation from a "should" of XMP Part 1 (§8, §13).
 - Date: 2026-11-04 (revision 1: storage, IIM policy and the role of XMP; revision 2: all owner
   decisions of 2026-11-04, MWG 2.0, the full IPTC specification and the Mapping Guidelines;
   revision 3: Q4 answered by the owner on 2026-11-08; revision 4: Q5 answered by the owner on
@@ -60,6 +62,9 @@ Every rule in §3–§12 carries its basis:
 | **[IPTC]** | IPTC Photo Metadata Standard 2025.1 (section given) |
 | **[IPTC-MG]** | IPTC Photo Metadata Mapping Guidelines 2023.1 |
 | **[MWG]** | MWG Guidelines 2.0 (section given) |
+| **[XMP-1]** | Adobe XMP Specification Part 1 (April 2012), the text of ISO 16684-1:2011 (section given; the 2019 edition was not read) |
+| **[XMP-3]** | Adobe XMP Specification Part 3, Storage in Files (January 2020) |
+| **[IIM 4.2]** | IPTC-NAA Information Interchange Model 4.2 (July 2014; dataset given) |
 | **[Product]** | RawStride's own decision (owner's decision of 2026-11-04 unless said otherwise) |
 | **[Product ≠ std]** | A product decision that deliberately departs from a recommendation of a standard. The reason is given |
 
@@ -139,6 +144,10 @@ Where in the file to read and write [MWG §4.2.3.4]:
     as for a foreign sidecar next to a DNG (Q5).
   - To confirm with the level-C samples (Q11; Photo Mechanic and the mixed archive files, no file
     written by Lightroom alone, §12); Adobe XMP Part 3 is read if available (§16).
+  - **Confirmed by [XMP-3] (2026-11-18):** "look in the same directory for a file with the same
+    name as the main document but with an .xmp extension"; for MPEG-2 it says "with the file
+    extension .xmp replacing the original file extension". `<basename>.<ext>.xmp` is not
+    mentioned. [XMP-3] says nothing about RAW+JPEG pairs.
   - **Confirmed for Photo Mechanic (T127, 2026-11-14):** Photo Mechanic 2026.6 names the sidecar
     `<basename>.XMP` with an upper-case extension (`PM-raw.XMP`); RawStride finds it as
     `<basename>.xmp` and reports no foreign sidecar. Until T132 a write by RawStride renamed it to
@@ -245,7 +254,7 @@ IIM block in PSIR 1061 [MWG §4.2.3.2].
 | Intellectual Genre (2:04) | Prefix `000:`; the 64-byte limit applies to the code only | [IPTC §7.16] |
 | Subject Code (2:12) | Prefix `IPTC:` | [IPTC §7.23] |
 | Date Created (2:55) | `YYYYMMDD`, `00` for an unknown month or day (`19180000`) | [IPTC §7.10] |
-| Time Created (2:60) | `hhmmss±hhmm`, no sub-seconds. **Only written when the offset is known** (§7). Otherwise only 2:55 is written and 2:60 is left out; the time stays in XMP, zone-less **(Q3, owner 2026-11-11)** | [IPTC-MG Exif Note on Date Created]; to confirm against IIM 4.2 (§16) |
+| Time Created (2:60) | `hhmmss±hhmm`, no sub-seconds. **Only written when the offset is known** (§7). Otherwise only 2:55 is written and 2:60 is left out; the time stays in XMP, zone-less **(Q3, owner 2026-11-11)** | [IPTC-MG Exif Note on Date Created]; [IIM 4.2 2:60]: always 11 octets `HHMMSS±HHMM`, no form without an offset; the dataset is not mandatory |
 | Keywords (2:25), By-line (2:80) | One repeated dataset per value; the whole list is rewritten from XMP | [MWG §5.1] |
 | Contact (2:118) | As in the spec table | [IPTC §8.1] |
 
@@ -385,7 +394,7 @@ Urgency (2:10), Category (2:15) and Supplemental Categories (2:20):
 | **Truncated dates** (`YYYY`, `YYYY-MM`, `YYYY-MM-DD`, with or without a time) are allowed in the editor and in storage. IIM uses `00` for an unknown month or day | [IPTC §7.10, §14.2] |
 | Without a time, the time part stays empty. A system that needs a time uses 00:00:00 but does not store it | [IPTC §7.10 note 1] |
 | IIM has no sub-seconds: they are dropped for IIM and kept in XMP | [IPTC-MG Exif Note on Date Created] |
-| **IIM Time Created (2:60) is left out when the zone is unknown**; only the date (2:55) is written | [Product], following MWG; to confirm against IIM 4.2 (Q3) |
+| **IIM Time Created (2:60) is left out when the zone is unknown**; only the date (2:55) is written | [Product], following MWG; confirmed by [IIM 4.2 2:60] (2:60 has no form without an offset and is not mandatory; Q3) |
 | A manual "correct camera time" feature is ADR 0020 (owner, 2026-11-17; out of scope until then). It is the only way DateTimeOriginal ever changes, and only on the user's explicit command. For manufacturer RAW the corrected time is the sidecar's `exif:DateTimeOriginal`, which is read before the embedded value and is not a conflict against it | [Product] (Q12); MWG says such corrections SHOULD be exported to Exif |
 
 ## 8. Other rules
@@ -396,7 +405,7 @@ Urgency (2:10), Category (2:15) and Supplemental Categories (2:20):
 | **Keywords may be phrases** and are never split at spaces | [IPTC §7.18] |
 | Keyword lists are rewritten as a whole in IIM; XMP qualifiers on keywords are kept | [MWG §5.1] |
 | **Rating:** stored internally with full precision (a real number). Rounded only for display (out-of-range values shown as the nearest of −1…5). Written only when the user changes it. 0 = unrated; a missing value counts as 0; −1 = rejected | [IPTC §11.19]; [MWG §5.5] |
-| **Lang Alt:**<br>- RawStride edits `x-default` only and preserves all other language entries, including one that held the same value as the old `x-default`;<br>- when `x-default` is absent, it is added first;<br>- **reading** without `x-default`: the first entry is shown, marked with its language;<br>- clearing removes the whole property, all languages included | [IPTC §14.1]; [Product]. **To verify:** the Adobe XMP Toolkit also updates entries equal to the old `x-default`; if MWG §5.2 or ISO 16684-1 recommend that, this becomes [Product ≠ std] (Q7, §13, §16) |
+| **Lang Alt:**<br>- RawStride edits `x-default` only and preserves all other language entries, including one that held the same value as the old `x-default`;<br>- when `x-default` is absent, it is added first;<br>- **reading** without `x-default`: the first entry is shown, marked with its language;<br>- clearing removes the whole property, all languages included | [IPTC §14.1]; [Product]; `x-default` first: [XMP-1 §8.2.2.4] "shall be first in the array" (ExifTool inserts it first, T83); reading the first entry: [XMP-1 §8.2.2.4] "a default value, if known, should be the first array item"; [MWG §5.2] discusses only `x-default`, other languages MAY be supported. **[Product ≠ std]** against [XMP-1 §8.2.2.4] "its simple text value should be repeated in another item in which xml:lang specifies its actual language": after an edit, an entry that held the old `x-default` text keeps it. Reason: RawStride does not know the language of the typed text, and writing it into such an entry could give it the wrong language. A Lang Alt with `x-default` alone, the common case, is allowed (Q7, §13, checked 2026-11-18) |
 | **Unknown namespaces, list items not touched, camera maker notes** are never removed or rewritten | [Product] |
 | **Creator's Contact Info** and **Creator's Jobtitle** belong to the first Creator. The contact sub-fields are single Text values that may hold several entries | [IPTC §7.7, §7.8, §8.1] |
 | **Creator ↔ Image Creator name (PLUS):** synchronisation is offered | [IPTC §7.6 note 1] |
@@ -636,19 +645,19 @@ The three documents were compared for every rule above (details in the analysis 
 | Creator → Artist | – | one name; also Photographer | all names, "; " | IPTC-MG for writing, MWG for reading | The standards disagree; the newer IPTC-MG is followed (§6.5) |
 | Exif text encoding | – | Exif 3.0: UTF-8 type | UTF-8 in ASCII | by Exif version | Compatible |
 | DateTimeOriginal | suggest Date Created from it | mapping both ways | export corrections to Exif | never changed automatically | Compatible (the mapping is not mandatory; corrections are a manual feature, Q12) |
-| Time zone | TZD optional (§14.2) | IIM time with offset | never invent | never invent; IIM 2:60 left out without a known zone | Compatible (Q3; to confirm against IIM 4.2) |
+| Time zone | TZD optional (§14.2) | IIM time with offset | never invent | never invent; IIM 2:60 left out without a known zone | Compatible (Q3; confirmed by IIM 4.2 2:60, 2026-11-18) |
 | Rating | −1, 0…5, real | – | float, rounding for display | as both | Compatible |
 | Hierarchical keywords | – | – | MUST preserve | preserved | Compatible |
 | Deprecated IIM datasets | keep in sync (§9.1) | – | – | kept and synced | Compatible |
 | DNG embedded / RAW sidecar | not covered | – | DNG not covered | product decision | No conflict |
 | Clearing | – | – | update both forms or remove the other | consistent across forms, RAW untouched; a cleared property of a manufacturer RAW is filled again from the camera's Exif (Q2) | Compatible: the RAW Exif cannot be changed |
-| Lang Alt edits | Lang Alt type (§14.1) | – | §5.2, not yet checked on this point | edit `x-default` only; other entries kept | **To verify:** the Adobe XMP Toolkit also updates entries equal to the old `x-default`. If MWG §5.2 or ISO 16684-1 recommend that, this is a deliberate deviation (Q7) |
+| Lang Alt edits | Lang Alt type (§14.1) | – | §5.2: only `x-default` discussed, other languages MAY be supported | edit `x-default` only; other entries kept | Compatible with MWG. **Deviation from an [XMP-1 §8.2.2.4] "should"**, deliberate: the `x-default` text should be repeated in an entry with its actual language, and after an edit an entry with the old text is not updated (Q7, §8) |
 
 **One rule of this ADR deliberately contradicts a MUST:** the IIM checksum is not written while
 a no-checksum conflict is unresolved (§5.2, Q1), so that a write never decides the conflict
 silently. All other deviations concern SHOULD-level recommendations; each is marked
-[Product ≠ std] with its reason. The Lang Alt rule
-(§8, Q7) is still to be checked against MWG §5.2 and ISO 16684-1.
+[Product ≠ std] with its reason. The Lang Alt rule (§8, Q7) was checked against MWG §5.2 and
+[XMP-1] on 2026-11-18 and is one of them.
 
 ## 14. Questions (all answered by the owner)
 
@@ -656,12 +665,12 @@ silently. All other deviations concern SHOULD-level recommendations; each is mar
 |---|---|---|
 | ~~**Q1**~~ | **Writing a file with an unresolved IIM/XMP conflict** (no-checksum case). Writing both forms and the checksum would decide the conflict silently in favour of the written value | **Resolved 2026-11-11:** Writing other fields is allowed. For each conflicting property both forms are left as they are **and no new checksum is written**, until the user decides. MWG requires the checksum "whether changed or not", so this is a deliberate exception, limited to unresolved conflicts (§5.2, §13). Batch operations list such files |
 | ~~**Q2**~~ | **Clearing a field for an ARW/RW2 whose embedded camera Exif has a value** (e.g. Artist set in the camera). After clearing, the camera value would fill the gap again (§6.2) | **Resolved 2026-11-11, changed by the owner 2026-11-18:** no marker. A cleared property is removed from the sidecar and the camera's value fills it again (§6.4). The answer of 2026-11-11, a `Cleared` Bag in a RawStride namespace that hid the camera's value in RawStride only, was never implemented and is dropped for the reasons in §6.4. An explicitly empty sidecar value may be added later if it is shown to work with the files of other programs (§6.4) |
-| ~~**Q3**~~ | **IIM 2:60 Time Created without a known time zone.** IIM's time format includes an offset; writing `+0000` would invent one | **Resolved 2026-11-11:** Write only 2:55 (the date) and leave 2:60 out until the zone is known. To be confirmed against the IIM 4.2 specification (not read; §16) |
+| ~~**Q3**~~ | **IIM 2:60 Time Created without a known time zone.** IIM's time format includes an offset; writing `+0000` would invent one | **Resolved 2026-11-11:** Write only 2:55 (the date) and leave 2:60 out until the zone is known. **Confirmed 2026-11-18** by IIM 4.2: 2:60 is always `HHMMSS±HHMM` and is not mandatory, so leaving it out is allowed and nothing is invented |
 | ~~**Q4**~~ | **Exif overlap fields inside DNG:** the decision lists JPEG/TIFF for synchronisation | **Resolved 2026-11-08:** Treat DNG like TIFF: overlap fields that exist are updated (MWG requires updating or removing the other form) |
 | ~~**Q5**~~ | **A foreign `<basename>.xmp` next to a DNG** (written by another tool) | **Resolved 2026-11-08:** Never written and never used as a source; the info panel shows a notice that it exists and is ignored |
 | ~~**Q6**~~ | **Creating missing Exif overlap fields** in JPEG/TIFF | **Resolved 2026-11-08:** Do not create missing fields in JPEG, TIFF or DNG (DNG is handled like TIFF, Q4); synchronise only existing overlap fields |
-| ~~**Q7**~~ | Exact Lang Alt rules (`x-default` alongside a language entry) | **Resolved 2026-11-08 (product policy):** edit only `x-default`; leave all other language entries and their values unchanged. If `x-default` is absent, add it first. Clearing removes the whole property. Adobe's SDK also synchronises entries matching the old default ([`SetLocalizedText`](https://github.com/adobe/XMP-Toolkit-SDK/blob/v2025.03/XMPCore/source/XMPMeta-GetSet.cpp), SDK v2025.03); RawStride deliberately does not. The full ISO 16684-1 text was not accessible during review, so verify this policy against the standard before implementation. |
-| ~~**Q8**~~ | Normative sidecar naming (`name.xmp` vs `name.ARW.xmp`) and RAW+JPEG pairs | **Resolved 2026-11-11:** `<basename>.xmp`, as ADR 0004 and the default of Lightroom and Photo Mechanic. A `<basename>.<ext>.xmp` is never read or written and is reported, as in Q5. RAW+JPEG pairs as §4.2. To confirm with the level-C samples; Adobe XMP Part 3 is read if available |
+| ~~**Q7**~~ | Exact Lang Alt rules (`x-default` alongside a language entry) | **Resolved 2026-11-08 (product policy):** edit only `x-default`; leave all other language entries and their values unchanged. If `x-default` is absent, add it first. Clearing removes the whole property. Adobe's SDK also synchronises entries matching the old default ([`SetLocalizedText`](https://github.com/adobe/XMP-Toolkit-SDK/blob/v2025.03/XMPCore/source/XMPMeta-GetSet.cpp), SDK v2025.03); RawStride deliberately does not. The full ISO 16684-1 text was not accessible during review, so verify this policy against the standard before implementation. **Checked 2026-11-18** against [XMP-1] (ISO 16684-1:2011) and MWG §5.2: compatible with MWG; a deliberate deviation from the [XMP-1 §8.2.2.4] "should" that the `x-default` text is repeated in an entry with its actual language (§8, §13) |
+| ~~**Q8**~~ | Normative sidecar naming (`name.xmp` vs `name.ARW.xmp`) and RAW+JPEG pairs | **Resolved 2026-11-11:** `<basename>.xmp`, as ADR 0004 and the default of Lightroom and Photo Mechanic. A `<basename>.<ext>.xmp` is never read or written and is reported, as in Q5. RAW+JPEG pairs as §4.2. To confirm with the level-C samples; Adobe XMP Part 3 is read if available. **Confirmed** for Photo Mechanic by the level-C samples (T127, 2026-11-14) and by [XMP-3] (2026-11-18, §4.2) |
 | ~~**Q9**~~ | Allowed URI values of PLUS properties (release status, minor model age, data mining) | **Resolved 2026-11-11:** a fixed choice list with Swedish labels (English since 2026-11-14, ADR 0017 U10d-Q3), values taken from the PLUS controlled vocabulary; unknown values kept with a warning (§11). The vocabulary itself must be read before implementation (§16) |
 | ~~**Q10**~~ | Fallback encoding for IIM/Exif text that is neither ASCII nor UTF-8 | **Resolved 2026-11-11:** Windows-1252 by default, changeable in the settings; the value is marked as converted (§5.4) |
 | ~~**Q11**~~ | Test files | **Resolved 2026-11-11:** the level-C samples of §12, provided by the owner before the implementation is tested. **Changed 2026-11-14:** Photo Mechanic files, a Xiaomi DNG and mixed Photo Mechanic / Lightroom Classic archive files; no Lightroom-only files, no IIM-only JPEG (§12) |
@@ -694,8 +703,10 @@ silently. All other deviations concern SHOULD-level recommendations; each is mar
 4. ~~**Read the PLUS controlled vocabulary**~~ (Q9) – read 2026-11-14 and saved in
    `D:\PhotoWorkflowData\references\` (the LDF 1.2.0 vocabulary file; Data Mining from the PLUS
    XMP specification 2.0.1, in the folder's `README.md`).
-5. Read **XMP Part 1** (ISO 16684-1) and **MWG §5.2** to verify the Q7 policy, **XMP Part 3** (Q8)
-   and **IIM 4.2** (Q3) if the owner provides them.
+5. ~~Read **XMP Part 1** (ISO 16684-1) and **MWG §5.2** to verify the Q7 policy, **XMP Part 3** (Q8)
+   and **IIM 4.2** (Q3) if the owner provides them~~ – read 2026-11-18 and saved in
+   `D:\PhotoWorkflowData\references\` (R3; XMP Part 1 is the text of ISO 16684-1:2011). Q3 and Q8
+   confirmed; Q7 compatible with MWG and a deliberate deviation from an [XMP-1] "should" (§8, §13).
 6. ~~**Level-C samples**~~ (Q11, the set changed 2026-11-14, §12) – received 2026-11-14 and
    tested by T127 (`crates/pw-metadata/tests/level_c.rs`); what they showed is in §4.2 and §6.4,
    and they led to T129 (§5.1) and to the PLUS codes of §11.
@@ -763,8 +774,6 @@ listed under the table (§17.1).
 - The other controlled vocabularies of §11 (`docs/tasks/backlog.md`).
 - Image Region (ADR 0017 U11b). The other lists of structures and editing several images are done
   (ADR 0017 U11, U12; T136–T143, T125, T126, T179, T180).
-- §16 point 5: XMP Part 1, MWG §5.2, XMP Part 3 and IIM 4.2 not read, so Q3, Q7 and Q8 and the
-  Lang Alt row of §13 stay "to verify".
 - The Tauri app keeps its in-place write (D7) until it is retired (GR8).
 
 ## Revision history
@@ -790,3 +799,4 @@ listed under the table (§17.1).
 | 17 | 2026-11-14 | I12 done (T127): what the level-C samples showed written into §4.2 (Q8, Photo Mechanic's `<basename>.XMP`) and §6.4 (Photo Mechanic removes an emptied field, keeps empty structure sub-fields); §16 point 6 done |
 | 18 | 2026-11-14 | I13 (T133): implemented status, where each §12 test is, §18 what is left; no new decision |
 | 19 | 2026-11-18 | Owner changed Q2: a cleared field of a manufacturer RAW is not marked and is filled again from the camera's Exif (§6.4, §13, Q2); D1 dropped (§17, §17.1); §18 brought up to date (U11 and U12 done) |
+| 20 | 2026-11-18 | §16 point 5 done: XMP Part 1 (ISO 16684-1:2011), XMP Part 3, IIM 4.2 and MWG §5.2 read (R3); labels [XMP-1], [XMP-3], [IIM 4.2] (§1.1). Q3 and Q8 confirmed (§4.2, §5.3, §7, §13, §14); Q7 compatible with MWG §5.2 and marked [Product ≠ std] against an [XMP-1 §8.2.2.4] "should" (§8, §13, §14), as revision 8 foresaw; §18 brought up to date. No rule changed |
