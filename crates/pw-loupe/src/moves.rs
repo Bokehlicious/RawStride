@@ -8,6 +8,8 @@ use std::path::{Path, PathBuf};
 
 use pw_metadata::{Moved, Rating};
 
+use crate::deletes::same_path;
+
 /// The folder name rejected images are moved to, in the image's own folder (not translated).
 pub const REJECTED_FOLDER: &str = "_rejected";
 /// The folder name picked images are moved to, in the image's own folder (not translated).
@@ -276,6 +278,31 @@ impl UndoMoves {
 
     pub fn is_empty(&self) -> bool {
         self.steps.is_empty()
+    }
+
+    /// Forgets the files a delete sent to the Recycle Bin (ADR 0018 §2.10, T187), compared with
+    /// `same_path`: in each step, every image with a `Moved::to` among `deleted` is dropped, then
+    /// a partner's entry with no moves of its own whose image is a `Moved::from` of an entry
+    /// dropped in the same step; a step left empty is dropped. The dropped entries' `restore`
+    /// ratings are lost: the files are gone.
+    pub fn forget_deleted(&mut self, deleted: &[PathBuf]) {
+        for step in &mut self.steps {
+            let mut froms: Vec<PathBuf> = Vec::new();
+            step.retain(|entry| {
+                let gone = entry
+                    .moved
+                    .iter()
+                    .any(|moved| deleted.iter().any(|file| same_path(&moved.to, file)));
+                if gone {
+                    froms.extend(entry.moved.iter().map(|moved| moved.from.clone()));
+                }
+                !gone
+            });
+            step.retain(|entry| {
+                !(entry.moved.is_empty() && froms.iter().any(|from| same_path(from, &entry.image)))
+            });
+        }
+        self.steps.retain(|step| !step.is_empty());
     }
 }
 
@@ -621,5 +648,60 @@ mod tests {
         undo.push(Vec::new());
         assert_eq!(undo.pop(), Some(step(1)));
         assert_eq!(undo.pop(), None);
+    }
+
+    #[test]
+    fn forget_deleted_drops_a_deleted_image_keeps_the_others_and_drops_an_empty_step() {
+        let entry = |name: &str| MovedImage {
+            image: PathBuf::from(format!("D:/x/{name}")),
+            moved: vec![moved(
+                &format!("D:/x/{name}"),
+                &format!("D:/x/_rejected/{name}"),
+            )],
+            restore: None,
+        };
+        let mut undo = UndoMoves::default();
+        undo.push(vec![entry("a.ARW")]);
+        undo.push(vec![entry("b.ARW"), entry("c.ARW")]);
+
+        // In other case, as the delete's answer may give it.
+        undo.forget_deleted(&[
+            PathBuf::from("d:/x/_REJECTED/a.arw"),
+            PathBuf::from("D:/x/_rejected/b.ARW"),
+        ]);
+        assert_eq!(undo.pop(), Some(vec![entry("c.ARW")]));
+        assert_eq!(undo.pop(), None, "a's step was left empty and dropped");
+    }
+
+    #[test]
+    fn forget_deleted_drops_a_raw_and_jpg_step_whole() {
+        let raw = PathBuf::from("D:/x/IMG_001.ARW");
+        let jpg = PathBuf::from("D:/x/IMG_001.JPG");
+        let target = PathBuf::from("D:/x/_rejected");
+        let mut batch = Batch::new(
+            MoveKind::Reject,
+            vec![
+                (raw.clone(), target.clone(), Some(Rating::default())),
+                (jpg.clone(), target, Some(Rating::default())),
+            ],
+        );
+        batch.answered(
+            &raw,
+            Ok(vec![
+                moved("D:/x/IMG_001.ARW", "D:/x/_rejected/IMG_001.ARW"),
+                moved("D:/x/IMG_001.JPG", "D:/x/_rejected/IMG_001.JPG"),
+            ]),
+        );
+        batch.answered(&jpg, Err("the file is missing".to_owned()));
+        let step = batch.finish().moved;
+        assert_eq!(step.len(), 2, "the JPG's entry has no moves");
+
+        let mut undo = UndoMoves::default();
+        undo.push(step);
+        undo.forget_deleted(&[
+            PathBuf::from("D:/x/_rejected/IMG_001.ARW"),
+            PathBuf::from("D:/x/_rejected/IMG_001.JPG"),
+        ]);
+        assert!(undo.is_empty());
     }
 }

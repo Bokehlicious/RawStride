@@ -142,6 +142,11 @@ Every other property already uses IPTC's English name in both languages.
 | – | No tasks, Stop, ×, Errors ({n}), Clear | the Tasks area under the Library (ADR 0017 U5-Q1–U5-Q5): the line with nothing to show (the text is still "No tasks in progress."), the running import's button, the finished import's button (hover "Remove this line"), the error list's heading and its button; added by T140 |
 | – | {source} → {destination}; Importing {i} of {n}: {file}; Import done: {n} files, {f} failed / Import cancelled: {n} files, {f} failed | the import's row in the Tasks area (U5-Q2; hover "Show the import window"); without failures "Import done: {n} files" as before; added by T140 |
 | – | Writing ratings: {n}; Saving metadata: {i} of {n}; Saving metadata | the pending writes in the Tasks area: rating writes, "Apply to All Marked" and the metadata window's own write (U5-Q4); added by T140 |
+| – | Recycle Bin | Windows' own name, not translated by RawStride (ADR 0018); added by T187 |
+| – | Delete to Recycle Bin | the menu item (key Delete) and the title of its confirmation (ADR 0018 B4, T189); added by T187 |
+| – | Delete Rejected Images | the menu item that deletes the rejected images of the active tab's folder (ADR 0018 B5, T190); added by T187 |
+| – | RAW+JPEG pair | an image's RAW and JPEG files of the same name, deleted together (ADR 0018 B-Q3); added by T187 |
+| – | Delete | the confirmation's button that deletes (ADR 0018); its other button is "Cancel" (§6); added by T187 |
 
 ## 4. Viewer and zoom
 

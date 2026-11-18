@@ -52,7 +52,9 @@
 - Deleting only one file of a RAW+JPEG pair is not offered now (B-Q3).
 - Every image file of the same name goes along (a TIFF or DNG too, not only the RAW+JPEG
   partner), as for a move; the confirmation names those besides the chosen images (owner,
-  2026-11-17, B-Q18, from the chain review of T185–T190).
+  2026-11-17, B-Q18, from the chain review of T185–T190). Only image files the user did not
+  mark are named: a marked JPG that goes with its marked RAW is not named again (owner,
+  2026-11-18, during T187).
 
 ### 2.3 Order
 
@@ -174,7 +176,7 @@
 | B-Q15 | Tests that use the real Recycle Bin (asked when B1 was written, 2026-11-17) | `#[ignore]`, run by hand in the review; `.\tools\check.ps1` does not put files in the user's Recycle Bin |
 | B-Q16 | "Delete Rejected Images" and a partner that is not rejected (asked when B5 was written, 2026-11-17) | A rejected image whose RAW+JPEG partner is not rejected is refused, and the confirmation names it; deleting it alone would break B-Q3 |
 | B-Q17 | A structured error for the move's answer too (plan row B2, 2026-11-17) | No, not now: only the delete's answer gets one; the move's stays text (the backlog item "Leftovers from the review of T170" keeps it) |
-| B-Q18 | Image files of the same name besides the RAW+JPEG partner (chain review, 2026-11-17) | They go along, as for a move, and the confirmation names them |
+| B-Q18 | Image files of the same name besides the RAW+JPEG partner (chain review, 2026-11-17) | They go along, as for a move, and the confirmation names them; only those the user did not mark (owner, 2026-11-18, T187) |
 
 ## 4. Steps
 

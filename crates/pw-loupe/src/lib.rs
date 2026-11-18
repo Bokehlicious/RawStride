@@ -7,6 +7,8 @@
 mod browse;
 pub mod clipping;
 mod compare;
+mod deletes;
+mod deletes_text;
 mod editor;
 mod field_values;
 mod filter;
@@ -44,6 +46,12 @@ use pw_viewcore::Status;
 
 pub use browse::{LoupeMove, metadata_neighbour};
 pub use compare::{Compare, Layout, follow, open_indexes, sides};
+pub use deletes::{DeleteBatch, DeletePlan, DeleteResult, DeleteStep, plan_delete, same_path};
+pub use deletes_text::{
+    delete_button_text, delete_cancel_text, delete_confirm_text, delete_failed_text,
+    delete_partly_failed_text, delete_partners_text, delete_refused_text, delete_running_text,
+    delete_title_text, delete_while_moving_text, deleted_text, deletes_failed_text,
+};
 pub use editor::{
     BatchEdits, CopiedFields, EditorField, EditorForm, EditorSection, EditorText, OpenConflict,
     RatingButton, WriteReason, apply_confirmation, editor_text, notice_text, write_reason_text,
