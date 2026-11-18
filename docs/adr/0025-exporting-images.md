@@ -34,7 +34,8 @@
 
 - For a RAW the user chooses (X-Q2):
   - **Embedded JPEG** (the default): the camera's own preview, fast;
-  - **RAW**: rendered by LibRaw with the same settings as the view's RAW mode, at full size and in
+  - **RAW**: rendered by LibRaw with the same settings as the view's RAW mode (with every display
+    adjustment of ADR 0027 off, that is ADR 0006 §2; owner, 2026-11-18), at full size and in
     16 bits.
 - For a JPEG or TIFF the source is the file itself.
 - **Copied as it is** (X-Q3): an embedded JPEG exported as JPEG at its original size is copied
@@ -93,6 +94,9 @@
 - A new crate **`pw-export`**, depending on `pw-raw`, `pw-libraw`, `pw-libjpeg`, `pw-colour`,
   `pw-metadata` and `tiff` =0.9.1, all already in the workspace; and an encoding function in
   `pw-libjpeg`. No new package, no new licence (X-Q15; owner, 2026-11-17).
+- **2026-11-18 (ADR 0027 A-Q7):** the Lanczos filter lives in a new workspace crate without
+  dependencies (for example `pw-resample`), shared with `pw-viewcore`; `pw-export` depends on it.
+  Made by X2 or ADR 0027's A1, whichever comes first.
 
 ## 3. Questions (answered by the owner, 2026-11-17: every proposal approved)
 

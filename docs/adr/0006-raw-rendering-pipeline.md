@@ -48,6 +48,10 @@ With them, a tile is pixel-identical to the same area of a full decode. Brightne
 fixed per image (LibRaw `bright = 1.0`). Matching the camera JPEG's look is a separate, later
 question, and it would also be one value per image, never per tile.
 
+**2026-11-18 (ADR 0027):** the view may differ from these settings while a display adjustment of
+ADR 0027 is on (exposure, white balance; the view's demosaic method is already PPG, ADR 0008 §11).
+The export (ADR 0025 §2.2) and the thumbnails always use these settings.
+
 ### 3. Orientation
 
 Tiles and half-size images are produced in sensor orientation. The loupe already rotates the whole

@@ -325,7 +325,8 @@ described in our own words.
   folder (for example a Capture One session or a Lightroom catalogue) is not moved; such a program
   must find the file again itself.
 
-Not included: temporary exposure or white balance correction for assessment (§7.2).
+Not included: temporary exposure or white balance correction for assessment (§7.2); taken up by
+ADR 0027 (2026-11-18).
 
 ### 2.7 Own design
 
@@ -599,7 +600,8 @@ separate window waits (§7.2).
 | Loupe under the mouse pointer in the contact sheet (100 % while a key or button is held) | Later, after stage A (owner, 2026-11-12) | |
 | Copy, move and rename tools for selected images | Later, after stage A (owner, 2026-11-12) | Taken up by ADR 0021 (2026-11-17) |
 | Chosen fields as text lines under each thumbnail | Later, after stage A (owner, 2026-11-12) | The thumbnail shows the file name until then |
-| Temporary exposure and white balance for assessment | Later, after stage A (owner, 2026-11-12) | Needs RAW processing options the view core does not have today |
+| Temporary exposure and white balance for assessment | Later, after stage A (owner, 2026-11-12) | Needs RAW processing options the view core does not have today. Taken up by ADR 0027 (2026-11-18), with fine details, sharpening, channel view, thresholds, the camera's crop frame and focus point |
+| Compare up to four images (2×2) at the same place and zoom, to pick the sharpest of a burst | Later, as an amendment of U6 (owner, 2026-11-18, ADR 0027 A-Q17) | Needs its own measurement within V8 |
 | The separate preview window (U0), movable to a second screen with that screen's DPI and colour profile | When the owner has a second screen to test with (owner, 2026-11-12 and 2026-11-13) | Review finding 5: colour conversion is per start screen today (ADR 0016) |
 | **Images shown while importing**: the destination tab opens when the first file is copied and verified, and fills as the import goes on; today it opens when the copy is done (ADR 0010, "Open the result") | Not yet placed (owner, 2026-11-15); to be taken up by ADR 0026 (owner, 2026-11-18) | Changes ADR 0010's rule. The IPTC template is written after the copy, so an image is shown for a while before the template's values are in it; the contact sheet must take the folder's new files without a reload of the tab |
 | Code replacements (short codes expanded to text while captioning) | Not yet placed (review, 2026-11-13) | From the study's list of missing functions |
