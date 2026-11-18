@@ -1,4 +1,4 @@
-# T188. ADR 0018 B3, second part: the delete requests and answers in the shell's metadata part (pw-loupe) — Blocked: waits for T187
+# T188. ADR 0018 B3, second part: the delete requests and answers in the shell's metadata part (pw-loupe) — Open
 
 - **Chain:** T185 (B1) → T186 (B2) → T187, T188 (B3) → T189 (B4) → T190 (B5). The owner's
   answers are B-Q1–B-Q15 in ADR 0018 §3; how the steps fit is ADR 0018 §2.10.
@@ -57,3 +57,4 @@
 |---|---|---|
 | 2026-11-17 | Blocked: waits for T187 | Added for ADR 0018 B3, written with B2–B5 for the chain review |
 | 2026-11-17 | Blocked: waits for T187 | Cold read: doable in `metadata.rs` alone (the only two `MetadataSubmit` implementors are there; `main.rs` calls the move methods by name). Changed: the derives of `DeleteAnswer`, where the types come from, how `FakeSubmit` records, `pending_read` cleared too, what a write answer for a forgotten path does (no entry made again; the failure is shown, expected), the `dead_code` attribute on the trait declarations with its exact comment, and how each test checks (private fields from the same file's tests). Waits for T187 rather than T186 only so the B3 tasks are reviewed one at a time in `pw-loupe` |
+| 2026-11-18 | Open | T187 is Done and committed (`9d2156d`): set Open. Checked: the `#[cfg_attr(not(test), allow(dead_code))]` examples are still at `metadata.rs` lines 510 and 526; T186's placeholder arm `WorkerEvent::DeletePrepared { .. } \| WorkerEvent::Deleted { .. } => {}` is at about line 1085 in `apply`; `take_moves`, `is_pending`, `has_image`, `prune` and `pending_read` are where the brief expects them |
