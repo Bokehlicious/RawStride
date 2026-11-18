@@ -257,19 +257,6 @@ and reviewer:
     `DRIVE_REMOTE` and a volume without a name. Kept until a network drive is at hand (not
     checked at B5 either, 2026-11-18).
 
-- **The folder follows changes on disk** (owner's wish at the hand check of B4, 2026-11-18): a
-  tab shows new files (for example images put back from the Recycle Bin, or copied in by another
-  program) without the folder being opened again. Needs a decision first: reading the folder
-  again at times, or Windows' change notifications (`ReadDirectoryChangesW`, or a crate such as
-  `notify`, which is a new dependency); what happens to the position, filter, sort and marks
-  when files come or go; and how it works with the moves and deletes that already update the
-  tabs. **Owner, 2026-11-18 (sort after B4):** a new ADR 0026 with questions to the owner,
-  written after B5 (T190) is done. **Owner, 2026-11-18 (sort after B5):** ADR 0026 also takes up
-  two wishes of ADR 0017 §7.2 built on the same thing, "Images shown while importing" and "Load
-  a folder again"; it is written in a session of its own. **Draft written 2026-11-18:**
-  [ADR 0026](../adr/0026-a-folder-that-follows-changes-on-disk.md), questions F-Q1–F-Q12 to the
-  owner. Kept here until ADR 0026 is accepted.
-
 Removed on 2026-11-13 because they are done or planned elsewhere: ADR 0010 steps M3–M7 (done,
 T30–T40); ADR 0011 step K4 (done, T26–T29); moving rejected or picked images to `_rejected` /
 `_picked` (ADR 0013 §13), now ADR 0017 U9 (§2.6, U-Q6); the import dialog fields for title and description in the Tauri
@@ -294,3 +281,6 @@ sent stay, nothing is lost) and the view sessions released by a delete refused a
 Struck at the backlog sort after B5, 2026-11-18 (owner; written into ADR 0018 §2.7 as accepted
 known limits): T190's leftovers, a partner un-rejected after its image's delete was sent, the
 group gathered again at delete time, and a tab closed while the batch runs.
+Moved to an ADR on 2026-11-18: "The folder follows changes on disk" (ADR 0026, accepted by the
+owner the same day, with the two ADR 0017 §7.2 wishes "Load a folder again" and "Images shown
+while importing"; steps F1–F4 in `plans/adr-0018-0025-steps.md`).

@@ -1,8 +1,8 @@
 # ADR 0026: A folder that follows changes on disk
 
-- Status: **proposed (draft, 2026-11-18)**, with questions to the owner in §5 (F-Q1–F-Q12).
-  Nothing is built, installed or added as a dependency by this ADR. Each step in §6 becomes its
-  own task, with its own approval and commit.
+- Status: **accepted by the owner (2026-11-18):** every question in §5 (F-Q1–F-Q12) answered as
+  proposed. Nothing is built, installed or added as a dependency by this ADR. Each step in §6
+  becomes its own task, with its own approval and commit.
 - Date: 2026-11-18
 - Related:
   - the owner's wish at the hand check of ADR 0018 B4 (2026-11-18): a tab shows new files, for
@@ -75,7 +75,7 @@ These hold for all three, so a tab behaves the same whatever changed it. They ar
    small gap today, when `relist_tabs` runs while a rating is being written.
 7. **Only the folder itself**, not its subfolders, as today.
 
-## 3. Decision (proposed)
+## 3. Decision
 
 ### 3.1 Load a folder again (step F1)
 
@@ -160,22 +160,22 @@ These hold for all three, so a tab behaves the same whatever changed it. They ar
 - Following the library's tree of folders (U4-Q2: a folder read when expanded, never in the
   background); F5 over the library already reads the drives again.
 
-## 5. Questions to the owner
+## 5. Questions (answered by the owner, 2026-11-18)
 
-| # | Question | Proposal |
+| # | Question | Answer |
 |---|---|---|
-| F-Q1 | The name, menu and key of "Load a folder again"? | "Reload Folder" in the menu with "Open Folder…", key F5 (F5 over the library still reads the drives) |
-| F-Q2 | Windows' change notifications or reading the folder again at times? | Notifications through the existing `windows-sys`, no new crate; reading again only as the fallback (F-Q3) |
-| F-Q3 | Where notifications do not work (a network drive, some card readers): list again at times, or only when the tab becomes active and on F5? | Only on activation and F5; no timer |
-| F-Q4 | The folder is renamed, moved or deleted while its tab is open? | The tab keeps its files and the status line says the folder is gone; F5 says so again; the tab is closed by the user |
-| F-Q5 | The image shown in the preview is removed by another program? | The following image is shown, and the status line says "{file} was removed by another program" |
-| F-Q6 | A new file under a sort order: placed in the order, or put at the end until the tab is opened again? | Placed in the order (§2 point 4); with a capture-time order once its time is read, at the end until then |
-| F-Q7 | Follow only files that come and go, or also files that change? | Only files that come and go; F5 reads changed files (§3.2) |
-| F-Q8 | Follow tabs that are not active? | Marked as changed, listed when they become active |
-| F-Q9 | Say in the status line when another program added or removed files? | Yes, briefly; no dialog |
-| F-Q10 | During an import with several destination folders, which tab is active? | The first folder's tab when it opens; the newest at the end only if the user has not moved (§3.4) |
-| F-Q11 | The IPTC template: written to each file right after its copy (and the file shown after that), or after the whole copy as today? | Right after each file's copy; to be measured on a card of the owner's (one ExifTool, file by file, as today) |
-| F-Q12 | Order of the steps (§6) and where they go in the step plan | F1 first, on its own (it is useful at once); F2–F4 after it, in that order; after ADR 0024 O1, which is next by the plan |
+| F-Q1 | The name, menu and key of "Load a folder again"? | "Reload Folder" in the menu with "Open Folder…", key F5 (F5 over the library still reads the drives) (as proposed) |
+| F-Q2 | Windows' change notifications or reading the folder again at times? | Notifications through the existing `windows-sys`, no new crate; reading again only as the fallback (F-Q3) (as proposed) |
+| F-Q3 | Where notifications do not work (a network drive, some card readers): list again at times, or only when the tab becomes active and on F5? | Only on activation and F5; no timer (as proposed) |
+| F-Q4 | The folder is renamed, moved or deleted while its tab is open? | The tab keeps its files and the status line says the folder is gone; F5 says so again; the tab is closed by the user (as proposed) |
+| F-Q5 | The image shown in the preview is removed by another program? | The following image is shown, and the status line says "{file} was removed by another program" (as proposed) |
+| F-Q6 | A new file under a sort order: placed in the order, or put at the end until the tab is opened again? | Placed in the order (§2 point 4); with a capture-time order once its time is read, at the end until then (as proposed) |
+| F-Q7 | Follow only files that come and go, or also files that change? | Only files that come and go; F5 reads changed files (§3.2) (as proposed) |
+| F-Q8 | Follow tabs that are not active? | Marked as changed, listed when they become active (as proposed) |
+| F-Q9 | Say in the status line when another program added or removed files? | Yes, briefly; no dialog (as proposed) |
+| F-Q10 | During an import with several destination folders, which tab is active? | The first folder's tab when it opens; the newest at the end only if the user has not moved (§3.4) (as proposed) |
+| F-Q11 | The IPTC template: written to each file right after its copy (and the file shown after that), or after the whole copy as today? | Right after each file's copy; to be measured on a card of the owner's (one ExifTool, file by file, as today) (as proposed) |
+| F-Q12 | Order of the steps (§6) and where they go in the step plan | F1 first, on its own (it is useful at once); F2–F4 after it, in that order; after ADR 0024 O1, which is next by the plan (as proposed) |
 
 ## 6. Steps
 
@@ -194,8 +194,10 @@ Each step ends with tests (GR11) and the owner's hand check.
   end (F4); the template is written per file (F-Q11).
 - **ADR 0017 §7.2**: the rows "Load a folder again" and "Images shown while importing" point to
   this ADR's steps.
-- **`docs/tasks/backlog.md`**: the item "The folder follows changes on disk" is removed when this
-  ADR is accepted.
+- **`docs/tasks/backlog.md`**: the item "The folder follows changes on disk" is removed (done
+  2026-11-18, at the acceptance).
+- **The step plan**: F1–F4 are placed in
+  [`adr-0018-0025-steps.md`](../tasks/plans/adr-0018-0025-steps.md) after ADR 0024 O1 (F-Q12).
 - **`pw-loupe`**: a watcher module in plain, tested Rust apart from the Windows calls; `Tab` gains
   "changed on disk"; `replace_files` gains the placement of new files in the sort; a new command
   and key; possibly a new `windows-sys` feature line (GR10, the owner's approval in F-Q2).
