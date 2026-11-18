@@ -266,7 +266,9 @@ and reviewer:
   tabs. **Owner, 2026-11-18 (sort after B4):** a new ADR 0026 with questions to the owner,
   written after B5 (T190) is done. **Owner, 2026-11-18 (sort after B5):** ADR 0026 also takes up
   two wishes of ADR 0017 §7.2 built on the same thing, "Images shown while importing" and "Load
-  a folder again"; it is written in a session of its own. Kept here until ADR 0026 exists.
+  a folder again"; it is written in a session of its own. **Draft written 2026-11-18:**
+  [ADR 0026](../adr/0026-a-folder-that-follows-changes-on-disk.md), questions F-Q1–F-Q12 to the
+  owner. Kept here until ADR 0026 is accepted.
 
 Removed on 2026-11-13 because they are done or planned elsewhere: ADR 0010 steps M3–M7 (done,
 T30–T40); ADR 0011 step K4 (done, T26–T29); moving rejected or picked images to `_rejected` /
