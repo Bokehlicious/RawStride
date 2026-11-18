@@ -86,11 +86,14 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status |
 |---|---|---|
+| [T192](T192-exif-imageeditor-and-contributor.md) | Exif ImageEditor ↔ Contributor, the content editor (ADR 0007 §6.6) | Open |
+| [T193](T193-lists-with-qualifiers-not-written.md) | A list whose items have qualifiers is shown but not written (ADR 0007 §8) | Open |
+| [T194](T194-batch-line-for-a-qualified-list.md) | The batch names a list with qualifiers that was not written in another image (ADR 0007 §8) | Blocked: waits for T193 |
 
 ## Writing a task (owner and reviewer)
 
-- **Number:** the next free number after the highest in this folder and `done/` (T192 next).
-- **File:** `docs/tasks/T192-<a-few-words>.md`; three digits, lower case, words joined by `-`.
+- **Number:** the next free number after the highest in this folder and `done/` (T195 next).
+- **File:** `docs/tasks/T195-<a-few-words>.md`; three digits, lower case, words joined by `-`.
 - **Index:** add a row to "Open tasks" above and keep its status in step with the file's heading.
 - **Size (owner, 2026-11-15, after T142):** one task is one layer (a C++ shim or a core crate, or
   the shell in `pw-loupe`), about eight files at most, and gives one result the owner can check by
@@ -143,7 +146,7 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 Skeleton (the fields recent tasks use; leave out those that do not apply):
 
 ```markdown
-# T192. <Title> — Open
+# T195. <Title> — Open
 
 - **Why:** …
 - **Crates:** … **Files:** …

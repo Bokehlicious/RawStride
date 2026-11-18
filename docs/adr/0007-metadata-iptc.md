@@ -28,6 +28,8 @@
     dropped (§17.1).
   - **Sources checked (2026-11-18, revision 20):** Q3 and Q8 confirmed by IIM 4.2 and XMP Part 3;
     the Lang Alt rule (Q7) is a deliberate deviation from a "should" of XMP Part 1 (§8, §13).
+  - **Amended by the owner (2026-11-18, revision 21):** Image Editor ↔ Contributor (§6.6); a list
+    whose items have qualifiers is not written (§8).
 - Date: 2026-11-04 (revision 1: storage, IIM policy and the role of XMP; revision 2: all owner
   decisions of 2026-11-04, MWG 2.0, the full IPTC specification and the Mapping Guidelines;
   revision 3: Q4 answered by the owner on 2026-11-08; revision 4: Q5 answered by the owner on
@@ -297,7 +299,7 @@ Urgency (2:10), Category (2:15) and Supplemental Categories (2:20):
 | Copyright Notice (`dc:rights` x-default) | Copyright 0x8298 | both ways | [IPTC-MG]; [MWG §5.6] |
 | Creator (`dc:creator`) | Artist 0x013B; Photographer 0xA437 (Exif 3.0) | both ways (§6.5) | [IPTC-MG Exif Note on Creator] |
 | Image Creator name (PLUS) | Photographer / Artist | as Creator | [IPTC-MG Exif Note on Image Creator] |
-| Contributor with the role "Content Editor" | ImageEditor 0xA438 (Exif 3.0) | both ways | [IPTC-MG Exif Note on Contributor] |
+| Contributor with the role "Content Editor" | ImageEditor 0xA438 (Exif 3.0) | both ways (§6.6) | [IPTC-MG Exif Note on Contributor] |
 | Date Created | DateTimeOriginal + SubSecTimeOriginal + OffsetTimeOriginal | **Exif → IPTC only** (§7) | [IPTC-MG]; [Product] |
 | Digital Image GUID | ImageUniqueID 0xA420 | **Exif → IPTC only**; the IPTC value is then not changed | [IPTC-MG Exif Note on Digital Image GUID] |
 | Location Created | GPS tags 1–6 | Exif → IPTC, only when recorded by the camera | [IPTC-MG]; [MWG §5.8.5] |
@@ -382,6 +384,25 @@ Urgency (2:10), Category (2:15) and Supplemental Categories (2:20):
     feed when read. [MWG §5.6; IPTC-MG]
   - Writing: one value.
 
+### 6.6 Image Editor ↔ Contributor (owner, 2026-11-18)
+
+- **The content editor** is the first Contributor whose Role holds the URI
+  `https://cv.iptc.org/newscodes/contentprodpartyrole/contentEditor`; the same URI with `http://`
+  counts too. A Contributor RawStride creates gets the `https://` form. [IPTC-MG Exif Note on
+  Contributor]; [Product] for `http://`
+- **Reading:**
+  - No Contributor at all: Exif ImageEditor fills it with one Contributor, Name (`x-default`) =
+    ImageEditor, Role = the URI above. [IPTC-MG]
+  - A Contributor without a content editor, or one whose shown Name differs from ImageEditor: a
+    conflict, XMP wins (§6.2). The Exif side of the conflict is the same list with the content
+    editor added at the end or its Name replaced, so the other Contributors are kept whichever
+    side the user chooses. [Product]
+  - Manufacturer RAW: as every Exif field, camera data (§6.4).
+- **Writing (JPEG, TIFF, DNG):** when Contributor changes, the content editor's shown Name is
+  written to ImageEditor if the tag exists (§6.3: never created); without a content editor
+  ImageEditor is removed. It is never written to Artist. [IPTC-MG Exif Note on Contributor];
+  [Product] for not creating
+
 ## 7. Date, time and time zone
 
 | Rule | Basis |
@@ -404,6 +425,7 @@ Urgency (2:10), Category (2:15) and Supplemental Categories (2:20):
 | **Hierarchical keywords** (`mwg-kw:Keywords`, `lr:hierarchicalSubject`) are kept **unchanged**, including all nested information, even though RawStride cannot edit them yet | [MWG §5.10]: "MUST preserve all nested information"; [Product] for `lr:` |
 | **Keywords may be phrases** and are never split at spaces | [IPTC §7.18] |
 | Keyword lists are rewritten as a whole in IIM; XMP qualifiers on keywords are kept | [MWG §5.1] |
+| **A list with qualifiers is not written** (owner, 2026-11-18): when an item of a list property (`dc:subject` and every other XMP list RawStride writes as a whole) in the primary XMP has a qualifier other than `xml:lang`, RawStride shows the list as usual with a notice, and never writes that property to XMP; a change to it is left out of the write with a write notice, and the other properties are written. Reason: ExifTool 13.59 cannot change or remove a qualified item (rewriting the list keeps it and adds the text again as a plain item; `-=` and clearing leave it; checked 2026-11-18). Editing such a list with its qualifiers kept would need RawStride to edit the XMP packet itself (`docs/tasks/backlog.md`) | [MWG §5.1] "SHOULD be preserved"; [Product] |
 | **Rating:** stored internally with full precision (a real number). Rounded only for display (out-of-range values shown as the nearest of −1…5). Written only when the user changes it. 0 = unrated; a missing value counts as 0; −1 = rejected | [IPTC §11.19]; [MWG §5.5] |
 | **Lang Alt:**<br>- RawStride edits `x-default` only and preserves all other language entries, including one that held the same value as the old `x-default`;<br>- when `x-default` is absent, it is added first;<br>- **reading** without `x-default`: the first entry is shown, marked with its language;<br>- clearing removes the whole property, all languages included | [IPTC §14.1]; [Product]; `x-default` first: [XMP-1 §8.2.2.4] "shall be first in the array" (ExifTool inserts it first, T83); reading the first entry: [XMP-1 §8.2.2.4] "a default value, if known, should be the first array item"; [MWG §5.2] discusses only `x-default`, other languages MAY be supported. **[Product ≠ std]** against [XMP-1 §8.2.2.4] "its simple text value should be repeated in another item in which xml:lang specifies its actual language": after an edit, an entry that held the old `x-default` text keeps it. Reason: RawStride does not know the language of the typed text, and writing it into such an entry could give it the wrong language. A Lang Alt with `x-default` alone, the common case, is allowed (Q7, §13, checked 2026-11-18) |
 | **Unknown namespaces, list items not touched, camera maker notes** are never removed or rewritten | [Product] |
@@ -766,9 +788,11 @@ listed under the table (§17.1).
 
 ## 18. What is left after milestone 8
 
-- §6.1 Exif ImageEditor ↔ Contributor and GPS → Location Created (`docs/tasks/backlog.md`; GPS gets
-  the next metadata ADR after ADR 0017, its §7.2).
-- Keyword qualifiers (§8; `docs/tasks/backlog.md`).
+- §6.6 Exif ImageEditor ↔ Contributor: T192.
+- §8 lists with qualifiers not written: T193, T194. Editing such a list with its qualifiers kept
+  (`docs/tasks/backlog.md`).
+- §6.1 GPS → Location Created (`docs/tasks/backlog.md`; GPS gets the next metadata ADR after
+  ADR 0017, its §7.2).
 - From §10: template sub-fields of lists of structures, variables, template files in XMP
   (`docs/tasks/backlog.md`; ADR 0017 U13).
 - The other controlled vocabularies of §11 (`docs/tasks/backlog.md`).
@@ -800,3 +824,4 @@ listed under the table (§17.1).
 | 18 | 2026-11-14 | I13 (T133): implemented status, where each §12 test is, §18 what is left; no new decision |
 | 19 | 2026-11-18 | Owner changed Q2: a cleared field of a manufacturer RAW is not marked and is filled again from the camera's Exif (§6.4, §13, Q2); D1 dropped (§17, §17.1); §18 brought up to date (U11 and U12 done) |
 | 20 | 2026-11-18 | §16 point 5 done: XMP Part 1 (ISO 16684-1:2011), XMP Part 3, IIM 4.2 and MWG §5.2 read (R3); labels [XMP-1], [XMP-3], [IIM 4.2] (§1.1). Q3 and Q8 confirmed (§4.2, §5.3, §7, §13, §14); Q7 compatible with MWG §5.2 and marked [Product ≠ std] against an [XMP-1 §8.2.2.4] "should" (§8, §13, §14), as revision 8 foresaw; §18 brought up to date. No rule changed |
+| 21 | 2026-11-18 | Owner decisions: §6.6 Image Editor ↔ Contributor (the content editor by its Role URI, `http://` too; Exif fills an absent Contributor, otherwise a conflict whose Exif side keeps the other Contributors; ImageEditor written only if it exists); §8 a list whose items have qualifiers is shown but not written, after a check showed that ExifTool 13.59 cannot change or remove a qualified item; §18: T192, T193, T194 |
