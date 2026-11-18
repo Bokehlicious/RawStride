@@ -384,6 +384,13 @@ pub fn move_key_action(key: egui::Key, ctrl: bool, shift: bool, alt: bool) -> Op
     }
 }
 
+/// Whether a key press is the Delete key of "Delete to Recycle Bin" (ADR 0018 §2.1, B4, T189):
+/// Delete with no modifier, in the contact sheet and the preview. Delete is a key of no other key
+/// map.
+pub fn delete_key_action(key: egui::Key, ctrl: bool, shift: bool, alt: bool) -> bool {
+    key == egui::Key::Delete && !ctrl && !shift && !alt
+}
+
 /// A key of the preview's own (ADR 0017 §2.2, §2.4, U3-Q1–Q3, T111), asked before every other key
 /// map while the preview is shown.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -996,7 +1003,7 @@ mod tests {
     }
 
     /// The command a key gives in `view`, through the key functions in the order `main.rs` asks
-    /// them (shell keys, the move keys P and Ctrl+Z (T174), import, tabs, ratings, `M`, `I`, then
+    /// them (shell keys, the move keys P and Ctrl+Z (T174), the Delete key (T189), import, tabs, ratings, `M`, `I`, then
     /// the view's own keys). The preview's
     /// clipping keys (J and Shift+J, T148) and the compare's keys (C, K, Shift+K and V, T153; L,
     /// T154) are asked before the loupe's keys, which take no Shift chord.
@@ -1019,6 +1026,9 @@ mod tests {
                 MoveKey::MovePicked => Command::MovePicked,
                 MoveKey::UndoMove => Command::UndoMove,
             });
+        }
+        if delete_key_action(key, ctrl, shift, alt) {
+            return Some(Command::DeleteToRecycleBin);
         }
         if opens_import(key, ctrl, shift, alt) {
             return Some(Command::Import);
@@ -1208,6 +1218,70 @@ mod tests {
             ),
             Some(Command::ToggleZoom)
         );
+    }
+
+    /// Delete is the key of "Delete to Recycle Bin" (ADR 0018 B4, T189): only with no modifier,
+    /// in both views, and a key of no other key map.
+    #[test]
+    fn delete_is_the_key_of_delete_to_recycle_bin_in_both_views() {
+        use egui::Key as K;
+        assert!(delete_key_action(K::Delete, false, false, false));
+        let modifiers = [
+            (false, false, false),
+            (true, false, false),
+            (false, true, false),
+            (false, false, true),
+            (true, true, false),
+            (true, false, true),
+            (false, true, true),
+            (true, true, true),
+        ];
+        for (ctrl, shift, alt) in modifiers {
+            if (ctrl, shift, alt) != (false, false, false) {
+                assert!(
+                    !delete_key_action(K::Delete, ctrl, shift, alt),
+                    "Delete with ctrl {ctrl} shift {shift} alt {alt}"
+                );
+            }
+            // No other key map has Delete, with any modifiers.
+            assert_eq!(key_action(K::Delete, ctrl, alt), None);
+            assert_eq!(loupe_key_action(K::Delete, ctrl, alt), None);
+            assert_eq!(grid_key_action(K::Delete, ctrl, shift, alt), None);
+            assert_eq!(rating_key_action(K::Delete, ctrl, shift, alt), None);
+            assert_eq!(shell_key_action(K::Delete, ctrl, shift, alt), None);
+            assert_eq!(move_key_action(K::Delete, ctrl, shift, alt), None);
+            assert_eq!(preview_key_action(K::Delete, ctrl, shift, alt), None);
+            assert_eq!(tab_action(K::Delete, ctrl, shift, alt), None);
+            assert_eq!(editor_key_action(K::Delete, ctrl, shift, alt), None);
+            assert_eq!(dialog_key_action(K::Delete, ctrl, alt), None);
+            assert!(!opens_import(K::Delete, ctrl, shift, alt));
+        }
+        // Another key is not Delete.
+        assert!(!delete_key_action(K::Backspace, false, false, false));
+        let delete = KeyChord {
+            key: K::Delete,
+            ctrl: false,
+            shift: false,
+            alt: false,
+        };
+        for view in [ViewMode::Grid, ViewMode::Loupe] {
+            assert_eq!(
+                command_of_key(delete, view),
+                Some(Command::DeleteToRecycleBin),
+                "{view:?}"
+            );
+            assert_eq!(
+                command_of_key(
+                    KeyChord {
+                        shift: true,
+                        ..delete
+                    },
+                    view
+                ),
+                None,
+                "Shift+Delete in {view:?}"
+            );
+        }
     }
 
     /// J and Shift+J are the preview's clipping keys (ADR 0017 U7b-Q5, T148): each gives its own

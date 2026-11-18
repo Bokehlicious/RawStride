@@ -16,7 +16,9 @@ use std::time::{Duration, Instant};
 use eframe::egui;
 use inspector::{ExifInspector, ExifReader, ExifShown, exif_state_text};
 use inspector_text::{InspectorText, exif_label, inspector_text};
-use metadata::{EditorEvent, InspectorState, MetadataCache, MetadataSubmit, MoveAnswer};
+use metadata::{
+    DeleteAnswer, EditorEvent, InspectorState, MetadataCache, MetadataSubmit, MoveAnswer,
+};
 use pw_imagecheck::RawImageCheck;
 use pw_loupe::SavedLibrary;
 use pw_loupe::clipping::{ClipChoice, OverlayCache, overlay_uv};
@@ -71,6 +73,12 @@ use pw_loupe::{
 };
 use pw_loupe::{Compare, Layout, compare_side_text, follow, open_indexes, sides};
 use pw_loupe::{
+    DeleteBatch, DeleteStep, delete_button_text, delete_cancel_text, delete_confirm_text,
+    delete_failed_text, delete_key_action, delete_partly_failed_text, delete_partners_text,
+    delete_refused_text, delete_running_text, delete_title_text, delete_while_moving_text,
+    deleted_text, deletes_failed_text, plan_delete, same_path,
+};
+use pw_loupe::{
     FILMSTRIP_CELL_WIDTH, FILMSTRIP_IMAGE_HEIGHT, FILMSTRIP_LABEL_HEIGHT, FILMSTRIP_MARGIN,
     FILMSTRIP_SPACING, PreviewKey, PreviewText, Restore, ThumbGate, WindowBefore, clamp_offset,
     filmstrip_range, hit_test, preview_info_shown, preview_key_action, preview_parts, preview_text,
@@ -91,7 +99,9 @@ use pw_metadata::iim::Fallback;
 use pw_metadata::journal::Journal;
 use pw_metadata::read::MetadataRead;
 use pw_metadata::template::Mode;
-use pw_metadata::{MetadataWorker, Rating, WriteSetup, supports_rating};
+use pw_metadata::{
+    DeleteError, DeleteRefusal, MetadataWorker, PreparedDelete, Rating, WriteSetup, supports_rating,
+};
 use pw_render::{Textures, view_px};
 use pw_thumbcache::{ThumbWorker, ThumbnailRequest};
 use pw_viewcore::native::NativeBackend;
@@ -134,6 +144,9 @@ const BACKDROP: egui::Color32 = egui::Color32::from_black_alpha(60);
 const WINDOW_POLL_INTERVAL: Duration = Duration::from_millis(100);
 /// How often a frame is asked for while a batch of moves or an undo runs (ADR 0017 U9b, T174).
 const MOVE_POLL_INTERVAL: Duration = Duration::from_millis(50);
+/// The widest the confirmation of a delete to the Recycle Bin grows; its texts wrap within it
+/// (ADR 0018 B4, T189).
+const DELETE_WINDOW_WIDTH: f32 = 420.0;
 /// How often a frame is asked for while capture times are being read for the sort (T138).
 const CAPTURE_POLL_INTERVAL: Duration = Duration::from_millis(50);
 /// The space around the line at the top of a side of the compare, and the plate behind it (T153).
@@ -756,6 +769,20 @@ struct Loupe {
     message: Option<String>,
     /// The moves to subfolders, their undo list and the batch or undo that runs (T174).
     moves: Moves,
+    /// Where a delete to the Recycle Bin is (ADR 0018 §2.10, B4, T189); one at a time.
+    delete: DeleteStep,
+    /// The active tab's folder when the delete was asked for; `None` while `delete` is `Idle`.
+    /// The confirmation is not shown for another tab (T189 point 5).
+    delete_folder: Option<PathBuf>,
+    /// The ids of the deletes sent for the running batch; an answer with another id is ignored.
+    /// Cleared when `delete` is `Idle` again.
+    delete_ids: HashSet<pw_metadata::RequestId>,
+    /// The confirmation's Cancel gets the focus on the first frame it is shown (ADR 0018 B-Q4):
+    /// set when `delete` becomes `Confirming`, cleared when the window is first drawn.
+    delete_focus_cancel: bool,
+    /// The id of the confirmation's Delete button as last drawn, so Enter deletes only while it
+    /// has the focus.
+    delete_button: Option<egui::Id>,
     indicator_after: Duration,
     tabs: Tabs,
     /// Whether the active tab's ratings have been read since the tab was loaded. A later read of
@@ -3033,11 +3060,38 @@ impl Loupe {
     }
 
     /// Whether a dialog holds the program: the metadata window (modal, D16), the settings window,
-    /// or a shown import dialog.
+    /// a shown import dialog, or the confirmation of a delete (T189), also while it waits for
+    /// another dialog to close.
     fn dialog_open(&self) -> bool {
+        self.other_dialog_open() || matches!(self.delete, DeleteStep::Confirming(_))
+    }
+
+    /// Whether a dialog other than the confirmation of a delete is open: the metadata window, the
+    /// settings window or a shown import dialog. The confirmation waits while one is (T189).
+    fn other_dialog_open(&self) -> bool {
         self.metadata_window.is_some()
             || self.settings_window.is_some()
             || (self.import_dialog.is_some() && !self.import_hidden)
+    }
+
+    /// Whether the confirmation of a delete is shown this frame: the step is `Confirming`, no
+    /// other dialog is open, and the active tab is still of the delete's folder (T189 point 5).
+    fn delete_window_shown(&self) -> bool {
+        matches!(self.delete, DeleteStep::Confirming(_))
+            && !self.other_dialog_open()
+            && self.delete_tab_active()
+    }
+
+    /// Whether the active tab is of the folder the delete was asked for in (`same_folder`); the
+    /// confirmation never asks about a tab that is not shown (T189 point 5).
+    fn delete_tab_active(&self) -> bool {
+        match (
+            self.tabs.active().and_then(|tab| tab.folder.as_deref()),
+            self.delete_folder.as_deref(),
+        ) {
+            (Some(open), Some(folder)) => same_folder(open, folder),
+            _ => false,
+        }
     }
 
     /// Keeps the window's state for `settings.txt` (ADR 0017 §2.5, T109): full screen, maximized,
@@ -4054,6 +4108,11 @@ impl Loupe {
     /// by `follow_moves`. While a batch or an undo runs or waits, the status line says so and
     /// nothing is queued (U9-Q11, T183); nothing to undo shows so.
     fn undo_move(&mut self) {
+        // Nothing is moved back while a delete is under way (ADR 0018 §2.10, T189 point 7).
+        if self.delete.busy() {
+            self.message = Some(delete_running_text().to_owned());
+            return;
+        }
         if self.moves.busy() {
             self.message = Some(move_running_text().to_owned());
             return;
@@ -4099,6 +4158,10 @@ impl Loupe {
         }
         loop {
             if self.moves.running.is_none() {
+                // A waiting batch waits while a delete is under way (ADR 0018 §2.10, T189).
+                if self.delete.busy() {
+                    break;
+                }
                 match self.moves.waiting.pop_front() {
                     Some(batch) => {
                         self.moves.running = Some(MoveRun::Batch {
@@ -4395,6 +4458,290 @@ impl Loupe {
         });
     }
 
+    /// Delete or Image ▸ Delete to Recycle Bin (ADR 0018 §2.1, B4, T189): while a move or an undo
+    /// runs or waits, or a delete is under way, the status line says so and nothing else is done;
+    /// otherwise the key's targets (`key_targets`, B-Q2) are prepared by `follow_deletes`, and the
+    /// active tab's folder is kept. No targets, nothing.
+    fn delete_images(&mut self) {
+        if self.moves.busy() {
+            self.message = Some(delete_while_moving_text().to_owned());
+            return;
+        }
+        if self.delete.busy() {
+            self.message = Some(delete_running_text().to_owned());
+            return;
+        }
+        let paths = self.key_targets();
+        if paths.is_empty() {
+            return;
+        }
+        let Some(folder) = self.tabs.active().and_then(|tab| tab.folder.clone()) else {
+            return;
+        };
+        match resolve_paths(&paths) {
+            Ok(images) => {
+                self.delete = DeleteStep::Preparing { images, id: None };
+                self.delete_folder = Some(folder);
+            }
+            Err(error) => self.message = Some(error),
+        }
+    }
+
+    /// The delete is over or dropped: the step is `Idle`, and what belongs to it is cleared.
+    fn delete_idle(&mut self) {
+        self.delete = DeleteStep::Idle;
+        self.delete_folder = None;
+        self.delete_ids.clear();
+        self.delete_focus_cancel = false;
+        self.delete_button = None;
+    }
+
+    /// The delete's follow-up of a frame, right after `follow_moves` (T189 point 5): the answers
+    /// go to the step (an answer of another request is ignored); a prepare not yet taken is sent;
+    /// the running batch's images with no rating write waiting are sent, and a finished batch is
+    /// acted on. A frame is asked for while the step is `Preparing` or `Running`.
+    fn follow_deletes(&mut self, ctx: &egui::Context) {
+        for answer in self.metadata.take_deletes() {
+            match answer {
+                DeleteAnswer::Prepared { id, images } => {
+                    if matches!(
+                        self.delete,
+                        DeleteStep::Preparing { id: Some(sent), .. } if sent == id
+                    ) {
+                        self.delete_prepared(images);
+                    }
+                }
+                DeleteAnswer::Deleted { id, image, result } => {
+                    if let DeleteStep::Running(batch) = &mut self.delete
+                        && self.delete_ids.contains(&id)
+                    {
+                        batch.answered(&image, result);
+                    }
+                }
+            }
+        }
+        let suffixes = &self.settings.shell.companion_suffixes;
+        let worker = &mut self.metadata_worker;
+        let mut stopped = false;
+        match &mut self.delete {
+            DeleteStep::Preparing {
+                images,
+                id: id @ None,
+            } => {
+                // The images are cloned, so a full queue keeps them for the next frame.
+                match MetadataSubmit::prepare_delete(
+                    worker,
+                    images.clone(),
+                    image_extensions(),
+                    suffixes.clone(),
+                ) {
+                    Ok(sent) => *id = Some(sent),
+                    Err(pw_metadata::SubmitError::QueueFull) => {}
+                    Err(pw_metadata::SubmitError::Stopped) => stopped = true,
+                }
+            }
+            DeleteStep::Running(batch) => {
+                let metadata = &self.metadata;
+                for image in batch.to_send(|path| metadata.is_pending(path)) {
+                    match MetadataSubmit::delete_image(
+                        worker,
+                        image.clone(),
+                        image_extensions(),
+                        suffixes.clone(),
+                    ) {
+                        Ok(id) => {
+                            self.delete_ids.insert(id);
+                            batch.sent(&image);
+                        }
+                        Err(pw_metadata::SubmitError::QueueFull) => break,
+                        Err(pw_metadata::SubmitError::Stopped) => {
+                            let error = DeleteError {
+                                file: image.clone(),
+                                reason: DeleteRefusal::Failed(worker_stopped_text().to_owned()),
+                                left: Vec::new(),
+                                deleted: Vec::new(),
+                            };
+                            batch.answered(&image, Err(error));
+                        }
+                    }
+                }
+            }
+            DeleteStep::Idle | DeleteStep::Preparing { .. } | DeleteStep::Confirming(_) => {}
+        }
+        if stopped {
+            self.delete_idle();
+            self.message = Some(worker_stopped_text().to_owned());
+        }
+        if matches!(&self.delete, DeleteStep::Running(batch) if batch.done())
+            && let DeleteStep::Running(batch) = std::mem::take(&mut self.delete)
+        {
+            self.deletes_done(ctx, batch);
+        }
+        if matches!(
+            self.delete,
+            DeleteStep::Preparing { .. } | DeleteStep::Running(_)
+        ) {
+            ctx.request_repaint_after(MOVE_POLL_INTERVAL);
+        }
+    }
+
+    /// The worker's answer to the prepare (T189 point 5): dropped, with nothing shown, when the
+    /// active tab is no longer of the delete's folder; otherwise its plan. With no image to delete
+    /// the status line names the refused ones (or is left as it is when there are none) and the
+    /// step is `Idle`; else the confirmation asks.
+    fn delete_prepared(&mut self, prepared: Vec<PreparedDelete>) {
+        if !self.delete_tab_active() {
+            self.delete_idle();
+            return;
+        }
+        let plan = plan_delete(prepared, is_image_file);
+        if plan.images.is_empty() {
+            if let Some((image, reason)) = plan.refused.first() {
+                self.message = Some(delete_refused_text(
+                    plan.refused.len(),
+                    &image_name(image),
+                    reason,
+                ));
+            }
+            self.delete_idle();
+            return;
+        }
+        self.delete = DeleteStep::Confirming(plan);
+        self.delete_focus_cancel = true;
+    }
+
+    /// The confirmation of a delete (T189 point 4), an `egui::Modal` drawn while the step is
+    /// `Confirming` and no other dialog is open, and dropped when the active tab is no longer of
+    /// the delete's folder: the question, the refused images and the image files that go along,
+    /// and Delete and Cancel. Cancel has the focus on the first frame (B-Q4); Escape or a click
+    /// outside is Cancel. Cancel → `Idle`; Delete → `Running`.
+    fn draw_delete_window(&mut self, ctx: &egui::Context) {
+        if !matches!(self.delete, DeleteStep::Confirming(_)) || self.other_dialog_open() {
+            return;
+        }
+        // Another tab was made active while the confirmation waited for another dialog (which is
+        // not modal) or on the frame it began: the confirmation is dropped, nothing shown.
+        if !self.delete_tab_active() {
+            self.delete_idle();
+            return;
+        }
+        let DeleteStep::Confirming(plan) = &self.delete else {
+            return;
+        };
+        let question = delete_confirm_text(plan.images.len(), plan.files, plan.bytes);
+        let refused = plan.refused.first().map(|(image, reason)| {
+            delete_refused_text(plan.refused.len(), &image_name(image), reason)
+        });
+        let partners = (!plan.partners.is_empty()).then(|| {
+            let names: Vec<String> = plan.partners.iter().map(|file| image_name(file)).collect();
+            delete_partners_text(&names)
+        });
+        let focus_cancel = std::mem::take(&mut self.delete_focus_cancel);
+        let modal = egui::Modal::new(egui::Id::unique("delete-confirmation")).show(ctx, |ui| {
+            ui.set_max_width(DELETE_WINDOW_WIDTH);
+            ui.heading(delete_title_text());
+            ui.add_space(PANEL_ROW_SPACING);
+            ui.label(question);
+            if let Some(text) = refused {
+                ui.add_space(PANEL_ROW_SPACING);
+                ui.label(text);
+            }
+            if let Some(text) = partners {
+                ui.add_space(PANEL_ROW_SPACING);
+                ui.label(text);
+            }
+            ui.add_space(PANEL_ROW_SPACING);
+            ui.horizontal(|ui| {
+                let delete = ui
+                    .push_id("delete-confirmation-delete", |ui| {
+                        ui.button(delete_button_text())
+                    })
+                    .inner;
+                let cancel = ui
+                    .push_id("delete-confirmation-cancel", |ui| {
+                        ui.button(delete_cancel_text())
+                    })
+                    .inner;
+                if focus_cancel {
+                    cancel.request_focus();
+                }
+                (delete.id, delete.clicked(), cancel.clicked())
+            })
+            .inner
+        });
+        let (delete_id, delete, cancel) = modal.inner;
+        self.delete_button = Some(delete_id);
+        if delete {
+            if let DeleteStep::Confirming(plan) = std::mem::take(&mut self.delete) {
+                self.delete = DeleteStep::Running(DeleteBatch::new(plan.images));
+            }
+            ctx.request_repaint();
+        } else if cancel || modal.should_close() {
+            self.delete_idle();
+        }
+    }
+
+    /// A batch of deletes has all its answers (T189 point 6): every tab of the deleted files'
+    /// folders drops them, the active one's view cores and thumbnails follow, the metadata cache
+    /// and the undo list of moves forget them, the failures and listing errors go to the Tasks
+    /// list, and the status line is set last. The step is `Idle` after.
+    fn deletes_done(&mut self, ctx: &egui::Context, batch: DeleteBatch) {
+        let result = batch.finish();
+        let deleted = &result.files;
+        let folders = image_folders(deleted.iter().map(PathBuf::as_path));
+        let (active, mut errors) = self.replace_tab_files(&folders, |tab| {
+            let resolved = resolve_paths(&tab.files)?;
+            let files = tab
+                .files
+                .iter()
+                .zip(resolved)
+                .filter(|(_, path)| !deleted.iter().any(|file| same_path(file, path)))
+                .map(|(file, _)| file.clone())
+                .collect();
+            Ok((files, None))
+        });
+        if active {
+            self.active_reordered();
+        }
+        self.metadata.forget_deleted(&result.files);
+        self.moves.undo.forget_deleted(&result.files);
+        let failure_text = |error: &DeleteError| {
+            let name = image_name(&error.file);
+            let reason = error.reason.to_string();
+            if error.left.is_empty() {
+                delete_failed_text(&name, &reason)
+            } else {
+                let left: Vec<String> = error
+                    .left
+                    .iter()
+                    .map(|file| file.display().to_string())
+                    .collect();
+                delete_partly_failed_text(&name, &reason, &left)
+            }
+        };
+        let now = ClockTime::now();
+        for error in &errors {
+            self.tasks.add_error(error, now);
+        }
+        for (_, error) in &result.failed {
+            self.tasks.add_error(&failure_text(error), now);
+        }
+        // A folder listing that failed is shown as `batch_done` does when nothing failed.
+        self.message = Some(match result.failed.as_slice() {
+            [] => errors
+                .pop()
+                .unwrap_or_else(|| deleted_text(result.images.len())),
+            [(_, error)] => failure_text(error),
+            [.., (_, error)] => deletes_failed_text(
+                result.failed.len(),
+                &image_name(&error.file),
+                &error.reason.to_string(),
+            ),
+        });
+        self.delete_idle();
+        ctx.request_repaint();
+    }
+
     /// After accepted ratings: the images that stopped matching leave at once (§2.2, amendment
     /// 1). Returns `Some` with the position the contact sheet scrolls to when the visible list
     /// changed. Used by `rate` and when the metadata window closes after a rating (T124).
@@ -4453,6 +4800,11 @@ impl Loupe {
             }
             // Greyed while the undo list is empty or a batch or an undo runs (U9-Q8).
             Command::UndoMove => !self.moves.undo.is_empty() && !self.moves.busy(),
+            // Greyed without a current image, and in a tab without a folder, whose list is not
+            // followed after a delete (T189). A running move or delete is said when chosen.
+            Command::DeleteToRecycleBin => {
+                tab.is_some_and(|tab| tab.position().is_some() && tab.folder.is_some())
+            }
             Command::ToggleView => tab.is_some_and(|tab| !tab.visible.is_empty()),
             // Compare opens with two images in the stepped list, and closes an open compare; the
             // other four act only in the compare (T153, T154).
@@ -4515,6 +4867,7 @@ impl Loupe {
             Command::Label(label) => self.rate_from_menu(RatingKey::Label(label)),
             Command::ClearLabel => self.rate_from_menu(RatingKey::ClearLabel),
             Command::ToggleMode => self.act(Action::ToggleMode, None),
+            Command::DeleteToRecycleBin => self.delete_images(),
             Command::ToggleView => match self.tabs.active().map(|tab| tab.mode) {
                 Some(ViewMode::Grid) => {
                     self.switch_mode(ViewMode::Loupe);
@@ -5066,6 +5419,8 @@ impl Loupe {
         }
         // The moves to subfolders and their undo follow the answers and are sent (T174).
         self.follow_moves(&ctx);
+        // The delete to the Recycle Bin follows its answers and is sent (ADR 0018 B4, T189).
+        self.follow_deletes(&ctx);
         // A rolled-back write does not refilter (ADR 0014 §2.2; the next move drops the image); the
         // ratings becoming ready does.
         self.refilter_when_ratings_change();
@@ -5086,6 +5441,7 @@ impl Loupe {
         // on the preview closes it first, then opens as in the contact sheet (T111).
         if let Some(path) = dropped
             && self.metadata_window.is_none()
+            && !matches!(self.delete, DeleteStep::Confirming(_))
         {
             if self.in_preview() {
                 self.switch_mode(ViewMode::Grid);
@@ -5172,6 +5528,18 @@ impl Loupe {
         let mut dialog_consumes_keys = self.import_dialog.is_some() && !self.import_hidden;
         let mut start_import = false;
         for (tab_action, key, ctrl, shift, alt, repeat) in key_actions {
+            // The confirmation of a delete takes every key while it is shown (T189 point 4):
+            // Escape cancels, Enter cancels unless the Delete button has the focus (then egui
+            // clicks it), every other key does nothing.
+            if self.delete_window_shown() {
+                let delete_focused = self
+                    .delete_button
+                    .is_some_and(|id| ctx.memory(|memory| memory.has_focus(id)));
+                if key == egui::Key::Escape || (key == egui::Key::Enter && !delete_focused) {
+                    self.delete_idle();
+                }
+                continue;
+            }
             // The metadata window is modal (D16, T107): no key reaches the loupe, the contact
             // sheet or the tabs, and keys typed into its fields reach nothing else. Escape is its
             // "Avbryt"; Enter does not press OK.
@@ -5261,6 +5629,15 @@ impl Loupe {
                         MoveKey::MovePicked => self.run_command(&ctx, Command::MovePicked),
                         MoveKey::UndoMove => self.undo_move(),
                     }
+                    ctx.request_repaint();
+                }
+                continue;
+            }
+            // Delete (ADR 0018 §2.1, B4, T189) in the contact sheet and the preview, through its
+            // command; not while a text field has the keyboard or a dialog holds the program.
+            if !ctx.egui_wants_keyboard_input() && delete_key_action(key, ctrl, shift, alt) {
+                if !self.dialog_open() {
+                    self.run_command(&ctx, Command::DeleteToRecycleBin);
                     ctx.request_repaint();
                 }
                 continue;
@@ -5389,7 +5766,9 @@ impl Loupe {
                     .sum();
                 (wheel, input.pointer.hover_pos())
             });
+            // Not behind the metadata window or the confirmation of a delete (T189 point 4).
             if self.metadata_window.is_none()
+                && !self.delete_window_shown()
                 && pointer.is_some_and(|pointer| rect.contains(pointer))
             {
                 self.wheel_notches += wheel;
@@ -5801,6 +6180,22 @@ fn image_name(image: &Path) -> String {
         || image.display().to_string(),
         |name| name.to_string_lossy().into_owned(),
     )
+}
+
+/// Whether `path` is an image file, one of `pw_raw::SUPPORTED_EXTENSIONS` without regard to case,
+/// and not a companion file (T189's `plan_delete`).
+fn is_image_file(path: &Path) -> bool {
+    path.extension()
+        .map(|extension| extension.to_string_lossy().to_lowercase())
+        .is_some_and(|extension| pw_raw::SUPPORTED_EXTENSIONS.contains(&extension.as_str()))
+}
+
+/// `pw_raw::SUPPORTED_EXTENSIONS` as the metadata worker's move and delete requests take them.
+fn image_extensions() -> Vec<String> {
+    pw_raw::SUPPORTED_EXTENSIONS
+        .iter()
+        .map(|extension| (*extension).to_owned())
+        .collect()
 }
 
 /// The paths as the metadata cache keys them (`MetadataCache::begin_load`): relative paths are
@@ -7505,6 +7900,7 @@ impl eframe::App for Loupe {
         self.draw_import_dialog(&ctx);
         self.draw_settings_window(&ctx);
         self.draw_metadata_window(&ctx);
+        self.draw_delete_window(&ctx);
         if !commands.is_empty() {
             for command in commands {
                 self.run_command(&ctx, command);
@@ -7861,6 +8257,11 @@ fn run(options: Options) -> Result<(), String> {
                 field_values_path,
                 message: None,
                 moves: Moves::default(),
+                delete: DeleteStep::Idle,
+                delete_folder: None,
+                delete_ids: HashSet::new(),
+                delete_focus_cancel: false,
+                delete_button: None,
                 indicator_after,
                 tabs: Tabs::default(),
                 ratings_read: false,

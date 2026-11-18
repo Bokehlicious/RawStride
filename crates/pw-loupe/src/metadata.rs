@@ -40,10 +40,8 @@ pub(crate) trait MetadataSubmit: RatingWriter {
     /// The files of `moved` moved back where they came from (ADR 0017 U9b, T170, T173).
     fn move_back(&mut self, moved: Vec<Moved>) -> Result<RequestId, SubmitError>;
 
-    // T189 (ADR 0018 B4) uses these; until then only the tests do.
     /// The groups of `images` and whether each can be deleted, for the confirmation (ADR 0018
     /// B2, T186, T188).
-    #[cfg_attr(not(test), allow(dead_code))]
     fn prepare_delete(
         &mut self,
         images: Vec<PathBuf>,
@@ -52,7 +50,6 @@ pub(crate) trait MetadataSubmit: RatingWriter {
     ) -> Result<RequestId, SubmitError>;
 
     /// `image` and its companion files sent to the Recycle Bin (ADR 0018 B2, T186, T188).
-    #[cfg_attr(not(test), allow(dead_code))]
     fn delete_image(
         &mut self,
         image: PathBuf,
@@ -319,8 +316,6 @@ pub(crate) struct MetadataCache {
 
 /// One answer of the metadata worker's delete requests (ADR 0018 B2, T186, T188), with the fields
 /// of its event.
-// T189 (ADR 0018 B4) uses these; until then only the tests do.
-#[cfg_attr(not(test), allow(dead_code))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum DeleteAnswer {
     /// The answer to `MetadataSubmit::prepare_delete`: one entry per image, in the order sent.
@@ -951,10 +946,8 @@ impl MetadataCache {
         std::mem::take(&mut self.moves)
     }
 
-    // T189 (ADR 0018 B4) uses these; until then only the tests do.
     /// The answers of the delete requests since the last call, in the order they came (ADR 0018
     /// B3, T188).
-    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn take_deletes(&mut self) -> Vec<DeleteAnswer> {
         std::mem::take(&mut self.deletes)
     }
@@ -964,7 +957,6 @@ impl MetadataCache {
     /// them, the rating store drops them, and a folder read waiting to be sent again no longer
     /// asks for them. A rating write still queued or sent is kept, as by `prune`; its answer for
     /// the missing file fails and is shown as any failed rating write.
-    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn forget_deleted(&mut self, files: &[PathBuf]) {
         let deleted = |path: &Path| files.iter().any(|file| file == path);
         self.images.retain(|path, _| !deleted(path));

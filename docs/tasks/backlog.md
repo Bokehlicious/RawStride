@@ -228,6 +228,26 @@ and reviewer:
   while a field has an error. A text on hover over the disabled button ("Correct the error in
   …", as `EditorText::NotSaved` names the items) would say why. Not important.
 
+- **Known limits of the delete to the Recycle Bin** (T189's brief and its reviews, 2026-11-18;
+  accepted when T189 was done, to be sorted after the owner's hand check of B4):
+  - *The worker:* if the metadata worker stops after it took a request, its answer never comes
+    and the delete stays busy, which also holds moves back (the moves have the same gap).
+  - *Quitting:* quitting while a delete runs waits only for rating writes, so the images not yet
+    sent are not deleted (each image is all or nothing in Windows' call).
+  - *What is shown:* a held Delete key repeats "A delete is still running"; nothing is shown while
+    the prepare runs; between the first answer and the end of the batch the deleted images are
+    still in the list, and a rating key on one fails (as for the moves).
+  - *Paths:* a JPG partner left out of the plan is not waited for, so a rating write still queued
+    for it fails after the delete (noise, not loss); a folder read already sent may put a deleted
+    path back into the metadata cache (the tab's list is the source); a `_rejected` folder reached
+    under another spelling is not matched by `same_path`, so a later Ctrl+Z on it fails safely.
+  - *Other windows:* while a delete runs, the metadata window can be opened on an image being
+    deleted, and its save then fails. While the confirmation waits, `same_folder` (which resolves
+    the folder on disk) is asked several times a frame; the drive was accepted by T185's check, so
+    it is a fixed drive.
+  - *The workers' release:* a delete refused at the worker has already released the image's view
+    sessions, as a failed move does (T186's review; the hand check of B4 looks at it).
+
 Removed on 2026-11-13 because they are done or planned elsewhere: ADR 0010 steps M3–M7 (done,
 T30–T40); ADR 0011 step K4 (done, T26–T29); moving rejected or picked images to `_rejected` /
 `_picked` (ADR 0013 §13), now ADR 0017 U9 (§2.6, U-Q6); the import dialog fields for title and description in the Tauri

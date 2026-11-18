@@ -460,6 +460,9 @@ pub enum Command {
     Label(&'static str),
     ClearLabel,
     ToggleMode,
+    /// The target images and their companion files sent to the Recycle Bin after a confirmation
+    /// (Image ▸ Delete to Recycle Bin, Delete; ADR 0018 §2.1, B4, T189).
+    DeleteToRecycleBin,
     /// The preview open ↔ closed (Visa ▸ Förhandsvisning, G; ADR 0017 §2.2, T111).
     ToggleView,
     Fit,
@@ -695,6 +698,8 @@ pub const MENUS: &[Menu] = &[
             MenuEntry::Submenu(SubmenuKind::Label, LABEL_ITEMS),
             MenuEntry::Separator,
             item(Command::ToggleMode, plain(Key::R)),
+            MenuEntry::Separator,
+            item(Command::DeleteToRecycleBin, plain(Key::Delete)),
         ],
     },
     Menu {
@@ -1018,6 +1023,34 @@ mod tests {
         assert_eq!(Command::MovePicked.acts_in(), Where::Both);
         assert_eq!(Command::MoveToSubfolders.acts_in(), Where::Both);
         assert_eq!(Command::UndoMove.acts_in(), Where::Both);
+        assert_eq!(Command::DeleteToRecycleBin.acts_in(), Where::Both);
+    }
+
+    /// Delete to Recycle Bin (Delete) is the last item of the Image menu, after RAW ↔ JPEG with a
+    /// separator before it, and no other item shows Delete (ADR 0018 B4, T189).
+    #[test]
+    fn delete_to_recycle_bin_is_the_last_item_of_the_image_menu() {
+        let Some(image) = MENUS.iter().find(|menu| menu.kind == MenuKind::Image) else {
+            panic!("there is an Image menu");
+        };
+        let Some(start) = image.entries.len().checked_sub(3) else {
+            panic!("the Image menu has at least three entries");
+        };
+        assert_eq!(
+            image.entries.get(start..),
+            Some(
+                &[
+                    item(Command::ToggleMode, plain(Key::R)),
+                    MenuEntry::Separator,
+                    item(Command::DeleteToRecycleBin, plain(Key::Delete)),
+                ][..]
+            )
+        );
+        for menu_item in menu_items() {
+            if menu_item.key.is_some_and(|chord| chord.key == Key::Delete) {
+                assert_eq!(menu_item.command, Command::DeleteToRecycleBin);
+            }
+        }
     }
 
     /// The moves' items (ADR 0017 U9-Q5–U9-Q8, T174): Undo Move (Ctrl+Z) first in the Edit menu,
