@@ -17,7 +17,13 @@ Claude Code sessions. Do not repeat or reinterpret `AGENTS.md` here.
   No unrelated refactoring.
 - Ask before changing a file the owner has not asked about.
 
-## 3. Completion Report
+## 3. Shell Scripts
+- An edit or helper script longer than a few lines is written with the Write tool to the session
+  scratchpad and run as `python <path>`; never sent inline as a heredoc or `python -c`, which
+  breaks on quoting in this environment.
+- A handful of exact replacements in one file is done with the Edit tool, not a script.
+
+## 4. Completion Report
 - Every file modified or created, what changed in each and why.
 - The tests actually run, with the summary from `test-output.txt` (`.\tools\check.ps1`), or a
   statement that no tests were run and why.
