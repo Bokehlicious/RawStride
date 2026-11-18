@@ -27,13 +27,6 @@ and reviewer:
   large JPEG and a cached mid-size preview. T160's hand check (owner, 2026-11-17) had only four
   RAF files and showed no problem; too few to judge, so this waits for a folder with many RAF
   files.
-- **A region render fails on every RAF** (T182's finding, 2026-11-17; to be a task of its own):
-  `Session::render_region_with` fails on `_DSF4271.RAF` and `_DSF4243.RAF` with `process:
-  Input/output error` from `dcraw_process` with a `cropbox` (`pwlr.cpp`), with PPG and AHD, in a
-  fresh session, after `statistics` and after `render_half`. The loupe's Zoom, Ring and Scaled
-  views use it (`pw-viewcore` `native.rs`, `render_region` with `Demosaic::Ppg`), so zooming into
-  a RAF most likely shows an error; not yet checked in the app. T182's test 2 leaves the region
-  render out for this reason.
 - **ORF and CR2 in `pw-raw`** (survey, 2026-11-17; owner: no need now, the cameras are gone).
   Both are listed in `SUPPORTED_EXTENSIONS` and LibRaw 0.22.3 renders both, but `pw-raw` falls
   short. Sample files: the owner's five ORF (OM-1, E-M1 Mark II) and three CR2 (EOS-1D X Mark II)
@@ -284,3 +277,5 @@ group gathered again at delete time, and a tab closed while the batch runs.
 Moved to an ADR on 2026-11-18: "The folder follows changes on disk" (ADR 0026, accepted by the
 owner the same day, with the two ADR 0017 §7.2 wishes "Load a folder again" and "Images shown
 while importing"; steps F1–F4 in `plans/adr-0018-0025-steps.md`).
+Written as a task on 2026-11-18: "A region render fails on every RAF" (T182's finding) is T197,
+ADR 0027 step W0, moved forward by the owner to order 1b in `plans/adr-0018-0025-steps.md`.

@@ -19,7 +19,7 @@
   - ADR 0025 §2.2, §2.4 and §2.9 (the export's source, its separable Lanczos filter in plain Rust,
     and its new crate `pw-export`): the same filter is used by the view, in a crate of its own
     (§3.2, A-Q7); the export takes over no adjustment (A-Q14);
-  - the backlog item "A region render fails on every RAF", a prerequisite (§5, W0);
+  - the backlog item "A region render fails on every RAF", a prerequisite (§5, W0; task T197 since 2026-11-18);
   - [clean-room.md](../clean-room.md): this ADR describes the functions in our own words, from
     RawStride's own needs.
 
@@ -306,7 +306,7 @@ Each step ends with tests (GR11), the owner's hand check and, where an image is 
 
 | Step | Content |
 |---|---|
-| **W0** | (Prerequisite, its own task) the region render on RAF fixed (backlog) |
+| **W0** | (Prerequisite, its own task) the region render on RAF fixed (T197) |
 | **W1** | The Lanczos filter in its own crate (A-Q7) for every view below 100 %; the half-size view reduced on the worker and its use during zoom gestures; the conversion to the monitor profile moved after the downscale (§3.2) |
 | **W2** | Fine details (§3.1): measure a full PPG render of the owner's 61 Mpix files and a smaller format first; then the view kind and the swap; the measurement that decides the prefetch of +1 (A-Q5) |
 | **W3** | Sharpening (§3.3) with its settings; the overlay's adjustment marks, paused marks included (§2.1) |
