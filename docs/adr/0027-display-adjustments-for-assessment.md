@@ -319,6 +319,10 @@ Each step ends with tests (GR11), the owner's hand check and, where an image is 
 
 Order: A0, A1, A2, A3, A5, A4, A6, A7, A8, A9.
 
+**Placed in the step plan (owner, 2026-11-18):** last, after ADR 0025, in
+[`adr-0018-0025-steps.md`](../tasks/plans/adr-0018-0025-steps.md) as order 9. The shared filter
+crate (A-Q7) is therefore made by ADR 0025 X2, and A1 takes it into the view.
+
 ## 6. Not included
 
 - Saving any adjustment into the file, a sidecar or XMP; development settings of any kind.
