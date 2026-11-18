@@ -197,3 +197,4 @@ was when the task was done, so "this file", "below" and "the Log" in T1–T115 m
 | [T188](T188-delete-requests-and-answers-in-the-metadata-cache.md) | ADR 0018 B3, second part: the delete requests and answers in the shell's metadata part (pw-loupe) |
 | [T189](T189-delete-key-menu-window-and-wiring.md) | ADR 0018 B4: the Delete key, the menu item, the confirmation window and the deletes in the shell (pw-loupe) |
 | [T190](T190-delete-rejected-images.md) | ADR 0018 B5: "Delete Rejected Images" in the active tab's folder (pw-loupe) |
+| [T191](T191-remove-the-unused-cleared-path.md) | ADR 0007 Q2 (revision 19): the unused `Cleared` path removed (pw-metadata, pw-loupe) |

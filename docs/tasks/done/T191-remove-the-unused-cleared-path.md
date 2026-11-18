@@ -1,4 +1,4 @@
-# T191. Remove the unused `Cleared` path (ADR 0007 Q2, changed 2026-11-18) — Open
+# T191. Remove the unused `Cleared` path (ADR 0007 Q2, changed 2026-11-18) — Done
 
 - **Why:** the owner changed ADR 0007 Q2 on 2026-11-18 (revision 19, §6.4, §17.1): a field
   cleared in a manufacturer RAW file's sidecar is no longer marked; the camera's value fills it
@@ -91,3 +91,5 @@
 |---|---|---|
 | 2026-11-18 | Open | Added (ADR 0007 revision 19, Part C of the Q2/D1 change) |
 | 2026-11-18 | Open | Cold read: a fresh agent found that removing `'a` from `Work` needs `Work<'_>` changed in six places (point 4), that `test-inventory.md` line 21 and its header also change (point 11), and that the unused imports and the place of the new test were not named (point 10, Tests to add); all written in, with the line numbers it checked. No other file uses the removed items |
+| 2026-11-18 | Ready for review | Done as written (points 1–11, the five named tests removed, `a_raw_file_exif_fills_a_property_the_sidecar_lacks` added). `.\tools\check.ps1` all OK: 1879 passed, 72 ignored, 0 failed; no clippy warning (only the usual `raw-decode-bench` build-script line). The `grep` of Done when finds nothing. No other file changed |
+| 2026-11-18 | Done | Reviewed: all points done as written, `test-output.txt` newer than the last change (fmt, audit, test, clippy OK; 1879 passed, 72 ignored; no clippy warning), the Done-when grep finds nothing. Extra code review (two crates) by a fresh agent: no bug, nothing to fix; two optional nits not taken (`Work::fill` is now a pass-through to `insert`, kept as the task says; the new test's comment). No behaviour change, so no hand check. Nothing left over |

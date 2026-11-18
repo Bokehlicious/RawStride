@@ -29,15 +29,12 @@
 //! owner's decision during T82) and builds each value by the kind of its property. A bare JSON
 //! number still becomes a `Number`.
 //!
-//! `Cleared` (owner decision D1) is not read yet; `Readings::cleared` stays empty.
-//!
 //! [`MetadataRead::state`] is the [`FileState`] the write plan needs (T87), filled from the same
 //! readings before the reconciliation takes them: for a JPEG, TIFF or DNG whether the file has a
 //! readable IIM block (an unreadable one counts as none), its declared encoding, its values and its
 //! checksum, and which Exif "both ways" fields exist; for a manufacturer RAW no IIM and no Exif,
 //! because the plan never writes the RAW file and its sidecar holds neither (§4.2).
 
-use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use serde_json::{Map, Value as Json};
@@ -175,7 +172,6 @@ impl ExifTool {
             camera_xmp: camera.values,
             iim,
             exif,
-            cleared: BTreeSet::new(),
         });
         reconciled.notices.extend(unreadable);
         Ok(MetadataRead {
@@ -951,7 +947,6 @@ mod tests {
             camera_xmp: Vec::new(),
             iim: None,
             exif: ExifFields::default(),
-            cleared: BTreeSet::new(),
         });
         let mut refused: Vec<&str> = reconciled
             .notices

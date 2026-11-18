@@ -6,8 +6,7 @@
 //! - **Conflicts** (§5.1, "conflicts always visible"): every value with its origin and the rule
 //!   that was applied, until the next write by RawStride.
 //! - **Notices**: ignored sidecars (Q5, Q8), an unreadable IIM block, converted IIM text (§5.4),
-//!   refused and unreadable values, values hidden by the user (§6.4), the suggested Date Created
-//!   (§7) and the IIM checksum (§5.1).
+//!   refused and unreadable values, the suggested Date Created (§7) and the IIM checksum (§5.1).
 //!
 //! Text rule (owner, 2026-11-12): every text the user sees in the info panel is made here. Each
 //! text is a whole sentence built from one template with its values filled in, so another language
@@ -371,8 +370,8 @@ pub fn info_panel(read: &MetadataRead) -> InfoPanel {
     }
 }
 
-/// The notices, in this order: the file notices, the IIM notices, the refused values, the values
-/// hidden by the user, the unreadable values, the suggested Date Created, the IIM checksum.
+/// The notices, in this order: the file notices, the IIM notices, the refused values, the
+/// unreadable values, the suggested Date Created, the IIM checksum.
 fn notices(read: &MetadataRead) -> Vec<String> {
     let reconciled = &read.reconciled;
     let mut out: Vec<String> = read.file_notices.iter().map(file_notice_text).collect();
@@ -390,16 +389,6 @@ fn notices(read: &MetadataRead) -> Vec<String> {
             field = property_label(property, Language::En),
             origin = origin_text(*origin),
             reason = refused_reason(error)
-        )),
-        _ => None,
-    }));
-    out.extend(reconciled.notices.iter().filter_map(|notice| match notice {
-        Notice::HiddenByUser {
-            property, value, ..
-        } => Some(format!(
-            "{field}: the camera's value {value} is hidden by the user",
-            field = property_label(property, Language::En),
-            value = value_text(value)
         )),
         _ => None,
     }));
@@ -1106,11 +1095,6 @@ mod tests {
                 origin: Origin::Exif,
                 text: "2026:13:04 10:15:30".into(),
             },
-            Notice::HiddenByUser {
-                property: "dc:creator".into(),
-                value: Value::List(vec!["Kamera Ägare".into()]),
-                origin: Origin::XmpEmbedded,
-            },
             Notice::Refused {
                 property: "photoshop:City".into(),
                 origin: Origin::XmpSidecar,
@@ -1169,7 +1153,6 @@ mod tests {
                 "Licensor from XMP was not read: too many values",
                 "Title from IIM was not read: empty value",
                 "foo:Bar from Exif was not read: unknown field",
-                "Creator: the camera's value Kamera Ägare is hidden by the user",
                 "Date Created from Exif could not be read (2026:13:04 10:15:30)",
                 "Suggested Date Created from the camera: 2026-11-12T10:15:30",
                 "IIM has been changed by another program after XMP (the checksum does not match)",

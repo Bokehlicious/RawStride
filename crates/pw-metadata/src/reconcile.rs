@@ -12,15 +12,11 @@
 //! 4. **Exif** (§6.1, §6.2, §6.5): Description, Copyright Notice and Creator fill a property XMP and
 //!    IIM lack; a difference is a conflict. Against an IIM value the checksum decides (§6.2). The
 //!    Digital Image GUID only fills from ImageUniqueID.
-//! 5. **`Cleared`** (§6.4): a property the user cleared in a RAW file's sidecar is never filled from
-//!    the RAW file; the value it would have got is reported as hidden by the user.
-//! 6. **Date Created** (§7) is only *suggested* from DateTimeOriginal, never inserted.
+//! 5. **Date Created** (§7) is only *suggested* from DateTimeOriginal, never inserted.
 //!
 //! Equality ([`same_value`]) is tested on the predicted IIM value (§5.1) "or the whole XMP text, as
 //! a program that ignores the IIM limit writes it" (§5.1, T129) and, against Exif, on the shown text
 //! and the first creator (§6.5). Nothing here runs ExifTool or reads a file.
-
-use std::collections::BTreeSet;
 
 use crate::date::{DateError, IptcDate};
 use crate::iim;
@@ -95,8 +91,6 @@ pub struct Readings {
     pub camera_xmp: Vec<(String, Value)>,
     pub iim: Option<IimRead>,
     pub exif: ExifFields,
-    /// The sidecar's `Cleared` list (only for `Raw`; empty until owner decision D1).
-    pub cleared: BTreeSet<String>,
 }
 
 /// Something the user is told about the reconciliation.
@@ -109,13 +103,6 @@ pub enum Notice {
         property: String,
         origin: Origin,
         error: ValueError,
-    },
-    /// A cleared property of a RAW file that this value from the RAW file would have filled
-    /// (§6.4, shown as "dold av användaren"). Once per property.
-    HiddenByUser {
-        property: String,
-        value: Value,
-        origin: Origin,
     },
     /// A value that could not be read; `text` is the text as read.
     Unreadable {
@@ -136,16 +123,13 @@ pub struct Reconciled {
 }
 
 /// The state of the reconciliation while it runs.
-struct Work<'a> {
+struct Work {
     metadata: Metadata,
     notices: Vec<Notice>,
     raw: bool,
-    cleared: &'a BTreeSet<String>,
-    /// The cleared properties that already gave `HiddenByUser`.
-    hidden: BTreeSet<String>,
 }
 
-impl Work<'_> {
+impl Work {
     /// Stores a value read from the file; a refused value gives `Notice::Refused`.
     fn insert(&mut self, property: &str, value: Value, origin: Origin) {
         if let Err(error) = self.metadata.insert_read(property, value, origin) {
@@ -157,20 +141,8 @@ impl Work<'_> {
         }
     }
 
-    /// Fills an absent property from the RAW file or another secondary representation. A property
-    /// the user cleared in a RAW file's sidecar is not filled (§6.4); the first value that would
-    /// have filled it gives `HiddenByUser`.
+    /// Fills an absent property from the RAW file or another secondary representation.
     fn fill(&mut self, property: &str, value: Value, origin: Origin) {
-        if self.raw && self.cleared.contains(property) {
-            if self.hidden.insert(property.to_string()) {
-                self.notices.push(Notice::HiddenByUser {
-                    property: property.to_string(),
-                    value,
-                    origin,
-                });
-            }
-            return;
-        }
         self.insert(property, value, origin);
     }
 
@@ -199,15 +171,12 @@ pub fn reconcile(readings: Readings) -> Reconciled {
         camera_xmp,
         iim,
         exif,
-        cleared,
     } = readings;
     let raw = kind == FileKind::Raw;
     let mut work = Work {
         metadata: Metadata::new(),
         notices: Vec::new(),
         raw,
-        cleared: &cleared,
-        hidden: BTreeSet::new(),
     };
 
     // 1. Primary XMP.
@@ -245,9 +214,7 @@ pub fn reconcile(readings: Readings) -> Reconciled {
     // part of this step yet; they get a task of their own later.
     reconcile_exif(&mut work, &exif, digest);
 
-    // 5. `Cleared` (§6.4) is applied by `Work::fill` in steps 2–4.
-
-    // 6. Date Created (§7): only a suggestion.
+    // 5. Date Created (§7): only a suggestion.
     let suggested_date_created = if work.metadata.get(DATE_CREATED).is_none() {
         suggest_date_created(&mut work, &exif)
     } else {
@@ -262,7 +229,7 @@ pub fn reconcile(readings: Readings) -> Reconciled {
 }
 
 /// One IIM value against the value XMP gave (§5.1; for `Raw` §4.2, §6.4).
-fn reconcile_iim(work: &mut Work<'_>, property: &str, value: Value, digest: IimDigest) {
+fn reconcile_iim(work: &mut Work, property: &str, value: Value, digest: IimDigest) {
     let Some((current, origin)) = work.current(property) else {
         work.fill(property, value, Origin::Iim);
         return;
@@ -293,7 +260,7 @@ fn reconcile_iim(work: &mut Work<'_>, property: &str, value: Value, digest: IimD
 /// value is a conflict with rule `Xmp`, the sidecar's value kept. A value that was filled from the
 /// RAW file's IIM is replaced, because XMP has precedence over IIM (§5.1); that is a conflict with
 /// rule `Xmp` too.
-fn reconcile_camera_xmp(work: &mut Work<'_>, property: &str, value: Value) {
+fn reconcile_camera_xmp(work: &mut Work, property: &str, value: Value) {
     let Some((current, origin)) = work.current(property) else {
         work.fill(property, value, Origin::XmpEmbedded);
         return;
@@ -324,7 +291,7 @@ fn is_camera_no_rating(property: &str, value: &Value) -> bool {
 }
 
 /// The Exif fields (§6.1, §6.2, §6.5).
-fn reconcile_exif(work: &mut Work<'_>, exif: &ExifFields, digest: Option<IimDigest>) {
+fn reconcile_exif(work: &mut Work, exif: &ExifFields, digest: Option<IimDigest>) {
     let lang_alt = |text: &str| {
         Value::LangAlt(LangAlt::from_entries(vec![(
             X_DEFAULT.to_string(),
@@ -361,7 +328,7 @@ fn reconcile_exif(work: &mut Work<'_>, exif: &ExifFields, digest: Option<IimDige
 /// One "both ways" Exif field: `value` fills an absent property; `compared` is what the current
 /// value is compared with ([`same_value`] against Exif: the shown text, or the first creator).
 fn reconcile_exif_field(
-    work: &mut Work<'_>,
+    work: &mut Work,
     property: &str,
     value: Value,
     compared: &str,
@@ -396,7 +363,7 @@ fn reconcile_exif_field(
 /// Date Created from DateTimeOriginal, SubSecTimeOriginal and OffsetTimeOriginal (§7). An empty
 /// date gives `None`; an invalid one gives `Notice::Unreadable` with the three texts as read,
 /// joined with a space.
-fn suggest_date_created(work: &mut Work<'_>, exif: &ExifFields) -> Option<IptcDate> {
+fn suggest_date_created(work: &mut Work, exif: &ExifFields) -> Option<IptcDate> {
     let date_time = exif.date_time_original.as_deref()?;
     let subsec = exif.sub_sec_time_original.as_deref();
     let offset = exif.offset_time_original.as_deref();
@@ -617,7 +584,6 @@ mod tests {
             camera_xmp: Vec::new(),
             iim: None,
             exif: ExifFields::default(),
-            cleared: BTreeSet::new(),
         }
     }
 
@@ -1344,94 +1310,22 @@ mod tests {
     }
 
     #[test]
-    fn a_cleared_property_is_not_filled_from_the_raw_file() {
-        let result = reconcile(Readings {
-            camera_xmp: values(&[(DESCRIPTION, x_default("Kamera"))]),
-            iim: iim(&[(DESCRIPTION, x_default("IIM"))], IimDigest::Missing),
-            exif: ExifFields {
-                image_description: Some("Exif".into()),
-                ..ExifFields::default()
-            },
-            cleared: BTreeSet::from([DESCRIPTION.to_string()]),
-            ..readings(FileKind::Raw)
-        });
-        assert_eq!(value_of(&result, DESCRIPTION), None);
-        assert!(result.metadata.conflicts().is_empty());
-        // IIM is read before camera XMP and Exif, so its value is the first that would have filled.
-        assert_eq!(
-            result.notices,
-            [Notice::HiddenByUser {
-                property: DESCRIPTION.into(),
-                value: x_default("IIM"),
-                origin: Origin::Iim,
-            }]
-        );
-    }
-
-    #[test]
-    fn a_cleared_property_hides_the_camera_xmp_value() {
-        let result = reconcile(Readings {
-            camera_xmp: values(&[(DESCRIPTION, x_default("Kamera"))]),
-            exif: ExifFields {
-                image_description: Some("Exif".into()),
-                ..ExifFields::default()
-            },
-            cleared: BTreeSet::from([DESCRIPTION.to_string()]),
-            ..readings(FileKind::Raw)
-        });
-        assert_eq!(value_of(&result, DESCRIPTION), None);
-        assert_eq!(
-            result.notices,
-            [Notice::HiddenByUser {
-                property: DESCRIPTION.into(),
-                value: x_default("Kamera"),
-                origin: Origin::XmpEmbedded,
-            }]
-        );
-    }
-
-    #[test]
-    fn a_cleared_property_is_not_filled_from_exif() {
+    fn a_raw_file_exif_fills_a_property_the_sidecar_lacks() {
+        // A field cleared in a RAW file's sidecar is filled again from the camera's values like
+        // any absent property (ADR 0007 §6.4, Q2 as changed on 2026-11-18).
         let result = reconcile(Readings {
             exif: ExifFields {
                 artist: Some("A".into()),
                 ..ExifFields::default()
             },
-            cleared: BTreeSet::from([CREATOR.to_string()]),
-            ..readings(FileKind::Raw)
-        });
-        assert_eq!(value_of(&result, CREATOR), None);
-        assert_eq!(
-            result.notices,
-            [Notice::HiddenByUser {
-                property: CREATOR.into(),
-                value: list(&["A"]),
-                origin: Origin::Exif,
-            }]
-        );
-    }
-
-    #[test]
-    fn a_sidecar_value_for_a_cleared_property_is_used() {
-        let result = reconcile(Readings {
-            xmp: values(&[(DESCRIPTION, x_default("Sidecar"))]),
-            exif: ExifFields {
-                image_description: Some("Exif".into()),
-                ..ExifFields::default()
-            },
-            cleared: BTreeSet::from([DESCRIPTION.to_string()]),
             ..readings(FileKind::Raw)
         });
         assert_eq!(
-            value_of(&result, DESCRIPTION),
-            Some((x_default("Sidecar"), Origin::XmpSidecar))
+            value_of(&result, CREATOR),
+            Some((list(&["A"]), Origin::Exif))
         );
-        assert!(
-            !result
-                .notices
-                .iter()
-                .any(|n| matches!(n, Notice::HiddenByUser { .. }))
-        );
+        assert!(result.metadata.conflicts().is_empty());
+        assert!(result.notices.is_empty());
     }
 
     // --- Camera rating 0 (§4.2, T113) ---
@@ -1509,22 +1403,6 @@ mod tests {
             Some((number("-1"), Origin::XmpEmbedded))
         );
         assert!(result.metadata.conflicts().is_empty());
-    }
-
-    #[test]
-    fn a_cleared_rating_and_a_camera_rating_0_give_no_hidden_notice() {
-        let result = reconcile(Readings {
-            camera_xmp: values(&[(RATING, number("0"))]),
-            cleared: BTreeSet::from([RATING.to_string()]),
-            ..readings(FileKind::Raw)
-        });
-        assert_eq!(value_of(&result, RATING), None);
-        assert!(
-            !result
-                .notices
-                .iter()
-                .any(|n| matches!(n, Notice::HiddenByUser { .. }))
-        );
     }
 
     #[test]

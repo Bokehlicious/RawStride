@@ -86,7 +86,6 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status |
 |---|---|---|
-| [T191](T191-remove-the-unused-cleared-path.md) | Remove the unused `Cleared` path (ADR 0007 Q2, changed 2026-11-18) | Open |
 
 ## Writing a task (owner and reviewer)
 
