@@ -130,6 +130,19 @@
     hand) are kept in `docs/tasks/backlog.md` with their reasons. A tab that follows changes on
     disk (for example files restored from the Recycle Bin, §2.8) is a wish of the owner's at the
     hand check of B4: a new ADR (0026) with questions to the owner, written after B5.
+- **Known limits accepted at the backlog sort after B5** (owner, 2026-11-18; from T190's
+  reviews, none seen in the hand check of B5):
+  - *A partner un-rejected too late:* Delete Rejected Images checks an image and its partners
+    before it sends the delete; a reject cleared after that still lets the partner go, since the
+    rating write is queued behind the delete.
+  - *The group gathered again:* the worker gathers an image's group again when it deletes, so a
+    same-name image file that appears after the confirmation goes along without being named (for
+    Delete too).
+  - *A tab closed during the batch:* its remaining images are skipped without a word (nothing
+    wrong is deleted; the count is lower).
+  - The B4 limits kept in `docs/tasks/backlog.md` stay there (not seen at B4 or B5); a network
+    folder is still not checked by hand. ADR 0026 takes up a tab that follows changes on disk
+    together with two wishes of ADR 0017 §7.2 (owner, 2026-11-18).
 
 ### 2.8 Undo
 

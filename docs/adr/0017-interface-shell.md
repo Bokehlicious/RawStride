@@ -601,10 +601,10 @@ separate window waits (§7.2).
 | Chosen fields as text lines under each thumbnail | Later, after stage A (owner, 2026-11-12) | The thumbnail shows the file name until then |
 | Temporary exposure and white balance for assessment | Later, after stage A (owner, 2026-11-12) | Needs RAW processing options the view core does not have today |
 | The separate preview window (U0), movable to a second screen with that screen's DPI and colour profile | When the owner has a second screen to test with (owner, 2026-11-12 and 2026-11-13) | Review finding 5: colour conversion is per start screen today (ADR 0016) |
-| **Images shown while importing**: the destination tab opens when the first file is copied and verified, and fills as the import goes on; today it opens when the copy is done (ADR 0010, "Open the result") | Not yet placed (owner, 2026-11-15) | Changes ADR 0010's rule. The IPTC template is written after the copy, so an image is shown for a while before the template's values are in it; the contact sheet must take the folder's new files without a reload of the tab |
+| **Images shown while importing**: the destination tab opens when the first file is copied and verified, and fills as the import goes on; today it opens when the copy is done (ADR 0010, "Open the result") | Not yet placed (owner, 2026-11-15); to be taken up by ADR 0026 (owner, 2026-11-18) | Changes ADR 0010's rule. The IPTC template is written after the copy, so an image is shown for a while before the template's values are in it; the contact sheet must take the folder's new files without a reload of the tab |
 | Code replacements (short codes expanded to text while captioning) | Not yet placed (review, 2026-11-13) | From the study's list of missing functions |
 | A catalogue across folders (`pw-catalog`) | Not yet placed (review, 2026-11-13) | From the study's list of missing functions |
-| **Load a folder again**: a command that reads the active tab's folder and its ratings and metadata again, so files added or changed by another program are seen | Not yet placed (owner, 2026-11-17, ADR 0019 E-Q12) | Today a tab is read when it is opened |
+| **Load a folder again**: a command that reads the active tab's folder and its ratings and metadata again, so files added or changed by another program are seen | Not yet placed (owner, 2026-11-17, ADR 0019 E-Q12); to be taken up by ADR 0026 (owner, 2026-11-18) | Today a tab is read when it is opened |
 | Floating, freely placed panels | Future requirement (requirements-image-viewer.md, "Not covered") | |
 
 ## 8. Consequences

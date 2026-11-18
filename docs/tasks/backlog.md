@@ -229,8 +229,9 @@ and reviewer:
   …", as `EditorText::NotSaved` names the items) would say why. Not important.
 
 - **Known limits of the delete to the Recycle Bin** (T189's brief and its reviews, 2026-11-18;
-  accepted when T189 was done; **kept** at the sort after B4, 2026-11-18, as each item says;
-  quitting and the workers' release were struck, ADR 0018 §2.7):
+  accepted when T189 was done; **kept** at the sorts after B4 and B5, 2026-11-18, as each item
+  says: none was seen in the hand checks of B4 and B5, so each becomes a task only if it is
+  noticed in use; the struck ones are in ADR 0018 §2.7):
   - *The worker:* if the metadata worker stops after it took a request, its answer never comes
     and the delete stays busy, which also holds moves back (the moves have the same gap). Kept:
     not seen; the same gap as the moves, and it belongs with the ExifTool timeout above.
@@ -242,21 +243,15 @@ and reviewer:
     for it fails after the delete (noise, not loss); a folder read already sent may put a deleted
     path back into the metadata cache (the tab's list is the source); a `_rejected` folder reached
     under another spelling is not matched by `same_path`, so a later Ctrl+Z on it fails safely.
-    Kept: rare and harmless; taken up when `deletes.rs` or `metadata.rs` is next changed after B5.
+    Kept: rare and harmless; a task if it is noticed in use.
   - *Other windows:* while a delete runs, the metadata window can be opened on an image being
     deleted, and its save then fails. While the confirmation waits, `same_folder` (which resolves
     the folder on disk) is asked several times a frame; the drive was accepted by T185's check, so
     it is a fixed drive. Kept: safe and not seen; a task if it is noticed.
   - *Not hand-checked:* a network folder refused with "the drive has no Recycle Bin" (the owner
     had no network drive at the hand check of B4, 2026-11-18). T185's decision tests cover
-    `DRIVE_REMOTE` and a volume without a name. Kept until a network drive is at hand; part of
-    the hand check of B5 (T190) if one is.
-  - *Delete Rejected Images* (T190's reviews, 2026-11-18; to be sorted after the hand check of
-    B5): a partner whose reject is cleared after its image's delete was sent still goes (the
-    check is in the shell, and the rating write is queued behind the delete); the worker gathers
-    the group again at delete time, so a same-name image file that appears after the
-    confirmation goes along unseen (also for Delete, from T189); a tab closed while the batch
-    runs makes its remaining images skipped without a word (safe; the count is lower).
+    `DRIVE_REMOTE` and a volume without a name. Kept until a network drive is at hand (not
+    checked at B5 either, 2026-11-18).
 
 - **The folder follows changes on disk** (owner's wish at the hand check of B4, 2026-11-18): a
   tab shows new files (for example images put back from the Recycle Bin, or copied in by another
@@ -265,7 +260,9 @@ and reviewer:
   `notify`, which is a new dependency); what happens to the position, filter, sort and marks
   when files come or go; and how it works with the moves and deletes that already update the
   tabs. **Owner, 2026-11-18 (sort after B4):** a new ADR 0026 with questions to the owner,
-  written after B5 (T190) is done.
+  written after B5 (T190) is done. **Owner, 2026-11-18 (sort after B5):** ADR 0026 also takes up
+  two wishes of ADR 0017 §7.2 built on the same thing, "Images shown while importing" and "Load
+  a folder again"; it is written in a session of its own. Kept here until ADR 0026 exists.
 
 Removed on 2026-11-13 because they are done or planned elsewhere: ADR 0010 steps M3–M7 (done,
 T30–T40); ADR 0011 step K4 (done, T26–T29); moving rejected or picked images to `_rejected` /
@@ -288,3 +285,6 @@ Struck at the backlog sort after B4, 2026-11-18 (owner; written into ADR 0018 §
 known limits): from the delete's known limits, quitting while a delete runs (the images not yet
 sent stay, nothing is lost) and the view sessions released by a delete refused at the worker
 (the image opens again, seen in the hand check of B4).
+Struck at the backlog sort after B5, 2026-11-18 (owner; written into ADR 0018 §2.7 as accepted
+known limits): T190's leftovers, a partner un-rejected after its image's delete was sent, the
+group gathered again at delete time, and a tab closed while the batch runs.
