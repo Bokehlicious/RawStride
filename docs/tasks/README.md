@@ -86,11 +86,10 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status |
 |---|---|---|
-| [T192](T192-exif-imageeditor-and-contributor.md) | Exif ImageEditor ↔ Contributor, the content editor (ADR 0007 §6.6) | Open |
 | [T193](T193-lists-with-qualifiers-not-written.md) | A list whose items have qualifiers is shown but not written (ADR 0007 §8) | Open |
 | [T194](T194-batch-line-for-a-qualified-list.md) | The batch names a list with qualifiers that was not written in another image (ADR 0007 §8) | Blocked: waits for T193 |
 | [T195](T195-scene-subject-and-genre-codes-checked.md) | Scene Code, Subject Code and Genre checked against IPTC NewsCodes (ADR 0007 §11) | Open |
-| [T196](T196-camera-gps-fills-location-created.md) | Camera GPS fills the coordinates of Location Created (ADR 0007 §6.7) | Blocked: waits for T192 |
+| [T196](T196-camera-gps-fills-location-created.md) | Camera GPS fills the coordinates of Location Created (ADR 0007 §6.7) | Open |
 | [T197](T197-region-render-on-raf.md) | The region render on RAF (ADR 0027 W0) | Open |
 
 ## Writing a task (owner and reviewer)

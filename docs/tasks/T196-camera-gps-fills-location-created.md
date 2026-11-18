@@ -1,4 +1,4 @@
-# T196. Camera GPS fills the coordinates of Location Created (ADR 0007 §6.7) — Blocked: waits for T192
+# T196. Camera GPS fills the coordinates of Location Created (ADR 0007 §6.7) — Open
 
 - **Why:** ADR 0007 §6.1 maps the Exif GPS tags 1–6 to Location Created; §6.7 (revision 22,
   owner 2026-11-18) limits it to the coordinates. Today the reader does not read the Exif GPS
@@ -182,3 +182,4 @@
 |---|---|---|
 | 2026-11-18 | Blocked | Added (ADR 0007 revision 22, §6.7; the owner chose the same day that the coordinates are added to a Location Created without coordinates, keeping its origin); waits for T192 |
 | 2026-11-18 | Blocked | Cold read: a fresh agent confirmed names, lines, the GPS field order, how ExifTool gives the values (also that `tag()` cannot pick an XMP or Composite GPS tag), that T196 fits on top of T192, that no existing test reads GPS, and that ExifTool writes the signed coordinates back. Written in from its findings: an empty list is filled with origin Exif (the text contradicted itself); "has coordinates" is the field's presence (the model refuses a GPS field that is not a number, so "does not parse" cannot happen); a refused Location Created is not replaced (reviewer's choice); no second GPSAltitudeRef; how a field is set (in place, else appended); the notice's text and order, no notice without latitude and longitude, a leading `+`/`-` refused; "three decimals" corrected; the expected values of every test; the test helpers; ADR §6.7 gained "altitude not compared" and "any Exif GPS counts as the camera's" |
+| 2026-11-18 | Open | T192 is Done, so the task is no longer blocked; its line numbers are still from before T192 |

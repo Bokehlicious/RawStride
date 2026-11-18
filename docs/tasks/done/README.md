@@ -198,3 +198,4 @@ was when the task was done, so "this file", "below" and "the Log" in T1–T115 m
 | [T189](T189-delete-key-menu-window-and-wiring.md) | ADR 0018 B4: the Delete key, the menu item, the confirmation window and the deletes in the shell (pw-loupe) |
 | [T190](T190-delete-rejected-images.md) | ADR 0018 B5: "Delete Rejected Images" in the active tab's folder (pw-loupe) |
 | [T191](T191-remove-the-unused-cleared-path.md) | ADR 0007 Q2 (revision 19): the unused `Cleared` path removed (pw-metadata, pw-loupe) |
+| [T192](T192-exif-imageeditor-and-contributor.md) | ADR 0007 §6.6: Exif ImageEditor ↔ the Contributor whose role is content editor (pw-metadata) |

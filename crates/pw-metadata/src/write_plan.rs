@@ -19,9 +19,10 @@
 //!   both forms in line (§5.1, §12): unchanged properties whose IIM value won (rule `Iim`) or that
 //!   only IIM held are written to XMP, and those whose XMP value won (rule `Xmp`) to IIM, so the
 //!   new checksum never hands a property back to a stale form.
-//! - **Exif** (§6.3, §6.5; JPEG, TIFF and DNG): only the "both ways" fields that already exist are
-//!   updated or removed, never created. DateTimeOriginal and its sub-fields, ImageUniqueID and GPS
-//!   are never written.
+//! - **Exif** (§6.3, §6.5, §6.6; JPEG, TIFF and DNG): only the "both ways" fields that already
+//!   exist are updated or removed, never created. ImageEditor gets the name of Contributor's content
+//!   editor, and is removed when there is none; it is never written to Artist. DateTimeOriginal and
+//!   its sub-fields, ImageUniqueID and GPS are never written.
 //! - **Line breaks** (`-stay_open` takes one argument per line): when a value holds one, the plan
 //!   asks for ExifTool's `-ec` option and writes a line feed as `\n`, a carriage return as `\r` and
 //!   `\` as `\\` in every argument.
@@ -32,7 +33,7 @@ use std::fmt;
 use crate::iim::{self, CodedCharset};
 use crate::iim_read::iim_format;
 use crate::properties::{self, PropertyDef, ValueKind};
-use crate::reconcile::{FileKind, IimDigest};
+use crate::reconcile::{self, FileKind, IimDigest};
 use crate::value::{ConflictRule, LangAlt, Metadata, Origin, StructValue, Value};
 
 /// The language of the Lang Alt entry ExifTool names without a language suffix.
@@ -43,6 +44,8 @@ const DESCRIPTION: &str = "dc:description";
 const COPYRIGHT: &str = "dc:rights";
 /// Creator: the first creator is synced with Exif Artist and Photographer (§6.5).
 const CREATOR: &str = "dc:creator";
+/// Contributor: the name of its content editor is synced with Exif ImageEditor (§6.6).
+const CONTRIBUTOR: &str = "Iptc4xmpExt:Contributor";
 /// The ExifTool option that turns C-style escapes in values into characters.
 const ESCAPE_C: &str = "-ec";
 /// Declares the IIM as UTF-8 (1:90 `ESC % G`, MWG text encodings).
@@ -61,6 +64,8 @@ pub struct ExifPresent {
     pub artist: bool,
     /// `ExifIFD:Photographer` (Exif 3.0).
     pub photographer: bool,
+    /// `ExifIFD:ImageEditor` (Exif 3.0).
+    pub image_editor: bool,
 }
 
 /// What the plan needs to know about the file as it is now.
@@ -586,9 +591,24 @@ fn has_xmp(metadata: &Metadata) -> bool {
 
 /// The Exif arguments for a changed property (§6.3, §6.5): Description → ImageDescription (the
 /// shown text), Copyright Notice → Copyright, Creator → the first creator to Artist and
-/// Photographer; each only when the field exists, and removed when the property was cleared.
-/// Every other property gives nothing (DateTimeOriginal, ImageUniqueID and GPS are never written).
+/// Photographer, Contributor → the name of its content editor to ImageEditor (§6.6, never to
+/// Artist); each only when the field exists, and removed when the property was cleared (for
+/// ImageEditor also when the list has no content editor or its name is blank). Every other
+/// property gives nothing (DateTimeOriginal, ImageUniqueID and GPS are never written).
 fn exif_args(xmp_id: &str, value: Option<&Value>, present: ExifPresent, args: &mut Vec<String>) {
+    if xmp_id == CONTRIBUTOR {
+        if present.image_editor {
+            let name = match value {
+                Some(Value::StructList(contributors)) => {
+                    reconcile::content_editor_name(contributors).unwrap_or("")
+                }
+                _ => "",
+            };
+            let name = if iim::is_blank(name) { "" } else { name };
+            args.push(format!("-ExifIFD:ImageEditor={name}"));
+        }
+        return;
+    }
     let tags: &[(&str, bool)] = match xmp_id {
         DESCRIPTION => &[("IFD0:ImageDescription", present.image_description)],
         COPYRIGHT => &[("IFD0:Copyright", present.copyright)],
@@ -686,6 +706,7 @@ mod tests {
             copyright: true,
             artist: true,
             photographer: true,
+            image_editor: true,
         }
     }
 
@@ -1510,6 +1531,94 @@ mod tests {
         };
         let plan = run(&metadata, &only_artist);
         assert_eq!(args(&plan)[5..], ["-IFD0:Artist=Anna"]);
+    }
+
+    const CONTENT_EDITOR: &str = "https://cv.iptc.org/newscodes/contentprodpartyrole/contentEditor";
+
+    fn contributor(name: &str, role: &str) -> StructValue {
+        fields(vec![
+            ("Iptc4xmpExt:Name", lang_alt(&[("x-default", name)])),
+            ("Iptc4xmpExt:Role", list(&[role])),
+        ])
+    }
+
+    /// The Exif arguments of the plan for a JPEG whose Exif fields are `present`.
+    fn exif_of(metadata: &Metadata, present: ExifPresent) -> Vec<String> {
+        let state = FileState {
+            exif_present: present,
+            ..jpeg()
+        };
+        run(metadata, &state)
+            .args
+            .into_iter()
+            .filter(|arg| arg.starts_with("-IFD0:") || arg.starts_with("-ExifIFD:"))
+            .collect()
+    }
+
+    #[test]
+    fn a_changed_contributor_writes_the_content_editor_to_an_existing_image_editor() {
+        let metadata = edited(&[(
+            CONTRIBUTOR,
+            Value::StructList(vec![
+                contributor("Bo", "photographer"),
+                contributor("Eva", CONTENT_EDITOR),
+            ]),
+        )]);
+        assert_eq!(exif_of(&metadata, all_exif()), ["-ExifIFD:ImageEditor=Eva"]);
+    }
+
+    #[test]
+    fn a_contributor_without_content_editor_removes_image_editor() {
+        let without = edited(&[(
+            CONTRIBUTOR,
+            Value::StructList(vec![contributor("Bo", "photographer")]),
+        )]);
+        assert_eq!(exif_of(&without, all_exif()), ["-ExifIFD:ImageEditor="]);
+
+        let blank_name = edited(&[(
+            CONTRIBUTOR,
+            Value::StructList(vec![
+                contributor("Bo", "photographer"),
+                contributor("   ", CONTENT_EDITOR),
+            ]),
+        )]);
+        assert_eq!(exif_of(&blank_name, all_exif()), ["-ExifIFD:ImageEditor="]);
+
+        let mut cleared = Metadata::new();
+        cleared
+            .insert_read(
+                CONTRIBUTOR,
+                Value::StructList(vec![contributor("Eva", CONTENT_EDITOR)]),
+                Origin::XmpEmbedded,
+            )
+            .unwrap();
+        cleared.clear(CONTRIBUTOR).unwrap();
+        assert_eq!(exif_of(&cleared, all_exif()), ["-ExifIFD:ImageEditor="]);
+    }
+
+    #[test]
+    fn image_editor_is_not_created() {
+        let metadata = edited(&[(
+            CONTRIBUTOR,
+            Value::StructList(vec![contributor("Eva", CONTENT_EDITOR)]),
+        )]);
+        let present = ExifPresent {
+            image_editor: false,
+            ..all_exif()
+        };
+        let plan = run(
+            &metadata,
+            &FileState {
+                exif_present: present,
+                ..jpeg()
+            },
+        );
+        assert!(
+            !plan.args.iter().any(|arg| arg.contains("ImageEditor")),
+            "{:?}",
+            plan.args
+        );
+        assert!(exif_of(&metadata, present).is_empty());
     }
 
     #[test]

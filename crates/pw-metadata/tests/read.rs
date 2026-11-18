@@ -340,6 +340,33 @@ fn exif_artist_and_image_description_fill_creator_and_description() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Exif ImageEditor fills an absent Contributor with one content editor (ADR 0007 §6.6, T192), and
+/// the file state names the tag as present.
+#[test]
+fn exif_image_editor_fills_contributor() {
+    let mut et = exiftool();
+    let (dir, file) = jpeg("exif-image-editor");
+    write(&mut et, &file, &["-ExifIFD:ImageEditor=Åsa Öberg"]);
+
+    let read = read_file(&mut et, &file);
+    assert_eq!(
+        get(&read, "Iptc4xmpExt:Contributor"),
+        Some((
+            Value::StructList(vec![structure(vec![
+                ("Iptc4xmpExt:Name", lang_alt(&[("x-default", "Åsa Öberg")])),
+                (
+                    "Iptc4xmpExt:Role",
+                    list(&["https://cv.iptc.org/newscodes/contentprodpartyrole/contentEditor"])
+                ),
+            ])]),
+            Origin::Exif
+        ))
+    );
+    assert!(read.reconciled.metadata.conflicts().is_empty());
+    assert!(read.state.exif_present.image_editor);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// A manufacturer RAW reads its sidecar `<basename>.xmp` (also with the extension in another
 /// case) and never `<basename>.<ext>.xmp`. The RAW file is not changed.
 #[test]
@@ -541,6 +568,7 @@ fn the_state_of_a_jpeg_names_only_the_exif_fields_it_has() {
             copyright: false,
             artist: true,
             photographer: false,
+            image_editor: false,
         }
     );
     assert!(!state.iim_present);

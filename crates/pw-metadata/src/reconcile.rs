@@ -9,9 +9,12 @@
 //!    open (the user decides). In a RAW file the IIM is camera data and only fills (§4.2, §6.4).
 //! 3. **Camera XMP** inside a RAW file only fills (§4.2). Its `xmp:Rating` 0 counts as no rating:
 //!    it neither fills nor gives a conflict (§4.2).
-//! 4. **Exif** (§6.1, §6.2, §6.5): Description, Copyright Notice and Creator fill a property XMP and
-//!    IIM lack; a difference is a conflict. Against an IIM value the checksum decides (§6.2). The
-//!    Digital Image GUID only fills from ImageUniqueID.
+//! 4. **Exif** (§6.1, §6.2, §6.5, §6.6): Description, Copyright Notice and Creator fill a property
+//!    XMP and IIM lack; a difference is a conflict. Against an IIM value the checksum decides (§6.2).
+//!    ImageEditor fills an absent Contributor with one content editor; a Contributor list without a
+//!    content editor, or whose content editor has another name, is a conflict that XMP wins, its
+//!    Exif side the same list with the content editor added or renamed (§6.6). The Digital Image
+//!    GUID only fills from ImageUniqueID. GPS → Location Created is not part of this step yet.
 //! 5. **Date Created** (§7) is only *suggested* from DateTimeOriginal, never inserted.
 //!
 //! Equality ([`same_value`]) is tested on the predicted IIM value (§5.1) "or the whole XMP text, as
@@ -22,7 +25,9 @@ use crate::date::{DateError, IptcDate};
 use crate::iim;
 use crate::iim_read::{IimNotice, IimValues, iim_format};
 use crate::properties;
-use crate::value::{Conflict, ConflictRule, LangAlt, Metadata, Origin, Value, ValueError};
+use crate::value::{
+    Conflict, ConflictRule, LangAlt, Metadata, Origin, StructValue, Value, ValueError,
+};
 
 /// Description, filled from and compared with Exif ImageDescription.
 const DESCRIPTION: &str = "dc:description";
@@ -30,6 +35,20 @@ const DESCRIPTION: &str = "dc:description";
 const COPYRIGHT: &str = "dc:rights";
 /// Creator, filled from and compared with Exif Photographer or Artist (§6.5).
 const CREATOR: &str = "dc:creator";
+/// Contributor (`EntityWRole`, a list of structures): its content editor is filled from and
+/// compared with Exif ImageEditor (§6.6).
+const CONTRIBUTOR: &str = "Iptc4xmpExt:Contributor";
+/// The Name field (Lang Alt) of a Contributor.
+const CONTRIBUTOR_NAME: &str = "Iptc4xmpExt:Name";
+/// The Role field (a list of texts) of a Contributor.
+const CONTRIBUTOR_ROLE: &str = "Iptc4xmpExt:Role";
+/// The role of the content editor (IPTC Mapping Guidelines, Exif Note on Contributor); a
+/// Contributor RawStride creates gets this form (§6.6).
+const CONTENT_EDITOR_ROLE: &str =
+    "https://cv.iptc.org/newscodes/contentprodpartyrole/contentEditor";
+/// The same role with `http://`, which counts too (§6.6).
+const CONTENT_EDITOR_ROLE_HTTP: &str =
+    "http://cv.iptc.org/newscodes/contentprodpartyrole/contentEditor";
 /// Digital Image GUID, only filled from Exif ImageUniqueID (§6.1).
 const DIGITAL_IMAGE_GUID: &str = "Iptc4xmpExt:DigImageGUID";
 /// Date Created, only suggested from Exif (§7).
@@ -75,6 +94,7 @@ pub struct ExifFields {
     pub copyright: Option<String>,
     pub artist: Option<String>,
     pub photographer: Option<String>,
+    pub image_editor: Option<String>,
     pub image_unique_id: Option<String>,
     pub date_time_original: Option<String>,
     pub sub_sec_time_original: Option<String>,
@@ -210,8 +230,8 @@ pub fn reconcile(readings: Readings) -> Reconciled {
         }
     }
 
-    // 4. Exif (§6.1, §6.2, §6.5). ImageEditor ↔ Contributor and GPS → Location Created are not
-    // part of this step yet; they get a task of their own later.
+    // 4. Exif (§6.1, §6.2, §6.5, §6.6). GPS → Location Created is not part of this step yet; it
+    // gets a task of its own later.
     reconcile_exif(&mut work, &exif, digest);
 
     // 5. Date Created (§7): only a suggestion.
@@ -312,6 +332,9 @@ fn reconcile_exif(work: &mut Work, exif: &ExifFields, digest: Option<IimDigest>)
     if let Some(first) = creators.first().cloned() {
         reconcile_exif_field(work, CREATOR, Value::List(creators), &first, digest);
     }
+    if let Some(name) = present(&exif.image_editor) {
+        reconcile_image_editor(work, name);
+    }
     // Digital Image GUID: Exif only fills; a different IPTC value is kept and is not a conflict
     // (§6.1).
     if let Some(guid) = present(&exif.image_unique_id)
@@ -358,6 +381,119 @@ fn reconcile_exif_field(
     if rule == ConflictRule::Exif {
         work.insert(property, value, Origin::Exif);
     }
+}
+
+/// Exif ImageEditor against Contributor (§6.6): `name` fills an absent Contributor with one
+/// content editor. A Contributor list whose content editor has the name `name` (exact text) gives
+/// nothing. Otherwise it is a conflict with rule `Xmp` (§6.2; in a RAW file Exif is camera data,
+/// §6.4, so also `Xmp`) and the stored value is kept; its Exif side is the current list with a
+/// content editor appended when it has none, or with only the content editor's Name changed (its
+/// `x-default`, the other languages kept, Q7). A value that is not a list of structures gives
+/// nothing.
+fn reconcile_image_editor(work: &mut Work, name: &str) {
+    let Some((current, origin)) = work.current(CONTRIBUTOR) else {
+        work.fill(
+            CONTRIBUTOR,
+            Value::StructList(vec![new_content_editor(name)]),
+            Origin::Exif,
+        );
+        return;
+    };
+    let Value::StructList(list) = &current else {
+        return;
+    };
+    let mut exif_side = list.clone();
+    match content_editor_index(list) {
+        Some(index) => {
+            if content_editor_name(list) == Some(name) {
+                return;
+            }
+            let Some(editor) = exif_side.get_mut(index) else {
+                return;
+            };
+            if set_contributor_name(editor, name).is_err() {
+                return;
+            }
+        }
+        None => exif_side.push(new_content_editor(name)),
+    }
+    work.conflict(
+        CONTRIBUTOR,
+        vec![
+            (origin, current),
+            (Origin::Exif, Value::StructList(exif_side)),
+        ],
+        ConflictRule::Xmp,
+    );
+}
+
+/// A Contributor with the Name `name` (only `x-default`) and the content editor role (§6.6).
+fn new_content_editor(name: &str) -> StructValue {
+    StructValue {
+        fields: vec![
+            (CONTRIBUTOR_NAME.to_string(), x_default_lang_alt(name)),
+            (
+                CONTRIBUTOR_ROLE.to_string(),
+                Value::List(vec![CONTENT_EDITOR_ROLE.to_string()]),
+            ),
+        ],
+    }
+}
+
+/// A Lang Alt with only `x-default` = `text`.
+fn x_default_lang_alt(text: &str) -> Value {
+    Value::LangAlt(LangAlt::from_entries(vec![(
+        X_DEFAULT.to_string(),
+        text.to_string(),
+    )]))
+}
+
+/// Sets the `x-default` of a Contributor's Name to `name`, keeping its other languages (Q7). A
+/// Contributor without a Name gets one as its first field; a Name that is not a Lang Alt is
+/// replaced. An error only for a blank `name` ([`LangAlt::set_default`]).
+fn set_contributor_name(contributor: &mut StructValue, name: &str) -> Result<(), ValueError> {
+    match contributor
+        .fields
+        .iter_mut()
+        .find(|(id, _)| id == CONTRIBUTOR_NAME)
+    {
+        Some((_, Value::LangAlt(lang_alt))) => lang_alt.set_default(name),
+        Some((_, other)) => {
+            *other = x_default_lang_alt(name);
+            Ok(())
+        }
+        None => {
+            contributor
+                .fields
+                .insert(0, (CONTRIBUTOR_NAME.to_string(), x_default_lang_alt(name)));
+            Ok(())
+        }
+    }
+}
+
+/// The index of the content editor of a Contributor list (§6.6): the **first** structure whose
+/// Role holds the content editor URI, `https://` or `http://` (exact text otherwise).
+pub(crate) fn content_editor_index(contributors: &[StructValue]) -> Option<usize> {
+    contributors.iter().position(|contributor| {
+        contributor.fields.iter().any(|(id, value)| {
+            id == CONTRIBUTOR_ROLE
+                && matches!(value, Value::List(roles) if roles.iter().any(|role| {
+                    role == CONTENT_EDITOR_ROLE || role == CONTENT_EDITOR_ROLE_HTTP
+                }))
+        })
+    })
+}
+
+/// The name of the content editor of a Contributor list (§6.6): the shown text of its Name
+/// (`x-default`, or else the first entry). `None` without a content editor, `Some("")` for one
+/// without a Name.
+pub(crate) fn content_editor_name(contributors: &[StructValue]) -> Option<&str> {
+    let editor = contributors.get(content_editor_index(contributors)?)?;
+    let name = editor.fields.iter().find_map(|(id, value)| match value {
+        Value::LangAlt(lang_alt) if id == CONTRIBUTOR_NAME => Some(shown_text(lang_alt)),
+        _ => None,
+    });
+    Some(name.unwrap_or(""))
 }
 
 /// Date Created from DateTimeOriginal, SubSecTimeOriginal and OffsetTimeOriginal (§7). An empty
@@ -1211,6 +1347,186 @@ mod tests {
         assert!(result.metadata.conflicts().is_empty());
     }
 
+    // --- Exif ImageEditor ↔ Contributor (§6.6) ---
+
+    fn contributor(name: Option<Value>, roles: &[&str]) -> StructValue {
+        let mut fields = Vec::new();
+        if let Some(name) = name {
+            fields.push((CONTRIBUTOR_NAME.to_string(), name));
+        }
+        fields.push((CONTRIBUTOR_ROLE.to_string(), list(roles)));
+        StructValue { fields }
+    }
+
+    fn named(name: &str, roles: &[&str]) -> StructValue {
+        contributor(Some(x_default(name)), roles)
+    }
+
+    fn contributors(list: Vec<StructValue>) -> Value {
+        Value::StructList(list)
+    }
+
+    fn image_editor_against(kind: FileKind, xmp: Option<Value>, image_editor: &str) -> Reconciled {
+        reconcile(Readings {
+            xmp: xmp.map_or_else(Vec::new, |value| values(&[(CONTRIBUTOR, value)])),
+            exif: ExifFields {
+                image_editor: Some(image_editor.into()),
+                ..ExifFields::default()
+            },
+            ..readings(kind)
+        })
+    }
+
+    /// The one Contributor conflict's rule and Exif side.
+    fn contributor_conflict(result: &Reconciled) -> (ConflictRule, Value) {
+        let conflicts = conflicts_of(result, CONTRIBUTOR);
+        assert_eq!(conflicts.len(), 1, "{conflicts:?}");
+        let conflict = conflicts[0];
+        assert_eq!(conflict.values.len(), 2);
+        assert_eq!(conflict.values[1].0, Origin::Exif);
+        (conflict.rule, conflict.values[1].1.clone())
+    }
+
+    #[test]
+    fn image_editor_fills_an_absent_contributor() {
+        let result = image_editor_against(FileKind::Jpeg, None, "Åsa");
+        assert_eq!(
+            value_of(&result, CONTRIBUTOR),
+            Some((
+                contributors(vec![named("Åsa", &[CONTENT_EDITOR_ROLE])]),
+                Origin::Exif
+            ))
+        );
+        assert!(result.metadata.conflicts().is_empty());
+        assert!(result.notices.is_empty());
+    }
+
+    #[test]
+    fn image_editor_equal_to_the_content_editor_gives_nothing() {
+        let xmp = contributors(vec![named("Åsa", &[CONTENT_EDITOR_ROLE_HTTP])]);
+        let result = image_editor_against(FileKind::Jpeg, Some(xmp.clone()), "Åsa");
+        assert!(result.metadata.conflicts().is_empty());
+        assert_eq!(
+            value_of(&result, CONTRIBUTOR),
+            Some((xmp, Origin::XmpEmbedded))
+        );
+    }
+
+    #[test]
+    fn image_editor_differing_from_the_content_editor_is_a_conflict_that_keeps_the_others() {
+        let xmp = contributors(vec![
+            named("Bo", &["photographer"]),
+            named("Åsa", &[CONTENT_EDITOR_ROLE]),
+        ]);
+        let result = image_editor_against(FileKind::Jpeg, Some(xmp.clone()), "Eva");
+        assert_eq!(
+            result.metadata.conflicts(),
+            [Conflict {
+                property: CONTRIBUTOR.into(),
+                values: vec![
+                    (Origin::XmpEmbedded, xmp.clone()),
+                    (
+                        Origin::Exif,
+                        contributors(vec![
+                            named("Bo", &["photographer"]),
+                            named("Eva", &[CONTENT_EDITOR_ROLE]),
+                        ])
+                    ),
+                ],
+                rule: ConflictRule::Xmp,
+            }]
+        );
+        assert_eq!(
+            value_of(&result, CONTRIBUTOR),
+            Some((xmp, Origin::XmpEmbedded))
+        );
+    }
+
+    #[test]
+    fn image_editor_with_no_content_editor_in_the_list_appends_one_on_the_exif_side() {
+        let xmp = contributors(vec![named("Bo", &["photographer"])]);
+        let result = image_editor_against(FileKind::Jpeg, Some(xmp.clone()), "Eva");
+        assert_eq!(
+            contributor_conflict(&result),
+            (
+                ConflictRule::Xmp,
+                contributors(vec![
+                    named("Bo", &["photographer"]),
+                    named("Eva", &[CONTENT_EDITOR_ROLE]),
+                ])
+            )
+        );
+        assert_eq!(
+            value_of(&result, CONTRIBUTOR),
+            Some((xmp, Origin::XmpEmbedded))
+        );
+    }
+
+    #[test]
+    fn the_first_content_editor_is_the_one_compared() {
+        let xmp = contributors(vec![
+            named("Åsa", &[CONTENT_EDITOR_ROLE]),
+            named("Eva", &[CONTENT_EDITOR_ROLE]),
+        ]);
+        let result = image_editor_against(FileKind::Jpeg, Some(xmp), "Åsa");
+        assert!(result.metadata.conflicts().is_empty());
+    }
+
+    #[test]
+    fn the_exif_side_keeps_the_other_languages_of_the_name() {
+        let name = lang_alt(&[("x-default", "Åsa"), ("sv", "Åsa S")]);
+        let xmp = contributors(vec![contributor(Some(name), &[CONTENT_EDITOR_ROLE])]);
+        let result = image_editor_against(FileKind::Jpeg, Some(xmp), "Eva");
+        let expected = lang_alt(&[("x-default", "Eva"), ("sv", "Åsa S")]);
+        assert_eq!(
+            contributor_conflict(&result),
+            (
+                ConflictRule::Xmp,
+                contributors(vec![contributor(Some(expected), &[CONTENT_EDITOR_ROLE])])
+            )
+        );
+    }
+
+    #[test]
+    fn a_name_without_x_default_is_compared_by_its_first_entry() {
+        let name = lang_alt(&[("sv", "Åsa")]);
+        let xmp = contributors(vec![contributor(Some(name), &[CONTENT_EDITOR_ROLE])]);
+        let result = image_editor_against(FileKind::Jpeg, Some(xmp), "Åsa");
+        assert!(result.metadata.conflicts().is_empty());
+    }
+
+    #[test]
+    fn a_content_editor_without_name_gets_one_on_the_exif_side() {
+        let xmp = contributors(vec![contributor(None, &[CONTENT_EDITOR_ROLE])]);
+        let result = image_editor_against(FileKind::Jpeg, Some(xmp), "Eva");
+        // `named` puts the Name first and the Role after it.
+        assert_eq!(
+            contributor_conflict(&result),
+            (
+                ConflictRule::Xmp,
+                contributors(vec![named("Eva", &[CONTENT_EDITOR_ROLE])])
+            )
+        );
+    }
+
+    #[test]
+    fn content_editor_helpers_find_the_first_content_editor() {
+        let list = [
+            named("Bo", &["photographer"]),
+            contributor(None, &["x", CONTENT_EDITOR_ROLE_HTTP]),
+            named("Eva", &[CONTENT_EDITOR_ROLE]),
+        ];
+        assert_eq!(content_editor_index(&list), Some(1));
+        assert_eq!(content_editor_name(&list), Some(""));
+        assert_eq!(content_editor_index(&list[..1]), None);
+        assert_eq!(content_editor_name(&list[..1]), None);
+        assert_eq!(content_editor_name(&list[2..]), Some("Eva"));
+        // Any other text than the two URIs does not count.
+        let role = format!("{CONTENT_EDITOR_ROLE}/");
+        let other = [named("Åsa", &[role.as_str()])];
+        assert_eq!(content_editor_index(&other), None);
+    }
+
     // --- RAW ---
 
     #[test]
@@ -1326,6 +1642,40 @@ mod tests {
         );
         assert!(result.metadata.conflicts().is_empty());
         assert!(result.notices.is_empty());
+    }
+
+    #[test]
+    fn a_raw_file_image_editor_fills_an_absent_contributor_and_conflicts_with_rule_xmp() {
+        let filled = image_editor_against(FileKind::Raw, None, "Åsa");
+        assert_eq!(
+            value_of(&filled, CONTRIBUTOR),
+            Some((
+                contributors(vec![named("Åsa", &[CONTENT_EDITOR_ROLE])]),
+                Origin::Exif
+            ))
+        );
+        assert!(filled.metadata.conflicts().is_empty());
+
+        let sidecar = contributors(vec![named("Bo", &[CONTENT_EDITOR_ROLE])]);
+        let conflict = image_editor_against(FileKind::Raw, Some(sidecar.clone()), "Åsa");
+        assert_eq!(
+            conflict.metadata.conflicts(),
+            [Conflict {
+                property: CONTRIBUTOR.into(),
+                values: vec![
+                    (Origin::XmpSidecar, sidecar.clone()),
+                    (
+                        Origin::Exif,
+                        contributors(vec![named("Åsa", &[CONTENT_EDITOR_ROLE])])
+                    ),
+                ],
+                rule: ConflictRule::Xmp,
+            }]
+        );
+        assert_eq!(
+            value_of(&conflict, CONTRIBUTOR),
+            Some((sidecar, Origin::XmpSidecar))
+        );
     }
 
     // --- Camera rating 0 (§4.2, T113) ---

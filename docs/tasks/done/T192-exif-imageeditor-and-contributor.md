@@ -1,4 +1,4 @@
-# T192. Exif ImageEditor ↔ Contributor, the content editor (ADR 0007 §6.6) — Open
+# T192. Exif ImageEditor ↔ Contributor, the content editor (ADR 0007 §6.6) — Done
 
 - **Why:** ADR 0007 §6.1 lists Exif 3.0 ImageEditor (0xA438) as mapped "both ways" to the
   Contributor whose role is "Content Editor" (IPTC Mapping Guidelines, Exif Note on Contributor).
@@ -135,3 +135,5 @@
 |---|---|---|
 | 2026-11-18 | Open | Added (ADR 0007 revision 21, §6.6; owner's approval of E1–E3 the same day) |
 | 2026-11-18 | Open | Cold read: a fresh agent found that `reconcile.rs` needs its own `CONTRIBUTOR` constant and `StructValue` import (point 1), that `LangAlt::display` gives a pair (terms), that `exif_args` returns before its `match` for a `StructList` so Contributor needs its own branch first (point 6), the unit-test literal at `read.rs` ~1108 (point 3), that a blank name must remove the tag, and that the write test needs `all_exif()` to mean anything. The reviewer also settled two cases the text left open: the Exif side changes only the Name's `x-default` (other languages kept, Q7) and a content editor without a Name gets one as its first field; tests added for these and for a Name without `x-default` |
+| 2026-11-18 | Ready for review | Done by the task agent: points 1–7 and every listed test; besides them `reconcile.rs` has `content_editor_helpers_find_the_first_content_editor` (the two helpers directly) and constants for the Contributor's Name and Role fields. A Name field that is not a Lang Alt (the reader cannot give one) is replaced on the Exif side. `.\tools\check.ps1` all OK (1893 passed, 72 ignored), no clippy warnings |
+| 2026-11-18 | Done | Reviewed: points 1–7 and every listed test match the text and ADR 0007 §6.6; the extra helper test and the Name/Role constants are fine; the test counts in `docs/test-inventory.md` add up (unit +13, `tests/read.rs` +1). The reviewer's `.\tools\check.ps1`: all OK, 1893 passed, 0 failed, 72 ignored, no clippy warnings. Left as it is: the step comment `// Exif (§6.3, §6.5).` before the `exif_args` loop in `write_plan.rs` does not name §6.6 (the text did not ask for it). No hand check: no user-visible change. T196 is unblocked |
