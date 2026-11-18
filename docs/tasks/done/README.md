@@ -194,3 +194,4 @@ was when the task was done, so "this file", "below" and "the Log" in T1–T115 m
 | [T185](T185-delete-group-to-recycle-bin.md) | ADR 0018 B1: an image's files to the Recycle Bin, with the drive and the files checked first (pw-metadata) |
 | [T186](T186-delete-requests-in-the-metadata-worker.md) | ADR 0018 B2: preparing and deleting an image as requests to the metadata worker (pw-metadata) |
 | [T187](T187-delete-rules-and-texts.md) | ADR 0018 B3, first part: the delete's plan, batch and texts in the shell (pw-loupe) |
+| [T188](T188-delete-requests-and-answers-in-the-metadata-cache.md) | ADR 0018 B3, second part: the delete requests and answers in the shell's metadata part (pw-loupe) |

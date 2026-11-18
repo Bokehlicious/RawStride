@@ -13,7 +13,8 @@ use pw_metadata::read::MetadataRead;
 use pw_metadata::safe_write::OriginalState;
 use pw_metadata::write_plan::WriteNotice;
 use pw_metadata::{
-    MetadataWorker, Moved, Rating, RequestId, SubmitError, WorkerEvent, WriteError, supports_rating,
+    DeleteError, MetadataWorker, Moved, PreparedDelete, Rating, RequestId, SubmitError,
+    WorkerEvent, WriteError, supports_rating,
 };
 
 use crate::inspector::{INSPECTOR_POLL_INTERVAL, INSPECTOR_READ_DELAY};
@@ -38,6 +39,26 @@ pub(crate) trait MetadataSubmit: RatingWriter {
 
     /// The files of `moved` moved back where they came from (ADR 0017 U9b, T170, T173).
     fn move_back(&mut self, moved: Vec<Moved>) -> Result<RequestId, SubmitError>;
+
+    // T189 (ADR 0018 B4) uses these; until then only the tests do.
+    /// The groups of `images` and whether each can be deleted, for the confirmation (ADR 0018
+    /// B2, T186, T188).
+    #[cfg_attr(not(test), allow(dead_code))]
+    fn prepare_delete(
+        &mut self,
+        images: Vec<PathBuf>,
+        image_extensions: Vec<String>,
+        suffixes: Vec<String>,
+    ) -> Result<RequestId, SubmitError>;
+
+    /// `image` and its companion files sent to the Recycle Bin (ADR 0018 B2, T186, T188).
+    #[cfg_attr(not(test), allow(dead_code))]
+    fn delete_image(
+        &mut self,
+        image: PathBuf,
+        image_extensions: Vec<String>,
+        suffixes: Vec<String>,
+    ) -> Result<RequestId, SubmitError>;
 
     fn try_recv(&mut self) -> Result<WorkerEvent, TryRecvError>;
 }
@@ -67,6 +88,24 @@ impl MetadataSubmit for MetadataWorker {
 
     fn move_back(&mut self, moved: Vec<Moved>) -> Result<RequestId, SubmitError> {
         MetadataWorker::move_back(self, moved)
+    }
+
+    fn prepare_delete(
+        &mut self,
+        images: Vec<PathBuf>,
+        image_extensions: Vec<String>,
+        suffixes: Vec<String>,
+    ) -> Result<RequestId, SubmitError> {
+        MetadataWorker::prepare_delete(self, images, image_extensions, suffixes)
+    }
+
+    fn delete_image(
+        &mut self,
+        image: PathBuf,
+        image_extensions: Vec<String>,
+        suffixes: Vec<String>,
+    ) -> Result<RequestId, SubmitError> {
+        MetadataWorker::delete_image(self, image, image_extensions, suffixes)
     }
 
     fn try_recv(&mut self) -> Result<WorkerEvent, TryRecvError> {
@@ -273,6 +312,29 @@ pub(crate) struct MetadataCache {
     /// The answers of the moves and the moves back since `main.rs` last took them, in the order
     /// they came (ADR 0017 U9b, T173).
     moves: Vec<MoveAnswer>,
+    /// The answers of the delete requests since `main.rs` last took them, in the order they came
+    /// (ADR 0018 B3, T188).
+    deletes: Vec<DeleteAnswer>,
+}
+
+/// One answer of the metadata worker's delete requests (ADR 0018 B2, T186, T188), with the fields
+/// of its event.
+// T189 (ADR 0018 B4) uses these; until then only the tests do.
+#[cfg_attr(not(test), allow(dead_code))]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum DeleteAnswer {
+    /// The answer to `MetadataSubmit::prepare_delete`: one entry per image, in the order sent.
+    Prepared {
+        id: RequestId,
+        images: Vec<PreparedDelete>,
+    },
+    /// The answer to `MetadataSubmit::delete_image`: the files sent to the Recycle Bin, or why
+    /// the delete failed.
+    Deleted {
+        id: RequestId,
+        image: PathBuf,
+        result: Result<Vec<PathBuf>, DeleteError>,
+    },
 }
 
 /// One answer of the metadata worker's move or move back (ADR 0017 U9b, T170, T173), with the
@@ -889,6 +951,32 @@ impl MetadataCache {
         std::mem::take(&mut self.moves)
     }
 
+    // T189 (ADR 0018 B4) uses these; until then only the tests do.
+    /// The answers of the delete requests since the last call, in the order they came (ADR 0018
+    /// B3, T188).
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn take_deletes(&mut self) -> Vec<DeleteAnswer> {
+        std::mem::take(&mut self.deletes)
+    }
+
+    /// Forgets `files` (absolute), which were sent to the Recycle Bin (ADR 0018 §2.7, T188):
+    /// they leave the list of loaded images, the inspector's image is cleared when it is one of
+    /// them, the rating store drops them, and a folder read waiting to be sent again no longer
+    /// asks for them. A rating write still queued or sent is kept, as by `prune`; its answer for
+    /// the missing file fails and is shown as any failed rating write.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn forget_deleted(&mut self, files: &[PathBuf]) {
+        let deleted = |path: &Path| files.iter().any(|file| file == path);
+        self.images.retain(|path, _| !deleted(path));
+        if let Some(pending) = self.pending_read.as_mut() {
+            pending.retain(|path| !deleted(path));
+            if pending.is_empty() {
+                self.pending_read = None;
+            }
+        }
+        self.prune(|path| !deleted(path));
+    }
+
     /// Whether a rating write for `path` (absolute) is queued, or sent and not yet answered; a
     /// move of the image waits for it (T172, T173, T178).
     pub(crate) fn is_pending(&self, path: &Path) -> bool {
@@ -1081,8 +1169,14 @@ impl MetadataCache {
             WorkerEvent::MovedBack { id, moved, result } => {
                 self.moves.push(MoveAnswer::MovedBack { id, moved, result });
             }
-            // The deletes (T186) are taken by the shell from T188 on.
-            WorkerEvent::DeletePrepared { .. } | WorkerEvent::Deleted { .. } => {}
+            // The deletes (T186): `main.rs` takes their answers with `take_deletes` (T188, T189).
+            WorkerEvent::DeletePrepared { id, images } => {
+                self.deletes.push(DeleteAnswer::Prepared { id, images });
+            }
+            WorkerEvent::Deleted { id, image, result } => {
+                self.deletes
+                    .push(DeleteAnswer::Deleted { id, image, result });
+            }
         }
     }
 }
@@ -1253,6 +1347,14 @@ mod tests {
     /// suffixes (T173).
     type MoveImageCall = (RequestId, PathBuf, PathBuf, Vec<String>, Vec<String>);
 
+    /// One `prepare_delete` call of `FakeSubmit`: its id, images, image extensions and suffixes
+    /// (T188).
+    type PrepareDeleteCall = (RequestId, Vec<PathBuf>, Vec<String>, Vec<String>);
+
+    /// One `delete_image` call of `FakeSubmit`: its id, image, image extensions and suffixes
+    /// (T188).
+    type DeleteImageCall = (RequestId, PathBuf, Vec<String>, Vec<String>);
+
     struct FakeSubmit {
         read_responses: VecDeque<Result<RequestId, SubmitError>>,
         read_attempts: Vec<Vec<PathBuf>>,
@@ -1278,6 +1380,11 @@ mod tests {
         /// The files of every `move_back` call, with the id each was given (T173).
         move_backs: Vec<(RequestId, Vec<Moved>)>,
         next_move_id: RequestId,
+        /// Every `prepare_delete` call, with the id each was given (T188).
+        prepare_deletes: Vec<PrepareDeleteCall>,
+        /// Every `delete_image` call, with the id each was given (T188).
+        delete_images: Vec<DeleteImageCall>,
+        next_delete_id: RequestId,
     }
 
     impl FakeSubmit {
@@ -1299,6 +1406,9 @@ mod tests {
                 move_images: Vec::new(),
                 move_backs: Vec::new(),
                 next_move_id: 1300,
+                prepare_deletes: Vec::new(),
+                delete_images: Vec::new(),
+                next_delete_id: 1700,
             }
         }
     }
@@ -1383,6 +1493,34 @@ mod tests {
             let id = self.next_move_id;
             self.next_move_id += 1;
             self.move_backs.push((id, moved));
+            Ok(id)
+        }
+
+        fn prepare_delete(
+            &mut self,
+            images: Vec<PathBuf>,
+            image_extensions: Vec<String>,
+            suffixes: Vec<String>,
+        ) -> Result<RequestId, SubmitError> {
+            self.operations.push("prepare_delete");
+            let id = self.next_delete_id;
+            self.next_delete_id += 1;
+            self.prepare_deletes
+                .push((id, images, image_extensions, suffixes));
+            Ok(id)
+        }
+
+        fn delete_image(
+            &mut self,
+            image: PathBuf,
+            image_extensions: Vec<String>,
+            suffixes: Vec<String>,
+        ) -> Result<RequestId, SubmitError> {
+            self.operations.push("delete_image");
+            let id = self.next_delete_id;
+            self.next_delete_id += 1;
+            self.delete_images
+                .push((id, image, image_extensions, suffixes));
             Ok(id)
         }
 
@@ -3687,5 +3825,213 @@ mod tests {
 
         assert!(cache.has_image(&loaded));
         assert!(!cache.has_image(&image_path("pw-loupe-move-other.ARW")));
+    }
+
+    // --- the deletes through the cache (ADR 0018 B3, T188) ---
+
+    #[test]
+    fn the_fake_records_prepare_delete_and_delete_image() {
+        let mut worker = FakeSubmit::new([]);
+        let a = image_path("pw-loupe-delete-record-a.ARW");
+        let b = image_path("pw-loupe-delete-record-b.ARW");
+        let extensions = vec!["arw".to_owned(), "jpg".to_owned()];
+        let suffixes = vec!["dop".to_owned()];
+        assert_eq!(
+            MetadataSubmit::prepare_delete(
+                &mut worker,
+                vec![a.clone(), b.clone()],
+                extensions.clone(),
+                suffixes.clone()
+            ),
+            Ok(1700)
+        );
+        assert_eq!(
+            MetadataSubmit::delete_image(
+                &mut worker,
+                a.clone(),
+                extensions.clone(),
+                suffixes.clone()
+            ),
+            Ok(1701)
+        );
+        assert_eq!(
+            worker.prepare_deletes,
+            [(
+                1700,
+                vec![a.clone(), b],
+                extensions.clone(),
+                suffixes.clone()
+            )]
+        );
+        assert_eq!(worker.delete_images, [(1701, a, extensions, suffixes)]);
+        assert_eq!(worker.operations, ["prepare_delete", "delete_image"]);
+    }
+
+    #[test]
+    fn a_delete_prepared_and_a_deleted_reach_take_deletes_in_order_and_once() {
+        let mut worker = FakeSubmit::new([]);
+        let mut cache = MetadataCache::default();
+        assert!(cache.take_deletes().is_empty());
+        let image = image_path("pw-loupe-delete-answer.ARW");
+        let sidecar = image_path("pw-loupe-delete-answer.ARW.dop");
+        let card = image_path("pw-loupe-delete-card.ARW");
+        let prepared = vec![
+            PreparedDelete {
+                image: image.clone(),
+                result: Ok(pw_metadata::DeleteGroup {
+                    files: vec![image.clone(), sidecar.clone()],
+                    bytes: 1234,
+                }),
+            },
+            PreparedDelete {
+                image: card.clone(),
+                result: Err(DeleteError {
+                    file: card,
+                    reason: pw_metadata::DeleteRefusal::Card,
+                    left: Vec::new(),
+                    deleted: Vec::new(),
+                }),
+            },
+        ];
+        worker.events.push_back(WorkerEvent::DeletePrepared {
+            id: 1700,
+            images: prepared.clone(),
+        });
+        worker.events.push_back(WorkerEvent::Deleted {
+            id: 1701,
+            image: image.clone(),
+            result: Ok(vec![image.clone(), sidecar.clone()]),
+        });
+
+        assert!(cache.poll(&mut worker).is_empty());
+
+        assert_eq!(
+            cache.take_deletes(),
+            [
+                DeleteAnswer::Prepared {
+                    id: 1700,
+                    images: prepared,
+                },
+                DeleteAnswer::Deleted {
+                    id: 1701,
+                    image: image.clone(),
+                    result: Ok(vec![image, sidecar]),
+                },
+            ]
+        );
+        // taken once
+        assert!(cache.take_deletes().is_empty());
+        // a delete answer is no move answer and no write answer
+        assert!(cache.take_moves().is_empty());
+        assert!(cache.take_written().is_empty());
+    }
+
+    /// A cache with `files` loaded through `worker` (T188).
+    fn loaded_cache(files: &[PathBuf], worker: &mut FakeSubmit) -> MetadataCache {
+        let mut cache = MetadataCache::default();
+        if let Err(error) = cache.begin_load(files.to_vec(), worker) {
+            panic!("current directory should be available: {error}");
+        }
+        cache
+    }
+
+    #[test]
+    fn forget_deleted_removes_a_loaded_image_and_keeps_the_others() {
+        let mut worker = FakeSubmit::new([Ok(7)]);
+        let deleted = image_path("pw-loupe-forget-loaded.ARW");
+        let kept = image_path("pw-loupe-forget-kept.ARW");
+        let mut cache = loaded_cache(&[deleted.clone(), kept.clone()], &mut worker);
+        assert!(cache.has_image(&deleted));
+
+        cache.forget_deleted(std::slice::from_ref(&deleted));
+
+        assert!(!cache.has_image(&deleted));
+        assert!(cache.has_image(&kept));
+    }
+
+    #[test]
+    fn forget_deleted_clears_the_inspectors_image_only_when_it_is_deleted() {
+        let mut worker = FakeSubmit::new([]);
+        let mut cache = MetadataCache::default();
+        let image = image_path("pw-loupe-forget-inspector.ARW");
+        inspector_read_sent(&mut cache, &image, Instant::now(), &mut worker);
+        worker
+            .events
+            .push_back(metadata_read(500, &image, Ok(empty_read())));
+        assert!(cache.poll(&mut worker).is_empty());
+
+        // another image deleted: the inspector keeps its image and its result
+        cache.forget_deleted(&[image_path("pw-loupe-forget-other.ARW")]);
+        assert!(cache.inspector.image.is_some());
+        assert!(matches!(
+            cache.inspector_state(&image),
+            InspectorState::Ready(_)
+        ));
+
+        // its own image deleted: cleared
+        cache.forget_deleted(std::slice::from_ref(&image));
+        assert!(cache.inspector.image.is_none());
+    }
+
+    #[test]
+    fn forget_deleted_drops_the_rating_of_an_image_without_a_pending_write() {
+        let mut worker = FakeSubmit::new([Ok(7)]);
+        let deleted = image_path("pw-loupe-forget-rated.ARW");
+        let kept = image_path("pw-loupe-forget-rated-kept.ARW");
+        let mut cache = loaded_cache(&[deleted.clone(), kept.clone()], &mut worker);
+        let ratings = HashMap::from([
+            (deleted.clone(), Rating::default()),
+            (kept.clone(), Rating::default()),
+        ]);
+        worker.events.push_back(WorkerEvent::RatingsRead {
+            id: 7,
+            result: Ok(ratings),
+        });
+        assert!(cache.poll(&mut worker).is_empty());
+        assert!(cache.ratings.contains(&deleted));
+        assert!(!cache.is_pending(&deleted));
+
+        cache.forget_deleted(std::slice::from_ref(&deleted));
+
+        assert!(!cache.ratings.contains(&deleted));
+        assert!(cache.ratings.contains(&kept));
+    }
+
+    #[test]
+    fn forget_deleted_keeps_a_rating_write_that_is_still_queued() {
+        let mut cache = MetadataCache::default();
+        let image = image_path("pw-loupe-forget-queued.ARW");
+        assert!(cache.set_rating(&image, RatingKey::Stars(2)).is_ok());
+        assert!(cache.is_pending(&image));
+
+        cache.forget_deleted(std::slice::from_ref(&image));
+
+        assert!(cache.is_pending(&image));
+        assert!(cache.ratings.contains(&image));
+    }
+
+    #[test]
+    fn forget_deleted_takes_a_deleted_path_out_of_a_waiting_folder_read() {
+        let mut worker = FakeSubmit::new([Err(SubmitError::QueueFull), Ok(8)]);
+        let deleted = image_path("pw-loupe-forget-pending-a.ARW");
+        let kept = image_path("pw-loupe-forget-pending-b.ARW");
+        let mut cache = loaded_cache(&[deleted.clone(), kept.clone()], &mut worker);
+        assert!(cache.pending_read.is_some());
+
+        cache.forget_deleted(std::slice::from_ref(&deleted));
+
+        assert_eq!(cache.pending_read, Some(vec![kept.clone()]));
+        // the retry asks only for the image that is left
+        assert!(cache.poll(&mut worker).is_empty());
+        assert_eq!(worker.read_attempts.last(), Some(&vec![kept]));
+        assert!(cache.pending_read.is_none());
+
+        // when every waiting path is deleted, nothing waits to be sent
+        let mut worker = FakeSubmit::new([Err(SubmitError::QueueFull)]);
+        let mut cache = loaded_cache(std::slice::from_ref(&deleted), &mut worker);
+        cache.forget_deleted(std::slice::from_ref(&deleted));
+        assert!(cache.pending_read.is_none());
+        assert!(cache.poll(&mut worker).is_empty());
+        assert_eq!(worker.read_attempts.len(), 1, "no empty read is sent");
     }
 }
