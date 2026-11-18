@@ -45,8 +45,8 @@ pub use exiftool::{ExifTool, MIN_EXIFTOOL_VERSION, ToolVersion};
 pub use recycle::{DeleteError, DeleteRefusal};
 pub use relocate::{MoveError, Moved};
 pub use worker::{
-    EXIFTOOL_TOO_OLD, Event as WorkerEvent, MetadataWorker, NO_JOURNAL, RequestId, SubmitError,
-    WriteSetup,
+    DeleteGroup, EXIFTOOL_TOO_OLD, Event as WorkerEvent, MetadataWorker, NO_JOURNAL,
+    PreparedDelete, RequestId, SubmitError, WriteSetup,
 };
 
 use edit::EditError;

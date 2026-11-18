@@ -32,9 +32,20 @@
 //!   [`ImageCheck::release_for_move`]) and moves the files back with
 //!   [`relocate::move_back`]; answered with [`Event::MovedBack`].
 //!
-//! Requests run in order, so a move sent after a rating write of the same image runs after it.
-//! A move does not use ExifTool; without a [`WriteSetup`] (no `checks` to release the sessions)
-//! both fail with [`NO_JOURNAL`] and nothing is moved.
+//! Deleting an image with its companion files to the Recycle Bin (ADR 0018 §2.3, step B2; T186):
+//! - [`MetadataWorker::prepare_delete`] finds each image's group with [`relocate::companions`]
+//!   and its size with [`recycle::inspect_group`], for the confirmation; it releases nothing and
+//!   changes nothing on disk. Answered with [`Event::DeletePrepared`].
+//! - [`MetadataWorker::delete_image`] finds the image's group, releases the view cores' sessions
+//!   of the image files in it as a move does ([`ImageCheck::release_for_move`]) and sends the
+//!   group to the Recycle Bin with [`recycle::delete_group`]; answered with [`Event::Deleted`].
+//!
+//! Both answer with a structured [`DeleteError`].
+//!
+//! Requests run in order, so a move or a delete sent after a rating write of the same image runs
+//! after it. Moves and deletes do not use ExifTool; without a [`WriteSetup`] (no `checks` to
+//! release the sessions) the moves and `delete_image` fail with [`NO_JOURNAL`] and nothing is
+//! moved or deleted. `prepare_delete` works without a setup.
 
 use std::collections::HashMap;
 use std::fmt;
@@ -47,6 +58,7 @@ use crate::edit::{Edit, EditOptions, EditReport};
 use crate::exiftool::{MIN_EXIFTOOL_VERSION, ToolVersion, exiftool_program};
 use crate::journal::Journal;
 use crate::read::MetadataRead;
+use crate::recycle::{self, DeleteError, DeleteRefusal};
 use crate::relocate::{self, Moved};
 use crate::safe_write::ImageCheck;
 use crate::{ExifTool, Rating, Result, WriteError};
@@ -82,6 +94,22 @@ impl fmt::Debug for WriteSetup {
 }
 
 pub type RequestId = u64;
+
+/// One image's group for a delete (T186): its files as [`relocate::companions`] gives them, the
+/// image first, and their total size in bytes from [`recycle::inspect_group`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DeleteGroup {
+    pub files: Vec<PathBuf>,
+    pub bytes: u64,
+}
+
+/// The answer for one image of [`MetadataWorker::prepare_delete`] (T186): the image as sent, and
+/// its group or why it cannot be deleted.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PreparedDelete {
+    pub image: PathBuf,
+    pub result: std::result::Result<DeleteGroup, DeleteError>,
+}
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum SubmitError {
@@ -127,6 +155,19 @@ pub enum Event {
         moved: Vec<Moved>,
         result: std::result::Result<(), String>,
     },
+    /// The answer to [`MetadataWorker::prepare_delete`] (T186): one entry per image, in the order
+    /// sent.
+    DeletePrepared {
+        id: RequestId,
+        images: Vec<PreparedDelete>,
+    },
+    /// The answer to [`MetadataWorker::delete_image`] (T186), with `image` as it was sent: the
+    /// files that went to the Recycle Bin, or the error.
+    Deleted {
+        id: RequestId,
+        image: PathBuf,
+        result: std::result::Result<Vec<PathBuf>, DeleteError>,
+    },
 }
 
 /// What the worker thread receives: a request with an event, or new options without one (T98).
@@ -166,6 +207,18 @@ enum Request {
     MoveBack {
         id: RequestId,
         moved: Vec<Moved>,
+    },
+    PrepareDelete {
+        id: RequestId,
+        images: Vec<PathBuf>,
+        image_extensions: Vec<String>,
+        suffixes: Vec<String>,
+    },
+    Delete {
+        id: RequestId,
+        image: PathBuf,
+        image_extensions: Vec<String>,
+        suffixes: Vec<String>,
     },
 }
 
@@ -296,6 +349,47 @@ impl MetadataWorker {
     pub fn move_back(&mut self, moved: Vec<Moved>) -> std::result::Result<RequestId, SubmitError> {
         let id = self.next_request_id();
         self.submit(Request::MoveBack { id, moved })?;
+        Ok(id)
+    }
+
+    /// Queues finding the groups of `images` and their sizes without blocking (T186), for the
+    /// confirmation before a delete; answered with [`Event::DeletePrepared`], one entry per image
+    /// in the order given. Nothing is released or changed on disk, and no [`WriteSetup`] is
+    /// needed. `image_extensions` and `suffixes` are as for [`MetadataWorker::move_image`].
+    pub fn prepare_delete(
+        &mut self,
+        images: Vec<PathBuf>,
+        image_extensions: Vec<String>,
+        suffixes: Vec<String>,
+    ) -> std::result::Result<RequestId, SubmitError> {
+        let id = self.next_request_id();
+        self.submit(Request::PrepareDelete {
+            id,
+            images,
+            image_extensions,
+            suffixes,
+        })?;
+        Ok(id)
+    }
+
+    /// Queues sending `image` and its companion files to the Recycle Bin without blocking (T186),
+    /// answered with [`Event::Deleted`]. The sessions of the group's image files are released
+    /// first, as for a move; `image_extensions` and `suffixes` are as for
+    /// [`MetadataWorker::move_image`]. Without a [`WriteSetup`] it fails with [`NO_JOURNAL`] and
+    /// nothing is deleted.
+    pub fn delete_image(
+        &mut self,
+        image: PathBuf,
+        image_extensions: Vec<String>,
+        suffixes: Vec<String>,
+    ) -> std::result::Result<RequestId, SubmitError> {
+        let id = self.next_request_id();
+        self.submit(Request::Delete {
+            id,
+            image,
+            image_extensions,
+            suffixes,
+        })?;
         Ok(id)
     }
 
@@ -510,6 +604,37 @@ fn handle(
             };
             Event::MovedBack { id, moved, result }
         }
+        // Neither delete request uses ExifTool (T186), as for a move.
+        Request::PrepareDelete {
+            id,
+            images,
+            image_extensions,
+            suffixes,
+        } => {
+            let images = images
+                .into_iter()
+                .map(|image| {
+                    let result = prepare_group(&image, &image_extensions, &suffixes);
+                    PreparedDelete { image, result }
+                })
+                .collect();
+            Event::DeletePrepared { id, images }
+        }
+        Request::Delete {
+            id,
+            image,
+            image_extensions,
+            suffixes,
+        } => {
+            let result = match setup {
+                None => Err(delete_error(
+                    &image,
+                    DeleteRefusal::Failed(NO_JOURNAL.to_string()),
+                )),
+                Some(setup) => delete_image(&*setup.checks, &image, &image_extensions, &suffixes),
+            };
+            Event::Deleted { id, image, result }
+        }
     }
 }
 
@@ -531,8 +656,21 @@ fn move_image(
         );
         format!("Could not move {name}: {error}.")
     })?;
-    let lower: Vec<String> = extensions.iter().map(|e| e.to_lowercase()).collect();
-    for file in &files {
+    release_image_files(checks, image, &files, &extensions);
+    relocate::move_group(&files, target).map_err(|error| error.to_string())
+}
+
+/// Releases the sessions of the image files among `files`, `image`'s group, with
+/// [`ImageCheck::release_for_move`]: `image` itself, and every file whose extension is in
+/// `image_extensions`, without regard to case (T170, T186).
+fn release_image_files(
+    checks: &dyn ImageCheck,
+    image: &Path,
+    files: &[PathBuf],
+    image_extensions: &[&str],
+) {
+    let lower: Vec<String> = image_extensions.iter().map(|e| e.to_lowercase()).collect();
+    for file in files {
         // The image itself is always released, whether or not its extension is in the list.
         let is_image = file == image
             || file
@@ -543,7 +681,65 @@ fn move_image(
             checks.release_for_move(file);
         }
     }
-    relocate::move_group(&files, target).map_err(|error| error.to_string())
+}
+
+/// A [`DeleteError`] for `file` with nothing deleted and nothing left.
+fn delete_error(file: &Path, reason: DeleteRefusal) -> DeleteError {
+    DeleteError {
+        file: file.to_path_buf(),
+        reason,
+        left: Vec::new(),
+        deleted: Vec::new(),
+    }
+}
+
+/// `image`'s group as [`relocate::companions`] finds it (T186). Its errors become a
+/// [`DeleteError`] naming the image made absolute (as given if that fails): `NotFound` is
+/// [`DeleteRefusal::Missing`], `InvalidInput` [`DeleteRefusal::NotAFile`], anything else
+/// [`DeleteRefusal::Failed`] with the error's text.
+fn delete_companions(
+    image: &Path,
+    image_extensions: &[&str],
+    suffixes: &[&str],
+) -> std::result::Result<Vec<PathBuf>, DeleteError> {
+    relocate::companions(image, image_extensions, suffixes).map_err(|error| {
+        let reason = match error.kind() {
+            std::io::ErrorKind::NotFound => DeleteRefusal::Missing,
+            std::io::ErrorKind::InvalidInput => DeleteRefusal::NotAFile,
+            _ => DeleteRefusal::Failed(error.to_string()),
+        };
+        let file = std::path::absolute(image).unwrap_or_else(|_| image.to_path_buf());
+        delete_error(&file, reason)
+    })
+}
+
+/// Finds `image`'s group and its size for the confirmation (T186); changes nothing.
+fn prepare_group(
+    image: &Path,
+    image_extensions: &[String],
+    suffixes: &[String],
+) -> std::result::Result<DeleteGroup, DeleteError> {
+    let extensions: Vec<&str> = image_extensions.iter().map(String::as_str).collect();
+    let suffixes: Vec<&str> = suffixes.iter().map(String::as_str).collect();
+    let files = delete_companions(image, &extensions, &suffixes)?;
+    let bytes = recycle::inspect_group(&files)?;
+    Ok(DeleteGroup { files, bytes })
+}
+
+/// Finds `image`'s group, releases the sessions of its image files and sends the group to the
+/// Recycle Bin (T186); `Ok` holds the group's files as found.
+fn delete_image(
+    checks: &dyn ImageCheck,
+    image: &Path,
+    image_extensions: &[String],
+    suffixes: &[String],
+) -> std::result::Result<Vec<PathBuf>, DeleteError> {
+    let extensions: Vec<&str> = image_extensions.iter().map(String::as_str).collect();
+    let suffixes: Vec<&str> = suffixes.iter().map(String::as_str).collect();
+    let files = delete_companions(image, &extensions, &suffixes)?;
+    release_image_files(checks, image, &files, &extensions);
+    recycle::delete_group(&files)?;
+    Ok(files)
 }
 
 #[cfg(test)]
@@ -749,7 +945,9 @@ mod tests {
                     other @ (Event::MetadataRead { .. }
                     | Event::EditsWritten { .. }
                     | Event::Moved { .. }
-                    | Event::MovedBack { .. }),
+                    | Event::MovedBack { .. }
+                    | Event::DeletePrepared { .. }
+                    | Event::Deleted { .. }),
                 ) => {
                     panic!("unexpected event {other:?}")
                 }
@@ -1305,6 +1503,324 @@ mod tests {
             ["TN0001.ARW", "TN0001.xmp", "_rejected"]
         );
         assert_eq!(names(&target), ["TN0002.ARW"]);
+    }
+
+    /// Finds the groups of `images` through the worker (T186), with ARW and JPG as image
+    /// extensions and `dop` as the suffix.
+    fn prepare_result(worker: &mut MetadataWorker, images: &[PathBuf]) -> Vec<PreparedDelete> {
+        let id = worker
+            .prepare_delete(images.to_vec(), strings(&["arw", "jpg"]), strings(&["dop"]))
+            .expect("request should be accepted");
+        match next_event(worker) {
+            Event::DeletePrepared {
+                id: event_id,
+                images,
+            } => {
+                assert_eq!(event_id, id);
+                images
+            }
+            other => panic!("unexpected event {other:?}"),
+        }
+    }
+
+    /// Deletes `image` through the worker (T186), with ARW and JPG as image extensions and `dop`
+    /// as the suffix.
+    fn delete_result(
+        worker: &mut MetadataWorker,
+        image: &Path,
+    ) -> std::result::Result<Vec<PathBuf>, DeleteError> {
+        let id = worker
+            .delete_image(
+                image.to_path_buf(),
+                strings(&["arw", "jpg"]),
+                strings(&["dop"]),
+            )
+            .expect("request should be accepted");
+        match next_event(worker) {
+            Event::Deleted {
+                id: event_id,
+                image: event_image,
+                result,
+            } => {
+                assert_eq!(event_id, id);
+                assert_eq!(event_image, image);
+                result
+            }
+            other => panic!("unexpected event {other:?}"),
+        }
+    }
+
+    /// Writes `name` in `folder` with its own name as its content and returns its path.
+    fn file_in(folder: &Path, name: &str) -> PathBuf {
+        let path = folder.join(name);
+        std::fs::write(&path, name.as_bytes()).expect("write the file");
+        path
+    }
+
+    /// The total size of `files`.
+    fn size_of(files: &[PathBuf]) -> u64 {
+        files
+            .iter()
+            .map(|file| std::fs::metadata(file).expect("the file's metadata").len())
+            .sum()
+    }
+
+    #[test]
+    fn without_a_setup_delete_image_fails_and_nothing_is_deleted() {
+        let folder = TempDir::new("delete-no-journal");
+        let raw = file_in(folder.path(), "TN0001.ARW");
+        let dop = file_in(folder.path(), "TN0001.ARW.dop");
+        let mut worker = start_without_exiftool("delete-no-journal", None);
+
+        assert_eq!(
+            delete_result(&mut worker, &raw),
+            Err(DeleteError {
+                file: raw.clone(),
+                reason: DeleteRefusal::Failed(NO_JOURNAL.to_string()),
+                left: Vec::new(),
+                deleted: Vec::new(),
+            })
+        );
+        assert!(raw.is_file() && dop.is_file());
+    }
+
+    /// The tests below expect a group to pass T185's drive check, so the system's temporary
+    /// folder must be on a fixed drive with the Recycle Bin on; if it is not, they fail with the
+    /// refusal. Nothing goes to the Recycle Bin except in the ignored test.
+    #[cfg(windows)]
+    mod deletes {
+        use super::*;
+        use std::os::windows::fs::OpenOptionsExt;
+
+        // FILE_SHARE_READ | FILE_SHARE_WRITE, without FILE_SHARE_DELETE.
+        const SHARE_READ_WRITE: u32 = 0x1 | 0x2;
+
+        /// Opens `file` as another program would: reading and writing shared, deleting not.
+        fn hold_open(file: &Path) -> std::fs::File {
+            std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .share_mode(SHARE_READ_WRITE)
+                .open(file)
+                .expect("open the file")
+        }
+
+        #[test]
+        fn prepare_delete_gives_each_group_and_its_size_and_changes_nothing() {
+            let folder = TempDir::new("prepare");
+            let journal = TempDir::new("prepare-journal");
+            let raw = file_in(folder.path(), "TN0001.ARW");
+            let dop = file_in(folder.path(), "TN0001.ARW.dop");
+            let xmp = file_in(folder.path(), "TN0001.XMP");
+            let jpg = file_in(folder.path(), "TN0002.jpg");
+            let check = RecordingCheck::default();
+            let mut worker = start_without_exiftool(
+                "prepare",
+                Some(setup_with(journal.path(), Box::new(check.clone()))),
+            );
+
+            let prepared = prepare_result(&mut worker, &[jpg.clone(), raw.clone()]);
+
+            let raw_group = vec![raw.clone(), dop.clone(), xmp.clone()];
+            assert_eq!(
+                prepared,
+                vec![
+                    PreparedDelete {
+                        image: jpg.clone(),
+                        result: Ok(DeleteGroup {
+                            files: vec![jpg.clone()],
+                            bytes: size_of(std::slice::from_ref(&jpg)),
+                        }),
+                    },
+                    PreparedDelete {
+                        image: raw.clone(),
+                        result: Ok(DeleteGroup {
+                            bytes: size_of(&raw_group),
+                            files: raw_group,
+                        }),
+                    },
+                ]
+            );
+            assert!([raw, dop, xmp, jpg].iter().all(|file| file.is_file()));
+            assert!(check.released().is_empty());
+            assert!(check.released_for_move().is_empty());
+        }
+
+        #[test]
+        fn prepare_delete_of_a_missing_image_is_missing_and_the_other_is_answered() {
+            let folder = TempDir::new("prepare-missing");
+            let journal = TempDir::new("prepare-missing-journal");
+            let missing = folder.path().join("TN0009.ARW");
+            let jpg = file_in(folder.path(), "TN0002.jpg");
+            let mut worker =
+                start_without_exiftool("prepare-missing", Some(test_setup(journal.path())));
+
+            let prepared = prepare_result(&mut worker, &[missing.clone(), jpg.clone()]);
+
+            assert_eq!(
+                prepared,
+                vec![
+                    PreparedDelete {
+                        image: missing.clone(),
+                        result: Err(DeleteError {
+                            file: missing,
+                            reason: DeleteRefusal::Missing,
+                            left: Vec::new(),
+                            deleted: Vec::new(),
+                        }),
+                    },
+                    PreparedDelete {
+                        image: jpg.clone(),
+                        result: Ok(DeleteGroup {
+                            files: vec![jpg.clone()],
+                            bytes: size_of(std::slice::from_ref(&jpg)),
+                        }),
+                    },
+                ]
+            );
+        }
+
+        #[test]
+        fn prepare_delete_works_without_a_setup() {
+            let folder = TempDir::new("prepare-no-journal");
+            let raw = file_in(folder.path(), "TN0001.ARW");
+            let dop = file_in(folder.path(), "TN0001.ARW.dop");
+            let mut worker = start_without_exiftool("prepare-no-journal", None);
+
+            let prepared = prepare_result(&mut worker, std::slice::from_ref(&raw));
+
+            let group = vec![raw.clone(), dop.clone()];
+            assert_eq!(
+                prepared,
+                vec![PreparedDelete {
+                    image: raw.clone(),
+                    result: Ok(DeleteGroup {
+                        bytes: size_of(&group),
+                        files: group,
+                    }),
+                }]
+            );
+            assert!(raw.is_file() && dop.is_file());
+        }
+
+        #[test]
+        fn delete_image_with_a_sidecar_held_open_is_refused_and_nothing_is_deleted() {
+            let folder = TempDir::new("delete-held");
+            let journal = TempDir::new("delete-held-journal");
+            let raw = file_in(folder.path(), "TN0001.ARW");
+            let dop = file_in(folder.path(), "TN0001.ARW.dop");
+            let xmp = file_in(folder.path(), "TN0001.XMP");
+            let check = RecordingCheck::default();
+            let mut worker = start_without_exiftool(
+                "delete-held",
+                Some(setup_with(journal.path(), Box::new(check.clone()))),
+            );
+
+            let held = hold_open(&xmp);
+            let result = delete_result(&mut worker, &raw);
+            drop(held);
+
+            assert_eq!(
+                result,
+                Err(DeleteError {
+                    file: xmp.clone(),
+                    reason: DeleteRefusal::OpenElsewhere,
+                    left: Vec::new(),
+                    deleted: Vec::new(),
+                })
+            );
+            assert_eq!(check.released_for_move(), vec![raw.clone()]);
+            assert!(check.released().is_empty());
+            assert!([raw, dop, xmp].iter().all(|file| file.is_file()));
+        }
+
+        #[test]
+        fn a_delete_sent_after_a_rating_write_is_answered_after_it() {
+            let folder = TempDir::new("delete-order");
+            let journal = TempDir::new("delete-order-journal");
+            let raw = file_in(folder.path(), "TN0001.ARW");
+            let xmp = file_in(folder.path(), "TN0001.XMP");
+            let mut worker =
+                start_without_exiftool("delete-order", Some(test_setup(journal.path())));
+
+            let held = hold_open(&xmp);
+            let write = worker
+                .write_rating(
+                    raw.clone(),
+                    Rating {
+                        stars: Some(1),
+                        label: None,
+                    },
+                )
+                .expect("request should be accepted");
+            let deleting = worker
+                .delete_image(raw.clone(), strings(&["arw", "jpg"]), strings(&["dop"]))
+                .expect("request should be accepted");
+            let first = next_event(&worker);
+            let second = next_event(&worker);
+            drop(held);
+
+            match first {
+                Event::RatingWritten { id, .. } => assert_eq!(id, write),
+                other => panic!("expected the rating write first, got {other:?}"),
+            }
+            match second {
+                Event::Deleted { id, result, .. } => {
+                    assert_eq!(id, deleting);
+                    let reason = result.map_err(|error| error.reason);
+                    assert_eq!(reason, Err(DeleteRefusal::OpenElsewhere));
+                }
+                other => panic!("expected the delete second, got {other:?}"),
+            }
+            assert!(raw.is_file() && xmp.is_file());
+        }
+
+        #[test]
+        #[ignore = "puts two small files in the real Recycle Bin (B-Q15); run by hand"]
+        fn delete_to_recycle_bin_sends_the_image_and_its_dop_and_releases_the_image() {
+            let folder = TempDir::new("delete-real");
+            let journal = TempDir::new("delete-real-journal");
+            let raw = file_in(folder.path(), "pw-metadata-recycle-test-TN0040.ARW");
+            let dop = file_in(folder.path(), "pw-metadata-recycle-test-TN0040.ARW.dop");
+            let check = RecordingCheck::default();
+            let mut worker = start_without_exiftool(
+                "delete-real",
+                Some(setup_with(journal.path(), Box::new(check.clone()))),
+            );
+
+            let id = worker
+                .delete_image(raw.clone(), strings(&["arw", "jpg"]), strings(&["dop"]))
+                .expect("request should be accepted");
+            let deadline = Instant::now() + Duration::from_secs(30);
+            let event = loop {
+                match worker.try_recv() {
+                    Ok(event) => break event,
+                    Err(TryRecvError::Disconnected) => panic!("worker disconnected unexpectedly"),
+                    Err(TryRecvError::Empty) if Instant::now() < deadline => {
+                        std::thread::sleep(Duration::from_millis(5));
+                    }
+                    Err(TryRecvError::Empty) => {
+                        panic!("no answer within 30 seconds: a Windows dialog may be open")
+                    }
+                }
+            };
+
+            match event {
+                Event::Deleted {
+                    id: event_id,
+                    image,
+                    result,
+                } => {
+                    assert_eq!(event_id, id);
+                    assert_eq!(image, raw);
+                    assert_eq!(result, Ok(vec![raw.clone(), dop.clone()]));
+                }
+                other => panic!("unexpected event {other:?}"),
+            }
+            assert!(!raw.exists() && !dop.exists());
+            assert_eq!(check.released_for_move(), vec![raw]);
+            assert!(check.released().is_empty());
+        }
     }
 
     /// The tests below write through a real ExifTool (`exiftool` on PATH, or `PW_EXIFTOOL_PL`

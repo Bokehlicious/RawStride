@@ -1081,6 +1081,8 @@ impl MetadataCache {
             WorkerEvent::MovedBack { id, moved, result } => {
                 self.moves.push(MoveAnswer::MovedBack { id, moved, result });
             }
+            // The deletes (T186) are taken by the shell from T188 on.
+            WorkerEvent::DeletePrepared { .. } | WorkerEvent::Deleted { .. } => {}
         }
     }
 }

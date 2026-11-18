@@ -192,3 +192,4 @@ was when the task was done, so "this file", "below" and "the Log" in T1–T115 m
 | [T183](T183-tabs-on-rejected-and-picked-and-undo-while-moving.md) | ADR 0017 U9b: a tab open on `_rejected` or `_picked` follows a move and an undo; Ctrl+Z while a move runs says so (pw-loupe) |
 | [T184](T184-release-for-move-a-required-method.md) | `ImageCheck::release_for_move` a required method (pw-metadata, pw-imagecheck) |
 | [T185](T185-delete-group-to-recycle-bin.md) | ADR 0018 B1: an image's files to the Recycle Bin, with the drive and the files checked first (pw-metadata) |
+| [T186](T186-delete-requests-in-the-metadata-worker.md) | ADR 0018 B2: preparing and deleting an image as requests to the metadata worker (pw-metadata) |
