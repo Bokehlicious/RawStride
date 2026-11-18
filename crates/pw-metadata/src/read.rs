@@ -105,6 +105,9 @@ pub enum FileNotice {
     /// The IIM block could not be split into datasets; holds the reason. The file has no IIM
     /// values then.
     IimBlockUnreadable(String),
+    /// A list property whose items have qualifiers RawStride cannot keep when it writes the list;
+    /// shown, never written (ADR 0007 §8). Holds the XMP id.
+    ListWithQualifiers(String),
 }
 
 impl ExifTool {
@@ -124,21 +127,25 @@ impl ExifTool {
             file_notices.push(FileNotice::ExtSidecarIgnored(path));
         }
         let file_xmp = xmp_values(&file);
-        let (primary, camera) = match kind {
-            FileKind::Raw => {
-                let sidecar = match sidecars.plain {
-                    Some(path) => xmp_values(&self.read_json(&sidecar_args(&path), &path)?),
-                    None => XmpRead::default(),
-                };
-                (sidecar, file_xmp)
-            }
+        // The lists with qualifiers are looked for in the primary XMP only, never in the camera
+        // XMP inside a RAW (ADR 0007 §8).
+        let (primary, camera, qualified) = match kind {
+            FileKind::Raw => match sidecars.plain {
+                Some(path) => {
+                    let sidecar = self.read_json(&sidecar_args(&path), &path)?;
+                    (xmp_values(&sidecar), file_xmp, qualified_lists(&sidecar))
+                }
+                None => (XmpRead::default(), file_xmp, Vec::new()),
+            },
             FileKind::Dng => {
                 if let Some(path) = sidecars.plain {
                     file_notices.push(FileNotice::ForeignSidecarIgnored(path));
                 }
-                (file_xmp, XmpRead::default())
+                (file_xmp, XmpRead::default(), qualified_lists(&file))
             }
-            FileKind::Jpeg | FileKind::Tiff => (file_xmp, XmpRead::default()),
+            FileKind::Jpeg | FileKind::Tiff => {
+                (file_xmp, XmpRead::default(), qualified_lists(&file))
+            }
         };
         let (iim, iim_notice) = iim_read(&file, fallback);
         file_notices.extend(iim_notice);
@@ -175,6 +182,10 @@ impl ExifTool {
             exif,
         });
         reconciled.notices.extend(unreadable);
+        for id in qualified {
+            reconciled.metadata.mark_qualified(id);
+            file_notices.push(FileNotice::ListWithQualifiers(id.to_string()));
+        }
         Ok(MetadataRead {
             reconciled,
             file_notices,
@@ -398,6 +409,30 @@ fn xmp_values(object: &Map<String, Json>) -> XmpRead {
         }
     }
     read
+}
+
+/// The XMP ids of the list properties (`et_xmp` set, `Multi`, not a structure) that have at least
+/// one qualifier key in `object`, in table order (ADR 0007 §8). A qualifier key of a list named `N`
+/// starts with `N`, goes on with an ASCII upper-case letter (ExifTool names a qualifier as the
+/// property's tag name followed by the qualifier's name, e.g. `XMP-dc:SubjectType`) and is not the
+/// `et_xmp` of any property of the table (so `XMP-iptcExt:PersonInImageWDetails` is not one).
+fn qualified_lists(object: &Map<String, Json>) -> Vec<&'static str> {
+    let is_property = |key: &str| properties::properties().any(|def| def.et_xmp == Some(key));
+    properties::properties()
+        .filter(|def| {
+            def.occurrence == Occurrence::Multi && !matches!(def.kind, ValueKind::Struct(_))
+        })
+        .filter_map(|def| def.et_xmp.map(|et_xmp| (def.xmp_id, et_xmp)))
+        .filter(|(_, et_xmp)| {
+            object.keys().any(|key| {
+                key.strip_prefix(et_xmp)
+                    .and_then(|rest| rest.chars().next())
+                    .is_some_and(|next| next.is_ascii_uppercase())
+                    && !is_property(key)
+            })
+        })
+        .map(|(xmp_id, _)| xmp_id)
+        .collect()
 }
 
 /// The value of the property or field named `et_name` in `object`; `None` when it is absent or
@@ -749,6 +784,25 @@ mod tests {
             .iter()
             .find(|(property, _)| property == id)
             .map(|(_, value)| value)
+    }
+
+    #[test]
+    fn qualified_lists_finds_a_qualifier_key() {
+        let object = object(
+            r#"{"XMP-dc:Subject": ["San Francisco", "cat"], "XMP-dc:SubjectType": "location"}"#,
+        );
+        assert_eq!(qualified_lists(&object), ["dc:subject"]);
+    }
+
+    #[test]
+    fn qualified_lists_ignores_other_properties_and_languages() {
+        let object = object(
+            r#"{"XMP-iptcExt:PersonInImage": ["A"],
+                "XMP-iptcExt:PersonInImageWDetails": [{"PersonName": "A"}],
+                "XMP-dc:Title-sv": "Titel",
+                "XMP-dc:Subject": ["cat"]}"#,
+        );
+        assert_eq!(qualified_lists(&object), Vec::<&str>::new());
     }
 
     #[test]

@@ -26,7 +26,8 @@
 //! [`ExifTool::write_iptc`]; then the file is read, [`template::apply`] applies the template's
 //! modes to its metadata (an error is [`EditError::Template`]), and the plan is made and written as
 //! above. A template that is already in the file gives an empty plan and
-//! [`WriteReport::Unchanged`].
+//! [`WriteReport::Unchanged`]. A list with qualifiers the template changed is put back first, as
+//! below, but without a notice (the template path returns none).
 //!
 //! [`ExifTool::write_edits_safely`] writes the editor's [`Edit`]s of single properties (I10d,
 //! T97): a file kind that cannot hold metadata is [`EditError::Unsupported`] with the same text as
@@ -37,6 +38,14 @@
 //! empty when nothing was written, except that an **Entries** edit left alone because of an `Open`
 //! conflict (below) is always named in a [`WriteNotice::ConflictKept`], also when nothing was
 //! written, and only once (ADR 0017 U12d-Q6).
+//!
+//! **A list with qualifiers** ([`Metadata::has_qualifiers`], ADR 0007 §8) is shown but never
+//! written: RawStride cannot write such a list without losing or doubling its qualified items.
+//! After the edits (or the template) are applied, and before the plan is made, each such list that
+//! was changed is put back to the value read from the file ([`Metadata::restore`]), so the plan
+//! treats it like an untouched property and the edit leaks into no other form. The other changes
+//! are written. In [`ExifTool::write_edits_safely`] each list put back is named once in a
+//! [`WriteNotice::QualifiersKept`], also when nothing was written.
 //!
 //! - **Set** stores the value with [`Metadata::set`]; a Lang Alt edits `x-default` only and keeps
 //!   the other languages (§8, Q7). A value equal to the current one ([`same_value`]) is no change,
@@ -163,7 +172,8 @@ pub struct EditReport {
     pub report: WriteReport,
     /// What the user is told about the write (§5.2, §5.4, Q1); empty when nothing was written,
     /// except for a [`WriteNotice::ConflictKept`] of each [`Edit::Entries`] left alone because of
-    /// an `Open` conflict (U12d-Q6).
+    /// an `Open` conflict (U12d-Q6) and a [`WriteNotice::QualifiersKept`] of each changed list
+    /// with qualifiers that was put back (ADR 0007 §8).
     pub notices: Vec<WriteNotice>,
 }
 
@@ -404,7 +414,9 @@ impl ExifTool {
     }
 
     /// Applies `template` to `image` through the write plan and the safe write (see the module
-    /// comment). `checks` are the caller's image checks; `journal` is the app's write journal.
+    /// comment). A list with qualifiers the template changed is put back and not written (§8),
+    /// without a notice. `checks` are the caller's image checks; `journal` is the app's write
+    /// journal.
     pub fn apply_template_safely(
         &mut self,
         image: &Path,
@@ -422,8 +434,11 @@ impl ExifTool {
         let read = self
             .read_metadata(image, options.fallback)
             .map_err(EditError::Read)?;
+        let original = read.reconciled.metadata.clone();
         let mut metadata = read.reconciled.metadata;
         template::apply(template, &mut metadata).map_err(EditError::Template)?;
+        // §8: a changed list with qualifiers is not written; the template path gives no notice.
+        restore_qualified(&mut metadata, &original);
         let plan =
             write_plan::plan(&metadata, &read.state, options.settings).map_err(EditError::Plan)?;
         self.write_safely(image, &plan, checks, journal)
@@ -434,8 +449,9 @@ impl ExifTool {
     /// returns the report with the plan's notices (see the module comment). An [`Edit::Entries`]
     /// left alone because its property has an `Open` conflict adds a
     /// [`WriteNotice::ConflictKept`] for that property, also when the report is
-    /// [`WriteReport::Unchanged`], never twice (U12d-Q6). `checks` are the caller's image checks;
-    /// `journal` is the app's write journal.
+    /// [`WriteReport::Unchanged`], never twice (U12d-Q6). A changed list with qualifiers is put
+    /// back and not written, and adds a [`WriteNotice::QualifiersKept`] the same way (§8).
+    /// `checks` are the caller's image checks; `journal` is the app's write journal.
     pub fn write_edits_safely(
         &mut self,
         image: &Path,
@@ -453,9 +469,11 @@ impl ExifTool {
         let read = self
             .read_metadata(image, options.fallback)
             .map_err(EditError::Read)?;
+        let original = read.reconciled.metadata.clone();
         let mut metadata = read.reconciled.metadata;
         apply_edits(&mut metadata, edits)?;
         let left_alone = entries_left_alone(&metadata, edits);
+        let qualifiers_kept = restore_qualified(&mut metadata, &original);
         let plan =
             write_plan::plan(&metadata, &read.state, options.settings).map_err(EditError::Plan)?;
         let report = self
@@ -467,6 +485,12 @@ impl ExifTool {
         };
         for property in left_alone {
             let notice = WriteNotice::ConflictKept { property };
+            if !notices.contains(&notice) {
+                notices.push(notice);
+            }
+        }
+        for property in qualifiers_kept {
+            let notice = WriteNotice::QualifiersKept { property };
             if !notices.contains(&notice) {
                 notices.push(notice);
             }
@@ -492,6 +516,21 @@ fn entries_left_alone(metadata: &Metadata, edits: &[Edit]) -> Vec<String> {
         }
     }
     left_alone
+}
+
+/// Puts each changed list with qualifiers back to its value in `original` (ADR 0007 §8; see the
+/// module comment) and returns their XMP ids, in the order of [`Metadata::changes`].
+fn restore_qualified(metadata: &mut Metadata, original: &Metadata) -> Vec<String> {
+    let marked: Vec<String> = metadata
+        .changes()
+        .map(|(property, _)| property)
+        .filter(|property| metadata.has_qualifiers(property))
+        .map(str::to_string)
+        .collect();
+    for property in &marked {
+        metadata.restore(original, property);
+    }
+    marked
 }
 
 /// Sets `value` on `property`, or clears it for `None`.

@@ -12,7 +12,14 @@ and reviewer:
   unwritten; needs RawStride to edit the XMP packet itself, since ExifTool 13.59 cannot change or
   remove a qualified item). Also from T193's chain review (2026-11-18): the import's
   template drops a change to such a list without a notice (`apply_template_safely` returns no
-  plan notices), and the editor gives no warning before OK that the list will not be written;
+  plan notices), and the editor gives no warning before OK that the list will not be written.
+  Leftovers from the review of T193 (2026-11-18): the text of `DigestNotWritten` ("because a
+  conflict is unresolved") is misleading when the reason is a held list with qualifiers;
+  `write_plan::plan` itself does not refuse a changed list with qualifiers (only its callers in
+  `edit.rs` put it back; `write_rating_safely` writes no list); recent values (`main.rs`
+  `recorded`) also record a keyword that was put back; the batch's "Written" count also counts an
+  image whose write was `Unchanged`; an `xml:lang` on a list item is not in ExifTool 13.59's JSON
+  (so not marked) and is kept by a whole-list write, but also given to the new items;
   from §10, left out of T88: template sub-fields of lists of
   structures (Location Created, Image Creator, Copyright Owner, Licensor), variables (`{date}` …),
   template files in XMP with the modes (where the modes are stored is decided with U13). Left out of I10: editing several

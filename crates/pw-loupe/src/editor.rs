@@ -2556,6 +2556,10 @@ pub fn notice_text(notice: &WriteNotice) -> String {
         WriteNotice::DigestNotWritten => {
             "No new IIM checksum was written, because a conflict is unresolved".to_string()
         }
+        WriteNotice::QualifiersKept { property } => format!(
+            "{field} was not written: it has qualifiers RawStride cannot keep",
+            field = property_label(property, Language::En)
+        ),
     }
 }
 
@@ -4514,6 +4518,16 @@ mod tests {
         assert_eq!(
             notice_text(&WriteNotice::DigestNotWritten),
             "No new IIM checksum was written, because a conflict is unresolved"
+        );
+    }
+
+    #[test]
+    fn the_qualifiers_kept_notice_text() {
+        assert_eq!(
+            notice_text(&WriteNotice::QualifiersKept {
+                property: "dc:subject".into()
+            }),
+            "Keywords was not written: it has qualifiers RawStride cannot keep"
         );
     }
 

@@ -439,6 +439,10 @@ fn file_notice_text(notice: &FileNotice) -> String {
         FileNotice::IimBlockUnreadable(reason) => {
             format!("The IIM block could not be read: {reason}")
         }
+        FileNotice::ListWithQualifiers(property) => format!(
+            "{field} has qualifiers RawStride cannot keep, so it is shown but never changed",
+            field = property_label(property, Language::En)
+        ),
     }
 }
 
@@ -1157,6 +1161,19 @@ mod tests {
                 "Suggested Date Created from the camera: 2026-11-12T10:15:30",
                 "IIM has been changed by another program after XMP (the checksum does not match)",
             ]
+        );
+    }
+
+    #[test]
+    fn a_list_with_qualifiers_has_a_notice() {
+        let read = read_with(
+            Metadata::new(),
+            Vec::new(),
+            vec![FileNotice::ListWithQualifiers("dc:subject".into())],
+        );
+        assert_eq!(
+            info_panel(&read).notices,
+            ["Keywords has qualifiers RawStride cannot keep, so it is shown but never changed"]
         );
     }
 

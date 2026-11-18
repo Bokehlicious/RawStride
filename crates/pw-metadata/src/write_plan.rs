@@ -18,7 +18,10 @@
 //!   conflict remains (Q1). Every write also brings
 //!   both forms in line (§5.1, §12): unchanged properties whose IIM value won (rule `Iim`) or that
 //!   only IIM held are written to XMP, and those whose XMP value won (rule `Xmp`) to IIM, so the
-//!   new checksum never hands a property back to a stale form.
+//!   new checksum never hands a property back to a stale form. A list with qualifiers
+//!   ([`Metadata::has_qualifiers`], §8) is never written to XMP by this pass, and no new checksum
+//!   is written then ([`WriteNotice::DigestNotWritten`], as for Q1); a changed one is put back to
+//!   its read value by `edit.rs` before the plan is made, so it is never a change here.
 //! - **Exif** (§6.3, §6.5, §6.6; JPEG, TIFF and DNG): only the "both ways" fields that already
 //!   exist are updated or removed, never created. ImageEditor gets the name of Contributor's content
 //!   editor, and is removed when there is none; it is never written to Artist. DateTimeOriginal and
@@ -111,8 +114,12 @@ pub enum WriteNotice {
     /// The property has an unresolved conflict the user did not decide; neither form is written
     /// (Q1).
     ConflictKept { property: String },
-    /// No checksum is written, because an unresolved conflict remains (Q1).
+    /// No checksum is written, because an unresolved conflict remains (Q1), or because a list
+    /// with qualifiers could not be brought in line (§8).
     DigestNotWritten,
+    /// A change to a list whose items have qualifiers was left out of the write (§8). Made by
+    /// `edit.rs`, which puts the list back before the plan is made; the plan does not make it.
+    QualifiersKept { property: String },
 }
 
 /// Why a plan cannot be made.
@@ -141,6 +148,9 @@ impl std::error::Error for PlanError {}
 ///
 /// Without changes the plan is empty. A changed deprecated IIM property (Urgency, Category,
 /// Supplemental Categories) is [`PlanError::NotEditable`].
+///
+/// A list with qualifiers (§8) must not be among the changes: callers put a changed one back to
+/// its read value first ([`Metadata::restore`]), as `edit.rs` does.
 pub fn plan(
     metadata: &Metadata,
     state: &FileState,
@@ -263,7 +273,7 @@ pub fn plan(
         let xmp_after = writes_xmp_value || has_xmp(metadata);
         let has_stored_digest = matches!(state.digest, IimDigest::Matches | IimDigest::Differs);
         if (iim_after && xmp_after) || (writes_iim && has_stored_digest) {
-            if kept.is_empty() {
+            if kept.is_empty() && in_line.held.is_empty() {
                 out.args.push(NEW_DIGEST.to_string());
             } else {
                 out.notices.push(WriteNotice::DigestNotWritten);
@@ -512,13 +522,16 @@ struct InLine<'a> {
     to_xmp: Vec<(&'static PropertyDef, &'a Value)>,
     /// Written to IIM: a conflict with rule `Xmp` between XMP and IIM.
     to_iim: Vec<(&'static PropertyDef, &'a Value)>,
+    /// Lists with qualifiers (§8) that would go to `to_xmp` but are never written to XMP, by XMP
+    /// id. While one is held no new checksum is written.
+    held: Vec<&'static str>,
 }
 
 /// Finds the properties the user did not change whose XMP and IIM differ, in table order (only
 /// called for a JPEG, TIFF or DNG with IIM). Without this, the new checksum would make XMP win at
 /// the next read and silently undo an IIM edit made by another program. Left out: conflicts with
 /// rule `Open` (Q1) and `Exif`, conflicts between XMP and Exif only, and the deprecated IIM
-/// properties (§5.5).
+/// properties (§5.5). A list with qualifiers (§8) goes to `held` instead of `to_xmp`.
 fn bring_in_line<'a>(metadata: &'a Metadata, changed: &BTreeSet<&str>) -> InLine<'a> {
     let mut in_line = InLine::default();
     for def in properties::properties() {
@@ -536,7 +549,7 @@ fn bring_in_line<'a>(metadata: &'a Metadata, changed: &BTreeSet<&str>) -> InLine
             .peekable();
         if conflicts.peek().is_none() {
             if stored.origin == Origin::Iim {
-                in_line.to_xmp.push((def, &stored.value));
+                in_line.push_to_xmp(metadata, def, &stored.value);
             }
             continue;
         }
@@ -553,12 +566,23 @@ fn bring_in_line<'a>(metadata: &'a Metadata, changed: &BTreeSet<&str>) -> InLine
             continue;
         }
         if rules.contains(&ConflictRule::Iim) {
-            in_line.to_xmp.push((def, &stored.value));
+            in_line.push_to_xmp(metadata, def, &stored.value);
         } else if rules.contains(&ConflictRule::Xmp) {
             in_line.to_iim.push((def, &stored.value));
         }
     }
     in_line
+}
+
+impl<'a> InLine<'a> {
+    /// Adds a value to `to_xmp`, or a list with qualifiers (§8) to `held`.
+    fn push_to_xmp(&mut self, metadata: &Metadata, def: &'static PropertyDef, value: &'a Value) {
+        if metadata.has_qualifiers(def.xmp_id) {
+            self.held.push(def.xmp_id);
+        } else {
+            self.to_xmp.push((def, value));
+        }
+    }
 }
 
 /// True when every text of the value is ASCII.
@@ -1329,6 +1353,69 @@ mod tests {
                 property: "photoshop:City".into()
             }]
         );
+    }
+
+    #[test]
+    fn a_marked_list_is_not_brought_in_line_to_xmp() {
+        let mut metadata = edited(&[("photoshop:Headline", text("Ny"))]);
+        iim_conflict(
+            &mut metadata,
+            "dc:subject",
+            list(&["San Francisco", "cat"]),
+            list(&["dog"]),
+            ConflictRule::Iim,
+        );
+        metadata.mark_qualified("dc:subject");
+        let plan = run(&metadata, &jpeg_with_iim());
+        assert!(
+            !plan
+                .args
+                .iter()
+                .any(|arg| arg.starts_with("-XMP-dc:Subject")),
+            "{:?}",
+            plan.args
+        );
+        assert!(
+            !plan.args.iter().any(|arg| arg == NEW_DIGEST),
+            "{:?}",
+            plan.args
+        );
+        assert_eq!(
+            args(&plan),
+            [
+                "-XMP-photoshop:Headline=Ny",
+                "-IPTC:CodedCharacterSet=UTF8",
+                "-IPTC:Headline=Ny",
+            ]
+        );
+        assert_eq!(plan.notices, [WriteNotice::DigestNotWritten]);
+    }
+
+    #[test]
+    fn a_marked_list_whose_xmp_won_still_brings_iim_in_line() {
+        let mut metadata = edited(&[("photoshop:Headline", text("Ny"))]);
+        iim_conflict(
+            &mut metadata,
+            "dc:subject",
+            list(&["San Francisco", "cat"]),
+            list(&["dog"]),
+            ConflictRule::Xmp,
+        );
+        metadata.mark_qualified("dc:subject");
+        let plan = run(&metadata, &jpeg_with_iim());
+        assert_eq!(
+            args(&plan),
+            [
+                "-XMP-photoshop:Headline=Ny",
+                "-IPTC:CodedCharacterSet=UTF8",
+                "-IPTC:Headline=Ny",
+                "-IPTC:Keywords=",
+                "-IPTC:Keywords=San Francisco",
+                "-IPTC:Keywords=cat",
+                "-IPTCDigest=new",
+            ]
+        );
+        assert!(plan.notices.is_empty());
     }
 
     #[test]

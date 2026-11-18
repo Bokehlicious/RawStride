@@ -425,6 +425,114 @@ fn a_raw_file_reads_its_sidecar_and_ignores_a_sidecar_with_the_extension() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// An XMP packet whose `dc:subject` has one item with a qualifier (`ex:type`) and one plain item
+/// (ADR 0007 §8; checked with ExifTool 13.59).
+const QUALIFIED_SUBJECT: &str = "<?xpacket begin='' id='W5M0MpCehiHzreSzNTczkc9d'?>
+<x:xmpmeta xmlns:x='adobe:ns:meta/'>
+<rdf:RDF xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'>
+ <rdf:Description rdf:about='' xmlns:dc='http://purl.org/dc/elements/1.1/' xmlns:ex='http://example.com/ns/'>
+  <dc:subject><rdf:Bag>
+   <rdf:li rdf:parseType='Resource'><rdf:value>San Francisco</rdf:value><ex:type>location</ex:type></rdf:li>
+   <rdf:li>cat</rdf:li>
+  </rdf:Bag></dc:subject>
+ </rdf:Description>
+</rdf:RDF>
+</x:xmpmeta>
+<?xpacket end='w'?>
+";
+
+/// The qualified item of [`QUALIFIED_SUBJECT`] and the same item without its qualifier.
+const QUALIFIED_ITEM: &str = "<rdf:li rdf:parseType='Resource'><rdf:value>San Francisco</rdf:value><ex:type>location</ex:type></rdf:li>";
+const PLAIN_ITEM: &str = "<rdf:li>San Francisco</rdf:li>";
+
+/// True when `read` marks `dc:subject` and has the notice `ListWithQualifiers("dc:subject")`.
+fn subject_marked(read: &MetadataRead) -> (bool, bool) {
+    (
+        read.reconciled.metadata.has_qualifiers("dc:subject"),
+        read.file_notices
+            .contains(&FileNotice::ListWithQualifiers("dc:subject".to_string())),
+    )
+}
+
+/// A sidecar keyword with a qualifier marks `dc:subject` and is still read as a list (ADR 0007
+/// §8); the same sidecar without the qualifier marks nothing.
+#[test]
+fn a_sidecar_keyword_with_a_qualifier_is_marked() {
+    let mut et = exiftool();
+    let dir = temp_dir("qualified-sidecar");
+    let raw = dir.join("TN0001.ARW");
+    std::fs::write(&raw, b"not really a raw file").unwrap();
+    let sidecar = dir.join("TN0001.xmp");
+    std::fs::write(&sidecar, QUALIFIED_SUBJECT).unwrap();
+
+    let read = read_file(&mut et, &raw);
+    assert_eq!(
+        get(&read, "dc:subject"),
+        Some((list(&["San Francisco", "cat"]), Origin::XmpSidecar))
+    );
+    assert_eq!(
+        subject_marked(&read),
+        (true, true),
+        "{:?}",
+        read.file_notices
+    );
+
+    std::fs::write(
+        &sidecar,
+        QUALIFIED_SUBJECT.replace(QUALIFIED_ITEM, PLAIN_ITEM),
+    )
+    .unwrap();
+    let read = read_file(&mut et, &raw);
+    assert_eq!(
+        get(&read, "dc:subject"),
+        Some((list(&["San Francisco", "cat"]), Origin::XmpSidecar))
+    );
+    assert_eq!(
+        subject_marked(&read),
+        (false, false),
+        "{:?}",
+        read.file_notices
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// An embedded keyword with a qualifier in a JPEG marks `dc:subject` the same way (ADR 0007 §8).
+#[test]
+fn an_embedded_keyword_with_a_qualifier_is_marked() {
+    let mut et = exiftool();
+    let (dir, file) = jpeg("qualified-jpeg");
+    let packet = dir.join("packet.xmp");
+    std::fs::write(&packet, QUALIFIED_SUBJECT).unwrap();
+    write(
+        &mut et,
+        &file,
+        &[&format!("-xmp<={}", packet.to_string_lossy())],
+    );
+    // The packet was copied as it is: the qualifier is in the file.
+    let out = et
+        .execute(&[
+            "-j".to_string(),
+            "-G1".to_string(),
+            "-XMP-dc:all".to_string(),
+            file.to_string_lossy().into_owned(),
+        ])
+        .unwrap();
+    assert!(out.contains("\"XMP-dc:SubjectType\""), "{out}");
+
+    let read = read_file(&mut et, &file);
+    assert_eq!(
+        get(&read, "dc:subject"),
+        Some((list(&["San Francisco", "cat"]), Origin::XmpEmbedded))
+    );
+    assert_eq!(
+        subject_marked(&read),
+        (true, true),
+        "{:?}",
+        read.file_notices
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// A missing file is the error ExifTool reports; an unknown extension is `Unsupported`.
 #[test]
 fn a_missing_file_and_an_unknown_kind_are_errors() {

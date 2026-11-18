@@ -201,6 +201,8 @@ pub struct Metadata {
     values: BTreeMap<String, PropertyValue>,
     conflicts: Vec<Conflict>,
     changed: BTreeSet<String>,
+    /// The list properties whose items have qualifiers in the file (ADR 0007 §8), by XMP id.
+    qualified: BTreeSet<String>,
 }
 
 impl Metadata {
@@ -310,6 +312,32 @@ impl Metadata {
                 self.values.get(xmp_id).map(|stored| &stored.value),
             )
         })
+    }
+
+    /// Marks a list property whose items have qualifiers in the file, which RawStride cannot keep
+    /// when it writes the list (ADR 0007 §8): it is shown, never written to XMP.
+    pub fn mark_qualified(&mut self, xmp_id: &str) {
+        self.qualified.insert(xmp_id.to_string());
+    }
+
+    /// True for a list property marked by [`Metadata::mark_qualified`] (ADR 0007 §8).
+    pub fn has_qualifiers(&self, xmp_id: &str) -> bool {
+        self.qualified.contains(xmp_id)
+    }
+
+    /// Puts a property back as it was read (ADR 0007 §8, a changed list with qualifiers): it gets
+    /// the value and origin it has in `original`, or none if `original` has none, and is no longer
+    /// marked changed. Conflicts are not touched.
+    pub fn restore(&mut self, original: &Metadata, xmp_id: &str) {
+        match original.values.get(xmp_id) {
+            Some(stored) => {
+                self.values.insert(xmp_id.to_string(), stored.clone());
+            }
+            None => {
+                self.values.remove(xmp_id);
+            }
+        }
+        self.changed.remove(xmp_id);
     }
 }
 
@@ -728,6 +756,35 @@ mod tests {
         );
         let changes: Vec<(&str, Option<&Value>)> = metadata.changes().collect();
         assert_eq!(changes, [("photoshop:City", Some(&text("Malmö")))]);
+        Ok(())
+    }
+
+    #[test]
+    fn restore_puts_back_the_read_value_and_unmarks_the_change() -> Result<(), ValueError> {
+        let mut metadata = Metadata::new();
+        metadata.insert_read("dc:subject", list(&["a", "b"]), Origin::XmpSidecar)?;
+        let original = metadata.clone();
+        metadata.set("dc:subject", list(&["c"]))?;
+        metadata.restore(&original, "dc:subject");
+        assert_eq!(
+            metadata.get("dc:subject"),
+            Some(&PropertyValue {
+                value: list(&["a", "b"]),
+                origin: Origin::XmpSidecar
+            })
+        );
+        assert_eq!(metadata.changes().count(), 0);
+        Ok(())
+    }
+
+    #[test]
+    fn restore_of_a_property_the_file_lacked_removes_it() -> Result<(), ValueError> {
+        let original = Metadata::new();
+        let mut metadata = original.clone();
+        metadata.set("dc:subject", list(&["c"]))?;
+        metadata.restore(&original, "dc:subject");
+        assert_eq!(metadata.get("dc:subject"), None);
+        assert_eq!(metadata.changes().count(), 0);
         Ok(())
     }
 

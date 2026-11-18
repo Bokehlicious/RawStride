@@ -659,3 +659,86 @@ fn deprecated_iim_datasets_are_kept_when_the_headline_is_edited() {
     s.assert_clean();
     s.remove();
 }
+
+/// An XMP packet whose `dc:subject` has one item with a qualifier (`ex:type`) and one plain item
+/// (ADR 0007 §8; checked with ExifTool 13.59). Written with `std::fs::write`, because `write`
+/// cannot make a qualifier.
+const QUALIFIED_SUBJECT: &str = "<?xpacket begin='' id='W5M0MpCehiHzreSzNTczkc9d'?>
+<x:xmpmeta xmlns:x='adobe:ns:meta/'>
+<rdf:RDF xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'>
+ <rdf:Description rdf:about='' xmlns:dc='http://purl.org/dc/elements/1.1/' xmlns:ex='http://example.com/ns/'>
+  <dc:subject><rdf:Bag>
+   <rdf:li rdf:parseType='Resource'><rdf:value>San Francisco</rdf:value><ex:type>location</ex:type></rdf:li>
+   <rdf:li>cat</rdf:li>
+  </rdf:Bag></dc:subject>
+ </rdf:Description>
+</rdf:RDF>
+</x:xmpmeta>
+<?xpacket end='w'?>
+";
+
+/// The fake RAW with the sidecar [`QUALIFIED_SUBJECT`]; returns the RAW and the sidecar.
+fn raw_with_qualified_subject(s: &Scratch) -> (PathBuf, PathBuf) {
+    let raw = s.raw();
+    let sidecar = s.dir.join("TN0001.xmp");
+    std::fs::write(&sidecar, QUALIFIED_SUBJECT).unwrap();
+    (raw, sidecar)
+}
+
+fn qualifiers_kept() -> WriteNotice {
+    WriteNotice::QualifiersKept {
+        property: "dc:subject".to_string(),
+    }
+}
+
+/// A keyword edit of a list with qualifiers writes nothing and says so (ADR 0007 §8): the sidecar
+/// keeps its bytes.
+#[test]
+fn a_keyword_edit_of_a_qualified_list_is_not_written_and_says_so() {
+    let mut et = exiftool();
+    let s = Scratch::new("qualified-only");
+    let (raw, sidecar) = raw_with_qualified_subject(&s);
+    let before = std::fs::read(&sidecar).unwrap();
+
+    assert_edit(
+        s.edit(&mut et, &raw, &[set("dc:subject", list(&["dog"]))]),
+        WriteReport::Unchanged,
+        &[qualifiers_kept()],
+    );
+    assert_eq!(std::fs::read(&sidecar).unwrap(), before);
+    assert_eq!(std::fs::read(&raw).unwrap(), FAKE_RAW);
+    s.assert_clean();
+    s.remove();
+}
+
+/// A Headline edit beside a keyword edit of a list with qualifiers: the Headline is written, the
+/// keywords and their qualifier stay as they were (no second "San Francisco"), and the notice is
+/// given once (ADR 0007 §8).
+#[test]
+fn the_other_edits_are_written_beside_a_qualified_list() {
+    let mut et = exiftool();
+    let s = Scratch::new("qualified-beside");
+    let (raw, sidecar) = raw_with_qualified_subject(&s);
+
+    assert_edit(
+        s.edit(
+            &mut et,
+            &raw,
+            &[
+                set("dc:subject", list(&["San Francisco", "cat", "dog"])),
+                set("photoshop:Headline", text("Rubrik")),
+            ],
+        ),
+        written(&sidecar),
+        &[qualifiers_kept()],
+    );
+    assert_eq!(tag(&mut et, &sidecar, "XMP-photoshop:Headline"), "Rubrik");
+    assert_eq!(
+        read_value(&mut et, &raw, "dc:subject"),
+        Some(list(&["San Francisco", "cat"]))
+    );
+    assert_eq!(tag(&mut et, &sidecar, "XMP-dc:SubjectType"), "location");
+    assert_eq!(std::fs::read(&raw).unwrap(), FAKE_RAW);
+    s.assert_clean();
+    s.remove();
+}
