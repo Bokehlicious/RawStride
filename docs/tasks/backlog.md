@@ -229,7 +229,7 @@ and reviewer:
   …", as `EditorText::NotSaved` names the items) would say why. Not important.
 
 - **Known limits of the delete to the Recycle Bin** (T189's brief and its reviews, 2026-11-18;
-  accepted when T189 was done, to be sorted after the owner's hand check of B4):
+  accepted when T189 was done; to be sorted with the owner after the hand check of B4):
   - *The worker:* if the metadata worker stops after it took a request, its answer never comes
     and the delete stays busy, which also holds moves back (the moves have the same gap).
   - *Quitting:* quitting while a delete runs waits only for rating writes, so the images not yet
@@ -246,7 +246,19 @@ and reviewer:
     the folder on disk) is asked several times a frame; the drive was accepted by T185's check, so
     it is a fixed drive.
   - *The workers' release:* a delete refused at the worker has already released the image's view
-    sessions, as a failed move does (T186's review; the hand check of B4 looks at it).
+    sessions, as a failed move does (T186's review; the owner's hand check of B4 found the image
+    shown again after such a refused delete).
+  - *Not hand-checked:* a network folder refused with "the drive has no Recycle Bin" (the owner
+    had no network drive at the hand check of B4, 2026-11-18). T185's decision tests cover
+    `DRIVE_REMOTE` and a volume without a name; check it by hand when a network drive is at hand.
+
+- **The folder follows changes on disk** (owner's wish at the hand check of B4, 2026-11-18): a
+  tab shows new files (for example images put back from the Recycle Bin, or copied in by another
+  program) without the folder being opened again. Needs a decision first: reading the folder
+  again at times, or Windows' change notifications (`ReadDirectoryChangesW`, or a crate such as
+  `notify`, which is a new dependency); what happens to the position, filter, sort and marks
+  when files come or go; and how it works with the moves and deletes that already update the
+  tabs. An ADR or an ADR 0017 step.
 
 Removed on 2026-11-13 because they are done or planned elsewhere: ADR 0010 steps M3–M7 (done,
 T30–T40); ADR 0011 step K4 (done, T26–T29); moving rejected or picked images to `_rejected` /
