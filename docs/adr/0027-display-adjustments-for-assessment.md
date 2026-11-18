@@ -19,7 +19,7 @@
   - ADR 0025 §2.2, §2.4 and §2.9 (the export's source, its separable Lanczos filter in plain Rust,
     and its new crate `pw-export`): the same filter is used by the view, in a crate of its own
     (§3.2, A-Q7); the export takes over no adjustment (A-Q14);
-  - the backlog item "A region render fails on every RAF", a prerequisite (§5, A0);
+  - the backlog item "A region render fails on every RAF", a prerequisite (§5, W0);
   - [clean-room.md](../clean-room.md): this ADR describes the functions in our own words, from
     RawStride's own needs.
 
@@ -124,13 +124,13 @@ A prerequisite: `Session::render_region_with` fails on every RAF file tried (bac
 - Prefetch (A-Q5): **only the current image** gets the fine view. A LibRaw render cannot be
   cancelled once it has started (`pwlr.cpp` has no progress callback), so a fine render for a
   neighbour would hold the CPU while the user steps on. Prefetching +1 in the direction of travel
-  is added only if A2's measurement with `latency.ps1` shows that V1 and V4 hold while a fine
+  is added only if W2's measurement with `latency.ps1` shows that V1 and V4 hold while a fine
   render runs; otherwise it is a later question.
 - Cost: a full PPG render of a 61 Mpix file is the most expensive job the view core runs. ADR 0008
   §11.2 measured it [M, P4b, i7-9700K, 2026-11-05]: a whole A7R image (9568×6376) takes 1012 ms
   with PPG on all threads (AHD 1871 ms) and 1926 ms on one thread (AHD 5936 ms); a 16 Mpix RW2
   (4608×3464) 347 ms with PPG on all threads. Fine details is therefore a "look closer" mode, not
-  a browse mode. A2 measures it again on the owner's files in the app [T].
+  a browse mode. W2 measures it again on the owner's files in the app [T].
 
 ### 3.2 A better downscale filter
 
@@ -140,7 +140,7 @@ A prerequisite: `Session::render_region_with` fails on every RAF file tried (bac
 - **One filter for the view and the export** (A-Q7): it lives in a new workspace crate without
   dependencies (for example `pw-resample`), in plain Rust, with an 8-bit and a 16-bit version.
   `pw-viewcore` and `pw-export` (ADR 0025 §2.9) depend on it; the owner approved these dependency
-  lines on 2026-11-18 (AGENTS.md §3). No new package. The crate is made by A1 or by ADR 0025's X2,
+  lines on 2026-11-18 (AGENTS.md §3). No new package. The crate is made by W1 or by ADR 0025's X2,
   whichever is built first. Rejected: the filter in `pw-colour` (the view core would need
   `pw-colour`, and so `moxcms`, as a non-optional dependency), in `pw-viewcore` (the export would
   depend on the view core) or in `pw-export` (the view core would pull in the metadata code and
@@ -149,14 +149,14 @@ A prerequisite: `Session::render_region_with` fails on every RAF file tried (bac
   worker to the screen size by the same filter. During a zoom gesture the view core asks only for
   views at a scale ≤ 0.5 (`state.rs`, `wanted`), today the half-size view; a half-size view
   reduced to the fit size would be drawn enlarged during a gesture between fit and 50 % [T, to be
-  handled in A1: keep the unreduced half-size view for gestures, or accept the softer frames
+  handled in W1: keep the unreduced half-size view for gestures, or accept the softer frames
   during the gesture].
 - Today every view is converted to the monitor profile in the backend, before the box filter
   (`native.rs`, `convert` in `render_half` and `render_region`). This ADR moves the conversion
   after the downscale and the post steps (§7, ADR 0016), so the filter works on LibRaw's sRGB
   output (or the JPEG's own colour space), where linear light is well defined.
 - Applies to every view kind below 100 % and to JPEG mode. The cost is higher than the box
-  filter's (floating point); A1 measures it [T].
+  filter's (floating point); W1 measures it [T].
 
 ### 3.3 Sharpening in the view (unsharp mask)
 
@@ -199,7 +199,7 @@ A prerequisite: `Session::render_region_with` fails on every RAF file tried (bac
   - the rule is tuned in the hand check.
 - **The camera's brightness** (A-Q12): a choice to apply the camera's own brightness offset (for
   example DNG `BaselineExposure`, and the makers' equivalents where LibRaw or ExifTool gives them
-  [T: which formats carry it is checked in A5]), so the RAW view can be compared with the embedded
+  [T: which formats carry it is checked in W5]), so the RAW view can be compared with the embedded
   JPEG fairly. ADR 0006 §2 left matching the camera JPEG's look as "a separate, later question"
   and required it to be one value per image, never per tile; this offset is such a value.
   - **Off by default**: the default view stays the fair view of ADR 0006, and its brightness does
@@ -217,7 +217,7 @@ A prerequisite: `Session::render_region_with` fails on every RAF file tried (bac
     view of it. LibRaw's `use_auto_wb` measures the area it renders, so with a `cropbox`
     (`Scaled`, `Zoom`, `Ring`) every region could get a balance of its own and a 100 % view
     another colour than the fit view, against ADR 0006's "consistent between tiles" [T: how the
-    multipliers are worked out is decided in A6]. A mode that lasts for the session (§2.1): it is
+    multipliers are worked out is decided in W6]. A mode that lasts for the session (§2.1): it is
     worked out again for every image, and the mark "WB auto" is always shown;
   - **click on grey**: the user clicks a neutral area; the multipliers are taken from the mean of
     the RAW data under a small square there (in the same mapping between the RAW and the shown
@@ -226,10 +226,10 @@ A prerequisite: `Session::render_region_with` fails on every RAF file tried (bac
 - **Presets** (A-Q13):
   - **from the file**: the camera's own preset table (daylight, shade, tungsten and so on), as
     LibRaw reads it from the maker note (`imgdata.color.WB_Coeffs`) [T, from LibRaw's
-    documentation; which presets the owner's files carry is checked in A6]; no generic presets,
+    documentation; which presets the owner's files carry is checked in W6]; no generic presets,
     since they need a colour model per camera;
   - **"Daylight (LibRaw)"** for every file: LibRaw's daylight multipliers (`pre_mul`), worked out
-    from its colour matrix for every camera it supports [T, checked in A6]; a neutral reference
+    from its colour matrix for every camera it supports [T, checked in W6]; a neutral reference
     that can be compared between cameras. When the file's own table also has a daylight preset,
     both are shown, with different names (G1).
   - A preset is a fixed choice and lasts for the session (§2.1); a file without the chosen preset
@@ -256,9 +256,9 @@ A prerequisite: `Session::render_region_with` fails on every RAF file tried (bac
 - Many cameras let the user choose an aspect ratio (3:2, 4:3, 16:9, 1:1) or a crop mode, and save it
   in the maker note while the RAW keeps the whole sensor. A key shows that frame on the image, the
   rest dimmed, drawn in the same mapping between the RAW and the shown image as the clipping
-  overlay (orientation, borders, half size). A later step (A8, A-Q15):
+  overlay (orientation, borders, half size). A later step (W8, A-Q15):
   - **the survey comes first**: which of the owner's cameras save the frame, and which tags
-    ExifTool gives for it, is not known [T]; if none of the owner's files carries it, A8 is closed
+    ExifTool gives for it, is not known [T]; if none of the owner's files carries it, W8 is closed
     without building anything;
   - **only frames inside a whole sensor image** are shown; a crop mode that makes the RAW itself
     smaller (for example a smaller-sensor mode on a full-frame camera) has no frame to show.
@@ -267,7 +267,7 @@ A prerequisite: `Session::render_region_with` fails on every RAF file tried (bac
 
 - A key draws the camera's focus point or points (the AF area used, from the maker note) on the
   image, as a frame. It complements the focus marking: the marking shows where the image is sharp,
-  the point shows where the camera meant it to be. A later step (A9, A-Q16):
+  the point shows where the camera meant it to be. A later step (W9, A-Q16):
   - the makers in the order of the owner's files: **Sony** (ARW) first, then **Panasonic** (RW2)
     and **Fujifilm** (RAF); Nikon and Canon only if the owner has such files (none in the test
     folders on 2026-11-18);
@@ -285,7 +285,7 @@ A prerequisite: `Session::render_region_with` fails on every RAF file tried (bac
 | A-Q2 | How long does an adjustment last: per session, per image, or saved between sessions? | **Changed:** the manual exposure and a click on grey are reset when another image is shown; fine details, sharpening and the channel view last for the session; auto exposure, the camera's brightness (A-Q12), auto white balance and the white balance presets are modes that last for the session, worked out per image (auto white balance and presets added by the owner the same day); one key resets everything; nothing is saved, the parameters are (§2.1) |
 | A-Q3 | Keys for fine details, sharpening, exposure ±/0, auto exposure, white balance, channel view, crop frame, focus point, and the reset of A-Q2 | Proposed in each step, checked against the key map (U8) (as proposed) |
 | A-Q4 | Fine details with PPG or AHD? | PPG (as proposed): at fit the difference is lost in the reduction, AHD takes nearly twice as long (ADR 0008 §11.2) |
-| A-Q5 | Fine view prefetched for neighbours? | **Changed:** only the current image in A2; +1 in the direction of travel is added only if A2's measurement shows that V1 and V4 (not V8) hold while a fine render runs, since a LibRaw render cannot be cancelled (§3.1) |
+| A-Q5 | Fine view prefetched for neighbours? | **Changed:** only the current image in W2; +1 in the direction of travel is added only if W2's measurement shows that V1 and V4 (not V8) hold while a fine render runs, since a LibRaw render cannot be cancelled (§3.1) |
 | A-Q6 | Focus marking with or without the adjustments? | Without (as proposed): the focus job renders with ADR 0006 §2's settings, so the marking never changes with a display setting (§2.1) |
 | A-Q7 | Filter, linear light or gamma, and the crate shared with ADR 0025's `pw-export`? | Lanczos-3 in linear light, clamped to 0–255; **added:** in a new workspace crate without dependencies, 8- and 16-bit, used by `pw-viewcore` and `pw-export`; the dependency lines approved (§3.2) |
 | A-Q8 | Sharpening at 100 % and above? | Off (as proposed); **added:** the mark "USM" is shown as paused, and sharpening applies again when the user zooms out (§3.3) |
@@ -306,22 +306,25 @@ Each step ends with tests (GR11), the owner's hand check and, where an image is 
 
 | Step | Content |
 |---|---|
-| **A0** | (Prerequisite, its own task) the region render on RAF fixed (backlog) |
-| **A1** | The Lanczos filter in its own crate (A-Q7) for every view below 100 %; the half-size view reduced on the worker and its use during zoom gestures; the conversion to the monitor profile moved after the downscale (§3.2) |
-| **A2** | Fine details (§3.1): measure a full PPG render of the owner's 61 Mpix files and a smaller format first; then the view kind and the swap; the measurement that decides the prefetch of +1 (A-Q5) |
-| **A3** | Sharpening (§3.3) with its settings; the overlay's adjustment marks, paused marks included (§2.1) |
-| **A4** | Channel view (§3.6) |
-| **A5** | Exposure, auto exposure, shadows and the camera's brightness (§3.4); the new LibRaw parameters through `pwlr.cpp` and `pw-libraw`; the focus job kept on ADR 0006 §2's settings (A-Q6) |
-| **A6** | White balance: auto (worked out once per image and passed as `user_mul`, the same in every view), click on grey, the file's presets and "Daylight (LibRaw)" (§3.5) |
-| **A7** | Thresholds, colours and the EV histogram (§3.7) |
-| **A8** | The camera's crop frame (§3.8), after a survey of the owner's files |
-| **A9** | The focus point (§3.9), after a survey of the owner's files; one step per maker |
+| **W0** | (Prerequisite, its own task) the region render on RAF fixed (backlog) |
+| **W1** | The Lanczos filter in its own crate (A-Q7) for every view below 100 %; the half-size view reduced on the worker and its use during zoom gestures; the conversion to the monitor profile moved after the downscale (§3.2) |
+| **W2** | Fine details (§3.1): measure a full PPG render of the owner's 61 Mpix files and a smaller format first; then the view kind and the swap; the measurement that decides the prefetch of +1 (A-Q5) |
+| **W3** | Sharpening (§3.3) with its settings; the overlay's adjustment marks, paused marks included (§2.1) |
+| **W4** | Channel view (§3.6) |
+| **W5** | Exposure, auto exposure, shadows and the camera's brightness (§3.4); the new LibRaw parameters through `pwlr.cpp` and `pw-libraw`; the focus job kept on ADR 0006 §2's settings (A-Q6) |
+| **W6** | White balance: auto (worked out once per image and passed as `user_mul`, the same in every view), click on grey, the file's presets and "Daylight (LibRaw)" (§3.5) |
+| **W7** | Thresholds, colours and the EV histogram (§3.7) |
+| **W8** | The camera's crop frame (§3.8), after a survey of the owner's files |
+| **W9** | The focus point (§3.9), after a survey of the owner's files; one step per maker |
 
-Order: A0, A1, A2, A3, A5, A4, A6, A7, A8, A9.
+Order: W0, W1, W2, W3, W5, W4, W6, W7, W8, W9.
+
+The steps were called A0–A9 until 2026-11-18, when the owner renamed them W0–W9, since ADR
+0023's steps are A1–A3; the questions keep their names A-Q1–A-Q17.
 
 **Placed in the step plan (owner, 2026-11-18):** last, after ADR 0025, in
 [`adr-0018-0025-steps.md`](../tasks/plans/adr-0018-0025-steps.md) as order 9. The shared filter
-crate (A-Q7) is therefore made by ADR 0025 X2, and A1 takes it into the view. **A0** (the
+crate (A-Q7) is therefore made by ADR 0025 X2, and W1 takes it into the view. **W0** (the
 region render on RAF, a fault today) is moved forward the same day: order 1b, before ADR 0024.
 
 ## 6. Not included
@@ -348,7 +351,7 @@ region render on RAF, a fault today) is moved forward the same day: order 1b, be
   ADR 0027 adjustment off (A-Q14); §2.9 gains the shared filter crate (A-Q7).
 - **ADR 0016**: the order becomes render → (exposure, white balance in LibRaw) → downscale →
   shadows → sharpening → channel view → conversion to the monitor profile. Today the conversion
-  comes right after the render, before the downscale (`native.rs`); A1 moves it.
+  comes right after the render, before the downscale (`native.rs`); W1 moves it.
 - **`pw-viewcore`**: the view key and the job gain the adjustment state; new post steps after the
   render, each in plain, tested Rust.
 - **`pwlr.cpp` / `pw-libraw`**: new parameters for exposure, white balance multipliers and presets,

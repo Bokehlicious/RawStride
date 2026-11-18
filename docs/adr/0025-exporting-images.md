@@ -96,7 +96,7 @@
   `pw-libjpeg`. No new package, no new licence (X-Q15; owner, 2026-11-17).
 - **2026-11-18 (ADR 0027 A-Q7):** the Lanczos filter lives in a new workspace crate without
   dependencies (for example `pw-resample`), shared with `pw-viewcore`; `pw-export` depends on it.
-  Made by X2 or ADR 0027's A1, whichever comes first.
+  Made by X2 or ADR 0027's W1, whichever comes first.
 
 ## 3. Questions (answered by the owner, 2026-11-17: every proposal approved)
 
