@@ -109,7 +109,7 @@ leaves the stored `IPTCDigest` out of date (`Validate`: `IPTCDigest is not curre
 | I4 | T79 | IIM text rules: blank values, byte limits, prefixes, character encodings | §5.1–§5.4, §6.2 | now |
 | I5a | T80 | IIM block: the datasets of the raw IIM block, decoded and turned into values | §5.1, §5.3, §5.4 | now |
 | I5b | T81 | Reconciliation: IIM/XMP by checksum, Exif/XMP, Creator ↔ Artist/Photographer, `Cleared` as an input | §5.1, §6.2, §6.4, §6.5 | after T80 |
-| D1 | owner | The XMP namespace of `Cleared`: see ADR 0007 §17 | §6.4 | – |
+| D1 | owner | The XMP namespace of `Cleared`: see ADR 0007 §17 | §6.4 | dropped 2026-11-18 (ADR 0007 §17.1) |
 | D2 | owner | `serde_json` in `pw-metadata`: see ADR 0007 §17 | – | done |
 | I6 | T82 | Reader with ExifTool for every format; sidecar rules and notices (foreign sidecar next to DNG, `<name>.<ext>.xmp`) | §4, §4.2 | after T81 |
 | I7 | T83 | Write plan: XMP, IIM if present (or with the setting), existing Exif overlap fields, clearing, unresolved conflicts without checksum; checked against ExifTool | §5.2, §6.3, §8 | after T82 |

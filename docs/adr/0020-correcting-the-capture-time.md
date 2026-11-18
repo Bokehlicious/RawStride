@@ -82,8 +82,8 @@
   was).
 - **The original time is not kept** in a field of its own (C-Q9): for RAW it stays in the file;
   for JPEG, TIFF and DNG it is overwritten. A correction is undone by shifting back by the same
-  amount. Keeping the original in a RawStride namespace waits for the namespace decision (ADR 0007
-  D1).
+  amount. Keeping the original would need a RawStride namespace, which RawStride does not have (ADR 0007
+  D1 dropped, 2026-11-18); it gets its own decision if it is ever wanted.
 
 ### 2.8 Changes to ADR 0007 (written there with this ADR, 2026-11-17)
 

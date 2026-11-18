@@ -23,6 +23,9 @@
   - **Amended by ADR 0020 (owner, 2026-11-17):** a manual correction of the capture time, the only
     way DateTimeOriginal changes (§6.3, §7, Q12, rule 4).
   - **Amended by ADR 0024 (owner, 2026-11-17):** a rotation writes `tiff:Orientation` (§6.3, rule 4).
+  - **Amended by the owner (2026-11-18, revision 19):** Q2 changed: a cleared field of a
+    manufacturer RAW file is not marked, and the camera's value fills it again (§6.4). D1 is
+    dropped (§17.1).
 - Date: 2026-11-04 (revision 1: storage, IIM policy and the role of XMP; revision 2: all owner
   decisions of 2026-11-04, MWG 2.0, the full IPTC specification and the Mapping Guidelines;
   revision 3: Q4 answered by the owner on 2026-11-08; revision 4: Q5 answered by the owner on
@@ -333,17 +336,16 @@ Urgency (2:10), Category (2:15) and Supplemental Categories (2:20):
 - **Embedded Exif is preserved and never written:** the original is never changed.
 - **When embedded Exif differs** from the sidecar's XMP (for example, Artist or Copyright set in
   the camera), the difference is **shown as a conflict**. XMP has precedence.
-- **A field cleared in the sidecar stays cleared** although the camera's Exif still has a value
-  **(Q2, owner 2026-11-11):**
-  - the sidecar records the cleared property in the RawStride namespace (`Cleared`, a Bag of
-    property ids; prefix and namespace URI are fixed with the implementation);
-  - RawStride does not fill such a property from the embedded Exif; the info panel shows the
-    camera value as "hidden by the user";
-  - writing a value to the property again removes it from `Cleared`.
-  - **Limitation:** other tools ignore the marker and show the camera value. Lightroom has the
-    same problem today: it may use the camera's ImageDescription of a raw file on export after the
-    caption was cleared (a known bug report since Lightroom 3). Photo Mechanic documents no
-    behaviour for this case.
+- **A field cleared in the sidecar is filled again from the camera's Exif** when the camera wrote
+  a value, for example Artist or Copyright set in the camera **(Q2, owner 2026-11-11, changed
+  2026-11-18):**
+  - clearing removes the property from the sidecar (§8); nothing records that it was cleared;
+  - the next read fills the property from the embedded Exif as in §6.2, and the info panel shows
+    it as the camera's value;
+  - why: a marker would only work inside RawStride, since other programs reading the sidecar show
+    the camera's value anyway; it would concern only the few fields a camera writes; and it would
+    need an XMP namespace of RawStride's own, which stays in every sidecar once written. To keep a
+    camera value out of the images, change the setting in the camera.
   - **Possible later addition:** writing an explicitly empty value in the sidecar, if it is shown
     that Lightroom and Photo Mechanic then keep the field empty. The level-C samples (Q11) can show
     it for Photo Mechanic only; there is no file written by Lightroom alone (§12, 2026-11-14), so
@@ -639,7 +641,7 @@ The three documents were compared for every rule above (details in the analysis 
 | Hierarchical keywords | – | – | MUST preserve | preserved | Compatible |
 | Deprecated IIM datasets | keep in sync (§9.1) | – | – | kept and synced | Compatible |
 | DNG embedded / RAW sidecar | not covered | – | DNG not covered | product decision | No conflict |
-| Clearing | – | – | update both forms or remove the other | consistent across forms, RAW untouched; a cleared property is marked in the sidecar (Q2) | Compatible: the RAW Exif cannot be changed, and the marker only affects RawStride |
+| Clearing | – | – | update both forms or remove the other | consistent across forms, RAW untouched; a cleared property of a manufacturer RAW is filled again from the camera's Exif (Q2) | Compatible: the RAW Exif cannot be changed |
 | Lang Alt edits | Lang Alt type (§14.1) | – | §5.2, not yet checked on this point | edit `x-default` only; other entries kept | **To verify:** the Adobe XMP Toolkit also updates entries equal to the old `x-default`. If MWG §5.2 or ISO 16684-1 recommend that, this is a deliberate deviation (Q7) |
 
 **One rule of this ADR deliberately contradicts a MUST:** the IIM checksum is not written while
@@ -653,7 +655,7 @@ silently. All other deviations concern SHOULD-level recommendations; each is mar
 | # | Question | Answer |
 |---|---|---|
 | ~~**Q1**~~ | **Writing a file with an unresolved IIM/XMP conflict** (no-checksum case). Writing both forms and the checksum would decide the conflict silently in favour of the written value | **Resolved 2026-11-11:** Writing other fields is allowed. For each conflicting property both forms are left as they are **and no new checksum is written**, until the user decides. MWG requires the checksum "whether changed or not", so this is a deliberate exception, limited to unresolved conflicts (§5.2, §13). Batch operations list such files |
-| ~~**Q2**~~ | **Clearing a field for an ARW/RW2 whose embedded camera Exif has a value** (e.g. Artist set in the camera). After clearing, the camera value would fill the gap again (§6.2) | **Resolved 2026-11-11:** The sidecar records the cleared property in the RawStride namespace (`Cleared`, a Bag of property ids), which suppresses the camera value in RawStride (§6.4). Other tools ignore it and will show the camera value. Before deciding, the owner compared Lightroom (may use the camera's raw ImageDescription on export after the caption was cleared; a bug report since Lightroom 3) and Photo Mechanic (copies camera Artist/Copyright one way into IPTC; clearing is not documented). An explicitly empty sidecar value may be added later if the level-C samples show that it works in both tools |
+| ~~**Q2**~~ | **Clearing a field for an ARW/RW2 whose embedded camera Exif has a value** (e.g. Artist set in the camera). After clearing, the camera value would fill the gap again (§6.2) | **Resolved 2026-11-11, changed by the owner 2026-11-18:** no marker. A cleared property is removed from the sidecar and the camera's value fills it again (§6.4). The answer of 2026-11-11, a `Cleared` Bag in a RawStride namespace that hid the camera's value in RawStride only, was never implemented and is dropped for the reasons in §6.4. An explicitly empty sidecar value may be added later if it is shown to work with the files of other programs (§6.4) |
 | ~~**Q3**~~ | **IIM 2:60 Time Created without a known time zone.** IIM's time format includes an offset; writing `+0000` would invent one | **Resolved 2026-11-11:** Write only 2:55 (the date) and leave 2:60 out until the zone is known. To be confirmed against the IIM 4.2 specification (not read; §16) |
 | ~~**Q4**~~ | **Exif overlap fields inside DNG:** the decision lists JPEG/TIFF for synchronisation | **Resolved 2026-11-08:** Treat DNG like TIFF: overlap fields that exist are updated (MWG requires updating or removing the other form) |
 | ~~**Q5**~~ | **A foreign `<basename>.xmp` next to a DNG** (written by another tool) | **Resolved 2026-11-08:** Never written and never used as a source; the info panel shows a notice that it exists and is ignored |
@@ -707,7 +709,7 @@ listed under the table (§17.1).
 
 | # | Decision | §§ | Status |
 |---|---|---|---|
-| D1 | The XMP namespace (prefix and URI) of `Cleared` (§6.4: "fixed with the implementation"). Reading and writing `Cleared` gets its own small task after D1 | §6.4 | open |
+| D1 | The XMP namespace (prefix and URI) of `Cleared` (§6.4: "fixed with the implementation"). Reading and writing `Cleared` gets its own small task after D1 | §6.4 | dropped (§17.1) |
 | D2 | `serde_json` (=1.0.154, already in `Cargo.lock` through the Tauri app, so nothing new is compiled) as a dependency of `pw-metadata`, to read ExifTool's `-j -struct` output. **Approved by the owner on 2026-11-11** | – | done |
 | D3 | `windows-sys` (=0.61.2, already in `Cargo.lock` through `pw-loupe`, so no new package) as a Windows-only dependency of `pw-metadata`, features `Win32_Foundation` and `Win32_Storage_FileSystem`, for `ReplaceFileW`, `MoveFileExW`, free space and read-only volumes. **Approved by the owner on 2026-11-12** | §9 | done |
 | D4 | A new workspace crate **`pw-imagecheck`** for the real `ImageCheck`, depending on `pw-metadata`, `pw-raw` and `pw-libraw` (all workspace crates: no new package from crates.io; `Cargo.lock` gains only the crate itself). Root `Cargo.toml`: `pw-imagecheck = { path = "crates/pw-imagecheck" }` under `[workspace.dependencies]`; `pw-loupe`: `pw-imagecheck.workspace = true` (T91). Why not elsewhere: `pw-metadata` must not depend on `pw-raw`/LibRaw (§9.3); in `pw-viewcore` the view core would depend on `pw-metadata`; in `pw-loupe` it would need `pw-libraw` as a direct dependency (also a `Cargo.toml` change) and the Tauri app could not use it. **Approved by the owner on 2026-11-12** | §9.3 | done |
@@ -726,7 +728,9 @@ listed under the table (§17.1).
 
 ### 17.1 Later changes to D1–D16
 
-- **D1** is still open (`docs/tasks/backlog.md`): reading and writing `Cleared` waits for it.
+- **D1** is dropped (owner, 2026-11-18): Q2 was changed so that nothing records a cleared field
+  (§6.4), and RawStride has no XMP namespace of its own. If one is needed later (the modes of a
+  template file, §10; the original capture time, ADR 0020 §2.7), it is decided with that step.
 - **D11, language** (owner, 2026-11-12, T102 and T104): `property_label` takes a language
   (`Language::Sv`, `Language::En`). English always gives the IPTC name from the property table;
   Swedish gives the D11 name where there is one and otherwise the IPTC name. The Swedish names are
@@ -751,14 +755,14 @@ listed under the table (§17.1).
 
 ## 18. What is left after milestone 8
 
-- `Cleared` (§6.4, Q2): not read or written; waits for D1 (`docs/tasks/backlog.md`).
 - §6.1 Exif ImageEditor ↔ Contributor and GPS → Location Created (`docs/tasks/backlog.md`; GPS gets
   the next metadata ADR after ADR 0017, its §7.2).
 - Keyword qualifiers (§8; `docs/tasks/backlog.md`).
 - From §10: template sub-fields of lists of structures, variables, template files in XMP
   (`docs/tasks/backlog.md`; ADR 0017 U13).
 - The other controlled vocabularies of §11 (`docs/tasks/backlog.md`).
-- Lists of structures and editing several images (ADR 0017 U11, U12).
+- Image Region (ADR 0017 U11b). The other lists of structures and editing several images are done
+  (ADR 0017 U11, U12; T136–T143, T125, T126, T179, T180).
 - §16 point 5: XMP Part 1, MWG §5.2, XMP Part 3 and IIM 4.2 not read, so Q3, Q7 and Q8 and the
   Lang Alt row of §13 stay "to verify".
 - The Tauri app keeps its in-place write (D7) until it is retired (GR8).
@@ -785,3 +789,4 @@ listed under the table (§17.1).
 | 16 | 2026-11-14 | After the first run of the level-C tests (T127), owner approved: §5.1, an IIM value equal to the whole XMP text is not a conflict (T129); §11, RawStride holds the PLUS codes, ExifTool adds the URI prefix; URI values written with `#=` (T128) |
 | 17 | 2026-11-14 | I12 done (T127): what the level-C samples showed written into §4.2 (Q8, Photo Mechanic's `<basename>.XMP`) and §6.4 (Photo Mechanic removes an emptied field, keeps empty structure sub-fields); §16 point 6 done |
 | 18 | 2026-11-14 | I13 (T133): implemented status, where each §12 test is, §18 what is left; no new decision |
+| 19 | 2026-11-18 | Owner changed Q2: a cleared field of a manufacturer RAW is not marked and is filled again from the camera's Exif (§6.4, §13, Q2); D1 dropped (§17, §17.1); §18 brought up to date (U11 and U12 done) |
