@@ -118,6 +118,18 @@
   memory and drops them with the tab's list.
 - Failures are shown in the status line and go to the Tasks error list (ADR 0017 U5-Q5), as a
   move's do. On success: "{n} images moved to the Recycle Bin." (the exact texts in B3).
+- **Known limits accepted at the backlog sort after B4** (owner, 2026-11-18):
+  - *Quitting while a delete runs* waits only for the rating writes, so the images not yet sent
+    to the worker are not deleted; each image is all or nothing, so nothing is lost and the files
+    stay where they were.
+  - *A delete refused at the worker* (a file open in another program, or the drive or the size
+    refused after the confirmation) has already released the image's view sessions, as a failed
+    move has; the image opens again. Seen and approved in the owner's hand check of B4.
+  - The other known limits of B4 (a worker that never answers, what is shown during a delete,
+    path corner cases, the metadata window during a delete, a network folder not yet checked by
+    hand) are kept in `docs/tasks/backlog.md` with their reasons. A tab that follows changes on
+    disk (for example files restored from the Recycle Bin, §2.8) is a wish of the owner's at the
+    hand check of B4: a new ADR (0026) with questions to the owner, written after B5.
 
 ### 2.8 Undo
 
