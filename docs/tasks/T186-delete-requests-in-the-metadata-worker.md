@@ -1,4 +1,4 @@
-# T186. ADR 0018 B2: preparing and deleting an image as requests to the metadata worker (pw-metadata) — Blocked: waits for T185
+# T186. ADR 0018 B2: preparing and deleting an image as requests to the metadata worker (pw-metadata) — Open
 
 - **Chain:** T185 (B1) → T186 (B2) → T187, T188 (B3) → T189 (B4) → T190 (B5). The owner's
   answers are B-Q1–B-Q15 in ADR 0018 §3; how the steps fit is ADR 0018 §2.10.
@@ -100,3 +100,4 @@
 | 2026-11-17 | Blocked: waits for T185 and T184 | Point 6 decided by the owner: the move's error stays text (ADR 0018 B-Q17) |
 | 2026-11-17 | Blocked: waits for T185 and T184 | Chain review (fresh agent, T185–T190 read together): the answers' paths are the shell's form (companions built from the image as sent; T185's errors give paths as given), so T187–T189 can compare them |
 | 2026-11-17 | Blocked: waits for T185 | T184 is Done and committed: waits for T185 only. T184 added an empty `release_for_move` to `FailingCheck` in `worker.rs`'s tests (about line 1376): line numbers to be checked when this task is set Open |
+| 2026-11-18 | Open | T185 is Done and committed (`f21caba`): set Open. The names T186 uses (`recycle::inspect_group`, `recycle::delete_group`, `DeleteRefusal::Missing`, `DeleteRefusal::Failed`) are as T185 made them |

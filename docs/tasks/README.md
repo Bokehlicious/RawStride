@@ -86,7 +86,7 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status |
 |---|---|---|
-| [T186](T186-delete-requests-in-the-metadata-worker.md) | ADR 0018 B2: preparing and deleting an image as requests to the metadata worker (pw-metadata) | Blocked: waits for T185 |
+| [T186](T186-delete-requests-in-the-metadata-worker.md) | ADR 0018 B2: preparing and deleting an image as requests to the metadata worker (pw-metadata) | Open |
 | [T187](T187-delete-rules-and-texts.md) | ADR 0018 B3, first part: the delete's plan, batch and texts in the shell (pw-loupe) | Blocked: waits for T186 |
 | [T188](T188-delete-requests-and-answers-in-the-metadata-cache.md) | ADR 0018 B3, second part: the delete requests and answers in the shell's metadata part (pw-loupe) | Blocked: waits for T187 |
 | [T189](T189-delete-key-menu-window-and-wiring.md) | ADR 0018 B4: the Delete key, the menu item, the confirmation window and the deletes in the shell (pw-loupe) | Blocked: waits for T188 |
