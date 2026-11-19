@@ -99,6 +99,18 @@ pub fn program_number_text(number: usize) -> String {
     format!("Open in Program {number}")
 }
 
+/// The status-line text when File Explorer could not be started (ADR 0019 §2.8, T203), with the
+/// system's reason.
+pub fn explorer_failed_text(reason: &str) -> String {
+    format!("File Explorer could not be started: {reason}")
+}
+
+/// The status-line text when the current image (its file name `name`) is no longer a file, so
+/// File Explorer is not started.
+pub fn explorer_missing_text(name: &str) -> String {
+    format!("{name} is no longer in its folder.")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -169,5 +181,18 @@ mod tests {
         assert_eq!(too_long_text(1, "Editor", 0), one);
         assert_eq!(too_long_text(1, "Editor", 1), one);
         assert_eq!(too_long_text(0, "Editor", 0), one);
+    }
+
+    #[test]
+    fn the_file_explorer_texts() {
+        assert_eq!(
+            explorer_failed_text("The system cannot find the file specified. (os error 2)"),
+            "File Explorer could not be started: The system cannot find the file specified. \
+             (os error 2)"
+        );
+        assert_eq!(
+            explorer_missing_text("a.ARW"),
+            "a.ARW is no longer in its folder."
+        );
     }
 }

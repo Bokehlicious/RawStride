@@ -152,6 +152,7 @@ Every other property already uses IPTC's English name in both languages.
 | – | Waiting for writes … | the status line while "Open in {name}" waits for the images' rating or metadata writes (ADR 0019 §2.4, E-Q6); added by T201 |
 | – | Open | the button of the question asked before more than 100 images are opened in a program (ADR 0019 E-Q8); its other button is "Cancel" (§6); added by T201 |
 | – | command line | the program's path and the images' paths it is started with; Windows' own limit is 32 767 characters, and "Open in {name}" says so when the images do not fit ("… the command line would be longer than Windows allows.", ADR 0019); added by T201 |
+| – | Show in File Explorer | the Image menu's item, no key, opening the current image's folder in File Explorer with the file selected (ADR 0019 E3, E-Q11); it uses Windows' program's name, "File Explorer" (§5; owner, 2026-11-19, ADR 0019 §2.8); added by T203 |
 
 ## 4. Viewer and zoom
 

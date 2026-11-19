@@ -97,10 +97,11 @@ use pw_loupe::{
     no_preview_text,
 };
 use pw_loupe::{
-    OPEN_IN_KEY, OpenPlan, OpenRequest, OpenStep, StartError, image_gone_text,
-    nothing_to_open_text, open_button_text, open_cancel_text, open_in_another_text,
-    open_in_key_action, open_in_text, open_many_question_text, opened_text, plan_open,
-    program_missing_text, start_failed_text, start_program, too_long_text, waiting_for_writes_text,
+    OPEN_IN_KEY, OpenPlan, OpenRequest, OpenStep, StartError, explorer_failed_text,
+    explorer_missing_text, image_gone_text, nothing_to_open_text, open_button_text,
+    open_cancel_text, open_in_another_text, open_in_key_action, open_in_text,
+    open_many_question_text, opened_text, plan_open, program_missing_text, show_in_explorer,
+    start_failed_text, start_program, too_long_text, waiting_for_writes_text,
 };
 use pw_metadata::edit::{Edit, EditOptions};
 use pw_metadata::iim::Fallback;
@@ -5104,6 +5105,39 @@ impl Loupe {
         }
     }
 
+    /// Image ▸ Show in File Explorer (ADR 0019 §2.8, E3, T203): the current image only, also with
+    /// several images marked. A file that is no longer a file is said in the status line only and
+    /// starts nothing, since Explorer would open another folder without a word; a failed start
+    /// goes to the status line and the Tasks error list. Nothing is said when it starts.
+    fn show_current_in_explorer(&mut self) {
+        let Some(file) = self
+            .tabs
+            .active()
+            .and_then(|tab| tab.files.get(tab.current))
+        else {
+            return;
+        };
+        let path = match resolve_paths(std::slice::from_ref(file)) {
+            Ok(paths) => paths.into_iter().next(),
+            Err(error) => {
+                self.message = Some(error);
+                return;
+            }
+        };
+        let Some(path) = path else {
+            return;
+        };
+        if !path.is_file() {
+            self.message = Some(explorer_missing_text(&image_name(&path)));
+            return;
+        }
+        if let Err(reason) = show_in_explorer(&path) {
+            let text = explorer_failed_text(&reason);
+            self.tasks.add_error(&text, ClockTime::now());
+            self.message = Some(text);
+        }
+    }
+
     /// A batch of deletes has all its answers (T189 point 6): every tab of the deleted files'
     /// folders drops them, the active one's view cores and thumbnails follow, the metadata cache
     /// and the undo list of moves forget them, the failures and listing errors go to the Tasks
@@ -5237,6 +5271,8 @@ impl Loupe {
                 tab.is_some_and(|tab| tab.position().is_some())
                     && usize::from(index) < self.settings.external_programs.len()
             }
+            // Greyed while the active tab shows no current image (ADR 0019 §2.8, T203).
+            Command::ShowInExplorer => tab.is_some_and(|tab| tab.position().is_some()),
             Command::ToggleView => tab.is_some_and(|tab| !tab.visible.is_empty()),
             // Compare opens with two images in the stepped list, and closes an open compare; the
             // other four act only in the compare (T153, T154).
@@ -5305,6 +5341,7 @@ impl Loupe {
             // The Settings window has no scrolling, so its section "External Programs" is in view
             // when it opens (ADR 0019 §2.2, E-Q3).
             Command::OpenInAnother => self.open_settings_window(),
+            Command::ShowInExplorer => self.show_current_in_explorer(),
             Command::ToggleView => match self.tabs.active().map(|tab| tab.mode) {
                 Some(ViewMode::Grid) => {
                     self.switch_mode(ViewMode::Loupe);

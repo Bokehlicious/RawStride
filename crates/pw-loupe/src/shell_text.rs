@@ -359,6 +359,7 @@ pub fn command_text(command: Command) -> String {
         // Never shown in the menu, which draws `open_in_text(name)`; `command_text` takes no name.
         Command::OpenIn(index) => program_number_text(usize::from(index) + 1),
         Command::OpenInAnother => open_in_another_text().to_owned(),
+        Command::ShowInExplorer => "Show in File Explorer".to_owned(),
         Command::ToggleView => "Preview".to_owned(),
         Command::Fit => "Fit".to_owned(),
         Command::ToggleZoom => "Fit ↔ 100%".to_owned(),
@@ -487,6 +488,7 @@ mod tests {
                 "Purple",
                 "No label",
                 "RAW ↔ JPEG",
+                "Show in File Explorer",
                 "Delete to Recycle Bin",
                 "Delete Rejected Images",
                 "Preview",
@@ -547,6 +549,7 @@ mod tests {
             Some("Ctrl+5"),
             Some("Ctrl+0"),
             Some("R"),
+            None,
             Some("Delete"),
             None,
             Some("G"),

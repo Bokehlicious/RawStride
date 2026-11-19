@@ -294,6 +294,13 @@ and reviewer:
     `start_failed_text` is in Windows' language; the menu checks each program's path (`is_file`)
     every frame while the Image menu is open, so a program on a network share that is gone may
     slow the open menu (T202's independent review).
+  - *Show in File Explorer* (T203's brief and its independent review, accepted when T203 was
+    done): `resolve_paths` joins the working folder without normalising, so a tab opened on a
+    `\\?\` path or a path with `..` makes File Explorer open another folder (it gives no
+    error), and a path over 260 characters may do the same; the preview draws no menu bar and
+    the item has no key (E-Q11), so it is reached only from the contact sheet; it does not wait
+    for a move, so right after X with "Move Rejected and Picked Images to Subfolders" on it may
+    open the old folder (or say the image is no longer in its folder once the move is done).
 
 - **Leftovers from the review of T197** (reviewer and an independent review agent, 2026-11-19;
   none is caused by T197, which avoids the first for X-Trans by refusing a box under 512 px before

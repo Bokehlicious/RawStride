@@ -485,6 +485,10 @@ pub enum Command {
     /// The Settings window opened at its section "External Programs" (Image ▸ Open in Another
     /// Program…, shown while the list is empty, then with Ctrl+E; ADR 0019 E-Q3, T202).
     OpenInAnother,
+    /// The current image's folder opened in File Explorer with the file selected, no key (Image ▸
+    /// Show in File Explorer; ADR 0019 §2.8, E-Q11, T203). Greyed while the active tab shows no
+    /// current image.
+    ShowInExplorer,
     /// The preview open ↔ closed (Visa ▸ Förhandsvisning, G; ADR 0017 §2.2, T111).
     ToggleView,
     Fit,
@@ -726,6 +730,7 @@ pub const MENUS: &[Menu] = &[
             item(Command::ToggleMode, plain(Key::R)),
             MenuEntry::Separator,
             MenuEntry::ExternalPrograms,
+            item(Command::ShowInExplorer, None),
             MenuEntry::Separator,
             item(Command::DeleteToRecycleBin, plain(Key::Delete)),
             item(Command::DeleteRejected, None),
@@ -1060,14 +1065,15 @@ mod tests {
 
     /// Delete to Recycle Bin (Delete) and Delete Rejected Images (no key) are the last items of
     /// the Image menu, after RAW ↔ JPEG, a separator, the external programs (ADR 0019 §2.2,
-    /// T202) and another separator, and no other item shows Delete (ADR 0018 B4, B5, T189, T190).
+    /// T202), Show in File Explorer (no key; ADR 0019 §2.8, T203) and another separator, and no
+    /// other item shows Delete (ADR 0018 B4, B5, T189, T190).
     #[test]
     fn the_delete_items_are_the_last_items_of_the_image_menu() {
         let Some(image) = MENUS.iter().find(|menu| menu.kind == MenuKind::Image) else {
             panic!("there is an Image menu");
         };
-        let Some(start) = image.entries.len().checked_sub(6) else {
-            panic!("the Image menu has at least six entries");
+        let Some(start) = image.entries.len().checked_sub(7) else {
+            panic!("the Image menu has at least seven entries");
         };
         assert_eq!(
             image.entries.get(start..),
@@ -1076,6 +1082,7 @@ mod tests {
                     item(Command::ToggleMode, plain(Key::R)),
                     MenuEntry::Separator,
                     MenuEntry::ExternalPrograms,
+                    item(Command::ShowInExplorer, None),
                     MenuEntry::Separator,
                     item(Command::DeleteToRecycleBin, plain(Key::Delete)),
                     item(Command::DeleteRejected, None),

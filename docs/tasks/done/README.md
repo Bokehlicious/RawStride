@@ -209,3 +209,4 @@ was when the task was done, so "this file", "below" and "the Log" in T1–T115 m
 | [T200](T200-external-program-list.md) | ADR 0019 E1: the list of external programs in `settings.txt` and its section "External Programs" in the Settings window (pw-loupe) |
 | [T201](T201-open-in-program-plan-wait-and-texts.md) | ADR 0019 E2, first part: the command line's length, the plan (start, ask, too long), the wait for the images' writes, the start of the program and the texts of "Open in {name}" (pw-loupe) |
 | [T202](T202-open-in-program-menu-key-and-wiring.md) | ADR 0019 E2, second part: Image ▸ "Open in {name}" per program or "Open in Another Program…", Ctrl+E, the question above 100 images, the wait for the images' writes and the start in the shell (pw-loupe) |
+| [T203](T203-show-in-explorer.md) | ADR 0019 E3: Image ▸ "Show in File Explorer" for the current image, and the owner's hand check of E2 and E3 (pw-loupe) |

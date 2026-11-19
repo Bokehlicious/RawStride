@@ -2,8 +2,12 @@
 //! command line would be and how many images fit in it, the plan (start, ask first, or too long),
 //! the request that waits for the images' writes, and the start of the program. Plain Rust,
 //! tested without a window (GR11); the shell wires it to the menu, Ctrl+E and the question
-//! (T202). The texts are in `external_text.rs`.
+//! (T202). Showing the current image in File Explorer (ADR 0019 §2.8, step E3; T203). The texts
+//! are in `external_text.rs`.
 
+use std::ffi::OsString;
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -172,6 +176,39 @@ pub fn start_program(request: &OpenRequest) -> Result<(), StartError> {
         .spawn()
         .map(|_child| ())
         .map_err(|error| StartError::Failed(error.to_string()))
+}
+
+/// File Explorer's argument that opens `path`'s folder with the file selected:
+/// `/select,"<path>"`. Built without a lossy conversion; a Windows path holds no `"`.
+pub fn explorer_select_argument(path: &Path) -> OsString {
+    let mut argument = OsString::from("/select,\"");
+    argument.push(path.as_os_str());
+    argument.push("\"");
+    argument
+}
+
+/// Opens `path`'s folder in File Explorer with the file selected (ADR 0019 §2.8, T203):
+/// `explorer.exe` from the folder in `SystemRoot`, or plain `explorer.exe` when it is not set,
+/// with `explorer_select_argument` passed as it is. The child is not waited for: Explorer's exit
+/// code is not a success signal. `Err` with the system's reason when the start fails.
+#[cfg(windows)]
+pub fn show_in_explorer(path: &Path) -> Result<(), String> {
+    let explorer = match std::env::var_os("SystemRoot") {
+        Some(root) => Path::new(&root).join("explorer.exe"),
+        None => PathBuf::from("explorer.exe"),
+    };
+    Command::new(explorer)
+        .raw_arg(explorer_select_argument(path))
+        .spawn()
+        .map(|_child| ())
+        .map_err(|error| error.to_string())
+}
+
+/// File Explorer exists only on Windows; elsewhere nothing is started.
+#[cfg(not(windows))]
+pub fn show_in_explorer(path: &Path) -> Result<(), String> {
+    let _ = path;
+    Err("File Explorer exists only on Windows".to_owned())
 }
 
 #[cfg(test)]
@@ -386,5 +423,21 @@ mod tests {
             Err(StartError::Failed(reason)) if !reason.is_empty()
         ));
         let _ = std::fs::remove_dir_all(&folder);
+    }
+
+    #[test]
+    fn the_explorer_argument_selects_the_path_in_quotes() {
+        assert_eq!(
+            explorer_select_argument(Path::new(r"C:\Photos\a.ARW")),
+            OsString::from(r#"/select,"C:\Photos\a.ARW""#)
+        );
+        assert_eq!(
+            explorer_select_argument(Path::new(r"C:\My Photos\b c.ARW")),
+            OsString::from(r#"/select,"C:\My Photos\b c.ARW""#)
+        );
+        assert_eq!(
+            explorer_select_argument(Path::new(r"C:\Bilder\Åsa\älg.ARW")),
+            OsString::from(r#"/select,"C:\Bilder\Åsa\älg.ARW""#)
+        );
     }
 }

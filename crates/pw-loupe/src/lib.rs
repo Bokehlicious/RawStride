@@ -64,12 +64,14 @@ pub use editor::{
 };
 pub use external::{
     COMMAND_LINE_LIMIT, MANY_IMAGES, OpenPlan, OpenRequest, OpenStep, StartError,
-    command_line_length, images_that_fit, plan_open, start_program,
+    command_line_length, explorer_select_argument, images_that_fit, plan_open, show_in_explorer,
+    start_program,
 };
 pub use external_text::{
-    image_gone_text, nothing_to_open_text, open_button_text, open_cancel_text,
-    open_in_another_text, open_in_text, open_many_question_text, opened_text, program_missing_text,
-    program_number_text, start_failed_text, too_long_text, waiting_for_writes_text,
+    explorer_failed_text, explorer_missing_text, image_gone_text, nothing_to_open_text,
+    open_button_text, open_cancel_text, open_in_another_text, open_in_text,
+    open_many_question_text, opened_text, program_missing_text, program_number_text,
+    start_failed_text, too_long_text, waiting_for_writes_text,
 };
 pub use field_values::{
     FIELD_VALUES_FILE, FieldValues, RECENT_LIMIT, ValueChoice, ValueList, field_id,
