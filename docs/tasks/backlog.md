@@ -19,7 +19,9 @@ and reviewer:
   `edit.rs` put it back; `write_rating_safely` writes no list); recent values (`main.rs`
   `recorded`) also record a keyword that was put back; the batch's "Written" count also counts an
   image whose write was `Unchanged`; an `xml:lang` on a list item is not in ExifTool 13.59's JSON
-  (so not marked) and is kept by a whole-list write, but also given to the new items;
+  (so not marked) and is kept by a whole-list write, but also given to the new items; T193's hand
+  check (owner, 2026-11-19) did not try a JPEG with IIM, a list with qualifiers and an IIM/XMP
+  conflict (no such file at hand), so the held list's `DigestNotWritten` is checked only by tests;
   from §10, left out of T88: template sub-fields of lists of
   structures (Location Created, Image Creator, Copyright Owner, Licensor), variables (`{date}` …),
   template files in XMP with the modes (where the modes are stored is decided with U13). Left out of I10: editing several
