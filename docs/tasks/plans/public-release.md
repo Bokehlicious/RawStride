@@ -4,8 +4,8 @@ The owner said on 2026-11-19 that the next milestone is probably making the repo
 (`github.com/Bokehlicious/RawStride`, private today) public. This plan gathers what `backlog.md`
 lists for it ("CI before the repository becomes public", "Review the git history before the
 repository becomes public", "Before the repository is made public", the README note under "Linux
-and macOS ports") and ADR 0002 §4 into one order. It is a proposal: nothing here is decided until
-the owner answers the questions in §1.
+and macOS ports") and ADR 0002 §4 into one order. **Accepted by the owner on 2026-11-19:** every proposal in §1
+(PR-Q1–PR-Q10) approved as written.
 
 **Making the repository public is not a binary release.** A release of the program (an exe for
 others to download) has its own list in ADR 0002 §4 and is §6 here, after this milestone.
@@ -20,9 +20,10 @@ the history). Some tens of commit hashes are quoted in the documents (most in `d
 
 ## 1. Owner decisions first
 
-Each step below says which decision it waits for. The reviewer's proposal is in the last column.
+Each step below says which decision it waited for. The last column is the reviewer's proposal;
+the owner approved all ten as written on 2026-11-19, so each is now the decision.
 
-| Id | Question | Proposal |
+| Id | Question | Decision (owner, 2026-11-19: as proposed) |
 |---|---|---|
 | PR-Q1 | **Which branches are published?** Both, or only `main` (the work branch kept private, or the work moved to a public branch after the milestone)? | Both, as today: `main` is moved only by fast-forward, so the work branch holds nothing `main` will not hold. |
 | PR-Q2 | **The owner's e-mail address in all 573 commits.** Keep it, or rewrite the history to the GitHub noreply address? | Rewrite (H2), since it is the only personal data found so far and cannot be taken back once public. If H1 finds other things to remove from the history, they go in the same rewrite. |
@@ -91,3 +92,4 @@ Order 1 steps can run in parallel (they touch different files), one task at a ti
 |---|---|---|
 | 1 | 2026-11-19 | Proposed by the reviewer from `backlog.md`, ADR 0002 §4 and the project status; waits for the owner's answers to PR-Q1–PR-Q10 |
 | 2 | 2026-11-19 | R10 added (owner): the binary renamed to `rawstride` (ADR 0012 step 2), after PR-Q3 and before C1 |
+| 3 | 2026-11-19 | Accepted: the owner approved PR-Q1–PR-Q10 as proposed |
