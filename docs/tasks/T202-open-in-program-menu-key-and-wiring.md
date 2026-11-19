@@ -1,4 +1,4 @@
-# T202. ADR 0019 E2, second part: the menu items, Ctrl+E, the question and the start in the shell (pw-loupe) — Blocked: waits for T201
+# T202. ADR 0019 E2, second part: the menu items, Ctrl+E, the question and the start in the shell (pw-loupe) — Open
 
 - **Chain:** T200 (E1, done) → T201, T202 (E2) → T203 (E3). The owner's answers are E-Q1–E-Q14 in
   ADR 0019 §3. The owner's hand check comes after E3 (ADR 0019 §4) and is written in T203.
@@ -25,20 +25,25 @@
        after the programs, before that separator.
      - `menu_items()` skips `MenuEntry::ExternalPrograms` (as `Filter` and `Sort`): its items and
        Ctrl+E are not in the static table.
-     - `pub const OPEN_IN_KEY: KeyChord` = Ctrl+E (no Shift, no Alt), the key the first
+     - `pub const OPEN_IN_KEY: KeyChord` = Ctrl+E (no Shift, no Alt), written as a
+       `KeyChord { key: Key::E, ctrl: true, shift: false, alt: false }` literal (the helper
+       `ctrl()`, `shell.rs` about line 413, gives an `Option` and cannot build it), the key the first
        program's item (or "Open in Another Program…") shows on its right; exported in `lib.rs`'s
        `pub use shell::{…}` (`main.rs` is a separate binary crate).
      - The test `the_delete_items_are_the_last_items_of_the_image_menu` (`shell.rs` about line
-       1036) checks the last four entries from `ToggleMode`; with the new entry it must take the
+       1038) checks the last four entries from `ToggleMode`; with the new entry it must take the
        last six (`checked_sub(6)`), its expected slice gets `MenuEntry::ExternalPrograms` and a
        separator after ToggleMode's separator, and its doc comment says so. This change is
        allowed by this task (an exception to rule 5: what it checks is the same, the menu
        grew). `every_menu_item_text_in_menu_order` and `every_menu_key_text_in_menu_order`
        (`shell_text.rs`) do not change, since `menu_items()` skips the new entry.
   2. **Texts** (`shell_text.rs`, rule 13): `command_text(Command::OpenIn(index))` is T201's
-     `program_number_text(index as usize + 1)` (it is never shown in the menu, which draws
+     `program_number_text(usize::from(index) + 1)` (it is never shown in the menu, which draws
      `open_in_text(name)`; it exists because `command_text` takes no name), and
-     `command_text(Command::OpenInAnother)` is T201's `open_in_another_text()`. A new test in
+     `command_text(Command::OpenInAnother)` is T201's `open_in_another_text().to_owned()`
+     (`command_text` gives a `String`); `shell_text.rs` imports both from
+     `crate::external_text`. `command_text`'s match (`shell_text.rs` about line 337) has no
+     catch-all arm, so both arms are needed. A new test in
      `shell_text.rs` checks both (one `OpenIn(0)` and one `OpenIn(4)`).
   3. **The key** (`lib.rs`): `pub fn open_in_key_action(key: egui::Key, ctrl: bool, shift: bool,
      alt: bool) -> bool`: `egui::Key::E` with Ctrl and no other modifier. Read in `main.rs` right
@@ -46,7 +51,7 @@
      `ctx.egui_wants_keyboard_input()`, nothing while `dialog_open()`) and **not on a repeat** (a
      held Ctrl+E must not start the program again each repeat); it runs `OpenIn(0)` when
      the list has a program, otherwise `OpenInAnother`, through `run_command`. Teach the test
-     helper `command_of_key` (`lib.rs` tests, about line 1015) Ctrl+E as `Command::OpenIn(0)`,
+     helper `command_of_key` (`lib.rs` tests, about line 1026) Ctrl+E as `Command::OpenIn(0)`,
      after the Delete key. E without Ctrl stays the focus marking: `preview_key_action` and
      `key_action` refuse Ctrl+E today; a test says so.
   4. **The menu entry** (`main.rs`, in `draw_menu_bar`, a new arm for
@@ -58,9 +63,12 @@
        `command_enabled(Command::OpenIn(index))` **and** `program.path.is_file()` (a program
        whose `.exe` is gone is greyed, E-Q9; the check runs only while the menu is open); a
        click pushes `Command::OpenIn(index)`. The index is at most 4 (`MAX_EXTERNAL_PROGRAMS`),
-       so `u8::try_from(index)` never fails; a failure skips the item, no panic. No string
-       literal in the drawing (rule 13).
-  5. **Enabled and run** (`main.rs`, `command_enabled` and `run_command`):
+       so `u8::try_from(index)` never fails; a failure skips the item, no panic. No
+       user-visible string literal in the drawing (rule 13; widget ids such as `push_id` and
+       `egui::Id::new` strings are not user-visible texts, as in `draw_delete_window`).
+  5. **Enabled and run** (`main.rs`, `command_enabled` and `run_command`; `OpenIn` gets its own
+     arm in `command_enabled` (about line 5038, `OpenInAnother` falls to its `_ => true` arm),
+     and both get arms in `run_command`'s match, about line 5072):
      - `OpenIn(index)`: enabled while the active tab shows a current image
        (`tab.position().is_some()`, as the rating items) and `index` is within the list. The
        missing `.exe` is not checked here: the key then says why (point 6), the menu greys it
@@ -79,9 +87,12 @@
        (`self.tasks.add_error(…, ClockTime::now())`, as a failed move's), nothing else (E-Q9);
      - otherwise `plan_open(program, images)`: `TooLong { count, fit }` → the status line shows
        `too_long_text(count, name, fit)`, nothing started (E-Q8); `Ask(request)` → the step
-       `self.open` (a new `OpenStep` field in `Loupe`) becomes `Confirming(request)` and a
-       `bool` asks the Cancel button for the focus on its first frame (as
-       `delete_focus_cancel`); `Start(request)` → `Waiting(request)`, which **replaces** a request
+       `self.open` (a new `OpenStep` field in `Loupe`) becomes `Confirming(request)` and
+       `open_focus_cancel: bool` (a new field, as `delete_focus_cancel`) asks the Cancel button
+       for the focus on its first frame; a third new field, `open_button: Option<egui::Id>` (as
+       `delete_button`), keeps the Open button's id (point 7); all three are added to `Loupe`'s
+       initializer (about line 8509), and whenever the step leaves `Confirming` both
+       `open_focus_cancel` and `open_button` are reset, as `delete_idle` does (about line 4628); `Start(request)` → `Waiting(request)`, which **replaces** a request
        that was waiting (ADR 0019 §2.4: the earlier one is dropped, not started), and, when the
        request is not ready at once (`ready(|path| self.metadata.write_pending(path))`), the
        status line shows `waiting_for_writes_text()` (set once here, not every frame).
@@ -104,8 +115,9 @@
      - **keys:** a branch at the top of the key loop, beside the delete's (about line 5756),
        takes every key while the question is shown: Escape cancels; Enter cancels unless the
        Open button has the focus (then egui clicks it); every other key does nothing;
-     - Cancel, Escape or a click outside (`should_close`) → `Idle`, nothing started; Open →
-       `Waiting(request)`, and the status line shows `waiting_for_writes_text()` when it is not
+     - Cancel, Escape or a click outside (`should_close`) → `Idle`, nothing started; Open takes
+       the request with `std::mem::take(&mut self.open)` (as the delete does, about line 4893)
+       → `Waiting(request)`, and the status line shows `waiting_for_writes_text()` when it is not
        ready at once, as point 6;
      - **one dialog at a time:** the question is shown when the step is `Confirming` and neither
        the metadata window, the Settings window nor a shown import dialog is open (none can open
@@ -113,8 +125,9 @@
        This guard is written out on its own (a new `open_window_shown(&self)`); it must not call
        `other_dialog_open()` or `dialog_open()`, which are true while the question itself is
        `Confirming`, or the question would never show.
-       `dialog_open()` and `other_dialog_open()` both return true while the open step is
-       `Confirming`, so the delete's confirmation waits behind it (a delete that was preparing
+       Add `|| matches!(self.open, OpenStep::Confirming(_))` to `other_dialog_open()` (about
+       line 3152; `dialog_open()` calls it) and update both doc comments, so that both return
+       true while the open step is `Confirming` (today they do not) and the delete's confirmation waits behind it (a delete that was preparing
        when Ctrl+E was pressed) and the menus are greyed. Every other place that guards on
        `delete_window_shown()` or `DeleteStep::Confirming` as a modal (the file drop, about line
        5666: `&& !matches!(self.open, OpenStep::Confirming(_))` beside the delete's; the wheel,
@@ -131,7 +144,8 @@
      - when not waiting so and `request.ready(|path| self.metadata.write_pending(path))`: take
        the request (the step is `Idle`); the images that are no longer files (`is_file`: moved
        or deleted while the request waited) are left out, each named in the Tasks error list
-       with `image_gone_text(file name)` (T201); with none left the status line shows
+       with `image_gone_text(&image_name(path))` (T201's text, the existing `image_name` helper
+       as the moves and the delete use it); with none left the status line shows
        `nothing_to_open_text()` and nothing is started; otherwise `start_program` with the
        request of the images left. `Ok` → the status line shows `opened_text(images left,
        name)`; `Err(Missing)` → `program_missing_text` (the `.exe` was
@@ -149,7 +163,11 @@
 - **Tests to add:** `lib.rs`: Ctrl+E gives `open_in_key_action`, not E alone, not Ctrl+Shift+E or
   Ctrl+Alt+E; Ctrl+E is in no other key map (`key_action`, `grid_key_action`,
   `preview_key_action`, `shell_key_action`, `move_key_action`, `rating_key_action`,
-  `tab_action`, `opens_import`). `shell.rs`: the Image menu's entries in order with
+  `tab_action`, `opens_import`, `loupe_key_action` in `grid.rs`, `delete_key_action`; mind each
+  one's arguments, for example `key_action` and `loupe_key_action` take `(key, ctrl, alt)`
+  without Shift); `command_of_key(OPEN_IN_KEY, view)` is `Some(Command::OpenIn(0))` in the
+  grid and the loupe, and no item of `menu_items()` has `OPEN_IN_KEY` as its key (Ctrl+E is not
+  in the static table, so this catches a later clash). `shell.rs`: the Image menu's entries in order with
   `ExternalPrograms` and its separator, checked by the rewritten
   `the_delete_items_are_the_last_items_of_the_image_menu` of point 1 (no separate order test);
   `menu_items()` has no `OpenIn` and no `OpenInAnother`;
@@ -183,3 +201,4 @@
 | Date | Status | Note |
 |---|---|---|
 | 2026-11-19 | Blocked | Added (ADR 0019 E2, order 1c), with T201 and T203 as one chain; waits for T201. Cold read (fresh agent, 2026-11-19): `OPEN_IN_KEY` exported; the delete-items test rewritten for six entries (allowed); a new test for the two command texts; the path given with `display()`; Ctrl+E not on a repeat; an `Ask` replaces a waiting request, a command with no new request leaves it; "Waiting for writes …" cleared when nothing is started; the question independent of the tab and its focus bool kept to the first drawn frame; the start not held back by a dialog; new known limits; the agent does not edit `backlog.md`. Chain review: see T201's log |
+| 2026-11-19 | Open | Set Open now that T201 is done (9afe098). Second cold read (fresh agent, 2026-11-19, against the code at 9afe098): every T201 item exists as named; `OPEN_IN_KEY` written as a `KeyChord` literal; `usize::from(index) + 1` and `open_in_another_text().to_owned()` in `command_text`, imported from `crate::external_text`; the three matches named (`command_text`, `command_enabled`, `run_command`); the new fields `open_focus_cancel` and `open_button` named, added to the initializer and reset when the step leaves `Confirming`; `other_dialog_open()` changed by this task (it does not cover the question today); Open takes the request with `std::mem::take`; `image_gone_text(&image_name(path))`; widget ids are not user-visible texts; tests added for `command_of_key(OPEN_IN_KEY, …)` and for Ctrl+E not in `menu_items()`, and `loupe_key_action` and `delete_key_action` added to the key maps checked; line numbers brought up to date |

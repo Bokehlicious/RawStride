@@ -86,7 +86,7 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status |
 |---|---|---|
-| [T202](T202-open-in-program-menu-key-and-wiring.md) | "Open in {name}": the menu items, Ctrl+E, the question and the start in the shell (ADR 0019 E2, second part) | Blocked: waits for T201 |
+| [T202](T202-open-in-program-menu-key-and-wiring.md) | "Open in {name}": the menu items, Ctrl+E, the question and the start in the shell (ADR 0019 E2, second part) | Open |
 | [T203](T203-show-in-explorer.md) | "Show in File Explorer", and the owner's hand check of E2 and E3 (ADR 0019 E3) | Blocked: waits for T202 |
 
 ## Writing a task (owner and reviewer)
