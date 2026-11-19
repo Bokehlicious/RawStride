@@ -86,7 +86,6 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status |
 |---|---|---|
-| [T199](T199-checksum-notice-names-both-reasons.md) | The notice that no new IIM checksum was written names a reason that holds for both causes (ADR 0007 §8) | Open |
 
 ## Writing a task (owner and reviewer)
 

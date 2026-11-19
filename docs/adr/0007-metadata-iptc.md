@@ -834,7 +834,7 @@ listed under the table (§17.1).
 
 - §6.6 Exif ImageEditor ↔ Contributor: T192.
 - §8 lists with qualifiers not written: T193, T194 (done). The notice that no new checksum was
-  written gives a reason that holds for both causes (§5.2 Q1, §8): T199. The batch's lines for the
+  written gives a reason that holds for both causes (§5.2 Q1, §8): T199 (done). The batch's lines for the
   other images' notices: T198 (done; ADR 0017 U12d-Q10). Editing such a list with its qualifiers kept
   (`docs/tasks/backlog.md`).
 - §6.7 camera GPS → the coordinates of Location Created: T196 (done). Reverse

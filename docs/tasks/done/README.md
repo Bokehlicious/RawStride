@@ -205,3 +205,4 @@ was when the task was done, so "this file", "below" and "the Log" in T1–T115 m
 | [T196](T196-camera-gps-fills-location-created.md) | ADR 0007 §6.7: camera GPS fills the coordinates of Location Created, never written (pw-metadata) |
 | [T197](T197-region-render-on-raf.md) | ADR 0027 W0: the region render on RAF, an X-Trans region processed in a wider box (pw-libraw, C++ shim) |
 | [T198](T198-batch-lines-for-every-notice.md) | ADR 0017 U12d-Q10: the batch names every write notice of the other images, the match over the notices without a `_` arm (pw-loupe) |
+| [T199](T199-checksum-notice-names-both-reasons.md) | ADR 0007 §8: the notice that no new IIM checksum was written gives a reason that holds for an unresolved conflict and a held list with qualifiers (pw-loupe) |

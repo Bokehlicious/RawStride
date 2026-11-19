@@ -3410,7 +3410,7 @@ mod tests {
                 "Could not save metadata for pw-loupe-batch-b.ARW: the file is read-only",
                 "Unresolved conflict kept: pw-loupe-batch-c.DNG (City)",
                 "No new IIM checksum written: pw-loupe-batch-c.DNG",
-                "No new IIM checksum was written, because a conflict is unresolved",
+                "No new IIM checksum was written, because IIM and XMP still differ",
                 "Province or State: the conflict is unresolved and was not written",
             ]
         );
