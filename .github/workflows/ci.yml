@@ -1,0 +1,177 @@
+# Builds RawStride on a clean Windows machine and runs the same check as every commit
+# (.\tools\check.ps1, docs/building.md section 4). test-output.txt is kept as the artifact
+# "test-output".
+#
+# Only GitHub's own actions, each pinned to a full commit SHA with its version in a comment.
+# The Rust version lives only in rust-toolchain.toml, the vcpkg baseline only in vcpkg.json.
+
+name: CI
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: check.ps1 on Windows
+    runs-on: windows-latest
+    timeout-minutes: 120
+    env:
+      # A smaller target folder to cache.
+      CARGO_INCREMENTAL: "0"
+      CARGO_AUDIT_VERSION: "0.23.0"
+      VCPKG_TRIPLET: x64-windows-static-md
+    defaults:
+      run:
+        shell: powershell
+
+    steps:
+      - name: Enable Git long paths
+        run: |
+          git config --global core.longpaths true
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install the Rust toolchain from rust-toolchain.toml
+        run: |
+          rustup toolchain install
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          rustup show
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo --version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Cache the Cargo registry and target
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('rust-toolchain.toml') }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-${{ hashFiles('rust-toolchain.toml') }}-
+
+      - name: Cache cargo-audit
+        id: cargo-audit-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cargo/bin/cargo-audit.exe
+          key: ${{ runner.os }}-cargo-audit-${{ env.CARGO_AUDIT_VERSION }}
+
+      - name: Install cargo-audit
+        if: steps.cargo-audit-cache.outputs.cache-hit != 'true'
+        run: |
+          cargo install cargo-audit --locked --version $env:CARGO_AUDIT_VERSION
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Clone vcpkg at the baseline in vcpkg.json
+        run: |
+          $baseline = (Get-Content -Raw -LiteralPath 'vcpkg.json' | ConvertFrom-Json).'builtin-baseline'
+          if ($baseline -notmatch '^[0-9a-f]{40}$') {
+            Write-Output "vcpkg.json has no valid builtin-baseline: '$baseline'"
+            exit 1
+          }
+          Write-Output "vcpkg baseline: $baseline"
+          # Not the runner's preinstalled vcpkg: a clone outside the checkout, holding the baseline commit.
+          $vcpkgRoot = Join-Path $env:RUNNER_TEMP 'vcpkg'
+          git init --quiet $vcpkgRoot
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          git -C $vcpkgRoot remote add origin https://github.com/microsoft/vcpkg.git
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          git -C $vcpkgRoot fetch --quiet --depth 1 origin $baseline
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          git -C $vcpkgRoot checkout --quiet FETCH_HEAD
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $binaryCache = Join-Path $env:RUNNER_TEMP 'vcpkg-bincache'
+          Add-Content -Path $env:GITHUB_ENV -Value "VCPKG_ROOT=$vcpkgRoot" -Encoding ascii
+          Add-Content -Path $env:GITHUB_ENV -Value "VCPKG_BINARY_CACHE=$binaryCache" -Encoding ascii
+          Add-Content -Path $env:GITHUB_ENV -Value "VCPKG_BINARY_SOURCES=clear;files,$binaryCache,readwrite" -Encoding ascii
+
+      - name: Bootstrap vcpkg
+        run: |
+          & (Join-Path $env:VCPKG_ROOT 'bootstrap-vcpkg.bat') -disableMetrics
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      # vcpkg's package hashes include the compiler version, so a cache found only by vcpkg.json
+      # may hold packages vcpkg no longer uses. The folder is therefore restored by prefix and saved
+      # again after every install under a new key (run_id), with whatever vcpkg added.
+      - name: Restore the vcpkg binary cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}\vcpkg-bincache
+          key: ${{ runner.os }}-vcpkg-${{ env.VCPKG_TRIPLET }}-${{ hashFiles('vcpkg.json') }}-${{ github.run_id }}
+          restore-keys: |
+            ${{ runner.os }}-vcpkg-${{ env.VCPKG_TRIPLET }}-${{ hashFiles('vcpkg.json') }}-
+
+      - name: Install the native libraries with vcpkg
+        run: |
+          New-Item -ItemType Directory -Force -Path $env:VCPKG_BINARY_CACHE | Out-Null
+          # In the repository root, so the libraries land in .\vcpkg_installed (check.ps1, build.rs).
+          & (Join-Path $env:VCPKG_ROOT 'vcpkg.exe') install --triplet $env:VCPKG_TRIPLET
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Save the vcpkg binary cache
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}\vcpkg-bincache
+          key: ${{ runner.os }}-vcpkg-${{ env.VCPKG_TRIPLET }}-${{ hashFiles('vcpkg.json') }}-${{ github.run_id }}
+
+      - name: Install ExifTool
+        env:
+          EXIFTOOL_VERSION: "13.59"
+          # SHA-256 of exiftool-13.59_64.zip. 13.59 is no longer in exiftool.org's checksums.txt;
+          # the value was computed from a hand download of the URL below and checked against the
+          # SHA-1 and MD5 in SourceForge's checksums-13.59.txt (which gives the same SHA-256).
+          EXIFTOOL_SHA256: 44b512b25af500724ba579d0a53c8fc5851628b692dd5e5d94ae4a15c2cba9ec
+        run: |
+          $name = "exiftool-$($env:EXIFTOOL_VERSION)_64"
+          $zip = Join-Path $env:RUNNER_TEMP "$name.zip"
+          # The SourceForge file archive keeps older versions; its /download URL redirects.
+          curl.exe -L --fail --silent --show-error --retry 3 -o $zip "https://sourceforge.net/projects/exiftool/files/$name.zip/download"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $actual = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne $env:EXIFTOOL_SHA256) {
+            Write-Output "SHA-256 mismatch for ${name}.zip: expected $($env:EXIFTOOL_SHA256), got $actual"
+            exit 1
+          }
+          $unpackRoot = Join-Path $env:RUNNER_TEMP 'exiftool'
+          Expand-Archive -LiteralPath $zip -DestinationPath $unpackRoot -Force
+          $exiftoolDir = Join-Path $unpackRoot $name
+          Rename-Item -LiteralPath (Join-Path $exiftoolDir 'exiftool(-k).exe') -NewName 'exiftool.exe'
+          if (-not (Test-Path -LiteralPath (Join-Path $exiftoolDir 'exiftool_files') -PathType Container)) {
+            Write-Output "exiftool_files is missing in $exiftoolDir"
+            exit 1
+          }
+          # Windows PowerShell's >> writes UTF-16, which the runner misreads.
+          Add-Content -Path $env:GITHUB_PATH -Value $exiftoolDir -Encoding ascii
+
+      - name: Show the ExifTool version
+        run: |
+          exiftool -ver
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      # Without -Ignored and without PW_TESTDATA: the tests that need real camera files do not run.
+      - name: Run tools/check.ps1
+        run: .\tools\check.ps1
+
+      - name: Upload test-output.txt
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: test-output
+          path: test-output.txt

@@ -226,3 +226,4 @@ was when the task was done, so "this file", "below" and "the Log" in T1–T115 m
 | [T217](T217-made-up-name-in-the-metadata-test-data.md) | A made-up name in `pw-metadata`'s test data (public-release plan R6) |
 | [T218](T218-rename-the-binary-to-rawstride.md) | The program file renamed from `pw-loupe.exe` to `rawstride.exe` (public-release plan R10) |
 | [T219](T219-private-values-out-of-test-code.md) | Private values out of the test code (public-release plan R7) |
+| [T220](T220-ci-workflow.md) | A CI workflow on GitHub Actions, `.github/workflows/ci.yml` (public-release plan C1) |

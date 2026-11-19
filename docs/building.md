@@ -58,6 +58,9 @@ warnings such as unmaintained crates. Without cargo-audit installed the step is 
 `SKIPPED` and does not fail the check. If PowerShell refuses to
 run the script, run it with `powershell -ExecutionPolicy Bypass -File .\tools\check.ps1`.
 
+The workflow `.github/workflows/ci.yml` runs the same check on GitHub, on a clean Windows machine,
+and keeps `test-output.txt` from the run.
+
 Some tests need more than the source:
 
 - **ExifTool:** the `pw-metadata` tests and a few import tests start ExifTool. Without it they

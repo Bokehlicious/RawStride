@@ -86,7 +86,6 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status |
 |---|---|---|
-| [T220](T220-ci-workflow.md) | A CI workflow on GitHub Actions | Open |
 
 ## Writing a task (owner and reviewer)
 

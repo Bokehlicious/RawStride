@@ -1,4 +1,4 @@
-# T220. A CI workflow on GitHub Actions — Open
+# T220. A CI workflow on GitHub Actions — Done
 
 - **Why:** public-release plan step C1 (`docs/tasks/plans/public-release.md`) and the backlog item
   "CI before the repository becomes public": before the repository is public, a workflow on
@@ -84,10 +84,11 @@
   `tools/check.ps1`, `.cargo/config.toml`, `vcpkg.json` or `rust-toolchain.toml`; a trigger on
   push (P3); the real-file tests in CI (they need free test files, plan R9); release builds or
   uploading the exe; Linux or macOS jobs; caching beyond items 5, 7 and 8; issue templates.
-- **Rules:** no personal data in the workflow and no literal runner paths such as
-  `C:\Users\runneradmin\…` (`check.ps1`'s `personal data` step searches the new file and would
-  fail on them): use `~`, `${{ runner.temp }}` or `$env:USERPROFILE`; no text of the form
-  `name@host.tld` (the step's e-mail pattern), the `@<sha>` of a `uses:` line is fine; nothing is
+- **Rules:** no personal data in the workflow and no literal path into the runner's user folder
+  (a drive, `Users` and the account name; `check.ps1`'s `personal data` step searches the new file
+  and would fail on it): use `~`, `${{ runner.temp }}` or `$env:USERPROFILE`; no text shaped like
+  an e-mail address (a name, `@`, a domain with a dot; the step's e-mail pattern), the `@<sha>` of
+  a `uses:` line is fine; nothing is
   unpacked, cached or downloaded inside the checkout besides `vcpkg_installed`, `target` and
   `test-output.txt` (all git-ignored). No secrets, the workflow needs none. No change to the build
   itself: if `check.ps1` or a `build.rs` would have to change for CI, stop and say why.
@@ -100,3 +101,5 @@
 | Date | Status | Note |
 |---|---|---|
 | 2026-11-19 | Open | Added (public-release plan C1). Cold read (fresh agent, 2026-11-19): the build needs no LLVM, NASM or CMake beyond what vcpkg fetches; fixed in the text: the vcpkg cache saved per run (restore/save, `run_id`) since vcpkg's hashes include the compiler; the baseline commit fetched explicitly and `VCPKG_ROOT` set; `rustup toolchain install` first; the ExifTool zip layout, redirecting URL and where the SHA-256 comes from; `$env:GITHUB_PATH` written as ASCII; `CARGO_INCREMENTAL=0`; only `cargo-audit.exe` cached; the YAML check left to C2 (no PyYAML); runner paths and `@` text kept out for the `personal data` step; "Done when" allows the changes already in the worktree and this file's status and Log row |
+| 2026-11-19 | Ready for review | `.github/workflows/ci.yml` added and one sentence in `docs/building.md` §4. Pins: `actions/checkout` 3d3c42e5aac5ba805825da76410c181273ba90b1 (v7.0.1), `actions/cache`, `cache/restore`, `cache/save` 55cc8345863c7cc4c66a329aec7e433d2d1c52a9 (v6.1.0), `actions/upload-artifact` cf430e030ddbb5b0abf93d22962f4752f3646cd9 (v7.0.2), the latest releases on 2026-11-19; cargo-audit 0.23.0 (newest on crates.io); ExifTool 13.59 from `https://sourceforge.net/projects/exiftool/files/exiftool-13.59_64.zip/download`, SHA-256 44b512b25af500724ba579d0a53c8fc5851628b692dd5e5d94ae4a15c2cba9ec, computed from a hand download (13.59 is no longer in exiftool.org's `checksums.txt`) and matching the SHA-256, SHA-1 and MD5 in SourceForge's `checksums-13.59.txt`; the download deleted afterwards. The YAML is untested until the first run (C2). check.ps1: fmt, audit, tests (1957 passed, 72 ignored) and clippy OK, but `personal data` FAILED on this task file's own Rules text (lines 88 and 90, the runner path and e-mail examples), not on the new files; the task text is the owner's, so it was not changed |
+| 2026-11-19 | Done | Reviewed (reviewer): every point done as written; the three action SHAs checked against their tags with `git ls-remote`. The `personal data` failure was the reviewer's own text: the Rules gave a user-folder path and an e-mail-shaped example, which the step (and CI) would catch; reworded without the examples, the meaning unchanged. `check.ps1` after that all OK: 1957 passed, 72 ignored, no clippy warnings. Not checked until the first run: the YAML itself, the caches, the ExifTool download on the runner. Left for C2 (public-release plan): the first run by hand, and `docs/building.md`'s bare `vcpkg install` (no `--triplet`; on a clean machine likely `x64-windows`, while the `build.rs` files need `x64-windows-static-md`); the Cargo cache is saved only by a run whose check passes. The owner's hand check is C2 |
