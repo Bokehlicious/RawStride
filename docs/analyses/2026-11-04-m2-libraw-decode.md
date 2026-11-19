@@ -10,6 +10,7 @@
   with lcms2, jasper, libjpeg-turbo and zlib (`zs.lib`). Capabilities `0x40`.
 - **Licence:** LibRaw is dual-licensed **LGPL-2.1 or CDDL-1.0**. The choice for distribution is
   postponed (ADR 0002). Static linking under LGPL has relinking obligations; CDDL does not.
+- **Note (2026-11-19, T216):** the `tools\m2-*.cmd` scripts named below were removed; `tools\raw-decode-bench\README.md` shows how to run the same PowerShell scripts.
 - Machine: thanos (i7-9700K, 8 cores without HT, 32 GB). Test files on D: (SATA SSD).
   Warm file cache (each configuration run 3 times; median shown, spread < 2 %).
 - Settings: 8-bit output, camera white balance defaults, `user_qual` 0 = linear, 3 = AHD.

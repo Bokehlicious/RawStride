@@ -1,4 +1,4 @@
-# T216. Remove the one-off `tools/m2-*.cmd` scripts — Open
+# T216. Remove the one-off `tools/m2-*.cmd` scripts — Done
 
 - **Why:** step R5 of `docs/tasks/plans/public-release.md` (owner, 2026-11-19, PR-Q5: remove
   them). The five double-click scripts ran the M2 LibRaw measurements of 2026-11-04 and write their
@@ -57,3 +57,5 @@
 | 2026-11-19 | Blocked | Added (plan step R5, owner 2026-11-19, PR-Q5). Waits for the cold read before Open |
 | 2026-11-19 | Blocked | Cold read (fresh agent, `AGENTS.md`, the README, this file and the named files): doable; every `run-*.ps1` finds the repository root itself; nothing outside the named files depends on the `.cmd` files. Changed after it: the `git grep` of "Rules" narrowed to the five names and the analysis' five existing lines named as expected; `run.ps1`'s prerequisite (`vcpkg install`) said; the source of each "What" said; the scripts' output folder mentioned |
 | 2026-11-19 | Open | Cold read done |
+| 2026-11-19 | Ready for review | Five `.cmd` files removed with `git rm`; README table now lists the five `run*.ps1` with the run command, the output folder and the OpenMP `vcpkg install` block; the two `.ps1` comments point to the README; the analysis has the note after "Licence". The `git grep` finds only `docs/tasks/` (this file, `plans/public-release.md` R5 row) and the analysis' five lines 94, 172, 239, 259, 266 (one lower than before, after the note); the note itself says `m2-*.cmd` and does not match the pattern. check.ps1 all OK: 1957 passed, 72 ignored |
+| 2026-11-19 | Done | Reviewed: the five `.cmd` files removed; the README table lists the five `run*.ps1` with the run command, output folder and the OpenMP `vcpkg install` block (same arguments as `m2-openmp.cmd` line 11, log redirection dropped); the two `.ps1` comments point to the README; the analysis note after "Licence". `git grep` as in "Rules" (the R5 row of `plans/public-release.md` is under `docs/tasks/`). check.ps1 all OK: 1957 passed, 0 failed, 72 ignored; no clippy warnings outside raw-decode-bench |

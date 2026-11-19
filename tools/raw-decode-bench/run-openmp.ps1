@@ -1,5 +1,5 @@
 # M2, step 3: baseline LibRaw vs LibRaw with OpenMP, same files, same machine state, interleaved.
-# Prerequisite (done by tools\m2-openmp.cmd): vcpkg_installed_openmp\ with libraw[openmp].
+# Prerequisite (see tools\raw-decode-bench\README.md): vcpkg_installed_openmp\ with libraw[openmp].
 # The baseline vcpkg_installed\ and target\ are not changed. Undo: delete vcpkg_installed_openmp\
 # and target-openmp\ (docs/libraw-build.md).
 $ErrorActionPreference = 'Stop'

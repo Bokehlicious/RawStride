@@ -36,9 +36,25 @@ small C shim (`csrc/shim.c`).
   own LibRaw instance (own unpack) at the same time.
 - **`parallel --config half_size`:** background half-size decoding with 1–4 decoders.
 
-| Script (double-click) | What |
+Each script is run from the repository root as
+`powershell -NoProfile -ExecutionPolicy Bypass -File tools\raw-decode-bench\<script>.ps1`. The
+scripts write their results under the owner's data folder (`D:\PhotoWorkflowData\analysis\`, as
+their own comments say), not into the repository.
+
+| Script | What |
 |---|---|
-| `tools\m2-tiles.cmd` | `tiles`, `ptiles`, parallel half-size with the baseline LibRaw. Installs nothing. |
-| `tools\m2-openmp.cmd` | Installs `libraw[openmp]` into the separate `vcpkg_installed_openmp\`, builds the bench twice (baseline into `target\`, OpenMP into `target-openmp\`) and runs the full suite for both, interleaved. |
+| `run.ps1` | The M2 LibRaw decode measurements (`single` and `parallel`). Needs the normal `vcpkg install --triplet x64-windows-static-md` of `docs/building.md` first. |
+| `run-tiles.ps1` | `tiles`, `ptiles`, parallel half-size with the baseline LibRaw. Installs nothing. |
+| `run-openmp.ps1` | Builds the bench twice (baseline into `target\`, OpenMP into `target-openmp\`) and runs the full suite for both, interleaved. Needs `libraw[openmp]` in the separate `vcpkg_installed_openmp\` (below). |
+| `run-verify.ps1` | Pixel check: do the baseline and the OpenMP LibRaw give identical pixels, and which tile overlap makes a tile identical to the same pixels of a full decode? |
+| `run-crops.ps1` | Which crop origins and margins reproduce the full decode exactly, with the OpenMP build. |
+
+`run-openmp.ps1`, `run-verify.ps1` and `run-crops.ps1` need the OpenMP variant of LibRaw, installed
+once from the repository root into the separate `vcpkg_installed_openmp\` (the baseline
+`vcpkg_installed\` is not touched); `docs/libraw-build.md` says how to undo it:
+
+```powershell
+& "$env:VCPKG_ROOT\vcpkg.exe" install --triplet x64-windows-static-md --x-manifest-root=tools\raw-decode-bench\openmp --x-install-root=vcpkg_installed_openmp
+```
 
 The LibRaw configuration, and how to undo the OpenMP variant, is in `docs/libraw-build.md`.

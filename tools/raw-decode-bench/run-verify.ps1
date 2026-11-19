@@ -1,6 +1,6 @@
 # Pixel check before the RAW pipeline: (1) do the baseline and the OpenMP LibRaw produce identical
 # pixels, and (2) which tile overlap makes a tile identical to the same pixels of a full decode?
-# Needs vcpkg_installed_openmp\ (tools\m2-openmp.cmd). Results: D:\PhotoWorkflowData\analysis\raw-verify-<ts>\
+# Needs vcpkg_installed_openmp\ (see tools\raw-decode-bench\README.md). Results: D:\PhotoWorkflowData\analysis\raw-verify-<ts>\
 $ErrorActionPreference = 'Stop'
 $repo = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 $raw = 'D:\PhotoWorkflowData\RAW'
