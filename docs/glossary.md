@@ -7,7 +7,7 @@
   interface's base language (GUI_REQUIREMENTS GR14); Swedish texts are translated with these terms.
 - Kept up to date: a task that adds a UI term not listed here adds it to this file
   (`docs/tasks/README.md`, rule 13).
-- Source: every string literal in the non-test code of `crates/pw-loupe/src/` (commit `241263c`),
+- Source: every string literal in the non-test code of `crates/pw-loupe/src/` (commit `76f99f2`),
   about 300 user-visible texts; IPTC names from `pw-metadata`'s property table, checked against
   IPTC Photo Metadata Standard 2025.1 (`D:\PhotoWorkflowData\references\`).
 

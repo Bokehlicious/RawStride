@@ -67,7 +67,7 @@
 
 | Date | Status | Note |
 |---|---|---|
-| 2026-11-19 | Blocked | Added (plan step R11, owner 2026-11-19). The two patterns tried by the reviewer on the tree at `19632bb`: no user-folder path, and every e-mail address at `example.com`, `example.org` or `b.se`. Waits for the cold read before Open |
+| 2026-11-19 | Blocked | Added (plan step R11, owner 2026-11-19). The two patterns tried by the reviewer on the tree at `2b69bd7`: no user-folder path, and every e-mail address at `example.com`, `example.org` or `b.se`. Waits for the cold read before Open |
 | 2026-11-19 | Blocked | Cold read (fresh agent, `AGENTS.md`, the README, this file and the named files; it ran the patterns): this file's own probe lines matched all three patterns, so result 1 would have failed. Changed after it: the probe lines are built in PowerShell from pieces and never written into a document; the domain match said exactly; single quotes and an argument array for the patterns; `--untracked` keeps the excludes said; how to run the step said; `docs/building.md` lines 51–52 added (it lists the steps too) |
 | 2026-11-19 | Open | Cold read done |
 | 2026-11-19 | Ready for review | Step `personal data` in `check.ps1` after fmt (git grep `--untracked -n -I -i -z -E`, one run per pattern; `-z` so path, line and text split on NUL; e-mail lines dropped only when every address on the line is at an allowed domain); the three lists in `AGENTS.md` §5, `README.md` and `docs/building.md`. Hand results 2 and 3 with the step's own lines taken unchanged from `check.ps1` by a scratchpad harness; results 1 and 4 with the whole `check.ps1`. Extra probe: a line with an allowed and a disallowed address fails |

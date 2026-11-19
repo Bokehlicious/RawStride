@@ -76,7 +76,7 @@
     origin `Origin::Exif`, no conflict and no notice (ADR 0007 §6.4, Q2 as changed on
     2026-11-18). It passes on today's code too; it records the rule, not a new behaviour.
 - **Not in this task:** the ADRs and other documents (the reviewer changed them in commit
-  `b2b21ef`); any change to how a field is cleared or written (`edit.rs`, `write_plan.rs`); the
+  `e05718a`); any change to how a field is cleared or written (`edit.rs`, `write_plan.rs`); the
   word "cleared" elsewhere in the code (for example the import's cleared fields, D14), which has
   nothing to do with `Cleared`.
 - **Rules:** `docs/tasks/README.md`; no change in behaviour beyond removing the unused path; no

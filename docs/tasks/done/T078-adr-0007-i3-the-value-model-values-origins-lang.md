@@ -1,6 +1,6 @@
 # T78. ADR 0007 I3: the value model — values, origins, Lang Alt, changes — Done
 
-- **Can start now.** T76 and T77 are accepted and committed (4e7df84); this task uses the property
+- **Can start now.** T76 and T77 are accepted and committed (8468fff); this task uses the property
   table and `IptcDate`. Independent of T79.
 - **Crates:** `pw-metadata` only. Nothing uses the model yet; `LocalizedValue` and `Iptc` stay as
   they are (they move to the new model in I9).

@@ -973,7 +973,7 @@ approved for the app. The open questions in 15.4 must be answered first, and the
 
 ### 15.1 What P6b did
 
-- **Prototype:** `prototypes/phase3/p6b-gpu-ppg`, commit `a44643a`. It is not part of the app and
+- **Prototype:** `prototypes/phase3/p6b-gpu-ppg`, commit `11d6f30`. It is not part of the app and
   adds no new dependencies.
 - **Raw data:** `D:\PhotoWorkflowData\analysis\phase3\p6b\`:
   - `p6b-bench.json`;
@@ -1256,7 +1256,7 @@ presenter (B2-res), which has since been superseded by the eframe + egui GUI (se
 
 ### 17.1 What P6c did
 
-- **Prototype:** `prototypes/phase3/p6c-gpu-memory`, commit `40903c0`. Built on P6b, with no new
+- **Prototype:** `prototypes/phase3/p6c-gpu-memory`, commit `43ca601`. Built on P6b, with no new
   dependencies.
 - **Raw data:** `D:\PhotoWorkflowData\analysis\phase3\p6c\`. Results:
   `claude/phase3-p6c-results.md` (project).
@@ -1392,7 +1392,7 @@ Unchanged: PPG/AHD (section 11), strategy p5 (section 12), V1–V8 and G1–G4.
 
 ### 18.2 What P7 did
 
-- **Prototype:** `prototypes/gui/p7-egui-presenter`, commit `1dff27c`.
+- **Prototype:** `prototypes/gui/p7-egui-presenter`, commit `c691a80`.
   - eframe/egui 0.37.0 as approved (GUI_REQUIREMENTS.md §6), with both renderers built in.
   - No other new dependencies.
 - **Raw data:** `D:\PhotoWorkflowData\analysis\gui\p7\`. Results: `claude/gui-p7-results.md`

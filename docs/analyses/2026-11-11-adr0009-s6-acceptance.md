@@ -9,7 +9,7 @@
   decision.
 - Build: a release build (`cargo build --release --workspace`, `target\release\pw-loupe.exe`). The
   S6a notes do not record the commit or a binary SHA-256. The last commit before the runs was
-  `f884ed5` (13:40); the runs were made 14:33–15:01 [T: the build is of that commit].
+  `4a0d677` (13:40); the runs were made 14:33–15:01 [T: the build is of that commit].
 - Machine and conditions: thanos (i7-9700K, 32 GB, Arc B580, Windows 11); the number of screens
   connected is not recorded in S6a; window maximised on the main screen; the monitor profile of the
   CX240 was active (the window title of every `s6-` row ends in "Skärmprofil: CX240(…)08CAL

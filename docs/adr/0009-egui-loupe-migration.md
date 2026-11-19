@@ -18,7 +18,7 @@
   - [requirements-image-viewer.md](../requirements-image-viewer.md) (V1–V8, G1–G4), which is
     unchanged;
   - [TESTING.md](../TESTING.md) and AGENTS.md.
-- Basis: P7 (`prototypes/gui/p7-egui-presenter`, commit `1dff27c`); phase 1 (P0, P4, P5).
+- Basis: P7 (`prototypes/gui/p7-egui-presenter`, commit `c691a80`); phase 1 (P0, P4, P5).
 
 ## 0. How claims are marked
 
