@@ -110,7 +110,9 @@ Some programs keep their edits outside the image's folder, in a session subfolde
 database of their own. A session subfolder can be described by the same patterns (a relative
 subfolder); a database cannot, and such a program only gets the export rule. Capture One is not
 part of the first steps (P-Q9): it is tested with the owner's files first, and added by an
-amendment.
+amendment. Known in advance: since such edits do not lie beside the image, a rename or move in
+RawStride breaks the editing program's own link to the image, so images are renamed and moved
+before they are edited; a session works better than a database for this.
 
 ## 3. What this costs [estimate, 2026-11-19, unmeasured]
 
