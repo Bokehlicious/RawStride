@@ -86,11 +86,13 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status |
 |---|---|---|
+| [T216](T216-remove-the-m2-scripts.md) | Remove the one-off `tools/m2-*.cmd` scripts | Open |
+| [T217](T217-made-up-name-in-the-metadata-test-data.md) | A made-up name in `pw-metadata`'s test data | Open |
 
 ## Writing a task (owner and reviewer)
 
-- **Number:** the next free number after the highest in this folder and `done/` (T216 next).
-- **File:** `docs/tasks/T216-<a-few-words>.md`; three digits, lower case, words joined by `-`.
+- **Number:** the next free number after the highest in this folder and `done/` (T218 next).
+- **File:** `docs/tasks/T218-<a-few-words>.md`; three digits, lower case, words joined by `-`.
 - **Index:** add a row to "Open tasks" above and keep its status in step with the file's heading.
 - **Size (owner, 2026-11-15, after T142):** one task is one layer (a C++ shim or a core crate, or
   the shell in `pw-loupe`), about eight files at most, and gives one result the owner can check by
