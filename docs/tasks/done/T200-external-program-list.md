@@ -1,4 +1,4 @@
-# T200. The list of external programs and its Settings section (ADR 0019 E1) — Open
+# T200. The list of external programs and its Settings section (ADR 0019 E1) — Done
 
 - **Why:** ADR 0019 (accepted by the owner on 2026-11-17, moved forward as order 1c on 2026-11-19
   in `plans/adr-0018-0025-steps.md`) lets the user open the chosen images in another program with
@@ -134,3 +134,5 @@
 | Date | Status | Note |
 |---|---|---|
 | 2026-11-19 | Open | Added (ADR 0019 E1, order 1c). Cold read (fresh agent, 2026-11-19): `lib.rs` added to the files (the private modules' re-exports, and `main.rs`'s `use` list); the `Settings` literal without `..` in `every_shell_key_round_trips_through_save_and_load` may get `..Settings::default()`; the problems' wording given in full, the bad-value check before the count, the limit on saving applied after leaving out unreadable programs; the window given a fixed width, rows in `push_id`, the disabled Add… tooltip with `on_disabled_hover_text`, clicks applied after the row loop |
+| 2026-11-19 | Ready for review | Task agent: points 1–8 and the tests done in the named files (`settings.rs`, `shell_text.rs`, `lib.rs`, `main.rs`, `docs/glossary.md`, `docs/test-inventory.md`); 8 tests added (7 in `settings.rs`, 1 in `shell_text.rs`); `save_settings_window` unchanged (it keeps `external_programs` through `..chosen`); `.\tools\check.ps1` all OK, 1940 passed, 76 ignored, 0 failed, no clippy warning. Glossary §6: External Programs, Add…, Move Up, No programs added., Choose a Program, Programs, At most {n} programs. The window's width is 440 points (`SETTINGS_WINDOW_WIDTH` in `draw_settings_window`) |
+| 2026-11-19 | Done | Review (reviewer, 2026-11-19): every point 1–8 and every test of the task checked against the diff; reading checks the value before the count, saving leaves out a program that would not be read back and then keeps five, `tidied_programs` as point 4, the window's clicks applied after the row loop with checked indices, no user-visible literal in `draw_settings_window`; the implementation agrees with ADR 0019 §2.1. `.\tools\check.ps1` run again by the reviewer: all OK, 1940 passed, 76 ignored, 0 failed, no clippy warning. No independent code review (one crate, no safe write, no C++ shim). Nothing left over. The owner's hand check comes after E2 and E3 (ADR 0019 §4) |

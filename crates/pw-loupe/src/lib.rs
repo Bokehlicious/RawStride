@@ -130,8 +130,9 @@ pub use rating_text::{
 pub use ratings::{RatingKey, RatingRefused, RatingStore, RatingWriter, apply, rating_key_action};
 pub use selection::Selection;
 pub use settings::{
-    SavedLibrary, Settings, ShellSettings, WindowRect, load_settings, load_settings_and_library,
-    save_settings, save_settings_with_library, settings_path,
+    ExternalProgram, MAX_EXTERNAL_PROGRAMS, SavedLibrary, Settings, ShellSettings, WindowRect,
+    load_settings, load_settings_and_library, save_settings, save_settings_with_library,
+    settings_path, tidied_programs,
 };
 pub use shell::{
     COLLAPSED_WIDTH, ColumnState, Command, HIDE_KEY, KeyChord, MENUS, Menu, MenuEntry, MenuItem,
@@ -141,11 +142,11 @@ pub use shell::{
     rect_on_a_screen, start_window, text_pairs, visuals,
 };
 pub use shell_text::{
-    SettingsText, ShellText, command_text, exiftool_message, fallback_text, key_text, menu_text,
-    no_images_text, open_error_text, path_resolution_error_text, prune_error_text, recovery_text,
-    settings_save_error_text, settings_text, shell_text, sort_button_text, sort_direction_hover,
-    sort_direction_text, sort_key_text, sorting_text, status_line_text, submenu_text, theme_text,
-    window_title,
+    SettingsText, ShellText, command_text, exiftool_message, external_program_limit_text,
+    fallback_text, key_text, menu_text, no_images_text, open_error_text,
+    path_resolution_error_text, prune_error_text, recovery_text, settings_save_error_text,
+    settings_text, shell_text, sort_button_text, sort_direction_hover, sort_direction_text,
+    sort_key_text, sorting_text, status_line_text, submenu_text, theme_text, window_title,
 };
 pub use sort::{
     CaptureRead, CaptureReader, CaptureTime, CaptureTimes, SORT_KEYS, SortKey, SortOrder, SortPlan,

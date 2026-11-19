@@ -243,6 +243,20 @@ pub enum SettingsText {
     Cancel,
     /// The reason the file could not be saved when there is no settings folder (no LOCALAPPDATA).
     NoFolder,
+    /// The heading of the section with the list of external programs (ADR 0019 E-Q2, T200).
+    ExternalPrograms,
+    /// The button under the list that chooses a program to add.
+    AddProgram,
+    /// The button of a row that moves the program one place up.
+    MoveUp,
+    /// The button of a row that takes the program away from the list.
+    RemoveProgram,
+    /// The line shown in place of the rows when the list is empty.
+    NoPrograms,
+    /// The title of the file dialog that chooses a program.
+    ChooseProgram,
+    /// The name of the file dialog's filter for `.exe` files.
+    ProgramsFilter,
 }
 
 /// The text of `text` in the settings window.
@@ -257,6 +271,23 @@ pub fn settings_text(text: SettingsText) -> &'static str {
         SettingsText::Save => "Save",
         SettingsText::Cancel => "Cancel",
         SettingsText::NoFolder => "the settings folder is unknown (LOCALAPPDATA is missing)",
+        SettingsText::ExternalPrograms => "External Programs",
+        SettingsText::AddProgram => "Add…",
+        SettingsText::MoveUp => "Move Up",
+        SettingsText::RemoveProgram => "Remove",
+        SettingsText::NoPrograms => "No programs added.",
+        SettingsText::ChooseProgram => "Choose a Program",
+        SettingsText::ProgramsFilter => "Programs",
+    }
+}
+
+/// The tooltip of the disabled "Add…" button when the list of external programs is full
+/// (ADR 0019 E-Q1, T200).
+pub fn external_program_limit_text(n: usize) -> String {
+    if n == 1 {
+        "At most 1 program".to_string()
+    } else {
+        format!("At most {n} programs")
     }
 }
 
@@ -759,6 +790,24 @@ mod tests {
             settings_save_error_text("åtkomst nekad"),
             "The settings could not be saved: åtkomst nekad"
         );
+    }
+
+    #[test]
+    fn the_external_programs_section_has_the_texts_of_t200() {
+        let texts = [
+            (SettingsText::ExternalPrograms, "External Programs"),
+            (SettingsText::AddProgram, "Add…"),
+            (SettingsText::MoveUp, "Move Up"),
+            (SettingsText::RemoveProgram, "Remove"),
+            (SettingsText::NoPrograms, "No programs added."),
+            (SettingsText::ChooseProgram, "Choose a Program"),
+            (SettingsText::ProgramsFilter, "Programs"),
+        ];
+        for (text, expected) in texts {
+            assert_eq!(settings_text(text), expected, "{text:?}");
+        }
+        assert_eq!(external_program_limit_text(1), "At most 1 program");
+        assert_eq!(external_program_limit_text(5), "At most 5 programs");
     }
 
     #[test]

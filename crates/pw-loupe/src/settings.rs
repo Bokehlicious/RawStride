@@ -96,6 +96,9 @@ const SORT_DESCENDING: &str = "sort_descending";
 /// (T135, U4-Q3, U4-Q4).
 const FAVOURITE: &str = "favourite";
 const RECENT: &str = "recent";
+/// The key of an external program, `<name> | <path>`: one line per program, in the list's order
+/// (ADR 0019 §2.1, E-Q1, T200).
+const EXTERNAL_PROGRAM: &str = "external_program";
 /// The values of [`FILMSTRIP`] and [`FILMSTRIP_MARKED`].
 const SHOWN: &str = "shown";
 const HIDDEN: &str = "hidden";
@@ -111,6 +114,9 @@ pub struct Settings {
     pub fallback: Fallback,
     /// The main window's remembered state (ADR 0017 §2.5, T109).
     pub shell: ShellSettings,
+    /// The external programs in the list's order, the first the default program; at most
+    /// [`MAX_EXTERNAL_PROGRAMS`] (ADR 0019 §2.1, E-Q1, T200).
+    pub external_programs: Vec<ExternalProgram>,
 }
 
 impl Default for Settings {
@@ -119,8 +125,20 @@ impl Default for Settings {
             create_iim: false,
             fallback: Fallback::Windows1252,
             shell: ShellSettings::default(),
+            external_programs: Vec::new(),
         }
     }
+}
+
+/// The most external programs the list holds (ADR 0019 §2.1, E-Q1).
+pub const MAX_EXTERNAL_PROGRAMS: usize = 5;
+
+/// A program the chosen images can be opened in: the name shown to the user and the path to its
+/// `.exe`, which need not exist (ADR 0019 §2.1, E-Q9, T200).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ExternalProgram {
+    pub name: String,
+    pub path: PathBuf,
 }
 
 /// The window's last normal (not maximized, not full screen) place: the outer position and the
@@ -506,6 +524,23 @@ pub fn load_settings_and_library(path: &Path) -> (Settings, SavedLibrary, Vec<St
                     path.display()
                 )),
             },
+            // The value is checked before the count, so a bad line is reported as bad wherever
+            // it is (T200).
+            EXTERNAL_PROGRAM => match parse_external_program(value) {
+                Some(_) if settings.external_programs.len() >= MAX_EXTERNAL_PROGRAMS => {
+                    problems.push(format!(
+                        "settings file {}, line {number}: more than {MAX_EXTERNAL_PROGRAMS} \
+                         external programs, line ignored",
+                        path.display()
+                    ));
+                }
+                Some(program) => settings.external_programs.push(program),
+                None => problems.push(format!(
+                    "settings file {}, line {number}: bad value \"{value}\" for {key} (expected \
+                     a name, '|' and a full path to a program), line ignored",
+                    path.display()
+                )),
+            },
             _ => problems.push(format!(
                 "settings file {}, line {number}: unknown key \"{key}\", line ignored",
                 path.display()
@@ -548,6 +583,7 @@ pub fn save_settings_with_library(
         fallback_value(settings.fallback)
     );
     text.push_str(&shell_lines(&settings.shell));
+    text.push_str(&external_program_lines(&settings.external_programs));
     text.push_str(&library_lines(library));
     let written = write_synced(&temp, text.as_bytes()).and_then(|()| std::fs::rename(&temp, path));
     if written.is_err() {
@@ -688,6 +724,76 @@ fn library_lines(library: &SavedLibrary) -> String {
     text
 }
 
+/// The `external_program` lines in the list's order (T200): a program that
+/// [`parse_external_program`] would not give back as it is, is left out; of those left, the first
+/// [`MAX_EXTERNAL_PROGRAMS`] are written.
+fn external_program_lines(programs: &[ExternalProgram]) -> String {
+    let mut text = String::new();
+    for (name, path) in programs
+        .iter()
+        .filter_map(|program| {
+            let path = program.path.to_str()?;
+            let line_value = format!("{} | {path}", program.name);
+            (parse_external_program(&line_value).as_ref() == Some(program))
+                .then_some((&program.name, path))
+        })
+        .take(MAX_EXTERNAL_PROGRAMS)
+    {
+        text.push_str(&format!("{EXTERNAL_PROGRAM} = {name} | {path}\n"));
+    }
+    text
+}
+
+/// The program of an `external_program` line, `<name> | <path>` (T200): exactly one `|`, the
+/// name and the path each trimmed; the name not empty, the path a full path without a line break
+/// ([`parse_folder`]). The file need not exist.
+fn parse_external_program(value: &str) -> Option<ExternalProgram> {
+    let (name, path) = value.split_once('|')?;
+    if path.contains('|') {
+        return None;
+    }
+    let (name, path) = (name.trim(), path.trim());
+    if name.is_empty() || name.contains(['\n', '\r']) {
+        return None;
+    }
+    Some(ExternalProgram {
+        name: name.to_string(),
+        path: parse_folder(path)?,
+    })
+}
+
+/// The list the Settings window saves (T200): each name without `|` and line breaks and trimmed;
+/// an empty name becomes the file name of its path without the extension, and a program with no
+/// such name either is dropped; at most [`MAX_EXTERNAL_PROGRAMS`] are kept. The paths are not
+/// changed.
+pub fn tidied_programs(programs: &[ExternalProgram]) -> Vec<ExternalProgram> {
+    let cleaned = |name: &str| {
+        name.chars()
+            .filter(|c| !matches!(c, '|' | '\n' | '\r'))
+            .collect::<String>()
+            .trim()
+            .to_string()
+    };
+    programs
+        .iter()
+        .filter_map(|program| {
+            let mut name = cleaned(&program.name);
+            if name.is_empty() {
+                name = program
+                    .path
+                    .file_stem()
+                    .map(|stem| cleaned(&stem.to_string_lossy()))
+                    .unwrap_or_default();
+            }
+            (!name.is_empty()).then(|| ExternalProgram {
+                name,
+                path: program.path.clone(),
+            })
+        })
+        .take(MAX_EXTERNAL_PROGRAMS)
+        .collect()
+}
+
 /// The folder of a `favourite` or `recent` line: a full path without a line break or spaces at
 /// either end (they would be lost when the line is read).
 fn parse_folder(value: &str) -> Option<PathBuf> {
@@ -804,8 +910,9 @@ mod tests {
     use pw_metadata::write_plan::WriteSettings;
 
     use super::{
-        SavedLibrary, Settings, ShellSettings, WindowRect, load_settings,
-        load_settings_and_library, save_settings, save_settings_with_library, settings_path,
+        ExternalProgram, MAX_EXTERNAL_PROGRAMS, SavedLibrary, Settings, ShellSettings, WindowRect,
+        load_settings, load_settings_and_library, save_settings, save_settings_with_library,
+        settings_path, tidied_programs,
     };
     use crate::editor::EditorSection;
     use crate::shell::{ColumnState, Theme};
@@ -1195,6 +1302,7 @@ mod tests {
                 create_iim: true,
                 fallback: Fallback::Latin1,
                 shell,
+                ..Settings::default()
             };
             save_settings(&path, &settings).unwrap();
             let (loaded, problems) = load_settings(&path);
@@ -2330,5 +2438,181 @@ mod tests {
             );
             assert!(settings.shell.move_to_subfolders, "{value:?}");
         }
+    }
+
+    // --- The external programs (ADR 0019 E1, E-Q1, E-Q2, T200) ---
+
+    /// A program with this name and `path`.
+    fn program(name: &str, path: &str) -> ExternalProgram {
+        ExternalProgram {
+            name: name.to_string(),
+            path: PathBuf::from(path),
+        }
+    }
+
+    /// Five programs with spaces inside their names and paths.
+    fn five_programs() -> Vec<ExternalProgram> {
+        vec![
+            program(
+                "Capture One",
+                r"C:\Program Files\Capture One\CaptureOne.exe",
+            ),
+            program(
+                "Photo Editor 2",
+                r"C:\Program Files\Photo Editor\editor.exe",
+            ),
+            program("Raw Developer", r"D:\Apps\Raw Developer 8\RawDeveloper.exe"),
+            program("Viewer", r"C:\Tools\viewer.exe"),
+            program("Last one", r"E:\Portable apps\last one.exe"),
+        ]
+    }
+
+    #[test]
+    fn the_external_programs_are_empty_by_default_and_without_lines() {
+        assert!(Settings::default().external_programs.is_empty());
+        let (_dir, path) = TempDir::with_file("# RawStride\ncreate_iim = true\n");
+        let (settings, problems) = load_settings(&path);
+        assert!(problems.is_empty(), "{problems:?}");
+        assert!(settings.external_programs.is_empty());
+    }
+
+    #[test]
+    fn one_and_five_external_programs_round_trip_in_their_order() {
+        let dir = TempDir::new();
+        let path = dir.0.join("settings.txt");
+        for programs in [five_programs()[..1].to_vec(), five_programs()] {
+            let settings = Settings {
+                external_programs: programs.clone(),
+                ..Settings::default()
+            };
+            save_settings(&path, &settings).unwrap();
+            let (loaded, problems) = load_settings(&path);
+            assert!(problems.is_empty(), "{problems:?}");
+            assert_eq!(loaded.external_programs, programs);
+            assert_eq!(loaded, settings);
+        }
+    }
+
+    #[test]
+    fn the_external_program_line_is_after_the_shell_lines_and_before_the_library() {
+        let dir = TempDir::new();
+        let path = dir.0.join("settings.txt");
+        let settings = Settings {
+            external_programs: five_programs()[..1].to_vec(),
+            ..Settings::default()
+        };
+        let library = SavedLibrary {
+            favourites: vec![full("Favourite")],
+            recent: Vec::new(),
+        };
+        save_settings_with_library(&path, &settings, &library).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        let expected = format!(
+            "companion_suffixes = dop, pp3, on1\n\
+             external_program = Capture One | C:\\Program Files\\Capture One\\CaptureOne.exe\n\
+             favourite = {}\n",
+            full("Favourite").display()
+        );
+        assert!(text.ends_with(&expected), "{text}");
+    }
+
+    #[test]
+    fn a_bad_external_program_line_gives_one_problem_and_a_good_line_after_it_is_read() {
+        for bad in [
+            "Capture One C:\\CaptureOne.exe",
+            "Capture | One | C:\\CaptureOne.exe",
+            " | C:\\CaptureOne.exe",
+            "Capture One |",
+            "Capture One | Programs\\CaptureOne.exe",
+        ] {
+            let (_dir, path) = TempDir::with_file(&format!(
+                "# RawStride\nexternal_program = {bad}\n\
+                 external_program = Viewer | C:\\Tools\\viewer.exe\n"
+            ));
+            let (settings, problems) = load_settings(&path);
+            assert_one_problem_on_line(&problems, 2);
+            assert!(
+                problems[0].contains(
+                    "for external_program (expected a name, '|' and a full path to a program), \
+                     line ignored"
+                ),
+                "{bad:?}: {problems:?}"
+            );
+            assert_eq!(
+                settings.external_programs,
+                vec![program("Viewer", r"C:\Tools\viewer.exe")],
+                "{bad:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_sixth_external_program_gives_one_problem_and_the_first_five_are_kept() {
+        let mut text = String::from("# RawStride\n");
+        for program in five_programs() {
+            text.push_str(&format!(
+                "external_program = {} | {}\n",
+                program.name,
+                program.path.display()
+            ));
+        }
+        text.push_str("external_program = Sixth | C:\\Tools\\sixth.exe\n");
+        let (_dir, path) = TempDir::with_file(&text);
+        let (settings, problems) = load_settings(&path);
+        assert_one_problem_on_line(&problems, 7);
+        assert!(
+            problems[0].contains("more than 5 external programs, line ignored"),
+            "{problems:?}"
+        );
+        assert_eq!(settings.external_programs, five_programs());
+    }
+
+    #[test]
+    fn an_external_program_that_could_not_be_read_back_is_left_out_when_saving() {
+        let dir = TempDir::new();
+        let path = dir.0.join("settings.txt");
+        let kept = program("Kept", r"C:\Tools\kept.exe");
+        let also_kept = program("Also kept", r"C:\Tools\also kept.exe");
+        let settings = Settings {
+            external_programs: vec![
+                program("A | B", r"C:\Tools\ab.exe"),
+                kept.clone(),
+                program("Trailing ", r"C:\Tools\trailing.exe"),
+                also_kept.clone(),
+            ],
+            ..Settings::default()
+        };
+        save_settings(&path, &settings).unwrap();
+        let (loaded, problems) = load_settings(&path);
+        assert!(problems.is_empty(), "{problems:?}");
+        assert_eq!(loaded.external_programs, vec![kept, also_kept]);
+    }
+
+    #[test]
+    fn tidied_programs_clean_the_names_and_keep_at_most_five() {
+        let tidied = tidied_programs(&[
+            program(
+                "  Capture | One  ",
+                r"C:\Program Files\Capture One\CaptureOne.exe",
+            ),
+            program(" | ", r"C:\Tools\My Viewer.exe"),
+            program("", r"C:\"),
+        ]);
+        assert_eq!(
+            tidied,
+            vec![
+                program(
+                    "Capture  One",
+                    r"C:\Program Files\Capture One\CaptureOne.exe"
+                ),
+                program("My Viewer", r"C:\Tools\My Viewer.exe"),
+            ]
+        );
+        let seven: Vec<ExternalProgram> = (1..=7)
+            .map(|n| program(&format!("Program {n}"), &format!(r"C:\Tools\p{n}.exe")))
+            .collect();
+        let tidied = tidied_programs(&seven);
+        assert_eq!(tidied.len(), MAX_EXTERNAL_PROGRAMS);
+        assert_eq!(tidied, seven[..5].to_vec());
     }
 }

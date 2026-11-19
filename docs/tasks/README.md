@@ -86,7 +86,6 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status |
 |---|---|---|
-| [T200](T200-external-program-list.md) | The list of external programs and its Settings section (ADR 0019 E1) | Open |
 
 ## Writing a task (owner and reviewer)
 

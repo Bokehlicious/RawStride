@@ -53,13 +53,14 @@ use pw_loupe::{
     target_folder, undo_failed_text, undone_text, worker_stopped_text,
 };
 use pw_loupe::{
-    COLLAPSED_WIDTH, ColumnState, Command, MENUS, MenuEntry, MenuItem, RatingKey, STATUS_TEXT_SIZE,
-    SettingsText, ShellAction, ShellSettings, ShellText, StartWindow, THEMES, Theme, Where,
-    WindowRect, apply_text_sizes, clamp_column_width, column_width_range, command_text,
-    exiftool_message, fallback_text, font_definitions, image_area, key_text, menu_text,
-    no_images_text, open_error_text, palette, path_resolution_error_text, prune_error_text,
-    recovery_text, rect_on_a_screen, settings_save_error_text, settings_text, shell_key_action,
-    shell_text, start_window, status_line_text, submenu_text, theme_text, visuals,
+    COLLAPSED_WIDTH, ColumnState, Command, ExternalProgram, MAX_EXTERNAL_PROGRAMS, MENUS,
+    MenuEntry, MenuItem, RatingKey, STATUS_TEXT_SIZE, SettingsText, ShellAction, ShellSettings,
+    ShellText, StartWindow, THEMES, Theme, Where, WindowRect, apply_text_sizes, clamp_column_width,
+    column_width_range, command_text, exiftool_message, external_program_limit_text, fallback_text,
+    font_definitions, image_area, key_text, menu_text, no_images_text, open_error_text, palette,
+    path_resolution_error_text, prune_error_text, recovery_text, rect_on_a_screen,
+    settings_save_error_text, settings_text, shell_key_action, shell_text, start_window,
+    status_line_text, submenu_text, theme_text, tidied_programs, visuals,
 };
 use pw_loupe::{
     CaptureReader, SORT_KEYS, SortFollow, SortKey, SortOrder, modified_time, read_order,
@@ -934,16 +935,25 @@ impl Loupe {
 
     /// The settings window "Inställningar" (ADR 0007 §5.2, §5.4/Q10, T106). Every text comes
     /// from `settings_text` or `fallback_text` (`shell_text.rs`); an encoding is chosen by its
-    /// value (T116).
+    /// value (T116). The section "External Programs" edits the list of programs (ADR 0019 E-Q2,
+    /// T200); like the other choices it is applied and saved only by "Save".
     fn draw_settings_window(&mut self, ctx: &egui::Context) {
+        /// The window's fixed width in points, so a long program path wraps (T200).
+        const SETTINGS_WINDOW_WIDTH: f32 = 440.0;
         let Some(mut chosen) = self.settings_window.clone() else {
             return;
         };
         let mut save = false;
         let mut cancel = false;
+        // The clicks of the program rows and of "Add…", applied after the rows are drawn.
+        let mut move_up = None;
+        let mut remove = None;
+        let mut add_program = false;
         egui::Window::new(settings_text(SettingsText::Title))
             .collapsible(false)
             .resizable(false)
+            .default_width(SETTINGS_WINDOW_WIDTH)
+            .max_width(SETTINGS_WINDOW_WIDTH)
             .show(ctx, |ui| {
                 ui.checkbox(
                     &mut chosen.create_iim,
@@ -973,12 +983,72 @@ impl Loupe {
                         }
                     });
                 ui.add_space(PANEL_ROW_SPACING);
+                ui.heading(settings_text(SettingsText::ExternalPrograms));
+                if chosen.external_programs.is_empty() {
+                    ui.label(settings_text(SettingsText::NoPrograms));
+                }
+                for (index, program) in chosen.external_programs.iter_mut().enumerate() {
+                    ui.push_id(index, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.text_edit_singleline(&mut program.name);
+                            let up = egui::Button::new(settings_text(SettingsText::MoveUp));
+                            if ui.add_enabled(index > 0, up).clicked() {
+                                move_up = Some(index);
+                            }
+                            if ui
+                                .button(settings_text(SettingsText::RemoveProgram))
+                                .clicked()
+                            {
+                                remove = Some(index);
+                            }
+                        });
+                        ui.add(
+                            egui::Label::new(
+                                egui::RichText::new(program.path.display().to_string()).small(),
+                            )
+                            .wrap(),
+                        );
+                    });
+                }
+                let room = chosen.external_programs.len() < MAX_EXTERNAL_PROGRAMS;
+                add_program = ui
+                    .add_enabled(
+                        room,
+                        egui::Button::new(settings_text(SettingsText::AddProgram)),
+                    )
+                    .on_disabled_hover_text(external_program_limit_text(MAX_EXTERNAL_PROGRAMS))
+                    .clicked();
+                ui.add_space(PANEL_ROW_SPACING);
                 ui.horizontal(|ui| {
                     save = ui.button(settings_text(SettingsText::Save)).clicked();
                     cancel = ui.button(settings_text(SettingsText::Cancel)).clicked();
                 });
             });
+        let programs = &mut chosen.external_programs;
+        if let Some(index) = move_up
+            && let Some(above) = index.checked_sub(1)
+            && index < programs.len()
+        {
+            programs.swap(above, index);
+        }
+        if let Some(index) = remove
+            && index < programs.len()
+        {
+            programs.remove(index);
+        }
+        if add_program
+            && programs.len() < MAX_EXTERNAL_PROGRAMS
+            && let Some(path) = pick_program()
+        {
+            let name = path
+                .file_stem()
+                .map(|stem| stem.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            programs.push(ExternalProgram { name, path });
+        }
         if save {
+            // A name typed empty or with a `|` never reaches the file (T200).
+            chosen.external_programs = tidied_programs(&chosen.external_programs);
             self.settings_window = None;
             self.save_settings_window(chosen);
             ctx.set_theme(egui_theme(self.settings.shell.theme));
@@ -7432,6 +7502,15 @@ fn pick_folder(title: &str, current: &str, fallback: Option<&PathBuf>) -> Option
         dialog = dialog.set_directory(fallback);
     }
     dialog.pick_folder()
+}
+
+/// The Windows file dialog that chooses a program's `.exe` for the list of external programs
+/// (ADR 0019 E-Q2, T200); `None` when it is cancelled.
+fn pick_program() -> Option<PathBuf> {
+    rfd::FileDialog::new()
+        .set_title(settings_text(SettingsText::ChooseProgram))
+        .add_filter(settings_text(SettingsText::ProgramsFilter), &["exe"])
+        .pick_file()
 }
 
 /// A side column's heading with its collapse button on the right; returns whether the button was

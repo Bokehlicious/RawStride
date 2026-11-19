@@ -250,6 +250,13 @@ Every other property already uses IPTC's English name in both languages.
 | – | move back | what an undo does to the files of a move (ADR 0017 U9-Q5–U9-Q9; the undo is U9-Q8): "1 image moved back.", "{count} images moved back.", "{file} could not be moved back: {reason}", "There is no move to undo."; a failed move is "{file} could not be moved: {reason}"; added by T172 |
 | – | Move Rejected and Picked Images to Subfolders, Move to Picked, Undo Move | the moves' menu items (ADR 0017 U9-Q5–U9-Q9): in the Image menu, the check box "Move Rejected and Picked Images to Subfolders" (off by default, remembered); "Move to Picked" (P), greyed while the check box is off; "Undo Move" (Ctrl+Z), the first item of the Edit menu, which undoes moves only. Named by T172, the items come with T174 |
 | – | qualifier | an XMP qualifier on a value, for example on one keyword of Keywords (not the language `xml:lang` of a Lang Alt entry); a list whose items have qualifiers is shown but never written (ADR 0007 §8): "{field} has qualifiers RawStride cannot keep, so it is shown but never changed" in the info panel, "{field} was not written: it has qualifiers RawStride cannot keep" after a write; added by T193 |
+| – | External Programs | the heading of the Settings window's section with the list of programs the chosen images can be opened in, at most five, the first the default program (ADR 0019 §2.1, E-Q1, E-Q2); added by T200 |
+| – | Add… | the button under the list of external programs in the Settings window, which opens the file dialog "Choose a Program" (ADR 0019 E-Q2); added by T200 |
+| – | Move Up | the button on each row of the list of external programs in the Settings window, which moves the program one place up (greyed on the first row; ADR 0019 E-Q2); added by T200 |
+| – | No programs added. | the line in the Settings window's section External Programs while the list is empty (ADR 0019 E-Q2); added by T200 |
+| – | Choose a Program | the title of the file dialog opened by "Add…" in the section External Programs (ADR 0019 E-Q2); added by T200 |
+| – | Programs | the name of the `.exe` filter of the file dialog "Choose a Program" (ADR 0019 E-Q2); added by T200 |
+| – | At most {n} programs | the tooltip of the disabled "Add…" when the list of external programs is full ("At most 1 program" in singular; ADR 0019 E-Q1); added by T200 |
 
 ## 7. Recurring sentence parts
 
