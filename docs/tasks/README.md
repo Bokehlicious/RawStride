@@ -86,11 +86,14 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status |
 |---|---|---|
+| [T206](T206-import-recognises-by-creation-time.md) | Import recognises an earlier DNG/JPEG/TIFF by its creation time too (ADR 0005 choice 2) | Open |
+| [T204](T204-written-file-gets-the-write-time.md) | A written file gets the time of the write as its modification time (ADR 0007 Q14) | Blocked: waits for T206 |
+| [T205](T205-rating-percentages-and-flat-hierarchical-keywords.md) | Rating percentages and a flat `lr:hierarchicalSubject` kept equal (ADR 0007 Q15, Q16) | Blocked: waits for T204 |
 
 ## Writing a task (owner and reviewer)
 
-- **Number:** the next free number after the highest in this folder and `done/` (T204 next).
-- **File:** `docs/tasks/T204-<a-few-words>.md`; three digits, lower case, words joined by `-`.
+- **Number:** the next free number after the highest in this folder and `done/` (T207 next).
+- **File:** `docs/tasks/T207-<a-few-words>.md`; three digits, lower case, words joined by `-`.
 - **Index:** add a row to "Open tasks" above and keep its status in step with the file's heading.
 - **Size (owner, 2026-11-15, after T142):** one task is one layer (a C++ shim or a core crate, or
   the shell in `pw-loupe`), about eight files at most, and gives one result the owner can check by

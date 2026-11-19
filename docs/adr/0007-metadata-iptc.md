@@ -36,8 +36,8 @@
   - **Amended by the owner (2026-11-19, revision 26)**, from the test with DxO PhotoLab 10.3
     (ADR 0029 step P0): a written file gets a new modification time (§9.4, Q14); a flat
     `lr:hierarchicalSubject` is kept equal to the keywords (§8, Q15); existing Exif and XMP
-    rating percentages are kept equal to the rating (§6.1, §6.3, Q16). One task carries all
-    three (§18).
+    rating percentages are kept equal to the rating (§6.1, §6.3, Q16). Two tasks carry the three
+    (§18; T204, T205, split by the owner 2026-11-19).
 - Date: 2026-11-04 (revision 1: storage, IIM policy and the role of XMP; revision 2: all owner
   decisions of 2026-11-04, MWG 2.0, the full IPTC specification and the Mapping Guidelines;
   revision 3: Q4 answered by the owner on 2026-11-08; revision 4: Q5 answered by the owner on
@@ -356,6 +356,8 @@ Urgency (2:10), Category (2:15) and Supplemental Categories (2:20):
   they have no reject value. None of them is created, and none is read as a source: `xmp:Rating`
   stays the only rating RawStride reads. Reason: DxO PhotoLab adds all three when it writes a DNG
   (ADR 0029 P0, 2026-11-19), and without this they would keep an old rating beside a new one.
+  `xmp:RatingPercent` is kept equal in a manufacturer RAW's sidecar too (owner, 2026-11-19): DxO
+  PhotoLab adds it there as well; the RAW file itself is never written (§4.2).
 
 ### 6.4 Manufacturer RAW (ARW, RW2, …)
 
@@ -866,8 +868,8 @@ listed under the table (§17.1).
 - Image Region (ADR 0017 U11b). The other lists of structures and editing several images are done
   (ADR 0017 U11, U12; T136–T143, T125, T126, T179, T180).
 - The Tauri app keeps its in-place write (D7) until it is retired (GR8).
-- Revision 26 (§9.4 Q14, §8 Q15, §6.3 Q16): one task (ADR 0029 step P0b); until it is
-  done, a sidecar or file written by RawStride keeps its old modification time.
+- Revision 26 (§9.4 Q14, §8 Q15, §6.3 Q16): two tasks (ADR 0029 step P0b; T204 the
+  modification time, T205 Q15 and Q16); until T204 is done, a sidecar or file written by RawStride keeps its old modification time.
 
 ## Revision history
 

@@ -54,13 +54,20 @@ The sandbox disk is not the PC. Measure on thanos with a real card before tuning
 - Sequential copy, one file at a time. With CFexpress (~800 MB/s) a pipelined reader and writer
   and a faster hash (xxh3 or BLAKE3 crate) may be needed. Measure first.
 - Videos and audio notes are never copied (see choice 5).
+- Files imported before T206 have the import's time as their creation time, and a write on a
+  volume without `ReplaceFileW` does not keep the creation time (ADR 0007 §9.4). Once RawStride
+  has written such a DNG/JPEG/TIFF, a re-import of its card without the register gives a
+  suffixed copy; nothing is lost (owner, 2026-11-19).
 
 ## Owner's choices (2026-11-04)
 
 1. **Default templates:** folder `{year}/{date} {job}`, file name `{name}` (the camera's name).
 2. **Recognising earlier ingests:** at the destination, by name and modification time; for images
    also by size, except DNG/JPEG/TIFF, whose size changes when ratings or IPTC are written into
-   them (the date is kept). An existing sidecar counts as ours when the shot's images are already
+   them. **Changed by the owner 2026-11-19 (T206):** a copy also gets the card file's time as its
+   creation time, and an image matches by its modification time or its creation time, since
+   RawStride's writes now give a file a new modification time (ADR 0007 §9.4, Q14) and keep its
+   creation time. An existing sidecar counts as ours when the shot's images are already
    there, because it is edited after ingest. A log or the catalog may come later.
 3. **Never delete from the card.** Ejecting is an option in the dialog, done only after a
    complete ingest (Windows "Eject" verb through PowerShell, then a check that the card is gone).
