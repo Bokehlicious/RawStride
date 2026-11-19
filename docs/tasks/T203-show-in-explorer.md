@@ -1,4 +1,4 @@
-# T203. ADR 0019 E3: "Show in File Explorer", and the owner's hand check of E2 and E3 (pw-loupe) — Blocked: waits for T202
+# T203. ADR 0019 E3: "Show in File Explorer", and the owner's hand check of E2 and E3 (pw-loupe) — Open
 
 - **Chain:** T200 (E1, done) → T201, T202 (E2) → T203 (E3). The owner's answers are E-Q1–E-Q14 in
   ADR 0019 §3.
@@ -15,27 +15,31 @@
   1. **Command** (`shell.rs`): `Command::ShowInExplorer`, no key, in the Image menu right after
      `MenuEntry::ExternalPrograms` (T202) and before the separator that comes before "Delete to
      Recycle Bin". Its text in `command_text` (`shell_text.rs`) is "Show in File Explorer" (ADR 0019
-     §2.8, the owner's choice of 2026-11-19); `acts_in` gives `Where::Both` through its default arm. `command_text` and
-     `run_command` match every command and need the new arm; `command_enabled` has a `_` arm, so
+     §2.8, the owner's choice of 2026-11-19); `acts_in` gives `Where::Both` through its default arm. `command_text`
+     (`shell_text.rs`, about line 337) and `run_command` (`main.rs`, point 4) match every
+     command and need the new arm; `menu_items()` needs no change; `command_enabled` has a `_` arm, so
      the greying of point 4 is an explicit arm. Three existing tests list the menus and are
      extended with the new item (allowed by this task, an exception to rule 5: an item is added,
      nothing else of what they check changes): `the_delete_items_are_the_last_items_of_the_image_menu`
-     (`shell.rs`, about line 1038, as T202 left it: its `checked_sub(6)` becomes
+     (`shell.rs`, about line 1065, as T202 left it: its `checked_sub(6)` becomes
      `checked_sub(7)`, its expected slice and its message and doc comment get the new item),
      `every_menu_item_text_in_menu_order`
-     ("Show in File Explorer" in its place, `shell_text.rs` about line 453) and
-     `every_menu_key_text_in_menu_order` (a `None` in its place, about line 515).
+     ("Show in File Explorer" in its place, `shell_text.rs` about line 457) and
+     `every_menu_key_text_in_menu_order` (a `None` in its place, about line 519).
   2. **The start** (`external.rs`):
      - `pub fn explorer_select_argument(path: &Path) -> OsString`: `/select,"<path>"`, built by
        pushing `/select,"`, `path.as_os_str()` and `"` onto an `OsString` (lossless; a Windows
        path holds no `"`);
      - `pub fn show_in_explorer(path: &Path) -> Result<(), String>`: one
        `std::process::Command` of `explorer.exe` in the folder named by the environment variable
-       `SystemRoot` (`Path::new(&root).join("explorer.exe")`), or plain `explorer.exe` when it is
+       `SystemRoot` (read with `std::env::var_os("SystemRoot")`;
+       `Path::new(&root).join("explorer.exe")`), or plain `explorer.exe` when it is
        not set, with that argument passed as it is, not quoted
-       again (`std::os::windows::process::CommandExt::raw_arg`, under `#[cfg(windows)]`; on other
-       platforms it returns `Err` with a short reason and starts nothing, since RawStride runs on
-       Windows); the child is dropped at once, never waited for (Explorer's exit code is not a
+       again (`std::os::windows::process::CommandExt::raw_arg`, its import and the Windows body
+       under `#[cfg(windows)]`; on other platforms it returns `Err` with a short reason and starts
+       nothing (`let _ = path;` so nothing is unused), since RawStride runs on Windows;
+       `std::process::Command` is already imported in `external.rs`, `std::ffi::OsString` is
+       imported); the child is dropped at once, never waited for (Explorer's exit code is not a
        success signal); a spawn error is `Err(error.to_string())`.
   3. **Text** (`external_text.rs`, rule 13): `explorer_failed_text(reason: &str)`: "File
      Explorer could not be started: {reason}" (no full stop after `{reason}`, as T201's texts), and
@@ -44,20 +48,29 @@
   4. **Enabled and run** (`main.rs`, `command_enabled` and `run_command`): greyed while the
      active tab shows no current image (`tab.position().is_some()`). It acts on the **current
      image only**, also in the contact sheet with several images marked (ADR 0019 §2.8: "the
-     folder of the current image"): the tab's `files.get(tab.current)`, resolved with
-     `resolve_paths` (an error goes to the status line, `self.message`). A file that is no longer
+     folder of the current image"): the tab's `files.get(tab.current)` (`None` → nothing),
+     resolved with `resolve_paths(std::slice::from_ref(file))` (it takes a list, `main.rs` about
+     line 6725) and its first path taken with `.into_iter().next()` (`None` → nothing; an error
+     goes to the status line, `self.message`). A file that is no longer
      a file (`is_file`, moved or deleted since the tab was read) gives
-     `explorer_missing_text(name)` in the status line and starts nothing, since Explorer would
-     silently open another folder. `show_in_explorer`'s error goes to the status line and the
+     `explorer_missing_text(&image_name(path))` in the status line only (unlike T202's
+     `image_gone_text`, not in the Tasks list: the user is looking at the image and gets the
+     answer at once) and starts nothing, since Explorer would silently open another folder.
+     The four new names (`explorer_select_argument`, `show_in_explorer`, `explorer_failed_text`,
+     `explorer_missing_text`) are exported in `lib.rs` and added to `main.rs`'s
+     `use pw_loupe::{…}` list (about line 100). `show_in_explorer`'s error goes to the status line and the
      Tasks error list (`self.tasks.add_error(…, ClockTime::now())`) with `explorer_failed_text`.
      Nothing is shown when it starts.
   5. **Glossary** (`docs/glossary.md` §3): "Show in File Explorer" (the Image menu's item, no key; ADR
      0019 E3, E-Q11; added by T203). The glossary's row "Utforskaren | File Explorer" (§5, T118)
      names Windows' program, and the item uses that name (owner, 2026-11-19, ADR 0019 §2.8).
-- **Tests to add:** `external.rs`: `explorer_select_argument` for a path without and with a
-  space and with a non-ASCII letter (no test starts Explorer). `external_text.rs`:
-  `explorer_failed_text` and `explorer_missing_text`. `shell.rs`, `shell_text.rs`: the Image menu's order with the new item,
-  its text, and that it has no key.
+- **Tests to add:** two new tests and three extended. `external.rs`: one test of
+  `explorer_select_argument` for a path without and with a space and with a non-ASCII letter (no
+  test starts Explorer). `external_text.rs`: one test of `explorer_failed_text` and
+  `explorer_missing_text`. `shell.rs`, `shell_text.rs`: the Image menu's order with the new item,
+  its text, and that it has no key, by the three existing tests of point 1 (no new test). The
+  test-inventory total becomes 1966. The greying and the file that is no longer a file
+  (`main.rs`) have no unit test; the hand check covers them.
 - **Known limits** (to `backlog.md` when this task is Done): `resolve_paths` joins the working
   folder without normalising, so a tab opened on a `\\?\` path or a path with `..` makes
   Explorer open another folder (Explorer gives no error); a path over 260 characters may do the
@@ -89,7 +102,7 @@
     is the first) says it does not exist, in the status line and the Tasks list (each press adds
     one more line to the Tasks list);
   - the question above 100 images also: a click outside it cancels; Space on Cancel cancels and
-    Space on Open opens; while it is shown the menus are greyed and no key but Escape, Enter and
+    Space on Open opens; while it is shown the menus ("Show in File Explorer" too) are greyed and no key but Escape, Enter and
     Tab acts; Ctrl+E held down starts the program once (T202's independent review, 2026-11-19);
   - more than 100 marked images: the question "Open {n} images in {name}?", Enter and Escape
     cancel, Tab to Open and Enter opens;
@@ -108,3 +121,4 @@
 |---|---|---|
 | 2026-11-19 | Blocked | Added (ADR 0019 E3, order 1c), with T201 and T202 as one chain; waits for T202. Cold read (fresh agent, 2026-11-19): the three menu tests named and allowed to grow; the argument built as an `OsString`; Explorer from `SystemRoot`; a file no longer there gives `explorer_missing_text` instead of Explorer opening another folder; `\\?\` and `..` paths as known limits; the hand check widened. Chain review: see T201's log. Open question to the owner: the menu text "Show in Explorer" (the ADR) or "Show in File Explorer" (the glossary's name of Windows' program, §5) |
 | 2026-11-19 | Blocked | The owner chose "Show in File Explorer" (the glossary's name of Windows' program) over the ADR's "Show in Explorer"; written into ADR 0019 §2.8 and E-Q11, and into points 1, 3 and 5 and the hand check here |
+| 2026-11-19 | Open | Set Open now that T202 is done (e5470bf). Second cold read (fresh agent, 2026-11-19, against the code at e5470bf): every T200–T202 item exists as named and the Image menu is as T202 left it; line numbers brought up to date (`shell.rs` 1065, `shell_text.rs` 457 and 519); `command_text` and `run_command` named in their files; `resolve_paths` takes a list (`std::slice::from_ref`, the first path, `None` → nothing); `SystemRoot` read with `var_os`, the imports and the Windows body under `#[cfg(windows)]`; the four new names added to `main.rs`'s `use` list; `explorer_missing_text` in the status line only, with `image_name`; the test count stated (two new, three extended, total 1966); the hand check notes "Show in File Explorer" greyed while the question is shown |
