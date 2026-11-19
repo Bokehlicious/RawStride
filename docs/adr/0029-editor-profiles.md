@@ -200,7 +200,7 @@ with `latency.ps1`.
 | Step | Content | Needs |
 |---|---|---|
 | ~~**P0**~~ | **Done 2026-11-19 (§1.1):** the owner's test in DxO PhotoLab, no code: images from several folders, ratings, labels and rejects, the export's folder and name, the `.dop` when only viewing, the program's XMP writing with its synchronisation off and on, ARW and DNG | ADR 0019 E2 (done) |
-| **P0b** | **Done 2026-11-19, awaiting the owner's hand check.** ADR 0007 revision 26 (the modification time, Q15, Q16; decided by the owner 2026-11-19): three tasks: T206 (`pw-ingest`, the import recognises a written file by its creation time) → T204 (the modification time) → T205 (Q15, Q16); needed for §2.8 | – |
+| ~~**P0b**~~ | **Done 2026-11-19, hand-checked by the owner the same day.** ADR 0007 revision 26 (the modification time, Q15, Q16; decided by the owner 2026-11-19): three tasks: T206 (`pw-ingest`, the import recognises a written file by its creation time) → T204 (the modification time) → T205 (Q15, Q16); needed for §2.8 | – |
 | **P1** | Profiles in the settings: data, `settings.txt` lines, the shipped DxO PhotoLab profile, the companion suffix (P-Q8) | P0, P-Q1, P-Q2 |
 | **P2** | The profile section in the Settings window | P1 |
 | **P3** | Matching when a folder is read; the marks in the contact sheet and the inspector; the age rule | P1 |
