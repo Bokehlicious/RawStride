@@ -1,4 +1,4 @@
-# T214. The repository's address in `Cargo.toml` and RawStride in `vcpkg.json` — Open
+# T214. The repository's address in `Cargo.toml` and RawStride in `vcpkg.json` — Done
 
 - **Why:** step R2 of `docs/tasks/plans/public-release.md` (accepted by the owner, 2026-11-19),
   backlog "Before the repository is made public" (small fixes; item 4, the old name in
@@ -42,3 +42,5 @@
 | 2026-11-19 | Blocked | Added (plan step R2). Waits for the cold read before Open |
 | 2026-11-19 | Blocked | Cold read (fresh agent, `AGENTS.md`, the README, this file and the named files): the old strings match; but no member crate had `repository.workspace = true`, so the field alone would reach no package and the `cargo metadata` check would fail. Changed after it: the 17 members inherit the field (point 2, files listed); the dry run names the triplet and reports its exit code; said that `check.ps1` does not run vcpkg |
 | 2026-11-19 | Open | Cold read done |
+| 2026-11-19 | Ready for review | Done as written: root `repository` set; `repository.workspace = true` after `license.workspace = true` in the 17 members; `vcpkg.json` name `rawstride` and description. `cargo metadata --no-deps --offline`: 17 of 17 packages give `"repository":"https://github.com/Bokehlicious/RawStride"`. vcpkg dry run (`x64-windows-static-md`) exit 0, plan lists libjpeg-turbo, libraw[core,openmp] and their deps. `Cargo.lock` unchanged. check.ps1 all OK: 1957 passed, 72 ignored; cargo audit still warns zbus_names, zvariant, zvariant_derive unmaintained (as in T213) |
+| 2026-11-19 | Done | Review: `git diff --stat` shows exactly the 19 files and this file (22 insertions, 4 deletions); each of the 17 members has `repository.workspace = true` directly after `license.workspace = true`; `Cargo.lock` unchanged; `cargo metadata` checked again, 17 of 17 packages give the address. `test-output.txt` newer than every changed file; fmt, audit, tests (1957 passed, 0 failed, 72 ignored) and clippy exit 0, clippy's only warning line is the known `raw-decode-bench` LibRaw build note. Nothing left; no hand check needed |

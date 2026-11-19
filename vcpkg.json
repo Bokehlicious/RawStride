@@ -1,8 +1,8 @@
 {
   "$schema": "https://raw.githubusercontent.com/microsoft/vcpkg-tool/main/docs/vcpkg.schema.json",
-  "name": "photoworkflow",
+  "name": "rawstride",
   "version": "0.1.0",
-  "description": "Native dependencies for PhotoWorkflow",
+  "description": "Native dependencies for RawStride",
   "dependencies": [
     "libjpeg-turbo",
     { "name": "libraw", "features": ["openmp"] }

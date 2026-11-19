@@ -8,7 +8,7 @@ edition = "2024"
 rust-version = "1.99"
 publish = false
 authors = ["Tobias Nykänen"]
-repository = ""
+repository = "https://github.com/Bokehlicious/RawStride"
 license = "GPL-3.0-or-later" # docs/adr/0002-licensing.md
 
 [workspace.dependencies]

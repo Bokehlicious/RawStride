@@ -86,7 +86,6 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status |
 |---|---|---|
-| [T214](T214-repository-address-and-the-name-in-vcpkg-json.md) | The repository's address in `Cargo.toml` and RawStride in `vcpkg.json` | Open |
 
 ## Writing a task (owner and reviewer)
 

@@ -41,7 +41,7 @@ the owner approved all ten as written on 2026-11-19, so each is now the decision
 | Order | Step | Who | Content | Can start |
 |---|---|---|---|---|
 | 1 | R1 | T213 | `.gitignore`: add `TokenEconomizer/` and `.claude/settings.local.json` (hidden before only on the owner's machine, by `.git/info/exclude`); done (T213, 2026-11-19) | now |
-| 1 | R2 | T214 | `Cargo.toml` `repository` set to the GitHub address and inherited by the 17 members; `vcpkg.json` name and description to RawStride (a vcpkg dry run shows the manifest is read) | now |
+| 1 | R2 | T214 | `Cargo.toml` `repository` set to the GitHub address and inherited by the 17 members; `vcpkg.json` name and description to RawStride (a vcpkg dry run shows the manifest is read); done (T214, 2026-11-19) | now |
 | 1 | R3 | reviewer (docs only) | Paths with the owner's user name in the files: `done/T115-…` (scratchpad path) and `docs/analyses/2026-11-04-m2-pipeline-steps.md` line 502 (`C:\Users\…\.cargo`); a search of the whole tree for `Users\`, the e-mail address and the owner's name gives the full list | now |
 | 1 | R4 | reviewer (docs only) | The three documents that name `pm-study` say the latency tools are the owner's and not published (PR-Q6) | after PR-Q6 |
 | 1 | R5 | task | `tools/m2-*.cmd` removed, and the documents that name them updated (PR-Q5) | after PR-Q5 |
