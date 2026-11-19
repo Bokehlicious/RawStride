@@ -47,6 +47,7 @@ Each step below says which decision it waits for. The reviewer's proposal is in 
 | 1 | R6 | task | The owner's name as test data in `pw-metadata` replaced (PR-Q4) | after PR-Q4 |
 | 1 | R7 | read-through (fresh agents) + reviewer | `done/` (214 files) and `docs/analyses/` read once "with public eyes": personal data, private paths, test-image names that say more than needed, wording about other products against `docs/clean-room.md`. Split by number ranges (for example T1–T70, T71–T140, T141–T212, the logs, the analyses); the agents only report, the reviewer fixes | now |
 | 1 | R8 | reviewer (docs only) | README: "Windows only today; open an issue if you want Linux or macOS" (backlog, Linux and macOS ports); CONTRIBUTING per PR-Q7; `SECURITY.md` per PR-Q8; backlog items done here struck | after PR-Q7, PR-Q8 |
+| 1 | R10 | task | **The last step of the rename** (ADR 0012 decision 3, "step 2"): the binary renamed from `pw-loupe` to `rawstride` (`[[bin]]` in `crates/pw-loupe/Cargo.toml`), and the documents and scripts that name `pw-loupe.exe` updated (`docs/building.md`, `latency.ps1` if it starts the exe). ADR 0012 set it "at the latest when the egui program replaces the Tauri app", which happened with T207 on 2026-11-19; it had no task. Unchanged as ADR 0012 decision 4 says: crate names, folders, branches, `PW_TESTDATA`. ADR 0012 gets a line that step 2 is done | after PR-Q3 (a failed trademark search would mean another name), before C1 (the workflow and `docs/building.md` name the exe) |
 | 2 | H1 | read-through (fresh agent) + reviewer | **The whole history**, every commit on the branches of PR-Q1, not only today's files: personal data, keys, tokens, passwords, private test images and their metadata, copyrighted reference specs (the IPTC files), large binaries (`git rev-list --objects --all` with sizes), files that were later removed (for example the old `docs/agent-tasks.md` and `src-tauri/`). `gitleaks` per PR-Q10. Result: a list, each finding "remove from the history" or "leave", decided by the owner | after R1–R8 (so the list is not about things already fixed in the files) |
 | 3 | H2 | reviewer, with the owner | **Only if PR-Q2 is "rewrite" or H1 found something to remove.** On a fresh mirror clone, not in the worktrees: `git filter-repo` with a `.mailmap` (and the paths to remove). filter-repo also rewrites short hashes in commit messages; hashes quoted in files are not rewritten, so the documents' hashes are updated from filter-repo's `commit-map` in the same run (a script, AGENTS.md and CLAUDE.md §3). Checked: same tree at the tip of each branch apart from the intended changes, `check.ps1` passes on a fresh clone | after H1 and the owner's yes |
 | 3 | H3 | owner on GitHub, reviewer guides | **Only after H2.** The old repository renamed (for example `RawStride-old`), kept private and archived; a new empty `RawStride` created; the rewritten branches pushed; "Block command line pushes that expose my email" turned on. The two worktrees (`C:\Development\PhotoWorkflow` and `…-GUI`) are cloned anew from the new repository; the old ones kept until the new ones build | after H2 |
@@ -57,7 +58,7 @@ Each step below says which decision it waits for. The reviewer's proposal is in 
 | 5 | P3 | task (tooling) | CI on every push (the trigger widened) | after P2 |
 
 Order 1 steps can run in parallel (they touch different files), one task at a time per
-`check.ps1` run. R1, R2, R5, R6 and C1, P3 change tools or code, so they are tasks with briefs
+`check.ps1` run. R1, R2, R5, R6, R10 and C1, P3 change tools or code, so they are tasks with briefs
 (rule: tooling changes via a task); R3, R4, R8 are documentation the reviewer writes.
 
 ## 3. Risks
@@ -89,3 +90,4 @@ Order 1 steps can run in parallel (they touch different files), one task at a ti
 | Revision | Date | Changes |
 |---|---|---|
 | 1 | 2026-11-19 | Proposed by the reviewer from `backlog.md`, ADR 0002 §4 and the project status; waits for the owner's answers to PR-Q1–PR-Q10 |
+| 2 | 2026-11-19 | R10 added (owner): the binary renamed to `rawstride` (ADR 0012 step 2), after PR-Q3 and before C1 |
