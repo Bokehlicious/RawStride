@@ -137,6 +137,18 @@ and reviewer:
   RUSTSEC-2026-054356 marks `chrono` 0.4.45 as unmaintained. It is a warning, not a vulnerability,
   so the check still passes. Find which crates use it (`cargo tree --offline -i chrono`) and
   whether a maintained replacement fits; a change of dependency needs a task of its own.
+- **A right-click menu on images** (owner, 2026-11-19, during the hand check of ADR 0019 E2–E3:
+  the owner expected to right-click an image to reach "Show in File Explorer"). Today an image in
+  the contact sheet or the preview has no right-click menu; only the folder tree, the tabs,
+  Favourites and Recent have one (ADR 0017 U4-Q3). The commands that act on images are reached
+  only from the menu bar, which the preview does not draw, so "Show in File Explorer" (no key,
+  E-Q11) cannot be reached from the preview at all. Needs an addition to ADR 0019 or an ADR of
+  its own before it becomes a task. Questions for the owner: which commands it holds (proposal:
+  "Open in {name}" per program, "Show in File Explorer", the ratings and labels, "Delete to Recycle
+  Bin"); whether a right-click on an image that is not marked makes it the current image and acts
+  on it alone, while a right-click on a marked image acts on all the marked ones (as the keys'
+  targets, ADR 0014 §2.6); whether it is shown in both the contact sheet and the preview; and
+  whether the commands show their keys on the right as in the menu bar.
 - **A filter bar of toggle buttons instead of drop-down lists** (owner idea, 2026-11-10, after T61;
   ADR 0014 §15): a row "0★ 1★ 2★ 3★ 4★ 5★" and a row of colour swatches, each clicked on and off,
   with a check box per row that turns the row on or off. Needs an amendment of ADR 0014 first: the
