@@ -42,4 +42,5 @@
 - **Trademark search (owner, 2026-11-19, public-release plan PR-Q3):** "RawStride" in TMview
   (tmdn.org, the Trade Mark and Design Network's search over EUIPO, the national offices such as
   PRV, and offices outside the EU such as USPTO and WIPO), reached from EUIPO's availability page:
-  0 hits.
+  0 hits. "Stride" in TMview in Nice classes 9 and 42 (software): many hits; the owner's quick
+  read of them found none that looked like a conflict with RawStride.
