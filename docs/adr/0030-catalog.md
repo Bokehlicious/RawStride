@@ -2,9 +2,9 @@
 
 - Status: **proposed (2026-11-19).** A draft for the owner. No question in §5 is answered,
   nothing is placed in the step plan, and nothing is built, installed or added as a dependency by
-  this ADR. Step K0, a measuring tool run on the owner's real archive, comes before anything else
-  and may change the numbers and the proposals below; when the questions are answered, each step
-  in §6 becomes its own task, with its own approval and commit.
+  this ADR. Step K0, the measurement on the owner's real archive, is done (2026-11-19, §6.1);
+  when the questions are answered, each step in §6 becomes its own task, with its own approval
+  and commit.
 - Date: 2026-11-19
 - Related:
   - [architecture.md](../architecture.md): goal 3 ("the SQLite catalog is an index and cache, not
@@ -97,8 +97,9 @@ and a catalog tab.
   ExifTool processes, at low priority, pausable, and only while RawStride runs (no background
   service, architecture.md goal 4). The Exif values are read with `pw-raw`'s own fast read where
   it covers them, the ratings, labels and IPTC values with ExifTool in batches (as ADR 0022 §2.4).
-  Estimated 30 minutes to hours for 250,000 images (K0 measures it). The Tasks list shows the
-  progress with a Pause button, the status line a short form.
+  Measured by K0 (§6.1): listing the roots takes about 80 s; reading every image with ExifTool
+  about 4–5 hours with the two HDDs read at the same time, bound by the disks. The Tasks list
+  shows the progress with a Pause button, the status line a short form.
 - **An import** (`pw-ingest`, ADR 0010) into a catalog root adds its files to the catalog when
   they are verified; the latest import is the library's "Last Import".
 - **An open folder** inside a catalog root that ADR 0026 F2–F3 follow: the changes the watcher
@@ -188,16 +189,16 @@ Sizes: the catalog 0.3–0.5 GB; a disk thumbnail cache (K-Q8) about 2.5 GB at 2
 | K-Q1 | **One global catalog, or one per volume?** (architecture.md) | Global, with a `volumes` table: one search over every disk, offline disks still searchable |
 | K-Q2 | How catalog roots are chosen, and are backup disks excluded? | Chosen in Settings, nothing by default; backup disks never offered automatically |
 | K-Q3 | Volumes without a usable id (network drives, clones) | Not supported in the first steps; a clone is reported as a conflict, not merged |
-| K-Q4 | The change check: size and mtime per file, plus a full re-read on demand. Is that enough, given that ExifTool's `-P` keeps the mtime of a file it writes? | Yes for RawStride's own writes (they update the catalog directly); for other programs that keep mtime, the full re-read; K0 tells how long a listing takes |
+| K-Q4 | The change check: size and mtime per file, plus a full re-read on demand. Is that enough, given that ExifTool's `-P` keeps the mtime of a file it writes? | Yes for RawStride's own writes (they update the catalog directly); for other programs that keep mtime, the full re-read. K0: a listing of all roots takes about 80 s. Since T204 RawStride's safe write no longer keeps the mtime (ADR 0007 §9.4); only the Tauri path's `-P` does |
 | K-Q5 | The drift check: a command with a report, or automatic? | A command, with a report in the Tasks list |
-| K-Q6 | Keywords breaking the lower-case rule: a report only, or also a warning or lower-casing in the metadata window? | A report in the catalog first; anything in the metadata window is a new feature for a later ADR |
+| K-Q6 | Keywords breaking the lower-case rule: a report only, or also a warning or lower-casing in the metadata window? | A report in the catalog first; anything in the metadata window is a new feature for a later ADR. K0: no keyword with upper case in the sample |
 | K-Q7 | Collections: kept in the catalog only (then the catalog must be backed up), or written to the files? A keyword such as `collections\|portfolio` breaks the flat-keyword rule | Not in the first steps; decided before collections are built |
 | K-Q8 | A disk thumbnail cache: when, where (C: or D:), which size, with a size limit and "Empty Cache"? | Not in the first steps; decided after the search is in use |
 | K-Q9 | Names in the library (Catalog, All Photos, Last Import, Missing, Volumes) | Proposed in each step, checked against the glossary |
 | K-Q10 | Broader terms (a search for `rovfåglar` finding `fiskgjuse`): a synonym list in RawStride? | Later, in RawStride's settings, never written to the files |
 | K-Q11 | The catalog off by default? | Yes: turned on by the owner in Settings |
 | K-Q12 | Priority against the work under way (ADR 0019 E4, 0024 O1, 0027 W1–W9, 0029) | After them; K0 may be run earlier, as it touches nothing in the program |
-| K-Q13 | Watch the catalog roots for changes while RawStride runs, beyond the open folders of ADR 0026? | No: the change check at start and on "Update Catalog" is enough; reconsidered after K0 |
+| K-Q13 | Watch the catalog roots for changes while RawStride runs, beyond the open folders of ADR 0026? | No: the change check at start and on "Update Catalog" is enough. K0: the listing takes about 80 s for all roots, so a check at start is cheap |
 
 ## 6. Steps (proposed)
 
@@ -205,7 +206,7 @@ Each step ends with tests (GR11) and the owner's hand check.
 
 | Step | Content | Needs |
 |---|---|---|
-| **K0** | **A measuring tool under `tools/`,** read-only, run on the owner's real archive: indexing time per disk (E: and an HDD), a size and mtime listing per disk, where keywords and place live and how many images have them, keywords breaking the lower-case rule | – |
+| ~~**K0**~~ | **Done 2026-11-19 (§6.1):** the measurement on the owner's real archive, read-only: indexing time per disk, a size and mtime listing per disk, where keywords and place live and how many images have them, keywords breaking the lower-case rule. Run as scripts outside the repository (owner's choice, 2026-11-19), not as a tool under `tools/`; a sample first, then a full listing; no full ExifTool read (not needed before K1) | – |
 | **K1** | `pw-catalog`: the schema, migrations, the writer thread, the FTS5 table, the text normalisation; tests on a small set | K0, `rusqlite` approved |
 | **K2** | Volumes and roots: recognition by id, the roots in Settings, the catalog turned on and off | K1 |
 | **K3** | The first index and the change check, at low priority and pausable; progress in the status line | K2 |
@@ -216,6 +217,48 @@ Each step ends with tests (GR11) and the owner's hand check.
 
 Order: K0 first, then K1–K7. K5 waits for ADR 0022's filter, so the folder tab and the catalog tab
 share one filter model.
+
+### 6.1 K0: results (2026-11-19)
+
+Read-only scripts (Python and ExifTool 13.59, outside the repository) on the owner's archive. The
+owner named three archive disks, here disk 1–3: disk 1 an SSD (the catalog root is one folder of
+it; the rest holds video and other files), disks 2 and 3 HDDs; no backup disks; a fourth disk left
+out for now.
+
+**The listing** (every file's size and mtime, `os.walk`, 2026-11-19):
+
+| Root | Images | Of which | Sidecars (`.xmp`) | Size | Listing |
+|---|---|---|---|---|---|
+| Disk 1 (SSD, one folder) | 8,069 | 6,174 RAW (ARW), 1,895 DNG/JPEG/TIFF | 6,174 (and 609 `.dop`) | 0.36 TB | 0.6 s |
+| Disk 2 (HDD) | 166,835 | 146,804 DNG, 7,313 JPEG, 5,280 TIFF, 6,042 CR2 | 7,679 | 3.6 TB | 43 s |
+| Disk 3 (HDD) | 82,504 | 52,463 ARW, 11,539 CR2, 5,393 RAF, 2,478 ORF, 3,860 DNG | 76,437 | 3.4 TB | 36 s |
+| **Total** | **≈ 257,000** | | ≈ 90,000 | ≈ 7.4 TB | ≈ 80 s |
+
+Besides images the roots hold `.psd`, `.lrprev`, `.lua`, files without an extension and a few
+others; the catalog ignores them.
+
+**Reading the metadata** (a sample of one folder per disk: disk 2's year 2012, 7,853 images; disk
+3's year 2020, 6,679 images and 4,971 sidecars; disk 1's October 2026, 352 images and sidecars):
+
+- ExifTool, one process, cold disk cache: 10–22 files/s on the HDDs, 56 files/s on the SSD; with
+  a warm cache 33–82 files/s, so the disks set the pace, not ExifTool.
+- `-fast2` (600 files each from disk 2's year 2013 and disk 3's year 2021, half read each way, the
+  values compared): the same values for every tag the catalog reads; about twice as fast on disk 3
+  (RAW and sidecars, 16 → 30 files/s cold), hardly faster on disk 2's DNGs (10 → 11).
+- A first full read therefore takes about 4–4.5 hours for disk 2 and 1.5 hours for disk 3, about 4–5
+  hours with the two disks read at the same time (one ExifTool process per disk).
+- **Keywords:** almost every image has them (7,853 of 7,853; 6,651 of 6,679; 349 of 352), always
+  in XMP: embedded in DNG/JPEG/TIFF, in the sidecar for a RAW; none only in IIM, none only in the
+  RAW's own XMP. 358, 405 and 6 distinct keywords.
+- **Lower case:** no keyword with an upper-case letter in the sample.
+- **`lr:hierarchicalSubject`:** in 3,775, 4,432 and 74 images, every entry flat (no `|`); ADR 0007
+  §8's Q15 rule (T205) applies to all of them.
+- **Place:** city or location in 0, 2,951 and 324 images; GPS in 200, 663 and 75; a title in
+  2,864, 0 and 0.
+
+What it changes: §3.4's estimate is replaced by the measured time; a first index is a matter of
+hours and is pausable as proposed. K-Q4, K-Q6 and K-Q13 have a note from K0. The catalog size
+(§4) is still an estimate.
 
 ## 7. Not included
 
