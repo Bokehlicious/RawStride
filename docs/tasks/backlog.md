@@ -281,7 +281,9 @@ and reviewer:
     checked at B5 either, 2026-11-18).
 
 - **Known limits of opening images in another program** (T201's brief, 2026-11-19; accepted when
-  T201 was done; each becomes a task only if it is noticed in use):
+  T201 was done; **kept** at the sort after ADR 0019 E1–E3, 2026-11-19 (owner): none was seen in
+  the hand check of E1–E3, so each becomes a task only if it is noticed in use; the struck ones are
+  listed at the end of this file):
   - *The length:* `command_line_length` follows `std`'s quoting on Windows as it is today; a later
     `std` that quotes otherwise is caught only by the start's error (the start then fails with
     Windows' reason).
@@ -302,15 +304,13 @@ and reviewer:
     repeated Ctrl+E on a missing program adds one Tasks line per press.
   - *Settings and the system:* after Save, a program whose path is not UTF-8 is used until a
     restart although T200 does not write it to the file; the Settings window has no scrolling,
-    so on a very small screen its section "External Programs" may be cut off; Windows' reason in
-    `start_failed_text` is in Windows' language; the menu checks each program's path (`is_file`)
+    so on a very small screen its section "External Programs" may be cut off; the menu checks each program's path (`is_file`)
     every frame while the Image menu is open, so a program on a network share that is gone may
     slow the open menu (T202's independent review).
   - *Show in File Explorer* (T203's brief and its independent review, accepted when T203 was
     done): `resolve_paths` joins the working folder without normalising, so a tab opened on a
     `\\?\` path or a path with `..` makes File Explorer open another folder (it gives no
-    error), and a path over 260 characters may do the same; the preview draws no menu bar and
-    the item has no key (E-Q11), so it is reached only from the contact sheet; it does not wait
+    error), and a path over 260 characters may do the same; it does not wait
     for a move, so right after X with "Move Rejected and Picked Images to Subfolders" on it may
     open the old folder (or say the image is no longer in its folder once the move is done).
 
@@ -360,3 +360,7 @@ owner the same day, with the two ADR 0017 §7.2 wishes "Load a folder again" and
 while importing"; steps F1–F4 in `plans/adr-0018-0025-steps.md`).
 Written as a task on 2026-11-18: "A region render fails on every RAF" (T182's finding) is T197,
 ADR 0027 step W0, moved forward by the owner to order 1b in `plans/adr-0018-0025-steps.md`.
+Struck at the backlog sort after ADR 0019 E1–E3, 2026-11-19 (owner): from the known limits of
+opening images in another program, Windows' reason in `start_failed_text` given in Windows'
+language (the system's own text, accepted), and "Show in File Explorer" reached only from the
+contact sheet since the preview draws no menu bar (covered by "A right-click menu on images").
