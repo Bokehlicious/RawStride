@@ -85,7 +85,7 @@ and reviewer:
   whether to remove it from the history (a history rewrite of all branches, which changes every
   commit hash and needs the owner's approval) or to leave it; a tool such as `gitleaks` for the
   secrets part would be a new dependency. Do this before the CI item above makes the repository
-  public.
+  public. **Done as public-release plan H1 (2026-11-19)**; the rewrite is H2 there.
 - **Linux and macOS ports** (owner, 2026-11-17: only if there is interest once the repository is
   public; the owner uses only Windows). Survey of the code, 2026-11-17, nothing built off Windows:
   - *A small README note when public*: done (public-release plan R8, 2026-11-19), in the
@@ -162,6 +162,12 @@ and reviewer:
     "Appropriate Legal Notices" (copyright, no warranty, where the licence is), usually in an
     About box. `pw-loupe` has none, and ADR 0002 §4 does not list it. Needed before the first
     binary release, not before the repository is public; an ADR 0002 §4 line first (plan §4).
+  - *IPTC's terms for the generated tables* (public-release plan H1, 2026-11-19):
+    `crates/pw-metadata/src/iptc_table.rs` (from `tools/iptc-table.ps1`) and `vocabulary.rs` are
+    generated from IPTC's TechReference and the NewsCodes / PLUS vocabularies (names, ids and
+    codes only); the source and its SHA-256 are named, but no licence or attribution. Check IPTC's
+    terms (believed to be CC BY 4.0, not checked) and add the attribution they ask for, in the
+    files or `THIRD-PARTY-NOTICES.txt`; at the latest before the first binary release.
 - **Known limits of `relocate::companions`** (`/code-review` of T169, 2026-11-17; accepted, the
   moves are Windows only; **kept** at the sort of 2026-11-17 until a Linux or macOS port):
   - *Case-sensitive file systems:* a file whose name differs from the image's only in case is
