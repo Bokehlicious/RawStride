@@ -1,6 +1,8 @@
-//! The controlled vocabularies of the editor's choice lists (ADR 0007 §11, I11; ADR 0017 U10d,
-//! T128): for each choice-list property its XMP id and its allowed values, in the vocabulary's
-//! order. Values only; the labels the user sees are made in the editor (rule 13).
+//! The controlled vocabularies RawStride knows (ADR 0007 §11, I11; ADR 0017 U10d, T128, T195):
+//! those of the editor's choice lists, for each choice-list property its XMP id and its allowed
+//! values in the vocabulary's order, and the IPTC Scene and Genre NewsCodes that
+//! [`crate::validate`] checks but that are not choice lists. Values only; the labels the user sees
+//! are made in the editor (rule 13).
 //!
 //! **The values are the form RawStride reads and writes through ExifTool:** for the four PLUS
 //! properties the code alone (`MR-NAP`, `AG-A25`, …). The file holds [`PLUS_PREFIX`] followed by
@@ -18,6 +20,16 @@
 //! - `IPTC-NewsCodes-digitalsourcetype.json` (SHA-256
 //!   `1caaa5bb729d5b40fdfef599bc650bf1288e7cca4fe52b9bb4d65701da4fb1d6`): Digital Source Type, the
 //!   17 current codes and, apart, the 3 retired ones.
+//!
+//! And from the reference copies R4 in the same folder (T195), two lists that only
+//! [`crate::validate`] uses; they are not choice lists ([`choices`] gives `None` for Scene Code
+//! and Genre, which stay free-text fields in the editor):
+//! - `IPTC-NewsCodes-scene.json` (SHA-256
+//!   `d40592d420218a01bdeea8c1cb26205fa888cbcad856bb173012988c9c9f0796`): Scene Code, the 24
+//!   codes (none retired);
+//! - `IPTC-NewsCodes-genre.json` (SHA-256
+//!   `8595892d4c17dcb04adf2c4c581e2fa629bf52fb1c3565119db0c1f5f086b64f`): Genre, the 51 current
+//!   codes and, apart, the 7 retired ones.
 //!
 //! The comparison of a value with a list is exact: no case folding, no trimming.
 
@@ -149,6 +161,116 @@ pub fn full_uri(xmp_id: &str, value: &str) -> Option<String> {
 /// True when `uri` is a retired Digital Source Type code, compared exactly.
 pub fn is_retired_digital_source_type(uri: &str) -> bool {
     RETIRED_DIGITAL_SOURCE_TYPE_URIS.contains(&uri)
+}
+
+/// The XMP id of Scene Code (a list of bare codes) [IPTC §7.21].
+pub const SCENE: &str = "Iptc4xmpCore:Scene";
+/// The XMP id of Subject Code (a list of 8-digit codes).
+pub const SUBJECT_CODE: &str = "Iptc4xmpCore:SubjectCode";
+/// The XMP id of Genre (a list of CV-Term structures).
+pub const GENRE: &str = "Iptc4xmpExt:Genre";
+/// The start of every IPTC Genre NewsCodes URI (http).
+pub const GENRE_PREFIX: &str = "http://cv.iptc.org/newscodes/genre/";
+/// The start of every IPTC Genre NewsCodes URI (https).
+pub const GENRE_PREFIX_HTTPS: &str = "https://cv.iptc.org/newscodes/genre/";
+
+/// Scene Code, the codes in the file's order (NewsCodes file; none retired).
+const SCENE_CODES: [&str; 24] = [
+    "010100", "010200", "010300", "010400", "010500", "010600", "010700", "010800", "010900",
+    "011000", "011100", "011200", "011300", "011400", "011500", "011600", "011700", "011800",
+    "011900", "012000", "012100", "012200", "012300", "012400",
+];
+
+/// Genre, the current codes in the file's order (NewsCodes file); the case varies.
+const GENRE_CODES: [&str; 51] = [
+    "Actuality",
+    "Advertiser_Supplied",
+    "Advice",
+    "Advisory",
+    "almanac",
+    "Analysis",
+    "Archive_material",
+    "Background",
+    "Behind_the_Story",
+    "Biography",
+    "Birth_Announcement",
+    "Current",
+    "Curtain_Raiser",
+    "Daybook",
+    "Exclusive",
+    "Fact_Check",
+    "Feature",
+    "Fixture",
+    "Forecast",
+    "From_the_Scene",
+    "Help_Us_to_Report",
+    "History",
+    "horoscope",
+    "Interview",
+    "ListingOfFacts",
+    "LiveCoverage",
+    "Music",
+    "Obituary",
+    "Opinion",
+    "Polls_and_Surveys",
+    "Press_Release",
+    "Press-Digest",
+    "Preview",
+    "Profile",
+    "Question_and_Answer_Session",
+    "Quote",
+    "Raw_Sound",
+    "Response_to_a_Question",
+    "Results_Listings_and_Statistics",
+    "Retrospective",
+    "Review",
+    "Satire",
+    "Side_bar_and_supporting_information",
+    "Special_Report",
+    "Sponsored",
+    "Summary",
+    "Supported",
+    "Synopsis",
+    "Transcript_and_Verbatim",
+    "UGC",
+    "Voicer",
+];
+
+/// The retired Genre codes (NewsCodes file): still valid in a file.
+const RETIRED_GENRE_CODES: [&str; 7] = [
+    "Anniversary",
+    "Program",
+    "Scener",
+    "Text_only",
+    "Update",
+    "Wrap",
+    "Wrapup",
+];
+
+/// True when `code` is a code of IPTC Scene NewsCodes, compared exactly.
+pub fn is_scene_code(code: &str) -> bool {
+    SCENE_CODES.contains(&code)
+}
+
+/// True when `code` is a current or retired code of IPTC Genre NewsCodes, compared exactly.
+pub fn is_genre_code(code: &str) -> bool {
+    GENRE_CODES.contains(&code) || RETIRED_GENRE_CODES.contains(&code)
+}
+
+/// True when `cv_id` names the IPTC Genre NewsCodes: [`GENRE_PREFIX`] or [`GENRE_PREFIX_HTTPS`],
+/// each with or without its trailing `/` (ADR 0007 §11), compared exactly otherwise.
+pub fn is_iptc_genre_vocabulary(cv_id: &str) -> bool {
+    [GENRE_PREFIX, GENRE_PREFIX_HTTPS]
+        .into_iter()
+        .any(|prefix| cv_id == prefix || prefix.strip_suffix('/') == Some(cv_id))
+}
+
+/// `term_id` without [`GENRE_PREFIX`] or [`GENRE_PREFIX_HTTPS`]; `None` when it starts with
+/// neither. The code is not checked.
+pub fn genre_code(term_id: &str) -> Option<&str> {
+    term_id
+        .strip_prefix(GENRE_PREFIX)
+        .or_else(|| term_id.strip_prefix(GENRE_PREFIX_HTTPS))
 }
 
 #[cfg(test)]
@@ -341,5 +463,89 @@ mod tests {
             assert!(choices(xmp_id).is_some(), "{xmp_id}");
             assert!(crate::properties::property(xmp_id).is_some(), "{xmp_id}");
         }
+    }
+
+    fn assert_no_duplicate(values: &[&str]) {
+        let mut unique = values.to_vec();
+        unique.sort_unstable();
+        unique.dedup();
+        assert_eq!(unique.len(), values.len(), "{values:?}");
+    }
+
+    #[test]
+    fn the_scene_and_genre_lists_have_their_counts_ends_and_no_duplicate() {
+        assert_eq!(SCENE_CODES.len(), 24);
+        assert_eq!(SCENE_CODES.first().copied(), Some("010100"));
+        assert_eq!(SCENE_CODES.last().copied(), Some("012400"));
+        assert!(
+            SCENE_CODES
+                .iter()
+                .all(|code| code.len() == 6 && code.bytes().all(|b| b.is_ascii_digit())),
+            "{SCENE_CODES:?}"
+        );
+        assert_no_duplicate(&SCENE_CODES);
+
+        assert_eq!(GENRE_CODES.len(), 51);
+        assert_eq!(GENRE_CODES.first().copied(), Some("Actuality"));
+        assert_eq!(GENRE_CODES.last().copied(), Some("Voicer"));
+        assert_no_duplicate(&GENRE_CODES);
+
+        assert_eq!(RETIRED_GENRE_CODES.len(), 7);
+        assert_eq!(RETIRED_GENRE_CODES.first().copied(), Some("Anniversary"));
+        assert_eq!(RETIRED_GENRE_CODES.last().copied(), Some("Wrapup"));
+        assert_no_duplicate(&RETIRED_GENRE_CODES);
+
+        for code in RETIRED_GENRE_CODES {
+            assert!(!GENRE_CODES.contains(&code), "{code}");
+        }
+    }
+
+    #[test]
+    fn scene_and_genre_membership_is_exact() {
+        assert!(is_scene_code("010100"));
+        for code in ["10100", " 010100", "012500"] {
+            assert!(!is_scene_code(code), "{code:?}");
+        }
+        assert!(is_genre_code("Actuality"));
+        assert!(is_genre_code("Wrapup"));
+        for code in ["actuality", "Almanac", "Actuality "] {
+            assert!(!is_genre_code(code), "{code:?}");
+        }
+    }
+
+    #[test]
+    fn the_iptc_genre_vocabulary_and_its_codes() {
+        for cv_id in [
+            "http://cv.iptc.org/newscodes/genre/",
+            "http://cv.iptc.org/newscodes/genre",
+            "https://cv.iptc.org/newscodes/genre/",
+            "https://cv.iptc.org/newscodes/genre",
+        ] {
+            assert!(is_iptc_genre_vocabulary(cv_id), "{cv_id}");
+        }
+        for cv_id in [
+            "http://cv.iptc.org/newscodes/genre//",
+            "HTTP://cv.iptc.org/newscodes/genre/",
+            "http://cv.iptc.org/newscodes/scene/",
+        ] {
+            assert!(!is_iptc_genre_vocabulary(cv_id), "{cv_id}");
+        }
+        assert_eq!(
+            genre_code(&format!("{GENRE_PREFIX}Feature")),
+            Some("Feature")
+        );
+        assert_eq!(
+            genre_code(&format!("{GENRE_PREFIX_HTTPS}Feature")),
+            Some("Feature")
+        );
+        assert_eq!(genre_code(GENRE_PREFIX), Some(""));
+        assert_eq!(genre_code("Feature"), None);
+    }
+
+    #[test]
+    fn the_scene_and_genre_codes_are_not_choice_lists() {
+        assert_eq!(choices(SCENE), None);
+        assert_eq!(choices(GENRE), None);
+        assert_eq!(choices(SUBJECT_CODE), None);
     }
 }

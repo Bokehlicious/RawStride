@@ -1,4 +1,4 @@
-# T195. Scene Code, Subject Code and Genre checked against IPTC NewsCodes (ADR 0007 §11) — Open
+# T195. Scene Code, Subject Code and Genre checked against IPTC NewsCodes (ADR 0007 §11) — Done
 
 - **Why:** ADR 0007 §11 (revision 22, owner 2026-11-18) adds warnings for three more controlled
   vocabularies. Today `validate.rs` checks only Digital Source Type and the PLUS choice lists, and
@@ -162,3 +162,6 @@
 |---|---|---|
 | 2026-11-18 | Open | Added (ADR 0007 revision 22, §11; vocabularies read as R4 the same day) |
 | 2026-11-18 | Open | Cold read: a fresh agent found no statement wrong against the code (ids, value kinds, table order Genre → Scene → Subject Code, the two exhaustive matches on `Warning`, the lists and checksums). Written in from its findings: named helpers `is_iptc_genre_vocabulary` and `genre_code` and the https prefix constant (and §11 now says http or https, with or without `/`), a full Scene URI warns, the Genre warning holds the whole CV-Term ID, `present_text` for the Genre fields, the test helper `cv_term` and the warning shorthand, `iim_written` false only in tests that call `validate`, the test-inventory rows |
+| 2026-11-19 | Ready for review | Done as written: `vocabulary.rs` (SCENE, SUBJECT_CODE, GENRE, the two Genre prefixes, the 24 + 51 + 7 codes, `is_scene_code`, `is_genre_code`, `is_iptc_genre_vocabulary`, `genre_code`, not in `choices`; module comment with R4), `validate.rs` (`NewsCodeUnknown`, `SubjectCodeForm`, three arms that extend `warnings`, module comment), `editor.rs` (`warning_text`, two arms), every listed test, `docs/test-inventory.md`. `.\tools\check.ps1` all OK: 1917 passed, 72 ignored, 0 failed; no clippy warnings |
+| 2026-11-19 | Ready for review | Review: every point and test as written, the three code lists compared by script with the R4 files (same codes, same order, 0 differences; both SHA-256 match), `git diff --stat` only the named files, `.\tools\check.ps1` run by the reviewer all OK (1917 passed, 72 ignored, 0 failed, the sum of every `test result:`; no clippy warnings). Noted, not changed: a Genre warning shows the whole CV-Term ID, so its line is long (as the task says) |
+| 2026-11-19 | Done | Approved by the owner. The owner's hand check (an image with Scene Code `999999` shows the warning in the metadata window) follows |

@@ -15,13 +15,21 @@
 //! - **PLUS choice lists** (I11, T128): Model Release Status, Property Release Status, Minor Model
 //!   Age Disclosure and Data Mining, one of the codes of their PLUS vocabulary ([`vocabulary`],
 //!   exact; ExifTool gives the code without the URI's prefix).
+//! - **Genre:** the CV-Term ID of each entry of the IPTC Genre NewsCodes (its CV-Term's
+//!   Controlled Vocabulary Id is the http or https URI, with or without the trailing `/`) is that
+//!   vocabulary's prefix followed by one of its current or retired codes ([`vocabulary`], exact;
+//!   T195).
+//! - **Scene Code:** each entry one of the codes of IPTC Scene NewsCodes, the bare code
+//!   ([`vocabulary`], exact) [IPTC §7.21] (T195).
+//! - **Subject Code:** each entry 8 ASCII digits; not checked against a vocabulary, which IPTC
+//!   retired (T195).
 //! - **Image Registry Entry:** both Item Id and Organisation Id [IPTC §11.21].
 //! - **Rating:** a number from −1 to 5; a real number inside the range is fine (§8).
 //!
 //! A blank value (only spaces and/or NUL, [`iim::is_blank`]) counts as missing (§5.1).
 //!
 //! Left out here:
-//! - the controlled vocabularies other than Digital Source Type and the PLUS choice lists;
+//! - Intellectual Genre, and Genre entries of other vocabularies, are not checked (§11);
 //! - dates: the editor checks a date when it turns a text into a date (T104).
 
 use std::fmt;
@@ -41,6 +49,8 @@ const REGISTRY: &str = "Iptc4xmpExt:RegistryId";
 const REG_ITEM_ID: &str = "Iptc4xmpExt:RegItemId";
 const REG_ORG_ID: &str = "Iptc4xmpExt:RegOrgId";
 const RATING: &str = "xmp:Rating";
+const CV_ID: &str = "Iptc4xmpExt:CvId";
+const CV_TERM_ID: &str = "Iptc4xmpExt:CvTermId";
 
 /// The most characters of Alt Text (Accessibility) without a warning [IPTC §7.1].
 const ALT_TEXT_MAX_CHARACTERS: usize = 250;
@@ -74,6 +84,14 @@ pub enum Warning {
     /// The value of the PLUS choice-list property `property` (XMP id) is not one of the codes of
     /// its PLUS vocabulary (I11, T128); `value` is the text as read. Kept, never refused.
     VocabularyValueUnknown { property: String, value: String },
+    /// An entry of Scene Code that is not a code of IPTC Scene NewsCodes, or the CV-Term ID of an
+    /// IPTC Genre entry that is not a code of IPTC Genre NewsCodes (§11, T195); `property` is the
+    /// XMP id, `value` the text as read (for Genre the whole CV-Term ID, not only the code). Kept,
+    /// never refused.
+    NewsCodeUnknown { property: String, value: String },
+    /// An entry of Subject Code that is not 8 ASCII digits (§11, T195); `code` is the text as
+    /// read. Kept, never refused.
+    SubjectCodeForm { code: String },
 }
 
 impl fmt::Display for Warning {
@@ -113,6 +131,13 @@ impl fmt::Display for Warning {
                 f,
                 "{property}: \"{value}\" is not in the PLUS controlled vocabulary"
             ),
+            Warning::NewsCodeUnknown { property, value } => write!(
+                f,
+                "{property}: \"{value}\" is not in the IPTC NewsCodes vocabulary"
+            ),
+            Warning::SubjectCodeForm { code } => {
+                write!(f, "Subject Code \"{code}\" is not 8 digits")
+            }
         }
     }
 }
@@ -159,6 +184,18 @@ pub fn validate(metadata: &Metadata, iim_written: bool) -> Vec<Warning> {
                             .map(|(index, _)| Warning::RegistryEntryIncomplete { index }),
                     );
                 }
+                None
+            }
+            vocabulary::SCENE => {
+                warnings.extend(scene_warnings(value));
+                None
+            }
+            vocabulary::SUBJECT_CODE => {
+                warnings.extend(subject_code_warnings(value));
+                None
+            }
+            vocabulary::GENRE => {
+                warnings.extend(genre_warnings(value));
                 None
             }
             _ => None,
@@ -253,6 +290,67 @@ fn vocabulary_warning(xmp_id: &str, value: &Value) -> Option<Warning> {
         property: xmp_id.to_string(),
         value: text.to_string(),
     })
+}
+
+/// The entries of a list that are not blank, in list order; nothing for another kind of value.
+fn present_entries(value: &Value) -> impl Iterator<Item = &String> {
+    let entries: &[String] = match value {
+        Value::List(entries) => entries,
+        _ => &[],
+    };
+    entries.iter().filter(|entry| !iim::is_blank(entry))
+}
+
+/// `NewsCodeUnknown` for each entry of Scene Code that is not blank and not a Scene NewsCode
+/// (exact: the property holds the bare code [IPTC §7.21], so a full URI warns too).
+fn scene_warnings(value: &Value) -> impl Iterator<Item = Warning> {
+    present_entries(value)
+        .filter(|entry| !vocabulary::is_scene_code(entry))
+        .map(|entry| Warning::NewsCodeUnknown {
+            property: vocabulary::SCENE.to_string(),
+            value: entry.clone(),
+        })
+}
+
+/// `SubjectCodeForm` for each entry of Subject Code that is not blank and not exactly 8 ASCII
+/// digits; not checked against a vocabulary (§11: IPTC retired it before 2010).
+fn subject_code_warnings(value: &Value) -> impl Iterator<Item = Warning> {
+    present_entries(value)
+        .filter(|entry| !(entry.len() == 8 && entry.bytes().all(|byte| byte.is_ascii_digit())))
+        .map(|entry| Warning::SubjectCodeForm {
+            code: entry.clone(),
+        })
+}
+
+/// `NewsCodeUnknown` for each IPTC Genre entry (its CvId names the IPTC Genre NewsCodes) whose
+/// CvTermId is not the IPTC Genre prefix (http or https) followed by a current or retired code.
+/// Entries of another vocabulary, or without CvId or CvTermId, give nothing (§11).
+fn genre_warnings(value: &Value) -> Vec<Warning> {
+    let Value::StructList(entries) = value else {
+        return Vec::new();
+    };
+    entries
+        .iter()
+        .filter_map(|entry| {
+            let field = |field_id: &str| {
+                entry
+                    .fields
+                    .iter()
+                    .find(|(id, _)| id == field_id)
+                    .and_then(|(_, value)| present_text(value))
+            };
+            let cv_id = field(CV_ID)?;
+            if !vocabulary::is_iptc_genre_vocabulary(cv_id) {
+                return None;
+            }
+            let term_id = field(CV_TERM_ID)?;
+            let known = vocabulary::genre_code(term_id).is_some_and(vocabulary::is_genre_code);
+            (!known).then(|| Warning::NewsCodeUnknown {
+                property: vocabulary::GENRE.to_string(),
+                value: term_id.to_string(),
+            })
+        })
+        .collect()
 }
 
 /// True when the entry lacks `RegItemId` or `RegOrgId`; a blank text counts as missing.
@@ -747,6 +845,152 @@ mod tests {
         assert_eq!(
             warning.to_string(),
             "plus:ModelReleaseStatus: \"MR-XXX\" is not in the PLUS controlled vocabulary"
+        );
+    }
+
+    // --- Scene Code, Subject Code and Genre (§11, T195) ---
+
+    /// A CV-Term entry of Genre with its Controlled Vocabulary Id and its CV-Term ID.
+    fn cv_term(cv_id: &str, term_id: &str) -> StructValue {
+        StructValue {
+            fields: vec![
+                (CV_ID.to_string(), text(cv_id)),
+                (CV_TERM_ID.to_string(), text(term_id)),
+            ],
+        }
+    }
+
+    fn news_code_unknown(property: &str, value: &str) -> Warning {
+        Warning::NewsCodeUnknown {
+            property: property.to_string(),
+            value: value.to_string(),
+        }
+    }
+
+    fn subject_code_form(code: &str) -> Warning {
+        Warning::SubjectCodeForm {
+            code: code.to_string(),
+        }
+    }
+
+    #[test]
+    fn scene_codes_from_the_newscodes() -> Result<(), ValueError> {
+        assert_eq!(
+            warnings_of(
+                vocabulary::SCENE,
+                list(&["010100", "", "999999", "012400", "10100"]),
+                false
+            )?,
+            vec![
+                news_code_unknown(vocabulary::SCENE, "999999"),
+                news_code_unknown(vocabulary::SCENE, "10100"),
+            ]
+        );
+        // Exact: spaces around a code, and the full Scene URI (the property holds the bare code).
+        for entry in [" 010100", "http://cv.iptc.org/newscodes/scene/010100"] {
+            assert_eq!(
+                warnings_of(vocabulary::SCENE, list(&[entry]), false)?,
+                vec![news_code_unknown(vocabulary::SCENE, entry)],
+                "{entry:?}"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn subject_codes_of_eight_digits() -> Result<(), ValueError> {
+        assert_eq!(
+            warnings_of(
+                vocabulary::SUBJECT_CODE,
+                list(&["04000000", "4000000", "IPTC:04000000", " ", "0400000a"]),
+                false
+            )?,
+            vec![
+                subject_code_form("4000000"),
+                subject_code_form("IPTC:04000000"),
+                subject_code_form("0400000a"),
+            ]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn genre_is_checked_only_for_the_iptc_vocabulary() -> Result<(), ValueError> {
+        let http = "http://cv.iptc.org/newscodes/genre/";
+        let entries = Value::StructList(vec![
+            cv_term(http, "http://cv.iptc.org/newscodes/genre/Feature"),
+            cv_term(
+                "https://cv.iptc.org/newscodes/genre",
+                "https://cv.iptc.org/newscodes/genre/Wrapup",
+            ),
+            cv_term(http, "http://cv.iptc.org/newscodes/genre/feature"),
+            cv_term(http, "Feature"),
+            cv_term("http://example.com/genres/", "anything"),
+        ]);
+        assert_eq!(
+            warnings_of(vocabulary::GENRE, entries, false)?,
+            vec![
+                news_code_unknown(
+                    vocabulary::GENRE,
+                    "http://cv.iptc.org/newscodes/genre/feature"
+                ),
+                news_code_unknown(vocabulary::GENRE, "Feature"),
+            ]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn intellectual_genre_is_not_checked() -> Result<(), ValueError> {
+        assert_eq!(
+            warnings_of("Iptc4xmpCore:IntellectualGenre", text("anything"), false)?,
+            Vec::new()
+        );
+        Ok(())
+    }
+
+    /// Inserted in the order Subject Code, Scene, Genre; given in the table's order.
+    #[test]
+    fn the_newscodes_warnings_follow_the_table_order() -> Result<(), ValueError> {
+        let metadata = metadata(vec![
+            (vocabulary::SUBJECT_CODE, list(&["4000000"])),
+            (vocabulary::SCENE, list(&["999999"])),
+            (
+                vocabulary::GENRE,
+                Value::StructList(vec![cv_term(vocabulary::GENRE_PREFIX, "Feature")]),
+            ),
+        ])?;
+        assert_eq!(
+            validate(&metadata, false),
+            vec![
+                news_code_unknown(vocabulary::GENRE, "Feature"),
+                news_code_unknown(vocabulary::SCENE, "999999"),
+                subject_code_form("4000000"),
+            ]
+        );
+        let order = [
+            vocabulary::GENRE,
+            vocabulary::SCENE,
+            vocabulary::SUBJECT_CODE,
+        ];
+        let positions: Vec<Option<usize>> = order.iter().map(|id| table_position(id)).collect();
+        assert!(positions.iter().all(Option::is_some), "{positions:?}");
+        assert!(
+            positions.windows(2).all(|pair| pair[0] < pair[1]),
+            "{positions:?}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn the_english_texts_of_the_newscodes_warnings() {
+        assert_eq!(
+            news_code_unknown(vocabulary::SCENE, "999999").to_string(),
+            "Iptc4xmpCore:Scene: \"999999\" is not in the IPTC NewsCodes vocabulary"
+        );
+        assert_eq!(
+            subject_code_form("4000000").to_string(),
+            "Subject Code \"4000000\" is not 8 digits"
         );
     }
 }

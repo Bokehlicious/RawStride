@@ -86,7 +86,6 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status |
 |---|---|---|
-| [T195](T195-scene-subject-and-genre-codes-checked.md) | Scene Code, Subject Code and Genre checked against IPTC NewsCodes (ADR 0007 §11) | Open |
 | [T196](T196-camera-gps-fills-location-created.md) | Camera GPS fills the coordinates of Location Created (ADR 0007 §6.7) | Open |
 | [T197](T197-region-render-on-raf.md) | The region render on RAF (ADR 0027 W0) | Open |
 | [T198](T198-batch-lines-for-every-notice.md) | The batch names every write notice of the other images (ADR 0017 U12d-Q9) | Open |

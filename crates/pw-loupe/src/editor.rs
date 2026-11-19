@@ -2455,6 +2455,14 @@ fn warning_text(warning: &Warning) -> String {
             "{field} {value} is not in the PLUS list",
             field = property_label(property, Language::En)
         ),
+        Warning::NewsCodeUnknown { property, value } => format!(
+            "{field} {value} is not in IPTC's list",
+            field = property_label(property, Language::En)
+        ),
+        Warning::SubjectCodeForm { code } => format!(
+            "{field} {code} should be eight digits",
+            field = property_label("Iptc4xmpCore:SubjectCode", Language::En)
+        ),
     }
 }
 
@@ -5951,6 +5959,29 @@ mod tests {
         assert_eq!(
             editor_text(&EditorText::SectionHeading(EditorSection::Licence)),
             "Licence (PLUS)"
+        );
+    }
+
+    #[test]
+    fn the_newscodes_warning_texts() {
+        assert_eq!(
+            warning_text(&Warning::NewsCodeUnknown {
+                property: "Iptc4xmpCore:Scene".into(),
+                value: "999999".into(),
+            }),
+            format!(
+                "{} 999999 is not in IPTC's list",
+                property_label("Iptc4xmpCore:Scene", Language::En)
+            )
+        );
+        assert_eq!(
+            warning_text(&Warning::SubjectCodeForm {
+                code: "4000000".into()
+            }),
+            format!(
+                "{} 4000000 should be eight digits",
+                property_label("Iptc4xmpCore:SubjectCode", Language::En)
+            )
         );
     }
 
