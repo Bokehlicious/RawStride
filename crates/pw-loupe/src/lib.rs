@@ -148,11 +148,11 @@ pub use settings::{
     settings_path, tidied_programs,
 };
 pub use shell::{
-    COLLAPSED_WIDTH, ColumnState, Command, HIDE_KEY, KeyChord, MENUS, Menu, MenuEntry, MenuItem,
-    MenuKind, NON_TEXT_CONTRAST, OPEN_IN_KEY, Palette, STATUS_TEXT_SIZE, StartWindow, SubmenuKind,
-    TEXT_CONTRAST, THEMES, Theme, Where, apply_text_sizes, clamp_column_width, column_width_range,
-    contrast_ratio, font_definitions, image_area, menu_items, non_text_pairs, palette,
-    rect_on_a_screen, start_window, text_pairs, visuals,
+    COLLAPSED_WIDTH, ColumnState, Command, HIDE_KEY, IMAGE_CONTEXT_MENU, KeyChord, MENUS, Menu,
+    MenuEntry, MenuItem, MenuKind, NON_TEXT_CONTRAST, OPEN_IN_KEY, Palette, STATUS_TEXT_SIZE,
+    StartWindow, SubmenuKind, TEXT_CONTRAST, THEMES, Theme, Where, apply_text_sizes,
+    clamp_column_width, column_width_range, contrast_ratio, font_definitions, image_area,
+    menu_items, non_text_pairs, palette, rect_on_a_screen, start_window, text_pairs, visuals,
 };
 pub use shell_text::{
     SettingsText, ShellText, command_text, exiftool_message, external_program_limit_text,

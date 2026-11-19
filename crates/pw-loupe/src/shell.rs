@@ -779,6 +779,24 @@ pub const MENUS: &[Menu] = &[
     },
 ];
 
+/// The right-click menu on an image in the contact sheet or the preview (the compare included):
+/// the commands that act on images, in the order of ADR 0019 §2.9 and E-Q17. Every item has the
+/// same key as its item in `MENUS` (E-Q18). Left out on purpose: Move to Subfolders, RAW ↔ JPEG
+/// and Delete Rejected Images, which act on the folder or the view, not on the images clicked.
+pub const IMAGE_CONTEXT_MENU: &[MenuEntry] = &[
+    MenuEntry::ExternalPrograms,
+    item(Command::ShowInExplorer, None),
+    MenuEntry::Separator,
+    MenuEntry::Submenu(SubmenuKind::Rating, RATING_ITEMS),
+    item(Command::Reject, plain(Key::X)),
+    item(Command::MovePicked, plain(Key::P)),
+    MenuEntry::Submenu(SubmenuKind::Label, LABEL_ITEMS),
+    MenuEntry::Separator,
+    item(Command::Metadata, plain(Key::M)),
+    MenuEntry::Separator,
+    item(Command::DeleteToRecycleBin, plain(Key::Delete)),
+];
+
 /// Every item of the menu bar, submenus included, in menu order.
 pub fn menu_items() -> Vec<MenuItem> {
     let mut items = Vec::new();
@@ -1092,6 +1110,73 @@ mod tests {
         for menu_item in menu_items() {
             if menu_item.key.is_some_and(|chord| chord.key == Key::Delete) {
                 assert_eq!(menu_item.command, Command::DeleteToRecycleBin);
+            }
+        }
+    }
+
+    /// The right-click menu on images holds the commands that act on images, in the order of
+    /// ADR 0019 §2.9 and E-Q17 (T221).
+    #[test]
+    fn the_image_context_menu_holds_the_image_commands_in_order() {
+        assert_eq!(
+            IMAGE_CONTEXT_MENU,
+            &[
+                MenuEntry::ExternalPrograms,
+                item(Command::ShowInExplorer, None),
+                MenuEntry::Separator,
+                MenuEntry::Submenu(SubmenuKind::Rating, RATING_ITEMS),
+                item(Command::Reject, plain(Key::X)),
+                item(Command::MovePicked, plain(Key::P)),
+                MenuEntry::Submenu(SubmenuKind::Label, LABEL_ITEMS),
+                MenuEntry::Separator,
+                item(Command::Metadata, plain(Key::M)),
+                MenuEntry::Separator,
+                item(Command::DeleteToRecycleBin, plain(Key::Delete)),
+            ][..]
+        );
+    }
+
+    /// Every item of the right-click menu is an item of the menu bar with the same key, every
+    /// submenu is the Image menu's, and it holds neither the filter nor the sort, nor the commands
+    /// that act on the folder or the view (ADR 0019 §2.9, E-Q18, T221).
+    #[test]
+    fn every_item_of_the_image_context_menu_is_the_menu_bars_item() {
+        let items = menu_items();
+        let Some(image) = MENUS.iter().find(|menu| menu.kind == MenuKind::Image) else {
+            panic!("there is an Image menu");
+        };
+        for entry in IMAGE_CONTEXT_MENU {
+            match entry {
+                MenuEntry::Item(menu_item) => {
+                    assert!(
+                        items.iter().any(|bar| bar.command == menu_item.command
+                            && bar.key == menu_item.key),
+                        "{menu_item:?} is not an item of the menu bar with the same key"
+                    );
+                    assert!(
+                        !matches!(
+                            menu_item.command,
+                            Command::MoveToSubfolders
+                                | Command::ToggleMode
+                                | Command::DeleteRejected
+                        ),
+                        "{menu_item:?} acts on the folder or the view"
+                    );
+                }
+                MenuEntry::Submenu(kind, sub) => {
+                    assert!(
+                        image.entries.iter().any(|bar| matches!(
+                            bar,
+                            MenuEntry::Submenu(bar_kind, bar_sub)
+                                if bar_kind == kind && bar_sub == sub
+                        )),
+                        "{entry:?} is not a submenu of the Image menu"
+                    );
+                }
+                MenuEntry::Filter | MenuEntry::Sort => {
+                    panic!("{entry:?} is in the right-click menu");
+                }
+                MenuEntry::Separator | MenuEntry::ExternalPrograms => {}
             }
         }
     }

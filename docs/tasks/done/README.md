@@ -227,3 +227,4 @@ was when the task was done, so "this file", "below" and "the Log" in T1–T115 m
 | [T218](T218-rename-the-binary-to-rawstride.md) | The program file renamed from `pw-loupe.exe` to `rawstride.exe` (public-release plan R10) |
 | [T219](T219-private-values-out-of-test-code.md) | Private values out of the test code (public-release plan R7) |
 | [T220](T220-ci-workflow.md) | A CI workflow on GitHub Actions, `.github/workflows/ci.yml` (public-release plan C1) |
+| [T221](T221-image-context-menu.md) | ADR 0019 E4: a right-click menu on images in the contact sheet and the preview |

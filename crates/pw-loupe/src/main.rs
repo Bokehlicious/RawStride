@@ -53,14 +53,14 @@ use pw_loupe::{
     target_folder, undo_failed_text, undone_text, worker_stopped_text,
 };
 use pw_loupe::{
-    COLLAPSED_WIDTH, ColumnState, Command, ExternalProgram, MAX_EXTERNAL_PROGRAMS, MENUS,
-    MenuEntry, MenuItem, RatingKey, STATUS_TEXT_SIZE, SettingsText, ShellAction, ShellSettings,
-    ShellText, StartWindow, THEMES, Theme, Where, WindowRect, apply_text_sizes, clamp_column_width,
-    column_width_range, command_text, exiftool_message, external_program_limit_text, fallback_text,
-    font_definitions, image_area, key_text, menu_text, no_images_text, open_error_text, palette,
-    path_resolution_error_text, prune_error_text, recovery_text, rect_on_a_screen,
-    settings_save_error_text, settings_text, shell_key_action, shell_text, start_window,
-    status_line_text, submenu_text, theme_text, tidied_programs, visuals,
+    COLLAPSED_WIDTH, ColumnState, Command, ExternalProgram, IMAGE_CONTEXT_MENU,
+    MAX_EXTERNAL_PROGRAMS, MENUS, MenuEntry, MenuItem, RatingKey, STATUS_TEXT_SIZE, SettingsText,
+    ShellAction, ShellSettings, ShellText, StartWindow, THEMES, Theme, Where, WindowRect,
+    apply_text_sizes, clamp_column_width, column_width_range, command_text, exiftool_message,
+    external_program_limit_text, fallback_text, font_definitions, image_area, key_text, menu_text,
+    no_images_text, open_error_text, palette, path_resolution_error_text, prune_error_text,
+    recovery_text, rect_on_a_screen, settings_save_error_text, settings_text, shell_key_action,
+    shell_text, start_window, status_line_text, submenu_text, theme_text, tidied_programs, visuals,
 };
 use pw_loupe::{
     CaptureReader, SORT_KEYS, SortFollow, SortKey, SortOrder, modified_time, read_order,
@@ -1128,6 +1128,17 @@ impl Loupe {
         }
     }
 
+    /// A right-click on the cell of file `index`, before its menu opens (`Tab::right_click`,
+    /// ADR 0019 §2.9, E-Q16): the image becomes current, the marking is kept.
+    fn right_click(&mut self, index: usize) {
+        let ready = self.ratings_ready();
+        let cwd = std::env::current_dir().ok();
+        let rating_of = tab_rating(&self.metadata, cwd.as_deref());
+        if let Some(tab) = self.tabs.active_mut() {
+            tab.right_click(index, ready, &rating_of);
+        }
+    }
+
     /// A step in the preview over the visible list, or between the marked images with "only the
     /// marked" (`Tab::preview_move`, ADR 0014 §4.4 way C, ADR 0017 §2.2, T111); the marking is
     /// kept. The core follows the tab: `set_files` when the visible list changed, so the views of
@@ -2118,6 +2129,7 @@ impl Loupe {
         full: egui::Rect,
         rect: egui::Rect,
         scroll_to: Option<usize>,
+        commands: &mut Vec<Command>,
     ) {
         let ctx = ui.ctx().clone();
         let painter = ui.painter().clone();
@@ -2129,6 +2141,9 @@ impl Loupe {
         let stride = cell_size + GRID_SPACING;
         let mut open_loupe = false;
         let mut clicked_cell = None;
+        let mut right_clicked_cell = None;
+        // No right-click menu while a dialog holds the program (ADR 0019 §2.9, T221).
+        let context_menu = !self.dialog_open();
         // The tab's files may be relative; the metadata cache keys by resolved path.
         let cwd = std::env::current_dir().ok();
 
@@ -2200,6 +2215,7 @@ impl Loupe {
                     let origin = ui.min_rect().min;
                     let painter = ui.painter().clone();
                     let mut clicked = None;
+                    let mut right_clicked = None;
                     for (position, &index) in positions.clone().zip(visible_files) {
                         let Some(path) = tab.files.get(index) else {
                             continue;
@@ -2253,6 +2269,14 @@ impl Loupe {
                             });
                             clicked = Some((index, ctrl, shift));
                         }
+                        // The right-click menu on a cell only, not on the empty part of the
+                        // contact sheet (ADR 0019 §2.9, E-Q15, E-Q16, T221).
+                        if context_menu {
+                            if response.secondary_clicked() {
+                                right_clicked = Some(index);
+                            }
+                            response.context_menu(|ui| self.image_context_menu(ui, commands));
+                        }
                     }
 
                     if let Some(position) = scroll_to {
@@ -2276,10 +2300,16 @@ impl Loupe {
                     if let Some(click) = clicked {
                         clicked_cell = Some(click);
                     }
+                    if let Some(index) = right_clicked {
+                        right_clicked_cell = Some(index);
+                    }
                 });
         });
         if let Some((index, ctrl, shift)) = clicked_cell {
             self.click(index, ctrl, shift);
+        }
+        if let Some(index) = right_clicked_cell {
+            self.right_click(index);
         }
         if open_loupe {
             self.switch_mode(ViewMode::Loupe);
@@ -3721,7 +3751,7 @@ impl Loupe {
         let fill = ui.visuals().panel_fill;
         egui::CentralPanel::default()
             .frame(egui::Frame::NONE.fill(fill))
-            .show(ui, |ui| self.draw(ui));
+            .show(ui, |ui| self.draw(ui, commands));
     }
 
     /// The preview's right column (§2.2, U3-Q2, U3-Q5, T111): resizable and collapsible as the
@@ -5408,9 +5438,15 @@ impl Loupe {
                 ui.menu_button(menu_text(menu.kind), |ui| {
                     for entry in menu.entries {
                         match entry {
-                            MenuEntry::Item(item) => {
-                                self.menu_item(ui, *item, commands);
-                                if item.command == Command::CloseTab {
+                            MenuEntry::Item(_)
+                            | MenuEntry::Separator
+                            | MenuEntry::Submenu(..)
+                            | MenuEntry::ExternalPrograms => {
+                                self.menu_entry(ui, *entry, commands);
+                                if matches!(
+                                    entry,
+                                    MenuEntry::Item(item) if item.command == Command::CloseTab
+                                ) {
                                     let folder =
                                         self.tabs.active().and_then(|tab| tab.folder.clone());
                                     let button = egui::Button::new(library_text(
@@ -5420,16 +5456,6 @@ impl Loupe {
                                         *favourite = folder;
                                     }
                                 }
-                            }
-                            MenuEntry::Separator => {
-                                ui.separator();
-                            }
-                            MenuEntry::Submenu(kind, items) => {
-                                ui.menu_button(submenu_text(*kind), |ui| {
-                                    for item in *items {
-                                        self.menu_item(ui, *item, commands);
-                                    }
-                                });
                             }
                             MenuEntry::Sort => {
                                 ui.menu_button(shell_text(ShellText::SortMenu), |ui| {
@@ -5458,14 +5484,42 @@ impl Loupe {
                                     });
                                 });
                             }
-                            MenuEntry::ExternalPrograms => {
-                                self.external_programs_menu(ui, commands);
-                            }
                         }
                     }
                 });
             }
         });
+    }
+
+    /// One entry of the menu bar or of the right-click menu on images (ADR 0019 §2.9, T221): an
+    /// item, a separator, a submenu or the external programs, drawn the same in both menus.
+    fn menu_entry(&self, ui: &mut egui::Ui, entry: MenuEntry, commands: &mut Vec<Command>) {
+        match entry {
+            MenuEntry::Item(item) => self.menu_item(ui, item, commands),
+            MenuEntry::Separator => {
+                ui.separator();
+            }
+            MenuEntry::Submenu(kind, items) => {
+                ui.menu_button(submenu_text(kind), |ui| {
+                    for item in items {
+                        self.menu_item(ui, *item, commands);
+                    }
+                });
+            }
+            MenuEntry::ExternalPrograms => self.external_programs_menu(ui, commands),
+            // The menu bar draws the filter and the sort itself; the right-click menu has neither.
+            MenuEntry::Filter | MenuEntry::Sort => {}
+        }
+    }
+
+    /// The right-click menu on an image in the contact sheet or the preview (ADR 0019 §2.9,
+    /// E-Q17, E-Q18): every entry of `IMAGE_CONTEXT_MENU`, with the menu bar's texts, keys and
+    /// greying. Its commands go into the frame's `commands`, as the menu bar's do; the popup
+    /// closes by itself after a click.
+    fn image_context_menu(&self, ui: &mut egui::Ui, commands: &mut Vec<Command>) {
+        for entry in IMAGE_CONTEXT_MENU {
+            self.menu_entry(ui, *entry, commands);
+        }
     }
 
     /// Image ▸ the external programs (ADR 0019 §2.2, E-Q3, E-Q9, T202): with an empty list "Open
@@ -5902,7 +5956,7 @@ impl Loupe {
         }
     }
 
-    fn draw(&mut self, ui: &mut egui::Ui) {
+    fn draw(&mut self, ui: &mut egui::Ui, commands: &mut Vec<Command>) {
         let ctx = ui.ctx().clone();
         let failures = self.metadata.poll(&mut self.metadata_worker);
         // A kept histogram follows RawStride's own metadata writes of its file (U7c-Q7, T145).
@@ -6336,7 +6390,7 @@ impl Loupe {
             // views drained. With an empty list and nothing dropped it does nothing.
             let max_side = ctx.input(|i| i.max_texture_side);
             self.second_textures.sync(&ctx, &self.second_core, max_side);
-            self.draw_grid(ui, full, rect, scroll_to);
+            self.draw_grid(ui, full, rect, scroll_to, commands);
             return;
         }
         // The background first, then the image area (T152): the function draws one view core's
@@ -6361,7 +6415,11 @@ impl Loupe {
         // top from the second view core, the current image right or below from the first.
         let halves = self.compare_sides(rect);
         let current_rect = halves.map_or(rect, |(_, current)| current);
-        let frame = draw_image_area(
+        // The right-click menu on the image, on both sides of the compare, acting on the current
+        // image as the keys do; none while a dialog holds the program (ADR 0019 §2.9, E-Q15,
+        // E-Q16, T221).
+        let context_menu = !self.dialog_open();
+        let (frame, response) = draw_image_area(
             ui,
             &self.core,
             &self.core,
@@ -6372,6 +6430,11 @@ impl Loupe {
             ui.scope_id().with("image"),
             &shown,
         );
+        if context_menu {
+            response.context_menu(|ui| self.image_context_menu(ui, commands));
+        }
+        // The held side's menu is attached after the `match`: `open` borrows `self.compare`.
+        let mut held_response = None;
         match (halves, &mut self.compare) {
             (Some((held_rect, _)), Some(open)) => {
                 // The held side starts as the current one is shown: the display mode when the
@@ -6402,7 +6465,7 @@ impl Loupe {
                 } else {
                     &self.second_core
                 };
-                let held_frame = draw_image_area(
+                let (held_frame, held) = draw_image_area(
                     ui,
                     &self.second_core,
                     held_mouse,
@@ -6413,6 +6476,7 @@ impl Loupe {
                     ui.scope_id().with("held-image"),
                     &shown,
                 );
+                held_response = Some(held);
                 // The held image's size became known: the view sent before it was clamped without
                 // it (T150), so it is sent again at the next frame (T154).
                 if !open.held_size_known && held_frame.size.is_some() {
@@ -6440,6 +6504,11 @@ impl Loupe {
                 self.second_clip_overlay.release();
                 self.second_focus_overlay.release();
             }
+        }
+        if let Some(held) = held_response
+            && context_menu
+        {
+            held.context_menu(|ui| self.image_context_menu(ui, commands));
         }
         self.last_frame_status = frame.status.clone();
         self.last_zoom = Some((frame.zoom, frame.scale));
@@ -6534,7 +6603,8 @@ fn zoom_anchor(
 /// `mouse_core` (the same core, or the current side's while the compare is locked, T154), the
 /// sync of the core's `textures`, the frame asked of the core, the image, the focus marking from
 /// `focus_overlay` and over it the clipping marks from `clip_overlay`, the rating badge, and the error, indicator and empty-area texts. The
-/// background is the caller's. Returns the core's frame.
+/// background is the caller's. Returns the core's frame and the area's response, to which the
+/// caller attaches the right-click menu (ADR 0019 §2.9, T221).
 #[allow(clippy::too_many_arguments)] // one core's area, the core its mouse acts on, its state
 fn draw_image_area(
     ui: &egui::Ui,
@@ -6546,7 +6616,7 @@ fn draw_image_area(
     rect: egui::Rect,
     id: egui::Id,
     shown: &ImageAreaShown<'_>,
-) -> Frame {
+) -> (Frame, egui::Response) {
     let ctx = ui.ctx().clone();
     let ppp = ctx.pixels_per_point();
     let response = ui.interact(rect, id, egui::Sense::click_and_drag());
@@ -6665,7 +6735,7 @@ fn draw_image_area(
         },
         Status::Ready => {}
     }
-    frame
+    (frame, response)
 }
 
 /// The line at the top of one side of the compare (U6-Q10, T153): `text` centred at the top of
@@ -8462,7 +8532,7 @@ impl eframe::App for Loupe {
             let fill = ui.visuals().panel_fill;
             let central = egui::CentralPanel::default()
                 .frame(egui::Frame::NONE.fill(fill))
-                .show(ui, |ui| self.draw(ui));
+                .show(ui, |ui| self.draw(ui, &mut commands));
             self.image_area = Some(central.response.rect);
         }
         self.draw_import_dialog(&ctx);

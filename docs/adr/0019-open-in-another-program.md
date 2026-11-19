@@ -100,7 +100,7 @@
   has no key (E-Q11), so it cannot be reached from the preview at all.
 - **Where** (E-Q15): on an image in the contact sheet and on the image in the preview (in the
   compare too, where it acts on the current image as the keys do). Not on the empty part of the
-  contact sheet.
+  contact sheet. **Not on the filmstrip for now (owner, 2026-11-19, while T221 was written).**
 - **Which images** (E-Q16): the image right-clicked becomes the current image; the marking is
   kept as it is. The commands then act on their usual targets (ADR 0014 §2 point 6; E-Q4): a
   right-click on a marked image acts on all the marked images, a right-click on an image that is

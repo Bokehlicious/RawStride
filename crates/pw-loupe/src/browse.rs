@@ -298,6 +298,26 @@ impl Tab {
         self.current
     }
 
+    /// A right-click on the cell of file `index`, before the right-click menu opens (ADR 0019
+    /// §2.9, E-Q16): `index` becomes current and the marking and its anchor are kept as they are.
+    /// With `Selection::targets` this makes a command from the menu act on every marked image when
+    /// the image clicked is marked and more than one is, and on that image alone otherwise. Ends
+    /// with `refilter` keeping the new current image, as `click`. A right-click on an image that is
+    /// not visible changes nothing (S5). Returns the new current file index.
+    pub fn right_click(
+        &mut self,
+        index: usize,
+        ratings_ready: bool,
+        rating_of: &dyn Fn(&Path) -> Option<Rating>,
+    ) -> usize {
+        if !self.visible.contains(&index) {
+            return self.current;
+        }
+        self.current = index;
+        self.refilter(ratings_ready, rating_of, Some(self.current));
+        self.current
+    }
+
     /// A step in the preview, as `go()` in `app.js`: `preview_move` without "only the marked".
     pub fn loupe_move(
         &mut self,
@@ -682,6 +702,26 @@ mod tests {
         assert_eq!(*t, before);
     }
 
+    /// ADR 0019 §2.9, E-Q16 (T221): a right-click on an image that is not visible changes nothing,
+    /// as a left click (S5).
+    #[test]
+    fn a_right_click_on_a_hidden_image_changes_nothing() {
+        let (mut tabs, ratings) = setup();
+        set(
+            &mut tabs,
+            &ratings,
+            filter(
+                StarFilter::All,
+                LabelFilter::only(LabelChoice::Label("Red")),
+            ),
+        );
+        let t = tab(&mut tabs);
+        t.click(2, true, false, true, &of(&ratings));
+        let before = t.clone();
+        assert_eq!(t.right_click(7, true, &of(&ratings)), 2);
+        assert_eq!(*t, before);
+    }
+
     #[test]
     fn grid_moves_follow_positions_in_the_visible_list() {
         let (mut tabs, ratings) = setup();
@@ -1062,6 +1102,44 @@ mod tests {
         t.click(5, true, false, true, &r);
         t.click(9, true, false, true, &r);
         assert_eq!(t.selection.marked_in(&t.visible), [2, 5, 9]);
+    }
+
+    /// ADR 0019 §2.9, E-Q16 (T221): a right-click on an image that is not marked makes it current
+    /// and keeps the marking and its anchor; the menu's commands then act on that image alone.
+    #[test]
+    fn a_right_click_makes_the_image_current_and_keeps_the_marking() {
+        let (mut tabs, ratings) = setup();
+        three_marked(&mut tabs, &ratings);
+        let r = of(&ratings);
+        let t = tab(&mut tabs);
+        let anchor = t.selection.anchor();
+        assert_eq!(anchor, Some(9));
+        assert_eq!(t.right_click(7, true, &r), 7);
+        assert_eq!(t.current, 7);
+        assert_eq!(t.selection.marked_in(&t.visible), [2, 5, 9]);
+        assert_eq!(t.selection.anchor(), anchor);
+        assert_eq!(
+            t.selection.targets(&t.visible, t.current, ViewMode::Grid),
+            [7]
+        );
+    }
+
+    /// ADR 0019 §2.9, E-Q16 (T221): a right-click on a marked image, with more than one marked,
+    /// makes it current, and the menu's commands act on every marked image in display order.
+    #[test]
+    fn a_right_click_on_a_marked_image_targets_every_marked_image() {
+        let (mut tabs, ratings) = setup();
+        three_marked(&mut tabs, &ratings);
+        let r = of(&ratings);
+        let t = tab(&mut tabs);
+        assert_eq!(t.preview_move(LoupeMove::To(7), false, true, &r), 7);
+        assert_eq!(t.selection.marked_in(&t.visible), [2, 5, 9]);
+        assert_eq!(t.right_click(5, true, &r), 5);
+        assert_eq!(t.current, 5);
+        assert_eq!(
+            t.selection.targets(&t.visible, t.current, ViewMode::Grid),
+            [2, 5, 9]
+        );
     }
 
     #[test]

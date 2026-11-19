@@ -1,4 +1,4 @@
-# T221. ADR 0019 E4: a right-click menu on images, and the owner's hand check (pw-loupe) — Open
+# T221. ADR 0019 E4: a right-click menu on images, and the owner's hand check (pw-loupe) — Done
 
 - **Why:** ADR 0019 §2.9 (addition 1, accepted by the owner 2026-11-19), step E4: a right-click on
   an image in the contact sheet, or on the image in the preview (the compare included), opens a
@@ -149,3 +149,5 @@
 | Date | Status | Note |
 |---|---|---|
 | 2026-11-19 | Open | Added (ADR 0019 E4, §2.9, E-Q15–E-Q19). The owner, 2026-11-19: no menu on the filmstrip for now. Cold read: doable with the named files, names and lines right. Changed: point 4 says egui 0.37's context menu closes by itself (no `ui.close()`); point 6 places the held side's menu after the compare `match` (borrow of `self.compare`, E0502); the hidden-image test names its return value and the filter; the marked-image test names `three_marked` and moving the current image first; "Not in this task" says the keys keep acting while the menu is open, as with the menu bar |
+| 2026-11-19 | Ready for review | Points 1–7 and the five tests done. `shell.rs`: `IMAGE_CONTEXT_MENU`; `browse.rs`: `Tab::right_click`; `main.rs`: `menu_entry` (used by `draw_menu_bar` and `image_context_menu`), `right_click`, the menu on the contact sheet's cells and on both sides of the preview and compare (the held side's after the compare `match`), none while `dialog_open()`; `draw_image_area` returns `(Frame, egui::Response)`; `draw` and `draw_grid` take `commands`. The submenu test compares the slices by content (a `const` slice has no fixed address). `docs/test-inventory.md`: `pw-loupe` 975 → 980, total 1962. check.ps1 all OK: 1962 passed, 72 ignored |
+| 2026-11-19 | Done | Reviewed by the reviewer: every point and the five tests as written; check.ps1 all OK (1962 passed, 72 ignored), no clippy warning; no independent code review needed (one crate, six files). The owner's choice (no menu on the filmstrip for now) written into ADR 0019 §2.9. Leftovers (keys while the menu is open, opening it from the keyboard, the first frame's greying) in `backlog.md`, "Leftovers of T221". Committed; the owner's hand check follows (plan E4 row)

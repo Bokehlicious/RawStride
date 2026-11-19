@@ -86,7 +86,6 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status |
 |---|---|---|
-| [T221](T221-image-context-menu.md) | ADR 0019 E4: a right-click menu on images, and the owner's hand check | Open |
 
 ## Writing a task (owner and reviewer)
 

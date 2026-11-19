@@ -379,3 +379,14 @@ by the owner the same day; step E4 in `plans/adr-0018-0025-steps.md`, before ADR
   no longer built by production code (only the removed `refused_write_error` built them);
   `From<Error> for WriteError` still maps them. They are public, so no warning; remove them when
   `Error` is next changed, or keep them.
+- **Leftovers of T221** (the right-click menu on images, ADR 0019 E4; review, 2026-11-19; accepted
+  when T221 was done, to be sorted after the owner's hand check of E4):
+  - *Keys while the menu is open:* the keys keep acting while the right-click menu is open, as
+    with the menu bar's menus: Escape closes it and also clears the marking, the arrows move the
+    current image under it.
+  - *Opening it from the keyboard* (Shift+F10 or the menu key): not built.
+  - *The first frame:* in the frame of the right-click the menu is greyed by the image that was
+    current before (the click is applied after the contact sheet is drawn); nothing can be chosen
+    in that frame.
+  - (The filmstrip has no menu by the owner's choice, ADR 0019 §2.9; the template submenu waits
+    for ADR 0017 U13.)
