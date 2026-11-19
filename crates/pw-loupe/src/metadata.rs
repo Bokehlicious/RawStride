@@ -1003,6 +1003,26 @@ impl MetadataCache {
         self.ratings.is_pending(path)
     }
 
+    /// Whether a rating or metadata write of `path` (absolute) is waiting in the queue or running
+    /// (ADR 0019 §2.4, T201): a rating write (`is_pending`), the editor's write in flight, or a
+    /// write of the running "Apply to All Marked" batch not yet sent or not yet answered. "Open
+    /// in {name}" waits for it.
+    // T202 uses it to wait before the program is started; until then only the tests do.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn write_pending(&self, path: &Path) -> bool {
+        self.is_pending(path)
+            || self
+                .editor
+                .writing
+                .as_ref()
+                .is_some_and(|(_, writing)| writing == path)
+            || self
+                .editor
+                .batch
+                .as_ref()
+                .is_some_and(|batch| batch.pending_paths().any(|pending| pending == path))
+    }
+
     /// The rating a key would start from for `path` (absolute), which the undo of a move restores
     /// (ADR 0017 U9-Q8, T172, T173).
     pub(crate) fn current_rating(&self, path: &Path) -> Rating {
@@ -3933,6 +3953,77 @@ mod tests {
         assert!(!cache.is_pending(&image), "answered");
         assert_eq!(cache.current_rating(&image).stars, Some(-1));
         assert_eq!(worker.write_attempts, [image.clone(), image]);
+    }
+
+    #[test]
+    fn write_pending_follows_rating_editor_and_batch_writes() {
+        let mut worker = FakeSubmit::new([]);
+        worker.write_result = Some(Ok(()));
+        let mut cache = MetadataCache::default();
+        let rated = image_path("pw-loupe-open-wait-rated.ARW");
+        let other = image_path("pw-loupe-open-wait-other.jpg");
+        assert!(!cache.write_pending(&rated));
+
+        // a queued rating write, then sent, then answered
+        assert!(cache.set_rating(&rated, RatingKey::Stars(3)).is_ok());
+        assert!(cache.write_pending(&rated), "queued");
+        assert!(!cache.write_pending(&other));
+        let _ = cache.poll(&mut worker);
+        assert!(cache.write_pending(&rated), "sent, waiting for its answer");
+        let _ = cache.poll(&mut worker);
+        assert!(!cache.write_pending(&rated), "answered");
+
+        // the editor's write in flight, then answered
+        let edited = image_path("pw-loupe-open-wait-edited.jpg");
+        assert_eq!(
+            cache.save_edits(&edited, title_edits(), &mut worker),
+            Ok(())
+        );
+        assert!(cache.write_pending(&edited));
+        assert!(!cache.write_pending(&other));
+        worker
+            .events
+            .push_back(edits_written(900, &edited, Ok(report(Vec::new()))));
+        assert!(cache.poll(&mut worker).is_empty());
+        assert!(!cache.editor_saving());
+        assert!(!cache.write_pending(&edited), "answered");
+    }
+
+    #[test]
+    fn write_pending_covers_a_batchs_queued_and_sent_images() {
+        let mut worker = FakeSubmit::new([]);
+        // the first write is taken, the later ones stay in the batch's queue
+        worker.edits_capacity = Some(1);
+        let mut cache = MetadataCache::default();
+        let (a, b, c) = start_three(&mut cache, &mut worker);
+        let other = image_path("pw-loupe-open-wait-batch-other.jpg");
+        assert_eq!(worker.edits_writes.len(), 1);
+
+        assert!(cache.write_pending(&a), "in flight");
+        assert!(cache.write_pending(&b), "queued");
+        assert!(cache.write_pending(&c), "queued");
+        assert!(!cache.write_pending(&other));
+
+        // a answers, the queue takes b and c
+        worker.edits_capacity = None;
+        worker
+            .events
+            .push_back(edits_written(900, &a, Ok(report(Vec::new()))));
+        assert!(cache.poll(&mut worker).is_empty());
+        assert!(!cache.write_pending(&a), "answered");
+        assert!(cache.write_pending(&b));
+        assert!(cache.write_pending(&c));
+
+        worker
+            .events
+            .push_back(edits_written(901, &b, Ok(report(Vec::new()))));
+        worker
+            .events
+            .push_back(edits_written(902, &c, Ok(report(Vec::new()))));
+        assert!(cache.poll(&mut worker).is_empty());
+        assert!(!cache.batch_running());
+        assert!(!cache.write_pending(&b), "answered");
+        assert!(!cache.write_pending(&c), "answered");
     }
 
     #[test]

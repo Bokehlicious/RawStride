@@ -10,6 +10,8 @@ mod compare;
 mod deletes;
 mod deletes_text;
 mod editor;
+mod external;
+mod external_text;
 mod field_values;
 mod filter;
 pub mod focus;
@@ -59,6 +61,15 @@ pub use deletes_text::{
 pub use editor::{
     BatchEdits, CopiedFields, EditorField, EditorForm, EditorSection, EditorText, OpenConflict,
     RatingButton, WriteReason, apply_confirmation, editor_text, notice_text, write_reason_text,
+};
+pub use external::{
+    COMMAND_LINE_LIMIT, MANY_IMAGES, OpenPlan, OpenRequest, OpenStep, StartError,
+    command_line_length, images_that_fit, plan_open, start_program,
+};
+pub use external_text::{
+    image_gone_text, nothing_to_open_text, open_button_text, open_cancel_text,
+    open_in_another_text, open_in_text, open_many_question_text, opened_text, program_missing_text,
+    program_number_text, start_failed_text, too_long_text, waiting_for_writes_text,
 };
 pub use field_values::{
     FIELD_VALUES_FILE, FieldValues, RECENT_LIMIT, ValueChoice, ValueList, field_id,

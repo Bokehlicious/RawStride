@@ -147,6 +147,11 @@ Every other property already uses IPTC's English name in both languages.
 | – | Delete Rejected Images | the menu item that deletes the rejected images of the active tab's folder (ADR 0018 B5, T190); added by T187 |
 | – | RAW+JPEG pair | an image's RAW and JPEG files of the same name, deleted together (ADR 0018 B-Q3); added by T187 |
 | – | Delete | the confirmation's button that deletes (ADR 0018); its other button is "Cancel" (§6); added by T187 |
+| – | Open in {name} | the Image menu's item per program in the list of external programs, opening the chosen images in that program (ADR 0019 §2.3, E-Q3); added by T201 |
+| – | Open in Another Program… | the Image menu's item while no external program is set up (ADR 0019); added by T201 |
+| – | Waiting for writes … | the status line while "Open in {name}" waits for the images' rating or metadata writes (ADR 0019 §2.4, E-Q6); added by T201 |
+| – | Open | the button of the question asked before more than 100 images are opened in a program (ADR 0019 E-Q8); its other button is "Cancel" (§6); added by T201 |
+| – | command line | the program's path and the images' paths it is started with; Windows' own limit is 32 767 characters, and "Open in {name}" says so when the images do not fit ("… the command line would be longer than Windows allows.", ADR 0019); added by T201 |
 
 ## 4. Viewer and zoom
 

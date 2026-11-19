@@ -268,6 +268,14 @@ and reviewer:
     `DRIVE_REMOTE` and a volume without a name. Kept until a network drive is at hand (not
     checked at B5 either, 2026-11-18).
 
+- **Known limits of opening images in another program** (T201's brief, 2026-11-19; accepted when
+  T201 was done; each becomes a task only if it is noticed in use):
+  - *The length:* `command_line_length` follows `std`'s quoting on Windows as it is today; a later
+    `std` that quotes otherwise is caught only by the start's error (the start then fails with
+    Windows' reason).
+  - *`.bat` and `.cmd`:* a batch file set up as a program is measured as an `.exe`; `std` starts
+    it through `cmd.exe` and may refuse some arguments, so its start may fail with `Failed`.
+
 - **Leftovers from the review of T197** (reviewer and an independent review agent, 2026-11-19;
   none is caused by T197, which avoids the first for X-Trans by refusing a box under 512 px before
   LibRaw is called):
