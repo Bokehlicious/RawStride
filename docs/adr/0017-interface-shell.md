@@ -594,7 +594,7 @@ separate window waits (§7.2).
 
 | Wish | When (owner, 2026-11-12) | Note |
 |---|---|---|
-| **GPS**: import a GPX track and match it to capture times (with a time offset), set a position on a map, fill in city, country and location from the position (reverse geocoding) | **Later: the next metadata ADR after this one** | Needs new dependencies (a map view, probably an online place service): an owner decision and a licence check (ADR 0002) |
+| **GPS**: import a GPX track and match it to capture times (with a time offset), set a position on a map, fill in city, country and location from the position (reverse geocoding) | **Later: the next metadata ADR after this one** | Needs new dependencies (a map view, probably an online place service): an owner decision and a licence check (ADR 0002). **Drafted as [ADR 0028](0028-positions-map-and-gpx.md) (proposed, parked; owner, 2026-11-19)**; reverse geocoding is left out there (its L-Q4) |
 | **Find and replace** in metadata across many images (fields, case, whole words, file names) | Further out | Uses the safe write of ADR 0007 §9 |
 | **Keyword panel**: a flat list of approved keywords, and structured keywords (hierarchy, synonyms, import/export as text) | Further out | Lets RawStride edit the hierarchical keywords it only keeps today (ADR 0007 §8) |
 | Tagging (a yes/no mark apart from stars and labels) | Later, after stage A (owner, 2026-11-12) | |
