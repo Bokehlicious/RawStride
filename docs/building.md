@@ -23,12 +23,13 @@ requirement.
 ```powershell
 git clone <repository URL>
 cd <repository folder>
-vcpkg install
+vcpkg install --triplet x64-windows-static-md
 ```
 
 `vcpkg install` reads `vcpkg.json` (versions pinned by its baseline) and builds the libraries into
-`.\vcpkg_installed`, with the triplet `x64-windows-static-md` set in `.cargo\config.toml`. The first
-run takes a while, because LibRaw is built from source.
+`.\vcpkg_installed`. The triplet must be given: without it vcpkg builds for `x64-windows`, while the
+build looks for `x64-windows-static-md` (static libraries with the dynamic C runtime, as Rust links
+on MSVC). The first run takes a while, because LibRaw is built from source.
 
 The build looks for the libraries in `.\vcpkg_installed`. To use them from another folder (for
 example a second Git worktree), set `VCPKG_INSTALLED_DIR` to that folder's `vcpkg_installed`.
@@ -77,7 +78,7 @@ Some tests need more than the source:
 | Message | Cause |
 |---|---|
 | `VCPKG_INSTALLED_DIR is not set and neither … exists` | `vcpkg install` has not been run in the repository root |
-| a linker error naming `raw_r.lib` or `turbojpeg` | the libraries were built for another triplet or are missing; run `vcpkg install` again |
+| a linker error naming `raw_r.lib` or `turbojpeg` | the libraries were built for another triplet or are missing; run `vcpkg install --triplet x64-windows-static-md` again |
 | `ExifTool is missing` in RawStride, or the metadata tests fail at start | `exiftool.exe` is not on `PATH` |
 
 `docs/dev-setup.md` describes the maintainer's own machine (exact versions and local paths); you do

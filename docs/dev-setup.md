@@ -31,11 +31,12 @@ The Tauri CLI and Node.js are only needed for the current Tauri app. The planned
 ## Native dependencies
 
 LibRaw is built by vcpkg in **manifest mode** from `vcpkg.json`.
-The triplet is `x64-windows-static-md`, set in `.cargo/config.toml`.
+The triplet is `x64-windows-static-md`; vcpkg does not read `.cargo/config.toml`, so it is given
+on the command line (`.cargo/config.toml` sets it only for the Cargo build).
 The vcpkg baseline is pinned in `vcpkg.json` (`builtin-baseline`).
 
 ```powershell
-vcpkg install            # run in the repo root; output goes to .\vcpkg_installed
+vcpkg install --triplet x64-windows-static-md   # run in the repo root; output goes to .\vcpkg_installed
 ```
 
 ## Running the tests

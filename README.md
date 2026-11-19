@@ -33,7 +33,7 @@ macOS, open an issue to say so. See [docs/building.md](docs/building.md): Visual
 vcpkg and ExifTool, then
 
 ```powershell
-vcpkg install
+vcpkg install --triplet x64-windows-static-md
 cargo run --release -p pw-loupe
 ```
 
