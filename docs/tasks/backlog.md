@@ -152,7 +152,8 @@ and reviewer:
     "Block command line pushes that expose my email".
   - *A trademark search* for the name RawStride (ADR 0012, ADR 0002 §4).
   - *Small fixes*: `repository = ""` in `Cargo.toml`; a path with the owner's user name in
-    `done/T115-…`; `docs/agent-tasks.md` (about 700 KB, replaced by `docs/tasks/`) archived or
+    `done/T115-…` and in `docs/analyses/2026-11-04-m2-pipeline-steps.md` (line 502,
+    `C:\Users\…\.cargo`); `docs/agent-tasks.md` (about 700 KB, replaced by `docs/tasks/`) archived or
     removed; the done tasks' logs read once with public eyes.
   - *Choices*: the owner's name as test data in `pw-metadata`; the one-off `tools/m2-*.cmd`
     scripts with paths to the test-data folder; `.github/` with CI, issue templates and a
@@ -162,6 +163,36 @@ and reviewer:
     installed).
   - A binary release also needs what ADR 0002 §4 lists (distribution folder,
     `THIRD-PARTY-NOTICES.txt`, ExifTool).
+  - Found by a second survey (2026-11-19, owner: into the backlog):
+    1. *Licence notice in the program*: GPL-3.0 §0 and §5(d) ask an interactive program to show
+       "Appropriate Legal Notices" (copyright, no warranty, where the licence is), usually in an
+       About box. `pw-loupe` has none, and ADR 0002 §4 does not list it. Needed before the first
+       binary release, not before the repository is public; an ADR 0002 §4 line first.
+    2. *Free test files*: `tests/fixtures/` holds only a README, so every real-file test needs
+       the owner's `PW_TESTDATA`. A contributor's run, or CI, passes without one RAW, DNG or JPEG
+       being decoded or written. A few of the owner's own images released as CC0 (small RAW,
+       DNG, JPEG and TIFF, metadata checked first) would let the ignored tests run anywhere.
+    3. *Measurement tools outside the repository*: `docs/requirements-image-viewer.md`,
+       ADR 0008 and ADR 0015 name `D:\PhotoWorkflowData\pm-study\tools\latency.ps1` and
+       `…\pm-study\results\`, so no one else can repeat the acceptance measurements. Choose:
+       bring the RawStride-only scripts into `tools/`, or say in those documents that the tools
+       are the owner's and not published. The folder name `pm-study` hints at another product;
+       allowed by the clean-room policy (observations stay outside), but seen by readers.
+    4. *The old name in configuration*: `vcpkg.json` (`"name": "photoworkflow"`, the description
+       "Native dependencies for PhotoWorkflow"); `src-tauri/tauri.conf.json` goes with T207.
+    5. *Local folders ignored only on the owner's machine*: `TokenEconomizer/` is hidden by
+       `.git/info/exclude` and `.claude/` (`settings.local.json`) by a rule outside the repository,
+       not by `.gitignore`; in another clone a `git add -A` would take them. Add both to
+       `.gitignore` (a tooling change, so through a task).
+- **`pw-rawview` and the direct ExifTool write calls after T207** (2026-11-19, from T207's
+  brief): once the Tauri app is gone, `crates/pw-rawview` has no user (ADR 0009 §4.1: "Whether it
+  is removed after the switch is decided with GR8"), and `pw-metadata`'s
+  `ExifTool::write_rating` and `ExifTool::write_iptc` (the "Tauri path" in T204 and T205) are
+  called only by `tests/sidecar.rs`; the program writes through the worker. Owner to decide:
+  remove `pw-rawview` with its tests (and its `tests/engine.rs` and `libraw_engine.rs` rows in
+  `docs/test-inventory.md` and `tools/m2-step2.cmd`, which T208 keeps), or keep it as reference
+  for ADR 0006; and remove the direct write
+  calls with the tests that use them, or keep them as a tested public API.
 - **Known limits of `relocate::companions`** (`/code-review` of T169, 2026-11-17; accepted, the
   moves are Windows only; **kept** at the sort of 2026-11-17 until a Linux or macOS port):
   - *Case-sensitive file systems:* a file whose name differs from the image's only in case is

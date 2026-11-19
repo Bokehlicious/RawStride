@@ -5,6 +5,7 @@
   its own work part, with its own approval and commit.
 - **Amendment 1 (owner, 2026-11-10, §13):** a held step key in the loupe waits for the shown image
   (task T62).
+- **The Tauri app is retired (owner, 2026-11-19, §7):** removed by T207 without waiting for S6.
 - S6 partly done (2026-11-11, runs 11–13 open): results in
   `docs/analyses/2026-11-11-adr0009-s6-acceptance.md`.
 - Date: 2026-11-07
@@ -301,6 +302,12 @@ These parts were measured in P7. They are rewritten to production quality, not c
 No other new crates are planned. `cc` is already used by `pw-libraw`.
 
 ## 7. Coexistence with the Tauri app (GR8)
+
+**Ended (owner, 2026-11-19):** the Tauri app is retired now, without waiting for the rest of S6;
+S6 measures the egui program only and is not affected. `src-tauri/` and `ui/` are removed from the
+workspace (T207), its scripts in `tools/` follow (T208), and texts that name it are reworded
+(T209). Whether `pw-rawview` stays (§4.1) is decided separately. The points below are kept as
+history.
 
 - **Nothing in `src-tauri`, `ui/web` or `pw-rawview` changes in milestone 1.**
 - **`pw-libraw` is extended only additively.**

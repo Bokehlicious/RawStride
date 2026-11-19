@@ -53,7 +53,7 @@ pub enum Zoom {
 }
 
 /// Smallest and largest free zoom: half of fit (or of 100 %, whichever is smaller) up to 800 %, as
-/// the current viewer (`ui/web/app.js`, `zoomTo`).
+/// taken from the retired Tauri viewer's `zoomTo`.
 pub const MAX_SCALE: f64 = 8.0;
 /// One + or − step.
 pub const ZOOM_STEP: f64 = 1.25;

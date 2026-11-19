@@ -1,9 +1,11 @@
 //! Embeds a manifest that asks Windows for Common Controls version 6 (T47).
 //!
-//! In this workspace `rfd` is shared with the Tauri app's `tauri-plugin-dialog`, so Cargo builds
-//! it with the `common-controls-v6` feature. Its message box (used by `on_exit`, ADR 0013 T44) then
-//! imports `TaskDialogIndirect` from `comctl32.dll`, which exists only in version 6. Without this
-//! manifest Windows loads version 5 and the program exits at start with 0xC0000139.
+//! It was needed while the retired Tauri app's `tauri-plugin-dialog` shared `rfd` in this
+//! workspace and so built it with the `common-controls-v6` feature: `rfd`'s message box then
+//! imported `TaskDialogIndirect` from `comctl32.dll`, which exists only in version 6, and without
+//! the manifest Windows loaded version 5 and the program exited at start with 0xC0000139. No
+//! package turns that feature on any longer; the manifest is kept so the program's dialogs look the
+//! same.
 
 use std::env;
 

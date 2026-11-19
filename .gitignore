@@ -12,15 +12,6 @@
 /vcpkg_installed_openmp/
 /target-openmp/
 
-# Frontend
-node_modules/
-/ui/dist/
-/ui/.vite/
-
-# Tauri
-/src-tauri/target/
-/src-tauri/gen/
-
 # Local data – RAW files, catalogs and caches live outside the repo
 # (D:\PhotoWorkflowData). Small, licence-clean fixtures only in tests/fixtures.
 *.ARW

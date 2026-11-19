@@ -763,7 +763,7 @@ mod tests {
         assert_eq!(wheel_factor(f32::NAN), 1.0);
     }
 
-    /// The `app.js` case "loupe within filter" (`ui/tests/filter-select.test.js`) on
+    /// The case "loupe within filter", taken from the retired Tauri app's tests, on
     /// `Tab::loupe_move`: with the `browse.rs` setup (1: 3 stars, 2: 5 stars Red, 3: rejected,
     /// 4: Red only), filter Red, Home, Enter, step right → IMG_002, then IMG_004.
     #[test]

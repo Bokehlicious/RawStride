@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/*", "src-tauri", "tools/rea-probe", "tools/preview-bench", "tools/raw-decode-bench"]
+members = ["crates/*", "tools/rea-probe", "tools/preview-bench", "tools/raw-decode-bench"]
 
 [workspace.package]
 version = "0.1.0"

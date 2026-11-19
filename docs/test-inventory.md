@@ -1,7 +1,7 @@
 # Test inventory
 
 This inventory describes Rust tests included by `cargo test --workspace`. It was checked against
-a Windows run on 2026-11-19 (after T87–T206): **1984 passed, 76 ignored by default, 0 failed**.
+a Windows run on 2026-11-19 (after T87–T207): **1982 passed, 73 ignored by default, 0 failed**.
 Test counts include
 ignored tests. Unit-test rows aggregate the inline `#[cfg(test)]` modules in each crate; for
 `pw-loupe`, the shared metadata module is included in both its library and binary test targets.
@@ -10,7 +10,6 @@ requirement is fully verified.
 
 | Crate | File(s) | What it verifies | Category | Prerequisites | Tests | Ignored |
 |---|---|---|---|---|---:|---:|
-| `photoworkflow` | `src-tauri/src/ingest.rs` | Ingest action labels and conversion of dialog text to IPTC. | Unit | vcpkg libraries | 2 | 0 |
 | `preview-bench` | `tools/preview-bench/src/main.rs` | CSV parsing, timing statistics, and reading byte ranges including an unaligned end-of-file range. | Unit | None | 4 | 0 |
 | `pw-colour` | `crates/pw-colour/src/tests.rs` | Colour conversion with `moxcms` against reference values computed independently (each channel within 1): sRGB → Adobe RGB and ProPhoto RGB → sRGB in 8 bit, ProPhoto RGB → sRGB in 16 bit reduced to 8 bit, and sRGB → an Adobe RGB profile parsed from ICC bytes; the identity (the same built-in profile, two profiles from the same ICC bytes) leaving 8- and 16-bit data unchanged byte for byte; bad ICC bytes (empty, garbage, a profile cut in half) as errors and a gray profile as `Unsupported`; the error texts; a length that is not whole RGB pixels refused with the data unchanged, and an empty buffer; chunked conversion of 65 536 × 2 + 7 pixels equal to converting each pixel on its own; the transform cache (the same `Arc` for the same pair, another for a different pair, a failed build returned and not cached); `Send + Sync` of `Transform`, `TransformCache` and `Profile`; the JPEG source profile (`jpeg_source_profile`, ADR 0016 C4) checked by identity: an Adobe RGB ICC with or without the Exif marker gives the profile of those bytes, no ICC with the marker Adobe RGB, no ICC without it sRGB, a garbage or gray ICC with the marker Adobe RGB, a garbage ICC without it sRGB; `jpeg_source_profile_checked` (ADR 0016 §5, T73): no ICC not flagged (with and without the marker), a usable Adobe RGB ICC not flagged, a garbage ICC flagged with sRGB and, with the marker, flagged with Adobe RGB, a gray ICC flagged. | Unit | None | 20 | 0 |
 | `pw-core` | `crates/pw-core/src/lib.rs` | Human-readable byte formatting and unit-boundary rounding. | Unit | None | 14 | 0 |

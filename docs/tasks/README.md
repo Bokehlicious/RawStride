@@ -86,11 +86,13 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status |
 |---|---|---|
+| [T208](T208-remove-the-tauri-app-scripts.md) | Remove the scripts in `tools/` that build or run the Tauri app | Open |
+| [T209](T209-texts-that-name-the-tauri-app.md) | Comments and documents that still name the Tauri app as if it existed | Blocked |
 
 ## Writing a task (owner and reviewer)
 
-- **Number:** the next free number after the highest in this folder and `done/` (T207 next).
-- **File:** `docs/tasks/T207-<a-few-words>.md`; three digits, lower case, words joined by `-`.
+- **Number:** the next free number after the highest in this folder and `done/` (T210 next).
+- **File:** `docs/tasks/T210-<a-few-words>.md`; three digits, lower case, words joined by `-`.
 - **Index:** add a row to "Open tasks" above and keep its status in step with the file's heading.
 - **Size (owner, 2026-11-15, after T142):** one task is one layer (a C++ shim or a core crate, or
   the shell in `pw-loupe`), about eight files at most, and gives one result the owner can check by
