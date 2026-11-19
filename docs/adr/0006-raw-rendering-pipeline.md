@@ -2,6 +2,9 @@
 
 - Status: **proposed**. The owner approved the direction (OpenMP LibRaw and points 1–6, 2026-11-04);
   this is the design for the implementation, shown before it starts.
+- **`pw-rawview` is removed (owner, 2026-11-19):** it had no user once the Tauri app was retired
+  (ADR 0009 §7, T207); the egui program uses `pw-viewcore` (ADR 0008, ADR 0009 §4.1). Removed by
+  T210; the code stays in the git history. This ADR is kept as the record of the M2 design.
 - Date: 2026-11-04
 - Basis: `docs/analyses/2026-11-04-m2-libraw-decode.md` (measurements and follow-ups 1–4),
   `docs/libraw-build.md`.

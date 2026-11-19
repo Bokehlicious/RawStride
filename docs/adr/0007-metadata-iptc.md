@@ -867,7 +867,11 @@ listed under the table (§17.1).
   (`docs/tasks/backlog.md`; ADR 0017 U13).
 - Image Region (ADR 0017 U11b). The other lists of structures and editing several images are done
   (ADR 0017 U11, U12; T136–T143, T125, T126, T179, T180).
-- The Tauri app keeps its in-place write (D7) until it is retired (GR8).
+- The Tauri app keeps its in-place write (D7) until it is retired (GR8). **Retired 2026-11-19
+  (T207); owner, 2026-11-19:** the in-place write calls `ExifTool::write_rating` and
+  `ExifTool::write_iptc` (and the private `write_tags`) are removed with the tests that use only
+  them, so every write goes through the safe write (§9); coverage they alone had is moved to the
+  safe write's tests (T211).
 - Revision 26 (§9.4 Q14, §8 Q15, §6.3 Q16): two tasks (ADR 0029 step P0b; T204 the
   modification time, T205 Q15 and Q16); both done and hand-checked by the owner 2026-11-19.
 

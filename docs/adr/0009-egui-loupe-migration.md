@@ -194,6 +194,8 @@ screen at that level, so it is never a blurred upscale (V2).
     with exact regions as raw RGB.
   - `pw-rawview` therefore stays with the Tauri app. Whether it is removed after the switch is decided
     with GR8.
+  - **Decided (owner, 2026-11-19):** `pw-rawview` is removed with its tests (T210), since the
+    Tauri app is retired (§7).
 
 ### 4.2 Data flow
 
@@ -306,7 +308,7 @@ No other new crates are planned. `cc` is already used by `pw-libraw`.
 **Ended (owner, 2026-11-19):** the Tauri app is retired now, without waiting for the rest of S6;
 S6 measures the egui program only and is not affected. `src-tauri/` and `ui/` are removed from the
 workspace (T207), its scripts in `tools/` follow (T208), and texts that name it are reworded
-(T209). Whether `pw-rawview` stays (§4.1) is decided separately. The points below are kept as
+(T209). `pw-rawview` is removed too (owner, 2026-11-19, §4.1; T210). The points below are kept as
 history.
 
 - **Nothing in `src-tauri`, `ui/web` or `pw-rawview` changes in milestone 1.**

@@ -185,15 +185,6 @@ and reviewer:
        `.git/info/exclude` and `.claude/` (`settings.local.json`) by a rule outside the repository,
        not by `.gitignore`; in another clone a `git add -A` would take them. Add both to
        `.gitignore` (a tooling change, so through a task).
-- **`pw-rawview` and the direct ExifTool write calls after T207** (2026-11-19, from T207's
-  brief): once the Tauri app is gone, `crates/pw-rawview` has no user (ADR 0009 §4.1: "Whether it
-  is removed after the switch is decided with GR8"), and `pw-metadata`'s
-  `ExifTool::write_rating` and `ExifTool::write_iptc` (the "Tauri path" in T204 and T205) are
-  called only by `tests/sidecar.rs`; the program writes through the worker. Owner to decide:
-  remove `pw-rawview` with its tests (and its `tests/engine.rs` and `libraw_engine.rs` rows in
-  `docs/test-inventory.md` and `tools/m2-step2.cmd`, which T208 keeps), or keep it as reference
-  for ADR 0006; and remove the direct write
-  calls with the tests that use them, or keep them as a tested public API.
 - **Known limits of `relocate::companions`** (`/code-review` of T169, 2026-11-17; accepted, the
   moves are Windows only; **kept** at the sort of 2026-11-17 until a Linux or macOS port):
   - *Case-sensitive file systems:* a file whose name differs from the image's only in case is
