@@ -13,20 +13,24 @@ and reviewer:
   remove a qualified item). Also from T193's chain review (2026-11-18): the import's
   template drops a change to such a list without a notice (`apply_template_safely` returns no
   plan notices), and the editor gives no warning before OK that the list will not be written.
-  Leftovers from the review of T193 (2026-11-18): the text of `DigestNotWritten` ("because a
-  conflict is unresolved") is misleading when the reason is a held list with qualifiers;
-  `write_plan::plan` itself does not refuse a changed list with qualifiers (only its callers in
-  `edit.rs` put it back; `write_rating_safely` writes no list); recent values (`main.rs`
-  `recorded`) also record a keyword that was put back; the batch's "Written" count also counts an
-  image whose write was `Unchanged`; an `xml:lang` on a list item is not in ExifTool 13.59's JSON
-  (so not marked) and is kept by a whole-list write, but also given to the new items; T193's hand
-  check (owner, 2026-11-19) did not try a JPEG with IIM, a list with qualifiers and an IIM/XMP
-  conflict (no such file at hand), so the held list's `DigestNotWritten` is checked only by tests;
-  Leftovers from the review of T194 (2026-11-19): the batch (`metadata.rs` `batch_written`) lists
-  only `ConflictKept` and `QualifiersKept` of an image other than the window's; its `Truncated`,
-  `IimConvertedToUtf8` and `DigestNotWritten` are dropped, so the user does not learn that a field
-  was truncated in another image, and the `match` ends in `_ => {}`, so a new notice kind would be
-  dropped without a decision (an exhaustive `match` would force one);
+  Leftovers from the review of T193 (2026-11-18): `write_plan::plan` itself does not refuse a
+  changed list with qualifiers (only its callers in `edit.rs` put it back; `write_rating_safely`
+  writes no list); recent values (`main.rs` `recorded`) also record a keyword that was put back;
+  the batch's "Written" count also counts an image whose write was `Unchanged`; an `xml:lang` on a
+  list item is not in ExifTool 13.59's JSON (so not marked) and is kept by a whole-list write, but
+  also given to the new items; T193's hand check (owner, 2026-11-19) did not try a JPEG with IIM,
+  a list with qualifiers and an IIM/XMP conflict (no such file at hand), so the held list's
+  `DigestNotWritten` is checked only by tests.
+  **Sorted after T194 (owner, 2026-11-19):** the misleading text of `DigestNotWritten` is T199, and
+  the batch dropping another image's `Truncated`, `IimConvertedToUtf8` and `DigestNotWritten`
+  (with the `match`'s `_ => {}` arm, from the review of T194) is T198. Stay, each for a reason:
+  the template's missing notice waits for templates in full (ADR 0017 U13); the warning before OK
+  is not needed while the info panel's notice and the write notice tell the user; `plan` not
+  refusing, because every caller today puts the list back (taken up when a new caller of `plan`
+  comes); the recent values, because a value put back is harmless to offer again; the "Written"
+  count, because ADR 0017 U12d-Q8 already decides that an unchanged image counts as written; the
+  `xml:lang`, because ExifTool 13.59 does not report it and it belongs with editing such lists;
+  the hand check of the held list's `DigestNotWritten`, done when such a file is at hand.
   from §10, left out of T88: template sub-fields of lists of
   structures (Location Created, Image Creator, Copyright Owner, Licensor), variables (`{date}` …),
   template files in XMP with the modes (where the modes are stored is decided with U13). Left out of I10: editing several

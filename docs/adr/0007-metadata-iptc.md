@@ -824,7 +824,9 @@ listed under the table (§17.1).
 ## 18. What is left after milestone 8
 
 - §6.6 Exif ImageEditor ↔ Contributor: T192.
-- §8 lists with qualifiers not written: T193, T194. Editing such a list with its qualifiers kept
+- §8 lists with qualifiers not written: T193, T194 (done). The notice that no new checksum was
+  written gives a reason that holds for both causes (§5.2 Q1, §8): T199. The batch's lines for the
+  other images' notices: T198 (ADR 0017 U12d-Q9). Editing such a list with its qualifiers kept
   (`docs/tasks/backlog.md`).
 - §6.7 camera GPS → the coordinates of Location Created: T196. Reverse
   geocoding, GPX and a map: the GPS ADR after ADR 0017 (its §7.2).
@@ -862,3 +864,4 @@ listed under the table (§17.1).
 | 21 | 2026-11-18 | Owner decisions: §6.6 Image Editor ↔ Contributor (the content editor by its Role URI, `http://` too; Exif fills an absent Contributor, otherwise a conflict whose Exif side keeps the other Contributors; ImageEditor written only if it exists); §8 a list whose items have qualifiers is shown but not written, after a check showed that ExifTool 13.59 cannot change or remove a qualified item; §18: T192, T193, T194 |
 | 22 | 2026-11-18 | Owner decisions: §6.7 camera GPS fills only the coordinates of Location Created (no network, no new dependency; reverse geocoding, GPX and a map stay with the GPS ADR); §11 Scene Code (6 digits, IPTC Scene NewsCodes), Subject Code (8 digits, format only) and Genre (IPTC Genre NewsCodes only when its CV ID is that vocabulary) give warnings, Intellectual Genre is not checked; §16 point 7 reads the two vocabularies (R4); §18 brought up to date |
 | 23 | 2026-11-18 | §16 point 7 done (R4: 24 Scene codes; 58 Genre codes, 7 retired); §11 the Genre CV ID may also use `https://` and lack the trailing `/` (cold read of T195); §6.7 the tolerance of 0.0001°, the altitude not compared, any Exif GPS counts as the camera's (cold read of T196); §18 names T195 and T196 |
+| 24 | 2026-11-19 | Owner decision (backlog sorted after T194): the notice that no new IIM checksum was written names a reason that holds both for an unresolved conflict (§5.2 Q1) and for a held list with qualifiers (§8), "No new IIM checksum was written, because IIM and XMP still differ" (T199); §18 names T198 and T199 |

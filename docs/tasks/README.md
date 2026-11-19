@@ -89,11 +89,13 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 | [T195](T195-scene-subject-and-genre-codes-checked.md) | Scene Code, Subject Code and Genre checked against IPTC NewsCodes (ADR 0007 §11) | Open |
 | [T196](T196-camera-gps-fills-location-created.md) | Camera GPS fills the coordinates of Location Created (ADR 0007 §6.7) | Open |
 | [T197](T197-region-render-on-raf.md) | The region render on RAF (ADR 0027 W0) | Open |
+| [T198](T198-batch-lines-for-every-notice.md) | The batch names every write notice of the other images (ADR 0017 U12d-Q9) | Open |
+| [T199](T199-checksum-notice-names-both-reasons.md) | The notice that no new IIM checksum was written names a reason that holds for both causes (ADR 0007 §8) | Open |
 
 ## Writing a task (owner and reviewer)
 
-- **Number:** the next free number after the highest in this folder and `done/` (T198 next).
-- **File:** `docs/tasks/T198-<a-few-words>.md`; three digits, lower case, words joined by `-`.
+- **Number:** the next free number after the highest in this folder and `done/` (T200 next).
+- **File:** `docs/tasks/T200-<a-few-words>.md`; three digits, lower case, words joined by `-`.
 - **Index:** add a row to "Open tasks" above and keep its status in step with the file's heading.
 - **Size (owner, 2026-11-15, after T142):** one task is one layer (a C++ shim or a core crate, or
   the shell in `pw-loupe`), about eight files at most, and gives one result the owner can check by
