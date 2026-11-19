@@ -1,11 +1,11 @@
-# T198. The batch names every write notice of the other images (ADR 0017 U12d-Q9) — Open
+# T198. The batch names every write notice of the other images (ADR 0017 U12d-Q10) — Done
 
 - **Why:** when the metadata window writes several images ("Apply to {n} Marked"), the batch in
   `pw-loupe` shows the window image's notices as after its own write, but for the **other**
   images it lists only `WriteNotice::ConflictKept` and `WriteNotice::QualifiersKept` (T194).
   Their `Truncated`, `IimConvertedToUtf8` and `DigestNotWritten` are dropped by a `_ => {}` arm,
   so the user does not learn, for example, that a field was truncated in IIM in another image.
-  The owner decided on 2026-11-19 (ADR 0017 U12d-Q9) that every notice of another image is a line
+  The owner decided on 2026-11-19 (ADR 0017 U12d-Q10) that every notice of another image is a line
   of the summary, in the order the answers and their notices come; the `match` names every
   notice kind, so a new one cannot be dropped without a decision.
 - **Not at the same time as T199:** both change `editor.rs` and the tests of `metadata.rs`.
@@ -45,7 +45,7 @@
      `one_failure_stops_nothing_and_the_summary_counts_failures_and_kept_conflicts`
      (`metadata.rs`, about line 3333). Its third image's report is `[ConflictKept { property:
      "photoshop:City" }, DigestNotWritten]`, and the test today expects that image's
-     `DigestNotWritten` to be dropped (`kept` holds one line, about line 3384). By U12d-Q9 it is
+     `DigestNotWritten` to be dropped (`kept` holds one line, about line 3384). By U12d-Q10 it is
      now a line: change only `kept` and the matching line of the expected `lines()` (about line
      3392) to add `"No new IIM checksum written: pw-loupe-batch-c.DNG"` right after `"Unresolved
      conflict kept: pw-loupe-batch-c.DNG (City)"`. Nothing else in that test changes; its window
@@ -90,5 +90,8 @@
 
 | Date | Status | Note |
 |---|---|---|
-| 2026-11-19 | Open | Added: from the backlog sorted after T194 (owner, 2026-11-19; ADR 0017 U12d-Q9) |
+| 2026-11-19 | Open | Added: from the backlog sorted after T194 (owner, 2026-11-19; ADR 0017 U12d-Q10) |
 | 2026-11-19 | Open | Cold read: a fresh agent found every name, helper and line number right (`WriteNotice` has five kinds, `editor_text` the only other `match` to grow, only the named existing test changes; the single-image save at `metadata.rs` ~2636 is not the batch). Unclear: which report went to which image ("second then first") and the new test's texts not written out. Fixed: the images named `a`/`b`/`c` with their ids and the order of the answers, the exact `kept` and `lines()` |
+| 2026-11-19 | Ready for review | Done as written: three `EditorText` variants and texts (`editor.rs`), the batch's `match` over another image's notices names all five `WriteNotice` kinds with no `_` arm (`metadata.rs`), doc comments updated, `one_failure_stops_nothing_…` changed only in `kept` and `lines()` as point 4 says, the new test `every_notice_of_another_image_is_a_summary_line`, three rows in the singular/plural table; `docs/test-inventory.md` (pw-loupe 941, total 1932). `.\tools\check.ps1` all OK: 1932 passed, 76 ignored, 0 failed; no clippy warnings |
+| 2026-11-19 | Ready for review | Review: every point and test as written (three `EditorText` variants with the exact texts, the batch's `match` over another image's notices names all five `WriteNotice` kinds with no `_` arm, the window image's notices unchanged, only the named existing test changed and only in `kept` and `lines()`, no panic path in non-test code); `.\tools\check.ps1` run again by the reviewer: all OK, 1932 passed, 76 ignored, 0 failed, no clippy warnings. Found: ADR 0017 had two rows U12d-Q9 (the "; " of the info panel, 2026-11-17, and this task's decision, 2026-11-19); this task's decision renamed U12d-Q10 (owner, 2026-11-19) in ADR 0017, ADR 0007 §18, this file, the task list and the code's comments |
+| 2026-11-19 | Done | Approved by the owner. The owner's hand check ("Apply to {n} Marked" on images where another image than the window's gets a notice, for example a field truncated in IIM) follows |

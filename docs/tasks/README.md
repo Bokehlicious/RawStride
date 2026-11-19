@@ -86,7 +86,6 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status |
 |---|---|---|
-| [T198](T198-batch-lines-for-every-notice.md) | The batch names every write notice of the other images (ADR 0017 U12d-Q9) | Open |
 | [T199](T199-checksum-notice-names-both-reasons.md) | The notice that no new IIM checksum was written names a reason that holds for both causes (ADR 0007 §8) | Open |
 
 ## Writing a task (owner and reviewer)

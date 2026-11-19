@@ -220,17 +220,17 @@ pub(crate) struct BatchSummary {
     pub total: usize,
     /// The failed files, each with its reason ("Could not save metadata for <file>: …").
     pub failed: Vec<String>,
-    /// The other images where an unresolved conflict was kept ("Unresolved conflict kept: …") or a
-    /// list with qualifiers was not written ("List with qualifiers not written: …"), in the order
-    /// the answers and their notices came.
+    /// Every write notice of the other images, one line each ("Unresolved conflict kept: …",
+    /// "Truncated in IIM: …" and so on; ADR 0017 U12d-Q10), in the order the answers and their
+    /// notices came.
     pub kept: Vec<String>,
     /// The notices of the window's own image, shown as after its own write.
     pub notices: Vec<WriteNotice>,
 }
 
 impl BatchSummary {
-    /// The lines the window shows: the written count, the failed files, the kept conflicts and
-    /// lists with qualifiers not written, then the window's image's notices.
+    /// The lines the window shows: the written count, the failed files, every notice of the other
+    /// images, then the window's image's notices.
     pub fn lines(&self) -> Vec<String> {
         let written = editor_text(&EditorText::BatchWritten {
             written: self.written,
@@ -898,9 +898,8 @@ impl MetadataCache {
             }));
     }
 
-    /// One of the batch's writes answered (T126): counted as written or failed; an unresolved
-    /// conflict kept or a list with qualifiers not written (T194) in another image than the
-    /// window's is listed.
+    /// One of the batch's writes answered (T126): counted as written or failed; every notice of
+    /// another image than the window's is listed (T194, ADR 0017 U12d-Q10).
     fn batch_written(
         &mut self,
         id: RequestId,
@@ -934,7 +933,24 @@ impl MetadataCache {
                                     property: property.clone(),
                                 }));
                             }
-                            _ => {}
+                            WriteNotice::Truncated { property } => {
+                                batch.kept.push(editor_text(&EditorText::TruncatedInIim {
+                                    file: file_name(path),
+                                    property: property.clone(),
+                                }));
+                            }
+                            WriteNotice::IimConvertedToUtf8 => {
+                                batch
+                                    .kept
+                                    .push(editor_text(&EditorText::IimRewrittenAsUtf8 {
+                                        file: file_name(path),
+                                    }));
+                            }
+                            WriteNotice::DigestNotWritten => {
+                                batch.kept.push(editor_text(&EditorText::NoDigestWritten {
+                                    file: file_name(path),
+                                }));
+                            }
                         }
                     }
                 }
@@ -3381,7 +3397,10 @@ mod tests {
                 "Could not save metadata for pw-loupe-batch-b.ARW: the file is read-only"
                     .to_owned(),
             ],
-            kept: vec!["Unresolved conflict kept: pw-loupe-batch-c.DNG (City)".to_owned()],
+            kept: vec![
+                "Unresolved conflict kept: pw-loupe-batch-c.DNG (City)".to_owned(),
+                "No new IIM checksum written: pw-loupe-batch-c.DNG".to_owned(),
+            ],
             notices: window_notices,
         };
         assert_eq!(
@@ -3390,6 +3409,7 @@ mod tests {
                 "Written to 2 of 3 images.",
                 "Could not save metadata for pw-loupe-batch-b.ARW: the file is read-only",
                 "Unresolved conflict kept: pw-loupe-batch-c.DNG (City)",
+                "No new IIM checksum written: pw-loupe-batch-c.DNG",
                 "No new IIM checksum was written, because a conflict is unresolved",
                 "Province or State: the conflict is unresolved and was not written",
             ]
@@ -3474,6 +3494,82 @@ mod tests {
                 "List with qualifiers not written: pw-loupe-batch-c.DNG (Keywords)",
                 "List with qualifiers not written: pw-loupe-batch-b.ARW (Keywords)",
                 "Keywords was not written: it has qualifiers RawStride cannot keep",
+            ]
+        );
+        assert_eq!(
+            cache.take_editor_events(),
+            [EditorEvent::BatchDone(summary)]
+        );
+    }
+
+    #[test]
+    fn every_notice_of_another_image_is_a_summary_line() {
+        let mut worker = FakeSubmit::new([]);
+        let mut cache = MetadataCache::default();
+        let (a, b, c) = start_three(&mut cache, &mut worker);
+        assert_eq!(worker.edits_writes.len(), 3);
+
+        let window_notices = vec![
+            WriteNotice::Truncated {
+                property: "photoshop:Headline".to_owned(),
+            },
+            WriteNotice::IimConvertedToUtf8,
+        ];
+        worker
+            .events
+            .push_back(edits_written(900, &a, Ok(report(window_notices.clone()))));
+        assert!(cache.poll(&mut worker).is_empty());
+        // The second other image answers before the first.
+        worker.events.push_back(edits_written(
+            902,
+            &c,
+            Ok(report(vec![
+                WriteNotice::DigestNotWritten,
+                WriteNotice::Truncated {
+                    property: "dc:title".to_owned(),
+                },
+                WriteNotice::IimConvertedToUtf8,
+            ])),
+        ));
+        assert!(cache.poll(&mut worker).is_empty());
+        assert!(cache.take_editor_events().is_empty());
+        worker.events.push_back(edits_written(
+            901,
+            &b,
+            Ok(report(vec![
+                WriteNotice::ConflictKept {
+                    property: "photoshop:City".to_owned(),
+                },
+                WriteNotice::DigestNotWritten,
+            ])),
+        ));
+        assert!(cache.poll(&mut worker).is_empty());
+
+        assert!(!cache.batch_running());
+        let summary = BatchSummary {
+            written: 3,
+            total: 3,
+            failed: Vec::new(),
+            kept: vec![
+                "No new IIM checksum written: pw-loupe-batch-c.DNG".to_owned(),
+                "Truncated in IIM: pw-loupe-batch-c.DNG (Title)".to_owned(),
+                "IIM texts rewritten as UTF-8: pw-loupe-batch-c.DNG".to_owned(),
+                "Unresolved conflict kept: pw-loupe-batch-b.ARW (City)".to_owned(),
+                "No new IIM checksum written: pw-loupe-batch-b.ARW".to_owned(),
+            ],
+            notices: window_notices,
+        };
+        assert_eq!(
+            summary.lines(),
+            [
+                "Written to 3 of 3 images.",
+                "No new IIM checksum written: pw-loupe-batch-c.DNG",
+                "Truncated in IIM: pw-loupe-batch-c.DNG (Title)",
+                "IIM texts rewritten as UTF-8: pw-loupe-batch-c.DNG",
+                "Unresolved conflict kept: pw-loupe-batch-b.ARW (City)",
+                "No new IIM checksum written: pw-loupe-batch-b.ARW",
+                "Headline was truncated in IIM; XMP has the whole text",
+                "The IIM texts were rewritten as UTF-8",
             ]
         );
         assert_eq!(

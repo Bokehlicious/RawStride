@@ -2728,11 +2728,18 @@ pub enum EditorText {
     /// The first line of the batch's summary (U12c-Q6).
     BatchWritten { written: usize, total: usize },
     /// A line of the summary: an unresolved conflict on `property` (its XMP id) kept in `file`.
-    /// The summary's lines also name lists with qualifiers not written (`QualifiersKept`).
+    /// The summary's lines name every write notice of the other images (ADR 0017 U12d-Q10).
     ConflictKept { file: String, property: String },
     /// A line of the summary: a changed list with qualifiers on `property` (its XMP id) put back
     /// instead of written in `file` (ADR 0007 §8).
     QualifiersKept { file: String, property: String },
+    /// A line of the summary: the IIM value of `property` (its XMP id) truncated in `file`
+    /// (ADR 0007 §5.2).
+    TruncatedInIim { file: String, property: String },
+    /// A line of the summary: the IIM texts of `file` written again as UTF-8 (ADR 0007 §5.4).
+    IimRewrittenAsUtf8 { file: String },
+    /// A line of the summary: no new IIM checksum written in `file` (ADR 0007 §5.2 Q1, §8).
+    NoDigestWritten { file: String },
     /// The tooltip of the "▼" button right of a field that opens its list of values (U12a-Q5,
     /// U12a-Q7, T141; the triangle is painted, not a text).
     ValuesTooltip,
@@ -2956,6 +2963,12 @@ pub fn editor_text(text: &EditorText) -> String {
             "List with qualifiers not written: {file} ({field})",
             field = property_label(property, Language::En)
         ),
+        EditorText::TruncatedInIim { file, property } => format!(
+            "Truncated in IIM: {file} ({field})",
+            field = property_label(property, Language::En)
+        ),
+        EditorText::IimRewrittenAsUtf8 { file } => format!("IIM texts rewritten as UTF-8: {file}"),
+        EditorText::NoDigestWritten { file } => format!("No new IIM checksum written: {file}"),
         EditorText::ValuesTooltip => "Recent and saved values".to_string(),
         EditorText::Recent => "Recent".to_string(),
         EditorText::MyValues => "My Values".to_string(),
@@ -5380,6 +5393,25 @@ mod tests {
                     property: "dc:subject".into(),
                 },
                 "List with qualifiers not written: c.jpg (Keywords)",
+            ),
+            (
+                EditorText::TruncatedInIim {
+                    file: "d.jpg".into(),
+                    property: "photoshop:Headline".into(),
+                },
+                "Truncated in IIM: d.jpg (Headline)",
+            ),
+            (
+                EditorText::IimRewrittenAsUtf8 {
+                    file: "e.jpg".into(),
+                },
+                "IIM texts rewritten as UTF-8: e.jpg",
+            ),
+            (
+                EditorText::NoDigestWritten {
+                    file: "f.jpg".into(),
+                },
+                "No new IIM checksum written: f.jpg",
             ),
         ];
         for (text, expected) in cases {
