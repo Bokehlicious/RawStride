@@ -1,4 +1,4 @@
-# T218. The program file renamed from `pw-loupe.exe` to `rawstride.exe` — Open
+# T218. The program file renamed from `pw-loupe.exe` to `rawstride.exe` — Done
 
 - **Why:** step R10 of `docs/tasks/plans/public-release.md`, the last step of the rename (ADR 0012
   decision 3, "step 2"). ADR 0012 set it "at the latest when the egui program replaces the Tauri
@@ -61,3 +61,5 @@
 | 2026-11-19 | Blocked | Added (plan step R10, after PR-Q3: the owner's TMview search 2026-11-19). Waits for the cold read before Open |
 | 2026-11-19 | Blocked | Cold read (fresh agent, `AGENTS.md`, the README, this file and the named files): doable; line numbers and quoted texts right; nothing builds or runs the binary by name (no `CARGO_BIN_EXE_*`, `build.rs` uses `-bins`, the settings folder does not depend on it). Changed after it: `lib.rs` `USAGE` added (it began with `pw-loupe`), with its pattern in the `git grep`; the `eprintln!` prefixes counted as 18 and the console reason corrected (a debug run shows them); the S6 acceptance analysis added to the older records |
 | 2026-11-19 | Open | Cold read done |
+| 2026-11-19 | Ready for review | Points 1–6 done in the six named files; README line 6 rewrapped (blockquote, three lines). `cargo build --release -p pw-loupe` made `target\release\rawstride.exe` (2026-11-19 18:24:44); the task's `git grep` finds nothing. `check.ps1` all OK: 1957 passed, 72 ignored; clippy no warnings |
+| 2026-11-19 | Done | Reviewed: the six files as in points 1–6, nothing else; `cargo run -p pw-loupe` still works (the package name is unchanged). `test-output.txt` is from after the change (its unit tests run `target\debug\deps\rawstride-*.exe`); check.ps1 all OK: 1957 passed, 0 failed, 72 ignored; no clippy warnings outside raw-decode-bench. The task's `git grep` finds nothing. Leftover: the owner's pm-study tools (`s6a.ps1`, `S6a-guide.md`), updated by the reviewer after this commit (plan step R10) |

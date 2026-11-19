@@ -44,3 +44,4 @@
   PRV, and offices outside the EU such as USPTO and WIPO), reached from EUIPO's availability page:
   0 hits. "Stride" in TMview in Nice classes 9 and 42 (software): many hits; the owner's quick
   read of them found none that looked like a conflict with RawStride.
+- **Step 2 done (2026-11-19, T218):** the binary is `rawstride` (`rawstride.exe`); the crate is still `pw-loupe` (decision 4).

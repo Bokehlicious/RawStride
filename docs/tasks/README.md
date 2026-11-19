@@ -86,7 +86,6 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status |
 |---|---|---|
-| [T218](T218-rename-the-binary-to-rawstride.md) | The program file renamed from `pw-loupe.exe` to `rawstride.exe` | Open |
 
 ## Writing a task (owner and reviewer)
 

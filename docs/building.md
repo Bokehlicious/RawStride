@@ -39,8 +39,10 @@ example a second Git worktree), set `VCPKG_INSTALLED_DIR` to that folder's `vcpk
 cargo run --release -p pw-loupe
 ```
 
-`pw-loupe` is the RawStride program (window title "RawStride"). A folder can be given on the command
-line: `cargo run --release -p pw-loupe -- "D:\Photos\2026-11-14"`.
+The crate `pw-loupe` builds the RawStride program, `target\release\rawstride.exe` (window title
+"RawStride"). A folder can be given on the command line:
+`cargo run --release -p pw-loupe -- "D:\Photos\2026-11-14"`. The built program can also be started
+directly with a folder: `target\release\rawstride.exe "D:\Photos\2026-11-14"`.
 
 ## 4. Check your changes
 

@@ -13,7 +13,7 @@ authors.workspace = true
 workspace = true
 
 [[bin]]
-name = "pw-loupe"
+name = "rawstride"
 path = "src/main.rs"
 
 [dependencies]

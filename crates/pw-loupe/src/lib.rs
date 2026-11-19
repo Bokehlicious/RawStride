@@ -200,7 +200,7 @@ impl Default for Options {
     }
 }
 
-pub const USAGE: &str = "pw-loupe [--core-mb <MiB>] [--texture-mb <MiB>] [<folder or file>]\n\
+pub const USAGE: &str = "rawstride [--core-mb <MiB>] [--texture-mb <MiB>] [<folder or file>]\n\
      \n\
      --core-mb     memory for RAW sessions and decoded JPEGs and TIFFs (default 4096)\n\
      --texture-mb  memory for finished views as textures (default 1024)";
