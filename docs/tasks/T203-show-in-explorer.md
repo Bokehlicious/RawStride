@@ -1,8 +1,8 @@
-# T203. ADR 0019 E3: "Show in Explorer", and the owner's hand check of E2 and E3 (pw-loupe) — Blocked: waits for T202
+# T203. ADR 0019 E3: "Show in File Explorer", and the owner's hand check of E2 and E3 (pw-loupe) — Blocked: waits for T202
 
 - **Chain:** T200 (E1, done) → T201, T202 (E2) → T203 (E3). The owner's answers are E-Q1–E-Q14 in
   ADR 0019 §3.
-- **Why:** ADR 0019 §2.8, step E3: Image ▸ "Show in Explorer", without a key (E-Q11), opens the
+- **Why:** ADR 0019 §2.8, step E3: Image ▸ "Show in File Explorer", without a key (E-Q11), opens the
   folder of the current image in Windows' file manager with the file selected. ADR 0019 §4 puts
   the owner's hand check after E2 and E3; it is written here and covers both.
 - **Crates:** `pw-loupe`. **Files:** `crates/pw-loupe/src/external.rs` (point 2),
@@ -14,8 +14,8 @@
 - **What:**
   1. **Command** (`shell.rs`): `Command::ShowInExplorer`, no key, in the Image menu right after
      `MenuEntry::ExternalPrograms` (T202) and before the separator that comes before "Delete to
-     Recycle Bin". Its text in `command_text` (`shell_text.rs`) is "Show in Explorer" (ADR 0019
-     §2.8); `acts_in` gives `Where::Both` through its default arm. `command_text` and
+     Recycle Bin". Its text in `command_text` (`shell_text.rs`) is "Show in File Explorer" (ADR 0019
+     §2.8, the owner's choice of 2026-11-19); `acts_in` gives `Where::Both` through its default arm. `command_text` and
      `run_command` match every command and need the new arm; `command_enabled` has a `_` arm, so
      the greying of point 4 is an explicit arm. Three existing tests list the menus and are
      extended with the new item (allowed by this task, an exception to rule 5: an item is added,
@@ -23,7 +23,7 @@
      (`shell.rs`, about line 1038, as T202 left it: its `checked_sub(6)` becomes
      `checked_sub(7)`, its expected slice and its message and doc comment get the new item),
      `every_menu_item_text_in_menu_order`
-     ("Show in Explorer" in its place, `shell_text.rs` about line 453) and
+     ("Show in File Explorer" in its place, `shell_text.rs` about line 453) and
      `every_menu_key_text_in_menu_order` (a `None` in its place, about line 515).
   2. **The start** (`external.rs`):
      - `pub fn explorer_select_argument(path: &Path) -> OsString`: `/select,"<path>"`, built by
@@ -37,8 +37,8 @@
        platforms it returns `Err` with a short reason and starts nothing, since RawStride runs on
        Windows); the child is dropped at once, never waited for (Explorer's exit code is not a
        success signal); a spawn error is `Err(error.to_string())`.
-  3. **Text** (`external_text.rs`, rule 13): `explorer_failed_text(reason: &str)`: "Explorer
-     could not be started: {reason}" (no full stop after `{reason}`, as T201's texts), and
+  3. **Text** (`external_text.rs`, rule 13): `explorer_failed_text(reason: &str)`: "File
+     Explorer could not be started: {reason}" (no full stop after `{reason}`, as T201's texts), and
      `explorer_missing_text(name: &str)`: "{name} is no longer in its folder." (`{name}` the
      file name).
   4. **Enabled and run** (`main.rs`, `command_enabled` and `run_command`): greyed while the
@@ -51,9 +51,9 @@
      silently open another folder. `show_in_explorer`'s error goes to the status line and the
      Tasks error list (`self.tasks.add_error(…, ClockTime::now())`) with `explorer_failed_text`.
      Nothing is shown when it starts.
-  5. **Glossary** (`docs/glossary.md` §3): "Show in Explorer" (the Image menu's item, no key; ADR
+  5. **Glossary** (`docs/glossary.md` §3): "Show in File Explorer" (the Image menu's item, no key; ADR
      0019 E3, E-Q11; added by T203). The glossary's row "Utforskaren | File Explorer" (§5, T118)
-     names Windows' program; the menu item keeps the ADR's shorter "Explorer" (see the log).
+     names Windows' program, and the item uses that name (owner, 2026-11-19, ADR 0019 §2.8).
 - **Tests to add:** `external.rs`: `explorer_select_argument` for a path without and with a
   space and with a non-ASCII letter (no test starts Explorer). `external_text.rs`:
   `explorer_failed_text` and `explorer_missing_text`. `shell.rs`, `shell_text.rs`: the Image menu's order with the new item,
@@ -89,7 +89,7 @@
     is the first) says it does not exist, in the status line and the Tasks list;
   - more than 100 marked images: the question "Open {n} images in {name}?", Enter and Escape
     cancel, Tab to Open and Enter opens;
-  - "Show in Explorer" opens the image's folder with the file selected, also for a path with
+  - "Show in File Explorer" opens the image's folder with the file selected, also for a path with
     spaces and with å/ä/ö; with several images marked it shows the current one; it is greyed
     in an empty tab;
   - not checked by hand: the refusal of a command line longer than Windows allows (tests cover
@@ -103,3 +103,4 @@
 | Date | Status | Note |
 |---|---|---|
 | 2026-11-19 | Blocked | Added (ADR 0019 E3, order 1c), with T201 and T202 as one chain; waits for T202. Cold read (fresh agent, 2026-11-19): the three menu tests named and allowed to grow; the argument built as an `OsString`; Explorer from `SystemRoot`; a file no longer there gives `explorer_missing_text` instead of Explorer opening another folder; `\\?\` and `..` paths as known limits; the hand check widened. Chain review: see T201's log. Open question to the owner: the menu text "Show in Explorer" (the ADR) or "Show in File Explorer" (the glossary's name of Windows' program, §5) |
+| 2026-11-19 | Blocked | The owner chose "Show in File Explorer" (the glossary's name of Windows' program) over the ADR's "Show in Explorer"; written into ADR 0019 §2.8 and E-Q11, and into points 1, 3 and 5 and the hand check here |

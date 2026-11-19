@@ -21,7 +21,7 @@
        `MenuEntry::Sort` are drawn from their own data (point 4). In the Image menu it comes
        after `item(Command::ToggleMode, …)` and a separator, followed by a new separator and
        then the two delete items, so the menu reads: …, ToggleMode, separator, the programs,
-       separator, Delete to Recycle Bin, Delete Rejected Images. T203 adds "Show in Explorer"
+       separator, Delete to Recycle Bin, Delete Rejected Images. T203 adds "Show in File Explorer"
        after the programs, before that separator.
      - `menu_items()` skips `MenuEntry::ExternalPrograms` (as `Filter` and `Sort`): its items and
        Ctrl+E are not in the static table.
@@ -169,7 +169,7 @@
   scrolling, so on a very small screen its section "External Programs" may be cut off; Windows'
   reason in `start_failed_text` is in Windows' language. The agent does not edit `backlog.md`;
   the reviewer moves these there.
-- **Not in this task:** "Show in Explorer" (T203); Windows' default program (E-Q10); anything of
+- **Not in this task:** "Show in File Explorer" (T203); Windows' default program (E-Q10); anything of
   ADR 0019 §5.
 - **Rules:** `AGENTS.md` §3; `docs/tasks/README.md` rule 13 (the texts are T201's and this task's
   `command_text` arms; no string literal in the drawing code). The program is started while the

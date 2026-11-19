@@ -80,11 +80,14 @@
 - RawStride's own writes keep their rules: a file that the other program holds open is refused by
   the safe write (ADR 0007 §9), as today.
 
-### 2.8 Show in Explorer
+### 2.8 Show in File Explorer
 
-- **"Show in Explorer"** in the Image menu, without a key (E-Q11): opens the folder of the current
-  image in Windows Explorer with the file selected (`explorer.exe /select,<path>`). A step of its
+- **"Show in File Explorer"** in the Image menu, without a key (E-Q11): opens the folder of the
+  current image in File Explorer with the file selected (`explorer.exe /select,<path>`). A step of its
   own (E3).
+- **The name (owner, 2026-11-19, while T203 was written):** the item says "File Explorer",
+  Windows' own name for the program and the glossary's term (§5, T118), not the shorter
+  "Explorer" this ADR first had.
 
 ## 3. Questions (answered by the owner, 2026-11-17: every proposal approved)
 
@@ -100,7 +103,7 @@
 | E-Q8 | Limits | A question above 100 images; refused with a reason when the command line would pass 32 767 characters |
 | E-Q9 | Errors | Status line and Tasks error list; a program whose path is gone is greyed |
 | E-Q10 | Windows' default program | Not now (it would need `ShellExecuteW`, a `windows-sys` feature in `pw-loupe`) |
-| E-Q11 | Show in Explorer | Yes, in the Image menu without a key, a step of its own (E3) |
+| E-Q11 | Show in File Explorer | Yes, in the Image menu without a key, a step of its own (E3); named "Show in File Explorer" by the owner on 2026-11-19 (§2.8) |
 | E-Q12 | Files changed by the other program | Not watched; seen when the tab is loaded again; a reload command as a wish in ADR 0017 §7.2 |
 | E-Q13 | Steps | E1–E3 as §4 |
 | E-Q14 | Not included | As §5 |
@@ -113,7 +116,7 @@ Each step ends with `.\tools\check.ps1`; the owner's hand check comes after E2 a
 |---|---|
 | **E1** | The program list: the type and its `settings.txt` lines with their tests, and the section "External Programs" of the Settings window (§2.1); texts by rule 13 and in the glossary |
 | **E2** | The menu items and Ctrl+E (§2.2), the targets (§2.3), the wait for writes (§2.4), the start with its limits (§2.5) and the errors (§2.6); plain-Rust parts tested without a window (the arguments, the length check, the wait). Hand check with the owner's RAW editor: one image, several marked images, an image just rated (the rating is in its sidecar when the program opens it), a removed program |
-| **E3** | "Show in Explorer" (§2.8) |
+| **E3** | "Show in File Explorer" (§2.8) |
 
 ## 5. Not included
 

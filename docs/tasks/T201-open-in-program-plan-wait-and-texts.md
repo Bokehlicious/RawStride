@@ -125,7 +125,7 @@
   an `.exe` (`std` starts it through `cmd.exe` and may refuse some arguments); its start may
   then fail with `Failed`.
 - **Not in this task:** the menu, Ctrl+E, the confirmation window, the wait and the start in the
-  shell (T202); "Show in Explorer" (T203). No change to `settings.rs` (T200's type is used as
+  shell (T202); "Show in File Explorer" (T203). No change to `settings.rs` (T200's type is used as
   it is).
 - **Rules:** `AGENTS.md` §3; `docs/tasks/README.md` rule 13 (the texts are made here; no drawing
   code in this task). No new dependency (`std::process::Command` only).
