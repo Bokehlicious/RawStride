@@ -86,7 +86,6 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status |
 |---|---|---|
-| [T217](T217-made-up-name-in-the-metadata-test-data.md) | A made-up name in `pw-metadata`'s test data | Open |
 
 ## Writing a task (owner and reviewer)
 

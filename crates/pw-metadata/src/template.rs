@@ -954,7 +954,7 @@ mod tests {
                 "plus:ImageCreator",
                 "plus:ImageCreatorName",
                 mode,
-                Some(text("Tobias")),
+                Some(text("Anna")),
             )
         };
         for mode in [Mode::Replace, Mode::Append, Mode::Prefix] {
@@ -1046,12 +1046,12 @@ mod tests {
     #[test]
     fn a_template_equal_to_the_file_changes_nothing() {
         let original = read(&[
-            ("dc:creator", list(&["Tobias Nykänen"])),
+            ("dc:creator", list(&["Anna Exempelström"])),
             (
                 "dc:rights",
-                lang_alt(&[("x-default", "© 2026 Tobias Nykänen"), ("sv", "©")]),
+                lang_alt(&[("x-default", "© 2026 Anna Exempelström"), ("sv", "©")]),
             ),
-            ("photoshop:Credit", text("Tobias Nykänen")),
+            ("photoshop:Credit", text("Anna Exempelström")),
             (
                 CONTACT,
                 structure(&[(EMAIL, text("a@example.com")), (PHONE, text("031-12"))]),
@@ -1061,16 +1061,20 @@ mod tests {
         let mut metadata = original.clone();
         let applied = apply(
             &template(vec![
-                field("dc:creator", Mode::Replace, Some(list(&["Tobias Nykänen"]))),
+                field(
+                    "dc:creator",
+                    Mode::Replace,
+                    Some(list(&["Anna Exempelström"])),
+                ),
                 field(
                     "dc:rights",
                     Mode::Replace,
-                    Some(lang_alt(&[("x-default", "© 2026 Tobias Nykänen")])),
+                    Some(lang_alt(&[("x-default", "© 2026 Anna Exempelström")])),
                 ),
                 field(
                     "photoshop:Credit",
                     Mode::Replace,
-                    Some(text("Tobias Nykänen")),
+                    Some(text("Anna Exempelström")),
                 ),
                 sub_field(CONTACT, PHONE, Mode::Replace, Some(text("031-12"))),
                 sub_field(CONTACT, EMAIL, Mode::Replace, Some(text("a@example.com"))),

@@ -262,9 +262,9 @@ fn assert_report(result: Result<WriteReport, EditError>, expected: WriteReport) 
 /// The template of an ingest as the import dialog fills it in.
 fn ingest_template() -> Iptc {
     Iptc {
-        creator: "Tobias Nykänen".into(),
-        copyright: LocalizedValue::x_default("© 2026 Tobias Nykänen"),
-        credit: "Nykänen Foto".into(),
+        creator: "Anna Exempelström".into(),
+        copyright: LocalizedValue::x_default("© 2026 Anna Exempelström"),
+        credit: "Exempelström Foto".into(),
         email: "foto@example.com".into(),
         phone: "+46 31 12 34 56".into(),
         url: "https://example.com".into(),
@@ -284,14 +284,17 @@ fn the_ingest_template_is_written_to_a_jpeg_and_read_back() {
     assert_report(s.apply(&mut et, &file, &template), written(&file));
 
     let after = read(&mut et, &file);
-    assert_eq!(value(&after, "dc:creator"), Some(list(&["Tobias Nykänen"])));
+    assert_eq!(
+        value(&after, "dc:creator"),
+        Some(list(&["Anna Exempelström"]))
+    );
     assert_eq!(
         value(&after, "dc:rights"),
-        Some(x_default("© 2026 Tobias Nykänen"))
+        Some(x_default("© 2026 Anna Exempelström"))
     );
     assert_eq!(
         value(&after, "photoshop:Credit"),
-        Some(text("Nykänen Foto"))
+        Some(text("Exempelström Foto"))
     );
     assert_eq!(
         value(&after, "Iptc4xmpCore:CreatorContactInfo"),
@@ -338,11 +341,11 @@ fn the_exif_copyright_is_updated_too() {
 
     assert_eq!(
         tag(&mut et, &file, "IFD0:Copyright"),
-        "© 2026 Tobias Nykänen"
+        "© 2026 Anna Exempelström"
     );
     assert_eq!(
         tag(&mut et, &file, "XMP-dc:Rights"),
-        "© 2026 Tobias Nykänen"
+        "© 2026 Anna Exempelström"
     );
     s.assert_clean();
     s.remove();
@@ -496,7 +499,10 @@ fn a_raw_gets_only_its_sidecar_written() {
 
     assert_eq!(std::fs::read(&raw).unwrap(), FAKE_RAW);
     assert_eq!(s.files(), ["TN0001.ARW", "TN0001.xmp"]);
-    assert_eq!(tag(&mut et, &sidecar, "XMP-dc:Creator"), "Tobias Nykänen");
+    assert_eq!(
+        tag(&mut et, &sidecar, "XMP-dc:Creator"),
+        "Anna Exempelström"
+    );
     assert_eq!(
         tag(&mut et, &sidecar, "XMP-iptcCore:CreatorWorkEmail"),
         "foto@example.com"
@@ -504,7 +510,7 @@ fn a_raw_gets_only_its_sidecar_written() {
     let after = read(&mut et, &raw);
     assert_eq!(
         value(&after, "dc:rights"),
-        Some(x_default("© 2026 Tobias Nykänen"))
+        Some(x_default("© 2026 Anna Exempelström"))
     );
     s.assert_clean();
     s.remove();
@@ -527,7 +533,10 @@ fn a_template_keeps_an_earlier_rating_in_a_sidecar() {
     );
 
     assert_eq!(std::fs::read(&raw).unwrap(), FAKE_RAW);
-    assert_eq!(tag(&mut et, &sidecar, "XMP-dc:Creator"), "Tobias Nykänen");
+    assert_eq!(
+        tag(&mut et, &sidecar, "XMP-dc:Creator"),
+        "Anna Exempelström"
+    );
     assert_eq!(
         et.read_ratings(std::slice::from_ref(&raw)).unwrap()[&raw].stars,
         Some(4)

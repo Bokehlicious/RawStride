@@ -843,7 +843,7 @@ mod localized_iptc_tests {
         let iptc = Iptc {
             title: LocalizedValue::x_default("Solnedgång"),
             description: LocalizedValue::x_default("Rad 1\nRad 2"),
-            copyright: LocalizedValue::x_default("© 2026 Tobias Nykänen"),
+            copyright: LocalizedValue::x_default("© 2026 Anna Exempelström"),
             ..Iptc::default()
         };
         assert_eq!(
@@ -851,7 +851,7 @@ mod localized_iptc_tests {
             [
                 "-XMP-dc:Title=Solnedgång",
                 "-XMP-dc:Description=Rad 1 Rad 2",
-                "-XMP-dc:Rights=© 2026 Tobias Nykänen",
+                "-XMP-dc:Rights=© 2026 Anna Exempelström",
                 "-XMP-xmpRights:Marked=True",
             ]
         );
@@ -886,11 +886,11 @@ mod to_template_tests {
     #[test]
     fn a_full_template_replaces_every_field() {
         let iptc = Iptc {
-            creator: " Tobias Nykänen ".into(),
-            copyright: LocalizedValue::x_default("© 2026 Tobias Nykänen"),
+            creator: " Anna Exempelström ".into(),
+            copyright: LocalizedValue::x_default("© 2026 Anna Exempelström"),
             title: LocalizedValue::x_default("Solnedgång"),
             description: LocalizedValue::x_default("Hamnen"),
-            credit: "Tobias Nykänen".into(),
+            credit: "Anna Exempelström".into(),
             email: "foto@example.com".into(),
             phone: "+46 31 12 34 56".into(),
             url: " https://example.com ".into(),
@@ -902,12 +902,16 @@ mod to_template_tests {
                     field(
                         "dc:creator",
                         None,
-                        Some(Value::List(vec!["Tobias Nykänen".to_string()]))
+                        Some(Value::List(vec!["Anna Exempelström".to_string()]))
                     ),
                     field("dc:title", None, Some(x_default("Solnedgång"))),
                     field("dc:description", None, Some(x_default("Hamnen"))),
-                    field("dc:rights", None, Some(x_default("© 2026 Tobias Nykänen"))),
-                    field("photoshop:Credit", None, text("Tobias Nykänen")),
+                    field(
+                        "dc:rights",
+                        None,
+                        Some(x_default("© 2026 Anna Exempelström"))
+                    ),
+                    field("photoshop:Credit", None, text("Anna Exempelström")),
                     field(
                         CONTACT,
                         Some("Iptc4xmpCore:CiEmailWork"),

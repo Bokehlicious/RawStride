@@ -223,3 +223,4 @@ was when the task was done, so "this file", "below" and "the Log" in T1–T115 m
 | [T214](T214-repository-address-and-the-name-in-vcpkg-json.md) | The repository's address in `Cargo.toml` and RawStride in `vcpkg.json` (public-release plan R2) |
 | [T215](T215-personal-data-check-in-check-ps1.md) | A personal-data step in `check.ps1` (public-release plan R11) |
 | [T216](T216-remove-the-m2-scripts.md) | The one-off `tools/m2-*.cmd` scripts removed (public-release plan R5) |
+| [T217](T217-made-up-name-in-the-metadata-test-data.md) | A made-up name in `pw-metadata`'s test data (public-release plan R6) |

@@ -1,4 +1,4 @@
-# T217. A made-up name in `pw-metadata`'s test data — Open
+# T217. A made-up name in `pw-metadata`'s test data — Done
 
 - **Why:** step R6 of `docs/tasks/plans/public-release.md` (owner, 2026-11-19, PR-Q4: replace
   it). Tests in `pw-metadata` use the owner's real name as the creator, copyright and credit of a
@@ -36,3 +36,5 @@
 | 2026-11-19 | Blocked | Added (plan step R6, owner 2026-11-19, PR-Q4). Waits for the cold read before Open |
 | 2026-11-19 | Blocked | Cold read (fresh agent, `AGENTS.md`, the README, this file and the three files): every occurrence (lib.rs 8, src/template.rs 7, tests/template.rs 11) is in test code and covered by points 1–3; no test seen depends on the length. Changed after it: `tests/template.rs` has no ignored tests and needs no `PW_TESTDATA`, so the separate run was replaced by its line in `test-output.txt`; the byte difference worded as "a few bytes" |
 | 2026-11-19 | Open | Cold read done |
+| 2026-11-19 | Ready for review | Points 1–3 done in the three files only: the full name → `Anna Exempelström` (lib.rs 8, src/template.rs 6, tests/template.rs 9, the spaces in `" … "` kept), `"Exempelström Foto"` (2), `text("Anna")` (1). The longer name pushed five lines past rustfmt's width (lib.rs 1, src/template.rs 1, tests/template.rs 3), so `cargo fmt` wrapped them (layout only, same calls and assertions). No test failed on a length. `template` binary: `test result: ok. 7 passed; 0 failed; 0 ignored`. `git grep -n -i 'Nyk.nen' -- crates/` finds nothing (also with `-P`). check.ps1 all OK: 1957 passed, 72 ignored |
+| 2026-11-19 | Done | Reviewed: only test code in the three files; 8 + 7 + 11 occurrences replaced as in points 1–3, the spaces in `" … "` kept, five lines wrapped by rustfmt (layout only). `git grep -n -i -E 'Nyk.nen|tobias' -- crates/` finds nothing. check.ps1 rerun by the reviewer, all OK: 1957 passed, 0 failed, 72 ignored; `template` 7 passed; no clippy warnings outside raw-decode-bench |
