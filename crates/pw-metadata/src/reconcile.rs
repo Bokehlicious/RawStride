@@ -1,4 +1,5 @@
-//! Reconciliation of the representations of one image (ADR 0007 §4.2, §5.1, §6.2, §6.4, §6.5, §7).
+//! Reconciliation of the representations of one image (ADR 0007 §4.2, §5.1, §6.2, §6.4, §6.5,
+//! §6.7, §7).
 //!
 //! [`reconcile`] turns what the reader (I6) found in a file into one [`Metadata`]:
 //! 1. **Primary XMP** (embedded for JPEG, TIFF and DNG; the sidecar for a manufacturer RAW) is read
@@ -9,12 +10,15 @@
 //!    open (the user decides). In a RAW file the IIM is camera data and only fills (§4.2, §6.4).
 //! 3. **Camera XMP** inside a RAW file only fills (§4.2). Its `xmp:Rating` 0 counts as no rating:
 //!    it neither fills nor gives a conflict (§4.2).
-//! 4. **Exif** (§6.1, §6.2, §6.5, §6.6): Description, Copyright Notice and Creator fill a property
-//!    XMP and IIM lack; a difference is a conflict. Against an IIM value the checksum decides (§6.2).
+//! 4. **Exif** (§6.1, §6.2, §6.5, §6.6, §6.7): Description, Copyright Notice and Creator fill a
+//!    property XMP and IIM lack; a difference is a conflict. Against an IIM value the checksum decides (§6.2).
 //!    ImageEditor fills an absent Contributor with one content editor; a Contributor list without a
 //!    content editor, or whose content editor has another name, is a conflict that XMP wins, its
 //!    Exif side the same list with the content editor added or renamed (§6.6). The Digital Image
-//!    GUID only fills from ImageUniqueID. GPS → Location Created is not part of this step yet.
+//!    GUID only fills from ImageUniqueID. GPS → Location Created, the coordinates only (§6.7): the
+//!    camera position fills an absent or empty Location Created, or is added to a first entry
+//!    without coordinates (its origin kept); other coordinates in the first entry are a conflict
+//!    that XMP wins; GPS that cannot be used is reported. GPS is never written (§6.3).
 //! 5. **Date Created** (§7) is only *suggested* from DateTimeOriginal, never inserted.
 //!
 //! Equality ([`same_value`]) is tested on the predicted IIM value (§5.1) "or the whole XMP text, as
@@ -51,6 +55,17 @@ const CONTENT_EDITOR_ROLE_HTTP: &str =
     "http://cv.iptc.org/newscodes/contentprodpartyrole/contentEditor";
 /// Digital Image GUID, only filled from Exif ImageUniqueID (§6.1).
 const DIGITAL_IMAGE_GUID: &str = "Iptc4xmpExt:DigImageGUID";
+/// Location Created (a list of `Location` structures): the first entry's coordinates are filled
+/// from and compared with the camera's Exif GPS (§6.7).
+const LOCATION_CREATED: &str = "Iptc4xmpExt:LocationCreated";
+/// The GPS fields (all numbers) of a Location, in table order.
+const GPS_ALTITUDE: &str = "exif:GPSAltitude";
+const GPS_ALTITUDE_REF: &str = "exif:GPSAltitudeRef";
+const GPS_LONGITUDE: &str = "exif:GPSLongitude";
+const GPS_LATITUDE: &str = "exif:GPSLatitude";
+/// The largest difference, in degrees, between the camera's and a Location's latitude or
+/// longitude that still counts as the same coordinates (about 11 m; §6.7).
+const SAME_COORDINATES_DEGREES: f64 = 0.0001;
 /// Date Created, only suggested from Exif (§7).
 const DATE_CREATED: &str = "photoshop:DateCreated";
 /// Rating; a camera rating of 0 inside a RAW file counts as no rating (§4.2).
@@ -99,6 +114,12 @@ pub struct ExifFields {
     pub date_time_original: Option<String>,
     pub sub_sec_time_original: Option<String>,
     pub offset_time_original: Option<String>,
+    pub gps_latitude: Option<String>,
+    pub gps_latitude_ref: Option<String>,
+    pub gps_longitude: Option<String>,
+    pub gps_longitude_ref: Option<String>,
+    pub gps_altitude: Option<String>,
+    pub gps_altitude_ref: Option<String>,
 }
 
 /// Everything the reader found in one file.
@@ -230,8 +251,7 @@ pub fn reconcile(readings: Readings) -> Reconciled {
         }
     }
 
-    // 4. Exif (§6.1, §6.2, §6.5, §6.6). GPS → Location Created is not part of this step yet; it
-    // gets a task of its own later.
+    // 4. Exif (§6.1, §6.2, §6.5, §6.6), and GPS → the coordinates of Location Created (§6.7).
     reconcile_exif(&mut work, &exif, digest);
 
     // 5. Date Created (§7): only a suggestion.
@@ -310,7 +330,7 @@ fn is_camera_no_rating(property: &str, value: &Value) -> bool {
         && matches!(value, Value::Number(text) if text.trim().parse::<f64>() == Ok(0.0))
 }
 
-/// The Exif fields (§6.1, §6.2, §6.5).
+/// The Exif fields (§6.1, §6.2, §6.5, §6.6, §6.7).
 fn reconcile_exif(work: &mut Work, exif: &ExifFields, digest: Option<IimDigest>) {
     let lang_alt = |text: &str| {
         Value::LangAlt(LangAlt::from_entries(vec![(
@@ -346,6 +366,215 @@ fn reconcile_exif(work: &mut Work, exif: &ExifFields, digest: Option<IimDigest>)
             Origin::Exif,
         );
     }
+    reconcile_camera_gps(work, exif);
+}
+
+/// The camera's position from the Exif GPS tags (§6.7): signed decimal degrees as text, and the
+/// altitude with its ref when they can be used.
+#[derive(Clone, Debug, PartialEq)]
+struct CameraPosition {
+    latitude: String,
+    longitude: String,
+    latitude_degrees: f64,
+    longitude_degrees: f64,
+    /// GPSAltitude and GPSAltitudeRef.
+    altitude: Option<(String, String)>,
+}
+
+/// The camera's position (§6.7). `None` when Exif has neither GPSLatitude nor GPSLongitude;
+/// `Some(Err(text))` when it has one of them but no usable position, `text` being GPSLatitude,
+/// GPSLatitudeRef, GPSLongitude and GPSLongitudeRef as read, those present, joined with a space.
+fn camera_position(exif: &ExifFields) -> Option<Result<CameraPosition, String>> {
+    let latitude = present(&exif.gps_latitude);
+    let longitude = present(&exif.gps_longitude);
+    if latitude.is_none() && longitude.is_none() {
+        return None;
+    }
+    let latitude_ref = present(&exif.gps_latitude_ref);
+    let longitude_ref = present(&exif.gps_longitude_ref);
+    let position = || {
+        let (latitude, latitude_degrees) =
+            signed_degrees(latitude?, 90.0, latitude_ref?, "N", "S")?;
+        let (longitude, longitude_degrees) =
+            signed_degrees(longitude?, 180.0, longitude_ref?, "E", "W")?;
+        let altitude = match (present(&exif.gps_altitude), present(&exif.gps_altitude_ref)) {
+            (Some(altitude), Some(reference)) if reference == "0" || reference == "1" => {
+                unsigned_number(altitude).map(|(text, _)| (text.to_string(), reference.to_string()))
+            }
+            _ => None,
+        };
+        Some(CameraPosition {
+            latitude,
+            longitude,
+            latitude_degrees,
+            longitude_degrees,
+            altitude,
+        })
+    };
+    Some(position().ok_or_else(|| {
+        [latitude, latitude_ref, longitude, longitude_ref]
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>()
+            .join(" ")
+    }))
+}
+
+/// An unsigned Exif number: its trimmed text and value. `None` when the text starts with `+` or
+/// `-` or is not a finite number.
+fn unsigned_number(text: &str) -> Option<(&str, f64)> {
+    let text = text.trim();
+    if text.starts_with(['+', '-']) {
+        return None;
+    }
+    let value = text.parse::<f64>().ok().filter(|value| value.is_finite())?;
+    Some((text, value))
+}
+
+/// An unsigned Exif coordinate (0 to `max`) and its ref (exactly `positive` or `negative`) as
+/// signed degrees: the text with `-` in front for `negative` unless the value is 0, and its value.
+fn signed_degrees(
+    text: &str,
+    max: f64,
+    reference: &str,
+    positive: &str,
+    negative: &str,
+) -> Option<(String, f64)> {
+    let (text, value) = unsigned_number(text)?;
+    if !(0.0..=max).contains(&value) {
+        return None;
+    }
+    if reference == positive {
+        Some((text.to_string(), value))
+    } else if reference == negative {
+        if value == 0.0 {
+            Some((text.to_string(), value))
+        } else {
+            Some((format!("-{text}"), -value))
+        }
+    } else {
+        None
+    }
+}
+
+/// Exif GPS against Location Created (§6.7; only the coordinates, only the first entry, §8). A
+/// position fills an absent or empty Location Created, or is added to a first entry without
+/// coordinates keeping the property's origin; the same coordinates (within
+/// [`SAME_COORDINATES_DEGREES`], altitude not compared) give nothing; other coordinates are a
+/// conflict that XMP wins (§6.2; in a RAW file Exif is camera data, §6.4). A Location Created the
+/// model refused is not replaced. Exif GPS without a usable position gives `Notice::Unreadable`.
+fn reconcile_camera_gps(work: &mut Work, exif: &ExifFields) {
+    let position = match camera_position(exif) {
+        None => return,
+        Some(Err(text)) => {
+            work.notices.push(Notice::Unreadable {
+                property: LOCATION_CREATED.to_string(),
+                origin: Origin::Exif,
+                text,
+            });
+            return;
+        }
+        Some(Ok(position)) => position,
+    };
+    let refused = work.notices.iter().any(
+        |notice| matches!(notice, Notice::Refused { property, .. } if property == LOCATION_CREATED),
+    );
+    if refused {
+        return;
+    }
+    let fill = |work: &mut Work| {
+        let mut entry = StructValue { fields: Vec::new() };
+        set_position(&mut entry, &position, true);
+        work.fill(
+            LOCATION_CREATED,
+            Value::StructList(vec![entry]),
+            Origin::Exif,
+        );
+    };
+    let Some((current, origin)) = work.current(LOCATION_CREATED) else {
+        fill(work);
+        return;
+    };
+    let Value::StructList(list) = &current else {
+        return;
+    };
+    let Some(first) = list.first() else {
+        fill(work);
+        return;
+    };
+    if !has_field(first, GPS_LATITUDE) && !has_field(first, GPS_LONGITUDE) {
+        let keeps_altitude = has_field(first, GPS_ALTITUDE) || has_field(first, GPS_ALTITUDE_REF);
+        let mut filled = list.clone();
+        if let Some(entry) = filled.first_mut() {
+            set_position(entry, &position, !keeps_altitude);
+        }
+        work.insert(LOCATION_CREATED, Value::StructList(filled), origin);
+        return;
+    }
+    if same_coordinates(first, &position) {
+        return;
+    }
+    let mut exif_side = list.clone();
+    if let Some(entry) = exif_side.first_mut() {
+        set_position(entry, &position, true);
+    }
+    work.conflict(
+        LOCATION_CREATED,
+        vec![
+            (origin, current),
+            (Origin::Exif, Value::StructList(exif_side)),
+        ],
+        ConflictRule::Xmp,
+    );
+}
+
+/// Sets the position's fields in a Location in the order GPSAltitude, GPSAltitudeRef (only with
+/// `altitude` and when the position has them), GPSLongitude, GPSLatitude: in place when the
+/// entry has the field, else appended.
+fn set_position(entry: &mut StructValue, position: &CameraPosition, altitude: bool) {
+    if altitude && let Some((height, reference)) = &position.altitude {
+        set_field(entry, GPS_ALTITUDE, Value::Number(height.clone()));
+        set_field(entry, GPS_ALTITUDE_REF, Value::Number(reference.clone()));
+    }
+    set_field(
+        entry,
+        GPS_LONGITUDE,
+        Value::Number(position.longitude.clone()),
+    );
+    set_field(
+        entry,
+        GPS_LATITUDE,
+        Value::Number(position.latitude.clone()),
+    );
+}
+
+/// Replaces the field `id` of a structure in place, or appends it.
+fn set_field(entry: &mut StructValue, id: &str, value: Value) {
+    match entry.fields.iter_mut().find(|(field, _)| field == id) {
+        Some((_, old)) => *old = value,
+        None => entry.fields.push((id.to_string(), value)),
+    }
+}
+
+fn has_field(entry: &StructValue, id: &str) -> bool {
+    entry.fields.iter().any(|(field, _)| field == id)
+}
+
+/// True when the Location has both coordinates and each differs from the position's by at most
+/// [`SAME_COORDINATES_DEGREES`] (§6.7).
+fn same_coordinates(entry: &StructValue, position: &CameraPosition) -> bool {
+    let degrees = |id: &str| {
+        entry.fields.iter().find_map(|(field, value)| match value {
+            Value::Number(text) if field == id => {
+                text.trim().parse::<f64>().ok().filter(|v| v.is_finite())
+            }
+            _ => None,
+        })
+    };
+    let near = |id: &str, expected: f64| {
+        degrees(id).is_some_and(|value| (value - expected).abs() <= SAME_COORDINATES_DEGREES)
+    };
+    near(GPS_LATITUDE, position.latitude_degrees) && near(GPS_LONGITUDE, position.longitude_degrees)
 }
 
 /// One "both ways" Exif field: `value` fills an absent property; `compared` is what the current
@@ -1347,6 +1576,288 @@ mod tests {
         assert!(result.metadata.conflicts().is_empty());
     }
 
+    // Exif GPS → Location Created (§6.7). "The position" is 33.9 S, 151.2 W, so the sign is
+    // tested.
+
+    const LOCATION_CITY: &str = "Iptc4xmpExt:City";
+
+    fn entry(fields: &[(&str, Value)]) -> StructValue {
+        StructValue {
+            fields: values(fields),
+        }
+    }
+
+    fn locations(list: Vec<StructValue>) -> Value {
+        Value::StructList(list)
+    }
+
+    fn gps(
+        latitude: Option<&str>,
+        latitude_ref: Option<&str>,
+        longitude: Option<&str>,
+        longitude_ref: Option<&str>,
+    ) -> ExifFields {
+        ExifFields {
+            gps_latitude: latitude.map(Into::into),
+            gps_latitude_ref: latitude_ref.map(Into::into),
+            gps_longitude: longitude.map(Into::into),
+            gps_longitude_ref: longitude_ref.map(Into::into),
+            ..ExifFields::default()
+        }
+    }
+
+    /// The position, with altitude 12.5 ref `0` when `altitude`.
+    fn position(altitude: bool) -> ExifFields {
+        let mut exif = gps(Some("33.9"), Some("S"), Some("151.2"), Some("W"));
+        if altitude {
+            exif.gps_altitude = Some("12.5".into());
+            exif.gps_altitude_ref = Some("0".into());
+        }
+        exif
+    }
+
+    fn gps_against(kind: FileKind, xmp: Option<Value>, exif: ExifFields) -> Reconciled {
+        reconcile(Readings {
+            xmp: xmp.map_or_else(Vec::new, |value| values(&[(LOCATION_CREATED, value)])),
+            exif,
+            ..readings(kind)
+        })
+    }
+
+    /// The one Location Created conflict's rule and Exif side.
+    fn location_conflict(result: &Reconciled) -> (ConflictRule, Value) {
+        let conflicts = conflicts_of(result, LOCATION_CREATED);
+        assert_eq!(conflicts.len(), 1, "{conflicts:?}");
+        let conflict = conflicts[0];
+        assert_eq!(conflict.values.len(), 2);
+        assert_eq!(conflict.values[1].0, Origin::Exif);
+        (conflict.rule, conflict.values[1].1.clone())
+    }
+
+    fn coordinates() -> [(&'static str, Value); 2] {
+        [
+            (GPS_LONGITUDE, number("-151.2")),
+            (GPS_LATITUDE, number("-33.9")),
+        ]
+    }
+
+    fn coordinates_with_altitude() -> [(&'static str, Value); 4] {
+        [
+            (GPS_ALTITUDE, number("12.5")),
+            (GPS_ALTITUDE_REF, number("0")),
+            (GPS_LONGITUDE, number("-151.2")),
+            (GPS_LATITUDE, number("-33.9")),
+        ]
+    }
+
+    #[test]
+    fn camera_gps_fills_an_absent_location_created() {
+        let result = gps_against(FileKind::Jpeg, None, position(true));
+        assert_eq!(
+            value_of(&result, LOCATION_CREATED),
+            Some((
+                locations(vec![entry(&coordinates_with_altitude())]),
+                Origin::Exif
+            ))
+        );
+        assert!(result.metadata.conflicts().is_empty());
+        assert!(result.notices.is_empty());
+    }
+
+    #[test]
+    fn camera_gps_fills_an_empty_location_created() {
+        let result = gps_against(FileKind::Jpeg, Some(locations(vec![])), position(false));
+        assert_eq!(
+            value_of(&result, LOCATION_CREATED),
+            Some((locations(vec![entry(&coordinates())]), Origin::Exif))
+        );
+        assert!(result.metadata.conflicts().is_empty());
+        assert!(result.notices.is_empty());
+    }
+
+    #[test]
+    fn camera_gps_without_altitude_fills_only_the_coordinates() {
+        let mut altitude_ref_2 = position(true);
+        altitude_ref_2.gps_altitude_ref = Some("2".into());
+        for exif in [position(false), altitude_ref_2] {
+            let result = gps_against(FileKind::Jpeg, None, exif.clone());
+            assert_eq!(
+                value_of(&result, LOCATION_CREATED),
+                Some((locations(vec![entry(&coordinates())]), Origin::Exif)),
+                "{exif:?}"
+            );
+            assert!(result.notices.is_empty(), "{exif:?}");
+        }
+    }
+
+    #[test]
+    fn camera_gps_is_added_to_a_location_without_coordinates() {
+        let malmo = entry(&[(LOCATION_CITY, text("Malmö"))]);
+        let xmp = locations(vec![entry(&[(LOCATION_CITY, text("Lund"))]), malmo.clone()]);
+        let result = gps_against(FileKind::Jpeg, Some(xmp), position(true));
+        let mut lund = vec![(LOCATION_CITY, text("Lund"))];
+        lund.extend(coordinates_with_altitude());
+        assert_eq!(
+            value_of(&result, LOCATION_CREATED),
+            Some((locations(vec![entry(&lund), malmo]), Origin::XmpEmbedded))
+        );
+        assert!(result.metadata.conflicts().is_empty());
+        assert!(result.notices.is_empty());
+    }
+
+    #[test]
+    fn an_existing_altitude_is_kept_when_coordinates_are_added() {
+        for altitude in [
+            (GPS_ALTITUDE, number("40")),
+            (GPS_ALTITUDE_REF, number("1")),
+        ] {
+            let first = vec![(LOCATION_CITY, text("Lund")), altitude.clone()];
+            let xmp = locations(vec![entry(&first)]);
+            let result = gps_against(FileKind::Jpeg, Some(xmp), position(true));
+            let mut expected = first.clone();
+            expected.extend(coordinates());
+            assert_eq!(
+                value_of(&result, LOCATION_CREATED),
+                Some((locations(vec![entry(&expected)]), Origin::XmpEmbedded)),
+                "{altitude:?}"
+            );
+            assert!(result.metadata.conflicts().is_empty(), "{altitude:?}");
+        }
+    }
+
+    #[test]
+    fn the_same_coordinates_within_a_ten_thousandth_of_a_degree_give_nothing() {
+        let near = locations(vec![entry(&[
+            (GPS_LONGITUDE, number("-151.19996")),
+            (GPS_LATITUDE, number("-33.90004")),
+        ])]);
+        let result = gps_against(FileKind::Jpeg, Some(near.clone()), position(false));
+        assert!(result.metadata.conflicts().is_empty());
+        assert_eq!(
+            value_of(&result, LOCATION_CREATED),
+            Some((near, Origin::XmpEmbedded))
+        );
+
+        let farther = locations(vec![entry(&[
+            (GPS_LONGITUDE, number("-151.19996")),
+            (GPS_LATITUDE, number("-33.9002")),
+        ])]);
+        let result = gps_against(FileKind::Jpeg, Some(farther), position(false));
+        assert_eq!(conflicts_of(&result, LOCATION_CREATED).len(), 1);
+    }
+
+    #[test]
+    fn other_coordinates_are_a_conflict_that_xmp_wins() {
+        let malmo = entry(&[(LOCATION_CITY, text("Malmö"))]);
+        let xmp = locations(vec![
+            entry(&[
+                (LOCATION_CITY, text("Lund")),
+                (GPS_LONGITUDE, number("13.19")),
+                (GPS_LATITUDE, number("55.7")),
+            ]),
+            malmo.clone(),
+        ]);
+        let result = gps_against(FileKind::Jpeg, Some(xmp.clone()), position(false));
+        let (rule, exif_side) = location_conflict(&result);
+        assert_eq!(rule, ConflictRule::Xmp);
+        let mut lund = vec![(LOCATION_CITY, text("Lund"))];
+        lund.extend(coordinates());
+        assert_eq!(exif_side, locations(vec![entry(&lund), malmo]));
+        assert_eq!(
+            conflicts_of(&result, LOCATION_CREATED)[0].values[0],
+            (Origin::XmpEmbedded, xmp.clone())
+        );
+        assert_eq!(
+            value_of(&result, LOCATION_CREATED),
+            Some((xmp, Origin::XmpEmbedded))
+        );
+    }
+
+    #[test]
+    fn a_location_with_only_a_latitude_is_a_conflict() {
+        let xmp = locations(vec![entry(&[
+            (LOCATION_CITY, text("Lund")),
+            (GPS_LATITUDE, number("55.7")),
+        ])]);
+        let result = gps_against(FileKind::Jpeg, Some(xmp), position(false));
+        let (rule, exif_side) = location_conflict(&result);
+        assert_eq!(rule, ConflictRule::Xmp);
+        assert_eq!(
+            exif_side,
+            locations(vec![entry(&[
+                (LOCATION_CITY, text("Lund")),
+                (GPS_LATITUDE, number("-33.9")),
+                (GPS_LONGITUDE, number("-151.2")),
+            ])])
+        );
+    }
+
+    #[test]
+    fn camera_gps_that_cannot_be_used_gives_a_notice() {
+        for (exif, expected) in [
+            (
+                gps(Some("33.9"), None, Some("151.2"), Some("W")),
+                "33.9 151.2 W",
+            ),
+            (
+                gps(Some("33.9"), Some("X"), Some("151.2"), Some("W")),
+                "33.9 X 151.2 W",
+            ),
+            (
+                gps(Some("91"), Some("N"), Some("151.2"), Some("W")),
+                "91 N 151.2 W",
+            ),
+            (
+                gps(Some("33.9"), Some("S"), Some("abc"), Some("W")),
+                "33.9 S abc W",
+            ),
+            (
+                gps(Some("+33.9"), Some("S"), Some("151.2"), Some("W")),
+                "+33.9 S 151.2 W",
+            ),
+        ] {
+            let result = gps_against(FileKind::Jpeg, None, exif);
+            assert_eq!(value_of(&result, LOCATION_CREATED), None, "{expected}");
+            assert_eq!(
+                result.notices,
+                [Notice::Unreadable {
+                    property: LOCATION_CREATED.into(),
+                    origin: Origin::Exif,
+                    text: expected.into(),
+                }]
+            );
+        }
+    }
+
+    #[test]
+    fn no_latitude_or_longitude_gives_nothing() {
+        let only_refs_and_altitude = ExifFields {
+            gps_latitude_ref: Some("N".into()),
+            gps_altitude: Some("12.5".into()),
+            gps_altitude_ref: Some("0".into()),
+            ..ExifFields::default()
+        };
+        for exif in [ExifFields::default(), only_refs_and_altitude] {
+            let result = gps_against(FileKind::Jpeg, None, exif.clone());
+            assert_eq!(value_of(&result, LOCATION_CREATED), None, "{exif:?}");
+            assert!(result.notices.is_empty(), "{exif:?}");
+        }
+    }
+
+    #[test]
+    fn a_refused_location_created_is_not_replaced() {
+        let refused = locations(vec![entry(&[(GPS_LATITUDE, number("abc"))])]);
+        let result = gps_against(FileKind::Jpeg, Some(refused), position(true));
+        assert_eq!(value_of(&result, LOCATION_CREATED), None);
+        assert!(result.metadata.conflicts().is_empty());
+        assert_eq!(result.notices.len(), 1, "{:?}", result.notices);
+        assert!(matches!(
+            &result.notices[0],
+            Notice::Refused { property, origin: Origin::XmpEmbedded, .. }
+                if property == LOCATION_CREATED
+        ));
+    }
+
     // --- Exif ImageEditor ↔ Contributor (§6.6) ---
 
     fn contributor(name: Option<Value>, roles: &[&str]) -> StructValue {
@@ -1674,6 +2185,37 @@ mod tests {
         );
         assert_eq!(
             value_of(&conflict, CONTRIBUTOR),
+            Some((sidecar, Origin::XmpSidecar))
+        );
+    }
+
+    #[test]
+    fn a_raw_file_gps_fills_an_absent_location_created_and_conflicts_with_rule_xmp() {
+        let filled = gps_against(FileKind::Raw, None, position(false));
+        assert_eq!(
+            value_of(&filled, LOCATION_CREATED),
+            Some((locations(vec![entry(&coordinates())]), Origin::Exif))
+        );
+        assert!(filled.metadata.conflicts().is_empty());
+
+        let sidecar = locations(vec![entry(&[
+            (GPS_LONGITUDE, number("13.19")),
+            (GPS_LATITUDE, number("55.7")),
+        ])]);
+        let conflict = gps_against(FileKind::Raw, Some(sidecar.clone()), position(false));
+        assert_eq!(
+            conflict.metadata.conflicts(),
+            [Conflict {
+                property: LOCATION_CREATED.into(),
+                values: vec![
+                    (Origin::XmpSidecar, sidecar.clone()),
+                    (Origin::Exif, locations(vec![entry(&coordinates())])),
+                ],
+                rule: ConflictRule::Xmp,
+            }]
+        );
+        assert_eq!(
+            value_of(&conflict, LOCATION_CREATED),
             Some((sidecar, Origin::XmpSidecar))
         );
     }

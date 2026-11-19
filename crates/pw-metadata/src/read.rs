@@ -84,6 +84,12 @@ const IMAGE_TAGS: &[&str] = &[
     "-ExifIFD:DateTimeOriginal",
     "-ExifIFD:SubSecTimeOriginal",
     "-ExifIFD:OffsetTimeOriginal",
+    "-GPS:GPSLatitudeRef",
+    "-GPS:GPSLatitude",
+    "-GPS:GPSLongitudeRef",
+    "-GPS:GPSLongitude",
+    "-GPS:GPSAltitudeRef",
+    "-GPS:GPSAltitude",
 ];
 
 /// What [`ExifTool::read_metadata`] found in one image.
@@ -668,6 +674,12 @@ fn exif_fields(object: &Map<String, Json>, fallback: Fallback) -> ExifFields {
         date_time_original: field("DateTimeOriginal"),
         sub_sec_time_original: field("SubSecTimeOriginal"),
         offset_time_original: field("OffsetTimeOriginal"),
+        gps_latitude: field("GPSLatitude"),
+        gps_latitude_ref: field("GPSLatitudeRef"),
+        gps_longitude: field("GPSLongitude"),
+        gps_longitude_ref: field("GPSLongitudeRef"),
+        gps_altitude: field("GPSAltitude"),
+        gps_altitude_ref: field("GPSAltitudeRef"),
     }
 }
 
@@ -1172,6 +1184,12 @@ mod tests {
                 date_time_original: Some("2026:11:04 10:15:30".to_string()),
                 sub_sec_time_original: Some("050".to_string()),
                 offset_time_original: Some("+01:00".to_string()),
+                gps_latitude: None,
+                gps_latitude_ref: None,
+                gps_longitude: None,
+                gps_longitude_ref: None,
+                gps_altitude: None,
+                gps_altitude_ref: None,
             }
         );
         let latin1 = exif_fields(&json, Fallback::Latin1);

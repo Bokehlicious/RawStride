@@ -417,6 +417,15 @@ Urgency (2:10), Category (2:15) and Supplemental Categories (2:20):
   when latitude and longitude each differ by at most 0.0001° (T196); the altitude is not
   compared, and is added only together with the coordinates. Any Exif GPS counts as the
   camera's: the file does not say who wrote it. [Product]
+- **Which entry, and its origin** (owner, 2026-11-18; written in 2026-11-19, revision 25): only the
+  first entry of Location Created is looked at (§8: one location in the window). An absent or
+  empty Location Created is filled with one entry of the coordinates, origin Exif. A first entry
+  without coordinates gets them added, its other sub-fields and the other entries unchanged, and
+  the property keeps its origin: no conflict, no notice. Its altitude is added only when it has
+  neither GPS Altitude nor GPS Altitude Ref. A Location Created the model refused is not
+  replaced by one built from Exif (reviewer's choice, T196). Exif GPS that cannot be used (a
+  latitude or longitude without a valid reference, out of range, signed or not a number) gives a
+  notice that the value could not be read. [Product]
 - **Writing:** never (§6.3, "Exif → IPTC only").
 - **Not here:** filling city, country and location from a position (reverse geocoding), a GPX
   track and a map need network or new dependencies and belong to the GPS ADR (ADR 0017 §7.2).
@@ -828,9 +837,9 @@ listed under the table (§17.1).
   written gives a reason that holds for both causes (§5.2 Q1, §8): T199. The batch's lines for the
   other images' notices: T198 (ADR 0017 U12d-Q9). Editing such a list with its qualifiers kept
   (`docs/tasks/backlog.md`).
-- §6.7 camera GPS → the coordinates of Location Created: T196. Reverse
+- §6.7 camera GPS → the coordinates of Location Created: T196 (done). Reverse
   geocoding, GPX and a map: the GPS ADR after ADR 0017 (its §7.2).
-- §11 the other IPTC NewsCodes (Scene Code, Subject Code, Genre): T195.
+- §11 the other IPTC NewsCodes (Scene Code, Subject Code, Genre): T195 (done).
 - From §10: template sub-fields of lists of structures, variables, template files in XMP
   (`docs/tasks/backlog.md`; ADR 0017 U13).
 - Image Region (ADR 0017 U11b). The other lists of structures and editing several images are done
@@ -865,3 +874,4 @@ listed under the table (§17.1).
 | 22 | 2026-11-18 | Owner decisions: §6.7 camera GPS fills only the coordinates of Location Created (no network, no new dependency; reverse geocoding, GPX and a map stay with the GPS ADR); §11 Scene Code (6 digits, IPTC Scene NewsCodes), Subject Code (8 digits, format only) and Genre (IPTC Genre NewsCodes only when its CV ID is that vocabulary) give warnings, Intellectual Genre is not checked; §16 point 7 reads the two vocabularies (R4); §18 brought up to date |
 | 23 | 2026-11-18 | §16 point 7 done (R4: 24 Scene codes; 58 Genre codes, 7 retired); §11 the Genre CV ID may also use `https://` and lack the trailing `/` (cold read of T195); §6.7 the tolerance of 0.0001°, the altitude not compared, any Exif GPS counts as the camera's (cold read of T196); §18 names T195 and T196 |
 | 24 | 2026-11-19 | Owner decision (backlog sorted after T194): the notice that no new IIM checksum was written names a reason that holds both for an unresolved conflict (§5.2 Q1) and for a held list with qualifiers (§8), "No new IIM checksum was written, because IIM and XMP still differ" (T199); §18 names T198 and T199 |
+| 25 | 2026-11-19 | §6.7 written in from T196 (no new rule): only the first entry of Location Created is looked at; a first entry without coordinates gets them and keeps its origin (owner, 2026-11-18), its altitude only when it has none; a refused Location Created is not replaced (reviewer's choice); unusable Exif GPS gives a notice; §18 marks T195 and T196 done |

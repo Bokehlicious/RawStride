@@ -202,3 +202,4 @@ was when the task was done, so "this file", "below" and "the Log" in T1–T115 m
 | [T193](T193-lists-with-qualifiers-not-written.md) | ADR 0007 §8: a list whose items have qualifiers is shown with a notice and never written (pw-metadata, pw-loupe) |
 | [T194](T194-batch-line-for-a-qualified-list.md) | ADR 0007 §8: the batch names a list with qualifiers that was not written in another image (pw-loupe) |
 | [T195](T195-scene-subject-and-genre-codes-checked.md) | ADR 0007 §11: Scene Code, Subject Code and Genre checked against IPTC NewsCodes, warnings only (pw-metadata, pw-loupe) |
+| [T196](T196-camera-gps-fills-location-created.md) | ADR 0007 §6.7: camera GPS fills the coordinates of Location Created, never written (pw-metadata) |

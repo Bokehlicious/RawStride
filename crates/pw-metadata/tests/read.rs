@@ -367,6 +367,93 @@ fn exif_image_editor_fills_contributor() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// The camera position 33.9 S, 151.2 W, altitude 12.5 above sea level, in the Exif GPS IFD.
+const CAMERA_GPS: &[&str] = &[
+    "-GPS:GPSLatitude=33.9",
+    "-GPS:GPSLatitudeRef=S",
+    "-GPS:GPSLongitude=151.2",
+    "-GPS:GPSLongitudeRef=W",
+    "-GPS:GPSAltitude=12.5",
+    "-GPS:GPSAltitudeRef#=0",
+];
+
+/// The only entry of Location Created and the property's origin. Panics without exactly one.
+fn only_location(read: &MetadataRead) -> (StructValue, Origin) {
+    match get(read, "Iptc4xmpExt:LocationCreated") {
+        Some((Value::StructList(entries), origin)) => match entries.as_slice() {
+            [entry] => (entry.clone(), origin),
+            other => panic!("one Location Created entry expected, got {other:?}"),
+        },
+        other => panic!("a Location Created list expected, got {other:?}"),
+    }
+}
+
+/// The text of a Number field of a structure. Panics when it is missing or not a number.
+fn number_field<'a>(entry: &'a StructValue, id: &str) -> &'a str {
+    match entry.fields.iter().find(|(field, _)| field == id) {
+        Some((_, Value::Number(text))) => text,
+        other => panic!("{id}: a number expected, got {other:?}"),
+    }
+}
+
+/// Asserts the four GPS fields of the camera position in a Location.
+fn assert_camera_gps(entry: &StructValue) {
+    let degrees = |id: &str| number_field(entry, id).trim().parse::<f64>().unwrap();
+    assert!(
+        (degrees("exif:GPSLatitude") - -33.9).abs() < 1e-9,
+        "{entry:?}"
+    );
+    assert!(
+        (degrees("exif:GPSLongitude") - -151.2).abs() < 1e-9,
+        "{entry:?}"
+    );
+    assert!(
+        (degrees("exif:GPSAltitude") - 12.5).abs() < 1e-9,
+        "{entry:?}"
+    );
+    assert_eq!(number_field(entry, "exif:GPSAltitudeRef"), "0");
+}
+
+/// Exif GPS fills an absent Location Created with the camera's coordinates (ADR 0007 §6.7, T196).
+#[test]
+fn exif_gps_fills_location_created() {
+    let mut et = exiftool();
+    let (dir, file) = jpeg("exif-gps");
+    write(&mut et, &file, CAMERA_GPS);
+
+    let read = read_file(&mut et, &file);
+    let (entry, origin) = only_location(&read);
+    assert_eq!(origin, Origin::Exif);
+    assert_camera_gps(&entry);
+    assert!(read.reconciled.metadata.conflicts().is_empty());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Exif GPS is added to a Location Created whose only entry has a City and no coordinates; the
+/// property keeps its origin and there is no conflict (ADR 0007 §6.7, T196).
+#[test]
+fn exif_gps_is_added_to_the_city_of_location_created() {
+    let mut et = exiftool();
+    let (dir, file) = jpeg("exif-gps-city");
+    let mut tags = CAMERA_GPS.to_vec();
+    tags.push("-XMP-iptcExt:LocationCreated={City=Lund}");
+    write(&mut et, &file, &tags);
+
+    let read = read_file(&mut et, &file);
+    let (entry, origin) = only_location(&read);
+    assert_eq!(origin, Origin::XmpEmbedded);
+    assert!(
+        entry
+            .fields
+            .contains(&("Iptc4xmpExt:City".to_string(), text("Lund"))),
+        "{entry:?}"
+    );
+    assert_eq!(entry.fields.len(), 5, "{entry:?}");
+    assert_camera_gps(&entry);
+    assert!(read.reconciled.metadata.conflicts().is_empty());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// A manufacturer RAW reads its sidecar `<basename>.xmp` (also with the extension in another
 /// case) and never `<basename>.<ext>.xmp`. The RAW file is not changed.
 #[test]

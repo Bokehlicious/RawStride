@@ -86,7 +86,6 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status |
 |---|---|---|
-| [T196](T196-camera-gps-fills-location-created.md) | Camera GPS fills the coordinates of Location Created (ADR 0007 §6.7) | Open |
 | [T197](T197-region-render-on-raf.md) | The region render on RAF (ADR 0027 W0) | Open |
 | [T198](T198-batch-lines-for-every-notice.md) | The batch names every write notice of the other images (ADR 0017 U12d-Q9) | Open |
 | [T199](T199-checksum-notice-names-both-reasons.md) | The notice that no new IIM checksum was written names a reason that holds for both causes (ADR 0007 §8) | Open |
