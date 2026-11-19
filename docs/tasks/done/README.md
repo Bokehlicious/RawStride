@@ -200,3 +200,4 @@ was when the task was done, so "this file", "below" and "the Log" in T1–T115 m
 | [T191](T191-remove-the-unused-cleared-path.md) | ADR 0007 Q2 (revision 19): the unused `Cleared` path removed (pw-metadata, pw-loupe) |
 | [T192](T192-exif-imageeditor-and-contributor.md) | ADR 0007 §6.6: Exif ImageEditor ↔ the Contributor whose role is content editor (pw-metadata) |
 | [T193](T193-lists-with-qualifiers-not-written.md) | ADR 0007 §8: a list whose items have qualifiers is shown with a notice and never written (pw-metadata, pw-loupe) |
+| [T194](T194-batch-line-for-a-qualified-list.md) | ADR 0007 §8: the batch names a list with qualifiers that was not written in another image (pw-loupe) |

@@ -2720,7 +2720,11 @@ pub enum EditorText {
     /// The first line of the batch's summary (U12c-Q6).
     BatchWritten { written: usize, total: usize },
     /// A line of the summary: an unresolved conflict on `property` (its XMP id) kept in `file`.
+    /// The summary's lines also name lists with qualifiers not written (`QualifiersKept`).
     ConflictKept { file: String, property: String },
+    /// A line of the summary: a changed list with qualifiers on `property` (its XMP id) put back
+    /// instead of written in `file` (ADR 0007 §8).
+    QualifiersKept { file: String, property: String },
     /// The tooltip of the "▼" button right of a field that opens its list of values (U12a-Q5,
     /// U12a-Q7, T141; the triangle is painted, not a text).
     ValuesTooltip,
@@ -2938,6 +2942,10 @@ pub fn editor_text(text: &EditorText) -> String {
         }
         EditorText::ConflictKept { file, property } => format!(
             "Unresolved conflict kept: {file} ({field})",
+            field = property_label(property, Language::En)
+        ),
+        EditorText::QualifiersKept { file, property } => format!(
+            "List with qualifiers not written: {file} ({field})",
             field = property_label(property, Language::En)
         ),
         EditorText::ValuesTooltip => "Recent and saved values".to_string(),
@@ -5357,6 +5365,13 @@ mod tests {
                     property: "photoshop:City".into(),
                 },
                 "Unresolved conflict kept: b.jpg (City)",
+            ),
+            (
+                EditorText::QualifiersKept {
+                    file: "c.jpg".into(),
+                    property: "dc:subject".into(),
+                },
+                "List with qualifiers not written: c.jpg (Keywords)",
             ),
         ];
         for (text, expected) in cases {

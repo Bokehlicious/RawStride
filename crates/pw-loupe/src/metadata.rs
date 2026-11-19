@@ -220,15 +220,17 @@ pub(crate) struct BatchSummary {
     pub total: usize,
     /// The failed files, each with its reason ("Could not save metadata for <file>: …").
     pub failed: Vec<String>,
-    /// The other images where an unresolved conflict was kept ("Unresolved conflict kept: …").
+    /// The other images where an unresolved conflict was kept ("Unresolved conflict kept: …") or a
+    /// list with qualifiers was not written ("List with qualifiers not written: …"), in the order
+    /// the answers and their notices came.
     pub kept: Vec<String>,
     /// The notices of the window's own image, shown as after its own write.
     pub notices: Vec<WriteNotice>,
 }
 
 impl BatchSummary {
-    /// The lines the window shows: the written count, the failed files, the kept conflicts, then
-    /// the window's image's notices.
+    /// The lines the window shows: the written count, the failed files, the kept conflicts and
+    /// lists with qualifiers not written, then the window's image's notices.
     pub fn lines(&self) -> Vec<String> {
         let written = editor_text(&EditorText::BatchWritten {
             written: self.written,
@@ -897,7 +899,8 @@ impl MetadataCache {
     }
 
     /// One of the batch's writes answered (T126): counted as written or failed; an unresolved
-    /// conflict kept in another image than the window's is listed.
+    /// conflict kept or a list with qualifiers not written (T194) in another image than the
+    /// window's is listed.
     fn batch_written(
         &mut self,
         id: RequestId,
@@ -918,11 +921,20 @@ impl MetadataCache {
                     batch.notices = report.notices;
                 } else {
                     for notice in &report.notices {
-                        if let WriteNotice::ConflictKept { property } = notice {
-                            batch.kept.push(editor_text(&EditorText::ConflictKept {
-                                file: file_name(path),
-                                property: property.clone(),
-                            }));
+                        match notice {
+                            WriteNotice::ConflictKept { property } => {
+                                batch.kept.push(editor_text(&EditorText::ConflictKept {
+                                    file: file_name(path),
+                                    property: property.clone(),
+                                }));
+                            }
+                            WriteNotice::QualifiersKept { property } => {
+                                batch.kept.push(editor_text(&EditorText::QualifiersKept {
+                                    file: file_name(path),
+                                    property: property.clone(),
+                                }));
+                            }
+                            _ => {}
                         }
                     }
                 }
@@ -3401,6 +3413,72 @@ mod tests {
                 path: a,
                 result: Ok(empty_read()),
             }]
+        );
+    }
+
+    #[test]
+    fn a_list_with_qualifiers_kept_in_another_image_is_a_summary_line() {
+        let mut worker = FakeSubmit::new([]);
+        let mut cache = MetadataCache::default();
+        let (a, b, c) = start_three(&mut cache, &mut worker);
+        assert_eq!(worker.edits_writes.len(), 3);
+
+        let window_notices = vec![WriteNotice::QualifiersKept {
+            property: "dc:subject".to_owned(),
+        }];
+        worker
+            .events
+            .push_back(edits_written(900, &a, Ok(report(window_notices.clone()))));
+        assert!(cache.poll(&mut worker).is_empty());
+        // The second image answers before the first other one.
+        worker.events.push_back(edits_written(
+            902,
+            &c,
+            Ok(report(vec![
+                WriteNotice::ConflictKept {
+                    property: "photoshop:City".to_owned(),
+                },
+                WriteNotice::QualifiersKept {
+                    property: "dc:subject".to_owned(),
+                },
+            ])),
+        ));
+        assert!(cache.poll(&mut worker).is_empty());
+        assert!(cache.take_editor_events().is_empty());
+        worker.events.push_back(edits_written(
+            901,
+            &b,
+            Ok(report(vec![WriteNotice::QualifiersKept {
+                property: "dc:subject".to_owned(),
+            }])),
+        ));
+        assert!(cache.poll(&mut worker).is_empty());
+
+        assert!(!cache.batch_running());
+        let summary = BatchSummary {
+            written: 3,
+            total: 3,
+            failed: Vec::new(),
+            kept: vec![
+                "Unresolved conflict kept: pw-loupe-batch-c.DNG (City)".to_owned(),
+                "List with qualifiers not written: pw-loupe-batch-c.DNG (Keywords)".to_owned(),
+                "List with qualifiers not written: pw-loupe-batch-b.ARW (Keywords)".to_owned(),
+            ],
+            notices: window_notices,
+        };
+        assert_eq!(
+            summary.lines(),
+            [
+                "Written to 3 of 3 images.",
+                "Unresolved conflict kept: pw-loupe-batch-c.DNG (City)",
+                "List with qualifiers not written: pw-loupe-batch-c.DNG (Keywords)",
+                "List with qualifiers not written: pw-loupe-batch-b.ARW (Keywords)",
+                "Keywords was not written: it has qualifiers RawStride cannot keep",
+            ]
+        );
+        assert_eq!(
+            cache.take_editor_events(),
+            [EditorEvent::BatchDone(summary)]
         );
     }
 

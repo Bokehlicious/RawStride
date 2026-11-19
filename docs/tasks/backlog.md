@@ -22,6 +22,11 @@ and reviewer:
   (so not marked) and is kept by a whole-list write, but also given to the new items; T193's hand
   check (owner, 2026-11-19) did not try a JPEG with IIM, a list with qualifiers and an IIM/XMP
   conflict (no such file at hand), so the held list's `DigestNotWritten` is checked only by tests;
+  Leftovers from the review of T194 (2026-11-19): the batch (`metadata.rs` `batch_written`) lists
+  only `ConflictKept` and `QualifiersKept` of an image other than the window's; its `Truncated`,
+  `IimConvertedToUtf8` and `DigestNotWritten` are dropped, so the user does not learn that a field
+  was truncated in another image, and the `match` ends in `_ => {}`, so a new notice kind would be
+  dropped without a decision (an exhaustive `match` would force one);
   from §10, left out of T88: template sub-fields of lists of
   structures (Location Created, Image Creator, Copyright Owner, Licensor), variables (`{date}` …),
   template files in XMP with the modes (where the modes are stored is decided with U13). Left out of I10: editing several
