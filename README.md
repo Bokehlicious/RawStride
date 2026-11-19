@@ -28,7 +28,8 @@ Panasonic (RW2) and DNG files.
 
 ## Building
 
-Windows 10 or 11, x64. See [docs/building.md](docs/building.md): Visual Studio Build Tools, Rust,
+Windows 10 or 11, x64. RawStride runs only on Windows today; if you would like it on Linux or
+macOS, open an issue to say so. See [docs/building.md](docs/building.md): Visual Studio Build Tools, Rust,
 vcpkg and ExifTool, then
 
 ```powershell

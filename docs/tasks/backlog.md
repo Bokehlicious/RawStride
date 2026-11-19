@@ -88,8 +88,8 @@ and reviewer:
   public.
 - **Linux and macOS ports** (owner, 2026-11-17: only if there is interest once the repository is
   public; the owner uses only Windows). Survey of the code, 2026-11-17, nothing built off Windows:
-  - *A small README note when public*: Windows only today, an issue where people can show interest.
-    Keep putting Windows code behind `#[cfg(windows)]` with a `not(windows)` branch, as now.
+  - *A small README note when public*: done (public-release plan R8, 2026-11-19), in the
+    README's "Building" section. Keep putting Windows code behind `#[cfg(windows)]` with a `not(windows)` branch, as now.
   - *Build*: `rust-toolchain.toml` lists only the MSVC target; `.cargo/config.toml`,
     `pw-libraw/build.rs` and `pw-libjpeg/build.rs` assume the `x64-windows-static-md` triplet and
     `*.lib` names (`lib*.a` on Unix; `ws2_32` Windows only). LibRaw's OpenMP (ADR 0006): `libgomp`
@@ -152,44 +152,16 @@ and reviewer:
 - **Before the repository is made public** (survey, 2026-11-17; the README section "How RawStride
   is developed" and general antivirus wording in the agent rules were done then). The licence,
   CONTRIBUTING and the dependency survey are in place, and no secrets were found in the files or
-  the history. Left, for the owner to decide:
-  - *The owner's e-mail address* is in all commits. Keep it, or rewrite the history of both
-    branches to the GitHub noreply address (`git filter-repo --mailmap`). A rewrite changes every
-    commit hash (check the documents' references to hashes first); push it to a new, empty
-    `RawStride` repository after renaming the old one (kept private and archived), and turn on
-    "Block command line pushes that expose my email".
-  - *A trademark search* for the name RawStride (ADR 0012, ADR 0002 §4).
-  - *Small fixes*: `repository = ""` in `Cargo.toml`; a path with the owner's user name in
-    `done/T115-…` and in `docs/analyses/2026-11-04-m2-pipeline-steps.md` (line 502,
-    `C:\Users\…\.cargo`); `docs/agent-tasks.md` (about 700 KB, replaced by `docs/tasks/`) archived or
-    removed; the done tasks' logs read once with public eyes.
-  - *Choices*: the owner's name as test data in `pw-metadata`; the one-off `tools/m2-*.cmd`
-    scripts with paths to the test-data folder; `.github/` with CI, issue templates and a
-    `SECURITY.md` (optional); CONTRIBUTING asks contributors for `Signed-off-by`, which the
-    owner's own commits do not carry.
-  - *Check on GitHub*: the repository's visibility and settings today (not checked, `gh` is not
-    installed).
-  - A binary release also needs what ADR 0002 §4 lists (distribution folder,
-    `THIRD-PARTY-NOTICES.txt`, ExifTool).
-  - Found by a second survey (2026-11-19, owner: into the backlog):
-    1. *Licence notice in the program*: GPL-3.0 §0 and §5(d) ask an interactive program to show
-       "Appropriate Legal Notices" (copyright, no warranty, where the licence is), usually in an
-       About box. `pw-loupe` has none, and ADR 0002 §4 does not list it. Needed before the first
-       binary release, not before the repository is public; an ADR 0002 §4 line first.
-    2. *Free test files*: `tests/fixtures/` holds only a README, so every real-file test needs
-       the owner's `PW_TESTDATA`. A contributor's run, or CI, passes without one RAW, DNG or JPEG
-       being decoded or written. A few of the owner's own images released as CC0 (small RAW,
-       DNG, JPEG and TIFF, metadata checked first) would let the ignored tests run anywhere.
-    3. *Measurement tools outside the repository*: done (public-release plan R4, PR-Q6,
-       2026-11-19): `docs/requirements-image-viewer.md` §Method, ADR 0008, ADR 0015 and the S6
-       analysis say the tools and results are the owner's and not published. Bringing the
-       scripts into `tools/` is a later task only if someone asks.
-    4. *The old name in configuration*: `vcpkg.json` (`"name": "photoworkflow"`, the description
-       "Native dependencies for PhotoWorkflow"); `src-tauri/tauri.conf.json` goes with T207.
-    5. *Local folders ignored only on the owner's machine*: `TokenEconomizer/` is hidden by
-       `.git/info/exclude` and `.claude/` (`settings.local.json`) by a rule outside the repository,
-       not by `.gitignore`; in another clone a `git add -A` would take them. Add both to
-       `.gitignore` (a tooling change, so through a task).
+  the history. **Moved to `plans/public-release.md` (accepted 2026-11-19, PR-Q1–PR-Q10)**, which
+  now holds every point of the two surveys (2026-11-17 and 2026-11-19): the e-mail address (H2,
+  H3), the trademark search (PR-Q3, done), the small fixes (R2, R3, R7; `docs/agent-tasks.md` is
+  already a stub), the choices (R5, R6, R8, C1; issue templates after the switch), the GitHub
+  settings (P1), the free test files (R9), the measurement tools (R4), the old name in `vcpkg.json`
+  (R2) and the local folders (R1). Struck here at R8, 2026-11-19. One point stays here:
+  - *Licence notice in the program*: GPL-3.0 §0 and §5(d) ask an interactive program to show
+    "Appropriate Legal Notices" (copyright, no warranty, where the licence is), usually in an
+    About box. `pw-loupe` has none, and ADR 0002 §4 does not list it. Needed before the first
+    binary release, not before the repository is public; an ADR 0002 §4 line first (plan §4).
 - **Known limits of `relocate::companions`** (`/code-review` of T169, 2026-11-17; accepted, the
   moves are Windows only; **kept** at the sort of 2026-11-17 until a Linux or macOS port):
   - *Case-sensitive file systems:* a file whose name differs from the image's only in case is

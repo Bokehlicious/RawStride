@@ -7,6 +7,8 @@ coordination up front saves everyone time.
 
 - **Bugs and ideas:** open an issue. For a bug, say what you did, what you expected, what happened,
   the camera and file type, and the RawStride commit or version.
+- **Security problems:** do not open a public issue; report them privately as
+  [SECURITY.md](.github/SECURITY.md) describes.
 - **Small fixes** (a typo, a clear bug with an obvious fix): a pull request is welcome directly.
 - **Larger changes** (a new feature, a new dependency, a change of behaviour or of the file format
   RawStride writes): open an issue first and wait for the maintainer's answer. Many decisions are
@@ -59,6 +61,9 @@ otherwise have the right to submit it under the project's licence. `git commit -
 ```
 Signed-off-by: Your Name <you@example.com>
 ```
+
+This applies from the day the repository became public; the maintainer's commits before that do
+not carry the line.
 
 ## How the project itself works
 
