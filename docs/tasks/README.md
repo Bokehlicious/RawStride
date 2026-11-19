@@ -86,11 +86,14 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status |
 |---|---|---|
+| [T201](T201-open-in-program-plan-wait-and-texts.md) | "Open in {name}": the plan, the wait, the start and the texts (ADR 0019 E2, first part) | Open |
+| [T202](T202-open-in-program-menu-key-and-wiring.md) | "Open in {name}": the menu items, Ctrl+E, the question and the start in the shell (ADR 0019 E2, second part) | Blocked: waits for T201 |
+| [T203](T203-show-in-explorer.md) | "Show in Explorer", and the owner's hand check of E2 and E3 (ADR 0019 E3) | Blocked: waits for T202 |
 
 ## Writing a task (owner and reviewer)
 
-- **Number:** the next free number after the highest in this folder and `done/` (T201 next).
-- **File:** `docs/tasks/T201-<a-few-words>.md`; three digits, lower case, words joined by `-`.
+- **Number:** the next free number after the highest in this folder and `done/` (T204 next).
+- **File:** `docs/tasks/T204-<a-few-words>.md`; three digits, lower case, words joined by `-`.
 - **Index:** add a row to "Open tasks" above and keep its status in step with the file's heading.
 - **Size (owner, 2026-11-15, after T142):** one task is one layer (a C++ shim or a core crate, or
   the shell in `pw-loupe`), about eight files at most, and gives one result the owner can check by
