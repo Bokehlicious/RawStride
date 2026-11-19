@@ -31,8 +31,8 @@
 //!   sidecar must be XMP and hold, besides `System`, `ExifTool` and `File` keys, only keys
 //!   [`verify_copy`] allows for the plan (owner's decision during T86: ExifTool always adds
 //!   `XMP-x:XMPToolkit`); then the caller's [`ImageCheck::check_copy`] for a JPEG, TIFF or DNG
-//!   (previews and the RAW image, §9.3 points 3–4, written in I9); then the original's
-//!   modification time is set on the copy and the copy is flushed.
+//!   (previews and the RAW image, §9.3 points 3–4, written in I9); then the copy is flushed; it
+//!   keeps the time of the write as its modification time (§9.4, Q14).
 //! - **9.4, replace:** `ReplaceFileW` with the backup `<name>.pwbak-<hex>.<ext>` (or two renames
 //!   on volumes without it), or a move without overwriting for a new sidecar; then a final read
 //!   (size and `ImageDataHash` equal the copy's), the backup is deleted and the journal entry
@@ -112,8 +112,8 @@ pub enum Stage {
     Precheck,
     /// §9.2: the journal entry or ExifTool's write of the temporary copy.
     WriteCopy,
-    /// §9.3 points 1–3 and 5: the copy's snapshot and its comparison with the original; setting
-    /// the modification time and the flush.
+    /// §9.3 points 1–3 and 5: the copy's snapshot and its comparison with the original; the
+    /// flush.
     Verify,
     /// §9.3 points 3–4: the caller's [`ImageCheck::check_copy`].
     ImageCheck,
@@ -379,8 +379,8 @@ impl Transaction<'_> {
         Ok(())
     }
 
-    /// Writes the copy (§9.2) and verifies it (§9.3); sets the original's modification time on it
-    /// and flushes it. Returns the copy's snapshot for the final check.
+    /// Writes the copy (§9.2) and verifies it (§9.3); flushes it. Returns the copy's snapshot for
+    /// the final check.
     fn write_and_verify(
         &mut self,
         open: &Open,
@@ -418,8 +418,6 @@ impl Transaction<'_> {
                         .check_copy(self.target, &open.copy, kind)
                         .map_err(|reason| (Stage::ImageCheck, reason))?;
                 }
-                fileops::set_modified(&open.copy, original.modified)
-                    .map_err(|e| verify(format!("the modification time could not be set: {e}")))?;
             }
             None => verify_new_sidecar(&written, self.plan).map_err(|e| verify(e.to_string()))?,
         }

@@ -16,6 +16,7 @@
 use std::os::windows::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use pw_metadata::ExifTool;
 use pw_metadata::iim::{CodedCharset, Fallback};
@@ -382,14 +383,19 @@ impl ImageCheck for LockingCheck {
 }
 
 /// A JPEG written with City, a two-line Description, keywords and IIM created: the values are
-/// read back, the modification time is the original's, and no `pwtmp`/`pwbak` file and no journal
-/// entry is left.
+/// read back, the modification time is the time of the write, and no `pwtmp`/`pwbak` file and no
+/// journal entry is left.
 #[test]
 fn a_jpeg_is_written_safely_and_its_values_read_back() {
     let mut et = exiftool();
     let s = Scratch::new("jpeg");
     let file = s.jpeg();
-    let modified = std::fs::metadata(&file).unwrap().modified().unwrap();
+    std::fs::File::options()
+        .write(true)
+        .open(&file)
+        .unwrap()
+        .set_modified(UNIX_EPOCH + Duration::from_secs(1_600_000_000))
+        .unwrap();
 
     let mut metadata = Metadata::new();
     metadata.set("photoshop:City", text("Malmö")).unwrap();
@@ -413,6 +419,7 @@ fn a_jpeg_is_written_safely_and_its_values_read_back() {
         "IIM is created: {plan:?}"
     );
 
+    let before = SystemTime::now();
     assert_eq!(
         et.write_safely(&file, &plan, &NoImageCheck, &s.journal),
         written(&file)
@@ -428,9 +435,9 @@ fn a_jpeg_is_written_safely_and_its_values_read_back() {
         value(&read, "dc:subject"),
         Some(list(&["fjäll", "sjö, strand"]))
     );
-    assert_eq!(
-        std::fs::metadata(&file).unwrap().modified().unwrap(),
-        modified
+    assert!(
+        std::fs::metadata(&file).unwrap().modified().unwrap() >= before - Duration::from_secs(2),
+        "the modification time is the time of the write"
     );
     s.assert_clean();
     s.remove();

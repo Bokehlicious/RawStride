@@ -86,8 +86,7 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status |
 |---|---|---|
-| [T204](T204-written-file-gets-the-write-time.md) | A written file gets the time of the write as its modification time (ADR 0007 Q14) | Open |
-| [T205](T205-rating-percentages-and-flat-hierarchical-keywords.md) | Rating percentages and a flat `lr:hierarchicalSubject` kept equal (ADR 0007 Q15, Q16) | Blocked: waits for T204 |
+| [T205](T205-rating-percentages-and-flat-hierarchical-keywords.md) | Rating percentages and a flat `lr:hierarchicalSubject` kept equal (ADR 0007 Q15, Q16) | Open |
 
 ## Writing a task (owner and reviewer)
 

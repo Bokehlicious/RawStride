@@ -3,8 +3,8 @@
 //!
 //! - [`can_write`] checks that a file may be written: not read-only, not on a read-only volume,
 //!   not locked by another program, and enough free space on its volume (§9.1 point 2).
-//! - [`flush`] and [`set_modified`] flush a written copy and set its modification time (§9.3
-//!   point 5, §9.4).
+//! - [`flush`] flushes a written copy (§9.3 point 5); [`set_modified`] sets a modification time,
+//!   used by [`replace`] (§9.4).
 //! - [`replace`] swaps the verified copy in for the original with `ReplaceFileW`, keeping the
 //!   original as a backup; [`replace_by_rename`] does the same with two renames on volumes without
 //!   `ReplaceFileW` (§9.4). [`move_new`] moves a new file (a new sidecar) into place without ever

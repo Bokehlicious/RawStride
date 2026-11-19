@@ -354,3 +354,8 @@ language (the system's own text, accepted), and "Show in File Explorer" reached 
 contact sheet since the preview draws no menu bar (covered by "A right-click menu on images").
 Moved to an ADR on 2026-11-19: "A right-click menu on images" (ADR 0019 addition 1, §2.9, accepted
 by the owner the same day; step E4 in `plans/adr-0018-0025-steps.md`, before ADR 0024 O1).
+- **RawStride's own writes and a check by modification time** (chain review of T204, 2026-11-19):
+  since T204 a file RawStride writes gets the time of the write (ADR 0007 §9.4). ADR 0026's folder
+  watcher and ADR 0030's change check must tell RawStride's own writes from outside changes (as
+  the histogram cache does with its stamp before and after a write, U7c-Q7); taken up in those
+  ADRs' steps.

@@ -13,7 +13,7 @@
 #![cfg(windows)]
 
 use std::path::{Path, PathBuf};
-use std::time::Instant;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use pw_metadata::edit::{Edit, EditError, EditOptions};
 use pw_metadata::iim::Fallback;
@@ -225,15 +225,21 @@ fn assert_report(result: Result<WriteReport, EditError>, expected: WriteReport) 
     }
 }
 
-/// 3 stars and Red on a JPEG: written, read back by `read_ratings`, the modification time kept,
-/// and no `pwtmp`/`pwbak` file or journal entry left.
+/// 3 stars and Red on a JPEG: written, read back by `read_ratings`, the modification time the time
+/// of the write, and no `pwtmp`/`pwbak` file or journal entry left.
 #[test]
 fn a_rating_and_label_are_written_safely_to_a_jpeg() {
     let mut et = exiftool();
     let s = Scratch::new("jpeg");
     let file = s.jpeg();
-    let modified = std::fs::metadata(&file).unwrap().modified().unwrap();
+    std::fs::File::options()
+        .write(true)
+        .open(&file)
+        .unwrap()
+        .set_modified(UNIX_EPOCH + Duration::from_secs(1_600_000_000))
+        .unwrap();
 
+    let before = SystemTime::now();
     assert_report(
         s.rate(&mut et, &file, &rating(Some(3), Some("Red"))),
         written(&file),
@@ -243,9 +249,9 @@ fn a_rating_and_label_are_written_safely_to_a_jpeg() {
         read_rating(&mut et, &file),
         Some(rating(Some(3), Some("Red")))
     );
-    assert_eq!(
-        std::fs::metadata(&file).unwrap().modified().unwrap(),
-        modified
+    assert!(
+        std::fs::metadata(&file).unwrap().modified().unwrap() >= before - Duration::from_secs(2),
+        "the modification time is the time of the write"
     );
     s.assert_clean();
     s.remove();
@@ -411,6 +417,43 @@ fn a_raw_gets_a_sidecar_only_for_a_rating() {
     assert_eq!(tag(&mut et, &sidecar, "XMP-xmp:Rating"), "2");
     assert_eq!(read_rating(&mut et, &raw), Some(rating(Some(2), None)));
     assert_eq!(std::fs::read(&raw).unwrap(), FAKE_RAW);
+    s.assert_clean();
+    s.remove();
+}
+
+/// A RAW whose sidecar already exists: a rating writes the sidecar, which gets the time of the
+/// write as its modification time (§9.4, Q14); the RAW is not written (§4.2).
+#[test]
+fn an_existing_sidecar_gets_the_time_of_the_write() {
+    let mut et = exiftool();
+    let s = Scratch::new("sidecar-time");
+    let raw = s.raw();
+    let sidecar = s.dir.join("TN0001.xmp");
+    write(&mut et, &sidecar, &["-XMP-xmp:Label=Red"]);
+    std::fs::File::options()
+        .write(true)
+        .open(&sidecar)
+        .unwrap()
+        .set_modified(UNIX_EPOCH + Duration::from_secs(1_600_000_000))
+        .unwrap();
+    let raw_modified = std::fs::metadata(&raw).unwrap().modified().unwrap();
+
+    let before = SystemTime::now();
+    assert_report(
+        s.rate(&mut et, &raw, &rating(Some(2), None)),
+        written(&sidecar),
+    );
+
+    assert_eq!(tag(&mut et, &sidecar, "XMP-xmp:Rating"), "2");
+    assert!(
+        std::fs::metadata(&sidecar).unwrap().modified().unwrap() >= before - Duration::from_secs(2),
+        "the sidecar's modification time is the time of the write"
+    );
+    assert_eq!(std::fs::read(&raw).unwrap(), FAKE_RAW);
+    assert_eq!(
+        std::fs::metadata(&raw).unwrap().modified().unwrap(),
+        raw_modified
+    );
     s.assert_clean();
     s.remove();
 }

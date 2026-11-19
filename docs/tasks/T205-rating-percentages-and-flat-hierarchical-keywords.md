@@ -1,4 +1,4 @@
-# T205. Rating percentages and a flat `lr:hierarchicalSubject` kept equal (ADR 0007 Q15, Q16) — Blocked: waits for T204
+# T205. Rating percentages and a flat `lr:hierarchicalSubject` kept equal (ADR 0007 Q15, Q16) — Open
 
 - **Why:** ADR 0007 revision 26 (owner 2026-11-19), from the test with DxO PhotoLab (ADR 0029
   step P0, §1.1):
@@ -177,3 +177,4 @@
 | Date | Status | Note |
 |---|---|---|
 | 2026-11-19 | Blocked | Added (ADR 0029 step P0b split into T204 → T205 by the owner, 2026-11-19); waits for T204. Cold read: verification accepts the new arguments (also the Exif block dropped on a reject, measured); one entry comes as an array; `file_state`'s new signature and the literal list made exact |
+| 2026-11-19 | Open | T204 Done; T205 can start |

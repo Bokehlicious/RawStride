@@ -210,4 +210,5 @@ was when the task was done, so "this file", "below" and "the Log" in T1–T115 m
 | [T201](T201-open-in-program-plan-wait-and-texts.md) | ADR 0019 E2, first part: the command line's length, the plan (start, ask, too long), the wait for the images' writes, the start of the program and the texts of "Open in {name}" (pw-loupe) |
 | [T202](T202-open-in-program-menu-key-and-wiring.md) | ADR 0019 E2, second part: Image ▸ "Open in {name}" per program or "Open in Another Program…", Ctrl+E, the question above 100 images, the wait for the images' writes and the start in the shell (pw-loupe) |
 | [T203](T203-show-in-explorer.md) | ADR 0019 E3: Image ▸ "Show in File Explorer" for the current image, and the owner's hand check of E2 and E3 (pw-loupe) |
+| [T204](T204-written-file-gets-the-write-time.md) | ADR 0007 §9.4 (Q14): a file the safe write writes, sidecar or image, keeps the time of the write as its modification time (pw-metadata) |
 | [T206](T206-import-recognises-by-creation-time.md) | ADR 0005 choice 2: the import gives a copy the card's time as its creation time and recognises an earlier DNG/JPEG/TIFF by its modification or creation time (pw-ingest) |
