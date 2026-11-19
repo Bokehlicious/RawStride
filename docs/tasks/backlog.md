@@ -180,12 +180,10 @@ and reviewer:
        the owner's `PW_TESTDATA`. A contributor's run, or CI, passes without one RAW, DNG or JPEG
        being decoded or written. A few of the owner's own images released as CC0 (small RAW,
        DNG, JPEG and TIFF, metadata checked first) would let the ignored tests run anywhere.
-    3. *Measurement tools outside the repository*: `docs/requirements-image-viewer.md`,
-       ADR 0008 and ADR 0015 name `D:\PhotoWorkflowData\pm-study\tools\latency.ps1` and
-       `…\pm-study\results\`, so no one else can repeat the acceptance measurements. Choose:
-       bring the RawStride-only scripts into `tools/`, or say in those documents that the tools
-       are the owner's and not published. The folder name `pm-study` hints at another product;
-       allowed by the clean-room policy (observations stay outside), but seen by readers.
+    3. *Measurement tools outside the repository*: done (public-release plan R4, PR-Q6,
+       2026-11-19): `docs/requirements-image-viewer.md` §Method, ADR 0008, ADR 0015 and the S6
+       analysis say the tools and results are the owner's and not published. Bringing the
+       scripts into `tools/` is a later task only if someone asks.
     4. *The old name in configuration*: `vcpkg.json` (`"name": "photoworkflow"`, the description
        "Native dependencies for PhotoWorkflow"); `src-tauri/tauri.conf.json` goes with T207.
     5. *Local folders ignored only on the owner's machine*: `TokenEconomizer/` is hidden by

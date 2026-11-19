@@ -19,7 +19,9 @@
   empty at the start of each other run. The state of the Windows file cache is not recorded.
 - Input sets: `D:\PhotoWorkflowData\s6\`: `a7r` 5 files (Sony A7R IV), `a1` 14 (Sony A1), `rw2` 21
   (Panasonic RW2), `dng` 9 (DNG).
-- Sources: the `s6-` rows of `D:\PhotoWorkflowData\pm-study\results\latency-rawstride.csv`; the
+- Sources (the files under `D:\PhotoWorkflowData` are the owner's and not published, 2026-11-19,
+  `docs/tasks/plans/public-release.md` PR-Q6): the `s6-` rows of
+  `D:\PhotoWorkflowData\pm-study\results\latency-rawstride.csv`; the
   S6a rows of the Log in `docs/tasks/done/log-2026-11-08-to-2026-11-13.md`; `D:\PhotoWorkflowData\analysis\s6\s6a-log.txt` and
   `mem.csv`. For TIFF and RAW with colour management: the F6 rows of the Log (labels
   `c4-tiff-next-2`, `c4-raw-next`).

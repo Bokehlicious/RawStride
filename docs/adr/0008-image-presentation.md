@@ -42,7 +42,9 @@
   - [requirements-image-viewer.md](../requirements-image-viewer.md) (V1–V8, G1–G4; approved 2026-11-04, G4 and the V2 clarification added 2026-11-04/05);
   - ADR 0003 (M1 viewer), ADR 0006 (RAW pipeline M2);
   - `docs/analyses/2026-11-04-m2-libraw-decode.md`, `docs/analyses/2026-11-04-m2-pipeline-steps.md`;
-  - the pixel measurements of 2026-11-04 (`D:\PhotoWorkflowData\pm-study\results\`).
+  - the pixel measurements of 2026-11-04 (`D:\PhotoWorkflowData\pm-study\results\`). The
+    measurement tool `latency.ps1`, named throughout this ADR, and its results are the owner's own
+    and not published (2026-11-19, PR-Q6); `requirements-image-viewer.md` §Method says what it does.
 - Out of scope:
   - floating windows and free window/panel placement (a future UI requirement);
   - large folders (1 000+ images; deferred);

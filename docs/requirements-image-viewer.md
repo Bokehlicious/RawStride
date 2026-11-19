@@ -64,6 +64,10 @@ General:
 ## Method
 
 - **Tool:** a script outside the repository (`D:\PhotoWorkflowData\pm-study\tools\latency.ps1`).
+  The measurement tools and their results are the owner's own and are not published (owner's
+  decision, 2026-11-19, `docs/tasks/plans/public-release.md` PR-Q6); this section describes what the
+  script does, so the measurement can be repeated with another tool. The paths below are the
+  owner's machine.
   - It sends a key to the window under test.
   - It samples the image area's screen pixels every capture (about 10–20 ms).
   - It reports the first and the last change, and the number of changes, until the screen has been
