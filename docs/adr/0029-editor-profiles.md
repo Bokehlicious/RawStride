@@ -1,8 +1,8 @@
 # ADR 0029: Editor profiles: what an editing program leaves beside the images
 
-- Status: **proposed (2026-11-19).** A draft for the owner. Nothing is placed in the step plan,
-  and nothing is built, installed or added as a dependency by this ADR. When the questions are
-  answered, each step in §5 becomes its own task, with its own approval and commit.
+- Status: **accepted by the owner (2026-11-19):** every question answered as proposed (§4).
+  Nothing is built, installed or added as a dependency by this ADR. Each step in §5 becomes its
+  own task, with its own approval and commit.
   - **Step P0 done (2026-11-19):** the owner's test with DxO PhotoLab 10.3, written into §1.1;
     P-Q3, P-Q6 and P-Q12 now carry what it showed, §2.8 is new, and two changes to the metadata
     writing went to ADR 0007 revision 26.
@@ -16,7 +16,7 @@
   - ADR 0026 (a folder that follows changes on disk): when a new edit file or export is seen;
   - ADR 0007 §9 (the safe write) and ADR 0013 (ratings and labels in XMP), which the editing
     program is expected to read;
-  - ADR 0030 (the catalog, to be written): written separately on the owner's decision
+  - ADR 0030 (the catalog): written separately on the owner's decision
     (2026-11-19), since this ADR needs no catalog;
   - [clean-room.md](../clean-room.md): the functions are described from RawStride's own needs; the
     file names are interoperability facts read on the owner's own files.
@@ -61,7 +61,7 @@ What follows: the program's synchronisation setting must be on (§2.8); ADR 0007
 written files a new modification time and keeps a flat `lr:hierarchicalSubject` and the rating
 percentages equal to RawStride's values (decided by the owner, 2026-11-19).
 
-## 2. Decision (proposed)
+## 2. Decision
 
 ### 2.1 An editor profile
 
@@ -155,8 +155,8 @@ before they are edited; a session works better than a database for this.
 - **Rejects do not cross** (P-Q12, P-Q13): the program neither reads RawStride's `xmp:Rating` −1
   nor writes its own reject to XMP. A reject is made in RawStride; an image rejected in RawStride
   shows no rating in the program.
-- **Until revision 26 is done**, a change in RawStride reaches the program only through its
-  "read metadata from file" command; the user guide says so for that time.
+- Since revision 26 (P0b, done 2026-11-19) a change in RawStride reaches the program by
+  itself; before it, only through the program's "read metadata from file" command.
 - Fields the program adds by itself (Location Shown city, Image Creator name, `exif:DateTimeOriginal`
   in XMP) are kept by RawStride as any other value; the time is noted in ADR 0020.
 
@@ -174,25 +174,25 @@ before they are edited; a session works better than a database for this.
 
 No new dependency.
 
-## 4. Questions (open)
+## 4. Questions (answered by the owner, 2026-11-19)
 
-| # | Question | Proposal |
+| # | Question | Answer |
 |---|---|---|
-| P-Q1 | **Form of a profile:** (a) built-in kinds only (DxO PhotoLab, later others, each in code); (b) name patterns with placeholders, edited by the user, with built-in filled-in profiles | (b): a new program needs no code; DxO PhotoLab ships filled in |
-| P-Q2 | Is a profile a part of a program in the ADR 0019 list, or a list of its own? | A part of the program: the path is already there, and at most five programs means at most five profiles |
-| P-Q3 | Where DxO PhotoLab's exports land and what they are called (same folder or subfolder, suffix) | **P0:** `{base}_DxO.jpg` in the image's folder with the owner's preset; the shipped profile uses it, confirmed by `xmpMM:PreservedFileName` (§2.1, §2.2) |
-| P-Q4 | An export in the image's folder: its own cell as today, or shown under its original? | Under its original, with a View setting "Show Exports as Own Images" (off) |
-| P-Q5 | The marks in the contact sheet: which, where, and are they on by default? | Three marks (edited, exported, export older than the edit) in a corner of the cell; on when a profile is active; a View setting to hide them |
-| P-Q6 | The age rule: mtime of the edit file against the export, and its margin | **P0:** 60 s (§2.5). The alternative, remembering the edit file's time when the export is first seen, needs stored state and fits the catalog (ADR 0030) better |
-| P-Q7 | Key and names for switching original ↔ export | Proposed in step P4, checked against the key map (U8) and the glossary |
-| P-Q8 | Renaming and moving: the edit file suffix added to the companion list automatically? Do exports follow a rename or move? | Suffix added automatically; exports do not follow (they are the program's output), the lost link said in the rename dialog when exports exist |
-| P-Q9 | Capture One in this ADR? | No: an amendment after a test with the owner's sessions (where edits and exports land, colour labels against XMP Label) |
-| P-Q10 | Read the contents of edit files (for example to show the edit's settings)? | Never (§2.2) |
-| P-Q11 | New edit files and exports seen without loading the folder again? | Through ADR 0026 F2–F3 when they are done; until then on "Load a folder again" |
-| P-Q12 | Can the culling marks that RawStride writes (rating, label, reject) be read by DxO PhotoLab? | **P0:** rating and label yes, both ways (with the setting of §2.8 on); reject no, in neither direction |
-| P-Q13 | Rejects between the programs: accept that they do not cross, or let RawStride write something the program reads (for example a reject also as a colour label or a keyword)? | Accept it: the reject is made in RawStride, and writing a second mark would break the owner's own label and keyword rules |
+| P-Q1 | **Form of a profile:** (a) built-in kinds only (DxO PhotoLab, later others, each in code); (b) name patterns with placeholders, edited by the user, with built-in filled-in profiles | (b): a new program needs no code; DxO PhotoLab ships filled in (as proposed) |
+| P-Q2 | Is a profile a part of a program in the ADR 0019 list, or a list of its own? | A part of the program: the path is already there, and at most five programs means at most five profiles (as proposed) |
+| P-Q3 | Where DxO PhotoLab's exports land and what they are called (same folder or subfolder, suffix) | **P0:** `{base}_DxO.jpg` in the image's folder with the owner's preset; the shipped profile uses it, confirmed by `xmpMM:PreservedFileName` (§2.1, §2.2) (as proposed) |
+| P-Q4 | An export in the image's folder: its own cell as today, or shown under its original? | Under its original, with a View setting "Show Exports as Own Images" (off) (as proposed) |
+| P-Q5 | The marks in the contact sheet: which, where, and are they on by default? | Three marks (edited, exported, export older than the edit) in a corner of the cell; on when a profile is active; a View setting to hide them (as proposed) |
+| P-Q6 | The age rule: mtime of the edit file against the export, and its margin | **P0:** 60 s (§2.5). The alternative, remembering the edit file's time when the export is first seen, needs stored state and fits the catalog (ADR 0030) better (as proposed) |
+| P-Q7 | Key and names for switching original ↔ export | Proposed in step P4, checked against the key map (U8) and the glossary (as proposed) |
+| P-Q8 | Renaming and moving: the edit file suffix added to the companion list automatically? Do exports follow a rename or move? | Suffix added automatically; exports do not follow (they are the program's output), the lost link said in the rename dialog when exports exist (as proposed) |
+| P-Q9 | Capture One in this ADR? | No: an amendment after a test with the owner's sessions (where edits and exports land, colour labels against XMP Label) (as proposed) |
+| P-Q10 | Read the contents of edit files (for example to show the edit's settings)? | Never (§2.2) (as proposed) |
+| P-Q11 | New edit files and exports seen without loading the folder again? | Through ADR 0026 F2–F3 when they are done; until then on "Load a folder again" (as proposed) |
+| P-Q12 | Can the culling marks that RawStride writes (rating, label, reject) be read by DxO PhotoLab? | **P0:** rating and label yes, both ways (with the setting of §2.8 on); reject no, in neither direction (as proposed) |
+| P-Q13 | Rejects between the programs: accept that they do not cross, or let RawStride write something the program reads (for example a reject also as a colour label or a keyword)? | Accept it: the reject is made in RawStride, and writing a second mark would break the owner's own label and keyword rules (as proposed) |
 
-## 5. Steps (proposed)
+## 5. Steps
 
 Each step ends with tests (GR11) and the owner's hand check; steps that change the preview also
 with `latency.ps1`.
@@ -206,8 +206,12 @@ with `latency.ps1`.
 | **P3** | Matching when a folder is read; the marks in the contact sheet and the inspector; the age rule | P1 |
 | **P4** | Original ↔ export in the preview; exports under their original (P-Q4); `latency.ps1` | P3 |
 
-Order: P0b first (it helps without any profile), then P1, P2, P3, P4; P2 and P3 may swap. Priority after the work already under way (ADR 0019
+Order: P0b first (done), then P1, P2, P3, P4; P2 and P3 may swap. Priority after the work already under way (ADR 0019
 E4, ADR 0024 O1, ADR 0027 W1–W9), unless the owner places it otherwise.
+
+**Placed in the step plan (owner, 2026-11-19):** last, after ADR 0027, in
+[`adr-0018-0025-steps.md`](../tasks/plans/adr-0018-0025-steps.md) as order 10; the owner expects
+to move it as the work goes on.
 
 ## 6. Not included
 

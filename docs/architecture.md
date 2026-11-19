@@ -81,4 +81,5 @@ Benchmark large ingests before choosing default destinations.
 - ~~Thumbnail cache format and sizes.~~ Settled 2026-11-09 for now: thumbnails are made from the embedded
   previews on demand and kept in memory only; sizes 96–480 pt, default 200 (ADR 0011 §11, K5). A disk
   cache is reconsidered only if larger folders need it.
-- Catalog per volume or global.
+- ~~Catalog per volume or global.~~ Settled 2026-11-19: one global catalog, with the disks in a
+  `volumes` table (ADR 0030 K-Q1).

@@ -1,10 +1,10 @@
 # ADR 0030: A catalog across folders, for searching the whole archive
 
-- Status: **proposed (2026-11-19).** A draft for the owner. No question in §5 is answered,
-  nothing is placed in the step plan, and nothing is built, installed or added as a dependency by
-  this ADR. Step K0, the measurement on the owner's real archive, is done (2026-11-19, §6.1);
-  when the questions are answered, each step in §6 becomes its own task, with its own approval
-  and commit.
+- Status: **accepted by the owner (2026-11-19):** every question answered as proposed (§5), and
+  the new dependency `rusqlite` with the bundled SQLite approved (§3.2; the licence check against
+  ADR 0002 is part of K1). Nothing is built or installed by this ADR. Step K0, the measurement on
+  the owner's real archive, is done (2026-11-19, §6.1); each remaining step in §6 becomes its own
+  task, with its own approval and commit.
 - Date: 2026-11-19
 - Related:
   - [architecture.md](../architecture.md): goal 3 ("the SQLite catalog is an index and cache, not
@@ -56,7 +56,7 @@ the file first, then the catalog):
 
 ![The parts of RawStride with a catalog](images/0030-catalog-architecture.png)
 
-## 3. Decision (proposed)
+## 3. Decision
 
 ### 3.1 One global catalog
 
@@ -67,7 +67,7 @@ is still searchable; its images are shown as offline (§3.7).
 ### 3.2 Storage
 
 - SQLite through `rusqlite` with the bundled SQLite (a new dependency, about +1–1.5 MB in the
-  program; the owner's approval and ADR 0002's licence check first). WAL, a single writer thread,
+  program; approved by the owner 2026-11-19, ADR 0002's licence check in K1). WAL, a single writer thread,
   readers as needed (architecture.md, `pw-catalog`).
 - A capped page cache (16–64 MB). A hit list holds image ids only; the rows are fetched page by
   page as the contact sheet scrolls, so 100,000 hits cost little memory.
@@ -182,32 +182,32 @@ collections and disk thumbnail cache of K-Q7 and K-Q8, which are not part of the
 Sizes: the catalog 0.3–0.5 GB; a disk thumbnail cache (K-Q8) about 2.5 GB at 200 px and 10 GB at
 480 px for 250,000 images.
 
-## 5. Questions (open)
+## 5. Questions (answered by the owner, 2026-11-19)
 
-| # | Question | Proposal |
+| # | Question | Answer |
 |---|---|---|
-| K-Q1 | **One global catalog, or one per volume?** (architecture.md) | Global, with a `volumes` table: one search over every disk, offline disks still searchable |
-| K-Q2 | How catalog roots are chosen, and are backup disks excluded? | Chosen in Settings, nothing by default; backup disks never offered automatically |
-| K-Q3 | Volumes without a usable id (network drives, clones) | Not supported in the first steps; a clone is reported as a conflict, not merged |
-| K-Q4 | The change check: size and mtime per file, plus a full re-read on demand. Is that enough, given that ExifTool's `-P` keeps the mtime of a file it writes? | Yes for RawStride's own writes (they update the catalog directly); for other programs that keep mtime, the full re-read. K0: a listing of all roots takes about 80 s. Since T204 RawStride's safe write no longer keeps the mtime (ADR 0007 §9.4); only the Tauri path's `-P` does |
-| K-Q5 | The drift check: a command with a report, or automatic? | A command, with a report in the Tasks list |
-| K-Q6 | Keywords breaking the lower-case rule: a report only, or also a warning or lower-casing in the metadata window? | A report in the catalog first; anything in the metadata window is a new feature for a later ADR. K0: no keyword with upper case in the sample |
-| K-Q7 | Collections: kept in the catalog only (then the catalog must be backed up), or written to the files? A keyword such as `collections\|portfolio` breaks the flat-keyword rule | Not in the first steps; decided before collections are built |
-| K-Q8 | A disk thumbnail cache: when, where (C: or D:), which size, with a size limit and "Empty Cache"? | Not in the first steps; decided after the search is in use |
-| K-Q9 | Names in the library (Catalog, All Photos, Last Import, Missing, Volumes) | Proposed in each step, checked against the glossary |
-| K-Q10 | Broader terms (a search for `rovfåglar` finding `fiskgjuse`): a synonym list in RawStride? | Later, in RawStride's settings, never written to the files |
-| K-Q11 | The catalog off by default? | Yes: turned on by the owner in Settings |
-| K-Q12 | Priority against the work under way (ADR 0019 E4, 0024 O1, 0027 W1–W9, 0029) | After them; K0 may be run earlier, as it touches nothing in the program |
-| K-Q13 | Watch the catalog roots for changes while RawStride runs, beyond the open folders of ADR 0026? | No: the change check at start and on "Update Catalog" is enough. K0: the listing takes about 80 s for all roots, so a check at start is cheap |
+| K-Q1 | **One global catalog, or one per volume?** (architecture.md) | Global, with a `volumes` table: one search over every disk, offline disks still searchable (as proposed) |
+| K-Q2 | How catalog roots are chosen, and are backup disks excluded? | Chosen in Settings, nothing by default; backup disks never offered automatically (as proposed) |
+| K-Q3 | Volumes without a usable id (network drives, clones) | Not supported in the first steps; a clone is reported as a conflict, not merged (as proposed) |
+| K-Q4 | The change check: size and mtime per file, plus a full re-read on demand. Is that enough, given that ExifTool's `-P` keeps the mtime of a file it writes? | Yes for RawStride's own writes (they update the catalog directly); for other programs that keep mtime, the full re-read. K0: a listing of all roots takes about 80 s. Since T204 RawStride's safe write no longer keeps the mtime (ADR 0007 §9.4); only the Tauri path's `-P` does (as proposed) |
+| K-Q5 | The drift check: a command with a report, or automatic? | A command, with a report in the Tasks list (as proposed) |
+| K-Q6 | Keywords breaking the lower-case rule: a report only, or also a warning or lower-casing in the metadata window? | A report in the catalog first; anything in the metadata window is a new feature for a later ADR. K0: no keyword with upper case in the sample (as proposed) |
+| K-Q7 | Collections: kept in the catalog only (then the catalog must be backed up), or written to the files? A keyword such as `collections\|portfolio` breaks the flat-keyword rule | Not in the first steps; decided before collections are built (as proposed) |
+| K-Q8 | A disk thumbnail cache: when, where (C: or D:), which size, with a size limit and "Empty Cache"? | Not in the first steps; decided after the search is in use (as proposed) |
+| K-Q9 | Names in the library (Catalog, All Photos, Last Import, Missing, Volumes) | Proposed in each step, checked against the glossary (as proposed) |
+| K-Q10 | Broader terms (a search for `rovfåglar` finding `fiskgjuse`): a synonym list in RawStride? | Later, in RawStride's settings, never written to the files (as proposed) |
+| K-Q11 | The catalog off by default? | Yes: turned on by the owner in Settings (as proposed) |
+| K-Q12 | Priority against the work under way (ADR 0019 E4, 0024 O1, 0027 W1–W9, 0029) | After them; K0 may be run earlier, as it touches nothing in the program (as proposed) |
+| K-Q13 | Watch the catalog roots for changes while RawStride runs, beyond the open folders of ADR 0026? | No: the change check at start and on "Update Catalog" is enough. K0: the listing takes about 80 s for all roots, so a check at start is cheap (as proposed) |
 
-## 6. Steps (proposed)
+## 6. Steps
 
 Each step ends with tests (GR11) and the owner's hand check.
 
 | Step | Content | Needs |
 |---|---|---|
 | ~~**K0**~~ | **Done 2026-11-19 (§6.1):** the measurement on the owner's real archive, read-only: indexing time per disk, a size and mtime listing per disk, where keywords and place live and how many images have them, keywords breaking the lower-case rule. Run as scripts outside the repository (owner's choice, 2026-11-19), not as a tool under `tools/`; a sample first, then a full listing; no full ExifTool read (not needed before K1) | – |
-| **K1** | `pw-catalog`: the schema, migrations, the writer thread, the FTS5 table, the text normalisation; tests on a small set | K0, `rusqlite` approved |
+| **K1** | `pw-catalog`: the schema, migrations, the writer thread, the FTS5 table, the text normalisation; tests on a small set | K0, `rusqlite` approved (2026-11-19) |
 | **K2** | Volumes and roots: recognition by id, the roots in Settings, the catalog turned on and off | K1 |
 | **K3** | The first index and the change check, at low priority and pausable; progress in the status line | K2 |
 | **K4** | The shared after-write hook for RawStride's own writes | K3 |
@@ -217,6 +217,10 @@ Each step ends with tests (GR11) and the owner's hand check.
 
 Order: K0 first, then K1–K7. K5 waits for ADR 0022's filter, so the folder tab and the catalog tab
 share one filter model.
+
+**Placed in the step plan (owner, 2026-11-19):** last, after ADR 0029, in
+[`adr-0018-0025-steps.md`](../tasks/plans/adr-0018-0025-steps.md) as order 11; the owner expects
+to move it as the work goes on.
 
 ### 6.1 K0: results (2026-11-19)
 
