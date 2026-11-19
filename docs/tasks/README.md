@@ -86,7 +86,6 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status |
 |---|---|---|
-| [T212](T212-accept-the-hiddendata-write-warning.md) | Accept the write warning "Error reading HiddenData" by name (DxO exports of Sony RAWs) | Open |
 
 ## Writing a task (owner and reviewer)
 

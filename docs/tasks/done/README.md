@@ -218,3 +218,4 @@ was when the task was done, so "this file", "below" and "the Log" in T1–T115 m
 | [T209](T209-texts-that-name-the-tauri-app.md) | Comments and documents that still name the Tauri app as if it existed (pw-loupe, pw-metadata, pw-tiff, pw-libraw, docs) |
 | [T210](T210-remove-pw-rawview.md) | Remove `pw-rawview`, the Tauri app's RAW job engine (the workspace) |
 | [T211](T211-remove-the-in-place-write-calls.md) | Remove the in-place write calls `ExifTool::write_rating` and `write_iptc` (pw-metadata) |
+| [T212](T212-accept-the-hiddendata-write-warning.md) | Accept the write warning "Error reading HiddenData" by name (DxO exports of Sony RAWs) |

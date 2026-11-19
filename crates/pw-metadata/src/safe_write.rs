@@ -15,16 +15,18 @@
 //! - **9.2, the copy:** one ExifTool call writes the plan to `<name>.pwtmp-<hex>.<ext>` with `-o`;
 //!   the target is only read. A new sidecar is made without a source file (measured: `-o x.xmp`
 //!   from a RAW copies the RAW's Exif into the sidecar). ExifTool must report one file created
-//!   and no warning. **The digest pass** (T92, §5.2, §12): for a TIFF or DNG whose plan writes
+//!   and no warning, except the known harmless ones accepted by name (`HARMLESS_WRITE_WARNINGS`,
+//!   D17). **The digest pass** (T92, §5.2, §12): for a TIFF or DNG whose plan writes
 //!   `-IPTCDigest=new`, a second call `-IPTCDigest=new -overwrite_original <copy>` on the copy
 //!   only (RawStride's own temporary file; the original is still only read). Measured with
 //!   ExifTool 13.59: in a TIFF or DNG, `-IPTCDigest=new` in the same call as an IIM write stores
 //!   the MD5 of the IIM block without the padding ExifTool adds to it in the TIFF structure, while
 //!   `CurrentIPTCDigest` includes it, so the checksum is out of date; the second call stores the
 //!   current one and leaves the image data hash unchanged. A JPEG is not affected. ExifTool must
-//!   report one file updated and no warning. **The restart** (T92, owner's choice A): after a
-//!   TIFF write with `-IPTCDigest=new` (also a failed one), [`ExifTool::restart`] starts a new
-//!   process before the copy is read, because the process that wrote it reads the Photoshop block
+//!   report one file updated and no warning outside the same list. **The restart** (T92, owner's
+//!   choice A): after a TIFF write with `-IPTCDigest=new` (also a failed one),
+//!   [`ExifTool::restart`] starts a new process before the copy is read, because the process
+//!   that wrote it reads the Photoshop block
 //!   of such TIFFs wrongly from then on (measured on `TN002683.tif`, whose block holds an `AgHg`
 //!   resource: the correct copy read with two more warnings, and so refused in 9.3).
 //! - **9.3, verification:** the copy's snapshot against the original's ([`verify_copy`]); a new
@@ -584,29 +586,43 @@ impl Transaction<'_> {
     }
 }
 
+/// Write warnings known to be harmless, accepted by name (owner's decision D17, 2026-11-19,
+/// ADR 0007 §9.2). Each entry is the start of a line of ExifTool's answer, compared
+/// case-sensitively after leading whitespace; the rest of the line (` - <path>`) may be anything.
+/// Every other warning, also every other `[minor]` one, still refuses the write.
+///
+/// - `Error reading HiddenData`: a JPEG or DNG that DxO PhotoLab exported from a Sony RAW keeps
+///   Sony's maker note, whose `HiddenInfo` points at data that exists only in the original ARW.
+///   ExifTool keeps the pointer as it was and the image data hash is unchanged.
+const HARMLESS_WRITE_WARNINGS: &[&str] = &["Warning: [minor] Error reading HiddenData"];
+
 /// True if ExifTool's answer to the write of the copy reports exactly one file created, no failed
-/// file and no warning.
+/// file and no warning outside [`HARMLESS_WRITE_WARNINGS`].
 fn copy_written(answer: &str) -> bool {
     one_file_without_warning(answer, " image files created")
 }
 
 /// True if ExifTool's answer to the digest pass reports exactly one file updated, no failed file
-/// and no warning.
+/// and no warning outside [`HARMLESS_WRITE_WARNINGS`].
 fn digest_written(answer: &str) -> bool {
     one_file_without_warning(answer, " image files updated")
 }
 
 /// True if the answer's count of `summary` (`" image files created"`, …) is exactly one, no file
-/// failed and no line is a warning.
+/// failed and no line is a warning, except a line that starts with an entry of
+/// [`HARMLESS_WRITE_WARNINGS`].
 fn one_file_without_warning(answer: &str, summary: &str) -> bool {
     let count: u64 = answer
         .lines()
         .filter_map(|line| line.trim().strip_suffix(summary))
         .filter_map(|count| count.trim().parse::<u64>().ok())
         .sum();
-    let warned = answer
-        .lines()
-        .any(|line| line.trim_start().starts_with("Warning"));
+    let warned = answer.lines().map(str::trim_start).any(|line| {
+        line.starts_with("Warning")
+            && !HARMLESS_WRITE_WARNINGS
+                .iter()
+                .any(|harmless| line.starts_with(harmless))
+    });
     crate::write_succeeded(answer) && count == 1 && !warned
 }
 
@@ -778,6 +794,83 @@ mod tests {
             "    0 image files updated\n    1 files weren't updated due to errors\n"
         ));
         assert!(!digest_written(""));
+    }
+
+    /// The HiddenData warning of a DxO export of a Sony RAW (D17), in the form
+    /// `ExifTool::execute` gives: stdout lines may end with `\r\n`, stderr lines do not.
+    const HIDDEN_DATA: &str = "Warning: [minor] Error reading HiddenData - C:/x/a.jpg\n";
+
+    #[test]
+    fn the_hiddendata_warning_alone_is_accepted_by_name() {
+        assert!(copy_written(&format!(
+            "    1 image files created\r\n--- stderr ---\n{HIDDEN_DATA}"
+        )));
+        assert!(digest_written(&format!(
+            "    1 image files updated\r\n--- stderr ---\n{HIDDEN_DATA}"
+        )));
+        // Leading whitespace before the warning is ignored.
+        assert!(copy_written(&format!(
+            "    1 image files created\r\n--- stderr ---\n  {HIDDEN_DATA}"
+        )));
+    }
+
+    #[test]
+    fn every_other_warning_or_failure_still_refuses_the_write_with_hiddendata_accepted() {
+        let cases = [
+            // HiddenData together with another warning.
+            (
+                "    1 image files created\r\n",
+                "    1 image files updated\r\n",
+                format!(
+                    "{HIDDEN_DATA}Warning: [minor] IPTC:City exceeds length limit (truncated) - a.jpg\n"
+                ),
+            ),
+            (
+                "    1 image files created\r\n",
+                "    1 image files updated\r\n",
+                format!("Warning: Tag 'XMP-photoshop:NoSuchTag' is not defined\n{HIDDEN_DATA}"),
+            ),
+            // A different [minor] warning alone.
+            (
+                "    1 image files created\r\n",
+                "    1 image files updated\r\n",
+                "Warning: [minor] IPTC:City exceeds length limit (truncated) - a.jpg\n".to_string(),
+            ),
+            // The match is case-sensitive.
+            (
+                "    1 image files created\r\n",
+                "    1 image files updated\r\n",
+                "Warning: [Minor] Error reading HiddenData - C:/x/a.jpg\n".to_string(),
+            ),
+            // HiddenData with no file written.
+            (
+                "    0 image files created\r\n",
+                "    0 image files updated\r\n",
+                HIDDEN_DATA.to_string(),
+            ),
+            // HiddenData with a failed file.
+            (
+                "    1 image files created\r\n    1 files weren't updated due to errors\r\n",
+                "    1 image files updated\r\n    1 files weren't updated due to errors\r\n",
+                format!("{HIDDEN_DATA}Error: Error writing a.jpg - a.jpg\n"),
+            ),
+            (
+                "    0 image files created\r\n    1 files weren't updated due to errors\r\n",
+                "    0 image files updated\r\n    1 files weren't updated due to errors\r\n",
+                HIDDEN_DATA.to_string(),
+            ),
+        ];
+        for (created, updated, stderr) in &cases {
+            let copy = format!("{created}--- stderr ---\n{stderr}");
+            let digest = format!("{updated}--- stderr ---\n{stderr}");
+            assert!(!copy_written(&copy), "{copy:?}");
+            assert!(!digest_written(&digest), "{digest:?}");
+        }
+        // The existing [Minor] City case stays refused.
+        assert!(!copy_written(
+            "    1 image files created\n--- stderr ---\n\
+             Warning: [Minor] IPTC:City exceeds length limit (truncated) - a.jpg\n"
+        ));
     }
 
     /// Measured with ExifTool 13.59: a sidecar made from `-XMP-photoshop:City=Lund -o new.xmp`.
