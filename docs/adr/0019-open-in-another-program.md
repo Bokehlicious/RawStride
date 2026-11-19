@@ -3,6 +3,9 @@
 - Status: **accepted by the owner (2026-11-17):** every question answered, all proposals approved
   (§3). Nothing is built, installed or added as a dependency by this ADR. Each step in §4 becomes
   its own task, with its own approval and commit.
+- **Addition 1 accepted by the owner (2026-11-19):** a right-click menu on images (§2.9,
+  E-Q15–E-Q19, step E4), the owner's wish from the hand check of E2–E3; every proposal approved,
+  E-Q17 with the owner's two changes.
 - Date: 2026-11-17
 - Related:
   - ADR 0014 §2.7 (one command on the marked images, otherwise the current one);
@@ -89,6 +92,33 @@
   Windows' own name for the program and the glossary's term (§5, T118), not the shorter
   "Explorer" this ADR first had.
 
+### 2.9 A right-click menu on images (addition 1, accepted by the owner 2026-11-19)
+
+- **Why:** in the hand check of E2–E3 (2026-11-19) the owner expected to right-click an image to
+  reach "Show in File Explorer". Today only the folder tree, the tabs, Favourites and Recent have a
+  right-click menu (ADR 0017 U4-Q3); the preview draws no menu bar, and "Show in File Explorer"
+  has no key (E-Q11), so it cannot be reached from the preview at all.
+- **Where** (E-Q15): on an image in the contact sheet and on the image in the preview (in the
+  compare too, where it acts on the current image as the keys do). Not on the empty part of the
+  contact sheet.
+- **Which images** (E-Q16): the image right-clicked becomes the current image; the marking is
+  kept as it is. The commands then act on their usual targets (ADR 0014 §2 point 6; E-Q4): a
+  right-click on a marked image acts on all the marked images, a right-click on an image that is
+  not marked acts on that image alone. In the preview only the current image, as today. Unlike
+  File Explorer, a right-click on an image that is not marked does not clear the marking, so a
+  slip of the mouse never loses a marking.
+- **What it holds** (E-Q17), in this order: "Open in {name}" per program (or "Open in Another
+  Program…" with an empty list), "Show in File Explorer"; a separator; the Rating submenu,
+  Reject, Move to Picked, the Label submenu with the colours (Red, Yellow, Green, Blue, Purple,
+  No label; owner, 2026-11-19); a separator; Metadata…; a separator; Delete to Recycle Bin.
+  **Later (owner, 2026-11-19):** when metadata templates exist (ADR 0017 U13), the menu also gets
+  a submenu to apply a template to the images, after Metadata…; not part of E4. Left out: the setting "Move Rejected and Picked Images to Subfolders", RAW ↔ JPEG
+  and "Delete Rejected Images", which act on the folder or the view, not on the images clicked.
+- **How it looks** (E-Q18): the same texts as the menu bar, each command's key shown on the right
+  and greyed by the same rules (a missing program, no current image, Move to Picked while the
+  setting is off). The menu is drawn from the same entries as the menu bar, so the two cannot
+  drift apart.
+
 ## 3. Questions (answered by the owner, 2026-11-17: every proposal approved)
 
 | # | Question | Answer (as proposed) |
@@ -108,6 +138,17 @@
 | E-Q13 | Steps | E1–E3 as §4 |
 | E-Q14 | Not included | As §5 |
 
+Addition 1 (answered by the owner, 2026-11-19: every proposal approved, E-Q17 with the colours
+written out and the later template submenu):
+
+| # | Question | Answer |
+|---|---|---|
+| E-Q15 | Where the right-click menu is | On an image in the contact sheet and on the image in the preview (and the compare); not on empty space |
+| E-Q16 | Which images it acts on | The image clicked becomes the current one and the marking is kept: a marked image → all the marked, an image not marked → that image alone; the preview → the current image |
+| E-Q17 | What it holds | Open in {name} per program, Show in File Explorer; Rating, Reject, Move to Picked, Label with the colours; Metadata…; Delete to Recycle Bin. Later, with ADR 0017 U13: a submenu to apply a metadata template (owner, 2026-11-19) |
+| E-Q18 | How it looks | Same texts as the menu bar, keys on the right, greyed by the same rules, drawn from the same entries |
+| E-Q19 | Step | One step E4 (one task in the shell), with the owner's hand check after it |
+
 ## 4. Steps
 
 Each step ends with `.\tools\check.ps1`; the owner's hand check comes after E2 and E3.
@@ -117,6 +158,7 @@ Each step ends with `.\tools\check.ps1`; the owner's hand check comes after E2 a
 | **E1** | The program list: the type and its `settings.txt` lines with their tests, and the section "External Programs" of the Settings window (§2.1); texts by rule 13 and in the glossary |
 | **E2** | The menu items and Ctrl+E (§2.2), the targets (§2.3), the wait for writes (§2.4), the start with its limits (§2.5) and the errors (§2.6); plain-Rust parts tested without a window (the arguments, the length check, the wait). Hand check with the owner's RAW editor: one image, several marked images, an image just rated (the rating is in its sidecar when the program opens it), a removed program |
 | **E3** | "Show in File Explorer" (§2.8) |
+| **E4** | The right-click menu on images (§2.9, addition 1). Hand check: right-click a marked image and an image not marked in the contact sheet, the preview and the compare; "Show in File Explorer" and "Open in {name}" from the preview; a greyed item |
 
 ## 5. Not included
 
