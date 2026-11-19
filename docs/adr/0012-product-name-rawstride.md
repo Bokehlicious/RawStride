@@ -39,3 +39,5 @@
 
 - `latency.ps1` must target the window title "RawStride" (ADR 0009 §11 decision 4 is amended).
 - Before any public release, a proper trademark search is still needed (ADR 0002 is open).
+- **Trademark search (owner, 2026-11-19, public-release plan PR-Q3):** "RawStride" in EUIPO's
+  availability search (euipo.europa.eu, "Before applying › Availability"): 0 hits.
