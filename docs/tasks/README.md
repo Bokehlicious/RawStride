@@ -86,7 +86,6 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status |
 |---|---|---|
-| [T205](T205-rating-percentages-and-flat-hierarchical-keywords.md) | Rating percentages and a flat `lr:hierarchicalSubject` kept equal (ADR 0007 Q15, Q16) | Open |
 
 ## Writing a task (owner and reviewer)
 

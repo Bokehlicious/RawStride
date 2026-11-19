@@ -557,6 +557,98 @@ fn hierarchical_keywords_in_a_jpeg_are_kept_when_the_keywords_are_edited() {
     s.remove();
 }
 
+/// Removes `p0test4` from the keywords of `file` and adds `p0test6`, with an Entries edit.
+fn rename_keyword(et: &mut ExifTool, s: &Scratch, file: &Path) {
+    assert_edit(
+        s.edit(
+            et,
+            file,
+            &[Edit::Entries {
+                property: "dc:subject".to_string(),
+                add: vec!["p0test6".to_string()],
+                remove: vec!["p0test4".to_string()],
+            }],
+        ),
+        written(file),
+        &[],
+    );
+    assert_eq!(
+        read_value(et, file, "dc:subject"),
+        Some(list(&["sjö", "p0test6"]))
+    );
+}
+
+/// A flat `lr:hierarchicalSubject` (every entry without `|`, as another program writes the
+/// keywords there) follows a renamed keyword, so the old one does not come back (§8, Q15).
+#[test]
+fn a_flat_hierarchical_subject_follows_a_renamed_keyword() {
+    let mut et = exiftool();
+    let s = Scratch::new("flat-hierarchy");
+    let file = s.jpeg();
+    write(
+        &mut et,
+        &file,
+        &[
+            "-XMP-dc:Subject=p0test4",
+            "-XMP-dc:Subject=sjö",
+            "-XMP-lr:HierarchicalSubject=p0test4",
+            "-XMP-lr:HierarchicalSubject=sjö",
+        ],
+    );
+
+    rename_keyword(&mut et, &s, &file);
+    assert_eq!(
+        tag(&mut et, &file, "XMP-lr:HierarchicalSubject"),
+        "sjö, p0test6"
+    );
+    s.assert_clean();
+    s.remove();
+}
+
+/// An `lr:hierarchicalSubject` with a nested entry is kept as it is when the keywords change
+/// (§8, Q15).
+#[test]
+fn a_nested_hierarchical_subject_is_kept() {
+    let mut et = exiftool();
+    let s = Scratch::new("nested-hierarchy");
+    let file = s.jpeg();
+    write(
+        &mut et,
+        &file,
+        &[
+            "-XMP-dc:Subject=p0test4",
+            "-XMP-dc:Subject=sjö",
+            "-XMP-lr:HierarchicalSubject=natur|fåglar|fiskgjuse",
+        ],
+    );
+
+    rename_keyword(&mut et, &s, &file);
+    assert_eq!(
+        tag(&mut et, &file, "XMP-lr:HierarchicalSubject"),
+        "natur|fåglar|fiskgjuse"
+    );
+    s.assert_clean();
+    s.remove();
+}
+
+/// The keywords never create an `lr:hierarchicalSubject` (§8, Q15).
+#[test]
+fn no_hierarchical_subject_is_created() {
+    let mut et = exiftool();
+    let s = Scratch::new("no-hierarchy");
+    let file = s.jpeg();
+    write(
+        &mut et,
+        &file,
+        &["-XMP-dc:Subject=p0test4", "-XMP-dc:Subject=sjö"],
+    );
+
+    rename_keyword(&mut et, &s, &file);
+    assert_eq!(tag(&mut et, &file, "XMP-lr:HierarchicalSubject"), "-");
+    s.assert_clean();
+    s.remove();
+}
+
 /// Hierarchical keywords (`lr:hierarchicalSubject`) in a RAW's sidecar are kept unchanged when
 /// another field (the Title) is edited; the RAW's bytes are unchanged: ADR 0007 §12, §8.
 #[test]

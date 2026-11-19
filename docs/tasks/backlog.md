@@ -359,3 +359,10 @@ by the owner the same day; step E4 in `plans/adr-0018-0025-steps.md`, before ADR
   watcher and ADR 0030's change check must tell RawStride's own writes from outside changes (as
   the histogram cache does with its stamp before and after a write, U7c-Q7); taken up in those
   ADRs' steps.
+- **Known limits of T205** (independent review, 2026-11-19; accepted when T205 was done):
+  a keyword that itself holds `|` is copied into a flat `lr:hierarchicalSubject`, which then
+  reads as nested and is kept unchanged from then on (none of 68,647 keywords in ADR 0030's K0
+  sample holds `|`); flat entries of `lr:hierarchicalSubject` that are not among the keywords
+  are replaced when the keywords are written (ADR 0007 §8, Q15, as decided);
+  `XMP-microsoft:Rating` and `XMP-microsoft:RatingPercent` (Windows Explorer's) are not in
+  ADR 0007 §6.3 and stay as they are when RawStride writes a rating.

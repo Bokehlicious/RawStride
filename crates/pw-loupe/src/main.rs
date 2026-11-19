@@ -9391,6 +9391,7 @@ mod tests {
                 iim_values: Vec::new(),
                 digest: pw_metadata::reconcile::IimDigest::Missing,
                 exif_present: pw_metadata::write_plan::ExifPresent::default(),
+                xmp_present: pw_metadata::write_plan::XmpPresent::default(),
             },
         };
         let mut form = EditorForm::from_read(&read);
@@ -9467,6 +9468,7 @@ mod tests {
                 iim_values: Vec::new(),
                 digest: pw_metadata::reconcile::IimDigest::Missing,
                 exif_present: pw_metadata::write_plan::ExifPresent::default(),
+                xmp_present: pw_metadata::write_plan::XmpPresent::default(),
             },
         };
         let marked = [PathBuf::from("a.jpg"), PathBuf::from("b.jpg")];
@@ -9816,7 +9818,7 @@ mod tests {
         use pw_metadata::read::MetadataRead;
         use pw_metadata::reconcile::{FileKind, IimDigest, Reconciled};
         use pw_metadata::value::{Metadata, Origin, StructValue, Value};
-        use pw_metadata::write_plan::{ExifPresent, FileState};
+        use pw_metadata::write_plan::{ExifPresent, FileState, XmpPresent};
 
         let text = |s: &str| Value::Text(s.to_string());
         let mut metadata = Metadata::new();
@@ -9857,6 +9859,7 @@ mod tests {
                 iim_values: Vec::new(),
                 digest: IimDigest::Missing,
                 exif_present: ExifPresent::default(),
+                xmp_present: XmpPresent::default(),
             },
         };
         let rows = other_values(&read, &window_editor_properties());
@@ -9873,7 +9876,7 @@ mod tests {
         use pw_metadata::read::MetadataRead;
         use pw_metadata::reconcile::{FileKind, IimDigest, Reconciled};
         use pw_metadata::value::{Metadata, Origin, StructValue, Value};
-        use pw_metadata::write_plan::{ExifPresent, FileState};
+        use pw_metadata::write_plan::{ExifPresent, FileState, XmpPresent};
 
         let properties = window_editor_properties();
         let licence = [
@@ -9937,6 +9940,7 @@ mod tests {
                 iim_values: Vec::new(),
                 digest: IimDigest::Missing,
                 exif_present: ExifPresent::default(),
+                xmp_present: XmpPresent::default(),
             },
         };
         let rows = other_values(&read, &properties);

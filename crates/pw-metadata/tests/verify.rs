@@ -20,7 +20,7 @@ use pw_metadata::iim::CodedCharset;
 use pw_metadata::reconcile::{FileKind, IimDigest};
 use pw_metadata::value::{LangAlt, Metadata, Value};
 use pw_metadata::verify::{FileSnapshot, VerifyError, check_file_type, verify_copy};
-use pw_metadata::write_plan::{ExifPresent, FileState, WritePlan, WriteSettings, plan};
+use pw_metadata::write_plan::{ExifPresent, FileState, WritePlan, WriteSettings, XmpPresent, plan};
 
 /// The small baseline JPEG of `crates/pw-thumbcache/src/jpeg_fixture.rs`, copied.
 const SMALL: &[u8] = &[
@@ -146,6 +146,7 @@ fn bare_state(kind: FileKind) -> FileState {
         iim_values: Vec::new(),
         digest: IimDigest::Missing,
         exif_present: ExifPresent::default(),
+        xmp_present: XmpPresent::default(),
     }
 }
 

@@ -8,7 +8,8 @@
 //!   named as `-<et_xmp>-x-default=` so the other languages are kept; a list is written as a whole;
 //!   a structure in ExifTool's structure syntax. Clearing removes the
 //!   property, for a Lang Alt every language (`-<et_xmp>=` does that in ExifTool 13.59, checked in
-//!   `tests/write_plan.rs`).
+//!   `tests/write_plan.rs`). An existing `xmp:RatingPercent` follows a rating change and an
+//!   existing flat `lr:hierarchicalSubject` follows the keywords (§6.3 Q16, §8 Q15).
 //! - **IIM** (§5.2–§5.5; JPEG, TIFF and DNG, never a manufacturer RAW): written when the file has
 //!   IIM, or when the setting "create IIM" is on. Values are the predicted IIM values
 //!   ([`iim::predict`]), cut to the byte limit; always UTF-8 with 1:90. Existing IIM in another
@@ -25,7 +26,8 @@
 //! - **Exif** (§6.3, §6.5, §6.6; JPEG, TIFF and DNG): only the "both ways" fields that already
 //!   exist are updated or removed, never created. ImageEditor gets the name of Contributor's content
 //!   editor, and is removed when there is none; it is never written to Artist. DateTimeOriginal and
-//!   its sub-fields, ImageUniqueID and GPS are never written.
+//!   its sub-fields, ImageUniqueID and GPS are never written. Rating and RatingPercent follow a
+//!   rating change when they exist, and are removed for a reject (§6.3 Q16).
 //! - **Line breaks** (`-stay_open` takes one argument per line): when a value holds one, the plan
 //!   asks for ExifTool's `-ec` option and writes a line feed as `\n`, a carriage return as `\r` and
 //!   `\` as `\\` in every argument.
@@ -49,6 +51,18 @@ const COPYRIGHT: &str = "dc:rights";
 const CREATOR: &str = "dc:creator";
 /// Contributor: the name of its content editor is synced with Exif ImageEditor (§6.6).
 const CONTRIBUTOR: &str = "Iptc4xmpExt:Contributor";
+/// Keywords: an existing flat `lr:hierarchicalSubject` follows them (§8, Q15).
+const KEYWORDS: &str = "dc:subject";
+/// Rating: its existing percentages and Exif Rating follow it (§6.3, Q16).
+const RATING: &str = "xmp:Rating";
+/// `lr:hierarchicalSubject` by its ExifTool name; not in the property table (§8, Q15).
+const HIERARCHICAL_SUBJECT: &str = "XMP-lr:HierarchicalSubject";
+/// `xmp:RatingPercent` by its ExifTool name; not in the property table (§6.3, Q16).
+const XMP_RATING_PERCENT: &str = "XMP-xmp:RatingPercent";
+/// Exif Rating (0x4746).
+const EXIF_RATING: &str = "IFD0:Rating";
+/// Exif RatingPercent (0x4749).
+const EXIF_RATING_PERCENT: &str = "IFD0:RatingPercent";
 /// The ExifTool option that turns C-style escapes in values into characters.
 const ESCAPE_C: &str = "-ec";
 /// Declares the IIM as UTF-8 (1:90 `ESC % G`, MWG text encodings).
@@ -56,7 +70,7 @@ const IIM_UTF8: &str = "-IPTC:CodedCharacterSet=UTF8";
 /// Writes a new IIM checksum computed over the IIM block after the write.
 const NEW_DIGEST: &str = "-IPTCDigest=new";
 
-/// Which Exif "both ways" fields exist in the file (§6.3: only these are written).
+/// Which Exif fields the plan may update exist in the file (§6.3: only these are written).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ExifPresent {
     /// `IFD0:ImageDescription`.
@@ -69,6 +83,21 @@ pub struct ExifPresent {
     pub photographer: bool,
     /// `ExifIFD:ImageEditor` (Exif 3.0).
     pub image_editor: bool,
+    /// `IFD0:Rating` (0x4746).
+    pub rating: bool,
+    /// `IFD0:RatingPercent` (0x4749).
+    pub rating_percent: bool,
+}
+
+/// Which XMP properties outside the property table, that follow a change when they exist, the
+/// primary XMP has (§6.3 Q16, §8 Q15). Neither is ever shown or read as a value.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct XmpPresent {
+    /// `xmp:RatingPercent` (ExifTool `XMP-xmp:RatingPercent`).
+    pub rating_percent: bool,
+    /// `lr:hierarchicalSubject` (ExifTool `XMP-lr:HierarchicalSubject`) with at least one entry,
+    /// no entry holding `|` and no qualifier.
+    pub flat_hierarchical_subject: bool,
 }
 
 /// What the plan needs to know about the file as it is now.
@@ -84,6 +113,8 @@ pub struct FileState {
     /// The IIM checksum as read.
     pub digest: IimDigest,
     pub exif_present: ExifPresent,
+    /// What the primary XMP has outside the property table (the sidecar's for a manufacturer RAW).
+    pub xmp_present: XmpPresent,
 }
 
 /// The settings that change what is written.
@@ -189,6 +220,7 @@ pub fn plan(
         }));
 
     // XMP (§8).
+    let flat_hierarchy = state.xmp_present.flat_hierarchical_subject;
     let mut writes_xmp_value = false;
     for (def, value) in &changes {
         let Some(et_xmp) = def.et_xmp else {
@@ -198,9 +230,29 @@ pub fn plan(
             Some(value) => {
                 writes_xmp_value = true;
                 xmp_args(et_xmp, def.kind, value, &mut out.args);
+                if flat_hierarchy && def.xmp_id == KEYWORDS {
+                    xmp_args(HIERARCHICAL_SUBJECT, def.kind, value, &mut out.args);
+                }
             }
-            None => out.args.push(format!("-{et_xmp}=")),
+            None => {
+                out.args.push(format!("-{et_xmp}="));
+                if flat_hierarchy && def.xmp_id == KEYWORDS {
+                    out.args.push(format!("-{HIERARCHICAL_SUBJECT}="));
+                }
+            }
         }
+    }
+
+    // The rating's percentages and Exif Rating (§6.3 Q16): only those that exist are written.
+    let rating = changes
+        .iter()
+        .find(|(def, _)| def.xmp_id == RATING)
+        .map(|(_, value)| rating_values(*value));
+    if let Some(rating) = rating
+        && state.xmp_present.rating_percent
+    {
+        let percent = rating.map_or_else(String::new, |(_, percent)| percent.to_string());
+        out.args.push(format!("-{XMP_RATING_PERCENT}={percent}"));
     }
 
     // Bring both forms in line (§5.1, §12): the unchanged properties whose XMP and IIM differ.
@@ -213,6 +265,9 @@ pub fn plan(
         if let Some(et_xmp) = def.et_xmp {
             writes_xmp_value = true;
             xmp_args(et_xmp, def.kind, value, &mut out.args);
+            if flat_hierarchy && def.xmp_id == KEYWORDS {
+                xmp_args(HIERARCHICAL_SUBJECT, def.kind, value, &mut out.args);
+            }
         }
     }
 
@@ -283,6 +338,18 @@ pub fn plan(
         // Exif (§6.3, §6.5).
         for (def, value) in &changes {
             exif_args(def.xmp_id, *value, state.exif_present, &mut out.args);
+        }
+        if let Some(rating) = rating {
+            let (stars, percent) = rating.map_or_else(
+                || (String::new(), String::new()),
+                |(stars, percent)| (stars.to_string(), percent.to_string()),
+            );
+            if state.exif_present.rating {
+                out.args.push(format!("-{EXIF_RATING}={stars}"));
+            }
+            if state.exif_present.rating_percent {
+                out.args.push(format!("-{EXIF_RATING_PERCENT}={percent}"));
+            }
         }
     }
 
@@ -656,6 +723,31 @@ fn exif_args(xmp_id: &str, value: Option<&Value>, present: ExifPresent, args: &m
     }
 }
 
+/// The Exif Rating and the RatingPercent a new Rating gives (§6.3, Q16): a number is rounded and
+/// kept to −1…5, as it is shown (§8); 0–5 give 0, 1, 25, 50, 75 or 99 percent. `None` (remove
+/// them) for a reject (−1), a value that is not a finite number, and a cleared Rating.
+fn rating_values(value: Option<&Value>) -> Option<(i8, u8)> {
+    let Some(Value::Number(text)) = value else {
+        return None;
+    };
+    let number = text.trim().parse::<f64>().ok()?;
+    if !number.is_finite() {
+        return None;
+    }
+    // Finite and kept to −1…5, so the cast is exact.
+    let stars = number.round().clamp(-1.0, 5.0) as i8;
+    let percent = match stars {
+        0 => 0,
+        1 => 1,
+        2 => 25,
+        3 => 50,
+        4 => 75,
+        5 => 99,
+        _ => return None,
+    };
+    Some((stars, percent))
+}
+
 /// The text an Exif field gets: the shown text of a Lang Alt, the first item of a list.
 fn exif_text(value: &Value) -> Option<&str> {
     match value {
@@ -711,6 +803,7 @@ mod tests {
             iim_values: Vec::new(),
             digest: IimDigest::Missing,
             exif_present: ExifPresent::default(),
+            xmp_present: XmpPresent::default(),
         }
     }
 
@@ -724,6 +817,7 @@ mod tests {
         }
     }
 
+    /// All the "both ways" fields.
     fn all_exif() -> ExifPresent {
         ExifPresent {
             image_description: true,
@@ -731,6 +825,8 @@ mod tests {
             artist: true,
             photographer: true,
             image_editor: true,
+            rating: false,
+            rating_percent: false,
         }
     }
 
@@ -1620,6 +1716,179 @@ mod tests {
         assert_eq!(args(&plan)[5..], ["-IFD0:Artist=Anna"]);
     }
 
+    /// A JPEG with Exif Rating, Exif RatingPercent and `xmp:RatingPercent`.
+    fn rating_fields(kind: FileKind) -> FileState {
+        FileState {
+            kind,
+            exif_present: ExifPresent {
+                rating: true,
+                rating_percent: true,
+                ..ExifPresent::default()
+            },
+            xmp_present: XmpPresent {
+                rating_percent: true,
+                flat_hierarchical_subject: false,
+            },
+            ..jpeg()
+        }
+    }
+
+    fn rated(rating: &str) -> Metadata {
+        edited(&[("xmp:Rating", Value::Number(rating.into()))])
+    }
+
+    /// The arguments of the rating's percentages and Exif Rating.
+    fn rating_args(plan: &WritePlan) -> Vec<&str> {
+        args(plan)
+            .into_iter()
+            .filter(|arg| arg.contains("RatingPercent=") || arg.starts_with("-IFD0:Rating="))
+            .collect()
+    }
+
+    #[test]
+    fn a_rating_updates_the_existing_percentages_and_exif_rating() {
+        let plan = run(&rated("3"), &rating_fields(FileKind::Jpeg));
+        assert_eq!(
+            args(&plan),
+            [
+                "-XMP-xmp:Rating=3",
+                "-XMP-xmp:RatingPercent=50",
+                "-IFD0:Rating=3",
+                "-IFD0:RatingPercent=50",
+            ]
+        );
+        assert_eq!(args(&run(&rated("3"), &jpeg())), ["-XMP-xmp:Rating=3"]);
+    }
+
+    #[test]
+    fn the_percentages_of_every_star() {
+        let state = rating_fields(FileKind::Jpeg);
+        for (stars, percent) in [(0, 0), (1, 1), (2, 25), (3, 50), (4, 75), (5, 99)] {
+            let plan = run(&rated(&stars.to_string()), &state);
+            assert_eq!(
+                rating_args(&plan),
+                [
+                    format!("-XMP-xmp:RatingPercent={percent}"),
+                    format!("-IFD0:Rating={stars}"),
+                    format!("-IFD0:RatingPercent={percent}"),
+                ]
+            );
+        }
+        let plan = run(&rated("2.5"), &state);
+        assert_eq!(
+            rating_args(&plan),
+            [
+                "-XMP-xmp:RatingPercent=50",
+                "-IFD0:Rating=3",
+                "-IFD0:RatingPercent=50"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_reject_or_a_cleared_rating_removes_the_percentages_and_exif_rating() {
+        let state = rating_fields(FileKind::Jpeg);
+        let removed = [
+            "-XMP-xmp:RatingPercent=",
+            "-IFD0:Rating=",
+            "-IFD0:RatingPercent=",
+        ];
+        let plan = run(&rated("-1"), &state);
+        assert_eq!(args(&plan)[0], "-XMP-xmp:Rating=-1");
+        assert_eq!(args(&plan)[1..], removed);
+
+        let mut cleared = Metadata::new();
+        cleared
+            .insert_read("xmp:Rating", Value::Number("4".into()), Origin::XmpEmbedded)
+            .unwrap();
+        cleared.clear("xmp:Rating").unwrap();
+        let plan = run(&cleared, &state);
+        assert_eq!(args(&plan)[0], "-XMP-xmp:Rating=");
+        assert_eq!(args(&plan)[1..], removed);
+    }
+
+    #[test]
+    fn a_raw_sidecar_gets_only_the_xmp_percentage() {
+        let plan = run(&rated("3"), &rating_fields(FileKind::Raw));
+        assert_eq!(
+            args(&plan),
+            ["-XMP-xmp:Rating=3", "-XMP-xmp:RatingPercent=50"]
+        );
+    }
+
+    #[test]
+    fn no_rating_change_writes_no_percentage() {
+        let plan = run(
+            &edited(&[("photoshop:City", text("Lund"))]),
+            &rating_fields(FileKind::Jpeg),
+        );
+        assert_eq!(args(&plan), ["-XMP-photoshop:City=Lund"]);
+    }
+
+    fn flat_hierarchy(state: FileState) -> FileState {
+        FileState {
+            xmp_present: XmpPresent {
+                rating_percent: false,
+                flat_hierarchical_subject: true,
+            },
+            ..state
+        }
+    }
+
+    #[test]
+    fn a_flat_hierarchical_subject_follows_the_keywords() {
+        let metadata = edited(&[("dc:subject", list(&["a", "b"]))]);
+        assert_eq!(
+            args(&run(&metadata, &flat_hierarchy(jpeg()))),
+            [
+                "-XMP-dc:Subject=",
+                "-XMP-dc:Subject=a",
+                "-XMP-dc:Subject=b",
+                "-XMP-lr:HierarchicalSubject=",
+                "-XMP-lr:HierarchicalSubject=a",
+                "-XMP-lr:HierarchicalSubject=b",
+            ]
+        );
+        assert_eq!(
+            args(&run(&metadata, &jpeg())),
+            ["-XMP-dc:Subject=", "-XMP-dc:Subject=a", "-XMP-dc:Subject=b"]
+        );
+
+        let mut cleared = Metadata::new();
+        cleared
+            .insert_read("dc:subject", list(&["a"]), Origin::XmpEmbedded)
+            .unwrap();
+        cleared.clear("dc:subject").unwrap();
+        assert_eq!(
+            args(&run(&cleared, &flat_hierarchy(jpeg()))),
+            ["-XMP-dc:Subject=", "-XMP-lr:HierarchicalSubject="]
+        );
+    }
+
+    #[test]
+    fn keywords_brought_in_line_from_iim_also_go_to_a_flat_hierarchical_subject() {
+        let mut metadata = edited(&[rating()]);
+        iim_conflict(
+            &mut metadata,
+            "dc:subject",
+            list(&["cat"]),
+            list(&["dog"]),
+            ConflictRule::Iim,
+        );
+        let plan = run(&metadata, &flat_hierarchy(jpeg_with_iim()));
+        assert_eq!(
+            args(&plan),
+            [
+                "-XMP-xmp:Rating=3",
+                "-XMP-dc:Subject=",
+                "-XMP-dc:Subject=dog",
+                "-XMP-lr:HierarchicalSubject=",
+                "-XMP-lr:HierarchicalSubject=dog",
+                "-IPTCDigest=new",
+            ]
+        );
+    }
+
     const CONTENT_EDITOR: &str = "https://cv.iptc.org/newscodes/contentprodpartyrole/contentEditor";
 
     fn contributor(name: &str, role: &str) -> StructValue {
@@ -1762,6 +2031,7 @@ mod tests {
             iim_values: vec![("photoshop:City".into(), text("Göteborg"))],
             digest: IimDigest::Missing,
             exif_present: all_exif(),
+            xmp_present: XmpPresent::default(),
         };
         let mut metadata = edited(&[
             ("photoshop:City", text("Lund")),

@@ -3038,7 +3038,7 @@ mod tests {
     use pw_metadata::iim::CodedCharset;
     use pw_metadata::reconcile::{IimDigest, Reconciled};
     use pw_metadata::value::{Metadata, Origin, StructValue};
-    use pw_metadata::write_plan::{ExifPresent, FileState};
+    use pw_metadata::write_plan::{ExifPresent, FileState, XmpPresent};
 
     fn state(kind: FileKind, iim_present: bool) -> FileState {
         FileState {
@@ -3048,6 +3048,7 @@ mod tests {
             iim_values: Vec::new(),
             digest: IimDigest::Missing,
             exif_present: ExifPresent::default(),
+            xmp_present: XmpPresent::default(),
         }
     }
 

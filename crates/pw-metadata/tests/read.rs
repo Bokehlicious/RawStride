@@ -17,7 +17,7 @@ use pw_metadata::iim::{CodedCharset, Fallback};
 use pw_metadata::read::{FileNotice, MetadataRead};
 use pw_metadata::reconcile::{FileKind, IimDigest};
 use pw_metadata::value::{ConflictRule, LangAlt, Origin, StructValue, Value};
-use pw_metadata::write_plan::ExifPresent;
+use pw_metadata::write_plan::{ExifPresent, XmpPresent};
 
 /// The small baseline JPEG of `crates/pw-thumbcache/src/jpeg_fixture.rs`, copied.
 const SMALL: &[u8] = &[
@@ -764,6 +764,8 @@ fn the_state_of_a_jpeg_names_only_the_exif_fields_it_has() {
             artist: true,
             photographer: false,
             image_editor: false,
+            rating: false,
+            rating_percent: false,
         }
     );
     assert!(!state.iim_present);
@@ -792,6 +794,50 @@ fn the_state_of_a_raw_has_no_iim_and_no_exif() {
     assert_eq!(state.digest, IimDigest::Missing);
     assert_eq!(state.exif_present, ExifPresent::default());
     assert_eq!(std::fs::read(&raw).unwrap(), b"not really a raw file");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The file state names the Exif rating fields and, from the primary XMP, `xmp:RatingPercent` and a
+/// flat `lr:hierarchicalSubject` (T205, ADR 0007 §6.3 Q16, §8 Q15); a manufacturer RAW takes them
+/// from its sidecar and has no Exif fields.
+#[test]
+fn the_state_names_the_rating_fields_and_a_flat_hierarchy() {
+    let mut et = exiftool();
+    let (dir, file) = jpeg("state-rating-fields");
+    write(
+        &mut et,
+        &file,
+        &[
+            "-IFD0:Rating=5",
+            "-IFD0:RatingPercent=99",
+            "-XMP-xmp:RatingPercent=99",
+            "-XMP-lr:HierarchicalSubject=a",
+        ],
+    );
+    let state = read_file(&mut et, &file).state;
+    assert!(state.exif_present.rating);
+    assert!(state.exif_present.rating_percent);
+    assert_eq!(
+        state.xmp_present,
+        XmpPresent {
+            rating_percent: true,
+            flat_hierarchical_subject: true,
+        }
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+
+    let dir = temp_dir("state-rating-fields-raw");
+    let raw = dir.join("TN0001.ARW");
+    std::fs::write(&raw, b"not really a raw file").unwrap();
+    write(
+        &mut et,
+        &dir.join("TN0001.xmp"),
+        &["-XMP-xmp:Rating=3", "-XMP-xmp:RatingPercent=50"],
+    );
+    let state = read_file(&mut et, &raw).state;
+    assert!(state.xmp_present.rating_percent);
+    assert!(!state.xmp_present.flat_hierarchical_subject);
+    assert_eq!(state.exif_present, ExifPresent::default());
     let _ = std::fs::remove_dir_all(&dir);
 }
 

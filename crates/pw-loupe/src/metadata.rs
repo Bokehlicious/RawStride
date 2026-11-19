@@ -2220,7 +2220,7 @@ mod tests {
         use pw_metadata::iim::CodedCharset;
         use pw_metadata::reconcile::{FileKind, IimDigest, Reconciled};
         use pw_metadata::value::Metadata;
-        use pw_metadata::write_plan::{ExifPresent, FileState};
+        use pw_metadata::write_plan::{ExifPresent, FileState, XmpPresent};
         MetadataRead {
             reconciled: Reconciled {
                 metadata: Metadata::new(),
@@ -2235,6 +2235,7 @@ mod tests {
                 iim_values: Vec::new(),
                 digest: IimDigest::Missing,
                 exif_present: ExifPresent::default(),
+                xmp_present: XmpPresent::default(),
             },
         }
     }

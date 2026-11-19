@@ -32,8 +32,10 @@
 //! [`MetadataRead::state`] is the [`FileState`] the write plan needs (T87), filled from the same
 //! readings before the reconciliation takes them: for a JPEG, TIFF or DNG whether the file has a
 //! readable IIM block (an unreadable one counts as none), its declared encoding, its values and its
-//! checksum, and which Exif "both ways" fields exist; for a manufacturer RAW no IIM and no Exif,
-//! because the plan never writes the RAW file and its sidecar holds neither (§4.2).
+//! checksum, and which Exif fields the plan may update exist (the "both ways" fields and the
+//! Microsoft rating fields), and from the primary XMP whether it has `xmp:RatingPercent` and a flat
+//! `lr:hierarchicalSubject`; for a manufacturer RAW no IIM and no Exif, because the plan never
+//! writes the RAW file and its sidecar holds neither (§4.2).
 
 use std::path::{Path, PathBuf};
 
@@ -47,7 +49,7 @@ use crate::reconcile::{
     ExifFields, FileKind, IimDigest, IimRead, Notice, Readings, Reconciled, reconcile,
 };
 use crate::value::{LangAlt, Origin, StructValue, Value};
-use crate::write_plan::{ExifPresent, FileState};
+use crate::write_plan::{ExifPresent, FileState, XmpPresent};
 use crate::{Error, ExifTool, Result};
 
 /// The language of the Lang Alt entry ExifTool names without a language suffix.
@@ -80,6 +82,8 @@ const IMAGE_TAGS: &[&str] = &[
     "-IFD0:Copyright",
     "-ExifIFD:Photographer",
     "-ExifIFD:ImageEditor",
+    "-IFD0:Rating",
+    "-IFD0:RatingPercent",
     "-ExifIFD:ImageUniqueID",
     "-ExifIFD:DateTimeOriginal",
     "-ExifIFD:SubSecTimeOriginal",
@@ -133,25 +137,44 @@ impl ExifTool {
             file_notices.push(FileNotice::ExtSidecarIgnored(path));
         }
         let file_xmp = xmp_values(&file);
-        // The lists with qualifiers are looked for in the primary XMP only, never in the camera
-        // XMP inside a RAW (ADR 0007 §8).
-        let (primary, camera, qualified) = match kind {
+        // The lists with qualifiers, `xmp:RatingPercent` and a flat `lr:hierarchicalSubject` are
+        // looked for in the primary XMP only, never in the camera XMP inside a RAW (ADR 0007 §6.3,
+        // §8).
+        let (primary, camera, qualified, xmp_present) = match kind {
             FileKind::Raw => match sidecars.plain {
                 Some(path) => {
                     let sidecar = self.read_json(&sidecar_args(&path), &path)?;
-                    (xmp_values(&sidecar), file_xmp, qualified_lists(&sidecar))
+                    (
+                        xmp_values(&sidecar),
+                        file_xmp,
+                        qualified_lists(&sidecar),
+                        xmp_present(&sidecar),
+                    )
                 }
-                None => (XmpRead::default(), file_xmp, Vec::new()),
+                None => (
+                    XmpRead::default(),
+                    file_xmp,
+                    Vec::new(),
+                    XmpPresent::default(),
+                ),
             },
             FileKind::Dng => {
                 if let Some(path) = sidecars.plain {
                     file_notices.push(FileNotice::ForeignSidecarIgnored(path));
                 }
-                (file_xmp, XmpRead::default(), qualified_lists(&file))
+                (
+                    file_xmp,
+                    XmpRead::default(),
+                    qualified_lists(&file),
+                    xmp_present(&file),
+                )
             }
-            FileKind::Jpeg | FileKind::Tiff => {
-                (file_xmp, XmpRead::default(), qualified_lists(&file))
-            }
+            FileKind::Jpeg | FileKind::Tiff => (
+                file_xmp,
+                XmpRead::default(),
+                qualified_lists(&file),
+                xmp_present(&file),
+            ),
         };
         let (iim, iim_notice) = iim_read(&file, fallback);
         file_notices.extend(iim_notice);
@@ -179,7 +202,7 @@ impl ExifTool {
             .collect();
 
         let exif = exif_fields(&file, fallback);
-        let state = file_state(kind, iim.as_ref(), &exif);
+        let state = file_state(kind, iim.as_ref(), &exif, &file, xmp_present);
         let mut reconciled = reconcile(Readings {
             kind,
             xmp: primary.values,
@@ -232,8 +255,16 @@ impl ExifTool {
 }
 
 /// The [`FileState`] of a file of `kind` with the IIM `iim` (`None` when it has no readable IIM
-/// block) and the Exif fields `exif` (see the module comment).
-fn file_state(kind: FileKind, iim: Option<&IimRead>, exif: &ExifFields) -> FileState {
+/// block), the Exif fields `exif`, the image's JSON object `file` (for the Exif rating fields; a
+/// manufacturer RAW ignores it) and what its primary XMP has, `xmp_present` (see the module
+/// comment).
+fn file_state(
+    kind: FileKind,
+    iim: Option<&IimRead>,
+    exif: &ExifFields,
+    file: &Map<String, Json>,
+    xmp_present: XmpPresent,
+) -> FileState {
     match (kind, iim) {
         (FileKind::Raw, _) => FileState {
             kind,
@@ -242,6 +273,7 @@ fn file_state(kind: FileKind, iim: Option<&IimRead>, exif: &ExifFields) -> FileS
             iim_values: Vec::new(),
             digest: IimDigest::Missing,
             exif_present: ExifPresent::default(),
+            xmp_present,
         },
         (_, iim) => FileState {
             kind,
@@ -255,7 +287,11 @@ fn file_state(kind: FileKind, iim: Option<&IimRead>, exif: &ExifFields) -> FileS
                 artist: exif.artist.is_some(),
                 photographer: exif.photographer.is_some(),
                 image_editor: exif.image_editor.is_some(),
+                // Present whatever the value: a stale 0 is still updated (§6.3, Q16).
+                rating: file.contains_key("IFD0:Rating"),
+                rating_percent: file.contains_key("IFD0:RatingPercent"),
             },
+            xmp_present,
         },
     }
 }
@@ -439,6 +475,29 @@ fn qualified_lists(object: &Map<String, Json>) -> Vec<&'static str> {
         })
         .map(|(xmp_id, _)| xmp_id)
         .collect()
+}
+
+/// What the primary XMP `object` has outside the property table (ADR 0007 §6.3 Q16, §8 Q15):
+/// `xmp:RatingPercent`, and an `lr:hierarchicalSubject` that is flat: one text or a list of texts,
+/// at least one entry, none holding `|`, and no qualifier key (a key that starts with its name and
+/// goes on with an ASCII upper-case letter, as in [`qualified_lists`]).
+fn xmp_present(object: &Map<String, Json>) -> XmpPresent {
+    const HIERARCHY: &str = "XMP-lr:HierarchicalSubject";
+    let is_flat = |entry: &Json| matches!(entry, Json::String(text) if !text.contains('|'));
+    let entries_flat = match object.get(HIERARCHY) {
+        Some(Json::Array(entries)) => !entries.is_empty() && entries.iter().all(is_flat),
+        Some(entry @ Json::String(_)) => is_flat(entry),
+        _ => false,
+    };
+    let has_qualifier = object.keys().any(|key| {
+        key.strip_prefix(HIERARCHY)
+            .and_then(|rest| rest.chars().next())
+            .is_some_and(|next| next.is_ascii_uppercase())
+    });
+    XmpPresent {
+        rating_percent: object.contains_key("XMP-xmp:RatingPercent"),
+        flat_hierarchical_subject: entries_flat && !has_qualifier,
+    }
 }
 
 /// The value of the property or field named `et_name` in `object`; `None` when it is absent or
@@ -815,6 +874,23 @@ mod tests {
                 "XMP-dc:Subject": ["cat"]}"#,
         );
         assert_eq!(qualified_lists(&object), Vec::<&str>::new());
+    }
+
+    #[test]
+    fn xmp_present_finds_a_rating_percentage_and_a_flat_hierarchy() {
+        let present = xmp_present(&object(r#"{"XMP-xmp:RatingPercent": "50"}"#));
+        assert!(present.rating_percent);
+        assert!(!present.flat_hierarchical_subject);
+        let flat = |json: &str| xmp_present(&object(json)).flat_hierarchical_subject;
+        assert!(flat(r#"{"XMP-lr:HierarchicalSubject": ["a", "b"]}"#));
+        assert!(flat(r#"{"XMP-lr:HierarchicalSubject": "a"}"#));
+        assert!(!flat(r#"{"XMP-lr:HierarchicalSubject": ["a", "x|y"]}"#));
+        assert!(!flat(r#"{"XMP-lr:HierarchicalSubject": []}"#));
+        assert!(!flat(
+            r#"{"XMP-lr:HierarchicalSubject": ["a"], "XMP-lr:HierarchicalSubjectLang": "sv"}"#
+        ));
+        assert!(!xmp_present(&object(r#"{"XMP-lr:HierarchicalSubject": ["a"]}"#)).rating_percent);
+        assert_eq!(xmp_present(&object("{}")), XmpPresent::default());
     }
 
     #[test]

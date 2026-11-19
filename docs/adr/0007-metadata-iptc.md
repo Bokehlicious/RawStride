@@ -869,7 +869,7 @@ listed under the table (§17.1).
   (ADR 0017 U11, U12; T136–T143, T125, T126, T179, T180).
 - The Tauri app keeps its in-place write (D7) until it is retired (GR8).
 - Revision 26 (§9.4 Q14, §8 Q15, §6.3 Q16): two tasks (ADR 0029 step P0b; T204 the
-  modification time, T205 Q15 and Q16); T204 done 2026-11-19 (a written file keeps the time of the write); T205 is left.
+  modification time, T205 Q15 and Q16); both done 2026-11-19, the owner's hand check follows.
 
 ## Revision history
 

@@ -212,3 +212,4 @@ was when the task was done, so "this file", "below" and "the Log" in T1–T115 m
 | [T203](T203-show-in-explorer.md) | ADR 0019 E3: Image ▸ "Show in File Explorer" for the current image, and the owner's hand check of E2 and E3 (pw-loupe) |
 | [T204](T204-written-file-gets-the-write-time.md) | ADR 0007 §9.4 (Q14): a file the safe write writes, sidecar or image, keeps the time of the write as its modification time (pw-metadata) |
 | [T206](T206-import-recognises-by-creation-time.md) | ADR 0005 choice 2: the import gives a copy the card's time as its creation time and recognises an earlier DNG/JPEG/TIFF by its modification or creation time (pw-ingest) |
+| [T205](T205-rating-percentages-and-flat-hierarchical-keywords.md) | ADR 0007 §6.3 and §8 (Q16, Q15): existing Exif Rating/RatingPercent and `xmp:RatingPercent` follow a rating change and are removed on a reject; a flat `lr:hierarchicalSubject` follows the keywords (pw-metadata) |

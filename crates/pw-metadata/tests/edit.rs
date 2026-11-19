@@ -458,6 +458,92 @@ fn an_existing_sidecar_gets_the_time_of_the_write() {
     s.remove();
 }
 
+/// The rating fields that follow a rating when they exist (§6.3, Q16).
+const RATING_FIELDS: [&str; 3] = ["IFD0:Rating", "IFD0:RatingPercent", "XMP-xmp:RatingPercent"];
+
+/// A JPEG with Exif Rating and RatingPercent and `xmp:RatingPercent` (as another program writes
+/// them): 2 stars bring all three to 2 and 25; a reject then removes them and writes −1 (§6.3,
+/// Q16).
+#[test]
+fn a_rating_brings_existing_percentages_and_exif_rating_along() {
+    let mut et = exiftool();
+    let s = Scratch::new("percentages");
+    let file = s.jpeg();
+    write(
+        &mut et,
+        &file,
+        &[
+            "-IFD0:Rating=5",
+            "-IFD0:RatingPercent=99",
+            "-XMP-xmp:Rating=5",
+            "-XMP-xmp:RatingPercent=99",
+        ],
+    );
+
+    assert_report(
+        s.rate(&mut et, &file, &rating(Some(2), None)),
+        written(&file),
+    );
+    assert_eq!(tag(&mut et, &file, "IFD0:Rating"), "2");
+    assert_eq!(tag(&mut et, &file, "IFD0:RatingPercent"), "25");
+    assert_eq!(tag(&mut et, &file, "XMP-xmp:RatingPercent"), "25");
+
+    assert_report(
+        s.rate(&mut et, &file, &rating(Some(-1), None)),
+        written(&file),
+    );
+    for name in RATING_FIELDS {
+        assert_eq!(tag(&mut et, &file, name), "-", "{name} is removed");
+    }
+    assert_eq!(tag(&mut et, &file, "XMP-xmp:Rating"), "-1");
+    s.assert_clean();
+    s.remove();
+}
+
+/// A rating never creates the percentages or Exif Rating (§6.3, Q16).
+#[test]
+fn a_rating_creates_no_percentage() {
+    let mut et = exiftool();
+    let s = Scratch::new("no-percentage");
+    let file = s.jpeg();
+
+    assert_report(
+        s.rate(&mut et, &file, &rating(Some(4), None)),
+        written(&file),
+    );
+    assert_eq!(tag(&mut et, &file, "XMP-xmp:Rating"), "4");
+    for name in RATING_FIELDS {
+        assert_eq!(tag(&mut et, &file, name), "-", "{name} is not created");
+    }
+    s.assert_clean();
+    s.remove();
+}
+
+/// A RAW whose sidecar has `xmp:RatingPercent`: it follows the rating in the sidecar; the RAW is
+/// not written (§4.2, §6.3).
+#[test]
+fn a_raw_sidecar_percentage_follows_the_rating() {
+    let mut et = exiftool();
+    let s = Scratch::new("raw-percentage");
+    let raw = s.raw();
+    let sidecar = s.dir.join("TN0001.xmp");
+    write(
+        &mut et,
+        &sidecar,
+        &["-XMP-xmp:Rating=3", "-XMP-xmp:RatingPercent=50"],
+    );
+
+    assert_report(
+        s.rate(&mut et, &raw, &rating(Some(5), None)),
+        written(&sidecar),
+    );
+    assert_eq!(tag(&mut et, &sidecar, "XMP-xmp:Rating"), "5");
+    assert_eq!(tag(&mut et, &sidecar, "XMP-xmp:RatingPercent"), "99");
+    assert_eq!(std::fs::read(&raw).unwrap(), FAKE_RAW);
+    s.assert_clean();
+    s.remove();
+}
+
 /// A read-only JPEG: the safe write fails in its check before writing; the file is unchanged.
 #[test]
 fn a_read_only_jpeg_fails_in_precheck() {

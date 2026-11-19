@@ -18,7 +18,7 @@ use pw_metadata::read::MetadataRead;
 use pw_metadata::reconcile::{FileKind, IimDigest};
 use pw_metadata::value::{ConflictRule, LangAlt, Metadata, Origin, Value};
 use pw_metadata::write_plan::{
-    ExifPresent, FileState, WriteNotice, WritePlan, WriteSettings, plan,
+    ExifPresent, FileState, WriteNotice, WritePlan, WriteSettings, XmpPresent, plan,
 };
 
 /// The small baseline JPEG of `crates/pw-thumbcache/src/jpeg_fixture.rs`, copied.
@@ -248,6 +248,7 @@ fn state(digest: IimDigest, exif_present: ExifPresent) -> FileState {
         iim_values: Vec::new(),
         digest,
         exif_present,
+        xmp_present: XmpPresent::default(),
     }
 }
 

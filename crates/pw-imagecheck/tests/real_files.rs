@@ -20,7 +20,7 @@ use pw_metadata::journal::Journal;
 use pw_metadata::reconcile::{FileKind, IimDigest};
 use pw_metadata::safe_write::{ImageCheck, WriteReport};
 use pw_metadata::value::{Metadata, Value};
-use pw_metadata::write_plan::{ExifPresent, FileState, WriteSettings, plan};
+use pw_metadata::write_plan::{ExifPresent, FileState, WriteSettings, XmpPresent, plan};
 
 fn testdata() -> PathBuf {
     let Some(dir) = std::env::var_os("PW_TESTDATA") else {
@@ -131,6 +131,7 @@ fn every_dng_is_written_safely_with_the_real_check() {
         iim_values: Vec::new(),
         digest: IimDigest::Missing,
         exif_present: ExifPresent::default(),
+        xmp_present: XmpPresent::default(),
     };
     let plan = plan(&metadata, &state, WriteSettings::default()).unwrap();
 
