@@ -47,8 +47,8 @@ ADR 0003) and the presenter decision B2-res (WebView2 shared buffer into WebGL2,
 
 ## 3. What stays
 
-- **The core crates:** `pw-raw`, `pw-libraw`, `pw-rawview`, `pw-metadata`, `pw-ingest`, `pw-catalog`
-  and the planned `pw-viewcore`.
+- **The core crates:** `pw-raw`, `pw-libraw`, `pw-metadata`, `pw-ingest`, `pw-catalog`
+  and the planned `pw-viewcore` (`pw-rawview` was removed on 2026-11-19, T210).
 - **ADR 0008 decisions about the core:**
   - the view model, caches and swap rule (§2);
   - PPG as the default demosaic method, with AHD as the quality reference (§11);

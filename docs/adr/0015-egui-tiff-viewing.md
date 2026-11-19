@@ -134,7 +134,8 @@
 - The workspace `Cargo.toml` gains the member and workspace dependency `pw-tiff`. `pw-viewcore`
   (feature `native`), `pw-thumbcache` and `photoworkflow` gain a dependency on it; `photoworkflow`
   drops its direct `tiff` dependency.
-- `jpeg-encoder` stays in the Tauri app only.
+- `jpeg-encoder` stays in the Tauri app only. *(2026-11-19: gone from the workspace with the Tauri
+  app, T207, and `pw-rawview`, T210.)*
 
 ## 7. Behaviour requirements
 

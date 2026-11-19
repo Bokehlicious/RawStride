@@ -86,8 +86,7 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status |
 |---|---|---|
-| [T210](T210-remove-pw-rawview.md) | Remove `pw-rawview`, the Tauri app's RAW job engine | Open |
-| [T211](T211-remove-the-in-place-write-calls.md) | Remove the in-place write calls `ExifTool::write_rating` and `write_iptc` | Blocked |
+| [T211](T211-remove-the-in-place-write-calls.md) | Remove the in-place write calls `ExifTool::write_rating` and `write_iptc` | Open |
 
 ## Writing a task (owner and reviewer)
 

@@ -1,4 +1,4 @@
-# T211. Remove the in-place write calls `ExifTool::write_rating` and `write_iptc` — Blocked
+# T211. Remove the in-place write calls `ExifTool::write_rating` and `write_iptc` — Open
 
 - **Why:** owner's decision (2026-11-19, ADR 0007 D7 and the open-items list after §17): the
   in-place writes `ExifTool::write_rating` and `ExifTool::write_iptc` (with the private
@@ -96,3 +96,4 @@
 | 2026-11-19 | Blocked | Added after the owner's decision to remove the in-place write calls (ADR 0007 D7). Waits for the cold read before Open |
 | 2026-11-19 | Blocked | Cold read (fresh agent, `AGENTS.md`, the README and this file only): the first version would have removed two unrelated tests with `refused_write_tests` (they test `WriteError`); missed the unused imports and helpers in `sidecar.rs` (clippy), stale comments in `lib.rs` (module, `Iptc::tags`), inventory line 21, and that `check.ps1` does not check doc links; its done-when grep was wrong. Changed: point 1 keeps the two tests, point 3 has the cold read's coverage table with what moves and what is dropped (modification time kept, URL line break, `_original` file), the helpers and `cfg(windows)` named, point 4 adds line 21, the done-when grep rewritten |
 | 2026-11-19 | Blocked | Waits for T210 (both change line 4 of `docs/test-inventory.md`); then Open, the cold read is done |
+| 2026-11-19 | Open | T210 done; T211 can start |
