@@ -86,8 +86,7 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status |
 |---|---|---|
-| [T208](T208-remove-the-tauri-app-scripts.md) | Remove the scripts in `tools/` that build or run the Tauri app | Open |
-| [T209](T209-texts-that-name-the-tauri-app.md) | Comments and documents that still name the Tauri app as if it existed | Blocked |
+| [T209](T209-texts-that-name-the-tauri-app.md) | Comments and documents that still name the Tauri app as if it existed | Open |
 
 ## Writing a task (owner and reviewer)
 

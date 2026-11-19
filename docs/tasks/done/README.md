@@ -214,3 +214,4 @@ was when the task was done, so "this file", "below" and "the Log" in T1–T115 m
 | [T206](T206-import-recognises-by-creation-time.md) | ADR 0005 choice 2: the import gives a copy the card's time as its creation time and recognises an earlier DNG/JPEG/TIFF by its modification or creation time (pw-ingest) |
 | [T205](T205-rating-percentages-and-flat-hierarchical-keywords.md) | ADR 0007 §6.3 and §8 (Q16, Q15): existing Exif Rating/RatingPercent and `xmp:RatingPercent` follow a rating change and are removed on a reject; a flat `lr:hierarchicalSubject` follows the keywords (pw-metadata) |
 | [T207](T207-retire-the-tauri-app.md) | Retire the Tauri app: remove `src-tauri` and `ui/` from the workspace (the workspace, pw-loupe, pw-viewcore) |
+| [T208](T208-remove-the-tauri-app-scripts.md) | Remove the scripts in `tools/` that build or run the Tauri app (tools) |

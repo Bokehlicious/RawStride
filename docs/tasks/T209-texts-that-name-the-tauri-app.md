@@ -1,4 +1,4 @@
-# T209. Comments and documents that still name the Tauri app as if it existed — Blocked
+# T209. Comments and documents that still name the Tauri app as if it existed — Open
 
 - **Why:** after T207 and T208 the Tauri app and its scripts are gone, but code comments and
   developer documents still describe it as present ("beside the Tauri app", "the Tauri app still
@@ -68,3 +68,4 @@
 | Date | Status | Note |
 |---|---|---|
 | 2026-11-19 | Blocked | Added: split from T207 by its cold read, which also found the comments in `main.rs`, `edit.rs`, `pw-tiff`, `pw-libraw`, `TESTING.md` §5 and `libraw-build.md`. Nine files, all text. Waits for T208 |
+| 2026-11-19 | Open | T208 done; T209 can start |

@@ -1,4 +1,4 @@
-# T208. Remove the scripts in `tools/` that build or run the Tauri app — Open
+# T208. Remove the scripts in `tools/` that build or run the Tauri app — Done
 
 - **Why:** after T207 the Tauri app (`photoworkflow`) is gone, so the scripts that build, package,
   measure or verify it no longer work. Second task of the chain T207 → T208 → T209 (owner's
@@ -34,3 +34,5 @@
 |---|---|---|
 | 2026-11-19 | Blocked | Added: split from T207 by its cold read. `m2-step2.cmd` kept (it tests `pw-rawview`, not the Tauri app). Waits for T207 |
 | 2026-11-19 | Open | T207 done; T208 can start |
+| 2026-11-19 | Ready for review | Each of the 15 scripts named `photoworkflow`, `package-dist`, `verify-dist`, `bench-app` or `measure-app` (search before removal); all 15 removed with `git rm`, none kept. `.gitignore`: `/dist/` and its comment removed (no `dist/` folder in the working tree). `m2-step2.cmd` and the five `raw-decode-bench` scripts stay. `.\tools\check.ps1` all OK: 1982 passed, 73 ignored, no clippy warnings |
+| 2026-11-19 | Done | Review: `git diff --stat` shows only the 15 removed scripts and `.gitignore`; each script named `photoworkflow`, `package-dist`, `verify-dist`, `bench-app` or `measure-app` in `HEAD` (checked by search); `m2-step2.cmd`, the five `raw-decode-bench` scripts and the rest of `tools/` stay; no `dist/` folder on disk. No code changed, so the reviewer relied on the task agent's `.\tools\check.ps1` (all OK). Left for T209 and the reviewer: `docs/libraw-build.md` (T209), and `docs/distribution.md`, ADR 0002 §4 line 71, ADR 0008 line 273 and backlog line 114, which still name the removed scripts |

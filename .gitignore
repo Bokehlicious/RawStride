@@ -2,8 +2,6 @@
 /target/
 # Standalone tool crates with their own [workspace] (e.g. tools/egui-demo)
 /tools/*/target/
-# Standalone distribution folder (tools/package-dist.ps1)
-/dist/
 **/*.rs.bk
 
 # vcpkg manifest-mode output
