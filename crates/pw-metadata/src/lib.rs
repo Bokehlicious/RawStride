@@ -9,8 +9,10 @@
 //!   `xmp:Rating` and `xmp:Label`. The RAW file is never modified.
 //! - DNG, JPEG and TIFF: written *into the file* (embedded XMP), like Photo Mechanic does for DNG
 //!   and as Lightroom expects for these formats. Only the metadata is rewritten, never the image
-//!   data; the file modification date is preserved (`-P`) and the file is replaced in place.
-//! - ExifTool edits existing metadata in place, so everything else is preserved.
+//!   data.
+//! - Every write goes through the write plan and the safe write ([`edit`], [`safe_write`]; ADR
+//!   0007 §9): a verified temporary copy replaces the original, so everything else in the file is
+//!   preserved. The in-place write of the first milestone was removed (T211, ADR 0007 D7).
 //! - `properties`: the IPTC property table generated from the TechReference (ADR 0007 §3).
 
 pub mod date;
@@ -120,8 +122,8 @@ impl From<Error> for WriteError {
 /// The kind of a failed safe edit (T91): a read error keeps its kind as [`From<Error>`] does; a
 /// safe write refused before writing because another program holds the target open is
 /// [`WriteError::Locked`] (from the refusal's kind carried on the error, T108); one refused
-/// before writing because the target is read-only is [`WriteError::ReadOnly`] (checked as
-/// [`refused_write_error`] does); any other failed safe write is [`WriteError::NotSafe`];
+/// before writing because the target exists and is read-only is [`WriteError::ReadOnly`]; any
+/// other failed safe write is [`WriteError::NotSafe`];
 /// everything else is [`WriteError::Other`] with the error's text.
 impl From<EditError> for WriteError {
     fn from(error: EditError) -> Self {
@@ -275,8 +277,9 @@ impl Iptc {
         self.tags().is_empty()
     }
 
-    /// ExifTool arguments for the non-empty fields. Line breaks become spaces (one argument per
-    /// line in the `-stay_open` protocol).
+    /// One `-TAG=value` entry for each non-empty field, with line breaks as spaces. Nothing is
+    /// written from it (the template is written through [`Iptc::to_template`] and the safe
+    /// write); it only decides [`Iptc::is_empty`].
     fn tags(&self) -> Vec<String> {
         let clean = |v: &str| v.replace(['\r', '\n'], " ").trim().to_string();
         let mut out = Vec::new();
@@ -421,96 +424,12 @@ fn write_succeeded(out: &str) -> bool {
     written > 0 && failed == 0
 }
 
-/// The error for a write that ExifTool refused (T49): `ReadOnly` when `target` exists and is
-/// read-only, otherwise `NotWritten` with ExifTool's answer. ExifTool has already decided that the
-/// write failed; this only names the reason.
-fn refused_write_error(target: &Path, out: &str) -> Error {
-    if std::fs::metadata(target).is_ok_and(|meta| meta.permissions().readonly()) {
-        Error::ReadOnly(target.to_path_buf())
-    } else {
-        Error::NotWritten(out.trim().to_string())
-    }
-}
-
 /// The sidecar path for an image: same folder and stem, extension `.xmp`.
 pub fn sidecar_path(image: &Path) -> PathBuf {
     image.with_extension("xmp")
 }
 
 impl ExifTool {
-    /// Writes (or clears) rating and label: in the XMP sidecar for proprietary RAW files,
-    /// embedded in the file for DNG, JPEG and TIFF.
-    ///
-    /// Creates a sidecar if needed; existing metadata keeps everything else. Clearing both values
-    /// on a RAW file without a sidecar does nothing.
-    pub fn write_rating(&mut self, image: &Path, rating: &Rating) -> Result<()> {
-        if !supports_rating(image) {
-            return Err(Error::Unsupported(format!(
-                "ratings are not supported for {}",
-                image.display()
-            )));
-        }
-        let embedded = supports_embedded(image);
-        let target = rating_file(image);
-        if rating.is_empty() && !embedded && !target.exists() {
-            return Ok(());
-        }
-        if let Some(s) = rating.stars
-            && !(-1..=5).contains(&s)
-        {
-            return Err(Error::Unsupported(format!("rating {s} is outside -1..5")));
-        }
-        self.write_tags(
-            image,
-            vec![
-                format!(
-                    "-XMP-xmp:Rating={}",
-                    rating.stars.map(|s| s.to_string()).unwrap_or_default()
-                ),
-                format!(
-                    "-XMP-xmp:Label={}",
-                    rating.label.clone().unwrap_or_default()
-                ),
-            ],
-        )
-    }
-
-    /// Writes `tags` (ExifTool `-TAG=value` arguments) to the file that holds `image`'s
-    /// metadata: the sidecar (created if needed) or, for DNG/JPEG/TIFF, the image itself.
-    fn write_tags(&mut self, image: &Path, tags: Vec<String>) -> Result<()> {
-        let mut args = if supports_embedded(image) {
-            // Replace the file's contents in place (keeps creation date, attributes and links)
-            // and keep the modification date.
-            vec!["-overwrite_original_in_place".to_string(), "-P".to_string()]
-        } else {
-            vec!["-overwrite_original".to_string()]
-        };
-        args.extend(tags);
-        args.push(rating_file(image).to_string_lossy().into_owned());
-        let out = self.execute(&args)?;
-        if write_succeeded(&out) {
-            Ok(())
-        } else {
-            Err(refused_write_error(&rating_file(image), &out))
-        }
-    }
-
-    /// Applies an IPTC template (ADR 0005): only the non-empty fields are written, so existing
-    /// values for the others are kept. Same storage rules as ratings.
-    pub fn write_iptc(&mut self, image: &Path, iptc: &Iptc) -> Result<()> {
-        if !supports_rating(image) {
-            return Err(Error::Unsupported(format!(
-                "metadata is not supported for {}",
-                image.display()
-            )));
-        }
-        let tags = iptc.tags();
-        if tags.is_empty() {
-            return Ok(());
-        }
-        self.write_tags(image, tags)
-    }
-
     /// Reads rating and label for the given images (from sidecars, or from the files themselves
     /// for DNG, JPEG and TIFF). Returns a map keyed by image path; unrated images are absent.
     pub fn read_ratings(&mut self, images: &[PathBuf]) -> Result<HashMap<PathBuf, Rating>> {
@@ -588,63 +507,8 @@ mod write_result_tests {
 }
 
 #[cfg(test)]
-mod refused_write_tests {
-    use super::{Error, WriteError, refused_write_error};
-
-    const REFUSED: &str = "    0 image files updated\n    1 files weren't updated due to errors\n";
-
-    fn temp_file(name: &str) -> std::path::PathBuf {
-        let path = std::env::temp_dir().join(format!(
-            "pw-metadata-refused-{name}-{}.xmp",
-            std::process::id()
-        ));
-        std::fs::write(&path, b"<x:xmpmeta/>").unwrap();
-        path
-    }
-
-    #[test]
-    fn a_read_only_target_is_read_only() {
-        let path = temp_file("read-only");
-        let original = std::fs::metadata(&path).unwrap().permissions();
-        let mut read_only = original.clone();
-        read_only.set_readonly(true);
-        std::fs::set_permissions(&path, read_only).unwrap();
-
-        let error = refused_write_error(&path, REFUSED);
-
-        std::fs::set_permissions(&path, original).unwrap();
-        let _ = std::fs::remove_file(&path);
-        assert!(
-            matches!(&error, Error::ReadOnly(target) if *target == path),
-            "{error:?}"
-        );
-    }
-
-    #[test]
-    fn a_writable_target_is_not_written_with_the_answer() {
-        let path = temp_file("writable");
-
-        let error = refused_write_error(&path, REFUSED);
-
-        let _ = std::fs::remove_file(&path);
-        assert!(
-            matches!(&error, Error::NotWritten(answer) if answer == REFUSED.trim()),
-            "{error:?}"
-        );
-    }
-
-    #[test]
-    fn a_missing_target_is_not_written() {
-        let path = std::env::temp_dir().join(format!(
-            "pw-metadata-refused-missing-{}.xmp",
-            std::process::id()
-        ));
-        let _ = std::fs::remove_file(&path);
-
-        let error = refused_write_error(&path, REFUSED);
-
-        assert!(matches!(error, Error::NotWritten(_)), "{error:?}");
-    }
+mod write_error_tests {
+    use super::{Error, WriteError};
 
     #[test]
     fn write_error_keeps_the_kind_of_the_error() {

@@ -392,3 +392,17 @@ by the owner the same day; step E4 in `plans/adr-0018-0025-steps.md`, before ADR
   ADR 0007 §6.3 and stay as they are when RawStride writes a rating. **Stays (owner, 2026-11-19,
   after P0b's hand check):** no keyword with `|` in the K0 sample, the replacement is the Q15 rule,
   and the Microsoft fields are taken up if Windows Explorer is seen showing a stale rating.
+- **A JPEG from DxO PhotoLab cannot be rated** (T211's real-file run, 2026-11-19; not caused by
+  T211, `safe_write.rs` unchanged): `every_real_dng_jpeg_and_tiff_is_rated_safely` (`tests/edit.rs`,
+  ignored, `PW_TESTDATA`) fails on `TN005701_DxO.jpg` and `TN005702_DxO.jpg` in the test set: the
+  copy is written, but ExifTool adds `Warning: [minor] Error reading HiddenData`, and the safe
+  write refuses any copy written with a warning (`one_file_without_warning`, ADR 0007 §9.3), so
+  the original stays untouched and the user gets an error. The other 28 files pass. For the
+  owner: whether a known `[minor]` warning that only concerns reading an area RawStride does not
+  write (DxO's `HiddenData`) may be accepted, and how (a list of accepted warnings, or the check
+  after the write deciding), or the refusal stays and the message says why. Then a task in
+  `pw-metadata`; the test stays red with `PW_TESTDATA` until then.
+- **Leftover of T211** (2026-11-19): `pw_metadata::Error::ReadOnly` and `Error::NotWritten` are
+  no longer built by production code (only the removed `refused_write_error` built them);
+  `From<Error> for WriteError` still maps them. They are public, so no warning; remove them when
+  `Error` is next changed, or keep them.

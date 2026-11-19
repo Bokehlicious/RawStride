@@ -86,7 +86,6 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status |
 |---|---|---|
-| [T211](T211-remove-the-in-place-write-calls.md) | Remove the in-place write calls `ExifTool::write_rating` and `write_iptc` | Open |
 
 ## Writing a task (owner and reviewer)
 

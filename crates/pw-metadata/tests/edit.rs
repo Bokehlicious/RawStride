@@ -2,9 +2,9 @@
 //! (ADR 0007 I9a, T87) against a real ExifTool: `exiftool` on PATH, or
 //! `PW_EXIFTOOL_PL=/path/to/exiftool` (run through `perl`).
 //!
-//! The files are the small JPEG of `pw-thumbcache`'s fixture and a fake RAW (`TN0001.ARW` with a
-//! few bytes, as in `tests/read.rs`), each in its own temporary folder, with a temporary journal
-//! folder and `NoImageCheck`. These tests need ExifTool and fail with an explanation when it is
+//! The files are the small JPEG of `pw-thumbcache`'s fixture, a fake RAW (`TN0001.ARW` with a
+//! few bytes, as in `tests/read.rs`) and a 2x2 TIFF, each in its own temporary folder, with a
+//! temporary journal folder and `NoImageCheck`. These tests need ExifTool and fail with an explanation when it is
 //! missing, instead of returning early and being counted as passed (docs/TESTING.md §4.5). The
 //! safe write uses Windows file operations, so the file is built on Windows only.
 //!
@@ -563,6 +563,189 @@ fn a_read_only_jpeg_fails_in_precheck() {
         other => panic!("expected a write error in Precheck, got {other:?}"),
     }
     assert_eq!(std::fs::read(&file).unwrap(), SMALL);
+    s.assert_clean();
+    s.remove();
+}
+
+/// A RAW's sidecar holds a label as well: 3 stars and Red create it, 5 stars keep the label, a
+/// reject replaces both, and an empty rating clears them; the RAW is never written (moved from the
+/// in-place write's tests, T211).
+#[test]
+fn a_raw_sidecar_holds_the_label_a_reject_and_a_clear() {
+    let mut et = exiftool();
+    let s = Scratch::new("raw-label");
+    let raw = s.raw();
+    let sidecar = s.dir.join("TN0001.xmp");
+
+    for (stars, label) in [
+        (Some(3), Some("Red")),
+        (Some(5), Some("Red")),
+        (Some(-1), None),
+    ] {
+        let wanted = rating(stars, label);
+        assert_report(s.rate(&mut et, &raw, &wanted), written(&sidecar));
+        assert_eq!(read_rating(&mut et, &raw), Some(wanted));
+        assert_eq!(std::fs::read(&raw).unwrap(), FAKE_RAW, "RAW untouched");
+    }
+
+    assert_report(s.rate(&mut et, &raw, &Rating::default()), written(&sidecar));
+    assert_eq!(read_rating(&mut et, &raw), None);
+    assert_eq!(tag(&mut et, &sidecar, "XMP-xmp:Rating"), "-");
+    assert_eq!(tag(&mut et, &sidecar, "XMP-xmp:Label"), "-");
+    assert_eq!(std::fs::read(&raw).unwrap(), FAKE_RAW, "RAW untouched");
+    s.assert_clean();
+    s.remove();
+}
+
+/// A sidecar written by another program with a title and two keywords: a rating and label are
+/// added and the rest is kept (moved from the in-place write's tests, T211).
+#[test]
+fn a_rating_keeps_the_other_content_of_a_sidecar() {
+    let mut et = exiftool();
+    let s = Scratch::new("sidecar-content");
+    let raw = s.raw();
+    let sidecar = s.dir.join("TN0001.xmp");
+    write(
+        &mut et,
+        &sidecar,
+        &[
+            "-XMP-dc:Title=Sunset",
+            "-XMP-dc:Subject=beach",
+            "-XMP-dc:Subject=sea",
+        ],
+    );
+
+    assert_report(
+        s.rate(&mut et, &raw, &rating(Some(4), Some("Green"))),
+        written(&sidecar),
+    );
+
+    assert_eq!(tag(&mut et, &sidecar, "XMP-dc:Title"), "Sunset");
+    assert_eq!(tag(&mut et, &sidecar, "XMP-dc:Subject"), "beach, sea");
+    assert_eq!(tag(&mut et, &sidecar, "XMP-xmp:Rating"), "4");
+    assert_eq!(tag(&mut et, &sidecar, "XMP-xmp:Label"), "Green");
+    s.assert_clean();
+    s.remove();
+}
+
+/// A RAW with Unicode and spaces in its name, in a folder whose name has them too: its sidecar is
+/// created next to it and the rating is read back (moved from the in-place write's tests, T211).
+#[test]
+fn a_raw_in_a_folder_with_unicode_and_spaces_gets_its_sidecar() {
+    let mut et = exiftool();
+    let s = Scratch::new("åäö mapp");
+    let raw = s.dir.join("Bild ÅÄÖ 01.ARW");
+    std::fs::write(&raw, FAKE_RAW).unwrap();
+    let sidecar = s.dir.join("Bild ÅÄÖ 01.xmp");
+    let two_blue = rating(Some(2), Some("Blue"));
+
+    assert_report(s.rate(&mut et, &raw, &two_blue), written(&sidecar));
+
+    assert!(sidecar.is_file(), "{}", sidecar.display());
+    assert_eq!(read_rating(&mut et, &raw), Some(two_blue));
+    assert_eq!(std::fs::read(&raw).unwrap(), FAKE_RAW);
+    s.assert_clean();
+    s.remove();
+}
+
+/// Minimal uncompressed 2x2 RGB little-endian TIFF (from `tests/sidecar.rs`, T211). Unlike the
+/// old copy, BitsPerSample has three values (at offset 112): with one, ExifTool warns ("IFD0
+/// BitsPerSample should have 3 values"), and the safe write refuses a copy written with a warning.
+fn tiny_tiff() -> Vec<u8> {
+    let entries: [(u16, u16, u32, u32); 8] = [
+        (256, 3, 1, 2),   // ImageWidth
+        (257, 3, 1, 2),   // ImageLength
+        (258, 3, 3, 112), // BitsPerSample: three values at offset 112
+        (259, 3, 1, 1),   // Compression: none
+        (262, 3, 1, 2),   // Photometric: RGB
+        (273, 4, 1, 200), // StripOffsets
+        (277, 3, 1, 3),   // SamplesPerPixel
+        (279, 4, 1, 12),  // StripByteCounts
+    ];
+    let mut f = vec![0u8; 212];
+    f[0..4].copy_from_slice(b"II*\0");
+    f[4..8].copy_from_slice(&8u32.to_le_bytes());
+    f[8..10].copy_from_slice(&(entries.len() as u16).to_le_bytes());
+    for (k, (tag, typ, count, val)) in entries.iter().enumerate() {
+        let e = 10 + 12 * k;
+        f[e..e + 2].copy_from_slice(&tag.to_le_bytes());
+        f[e + 2..e + 4].copy_from_slice(&typ.to_le_bytes());
+        f[e + 4..e + 8].copy_from_slice(&count.to_le_bytes());
+        f[e + 8..e + 12].copy_from_slice(&val.to_le_bytes());
+    }
+    for (k, bits) in [8u16, 8, 8].iter().enumerate() {
+        f[112 + 2 * k..114 + 2 * k].copy_from_slice(&bits.to_le_bytes());
+    }
+    f[200..212].copy_from_slice(&[255, 0, 0, 0, 255, 0, 0, 0, 255, 9, 9, 9]);
+    f
+}
+
+/// The `ImageDataHash` of `file`; fails the test when ExifTool gives none.
+fn image_hash(et: &mut ExifTool, file: &Path) -> String {
+    match et.snapshot(file).unwrap().image_data_hash {
+        Some(hash) if !hash.is_empty() => hash,
+        other => panic!("no ImageDataHash for {}: {other:?}", file.display()),
+    }
+}
+
+/// A small TIFF: 4 stars and Purple are written into the file, read back, no sidecar is made and
+/// the image data is unchanged; an empty rating clears them again (moved from the in-place write's
+/// tests, T211).
+#[test]
+fn a_rating_is_written_safely_to_a_tiff() {
+    let mut et = exiftool();
+    let s = Scratch::new("tiff");
+    let file = s.dir.join("Scan 01.tif");
+    std::fs::write(&file, tiny_tiff()).unwrap();
+    let hash = image_hash(&mut et, &file);
+    let four_purple = rating(Some(4), Some("Purple"));
+
+    assert_report(s.rate(&mut et, &file, &four_purple), written(&file));
+    assert_eq!(read_rating(&mut et, &file), Some(four_purple));
+    assert!(!s.dir.join("Scan 01.xmp").exists(), "no sidecar for a TIFF");
+    assert_eq!(image_hash(&mut et, &file), hash, "image data unchanged");
+
+    assert_report(s.rate(&mut et, &file, &Rating::default()), written(&file));
+    assert_eq!(read_rating(&mut et, &file), None);
+    assert_eq!(image_hash(&mut et, &file), hash, "image data unchanged");
+    s.assert_clean();
+    s.remove();
+}
+
+/// A RAW whose sidecar holds 2 stars and Red and is read-only: 5 stars fail before writing, with
+/// the sidecar as the file and `WriteError::ReadOnly` as the kind, and the old rating is read back
+/// (moved from the in-place write's tests, T211).
+#[test]
+fn a_read_only_sidecar_is_read_only_and_keeps_the_old_rating() {
+    let mut et = exiftool();
+    let s = Scratch::new("read-only-sidecar");
+    let raw = s.raw();
+    let sidecar = s.dir.join("TN0001.xmp");
+    let old = rating(Some(2), Some("Red"));
+    assert_report(s.rate(&mut et, &raw, &old), written(&sidecar));
+    let writable = std::fs::metadata(&sidecar).unwrap().permissions();
+    let mut read_only = writable.clone();
+    read_only.set_readonly(true);
+    std::fs::set_permissions(&sidecar, read_only).unwrap();
+
+    let result = s.rate(&mut et, &raw, &rating(Some(5), None));
+    // The kind is decided from the file's permissions, so it is taken before they are restored;
+    // the restore comes before any assertion, so a failing test leaves a removable folder.
+    let failed = match &result {
+        Err(EditError::Write(error)) => Some((error.stage, error.file.clone())),
+        _ => None,
+    };
+    let kind = result.map_err(WriteError::from);
+    std::fs::set_permissions(&sidecar, writable).unwrap();
+
+    assert_eq!(failed, Some((Stage::Precheck, sidecar.clone())), "{kind:?}");
+    assert_eq!(kind, Err(WriteError::ReadOnly), "read-only sidecar");
+    assert_eq!(
+        read_rating(&mut et, &raw),
+        Some(old),
+        "the sidecar keeps the old rating"
+    );
+    assert_eq!(std::fs::read(&raw).unwrap(), FAKE_RAW);
     s.assert_clean();
     s.remove();
 }

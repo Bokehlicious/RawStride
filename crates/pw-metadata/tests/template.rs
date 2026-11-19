@@ -509,3 +509,36 @@ fn a_raw_gets_only_its_sidecar_written() {
     s.assert_clean();
     s.remove();
 }
+
+/// A RAW whose sidecar already holds a rating of 4: the template is added to the sidecar and the
+/// rating is kept; an empty template then writes nothing (moved from the in-place write's tests,
+/// T211).
+#[test]
+fn a_template_keeps_an_earlier_rating_in_a_sidecar() {
+    let mut et = exiftool();
+    let s = Scratch::new("raw-rating");
+    let raw = s.raw();
+    let sidecar = s.dir.join("TN0001.xmp");
+    write(&mut et, &sidecar, &["-XMP-xmp:Rating=4"]);
+
+    assert_report(
+        s.apply(&mut et, &raw, &ingest_template().to_template()),
+        written(&sidecar),
+    );
+
+    assert_eq!(std::fs::read(&raw).unwrap(), FAKE_RAW);
+    assert_eq!(tag(&mut et, &sidecar, "XMP-dc:Creator"), "Tobias Nykänen");
+    assert_eq!(
+        et.read_ratings(std::slice::from_ref(&raw)).unwrap()[&raw].stars,
+        Some(4)
+    );
+
+    let bytes = std::fs::read(&sidecar).unwrap();
+    assert_report(
+        s.apply(&mut et, &raw, &Iptc::default().to_template()),
+        WriteReport::Unchanged,
+    );
+    assert_eq!(std::fs::read(&sidecar).unwrap(), bytes);
+    s.assert_clean();
+    s.remove();
+}

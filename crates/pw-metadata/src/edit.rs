@@ -6,8 +6,8 @@
 //! by [`ExifTool::write_safely`] (§9: a verified temporary copy replaces the original):
 //!
 //! 1. A file kind that cannot hold ratings, or stars outside −1…5, is
-//!    [`EditError::Unsupported`] with the same text as the old [`ExifTool::write_rating`]; nothing
-//!    is read or written.
+//!    [`EditError::Unsupported`] ("ratings are not supported for …", "rating … is outside -1..5",
+//!    the texts of the removed in-place write); nothing is read or written.
 //! 2. The file is read with [`ExifTool::read_metadata`], which also gives the [`FileState`] the plan
 //!    needs (IIM, checksum, Exif fields).
 //! 3. **Rating** (`xmp:Rating`, §8): a number is set, `None` clears it. It is written only when it
@@ -22,17 +22,17 @@
 //!    gets none for an empty rating. The RAW file itself is never written (§4.2); its sidecar is.
 //!
 //! [`ExifTool::apply_template_safely`] writes an ingest template the same way (§9.5, §10): a file
-//! kind that cannot hold metadata is [`EditError::Unsupported`] with the same text as the old
-//! [`ExifTool::write_iptc`]; then the file is read, [`template::apply`] applies the template's
-//! modes to its metadata (an error is [`EditError::Template`]), and the plan is made and written as
+//! kind that cannot hold metadata is [`EditError::Unsupported`] ("metadata is not supported for
+//! …", the text of the removed in-place write); then the file is read, [`template::apply`]
+//! applies the template's modes to its metadata (an error is [`EditError::Template`]), and the plan is made and written as
 //! above. A template that is already in the file gives an empty plan and
 //! [`WriteReport::Unchanged`]. A list with qualifiers the template changed is put back first, as
 //! below, but without a notice (the template path returns none).
 //!
 //! [`ExifTool::write_edits_safely`] writes the editor's [`Edit`]s of single properties (I10d,
 //! T97): a file kind that cannot hold metadata is [`EditError::Unsupported`] with the same text as
-//! [`ExifTool::write_iptc`]; then the file is read, [`apply_edits`] applies the edits in order, and
-//! the plan is made and written as above. The result is an [`EditReport`]: the safe write's report
+//! [`ExifTool::apply_template_safely`]; then the file is read, [`apply_edits`] applies the edits
+//! in order, and the plan is made and written as above. The result is an [`EditReport`]: the safe write's report
 //! and the plan's [`WriteNotice`]s, which the user is told about (§5.2: an IIM value cut to its
 //! byte limit; §5.4: IIM converted to UTF-8; Q1: a conflict kept and no checksum written). They are
 //! empty when nothing was written, except that an **Entries** edit left alone because of an `Open`
@@ -69,9 +69,9 @@
 //!   left, cleared. A field of a list of structures, or a `field` on a property that is not a
 //!   structure, is [`EditError::Unsupported`].
 //!
-//! The old `write_rating`, `write_iptc` and `write_tags` are unchanged (owner decision D7). Since
-//! the Tauri app was retired (T207) only `tests/sidecar.rs` calls them; whether they stay is an
-//! open owner question.
+//! The old in-place write of ratings and templates (without the plan, the safe write or the
+//! journal), kept for the Tauri app by owner decision D7, was removed after that app was retired
+//! (T207; owner, 2026-11-19; T211).
 //!
 //! [`FileState`]: crate::write_plan::FileState
 
