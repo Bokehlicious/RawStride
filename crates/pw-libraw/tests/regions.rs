@@ -6,6 +6,14 @@
 //! pixel-identical to the same area of a whole-image render. It is checked for AHD (the default)
 //! and for PPG (ADR 0008 §11, the egui loupe of ADR 0009), and for a session that switches
 //! between the two.
+//!
+//! The Fujifilm X-Trans files (`.RAF`, T197) are checked the same way. LibRaw interpolates
+//! X-Trans with its own method (1 pass for PPG, 3 for AHD), cannot process a region under 512 px,
+//! silently moves a region's origin down to a multiple of 6, and its result near the seams of its
+//! 496 px tiles depends on where they lie; the shim therefore processes a region of an X-Trans
+//! file in a wider box (`csrc/pwlr.cpp`), and these tests show that the result is still identical
+//! to the whole-image render, also for small regions whose box the shim widens to 512 px or
+//! moves in from the far border.
 
 use std::path::PathBuf;
 
@@ -51,7 +59,10 @@ fn test_file(prefix: &str) -> PathBuf {
                 && p.extension()
                     .and_then(|ext| ext.to_str())
                     .is_some_and(|ext| {
-                        matches!(ext.to_ascii_lowercase().as_str(), "arw" | "rw2" | "dng")
+                        matches!(
+                            ext.to_ascii_lowercase().as_str(),
+                            "arw" | "rw2" | "dng" | "raf"
+                        )
                     })
         })
         .collect();
@@ -216,6 +227,12 @@ fn panasonic_ppg_regions_are_identical_to_full() {
 
 #[test]
 #[ignore = "needs real camera files: set PW_TESTDATA and run with --ignored"]
+fn fujifilm_ppg_regions_are_identical_to_full() {
+    check_ppg_regions_identical("_DSF4243");
+}
+
+#[test]
+#[ignore = "needs real camera files: set PW_TESTDATA and run with --ignored"]
 fn a7r_iva_methods_switch_cleanly() {
     check_methods_switch_cleanly("TN1004");
 }
@@ -224,6 +241,12 @@ fn a7r_iva_methods_switch_cleanly() {
 #[ignore = "needs real camera files: set PW_TESTDATA and run with --ignored"]
 fn panasonic_methods_switch_cleanly() {
     check_methods_switch_cleanly("P124");
+}
+
+#[test]
+#[ignore = "needs real camera files: set PW_TESTDATA and run with --ignored"]
+fn fujifilm_methods_switch_cleanly() {
+    check_methods_switch_cleanly("_DSF4243");
 }
 
 #[test]
@@ -242,6 +265,38 @@ fn a1_regions_are_identical_to_full() {
 #[ignore = "needs real camera files: set PW_TESTDATA and run with --ignored"]
 fn panasonic_regions_are_identical_to_full() {
     check_regions_identical("P124");
+}
+
+#[test]
+#[ignore = "needs real camera files: set PW_TESTDATA and run with --ignored"]
+fn fujifilm_regions_are_identical_to_full() {
+    check_regions_identical("_DSF4271");
+}
+
+/// Small X-Trans regions (T197), with both methods: one 32 px past a line of the shim's 1488 px
+/// grid, whose box is widened to 512 px, and one at the far corner, whose box is moved in from
+/// the border; each identical to the same area of a whole-image render.
+#[test]
+#[ignore = "needs real camera files: set PW_TESTDATA and run with --ignored"]
+fn fujifilm_small_regions_are_identical_to_full() {
+    let file = test_file("_DSF4243");
+    let mut s = Session::open(&file).unwrap();
+    let (w, h) = (s.width(), s.height());
+    let regions = [
+        Rect::new(1520, 1520, 64, 64),
+        Rect::new(w - 40, h - 40, 32, 32),
+    ];
+    for demosaic in [Demosaic::Ppg, Demosaic::Ahd] {
+        let full = s.render_full_with(demosaic).unwrap();
+        for r in regions {
+            let tile = s.render_region_with(r, 16, demosaic).unwrap();
+            assert!(
+                tile == full.crop(r),
+                "{}: {demosaic:?} region {r:?} differs from the full render",
+                file.display()
+            );
+        }
+    }
 }
 
 #[test]

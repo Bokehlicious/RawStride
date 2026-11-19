@@ -157,12 +157,63 @@ void *pwlr_open(const wchar_t *path, pwlr_info *info) {
 static const int PWLR_QUAL_PPG = 2;
 static const int PWLR_QUAL_AHD = 3;
 
+/* ---- The box an X-Trans region is processed in (T197) ----
+ *
+ * LibRaw demosaics X-Trans (filters == LIBRAW_XTRANS) with its own interpolation (xtrans_interpolate,
+ * 1 pass for PPG, 3 for AHD), which needs a box that differs from the one asked for:
+ * - it refuses an image under LIBRAW_AHD_TILE (512) px wide or high with IO_CORRUPT, and LibRaw
+ *   then recycles the whole session (the unpacked RAW data is gone; every later call fails);
+ * - LibRaw rounds an X-Trans crop's origin down to a multiple of 6 (the pattern) without an error;
+ * - it works in tiles of 512 px that start 3 px into the box and follow each other every 496 px
+ *   (LIBRAW_AHD_TILE - 16), and a pixel near a tile's seam depends on where the seam is; a region
+ *   is identical to the same area of a whole-image render only when the box's tiles lie where the
+ *   whole image's do, so the origin must be a multiple of 496 as well;
+ * - the pixels within about 24 px of the box's own edge differ (measured on _DSF4243.RAF and
+ *   _DSF4271.RAF, X-T30: PPG needed 16 px, AHD 24 px).
+ * The box is therefore the asked one plus PWLR_XTRANS_EDGE on every side, its origin rounded down
+ * to a multiple of PWLR_XTRANS_ALIGN, at least PWLR_XTRANS_MIN px wide and high, and clamped to
+ * the image. A Bayer file is processed in exactly the asked box. */
+static const int PWLR_XTRANS_ALIGN = 1488; /* the least common multiple of 6 and 496 */
+static const int PWLR_XTRANS_MIN = LIBRAW_AHD_TILE;
+static const int PWLR_XTRANS_EDGE = 32;
+static_assert(PWLR_XTRANS_ALIGN % 6 == 0 && PWLR_XTRANS_ALIGN % (LIBRAW_AHD_TILE - 16) == 0,
+              "the X-Trans box origin must keep the pattern and the tiles of xtrans_interpolate");
+
+/* One axis of the X-Trans box: the asked span [a, a + len) of an axis of `size` px becomes
+ * [*lo_out, *lo_out + *len_out), which holds it. Returns 0 when the image is too small for X-Trans interpolation. */
+static int pwlr_xtrans_axis(int a, int len, int size, int *lo_out, int *len_out) {
+  if (size < PWLR_XTRANS_MIN) return 0;
+  int lo = a - PWLR_XTRANS_EDGE;
+  if (lo < 0) lo = 0;
+  lo -= lo % PWLR_XTRANS_ALIGN;
+  int hi = a + len + PWLR_XTRANS_EDGE;
+  if (hi > size) hi = size;
+  if (hi - lo < PWLR_XTRANS_MIN) {
+    hi = lo + PWLR_XTRANS_MIN;
+    if (hi > size) {
+      hi = size;
+      lo = size - PWLR_XTRANS_MIN;
+      lo -= lo % PWLR_XTRANS_ALIGN;
+    }
+  }
+  *lo_out = lo;
+  *len_out = hi - lo;
+  return 1;
+}
+
 /* Processes the region (x, y, w, h) of the visible image, or the whole image if w == 0, with the
  * demosaic method `quality` (LibRaw user_qual: 2 PPG or 3 AHD; anything else is refused).
  * half != 0 gives half size (2x2 binning, whole image only; no demosaicing). Returns a LibRaw
- * image that the caller frees with pwlr_free; NULL on failure. */
+ * image that the caller frees with pwlr_free; NULL on failure. For a region, *ox, *oy, *ow and
+ * *oh are set to the box of the visible image it was processed in, which the returned image is:
+ * (x, y, w, h) on a Bayer file, and on an X-Trans file the wider box above, which holds the asked
+ * one. For the whole image they are 0. */
 libraw_processed_image_t *pwlr_render(void *session, int quality, int half, int x, int y, int w,
-                                      int h, char *error) {
+                                      int h, int *ox, int *oy, int *ow, int *oh, char *error) {
+  *ox = 0;
+  *oy = 0;
+  *ow = 0;
+  *oh = 0;
   if (quality != PWLR_QUAL_PPG && quality != PWLR_QUAL_AHD) {
     snprintf(error, 200, "unsupported demosaic method %d", quality);
     return 0;
@@ -171,6 +222,25 @@ libraw_processed_image_t *pwlr_render(void *session, int quality, int half, int 
   lr->imgdata.params.user_qual = quality;
   lr->imgdata.params.half_size = half ? 1 : 0;
   if (w > 0 && h > 0) {
+    /* The layout saved at the unpack; a render changes imgdata.idata and imgdata.sizes. */
+    const libraw_rawdata_t &R = lr->imgdata.rawdata;
+    const int width = (int)R.sizes.width, height = (int)R.sizes.height;
+    if (x < 0 || y < 0 || x > width - w || y > height - h) {
+      snprintf(error, 200, "region %dx%d at %d,%d is outside the image (%dx%d)", w, h, x, y,
+               width, height);
+      return 0;
+    }
+    if (R.iparams.filters == LIBRAW_XTRANS && !half) {
+      if (!pwlr_xtrans_axis(x, w, width, &x, &w) || !pwlr_xtrans_axis(y, h, height, &y, &h)) {
+        snprintf(error, 200, "the image (%dx%d) is smaller than X-Trans processing needs (%d px)",
+                 width, height, PWLR_XTRANS_MIN);
+        return 0;
+      }
+    }
+    *ox = x;
+    *oy = y;
+    *ow = w;
+    *oh = h;
     lr->imgdata.params.cropbox[0] = (unsigned)x;
     lr->imgdata.params.cropbox[1] = (unsigned)y;
     lr->imgdata.params.cropbox[2] = (unsigned)w;

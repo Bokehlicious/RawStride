@@ -268,6 +268,23 @@ and reviewer:
     `DRIVE_REMOTE` and a volume without a name. Kept until a network drive is at hand (not
     checked at B5 either, 2026-11-18).
 
+- **Leftovers from the review of T197** (reviewer and an independent review agent, 2026-11-19;
+  none is caused by T197, which avoids the first for X-Trans by refusing a box under 512 px before
+  LibRaw is called):
+  - *A failed LibRaw call kills the session:* LibRaw's exception handler calls `recycle()` on an
+    error such as `IO_CORRUPT`, so the unpacked RAW data is gone and every later call on that
+    `pw_libraw::Session` fails ("Out of order call of libraw function"), Bayer files too;
+    `statistics` then gives `Ok(None)` without an error. A fix would reopen the session or report
+    it as dead.
+  - *Panic paths in `pw-libraw/src/lib.rs` from before T197* (AGENTS.md §3): `r.x + r.w` and
+    `r.x + r.w + margin` in `render_region_with` can overflow `u32` (a panic in a debug build; in
+    release the shim's bounds check and the box check refuse the result), and `Rgb8::crop` is a
+    public function with an `assert!`.
+  - *The cost of an X-Trans region:* the shim's box reaches up to 1487 px plus the region plus
+    64 px on each axis, about 0.26–0.45 s for a 1024 px tile on `_DSF4243.RAF` against 1.55 s for
+    the whole image (T197's measurements). It matters only if the loupe ever renders many small
+    tiles of a RAF.
+
 Removed on 2026-11-13 because they are done or planned elsewhere: ADR 0010 steps M3–M7 (done,
 T30–T40); ADR 0011 step K4 (done, T26–T29); moving rejected or picked images to `_rejected` /
 `_picked` (ADR 0013 §13), now ADR 0017 U9 (§2.6, U-Q6); the import dialog fields for title and description in the Tauri

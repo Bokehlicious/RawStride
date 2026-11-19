@@ -203,3 +203,4 @@ was when the task was done, so "this file", "below" and "the Log" in T1–T115 m
 | [T194](T194-batch-line-for-a-qualified-list.md) | ADR 0007 §8: the batch names a list with qualifiers that was not written in another image (pw-loupe) |
 | [T195](T195-scene-subject-and-genre-codes-checked.md) | ADR 0007 §11: Scene Code, Subject Code and Genre checked against IPTC NewsCodes, warnings only (pw-metadata, pw-loupe) |
 | [T196](T196-camera-gps-fills-location-created.md) | ADR 0007 §6.7: camera GPS fills the coordinates of Location Created, never written (pw-metadata) |
+| [T197](T197-region-render-on-raf.md) | ADR 0027 W0: the region render on RAF, an X-Trans region processed in a wider box (pw-libraw, C++ shim) |

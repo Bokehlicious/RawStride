@@ -213,6 +213,10 @@ unsafe extern "C" {
         y: c_int,
         w: c_int,
         h: c_int,
+        ox: *mut c_int,
+        oy: *mut c_int,
+        ow: *mut c_int,
+        oh: *mut c_int,
         error: *mut c_char,
     ) -> *mut c_void;
     fn pwlr_image(
@@ -543,10 +547,15 @@ impl Session {
         }))
     }
 
-    fn render(&mut self, half: bool, r: Option<Rect>, demosaic: Demosaic) -> Result<Rgb8> {
+    /// Renders the whole image (`r` is `None`) or the region `r`, and returns the image with the
+    /// box of the visible image the shim processed: all 0 for the whole image, `r` for a region
+    /// of a Bayer file, and for a region of an X-Trans file a wider box that holds `r` (its origin
+    /// on a multiple of 1488 px, at least 512 px; `csrc/pwlr.cpp`).
+    fn render(&mut self, half: bool, r: Option<Rect>, demosaic: Demosaic) -> Result<(Rgb8, Rect)> {
         let r = r.unwrap_or(Rect::new(0, 0, 0, 0));
         let mut err = [0 as c_char; 200];
-        // SAFETY: live session (exclusive &mut), valid error buffer.
+        let (mut ox, mut oy, mut ow, mut oh): (c_int, c_int, c_int, c_int) = (0, 0, 0, 0);
+        // SAFETY: live session (exclusive &mut), valid out-pointers and error buffer.
         let img = unsafe {
             pwlr_render(
                 self.ptr,
@@ -556,6 +565,10 @@ impl Session {
                 r.y as c_int,
                 r.w as c_int,
                 r.h as c_int,
+                &mut ox,
+                &mut oy,
+                &mut ow,
+                &mut oh,
                 err.as_mut_ptr(),
             )
         };
@@ -579,7 +592,13 @@ impl Session {
         };
         // SAFETY: img came from pwlr_render and is freed exactly once.
         unsafe { pwlr_free(img) };
-        out
+        let used = Rect::new(
+            ox.max(0) as u32,
+            oy.max(0) as u32,
+            ow.max(0) as u32,
+            oh.max(0) as u32,
+        );
+        out.map(|image| (image, used))
     }
 
     /// The whole image at full resolution, with AHD.
@@ -589,23 +608,30 @@ impl Session {
 
     /// The whole image at full resolution, with the given demosaic method.
     pub fn render_full_with(&mut self, demosaic: Demosaic) -> Result<Rgb8> {
-        self.render(false, None, demosaic)
+        self.render(false, None, demosaic).map(|(image, _)| image)
     }
 
     /// The whole image at half resolution (2×2 binning, no demosaicing).
     pub fn render_half(&mut self) -> Result<Rgb8> {
         self.render(true, None, Demosaic::Ahd)
+            .map(|(image, _)| image)
     }
 
     /// Exactly the region `r`, rendered with AHD and with `margin` extra pixels of context on
-    /// every side (clamped at the image border) that are cut off again. With a margin of at least
-    /// 8 px the result equals the same area of [`render_full`](Self::render_full).
+    /// every side (clamped at the image border) that are cut off again. The result equals the same
+    /// area of [`render_full`](Self::render_full) with a margin of at least 8 px on a Bayer file;
+    /// on an X-Trans file (Fujifilm) with any margin, because the shim processes a wider box with
+    /// context of its own (its origin on a multiple of 1488 px, 32 px more on every side, at least
+    /// 512 px; `csrc/pwlr.cpp`), which also makes a region there slower than one of the same size
+    /// on a Bayer file.
     pub fn render_region(&mut self, r: Rect, margin: u32) -> Result<Rgb8> {
         self.render_region_with(r, margin, Demosaic::Ahd)
     }
 
     /// Like [`render_region`](Self::render_region), with the given demosaic method. The result
-    /// equals the same area of [`render_full_with`](Self::render_full_with) with that method.
+    /// equals the same area of [`render_full_with`](Self::render_full_with) with that method (on
+    /// a Bayer file with a margin of at least 8 px). An image from LibRaw whose size is not the
+    /// box the shim processed, or a box that does not hold the asked one, is refused.
     pub fn render_region_with(&mut self, r: Rect, margin: u32, demosaic: Demosaic) -> Result<Rgb8> {
         if r.w == 0 || r.h == 0 || r.x + r.w > self.width || r.y + r.h > self.height {
             return Err(Error(format!(
@@ -617,17 +643,27 @@ impl Session {
         let y0 = r.y.saturating_sub(margin);
         let x1 = (r.x + r.w + margin).min(self.width);
         let y1 = (r.y + r.h + margin).min(self.height);
-        let big = self.render(false, Some(Rect::new(x0, y0, x1 - x0, y1 - y0)), demosaic)?;
-        if big.width != x1 - x0 || big.height != y1 - y0 {
+        let asked = Rect::new(x0, y0, x1 - x0, y1 - y0);
+        let (big, used) = self.render(false, Some(asked), demosaic)?;
+        // The image must be exactly the box the shim processed: the asked one, or (X-Trans) a
+        // wider box inside the image that holds it.
+        let (ux1, uy1) = (
+            u64::from(used.x) + u64::from(used.w),
+            u64::from(used.y) + u64::from(used.h),
+        );
+        let holds = used.x <= x0
+            && used.y <= y0
+            && ux1 >= u64::from(x1)
+            && uy1 >= u64::from(y1)
+            && ux1 <= u64::from(self.width)
+            && uy1 <= u64::from(self.height);
+        if big.width != used.w || big.height != used.h || !holds {
             return Err(Error(format!(
-                "LibRaw returned {}x{} for a {}x{} region",
-                big.width,
-                big.height,
-                x1 - x0,
-                y1 - y0
+                "LibRaw returned {}x{} for the {}x{} box at {},{} (asked: {}x{} at {x0},{y0})",
+                big.width, big.height, used.w, used.h, used.x, used.y, asked.w, asked.h
             )));
         }
-        Ok(big.crop(Rect::new(r.x - x0, r.y - y0, r.w, r.h)))
+        Ok(big.crop(Rect::new(r.x - used.x, r.y - used.y, r.w, r.h)))
     }
 }
 

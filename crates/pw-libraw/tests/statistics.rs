@@ -20,8 +20,8 @@
 //! - The Fujifilm X-Trans files (T182): every file whose width and height are divisible by 6 has
 //!   the X-Trans shares (R = B = 2/9, G = 5/9 of the photosites) and every clipped photosite in
 //!   the top bin; `_DSF4271.RAF` and `_DSF4243.RAF` have the same statistics before and after
-//!   half-size renders (not region renders: those fail on every RAF); `_DSF4243.RAF` cut short
-//!   gives an error, not a panic and not statistics.
+//!   a half-size render and a region render under 512 px (T197: the shim widens it for X-Trans);
+//!   `_DSF4243.RAF` cut short gives an error, not a panic and not statistics.
 
 use std::path::{Path, PathBuf};
 
@@ -608,8 +608,16 @@ fn fujifilm_statistics_are_the_same_before_and_after_renders() {
         session.render_half().unwrap();
         let after_half = session.statistics().unwrap().unwrap();
         assert_eq!(after_half, before, "{name}: half-size render");
-        // No region render: `render_region_with` fails on every RAF with "process: Input/output
-        // error", with PPG and AHD, in a fresh session too (T182's finding, owner 2026-11-17).
+        let region = session
+            .render_region_with(Rect::new(64, 64, 256, 128), 16, Demosaic::Ppg)
+            .unwrap();
+        assert_eq!(
+            (region.width, region.height),
+            (256, 128),
+            "{name}: region size"
+        );
+        let after_region = session.statistics().unwrap().unwrap();
+        assert_eq!(after_region, before, "{name}: region render");
         // and a session that rendered first gives the same as one that did not
         let mut rendered_first = Session::open(&file).unwrap();
         rendered_first.render_half().unwrap();
