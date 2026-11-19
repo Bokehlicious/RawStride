@@ -1,4 +1,4 @@
-# T204. A written file gets the time of the write as its modification time (ADR 0007 Q14) — Blocked: waits for T206
+# T204. A written file gets the time of the write as its modification time (ADR 0007 Q14) — Open
 
 - **Why:** ADR 0007 revision 26, §9.4 (Q14, owner 2026-11-19): a file the safe write writes, a
   sidecar and an image written in place alike, gets the time of the write as its modification
@@ -78,3 +78,4 @@
 | Date | Status | Note |
 |---|---|---|
 | 2026-11-19 | Blocked | Added (ADR 0029 step P0b split into T204 → T205 by the owner, 2026-11-19). Cold read: the test imports of `std::time` named, the RAW's time read before the write; nothing else missing. Chain review (T204 → T205): the import's destination check (`pw-ingest` `slot`) relied on the kept modification time; owner's decision → T206 first, T204 waits for it. Also noted: the contact sheet's sort by modification time now moves a written JPEG/TIFF/DNG (intended, §9.4); the histogram cache re-stamps after RawStride's own write (U7c-Q7); ADR 0026's watcher and ADR 0030's change check must recognise RawStride's own writes (for those ADRs' steps) |
+| 2026-11-19 | Open | T206 Done; T204 can start |

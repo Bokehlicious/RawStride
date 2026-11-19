@@ -277,10 +277,11 @@ pub(crate) fn same_time(a: u64, b: u64) -> bool {
 }
 
 /// Whether `path` can receive `f`:
-/// - images: the same modification time (to the second) or exactly one hour apart (FAT32 and
-///   daylight saving time, [`same_time`]) and the same size mean "already ingested"; for
-///   DNG/JPEG/TIFF the size may differ, because ratings and IPTC are written into those files
-///   afterwards with the date kept;
+/// - images: the same size (for DNG/JPEG/TIFF any size, since metadata is written into them after
+///   the import) and the same modification time or creation time ([`same_time`]) mean "already
+///   ingested". RawStride's writes give a file a new modification time (ADR 0007 §9.4) but keep
+///   its creation time, which the import set to the card's time; files imported before this
+///   change kept the card's modification time instead.
 /// - sidecars: any existing file is `Present` (it is edited after ingest, so neither size nor date
 ///   says anything); `plan` decides from the shot's images.
 fn slot(path: &Path, f: &SourceFile) -> Slot {
@@ -294,10 +295,19 @@ fn slot(path: &Path, f: &SourceFile) -> Slot {
     if COMPANION_EXTENSIONS.contains(&ext.as_str()) {
         return Slot::Present;
     }
-    let time_matches = match (m.modified().ok().and_then(secs), secs(f.modified)) {
+    let card_time = secs(f.modified);
+    let modified_matches = match (m.modified().ok().and_then(secs), card_time) {
         (Some(a), Some(b)) => same_time(a, b),
         (a, b) => a == b,
     };
+    #[cfg(windows)]
+    let created_matches = match (m.created().ok().and_then(secs), card_time) {
+        (Some(a), Some(b)) => same_time(a, b),
+        _ => false,
+    };
+    #[cfg(not(windows))]
+    let created_matches = false;
+    let time_matches = modified_matches || created_matches;
     let same_size = m.len() == f.size || EMBEDDED_METADATA.contains(&ext.as_str());
     if time_matches && same_size {
         Slot::Same
@@ -524,7 +534,9 @@ fn part_path(target: &Path) -> PathBuf {
 }
 
 /// Copies `src` to `target` through a temporary file, verifies it and renames it into place.
-/// Returns the number of bytes copied. `Interrupted` means cancelled.
+/// Returns the number of bytes copied. `Interrupted` means cancelled. The copy gets `modified`,
+/// the card file's modification time, as both its modification time and (on Windows) its
+/// creation time.
 pub fn copy_verified(
     src: &Path,
     target: &Path,
@@ -560,7 +572,13 @@ pub fn copy_verified(
             total += n as u64;
         }
         out.sync_all()?;
-        out.set_modified(modified)?;
+        let times = fs::FileTimes::new().set_modified(modified);
+        #[cfg(windows)]
+        let times = {
+            use std::os::windows::fs::FileTimesExt;
+            times.set_created(modified)
+        };
+        out.set_times(times)?;
         drop(out);
         // Read back and compare.
         let mut check = File::open(&part)?;

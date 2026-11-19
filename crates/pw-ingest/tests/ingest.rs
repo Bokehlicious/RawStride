@@ -299,11 +299,92 @@ fn files_edited_after_ingest_still_count_as_ingested() {
     assert_eq!(again.files_to_copy(), 0, "{:?}", rels(&again));
     // But a different RAW under the same name is still a clash, and so is its sidecar.
     write(&dst.0.join("A001.ARW"), &[9u8; 500], T0 + 5);
+    #[cfg(windows)]
+    {
+        use std::fs::FileTimes;
+        use std::os::windows::fs::FileTimesExt;
+        File::options()
+            .write(true)
+            .open(dst.0.join("A001.ARW"))
+            .unwrap()
+            .set_times(FileTimes::new().set_created(UNIX_EPOCH + Duration::from_secs(T0 + 5)))
+            .unwrap();
+    }
     let clash = plan(&scan(&src.0).unwrap(), &o);
     assert_eq!(
         rels(&clash)[..2],
         ["A001_1.ARW".to_string(), "A001_1.xmp".to_string()]
     );
+}
+
+#[cfg(windows)]
+#[test]
+fn a_dng_written_after_ingest_with_a_new_time_still_counts_as_ingested() {
+    use std::fs::FileTimes;
+    use std::os::windows::fs::FileTimesExt;
+    let src = Tmp::new("dng-ctime-src");
+    let dst = Tmp::new("dng-ctime-dst");
+    write(&src.0.join("B001.DNG"), &[2u8; 500], T0);
+    let o = opts(&dst.0, "", "{name}");
+    let r = execute(
+        &plan(&scan(&src.0).unwrap(), &o),
+        &o,
+        &AtomicBool::new(false),
+        |_| {},
+    );
+    assert_eq!(r.copied, 1);
+    // A later write in place: new size and a new modification time; the creation time stays.
+    write(&dst.0.join("B001.DNG"), &[2u8; 900], T0 + 999);
+    let again = plan(&scan(&src.0).unwrap(), &o);
+    assert_eq!(
+        (again.files_to_copy(), again.already_present()),
+        (0, 1),
+        "{:?}",
+        rels(&again)
+    );
+    // With the creation time changed too, nothing says it is the card's file: a clash.
+    File::options()
+        .write(true)
+        .open(dst.0.join("B001.DNG"))
+        .unwrap()
+        .set_times(FileTimes::new().set_created(UNIX_EPOCH + Duration::from_secs(T0 + 5)))
+        .unwrap();
+    let clash = plan(&scan(&src.0).unwrap(), &o);
+    assert_eq!(rels(&clash), vec!["B001_1.DNG"]);
+}
+
+#[cfg(windows)]
+#[test]
+fn the_copy_gets_the_card_time_as_creation_time() {
+    let src = Tmp::new("ctime-src");
+    let dst = Tmp::new("ctime-dst");
+    let bak = Tmp::new("ctime-bak");
+    card(&src.0);
+    let mut o = opts(&dst.0, "", "{name}");
+    o.backup = Some(bak.0.clone());
+    let p = plan(&scan(&src.0).unwrap(), &o);
+    let r = execute(&p, &o, &AtomicBool::new(false), |_| {});
+    assert_eq!((r.copied, r.failed.len()), (4, 0));
+    let to_secs = |t: SystemTime| t.duration_since(UNIX_EPOCH).unwrap().as_secs();
+    for item in &p.items {
+        let card = to_secs(item.modified);
+        for root in [&dst.0, &bak.0] {
+            let m = fs::metadata(root.join(&item.rel)).unwrap();
+            let out = root.join(&item.rel);
+            assert_eq!(
+                to_secs(m.created().unwrap()),
+                card,
+                "created: {}",
+                out.display()
+            );
+            assert_eq!(
+                to_secs(m.modified().unwrap()),
+                card,
+                "modified: {}",
+                out.display()
+            );
+        }
+    }
 }
 
 #[test]

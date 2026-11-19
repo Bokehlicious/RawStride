@@ -86,8 +86,7 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status |
 |---|---|---|
-| [T206](T206-import-recognises-by-creation-time.md) | Import recognises an earlier DNG/JPEG/TIFF by its creation time too (ADR 0005 choice 2) | Open |
-| [T204](T204-written-file-gets-the-write-time.md) | A written file gets the time of the write as its modification time (ADR 0007 Q14) | Blocked: waits for T206 |
+| [T204](T204-written-file-gets-the-write-time.md) | A written file gets the time of the write as its modification time (ADR 0007 Q14) | Open |
 | [T205](T205-rating-percentages-and-flat-hierarchical-keywords.md) | Rating percentages and a flat `lr:hierarchicalSubject` kept equal (ADR 0007 Q15, Q16) | Blocked: waits for T204 |
 
 ## Writing a task (owner and reviewer)

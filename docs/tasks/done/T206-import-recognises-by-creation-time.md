@@ -1,4 +1,4 @@
-# T206. Import recognises an earlier DNG/JPEG/TIFF by its creation time too (ADR 0005 choice 2) — Open
+# T206. Import recognises an earlier DNG/JPEG/TIFF by its creation time too (ADR 0005 choice 2) — Done
 
 - **Why:** the import's destination check (`pw-ingest` `slot`, ADR 0005 choice 2) counts an
   existing DNG, JPEG or TIFF as "already ingested" only when its modification time is the card
@@ -36,9 +36,12 @@
   3. `tests/ingest.rs`, `files_edited_after_ingest_still_count_as_ingested` (about line 301): the
      "different RAW under the same name" is made by overwriting the imported `A001.ARW` in place,
      which keeps the copy's creation time (the card's, after point 1) and would now count as
-     already present. A different file is a new file: remove `A001.ARW` with `fs::remove_file`
-     before the `write`, so it gets a new creation time and the asserted clash stays. This is the
-     only change to an existing test (reviewer, 2026-11-19, after the cold read).
+     already present. A different file has its own creation time: after the `write`, set the
+     file's creation time to `T0 + 5` with `FileTimes::set_created` (`#[cfg(windows)]`, as the
+     new DNG test does), so the asserted clash stays. Removing the file first is not enough:
+     NTFS "file tunneling" gives a file created under the same name within about 15 s of a
+     deletion the old file's creation time (seen in the agent's first run, 2026-11-19). This is
+     the only change to an existing test (reviewer, 2026-11-19, after the cold read).
   4. On other platforms than Windows the creation time is neither set nor read: both are behind
      `#[cfg(windows)]`, so no unused code or clippy warning appears there.
   5. Nothing else: the register (`register.rs`) still compares the card's own files by
@@ -58,7 +61,7 @@
     found by their kept modification time until RawStride writes them after T204. A re-import of
     such a card without a register after a later write gives a suffixed copy (no data lost). Noted
     in ADR 0005's known limits by the reviewer.
-  - A volume without `ReplaceFileW` (the safe write's rename fallback, ADR 0007 §9.4) does not
+  - A volume without `ReplaceFileW` (the safe write's rename fallback, ADR 0007 §9.4) may not
     keep the creation time; same consequence as above. Noted in the same place.
   - The Tauri app's import (D7): unchanged.
 - **Rules:** `AGENTS.md`; this README. No existing test changes except point 3; `cargo clippy`
@@ -73,3 +76,6 @@
 | Date | Status | Note |
 |---|---|---|
 | 2026-11-19 | Open | Added (owner's decision 2026-11-19 after the chain review of T204 → T205); first of T206 → T204 → T205. Cold read: `set_created` works on `File::create`'s handle (as in `pw-metadata` `fileops.rs`); NTFS keeps the creation time through the rename and an in-place overwrite (measured); the backup uses the same `copy_verified`; `a_card_read_two_hours_later_is_a_clash` still holds; `files_edited_after_ingest_still_count_as_ingested` would break → point 3 (remove the file first); non-Windows behind `#[cfg(windows)]` (point 4) |
+| 2026-11-19 | Open | The agent stopped after the code and tests: `files_edited_after_ingest_still_count_as_ingested` failed (`A001.ARW` planned as present) although the file was removed first, because of NTFS file tunneling. Point 3 changed by the reviewer: set the creation time explicitly. The code in `lib.rs` and the two new tests are in the worktree; left: point 3, `check.ps1`, the inventory |
+| 2026-11-19 | Ready for review | Point 3 done as changed: after the `write`, `A001.ARW` gets the creation time `T0 + 5` (`#[cfg(windows)]`). `lib.rs` points 1, 2, 4 and the two new tests as before; `docs/test-inventory.md` updated (ingest row 18 → 20, totals 1968 passed, 76 ignored, "after T87–T203, T206"). `.\tools\check.ps1` all OK (fmt, audit, test, clippy; no clippy warning). Note for the reviewer: NTFS file tunneling may also keep the creation time in the safe write's rename fallback, so the second "Not in this task" limit may not hold; worth checking before it goes into ADR 0005 |
+| 2026-11-19 | Done | Review (reviewer): `copy_verified` sets the card time as modification and creation time in one `set_times` (Windows; elsewhere modification only); `slot` matches by modification or creation time, sidecars unchanged; point 3 sets the creation time after the `write`; the two new tests cover the destination and the backup and a clash once the creation time differs; `.\tools\check.ps1` all OK (fmt, audit, test, clippy; 1968 passed, 76 ignored), checked in `test-output.txt`. No extra code review (one crate, three files, not the safe write). The agent's note taken up: ADR 0005's known limit now says a volume without `ReplaceFileW` *may* not keep the creation time (NTFS name tunneling keeps it through the renames locally). Leftovers: the two limits are in ADR 0005 (known limits); the Tauri import unchanged (D7, retired with it). The owner's hand check follows (an import, a rating on an imported DNG/JPEG, then the same card again with the register removed: nothing copied) |

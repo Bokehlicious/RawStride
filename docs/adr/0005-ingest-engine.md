@@ -55,7 +55,9 @@ The sandbox disk is not the PC. Measure on thanos with a real card before tuning
   and a faster hash (xxh3 or BLAKE3 crate) may be needed. Measure first.
 - Videos and audio notes are never copied (see choice 5).
 - Files imported before T206 have the import's time as their creation time, and a write on a
-  volume without `ReplaceFileW` does not keep the creation time (ADR 0007 §9.4). Once RawStride
+  volume without `ReplaceFileW` (some network shares) may not keep the creation time: the safe
+  write's two renames (ADR 0007 §9.4) keep it only where the file system's name tunneling hands
+  it to the renamed copy, as NTFS does locally (T206). Once RawStride
   has written such a DNG/JPEG/TIFF, a re-import of its card without the register gives a
   suffixed copy; nothing is lost (owner, 2026-11-19).
 
