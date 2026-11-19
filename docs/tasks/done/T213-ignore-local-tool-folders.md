@@ -1,4 +1,4 @@
-# T213. Local tool folders ignored by `.gitignore` — Open
+# T213. Local tool folders ignored by `.gitignore` — Done
 
 - **Why:** step R1 of `docs/tasks/plans/public-release.md` (accepted by the owner, 2026-11-19),
   backlog "Before the repository is made public", item 5. Two local folders are hidden today
@@ -33,3 +33,5 @@
 | 2026-11-19 | Blocked | Added (plan step R1). Waits for the cold read before Open |
 | 2026-11-19 | Blocked | Cold read (fresh agent, `AGENTS.md`, the README, this file and `.gitignore`): doable in `.gitignore` alone, the section names match. Changed after it: the narrowing from the plan's `.claude/` to the settings file said, the blank lines said; the `git status` check removed (the local exclude file already hides both, so it proved nothing) |
 | 2026-11-19 | Open | Cold read done |
+| 2026-11-19 | Ready for review | `.gitignore` lines 38–40: new section "Per-user tool files" with `/TokenEconomizer/` and `/.claude/settings.local.json`, after "Session outputs" and before "Editors / OS". `git check-ignore -v` names `.gitignore:39` and `.gitignore:40`. `check.ps1` all OK |
+| 2026-11-19 | Done | Review: the diff is only `.gitignore` (four lines, blank lines as the other sections) and this file's status and log; `git check-ignore -v` checked again, names `.gitignore:39` and `:40`. `test-output.txt` newer than the change, fmt, audit, tests (1957 passed, 0 failed, 72 ignored) and clippy all exit 0, no clippy warnings. Nothing left; no hand check needed. `cargo audit` now warns `zbus_names`, `zvariant`, `zvariant_derive` unmaintained (RUSTSEC-2026-0370–0372) instead of `chrono`; not caused by this task, raised with the owner |

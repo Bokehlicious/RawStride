@@ -35,6 +35,10 @@
 # Session outputs (e.g. study reports); kept outside the repo
 /Claude outputs/
 
+# Per-user tool files; they never belong in the repository
+/TokenEconomizer/
+/.claude/settings.local.json
+
 # Editors / OS
 .vscode/*
 !.vscode/extensions.json
