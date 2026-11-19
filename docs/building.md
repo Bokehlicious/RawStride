@@ -18,9 +18,6 @@ Windows' long-path support (`LongPathsEnabled`) helps with vcpkg's deep build fo
 antivirus programs slow the build down a lot; that is a choice for your own machine, not a
 requirement.
 
-The old Tauri app (`src-tauri`, `ui/`) is still in the workspace until the switch to the new
-program. `cargo` builds it without Node.js or the Tauri CLI.
-
 ## 2. Get the source and the native libraries
 
 ```powershell

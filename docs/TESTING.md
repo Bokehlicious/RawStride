@@ -81,11 +81,7 @@ Examples:
 
 ### 4.3 UI Regression Tests
 
-Use the existing Node.js and Playwright tests where applicable.
-
-The current UI tests use a mocked Tauri backend.
-
-They verify frontend behavior but do not, by themselves, verify the complete integration with the real Rust backend or WebView2 runtime.
+The program's interface has no automated UI tests; its behavior is tested in the crates (text modules, state and workers) and checked by hand by the owner (ADR 0017 §7).
 
 ### 4.4 Real-File Tests
 
@@ -140,12 +136,6 @@ Purpose:
 - Quickly detect common regressions.
 - Run suitable unit and integration tests.
 - Avoid requiring large external datasets where possible.
-
-### UI Regression
-
-Purpose:
-- Verify frontend behavior using the existing Playwright tests.
-- Report the mocked-backend limitation.
 
 ### Metadata Integration
 

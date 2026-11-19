@@ -6,8 +6,7 @@ step through them quickly, rate and label them, and add IPTC metadata.
 > **Status: in development, not released.** The new program (`pw-loupe`, window title "RawStride",
 > eframe + egui) has the loupe and preview, the contact sheet, folder tabs, the import dialog,
 > ratings and labels, filter and multi-selection, TIFF viewing, colour management and the metadata
-> window. An older Tauri app is still in the repository until the switch
-> ([GUI_REQUIREMENTS](docs/GUI_REQUIREMENTS.md) GR8). There are no installers yet.
+> window. There are no installers yet.
 
 The project was called PhotoWorkflow until 2026-11-09 ([ADR 0012](docs/adr/0012-product-name-rawstride.md)).
 Folder and crate names (`pw-*`) keep the old name for now.
@@ -68,8 +67,6 @@ without AI tools are welcome under the same review.
 
 ```
 crates/        Rust libraries and the RawStride program (pw-loupe)
-src-tauri/     The older Tauri app (until the switch)
-ui/            The older Tauri app's frontend
 docs/          Architecture, requirements, ADRs, building, testing
 third_party/   Notes, pins and licences for native dependencies
 tools/         Developer scripts and benchmarks

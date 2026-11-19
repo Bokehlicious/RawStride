@@ -8,7 +8,7 @@
 //!   seams or differ in colour (measured: docs/analyses/2026-11-04-m2-libraw-decode.md; checked
 //!   again by `tests/regions.rs`).
 //! - The demosaic method is chosen per render ([`Demosaic`]): **AHD** is the default and what
-//!   [`Session::render_full`] and [`Session::render_region`] use (ADR 0006, the Tauri app);
+//!   [`Session::render_full`] and [`Session::render_region`] use (ADR 0006);
 //!   **PPG** is the decided method for the egui loupe (ADR 0008 §11, ADR 0009) and is used through
 //!   [`Session::render_full_with`] and [`Session::render_region_with`]. The region identity holds
 //!   for both (`tests/regions.rs`).

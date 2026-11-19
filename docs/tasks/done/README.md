@@ -215,3 +215,4 @@ was when the task was done, so "this file", "below" and "the Log" in T1–T115 m
 | [T205](T205-rating-percentages-and-flat-hierarchical-keywords.md) | ADR 0007 §6.3 and §8 (Q16, Q15): existing Exif Rating/RatingPercent and `xmp:RatingPercent` follow a rating change and are removed on a reject; a flat `lr:hierarchicalSubject` follows the keywords (pw-metadata) |
 | [T207](T207-retire-the-tauri-app.md) | Retire the Tauri app: remove `src-tauri` and `ui/` from the workspace (the workspace, pw-loupe, pw-viewcore) |
 | [T208](T208-remove-the-tauri-app-scripts.md) | Remove the scripts in `tools/` that build or run the Tauri app (tools) |
+| [T209](T209-texts-that-name-the-tauri-app.md) | Comments and documents that still name the Tauri app as if it existed (pw-loupe, pw-metadata, pw-tiff, pw-libraw, docs) |

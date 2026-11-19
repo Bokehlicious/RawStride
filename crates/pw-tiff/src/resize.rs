@@ -1,6 +1,7 @@
 //! Target size and area-averaging downscale. Moved from `src-tauri/src/imaging.rs` (ADR 0015 D3)
-//! so the TIFF thumbnails of RawStride and the Tauri app's TIFF and RAW views share one box
-//! filter. The result is unchanged bit for bit; `downscale` no longer indexes slices.
+//! for the TIFF thumbnails of RawStride, where the box filter was shared with the retired Tauri
+//! app's TIFF and RAW views. The result is unchanged bit for bit; `downscale` no longer indexes
+//! slices.
 
 use crate::Rgb8;
 

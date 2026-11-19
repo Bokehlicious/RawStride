@@ -78,11 +78,10 @@ The owner approved OpenMP for the app.
   compiled with `/openmp`, so the exe imports `vcomp140.dll`.
 - **Run-time DLLs:** the exe needs the MSVC runtime, including the OpenMP runtime:
   `vcomp140.dll`, plus `vcruntime140.dll`, `vcruntime140_1.dll` and `msvcp140.dll` as reported by
-  `dumpbin`. On a development machine they are in `C:\Windows\System32`.
-  `tools\package-dist.ps1` builds `dist\PhotoWorkflow\` and copies every non-Windows DLL the exe
-  imports from the VS Build Tools redist folder (`VC\Redist\MSVC\<ver>\x64\Microsoft.VC*.CRT` /
-  `…OpenMP`), app-locally. It writes `dist-manifest.txt` (each import: system / shipped /
-  missing, with SHA-256) and fails if anything is missing.
+  `dumpbin`. On a development machine they are in `C:\Windows\System32`. For a distribution they
+  come from the VS Build Tools redist folder (`VC\Redist\MSVC\<ver>\x64\Microsoft.VC*.CRT` /
+  `…OpenMP`) and are shipped app-locally; a distribution folder for RawStride is still to be made
+  (ADR 0002 §4).
 - **Back to the single-threaded LibRaw** (only if ever needed): change `vcpkg.json` back to
   `"libraw"` and relax the check in `crates/pw-libraw/build.rs`. Pixels are identical either way.
 - **`vcpkg_installed_openmp\` / `target-openmp\`** are no longer needed for the app. They are kept

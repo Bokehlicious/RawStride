@@ -1,4 +1,4 @@
-# T209. Comments and documents that still name the Tauri app as if it existed — Open
+# T209. Comments and documents that still name the Tauri app as if it existed — Done
 
 - **Why:** after T207 and T208 the Tauri app and its scripts are gone, but code comments and
   developer documents still describe it as present ("beside the Tauri app", "the Tauri app still
@@ -69,3 +69,5 @@
 |---|---|---|
 | 2026-11-19 | Blocked | Added: split from T207 by its cold read, which also found the comments in `main.rs`, `edit.rs`, `pw-tiff`, `pw-libraw`, `TESTING.md` §5 and `libraw-build.md`. Nine files, all text. Waits for T208 |
 | 2026-11-19 | Open | T208 done; T209 can start |
+| 2026-11-19 | Ready for review | Points 1–9 done in the nine files, text only. Point 5: `render_full` is not called from `pw-rawview` (it uses `render_half` and `render_region`), and its `render_region` call is in `libraw.rs` behind the `libraw` feature, which no crate turns on since T207; so the comment says only "(ADR 0006)". Point 2 checked: outside `pw-metadata/src` only `tests/sidecar.rs` calls `write_rating`/`write_iptc` (`write_tags` is private). The done-when `git grep` shows only the allowed lines, plus `pw-loupe/build.rs` line 3 and `pw-loupe/src/lib.rs` line 766 ("the retired Tauri app", history from T207), and the new `pw-metadata/src/edit.rs` line 73 ("since the Tauri app was retired (T207)", the wording point 2 asks for) |
+| 2026-11-19 | Done | Review: the diff holds only the nine files, comments and text only; points 1–9 match the brief (point 5 rightly "(ADR 0006)" only, since `render_full` is not called from `pw-rawview`). The done-when `git grep` shows only the allowed lines plus the history lines from T207 (`pw-loupe/build.rs`, `lib.rs`) and the new `edit.rs` line. `docs/TESTING.md` §6 keeps the general rule "Do not treat mocked backend tests as full integration tests", which is not about the Tauri app. `.\tools\check.ps1` run by the reviewer: all OK, 1982 passed, 73 ignored, 0 failed, no clippy warnings. The chain T207 → T208 → T209 is done; the owner's hand check of T207 is still open |

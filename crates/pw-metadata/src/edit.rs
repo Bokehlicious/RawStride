@@ -69,8 +69,9 @@
 //!   left, cleared. A field of a list of structures, or a `field` on a property that is not a
 //!   structure, is [`EditError::Unsupported`].
 //!
-//! The old `write_rating`, `write_iptc` and `write_tags` are unchanged; the Tauri app still uses
-//! them (owner decision D7).
+//! The old `write_rating`, `write_iptc` and `write_tags` are unchanged (owner decision D7). Since
+//! the Tauri app was retired (T207) only `tests/sidecar.rs` calls them; whether they stay is an
+//! open owner question.
 //!
 //! [`FileState`]: crate::write_plan::FileState
 

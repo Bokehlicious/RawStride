@@ -1,9 +1,9 @@
-//! TIFF decoding to 8-bit RGB, shared by RawStride and the Tauri app (ADR 0015 §4.1).
+//! TIFF decoding to 8-bit RGB for RawStride (ADR 0015 §4.1).
 //!
 //! The decoder and the sample conversions moved here from `src-tauri` (`tiff_view.rs` and
 //! `imaging.rs`) unchanged in behaviour and messages (ADR 0015 D1). Additions:
 //! - an optional memory limit for one decode (`decode_rgb8(path, Some(bytes))`, ADR 0015 Q4);
-//!   `None` keeps the Tauri app's unlimited decoding;
+//!   `None` decodes without a limit;
 //! - one decode at a time in the whole process (ADR 0015 §4.4): `decode_rgb8` holds a private
 //!   lock for the whole decode; `dimensions` does not.
 //!

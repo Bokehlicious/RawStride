@@ -86,7 +86,6 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status |
 |---|---|---|
-| [T209](T209-texts-that-name-the-tauri-app.md) | Comments and documents that still name the Tauri app as if it existed | Open |
 
 ## Writing a task (owner and reviewer)
 
