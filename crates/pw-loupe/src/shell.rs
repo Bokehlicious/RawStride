@@ -433,6 +433,17 @@ const fn shift(key: Key) -> Option<KeyChord> {
 /// the keyboard focus and which changes tab with Ctrl).
 pub const HIDE_KEY: Key = Key::H;
 
+/// Ctrl+E: the targets opened in the first external program, or the Settings window when the
+/// list is empty (ADR 0019 §2.2, E-Q1, E-Q3, T202). The first program's item (or "Open in
+/// Another Program…") shows it on its right; it is not in `menu_items()`, since
+/// `MenuEntry::ExternalPrograms` is drawn from the settings.
+pub const OPEN_IN_KEY: KeyChord = KeyChord {
+    key: Key::E,
+    ctrl: true,
+    shift: false,
+    alt: false,
+};
+
 /// A command of the menu bar (§2.1). Each does what its key does, through the same function.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Command {
@@ -467,6 +478,13 @@ pub enum Command {
     /// the same confirmation as Delete, no key (Image ▸ Delete Rejected Images; ADR 0018 §2.1,
     /// B-Q9, B5, T190). Greyed while the active tab has no folder.
     DeleteRejected,
+    /// The target images opened in the external program at this index of
+    /// `Settings::external_programs`, 0 the first and default (Image ▸ Open in {name}, Ctrl+E for
+    /// the first; ADR 0019 §2.2–§2.6, E-Q1, T202).
+    OpenIn(u8),
+    /// The Settings window opened at its section "External Programs" (Image ▸ Open in Another
+    /// Program…, shown while the list is empty, then with Ctrl+E; ADR 0019 E-Q3, T202).
+    OpenInAnother,
     /// The preview open ↔ closed (Visa ▸ Förhandsvisning, G; ADR 0017 §2.2, T111).
     ToggleView,
     Fit,
@@ -586,6 +604,10 @@ pub enum MenuEntry {
     /// View ▸ Sort By: the sort keys as radio items and "Descending" as a check item (ADR 0017
     /// U14-Q7, T138), drawn from `SORT_KEYS`. No key (U8 may add one).
     Sort,
+    /// Image ▸ the external programs: "Open in {name}" per program of the settings' list, the
+    /// first with `OPEN_IN_KEY`, or "Open in Another Program…" while the list is empty (ADR 0019
+    /// §2.2, T202), drawn from `Settings::external_programs`.
+    ExternalPrograms,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -703,6 +725,8 @@ pub const MENUS: &[Menu] = &[
             MenuEntry::Separator,
             item(Command::ToggleMode, plain(Key::R)),
             MenuEntry::Separator,
+            MenuEntry::ExternalPrograms,
+            MenuEntry::Separator,
             item(Command::DeleteToRecycleBin, plain(Key::Delete)),
             item(Command::DeleteRejected, None),
         ],
@@ -758,7 +782,10 @@ pub fn menu_items() -> Vec<MenuItem> {
             match entry {
                 MenuEntry::Item(item) => items.push(*item),
                 MenuEntry::Submenu(_, sub) => items.extend_from_slice(sub),
-                MenuEntry::Separator | MenuEntry::Filter | MenuEntry::Sort => {}
+                MenuEntry::Separator
+                | MenuEntry::Filter
+                | MenuEntry::Sort
+                | MenuEntry::ExternalPrograms => {}
             }
         }
     }
@@ -1032,21 +1059,23 @@ mod tests {
     }
 
     /// Delete to Recycle Bin (Delete) and Delete Rejected Images (no key) are the last items of
-    /// the Image menu, after RAW ↔ JPEG with a separator before them, and no other item shows
-    /// Delete (ADR 0018 B4, B5, T189, T190).
+    /// the Image menu, after RAW ↔ JPEG, a separator, the external programs (ADR 0019 §2.2,
+    /// T202) and another separator, and no other item shows Delete (ADR 0018 B4, B5, T189, T190).
     #[test]
     fn the_delete_items_are_the_last_items_of_the_image_menu() {
         let Some(image) = MENUS.iter().find(|menu| menu.kind == MenuKind::Image) else {
             panic!("there is an Image menu");
         };
-        let Some(start) = image.entries.len().checked_sub(4) else {
-            panic!("the Image menu has at least four entries");
+        let Some(start) = image.entries.len().checked_sub(6) else {
+            panic!("the Image menu has at least six entries");
         };
         assert_eq!(
             image.entries.get(start..),
             Some(
                 &[
                     item(Command::ToggleMode, plain(Key::R)),
+                    MenuEntry::Separator,
+                    MenuEntry::ExternalPrograms,
                     MenuEntry::Separator,
                     item(Command::DeleteToRecycleBin, plain(Key::Delete)),
                     item(Command::DeleteRejected, None),
@@ -1058,6 +1087,37 @@ mod tests {
                 assert_eq!(menu_item.command, Command::DeleteToRecycleBin);
             }
         }
+    }
+
+    /// The external programs' items are drawn from the settings (ADR 0019 §2.2, T202): no
+    /// `OpenIn` and no `OpenInAnother` in the static table.
+    #[test]
+    fn the_open_in_commands_are_not_in_the_static_menu_items() {
+        for menu_item in menu_items() {
+            assert!(
+                !matches!(
+                    menu_item.command,
+                    Command::OpenIn(_) | Command::OpenInAnother
+                ),
+                "{menu_item:?} is in the static table"
+            );
+        }
+        assert_eq!(Command::OpenIn(0).acts_in(), Where::Both);
+        assert_eq!(Command::OpenInAnother.acts_in(), Where::Both);
+    }
+
+    /// The key of "Open in {name}" is Ctrl+E, with no Shift and no Alt (ADR 0019 §2.2, T202).
+    #[test]
+    fn the_open_in_key_is_ctrl_e() {
+        assert_eq!(
+            OPEN_IN_KEY,
+            KeyChord {
+                key: Key::E,
+                ctrl: true,
+                shift: false,
+                alt: false,
+            }
+        );
     }
 
     /// The moves' items (ADR 0017 U9-Q5–U9-Q8, T174): Undo Move (Ctrl+Z) first in the Edit menu,

@@ -1007,8 +1007,6 @@ impl MetadataCache {
     /// (ADR 0019 §2.4, T201): a rating write (`is_pending`), the editor's write in flight, or a
     /// write of the running "Apply to All Marked" batch not yet sent or not yet answered. "Open
     /// in {name}" waits for it.
-    // T202 uses it to wait before the program is started; until then only the tests do.
-    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn write_pending(&self, path: &Path) -> bool {
         self.is_pending(path)
             || self

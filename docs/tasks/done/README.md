@@ -208,3 +208,4 @@ was when the task was done, so "this file", "below" and "the Log" in T1–T115 m
 | [T199](T199-checksum-notice-names-both-reasons.md) | ADR 0007 §8: the notice that no new IIM checksum was written gives a reason that holds for an unresolved conflict and a held list with qualifiers (pw-loupe) |
 | [T200](T200-external-program-list.md) | ADR 0019 E1: the list of external programs in `settings.txt` and its section "External Programs" in the Settings window (pw-loupe) |
 | [T201](T201-open-in-program-plan-wait-and-texts.md) | ADR 0019 E2, first part: the command line's length, the plan (start, ask, too long), the wait for the images' writes, the start of the program and the texts of "Open in {name}" (pw-loupe) |
+| [T202](T202-open-in-program-menu-key-and-wiring.md) | ADR 0019 E2, second part: Image ▸ "Open in {name}" per program or "Open in Another Program…", Ctrl+E, the question above 100 images, the wait for the images' writes and the start in the shell (pw-loupe) |

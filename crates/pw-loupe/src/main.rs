@@ -96,6 +96,12 @@ use pw_loupe::{
     ImportText, failed_cell_text, hidden_done_text, hidden_progress_text, import_text,
     no_preview_text,
 };
+use pw_loupe::{
+    OPEN_IN_KEY, OpenPlan, OpenRequest, OpenStep, StartError, image_gone_text,
+    nothing_to_open_text, open_button_text, open_cancel_text, open_in_another_text,
+    open_in_key_action, open_in_text, open_many_question_text, opened_text, plan_open,
+    program_missing_text, start_failed_text, start_program, too_long_text, waiting_for_writes_text,
+};
 use pw_metadata::edit::{Edit, EditOptions};
 use pw_metadata::iim::Fallback;
 use pw_metadata::journal::Journal;
@@ -149,6 +155,9 @@ const MOVE_POLL_INTERVAL: Duration = Duration::from_millis(50);
 /// The widest the confirmation of a delete to the Recycle Bin grows; its texts wrap within it
 /// (ADR 0018 B4, T189).
 const DELETE_WINDOW_WIDTH: f32 = 420.0;
+/// The widest the question of "Open in {name}" above 100 images grows; its text wraps within it
+/// (ADR 0019 §2.5, T202).
+const OPEN_WINDOW_WIDTH: f32 = 420.0;
 /// How often a frame is asked for while capture times are being read for the sort (T138).
 const CAPTURE_POLL_INTERVAL: Duration = Duration::from_millis(50);
 /// The space around the line at the top of a side of the compare, and the plate behind it (T153).
@@ -795,6 +804,16 @@ struct Loupe {
     /// The id of the confirmation's Delete button as last drawn, so Enter deletes only while it
     /// has the focus.
     delete_button: Option<egui::Id>,
+    /// Where "Open in {name}" is (ADR 0019 §2.3–§2.6, T202): nothing, the question above 100
+    /// images, or a request waiting for the images' writes; one request at a time.
+    open: OpenStep,
+    /// The question's Cancel gets the focus on the first frame it is shown (ADR 0019 §2.5): set
+    /// when `open` becomes `Confirming`, cleared when the window is first drawn or the step
+    /// leaves `Confirming`.
+    open_focus_cancel: bool,
+    /// The id of the question's Open button as last drawn, so Enter opens only while it has the
+    /// focus; `None` when the step is not `Confirming`.
+    open_button: Option<egui::Id>,
     indicator_after: Duration,
     tabs: Tabs,
     /// Whether the active tab's ratings have been read since the tab was loaded. A later read of
@@ -3141,18 +3160,33 @@ impl Loupe {
     }
 
     /// Whether a dialog holds the program: the metadata window (modal, D16), the settings window,
-    /// a shown import dialog, or the confirmation of a delete (T189), also while it waits for
-    /// another dialog to close.
+    /// a shown import dialog, the question of "Open in {name}" above 100 images (T202), or the
+    /// confirmation of a delete (T189), the last two also while they wait for another dialog to
+    /// close.
     fn dialog_open(&self) -> bool {
         self.other_dialog_open() || matches!(self.delete, DeleteStep::Confirming(_))
     }
 
     /// Whether a dialog other than the confirmation of a delete is open: the metadata window, the
-    /// settings window or a shown import dialog. The confirmation waits while one is (T189).
+    /// settings window, a shown import dialog, or the question of "Open in {name}" (its step
+    /// `Confirming`, T202). The confirmation waits while one is (T189).
     fn other_dialog_open(&self) -> bool {
         self.metadata_window.is_some()
             || self.settings_window.is_some()
             || (self.import_dialog.is_some() && !self.import_hidden)
+            || matches!(self.open, OpenStep::Confirming(_))
+    }
+
+    /// Whether the question of "Open in {name}" is shown this frame (ADR 0019 §2.5, T202): the
+    /// step is `Confirming` and neither the metadata window, the settings window nor a shown
+    /// import dialog is open. Written out on its own: `other_dialog_open` is true while the
+    /// question itself is `Confirming`. Unlike the delete's, it does not depend on the active tab
+    /// (the request holds its own paths).
+    fn open_window_shown(&self) -> bool {
+        matches!(self.open, OpenStep::Confirming(_))
+            && self.metadata_window.is_none()
+            && self.settings_window.is_none()
+            && !(self.import_dialog.is_some() && !self.import_hidden)
     }
 
     /// Whether the confirmation of a delete is shown this frame: the step is `Confirming`, no
@@ -4899,6 +4933,177 @@ impl Loupe {
         }
     }
 
+    /// Image ▸ Open in {name} or Ctrl+E (ADR 0019 §2.2–§2.6, T202): the targets (`key_targets`:
+    /// in the contact sheet the marked images, otherwise the current one, E-Q4), resolved, are
+    /// opened in the program at `index` of the list. Only the image files as the tab lists them
+    /// (E-Q5). A path error goes to the status line; a missing program to the status line and
+    /// the Tasks error list (E-Q9); a command line too long to the status line (E-Q8); none of
+    /// these touches a request that waits. Above 100 images the question asks first; otherwise
+    /// the request waits for the images' writes (`follow_open`). A new request replaces one
+    /// that waits (§2.4).
+    fn open_in(&mut self, index: usize) {
+        let Some(program) = self.settings.external_programs.get(index).cloned() else {
+            return;
+        };
+        let paths = self.key_targets();
+        if paths.is_empty() {
+            return;
+        }
+        let images = match resolve_paths(&paths) {
+            Ok(images) => images,
+            Err(error) => {
+                self.message = Some(error);
+                return;
+            }
+        };
+        if images.is_empty() {
+            return;
+        }
+        if !program.path.is_file() {
+            let text = program_missing_text(&program.name, &program.path.display().to_string());
+            self.tasks.add_error(&text, ClockTime::now());
+            self.message = Some(text);
+            return;
+        }
+        let name = program.name.clone();
+        match plan_open(program, images) {
+            OpenPlan::TooLong { count, fit } => {
+                self.message = Some(too_long_text(count, &name, fit));
+            }
+            OpenPlan::Ask(request) => {
+                self.open = OpenStep::Confirming(request);
+                self.open_focus_cancel = true;
+                self.open_button = None;
+            }
+            OpenPlan::Start(request) => self.open_wait(request),
+        }
+    }
+
+    /// The request waits for its images' writes (ADR 0019 §2.4): the step becomes `Waiting`,
+    /// replacing a request that waited (it is dropped, not started), and while a write is waiting
+    /// the status line says so, once here.
+    fn open_wait(&mut self, request: OpenRequest) {
+        let ready = request.ready(|path| self.metadata.write_pending(path));
+        self.open = OpenStep::Waiting(request);
+        self.open_focus_cancel = false;
+        self.open_button = None;
+        if !ready {
+            self.message = Some(waiting_for_writes_text().to_owned());
+        }
+    }
+
+    /// The question is cancelled (Cancel, Escape, Enter without the Open button's focus, or a
+    /// click outside): the step is `Idle` and nothing is started. A "Waiting for writes …" left
+    /// by a request the question replaced is cleared.
+    fn open_cancelled(&mut self) {
+        self.open = OpenStep::Idle;
+        self.open_focus_cancel = false;
+        self.open_button = None;
+        if self.message.as_deref() == Some(waiting_for_writes_text()) {
+            self.message = None;
+        }
+    }
+
+    /// The question of "Open in {name}" above 100 images (ADR 0019 §2.5, E-Q8, T202), an
+    /// `egui::Modal` drawn while `open_window_shown`: the question, and Open and Cancel. Cancel is
+    /// the default and has the focus on the first frame; Escape or a click outside is Cancel.
+    /// Cancel → `Idle`; Open → the request waits for its writes.
+    fn draw_open_window(&mut self, ctx: &egui::Context) {
+        if !self.open_window_shown() {
+            return;
+        }
+        let OpenStep::Confirming(request) = &self.open else {
+            return;
+        };
+        let question = open_many_question_text(request.images.len(), &request.program.name);
+        let focus_cancel = std::mem::take(&mut self.open_focus_cancel);
+        let modal = egui::Modal::new(egui::Id::unique("open-in-question")).show(ctx, |ui| {
+            ui.set_max_width(OPEN_WINDOW_WIDTH);
+            ui.label(question);
+            ui.add_space(PANEL_ROW_SPACING);
+            ui.horizontal(|ui| {
+                let open = ui
+                    .push_id("open-in-question-open", |ui| ui.button(open_button_text()))
+                    .inner;
+                let cancel = ui
+                    .push_id("open-in-question-cancel", |ui| {
+                        ui.button(open_cancel_text())
+                    })
+                    .inner;
+                if focus_cancel {
+                    cancel.request_focus();
+                }
+                (open.id, open.clicked(), cancel.clicked())
+            })
+            .inner
+        });
+        let (open_id, open, cancel) = modal.inner;
+        self.open_button = Some(open_id);
+        if open {
+            if let OpenStep::Confirming(request) = std::mem::take(&mut self.open) {
+                self.open_wait(request);
+            }
+            ctx.request_repaint();
+        } else if cancel || modal.should_close() {
+            self.open_cancelled();
+        }
+    }
+
+    /// The follow-up of "Open in {name}" every frame, right after `follow_deletes` (ADR 0019
+    /// §2.4, §2.6, T202). While a request waits it also waits while a move or an undo runs or
+    /// waits, or a delete is under way (they wait for the same writes and run earlier in the
+    /// frame); then, once no image has a write waiting, the request is taken. The images no
+    /// longer files (moved or deleted meanwhile) are left out, each named in the Tasks error
+    /// list; with none left nothing is started. Otherwise the program is started (E-Q7) and the
+    /// status line says so, or the error goes to the status line and the Tasks error list (E-Q9).
+    /// A write that failed meanwhile was reported by its own path; the program is started anyway.
+    fn follow_open(&mut self, ctx: &egui::Context) {
+        let OpenStep::Waiting(request) = &self.open else {
+            return;
+        };
+        let held = self.moves.busy() || self.delete.busy();
+        if held || !request.ready(|path| self.metadata.write_pending(path)) {
+            ctx.request_repaint_after(MOVE_POLL_INTERVAL);
+            return;
+        }
+        let OpenStep::Waiting(request) = std::mem::take(&mut self.open) else {
+            return;
+        };
+        let OpenRequest { program, images } = request;
+        let now = ClockTime::now();
+        let mut left = Vec::with_capacity(images.len());
+        for image in images {
+            if image.is_file() {
+                left.push(image);
+            } else {
+                self.tasks
+                    .add_error(&image_gone_text(&image_name(&image)), now);
+            }
+        }
+        if left.is_empty() {
+            self.message = Some(nothing_to_open_text().to_owned());
+            return;
+        }
+        let request = OpenRequest {
+            program,
+            images: left,
+        };
+        let name = &request.program.name;
+        match start_program(&request) {
+            Ok(()) => self.message = Some(opened_text(request.images.len(), name)),
+            Err(error) => {
+                let text = match error {
+                    StartError::Missing => {
+                        program_missing_text(name, &request.program.path.display().to_string())
+                    }
+                    StartError::Failed(reason) => start_failed_text(name, &reason),
+                };
+                self.tasks.add_error(&text, now);
+                self.message = Some(text);
+            }
+        }
+    }
+
     /// A batch of deletes has all its answers (T189 point 6): every tab of the deleted files'
     /// folders drops them, the active one's view cores and thumbnails follow, the metadata cache
     /// and the undo list of moves forget them, the failures and listing errors go to the Tasks
@@ -5026,6 +5231,12 @@ impl Loupe {
             // Greyed while the active tab has no folder (T190); a running move or delete, ratings
             // not read yet and no rejected image are said when chosen.
             Command::DeleteRejected => tab.is_some_and(|tab| tab.folder.is_some()),
+            // Enabled with a current image and a program at that index (ADR 0019 §2.2, T202); a
+            // missing `.exe` is said when chosen by its key and greyed in the menu.
+            Command::OpenIn(index) => {
+                tab.is_some_and(|tab| tab.position().is_some())
+                    && usize::from(index) < self.settings.external_programs.len()
+            }
             Command::ToggleView => tab.is_some_and(|tab| !tab.visible.is_empty()),
             // Compare opens with two images in the stepped list, and closes an open compare; the
             // other four act only in the compare (T153, T154).
@@ -5090,6 +5301,10 @@ impl Loupe {
             Command::ToggleMode => self.act(Action::ToggleMode, None),
             Command::DeleteToRecycleBin => self.delete_images(),
             Command::DeleteRejected => self.delete_rejected(),
+            Command::OpenIn(index) => self.open_in(usize::from(index)),
+            // The Settings window has no scrolling, so its section "External Programs" is in view
+            // when it opens (ADR 0019 §2.2, E-Q3).
+            Command::OpenInAnother => self.open_settings_window(),
             Command::ToggleView => match self.tabs.active().map(|tab| tab.mode) {
                 Some(ViewMode::Grid) => {
                     self.switch_mode(ViewMode::Loupe);
@@ -5206,11 +5421,48 @@ impl Loupe {
                                     });
                                 });
                             }
+                            MenuEntry::ExternalPrograms => {
+                                self.external_programs_menu(ui, commands);
+                            }
                         }
                     }
                 });
             }
         });
+    }
+
+    /// Image ▸ the external programs (ADR 0019 §2.2, E-Q3, E-Q9, T202): with an empty list "Open
+    /// in Another Program…" with Ctrl+E on its right; otherwise "Open in {name}" per program in
+    /// the list's order, the first with Ctrl+E, greyed while its command is not enabled or its
+    /// path is not a file (checked only while the menu is open).
+    fn external_programs_menu(&self, ui: &mut egui::Ui, commands: &mut Vec<Command>) {
+        let programs = &self.settings.external_programs;
+        if programs.is_empty() {
+            let button =
+                egui::Button::new(open_in_another_text()).shortcut_text(key_text(OPEN_IN_KEY));
+            if ui
+                .add_enabled(self.command_enabled(Command::OpenInAnother), button)
+                .clicked()
+            {
+                commands.push(Command::OpenInAnother);
+            }
+            return;
+        }
+        for (index, program) in programs.iter().enumerate() {
+            // At most `MAX_EXTERNAL_PROGRAMS` (5) programs, so this never fails.
+            let Ok(number) = u8::try_from(index) else {
+                continue;
+            };
+            let command = Command::OpenIn(number);
+            let mut button = egui::Button::new(open_in_text(&program.name));
+            if index == 0 {
+                button = button.shortcut_text(key_text(OPEN_IN_KEY));
+            }
+            let enabled = self.command_enabled(command) && program.path.is_file();
+            if ui.add_enabled(enabled, button).clicked() {
+                commands.push(command);
+            }
+        }
     }
 
     /// One menu item: its text, its key on the right, checked when it is a check or radio item
@@ -5643,6 +5895,9 @@ impl Loupe {
         self.follow_moves(&ctx);
         // The delete to the Recycle Bin follows its answers and is sent (ADR 0018 B4, T189).
         self.follow_deletes(&ctx);
+        // "Open in {name}" starts its program once the images' writes are done (ADR 0019 §2.4,
+        // T202).
+        self.follow_open(&ctx);
         // A rolled-back write does not refilter (ADR 0014 §2.2; the next move drops the image); the
         // ratings becoming ready does.
         self.refilter_when_ratings_change();
@@ -5664,6 +5919,7 @@ impl Loupe {
         if let Some(path) = dropped
             && self.metadata_window.is_none()
             && !matches!(self.delete, DeleteStep::Confirming(_))
+            && !matches!(self.open, OpenStep::Confirming(_))
         {
             if self.in_preview() {
                 self.switch_mode(ViewMode::Grid);
@@ -5759,6 +6015,19 @@ impl Loupe {
                     .is_some_and(|id| ctx.memory(|memory| memory.has_focus(id)));
                 if key == egui::Key::Escape || (key == egui::Key::Enter && !delete_focused) {
                     self.delete_idle();
+                }
+                continue;
+            }
+            // The question of "Open in {name}" above 100 images takes every key while it is shown
+            // (ADR 0019 §2.5, T202), as the delete's confirmation: Escape cancels, Enter cancels
+            // unless the Open button has the focus (then egui clicks it), every other key does
+            // nothing.
+            if self.open_window_shown() {
+                let open_focused = self
+                    .open_button
+                    .is_some_and(|id| ctx.memory(|memory| memory.has_focus(id)));
+                if key == egui::Key::Escape || (key == egui::Key::Enter && !open_focused) {
+                    self.open_cancelled();
                 }
                 continue;
             }
@@ -5860,6 +6129,22 @@ impl Loupe {
             if !ctx.egui_wants_keyboard_input() && delete_key_action(key, ctrl, shift, alt) {
                 if !self.dialog_open() {
                     self.run_command(&ctx, Command::DeleteToRecycleBin);
+                    ctx.request_repaint();
+                }
+                continue;
+            }
+            // Ctrl+E (ADR 0019 §2.2, T202) in the contact sheet and the preview: the first program
+            // of the list, or the Settings window while the list is empty, through its command;
+            // not while a text field has the keyboard or a dialog holds the program, and not on a
+            // repeat (a held Ctrl+E starts the program once).
+            if !ctx.egui_wants_keyboard_input() && open_in_key_action(key, ctrl, shift, alt) {
+                if !repeat && !self.dialog_open() {
+                    let command = if self.settings.external_programs.is_empty() {
+                        Command::OpenInAnother
+                    } else {
+                        Command::OpenIn(0)
+                    };
+                    self.run_command(&ctx, command);
                     ctx.request_repaint();
                 }
                 continue;
@@ -5988,9 +6273,11 @@ impl Loupe {
                     .sum();
                 (wheel, input.pointer.hover_pos())
             });
-            // Not behind the metadata window or the confirmation of a delete (T189 point 4).
+            // Not behind the metadata window, the confirmation of a delete (T189 point 4) or the
+            // question of "Open in {name}" (T202).
             if self.metadata_window.is_none()
                 && !self.delete_window_shown()
+                && !self.open_window_shown()
                 && pointer.is_some_and(|pointer| rect.contains(pointer))
             {
                 self.wheel_notches += wheel;
@@ -8145,6 +8432,7 @@ impl eframe::App for Loupe {
         self.draw_settings_window(&ctx);
         self.draw_metadata_window(&ctx);
         self.draw_delete_window(&ctx);
+        self.draw_open_window(&ctx);
         if !commands.is_empty() {
             for command in commands {
                 self.run_command(&ctx, command);
@@ -8508,6 +8796,9 @@ fn run(options: Options) -> Result<(), String> {
                 delete_ids: HashSet::new(),
                 delete_focus_cancel: false,
                 delete_button: None,
+                open: OpenStep::Idle,
+                open_focus_cancel: false,
+                open_button: None,
                 indicator_after,
                 tabs: Tabs::default(),
                 ratings_read: false,

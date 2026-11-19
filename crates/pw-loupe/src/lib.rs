@@ -147,7 +147,7 @@ pub use settings::{
 };
 pub use shell::{
     COLLAPSED_WIDTH, ColumnState, Command, HIDE_KEY, KeyChord, MENUS, Menu, MenuEntry, MenuItem,
-    MenuKind, NON_TEXT_CONTRAST, Palette, STATUS_TEXT_SIZE, StartWindow, SubmenuKind,
+    MenuKind, NON_TEXT_CONTRAST, OPEN_IN_KEY, Palette, STATUS_TEXT_SIZE, StartWindow, SubmenuKind,
     TEXT_CONTRAST, THEMES, Theme, Where, apply_text_sizes, clamp_column_width, column_width_range,
     contrast_ratio, font_definitions, image_area, menu_items, non_text_pairs, palette,
     rect_on_a_screen, start_window, text_pairs, visuals,
@@ -405,6 +405,16 @@ pub fn move_key_action(key: egui::Key, ctrl: bool, shift: bool, alt: bool) -> Op
 /// map.
 pub fn delete_key_action(key: egui::Key, ctrl: bool, shift: bool, alt: bool) -> bool {
     key == egui::Key::Delete && !ctrl && !shift && !alt
+}
+
+/// Whether a key press is Ctrl+E of "Open in {name}" ([`OPEN_IN_KEY`]; ADR 0019 §2.2, T202): E
+/// with Ctrl and no other modifier, in the contact sheet and the preview. E without Ctrl stays
+/// the focus marking; Ctrl+E is a key of no other key map.
+pub fn open_in_key_action(key: egui::Key, ctrl: bool, shift: bool, alt: bool) -> bool {
+    key == OPEN_IN_KEY.key
+        && ctrl == OPEN_IN_KEY.ctrl
+        && shift == OPEN_IN_KEY.shift
+        && alt == OPEN_IN_KEY.alt
 }
 
 /// A key of the preview's own (ADR 0017 §2.2, §2.4, U3-Q1–Q3, T111), asked before every other key
@@ -1019,7 +1029,8 @@ mod tests {
     }
 
     /// The command a key gives in `view`, through the key functions in the order `main.rs` asks
-    /// them (shell keys, the move keys P and Ctrl+Z (T174), the Delete key (T189), import, tabs, ratings, `M`, `I`, then
+    /// them (shell keys, the move keys P and Ctrl+Z (T174), the Delete key (T189), Ctrl+E (as
+    /// `OpenIn(0)`, T202), import, tabs, ratings, `M`, `I`, then
     /// the view's own keys). The preview's
     /// clipping keys (J and Shift+J, T148) and the compare's keys (C, K, Shift+K and V, T153; L,
     /// T154) are asked before the loupe's keys, which take no Shift chord.
@@ -1045,6 +1056,9 @@ mod tests {
         }
         if delete_key_action(key, ctrl, shift, alt) {
             return Some(Command::DeleteToRecycleBin);
+        }
+        if open_in_key_action(key, ctrl, shift, alt) {
+            return Some(Command::OpenIn(0));
         }
         if opens_import(key, ctrl, shift, alt) {
             return Some(Command::Import);
@@ -1298,6 +1312,49 @@ mod tests {
                 "Shift+Delete in {view:?}"
             );
         }
+    }
+
+    /// Ctrl+E is the key of "Open in {name}" (ADR 0019 §2.2, T202): only with Ctrl and no other
+    /// modifier, in both views, and a key of no other key map; E alone stays the focus marking.
+    #[test]
+    fn ctrl_e_is_the_key_of_open_in_in_both_views() {
+        use egui::Key as K;
+        assert!(open_in_key_action(K::E, true, false, false));
+        assert!(!open_in_key_action(K::E, false, false, false));
+        assert!(!open_in_key_action(K::E, true, true, false));
+        assert!(!open_in_key_action(K::E, true, false, true));
+        assert!(!open_in_key_action(K::E, false, true, false));
+        assert!(!open_in_key_action(K::E, false, false, true));
+        assert!(!open_in_key_action(K::D, true, false, false));
+        // No other key map has Ctrl+E.
+        assert_eq!(key_action(K::E, true, false), None);
+        assert_eq!(loupe_key_action(K::E, true, false), None);
+        assert_eq!(grid_key_action(K::E, true, false, false), None);
+        assert_eq!(preview_key_action(K::E, true, false, false), None);
+        assert_eq!(shell_key_action(K::E, true, false, false), None);
+        assert_eq!(move_key_action(K::E, true, false, false), None);
+        assert_eq!(rating_key_action(K::E, true, false, false), None);
+        assert_eq!(tab_action(K::E, true, false, false), None);
+        assert!(!opens_import(K::E, true, false, false));
+        assert!(!delete_key_action(K::E, true, false, false));
+        // E alone is still the preview's focus marking.
+        assert_eq!(
+            preview_key_action(K::E, false, false, false),
+            Some(PreviewKey::FocusMarking)
+        );
+        for view in [ViewMode::Grid, ViewMode::Loupe] {
+            assert_eq!(
+                command_of_key(OPEN_IN_KEY, view),
+                Some(Command::OpenIn(0)),
+                "{view:?}"
+            );
+        }
+        // Ctrl+E is not in the static table, so no item of it shows the key.
+        assert!(
+            shell::menu_items()
+                .iter()
+                .all(|item| item.key != Some(OPEN_IN_KEY))
+        );
     }
 
     /// J and Shift+J are the preview's clipping keys (ADR 0017 U7b-Q5, T148): each gives its own

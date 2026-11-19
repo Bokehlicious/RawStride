@@ -275,6 +275,25 @@ and reviewer:
     Windows' reason).
   - *`.bat` and `.cmd`:* a batch file set up as a program is measured as an `.exe`; `std` starts
     it through `cmd.exe` and may refuse some arguments, so its start may fail with `Failed`.
+  - *A request that waits* (T202's brief, accepted when T202 was done): quitting while a request
+    waits drops it (nothing is started or said); the wait has no time limit, so a worker that
+    never answers a write, or a user who keeps rating the targets, holds the start back (the
+    status line keeps "Waiting for writes …"); an image moved or deleted while its request waits
+    is left out by its old path, not followed to its new place; a program renamed or removed in
+    Settings while a request waits is still started by its old name and path; a request waits
+    only for writes already queued, so a rating key pressed on one of its images after the start
+    is not seen by the program until it reads the file again (ADR 0019 §2.7).
+  - *What is shown* (T202's independent review, 2026-11-19): while a request waits only for a
+    move or a delete (its writes done), the status line says nothing; when a new request
+    replaces one that waited, the old "Waiting for writes …" stays until the start; while a
+    request waits behind a delete confirmation left open, a frame is drawn every 50 ms; a
+    repeated Ctrl+E on a missing program adds one Tasks line per press.
+  - *Settings and the system:* after Save, a program whose path is not UTF-8 is used until a
+    restart although T200 does not write it to the file; the Settings window has no scrolling,
+    so on a very small screen its section "External Programs" may be cut off; Windows' reason in
+    `start_failed_text` is in Windows' language; the menu checks each program's path (`is_file`)
+    every frame while the Image menu is open, so a program on a network share that is gone may
+    slow the open menu (T202's independent review).
 
 - **Leftovers from the review of T197** (reviewer and an independent review agent, 2026-11-19;
   none is caused by T197, which avoids the first for X-Trans by refusing a box under 512 px before

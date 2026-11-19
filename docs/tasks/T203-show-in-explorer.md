@@ -86,7 +86,11 @@
   - an image rejected with X while "Move Rejected and Picked Images to Subfolders" is on, then
     Ctrl+E at once: it is not opened from its old place, and the Tasks list names it;
   - a program whose `.exe` was renamed or removed: its menu item is greyed, and Ctrl+E (when it
-    is the first) says it does not exist, in the status line and the Tasks list;
+    is the first) says it does not exist, in the status line and the Tasks list (each press adds
+    one more line to the Tasks list);
+  - the question above 100 images also: a click outside it cancels; Space on Cancel cancels and
+    Space on Open opens; while it is shown the menus are greyed and no key but Escape, Enter and
+    Tab acts; Ctrl+E held down starts the program once (T202's independent review, 2026-11-19);
   - more than 100 marked images: the question "Open {n} images in {name}?", Enter and Escape
     cancel, Tab to Open and Enter opens;
   - "Show in File Explorer" opens the image's folder with the file selected, also for a path with

@@ -12,6 +12,7 @@ use pw_metadata::iim::Fallback;
 use pw_metadata::journal::Recovered;
 use pw_metadata::{MIN_EXIFTOOL_VERSION, ToolVersion};
 
+use crate::external_text::{open_in_another_text, program_number_text};
 use crate::monitor_profile::ProfileSource;
 use crate::rating_text::label_name;
 use crate::shell::{Command, KeyChord, MenuKind, SubmenuKind, Theme};
@@ -355,6 +356,9 @@ pub fn command_text(command: Command) -> String {
         Command::ToggleMode => "RAW ↔ JPEG".to_owned(),
         Command::DeleteToRecycleBin => "Delete to Recycle Bin".to_owned(),
         Command::DeleteRejected => "Delete Rejected Images".to_owned(),
+        // Never shown in the menu, which draws `open_in_text(name)`; `command_text` takes no name.
+        Command::OpenIn(index) => program_number_text(usize::from(index) + 1),
+        Command::OpenInAnother => open_in_another_text().to_owned(),
         Command::ToggleView => "Preview".to_owned(),
         Command::Fit => "Fit".to_owned(),
         Command::ToggleZoom => "Fit ↔ 100%".to_owned(),
@@ -682,6 +686,21 @@ mod tests {
         assert_eq!(key_text(chord(true, false, true)), "Ctrl+Alt+K");
         assert_eq!(key_text(chord(false, true, true)), "Shift+Alt+K");
         assert_eq!(key_text(chord(true, true, true)), "Ctrl+Shift+Alt+K");
+    }
+
+    /// The texts of the two commands of the external programs (ADR 0019 §2.2, T202): a program
+    /// by its number (never shown in the menu, which draws `open_in_text(name)`) and "Open in
+    /// Another Program…"; the key shows as "Ctrl+E".
+    #[test]
+    fn the_open_in_command_texts_and_key() {
+        use crate::shell::OPEN_IN_KEY;
+        assert_eq!(command_text(Command::OpenIn(0)), "Open in Program 1");
+        assert_eq!(command_text(Command::OpenIn(4)), "Open in Program 5");
+        assert_eq!(
+            command_text(Command::OpenInAnother),
+            "Open in Another Program…"
+        );
+        assert_eq!(key_text(OPEN_IN_KEY), "Ctrl+E");
     }
 
     /// Visa ▸ Förhandsvisning (G) opens and closes the preview (ADR 0017 §2.2, T111); the old
