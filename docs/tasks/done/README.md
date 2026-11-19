@@ -221,3 +221,4 @@ was when the task was done, so "this file", "below" and "the Log" in T1–T115 m
 | [T212](T212-accept-the-hiddendata-write-warning.md) | Accept the write warning "Error reading HiddenData" by name (DxO exports of Sony RAWs) |
 | [T213](T213-ignore-local-tool-folders.md) | Local tool folders ignored by `.gitignore` (public-release plan R1) |
 | [T214](T214-repository-address-and-the-name-in-vcpkg-json.md) | The repository's address in `Cargo.toml` and RawStride in `vcpkg.json` (public-release plan R2) |
+| [T215](T215-personal-data-check-in-check-ps1.md) | A personal-data step in `check.ps1` (public-release plan R11) |

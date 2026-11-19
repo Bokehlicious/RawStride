@@ -48,7 +48,7 @@ line: `cargo run --release -p pw-loupe -- "D:\Photos\2026-11-14"`.
 .\tools\check.ps1
 ```
 
-It runs `cargo fmt --all --check`, `cargo audit`, `cargo test --workspace` and
+It runs `cargo fmt --all --check`, a personal-data search, `cargo audit`, `cargo test --workspace` and
 `cargo clippy --workspace --all-targets`, and writes the whole output to `test-output.txt`. It must
 end with every step OK before a change is committed (`CONTRIBUTING.md`). `cargo audit` fetches the
 RustSec advisory database, so it needs the network; it fails only on a known vulnerability, not on

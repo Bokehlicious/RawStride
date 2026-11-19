@@ -79,6 +79,84 @@ try {
 
     Invoke-CheckStep -Name 'cargo fmt --all --check' -Arguments @('fmt', '--all', '--check')
 
+    # Personal data (AGENTS.md §2): tracked files and untracked files that are not ignored must hold
+    # no path into a user's folder and no real e-mail address, so that they do not come back after
+    # the repository is public. Only the shape is searched for, never a particular name: a drive,
+    # `Users` and a name that starts with a letter, digit, `.`, `_` or `-` (a placeholder such as
+    # `%USERPROFILE%` or `C:\Users\<name>` passes), the same in Git Bash form, and an e-mail address
+    # at a domain not in the list below.
+    Write-ReportLine ''
+    Write-ReportLine '=== personal data ==='
+    # Test and placeholder domains; an address is allowed when it ends in `@` + one of these exactly.
+    $allowedEmailDomains = @(
+        'example.com',
+        'example.org',
+        'example.net',
+        'b.se', # test data in pw-metadata
+        'users.noreply.github.com'
+    )
+    $emailPattern = '[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}'
+    $personalDataPatterns = @(
+        [pscustomobject]@{ Pattern = '[a-z]:[\\/]+users[\\/]+[a-z0-9._-]'; IsEmail = $false },
+        [pscustomobject]@{ Pattern = '/[a-z]/users/[a-z0-9._-]'; IsEmail = $false },
+        [pscustomobject]@{ Pattern = $emailPattern; IsEmail = $true }
+    )
+    $emailRegex = New-Object System.Text.RegularExpressions.Regex($emailPattern, [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
+    $personalDataExitCode = 0
+    foreach ($personalDataPattern in $personalDataPatterns) {
+        # -z separates path, line number and text with NUL, so each hit splits cleanly.
+        $grepArguments = @('grep', '--untracked', '-n', '-I', '-i', '-z', '-E', $personalDataPattern.Pattern)
+        Write-ReportLine "> git $($grepArguments -join ' ')"
+        $grepOutput = & git @grepArguments 2>&1
+        $grepExitCode = $LASTEXITCODE
+        if ($grepExitCode -gt 1) {
+            foreach ($line in $grepOutput) {
+                Write-ReportLine ([string]$line)
+            }
+            Write-ReportLine "git grep failed with exit code $grepExitCode."
+            $personalDataExitCode = $grepExitCode
+            continue
+        }
+        if ($grepExitCode -eq 1) {
+            continue
+        }
+        foreach ($line in $grepOutput) {
+            $parts = ([string]$line).Split([char]0, 3)
+            if ($parts.Count -lt 3) {
+                Write-ReportLine ([string]$line)
+                $personalDataExitCode = 1
+                continue
+            }
+            $text = $parts[2]
+            if ($personalDataPattern.IsEmail) {
+                $hasOtherAddress = $false
+                foreach ($match in $emailRegex.Matches($text)) {
+                    $domain = $match.Value.Substring($match.Value.LastIndexOf('@') + 1)
+                    if (-not ($allowedEmailDomains -contains $domain.ToLowerInvariant())) {
+                        $hasOtherAddress = $true
+                    }
+                }
+                if (-not $hasOtherAddress) {
+                    continue
+                }
+            }
+            if ($text.Length -gt 200) {
+                $text = $text.Substring(0, 200) + '...'
+            }
+            Write-ReportLine "$($parts[0]):$($parts[1]):$text"
+            $personalDataExitCode = 1
+        }
+    }
+    Write-ReportLine "Exit code: $personalDataExitCode"
+    $personalDataStatus = if ($personalDataExitCode -eq 0) { 'OK' } else { 'FAILED' }
+    $script:results += [pscustomobject]@{
+        Name = 'personal data'
+        Status = $personalDataStatus
+    }
+    if ($personalDataExitCode -ne 0) {
+        $script:hasFailures = $true
+    }
+
     # Checks Cargo.lock against the RustSec advisory database (fetched over the network). A known
     # vulnerability fails the step; warnings such as unmaintained crates do not. Skipped, without
     # failing the check, when cargo-audit is not installed.

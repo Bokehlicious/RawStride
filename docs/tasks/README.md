@@ -86,7 +86,6 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status |
 |---|---|---|
-| [T215](T215-personal-data-check-in-check-ps1.md) | A personal-data step in `check.ps1` | Open |
 
 ## Writing a task (owner and reviewer)
 

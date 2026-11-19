@@ -51,7 +51,7 @@ RawStride is written with AI coding agents, directed and reviewed by its maintai
   [`docs/tasks/`](docs/tasks/README.md) that states what to change, which files, and which tests
   to add. An agent carries out one task and leaves its change uncommitted.
 - **Nothing goes in unreviewed.** Every change is reviewed against its task and must pass
-  `tools/check.ps1` (formatting, `cargo audit`, all tests, clippy without warnings) before the
+  `tools/check.ps1` (formatting, personal data, `cargo audit`, all tests, clippy without warnings) before the
   maintainer approves it. Changes that affect what the user sees or what is written to files are
   also checked by hand in the running program.
 - **The same rules bind people and agents.** [`AGENTS.md`](AGENTS.md) holds the rules every agent
