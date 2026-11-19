@@ -134,10 +134,17 @@ and reviewer:
   (dragging images into an order of the user's own, beside U14's keys); printing and slide shows;
   uploading. Deliberately left out, not to be taken up: video (ADR 0005 choice 5) and deleting
   from the card (ADR 0005 choice 3, ADR 0018 §2.6).
-- **`chrono` is unmaintained** (`cargo audit` in `tools/check.ps1`, seen 2026-11-17):
-  RUSTSEC-2026-054356 marks `chrono` 0.4.45 as unmaintained. It is a warning, not a vulnerability,
-  so the check still passes. Find which crates use it (`cargo tree --offline -i chrono`) and
-  whether a maintained replacement fits; a change of dependency needs a task of its own.
+- **`cargo audit` warns of unmaintained crates** (`tools/check.ps1`; updated 2026-11-19, seen in
+  T213's run): `zbus_names` 4.3.5, `zvariant` 5.15.1 and `zvariant_derive` 5.15.1 are marked
+  unmaintained (RUSTSEC-2026-0370, -0371, -0372). Warnings, not vulnerabilities, so the check
+  passes. They come only through `eframe` 0.37 → `egui-winit` → `accesskit_winit` →
+  `accesskit_unix` (the Linux screen-reader bridge, D-Bus): in `Cargo.lock` but not built on
+  Windows (`cargo tree --offline -i zvariant` finds nothing without `--target all`). Nothing to
+  do on our side but wait for an `eframe` / `accesskit` release that moves off them, and take it
+  in a normal egui update; until then the warning shows in the public CI log (plan
+  `public-release.md` §3). The earlier `chrono` warning (RUSTSEC-2026-054356, 2026-11-17) is gone:
+  `chrono` is no longer in `Cargo.lock` (`cargo tree --offline --target all -i chrono` finds no
+  package, 2026-11-19).
 - **A filter bar of toggle buttons instead of drop-down lists** (owner idea, 2026-11-10, after T61;
   ADR 0014 §15): a row "0★ 1★ 2★ 3★ 4★ 5★" and a row of colour swatches, each clicked on and off,
   with a check box per row that turns the row on or off. Needs an amendment of ADR 0014 first: the

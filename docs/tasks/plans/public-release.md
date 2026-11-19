@@ -74,8 +74,9 @@ Order 1 steps can run in parallel (they touch different files), one task at a ti
 - **The real-file tests** are ignored without `PW_TESTDATA`, so CI shows green without one RAW
   being decoded or written (R9 / PR-Q9 fixes it later). The README or `docs/TESTING.md` should say
   so, so a green badge is not read as more than it is.
-- **`cargo audit`'s warning** (chrono 0.4.45 unmaintained, RUSTSEC-2026-054356) will show in a
-  public CI log. It is a warning, the check passes; the backlog item stays.
+- **`cargo audit`'s warnings** (`zbus_names`, `zvariant`, `zvariant_derive` unmaintained,
+  RUSTSEC-2026-0370 to 0372, through `eframe`'s Linux accessibility bridge, not built on Windows)
+  will show in a public CI log. Warnings, the check passes; the backlog item stays.
 
 ## 4. Not in this milestone
 
