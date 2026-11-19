@@ -69,7 +69,7 @@ specification and MWG. What it does say [read]:
 | U1 | "IPTC Core fields can be embedded in the IIM format and/or in the XMP format." "IPTC Extension fields can be embedded only in XMP format." | Matches ADR 0007: XMP primary, IIM optional |
 | U2 | "the values are synchronised – this should be taken care of by the image management software"; software "has to verify that the IIM and XMP values are the same; if they are not, there are rules about which value should take precedence" (rules not given) | ADR 0007 D3/D4: sync on write, conflict shown on read; precedence = owner's decision (XMP) |
 | U3 | "IPTC Core and IPTC Extension fields can be saved as XMP 'sidecar files' for camera Raw files"; the Embedded Metadata Manifesto adds that "sidecar files are potentially exposed to metadata loss" | Sidecars for manufacturer RAW (owner's decision); ingest and moves must always carry the sidecar with its RAW (already so in ADR 0005: shots) |
-| U4 | Fields "can be embedded into JPEG, TIFF and PSD files" (APP1/APP13 for JPEG). DNG is not mentioned | DNG embedded is the owner's decision, consistent with Lightroom/Photo Mechanic |
+| U4 | Fields "can be embedded into JPEG, TIFF and PSD files" (APP1/APP13 for JPEG). DNG is not mentioned | DNG embedded is the owner's decision: an open TIFF-based format with a defined place for XMP |
 | U5 | Embedded Metadata Manifesto: "Copyright management information metadata must never be removed from the files." "Other metadata should only be removed from files by agreement with their copyright holders." Fields and values "should not be changed across metadata formats" | **Template "Clear" is not offered for copyright-management fields** (Copyright Notice, Creator, Credit Line, Rights Usage Terms, Web Statement of Rights, Copyright Owner, Licensor, Image Creator). Replace is allowed (a new holder). Clearing other fields asks for confirmation. IIM/XMP values must be the same text |
 | U6 | Creator's Jobtitle "is a qualifier for the Creator field, the Creator field must also be filled out" | Validation warning: Jobtitle without Creator |
 | U7 | "If both the Country and Country Code fields are used, the Country Code is the authoritative reference"; codes are ISO 3166 upper-case 2 or 3 letters | Validation of Country Code; Country Code wins on conflict |
@@ -199,10 +199,10 @@ Artist mapping.
 
 | File | Where metadata is written | Source |
 |---|---|---|
-| Proprietary RAW (ARW, RW2, NEF, CR2, CR3 …) | **XMP sidecar `<basename>.xmp`**; the original is never modified | Owner's requirement 5. Lightroom: "In the case of camera raw files that have a proprietary file format, XMP isn't written into the original files" [read]. Photo Mechanic: sidecars by default for RAW [read]. Naming rule (Adobe XMP Part 3) [unverified] |
+| Proprietary RAW (ARW, RW2, NEF, CR2, CR3 …) | **XMP sidecar `<basename>.xmp`**; the original is never modified | Owner's requirement 5. Naming rule (Adobe XMP Part 3) [unverified] |
 | JPEG | Embedded: XMP (APP1, primary); IIM (Photoshop IRB, APP13) kept in sync if present, created only with the setting | Owner's requirement 6 and decisions 2026-11-04 |
 | TIFF | Embedded: XMP (tag 700, primary); IIM (tag 33723 / IRB 34377) as JPEG | Owner's requirement 6; ExifTool IPTC page: IPTC "may be found in JPG, TIFF …" [read] |
-| DNG | **Embedded, as JPEG/TIFF (owner's decision: explicit exception from the sidecar rule).** Matches Lightroom [read] and Photo Mechanic ("DNG is embedded only") [read] | Owner's decision 2026-11-04 |
+| DNG | **Embedded, as JPEG/TIFF (owner's decision: explicit exception from the sidecar rule).** An open TIFF-based format with a defined place for XMP; one copy of the metadata cannot diverge from a sidecar | Owner's decision 2026-11-04 |
 | Sidecar contents | XMP only (no IIM: IIM has no sidecar form) | IIM is a binary block in the file [read, IIM page] |
 
 ## 6. Effect on PhotoWorkflow today
@@ -453,8 +453,8 @@ a standard** or is **a product decision**, and why. The full rules are in ADR 00
 | 2a | XMP is primary for the mapped fields; every Exif/XMP difference is detected and shown | **Product ≠ MWG §4.2.3.1** ("prefer Exif") | Owner's choice of XMP as primary; Lang Alt, lists and structures exist only in XMP; compliant tools keep both forms equal | §6.2 |
 | 2b | JPEG/TIFF: existing Exif overlap fields are synchronised | **Standard** [MWG §4.2.3.1: update both forms, or remove the other], mapping per [IPTC-MG] | Prevents Exif and XMP from diverging | §6.3 |
 | 2c | Manufacturer RAW Exif is preserved, never written; differences shown as conflicts | Product | Originals are never changed | §6.4 |
-| 3a | DNG: embedded, never a sidecar, Xiaomi 17 Ultra included | **Product** (no standard covers DNG; MWG excludes it) | Open TIFF-based format with a place for XMP; Lightroom and Photo Mechanic write embedded; a sidecar would diverge | §4 |
-| 3b | ARW, RW2 and other manufacturer RAW: sidecar only, original never changed | Product | Proprietary formats; the owner's requirement; Lightroom and Photo Mechanic practice | §4 |
+| 3a | DNG: embedded, never a sidecar, Xiaomi 17 Ultra included | **Product** (no standard covers DNG; MWG excludes it) | Open TIFF-based format with a place for XMP; a sidecar would diverge | §4 |
+| 3b | ARW, RW2 and other manufacturer RAW: sidecar only, original never changed | Product | Proprietary formats; the owner's requirement | §4 |
 | 3c | JPEG/TIFF: embedded | Product, consistent with [MWG §4.2.3.4] | Standard locations exist | §4 |
 | 3d | Safe write: temporary copy → verification → atomic replace → journal | Product | A write must never leave a partly written original (crash, full disk, lock, tool error) | §9 |
 | 4a | DateTimeOriginal never changed automatically | Product (IPTC-MG maps both ways, but is "not mandatory") | The capture time is evidence; it is changed only by an explicit future feature (Q12) | §7 |

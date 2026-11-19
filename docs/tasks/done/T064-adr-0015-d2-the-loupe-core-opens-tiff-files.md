@@ -60,5 +60,5 @@
     `PW_TESTDATA` (a new helper; at least one must exist) is shown in fit view with
     `Source::Jpeg` in **both** modes, at the size of `pw_tiff::dimensions`, without an error.
 - **Done when:** `.\tools\check.ps1` is all OK; the owner runs `.\tools\check.ps1 -Ignored` with
-  `PW_TESTDATA` set and the new real-file test passes on his 9 TIFFs; `git diff --stat` shows only
+  `PW_TESTDATA` set and the new real-file test passes on the owner's 9 TIFFs; `git diff --stat` shows only
   the files above.

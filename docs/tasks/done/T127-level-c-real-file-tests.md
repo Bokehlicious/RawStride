@@ -36,7 +36,7 @@
      start and checks them unchanged at the end.
   3. **No personal data in the code.** Expected values that are the owner's (name, e-mail, phone,
      copyright text) are not written as literals: compare with what `ExifTool` itself reads from
-     the file, or only check that the property is present. Neutral values (`Exempelstad`, the
+     the file, or only check that the property is present. Neutral values (the city, the
      keywords, the PLUS URIs, `NA`) may be literals.
   4. **Reading** (`read_metadata`, default fallback), each file without error, and:
      - the two JPEGs: IIM read as UTF-8; Description, Creator, Keywords, City and Copyright Notice
