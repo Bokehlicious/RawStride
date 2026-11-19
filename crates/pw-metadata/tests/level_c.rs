@@ -580,9 +580,14 @@ fn the_two_jpegs_read_iim_as_utf8_in_agreement_with_xmp() {
             Some(&Value::List(vec![tag(&mut et, &file, "XMP-dc:Creator")])),
             "{name}"
         );
+        let city = tag(&mut et, &file, "XMP-photoshop:City");
+        assert!(
+            !city.is_empty() && city != "-",
+            "{name}: ExifTool read no XMP-photoshop:City: {city:?}"
+        );
         assert_eq!(
             value(&read, "photoshop:City"),
-            Some(&Value::Text("Exempelstad".to_string())),
+            Some(&Value::Text(city)),
             "{name}"
         );
         assert_eq!(
@@ -633,9 +638,15 @@ fn pm_jpg_reads_the_long_description_location_model_age_and_plus() {
             .find(|(field, _)| field == id)
             .map(|(_, value)| value)
     };
+    // One location (asserted above), so ExifTool's flattened tag is that location's City alone.
+    let city = tag(&mut et, &file, "XMP-iptcExt:LocationCreatedCity");
+    assert!(
+        !city.is_empty() && city != "-",
+        "ExifTool read no XMP-iptcExt:LocationCreatedCity: {city:?}"
+    );
     assert_eq!(
         field("Iptc4xmpExt:City"),
-        Some(&Value::Text("Exempelstad".to_string())),
+        Some(&Value::Text(city)),
         "{fields:?}"
     );
     assert_eq!(

@@ -1,4 +1,4 @@
-# T219. Private values out of the test code (public-release plan R7) — Open
+# T219. Private values out of the test code (public-release plan R7) — Done
 
 - **Why:** the read-through of the documents before the repository is made public (public-release
   plan R7, 2026-11-19; owner: "ja, enligt förslagen") found three private values from the owner's
@@ -50,3 +50,5 @@
 | Date | Status | Note |
 |---|---|---|
 | 2026-11-19 | Open | Added (public-release plan R7). Cold read: doable with the five files, every name and literal matches the code, `docs/test-inventory.md` needs no change. Changed after it: point 5 also refuses `-` (a missing tag) and says the Location Created comparison relies on the one-location assert; point 3 names the old paths; point 6 says Git Bash; the expected text in point 2 on one line; "Done when" includes this task's file |
+| 2026-11-19 | Ready for review | Points 1–6 done in the five files. `level_c.rs`: both City asserts compare with `tag` (`XMP-photoshop:City`, `XMP-iptcExt:LocationCreatedCity`) and first assert the text is neither empty nor `-`. Point 6 (Git Bash) finds nothing. `.\tools\check.ps1 -Ignored` with `PW_TESTDATA=D:\PhotoWorkflowData\RAW`: all OK, both `level_c` tests ok. `.\tools\check.ps1`: all OK, 1957 passed, 72 ignored; no clippy warnings (only LibRaw's build-script note) |
+| 2026-11-19 | Done | Reviewed: the diff matches points 1–6; the `level_c.rs` asserts still check the City (read from the file by ExifTool, refused if empty or `-`), nothing weakened. Point 6 finds nothing. Reviewer ran `.\tools\check.ps1 -Ignored` with `PW_TESTDATA=D:\PhotoWorkflowData\RAW`: all OK, both `level_c` tests ok, no clippy warnings. Test code only, no hand check needed. No leftovers. Public-release plan R7 row says T219 done |

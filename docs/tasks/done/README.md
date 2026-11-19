@@ -225,3 +225,4 @@ was when the task was done, so "this file", "below" and "the Log" in T1–T115 m
 | [T216](T216-remove-the-m2-scripts.md) | The one-off `tools/m2-*.cmd` scripts removed (public-release plan R5) |
 | [T217](T217-made-up-name-in-the-metadata-test-data.md) | A made-up name in `pw-metadata`'s test data (public-release plan R6) |
 | [T218](T218-rename-the-binary-to-rawstride.md) | The program file renamed from `pw-loupe.exe` to `rawstride.exe` (public-release plan R10) |
+| [T219](T219-private-values-out-of-test-code.md) | Private values out of the test code (public-release plan R7) |

@@ -729,10 +729,8 @@ mod tests {
     #[test]
     fn the_window_title_names_the_profile() {
         assert_eq!(
-            window_title(&ProfileSource::File(
-                "CX240(…)08CAL (DP).icc".to_string()
-            )),
-            "RawStride  ·  Display profile: CX240(…)08CAL (DP).icc"
+            window_title(&ProfileSource::File("Monitor 1.icc".to_string())),
+            "RawStride  ·  Display profile: Monitor 1.icc"
         );
         assert_eq!(
             window_title(&ProfileSource::Missing),

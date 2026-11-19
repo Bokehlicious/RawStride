@@ -86,7 +86,6 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status |
 |---|---|---|
-| [T219](T219-private-values-out-of-test-code.md) | Private values out of the test code (public-release plan R7) | Open |
 
 ## Writing a task (owner and reviewer)
 
