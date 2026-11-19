@@ -16,6 +16,7 @@
 - **Task agents never commit.** They leave their changes uncommitted for review (`docs/tasks/README.md`, rule 8).
 - **The reviewer** may create a local commit on `feature/gui-workspace` only after the owner has approved the change and `.\tools\check.ps1` (§5) is all OK.
 - Staged changes (`git diff --staged`) are touched only when the owner says so for the task at hand. Otherwise they are the owner's work, like any other uncommitted or untracked change outside the task: leave them as they are.
+- **No personal data in files** (owner, 2026-11-19): never write a real user folder (write `%USERPROFILE%`, `%LOCALAPPDATA%` or `C:\Users\…`, never a session's own scratchpad path) or a real e-mail address (test data uses `example.com`) into a file in the repository.
 
 ## 3. Rust Code Quality
 - **Never crash:** non-test code returns errors instead of panicking.
