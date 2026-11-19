@@ -33,6 +33,11 @@
     NewsCodes (§11).
   - **Amended by the owner (2026-11-18, revision 21):** Image Editor ↔ Contributor (§6.6); a list
     whose items have qualifiers is not written (§8).
+  - **Amended by the owner (2026-11-19, revision 26)**, from the test with DxO PhotoLab 10.3
+    (ADR 0029 step P0): a written file gets a new modification time (§9.4, Q14); a flat
+    `lr:hierarchicalSubject` is kept equal to the keywords (§8, Q15); existing Exif and XMP
+    rating percentages are kept equal to the rating (§6.1, §6.3, Q16). One task carries all
+    three (§18).
 - Date: 2026-11-04 (revision 1: storage, IIM policy and the role of XMP; revision 2: all owner
   decisions of 2026-11-04, MWG 2.0, the full IPTC specification and the Mapping Guidelines;
   revision 3: Q4 answered by the owner on 2026-11-08; revision 4: Q5 answered by the owner on
@@ -307,6 +312,7 @@ Urgency (2:10), Category (2:15) and Supplemental Categories (2:20):
 | Digital Image GUID | ImageUniqueID 0xA420 | **Exif → IPTC only**; the IPTC value is then not changed | [IPTC-MG Exif Note on Digital Image GUID] |
 | Location Created | GPS tags 1–6 | Exif → IPTC, only when recorded by the camera; the coordinates only (§6.7) | [IPTC-MG]; [MWG §5.8.5] |
 | Location Shown | — | **never mapped from GPS** | [IPTC-MG Exif Note on Location Shown] |
+| Rating (`xmp:Rating`; not an IPTC property, ADR 0004) | Rating 0x4746 and RatingPercent 0x4749 (Microsoft, IFD0); also a non-standard `xmp:RatingPercent` | **XMP → Exif only**, existing fields only (§6.3, Q16, owner 2026-11-19, revision 26) | [Product]; [MWG §4.2.3.1] |
 | Image Region | — | **never mapped from SubjectArea** | [IPTC-MG Exif Note on Image Region] |
 
 ### 6.2 Reading: precedence
@@ -344,6 +350,12 @@ Urgency (2:10), Category (2:15) and Supplemental Categories (2:20):
   written by a rotation (ADR 0024, owner 2026-11-17).
 - **DateTimeOriginal is never written** (§7), except by the manual correction of ADR 0020
   (owner, 2026-11-17).
+- **Rating percentages (Q16, owner 2026-11-19, revision 26):** when RawStride writes a rating, existing
+  Exif Rating and RatingPercent and an existing `xmp:RatingPercent` are written to match: stars
+  0–5 as Rating 0–5 and RatingPercent 0, 1, 25, 50, 75, 99; a reject (−1) removes the three, since
+  they have no reject value. None of them is created, and none is read as a source: `xmp:Rating`
+  stays the only rating RawStride reads. Reason: DxO PhotoLab adds all three when it writes a DNG
+  (ADR 0029 P0, 2026-11-19), and without this they would keep an old rating beside a new one.
 
 ### 6.4 Manufacturer RAW (ARW, RW2, …)
 
@@ -450,7 +462,7 @@ Urgency (2:10), Category (2:15) and Supplemental Categories (2:20):
 
 | Rule | Basis |
 |---|---|
-| **Hierarchical keywords** (`mwg-kw:Keywords`, `lr:hierarchicalSubject`) are kept **unchanged**, including all nested information, even though RawStride cannot edit them yet | [MWG §5.10]: "MUST preserve all nested information"; [Product] for `lr:` |
+| **Hierarchical keywords** (`mwg-kw:Keywords`, `lr:hierarchicalSubject`) are kept **unchanged**, including all nested information, even though RawStride cannot edit them yet. **Exception (Q15, owner 2026-11-19, revision 26):** an `lr:hierarchicalSubject` whose every entry is flat (no `\|`) is written equal to the keywords (`dc:subject`) whenever RawStride writes the keywords; one entry with a `\|` keeps the whole property unchanged as before. Reason: DxO PhotoLab writes the keywords into `lr:hierarchicalSubject` as flat entries and reads them back from there, so a keyword renamed in RawStride came back (ADR 0029 P0, 2026-11-19) | [MWG §5.10]: "MUST preserve all nested information" (a flat entry has none); [Product] for `lr:` |
 | **Keywords may be phrases** and are never split at spaces | [IPTC §7.18] |
 | Keyword lists are rewritten as a whole in IIM; XMP qualifiers on keywords are kept | [MWG §5.1] |
 | **A list with qualifiers is not written** (owner, 2026-11-18): when an item of a list property (`dc:subject` and every other XMP list RawStride writes as a whole) in the primary XMP has a qualifier other than `xml:lang`, RawStride shows the list as usual with a notice, and never writes that property to XMP; a change to it is left out of the write with a write notice, and the other properties are written. Reason: ExifTool 13.59 cannot change or remove a qualified item (rewriting the list keeps it and adds the text again as a plain item; `-=` and clearing leave it; checked 2026-11-18). Editing such a list with its qualifiers kept would need RawStride to edit the XMP packet itself (`docs/tasks/backlog.md`) | [MWG §5.1] "SHOULD be preserved"; [Product] |
@@ -528,7 +540,13 @@ writes do not do this. If the restart fails, the write fails and ExifTool is mar
 - **`ReplaceFileW`** (same volume) replaces the original with the verified copy and keeps the
   original as a backup `<name>.pwbak-<random>` in the same step. It also keeps the original's
   creation time, attributes, ACL and alternate data streams.
-- **The modification time** is set back to the original's (as `-P` does today; ADR 0004).
+- **The modification time** is the time of the write, for a sidecar and for an image written in
+  place alike (Q14, owner 2026-11-19; revision 26). It is no longer set back to the original's,
+  as revisions 1–25 and ADR 0004 had it. Reason: other programs, backup tools and the catalog of
+  ADR 0030 find a changed file by its modification time (and size). With the old time, DxO
+  PhotoLab with metadata synchronisation on ignored RawStride's new keywords in a sidecar and in a
+  DNG (ADR 0029 P0, 2026-11-19), and an incremental backup could miss a change that kept the
+  size. The creation time, attributes, ACL and alternate data streams are still kept.
 - **On success:** the backup is deleted after a final read of the new file (size, `ImageDataHash`).
 - **If the final read fails** **(owner 2026-11-12, T86)**: the backup is kept, the journal entry is
   ended (so the recovery at the next start does not delete the backup), and the error names the
@@ -738,6 +756,9 @@ silently. All other deviations concern SHOULD-level recommendations; each is mar
 | ~~**Q11**~~ | Test files | **Resolved 2026-11-11:** the level-C samples of §12, provided by the owner before the implementation is tested. **Changed 2026-11-14:** Photo Mechanic files, a Xiaomi DNG and mixed Photo Mechanic / Lightroom Classic archive files; no Lightroom-only files, no IIM-only JPEG (§12) |
 | ~~**Q12**~~ | A manual "correct camera time" feature (MWG: such corrections SHOULD be exported to Exif) | **Resolved 2026-11-11:** Out of scope now; would be the only way DateTimeOriginal ever changes, and only on the user's explicit command (§7). **Taken up 2026-11-17 (owner): ADR 0020** |
 | ~~**Q13**~~ | "New IIM only when backward compatibility requires it": how is that detected besides the setting? | **Resolved 2026-11-11:** Only the setting (and possibly a future export profile); no automatic detection (§5.2) |
+| ~~**Q14**~~ | **(Revision 26.)** The modification time of a written file: set back to the original's, or the time of the write? | **Decided by the owner 2026-11-19:** the time of the write, for every file (§9.4) |
+| ~~**Q15**~~ | **(Revision 26.)** A flat `lr:hierarchicalSubject` beside the keywords | **Decided by the owner 2026-11-19:** written equal to `dc:subject` when every entry is flat; unchanged when one entry has a `\|` (§8) |
+| ~~**Q16**~~ | **(Revision 26.)** Exif Rating/RatingPercent and `xmp:RatingPercent` that another program added | **Decided by the owner 2026-11-19:** existing ones written to match the rating, a reject removes them, never created or read (§6.3) |
 
 ## 15. Consequences
 
@@ -845,6 +866,8 @@ listed under the table (§17.1).
 - Image Region (ADR 0017 U11b). The other lists of structures and editing several images are done
   (ADR 0017 U11, U12; T136–T143, T125, T126, T179, T180).
 - The Tauri app keeps its in-place write (D7) until it is retired (GR8).
+- Revision 26 (§9.4 Q14, §8 Q15, §6.3 Q16): one task (ADR 0029 step P0b); until it is
+  done, a sidecar or file written by RawStride keeps its old modification time.
 
 ## Revision history
 
@@ -875,3 +898,4 @@ listed under the table (§17.1).
 | 23 | 2026-11-18 | §16 point 7 done (R4: 24 Scene codes; 58 Genre codes, 7 retired); §11 the Genre CV ID may also use `https://` and lack the trailing `/` (cold read of T195); §6.7 the tolerance of 0.0001°, the altitude not compared, any Exif GPS counts as the camera's (cold read of T196); §18 names T195 and T196 |
 | 24 | 2026-11-19 | Owner decision (backlog sorted after T194): the notice that no new IIM checksum was written names a reason that holds both for an unresolved conflict (§5.2 Q1) and for a held list with qualifiers (§8), "No new IIM checksum was written, because IIM and XMP still differ" (T199); §18 names T198 and T199 |
 | 25 | 2026-11-19 | §6.7 written in from T196 (no new rule): only the first entry of Location Created is looked at; a first entry without coordinates gets them and keeps its origin (owner, 2026-11-18), its altitude only when it has none; a refused Location Created is not replaced (reviewer's choice); unusable Exif GPS gives a notice; §18 marks T195 and T196 done |
+| 26 | 2026-11-19 | From the test with DxO PhotoLab 10.3 (ADR 0029 step P0, test copies in `D:\PhotoWorkflowData\P0-dxo`): §9.4 a written file gets the time of the write as its modification time, sidecars and in-place writes alike (Q14; replaces the old time kept since ADR 0004); §8 a flat `lr:hierarchicalSubject` written equal to the keywords (Q15), §6.1 and §6.3 existing Exif Rating/RatingPercent and `xmp:RatingPercent` written to match the rating (Q16); all three decided by the owner; §14 Q14–Q16; §18 one task |

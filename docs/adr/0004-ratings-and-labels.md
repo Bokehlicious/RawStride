@@ -3,6 +3,8 @@
 - Status: accepted (choices made by the project owner, 2026-11-03)
 - Date: 2026-11-03
 - 2026-11-10: implemented in the egui program (ADR 0013).
+- 2026-11-19: the modification date in point 3 is no longer kept; a written file gets the time of
+  the write (ADR 0007 §9.4, Q14, revision 26).
 
 ## Context
 

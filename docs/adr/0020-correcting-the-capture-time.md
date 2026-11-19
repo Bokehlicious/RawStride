@@ -71,6 +71,12 @@
 - For a manufacturer RAW, a difference between that XMP value and the embedded DateTimeOriginal is
   **not a conflict**: it is a correction. Info shows the time with "corrected", and the original
   time in the tooltip.
+- **Written by another program (seen 2026-11-19, ADR 0029 P0):** DxO PhotoLab 10.3 writes
+  `exif:DateTimeOriginal` into XMP whenever it writes metadata, with the camera's own time: in an
+  ARW sidecar with sub-seconds and zone (`2026-10-27T14:28:37.252+02:00`), in a DNG without them.
+  Such a value must not show as "corrected": an XMP time equal to the embedded one in date and
+  local time (to the second) is no correction, whatever sub-seconds or zone it adds. To be
+  handled in C2.
 
 ### 2.7 Safety
 
