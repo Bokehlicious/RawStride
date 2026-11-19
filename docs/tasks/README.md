@@ -86,11 +86,13 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status |
 |---|---|---|
+| [T213](T213-ignore-local-tool-folders.md) | Local tool folders ignored by `.gitignore` | Open |
+| [T214](T214-repository-address-and-the-name-in-vcpkg-json.md) | The repository's address in `Cargo.toml` and RawStride in `vcpkg.json` | Open |
 
 ## Writing a task (owner and reviewer)
 
-- **Number:** the next free number after the highest in this folder and `done/` (T213 next).
-- **File:** `docs/tasks/T213-<a-few-words>.md`; three digits, lower case, words joined by `-`.
+- **Number:** the next free number after the highest in this folder and `done/` (T215 next).
+- **File:** `docs/tasks/T215-<a-few-words>.md`; three digits, lower case, words joined by `-`.
 - **Index:** add a row to "Open tasks" above and keep its status in step with the file's heading.
 - **Size (owner, 2026-11-15, after T142):** one task is one layer (a C++ shim or a core crate, or
   the shell in `pw-loupe`), about eight files at most, and gives one result the owner can check by
