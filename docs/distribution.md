@@ -8,6 +8,12 @@ and `tools\verify-dist.ps1`.
 > child processes are no longer needed. This file is updated then. The analysis is in `docs/analyses/2026-11-04-m2-pipeline-steps.md`
 (step 5).
 
+> **2026-11-19: history.** The Tauri app is retired (owner, ADR 0009 §7; T207), and the scripts
+> named here (`package-dist.ps1`, `verify-dist.ps1`, `m2-step5.cmd`) are removed (T208). This file
+> records how that app's folder was built and verified; the findings on runtime DLLs, ExifTool,
+> licence notices, signing and a clean PC are the starting point for RawStride's own distribution
+> folder, which is still to be made (ADR 0002 §4).
+
 ## What the program folder contains
 
 `tools\package-dist.ps1` builds `dist\PhotoWorkflow\`. Copying this folder is the whole

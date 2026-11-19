@@ -68,7 +68,8 @@
 
 ## 4. Still open
 
-- [ ] A RawStride distribution folder (today `tools/package-dist.ps1` packs only the Tauri app):
+- [ ] A RawStride distribution folder (there is none today; `tools/package-dist.ps1`, which packed only
+  the Tauri app, was removed with it on 2026-11-19, T208; `docs/distribution.md` keeps its findings):
   the exe, the runtime DLLs, ExifTool (§2.5), `LICENSE` and the notices.
 - [ ] `THIRD-PARTY-NOTICES.txt` before the first release: the Rust packages (from `cargo
   metadata`), LibRaw, LittleCMS, JasPer, libjpeg-turbo, zlib, the fonts, the MSVC runtime, and

@@ -270,7 +270,7 @@ well VRAM can be controlled.
 | `src-tauri` `pw://` routes | kept for thumbnails and the fallback; the main loupe path changes |
 | `ui/web/raw.js`, `rawtiles.js` (tile grid, badge, warnings, sequence guards) | **B2:** adapted to textures. **A:** the logic moves to Rust; badges and chips stay in HTML |
 | `app.js` loupe zoom/pan (`fitToWindow` on every change) | **rebuilt** around the core's view model (V6) |
-| Error handling M2, `bench`, `verify-dist.ps1`, `latency.ps1` | kept; `latency.ps1` measures the acceptance tests |
+| Error handling M2, `bench`, `verify-dist.ps1`, `latency.ps1` | kept; `latency.ps1` measures the acceptance tests. *2026-11-19: `verify-dist.ps1` removed with the retired Tauri app (T208).* |
 
 - **G4 (2026-11-04):** the automatic step "embedded preview first, RAW swapped in when ready" (M1/M2,
   `raw.js`) is not carried into the new viewer. Its parts are reused for the explicit RAW and JPEG modes:
