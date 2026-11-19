@@ -380,7 +380,8 @@ by the owner the same day; step E4 in `plans/adr-0018-0025-steps.md`, before ADR
   `From<Error> for WriteError` still maps them. They are public, so no warning; remove them when
   `Error` is next changed, or keep them.
 - **Leftovers of T221** (the right-click menu on images, ADR 0019 E4; review, 2026-11-19; accepted
-  when T221 was done, to be sorted after the owner's hand check of E4):
+  when T221 was done; **kept** at the sort after ADR 0019 E4, 2026-11-19 (owner): none was seen in
+  the hand check of E4, so each becomes a task only if it is noticed in use):
   - *Keys while the menu is open:* the keys keep acting while the right-click menu is open, as
     with the menu bar's menus: Escape closes it and also clears the marking, the arrows move the
     current image under it.
