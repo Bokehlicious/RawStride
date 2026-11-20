@@ -1,4 +1,4 @@
-# T232. ADR 0024 O1c: the shell gives the read orientations to the view and the thumbnails (pw-loupe) — Blocked: waits for T231
+# T232. ADR 0024 O1c: the shell gives the read orientations to the view and the thumbnails (pw-loupe) — Open
 
 - **Why:** ADR 0024 §2.4 (O-Q6): the XMP orientation read in the folder's batch call (T230) is
   given to the view core and the thumbnails (T231). Until it is read, the embedded orientation is
@@ -48,6 +48,9 @@
   5. **The thumbnails are asked for with it** (`main.rs`, both `ThumbnailRequest { … }`, which
      T231 gave `orientation: None`: the contact sheet's and the filmstrip's):
      `orientation: self.metadata.orientation(<the resolved path>)`.
+     The values come from T230's read (only `1..=8`), so no out-of-range value reaches the
+     worker; that `Some(<the file's own value>)` and `None` are cached as two thumbnails is an
+     accepted cost (T231's review).
   6. **A late thumbnail with an old value is dropped** (`main.rs`, `poll_thumbnails`): an event
      whose `orientation` (T231) differs from `self.metadata.orientation(<its resolved path>)` is
      not given to `thumb_grid.apply` and makes no texture; the request made after `forget`
@@ -86,3 +89,4 @@
 | 2026-11-20 | Blocked | Added (ADR 0024 O1, chain T230 → T231 → T232); waits for T231 |
 | 2026-11-20 | Blocked | Cold read: doable in the named files once T231's cores keep orientations per path across `open_folder`/`set_files` (T231 point 3 says so). Added: the compare's `second_core` also told (point 4); resolved paths for the active-tab check and the requests; `ThumbGrid::forget` returns `bool`, resets `Requested` too, and the old texture stays until the new one arrives; the metadata tests built inline as today. Known: a moved file has no orientation until the next read |
 | 2026-11-20 | Blocked | Chain review (notes in T230's log): `prune` pushes `(path, None)` (point 1), late thumbnails made with an old value dropped (point 6, with T231's event field), the double decode at folder open named as an accepted cost; O3's needs recorded in the plan's O3 row |
+| 2026-11-20 | Open | T231 done (committed); this task can start. Point 5 notes, from T231's review, that the values are only `1..=8` and the double cache of the file's own value and `None` is accepted |

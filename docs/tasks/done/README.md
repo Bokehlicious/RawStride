@@ -237,3 +237,4 @@ was when the task was done, so "this file", "below" and "the Log" in T1–T115 m
 | [T228](T228-portable-zip.md) | ADR 0031 RL4: the portable zip, made by tools/package-dist.ps1, and docs/distribution.md rewritten |
 | [T229](T229-release-workflow.md) | ADR 0031 RL6: CHANGELOG.md, tools/release-build.ps1 and the release workflow on v* tags |
 | [T230](T230-read-xmp-orientation.md) | ADR 0024 O1a: the batch read also reads `XMP-tiff:Orientation` (pw-metadata) |
+| [T231](T231-orientation-per-file.md) | ADR 0024 O1b: the view core and the thumbnails take an orientation per file |

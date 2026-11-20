@@ -139,15 +139,20 @@ const TIFF_LIMIT: usize = 4 << 30;
 /// from its image data, converted from its embedded profile and reduced to the cell with a box
 /// filter; its embedded previews are not used (ADR 0015 §4.1, Q7). With destination sRGB, sRGB
 /// sources are left unchanged (F3).
+///
+/// `orientation` is used instead of the file's own when given (ADR 0024 §2.4: an XMP orientation
+/// before the embedded one); a value outside `1..=8` is treated as none.
 pub fn thumbnail(
     path: &Path,
     cell: u32,
+    orientation: Option<u16>,
     decoder: &mut Decoder,
     destination: &Profile,
     cache: &TransformCache,
 ) -> Result<Rgb8, ThumbError> {
+    let orientation = orientation.filter(|o| (1..=8).contains(o));
     if pw_raw::is_tiff_file(path) {
-        return tiff_thumbnail(path, cell, destination, cache);
+        return tiff_thumbnail(path, cell, orientation, destination, cache);
     }
     let info = pw_raw::inspect(path).map_err(|error| ThumbError::Unreadable(error.to_string()))?;
     let bytes = if info.format == Some(Format::Jpeg) {
@@ -178,15 +183,16 @@ pub fn thumbnail(
         .or_else(|_| cache.get(&Profile::srgb(), destination))
         .and_then(|transform| transform.convert_rgb8(&mut image.data))
         .map_err(|error| ThumbError::Unreadable(error.to_string()))?;
-    Ok(orient(image, info.orientation))
+    Ok(orient(image, orientation.unwrap_or(info.orientation)))
 }
 
 /// Decodes a TIFF with `pw-tiff` under `TIFF_LIMIT` and converts it to `destination`, reduces it
-/// so the long edge is at most `cell` (never upscales) and applies the orientation of
-/// `pw_raw::inspect`, or none when inspect fails (for example a BigTIFF).
+/// so the long edge is at most `cell` (never upscales) and applies `orientation` when given, else
+/// the orientation of `pw_raw::inspect`, or none when inspect fails (for example a BigTIFF).
 fn tiff_thumbnail(
     path: &Path,
     cell: u32,
+    orientation: Option<u16>,
     destination: &Profile,
     cache: &TransformCache,
 ) -> Result<Rgb8, ThumbError> {
@@ -201,7 +207,8 @@ fn tiff_thumbnail(
         height: small.height,
         data: small.data,
     };
-    let orientation = pw_raw::inspect(path).map_or(1, |info| info.orientation);
+    let orientation =
+        orientation.unwrap_or_else(|| pw_raw::inspect(path).map_or(1, |info| info.orientation));
     Ok(orient(image, orientation))
 }
 
@@ -367,6 +374,7 @@ mod tests {
             thumbnail(
                 &missing,
                 200,
+                None,
                 &mut decoder,
                 &Profile::srgb(),
                 &TransformCache::default()
@@ -379,6 +387,7 @@ mod tests {
             thumbnail(
                 invalid.path(),
                 200,
+                None,
                 &mut decoder,
                 &Profile::srgb(),
                 &TransformCache::default()
@@ -395,12 +404,49 @@ mod tests {
         let image = thumbnail(
             file.path(),
             200,
+            None,
             &mut decoder,
             &Profile::srgb(),
             &TransformCache::default(),
         )
         .unwrap_or_else(|error| panic!("thumbnail failed: {error}"));
         assert_eq!((image.width, image.height), (16, 8));
+    }
+
+    // ---------- an orientation given by the caller (ADR 0024 §2.4) ----------
+
+    fn oriented_jpeg_thumbnail(orientation: Option<u16>) -> Rgb8 {
+        let file = TempFile::new("jpg", jpeg_fixture::SMALL);
+        let mut decoder = Decoder::new().unwrap_or_else(|error| panic!("{error}"));
+        thumbnail(
+            file.path(),
+            200,
+            orientation,
+            &mut decoder,
+            &Profile::srgb(),
+            &TransformCache::default(),
+        )
+        .unwrap_or_else(|error| panic!("thumbnail failed: {error}"))
+    }
+
+    #[test]
+    fn a_given_orientation_is_used_instead_of_the_files_own() {
+        let own = oriented_jpeg_thumbnail(None);
+        assert_eq!((own.width, own.height), (16, 8));
+        let turned = oriented_jpeg_thumbnail(Some(6));
+        assert_eq!((turned.width, turned.height), (8, 16));
+    }
+
+    #[test]
+    fn a_given_orientation_outside_1_to_8_acts_as_none() {
+        assert_eq!(
+            oriented_jpeg_thumbnail(Some(9)),
+            oriented_jpeg_thumbnail(None)
+        );
+        assert_eq!(
+            oriented_jpeg_thumbnail(Some(0)),
+            oriented_jpeg_thumbnail(None)
+        );
     }
 
     // ---------- colour conversion to the monitor profile (ADR 0016 C4) ----------
@@ -411,6 +457,7 @@ mod tests {
         thumbnail(
             file.path(),
             200,
+            None,
             &mut decoder,
             destination,
             &TransformCache::default(),
@@ -469,6 +516,7 @@ mod tests {
         let image = thumbnail(
             &path,
             200,
+            None,
             &mut decoder,
             &Profile::srgb(),
             &TransformCache::default(),
@@ -486,6 +534,7 @@ mod tests {
         let image = thumbnail(
             &path,
             200,
+            None,
             &mut decoder,
             &Profile::srgb(),
             &TransformCache::default(),
@@ -503,6 +552,7 @@ mod tests {
         let image = thumbnail(
             &path,
             200,
+            None,
             &mut decoder,
             &Profile::srgb(),
             &TransformCache::default(),
@@ -525,6 +575,7 @@ mod tests {
         let image = thumbnail(
             &path,
             200,
+            None,
             &mut decoder,
             &Profile::srgb(),
             &TransformCache::default(),
@@ -598,10 +649,19 @@ mod tests {
         }
 
         fn thumb(path: &Path, cell: u32) -> Result<Rgb8, ThumbError> {
+            thumb_oriented(path, cell, None)
+        }
+
+        fn thumb_oriented(
+            path: &Path,
+            cell: u32,
+            orientation: Option<u16>,
+        ) -> Result<Rgb8, ThumbError> {
             let mut decoder = Decoder::new().unwrap_or_else(|error| panic!("{error}"));
             thumbnail(
                 path,
                 cell,
+                orientation,
                 &mut decoder,
                 &Profile::srgb(),
                 &TransformCache::default(),
@@ -642,6 +702,7 @@ mod tests {
             let image = thumbnail(
                 &path,
                 100,
+                None,
                 &mut decoder,
                 &Profile::srgb(),
                 &TransformCache::default(),
@@ -709,6 +770,17 @@ mod tests {
             );
             let image = thumb(&path, 100).unwrap_or_else(|error| panic!("{error}"));
             assert_eq!((image.width, image.height), (50, 100));
+        }
+
+        #[test]
+        fn a_given_orientation_1_leaves_a_tiff_with_orientation_6_unturned() {
+            let path = temp_file(
+                "rgb-400x200-orientation-6-given-1.tif",
+                &rgb_tiff(400, 200, &uniform(400, 200), Some(6), None),
+            );
+            let image =
+                thumb_oriented(&path, 100, Some(1)).unwrap_or_else(|error| panic!("{error}"));
+            assert_eq!((image.width, image.height), (100, 50));
         }
 
         /// A 2×2 8-bit palette TIFF (PhotometricInterpretation 3 with a ColorMap), built by hand.

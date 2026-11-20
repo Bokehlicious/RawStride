@@ -45,6 +45,50 @@ impl ImageSize {
     }
 }
 
+/// LibRaw's flip code for an EXIF/TIFF orientation (mirrored orientations are shown unmirrored,
+/// ADR 0024 §2.3).
+pub fn flip_of_orientation(orientation: u16) -> u8 {
+    match orientation {
+        3 => 3,
+        6 => 6,
+        8 => 5,
+        _ => 0,
+    }
+}
+
+/// The Exif orientation after the image is turned 90° clockwise (`clockwise`) or anticlockwise
+/// (ADR 0024 §2.3). A mirrored value stays mirrored. A value outside `1..=8` is taken as 1.
+pub fn turned(orientation: u16, clockwise: bool) -> u16 {
+    let o = if (1..=8).contains(&orientation) {
+        orientation
+    } else {
+        1
+    };
+    if clockwise {
+        match o {
+            1 => 6,
+            6 => 3,
+            3 => 8,
+            8 => 1,
+            2 => 7,
+            7 => 4,
+            4 => 5,
+            _ => 2, // 5
+        }
+    } else {
+        match o {
+            1 => 8,
+            8 => 3,
+            3 => 6,
+            6 => 1,
+            2 => 5,
+            5 => 4,
+            4 => 7,
+            _ => 2, // 7
+        }
+    }
+}
+
 /// A rectangle of whole pixels.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Rect {
@@ -455,5 +499,57 @@ mod tests {
             pan_centre(FLAT, VIEW, fit_scale(FLAT, VIEW), [0.3, 0.3], [50.0, 50.0]),
             [0.5, 0.5]
         );
+    }
+
+    #[test]
+    fn turned_follows_the_exif_table_both_ways() {
+        let cw = [
+            (1, 6),
+            (6, 3),
+            (3, 8),
+            (8, 1),
+            (2, 7),
+            (7, 4),
+            (4, 5),
+            (5, 2),
+        ];
+        for (from, to) in cw {
+            assert_eq!(turned(from, true), to, "clockwise from {from}");
+            assert_eq!(turned(to, false), from, "anticlockwise from {to}");
+        }
+        let acw = [
+            (1, 8),
+            (8, 3),
+            (3, 6),
+            (6, 1),
+            (2, 5),
+            (5, 4),
+            (4, 7),
+            (7, 2),
+        ];
+        for (from, to) in acw {
+            assert_eq!(turned(from, false), to, "anticlockwise from {from}");
+        }
+    }
+
+    #[test]
+    fn turned_four_times_or_back_gives_the_start() {
+        for o in 1..=8u16 {
+            let mut t = o;
+            for _ in 0..4 {
+                t = turned(t, true);
+            }
+            assert_eq!(t, o, "four clockwise turns from {o}");
+            assert_eq!(turned(turned(o, true), false), o, "there and back from {o}");
+            assert_eq!(turned(turned(o, false), true), o, "back and there from {o}");
+        }
+    }
+
+    #[test]
+    fn turned_takes_values_outside_the_range_as_1() {
+        assert_eq!(turned(0, true), 6);
+        assert_eq!(turned(9, true), 6);
+        assert_eq!(turned(0, false), 8);
+        assert_eq!(turned(9, false), 8);
     }
 }

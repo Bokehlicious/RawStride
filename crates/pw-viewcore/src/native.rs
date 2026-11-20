@@ -137,15 +137,9 @@ pub struct JpegSession {
     profile_unusable: bool,
 }
 
-/// LibRaw's flip code for an EXIF/TIFF orientation (mirrored orientations are shown unmirrored).
-pub fn flip_of_orientation(orientation: u16) -> u8 {
-    match orientation {
-        3 => 3,
-        6 => 6,
-        8 => 5,
-        _ => 0,
-    }
-}
+/// LibRaw's flip code for an EXIF/TIFF orientation; moved to `geometry` (ADR 0024 §2.3), kept
+/// here for its callers.
+pub use crate::geometry::flip_of_orientation;
 
 fn raw_error(e: pw_libraw::Error) -> DecodeError {
     let message = e.0;

@@ -17,8 +17,14 @@ const VISIBLE_MARGIN: usize = 32;
 
 /// A thumbnail source owned by one worker thread.
 pub trait ThumbSource: Send {
-    /// Builds a thumbnail from a path on its owning background thread.
-    fn make(&mut self, path: &Path, cell: u32) -> Result<Rgb8, ThumbError>;
+    /// Builds a thumbnail from a path on its owning background thread. `orientation` is used
+    /// instead of the file's own when given (ADR 0024 §2.4).
+    fn make(
+        &mut self,
+        path: &Path,
+        cell: u32,
+        orientation: Option<u16>,
+    ) -> Result<Rgb8, ThumbError>;
 }
 
 /// Thumbnails from files, converted to `destination` (ADR 0016 §4.1 "Thumbnails").
@@ -40,9 +46,21 @@ impl FileThumbSource {
 }
 
 impl ThumbSource for FileThumbSource {
-    fn make(&mut self, path: &Path, cell: u32) -> Result<Rgb8, ThumbError> {
+    fn make(
+        &mut self,
+        path: &Path,
+        cell: u32,
+        orientation: Option<u16>,
+    ) -> Result<Rgb8, ThumbError> {
         match &mut self.decoder {
-            Ok(decoder) => thumbnail(path, cell, decoder, &self.destination, &self.cache),
+            Ok(decoder) => thumbnail(
+                path,
+                cell,
+                orientation,
+                decoder,
+                &self.destination,
+                &self.cache,
+            ),
             Err(error) => Err(ThumbError::Unreadable(error.clone())),
         }
     }
@@ -59,6 +77,10 @@ pub struct ThumbnailRequest {
     pub path: PathBuf,
     /// The requested cell size in pixels.
     pub cell: u32,
+    /// The orientation to use instead of the file's own (ADR 0024 §2.4: an XMP orientation before
+    /// the embedded one); `None` uses the file's own. A request with another orientation is a job
+    /// of its own.
+    pub orientation: Option<u16>,
 }
 
 /// A completed thumbnail job, including failures for placeholder display.
@@ -70,6 +92,9 @@ pub struct ThumbnailEvent {
     pub index: usize,
     /// The image path.
     pub path: PathBuf,
+    /// The orientation the thumbnail was made with (the request's, also for a cache hit), so a
+    /// late result made with an old value can be dropped.
+    pub orientation: Option<u16>,
     /// The decoded thumbnail or its extraction error.
     pub result: Result<Rgb8, ThumbError>,
 }
@@ -78,6 +103,19 @@ pub struct ThumbnailEvent {
 struct CacheKey {
     path: PathBuf,
     cell: u32,
+    orientation: Option<u16>,
+}
+
+/// What two requests are compared by: generation, index, cell and orientation.
+type RequestKey = (u64, usize, u32, Option<u16>);
+
+fn request_key(request: &ThumbnailRequest) -> RequestKey {
+    (
+        request.generation,
+        request.index,
+        request.cell,
+        request.orientation,
+    )
 }
 
 struct CacheEntry {
@@ -89,7 +127,7 @@ struct State {
     generation: u64,
     visible: Option<Range<usize>>,
     queue: Vec<QueuedRequest>,
-    in_flight: HashSet<(u64, usize, u32)>,
+    in_flight: HashSet<RequestKey>,
     next_sequence: u64,
     paused: bool,
     stopped: bool,
@@ -232,15 +270,12 @@ impl ThumbWorker {
             if is_far_from_visible(state.visible.as_ref(), request.index) {
                 return;
             }
-            let request_key = (request.generation, request.index, request.cell);
-            if state.in_flight.contains(&request_key)
-                || state.queue.iter().any(|queued| {
-                    (
-                        queued.request.generation,
-                        queued.request.index,
-                        queued.request.cell,
-                    ) == request_key
-                })
+            let key_of_request = request_key(&request);
+            if state.in_flight.contains(&key_of_request)
+                || state
+                    .queue
+                    .iter()
+                    .any(|queued| request_key(&queued.request) == key_of_request)
             {
                 return;
             }
@@ -248,6 +283,7 @@ impl ThumbWorker {
             let key = CacheKey {
                 path: request.path.clone(),
                 cell: request.cell,
+                orientation: request.orientation,
             };
             if state.cache.contains_key(&key) {
                 state.cache_clock = state.cache_clock.saturating_add(1);
@@ -260,6 +296,7 @@ impl ThumbWorker {
                     generation: request.generation,
                     index: request.index,
                     path: request.path.clone(),
+                    orientation: request.orientation,
                     result: Ok(image),
                 })
             } else {
@@ -402,11 +439,7 @@ fn run_worker(shared: Arc<Shared>) {
                     if queued.request.generation == state.generation
                         && !is_far_from_visible(state.visible.as_ref(), queued.request.index)
                     {
-                        state.in_flight.insert((
-                            queued.request.generation,
-                            queued.request.index,
-                            queued.request.cell,
-                        ));
+                        state.in_flight.insert(request_key(&queued.request));
                         break queued.request;
                     }
                     continue;
@@ -418,11 +451,9 @@ fn run_worker(shared: Arc<Shared>) {
             }
         };
 
-        let result = source.make(&request.path, request.cell);
+        let result = source.make(&request.path, request.cell, request.orientation);
         let mut state = lock_state(&shared);
-        state
-            .in_flight
-            .remove(&(request.generation, request.index, request.cell));
+        state.in_flight.remove(&request_key(&request));
         if !state.stopped
             && request.generation == state.generation
             && !is_far_from_visible(state.visible.as_ref(), request.index)
@@ -433,6 +464,7 @@ fn run_worker(shared: Arc<Shared>) {
                     CacheKey {
                         path: request.path.clone(),
                         cell: request.cell,
+                        orientation: request.orientation,
                     },
                     image.clone(),
                 );
@@ -441,6 +473,7 @@ fn run_worker(shared: Arc<Shared>) {
                 generation: request.generation,
                 index: request.index,
                 path: request.path,
+                orientation: request.orientation,
                 result,
             });
         }
@@ -490,6 +523,8 @@ mod tests {
     #[derive(Default)]
     struct FakeState {
         calls: Vec<PathBuf>,
+        /// The orientation of each call, in the order of `calls`.
+        orientations: Vec<Option<u16>>,
         failures: Vec<PathBuf>,
     }
 
@@ -511,7 +546,12 @@ mod tests {
     }
 
     impl ThumbSource for FakeSource {
-        fn make(&mut self, path: &Path, _cell: u32) -> Result<Rgb8, ThumbError> {
+        fn make(
+            &mut self,
+            path: &Path,
+            _cell: u32,
+            orientation: Option<u16>,
+        ) -> Result<Rgb8, ThumbError> {
             if let Some(gate) = &self.gate {
                 let mut gate_state = gate.state.lock().unwrap_or_else(|error| error.into_inner());
                 gate_state.started = true;
@@ -526,6 +566,7 @@ mod tests {
 
             let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
             state.calls.push(path.to_path_buf());
+            state.orientations.push(orientation);
             if state.failures.iter().any(|failure| failure == path) {
                 return Err(ThumbError::Unreadable("simulated failure".to_owned()));
             }
@@ -573,7 +614,39 @@ mod tests {
             index,
             path: PathBuf::from(path),
             cell: 200,
+            orientation: None,
         }
+    }
+
+    fn oriented(index: usize, path: &str, orientation: Option<u16>) -> ThumbnailRequest {
+        ThumbnailRequest {
+            orientation,
+            ..request(0, index, path)
+        }
+    }
+
+    fn orientations(state: &Mutex<FakeState>) -> Vec<Option<u16>> {
+        state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .orientations
+            .clone()
+    }
+
+    fn wait_until_started(gate: &Gate) {
+        let mut gate_state = gate.state.lock().unwrap_or_else(|error| error.into_inner());
+        while !gate_state.started {
+            gate_state = gate
+                .changed
+                .wait(gate_state)
+                .unwrap_or_else(|error| error.into_inner());
+        }
+    }
+
+    fn open_gate(gate: &Gate) {
+        let mut gate_state = gate.state.lock().unwrap_or_else(|error| error.into_inner());
+        gate_state.released = true;
+        gate.changed.notify_all();
     }
 
     fn next_event(worker: &ThumbWorker) -> ThumbnailEvent {
@@ -899,5 +972,69 @@ mod tests {
             worker.try_recv(),
             Err(std::sync::mpsc::TryRecvError::Empty)
         ));
+    }
+
+    // ---------- an orientation per request (ADR 0024 §2.4, T231) ----------
+
+    #[test]
+    fn a_queued_request_with_another_orientation_is_a_job_of_its_own() {
+        let (worker, state) = worker(1, 1024);
+        worker.pause();
+        worker.request(oriented(0, "same", None));
+        worker.request(oriented(0, "same", Some(6)));
+        worker.resume();
+
+        let first = next_event(&worker);
+        let second = next_event(&worker);
+        assert_eq!((first.index, second.index), (0, 0));
+        assert_eq!(first.orientation, None);
+        assert_eq!(second.orientation, Some(6));
+        assert_eq!(orientations(&state), vec![None, Some(6)]);
+        assert!(matches!(
+            worker.try_recv(),
+            Err(std::sync::mpsc::TryRecvError::Empty)
+        ));
+    }
+
+    #[test]
+    fn an_in_flight_request_with_another_orientation_is_a_job_of_its_own() {
+        let (worker, state, gate) = gated_worker();
+        worker.request(oriented(0, "same", None));
+        wait_until_started(&gate);
+        worker.request(oriented(0, "same", Some(8)));
+        open_gate(&gate);
+
+        let first = next_event(&worker);
+        let second = next_event(&worker);
+        assert_eq!(first.orientation, None);
+        assert_eq!(second.orientation, Some(8));
+        assert_eq!(orientations(&state), vec![None, Some(8)]);
+    }
+
+    #[test]
+    fn a_cached_thumbnail_is_not_given_out_for_another_orientation() {
+        let (worker, state) = worker(1, 1024);
+        worker.request(oriented(0, "same", Some(6)));
+        assert_eq!(next_event(&worker).orientation, Some(6));
+        worker.request(oriented(0, "same", None));
+        let other = next_event(&worker);
+        assert_eq!(other.orientation, None);
+        assert_eq!(orientations(&state), vec![Some(6), None]);
+    }
+
+    #[test]
+    fn a_cache_hit_carries_the_orientation_it_was_made_with() {
+        let (worker, state) = worker(1, 1024);
+        worker.request(oriented(0, "same", Some(3)));
+        assert_eq!(next_event(&worker).orientation, Some(3));
+        worker.request(oriented(1, "same", Some(3)));
+        let hit = next_event(&worker);
+        assert_eq!(hit.index, 1);
+        assert_eq!(hit.orientation, Some(3));
+        assert_eq!(
+            orientations(&state),
+            vec![Some(3)],
+            "answered from the cache"
+        );
     }
 }

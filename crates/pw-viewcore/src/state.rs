@@ -3,7 +3,7 @@
 //! runs them on two workers; the tests here drive them directly.
 
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -430,6 +430,14 @@ pub(crate) struct State<S> {
     pub centre: [f64; 2],
     pub view_px: [u32; 2],
     pub sizes: HashMap<Key, ImageSize>,
+    /// The backend's own flip of each opened image (for a RAW render LibRaw's flip), kept beside
+    /// `sizes` so an orientation told and taken back again ([`State::set_orientation`]) brings it
+    /// back without opening the file again. Inserted, cleared and moved where `sizes` is.
+    own_flips: HashMap<Key, u8>,
+    /// The orientations told by the shell, by path (ADR 0024 §2.4: an XMP orientation is used
+    /// before the file's own). Not cleared by a new folder or list of files: the shell sends a
+    /// value once (T232).
+    orientations: HashMap<PathBuf, u16>,
     /// The opened images whose embedded colour profile could not be used (ADR 0016 §5). Kept,
     /// cleared and moved like `sizes`.
     pub profile_unusable: HashSet<Key>,
@@ -513,6 +521,8 @@ impl<S> State<S> {
             centre: [0.5, 0.5],
             view_px: [1920, 1080],
             sizes: HashMap::new(),
+            own_flips: HashMap::new(),
+            orientations: HashMap::new(),
             profile_unusable: HashSet::new(),
             statistics: HashMap::new(),
             clipping_wanted: false,
@@ -741,6 +751,7 @@ impl<S> State<S> {
         self.session_lru.clear();
         self.session_bytes = 0;
         self.sizes.clear();
+        self.own_flips.clear();
         self.profile_unusable.clear();
         self.statistics.clear();
         self.clipping_maps.clear();
@@ -840,6 +851,11 @@ impl<S> State<S> {
 
         self.sizes = self
             .sizes
+            .drain()
+            .filter_map(|(k, v)| to(k).map(|n| (n, v)))
+            .collect();
+        self.own_flips = self
+            .own_flips
             .drain()
             .filter_map(|(k, v)| to(k).map(|n| (n, v)))
             .collect();
@@ -1323,6 +1339,52 @@ impl<S> State<S> {
         }
     }
 
+    // ---------- an orientation told by the shell (ADR 0024 §2.4) ----------
+
+    /// The flip of the orientation told for the path of `key`, if one was told.
+    fn told_flip(&self, key: Key) -> Option<u8> {
+        let path = self.files.get(key.0)?;
+        self.orientations
+            .get(path)
+            .map(|o| geometry::flip_of_orientation(*o))
+    }
+
+    /// Tells the orientation of `path` (ADR 0024 §2.4): `Some` value in `1..=8` is used before the
+    /// file's own; `None` (or a value outside `1..=8`) takes it back, and the file's own applies
+    /// again. Every opened image of `path` (both sources) gets the new flip; no view is released
+    /// and no render in flight is dropped, since views are kept in sensor orientation and the flip
+    /// is applied only when drawing. The zoom and the relative centre are kept; at fit the scale
+    /// follows the turned size. Returns whether a flip changed.
+    pub fn set_orientation(&mut self, path: &Path, orientation: Option<u16>) -> bool {
+        match orientation.filter(|o| (1..=8).contains(o)) {
+            Some(o) => {
+                self.orientations.insert(path.to_path_buf(), o);
+            }
+            None => {
+                self.orientations.remove(path);
+            }
+        }
+        let keys: Vec<Key> = self
+            .sizes
+            .keys()
+            .filter(|k| self.files.get(k.0).is_some_and(|p| p.as_path() == path))
+            .copied()
+            .collect();
+        let mut changed = false;
+        for key in keys {
+            let own = self.own_flips.get(&key).copied();
+            let told = self.told_flip(key);
+            if let Some(size) = self.sizes.get_mut(&key) {
+                let flip = told.or(own).unwrap_or(size.flip);
+                if size.flip != flip {
+                    size.flip = flip;
+                    changed = true;
+                }
+            }
+        }
+        changed
+    }
+
     // ---------- releasing a file (ADR 0007 §9.1 point 2) ----------
 
     /// Closes the sessions of `path` before its metadata is written: every owned session of it is
@@ -1581,7 +1643,9 @@ impl<S> State<S> {
         match result {
             Ok((session, size)) => {
                 let bytes = session_bytes(size, key.1);
-                self.sizes.insert(key, size);
+                self.own_flips.insert(key, size.flip);
+                let flip = self.told_flip(key).unwrap_or(size.flip);
+                self.sizes.insert(key, ImageSize { flip, ..size });
                 if profile_unusable(&session) {
                     self.profile_unusable.insert(key);
                 } else {
@@ -2730,6 +2794,132 @@ mod tests {
         let f = s.frame(VIEW);
         assert!(matches!(f.status, Status::Preparing { .. }));
         assert_eq!(f.draw.map(|d| d.id), raw);
+    }
+
+    // ---------- an orientation told by the shell (ADR 0024 §2.4, T231) ----------
+
+    /// Opens image `pos` through the open path, as the core does.
+    fn opened(s: &mut State<u32>, key: Key) {
+        let generation = s.generation;
+        s.finish_open(
+            generation,
+            key,
+            Ok((key.0 as u32, SIZE)),
+            |_, _| 1 << 20,
+            1.0,
+        );
+    }
+
+    fn flip(s: &State<u32>, key: Key) -> Option<u8> {
+        s.sizes.get(&key).map(|z| z.flip)
+    }
+
+    #[test]
+    fn a_told_orientation_turns_the_opened_images_of_its_path_and_none_takes_it_back() {
+        let mut s = state(1024);
+        let jpeg = (10, Source::Jpeg);
+        opened(&mut s, k(10));
+        opened(&mut s, jpeg);
+        opened(&mut s, k(11));
+        assert_eq!(flip(&s, k(10)), Some(0));
+        assert!(s.set_orientation(&path(10), Some(6)));
+        assert_eq!(flip(&s, k(10)), Some(6));
+        assert_eq!(flip(&s, jpeg), Some(6), "both sources");
+        assert_eq!(flip(&s, k(11)), Some(0), "another path is not touched");
+        assert!(
+            !s.set_orientation(&path(10), Some(6)),
+            "the same value again"
+        );
+        assert!(s.set_orientation(&path(10), None));
+        assert_eq!(flip(&s, k(10)), Some(0));
+        assert_eq!(flip(&s, jpeg), Some(0));
+        assert!(!s.orientations.contains_key(&path(10)));
+        // a value outside 1..=8 takes it back as None does
+        assert!(s.set_orientation(&path(10), Some(8)));
+        assert_eq!(flip(&s, k(10)), Some(5));
+        assert!(s.set_orientation(&path(10), Some(9)));
+        assert_eq!(flip(&s, k(10)), Some(0));
+    }
+
+    #[test]
+    fn the_backends_own_flip_comes_back_when_the_orientation_is_taken_back() {
+        let mut s = state(1024);
+        let generation = s.generation;
+        let own = ImageSize { flip: 3, ..SIZE };
+        s.finish_open(generation, k(10), Ok((10, own)), |_, _| 1 << 20, 1.0);
+        assert!(s.set_orientation(&path(10), Some(6)));
+        assert_eq!(flip(&s, k(10)), Some(6));
+        assert!(s.set_orientation(&path(10), None));
+        assert_eq!(flip(&s, k(10)), Some(3));
+    }
+
+    #[test]
+    fn an_orientation_told_before_the_open_is_used_when_it_opens_and_reopens() {
+        let mut s = state(1024);
+        assert!(!s.set_orientation(&path(10), Some(8)), "nothing opened yet");
+        opened(&mut s, k(10));
+        assert_eq!(flip(&s, k(10)), Some(5));
+        assert_eq!(s.own_flips.get(&k(10)), Some(&0));
+        // evicted and opened again
+        s.drop_session(k(10));
+        opened(&mut s, k(10));
+        assert_eq!(flip(&s, k(10)), Some(5));
+    }
+
+    #[test]
+    fn a_told_orientation_survives_a_new_folder_and_a_new_list_and_moves_with_its_image() {
+        let mut s = state(1024);
+        s.set_orientation(&path(10), Some(6));
+        s.open_folder(files(20));
+        s.go(10);
+        assert_eq!(s.orientations.get(&path(10)), Some(&6));
+        let generation = s.generation;
+        let own = ImageSize { flip: 3, ..SIZE };
+        s.finish_open(generation, k(10), Ok((10, own)), |_, _| 1 << 20, 1.0);
+        assert_eq!(flip(&s, k(10)), Some(6));
+        // image 3 drops out: image 10 is now at position 9
+        s.set_files(without(20, &[3]), 9);
+        assert_eq!(s.orientations.get(&path(10)), Some(&6));
+        assert_eq!(flip(&s, k(9)), Some(6));
+        assert_eq!(s.own_flips.get(&k(9)), Some(&3));
+        assert!(!s.own_flips.contains_key(&k(10)));
+        assert!(s.set_orientation(&path(10), None));
+        assert_eq!(flip(&s, k(9)), Some(3), "the moved own flip comes back");
+    }
+
+    #[test]
+    fn a_turn_keeps_every_resident_view_of_the_image() {
+        let mut s = state(1024);
+        opened(&mut s, k(10));
+        let fit = s.accept(&out(&s, 10, Want::Fit), 100);
+        s.zoom = Zoom::Scale(1.0);
+        let ring = s.accept(&out(&s, 10, Want::Ring), 100);
+        assert!(fit.is_some() && ring.is_some());
+        let before: Vec<u64> = s.resident.iter().map(|r| r.id).collect();
+        assert!(s.set_orientation(&path(10), Some(6)));
+        let _ = s.frame(VIEW);
+        assert!(s.take_dropped().is_empty());
+        let after: Vec<u64> = s.resident.iter().map(|r| r.id).collect();
+        assert_eq!(before, after);
+        assert_eq!(s.zoom, Zoom::Scale(1.0), "the zoom is kept");
+    }
+
+    #[test]
+    fn at_fit_the_scale_after_a_turn_fits_the_turned_size() {
+        let mut s = state(1024);
+        opened(&mut s, k(10));
+        let centre = s.centre;
+        // 4000×3000 in 1000×800: the width decides
+        let before = s.scale_of(k(10));
+        assert!(before.is_some_and(|v| (v - 0.25).abs() < 1e-9));
+        assert!(s.set_orientation(&path(10), Some(6)));
+        // turned 3000×4000: the height decides
+        let after = s.scale_of(k(10));
+        assert!(after.is_some_and(|v| (v - 0.2).abs() < 1e-9));
+        let turned = ImageSize { flip: 6, ..SIZE };
+        assert_eq!(after, Some(geometry::fit_scale(turned, VIEW)));
+        assert_eq!(s.zoom, Zoom::Fit);
+        assert_eq!(s.centre, centre);
     }
 
     // ---------- set_files (ADR 0014 §4.4, T54) ----------

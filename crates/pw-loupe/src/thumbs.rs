@@ -202,6 +202,7 @@ mod tests {
             generation,
             index,
             path: PathBuf::from("image.jpg"),
+            orientation: None,
             result,
         }
     }

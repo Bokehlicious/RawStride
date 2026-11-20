@@ -2238,6 +2238,7 @@ impl Loupe {
                                 index,
                                 path: path.clone(),
                                 cell,
+                                orientation: None,
                             });
                             self.thumb_grid.mark_requested(index, cell);
                         }
@@ -4067,6 +4068,7 @@ impl Loupe {
                             index,
                             path: path.clone(),
                             cell,
+                            orientation: None,
                         });
                         self.thumb_grid.mark_requested(index, cell);
                     }

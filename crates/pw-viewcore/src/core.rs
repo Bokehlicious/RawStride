@@ -352,6 +352,24 @@ impl<B: Backend> ViewCore<B> {
         self.shared.wake_ui();
     }
 
+    /// Tells the orientation of `path` (ADR 0024 §2.4): a value in `1..=8` is used before the
+    /// file's own orientation, `None` takes it back. It applies to the opened images of `path`
+    /// at once and to those opened later, also after a new folder or list of files. No view is
+    /// released (views are kept in sensor orientation); the zoom and the relative centre are
+    /// kept. When a flip changed, the state is marked changed, the workers are notified and the
+    /// UI is woken. Not a user request: nothing is recorded.
+    pub fn set_orientation(&self, path: PathBuf, orientation: Option<u16>) {
+        {
+            let mut s = self.shared.state();
+            if !s.set_orientation(&path, orientation) {
+                return;
+            }
+            s.changed();
+        }
+        self.shared.cv.notify_all();
+        self.shared.wake_ui();
+    }
+
     // ---------- the presentation ----------
 
     /// Finished views to upload.
