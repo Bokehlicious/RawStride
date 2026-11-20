@@ -1,6 +1,6 @@
 # ADR 0031: Releases, version history and installation
 
-- Status: **proposed** (2026-11-20). Waits for the owner's answers to RL-Q1–RL-Q13 (§5). Nothing
+- Status: **accepted by the owner (2026-11-20):** every question answered as proposed (§5). Nothing
   is built, installed or published by this ADR; each step in §6 becomes its own task or owner
   step, with its own approval and commit.
 - Date: 2026-11-20
@@ -58,7 +58,7 @@ program folder (ADR 0002 §2.5; T120 looks there before PATH).
 - **Checksums** (SHA-256) of every file, and ideally a **code signature**, so Windows' SmartScreen
   and virus scanners trust the exe.
 
-## 3. Decision (proposed)
+## 3. Decision
 
 1. **Version scheme:** SemVer, one version for the whole workspace (`[workspace.package]`), on
    `0.y.z` until the owner declares `1.0.0`. A new feature raises the minor version, a release
@@ -110,31 +110,31 @@ program folder (ADR 0002 §2.5; T120 looks there before PATH).
   tool, `AGENTS.md` §3); no new Rust dependency.
 - Signing (RL10) may cost money (Azure) or wait for an application (SignPath).
 
-## 5. Questions (waiting for the owner)
+## 5. Questions (answered by the owner, 2026-11-20)
 
-| # | Question | Proposal |
+| # | Question | Answer |
 |---|---|---|
-| RL-Q1 | **Version scheme:** SemVer with one version for the workspace, `0.y.z` until `1.0.0`? | Yes; minor for features, patch for fixes only |
-| RL-Q2 | **When is `0.1.0` made?** At a feature milestone, or when the release-only items are done? | When RL1–RL6 are done; marked pre-release on GitHub |
-| RL-Q3 | **`CHANGELOG.md`**, and who writes it? | Yes, "Keep a Changelog"; the reviewer adds a line at each user-visible task's Done; before `0.1.0` one summary paragraph |
-| RL-Q4 | **First package:** a portable zip, an MSI, or both at once? | The zip first |
-| RL-Q5 | **The installer:** MSI (WiX) or `setup.exe` (Inno Setup); per user or for all users; when? | MSI with WiX, per user without administrator rights, after the zip has been used for a release or two |
-| RL-Q6 | **Code signing** for `0.1.0`? | No; SHA-256 checksums and a note on SmartScreen; apply for free open-source signing after `0.1.0` |
-| RL-Q7 | **Where the release is built:** by CI on a tag, or on the owner's machine? | CI on a pushed `v*` tag, as a draft release the owner publishes by hand |
-| RL-Q8 | **Tags:** only on `main`, pushed on the owner's yes, protected by a ruleset? | Yes |
-| RL-Q9 | **"About RawStride"** with version, commit, licence notice and third-party notices? | Yes, in the Help menu; it closes the backlog's licence notice item (an ADR 0002 §4 line) |
-| RL-Q10 | **An update check** over the network? | No |
-| RL-Q11 | **A version resource and icon** in the exe? | Yes; without a new dependency if the existing `build.rs` and the Build Tools' resource compiler can do it, otherwise asked in the task |
-| RL-Q12 | **The release build without the build machine's paths** (`--remap-path-prefix`) and without the `.pdb` name? | Yes, in the release workflow (the local release profile unchanged, so latency measurements keep their line tables) |
-| RL-Q13 | **`docs/distribution.md`** rewritten for RawStride? | Yes, at RL4 |
+| RL-Q1 | **Version scheme:** SemVer with one version for the workspace, `0.y.z` until `1.0.0`? | Yes; minor for features, patch for fixes only (as proposed) |
+| RL-Q2 | **When is `0.1.0` made?** At a feature milestone, or when the release-only items are done? | When RL1–RL6 are done; marked pre-release on GitHub (as proposed) |
+| RL-Q3 | **`CHANGELOG.md`**, and who writes it? | Yes, "Keep a Changelog"; the reviewer adds a line at each user-visible task's Done; before `0.1.0` one summary paragraph (as proposed) |
+| RL-Q4 | **First package:** a portable zip, an MSI, or both at once? | The zip first (as proposed) |
+| RL-Q5 | **The installer:** MSI (WiX) or `setup.exe` (Inno Setup); per user or for all users; when? | MSI with WiX, per user without administrator rights, after the zip has been used for a release or two (as proposed) |
+| RL-Q6 | **Code signing** for `0.1.0`? | No; SHA-256 checksums and a note on SmartScreen; apply for free open-source signing after `0.1.0` (as proposed) |
+| RL-Q7 | **Where the release is built:** by CI on a tag, or on the owner's machine? | CI on a pushed `v*` tag, as a draft release the owner publishes by hand (as proposed) |
+| RL-Q8 | **Tags:** only on `main`, pushed on the owner's yes, protected by a ruleset? | Yes (as proposed) |
+| RL-Q9 | **"About RawStride"** with version, commit, licence notice and third-party notices? | Yes, in the Help menu; it closes the backlog's licence notice item (an ADR 0002 §4 line) (as proposed) |
+| RL-Q10 | **An update check** over the network? | No (as proposed) |
+| RL-Q11 | **A version resource and icon** in the exe? | Yes; without a new dependency if the existing `build.rs` and the Build Tools' resource compiler can do it, otherwise asked in the task (as proposed) |
+| RL-Q12 | **The release build without the build machine's paths** (`--remap-path-prefix`) and without the `.pdb` name? | Yes, in the release workflow (the local release profile unchanged, so latency measurements keep their line tables) (as proposed) |
+| RL-Q13 | **`docs/distribution.md`** rewritten for RawStride? | Yes, at RL4 (as proposed) |
 
-## 6. Steps (proposed order)
+## 6. Steps
 
 | Step | Who | Content | After |
 |---|---|---|---|
-| RL1 | task | "About RawStride" (RL-Q9): version from `CARGO_PKG_VERSION`, the commit from the build, the licence notice; an ADR 0002 §4 line first | the answers |
-| RL2 | task | Version resource and icon in `rawstride.exe` (RL-Q11) | the answers |
-| RL3 | task | `THIRD-PARTY-NOTICES.txt` (ADR 0002 §4): the Rust packages from `cargo metadata`, LibRaw (its version and source), LittleCMS, JasPer, libjpeg-turbo, zlib, the fonts, the MSVC runtime, ExifTool and its Perl, IPTC's attribution for the generated tables | the answers |
+| RL1 | task | "About RawStride" (RL-Q9): version from `CARGO_PKG_VERSION`, the commit from the build, the licence notice (ADR 0002 §4 has the line, 2026-11-20) | now |
+| RL2 | task | Version resource and icon in `rawstride.exe` (RL-Q11) | now |
+| RL3 | task | `THIRD-PARTY-NOTICES.txt` (ADR 0002 §4): the Rust packages from `cargo metadata`, LibRaw (its version and source), LittleCMS, JasPer, libjpeg-turbo, zlib, the fonts, the MSVC runtime, ExifTool and its Perl, IPTC's attribution for the generated tables | now |
 | RL4 | task | `tools/package-dist.ps1`: the zip of §3.4 from a release build, with ExifTool 13.59 checked by SHA-256 as in CI; `docs/distribution.md` rewritten (RL-Q13) | RL3 |
 | RL5 | owner | The zip run on a clean PC or in Windows Sandbox: starts, renders a RAW, writes a rating through the shipped ExifTool, leaves the program folder unchanged | RL4 |
 | RL6 | task | `CHANGELOG.md` with the `0.1.0` section and the rule in `docs/tasks/README.md` (RL-Q3); `.github/workflows/release.yml` on `v*` tags (RL-Q7, RL-Q12) | RL4 |
@@ -163,3 +163,4 @@ program folder (ADR 0002 §2.5; T120 looks there before PATH).
 | Revision | Date | Changes |
 |---|---|---|
 | 1 | 2026-11-20 | Proposed by the reviewer after the repository became public; waits for RL-Q1–RL-Q13 |
+| 2 | 2026-11-20 | Accepted: the owner approved RL-Q1–RL-Q13 as proposed; ADR 0002 §4 gets the About window's line |

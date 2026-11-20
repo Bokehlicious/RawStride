@@ -162,6 +162,8 @@ and reviewer:
     "Appropriate Legal Notices" (copyright, no warranty, where the licence is), usually in an
     About box. `pw-loupe` has none, and ADR 0002 §4 does not list it. Needed before the first
     binary release, not before the repository is public; an ADR 0002 §4 line first (plan §4).
+    Decided (owner, 2026-11-20): ADR 0031 RL-Q9, the "About RawStride" window, step RL1; the
+    ADR 0002 §4 line is written.
   - *IPTC's terms for the generated tables* (public-release plan H1, 2026-11-19):
     `crates/pw-metadata/src/iptc_table.rs` (from `tools/iptc-table.ps1`) and `vocabulary.rs` are
     generated from IPTC's TechReference and the NewsCodes / PLUS vocabularies (names, ids and

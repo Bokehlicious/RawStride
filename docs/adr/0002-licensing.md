@@ -74,6 +74,9 @@
 - [ ] `THIRD-PARTY-NOTICES.txt` before the first release: the Rust packages (from `cargo
   metadata`), LibRaw, LittleCMS, JasPer, libjpeg-turbo, zlib, the fonts, the MSVC runtime, and
   ExifTool with its Perl.
+- [ ] The licence notice in the program (GPL-3.0 §0, "Appropriate Legal Notices"): an "About
+  RawStride" window with the version, the commit, copyright, no warranty, where the licence and
+  the source are, and the third-party notices (owner, 2026-11-20, ADR 0031 RL-Q9, step RL1).
 - [ ] A proper trademark search for the name RawStride before a public release (ADR 0012).
 - [ ] Source headers (`SPDX-License-Identifier: GPL-3.0-or-later`) in the source files: optional;
   decide before the release.
