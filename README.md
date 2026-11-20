@@ -34,6 +34,23 @@ Folder and crate names (`pw-*`) keep the old name for now.
 **Cameras:** the goal is most cameras, through LibRaw. Development and testing use Sony (ARW),
 Panasonic (RW2), Fujifilm (RAF) and DNG files.
 
+## Try it
+
+Testers are welcome, especially with cameras and file types other than the ones above.
+
+1. Download `RawStride-<version>-windows-x64.zip` from the
+   [Releases page](https://github.com/Bokehlicious/RawStride/releases) (Windows 10 or 11, x64;
+   nothing else to install, ExifTool is included).
+2. Unpack it anywhere and start `rawstride.exe`. The program is not signed yet, so Windows
+   SmartScreen warns the first time: choose "More info", then "Run anyway".
+3. **Try it on copies of your photos first.** RawStride writes ratings, labels and metadata (into
+   XMP sidecars for RAW files, into DNG, JPEG and TIFF files themselves), and this is a first
+   pre-release.
+
+Found a bug, or a file that does not open? [Open an issue](https://github.com/Bokehlicious/RawStride/issues/new/choose);
+the form asks for what helps. Ideas are welcome the same way. To remove RawStride, delete its
+folder and `%LOCALAPPDATA%\RawStride`.
+
 ## Building
 
 Windows 10 or 11, x64. RawStride runs only on Windows today; if you would like it on Linux or
@@ -51,7 +68,8 @@ them, also in CI: a green CI run does not mean a RAW file was decoded or written
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md). Open an issue before a larger change.
+See [CONTRIBUTING.md](CONTRIBUTING.md). Open an issue before a larger change. Test reports are
+contributions too: a bug report with the camera and file type helps as much as code.
 
 ## How RawStride is developed
 

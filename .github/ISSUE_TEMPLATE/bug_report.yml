@@ -1,0 +1,72 @@
+name: Bug report
+description: Something in RawStride does not work as it should.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for testing RawStride. A security problem goes to a private report instead,
+        as [SECURITY.md](https://github.com/Bokehlicious/RawStride/blob/main/.github/SECURITY.md)
+        describes.
+  - type: input
+    id: version
+    attributes:
+      label: RawStride version
+      description: Help ▸ About RawStride… shows the version and the commit.
+      placeholder: "0.1.0 (commit …)"
+    validations:
+      required: true
+  - type: input
+    id: windows
+    attributes:
+      label: Windows version
+      placeholder: "Windows 11 24H2"
+    validations:
+      required: true
+  - type: input
+    id: camera
+    attributes:
+      label: Camera and file type
+      description: The camera model and the file type involved, if the bug concerns images.
+      placeholder: "Sony A7 IV, ARW (compressed)"
+  - type: textarea
+    id: steps
+    attributes:
+      label: What you did
+      description: The steps that lead to the problem, as exactly as you can.
+      placeholder: |
+        1. Opened a folder with …
+        2. Pressed …
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: What happened
+      description: The message RawStride showed, if any. A screenshot helps.
+    validations:
+      required: true
+  - type: dropdown
+    id: files
+    attributes:
+      label: Were files changed?
+      description: Did the problem change, damage or lose an image, a sidecar or metadata?
+      options:
+        - "No"
+        - "Yes"
+        - "I don't know"
+    validations:
+      required: true
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else
+      description: >
+        Can you share a sample file that shows the problem? Do not attach it here if it is
+        private; say so, and the maintainer will ask.
