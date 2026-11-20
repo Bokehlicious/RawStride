@@ -7,7 +7,8 @@ and reviewer:
   icon from M1 (2026-11-03; a blue ring with an orange square on a dark rounded square) as
   `crates/pw-loupe/assets/rawstride.ico` and `rawstride-128.png`. The owner may want another icon
   later; changing it is replacing those two files (the exe's resource and the window's icon read
-  them), no code change.
+  them), no code change. **Reserved for outside contributors** (owner, 2026-11-20): GitHub issue
+  [#4](https://github.com/Bokehlicious/RawStride/issues/4), `good first issue`; no agent task.
 - A timeout when ExifTool hangs (process supervision across threads). Today only the shutdown has a
   timeout (`SHUTDOWN_TIMEOUT` in `pw-metadata`'s `exiftool.rs`).
 - ADR 0007 (IPTC metadata): milestone 8 is done (I1–I13, 2026-11-14; what is left is in ADR 0007
@@ -253,7 +254,9 @@ and reviewer:
   2026-11-17): with a field error the button is disabled (`apply_allowed`, U12c-Q2) and nothing
   says why; the error is shown under its field. Nothing can go wrong, since nothing is written
   while a field has an error. A text on hover over the disabled button ("Correct the error in
-  …", as `EditorText::NotSaved` names the items) would say why. Not important.
+  …", as `EditorText::NotSaved` names the items) would say why. Not important. **Reserved for
+  outside contributors** (owner, 2026-11-20): GitHub issue
+  [#2](https://github.com/Bokehlicious/RawStride/issues/2), `good first issue`; no agent task.
 
 - **Known limits of the delete to the Recycle Bin** (T189's brief and its reviews, 2026-11-18;
   accepted when T189 was done; **kept** at the sorts after B4 and B5, 2026-11-18, as each item
@@ -391,7 +394,10 @@ by the owner the same day; step E4 in `plans/adr-0018-0025-steps.md`, before ADR
 - **Leftover of T211** (2026-11-19): `pw_metadata::Error::ReadOnly` and `Error::NotWritten` are
   no longer built by production code (only the removed `refused_write_error` built them);
   `From<Error> for WriteError` still maps them. They are public, so no warning; remove them when
-  `Error` is next changed, or keep them.
+  `Error` is next changed, or keep them. **Reserved for outside contributors** (owner,
+  2026-11-20): GitHub issue [#3](https://github.com/Bokehlicious/RawStride/issues/3),
+  `good first issue`; no agent task, and a task that changes `Error` leaves the two variants for
+  it.
 - **Leftovers of T221** (the right-click menu on images, ADR 0019 E4; review, 2026-11-19; accepted
   when T221 was done; **kept** at the sort after ADR 0019 E4, 2026-11-19 (owner): none was seen in
   the hand check of E4, so each becomes a task only if it is noticed in use):
