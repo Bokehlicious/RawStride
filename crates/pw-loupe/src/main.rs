@@ -8863,6 +8863,9 @@ fn run(options: Options) -> Result<(), String> {
     if settings.shell.fullscreen {
         viewport = viewport.with_fullscreen(true);
     }
+    if let Some(icon) = window_icon() {
+        viewport = viewport.with_icon(std::sync::Arc::new(icon));
+    }
     let native = eframe::NativeOptions {
         viewport,
         renderer: eframe::Renderer::Glow,
@@ -8981,6 +8984,12 @@ fn run(options: Options) -> Result<(), String> {
         }),
     )
     .map_err(|e| format!("{e}"))
+}
+
+/// RawStride's icon for the title bar, the taskbar and Alt+Tab (ADR 0031 RL-Q11, T226), or
+/// `None` when the PNG cannot be decoded; eframe then keeps its own icon.
+fn window_icon() -> Option<egui::IconData> {
+    eframe::icon_data::from_png_bytes(include_bytes!("../assets/rawstride-128.png")).ok()
 }
 
 fn main() -> ExitCode {
@@ -10126,5 +10135,14 @@ mod tests {
             let ratio = contrast_ratio(LABEL_TEXT, label_color(label).unwrap());
             assert!(ratio >= TEXT_CONTRAST, "{label}: {ratio:.2}");
         }
+    }
+
+    // --- The window's icon (ADR 0031 RL-Q11, T226) ---
+
+    #[test]
+    fn window_icon_is_the_128_px_png() {
+        let icon = super::window_icon().unwrap();
+        assert_eq!((icon.width, icon.height), (128, 128));
+        assert_eq!(icon.rgba.len(), 128 * 128 * 4);
     }
 }

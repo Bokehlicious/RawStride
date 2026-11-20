@@ -45,6 +45,9 @@ The crate `pw-loupe` builds the RawStride program, `target\release\rawstride.exe
 `cargo run --release -p pw-loupe -- "D:\Photos\2026-11-14"`. The built program can also be started
 directly with a folder: `target\release\rawstride.exe "D:\Photos\2026-11-14"`.
 
+The build runs the Windows SDK's resource compiler `rc.exe` (from the Build Tools) to give
+`rawstride.exe` its version resource and icon; without it the build prints a warning and goes on.
+
 ## 4. Check your changes
 
 ```powershell

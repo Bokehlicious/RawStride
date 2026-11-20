@@ -232,3 +232,4 @@ was when the task was done, so "this file", "below" and "the Log" in T1–T115 m
 | [T223](T223-recycle-test-on-any-drive.md) | A Recycle Bin test that does not depend on the working folder's drive (CI's first push run) |
 | [T224](T224-prototype-lock-files-out.md) | The Tauri prototypes' lock files out of the repository (five Dependabot alerts on `glib`) |
 | [T225](T225-about-window.md) | ADR 0031 RL1: the "About RawStride" window in a Help menu (version, commit, the licence notice) |
+| [T226](T226-exe-version-and-icon.md) | ADR 0031 RL2: a version resource and an icon in rawstride.exe, and the window's icon |
