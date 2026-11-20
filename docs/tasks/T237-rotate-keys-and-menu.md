@@ -1,4 +1,4 @@
-# T237. ADR 0024 O3c: Rotate Left and Rotate Right in the shell (keys, menu, writes, rollback) — Blocked: waits for T236
+# T237. ADR 0024 O3c: Rotate Left and Rotate Right in the shell (keys, menu, writes, rollback) — Open
 
 - **Why:** ADR 0024 §2.1 and §2.5 (O-Q1, O-Q2, O-Q8, O-Q10, O-Q11; accepted by the owner
   2026-11-17): **Ctrl+←** turns 90° anticlockwise and **Ctrl+→** 90° clockwise, in the contact
@@ -161,3 +161,4 @@
 | 2026-11-20 | Blocked | Added (chain T235 → T236 → T237, ADR 0024 O3); waits for T236 |
 | 2026-11-20 | Blocked | Cold read: doable; the key maps, `MetadataSubmit`, `failure_text`'s use and the repeat flag checked. Fixed: `command_of_key` in `lib.rs` (its existing test would fail); the two `shell_text.rs` list tests named; a repaint after a turn and while embedded reads are in flight; "Writing ratings" in the Tasks area counts rotations (accepted, backlog); `failure_text` when both fail in one poll; `FakeSubmit`'s field; a turn waiting for its embedded value holds back moves, deletes and "Open in" and is listed at exit (T236 got `is_waiting`/`waiting_paths`); the glossary moved to T236; the locked compare added to the hand check |
 | 2026-11-20 | Blocked | Chain review (T235's log): a reader that cannot start or has stopped is answered with `pw_raw::inspect` on the UI thread; `write_pending`'s doc comment; the queues kept apart; the locked compare and a pair's partner named under Not in this task; DNG/TIFF and a RAW+JPEG pair in the hand check |
+| 2026-11-20 | Open | T236 done; set to Open |

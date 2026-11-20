@@ -1,4 +1,4 @@
-# T236. ADR 0024 O3b: the shell's store of turns and its write queue (pw-loupe, logic only) — Open
+# T236. ADR 0024 O3b: the shell's store of turns and its write queue (pw-loupe, logic only) — Done
 
 - **Why:** ADR 0024 §2.5, O-Q8 (accepted by the owner 2026-11-17): a turn works "as a rating key:
   the image turns at once in the view and its thumbnail; the write goes into the same ordered
@@ -200,3 +200,5 @@
 | 2026-11-20 | Blocked | From T237's cold read: `is_waiting` and `waiting_paths` added (a move must not go ahead while a turn waits for its embedded value), with a test |
 | 2026-11-20 | Blocked | Chain review (T235's log): `try_recv` tells a stopped reader apart (`ReaderStopped`); the reason `confirmed_by_write` must stay written down |
 | 2026-11-20 | Open | T235 done; set to Open |
+| 2026-11-20 | Ready for review | Agent: `orientations.rs` (new: `OrientationWriter`, `OrientationStore`, `EmbeddedOrientationReader`, `ReaderStopped`; 25 tests, beyond the list also an answer for an unknown path ignored, a path given twice, a stopped worker and `fail_sent`, no change on an `Ok` that leaves the shown value, values outside 1–8 on a read, the failure reset and count), `lib.rs` (module and re-exports, `ROTATION_UNSUPPORTED_TEXT`), `ratings.rs` (`absolute_path` `pub(crate)`), `rating_text.rs` (three rotation texts and a test), `docs/glossary.md` ("Rotate Left / Rotate Right", "rotation" in §4), `docs/test-inventory.md` (2042 passed, 75 ignored). check.ps1 all OK, no clippy warnings |
+| 2026-11-20 | Done | Reviewed: the diff holds only the named files and matches points 1–7; `read`, `pump` and `fail_write` compared with `RatingStore`'s line by line (the same rule, plus `confirmed_by_write`); the reader's stopped and unstarted cases checked; nothing wired in `main.rs`, `metadata.rs` or `shell.rs`. The 8 tests beyond the list accepted. The reviewer's own clean run: `.\tools\check.ps1` all OK, 2042 passed, 75 ignored, no clippy warnings |

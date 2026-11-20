@@ -448,7 +448,7 @@ impl RatingStore {
     }
 }
 
-fn absolute_path(path: &Path) -> Result<PathBuf, RatingRefused> {
+pub(crate) fn absolute_path(path: &Path) -> Result<PathBuf, RatingRefused> {
     if path.is_absolute() {
         Ok(path.to_path_buf())
     } else {

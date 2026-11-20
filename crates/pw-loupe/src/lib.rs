@@ -28,6 +28,7 @@ mod loupe_text;
 mod monitor_profile;
 mod moves;
 mod moves_text;
+mod orientations;
 mod preview;
 mod preview_text;
 mod rating_text;
@@ -126,6 +127,9 @@ pub use moves_text::{
     move_failed_text, move_running_text, moves_failed_text, nothing_to_undo_text, undo_failed_text,
     undone_text,
 };
+pub use orientations::{
+    EmbeddedOrientationReader, OrientationStore, OrientationWriter, ReaderStopped,
+};
 pub use preview::{
     FILMSTRIP_CELL_WIDTH, FILMSTRIP_IMAGE_HEIGHT, FILMSTRIP_LABEL_HEIGHT, FILMSTRIP_MARGIN,
     FILMSTRIP_SPACING, PreviewParts, Restore, ThumbGate, WindowBefore, clamp_offset,
@@ -137,8 +141,8 @@ pub use preview_text::{
     deep_shadows_text, histogram_text, preview_text, zoom_value_text,
 };
 pub use rating_text::{
-    UNSUPPORTED_TEXT, label_choice_text, label_filter_text, label_name, star_condition_text,
-    star_filter_text, star_glyphs, status_text, worker_stopped_text,
+    ROTATION_UNSUPPORTED_TEXT, UNSUPPORTED_TEXT, label_choice_text, label_filter_text, label_name,
+    star_condition_text, star_filter_text, star_glyphs, status_text, worker_stopped_text,
 };
 pub use ratings::{RatingKey, RatingRefused, RatingStore, RatingWriter, apply, rating_key_action};
 pub use selection::Selection;

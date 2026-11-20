@@ -86,8 +86,7 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status |
 |---|---|---|
-| [T236](T236-orientation-store.md) | ADR 0024 O3b: the shell's store of turns and its write queue | Open |
-| [T237](T237-rotate-keys-and-menu.md) | ADR 0024 O3c: Rotate Left and Rotate Right in the shell | Blocked: waits for T236 |
+| [T237](T237-rotate-keys-and-menu.md) | ADR 0024 O3c: Rotate Left and Rotate Right in the shell | Open |
 
 ## Writing a task (owner and reviewer)
 

@@ -171,6 +171,8 @@ Every other property already uses IPTC's English name in both languages.
 | minnesbudget | memory budget ("the TIFF file is too large for the memory budget"; added by T118) |
 | kamerainformation | camera information |
 | Kamera, Objektiv, Brännvidd, Bländare, Exponeringstid, ISO, Tagen | Camera, Lens, Focal Length, Aperture, Exposure Time, ISO, Taken |
+| – | Rotate Left / Rotate Right (turn the image 90° anticlockwise / clockwise; for a RAW the turn is written to its sidecar, for a JPEG, TIFF or DNG to the file's Exif orientation; the pixels are never changed; ADR 0024; added by T236) |
+| – | rotation (the turn RawStride shows and writes: "Could not save the rotation for {name}: {error}", "Rotations cannot be saved for this file type."; ADR 0024; added by T236) |
 
 ## 5. Import
 

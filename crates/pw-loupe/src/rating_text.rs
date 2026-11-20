@@ -1,7 +1,9 @@
 //! The texts of ratings and labels (T116, rule 13): the names of the labels, the status-line text
 //! of a rating, the stars under a thumbnail, the messages of a rating that cannot be saved, and the
 //! texts of the filter's drop-down lists. Moved here from `ratings.rs` and `filter.rs` (T116),
-//! translated to English (T117).
+//! translated to English (T117). The rotation texts of `orientations.rs` (ADR 0024, T236) are here
+//! beside them: `ROTATION_UNSUPPORTED_TEXT`, `rotation_failure_message` and
+//! `rotation_failures_text`.
 
 use pw_metadata::Rating;
 
@@ -27,6 +29,26 @@ pub fn failures_text(count: usize, name: &str, error: &str) -> String {
         format!("Could not save the rating for 1 image. Last: {name}: {error}")
     } else {
         format!("Could not save the rating for {count} images. Last: {name}: {error}")
+    }
+}
+
+/// The status-line message when Rotate Left or Rotate Right is used on a file that cannot carry
+/// metadata (ADR 0024).
+pub const ROTATION_UNSUPPORTED_TEXT: &str = "Rotations cannot be saved for this file type.";
+
+/// The message for one failed rotation write, as returned by `OrientationStore`'s `pump`,
+/// `written` and `fail_sent`.
+pub(crate) fn rotation_failure_message(name: &str, error: &str) -> String {
+    format!("Could not save the rotation for {name}: {error}")
+}
+
+/// The status-line text for more than one failed rotation write since the last turn: the
+/// count, then the last failure's file name and error.
+pub fn rotation_failures_text(count: usize, name: &str, error: &str) -> String {
+    if count == 1 {
+        format!("Could not save the rotation for 1 image. Last: {name}: {error}")
+    } else {
+        format!("Could not save the rotation for {count} images. Last: {name}: {error}")
     }
 }
 
@@ -200,6 +222,26 @@ mod tests {
         assert_eq!(
             UNSUPPORTED_TEXT,
             "Ratings and labels cannot be saved for this file type."
+        );
+    }
+
+    #[test]
+    fn rotation_texts_singular_and_plural() {
+        assert_eq!(
+            ROTATION_UNSUPPORTED_TEXT,
+            "Rotations cannot be saved for this file type."
+        );
+        assert_eq!(
+            rotation_failure_message("A.ARW", "disk full"),
+            "Could not save the rotation for A.ARW: disk full"
+        );
+        assert_eq!(
+            rotation_failures_text(1, "C.ARW", "fel C"),
+            "Could not save the rotation for 1 image. Last: C.ARW: fel C"
+        );
+        assert_eq!(
+            rotation_failures_text(3, "C.ARW", "fel C"),
+            "Could not save the rotation for 3 images. Last: C.ARW: fel C"
         );
     }
 
