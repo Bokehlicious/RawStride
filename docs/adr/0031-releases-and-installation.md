@@ -142,6 +142,9 @@ program folder (ADR 0002 §2.5; T120 looks there before PATH).
 | RL8 | owner | Code signing applied for (RL-Q6) | RL7 |
 | RL9 | task | The MSI (RL-Q5) | RL7 and the owner's go |
 
+Placed by the owner (2026-11-20) as order 1d of `docs/tasks/plans/adr-0018-0025-steps.md`,
+before ADR 0024 O1; RL8 and RL9 do not hold O1 back.
+
 ## 7. Not included
 
 - Linux and macOS packages (RawStride is Windows only today; backlog).
