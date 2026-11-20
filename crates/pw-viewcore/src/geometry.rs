@@ -89,6 +89,30 @@ pub fn turned(orientation: u16, clockwise: bool) -> u16 {
     }
 }
 
+/// The clockwise quarter turns of a LibRaw flip code as [`flip_of_orientation`] makes them:
+/// `0` → 0, `6` → 1, `3` → 2, `5` → 3; any other code → 0.
+pub fn quarter_turns_of_flip(flip: u8) -> u8 {
+    match flip {
+        6 => 1,
+        3 => 2,
+        5 => 3,
+        _ => 0,
+    }
+}
+
+/// The relative point of the upright image after the image is turned `quarter_turns` (taken
+/// modulo 4) times 90° clockwise (ADR 0024 §2.5). One clockwise quarter turn maps `[x, y]` to
+/// `[1 - y, x]`: the top-left corner goes to the top-right.
+pub fn turned_centre(centre: [f64; 2], quarter_turns: u8) -> [f64; 2] {
+    let [x, y] = centre;
+    match quarter_turns % 4 {
+        1 => [1.0 - y, x],
+        2 => [1.0 - x, 1.0 - y],
+        3 => [y, 1.0 - x],
+        _ => [x, y],
+    }
+}
+
 /// A rectangle of whole pixels.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Rect {
@@ -551,5 +575,86 @@ mod tests {
         assert_eq!(turned(9, true), 6);
         assert_eq!(turned(0, false), 8);
         assert_eq!(turned(9, false), 8);
+    }
+
+    #[test]
+    fn quarter_turns_of_flip_follows_the_flip_codes() {
+        assert_eq!(quarter_turns_of_flip(0), 0);
+        assert_eq!(quarter_turns_of_flip(6), 1);
+        assert_eq!(quarter_turns_of_flip(3), 2);
+        assert_eq!(quarter_turns_of_flip(5), 3);
+        assert_eq!(quarter_turns_of_flip(7), 0);
+        assert_eq!(quarter_turns_of_flip(255), 0);
+    }
+
+    fn close_point(a: [f64; 2], b: [f64; 2]) -> bool {
+        (a[0] - b[0]).abs() < 1e-9 && (a[1] - b[1]).abs() < 1e-9
+    }
+
+    #[test]
+    fn turned_centre_moves_corners_and_points_clockwise() {
+        // Each row: the point, then where 0, 1, 2, 3 and 4 clockwise quarter turns put it.
+        let rows: [[[f64; 2]; 6]; 5] = [
+            [
+                [0.0, 0.0],
+                [0.0, 0.0],
+                [1.0, 0.0],
+                [1.0, 1.0],
+                [0.0, 1.0],
+                [0.0, 0.0],
+            ],
+            [
+                [1.0, 0.0],
+                [1.0, 0.0],
+                [1.0, 1.0],
+                [0.0, 1.0],
+                [0.0, 0.0],
+                [1.0, 0.0],
+            ],
+            [
+                [1.0, 1.0],
+                [1.0, 1.0],
+                [0.0, 1.0],
+                [0.0, 0.0],
+                [1.0, 0.0],
+                [1.0, 1.0],
+            ],
+            [
+                [0.0, 1.0],
+                [0.0, 1.0],
+                [0.0, 0.0],
+                [1.0, 0.0],
+                [1.0, 1.0],
+                [0.0, 1.0],
+            ],
+            [
+                [0.25, 0.1],
+                [0.25, 0.1],
+                [0.9, 0.25],
+                [0.75, 0.9],
+                [0.1, 0.75],
+                [0.25, 0.1],
+            ],
+        ];
+        for row in rows {
+            let [start, rest @ ..] = row;
+            for (turns, want) in (0u8..).zip(rest) {
+                let got = turned_centre(start, turns);
+                assert!(
+                    close_point(got, want),
+                    "{start:?} turned {turns} times: {got:?}, want {want:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn turned_centre_four_single_turns_give_the_start() {
+        let start = [0.25, 0.1];
+        let mut p = start;
+        for _ in 0..4 {
+            p = turned_centre(p, 1);
+        }
+        assert!(close_point(p, start), "{p:?}");
     }
 }

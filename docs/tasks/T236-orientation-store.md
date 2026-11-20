@@ -1,4 +1,4 @@
-# T236. ADR 0024 O3b: the shell's store of turns and its write queue (pw-loupe, logic only) — Blocked: waits for T235
+# T236. ADR 0024 O3b: the shell's store of turns and its write queue (pw-loupe, logic only) — Open
 
 - **Why:** ADR 0024 §2.5, O-Q8 (accepted by the owner 2026-11-17): a turn works "as a rating key:
   the image turns at once in the view and its thumbnail; the write goes into the same ordered
@@ -199,3 +199,4 @@
 | 2026-11-20 | Blocked | Cold read: doable; every test number checked against `turned`; `turned` reachable, no new dependency. Fixed: the glossary terms moved here from T237 (rule 13); `pw_metadata`'s `RequestId`/`SubmitError`; `ROTATION_UNSUPPORTED_TEXT` shown by the caller; own `fail_write`, text visibility; `Debug` on the reader; a change recorded on `Ok`; `confirmed_by_write` and `embedded` updated only for files with their own metadata (a RAW's sidecar is read again), with a RAW test; prune sorted, waiting turns of a pruned path lost (accepted); duplicates turned once; failure reset; the test orders and numbers given |
 | 2026-11-20 | Blocked | From T237's cold read: `is_waiting` and `waiting_paths` added (a move must not go ahead while a turn waits for its embedded value), with a test |
 | 2026-11-20 | Blocked | Chain review (T235's log): `try_recv` tells a stopped reader apart (`ReaderStopped`); the reason `confirmed_by_write` must stay written down |
+| 2026-11-20 | Open | T235 done; set to Open |

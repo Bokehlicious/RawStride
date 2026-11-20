@@ -355,8 +355,10 @@ impl<B: Backend> ViewCore<B> {
     /// Tells the orientation of `path` (ADR 0024 §2.4): a value in `1..=8` is used before the
     /// file's own orientation, `None` takes it back. It applies to the opened images of `path`
     /// at once and to those opened later, also after a new folder or list of files. No view is
-    /// released (views are kept in sensor orientation); the zoom and the relative centre are
-    /// kept. When a flip changed, the state is marked changed, the workers are notified and the
+    /// released (views are kept in sensor orientation). When the current image turns at a scale,
+    /// the centre is turned with the image so the same image point stays in the centre (ADR 0024
+    /// §2.5), and the scale is raised to the turned size's minimum when it is below it; fit stays
+    /// fit. When a flip changed, the state is marked changed, the workers are notified and the
     /// UI is woken. Not a user request: nothing is recorded.
     pub fn set_orientation(&self, path: PathBuf, orientation: Option<u16>) {
         {

@@ -86,8 +86,7 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status |
 |---|---|---|
-| [T235](T235-turn-keeps-the-zoomed-point.md) | ADR 0024 O3a: a turn keeps the same image point in the centre (pw-viewcore) | Open |
-| [T236](T236-orientation-store.md) | ADR 0024 O3b: the shell's store of turns and its write queue | Blocked: waits for T235 |
+| [T236](T236-orientation-store.md) | ADR 0024 O3b: the shell's store of turns and its write queue | Open |
 | [T237](T237-rotate-keys-and-menu.md) | ADR 0024 O3c: Rotate Left and Rotate Right in the shell | Blocked: waits for T236 |
 
 ## Writing a task (owner and reviewer)

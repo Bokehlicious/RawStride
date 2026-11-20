@@ -1353,9 +1353,15 @@ impl<S> State<S> {
     /// file's own; `None` (or a value outside `1..=8`) takes it back, and the file's own applies
     /// again. Every opened image of `path` (both sources) gets the new flip; no view is released
     /// and no render in flight is dropped, since views are kept in sensor orientation and the flip
-    /// is applied only when drawing. The zoom and the relative centre are kept; at fit the scale
-    /// follows the turned size. Returns whether a flip changed.
+    /// is applied only when drawing. When the current image's flip changes at a scale, the centre
+    /// is turned with the image, so the same image point stays in the centre (ADR 0024 §2.5), and
+    /// the scale is raised to the turned size's minimum when it is below it; at fit the zoom and
+    /// the centre are kept and the scale follows the turned size. This holds for every flip change
+    /// of the current image, whatever told it. Returns whether a flip changed.
     pub fn set_orientation(&mut self, path: &Path, orientation: Option<u16>) -> bool {
+        let cur = self
+            .cur_key()
+            .and_then(|k| self.sizes.get(&k).copied().map(|size| (k, size)));
         match orientation.filter(|o| (1..=8).contains(o)) {
             Some(o) => {
                 self.orientations.insert(path.to_path_buf(), o);
@@ -1382,7 +1388,36 @@ impl<S> State<S> {
                 }
             }
         }
+        if let Some((key, old_size)) = cur {
+            self.turn_view_with_image(key, old_size);
+        }
         changed
+    }
+
+    /// After a flip change of the current image `key`, whose size with the old flip was
+    /// `old_size`: at a scale, the point drawn in the middle of the view before the turn is
+    /// turned with the image and becomes the centre, and the scale is raised to the turned size's
+    /// minimum (ADR 0024 §2.5). At fit, or when the flip did not change, nothing changes.
+    fn turn_view_with_image(&mut self, key: Key, old_size: ImageSize) {
+        let Some(new_size) = self.sizes.get(&key).copied() else {
+            return;
+        };
+        let Zoom::Scale(s) = self.zoom else {
+            return;
+        };
+        if new_size.flip == old_size.flip {
+            return;
+        }
+        let old = geometry::quarter_turns_of_flip(old_size.flip);
+        let new = geometry::quarter_turns_of_flip(new_size.flip);
+        let turns = (4 + new - old) % 4;
+        let drawn = geometry::centre_of(
+            old_size,
+            geometry::visible(old_size, self.view_px, s, self.centre),
+        );
+        let c = geometry::turned_centre(drawn, turns);
+        self.centre = [c[0].clamp(0.0, 1.0), c[1].clamp(0.0, 1.0)];
+        self.zoom = Zoom::Scale(s.max(self.min_scale(Some(new_size))).min(MAX_SCALE));
     }
 
     // ---------- releasing a file (ADR 0007 §9.1 point 2) ----------
@@ -2920,6 +2955,86 @@ mod tests {
         assert_eq!(after, Some(geometry::fit_scale(turned, VIEW)));
         assert_eq!(s.zoom, Zoom::Fit);
         assert_eq!(s.centre, centre);
+    }
+
+    // ---------- a turn keeps the same image point in the centre (ADR 0024 §2.5, T235) ----------
+
+    fn assert_centre(s: &State<u32>, want: [f64; 2]) {
+        assert!(
+            (s.centre[0] - want[0]).abs() < 1e-9 && (s.centre[1] - want[1]).abs() < 1e-9,
+            "centre {:?}, want {want:?}",
+            s.centre
+        );
+    }
+
+    #[test]
+    fn a_turn_at_100_percent_keeps_the_same_image_point_in_the_centre() {
+        let mut s = state(1024);
+        opened(&mut s, k(10));
+        s.zoom = Zoom::Scale(1.0);
+        s.centre = [0.3, 0.4];
+        assert!(s.set_orientation(&path(10), Some(6)));
+        assert_centre(&s, [0.6, 0.3]);
+        assert_eq!(s.zoom, Zoom::Scale(1.0));
+        // from 6 to 3: one more clockwise quarter turn
+        assert!(s.set_orientation(&path(10), Some(3)));
+        assert_centre(&s, [0.7, 0.6]);
+        // taken back: from 3 to the file's own 0
+        assert!(s.set_orientation(&path(10), None));
+        assert_centre(&s, [0.3, 0.4]);
+        assert_eq!(s.zoom, Zoom::Scale(1.0));
+        assert!(s.gesture_at.is_none(), "a turn is not a zoom gesture");
+    }
+
+    #[test]
+    fn a_turn_near_an_edge_turns_the_drawn_centre() {
+        let mut s = state(1024);
+        opened(&mut s, k(10));
+        s.zoom = Zoom::Scale(1.0);
+        s.centre = [0.25, 0.1];
+        // the view's half height is 800 / 3000 / 2, so the drawn centre is [0.25, 0.4 / 3]
+        let drawn = geometry::centre_of(SIZE, geometry::visible(SIZE, VIEW, 1.0, s.centre));
+        assert!((drawn[0] - 0.25).abs() < 1e-9 && (drawn[1] - 0.4 / 3.0).abs() < 1e-9);
+        assert!(s.set_orientation(&path(10), Some(6)));
+        assert_centre(&s, [1.0 - 0.4 / 3.0, 0.25]);
+    }
+
+    #[test]
+    fn a_turn_at_fit_stays_fit_and_keeps_the_centre() {
+        let mut s = state(1024);
+        opened(&mut s, k(10));
+        s.zoom = Zoom::Fit;
+        s.centre = [0.3, 0.4];
+        assert!(s.set_orientation(&path(10), Some(6)));
+        assert_eq!(s.zoom, Zoom::Fit);
+        assert_eq!(s.centre, [0.3, 0.4]);
+    }
+
+    #[test]
+    fn a_turn_of_an_image_that_is_not_current_keeps_the_view() {
+        let mut s = state(1024);
+        opened(&mut s, k(10));
+        opened(&mut s, k(11));
+        s.zoom = Zoom::Scale(1.0);
+        s.centre = [0.3, 0.4];
+        assert!(s.set_orientation(&path(11), Some(6)));
+        assert_eq!(flip(&s, k(11)), Some(6));
+        assert_eq!(s.zoom, Zoom::Scale(1.0));
+        assert_eq!(s.centre, [0.3, 0.4]);
+    }
+
+    #[test]
+    fn a_turn_raises_a_scale_below_the_turned_minimum() {
+        let mut s = state(1024);
+        s.view_px = [800, 1000];
+        opened(&mut s, k(10));
+        // 4000×3000 in 800×1000: fit 0.2, minimum 0.1; turned 3000×4000: fit 0.25, minimum 0.125
+        assert!((s.min_scale(Some(SIZE)) - 0.1).abs() < 1e-9);
+        let turned = ImageSize { flip: 6, ..SIZE };
+        assert!((s.min_scale(Some(turned)) - 0.125).abs() < 1e-9);
+        s.zoom = Zoom::Scale(0.1);
+        assert!(s.set_orientation(&path(10), Some(6)));
+        assert_eq!(s.zoom, Zoom::Scale(0.125));
     }
 
     // ---------- set_files (ADR 0014 §4.4, T54) ----------

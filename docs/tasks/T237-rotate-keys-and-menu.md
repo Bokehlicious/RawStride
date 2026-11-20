@@ -142,7 +142,8 @@
   folder such as `D:\PhotoWorkflowData\O-Q12-rotation`: a RAW and a JPEG turned with Ctrl+→ and
   Ctrl+← in the contact sheet and the preview, the thumbnail and the view turn at once; several
   marked images turned with one key; at 100 % the same point stays in the centre, at fit the
-  image stays fit; in the compare with the zoom locked (L), what the held side does when the
+  image stays fit; near an edge at 100 %, a turn and a turn back (T235's review: the view may end
+  a little off where it started, since the drawn point is clamped after the turn); in the compare with the zoom locked (L), what the held side does when the
   current image is turned (T235: the shell copies the turned centre to it; a task only if it
   looks wrong); a failed write (a JPEG made read-only) turns back and the status line says
   why; after a restart the turns are still there (the RAW from its sidecar, the JPEG from its
