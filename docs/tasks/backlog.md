@@ -447,7 +447,8 @@ by the owner the same day; step E4 in `plans/adr-0018-0025-steps.md`, before ADR
   - *"Writing ratings" counts rotations:* the Tasks area's line "Writing ratings: {count}"
     (`tasks_text.rs`) counts the rotation writes too once T237 is done (`pending_writes`). A
     task (a separate line, or "Writing metadata") if the owner finds it misleading in O3's
-    hand check.
+    hand check. (Owner, 2026-11-20, after the hand check: a separate line, "Writing
+    rotations: {n}", beside the ratings' line; a `pw-loupe` task follows.)
   - *No Rotate items in the right-click menu:* ADR 0024 names only the Image menu, and the
     right-click menu's items and order are ADR 0019's (E-Q17). Needs an ADR addition if the
     owner wants them.
@@ -468,3 +469,13 @@ by the owner the same day; step E4 in `plans/adr-0018-0025-steps.md`, before ADR
     exit wait does not drain the reader). A task only if it is seen.
   - *A RAW+JPEG pair:* a turn acts on the file turned, not on its partner (as a rating key).
     The owner decides in O3's hand check whether partners should turn together.
+    (Owner, 2026-11-20, hand check: accepted as it is, the partner is not turned.)
+- **A turn of a Sony ILCE-1 JPEG is always refused** (the owner's hand check of ADR 0024,
+  2026-11-20): when ExifTool 13.59 writes IFD0 Orientation into a Sony ILCE-1 JPEG it also
+  "fixes" `Sony:HiddenDataOffset` (warning "[minor] Fixed incorrect HiddenDataOffset";
+  measured on a scratch copy, 13459456 became 13406043). The safe write's verify sees a value
+  it did not ask for and refuses the write, so the turn is rolled back and the file is
+  unchanged (fails safe). An XMP-only rating write does not trigger it. Next: a `pw-metadata`
+  task that measures which keys ExifTool changes in such a file and lets verify allow this
+  one fix for an orientation write (as `creates_exif_block` allows the Exif block's keys),
+  with a test on a Sony JPEG sample.
