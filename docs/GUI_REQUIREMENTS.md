@@ -66,7 +66,7 @@ ADR 0003) and the presenter decision B2-res (WebView2 shared buffer into WebGL2,
 | The 4 GB budget and texture memory | **Decided for now (§7):** the core's 4 GB and the texture budget are counted separately. |
 | eframe rendering backend (OpenGL through glow, or wgpu) | **Decided: glow (§7)**, after the measured comparison in P7. |
 | Today's UI tests (Playwright against a mocked Tauri backend) | Remain valid for the current app until it is replaced. New tests follow GR11. `docs/TESTING.md` is updated when the GUI work starts. |
-| Distribution (`distribution.md`) | The WebView2 runtime and profile folder are no longer needed once the egui GUI ships. To be updated then. |
+| Distribution (`distribution.md`) | The WebView2 runtime and profile folder are no longer needed once the egui GUI ships. Updated 2026-11-20 (T228): `distribution.md` describes RawStride's portable zip. |
 
 ## 5. Not decided here
 

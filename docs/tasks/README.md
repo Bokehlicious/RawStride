@@ -86,7 +86,6 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status |
 |---|---|---|
-| [T228](T228-portable-zip.md) | ADR 0031 RL4: the portable zip, made by tools/package-dist.ps1, and docs/distribution.md rewritten (tools, docs) | Open |
 
 ## Writing a task (owner and reviewer)
 

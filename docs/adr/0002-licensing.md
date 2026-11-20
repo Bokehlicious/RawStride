@@ -10,7 +10,8 @@
   `x64-windows-static-md`, `docs/libraw-build.md`), together with LittleCMS 2 (MIT), JasPer
   (JasPer License 2.0), libjpeg-turbo (IJG, BSD-3-Clause, zlib) and zlib.
 - **ExifTool** uses the same terms as Perl (Artistic License or GPL). RawStride runs it as a
-  separate, unmodified program, and today it is not shipped (`docs/distribution.md`).
+  separate, unmodified program, and ships it in the program folder of the portable zip (§2.5;
+  `docs/distribution.md`, T228).
 - **Rust dependencies:** a `cargo metadata` survey on 2026-11-13 (616 packages, all platforms)
   found only permissive licences (MIT, Apache-2.0, BSD, ISC, Zlib, BSL-1.0, Unicode-3.0, IJG, CC0,
   Unlicense) and a few with MPL-2.0 (`cssparser`, `selectors` and others, through the Tauri app);
@@ -68,9 +69,9 @@
 
 ## 4. Still open
 
-- [ ] A RawStride distribution folder (there is none today; `tools/package-dist.ps1`, which packed only
-  the Tauri app, was removed with it on 2026-11-19, T208; `docs/distribution.md` keeps its findings):
-  the exe, the runtime DLLs, ExifTool (§2.5), `LICENSE` and the notices.
+- [x] A RawStride distribution folder (the Tauri app's `tools/package-dist.ps1` was removed with it on
+  2026-11-19, T208): the exe, the runtime DLLs, ExifTool (§2.5), `LICENSE` and the notices. Done by T228 (2026-11-20):
+  `tools/package-dist.ps1` makes the portable zip (ADR 0031 RL4); `docs/distribution.md` describes it.
 - [x] `THIRD-PARTY-NOTICES.txt` before the first release: the Rust packages (from `cargo
   metadata`), LibRaw, LittleCMS, JasPer, libjpeg-turbo, zlib, the fonts, the MSVC runtime, and
   ExifTool with its Perl. Done by T227 (2026-11-20, ADR 0031 RL3): made by

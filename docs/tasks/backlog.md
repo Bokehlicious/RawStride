@@ -116,8 +116,7 @@ and reviewer:
   - *GUI*: eframe's `wayland`/`x11` and rfd's `xdg-portal`/`gtk3` are off (GUI_REQUIREMENTS §6) and
     one of each is needed on Linux. glow works on macOS (OpenGL 4.1, deprecated); GUI_REQUIREMENTS
     §7's timings are Windows-only measurements.
-  - *Distribution*: `docs/distribution.md` (the retired Tauri app's folder) is Windows only, and
-    RawStride's own folder (ADR 0002 §4) is not made yet. macOS needs an
+  - *Distribution*: `docs/distribution.md` (RawStride's portable zip, T228) is Windows only. macOS needs an
     `.app`, signing and notarization (Apple Developer account), `libomp.dylib` and a Mac for the
     hand checks; Linux a tarball or AppImage. ExifTool shipping (ADR 0002 §2.5) per platform.
   - *Size (estimate)*: Linux about 1–1.5 weeks (build, Unix fileops and settings folder, tests on

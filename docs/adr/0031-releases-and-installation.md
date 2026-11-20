@@ -10,7 +10,8 @@
     SPDX headers (optional);
   - `docs/tasks/plans/public-release.md` §4 "Before the first binary release" and `backlog.md`
     (the licence notice in the program, IPTC's terms for the generated tables);
-  - [distribution.md](../distribution.md): the retired Tauri app's folder, whose findings on
+  - [distribution.md](../distribution.md): then the retired Tauri app's folder (rewritten for the
+    portable zip by T228, 2026-11-20, those findings kept as its History), whose findings on
     runtime DLLs, a read-only program folder, signing and a clean PC are the starting point here;
   - ADR 0012 (the name RawStride, the exe `rawstride.exe`, crate names kept);
   - `.github/workflows/ci.yml` (T220, T222) and the rule that tooling changes go through a task;

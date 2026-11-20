@@ -7,3 +7,7 @@ ingest throughput per drive, and catalog query timings.
 the vcpkg packages' copyright files, egui's font licences and cargo-about's output (`about.toml`,
 `third-party-notices.hbs`); it needs cargo-about 0.9.3 and the vcpkg packages, and is run again, and
 its result committed, when `Cargo.lock`, `vcpkg.json` or ExifTool's version changes.
+`package-dist.ps1` makes the portable zip `RawStride-<version>-windows-x64.zip` and its folder in
+`target\dist\` (ADR 0031 RL4; `docs/distribution.md`): the release exe, the four MSVC runtime DLLs,
+ExifTool, `LICENSE`, `THIRD-PARTY-NOTICES.txt` and `README.txt`. A zip made by hand is for testing;
+a release zip is made by the release workflow, not by hand.
