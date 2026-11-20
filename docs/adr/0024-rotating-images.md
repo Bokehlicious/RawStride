@@ -79,6 +79,11 @@
 - Before O1 the reviewer checks on the owner's real files whether the owner's RAW editor reads
   `tiff:Orientation` from the sidecar (level C, as R2). If it does not, the rotation is written
   all the same and the finding is recorded here (O-Q12).
+- **Checked by the owner (2026-11-20): DxO PhotoLab reads it.** Copies of a Sony ARW, a
+  Panasonic RW2 and a Fujifilm RAF, each with embedded orientation 1, were given a sidecar holding
+  only `tiff:Orientation` (6, 8 and 3), in a new folder with no `.dop` files. DxO PhotoLab showed
+  all three turned as the sidecar says (90° clockwise, 90° anticlockwise, 180°). The folder held
+  no new or changed files afterwards.
 
 ## 3. Questions (answered by the owner, 2026-11-17: every proposal approved)
 
