@@ -448,7 +448,7 @@ by the owner the same day; step E4 in `plans/adr-0018-0025-steps.md`, before ADR
     (`tasks_text.rs`) counts the rotation writes too once T237 is done (`pending_writes`). A
     task (a separate line, or "Writing metadata") if the owner finds it misleading in O3's
     hand check. (Owner, 2026-11-20, after the hand check: a separate line, "Writing
-    rotations: {n}", beside the ratings' line; a `pw-loupe` task follows.)
+    rotations: {n}", beside the ratings' line; task T239.)
   - *No Rotate items in the right-click menu:* ADR 0024 names only the Image menu, and the
     right-click menu's items and order are ADR 0019's (E-Q17). Needs an ADR addition if the
     owner wants them.
@@ -478,4 +478,6 @@ by the owner the same day; step E4 in `plans/adr-0018-0025-steps.md`, before ADR
   unchanged (fails safe). An XMP-only rating write does not trigger it. Next: a `pw-metadata`
   task that measures which keys ExifTool changes in such a file and lets verify allow this
   one fix for an orientation write (as `creates_exif_block` allows the Exif block's keys),
-  with a test on a Sony JPEG sample.
+  with a test on a Sony JPEG sample. (Reviewer, 2026-11-20, measured: verify already allows
+  the key, a pointer; the write is refused by the warning itself, which the safe write
+  refuses before verify. Task T238, after the owner's decision D18, 2026-11-20.)

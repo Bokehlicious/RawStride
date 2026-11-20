@@ -482,10 +482,10 @@ the decisions do not live only in the tasks.
 | U5-Q1 | In the left column under the Library, collapsible like the Library's sections, its state remembered |
 | U5-Q2 | Source → destination, a progress bar by bytes and "Importing {i} of {n}: {file}" (IPTC and ejecting steps as in the dialog); a click shows the dialog; when done "Import done: {n} files" with failures counted, kept until "×" or the next import |
 | U5-Q3 | "Stop" asks nothing: it does what the dialog's Cancel does; the files copied so far are kept |
-| U5-Q4 | Rating writes ("Writing ratings: {n}"), "Apply to All Marked" ("Saving metadata: {i} of {n}") and the window's own save, each only while it runs |
+| U5-Q4 | Rating writes ("Writing ratings: {n}"), "Apply to All Marked" ("Saving metadata: {i} of {n}") and the window's own save, each only while it runs. **Added by the owner 2026-11-20** (after the hand check of ADR 0024): rotation writes get their own line, "Writing rotations: {n}", after the ratings' line, not counted in it (T239) |
 | U5-Q5 | Failed rating writes and reads, an import's failed files and errors; newest first with the time; at most 200; "Clear"; not saved at exit |
 | U5-Q6 | Only background errors go to the list; the boxes that need an answer (ExifTool missing or too old, unfinished writes at the last exit) stay |
-| U5-Q7 | Tasks, No tasks, Stop, Errors ({n}), Clear, Writing ratings: {n}, Saving metadata (: {i} of {n}); English (GR14), in the glossary |
+| U5-Q7 | Tasks, No tasks, Stop, Errors ({n}), Clear, Writing ratings: {n}, Writing rotations: {n} (owner, 2026-11-20, T239), Saving metadata (: {i} of {n}); English (GR14), in the glossary |
 | U12a-Q1 | Every editable one-line text and list field (contact fields included); not the multi-line fields, the date, the check box, the choice lists or the structure lists' sub-fields |
 | U12a-Q2 | What a successful write (OK, Save and Next, Apply to All Marked) put in the field; the last 10, newest first, no duplicates; a list field's entries one by one, only those the write adds (reviewer, T141) |
 | U12a-Q3 | "Add to My Values" in the ▼ list adds the field's text; "×" removes one; no limit; alphabetical |
