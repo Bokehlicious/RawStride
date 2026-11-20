@@ -445,3 +445,20 @@ by the owner the same day; step E4 in `plans/adr-0018-0025-steps.md`, before ADR
   - *No Rotate items in the right-click menu:* ADR 0024 names only the Image menu, and the
     right-click menu's items and order are ADR 0019's (E-Q17). Needs an ADR addition if the
     owner wants them.
+- **Leftovers of the chain review of T235–T237** (2026-11-20; accepted when the chain was
+  reviewed):
+  - *An outside change of IFD0 Orientation is not seen during the session:* after RawStride has
+    written a JPEG's, TIFF's or DNG's orientation it keeps that value until the tab is closed or
+    the program restarts (T236, `confirmed_by_write`; the thumbnail cache has no file time in
+    its key). A program started with "Open in" that turns the file is not followed; the next
+    turn in RawStride starts from RawStride's value. A task with ADR 0026 (a folder that
+    follows changes on disk) if it is seen.
+  - *A group move does not wait for the partner's turn:* a move by X with "Move Rejected and
+    Picked Images to Subfolders" waits only for the image's own pending writes
+    (`main.rs`, `send_moves`), not for its JPG partner's; a partner's turn still queued or
+    waiting for its embedded value then fails on the moved file and is rolled back. Ratings
+    have the same window; the embedded read makes it a little wider.
+  - *Turns waiting for their embedded value at exit* are listed as unsaved, not written (the
+    exit wait does not drain the reader). A task only if it is seen.
+  - *A RAW+JPEG pair:* a turn acts on the file turned, not on its partner (as a rating key).
+    The owner decides in O3's hand check whether partners should turn together.

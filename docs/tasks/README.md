@@ -87,7 +87,7 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 | Task | Title | Status |
 |---|---|---|
 | [T234](T234-level-c-tests-follow-the-samples.md) | The level-C tests follow the samples as they are now, and the samples are read-only | Open |
-| [T235](T235-turn-keeps-the-zoomed-point.md) | ADR 0024 O3a: a turn keeps the same image point in the centre (pw-viewcore) | Blocked: waits for the chain review |
+| [T235](T235-turn-keeps-the-zoomed-point.md) | ADR 0024 O3a: a turn keeps the same image point in the centre (pw-viewcore) | Open |
 | [T236](T236-orientation-store.md) | ADR 0024 O3b: the shell's store of turns and its write queue | Blocked: waits for T235 |
 | [T237](T237-rotate-keys-and-menu.md) | ADR 0024 O3c: Rotate Left and Rotate Right in the shell | Blocked: waits for T236 |
 

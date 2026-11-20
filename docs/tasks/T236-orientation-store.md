@@ -99,6 +99,11 @@
        path; a `HashMap`'s order is not fixed). A path only waiting for its embedded value is not
        pending, so it is dropped and its waiting turns are lost (a later `embedded_read` for it
        is ignored); that is accepted (the image left the open folders).
+     - **Why `confirmed_by_write` must stay** (chain review): the thumbnail cache's key is
+       `(path, cell, orientation)` with no file time (`pw-thumbcache` `worker.rs`), and the view
+       core keeps the flip it read before the write (a release drops sessions, not sizes). A
+       written JPEG, TIFF or DNG whose shown value went back to `None` would therefore be shown
+       with a stale thumbnail and a stale flip until a restart. Do not simplify it away.
      - `failure_text(&self) -> Option<String>`: as `RatingStore::failure_text`, with the texts of
        point 6. The store has its own private `fail_write` (copied from `RatingStore`'s, built on
        the rotation texts); `ratings.rs` is not changed beyond point 5.
@@ -106,15 +111,18 @@
      thread of its own (named `pw-orientation-reader`) that reads one file at a time with
      `pw_raw::inspect` and answers `(path, Option<u16>)`: `Some(info.orientation)` when inspect
      succeeds, `None` when it fails. `start()`, `request(path) -> bool` (false when the reader has
-     stopped; the caller then gives the store `embedded_read(path, None)`), and
-     `try_recv() -> Option<(PathBuf, Option<u16>)>`, with `request(&self, path: PathBuf)`; it
+     stopped; the caller then reads the value itself, T237), and
+     `try_recv() -> Result<Option<(PathBuf, Option<u16>)>, ReaderStopped>` (`Ok(None)`: no
+     answer yet; `Err(ReaderStopped)`: the thread has ended, so no answer will come; a small
+     public unit struct `ReaderStopped`, re-exported), with `request(&self, path: PathBuf)`; it
      derives `Debug` (the workspace warns on `missing_debug_implementations`). The thread ends when the reader is dropped;
      when it cannot be started, the reason goes to stderr as in `CaptureReader::start`.
   4. **No wiring:** nothing in `main.rs`, `metadata.rs` or `shell.rs` uses the store in this
      task (T237 does). The module may need `#[allow(dead_code)]` only if clippy asks for it on
      items `lib.rs` does not re-export; prefer re-exporting what T237 will use.
   5. **`lib.rs`:** `mod orientations;` and
-     `pub use orientations::{EmbeddedOrientationReader, OrientationStore, OrientationWriter};`;
+     `pub use orientations::{EmbeddedOrientationReader, OrientationStore, OrientationWriter,
+     ReaderStopped};`;
      `ratings.rs`'s `absolute_path` becomes `pub(crate)` so the store uses the same rule.
   6. **Texts** (`rating_text.rs`, rule 13, English): `ROTATION_UNSUPPORTED_TEXT`
      ("Rotations cannot be saved for this file type."), `pub(crate) fn
@@ -171,7 +179,7 @@
   - `unsupported_files_are_skipped_and_only_unsupported_is_refused`: as the ratings' batch tests,
     with `RatingRefused::Unsupported` and nothing changed.
   - `the_reader_reads_a_missing_file_as_none`: as `sort.rs`'s
-    `the_reader_reads_a_file_without_a_date_as_none`.
+    `the_reader_reads_a_file_without_a_date_as_none` (its answer comes as `Ok(Some(..))`).
   - `rating_text.rs`: the three texts, singular and plural.
 - **Not in this task:** keys, menu items, `MetadataCache`, `main.rs` and the view (T237); the
   zoom rule (T235); reading the embedded orientation in the folder's batch call (it would make
@@ -190,3 +198,4 @@
 | 2026-11-20 | Blocked | Added (chain T235 → T236 → T237, ADR 0024 O3); waits for T235 |
 | 2026-11-20 | Blocked | Cold read: doable; every test number checked against `turned`; `turned` reachable, no new dependency. Fixed: the glossary terms moved here from T237 (rule 13); `pw_metadata`'s `RequestId`/`SubmitError`; `ROTATION_UNSUPPORTED_TEXT` shown by the caller; own `fail_write`, text visibility; `Debug` on the reader; a change recorded on `Ok`; `confirmed_by_write` and `embedded` updated only for files with their own metadata (a RAW's sidecar is read again), with a RAW test; prune sorted, waiting turns of a pruned path lost (accepted); duplicates turned once; failure reset; the test orders and numbers given |
 | 2026-11-20 | Blocked | From T237's cold read: `is_waiting` and `waiting_paths` added (a move must not go ahead while a turn waits for its embedded value), with a test |
+| 2026-11-20 | Blocked | Chain review (T235's log): `try_recv` tells a stopped reader apart (`ReaderStopped`); the reason `confirmed_by_write` must stay written down |

@@ -46,6 +46,11 @@
        accepted for now, `backlog.md`); `finish_pending_writes` lists in `unsaved.pending` the
        files of both kinds of writes and the store's `waiting_paths` (the exit wait does not
        wait for those: the reader's answers come through `main.rs`), each file once.
+     - `write_pending`'s doc comment ("a rating write") names the rotation writes and the
+       waiting turns too.
+     - The two queues stay apart: the ratings are pumped before the rotations in each `poll`,
+       so a rating and a turn of the same frame are sent ratings first; they write different
+       tags, and both go into the worker's one ordered queue. Do not merge the stores.
      - `failure_text()` gives the text of the store whose failure came last (a rating or a
        rotation), so the status line names the right kind; keep which one in a field set where
        each store's failures are pushed (`written`, `pump`, `fail_sent`). When both fail in one
@@ -55,11 +60,17 @@
      where `capture_reader` is. `fn rotate(&mut self, clockwise: bool)`: the targets are
      `key_targets()`; with none, nothing. `metadata.turn(&targets, clockwise)`:
      - `Ok(asks)`: each path in `asks` is sent to `orientation_reader.request`; when that returns
-       false, `metadata.embedded_read(path, None)` at once.
+       false (the reader could not start or has stopped), the value is read at once on the UI
+       thread, `pw_raw::inspect(&path).ok().map(|info| info.orientation)`, and given to
+       `metadata.embedded_read` (one header read; `None` only when inspect fails). Starting
+       from 1 instead would write the file's own value without turning it, or jump 180°.
      - `Err(RatingRefused::Unsupported)`: the status line shows `ROTATION_UNSUPPORTED_TEXT`;
        another error shows its text (as `rate` does).
      Each frame, before `follow_orientations`, every answer of `orientation_reader.try_recv()` is
-     given to `metadata.embedded_read`. A turn does not change the marking, the filter or the
+     given to `metadata.embedded_read`. When `try_recv` gives `Err(ReaderStopped)`, every path
+     of the store's `waiting_paths()` is answered the same way on the UI thread and the count
+     of reads in flight goes to 0 (otherwise moves, deletes and "Open in" would wait for ever,
+     and the repaint loop would never stop). A turn does not change the marking, the filter or the
      current image, and moves nothing.
      **Redraw:** keys are handled after `follow_orientations` in the frame, so `rotate` calls
      `ctx.request_repaint()` (the turn reaches the view and the thumbnail in the next frame at
@@ -117,7 +128,10 @@
     after "No label" and before "RAW ↔ JPEG"/"R"; no other existing test changes (rule 5). If
     another one fails, stop and report it.
 - **Not in this task:** the zoom rule (T235); the store's rules (T236: change them only by
-  stopping and asking); the right-click menu (ADR 0019 E-Q17); showing the orientation in Info
+  stopping and asking); the right-click menu (ADR 0019 E-Q17); the locked compare (the shell copies the
+  current core's turned centre to the held side; nothing is changed there, it is looked at in
+  the hand check); turning a RAW+JPEG pair's partner (a turn acts on the file turned, as a
+  rating key does); showing the orientation in Info
   or the metadata window (O-Q7: nothing special shown); mirror commands, free angles, pixel
   turns (ADR 0024 §5); a `CHANGELOG.md` line (the reviewer adds it at Done, `docs/tasks/
   README.md`, "The change log").
@@ -132,7 +146,9 @@
   current image is turned (T235: the shell copies the turned centre to it; a task only if it
   looks wrong); a failed write (a JPEG made read-only) turns back and the status line says
   why; after a restart the turns are still there (the RAW from its sidecar, the JPEG from its
-  Exif); DxO PhotoLab shows the RAW turned; if one is at hand, a JPEG with no Exif that is not
+  Exif); a DNG (and a TIFF if at hand), during the session and after a restart; a RAW+JPEG
+  pair turned in RAW and in JPEG mode (R), noting that the partner file is not turned; with
+  many marked images on a slow drive, images without a read value may turn one by one; DxO PhotoLab shows the RAW turned; if one is at hand, a JPEG with no Exif that is not
   JFIF (`backlog.md`, "Creating Exif in a JPEG was measured on JFIF only").
 - **Done when:** `.\tools\check.ps1` is all OK and `git status` shows only the files above
   changed.
@@ -143,3 +159,4 @@
 |---|---|---|
 | 2026-11-20 | Blocked | Added (chain T235 → T236 → T237, ADR 0024 O3); waits for T236 |
 | 2026-11-20 | Blocked | Cold read: doable; the key maps, `MetadataSubmit`, `failure_text`'s use and the repeat flag checked. Fixed: `command_of_key` in `lib.rs` (its existing test would fail); the two `shell_text.rs` list tests named; a repaint after a turn and while embedded reads are in flight; "Writing ratings" in the Tasks area counts rotations (accepted, backlog); `failure_text` when both fail in one poll; `FakeSubmit`'s field; a turn waiting for its embedded value holds back moves, deletes and "Open in" and is listed at exit (T236 got `is_waiting`/`waiting_paths`); the glossary moved to T236; the locked compare added to the hand check |
+| 2026-11-20 | Blocked | Chain review (T235's log): a reader that cannot start or has stopped is answered with `pw_raw::inspect` on the UI thread; `write_pending`'s doc comment; the queues kept apart; the locked compare and a pair's partner named under Not in this task; DNG/TIFF and a RAW+JPEG pair in the hand check |

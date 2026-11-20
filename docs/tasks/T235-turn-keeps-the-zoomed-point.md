@@ -1,4 +1,4 @@
-# T235. ADR 0024 O3a: a turn keeps the same image point in the centre (pw-viewcore) — Blocked: waits for the chain review
+# T235. ADR 0024 O3a: a turn keeps the same image point in the centre (pw-viewcore) — Open
 
 - **Why:** ADR 0024 §2.5, O-Q9 (accepted by the owner 2026-11-17): when an image is turned,
   "fit stays fit; at 100 % the same point of the image stays in the centre". Since T231,
@@ -28,15 +28,18 @@
      - the centre becomes `turned_centre(drawn, (4 + new − old) % 4)` with the quarter turns of
        the two flips (`quarter_turns_of_flip`; written so the `u8` cannot underflow), clamped to
        0–1 as `set_view` clamps it. `drawn` is the point really in the middle of the view before
-       the turn, `geometry::centre_of(geometry::visible(old size, view_px, s, centre))` with the
-       size of the old flip, not the stored centre: `set_view` stores a centre without moving it
+       the turn, `geometry::centre_of(old_size, geometry::visible(old_size, view_px, s, centre))`
+       with `old_size` the size with the old flip, not the stored centre: `set_view` stores a centre without moving it
        where the view is drawn (state.rs:637–639), and near an edge the two differ. "The same
        point of the image stays in the centre" is the drawn point (ADR 0024 §2.5);
      - the scale is raised to `min_scale` of the turned size when it is below it (as `set_view`
        clamps a scale when the size is known), and stays at most `MAX_SCALE`.
      At `Zoom::Fit` nothing besides the flip changes (fit stays fit; the scale follows the turned
      size already, T231). An image that is not the current one, or a path whose current image is
-     not opened yet, changes only its flip, as today. The return value stays "whether a flip
+     not opened yet, changes only its flip, as today. The rule applies to every flip change
+     of the current image, not only a key's: an XMP value arriving with a folder read, a
+     rollback after a failed write, and a value taken back (`None`) all keep the same image
+     point in the centre, which is what the user should see. The return value stays "whether a flip
      changed". No gesture step is started (`gesture_at` is not set): a turn is not a zoom
      gesture.
   3. **The doc comments** of `ViewCore::set_orientation` (`core.rs`) and
@@ -86,3 +89,4 @@
 | 2026-11-20 | Open | Added (chain T235 → T236 → T237, ADR 0024 O3) |
 | 2026-11-20 | Open | Cold read: doable with the named files; flip directions (6 = 90° clockwise, 5 = 270°), the centre mapping and the helpers checked. Fixed: the drawn centre is turned, not the stored one (they differ near an edge), with an edge test; the 100 % test numbers moved inside the drawable range; the scale test given a tall view and its numbers (with the default view the minimum falls); `State::set_orientation`'s doc comment named too; no `u8` underflow; tests set `zoom`/`centre` directly; the locked compare's copy of the centre named under Not in this task and in T237's hand check |
 | 2026-11-20 | Blocked | Waits for the review of the whole chain T235–T237 (`docs/tasks/README.md`, "A review of the whole chain") before it is set to Open |
+| 2026-11-20 | Open | Chain review (one fresh agent, T235–T237 with ADR 0024 and the code): no contradiction between the briefs, every ADR 0024 requirement covered. Fixed: here the `centre_of` call's arguments, and that the rule holds for every flip change of the current image; in T236 a stopped reader is told apart from "no answer yet" and the reason `confirmed_by_write` must stay; in T237 a reader that cannot start or has stopped is answered with `pw_raw::inspect` on the UI thread (not 1, which would write the file's own value or jump 180°), `write_pending`'s doc comment, the two queues kept apart, nothing changed for the locked compare, and the hand check given a DNG/TIFF and a RAW+JPEG pair. Backlog: an outside change of IFD0 Orientation not seen during the session, a group move not waiting for the partner's turn, waiting turns dropped at exit. Set to Open |
