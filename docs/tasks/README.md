@@ -86,11 +86,12 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status |
 |---|---|---|
+| [T222](T222-ci-on-every-push.md) | CI on every push (public-release plan P3) | Open |
 
 ## Writing a task (owner and reviewer)
 
-- **Number:** the next free number after the highest in this folder and `done/` (T222 next).
-- **File:** `docs/tasks/T222-<a-few-words>.md`; three digits, lower case, words joined by `-`.
+- **Number:** the next free number after the highest in this folder and `done/` (T223 next).
+- **File:** `docs/tasks/T223-<a-few-words>.md`; three digits, lower case, words joined by `-`.
 - **Index:** add a row to "Open tasks" above and keep its status in step with the file's heading.
 - **Size (owner, 2026-11-15, after T142):** one task is one layer (a C++ shim or a core crate, or
   the shell in `pw-loupe`), about eight files at most, and gives one result the owner can check by
@@ -137,6 +138,14 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 - **Parallel tasks:** two tasks may run at the same time only if they change different functions
   (as T142 and T143 did); `.\tools\check.ps1` is run by one at a time, and each task is reviewed
   and committed on its own, one commit per task.
+- **Pull requests from outside (owner, 2026-11-20, public-release plan PR-Q11):** they are opened
+  against `main`; nobody presses Merge on GitHub. The reviewer reviews the pull request against
+  `CONTRIBUTING.md` and `AGENTS.md` §3–§8 (every commit signed off), fetches it
+  (`git fetch origin pull/<n>/head:pr-<n>`), merges it into `feature/gui-workspace` with
+  `git merge --no-ff pr-<n>` (the commits kept as they are, so GitHub sees them in `main` later),
+  runs `.\tools\check.ps1`, and commits only after the owner's approval. `main` is fast-forwarded
+  and pushed by the push routine; GitHub then marks the pull request merged. A change that needs a
+  hand check gets it before `main` moves.
 - **Owner decisions** (decisions, approved Q proposals) are written into the ADR or requirement
   they change before the task is Done, not only into the task's log (`AGENTS.md` §6).
 

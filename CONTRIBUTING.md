@@ -15,6 +15,14 @@ coordination up front saves everyone time.
   already recorded in the ADRs under `docs/adr/`; a change that goes against one needs that
   discussion first.
 
+## Pull requests
+
+Open pull requests against `main`. CI runs on them (a first-time contributor's run starts once the
+maintainer approves it). The maintainer does not press Merge on GitHub: an approved pull request is
+merged into the development branch `feature/gui-workspace`, checked there, and reaches `main` from
+it; GitHub then shows the pull request as merged. Keep your commits as they are once the review
+starts (no force push), so the merge takes the commits that were reviewed.
+
 ## Building and checking
 
 Follow [docs/building.md](docs/building.md). Before you open a pull request, run

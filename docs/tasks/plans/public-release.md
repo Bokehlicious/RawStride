@@ -35,6 +35,8 @@ the owner approved all ten as written on 2026-11-19, so each is now the decision
 | PR-Q8 | **Extras in `.github/`**: issue templates, `SECURITY.md` (how to report a security problem privately). | `SECURITY.md` yes (GitHub's private vulnerability reporting); issue templates later. |
 | PR-Q9 | **Free test files**: a few of the owner's own images (small RAW, DNG, JPEG, TIFF) released as CC0 into `tests/fixtures/`, so the ignored real-file tests can run for others and in CI. | After the repository is public (R9), not a blocker; the owner picks the images. |
 | PR-Q10 | **`gitleaks` (or a similar scanner) for H1.** Run it once as an outside tool (not a dependency of the project), or not at all? | Once, outside the repository, on a mirror clone; it adds nothing to the project. |
+| PR-Q11 | **Pull requests from outside contributors** (added 2026-11-20). `main` moves only by fast-forward from the work branch, and CI runs on pull requests to `main`. Where do they go, and how are they taken in? | To `main` (GitHub's default), so CI runs on them. Nobody presses Merge on GitHub: the reviewer fetches the pull request, merges it into `feature/gui-workspace`, runs `check.ps1`, and after the owner's approval `main` is fast-forwarded and pushed; GitHub then marks the pull request merged by itself (`docs/tasks/README.md`, "Pull requests from outside"). Decided by the owner, 2026-11-20. |
+| PR-Q12 | **P3: which pushes run CI?** (added 2026-11-20) | Both branches, `main` and `feature/gui-workspace`; a push of both at the same commit runs twice, which costs nothing in a public repository. Decided by the owner, 2026-11-20. |
 
 ## 2. Steps
 
@@ -59,7 +61,7 @@ the owner approved all ten as written on 2026-11-19, so each is now the decision
 | 5 | P1b | reviewer | **Just before the switch:** `gitleaks` (PR-Q10, outside the repository, on a fresh clone of the two branches) and a search of every commit since H2 for H1's private values (the replacement lists kept outside the repository), so nothing has come in since H1; done (reviewer, 2026-11-19, a fresh bare clone from GitHub, both branches at `7a3d97f`, 480 commits, 2,739 blobs): `gitleaks` 8.30.1 no leaks; H1's 38 literal values, 3 patterns and 6 removed paths in no blob or message (the same search on H1's pre-rewrite clone finds all of them, so it works); every author and committer the noreply address, the old private address nowhere; the 10 commits since H2 hold no user-folder path or e-mail address besides the runner's generic account and a placeholder in an older version of T220's text | after P1, the same day as P2 |
 | 5 | P2 | owner | The repository made public; done (owner, 2026-11-19) | after P1b |
 | 5 | P2b | owner on GitHub, reviewer lists | **Right after the switch:** private vulnerability reporting on (`.github/SECURITY.md` points to it); secret scanning and push protection on; a branch ruleset on the default branch with only "Restrict deletions" and "Block force pushes" (direct pushes stay allowed); done (owner, 2026-11-19), and the fork pull request approval checked again | right after P2 |
-| 5 | P3 | task (tooling) | CI on every push (the trigger widened) | after P2b |
+| 5 | P3 | T222 | CI on every push (the trigger widened): a push to `main` or `feature/gui-workspace` runs the workflow (PR-Q12), pull requests to `main` as before; the vcpkg binary cache saved only when the install added something, so a run per push does not fill the repository's cache | after P2b |
 
 Order 1 steps can run in parallel (they touch different files), one task at a time per
 `check.ps1` run. R1, R2, R5, R6, R10, R11 and C1, P3 change tools or code, so they are tasks with briefs
@@ -106,3 +108,4 @@ Order 1 steps can run in parallel (they touch different files), one task at a ti
 | 9 | 2026-11-19 | C1 (T220) and C2 done (first CI run green); P1 done as far as a private repository allows; P1b (a last secret and private-value search just before the switch) and P2b (the settings GitHub offers only for public repositories) added |
 | 10 | 2026-11-19 | P1b done (no leaks, no private values); P2 done: the repository is public; P2b done. Left: P3 |
 | 11 | 2026-11-20 | §3's note on the ignored real-file tests written (README, `docs/TESTING.md` §11); `AGENTS.md` §2 and `CLAUDE.md` say their workflow is the maintainer's and point outside contributors to `CONTRIBUTING.md` |
+| 12 | 2026-11-20 | PR-Q11 and PR-Q12 decided by the owner (as proposed); P3 is T222 |
