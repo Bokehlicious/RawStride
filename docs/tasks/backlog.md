@@ -69,7 +69,7 @@ and reviewer:
   the reader count as not USB (not ejected, safe). `CR_FAILURE` (19) is reused for "no matching
   disk" and reads like Windows error 19 in a bug report. The veto-name length is passed as
   `MAX_PATH` instead of the buffer's own length.
-- **CI before the repository becomes public** (owner, 2026-11-14): a GitHub Actions workflow
+- ~~**CI before the repository becomes public**~~ (done: T220, public-release plan C1, and T222, P3, 2026-11-20) (owner, 2026-11-14): a GitHub Actions workflow
   (`.github/workflows/ci.yml`) on `windows-latest` that installs the pinned Rust toolchain, runs
   `vcpkg install` with vcpkg's binary cache (LibRaw built from source takes long), puts ExifTool
   (Windows package, 12.67 or newer) on `PATH`, and runs `.\tools\check.ps1` without `-Ignored`;

@@ -1,6 +1,7 @@
 # Builds RawStride on a clean Windows machine and runs the same check as every commit
 # (.\tools\check.ps1, docs/building.md section 4). test-output.txt is kept as the artifact
-# "test-output".
+# "test-output". It runs when started by hand, on a push to main or feature/gui-workspace, and on
+# a pull request to main.
 #
 # Only GitHub's own actions, each pinned to a full commit SHA with its version in a comment.
 # The Rust version lives only in rust-toolchain.toml, the vcpkg baseline only in vcpkg.json.
@@ -9,6 +10,10 @@ name: CI
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - main
+      - feature/gui-workspace
   pull_request:
     branches:
       - main
@@ -17,7 +22,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -108,8 +113,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       # vcpkg's package hashes include the compiler version, so a cache found only by vcpkg.json
-      # may hold packages vcpkg no longer uses. The folder is therefore restored by prefix and saved
-      # again after every install under a new key (run_id), with whatever vcpkg added.
+      # may hold packages vcpkg no longer uses. The folder is therefore restored by prefix and saved,
+      # under a new key (run_id), only when the install added a package.
       - name: Restore the vcpkg binary cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -119,13 +124,23 @@ jobs:
             ${{ runner.os }}-vcpkg-${{ env.VCPKG_TRIPLET }}-${{ hashFiles('vcpkg.json') }}-
 
       - name: Install the native libraries with vcpkg
+        id: vcpkg-install
         run: |
           New-Item -ItemType Directory -Force -Path $env:VCPKG_BINARY_CACHE | Out-Null
+          # The files provider keeps <hash>.zip files in two-letter subfolders; @() keeps .Count
+          # right for zero or one file.
+          $zipsBefore = @(Get-ChildItem -LiteralPath $env:VCPKG_BINARY_CACHE -Recurse -File -Filter *.zip).Count
           # In the repository root, so the libraries land in .\vcpkg_installed (check.ps1, build.rs).
           & (Join-Path $env:VCPKG_ROOT 'vcpkg.exe') install --triplet $env:VCPKG_TRIPLET
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $zipsAfter = @(Get-ChildItem -LiteralPath $env:VCPKG_BINARY_CACHE -Recurse -File -Filter *.zip).Count
+          Write-Output "vcpkg binary cache: $zipsBefore zip files before the install, $zipsAfter after"
+          if ($zipsAfter -gt $zipsBefore) { $added = 'added=true' } else { $added = 'added=false' }
+          # Windows PowerShell's >> writes UTF-16 and Out-File -Encoding utf8 a byte-order mark.
+          Add-Content -Path $env:GITHUB_OUTPUT -Value $added -Encoding ascii
 
       - name: Save the vcpkg binary cache
+        if: steps.vcpkg-install.outputs.added == 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}\vcpkg-bincache

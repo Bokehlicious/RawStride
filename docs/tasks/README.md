@@ -86,7 +86,6 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status |
 |---|---|---|
-| [T222](T222-ci-on-every-push.md) | CI on every push (public-release plan P3) | Open |
 
 ## Writing a task (owner and reviewer)
 

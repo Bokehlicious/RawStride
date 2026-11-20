@@ -60,7 +60,8 @@ warnings such as unmaintained crates. Without cargo-audit installed the step is 
 run the script, run it with `powershell -ExecutionPolicy Bypass -File .\tools\check.ps1`.
 
 The workflow `.github/workflows/ci.yml` runs the same check on GitHub, on a clean Windows machine,
-and keeps `test-output.txt` from the run.
+when started by hand, on a push to `main` or `feature/gui-workspace`, and on a pull request to
+`main`, and keeps `test-output.txt` from the run.
 
 Some tests need more than the source:
 
