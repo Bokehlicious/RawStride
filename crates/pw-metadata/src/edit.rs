@@ -69,6 +69,21 @@
 //!   left, cleared. A field of a list of structures, or a `field` on a property that is not a
 //!   structure, is [`EditError::Unsupported`].
 //!
+//! [`ExifTool::write_orientation_safely`] writes the Exif orientation (1–8) of one image (ADR 0024
+//! §2.2, T233). A file kind that cannot hold ratings, or an orientation outside 1–8, is
+//! [`EditError::Unsupported`] ("orientation is not supported for …", "orientation … is outside
+//! 1..8"); nothing is read or written. The current values (IFD0 Orientation and
+//! `XMP-tiff:Orientation`, numbers) are read in one ExifTool call from the file that holds the
+//! metadata: a manufacturer RAW's sidecar as stored (none means no current value; the RAW itself
+//! is not read), otherwise the image; a value that is not a number in 1–8 counts as missing. The
+//! plan, written by [`ExifTool::write_safely`], has only tag arguments: for a manufacturer RAW
+//! `tiff:Orientation` in the sidecar, unless it already holds the value (a sidecar value always
+//! wins over the RAW's embedded one, §2.4); for a JPEG, TIFF or DNG IFD0 Orientation unless it
+//! already holds the value (a missing tag is created, §2.6), and `tiff:Orientation` only when the
+//! file's XMP has a different one (kept in step, never created). A value already in the file
+//! gives an empty plan and [`WriteReport::Unchanged`]. Nothing else is written, and
+//! `tiff:Orientation` is not a property of the table.
+//!
 //! The old in-place write of ratings and templates (without the plan, the safe write or the
 //! journal), kept for the Tauri app by owner decision D7, was removed after that app was retired
 //! (T207; owner, 2026-11-19; T211).
@@ -78,6 +93,8 @@
 use std::fmt;
 use std::path::Path;
 
+use serde_json::Value as Json;
+
 use crate::iim::Fallback;
 use crate::journal::Journal;
 use crate::properties::{self, Occurrence, ValueKind};
@@ -86,12 +103,17 @@ use crate::safe_write::{ImageCheck, SafeWriteError, WriteReport};
 use crate::template::{self, Template, TemplateError};
 use crate::value::{ConflictRule, Metadata, StructValue, Value, ValueError};
 use crate::write_plan::{self, PlanError, WriteNotice, WriteSettings};
-use crate::{Error, ExifTool, Rating, supports_rating};
+use crate::{Error, ExifTool, Rating, supports_rating, supports_sidecar};
 
 /// The Rating property (§8).
 const RATING: &str = "xmp:Rating";
 /// The colour label (not IPTC; kept for Adobe and Photo Mechanic, §3).
 const LABEL: &str = "xmp:Label";
+/// The Exif orientation in IFD0 and in XMP, as ExifTool names them with `-G1` (ADR 0024 §2.2).
+const IFD0_ORIENTATION: &str = "IFD0:Orientation";
+const XMP_ORIENTATION: &str = "XMP-tiff:Orientation";
+/// The line `ExifTool::execute` puts between standard output and standard error.
+const STDERR_MARKER: &str = "--- stderr ---\n";
 
 /// The choices that change how an edit is written.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -498,6 +520,121 @@ impl ExifTool {
         }
         Ok(EditReport { report, notices })
     }
+
+    /// Writes the Exif `orientation` (1–8) of `image` through the safe write (ADR 0024 §2.2; see
+    /// the module comment): `tiff:Orientation` in a manufacturer RAW's sidecar, IFD0 Orientation
+    /// (with an existing `tiff:Orientation` kept in step) in a JPEG, TIFF or DNG. `checks` are the
+    /// caller's image checks; `journal` is the app's write journal.
+    pub fn write_orientation_safely(
+        &mut self,
+        image: &Path,
+        orientation: u16,
+        checks: &dyn ImageCheck,
+        journal: &Journal,
+    ) -> Result<WriteReport, EditError> {
+        if !supports_rating(image) {
+            return Err(EditError::Unsupported(format!(
+                "orientation is not supported for {}",
+                image.display()
+            )));
+        }
+        if !(1..=8).contains(&orientation) {
+            return Err(EditError::Unsupported(format!(
+                "orientation {orientation} is outside 1..8"
+            )));
+        }
+        let raw = supports_sidecar(image);
+        let holder = if raw {
+            crate::read::plain_sidecar(image).map_err(EditError::Read)?
+        } else {
+            Some(image.to_path_buf())
+        };
+        let current = match holder {
+            Some(file) => self.read_orientations(&file).map_err(EditError::Read)?,
+            None => CurrentOrientations::default(),
+        };
+        let mut args = Vec::new();
+        if !raw && current.ifd0 != Some(orientation) {
+            args.push(format!("-{IFD0_ORIENTATION}#={orientation}"));
+        }
+        let write_xmp = if raw {
+            current.xmp != Some(orientation)
+        } else {
+            current.xmp.is_some_and(|xmp| xmp != orientation)
+        };
+        if write_xmp {
+            args.push(format!("-{XMP_ORIENTATION}#={orientation}"));
+        }
+        let plan = write_plan::WritePlan {
+            options: Vec::new(),
+            args,
+            notices: Vec::new(),
+        };
+        self.write_safely(image, &plan, checks, journal)
+            .map_err(EditError::Write)
+    }
+
+    /// Reads IFD0 Orientation and `XMP-tiff:Orientation` of `file` in one ExifTool call.
+    fn read_orientations(&mut self, file: &Path) -> Result<CurrentOrientations, Error> {
+        let args = [
+            "-j".to_string(),
+            "-n".to_string(),
+            "-G1".to_string(),
+            format!("-{IFD0_ORIENTATION}"),
+            format!("-{XMP_ORIENTATION}"),
+            file.to_string_lossy().into_owned(),
+        ];
+        let answer = self.execute(&args)?;
+        parse_orientations(&answer, file)
+    }
+}
+
+/// The orientations a file holds before an orientation write; `None` when missing or not a
+/// number in 1–8.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+struct CurrentOrientations {
+    ifd0: Option<u16>,
+    xmp: Option<u16>,
+}
+
+/// Parses ExifTool's JSON answer of [`ExifTool::read_orientations`] for `file`. No output is
+/// ExifTool's message as the error.
+fn parse_orientations(answer: &str, file: &Path) -> Result<CurrentOrientations, Error> {
+    let (stdout, stderr) = answer.split_once(STDERR_MARKER).unwrap_or((answer, ""));
+    if stdout.trim().is_empty() {
+        let message = stderr.trim();
+        return Err(Error::ExifTool(if message.is_empty() {
+            format!("no answer for {}", file.display())
+        } else {
+            message.to_string()
+        }));
+    }
+    let unreadable = |reason: &str| {
+        Error::ExifTool(format!(
+            "could not read the answer for {}: {reason}",
+            file.display()
+        ))
+    };
+    let json: Json = serde_json::from_str(stdout).map_err(|e| unreadable(&e.to_string()))?;
+    let Some(Json::Object(object)) = json.as_array().and_then(|items| items.first()) else {
+        return Err(unreadable("no object for the file"));
+    };
+    Ok(CurrentOrientations {
+        ifd0: object.get(IFD0_ORIENTATION).and_then(orientation_value),
+        xmp: object.get(XMP_ORIENTATION).and_then(orientation_value),
+    })
+}
+
+/// A JSON value as an Exif orientation: a number (or a text holding one) in 1–8, else `None`.
+fn orientation_value(value: &Json) -> Option<u16> {
+    let number = match value {
+        Json::Number(number) => number.as_u64(),
+        Json::String(text) => text.trim().parse::<u64>().ok(),
+        _ => None,
+    }?;
+    u16::try_from(number)
+        .ok()
+        .filter(|value| (1..=8).contains(value))
 }
 
 /// The properties of the [`Edit::Entries`] in `edits` that were left alone because of an `Open`
@@ -591,6 +728,33 @@ mod tests {
         assert!(rating_changes(Some(&number("3")), Some(&number("4"))));
         assert!(rating_changes(None, Some(&number("2"))));
         assert!(rating_changes(Some(&number("2.5")), Some(&number("2"))));
+    }
+
+    #[test]
+    fn orientations_outside_one_to_eight_count_as_missing() {
+        let file = Path::new("a.jpg");
+        let read = |answer: &str| parse_orientations(answer, file).ok();
+        assert_eq!(
+            read(r#"[{"SourceFile":"a.jpg","IFD0:Orientation":6,"XMP-tiff:Orientation":"3"}]"#),
+            Some(CurrentOrientations {
+                ifd0: Some(6),
+                xmp: Some(3)
+            })
+        );
+        assert_eq!(
+            read(r#"[{"SourceFile":"a.jpg","IFD0:Orientation":0,"XMP-tiff:Orientation":9}]"#),
+            Some(CurrentOrientations::default())
+        );
+        assert_eq!(
+            read(r#"[{"IFD0:Orientation":"Rotate 90 CW","XMP-tiff:Orientation":-1}]"#),
+            Some(CurrentOrientations::default())
+        );
+        assert_eq!(
+            read("[{\"SourceFile\":\"a.jpg\"}]\n--- stderr ---\nWarning: x\n"),
+            Some(CurrentOrientations::default())
+        );
+        assert!(read("--- stderr ---\nError: File not found - a.jpg\n").is_none());
+        assert!(read("not json").is_none());
     }
 
     #[test]

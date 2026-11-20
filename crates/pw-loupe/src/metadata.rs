@@ -1186,6 +1186,7 @@ impl MetadataCache {
                 }
             }
             WorkerEvent::RatingsRead { .. } => {}
+            WorkerEvent::OrientationWritten { .. } => {}
             WorkerEvent::MetadataRead { id, path, result }
                 if self
                     .editor

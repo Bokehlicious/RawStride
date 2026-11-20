@@ -239,3 +239,4 @@ was when the task was done, so "this file", "below" and "the Log" in T1–T115 m
 | [T230](T230-read-xmp-orientation.md) | ADR 0024 O1a: the batch read also reads `XMP-tiff:Orientation` (pw-metadata) |
 | [T231](T231-orientation-per-file.md) | ADR 0024 O1b: the view core and the thumbnails take an orientation per file |
 | [T232](T232-shell-uses-xmp-orientation.md) | ADR 0024 O1c: the shell gives the read orientations to the view and the thumbnails |
+| [T233](T233-write-orientation.md) | ADR 0024 O2: writing the orientation through the safe write (pw-metadata) |

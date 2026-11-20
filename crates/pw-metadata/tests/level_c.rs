@@ -1023,3 +1023,77 @@ fn a_headline_on_a_copy_of_tn002363_keeps_its_history() {
     let (_, after) = headline_on_a_copy("tn002363", &[TN_DNG], Kind::Embedded);
     print_read(TN_DNG, &after);
 }
+
+// ---------------------------------------------------------------------------------------------
+// The orientation (ADR 0024 O2, T233)
+// ---------------------------------------------------------------------------------------------
+
+/// Writes `orientation` on a copy of the DNG `name` with `NoImageCheck` and checks the common
+/// points: `Written`, IFD0 Orientation is `orientation`, the image data is unchanged, nothing is
+/// left over, and the same value again is `Unchanged`. Returns the ExifTool and the scratch
+/// folder with the copy for the test's own checks.
+fn orientation_on_a_copy(test: &str, name: &str, orientation: u16) -> (ExifTool, Scratch, PathBuf) {
+    let mut et = exiftool();
+    let s = Scratch::new(test);
+    let image = s.copy(&[name]);
+    let image_before = image_data_hash(&mut et, &image);
+
+    let report = et.write_orientation_safely(&image, orientation, &NoImageCheck, &s.journal);
+    match report {
+        Ok(WriteReport::Written { target }) => assert_eq!(target, image),
+        other => panic!("{name}: expected Written, got {other:?}"),
+    }
+    assert_eq!(
+        tag(&mut et, &image, "IFD0:Orientation#"),
+        orientation.to_string()
+    );
+    assert_eq!(image_data_hash(&mut et, &image), image_before);
+    s.assert_clean();
+    match et.write_orientation_safely(&image, orientation, &NoImageCheck, &s.journal) {
+        Ok(WriteReport::Unchanged) => {}
+        other => panic!("{name}: expected Unchanged the second time, got {other:?}"),
+    }
+    (et, s, image)
+}
+
+/// `xiaomi_dng.dng` (IFD0 Orientation 6) turned to 3 on a copy.
+#[test]
+#[ignore = "needs the level-C samples: set PW_TESTDATA and run with --ignored"]
+fn an_orientation_on_a_copy_of_the_xiaomi_dng() {
+    let fingerprints = Fingerprints::of(&[XIAOMI_DNG]);
+    let mut et = exiftool();
+    assert_eq!(
+        tag(&mut et, &sample(XIAOMI_DNG), "IFD0:Orientation#"),
+        "6",
+        "precondition: the sample's IFD0 Orientation"
+    );
+
+    let (_, s, _) = orientation_on_a_copy("xiaomi-dng-orientation", XIAOMI_DNG, 3);
+
+    s.remove();
+    fingerprints.assert_unchanged();
+}
+
+/// `TN002363.DNG` (IFD0 and `XMP-tiff:Orientation` both 1) turned to 8 on a copy: the XMP value
+/// is kept in step.
+#[test]
+#[ignore = "needs the level-C samples: set PW_TESTDATA and run with --ignored"]
+fn an_orientation_on_a_copy_of_tn002363_keeps_xmp_in_step() {
+    let fingerprints = Fingerprints::of(&[TN_DNG]);
+    let mut et = exiftool();
+    let original = sample(TN_DNG);
+    assert_eq!(
+        (
+            tag(&mut et, &original, "IFD0:Orientation#"),
+            tag(&mut et, &original, "XMP-tiff:Orientation#")
+        ),
+        ("1".to_string(), "1".to_string()),
+        "precondition: the sample's orientations"
+    );
+
+    let (mut et, s, image) = orientation_on_a_copy("tn002363-orientation", TN_DNG, 8);
+
+    assert_eq!(tag(&mut et, &image, "XMP-tiff:Orientation#"), "8");
+    s.remove();
+    fingerprints.assert_unchanged();
+}

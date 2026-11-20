@@ -86,7 +86,6 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status |
 |---|---|---|
-| [T233](T233-write-orientation.md) | ADR 0024 O2: writing the orientation through the safe write (pw-metadata) | Open |
 
 ## Writing a task (owner and reviewer)
 

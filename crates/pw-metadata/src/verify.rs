@@ -8,7 +8,8 @@
 //! the snapshot of the written copy: the type and the image data must be unchanged, there must be
 //! no new errors or warnings (one more warning when the write creates the Photoshop block of a
 //! TIFF or DNG, D8), and every tag that was added, removed or changed must be one the
-//! write plan wrote or one a write is known to change (file data, pointers, tool data).
+//! write plan wrote or one a write is known to change (file data, pointers, tool data; the keys of
+//! an Exif block that an `IFD0:` write creates, only added, ADR 0024 §2.6).
 //!
 //! Nothing here writes a file; the safe write (T86) uses these checks.
 
@@ -381,6 +382,7 @@ pub fn verify_copy(
 
     let allowed = Allowed::from_plan(plan);
     let exif_block_dropped = drops_exif_block(original, copy, plan);
+    let exif_block_created = creates_exif_block(original, copy, plan);
     let mut keys: Vec<&String> = original.listing.keys().chain(copy.listing.keys()).collect();
     keys.sort();
     keys.dedup();
@@ -391,7 +393,11 @@ pub fn verify_copy(
             && EXIF_BLOCK_KEYS.contains(&key.as_str())
             && before.is_some()
             && after.is_none();
-        if before != after && !allowed.allows(key) && !dropped_with_block {
+        let added_with_block = exif_block_created
+            && EXIF_BLOCK_KEYS.contains(&key.as_str())
+            && before.is_none()
+            && after.is_some();
+        if before != after && !allowed.allows(key) && !dropped_with_block && !added_with_block {
             return Err(VerifyError::Unexpected {
                 key: key.clone(),
                 before: before.cloned(),
@@ -436,6 +442,28 @@ fn drops_exif_block(original: &FileSnapshot, copy: &FileSnapshot, plan: &WritePl
                 .is_some_and(|(group, _)| EXIF_GROUPS.contains(&group))
         });
     clears_exif_tag && original.listing.contains_key(EXIF_BYTE_ORDER) && no_exif_left
+}
+
+/// ADR 0024 §2.6 (T233): writing an `IFD0:` tag into a file without Exif makes ExifTool create
+/// the Exif block. Measured by the reviewer with ExifTool 13.59 on the JFIF JPEG of
+/// `tests/edits.rs`: `-IFD0:Orientation#=6` adds exactly `File:ExifByteOrder`, `IFD0:Orientation`,
+/// `IFD0:XResolution`, `IFD0:YResolution`, `IFD0:ResolutionUnit` and `IFD0:YCbCrPositioning`, and
+/// the validation counts do not change. True when the plan sets an `IFD0:` tag (an argument
+/// `-IFD0:<tag>=<value>` or `-IFD0:<tag>#=<value>` with a non-empty value), the original has no
+/// `File:ExifByteOrder` and the copy has it; then the addition of [`EXIF_BLOCK_KEYS`] that the
+/// original lacks is allowed (only added, never changed or removed).
+fn creates_exif_block(original: &FileSnapshot, copy: &FileSnapshot, plan: &WritePlan) -> bool {
+    let sets_ifd0_tag = plan.args.iter().any(|arg| {
+        arg.strip_prefix("-IFD0:")
+            .and_then(|rest| rest.split_once('='))
+            .is_some_and(|(tag, value)| {
+                let tag = tag.strip_suffix('#').unwrap_or(tag);
+                !tag.is_empty() && !value.is_empty()
+            })
+    });
+    sets_ifd0_tag
+        && !original.listing.contains_key(EXIF_BYTE_ORDER)
+        && copy.listing.contains_key(EXIF_BYTE_ORDER)
 }
 
 /// The keys a plan may change besides the ones always allowed.
@@ -663,6 +691,72 @@ mod tests {
                 key: "File:ExifByteOrder".to_string(),
                 before: Some("Big-endian (Motorola, MM)".to_string()),
                 after: Some("Little-endian (Intel, II)".to_string()),
+            })
+        );
+    }
+
+    /// The JFIF JPEG without Exif (T233 point 3).
+    fn without_exif() -> FileSnapshot {
+        snapshot(&[("File:FileType", "JPEG"), ("JFIF:JFIFVersion", "1 1")])
+    }
+
+    /// The copy after `-IFD0:Orientation#=6` created the Exif block (measured, T233 point 3).
+    fn exif_block_created() -> FileSnapshot {
+        snapshot(&[
+            ("File:FileType", "JPEG"),
+            ("JFIF:JFIFVersion", "1 1"),
+            ("File:ExifByteOrder", "MM"),
+            ("IFD0:Orientation", "6"),
+            ("IFD0:XResolution", "1"),
+            ("IFD0:YResolution", "1"),
+            ("IFD0:ResolutionUnit", "1"),
+            ("IFD0:YCbCrPositioning", "1"),
+        ])
+    }
+
+    #[test]
+    fn creating_the_exif_block_with_an_ifd0_tag_is_allowed() {
+        assert_eq!(
+            verify_copy(
+                &without_exif(),
+                &exif_block_created(),
+                &plan(&["-IFD0:Orientation#=6"])
+            ),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn the_exif_block_keys_need_an_ifd0_write() {
+        assert!(matches!(
+            verify_copy(
+                &without_exif(),
+                &exif_block_created(),
+                &plan(&["-XMP-tiff:Orientation#=6"])
+            ),
+            Err(VerifyError::Unexpected { .. })
+        ));
+    }
+
+    #[test]
+    fn an_existing_exif_block_gets_no_free_keys() {
+        let original = snapshot(&[
+            ("File:FileType", "JPEG"),
+            ("File:ExifByteOrder", "MM"),
+            ("IFD0:XResolution", "72"),
+        ]);
+        let copy = snapshot(&[
+            ("File:FileType", "JPEG"),
+            ("File:ExifByteOrder", "MM"),
+            ("IFD0:XResolution", "1"),
+            ("IFD0:Orientation", "6"),
+        ]);
+        assert_eq!(
+            verify_copy(&original, &copy, &plan(&["-IFD0:Orientation#=6"])),
+            Err(VerifyError::Unexpected {
+                key: "IFD0:XResolution".to_string(),
+                before: Some("72".to_string()),
+                after: Some("1".to_string()),
             })
         );
     }

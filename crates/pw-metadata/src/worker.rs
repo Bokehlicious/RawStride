@@ -18,6 +18,9 @@
 //!   [`ExifTool::write_edits_safely`] and answers with [`Event::EditsWritten`]. It fails as a
 //!   rating write does: [`WriteError::NoJournal`] without a setup, [`WriteError::ExifToolTooOld`]
 //!   with a too old ExifTool.
+//! - [`MetadataWorker::write_orientation`] writes an Exif orientation through
+//!   [`ExifTool::write_orientation_safely`] in the same queue as the ratings (ADR 0024 §2.5) and
+//!   answers with [`Event::OrientationWritten`]; it fails as a rating write does.
 //! - [`MetadataWorker::set_options`] changes the [`EditOptions`] without an event. The worker
 //!   starts with the setup's options (the default without a setup); every request queued after
 //!   `set_options` uses the new options for rating writes, edits and reads (the `fallback`).
@@ -133,6 +136,14 @@ pub enum Event {
         /// The kind of failure is kept, so the program can show its own text (T49).
         result: std::result::Result<(), WriteError>,
     },
+    /// The answer to [`MetadataWorker::write_orientation`] (ADR 0024 §2.5, T233), with `path` and
+    /// `orientation` as they were sent. `Ok` also when the value was already in the file.
+    OrientationWritten {
+        id: RequestId,
+        path: PathBuf,
+        orientation: u16,
+        result: std::result::Result<(), WriteError>,
+    },
     /// The answer to [`MetadataWorker::read_metadata`] (T98).
     MetadataRead {
         id: RequestId,
@@ -190,6 +201,11 @@ enum Request {
         id: RequestId,
         path: PathBuf,
         rating: Rating,
+    },
+    WriteOrientation {
+        id: RequestId,
+        path: PathBuf,
+        orientation: u16,
     },
     ReadMetadata {
         id: RequestId,
@@ -302,6 +318,22 @@ impl MetadataWorker {
     ) -> std::result::Result<RequestId, SubmitError> {
         let id = self.next_request_id();
         self.submit(Request::Write { id, path, rating })?;
+        Ok(id)
+    }
+
+    /// Queues an orientation write without blocking. Writes run in request order (ADR 0024
+    /// §2.5); answered with [`Event::OrientationWritten`].
+    pub fn write_orientation(
+        &mut self,
+        path: PathBuf,
+        orientation: u16,
+    ) -> std::result::Result<RequestId, SubmitError> {
+        let id = self.next_request_id();
+        self.submit(Request::WriteOrientation {
+            id,
+            path,
+            orientation,
+        })?;
         Ok(id)
     }
 
@@ -561,6 +593,28 @@ fn handle(
                 id,
                 path,
                 rating,
+                result,
+            }
+        }
+        Request::WriteOrientation {
+            id,
+            path,
+            orientation,
+        } => {
+            let result = match (setup, running) {
+                (None, _) => Err(WriteError::NoJournal),
+                (Some(_), Some(running)) if !running.may_write => Err(WriteError::ExifToolTooOld),
+                (Some(setup), Some(running)) => running
+                    .tool
+                    .write_orientation_safely(&path, orientation, &*setup.checks, &setup.journal)
+                    .map(|_report| ())
+                    .map_err(WriteError::from),
+                (Some(_), None) => Err(WriteError::Other(unavailable())),
+            };
+            Event::OrientationWritten {
+                id,
+                path,
+                orientation,
                 result,
             }
         }
@@ -839,6 +893,32 @@ mod tests {
         }
     }
 
+    /// Writes `orientation` to `path` through the worker (T233) and checks that the answer
+    /// carries the id, path and orientation as sent.
+    fn orientation_result(
+        worker: &mut MetadataWorker,
+        path: &std::path::Path,
+        orientation: u16,
+    ) -> std::result::Result<(), WriteError> {
+        let id = worker
+            .write_orientation(path.to_path_buf(), orientation)
+            .expect("request should be accepted");
+        match next_event(worker) {
+            Event::OrientationWritten {
+                id: event_id,
+                path: event_path,
+                orientation: event_orientation,
+                result,
+            } => {
+                assert_eq!(event_id, id);
+                assert_eq!(event_path, path);
+                assert_eq!(event_orientation, orientation);
+                result
+            }
+            other => panic!("unexpected event {other:?}"),
+        }
+    }
+
     /// Reads the ratings of `images` through the worker.
     fn read_result(
         worker: &mut MetadataWorker,
@@ -959,6 +1039,7 @@ mod tests {
                 Ok(Event::RatingWritten { .. }) => panic!("unexpected write result"),
                 Ok(
                     other @ (Event::MetadataRead { .. }
+                    | Event::OrientationWritten { .. }
                     | Event::EditsWritten { .. }
                     | Event::Moved { .. }
                     | Event::MovedBack { .. }
@@ -1072,6 +1153,23 @@ mod tests {
     }
 
     #[test]
+    fn without_a_setup_an_orientation_write_fails_and_writes_nothing() {
+        let folder = TempDir::new("no-journal-orientation");
+        let raw = folder.path().join("TN0001.ARW");
+        std::fs::write(&raw, b"not really a raw file").expect("write the fake RAW");
+        let (program, args) = fake_exiftool("normal");
+        let args: Vec<&str> = args.iter().map(String::as_str).collect();
+        let mut worker =
+            MetadataWorker::start_with(&program, &args, None).expect("worker should start");
+
+        assert_eq!(
+            orientation_result(&mut worker, &raw, 6),
+            Err(WriteError::NoJournal)
+        );
+        assert!(!folder.path().join("TN0001.xmp").exists());
+    }
+
+    #[test]
     fn without_a_setup_edits_fail_and_the_file_is_unchanged() {
         let folder = TempDir::new("no-journal-edits");
         let image = folder.path().join("bild.jpg");
@@ -1165,6 +1263,28 @@ mod tests {
         assert_eq!(
             read_result(&mut worker, std::slice::from_ref(&raw)),
             Ok(HashMap::new())
+        );
+    }
+
+    #[test]
+    fn an_old_exiftool_refuses_orientation_writes() {
+        let folder = TempDir::new("version-old-orientation");
+        let journal = TempDir::new("version-old-orientation-journal");
+        let raw = raw_with_sidecar(folder.path());
+        let sidecar = folder.path().join("TN0001.xmp");
+        let mut worker = start_with_version("12.40", journal.path());
+        assert!(matches!(
+            wait_for_version(&worker, Duration::from_secs(10)),
+            Some(Ok(_))
+        ));
+
+        assert_eq!(
+            orientation_result(&mut worker, &raw, 6),
+            Err(WriteError::ExifToolTooOld)
+        );
+        assert_eq!(
+            std::fs::read(&sidecar).expect("read the sidecar"),
+            b"<x:xmpmeta/>"
         );
     }
 
@@ -1969,6 +2089,53 @@ mod tests {
             let ratings = read_result(&mut worker, std::slice::from_ref(&image))
                 .expect("the ratings should be read");
             assert_eq!(ratings.get(&image).and_then(|rating| rating.stars), Some(3));
+        }
+
+        #[test]
+        fn an_orientation_sent_after_a_rating_is_answered_after_it() {
+            let folder = TempDir::new("orientation-after-rating");
+            let journal = TempDir::new("orientation-after-rating-journal");
+            let raw = folder.path().join("TN0001.ARW");
+            std::fs::write(&raw, b"FAKE_RAW").expect("write the fake RAW");
+            let sidecar = folder.path().join("TN0001.xmp");
+            let mut worker = start(Box::new(NoImageCheck), journal.path());
+
+            let rating = Rating {
+                stars: Some(3),
+                label: None,
+            };
+            let rating_id = worker
+                .write_rating(raw.clone(), rating)
+                .expect("request should be accepted");
+            let orientation_id = worker
+                .write_orientation(raw.clone(), 6)
+                .expect("request should be accepted");
+
+            match next_event(&worker) {
+                Event::RatingWritten { id, result, .. } => {
+                    assert_eq!(id, rating_id);
+                    assert_eq!(result, Ok(()));
+                }
+                other => panic!("expected the rating first, got {other:?}"),
+            }
+            match next_event(&worker) {
+                Event::OrientationWritten {
+                    id,
+                    orientation,
+                    result,
+                    ..
+                } => {
+                    assert_eq!(id, orientation_id);
+                    assert_eq!(orientation, 6);
+                    assert_eq!(result, Ok(()));
+                }
+                other => panic!("expected the orientation second, got {other:?}"),
+            }
+            let mut et = direct();
+            assert_eq!(tag(&mut et, &sidecar, "XMP-xmp:Rating"), "3");
+            assert_eq!(tag(&mut et, &sidecar, "XMP-tiff:Orientation#"), "6");
+            assert_eq!(std::fs::read(&raw).expect("read the RAW"), b"FAKE_RAW");
+            assert_eq!(entries(journal.path()), Vec::<PathBuf>::new());
         }
 
         #[test]

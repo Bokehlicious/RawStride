@@ -11,7 +11,6 @@
 
 use std::path::{Path, PathBuf};
 
-use pw_metadata::ExifTool;
 use pw_metadata::edit::{Edit, EditError, EditOptions, EditReport};
 use pw_metadata::iim::Fallback;
 use pw_metadata::journal::Journal;
@@ -19,6 +18,7 @@ use pw_metadata::reconcile::IimDigest;
 use pw_metadata::safe_write::{NoImageCheck, WriteReport};
 use pw_metadata::value::{ConflictRule, LangAlt, Value};
 use pw_metadata::write_plan::WriteNotice;
+use pw_metadata::{ExifTool, Rating};
 
 /// The small baseline JPEG of `crates/pw-thumbcache/src/jpeg_fixture.rs`, copied.
 const SMALL: &[u8] = &[
@@ -831,6 +831,165 @@ fn the_other_edits_are_written_beside_a_qualified_list() {
     );
     assert_eq!(tag(&mut et, &sidecar, "XMP-dc:SubjectType"), "location");
     assert_eq!(std::fs::read(&raw).unwrap(), FAKE_RAW);
+    s.assert_clean();
+    s.remove();
+}
+
+impl Scratch {
+    /// Writes `orientation` with `NoImageCheck` (ADR 0024 O2, T233).
+    fn turn(
+        &self,
+        et: &mut ExifTool,
+        image: &Path,
+        orientation: u16,
+    ) -> Result<WriteReport, EditError> {
+        et.write_orientation_safely(image, orientation, &NoImageCheck, &self.journal)
+    }
+
+    /// Writes `stars` with the default options and `NoImageCheck`.
+    fn star(&self, et: &mut ExifTool, image: &Path, stars: i8) -> WriteReport {
+        let rating = Rating {
+            stars: Some(stars),
+            label: None,
+        };
+        et.write_rating_safely(
+            image,
+            &rating,
+            &EditOptions::default(),
+            &NoImageCheck,
+            &self.journal,
+        )
+        .unwrap()
+    }
+
+    /// The names of the files in the folder, sorted.
+    fn names(&self) -> Vec<String> {
+        let mut names: Vec<String> = std::fs::read_dir(&self.dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        names
+    }
+}
+
+/// An orientation on the fake RAW without a sidecar: a new sidecar holds `tiff:Orientation`, the
+/// RAW is unchanged; the same value again writes nothing (ADR 0024 §2.2).
+#[test]
+fn a_raw_is_turned_in_a_new_sidecar() {
+    let mut et = exiftool();
+    let s = Scratch::new("turn-raw");
+    let raw = s.raw();
+    let sidecar = s.dir.join("TN0001.xmp");
+
+    assert_eq!(s.turn(&mut et, &raw, 6).unwrap(), written(&sidecar));
+    assert_eq!(tag(&mut et, &sidecar, "XMP-tiff:Orientation#"), "6");
+    assert_eq!(std::fs::read(&raw).unwrap(), FAKE_RAW);
+    s.assert_clean();
+    assert_eq!(s.turn(&mut et, &raw, 6).unwrap(), WriteReport::Unchanged);
+    s.remove();
+}
+
+/// Stars, an orientation and stars again on the fake RAW: the sidecar holds both, and the
+/// orientation is no conflict (ADR 0024 §2.4).
+#[test]
+fn a_turned_raw_keeps_its_rating_and_is_not_a_conflict() {
+    let mut et = exiftool();
+    let s = Scratch::new("turn-raw-rating");
+    let raw = s.raw();
+    let sidecar = s.dir.join("TN0001.xmp");
+
+    assert_eq!(s.star(&mut et, &raw, 3), written(&sidecar));
+    assert_eq!(s.turn(&mut et, &raw, 8).unwrap(), written(&sidecar));
+    assert_eq!(s.star(&mut et, &raw, 4), written(&sidecar));
+    assert_eq!(tag(&mut et, &sidecar, "XMP-xmp:Rating"), "4");
+    assert_eq!(tag(&mut et, &sidecar, "XMP-tiff:Orientation#"), "8");
+    let read = et.read_metadata(&raw, Fallback::Windows1252).unwrap();
+    assert!(
+        read.reconciled.metadata.conflicts().is_empty(),
+        "{:?}",
+        read.reconciled.metadata.conflicts()
+    );
+    assert_eq!(std::fs::read(&raw).unwrap(), FAKE_RAW);
+    s.assert_clean();
+    s.remove();
+}
+
+/// The small JPEG has no Exif: IFD0 Orientation is created (§2.6), `tiff:Orientation` is not.
+#[test]
+fn a_jpeg_without_exif_gets_ifd0_orientation() {
+    let mut et = exiftool();
+    let s = Scratch::new("turn-jpeg");
+    let file = s.jpeg();
+
+    assert_eq!(s.turn(&mut et, &file, 6).unwrap(), written(&file));
+    assert_eq!(tag(&mut et, &file, "IFD0:Orientation#"), "6");
+    assert_eq!(tag(&mut et, &file, "XMP-tiff:Orientation#"), "-");
+    s.assert_clean();
+    assert_eq!(s.turn(&mut et, &file, 6).unwrap(), WriteReport::Unchanged);
+    s.remove();
+}
+
+/// A JPEG with Exif but no orientation keeps its other Exif tags.
+#[test]
+fn a_jpeg_with_exif_but_no_orientation_keeps_its_exif() {
+    let mut et = exiftool();
+    let s = Scratch::new("turn-jpeg-exif");
+    let file = s.jpeg();
+    write(&mut et, &file, &["-IFD0:Make=Test"]);
+
+    assert_eq!(s.turn(&mut et, &file, 8).unwrap(), written(&file));
+    assert_eq!(tag(&mut et, &file, "IFD0:Orientation#"), "8");
+    assert_eq!(tag(&mut et, &file, "IFD0:Make"), "Test");
+    s.assert_clean();
+    s.remove();
+}
+
+/// A JPEG with `tiff:Orientation` in its XMP: it is kept in step with IFD0.
+#[test]
+fn a_jpeg_with_an_xmp_orientation_is_kept_in_step() {
+    let mut et = exiftool();
+    let s = Scratch::new("turn-jpeg-xmp");
+    let file = s.jpeg();
+    write(
+        &mut et,
+        &file,
+        &["-IFD0:Orientation#=1", "-XMP-tiff:Orientation#=1"],
+    );
+
+    assert_eq!(s.turn(&mut et, &file, 3).unwrap(), written(&file));
+    assert_eq!(tag(&mut et, &file, "IFD0:Orientation#"), "3");
+    assert_eq!(tag(&mut et, &file, "XMP-tiff:Orientation#"), "3");
+    s.assert_clean();
+    s.remove();
+}
+
+/// Orientations outside 1–8 and a file kind without metadata are refused before anything is read
+/// or written.
+#[test]
+fn bad_orientations_and_file_kinds_are_refused() {
+    let mut et = exiftool();
+    let s = Scratch::new("turn-refused");
+    let file = s.jpeg();
+    let png = s.dir.join("bild.png");
+
+    for orientation in [0, 9] {
+        match s.turn(&mut et, &file, orientation) {
+            Err(EditError::Unsupported(reason)) => {
+                assert_eq!(reason, format!("orientation {orientation} is outside 1..8"));
+            }
+            other => panic!("expected Unsupported, got {other:?}"),
+        }
+    }
+    match s.turn(&mut et, &png, 6) {
+        Err(EditError::Unsupported(reason)) => assert_eq!(
+            reason,
+            format!("orientation is not supported for {}", png.display())
+        ),
+        other => panic!("expected Unsupported, got {other:?}"),
+    }
+    assert_eq!(std::fs::read(&file).unwrap(), SMALL);
+    assert_eq!(s.names(), vec!["bild ä.jpg".to_string()]);
     s.assert_clean();
     s.remove();
 }

@@ -419,3 +419,20 @@ by the owner the same day; step E4 in `plans/adr-0018-0025-steps.md`, before ADR
   a RAW's sidecar only (`rating_file`), never from XMP inside the RAW file itself. ADR 0024 §2.4's
   "embedded" XMP is that of a DNG, JPEG or TIFF. A task only if a camera or program is found that
   puts a different orientation in a RAW's own XMP.
+- **The level-C samples were changed outside the tests** (found in T233's review, 2026-11-20):
+  every file in `PW_TESTDATA\level-c` except `PM-raw.ARW` was written on 2026-11-19 between
+  22:25 and 22:28 (ExifTool 13.59 writes: ratings, other values, a new IIM checksum in the JPEGs),
+  most likely in a hand check in RawStride. Since then `level_c`'s
+  `the_two_jpegs_read_iim_as_utf8_in_agreement_with_xmp` fails (`PM-jpg.JPG`: digest `Matches`,
+  expected `Missing`); it passed at T219 the same day. No backup of the earlier state exists; the
+  folder `level-c - kopia` (2026-11-14) is another, older state and does not satisfy the test
+  either. The owner, 2026-11-20: no backup. Next: a task (T234) that brings the `level_c` tests in
+  line with the samples as they are now, with the reason in its log, and the owner makes the
+  `level-c` folder read-only so a hand check cannot change it again.
+- **Creating Exif in a JPEG was measured on JFIF only** (independent review of T233,
+  2026-11-20): `verify.rs`'s `creates_exif_block` allows the five `EXIF_BLOCK_KEYS` that ExifTool
+  13.59 adds when an orientation write creates Exif in the JFIF JPEG of `tests/edits.rs`. A JPEG
+  without Exif of another kind (for example with an Adobe APP14 segment and no JFIF) may get
+  another set, and then the safe write refuses the rotation (fails safe: the file is unchanged,
+  the user sees a failed write). Check with such a file in ADR 0024 O3's hand check if one is at
+  hand; a task only if one is refused.
