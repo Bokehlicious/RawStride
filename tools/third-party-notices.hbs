@@ -1,0 +1,20 @@
+{{!
+  cargo-about's template for the Rust part of THIRD-PARTY-NOTICES.txt (ADR 0031 RL3, T227).
+  Filled by tools/third-party-notices.ps1, which also replaces each "#copyright <name> <version>"
+  line with that package's copyright line, or removes it. Plain text: every field is written with
+  triple braces so that <, > and & are not escaped. One entry per licence text (identical texts
+  once); the packages that use it, then the text.
+}}
+{{#each licenses}}
+--------------------------------------------------------------------------------
+{{{name}}} ({{{id}}})
+
+Used by:
+{{#each used_by}}
+  {{{crate.name}}} {{{crate.version}}} ({{#if crate.repository}}{{{crate.repository}}}{{else}}https://crates.io/crates/{{{crate.name}}}{{/if}})
+#copyright {{{crate.name}}} {{{crate.version}}}
+{{/each}}
+
+{{{text}}}
+
+{{/each}}

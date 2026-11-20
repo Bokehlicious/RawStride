@@ -106,6 +106,12 @@ try {
     foreach ($personalDataPattern in $personalDataPatterns) {
         # -z separates path, line number and text with NUL, so each hit splits cleanly.
         $grepArguments = @('grep', '--untracked', '-n', '-I', '-i', '-z', '-E', $personalDataPattern.Pattern)
+        if ($personalDataPattern.IsEmail) {
+            # THIRD-PARTY-NOTICES.txt holds other people's copyright notices verbatim, with their
+            # e-mail addresses (owner, 2026-11-20, T227); it is skipped for e-mail addresses only.
+            # The path patterns above still search it.
+            $grepArguments += @('--', '.', ':(exclude)THIRD-PARTY-NOTICES.txt')
+        }
         Write-ReportLine "> git $($grepArguments -join ' ')"
         $grepOutput = & git @grepArguments 2>&1
         $grepExitCode = $LASTEXITCODE
