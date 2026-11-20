@@ -9,6 +9,8 @@ Downloads are on the [Releases page](https://github.com/Bokehlicious/RawStride/r
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-11-20
+
 The first release, for Windows 10 and 11 (x64), as a portable zip. RawStride copies photos
 from a memory card to a destination and an optional backup, with folder and file name
 templates; shows them in a contact sheet and a fast loupe (RAW files from their embedded
@@ -18,3 +20,6 @@ Extension in XMP, and the older IIM), into an XMP sidecar for a proprietary RAW 
 safely into DNG, JPEG and TIFF files. Folders open in tabs, with filters and multiple
 selection; images can be moved, deleted to the Recycle Bin and opened in another program.
 ExifTool and the Microsoft Visual C++ runtime are included; the program is not signed yet.
+
+[Unreleased]: https://github.com/Bokehlicious/RawStride/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/Bokehlicious/RawStride/releases/tag/v0.1.0
