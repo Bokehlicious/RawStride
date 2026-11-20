@@ -413,3 +413,9 @@ by the owner the same day; step E4 in `plans/adr-0018-0025-steps.md`, before ADR
   and `build-p6c.cmd` (line 7) resolves afresh. A lock file a build writes shows in `git status`
   and is not committed (it would bring the `glib` alert back). Kept: the prototypes are history
   and not built; a task only if one is to be run again.
+
+- **A RAW's own embedded XMP orientation is not read** (chain review of T230–T232, 2026-11-20;
+  accepted when the chain was written): the folder's batch read takes `XMP-tiff:Orientation` from
+  a RAW's sidecar only (`rating_file`), never from XMP inside the RAW file itself. ADR 0024 §2.4's
+  "embedded" XMP is that of a DNG, JPEG or TIFF. A task only if a camera or program is found that
+  puts a different orientation in a RAW's own XMP.

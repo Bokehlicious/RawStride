@@ -86,11 +86,14 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status |
 |---|---|---|
+| [T230](T230-read-xmp-orientation.md) | ADR 0024 O1a: the batch read also reads `XMP-tiff:Orientation` (pw-metadata) | Open |
+| [T231](T231-orientation-per-file.md) | ADR 0024 O1b: the view core and the thumbnails take an orientation per file | Blocked: waits for T230 |
+| [T232](T232-shell-uses-xmp-orientation.md) | ADR 0024 O1c: the shell gives the read orientations to the view and the thumbnails | Blocked: waits for T231 |
 
 ## Writing a task (owner and reviewer)
 
-- **Number:** the next free number after the highest in this folder and `done/` (T230 next).
-- **File:** `docs/tasks/T230-<a-few-words>.md`; three digits, lower case, words joined by `-`.
+- **Number:** the next free number after the highest in this folder and `done/` (T233 next).
+- **File:** `docs/tasks/T233-<a-few-words>.md`; three digits, lower case, words joined by `-`.
 - **Index:** add a row to "Open tasks" above and keep its status in step with the file's heading.
 - **Size (owner, 2026-11-15, after T142):** one task is one layer (a C++ shim or a core crate, or
   the shell in `pw-loupe`), about eight files at most, and gives one result the owner can check by
