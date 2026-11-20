@@ -7,16 +7,19 @@ reporting instead: the repository's **Security** tab, then **Report a vulnerabil
 maintainer sees the report.
 
 Say what the problem is, how to reproduce it (a file that triggers it, if you can share one), and
-which RawStride commit you used.
+which RawStride version you used (or the commit, if you built it yourself).
 
 ## What to expect
 
 RawStride has one maintainer, so answers are best effort: you should hear back within a few weeks.
-A confirmed problem is fixed on `main`, and the report is published once the fix is in.
+A confirmed problem is fixed on `main` and in a new release, and the report is published once that
+release is out.
 
 ## Versions
 
-There are no releases yet; only the latest commit on `main` is supported.
+Only the latest release is supported. A confirmed problem is fixed in a new patch release (for
+example 0.1.1); older versions are not updated. Until 1.0.0, see the [changelog](../CHANGELOG.md)
+for what each version changes.
 
 ## Scope
 
