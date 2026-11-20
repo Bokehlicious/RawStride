@@ -139,7 +139,7 @@ program folder (ADR 0002 §2.5; T120 looks there before PATH).
 | RL3 | task | `THIRD-PARTY-NOTICES.txt` (ADR 0002 §4): the Rust packages from `cargo metadata`, LibRaw (its version and source), LittleCMS, JasPer, libjpeg-turbo, zlib, the fonts, the MSVC runtime, ExifTool and its Perl, IPTC's attribution for the generated tables | now |
 | RL4 | task | `tools/package-dist.ps1`: the zip of §3.4 from a release build, with ExifTool 13.59 checked by SHA-256 as in CI; `docs/distribution.md` rewritten (RL-Q13) | RL3 |
 | RL5 | owner | The zip run on a clean PC or in Windows Sandbox: starts, renders a RAW, writes a rating through the shipped ExifTool, leaves the program folder unchanged; done 2026-11-20 in a new Windows account on the owner's PC (no other PC; no Sandbox on Windows 11 Home), all four OK | RL4 |
-| RL6 | task | `CHANGELOG.md` with the `0.1.0` section and the rule in `docs/tasks/README.md` (RL-Q3); `.github/workflows/release.yml` on `v*` tags (RL-Q7, RL-Q12) | RL4 |
+| RL6 | task | `CHANGELOG.md` with the `0.1.0` section and the rule in `docs/tasks/README.md` (RL-Q3); `.github/workflows/release.yml` on `v*` tags (RL-Q7, RL-Q12); done (T229), its test run on `main` checked OK 2026-11-20 | RL4 |
 | RL7 | owner + reviewer | `0.1.0`: the `CHANGELOG.md` section renamed, tag on `main`, the workflow's draft read, published as a pre-release; the tag ruleset (RL-Q8); `README.md`'s status line; steps in `docs/distribution.md`, "Making a release" | RL5, RL6 |
 | RL8 | owner | Code signing applied for (RL-Q6) | RL7 |
 | RL9 | task | The MSI (RL-Q5) | RL7 and the owner's go |
