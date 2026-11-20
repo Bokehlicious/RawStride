@@ -392,7 +392,7 @@ the decisions do not live only in the tasks.
 
 | # | Decision (as proposed) |
 |---|---|
-| U1-Q1 | The menus are **Arkiv, Redigera, Bild, Visa**, in that order, with names from RawStride's own commands (§2.1) |
+| U1-Q1 | The menus are **Arkiv, Redigera, Bild, Visa**, in that order, with names from RawStride's own commands (§2.1). Added 2026-11-20 by ADR 0031 RL-Q9 (owner): a fifth menu, Help, last, with "About RawStride…" (T225) |
 | U1-Q2 | The hide key is **`H`**; Tab stays free for egui's focus moves (any key can be chosen later, U8) |
 | U1-Q3 | Before U2, U4 and U5 the side columns hold headings and one line each, with the hidden import's status under "Uppgifter" |
 | U1-Q4 | egui's bundled font; body text 14, small text 11, headings 16 points, the status bar in the proportional font at 13; egui's default spacing; the image area and contact sheet stay a neutral dark grey in **both** themes, so an image is judged against the same surround (the light theme lightens menus, bars and columns) |

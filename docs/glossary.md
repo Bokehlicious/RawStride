@@ -124,6 +124,7 @@ Every other property already uses IPTC's English name in both languages.
 |---|---|---|
 | Arkiv, Redigera, Bild, Visa | File, Edit, Image, View | menu titles (Windows convention) |
 | Öppna mapp… / Importera… / Stäng flik / Inställningar… / Avsluta | Open Folder… / Import… / Close Tab / Settings… / Exit | |
+| – | Help; About RawStride… | the fifth menu and its one item, which opens the window "About RawStride" (ADR 0031 RL-Q9); added by T225 |
 | Nästa flik / Föregående flik | Next Tab / Previous Tab | |
 | Bibliotek, Uppgifter, Inspektör | Library, Tasks, Inspector | column titles |
 | Sidokolumner, Vänster kolumn | Side Columns, Left Column | |

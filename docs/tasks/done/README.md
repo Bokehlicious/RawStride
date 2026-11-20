@@ -231,3 +231,4 @@ was when the task was done, so "this file", "below" and "the Log" in T1–T115 m
 | [T222](T222-ci-on-every-push.md) | CI on every push and the vcpkg cache saved only when it grew, `.github/workflows/ci.yml` (public-release plan P3) |
 | [T223](T223-recycle-test-on-any-drive.md) | A Recycle Bin test that does not depend on the working folder's drive (CI's first push run) |
 | [T224](T224-prototype-lock-files-out.md) | The Tauri prototypes' lock files out of the repository (five Dependabot alerts on `glib`) |
+| [T225](T225-about-window.md) | ADR 0031 RL1: the "About RawStride" window in a Help menu (version, commit, the licence notice) |

@@ -86,7 +86,6 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status |
 |---|---|---|
-| [T225](T225-about-window.md) | ADR 0031 RL1: the "About RawStride" window in a Help menu (pw-loupe) | Open |
 
 ## Writing a task (owner and reviewer)
 

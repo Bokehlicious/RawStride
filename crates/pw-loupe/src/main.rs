@@ -27,6 +27,7 @@ use pw_loupe::library::{
     FolderList, Library, TreeRowKind, folder_key, read_drives, suppress_no_disk_dialogs,
 };
 use pw_loupe::library_text::{LibraryText, library_text};
+use pw_loupe::{AUTHORS, AboutText, COMMIT, REPOSITORY, VERSION, about_text};
 use pw_loupe::{
     Action, CardRefresh, CellState, CopiedFields, DEFAULT_THUMBNAIL_SIZE, DialogKey, DialogRequest,
     EditorField, EditorForm, EditorKeyAction, EditorSection, EditorText, Field, Filter,
@@ -715,6 +716,9 @@ struct Loupe {
     settings_path: Option<PathBuf>,
     /// The settings window's choices while it is open.
     settings_window: Option<Settings>,
+    /// The window "About RawStride" is open (ADR 0031 RL-Q9, T225). It blocks nothing, so it is not
+    /// part of `dialog_open`; only its Close button closes it.
+    about_window: bool,
     /// New options not yet taken by the metadata worker (its queue was full).
     pending_options: Option<EditOptions>,
     metadata: MetadataCache,
@@ -951,6 +955,48 @@ impl Loupe {
             }
         }
         self.pending_options.is_some()
+    }
+
+    /// The window "About RawStride" (ADR 0031 RL-Q9, T225): the version, the commit and the
+    /// licence notice of GPL-3.0 §0. Every text comes from `about_text` (`shell_text.rs`); the
+    /// rows are selectable labels that wrap. No ✕ and no key: only Close closes it. Nothing is
+    /// opened, read from disk or from the network.
+    fn draw_about_window(&mut self, ctx: &egui::Context) {
+        /// The window's fixed width in points, so the long sentences wrap (T225).
+        const ABOUT_WINDOW_WIDTH: f32 = 440.0;
+        if !self.about_window {
+            return;
+        }
+        let mut close = false;
+        egui::Window::new(about_text(AboutText::Title))
+            .collapsible(false)
+            .resizable(false)
+            .default_width(ABOUT_WINDOW_WIDTH)
+            .max_width(ABOUT_WINDOW_WIDTH)
+            .show(ctx, |ui| {
+                let label = |ui: &mut egui::Ui, text: AboutText<'_>| {
+                    ui.add(egui::Label::new(about_text(text)).wrap());
+                };
+                label(ui, AboutText::Version { version: VERSION });
+                label(ui, AboutText::Commit { commit: COMMIT });
+                ui.add_space(PANEL_ROW_SPACING);
+                label(ui, AboutText::Copyright { authors: AUTHORS });
+                label(ui, AboutText::Licence);
+                label(ui, AboutText::Warranty);
+                label(ui, AboutText::LicenceFile);
+                label(
+                    ui,
+                    AboutText::Source {
+                        repository: REPOSITORY,
+                    },
+                );
+                label(ui, AboutText::ThirdParty);
+                ui.add_space(PANEL_ROW_SPACING);
+                close = ui.button(about_text(AboutText::Close)).clicked();
+            });
+        if close {
+            self.about_window = false;
+        }
     }
 
     /// The settings window "Inställningar" (ADR 0007 §5.2, §5.4/Q10, T106). Every text comes
@@ -5353,6 +5399,7 @@ impl Loupe {
             Command::NextTab => self.tab_action(TabAction::Next),
             Command::PreviousTab => self.tab_action(TabAction::Previous),
             Command::Settings => self.open_settings_window(),
+            Command::About => self.about_window = true,
             Command::Quit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
             Command::SelectAll => self.select_all(),
             Command::ClearSelection => self.clear_selection(),
@@ -8537,6 +8584,7 @@ impl eframe::App for Loupe {
         }
         self.draw_import_dialog(&ctx);
         self.draw_settings_window(&ctx);
+        self.draw_about_window(&ctx);
         self.draw_metadata_window(&ctx);
         self.draw_delete_window(&ctx);
         self.draw_open_window(&ctx);
@@ -8852,6 +8900,7 @@ fn run(options: Options) -> Result<(), String> {
                 settings: settings.clone(),
                 settings_path,
                 settings_window: None,
+                about_window: false,
                 pending_options: None,
                 metadata: MetadataCache::default(),
                 import_worker,

@@ -15,7 +15,7 @@ use pw_metadata::{MIN_EXIFTOOL_VERSION, ToolVersion};
 use crate::external_text::{open_in_another_text, program_number_text};
 use crate::monitor_profile::ProfileSource;
 use crate::rating_text::label_name;
-use crate::shell::{Command, KeyChord, MenuKind, SubmenuKind, Theme};
+use crate::shell::{Command, KeyChord, MenuKind, SubmenuKind, Theme, UNKNOWN_COMMIT};
 use crate::sort::SortKey;
 
 /// The separator between the parts of the status line.
@@ -282,6 +282,66 @@ pub fn settings_text(text: SettingsText) -> &'static str {
     }
 }
 
+/// A text of the window "About RawStride": the version, the commit and the licence notice GPL-3.0
+/// §0 calls "Appropriate Legal Notices" (ADR 0031 RL-Q9, T225). A `String`, since some variants
+/// carry values.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AboutText<'a> {
+    /// The window's title.
+    Title,
+    /// The program's version (`shell::VERSION`).
+    Version { version: &'a str },
+    /// The commit the program was built from (`shell::COMMIT`), or `shell::UNKNOWN_COMMIT`.
+    Commit { commit: &'a str },
+    /// The copyright line; `authors` as Cargo gives them, separated by `:` (`shell::AUTHORS`).
+    Copyright { authors: &'a str },
+    /// The licence's grant.
+    Licence,
+    /// The disclaimer of warranty.
+    Warranty,
+    /// Where the licence is.
+    LicenceFile,
+    /// Where the source is (`shell::REPOSITORY`).
+    Source { repository: &'a str },
+    /// Where the third-party notices are (made by RL3, put in the program folder by RL4).
+    ThirdParty,
+    /// The button that closes the window.
+    Close,
+}
+
+/// The text of `text` in the window "About RawStride" (ADR 0031 RL-Q9, GPL-3.0 §0, T225).
+pub fn about_text(text: AboutText<'_>) -> String {
+    match text {
+        AboutText::Title => "About RawStride".to_owned(),
+        AboutText::Version { version } => format!("Version {version}"),
+        AboutText::Commit { commit } if commit == UNKNOWN_COMMIT => {
+            "Built from an unknown commit".to_owned()
+        }
+        AboutText::Commit { commit } => format!("Built from commit {commit}"),
+        AboutText::Copyright { authors } => {
+            let authors = authors.split(':').collect::<Vec<_>>().join(", ");
+            format!("Copyright © 2026 {authors}")
+        }
+        AboutText::Licence => "RawStride is free software: you can redistribute it and/or modify \
+             it under the terms of the GNU General Public License as published by the Free \
+             Software Foundation, either version 3 of the License, or (at your option) any later \
+             version."
+            .to_owned(),
+        AboutText::Warranty => "RawStride comes with ABSOLUTELY NO WARRANTY, to the extent \
+             permitted by law. See the GNU General Public License for details."
+            .to_owned(),
+        AboutText::LicenceFile => "The licence is in the file LICENSE in the program folder, and \
+             at https://www.gnu.org/licenses/gpl-3.0.html."
+            .to_owned(),
+        AboutText::Source { repository } => format!("The source code is at {repository}."),
+        AboutText::ThirdParty => "RawStride includes software by others under their own \
+             licences; their notices are in the file THIRD-PARTY-NOTICES.txt in the program \
+             folder."
+            .to_owned(),
+        AboutText::Close => "Close".to_owned(),
+    }
+}
+
 /// The tooltip of the disabled "Add…" button when the list of external programs is full
 /// (ADR 0019 E-Q1, T200).
 pub fn external_program_limit_text(n: usize) -> String {
@@ -313,6 +373,7 @@ pub fn menu_text(menu: MenuKind) -> &'static str {
         MenuKind::Edit => "Edit",
         MenuKind::Image => "Image",
         MenuKind::View => "View",
+        MenuKind::Help => "Help",
     }
 }
 
@@ -383,6 +444,7 @@ pub fn command_text(command: Command) -> String {
         Command::Theme(theme) => theme_text(theme).to_owned(),
         Command::Sort(key) => sort_key_text(key).to_owned(),
         Command::SortDescending => "Descending".to_owned(),
+        Command::About => "About RawStride…".to_owned(),
     }
 }
 
@@ -447,6 +509,7 @@ mod tests {
         assert_eq!(menu_text(MenuKind::Edit), "Edit");
         assert_eq!(menu_text(MenuKind::Image), "Image");
         assert_eq!(menu_text(MenuKind::View), "View");
+        assert_eq!(menu_text(MenuKind::Help), "Help");
         assert_eq!(submenu_text(SubmenuKind::Rating), "Rating");
         assert_eq!(submenu_text(SubmenuKind::Label), "Label");
         assert_eq!(submenu_text(SubmenuKind::Theme), "Theme");
@@ -513,6 +576,7 @@ mod tests {
                 "Full Screen",
                 "Dark",
                 "Light",
+                "About RawStride…",
             ]
         );
     }
@@ -572,6 +636,7 @@ mod tests {
             None,
             Some("I"),
             Some("F11"),
+            None,
             None,
             None,
         ];
@@ -828,6 +893,65 @@ mod tests {
         }
         assert_eq!(external_program_limit_text(1), "At most 1 program");
         assert_eq!(external_program_limit_text(5), "At most 5 programs");
+    }
+
+    /// Every text of the window "About RawStride", with sample values, not the real authors
+    /// (ADR 0031 RL-Q9, T225).
+    #[test]
+    fn the_about_window_has_the_texts_of_the_task() {
+        assert_eq!(about_text(AboutText::Title), "About RawStride");
+        assert_eq!(
+            about_text(AboutText::Version { version: "1.2.3" }),
+            "Version 1.2.3"
+        );
+        assert_eq!(
+            about_text(AboutText::Commit {
+                commit: "0123456789ab"
+            }),
+            "Built from commit 0123456789ab"
+        );
+        assert_eq!(
+            about_text(AboutText::Commit {
+                commit: UNKNOWN_COMMIT
+            }),
+            "Built from an unknown commit"
+        );
+        assert_eq!(
+            about_text(AboutText::Copyright { authors: "A" }),
+            "Copyright © 2026 A"
+        );
+        assert_eq!(
+            about_text(AboutText::Copyright { authors: "A:B" }),
+            "Copyright © 2026 A, B"
+        );
+        assert_eq!(
+            about_text(AboutText::Licence),
+            "RawStride is free software: you can redistribute it and/or modify it under the terms \
+             of the GNU General Public License as published by the Free Software Foundation, \
+             either version 3 of the License, or (at your option) any later version."
+        );
+        assert_eq!(
+            about_text(AboutText::Warranty),
+            "RawStride comes with ABSOLUTELY NO WARRANTY, to the extent permitted by law. See the \
+             GNU General Public License for details."
+        );
+        assert_eq!(
+            about_text(AboutText::LicenceFile),
+            "The licence is in the file LICENSE in the program folder, and at \
+             https://www.gnu.org/licenses/gpl-3.0.html."
+        );
+        assert_eq!(
+            about_text(AboutText::Source {
+                repository: "https://example.com/source"
+            }),
+            "The source code is at https://example.com/source."
+        );
+        assert_eq!(
+            about_text(AboutText::ThirdParty),
+            "RawStride includes software by others under their own licences; their notices are in \
+             the file THIRD-PARTY-NOTICES.txt in the program folder."
+        );
+        assert_eq!(about_text(AboutText::Close), "Close");
     }
 
     #[test]

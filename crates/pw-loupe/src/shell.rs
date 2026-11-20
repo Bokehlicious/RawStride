@@ -8,6 +8,25 @@ use egui::{Color32, Key};
 use crate::settings::{ShellSettings, WindowRect};
 use crate::sort::SortKey;
 
+/// The program's version, from `[workspace.package]` in `Cargo.toml`, shown in the window "About
+/// RawStride" (ADR 0031 RL-Q9, T225).
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// The first 12 characters of the commit the program was built from, or `UNKNOWN_COMMIT` when the
+/// build had no Git repository; set by `build.rs` (ADR 0031 RL-Q9, T225).
+pub const COMMIT: &str = env!("RAWSTRIDE_COMMIT");
+
+/// The text `build.rs` sets as `COMMIT` when there is no commit (ADR 0031 RL-Q9, T225). It must be
+/// the same text as the literal in `build.rs`.
+pub const UNKNOWN_COMMIT: &str = "unknown";
+
+/// The authors from `[workspace.package]`, separated by `:` as Cargo gives them (ADR 0031 RL-Q9,
+/// T225).
+pub const AUTHORS: &str = env!("CARGO_PKG_AUTHORS");
+
+/// The source repository from `[workspace.package]` (ADR 0031 RL-Q9, T225).
+pub const REPOSITORY: &str = env!("CARGO_PKG_REPOSITORY");
+
 /// The theme of the menus, bars, columns and dialogs (ADR 0017 §2.5, U-Q3). The contact sheet and
 /// the image area keep the same neutral dark grey in both (U1-Q4), so an image is always judged
 /// against the same surround.
@@ -533,6 +552,9 @@ pub enum Command {
     Sort(SortKey),
     /// Descending ↔ ascending (View ▸ Sort By ▸ Descending and the command bar's ↑/↓ button).
     SortDescending,
+    /// The window "About RawStride" opened: the version, the commit and the licence notice (Help ▸
+    /// About RawStride…, no key; ADR 0031 RL-Q9, T225).
+    About,
 }
 
 /// The view a command acts in.
@@ -587,6 +609,8 @@ pub enum MenuKind {
     Edit,
     Image,
     View,
+    /// The fifth menu, last, with "About RawStride…" (ADR 0031 RL-Q9, T225).
+    Help,
 }
 
 /// The submenus.
@@ -685,7 +709,7 @@ const THEME_ITEMS: &[MenuItem] = &[
     },
 ];
 
-/// The menu bar (U1-Q1): Arkiv, Redigera, Bild, Visa.
+/// The menu bar (U1-Q1): Arkiv, Redigera, Bild, Visa, and Help last (ADR 0031 RL-Q9, T225).
 pub const MENUS: &[Menu] = &[
     Menu {
         kind: MenuKind::File,
@@ -776,6 +800,10 @@ pub const MENUS: &[Menu] = &[
             MenuEntry::Separator,
             MenuEntry::Submenu(SubmenuKind::Theme, THEME_ITEMS),
         ],
+    },
+    Menu {
+        kind: MenuKind::Help,
+        entries: &[item(Command::About, None)],
     },
 ];
 
@@ -1025,7 +1053,7 @@ mod tests {
     }
 
     #[test]
-    fn the_menus_are_arkiv_redigera_bild_visa_and_every_command_is_listed_once() {
+    fn the_menus_are_arkiv_redigera_bild_visa_hjalp_and_every_command_is_listed_once() {
         let kinds: Vec<MenuKind> = MENUS.iter().map(|menu| menu.kind).collect();
         assert_eq!(
             kinds,
@@ -1033,7 +1061,8 @@ mod tests {
                 MenuKind::File,
                 MenuKind::Edit,
                 MenuKind::Image,
-                MenuKind::View
+                MenuKind::View,
+                MenuKind::Help
             ]
         );
         let items = menu_items();
@@ -1062,6 +1091,40 @@ mod tests {
                 .iter()
                 .any(|menu| menu.entries.contains(&MenuEntry::Filter))
         );
+    }
+
+    /// The Help menu is the last menu and holds only "About RawStride…", with no key (ADR 0031
+    /// RL-Q9, T225).
+    #[test]
+    fn the_help_menu_is_last_and_holds_only_about_with_no_key() {
+        let Some(last) = MENUS.last() else {
+            panic!("the menu bar has no menus");
+        };
+        assert_eq!(last.kind, MenuKind::Help);
+        assert_eq!(
+            last.entries,
+            &[MenuEntry::Item(MenuItem {
+                command: Command::About,
+                key: None,
+            })]
+        );
+    }
+
+    /// The build facts the window "About RawStride" shows (ADR 0031 RL-Q9, T225): the commit is
+    /// `UNKNOWN_COMMIT` or 12 hex digits, and the version, repository and authors come from
+    /// `Cargo.toml`.
+    #[test]
+    fn the_build_facts_are_well_formed() {
+        assert!(
+            COMMIT == UNKNOWN_COMMIT
+                || (COMMIT.len() == 12
+                    && COMMIT.chars().all(|c| matches!(c, '0'..='9' | 'a'..='f'))),
+            "{COMMIT:?}"
+        );
+        assert_eq!(VERSION, env!("CARGO_PKG_VERSION"));
+        assert!(!VERSION.is_empty());
+        assert!(REPOSITORY.starts_with("https://"), "{REPOSITORY:?}");
+        assert!(!AUTHORS.is_empty());
     }
 
     #[test]
