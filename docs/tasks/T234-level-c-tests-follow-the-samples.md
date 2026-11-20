@@ -77,3 +77,4 @@
 |---|---|---|
 | 2026-11-20 | Open | Added. Measured first by the reviewer (ExifTool 13.59 on the samples and on `level-c - kopia`): only the stored digest and City in IIM differ from what the test expects |
 | 2026-11-20 | Open | Cold read: doable with the named files; the measured claims confirmed with ExifTool. Fixed: the clippy lint fires for certain (allow on its own statement, as `fileops.rs`); stop if a sample is still writable; the new test's ignore text and that it lists every writable sample; the inventory's four count edits named; Done checks `git status` (the task file is new) |
+| 2026-11-20 | Open | The six samples in `PW_TESTDATA\level-c` made read-only by the reviewer on the owner's yes (Windows read-only attribute; sizes and times unchanged, checked) |
