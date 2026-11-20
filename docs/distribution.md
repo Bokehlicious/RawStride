@@ -59,9 +59,12 @@ From the repository root:
 Windows 10 or 11, x64. Nothing else: no Visual C++ Redistributable, no ExifTool, no WebView2, no
 Rust, vcpkg or Visual Studio.
 
-- **[unverified until RL5]** That it runs on a PC that has never had Visual Studio installed.
-- **[unverified until RL5]** That it needs no more than Windows' own OpenGL (eframe's Glow
-  renderer).
+RL5 (the owner, 2026-11-20) ran the zip in a new standard Windows account on a development PC:
+it started, rendered a RAW, wrote a rating through the shipped ExifTool and left its folder
+unchanged. That PC has the Build Tools and its own graphics driver, so two points stay open:
+
+- **[unverified]** That it runs on a PC that has never had Visual Studio installed.
+- **[unverified]** That it needs no more than Windows' own OpenGL (eframe's Glow renderer).
 
 ## Installing and removing
 
@@ -71,7 +74,7 @@ Rust, vcpkg or Visual Studio.
 
 ## What it writes, and where
 
-- **The program folder:** nothing **[unverified until RL5]**, so it may be read-only (for example
+- **The program folder:** nothing (checked in RL5, 2026-11-20), so it may be read-only (for example
   under `C:\Program Files`).
 - **Per user:** only `%LOCALAPPDATA%\RawStride\`.
 - **Next to the images:** only what the user asks for: XMP sidecars, embedded metadata, copies on
