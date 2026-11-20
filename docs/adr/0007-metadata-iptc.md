@@ -717,6 +717,12 @@ Each template field has one of four modes. The default is **Keep**. [Product]
   by Lightroom alone; the mixed archive files take their place. The IIM-only JPEG with a checksum
   mismatch is dropped: the case is tested on built data in `pw-metadata` (`reconcile.rs`).
 
+  **Changed 2026-11-20 (owner, T234):** every sample except `PM-raw.ARW` was written by RawStride
+  (ExifTool 13.59) on 2026-11-19, most likely in a hand check, and no backup of the earlier state
+  exists. The tests follow the samples as they are since then (in the two JPEGs the stored IIM
+  checksum matches and City is in IIM), and the six samples are kept read-only (Windows' read-only
+  attribute) so a hand check cannot change them again; the tests work on writable copies.
+
 ## 13. Consistency check of the standards in this architecture
 
 The three documents were compared for every rule above (details in the analysis §8–§10).

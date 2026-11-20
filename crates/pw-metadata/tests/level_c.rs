@@ -12,6 +12,9 @@
 //! end. Values that are the owner's (name, e-mail, phone, copyright text) are never written here:
 //! they are compared with what ExifTool itself reads from the file. The safe write uses Windows
 //! file operations, so the file is built on Windows only (as `tests/edits.rs`).
+//!
+//! The samples were also written by RawStride (ExifTool 13.59) on 2026-11-19; the tests follow
+//! them as they are since then (2026-11-20, T234), and the samples are kept read-only.
 #![cfg(windows)]
 
 use std::io::Read;
@@ -507,8 +510,31 @@ fn every_sample_is_there_and_is_read_without_error() {
     fingerprints.assert_unchanged();
 }
 
+/// Every sample is read-only, so a hand check cannot change it (T234).
+#[test]
+#[ignore = "needs the level-C samples: set PW_TESTDATA and run with --ignored"]
+fn every_sample_is_read_only() {
+    let writable: Vec<&str> = SAMPLES
+        .iter()
+        .copied()
+        .filter(|name| {
+            !std::fs::metadata(sample(name))
+                .unwrap()
+                .permissions()
+                .readonly()
+        })
+        .collect();
+    assert!(
+        writable.is_empty(),
+        "these level-C samples are writable: {writable:?}; make the level-C samples read-only \
+         (attrib +R) so a hand check cannot change them"
+    );
+}
+
 /// The two JPEGs: IIM read as UTF-8; Description, Creator, Keywords, City and Copyright Notice
-/// agree between IIM and XMP with no conflict; the stored digest is missing (§5.1).
+/// are all in IIM and agree with XMP with no conflict; the stored digest matches (§5.1).
+/// Since 2026-11-20 (T234): the samples were written outside the tests on 2026-11-19 (stored
+/// digest and City in IIM added) and there is no backup, so the test follows them as they are.
 #[test]
 #[ignore = "needs the level-C samples: set PW_TESTDATA and run with --ignored"]
 fn the_two_jpegs_read_iim_as_utf8_in_agreement_with_xmp() {
@@ -530,11 +556,13 @@ fn the_two_jpegs_read_iim_as_utf8_in_agreement_with_xmp() {
             "{name}: IIM text converted: {:?}",
             read.reconciled.notices
         );
-        assert_eq!(read.state.digest, IimDigest::Missing, "{name}");
+        assert_eq!(read.state.digest, IimDigest::Matches, "{name}");
+        let stored = tag(&mut et, &file, "Photoshop:IPTCDigest");
+        assert_ne!(stored, "-", "{name}: no stored digest");
         assert_eq!(
-            tag(&mut et, &file, "Photoshop:IPTCDigest"),
-            "-",
-            "{name}: a stored digest"
+            stored,
+            tag(&mut et, &file, "File:CurrentIPTCDigest"),
+            "{name}: the stored digest is not the current one"
         );
 
         for property in IIM_AND_XMP {
@@ -562,10 +590,6 @@ fn the_two_jpegs_read_iim_as_utf8_in_agreement_with_xmp() {
                     same_value(property, iim, shown),
                     "{name}: {property} differs: IIM {iim:?}, shown {shown:?}"
                 ),
-                // Photo Mechanic wrote City to XMP only in these samples.
-                None if *property == "photoshop:City" => {
-                    println!("{name}: {property} is not in IIM");
-                }
                 None => panic!("{name}: {property} is not in IIM"),
             }
         }
@@ -783,6 +807,12 @@ impl Scratch {
             .map(|name| {
                 let copy = self.dir.join(name);
                 std::fs::copy(sample(name), &copy).unwrap();
+                // The samples are read-only and the copy keeps that attribute, but the safe write
+                // refuses a read-only file: make the copy (never the sample) writable.
+                let mut permissions = std::fs::metadata(&copy).unwrap().permissions();
+                #[allow(clippy::permissions_set_readonly_false)]
+                permissions.set_readonly(false);
+                std::fs::set_permissions(&copy, permissions).unwrap();
                 copy
             })
             .collect();

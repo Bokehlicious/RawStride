@@ -425,7 +425,7 @@ by the owner the same day; step E4 in `plans/adr-0018-0025-steps.md`, before ADR
   a RAW's sidecar only (`rating_file`), never from XMP inside the RAW file itself. ADR 0024 §2.4's
   "embedded" XMP is that of a DNG, JPEG or TIFF. A task only if a camera or program is found that
   puts a different orientation in a RAW's own XMP.
-- **The level-C samples were changed outside the tests** (found in T233's review, 2026-11-20):
+- ~~**The level-C samples were changed outside the tests**~~ (done: T234, 2026-11-20; ADR 0007 §12) (found in T233's review, 2026-11-20):
   every file in `PW_TESTDATA\level-c` except `PM-raw.ARW` was written on 2026-11-19 between
   22:25 and 22:28 (ExifTool 13.59 writes: ratings, other values, a new IIM checksum in the JPEGs),
   most likely in a hand check in RawStride. Since then `level_c`'s
