@@ -3,6 +3,11 @@
 These need design decisions, new dependencies or platform-specific code, and stay with the owner
 and reviewer:
 
+- *A new program icon* (owner, 2026-11-20): T226 (ADR 0031 RL2) brings back the old Tauri app's
+  icon from M1 (2026-11-03; a blue ring with an orange square on a dark rounded square) as
+  `crates/pw-loupe/assets/rawstride.ico` and `rawstride-128.png`. The owner may want another icon
+  later; changing it is replacing those two files (the exe's resource and the window's icon read
+  them), no code change.
 - A timeout when ExifTool hangs (process supervision across threads). Today only the shutdown has a
   timeout (`SHUTDOWN_TIMEOUT` in `pw-metadata`'s `exiftool.rs`).
 - ADR 0007 (IPTC metadata): milestone 8 is done (I1–I13, 2026-11-14; what is left is in ADR 0007
