@@ -229,3 +229,4 @@ was when the task was done, so "this file", "below" and "the Log" in T1–T115 m
 | [T220](T220-ci-workflow.md) | A CI workflow on GitHub Actions, `.github/workflows/ci.yml` (public-release plan C1) |
 | [T221](T221-image-context-menu.md) | ADR 0019 E4: a right-click menu on images in the contact sheet and the preview |
 | [T222](T222-ci-on-every-push.md) | CI on every push and the vcpkg cache saved only when it grew, `.github/workflows/ci.yml` (public-release plan P3) |
+| [T223](T223-recycle-test-on-any-drive.md) | A Recycle Bin test that does not depend on the working folder's drive (CI's first push run) |

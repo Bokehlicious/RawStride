@@ -1,4 +1,4 @@
-# T223. A Recycle Bin test that does not depend on the working folder's drive — Open
+# T223. A Recycle Bin test that does not depend on the working folder's drive — Done
 
 - **Why:** the first push run of CI (run 44684074582, `main` at 1284f2c, 2026-11-20; the run on
   `feature/gui-workspace` at the same commit failed too) failed on one test:
@@ -53,3 +53,5 @@
 | Date | Status | Note |
 |---|---|---|
 | 2026-11-20 | Open | Added after CI run 44684074582 failed on this test (`test-output.txt` from the run's artifact). Cold read (fresh agent, 2026-11-20): can be done with the named file; variant and field names, `matches!` with the module's imports and the order of checks in `imp::inspect` match the code; `docs/test-inventory.md` line 21 ("a relative path to a missing file named as given") stays true. Fixed in the text: `Failed(_)` named as not accepted on purpose, and the reason `TooLarge` cannot happen made exact |
+| 2026-11-20 | Ready for review | Test changed as point 1-2: asserts `error.file` is the relative path as given, `left` and `deleted` empty, and `reason` matches one of `Missing`, `RecycleBinUnknown(_)`, `NoRecycleBin`, `Card` or `RecycleBinOff` (message prints the error); `TooLarge` and `Failed(_)` not accepted; comment above `#[test]`. No other change. check.ps1 all OK: 1962 passed, 72 ignored |
+| 2026-11-20 | Done | Reviewed (reviewer): points 1–3 done as written; only the test and its comment changed in `recycle.rs`, `Missing` and the four drive refusals accepted, `TooLarge` and `Failed(_)` not. `check.ps1` all OK: 1962 passed, 72 ignored, no clippy warnings (the `^warning` grep finds none besides cargo audit's allowed advisories and `raw-decode-bench`); the test rerun alone, ok. Not checked: the outcome `RecycleBinUnknown` on a drive without the key (only by reading); the next CI push run is the test, and its result is the next Log row. `docs/test-inventory.md` unchanged (line 21 still true). Leftover: a drive without Recycle Bin settings refuses every delete, in `backlog.md` under the known limits of the delete to the Recycle Bin |

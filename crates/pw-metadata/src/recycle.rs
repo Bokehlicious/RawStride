@@ -1180,11 +1180,27 @@ mod tests {
             }
         }
 
+        // The path resolves against the working folder, whose drive is judged first, so the reason
+        // depends on the machine (CI's D: had no Recycle Bin settings, 2026-11-20); the file's name
+        // is what is tested.
         #[test]
         fn a_relative_path_to_a_missing_file_is_named_as_given() {
             let relative = PathBuf::from("pw-metadata-recycle-no-such-file.ARW");
             let error = check_group(std::slice::from_ref(&relative)).unwrap_err();
-            assert_eq!(error, DeleteError::new(&relative, DeleteRefusal::Missing));
+            assert_eq!(error.file, relative);
+            assert!(error.left.is_empty(), "{error:?}");
+            assert!(error.deleted.is_empty(), "{error:?}");
+            assert!(
+                matches!(
+                    error.reason,
+                    DeleteRefusal::Missing
+                        | DeleteRefusal::RecycleBinUnknown(_)
+                        | DeleteRefusal::NoRecycleBin
+                        | DeleteRefusal::Card
+                        | DeleteRefusal::RecycleBinOff
+                ),
+                "unexpected refusal: {error:?}"
+            );
         }
 
         #[test]

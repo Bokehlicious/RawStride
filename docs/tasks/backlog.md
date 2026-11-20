@@ -275,6 +275,13 @@ and reviewer:
     had no network drive at the hand check of B4, 2026-11-18). T185's decision tests cover
     `DRIVE_REMOTE` and a volume without a name. Kept until a network drive is at hand (not
     checked at B5 either, 2026-11-18).
+  - *A drive without Recycle Bin settings* (T223, 2026-11-20): a fixed drive whose
+    `Explorer\BitBucket\Volume\{GUID}` key does not exist is refused as "settings unreadable"
+    (ADR 0018 B-Q14), so every delete there fails. GitHub's runner had no key for `D:`; when
+    Windows creates the key is not known, so a user's second drive may lack it too. Whether a
+    missing key should count as Windows' defaults (bin on, default size) is the owner's decision
+    for ADR 0018. Kept: not seen on the owner's machine (the keys exist for every local fixed
+    drive, 2026-11-17); a task if it is noticed in use.
 
 - **Known limits of opening images in another program** (T201's brief, 2026-11-19; accepted when
   T201 was done; **kept** at the sort after ADR 0019 E1–E3, 2026-11-19 (owner): none was seen in

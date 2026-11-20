@@ -86,7 +86,6 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status |
 |---|---|---|
-| [T223](T223-recycle-test-on-any-drive.md) | A Recycle Bin test that does not depend on the working folder's drive | Open |
 
 ## Writing a task (owner and reviewer)
 
