@@ -436,3 +436,12 @@ by the owner the same day; step E4 in `plans/adr-0018-0025-steps.md`, before ADR
   another set, and then the safe write refuses the rotation (fails safe: the file is unchanged,
   the user sees a failed write). Check with such a file in ADR 0024 O3's hand check if one is at
   hand; a task only if one is refused.
+- **Leftovers of writing ADR 0024 O3** (cold reads of T235–T237, 2026-11-20; accepted when the
+  chain was written):
+  - *"Writing ratings" counts rotations:* the Tasks area's line "Writing ratings: {count}"
+    (`tasks_text.rs`) counts the rotation writes too once T237 is done (`pending_writes`). A
+    task (a separate line, or "Writing metadata") if the owner finds it misleading in O3's
+    hand check.
+  - *No Rotate items in the right-click menu:* ADR 0024 names only the Image menu, and the
+    right-click menu's items and order are ADR 0019's (E-Q17). Needs an ADR addition if the
+    owner wants them.

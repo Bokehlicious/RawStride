@@ -87,11 +87,14 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 | Task | Title | Status |
 |---|---|---|
 | [T234](T234-level-c-tests-follow-the-samples.md) | The level-C tests follow the samples as they are now, and the samples are read-only | Open |
+| [T235](T235-turn-keeps-the-zoomed-point.md) | ADR 0024 O3a: a turn keeps the same image point in the centre (pw-viewcore) | Blocked: waits for the chain review |
+| [T236](T236-orientation-store.md) | ADR 0024 O3b: the shell's store of turns and its write queue | Blocked: waits for T235 |
+| [T237](T237-rotate-keys-and-menu.md) | ADR 0024 O3c: Rotate Left and Rotate Right in the shell | Blocked: waits for T236 |
 
 ## Writing a task (owner and reviewer)
 
-- **Number:** the next free number after the highest in this folder and `done/` (T235 next).
-- **File:** `docs/tasks/T235-<a-few-words>.md`; three digits, lower case, words joined by `-`.
+- **Number:** the next free number after the highest in this folder and `done/` (T238 next).
+- **File:** `docs/tasks/T238-<a-few-words>.md`; three digits, lower case, words joined by `-`.
 - **Index:** add a row to "Open tasks" above and keep its status in step with the file's heading.
 - **Size (owner, 2026-11-15, after T142):** one task is one layer (a C++ shim or a core crate, or
   the shell in `pw-loupe`), about eight files at most, and gives one result the owner can check by
