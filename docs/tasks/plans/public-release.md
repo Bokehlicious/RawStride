@@ -76,7 +76,8 @@ Order 1 steps can run in parallel (they touch different files), one task at a ti
   P3. Building LibRaw from source without a warm cache takes long on the first run.
 - **The real-file tests** are ignored without `PW_TESTDATA`, so CI shows green without one RAW
   being decoded or written (R9 / PR-Q9 fixes it later). The README or `docs/TESTING.md` should say
-  so, so a green badge is not read as more than it is.
+  so, so a green badge is not read as more than it is. Done (reviewer, 2026-11-20): the README's
+  "Building" section and `docs/TESTING.md` §11.
 - **`cargo audit`'s warnings** (`zbus_names`, `zvariant`, `zvariant_derive` unmaintained,
   RUSTSEC-2026-0370 to 0372, through `eframe`'s Linux accessibility bridge, not built on Windows)
   will show in a public CI log. Warnings, the check passes; the backlog item stays.
@@ -104,3 +105,4 @@ Order 1 steps can run in parallel (they touch different files), one task at a ti
 | 8 | 2026-11-19 | H3 done: the rewritten history pushed to a new private `RawStride`, the old one archived as `RawStride-old`, the worktrees cloned anew |
 | 9 | 2026-11-19 | C1 (T220) and C2 done (first CI run green); P1 done as far as a private repository allows; P1b (a last secret and private-value search just before the switch) and P2b (the settings GitHub offers only for public repositories) added |
 | 10 | 2026-11-19 | P1b done (no leaks, no private values); P2 done: the repository is public; P2b done. Left: P3 |
+| 11 | 2026-11-20 | §3's note on the ignored real-file tests written (README, `docs/TESTING.md` §11); `AGENTS.md` §2 and `CLAUDE.md` say their workflow is the maintainer's and point outside contributors to `CONTRIBUTING.md` |

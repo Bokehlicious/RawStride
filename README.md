@@ -24,7 +24,7 @@ Folder and crate names (`pw-*`) keep the old name for now.
   get the metadata inside the file, written safely (a backup and a check after every write).
 
 **Cameras:** the goal is most cameras, through LibRaw. Development and testing use Sony (ARW),
-Panasonic (RW2) and DNG files.
+Panasonic (RW2), Fujifilm (RAF) and DNG files.
 
 ## Building
 
@@ -36,6 +36,10 @@ vcpkg and ExifTool, then
 vcpkg install --triplet x64-windows-static-md
 cargo run --release -p pw-loupe
 ```
+
+The tests that read real camera files need the maintainer's test files and are skipped without
+them, also in CI: a green CI run does not mean a RAW file was decoded or written
+([docs/TESTING.md](docs/TESTING.md) §11).
 
 ## Contributing
 

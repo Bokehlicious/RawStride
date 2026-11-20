@@ -241,6 +241,14 @@ Do not claim that tests run on every commit, pull request, branch, or release un
 
 Do not create or modify CI workflows as part of a documentation-only task.
 
+The implemented workflow is `.github/workflows/ci.yml` (`docs/building.md` §4): it runs
+`.\tools\check.ps1` without `-Ignored` on `windows-latest`, started by hand or by a pull request to
+`main`. It has no `PW_TESTDATA`, so the real-file tests (§4.4) are ignored there: a green run means
+formatting, the personal data check, `cargo audit`, the tests that need no camera files, and clippy
+passed. It does not mean that one RAW file was decoded or written. Those tests run only on the
+maintainer's machine with `-Ignored`, until free test files are in `tests/fixtures/`
+(`docs/tasks/plans/public-release.md`, R9).
+
 ## 12. Test Documentation Maintenance
 
 When tests are added, removed, or materially changed:

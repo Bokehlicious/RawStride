@@ -11,6 +11,10 @@
 - **Precedence:** this file comes first, then `CLAUDE.md`, `docs/TESTING.md` and `docs/tasks/README.md`. When two rules differ, the stricter one applies.
 
 ## 2. Worktree and Git
+- **Outside contributors and their agents:** §1's roles and the rest of this section describe the
+  maintainer's own workflow, not yours. Follow `CONTRIBUTING.md`: work on a branch of your fork,
+  commit with `git commit -s` (`Signed-off-by`), and open a pull request. The rule on personal data
+  below and §3–§8 apply to every change.
 - The work happens on `feature/gui-workspace` in its own worktree. Never commit to `main`; the owner moves `main` forward after review.
 - Never push to a remote repository or merge into `main`.
 - **Task agents never commit.** They leave their changes uncommitted for review (`docs/tasks/README.md`, rule 8).

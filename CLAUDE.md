@@ -3,6 +3,9 @@
 `AGENTS.md` holds the project's rules and comes first; this file adds only what is specific to
 Claude Code sessions. Do not repeat or reinterpret `AGENTS.md` here.
 
+The paths, branches and roles below are the maintainer's own setup. A session for an outside
+contributor follows `CONTRIBUTING.md` and `AGENTS.md` §2's first point instead of §1 here.
+
 ## 1. Before You Change Anything
 1. Check the working directory, worktree and branch. The work happens in
    `C:\Development\PhotoWorkflow-GUI` on `feature/gui-workspace`; `C:\Development\PhotoWorkflow` is
