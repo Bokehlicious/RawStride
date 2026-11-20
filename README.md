@@ -13,6 +13,8 @@ step through them quickly, rate and label them, and add IPTC metadata.
 The project was called PhotoWorkflow until 2026-11-09 ([ADR 0012](docs/adr/0012-product-name-rawstride.md)).
 Folder and crate names (`pw-*`) keep the old name for now.
 
+![The contact sheet: folders on the left, thumbnails with ratings and labels in the middle, the inspector with camera data and histogram on the right](docs/images/contact-sheet.jpg)
+
 ## What it does
 
 - **Import:** copies from a memory card to a destination and an optional backup, with folder and
@@ -24,6 +26,10 @@ Folder and crate names (`pw-*`) keep the old name for now.
 - **Metadata:** IPTC Core and Extension in XMP, and the older IIM, following the IPTC standards. A
   proprietary RAW file is never modified: its metadata goes into an XMP sidecar. DNG, JPEG and TIFF
   get the metadata inside the file, written safely (a backup and a check after every write).
+
+| Loupe | Metadata window |
+| --- | --- |
+| ![The loupe: one image at fit size with clipping shown, the filmstrip below and zoom and histogram on the right](docs/images/loupe.jpg) | ![The metadata window over the contact sheet, showing the IPTC Content fields](docs/images/metadata.jpg) |
 
 **Cameras:** the goal is most cameras, through LibRaw. Development and testing use Sony (ARW),
 Panasonic (RW2), Fujifilm (RAF) and DNG files.
