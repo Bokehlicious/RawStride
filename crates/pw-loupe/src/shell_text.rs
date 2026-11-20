@@ -414,6 +414,8 @@ pub fn command_text(command: Command) -> String {
         Command::UndoMove => "Undo Move".to_owned(),
         Command::Label(label) => label_name(label).to_owned(),
         Command::ClearLabel => "No label".to_owned(),
+        Command::RotateLeft => "Rotate Left".to_owned(),
+        Command::RotateRight => "Rotate Right".to_owned(),
         Command::ToggleMode => "RAW ↔ JPEG".to_owned(),
         Command::DeleteToRecycleBin => "Delete to Recycle Bin".to_owned(),
         Command::DeleteRejected => "Delete Rejected Images".to_owned(),
@@ -464,6 +466,8 @@ pub fn key_text(chord: KeyChord) -> String {
         Key::Plus => "+",
         Key::Minus => "−",
         Key::Escape => "Esc",
+        Key::ArrowLeft => "←",
+        Key::ArrowRight => "→",
         other => other.name(),
     };
     match (chord.ctrl, chord.shift, chord.alt) {
@@ -550,6 +554,8 @@ mod tests {
                 "Blue",
                 "Purple",
                 "No label",
+                "Rotate Left",
+                "Rotate Right",
                 "RAW ↔ JPEG",
                 "Show in File Explorer",
                 "Delete to Recycle Bin",
@@ -612,6 +618,8 @@ mod tests {
             Some("9"),
             Some("Ctrl+5"),
             Some("Ctrl+0"),
+            Some("Ctrl+←"),
+            Some("Ctrl+→"),
             Some("R"),
             None,
             Some("Delete"),
@@ -754,6 +762,22 @@ mod tests {
         assert_eq!(key_text(chord(true, false, true)), "Ctrl+Alt+K");
         assert_eq!(key_text(chord(false, true, true)), "Shift+Alt+K");
         assert_eq!(key_text(chord(true, true, true)), "Ctrl+Shift+Alt+K");
+    }
+
+    /// Rotate Left and Rotate Right (ADR 0024 §2.1, O-Q1, T237): their texts, and their keys
+    /// shown with arrows, not egui's key names.
+    #[test]
+    fn the_rotate_texts_and_keys() {
+        assert_eq!(command_text(Command::RotateLeft), "Rotate Left");
+        assert_eq!(command_text(Command::RotateRight), "Rotate Right");
+        let ctrl = |key| KeyChord {
+            key,
+            ctrl: true,
+            shift: false,
+            alt: false,
+        };
+        assert_eq!(key_text(ctrl(Key::ArrowLeft)), "Ctrl+←");
+        assert_eq!(key_text(ctrl(Key::ArrowRight)), "Ctrl+→");
     }
 
     /// The texts of the two commands of the external programs (ADR 0019 §2.2, T202): a program

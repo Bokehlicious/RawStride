@@ -489,6 +489,12 @@ pub enum Command {
     /// A label by its XMP name ("Red", …).
     Label(&'static str),
     ClearLabel,
+    /// The target images turned 90° anticlockwise (Image ▸ Rotate Left, Ctrl+←; ADR 0024 §2.1,
+    /// O-Q1, T237).
+    RotateLeft,
+    /// The target images turned 90° clockwise (Image ▸ Rotate Right, Ctrl+→; ADR 0024 §2.1, O-Q1,
+    /// T237).
+    RotateRight,
     ToggleMode,
     /// The target images and their companion files sent to the Recycle Bin after a confirmation
     /// (Image ▸ Delete to Recycle Bin, Delete; ADR 0018 §2.1, B4, T189).
@@ -750,6 +756,9 @@ pub const MENUS: &[Menu] = &[
             item(Command::MovePicked, plain(Key::P)),
             item(Command::MoveToSubfolders, None),
             MenuEntry::Submenu(SubmenuKind::Label, LABEL_ITEMS),
+            MenuEntry::Separator,
+            item(Command::RotateLeft, ctrl(Key::ArrowLeft)),
+            item(Command::RotateRight, ctrl(Key::ArrowRight)),
             MenuEntry::Separator,
             item(Command::ToggleMode, plain(Key::R)),
             MenuEntry::Separator,
@@ -1173,6 +1182,48 @@ mod tests {
         for menu_item in menu_items() {
             if menu_item.key.is_some_and(|chord| chord.key == Key::Delete) {
                 assert_eq!(menu_item.command, Command::DeleteToRecycleBin);
+            }
+        }
+    }
+
+    /// Rotate Left (Ctrl+←) and Rotate Right (Ctrl+→) follow the Label submenu in the Image menu,
+    /// after a separator and before the separator above RAW ↔ JPEG; they act in both views and
+    /// are not in the right-click menu (ADR 0024 §2.1, O-Q1, T237).
+    #[test]
+    fn the_rotate_items_follow_the_label_submenu_in_the_image_menu() {
+        let Some(image) = MENUS.iter().find(|menu| menu.kind == MenuKind::Image) else {
+            panic!("there is an Image menu");
+        };
+        let Some(label) = image
+            .entries
+            .iter()
+            .position(|entry| *entry == MenuEntry::Submenu(SubmenuKind::Label, LABEL_ITEMS))
+        else {
+            panic!("the Image menu has the Label submenu");
+        };
+        assert_eq!(
+            image.entries.get(label + 1..label + 6),
+            Some(
+                &[
+                    MenuEntry::Separator,
+                    item(Command::RotateLeft, ctrl(Key::ArrowLeft)),
+                    item(Command::RotateRight, ctrl(Key::ArrowRight)),
+                    MenuEntry::Separator,
+                    item(Command::ToggleMode, plain(Key::R)),
+                ][..]
+            )
+        );
+        assert_eq!(Command::RotateLeft.acts_in(), Where::Both);
+        assert_eq!(Command::RotateRight.acts_in(), Where::Both);
+        for entry in IMAGE_CONTEXT_MENU {
+            if let MenuEntry::Item(menu_item) = entry {
+                assert!(
+                    !matches!(
+                        menu_item.command,
+                        Command::RotateLeft | Command::RotateRight
+                    ),
+                    "{menu_item:?} is in the right-click menu"
+                );
             }
         }
     }

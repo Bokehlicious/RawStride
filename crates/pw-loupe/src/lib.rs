@@ -129,6 +129,7 @@ pub use moves_text::{
 };
 pub use orientations::{
     EmbeddedOrientationReader, OrientationStore, OrientationWriter, ReaderStopped,
+    rotation_key_action,
 };
 pub use preview::{
     FILMSTRIP_CELL_WIDTH, FILMSTRIP_IMAGE_HEIGHT, FILMSTRIP_LABEL_HEIGHT, FILMSTRIP_MARGIN,
@@ -1038,7 +1039,7 @@ mod tests {
 
     /// The command a key gives in `view`, through the key functions in the order `main.rs` asks
     /// them (shell keys, the move keys P and Ctrl+Z (T174), the Delete key (T189), Ctrl+E (as
-    /// `OpenIn(0)`, T202), import, tabs, ratings, `M`, `I`, then
+    /// `OpenIn(0)`, T202), import, tabs, ratings, the rotation keys (T237), `M`, `I`, then
     /// the view's own keys). The preview's
     /// clipping keys (J and Shift+J, T148) and the compare's keys (C, K, Shift+K and V, T153; L,
     /// T154) are asked before the loupe's keys, which take no Shift chord.
@@ -1084,6 +1085,13 @@ mod tests {
                 RatingKey::Label(label) => Command::Label(label),
                 RatingKey::ClearLabel => Command::ClearLabel,
                 RatingKey::Reject => Command::Reject,
+            });
+        }
+        if let Some(clockwise) = rotation_key_action(key, ctrl, shift, alt) {
+            return Some(if clockwise {
+                Command::RotateRight
+            } else {
+                Command::RotateLeft
             });
         }
         if key_action(key, ctrl, alt) == Some(Action::OpenMetadata) {

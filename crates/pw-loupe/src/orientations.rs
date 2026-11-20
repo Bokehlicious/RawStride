@@ -464,9 +464,25 @@ impl EmbeddedOrientationReader {
     }
 }
 
+/// The rotation keys (ADR 0024 §2.1, O-Q1; T237): Ctrl+← turns 90° anticlockwise
+/// (`Some(false)`), Ctrl+→ 90° clockwise (`Some(true)`). With Shift or Alt, or any other key,
+/// `None`.
+pub fn rotation_key_action(key: egui::Key, ctrl: bool, shift: bool, alt: bool) -> Option<bool> {
+    if !ctrl || shift || alt {
+        return None;
+    }
+    match key {
+        egui::Key::ArrowLeft => Some(false),
+        egui::Key::ArrowRight => Some(true),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{EmbeddedOrientationReader, OrientationStore, OrientationWriter};
+    use super::{
+        EmbeddedOrientationReader, OrientationStore, OrientationWriter, rotation_key_action,
+    };
     use crate::ratings::RatingRefused;
     use pw_metadata::{RequestId, SubmitError};
     use std::collections::{HashMap, VecDeque};
@@ -1029,5 +1045,30 @@ mod tests {
             std::thread::sleep(Duration::from_millis(5));
         };
         assert_eq!(answer, (missing, None));
+    }
+
+    /// ADR 0024 §2.1, O-Q1 (T237): Ctrl+← anticlockwise, Ctrl+→ clockwise; nothing else.
+    #[test]
+    fn rotation_keys_match_adr_0024() {
+        use egui::Key as K;
+
+        assert_eq!(
+            rotation_key_action(K::ArrowLeft, true, false, false),
+            Some(false)
+        );
+        assert_eq!(
+            rotation_key_action(K::ArrowRight, true, false, false),
+            Some(true)
+        );
+        for key in [K::ArrowLeft, K::ArrowRight] {
+            assert_eq!(rotation_key_action(key, false, false, false), None);
+            assert_eq!(rotation_key_action(key, true, true, false), None);
+            assert_eq!(rotation_key_action(key, true, false, true), None);
+            assert_eq!(rotation_key_action(key, false, true, false), None);
+            assert_eq!(rotation_key_action(key, false, false, true), None);
+        }
+        for key in [K::ArrowUp, K::ArrowDown] {
+            assert_eq!(rotation_key_action(key, true, false, false), None);
+        }
     }
 }

@@ -5,8 +5,9 @@ use std::sync::mpsc::TryRecvError;
 use std::time::{Duration, Instant};
 
 use pw_loupe::{
-    EditorText, RatingKey, RatingRefused, RatingStore, RatingWriter, UNSUPPORTED_TEXT, WriteReason,
-    editor_text, notice_text, path_resolution_error_text, status_text, write_reason_text,
+    EditorText, OrientationStore, OrientationWriter, RatingKey, RatingRefused, RatingStore,
+    RatingWriter, UNSUPPORTED_TEXT, WriteReason, editor_text, notice_text,
+    path_resolution_error_text, status_text, write_reason_text,
 };
 use pw_metadata::edit::Edit;
 use pw_metadata::read::MetadataRead;
@@ -19,7 +20,7 @@ use pw_metadata::{
 
 use crate::inspector::{INSPECTOR_POLL_INTERVAL, INSPECTOR_READ_DELAY};
 
-pub(crate) trait MetadataSubmit: RatingWriter {
+pub(crate) trait MetadataSubmit: RatingWriter + OrientationWriter {
     fn read_ratings(&mut self, images: Vec<PathBuf>) -> Result<RequestId, SubmitError>;
 
     /// All metadata of one image, for the metadata window (T98, T107).
@@ -294,6 +295,13 @@ struct EditorSave {
     events: Vec<EditorEvent>,
 }
 
+/// The kind of write whose failure came last (T237).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FailedWrite {
+    Rating,
+    Rotation,
+}
+
 #[derive(Default)]
 pub(crate) struct MetadataCache {
     images: HashMap<PathBuf, ImageMetadata>,
@@ -302,12 +310,13 @@ pub(crate) struct MetadataCache {
     /// Why the last folder read failed (ADR 0014 Q7); cleared by the next `begin_load`.
     read_error: Option<String>,
     ratings: RatingStore,
-    /// The XMP orientations read with the ratings (ADR 0024 §2.4, T232), only values in `1..=8`;
-    /// an image without one is absent. Kept per path like the ratings, dropped by `prune`.
-    orientations: HashMap<PathBuf, u16>,
-    /// The changes of `orientations` (a path and its new value, `None` when it was taken away)
-    /// that `main.rs` has not taken yet with `take_orientation_changes`, in the order they came.
-    orientation_changes: Vec<(PathBuf, Option<u16>)>,
+    /// The turns of the images (ADR 0024 §2.4, §2.5; T232, T236, T237): the XMP orientations
+    /// read with the ratings, the turns of Rotate Left and Rotate Right shown at once, and their
+    /// ordered write queue, kept apart from the ratings' queue. Kept per path like the ratings,
+    /// dropped by `prune`. Its changes are taken with `take_orientation_changes`.
+    orientations: OrientationStore,
+    /// Which store's write failed last, so `failure_text` names the right kind (T237).
+    last_failure: Option<FailedWrite>,
     window: WindowRead,
     inspector: InspectorRead,
     editor: EditorSave,
@@ -426,8 +435,22 @@ impl MetadataCache {
         self.send_batch(worker);
         self.send_editor_reload(worker);
         self.send_window_read(worker);
-        failures.extend(self.ratings.pump(worker));
+        // The ratings before the rotations: a rating and a turn of the same frame are sent in
+        // that order into the worker's one ordered queue (T237).
+        let rating_failures = self.ratings.pump(worker);
+        self.push_failures(&mut failures, rating_failures, FailedWrite::Rating);
+        let rotation_failures = self.orientations.pump(worker);
+        self.push_failures(&mut failures, rotation_failures, FailedWrite::Rotation);
         failures
+    }
+
+    /// Adds `new` to `failures` and, when there is one, notes `kind` as the last failed write
+    /// for `failure_text` (T237).
+    fn push_failures(&mut self, failures: &mut Vec<String>, new: Vec<String>, kind: FailedWrite) {
+        if !new.is_empty() {
+            self.last_failure = Some(kind);
+            failures.extend(new);
+        }
     }
 
     fn retry_pending_read(&mut self, worker: &mut impl MetadataSubmit) {
@@ -445,9 +468,10 @@ impl MetadataCache {
     }
 
     /// Drops what is kept for images no longer open: their ratings, their orientations, and the
-    /// inspector's image. Each orientation dropped is a change to `None` (T232): the view cores
-    /// keep told values per path, so a folder opened again whose sidecar lost the value would
-    /// otherwise still be shown with the old turn.
+    /// inspector's image. Each shown orientation dropped is a change to `None` (T232): the view
+    /// cores keep told values per path, so a folder opened again whose sidecar lost the value
+    /// would otherwise still be shown with the old turn. A path with a pending write is kept
+    /// (`OrientationStore::prune`, T237).
     pub fn prune(&mut self, keep: impl Fn(&Path) -> bool) {
         if self
             .inspector
@@ -457,47 +481,45 @@ impl MetadataCache {
         {
             self.inspector.clear();
         }
-        let mut dropped: Vec<PathBuf> = self
-            .orientations
-            .keys()
-            .filter(|path| !keep(path))
-            .cloned()
-            .collect();
-        dropped.sort();
-        for path in dropped {
-            self.orientations.remove(&path);
-            self.orientation_changes.push((path, None));
-        }
+        self.orientations.prune(&keep);
         self.ratings.prune(keep);
     }
 
-    /// The XMP orientation read for `path` (an absolute path, as `begin_load` keys it), in
-    /// `1..=8`; `None` when none was read or the read has not come yet (ADR 0024 §2.4, T232).
+    /// The orientation shown for `path` (an absolute path, as `begin_load` keys it), in `1..=8`:
+    /// the XMP value read, or a turn made since; `None` means the file's own (ADR 0024 §2.4,
+    /// §2.5; T232, T237).
     pub fn orientation(&self, path: &Path) -> Option<u16> {
-        self.orientations.get(path).copied()
+        self.orientations.orientation(path)
     }
 
     /// The orientations that changed since the last call (a path and its new value, `None` when
     /// it was taken away), in the order they changed; empties the list (T232). The caller tells
     /// them to the view cores and makes the thumbnails again.
     pub fn take_orientation_changes(&mut self) -> Vec<(PathBuf, Option<u16>)> {
-        std::mem::take(&mut self.orientation_changes)
+        self.orientations.take_changes()
     }
 
-    /// Keeps the orientations of a folder read for `paths` (the images that were loading) and
-    /// records each change (T232).
-    fn read_orientations(&mut self, orientations: &HashMap<PathBuf, u16>, paths: &[PathBuf]) {
-        for path in paths {
-            let value = orientations.get(path).copied();
-            if self.orientations.get(path).copied() == value {
-                continue;
-            }
-            match value {
-                Some(value) => self.orientations.insert(path.clone(), value),
-                None => self.orientations.remove(path),
-            };
-            self.orientation_changes.push((path.clone(), value));
-        }
+    /// Rotate Left (`clockwise` false) or Rotate Right on `paths` (ADR 0024 §2.1, §2.5; T237):
+    /// shown at once and queued; see `OrientationStore::turn_many`. Returns the paths whose
+    /// embedded value the caller must read and give to `embedded_read`.
+    pub fn turn(
+        &mut self,
+        paths: &[PathBuf],
+        clockwise: bool,
+    ) -> Result<Vec<PathBuf>, RatingRefused> {
+        self.orientations.turn_many(paths, clockwise)
+    }
+
+    /// The file's own Exif orientation of `path` (absolute), read for a turn that waits for it
+    /// (T237); see `OrientationStore::embedded_read`.
+    pub fn embedded_read(&mut self, path: &Path, orientation: Option<u16>) {
+        self.orientations.embedded_read(path, orientation);
+    }
+
+    /// The paths whose turn waits for its embedded value, sorted (T237): answered on the UI
+    /// thread when the reader has stopped.
+    pub fn waiting_orientations(&self) -> Vec<PathBuf> {
+        self.orientations.waiting_paths()
     }
 
     /// Applies every available event. If the worker is gone, no outstanding operation can
@@ -519,7 +541,10 @@ impl MetadataCache {
                         // The folder read was sent or waiting to be sent: it can never finish.
                         self.fail_read(&message);
                     }
-                    failures.extend(self.ratings.fail_sent());
+                    let rating_failures = self.ratings.fail_sent();
+                    self.push_failures(failures, rating_failures, FailedWrite::Rating);
+                    let rotation_failures = self.orientations.fail_sent();
+                    self.push_failures(failures, rotation_failures, FailedWrite::Rotation);
                     // The window's read in flight can never come back either.
                     if self.window.in_flight.take().is_some() && self.window.image.is_some() {
                         self.window.result = Some(Err(message.clone()));
@@ -645,9 +670,18 @@ impl MetadataCache {
         self.ratings.set_many(paths, key)
     }
 
-    /// The status-line text for the write failures since the last rating key (ADR 0014 Q6).
+    /// The status-line text for the write failures since the last rating key (ADR 0014 Q6) or
+    /// turn (T237): the text of the store whose failure came last, else the other store's.
     pub fn failure_text(&self) -> Option<String> {
-        self.ratings.failure_text()
+        if self.last_failure == Some(FailedWrite::Rotation) {
+            self.orientations
+                .failure_text()
+                .or_else(|| self.ratings.failure_text())
+        } else {
+            self.ratings
+                .failure_text()
+                .or_else(|| self.orientations.failure_text())
+        }
     }
 
     pub fn shown_rating(&self, path: &Path) -> Option<&Rating> {
@@ -655,9 +689,10 @@ impl MetadataCache {
         self.ratings.shown(path)
     }
 
-    /// Rating writes that are queued or sent but not yet confirmed.
+    /// Rating and rotation writes that are queued or sent but not yet confirmed (T237). A turn
+    /// that waits for its embedded value has no write yet and is not counted.
     pub fn pending_writes(&self) -> usize {
-        self.ratings.pending()
+        self.ratings.pending() + self.orientations.pending()
     }
 
     /// Opens the metadata window's read of `image` (absolute path, ADR 0007 I10n, D16, T107): the
@@ -1046,14 +1081,18 @@ impl MetadataCache {
         self.prune(|path| !deleted(path));
     }
 
-    /// Whether a rating write for `path` (absolute) is queued, or sent and not yet answered; a
-    /// move of the image waits for it (T172, T173, T178).
+    /// Whether a rating or rotation write for `path` (absolute) is queued, or sent and not yet
+    /// answered, or a turn of it waits for its embedded value; a move or delete of the image
+    /// waits for it (T172, T173, T178, T237), so a turn's write never lands on a moved file.
     pub(crate) fn is_pending(&self, path: &Path) -> bool {
         self.ratings.is_pending(path)
+            || self.orientations.is_pending(path)
+            || self.orientations.is_waiting(path)
     }
 
-    /// Whether a rating or metadata write of `path` (absolute) is waiting in the queue or running
-    /// (ADR 0019 §2.4, T201): a rating write (`is_pending`), the editor's write in flight, or a
+    /// Whether a rating, rotation or metadata write of `path` (absolute) is waiting in the queue
+    /// or running (ADR 0019 §2.4, T201, T237): a rating or rotation write or a turn waiting for
+    /// its embedded value (`is_pending`), the editor's write in flight, or a
     /// write of the running "Apply to All Marked" batch not yet sent or not yet answered. "Open
     /// in {name}" waits for it.
     pub(crate) fn write_pending(&self, path: &Path) -> bool {
@@ -1159,7 +1198,7 @@ impl MetadataCache {
                             .map(|(path, _)| path.clone())
                             .collect();
                         self.ratings.read(id, &ratings, &paths);
-                        self.read_orientations(&orientations, &paths);
+                        self.orientations.read(id, &orientations, &paths);
                         for metadata in self.images.values_mut() {
                             if matches!(&metadata.state, LoadState::Loading) {
                                 metadata.state = LoadState::Ready;
@@ -1182,11 +1221,29 @@ impl MetadataCache {
                     self.ratings
                         .written(id, &path, result.map_err(write_error_text))
                 {
+                    self.last_failure = Some(FailedWrite::Rating);
+                    failures.push(message);
+                }
+            }
+            // A turn's write (T237), as a rating write.
+            WorkerEvent::OrientationWritten {
+                id, path, result, ..
+            } => {
+                self.window_written(&path);
+                self.inspector_written(&path);
+                self.written.push(WriteAnswer {
+                    path: path.clone(),
+                    succeeded: result.is_ok(),
+                });
+                if let Some(message) =
+                    self.orientations
+                        .written(id, &path, result.map_err(write_error_text))
+                {
+                    self.last_failure = Some(FailedWrite::Rotation);
                     failures.push(message);
                 }
             }
             WorkerEvent::RatingsRead { .. } => {}
-            WorkerEvent::OrientationWritten { .. } => {}
             WorkerEvent::MetadataRead { id, path, result }
                 if self
                     .editor
@@ -1301,9 +1358,11 @@ impl UnsavedRatings {
     }
 }
 
-/// Keeps sending and confirming rating writes until none is pending, and the editor's write and
-/// the batch of "Apply to All Marked" are done, or `EXIT_WAIT_LIMIT` has passed (T44, T105,
-/// T126). The clock and the sleep are passed in so the wait can be tested without real time.
+/// Keeps sending and confirming rating and rotation writes until none is pending, and the
+/// editor's write and the batch of "Apply to All Marked" are done, or `EXIT_WAIT_LIMIT` has
+/// passed (T44, T105, T126, T237). The clock and the sleep are passed in so the wait can be
+/// tested without real time. The turns that wait for their embedded value are not waited for
+/// (the reader's answers come through `main.rs`) but are listed as pending.
 pub(crate) fn finish_pending_writes(
     cache: &mut MetadataCache,
     worker: &mut impl MetadataSubmit,
@@ -1314,28 +1373,38 @@ pub(crate) fn finish_pending_writes(
     let waiting = |cache: &MetadataCache| {
         cache.pending_writes() > 0 || cache.editor_saving() || cache.batch_running()
     };
-    if !waiting(cache) {
-        return unsaved;
-    }
-    let start = now();
-    loop {
-        unsaved.failed.extend(cache.poll(worker));
-        for event in cache.take_editor_events() {
-            match event {
-                EditorEvent::Failed { message, .. } => unsaved.failed.push(message),
-                EditorEvent::BatchDone(summary) => unsaved.failed.extend(summary.failed),
-                EditorEvent::Saved { .. } | EditorEvent::Reloaded { .. } => {}
+    if waiting(cache) {
+        let start = now();
+        loop {
+            unsaved.failed.extend(cache.poll(worker));
+            for event in cache.take_editor_events() {
+                match event {
+                    EditorEvent::Failed { message, .. } => unsaved.failed.push(message),
+                    EditorEvent::BatchDone(summary) => unsaved.failed.extend(summary.failed),
+                    EditorEvent::Saved { .. } | EditorEvent::Reloaded { .. } => {}
+                }
             }
+            if !waiting(cache) || now().saturating_duration_since(start) >= EXIT_WAIT_LIMIT {
+                break;
+            }
+            sleep(EXIT_POLL_INTERVAL);
         }
-        if !waiting(cache) || now().saturating_duration_since(start) >= EXIT_WAIT_LIMIT {
-            break;
-        }
-        sleep(EXIT_POLL_INTERVAL);
     }
-    let editor = cache.editor.writing.as_ref().map(|(_, path)| path);
-    unsaved.pending = cache
+    // The rating and rotation writes and the waiting turns, each file once.
+    let mut written: Vec<PathBuf> = Vec::new();
+    for path in cache
         .ratings
         .pending_paths()
+        .into_iter()
+        .chain(cache.orientations.pending_paths())
+        .chain(cache.orientations.waiting_paths())
+    {
+        if !written.contains(&path) {
+            written.push(path);
+        }
+    }
+    let editor = cache.editor.writing.as_ref().map(|(_, path)| path);
+    unsaved.pending = written
         .iter()
         .chain(editor)
         .map(|path| file_name(path))
@@ -1452,6 +1521,8 @@ mod tests {
         read_responses: VecDeque<Result<RequestId, SubmitError>>,
         read_attempts: Vec<Vec<PathBuf>>,
         write_attempts: Vec<PathBuf>,
+        /// The path and value of every `write_orientation` call (T237).
+        orientation_writes: Vec<(PathBuf, u16)>,
         operations: Vec<&'static str>,
         events: VecDeque<WorkerEvent>,
         next_write_id: RequestId,
@@ -1486,6 +1557,7 @@ mod tests {
                 read_responses: read_responses.into_iter().collect(),
                 read_attempts: Vec::new(),
                 write_attempts: Vec::new(),
+                orientation_writes: Vec::new(),
                 operations: Vec::new(),
                 events: VecDeque::new(),
                 next_write_id: 100,
@@ -1521,6 +1593,29 @@ mod tests {
                     id,
                     path,
                     rating,
+                    result: result.map_err(WriteError::Other),
+                });
+            }
+            Ok(id)
+        }
+    }
+
+    /// Answers as `write_rating` does (T237).
+    impl OrientationWriter for FakeSubmit {
+        fn write_orientation(
+            &mut self,
+            path: PathBuf,
+            orientation: u16,
+        ) -> Result<RequestId, SubmitError> {
+            self.operations.push("write_orientation");
+            self.orientation_writes.push((path.clone(), orientation));
+            let id = self.next_write_id;
+            self.next_write_id += 1;
+            if let Some(result) = self.write_result.clone() {
+                self.events.push_back(WorkerEvent::OrientationWritten {
+                    id,
+                    path,
+                    orientation,
                     result: result.map_err(WriteError::Other),
                 });
             }
@@ -1962,6 +2057,315 @@ mod tests {
         );
         assert_eq!(cache.orientation(&a), Some(3));
         assert_eq!(cache.take_orientation_changes(), vec![(a, Some(3))]);
+    }
+
+    /// An absolute, supported image for the turn tests (T237).
+    fn turn_file(name: &str) -> PathBuf {
+        std::env::temp_dir().join(name)
+    }
+
+    /// A cache whose folder read gave `path` the XMP orientation `value`, its change taken
+    /// (T237).
+    fn cache_with_orientation(path: &Path, value: u16) -> MetadataCache {
+        let mut cache = MetadataCache::default();
+        load_and_read(
+            &mut cache,
+            &[path.to_path_buf()],
+            Ok(HashMap::new()),
+            HashMap::from([(path.to_path_buf(), value)]),
+        );
+        assert_eq!(
+            cache.take_orientation_changes(),
+            vec![(path.to_path_buf(), Some(value))]
+        );
+        cache
+    }
+
+    /// T237: a turn is shown at once, its write sent by the next `poll`, and its `Ok` answer keeps
+    /// the value and is a `WriteAnswer`.
+    #[test]
+    fn a_turn_is_shown_at_once_written_and_confirmed() {
+        let path = turn_file("pw-loupe-turn-confirmed.ARW");
+        let mut cache = cache_with_orientation(&path, 6);
+        let mut worker = FakeSubmit::new([]);
+        worker.write_result = Some(Ok(()));
+
+        assert_eq!(cache.turn(std::slice::from_ref(&path), true), Ok(vec![]));
+        assert_eq!(cache.orientation(&path), Some(3));
+        assert_eq!(
+            cache.take_orientation_changes(),
+            vec![(path.clone(), Some(3))]
+        );
+        assert!(worker.orientation_writes.is_empty(), "sent by poll");
+
+        assert!(cache.poll(&mut worker).is_empty());
+        assert_eq!(worker.orientation_writes, vec![(path.clone(), 3)]);
+        assert_eq!(worker.operations, ["write_orientation"]);
+        assert!(worker.write_attempts.is_empty(), "no rating write");
+
+        assert!(cache.poll(&mut worker).is_empty());
+        assert_eq!(cache.orientation(&path), Some(3));
+        assert!(cache.take_orientation_changes().is_empty());
+        assert_eq!(
+            cache.take_written(),
+            vec![WriteAnswer {
+                path,
+                succeeded: true
+            }]
+        );
+        assert_eq!(cache.pending_writes(), 0);
+        assert_eq!(cache.failure_text(), None);
+    }
+
+    /// T237: a failed rotation write turns the image back and its text is the status text; a
+    /// later failed rating write makes the rating's text the status text.
+    #[test]
+    fn a_failed_rotation_turns_back_and_its_text_is_the_status_text() {
+        let path = turn_file("pw-loupe-turn-failed.ARW");
+        let mut cache = cache_with_orientation(&path, 6);
+        let mut worker = FakeSubmit::new([]);
+        worker.write_result = Some(Err("read-only".to_owned()));
+
+        assert_eq!(cache.turn(std::slice::from_ref(&path), true), Ok(vec![]));
+        assert_eq!(
+            cache.take_orientation_changes(),
+            vec![(path.clone(), Some(3))]
+        );
+        assert!(cache.poll(&mut worker).is_empty());
+        assert_eq!(
+            cache.poll(&mut worker),
+            ["Could not save the rotation for pw-loupe-turn-failed.ARW: read-only"]
+        );
+        assert_eq!(cache.orientation(&path), Some(6));
+        assert_eq!(
+            cache.take_orientation_changes(),
+            vec![(path.clone(), Some(6))]
+        );
+        assert_eq!(
+            cache.failure_text().as_deref(),
+            Some("Could not save the rotation for pw-loupe-turn-failed.ARW: read-only")
+        );
+        assert_eq!(
+            cache.take_written(),
+            vec![WriteAnswer {
+                path: path.clone(),
+                succeeded: false
+            }]
+        );
+
+        if let Err(error) = cache.set_rating(&path, RatingKey::Stars(2)) {
+            panic!("supported rating path should be accepted: {error}");
+        }
+        assert!(cache.poll(&mut worker).is_empty());
+        assert_eq!(
+            cache.poll(&mut worker),
+            ["Could not save the rating for pw-loupe-turn-failed.ARW: read-only"]
+        );
+        assert_eq!(
+            cache.failure_text().as_deref(),
+            Some("Could not save the rating for pw-loupe-turn-failed.ARW: read-only")
+        );
+    }
+
+    /// T237: a queued or sent rotation write, and a turn waiting for its embedded value, make the
+    /// path pending (moves, deletes and "Open in" wait); only the writes are counted.
+    #[test]
+    fn a_queued_rotation_holds_back_a_move() {
+        let path = turn_file("pw-loupe-turn-pending.ARW");
+        let mut cache = cache_with_orientation(&path, 1);
+        let mut worker = FakeSubmit::new([]);
+        assert!(!cache.is_pending(&path));
+
+        assert_eq!(cache.turn(std::slice::from_ref(&path), false), Ok(vec![]));
+        assert!(cache.is_pending(&path), "queued");
+        assert!(cache.write_pending(&path));
+        assert_eq!(cache.pending_writes(), 1);
+
+        assert!(cache.poll(&mut worker).is_empty());
+        assert_eq!(worker.orientation_writes, vec![(path.clone(), 8)]);
+        assert!(cache.is_pending(&path), "sent, not answered");
+        assert_eq!(cache.pending_writes(), 1);
+
+        let mut failures = Vec::new();
+        cache.apply(
+            WorkerEvent::OrientationWritten {
+                id: worker.next_write_id - 1,
+                path: path.clone(),
+                orientation: 8,
+                result: Ok(()),
+            },
+            &mut failures,
+        );
+        assert!(failures.is_empty());
+        assert!(!cache.is_pending(&path));
+        assert!(!cache.write_pending(&path));
+        assert_eq!(cache.pending_writes(), 0);
+
+        // An image without a known value: pending while its turn waits, with no write counted.
+        let other = turn_file("pw-loupe-turn-waiting.ARW");
+        assert_eq!(
+            cache.turn(std::slice::from_ref(&other), true),
+            Ok(vec![other.clone()])
+        );
+        assert!(cache.is_pending(&other));
+        assert_eq!(cache.pending_writes(), 0);
+        assert_eq!(cache.waiting_orientations(), vec![other.clone()]);
+        assert_eq!(cache.turn(std::slice::from_ref(&other), false), Ok(vec![]));
+        assert!(cache.is_pending(&other), "still waiting");
+        cache.embedded_read(&other, Some(6));
+        assert!(
+            !cache.is_pending(&other),
+            "the two turns cancel: nothing to write"
+        );
+        assert!(cache.waiting_orientations().is_empty());
+        assert_eq!(cache.pending_writes(), 0);
+
+        // A turn that waited is queued once its value comes.
+        assert_eq!(cache.turn(std::slice::from_ref(&other), true), Ok(vec![]));
+        assert_eq!(cache.orientation(&other), Some(3));
+        assert!(cache.is_pending(&other));
+        assert_eq!(cache.pending_writes(), 1);
+    }
+
+    /// T237 (plan O3 row, need (a)): a folder read that lands while a turn is queued or sent does
+    /// not undo the turn on screen.
+    #[test]
+    fn a_folder_read_while_a_rotation_is_sent_keeps_the_turn() {
+        let path = turn_file("pw-loupe-turn-read.ARW");
+        let mut cache = cache_with_orientation(&path, 6);
+        let mut worker = FakeSubmit::new([]);
+        let files = [path.clone()];
+
+        assert_eq!(cache.turn(&files, true), Ok(vec![]));
+        assert_eq!(
+            cache.take_orientation_changes(),
+            vec![(path.clone(), Some(3))]
+        );
+        // Queued: the read of the old value keeps the turn.
+        load_and_read(
+            &mut cache,
+            &files,
+            Ok(HashMap::new()),
+            HashMap::from([(path.clone(), 6)]),
+        );
+        assert_eq!(cache.orientation(&path), Some(3));
+        assert!(cache.take_orientation_changes().is_empty());
+
+        // Sent after the read was asked for: the read keeps it too.
+        assert!(cache.poll(&mut worker).is_empty());
+        let id = worker.next_write_id - 1;
+        load_and_read(
+            &mut cache,
+            &files,
+            Ok(HashMap::new()),
+            HashMap::from([(path.clone(), 6)]),
+        );
+        assert_eq!(cache.orientation(&path), Some(3));
+        assert!(cache.take_orientation_changes().is_empty());
+
+        let mut failures = Vec::new();
+        cache.apply(
+            WorkerEvent::OrientationWritten {
+                id,
+                path: path.clone(),
+                orientation: 3,
+                result: Ok(()),
+            },
+            &mut failures,
+        );
+        assert!(failures.is_empty());
+        assert_eq!(cache.orientation(&path), Some(3));
+        assert!(cache.take_orientation_changes().is_empty());
+    }
+
+    /// T237: a stopped worker fails a sent rotation write, turns the image back and names the
+    /// rotation in the status text.
+    #[test]
+    fn a_stopped_worker_fails_a_sent_rotation() {
+        let path = turn_file("pw-loupe-turn-stopped.ARW");
+        let mut cache = cache_with_orientation(&path, 6);
+        let mut worker = FakeSubmit::new([]);
+        assert_eq!(cache.turn(std::slice::from_ref(&path), false), Ok(vec![]));
+        assert_eq!(
+            cache.take_orientation_changes(),
+            vec![(path.clone(), Some(1))]
+        );
+        assert!(cache.poll(&mut worker).is_empty());
+        assert_eq!(cache.pending_writes(), 1);
+
+        let mut failures = Vec::new();
+        cache.drain(|| Err(TryRecvError::Disconnected), &mut failures);
+
+        let message = format!(
+            "Could not save the rotation for pw-loupe-turn-stopped.ARW: {}",
+            pw_loupe::worker_stopped_text()
+        );
+        assert_eq!(failures, std::slice::from_ref(&message));
+        assert_eq!(cache.orientation(&path), Some(6));
+        assert_eq!(
+            cache.take_orientation_changes(),
+            vec![(path.clone(), Some(6))]
+        );
+        assert_eq!(cache.pending_writes(), 0);
+        assert!(!cache.is_pending(&path));
+        assert_eq!(cache.failure_text(), Some(message));
+    }
+
+    /// T237: the exit wait lists a rotation write that is never answered, and a turn still
+    /// waiting for its embedded value (not waited for), each file once.
+    #[test]
+    fn the_exit_wait_lists_a_pending_rotation() {
+        let sent = turn_file("pw-loupe-exit-turn-sent.ARW");
+        let waiting = turn_file("pw-loupe-exit-turn-waiting.ARW");
+        let mut cache = cache_with_orientation(&sent, 6);
+        assert_eq!(cache.turn(std::slice::from_ref(&sent), true), Ok(vec![]));
+        if let Err(error) = cache.set_rating(&sent, RatingKey::Stars(4)) {
+            panic!("supported rating path should be accepted: {error}");
+        }
+        assert_eq!(
+            cache.turn(std::slice::from_ref(&waiting), true),
+            Ok(vec![waiting.clone()])
+        );
+        let mut worker = FakeSubmit::new([]);
+        let clock = std::cell::Cell::new(Instant::now());
+        let start = clock.get();
+
+        let unsaved = finish_pending_writes(
+            &mut cache,
+            &mut worker,
+            || clock.get(),
+            |pause| clock.set(clock.get() + pause),
+        );
+
+        assert_eq!(clock.get() - start, EXIT_WAIT_LIMIT);
+        assert!(unsaved.failed.is_empty());
+        assert_eq!(
+            unsaved.pending,
+            [
+                "pw-loupe-exit-turn-sent.ARW",
+                "pw-loupe-exit-turn-waiting.ARW"
+            ]
+        );
+        assert_eq!(worker.orientation_writes, vec![(sent, 3)]);
+
+        // Only a waiting turn: nothing to wait for, but its file is listed.
+        let mut cache = MetadataCache::default();
+        assert_eq!(
+            cache.turn(std::slice::from_ref(&waiting), false),
+            Ok(vec![waiting.clone()])
+        );
+        let mut clock_reads = 0;
+        let unsaved = finish_pending_writes(
+            &mut cache,
+            &mut worker,
+            || {
+                clock_reads += 1;
+                Instant::now()
+            },
+            |_| {},
+        );
+        assert_eq!(clock_reads, 0);
+        assert_eq!(unsaved.pending, ["pw-loupe-exit-turn-waiting.ARW"]);
     }
 
     #[test]

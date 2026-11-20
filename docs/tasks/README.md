@@ -86,7 +86,6 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status |
 |---|---|---|
-| [T237](T237-rotate-keys-and-menu.md) | ADR 0024 O3c: Rotate Left and Rotate Right in the shell | Open |
 
 ## Writing a task (owner and reviewer)
 

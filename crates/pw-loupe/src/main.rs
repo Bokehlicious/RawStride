@@ -82,6 +82,9 @@ use pw_loupe::{
     ratings_not_ready_text, refuse_unrejected_partners, rejected_images, same_path,
 };
 use pw_loupe::{
+    EmbeddedOrientationReader, ROTATION_UNSUPPORTED_TEXT, ReaderStopped, rotation_key_action,
+};
+use pw_loupe::{
     FILMSTRIP_CELL_WIDTH, FILMSTRIP_IMAGE_HEIGHT, FILMSTRIP_LABEL_HEIGHT, FILMSTRIP_MARGIN,
     FILMSTRIP_SPACING, PreviewKey, PreviewText, Restore, ThumbGate, WindowBefore, clamp_offset,
     filmstrip_range, hit_test, preview_info_shown, preview_key_action, preview_parts, preview_text,
@@ -759,6 +762,11 @@ struct Loupe {
     /// answer has not come back.
     capture_reader: CaptureReader,
     capture_in_flight: HashSet<PathBuf>,
+    /// The reader of a file's own Exif orientation, for a turn of an image without a known value
+    /// (ADR 0024 §2.5, T236, T237), and the number of its reads asked for whose answer has not
+    /// come back.
+    orientation_reader: EmbeddedOrientationReader,
+    orientation_reads: usize,
     /// The status bar's content of the last frame, and the one made this frame (T109).
     status_bar: StatusBar,
     next_status: StatusBar,
@@ -2163,6 +2171,33 @@ impl Loupe {
             if let Some(&index) = active.get(&path) {
                 self.thumb_grid.forget(index);
             }
+        }
+    }
+
+    /// Gives the embedded orientations that came back to the metadata cache (ADR 0024 §2.5,
+    /// T237). When the reader has stopped, every turn still waiting is answered on the UI thread,
+    /// so moves, deletes and "Open in" do not wait for ever. A frame is asked for while reads are
+    /// on their way.
+    fn follow_embedded_reads(&mut self, ctx: &egui::Context) {
+        loop {
+            match self.orientation_reader.try_recv() {
+                Ok(Some((path, orientation))) => {
+                    self.orientation_reads = self.orientation_reads.saturating_sub(1);
+                    self.metadata.embedded_read(&path, orientation);
+                }
+                Ok(None) => break,
+                Err(ReaderStopped) => {
+                    for path in self.metadata.waiting_orientations() {
+                        self.metadata
+                            .embedded_read(&path, embedded_orientation(&path));
+                    }
+                    self.orientation_reads = 0;
+                    break;
+                }
+            }
+        }
+        if self.orientation_reads > 0 {
+            ctx.request_repaint_after(CAPTURE_POLL_INTERVAL);
         }
     }
 
@@ -4281,6 +4316,38 @@ impl Loupe {
         (None, Vec::new())
     }
 
+    /// Ctrl+← or Ctrl+→, or Image ▸ Rotate Left or Rotate Right (ADR 0024 §2.1, §2.5, O-Q1, O-Q8;
+    /// T237): the targets of a rating key turn 90° anticlockwise or clockwise (`clockwise`), shown
+    /// at once and written through the ordered queue; nothing when there is no target. The
+    /// images whose own value is not known yet are read by the orientation reader (on the UI
+    /// thread when it has stopped). A turn changes no marking, filter or current image, and
+    /// moves nothing; a refused turn says why.
+    fn rotate(&mut self, ctx: &egui::Context, clockwise: bool) {
+        let targets = self.key_targets();
+        if targets.is_empty() {
+            return;
+        }
+        match self.metadata.turn(&targets, clockwise) {
+            Ok(asks) => {
+                for path in asks {
+                    if self.orientation_reader.request(path.clone()) {
+                        self.orientation_reads = self.orientation_reads.saturating_add(1);
+                    } else {
+                        self.metadata
+                            .embedded_read(&path, embedded_orientation(&path));
+                    }
+                }
+            }
+            Err(RatingRefused::Unsupported) => {
+                self.message = Some(ROTATION_UNSUPPORTED_TEXT.to_owned());
+            }
+            Err(error) => self.message = Some(error.to_string()),
+        }
+        // Keys are handled after `follow_orientations`: the turn reaches the view and the
+        // thumbnail in the next frame, at once.
+        ctx.request_repaint();
+    }
+
     /// P or Image ▸ Move to Picked (ADR 0017 §2.6, U9-Q6, T174): with the setting on, the key's
     /// targets with a `_picked` target are moved there, with no rating change; with it off,
     /// nothing.
@@ -5368,9 +5435,12 @@ impl Loupe {
                 let cwd = std::env::current_dir().ok();
                 metadata_subject(tab, cwd.as_deref()).is_some()
             }
-            Command::Stars(_) | Command::Reject | Command::Label(_) | Command::ClearLabel => {
-                tab.is_some_and(|tab| tab.position().is_some())
-            }
+            Command::Stars(_)
+            | Command::Reject
+            | Command::Label(_)
+            | Command::ClearLabel
+            | Command::RotateLeft
+            | Command::RotateRight => tab.is_some_and(|tab| tab.position().is_some()),
             // Greyed while the setting is off (U9-Q6, T174).
             Command::MovePicked => {
                 self.settings.shell.move_to_subfolders
@@ -5456,6 +5526,8 @@ impl Loupe {
             Command::UndoMove => self.undo_move(),
             Command::Label(label) => self.rate_from_menu(RatingKey::Label(label)),
             Command::ClearLabel => self.rate_from_menu(RatingKey::ClearLabel),
+            Command::RotateLeft => self.rotate(ctx, false),
+            Command::RotateRight => self.rotate(ctx, true),
             Command::ToggleMode => self.act(Action::ToggleMode, None),
             Command::DeleteToRecycleBin => self.delete_images(),
             Command::DeleteRejected => self.delete_rejected(),
@@ -6051,7 +6123,10 @@ impl Loupe {
     fn draw(&mut self, ui: &mut egui::Ui, commands: &mut Vec<Command>) {
         let ctx = ui.ctx().clone();
         let failures = self.metadata.poll(&mut self.metadata_worker);
-        // The XMP orientations read with the ratings go to the view and the thumbnails (T232).
+        // The embedded orientations read for turns that waited for them (T237).
+        self.follow_embedded_reads(&ctx);
+        // The XMP orientations read with the ratings, and the turns, go to the view and the
+        // thumbnails (T232, T237).
         self.follow_orientations();
         // A kept histogram follows RawStride's own metadata writes of its file (U7c-Q7, T145).
         for written in self.metadata.take_written() {
@@ -6343,6 +6418,17 @@ impl Loupe {
                     scroll_to = position;
                 }
                 self.queue_moves(MoveKind::Reject, moves);
+                continue;
+            }
+
+            // Ctrl+← and Ctrl+→ turn the images a rating key acts on (ADR 0024 §2.1, O-Q1, T237);
+            // a held key turns once.
+            if !ctx.egui_wants_keyboard_input()
+                && let Some(clockwise) = rotation_key_action(key, ctrl, shift, alt)
+            {
+                if !repeat {
+                    self.rotate(&ctx, clockwise);
+                }
                 continue;
             }
 
@@ -7599,6 +7685,12 @@ fn shown_rating<'a>(
         Some(cwd) if !path.is_absolute() => metadata.shown_rating(&resolve_path(cwd, path)),
         _ => metadata.shown_rating(path),
     }
+}
+
+/// The file's own Exif orientation of `path`, read on the UI thread (one header read) when the
+/// orientation reader cannot answer (T237); `None` only when the read fails.
+fn embedded_orientation(path: &Path) -> Option<u16> {
+    pw_raw::inspect(path).ok().map(|info| info.orientation)
 }
 
 /// The XMP orientation read for a tab file (ADR 0024 §2.4, T232), looked up by the resolved path
@@ -8993,6 +9085,8 @@ fn run(options: Options) -> Result<(), String> {
                 ),
                 capture_reader: CaptureReader::start(),
                 capture_in_flight: HashSet::new(),
+                orientation_reader: EmbeddedOrientationReader::start(),
+                orientation_reads: 0,
                 status_bar: StatusBar::default(),
                 next_status: StatusBar::default(),
                 scroll_request: None,

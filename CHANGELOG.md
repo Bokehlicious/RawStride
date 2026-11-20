@@ -13,6 +13,10 @@ Downloads are on the [Releases page](https://github.com/Bokehlicious/RawStride/r
 
 - An image whose XMP says it is turned (`tiff:Orientation` in a RAW's sidecar, or in the XMP of a
   DNG, JPEG or TIFF) is shown turned in the preview and the contact sheet.
+- Rotate Left (Ctrl+←) and Rotate Right (Ctrl+→) in the Image menu turn the marked images, or
+  the current one, 90° at a time. The turn is shown at once and saved: for a RAW file in its
+  XMP sidecar, for a DNG, JPEG or TIFF in the file's own orientation tag. The pixels are never
+  changed.
 
 ## [0.1.0] - 2026-11-20
 
