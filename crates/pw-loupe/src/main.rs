@@ -2134,10 +2134,50 @@ impl Loupe {
         self.tabs.active().and_then(Tab::position)
     }
 
+    /// Tells the XMP orientations that changed to both view cores (the compare's too) and makes
+    /// the active tab's thumbnails of those files again (ADR 0024 §2.4, T232). The cores keep the
+    /// values per path, so nothing is sent again on a mode, tab or folder switch; a file of
+    /// another tab gets its thumbnail with the value when that tab is shown. The old texture
+    /// stays until the new thumbnail replaces it.
+    fn follow_orientations(&mut self) {
+        let changes = self.metadata.take_orientation_changes();
+        if changes.is_empty() {
+            return;
+        }
+        // The tab's files may be relative; the metadata cache keys by resolved path.
+        let active: HashMap<PathBuf, usize> = self
+            .tabs
+            .active()
+            .and_then(|tab| resolve_paths(&tab.files).ok())
+            .map(|files| {
+                files
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, path)| (path, index))
+                    .collect()
+            })
+            .unwrap_or_default();
+        for (path, value) in changes {
+            self.core.set_orientation(path.clone(), value);
+            self.second_core.set_orientation(path.clone(), value);
+            if let Some(&index) = active.get(&path) {
+                self.thumb_grid.forget(index);
+            }
+        }
+    }
+
     fn poll_thumbnails(&mut self, ctx: &egui::Context) {
+        let cwd = std::env::current_dir().ok();
         loop {
             match self.thumb_worker.try_recv() {
                 Ok(event) => {
+                    // A thumbnail made with an orientation that is no longer the read one is
+                    // dropped; the request made after `forget` brings the right one (T232).
+                    if event.orientation
+                        != read_orientation(&self.metadata, cwd.as_deref(), &event.path)
+                    {
+                        continue;
+                    }
                     if !self.thumb_grid.apply(&event) {
                         continue;
                     }
@@ -2233,12 +2273,14 @@ impl Loupe {
                     let cell = request_cell(self.thumb_size, ctx.pixels_per_point());
                     for index in self.thumb_grid.to_request_indexes(visible_files, cell) {
                         if let Some(path) = tab.files.get(index) {
+                            let orientation =
+                                read_orientation(&self.metadata, cwd.as_deref(), path);
                             self.thumb_worker.request(ThumbnailRequest {
                                 generation: self.thumb_generation,
                                 index,
                                 path: path.clone(),
                                 cell,
-                                orientation: None,
+                                orientation,
                             });
                             self.thumb_grid.mark_requested(index, cell);
                         }
@@ -4063,12 +4105,13 @@ impl Loupe {
                 let cell = request_cell(self.thumb_size, ctx.pixels_per_point());
                 for index in self.thumb_grid.to_request_indexes(keep_files, cell) {
                     if let Some((_, path, _)) = cell_of(index) {
+                        let orientation = read_orientation(&self.metadata, cwd.as_deref(), path);
                         self.thumb_worker.request(ThumbnailRequest {
                             generation: self.thumb_generation,
                             index,
                             path: path.clone(),
                             cell,
-                            orientation: None,
+                            orientation,
                         });
                         self.thumb_grid.mark_requested(index, cell);
                     }
@@ -6008,6 +6051,8 @@ impl Loupe {
     fn draw(&mut self, ui: &mut egui::Ui, commands: &mut Vec<Command>) {
         let ctx = ui.ctx().clone();
         let failures = self.metadata.poll(&mut self.metadata_worker);
+        // The XMP orientations read with the ratings go to the view and the thumbnails (T232).
+        self.follow_orientations();
         // A kept histogram follows RawStride's own metadata writes of its file (U7c-Q7, T145).
         for written in self.metadata.take_written() {
             self.histograms.written(
@@ -7553,6 +7598,15 @@ fn shown_rating<'a>(
     match cwd {
         Some(cwd) if !path.is_absolute() => metadata.shown_rating(&resolve_path(cwd, path)),
         _ => metadata.shown_rating(path),
+    }
+}
+
+/// The XMP orientation read for a tab file (ADR 0024 §2.4, T232), looked up by the resolved path
+/// as `shown_rating` does.
+fn read_orientation(metadata: &MetadataCache, cwd: Option<&Path>, path: &Path) -> Option<u16> {
+    match cwd {
+        Some(cwd) if !path.is_absolute() => metadata.orientation(&resolve_path(cwd, path)),
+        _ => metadata.orientation(path),
     }
 }
 

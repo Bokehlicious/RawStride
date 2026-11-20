@@ -86,7 +86,6 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status |
 |---|---|---|
-| [T232](T232-shell-uses-xmp-orientation.md) | ADR 0024 O1c: the shell gives the read orientations to the view and the thumbnails | Open |
 
 ## Writing a task (owner and reviewer)
 

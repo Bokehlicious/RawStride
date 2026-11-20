@@ -9,6 +9,11 @@ Downloads are on the [Releases page](https://github.com/Bokehlicious/RawStride/r
 
 ## [Unreleased]
 
+### Added
+
+- An image whose XMP says it is turned (`tiff:Orientation` in a RAW's sidecar, or in the XMP of a
+  DNG, JPEG or TIFF) is shown turned in the preview and the contact sheet.
+
 ## [0.1.0] - 2026-11-20
 
 The first release, for Windows 10 and 11 (x64), as a portable zip. RawStride copies photos

@@ -132,6 +132,20 @@ impl ThumbGrid {
         true
     }
 
+    /// Sets the entry at `index` to missing from any state, a requested one included, so its
+    /// thumbnail is asked for again (ADR 0024 §2.4, T232: its orientation changed). A request in
+    /// flight was sent with the old orientation; its late event lands on the missing entry as
+    /// ready without a cell size, which is asked for again. Returns whether the entry was ready
+    /// (a texture to release); an index outside this folder changes nothing and returns `false`.
+    pub fn forget(&mut self, index: usize) -> bool {
+        let Some(entry) = self.entries.get_mut(index) else {
+            return false;
+        };
+        let was_ready = matches!(entry, Entry::Ready(_));
+        *entry = Entry::Missing;
+        was_ready
+    }
+
     /// Returns the visible state of an index, or `Missing` when it is outside this folder.
     pub fn state(&self, index: usize) -> CellState {
         self.entries
@@ -345,6 +359,42 @@ mod tests {
         assert_eq!(grid.forget_not_in(&[]), vec![3, 4]);
         assert_eq!(grid.state(4), CellState::Missing);
         assert!(grid.forget_not_in(&[]).is_empty());
+    }
+
+    /// T232: a ready cell forgotten (its orientation changed) is asked for again at the same size.
+    #[test]
+    fn forget_resets_a_ready_cell_so_it_is_asked_for_again() {
+        let mut grid = mixed_grid();
+        assert!(grid.to_request_indexes(&[2], 128).is_empty());
+        assert!(grid.forget(2));
+        assert_eq!(grid.state(2), CellState::Missing);
+        assert_eq!(grid.to_request_indexes(&[2], 128), vec![2]);
+    }
+
+    /// T232: a requested cell is forgotten too; the late event of the old request leaves it
+    /// asked for again.
+    #[test]
+    fn forget_resets_a_requested_cell_and_its_late_event_leaves_it_asked_for() {
+        let mut grid = mixed_grid();
+        assert!(!grid.forget(1));
+        assert_eq!(grid.state(1), CellState::Missing);
+        let success = Ok(Rgb8 {
+            width: 1,
+            height: 1,
+            data: vec![0, 0, 0],
+        });
+        assert!(grid.apply(&event(1, 1, success)));
+        assert_eq!(grid.to_request_indexes(&[1], 128), vec![1]);
+    }
+
+    /// T232: an index outside the grid changes nothing.
+    #[test]
+    fn forget_outside_the_grid_returns_false() {
+        let mut grid = mixed_grid();
+        assert!(!grid.forget(6));
+        assert!(!grid.forget(usize::MAX));
+        assert_eq!(grid.state(2), CellState::Ready);
+        assert_eq!(grid.state(1), CellState::Requested);
     }
 
     #[test]

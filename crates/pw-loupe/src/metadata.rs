@@ -302,6 +302,12 @@ pub(crate) struct MetadataCache {
     /// Why the last folder read failed (ADR 0014 Q7); cleared by the next `begin_load`.
     read_error: Option<String>,
     ratings: RatingStore,
+    /// The XMP orientations read with the ratings (ADR 0024 §2.4, T232), only values in `1..=8`;
+    /// an image without one is absent. Kept per path like the ratings, dropped by `prune`.
+    orientations: HashMap<PathBuf, u16>,
+    /// The changes of `orientations` (a path and its new value, `None` when it was taken away)
+    /// that `main.rs` has not taken yet with `take_orientation_changes`, in the order they came.
+    orientation_changes: Vec<(PathBuf, Option<u16>)>,
     window: WindowRead,
     inspector: InspectorRead,
     editor: EditorSave,
@@ -438,7 +444,10 @@ impl MetadataCache {
         }
     }
 
-    /// Drops what is kept for images no longer open: their ratings, and the inspector's image.
+    /// Drops what is kept for images no longer open: their ratings, their orientations, and the
+    /// inspector's image. Each orientation dropped is a change to `None` (T232): the view cores
+    /// keep told values per path, so a folder opened again whose sidecar lost the value would
+    /// otherwise still be shown with the old turn.
     pub fn prune(&mut self, keep: impl Fn(&Path) -> bool) {
         if self
             .inspector
@@ -448,7 +457,47 @@ impl MetadataCache {
         {
             self.inspector.clear();
         }
+        let mut dropped: Vec<PathBuf> = self
+            .orientations
+            .keys()
+            .filter(|path| !keep(path))
+            .cloned()
+            .collect();
+        dropped.sort();
+        for path in dropped {
+            self.orientations.remove(&path);
+            self.orientation_changes.push((path, None));
+        }
         self.ratings.prune(keep);
+    }
+
+    /// The XMP orientation read for `path` (an absolute path, as `begin_load` keys it), in
+    /// `1..=8`; `None` when none was read or the read has not come yet (ADR 0024 §2.4, T232).
+    pub fn orientation(&self, path: &Path) -> Option<u16> {
+        self.orientations.get(path).copied()
+    }
+
+    /// The orientations that changed since the last call (a path and its new value, `None` when
+    /// it was taken away), in the order they changed; empties the list (T232). The caller tells
+    /// them to the view cores and makes the thumbnails again.
+    pub fn take_orientation_changes(&mut self) -> Vec<(PathBuf, Option<u16>)> {
+        std::mem::take(&mut self.orientation_changes)
+    }
+
+    /// Keeps the orientations of a folder read for `paths` (the images that were loading) and
+    /// records each change (T232).
+    fn read_orientations(&mut self, orientations: &HashMap<PathBuf, u16>, paths: &[PathBuf]) {
+        for path in paths {
+            let value = orientations.get(path).copied();
+            if self.orientations.get(path).copied() == value {
+                continue;
+            }
+            match value {
+                Some(value) => self.orientations.insert(path.clone(), value),
+                None => self.orientations.remove(path),
+            };
+            self.orientation_changes.push((path.clone(), value));
+        }
     }
 
     /// Applies every available event. If the worker is gone, no outstanding operation can
@@ -1095,7 +1144,11 @@ impl MetadataCache {
 
     fn apply(&mut self, event: WorkerEvent, failures: &mut Vec<String>) {
         match event {
-            WorkerEvent::RatingsRead { id, result, .. } if Some(id) == self.load_request => {
+            WorkerEvent::RatingsRead {
+                id,
+                result,
+                orientations,
+            } if Some(id) == self.load_request => {
                 self.load_request = None;
                 match result {
                     Ok(ratings) => {
@@ -1106,6 +1159,7 @@ impl MetadataCache {
                             .map(|(path, _)| path.clone())
                             .collect();
                         self.ratings.read(id, &ratings, &paths);
+                        self.read_orientations(&orientations, &paths);
                         for metadata in self.images.values_mut() {
                             if matches!(&metadata.state, LoadState::Loading) {
                                 metadata.state = LoadState::Ready;
@@ -1759,6 +1813,154 @@ mod tests {
         assert!(!cache.is_loading(Some(&files[0])));
         assert!(!cache.is_error(Some(&files[0])));
         assert_eq!(cache.notice(Some(&files[0])), None);
+    }
+
+    /// Two images for the orientation tests (T232): absolute, supported paths.
+    fn orientation_files() -> (PathBuf, PathBuf) {
+        let folder = std::env::temp_dir();
+        (
+            folder.join("pw-loupe-orientation-a.ARW"),
+            folder.join("pw-loupe-orientation-b.ARW"),
+        )
+    }
+
+    /// A load of `files` and its read with `result` and `orientations`, given to `cache.apply`
+    /// (T232). Returns the failures.
+    fn load_and_read(
+        cache: &mut MetadataCache,
+        files: &[PathBuf],
+        result: Result<HashMap<PathBuf, Rating>, String>,
+        orientations: HashMap<PathBuf, u16>,
+    ) -> Vec<String> {
+        let mut worker = FakeSubmit::new([Ok(41)]);
+        if let Err(error) = cache.begin_load(files.to_vec(), &mut worker) {
+            panic!("current directory should be available: {error}");
+        }
+        assert_eq!(cache.load_request, Some(41));
+        let mut failures = Vec::new();
+        cache.apply(
+            WorkerEvent::RatingsRead {
+                id: 41,
+                result,
+                orientations,
+            },
+            &mut failures,
+        );
+        failures
+    }
+
+    /// T232: a read with an orientation for one image (which has no rating) pushes one change and
+    /// keeps the value; taking the changes empties the list.
+    #[test]
+    fn a_read_orientation_is_kept_and_pushed_once() {
+        let (a, b) = orientation_files();
+        let mut cache = MetadataCache::default();
+        let ratings = HashMap::from([(
+            b.clone(),
+            Rating {
+                stars: Some(2),
+                label: None,
+            },
+        )]);
+        let failures = load_and_read(
+            &mut cache,
+            &[a.clone(), b.clone()],
+            Ok(ratings),
+            HashMap::from([(a.clone(), 6)]),
+        );
+
+        assert!(failures.is_empty());
+        assert_eq!(cache.orientation(&a), Some(6));
+        assert_eq!(cache.orientation(&b), None);
+        assert_eq!(cache.take_orientation_changes(), vec![(a, Some(6))]);
+        assert!(cache.take_orientation_changes().is_empty());
+    }
+
+    /// T232: the same read again pushes nothing; a later read without the value pushes
+    /// `(path, None)`.
+    #[test]
+    fn an_unchanged_read_pushes_nothing_and_a_lost_value_pushes_none() {
+        let (a, _) = orientation_files();
+        let mut cache = MetadataCache::default();
+        let files = [a.clone()];
+        load_and_read(
+            &mut cache,
+            &files,
+            Ok(HashMap::new()),
+            HashMap::from([(a.clone(), 6)]),
+        );
+        assert_eq!(cache.take_orientation_changes(), vec![(a.clone(), Some(6))]);
+
+        load_and_read(
+            &mut cache,
+            &files,
+            Ok(HashMap::new()),
+            HashMap::from([(a.clone(), 6)]),
+        );
+        assert!(cache.take_orientation_changes().is_empty());
+        assert_eq!(cache.orientation(&a), Some(6));
+
+        load_and_read(&mut cache, &files, Ok(HashMap::new()), HashMap::new());
+        assert_eq!(cache.take_orientation_changes(), vec![(a.clone(), None)]);
+        assert_eq!(cache.orientation(&a), None);
+    }
+
+    /// T232: a failed read changes no orientation and pushes nothing.
+    #[test]
+    fn a_failed_read_changes_no_orientation() {
+        let (a, _) = orientation_files();
+        let mut cache = MetadataCache::default();
+        let files = [a.clone()];
+        load_and_read(
+            &mut cache,
+            &files,
+            Ok(HashMap::new()),
+            HashMap::from([(a.clone(), 8)]),
+        );
+        assert_eq!(cache.take_orientation_changes().len(), 1);
+
+        load_and_read(
+            &mut cache,
+            &files,
+            Err("exiftool failed".to_owned()),
+            HashMap::new(),
+        );
+        assert!(cache.take_orientation_changes().is_empty());
+        assert_eq!(cache.orientation(&a), Some(8));
+    }
+
+    /// T232: `prune` drops the orientation of an image no longer open and pushes `(path, None)`;
+    /// an image pruned without a value pushes nothing; the same folder loaded again, with the
+    /// value still there, pushes it again.
+    #[test]
+    fn prune_drops_orientations_and_pushes_none() {
+        let (a, b) = orientation_files();
+        let mut cache = MetadataCache::default();
+        let files = [a.clone(), b.clone()];
+        load_and_read(
+            &mut cache,
+            &files,
+            Ok(HashMap::new()),
+            HashMap::from([(a.clone(), 3)]),
+        );
+        assert_eq!(cache.take_orientation_changes(), vec![(a.clone(), Some(3))]);
+
+        cache.prune(|_| false);
+        assert_eq!(cache.orientation(&a), None);
+        assert_eq!(
+            cache.take_orientation_changes(),
+            vec![(a.clone(), None)],
+            "b had no value, so only a is pushed"
+        );
+
+        load_and_read(
+            &mut cache,
+            &files,
+            Ok(HashMap::new()),
+            HashMap::from([(a.clone(), 3)]),
+        );
+        assert_eq!(cache.orientation(&a), Some(3));
+        assert_eq!(cache.take_orientation_changes(), vec![(a, Some(3))]);
     }
 
     #[test]

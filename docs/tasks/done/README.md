@@ -238,3 +238,4 @@ was when the task was done, so "this file", "below" and "the Log" in T1–T115 m
 | [T229](T229-release-workflow.md) | ADR 0031 RL6: CHANGELOG.md, tools/release-build.ps1 and the release workflow on v* tags |
 | [T230](T230-read-xmp-orientation.md) | ADR 0024 O1a: the batch read also reads `XMP-tiff:Orientation` (pw-metadata) |
 | [T231](T231-orientation-per-file.md) | ADR 0024 O1b: the view core and the thumbnails take an orientation per file |
+| [T232](T232-shell-uses-xmp-orientation.md) | ADR 0024 O1c: the shell gives the read orientations to the view and the thumbnails |
