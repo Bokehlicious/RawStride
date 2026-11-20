@@ -205,6 +205,16 @@ pub struct Rating {
     pub label: Option<String>,
 }
 
+/// The values one batch read of a folder gives (ADR 0024 §2.4): the ratings and the XMP
+/// `tiff:Orientation` of the images, read in the same ExifTool call.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct FolderValues {
+    /// As `read_ratings` returns them: unrated images are absent.
+    pub ratings: HashMap<PathBuf, Rating>,
+    /// `XMP-tiff:Orientation` (1–8) of the images whose rating file holds one; others absent.
+    pub orientations: HashMap<PathBuf, u16>,
+}
+
 /// Text values indexed by BCP 47 language tag (an XMP Lang Alt value).
 ///
 /// The map is ordered by language tag so iteration and serialized plans are deterministic.
@@ -433,6 +443,13 @@ impl ExifTool {
     /// Reads rating and label for the given images (from sidecars, or from the files themselves
     /// for DNG, JPEG and TIFF). Returns a map keyed by image path; unrated images are absent.
     pub fn read_ratings(&mut self, images: &[PathBuf]) -> Result<HashMap<PathBuf, Rating>> {
+        self.read_folder_values(images).map(|values| values.ratings)
+    }
+
+    /// Reads rating, label and `XMP-tiff:Orientation` for the given images in one ExifTool call
+    /// (ADR 0024 §2.4), from the same files as [`ExifTool::read_ratings`]. An orientation is kept
+    /// only when it is 1–8; `1` is kept, because a sidecar saying 1 overrides an embedded turn.
+    pub fn read_folder_values(&mut self, images: &[PathBuf]) -> Result<FolderValues> {
         let mut by_sidecar: HashMap<String, PathBuf> = HashMap::new();
         let mut args = vec![
             "-T".to_string(),
@@ -440,6 +457,7 @@ impl ExifTool {
             "-FileName".to_string(),
             "-XMP-xmp:Rating".to_string(),
             "-XMP-xmp:Label".to_string(),
+            "-XMP-tiff:Orientation#".to_string(),
         ];
         for img in images.iter().filter(|p| supports_rating(p)) {
             let sc = rating_file(img);
@@ -451,9 +469,9 @@ impl ExifTool {
                 }
             }
         }
-        let mut result = HashMap::new();
+        let mut values = FolderValues::default();
         if by_sidecar.is_empty() {
-            return Ok(result);
+            return Ok(values);
         }
         let out = self.execute(&args)?;
         for line in out.lines() {
@@ -470,10 +488,17 @@ impl ExifTool {
                 .map(String::from);
             let r = Rating { stars, label };
             if !r.is_empty() {
-                result.insert(img.clone(), r);
+                values.ratings.insert(img.clone(), r);
+            }
+            let orientation = cols
+                .get(3)
+                .and_then(|col| col.trim().parse::<u16>().ok())
+                .filter(|o| (1..=8).contains(o));
+            if let Some(orientation) = orientation {
+                values.orientations.insert(img.clone(), orientation);
             }
         }
-        Ok(result)
+        Ok(values)
     }
 }
 

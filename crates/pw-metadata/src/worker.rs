@@ -122,6 +122,9 @@ pub enum Event {
     RatingsRead {
         id: RequestId,
         result: std::result::Result<HashMap<PathBuf, Rating>, String>,
+        /// The `XMP-tiff:Orientation` (1–8) of the images that have one, read in the same call
+        /// (ADR 0024 §2.4); empty when the read failed.
+        orientations: HashMap<PathBuf, u16>,
     },
     RatingWritten {
         id: RequestId,
@@ -523,14 +526,25 @@ fn handle(
     let unavailable = || start_error.unwrap_or_else(|| "ExifTool worker is unavailable".into());
     match request {
         Request::Read { id, images } => {
-            let result = match running {
+            let read = match running {
                 Some(running) => running
                     .tool
-                    .read_ratings(&images)
+                    .read_folder_values(&images)
                     .map_err(|e| e.to_string()),
                 None => Err(unavailable()),
             };
-            Event::RatingsRead { id, result }
+            match read {
+                Ok(values) => Event::RatingsRead {
+                    id,
+                    result: Ok(values.ratings),
+                    orientations: values.orientations,
+                },
+                Err(error) => Event::RatingsRead {
+                    id,
+                    result: Err(error),
+                    orientations: HashMap::new(),
+                },
+            }
         }
         Request::Write { id, path, rating } => {
             let result = match (setup, running) {
@@ -837,6 +851,7 @@ mod tests {
             Event::RatingsRead {
                 id: event_id,
                 result,
+                ..
             } => {
                 assert_eq!(event_id, id);
                 result
@@ -932,6 +947,7 @@ mod tests {
                 Ok(Event::RatingsRead {
                     id: event_id,
                     result: Err(error),
+                    ..
                 }) => {
                     assert_eq!(event_id, id);
                     assert!(error.contains("could not start"));
@@ -957,6 +973,27 @@ mod tests {
                 }
                 Err(TryRecvError::Empty) => panic!("worker did not report startup failure"),
             }
+        }
+    }
+
+    /// T230: a failed read gives an `Err` result and no orientations (ADR 0024 §2.4).
+    #[test]
+    fn a_failed_read_gives_no_orientations() {
+        let mut worker = start_without_exiftool("read-orientations", None);
+        let id = worker
+            .read_ratings(Vec::new())
+            .expect("request should be accepted");
+        match next_event(&worker) {
+            Event::RatingsRead {
+                id: event_id,
+                result,
+                orientations,
+            } => {
+                assert_eq!(event_id, id);
+                assert!(result.is_err(), "a read without ExifTool should fail");
+                assert!(orientations.is_empty());
+            }
+            other => panic!("unexpected event {other:?}"),
         }
     }
 

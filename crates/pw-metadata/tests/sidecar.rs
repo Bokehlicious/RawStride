@@ -1,6 +1,7 @@
 //! Tests of which file holds an image's metadata (`supports_sidecar`, `sidecar_path`,
-//! `rating_file`), and, on Windows, integration tests of the safe write keeping a sidecar's name,
-//! against a real ExifTool: `exiftool` on PATH, or `PW_EXIFTOOL_PL=/path/to/exiftool` (run through
+//! `rating_file`), and, on Windows, integration tests of the safe write keeping a sidecar's name
+//! and of the folder's batch read of ratings and `XMP-tiff:Orientation` (T230), against a real
+//! ExifTool: `exiftool` on PATH, or `PW_EXIFTOOL_PL=/path/to/exiftool` (run through
 //! `perl`).
 //!
 //! The ExifTool tests fail with an explanation when ExifTool is missing, instead of returning early
@@ -8,10 +9,12 @@
 //! `cargo test --workspace --exclude pw-metadata`, so the omission is visible.
 
 #[cfg(windows)]
-use std::path::PathBuf;
+use std::collections::HashMap;
+#[cfg(windows)]
+use std::path::{Path, PathBuf};
 
 #[cfg(windows)]
-use pw_metadata::ExifTool;
+use pw_metadata::{ExifTool, Rating};
 use pw_metadata::{sidecar_path, supports_sidecar};
 
 /// Starts ExifTool and checks that it answers. Panics (fails the test) if it is unavailable.
@@ -63,6 +66,127 @@ fn which_file_holds_the_rating() {
         Path::new("d/a.xmp")
     );
     assert!(!pw_metadata::supports_rating(Path::new("a.png")));
+}
+
+/// Writes a fake image `name` (any bytes) in `dir` and, when `attributes` is given, a sidecar
+/// whose XMP description holds only those attributes (for example `tiff:Orientation='6'`).
+/// Returns the image's path (T230).
+#[cfg(windows)]
+fn image_with_sidecar(dir: &Path, name: &str, attributes: Option<&str>) -> PathBuf {
+    let image = dir.join(name);
+    std::fs::write(&image, b"not really a raw file").unwrap();
+    if let Some(attributes) = attributes {
+        let packet = format!(
+            "<?xpacket begin='' id='W5M0MpCehiHzreSzNTczkc9d'?>\n\
+             <x:xmpmeta xmlns:x='adobe:ns:meta/'>\n\
+             <rdf:RDF xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'>\n\
+             <rdf:Description rdf:about=''\n \
+             xmlns:xmp='http://ns.adobe.com/xap/1.0/'\n \
+             xmlns:tiff='http://ns.adobe.com/tiff/1.0/'\n \
+             {attributes}/>\n\
+             </rdf:RDF>\n\
+             </x:xmpmeta>\n\
+             <?xpacket end='w'?>\n"
+        );
+        std::fs::write(sidecar_path(&image), packet).unwrap();
+    }
+    image
+}
+
+/// T230: the sidecars' `tiff:Orientation` of three RAW kinds is read in the batch read.
+#[cfg(windows)]
+#[test]
+fn folder_values_read_the_sidecar_orientation() {
+    let dir = temp_dir("folder-values-orientation");
+    let a = image_with_sidecar(&dir, "a.ARW", Some("tiff:Orientation='6'"));
+    let b = image_with_sidecar(&dir, "b.RW2", Some("tiff:Orientation='8'"));
+    let c = image_with_sidecar(&dir, "c.RAF", Some("tiff:Orientation='3'"));
+    let mut et = exiftool();
+
+    let values = et
+        .read_folder_values(&[a.clone(), b.clone(), c.clone()])
+        .unwrap();
+
+    assert_eq!(values.orientations, HashMap::from([(a, 6), (b, 8), (c, 3)]));
+    assert!(values.ratings.is_empty());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// T230: an image is in `orientations` without a rating, and in `ratings` without an orientation.
+#[cfg(windows)]
+#[test]
+fn an_orientation_without_a_rating_and_a_rating_without_an_orientation() {
+    let dir = temp_dir("folder-values-one-map");
+    let turned = image_with_sidecar(&dir, "turned.ARW", Some("tiff:Orientation='6'"));
+    let rated = image_with_sidecar(&dir, "rated.ARW", Some("xmp:Rating='3'"));
+    let mut et = exiftool();
+
+    let values = et
+        .read_folder_values(&[turned.clone(), rated.clone()])
+        .unwrap();
+
+    assert_eq!(values.orientations, HashMap::from([(turned, 6)]));
+    assert_eq!(
+        values.ratings,
+        HashMap::from([(
+            rated,
+            Rating {
+                stars: Some(3),
+                label: None
+            }
+        )])
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// T230: orientation 1 is kept (it overrides an embedded turn); 0, 9 and a missing sidecar are not.
+#[cfg(windows)]
+#[test]
+fn orientation_1_is_kept_and_bad_values_are_left_out() {
+    let dir = temp_dir("folder-values-bad-orientation");
+    let one = image_with_sidecar(&dir, "one.ARW", Some("tiff:Orientation='1'"));
+    let zero = image_with_sidecar(&dir, "zero.ARW", Some("tiff:Orientation='0'"));
+    let nine = image_with_sidecar(&dir, "nine.ARW", Some("tiff:Orientation='9'"));
+    let bare = image_with_sidecar(&dir, "bare.ARW", None);
+    let mut et = exiftool();
+
+    let values = et
+        .read_folder_values(&[one.clone(), zero, nine, bare])
+        .unwrap();
+
+    assert_eq!(values.orientations, HashMap::from([(one, 1)]));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// T230: `read_ratings` gives the same ratings as `read_folder_values`.
+#[cfg(windows)]
+#[test]
+fn read_ratings_gives_what_folder_values_give() {
+    let dir = temp_dir("folder-values-ratings");
+    let image = image_with_sidecar(
+        &dir,
+        "all.ARW",
+        Some("xmp:Rating='4' xmp:Label='Red' tiff:Orientation='6'"),
+    );
+    let images = [image.clone()];
+    let mut et = exiftool();
+
+    let values = et.read_folder_values(&images).unwrap();
+    let ratings = et.read_ratings(&images).unwrap();
+
+    assert_eq!(ratings, values.ratings);
+    assert_eq!(
+        ratings,
+        HashMap::from([(
+            image.clone(),
+            Rating {
+                stars: Some(4),
+                label: Some("Red".to_string())
+            }
+        )])
+    );
+    assert_eq!(values.orientations, HashMap::from([(image, 6)]));
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// A safe write keeps the sidecar's name as it is on disk (T132): a `<basename>.xmp` in any case

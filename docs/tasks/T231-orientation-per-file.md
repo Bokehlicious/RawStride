@@ -1,4 +1,4 @@
-# T231. ADR 0024 O1b: the view core and the thumbnails take an orientation per file (pw-viewcore, pw-thumbcache) — Blocked: waits for T230
+# T231. ADR 0024 O1b: the view core and the thumbnails take an orientation per file (pw-viewcore, pw-thumbcache) — Open
 
 - **Why:** ADR 0024 §2.4 (O-Q6): an XMP orientation is used before the embedded one by the view
   core and the thumbnails. Until it is read, the embedded orientation is used, and the image turns
@@ -107,3 +107,4 @@
 | 2026-11-20 | Blocked | Added (ADR 0024 O1, chain T230 → T231 → T232); waits for T230 |
 | 2026-11-20 | Blocked | Cold read: the file list is complete. Changed: point 3 no longer releases views (all views and maps are in sensor orientation, the flip applied when drawing; a release would only cost renders and could drop the view on screen), `own_flips` follows `sizes` where it is inserted, cleared and moved, keys found through `files`, the scale follows by itself; point 6 puts the orientation in the duplicate check and `in_flight` too, and `ThumbnailEvent` carries it; the state tests use `finish_open` and the module's real helpers |
 | 2026-11-20 | Blocked | Chain review (whole chain, notes in T230's log): the worker's duplicate key and the event's orientation added here (above); a render in flight across a flip change needs nothing (sensor orientation, the cold read's finding) |
+| 2026-11-20 | Open | T230 done (committed); this task can start |

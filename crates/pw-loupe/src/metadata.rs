@@ -1095,7 +1095,7 @@ impl MetadataCache {
 
     fn apply(&mut self, event: WorkerEvent, failures: &mut Vec<String>) {
         match event {
-            WorkerEvent::RatingsRead { id, result } if Some(id) == self.load_request => {
+            WorkerEvent::RatingsRead { id, result, .. } if Some(id) == self.load_request => {
                 self.load_request = None;
                 match result {
                     Ok(ratings) => {
@@ -1707,6 +1707,7 @@ mod tests {
                         label: Some("Red".to_owned()),
                     },
                 )])),
+                orientations: HashMap::new(),
             },
             &mut failures,
         );
@@ -1751,6 +1752,7 @@ mod tests {
         worker.events.push_back(WorkerEvent::RatingsRead {
             id: 7,
             result: Ok(HashMap::new()),
+            orientations: HashMap::new(),
         });
         assert!(cache.poll(&mut worker).is_empty());
 
@@ -2131,6 +2133,7 @@ mod tests {
         worker.events.push_back(WorkerEvent::RatingsRead {
             id: 7,
             result: Ok(HashMap::new()),
+            orientations: HashMap::new(),
         });
         assert!(cache.poll(&mut worker).is_empty());
         assert!(cache.ratings_ready());
@@ -2156,6 +2159,7 @@ mod tests {
         worker.events.push_back(WorkerEvent::RatingsRead {
             id: 3,
             result: Err("exiftool saknas".to_owned()),
+            orientations: HashMap::new(),
         });
         assert!(cache.poll(&mut worker).is_empty());
 
@@ -2206,6 +2210,7 @@ mod tests {
         worker.events.push_back(WorkerEvent::RatingsRead {
             id: 6,
             result: Ok(HashMap::new()),
+            orientations: HashMap::new(),
         });
         assert!(cache.poll(&mut worker).is_empty());
         cache.drain(|| Err(TryRecvError::Disconnected), &mut failures);
@@ -4242,6 +4247,7 @@ mod tests {
         worker.events.push_back(WorkerEvent::RatingsRead {
             id: 7,
             result: Ok(ratings),
+            orientations: HashMap::new(),
         });
         assert!(cache.poll(&mut worker).is_empty());
         assert!(cache.ratings.contains(&deleted));
