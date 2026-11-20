@@ -86,7 +86,6 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status |
 |---|---|---|
-| [T224](T224-prototype-lock-files-out.md) | The Tauri prototypes' lock files out of the repository | Open |
 
 ## Writing a task (owner and reviewer)
 

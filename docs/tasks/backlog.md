@@ -400,3 +400,12 @@ by the owner the same day; step E4 in `plans/adr-0018-0025-steps.md`, before ADR
     in that frame.
   - (The filmstrip has no menu by the owner's choice, ADR 0019 §2.9; the template submenu waits
     for ADR 0017 U13.)
+
+- **Leftover of T224** (the Tauri prototypes' lock files removed, 2026-11-20; accepted when T224
+  was done, as T207 accepted the prototypes' broken icon path): the prototypes' `run-*.ps1` and
+  `build-*.cmd` seed a missing `Cargo.lock` by copying one in. `p2`, `p3`, `p6` and `p6b` copy the
+  root `Cargo.lock`, which has had no Tauri since T207, so Cargo resolves Tauri afresh;
+  `p6c-gpu-memory` copies `p6b-gpu-ppg`'s, which is gone, so `run-p6c.ps1` (line 25) stops at once
+  and `build-p6c.cmd` (line 7) resolves afresh. A lock file a build writes shows in `git status`
+  and is not committed (it would bring the `glib` alert back). Kept: the prototypes are history
+  and not built; a task only if one is to be run again.
