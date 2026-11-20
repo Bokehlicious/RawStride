@@ -71,9 +71,10 @@
 - [ ] A RawStride distribution folder (there is none today; `tools/package-dist.ps1`, which packed only
   the Tauri app, was removed with it on 2026-11-19, T208; `docs/distribution.md` keeps its findings):
   the exe, the runtime DLLs, ExifTool (§2.5), `LICENSE` and the notices.
-- [ ] `THIRD-PARTY-NOTICES.txt` before the first release: the Rust packages (from `cargo
+- [x] `THIRD-PARTY-NOTICES.txt` before the first release: the Rust packages (from `cargo
   metadata`), LibRaw, LittleCMS, JasPer, libjpeg-turbo, zlib, the fonts, the MSVC runtime, and
-  ExifTool with its Perl.
+  ExifTool with its Perl. Done by T227 (2026-11-20, ADR 0031 RL3): made by
+  `tools/third-party-notices.ps1` with cargo-about; IPTC's attribution included.
 - [x] The licence notice in the program (GPL-3.0 §0, "Appropriate Legal Notices"): an "About
   RawStride" window with the version, the commit, copyright, no warranty, where the licence and
   the source are, and the third-party notices (owner, 2026-11-20, ADR 0031 RL-Q9, step RL1). Done by
