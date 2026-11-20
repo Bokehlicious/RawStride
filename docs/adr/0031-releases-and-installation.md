@@ -35,8 +35,9 @@ What is known from the Tauri app's distribution (`docs/distribution.md`, 2026-11
 - The exe was unsigned: SmartScreen warns on first start, and the virus scanner delayed the first
   start of a new exe by 4–12 s.
 - A release build held the build machine's Rust source paths (with the user name) in its panic
-  messages and named its `.pdb`. The release profile still has `debug = "line-tables-only"` and
-  no path remapping.
+  messages (a check before T229, 2026-11-20, found that rustc already names the `.pdb` without its
+  folder). The release profile still has `debug = "line-tables-only"` and no path remapping; the
+  release workflow remaps the paths (RL6, `tools/release-build.ps1`).
 
 RawStride itself has since retired WebView2 (eframe + egui) and will ship ExifTool in the
 program folder (ADR 0002 §2.5; T120 looks there before PATH).
@@ -139,7 +140,7 @@ program folder (ADR 0002 §2.5; T120 looks there before PATH).
 | RL4 | task | `tools/package-dist.ps1`: the zip of §3.4 from a release build, with ExifTool 13.59 checked by SHA-256 as in CI; `docs/distribution.md` rewritten (RL-Q13) | RL3 |
 | RL5 | owner | The zip run on a clean PC or in Windows Sandbox: starts, renders a RAW, writes a rating through the shipped ExifTool, leaves the program folder unchanged; done 2026-11-20 in a new Windows account on the owner's PC (no other PC; no Sandbox on Windows 11 Home), all four OK | RL4 |
 | RL6 | task | `CHANGELOG.md` with the `0.1.0` section and the rule in `docs/tasks/README.md` (RL-Q3); `.github/workflows/release.yml` on `v*` tags (RL-Q7, RL-Q12) | RL4 |
-| RL7 | owner + reviewer | `0.1.0`: tag on `main`, the workflow's draft read, published as a pre-release; the tag ruleset (RL-Q8) | RL5, RL6 |
+| RL7 | owner + reviewer | `0.1.0`: the `CHANGELOG.md` section renamed, tag on `main`, the workflow's draft read, published as a pre-release; the tag ruleset (RL-Q8); `README.md`'s status line; steps in `docs/distribution.md`, "Making a release" | RL5, RL6 |
 | RL8 | owner | Code signing applied for (RL-Q6) | RL7 |
 | RL9 | task | The MSI (RL-Q5) | RL7 and the owner's go |
 

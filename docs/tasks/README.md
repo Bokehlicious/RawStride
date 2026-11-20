@@ -86,7 +86,6 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status |
 |---|---|---|
-| [T229](T229-release-workflow.md) | ADR 0031 RL6: CHANGELOG.md, tools/release-build.ps1 and the release workflow | Open |
 
 ## Writing a task (owner and reviewer)
 
@@ -123,6 +122,12 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
   agent) before the owner is asked to approve. Its findings and what was done with them go in
   the log's review row.
 - **When it is Done and committed:** `git mv` the file to `done/`, move its row to `done/README.md`.
+- **The change log (owner, 2026-11-20, ADR 0031 RL-Q3):** at the Done of a task that changes what
+  a user sees or gets (a feature, a fix, a changed file format, a new requirement on the PC), the
+  reviewer adds one line for users, in English, under `## [Unreleased]` in `CHANGELOG.md`
+  ("Keep a Changelog" groups: Added, Changed, Fixed, Removed), in the same commit. Tasks that change
+  only tests, tools, CI or documents get none. At a release the section is renamed
+  (`docs/distribution.md`, "Making a release").
 - **Leftovers:** before a task is set to Done, everything its log calls left, not covered, noted
   or not changed gets a home: a new task, a row in `plans/`, an item in `backlog.md`, or a line in
   `docs/test-inventory.md`. The Done row of the log says where. A done task's log is not read again
