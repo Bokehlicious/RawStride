@@ -99,7 +99,7 @@ pub use histogram::{
 };
 pub use import::{
     Field, FieldError, ImportForm, IptcField, IptcForm, IptcModes, ItemAction, Preview,
-    PreviewLine, Validated, allowed_modes, result_folders,
+    PreviewLine, Validated, allowed_modes,
 };
 pub use import_dialog::{
     CARD_REFRESH_INTERVAL, CardRefresh, DialogRequest, ImportDialog, ImportDialogState,

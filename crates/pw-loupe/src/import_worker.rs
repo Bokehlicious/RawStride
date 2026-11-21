@@ -111,7 +111,8 @@ pub struct ImportDone {
     /// Why the card could not be marked as imported, if so; the copy went on (T158).
     pub register_error: Option<String>,
     /// The destination folders this import copied images into, oldest images' folder first, each
-    /// once; these open in tabs after the import (T163).
+    /// once; the import's summary. The tabs open while importing, at each folder's first
+    /// [`ImportEvent::Placed`] (ADR 0026 §3.4, T260).
     pub new_folders: Vec<PathBuf>,
 }
 

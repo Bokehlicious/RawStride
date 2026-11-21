@@ -2,9 +2,7 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use crate::import_text::{ImportText, import_text};
-use crate::{
-    Field, FieldError, ImportDone, ImportEvent, ImportForm, Preview, RequestId, result_folders,
-};
+use crate::{Field, FieldError, ImportDone, ImportEvent, ImportForm, Preview, RequestId};
 
 const PREVIEW_DELAY: Duration = Duration::from_millis(300);
 
@@ -232,14 +230,6 @@ impl ImportDialog {
             self.changed_at = Some(Instant::now());
             self.source_changed = true;
             self.request_id = None;
-        }
-    }
-
-    /// The folders to open, each in its own tab, once the import is done (T163).
-    pub fn result_folders(&self) -> Vec<PathBuf> {
-        match &self.state {
-            ImportDialogState::Done { done } => result_folders(done.copied, &done.new_folders),
-            _ => Vec::new(),
         }
     }
 
@@ -609,13 +599,6 @@ mod tests {
         });
         assert!(
             matches!(dialog.state(), ImportDialogState::Done { done: value } if value == &done)
-        );
-        assert_eq!(
-            dialog.result_folders(),
-            vec![
-                PathBuf::from("destination/small"),
-                PathBuf::from("destination/largest"),
-            ]
         );
         assert!(!dialog.cancel());
         assert!(dialog.can_close());
@@ -1001,21 +984,6 @@ mod tests {
         assert!(!dialog.source_changed);
         assert_eq!(dialog.request_id, Some(7));
         assert!(dialog.tick(now + PREVIEW_DELAY).is_none());
-    }
-
-    #[test]
-    fn result_folders_are_empty_without_copied_files() {
-        let mut dialog = ImportDialog::new(ImportForm::default());
-        dialog.state = ImportDialogState::Done {
-            done: ImportDone {
-                copied: 0,
-                folders: vec![("destination/folder".to_string(), 3)],
-                new_folders: vec![PathBuf::from("destination/folder")],
-                ..ImportDone::default()
-            },
-        };
-
-        assert!(dialog.result_folders().is_empty());
     }
 
     #[test]

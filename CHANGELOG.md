@@ -9,6 +9,14 @@ Downloads are on the [Releases page](https://github.com/Bokehlicious/RawStride/r
 
 ## [Unreleased]
 
+### Changed
+
+- An import opens each destination folder in its own tab as soon as its first image is in place
+  with the template, behind the import dialog, and the tab fills while the import goes on; the
+  first folder's tab is active, and at the end the newest folder's tab is made active if you have
+  not moved. The import writes the template image by image, so its progress shows only the copy.
+  Thumbnails already shown no longer flicker when a tab's files change.
+
 ## [0.2.0] - 2026-11-21
 
 ### Added

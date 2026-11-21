@@ -335,6 +335,21 @@ with ADR 0026 F3, in `plans/adr-0018-0025-steps.md`.)
   (`X.xmp`) before the second shot's card sidecar of that name is copied; that copy then fails
   ("destination exists"), is listed as failed and the card is not ejected. Before T258 the two
   shots shared one sidecar instead.
+- *A tab on the backup folder is not held while importing* (T260 chain review, 2026-11-21; not
+  new): only the destination's tabs are held (`disk_listing_held`), so a tab open on the backup
+  folder may list a backup copy before the import's template is written to it.
+- *A folder opened again during an import can keep a copied image hidden* (T260 extra review,
+  2026-11-21): when the destination folder is already open and watched, and the user opens it
+  again (Recent, the library, a drop) during the import, the tab's noted change is cleared and
+  the new listing leaves out the images not yet placed. If the import is then cancelled, or a
+  shot's backup copy fails, that shot's copied image is never placed and stays out of the tab
+  after the import until F5 or the next change in the folder. Tabs the import opened, F5 and
+  the relist after a move are not affected.
+- *Another spelling of the destination is not recognised* (T260 extra review, 2026-11-21): the
+  import compares folders lexically (`same_folder_lexically`), so a tab open on the destination
+  through a `subst` drive or a `\\?\` path does not leave out the images not yet placed (one can
+  show before its template is written), and at the end of the import such a tab may be loaded
+  once more although it is already active.
 
 ## Card eject
 

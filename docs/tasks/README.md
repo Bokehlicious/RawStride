@@ -87,7 +87,6 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status |
 |---|---|---|
-| [T260](T260-tabs-fill-while-importing.md) | ADR 0026 F4: the destination tabs open on the first image and fill while importing | Open |
 | [T261](T261-metadata-write-timing.md) | The safe write's time per step, measured in a release build | Open |
 
 ## Writing a task (owner and reviewer)

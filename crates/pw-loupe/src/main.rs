@@ -103,6 +103,7 @@ use pw_loupe::{
 use pw_loupe::{FolderWatcher, WatchEvent};
 use pw_loupe::{HISTOGRAM_BINS, HistogramPanel, HistogramText, histogram_panel, histogram_text};
 use pw_loupe::{HistogramInspector, HistogramReader, HistogramReads};
+use pw_loupe::{ImportPosition, ImportTabs, PlacedInFolder, with_placed};
 use pw_loupe::{
     ImportText, failed_cell_text, hidden_done_text, hidden_progress_text, import_text,
     no_preview_text,
@@ -750,7 +751,6 @@ struct Loupe {
     card_refresh: Option<CardRefresh>,
     import_submit_error: Option<String>,
     import_hidden: bool,
-    import_result_opened: bool,
     /// The Tasks area under the library (ADR 0017 §2.1, U5, T140): the import's row and the
     /// error list.
     tasks: Tasks,
@@ -922,6 +922,11 @@ struct Loupe {
     /// The destination of the running import, as written in its form (trimmed): a tab inside it
     /// is not listed from disk while the import runs (`disk_listing_held`, ADR 0026 F3, T251).
     import_destination: Option<PathBuf>,
+    /// The running import's images and folders (ADR 0026 §3.4, T260): set at its `Planned`,
+    /// filled at each `Placed` (`import_placed`), and `None` at its `Done`, when its worker has
+    /// stopped, and while no import runs. While it is `Some`, a listing of a folder leaves out the
+    /// images the import has not shown yet (`leave_out_waiting`).
+    import_tabs: Option<ImportTabs>,
 }
 
 impl Loupe {
@@ -1555,7 +1560,6 @@ impl Loupe {
             return;
         }
         self.import_hidden = false;
-        self.import_result_opened = false;
         self.import_dialog = Some(ImportDialog::new(self.last_form.clone()));
         self.import_submit_error = None;
         let mut card_refresh = CardRefresh::new(Instant::now());
@@ -1629,7 +1633,6 @@ impl Loupe {
                 // (`disk_listing_held`, T251).
                 let written = destination.trim();
                 self.import_destination = (!written.is_empty()).then(|| PathBuf::from(written));
-                self.import_result_opened = false;
                 self.import_submit_error = None;
             }
             Err(error) => {
@@ -1763,6 +1766,21 @@ impl Loupe {
             return;
         }
         self.anchor_from_note();
+        let error = self.follow_relisted_active(&relisted);
+        self.added_files.add(&relisted.new);
+        self.retain_added_files();
+        self.follow_sort(ctx);
+        self.message = error.or_else(|| disk_change_text(&relisted));
+    }
+
+    /// The active tab follows a relist that changed its files (`follow_disk_changes`, T251, and
+    /// an import's `Placed`, `import_placed`, ADR 0026 §3.4, T260): the removed files are
+    /// forgotten in the metadata cache (`forget_deleted`), the new files' ratings are read on
+    /// their own (`add_files`) and only those sent wait as `unread`, the tab is refiltered, and the
+    /// thumbnails already made follow their files with the contact sheet keeping its top image
+    /// (`active_changed(false)`, T257). The anchor, `added_files`, the sort and the status line are
+    /// the caller's. Returns the error of a step that failed (the later steps still run).
+    fn follow_relisted_active(&mut self, relisted: &Relisted) -> Option<String> {
         let mut error = None;
         if !relisted.gone.is_empty() {
             match resolve_paths(&relisted.gone) {
@@ -1797,10 +1815,7 @@ impl Loupe {
         self.refilter_active(None);
         // The thumbnail cache is kept, so the added files keep their stamps (T254, T257).
         self.active_changed(false);
-        self.added_files.add(&relisted.new);
-        self.retain_added_files();
-        self.follow_sort(ctx);
-        self.message = error.or_else(|| disk_change_text(&relisted));
+        error
     }
 
     /// Keeps in `added_files` only the paths some open tab's `files` holds, so files gone or in
@@ -1958,25 +1973,21 @@ impl Loupe {
                         self.ejecting_drive = None;
                         self.import_destination = None;
                     }
-                    let folders_to_open = if let Some(dialog) = &mut self.import_dialog {
-                        let was_running = dialog.cancel();
+                    if let Some(dialog) = &mut self.import_dialog {
                         dialog.apply(&event);
-                        if was_running
-                            && matches!(dialog.state(), ImportDialogState::Done { .. })
-                            && !self.import_result_opened
-                        {
-                            self.import_result_opened = true;
-                            dialog.result_folders()
-                        } else {
-                            Vec::new()
+                    }
+                    // The destination tabs open on the first image and fill while importing
+                    // (ADR 0026 §3.4, T260).
+                    match event {
+                        ImportEvent::Planned { images, .. } => {
+                            self.import_tabs = Some(ImportTabs::new(images));
                         }
-                    } else {
-                        Vec::new()
-                    };
-                    // Every folder the import copied into, each in its own tab; the newest is
-                    // opened last and so is the active tab (T163).
-                    for folder in folders_to_open {
-                        self.open(&folder, true);
+                        ImportEvent::Placed { images, .. } => self.import_placed(ctx, &images),
+                        ImportEvent::Done { .. } => {
+                            self.import_ended();
+                            self.import_tabs = None;
+                        }
+                        _ => {}
                     }
                     if refresh_cards {
                         let asked = self.import_worker.cards();
@@ -1995,6 +2006,7 @@ impl Loupe {
                 Err(TryRecvError::Disconnected) => {
                     self.ejecting_drive = None;
                     self.import_destination = None;
+                    self.import_tabs = None;
                     if let Some(dialog) = &mut self.import_dialog {
                         dialog.disconnected();
                     }
@@ -2010,6 +2022,188 @@ impl Loupe {
             .is_some_and(ImportDialog::cancel)
         {
             ctx.request_repaint_after(Duration::from_millis(100));
+        }
+    }
+
+    /// The active tab's position for the import's end rule (ADR 0026 F-Q10, T260): its folder,
+    /// its current file (`files[current]`, `None` when it has no files) and its view; `None`
+    /// without an active tab with a folder.
+    fn import_position(&self) -> Option<ImportPosition> {
+        let tab = self.tabs.active()?;
+        Some(ImportPosition {
+            folder: tab.folder.clone()?,
+            current: tab.files.get(tab.current).cloned(),
+            mode: tab.mode,
+        })
+    }
+
+    /// An import's `Placed` event (ADR 0026 §3.4, F-Q10, T260): nothing without `import_tabs`.
+    /// Otherwise `ImportTabs::place` groups the images by folder, and each group, in order, goes
+    /// to its folder's tabs (`placed_tabs`): a folder with tabs has them filled
+    /// (`fill_import_tabs`); a folder without one is opened at its first group
+    /// (`open_import_folder`), the import's first shown folder as the active tab and a later one
+    /// behind it; a folder whose tab the user closed during the import is not opened again. The
+    /// first group of the first event that has one is the import's first shown folder: when it
+    /// already had a tab and the active tab is not one of them, its first tab is activated and
+    /// read as a click on it does (`load_activated_tab`), its view kept; then the active tab's
+    /// position is kept for the end rule (`ImportTabs::first_shown`). The import dialog is not
+    /// hidden.
+    fn import_placed(&mut self, ctx: &egui::Context, images: &[PathBuf]) {
+        let Some(import) = self.import_tabs.as_mut() else {
+            return;
+        };
+        let first_pending = !import.first_kept();
+        let groups = import.place(images);
+        for (index, group) in groups.iter().enumerate() {
+            let first_shown = first_pending && index == 0;
+            let has_tab = self.tabs.index_of_folder(&group.folder).is_some();
+            match placed_tabs(has_tab, group.first, first_shown) {
+                PlacedTabs::Fill => {
+                    self.fill_import_tabs(ctx, group);
+                    if first_shown
+                        && !self.active_tab_of(&group.folder)
+                        && let Some(index) = self.tabs.index_of_folder(&group.folder)
+                    {
+                        self.tabs.activate(index);
+                        self.load_activated_tab();
+                    }
+                }
+                PlacedTabs::OpenActive => self.open_import_folder(group, true),
+                PlacedTabs::OpenBehind => self.open_import_folder(group, false),
+                PlacedTabs::Closed => continue,
+            }
+            if first_shown
+                && let Some(position) = self.import_position()
+                && let Some(import) = self.import_tabs.as_mut()
+            {
+                import.first_shown(position);
+            }
+        }
+    }
+
+    /// Whether the active tab's folder is `folder` (`same_folder`).
+    fn active_tab_of(&self, folder: &Path) -> bool {
+        self.tabs
+            .active()
+            .and_then(|tab| tab.folder.as_deref())
+            .is_some_and(|open| same_folder(open, folder))
+    }
+
+    /// The tabs of a placed group's folder get its images (ADR 0026 §3.4, T260): each tab's files
+    /// become `with_placed` of its own folder, files and the group's images, through `relist_tab`
+    /// (no file made current; the chosen order, the files RawStride is writing counting as
+    /// listed). The active tab gets the real `ratings_ready` and is followed as a listing's new
+    /// files are (`follow_relisted_active`, with the contact sheet's note as the anchor before
+    /// the relist, and the sort followed); an error is shown in the status line, but no text says
+    /// what came, and the files are not kept in `added_files` (the import put them in place
+    /// whole). Every other tab gets `ratings_ready` false and is only relisted; it is read in full
+    /// when it becomes active (`load_tab`).
+    fn fill_import_tabs(&mut self, ctx: &egui::Context, group: &PlacedInFolder) {
+        let order = self.settings.shell.sort;
+        let cwd = std::env::current_dir().ok();
+        let active = self.active_tab_of(&group.folder);
+        if active {
+            self.anchor_from_note();
+        }
+        let ready = self.ratings_ready();
+        let relisted = {
+            let rating_of = tab_rating(&self.metadata, cwd.as_deref());
+            let pending = tab_pending(&self.metadata, cwd.as_deref());
+            let relisted = if active {
+                self.tabs.active_mut().and_then(|tab| {
+                    let folder = tab.folder.clone()?;
+                    let listed = with_placed(&folder, &tab.files, &group.images);
+                    Some(relist_tab(
+                        tab,
+                        listed,
+                        None,
+                        &pending,
+                        order,
+                        ready,
+                        &rating_of,
+                        &modified_time,
+                    ))
+                })
+            } else {
+                None
+            };
+            // The other tabs of the folder; the active one, relisted above, has every image now,
+            // so its listing here is its own files and changes nothing.
+            for tab in self.tabs.tabs_of_folder_mut(&group.folder) {
+                let Some(folder) = tab.folder.clone() else {
+                    continue;
+                };
+                let listed = with_placed(&folder, &tab.files, &group.images);
+                relist_tab(
+                    tab,
+                    listed,
+                    None,
+                    &pending,
+                    order,
+                    false,
+                    &rating_of,
+                    &modified_time,
+                );
+            }
+            relisted
+        };
+        let Some(relisted) = relisted.filter(Relisted::changed) else {
+            return;
+        };
+        let error = self.follow_relisted_active(&relisted);
+        self.follow_sort(ctx);
+        if let Some(error) = error {
+            self.message = Some(error);
+        }
+    }
+
+    /// Opens the folder of a placed group that has no tab, at the folder's first group (ADR 0026
+    /// §3.4, GR12, T260): its files are its listing without the images the import has not shown
+    /// yet (`leave_out_waiting`; files of earlier imports stay) with the group's images added
+    /// (`with_placed`), or the group's images alone when the listing fails. The folder, in the
+    /// import's form, becomes the first recent folder and the library is saved, as `open` does.
+    /// With `active` (the import's first shown folder) the tab is opened with `Tabs::open_new`,
+    /// the first file current, shown as the contact sheet (GR13) and loaded; otherwise it is
+    /// opened behind the active tab (`Tabs::open_behind`), the active tab unchanged and nothing
+    /// loaded.
+    fn open_import_folder(&mut self, group: &PlacedInFolder, active: bool) {
+        let folder = group.folder.clone();
+        let listing = match list_folder(&folder) {
+            Ok((files, _)) => leave_out_waiting(self.import_tabs.as_ref(), files),
+            Err(_) => Vec::new(),
+        };
+        let files = with_placed(&folder, &listing, &group.images);
+        self.library
+            .recent
+            .record(std::path::absolute(&folder).unwrap_or_else(|_| folder.clone()));
+        if active {
+            self.tabs.open_new(folder, files, 0);
+            self.tabs.set_mode(ViewMode::Grid);
+            self.load_active_tab();
+        } else {
+            self.tabs.open_behind(folder, files);
+        }
+        self.save_library();
+    }
+
+    /// An import's `Done` (ADR 0026 F-Q10's end rule, T260), before `import_tabs` is emptied: when
+    /// `ImportTabs::end_target` with the active tab's position now names a folder (the user has
+    /// not moved since the first shown image, and the newest folder is another), that folder's
+    /// first tab is activated and read as a click on it does (`load_activated_tab`). Nothing else
+    /// happens to the tabs: a tab whose watch noted a change is listed by `follow_disk_changes`
+    /// once nothing holds the listing (`disk_listing_held`: the dialog hidden or closed).
+    fn import_ended(&mut self) {
+        let now = self.import_position();
+        let Some(target) = self
+            .import_tabs
+            .as_ref()
+            .and_then(|import| import.end_target(now.as_ref()))
+        else {
+            return;
+        };
+        if let Some(index) = self.tabs.index_of_folder(&target) {
+            self.tabs.activate(index);
+            self.load_activated_tab();
         }
     }
 
@@ -2348,7 +2542,6 @@ impl Loupe {
         }
         if new_import && let Some(dialog) = &mut self.import_dialog {
             dialog.back_to_editing();
-            self.import_result_opened = false;
         }
         if close
             && self
@@ -2418,6 +2611,9 @@ impl Loupe {
     fn open(&mut self, path: &Path, new_tab: bool) {
         match list_folder(path) {
             Ok((files, pos)) => {
+                // While an import runs, the images it has not shown yet are left out (T260).
+                let (files, pos) =
+                    opened_during_import(self.import_tabs.as_ref(), files, pos, !path.is_dir());
                 let folder = if path.is_dir() {
                     path.to_path_buf()
                 } else {
@@ -2563,7 +2759,9 @@ impl Loupe {
             tab.unwatched = false;
         }
         self.folder_watcher.watch_again(&folder);
-        let listing = list_folder(&folder).map(|(files, _)| files);
+        // While an import runs, the images it has not shown yet are left out (T260).
+        let listing = list_folder(&folder)
+            .map(|(files, _)| leave_out_waiting(self.import_tabs.as_ref(), files));
         if listing.is_ok() {
             self.anchor_from_note();
         }
@@ -5307,8 +5505,9 @@ impl Loupe {
                 let Some(tab_folder) = tab.folder.clone() else {
                     continue;
                 };
+                // While an import runs, the images it has not shown yet are left out (T260).
                 let listed = match list_folder(&tab_folder) {
-                    Ok((files, _)) => files,
+                    Ok((files, _)) => leave_out_waiting(self.import_tabs.as_ref(), files),
                     Err(error) => {
                         errors.push(error);
                         continue;
@@ -8662,7 +8861,7 @@ fn list_into_tab(
 /// a batch of moves or an undo runs or waits (`moves_busy`), a delete runs (`delete_busy`), a
 /// dialog that holds the program is open (`dialog_open`), or `folder` is the destination of a
 /// running import or inside it (`inside_lexically`, no file access). These change the tabs
-/// themselves when they end (`replace_tab_files`, `relist_tabs`, an import's result opened), and
+/// themselves when they end (`replace_tab_files`, `relist_tabs`, an import's `Placed`), and
 /// while they run a file can be missing for a moment (a file on its way in a move, an import's
 /// `.pwpart` renamed and its template written with ExifTool's `-overwrite_original`), which a
 /// listing would report as removed by another program. While held, the tab's `changed_on_disk`
@@ -8679,6 +8878,65 @@ fn disk_listing_held(
         || delete_busy
         || dialog_open
         || import_destination.is_some_and(|destination| inside_lexically(folder, destination))
+}
+
+/// What an import's placed group does to its folder's tabs (ADR 0026 §3.4, T260).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PlacedTabs {
+    /// The folder has tabs: each gets the group's images.
+    Fill,
+    /// The folder has no tab and this is its first group, the import's first shown folder: it
+    /// opens as the active tab.
+    OpenActive,
+    /// The folder has no tab and this is its first group, a later folder: it opens behind the
+    /// active tab.
+    OpenBehind,
+    /// The folder has no tab and had images placed before: the user closed its tab during the
+    /// import, so it is not opened again.
+    Closed,
+}
+
+/// The choice of `PlacedTabs` for one placed group (ADR 0026 §3.4, T260): `has_tab` when a tab
+/// shows its folder, `first_in_folder` when no image of the folder was placed earlier in the
+/// import (`PlacedInFolder::first`), `first_shown` when it is the import's first shown folder.
+fn placed_tabs(has_tab: bool, first_in_folder: bool, first_shown: bool) -> PlacedTabs {
+    match (has_tab, first_in_folder, first_shown) {
+        (true, _, _) => PlacedTabs::Fill,
+        (false, true, true) => PlacedTabs::OpenActive,
+        (false, true, false) => PlacedTabs::OpenBehind,
+        (false, false, _) => PlacedTabs::Closed,
+    }
+}
+
+/// A folder's listing while an import runs (ADR 0026 §3.4, T260): without the images `import`
+/// has not shown yet (`ImportTabs::leave_out_waiting`); unchanged without an import.
+fn leave_out_waiting(import: Option<&ImportTabs>, listing: Vec<PathBuf>) -> Vec<PathBuf> {
+    match import {
+        Some(import) => import.leave_out_waiting(listing),
+        None => listing,
+    }
+}
+
+/// `list_folder`'s files and position for `open` while an import may run (ADR 0026 §3.4, T260):
+/// the files without the images `import` has not shown yet, and the position found again in
+/// them. With `file_opened` (a file was opened, `pos` its index in `files`), the same path's new
+/// index, or the first file when it was left out; otherwise `pos` within the new files.
+fn opened_during_import(
+    import: Option<&ImportTabs>,
+    files: Vec<PathBuf>,
+    pos: usize,
+    file_opened: bool,
+) -> (Vec<PathBuf>, usize) {
+    let Some(import) = import else {
+        return (files, pos);
+    };
+    let opened = file_opened.then(|| files.get(pos).cloned()).flatten();
+    let files = import.leave_out_waiting(files);
+    let pos = match opened {
+        Some(opened) => files.iter().position(|file| *file == opened).unwrap_or(0),
+        None => files.len().checked_sub(1).map_or(0, |last| pos.min(last)),
+    };
+    (files, pos)
 }
 
 /// The status text after a listing the folder watcher started (ADR 0026 §3.3, F-Q5, F-Q9, T251):
@@ -10277,7 +10535,6 @@ fn run(options: Options) -> Result<(), String> {
                 card_refresh: None,
                 import_submit_error: None,
                 import_hidden: false,
-                import_result_opened: false,
                 thumb_worker,
                 thumb_grid: ThumbGrid::new(0, 0),
                 thumb_files: Vec::new(),
@@ -10347,6 +10604,7 @@ fn run(options: Options) -> Result<(), String> {
                 watched_folders: Vec::new(),
                 ejecting_drive: None,
                 import_destination: None,
+                import_tabs: None,
             };
             if let Some(p) = path {
                 loupe.open(&p, false);
@@ -11521,12 +11779,13 @@ mod tests {
 
     mod reload_folder {
         use super::super::{
-            AnchorStep, GRID_SPACING, GridView, anchor_step, capture_requests, disk_change_text,
-            disk_listing_held, grid_note, list_into_tab, preview_must_leave, relist_tab,
-            reload_enabled, reload_tab,
+            AnchorStep, GRID_SPACING, GridView, PlacedTabs, anchor_step, capture_requests,
+            disk_change_text, disk_listing_held, grid_note, leave_out_waiting, list_into_tab,
+            opened_during_import, placed_tabs, preview_must_leave, relist_tab, reload_enabled,
+            reload_tab,
         };
         use pw_loupe::{
-            Relisted, SortKey, SortOrder, Tab, Tabs, ViewMode, anchored_offset,
+            ImportTabs, Relisted, SortKey, SortOrder, Tab, Tabs, ViewMode, anchored_offset,
             folder_changed_text, folder_gone_text, list_folder, removed_by_another_program_text,
         };
         use std::collections::{HashMap, HashSet};
@@ -11996,6 +12255,95 @@ mod tests {
                 Some(Path::new("D:/Photos/2026/shoot-2")),
                 folder
             ));
+        }
+
+        // --- The destination tabs fill while importing (ADR 0026 §3.4, T260) ---
+
+        #[test]
+        fn a_placed_group_fills_its_folders_tabs_or_opens_one_at_its_first_group() {
+            // tabs of the folder exist: filled, whatever else holds
+            for first_in_folder in [false, true] {
+                for first_shown in [false, true] {
+                    assert_eq!(
+                        placed_tabs(true, first_in_folder, first_shown),
+                        PlacedTabs::Fill
+                    );
+                }
+            }
+            // no tab, the folder's first group: the first shown folder opens active, a later one
+            // behind
+            assert_eq!(placed_tabs(false, true, true), PlacedTabs::OpenActive);
+            assert_eq!(placed_tabs(false, true, false), PlacedTabs::OpenBehind);
+            // no tab, images placed before: the user closed it, not opened again
+            assert_eq!(placed_tabs(false, false, false), PlacedTabs::Closed);
+            assert_eq!(placed_tabs(false, false, true), PlacedTabs::Closed);
+        }
+
+        fn import_of(planned: &[&str], placed: &[&str]) -> ImportTabs {
+            let mut import = ImportTabs::new(planned.iter().map(PathBuf::from).collect());
+            import.place(&placed.iter().map(PathBuf::from).collect::<Vec<_>>());
+            import
+        }
+
+        fn paths(names: &[&str]) -> Vec<PathBuf> {
+            names.iter().map(PathBuf::from).collect()
+        }
+
+        #[test]
+        fn a_listing_leaves_out_the_images_an_import_has_not_shown_and_is_kept_without_one() {
+            let listing = paths(&["D:/Shoot/old.nef", "D:/Shoot/a.nef", "D:/Shoot/b.nef"]);
+            assert_eq!(leave_out_waiting(None, listing.clone()), listing);
+            let import = import_of(&["D:/Shoot/a.nef", "D:/Shoot/b.nef"], &["D:/Shoot/a.nef"]);
+            assert_eq!(
+                leave_out_waiting(Some(&import), listing),
+                paths(&["D:/Shoot/old.nef", "D:/Shoot/a.nef"])
+            );
+        }
+
+        #[test]
+        fn a_file_opened_during_an_import_keeps_its_position_in_the_filtered_listing() {
+            let listing = paths(&[
+                "D:/Shoot/a.nef",
+                "D:/Shoot/b.nef",
+                "D:/Shoot/c.nef",
+                "D:/Shoot/d.nef",
+            ]);
+            // no import: unchanged
+            assert_eq!(
+                opened_during_import(None, listing.clone(), 2, true),
+                (listing.clone(), 2)
+            );
+            let import = import_of(&["D:/Shoot/b.nef", "D:/Shoot/c.nef"], &["D:/Shoot/c.nef"]);
+            let kept = paths(&["D:/Shoot/a.nef", "D:/Shoot/c.nef", "D:/Shoot/d.nef"]);
+            // the opened file found again by its path
+            assert_eq!(
+                opened_during_import(Some(&import), listing.clone(), 2, true),
+                (kept.clone(), 1)
+            );
+            assert_eq!(
+                opened_during_import(Some(&import), listing.clone(), 3, true),
+                (kept.clone(), 2)
+            );
+            // the opened file left out: the first file
+            assert_eq!(
+                opened_during_import(Some(&import), listing.clone(), 1, true),
+                (kept.clone(), 0)
+            );
+            // a folder opened: the position kept within the files
+            assert_eq!(
+                opened_during_import(Some(&import), listing.clone(), 0, false),
+                (kept.clone(), 0)
+            );
+            assert_eq!(
+                opened_during_import(Some(&import), listing, 3, false),
+                (kept, 2)
+            );
+            // everything left out: an empty listing at 0
+            let all = import_of(&["D:/Shoot/a.nef"], &[]);
+            assert_eq!(
+                opened_during_import(Some(&all), paths(&["D:/Shoot/a.nef"]), 0, true),
+                (Vec::new(), 0)
+            );
         }
 
         #[test]

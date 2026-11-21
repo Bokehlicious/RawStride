@@ -433,15 +433,6 @@ impl Preview {
     }
 }
 
-/// Chooses the destination folders to open after an import, each in its own tab (T163): none when
-/// nothing was copied (ADR 0010 Q2), else every folder the import copied into, in their order.
-pub fn result_folders(copied: usize, new_folders: &[PathBuf]) -> Vec<PathBuf> {
-    if copied == 0 {
-        return Vec::new();
-    }
-    new_folders.to_vec()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1018,16 +1009,5 @@ mod tests {
         assert_eq!(preview.earlier, 7);
         assert_eq!(preview.register_note.as_deref(), Some("note"));
         assert_eq!(preview.shots, 0);
-    }
-
-    #[test]
-    fn result_folders_are_empty_without_copied_files_and_every_new_folder_otherwise() {
-        let folders = vec![
-            PathBuf::from("destination/2026-11-15"),
-            PathBuf::from("destination/2026-11-16"),
-        ];
-        assert_eq!(result_folders(0, &folders), Vec::<PathBuf>::new());
-        assert_eq!(result_folders(2, &folders), folders);
-        assert_eq!(result_folders(1, &[]), Vec::<PathBuf>::new());
     }
 }
