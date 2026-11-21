@@ -254,3 +254,4 @@ was when the task was done, so "this file", "below" and "the Log" in T1–T115 m
 | [T245](T245-buttons-on-a-thumbnail.md) | ADR 0017 U15b: four buttons on a thumbnail in the contact sheet (pw-loupe) |
 | [T246](T246-larger-buttons-on-a-thumbnail.md) | ADR 0017 U15: the buttons on a thumbnail are 28 points (pw-loupe) |
 | [T247](T247-folder-watcher.md) | ADR 0026 F2a: the folder watcher, one thread with `ReadDirectoryChangesW` (pw-loupe) |
+| [T248](T248-folder-watcher-in-the-shell.md) | ADR 0026 F2b: the folder watcher follows the tabs and ends before an eject (pw-loupe) |

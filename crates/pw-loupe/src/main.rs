@@ -99,6 +99,7 @@ use pw_loupe::{
     FieldValues, ValueChoice, ValueList, field_values_path, load_field_values, save_field_values,
     value_choices,
 };
+use pw_loupe::{FolderWatcher, WatchEvent};
 use pw_loupe::{HISTOGRAM_BINS, HistogramPanel, HistogramText, histogram_panel, histogram_text};
 use pw_loupe::{HistogramInspector, HistogramReader, HistogramReads};
 use pw_loupe::{
@@ -174,6 +175,9 @@ const DELETE_WINDOW_WIDTH: f32 = 420.0;
 const OPEN_WINDOW_WIDTH: f32 = 420.0;
 /// How often a frame is asked for while capture times are being read for the sort (T138).
 const CAPTURE_POLL_INTERVAL: Duration = Duration::from_millis(50);
+/// How long an import with "Eject" waits for the watches on the card's drive to end before it
+/// starts anyway (ADR 0026 §3.2, T248); the window is blocked meanwhile, once per import.
+const EJECT_WATCH_WAIT: Duration = Duration::from_secs(2);
 /// The space around the line at the top of a side of the compare, and the plate behind it (T153).
 const SIDE_TEXT_MARGIN: f32 = 6.0;
 const SIDE_TEXT_PLATE: egui::Color32 = egui::Color32::from_black_alpha(170);
@@ -898,6 +902,13 @@ struct Loupe {
     /// The library in the left column (ADR 0017 §2.1, U4, T135): the folder tree, the favourites
     /// and the recent folders; the lists are saved in `settings.txt` with the settings.
     library: Library,
+    /// The folder watcher (ADR 0026 §3.2, T248): watches the tabs' folders.
+    folder_watcher: FolderWatcher,
+    /// The last set of folders given to `folder_watcher`.
+    watched_folders: Vec<PathBuf>,
+    /// The drive (`"E:"`) an import started with "Eject" will eject, while that import runs: no
+    /// folder on it is watched, so no watch keeps the card busy (T248).
+    ejecting_drive: Option<String>,
 }
 
 impl Loupe {
@@ -1560,6 +1571,18 @@ impl Loupe {
         if active_cleared {
             self.load_active_tab();
         }
+        if form.eject {
+            // The drive the worker ejects, from the source as written (T248): its watches end
+            // before the import starts, so they do not keep the card busy.
+            self.ejecting_drive = pw_ingest::drive_of(Path::new(form.source.trim()));
+            self.follow_tab_folders();
+            if !self.folder_watcher.wait_until_applied(EJECT_WATCH_WAIT) {
+                eprintln!(
+                    "pw-loupe: the watches on the drive to eject did not end within {} s",
+                    EJECT_WATCH_WAIT.as_secs()
+                );
+            }
+        }
         match self.import_worker.run(form, self.settings.edit_options()) {
             Ok(id) => {
                 if let Some(dialog) = &mut self.import_dialog {
@@ -1571,6 +1594,7 @@ impl Loupe {
             }
             Err(error) => {
                 self.tabs = previous_tabs;
+                self.ejecting_drive = None;
                 if active_cleared {
                     self.load_active_tab();
                 }
@@ -1578,6 +1602,34 @@ impl Loupe {
                     dialog.disconnected();
                 }
                 self.import_submit_error = Some(submit_error_text(error));
+            }
+        }
+    }
+
+    /// Gives the folder watcher the tabs' folders when they differ from the last set given
+    /// (ADR 0026 §3.2, T248), leaving out the drive of an import that will eject it. Does not
+    /// wait.
+    fn follow_tab_folders(&mut self) {
+        let wanted = self.tabs.folders_to_watch(self.ejecting_drive.as_deref());
+        if wanted != self.watched_folders {
+            self.folder_watcher.set_folders(wanted.clone());
+            self.watched_folders = wanted;
+        }
+    }
+
+    /// Notes the folder watcher's events on the tabs they concern (T248); acting on the notes is
+    /// ADR 0026 F3.
+    fn poll_folder_watcher(&mut self) {
+        while let Some(event) = self.folder_watcher.try_recv() {
+            match event {
+                WatchEvent::Changed(folder) => self.tabs.note_changed_on_disk(&folder),
+                WatchEvent::Ended { folder, reason } => {
+                    self.tabs.note_unwatched(&folder);
+                    eprintln!(
+                        "pw-loupe: the folder {} is not watched: {reason}",
+                        folder.display()
+                    );
+                }
             }
         }
     }
@@ -1627,6 +1679,10 @@ impl Loupe {
                         &event,
                         ImportEvent::Done { done, .. } if done.eject.is_some()
                     );
+                    if matches!(event, ImportEvent::Done { .. }) {
+                        // The import has ended: the card's drive may be watched again (T248).
+                        self.ejecting_drive = None;
+                    }
                     let folders_to_open = if let Some(dialog) = &mut self.import_dialog {
                         let was_running = dialog.cancel();
                         dialog.apply(&event);
@@ -1662,6 +1718,7 @@ impl Loupe {
                 }
                 Err(TryRecvError::Empty) => break,
                 Err(TryRecvError::Disconnected) => {
+                    self.ejecting_drive = None;
                     if let Some(dialog) = &mut self.import_dialog {
                         dialog.disconnected();
                     }
@@ -9426,6 +9483,8 @@ impl eframe::App for Loupe {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         self.poll_import_worker(&ctx);
+        self.poll_folder_watcher();
+        self.follow_tab_folders();
         self.check_exiftool(&ctx);
         if self.send_pending_options() {
             ctx.request_repaint_after(WINDOW_POLL_INTERVAL);
@@ -9485,6 +9544,8 @@ impl eframe::App for Loupe {
             }
             ctx.request_repaint();
         }
+        // A tab opened, closed or cleared this frame is watched or ended at once (T248).
+        self.follow_tab_folders();
         self.follow_inspector(&ctx);
         self.gate_thumbnails();
         self.sync_preview_window();
@@ -9781,7 +9842,11 @@ fn run(options: Options) -> Result<(), String> {
                 let ctx = ctx.clone();
                 move || ctx.request_repaint()
             });
-            second_core.set_wake(move || ctx.request_repaint());
+            second_core.set_wake({
+                let ctx = ctx.clone();
+                move || ctx.request_repaint()
+            });
+            let folder_watcher = FolderWatcher::start(Box::new(move || ctx.request_repaint()));
             let mut loupe = Loupe {
                 core,
                 second_core,
@@ -9873,6 +9938,9 @@ fn run(options: Options) -> Result<(), String> {
                 filmstrip_followed: None,
                 monitor_profile,
                 library,
+                folder_watcher,
+                watched_folders: Vec::new(),
+                ejecting_drive: None,
             };
             if let Some(p) = path {
                 loupe.open(&p, false);

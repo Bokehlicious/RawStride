@@ -253,6 +253,12 @@ with ADR 0026 F3, in `plans/adr-0018-0025-steps.md`.)
   starts anyway.
 - *A broken completion port* (never seen) is logged every 50 ms until RawStride ends; the
   thread does not spin.
+- *Two notes a tab may miss* (T248): a late `Ended`, sent before its folder left the set and
+  was given again, can mark a tab whose new watch works as unwatched, which ends that watch; and
+  a tab of the same folder under another spelling (a `subst` drive, a `\\?\` prefix) is not
+  noted, since the notes compare paths without reading the disk. Both only cost F3's fallback a
+  listing on activation; a `subst` letter mapped onto a card is also not left out before an
+  eject.
 
 ## Card eject
 

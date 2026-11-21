@@ -1,4 +1,4 @@
-use std::path::{Component, Path, PathBuf};
+use std::path::{Component, Path, PathBuf, Prefix};
 use std::time::SystemTime;
 
 use pw_metadata::Rating;
@@ -42,10 +42,20 @@ pub struct Tab {
     /// files of `files`, in the order they came (`relist` and `place_waiting` keep it so, and
     /// check it first, since `replace_files` and `reorder` do not know this list).
     pub unplaced: Vec<PathBuf>,
+    /// A watch said the folder changed since the files were last listed (ADR 0026 §7). Set by
+    /// `Tabs::note_changed_on_disk` (T248); F3 acts on it and clears it when it lists the folder.
+    pub changed_on_disk: bool,
+    /// The folder's watch could not start or has ended (ADR 0026 F-Q3). Set by
+    /// `Tabs::note_unwatched` (T248); while it is set the folder is left out of
+    /// `Tabs::folders_to_watch`. F3 acts on it (its fallback lists the folder).
+    pub unwatched: bool,
 }
 
 impl Tab {
     fn open(&mut self, folder: PathBuf, files: Vec<PathBuf>, pos: usize) {
+        // Listed now, and its watch is tried again (T248).
+        self.changed_on_disk = false;
+        self.unwatched = false;
         self.filter = Filter::default();
         self.selection = Selection::default();
         // The folder in file-name order from `list_folder`: the sort is applied again (U14-Q5).
@@ -334,6 +344,50 @@ impl Tabs {
         })
     }
 
+    /// The folders to watch (ADR 0026 §3.2, T248): every tab's folder in tab order, duplicates
+    /// kept, leaving out tabs without a folder, tabs marked `unwatched`, and, with
+    /// `except_drive` (a drive as `pw_ingest::drive_of` gives it, `"E:"`), every folder on that
+    /// drive, since an eject is of the whole drive. No file access: it runs every frame during
+    /// an import, and a network folder may be unreachable.
+    pub fn folders_to_watch(&self, except_drive: Option<&str>) -> Vec<PathBuf> {
+        self.tabs
+            .iter()
+            .filter(|tab| !tab.unwatched)
+            .filter_map(|tab| tab.folder.as_ref())
+            .filter(|folder| {
+                except_drive.is_none_or(|drive| {
+                    drive_letter(folder).is_none_or(|letter| !same_drive(letter, drive))
+                })
+            })
+            .cloned()
+            .collect()
+    }
+
+    /// Notes on every tab of `folder` that its folder changed on disk (T248). Compared without
+    /// file access (`same_folder_lexically`).
+    pub fn note_changed_on_disk(&mut self, folder: &Path) {
+        for tab in self.tabs_of_folder_lexically(folder) {
+            tab.changed_on_disk = true;
+        }
+    }
+
+    /// Notes on every tab of `folder` that its folder is not watched (T248). Compared without
+    /// file access: an `Ended` usually means the drive is gone, and resolving the path could
+    /// then hang the window.
+    pub fn note_unwatched(&mut self, folder: &Path) {
+        for tab in self.tabs_of_folder_lexically(folder) {
+            tab.unwatched = true;
+        }
+    }
+
+    fn tabs_of_folder_lexically(&mut self, folder: &Path) -> impl Iterator<Item = &mut Tab> {
+        self.tabs.iter_mut().filter(move |tab| {
+            tab.folder
+                .as_deref()
+                .is_some_and(|open| same_folder_lexically(open, folder))
+        })
+    }
+
     pub fn titles(&self) -> Vec<String> {
         self.tabs
             .iter()
@@ -366,6 +420,39 @@ fn resolved_folder(path: &Path) -> PathBuf {
         .ok()
         .and_then(|absolute| pw_ingest::resolve(&absolute, "folder").ok())
         .unwrap_or_else(|| path.to_path_buf())
+}
+
+/// The drive letter of `path`, from the first component of its `std::path::absolute` form (no
+/// disk access): `E:\` and `\\?\E:\` give `'E'`; a network path (`\\server\share`, `\\?\UNC\`)
+/// or a path whose absolute form cannot be made gives `None`.
+fn drive_letter(path: &Path) -> Option<char> {
+    let absolute = std::path::absolute(path).ok()?;
+    match absolute.components().next()? {
+        Component::Prefix(prefix) => match prefix.kind() {
+            Prefix::Disk(letter) | Prefix::VerbatimDisk(letter) => Some(char::from(letter)),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// Whether the letter is the drive `drive` (`"E:"`, as `pw_ingest::drive_of` gives it),
+/// ignoring case.
+fn same_drive(letter: char, drive: &str) -> bool {
+    let mut chars = drive.chars();
+    matches!(
+        (chars.next(), chars.next(), chars.next()),
+        (Some(other), Some(':'), None) if other.eq_ignore_ascii_case(&letter)
+    )
+}
+
+/// Whether `a` and `b` name the same folder without file access: both made absolute and compared
+/// component by component as `path_starts_with` does, so a trailing separator or other case does
+/// not matter, but a `subst` drive or a `\\?\` prefix does.
+fn same_folder_lexically(a: &Path, b: &Path) -> bool {
+    let a = std::path::absolute(a).unwrap_or_else(|_| a.to_path_buf());
+    let b = std::path::absolute(b).unwrap_or_else(|_| b.to_path_buf());
+    path_starts_with(&a, &b) && path_starts_with(&b, &a)
 }
 
 fn path_starts_with(path: &Path, root: &Path) -> bool {
@@ -824,6 +911,163 @@ mod tests {
         let currents: Vec<usize> = tabs.tabs().iter().map(|tab| tab.current).collect();
         assert_eq!(currents, vec![1, 0, 1]);
         assert_eq!(tabs.tabs_of_folder_mut(&temp.0.join("none")).count(), 0);
+    }
+
+    // --- the folder watcher's notes (ADR 0026 F2, T248) ---
+
+    /// One tab per written folder, opened without `open_new` so nothing is read from disk (a
+    /// network path or a drive that does not exist must not be resolved).
+    fn tabs_on(folders: &[PathBuf]) -> Tabs {
+        Tabs {
+            tabs: folders
+                .iter()
+                .map(|folder| {
+                    let mut tab = Tab::default();
+                    tab.open(folder.clone(), Vec::new(), 0);
+                    tab
+                })
+                .collect(),
+            active: 0,
+        }
+    }
+
+    #[test]
+    fn folders_to_watch_gives_the_folders_in_order_without_empty_or_unwatched_tabs() {
+        let base = std::env::temp_dir().join("pw-loupe-watch-order");
+        let (first, cleared, unwatched, last) = (
+            base.join("First"),
+            base.join("Cleared"),
+            base.join("Unwatched"),
+            base.join("Last"),
+        );
+        let mut tabs = tabs_on(&[
+            first.clone(),
+            cleared.clone(),
+            unwatched.clone(),
+            last.clone(),
+            first.clone(),
+        ]);
+        tabs.clear_inside(&cleared);
+        tabs.note_unwatched(&unwatched);
+
+        assert_eq!(tabs.tabs().len(), 5);
+        assert_eq!(tabs.tabs()[1].folder, None);
+        // Duplicates are kept (`FolderWatcher::set_folders` collapses them).
+        assert_eq!(
+            tabs.folders_to_watch(None),
+            vec![first.clone(), last, first]
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn folders_to_watch_leaves_out_every_folder_on_the_ejected_drive_without_file_access() {
+        let on_card = [r"E:\", r"E:\DCIM", r"e:\PRIVATE", r"\\?\E:\DCIM"];
+        let kept = [
+            r"D:\Photos",
+            r"\\server\share\photos",
+            r"\\?\UNC\server\share\photos",
+        ];
+        let folders: Vec<PathBuf> = on_card
+            .iter()
+            .chain(kept.iter())
+            .map(PathBuf::from)
+            .collect();
+        let tabs = tabs_on(&folders);
+
+        assert_eq!(tabs.folders_to_watch(None), folders);
+        let expected: Vec<PathBuf> = kept.iter().map(PathBuf::from).collect();
+        assert_eq!(tabs.folders_to_watch(Some("E:")), expected);
+        assert_eq!(tabs.folders_to_watch(Some("e:")), expected);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn folders_to_watch_leaves_out_a_real_folder_on_the_drive_also_in_its_canonical_form() {
+        let temp = TempFolder::new("watch-drive");
+        let foto = temp.foto();
+        let canonical = std::fs::canonicalize(&foto).expect("the folder exists");
+        assert!(canonical.to_string_lossy().starts_with(r"\\?\"));
+        let drive = pw_ingest::drive_of(&foto).expect("the temporary folder is on a drive");
+        let tabs = tabs_on(&[foto.clone(), canonical.clone()]);
+
+        assert_eq!(tabs.folders_to_watch(None), vec![foto, canonical]);
+        assert_eq!(tabs.folders_to_watch(Some(&drive)), Vec::<PathBuf>::new());
+    }
+
+    #[test]
+    fn the_notes_are_set_on_every_tab_of_the_folder_and_on_no_other() {
+        let base = std::env::temp_dir().join("pw-loupe-watch-notes");
+        let shoot = base.join("Shoot");
+        let trailing = PathBuf::from(format!("{}{}", shoot.display(), std::path::MAIN_SEPARATOR));
+        let mut folders = vec![
+            shoot.clone(),
+            trailing.clone(),
+            shoot.join("Sub"),
+            base.join("Shoot2"),
+        ];
+        #[cfg(windows)]
+        folders.push(PathBuf::from(shoot.to_string_lossy().to_uppercase()));
+        let marked = |tabs: &Tabs, note: fn(&Tab) -> bool| -> Vec<bool> {
+            tabs.tabs().iter().map(note).collect()
+        };
+        let mut expected = vec![true, true, false, false];
+        #[cfg(windows)]
+        expected.push(true);
+
+        let mut tabs = tabs_on(&folders);
+        tabs.note_changed_on_disk(&shoot);
+        assert_eq!(marked(&tabs, |tab| tab.changed_on_disk), expected);
+        assert!(tabs.tabs().iter().all(|tab| !tab.unwatched));
+
+        let mut tabs = tabs_on(&folders);
+        tabs.note_unwatched(&trailing);
+        assert_eq!(marked(&tabs, |tab| tab.unwatched), expected);
+        assert!(tabs.tabs().iter().all(|tab| !tab.changed_on_disk));
+
+        #[cfg(windows)]
+        {
+            let mut tabs = tabs_on(&folders);
+            tabs.note_unwatched(Path::new(&shoot.to_string_lossy().to_lowercase()));
+            assert_eq!(marked(&tabs, |tab| tab.unwatched), expected);
+        }
+    }
+
+    #[test]
+    fn opening_a_tab_again_clears_its_notes_and_watches_its_folder_again() {
+        let folder = std::env::temp_dir().join("pw-loupe-watch-again");
+        let mut tabs = tabs_on(std::slice::from_ref(&folder));
+        tabs.note_changed_on_disk(&folder);
+        tabs.note_unwatched(&folder);
+        assert!(
+            tabs.active()
+                .is_some_and(|tab| tab.changed_on_disk && tab.unwatched)
+        );
+        assert_eq!(tabs.folders_to_watch(None), Vec::<PathBuf>::new());
+
+        tabs.open_in_active(folder.clone(), files("again", 1), 0);
+
+        assert!(
+            tabs.active()
+                .is_some_and(|tab| !tab.changed_on_disk && !tab.unwatched)
+        );
+        assert_eq!(tabs.folders_to_watch(None), vec![folder]);
+    }
+
+    #[test]
+    fn clear_inside_leaves_a_tab_without_notes() {
+        let folder = std::env::temp_dir().join("pw-loupe-watch-clear");
+        let mut tabs = tabs_on(std::slice::from_ref(&folder));
+        tabs.note_changed_on_disk(&folder);
+        tabs.note_unwatched(&folder);
+
+        assert!(tabs.clear_inside(&folder));
+
+        assert_eq!(tabs.tabs(), &[Tab::default()]);
+        assert!(
+            tabs.active()
+                .is_some_and(|tab| !tab.changed_on_disk && !tab.unwatched)
+        );
     }
 
     // --- the sort order (ADR 0017 U14, T138) ---
