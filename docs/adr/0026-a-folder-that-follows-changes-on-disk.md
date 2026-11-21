@@ -7,6 +7,10 @@
   under an active filter while the ratings are read (ADR 0014 amendment 3); §2 point 4, the
   placement also when tabs are listed again after a move or an undo; §2 point 5 (review of
   T242), an undo always scrolls to the image brought back.
+- **The owner, 2026-11-21** (backlog sort after F3, from T252's hand check): F-Q7 gains an
+  addition, §3.2: a listed image file that changes size or write time also counts as a change,
+  and the active tab makes the thumbnail of a file another program added anew when the file has
+  changed since its thumbnail was asked for (T253, T254).
 - Date: 2026-11-18
 - Related:
   - the owner's wish at the hand check of ADR 0018 B4 (2026-11-18): a tab shows new files, for
@@ -122,6 +126,17 @@ These hold for all three, so a tab behaves the same whatever changed it. They ar
   that. Reason: RawStride's own rating writes change files all the time, and telling its own
   writes from another program's is not reliable; reading a whole folder's metadata again after
   every change would also cost too much.
+  **Addition (the owner, 2026-11-21, after T252's hand check):** a file copied in slowly (to a
+  USB stick) is listed while it is still being written, and its thumbnail is made from the part
+  written so far, which fails ("Unreadable") or, when File Explorer has already given the file
+  its full size, may look whole but be partly empty. So a change of size or write time of a
+  listed image file also counts as a change, and the folder is listed after the quiet moment
+  as for any change. RawStride keeps the files another program added to an open tab, with the
+  size and write time each had when its thumbnail was asked for; at each listing of the active
+  tab, a file whose size or write time differs has its thumbnail made anew, whether it was made
+  or failed, and one still being made is checked again once it comes back. Only those files are
+  checked, not the whole folder. Nothing else is read
+  again: a changed file's rating and metadata still wait for F5, as above.
 - **Which tabs:** the active tab follows at once; another tab is marked as changed and listed when
   it becomes active (F-Q8). A tab's watch ends when it is closed or opened on another folder.
 - **Network folders and removable drives:** a watch that cannot start, or ends (the drive is
@@ -184,7 +199,7 @@ These hold for all three, so a tab behaves the same whatever changed it. They ar
 | F-Q4 | The folder is renamed, moved or deleted while its tab is open? | The tab keeps its files and the status line says the folder is gone; F5 says so again; the tab is closed by the user (as proposed) |
 | F-Q5 | The image shown in the preview is removed by another program? | The following image is shown, and the status line says "{file} was removed by another program" (as proposed) |
 | F-Q6 | A new file under a sort order: placed in the order, or put at the end until the tab is opened again? | Placed in the order (§2 point 4); with a capture-time order once its time is read, at the end until then (as proposed) |
-| F-Q7 | Follow only files that come and go, or also files that change? | Only files that come and go; F5 reads changed files (§3.2) (as proposed) |
+| F-Q7 | Follow only files that come and go, or also files that change? | Only files that come and go; F5 reads changed files (§3.2) (as proposed). Addition (owner, 2026-11-21): a size or write-time change of a listed image counts as a change, and the thumbnail of a file another program added is made anew when the file changed since it was asked for (§3.2) |
 | F-Q8 | Follow tabs that are not active? | Marked as changed, listed when they become active (as proposed) |
 | F-Q9 | Say in the status line when another program added or removed files? | Yes, briefly; no dialog (as proposed) |
 | F-Q10 | During an import with several destination folders, which tab is active? | The first folder's tab when it opens; the newest at the end only if the user has not moved (§3.4) (as proposed) |
