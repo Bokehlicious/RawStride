@@ -87,7 +87,7 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status |
 |---|---|---|
-| [T249](T249-folder-follow-building-blocks.md) | ADR 0026 F3a: a listing that fails on an entry error, the watch's start, the status texts | Blocked |
+| [T249](T249-folder-follow-building-blocks.md) | ADR 0026 F3a: a listing that fails on an entry error, the watch's start, the status texts | Open |
 | [T250](T250-reading-only-new-files.md) | ADR 0026 F3b: the ratings of only the new files, files waiting for their rating, Reload Folder reads the embedded turns again | Blocked |
 | [T251](T251-tabs-follow-the-disk.md) | ADR 0026 F3c: the tabs follow their folders on disk | Blocked |
 

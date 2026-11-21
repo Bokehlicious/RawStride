@@ -65,13 +65,16 @@
      form, whose rating is being read on its own (`add_files`) after a listing (ADR 0026 §2
      points 3 and 4). Empty by default; `Tab::open` empties it beside the fields it resets
      (`clear` already does). **Only the shell fills it** (T251, after a listing the watcher
-     started, through `mark_unread`, point 4); `relist` does not, since Reload Folder, the relist
-     after a move or an undo, and an activation read the whole tab anyway (`ratings_ready` false
-     until that read is back). The doc comment says who fills and empties it and what it does.
+     started, through `mark_unread`, point 4); `relist` does not, since Reload Folder and an
+     activation read the whole tab anyway (`ratings_ready` false until that read is back), and
+     T251 makes the relist after an undo read the whole tab when one of its files is not in the
+     cache. The doc comment says who fills and empties it and what it does.
   4. **The tab model** (`browse.rs`, and `tabs.rs` for the whole order):
      - `Relisted` gains `pub new: Vec<PathBuf>`: the new files (those counted in `added`) in the
-       tab's form, in `listed`'s order, so the shell knows which files to read. Existing tests
-       that build `Relisted` literally gain `new` (only that; rule 5).
+       tab's form, in `listed`'s order, so the shell knows which files to read; and
+       `pub gone: Vec<PathBuf>`: the files removed (those counted in `removed`), in the tab's
+       form and its order, so the shell can forget them in the cache (T251). Existing tests that
+       build `Relisted` literally gain `new` and `gone` (only that; rule 5).
      - `pub fn mark_unread(&mut self, files: &[PathBuf])`: adds each of `files` that is in
        `files` and not yet in `unread`; then the shell refilters (doc comment says so).
      - `pub fn clear_read(&mut self, known: &dyn Fn(&Path) -> bool) -> bool`: removes from
@@ -114,8 +117,8 @@
   - `orientations.rs`: `forget_embedded` forgets the embedded value of a path without a write,
     keeps a path with a queued, sent or waiting turn as it was, changes no confirmed or shown
     value, and touches no other path; the next turn then asks for the embedded value again.
-  - `tabs.rs` / `browse.rs`: `relist` gives the new files in `Relisted::new` and leaves `unread`
-    empty; `mark_unread` adds only files of the tab; `Tab::open` empties `unread`; a file gone
+  - `tabs.rs` / `browse.rs`: `relist` gives the new files in `Relisted::new` and the removed
+    ones in `Relisted::gone` (a pending file is not in `gone`), and leaves `unread` empty; `mark_unread` adds only files of the tab; `Tab::open` empties `unread`; a file gone
     leaves `unread`; under an active filter an unread file is hidden while the files already read
     stay shown (and keep their marks), and a marked unread file keeps its mark; without a filter
     it is shown; under a rating order an unread file waits in `unplaced` with `ratings_ready` true
@@ -136,4 +139,5 @@
 | Date | Status | Note |
 |---|---|---|
 | 2026-11-21 | Blocked | Added (ADR 0026 F3, second of T249 → T250 → T251); waits for T249 |
+| 2026-11-21 | Blocked | Chain review (T249 → T251): `Relisted` gains `gone` (T251 forgets those files in the cache, so a file brought back is read anew); the Why no longer says the relist after an undo reads the whole tab (T251 makes it) |
 | 2026-11-21 | Blocked | Cold read: `relist` no longer fills `unread` (only the shell after a watcher listing, `mark_unread`), so moves, undo, F5 and activation are unchanged until T251; the folder read's answer and `fail_loading` leave `add_files` paths alone, a stopped worker fails them; the failure text through `EditorText::MetadataError`, `last_failure` untouched, an `Error` file counts as read (unrated); the whole order under a rating key waits while `unread` is not empty (`Tab::follow_sort`); marks of unread files kept through `retain_visible`; `prune`/`forget_deleted` cover the waiting paths; point 6 narrowed to the embedded values (`forget_embedded`): a value RawStride wrote stays, since the thumbnail cache and the view core would show it stale; `Relisted` literals in existing tests gain `new`; `inside_lexically`'s case test Windows only |

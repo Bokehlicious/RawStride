@@ -1,4 +1,4 @@
-# T249. ADR 0026 F3a: a listing that fails on an entry error, the watch's start, the status texts (pw-loupe) — Blocked
+# T249. ADR 0026 F3a: a listing that fails on an entry error, the watch's start, the status texts (pw-loupe) — Open
 
 - **Why:** ADR 0026 step F3 (accepted by the owner 2026-11-18): a tab follows its folder on disk
   (§3.2, §3.3). Before the shell (T251) lists folders by itself, three building blocks are needed:
@@ -84,3 +84,4 @@
 | 2026-11-21 | Open | Added (ADR 0026 F3, first of T249 → T250 → T251) |
 | 2026-11-21 | Open | Cold read: where `Started` is sent named (`WatchThread::opened`); the `main.rs` arm is certain (no wildcard); the error names `dir`; the user-visible effect at Reload Folder stated; the tests and helper that must ignore `Started` named (`wait_until_watching`, two tests asserting no events); the no-thread test built by hand in `mod tests`; the `lib.rs` test narrowed to `.pwtmp-`/`.pwbak-` in `list_folder` |
 | 2026-11-21 | Blocked | Waits for the chain review of T249 → T251 (`docs/tasks/README.md`, before the first task is set to Open) |
+| 2026-11-21 | Open | Chain review (T249 → T251) done; its findings were for T250 and T251 (removed files forgotten in the cache, `add_files` before `mark_unread`, an undo reading what it does not know); nothing changed here |
