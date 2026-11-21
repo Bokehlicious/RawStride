@@ -1,7 +1,8 @@
 # ADR 0006: RAW rendering pipeline (M2)
 
-- Status: **proposed**. The owner approved the direction (OpenMP LibRaw and points 1–6, 2026-11-04);
-  this is the design for the implementation, shown before it starts.
+- Status: **accepted by the owner (2026-11-04):** the direction (OpenMP LibRaw and points 1–6)
+  and the amendments made during implementation were approved that day; M2 was built on it.
+  The status line said "proposed" until 2026-11-21, when the owner had it corrected.
 - **`pw-rawview` is removed (owner, 2026-11-19):** it had no user once the Tauri app was retired
   (ADR 0009 §7, T207); the egui program uses `pw-viewcore` (ADR 0008, ADR 0009 §4.1). Removed by
   T210; the code stays in the git history. This ADR is kept as the record of the M2 design.
