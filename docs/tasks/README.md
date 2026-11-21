@@ -86,11 +86,13 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status |
 |---|---|---|
+| [T244](T244-metadata-window-steps-between-the-marked.md) | ADR 0017 U15a: the metadata window steps only between the marked images (pw-loupe) | Open |
+| [T245](T245-buttons-on-a-thumbnail.md) | ADR 0017 U15b: four buttons on a thumbnail in the contact sheet (pw-loupe) | Blocked: waits for T244 |
 
 ## Writing a task (owner and reviewer)
 
-- **Number:** the next free number after the highest in this folder and `done/` (T244 next).
-- **File:** `docs/tasks/T244-<a-few-words>.md`; three digits, lower case, words joined by `-`.
+- **Number:** the next free number after the highest in this folder and `done/` (T246 next).
+- **File:** `docs/tasks/T246-<a-few-words>.md`; three digits, lower case, words joined by `-`.
 - **Index:** add a row to "Open tasks" above and keep its status in step with the file's heading.
 - **Size (owner, 2026-11-15, after T142):** one task is one layer (a C++ shim or a core crate, or
   the shell in `pw-loupe`), about eight files at most, and gives one result the owner can check by
