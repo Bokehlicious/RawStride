@@ -514,3 +514,9 @@ by the owner the same day; step E4 in `plans/adr-0018-0025-steps.md`, before ADR
     T242): `open_loupe_core` opens only the main view core, so a held image changed by another
     program is not read again, and after a reload the image that follows a removed current one
     may be unmarked under "Only the marked". A task only if it is seen.
+  - *A gone folder's tab shows "Unreadable" thumbnails* (the owner's hand check of F1, item 5):
+    after the folder of an inactive tab is renamed, making the tab active and pressing F5 keeps
+    its images and says the folder is gone, but the thumbnails, no longer held for an inactive
+    tab, cannot be read under the old name and show "Unreadable". A text that the folder is gone
+    in place of each thumbnail, or keeping the thumbnails, would say it better. A task only if it
+    disturbs.
