@@ -18,6 +18,10 @@
   the listing after the import, without the template; and, first, a change of the active tab's
   files keeps the thumbnails already made (step F4a, §3.5), so a tab filling during an import
   does not redraw every thumbnail at each new file.
+- **The owner, 2026-11-21** (hand check of T260, point 3): F-Q10 changed. A later destination
+  folder's tab becomes active when it opens (its first image shown), if the user has not moved
+  since the import last made a tab active; otherwise it opens behind, as before. The end rule at
+  the import's end goes (§3.4).
 - Date: 2026-11-18
 - Related:
   - the owner's wish at the hand check of ADR 0018 B4 (2026-11-18): a tab shows new files, for
@@ -172,7 +176,9 @@ These hold for all three, so a tab behaves the same whatever changed it. They ar
 - **Which tab is active** (F-Q10): proposed, the first destination folder's tab becomes active when
   it opens, and the later folders' tabs open behind it, so the user is not moved while looking at
   images; T163's rule (the newest folder active) applies at the end only if the user has not
-  changed tab or image meanwhile.
+  changed tab or image meanwhile. **Changed by the owner, 2026-11-21 (hand check of T260):** a
+  later folder's tab becomes active when it opens, if the user has not moved since the import
+  last made a tab active; otherwise it opens behind it. There is no rule at the end.
 - **The IPTC template:** today it is written to all files after the whole copy, so an image would
   be shown, rated or opened for a while before its template is in it, and a rating key and the
   template's write could meet on the same file (two writers: the metadata worker and the import
@@ -200,6 +206,10 @@ These hold for all three, so a tab behaves the same whatever changed it. They ar
     first destination folder's tab becomes active, a later one's does not.
   - *The end rule of F-Q10:* "has not moved" means the active tab, its current image and its
     view (contact sheet or preview) are those of when the first folder's tab became active.
+    **Changed by the owner, 2026-11-21 (hand check of T260):** "has not moved" is checked when
+    each later folder's tab opens, against the active tab, current image and view of when the
+    import last made a tab active (the first folder's, or a later one's); the check at the end
+    goes.
   - *The import dialog* stays shown when the first tab opens; the tab opens behind it, and the
     user hides the dialog to see the images (the owner).
   - *The progress* shows the copy only; the template write is part of each file, and the
@@ -243,7 +253,7 @@ Opening a folder, another tab and Reload Folder still make everything anew.
 | F-Q7 | Follow only files that come and go, or also files that change? | Only files that come and go; F5 reads changed files (§3.2) (as proposed). Addition (owner, 2026-11-21): a size or write-time change of a listed image counts as a change, and the thumbnail of a file another program added is made anew when the file changed since it was asked for (§3.2) |
 | F-Q8 | Follow tabs that are not active? | Marked as changed, listed when they become active (as proposed) |
 | F-Q9 | Say in the status line when another program added or removed files? | Yes, briefly; no dialog (as proposed) |
-| F-Q10 | During an import with several destination folders, which tab is active? | The first folder's tab when it opens; the newest at the end only if the user has not moved (§3.4) (as proposed) |
+| F-Q10 | During an import with several destination folders, which tab is active? | The first folder's tab when it opens; the newest at the end only if the user has not moved (§3.4) (as proposed). **Changed by the owner, 2026-11-21 (hand check of T260):** each later folder's tab becomes active when it opens, if the user has not moved since the import last made a tab active; no rule at the end |
 | F-Q11 | The IPTC template: written to each file right after its copy (and the file shown after that), or after the whole copy as today? | Right after each file's copy; to be measured on a card of the owner's (one ExifTool, file by file, as today) (as proposed) |
 | F-Q12 | Order of the steps (§6) and where they go in the step plan | F1 first, on its own (it is useful at once); F2–F4 after it, in that order; after ADR 0024 O1, which is next by the plan (as proposed) |
 
