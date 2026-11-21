@@ -506,6 +506,10 @@ by the owner the same day; step E4 in `plans/adr-0018-0025-steps.md`, before ADR
     summary's and the histogram's read in flight stays in flight at "Reload Folder", and its
     answer is kept for the same image, so it may show values read just before the reload. To be
     watched in F1's hand check (T242); a task only if it is seen.
+  - *The anchor uses the previous frame's layout* (independent review of T242): `anchor_step` is
+    given last frame's column count and the current thumbnail size, so a window resize, a
+    collapsed left column or a thumbnail size change in the very frame the anchor is set puts
+    the top image some rows off. Rare; a task only if it is seen.
   - *A reload leaves the compare's held image and "Only the marked" as they were* (cold read of
     T242): `open_loupe_core` opens only the main view core, so a held image changed by another
     program is not read again, and after a reload the image that follows a removed current one

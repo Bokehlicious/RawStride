@@ -5,7 +5,8 @@
   becomes its own task, with its own approval and commit.
 - **The owner, 2026-11-21** (when F1 was written as T240–T242): §2 point 2, the marks also stay
   under an active filter while the ratings are read (ADR 0014 amendment 3); §2 point 4, the
-  placement also when tabs are listed again after a move or an undo.
+  placement also when tabs are listed again after a move or an undo; §2 point 5 (review of
+  T242), an undo always scrolls to the image brought back.
 - Date: 2026-11-18
 - Related:
   - the owner's wish at the hand check of ADR 0018 B4 (2026-11-18): a tab shows new files, for
@@ -78,7 +79,11 @@ These hold for all three, so a tab behaves the same whatever changed it. They ar
    the tab the files come back to after an undo), which until then applied the whole order again
    (step F1, T242). A delete only removes files and never applied the order again.
 5. **New:** the contact sheet does not jump. The image at the top of the visible part stays where
-   it is on the screen, even when files are added above it.
+   it is on the screen, even when files are added above it. **The owner, 2026-11-21** (review of
+   T242): after an undo the contact sheet always scrolls to the image brought back, since it
+   becomes the current image; a reload, a placement and the relist after a move keep the top
+   image. A preview left with nothing to show after a change of the tab's files goes back to the
+   contact sheet, as after a filter (ADR 0014 §2.3).
 6. **New: RawStride's own temporary files are never listed.** `is_listed` leaves out names with
    `.pwtmp-` and `.pwbak-` (and `.pwpart`, already left out by its extension). This also closes a
    small gap today, when `relist_tabs` runs while a rating is being written.

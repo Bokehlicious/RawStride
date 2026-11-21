@@ -14,6 +14,8 @@
   F1 row); the owner's hand check of F1 follows it.
 - **Crate:** `pw-loupe`. **Files:**
   - `crates/pw-loupe/src/main.rs` (points 1–8 and their tests)
+  - `crates/pw-loupe/src/metadata.rs` and `crates/pw-loupe/src/inspector.rs` (point 1's
+    `cfg_attr` only; added at the review)
   - `docs/test-inventory.md` (counts and the description of `pw-loupe`'s tests)
   - this task's own file (status and log)
 - **What:**
@@ -134,6 +136,39 @@
      - the anchor: after a relist that adds files above the top image, the offset is
        `anchored_offset`'s; with the top image gone, the next file decides; with nothing shown,
        no offset.
+  9. **Fixes after the review** (the reviewer's and an independent review, the owner 2026-11-21,
+     ADR 0026 §2 point 5). The work done so far stays; only these change:
+     1. **A preview with nothing to show goes back to the contact sheet** (ADR 0014 §2.3). Today
+        `load_tab` opens the view core with the visible list (`open_loupe_core`) and never calls
+        `loupe_follows_visible`, the only call that leaves an empty preview. Two cases leave the
+        preview open on nothing: (a) a reload in the preview of a folder whose every image was
+        removed (the tab has no files); (b) a reload in the preview under an active rating or
+        label filter where no file matches once the ratings are read: `visible` goes from empty
+        (while they are read) to empty, `refilter` answers "unchanged", and
+        `refilter_when_ratings_change` therefore never calls `loupe_follows_visible`. Fix: after
+        a reload's reads begin (`reload_active_tab`, after `load_tab(true)`), a tab in the
+        preview with nothing visible and the ratings ready goes back to the contact sheet
+        through `loupe_follows_visible`; and in `refilter_when_ratings_change`, when the ratings
+        became ready, `loupe_follows_visible` is called also when `refilter_active` answers
+        "unchanged" but nothing is visible in the preview (it already does nothing outside the
+        preview). Its answer (the position to scroll to) is used as the other callers use it.
+        If the decision can be a free function (for example "the preview must leave: mode,
+        visible empty, ratings ready"), test it in `main.rs`'s test module.
+     2. **An undo always scrolls to the image brought back** (the owner 2026-11-21). Today
+        `undo_done` calls `active_reordered` (which scrolls to the current image) when every
+        restored image is still in the metadata cache, and `load_active_tab` (no scroll; the
+        anchor from `relist_folder_tabs` keeps the top image) otherwise. Fix: after an undo whose
+        active tab was one of the folders, the pending anchor is dropped (`grid_anchor = None`)
+        and the contact sheet scrolls to the current image (`scroll_request` from
+        `Tab::position`) in both branches; in the preview nothing changes. The relist after a
+        move (`relist_tabs`, also called at the end of `undo_done` for the folders the files
+        left) and a reload keep the top image as now; when `relist_tabs` at the end of
+        `undo_done` takes a new anchor for the active tab, the undo's scroll still wins (a
+        scroll of that frame drops the anchor, point 5). Doc comments say so.
+     Not changed (accepted at the review): the anchor uses the previous frame's column count and
+     the current thumbnail size (`backlog.md`, "Leftovers of writing ADR 0026 F1"); the note
+     matched by tab index and folder; the paths copied by `grid_note` each frame; an anchor that
+     waits while a read failed under an active filter.
 - **The owner's hand check of F1** (after the review), in the contact sheet and the preview:
   1. Copy two images into an open folder with Explorer; F5: they appear in their place by name,
      the current image and the marks stay, the contact sheet does not jump.
@@ -156,7 +191,11 @@
      F5 elsewhere reloads; the File menu shows "Reload Folder F5", greyed for an empty tab.
   8. Move images to `_picked` (P) with the `_picked` tab open and sorted by Modified: the images
      already in that tab do not move; Ctrl+Z: the images come back to the first tab in their
-     place, and nothing else moves in either tab.
+     place, nothing else moves in either tab, and the contact sheet scrolls to the image brought
+     back (point 9.2).
+  9. In the preview, remove every image of the folder in Explorer (JPEGs), F5: back to the contact
+     sheet, which shows the empty folder's text. A rating filter that no image matches, in the
+     preview, F5: back to the contact sheet once the ratings are read (point 9.1).
   (That no `.pwtmp-`/`.pwbak-` file is listed during a write depends on timing and is shown by
   T240's test, not by hand.)
 - **Not in this task:** following the disk by itself (ADR 0026 F2, F3) and the import (F4); other
@@ -179,3 +218,5 @@
 | 2026-11-21 | Blocked | Chain review of T240–T242 (fresh agent, the three task files): T241's placeholder arms (one makes the item greyed) replaced here; `Placed` tells a placement from a new order; the note made every frame so a placement inside `sort_tabs` has an anchor; `pending` passed to `relist`; the order of the reload's steps and which text wins; `reload_enabled` true for a folder with no images; the compare's held image, "Only the marked", `list_folder`'s skipped entries and a read of only the new files to `backlog.md` |
 | 2026-11-21 | Blocked | T240 Done; waits for T241. Review of T240: point 6 notes `relist`'s early return without `current` for the undo |
 | 2026-11-21 | Open | T241 Done. Review of T241: point 2 names the order of F5 in the key loop (after Delete, before Ctrl+E, as `command_of_key` models); a read in flight at a reload is still taken (`backlog.md`), to be watched in the hand check |
+| 2026-11-21 | Ready for review | Done by the task agent. `main.rs`: `Command::ReloadFolder` runs `reload_active_tab`, enabled by `reload_enabled`; F5 in the key loop after Delete and before Ctrl+E (`command_of_key` unchanged), skipped when the left column took it (`library_took_f5`, reset each frame); `load_active_tab` shares `load_tab(reload)`; `sort_tabs` returns `SortChange` (`Placed` → anchor, `active_changed(false)` without the scroll); `relist_folder_tabs` (`relist_tabs` and `undo_done`, both `forget_sort` removed); `GridNote`/`grid_anchor` with the offset set by `vertical_scroll_offset`. Free functions: `reload_enabled`, `reload_tab`, `relist_tab`, `capture_requests`, `grid_note`, `anchor_step`, `tab_pending`. Also `metadata.rs` and `inspector.rs` (point 1's `cfg_attr` removed; not in the Files list). Point 3.3: `list_folder` of the tab's folder already gives the tab's form, so nothing is converted, as before. The note keeps no height: it picks the paths from it. 9 tests added; test-inventory 2097 passed, 76 ignored. check.ps1 all OK, no clippy warnings |
+| 2026-11-21 | Open | Sent back after review. The reviewer's review (points 1–8 as written; `metadata.rs`, `inspector.rs` added to Files) and an independent review (fresh agent, read only): finding 1, an empty preview after a reload (every image removed, or a filter matching nothing once the ratings are read): point 9.1; finding 2, an undo scrolled or kept the top image depending on the metadata cache: the owner decided 2026-11-21 that an undo always scrolls to the image brought back (ADR 0026 §2 point 5): point 9.2. Accepted, not changed: the anchor's previous-frame layout (`backlog.md`), the note matched by tab index and folder, `grid_note`'s per-frame copies, an anchor waiting after a failed read; the thumbnails remade at each placement were already in `backlog.md` (hand check item 2). Hand check items 8 and 9 for the fixes. The reviewer's clean run of check.ps1 before: all OK, 2097 passed, 76 ignored, no clippy warnings |
