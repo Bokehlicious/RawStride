@@ -11,6 +11,7 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 |---|---|
 | `T<nnn>-<name>.md` (this folder) | Open tasks, one file each |
 | [`backlog.md`](backlog.md) | Not for agents yet: needs a decision, a dependency or an ADR first |
+| [`known-limits.md`](known-limits.md) | Accepted limits and leftovers, by area; a task only if seen in use |
 | [`plans/`](plans/) | Step lists for ADRs that have none of their own (ADR 0007 milestone 8, ADR 0017, ADR 0018–0027 in one order, in `adr-0018-0025-steps.md`), and making the repository public (`public-release.md`, accepted 2026-11-19) |
 | [`done/`](done/README.md) | Finished tasks T1–T203, and the log they were kept in until 2026-11-13 |
 
@@ -129,17 +130,22 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
   only tests, tools, CI or documents get none. At a release the section is renamed
   (`docs/distribution.md`, "Making a release").
 - **Leftovers:** before a task is set to Done, everything its log calls left, not covered, noted
-  or not changed gets a home: a new task, a row in `plans/`, an item in `backlog.md`, or a line in
-  `docs/test-inventory.md`. The Done row of the log says where. A done task's log is not read again
-  when the next task is written, so nothing may live only there.
+  or not changed gets a home: a new task; a step's row or notes in `plans/` (something a planned
+  step must take up); an item in `known-limits.md` (accepted, a task only if it is seen in use),
+  under its area; an item in `backlog.md` (an idea or work that needs the owner's decision, an ADR
+  or a dependency); or a line in `docs/test-inventory.md`. The Done row of the log says where. A
+  done task's log is not read again when the next task is written, so nothing may live only there.
 - **Hand check:** a step's row in `plans/` says "done" only after the owner's hand check
   (ADR 0017 §7); until then it says "awaiting the owner's hand check". A fix found in the hand check
   is a log row in the task it belongs to.
 - **The backlog is sorted after each hand check (owner, 2026-11-17):** when the owner has
-  hand-checked a step, the reviewer goes through `backlog.md`'s items that came from reviews and
-  leftovers ("Leftovers from the review of …", "Known limits …") with the owner: each becomes a
-  task, stays with a reason and a date, or is struck. The result is one commit, `Backlog: sorted
-  after <step>`.
+  hand-checked a step, the reviewer goes through the items that step's tasks added to
+  `known-limits.md` and `backlog.md`, and anything the hand check found, with the owner: each
+  becomes a task, stays where it is, or is removed. A removed or finished item is deleted, not
+  struck and left (git history and `done/` keep it), and `known-limits.md` is not read through
+  again at every hand check, only its area when a task there is written. The result is one
+  commit, `Backlog: sorted after <step>`. (Changed by the owner on 2026-11-21, when the backlog
+  was split into `backlog.md` and `known-limits.md`.)
 - **Parallel tasks:** two tasks may run at the same time only if they change different functions
   (as T142 and T143 did); `.\tools\check.ps1` is run by one at a time, and each task is reviewed
   and committed on its own, one commit per task.

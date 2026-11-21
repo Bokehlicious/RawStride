@@ -127,7 +127,8 @@
     move has; the image opens again. Seen and approved in the owner's hand check of B4.
   - The other known limits of B4 (a worker that never answers, what is shown during a delete,
     path corner cases, the metadata window during a delete, a network folder not yet checked by
-    hand) are kept in `docs/tasks/backlog.md` with their reasons. A tab that follows changes on
+    hand) are kept in `docs/tasks/known-limits.md` (in `backlog.md` until 2026-11-21) with their
+    reasons. A tab that follows changes on
     disk (for example files restored from the Recycle Bin, §2.8) is a wish of the owner's at the
     hand check of B4: a new ADR (0026) with questions to the owner, written after B5.
 - **Known limits accepted at the backlog sort after B5** (owner, 2026-11-18; from T190's
@@ -140,7 +141,7 @@
     Delete too).
   - *A tab closed during the batch:* its remaining images are skipped without a word (nothing
     wrong is deleted; the count is lower).
-  - The B4 limits kept in `docs/tasks/backlog.md` stay there (not seen at B4 or B5); a network
+  - The B4 limits kept in `docs/tasks/known-limits.md` stay there (not seen at B4 or B5); a network
     folder is still not checked by hand. ADR 0026 takes up a tab that follows changes on disk
     together with two wishes of ADR 0017 §7.2 (owner, 2026-11-18).
 
