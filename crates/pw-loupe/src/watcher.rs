@@ -1,6 +1,7 @@
 //! The folder watcher (ADR 0026 step F2, §3.2): one thread that follows the open folders' files
-//! coming and going, through Windows' change notifications (`ReadDirectoryChangesW` on one I/O
-//! completion port), and says "this folder changed" after a quiet moment.
+//! coming and going, and a listed file's size or write time changing (ADR 0026 §3.2, the addition
+//! to F-Q7), through Windows' change notifications (`ReadDirectoryChangesW` on one I/O completion
+//! port), and says "this folder changed" after a quiet moment.
 //!
 //! Everything the thread decides is plain Rust, tested on its own (ADR 0026 §7): the quiet moment
 //! ([`QuietMoment`]), which notifications count ([`counts_as_change`]), which folders to open and
@@ -44,7 +45,9 @@ pub enum WatchEvent {
     /// The shell lists the folder once more (ADR 0026 F3: the gap between a tab's listing and its
     /// watch).
     Started(PathBuf),
-    /// Files came or went in the folder (named as it was first given), after a quiet moment.
+    /// Files came or went in the folder (named as it was first given), or a listed file's size or
+    /// write time changed (ADR 0026 §3.2, the addition to F-Q7: a file still being copied), after
+    /// a quiet moment.
     Changed(PathBuf),
     /// The folder's watch could not start (the folder does not exist, cannot be opened, or its
     /// volume does not support notifications) or stopped (the drive is gone, the folder was
@@ -489,8 +492,8 @@ mod sys {
     };
     use windows_sys::Win32::Storage::FileSystem::{
         FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OVERLAPPED, FILE_LIST_DIRECTORY,
-        FILE_NOTIFY_CHANGE_FILE_NAME, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
-        ReadDirectoryChangesW,
+        FILE_NOTIFY_CHANGE_FILE_NAME, FILE_NOTIFY_CHANGE_LAST_WRITE, FILE_NOTIFY_CHANGE_SIZE,
+        FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, ReadDirectoryChangesW,
     };
     use windows_sys::Win32::System::IO::{
         CancelIoEx, CreateIoCompletionPort, GetQueuedCompletionStatus, OVERLAPPED,
@@ -728,8 +731,10 @@ mod sys {
             })
         }
 
-        /// Starts the next read: only the folder itself, only file names coming and going (ADR
-        /// 0026 §2 point 7, F-Q7).
+        /// Starts the next read: only the folder itself; file names coming and going (ADR 0026 §2
+        /// point 7, F-Q7), and a file's size or write time changing (ADR 0026 §3.2, the addition
+        /// to F-Q7: the end of a copy gives no name change). `counts_as_change` still counts only
+        /// records naming a listed file.
         fn start_read(&mut self) -> Result<(), u32> {
             // SAFETY: no read is pending (`pending` is false here), so Windows does not use the
             // `OVERLAPPED`; it is a live allocation owned by this watch.
@@ -744,7 +749,9 @@ mod sys {
                     self.buffer.cast::<c_void>(),
                     BUFFER_BYTES,
                     0,
-                    FILE_NOTIFY_CHANGE_FILE_NAME,
+                    FILE_NOTIFY_CHANGE_FILE_NAME
+                        | FILE_NOTIFY_CHANGE_SIZE
+                        | FILE_NOTIFY_CHANGE_LAST_WRITE,
                     std::ptr::null_mut(),
                     self.overlapped,
                     None,
@@ -1714,6 +1721,35 @@ mod tests {
         assert_eq!(
             events_for(&mut watcher, Duration::from_millis(1500)),
             vec![]
+        );
+    }
+
+    /// T254 (ADR 0026 §3.2, the addition to F-Q7): a write to a listed file counts, a write to a
+    /// sidecar does not.
+    #[cfg(windows)]
+    #[test]
+    fn writing_to_an_image_gives_changed_and_to_a_sidecar_none() {
+        use std::io::Write;
+        let append = |path: &Path| {
+            let mut file = std::fs::OpenOptions::new().append(true).open(path).unwrap();
+            file.write_all(b"more bytes").unwrap();
+        };
+        let temp = TempDir::new();
+        let folder = temp.folder("written");
+        touch(&folder.join("x.xmp"));
+        let mut watcher = FolderWatcher::start(Box::new(|| {}));
+        watcher.set_folders(vec![folder.clone()]);
+        wait_until_watching(&mut watcher, &folder);
+        append(&folder.join("x.xmp"));
+        assert_eq!(
+            events_for(&mut watcher, Duration::from_millis(1500)),
+            vec![]
+        );
+        // `wait_until_watching`'s probes are listed images.
+        append(&folder.join("probe-0.jpg"));
+        assert_eq!(
+            events_until(&mut watcher, Duration::from_secs(5), |_| true),
+            vec![changed(&folder)]
         );
     }
 

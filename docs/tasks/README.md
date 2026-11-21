@@ -87,7 +87,6 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status |
 |---|---|---|
-| [T254](T254-thumbnails-of-written-files-made-anew.md) | ADR 0026 F3e: the thumbnail of a file still being written is made anew (pw-loupe) | Open |
 
 ## Writing a task (owner and reviewer)
 

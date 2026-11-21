@@ -1,8 +1,11 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::ops::Range;
+use std::path::{Path, PathBuf};
 
 use egui::ColorImage;
 use pw_thumbcache::{Rgb8, ThumbError, ThumbnailEvent};
+
+use crate::histogram::FileStamp;
 
 /// The bookkeeping state of one thumbnail cell.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -182,6 +185,102 @@ impl ThumbGrid {
     }
 }
 
+/// What is kept of one file another program added.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct Added {
+    /// The stamp taken just before the file's thumbnail was first asked for since it was added or
+    /// last made anew: `None` when not asked for yet, `Some(None)` when asked for while the file
+    /// could not be read.
+    stamp: Option<Option<FileStamp>>,
+    /// "Check when answered": a listing found the file changed while its thumbnail was being
+    /// made, so it is checked again when that thumbnail comes back.
+    check: bool,
+}
+
+/// The files of the open tabs that another program added while RawStride had them listed (ADR
+/// 0026 §3.2, the addition to F-Q7, T254), so a thumbnail made from a file still being written
+/// (a slow copy to a USB stick) is made anew once the file has changed. Each file keeps the stamp
+/// (size and write time) taken just before its thumbnail was first asked for since it was added
+/// or last made anew, or no stamp yet, and a mark "check when answered". Plain data: the caller
+/// reads the disk and passes the stamps in.
+#[derive(Clone, Debug, Default)]
+pub struct AddedFiles {
+    files: HashMap<PathBuf, Added>,
+}
+
+impl AddedFiles {
+    /// Keeps each path not yet kept, without a stamp and without the mark; a path already kept is
+    /// left as it is.
+    pub fn add(&mut self, paths: &[PathBuf]) {
+        for path in paths {
+            self.files.entry(path.clone()).or_default();
+        }
+    }
+
+    /// Whether `path` is kept.
+    pub fn contains(&self, path: &Path) -> bool {
+        self.files.contains_key(path)
+    }
+
+    /// Records `stamp` (also `None`: asked for while unreadable) for a kept path without a stamp.
+    /// A path that has a stamp keeps it: the drawing code asks again every frame while a cell is
+    /// requested, and the stamp must be the one taken before the first of those requests. A path
+    /// not kept: nothing.
+    pub fn note_requested(&mut self, path: &Path, stamp: Option<FileStamp>) {
+        if let Some(added) = self.files.get_mut(path) {
+            added.stamp.get_or_insert(stamp);
+        }
+    }
+
+    /// Whether `path` is kept, a stamp was recorded for it, and `now` differs from that stamp.
+    pub fn is_stale(&self, path: &Path, now: Option<FileStamp>) -> bool {
+        self.files
+            .get(path)
+            .and_then(|added| added.stamp)
+            .is_some_and(|stamp| stamp != now)
+    }
+
+    /// Sets the mark "check when answered" of a kept path.
+    pub fn mark_check(&mut self, path: &Path) {
+        if let Some(added) = self.files.get_mut(path) {
+            added.check = true;
+        }
+    }
+
+    /// Returns whether the mark of `path` was set, and clears it.
+    pub fn take_check(&mut self, path: &Path) -> bool {
+        self.files
+            .get_mut(path)
+            .is_some_and(|added| std::mem::take(&mut added.check))
+    }
+
+    /// The path's thumbnail is made anew: it stays kept, its stamp and mark are dropped (the next
+    /// request records a new stamp).
+    pub fn made_anew(&mut self, path: &Path) {
+        if let Some(added) = self.files.get_mut(path) {
+            *added = Added::default();
+        }
+    }
+
+    /// Drops every kept path's stamp and mark (after a new thumbnail generation, every cell is
+    /// asked for again).
+    pub fn forget_requests(&mut self) {
+        for added in self.files.values_mut() {
+            *added = Added::default();
+        }
+    }
+
+    /// Drops the paths `keep` refuses.
+    pub fn retain(&mut self, keep: impl Fn(&Path) -> bool) {
+        self.files.retain(|path, _| keep(path));
+    }
+
+    /// The kept paths, in any order.
+    pub fn paths(&self) -> Vec<PathBuf> {
+        self.files.keys().cloned().collect()
+    }
+}
+
 /// Converts a cell size in points to physical pixels, rounded up to a 128-pixel step.
 pub fn request_cell(size_points: u32, pixels_per_point: f32) -> u32 {
     let scale = if pixels_per_point.is_finite() && pixels_per_point > 0.0 {
@@ -209,7 +308,6 @@ pub fn color_image(image: &Rgb8) -> Option<ColorImage> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
 
     fn event(generation: u64, index: usize, result: Result<Rgb8, ThumbError>) -> ThumbnailEvent {
         ThumbnailEvent {
@@ -395,6 +493,124 @@ mod tests {
         assert!(!grid.forget(usize::MAX));
         assert_eq!(grid.state(2), CellState::Ready);
         assert_eq!(grid.state(1), CellState::Requested);
+    }
+
+    fn stamp(len: u64, seconds: u64) -> FileStamp {
+        FileStamp {
+            len,
+            modified: Some(std::time::UNIX_EPOCH + std::time::Duration::from_secs(seconds)),
+        }
+    }
+
+    /// T254: `add` keeps a path without a stamp and leaves one already kept with its stamp.
+    #[test]
+    fn added_files_add_keeps_a_new_path_without_a_stamp_and_leaves_a_kept_one() {
+        let mut added = AddedFiles::default();
+        let a = PathBuf::from("a.jpg");
+        assert!(!added.contains(&a));
+        added.add(std::slice::from_ref(&a));
+        assert!(added.contains(&a));
+        assert!(!added.is_stale(&a, Some(stamp(1, 1))));
+        added.note_requested(&a, Some(stamp(1, 1)));
+        added.add(&[a.clone(), PathBuf::from("b.jpg")]);
+        assert!(added.is_stale(&a, Some(stamp(2, 1))));
+        assert!(added.contains(Path::new("b.jpg")));
+        let mut paths = added.paths();
+        paths.sort();
+        assert_eq!(paths, vec![a, PathBuf::from("b.jpg")]);
+    }
+
+    /// T254: the first stamp is recorded and kept on later calls; a path not kept gets none.
+    #[test]
+    fn added_files_note_requested_keeps_the_first_stamp_and_ignores_paths_not_kept() {
+        let mut added = AddedFiles::default();
+        let a = PathBuf::from("a.jpg");
+        added.add(std::slice::from_ref(&a));
+        added.note_requested(&a, Some(stamp(1, 1)));
+        added.note_requested(&a, Some(stamp(2, 2)));
+        assert!(!added.is_stale(&a, Some(stamp(1, 1))));
+        assert!(added.is_stale(&a, Some(stamp(2, 2))));
+        let other = Path::new("other.jpg");
+        added.note_requested(other, Some(stamp(1, 1)));
+        assert!(!added.contains(other));
+        assert!(!added.is_stale(other, Some(stamp(2, 2))));
+    }
+
+    /// T254: stale only against a recorded stamp that differs, in size, write time or being read.
+    #[test]
+    fn added_files_is_stale_compares_with_the_recorded_stamp() {
+        let mut added = AddedFiles::default();
+        let a = PathBuf::from("a.jpg");
+        let b = PathBuf::from("b.jpg");
+        added.add(&[a.clone(), b.clone()]);
+        assert!(!added.is_stale(&a, None));
+        assert!(!added.is_stale(&a, Some(stamp(1, 1))));
+        added.note_requested(&a, Some(stamp(1, 1)));
+        assert!(!added.is_stale(&a, Some(stamp(1, 1))));
+        assert!(added.is_stale(&a, Some(stamp(2, 1))));
+        assert!(added.is_stale(&a, Some(stamp(1, 2))));
+        assert!(added.is_stale(&a, None));
+        added.note_requested(&b, None);
+        assert!(!added.is_stale(&b, None));
+        assert!(added.is_stale(&b, Some(stamp(1, 1))));
+    }
+
+    /// T254: the mark is set and cleared, only for a kept path.
+    #[test]
+    fn added_files_mark_check_and_take_check_only_for_a_kept_path() {
+        let mut added = AddedFiles::default();
+        let a = PathBuf::from("a.jpg");
+        added.add(std::slice::from_ref(&a));
+        assert!(!added.take_check(&a));
+        added.mark_check(&a);
+        assert!(added.take_check(&a));
+        assert!(!added.take_check(&a));
+        let other = Path::new("other.jpg");
+        added.mark_check(other);
+        assert!(!added.take_check(other));
+        assert!(!added.contains(other));
+    }
+
+    /// T254: `made_anew` and `forget_requests` drop the stamp and the mark, so the next request
+    /// records anew.
+    #[test]
+    fn added_files_made_anew_and_forget_requests_drop_the_stamp_and_the_mark() {
+        let mut added = AddedFiles::default();
+        let a = PathBuf::from("a.jpg");
+        let b = PathBuf::from("b.jpg");
+        added.add(&[a.clone(), b.clone()]);
+        for path in [&a, &b] {
+            added.note_requested(path, Some(stamp(1, 1)));
+            added.mark_check(path);
+        }
+        added.made_anew(&a);
+        assert!(added.contains(&a));
+        assert!(!added.is_stale(&a, Some(stamp(2, 2))));
+        assert!(!added.take_check(&a));
+        added.note_requested(&a, Some(stamp(2, 2)));
+        assert!(!added.is_stale(&a, Some(stamp(2, 2))));
+        assert!(added.is_stale(&a, Some(stamp(1, 1))));
+        added.mark_check(&a);
+
+        added.forget_requests();
+        for path in [&a, &b] {
+            assert!(added.contains(path));
+            assert!(!added.is_stale(path, Some(stamp(3, 3))));
+            assert!(!added.take_check(path));
+            added.note_requested(path, Some(stamp(3, 3)));
+            assert!(added.is_stale(path, Some(stamp(1, 1))));
+        }
+    }
+
+    /// T254: `retain` drops the paths it refuses.
+    #[test]
+    fn added_files_retain_drops_refused_paths() {
+        let mut added = AddedFiles::default();
+        added.add(&[PathBuf::from("a.jpg"), PathBuf::from("b.jpg")]);
+        added.retain(|path| path == Path::new("b.jpg"));
+        assert!(!added.contains(Path::new("a.jpg")));
+        assert!(added.contains(Path::new("b.jpg")));
+        assert_eq!(added.paths(), vec![PathBuf::from("b.jpg")]);
     }
 
     #[test]

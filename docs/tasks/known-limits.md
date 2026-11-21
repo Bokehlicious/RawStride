@@ -275,11 +275,27 @@ with ADR 0026 F3, in `plans/adr-0018-0025-steps.md`.)
 
 ## Tabs following the disk (ADR 0026 F3)
 
-(T249–T251, 2026-11-21, the chain review and the cold reads.)
+(T249–T251 and T254, 2026-11-21, the chain reviews and the cold reads.)
 
 - *A file listed while it is copied is read once* (F-Q7: only files that come and go are
   followed): a file listed before its copy has ended, or a RAW whose `.xmp` sidecar comes after
-  it, may show without its rating or capture time until F5.
+  it, may show without its rating or capture time until F5. Only its thumbnail is made anew
+  when the file changes (ADR 0026 §3.2, the addition to F-Q7, T254); the large image in the
+  preview and the order of a Modified or Size sort also wait for F5.
+- *A folder opened while a copy into it goes on* (T254): the file being copied was not added by
+  a listing, so it is not kept, and its thumbnail made from the part written so far stays until
+  F5. The same for a tab made active for the first time during the copy.
+- *A thumbnail read before the last write may stay* (T254): the stamp is taken on the UI thread
+  just before the request; a request the worker merges into one already in flight (a zoom while
+  a read is under way) may keep a thumbnail read before the last write, and its result may be
+  cached after `forget_path`. Rare; F5.
+- *Write times in 2 s steps* (T254): a USB stick's file system (FAT, exFAT) keeps write times in
+  2 s steps, so a change inside one step can be missed; File Explorer setting the file's time at
+  the end of the copy normally differs.
+- *RawStride's own JPEG writes give a listing* (T254): every rating or turn RawStride writes into
+  a JPEG (the safe write sets its write time) gives a `Changed` and a folder listing on the UI
+  thread, and a kept file gets its thumbnail made once more. While a kept file's cell waits for
+  its thumbnail, its size and write time are read on the UI thread each frame.
 - *A rating key on a new image whose rating is not read yet* starts from no rating, as during a
   folder read.
 - *The listing runs on the UI thread,* as Reload Folder and opening a folder: a network folder

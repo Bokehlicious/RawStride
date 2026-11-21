@@ -22,6 +22,7 @@ use metadata::{
 use pw_imagecheck::RawImageCheck;
 use pw_loupe::SavedLibrary;
 use pw_loupe::clipping::{ClipChoice, OverlayCache, overlay_uv};
+use pw_loupe::file_stamp;
 use pw_loupe::focus::FocusCache;
 use pw_loupe::library::{
     FolderList, Library, TreeRowKind, folder_key, read_drives, suppress_no_disk_dialogs,
@@ -29,9 +30,9 @@ use pw_loupe::library::{
 use pw_loupe::library_text::{LibraryText, library_text};
 use pw_loupe::{AUTHORS, AboutText, COMMIT, REPOSITORY, VERSION, about_text};
 use pw_loupe::{
-    Action, CardRefresh, CellState, CopiedFields, DEFAULT_THUMBNAIL_SIZE, DialogKey, DialogRequest,
-    EditorField, EditorForm, EditorKeyAction, EditorSection, EditorText, Field, Filter,
-    GridKeyAction, ImportDialog, ImportDialogState, ImportEvent, ImportForm, ImportWorker,
+    Action, AddedFiles, CardRefresh, CellState, CopiedFields, DEFAULT_THUMBNAIL_SIZE, DialogKey,
+    DialogRequest, EditorField, EditorForm, EditorKeyAction, EditorSection, EditorText, Field,
+    Filter, GridKeyAction, ImportDialog, ImportDialogState, ImportEvent, ImportForm, ImportWorker,
     IptcField, LABEL_CHOICES, LabelFilter, Language, LoupeMove, MAX_THUMBNAIL_SIZE,
     MIN_THUMBNAIL_SIZE, MonitorProfile, Navigation, Options, PanelText, READING_RATINGS_TEXT,
     RatingButton, RatingRefused, STAR_CONDITIONS, STAR_FILTERS, Settings, StarFilter, SubmitError,
@@ -755,6 +756,11 @@ struct Loupe {
     tasks: Tasks,
     thumb_worker: ThumbWorker,
     thumb_grid: ThumbGrid,
+    /// The open tabs' files another program added while they were listed, so a thumbnail made
+    /// from a file still being written is made anew once it changed (ADR 0026 §3.2, the addition
+    /// to F-Q7, T254). One for all tabs: a file stays kept across a tab switch or F5 while its
+    /// copy goes on.
+    added_files: AddedFiles,
     thumb_generation: u64,
     thumb_textures: HashMap<usize, egui::TextureHandle>,
     thumb_size: u32,
@@ -1704,6 +1710,13 @@ impl Loupe {
     /// (`active_changed(false)`); the sort is followed; and the status line says what changed
     /// (`disk_change_text`), unless a step above failed, whose error it shows instead. The Exif
     /// summary and the histograms are kept, and no file already shown is read again (F-Q7).
+    ///
+    /// The files another program added are kept in `added_files` (ADR 0026 §3.2, the addition to
+    /// F-Q7, T254), and at each listing only the open tabs' files stay kept. At a listing where
+    /// nothing came or went, each kept file of the active tab whose size or write time differs
+    /// from the stamp taken before its thumbnail was asked for has its thumbnail made anew
+    /// (`made_anew_if_stale`); one still being made is marked and checked when it comes back
+    /// (`poll_thumbnails`). So a file still being written is read again at most once per listing.
     fn follow_disk_changes(&mut self, ctx: &egui::Context) {
         let ready = self.ratings_ready();
         let relisted = match self.list_active_from_disk(ready) {
@@ -1715,6 +1728,8 @@ impl Loupe {
             Some(Ok(relisted)) => relisted,
         };
         if !relisted.changed() {
+            self.retain_added_files();
+            self.made_anew_if_stale(ctx);
             return;
         }
         self.anchor_from_note();
@@ -1751,8 +1766,60 @@ impl Loupe {
         }
         self.refilter_active(None);
         self.active_changed(false);
+        // A new thumbnail generation: every cell is asked for again (T254).
+        self.added_files.forget_requests();
+        self.added_files.add(&relisted.new);
+        self.retain_added_files();
         self.follow_sort(ctx);
         self.message = error.or_else(|| disk_change_text(&relisted));
+    }
+
+    /// Keeps in `added_files` only the paths some open tab's `files` holds, so files gone or in
+    /// closed tabs are dropped (T254).
+    fn retain_added_files(&mut self) {
+        let tabs = self.tabs.tabs();
+        self.added_files.retain(|path| {
+            tabs.iter()
+                .any(|tab| tab.files.iter().any(|file| file == path))
+        });
+    }
+
+    /// At a listing where nothing came or went (T254): each kept file of the active tab whose
+    /// stamp differs from the one taken before its thumbnail was asked for has its thumbnail made
+    /// anew (the cached ones forgotten, the cell set to missing, its texture kept until the new
+    /// one replaces it, as after a turn); a cell still requested (its read may have begun before
+    /// the last write) is marked, and checked when it comes back (`poll_thumbnails`). Kept files
+    /// of other tabs are not read.
+    fn made_anew_if_stale(&mut self, ctx: &egui::Context) {
+        let Some(tab) = self.tabs.active() else {
+            return;
+        };
+        let kept: Vec<(usize, PathBuf)> = self
+            .added_files
+            .paths()
+            .into_iter()
+            .filter_map(|path| {
+                let index = tab.files.iter().position(|file| *file == path)?;
+                Some((index, path))
+            })
+            .collect();
+        let mut any = false;
+        for (index, path) in kept {
+            if !self.added_files.is_stale(&path, file_stamp(&path)) {
+                continue;
+            }
+            if self.thumb_grid.state(index) == CellState::Requested {
+                self.added_files.mark_check(&path);
+            } else {
+                self.thumb_worker.forget_path(&path);
+                self.thumb_grid.forget(index);
+                self.added_files.made_anew(&path);
+                any = true;
+            }
+        }
+        if any {
+            ctx.request_repaint();
+        }
     }
 
     /// The new files of the active tab are shown when their ratings are read (ADR 0026 §2
@@ -1799,6 +1866,7 @@ impl Loupe {
             None => None,
             Some(Err(text)) => Some(text),
             Some(Ok(relisted)) => {
+                self.added_files.add(&relisted.new);
                 if self.tabs.active().is_some_and(|tab| tab.files.is_empty()) {
                     None
                 } else {
@@ -2390,6 +2458,8 @@ impl Loupe {
         self.sort_tabs(false);
         self.thumb_generation = self.thumb_generation.wrapping_add(1);
         self.thumb_worker.set_generation(self.thumb_generation);
+        // Every cell is asked for again, so the added files' stamps are taken anew (T254).
+        self.added_files.forget_requests();
         let Some(tab) = self.tabs.active().cloned() else {
             self.thumb_grid = ThumbGrid::new(self.thumb_generation, 0);
             self.thumb_textures.clear();
@@ -2621,6 +2691,11 @@ impl Loupe {
         }
     }
 
+    /// Takes the worker's finished thumbnails. A thumbnail of a file another program added, marked
+    /// at a listing that found the file changed while it was being made, is checked once more
+    /// when it comes back, and made anew when the file still differs from the stamp taken before
+    /// it was asked for (ADR 0026 §3.2, the addition to F-Q7, T254); so it is asked for again even
+    /// when no later listing comes, but not after every answer. Other paths are not read.
     fn poll_thumbnails(&mut self, ctx: &egui::Context) {
         let cwd = std::env::current_dir().ok();
         loop {
@@ -2653,6 +2728,17 @@ impl Loupe {
                         Err(_) => {
                             self.thumb_textures.remove(&event.index);
                         }
+                    }
+                    if self.added_files.contains(&event.path)
+                        && self.added_files.take_check(&event.path)
+                        && self
+                            .added_files
+                            .is_stale(&event.path, file_stamp(&event.path))
+                    {
+                        self.thumb_worker.forget_path(&event.path);
+                        self.thumb_grid.forget(event.index);
+                        self.added_files.made_anew(&event.path);
+                        ctx.request_repaint();
                     }
                 }
                 Err(TryRecvError::Empty) => break,
@@ -2780,6 +2866,9 @@ impl Loupe {
                 let cell = request_cell(self.thumb_size, ctx.pixels_per_point());
                 for index in self.thumb_grid.to_request_indexes(visible_files, cell) {
                     if let Some(path) = tab.files.get(index) {
+                        if self.added_files.contains(path) {
+                            self.added_files.note_requested(path, file_stamp(path));
+                        }
                         let orientation = read_orientation(&self.metadata, cwd.as_deref(), path);
                         self.thumb_worker.request(ThumbnailRequest {
                             generation: self.thumb_generation,
@@ -4711,6 +4800,9 @@ impl Loupe {
                 let cell = request_cell(self.thumb_size, ctx.pixels_per_point());
                 for index in self.thumb_grid.to_request_indexes(keep_files, cell) {
                     if let Some((_, path, _)) = cell_of(index) {
+                        if self.added_files.contains(path) {
+                            self.added_files.note_requested(path, file_stamp(path));
+                        }
                         let orientation = read_orientation(&self.metadata, cwd.as_deref(), path);
                         self.thumb_worker.request(ThumbnailRequest {
                             generation: self.thumb_generation,
@@ -10148,6 +10240,7 @@ fn run(options: Options) -> Result<(), String> {
                 import_result_opened: false,
                 thumb_worker,
                 thumb_grid: ThumbGrid::new(0, 0),
+                added_files: AddedFiles::default(),
                 thumb_generation: 0,
                 thumb_textures: HashMap::new(),
                 thumb_size: DEFAULT_THUMBNAIL_SIZE,

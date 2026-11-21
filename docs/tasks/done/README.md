@@ -260,3 +260,4 @@ was when the task was done, so "this file", "below" and "the Log" in T1–T115 m
 | [T251](T251-tabs-follow-the-disk.md) | ADR 0026 F3c: the tabs follow their folders on disk (pw-loupe) |
 | [T252](T252-reload-folder-starts-the-watch-anew.md) | ADR 0026 F3d: Reload Folder starts the folder's watch anew (pw-loupe) |
 | [T253](T253-thumbnail-worker-forgets-a-file.md) | ADR 0026 F3e: the thumbnail worker forgets one file's thumbnails (pw-thumbcache) |
+| [T254](T254-thumbnails-of-written-files-made-anew.md) | ADR 0026 F3e: the thumbnail of a file still being written is made anew (pw-loupe) |
