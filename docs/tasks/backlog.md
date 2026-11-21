@@ -150,6 +150,12 @@ and reviewer:
   `public-release.md` §3). The earlier `chrono` warning (RUSTSEC-2026-054356, 2026-11-17) is gone:
   `chrono` is no longer in `Cargo.lock` (`cargo tree --offline --target all -i chrono` finds no
   package, 2026-11-19).
+- **ADR 0009 S6: runs 11–13 not measured** (deferred by the owner 2026-11-11; tracked nowhere
+  else until the status review of 2026-11-21): V5 (run 11), V8 over a long session with L1–L4
+  (run 12), and the hand checks of run 13 (V6, G1, G3, G4, GR6, GR7), as listed in
+  `docs/analyses/2026-11-11-adr0009-s6-acceptance.md`. `D:\PhotoWorkflowData\pm-study\tools\s6a.ps1
+  -Run 11,12,13` runs them, on a release build. The owner decides whether to run them or close
+  S6 without them (the Tauri app they were to be compared with is retired, T207).
 - **A filter bar of toggle buttons instead of drop-down lists** (owner idea, 2026-11-10, after T61;
   ADR 0014 §15): a row "0★ 1★ 2★ 3★ 4★ 5★" and a row of colour swatches, each clicked on and off,
   with a check box per row that turns the row on or off. Needs an amendment of ADR 0014 first: the
@@ -175,6 +181,8 @@ and reviewer:
     codes only); the source and its SHA-256 are named, but no licence or attribution. Check IPTC's
     terms (believed to be CC BY 4.0, not checked) and add the attribution they ask for, in the
     files or `THIRD-PARTY-NOTICES.txt`; at the latest before the first binary release.
+    **Struck 2026-11-21: done by T227** (ADR 0031 RL3; the "IPTC and PLUS" section of
+    `THIRD-PARTY-NOTICES.txt`, shipped in 0.1.0).
 - **Known limits of `relocate::companions`** (`/code-review` of T169, 2026-11-17; accepted, the
   moves are Windows only; **kept** at the sort of 2026-11-17 until a Linux or macOS port):
   - *Case-sensitive file systems:* a file whose name differs from the image's only in case is
