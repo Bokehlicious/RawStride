@@ -24,6 +24,11 @@
 - **Wishes added by the owner (2026-11-15):** the import's IPTC template is filled in a window of
   its own and saved as an XMP template file (U13, §7); and the imported images appear in their tab
   while the import runs, not only when it is done (§7.2).
+- **Addition U15 accepted by the owner (2026-11-21):** four buttons on a thumbnail in the
+  contact sheet, shown while the pointer is over it (§2.8, §6.2 U15-Q1–U15-Q9, step U15). The
+  owner decided which buttons and where (U15-Q1, U15-Q2), that Preview on a marked image opens
+  every marked image (U15-Q4) and that the metadata window steps between the marked (U15-Q9, which
+  amends §2.3.1); every other proposal approved the same day.
 - Date: 2026-11-12; amended 2026-11-13
 - Related:
   - [GUI_REQUIREMENTS.md](../GUI_REQUIREMENTS.md) (GR1–GR13), in particular GR6 (keyboard first),
@@ -204,6 +209,9 @@ a full photo-desk caption window.
   - the window stays **modal**: the contact sheet and preview take no keys while it is open;
   - previous/next follow the **shown images** in the contact sheet's order (after the filter), and
     skip image types without metadata support;
+    **amended by the owner (2026-11-21, addition U15, U15-Q9):** with the window's image marked
+    and at least two images marked, they step only between the marked images, however the
+    window was opened;
   - **Escape** asks the same Spara / Släng / Avbryt question, replacing D16's "Släng ändringarna?";
   - if the **write fails**, the window stays on the image with the edits kept and the reason shown;
     with **write notices** it stays and shows them, and moves on only on the next key press.
@@ -333,6 +341,62 @@ ADR 0027 (2026-11-18).
 The ideas of the study are free to use, but the form is our own (clean-room.md). Order, texts and
 placement of titles, columns and buttons are decided in each step from RawStride's own commands,
 without the study notes as a template.
+
+### 2.8 Buttons on a thumbnail (addition U15, accepted by the owner 2026-11-21)
+
+- **Why (owner, 2026-11-21):** a user working with the mouse in the contact sheet should reach the
+  commands used most on one image (turning it, its metadata, the preview) without the menu bar or
+  the right-click menu. Every command keeps its key (GR6); the buttons are an aid for the mouse
+  only. Nothing else is added to the cell, so it stays uncluttered.
+- **Which and where (owner, 2026-11-21; U15-Q1, U15-Q2):** four buttons, one in each corner of the
+  cell's image square (not the name row under it):
+
+  ```
+  ┌──────────────┐
+  │ ↺          ↻ │   upper left: Rotate Left (Ctrl+←)   upper right: Rotate Right (Ctrl+→)
+  │  thumbnail   │
+  │ i          ⌕ │   lower left: Metadata… (M)          lower right: Preview (G)
+  ├──────────────┤
+  │★★★ IMG_1.ARW │   name row unchanged
+  └──────────────┘
+  ```
+
+  No Reject button and no other button. The corners are those of the square image area, not of
+  the fitted thumbnail, so a button stays in the same place whatever the image's shape or
+  orientation, and a landscape or portrait image is covered less.
+- **When shown** (U15-Q3): only while the pointer is over the cell, and only in the contact sheet;
+  not in the filmstrip, the preview or the compare. A cell under the pointer while a menu, the
+  metadata window or another window is open shows none.
+- **What they act on** (U15-Q4): as the right-click menu (ADR 0019 §2.9, E-Q16): a click on a
+  button makes the image current and keeps the marking; the command then acts on its usual
+  targets. Rotate Left and Rotate Right act on the marked images when the image is marked,
+  otherwise on that image alone (ADR 0024 O-Q2).
+  - **Preview (owner, 2026-11-21; U15-Q4):** on a marked image, with at least two images marked,
+    the preview opens on that image with "only the marked" on (U3-Q3, as `S`), so every marked
+    image is in the preview and the steps go only between them. On an image that is not marked,
+    the preview opens on that image with "only the marked" off. The choice stays afterwards, as it
+    does when `S` sets it.
+  - **Metadata… (owner, 2026-11-21; U15-Q9):** opens the metadata window on the image. With the
+    image marked and at least two images marked, previous/next and "Spara och nästa" step only
+    between the marked images (in the contact sheet's order, after the filter); otherwise they
+    step between all the shown images, as before. This holds however the window is opened
+    (`M`, the menus, the button), not only from the button (§2.3.1).
+
+  A click on a button
+  is not a click on the cell: it does not change the marking, and two quick clicks on a rotation
+  button turn the image twice and do not open the preview.
+- **A command that cannot run** (U15-Q5): its button is not drawn (for example Metadata… on a file
+  without metadata support, or the rotations while a move runs), by the same rules that grey the
+  menu items, so the cell never shows a button that does nothing.
+- **How they look** (U15-Q6): a small round button of 20 points with a symbol drawn by RawStride
+  (lines and shapes with the painter, as the stars are drawn), on a dark, partly transparent
+  disc, so no icon set and no new dependency is needed (§2.5). Symbol and disc meet 3:1 contrast
+  against the disc and the image (WCAG non-text contrast) in both themes. The button under the
+  pointer is lighter, and its hover text is the command's menu text and key, for example
+  "Rotate Left (Ctrl+←)". The size is the same at every thumbnail size; at the smallest size
+  (96 points) the four buttons still fit with space between them.
+- **On or off** (U15-Q7): a check item "Buttons on Thumbnails" in the View menu, on by default and
+  remembered in `settings.txt` (`thumbnail_buttons = on|off`). Off draws no buttons.
 
 ## 3. What stays
 
@@ -551,6 +615,20 @@ the decisions do not live only in the tasks.
 | U11c-Q8 | IPTC's English names (GR14); "More", "Copy from Person Shown" in the glossary |
 | U11c-Q9 | (owner, 2026-11-17, the first backlog sort, from the review of T143) When OK, Save and Next, Save or "Apply to {n} Marked" writes nothing because of a field error (for example an Artwork or Object's Date Created under the collapsed "More"), the window's status line says so too, naming the fields and structure lists with an error; the texts under the fields stay (T181) |
 
+### 6.2 Questions of addition U15 (answered by the owner, 2026-11-21: Q1, Q2 and parts of Q4 and Q9 the owner's own, every other proposal approved)
+
+| # | Question | Answer |
+|---|---|---|
+| U15-Q1 | Which buttons? | **Owner:** Rotate Left, Rotate Right, Metadata…, Preview; no Reject |
+| U15-Q2 | Where in the cell? | **Owner:** one in each corner of the image square: Rotate Left upper left, Rotate Right upper right, Metadata… (an "i") lower left, Preview (a magnifying glass) lower right |
+| U15-Q3 | When are they shown? | Only while the pointer is over the cell, only in the contact sheet; not in the filmstrip, the preview or the compare, and not while a menu or window is open |
+| U15-Q4 | Which images does a button act on? | As the right-click menu (E-Q16): the image becomes current, the marking is kept; the rotations act on the marked when the image is marked, otherwise on it alone; a button click never changes the marking or opens the preview by a double-click. **Preview (owner):** on a marked image (two or more marked) every marked image opens in the preview ("only the marked" on); on an image not marked, that image with "only the marked" off |
+| U15-Q5 | A command that cannot run? | Its button is not drawn, by the rules that grey its menu item |
+| U15-Q6 | Look? | 20-point round buttons with symbols drawn by RawStride on a dark, partly transparent disc; no icon set or new dependency; 3:1 contrast; lighter under the pointer; hover text = menu text and key; same size at every thumbnail size |
+| U15-Q7 | Can they be turned off? | "Buttons on Thumbnails" in the View menu, on by default, `thumbnail_buttons = on\|off` in `settings.txt` |
+| U15-Q8 | Steps? | One step U15 with the owner's hand check after it. **Changed by the owner (2026-11-21, after a look at the code):** two tasks in `pw-loupe`, a chain: U15a the metadata window's steps between the marked (U15-Q9), U15b the four buttons; the hand check after U15b |
+| U15-Q9 | Stepping in the metadata window | **Owner:** with the window's image marked and two or more marked, previous/next and "Spara och nästa" step only between the marked; this holds however the window is opened (`M`, the menus, the button); otherwise all shown images as today (amends §2.3.1) |
+
 ## 7. Steps
 
 Each step ends with tests (GR11), the owner's hand check and, where an image is shown, `latency.ps1`.
@@ -572,6 +650,7 @@ Each step ends with tests (GR11), the owner's hand check and, where an image is 
 | **U12** | Metadata window: previous/next and "spara och nästa" (the first part in stage A), recent values, copy/paste of all fields, "använd på alla markerade" with the batch rules (§2.3.1) |
 | **U13** | Metadata window: templates from the window (with the modes of ADR 0007 §10) and variables in text fields. **Also the import's template (owner, 2026-11-15):** instead of the template fields in the import dialog, a template window of its own (the metadata window's form with each field's mode), opened from the import dialog; the template is saved as an XMP template file (ADR 0007 §10) and chosen by name in the import. Where the modes are stored (a RawStride namespace or beside the XMP file) is decided first (ADR 0007 §10, §17.1). **Also (owner, 2026-11-19):** the right-click menu on images gets a submenu to apply a template, after Metadata… (ADR 0019 §2.9, E-Q17) |
 | **U14** | Sort order in the command bar and the contact sheet |
+| **U15** | *Addition, accepted by the owner 2026-11-21; two tasks (U15-Q8): U15a the steps between the marked, U15b the buttons:* the four buttons on a thumbnail (§2.8): where they are and which one is under the pointer worked out in plain Rust and tested without a window; drawing, clicks, hover texts and the View setting in the binary; texts in the glossary; the metadata window's steps between the marked (U15-Q9) in plain Rust with tests. Hand check: each button on a marked and an image not marked, Preview on a marked image shows only the marked, the metadata window steps only between the marked, a double click on a rotation button, a file without metadata support, the setting off and after a restart, the smallest and largest thumbnail size |
 
 ### 7.1 Order: a usable version first (owner, 2026-11-12)
 
