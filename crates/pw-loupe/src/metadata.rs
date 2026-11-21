@@ -388,7 +388,6 @@ impl MetadataCache {
     /// As [`Self::begin_load`], for "Reload Folder" (ADR 0026 §3.1): the inspector's metadata is
     /// always emptied, also when the same folder is loaded again, so a file changed by another
     /// program is read anew. A read in flight stays in flight, as `InspectorRead::clear` says.
-    #[cfg_attr(not(test), allow(dead_code))]
     pub fn begin_reload(
         &mut self,
         files: Vec<PathBuf>,

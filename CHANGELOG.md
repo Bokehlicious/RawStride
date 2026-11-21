@@ -17,6 +17,9 @@ Downloads are on the [Releases page](https://github.com/Bokehlicious/RawStride/r
   the current one, 90° at a time. The turn is shown at once and saved: for a RAW file in its
   XMP sidecar, for a DNG, JPEG or TIFF in the file's own orientation tag. The pixels are never
   changed.
+- File ▸ Reload Folder (F5) lists the folder again and reads every image's rating and metadata
+  anew; new files are placed in the chosen order, and the current image, the marks, the filter
+  and the place in the contact sheet are kept.
 
 ### Changed
 

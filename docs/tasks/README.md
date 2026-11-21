@@ -86,7 +86,6 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status |
 |---|---|---|
-| [T242](T242-reload-folder-in-the-shell.md) | ADR 0026 F1c: "Reload Folder" (F5) in the shell; tabs listed again after a move or an undo with the placement (pw-loupe) | Open |
 
 ## Writing a task (owner and reviewer)
 

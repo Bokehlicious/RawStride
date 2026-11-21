@@ -348,7 +348,6 @@ impl ExifInspector {
     /// "Reload Folder" (ADR 0026 §3.1, T241): empties the summary as `folder_loaded` does for
     /// another folder, so a file changed by another program is read anew. A read in flight stays
     /// in flight, as there.
-    #[cfg_attr(not(test), allow(dead_code))]
     pub fn folder_reloaded(&mut self) {
         self.empty();
     }

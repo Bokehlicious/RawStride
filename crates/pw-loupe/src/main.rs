@@ -11,7 +11,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::mpsc::TryRecvError;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use eframe::egui;
 use inspector::{ExifInspector, ExifReader, ExifShown, exif_state_text};
@@ -106,6 +106,10 @@ use pw_loupe::{
     open_cancel_text, open_in_another_text, open_in_key_action, open_in_text,
     open_many_question_text, opened_text, plan_open, program_missing_text, show_in_explorer,
     start_failed_text, start_program, too_long_text, waiting_for_writes_text,
+};
+use pw_loupe::{
+    Relisted, anchored_offset, folder_gone_text, reload_key_action,
+    removed_by_another_program_text, top_position,
 };
 use pw_metadata::edit::{Edit, EditOptions};
 use pw_metadata::iim::Fallback;
@@ -773,6 +777,15 @@ struct Loupe {
     /// A position the contact sheet scrolls to on the next frame: a menu command or the command
     /// bar changed the current image or the filter (T109).
     scroll_request: Option<usize>,
+    /// What the contact sheet showed in its last frame (ADR 0026 §2 point 5, T242), made by
+    /// `draw_grid` every frame it runs.
+    grid_note: Option<GridNote>,
+    /// The note taken at a relist or a placement of the active tab, waiting for the next
+    /// `draw_grid` of that tab to keep its top image where it was (T242).
+    grid_anchor: Option<GridNote>,
+    /// Whether the left column took F5 for the library's "Refresh" this frame (U4-Q1, T242), so
+    /// the key loop does not reload the tab too; reset at the start of every frame.
+    library_took_f5: bool,
     /// The metadata window (M, D16, T107); at most one. While it is open it holds the program.
     metadata_window: Option<MetadataWindow>,
     /// Whether the metadata window was drawn in the last frame: when it was not, the window has
@@ -1233,7 +1246,9 @@ impl Loupe {
 
     /// Recomputes the active tab's visible list when `ratings_ready` has changed since the last
     /// time (ADR 0014 Q7): the list fills when the ratings are read, and empties under an active
-    /// filter when the read fails.
+    /// filter when the read fails. A preview left with nothing to show once the ratings are ready
+    /// goes back to the contact sheet also when the list did not change (empty while they were
+    /// read, empty after: a filter no file matches after a reload, ADR 0014 §2.3, T242 point 9.1).
     fn refilter_when_ratings_change(&mut self) {
         if !self.ratings_read
             && self.metadata.ratings_ready()
@@ -1244,7 +1259,7 @@ impl Loupe {
         let ready = self.ratings_ready();
         if ready != self.last_ratings_ready {
             self.last_ratings_ready = ready;
-            if self.refilter_active(None) {
+            if self.refilter_active(None) || preview_must_leave(self.tabs.active(), ready) {
                 self.loupe_follows_visible();
             }
         }
@@ -1283,34 +1298,27 @@ impl Loupe {
         if self.settings.shell.sort.key == SortKey::Capture {
             self.request_capture_times();
         }
-        if self.sort_tabs(self.ratings_ready()) {
-            self.active_reordered();
+        match self.sort_tabs(self.ratings_ready()) {
+            SortChange::Unchanged => {}
+            SortChange::Reordered => self.active_reordered(),
+            // The contact sheet keeps its top image (ADR 0026 §2 point 5, T242).
+            SortChange::Placed => {
+                self.anchor_from_note();
+                self.active_changed(false);
+            }
         }
         if !self.capture_in_flight.is_empty() {
             ctx.request_repaint_after(CAPTURE_POLL_INTERVAL);
         }
     }
 
-    /// Asks the reader for every capture time of the active tab not read or asked for yet, the
-    /// shown images first (`read_order`). When the reader has stopped, a file counts as having no
-    /// date, so the sort still completes.
+    /// Asks the reader for the capture times `capture_requests` names for the active tab. When
+    /// the reader has stopped, a file counts as having no date, so the sort still completes.
     fn request_capture_times(&mut self) {
         let Some(tab) = self.tabs.active() else {
             return;
         };
-        if tab.sorted == Some(self.settings.shell.sort) {
-            return;
-        }
-        let in_flight = &self.capture_in_flight;
-        let wanted: Vec<PathBuf> =
-            read_order(tab.files.len(), &tab.visible, tab.current, |index| {
-                tab.files
-                    .get(index)
-                    .is_none_or(|path| tab.capture.is_read(path) || in_flight.contains(path))
-            })
-            .into_iter()
-            .filter_map(|index| tab.files.get(index).cloned())
-            .collect();
+        let wanted = capture_requests(tab, self.settings.shell.sort, &self.capture_in_flight);
         for path in wanted {
             if self.capture_reader.request(path.clone()) {
                 self.capture_in_flight.insert(path);
@@ -1321,16 +1329,20 @@ impl Loupe {
     }
 
     /// `Tabs::follow_sort` with the chosen order, the shown ratings and the files' modification
-    /// times. Returns whether a file of the active tab changed place.
-    fn sort_tabs(&mut self, ratings_ready: bool) -> bool {
+    /// times. Returns what happened to the active tab: a file changed place by a new order, or by
+    /// a placement of waiting files (T242), or neither.
+    fn sort_tabs(&mut self, ratings_ready: bool) -> SortChange {
         let order = self.settings.shell.sort;
         let cwd = std::env::current_dir().ok();
         let rating_of = tab_rating(&self.metadata, cwd.as_deref());
-        matches!(
-            self.tabs
-                .follow_sort(order, ratings_ready, &rating_of, &modified_time),
-            SortFollow::Reordered { moved: true }
-        )
+        match self
+            .tabs
+            .follow_sort(order, ratings_ready, &rating_of, &modified_time)
+        {
+            SortFollow::Reordered { moved: true } => SortChange::Reordered,
+            SortFollow::Placed { moved: true } => SortChange::Placed,
+            _ => SortChange::Unchanged,
+        }
     }
 
     /// After the active tab was reordered (U14-Q6): its thumbnails are asked for again in the new
@@ -1338,6 +1350,13 @@ impl Loupe {
     /// switch), a shown preview gets the new list through `set_files` (its decoded images are
     /// kept, as after a filter), and the contact sheet scrolls to the current image.
     fn active_reordered(&mut self) {
+        self.active_changed(true);
+    }
+
+    /// `active_reordered`; with `scroll` false (a placement of waiting files, ADR 0026 §2
+    /// point 5, T242) the contact sheet does not scroll to the current image but keeps its top
+    /// image. A preview that returned to the contact sheet still scrolls there.
+    fn active_changed(&mut self, scroll: bool) {
         let count = self.tabs.active().map_or(0, |tab| tab.files.len());
         self.thumb_generation = self.thumb_generation.wrapping_add(1);
         self.thumb_worker.set_generation(self.thumb_generation);
@@ -1347,8 +1366,28 @@ impl Loupe {
             if let Some(position) = self.loupe_follows_visible() {
                 self.scroll_request = Some(position);
             }
-        } else {
+        } else if scroll {
             self.scroll_request = self.tabs.active().and_then(Tab::position);
+        }
+    }
+
+    /// Turns the last frame's note of the contact sheet into the pending anchor (ADR 0026 §2
+    /// point 5, T242): before a relist or a placement of the active tab, when the note is that
+    /// tab's, the tab shows the contact sheet and the note names images. Otherwise a pending
+    /// anchor stays as it is (a note made while nothing was shown has no image to keep).
+    fn anchor_from_note(&mut self) {
+        let Some(tab) = self.tabs.active() else {
+            return;
+        };
+        if tab.mode != ViewMode::Grid {
+            return;
+        }
+        if let Some(note) = &self.grid_note
+            && note.tab == self.tabs.active_index()
+            && note.folder == tab.folder
+            && !note.from_top.is_empty()
+        {
+            self.grid_anchor = Some(note.clone());
         }
     }
 
@@ -2048,6 +2087,15 @@ impl Loupe {
     }
 
     fn load_active_tab(&mut self) {
+        self.load_tab(false);
+    }
+
+    /// The body of `load_active_tab` and of "Reload Folder"'s reads (ADR 0026 §3.1, T242): with
+    /// `reload` the metadata is read with `begin_reload` (the inspector's metadata always
+    /// emptied) and the Exif summary and the histograms are left to the caller, which has called
+    /// their `folder_reloaded`. Returns false when the reads could not begin (the error is in the
+    /// status line).
+    fn load_tab(&mut self, reload: bool) -> bool {
         // A folder opened (or opened again) or another tab: the order is applied now when its keys
         // need nothing read (U14-Q5), so the thumbnails below are asked for in it. The ratings
         // of this tab are not read yet; a rating or capture-time order follows in `follow_sort`.
@@ -2057,7 +2105,7 @@ impl Loupe {
         let Some(tab) = self.tabs.active().cloned() else {
             self.thumb_grid = ThumbGrid::new(self.thumb_generation, 0);
             self.thumb_textures.clear();
-            return;
+            return true;
         };
         self.thumb_grid = ThumbGrid::new(self.thumb_generation, tab.files.len());
         self.thumb_textures.clear();
@@ -2066,9 +2114,13 @@ impl Loupe {
         } else {
             self.thumb_worker.pause();
         }
-        let loaded = self
-            .metadata
-            .begin_load(tab.files, &mut self.metadata_worker);
+        let loaded = if reload {
+            self.metadata
+                .begin_reload(tab.files, &mut self.metadata_worker)
+        } else {
+            self.metadata
+                .begin_load(tab.files, &mut self.metadata_worker)
+        };
         // A tab load refilters without keeping the current image, as a folder load in `app.js`;
         // under an active filter nothing is shown until the ratings are read (Q7).
         self.ratings_read =
@@ -2079,13 +2131,15 @@ impl Loupe {
             Ok(files) => files,
             Err(error) => {
                 self.message = Some(error);
-                return;
+                return false;
             }
         };
         // Another folder empties the inspector's Exif summary, as its metadata (T110), and its
-        // kept histograms (T144).
-        self.exif.folder_loaded(&files);
-        self.histograms.folder_loaded(&files);
+        // kept histograms (T144); a reload has emptied them already.
+        if !reload {
+            self.exif.folder_loaded(&files);
+            self.histograms.folder_loaded(&files);
+        }
         if tab.mode == ViewMode::Loupe {
             self.open_loupe_core(&files);
         } else {
@@ -2100,6 +2154,69 @@ impl Loupe {
         } else {
             None
         };
+        true
+    }
+
+    /// "Reload Folder" (F5, ADR 0026 §2, §3.1, F1, T242) on the active tab: its folder is listed
+    /// again and `reload_tab` applies the listing (the current image, the marks, the filter and
+    /// the sort kept, new files placed; the contact sheet keeps its top image through the
+    /// anchor). A folder that is gone or unreadable leaves the tab as it was and says so (F-Q4).
+    /// Otherwise the Exif summary and the histograms are emptied, every image's rating and
+    /// metadata is read again and the thumbnails are made anew (`load_tab` with `reload`; in the
+    /// preview the view core opens the current image again from the file), the status line says
+    /// a removed current image (F-Q5) unless the reads could not begin, a preview left with
+    /// nothing to show goes back to the contact sheet (`preview_must_leave`, point 9.1), and the
+    /// sort is followed. A tab without a folder: nothing.
+    fn reload_active_tab(&mut self, ctx: &egui::Context) {
+        let Some(folder) = self.tabs.active().and_then(|tab| tab.folder.clone()) else {
+            return;
+        };
+        let listing = list_folder(&folder).map(|(files, _)| files);
+        if listing.is_ok() {
+            self.anchor_from_note();
+        }
+        let order = self.settings.shell.sort;
+        let ready = self.ratings_ready();
+        let cwd = std::env::current_dir().ok();
+        let reloaded = {
+            let rating_of = tab_rating(&self.metadata, cwd.as_deref());
+            let pending = tab_pending(&self.metadata, cwd.as_deref());
+            let Some(tab) = self.tabs.active_mut() else {
+                return;
+            };
+            reload_tab(
+                tab,
+                listing,
+                &pending,
+                order,
+                ready,
+                &rating_of,
+                &modified_time,
+            )
+        };
+        let removed = match reloaded {
+            Ok(removed) => removed,
+            Err(text) => {
+                self.message = Some(text);
+                return;
+            }
+        };
+        self.exif.folder_reloaded();
+        self.histograms.folder_reloaded();
+        if self.load_tab(true)
+            && let Some(text) = removed
+        {
+            self.message = Some(text);
+        }
+        // A preview left with nothing to show (every image removed) goes back to the contact
+        // sheet (ADR 0014 §2.3, T242 point 9.1); under a filter it waits for the ratings
+        // (`refilter_when_ratings_change`).
+        if preview_must_leave(self.tabs.active(), self.ratings_ready())
+            && let Some(position) = self.loupe_follows_visible()
+        {
+            self.scroll_request = Some(position);
+        }
+        self.follow_sort(ctx);
     }
 
     /// Switches the active tab between the contact sheet and the preview (the loupe) without
@@ -2267,167 +2384,205 @@ impl Loupe {
         let context_menu = !self.dialog_open();
         // The tab's files may be relative; the metadata cache keys by resolved path.
         let cwd = std::env::current_dir().ok();
+        // A pending anchor of this tab sets the offset once (ADR 0026 §2 point 5, T242); a scroll
+        // of this frame wins over it, and another tab drops it.
+        let tab_index = self.tabs.active_index();
+        let mut anchored = None;
+        if let Some(anchor) = &self.grid_anchor {
+            let step =
+                if anchor.tab != tab_index || anchor.folder != tab.folder || scroll_to.is_some() {
+                    AnchorStep::Drop
+                } else {
+                    anchor_step(
+                        anchor,
+                        &tab,
+                        self.ratings_ready(),
+                        stride,
+                        self.grid_columns,
+                    )
+                };
+            match step {
+                AnchorStep::Set(offset) => {
+                    anchored = Some(offset);
+                    self.grid_anchor = None;
+                }
+                AnchorStep::Wait => {}
+                AnchorStep::Drop => self.grid_anchor = None,
+            }
+        }
 
         // The grid uses the image area only, so it never runs under the status line.
         ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
             let ctrl_held = ui.input(|input| input.modifiers.ctrl || input.modifiers.command);
-            egui::ScrollArea::vertical()
+            let mut area = egui::ScrollArea::vertical()
                 .id_salt("contact-sheet")
                 .scroll_source(egui::containers::scroll_area::ScrollSource {
                     mouse_wheel: !ctrl_held,
                     ..Default::default()
                 })
-                .auto_shrink([false, false])
-                .show_viewport(ui, |ui, viewport| {
-                    let width = ui.available_width().max(0.0);
-                    let column_count = columns(
-                        width.min(u32::MAX as f32) as u32,
-                        self.thumb_size,
-                        GRID_SPACING as u32,
+                .auto_shrink([false, false]);
+            if let Some(offset) = anchored {
+                area = area.vertical_scroll_offset(offset);
+            }
+            area.show_viewport(ui, |ui, viewport| {
+                let width = ui.available_width().max(0.0);
+                let column_count = columns(
+                    width.min(u32::MAX as f32) as u32,
+                    self.thumb_size,
+                    GRID_SPACING as u32,
+                );
+                self.grid_columns = column_count;
+                self.grid_note = Some(grid_note(
+                    &tab,
+                    tab_index,
+                    GridView {
+                        offset: viewport.min.y,
+                        height: viewport.height(),
+                        columns: column_count,
+                        cell_size: self.thumb_size,
+                    },
+                ));
+                // Layout, rows and scrolling use positions in `tab.visible`; cells, thumbnails
+                // and textures use file indexes (ADR 0014 §4.2).
+                let shown = tab.visible.len();
+                let rows = shown.div_ceil(column_count);
+                let content_height = rows as f32 * stride;
+                ui.set_min_size(egui::vec2(width, content_height));
+
+                let positions = visible_range(
+                    shown,
+                    column_count,
+                    self.thumb_size,
+                    GRID_SPACING as u32,
+                    viewport.min.y,
+                    viewport.height(),
+                    1,
+                );
+                let visible_files = tab.visible.get(positions.clone()).unwrap_or(&[]);
+                self.thumb_worker
+                    .set_visible(index_span(visible_files.iter().copied()));
+                let cell = request_cell(self.thumb_size, ctx.pixels_per_point());
+                for index in self.thumb_grid.to_request_indexes(visible_files, cell) {
+                    if let Some(path) = tab.files.get(index) {
+                        let orientation = read_orientation(&self.metadata, cwd.as_deref(), path);
+                        self.thumb_worker.request(ThumbnailRequest {
+                            generation: self.thumb_generation,
+                            index,
+                            path: path.clone(),
+                            cell,
+                            orientation,
+                        });
+                        self.thumb_grid.mark_requested(index, cell);
+                    }
+                }
+                self.poll_thumbnails(&ctx);
+
+                let keep = visible_range(
+                    shown,
+                    column_count,
+                    self.thumb_size,
+                    GRID_SPACING as u32,
+                    viewport.min.y,
+                    viewport.height(),
+                    3,
+                );
+                let keep_files = tab.visible.get(keep).unwrap_or(&[]);
+                for index in self.thumb_grid.forget_not_in(keep_files) {
+                    self.thumb_textures.remove(&index);
+                }
+
+                let origin = ui.min_rect().min;
+                let painter = ui.painter().clone();
+                let mut clicked = None;
+                let mut right_clicked = None;
+                for (position, &index) in positions.clone().zip(visible_files) {
+                    let Some(path) = tab.files.get(index) else {
+                        continue;
+                    };
+                    let row = position / column_count;
+                    let column = position % column_count;
+                    let cell_rect = egui::Rect::from_min_size(
+                        egui::pos2(
+                            origin.x + column as f32 * stride,
+                            origin.y + row as f32 * stride,
+                        ),
+                        egui::vec2(cell_size, cell_size),
                     );
-                    self.grid_columns = column_count;
-                    // Layout, rows and scrolling use positions in `tab.visible`; cells, thumbnails
-                    // and textures use file indexes (ADR 0014 §4.2).
-                    let shown = tab.visible.len();
-                    let rows = shown.div_ceil(column_count);
-                    let content_height = rows as f32 * stride;
-                    ui.set_min_size(egui::vec2(width, content_height));
-
-                    let positions = visible_range(
-                        shown,
-                        column_count,
-                        self.thumb_size,
-                        GRID_SPACING as u32,
-                        viewport.min.y,
-                        viewport.height(),
-                        1,
+                    let image_size = (cell_size - GRID_LABEL_HEIGHT).max(1.0);
+                    let image_rect = egui::Rect::from_center_size(
+                        egui::pos2(cell_rect.center().x, cell_rect.min.y + image_size * 0.5),
+                        egui::vec2(image_size, image_size),
                     );
-                    let visible_files = tab.visible.get(positions.clone()).unwrap_or(&[]);
-                    self.thumb_worker
-                        .set_visible(index_span(visible_files.iter().copied()));
-                    let cell = request_cell(self.thumb_size, ctx.pixels_per_point());
-                    for index in self.thumb_grid.to_request_indexes(visible_files, cell) {
-                        if let Some(path) = tab.files.get(index) {
-                            let orientation =
-                                read_orientation(&self.metadata, cwd.as_deref(), path);
-                            self.thumb_worker.request(ThumbnailRequest {
-                                generation: self.thumb_generation,
-                                index,
-                                path: path.clone(),
-                                cell,
-                                orientation,
-                            });
-                            self.thumb_grid.mark_requested(index, cell);
-                        }
-                    }
-                    self.poll_thumbnails(&ctx);
-
-                    let keep = visible_range(
-                        shown,
-                        column_count,
-                        self.thumb_size,
-                        GRID_SPACING as u32,
-                        viewport.min.y,
-                        viewport.height(),
-                        3,
+                    let label_rect = egui::Rect::from_min_max(
+                        egui::pos2(cell_rect.min.x, cell_rect.max.y - GRID_LABEL_HEIGHT),
+                        cell_rect.max,
                     );
-                    let keep_files = tab.visible.get(keep).unwrap_or(&[]);
-                    for index in self.thumb_grid.forget_not_in(keep_files) {
-                        self.thumb_textures.remove(&index);
+                    paint_cell(
+                        &painter,
+                        CellRects {
+                            cell: cell_rect,
+                            image: image_rect,
+                            label: label_rect,
+                        },
+                        path,
+                        shown_rating(&self.metadata, cwd.as_deref(), path),
+                        tab.selection.is_marked(index),
+                        index == tab.current,
+                        self.thumb_grid.state(index),
+                        self.thumb_textures.get(&index),
+                    );
+                    let response = ui.interact(
+                        cell_rect,
+                        ui.make_persistent_id(("grid-cell", index)),
+                        egui::Sense::click(),
+                    );
+                    if response.double_clicked() {
+                        // The first click of the pair already made this image current.
+                        open_loupe = true;
+                    } else if response.clicked() {
+                        let (ctrl, shift) = ui.input(|input| {
+                            (
+                                input.modifiers.ctrl || input.modifiers.command,
+                                input.modifiers.shift,
+                            )
+                        });
+                        clicked = Some((index, ctrl, shift));
                     }
-
-                    let origin = ui.min_rect().min;
-                    let painter = ui.painter().clone();
-                    let mut clicked = None;
-                    let mut right_clicked = None;
-                    for (position, &index) in positions.clone().zip(visible_files) {
-                        let Some(path) = tab.files.get(index) else {
-                            continue;
-                        };
-                        let row = position / column_count;
-                        let column = position % column_count;
-                        let cell_rect = egui::Rect::from_min_size(
-                            egui::pos2(
-                                origin.x + column as f32 * stride,
-                                origin.y + row as f32 * stride,
-                            ),
-                            egui::vec2(cell_size, cell_size),
-                        );
-                        let image_size = (cell_size - GRID_LABEL_HEIGHT).max(1.0);
-                        let image_rect = egui::Rect::from_center_size(
-                            egui::pos2(cell_rect.center().x, cell_rect.min.y + image_size * 0.5),
-                            egui::vec2(image_size, image_size),
-                        );
-                        let label_rect = egui::Rect::from_min_max(
-                            egui::pos2(cell_rect.min.x, cell_rect.max.y - GRID_LABEL_HEIGHT),
-                            cell_rect.max,
-                        );
-                        paint_cell(
-                            &painter,
-                            CellRects {
-                                cell: cell_rect,
-                                image: image_rect,
-                                label: label_rect,
-                            },
-                            path,
-                            shown_rating(&self.metadata, cwd.as_deref(), path),
-                            tab.selection.is_marked(index),
-                            index == tab.current,
-                            self.thumb_grid.state(index),
-                            self.thumb_textures.get(&index),
-                        );
-                        let response = ui.interact(
-                            cell_rect,
-                            ui.make_persistent_id(("grid-cell", index)),
-                            egui::Sense::click(),
-                        );
-                        if response.double_clicked() {
-                            // The first click of the pair already made this image current.
-                            open_loupe = true;
-                        } else if response.clicked() {
-                            let (ctrl, shift) = ui.input(|input| {
-                                (
-                                    input.modifiers.ctrl || input.modifiers.command,
-                                    input.modifiers.shift,
-                                )
-                            });
-                            clicked = Some((index, ctrl, shift));
+                    // The right-click menu on a cell only, not on the empty part of the
+                    // contact sheet (ADR 0019 §2.9, E-Q15, E-Q16, T221).
+                    if context_menu {
+                        if response.secondary_clicked() {
+                            right_clicked = Some(index);
                         }
-                        // The right-click menu on a cell only, not on the empty part of the
-                        // contact sheet (ADR 0019 §2.9, E-Q15, E-Q16, T221).
-                        if context_menu {
-                            if response.secondary_clicked() {
-                                right_clicked = Some(index);
-                            }
-                            response.context_menu(|ui| self.image_context_menu(ui, commands));
-                        }
+                        response.context_menu(|ui| self.image_context_menu(ui, commands));
                     }
+                }
 
-                    if let Some(position) = scroll_to {
-                        let row = position / column_count;
-                        let column = position % column_count;
-                        let target = egui::Rect::from_min_size(
-                            egui::pos2(
-                                origin.x + column as f32 * stride,
-                                origin.y + row as f32 * stride,
-                            ),
-                            egui::vec2(cell_size, cell_size),
-                        );
-                        ui.scroll_to_rect(target, Some(egui::Align::Center));
-                    }
-                    if visible_files
-                        .iter()
-                        .any(|&index| matches!(self.thumb_grid.state(index), CellState::Requested))
-                    {
-                        ctx.request_repaint_after(Duration::from_millis(50));
-                    }
-                    if let Some(click) = clicked {
-                        clicked_cell = Some(click);
-                    }
-                    if let Some(index) = right_clicked {
-                        right_clicked_cell = Some(index);
-                    }
-                });
+                if let Some(position) = scroll_to {
+                    let row = position / column_count;
+                    let column = position % column_count;
+                    let target = egui::Rect::from_min_size(
+                        egui::pos2(
+                            origin.x + column as f32 * stride,
+                            origin.y + row as f32 * stride,
+                        ),
+                        egui::vec2(cell_size, cell_size),
+                    );
+                    ui.scroll_to_rect(target, Some(egui::Align::Center));
+                }
+                if visible_files
+                    .iter()
+                    .any(|&index| matches!(self.thumb_grid.state(index), CellState::Requested))
+                {
+                    ctx.request_repaint_after(Duration::from_millis(50));
+                }
+                if let Some(click) = clicked {
+                    clicked_cell = Some(click);
+                }
+                if let Some(index) = right_clicked {
+                    right_clicked_cell = Some(index);
+                }
+            });
         });
         if let Some((index, ctrl, shift)) = clicked_cell {
             self.click(index, ctrl, shift);
@@ -4586,13 +4741,88 @@ impl Loupe {
         (active, errors)
     }
 
+    /// Lists every tab of each of `folders` again with `Tab::relist` (ADR 0026 §2 point 4, the
+    /// owner 2026-11-21, T242): the files still there keep their order and the new ones are
+    /// placed in the sort (or wait for their key), instead of the whole order being applied
+    /// again. `current` (a resolved path: the image an undo brings back) is made current in each
+    /// tab that lists it, also when the listing brought nothing new (`relist_tab`). The active
+    /// tab's folder, found by `same_folder`, gets the real `ratings_ready`, the others `false`
+    /// (as `replace_tab_files`), and the contact sheet's note becomes the anchor first. A tab
+    /// without a folder keeps its files; a listing that fails leaves its tab as it was. Returns
+    /// whether a folder was the active tab's, and the errors.
+    fn relist_folder_tabs(
+        &mut self,
+        folders: &[PathBuf],
+        current: Option<&Path>,
+    ) -> (bool, Vec<String>) {
+        let active_folder = self.tabs.active().and_then(|tab| tab.folder.clone());
+        let is_active = |folder: &Path| {
+            active_folder
+                .as_deref()
+                .is_some_and(|open| same_folder(open, folder))
+        };
+        let active = folders.iter().any(|folder| is_active(folder));
+        if active {
+            self.anchor_from_note();
+        }
+        let ready = self.ratings_ready();
+        let order = self.settings.shell.sort;
+        let cwd = std::env::current_dir().ok();
+        let rating_of = tab_rating(&self.metadata, cwd.as_deref());
+        let pending = tab_pending(&self.metadata, cwd.as_deref());
+        let mut errors = Vec::new();
+        for folder in folders {
+            let ready = is_active(folder) && ready;
+            for tab in self.tabs.tabs_of_folder_mut(folder) {
+                let Some(tab_folder) = tab.folder.clone() else {
+                    continue;
+                };
+                let listed = match list_folder(&tab_folder) {
+                    Ok((files, _)) => files,
+                    Err(error) => {
+                        errors.push(error);
+                        continue;
+                    }
+                };
+                // The image to make current, in the tab's own form.
+                let tab_current = match current {
+                    Some(current) => match resolve_paths(&listed) {
+                        Ok(resolved) => listed
+                            .iter()
+                            .zip(&resolved)
+                            .find(|(_, path)| path.as_path() == current)
+                            .map(|(file, _)| file.clone()),
+                        Err(error) => {
+                            errors.push(error);
+                            continue;
+                        }
+                    },
+                    None => None,
+                };
+                relist_tab(
+                    tab,
+                    listed,
+                    tab_current.as_deref(),
+                    &pending,
+                    order,
+                    ready,
+                    &rating_of,
+                    &modified_time,
+                );
+            }
+        }
+        (active, errors)
+    }
+
     /// Lists every tab open on one of `folders` again (ADR 0017 U9b, T183): after a batch or an
     /// undo, the tabs of the `_rejected` and `_picked` folders the files went to or left. Listing
     /// again, not dropping single files, also covers a folder spelt differently from the moved
-    /// paths and files a failed move back left behind. No file is made current; a tab without a
-    /// folder keeps its files. Then every tab's sort is forgotten, the active tab is loaded again
-    /// when it was one of them (its new files' ratings are not in the metadata cache), and the
-    /// sort is followed. With no tab open on any of `folders`, nothing is done. Returns the errors.
+    /// paths and files a failed move back left behind. Each tab gets the listing through
+    /// `relist_folder_tabs` (ADR 0026 §2 point 4, T242): the files it shows keep their order and
+    /// the new ones are placed in the sort; no file is made current; a tab without a folder keeps
+    /// its files. Then the active tab is loaded again when it was one of them (its new files'
+    /// ratings are not in the metadata cache), and the sort is followed. With no tab open on any
+    /// of `folders`, nothing is done. Returns the errors.
     fn relist_tabs(&mut self, ctx: &egui::Context, folders: &[PathBuf]) -> Vec<String> {
         let open: Vec<PathBuf> = folders
             .iter()
@@ -4608,14 +4838,7 @@ impl Loupe {
         if open.is_empty() {
             return Vec::new();
         }
-        let (active, errors) = self.replace_tab_files(&open, |tab| {
-            let Some(folder) = tab.folder.as_deref() else {
-                return Ok((tab.files.clone(), None));
-            };
-            let (files, _) = list_folder(folder)?;
-            Ok((files, None))
-        });
-        self.tabs.forget_sort();
+        let (active, errors) = self.relist_folder_tabs(&open, None);
         if active {
             self.load_active_tab();
         }
@@ -4685,10 +4908,13 @@ impl Loupe {
     }
 
     /// An undo has all its answers (T174 point 6): the ratings before an X are restored, every
-    /// tab of the images' folders lists its folder again with the first restored image current,
-    /// the sort is applied again, and the active tab's view cores and thumbnails follow (its
-    /// ratings are read again when a restored image is no longer in the metadata cache); then the
-    /// tabs open on the folders the files left are listed again (T183). A failed image stays where
+    /// tab of the images' folders lists its folder again with the first restored image current
+    /// (`relist_folder_tabs`: the files brought back are placed in the sort and nothing else
+    /// moves, ADR 0026 §2 point 4, T242), and the active tab's view cores and thumbnails follow (its
+    /// ratings are read again when a restored image is no longer in the metadata cache), and the
+    /// contact sheet always scrolls to the image brought back (the owner 2026-11-21, T242 point
+    /// 9.2); then the tabs open on the folders the files left are listed again (T183), keeping
+    /// their top image, while the undo's scroll wins in its frame. A failed image stays where
     /// it is, and the step is not pushed back. The status line is set last.
     fn undo_done(&mut self, ctx: &egui::Context, images: Vec<UndoImage>) {
         let mut restored = Vec::new();
@@ -4710,27 +4936,10 @@ impl Loupe {
         }
         let folders = image_folders(restored.iter().map(|image| image.image.as_path()));
         let first = restored.first().map(|image| image.image.clone());
-        let (active, list_errors) = self.replace_tab_files(&folders, |tab| {
-            let Some(folder) = tab.folder.as_deref() else {
-                return Ok((tab.files.clone(), None));
-            };
-            let (files, _) = list_folder(folder)?;
-            let resolved = resolve_paths(&files)?;
-            let current = first.as_ref().and_then(|first| {
-                files
-                    .iter()
-                    .zip(&resolved)
-                    .find(|(_, path)| *path == first)
-                    .map(|(file, _)| file.clone())
-            });
-            Ok((files, current))
-        });
+        // The files brought back are placed in each tab's order and nothing else moves (ADR 0026
+        // §2 point 4, T242); a file whose key is not read yet waits at the end.
+        let (active, list_errors) = self.relist_folder_tabs(&folders, first.as_deref());
         errors.extend(list_errors);
-        if !folders.is_empty() {
-            // Every tab's sort is forgotten (accepted), so the order is applied again; after
-            // the active tab is loaded, so its new files are not sorted by ratings not read yet.
-            self.tabs.forget_sort();
-        }
         if active {
             if restored
                 .iter()
@@ -4740,6 +4949,18 @@ impl Loupe {
                 self.load_active_tab();
             } else {
                 self.active_reordered();
+            }
+            // An undo always scrolls to the image brought back (the owner 2026-11-21, ADR 0026
+            // §2 point 5, T242 point 9.2): the anchor taken by the relist is dropped, in both
+            // branches. A new anchor taken by `relist_tabs` below loses to this scroll in its
+            // frame. In the preview nothing changes.
+            self.grid_anchor = None;
+            if self
+                .tabs
+                .active()
+                .is_some_and(|tab| tab.mode == ViewMode::Grid)
+            {
+                self.scroll_request = self.tabs.active().and_then(Tab::position);
             }
         }
         if !folders.is_empty() {
@@ -5471,8 +5692,9 @@ impl Loupe {
             Command::HoldImage | Command::SwapImages | Command::AboveBelow | Command::LockZoom => {
                 self.compare.is_some()
             }
-            // wired in T242 (ADR 0026 F1)
-            Command::ReloadFolder => false,
+            // Greyed without a folder and while files are moved or deleted (ADR 0026 F1, T242):
+            // a reload then could list a file on its way.
+            Command::ReloadFolder => reload_enabled(tab, self.moves.busy() || self.delete.busy()),
             _ => true,
         }
     }
@@ -5511,8 +5733,7 @@ impl Loupe {
         }
         match command {
             Command::OpenFolder => self.shell_action(ctx, ShellAction::OpenFolder),
-            // wired in T242 (ADR 0026 F1)
-            Command::ReloadFolder => {}
+            Command::ReloadFolder => self.reload_active_tab(ctx),
             Command::Import => self.open_import(),
             Command::CloseTab => self.tab_action(TabAction::Close),
             Command::NextTab => self.tab_action(TabAction::Next),
@@ -6045,6 +6266,9 @@ impl Loupe {
                     && ctx.input(|input| input.key_pressed(egui::Key::F5))
                 {
                     library_actions.push(LibraryAction::Refresh);
+                    // The central area is drawn after this column: its key loop leaves this F5
+                    // to the library (T242).
+                    self.library_took_f5 = true;
                 }
                 self.settings.shell.left_column_width =
                     shown.response.rect.width().round().max(0.0) as u32;
@@ -6394,6 +6618,17 @@ impl Loupe {
             if !ctx.egui_wants_keyboard_input() && delete_key_action(key, ctrl, shift, alt) {
                 if !self.dialog_open() {
                     self.run_command(&ctx, Command::DeleteToRecycleBin);
+                    ctx.request_repaint();
+                }
+                continue;
+            }
+            // F5 (ADR 0026 §3.1, F-Q1, T242) in the contact sheet and the preview: "Reload
+            // Folder" through its command; not while a text field has the keyboard or a dialog
+            // holds the program, not on a repeat (a held F5 reloads once), and not when the left
+            // column took it this frame for the library's "Refresh" (U4-Q1).
+            if !ctx.egui_wants_keyboard_input() && reload_key_action(key, ctrl, shift, alt) {
+                if !repeat && !self.dialog_open() && !self.library_took_f5 {
+                    self.run_command(&ctx, Command::ReloadFolder);
                     ctx.request_repaint();
                 }
                 continue;
@@ -7716,6 +7951,252 @@ fn tab_rating<'a>(
     move |path| shown_rating(metadata, cwd, path).cloned()
 }
 
+/// The `pending` of `Tab::relist` (ADR 0026 F1, T240 point 5, T242): whether RawStride is
+/// writing a tab file (`MetadataCache::is_pending`), looked up by the resolved path as
+/// `shown_rating` does.
+fn tab_pending<'a>(
+    metadata: &'a MetadataCache,
+    cwd: Option<&'a Path>,
+) -> impl Fn(&Path) -> bool + 'a {
+    move |path| match cwd {
+        Some(cwd) if !path.is_absolute() => metadata.is_pending(&resolve_path(cwd, path)),
+        _ => metadata.is_pending(path),
+    }
+}
+
+/// What `sort_tabs` did to the active tab (T242).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SortChange {
+    /// No file of the active tab changed place.
+    Unchanged,
+    /// A new order moved a file (`SortFollow::Reordered { moved: true }`).
+    Reordered,
+    /// Waiting files were placed and a file moved (`SortFollow::Placed { moved: true }`): the
+    /// contact sheet keeps its top image (ADR 0026 §2 point 5).
+    Placed,
+}
+
+/// Whether "Reload Folder" can be chosen (ADR 0026 F1, T242): the active tab has a folder, also
+/// one with no images (F5 is how it shows new files), and no batch of moves, undo or delete runs
+/// (`busy`), since a reload then could list a file on its way.
+fn reload_enabled(tab: Option<&Tab>, busy: bool) -> bool {
+    !busy && tab.is_some_and(|tab| tab.folder.is_some())
+}
+
+/// Whether the preview must go back to the contact sheet (ADR 0014 §2.3, T242 point 9.1): the
+/// active tab shows the preview, nothing is visible, and the ratings are ready, so nothing will be
+/// shown by them (while they are read, an active filter shows nothing and the preview waits).
+fn preview_must_leave(tab: Option<&Tab>, ratings_ready: bool) -> bool {
+    ratings_ready && tab.is_some_and(|tab| tab.mode == ViewMode::Loupe && tab.visible.is_empty())
+}
+
+/// `Tab::relist`, and the image an undo brings back made current also when the listing brought
+/// nothing new and took nothing away (T242): `relist` then returns early without using
+/// `current`, so `replace_files` with the same files makes it current, as the undo did before
+/// the placement. `current` is in the tab's own form.
+#[allow(clippy::too_many_arguments)]
+fn relist_tab(
+    tab: &mut Tab,
+    listed: Vec<PathBuf>,
+    current: Option<&Path>,
+    pending: &dyn Fn(&Path) -> bool,
+    order: SortOrder,
+    ratings_ready: bool,
+    rating_of: &dyn Fn(&Path) -> Option<Rating>,
+    modified_of: &dyn Fn(&Path) -> Option<SystemTime>,
+) -> Relisted {
+    let relisted = tab.relist(
+        listed,
+        current,
+        pending,
+        order,
+        ratings_ready,
+        rating_of,
+        modified_of,
+    );
+    if !relisted.changed()
+        && let Some(current) = current
+        && tab.files.iter().any(|file| file == current)
+    {
+        let files = tab.files.clone();
+        tab.replace_files(files, Some(current), ratings_ready, rating_of);
+    }
+    relisted
+}
+
+/// The decision of "Reload Folder" on the active tab (ADR 0026 §2, §3.1, T242): `listing` is
+/// `list_folder`'s result for the tab's folder, in the tab's own form. A listing that failed
+/// leaves the tab unchanged and gives `Err` with `folder_gone_text` (F-Q4). Otherwise the tab is
+/// relisted (`relist_tab`, no file made current; `pending` names the files RawStride is writing,
+/// which count as listed) and `Ok` holds the status text to show when the current image was
+/// removed (`removed_by_another_program_text`, F-Q5), else `None`. A tab without a folder:
+/// `Ok(None)`, nothing changed.
+#[allow(clippy::too_many_arguments)]
+fn reload_tab(
+    tab: &mut Tab,
+    listing: Result<Vec<PathBuf>, String>,
+    pending: &dyn Fn(&Path) -> bool,
+    order: SortOrder,
+    ratings_ready: bool,
+    rating_of: &dyn Fn(&Path) -> Option<Rating>,
+    modified_of: &dyn Fn(&Path) -> Option<SystemTime>,
+) -> Result<Option<String>, String> {
+    let Some(folder) = tab.folder.clone() else {
+        return Ok(None);
+    };
+    let Ok(listed) = listing else {
+        return Err(folder_gone_text(&folder));
+    };
+    let relisted = relist_tab(
+        tab,
+        listed,
+        None,
+        pending,
+        order,
+        ratings_ready,
+        rating_of,
+        modified_of,
+    );
+    Ok(relisted
+        .current_removed
+        .as_deref()
+        .map(removed_by_another_program_text))
+}
+
+/// The capture times to ask for in the active tab under `order` (U14-Q4, ADR 0026 F-Q6, T242):
+/// when the tab is in `order` already, only its waiting (`unplaced`) files not read or asked for
+/// yet, so they are placed when they come; otherwise every file not read or asked for yet, the
+/// shown images first (`read_order`).
+fn capture_requests(tab: &Tab, order: SortOrder, in_flight: &HashSet<PathBuf>) -> Vec<PathBuf> {
+    let wanted = |path: &PathBuf| !tab.capture.is_read(path) && !in_flight.contains(path);
+    if tab.sorted == Some(order) {
+        return tab
+            .unplaced
+            .iter()
+            .filter(|path| wanted(path))
+            .cloned()
+            .collect();
+    }
+    read_order(tab.files.len(), &tab.visible, tab.current, |index| {
+        tab.files.get(index).is_none_or(|path| !wanted(path))
+    })
+    .into_iter()
+    .filter_map(|index| tab.files.get(index).cloned())
+    .collect()
+}
+
+/// The contact sheet as `draw_grid` laid it out in one frame (T242).
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct GridView {
+    /// The scroll offset (`viewport.min.y`).
+    offset: f32,
+    /// The view's height.
+    height: f32,
+    /// The column count used.
+    columns: usize,
+    /// The cell size (`thumb_size`).
+    cell_size: u32,
+}
+
+/// What the contact sheet showed of one tab in a frame (ADR 0026 §2 point 5, T242): the tab's
+/// index and folder, the scroll offset, the column count, the position in `visible` of the image
+/// at the top, and the paths of the shown images from that position on (two screens' worth).
+#[derive(Clone, Debug, Default, PartialEq)]
+struct GridNote {
+    tab: usize,
+    folder: Option<PathBuf>,
+    offset: f32,
+    columns: usize,
+    top: usize,
+    from_top: Vec<PathBuf>,
+}
+
+/// The note of `tab` (at index `index`) drawn as `view` says (T242): the top position is the
+/// start of `visible_range` with no margin; the paths taken from it are two screens' worth (the
+/// rows the view's height holds, plus one, twice, and at least two rows). Nothing shown: no paths.
+fn grid_note(tab: &Tab, index: usize, view: GridView) -> GridNote {
+    let columns = view.columns.max(1);
+    let top = visible_range(
+        tab.visible.len(),
+        columns,
+        view.cell_size,
+        GRID_SPACING as u32,
+        view.offset,
+        view.height,
+        0,
+    )
+    .start;
+    let stride = view.cell_size.max(1) as f32 + GRID_SPACING;
+    let rows = if view.height.is_finite() && view.height > 0.0 {
+        (view.height / stride).ceil() as usize
+    } else {
+        0
+    };
+    let count = rows
+        .saturating_add(1)
+        .saturating_mul(2)
+        .max(2)
+        .saturating_mul(columns);
+    let from_top = tab
+        .visible
+        .iter()
+        .skip(top)
+        .take(count)
+        .filter_map(|&file| tab.files.get(file).cloned())
+        .collect();
+    GridNote {
+        tab: index,
+        folder: tab.folder.clone(),
+        offset: view.offset,
+        columns,
+        top,
+        from_top,
+    }
+}
+
+/// What a pending anchor does in a frame of the contact sheet (T242).
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum AnchorStep {
+    /// Set this scroll offset once; the anchor is dropped.
+    Set(f32),
+    /// Nothing is shown yet (an active filter while the ratings are read): keep waiting.
+    Wait,
+    /// None of its images is shown: drop it.
+    Drop,
+}
+
+/// The offset a pending anchor sets on `tab` (ADR 0026 §2 point 5, T242): the first image of
+/// `anchor.from_top` still shown (`top_position`) keeps the height it had on the screen
+/// (`anchored_offset` with `stride`). The rows are taken with each layout's own column count
+/// (the note's for the old top, `columns` for the new one), so `anchored_offset` gets them with
+/// one column; with the same count this is `anchored_offset(offset, stride, columns, old_top,
+/// new_top)`. While nothing is shown and the ratings are not ready it waits; otherwise, with
+/// none of its images shown, it is dropped.
+fn anchor_step(
+    anchor: &GridNote,
+    tab: &Tab,
+    ratings_ready: bool,
+    stride: f32,
+    columns: usize,
+) -> AnchorStep {
+    let shown: Vec<PathBuf> = tab
+        .visible
+        .iter()
+        .filter_map(|&file| tab.files.get(file).cloned())
+        .collect();
+    match top_position(&anchor.from_top, &shown) {
+        Some(new_top) => AnchorStep::Set(anchored_offset(
+            anchor.offset,
+            stride,
+            1,
+            anchor.top / anchor.columns.max(1),
+            new_top / columns.max(1),
+        )),
+        None if shown.is_empty() && !ratings_ready => AnchorStep::Wait,
+        None => AnchorStep::Drop,
+    }
+}
+
 /// A filter drop-down list in the tab bar (ADR 0014 §5.2): an active list (not "Alla …") has a
 /// yellow outline. Returns the chosen value, if one was picked this frame.
 #[allow(clippy::too_many_arguments)] // one list of the command bar, with its look
@@ -8700,6 +9181,9 @@ impl eframe::App for Loupe {
         // (D16), and the import and settings windows keep the program as their keys do.
         let blocked = self.dialog_open();
         let mut commands = Vec::new();
+        // Set by the left column when it takes F5 this frame (T242); in the preview, or with the
+        // column collapsed, it is not drawn.
+        self.library_took_f5 = false;
         // Set again below when the central panel is drawn (T131).
         self.image_area = None;
         if self.in_preview() {
@@ -9095,6 +9579,9 @@ fn run(options: Options) -> Result<(), String> {
                 status_bar: StatusBar::default(),
                 next_status: StatusBar::default(),
                 scroll_request: None,
+                grid_note: None,
+                grid_anchor: None,
+                library_took_f5: false,
                 metadata_window: None,
                 metadata_window_shown: false,
                 image_area: None,
@@ -10299,5 +10786,445 @@ mod tests {
         let icon = super::window_icon().unwrap();
         assert_eq!((icon.width, icon.height), (128, 128));
         assert_eq!(icon.rgba.len(), 128 * 128 * 4);
+    }
+
+    // --- "Reload Folder" and the tabs listed again after a move or an undo (ADR 0026 F1, T242) ---
+
+    mod reload_folder {
+        use super::super::{
+            AnchorStep, GRID_SPACING, GridView, anchor_step, capture_requests, grid_note,
+            preview_must_leave, relist_tab, reload_enabled, reload_tab,
+        };
+        use pw_loupe::{
+            SortKey, SortOrder, Tab, Tabs, ViewMode, anchored_offset, folder_gone_text,
+            list_folder, removed_by_another_program_text,
+        };
+        use std::collections::{HashMap, HashSet};
+        use std::path::{Path, PathBuf};
+        use std::time::{Duration, SystemTime};
+
+        const NAME: SortOrder = SortOrder {
+            key: SortKey::Name,
+            descending: false,
+        };
+        const MODIFIED: SortOrder = SortOrder {
+            key: SortKey::Modified,
+            descending: false,
+        };
+        const CAPTURE: SortOrder = SortOrder {
+            key: SortKey::Capture,
+            descending: false,
+        };
+
+        fn nothing_pending(_: &Path) -> bool {
+            false
+        }
+
+        /// A new temporary folder `name` (under a folder of its own) holding `files`.
+        fn folder(name: &str, files: &[&str]) -> PathBuf {
+            let root =
+                std::env::temp_dir().join(format!("pw-loupe-t242-{name}-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&root);
+            let dir = root.join(name);
+            std::fs::create_dir_all(&dir).unwrap();
+            for file in files {
+                std::fs::write(dir.join(file), b"x").unwrap();
+            }
+            dir
+        }
+
+        fn remove_folder(dir: &Path) {
+            if let Some(root) = dir.parent() {
+                let _ = std::fs::remove_dir_all(root);
+            }
+        }
+
+        fn listing(dir: &Path) -> Result<Vec<PathBuf>, String> {
+            list_folder(dir).map(|(files, _)| files)
+        }
+
+        /// The folder opened in a tab with file `current` current and `order` applied, as
+        /// opening it and `follow_sort` leave it.
+        fn opened(
+            dir: &Path,
+            current: usize,
+            order: SortOrder,
+            modified_of: &dyn Fn(&Path) -> Option<SystemTime>,
+        ) -> Tab {
+            let mut tabs = Tabs::default();
+            tabs.open_in_active(dir.to_path_buf(), listing(dir).unwrap(), current);
+            tabs.follow_sort(order, true, &|_| None, modified_of);
+            let tab = tabs.active().cloned().unwrap();
+            assert_eq!(tab.sorted, Some(order));
+            tab
+        }
+
+        fn names(tab: &Tab) -> Vec<String> {
+            tab.files
+                .iter()
+                .filter_map(|path| path.file_name())
+                .map(|name| name.to_string_lossy().into_owned())
+                .collect()
+        }
+
+        fn current_name(tab: &Tab) -> String {
+            names(tab).get(tab.current).cloned().unwrap_or_default()
+        }
+
+        fn marked_names(tab: &Tab) -> Vec<String> {
+            let all: Vec<usize> = (0..tab.files.len()).collect();
+            let names = names(tab);
+            tab.selection
+                .marked_in(&all)
+                .into_iter()
+                .filter_map(|index| names.get(index).cloned())
+                .collect()
+        }
+
+        /// Modification times by file name, in seconds.
+        fn times(seconds: &[(&str, u64)]) -> impl Fn(&Path) -> Option<SystemTime> {
+            let times: HashMap<String, SystemTime> = seconds
+                .iter()
+                .map(|(name, seconds)| {
+                    (
+                        (*name).to_owned(),
+                        SystemTime::UNIX_EPOCH + Duration::from_secs(*seconds),
+                    )
+                })
+                .collect();
+            move |path: &Path| {
+                path.file_name()
+                    .and_then(|name| times.get(name.to_string_lossy().as_ref()).copied())
+            }
+        }
+
+        #[test]
+        fn a_reload_places_a_new_file_by_name_drops_a_removed_one_and_keeps_current_and_marks() {
+            let dir = folder("added", &["a.jpg", "c.jpg", "e.jpg"]);
+            let mut tab = opened(&dir, 2, NAME, &|_| None);
+            tab.selection.all(&[0, 2]);
+            std::fs::write(dir.join("b.jpg"), b"x").unwrap();
+            std::fs::remove_file(dir.join("c.jpg")).unwrap();
+
+            let text = reload_tab(
+                &mut tab,
+                listing(&dir),
+                &nothing_pending,
+                NAME,
+                true,
+                &|_| None,
+                &|_| None,
+            );
+
+            assert_eq!(text, Ok(None));
+            assert_eq!(names(&tab), ["a.jpg", "b.jpg", "e.jpg"]);
+            assert_eq!(current_name(&tab), "e.jpg");
+            assert_eq!(marked_names(&tab), ["a.jpg", "e.jpg"]);
+            assert_eq!(tab.visible, [0, 1, 2]);
+            remove_folder(&dir);
+        }
+
+        #[test]
+        fn a_reload_whose_current_file_was_removed_makes_the_following_file_current_and_says_so() {
+            let dir = folder("current-removed", &["a.jpg", "c.jpg", "e.jpg"]);
+            let mut tab = opened(&dir, 1, NAME, &|_| None);
+            std::fs::remove_file(dir.join("c.jpg")).unwrap();
+
+            let text = reload_tab(
+                &mut tab,
+                listing(&dir),
+                &nothing_pending,
+                NAME,
+                true,
+                &|_| None,
+                &|_| None,
+            );
+
+            assert_eq!(
+                text,
+                Ok(Some(removed_by_another_program_text(&dir.join("c.jpg"))))
+            );
+            assert_eq!(names(&tab), ["a.jpg", "e.jpg"]);
+            assert_eq!(current_name(&tab), "e.jpg");
+            remove_folder(&dir);
+        }
+
+        #[test]
+        fn a_reload_of_a_deleted_folder_keeps_the_tab_and_says_the_folder_is_gone() {
+            let dir = folder("gone", &["a.jpg", "b.jpg"]);
+            let mut tab = opened(&dir, 1, NAME, &|_| None);
+            tab.selection.all(&[0]);
+            let before = tab.clone();
+            remove_folder(&dir);
+
+            let text = reload_tab(
+                &mut tab,
+                listing(&dir),
+                &nothing_pending,
+                NAME,
+                true,
+                &|_| None,
+                &|_| None,
+            );
+
+            assert_eq!(text, Err(folder_gone_text(&dir)));
+            assert_eq!(tab, before);
+        }
+
+        #[test]
+        fn a_reload_keeps_a_file_being_written_that_the_listing_lacks() {
+            let dir = folder("pending", &["a.jpg", "b.jpg", "c.jpg"]);
+            let mut tab = opened(&dir, 1, NAME, &|_| None);
+            // The safe write has renamed the original away for a moment.
+            std::fs::remove_file(dir.join("b.jpg")).unwrap();
+            let written = dir.join("b.jpg");
+            let pending = |path: &Path| path == written;
+
+            let text = reload_tab(
+                &mut tab,
+                listing(&dir),
+                &pending,
+                NAME,
+                true,
+                &|_| None,
+                &|_| None,
+            );
+
+            assert_eq!(text, Ok(None));
+            assert_eq!(names(&tab), ["a.jpg", "b.jpg", "c.jpg"]);
+            assert_eq!(current_name(&tab), "b.jpg");
+            remove_folder(&dir);
+        }
+
+        #[test]
+        fn reload_is_enabled_for_a_folder_tab_with_or_without_images_and_not_while_busy() {
+            let empty_folder = Tab {
+                folder: Some(PathBuf::from("D:/x/empty")),
+                ..Tab::default()
+            };
+            let with_images = Tab {
+                folder: Some(PathBuf::from("D:/x/shoot")),
+                files: vec![PathBuf::from("D:/x/shoot/a.jpg")],
+                visible: vec![0],
+                ..Tab::default()
+            };
+            let without_folder = Tab {
+                files: vec![PathBuf::from("D:/x/shoot/a.jpg")],
+                visible: vec![0],
+                ..Tab::default()
+            };
+            assert!(!reload_enabled(None, false));
+            assert!(!reload_enabled(Some(&without_folder), false));
+            assert!(!reload_enabled(Some(&with_images), true));
+            assert!(!reload_enabled(Some(&empty_folder), true));
+            assert!(reload_enabled(Some(&with_images), false));
+            assert!(reload_enabled(Some(&empty_folder), false));
+        }
+
+        #[test]
+        fn the_relist_of_a_picked_tab_sorted_by_modified_places_the_new_file_and_moves_nothing_else()
+         {
+            let dir = folder("_picked", &["a.jpg", "b.jpg", "c.jpg"]);
+            let before = times(&[("a.jpg", 30), ("b.jpg", 10), ("c.jpg", 20)]);
+            let mut tab = opened(&dir, 0, MODIFIED, &before);
+            assert_eq!(names(&tab), ["b.jpg", "c.jpg", "a.jpg"]);
+            let current = current_name(&tab);
+            // A move to `_picked` brings d.jpg; a.jpg's time changed since the order was applied,
+            // and it still does not move.
+            std::fs::write(dir.join("d.jpg"), b"x").unwrap();
+            let after = times(&[("a.jpg", 5), ("b.jpg", 10), ("c.jpg", 20), ("d.jpg", 15)]);
+
+            let relisted = relist_tab(
+                &mut tab,
+                listing(&dir).unwrap(),
+                None,
+                &nothing_pending,
+                MODIFIED,
+                false,
+                &|_| None,
+                &after,
+            );
+
+            assert_eq!(relisted.added, 1);
+            assert_eq!(relisted.removed, 0);
+            assert_eq!(names(&tab), ["b.jpg", "d.jpg", "c.jpg", "a.jpg"]);
+            assert_eq!(current_name(&tab), current);
+            assert_eq!(tab.sorted, Some(MODIFIED));
+            assert!(tab.unplaced.is_empty());
+            remove_folder(&dir);
+        }
+
+        #[test]
+        fn the_relist_of_an_undo_sorted_by_modified_places_the_file_brought_back_and_makes_it_current()
+         {
+            let dir = folder("undo", &["a.jpg", "c.jpg"]);
+            let modified = times(&[("a.jpg", 30), ("b.jpg", 10), ("c.jpg", 20)]);
+            let mut tab = opened(&dir, 1, MODIFIED, &modified);
+            assert_eq!(names(&tab), ["c.jpg", "a.jpg"]);
+            tab.selection.all(&[0]);
+            // The undo brings b.jpg back.
+            std::fs::write(dir.join("b.jpg"), b"x").unwrap();
+            let brought_back = dir.join("b.jpg");
+
+            let relisted = relist_tab(
+                &mut tab,
+                listing(&dir).unwrap(),
+                Some(&brought_back),
+                &nothing_pending,
+                MODIFIED,
+                true,
+                &|_| None,
+                &modified,
+            );
+
+            assert_eq!(relisted.added, 1);
+            assert_eq!(names(&tab), ["b.jpg", "c.jpg", "a.jpg"]);
+            assert_eq!(current_name(&tab), "b.jpg");
+            assert_eq!(marked_names(&tab), ["c.jpg"]);
+
+            // A file brought back that the tab already lists (for example as a pending write):
+            // nothing new, nothing gone, and it is still made current.
+            let again = dir.join("c.jpg");
+            let relisted = relist_tab(
+                &mut tab,
+                listing(&dir).unwrap(),
+                Some(&again),
+                &nothing_pending,
+                MODIFIED,
+                true,
+                &|_| None,
+                &modified,
+            );
+            assert!(!relisted.changed());
+            assert_eq!(names(&tab), ["b.jpg", "c.jpg", "a.jpg"]);
+            assert_eq!(current_name(&tab), "c.jpg");
+            remove_folder(&dir);
+        }
+
+        #[test]
+        fn capture_requests_ask_only_for_the_waiting_files_once_the_tab_is_in_the_order() {
+            let path = |name: &str| PathBuf::from(format!("D:/x/{name}"));
+            let mut tab = Tab {
+                folder: Some(PathBuf::from("D:/x")),
+                files: vec![path("a.jpg"), path("b.jpg"), path("c.jpg")],
+                visible: vec![0, 1, 2],
+                sorted: Some(CAPTURE),
+                unplaced: vec![path("c.jpg")],
+                ..Tab::default()
+            };
+            tab.capture.insert(path("a.jpg"), None);
+            let none = HashSet::new();
+            assert_eq!(capture_requests(&tab, CAPTURE, &none), [path("c.jpg")]);
+            let in_flight: HashSet<PathBuf> = [path("c.jpg")].into_iter().collect();
+            assert!(capture_requests(&tab, CAPTURE, &in_flight).is_empty());
+
+            // Not in the order yet: every file not read or asked for, from the current one on.
+            tab.sorted = None;
+            tab.unplaced.clear();
+            assert_eq!(
+                capture_requests(&tab, CAPTURE, &none),
+                [path("b.jpg"), path("c.jpg")]
+            );
+            assert_eq!(capture_requests(&tab, CAPTURE, &in_flight), [path("b.jpg")]);
+        }
+
+        #[test]
+        fn the_preview_leaves_with_nothing_visible_once_the_ratings_are_ready() {
+            let path = |name: &str| PathBuf::from(format!("D:/x/{name}"));
+            let preview = |files: Vec<PathBuf>, visible: Vec<usize>| Tab {
+                folder: Some(PathBuf::from("D:/x")),
+                files,
+                visible,
+                mode: ViewMode::Loupe,
+                ..Tab::default()
+            };
+            // Every image removed: the tab has no files.
+            let emptied = preview(Vec::new(), Vec::new());
+            assert!(preview_must_leave(Some(&emptied), true));
+            // A filter no file matches: files, nothing visible; it waits while the ratings are
+            // read.
+            let unmatched = preview(vec![path("a.jpg"), path("b.jpg")], Vec::new());
+            assert!(!preview_must_leave(Some(&unmatched), false));
+            assert!(preview_must_leave(Some(&unmatched), true));
+            // Something shown, the contact sheet, or no tab: it stays.
+            let shown = preview(vec![path("a.jpg")], vec![0]);
+            assert!(!preview_must_leave(Some(&shown), true));
+            let sheet = Tab {
+                mode: ViewMode::Grid,
+                ..unmatched.clone()
+            };
+            assert!(!preview_must_leave(Some(&sheet), true));
+            assert!(!preview_must_leave(None, true));
+        }
+
+        #[test]
+        fn the_anchor_keeps_the_top_image_or_the_next_one_and_waits_while_nothing_is_shown() {
+            let cell_size = 100;
+            let stride = cell_size as f32 + GRID_SPACING;
+            let columns = 4;
+            let path = |name: String| PathBuf::from(format!("D:/x/{name}.jpg"));
+            let tab_of = |names: Vec<String>| Tab {
+                folder: Some(PathBuf::from("D:/x")),
+                visible: (0..names.len()).collect(),
+                files: names.into_iter().map(path).collect(),
+                ..Tab::default()
+            };
+            let old: Vec<String> = (0..20).map(|i| format!("f{i:02}")).collect();
+            let offset = 2.0 * stride + 5.0;
+            let anchor = grid_note(
+                &tab_of(old.clone()),
+                0,
+                GridView {
+                    offset,
+                    height: 2.0 * stride,
+                    columns,
+                    cell_size,
+                },
+            );
+            assert_eq!(anchor.top, 8);
+            assert_eq!(anchor.from_top.first(), Some(&path("f08".to_owned())));
+
+            // Four files added above the top image: one row lower.
+            let mut added: Vec<String> = (0..4).map(|i| format!("a{i}")).collect();
+            added.extend(old.iter().cloned());
+            assert_eq!(
+                anchor_step(&anchor, &tab_of(added), true, stride, columns),
+                AnchorStep::Set(anchored_offset(offset, stride, columns, 8, 12))
+            );
+            assert_eq!(
+                anchored_offset(offset, stride, columns, 8, 12),
+                offset + stride
+            );
+
+            // The top image and the first row gone: the next file, f09, now at 4, decides.
+            let gone: Vec<String> = old
+                .iter()
+                .enumerate()
+                .filter(|(index, _)| *index >= 4 && *index != 8)
+                .map(|(_, name)| name.clone())
+                .collect();
+            assert_eq!(
+                anchor_step(&anchor, &tab_of(gone), true, stride, columns),
+                AnchorStep::Set(anchored_offset(offset, stride, columns, 8, 4))
+            );
+
+            // Nothing shown (an active filter while the ratings are read): no offset yet; once
+            // the ratings are ready with none of its files shown, it is dropped.
+            let mut hidden = tab_of(old.clone());
+            hidden.visible.clear();
+            assert_eq!(
+                anchor_step(&anchor, &hidden, false, stride, columns),
+                AnchorStep::Wait
+            );
+            assert_eq!(
+                anchor_step(&anchor, &hidden, true, stride, columns),
+                AnchorStep::Drop
+            );
+            let others = tab_of((0..4).map(|i| format!("o{i}")).collect());
+            assert_eq!(
+                anchor_step(&anchor, &others, false, stride, columns),
+                AnchorStep::Drop
+            );
+        }
     }
 }
