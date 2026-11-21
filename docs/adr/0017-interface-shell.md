@@ -32,7 +32,9 @@
   day, when T244 and T245 were written:** Metadata… opens on the clicked image also when it is
   not marked and others are (the menus and `M` unchanged); a button is hidden only by its menu
   item's own rules (a running move does not grey the rotations); the setting's line is
-  `thumbnail_buttons = true|false` (§2.8, U15-Q4, U15-Q5, U15-Q7).
+  `thumbnail_buttons = true|false` (§2.8, U15-Q4, U15-Q5, U15-Q7). **Changed by the owner after
+  the hand check of U15 (2026-11-21):** the buttons are 28 points, not 20, so the symbols are
+  larger (§2.8, U15-Q6; task T246).
 - Date: 2026-11-12; amended 2026-11-13
 - Related:
   - [GUI_REQUIREMENTS.md](../GUI_REQUIREMENTS.md) (GR1–GR13), in particular GR6 (keyboard first),
@@ -397,7 +399,8 @@ without the study notes as a template.
   a button that does nothing. **The owner, 2026-11-21 (T245):** the buttons follow the menu items'
   rules as they are and add none; a running move does not grey Rotate Left and Rotate Right in the
   menu, so their buttons are drawn then too.
-- **How they look** (U15-Q6): a small round button of 20 points with a symbol drawn by RawStride
+- **How they look** (U15-Q6): a round button of 28 points (20 until the owner changed it after
+  the hand check of U15, 2026-11-21, T246) with a symbol drawn by RawStride
   (lines and shapes with the painter, as the stars are drawn), on a dark, partly transparent
   disc, so no icon set and no new dependency is needed (§2.5). Symbol and disc meet 3:1 contrast
   against the disc and the image (WCAG non-text contrast) in both themes. The button under the
@@ -634,7 +637,7 @@ the decisions do not live only in the tasks.
 | U15-Q3 | When are they shown? | Only while the pointer is over the cell, only in the contact sheet; not in the filmstrip, the preview or the compare, and not while a menu or window is open |
 | U15-Q4 | Which images does a button act on? | As the right-click menu (E-Q16): the image becomes current, the marking is kept; the rotations act on the marked when the image is marked, otherwise on it alone; a button click never changes the marking or opens the preview by a double-click. **Preview (owner):** on a marked image (two or more marked) every marked image opens in the preview ("only the marked" on); on an image not marked, that image with "only the marked" off. **Metadata… (owner, 2026-11-21, T245):** on the clicked image also when it is not marked and others are; the menus and `M` unchanged |
 | U15-Q5 | A command that cannot run? | Its button is not drawn, by the rules that grey its menu item. **Owner (2026-11-21, T245):** those rules as they are, none added (a running move does not hide the rotations) |
-| U15-Q6 | Look? | 20-point round buttons with symbols drawn by RawStride on a dark, partly transparent disc; no icon set or new dependency; 3:1 contrast; lighter under the pointer; hover text = menu text and key; same size at every thumbnail size |
+| U15-Q6 | Look? | **Changed by the owner (2026-11-21, after the hand check of U15): 28-point**, was 20-point round buttons with symbols drawn by RawStride on a dark, partly transparent disc; no icon set or new dependency; 3:1 contrast; lighter under the pointer; hover text = menu text and key; same size at every thumbnail size |
 | U15-Q7 | Can they be turned off? | "Buttons on Thumbnails" in the View menu, on by default, `thumbnail_buttons = true\|false` in `settings.txt` (corrected from `on\|off` by the owner, 2026-11-21) |
 | U15-Q8 | Steps? | One step U15 with the owner's hand check after it. **Changed by the owner (2026-11-21, after a look at the code):** two tasks in `pw-loupe`, a chain: U15a the metadata window's steps between the marked (U15-Q9), U15b the four buttons; the hand check after U15b |
 | U15-Q9 | Stepping in the metadata window | **Owner:** with the window's image marked and two or more marked, previous/next and "Spara och nästa" step only between the marked; this holds however the window is opened (`M`, the menus, the button); otherwise all shown images as today (amends §2.3.1) |

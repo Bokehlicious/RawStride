@@ -86,10 +86,11 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status |
 |---|---|---|
+| [T246](T246-larger-buttons-on-a-thumbnail.md) | ADR 0017 U15: the buttons on a thumbnail are 28 points (pw-loupe) | Open |
 
 ## Writing a task (owner and reviewer)
 
-- **Number:** the next free number after the highest in this folder and `done/` (T246 next).
+- **Number:** the next free number after the highest in this folder and `done/` (T247 next).
 - **File:** `docs/tasks/T246-<a-few-words>.md`; three digits, lower case, words joined by `-`.
 - **Index:** add a row to "Open tasks" above and keep its status in step with the file's heading.
 - **Size (owner, 2026-11-15, after T142):** one task is one layer (a C++ shim or a core crate, or
