@@ -341,11 +341,24 @@ impl ExifInspector {
     /// flight stays in flight, so a second one is not sent before it is back.
     pub fn folder_loaded(&mut self, files: &[PathBuf]) {
         if !files.iter().any(|path| self.is_image(path)) {
-            *self = Self {
-                in_flight: self.in_flight,
-                ..Self::default()
-            };
+            self.empty();
         }
+    }
+
+    /// "Reload Folder" (ADR 0026 §3.1, T241): empties the summary as `folder_loaded` does for
+    /// another folder, so a file changed by another program is read anew. A read in flight stays
+    /// in flight, as there.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn folder_reloaded(&mut self) {
+        self.empty();
+    }
+
+    /// Empties the summary; a read in flight stays in flight.
+    fn empty(&mut self) {
+        *self = Self {
+            in_flight: self.in_flight,
+            ..Self::default()
+        };
     }
 
     /// What the Info section shows for `image` (absolute path).
@@ -855,6 +868,45 @@ mod tests {
         // Another folder empties it.
         exif.folder_loaded(&[image("pw-loupe-exif-elsewhere.ARW")]);
         assert_eq!(exif.shown(&path), ExifShown::Loading);
+    }
+
+    /// "Reload Folder" (ADR 0026 §3.1, T241): `folder_loaded` of the same files keeps the
+    /// summary, `folder_reloaded` empties it, and a read in flight is still in flight afterwards
+    /// (no second read is sent before it is back).
+    #[test]
+    fn a_reload_empties_the_summary_and_keeps_a_read_in_flight() {
+        let mut reader = FakeReader::default();
+        let mut exif = ExifInspector::default();
+        let path = image("pw-loupe-exif-reload.ARW");
+        let start = Instant::now();
+        exif.request(Some(&path), true, start, &mut reader);
+        let t = start + INSPECTOR_READ_DELAY;
+        exif.request(Some(&path), true, t, &mut reader);
+        reader.answer(&path, Ok(info()));
+        exif.request(Some(&path), true, t, &mut reader);
+        assert_eq!(exif.shown(&path), ExifShown::Rows(&exif_rows(&info())));
+
+        exif.folder_loaded(std::slice::from_ref(&path));
+        assert_eq!(exif.shown(&path), ExifShown::Rows(&exif_rows(&info())));
+
+        exif.folder_reloaded();
+        assert_eq!(exif.shown(&path), ExifShown::Loading);
+
+        // The image read again; the reload comes while that read is in flight.
+        exif.request(Some(&path), true, t, &mut reader);
+        let t = t + INSPECTOR_READ_DELAY;
+        exif.request(Some(&path), true, t, &mut reader);
+        assert_eq!(reader.reads.len(), 2);
+        assert!(exif.in_flight);
+        exif.folder_reloaded();
+        assert!(exif.in_flight, "the read in flight stays in flight");
+        assert_eq!(exif.shown(&path), ExifShown::Loading);
+        exif.request(Some(&path), true, t + INSPECTOR_READ_DELAY, &mut reader);
+        assert_eq!(
+            reader.reads.len(),
+            2,
+            "no second read while one is in flight"
+        );
     }
 
     #[test]

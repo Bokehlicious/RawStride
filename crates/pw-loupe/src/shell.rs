@@ -467,6 +467,9 @@ pub const OPEN_IN_KEY: KeyChord = KeyChord {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Command {
     OpenFolder,
+    /// The active tab's folder listed again and every image's rating and metadata read again
+    /// (File ▸ Reload Folder, F5 elsewhere than over the left column; ADR 0026 §3.1, F-Q1, T241).
+    ReloadFolder,
     Import,
     CloseTab,
     Settings,
@@ -721,6 +724,7 @@ pub const MENUS: &[Menu] = &[
         kind: MenuKind::File,
         entries: &[
             item(Command::OpenFolder, ctrl(Key::O)),
+            item(Command::ReloadFolder, plain(Key::F5)),
             item(Command::Import, ctrl(Key::I)),
             item(Command::CloseTab, ctrl(Key::W)),
             MenuEntry::Separator,
@@ -818,8 +822,9 @@ pub const MENUS: &[Menu] = &[
 
 /// The right-click menu on an image in the contact sheet or the preview (the compare included):
 /// the commands that act on images, in the order of ADR 0019 §2.9 and E-Q17. Every item has the
-/// same key as its item in `MENUS` (E-Q18). Left out on purpose: Move to Subfolders, RAW ↔ JPEG
-/// and Delete Rejected Images, which act on the folder or the view, not on the images clicked.
+/// same key as its item in `MENUS` (E-Q18). Left out on purpose: Move to Subfolders, RAW ↔ JPEG,
+/// Delete Rejected Images and Reload Folder (ADR 0026 §3.1, T241), which act on the folder or the
+/// view, not on the images clicked.
 pub const IMAGE_CONTEXT_MENU: &[MenuEntry] = &[
     MenuEntry::ExternalPrograms,
     item(Command::ShowInExplorer, None),
@@ -1151,6 +1156,30 @@ mod tests {
         assert_eq!(Command::MoveToSubfolders.acts_in(), Where::Both);
         assert_eq!(Command::UndoMove.acts_in(), Where::Both);
         assert_eq!(Command::DeleteToRecycleBin.acts_in(), Where::Both);
+    }
+
+    /// "Reload Folder" is in the File menu right after "Open Folder…" with F5, acts in both views,
+    /// and is not in the right-click menu on images (ADR 0026 §3.1, F-Q1, T241).
+    #[test]
+    fn reload_folder_follows_open_folder_with_f5_and_is_not_in_the_image_context_menu() {
+        let Some(file) = MENUS.iter().find(|menu| menu.kind == MenuKind::File) else {
+            panic!("there is a File menu");
+        };
+        assert_eq!(
+            file.entries.get(..2),
+            Some(
+                &[
+                    item(Command::OpenFolder, ctrl(Key::O)),
+                    item(Command::ReloadFolder, plain(Key::F5)),
+                ][..]
+            )
+        );
+        assert_eq!(Command::ReloadFolder.acts_in(), Where::Both);
+        for entry in IMAGE_CONTEXT_MENU {
+            if let MenuEntry::Item(menu_item) = entry {
+                assert_ne!(menu_item.command, Command::ReloadFolder);
+            }
+        }
     }
 
     /// Delete to Recycle Bin (Delete) and Delete Rejected Images (no key) are the last items of

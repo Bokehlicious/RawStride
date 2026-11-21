@@ -612,11 +612,23 @@ impl HistogramInspector {
                 .iter()
                 .any(|kept| listed.contains(kept.path.as_path()));
         if !same_folder {
-            *self = Self {
-                in_flight: self.in_flight,
-                ..Self::new(self.delay, self.poll)
-            };
+            self.empty();
         }
+    }
+
+    /// "Reload Folder" (ADR 0026 §3.1, T241): empties the kept results as `folder_loaded` does
+    /// for another folder, so a file changed by another program is read anew. A read in flight
+    /// stays in flight, as there.
+    pub fn folder_reloaded(&mut self) {
+        self.empty();
+    }
+
+    /// Empties the kept results; a read in flight stays in flight.
+    fn empty(&mut self) {
+        *self = Self {
+            in_flight: self.in_flight,
+            ..Self::new(self.delay, self.poll)
+        };
     }
 
     /// What the Histogram section shows for `image` (absolute path) in the tab's display mode:
@@ -1204,6 +1216,46 @@ mod tests {
         assert_eq!(
             histograms.shown(&path, Source::Raw),
             HistogramPanel::Reading
+        );
+    }
+
+    /// "Reload Folder" (ADR 0026 §3.1, T241): `folder_loaded` of the same files keeps the kept
+    /// results, `folder_reloaded` empties them, and a read in flight is still in flight afterwards
+    /// (no second read is sent before it is back).
+    #[test]
+    fn a_reload_empties_the_kept_results_and_keeps_a_read_in_flight() {
+        let mut reader = FakeReader::default();
+        let mut histograms = inspector();
+        let path = image("pw-loupe-histogram-reload.ARW");
+        let t = read_now(&mut histograms, &mut reader, &path, Instant::now());
+        reader.answer(&path, Source::Raw, found(0.5));
+        histograms.request(Some(&path), Source::Raw, true, t, &mut reader);
+        assert_eq!(histograms.shown(&path, Source::Raw), ready(0.5));
+
+        histograms.folder_loaded(std::slice::from_ref(&path));
+        assert_eq!(histograms.shown(&path, Source::Raw), ready(0.5));
+
+        histograms.folder_reloaded();
+        assert_eq!(
+            histograms.shown(&path, Source::Raw),
+            HistogramPanel::Reading
+        );
+
+        // The image read again; the reload comes while that read is in flight.
+        let t = read_now(&mut histograms, &mut reader, &path, t);
+        assert_eq!(reader.reads.len(), 2);
+        assert!(histograms.in_flight);
+        histograms.folder_reloaded();
+        assert!(histograms.in_flight, "the read in flight stays in flight");
+        assert_eq!(
+            histograms.shown(&path, Source::Raw),
+            HistogramPanel::Reading
+        );
+        histograms.request(Some(&path), Source::Raw, true, t + DELAY, &mut reader);
+        assert_eq!(
+            reader.reads.len(),
+            2,
+            "no second read while one is in flight"
         );
     }
 

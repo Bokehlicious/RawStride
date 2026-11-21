@@ -5471,6 +5471,8 @@ impl Loupe {
             Command::HoldImage | Command::SwapImages | Command::AboveBelow | Command::LockZoom => {
                 self.compare.is_some()
             }
+            // wired in T242 (ADR 0026 F1)
+            Command::ReloadFolder => false,
             _ => true,
         }
     }
@@ -5509,6 +5511,8 @@ impl Loupe {
         }
         match command {
             Command::OpenFolder => self.shell_action(ctx, ShellAction::OpenFolder),
+            // wired in T242 (ADR 0026 F1)
+            Command::ReloadFolder => {}
             Command::Import => self.open_import(),
             Command::CloseTab => self.tab_action(TabAction::Close),
             Command::NextTab => self.tab_action(TabAction::Next),

@@ -163,11 +163,11 @@ pub use shell::{
 };
 pub use shell_text::{
     AboutText, SettingsText, ShellText, about_text, command_text, exiftool_message,
-    external_program_limit_text, fallback_text, key_text, menu_text, no_images_text,
-    open_error_text, path_resolution_error_text, prune_error_text, recovery_text,
-    settings_save_error_text, settings_text, shell_text, sort_button_text, sort_direction_hover,
-    sort_direction_text, sort_key_text, sorting_text, status_line_text, submenu_text, theme_text,
-    window_title,
+    external_program_limit_text, fallback_text, folder_gone_text, key_text, menu_text,
+    no_images_text, open_error_text, path_resolution_error_text, prune_error_text, recovery_text,
+    removed_by_another_program_text, settings_save_error_text, settings_text, shell_text,
+    sort_button_text, sort_direction_hover, sort_direction_text, sort_key_text, sorting_text,
+    status_line_text, submenu_text, theme_text, window_title,
 };
 pub use sort::{
     CaptureRead, CaptureReader, CaptureTime, CaptureTimes, SORT_KEYS, SortKey, SortOrder, SortPlan,
@@ -426,6 +426,13 @@ pub fn move_key_action(key: egui::Key, ctrl: bool, shift: bool, alt: bool) -> Op
 /// map.
 pub fn delete_key_action(key: egui::Key, ctrl: bool, shift: bool, alt: bool) -> bool {
     key == egui::Key::Delete && !ctrl && !shift && !alt
+}
+
+/// Whether a key press is F5 with no modifier. F5 with the pointer over the left column (the
+/// library and the Tasks area) is the library's "Refresh" (U4-Q1), which the shell asks first;
+/// every other F5 is "Reload Folder" (ADR 0026 §3.1, F-Q1, T241).
+pub fn reload_key_action(key: egui::Key, ctrl: bool, shift: bool, alt: bool) -> bool {
+    key == egui::Key::F5 && !ctrl && !shift && !alt
 }
 
 /// Whether a key press is Ctrl+E of "Open in {name}" ([`OPEN_IN_KEY`]; ADR 0019 §2.2, T202): E
@@ -1061,7 +1068,9 @@ mod tests {
     }
 
     /// The command a key gives in `view`, through the key functions in the order `main.rs` asks
-    /// them (shell keys, the move keys P and Ctrl+Z (T174), the Delete key (T189), Ctrl+E (as
+    /// them (shell keys, the move keys P and Ctrl+Z (T174), the Delete key (T189), F5 of "Reload
+    /// Folder" (T241; the pointer over the left column, where F5 is the library's, is not
+    /// modelled), Ctrl+E (as
     /// `OpenIn(0)`, T202), import, tabs, ratings, the rotation keys (T237), `M`, `I`, then
     /// the view's own keys). The preview's
     /// clipping keys (J and Shift+J, T148) and the compare's keys (C, K, Shift+K and V, T153; L,
@@ -1088,6 +1097,9 @@ mod tests {
         }
         if delete_key_action(key, ctrl, shift, alt) {
             return Some(Command::DeleteToRecycleBin);
+        }
+        if reload_key_action(key, ctrl, shift, alt) {
+            return Some(Command::ReloadFolder);
         }
         if open_in_key_action(key, ctrl, shift, alt) {
             return Some(Command::OpenIn(0));
@@ -1287,6 +1299,18 @@ mod tests {
             ),
             Some(Command::ToggleZoom)
         );
+    }
+
+    /// F5 with no modifier is the key of "Reload Folder"; Ctrl+F5, Shift+F5, Alt+F5 and F4 are
+    /// not (ADR 0026 §3.1, F-Q1, T241).
+    #[test]
+    fn f5_with_no_modifier_is_the_key_of_reload_folder() {
+        use egui::Key as K;
+        assert!(reload_key_action(K::F5, false, false, false));
+        assert!(!reload_key_action(K::F5, true, false, false));
+        assert!(!reload_key_action(K::F5, false, true, false));
+        assert!(!reload_key_action(K::F5, false, false, true));
+        assert!(!reload_key_action(K::F4, false, false, false));
     }
 
     /// Delete is the key of "Delete to Recycle Bin" (ADR 0018 B4, T189): only with no modifier,

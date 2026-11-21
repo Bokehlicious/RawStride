@@ -137,7 +137,8 @@ Every other property already uses IPTC's English name in both languages.
 | mapp | folder | |
 | – | Folders, Favourites, Recent | the Library's sections in the left column (ADR 0017 U4-Q7); added by T135 |
 | – | Add to Favourites / Remove from Favourites / Clear Recent Folders | the right-click menus of a folder in the tree, a folder tab, a favourite and the Recent section, and the File menu item (U4-Q3, U4-Q4); added by T135 |
-| – | Refresh | reads the drives again (also F5 over the Library); added by T135 |
+| – | Refresh | reads the drives again (also F5 with the pointer over the left column; F5 elsewhere is Reload Folder); added by T135 |
+| – | Reload Folder | the File menu item and F5 elsewhere than over the left column: the active tab's folder listed and read again (ADR 0026 F1); added by T241 |
 | – | {letter}: (no disk) | an empty card reader or DVD drive in the folder tree (U4-Q1); added by T135 |
 | – | Folder not found | the hover text of a favourite or recent folder that no longer exists, and an expand that fails because the folder is gone; added by T135 |
 | – | No tasks, Stop, ×, Errors ({n}), Clear | the Tasks area under the Library (ADR 0017 U5-Q1–U5-Q5): the line with nothing to show (the text is still "No tasks in progress."), the running import's button, the finished import's button (hover "Remove this line"), the error list's heading and its button; added by T140 |

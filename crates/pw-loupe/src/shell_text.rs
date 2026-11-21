@@ -151,6 +151,22 @@ pub fn no_images_text(folder: Option<&Path>) -> String {
     }
 }
 
+/// The status message when "Reload Folder" finds the active tab's folder missing or unreadable;
+/// the tab stays as it was (ADR 0026 §3.1, F-Q4, T241).
+pub fn folder_gone_text(folder: &Path) -> String {
+    format!("The folder is gone or cannot be read: {}", folder.display())
+}
+
+/// The status message when the current image is gone after "Reload Folder": the file name only,
+/// the whole path when it has none (ADR 0026 §2 point 1, F-Q5, T241).
+pub fn removed_by_another_program_text(file: &Path) -> String {
+    let name = file.file_name().map_or_else(
+        || file.display().to_string(),
+        |name| name.to_string_lossy().into_owned(),
+    );
+    format!("{name} was removed by another program")
+}
+
 /// The status message when the metadata of closed tabs cannot be cleaned up.
 pub fn prune_error_text(error: &str) -> String {
     format!("Cannot clean up metadata: {error}")
@@ -398,6 +414,7 @@ pub fn theme_text(theme: Theme) -> &'static str {
 pub fn command_text(command: Command) -> String {
     match command {
         Command::OpenFolder => "Open Folder…".to_owned(),
+        Command::ReloadFolder => "Reload Folder".to_owned(),
         Command::Import => "Import…".to_owned(),
         Command::CloseTab => "Close Tab".to_owned(),
         Command::Settings => "Settings…".to_owned(),
@@ -531,6 +548,7 @@ mod tests {
             texts,
             vec![
                 "Open Folder…",
+                "Reload Folder",
                 "Import…",
                 "Close Tab",
                 "Settings…",
@@ -595,6 +613,7 @@ mod tests {
             .collect();
         let expected: Vec<Option<&str>> = vec![
             Some("Ctrl+O"),
+            Some("F5"),
             Some("Ctrl+I"),
             Some("Ctrl+W"),
             None,
@@ -1108,6 +1127,29 @@ mod tests {
         assert_eq!(
             settings_text(SettingsText::NoFolder),
             "the settings folder is unknown (LOCALAPPDATA is missing)"
+        );
+    }
+
+    /// The status line when "Reload Folder" finds the folder gone (ADR 0026 F-Q4, T241).
+    #[test]
+    fn the_folder_gone_text_names_the_folder() {
+        assert_eq!(
+            folder_gone_text(Path::new("D:/Foto/2026")),
+            "The folder is gone or cannot be read: D:/Foto/2026"
+        );
+    }
+
+    /// The status line when the current image is gone after a reload: the file name only, the
+    /// whole path when it has none (ADR 0026 F-Q5, T241).
+    #[test]
+    fn the_removed_by_another_program_text_names_the_file_only() {
+        assert_eq!(
+            removed_by_another_program_text(Path::new("D:/Foto/TN100423.ARW")),
+            "TN100423.ARW was removed by another program"
+        );
+        assert_eq!(
+            removed_by_another_program_text(Path::new("..")),
+            ".. was removed by another program"
         );
     }
 }

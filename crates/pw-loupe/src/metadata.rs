@@ -382,6 +382,29 @@ impl MetadataCache {
         files: Vec<PathBuf>,
         worker: &mut impl MetadataSubmit,
     ) -> Result<Vec<PathBuf>, String> {
+        self.begin(files, worker, false)
+    }
+
+    /// As [`Self::begin_load`], for "Reload Folder" (ADR 0026 §3.1): the inspector's metadata is
+    /// always emptied, also when the same folder is loaded again, so a file changed by another
+    /// program is read anew. A read in flight stays in flight, as `InspectorRead::clear` says.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn begin_reload(
+        &mut self,
+        files: Vec<PathBuf>,
+        worker: &mut impl MetadataSubmit,
+    ) -> Result<Vec<PathBuf>, String> {
+        self.begin(files, worker, true)
+    }
+
+    /// The body of `begin_load` and `begin_reload`; `reload` empties the inspector's metadata
+    /// whatever the folder.
+    fn begin(
+        &mut self,
+        files: Vec<PathBuf>,
+        worker: &mut impl MetadataSubmit,
+        reload: bool,
+    ) -> Result<Vec<PathBuf>, String> {
         let cwd =
             std::env::current_dir().map_err(|e| path_resolution_error_text(&e.to_string()))?;
         let files: Vec<PathBuf> = files
@@ -409,8 +432,9 @@ impl MetadataCache {
         self.pending_read = None;
         self.read_error = None;
         // A loaded folder change empties the inspector; the same folder loaded again (a switch
-        // between the contact sheet and the loupe) keeps it (T110).
-        if !files.iter().any(|path| self.inspector.is_image(path)) {
+        // between the contact sheet and the loupe) keeps it (T110); a reload always empties it
+        // (ADR 0026 §3.1).
+        if reload || !files.iter().any(|path| self.inspector.is_image(path)) {
             self.inspector.clear();
         }
         let supported: Vec<PathBuf> = files
@@ -3936,6 +3960,147 @@ mod tests {
             panic!("current directory should be available: {error}");
         }
         assert_eq!(cache.inspector_state(&image), InspectorState::Loading);
+    }
+
+    /// "Reload Folder" (ADR 0026 §3.1, T241): `begin_load` of the same files keeps the
+    /// inspector's result, `begin_reload` empties it; both send the folder read again.
+    #[test]
+    fn a_reload_empties_the_inspector_and_a_load_of_the_same_folder_keeps_it() {
+        let mut worker = FakeSubmit::new([Ok(1), Ok(2), Ok(3)]);
+        let mut cache = MetadataCache::default();
+        let image = image_path("pw-loupe-inspector-reload.ARW");
+        if let Err(error) = cache.begin_load(vec![image.clone()], &mut worker) {
+            panic!("current directory should be available: {error}");
+        }
+        inspector_read_sent(&mut cache, &image, Instant::now(), &mut worker);
+        worker
+            .events
+            .push_back(metadata_read(500, &image, Ok(empty_read())));
+        assert!(cache.poll(&mut worker).is_empty());
+        assert_eq!(worker.read_attempts.len(), 1);
+
+        if let Err(error) = cache.begin_load(vec![image.clone()], &mut worker) {
+            panic!("current directory should be available: {error}");
+        }
+        assert_eq!(
+            cache.inspector_state(&image),
+            InspectorState::Ready(&empty_read())
+        );
+        assert_eq!(worker.read_attempts.len(), 2, "the folder read sent again");
+        assert_eq!(cache.load_request, Some(2));
+
+        if let Err(error) = cache.begin_reload(vec![image.clone()], &mut worker) {
+            panic!("current directory should be available: {error}");
+        }
+        assert_eq!(cache.inspector_state(&image), InspectorState::Loading);
+        assert_eq!(worker.read_attempts.len(), 3, "the folder read sent again");
+        assert_eq!(worker.read_attempts.last(), Some(&vec![image]));
+        assert_eq!(cache.load_request, Some(3));
+    }
+
+    /// "Reload Folder" while writes are on their way (ADR 0026 §3.1, T241): with one rating write
+    /// sent, one queued and one turn queued, the shown ratings and orientation stay the written
+    /// ones after `begin_reload`, the answer of the folder read sent before the reload is
+    /// ignored, and the reload's own read of the old values does not undo them either.
+    #[test]
+    fn a_reload_keeps_the_writes_on_their_way_and_ignores_the_earlier_read() {
+        let a = turn_file("pw-loupe-reload-writes-a.ARW");
+        let b = turn_file("pw-loupe-reload-writes-b.ARW");
+        let files = vec![a.clone(), b.clone()];
+        let mut worker = FakeSubmit::new([Ok(1), Ok(2), Ok(3)]);
+        let mut cache = MetadataCache::default();
+        if let Err(error) = cache.begin_load(files.clone(), &mut worker) {
+            panic!("current directory should be available: {error}");
+        }
+        worker.events.push_back(WorkerEvent::RatingsRead {
+            id: 1,
+            result: Ok(HashMap::new()),
+            orientations: HashMap::from([(a.clone(), 6)]),
+        });
+        assert!(cache.poll(&mut worker).is_empty());
+        assert_eq!(cache.take_orientation_changes(), vec![(a.clone(), Some(6))]);
+
+        // One rating write sent, one queued, one turn queued.
+        if let Err(error) = cache.set_rating(&a, RatingKey::Stars(3)) {
+            panic!("supported rating path should be accepted: {error}");
+        }
+        assert!(cache.poll(&mut worker).is_empty());
+        assert_eq!(worker.write_attempts, vec![a.clone()], "a's write sent");
+        if let Err(error) = cache.set_rating(&b, RatingKey::Stars(2)) {
+            panic!("supported rating path should be accepted: {error}");
+        }
+        assert_eq!(cache.turn(std::slice::from_ref(&a), true), Ok(vec![]));
+        assert_eq!(cache.take_orientation_changes(), vec![(a.clone(), Some(3))]);
+        assert_eq!(cache.pending_rating_writes(), 2);
+        assert_eq!(cache.pending_rotation_writes(), 1);
+        let shown_a = cache.shown_rating(&a).cloned();
+        let shown_b = cache.shown_rating(&b).cloned();
+        assert_eq!(shown_a.as_ref().and_then(|rating| rating.stars), Some(3));
+        assert_eq!(shown_b.as_ref().and_then(|rating| rating.stars), Some(2));
+
+        // A load of the same folder sends a read (2); the reload sends another (3).
+        if let Err(error) = cache.begin_load(files.clone(), &mut worker) {
+            panic!("current directory should be available: {error}");
+        }
+        assert_eq!(cache.load_request, Some(2));
+        if let Err(error) = cache.begin_reload(files.clone(), &mut worker) {
+            panic!("current directory should be available: {error}");
+        }
+        assert_eq!(cache.load_request, Some(3));
+        assert_eq!(cache.shown_rating(&a).cloned(), shown_a);
+        assert_eq!(cache.shown_rating(&b).cloned(), shown_b);
+        assert_eq!(cache.orientation(&a), Some(3));
+        assert_eq!(cache.pending_rating_writes(), 2);
+        assert_eq!(cache.pending_rotation_writes(), 1);
+
+        // The answer of the read sent before the reload is ignored.
+        let old_values = HashMap::from([
+            (
+                a.clone(),
+                Rating {
+                    stars: Some(5),
+                    label: None,
+                },
+            ),
+            (
+                b.clone(),
+                Rating {
+                    stars: Some(1),
+                    label: None,
+                },
+            ),
+        ]);
+        worker.events.push_back(WorkerEvent::RatingsRead {
+            id: 2,
+            result: Ok(old_values.clone()),
+            orientations: HashMap::from([(a.clone(), 8)]),
+        });
+        assert!(cache.poll(&mut worker).is_empty());
+        assert_eq!(
+            cache.load_request,
+            Some(3),
+            "still waiting for the reload's read"
+        );
+        assert!(cache.is_loading(Some(&a)));
+        assert!(cache.is_loading(Some(&b)));
+        assert_eq!(cache.shown_rating(&a).cloned(), shown_a);
+        assert_eq!(cache.shown_rating(&b).cloned(), shown_b);
+        assert_eq!(cache.orientation(&a), Some(3));
+        assert!(cache.take_orientation_changes().is_empty());
+
+        // The reload's own read of the values before the writes keeps the written ones too.
+        worker.events.push_back(WorkerEvent::RatingsRead {
+            id: 3,
+            result: Ok(old_values),
+            orientations: HashMap::from([(a.clone(), 6)]),
+        });
+        assert!(cache.poll(&mut worker).is_empty());
+        assert!(cache.ratings_ready());
+        assert!(!cache.is_loading(Some(&a)));
+        assert_eq!(cache.shown_rating(&a).cloned(), shown_a);
+        assert_eq!(cache.shown_rating(&b).cloned(), shown_b);
+        assert_eq!(cache.orientation(&a), Some(3));
+        assert!(cache.take_orientation_changes().is_empty());
     }
 
     // --- "Apply to All Marked" (ADR 0017 §2.3.1, U12c, T126) ---

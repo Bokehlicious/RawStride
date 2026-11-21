@@ -1,4 +1,4 @@
-# T242. ADR 0026 F1c: "Reload Folder" (F5) in the shell, and tabs listed again after a move or an undo with the placement (pw-loupe) — Blocked: waits for T241
+# T242. ADR 0026 F1c: "Reload Folder" (F5) in the shell, and tabs listed again after a move or an undo with the placement (pw-loupe) — Open
 
 - **Why:** ADR 0026 step F1 (accepted by the owner 2026-11-18): "Reload Folder" (F5) lists the
   active tab's folder again and applies §2 (the current image, the marks, the filter and the sort
@@ -27,7 +27,9 @@
      `#[cfg_attr(not(test), allow(dead_code))]` on `MetadataCache::begin_reload` and the Exif
      summary's `folder_reloaded` are removed now that they are called.
   2. **The key:** F5 (`reload_key_action`) in the central area's key loop, beside the Delete
-     and Ctrl+E keys and with their conditions (not while a text field has the keyboard or a
+     and Ctrl+E keys (asked after Delete and before Ctrl+E, the order `lib.rs`'s test helper
+     `command_of_key` models since T241; if the order differs, that helper and its doc comment
+     change with it) and with their conditions (not while a text field has the keyboard or a
      dialog holds the program, `self.dialog_open()`; not on a repeat, so a held F5 reloads
      once), through `run_command(&ctx, Command::ReloadFolder)` so a greyed command does nothing.
      F5 with the pointer over the left column stays the library's "Refresh" only (U4-Q1, the
@@ -176,3 +178,4 @@
 | 2026-11-21 | Blocked | Cold read (fresh agent, `AGENTS.md`, the README and this file, T240 and T241 for their APIs): `Loupe` cannot be built in a test, so the decisions are free functions tested on their own (point 7); the left column is drawn before the key loop, and its F5 note is reset every frame; `self.delete.busy()` named; `vertical_scroll_offset` exists in egui 0.37; the anchor needs the view height and the columns too, and the local `scroll_to` (not the field) wins in its frame; `undo_done` has its own `forget_sort`, now removed with the owner's decision (point 6), and a delete never applied the order; hand check: a JPEG for the deleted current image, a renamed folder with nothing open in it, the temporary files left to T240's test, an undo added to item 8 |
 | 2026-11-21 | Blocked | Chain review of T240–T242 (fresh agent, the three task files): T241's placeholder arms (one makes the item greyed) replaced here; `Placed` tells a placement from a new order; the note made every frame so a placement inside `sort_tabs` has an anchor; `pending` passed to `relist`; the order of the reload's steps and which text wins; `reload_enabled` true for a folder with no images; the compare's held image, "Only the marked", `list_folder`'s skipped entries and a read of only the new files to `backlog.md` |
 | 2026-11-21 | Blocked | T240 Done; waits for T241. Review of T240: point 6 notes `relist`'s early return without `current` for the undo |
+| 2026-11-21 | Open | T241 Done. Review of T241: point 2 names the order of F5 in the key loop (after Delete, before Ctrl+E, as `command_of_key` models); a read in flight at a reload is still taken (`backlog.md`), to be watched in the hand check |
