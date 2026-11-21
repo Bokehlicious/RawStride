@@ -130,6 +130,7 @@ Every other property already uses IPTC's English name in both languages.
 | Sidokolumner, Vänster kolumn | Side Columns, Left Column | |
 | Fäll ihop kolumnen / Visa kolumnen | Collapse Column / Show Column | |
 | Helskärm | Full Screen | |
+| – | Buttons on Thumbnails | the View menu's check item after Full Screen, on by default, and the four buttons on a thumbnail in the contact sheet it shows (Rotate Left, Rotate Right, Metadata…, Preview; ADR 0017 §2.8); added by T245 |
 | Tema, Mörkt, Ljust | Theme, Dark, Light | |
 | Tom (flik) | Empty | |
 | Läge: RAW / JPEG | Mode: RAW / JPEG | |

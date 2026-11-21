@@ -251,3 +251,4 @@ was when the task was done, so "this file", "below" and "the Log" in T1–T115 m
 | [T242](T242-reload-folder-in-the-shell.md) | ADR 0026 F1c: "Reload Folder" (F5) in the shell; tabs listed again after a move or an undo with the placement (pw-loupe) |
 | [T243](T243-label-after-rating-in-the-menus.md) | The Label submenu right after the Rating submenu, in the Image menu and the right-click menu (pw-loupe) |
 | [T244](T244-metadata-window-steps-between-the-marked.md) | ADR 0017 U15a: the metadata window steps only between the marked images (pw-loupe) |
+| [T245](T245-buttons-on-a-thumbnail.md) | ADR 0017 U15b: four buttons on a thumbnail in the contact sheet (pw-loupe) |

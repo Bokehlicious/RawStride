@@ -55,6 +55,10 @@ use pw_loupe::{
     target_folder, undo_failed_text, undone_text, worker_stopped_text,
 };
 use pw_loupe::{
+    ButtonFacts, THUMB_BUTTONS, ThumbButton, button_at, button_rect, menu_items,
+    preview_only_marked, thumb_button_hover_text,
+};
+use pw_loupe::{
     COLLAPSED_WIDTH, ColumnState, Command, ExternalProgram, IMAGE_CONTEXT_MENU,
     MAX_EXTERNAL_PROGRAMS, MENUS, MenuEntry, MenuItem, RatingKey, STATUS_TEXT_SIZE, SettingsText,
     ShellAction, ShellSettings, ShellText, StartWindow, THEMES, Theme, Where, WindowRect,
@@ -787,6 +791,10 @@ struct Loupe {
     /// Whether the left column took F5 for the library's "Refresh" this frame (U4-Q1, T242), so
     /// the key loop does not reload the tab too; reset at the start of every frame.
     library_took_f5: bool,
+    /// When a button on a thumbnail was last clicked (`InputState::time`; ADR 0017 §2.8, T245):
+    /// egui counts a double click per pointer, so a cell's double click soon after it is a plain
+    /// click.
+    thumb_button_clicked_at: Option<f64>,
     /// The metadata window (M, D16, T107); at most one. While it is open it holds the program.
     metadata_window: Option<MetadataWindow>,
     /// Whether the metadata window was drawn in the last frame: when it was not, the window has
@@ -1204,6 +1212,48 @@ impl Loupe {
         let rating_of = tab_rating(&self.metadata, cwd.as_deref());
         if let Some(tab) = self.tabs.active_mut() {
             tab.right_click(index, ready, &rating_of);
+        }
+    }
+
+    /// A click on a button on the thumbnail of file `index` in the contact sheet (ADR 0017 §2.8,
+    /// U15-Q4, T245). The image becomes current with the marking kept, as at a right click; its
+    /// refilter can hide or unmark images, so the rest reads the tab as it is after it and acts
+    /// only if the image is then current and shown. The rotations act as their keys do (on the
+    /// marked when the image is marked); Preview opens with "only the marked" on when the image
+    /// is marked and two or more are, else off, and the choice stays; Metadata… opens the window
+    /// on the clicked image, also when it is not marked and others are. The marking is never
+    /// changed.
+    fn thumb_button_click(&mut self, ctx: &egui::Context, index: usize, button: ThumbButton) {
+        self.right_click(index);
+        let Some(tab) = self.tabs.active() else {
+            return;
+        };
+        if tab.current != index || tab.position().is_none() {
+            return;
+        }
+        let marked = tab.selection.marked_in(&tab.visible);
+        let image_marked = marked.contains(&index);
+        let file = tab.files.get(index).cloned();
+        match button {
+            ThumbButton::RotateLeft | ThumbButton::RotateRight => {
+                self.run_command(ctx, button.command());
+            }
+            ThumbButton::Preview => {
+                self.settings.shell.filmstrip_marked =
+                    preview_only_marked(marked.len(), image_marked);
+                self.switch_mode(ViewMode::Loupe);
+            }
+            ThumbButton::Metadata => {
+                let Some(file) = file else {
+                    return;
+                };
+                // Resolved as `metadata_subject` resolves it: the cache keys by resolved path.
+                let path = match std::env::current_dir() {
+                    Ok(cwd) => resolve_path(&cwd, &file),
+                    Err(_) => file,
+                };
+                self.open_metadata_window_on(path);
+            }
         }
     }
 
@@ -2381,8 +2431,21 @@ impl Loupe {
         let mut open_loupe = false;
         let mut clicked_cell = None;
         let mut right_clicked_cell = None;
+        let mut clicked_button_cell = None;
         // No right-click menu while a dialog holds the program (ADR 0019 §2.9, T221).
         let context_menu = !self.dialog_open();
+        // The buttons on a thumbnail (ADR 0017 §2.8, U15, T245): only with the setting on and no
+        // dialog open; an open menu or popup is checked per cell below.
+        let thumb_buttons = self.settings.shell.thumbnail_buttons && context_menu;
+        // A cell's double click this soon after a button click is a plain click: egui counts a
+        // double click per pointer, not per widget. The delay is egui's own (`InputOptions`,
+        // reached through the context's options; `InputState::options` is private).
+        let now = ctx.input(|input| input.time);
+        let double_click_delay =
+            ctx.options(|options| options.input_options.max_double_click_delay);
+        let after_button_click = self
+            .thumb_button_clicked_at
+            .is_some_and(|at| now - at <= double_click_delay);
         // The tab's files may be relative; the metadata cache keys by resolved path.
         let cwd = std::env::current_dir().ok();
         // A pending anchor of this tab sets the offset once (ADR 0026 §2 point 5, T242); a scroll
@@ -2496,6 +2559,8 @@ impl Loupe {
                 let painter = ui.painter().clone();
                 let mut clicked = None;
                 let mut right_clicked = None;
+                let mut clicked_button = None;
+                let pointer = ui.input(|input| input.pointer.hover_pos());
                 for (position, &index) in positions.clone().zip(visible_files) {
                     let Some(path) = tab.files.get(index) else {
                         continue;
@@ -2537,7 +2602,7 @@ impl Loupe {
                         ui.make_persistent_id(("grid-cell", index)),
                         egui::Sense::click(),
                     );
-                    if response.double_clicked() {
+                    if response.double_clicked() && !after_button_click {
                         // The first click of the pair already made this image current.
                         open_loupe = true;
                     } else if response.clicked() {
@@ -2556,6 +2621,71 @@ impl Loupe {
                             right_clicked = Some(index);
                         }
                         response.context_menu(|ui| self.image_context_menu(ui, commands));
+                    }
+                    // The four buttons while the pointer is over the cell (`contains_pointer`:
+                    // `hovered` is false over a button) and no menu or popup is open; the
+                    // check reads egui's memory, so it also sees a right-click menu of a cell
+                    // drawn later in the frame (ADR 0017 §2.8, U15-Q3, T245).
+                    if thumb_buttons {
+                        let draw =
+                            response.contains_pointer() && !egui::Popup::is_any_open(ui.ctx());
+                        // The cell's image as if it were current, by the menu items' rules
+                        // (U15-Q5): a cell in the contact sheet is a shown image, so the rotations
+                        // (`tab.position()`) and Preview (a visible list) can run; Metadata… only
+                        // for a kind with metadata support, which `open_window` needs.
+                        let facts = ButtonFacts {
+                            rotate: true,
+                            metadata: supports_rating(path),
+                            preview: true,
+                        };
+                        let under_pointer = pointer.and_then(|at| button_at(image_rect, at));
+                        for button in THUMB_BUTTONS {
+                            let button_id =
+                                ui.make_persistent_id(("grid-cell-button", index, button));
+                            // While this button's right-click menu is open, its area and menu
+                            // are kept each frame, or egui closes the popup as abandoned; the
+                            // button itself is not drawn while a popup is open (T245 point 11).
+                            let menu_open =
+                                egui::Popup::is_id_open(ui.ctx(), button_id.with("popup"));
+                            let drawn = draw && button.shown(&facts);
+                            if !drawn && !menu_open {
+                                continue;
+                            }
+                            let button_rect = button_rect(image_rect, button);
+                            // Added after the cell, so a click on it is the button's alone.
+                            let mut button_response =
+                                ui.interact(button_rect, button_id, egui::Sense::click());
+                            if drawn {
+                                let disc = if under_pointer == Some(button) {
+                                    image_area::THUMB_BUTTON_DISC_HOVERED
+                                } else {
+                                    image_area::THUMB_BUTTON_DISC
+                                };
+                                painter.circle_filled(
+                                    button_rect.center(),
+                                    button_rect.width() * 0.5,
+                                    disc,
+                                );
+                                paint_thumb_button_symbol(&painter, button_rect, button);
+                                let command = button.command();
+                                let key = menu_items()
+                                    .into_iter()
+                                    .find(|item| item.command == command)
+                                    .and_then(|item| item.key);
+                                button_response = button_response
+                                    .on_hover_text(thumb_button_hover_text(command, key));
+                                if button_response.clicked() {
+                                    clicked_button = Some((index, button));
+                                    self.thumb_button_clicked_at = Some(now);
+                                }
+                            }
+                            // A right click on a button is a right click on the cell.
+                            if button_response.secondary_clicked() {
+                                right_clicked = Some(index);
+                            }
+                            button_response
+                                .context_menu(|ui| self.image_context_menu(ui, commands));
+                        }
                     }
                 }
 
@@ -2583,6 +2713,9 @@ impl Loupe {
                 if let Some(index) = right_clicked {
                     right_clicked_cell = Some(index);
                 }
+                if let Some(click) = clicked_button {
+                    clicked_button_cell = Some(click);
+                }
             });
         });
         if let Some((index, ctrl, shift)) = clicked_cell {
@@ -2590,6 +2723,9 @@ impl Loupe {
         }
         if let Some(index) = right_clicked_cell {
             self.right_click(index);
+        }
+        if let Some((index, button)) = clicked_button_cell {
+            self.thumb_button_click(&ctx, index, button);
         }
         if open_loupe {
             self.switch_mode(ViewMode::Loupe);
@@ -2746,14 +2882,24 @@ impl Loupe {
     /// else on the first marked one (U12c-Q1, T126). Nothing happens with no image shown, a kind
     /// without metadata support, or a window already open.
     fn open_metadata_window(&mut self) {
+        let cwd = std::env::current_dir().ok();
+        let Some(path) = metadata_subject(self.tabs.active(), cwd.as_deref()) else {
+            return;
+        };
+        self.open_metadata_window_on(path);
+    }
+
+    /// Opens the metadata window on `path` (as the metadata cache keys it) and asks for its
+    /// metadata at once: from `open_metadata_window`, and from the Metadata… button on a
+    /// thumbnail with the clicked image (ADR 0017 §2.8, U15-Q4, T245). "Apply to {n} Marked"
+    /// gets the marked images of the active tab as before. Nothing happens for a kind without
+    /// metadata support or while a metadata or settings window is open.
+    fn open_metadata_window_on(&mut self, path: PathBuf) {
         // Not while the settings window is open: the window's read must use the saved settings.
         if self.metadata_window.is_some() || self.settings_window.is_some() {
             return;
         }
         let cwd = std::env::current_dir().ok();
-        let Some(path) = metadata_subject(self.tabs.active(), cwd.as_deref()) else {
-            return;
-        };
         let marked = marked_subjects(self.tabs.active(), cwd.as_deref());
         if self.metadata.open_window(&path, &mut self.metadata_worker) {
             self.metadata_window = Some(MetadataWindow::new(path, marked));
@@ -3784,6 +3930,13 @@ impl Loupe {
     fn toggle_focus_marking(&mut self) {
         let shell = &mut self.settings.shell;
         shell.focus_marking = !shell.focus_marking;
+    }
+
+    /// View ▸ Buttons on Thumbnails: the four buttons on a thumbnail in the contact sheet, on ↔
+    /// off (ADR 0017 §2.8, U15-Q7, T245). The settings file is written when the program closes.
+    fn toggle_thumbnail_buttons(&mut self) {
+        let shell = &mut self.settings.shell;
+        shell.thumbnail_buttons = !shell.thumbnail_buttons;
     }
 
     /// Tells the view cores whether a clipping map is wanted (U7b-Q8, T148): the first exactly
@@ -5729,6 +5882,7 @@ impl Loupe {
                 Some(!shell.columns_hidden && shell.left_column == ColumnState::Open)
             }
             Command::Fullscreen => Some(shell.fullscreen),
+            Command::ThumbnailButtons => Some(shell.thumbnail_buttons),
             Command::Theme(theme) => Some(shell.theme == theme),
             Command::Sort(key) => Some(shell.sort.key == key),
             Command::SortDescending => Some(shell.sort.descending),
@@ -5796,6 +5950,7 @@ impl Loupe {
             Command::ToggleColumns => self.shell_action(ctx, ShellAction::ToggleColumns),
             Command::LeftColumn => self.toggle_column(true),
             Command::Fullscreen => self.shell_action(ctx, ShellAction::ToggleFullscreen),
+            Command::ThumbnailButtons => self.toggle_thumbnail_buttons(),
             Command::Theme(theme) => self.set_theme(ctx, theme),
             Command::Sort(key) => self.set_sort(
                 ctx,
@@ -8352,6 +8507,94 @@ struct CellRects {
     label: egui::Rect,
 }
 
+/// The symbol of a button on a thumbnail in its disc's square `rect` (ADR 0017 §2.8, U15-Q6,
+/// T245), drawn with lines and shapes in `THUMB_BUTTON_SYMBOL`: no icon set or font glyph.
+fn paint_thumb_button_symbol(painter: &egui::Painter, rect: egui::Rect, button: ThumbButton) {
+    match button {
+        ThumbButton::RotateLeft => paint_rotate_symbol(painter, rect, false),
+        ThumbButton::RotateRight => paint_rotate_symbol(painter, rect, true),
+        ThumbButton::Metadata => paint_info_symbol(painter, rect),
+        ThumbButton::Preview => paint_magnifier_symbol(painter, rect),
+    }
+}
+
+/// ↻ (`clockwise`) or ↺: an open arc of 270° with an arrow head at its end, near the top.
+fn paint_rotate_symbol(painter: &egui::Painter, rect: egui::Rect, clockwise: bool) {
+    let colour = image_area::THUMB_BUTTON_SYMBOL;
+    let scale = rect.width() / 20.0;
+    let centre = rect.center();
+    let radius = 5.0 * scale;
+    // Drawn clockwise (screen angles grow clockwise, y down) from the lower right to the upper
+    // right; the anticlockwise symbol is its mirror image.
+    let start = 30.0_f32.to_radians();
+    let sweep = 270.0_f32.to_radians();
+    let mirror = |offset: egui::Vec2| {
+        if clockwise {
+            centre + offset
+        } else {
+            centre + egui::vec2(-offset.x, offset.y)
+        }
+    };
+    const STEPS: u16 = 24;
+    let points: Vec<egui::Pos2> = (0..=STEPS)
+        .map(|step| {
+            let angle = start + sweep * f32::from(step) / f32::from(STEPS);
+            mirror(egui::vec2(angle.cos(), angle.sin()) * radius)
+        })
+        .collect();
+    painter.add(egui::Shape::line(
+        points,
+        egui::Stroke::new(1.8 * scale, colour),
+    ));
+    let end = start + sweep;
+    let radial = egui::vec2(end.cos(), end.sin());
+    let tangent = egui::vec2(-end.sin(), end.cos());
+    let tip = radial * radius + tangent * 3.0 * scale;
+    let back = radial * radius - tangent * 1.0 * scale;
+    let head = vec![
+        mirror(tip),
+        mirror(back + radial * 3.0 * scale),
+        mirror(back - radial * 3.0 * scale),
+    ];
+    painter.add(egui::Shape::convex_polygon(
+        head,
+        colour,
+        egui::Stroke::NONE,
+    ));
+}
+
+/// "i": a dot above a short vertical bar.
+fn paint_info_symbol(painter: &egui::Painter, rect: egui::Rect) {
+    let colour = image_area::THUMB_BUTTON_SYMBOL;
+    let scale = rect.width() / 20.0;
+    let centre = rect.center();
+    painter.circle_filled(centre + egui::vec2(0.0, -4.5 * scale), 1.5 * scale, colour);
+    painter.line_segment(
+        [
+            centre + egui::vec2(0.0, -1.5 * scale),
+            centre + egui::vec2(0.0, 5.5 * scale),
+        ],
+        egui::Stroke::new(2.2 * scale, colour),
+    );
+}
+
+/// A magnifying glass: a ring with a short handle to the lower right.
+fn paint_magnifier_symbol(painter: &egui::Painter, rect: egui::Rect) {
+    let colour = image_area::THUMB_BUTTON_SYMBOL;
+    let scale = rect.width() / 20.0;
+    let ring = rect.center() + egui::vec2(-1.5, -1.5) * scale;
+    let radius = 4.0 * scale;
+    painter.circle_stroke(ring, radius, egui::Stroke::new(1.8 * scale, colour));
+    let diagonal = egui::vec2(1.0, 1.0) / 2.0_f32.sqrt();
+    painter.line_segment(
+        [
+            ring + diagonal * radius,
+            rect.center() + egui::vec2(5.5, 5.5) * scale,
+        ],
+        egui::Stroke::new(2.4 * scale, colour),
+    );
+}
+
 /// One thumbnail cell of the contact sheet or the filmstrip (ADR 0011, ADR 0013, ADR 0014 §5.1):
 /// the faint fill of a marked cell, the thumbnail fitted into the image area (aspect kept), or the
 /// error of a failed one, the dimming of a rejected image, the label bar (label pill, stars, file
@@ -9593,6 +9836,7 @@ fn run(options: Options) -> Result<(), String> {
                 grid_note: None,
                 grid_anchor: None,
                 library_took_f5: false,
+                thumb_button_clicked_at: None,
                 metadata_window: None,
                 metadata_window_shown: false,
                 image_area: None,

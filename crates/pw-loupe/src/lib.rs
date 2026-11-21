@@ -41,6 +41,7 @@ mod sort;
 mod tabs;
 mod tasks;
 mod tasks_text;
+mod thumb_buttons;
 mod thumbs;
 
 use std::path::{Path, PathBuf};
@@ -167,7 +168,7 @@ pub use shell_text::{
     no_images_text, open_error_text, path_resolution_error_text, prune_error_text, recovery_text,
     removed_by_another_program_text, settings_save_error_text, settings_text, shell_text,
     sort_button_text, sort_direction_hover, sort_direction_text, sort_key_text, sorting_text,
-    status_line_text, submenu_text, theme_text, window_title,
+    status_line_text, submenu_text, theme_text, thumb_button_hover_text, window_title,
 };
 pub use sort::{
     CaptureRead, CaptureReader, CaptureTime, CaptureTimes, SORT_KEYS, SortKey, SortOrder, SortPlan,
@@ -180,6 +181,10 @@ pub use tasks::{
 pub use tasks_text::{
     TasksText, error_entry_text, errors_heading_text, import_done_text, import_route_text,
     importing_text, pending_write_text, tasks_text,
+};
+pub use thumb_buttons::{
+    BUTTON_INSET, BUTTON_SIZE, ButtonFacts, THUMB_BUTTONS, ThumbButton, button_at, button_rect,
+    preview_only_marked,
 };
 pub use thumbs::{CellState, ThumbGrid, color_image, request_cell};
 

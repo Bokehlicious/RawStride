@@ -246,6 +246,29 @@ pub mod image_area {
     pub const TEXT: Color32 = Color32::from_gray(0xbe);
     /// The frame of a marked cell (ADR 0014 §5.1: the label blue, the dark theme's accent).
     pub const MARKED: Color32 = Color32::from_rgb(0x4c, 0x8d, 0xff);
+    /// The disc of a button on a thumbnail (ADR 0017 §2.8, U15-Q6, T245): black at about 55 %
+    /// opacity, so the image shows through and the disc stands out on a light image.
+    pub const THUMB_BUTTON_DISC: Color32 = Color32::from_black_alpha(0x8c);
+    /// The disc of the button under the pointer: a lighter grey, nearly opaque.
+    pub const THUMB_BUTTON_DISC_HOVERED: Color32 =
+        Color32::from_rgba_unmultiplied_const(0x70, 0x70, 0x70, 0xe0);
+    /// The symbol on a button's disc.
+    pub const THUMB_BUTTON_SYMBOL: Color32 = Color32::from_gray(0xf0);
+}
+
+/// `colour` (premultiplied, as `Color32` holds it) drawn over the opaque `background`:
+/// `premultiplied + background × (1 − alpha)` per channel, opaque.
+fn over(colour: Color32, background: Color32) -> Color32 {
+    let rest = 255 - u16::from(colour.a());
+    let channel = |top: u8, bottom: u8| {
+        let mixed = u16::from(top) + (u16::from(bottom) * rest + 127) / 255;
+        u8::try_from(mixed).unwrap_or(u8::MAX)
+    };
+    Color32::from_rgb(
+        channel(colour.r(), background.r()),
+        channel(colour.g(), background.g()),
+        channel(colour.b(), background.b()),
+    )
 }
 
 /// The text sizes in points (U1-Q4): body text, small text and headings; the status bar uses the
@@ -398,6 +421,10 @@ pub fn text_pairs(theme: Theme) -> Vec<(&'static str, Color32, Color32)> {
 /// reach [`NON_TEXT_CONTRAST`].
 pub fn non_text_pairs(theme: Theme) -> Vec<(&'static str, Color32, Color32)> {
     let p = palette(theme);
+    let symbol = image_area::THUMB_BUTTON_SYMBOL;
+    let disc = image_area::THUMB_BUTTON_DISC;
+    let hovered = image_area::THUMB_BUTTON_DISC_HOVERED;
+    let (white, black, cell) = (Color32::WHITE, Color32::BLACK, image_area::CELL);
     vec![
         ("accent on panel", p.accent, p.panel),
         ("accent in a field", p.accent, p.extreme),
@@ -408,6 +435,44 @@ pub fn non_text_pairs(theme: Theme) -> Vec<(&'static str, Color32, Color32)> {
             "marked cell frame on the contact sheet",
             image_area::MARKED,
             image_area::BACKGROUND,
+        ),
+        // The buttons on a thumbnail (ADR 0017 §2.8, U15-Q6, T245): the symbol on its disc over
+        // a white image, a black image and the empty cell, and the disc itself on a white image.
+        // On a black image the dark disc cannot stand out (1:1); the light symbol does.
+        (
+            "thumbnail button symbol on its disc over a white image",
+            symbol,
+            over(disc, white),
+        ),
+        (
+            "thumbnail button symbol on its disc over a black image",
+            symbol,
+            over(disc, black),
+        ),
+        (
+            "thumbnail button symbol on its disc over the empty cell",
+            symbol,
+            over(disc, cell),
+        ),
+        (
+            "thumbnail button symbol on its hovered disc over a white image",
+            symbol,
+            over(hovered, white),
+        ),
+        (
+            "thumbnail button symbol on its hovered disc over a black image",
+            symbol,
+            over(hovered, black),
+        ),
+        (
+            "thumbnail button symbol on its hovered disc over the empty cell",
+            symbol,
+            over(hovered, cell),
+        ),
+        (
+            "thumbnail button disc on a white image",
+            over(disc, white),
+            white,
         ),
     ]
 }
@@ -555,6 +620,9 @@ pub enum Command {
     ToggleColumns,
     LeftColumn,
     Fullscreen,
+    /// "Buttons on Thumbnails" on ↔ off: the four buttons on a thumbnail in the contact sheet
+    /// (View menu, a check item, no key; ADR 0017 §2.8, U15-Q7, T245).
+    ThumbnailButtons,
     Theme(Theme),
     /// Sort every tab by a key (View ▸ Sort By and the command bar's drop-down; ADR 0017 U14,
     /// T138).
@@ -810,6 +878,7 @@ pub const MENUS: &[Menu] = &[
             item(Command::LeftColumn, None),
             item(Command::ToggleInfo, plain(Key::I)),
             item(Command::Fullscreen, plain(Key::F11)),
+            item(Command::ThumbnailButtons, None),
             MenuEntry::Separator,
             MenuEntry::Submenu(SubmenuKind::Theme, THEME_ITEMS),
         ],
@@ -823,8 +892,8 @@ pub const MENUS: &[Menu] = &[
 /// The right-click menu on an image in the contact sheet or the preview (the compare included):
 /// the commands that act on images, in the order of ADR 0019 §2.9 and E-Q17. Every item has the
 /// same key as its item in `MENUS` (E-Q18). Left out on purpose: Move to Subfolders, RAW ↔ JPEG,
-/// Delete Rejected Images and Reload Folder (ADR 0026 §3.1, T241), which act on the folder or the
-/// view, not on the images clicked.
+/// Delete Rejected Images, Reload Folder (ADR 0026 §3.1, T241) and Buttons on Thumbnails (ADR 0017
+/// §2.8, T245), which act on the folder or the view, not on the images clicked.
 pub const IMAGE_CONTEXT_MENU: &[MenuEntry] = &[
     MenuEntry::ExternalPrograms,
     item(Command::ShowInExplorer, None),
@@ -1180,6 +1249,62 @@ mod tests {
                 assert_ne!(menu_item.command, Command::ReloadFolder);
             }
         }
+    }
+
+    /// Buttons on Thumbnails is a check item of the View menu right after Full Screen, with no
+    /// key; it acts in both views and is not in the right-click menu (ADR 0017 §2.8, U15-Q7,
+    /// T245).
+    #[test]
+    fn buttons_on_thumbnails_follows_full_screen_in_the_view_menu() {
+        let Some(view) = MENUS.iter().find(|menu| menu.kind == MenuKind::View) else {
+            panic!("there is a View menu");
+        };
+        let Some(at) = view
+            .entries
+            .iter()
+            .position(|entry| *entry == item(Command::Fullscreen, plain(Key::F11)))
+        else {
+            panic!("Full Screen is in the View menu");
+        };
+        assert_eq!(
+            view.entries.get(at + 1),
+            Some(&item(Command::ThumbnailButtons, None))
+        );
+        assert_eq!(Command::ThumbnailButtons.acts_in(), Where::Both);
+        for entry in IMAGE_CONTEXT_MENU {
+            if let MenuEntry::Item(menu_item) = entry {
+                assert_ne!(menu_item.command, Command::ThumbnailButtons);
+            }
+        }
+    }
+
+    /// A colour with alpha drawn over an opaque background: premultiplied + background × (1 −
+    /// alpha), opaque (T245's contrast pairs).
+    #[test]
+    fn a_transparent_colour_over_a_background() {
+        assert_eq!(
+            over(Color32::from_black_alpha(0x8c), Color32::WHITE),
+            Color32::from_gray(0x73)
+        );
+        assert_eq!(
+            over(Color32::from_black_alpha(0x8c), Color32::BLACK),
+            Color32::BLACK
+        );
+        assert_eq!(
+            over(Color32::from_gray(0x40), Color32::WHITE),
+            Color32::from_gray(0x40)
+        );
+        assert_eq!(
+            over(Color32::TRANSPARENT, Color32::from_gray(0x40)),
+            Color32::from_gray(0x40)
+        );
+        assert_eq!(
+            over(
+                Color32::from_rgba_premultiplied(0x62, 0x62, 0x62, 0xe0),
+                Color32::WHITE
+            ),
+            Color32::from_gray(0x62 + 0x1f)
+        );
     }
 
     /// Delete to Recycle Bin (Delete) and Delete Rejected Images (no key) are the last items of

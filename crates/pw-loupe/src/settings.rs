@@ -72,6 +72,9 @@ const IMPORT_INCREMENTAL: &str = "import_incremental";
 /// companion files that move with an image (ADR 0017 §2.6, U9-Q5, U9-Q10, T171).
 const MOVE_TO_SUBFOLDERS: &str = "move_to_subfolders";
 const COMPANION_SUFFIXES: &str = "companion_suffixes";
+/// The key of the four buttons on a thumbnail in the contact sheet, on or off (ADR 0017 §2.8,
+/// U15-Q7, T245).
+const THUMBNAIL_BUTTONS: &str = "thumbnail_buttons";
 /// The companion suffixes by default (U9-Q10).
 const DEFAULT_COMPANION_SUFFIXES: [&str; 3] = ["dop", "pp3", "on1"];
 /// The keys of the metadata window's sections, open or collapsed (ADR 0017 U10-Q6, T123).
@@ -223,6 +226,9 @@ pub struct ShellSettings {
     /// The suffixes of the companion files that move with an image, without the dot, trimmed and
     /// in lower case (U9-Q10, T171).
     pub companion_suffixes: Vec<String>,
+    /// The four buttons on a thumbnail in the contact sheet, shown while the pointer is over the
+    /// cell (View ▸ Buttons on Thumbnails; ADR 0017 §2.8, U15-Q7, T245); on by default.
+    pub thumbnail_buttons: bool,
 }
 
 /// The library's lists as `settings.txt` keeps them (T135, U4-Q3, U4-Q4): the favourites in the
@@ -291,6 +297,8 @@ impl Default for ShellSettings {
             // Images are not moved (U9-Q5); the companion suffixes of U9-Q10.
             move_to_subfolders: false,
             companion_suffixes: default_companion_suffixes(),
+            // The buttons on a thumbnail shown (U15-Q7).
+            thumbnail_buttons: true,
         }
     }
 }
@@ -424,23 +432,26 @@ pub fn load_settings_and_library(path: &Path) -> (Settings, SavedLibrary, Vec<St
             },
             WINDOW_MAXIMIZED | FULLSCREEN | COLUMNS_HIDDEN | PREVIEW_HIDDEN | SORT_DESCENDING
             | CLIP_HIGHLIGHTS | CLIP_SHADOWS | FOCUS_MARKING | COMPARE_ABOVE_BELOW
-            | COMPARE_LOCKED | IMPORT_INCREMENTAL | MOVE_TO_SUBFOLDERS => match parse_bool(value) {
-                Some(on) => match key {
-                    WINDOW_MAXIMIZED => shell.window_maximized = on,
-                    FULLSCREEN => shell.fullscreen = on,
-                    PREVIEW_HIDDEN => shell.preview_hidden = on,
-                    SORT_DESCENDING => shell.sort.descending = on,
-                    CLIP_HIGHLIGHTS => shell.clip_highlights = on,
-                    CLIP_SHADOWS => shell.clip_shadows = on,
-                    FOCUS_MARKING => shell.focus_marking = on,
-                    COMPARE_ABOVE_BELOW => shell.compare_above_below = on,
-                    COMPARE_LOCKED => shell.compare_locked = on,
-                    IMPORT_INCREMENTAL => shell.import_incremental = on,
-                    MOVE_TO_SUBFOLDERS => shell.move_to_subfolders = on,
-                    _ => shell.columns_hidden = on,
-                },
-                None => problems.push(bad("true or false")),
-            },
+            | COMPARE_LOCKED | IMPORT_INCREMENTAL | MOVE_TO_SUBFOLDERS | THUMBNAIL_BUTTONS => {
+                match parse_bool(value) {
+                    Some(on) => match key {
+                        WINDOW_MAXIMIZED => shell.window_maximized = on,
+                        FULLSCREEN => shell.fullscreen = on,
+                        PREVIEW_HIDDEN => shell.preview_hidden = on,
+                        SORT_DESCENDING => shell.sort.descending = on,
+                        CLIP_HIGHLIGHTS => shell.clip_highlights = on,
+                        CLIP_SHADOWS => shell.clip_shadows = on,
+                        FOCUS_MARKING => shell.focus_marking = on,
+                        COMPARE_ABOVE_BELOW => shell.compare_above_below = on,
+                        COMPARE_LOCKED => shell.compare_locked = on,
+                        IMPORT_INCREMENTAL => shell.import_incremental = on,
+                        MOVE_TO_SUBFOLDERS => shell.move_to_subfolders = on,
+                        THUMBNAIL_BUTTONS => shell.thumbnail_buttons = on,
+                        _ => shell.columns_hidden = on,
+                    },
+                    None => problems.push(bad("true or false")),
+                }
+            }
             LEFT_COLUMN_WIDTH | RIGHT_COLUMN_WIDTH | PREVIEW_COLUMN_WIDTH => {
                 match value.parse::<u32>() {
                     Ok(width) if key == LEFT_COLUMN_WIDTH => shell.left_column_width = width,
@@ -680,6 +691,10 @@ fn shell_lines(shell: &ShellSettings) -> String {
         "{MOVE_TO_SUBFOLDERS} = {}\n{COMPANION_SUFFIXES} = {}\n",
         shell.move_to_subfolders,
         shell.companion_suffixes.join(", ")
+    ));
+    text.push_str(&format!(
+        "{THUMBNAIL_BUTTONS} = {}\n",
+        shell.thumbnail_buttons
     ));
     text
 }
@@ -1030,7 +1045,8 @@ mod tests {
              preview_clipping = open\n\
              compare_above_below = false\ncompare_locked = true\n\
              import_incremental = true\n\
-             move_to_subfolders = false\ncompanion_suffixes = dop, pp3, on1\n"
+             move_to_subfolders = false\ncompanion_suffixes = dop, pp3, on1\n\
+             thumbnail_buttons = true\n"
         );
     }
 
@@ -1227,6 +1243,7 @@ mod tests {
             import_incremental: false,
             move_to_subfolders: true,
             companion_suffixes: vec!["xmp2".to_string(), "dop".to_string()],
+            thumbnail_buttons: false,
         }
     }
 
@@ -2179,6 +2196,72 @@ mod tests {
         }
     }
 
+    // ---------- the buttons on a thumbnail (ADR 0017 §2.8, U15-Q7, T245) ----------
+
+    #[test]
+    fn the_thumbnail_buttons_default_to_on() {
+        assert!(ShellSettings::default().thumbnail_buttons);
+    }
+
+    #[test]
+    fn the_thumbnail_buttons_are_written_and_read() {
+        let dir = TempDir::new();
+        let path = dir.0.join("settings.txt");
+        for on in [true, false] {
+            let settings = Settings {
+                shell: ShellSettings {
+                    thumbnail_buttons: on,
+                    ..ShellSettings::default()
+                },
+                ..Settings::default()
+            };
+            save_settings(&path, &settings).unwrap();
+            let text = std::fs::read_to_string(&path).unwrap();
+            assert!(
+                text.ends_with(&format!("\nthumbnail_buttons = {on}\n")),
+                "{text}"
+            );
+            let (loaded, problems) = load_settings(&path);
+            assert!(problems.is_empty(), "{problems:?}");
+            assert_eq!(loaded, settings);
+        }
+        // read from the file's value; nothing else changes
+        let (_dir, path) = TempDir::with_file("# RawStride\nthumbnail_buttons = false\n");
+        let (settings, problems) = load_settings(&path);
+        assert!(problems.is_empty(), "{problems:?}");
+        assert_eq!(
+            settings.shell,
+            ShellSettings {
+                thumbnail_buttons: false,
+                ..ShellSettings::default()
+            }
+        );
+    }
+
+    #[test]
+    fn a_file_without_the_thumbnail_buttons_gives_on_and_no_problem() {
+        let (_dir, path) =
+            TempDir::with_file("# RawStride\ncreate_iim = true\nfocus_marking = true\n");
+        let (settings, problems) = load_settings(&path);
+        assert!(problems.is_empty(), "{problems:?}");
+        assert!(settings.shell.thumbnail_buttons);
+    }
+
+    #[test]
+    fn a_bad_value_of_the_thumbnail_buttons_keeps_on_and_names_the_line() {
+        for value in ["on", "off", "shown", "0", ""] {
+            let (_dir, path) = TempDir::with_file(&format!(
+                "# RawStride\ncreate_iim = true\nthumbnail_buttons = {value}\n"
+            ));
+            let (settings, problems) = load_settings(&path);
+            assert_one_problem_on_line(&problems, 3);
+            assert!(problems[0].contains("thumbnail_buttons"), "{problems:?}");
+            assert!(settings.shell.thumbnail_buttons, "{value}");
+            assert_eq!(settings.shell, ShellSettings::default(), "{value}");
+            assert!(settings.create_iim, "{value}");
+        }
+    }
+
     // ---------- the compare's layout and lock (ADR 0017 §2.2, U6-Q7, U6-Q8, T151) ----------
 
     #[test]
@@ -2363,10 +2446,11 @@ mod tests {
             };
             save_settings(&path, &settings).unwrap();
             let text = std::fs::read_to_string(&path).unwrap();
-            // The two lines come last, `move_to_subfolders` first.
+            // The two lines come last but `thumbnail_buttons` (T245), `move_to_subfolders` first.
             assert!(
                 text.ends_with(&format!(
-                    "\nimport_incremental = true\nmove_to_subfolders = {on}\n{line}\n"
+                    "\nimport_incremental = true\nmove_to_subfolders = {on}\n{line}\n\
+                     thumbnail_buttons = true\n"
                 )),
                 "{text}"
             );
@@ -2508,7 +2592,7 @@ mod tests {
         save_settings_with_library(&path, &settings, &library).unwrap();
         let text = std::fs::read_to_string(&path).unwrap();
         let expected = format!(
-            "companion_suffixes = dop, pp3, on1\n\
+            "companion_suffixes = dop, pp3, on1\nthumbnail_buttons = true\n\
              external_program = Capture One | C:\\Program Files\\Capture One\\CaptureOne.exe\n\
              favourite = {}\n",
             full("Favourite").display()

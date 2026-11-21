@@ -460,10 +460,25 @@ pub fn command_text(command: Command) -> String {
         Command::ToggleColumns => "Side Columns".to_owned(),
         Command::LeftColumn => "Left Column".to_owned(),
         Command::Fullscreen => "Full Screen".to_owned(),
+        Command::ThumbnailButtons => "Buttons on Thumbnails".to_owned(),
         Command::Theme(theme) => theme_text(theme).to_owned(),
         Command::Sort(key) => sort_key_text(key).to_owned(),
         Command::SortDescending => "Descending".to_owned(),
         Command::About => "About RawStride…".to_owned(),
+    }
+}
+
+/// The hover text of a button on a thumbnail in the contact sheet (ADR 0017 §2.8, T245): the
+/// command's menu text and the key its menu item shows, for example "Rotate Left (Ctrl+←)"; with
+/// no key, the menu text alone.
+pub fn thumb_button_hover_text(command: Command, key: Option<KeyChord>) -> String {
+    let command = command_text(command);
+    match key {
+        Some(chord) => {
+            let key = key_text(chord);
+            format!("{command} ({key})")
+        }
+        None => command,
     }
 }
 
@@ -598,6 +613,7 @@ mod tests {
                 "Left Column",
                 "Inspector",
                 "Full Screen",
+                "Buttons on Thumbnails",
                 "Dark",
                 "Light",
                 "About RawStride…",
@@ -666,6 +682,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         ];
         let expected: Vec<Option<String>> = expected
             .into_iter()
@@ -676,6 +693,48 @@ mod tests {
             MENUS
                 .iter()
                 .any(|menu| menu.entries.contains(&MenuEntry::Filter))
+        );
+    }
+
+    /// The hover texts of the four buttons on a thumbnail, each key taken from the command's item
+    /// in the menu bar (ADR 0017 §2.8, T245).
+    #[test]
+    fn the_hover_texts_of_the_thumbnail_buttons() {
+        let key_of = |command: Command| {
+            menu_items()
+                .into_iter()
+                .find(|item| item.command == command)
+                .and_then(|item| item.key)
+        };
+        let texts: Vec<String> = [
+            Command::RotateLeft,
+            Command::RotateRight,
+            Command::Metadata,
+            Command::ToggleView,
+        ]
+        .into_iter()
+        .map(|command| thumb_button_hover_text(command, key_of(command)))
+        .collect();
+        assert_eq!(
+            texts,
+            [
+                "Rotate Left (Ctrl+←)",
+                "Rotate Right (Ctrl+→)",
+                "Metadata… (M)",
+                "Preview (G)",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_thumbnail_button_hover_text_without_a_key_is_the_menu_text() {
+        assert_eq!(
+            thumb_button_hover_text(Command::RotateLeft, None),
+            "Rotate Left"
+        );
+        assert_eq!(
+            thumb_button_hover_text(Command::ThumbnailButtons, None),
+            "Buttons on Thumbnails"
         );
     }
 

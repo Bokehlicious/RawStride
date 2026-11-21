@@ -20,6 +20,10 @@ Downloads are on the [Releases page](https://github.com/Bokehlicious/RawStride/r
 - File ▸ Reload Folder (F5) lists the folder again and reads every image's rating and metadata
   anew; new files are placed in the chosen order, and the current image, the marks, the filter
   and the place in the contact sheet are kept.
+- Four buttons on a thumbnail in the contact sheet, shown while the pointer is over it: Rotate
+  Left, Rotate Right, Metadata… and Preview. View ▸ Buttons on Thumbnails turns them off.
+- With the image in the metadata window marked and two or more images marked, Previous, Next
+  and Save and Next step only between the marked images.
 
 ### Changed
 
