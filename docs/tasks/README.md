@@ -87,10 +87,12 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status |
 |---|---|---|
+| [T247](T247-folder-watcher.md) | ADR 0026 F2a: the folder watcher, one thread with `ReadDirectoryChangesW` (pw-loupe) | Open |
+| [T248](T248-folder-watcher-in-the-shell.md) | ADR 0026 F2b: the folder watcher follows the tabs and ends before an eject (pw-loupe) | Blocked: waits for T247 |
 
 ## Writing a task (owner and reviewer)
 
-- **Number:** the next free number after the highest in this folder and `done/` (T247 next).
+- **Number:** the next free number after the highest in this folder and `done/` (T249 next).
 - **File:** `docs/tasks/T246-<a-few-words>.md`; three digits, lower case, words joined by `-`.
 - **Index:** add a row to "Open tasks" above and keep its status in step with the file's heading.
 - **Size (owner, 2026-11-15, after T142):** one task is one layer (a C++ shim or a core crate, or
@@ -129,6 +131,12 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
   ("Keep a Changelog" groups: Added, Changed, Fixed, Removed), in the same commit. Tasks that change
   only tests, tools, CI or documents get none. At a release the section is renamed
   (`docs/distribution.md`, "Making a release").
+- **When to suggest a release (owner, 2026-11-21):** the reviewer tells the owner, unasked, that
+  a new version is due when `## [Unreleased]` in `CHANGELOG.md` is not empty and an ADR's steps
+  or an order in `plans/adr-0018-0025-steps.md` has just been finished, or when it has grown long
+  since the last release. The suggestion names the version number by ADR 0031 RL-Q1 (minor for a
+  new feature, patch for fixes only) and what it would contain. The owner decides; the tag is set
+  and pushed only on the owner's yes.
 - **Leftovers:** before a task is set to Done, everything its log calls left, not covered, noted
   or not changed gets a home: a new task; a step's row or notes in `plans/` (something a planned
   step must take up); an item in `known-limits.md` (accepted, a task only if it is seen in use),

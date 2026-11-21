@@ -171,3 +171,4 @@ U13), so they are not lost.
 |---|---|---|
 | 1 | 2026-11-20 | Proposed by the reviewer after the repository became public; waits for RL-Q1–RL-Q13 |
 | 2 | 2026-11-20 | Accepted: the owner approved RL-Q1–RL-Q13 as proposed; ADR 0002 §4 gets the About window's line |
+| 3 | 2026-11-21 | When a later release is suggested: a rule in `docs/tasks/README.md` (the reviewer raises it when `Unreleased` is not empty and an ADR or a step order is finished), approved by the owner |
