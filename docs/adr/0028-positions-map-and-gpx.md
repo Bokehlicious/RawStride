@@ -1,11 +1,13 @@
 # ADR 0028: Positions, a map and GPX tracks
 
-- Status: **proposed, parked (owner, 2026-11-19).** A draft written down so the thinking is
-  kept; many steps come before it. No question in §4 is answered, nothing is placed in the step
-  plan, and nothing is built, installed or added as a dependency by this ADR. When it is taken
-  up, the questions are answered first and each step in §5 becomes its own task, with its own
-  approval and commit.
-- Date: 2026-11-19
+- Status: **accepted by the owner (2026-11-21):** every question in §4 answered as proposed,
+  L-Q1 as (b). Proposed and parked on 2026-11-19. The new crate `pw-map` is approved (L-Q8);
+  new external dependencies (source C, and SQLite if MBTiles is ever needed) are not, and each is
+  approved by the owner in its step after ADR 0002's licence check. Nothing is built or
+  installed by this ADR; the steps in §5 are placed in
+  [the step plan](../tasks/plans/adr-0018-0025-steps.md) as order 12, and each becomes its own
+  task, with its own approval and commit.
+- Date: 2026-11-19 (accepted 2026-11-21)
 - Related:
   - ADR 0017 §7.2 (the row "GPS: import a GPX track …, set a position on a map, fill in city,
     country and location from the position"), which this ADR takes up; §2.1 (main window,
@@ -41,7 +43,7 @@ The owner wants to:
 2. set a position for one or more images directly on a map;
 3. set positions from a GPX track recorded during the shoot, matched against the capture times.
 
-## 2. Decision (proposed)
+## 2. Decision
 
 ### 2.1 Offline by default
 
@@ -239,11 +241,11 @@ The map must not slow down the contact sheet or the preview (V1–V8):
 
 For scale: `pw-loupe` is about 51,000 lines (2026-11-19).
 
-## 4. Questions (open)
+## 4. Questions (answered by the owner, 2026-11-21: every proposal approved)
 
-| # | Question | Proposal |
+| # | Question | Answer (as proposed) |
 |---|---|---|
-| L-Q1 | **Which properties receive a position?** Many programs read a position from Exif GPS (in the file, or `exif:GPSLatitude` … in XMP), not from Location Created, so a position written only there may not be seen elsewhere. (a) Location Created only, as ADR 0007 §6.7 reads it; (b) also `exif:GPS*` in XMP and the sidecar; (c) also the Exif GPS tags in JPEG, TIFF and DNG | (b): interoperable without writing Exif in the file; needs an ADR 0007 revision of §6.3 and §6.7 (which wins, how the two are kept equal, conflicts). The owner decides |
+| L-Q1 | **Which properties receive a position?** Many programs read a position from Exif GPS (in the file, or `exif:GPSLatitude` … in XMP), not from Location Created, so a position written only there may not be seen elsewhere. (a) Location Created only, as ADR 0007 §6.7 reads it; (b) also `exif:GPS*` in XMP and the sidecar; (c) also the Exif GPS tags in JPEG, TIFF and DNG | (b): interoperable without writing Exif in the file; needs an ADR 0007 revision of §6.3 and §6.7 (which wins, how the two are kept equal, conflicts). **Decided (b), owner 2026-11-21**; the ADR 0007 revision is written with L1 |
 | L-Q2 | Network: may RawStride use it, and how? | Default source A, no network; B and C turned on in Settings; C with a plain statement of what the provider sees |
 | L-Q3 | Priority between the camera's GPS, a GPX match and a position set by hand; with ADR 0007's "XMP wins", is a GPX position in XMP that differs from the camera's Exif a conflict or an intended choice? | A position RawStride writes is the user's choice and wins without a conflict; never overwritten silently (§2.3, §2.4's default); details in the ADR 0007 revision of L-Q1 |
 | L-Q4 | Place search on the map and filling city, country … from a position (geocoding, reverse geocoding)? | Not in this ADR (§6): both need an online service; a later amendment |
@@ -259,7 +261,7 @@ For scale: `pw-loupe` is about 51,000 lines (2026-11-19).
 | L-Q14 | "From a photo of the clock…" for the offset? | A later step (L7b), after the dialog is in use |
 | L-Q15 | What the Map view shows: the tab's shown images (after the filter), or all of the folder? | The shown images, as the contact sheet |
 
-## 5. Steps (proposed)
+## 5. Steps
 
 Each step ends with tests (GR11) and the owner's hand check; steps that change the preview also
 with `latency.ps1`.
@@ -277,8 +279,8 @@ with `latency.ps1`.
 | **L9** | Source C: online tiles, the disk cache, the setting and its text (L-Q2, L-Q7) | New dependencies approved |
 
 Order: L1, L2, L3, L4, L5, L6, L7, then L8 and L9 as the owner chooses. L1 needs neither network
-nor a map and can be done on its own. L6 and L7 wait for ADR 0020. **Not placed in the step plan
-(owner, 2026-11-19):** parked until the steps before it are done.
+nor a map and can be done on its own. L6 and L7 wait for ADR 0020. **Placed in the step plan
+(owner, 2026-11-21)** as order 12, after ADR 0030 K7; it was parked from 2026-11-19 until then.
 
 ## 6. Not included
 
@@ -291,9 +293,11 @@ nor a map and can be done on its own. L6 and L7 wait for ADR 0020. **Not placed 
 ## 7. Consequences
 
 - **ADR 0007:** §6.3 and §6.7 revised for writing a position, depending on L-Q1 and L-Q3.
-- **ADR 0017:** the §7.2 GPS row points to this draft (2026-11-19); §2.3.1's "The GPS coordinates
-  are read-only until the GPS ADR" points here when this ADR is accepted.
-- **ADR 0025:** an option to leave the position out of an export, if L-Q5 is approved.
+- **ADR 0017:** the §7.2 GPS row points here (2026-11-19); §2.3.1's "The GPS coordinates are
+  read-only until the GPS ADR" points here (2026-11-21, on acceptance).
+- **ADR 0025:** an option to leave the position out of an export (L-Q5, approved 2026-11-21);
+  ADR 0025's steps (order 8) come before this ADR's, so the amendment is written with L1, when
+  the properties that hold a position are settled.
 - **ADR 0022:** the batch reading of values possibly shared (L-Q11).
 - **New crate** `pw-map` (working name); new dependencies only with source C (an HTTP client, TLS,
   possibly a PNG decoder) and possibly B (SQLite for MBTiles), each approved by the owner and

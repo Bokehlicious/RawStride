@@ -24,7 +24,7 @@
   - ADR 0029 (editor profiles): split from this ADR on the owner's decision (2026-11-19); a hit
     list is sent to the editing program with ADR 0019's "Open in {name}";
   - ADR 0010 and `pw-ingest` (import): an import into a catalog root adds its files (§3.4);
-  - ADR 0028 (positions, parked): a search by place radius would come from there;
+  - ADR 0028 (positions; parked when this ADR was written, accepted 2026-11-21): a search by place radius would come from there;
   - ADR 0002 (licence `GPL-3.0-or-later`): the new dependency (§3.2);
   - [clean-room.md](../clean-room.md): the functions are described from RawStride's own needs.
 

@@ -12,7 +12,7 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 | `T<nnn>-<name>.md` (this folder) | Open tasks, one file each |
 | [`backlog.md`](backlog.md) | Not for agents yet: needs a decision, a dependency or an ADR first |
 | [`known-limits.md`](known-limits.md) | Accepted limits and leftovers, by area; a task only if seen in use |
-| [`plans/`](plans/) | Step lists for ADRs that have none of their own (ADR 0007 milestone 8, ADR 0017, ADR 0018–0027 in one order, in `adr-0018-0025-steps.md`), and making the repository public (`public-release.md`, accepted 2026-11-19) |
+| [`plans/`](plans/) | Step lists for ADRs that have none of their own (ADR 0007 milestone 8, ADR 0017, ADR 0018–0031 in one order, in `adr-0018-0025-steps.md`), and making the repository public (`public-release.md`, accepted 2026-11-19) |
 | [`done/`](done/README.md) | Finished tasks T1–T203, and the log they were kept in until 2026-11-13 |
 
 
