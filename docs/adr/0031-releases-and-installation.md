@@ -145,7 +145,9 @@ program folder (ADR 0002 §2.5; T120 looks there before PATH).
 | RL9 | task | The MSI (RL-Q5) | RL7 and the owner's go |
 
 Placed by the owner (2026-11-20) as order 1d of `docs/tasks/plans/adr-0018-0025-steps.md`,
-before ADR 0024 O1; RL8 and RL9 do not hold O1 back.
+before ADR 0024 O1; RL8 and RL9 do not hold O1 back. RL1–RL7 are done (2026-11-20); RL8 and RL9
+were moved by the owner on 2026-11-21 to order 2c of that plan, after ADR 0017's rest (U10b, U8,
+U13), so they are not lost.
 
 ## 7. Not included
 

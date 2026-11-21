@@ -32,8 +32,9 @@ Reorganised on 2026-11-21 (owner): the earlier file mixed these three kinds and 
   `known-limits.md`, "Lists with qualifiers".
 - **Templates in full** (ADR 0007 §10, left out of T88): template sub-fields of lists of
   structures (Location Created, Image Creator, Copyright Owner, Licensor), variables (`{date}` …),
-  template files in XMP with the modes. All are ADR 0017 U13, which waits for the decision on
-  where the modes are stored (postponed by the owner).
+  template files in XMP with the modes. All are ADR 0017 U13 (order 2b in
+  `plans/adr-0018-0025-steps.md`, placed 2026-11-21), which first needs the owner's decision on
+  where the modes are stored.
 - **A filter bar of toggle buttons instead of drop-down lists** (owner idea, 2026-11-10, after T61;
   ADR 0014 §15): a row "0★ 1★ 2★ 3★ 4★ 5★" and a row of colour swatches, each clicked on and off,
   with a check box per row that turns the row on or off. Needs an amendment of ADR 0014 first: the
