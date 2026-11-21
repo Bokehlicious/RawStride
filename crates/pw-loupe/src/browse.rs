@@ -3,15 +3,59 @@
 //! in the grid and the loupe that recompute the list before and after the move. Plain Rust, no I/O
 //! (GR11); the shown rating of each file comes through a closure.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 use pw_metadata::Rating;
 
 use crate::filter::{matches, nearest_visible, visible};
 use crate::grid::{Navigation, navigate};
 use crate::selection::Selection;
+use crate::sort::{CaptureTimes, Keyed, SortKey, SortOrder, key_known, place};
 use crate::tabs::Tab;
+
+/// What `Tab::relist` found (ADR 0026 F1): how many files came and went, and the current file
+/// when it was among the gone ones (for F-Q5's text).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Relisted {
+    pub added: usize,
+    pub removed: usize,
+    pub current_removed: Option<PathBuf>,
+}
+
+impl Relisted {
+    /// Whether a file came or went.
+    pub fn changed(&self) -> bool {
+        self.added != 0 || self.removed != 0
+    }
+}
+
+/// Puts each of `new` among `placed` where `order` puts it (`sort::place`), the values of the
+/// placed files taken once for all of them (with `Modified` each value is a disk read). Returns
+/// the placed files and the new ones in their new order.
+fn place_all(
+    placed: &[PathBuf],
+    new: Vec<PathBuf>,
+    order: SortOrder,
+    capture: &CaptureTimes,
+    rating_of: &dyn Fn(&Path) -> Option<Rating>,
+    modified_of: &dyn Fn(&Path) -> Option<SystemTime>,
+) -> Vec<PathBuf> {
+    if new.is_empty() {
+        return placed.to_vec();
+    }
+    let mut keyed: Vec<Keyed> = placed
+        .iter()
+        .map(|path| Keyed::new(path.clone(), order, capture, rating_of, modified_of))
+        .collect();
+    for path in new {
+        let file = Keyed::new(path, order, capture, rating_of, modified_of);
+        let at = place(&keyed, &file, order.descending);
+        keyed.insert(at, file);
+    }
+    keyed.into_iter().map(Keyed::into_path).collect()
+}
 
 /// A step in the preview (the loupe), over the visible list or, with "only the marked", over the
 /// marked images (ADR 0017 §2.2, T111).
@@ -56,9 +100,12 @@ pub fn metadata_neighbour(
 impl Tab {
     /// Recomputes `visible`: every file without an active filter; nothing with an active filter
     /// while the ratings are not read yet (Q7); otherwise the files that match, plus `keep` (the
-    /// image a move lands on, §4.2). Then unmarks the images the filter hides (§2.8), and if the
-    /// current image is hidden, makes the nearest visible one current (§2.3; unchanged when nothing
-    /// is visible). Returns whether `visible` changed.
+    /// image a move lands on, §4.2). Then unmarks the images the filter hides (§2.8), except while
+    /// an active filter waits for the ratings: those images are hidden only because their values
+    /// are unknown, so their marks stay (§2.8 as changed by amendment 3, §16, the owner
+    /// 2026-11-21; this holds for inactive tabs too). If the current image is hidden, makes the
+    /// nearest visible one current (§2.3; unchanged when nothing is visible). Returns whether
+    /// `visible` changed.
     pub fn refilter(
         &mut self,
         ratings_ready: bool,
@@ -66,9 +113,10 @@ impl Tab {
         keep: Option<usize>,
     ) -> bool {
         let count = self.files.len();
+        let waiting_for_ratings = self.filter.is_active() && !ratings_ready;
         let new_visible = if !self.filter.is_active() {
             (0..count).collect()
-        } else if !ratings_ready {
+        } else if waiting_for_ratings {
             Vec::new()
         } else {
             let files = &self.files;
@@ -81,7 +129,9 @@ impl Tab {
         };
         let changed = new_visible != self.visible;
         self.visible = new_visible;
-        self.selection.retain_visible(&self.visible);
+        if !waiting_for_ratings {
+            self.selection.retain_visible(&self.visible);
+        }
         if let Some(nearest) = nearest_visible(&self.visible, self.current) {
             self.current = nearest;
         }
@@ -92,7 +142,8 @@ impl Tab {
     /// image. Images that no longer match leave `visible` at once; if the current image left, the
     /// nearest following visible image becomes current (the last visible one if none follows;
     /// unchanged when nothing is visible, §2.3); marked images that left are unmarked, the others
-    /// stay marked. Returns whether `visible` changed.
+    /// stay marked (while an active filter waits for the ratings nothing is shown and every mark
+    /// stays, as `refilter` says). Returns whether `visible` changed.
     pub fn rated(
         &mut self,
         ratings_ready: bool,
@@ -214,6 +265,193 @@ impl Tab {
         self.current = new_current;
         self.refilter(ratings_ready, rating_of, keep);
         changed
+    }
+
+    /// Checks that the files of `unplaced` are the last files of `files` (ADR 0026 §2 point 4,
+    /// T240): `replace_files` and `reorder` do not know `unplaced`, so it is checked, not
+    /// trusted. The waiting files no longer in `files` are dropped; when the rest are not exactly
+    /// the last files of `files`, in `unplaced`'s order, `unplaced` is emptied and `sorted` set to
+    /// `None`, so the next `follow_sort` applies the whole order (as after an open).
+    fn check_unplaced(&mut self) {
+        if self.unplaced.is_empty() || self.files.ends_with(&self.unplaced) {
+            return;
+        }
+        let listed: HashSet<&PathBuf> = self.files.iter().collect();
+        let still: Vec<PathBuf> = self
+            .unplaced
+            .iter()
+            .filter(|path| listed.contains(path))
+            .cloned()
+            .collect();
+        if self.files.ends_with(&still) {
+            self.unplaced = still;
+        } else {
+            self.unplaced.clear();
+            self.sorted = None;
+        }
+    }
+
+    /// Gives the tab a new listing of its folder (ADR 0026 §2, F1): `listed` is the folder's
+    /// listing as `list_folder` gives it, in the tab's own form (the caller converts; a rename
+    /// that changes only the case counts as one file gone and one new), compared as given; a path
+    /// that comes twice is taken once. A file `pending` names (a write RawStride has queued or in
+    /// flight) counts as listed even when `listed` lacks it: the safe write may rename the
+    /// original away for a moment. The files still there keep their order; the new ones, in
+    /// `listed`'s order, are placed where `order` puts them when the tab is in it (§2 point 4,
+    /// F-Q6) and their key is known, otherwise they wait at the end in `unplaced` (a new file's
+    /// rating is never known here: it has not been read). When the tab is not in `order`, the new
+    /// files go at the end, nothing waits, and `sorted` becomes `None` so that the next
+    /// `follow_sort` applies the whole order. The new list then goes through `replace_files` with
+    /// `current` (the image an undo brings back; `None` for a reload), so the marks, the anchor,
+    /// the filter and the current image follow its rules. With nothing new and nothing gone,
+    /// nothing changes.
+    #[allow(clippy::too_many_arguments)]
+    pub fn relist(
+        &mut self,
+        listed: Vec<PathBuf>,
+        current: Option<&Path>,
+        pending: &dyn Fn(&Path) -> bool,
+        order: SortOrder,
+        ratings_ready: bool,
+        rating_of: &dyn Fn(&Path) -> Option<Rating>,
+        modified_of: &dyn Fn(&Path) -> Option<SystemTime>,
+    ) -> Relisted {
+        self.check_unplaced();
+
+        let mut seen: HashSet<PathBuf> = HashSet::with_capacity(listed.len());
+        let listed: Vec<PathBuf> = listed
+            .into_iter()
+            .filter(|path| seen.insert(path.clone()))
+            .collect();
+        let still_there = |path: &PathBuf| seen.contains(path) || pending(path);
+
+        let mut kept: Vec<PathBuf> = Vec::with_capacity(self.files.len());
+        let mut removed = 0;
+        let mut current_removed = None;
+        for (index, path) in self.files.iter().enumerate() {
+            if still_there(path) {
+                kept.push(path.clone());
+            } else {
+                removed += 1;
+                if index == self.current {
+                    current_removed = Some(path.clone());
+                }
+            }
+        }
+        let old: HashSet<&PathBuf> = self.files.iter().collect();
+        let new: Vec<PathBuf> = listed
+            .into_iter()
+            .filter(|path| !old.contains(path))
+            .collect();
+        if new.is_empty() && removed == 0 {
+            return Relisted::default();
+        }
+        let added = new.len();
+
+        self.unplaced.retain(|path| still_there(path));
+        let new_list = if self.sorted == Some(order) {
+            // The waiting files are the last of `self.files` (checked above), so after the gone
+            // files left they are the last of `kept`.
+            let split = kept.len().saturating_sub(self.unplaced.len());
+            let placed = kept.get(..split).unwrap_or(&[]);
+            let mut waiting: Vec<PathBuf> = kept.get(split..).unwrap_or(&[]).to_vec();
+            let mut to_place = Vec::new();
+            for path in new {
+                if order.key != SortKey::Rating
+                    && key_known(&path, order, &self.capture, ratings_ready)
+                {
+                    to_place.push(path);
+                } else {
+                    self.unplaced.push(path.clone());
+                    waiting.push(path);
+                }
+            }
+            let mut list = place_all(
+                placed,
+                to_place,
+                order,
+                &self.capture,
+                rating_of,
+                modified_of,
+            );
+            list.append(&mut waiting);
+            list
+        } else {
+            self.unplaced.clear();
+            self.sorted = None;
+            kept.extend(new);
+            kept
+        };
+
+        self.replace_files(new_list, current, ratings_ready, rating_of);
+        Relisted {
+            added,
+            removed,
+            current_removed,
+        }
+    }
+
+    /// Places the waiting files whose key is now known (ADR 0026 §2 point 4): when the tab is in
+    /// `order`, after the check of `unplaced`, each file of `unplaced` whose key is known
+    /// (`sort::key_known`), in `unplaced`'s order, is taken out of the tail and put where `order`
+    /// puts it among the placed files; the files still waiting stay at the end. The new order goes
+    /// through `reorder` (the current image, the marks, the anchor and the filter kept as it keeps
+    /// them). Returns whether a file changed place; a file whose place is the end changes nothing
+    /// but still leaves `unplaced`. When the tab is not in `order`, nothing changes.
+    pub fn place_waiting(
+        &mut self,
+        order: SortOrder,
+        ratings_ready: bool,
+        rating_of: &dyn Fn(&Path) -> Option<Rating>,
+        modified_of: &dyn Fn(&Path) -> Option<SystemTime>,
+    ) -> bool {
+        self.place_known(order, ratings_ready, rating_of, modified_of)
+            .unwrap_or(false)
+    }
+
+    /// `place_waiting`, telling a placement apart: `Some(moved)` when at least one file was
+    /// placed, `None` when nothing was (for `follow_sort`'s `SortFollow::Placed`).
+    pub(crate) fn place_known(
+        &mut self,
+        order: SortOrder,
+        ratings_ready: bool,
+        rating_of: &dyn Fn(&Path) -> Option<Rating>,
+        modified_of: &dyn Fn(&Path) -> Option<SystemTime>,
+    ) -> Option<bool> {
+        if self.sorted != Some(order) {
+            return None;
+        }
+        self.check_unplaced();
+        if self.sorted != Some(order) || self.unplaced.is_empty() {
+            return None;
+        }
+        let (known, still): (Vec<PathBuf>, Vec<PathBuf>) = self
+            .unplaced
+            .iter()
+            .cloned()
+            .partition(|path| key_known(path, order, &self.capture, ratings_ready));
+        if known.is_empty() {
+            return None;
+        }
+        let split = self.files.len().saturating_sub(self.unplaced.len());
+        let placed = self.files.get(..split).unwrap_or(&[]);
+        let mut list = place_all(placed, known, order, &self.capture, rating_of, modified_of);
+        list.extend(still.iter().cloned());
+
+        let positions: HashMap<&PathBuf, usize> = self
+            .files
+            .iter()
+            .enumerate()
+            .rev()
+            .map(|(index, path)| (path, index))
+            .collect();
+        let new_order: Vec<usize> = list
+            .iter()
+            .filter_map(|path| positions.get(path).copied())
+            .collect();
+        let moved = self.reorder(&new_order, ratings_ready, rating_of);
+        self.unplaced = still;
+        Some(moved)
     }
 
     /// The position of the current image in `visible`, if it is shown.
@@ -427,6 +665,7 @@ mod tests {
 
     use super::*;
     use crate::filter::{Filter, LabelChoice, LabelFilter, StarCondition, StarFilter};
+    use crate::sort::CaptureTime;
     use crate::tabs::{Tabs, ViewMode};
     use crate::{marked_text, no_match_text, position_text};
 
@@ -606,11 +845,18 @@ mod tests {
         assert!(t.visible.is_empty());
         assert_eq!(t.position(), None);
         assert_eq!(t.current, 4, "unchanged while nothing is visible");
-        assert_eq!(t.selection.count(), 0, "hidden images are unmarked");
+        assert_eq!(
+            t.selection.count(),
+            2,
+            "marks are kept while the ratings are read"
+        );
 
         assert!(t.refilter(true, &of(&ratings), None));
         assert_eq!(t.visible, [2, 4]);
         assert_eq!(t.current, 4);
+        assert!(t.selection.is_marked(4));
+        assert!(!t.selection.is_marked(5));
+        assert_eq!(t.selection.count(), 1);
 
         // Without an active filter, every image is shown even before the ratings are read.
         tabs.set_filter(Filter::default());
@@ -1521,5 +1767,502 @@ mod tests {
         assert!(t.replace_files(files, None, true, &of(&ratings)));
         assert_eq!(t.visible, [7]);
         assert_eq!(t.files.get(t.current), Some(&name(9)));
+    }
+
+    // --- listing a tab again and placing new files (ADR 0026 §2, F1, T240) ---
+
+    fn by(key: SortKey, descending: bool) -> SortOrder {
+        SortOrder { key, descending }
+    }
+
+    fn no_time(_: &Path) -> Option<SystemTime> {
+        None
+    }
+
+    fn never(_: &Path) -> bool {
+        false
+    }
+
+    /// The marked files of `t`, by path, in file order.
+    fn marked_files(t: &Tab) -> Vec<PathBuf> {
+        (0..t.files.len())
+            .filter(|&index| t.selection.is_marked(index))
+            .filter_map(|index| t.files.get(index).cloned())
+            .collect()
+    }
+
+    fn current_file(t: &Tab) -> Option<PathBuf> {
+        t.files.get(t.current).cloned()
+    }
+
+    /// The 12 files of `setup` and `extra`, in file-name order as `list_folder` gives them.
+    fn listing(t: &Tab, extra: &[&str], gone: &[usize]) -> Vec<PathBuf> {
+        let mut files = without(t, gone);
+        files.extend(extra.iter().map(PathBuf::from));
+        files.sort_by_key(|path| path.to_string_lossy().to_lowercase());
+        files
+    }
+
+    fn time(stored: &str) -> Option<CaptureTime> {
+        CaptureTime::parse(stored)
+    }
+
+    /// The `setup` folder sorted by name ascending (the order it is in already).
+    fn sorted_by_name() -> (Tabs, HashMap<PathBuf, Rating>) {
+        let (mut tabs, ratings) = setup();
+        let order = by(SortKey::Name, false);
+        tabs.follow_sort(order, true, &of(&ratings), &no_time);
+        assert_eq!(tab(&mut tabs).sorted, Some(order));
+        (tabs, ratings)
+    }
+
+    /// The `setup` folder sorted by capture time, every file read (14:00:00 + its index, so the
+    /// order is the file-name order).
+    fn sorted_by_capture() -> (Tabs, HashMap<PathBuf, Rating>) {
+        let (mut tabs, ratings) = setup();
+        for index in 0..12 {
+            tabs.record_capture(&name(index), time(&format!("2026:10:30 14:00:{index:02}")));
+        }
+        let order = by(SortKey::Capture, false);
+        tabs.follow_sort(order, true, &of(&ratings), &no_time);
+        assert_eq!(tab(&mut tabs).sorted, Some(order));
+        (tabs, ratings)
+    }
+
+    #[test]
+    fn relist_places_a_new_file_by_name_and_keeps_the_current_image_and_the_marks() {
+        let (mut tabs, ratings) = sorted_by_name();
+        let r = of(&ratings);
+        let t = tab(&mut tabs);
+        t.click(3, false, false, true, &r);
+        t.click(8, true, false, true, &r);
+        let listed = listing(t, &["IMG_005b.ARW"], &[]);
+        let relisted = t.relist(
+            listed,
+            None,
+            &never,
+            by(SortKey::Name, false),
+            true,
+            &r,
+            &no_time,
+        );
+        assert_eq!(
+            relisted,
+            Relisted {
+                added: 1,
+                removed: 0,
+                current_removed: None
+            }
+        );
+        assert!(relisted.changed());
+        assert_eq!(t.files.len(), 13);
+        assert_eq!(t.files.get(6), Some(&PathBuf::from("IMG_005b.ARW")));
+        assert_eq!(current_file(t), Some(name(8)));
+        assert_eq!(marked_files(t), [name(3), name(8)]);
+        assert!(t.unplaced.is_empty());
+        assert_eq!(t.visible.len(), 13);
+    }
+
+    #[test]
+    fn relist_with_the_current_and_a_marked_file_gone_takes_the_following_image() {
+        let (mut tabs, ratings) = sorted_by_name();
+        let r = of(&ratings);
+        let t = tab(&mut tabs);
+        t.click(2, false, false, true, &r);
+        t.click(4, true, false, true, &r);
+        t.click(6, true, false, true, &r);
+        let listed = listing(t, &[], &[4, 6]);
+        let relisted = t.relist(
+            listed,
+            None,
+            &never,
+            by(SortKey::Name, false),
+            true,
+            &r,
+            &no_time,
+        );
+        assert_eq!(
+            relisted,
+            Relisted {
+                added: 0,
+                removed: 2,
+                current_removed: Some(name(6))
+            }
+        );
+        assert_eq!(current_file(t), Some(name(7)));
+        assert_eq!(marked_files(t), [name(2)]);
+    }
+
+    #[test]
+    fn relist_under_capture_waits_for_the_time_and_places_the_file_when_it_is_read() {
+        let (mut tabs, ratings) = sorted_by_capture();
+        let r = of(&ratings);
+        let order = by(SortKey::Capture, false);
+        let first = PathBuf::from("AAA.ARW");
+        let second = PathBuf::from("ZZZ.ARW");
+        let t = tab(&mut tabs);
+        t.click(5, false, false, true, &r);
+
+        // The time of AAA.ARW is not read: it waits at the end.
+        let listed = listing(t, &["AAA.ARW"], &[]);
+        t.relist(listed, None, &never, order, true, &r, &no_time);
+        assert_eq!(t.files.last(), Some(&first));
+        assert_eq!(t.unplaced, std::slice::from_ref(&first));
+        assert_eq!(current_file(t), Some(name(5)));
+
+        // ZZZ.ARW comes while AAA.ARW waits, with its time read (that of IMG_005): it is placed
+        // before the waiting tail, after IMG_005 by name.
+        t.capture
+            .insert(second.clone(), time("2026:10:30 14:00:05"));
+        let listed = listing(t, &["ZZZ.ARW"], &[]);
+        let relisted = t.relist(listed, None, &never, order, true, &r, &no_time);
+        assert_eq!(relisted.added, 1);
+        assert_eq!(t.files.get(6), Some(&second));
+        assert_eq!(t.files.last(), Some(&first));
+        assert_eq!(t.unplaced, std::slice::from_ref(&first));
+
+        // The time of AAA.ARW comes back (before every other): it is placed first.
+        tabs.record_capture(&first, time("2026:10:30 13:00:00"));
+        let t = tab(&mut tabs);
+        assert!(t.place_waiting(order, true, &r, &no_time));
+        assert_eq!(t.files.first(), Some(&first));
+        assert!(t.unplaced.is_empty());
+        assert_eq!(current_file(t), Some(name(5)));
+        assert_eq!(t.files.len(), 14);
+    }
+
+    #[test]
+    fn relist_under_rating_waits_even_with_the_ratings_ready() {
+        let (mut tabs, mut ratings) = setup();
+        let order = by(SortKey::Rating, true);
+        tabs.follow_sort(order, true, &of(&ratings), &no_time);
+        let new = PathBuf::from("NEW.ARW");
+        ratings.insert(new.clone(), stars(4));
+        let r = of(&ratings);
+        let t = tab(&mut tabs);
+        assert_eq!(t.files.first(), Some(&name(2)), "5 stars first");
+
+        let listed = listing(t, &["NEW.ARW"], &[]);
+        t.relist(listed, None, &never, order, true, &r, &no_time);
+        assert_eq!(t.files.last(), Some(&new));
+        assert_eq!(t.unplaced, std::slice::from_ref(&new));
+
+        // Its rating read: after the 5 stars of IMG_002.
+        assert!(t.place_waiting(order, true, &r, &no_time));
+        assert_eq!(t.files.get(1), Some(&new));
+        assert!(t.unplaced.is_empty());
+    }
+
+    #[test]
+    fn relist_with_no_order_applied_puts_the_new_files_at_the_end_in_name_order() {
+        let (mut tabs, ratings) = setup();
+        let r = of(&ratings);
+        let t = tab(&mut tabs);
+        assert_eq!(t.sorted, None);
+        let listed = listing(t, &["B.ARW", "A.ARW"], &[]);
+        let relisted = t.relist(
+            listed,
+            None,
+            &never,
+            by(SortKey::Name, false),
+            true,
+            &r,
+            &no_time,
+        );
+        assert_eq!(relisted.added, 2);
+        assert_eq!(t.files.len(), 14);
+        assert_eq!(t.files.get(12), Some(&PathBuf::from("A.ARW")));
+        assert_eq!(t.files.get(13), Some(&PathBuf::from("B.ARW")));
+        assert_eq!(t.sorted, None);
+        assert!(t.unplaced.is_empty());
+    }
+
+    #[test]
+    fn relist_with_the_same_listing_changes_nothing() {
+        let (mut tabs, ratings) = sorted_by_name();
+        let r = of(&ratings);
+        let t = tab(&mut tabs);
+        t.click(4, false, false, true, &r);
+        let before = t.clone();
+        let listed = listing(t, &[], &[]);
+        let relisted = t.relist(
+            listed,
+            None,
+            &never,
+            by(SortKey::Name, false),
+            true,
+            &r,
+            &no_time,
+        );
+        assert_eq!(relisted, Relisted::default());
+        assert!(!relisted.changed());
+        assert_eq!(*t, before);
+    }
+
+    #[test]
+    fn relist_with_a_given_current_file_makes_it_current() {
+        let (mut tabs, ratings) = sorted_by_name();
+        let r = of(&ratings);
+        let back = PathBuf::from("IMG_007b.ARW");
+        let t = tab(&mut tabs);
+        t.click(2, false, false, true, &r);
+        let listed = listing(t, &["IMG_007b.ARW"], &[]);
+        t.relist(
+            listed,
+            Some(&back),
+            &never,
+            by(SortKey::Name, false),
+            true,
+            &r,
+            &no_time,
+        );
+        assert_eq!(current_file(t), Some(back));
+        assert_eq!(t.current, 8);
+        assert!(t.position().is_some());
+    }
+
+    #[test]
+    fn relist_keeps_a_file_being_written_that_the_listing_lacks() {
+        let (mut tabs, ratings) = sorted_by_name();
+        let r = of(&ratings);
+        let t = tab(&mut tabs);
+        t.click(4, false, false, true, &r);
+        t.click(6, true, false, true, &r);
+        let writing = name(4);
+        let pending = |path: &Path| path == writing.as_path();
+        let listed = listing(t, &["IMG_010b.ARW"], &[4]);
+        let relisted = t.relist(
+            listed,
+            None,
+            &pending,
+            by(SortKey::Name, false),
+            true,
+            &r,
+            &no_time,
+        );
+        assert_eq!(relisted.added, 1);
+        assert_eq!(relisted.removed, 0);
+        assert_eq!(t.files.get(4), Some(&name(4)));
+        assert_eq!(marked_files(t), [name(4), name(6)]);
+    }
+
+    #[test]
+    fn relist_under_another_order_forgets_the_order_and_empties_unplaced() {
+        let (mut tabs, ratings) = sorted_by_capture();
+        let r = of(&ratings);
+        let t = tab(&mut tabs);
+        let listed = listing(t, &["AAA.ARW"], &[]);
+        t.relist(
+            listed,
+            None,
+            &never,
+            by(SortKey::Capture, false),
+            true,
+            &r,
+            &no_time,
+        );
+        assert_eq!(t.unplaced.len(), 1);
+
+        // The user chose another order before the next listing.
+        let listed = listing(t, &["BBB.ARW"], &[]);
+        t.relist(
+            listed,
+            None,
+            &never,
+            by(SortKey::Name, false),
+            true,
+            &r,
+            &no_time,
+        );
+        assert_eq!(t.sorted, None);
+        assert!(t.unplaced.is_empty());
+        assert_eq!(t.files.last(), Some(&PathBuf::from("BBB.ARW")));
+    }
+
+    #[test]
+    fn forget_sort_empties_unplaced() {
+        let (mut tabs, ratings) = sorted_by_capture();
+        let r = of(&ratings);
+        let t = tab(&mut tabs);
+        let listed = listing(t, &["AAA.ARW"], &[]);
+        t.relist(
+            listed,
+            None,
+            &never,
+            by(SortKey::Capture, false),
+            true,
+            &r,
+            &no_time,
+        );
+        assert_eq!(t.unplaced.len(), 1);
+        tabs.forget_sort();
+        assert!(tab(&mut tabs).unplaced.is_empty());
+        assert_eq!(tab(&mut tabs).sorted, None);
+    }
+
+    #[test]
+    fn relist_with_every_file_gone_and_relist_of_an_empty_tab() {
+        let (mut tabs, ratings) = sorted_by_name();
+        let r = of(&ratings);
+        let t = tab(&mut tabs);
+        t.click(3, false, false, true, &r);
+        let relisted = t.relist(
+            Vec::new(),
+            None,
+            &never,
+            by(SortKey::Name, false),
+            true,
+            &r,
+            &no_time,
+        );
+        assert_eq!(
+            relisted,
+            Relisted {
+                added: 0,
+                removed: 12,
+                current_removed: Some(name(3))
+            }
+        );
+        assert!(t.files.is_empty());
+        assert!(t.visible.is_empty());
+        assert_eq!(t.position(), None);
+        assert_eq!(t.selection.count(), 0);
+
+        let mut empty = Tab::default();
+        let listed: Vec<PathBuf> = (0..3).map(name).collect();
+        let relisted = empty.relist(
+            listed.clone(),
+            None,
+            &never,
+            by(SortKey::Name, false),
+            true,
+            &r,
+            &no_time,
+        );
+        assert_eq!(relisted.added, 3);
+        assert_eq!(relisted.current_removed, None);
+        assert_eq!(empty.files, listed);
+        assert_eq!(empty.visible, [0, 1, 2]);
+        // `replace_files`' rule: no old current image and none that followed it, so the last file.
+        assert_eq!(empty.position(), Some(2));
+    }
+
+    #[test]
+    fn a_path_listed_twice_is_taken_once() {
+        let (mut tabs, ratings) = sorted_by_name();
+        let r = of(&ratings);
+        let t = tab(&mut tabs);
+        let mut listed = listing(t, &["IMG_012.ARW"], &[]);
+        listed.push(PathBuf::from("IMG_012.ARW"));
+        let relisted = t.relist(
+            listed,
+            None,
+            &never,
+            by(SortKey::Name, false),
+            true,
+            &r,
+            &no_time,
+        );
+        assert_eq!(relisted.added, 1);
+        assert_eq!(t.files.len(), 13);
+    }
+
+    #[test]
+    fn a_waiting_file_that_is_gone_leaves_unplaced() {
+        let (mut tabs, ratings) = sorted_by_capture();
+        let r = of(&ratings);
+        let order = by(SortKey::Capture, false);
+        let t = tab(&mut tabs);
+        let listed = listing(t, &["AAA.ARW", "BBB.ARW"], &[]);
+        t.relist(listed, None, &never, order, true, &r, &no_time);
+        assert_eq!(
+            t.unplaced,
+            [PathBuf::from("AAA.ARW"), PathBuf::from("BBB.ARW")]
+        );
+
+        let listed: Vec<PathBuf> = t
+            .files
+            .iter()
+            .filter(|path| path.as_path() != Path::new("AAA.ARW"))
+            .cloned()
+            .collect();
+        let relisted = t.relist(listed, None, &never, order, true, &r, &no_time);
+        assert_eq!(relisted.removed, 1);
+        assert_eq!(t.unplaced, [PathBuf::from("BBB.ARW")]);
+        assert_eq!(t.files.last(), Some(&PathBuf::from("BBB.ARW")));
+        assert_eq!(t.sorted, Some(order));
+    }
+
+    #[test]
+    fn a_broken_tail_makes_the_tab_forget_its_order() {
+        let (mut tabs, ratings) = sorted_by_capture();
+        let r = of(&ratings);
+        let order = by(SortKey::Capture, false);
+        let t = tab(&mut tabs);
+        let listed = listing(t, &["AAA.ARW"], &[]);
+        t.relist(listed, None, &never, order, true, &r, &no_time);
+        assert_eq!(t.unplaced.len(), 1);
+
+        // A list where the waiting file comes before a placed one.
+        let mut files = t.files.clone();
+        files.rotate_right(1);
+        assert_eq!(files.first(), Some(&PathBuf::from("AAA.ARW")));
+        t.replace_files(files, None, true, &r);
+        assert!(!t.place_waiting(order, true, &r, &no_time));
+        assert!(t.unplaced.is_empty());
+        assert_eq!(t.sorted, None);
+    }
+
+    #[test]
+    fn place_waiting_under_another_order_changes_nothing() {
+        let (mut tabs, ratings) = sorted_by_capture();
+        let r = of(&ratings);
+        let order = by(SortKey::Capture, false);
+        let t = tab(&mut tabs);
+        let listed = listing(t, &["AAA.ARW"], &[]);
+        t.relist(listed, None, &never, order, true, &r, &no_time);
+        t.capture
+            .insert(PathBuf::from("AAA.ARW"), time("2026:10:30 13:00:00"));
+        let before = t.clone();
+        assert!(!t.place_waiting(by(SortKey::Capture, true), true, &r, &no_time));
+        assert!(!t.place_waiting(by(SortKey::Name, false), true, &r, &no_time));
+        assert_eq!(*t, before);
+    }
+
+    /// ADR 0014 §2.8 as changed by amendment 3 (§16, the owner 2026-11-21): while an active
+    /// filter waits for the ratings, a new listing hides every image and keeps every mark; once
+    /// the ratings are read, the marked files that match stay marked and the others are unmarked.
+    #[test]
+    fn relist_under_a_filter_waiting_for_the_ratings_keeps_the_marks() {
+        let (mut tabs, ratings) = setup();
+        let r = of(&ratings);
+        let t = tab(&mut tabs);
+        t.click(1, false, false, true, &r);
+        t.click(2, true, false, true, &r);
+        t.click(4, true, false, true, &r);
+        tabs.set_filter(filter(
+            StarFilter::All,
+            LabelFilter::only(LabelChoice::Label("Red")),
+        ));
+        let t = tab(&mut tabs);
+        t.refilter(false, &r, None);
+        let listed = listing(t, &["IMG_020.ARW"], &[]);
+        let relisted = t.relist(
+            listed,
+            None,
+            &never,
+            by(SortKey::Name, false),
+            false,
+            &r,
+            &no_time,
+        );
+        assert_eq!(relisted.added, 1);
+        assert!(t.visible.is_empty());
+        assert_eq!(marked_files(t), [name(1), name(2), name(4)]);
+
+        t.refilter(true, &r, None);
+        assert_eq!(t.visible, [2, 4]);
+        assert_eq!(marked_files(t), [name(2), name(4)]);
+        assert_eq!(t.selection.count(), 2);
     }
 }

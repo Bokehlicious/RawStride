@@ -1,4 +1,6 @@
+use std::collections::HashMap;
 use std::ops::Range;
+use std::path::PathBuf;
 
 pub const DEFAULT_THUMBNAIL_SIZE: u32 = 200;
 pub const MIN_THUMBNAIL_SIZE: u32 = 96;
@@ -45,6 +47,43 @@ pub fn columns(available_width: u32, cell_size: u32, spacing: u32) -> usize {
 /// Zero-based row containing `index`.
 pub fn row(index: usize, columns: usize) -> usize {
     index / columns.max(1)
+}
+
+/// The scroll offset that keeps the image at the top of the contact sheet at the same height on
+/// the screen after the visible list changed (ADR 0026 §2 point 5): the image that was at position
+/// `old_top` is now at `new_top`, so `offset` moves by the difference of their rows (`row`) times
+/// `stride` (a row's height with its spacing), computed in `f64` and never below 0. The part of
+/// `offset` below a row boundary is kept. A non-finite `offset` gives 0; a non-finite or
+/// non-positive `stride` gives `offset` unchanged.
+pub fn anchored_offset(
+    offset: f32,
+    stride: f32,
+    columns: usize,
+    old_top: usize,
+    new_top: usize,
+) -> f32 {
+    if !offset.is_finite() {
+        return 0.0;
+    }
+    if !stride.is_finite() || stride <= 0.0 {
+        return offset;
+    }
+    let rows = row(new_top, columns) as f64 - row(old_top, columns) as f64;
+    let anchored = f64::from(offset) + rows * f64::from(stride);
+    anchored.max(0.0) as f32
+}
+
+/// The position in `new_visible` of the first path of `old_from_top` that is in it: the image
+/// that was at the top of the contact sheet, or the first one after it that is still shown
+/// (ADR 0026 §2 point 5). `None` when none is.
+pub fn top_position(old_from_top: &[PathBuf], new_visible: &[PathBuf]) -> Option<usize> {
+    let mut positions: HashMap<&PathBuf, usize> = HashMap::with_capacity(new_visible.len());
+    for (index, path) in new_visible.iter().enumerate() {
+        positions.entry(path).or_insert(index);
+    }
+    old_from_top
+        .iter()
+        .find_map(|path| positions.get(path).copied())
 }
 
 /// Index range containing visible cells and `margin_rows` on either side.
@@ -215,6 +254,45 @@ mod tests {
         assert_eq!(row(7, 4), 1);
         assert_eq!(row(8, 4), 2);
         assert_eq!(row(7, 0), 7);
+    }
+
+    /// ADR 0026 §2 point 5 (T240): 4 columns, rows 110 high.
+    #[test]
+    fn anchored_offset_follows_the_top_image_by_rows() {
+        // The top image (position 5, row 1) moved down one row (position 9, row 2).
+        assert_eq!(anchored_offset(110.0, 110.0, 4, 5, 9), 220.0);
+        // Up two rows (row 3 to row 1), with a partial row (30 below the boundary) kept.
+        assert_eq!(anchored_offset(360.0, 110.0, 4, 13, 4), 140.0);
+        // Within the same row nothing changes.
+        assert_eq!(anchored_offset(125.5, 110.0, 4, 4, 7), 125.5);
+        // Never below 0.
+        assert_eq!(anchored_offset(50.0, 110.0, 4, 8, 0), 0.0);
+        // A non-finite offset gives 0; a zero, negative or non-finite stride the offset as it is.
+        assert_eq!(anchored_offset(f32::NAN, 110.0, 4, 0, 8), 0.0);
+        assert_eq!(anchored_offset(f32::INFINITY, 110.0, 4, 0, 8), 0.0);
+        assert_eq!(anchored_offset(70.0, 0.0, 4, 0, 8), 70.0);
+        assert_eq!(anchored_offset(70.0, -1.0, 4, 0, 8), 70.0);
+        assert_eq!(anchored_offset(70.0, f32::NAN, 4, 0, 8), 70.0);
+        // `columns == 0` is taken as 1, as `row` does: one image per row.
+        assert_eq!(anchored_offset(10.0, 100.0, 0, 2, 5), 310.0);
+    }
+
+    #[test]
+    fn top_position_finds_the_top_image_or_the_first_after_it_still_shown() {
+        let paths = |names: &[&str]| -> Vec<PathBuf> { names.iter().map(PathBuf::from).collect() };
+        let new_visible = paths(&["a", "new", "c", "d", "e"]);
+        assert_eq!(
+            top_position(&paths(&["c", "d", "e"]), &new_visible),
+            Some(2),
+            "still there"
+        );
+        assert_eq!(
+            top_position(&paths(&["b", "d", "e"]), &new_visible),
+            Some(3),
+            "gone; the next one is there"
+        );
+        assert_eq!(top_position(&paths(&["x", "y"]), &new_visible), None);
+        assert_eq!(top_position(&[], &new_visible), None);
     }
 
     #[test]

@@ -246,3 +246,4 @@ was when the task was done, so "this file", "below" and "the Log" in T1–T115 m
 | [T237](T237-rotate-keys-and-menu.md) | ADR 0024 O3c: Rotate Left and Rotate Right in the shell (keys, menu, writes, rollback) |
 | [T238](T238-accept-the-hiddendataoffset-fix-warning.md) | Accept the write warning "Fixed incorrect HiddenDataOffset" by name (Sony ILCE-1 JPEGs) |
 | [T239](T239-writing-rotations-line.md) | A separate Tasks line "Writing rotations: {n}" (pw-loupe) |
+| [T240](T240-relist-a-tab-and-place-new-files.md) | ADR 0026 F1a: list a tab again, place new files in the sort, keep the contact sheet still (pw-loupe, logic) |

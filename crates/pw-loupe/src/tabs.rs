@@ -37,6 +37,11 @@ pub struct Tab {
     pub sorted: Option<SortOrder>,
     /// The capture times read for this tab (U14-Q4), kept while it is open.
     pub capture: CaptureTimes,
+    /// Files listed since the order was applied that wait for their key's value (a capture time
+    /// or a rating) before they are placed (ADR 0026 §2 point 4, T240). They are always the last
+    /// files of `files`, in the order they came (`relist` and `place_waiting` keep it so, and
+    /// check it first, since `replace_files` and `reorder` do not know this list).
+    pub unplaced: Vec<PathBuf>,
 }
 
 impl Tab {
@@ -46,6 +51,7 @@ impl Tab {
         // The folder in file-name order from `list_folder`: the sort is applied again (U14-Q5).
         self.sorted = None;
         self.capture.clear();
+        self.unplaced.clear();
         self.folder = Some(folder);
         self.files = files;
         self.current = self
@@ -64,8 +70,9 @@ impl Tab {
 
     /// Applies `order` once when the files are not in it yet (U14-Q4, U14-Q5): when its keys are
     /// all read, the files are reordered (`reorder`, keeping the current image, the marking and
-    /// the filter) and the order is remembered; until then the tab keeps its order. Returns what
-    /// happened.
+    /// the filter) and the order is remembered; until then the tab keeps its order. When the
+    /// files are in the order already, the waiting files whose key is now known are placed
+    /// (`place_waiting`, ADR 0026 §2 point 4). Returns what happened.
     pub fn follow_sort(
         &mut self,
         order: SortOrder,
@@ -74,7 +81,14 @@ impl Tab {
         modified_of: &dyn Fn(&Path) -> Option<SystemTime>,
     ) -> SortFollow {
         if self.sorted == Some(order) {
-            return SortFollow::Sorted;
+            if let Some(moved) = self.place_known(order, ratings_ready, rating_of, modified_of) {
+                return SortFollow::Placed { moved };
+            }
+            // A broken tail of waiting files makes the tab forget its order (`place_known`):
+            // the whole order is applied below.
+            if self.sorted == Some(order) {
+                return SortFollow::Sorted;
+            }
         }
         match plan(
             &self.files,
@@ -87,6 +101,8 @@ impl Tab {
             SortPlan::Order(new_order) => {
                 let moved = self.reorder(&new_order, ratings_ready, rating_of);
                 self.sorted = Some(order);
+                // The whole order now holds for every file.
+                self.unplaced.clear();
                 SortFollow::Reordered { moved }
             }
             SortPlan::ReadingCaptureTimes { read, total } => {
@@ -104,6 +120,9 @@ pub enum SortFollow {
     Sorted,
     /// The order was applied now; `moved` when a file changed place.
     Reordered { moved: bool },
+    /// The files were in the order and waiting files were placed in it (ADR 0026 §2 point 4):
+    /// the contact sheet keeps its top image; `moved` when a file changed place.
+    Placed { moved: bool },
     /// Waiting for the capture times: `read` of `total` have come back.
     ReadingCaptureTimes { read: usize, total: usize },
     /// Waiting for the ratings.
@@ -271,10 +290,12 @@ impl Tabs {
     }
 
     /// Forgets the order every tab is in, so the next `follow_sort` applies the chosen one again:
-    /// choosing the sort the tabs are in already (U14-Q5). The capture times are kept.
+    /// choosing the sort the tabs are in already (U14-Q5). The capture times are kept; no file
+    /// waits any more, since the whole order is applied next.
     pub fn forget_sort(&mut self) {
         for tab in &mut self.tabs {
             tab.sorted = None;
+            tab.unplaced.clear();
         }
     }
 
@@ -967,6 +988,99 @@ mod tests {
             SortFollow::Reordered { moved: true }
         );
         assert_eq!(file_names(active(&tabs)), ["d.arw", "e.arw", "c.jpg"]);
+    }
+
+    /// ADR 0026 §2 point 4 (T240): a file listed after the order was applied waits for its
+    /// capture time, then `follow_sort` places it and says so; a new order or an open empties the
+    /// waiting files.
+    #[test]
+    fn follow_sort_places_a_waiting_file_once_its_capture_time_is_read() {
+        let mut tabs = Tabs::default();
+        tabs.open_in_active(
+            PathBuf::from("first"),
+            named(&["a.arw", "b.arw", "c.arw"]),
+            0,
+        );
+        tabs.record_capture(
+            Path::new("a.arw"),
+            CaptureTime::parse("2026:10:30 12:00:02"),
+        );
+        tabs.record_capture(
+            Path::new("b.arw"),
+            CaptureTime::parse("2026:10:30 12:00:03"),
+        );
+        tabs.record_capture(
+            Path::new("c.arw"),
+            CaptureTime::parse("2026:10:30 12:00:01"),
+        );
+        let capture = by(SortKey::Capture, false);
+        assert_eq!(
+            tabs.follow_sort(capture, true, &no_rating, &no_time),
+            SortFollow::Reordered { moved: true }
+        );
+        assert_eq!(file_names(active(&tabs)), ["c.arw", "a.arw", "b.arw"]);
+
+        let never = |_: &Path| false;
+        let listed = named(&["a.arw", "b.arw", "c.arw", "d.arw"]);
+        if let Some(tab) = tabs.active_mut() {
+            tab.relist(listed, None, &never, capture, true, &no_rating, &no_time);
+        }
+        assert_eq!(active(&tabs).unplaced, named(&["d.arw"]));
+        assert_eq!(
+            tabs.follow_sort(capture, true, &no_rating, &no_time),
+            SortFollow::Sorted,
+            "d.arw still waits"
+        );
+        assert_eq!(
+            file_names(active(&tabs)),
+            ["c.arw", "a.arw", "b.arw", "d.arw"]
+        );
+
+        tabs.record_capture(
+            Path::new("d.arw"),
+            CaptureTime::parse("2026:10:30 12:00:00"),
+        );
+        assert_eq!(
+            tabs.follow_sort(capture, true, &no_rating, &no_time),
+            SortFollow::Placed { moved: true }
+        );
+        assert_eq!(
+            file_names(active(&tabs)),
+            ["d.arw", "c.arw", "a.arw", "b.arw"]
+        );
+        assert!(active(&tabs).unplaced.is_empty());
+        assert_eq!(active(&tabs).sorted, Some(capture));
+
+        // Another file waits; applying a new order empties `unplaced`.
+        let listed = named(&["a.arw", "b.arw", "c.arw", "d.arw", "e.arw"]);
+        if let Some(tab) = tabs.active_mut() {
+            tab.relist(
+                listed.clone(),
+                None,
+                &never,
+                capture,
+                true,
+                &no_rating,
+                &no_time,
+            );
+        }
+        assert_eq!(active(&tabs).unplaced, named(&["e.arw"]));
+
+        // Opening the folder again empties it.
+        let mut reopened = tabs.clone();
+        reopened.open_new(PathBuf::from("first"), listed, 0);
+        assert!(active(&reopened).unplaced.is_empty());
+
+        let by_name = by(SortKey::Name, false);
+        assert_eq!(
+            tabs.follow_sort(by_name, true, &no_rating, &no_time),
+            SortFollow::Reordered { moved: true }
+        );
+        assert!(active(&tabs).unplaced.is_empty());
+        assert_eq!(
+            file_names(active(&tabs)),
+            ["a.arw", "b.arw", "c.arw", "d.arw", "e.arw"]
+        );
     }
 
     #[test]

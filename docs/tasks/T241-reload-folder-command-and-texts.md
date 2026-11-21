@@ -1,4 +1,4 @@
-# T241. ADR 0026 F1b: the "Reload Folder" command, its key and texts, and reads forgotten on a reload (pw-loupe) — Blocked: waits for T240
+# T241. ADR 0026 F1b: the "Reload Folder" command, its key and texts, and reads forgotten on a reload (pw-loupe) — Open
 
 - **Why:** ADR 0026 §3.1 (F-Q1, accepted by the owner 2026-11-18): a command **"Reload Folder"**
   in the menu that holds "Open Folder…", key **F5**; F5 over the library still reads the drives
@@ -110,3 +110,4 @@
 | 2026-11-21 | Blocked | Cold read (fresh agent, `AGENTS.md`, the README and this file): doable with small fixes; the claims on the caches true; F5 has no other meaning in any key map. Changed after it: `main.rs` added for one empty arm in `run_command` (no catch-all, else it does not compile); `cfg_attr(not(test), allow(dead_code))` on the binary's two new methods until T242; `folder_reloaded` takes no argument (it would be unused); the two status texts re-exported from `lib.rs`; the two menu-list tests and `FakeSubmit` named; "the library" is the whole left column; the glossary's words named; T239's files in "Wait for" |
 | 2026-11-21 | Blocked | Chain review of T240–T242: `command_enabled` gets `ReloadFolder => false` until T242 (else an enabled item that does nothing); a test that a reload keeps the shown ratings and turns of writes on their way and ignores the earlier read's answer |
 | 2026-11-21 | Blocked | T239 Done (717a83a); waits only for T240 |
+| 2026-11-21 | Open | T240 Done |

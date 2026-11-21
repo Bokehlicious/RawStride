@@ -1,4 +1,4 @@
-# T242. ADR 0026 F1c: "Reload Folder" (F5) in the shell, and tabs listed again after a move or an undo with the placement (pw-loupe) — Blocked: waits for T240 and T241
+# T242. ADR 0026 F1c: "Reload Folder" (F5) in the shell, and tabs listed again after a move or an undo with the placement (pw-loupe) — Blocked: waits for T241
 
 - **Why:** ADR 0026 step F1 (accepted by the owner 2026-11-18): "Reload Folder" (F5) lists the
   active tab's folder again and applies §2 (the current image, the marks, the filter and the sort
@@ -90,7 +90,10 @@
      - `undo_done`: the tabs of the folders the files come back to get `tab.relist(listed,
        first_restored, &pending, …)` (the image it makes current today) instead of
        `replace_files` with a full listing, and its `self.tabs.forget_sort()` (with its comment
-       "Every tab's sort is forgotten (accepted)") is removed. The rest stays.
+       "Every tab's sort is forgotten (accepted)") is removed. The rest stays. Note (review of
+       T240): `relist` returns early, without using `current`, when nothing is new and nothing
+       gone (a file the undo brings back that the tab already lists, for example as `pending`);
+       the undo then makes `first_restored` current itself in that case, as it does today.
      - Doc comments say so. A tab without a folder keeps its files as today. `batch_done`'s and
        `deletes_done`'s own `replace_tab_files` (files moved away or deleted, nothing added)
        are unchanged: they never applied the order again.
@@ -172,3 +175,4 @@
 | 2026-11-21 | Blocked | Added; waits for T240 and T241. The owner decided 2026-11-21 that the tabs listed again after a move or an undo use the placement (ADR 0026 §2 point 4) |
 | 2026-11-21 | Blocked | Cold read (fresh agent, `AGENTS.md`, the README and this file, T240 and T241 for their APIs): `Loupe` cannot be built in a test, so the decisions are free functions tested on their own (point 7); the left column is drawn before the key loop, and its F5 note is reset every frame; `self.delete.busy()` named; `vertical_scroll_offset` exists in egui 0.37; the anchor needs the view height and the columns too, and the local `scroll_to` (not the field) wins in its frame; `undo_done` has its own `forget_sort`, now removed with the owner's decision (point 6), and a delete never applied the order; hand check: a JPEG for the deleted current image, a renamed folder with nothing open in it, the temporary files left to T240's test, an undo added to item 8 |
 | 2026-11-21 | Blocked | Chain review of T240–T242 (fresh agent, the three task files): T241's placeholder arms (one makes the item greyed) replaced here; `Placed` tells a placement from a new order; the note made every frame so a placement inside `sort_tabs` has an anchor; `pending` passed to `relist`; the order of the reload's steps and which text wins; `reload_enabled` true for a folder with no images; the compare's held image, "Only the marked", `list_folder`'s skipped entries and a read of only the new files to `backlog.md` |
+| 2026-11-21 | Blocked | T240 Done; waits for T241. Review of T240: point 6 notes `relist`'s early return without `current` for the undo |

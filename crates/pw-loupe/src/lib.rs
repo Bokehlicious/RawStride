@@ -47,7 +47,7 @@ use std::path::{Path, PathBuf};
 
 use pw_viewcore::Status;
 
-pub use browse::{LoupeMove, metadata_neighbour};
+pub use browse::{LoupeMove, Relisted, metadata_neighbour};
 pub use compare::{Compare, Layout, follow, open_indexes, sides};
 pub use deletes::{
     DeleteBatch, DeletePlan, DeleteResult, DeleteStep, image_partners, plan_delete,
@@ -84,8 +84,9 @@ pub use filter::{
 };
 pub use grid::{
     DEFAULT_THUMBNAIL_SIZE, GridKeyAction, LoupeKeyAction, MAX_THUMBNAIL_SIZE, MIN_THUMBNAIL_SIZE,
-    Navigation, THUMBNAIL_SIZE_STEP, clamp_thumbnail_size, columns, grid_key_action,
-    loupe_key_action, navigate, row, step_thumbnail_size, take_wheel_steps, visible_range,
+    Navigation, THUMBNAIL_SIZE_STEP, anchored_offset, clamp_thumbnail_size, columns,
+    grid_key_action, loupe_key_action, navigate, row, step_thumbnail_size, take_wheel_steps,
+    top_position, visible_range,
 };
 pub use histogram::{
     FileStamp, HISTOGRAM_BINS, HistogramBars, HistogramInspector, HistogramPanel, HistogramRead,
@@ -170,7 +171,7 @@ pub use shell_text::{
 };
 pub use sort::{
     CaptureRead, CaptureReader, CaptureTime, CaptureTimes, SORT_KEYS, SortKey, SortOrder, SortPlan,
-    modified_time, read_order,
+    insert_position, key_known, modified_time, read_order,
 };
 pub use tabs::{SortFollow, Tab, Tabs, ViewMode, same_folder};
 pub use tasks::{
@@ -238,13 +239,24 @@ pub fn parse_args<I: IntoIterator<Item = String>>(args: I) -> Result<Options, St
     Ok(o)
 }
 
-/// Whether the loupe lists `path`: the file types of the current app (TIFF since ADR 0015).
+/// Whether the loupe lists `path`: the file types of the current app (TIFF since ADR 0015), and
+/// never RawStride's own temporary files (ADR 0026 §2 point 6): the safe write's copy and backup,
+/// `<name>.pwtmp-<hex>.<ext>` and `<name>.pwbak-<hex>.<ext>` (`pw-metadata` `fileops.rs`), end in
+/// an image extension, so a name containing `.pwtmp-` or `.pwbak-` (ignoring case) is left out.
+/// A `.pwpart` file is left out by its extension.
 pub fn is_listed(path: &Path) -> bool {
     let Some(ext) = path.extension().and_then(|e| e.to_str()) else {
         return false;
     };
     let ext = ext.to_ascii_lowercase();
-    pw_raw::SUPPORTED_EXTENSIONS.contains(&ext.as_str())
+    if !pw_raw::SUPPORTED_EXTENSIONS.contains(&ext.as_str()) {
+        return false;
+    }
+    let name = path
+        .file_name()
+        .map(|name| name.to_string_lossy().to_ascii_lowercase())
+        .unwrap_or_default();
+    !name.contains(".pwtmp-") && !name.contains(".pwbak-")
 }
 
 /// The images of a folder in display order (by name, ignoring case), and the position of
@@ -831,6 +843,17 @@ mod tests {
     #[test]
     fn tiff_files_are_listed() {
         for n in ["a.tif", "b.TIFF", "c.tiff"] {
+            assert!(is_listed(Path::new(n)), "{n}");
+        }
+    }
+
+    /// ADR 0026 §2 point 6 (T240): the safe write's copy and backup are never listed.
+    #[test]
+    fn rawstride_temporary_files_are_not_listed() {
+        for n in ["bild.pwtmp-1a2b.jpg", "bild.PWBAK-0123.ARW", "bild.pwpart"] {
+            assert!(!is_listed(Path::new(n)), "{n}");
+        }
+        for n in ["bild.jpg", "pwtmp.jpg"] {
             assert!(is_listed(Path::new(n)), "{n}");
         }
     }

@@ -136,17 +136,48 @@ pub fn plan(
         SortKey::Rating if !ratings_ready => return SortPlan::WaitingForRatings,
         SortKey::Name | SortKey::Modified | SortKey::Type | SortKey::Rating => {}
     }
-    let primary: Vec<Option<Primary>> = files
+    let keyed: Vec<Keyed> = files
         .iter()
-        .map(|path| match order.key {
-            SortKey::Name => Some(Primary::Text(lower_name(path))),
-            SortKey::Type => Some(Primary::Text(lower_extension(path))),
-            SortKey::Capture => capture.get(path).cloned().map(Primary::Capture),
-            SortKey::Modified => modified_of(path).map(Primary::Time),
-            SortKey::Rating => rating_rank(rating_of(path).as_ref()).map(Primary::Rank),
-        })
+        .map(|path| Keyed::new(path.clone(), order, capture, rating_of, modified_of))
         .collect();
-    SortPlan::Order(sorted_order(files, order.descending, &primary))
+    SortPlan::Order(sorted_order(&keyed, order.descending))
+}
+
+/// Where `new` goes in `files` under `order` (ADR 0026 §2 point 4, F-Q6): the index before the
+/// first file that `order` puts after `new`; `files.len()` when there is none. The comparison is
+/// the one `plan` uses (the key's value in the order's direction, no value last in both
+/// directions, then the file name ignoring case, then the path as it is). `files` need not be in
+/// the order (a rating or a modification time may have changed since it was applied): they are
+/// scanned from the start. `rating_of` and `modified_of` are asked only for their own key.
+pub fn insert_position(
+    files: &[PathBuf],
+    new: &Path,
+    order: SortOrder,
+    capture: &CaptureTimes,
+    rating_of: &dyn Fn(&Path) -> Option<Rating>,
+    modified_of: &dyn Fn(&Path) -> Option<SystemTime>,
+) -> usize {
+    let placed: Vec<Keyed> = files
+        .iter()
+        .map(|path| Keyed::new(path.clone(), order, capture, rating_of, modified_of))
+        .collect();
+    let new = Keyed::new(new.to_path_buf(), order, capture, rating_of, modified_of);
+    place(&placed, &new, order.descending)
+}
+
+/// Whether `insert_position` can place `path` under `order` now: `Name`, `Type` and `Modified`
+/// always; `Capture` when its capture time is read; `Rating` when the ratings are ready.
+pub fn key_known(
+    path: &Path,
+    order: SortOrder,
+    capture: &CaptureTimes,
+    ratings_ready: bool,
+) -> bool {
+    match order.key {
+        SortKey::Name | SortKey::Type | SortKey::Modified => true,
+        SortKey::Capture => capture.is_read(path),
+        SortKey::Rating => ratings_ready,
+    }
 }
 
 /// The value a key compares first; `None` sorts last in both directions (U14-Q4).
@@ -158,27 +189,80 @@ enum Primary {
     Rank((i8, usize)),
 }
 
-/// The file indexes ordered by `primary` (its direction from `descending`, no value last), ties
-/// by the file name ignoring case, then by the name as it is and the old position, so the order
-/// is the same every time.
-fn sorted_order(files: &[PathBuf], descending: bool, primary: &[Option<Primary>]) -> Vec<usize> {
-    let names: Vec<String> = files.iter().map(|path| lower_name(path)).collect();
-    let mut order: Vec<usize> = (0..files.len()).collect();
-    order.sort_by(|&a, &b| {
-        let first = match (
-            primary.get(a).and_then(Option::as_ref),
-            primary.get(b).and_then(Option::as_ref),
-        ) {
-            (Some(x), Some(y)) if descending => y.cmp(x),
-            (Some(x), Some(y)) => x.cmp(y),
-            (Some(_), None) => Ordering::Less,
-            (None, Some(_)) => Ordering::Greater,
-            (None, None) => Ordering::Equal,
+/// A file with the values the comparison needs, taken once (with `Modified` a value is a disk
+/// read): `plan` and the placement of new files (`insert_position`, `Tab::relist`,
+/// `Tab::place_waiting`) compare with these.
+#[derive(Clone, Debug)]
+pub(crate) struct Keyed {
+    path: PathBuf,
+    name: String,
+    primary: Option<Primary>,
+}
+
+impl Keyed {
+    /// `path` with its value under `order.key`; `rating_of` and `modified_of` are asked only for
+    /// their own key.
+    pub(crate) fn new(
+        path: PathBuf,
+        order: SortOrder,
+        capture: &CaptureTimes,
+        rating_of: &dyn Fn(&Path) -> Option<Rating>,
+        modified_of: &dyn Fn(&Path) -> Option<SystemTime>,
+    ) -> Self {
+        let primary = match order.key {
+            SortKey::Name => Some(Primary::Text(lower_name(&path))),
+            SortKey::Type => Some(Primary::Text(lower_extension(&path))),
+            SortKey::Capture => capture.get(&path).cloned().map(Primary::Capture),
+            SortKey::Modified => modified_of(&path).map(Primary::Time),
+            SortKey::Rating => rating_rank(rating_of(&path).as_ref()).map(Primary::Rank),
         };
-        first
-            .then_with(|| names.get(a).cmp(&names.get(b)))
-            .then_with(|| files.get(a).cmp(&files.get(b)))
-            .then_with(|| a.cmp(&b))
+        let name = lower_name(&path);
+        Self {
+            path,
+            name,
+            primary,
+        }
+    }
+
+    pub(crate) fn into_path(self) -> PathBuf {
+        self.path
+    }
+}
+
+/// The order of two files: the key's value (its direction from `descending`, no value last in
+/// both directions), then the file name ignoring case, then the path as it is.
+fn compare(a: &Keyed, b: &Keyed, descending: bool) -> Ordering {
+    let first = match (a.primary.as_ref(), b.primary.as_ref()) {
+        (Some(x), Some(y)) if descending => y.cmp(x),
+        (Some(x), Some(y)) => x.cmp(y),
+        (Some(_), None) => Ordering::Less,
+        (None, Some(_)) => Ordering::Greater,
+        (None, None) => Ordering::Equal,
+    };
+    first
+        .then_with(|| a.name.cmp(&b.name))
+        .then_with(|| a.path.cmp(&b.path))
+}
+
+/// The index in `placed` before the first file that the order puts after `new`; `placed.len()`
+/// when there is none. Scanned from the start, so `placed` need not be in the order.
+pub(crate) fn place(placed: &[Keyed], new: &Keyed, descending: bool) -> usize {
+    placed
+        .iter()
+        .position(|file| compare(file, new, descending) == Ordering::Greater)
+        .unwrap_or(placed.len())
+}
+
+/// The file indexes ordered by `compare`, ties then by the old position, so the order is the
+/// same every time.
+fn sorted_order(keyed: &[Keyed], descending: bool) -> Vec<usize> {
+    let mut order: Vec<usize> = (0..keyed.len()).collect();
+    order.sort_by(|&a, &b| {
+        let by_value = match (keyed.get(a), keyed.get(b)) {
+            (Some(x), Some(y)) => compare(x, y, descending),
+            _ => Ordering::Equal,
+        };
+        by_value.then_with(|| a.cmp(&b))
     });
     order
 }
@@ -660,6 +744,253 @@ mod tests {
         assert_eq!(read_order(4, &[2, 3], 0, |_| false), [2, 3, 0, 1]);
         // Indexes outside the folder are ignored.
         assert_eq!(read_order(2, &[5, 1], 1, |_| false), [1, 0]);
+    }
+
+    // --- placing a new file (ADR 0026 §2 point 4, F-Q6, T240) ---
+
+    fn by(key: SortKey, descending: bool) -> SortOrder {
+        SortOrder { key, descending }
+    }
+
+    /// `insert_position` with no capture times, ratings or modification times.
+    fn position_by_name(files: &[&str], new: &str, descending: bool) -> usize {
+        insert_position(
+            &paths(files),
+            Path::new(new),
+            by(SortKey::Name, descending),
+            &CaptureTimes::default(),
+            &no_rating,
+            &no_time,
+        )
+    }
+
+    #[test]
+    fn insert_position_by_name_both_ways_and_into_an_empty_list() {
+        let files = ["a.arw", "C.arw", "e.arw"];
+        assert_eq!(position_by_name(&files, "B.arw", false), 1, "between");
+        assert_eq!(position_by_name(&files, "0.arw", false), 0, "first");
+        assert_eq!(position_by_name(&files, "f.arw", false), 3, "last");
+        assert_eq!(
+            position_by_name(&["e.arw", "C.arw", "a.arw"], "b.arw", true),
+            2,
+            "descending"
+        );
+        assert_eq!(position_by_name(&[], "a.arw", false), 0, "an empty list");
+    }
+
+    #[test]
+    fn insert_position_by_capture_puts_a_file_without_a_time_last_in_both_directions() {
+        let capture = capture_of(&[
+            ("t1.arw", Some("2026:10:30 14:00:01")),
+            ("t2.arw", Some("2026:10:30 14:00:02")),
+            ("t3.arw", Some("2026:10:30 14:00:03")),
+            ("m_none.arw", None),
+            ("z_none.arw", None),
+            ("a_none.arw", None),
+        ]);
+        let at = |files: &[&str], new: &str, descending: bool| {
+            insert_position(
+                &paths(files),
+                Path::new(new),
+                by(SortKey::Capture, descending),
+                &capture,
+                &no_rating,
+                &no_time,
+            )
+        };
+        let ascending = ["t1.arw", "t3.arw", "m_none.arw"];
+        assert_eq!(at(&ascending, "t2.arw", false), 1);
+        assert_eq!(at(&ascending, "a_none.arw", false), 2, "no time: last");
+        assert_eq!(at(&ascending, "z_none.arw", false), 3);
+        let descending = ["t3.arw", "t1.arw", "m_none.arw"];
+        assert_eq!(at(&descending, "t2.arw", true), 1);
+        assert_eq!(at(&descending, "a_none.arw", true), 2, "no time: last");
+        assert_eq!(at(&descending, "z_none.arw", true), 3);
+    }
+
+    #[test]
+    fn insert_position_scans_a_list_that_is_not_in_the_order_from_the_start() {
+        let base = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000_000);
+        let modified = |path: &Path| -> Option<SystemTime> {
+            let seconds = match path.to_str()? {
+                "a.arw" => 1,
+                "b.arw" => 2,
+                "c.arw" => 30,
+                "new.arw" => 20,
+                _ => return None,
+            };
+            Some(base + Duration::from_secs(seconds))
+        };
+        // c.arw was modified after the order was applied: it comes first and is after new.arw.
+        assert_eq!(
+            insert_position(
+                &paths(&["c.arw", "a.arw", "b.arw"]),
+                Path::new("new.arw"),
+                by(SortKey::Modified, false),
+                &CaptureTimes::default(),
+                &no_rating,
+                &modified,
+            ),
+            0
+        );
+        // A list in the order: after b.arw.
+        assert_eq!(
+            insert_position(
+                &paths(&["a.arw", "b.arw", "c.arw"]),
+                Path::new("new.arw"),
+                by(SortKey::Modified, false),
+                &CaptureTimes::default(),
+                &no_rating,
+                &modified,
+            ),
+            2
+        );
+    }
+
+    #[test]
+    fn insert_position_by_rating() {
+        let ratings: HashMap<&str, Rating> = HashMap::from([
+            ("five.arw", rating(Some(5), None)),
+            ("three.arw", rating(Some(3), None)),
+            ("four.arw", rating(Some(4), None)),
+        ]);
+        let rating_of = |path: &Path| path.to_str().and_then(|name| ratings.get(name).cloned());
+        let files = paths(&["five.arw", "three.arw", "none.arw"]);
+        let at = |new: &str| {
+            insert_position(
+                &files,
+                Path::new(new),
+                by(SortKey::Rating, true),
+                &CaptureTimes::default(),
+                &rating_of,
+                &no_time,
+            )
+        };
+        assert_eq!(at("four.arw"), 1);
+        assert_eq!(
+            at("other.arw"),
+            3,
+            "no rating: last, after none.arw by name"
+        );
+    }
+
+    #[test]
+    fn a_new_file_whose_value_ties_is_placed_by_name_then_by_path() {
+        let base = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000_000);
+        let same = |_: &Path| Some(base);
+        let at = |files: &[&str], new: &str| {
+            insert_position(
+                &paths(files),
+                Path::new(new),
+                by(SortKey::Modified, false),
+                &CaptureTimes::default(),
+                &no_rating,
+                &same,
+            )
+        };
+        assert_eq!(at(&["a.arw", "c.arw"], "b.arw"), 1, "by name");
+        assert_eq!(at(&["a.arw", "c.arw"], "C.arw"), 1, "C.arw before c.arw");
+        assert_eq!(at(&["x/b.arw", "z/b.arw"], "y/b.arw"), 1, "then by path");
+    }
+
+    /// For each key and direction a list is put in `plan`'s order; each file then placed into
+    /// the list without it goes back to its own place, so `plan` and `insert_position` compare
+    /// alike.
+    #[test]
+    fn insert_position_puts_each_file_where_plan_puts_it() {
+        let files = paths(&[
+            "d.jpg", "B.arw", "a.dng", "c.ARW", "e.tif", "none.jpg", "x/f.arw", "y/f.arw",
+        ]);
+        let capture = capture_of(&[
+            ("d.jpg", Some("2026:10:30 14:00:03")),
+            ("B.arw", Some("2026:10:30 14:00:01")),
+            ("a.dng", Some("2026:10:30 14:00:03")),
+            ("c.ARW", None),
+            ("e.tif", Some("2026:10:30 14:00:02")),
+            ("none.jpg", None),
+            ("x/f.arw", Some("2026:10:30 14:00:01")),
+            ("y/f.arw", Some("2026:10:30 14:00:01")),
+        ]);
+        let base = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000_000);
+        let modified = |path: &Path| -> Option<SystemTime> {
+            let seconds = match path.to_str()? {
+                "d.jpg" => 2,
+                "B.arw" => 5,
+                "a.dng" => 2,
+                "c.ARW" => 1,
+                "x/f.arw" => 4,
+                "y/f.arw" => 4,
+                _ => return None,
+            };
+            Some(base + Duration::from_secs(seconds))
+        };
+        let ratings: HashMap<&str, Rating> = HashMap::from([
+            ("d.jpg", rating(Some(3), Some("Red"))),
+            ("B.arw", rating(Some(5), None)),
+            ("a.dng", rating(Some(3), None)),
+            ("c.ARW", rating(Some(-1), None)),
+            ("x/f.arw", rating(Some(3), None)),
+            ("y/f.arw", rating(None, Some("Green"))),
+        ]);
+        let rating_of = |path: &Path| path.to_str().and_then(|name| ratings.get(name).cloned());
+        for key in SORT_KEYS {
+            for descending in [false, true] {
+                let order = by(key, descending);
+                let SortPlan::Order(planned) =
+                    plan(&files, order, &capture, true, &rating_of, &modified)
+                else {
+                    panic!("not ordered: {order:?}");
+                };
+                let sorted: Vec<PathBuf> = planned.iter().map(|&i| files[i].clone()).collect();
+                for (i, file) in sorted.iter().enumerate() {
+                    let mut without = sorted.clone();
+                    without.remove(i);
+                    assert_eq!(
+                        insert_position(&without, file, order, &capture, &rating_of, &modified),
+                        i,
+                        "{order:?}: {}",
+                        file.display()
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn key_known_for_each_key() {
+        let capture = capture_of(&[("read.arw", None)]);
+        let read = Path::new("read.arw");
+        let unread = Path::new("unread.arw");
+        for key in [SortKey::Name, SortKey::Type, SortKey::Modified] {
+            assert!(
+                key_known(unread, by(key, false), &capture, false),
+                "{key:?}"
+            );
+        }
+        assert!(key_known(
+            read,
+            by(SortKey::Capture, false),
+            &capture,
+            false
+        ));
+        assert!(!key_known(
+            unread,
+            by(SortKey::Capture, true),
+            &capture,
+            true
+        ));
+        assert!(key_known(
+            unread,
+            by(SortKey::Rating, false),
+            &capture,
+            true
+        ));
+        assert!(!key_known(
+            read,
+            by(SortKey::Rating, false),
+            &capture,
+            false
+        ));
     }
 
     #[test]
