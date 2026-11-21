@@ -252,3 +252,4 @@ was when the task was done, so "this file", "below" and "the Log" in T1–T115 m
 | [T243](T243-label-after-rating-in-the-menus.md) | The Label submenu right after the Rating submenu, in the Image menu and the right-click menu (pw-loupe) |
 | [T244](T244-metadata-window-steps-between-the-marked.md) | ADR 0017 U15a: the metadata window steps only between the marked images (pw-loupe) |
 | [T245](T245-buttons-on-a-thumbnail.md) | ADR 0017 U15b: four buttons on a thumbnail in the contact sheet (pw-loupe) |
+| [T246](T246-larger-buttons-on-a-thumbnail.md) | ADR 0017 U15: the buttons on a thumbnail are 28 points (pw-loupe) |

@@ -25,8 +25,10 @@ pub const THUMB_BUTTONS: [ThumbButton; 4] = [
     ThumbButton::Preview,
 ];
 
-/// A button's disc's diameter in points, the same at every thumbnail size (U15-Q6).
-pub const BUTTON_SIZE: f32 = 20.0;
+/// A button's disc's diameter in points, the same at every thumbnail size (U15-Q6). It was 20
+/// until the owner's hand check of U15 (2026-11-21), when the owner made it 28 so the symbols are
+/// larger (T246).
+pub const BUTTON_SIZE: f32 = 28.0;
 /// From the image square's edges to a disc's edge, in points.
 pub const BUTTON_INSET: f32 = 4.0;
 
@@ -141,7 +143,7 @@ mod tests {
 
     #[test]
     fn the_buttons_do_not_overlap_at_the_smallest_and_the_largest_size() {
-        // The smallest: a 78-point square leaves 30 points between two discs.
+        // The smallest: a 78-point square leaves 14 points between two discs.
         assert_eq!(image_side(MIN_THUMBNAIL_SIZE), 78.0);
         for size in [MIN_THUMBNAIL_SIZE, MAX_THUMBNAIL_SIZE] {
             let image = square(0.0, 0.0, image_side(size));
@@ -162,7 +164,7 @@ mod tests {
         let image = square(0.0, 0.0, image_side(MIN_THUMBNAIL_SIZE));
         let gap = button_rect(image, ThumbButton::RotateRight).left()
             - button_rect(image, ThumbButton::RotateLeft).right();
-        assert_eq!(gap, 30.0);
+        assert_eq!(gap, 14.0);
     }
 
     #[test]

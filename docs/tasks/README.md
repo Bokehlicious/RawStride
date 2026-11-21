@@ -86,7 +86,6 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status |
 |---|---|---|
-| [T246](T246-larger-buttons-on-a-thumbnail.md) | ADR 0017 U15: the buttons on a thumbnail are 28 points (pw-loupe) | Open |
 
 ## Writing a task (owner and reviewer)
 

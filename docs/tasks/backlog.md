@@ -481,7 +481,7 @@ by the owner the same day; step E4 in `plans/adr-0018-0025-steps.md`, before ADR
   with a test on a Sony JPEG sample. (Reviewer, 2026-11-20, measured: verify already allows
   the key, a pointer; the write is refused by the warning itself, which the safe write
   refuses before verify. Task T238, after the owner's decision D18, 2026-11-20.)
-- **Larger buttons on a thumbnail** (the owner's hand check of U15, 2026-11-21): the hand check
+- ~~**Larger buttons on a thumbnail**~~ (done: T246, 28 points, ADR 0017 U15-Q6, 2026-11-21) (the owner's hand check of U15, 2026-11-21): the hand check
   passed, but the owner thinks the symbols need to be larger. Today 20-point discs (`BUTTON_SIZE`,
   `thumb_buttons.rs`; ADR 0017 §2.8, U15-Q6) with the symbols scaled from it in `main.rs`
   (`paint_rotate_symbol`, `paint_info_symbol`, `paint_magnifier_symbol`). Changing U15-Q6 needs

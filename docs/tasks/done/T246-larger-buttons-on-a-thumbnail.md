@@ -1,4 +1,4 @@
-# T246. ADR 0017 U15: the buttons on a thumbnail are 28 points (pw-loupe) — Open
+# T246. ADR 0017 U15: the buttons on a thumbnail are 28 points (pw-loupe) — Done
 
 - **Why:** the owner's hand check of U15 (2026-11-21) passed, but the owner found the buttons'
   symbols too small and chose 28-point buttons in place of 20 (ADR 0017 §2.8 and U15-Q6, changed
@@ -44,3 +44,5 @@
 |---|---|---|
 | 2026-11-21 | Open | Added (the owner's decision after the hand check of U15: 28-point buttons, ADR 0017 §2.8, U15-Q6) |
 | 2026-11-21 | Open | Cold read: doable with the named files; the 14-point gap, the symbols scaling with the disc and staying inside it at 28, and nothing else depending on 20 confirmed. Changed: the test-inventory phrase named; the doc comment in the agent's own words |
+| 2026-11-21 | Ready for review | Points 1–3 done: `BUTTON_SIZE` 20 → 28 with its doc comment (20 until the owner's hand check of U15, 2026-11-21, T246); the gap test's comment and `assert_eq!` 30 → 14, nothing else in the tests changed; `main.rs` not changed; the test-inventory phrase 30 → 14 points, counts unchanged. check.ps1 all OK, 2119 passed, 76 ignored, no clippy warnings |
+| 2026-11-21 | Done | Reviewed (reviewer): as written; only `thumb_buttons.rs`, `test-inventory.md` and this file. The reviewer's clean run of check.ps1: all OK, 2119 passed, 76 ignored, no clippy warnings. Backlog entry struck. Moved to `done/`; the owner's hand check follows |
