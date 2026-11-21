@@ -47,7 +47,7 @@ use std::path::{Path, PathBuf};
 
 use pw_viewcore::Status;
 
-pub use browse::{LoupeMove, Relisted, metadata_neighbour};
+pub use browse::{LoupeMove, Relisted, metadata_neighbour, metadata_steps};
 pub use compare::{Compare, Layout, follow, open_indexes, sides};
 pub use deletes::{
     DeleteBatch, DeletePlan, DeleteResult, DeleteStep, image_partners, plan_delete,

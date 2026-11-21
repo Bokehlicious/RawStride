@@ -1,4 +1,4 @@
-# T245. ADR 0017 U15b: four buttons on a thumbnail in the contact sheet (pw-loupe) — Blocked: waits for T244
+# T245. ADR 0017 U15b: four buttons on a thumbnail in the contact sheet (pw-loupe) — Open
 
 - **Why:** ADR 0017 §2.8 (addition U15, accepted by the owner 2026-11-21, U15-Q1–U15-Q8): a user
   working with the mouse in the contact sheet reaches the commands used most on one image without
@@ -226,3 +226,4 @@
 |---|---|---|
 | 2026-11-21 | Blocked | Added (ADR 0017 U15b; second task of the chain T244 → T245); waits for T244 |
 | 2026-11-21 | Blocked | The owner's decisions written in (ADR 0017 §2.8, U15-Q4, Q5, Q7): Metadata… on the clicked image; the menu items' rules as they are; `thumbnail_buttons = true\|false`. Cold read: doable with the named files (the only exhaustive matches on `Command` are in `shell_text.rs` and `main.rs`). Changed: the contrast pairs blended correctly (premultiplied) over white, black and the cell, with the symbol carrying the contrast on a black image (the stop clause removed); the square is the hit area for hover and click; `ThumbButton`'s derives; `Popup::is_any_open` named for the open-menu check; the setting written on exit as the View menu's other check items; the test's 18-point label row |
+| 2026-11-21 | Open | T244 done; this task can start |

@@ -41,12 +41,13 @@ use pw_loupe::{
     done_lines, editor_key_action, editor_rating_key, editor_text, ejecting_progress_text,
     error_text, grid_key_action, indicator_text, info_panel, iptc_progress_text, key_action,
     label_choice_text, label_filter_text, label_name, list_folder, load_monitor_profile,
-    load_settings_and_library, loupe_key_action, marked_text, metadata_neighbour, mode_label,
-    mode_text, more_lines, no_match_text, notice_text, opens_import, other_values, panel_text,
-    parse_args, position_text, preview_line, preview_summary, primary_monitor_profile_path,
-    progress_text, property_label, rating_key_action, request_cell, save_settings_with_library,
-    settings_path, star_condition_text, star_filter_text, star_glyphs, status_line, step_allowed,
-    step_thumbnail_size, tab_action, take_wheel_steps, visible_range, wheel_factor, window_title,
+    load_settings_and_library, loupe_key_action, marked_text, metadata_neighbour, metadata_steps,
+    mode_label, mode_text, more_lines, no_match_text, notice_text, opens_import, other_values,
+    panel_text, parse_args, position_text, preview_line, preview_summary,
+    primary_monitor_profile_path, progress_text, property_label, rating_key_action, request_cell,
+    save_settings_with_library, settings_path, star_condition_text, star_filter_text, star_glyphs,
+    status_line, step_allowed, step_thumbnail_size, tab_action, take_wheel_steps, visible_range,
+    wheel_factor, window_title,
 };
 use pw_loupe::{
     Batch, MoveKey, MoveKind, MovedImage, UndoMoves, move_failed_text, move_key_action,
@@ -2769,10 +2770,15 @@ impl Loupe {
         self.metadata.close_window();
     }
 
-    /// The image the metadata window on `path` moves to with "Föregående" (`forward` false) or
-    /// "Nästa" (ADR 0017 §2.3.1, U12-Q3, T112): its file index in the active tab and its path as
-    /// the metadata cache keys it. The shown images of the active tab, skipping kinds without
-    /// metadata support; `None` at the first or last such image.
+    /// The image the metadata window on `path` moves to with "Previous" (`forward` false) or
+    /// "Next" (ADR 0017 §2.3.1, U12-Q3, T112): its file index in the active tab and its path as
+    /// the metadata cache keys it. It steps between the marked images when the window's image is
+    /// marked and two or more are, else between the shown images of the active tab
+    /// (`metadata_steps`, U15-Q9, T244), skipping kinds without metadata support; `None` at the
+    /// first or last such image. The marking is read from the tab each time, so it is the marking
+    /// as it is at the step (the window is modal; a rating chosen in the window can refilter the
+    /// tab when the window moves, U10c-Q4, and the refilter may unmark images it hides,
+    /// `Tab::refilter`).
     fn window_neighbour(&self, path: &Path, forward: bool) -> Option<(usize, PathBuf)> {
         let tab = self.tabs.active()?;
         let cwd = std::env::current_dir().ok();
@@ -2781,7 +2787,12 @@ impl Loupe {
             None => file.clone(),
         };
         let current = tab.files.iter().position(|file| key(file) == path)?;
-        let index = metadata_neighbour(&tab.visible, current, forward, |index| {
+        let steps = metadata_steps(
+            &tab.visible,
+            &tab.selection.marked_in(&tab.visible),
+            current,
+        );
+        let index = metadata_neighbour(&steps, current, forward, |index| {
             tab.files
                 .get(index)
                 .is_some_and(|file| supports_rating(file))

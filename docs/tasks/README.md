@@ -86,8 +86,7 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status |
 |---|---|---|
-| [T244](T244-metadata-window-steps-between-the-marked.md) | ADR 0017 U15a: the metadata window steps only between the marked images (pw-loupe) | Open |
-| [T245](T245-buttons-on-a-thumbnail.md) | ADR 0017 U15b: four buttons on a thumbnail in the contact sheet (pw-loupe) | Blocked: waits for T244 |
+| [T245](T245-buttons-on-a-thumbnail.md) | ADR 0017 U15b: four buttons on a thumbnail in the contact sheet (pw-loupe) | Open |
 
 ## Writing a task (owner and reviewer)
 

@@ -69,7 +69,7 @@ pub enum LoupeMove {
     To(usize),
 }
 
-/// The image the metadata window moves to with "Föregående" or "Nästa" (ADR 0017 §2.3.1, U12-Q3,
+/// The image the metadata window moves to with "Previous" or "Next" (ADR 0017 §2.3.1, U12-Q3,
 /// T112), as a file index: the nearest image after (`forward`) or before `current` in `visible`
 /// (the shown images in the contact sheet's order) whose kind has metadata support (`supported`
 /// of a file index). Unsupported kinds are skipped; there is no wrap. `None` at the first or last
@@ -94,6 +94,27 @@ pub fn metadata_neighbour(
             .rev()
             .copied()
             .find(|&index| supported(index))
+    }
+}
+
+/// The list the metadata window on file index `current` steps over with "Previous", "Next" and
+/// "Save and Next" (ADR 0017 §2.3.1 as amended 2026-11-21, U15-Q9, T244). `visible` is the shown
+/// images and `marked` the marked images, both in the contact sheet's order after the filter
+/// (`marked` as `Selection::marked_in(visible)` gives it). When two or more images are marked and
+/// `current` is one of them, the window steps only between the marked images: `marked` is
+/// returned. Otherwise it steps between all the shown images: `visible` is returned. The rule
+/// holds however the window was opened (`M`, the menus, the right-click menu or a thumbnail's
+/// button). The count is of every marked image, kinds without metadata support included (as
+/// `marked_subjects` counts them); `metadata_neighbour` skips those kinds when it steps.
+///
+/// This differs on purpose from the preview's "only the marked" (`Tab::preview_list`), which
+/// does not need the current image marked: the window steps between the marked images only when
+/// its own image is one of them (U15-Q9).
+pub fn metadata_steps(visible: &[usize], marked: &[usize], current: usize) -> Vec<usize> {
+    if marked.len() >= 2 && marked.contains(&current) {
+        marked.to_vec()
+    } else {
+        visible.to_vec()
     }
 }
 
@@ -1552,6 +1573,66 @@ mod tests {
         let supported = |index: usize| index != 1;
         assert_eq!(metadata_neighbour(&visible, 1, true, supported), Some(2));
         assert_eq!(metadata_neighbour(&visible, 1, false, supported), Some(0));
+    }
+
+    #[test]
+    fn metadata_steps_are_the_marked_when_the_image_is_marked_and_two_or_more_are() {
+        let visible = [0, 1, 2, 3, 4, 5];
+        let marked = [1, 3, 5];
+        assert_eq!(metadata_steps(&visible, &marked, 3), [1, 3, 5]);
+    }
+
+    #[test]
+    fn metadata_steps_are_the_shown_images_when_the_image_is_not_marked() {
+        let visible = [0, 1, 2, 3, 4, 5];
+        let marked = [1, 3, 5];
+        assert_eq!(metadata_steps(&visible, &marked, 2), visible);
+    }
+
+    #[test]
+    fn metadata_steps_are_the_shown_images_with_only_one_marked() {
+        let visible = [0, 1, 2, 3, 4, 5];
+        assert_eq!(metadata_steps(&visible, &[3], 3), visible);
+        assert_eq!(metadata_steps(&visible, &[], 3), visible);
+    }
+
+    #[test]
+    fn metadata_steps_with_metadata_neighbour_step_only_between_the_marked() {
+        let visible = [0, 1, 2, 3, 4, 5];
+        let marked = [1, 3, 5];
+        let all = |_: usize| true;
+        let from_3 = metadata_steps(&visible, &marked, 3);
+        assert_eq!(metadata_neighbour(&from_3, 3, true, all), Some(5));
+        assert_eq!(metadata_neighbour(&from_3, 3, false, all), Some(1));
+        let from_5 = metadata_steps(&visible, &marked, 5);
+        assert_eq!(metadata_neighbour(&from_5, 5, true, all), None);
+        // No wrap at the first marked image.
+        let from_1 = metadata_steps(&visible, &marked, 1);
+        assert_eq!(metadata_neighbour(&from_1, 1, false, all), None);
+        // File 3 is a kind without metadata support: it is skipped, to the next marked image.
+        let not_3 = |index: usize| index != 3;
+        assert_eq!(metadata_neighbour(&from_1, 1, true, not_3), Some(5));
+    }
+
+    #[test]
+    fn metadata_steps_keep_the_contact_sheet_order() {
+        // A sort order that is not the file order; the marked in that order.
+        let visible = [4, 0, 2];
+        let marked = [4, 2];
+        let steps = metadata_steps(&visible, &marked, 2);
+        assert_eq!(steps, [4, 2]);
+        assert_eq!(metadata_neighbour(&steps, 2, false, |_| true), Some(4));
+    }
+
+    #[test]
+    fn metadata_steps_count_marked_kinds_without_support() {
+        let visible = [0, 1, 2, 3, 4];
+        let marked = [1, 3];
+        let not_3 = |index: usize| index != 3;
+        let steps = metadata_steps(&visible, &marked, 1);
+        assert_eq!(steps, [1, 3]);
+        // The window does not fall back to the images not marked.
+        assert_eq!(metadata_neighbour(&steps, 1, true, not_3), None);
     }
 
     // --- reordering a tab (ADR 0017 U14-Q6, T138) ---
