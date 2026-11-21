@@ -88,10 +88,11 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 | Task | Title | Status |
 |---|---|---|
 | [T260](T260-tabs-fill-while-importing.md) | ADR 0026 F4: the destination tabs open on the first image and fill while importing | Open |
+| [T261](T261-metadata-write-timing.md) | The safe write's time per step, measured in a release build | Open |
 
 ## Writing a task (owner and reviewer)
 
-- **Number:** the next free number after the highest in this folder and `done/` (T261 next).
+- **Number:** the next free number after the highest in this folder and `done/` (T262 next).
 - **File:** `docs/tasks/T246-<a-few-words>.md`; three digits, lower case, words joined by `-`.
 - **Index:** add a row to "Open tasks" above and keep its status in step with the file's heading.
 - **Size (owner, 2026-11-15, after T142):** one task is one layer (a C++ shim or a core crate, or
