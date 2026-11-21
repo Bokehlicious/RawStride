@@ -58,7 +58,7 @@
 | Copy | `pw-ingest::execute` on a background thread; the UI only polls progress (G2, GR2) | ADR 0005 point 6 |
 | Progress and cancel | Files, bytes and current file; cancel stops between chunks and leaves no final-named file | ADR 0005 point 6 |
 | Summary | Copied, already present, failed (with reasons), time and speed, destination folders | – |
-| Open the result | When the copy is complete, **every destination folder that received a copied file** opens **in its own tab** automatically, oldest images first and the newest folder's tab active (owner, 2026-11-16, T163; until then only the folder with the most files opened) (§11, Q2 for cancel and failures), shown as a **contact sheet** (ADR 0011 §2, GR13; added 2026-11-09) | Owner requirement |
+| Open the result | When the copy is complete, **every destination folder that received a copied file** opens **in its own tab** automatically, oldest images first and the newest folder's tab active (owner, 2026-11-16, T163; until then only the folder with the most files opened) (§11, Q2 for cancel and failures), shown as a **contact sheet** (ADR 0011 §2, GR13; added 2026-11-09). **Changed by ADR 0026 §3.4 (step F4, 2026-11-21; until F4 is done, as above):** each folder's tab opens when its first image is copied, verified and given the template, and fills as the import goes on; the first folder's tab is active, the newest becomes active at the end only if the user has not moved (F-Q10) | Owner requirement |
 | Settings | Remembered for the running session only. A settings file comes later (§11, Q5) | ADR 0009 decision 3 |
 
 ### 3.2 Step B
@@ -66,6 +66,9 @@
 - **Backup destination**, checked against the source and the destination as today.
 - **IPTC template** (creator, copyright, credit, e-mail, telephone, web, title, description), written to
   the new copies after a complete copy, through `pw-metadata`'s worker (not on the UI thread).
+  **Changed by ADR 0026 §3.4 (F-Q11, step F4, 2026-11-21; until F4 is done, as above):** written
+  to each shot's images right after the shot's files are copied and verified, by the import
+  worker's own ExifTool with the safe write (ADR 0007 §9.5), before the images are shown.
 - **Job name** and **first running number**.
 - **Eject the card** after a complete import, with `pw-ingest::eject`.
 

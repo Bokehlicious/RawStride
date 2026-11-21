@@ -11,6 +11,13 @@
   addition, §3.2: a listed image file that changes size or write time also counts as a change,
   and the active tab makes the thumbnail of a file another program added anew when the file has
   changed since its thumbnail was asked for (T253, T254).
+- **The owner, 2026-11-21** (when F4 was written as T256–T260), §3.4: the import dialog stays
+  shown when the first tab opens (the user hides it); the import's progress shows only the copy,
+  the template write being part of each file (the separate step "Writing IPTC" goes); after a
+  cancel nothing more is written, and copied files the import has not shown are shown only by
+  the listing after the import, without the template; and, first, a change of the active tab's
+  files keeps the thumbnails already made (step F4a, §3.5), so a tab filling during an import
+  does not redraw every thumbnail at each new file.
 - Date: 2026-11-18
 - Related:
   - the owner's wish at the hand check of ADR 0018 B4 (2026-11-18): a tab shows new files, for
@@ -179,6 +186,40 @@ These hold for all three, so a tab behaves the same whatever changed it. They ar
   nothing more happens to them.
 - **The order:** the files are copied in capture order (`pw-ingest`, the shots sorted by time),
   so a tab fills in that order; ADR 0010's "oldest images first" for the tabs is unchanged.
+- **Settled when F4 was written (the owner, 2026-11-21, and the reviewer):**
+  - *Per shot, not per file:* a shot's files (a RAW, its JPEG, a sidecar from the card) are
+    copied one after another; the template is written to the shot's images once all of the
+    shot's files are copied and verified, so a sidecar from the card is in place before the
+    template writes into it, as today. Then the shot's destination images are shown.
+  - *How the tabs know:* before copying, the import tells which destination images it will put
+    in place; after each shot, which it has shown. A listing of a destination folder from disk
+    while the import runs (a tab opened, Reload Folder, a folder opened from the library) leaves
+    out the images the import has not shown yet. The watch's listing stays held while the import
+    runs (F3, T251).
+  - *A folder already open in a tab* gets the new files added (§2), and is not opened again; the
+    first destination folder's tab becomes active, a later one's does not.
+  - *The end rule of F-Q10:* "has not moved" means the active tab, its current image and its
+    view (contact sheet or preview) are those of when the first folder's tab became active.
+  - *The import dialog* stays shown when the first tab opens; the tab opens behind it, and the
+    user hides the dialog to see the images (the owner).
+  - *The progress* shows the copy only; the template write is part of each file, and the
+    separate step "Writing IPTC n / total" goes (the owner).
+  - *Cancel:* after a cancel nothing more is written; a shot not finished, or finished but not
+    yet given its template, is not shown by the import; its copied files are shown by the
+    listing after the import, without the template, as a cancel today writes no template (the
+    owner).
+
+### 3.5 Thumbnails kept when a tab's files change (step F4a)
+
+The owner, 2026-11-21 (when F4 was written): today every change of the active tab's files (a
+listing after a change on disk, a placement in the sort, a new order) starts a new thumbnail
+generation, which empties the thumbnail worker's cache and the shell's textures, so every visible
+thumbnail is made and drawn anew. A tab filling during an import changes several times a second,
+so the contact sheet would flicker all the time. Before F4: a change of the active tab's files
+**keeps the thumbnails already made**, matched by file, not by place: the worker changes
+generation without emptying its cache (its cache is kept by path), and the shell carries each
+made cell and its texture to the file's new place. A cell still being made is asked for again.
+Opening a folder, another tab and Reload Folder still make everything anew.
 
 ## 4. Not included
 
@@ -215,7 +256,7 @@ Each step ends with tests (GR11) and the owner's hand check.
 | **F1** | `is_listed` leaves out RawStride's temporary files (§2 point 6); "Reload Folder" (F5): list again, `replace_files`, ratings, metadata, thumbnails and views read again (§3.1); the placement of new files in the sort (§2 point 4) and the contact sheet that does not jump (§2 point 5) |
 | **F2** | The watcher thread with `ReadDirectoryChangesW`, one handle per open folder, the quiet moment, start and end with the tabs, ended before an eject; tested with a temporary folder |
 | **F3** | The tabs follow the watcher (§3.2, §3.3): the active tab at once, others on activation, the status texts; the fallback where a watch cannot start |
-| **F4** | Images shown while importing (§3.4): the tab opens on the first file, filled from the import's progress; the template per file (F-Q11); the active tab rule (F-Q10); ADR 0010 and GR12 updated |
+| **F4** | First (F4a, §3.5, the owner 2026-11-21): a change of the active tab's files keeps the thumbnails made. Then images shown while importing (§3.4): the tab opens on the first file, filled from the import's progress; the template per file (F-Q11); the active tab rule (F-Q10); ADR 0010 and GR12 updated |
 
 ## 7. Consequences
 
