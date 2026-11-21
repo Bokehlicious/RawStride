@@ -1,4 +1,4 @@
-# T259. ADR 0026 F4: what the import's tabs need to know (pw-loupe logic) — Blocked: waits for T258
+# T259. ADR 0026 F4: what the import's tabs need to know (pw-loupe logic) — Open
 
 - **Why:** ADR 0026 §3.4 and what was settled on 2026-11-21: the shell opens and fills the
   destination tabs from the import's events (`ImportEvent::Planned` and `Placed`, T258), leaves out
@@ -88,3 +88,4 @@
 |---|---|---|
 | 2026-11-21 | Blocked | Added when F4 was written (ADR 0026 §3.4); waits for T258 |
 | 2026-11-21 | Blocked | Cold read: doable with the named files; `same_folder` reads the disk, so `ImportTabs` uses `same_folder_lexically` (made `pub`); the grouping key, a placed image never planned, `with_placed`'s comparison (file name, ASCII case) and the derives named; `open_behind` differs from `open_new` on an empty active tab (said). No code dependency on T258; the order is the chain's |
+| 2026-11-21 | Open | T258 done; ready for its agent |

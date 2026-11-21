@@ -106,8 +106,8 @@ pub use import_dialog::{
 pub use import_text::{
     DoneLine, ImportText, clear_and_import_text, clear_cancel_text, clear_confirmation_text,
     clear_confirmation_title, done_lines, ejecting_progress_text, hidden_done_text,
-    hidden_progress_text, import_text, iptc_progress_text, mode_text, more_lines, preview_line,
-    preview_summary, progress_text,
+    hidden_progress_text, import_text, mode_text, more_lines, preview_line, preview_summary,
+    progress_text,
 };
 pub use import_worker::{ImportDone, ImportEvent, ImportWorker, RequestId, SubmitError};
 pub use info_panel::{

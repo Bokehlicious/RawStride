@@ -25,7 +25,6 @@ pub enum ImportDialogState {
     Previewing,
     Running {
         progress: Option<pw_ingest::Progress>,
-        iptc: Option<(usize, usize, PathBuf)>,
     },
     Ejecting {
         source: PathBuf,
@@ -115,10 +114,7 @@ impl ImportDialog {
             return None;
         }
         self.changed_at = None;
-        self.state = ImportDialogState::Running {
-            progress: None,
-            iptc: None,
-        };
+        self.state = ImportDialogState::Running { progress: None };
         Some(DialogRequest::Run {
             form: self.form.clone(),
         })
@@ -166,16 +162,6 @@ impl ImportDialog {
                 } = &mut self.state
                 {
                     *current_progress = Some(progress.clone());
-                }
-            }
-            ImportEvent::IptcProgress {
-                id: event_id,
-                done,
-                total,
-                current,
-            } if *event_id == id => {
-                if let ImportDialogState::Running { iptc, .. } = &mut self.state {
-                    *iptc = Some((*done, *total, current.clone()));
                 }
             }
             ImportEvent::Ejecting { id: event_id }
@@ -605,21 +591,6 @@ mod tests {
             } if current.files_done == 1
         ));
 
-        let current = PathBuf::from("destination/image.ARW");
-        dialog.apply(&ImportEvent::IptcProgress {
-            id: 6,
-            done: 0,
-            total: 2,
-            current: current.clone(),
-        });
-        assert!(matches!(
-            dialog.state(),
-            ImportDialogState::Running {
-                iptc: Some((0, 2, path)),
-                ..
-            } if path == &current
-        ));
-
         let done = ImportDone {
             copied: 2,
             folders: vec![
@@ -888,17 +859,11 @@ mod tests {
         dialog.state = ImportDialogState::Previewing;
         assert!(!dialog.can_start());
         assert!(matches!(dialog.state(), ImportDialogState::Previewing));
-        dialog.state = ImportDialogState::Running {
-            progress: None,
-            iptc: None,
-        };
+        dialog.state = ImportDialogState::Running { progress: None };
         assert!(!dialog.can_start());
         assert!(matches!(
             dialog.state(),
-            ImportDialogState::Running {
-                progress: None,
-                iptc: None
-            }
+            ImportDialogState::Running { progress: None }
         ));
         dialog.state = ImportDialogState::Done {
             done: ImportDone::default(),
@@ -1017,7 +982,6 @@ mod tests {
         dialog.request_id = Some(7);
         dialog.state = ImportDialogState::Running {
             progress: Some(pw_ingest::Progress::default()),
-            iptc: None,
         };
         let now = Instant::now();
 
@@ -1027,7 +991,6 @@ mod tests {
             dialog.state(),
             ImportDialogState::Running {
                 progress: Some(progress),
-                iptc: None,
             } if progress.files_done == 0
                 && progress.files_total == 0
                 && progress.bytes_done == 0

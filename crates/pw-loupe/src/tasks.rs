@@ -94,12 +94,6 @@ pub enum ImportStep {
         bytes_total: u64,
         current: Option<PathBuf>,
     },
-    /// Writing the IPTC template: `done` files written of `total`, `current` being written.
-    Iptc {
-        done: usize,
-        total: usize,
-        current: PathBuf,
-    },
     /// Ejecting the source card.
     Ejecting,
     /// Finished or cancelled: the files copied and failed, or the error that stopped it.
@@ -120,7 +114,7 @@ pub struct ImportRow {
 }
 
 impl ImportRow {
-    /// Whether the import still runs (copying, writing IPTC or ejecting): the row has "Stop".
+    /// Whether the import still runs (copying or ejecting): the row has "Stop".
     pub fn running(&self) -> bool {
         !matches!(self.step, ImportStep::Done { .. })
     }
@@ -246,18 +240,6 @@ impl Tasks {
                     bytes_done: progress.bytes_done,
                     bytes_total: progress.bytes_total,
                     current: Some(progress.current.clone()),
-                };
-            }
-            ImportEvent::IptcProgress {
-                id: event_id,
-                done,
-                total,
-                current,
-            } if *event_id == id => {
-                row.step = ImportStep::Iptc {
-                    done: *done,
-                    total: *total,
-                    current: current.clone(),
                 };
             }
             ImportEvent::Ejecting { id: event_id } if *event_id == id => {
@@ -452,26 +434,8 @@ mod tests {
     }
 
     #[test]
-    fn the_iptc_and_ejecting_steps() {
+    fn the_ejecting_step() {
         let mut tasks = started();
-        tasks.apply(
-            &ImportEvent::IptcProgress {
-                id: 7,
-                done: 2,
-                total: 4,
-                current: PathBuf::from("D:\\Bilder\\IMG_3.ARW"),
-            },
-            T,
-        );
-        assert_eq!(
-            step(&tasks),
-            ImportStep::Iptc {
-                done: 2,
-                total: 4,
-                current: PathBuf::from("D:\\Bilder\\IMG_3.ARW")
-            }
-        );
-        assert!(tasks.import().unwrap().running());
         tasks.apply(&ImportEvent::Ejecting { id: 7 }, T);
         assert_eq!(step(&tasks), ImportStep::Ejecting);
         assert!(tasks.import().unwrap().running());

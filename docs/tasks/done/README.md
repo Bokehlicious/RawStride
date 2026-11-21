@@ -264,3 +264,4 @@ was when the task was done, so "this file", "below" and "the Log" in T1–T115 m
 | [T255](T255-own-writes-keep-the-thumbnail.md) | ADR 0026 F3f: RawStride's own write of an added file does not make its thumbnail anew (pw-loupe) |
 | [T256](T256-generation-change-keeps-the-cache.md) | ADR 0026 F4a: a generation change that keeps the thumbnail cache (pw-thumbcache) |
 | [T257](T257-thumbnails-carried-when-files-change.md) | ADR 0026 F4a: the contact sheet keeps its thumbnails when the active tab's files change (pw-loupe) |
+| [T258](T258-template-per-shot-and-placed-events.md) | ADR 0026 F4: the import writes the template per shot and says which images it has put in place (pw-loupe import worker) |

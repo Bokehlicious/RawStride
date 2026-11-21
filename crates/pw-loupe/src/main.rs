@@ -41,7 +41,7 @@ use pw_loupe::{
     clear_cancel_text, clear_confirmation_text, clear_confirmation_title, color_image, columns,
     dialog_key_action, done_lines, editor_key_action, editor_rating_key, editor_text,
     ejecting_progress_text, error_text, files_gone, grid_key_action, indicator_text, info_panel,
-    iptc_progress_text, key_action, label_choice_text, label_filter_text, label_name, list_folder,
+    key_action, label_choice_text, label_filter_text, label_name, list_folder,
     load_monitor_profile, load_settings_and_library, loupe_key_action, marked_text,
     metadata_neighbour, metadata_steps, mode_label, mode_text, more_lines, no_match_text,
     notice_text, opens_import, other_values, panel_text, parse_args, position_text, preview_line,
@@ -1920,18 +1920,10 @@ impl Loupe {
             return None;
         }
         match self.import_dialog.as_ref()?.state() {
-            ImportDialogState::Running { progress, iptc } => Some(
-                iptc.as_ref()
-                    .map(|(done, total, current)| iptc_progress_text(*done, *total, current))
-                    .unwrap_or_else(|| {
-                        progress.as_ref().map_or_else(
-                            || hidden_progress_text(0, 0),
-                            |progress| {
-                                hidden_progress_text(progress.files_done, progress.files_total)
-                            },
-                        )
-                    }),
-            ),
+            ImportDialogState::Running { progress } => Some(progress.as_ref().map_or_else(
+                || hidden_progress_text(0, 0),
+                |progress| hidden_progress_text(progress.files_done, progress.files_total),
+            )),
             ImportDialogState::Ejecting { source } => Some(ejecting_progress_text(source)),
             ImportDialogState::Done { done } => {
                 if let Some(error) = &done.error {
@@ -2217,30 +2209,19 @@ impl Loupe {
                 });
 
                 match &state {
-                    ImportDialogState::Running { progress, iptc } => {
-                        let (fraction, text) = if let Some((done, total, current)) = iptc {
-                            let files_done = done.saturating_add(1);
-                            let fraction = if *total == 0 {
+                    ImportDialogState::Running { progress } => {
+                        let fraction = progress.as_ref().map_or(0.0, |progress| {
+                            if progress.bytes_total == 0 {
                                 0.0
                             } else {
-                                (files_done as f32 / *total as f32).clamp(0.0, 1.0)
-                            };
-                            (fraction, iptc_progress_text(*done, *total, current))
-                        } else {
-                            let fraction = progress.as_ref().map_or(0.0, |progress| {
-                                if progress.bytes_total == 0 {
-                                    0.0
-                                } else {
-                                    (progress.bytes_done as f32 / progress.bytes_total as f32)
-                                        .clamp(0.0, 1.0)
-                                }
-                            });
-                            let text = progress
-                                .as_ref()
-                                .map(progress_text)
-                                .unwrap_or_else(|| import_text(ImportText::Importing).to_string());
-                            (fraction, text)
-                        };
+                                (progress.bytes_done as f32 / progress.bytes_total as f32)
+                                    .clamp(0.0, 1.0)
+                            }
+                        });
+                        let text = progress
+                            .as_ref()
+                            .map(progress_text)
+                            .unwrap_or_else(|| import_text(ImportText::Importing).to_string());
                         ui.add(egui::ProgressBar::new(fraction).text(text));
                         ui.horizontal(|ui| {
                             if ui.button(import_text(ImportText::Cancel)).clicked() {
@@ -9524,11 +9505,6 @@ fn draw_import_row(ui: &mut egui::Ui, row: &ImportRow, actions: &mut Vec<TaskAct
             current,
             ..
         } => importing_text(*files_done, *files_total, current.as_deref()),
-        ImportStep::Iptc {
-            done,
-            total,
-            current,
-        } => iptc_progress_text(*done, *total, current),
         ImportStep::Ejecting => ejecting_progress_text(Path::new(&row.source)),
         ImportStep::Done {
             error: Some(error), ..

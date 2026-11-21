@@ -319,6 +319,23 @@ with ADR 0026 F3, in `plans/adr-0018-0025-steps.md`.)
   same name may then be shown with the old image until F5 or another tab. Rare (the file must go
   while its thumbnail is made, and a new one come under its name in the same folder).
 
+## Import: the template per shot (ADR 0026 F4)
+
+- *A file another program makes under a planned name gets the template* (T258, accepted in its
+  task; widened by the extra review, 2026-11-21): a shot's item counts as copied when every
+  target it has exists. When another program makes a file of a planned destination name after
+  the plan was made (before or during that item's copy), the copy fails ("destination exists"
+  or "appeared during copy") and is listed as failed, but the file there gets the import's
+  template and is named in `Placed`, so it is shown. The template written before T258 skipped
+  failed items.
+- *Two shots of the same name that are not next to each other* (T258 extra review,
+  2026-11-21): with a name template without `{seq}`, two shots can get the same name with other
+  extensions in one folder (for example after the camera's counter wrapped). When they are not
+  next to each other in the plan, the first shot's template write can make the sidecar
+  (`X.xmp`) before the second shot's card sidecar of that name is copied; that copy then fails
+  ("destination exists"), is listed as failed and the card is not ejected. Before T258 the two
+  shots shared one sidecar instead.
+
 ## Card eject
 
 (Independent review of T156, 2026-11-16; none affects the owner's readers.)

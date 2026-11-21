@@ -1,5 +1,5 @@
-use std::collections::HashSet;
 use std::io;
+use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, SyncSender, TryRecvError, TrySendError};
@@ -11,6 +11,7 @@ use crate::{Field, FieldError, ImportForm, IptcForm, Preview};
 use pw_metadata::edit::EditOptions;
 use pw_metadata::journal::Journal;
 use pw_metadata::safe_write::ImageCheck;
+use pw_metadata::template::Template;
 use pw_metadata::{ExifTool, MIN_EXIFTOOL_VERSION};
 
 use crate::editor::{WriteReason, write_reason_text};
@@ -64,11 +65,21 @@ pub enum ImportEvent {
         id: RequestId,
         progress: pw_ingest::Progress,
     },
-    IptcProgress {
+    /// Every destination image the import will put in place, sent once after the plan is made
+    /// and before the first copy (also when there is none; not when the import ends before
+    /// planning): the planned items copied to the destination that are not companions
+    /// ([`pw_ingest::COMPANION_EXTENSIONS`]), in plan order (ADR 0026 §3.4, T258). A tab showing
+    /// such a folder leaves them out until they are [`ImportEvent::Placed`].
+    Planned {
         id: RequestId,
-        done: usize,
-        total: usize,
-        current: PathBuf,
+        images: Vec<PathBuf>,
+    },
+    /// One shot's destination images, now copied, verified and given the import's template, in
+    /// plan order; never empty (ADR 0026 §3.4, T258). A failed template write does not keep an
+    /// image out of it.
+    Placed {
+        id: RequestId,
+        images: Vec<PathBuf>,
     },
     Ejecting {
         id: RequestId,
@@ -486,6 +497,10 @@ fn run_import(
         root_of(form, &validated.source, register_root),
     );
     let plan = planned.plan;
+    let _ = events.send(ImportEvent::Planned {
+        id,
+        images: planned_images(&plan, &validated.options.dest),
+    });
     // A card that cannot be marked is said in the summary, and the import runs anyway (T158).
     let mut register_error = None;
     let mut writer = match &planned.register {
@@ -498,6 +513,23 @@ fn run_import(
         },
         None => None,
     };
+    let mut shot_writer = ShotWriter::new(
+        &plan,
+        &validated.options,
+        &form.iptc,
+        IptcRuntime {
+            id,
+            options,
+            cancel,
+            events,
+            exiftool,
+            exiftool_program: write
+                .exiftool_program
+                .as_ref()
+                .map(|tool| tool.program.as_str()),
+            write,
+        },
+    );
     let report = pw_ingest::execute_recording(
         &plan,
         &validated.options,
@@ -508,8 +540,10 @@ fn run_import(
                 id,
                 progress: progress.clone(),
             });
+            shot_writer.file_done(progress.files_done);
         },
     );
+    let (iptc_errors, shot_cancelled) = shot_writer.finish();
     // The register's file is closed before the card may be ejected.
     drop(writer);
     let register_error = register_error.or_else(|| report.register_error.clone());
@@ -534,7 +568,9 @@ fn run_import(
                 format!("{name}: {error}")
             })
             .collect(),
-        cancelled: report.cancelled,
+        iptc_errors,
+        // A cancel seen after the last file's progress call is not in the report.
+        cancelled: report.cancelled || shot_cancelled,
         elapsed: started.elapsed(),
         folders: pw_ingest::folder_summary(&destination_items, &validated.options.dest),
         new_folders: new_folders(&plan, &validated.options.dest),
@@ -543,26 +579,6 @@ fn run_import(
         register_error,
         ..ImportDone::default()
     };
-    let mut iptc_runtime = IptcRuntime {
-        id,
-        options,
-        cancel,
-        events,
-        exiftool,
-        exiftool_program: write
-            .exiftool_program
-            .as_ref()
-            .map(|tool| tool.program.as_str()),
-        write,
-    };
-    apply_iptc(
-        &plan,
-        &report.failed,
-        &validated.options,
-        &form.iptc,
-        &mut iptc_runtime,
-        &mut done,
-    );
     if form.eject {
         if done.cancelled || !done.failed.is_empty() || done.error.is_some() {
             done.eject = Some(import_text(ImportText::EjectSkipped).to_string());
@@ -608,120 +624,253 @@ struct IptcRuntime<'a> {
     write: &'a WriteContext,
 }
 
-fn iptc_targets(
-    plan: &pw_ingest::Plan,
-    failed: &[(PathBuf, String)],
-    options: &pw_ingest::Options,
-) -> Vec<PathBuf> {
-    let failed_sources: HashSet<PathBuf> =
-        failed.iter().map(|(source, _)| source.clone()).collect();
-    let mut targets = Vec::new();
-    for item in &plan.items {
-        if !(item.to_dest || item.to_backup) || failed_sources.contains(&item.source) {
+/// Whether `rel` names a companion file ([`pw_ingest::COMPANION_EXTENSIONS`], compared without
+/// regard to case): it gets no template of its own and is not an image of a tab.
+fn is_companion(rel: &Path) -> bool {
+    rel.extension()
+        .map(|extension| extension.to_string_lossy().to_ascii_lowercase())
+        .is_some_and(|extension| pw_ingest::COMPANION_EXTENSIONS.contains(&extension.as_str()))
+}
+
+/// The destination images the import will put in place ([`ImportEvent::Planned`]): each plan
+/// item copied to the destination that is not a companion, in plan order.
+fn planned_images(plan: &pw_ingest::Plan, dest: &Path) -> Vec<PathBuf> {
+    plan.items
+        .iter()
+        .filter(|item| item.to_dest && !is_companion(&item.rel))
+        .map(|item| dest.join(&item.rel))
+        .collect()
+}
+
+/// The shots of the items [`pw_ingest::execute_recording`] copies (`to_dest || to_backup`): those
+/// items numbered from 0 in plan order, grouped into ranges of consecutive items whose `rel`
+/// without its extension is equal (a shot's files share their folder and name,
+/// [`pw_ingest::plan`]). `execute_recording` calls its progress closure once after each such item
+/// with `files_done` raised by one, also when the item failed, and not for an item interrupted by
+/// a cancel; so after the call with `files_done == range.end` the shot of `range` is finished.
+/// Two shots next to each other that got the same name with other extensions (possible when the
+/// name template has no `{seq}`) fall into one range; that only shows them together.
+fn copy_shots(plan: &pw_ingest::Plan) -> Vec<Range<usize>> {
+    let mut shots: Vec<Range<usize>> = Vec::new();
+    let mut last_name: Option<PathBuf> = None;
+    let copied = plan
+        .items
+        .iter()
+        .filter(|item| item.to_dest || item.to_backup);
+    for (index, item) in copied.enumerate() {
+        let name = item.rel.with_extension("");
+        match shots.last_mut() {
+            Some(range) if last_name.as_ref() == Some(&name) => range.end = index + 1,
+            _ => shots.push(index..index + 1),
+        }
+        last_name = Some(name);
+    }
+    shots
+}
+
+/// What is done for one finished shot (T258).
+#[derive(Debug, Default, PartialEq, Eq)]
+struct ShotTargets {
+    /// The files the template is written to: for each copied item that is not a companion, its
+    /// destination target and then its backup target, as it has them, in plan order.
+    writes: Vec<PathBuf>,
+    /// The destination targets of the copied items that are not companions
+    /// ([`ImportEvent::Placed`]).
+    placed: Vec<PathBuf>,
+}
+
+/// The targets of a finished shot's `items`. An item counts as copied when every target it has
+/// exists, as `pw_ingest`'s report counts an item only when all its targets succeeded; an item
+/// whose backup copy failed is not copied, so it gets no template and is not placed.
+fn shot_targets(items: &[&pw_ingest::PlanItem], options: &pw_ingest::Options) -> ShotTargets {
+    let mut targets = ShotTargets::default();
+    for item in items {
+        let dest = item.to_dest.then(|| options.dest.join(&item.rel));
+        let backup = if item.to_backup {
+            options.backup.as_ref().map(|backup| backup.join(&item.rel))
+        } else {
+            None
+        };
+        let copied = dest
+            .iter()
+            .chain(backup.iter())
+            .all(|target| target.exists());
+        if !copied || is_companion(&item.rel) {
             continue;
         }
-        let is_companion = item
-            .rel
-            .extension()
-            .map(|extension| extension.to_string_lossy().to_ascii_lowercase())
-            .is_some_and(|extension| pw_ingest::COMPANION_EXTENSIONS.contains(&extension.as_str()));
-        if is_companion {
-            continue;
-        }
-        if item.to_dest {
-            targets.push(options.dest.join(&item.rel));
-        }
-        if item.to_backup
-            && let Some(backup) = &options.backup
-        {
-            targets.push(backup.join(&item.rel));
-        }
+        targets.writes.extend(dest.iter().cloned());
+        targets.writes.extend(backup);
+        targets.placed.extend(dest);
     }
     targets
 }
 
-fn apply_iptc(
-    plan: &pw_ingest::Plan,
-    failed: &[(PathBuf, String)],
-    options: &pw_ingest::Options,
-    iptc: &IptcForm,
-    runtime: &mut IptcRuntime<'_>,
-    done: &mut ImportDone,
-) {
-    // A template that does nothing does not start ExifTool.
-    if done.cancelled || iptc.template_is_empty() {
-        return;
+/// Writes the import's template to each shot's images when the shot is finished, and says which
+/// images are in place (ADR 0026 §3.4, T258). Driven by [`pw_ingest::execute_recording`]'s
+/// progress calls ([`ShotWriter::file_done`]).
+struct ShotWriter<'a> {
+    /// The items `execute_recording` copies, in its order.
+    items: Vec<&'a pw_ingest::PlanItem>,
+    /// [`copy_shots`] of the plan.
+    shots: Vec<Range<usize>>,
+    /// The first shot not finished yet.
+    next_shot: usize,
+    options: &'a pw_ingest::Options,
+    /// The form's template, each field with the mode chosen in the dialog (ADR 0007 §10, D13);
+    /// `None` when it does nothing, so ExifTool is not started.
+    template: Option<Template>,
+    runtime: IptcRuntime<'a>,
+    /// Set when the journal is missing or ExifTool cannot be used: listed once, and no template is
+    /// written to any later shot of this import.
+    writes_stopped: bool,
+    /// Set when a cancel was seen: nothing more is done for this shot or any later one.
+    cancelled: bool,
+    iptc_errors: Vec<String>,
+}
+
+impl<'a> ShotWriter<'a> {
+    fn new(
+        plan: &'a pw_ingest::Plan,
+        options: &'a pw_ingest::Options,
+        iptc: &IptcForm,
+        runtime: IptcRuntime<'a>,
+    ) -> Self {
+        Self {
+            items: plan
+                .items
+                .iter()
+                .filter(|item| item.to_dest || item.to_backup)
+                .collect(),
+            shots: copy_shots(plan),
+            next_shot: 0,
+            options,
+            template: (!iptc.template_is_empty()).then(|| iptc.to_template()),
+            runtime,
+            writes_stopped: false,
+            cancelled: false,
+            iptc_errors: Vec::new(),
+        }
     }
 
-    let targets = iptc_targets(plan, failed, options);
-    // Each field with the mode chosen in the dialog (ADR 0007 §10, D13).
-    let template = iptc.to_template();
-    for (index, current) in targets.iter().enumerate() {
-        if runtime.cancel.load(Ordering::Relaxed) {
-            done.cancelled = true;
-            break;
+    /// Called after `execute_recording`'s progress call with `files_done`; finishes every shot
+    /// whose last item that was.
+    fn file_done(&mut self, files_done: usize) {
+        while let Some(range) = self.shots.get(self.next_shot).cloned() {
+            if range.end > files_done {
+                break;
+            }
+            self.next_shot += 1;
+            self.finish_shot(range);
         }
+    }
+
+    /// The template's failures and whether a cancel was seen.
+    fn finish(self) -> (Vec<String>, bool) {
+        (self.iptc_errors, self.cancelled)
+    }
+
+    fn cancel_seen(&mut self) -> bool {
+        if self.runtime.cancel.load(Ordering::Relaxed) {
+            self.cancelled = true;
+        }
+        self.cancelled
+    }
+
+    fn finish_shot(&mut self, range: Range<usize>) {
+        if self.cancel_seen() {
+            return;
+        }
+        let Some(items) = self.items.get(range) else {
+            return;
+        };
+        let targets = shot_targets(items, self.options);
+        if self.template.is_some() {
+            for target in &targets.writes {
+                if self.writes_stopped {
+                    break;
+                }
+                if self.cancel_seen() {
+                    return;
+                }
+                self.write_template(target);
+            }
+        }
+        if !targets.placed.is_empty() {
+            let _ = self.runtime.events.send(ImportEvent::Placed {
+                id: self.runtime.id,
+                images: targets.placed,
+            });
+        }
+    }
+
+    /// Writes the template to one target with the safe write (§9.5); a failure is one line in
+    /// `iptc_errors`.
+    fn write_template(&mut self, target: &Path) {
+        let Some(template) = self.template.as_ref() else {
+            return;
+        };
         // Without the journal nothing may be written (§9.5); listed once, as a failed start.
-        let Some(journal) = runtime.write.journal.as_ref() else {
-            done.iptc_errors.push(format!(
+        let Some(journal) = self.runtime.write.journal.as_ref() else {
+            self.iptc_errors.push(format!(
                 "{}: {}",
-                file_name(current),
+                file_name(target),
                 write_reason_text(&WriteReason::NoJournal)
             ));
-            break;
+            self.writes_stopped = true;
+            return;
         };
-        if runtime.exiftool.is_none() {
-            let started = match runtime.exiftool_program {
-                Some(program) => ExifTool::start_with(program, &runtime.write.exiftool_args()),
+        if self.runtime.exiftool.is_none() {
+            let started = match self.runtime.exiftool_program {
+                Some(program) => ExifTool::start_with(program, &self.runtime.write.exiftool_args()),
                 None => ExifTool::start(),
             };
             let mut tool = match started {
                 Ok(tool) => tool,
                 Err(error) => {
-                    done.iptc_errors
-                        .push(format!("{}: {error}", file_name(current)));
-                    break;
+                    self.iptc_errors
+                        .push(format!("{}: {error}", file_name(target)));
+                    self.writes_stopped = true;
+                    return;
                 }
             };
             // §11, D9 (T101): an ExifTool older than 12.67, or one whose version cannot be read,
             // does not write the template. It is listed once, as a failed start, and not kept, so
             // the next import starts and asks again; the copied files stay.
             match tool.version() {
-                Ok(version) if version >= MIN_EXIFTOOL_VERSION => *runtime.exiftool = Some(tool),
+                Ok(version) if version >= MIN_EXIFTOOL_VERSION => {
+                    *self.runtime.exiftool = Some(tool);
+                }
                 Ok(version) => {
-                    done.iptc_errors
-                        .push(exiftool_too_old_text(&file_name(current), version));
-                    break;
+                    self.iptc_errors
+                        .push(exiftool_too_old_text(&file_name(target), version));
+                    self.writes_stopped = true;
+                    return;
                 }
                 Err(error) => {
-                    done.iptc_errors
-                        .push(format!("{}: {error}", file_name(current)));
-                    break;
+                    self.iptc_errors
+                        .push(format!("{}: {error}", file_name(target)));
+                    self.writes_stopped = true;
+                    return;
                 }
             }
         }
-        let Some(tool) = runtime.exiftool.as_mut() else {
-            done.iptc_errors
-                .push(exiftool_unavailable_text(&file_name(current)));
-            break;
+        let Some(tool) = self.runtime.exiftool.as_mut() else {
+            self.iptc_errors
+                .push(exiftool_unavailable_text(&file_name(target)));
+            self.writes_stopped = true;
+            return;
         };
-        let _ = runtime.events.send(ImportEvent::IptcProgress {
-            id: runtime.id,
-            done: index,
-            total: targets.len(),
-            current: current.clone(),
-        });
         // §9.5: the template is written to the verified copy with the safe write.
         let written = tool.apply_template_safely(
-            current,
-            &template,
-            &runtime.options,
-            &*runtime.write.checks,
+            target,
+            template,
+            &self.runtime.options,
+            &*self.runtime.write.checks,
             journal,
         );
         if let Err(error) = written {
-            done.iptc_errors
-                .push(format!("{}: {error}", file_name(current)));
+            self.iptc_errors
+                .push(format!("{}: {error}", file_name(target)));
         }
     }
 }
@@ -847,8 +996,9 @@ mod tests {
     fn done_event(worker: &ImportWorker, id: RequestId) -> ImportDone {
         loop {
             match next_event(worker) {
-                ImportEvent::Progress { id: event_id, .. } => assert_eq!(event_id, id),
-                ImportEvent::IptcProgress { id: event_id, .. } => assert_eq!(event_id, id),
+                ImportEvent::Progress { id: event_id, .. }
+                | ImportEvent::Planned { id: event_id, .. }
+                | ImportEvent::Placed { id: event_id, .. } => assert_eq!(event_id, id),
                 ImportEvent::Ejecting { id: event_id } => {
                     panic!("unexpected ejection event for request {event_id}")
                 }
@@ -927,9 +1077,8 @@ mod tests {
                     assert_eq!(progress.files_total, 1);
                     progress_count += 1;
                 }
-                ImportEvent::IptcProgress { .. } => {
-                    panic!("unexpected IPTC progress for an empty template")
-                }
+                ImportEvent::Planned { id: event_id, .. }
+                | ImportEvent::Placed { id: event_id, .. } => assert_eq!(event_id, id),
                 ImportEvent::Ejecting { id: event_id } => {
                     panic!("unexpected ejection event for request {event_id}")
                 }
@@ -1480,115 +1629,111 @@ mod tests {
         )
     }
 
+    /// A plan item for `rel` below the destination (and the backup).
+    fn plan_item(
+        dirs: &TempDirs,
+        rel: &str,
+        to_dest: bool,
+        to_backup: bool,
+    ) -> pw_ingest::PlanItem {
+        pw_ingest::PlanItem {
+            source: dirs.source.join(Path::new(rel).file_name().unwrap()),
+            size: 10,
+            modified: std::time::SystemTime::UNIX_EPOCH,
+            rel: PathBuf::from(rel),
+            to_dest,
+            to_backup,
+            renamed_for_conflict: false,
+        }
+    }
+
+    /// Writes a file at `path`, making its folder.
+    fn write_file(path: &Path) {
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, b"copied").unwrap();
+    }
+
+    /// T258 (rewritten from `iptc_targets`'s test): of a finished shot, the copied images get the
+    /// template in the destination and the backup; companions and items not copied get none, and
+    /// only the destination copies are placed.
     #[test]
-    fn iptc_targets_images_in_destination_and_backup_but_not_companions_or_failures() {
+    fn shot_targets_images_in_destination_and_backup_but_not_companions_or_failures() {
         let dirs = TempDirs::new("iptc-targets");
         let mut options = dirs.options("");
         let backup = dirs.root.join("backup");
         options.backup = Some(backup.clone());
-        let copied_source = dirs.source.join("A001.ARW");
-        let companion_source = dirs.source.join("A001.xmp");
-        let failed_source = dirs.source.join("A002.ARW");
-        let plan = pw_ingest::Plan {
-            items: vec![
-                pw_ingest::PlanItem {
-                    source: copied_source.clone(),
-                    size: 10,
-                    modified: std::time::SystemTime::UNIX_EPOCH,
-                    rel: PathBuf::from("A001.ARW"),
-                    to_dest: true,
-                    to_backup: true,
-                    renamed_for_conflict: false,
-                },
-                pw_ingest::PlanItem {
-                    source: companion_source,
-                    size: 10,
-                    modified: std::time::SystemTime::UNIX_EPOCH,
-                    rel: PathBuf::from("A001.xmp"),
-                    to_dest: true,
-                    to_backup: true,
-                    renamed_for_conflict: false,
-                },
-                pw_ingest::PlanItem {
-                    source: failed_source.clone(),
-                    size: 10,
-                    modified: std::time::SystemTime::UNIX_EPOCH,
-                    rel: PathBuf::from("A002.ARW"),
-                    to_dest: true,
-                    to_backup: false,
-                    renamed_for_conflict: false,
-                },
-            ],
-        };
+        let items = [
+            plan_item(&dirs, "A001.ARW", true, true),
+            plan_item(&dirs, "A001.xmp", true, true),
+            // Failed: its copy is not there.
+            plan_item(&dirs, "A002.ARW", true, false),
+        ];
+        for target in [
+            options.dest.join("A001.ARW"),
+            backup.join("A001.ARW"),
+            options.dest.join("A001.xmp"),
+            backup.join("A001.xmp"),
+        ] {
+            write_file(&target);
+        }
+        let items: Vec<&pw_ingest::PlanItem> = items.iter().collect();
 
         assert_eq!(
-            iptc_targets(
-                &plan,
-                &[(failed_source, "copy failed".to_string())],
-                &options
-            ),
-            vec![options.dest.join("A001.ARW"), backup.join("A001.ARW")]
+            shot_targets(&items, &options),
+            ShotTargets {
+                writes: vec![options.dest.join("A001.ARW"), backup.join("A001.ARW")],
+                placed: vec![options.dest.join("A001.ARW")],
+            }
         );
     }
 
+    /// T258 (rewritten for the template written per shot): a cancel seen at a shot's end writes
+    /// nothing, starts no ExifTool and places nothing.
     #[test]
     fn cancellation_before_iptc_writes_nothing() {
         let dirs = TempDirs::new("iptc-cancel");
-        dirs.write_image("A001.ARW", b"image bytes");
         let options = dirs.options("");
         let image = options.dest.join("A001.ARW");
-        fs::create_dir_all(&options.dest).unwrap();
-        fs::write(&image, b"image bytes").unwrap();
+        write_file(&image);
         let plan = pw_ingest::Plan {
-            items: vec![pw_ingest::PlanItem {
-                source: dirs.source.join("DCIM").join("100TEST").join("A001.ARW"),
-                size: 11,
-                modified: std::time::SystemTime::UNIX_EPOCH,
-                rel: PathBuf::from("A001.ARW"),
-                to_dest: true,
-                to_backup: false,
-                renamed_for_conflict: false,
-            }],
+            items: vec![plan_item(&dirs, "A001.ARW", true, false)],
         };
         let cancel = AtomicBool::new(true);
         let mut exiftool = None;
-        let (events, _receiver) = mpsc::channel();
+        let (events, receiver) = mpsc::channel();
         let write = WriteContext {
             exiftool_program: None,
             journal: Some(test_journal()),
             checks: Box::new(NoImageCheck),
         };
-        let mut runtime = IptcRuntime {
-            id: 1,
-            options: EditOptions::default(),
-            cancel: &cancel,
-            events: &events,
-            exiftool: &mut exiftool,
-            exiftool_program: Some("missing-exiftool"),
-            write: &write,
+        let iptc = crate::IptcForm {
+            creator: "Fotograf".to_string(),
+            ..crate::IptcForm::default()
         };
-        let mut done = ImportDone {
-            copied: 1,
-            ..ImportDone::default()
-        };
-
-        apply_iptc(
+        let mut shot_writer = ShotWriter::new(
             &plan,
-            &[],
             &options,
-            &crate::IptcForm {
-                creator: "Fotograf".to_string(),
-                ..crate::IptcForm::default()
+            &iptc,
+            IptcRuntime {
+                id: 1,
+                options: EditOptions::default(),
+                cancel: &cancel,
+                events: &events,
+                exiftool: &mut exiftool,
+                exiftool_program: Some("missing-exiftool"),
+                write: &write,
             },
-            &mut runtime,
-            &mut done,
         );
 
-        assert!(done.cancelled);
-        assert!(done.iptc_errors.is_empty());
+        shot_writer.file_done(1);
+        let (iptc_errors, cancelled) = shot_writer.finish();
+
+        assert!(cancelled);
+        assert!(iptc_errors.is_empty());
         assert!(exiftool.is_none());
         assert!(image.exists());
         assert!(!image.with_extension("xmp").exists());
+        assert_eq!(receiver.try_iter().count(), 0);
     }
 
     #[test]
@@ -2004,6 +2149,463 @@ mod tests {
         assert_eq!(
             new_folders(&plan, &dirs.dest),
             vec![dirs.dest.join("b"), dirs.dest.join("a")]
+        );
+    }
+
+    // ---------- the template per shot, Planned and Placed (ADR 0026 §3.4, T258) ----------
+
+    /// An event of an import, as the tests below compare them.
+    #[derive(Debug, PartialEq, Eq)]
+    enum Seen {
+        Planned(Vec<PathBuf>),
+        Progress(usize),
+        Placed(Vec<PathBuf>),
+        Ejecting,
+    }
+
+    /// `run_import` of `form` with `cancel` and `write`: the events it sent, and its summary.
+    fn import_events(
+        form: &ImportForm,
+        cancel: &AtomicBool,
+        write: &WriteContext,
+        exiftool: &mut Option<ExifTool>,
+    ) -> (Vec<Seen>, ImportDone) {
+        let (events, receiver) = mpsc::channel();
+        let ImportEvent::Done { done, .. } = run_import(
+            11,
+            ImportRun {
+                form,
+                options: EditOptions::default(),
+                register_root: &|_| None,
+            },
+            cancel,
+            &mut None,
+            &events,
+            exiftool,
+            write,
+        ) else {
+            panic!("run_import did not return Done");
+        };
+        let seen = receiver
+            .try_iter()
+            .map(|event| match event {
+                ImportEvent::Planned { id, images } => {
+                    assert_eq!(id, 11);
+                    Seen::Planned(images)
+                }
+                ImportEvent::Progress { id, progress } => {
+                    assert_eq!(id, 11);
+                    Seen::Progress(progress.files_done)
+                }
+                ImportEvent::Placed { id, images } => {
+                    assert_eq!(id, 11);
+                    assert!(!images.is_empty());
+                    Seen::Placed(images)
+                }
+                ImportEvent::Ejecting { .. } => Seen::Ejecting,
+                event => panic!("unexpected event: {event:?}"),
+            })
+            .collect();
+        (seen, done)
+    }
+
+    /// A write context with the test journal and no image checks; `exiftool_program` as given.
+    fn write_context(exiftool_program: Option<&str>) -> WriteContext {
+        WriteContext {
+            exiftool_program: exiftool_program.map(|program| ExifToolProgram {
+                program: program.to_string(),
+                args: Vec::new(),
+            }),
+            journal: Some(test_journal()),
+            checks: Box::new(NoImageCheck),
+        }
+    }
+
+    /// Two shots on the card: `A001` with a RAW, its JPEG and its sidecar, then `A002`, a RAW.
+    fn two_shots(dirs: &TempDirs) {
+        write_image_dated(dirs, "A001.ARW", NOV_15);
+        write_image_dated(dirs, "A001.JPG", NOV_15);
+        write_image_dated(dirs, "A001.xmp", NOV_15);
+        write_image_dated(dirs, "A002.ARW", NOV_15 + 60);
+    }
+
+    #[test]
+    fn copy_shots_groups_each_shots_copied_items() {
+        let dirs = TempDirs::new("copy-shots");
+        let all = pw_ingest::Plan {
+            items: vec![
+                plan_item(&dirs, "A001.ARW", true, false),
+                plan_item(&dirs, "A001.JPG", true, false),
+                plan_item(&dirs, "A001.xmp", true, false),
+                plan_item(&dirs, "A002.ARW", true, true),
+            ],
+        };
+        assert_eq!(copy_shots(&all), vec![0..3, 3..4]);
+
+        // The JPEG is present: it is not copied, and the shot stays one.
+        let present = pw_ingest::Plan {
+            items: vec![
+                plan_item(&dirs, "A001.ARW", true, false),
+                plan_item(&dirs, "A001.JPG", false, false),
+                plan_item(&dirs, "A001.xmp", false, true),
+                plan_item(&dirs, "A002.ARW", true, false),
+            ],
+        };
+        assert_eq!(copy_shots(&present), vec![0..2, 2..3]);
+
+        assert_eq!(
+            copy_shots(&pw_ingest::Plan::default()),
+            Vec::<Range<usize>>::new()
+        );
+    }
+
+    #[test]
+    fn a_run_over_two_shots_places_each_shot_after_its_last_file() {
+        let dirs = TempDirs::new("placed-two-shots");
+        two_shots(&dirs);
+        let dest = &dirs.dest;
+
+        let (seen, done) = import_events(
+            &dirs.form(""),
+            &AtomicBool::new(false),
+            &write_context(None),
+            &mut None,
+        );
+
+        assert_eq!(
+            seen,
+            [
+                Seen::Planned(vec![
+                    dest.join("A001.ARW"),
+                    dest.join("A001.JPG"),
+                    dest.join("A002.ARW")
+                ]),
+                Seen::Progress(1),
+                Seen::Progress(2),
+                Seen::Progress(3),
+                Seen::Placed(vec![dest.join("A001.ARW"), dest.join("A001.JPG")]),
+                Seen::Progress(4),
+                Seen::Placed(vec![dest.join("A002.ARW")]),
+            ]
+        );
+        assert_eq!(done.copied, 4);
+        assert!(done.failed.is_empty());
+        assert!(!done.cancelled);
+    }
+
+    #[test]
+    fn with_a_backup_planned_and_placed_name_only_destination_images() {
+        let dirs = TempDirs::new("placed-backup");
+        write_image_dated(&dirs, "A001.ARW", NOV_15);
+        write_image_dated(&dirs, "A001.xmp", NOV_15);
+        let backup = dirs.root.join("backup");
+        let mut form = dirs.form("");
+        form.backup_on = true;
+        form.backup = backup.to_string_lossy().into_owned();
+
+        let (seen, done) = import_events(
+            &form,
+            &AtomicBool::new(false),
+            &write_context(None),
+            &mut None,
+        );
+
+        let image = dirs.dest.join("A001.ARW");
+        assert_eq!(
+            seen,
+            [
+                Seen::Planned(vec![image.clone()]),
+                Seen::Progress(1),
+                Seen::Progress(2),
+                Seen::Placed(vec![image]),
+            ]
+        );
+        assert_eq!(done.copied, 2);
+        assert!(backup.join("A001.ARW").exists());
+    }
+
+    /// A shot whose files were copied in part: only its copied images are placed, and a shot with
+    /// none copied is not.
+    #[test]
+    fn a_shot_places_only_its_copied_images() {
+        let dirs = TempDirs::new("placed-partial");
+        let options = dirs.options("");
+        let plan = pw_ingest::Plan {
+            items: vec![
+                plan_item(&dirs, "A001.ARW", true, false),
+                plan_item(&dirs, "A001.JPG", true, false),
+                plan_item(&dirs, "A001.xmp", true, false),
+                plan_item(&dirs, "A002.ARW", true, false),
+            ],
+        };
+        // The JPEG and A002 could not be copied.
+        write_file(&options.dest.join("A001.ARW"));
+        write_file(&options.dest.join("A001.xmp"));
+        let cancel = AtomicBool::new(false);
+        let mut exiftool = None;
+        let (events, receiver) = mpsc::channel();
+        let write = write_context(None);
+        let mut shot_writer = ShotWriter::new(
+            &plan,
+            &options,
+            &crate::IptcForm::default(),
+            IptcRuntime {
+                id: 3,
+                options: EditOptions::default(),
+                cancel: &cancel,
+                events: &events,
+                exiftool: &mut exiftool,
+                exiftool_program: None,
+                write: &write,
+            },
+        );
+
+        for files_done in 1..=4 {
+            shot_writer.file_done(files_done);
+        }
+        let (iptc_errors, cancelled) = shot_writer.finish();
+
+        let placed: Vec<Vec<PathBuf>> = receiver
+            .try_iter()
+            .map(|event| match event {
+                ImportEvent::Placed { id: 3, images } => images,
+                event => panic!("unexpected event: {event:?}"),
+            })
+            .collect();
+        assert_eq!(placed, [vec![options.dest.join("A001.ARW")]]);
+        assert!(iptc_errors.is_empty());
+        assert!(!cancelled);
+    }
+
+    /// Every copy fails (the destination is a file): no shot is placed.
+    #[test]
+    fn a_shot_none_of_whose_files_was_copied_is_not_placed() {
+        let dirs = TempDirs::new("placed-none");
+        two_shots(&dirs);
+        fs::write(&dirs.dest, b"not a directory").unwrap();
+
+        let (seen, done) = import_events(
+            &dirs.form(""),
+            &AtomicBool::new(false),
+            &write_context(None),
+            &mut None,
+        );
+
+        assert!(
+            seen.iter().all(|seen| !matches!(seen, Seen::Placed(_))),
+            "{seen:?}"
+        );
+        assert_eq!(done.failed.len(), 4);
+    }
+
+    /// The destination copy succeeds and the backup copy fails (the backup is a file): the image
+    /// is not placed and gets no template.
+    #[test]
+    fn a_shot_whose_backup_copy_failed_is_not_placed() {
+        let dirs = TempDirs::new("placed-backup-failed");
+        write_image_dated(&dirs, "A001.ARW", NOV_15);
+        let backup = dirs.root.join("backup");
+        fs::write(&backup, b"not a directory").unwrap();
+        let mut form = dirs.form("");
+        form.backup_on = true;
+        form.backup = backup.to_string_lossy().into_owned();
+        form.iptc.creator = "Fotograf".to_string();
+        let missing_exiftool = dirs.root.join("missing-exiftool");
+        let mut exiftool = None;
+
+        let (seen, done) = import_events(
+            &form,
+            &AtomicBool::new(false),
+            &write_context(Some(&missing_exiftool.to_string_lossy())),
+            &mut exiftool,
+        );
+
+        let image = dirs.dest.join("A001.ARW");
+        assert_eq!(
+            seen,
+            [Seen::Planned(vec![image.clone()]), Seen::Progress(1)]
+        );
+        assert_eq!(done.copied, 0);
+        assert_eq!(done.failed.len(), 1);
+        assert!(done.iptc_errors.is_empty(), "{:?}", done.iptc_errors);
+        assert!(exiftool.is_none());
+        assert_eq!(fs::read(&image).unwrap(), b"A001.ARW");
+    }
+
+    /// ExifTool cannot start: one line in the IPTC errors, and every shot is placed anyway.
+    #[test]
+    fn an_unavailable_exiftool_is_listed_once_and_both_shots_are_placed() {
+        let dirs = TempDirs::new("placed-no-exiftool");
+        two_shots(&dirs);
+        let mut form = dirs.form("");
+        form.iptc.creator = "Fotograf".to_string();
+        let missing_exiftool = dirs.root.join("missing-exiftool");
+
+        let (seen, done) = import_events(
+            &form,
+            &AtomicBool::new(false),
+            &write_context(Some(&missing_exiftool.to_string_lossy())),
+            &mut None,
+        );
+
+        let placed: Vec<&Seen> = seen
+            .iter()
+            .filter(|seen| matches!(seen, Seen::Placed(_)))
+            .collect();
+        assert_eq!(
+            placed,
+            [
+                &Seen::Placed(vec![dirs.dest.join("A001.ARW"), dirs.dest.join("A001.JPG")]),
+                &Seen::Placed(vec![dirs.dest.join("A002.ARW")]),
+            ]
+        );
+        assert_eq!(done.iptc_errors.len(), 1, "{:?}", done.iptc_errors);
+        assert!(
+            done.iptc_errors[0].starts_with("A001.ARW: ExifTool: could not start "),
+            "{:?}",
+            done.iptc_errors
+        );
+        assert_eq!(done.copied, 4);
+    }
+
+    /// A cancel before the first shot is finished: the plan is said, nothing is placed and no
+    /// template is written (ExifTool is not started).
+    #[test]
+    fn a_run_cancelled_before_its_first_shot_plans_but_places_nothing() {
+        let dirs = TempDirs::new("placed-cancel-first");
+        two_shots(&dirs);
+        let mut form = dirs.form("");
+        form.iptc.creator = "Fotograf".to_string();
+        let mut exiftool = None;
+
+        let (seen, done) = import_events(
+            &form,
+            &AtomicBool::new(true),
+            &write_context(Some("missing-exiftool")),
+            &mut exiftool,
+        );
+
+        assert_eq!(
+            seen,
+            [Seen::Planned(vec![
+                dirs.dest.join("A001.ARW"),
+                dirs.dest.join("A001.JPG"),
+                dirs.dest.join("A002.ARW")
+            ])]
+        );
+        assert!(done.cancelled);
+        assert!(done.iptc_errors.is_empty());
+        assert!(exiftool.is_none());
+    }
+
+    /// An image check that sets `cancel` when the safe write releases the image, so a cancel
+    /// comes in the middle of a shot's template writes.
+    #[cfg(windows)]
+    struct CancelOnRelease(Arc<AtomicBool>);
+
+    #[cfg(windows)]
+    impl ImageCheck for CancelOnRelease {
+        fn release(&self, _image: &Path) {
+            self.0.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+
+        fn release_for_move(&self, _image: &Path) {}
+
+        fn check_copy(
+            &self,
+            _original: &Path,
+            _copy: &Path,
+            _kind: pw_metadata::reconcile::FileKind,
+        ) -> Result<(), String> {
+            Ok(())
+        }
+    }
+
+    /// A cancel set while the destination copy gets the template: the backup copy gets none, the
+    /// shot is not placed, and the import is cancelled. Needs ExifTool on PATH; the safe write
+    /// uses Windows file operations.
+    #[cfg(windows)]
+    #[test]
+    fn a_cancel_during_a_shots_template_writes_places_nothing() {
+        let _exiftool = required_exiftool();
+        let dirs = TempDirs::new("placed-cancel-template");
+        dirs.write_image("A001.jpg", jpeg_fixture::SMALL);
+        let backup = dirs.root.join("backup");
+        let mut form = dirs.form("");
+        form.backup_on = true;
+        form.backup = backup.to_string_lossy().into_owned();
+        form.iptc.creator = "Fotograf".to_string();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let write = WriteContext {
+            exiftool_program: None,
+            journal: Some(Journal::open(&dirs.root.join("journal")).unwrap()),
+            checks: Box::new(CancelOnRelease(Arc::clone(&cancel))),
+        };
+
+        let (seen, done) = import_events(&form, &cancel, &write, &mut None);
+
+        assert_eq!(
+            seen,
+            [
+                Seen::Planned(vec![dirs.dest.join("A001.jpg")]),
+                Seen::Progress(1)
+            ]
+        );
+        assert!(done.cancelled);
+        assert_eq!(done.copied, 1);
+        assert_eq!(
+            fs::read(backup.join("A001.jpg")).unwrap(),
+            jpeg_fixture::SMALL
+        );
+    }
+
+    /// A RAW with its sidecar on the card: the sidecar is copied, the template is in the
+    /// destination's sidecar afterwards, and only the RAW is placed. Needs ExifTool on PATH; the
+    /// safe write uses Windows file operations.
+    #[cfg(windows)]
+    #[test]
+    fn a_raw_with_a_card_sidecar_gets_the_template_in_the_copied_sidecar() {
+        let mut exiftool = required_exiftool();
+        let dirs = TempDirs::new("placed-raw-sidecar");
+        dirs.write_image("A001.ARW", b"not really a raw file");
+        let card_sidecar = dirs.source.join("DCIM").join("100TEST").join("A001.xmp");
+        let output = exiftool
+            .execute(&[
+                "-XMP-xmp:Rating=3".to_string(),
+                card_sidecar.to_string_lossy().into_owned(),
+            ])
+            .unwrap();
+        assert!(output.contains("1 image files created"), "{output}");
+        let mut form = dirs.form("");
+        form.iptc.creator = "Fotograf".to_string();
+        let write = WriteContext {
+            exiftool_program: None,
+            journal: Some(Journal::open(&dirs.root.join("journal")).unwrap()),
+            checks: Box::new(NoImageCheck),
+        };
+
+        let (seen, done) = import_events(&form, &AtomicBool::new(false), &write, &mut None);
+
+        assert_eq!(done.copied, 2);
+        assert!(done.failed.is_empty(), "{:?}", done.failed);
+        assert!(done.iptc_errors.is_empty(), "{:?}", done.iptc_errors);
+        let placed: Vec<&Seen> = seen
+            .iter()
+            .filter(|seen| matches!(seen, Seen::Placed(_)))
+            .collect();
+        assert_eq!(placed, [&Seen::Placed(vec![dirs.dest.join("A001.ARW")])]);
+        let sidecar = dirs.dest.join("A001.xmp");
+        let creator = exiftool
+            .execute(&[
+                "-XMP-dc:Creator".to_string(),
+                "-s3".to_string(),
+                sidecar.to_string_lossy().into_owned(),
+            ])
+            .unwrap();
+        assert_eq!(creator.trim(), "Fotograf");
+        assert_eq!(
+            files_below(&dirs.dest),
+            [PathBuf::from("A001.ARW"), PathBuf::from("A001.xmp")]
         );
     }
 }

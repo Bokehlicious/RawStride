@@ -316,19 +316,6 @@ pub fn progress_text(p: &pw_ingest::Progress) -> String {
     )
 }
 
-/// Returns the progress text while writing IPTC metadata.
-pub fn iptc_progress_text(done: usize, total: usize, current: &Path) -> String {
-    format!(
-        "Writing IPTC {} / {} · {}",
-        done.saturating_add(1),
-        total,
-        current
-            .file_name()
-            .map(|name| name.to_string_lossy())
-            .unwrap_or_default()
-    )
-}
-
 /// Returns the progress text while ejecting the source card.
 pub fn ejecting_progress_text(source: &Path) -> String {
     format!("Ejecting {} …", source.display())
@@ -633,18 +620,6 @@ mod tests {
         assert_eq!(
             progress_text(&pw_ingest::Progress::default()),
             "Copying and verifying 0 / 0 · 0 B of 0 B · "
-        );
-    }
-
-    #[test]
-    fn iptc_progress_uses_one_based_file_number_and_name() {
-        assert_eq!(
-            iptc_progress_text(2, 5, Path::new("destination/image.ARW")),
-            "Writing IPTC 3 / 5 · image.ARW"
-        );
-        assert_eq!(
-            iptc_progress_text(0, 0, Path::new("")),
-            "Writing IPTC 1 / 0 · "
         );
     }
 

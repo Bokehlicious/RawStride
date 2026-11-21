@@ -1,9 +1,8 @@
 //! The texts of the Tasks area in the left column (ADR 0017 §2.1, U5, T140): its buttons, the
 //! import row, the pending writes and the error list. English (GR14), with the terms of
 //! `docs/glossary.md`; each text a whole sentence from one template (`docs/tasks/README.md`,
-//! rule 13). The import's IPTC and ejecting steps keep the import dialog's texts
-//! (`iptc_progress_text`, `ejecting_progress_text`), and a finished import without failures
-//! `hidden_done_text`.
+//! rule 13). The import's ejecting step keeps the import dialog's text
+//! (`ejecting_progress_text`), and a finished import without failures `hidden_done_text`.
 
 use std::path::Path;
 
