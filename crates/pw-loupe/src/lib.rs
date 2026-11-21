@@ -165,11 +165,12 @@ pub use shell::{
 };
 pub use shell_text::{
     AboutText, SettingsText, ShellText, about_text, command_text, exiftool_message,
-    external_program_limit_text, fallback_text, folder_gone_text, key_text, menu_text,
-    no_images_text, open_error_text, path_resolution_error_text, prune_error_text, recovery_text,
-    removed_by_another_program_text, settings_save_error_text, settings_text, shell_text,
-    sort_button_text, sort_direction_hover, sort_direction_text, sort_key_text, sorting_text,
-    status_line_text, submenu_text, theme_text, thumb_button_hover_text, window_title,
+    external_program_limit_text, fallback_text, folder_changed_text, folder_gone_text, key_text,
+    menu_text, no_images_text, open_error_text, path_resolution_error_text, prune_error_text,
+    recovery_text, removed_by_another_program_text, settings_save_error_text, settings_text,
+    shell_text, sort_button_text, sort_direction_hover, sort_direction_text, sort_key_text,
+    sorting_text, status_line_text, submenu_text, theme_text, thumb_button_hover_text,
+    window_title,
 };
 pub use sort::{
     CaptureRead, CaptureReader, CaptureTime, CaptureTimes, SORT_KEYS, SortKey, SortOrder, SortPlan,
@@ -269,6 +270,12 @@ pub fn is_listed(path: &Path) -> bool {
 /// The images of a folder in display order (by name, ignoring case), and the position of
 /// `selected` among them. A file path opens its folder with that file selected. A path that
 /// does not exist is an error naming that path, not its folder.
+///
+/// A directory entry that gives an error (a network hiccup while reading the folder) makes the
+/// whole listing an error naming the folder read, instead of being skipped: a listing with
+/// entries missing would drop their files and marks from the tab (ADR 0026 F3). An entry that is
+/// not a file (also one that went away between the listing and the check) or is not listed
+/// (`is_listed`) is still left out.
 pub fn list_folder(path: &Path) -> Result<(Vec<PathBuf>, usize), String> {
     let meta = std::fs::metadata(path).map_err(|e| format!("{}: {e}", path.display()))?;
     let (dir, selected) = if meta.is_dir() {
@@ -282,10 +289,13 @@ pub fn list_folder(path: &Path) -> Result<(Vec<PathBuf>, usize), String> {
         (dir, Some(path.to_path_buf()))
     };
     let rd = std::fs::read_dir(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-    let mut files: Vec<PathBuf> = rd
-        .filter_map(|e| e.ok().map(|e| e.path()))
-        .filter(|p| p.is_file() && is_listed(p))
-        .collect();
+    let mut files: Vec<PathBuf> = Vec::new();
+    for entry in rd {
+        let p = entry.map_err(|e| format!("{}: {e}", dir.display()))?.path();
+        if p.is_file() && is_listed(&p) {
+            files.push(p);
+        }
+    }
     files.sort_by_key(|p| {
         p.file_name()
             .map(|n| n.to_string_lossy().to_lowercase())
@@ -688,6 +698,26 @@ mod tests {
         let missing = dir.join("missing.arw");
         let error = list_folder(&missing).err().unwrap_or_default();
         assert!(error.starts_with(&missing.display().to_string()), "{error}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ADR 0026 §2 point 6 (T249): the folder's listing leaves out RawStride's own temporary
+    /// files. (An entry error from `read_dir`, which makes the listing fail, cannot be made on
+    /// purpose in a temporary folder.)
+    #[test]
+    fn the_folder_listing_leaves_out_rawstride_temporary_files() {
+        let dir = std::env::temp_dir().join(format!("pw-loupe-tmp-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::create_dir_all(&dir);
+        for n in ["a.jpg", "a.pwtmp-1a2b.jpg", "b.ARW", "b.PWBAK-0123.ARW"] {
+            let _ = std::fs::write(dir.join(n), b"x");
+        }
+        let (files, _) = list_folder(&dir).unwrap_or_default();
+        let names: Vec<String> = files
+            .iter()
+            .filter_map(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
+            .collect();
+        assert_eq!(names, vec!["a.jpg", "b.ARW"]);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

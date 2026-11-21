@@ -1622,7 +1622,11 @@ impl Loupe {
     fn poll_folder_watcher(&mut self) {
         while let Some(event) = self.folder_watcher.try_recv() {
             match event {
-                WatchEvent::Changed(folder) => self.tabs.note_changed_on_disk(&folder),
+                // The watch started after the tab's listing: a file may have come in between
+                // (T249), so it counts as a change.
+                WatchEvent::Started(folder) | WatchEvent::Changed(folder) => {
+                    self.tabs.note_changed_on_disk(&folder)
+                }
                 WatchEvent::Ended { folder, reason } => {
                     self.tabs.note_unwatched(&folder);
                     eprintln!(

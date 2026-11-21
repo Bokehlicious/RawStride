@@ -32,9 +32,17 @@ const DROP_WAIT: Duration = Duration::from_secs(2);
 #[cfg_attr(not(windows), allow(dead_code))]
 const STOP_WAIT: Duration = Duration::from_millis(1500);
 
-/// What the watcher tells the shell.
+/// What the watcher tells the shell. Each watch starts with `Started` or `Ended`; a live watch
+/// then gives `Changed` until it ends. The shell lists the folder again at `Started` (a file that
+/// arrived between the tab's listing and the watch's start would otherwise never be shown) and
+/// at `Changed` (ADR 0026 F3).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum WatchEvent {
+    /// The folder's watch has started (its first read is issued): a change made from now on is
+    /// seen. Sent once per watch, so again when the folder has left the set and been given again.
+    /// The shell lists the folder once more (ADR 0026 F3: the gap between a tab's listing and its
+    /// watch).
+    Started(PathBuf),
     /// Files came or went in the folder (named as it was first given), after a quiet moment.
     Changed(PathBuf),
     /// The folder's watch could not start (the folder does not exist, cannot be opened, or its
@@ -1004,7 +1012,11 @@ mod sys {
                 })
                 .and_then(|mut watch| watch.start_read().map(|()| watch).map_err(reason));
             match started {
-                Ok(watch) => entry.state = State::Live(watch),
+                Ok(watch) => {
+                    entry.state = State::Live(watch);
+                    let folder = entry.folder.clone();
+                    self.send(WatchEvent::Started(folder));
+                }
                 Err(reason) => {
                     entry.state = State::Ended;
                     let folder = entry.folder.clone();
@@ -1479,6 +1491,16 @@ mod tests {
         WatchEvent::Changed(folder.to_path_buf())
     }
 
+    fn is_started(event: &WatchEvent) -> bool {
+        matches!(event, WatchEvent::Started(_))
+    }
+
+    /// The events without `Started` (T249: for tests about `Changed` and `Ended`, where a watch
+    /// that becomes live also sends `Started`).
+    fn ignoring_started(events: Vec<WatchEvent>) -> Vec<WatchEvent> {
+        events.into_iter().filter(|e| !is_started(e)).collect()
+    }
+
     fn touch(path: &Path) {
         std::fs::write(path, b"").unwrap();
     }
@@ -1498,7 +1520,9 @@ mod tests {
             );
             touch(&folder.join(format!("probe-{probe}.jpg")));
             probe += 1;
-            let events = events_until(watcher, Duration::from_secs(1), |_| true);
+            let events = ignoring_started(events_until(watcher, Duration::from_secs(1), |e| {
+                !is_started(e)
+            }));
             if events.contains(&changed(folder)) {
                 break;
             }
@@ -1732,7 +1756,10 @@ mod tests {
         let moved = temp.0.join("removed-at-once-moved");
         retried(|| std::fs::rename(&parent, &moved)).unwrap();
         retried(|| std::fs::remove_dir_all(moved.join("watched"))).unwrap();
-        assert_eq!(events_for(&mut watcher, Duration::from_millis(500)), vec![]);
+        assert_eq!(
+            ignoring_started(events_for(&mut watcher, Duration::from_millis(500))),
+            vec![]
+        );
     }
 
     #[cfg(windows)]
@@ -1749,13 +1776,97 @@ mod tests {
         wait_until_watching(&mut watcher, &b);
         touch(&a.join("x.jpg"));
         assert_eq!(
-            events_for(&mut watcher, Duration::from_millis(1500)),
+            ignoring_started(events_for(&mut watcher, Duration::from_millis(1500))),
             vec![]
         );
         touch(&b.join("x.jpg"));
         assert_eq!(
             events_until(&mut watcher, Duration::from_secs(5), |_| true),
             vec![changed(&b)]
+        );
+    }
+
+    // --- `Started` (T249) ---
+
+    #[cfg(windows)]
+    #[test]
+    fn a_folder_given_gets_started_before_any_changed_and_then_sees_a_new_file() {
+        let temp = TempDir::new();
+        let folder = temp.folder("started");
+        let mut watcher = FolderWatcher::start(Box::new(|| {}));
+        watcher.set_folders(vec![folder.clone()]);
+        let events = events_until(&mut watcher, Duration::from_secs(5), |_| true);
+        assert_eq!(events, vec![WatchEvent::Started(folder.clone())]);
+        // A file made right after `Started` is seen.
+        touch(&folder.join("x.jpg"));
+        assert_eq!(
+            events_until(&mut watcher, Duration::from_secs(5), |_| true),
+            vec![changed(&folder)]
+        );
+        assert_eq!(events_for(&mut watcher, Duration::from_secs(1)), vec![]);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_folder_that_does_not_exist_gets_no_started() {
+        let temp = TempDir::new();
+        let folder = temp.0.join("missing-started");
+        let mut watcher = FolderWatcher::start(Box::new(|| {}));
+        watcher.set_folders(vec![folder.clone()]);
+        let events = events_for(&mut watcher, Duration::from_secs(2));
+        assert!(
+            matches!(events.as_slice(), [WatchEvent::Ended { folder: ended, .. }] if *ended == folder),
+            "{events:?}"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_folder_taken_out_and_given_again_gets_a_second_started() {
+        let temp = TempDir::new();
+        let folder = temp.folder("again");
+        let mut watcher = FolderWatcher::start(Box::new(|| {}));
+        watcher.set_folders(vec![folder.clone()]);
+        assert_eq!(
+            events_until(&mut watcher, Duration::from_secs(5), |_| true),
+            vec![WatchEvent::Started(folder.clone())]
+        );
+        watcher.set_folders(Vec::new());
+        assert!(watcher.wait_until_applied(Duration::from_secs(2)));
+        assert_eq!(events_for(&mut watcher, Duration::from_millis(500)), vec![]);
+        watcher.set_folders(vec![folder.clone()]);
+        assert_eq!(
+            events_until(&mut watcher, Duration::from_secs(5), |_| true),
+            vec![WatchEvent::Started(folder.clone())]
+        );
+    }
+
+    #[test]
+    fn without_a_thread_only_ended_is_sent() {
+        let (events_sender, events) = mpsc::channel();
+        let mut watcher = FolderWatcher {
+            events_sender,
+            events,
+            wake: Arc::new(Mutex::new(Box::new(|| {}))),
+            applied: Arc::new(Applied::default()),
+            number: 0,
+            running: None,
+            unwatched: Vec::new(),
+            reason: "no thread".to_string(),
+        };
+        let temp = TempDir::new();
+        let folder = temp.folder("no-thread");
+        watcher.set_folders(vec![folder.clone()]);
+        let mut received = Vec::new();
+        while let Some(event) = watcher.try_recv() {
+            received.push(event);
+        }
+        assert_eq!(
+            received,
+            vec![WatchEvent::Ended {
+                folder,
+                reason: "no thread".to_string()
+            }]
         );
     }
 }

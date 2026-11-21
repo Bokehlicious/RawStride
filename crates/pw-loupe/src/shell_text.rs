@@ -167,6 +167,26 @@ pub fn removed_by_another_program_text(file: &Path) -> String {
     format!("{name} was removed by another program")
 }
 
+/// The status message after RawStride listed a tab's folder again because it changed on disk
+/// (ADR 0026 §3.3, F-Q9, T251): how many images came and how many another program removed;
+/// `None` when neither. The current image removed has its own text
+/// (`removed_by_another_program_text`, F-Q5). Each case is one whole sentence, singular or plural
+/// for each number.
+pub fn folder_changed_text(added: usize, removed: usize) -> Option<String> {
+    let text = match (added, removed) {
+        (0, 0) => return None,
+        (1, 0) => "1 new image".to_string(),
+        (added, 0) => format!("{added} new images"),
+        (0, 1) => "1 image removed by another program".to_string(),
+        (0, removed) => format!("{removed} images removed by another program"),
+        (1, 1) => "1 new image, 1 removed by another program".to_string(),
+        (1, removed) => format!("1 new image, {removed} removed by another program"),
+        (added, 1) => format!("{added} new images, 1 removed by another program"),
+        (added, removed) => format!("{added} new images, {removed} removed by another program"),
+    };
+    Some(text)
+}
+
 /// The status message when the metadata of closed tabs cannot be cleaned up.
 pub fn prune_error_text(error: &str) -> String {
     format!("Cannot clean up metadata: {error}")
@@ -1209,6 +1229,39 @@ mod tests {
         assert_eq!(
             removed_by_another_program_text(Path::new("..")),
             ".. was removed by another program"
+        );
+    }
+
+    /// The status line after a tab's folder changed on disk (ADR 0026 §3.3, F-Q9, T249).
+    #[test]
+    fn the_folder_changed_text_counts_new_and_removed_images() {
+        let text = |added, removed| folder_changed_text(added, removed);
+        assert_eq!(text(0, 0), None);
+        assert_eq!(text(1, 0).as_deref(), Some("1 new image"));
+        assert_eq!(text(3, 0).as_deref(), Some("3 new images"));
+        assert_eq!(
+            text(0, 1).as_deref(),
+            Some("1 image removed by another program")
+        );
+        assert_eq!(
+            text(0, 2).as_deref(),
+            Some("2 images removed by another program")
+        );
+        assert_eq!(
+            text(1, 1).as_deref(),
+            Some("1 new image, 1 removed by another program")
+        );
+        assert_eq!(
+            text(1, 2).as_deref(),
+            Some("1 new image, 2 removed by another program")
+        );
+        assert_eq!(
+            text(3, 1).as_deref(),
+            Some("3 new images, 1 removed by another program")
+        );
+        assert_eq!(
+            text(3, 2).as_deref(),
+            Some("3 new images, 2 removed by another program")
         );
     }
 }

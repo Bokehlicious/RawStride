@@ -1,4 +1,4 @@
-# T250. ADR 0026 F3b: the ratings of only the new files, files waiting for their rating, Reload Folder reads the embedded turns again (pw-loupe) — Blocked
+# T250. ADR 0026 F3b: the ratings of only the new files, files waiting for their rating, Reload Folder reads the embedded turns again (pw-loupe) — Open
 
 - **Why:** ADR 0026 step F3 (accepted by the owner 2026-11-18). When a tab's folder changes on
   disk, the active tab is listed again at once (§3.2) and its new files are shown as they come
@@ -141,3 +141,4 @@
 | 2026-11-21 | Blocked | Added (ADR 0026 F3, second of T249 → T250 → T251); waits for T249 |
 | 2026-11-21 | Blocked | Chain review (T249 → T251): `Relisted` gains `gone` (T251 forgets those files in the cache, so a file brought back is read anew); the Why no longer says the relist after an undo reads the whole tab (T251 makes it) |
 | 2026-11-21 | Blocked | Cold read: `relist` no longer fills `unread` (only the shell after a watcher listing, `mark_unread`), so moves, undo, F5 and activation are unchanged until T251; the folder read's answer and `fail_loading` leave `add_files` paths alone, a stopped worker fails them; the failure text through `EditorText::MetadataError`, `last_failure` untouched, an `Error` file counts as read (unrated); the whole order under a rating key waits while `unread` is not empty (`Tab::follow_sort`); marks of unread files kept through `retain_visible`; `prune`/`forget_deleted` cover the waiting paths; point 6 narrowed to the embedded values (`forget_embedded`): a value RawStride wrote stays, since the thumbnail cache and the view core would show it stale; `Relisted` literals in existing tests gain `new`; `inside_lexically`'s case test Windows only |
+| 2026-11-21 | Open | T249 Done |
