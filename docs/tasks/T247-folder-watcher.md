@@ -29,11 +29,26 @@
        the whole set each time. It does not block: the thread opens a watch for each folder not
        watched yet and ends each watch whose folder is no longer in the set. Folders that
        `tabs::same_folder` calls the same get one watch (ADR 0026 §3.2, "one handle per open
-       folder"); the first spelling given is the one events name.
-     - `pub fn wait_until_applied(&self, wait: Duration) -> bool`: blocks until the thread has
-       applied the last `set_folders` (every ended watch's handle closed, point 4) or `wait` has
-       passed; true when applied. Used by T248 before an import that ejects its card. With no
-       thread (point 1's first bullet) it returns true at once: no handle is open.
+       folder"); the first spelling given is the one events name. Each call gets a number (a
+       generation counting up from 1); the thread drains every set waiting in its channel and
+       applies only the newest, ends before it opens, and publishes the number of the set it has
+       applied (a `Mutex<u64>` and a `Condvar` shared with `FolderWatcher`).
+     - `pub fn wait_until_applied(&self, wait: Duration) -> bool`: blocks until the published
+       number is at least the number of the last `set_folders` made before this call (every
+       ended watch's handle closed, point 4) or `wait` has passed; true when applied. Comparing
+       numbers means a signal from an earlier set that came late is never taken for this one.
+       Used by T248 before an import that ejects its card. With no thread (point 1's first
+       bullet) it returns true at once: no handle is open.
+     - **Opening off the thread:** opening a folder can block for the network's timeout (20–60 s
+       on an unreachable share). So the watcher thread does not open folders itself: for each
+       folder to open it starts a short-lived helper thread (named `pw-folder-open`), which
+       opens it (point 5) and sends the `File` or the error back through the control channel,
+       posting the control key so the watcher wakes. Meanwhile the watcher thread keeps ending
+       watches, sending events and publishing applied sets; a set counts as applied without
+       waiting for its opens (applied means "nothing left open that should not be"). A `File`
+       that comes back for a folder no longer in the set is dropped at once with no event; an
+       error for one still in the set gives `Ended`. A helper that cannot be started gives
+       `Ended` for its folder.
      - `pub fn try_recv(&mut self) -> Option<WatchEvent>`, never blocking.
      - `pub enum WatchEvent { Changed(PathBuf), Ended { folder: PathBuf, reason: String } }`:
        `Changed` after a quiet moment (point 3); `Ended` when a watch cannot start (the folder
@@ -46,11 +61,12 @@
        the set the entry goes, and when it comes back it is opened again. A folder already
        watched under one spelling and given again under another keeps the first spelling. In
        the no-thread case (point 1's first bullet) `set_folders` queues the `Ended` events itself
-       and `wake` is not called (the shell reads them in the same frame).
+       and calls `wake` too (`request_repaint` may be called from the window's own thread), so
+       the shell reads them in the next frame without waiting for input.
      - `Drop`: ends every watch (point 4), then the thread, and returns only when the thread has
        closed every handle, waiting at most 2 s through a "done" channel's `recv_timeout`
-       (`JoinHandle` has no timed join). A thread stuck opening an unreachable network folder is
-       then left to end on its own (logged).
+       (`JoinHandle` has no timed join). A helper thread still opening an unreachable network
+       folder is not waited for: when it finishes, its `File` is dropped (the channel is gone).
      - **Who owns what** (so nothing Windows still writes into is freed): every read buffer and
        `OVERLAPPED` is owned by the watcher thread only. If the thread ever gives up waiting for
        a cancelled read's completion (at its own end, point 4), it leaks that watch's buffer and
@@ -171,6 +187,12 @@
       0 bytes, then the restarted read fails). If Windows gives no `Ended` on this machine,
       stop and report what happened instead of changing the test.
   - `wait_until_applied` with no change since the last applied set returns true at once.
+  - Generations (plain Rust, on the shared number and `Condvar` alone, no Windows): a wait for
+    number 3 is not answered by a publish of 2, and is by 3 or 4; a wait times out with false
+    when nothing is published.
+  - Windows: three `set_folders` calls in a row (folder A, then A and B, then only B) followed by
+    `wait_until_applied(2 s)` give true, a file created in A then gives no `Changed` within
+    1.5 s, and one created in B gives `Changed`.
 - **To report** (in the log row, not as a test assertion: logged by a test with `eprintln!`,
   or tried by hand; the test does not fail on either answer): whether renaming the watched folder's
   **parent** in File Explorer, and with `std::fs::rename`, fails while the folder is watched.
@@ -190,3 +212,4 @@
 |---|---|---|
 | 2026-11-21 | Open | Added (ADR 0026 F2, first of T247 → T248) |
 | 2026-11-21 | Open | Cold read: the folder opened with `std::fs::OpenOptions` + `OpenOptionsExt` instead of `CreateFileW` (it needs `Win32_Security`); a local `INFINITE`; an ended folder kept as an entry so it is not reopened, the first spelling kept, no `wake` without a thread; ownership of buffers, `OVERLAPPED` and the port (`Arc` wrapper, leak on give-up), "read pending" per watch and `ERROR_NOT_FOUND`, the wait in the main loop, keys never reused, `GetQueuedCompletionStatus`'s two FALSE cases; Drop's wait through `recv_timeout`; the parser takes `&[u8]` (`to_ne_bytes`); tests given counting windows, three `Changed` allowed for 20 files, retries for rename and delete, a `Changed` before `Ended` accepted; the parent rename only reported |
+| 2026-11-21 | Open | Chain review (T247 → T248): each `set_folders` numbered, the thread applies only the newest waiting set, ends before opens, and publishes the number applied, so `wait_until_applied` cannot take a late signal for a new set; folders opened on short-lived helper threads so an unreachable network folder does not stop ends, events or the applied signal (a `File` for a folder that left the set dropped at once); `wake` also called without a thread; tests for the numbers and for quick sets. F3's notes from the review (a gap between listing and watching, RawStride's own writes, a renamed folder gives no event) are in `plans/adr-0018-0025-steps.md`, "Taken up when a step is written" |
