@@ -6,8 +6,10 @@
 - **Amendment 1 (owner, 2026-11-10, §13):** a held step key in the loupe waits for the shown image
   (task T62).
 - **The Tauri app is retired (owner, 2026-11-19, §7):** removed by T207 without waiting for S6.
-- S6 partly done (2026-11-11, runs 11–13 open): results in
-  `docs/analyses/2026-11-11-adr0009-s6-acceptance.md`.
+- S6 partly done (2026-11-11): results in
+  `docs/analyses/2026-11-11-adr0009-s6-acceptance.md`. **Closed by the owner (2026-11-21)
+  without runs 11–13** (V5, V8 over a long session, run 13's hand checks), which were deferred on
+  2026-11-11 and will not be run.
 - Date: 2026-11-07
 - Related:
   - [GUI_REQUIREMENTS.md](../GUI_REQUIREMENTS.md) (GR1–GR11; §6 versions and features; §7 renderer and

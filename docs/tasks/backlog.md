@@ -150,12 +150,6 @@ and reviewer:
   `public-release.md` §3). The earlier `chrono` warning (RUSTSEC-2026-054356, 2026-11-17) is gone:
   `chrono` is no longer in `Cargo.lock` (`cargo tree --offline --target all -i chrono` finds no
   package, 2026-11-19).
-- **ADR 0009 S6: runs 11–13 not measured** (deferred by the owner 2026-11-11; tracked nowhere
-  else until the status review of 2026-11-21): V5 (run 11), V8 over a long session with L1–L4
-  (run 12), and the hand checks of run 13 (V6, G1, G3, G4, GR6, GR7), as listed in
-  `docs/analyses/2026-11-11-adr0009-s6-acceptance.md`. `D:\PhotoWorkflowData\pm-study\tools\s6a.ps1
-  -Run 11,12,13` runs them, on a release build. The owner decides whether to run them or close
-  S6 without them (the Tauri app they were to be compared with is retired, T207).
 - **A filter bar of toggle buttons instead of drop-down lists** (owner idea, 2026-11-10, after T61;
   ADR 0014 §15): a row "0★ 1★ 2★ 3★ 4★ 5★" and a row of colour swatches, each clicked on and off,
   with a check box per row that turns the row on or off. Needs an amendment of ADR 0014 first: the
