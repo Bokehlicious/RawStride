@@ -87,10 +87,11 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status |
 |---|---|---|
+| [T255](T255-own-writes-keep-the-thumbnail.md) | ADR 0026 F3f: RawStride's own write of an added file does not make its thumbnail anew (pw-loupe) | Open |
 
 ## Writing a task (owner and reviewer)
 
-- **Number:** the next free number after the highest in this folder and `done/` (T255 next).
+- **Number:** the next free number after the highest in this folder and `done/` (T256 next).
 - **File:** `docs/tasks/T246-<a-few-words>.md`; three digits, lower case, words joined by `-`.
 - **Index:** add a row to "Open tasks" above and keep its status in step with the file's heading.
 - **Size (owner, 2026-11-15, after T142):** one task is one layer (a C++ shim or a core crate, or
