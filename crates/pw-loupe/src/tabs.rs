@@ -181,11 +181,7 @@ impl Tabs {
     /// refreshed instead (GR12); if the active tab is empty, the folder fills it instead of leaving
     /// an empty tab behind.
     pub fn open_new(&mut self, folder: PathBuf, files: Vec<PathBuf>, pos: usize) {
-        if let Some(index) = self.tabs.iter().position(|tab| {
-            tab.folder
-                .as_deref()
-                .is_some_and(|open| same_folder(open, &folder))
-        }) {
+        if let Some(index) = self.index_of_folder(&folder) {
             self.active = index;
             if let Some(tab) = self.tabs.get_mut(index) {
                 tab.open(folder, files, pos);
@@ -204,6 +200,30 @@ impl Tabs {
         self.tabs.push(Tab::default());
         self.active = self.tabs.len().saturating_sub(1);
         self.open_in_active(folder, files, pos);
+    }
+
+    /// The index of the first tab whose folder is `folder`, compared by `same_folder` (GR12).
+    pub fn index_of_folder(&self, folder: &Path) -> Option<usize> {
+        self.tabs.iter().position(|tab| {
+            tab.folder
+                .as_deref()
+                .is_some_and(|open| same_folder(open, folder))
+        })
+    }
+
+    /// Opens `folder` in a new tab behind the active one (ADR 0026 §3.4): when the folder is open
+    /// in a tab (`index_of_folder`), that tab's index, nothing changed; otherwise a new tab at the
+    /// end, opened on `folder` with `files` and the first file current (the contact sheet, GR13),
+    /// and its index. The active tab does not change, also when it is empty (unlike `open_new`,
+    /// which fills an empty active tab).
+    pub fn open_behind(&mut self, folder: PathBuf, files: Vec<PathBuf>) -> usize {
+        if let Some(index) = self.index_of_folder(&folder) {
+            return index;
+        }
+        let mut tab = Tab::default();
+        tab.open(folder, files, 0);
+        self.tabs.push(tab);
+        self.tabs.len().saturating_sub(1)
     }
 
     /// Activates tab `index`; returns false when the index is out of range.
@@ -463,7 +483,7 @@ fn same_drive(letter: char, drive: &str) -> bool {
 /// Whether `a` and `b` name the same folder without file access: both made absolute and compared
 /// component by component as `path_starts_with` does, so a trailing separator or other case does
 /// not matter, but a `subst` drive or a `\\?\` prefix does.
-fn same_folder_lexically(a: &Path, b: &Path) -> bool {
+pub fn same_folder_lexically(a: &Path, b: &Path) -> bool {
     let a = std::path::absolute(a).unwrap_or_else(|_| a.to_path_buf());
     let b = std::path::absolute(b).unwrap_or_else(|_| b.to_path_buf());
     path_starts_with(&a, &b) && path_starts_with(&b, &a)
@@ -1446,6 +1466,77 @@ mod tests {
             &root.join("Card A"),
             Path::new(r"D:\Import\2026\")
         ));
+    }
+
+    /// T259: `index_of_folder` finds the first tab of a folder, `None` for a folder not open.
+    #[test]
+    fn index_of_folder_finds_the_first_tab_of_a_folder() {
+        let mut tabs = Tabs::default();
+        assert_eq!(tabs.index_of_folder(Path::new("first")), None);
+        tabs.open_in_active(PathBuf::from("first"), files("first", 2), 0);
+        tabs.open_new(PathBuf::from("second"), files("second", 2), 0);
+        assert_eq!(tabs.index_of_folder(Path::new("first")), Some(0));
+        assert_eq!(tabs.index_of_folder(Path::new("second")), Some(1));
+        assert_eq!(tabs.index_of_folder(Path::new("third")), None);
+    }
+
+    /// T259: `open_behind` adds a tab at the end on the first file and the contact sheet, and
+    /// leaves the active tab as it was.
+    #[test]
+    fn open_behind_adds_a_tab_without_changing_the_active_one() {
+        let mut tabs = Tabs::default();
+        tabs.open_in_active(PathBuf::from("first"), files("first", 3), 2);
+        tabs.set_mode(ViewMode::Loupe);
+        let before = tabs.active().cloned();
+
+        let index = tabs.open_behind(PathBuf::from("second"), files("second", 3));
+        assert_eq!(index, 1);
+        assert_eq!(tabs.active_index(), 0);
+        assert_eq!(tabs.active().cloned(), before);
+        let added = tabs.tabs().get(1).expect("the new tab exists");
+        assert_eq!(added.folder, Some(PathBuf::from("second")));
+        assert_eq!(added.files, files("second", 3));
+        assert_eq!(added.current, 0);
+        assert_eq!(added.mode, ViewMode::Grid);
+        assert_eq!(added.visible, vec![0, 1, 2]);
+    }
+
+    /// T259: unlike `open_new`, `open_behind` does not fill an empty active tab.
+    #[test]
+    fn open_behind_leaves_an_empty_active_tab_empty() {
+        let mut tabs = Tabs::default();
+        let index = tabs.open_behind(PathBuf::from("first"), files("first", 2));
+        assert_eq!(index, 1);
+        assert_eq!(tabs.active_index(), 0);
+        assert_eq!(tabs.active(), Some(&Tab::default()));
+        assert_eq!(tabs.tabs().len(), 2);
+        assert_eq!(
+            tabs.tabs().get(1).and_then(|tab| tab.folder.clone()),
+            Some(PathBuf::from("first"))
+        );
+    }
+
+    /// T259: a folder already open gives its tab's index and keeps its files, filter and marks.
+    #[test]
+    fn open_behind_leaves_an_open_folders_tab_as_it_was() {
+        let mut tabs = Tabs::default();
+        tabs.open_in_active(PathBuf::from("first"), files("first", 4), 1);
+        tabs.open_new(PathBuf::from("second"), files("second", 2), 0);
+        tabs.activate(0);
+        tabs.set_filter(red());
+        if let Some(tab) = tabs.active_mut() {
+            tab.selection.ctrl_click(1, 3);
+        }
+        tabs.activate(1);
+        let before = tabs.clone();
+
+        let index = tabs.open_behind(PathBuf::from("first"), files("other", 1));
+        assert_eq!(index, 0);
+        assert_eq!(tabs, before);
+        let first = tabs.tabs().first().expect("the first tab exists");
+        assert_eq!(first.files, files("first", 4));
+        assert_eq!(first.filter, red());
+        assert_eq!(first.selection.count(), 2);
     }
 
     /// T250: on Windows other case is the same folder.

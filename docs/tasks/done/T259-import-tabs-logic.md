@@ -1,4 +1,4 @@
-# T259. ADR 0026 F4: what the import's tabs need to know (pw-loupe logic) — Open
+# T259. ADR 0026 F4: what the import's tabs need to know (pw-loupe logic) — Done
 
 - **Why:** ADR 0026 §3.4 and what was settled on 2026-11-21: the shell opens and fills the
   destination tabs from the import's events (`ImportEvent::Planned` and `Placed`, T258), leaves out
@@ -89,3 +89,5 @@
 | 2026-11-21 | Blocked | Added when F4 was written (ADR 0026 §3.4); waits for T258 |
 | 2026-11-21 | Blocked | Cold read: doable with the named files; `same_folder` reads the disk, so `ImportTabs` uses `same_folder_lexically` (made `pub`); the grouping key, a placed image never planned, `with_placed`'s comparison (file name, ASCII case) and the derives named; `open_behind` differs from `open_new` on an empty active tab (said). No code dependency on T258; the order is the chain's |
 | 2026-11-21 | Open | T258 done; ready for its agent |
+| 2026-11-21 | Ready for review | `import_tabs.rs` (new): `ImportTabs` (`new`, `place`, `folders`, `waiting`, `leave_out_waiting`, `first_shown`, `first_kept`, `end_target`), `PlacedInFolder`, `ImportPosition`, `with_placed`; planned and placed names kept per folder (found by `same_folder_lexically`, file names ASCII-lowercased in a set), so `waiting` does not compare every planned path. An image with an empty parent (a bare file name) counts as without a parent folder. `tabs.rs`: `index_of_folder` (now used by `open_new`), `open_behind`, `same_folder_lexically` `pub`. `lib.rs`: module and `pub use`. 16 tests (12 + 4); `test-inventory.md` updated. check.ps1 all OK (2248 passed, 76 ignored), no clippy warnings |
+| 2026-11-21 | Done | Reviewed: points 1–4 as written; every folder comparison in `import_tabs.rs` lexical, `open_behind` never changes the active tab, `open_new` now uses `index_of_folder`; two small documented additions accepted (an empty parent counts as no folder; `with_placed` adds a name only once within one event). The 16 tests seen passing in `test-output.txt` (newer than the change), no clippy warnings. Reviewer's edit: a missing comma in `test-inventory.md`'s pw-loupe requirement column. No extra review (one crate, plain logic), no leftovers, no change log line (nothing shown until T260) |

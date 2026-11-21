@@ -19,6 +19,7 @@ mod grid;
 mod histogram;
 mod import;
 mod import_dialog;
+mod import_tabs;
 mod import_text;
 mod import_worker;
 mod info_panel;
@@ -103,6 +104,7 @@ pub use import::{
 pub use import_dialog::{
     CARD_REFRESH_INTERVAL, CardRefresh, DialogRequest, ImportDialog, ImportDialogState,
 };
+pub use import_tabs::{ImportPosition, ImportTabs, PlacedInFolder, with_placed};
 pub use import_text::{
     DoneLine, ImportText, clear_and_import_text, clear_cancel_text, clear_confirmation_text,
     clear_confirmation_title, done_lines, ejecting_progress_text, hidden_done_text,

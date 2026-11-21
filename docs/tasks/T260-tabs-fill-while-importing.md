@@ -1,4 +1,4 @@
-# T260. ADR 0026 F4: the destination tabs open on the first image and fill while importing (pw-loupe shell) — Blocked: waits for T259
+# T260. ADR 0026 F4: the destination tabs open on the first image and fill while importing (pw-loupe shell) — Open
 
 - **Why:** ADR 0026 §3.4 (F-Q10, F-Q11 and what was settled on 2026-11-21), GR12 as changed:
   each destination folder opens in its own tab when its first image is in place with its
@@ -129,3 +129,4 @@
 | 2026-11-21 | Blocked | Added when F4 was written (ADR 0026 §3.4); waits for T259. At Done: CHANGELOG line, an independent code review |
 | 2026-11-21 | Blocked | Cold read: path forms consistent; fixed: every tab of a folder relisted (the active one followed as active, others with `ratings_ready` false), `ImportTabs::first_kept` (added to T259), the first folder's existing tab activated after its relist with its view kept, errors shown but no change text, a tab closed during the import not opened again, `relist_tabs` and `open`'s position in point 4, the hold after `Done` lasting while the dialog is shown (point 5, hand check 5), the dialog hidden for clicks (hand check 2, 3), the `was_running` leftovers |
 | 2026-11-21 | Blocked | Chain review: the end rule's place at `Done` named; `test-inventory.md` only when tests change; the backup folder's tab not held (not new, to `known-limits.md` at Done); the other findings (`relist_tabs`, `open`'s position, the hold while the dialog is shown, `first`, the activation order) were already fixed after the cold read |
+| 2026-11-21 | Open | T259 done; ready for its agent |
