@@ -18,6 +18,11 @@ Downloads are on the [Releases page](https://github.com/Bokehlicious/RawStride/r
   XMP sidecar, for a DNG, JPEG or TIFF in the file's own orientation tag. The pixels are never
   changed.
 
+### Changed
+
+- The Label submenu now comes right after the Rating submenu, in the Image menu and in the
+  right-click menu on images.
+
 ### Fixed
 
 - Turning a JPEG from a Sony ILCE-1, or writing its Exif fields, no longer fails with a refused

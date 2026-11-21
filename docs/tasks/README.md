@@ -88,7 +88,6 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 |---|---|---|
 | [T241](T241-reload-folder-command-and-texts.md) | ADR 0026 F1b: "Reload Folder" command, key and texts; reads forgotten on a reload (pw-loupe) | Open |
 | [T242](T242-reload-folder-in-the-shell.md) | ADR 0026 F1c: "Reload Folder" (F5) in the shell; tabs listed again after a move or an undo with the placement (pw-loupe) | Blocked: waits for T241 |
-| [T243](T243-label-after-rating-in-the-menus.md) | The Label submenu right after the Rating submenu, in the Image menu and the right-click menu (pw-loupe) | Open |
 
 ## Writing a task (owner and reviewer)
 

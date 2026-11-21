@@ -752,10 +752,10 @@ pub const MENUS: &[Menu] = &[
         kind: MenuKind::Image,
         entries: &[
             MenuEntry::Submenu(SubmenuKind::Rating, RATING_ITEMS),
+            MenuEntry::Submenu(SubmenuKind::Label, LABEL_ITEMS),
             item(Command::Reject, plain(Key::X)),
             item(Command::MovePicked, plain(Key::P)),
             item(Command::MoveToSubfolders, None),
-            MenuEntry::Submenu(SubmenuKind::Label, LABEL_ITEMS),
             MenuEntry::Separator,
             item(Command::RotateLeft, ctrl(Key::ArrowLeft)),
             item(Command::RotateRight, ctrl(Key::ArrowRight)),
@@ -825,9 +825,9 @@ pub const IMAGE_CONTEXT_MENU: &[MenuEntry] = &[
     item(Command::ShowInExplorer, None),
     MenuEntry::Separator,
     MenuEntry::Submenu(SubmenuKind::Rating, RATING_ITEMS),
+    MenuEntry::Submenu(SubmenuKind::Label, LABEL_ITEMS),
     item(Command::Reject, plain(Key::X)),
     item(Command::MovePicked, plain(Key::P)),
-    MenuEntry::Submenu(SubmenuKind::Label, LABEL_ITEMS),
     MenuEntry::Separator,
     item(Command::Metadata, plain(Key::M)),
     MenuEntry::Separator,
@@ -1186,25 +1186,25 @@ mod tests {
         }
     }
 
-    /// Rotate Left (Ctrl+←) and Rotate Right (Ctrl+→) follow the Label submenu in the Image menu,
-    /// after a separator and before the separator above RAW ↔ JPEG; they act in both views and
-    /// are not in the right-click menu (ADR 0024 §2.1, O-Q1, T237).
+    /// The Image menu begins with the Rating submenu, the Label submenu right below it, Reject,
+    /// Move to Picked and Move to Subfolders (the owner's change of the order, ADR 0019 §2.9,
+    /// 2026-11-21, T243); then, after a separator, Rotate Left (Ctrl+←) and Rotate Right (Ctrl+→)
+    /// before the separator above RAW ↔ JPEG. The rotate items act in both views and are not in
+    /// the right-click menu (ADR 0024 §2.1, O-Q1, T237).
     #[test]
-    fn the_rotate_items_follow_the_label_submenu_in_the_image_menu() {
+    fn the_image_menu_begins_with_rating_and_label_then_the_rotate_items() {
         let Some(image) = MENUS.iter().find(|menu| menu.kind == MenuKind::Image) else {
             panic!("there is an Image menu");
         };
-        let Some(label) = image
-            .entries
-            .iter()
-            .position(|entry| *entry == MenuEntry::Submenu(SubmenuKind::Label, LABEL_ITEMS))
-        else {
-            panic!("the Image menu has the Label submenu");
-        };
         assert_eq!(
-            image.entries.get(label + 1..label + 6),
+            image.entries.get(..10),
             Some(
                 &[
+                    MenuEntry::Submenu(SubmenuKind::Rating, RATING_ITEMS),
+                    MenuEntry::Submenu(SubmenuKind::Label, LABEL_ITEMS),
+                    item(Command::Reject, plain(Key::X)),
+                    item(Command::MovePicked, plain(Key::P)),
+                    item(Command::MoveToSubfolders, None),
                     MenuEntry::Separator,
                     item(Command::RotateLeft, ctrl(Key::ArrowLeft)),
                     item(Command::RotateRight, ctrl(Key::ArrowRight)),
@@ -1229,7 +1229,8 @@ mod tests {
     }
 
     /// The right-click menu on images holds the commands that act on images, in the order of
-    /// ADR 0019 §2.9 and E-Q17 (T221).
+    /// ADR 0019 §2.9 and E-Q17 (T221), with the Label submenu right after the Rating submenu (the
+    /// owner's change of the order, ADR 0019 §2.9, 2026-11-21, T243).
     #[test]
     fn the_image_context_menu_holds_the_image_commands_in_order() {
         assert_eq!(
@@ -1239,9 +1240,9 @@ mod tests {
                 item(Command::ShowInExplorer, None),
                 MenuEntry::Separator,
                 MenuEntry::Submenu(SubmenuKind::Rating, RATING_ITEMS),
+                MenuEntry::Submenu(SubmenuKind::Label, LABEL_ITEMS),
                 item(Command::Reject, plain(Key::X)),
                 item(Command::MovePicked, plain(Key::P)),
-                MenuEntry::Submenu(SubmenuKind::Label, LABEL_ITEMS),
                 MenuEntry::Separator,
                 item(Command::Metadata, plain(Key::M)),
                 MenuEntry::Separator,
