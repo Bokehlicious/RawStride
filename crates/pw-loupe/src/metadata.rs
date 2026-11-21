@@ -307,6 +307,15 @@ pub(crate) struct MetadataCache {
     images: HashMap<PathBuf, ImageMetadata>,
     load_request: Option<RequestId>,
     pending_read: Option<Vec<PathBuf>>,
+    /// The reads of only the files added after a listing (`add_files`, ADR 0026 §2 points 3 and
+    /// 4, T250), by request id, each with its paths. Kept apart from `load_request`, so
+    /// `ratings_ready` does not wait for them; forgotten by `begin`.
+    added_reads: HashMap<RequestId, Vec<PathBuf>>,
+    /// The paths of `add_files` whose read waits for room in the worker's queue, sent from
+    /// `poll` in one request (as `pending_read` for the folder's read).
+    pending_added: Vec<PathBuf>,
+    /// The failures of an `add_files` read that could not be sent, given by the next `poll`.
+    added_failures: Vec<String>,
     /// Why the last folder read failed (ADR 0014 Q7); cleared by the next `begin_load`.
     read_error: Option<String>,
     ratings: RatingStore,
@@ -397,25 +406,22 @@ impl MetadataCache {
     }
 
     /// The body of `begin_load` and `begin_reload`; `reload` empties the inspector's metadata
-    /// whatever the folder.
+    /// whatever the folder and forgets the embedded orientations of the files without a pending
+    /// turn (ADR 0026 §3.1, T250), so the next turn of a file turned by another program asks for
+    /// its value again.
     fn begin(
         &mut self,
         files: Vec<PathBuf>,
         worker: &mut impl MetadataSubmit,
         reload: bool,
     ) -> Result<Vec<PathBuf>, String> {
-        let cwd =
-            std::env::current_dir().map_err(|e| path_resolution_error_text(&e.to_string()))?;
-        let files: Vec<PathBuf> = files
-            .into_iter()
-            .map(|path| {
-                if path.is_absolute() {
-                    path
-                } else {
-                    cwd.join(path)
-                }
-            })
-            .collect();
+        let files = absolute_files(files)?;
+        // A late answer of an earlier `add_files` read changes nothing (T250).
+        self.added_reads.clear();
+        self.pending_added.clear();
+        if reload {
+            self.orientations.forget_embedded(&files);
+        }
         self.images = files
             .iter()
             .map(|path| {
@@ -451,10 +457,123 @@ impl MetadataCache {
         Ok(files)
     }
 
+    /// Reads the ratings of only the files a listing found new (ADR 0026 §2 points 3 and 4, §3.3;
+    /// T250), leaving the files already read `Ready` with their ratings and `ratings_ready`
+    /// unchanged. The paths are made absolute as `begin_load` does (same error). Each path not in
+    /// the cache yet is added, `Loading` when it supports a rating, else `Unsupported`; paths
+    /// already there are left as they are and not sent. The added supported paths are sent in one
+    /// `read_ratings` request of their own; a full queue keeps them and `poll` sends them. Its
+    /// answer makes them `Ready`; its failure makes them `Error` (`rating_known` is then true:
+    /// shown and placed as unrated) and gives one failure through `poll`, without a `read_error`.
+    /// The folder read's answer leaves them alone. Returns the absolute paths added.
+    // T251 calls it after a listing the folder watcher started; the tests use it until then.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn add_files(
+        &mut self,
+        files: Vec<PathBuf>,
+        worker: &mut impl MetadataSubmit,
+    ) -> Result<Vec<PathBuf>, String> {
+        let files = absolute_files(files)?;
+        let mut added = Vec::new();
+        let mut to_read = Vec::new();
+        for path in files {
+            if self.images.contains_key(&path) {
+                continue;
+            }
+            let state = if supports_rating(&path) {
+                to_read.push(path.clone());
+                LoadState::Loading
+            } else {
+                LoadState::Unsupported
+            };
+            self.images.insert(path.clone(), ImageMetadata { state });
+            added.push(path);
+        }
+        if !to_read.is_empty() {
+            match worker.read_ratings(to_read.clone()) {
+                Ok(id) => {
+                    self.added_reads.insert(id, to_read);
+                }
+                Err(SubmitError::QueueFull) => self.pending_added.extend(to_read),
+                Err(error) => {
+                    let failure = self.fail_added(&to_read, &submit_error(error));
+                    self.added_failures.extend(failure);
+                }
+            }
+        }
+        Ok(added)
+    }
+
+    /// Whether a filter and a rating order can use the rating of `path` (absolute; ADR 0026 §2
+    /// points 3 and 4, T250): true when its state is `Ready`, `Unsupported` or `Error` (an
+    /// `Error` file counts as unrated), false while it is `Loading` or when the path is not in
+    /// the cache. T251 asks it for a tab's unread files (`Tab::clear_read`).
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn rating_known(&self, path: &Path) -> bool {
+        self.images.get(path).is_some_and(|metadata| {
+            matches!(
+                &metadata.state,
+                LoadState::Ready | LoadState::Unsupported | LoadState::Error(_)
+            )
+        })
+    }
+
+    /// An `add_files` read failed with `message`: its `paths` still loading become `Error`.
+    /// Returns the one failure text (the folder read's notice text) when at least one did; the
+    /// folder's `read_error` and `last_failure` are not touched.
+    fn fail_added(&mut self, paths: &[PathBuf], message: &str) -> Option<String> {
+        let mut failed = false;
+        for path in paths {
+            if let Some(metadata) = self.images.get_mut(path)
+                && matches!(&metadata.state, LoadState::Loading)
+            {
+                metadata.state = LoadState::Error(message.to_owned());
+                failed = true;
+            }
+        }
+        failed.then(|| {
+            editor_text(&EditorText::MetadataError {
+                error: message.to_owned(),
+            })
+        })
+    }
+
+    /// Sends the `add_files` paths that waited for room in the queue, in one request.
+    fn retry_pending_added(&mut self, worker: &mut impl MetadataSubmit) {
+        if self.pending_added.is_empty() {
+            return;
+        }
+        match worker.read_ratings(self.pending_added.clone()) {
+            Ok(id) => {
+                let paths = std::mem::take(&mut self.pending_added);
+                self.added_reads.insert(id, paths);
+            }
+            Err(SubmitError::QueueFull) => {}
+            Err(error) => {
+                let paths = std::mem::take(&mut self.pending_added);
+                let failure = self.fail_added(&paths, &submit_error(error));
+                self.added_failures.extend(failure);
+            }
+        }
+    }
+
+    /// The paths of the `add_files` reads still sent or waiting, which the folder read leaves
+    /// alone.
+    fn added_paths(&self) -> std::collections::HashSet<PathBuf> {
+        self.added_reads
+            .values()
+            .flatten()
+            .chain(self.pending_added.iter())
+            .cloned()
+            .collect()
+    }
+
     pub fn poll(&mut self, worker: &mut impl MetadataSubmit) -> Vec<String> {
-        let mut failures = Vec::new();
+        let mut failures = std::mem::take(&mut self.added_failures);
         self.drain(|| worker.try_recv(), &mut failures);
         self.retry_pending_read(worker);
+        self.retry_pending_added(worker);
+        failures.append(&mut self.added_failures);
         self.send_batch(worker);
         self.send_editor_reload(worker);
         self.send_window_read(worker);
@@ -494,8 +613,10 @@ impl MetadataCache {
     /// inspector's image. Each shown orientation dropped is a change to `None` (T232): the view
     /// cores keep told values per path, so a folder opened again whose sidecar lost the value
     /// would otherwise still be shown with the old turn. A path with a pending write is kept
-    /// (`OrientationStore::prune`, T237).
+    /// (`OrientationStore::prune`, T237). A path not kept also leaves the `add_files` paths
+    /// waiting to be sent (T250; `forget_deleted` goes through here).
     pub fn prune(&mut self, keep: impl Fn(&Path) -> bool) {
+        self.pending_added.retain(|path| keep(path));
         if self
             .inspector
             .image
@@ -558,6 +679,19 @@ impl MetadataCache {
                 Err(TryRecvError::Empty) => return,
                 Err(TryRecvError::Disconnected) => {
                     let message = submit_error(SubmitError::Stopped);
+                    // The `add_files` reads can never finish either: each fails on its own
+                    // (T250), the sent ones in request order, then the waiting paths.
+                    let mut added: Vec<(RequestId, Vec<PathBuf>)> =
+                        self.added_reads.drain().collect();
+                    added.sort_unstable_by_key(|(id, _)| *id);
+                    let waiting = std::mem::take(&mut self.pending_added);
+                    for paths in added
+                        .into_iter()
+                        .map(|(_, paths)| paths)
+                        .chain(std::iter::once(waiting))
+                    {
+                        failures.extend(self.fail_added(&paths, &message));
+                    }
                     if self.ratings_ready() {
                         self.fail_loading(&message);
                     } else {
@@ -618,13 +752,26 @@ impl MetadataCache {
         self.fail_loading(message);
     }
 
-    /// Moves every entry that is still loading to the error state.
+    /// Moves every entry that is still loading to the error state, except the paths of an
+    /// `add_files` read still sent or waiting (T250): the folder read did not ask for them.
     fn fail_loading(&mut self, message: &str) {
         self.load_request = None;
         self.pending_read = None;
-        for metadata in self.images.values_mut() {
-            if matches!(&metadata.state, LoadState::Loading) {
+        let added = self.added_paths();
+        for (path, metadata) in &mut self.images {
+            if matches!(&metadata.state, LoadState::Loading) && !added.contains(path) {
                 metadata.state = LoadState::Error(message.to_owned());
+            }
+        }
+    }
+
+    /// Makes `paths` that are still loading `Ready`.
+    fn mark_ready(&mut self, paths: &[PathBuf]) {
+        for path in paths {
+            if let Some(metadata) = self.images.get_mut(path)
+                && matches!(&metadata.state, LoadState::Loading)
+            {
+                metadata.state = LoadState::Ready;
             }
         }
     }
@@ -1102,8 +1249,8 @@ impl MetadataCache {
 
     /// Forgets `files` (absolute), which were sent to the Recycle Bin (ADR 0018 §2.7, T188):
     /// they leave the list of loaded images, the inspector's image is cleared when it is one of
-    /// them, the rating store drops them, and a folder read waiting to be sent again no longer
-    /// asks for them. A rating write still queued or sent is kept, as by `prune`; its answer for
+    /// them, the rating store drops them, and a folder read or an `add_files` read waiting to be
+    /// sent again no longer asks for them (the latter through `prune`, T250). A rating write still queued or sent is kept, as by `prune`; its answer for
     /// the missing file fails and is shown as any failed rating write.
     pub(crate) fn forget_deleted(&mut self, files: &[PathBuf]) {
         let deleted = |path: &Path| files.iter().any(|file| file == path);
@@ -1227,21 +1374,47 @@ impl MetadataCache {
                 self.load_request = None;
                 match result {
                     Ok(ratings) => {
+                        // The paths of an `add_files` read wait for their own answer (T250).
+                        let added = self.added_paths();
                         let paths: Vec<PathBuf> = self
                             .images
                             .iter()
-                            .filter(|(_, metadata)| matches!(&metadata.state, LoadState::Loading))
+                            .filter(|(path, metadata)| {
+                                matches!(&metadata.state, LoadState::Loading)
+                                    && !added.contains(*path)
+                            })
                             .map(|(path, _)| path.clone())
                             .collect();
                         self.ratings.read(id, &ratings, &paths);
                         self.orientations.read(id, &orientations, &paths);
-                        for metadata in self.images.values_mut() {
-                            if matches!(&metadata.state, LoadState::Loading) {
-                                metadata.state = LoadState::Ready;
-                            }
-                        }
+                        self.mark_ready(&paths);
                     }
                     Err(error) => self.fail_read(&error),
+                }
+            }
+            // The read of only the new files (`add_files`, T250): its paths still loading get
+            // their ratings and orientations as the folder read gives them.
+            WorkerEvent::RatingsRead {
+                id,
+                result,
+                orientations,
+            } if self.added_reads.contains_key(&id) => {
+                let sent = self.added_reads.remove(&id).unwrap_or_default();
+                let paths: Vec<PathBuf> = sent
+                    .into_iter()
+                    .filter(|path| {
+                        self.images
+                            .get(path)
+                            .is_some_and(|metadata| matches!(&metadata.state, LoadState::Loading))
+                    })
+                    .collect();
+                match result {
+                    Ok(ratings) => {
+                        self.ratings.read(id, &ratings, &paths);
+                        self.orientations.read(id, &orientations, &paths);
+                        self.mark_ready(&paths);
+                    }
+                    Err(error) => failures.extend(self.fail_added(&paths, &error)),
                 }
             }
             WorkerEvent::RatingWritten {
@@ -1509,6 +1682,22 @@ fn save_failed_text(path: &Path, reason: String) -> String {
         file: file_name(path),
         reason,
     })
+}
+
+/// `files` made absolute against the current directory, so they match the paths sent to the view
+/// core; the error text when the current directory cannot be read.
+fn absolute_files(files: Vec<PathBuf>) -> Result<Vec<PathBuf>, String> {
+    let cwd = std::env::current_dir().map_err(|e| path_resolution_error_text(&e.to_string()))?;
+    Ok(files
+        .into_iter()
+        .map(|path| {
+            if path.is_absolute() {
+                path
+            } else {
+                cwd.join(path)
+            }
+        })
+        .collect())
 }
 
 fn submit_error(error: SubmitError) -> String {
@@ -5108,5 +5297,322 @@ mod tests {
         assert!(cache.pending_read.is_none());
         assert!(cache.poll(&mut worker).is_empty());
         assert_eq!(worker.read_attempts.len(), 1, "no empty read is sent");
+    }
+
+    // --- the read of only the new files and Reload Folder's embedded turns (ADR 0026 F3, T250) ---
+
+    /// A folder read answered for `cache` with `ratings` (T250).
+    fn answer_read(
+        cache: &mut MetadataCache,
+        worker: &mut FakeSubmit,
+        id: RequestId,
+        result: Result<HashMap<PathBuf, Rating>, String>,
+    ) -> Vec<String> {
+        worker.events.push_back(WorkerEvent::RatingsRead {
+            id,
+            result,
+            orientations: HashMap::new(),
+        });
+        cache.poll(worker)
+    }
+
+    fn stars_of(cache: &MetadataCache, path: &Path) -> Option<i8> {
+        cache.shown_rating(path).and_then(|rating| rating.stars)
+    }
+
+    fn three_stars() -> Rating {
+        Rating {
+            stars: Some(3),
+            label: None,
+        }
+    }
+
+    /// T250: `add_files` sends one read of only the new supported paths (a path given twice
+    /// once), keeps the files already read `Ready` with their ratings and `ratings_ready` true;
+    /// its answer makes the new files `Ready` with their ratings.
+    #[test]
+    fn add_files_reads_only_the_new_supported_files_and_leaves_the_others_ready() {
+        let read = image_path("pw-loupe-add-read.ARW");
+        let new = image_path("pw-loupe-add-new.ARW");
+        let notes = image_path("pw-loupe-add-notes.txt");
+        let mut worker = FakeSubmit::new([Ok(41), Ok(42)]);
+        let mut cache = loaded_cache(std::slice::from_ref(&read), &mut worker);
+        let ratings = HashMap::from([(read.clone(), three_stars())]);
+        assert!(answer_read(&mut cache, &mut worker, 41, Ok(ratings)).is_empty());
+
+        let added = cache.add_files(
+            vec![read.clone(), new.clone(), notes.clone(), new.clone()],
+            &mut worker,
+        );
+
+        assert_eq!(added, Ok(vec![new.clone(), notes.clone()]));
+        assert_eq!(worker.read_attempts.len(), 2);
+        assert_eq!(worker.read_attempts.last(), Some(&vec![new.clone()]));
+        assert!(cache.ratings_ready());
+        assert!(cache.rating_known(&read));
+        assert_eq!(stars_of(&cache, &read), Some(3));
+        assert!(cache.is_loading(Some(&new)));
+        assert!(!cache.rating_known(&new));
+        assert!(
+            cache.rating_known(&notes),
+            "an unsupported file is never read"
+        );
+
+        let ratings = HashMap::from([(
+            new.clone(),
+            Rating {
+                stars: Some(2),
+                label: None,
+            },
+        )]);
+        assert!(answer_read(&mut cache, &mut worker, 42, Ok(ratings)).is_empty());
+        assert!(!cache.is_loading(Some(&new)));
+        assert!(cache.rating_known(&new));
+        assert_eq!(stars_of(&cache, &new), Some(2));
+        assert_eq!(stars_of(&cache, &read), Some(3));
+    }
+
+    /// T250: a path already in the cache is not added and not sent again.
+    #[test]
+    fn add_files_does_not_send_a_path_already_in_the_cache() {
+        let read = image_path("pw-loupe-add-again.ARW");
+        let mut worker = FakeSubmit::new([Ok(41), Ok(42)]);
+        let mut cache = loaded_cache(std::slice::from_ref(&read), &mut worker);
+
+        assert_eq!(cache.add_files(vec![read.clone()], &mut worker), Ok(vec![]));
+        assert_eq!(worker.read_attempts.len(), 1, "only the folder read");
+        assert!(cache.is_loading(Some(&read)), "left as it was");
+    }
+
+    /// T250: an error answer makes the new files `Error` (read: shown and placed as unrated) and
+    /// gives one failure with the folder read's text; the folder's `read_error` and the last
+    /// failed write are not touched; the files already read stay `Ready`.
+    #[test]
+    fn a_failed_add_files_read_makes_its_files_errors_and_gives_one_failure() {
+        let read = image_path("pw-loupe-add-fail-read.ARW");
+        let first = image_path("pw-loupe-add-fail-a.ARW");
+        let second = image_path("pw-loupe-add-fail-b.ARW");
+        let mut worker = FakeSubmit::new([Ok(41), Ok(42)]);
+        let mut cache = loaded_cache(std::slice::from_ref(&read), &mut worker);
+        assert!(answer_read(&mut cache, &mut worker, 41, Ok(HashMap::new())).is_empty());
+        assert!(
+            cache
+                .add_files(vec![first.clone(), second.clone()], &mut worker)
+                .is_ok()
+        );
+
+        let failures = answer_read(&mut cache, &mut worker, 42, Err("ExifTool failed".into()));
+
+        assert_eq!(failures, ["Metadata error: ExifTool failed"]);
+        assert!(cache.is_error(Some(&first)));
+        assert!(cache.is_error(Some(&second)));
+        assert!(cache.rating_known(&first));
+        assert_eq!(cache.read_error(), None);
+        assert_eq!(cache.last_failure, None);
+        assert!(!cache.is_error(Some(&read)));
+        assert!(cache.ratings_ready());
+    }
+
+    /// T250: a full queue keeps the new files `Loading` and `poll` sends them in one read; its
+    /// answer makes them `Ready`.
+    #[test]
+    fn a_full_queue_sends_the_add_files_read_from_poll() {
+        let read = image_path("pw-loupe-add-full-read.ARW");
+        let new = image_path("pw-loupe-add-full-new.ARW");
+        let mut worker = FakeSubmit::new([Ok(41), Err(SubmitError::QueueFull), Ok(43)]);
+        let mut cache = loaded_cache(std::slice::from_ref(&read), &mut worker);
+        assert!(answer_read(&mut cache, &mut worker, 41, Ok(HashMap::new())).is_empty());
+
+        assert!(cache.add_files(vec![new.clone()], &mut worker).is_ok());
+        assert!(cache.is_loading(Some(&new)));
+        assert!(cache.ratings_ready());
+        assert_eq!(cache.pending_added, std::slice::from_ref(&new));
+
+        assert!(cache.poll(&mut worker).is_empty());
+        assert_eq!(worker.read_attempts.last(), Some(&vec![new.clone()]));
+        assert!(cache.pending_added.is_empty());
+
+        let ratings = HashMap::from([(new.clone(), three_stars())]);
+        assert!(answer_read(&mut cache, &mut worker, 43, Ok(ratings)).is_empty());
+        assert!(cache.rating_known(&new));
+        assert_eq!(stars_of(&cache, &new), Some(3));
+    }
+
+    /// T250: the folder read's answer, or its failure, arriving while an `add_files` read is
+    /// sent leaves that read's files `Loading`; its own answer then reads them.
+    #[test]
+    fn the_folder_read_leaves_the_files_of_an_add_files_read_alone() {
+        let read = image_path("pw-loupe-add-folder-read.ARW");
+        let new = image_path("pw-loupe-add-folder-new.ARW");
+        let mut worker = FakeSubmit::new([Ok(41), Ok(42)]);
+        let mut cache = loaded_cache(std::slice::from_ref(&read), &mut worker);
+        assert!(cache.add_files(vec![new.clone()], &mut worker).is_ok());
+
+        let ratings = HashMap::from([(read.clone(), three_stars()), (new.clone(), three_stars())]);
+        assert!(answer_read(&mut cache, &mut worker, 41, Ok(ratings)).is_empty());
+        assert!(cache.ratings_ready());
+        assert!(cache.rating_known(&read));
+        assert!(cache.is_loading(Some(&new)));
+        assert_eq!(stars_of(&cache, &new), None);
+
+        assert!(answer_read(&mut cache, &mut worker, 42, Ok(HashMap::new())).is_empty());
+        assert!(cache.rating_known(&new));
+
+        // The folder read fails while an `add_files` read is sent.
+        let mut worker = FakeSubmit::new([Ok(51), Ok(52)]);
+        let mut cache = loaded_cache(std::slice::from_ref(&read), &mut worker);
+        assert!(cache.add_files(vec![new.clone()], &mut worker).is_ok());
+        let failures = answer_read(&mut cache, &mut worker, 51, Err("folder failed".into()));
+        assert!(failures.is_empty());
+        assert!(cache.is_error(Some(&read)));
+        assert!(cache.is_loading(Some(&new)));
+        assert!(answer_read(&mut cache, &mut worker, 52, Ok(HashMap::new())).is_empty());
+        assert!(cache.rating_known(&new));
+        assert!(!cache.is_error(Some(&new)));
+    }
+
+    /// T250: a stopped worker fails an `add_files` read, sent or waiting, each with one failure.
+    #[test]
+    fn a_stopped_worker_fails_the_add_files_reads() {
+        let read = image_path("pw-loupe-add-stopped-read.ARW");
+        let sent = image_path("pw-loupe-add-stopped-sent.ARW");
+        let waiting = image_path("pw-loupe-add-stopped-waiting.ARW");
+        let mut worker = FakeSubmit::new([Ok(41), Ok(42), Err(SubmitError::QueueFull)]);
+        let mut cache = loaded_cache(std::slice::from_ref(&read), &mut worker);
+        assert!(answer_read(&mut cache, &mut worker, 41, Ok(HashMap::new())).is_empty());
+        assert!(cache.add_files(vec![sent.clone()], &mut worker).is_ok());
+        assert!(cache.add_files(vec![waiting.clone()], &mut worker).is_ok());
+
+        let mut failures = Vec::new();
+        cache.drain(|| Err(TryRecvError::Disconnected), &mut failures);
+
+        let text = "Metadata error: metadata writing has stopped";
+        assert_eq!(failures, [text, text]);
+        assert!(cache.is_error(Some(&sent)));
+        assert!(cache.is_error(Some(&waiting)));
+        assert_eq!(cache.read_error(), None);
+        assert!(cache.pending_added.is_empty());
+    }
+
+    /// T250: `begin_load` after `add_files` forgets its read, so a late answer changes nothing.
+    #[test]
+    fn a_load_after_add_files_makes_its_late_answer_change_nothing() {
+        let read = image_path("pw-loupe-add-late-read.ARW");
+        let new = image_path("pw-loupe-add-late-new.ARW");
+        let mut worker = FakeSubmit::new([Ok(41), Ok(42), Ok(43)]);
+        let mut cache = loaded_cache(std::slice::from_ref(&read), &mut worker);
+        assert!(answer_read(&mut cache, &mut worker, 41, Ok(HashMap::new())).is_empty());
+        assert!(cache.add_files(vec![new.clone()], &mut worker).is_ok());
+
+        assert!(
+            cache
+                .begin_load(vec![read.clone(), new.clone()], &mut worker)
+                .is_ok()
+        );
+        let ratings = HashMap::from([(new.clone(), three_stars())]);
+        assert!(answer_read(&mut cache, &mut worker, 42, Ok(ratings)).is_empty());
+
+        assert!(cache.is_loading(Some(&new)));
+        assert_eq!(stars_of(&cache, &new), None);
+        assert!(!cache.ratings_ready(), "the load's own read is still sent");
+    }
+
+    /// T250: `rating_known` is true for `Ready`, `Unsupported` and `Error`, false for `Loading`
+    /// and a path not in the cache.
+    #[test]
+    fn rating_known_follows_the_state_of_the_file() {
+        let loading = image_path("pw-loupe-known-loading.ARW");
+        let notes = image_path("pw-loupe-known-notes.txt");
+        let mut worker = FakeSubmit::new([Ok(41)]);
+        let mut cache = loaded_cache(&[loading.clone(), notes.clone()], &mut worker);
+        assert!(!cache.rating_known(&loading));
+        assert!(cache.rating_known(&notes));
+        assert!(!cache.rating_known(&image_path("pw-loupe-known-unknown.ARW")));
+
+        assert!(answer_read(&mut cache, &mut worker, 41, Ok(HashMap::new())).is_empty());
+        assert!(cache.rating_known(&loading), "ready");
+
+        let mut worker = FakeSubmit::new([Ok(51)]);
+        let mut cache = loaded_cache(std::slice::from_ref(&loading), &mut worker);
+        assert!(answer_read(&mut cache, &mut worker, 51, Err("failed".into())).is_empty());
+        assert!(cache.is_error(Some(&loading)));
+        assert!(cache.rating_known(&loading), "an error counts as read");
+    }
+
+    /// A cache of three image files read without orientations (T250): `plain` with an embedded
+    /// value read for turns that cancelled, `pending` with a queued turn (shown 6), `written`
+    /// with a turn RawStride wrote into the file (6, confirmed by the write).
+    fn cache_with_embedded_values() -> (MetadataCache, [PathBuf; 3]) {
+        let plain = image_path("pw-loupe-reload-plain.jpg");
+        let pending = image_path("pw-loupe-reload-pending.jpg");
+        let written = image_path("pw-loupe-reload-written.tif");
+        let files = [plain.clone(), pending.clone(), written.clone()];
+        let mut worker = FakeSubmit::new([Ok(41)]);
+        let mut cache = loaded_cache(&files, &mut worker);
+        assert!(answer_read(&mut cache, &mut worker, 41, Ok(HashMap::new())).is_empty());
+
+        assert_eq!(
+            cache.turn(std::slice::from_ref(&written), true),
+            Ok(vec![written.clone()])
+        );
+        cache.embedded_read(&written, Some(1));
+        worker.write_result = Some(Ok(()));
+        assert!(cache.poll(&mut worker).is_empty());
+        assert!(cache.poll(&mut worker).is_empty());
+        assert_eq!(cache.pending_writes(), 0);
+        assert_eq!(cache.orientation(&written), Some(6));
+
+        assert_eq!(
+            cache.turn(std::slice::from_ref(&plain), true),
+            Ok(vec![plain.clone()])
+        );
+        assert_eq!(cache.turn(std::slice::from_ref(&plain), false), Ok(vec![]));
+        cache.embedded_read(&plain, Some(6));
+        assert_eq!(cache.orientation(&plain), None);
+
+        assert_eq!(
+            cache.turn(std::slice::from_ref(&pending), true),
+            Ok(vec![pending.clone()])
+        );
+        cache.embedded_read(&pending, Some(1));
+        assert_eq!(cache.orientation(&pending), Some(6));
+        assert_eq!(cache.pending_writes(), 1);
+        let _ = cache.take_orientation_changes();
+        (cache, files)
+    }
+
+    /// T250: `begin_reload` forgets an embedded value, so the next turn asks for it again; it
+    /// keeps a pending turn's value and a value RawStride wrote into the file. `begin_load`
+    /// forgets nothing.
+    #[test]
+    fn a_reload_forgets_the_embedded_values_and_a_load_does_not() {
+        let (mut cache, files) = cache_with_embedded_values();
+        let [plain, pending, written] = files.clone();
+        let mut worker = FakeSubmit::new([Ok(50)]);
+        assert!(cache.begin_load(files.to_vec(), &mut worker).is_ok());
+        assert_eq!(
+            cache.turn(std::slice::from_ref(&plain), true),
+            Ok(vec![]),
+            "a load keeps the embedded value"
+        );
+
+        let (mut cache, files) = cache_with_embedded_values();
+        let mut worker = FakeSubmit::new([Ok(51)]);
+        assert!(cache.begin_reload(files.to_vec(), &mut worker).is_ok());
+        assert!(cache.take_orientation_changes().is_empty());
+        assert_eq!(cache.orientation(&pending), Some(6));
+        assert_eq!(cache.orientation(&written), Some(6));
+        assert_eq!(
+            cache.turn(std::slice::from_ref(&plain), true),
+            Ok(vec![plain.clone()]),
+            "asked for again"
+        );
+        assert_eq!(cache.turn(std::slice::from_ref(&pending), true), Ok(vec![]));
+        assert_eq!(cache.turn(std::slice::from_ref(&written), true), Ok(vec![]));
+        assert_eq!(
+            cache.orientation(&written),
+            Some(3),
+            "turned from the written 6"
+        );
     }
 }

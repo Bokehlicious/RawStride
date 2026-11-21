@@ -49,6 +49,14 @@ pub struct Tab {
     /// `Tabs::note_unwatched` (T248); while it is set the folder is left out of
     /// `Tabs::folders_to_watch`. F3 acts on it (its fallback lists the folder).
     pub unwatched: bool,
+    /// Files of `files`, in the tab's own form, whose rating is being read on their own
+    /// (`MetadataCache::add_files`) after a listing (ADR 0026 §2 points 3 and 4, T250). Under an
+    /// active filter they are not shown (`refilter`) and under a rating order they are not placed
+    /// and the whole order waits for them (`place_known`, `follow_sort`). Only the shell fills it,
+    /// after a listing the folder watcher started (`mark_unread`, T251), and empties it through
+    /// `clear_read` once their ratings are known; `Tab::open` and `clear` empty it, and every
+    /// change of `files` keeps it a subset of them.
+    pub unread: Vec<PathBuf>,
 }
 
 impl Tab {
@@ -62,6 +70,8 @@ impl Tab {
         self.sorted = None;
         self.capture.clear();
         self.unplaced.clear();
+        // The whole tab's ratings are read anew (T250).
+        self.unread.clear();
         self.folder = Some(folder);
         self.files = files;
         self.current = self
@@ -82,7 +92,9 @@ impl Tab {
     /// all read, the files are reordered (`reorder`, keeping the current image, the marking and
     /// the filter) and the order is remembered; until then the tab keeps its order. When the
     /// files are in the order already, the waiting files whose key is now known are placed
-    /// (`place_waiting`, ADR 0026 §2 point 4). Returns what happened.
+    /// (`place_waiting`, ADR 0026 §2 point 4). Under a rating key the whole order waits, as while
+    /// `ratings_ready` is false, while a file's rating is still read on its own (`unread`, T250).
+    /// Returns what happened.
     pub fn follow_sort(
         &mut self,
         order: SortOrder,
@@ -100,11 +112,13 @@ impl Tab {
                 return SortFollow::Sorted;
             }
         }
+        // `plan` asks `ratings_ready` only for the rating key; a capture time is read on its own.
+        let all_ratings_read = ratings_ready && self.unread.is_empty();
         match plan(
             &self.files,
             order,
             &self.capture,
-            ratings_ready,
+            all_ratings_read,
             rating_of,
             modified_of,
         ) {
@@ -453,6 +467,15 @@ fn same_folder_lexically(a: &Path, b: &Path) -> bool {
     let a = std::path::absolute(a).unwrap_or_else(|_| a.to_path_buf());
     let b = std::path::absolute(b).unwrap_or_else(|_| b.to_path_buf());
     path_starts_with(&a, &b) && path_starts_with(&b, &a)
+}
+
+/// Whether `path` is `root` or inside it, compared as `path_starts_with` does (component by
+/// component, other case equal on Windows), without file access (ADR 0026 F3, T250). T251 uses it
+/// to hold back the listing of a tab inside an import's destination.
+// T251 calls it from the shell (and exports it); the tests use it until then.
+#[cfg_attr(not(test), allow(dead_code))]
+pub fn inside_lexically(path: &Path, root: &Path) -> bool {
+    path_starts_with(path, root)
 }
 
 fn path_starts_with(path: &Path, root: &Path) -> bool {
@@ -1343,5 +1366,97 @@ mod tests {
         assert!(tabs.tabs()[0].capture.is_read(Path::new("a.arw")));
         tabs.open_new(PathBuf::from("first"), named(&["a.arw"]), 0);
         assert!(!tabs.tabs()[0].capture.is_read(Path::new("a.arw")));
+    }
+
+    // --- files whose rating is read on their own (ADR 0026 F3, T250) ---
+
+    /// T250: opening the folder again empties `unread` (the whole tab is read anew).
+    #[test]
+    fn opening_a_tab_again_empties_unread() {
+        let mut tabs = Tabs::default();
+        let folder = PathBuf::from("first");
+        tabs.open_in_active(folder.clone(), named(&["a.arw", "b.arw"]), 0);
+        if let Some(tab) = tabs.active_mut() {
+            tab.mark_unread(&named(&["b.arw"]));
+        }
+        assert_eq!(active(&tabs).unread, named(&["b.arw"]));
+
+        tabs.open_new(folder, named(&["a.arw", "b.arw"]), 0);
+
+        assert!(active(&tabs).unread.is_empty());
+    }
+
+    /// T250: the whole rating order, not yet applied, waits while a file's rating is read on its
+    /// own, as while the ratings are not ready, and is applied once it is read; another key does
+    /// not wait for it.
+    #[test]
+    fn follow_sort_under_a_rating_order_waits_for_the_unread_files() {
+        let mut tabs = Tabs::default();
+        tabs.open_in_active(
+            PathBuf::from("first"),
+            named(&["a.arw", "b.arw", "c.arw"]),
+            0,
+        );
+        let ratings = HashMap::from([
+            (PathBuf::from("a.arw"), stars(1)),
+            (PathBuf::from("b.arw"), stars(5)),
+            (PathBuf::from("c.arw"), stars(3)),
+        ]);
+        let rating_of = |path: &Path| ratings.get(path).cloned();
+        let best_first = by(SortKey::Rating, true);
+        if let Some(tab) = tabs.active_mut() {
+            tab.mark_unread(&named(&["c.arw"]));
+        }
+
+        assert_eq!(
+            tabs.follow_sort(best_first, true, &rating_of, &no_time),
+            SortFollow::WaitingForRatings
+        );
+        assert_eq!(active(&tabs).sorted, None);
+        assert_eq!(file_names(active(&tabs)), ["a.arw", "b.arw", "c.arw"]);
+
+        // Another key does not wait for the rating.
+        let name_desc = by(SortKey::Name, true);
+        assert_eq!(
+            tabs.follow_sort(name_desc, true, &rating_of, &no_time),
+            SortFollow::Reordered { moved: true }
+        );
+        assert_eq!(file_names(active(&tabs)), ["c.arw", "b.arw", "a.arw"]);
+
+        if let Some(tab) = tabs.active_mut() {
+            assert!(tab.clear_read(&|_| true));
+        }
+        assert_eq!(
+            tabs.follow_sort(best_first, true, &rating_of, &no_time),
+            SortFollow::Reordered { moved: true }
+        );
+        assert_eq!(file_names(active(&tabs)), ["b.arw", "c.arw", "a.arw"]);
+        assert_eq!(active(&tabs).sorted, Some(best_first));
+    }
+
+    /// T250: `inside_lexically` is true for the folder itself and a subfolder, false for a
+    /// sibling with a longer name; a trailing separator does not matter.
+    #[test]
+    fn inside_lexically_compares_whole_components() {
+        let root = PathBuf::from(r"D:\Import\2026");
+        assert!(inside_lexically(&root, &root));
+        assert!(inside_lexically(&root.join("Card A"), &root));
+        assert!(!inside_lexically(Path::new(r"D:\Import\2026-11"), &root));
+        assert!(!inside_lexically(Path::new(r"D:\Import"), &root));
+        assert!(inside_lexically(Path::new(r"D:\Import\2026\"), &root));
+        assert!(inside_lexically(
+            &root.join("Card A"),
+            Path::new(r"D:\Import\2026\")
+        ));
+    }
+
+    /// T250: on Windows other case is the same folder.
+    #[cfg(windows)]
+    #[test]
+    fn inside_lexically_ignores_case_on_windows() {
+        assert!(inside_lexically(
+            Path::new(r"d:\import\2026\card a"),
+            Path::new(r"D:\IMPORT\2026")
+        ));
     }
 }

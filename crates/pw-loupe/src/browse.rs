@@ -22,6 +22,12 @@ pub struct Relisted {
     pub added: usize,
     pub removed: usize,
     pub current_removed: Option<PathBuf>,
+    /// The new files (those counted in `added`), in the tab's form and in the listing's order, so
+    /// the shell knows which files to read (T250, T251).
+    pub new: Vec<PathBuf>,
+    /// The files removed (those counted in `removed`), in the tab's form and its order, so the
+    /// shell can forget them in the metadata cache (T250, T251).
+    pub gone: Vec<PathBuf>,
 }
 
 impl Relisted {
@@ -125,8 +131,10 @@ impl Tab {
     /// an active filter waits for the ratings: those images are hidden only because their values
     /// are unknown, so their marks stay (§2.8 as changed by amendment 3, §16, the owner
     /// 2026-11-21; this holds for inactive tabs too). If the current image is hidden, makes the
-    /// nearest visible one current (§2.3; unchanged when nothing is visible). Returns whether
-    /// `visible` changed.
+    /// nearest visible one current (§2.3; unchanged when nothing is visible). A file of `unread`
+    /// (its rating read on its own, T250) is treated the same way on its own: under an active
+    /// filter it is not visible unless `keep` names it, and its mark stays; without a filter it is
+    /// shown at once. Returns whether `visible` changed.
     pub fn refilter(
         &mut self,
         ratings_ready: bool,
@@ -135,6 +143,7 @@ impl Tab {
     ) -> bool {
         let count = self.files.len();
         let waiting_for_ratings = self.filter.is_active() && !ratings_ready;
+        let unread: HashSet<&PathBuf> = self.unread.iter().collect();
         let new_visible = if !self.filter.is_active() {
             (0..count).collect()
         } else if waiting_for_ratings {
@@ -143,15 +152,29 @@ impl Tab {
             let files = &self.files;
             let filter = self.filter;
             visible(count, keep, |index| {
-                files
-                    .get(index)
-                    .is_some_and(|path| matches(&filter, rating_of(path).as_ref()))
+                files.get(index).is_some_and(|path| {
+                    !unread.contains(path) && matches(&filter, rating_of(path).as_ref())
+                })
             })
         };
         let changed = new_visible != self.visible;
         self.visible = new_visible;
         if !waiting_for_ratings {
-            self.selection.retain_visible(&self.visible);
+            if unread.is_empty() || !self.filter.is_active() {
+                self.selection.retain_visible(&self.visible);
+            } else {
+                // The unread files are hidden only because their ratings are unknown: their
+                // marks stay (amendment 3), as while the whole tab's ratings are read.
+                let mut kept = self.visible.clone();
+                kept.extend(
+                    self.files
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, path)| unread.contains(path))
+                        .map(|(index, _)| index),
+                );
+                self.selection.retain_visible(&kept);
+            }
         }
         if let Some(nearest) = nearest_visible(&self.visible, self.current) {
             self.current = nearest;
@@ -282,6 +305,8 @@ impl Tab {
 
         let changed = files != self.files;
         self.files = files;
+        // A file gone leaves `unread` (T250).
+        self.keep_unread_listed();
         self.selection = selection;
         self.current = new_current;
         self.refilter(ratings_ready, rating_of, keep);
@@ -347,18 +372,19 @@ impl Tab {
         let still_there = |path: &PathBuf| seen.contains(path) || pending(path);
 
         let mut kept: Vec<PathBuf> = Vec::with_capacity(self.files.len());
-        let mut removed = 0;
+        let mut gone: Vec<PathBuf> = Vec::new();
         let mut current_removed = None;
         for (index, path) in self.files.iter().enumerate() {
             if still_there(path) {
                 kept.push(path.clone());
             } else {
-                removed += 1;
+                gone.push(path.clone());
                 if index == self.current {
                     current_removed = Some(path.clone());
                 }
             }
         }
+        let removed = gone.len();
         let old: HashSet<&PathBuf> = self.files.iter().collect();
         let new: Vec<PathBuf> = listed
             .into_iter()
@@ -368,6 +394,7 @@ impl Tab {
             return Relisted::default();
         }
         let added = new.len();
+        let new_files = new.clone();
 
         self.unplaced.retain(|path| still_there(path));
         let new_list = if self.sorted == Some(order) {
@@ -409,7 +436,42 @@ impl Tab {
             added,
             removed,
             current_removed,
+            new: new_files,
+            gone,
         }
+    }
+
+    /// Notes that the ratings of `files` (in the tab's form) are being read on their own after a
+    /// listing (ADR 0026 §2 points 3 and 4, T250): each that is in `files` and not yet in
+    /// `unread` is added. Only the shell calls it (T251), after a listing the folder watcher
+    /// started; it then refilters (`refilter`), so under an active filter they are hidden until
+    /// their ratings are known.
+    pub fn mark_unread(&mut self, files: &[PathBuf]) {
+        let listed: HashSet<&PathBuf> = self.files.iter().collect();
+        for file in files {
+            if listed.contains(file) && !self.unread.contains(file) {
+                self.unread.push(file.clone());
+            }
+        }
+    }
+
+    /// Takes out of `unread` every file whose rating `known` says is read (the shell passes
+    /// `MetadataCache::rating_known` on the resolved path, T251) and returns whether one was
+    /// taken out. It neither refilters nor places: the shell calls `refilter` and `follow_sort`
+    /// next (T250).
+    pub fn clear_read(&mut self, known: &dyn Fn(&Path) -> bool) -> bool {
+        let before = self.unread.len();
+        self.unread.retain(|path| !known(path));
+        self.unread.len() != before
+    }
+
+    /// Keeps `unread` a subset of `files`, in its own order (T250).
+    fn keep_unread_listed(&mut self) {
+        if self.unread.is_empty() {
+            return;
+        }
+        let listed: HashSet<&PathBuf> = self.files.iter().collect();
+        self.unread.retain(|path| listed.contains(path));
     }
 
     /// Places the waiting files whose key is now known (ADR 0026 §2 point 4): when the tab is in
@@ -431,7 +493,8 @@ impl Tab {
     }
 
     /// `place_waiting`, telling a placement apart: `Some(moved)` when at least one file was
-    /// placed, `None` when nothing was (for `follow_sort`'s `SortFollow::Placed`).
+    /// placed, `None` when nothing was (for `follow_sort`'s `SortFollow::Placed`). Under a rating
+    /// key a file of `unread` waits also when `ratings_ready` is true (T250).
     pub(crate) fn place_known(
         &mut self,
         order: SortOrder,
@@ -446,11 +509,12 @@ impl Tab {
         if self.sorted != Some(order) || self.unplaced.is_empty() {
             return None;
         }
-        let (known, still): (Vec<PathBuf>, Vec<PathBuf>) = self
-            .unplaced
-            .iter()
-            .cloned()
-            .partition(|path| key_known(path, order, &self.capture, ratings_ready));
+        // Under a rating key a file whose rating is read on its own is not known yet (T250).
+        let unread = |path: &PathBuf| order.key == SortKey::Rating && self.unread.contains(path);
+        let (known, still): (Vec<PathBuf>, Vec<PathBuf>) =
+            self.unplaced.iter().cloned().partition(|path| {
+                key_known(path, order, &self.capture, ratings_ready) && !unread(path)
+            });
         if known.is_empty() {
             return None;
         }
@@ -1932,7 +1996,9 @@ mod tests {
             Relisted {
                 added: 1,
                 removed: 0,
-                current_removed: None
+                current_removed: None,
+                new: vec![PathBuf::from("IMG_005b.ARW")],
+                gone: Vec::new(),
             }
         );
         assert!(relisted.changed());
@@ -1967,7 +2033,9 @@ mod tests {
             Relisted {
                 added: 0,
                 removed: 2,
-                current_removed: Some(name(6))
+                current_removed: Some(name(6)),
+                new: Vec::new(),
+                gone: vec![name(4), name(6)],
             }
         );
         assert_eq!(current_file(t), Some(name(7)));
@@ -2201,7 +2269,9 @@ mod tests {
             Relisted {
                 added: 0,
                 removed: 12,
-                current_removed: Some(name(3))
+                current_removed: Some(name(3)),
+                new: Vec::new(),
+                gone: (0..12).map(name).collect(),
             }
         );
         assert!(t.files.is_empty());
@@ -2345,5 +2415,149 @@ mod tests {
         assert_eq!(t.visible, [2, 4]);
         assert_eq!(marked_files(t), [name(2), name(4)]);
         assert_eq!(t.selection.count(), 2);
+    }
+
+    // --- files whose rating is read on their own after a listing (ADR 0026 F3, T250) ---
+
+    /// T250: `relist` gives the new files in the listing's order and the removed ones in the
+    /// tab's order; a file being written that the listing lacks is not gone; `unread` stays empty
+    /// (only the shell fills it).
+    #[test]
+    fn relist_gives_the_new_and_the_gone_files_and_leaves_unread_empty() {
+        let (mut tabs, ratings) = sorted_by_name();
+        let r = of(&ratings);
+        let t = tab(&mut tabs);
+        let listed = listing(t, &["IMG_005b.ARW", "AAA.ARW"], &[4, 5, 9]);
+        let writing = |path: &Path| path == name(5);
+        let relisted = t.relist(
+            listed,
+            None,
+            &writing,
+            by(SortKey::Name, false),
+            true,
+            &r,
+            &no_time,
+        );
+        assert_eq!(relisted.added, 2);
+        assert_eq!(relisted.removed, 2);
+        assert_eq!(
+            relisted.new,
+            [PathBuf::from("AAA.ARW"), PathBuf::from("IMG_005b.ARW")]
+        );
+        assert_eq!(relisted.gone, [name(4), name(9)]);
+        assert!(t.files.contains(&name(5)));
+        assert!(t.unread.is_empty());
+    }
+
+    /// T250: `mark_unread` adds only files of the tab, each once; `clear_read` takes out the
+    /// files said to be read and returns whether one was taken out.
+    #[test]
+    fn mark_unread_adds_only_files_of_the_tab_and_clear_read_reports_a_removal() {
+        let (mut tabs, _) = setup();
+        let t = tab(&mut tabs);
+        t.mark_unread(&[name(3), PathBuf::from("OTHER.ARW"), name(5)]);
+        t.mark_unread(&[name(5)]);
+        assert_eq!(t.unread, [name(3), name(5)]);
+
+        assert!(!t.clear_read(&|_| false));
+        assert_eq!(t.unread, [name(3), name(5)]);
+        assert!(t.clear_read(&|path| path == name(3)));
+        assert_eq!(t.unread, [name(5)]);
+        assert!(t.clear_read(&|_| true));
+        assert!(t.unread.is_empty());
+        assert!(!t.clear_read(&|_| true));
+    }
+
+    /// T250: a file gone from the listing leaves `unread`; a reordering keeps the same files.
+    #[test]
+    fn a_file_gone_leaves_unread() {
+        let (mut tabs, ratings) = sorted_by_name();
+        let r = of(&ratings);
+        let t = tab(&mut tabs);
+        t.mark_unread(&[name(3), name(5)]);
+        let listed = listing(t, &[], &[3]);
+        t.relist(
+            listed,
+            None,
+            &never,
+            by(SortKey::Name, false),
+            true,
+            &r,
+            &no_time,
+        );
+        assert_eq!(t.unread, [name(5)]);
+
+        let order: Vec<usize> = (0..t.files.len()).rev().collect();
+        assert!(t.reorder(&order, true, &r));
+        assert_eq!(t.unread, [name(5)]);
+    }
+
+    /// T250: under an active filter an unread file is hidden while the files already read stay
+    /// shown; the marks of unread files stay (amendment 3) and a read file the filter hides is
+    /// unmarked; a `keep` naming an unread file shows it; once read it is filtered as any file.
+    #[test]
+    fn under_a_filter_an_unread_file_is_hidden_and_keeps_its_mark() {
+        let (mut tabs, ratings) = setup();
+        let r = of(&ratings);
+        let t = tab(&mut tabs);
+        t.click(1, false, false, true, &r);
+        t.click(2, true, false, true, &r);
+        t.click(4, true, false, true, &r);
+        t.mark_unread(&[name(4)]);
+        tabs.set_filter(filter(
+            StarFilter::All,
+            LabelFilter::only(LabelChoice::Label("Red")),
+        ));
+        let t = tab(&mut tabs);
+
+        t.refilter(true, &r, None);
+        assert_eq!(t.visible, [2], "IMG_004 (Red) waits for its rating");
+        assert_eq!(marked_files(t), [name(2), name(4)]);
+
+        t.refilter(true, &r, Some(4));
+        assert_eq!(t.visible, [2, 4], "the current image is kept");
+
+        assert!(t.clear_read(&|path| path == name(4)));
+        t.refilter(true, &r, None);
+        assert_eq!(t.visible, [2, 4]);
+        assert_eq!(marked_files(t), [name(2), name(4)]);
+    }
+
+    /// T250: without a filter an unread file is shown at once.
+    #[test]
+    fn without_a_filter_an_unread_file_is_shown() {
+        let (mut tabs, ratings) = setup();
+        let r = of(&ratings);
+        let t = tab(&mut tabs);
+        t.mark_unread(&[name(4)]);
+        t.refilter(true, &r, None);
+        assert_eq!(t.visible, (0..12).collect::<Vec<_>>());
+    }
+
+    /// T250: under a rating order an unread file waits in `unplaced` also with the ratings
+    /// ready, and is placed once `clear_read` took it out.
+    #[test]
+    fn under_a_rating_order_an_unread_file_waits_until_it_is_read() {
+        let (mut tabs, mut ratings) = setup();
+        let order = by(SortKey::Rating, true);
+        tabs.follow_sort(order, true, &of(&ratings), &no_time);
+        let new = PathBuf::from("NEW.ARW");
+        ratings.insert(new.clone(), stars(4));
+        let r = of(&ratings);
+        let t = tab(&mut tabs);
+
+        let listed = listing(t, &["NEW.ARW"], &[]);
+        let relisted = t.relist(listed, None, &never, order, true, &r, &no_time);
+        t.mark_unread(&relisted.new);
+        assert_eq!(t.unread, std::slice::from_ref(&new));
+
+        assert!(!t.place_waiting(order, true, &r, &no_time));
+        assert_eq!(t.files.last(), Some(&new));
+        assert_eq!(t.unplaced, std::slice::from_ref(&new));
+
+        assert!(t.clear_read(&|path| path == new));
+        assert!(t.place_waiting(order, true, &r, &no_time));
+        assert_eq!(t.files.get(1), Some(&new), "after the 5 stars of IMG_002");
+        assert!(t.unplaced.is_empty());
     }
 }

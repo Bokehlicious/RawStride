@@ -239,6 +239,11 @@ with ADR 0026 F3, in `plans/adr-0018-0025-steps.md`.)
   images and says the folder is gone, but the thumbnails, no longer held for an inactive tab,
   cannot be read under the old name and show "Unreadable". A text that the folder is gone in
   place of each thumbnail, or keeping the thumbnails, would say it better. A task if it disturbs.
+- *A turn RawStride wrote is kept at Reload Folder* (T250): F5 forgets the embedded turns read
+  before, but a value RawStride wrote into a JPEG or TIFF (`confirmed_by_write`) stays, so a
+  file turned by RawStride and then by another program still shows RawStride's turn after
+  F5. Letting it go needs the thumbnail cache's key to hold the file's
+  time and the view core to read the flip again. A task if it is seen in use.
 
 ## The folder watcher (ADR 0026 F2)
 

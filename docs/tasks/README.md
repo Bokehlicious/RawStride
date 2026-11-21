@@ -87,8 +87,7 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status |
 |---|---|---|
-| [T250](T250-reading-only-new-files.md) | ADR 0026 F3b: the ratings of only the new files, files waiting for their rating, Reload Folder reads the embedded turns again | Open |
-| [T251](T251-tabs-follow-the-disk.md) | ADR 0026 F3c: the tabs follow their folders on disk | Blocked |
+| [T251](T251-tabs-follow-the-disk.md) | ADR 0026 F3c: the tabs follow their folders on disk | Open |
 
 ## Writing a task (owner and reviewer)
 

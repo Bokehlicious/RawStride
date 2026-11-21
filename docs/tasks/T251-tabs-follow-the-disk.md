@@ -1,4 +1,4 @@
-# T251. ADR 0026 F3c: the tabs follow their folders on disk (pw-loupe) — Blocked
+# T251. ADR 0026 F3c: the tabs follow their folders on disk (pw-loupe) — Open
 
 - **Why:** ADR 0026 step F3 (accepted by the owner 2026-11-18), §3.2 and §3.3: the active tab
   follows its folder at once, another tab when it becomes active (F-Q8); a tab whose watch could
@@ -15,6 +15,12 @@
   hand check of F3 follows it.
 - **Crate:** `pw-loupe`. **Files:**
   - `crates/pw-loupe/src/main.rs` (points 1–10, and their tests)
+  - `crates/pw-loupe/src/lib.rs` (only `inside_lexically` added to `pub use tabs::{…}`, for
+    point 2)
+  - `crates/pw-loupe/src/metadata.rs` and `crates/pw-loupe/src/tabs.rs` (only the
+    `#[cfg_attr(not(test), allow(dead_code))]` lines and their "T251 calls it" comments on
+    `add_files`, `rating_known` and `inside_lexically` removed, now that the shell calls them;
+    review of T250)
   - `docs/test-inventory.md` (counts and the description of `pw-loupe`'s tests)
   - this task's own file (status and log)
 - **What:**
@@ -176,3 +182,4 @@
 | 2026-11-21 | Blocked | Added (ADR 0026 F3, last of T249 → T250 → T251); waits for T250 |
 | 2026-11-21 | Blocked | Chain review (T249 → T251): removed files forgotten with `forget_deleted` (`Relisted::gone`, T250) instead of `prune_metadata_to_open_tabs`, which left them in `images` so a file brought back came without its rating and turn, and dropped the values of files moved to a folder with no tab; `add_files` before `mark_unread`, which marks only what it sent; point 8: an undo reads the tab when any of its files is not in the cache; accepted and noted: a file listed while being copied or a RAW before its sidecar (F5 reads it), a rating key on an unread image, the second listing when a watch starts; hand check: texts during a copy, a restored image keeps its stars and turn, placements in step 4, RAW+XMP from a USB stick |
 | 2026-11-21 | Blocked | Cold read: the anchor only when the listing changed something; `mark_unread` + `add_files` + `refilter_active` named (T250 no longer fills `unread` in `relist`); `preview_must_leave` dropped (`active_changed` already returns to the contact sheet); `prune_metadata_to_open_tabs`'s side effects named and the text set last; the "no images" text kept on activation; the ghost file under `write_pending` noted as accepted; point 9: one free listing function, tested; hand check: deleted images not the current one, step 7 copies a file into the renamed folder (a rename gives no event), step 8 with a full destination |
+| 2026-11-21 | Open | T250 Done. Its review added to Files: `lib.rs` (export `inside_lexically`), and in `metadata.rs` and `tabs.rs` only the `allow(dead_code)` lines of `add_files`, `rating_known` and `inside_lexically` removed |

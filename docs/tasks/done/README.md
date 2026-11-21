@@ -256,3 +256,4 @@ was when the task was done, so "this file", "below" and "the Log" in T1–T115 m
 | [T247](T247-folder-watcher.md) | ADR 0026 F2a: the folder watcher, one thread with `ReadDirectoryChangesW` (pw-loupe) |
 | [T248](T248-folder-watcher-in-the-shell.md) | ADR 0026 F2b: the folder watcher follows the tabs and ends before an eject (pw-loupe) |
 | [T249](T249-folder-follow-building-blocks.md) | ADR 0026 F3a: a listing that fails on an entry error, the watch's start, the status texts (pw-loupe) |
+| [T250](T250-reading-only-new-files.md) | ADR 0026 F3b: the ratings of only the new files, files waiting for their rating, Reload Folder reads the embedded turns again (pw-loupe) |

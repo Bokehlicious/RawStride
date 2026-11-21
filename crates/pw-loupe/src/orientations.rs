@@ -279,6 +279,23 @@ impl OrientationStore {
         }
     }
 
+    /// "Reload Folder" (ADR 0026 §3.1, T250): forgets the embedded value of each of `paths`
+    /// (absolute) whose entry has no write queued or sent (`is_pending`) and no turn waiting for
+    /// its embedded value (`is_waiting`), so the next turn of a file turned by another program
+    /// asks for its value again. The confirmed value, `confirmed_by_write` and the shown value
+    /// are not changed: a value RawStride wrote is kept (see `confirmed_by_write`), and a turn
+    /// starts from it before the embedded one.
+    pub fn forget_embedded(&mut self, paths: &[PathBuf]) {
+        for path in paths {
+            if self.is_pending(path) || self.is_waiting(path) {
+                continue;
+            }
+            if let Some(entry) = self.entries.get_mut(path) {
+                entry.embedded = None;
+            }
+        }
+    }
+
     /// The shown value of `path` (absolute); `None` means "the file's own".
     pub fn orientation(&self, path: &Path) -> Option<u16> {
         self.entries.get(path)?.shown
@@ -1070,5 +1087,73 @@ mod tests {
         for key in [K::ArrowUp, K::ArrowDown] {
             assert_eq!(rotation_key_action(key, true, false, false), None);
         }
+    }
+
+    /// T250: "Reload Folder" forgets the embedded value of a path without a write, so its next
+    /// turn asks for it again; a path with a queued, sent or waiting turn keeps its entry as it
+    /// was; no confirmed or shown value changes; a path not given is not touched.
+    #[test]
+    fn forget_embedded_forgets_only_values_without_a_write() {
+        let plain = image("pw-loupe-forget-plain.ARW");
+        let queued = image("pw-loupe-forget-queued.ARW");
+        let sent = image("pw-loupe-forget-sent.ARW");
+        let waiting = image("pw-loupe-forget-waiting.ARW");
+        let read = image("pw-loupe-forget-read.ARW");
+        let other = image("pw-loupe-forget-other.ARW");
+        let mut store = OrientationStore::default();
+        let mut writer = FakeWriter::default();
+
+        // `plain`: its embedded value read for turns that cancelled; nothing pending.
+        assert_eq!(turn(&mut store, &plain, true), std::slice::from_ref(&plain));
+        assert!(turn(&mut store, &plain, false).is_empty());
+        store.embedded_read(&plain, Some(6));
+        // `sent`: a turn written and not answered.
+        read_value(&mut store, &sent, 1, 6);
+        let _ = turn(&mut store, &sent, true);
+        assert!(store.pump(&mut writer).is_empty());
+        // `queued`: a turn not sent yet.
+        read_value(&mut store, &queued, 2, 6);
+        let _ = turn(&mut store, &queued, true);
+        // `waiting`: a turn waiting for its embedded value.
+        let _ = turn(&mut store, &waiting, true);
+        // `read`: an XMP value read; `other`: not given to `forget_embedded`.
+        read_value(&mut store, &read, 3, 8);
+        for path in [&sent, &queued, &read, &other] {
+            store.entries.entry(path.clone()).or_default().embedded = Some(5);
+        }
+        let _ = store.take_changes();
+        let before: Vec<(Option<u16>, Option<u16>, bool, u8)> = [&queued, &sent, &waiting]
+            .iter()
+            .map(|path| {
+                let entry = &store.entries[*path];
+                (entry.embedded, entry.shown, entry.requested, entry.waiting)
+            })
+            .collect();
+
+        store.forget_embedded(&[
+            plain.clone(),
+            queued.clone(),
+            sent.clone(),
+            waiting.clone(),
+            read.clone(),
+        ]);
+
+        assert_eq!(store.entries[&plain].embedded, None);
+        assert_eq!(store.entries[&read].embedded, None);
+        assert_eq!(store.entries[&read].confirmed, Some(8));
+        assert_eq!(store.orientation(&read), Some(8));
+        assert_eq!(store.entries[&other].embedded, Some(5));
+        let after: Vec<(Option<u16>, Option<u16>, bool, u8)> = [&queued, &sent, &waiting]
+            .iter()
+            .map(|path| {
+                let entry = &store.entries[*path];
+                (entry.embedded, entry.shown, entry.requested, entry.waiting)
+            })
+            .collect();
+        assert_eq!(after, before);
+        assert!(store.take_changes().is_empty());
+
+        // The next turn of `plain` asks for its embedded value again.
+        assert_eq!(turn(&mut store, &plain, true), std::slice::from_ref(&plain));
     }
 }
