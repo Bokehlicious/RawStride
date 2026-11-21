@@ -16,7 +16,7 @@
 //!   the target is only read. A new sidecar is made without a source file (measured: `-o x.xmp`
 //!   from a RAW copies the RAW's Exif into the sidecar). ExifTool must report one file created
 //!   and no warning, except the known harmless ones accepted by name (`HARMLESS_WRITE_WARNINGS`,
-//!   D17). **The digest pass** (T92, §5.2, §12): for a TIFF or DNG whose plan writes
+//!   D17 and D18). **The digest pass** (T92, §5.2, §12): for a TIFF or DNG whose plan writes
 //!   `-IPTCDigest=new`, a second call `-IPTCDigest=new -overwrite_original <copy>` on the copy
 //!   only (RawStride's own temporary file; the original is still only read). Measured with
 //!   ExifTool 13.59: in a TIFF or DNG, `-IPTCDigest=new` in the same call as an IIM write stores
@@ -586,15 +586,22 @@ impl Transaction<'_> {
     }
 }
 
-/// Write warnings known to be harmless, accepted by name (owner's decision D17, 2026-11-19,
-/// ADR 0007 §9.2). Each entry is the start of a line of ExifTool's answer, compared
-/// case-sensitively after leading whitespace; the rest of the line (` - <path>`) may be anything.
-/// Every other warning, also every other `[minor]` one, still refuses the write.
+/// Write warnings known to be harmless, accepted by name (owner's decisions D17, 2026-11-19, and
+/// D18, 2026-11-20, ADR 0007 §9.2). Each entry is the start of a line of ExifTool's answer,
+/// compared case-sensitively after leading whitespace; the rest of the line (` - <path>`) may be
+/// anything. Every other warning, also every other `[minor]` one, still refuses the write.
 ///
 /// - `Error reading HiddenData`: a JPEG or DNG that DxO PhotoLab exported from a Sony RAW keeps
 ///   Sony's maker note, whose `HiddenInfo` points at data that exists only in the original ARW.
 ///   ExifTool keeps the pointer as it was and the image data hash is unchanged.
-const HARMLESS_WRITE_WARNINGS: &[&str] = &["Warning: [minor] Error reading HiddenData"];
+/// - `Fixed incorrect HiddenDataOffset`: a JPEG from a Sony camera (measured on the ILCE-1) whose
+///   maker note's `HiddenDataOffset` does not point at the hidden data. On an Exif write ExifTool
+///   corrects the pointer; the hidden data and the image data hash are unchanged (D18,
+///   2026-11-20).
+const HARMLESS_WRITE_WARNINGS: &[&str] = &[
+    "Warning: [minor] Error reading HiddenData",
+    "Warning: [minor] Fixed incorrect HiddenDataOffset",
+];
 
 /// True if ExifTool's answer to the write of the copy reports exactly one file created, no failed
 /// file and no warning outside [`HARMLESS_WRITE_WARNINGS`].
@@ -800,6 +807,11 @@ mod tests {
     /// `ExifTool::execute` gives: stdout lines may end with `\r\n`, stderr lines do not.
     const HIDDEN_DATA: &str = "Warning: [minor] Error reading HiddenData - C:/x/a.jpg\n";
 
+    /// The HiddenDataOffset warning of an Exif write into a Sony ILCE-1 JPEG (D18), in the same
+    /// form.
+    const HIDDEN_DATA_OFFSET: &str =
+        "Warning: [minor] Fixed incorrect HiddenDataOffset - C:/x/a.jpg\n";
+
     #[test]
     fn the_hiddendata_warning_alone_is_accepted_by_name() {
         assert!(copy_written(&format!(
@@ -871,6 +883,60 @@ mod tests {
             "    1 image files created\n--- stderr ---\n\
              Warning: [Minor] IPTC:City exceeds length limit (truncated) - a.jpg\n"
         ));
+    }
+
+    #[test]
+    fn the_hidden_data_offset_warning_is_accepted_by_name() {
+        // Alone, and together with the D17 line.
+        for stderr in [
+            HIDDEN_DATA_OFFSET.to_string(),
+            format!("{HIDDEN_DATA_OFFSET}{HIDDEN_DATA}"),
+            format!("{HIDDEN_DATA}{HIDDEN_DATA_OFFSET}"),
+        ] {
+            let copy = format!("    1 image files created\r\n--- stderr ---\n{stderr}");
+            let digest = format!("    1 image files updated\r\n--- stderr ---\n{stderr}");
+            assert!(copy_written(&copy), "{copy:?}");
+            assert!(digest_written(&digest), "{digest:?}");
+        }
+        let refused = [
+            // Together with another warning.
+            (
+                "    1 image files created\r\n",
+                "    1 image files updated\r\n",
+                format!(
+                    "{HIDDEN_DATA_OFFSET}Warning: [minor] IPTC:City exceeds length limit (truncated) - a.jpg\n"
+                ),
+            ),
+            // The match is case-sensitive.
+            (
+                "    1 image files created\r\n",
+                "    1 image files updated\r\n",
+                "Warning: [Minor] Fixed incorrect HiddenDataOffset - C:/x/a.jpg\n".to_string(),
+            ),
+            // No file written.
+            (
+                "    0 image files created\r\n",
+                "    0 image files updated\r\n",
+                HIDDEN_DATA_OFFSET.to_string(),
+            ),
+            // A failed file.
+            (
+                "    1 image files created\r\n    1 files weren't updated due to errors\r\n",
+                "    1 image files updated\r\n    1 files weren't updated due to errors\r\n",
+                format!("{HIDDEN_DATA_OFFSET}Error: Error writing a.jpg - a.jpg\n"),
+            ),
+            (
+                "    0 image files created\r\n    1 files weren't updated due to errors\r\n",
+                "    0 image files updated\r\n    1 files weren't updated due to errors\r\n",
+                HIDDEN_DATA_OFFSET.to_string(),
+            ),
+        ];
+        for (created, updated, stderr) in &refused {
+            let copy = format!("{created}--- stderr ---\n{stderr}");
+            let digest = format!("{updated}--- stderr ---\n{stderr}");
+            assert!(!copy_written(&copy), "{copy:?}");
+            assert!(!digest_written(&digest), "{digest:?}");
+        }
     }
 
     /// Measured with ExifTool 13.59: a sidecar made from `-XMP-photoshop:City=Lund -o new.xmp`.

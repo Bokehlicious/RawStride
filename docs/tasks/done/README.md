@@ -244,3 +244,4 @@ was when the task was done, so "this file", "below" and "the Log" in T1–T115 m
 | [T235](T235-turn-keeps-the-zoomed-point.md) | ADR 0024 O3a: a turn keeps the same image point in the centre (pw-viewcore) |
 | [T236](T236-orientation-store.md) | ADR 0024 O3b: the shell's store of turns and its write queue (pw-loupe, logic only) |
 | [T237](T237-rotate-keys-and-menu.md) | ADR 0024 O3c: Rotate Left and Rotate Right in the shell (keys, menu, writes, rollback) |
+| [T238](T238-accept-the-hiddendataoffset-fix-warning.md) | Accept the write warning "Fixed incorrect HiddenDataOffset" by name (Sony ILCE-1 JPEGs) |

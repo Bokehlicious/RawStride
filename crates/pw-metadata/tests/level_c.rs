@@ -1058,7 +1058,7 @@ fn a_headline_on_a_copy_of_tn002363_keeps_its_history() {
 // The orientation (ADR 0024 O2, T233)
 // ---------------------------------------------------------------------------------------------
 
-/// Writes `orientation` on a copy of the DNG `name` with `NoImageCheck` and checks the common
+/// Writes `orientation` on a copy of the sample `name` with `NoImageCheck` and checks the common
 /// points: `Written`, IFD0 Orientation is `orientation`, the image data is unchanged, nothing is
 /// left over, and the same value again is `Unchanged`. Returns the ExifTool and the scratch
 /// folder with the copy for the test's own checks.
@@ -1124,6 +1124,64 @@ fn an_orientation_on_a_copy_of_tn002363_keeps_xmp_in_step() {
     let (mut et, s, image) = orientation_on_a_copy("tn002363-orientation", TN_DNG, 8);
 
     assert_eq!(tag(&mut et, &image, "XMP-tiff:Orientation#"), "8");
+    s.remove();
+    fingerprints.assert_unchanged();
+}
+
+/// The SHA-256 of the hidden data of `PM-jpg.JPG` (`exiftool -b -HiddenData`, 53248 bytes),
+/// measured by the reviewer on the sample and on a turned copy (2026-11-20).
+const PM_JPG_HIDDEN_DATA_SHA256: &str =
+    "f158d4da9ed6557766c0b89a72b9917526a5693d299347c79cc2b9588b720e7c";
+
+/// The SHA-256 of `length` bytes of `file` from `offset`, the range checked against the file's
+/// length.
+fn sha256_of_range(file: &Path, offset: usize, length: usize) -> String {
+    let bytes = std::fs::read(file).unwrap();
+    let end = offset.checked_add(length).unwrap();
+    assert!(
+        end <= bytes.len(),
+        "{}: the range {offset}..{end} is past the end ({} bytes)",
+        file.display(),
+        bytes.len()
+    );
+    sha256_hex(&bytes[offset..end])
+}
+
+/// `PM-jpg.JPG` (a Sony ILCE-1 JPEG, IFD0 Orientation 8) turned to 6 on a copy: ExifTool answers
+/// with the warning "Fixed incorrect HiddenDataOffset", which the safe write accepts by name
+/// (owner's decision D18, 2026-11-20), and moves `Sony:HiddenDataOffset` to where the hidden
+/// data really is. The numbers were measured on the sample as it is since 2026-11-20 (T234: the
+/// samples are read-only, so the numbers stay).
+#[test]
+#[ignore = "needs the level-C samples: set PW_TESTDATA and run with --ignored"]
+fn an_orientation_on_a_copy_of_pm_jpg_fixes_the_hidden_data_offset() {
+    let fingerprints = Fingerprints::of(&[PM_JPG]);
+    let mut et = exiftool();
+    let original = sample(PM_JPG);
+    assert_eq!(
+        (
+            tag(&mut et, &original, "IFD0:Orientation#"),
+            tag(&mut et, &original, "Sony:HiddenDataOffset#"),
+            tag(&mut et, &original, "Sony:HiddenDataLength#")
+        ),
+        ("8".to_string(), "9232384".to_string(), "53248".to_string()),
+        "precondition: the sample's orientation and hidden data pointer"
+    );
+
+    let (mut et, s, image) = orientation_on_a_copy("pm-jpg-orientation", PM_JPG, 6);
+
+    assert_eq!(tag(&mut et, &image, "Sony:HiddenDataOffset#"), "9186032");
+    assert_eq!(tag(&mut et, &image, "Sony:HiddenDataLength#"), "53248");
+    assert_eq!(
+        sha256_of_range(&image, 9_186_032, 53_248),
+        PM_JPG_HIDDEN_DATA_SHA256,
+        "the copy's pointer does not point at the hidden data"
+    );
+    assert_ne!(
+        sha256_of_range(&original, 9_232_384, 53_248),
+        PM_JPG_HIDDEN_DATA_SHA256,
+        "the sample's old pointer already pointed at the hidden data"
+    );
     s.remove();
     fingerprints.assert_unchanged();
 }

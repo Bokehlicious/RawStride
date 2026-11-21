@@ -18,6 +18,11 @@ Downloads are on the [Releases page](https://github.com/Bokehlicious/RawStride/r
   XMP sidecar, for a DNG, JPEG or TIFF in the file's own orientation tag. The pixels are never
   changed.
 
+### Fixed
+
+- Turning a JPEG from a Sony ILCE-1, or writing its Exif fields, no longer fails with a refused
+  write.
+
 ## [0.1.0] - 2026-11-20
 
 The first release, for Windows 10 and 11 (x64), as a portable zip. RawStride copies photos

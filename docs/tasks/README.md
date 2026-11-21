@@ -86,7 +86,6 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status |
 |---|---|---|
-| [T238](T238-accept-the-hiddendataoffset-fix-warning.md) | Accept the write warning "Fixed incorrect HiddenDataOffset" by name (Sony ILCE-1 JPEGs) | Open |
 | [T239](T239-writing-rotations-line.md) | A separate Tasks line "Writing rotations: {n}" (pw-loupe) | Open |
 
 ## Writing a task (owner and reviewer)
