@@ -87,8 +87,7 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status |
 |---|---|---|
-| [T257](T257-thumbnails-carried-when-files-change.md) | ADR 0026 F4a: the contact sheet keeps its thumbnails when the active tab's files change | Open |
-| [T258](T258-template-per-shot-and-placed-events.md) | ADR 0026 F4: the import writes the template per shot and says which images it has put in place | Blocked: waits for T257 |
+| [T258](T258-template-per-shot-and-placed-events.md) | ADR 0026 F4: the import writes the template per shot and says which images it has put in place | Open |
 | [T259](T259-import-tabs-logic.md) | ADR 0026 F4: what the import's tabs need to know | Blocked: waits for T258 |
 | [T260](T260-tabs-fill-while-importing.md) | ADR 0026 F4: the destination tabs open on the first image and fill while importing | Blocked: waits for T259 |
 

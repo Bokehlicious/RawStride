@@ -37,18 +37,18 @@ use pw_loupe::{
     MIN_THUMBNAIL_SIZE, MonitorProfile, Navigation, Options, PanelText, READING_RATINGS_TEXT,
     RatingButton, RatingRefused, STAR_CONDITIONS, STAR_FILTERS, Settings, StarFilter, SubmitError,
     Tab, TabAction, Tabs, ThumbGrid, UNSUPPORTED_TEXT, ViewMode, WINDOW_TITLE, allowed_modes,
-    apply_confirmation, clamp_thumbnail_size, clear_and_import_text, clear_cancel_text,
-    clear_confirmation_text, clear_confirmation_title, color_image, columns, dialog_key_action,
-    done_lines, editor_key_action, editor_rating_key, editor_text, ejecting_progress_text,
-    error_text, grid_key_action, indicator_text, info_panel, iptc_progress_text, key_action,
-    label_choice_text, label_filter_text, label_name, list_folder, load_monitor_profile,
-    load_settings_and_library, loupe_key_action, marked_text, metadata_neighbour, metadata_steps,
-    mode_label, mode_text, more_lines, no_match_text, notice_text, opens_import, other_values,
-    panel_text, parse_args, position_text, preview_line, preview_summary,
-    primary_monitor_profile_path, progress_text, property_label, rating_key_action, request_cell,
-    save_settings_with_library, settings_path, star_condition_text, star_filter_text, star_glyphs,
-    status_line, step_allowed, step_thumbnail_size, tab_action, take_wheel_steps, visible_range,
-    wheel_factor, window_title,
+    apply_confirmation, carried_map, clamp_thumbnail_size, clear_and_import_text,
+    clear_cancel_text, clear_confirmation_text, clear_confirmation_title, color_image, columns,
+    dialog_key_action, done_lines, editor_key_action, editor_rating_key, editor_text,
+    ejecting_progress_text, error_text, files_gone, grid_key_action, indicator_text, info_panel,
+    iptc_progress_text, key_action, label_choice_text, label_filter_text, label_name, list_folder,
+    load_monitor_profile, load_settings_and_library, loupe_key_action, marked_text,
+    metadata_neighbour, metadata_steps, mode_label, mode_text, more_lines, no_match_text,
+    notice_text, opens_import, other_values, panel_text, parse_args, position_text, preview_line,
+    preview_summary, primary_monitor_profile_path, progress_text, property_label,
+    rating_key_action, request_cell, save_settings_with_library, settings_path,
+    star_condition_text, star_filter_text, star_glyphs, status_line, step_allowed,
+    step_thumbnail_size, tab_action, take_wheel_steps, visible_range, wheel_factor, window_title,
 };
 use pw_loupe::{
     Batch, MoveKey, MoveKind, MovedImage, UndoMoves, move_failed_text, move_key_action,
@@ -756,6 +756,10 @@ struct Loupe {
     tasks: Tasks,
     thumb_worker: ThumbWorker,
     thumb_grid: ThumbGrid,
+    /// The active tab's files (in the tab's own form) the current `thumb_grid` was made for, so
+    /// a change of those files carries the made thumbnails to their new places (ADR 0026 §3.5,
+    /// T257). Empty when no tab is open.
+    thumb_files: Vec<PathBuf>,
     /// The open tabs' files another program added while they were listed, so a thumbnail made
     /// from a file still being written is made anew once it changed (ADR 0026 §3.2, the addition
     /// to F-Q7, T254). One for all tabs: a file stays kept across a tab switch or F5 while its
@@ -1416,23 +1420,46 @@ impl Loupe {
         }
     }
 
-    /// After the active tab was reordered (U14-Q6): its thumbnails are asked for again in the new
-    /// order (they are kept by file index; the thumbnail cache keeps the images, as on a tab
-    /// switch), a shown preview gets the new list through `set_files` (its decoded images are
-    /// kept, as after a filter), and the contact sheet scrolls to the current image.
+    /// After the active tab was reordered (U14-Q6), or its files changed by a move, an undo or a
+    /// delete: the thumbnails already made follow their files to their new places and only the
+    /// others are asked for (`active_changed`, ADR 0026 §3.5, T257), a shown preview gets the new
+    /// list through `set_files` (its decoded images are kept, as after a filter), and the contact
+    /// sheet scrolls to the current image.
     fn active_reordered(&mut self) {
         self.active_changed(true);
     }
 
     /// `active_reordered`; with `scroll` false (a placement of waiting files, ADR 0026 §2
-    /// point 5, T242) the contact sheet does not scroll to the current image but keeps its top
-    /// image. A preview that returned to the contact sheet still scrolls there.
+    /// point 5, T242, or a listing that found files come or go, T251) the contact sheet does not
+    /// scroll to the current image but keeps its top image. A preview that returned to the
+    /// contact sheet still scrolls there.
+    ///
+    /// The thumbnails already made are kept (ADR 0026 §3.5, F4a, T257): a new generation is given
+    /// to the worker without emptying its cache (`set_generation_keeping_cache`), the grid's
+    /// ready, failed and no-preview cells and the textures move with their files
+    /// (`ThumbGrid::carried`, `carried_map`), and a requested or new cell is asked for again
+    /// (answered from the kept cache when it has the image). A file gone from the tab is
+    /// forgotten in the cache, so a later file of the same name is not shown with the old image.
+    /// The added files' stamps are kept (T254): the stamp taken before a file's first request
+    /// stays the one to compare with, also when it is answered from the kept cache.
     fn active_changed(&mut self, scroll: bool) {
-        let count = self.tabs.active().map_or(0, |tab| tab.files.len());
+        let files = self
+            .tabs
+            .active()
+            .map(|tab| tab.files.clone())
+            .unwrap_or_default();
         self.thumb_generation = self.thumb_generation.wrapping_add(1);
-        self.thumb_worker.set_generation(self.thumb_generation);
-        self.thumb_grid = ThumbGrid::new(self.thumb_generation, count);
-        self.thumb_textures.clear();
+        self.thumb_worker
+            .set_generation_keeping_cache(self.thumb_generation);
+        let (grid, moves) =
+            self.thumb_grid
+                .carried(self.thumb_generation, &self.thumb_files, &files);
+        self.thumb_grid = grid;
+        self.thumb_textures = carried_map(std::mem::take(&mut self.thumb_textures), &moves);
+        for gone in files_gone(&self.thumb_files, &files) {
+            self.thumb_worker.forget_path(&gone);
+        }
+        self.thumb_files = files;
         if self.tabs.active().map(|tab| tab.mode) == Some(ViewMode::Loupe) {
             if let Some(position) = self.loupe_follows_visible() {
                 self.scroll_request = Some(position);
@@ -1706,10 +1733,11 @@ impl Loupe {
     /// (`forget_deleted`), so a file that comes back under the same name is read anew; the new
     /// files' ratings are read on their own (`add_files`) and only those sent wait as `unread`;
     /// the tab is refiltered, so under a filter the new files wait for their rating; the
-    /// thumbnails are asked for again with the contact sheet keeping its top image
-    /// (`active_changed(false)`); the sort is followed; and the status line says what changed
-    /// (`disk_change_text`), unless a step above failed, whose error it shows instead. The Exif
-    /// summary and the histograms are kept, and no file already shown is read again (F-Q7).
+    /// thumbnails already made follow their files and only the new files' are asked for, with
+    /// the contact sheet keeping its top image (`active_changed(false)`, T257); the sort is
+    /// followed; and the status line says what changed (`disk_change_text`), unless a step above
+    /// failed, whose error it shows instead. The Exif summary and the histograms are kept, and no
+    /// file already shown is read again (F-Q7).
     ///
     /// The files another program added are kept in `added_files` (ADR 0026 §3.2, the addition to
     /// F-Q7, T254), and at each listing only the open tabs' files stay kept. At a listing where
@@ -1767,9 +1795,8 @@ impl Loupe {
             }
         }
         self.refilter_active(None);
+        // The thumbnail cache is kept, so the added files keep their stamps (T254, T257).
         self.active_changed(false);
-        // A new thumbnail generation: every cell is asked for again (T254).
-        self.added_files.forget_requests();
         self.added_files.add(&relisted.new);
         self.retain_added_files();
         self.follow_sort(ctx);
@@ -2471,10 +2498,12 @@ impl Loupe {
         self.added_files.forget_requests();
         let Some(tab) = self.tabs.active().cloned() else {
             self.thumb_grid = ThumbGrid::new(self.thumb_generation, 0);
+            self.thumb_files.clear();
             self.thumb_textures.clear();
             return true;
         };
         self.thumb_grid = ThumbGrid::new(self.thumb_generation, tab.files.len());
+        self.thumb_files = tab.files.clone();
         self.thumb_textures.clear();
         if tab.mode == ViewMode::Grid {
             self.thumb_worker.resume();
@@ -10275,6 +10304,7 @@ fn run(options: Options) -> Result<(), String> {
                 import_result_opened: false,
                 thumb_worker,
                 thumb_grid: ThumbGrid::new(0, 0),
+                thumb_files: Vec::new(),
                 added_files: AddedFiles::default(),
                 thumb_generation: 0,
                 thumb_textures: HashMap::new(),

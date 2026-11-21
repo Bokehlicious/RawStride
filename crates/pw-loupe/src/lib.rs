@@ -188,7 +188,9 @@ pub use thumb_buttons::{
     BUTTON_INSET, BUTTON_SIZE, ButtonFacts, THUMB_BUTTONS, ThumbButton, button_at, button_rect,
     preview_only_marked,
 };
-pub use thumbs::{AddedFiles, CellState, ThumbGrid, color_image, request_cell};
+pub use thumbs::{
+    AddedFiles, CellState, ThumbGrid, carried_map, color_image, files_gone, request_cell,
+};
 pub use watcher::{FolderWatcher, WatchEvent};
 
 /// The window title: the product name (ADR 0012). `latency.ps1` finds the window by it (ADR 0009

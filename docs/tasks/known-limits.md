@@ -312,6 +312,12 @@ with ADR 0026 F3, in `plans/adr-0018-0025-steps.md`.)
 - *A file moved while "Apply to All Marked" still writes it* counts as listed (`tab_pending`
   uses `write_pending`, a move waits only for `is_pending`) and stays in the source tab until
   the next listing.
+- *A gone file's thumbnail made while it went may be kept* (T257 review, 2026-11-21): a file gone
+  from the active tab is forgotten in the kept thumbnail cache (`forget_path` in
+  `active_changed`), but a thumbnail of it still being made then is cached when it comes back
+  (T256: kept across `set_generation_keeping_cache`). Another file that later comes under the
+  same name may then be shown with the old image until F5 or another tab. Rare (the file must go
+  while its thumbnail is made, and a new one come under its name in the same folder).
 
 ## Card eject
 

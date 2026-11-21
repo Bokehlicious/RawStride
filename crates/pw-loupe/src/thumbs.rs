@@ -183,6 +183,76 @@ impl ThumbGrid {
             })
             .collect()
     }
+
+    /// A grid of `generation` with one entry per file of `new`, keeping the thumbnails already
+    /// made when the active tab's files change (ADR 0026 §3.5, F4a, T257). Each file is matched
+    /// by its first place in `old` and in `new` (compared exactly, as `PathBuf`s; a path that
+    /// comes twice counts only at its first place in either list, so a later copy in `new` is
+    /// missing). A matched file whose entry in `self` is ready (with its cell size), has no
+    /// preview or failed takes that entry; a requested or missing entry becomes missing, so it
+    /// is asked for again (a request made in the old generation is dropped, T256). A file not in
+    /// `old` is missing. The second value lists `(old index, new index)` for every matched file,
+    /// whatever its entry, in `new`'s order, so the caller moves the textures with their files (a
+    /// cell set back to missing by `forget` keeps its texture until the new one replaces it,
+    /// T232, T254). When `self` does not have exactly `old.len()` entries, nothing is carried:
+    /// every entry is missing and the list is empty.
+    pub fn carried(
+        &self,
+        generation: u64,
+        old: &[PathBuf],
+        new: &[PathBuf],
+    ) -> (ThumbGrid, Vec<(usize, usize)>) {
+        let mut grid = ThumbGrid::new(generation, new.len());
+        if self.entries.len() != old.len() {
+            return (grid, Vec::new());
+        }
+        let mut old_places: HashMap<&PathBuf, usize> = HashMap::with_capacity(old.len());
+        for (index, path) in old.iter().enumerate() {
+            old_places.entry(path).or_insert(index);
+        }
+        let mut seen: HashSet<&PathBuf> = HashSet::with_capacity(new.len());
+        let mut moves = Vec::new();
+        for (to, path) in new.iter().enumerate() {
+            if !seen.insert(path) {
+                continue;
+            }
+            let Some(&from) = old_places.get(path) else {
+                continue;
+            };
+            moves.push((from, to));
+            let carried = match self.entries.get(from) {
+                Some(entry @ (Entry::Ready(_) | Entry::NoPreview | Entry::Failed(_))) => {
+                    entry.clone()
+                }
+                _ => Entry::Missing,
+            };
+            if let Some(entry) = grid.entries.get_mut(to) {
+                *entry = carried;
+            }
+        }
+        (grid, moves)
+    }
+}
+
+/// A map holding, for each `(from, to)` of `moves`, the value `map` had at `from`, now at `to`
+/// (T257: the contact sheet's textures follow their files); values at indexes not named are
+/// dropped.
+pub fn carried_map<T>(mut map: HashMap<usize, T>, moves: &[(usize, usize)]) -> HashMap<usize, T> {
+    moves
+        .iter()
+        .filter_map(|&(from, to)| map.remove(&from).map(|value| (to, value)))
+        .collect()
+}
+
+/// The files of `old` that are not in `new` (compared exactly, as `PathBuf`s), each once, in
+/// `old`'s order (T257: gone from the folder, so they are forgotten in the kept thumbnail cache).
+pub fn files_gone(old: &[PathBuf], new: &[PathBuf]) -> Vec<PathBuf> {
+    let new: HashSet<&PathBuf> = new.iter().collect();
+    let mut seen: HashSet<&PathBuf> = HashSet::new();
+    old.iter()
+        .filter(|path| !new.contains(path) && seen.insert(path))
+        .cloned()
+        .collect()
 }
 
 /// What is kept of one file another program added.
@@ -289,8 +359,9 @@ impl AddedFiles {
         }
     }
 
-    /// Drops every kept path's stamp and mark (after a new thumbnail generation, every cell is
-    /// asked for again).
+    /// Drops every kept path's stamp and mark (after a new folder or tab, `load_tab`: the
+    /// thumbnail cache is emptied and every cell is asked for again). A change of the active
+    /// tab's files keeps the stamps, since the cache is kept (T257).
     pub fn forget_requests(&mut self) {
         for added in self.files.values_mut() {
             *added = Added::default();
@@ -691,6 +762,220 @@ mod tests {
         assert!(!added.contains(Path::new("a.jpg")));
         assert!(added.contains(Path::new("b.jpg")));
         assert_eq!(added.paths(), vec![PathBuf::from("b.jpg")]);
+    }
+
+    fn paths(names: &[&str]) -> Vec<PathBuf> {
+        names.iter().map(PathBuf::from).collect()
+    }
+
+    fn pixel() -> Result<Rgb8, ThumbError> {
+        Ok(Rgb8 {
+            width: 1,
+            height: 1,
+            data: vec![0, 0, 0],
+        })
+    }
+
+    /// Makes the entry at `index` ready at `cell` pixels, by an event of the grid's generation.
+    fn ready_at(grid: &mut ThumbGrid, index: usize, cell: u32) {
+        grid.mark_requested(index, cell);
+        assert!(grid.apply(&event(grid.generation, index, pixel())));
+    }
+
+    #[test]
+    fn carried_moves_ready_entries_with_their_files_and_their_cell_size() {
+        let old = paths(&["a.jpg", "b.jpg", "c.jpg"]);
+        let mut grid = ThumbGrid::new(1, 3);
+        ready_at(&mut grid, 0, 256);
+        ready_at(&mut grid, 1, 384);
+        ready_at(&mut grid, 2, 256);
+        let new = paths(&["c.jpg", "a.jpg", "b.jpg"]);
+
+        let (carried, moves) = grid.carried(2, &old, &new);
+
+        assert_eq!(moves, vec![(2, 0), (0, 1), (1, 2)]);
+        for index in 0..3 {
+            assert_eq!(carried.state(index), CellState::Ready);
+        }
+        // The cell sizes moved too: b.jpg is now at 2 and was made at 384.
+        assert_eq!(carried.to_request(0..3, 256), vec![2]);
+        assert_eq!(carried.to_request(0..3, 384), vec![0, 1]);
+    }
+
+    #[test]
+    fn carried_leaves_a_new_file_missing_and_shifts_the_others() {
+        let old = paths(&["a.jpg", "b.jpg"]);
+        let mut grid = ThumbGrid::new(1, 2);
+        ready_at(&mut grid, 0, 256);
+        ready_at(&mut grid, 1, 256);
+        let new = paths(&["a.jpg", "new.jpg", "b.jpg"]);
+
+        let (carried, moves) = grid.carried(2, &old, &new);
+
+        assert_eq!(moves, vec![(0, 0), (1, 2)]);
+        assert_eq!(carried.state(0), CellState::Ready);
+        assert_eq!(carried.state(1), CellState::Missing);
+        assert_eq!(carried.state(2), CellState::Ready);
+        assert_eq!(carried.to_request(0..3, 256), vec![1]);
+    }
+
+    #[test]
+    fn carried_does_not_carry_a_file_gone() {
+        let old = paths(&["a.jpg", "gone.jpg", "b.jpg"]);
+        let mut grid = ThumbGrid::new(1, 3);
+        ready_at(&mut grid, 0, 256);
+        ready_at(&mut grid, 1, 256);
+        ready_at(&mut grid, 2, 256);
+        let new = paths(&["a.jpg", "b.jpg"]);
+
+        let (carried, moves) = grid.carried(2, &old, &new);
+
+        assert_eq!(moves, vec![(0, 0), (2, 1)]);
+        assert_eq!(carried.state(0), CellState::Ready);
+        assert_eq!(carried.state(1), CellState::Ready);
+        assert_eq!(carried.state(2), CellState::Missing);
+    }
+
+    #[test]
+    fn carried_sets_a_requested_entry_to_missing_but_lists_its_move() {
+        let old = paths(&["a.jpg", "b.jpg"]);
+        let mut grid = ThumbGrid::new(1, 2);
+        grid.mark_requested(0, 256);
+        let new = paths(&["b.jpg", "a.jpg"]);
+
+        let (carried, moves) = grid.carried(2, &old, &new);
+
+        assert_eq!(moves, vec![(1, 0), (0, 1)]);
+        assert_eq!(carried.state(0), CellState::Missing);
+        assert_eq!(carried.state(1), CellState::Missing);
+        assert_eq!(carried.to_request(0..2, 256), vec![0, 1]);
+    }
+
+    #[test]
+    fn carried_keeps_failed_and_no_preview_entries() {
+        let old = paths(&["broken.jpg", "plain.raw"]);
+        let mut grid = ThumbGrid::new(1, 2);
+        grid.mark_requested(0, 128);
+        grid.mark_requested(1, 128);
+        assert!(grid.apply(&event(
+            1,
+            0,
+            Err(ThumbError::Unreadable("broken".to_string()))
+        )));
+        assert!(grid.apply(&event(1, 1, Err(ThumbError::NoPreview))));
+        let new = paths(&["plain.raw", "broken.jpg"]);
+
+        let (carried, moves) = grid.carried(2, &old, &new);
+
+        assert_eq!(moves, vec![(1, 0), (0, 1)]);
+        assert_eq!(carried.state(0), CellState::NoPreview);
+        assert_eq!(
+            carried.state(1),
+            CellState::Failed("unreadable thumbnail: broken".to_string())
+        );
+        assert!(carried.to_request(0..2, 128).is_empty());
+    }
+
+    #[test]
+    fn carried_takes_a_path_twice_in_new_only_at_its_first_place() {
+        let old = paths(&["a.jpg", "b.jpg", "a.jpg"]);
+        let mut grid = ThumbGrid::new(1, 3);
+        ready_at(&mut grid, 0, 256);
+        ready_at(&mut grid, 1, 256);
+        let new = paths(&["b.jpg", "a.jpg", "a.jpg"]);
+
+        let (carried, moves) = grid.carried(2, &old, &new);
+
+        // a.jpg is matched by its first place in `old` (0) and in `new` (1); its later copy in
+        // `new` is missing.
+        assert_eq!(moves, vec![(1, 0), (0, 1)]);
+        assert_eq!(carried.state(0), CellState::Ready);
+        assert_eq!(carried.state(1), CellState::Ready);
+        assert_eq!(carried.state(2), CellState::Missing);
+    }
+
+    #[test]
+    fn carried_carries_nothing_when_the_grid_does_not_match_old() {
+        let old = paths(&["a.jpg", "b.jpg"]);
+        let mut grid = ThumbGrid::new(1, 3);
+        ready_at(&mut grid, 0, 256);
+        ready_at(&mut grid, 1, 256);
+
+        let (carried, moves) = grid.carried(2, &old, &old);
+
+        assert!(moves.is_empty());
+        assert_eq!(carried.state(0), CellState::Missing);
+        assert_eq!(carried.state(1), CellState::Missing);
+        assert_eq!(carried.to_request(0..10, 256), vec![0, 1]);
+    }
+
+    #[test]
+    fn carried_grid_answers_only_events_of_the_new_generation() {
+        let old = paths(&["a.jpg", "b.jpg"]);
+        let mut grid = ThumbGrid::new(1, 2);
+        grid.mark_requested(1, 256);
+
+        let (mut carried, _) = grid.carried(2, &old, &old);
+
+        assert!(!carried.apply(&event(1, 1, pixel())));
+        assert_eq!(carried.state(1), CellState::Missing);
+        carried.mark_requested(1, 256);
+        assert!(carried.apply(&event(2, 1, pixel())));
+        assert_eq!(carried.state(1), CellState::Ready);
+        assert!(carried.to_request(1..2, 256).is_empty());
+    }
+
+    #[test]
+    fn carried_map_moves_values_to_their_new_indexes_and_drops_the_rest() {
+        let map: HashMap<usize, &str> = [(0, "a"), (1, "b"), (2, "c")].into_iter().collect();
+
+        let moved = carried_map(map, &[(2, 0), (0, 3)]);
+
+        let expected: HashMap<usize, &str> = [(0, "c"), (3, "a")].into_iter().collect();
+        assert_eq!(moved, expected);
+    }
+
+    #[test]
+    fn carried_map_skips_a_move_from_an_index_without_a_value() {
+        let map: HashMap<usize, &str> = [(1, "b")].into_iter().collect();
+
+        let moved = carried_map(map, &[(0, 0), (1, 1)]);
+
+        let expected: HashMap<usize, &str> = [(1, "b")].into_iter().collect();
+        assert_eq!(moved, expected);
+    }
+
+    #[test]
+    fn carried_map_with_no_moves_is_empty() {
+        let map: HashMap<usize, &str> = [(0, "a"), (1, "b")].into_iter().collect();
+
+        assert!(carried_map(map, &[]).is_empty());
+    }
+
+    #[test]
+    fn files_gone_lists_old_files_not_in_new_once_in_old_order() {
+        let old = paths(&["c.jpg", "a.jpg", "b.jpg", "c.jpg"]);
+        let new = paths(&["a.jpg", "d.jpg"]);
+
+        assert_eq!(files_gone(&old, &new), paths(&["c.jpg", "b.jpg"]));
+    }
+
+    #[test]
+    fn files_gone_is_empty_when_every_old_file_stays_or_old_is_empty() {
+        let old = paths(&["a.jpg", "b.jpg"]);
+
+        assert!(files_gone(&old, &paths(&["b.jpg", "new.jpg", "a.jpg"])).is_empty());
+        assert!(files_gone(&[], &old).is_empty());
+    }
+
+    #[test]
+    fn files_gone_compares_paths_exactly() {
+        let old = paths(&["dir/a.jpg"]);
+
+        assert_eq!(
+            files_gone(&old, &paths(&["dir/A.jpg"])),
+            paths(&["dir/a.jpg"])
+        );
     }
 
     #[test]

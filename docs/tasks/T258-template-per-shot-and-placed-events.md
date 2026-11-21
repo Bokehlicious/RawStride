@@ -1,4 +1,4 @@
-# T258. ADR 0026 F4: the import writes the template per shot and says which images it has put in place (pw-loupe import worker) — Blocked: waits for T257
+# T258. ADR 0026 F4: the import writes the template per shot and says which images it has put in place (pw-loupe import worker) — Open
 
 - **Why:** ADR 0026 §3.4 (F-Q11, and what the owner settled on 2026-11-21): the destination tabs
   open on the first image and fill as the import goes on, so each image must have its template
@@ -131,3 +131,4 @@
 | 2026-11-21 | Blocked | Added when F4 was written (ADR 0026 §3.4, the owner's choices of 2026-11-21); waits for T257 (the chain is run in order; it does not depend on T256–T257's code) |
 | 2026-11-21 | Blocked | Cold read: doable as written, `execute_recording`'s progress calls and the shots' order confirmed in `pw-ingest`, the closure's borrows work; added `tasks_text.rs` (doc comment), the cancel check before each target, `cancelled` as `report.cancelled` or point 3's, the merged-name shots and the "appeared during copy" case (accepted, to `known-limits.md` at Done), and the `iptc: None` compile edits |
 | 2026-11-21 | Blocked | Chain review: a late cancel reported (already fixed after the cold read: `cancelled` from point 3, checked before each target, no `Placed` for an interrupted shot), now also tested; a shot whose backup copy failed is not shown during the import (stated and tested) |
+| 2026-11-21 | Open | T257 done; ready for its agent |
