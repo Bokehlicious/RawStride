@@ -168,6 +168,20 @@
      turn the image twice and do not open the preview (U15-Q4).
   10. **Repaint:** the contact sheet already repaints when the pointer moves over it (egui does
       on pointer movement); add no timer.
+  11. **Fix after the review** (the reviewer, 2026-11-21). The work done so far stays; only this
+      changes. **A right click on a button opens the cell's right-click menu for one frame only.**
+      In `draw_grid` a cell's buttons are drawn, and their `ui.interact` and `context_menu`
+      called, only while `egui::Popup::is_any_open` is false. A right click on a button opens
+      that button's menu (`Response::context_menu`, popup id `Popup::default_response_id`, that
+      is the button response's id `.with("popup")`); in the next frame a popup is open, so the
+      button's `context_menu` is no longer called, and egui 0.37 closes a popup that was not
+      shown in a frame (`Memory::end_pass`, "Clean up abandoned popups"). Fix: while the menu of
+      one of the cell's buttons is open (`Popup::is_id_open` with that id), that button's
+      `ui.interact` (the same id and rect) and its `context_menu` are still called each frame, so
+      the menu stays open, but no button is drawn (no disc, no symbol, no hover text) while any
+      popup is open, as now. Nothing else in the hiding rule changes. Hand-check item 4 covers it
+      ("a right click on a button opens the cell's right-click menu": the menu must stay open
+      until an item is chosen or it is closed).
 - **Tests to add:**
   - `thumb_buttons.rs`: each button's rect in its corner and `BUTTON_INSET` from both edges, for
     an image square at the origin and one elsewhere; `BUTTON_SIZE` is the same at every size; at
@@ -227,3 +241,5 @@
 | 2026-11-21 | Blocked | Added (ADR 0017 U15b; second task of the chain T244 → T245); waits for T244 |
 | 2026-11-21 | Blocked | The owner's decisions written in (ADR 0017 §2.8, U15-Q4, Q5, Q7): Metadata… on the clicked image; the menu items' rules as they are; `thumbnail_buttons = true\|false`. Cold read: doable with the named files (the only exhaustive matches on `Command` are in `shell_text.rs` and `main.rs`). Changed: the contrast pairs blended correctly (premultiplied) over white, black and the cell, with the symbol carrying the contrast on a black image (the stop clause removed); the square is the hit area for hover and click; `ThumbButton`'s derives; `Popup::is_any_open` named for the open-menu check; the setting written on exit as the View menu's other check items; the test's 18-point label row |
 | 2026-11-21 | Open | T244 done; this task can start |
+| 2026-11-21 | Ready for review | Points 1–10 done. New `thumb_buttons.rs` (`ThumbButton`, `THUMB_BUTTONS`, `BUTTON_SIZE` 20, `BUTTON_INSET` 4, `button_rect`, `button_at`, `ButtonFacts`, `shown`, `preview_only_marked`); `Command::ThumbnailButtons` after Full Screen; `thumbnail_buttons` (on by default, written last of the shell lines); `thumb_button_hover_text`; `main.rs`: the check item, the drawing and clicks in `draw_grid`, `thumb_button_click`, `open_metadata_window_on`. Colours: disc `from_black_alpha(0x8c)`, hovered disc `from_rgba_unmultiplied_const(0x70, 0x70, 0x70, 0xe0)`, symbol `from_gray(0xf0)`. The double-click delay is egui's `InputOptions::max_double_click_delay`, read through `ctx.options` (`InputState::options` is private in 0.37). Two existing settings tests that took `companion_suffixes` as the last shell line (`the_move_settings_are_written_and_read`, `the_external_program_line_is_after_the_shell_lines_and_before_the_library`) now expect `thumbnail_buttons = true` after it, as point 5 places it. 15 tests added; test-inventory 2119 passed, 76 ignored. check.ps1 all OK, no clippy warnings |
+| 2026-11-21 | Open | Sent back after review (the reviewer): points 1–10 as written, checked against the brief (corners, sizes and gaps, the contrast pairs about 4.2:1 and 4.7:1 on white, the setting's line last, the hover texts, the guard in `open_metadata_window_on`, the double-click delay). Finding: a right click on a button opens its menu for one frame only, as egui closes a popup not shown in a frame once the buttons are hidden by `Popup::is_any_open`: point 11. The task agent's code stays uncommitted; check.ps1 and the independent review after the fix |
