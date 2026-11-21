@@ -135,11 +135,17 @@ struct State {
     cache_bytes: usize,
     cache_limit: usize,
     cache_clock: u64,
+    /// Raised by `set_generation` and `cancel` only (the cache emptied), not by
+    /// `set_generation_keeping_cache`: a result is cached only when the epoch it was queued in is
+    /// still the current one.
+    cache_epoch: u64,
 }
 
 struct QueuedRequest {
     request: ThumbnailRequest,
     sequence: u64,
+    /// The cache epoch when the request was queued.
+    epoch: u64,
 }
 
 type SourceFactory = Arc<dyn Fn() -> Box<dyn ThumbSource> + Send + Sync>;
@@ -228,6 +234,7 @@ impl ThumbWorker {
                 cache_bytes: 0,
                 cache_limit,
                 cache_clock: 0,
+                cache_epoch: 0,
             }),
             wake: Condvar::new(),
             results: result_sender,
@@ -302,7 +309,12 @@ impl ThumbWorker {
             } else {
                 state.next_sequence = state.next_sequence.saturating_add(1);
                 let sequence = state.next_sequence;
-                state.queue.push(QueuedRequest { request, sequence });
+                let epoch = state.cache_epoch;
+                state.queue.push(QueuedRequest {
+                    request,
+                    sequence,
+                    epoch,
+                });
                 self.shared.wake.notify_one();
                 None
             }
@@ -321,6 +333,23 @@ impl ThumbWorker {
         state.queue.clear();
         state.cache.clear();
         state.cache_bytes = 0;
+        state.cache_epoch = state.cache_epoch.wrapping_add(1);
+        self.shared.wake.notify_all();
+    }
+
+    /// Sets the active generation as `set_generation` does (the generation set, the visible range
+    /// cleared, the queue cleared, the workers woken), but keeps the thumbnail cache and its bytes
+    /// (ADR 0026 §3.5): the cache is kept by path, cell size and orientation, not by place, so its
+    /// entries stay true when the files of the active tab only move or more files come.
+    ///
+    /// A request of an older generation still being made when it comes back is not sent (its
+    /// index is stale), but its thumbnail is cached when no `set_generation` or `cancel` came since
+    /// it was queued, so a slow thumbnail is finished even while the generation changes often.
+    pub fn set_generation_keeping_cache(&self, generation: u64) {
+        let mut state = lock_state(&self.shared);
+        state.generation = generation;
+        state.visible = None;
+        state.queue.clear();
         self.shared.wake.notify_all();
     }
 
@@ -335,6 +364,7 @@ impl ThumbWorker {
         state.queue.clear();
         state.cache.clear();
         state.cache_bytes = 0;
+        state.cache_epoch = state.cache_epoch.wrapping_add(1);
         self.shared.wake.notify_all();
     }
 
@@ -432,7 +462,7 @@ fn distance_to_visible(visible: &Range<usize>, index: usize) -> usize {
 fn run_worker(shared: Arc<Shared>) {
     let mut source = (shared.source_factory)();
     loop {
-        let request = {
+        let (request, epoch) = {
             let mut state = lock_state(&shared);
             loop {
                 if state.stopped {
@@ -461,7 +491,7 @@ fn run_worker(shared: Arc<Shared>) {
                         && !is_far_from_visible(state.visible.as_ref(), queued.request.index)
                     {
                         state.in_flight.insert(request_key(&queued.request));
-                        break queued.request;
+                        break (queued.request, queued.epoch);
                     }
                     continue;
                 }
@@ -475,21 +505,28 @@ fn run_worker(shared: Arc<Shared>) {
         let result = source.make(&request.path, request.cell, request.orientation);
         let mut state = lock_state(&shared);
         state.in_flight.remove(&request_key(&request));
-        if !state.stopped
-            && request.generation == state.generation
+        if state.stopped {
+            continue;
+        }
+        // Cached while the cache it was asked for is still the current one (also across
+        // `set_generation_keeping_cache`, since the cache is kept by path); sent only to the
+        // current generation, where its index is still true.
+        if epoch == state.cache_epoch
+            && let Ok(image) = &result
+        {
+            cache_insert(
+                &mut state,
+                CacheKey {
+                    path: request.path.clone(),
+                    cell: request.cell,
+                    orientation: request.orientation,
+                },
+                image.clone(),
+            );
+        }
+        if request.generation == state.generation
             && !is_far_from_visible(state.visible.as_ref(), request.index)
         {
-            if let Ok(image) = &result {
-                cache_insert(
-                    &mut state,
-                    CacheKey {
-                        path: request.path.clone(),
-                        cell: request.cell,
-                        orientation: request.orientation,
-                    },
-                    image.clone(),
-                );
-            }
             let _ = shared.results.send(ThumbnailEvent {
                 generation: request.generation,
                 index: request.index,
@@ -1172,5 +1209,125 @@ mod tests {
         worker.request(request(0, 0, "same"));
         assert_eq!(next_event(&worker).index, 0);
         assert_eq!(calls(&state), vec![PathBuf::from("same")]);
+    }
+
+    // ---------- a generation change that keeps the cache (ADR 0026 §3.5, T256) ----------
+
+    /// Waits until the one request being made has come back and been handled by the worker.
+    fn wait_until_nothing_in_flight(worker: &ThumbWorker, state: &Mutex<FakeState>) {
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while (calls(state).is_empty() || !lock_state(&worker.shared).in_flight.is_empty())
+            && Instant::now() < deadline
+        {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(
+            lock_state(&worker.shared).in_flight.is_empty(),
+            "the request came back in time"
+        );
+    }
+
+    #[test]
+    fn a_generation_change_keeping_the_cache_answers_from_the_cache() {
+        let (worker, state) = worker(1, 1024);
+        worker.request(request(0, 0, "same"));
+        assert_eq!(next_event(&worker).index, 0);
+
+        worker.set_generation_keeping_cache(1);
+        worker.request(request(1, 5, "same"));
+        let hit = next_event(&worker);
+
+        assert_eq!((hit.generation, hit.index), (1, 5));
+        assert_eq!(hit.path, PathBuf::from("same"));
+        assert!(hit.result.is_ok());
+        assert_eq!(calls(&state), vec![PathBuf::from("same")], "from the cache");
+    }
+
+    #[test]
+    fn a_generation_change_keeping_the_cache_drops_queued_requests_of_the_old_one() {
+        let (worker, state) = worker(1, 1024);
+        worker.pause();
+        worker.request(request(0, 0, "old"));
+        worker.set_generation_keeping_cache(1);
+        worker.request(request(1, 1, "new"));
+        worker.resume();
+
+        let event = next_event(&worker);
+        assert_eq!((event.generation, event.index), (1, 1));
+        assert_eq!(calls(&state), vec![PathBuf::from("new")]);
+        assert!(matches!(
+            worker.try_recv(),
+            Err(std::sync::mpsc::TryRecvError::Empty)
+        ));
+    }
+
+    #[test]
+    fn an_old_result_after_a_generation_change_keeping_the_cache_is_cached_not_sent() {
+        let (worker, state, gate) = gated_worker();
+        worker.request(request(0, 0, "same"));
+        wait_until_started(&gate);
+        worker.set_generation_keeping_cache(1);
+        open_gate(&gate);
+        wait_until_nothing_in_flight(&worker, &state);
+
+        assert!(
+            matches!(worker.events.try_recv(), Err(TryRecvError::Empty)),
+            "the old generation's event is not sent"
+        );
+        worker.request(request(1, 3, "same"));
+        let hit = next_event(&worker);
+        assert_eq!((hit.generation, hit.index), (1, 3));
+        assert_eq!(
+            calls(&state),
+            vec![PathBuf::from("same")],
+            "the source called once in all"
+        );
+    }
+
+    #[test]
+    fn an_old_result_after_set_generation_is_neither_cached_nor_sent() {
+        let (worker, state, gate) = gated_worker();
+        worker.request(request(0, 0, "same"));
+        wait_until_started(&gate);
+        worker.set_generation(1);
+        open_gate(&gate);
+        wait_until_nothing_in_flight(&worker, &state);
+
+        assert!(
+            matches!(worker.events.try_recv(), Err(TryRecvError::Empty)),
+            "the old generation's event is not sent"
+        );
+        worker.request(request(1, 3, "same"));
+        let event = next_event(&worker);
+        assert_eq!((event.generation, event.index), (1, 3));
+        assert_eq!(
+            calls(&state),
+            vec![PathBuf::from("same"), PathBuf::from("same")],
+            "made anew: the old result was not cached"
+        );
+    }
+
+    #[test]
+    fn an_old_result_after_cancel_is_neither_cached_nor_sent() {
+        let (worker, state, gate) = gated_worker();
+        worker.request(request(0, 0, "same"));
+        wait_until_started(&gate);
+        worker.cancel();
+        worker.set_generation_keeping_cache(2);
+        open_gate(&gate);
+        wait_until_nothing_in_flight(&worker, &state);
+
+        assert!(
+            matches!(worker.events.try_recv(), Err(TryRecvError::Empty)),
+            "the old generation's event is not sent"
+        );
+        worker.request(request(2, 3, "same"));
+        let event = next_event(&worker);
+        assert_eq!((event.generation, event.index), (2, 3));
+        assert_eq!(
+            calls(&state),
+            vec![PathBuf::from("same"), PathBuf::from("same")],
+            "made anew: a cancel since the request empties the cache for it"
+        );
     }
 }

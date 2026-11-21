@@ -1,4 +1,4 @@
-# T256. ADR 0026 F4a: a generation change that keeps the thumbnail cache (pw-thumbcache) — Open
+# T256. ADR 0026 F4a: a generation change that keeps the thumbnail cache (pw-thumbcache) — Done
 
 - **Why:** ADR 0026 §3.5 (the owner, 2026-11-21, when F4 was written): every change of the
   active tab's files starts a new thumbnail generation, and `ThumbWorker::set_generation` empties
@@ -54,3 +54,5 @@
 | 2026-11-21 | Blocked | Added when F4 was written (ADR 0026 §3.5, the owner's choice of step F4a); waits for its cold read and the chain review |
 | 2026-11-21 | Blocked | Cold read: doable with `worker.rs` alone; test generations start at 0, the in-flight case tested with `gated_worker`, `changing_generation_clears_the_thumbnail_cache` named. Chain review: an old result coming back after `set_generation_keeping_cache` is cached (not sent), else a slow RAW preview never finishes while a tab fills during an import; the cache epoch proposed |
 | 2026-11-21 | Open | Cold read and chain review done (rows above); ready for its agent |
+| 2026-11-21 | Ready for review | `set_generation_keeping_cache` added; `State::cache_epoch` raised by `set_generation` and `cancel` only, taken with each queued request; a result is cached when its epoch is current and sent when its generation is current and it is not far from the visible range. 5 tests (the four listed plus the old result after `cancel`); `changing_generation_clears_the_thumbnail_cache` and `in_flight_results_from_an_old_generation_are_discarded` unchanged and passing. Note: as point 1 words it, a current-generation result far from the visible range is now cached (not sent); before it was dropped. check.ps1 all OK (2209 passed, 76 ignored), no clippy warnings |
+| 2026-11-21 | Done | Reviewed: as point 1 and the chain review say; the five tests and the two named old ones seen passing in `test-output.txt` (newer than the change), no clippy warnings. The far-from-visible result now cached accepted (as point 1 words it). Leftover: the in-flight check compares generation and index, not path, so a new generation's request for a file still being made in the old one is made a second time in parallel (double work for a slow RAW preview during an import): written into T257's "Not in this task" (the owner, 2026-11-21). Nothing the user sees on its own; checked by hand through T260 |

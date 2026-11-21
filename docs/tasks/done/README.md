@@ -262,3 +262,4 @@ was when the task was done, so "this file", "below" and "the Log" in T1–T115 m
 | [T253](T253-thumbnail-worker-forgets-a-file.md) | ADR 0026 F3e: the thumbnail worker forgets one file's thumbnails (pw-thumbcache) |
 | [T254](T254-thumbnails-of-written-files-made-anew.md) | ADR 0026 F3e: the thumbnail of a file still being written is made anew (pw-loupe) |
 | [T255](T255-own-writes-keep-the-thumbnail.md) | ADR 0026 F3f: RawStride's own write of an added file does not make its thumbnail anew (pw-loupe) |
+| [T256](T256-generation-change-keeps-the-cache.md) | ADR 0026 F4a: a generation change that keeps the thumbnail cache (pw-thumbcache) |

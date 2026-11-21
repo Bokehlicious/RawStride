@@ -1,4 +1,4 @@
-# T257. ADR 0026 F4a: the contact sheet keeps its thumbnails when the active tab's files change (pw-loupe) — Blocked: waits for T256
+# T257. ADR 0026 F4a: the contact sheet keeps its thumbnails when the active tab's files change (pw-loupe) — Open
 
 - **Why:** ADR 0026 §3.5 (the owner, 2026-11-21): `Loupe::active_changed` (`main.rs`), used after
   a listing the folder watcher started (`follow_disk_changes`), after a placement of waiting files
@@ -77,7 +77,12 @@
   0026 F-Q7): a file another program changes, not one it added, keeps its cached thumbnail
   across a carry until F5 or another tab (`load_tab` empties the cache); before this task any
   listing emptied it by the way. Files another program added are made anew by T254's
-  `forget_path` as before.
+  `forget_path` as before. Known from T256's review (the owner, 2026-11-21, left as it is
+  for now): the worker's in-flight check compares generation and index, not path, so when
+  `active_changed` asks again for a file whose old-generation request is still being made, the
+  file is made a second time in parallel (the first result is still cached); this costs double
+  work for a slow RAW preview during an import. Do not change the worker for it; if T260's hand
+  check shows it slowing the contact sheet, it becomes a task of its own.
 - **Rules:** `docs/tasks/README.md` rules 1–12 (no texts); `AGENTS.md` §3.
 - **Done when:** `.\tools\check.ps1` is all OK and `git diff --stat` shows only the files above.
 
@@ -88,3 +93,4 @@
 | 2026-11-21 | Blocked | Added when F4 was written (ADR 0026 §3.5); waits for T256 |
 | 2026-11-21 | Blocked | Cold read: doable with the named files; point 4's `made_anew` for every file not carried would break T254 (an answer cached in the old generation, its event dropped, then a fresh stamp matching the half-written image), so the stamps are kept and only `forget_requests()` is removed; duplicates in `new` and the wording of carried entries made exact; the moves list now covers every matched file, so a forgotten cell's kept texture moves too; moves, undo and deletes reach `active_changed` (said, and in T260's hand check); the accepted F-Q7 case of a changed file's cached thumbnail named |
 | 2026-11-21 | Blocked | Chain review: a file gone from the tab is forgotten in the kept cache (`forget_path` in `active_changed`, so a later file of the same name is not shown with the old image); the other findings (stamps, moves/undo/deletes, wording) were already fixed after the cold read |
+| 2026-11-21 | Open | T256 done; its review's leftover (the in-flight double work) written into "Not in this task" |
