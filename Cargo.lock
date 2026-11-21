@@ -2056,7 +2056,7 @@ dependencies = [
 
 [[package]]
 name = "preview-bench"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "jpeg-decoder",
  "zune-jpeg 0.4.21",
@@ -2088,25 +2088,25 @@ checksum = "3d595e54a326bc53c1c197b32d295e14b169e3cfeaa8dc82b529f947fba6bcf5"
 
 [[package]]
 name = "pw-catalog"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "pw-core",
 ]
 
 [[package]]
 name = "pw-colour"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "moxcms",
 ]
 
 [[package]]
 name = "pw-core"
-version = "0.1.0"
+version = "0.2.0"
 
 [[package]]
 name = "pw-imagecheck"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "pw-libraw",
  "pw-metadata",
@@ -2115,7 +2115,7 @@ dependencies = [
 
 [[package]]
 name = "pw-ingest"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "pw-raw",
  "windows-sys 0.61.2",
@@ -2123,21 +2123,21 @@ dependencies = [
 
 [[package]]
 name = "pw-libjpeg"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "pw-raw",
 ]
 
 [[package]]
 name = "pw-libraw"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "cc",
 ]
 
 [[package]]
 name = "pw-loupe"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "eframe",
  "egui",
@@ -2157,7 +2157,7 @@ dependencies = [
 
 [[package]]
 name = "pw-metadata"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "pw-core",
  "serde_json",
@@ -2166,14 +2166,14 @@ dependencies = [
 
 [[package]]
 name = "pw-raw"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "pw-core",
 ]
 
 [[package]]
 name = "pw-render"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "egui",
  "pw-viewcore",
@@ -2181,7 +2181,7 @@ dependencies = [
 
 [[package]]
 name = "pw-thumbcache"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "moxcms",
  "pw-colour",
@@ -2194,7 +2194,7 @@ dependencies = [
 
 [[package]]
 name = "pw-tiff"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "moxcms",
  "pw-colour",
@@ -2203,7 +2203,7 @@ dependencies = [
 
 [[package]]
 name = "pw-viewcore"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "moxcms",
  "pw-colour",
@@ -2258,7 +2258,7 @@ checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
 
 [[package]]
 name = "raw-decode-bench"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "cc",
 ]
@@ -2271,7 +2271,7 @@ checksum = "20675572f6f24e9e76ef639bc5552774ed45f1c30e2951e1e99c59888861c539"
 
 [[package]]
 name = "rea-probe"
-version = "0.1.0"
+version = "0.2.0"
 
 [[package]]
 name = "read-fonts"

@@ -9,6 +9,8 @@ Downloads are on the [Releases page](https://github.com/Bokehlicious/RawStride/r
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-21
+
 ### Added
 
 - An image whose XMP says it is turned (`tiff:Orientation` in a RAW's sidecar, or in the XMP of a
@@ -51,5 +53,6 @@ safely into DNG, JPEG and TIFF files. Folders open in tabs, with filters and mul
 selection; images can be moved, deleted to the Recycle Bin and opened in another program.
 ExifTool and the Microsoft Visual C++ runtime are included; the program is not signed yet.
 
-[Unreleased]: https://github.com/Bokehlicious/RawStride/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/Bokehlicious/RawStride/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/Bokehlicious/RawStride/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/Bokehlicious/RawStride/releases/tag/v0.1.0

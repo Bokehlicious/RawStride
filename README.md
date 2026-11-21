@@ -3,7 +3,7 @@
 A fast and lightweight photo culling and ingest program for Windows: copy the photos off the card,
 step through them quickly, rate and label them, and add IPTC metadata.
 
-> **Status: in development; first pre-release `0.1.0` (2026-11-20), a portable zip for Windows on
+> **Status: in development; latest pre-release `0.2.0` (2026-11-21), a portable zip for Windows on
 > the [Releases page](https://github.com/Bokehlicious/RawStride/releases).** The program
 > (`rawstride.exe`, built from the crate `pw-loupe`; eframe + egui) has the loupe and preview, the
 > contact sheet, folder tabs, the import dialog, ratings and labels, filter and multi-selection, TIFF

@@ -1,4 +1,4 @@
-Third-party notices for RawStride 0.1.0
+Third-party notices for RawStride 0.2.0
 
 RawStride itself is licensed under the GNU General Public License, version 3 or later
 (GPL-3.0-or-later); see the file LICENSE. This file holds the notices of the software and data in
