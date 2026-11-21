@@ -5,7 +5,8 @@
   its own task, with its own approval and commit.
 - **Addition 1 accepted by the owner (2026-11-19):** a right-click menu on images (§2.9,
   E-Q15–E-Q19, step E4), the owner's wish from the hand check of E2–E3; every proposal approved,
-  E-Q17 with the owner's two changes.
+  E-Q17 with the owner's two changes. **E-Q17's order changed by the owner (2026-11-21):** Label
+  right after Rating, also in the Image menu (§2.9, T243).
 - Date: 2026-11-17
 - Related:
   - ADR 0014 §2.7 (one command on the marked images, otherwise the current one);
@@ -108,9 +109,13 @@
   File Explorer, a right-click on an image that is not marked does not clear the marking, so a
   slip of the mouse never loses a marking.
 - **What it holds** (E-Q17), in this order: "Open in {name}" per program (or "Open in Another
-  Program…" with an empty list), "Show in File Explorer"; a separator; the Rating submenu,
-  Reject, Move to Picked, the Label submenu with the colours (Red, Yellow, Green, Blue, Purple,
-  No label; owner, 2026-11-19); a separator; Metadata…; a separator; Delete to Recycle Bin.
+  Program…" with an empty list), "Show in File Explorer"; a separator; the Rating submenu, the
+  Label submenu with the colours (Red, Yellow, Green, Blue, Purple, No label; owner, 2026-11-19),
+  Reject, Move to Picked; a separator; Metadata…; a separator; Delete to Recycle Bin.
+  **Changed by the owner (2026-11-21, after using the program; T243):** the Label submenu comes
+  right after the Rating submenu, here and in the Image menu of the menu bar (Rating, Label,
+  Reject, Move to Picked, the setting "Move Rejected and Picked Images to Subfolders"; then, after
+  a separator, Rotate Left and Rotate Right as before).
   **Later (owner, 2026-11-19):** when metadata templates exist (ADR 0017 U13), the menu also gets
   a submenu to apply a template to the images, after Metadata…; not part of E4. Left out: the setting "Move Rejected and Picked Images to Subfolders", RAW ↔ JPEG
   and "Delete Rejected Images", which act on the folder or the view, not on the images clicked.
