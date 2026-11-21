@@ -1,4 +1,4 @@
-# T253. ADR 0026 F3e: the thumbnail worker forgets one file's thumbnails (pw-thumbcache) — Open
+# T253. ADR 0026 F3e: the thumbnail worker forgets one file's thumbnails (pw-thumbcache) — Done
 
 - **Why:** ADR 0026 §3.2, the owner's addition to F-Q7 (2026-11-21, the backlog sort after F3,
   from T252's hand check): a file another program is still writing (a slow copy to a USB stick)
@@ -41,3 +41,5 @@
 |---|---|---|
 | 2026-11-21 | Blocked | Added in the backlog sort after F3 (the owner's choice: ADR 0026 §3.2, addition to F-Q7); waits for its cold read and the chain review |
 | 2026-11-21 | Open | Cold read and chain review (T253 → T254): can be done as written (the fake thumbnails are 3 bytes, so a limit of 6 holds two); the sentence on in-flight requests softened (T254 checks only the cell's own request) |
+| 2026-11-21 | Ready for review | `ThumbWorker::forget_path` in `worker.rs` (removes every cache entry of the path with `retain`, lowers `cache_bytes` by their sizes; queue and in-flight untouched, no wake). 4 tests (`a_forgotten_thumbnail_is_made_anew`, `forget_path_drops_every_cell_size_and_orientation_of_that_path_only`, `forget_path_frees_the_bytes_of_the_forgotten_thumbnails`, `forget_path_of_a_path_not_in_the_cache_changes_nothing`); `docs/test-inventory.md` row 45 → 49 and header 2195 passed. check.ps1 all OK (2195 passed, 76 ignored), no clippy warnings |
+| 2026-11-21 | Done | Reviewed: `forget_path` as point 1 (doc comment, state lock only, no wake; queue and in-flight untouched), the 4 tests each fail without what they test (the bytes test evicts "second" if `cache_bytes` is not lowered); reviewer's own check.ps1 all OK (2195 passed, 76 ignored), no clippy warnings. T254 Open |

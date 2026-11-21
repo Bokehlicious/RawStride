@@ -1,4 +1,4 @@
-# T254. ADR 0026 F3e: the thumbnail of a file still being written is made anew (pw-loupe) — Blocked
+# T254. ADR 0026 F3e: the thumbnail of a file still being written is made anew (pw-loupe) — Open
 
 - **Why:** the owner's hand check of T252 (2026-11-21, point 1): an image copied into a folder on
   a USB stick appeared in the contact sheet with the thumbnail "Unreadable" until F5. Writing to
@@ -154,3 +154,4 @@
 |---|---|---|
 | 2026-11-21 | Blocked | Added in the backlog sort after F3 (the owner's choice: ADR 0026 §3.2, addition to F-Q7; a first draft that only asked again for failed cells was replaced after its cold read: a thumbnail of a file given its full size at the start of a copy may come back made but partly empty, and a cell still being made at the last change was missed); waits for T253, its cold read and the chain review |
 | 2026-11-21 | Blocked | Cold read and chain review (T253 → T254): point 6 only for a cell marked at a listing (`mark_check`/`take_check`), so a file still being written is read again at most once per listing, not after every answer, and only `contains` paths are read; `added_files` is one for all tabs and `load_tab` only drops the stamps (a file kept across F5 or a tab switch during its copy), `retain` to the open tabs' files, `clear` removed; the stamp named as taken before the request, the worker's merged in-flight request, FAT's 2 s write times, a listing at each JPEG write of RawStride's and a folder opened during a copy put under Not in; the watcher test no longer asserts nothing more within 2 s; hand check gains several files at once, the copy's speed, F5 and a tab switch during a copy, and a JPEG copied in then rated and turned. Waits for T253 |
+| 2026-11-21 | Open | T253 done (`ThumbWorker::forget_path`) |

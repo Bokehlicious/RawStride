@@ -338,6 +338,27 @@ impl ThumbWorker {
         self.shared.wake.notify_all();
     }
 
+    /// Forgets the cached thumbnails of one file (ADR 0026 §3.2), so its next request is made
+    /// anew instead of being answered from the cache.
+    ///
+    /// Every cache entry whose path equals `path` (compared as a `PathBuf`, as the cache compares
+    /// it), at any cell size and orientation, is removed and its bytes no longer count against
+    /// the cache limit. Queued and in-flight requests are not touched: a result of one that comes
+    /// in later is cached as usual. Takes only the state lock and does not wake the workers.
+    pub fn forget_path(&self, path: &Path) {
+        let mut state = lock_state(&self.shared);
+        let mut freed = 0usize;
+        state.cache.retain(|key, entry| {
+            if key.path.as_path() == path {
+                freed = freed.saturating_add(entry.image.data.len());
+                false
+            } else {
+                true
+            }
+        });
+        state.cache_bytes = state.cache_bytes.saturating_sub(freed);
+    }
+
     /// Sets the visible index range; nearby requests are prefetched, distant ones are dropped.
     pub fn set_visible(&self, visible: Range<usize>) {
         let mut state = lock_state(&self.shared);
@@ -1036,5 +1057,120 @@ mod tests {
             vec![Some(3)],
             "answered from the cache"
         );
+    }
+
+    // ---------- forgetting one file's thumbnails (ADR 0026 §3.2, T253) ----------
+
+    fn cell(index: usize, path: &str, cell: u32) -> ThumbnailRequest {
+        ThumbnailRequest {
+            cell,
+            ..request(0, index, path)
+        }
+    }
+
+    #[test]
+    fn a_forgotten_thumbnail_is_made_anew() {
+        let (worker, state) = worker(1, 1024);
+        worker.request(request(0, 0, "same"));
+        assert_eq!(next_event(&worker).index, 0);
+        worker.forget_path(Path::new("same"));
+        worker.request(request(0, 0, "same"));
+        assert_eq!(next_event(&worker).index, 0);
+
+        assert_eq!(
+            calls(&state),
+            vec![PathBuf::from("same"), PathBuf::from("same")]
+        );
+    }
+
+    #[test]
+    fn forget_path_drops_every_cell_size_and_orientation_of_that_path_only() {
+        let (worker, state) = worker(1, 1024);
+        let requests = [
+            cell(0, "same", 200),
+            cell(0, "same", 256),
+            oriented(0, "same", Some(6)),
+        ];
+        for request in &requests {
+            worker.request(request.clone());
+            let _ = next_event(&worker);
+        }
+        worker.request(request(0, 1, "other"));
+        let _ = next_event(&worker);
+        assert_eq!(calls(&state).len(), 4);
+
+        worker.forget_path(Path::new("same"));
+        for request in &requests {
+            worker.request(request.clone());
+            let _ = next_event(&worker);
+        }
+        worker.request(request(0, 1, "other"));
+        assert_eq!(next_event(&worker).index, 1);
+
+        assert_eq!(
+            calls(&state),
+            vec![
+                PathBuf::from("same"),
+                PathBuf::from("same"),
+                PathBuf::from("same"),
+                PathBuf::from("other"),
+                PathBuf::from("same"),
+                PathBuf::from("same"),
+                PathBuf::from("same"),
+            ],
+            "every entry of \"same\" made anew, \"other\" answered from the cache"
+        );
+        assert_eq!(
+            orientations(&state)[4..],
+            [None, None, Some(6)],
+            "made anew at each cell size and orientation"
+        );
+    }
+
+    #[test]
+    fn forget_path_frees_the_bytes_of_the_forgotten_thumbnails() {
+        // The fake thumbnails are 3 bytes, so a limit of 6 holds two.
+        let (worker, state) = worker(1, 6);
+        worker.request(request(0, 0, "first"));
+        let _ = next_event(&worker);
+        worker.request(request(0, 1, "second"));
+        let _ = next_event(&worker);
+        worker.forget_path(Path::new("first"));
+        worker.request(request(0, 2, "third"));
+        let _ = next_event(&worker);
+        worker.request(request(0, 1, "second"));
+        assert_eq!(next_event(&worker).index, 1);
+
+        assert_eq!(
+            calls(&state),
+            vec![
+                PathBuf::from("first"),
+                PathBuf::from("second"),
+                PathBuf::from("third"),
+            ],
+            "\"second\" still answered from the cache: nothing was evicted for \"third\""
+        );
+    }
+
+    #[test]
+    fn forget_path_of_a_path_not_in_the_cache_changes_nothing() {
+        let (worker, state) = worker(1, 1024);
+        worker.request(request(0, 0, "same"));
+        let _ = next_event(&worker);
+        let before = {
+            let state = lock_state(&worker.shared);
+            (state.cache.len(), state.cache_bytes)
+        };
+
+        worker.forget_path(Path::new("other"));
+
+        let after = {
+            let state = lock_state(&worker.shared);
+            (state.cache.len(), state.cache_bytes)
+        };
+        assert_eq!(after, before);
+        worker.request(request(0, 0, "same"));
+        assert_eq!(next_event(&worker).index, 0);
+        assert_eq!(calls(&state), vec![PathBuf::from("same")]);
     }
 }

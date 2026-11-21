@@ -87,8 +87,7 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status |
 |---|---|---|
-| [T253](T253-thumbnail-worker-forgets-a-file.md) | ADR 0026 F3e: the thumbnail worker forgets one file's thumbnails (pw-thumbcache) | Open |
-| [T254](T254-thumbnails-of-written-files-made-anew.md) | ADR 0026 F3e: the thumbnail of a file still being written is made anew (pw-loupe) | Blocked |
+| [T254](T254-thumbnails-of-written-files-made-anew.md) | ADR 0026 F3e: the thumbnail of a file still being written is made anew (pw-loupe) | Open |
 
 ## Writing a task (owner and reviewer)
 

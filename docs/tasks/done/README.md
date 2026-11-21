@@ -259,3 +259,4 @@ was when the task was done, so "this file", "below" and "the Log" in T1–T115 m
 | [T250](T250-reading-only-new-files.md) | ADR 0026 F3b: the ratings of only the new files, files waiting for their rating, Reload Folder reads the embedded turns again (pw-loupe) |
 | [T251](T251-tabs-follow-the-disk.md) | ADR 0026 F3c: the tabs follow their folders on disk (pw-loupe) |
 | [T252](T252-reload-folder-starts-the-watch-anew.md) | ADR 0026 F3d: Reload Folder starts the folder's watch anew (pw-loupe) |
+| [T253](T253-thumbnail-worker-forgets-a-file.md) | ADR 0026 F3e: the thumbnail worker forgets one file's thumbnails (pw-thumbcache) |
