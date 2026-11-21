@@ -444,7 +444,7 @@ by the owner the same day; step E4 in `plans/adr-0018-0025-steps.md`, before ADR
   hand; a task only if one is refused.
 - **Leftovers of writing ADR 0024 O3** (cold reads of T235–T237, 2026-11-20; accepted when the
   chain was written):
-  - *"Writing ratings" counts rotations:* the Tasks area's line "Writing ratings: {count}"
+  - ~~*"Writing ratings" counts rotations:*~~ (done: T239, hand-checked 2026-11-21) the Tasks area's line "Writing ratings: {count}"
     (`tasks_text.rs`) counts the rotation writes too once T237 is done (`pending_writes`). A
     task (a separate line, or "Writing metadata") if the owner finds it misleading in O3's
     hand check. (Owner, 2026-11-20, after the hand check: a separate line, "Writing
