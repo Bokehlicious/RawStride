@@ -43,6 +43,7 @@ mod tasks;
 mod tasks_text;
 mod thumb_buttons;
 mod thumbs;
+mod watcher;
 
 use std::path::{Path, PathBuf};
 
@@ -187,6 +188,7 @@ pub use thumb_buttons::{
     preview_only_marked,
 };
 pub use thumbs::{CellState, ThumbGrid, color_image, request_cell};
+pub use watcher::{FolderWatcher, WatchEvent};
 
 /// The window title: the product name (ADR 0012). `latency.ps1` finds the window by it (ADR 0009
 /// §11, decision 4, amended by ADR 0012).

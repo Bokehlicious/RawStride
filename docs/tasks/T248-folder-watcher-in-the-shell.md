@@ -1,4 +1,4 @@
-# T248. ADR 0026 F2b: the folder watcher follows the tabs and ends before an eject (pw-loupe) — Blocked: waits for T247
+# T248. ADR 0026 F2b: the folder watcher follows the tabs and ends before an eject (pw-loupe) — Open
 
 - **Why:** ADR 0026 step F2 (accepted by the owner 2026-11-18): the watcher's watches start and
   end with the tabs (§3.2, "a tab's watch ends when it is closed or opened on another folder"),
@@ -110,9 +110,9 @@
   2. Start an import of many files (a few hundred) from a card with "Eject" on and hide the
      import window while it copies; then open a folder on the card from the library: at the end
      the card is ejected.
-  3. Close a tab on a PC folder, then rename that folder in File Explorer: it works. (What
-     happens to a rename of a watched folder's **parent** while its tab is open is told by
-     T247's log; the reviewer puts it here before this task is set to Open.)
+  3. Close a tab on a PC folder, then rename that folder in File Explorer: it works. Then, with a tab open on a PC folder, try to rename the folder **above** it: Windows
+     refuses ("Access denied") while the tab is open, and allows it once the tab is closed
+     (T247; accepted, `known-limits.md`).
   4. RawStride starts, opens folders, rates images and exits as before; nothing new is shown.
 - **Not in this task:** listing a folder after `Changed`, the active tab at once and the others
   on activation, the status texts, the fallback's listing for an `unwatched` tab on activation
@@ -137,3 +137,4 @@
 | 2026-11-21 | Blocked | Added (ADR 0026 F2, second of T247 → T248); waits for T247 |
 | 2026-11-21 | Blocked | Cold read: the eject is of the whole drive, so `folders_to_watch` leaves out every folder on the source's drive (compared on the resolved form), not only the source's subtree; tabs marked `unwatched` left out so a tab opened again retries its watch; where the source path is taken (before `run` takes `form`), `ejecting_source` cleared before the result folders open, the order of `poll_folder_watcher` and `follow_tab_folders`, the 2 s wait accepted; `note_` tests under a temporary folder; hand check: a subfolder as the source with a tab on another folder of the card, a long hidden import, only visible results |
 | 2026-11-21 | Blocked | Chain review (T247 → T248): the drive is compared without file access (`std::path::absolute` and the path's `Prefix`, `\?\E:\` included; the resolved form's `\?\` had no drive for `drive_of`, so the card was never left out), worked out once in `start_import` as `ejecting_drive` from the source as written; the `note_` functions compare without file access (an `Ended` usually means the drive is gone); a late `Ended` and the card's top-folder tab noted under "Not in this task"; tests with `\?\` and UNC forms and a real folder under `temp_dir()`. Waits for T247 |
+| 2026-11-21 | Open | T247 done; hand check step 3 filled in from T247's finding (the parent of a watched folder cannot be renamed) |

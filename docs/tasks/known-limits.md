@@ -240,6 +240,20 @@ with ADR 0026 F3, in `plans/adr-0018-0025-steps.md`.)
   cannot be read under the old name and show "Unreadable". A text that the folder is gone in
   place of each thumbnail, or keeping the thumbnails, would say it better. A task if it disturbs.
 
+## The folder watcher (ADR 0026 F2)
+
+(T247, 2026-11-21, the reviewer and an independent review.)
+
+- *The parent of a watched folder cannot be renamed:* while a folder is watched, renaming the
+  folder above it fails with "Access denied" (NTFS; seen with `std::fs::rename`, T247). The
+  watched folder itself can be renamed and deleted. It works again once the tab is closed.
+- *A hung open holds back "applied":* a folder still being opened when it leaves the set (an
+  unreachable network folder) keeps `wait_until_applied` from returning true until that open
+  returns (the network's timeout, 20–60 s); an import that ejects in that time waits 2 s and
+  starts anyway.
+- *A broken completion port* (never seen) is logged every 50 ms until RawStride ends; the
+  thread does not spin.
+
 ## Card eject
 
 (Independent review of T156, 2026-11-16; none affects the owner's readers.)

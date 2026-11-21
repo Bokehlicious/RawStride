@@ -87,8 +87,7 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status |
 |---|---|---|
-| [T247](T247-folder-watcher.md) | ADR 0026 F2a: the folder watcher, one thread with `ReadDirectoryChangesW` (pw-loupe) | Open |
-| [T248](T248-folder-watcher-in-the-shell.md) | ADR 0026 F2b: the folder watcher follows the tabs and ends before an eject (pw-loupe) | Blocked: waits for T247 |
+| [T248](T248-folder-watcher-in-the-shell.md) | ADR 0026 F2b: the folder watcher follows the tabs and ends before an eject (pw-loupe) | Open |
 
 ## Writing a task (owner and reviewer)
 
