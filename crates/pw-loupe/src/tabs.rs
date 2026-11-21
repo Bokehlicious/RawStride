@@ -472,8 +472,6 @@ fn same_folder_lexically(a: &Path, b: &Path) -> bool {
 /// Whether `path` is `root` or inside it, compared as `path_starts_with` does (component by
 /// component, other case equal on Windows), without file access (ADR 0026 F3, T250). T251 uses it
 /// to hold back the listing of a tab inside an import's destination.
-// T251 calls it from the shell (and exports it); the tests use it until then.
-#[cfg_attr(not(test), allow(dead_code))]
 pub fn inside_lexically(path: &Path, root: &Path) -> bool {
     path_starts_with(path, root)
 }

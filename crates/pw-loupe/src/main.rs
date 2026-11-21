@@ -114,8 +114,8 @@ use pw_loupe::{
     start_failed_text, start_program, too_long_text, waiting_for_writes_text,
 };
 use pw_loupe::{
-    Relisted, anchored_offset, folder_gone_text, reload_key_action,
-    removed_by_another_program_text, top_position,
+    Relisted, anchored_offset, folder_changed_text, folder_gone_text, inside_lexically,
+    reload_key_action, removed_by_another_program_text, top_position,
 };
 use pw_metadata::edit::{Edit, EditOptions};
 use pw_metadata::iim::Fallback;
@@ -909,6 +909,9 @@ struct Loupe {
     /// The drive (`"E:"`) an import started with "Eject" will eject, while that import runs: no
     /// folder on it is watched, so no watch keeps the card busy (T248).
     ejecting_drive: Option<String>,
+    /// The destination of the running import, as written in its form (trimmed): a tab inside it
+    /// is not listed from disk while the import runs (`disk_listing_held`, ADR 0026 F3, T251).
+    import_destination: Option<PathBuf>,
 }
 
 impl Loupe {
@@ -1589,6 +1592,10 @@ impl Loupe {
                     dialog.sent(id);
                 }
                 self.tasks.import_started(id, &source, &destination);
+                // A tab inside the destination is not listed from disk while the import runs
+                // (`disk_listing_held`, T251).
+                let written = destination.trim();
+                self.import_destination = (!written.is_empty()).then(|| PathBuf::from(written));
                 self.import_result_opened = false;
                 self.import_submit_error = None;
             }
@@ -1617,8 +1624,10 @@ impl Loupe {
         }
     }
 
-    /// Notes the folder watcher's events on the tabs they concern (T248); acting on the notes is
-    /// ADR 0026 F3.
+    /// Notes the folder watcher's events on the tabs they concern (T248): `Changed` and `Started`
+    /// set `changed_on_disk`, `Ended` sets `unwatched`. The active tab acts on them in
+    /// `follow_disk_changes`, another tab when it becomes active (`load_activated_tab`, ADR 0026
+    /// F3, T251).
     fn poll_folder_watcher(&mut self) {
         while let Some(event) = self.folder_watcher.try_recv() {
             match event {
@@ -1635,6 +1644,170 @@ impl Loupe {
                     );
                 }
             }
+        }
+    }
+
+    /// `disk_listing_held` with the program's state (T251).
+    fn disk_listing_held(&self, folder: &Path) -> bool {
+        disk_listing_held(
+            self.moves.busy(),
+            self.delete.busy(),
+            self.dialog_open(),
+            self.import_destination.as_deref(),
+            folder,
+        )
+    }
+
+    /// Lists the active tab's folder from disk when a watch noted a change (`changed_on_disk`)
+    /// and the listing is not held (`disk_listing_held`), and applies it (`list_into_tab`, the
+    /// files RawStride is writing counting as listed); the note is cleared. Used by
+    /// `follow_disk_changes` (the active tab follows at once, with the real `ratings_ready`) and
+    /// by `load_activated_tab` (a tab that becomes active, with `ratings_ready` false, since the
+    /// value there is still the previous tab's) (ADR 0026 F3, F-Q8, T251). `None` when nothing
+    /// was listed; `Err` with `folder_gone_text` when the listing failed (the tab unchanged).
+    fn list_active_from_disk(&mut self, ratings_ready: bool) -> Option<Result<Relisted, String>> {
+        let folder = self
+            .tabs
+            .active()
+            .filter(|tab| tab.changed_on_disk)
+            .and_then(|tab| tab.folder.clone())?;
+        if self.disk_listing_held(&folder) {
+            return None;
+        }
+        let order = self.settings.shell.sort;
+        let cwd = std::env::current_dir().ok();
+        let listing = list_folder(&folder).map(|(files, _)| files);
+        let rating_of = tab_rating(&self.metadata, cwd.as_deref());
+        let pending = tab_pending(&self.metadata, cwd.as_deref());
+        let tab = self.tabs.active_mut()?;
+        tab.changed_on_disk = false;
+        Some(list_into_tab(
+            tab,
+            listing,
+            &pending,
+            order,
+            ratings_ready,
+            &rating_of,
+            &modified_time,
+        ))
+    }
+
+    /// The active tab follows its folder on disk at once (ADR 0026 §3.2, §3.3, F3, T251): when a
+    /// watch noted a change and the listing is not held, the folder is listed on the UI thread,
+    /// as Reload Folder does. A listing that fails keeps the tab and says `folder_gone_text`
+    /// (F-Q4). When nothing came or went, nothing more happens. Otherwise: the contact sheet's
+    /// note becomes the anchor; the removed files are forgotten in the metadata cache
+    /// (`forget_deleted`), so a file that comes back under the same name is read anew; the new
+    /// files' ratings are read on their own (`add_files`) and only those sent wait as `unread`;
+    /// the tab is refiltered, so under a filter the new files wait for their rating; the
+    /// thumbnails are asked for again with the contact sheet keeping its top image
+    /// (`active_changed(false)`); the sort is followed; and the status line says what changed
+    /// (`disk_change_text`), unless a step above failed, whose error it shows instead. The Exif
+    /// summary and the histograms are kept, and no file already shown is read again (F-Q7).
+    fn follow_disk_changes(&mut self, ctx: &egui::Context) {
+        let ready = self.ratings_ready();
+        let relisted = match self.list_active_from_disk(ready) {
+            None => return,
+            Some(Err(text)) => {
+                self.message = Some(text);
+                return;
+            }
+            Some(Ok(relisted)) => relisted,
+        };
+        if !relisted.changed() {
+            return;
+        }
+        self.anchor_from_note();
+        let mut error = None;
+        if !relisted.gone.is_empty() {
+            match resolve_paths(&relisted.gone) {
+                Ok(gone) => self.metadata.forget_deleted(&gone),
+                Err(text) => error = Some(text),
+            }
+        }
+        if !relisted.new.is_empty() {
+            let added = resolve_paths(&relisted.new).and_then(|resolved| {
+                let added: HashSet<PathBuf> = self
+                    .metadata
+                    .add_files(resolved.clone(), &mut self.metadata_worker)?
+                    .into_iter()
+                    .collect();
+                Ok(relisted
+                    .new
+                    .iter()
+                    .zip(&resolved)
+                    .filter(|(_, path)| added.contains(*path))
+                    .map(|(file, _)| file.clone())
+                    .collect::<Vec<PathBuf>>())
+            });
+            match added {
+                Ok(sent) => {
+                    if let Some(tab) = self.tabs.active_mut() {
+                        tab.mark_unread(&sent);
+                    }
+                }
+                Err(text) => error = Some(text),
+            }
+        }
+        self.refilter_active(None);
+        self.active_changed(false);
+        self.follow_sort(ctx);
+        self.message = error.or_else(|| disk_change_text(&relisted));
+    }
+
+    /// The new files of the active tab are shown when their ratings are read (ADR 0026 §2
+    /// points 3 and 4, T251): `Tab::clear_read` with `MetadataCache::rating_known`, and when a
+    /// file left `unread`, the tab is refiltered and a shown preview follows its visible list.
+    /// Their placement under a rating order follows in `follow_sort`.
+    fn follow_unread(&mut self) {
+        let cwd = std::env::current_dir().ok();
+        let metadata = &self.metadata;
+        let Some(tab) = self.tabs.active_mut() else {
+            return;
+        };
+        if tab.unread.is_empty() {
+            return;
+        }
+        let known = |path: &Path| match cwd.as_deref() {
+            Some(cwd) if !path.is_absolute() => metadata.rating_known(&resolve_path(cwd, path)),
+            _ => metadata.rating_known(path),
+        };
+        if tab.clear_read(&known) && self.refilter_active(None) {
+            self.loupe_follows_visible();
+        }
+    }
+
+    /// A tab became active through a click on its tab or `tab_action` (ADR 0026 F-Q8, F-Q3,
+    /// T251): a tab whose watch could not start or has ended also counts as changed, so it is
+    /// listed on each activation; when it changed on disk and the listing is not held, its folder
+    /// is listed first (`list_active_from_disk`, with no anchor, no `add_files` and no follow-up
+    /// of its own, since `load_tab` reads the whole tab next). The status text (`disk_change_text`
+    /// or `folder_gone_text`) is set after the load, which clears the message; when the tab has
+    /// no files, the load's "no images" text stays. When held, the note stays and
+    /// `follow_disk_changes` lists the tab once the hold ends.
+    fn load_activated_tab(&mut self) {
+        if let Some(tab) = self.tabs.active_mut()
+            && tab.unwatched
+        {
+            tab.changed_on_disk = true;
+        }
+        let listed = self.list_active_from_disk(false);
+        if !self.load_tab(false) {
+            return;
+        }
+        let text = match listed {
+            None => None,
+            Some(Err(text)) => Some(text),
+            Some(Ok(relisted)) => {
+                if self.tabs.active().is_some_and(|tab| tab.files.is_empty()) {
+                    None
+                } else {
+                    disk_change_text(&relisted)
+                }
+            }
+        };
+        if let Some(text) = text {
+            self.message = Some(text);
         }
     }
 
@@ -1684,8 +1857,10 @@ impl Loupe {
                         ImportEvent::Done { done, .. } if done.eject.is_some()
                     );
                     if matches!(event, ImportEvent::Done { .. }) {
-                        // The import has ended: the card's drive may be watched again (T248).
+                        // The import has ended: the card's drive may be watched again (T248), and
+                        // the tabs inside its destination listed (T251).
                         self.ejecting_drive = None;
+                        self.import_destination = None;
                     }
                     let folders_to_open = if let Some(dialog) = &mut self.import_dialog {
                         let was_running = dialog.cancel();
@@ -1723,6 +1898,7 @@ impl Loupe {
                 Err(TryRecvError::Empty) => break,
                 Err(TryRecvError::Disconnected) => {
                     self.ejecting_drive = None;
+                    self.import_destination = None;
                     if let Some(dialog) = &mut self.import_dialog {
                         dialog.disconnected();
                     }
@@ -2278,11 +2454,18 @@ impl Loupe {
     /// preview the view core opens the current image again from the file), the status line says
     /// a removed current image (F-Q5) unless the reads could not begin, a preview left with
     /// nothing to show goes back to the contact sheet (`preview_must_leave`, point 9.1), and the
-    /// sort is followed. A tab without a folder: nothing.
+    /// sort is followed. A tab without a folder: nothing. The tab's notes of the folder watcher
+    /// are cleared (T251): `changed_on_disk`, since the folder is listed now, and `unwatched`, so
+    /// its watch is tried again (`follow_tab_folders`; a watch that still cannot start marks it
+    /// again).
     fn reload_active_tab(&mut self, ctx: &egui::Context) {
         let Some(folder) = self.tabs.active().and_then(|tab| tab.folder.clone()) else {
             return;
         };
+        if let Some(tab) = self.tabs.active_mut() {
+            tab.changed_on_disk = false;
+            tab.unwatched = false;
+        }
         let listing = list_folder(&folder).map(|(files, _)| files);
         if listing.is_ok() {
             self.anchor_from_note();
@@ -2882,12 +3065,12 @@ impl Loupe {
             TabAction::Previous => self.tabs.previous(),
             TabAction::Close => {
                 self.tabs.close_active();
-                self.load_active_tab();
+                self.load_activated_tab();
                 self.prune_metadata_to_open_tabs();
                 return;
             }
         }
-        self.load_active_tab();
+        self.load_activated_tab();
     }
 
     fn prune_metadata_to_open_tabs(&mut self) {
@@ -5136,7 +5319,7 @@ impl Loupe {
     /// tab of the images' folders lists its folder again with the first restored image current
     /// (`relist_folder_tabs`: the files brought back are placed in the sort and nothing else
     /// moves, ADR 0026 §2 point 4, T242), and the active tab's view cores and thumbnails follow (its
-    /// ratings are read again when a restored image is no longer in the metadata cache), and the
+    /// ratings are read again when a file of the tab is not in the metadata cache, T251), and the
     /// contact sheet always scrolls to the image brought back (the owner 2026-11-21, T242 point
     /// 9.2); then the tabs open on the folders the files left are listed again (T183), keeping
     /// their top image, while the undo's scroll wins in its frame. A failed image stays where
@@ -5166,11 +5349,17 @@ impl Loupe {
         let (active, list_errors) = self.relist_folder_tabs(&folders, first.as_deref());
         errors.extend(list_errors);
         if active {
-            if restored
-                .iter()
-                .any(|image| !self.metadata.has_image(&image.image))
-            {
-                // The tab was loaded again since the move: its ratings are read again.
+            // The relist listed the folder from disk, so it may also have brought in files
+            // another program added while the listing was held (T251): any file of the tab not
+            // in the metadata cache means its ratings are read again.
+            let unknown = self.tabs.active().is_some_and(|tab| {
+                resolve_paths(&tab.files).map_or(true, |files| {
+                    files.iter().any(|file| !self.metadata.has_image(file))
+                })
+            });
+            if unknown {
+                // The tab was loaded again since the move, or a file came: its ratings are read
+                // again.
                 self.load_active_tab();
             } else {
                 self.active_reordered();
@@ -6615,7 +6804,8 @@ impl Loupe {
         // T202).
         self.follow_open(&ctx);
         // A rolled-back write does not refilter (ADR 0014 §2.2; the next move drops the image); the
-        // ratings becoming ready does.
+        // ratings becoming ready does. New files are shown when their ratings are read (T251).
+        self.follow_unread();
         self.refilter_when_ratings_change();
         // The sort order follows its keys as they are read (U14-Q4, T138).
         self.follow_sort(&ctx);
@@ -6705,7 +6895,7 @@ impl Loupe {
             && index != self.tabs.active_index()
             && self.tabs.activate(index)
         {
-            self.load_active_tab();
+            self.load_activated_tab();
         }
         let full = ui.available_rect_before_wrap();
         let import_status = self.hidden_import_status();
@@ -8178,16 +8368,21 @@ fn tab_rating<'a>(
     move |path| shown_rating(metadata, cwd, path).cloned()
 }
 
-/// The `pending` of `Tab::relist` (ADR 0026 F1, T240 point 5, T242): whether RawStride is
-/// writing a tab file (`MetadataCache::is_pending`), looked up by the resolved path as
-/// `shown_rating` does.
+/// The `pending` of `Tab::relist` (ADR 0026 F1, T240 point 5, T242, T251): whether RawStride is
+/// writing a tab file (`MetadataCache::write_pending`: a rating or rotation write, an editor
+/// save or a write of "Apply to All Marked"), looked up by the resolved path as `shown_rating`
+/// does. Such a file counts as listed, since the safe write may rename it away for a moment. It is
+/// used by every listing of a tab: Reload Folder, `relist_tabs` after a batch or an undo, and the
+/// listings the folder watcher starts. Accepted edge (T251): a move waits only for `is_pending`,
+/// so a file moved while "Apply to All Marked" still has it pending counts as listed and stays in
+/// the source tab until the next listing.
 fn tab_pending<'a>(
     metadata: &'a MetadataCache,
     cwd: Option<&'a Path>,
 ) -> impl Fn(&Path) -> bool + 'a {
     move |path| match cwd {
-        Some(cwd) if !path.is_absolute() => metadata.is_pending(&resolve_path(cwd, path)),
-        _ => metadata.is_pending(path),
+        Some(cwd) if !path.is_absolute() => metadata.write_pending(&resolve_path(cwd, path)),
+        _ => metadata.write_pending(path),
     }
 }
 
@@ -8268,13 +8463,45 @@ fn reload_tab(
     rating_of: &dyn Fn(&Path) -> Option<Rating>,
     modified_of: &dyn Fn(&Path) -> Option<SystemTime>,
 ) -> Result<Option<String>, String> {
+    let relisted = list_into_tab(
+        tab,
+        listing,
+        pending,
+        order,
+        ratings_ready,
+        rating_of,
+        modified_of,
+    )?;
+    Ok(relisted
+        .current_removed
+        .as_deref()
+        .map(removed_by_another_program_text))
+}
+
+/// One listing of a tab's folder applied to the tab (ADR 0026 F3, T251), used by Reload Folder
+/// (`reload_tab`) and by the listings the folder watcher starts (`list_active_from_disk`):
+/// `listing` is `list_folder`'s result for the tab's folder, in the tab's own form. A listing that
+/// failed leaves the tab unchanged and gives `Err` with `folder_gone_text` (F-Q4; also a folder
+/// renamed or moved while open). Otherwise the tab is relisted with `relist_tab` (no file made
+/// current; a file `pending` names counts as listed) and its `Relisted` returned. A tab without a
+/// folder: `Ok` with nothing changed.
+#[allow(clippy::too_many_arguments)]
+fn list_into_tab(
+    tab: &mut Tab,
+    listing: Result<Vec<PathBuf>, String>,
+    pending: &dyn Fn(&Path) -> bool,
+    order: SortOrder,
+    ratings_ready: bool,
+    rating_of: &dyn Fn(&Path) -> Option<Rating>,
+    modified_of: &dyn Fn(&Path) -> Option<SystemTime>,
+) -> Result<Relisted, String> {
     let Some(folder) = tab.folder.clone() else {
-        return Ok(None);
+        return Ok(Relisted::default());
     };
     let Ok(listed) = listing else {
         return Err(folder_gone_text(&folder));
     };
-    let relisted = relist_tab(
+    Ok(relist_tab(
         tab,
         listed,
         None,
@@ -8283,11 +8510,41 @@ fn reload_tab(
         ratings_ready,
         rating_of,
         modified_of,
-    );
-    Ok(relisted
-        .current_removed
-        .as_deref()
-        .map(removed_by_another_program_text))
+    ))
+}
+
+/// Whether RawStride's own work holds back a listing of `folder` from disk (ADR 0026 F3, T251):
+/// a batch of moves or an undo runs or waits (`moves_busy`), a delete runs (`delete_busy`), a
+/// dialog that holds the program is open (`dialog_open`), or `folder` is the destination of a
+/// running import or inside it (`inside_lexically`, no file access). These change the tabs
+/// themselves when they end (`replace_tab_files`, `relist_tabs`, an import's result opened), and
+/// while they run a file can be missing for a moment (a file on its way in a move, an import's
+/// `.pwpart` renamed and its template written with ExifTool's `-overwrite_original`), which a
+/// listing would report as removed by another program. While held, the tab's `changed_on_disk`
+/// is kept, and the folder is listed once the hold ends (`follow_disk_changes` runs every
+/// frame).
+fn disk_listing_held(
+    moves_busy: bool,
+    delete_busy: bool,
+    dialog_open: bool,
+    import_destination: Option<&Path>,
+    folder: &Path,
+) -> bool {
+    moves_busy
+        || delete_busy
+        || dialog_open
+        || import_destination.is_some_and(|destination| inside_lexically(folder, destination))
+}
+
+/// The status text after a listing the folder watcher started (ADR 0026 §3.3, F-Q5, F-Q9, T251):
+/// the current image removed has its own text (`removed_by_another_program_text`, as Reload
+/// Folder), otherwise how many images came and went (`folder_changed_text`); `None` when nothing
+/// changed. No sound and no dialog.
+fn disk_change_text(relisted: &Relisted) -> Option<String> {
+    match &relisted.current_removed {
+        Some(file) => Some(removed_by_another_program_text(file)),
+        None => folder_changed_text(relisted.added, relisted.removed),
+    }
 }
 
 /// The capture times to ask for in the active tab under `order` (U14-Q4, ADR 0026 F-Q6, T242):
@@ -9488,6 +9745,8 @@ impl eframe::App for Loupe {
         let ctx = ui.ctx().clone();
         self.poll_import_worker(&ctx);
         self.poll_folder_watcher();
+        // The active tab follows its folder on disk at once (ADR 0026 F3, T251).
+        self.follow_disk_changes(&ctx);
         self.follow_tab_folders();
         self.check_exiftool(&ctx);
         if self.send_pending_options() {
@@ -9945,6 +10204,7 @@ fn run(options: Options) -> Result<(), String> {
                 folder_watcher,
                 watched_folders: Vec::new(),
                 ejecting_drive: None,
+                import_destination: None,
             };
             if let Some(p) = path {
                 loupe.open(&p, false);
@@ -11119,12 +11379,13 @@ mod tests {
 
     mod reload_folder {
         use super::super::{
-            AnchorStep, GRID_SPACING, GridView, anchor_step, capture_requests, grid_note,
-            preview_must_leave, relist_tab, reload_enabled, reload_tab,
+            AnchorStep, GRID_SPACING, GridView, anchor_step, capture_requests, disk_change_text,
+            disk_listing_held, grid_note, list_into_tab, preview_must_leave, relist_tab,
+            reload_enabled, reload_tab,
         };
         use pw_loupe::{
-            SortKey, SortOrder, Tab, Tabs, ViewMode, anchored_offset, folder_gone_text,
-            list_folder, removed_by_another_program_text,
+            Relisted, SortKey, SortOrder, Tab, Tabs, ViewMode, anchored_offset,
+            folder_changed_text, folder_gone_text, list_folder, removed_by_another_program_text,
         };
         use std::collections::{HashMap, HashSet};
         use std::path::{Path, PathBuf};
@@ -11552,6 +11813,161 @@ mod tests {
                 anchor_step(&anchor, &others, false, stride, columns),
                 AnchorStep::Drop
             );
+        }
+
+        // --- The tabs follow their folders on disk (ADR 0026 F3, T251) ---
+
+        #[test]
+        fn a_disk_listing_is_held_while_rawstride_moves_deletes_shows_a_dialog_or_imports_into_it()
+        {
+            let folder = Path::new("D:/Photos/2026/shoot");
+            // nothing running
+            assert!(!disk_listing_held(false, false, false, None, folder));
+            // moves or an undo, a delete, a dialog
+            assert!(disk_listing_held(true, false, false, None, folder));
+            assert!(disk_listing_held(false, true, false, None, folder));
+            assert!(disk_listing_held(false, false, true, None, folder));
+            // inside or equal to the import's destination
+            let destination = Path::new("D:/Photos/2026");
+            assert!(disk_listing_held(
+                false,
+                false,
+                false,
+                Some(destination),
+                folder
+            ));
+            assert!(disk_listing_held(false, false, false, Some(folder), folder));
+            // outside it: a sibling with a longer name
+            assert!(!disk_listing_held(
+                false,
+                false,
+                false,
+                Some(folder),
+                Path::new("D:/Photos/2026/shoot-2")
+            ));
+            // no import
+            assert!(!disk_listing_held(false, false, false, None, destination));
+            assert!(!disk_listing_held(
+                false,
+                false,
+                false,
+                Some(Path::new("D:/Photos/2026/shoot-2")),
+                folder
+            ));
+        }
+
+        #[test]
+        fn the_disk_change_text_names_a_removed_current_image_else_counts_new_and_removed() {
+            let current = PathBuf::from("D:/x/shoot/c.jpg");
+            let current_gone = Relisted {
+                added: 2,
+                removed: 1,
+                current_removed: Some(current.clone()),
+                new: vec![PathBuf::from("D:/x/shoot/n1.jpg")],
+                gone: vec![current.clone()],
+            };
+            assert_eq!(
+                disk_change_text(&current_gone),
+                Some(removed_by_another_program_text(&current))
+            );
+            let others = Relisted {
+                added: 3,
+                removed: 2,
+                current_removed: None,
+                ..Relisted::default()
+            };
+            assert_eq!(disk_change_text(&others), folder_changed_text(3, 2));
+            assert!(disk_change_text(&others).is_some());
+            assert_eq!(disk_change_text(&Relisted::default()), None);
+        }
+
+        #[test]
+        fn a_failed_disk_listing_keeps_the_tab_and_says_the_folder_is_gone() {
+            let dir = folder("disk-gone", &["a.jpg", "b.jpg"]);
+            let mut tab = opened(&dir, 1, NAME, &|_| None);
+            let before = tab.clone();
+            remove_folder(&dir);
+
+            let relisted = list_into_tab(
+                &mut tab,
+                listing(&dir),
+                &nothing_pending,
+                NAME,
+                true,
+                &|_| None,
+                &|_| None,
+            );
+
+            assert_eq!(relisted, Err(folder_gone_text(&dir)));
+            assert_eq!(tab, before);
+        }
+
+        #[test]
+        fn a_disk_listing_reports_the_new_and_the_gone_files_and_nothing_when_unchanged() {
+            let dir = folder("disk-changed", &["a.jpg", "c.jpg", "e.jpg"]);
+            let mut tab = opened(&dir, 0, NAME, &|_| None);
+            std::fs::write(dir.join("d.jpg"), b"x").unwrap();
+            std::fs::remove_file(dir.join("c.jpg")).unwrap();
+
+            let relisted = list_into_tab(
+                &mut tab,
+                listing(&dir),
+                &nothing_pending,
+                NAME,
+                true,
+                &|_| None,
+                &|_| None,
+            )
+            .unwrap();
+
+            assert_eq!(relisted.added, 1);
+            assert_eq!(relisted.removed, 1);
+            assert_eq!(relisted.current_removed, None);
+            assert_eq!(relisted.new, [dir.join("d.jpg")]);
+            assert_eq!(relisted.gone, [dir.join("c.jpg")]);
+            assert_eq!(names(&tab), ["a.jpg", "d.jpg", "e.jpg"]);
+
+            // the same files again: nothing changes
+            let before = tab.clone();
+            let again = list_into_tab(
+                &mut tab,
+                listing(&dir),
+                &nothing_pending,
+                NAME,
+                true,
+                &|_| None,
+                &|_| None,
+            )
+            .unwrap();
+            assert!(!again.changed());
+            assert_eq!(again, Relisted::default());
+            assert_eq!(tab, before);
+            remove_folder(&dir);
+        }
+
+        #[test]
+        fn a_disk_listing_counts_a_file_being_written_as_listed() {
+            let dir = folder("disk-pending", &["a.jpg", "b.jpg", "c.jpg"]);
+            let mut tab = opened(&dir, 0, NAME, &|_| None);
+            // The safe write has renamed the original away for a moment.
+            std::fs::remove_file(dir.join("b.jpg")).unwrap();
+            let written = dir.join("b.jpg");
+            let pending = |path: &Path| path == written;
+
+            let relisted = list_into_tab(
+                &mut tab,
+                listing(&dir),
+                &pending,
+                NAME,
+                true,
+                &|_| None,
+                &|_| None,
+            )
+            .unwrap();
+
+            assert!(!relisted.changed());
+            assert_eq!(names(&tab), ["a.jpg", "b.jpg", "c.jpg"]);
+            remove_folder(&dir);
         }
     }
 }

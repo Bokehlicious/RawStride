@@ -265,6 +265,22 @@ with ADR 0026 F3, in `plans/adr-0018-0025-steps.md`.)
   listing on activation; a `subst` letter mapped onto a card is also not left out before an
   eject.
 
+## Tabs following the disk (ADR 0026 F3)
+
+(T249–T251, 2026-11-21, the chain review and the cold reads.)
+
+- *A file listed while it is copied is read once* (F-Q7: only files that come and go are
+  followed): a file listed before its copy has ended, or a RAW whose `.xmp` sidecar comes after
+  it, may show without its rating or capture time until F5.
+- *A rating key on a new image whose rating is not read yet* starts from no rating, as during a
+  folder read.
+- *The listing runs on the UI thread,* as Reload Folder and opening a folder: a network folder
+  that answers slowly holds the window for that time, also for the second listing each tab gets
+  when its watch starts (`WatchEvent::Started`).
+- *A file moved while "Apply to All Marked" still writes it* counts as listed (`tab_pending`
+  uses `write_pending`, a move waits only for `is_pending`) and stays in the source tab until
+  the next listing.
+
 ## Card eject
 
 (Independent review of T156, 2026-11-16; none affects the owner's readers.)

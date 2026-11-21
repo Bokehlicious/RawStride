@@ -87,7 +87,6 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status |
 |---|---|---|
-| [T251](T251-tabs-follow-the-disk.md) | ADR 0026 F3c: the tabs follow their folders on disk | Open |
 
 ## Writing a task (owner and reviewer)
 

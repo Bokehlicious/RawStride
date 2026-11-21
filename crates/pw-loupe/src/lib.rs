@@ -176,7 +176,7 @@ pub use sort::{
     CaptureRead, CaptureReader, CaptureTime, CaptureTimes, SORT_KEYS, SortKey, SortOrder, SortPlan,
     insert_position, key_known, modified_time, read_order,
 };
-pub use tabs::{SortFollow, Tab, Tabs, ViewMode, same_folder};
+pub use tabs::{SortFollow, Tab, Tabs, ViewMode, inside_lexically, same_folder};
 pub use tasks::{
     ClockTime, ImportRow, ImportStep, MAX_ERRORS, PendingWrite, TaskError, Tasks, pending_writes,
 };

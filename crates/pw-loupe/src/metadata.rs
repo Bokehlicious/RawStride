@@ -466,8 +466,6 @@ impl MetadataCache {
     /// answer makes them `Ready`; its failure makes them `Error` (`rating_known` is then true:
     /// shown and placed as unrated) and gives one failure through `poll`, without a `read_error`.
     /// The folder read's answer leaves them alone. Returns the absolute paths added.
-    // T251 calls it after a listing the folder watcher started; the tests use it until then.
-    #[cfg_attr(not(test), allow(dead_code))]
     pub fn add_files(
         &mut self,
         files: Vec<PathBuf>,
@@ -508,7 +506,6 @@ impl MetadataCache {
     /// points 3 and 4, T250): true when its state is `Ready`, `Unsupported` or `Error` (an
     /// `Error` file counts as unrated), false while it is `Loading` or when the path is not in
     /// the cache. T251 asks it for a tab's unread files (`Tab::clear_read`).
-    #[cfg_attr(not(test), allow(dead_code))]
     pub fn rating_known(&self, path: &Path) -> bool {
         self.images.get(path).is_some_and(|metadata| {
             matches!(

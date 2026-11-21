@@ -24,6 +24,9 @@ Downloads are on the [Releases page](https://github.com/Bokehlicious/RawStride/r
   Left, Rotate Right, Metadata… and Preview. View ▸ Buttons on Thumbnails turns them off.
 - With the image in the metadata window marked and two or more images marked, Previous, Next
   and Save and Next step only between the marked images.
+- A folder open in a tab follows what other programs do in it: new images appear in the
+  contact sheet (under a filter or a rating order once their rating is read), removed ones
+  go, and the status line says how many. A tab not shown follows when it is shown again.
 
 ### Changed
 
