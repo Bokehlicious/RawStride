@@ -6,6 +6,8 @@
   commit.
 - **Implemented (2026-11-10):** steps F1–F6 and the amendments done (agent tasks T51–T57, T59–T61),
   F7 accepted by the owner; F8 is this documentation update.
+- **Amendment 3 (owner, 2026-11-21, §16):** §2.8: marks are kept while the ratings are not read
+  yet (ADR 0026 F1, T240).
 - **Amendment 2 (owner, 2026-11-10, §14):** the label filter takes several labels at once (T61).
 - **Amendment 1 (owner, 2026-11-10, §13):** §2.1 gets a star condition (≥, =, ≤), and §2.2 removes
   a rated image that stops matching at once. Tasks T59, T60; T57 changed.
@@ -66,7 +68,9 @@
 7. **Batch rules:** one write per image, queued in order. Files that cannot carry ratings are skipped
    silently; if none of the targets can, one message. A label key removes the label only if **all**
    ratable targets already have it; otherwise it sets it on all.
-8. **Marked images that the filter hides are unmarked.**
+8. **Marked images that the filter hides are unmarked.** Changed by amendment 3 (§16, owner
+   2026-11-21): while the tab's ratings are not read yet (Q7), nothing is unmarked; the marks are
+   checked against the filter once the read is done.
 
 ## 3. Scope
 
@@ -376,3 +380,16 @@ What it would change, to be weighed in its own amendment before any task:
 - the layout is studied from other culling programs only by using them and from their public
   documentation (clean-room levels C and D, `docs/clean-room.md`); no screenshots or assets of
   another product go into the repository.
+
+## 16. Amendment 3: marks kept while the ratings are read (owner, 2026-11-21)
+
+Status: **decided by the owner (2026-11-21)**, when ADR 0026 F1 ("Reload Folder", F5) was written
+as tasks. ADR 0026 §2 point 2 keeps the marks of the files still there when a tab's files change.
+Under an active filter a tab shows nothing until its ratings are read (Q7), and §2.8 then unmarked
+every image, so F5 (and a switch to another tab and back, as before) lost the marks.
+
+**Change of §2.8:** while the tab's ratings are not read yet, the filter hides images only because
+their values are unknown, so nothing is unmarked. When the read is done, the marked images the
+filter really hides are unmarked as before. The test
+`an_active_filter_shows_nothing_until_the_ratings_are_read` (`pw-loupe` `browse.rs`) is changed to
+match (T240), with the owner's approval.

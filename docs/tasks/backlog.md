@@ -481,3 +481,28 @@ by the owner the same day; step E4 in `plans/adr-0018-0025-steps.md`, before ADR
   with a test on a Sony JPEG sample. (Reviewer, 2026-11-20, measured: verify already allows
   the key, a pointer; the write is refused by the warning itself, which the safe write
   refuses before verify. Task T238, after the owner's decision D18, 2026-11-20.)
+- **Leftovers of writing ADR 0026 F1** (T240–T242, 2026-11-21):
+  - *A reload does not forget the orientations read from a file's own Exif:* "Reload Folder"
+    reads the ratings, the metadata, the Exif summary and the histograms again (T241), but
+    `OrientationStore` keeps the embedded values it has read and the values RawStride wrote
+    (`confirmed_by_write`), so a file turned by another program still shows RawStride's
+    orientation after F5. The same gap as "An outside change of IFD0 Orientation is not seen
+    during the session" above; a task with ADR 0026 F3 if it is seen.
+  - *A placement remakes every thumbnail:* `active_reordered` starts a new thumbnail generation,
+    and `ThumbWorker::set_generation` empties the thumbnail cache, so each placement of waiting
+    files (T240 `place_waiting`, under "Capture Time" or "Rating") makes the tab's visible
+    thumbnails anew. To be watched in F1's hand check and again in F3, where files come often.
+  - *Ctrl+A while nothing is shown clears the kept marks:* under an active filter while the
+    ratings are read, `visible` is empty and Ctrl+A (`Selection::all` of nothing) clears the
+    marks that ADR 0014 amendment 3 keeps (cold read of T240). A task only if it is seen.
+  - *`list_folder` skips entries that give an error* (`filter_map(e.ok())`, chain review of
+    T240–T242): a network hiccup then looks like files removed, and a reload drops their marks.
+    Before ADR 0026 F3, where listings come often, `list_folder` should fail on an entry error.
+  - *F3 needs a read of only the new files:* a reload sets every image back to "reading" (under
+    a rating filter the contact sheet empties until the read is back), which is right for F5 but
+    would flicker on every listing the watcher starts. F3 needs a metadata read of only the new
+    files (for example `MetadataCache::add_files`) that keeps the others ready.
+  - *A reload leaves the compare's held image and "Only the marked" as they were* (cold read of
+    T242): `open_loupe_core` opens only the main view core, so a held image changed by another
+    program is not read again, and after a reload the image that follows a removed current one
+    may be unmarked under "Only the marked". A task only if it is seen.

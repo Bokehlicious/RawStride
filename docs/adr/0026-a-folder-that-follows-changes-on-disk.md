@@ -3,6 +3,9 @@
 - Status: **accepted by the owner (2026-11-18):** every question in §5 (F-Q1–F-Q12) answered as
   proposed. Nothing is built, installed or added as a dependency by this ADR. Each step in §6
   becomes its own task, with its own approval and commit.
+- **The owner, 2026-11-21** (when F1 was written as T240–T242): §2 point 2, the marks also stay
+  under an active filter while the ratings are read (ADR 0014 amendment 3); §2 point 4, the
+  placement also when tabs are listed again after a move or an undo.
 - Date: 2026-11-18
 - Related:
   - the owner's wish at the hand check of ADR 0018 B4 (2026-11-18): a tab shows new files, for
@@ -61,13 +64,19 @@ These hold for all three, so a tab behaves the same whatever changed it. They ar
 1. **The current image stays** when it is still in the folder. When it is gone, the following file
    becomes current (the previous one at the end), as after a move. In the preview the view of the
    new current image is opened; the status line says why (F-Q5).
-2. **The marks of the files still there stay**; a file that is gone loses its mark.
+2. **The marks of the files still there stay**; a file that is gone loses its mark. Also under an
+   active filter while the ratings are read again (owner, 2026-11-21: ADR 0014 amendment 3, §16).
 3. **The filter stays.** A new file is shown when it matches, which for a rating or label filter
    is known only once its rating is read; until then it is not shown under such a filter (as a
    tab load does today, ADR 0014 Q7).
 4. **The sort stays, and nothing already shown moves** (U14-Q5). **New:** a new file is placed
    where the chosen order puts it among the others; the order is not applied again to the whole
-   tab. With a capture-time order, a new file is placed when its capture time is read (F-Q6).
+   tab. With a capture-time order, a new file is placed when its capture time is read (F-Q6);
+   with a rating order, likewise when its rating is read (as the sort itself waits for the
+   ratings, U14-Q4). **The owner, 2026-11-21:** this also holds when RawStride lists its tabs
+   again after a move or an undo (the `_rejected` and `_picked` tabs in `relist_tabs`, T183, and
+   the tab the files come back to after an undo), which until then applied the whole order again
+   (step F1, T242). A delete only removes files and never applied the order again.
 5. **New:** the contact sheet does not jump. The image at the top of the visible part stays where
    it is on the screen, even when files are added above it.
 6. **New: RawStride's own temporary files are never listed.** `is_listed` leaves out names with
