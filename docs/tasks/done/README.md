@@ -245,3 +245,4 @@ was when the task was done, so "this file", "below" and "the Log" in T1–T115 m
 | [T236](T236-orientation-store.md) | ADR 0024 O3b: the shell's store of turns and its write queue (pw-loupe, logic only) |
 | [T237](T237-rotate-keys-and-menu.md) | ADR 0024 O3c: Rotate Left and Rotate Right in the shell (keys, menu, writes, rollback) |
 | [T238](T238-accept-the-hiddendataoffset-fix-warning.md) | Accept the write warning "Fixed incorrect HiddenDataOffset" by name (Sony ILCE-1 JPEGs) |
+| [T239](T239-writing-rotations-line.md) | A separate Tasks line "Writing rotations: {n}" (pw-loupe) |

@@ -74,6 +74,7 @@ pub fn import_done_text(copied: usize, failed: usize, cancelled: bool) -> String
 pub fn pending_write_text(write: PendingWrite) -> String {
     match write {
         PendingWrite::Ratings(count) => format!("Writing ratings: {count}"),
+        PendingWrite::Rotations(count) => format!("Writing rotations: {count}"),
         PendingWrite::Batch { current, total } => {
             format!("Saving metadata: {current} of {total}")
         }
@@ -145,6 +146,10 @@ mod tests {
         assert_eq!(
             pending_write_text(PendingWrite::Ratings(4)),
             "Writing ratings: 4"
+        );
+        assert_eq!(
+            pending_write_text(PendingWrite::Rotations(3)),
+            "Writing rotations: 3"
         );
         assert_eq!(
             pending_write_text(PendingWrite::Batch {

@@ -147,25 +147,32 @@ impl ImportRow {
 /// A pending write, one line each while it runs (U5-Q4).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PendingWrite {
-    /// Rating writes queued or sent but not yet confirmed (`metadata.pending_writes()`).
+    /// Rating writes queued or sent but not yet confirmed (`metadata.pending_rating_writes()`).
     Ratings(usize),
+    /// Rotation writes queued or sent but not yet confirmed (`metadata.pending_rotation_writes()`,
+    /// T239).
+    Rotations(usize),
     /// "Apply to All Marked": image `current` of `total` (`metadata.batch_progress()`).
     Batch { current: usize, total: usize },
     /// The metadata window's own write.
     Editor,
 }
 
-/// The pending writes to show, in this order: ratings, "Apply to All Marked", the window's write.
-/// A write that does not run gives no line. The window's own write is not shown beside a batch,
-/// whose writes it is part of.
+/// The pending writes to show, in this order: ratings, rotations (T239), "Apply to All Marked",
+/// the window's write. A write that does not run (a count of 0) gives no line. The window's own
+/// write is not shown beside a batch, whose writes it is part of.
 pub fn pending_writes(
     ratings: usize,
+    rotations: usize,
     batch: Option<(usize, usize)>,
     editor_saving: bool,
 ) -> Vec<PendingWrite> {
     let mut lines = Vec::new();
     if ratings > 0 {
         lines.push(PendingWrite::Ratings(ratings));
+    }
+    if rotations > 0 {
+        lines.push(PendingWrite::Rotations(rotations));
     }
     match batch {
         Some((current, total)) => lines.push(PendingWrite::Batch { current, total }),
@@ -602,11 +609,18 @@ mod tests {
 
     #[test]
     fn the_pending_write_lines_appear_and_go() {
-        assert_eq!(pending_writes(0, None, false), []);
-        assert_eq!(pending_writes(3, None, false), [PendingWrite::Ratings(3)]);
-        assert_eq!(pending_writes(0, None, true), [PendingWrite::Editor]);
+        assert_eq!(pending_writes(0, 0, None, false), []);
         assert_eq!(
-            pending_writes(2, Some((4, 9)), true),
+            pending_writes(3, 0, None, false),
+            [PendingWrite::Ratings(3)]
+        );
+        assert_eq!(
+            pending_writes(0, 5, None, false),
+            [PendingWrite::Rotations(5)]
+        );
+        assert_eq!(pending_writes(0, 0, None, true), [PendingWrite::Editor]);
+        assert_eq!(
+            pending_writes(2, 0, Some((4, 9)), true),
             [
                 PendingWrite::Ratings(2),
                 PendingWrite::Batch {
@@ -615,7 +629,26 @@ mod tests {
                 }
             ]
         );
-        assert_eq!(pending_writes(0, None, false), []);
+        assert_eq!(
+            pending_writes(2, 1, Some((4, 9)), true),
+            [
+                PendingWrite::Ratings(2),
+                PendingWrite::Rotations(1),
+                PendingWrite::Batch {
+                    current: 4,
+                    total: 9
+                }
+            ]
+        );
+        assert_eq!(
+            pending_writes(2, 1, None, true),
+            [
+                PendingWrite::Ratings(2),
+                PendingWrite::Rotations(1),
+                PendingWrite::Editor
+            ]
+        );
+        assert_eq!(pending_writes(0, 0, None, false), []);
     }
 
     #[test]

@@ -695,6 +695,19 @@ impl MetadataCache {
         self.ratings.pending() + self.orientations.pending()
     }
 
+    /// Rating writes that are queued or sent but not yet confirmed (T239): the Tasks area's
+    /// "Writing ratings" line.
+    pub fn pending_rating_writes(&self) -> usize {
+        self.ratings.pending()
+    }
+
+    /// Rotation writes that are queued or sent but not yet confirmed (T239): the Tasks area's
+    /// "Writing rotations" line. A turn that waits for its embedded value has no write yet and is
+    /// not counted.
+    pub fn pending_rotation_writes(&self) -> usize {
+        self.orientations.pending()
+    }
+
     /// Opens the metadata window's read of `image` (absolute path, ADR 0007 I10n, D16, T107): the
     /// read is asked for at once, unless a read is still in flight (its result is then dropped
     /// and this one sent by the next `poll`). False, and nothing asked for, when the file kind
@@ -2225,6 +2238,35 @@ mod tests {
         assert_eq!(cache.orientation(&other), Some(3));
         assert!(cache.is_pending(&other));
         assert_eq!(cache.pending_writes(), 1);
+    }
+
+    /// T239: rating writes and rotation writes are counted apart for their two Tasks lines, and
+    /// `pending_writes` is their sum; a turn waiting for its embedded value counts in neither.
+    #[test]
+    fn rating_and_rotation_writes_are_counted_apart() {
+        let path = turn_file("pw-loupe-turn-counted.ARW");
+        let mut cache = cache_with_orientation(&path, 6);
+        assert_eq!(cache.pending_rating_writes(), 0);
+        assert_eq!(cache.pending_rotation_writes(), 0);
+
+        if let Err(error) = cache.set_rating(&path, RatingKey::Stars(2)) {
+            panic!("supported rating path should be accepted: {error}");
+        }
+        assert_eq!(cache.turn(std::slice::from_ref(&path), true), Ok(vec![]));
+        assert_eq!(cache.pending_rating_writes(), 1);
+        assert_eq!(cache.pending_rotation_writes(), 1);
+        assert_eq!(cache.pending_writes(), 2);
+
+        // A turn of an image with no known value waits for its embedded value: no write yet.
+        let other = turn_file("pw-loupe-turn-counted-waiting.ARW");
+        assert_eq!(
+            cache.turn(std::slice::from_ref(&other), true),
+            Ok(vec![other.clone()])
+        );
+        assert_eq!(cache.waiting_orientations(), vec![other]);
+        assert_eq!(cache.pending_rating_writes(), 1);
+        assert_eq!(cache.pending_rotation_writes(), 1);
+        assert_eq!(cache.pending_writes(), 2);
     }
 
     /// T237 (plan O3 row, need (a)): a folder read that lands while a turn is queued or sent does

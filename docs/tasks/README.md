@@ -86,7 +86,6 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status |
 |---|---|---|
-| [T239](T239-writing-rotations-line.md) | A separate Tasks line "Writing rotations: {n}" (pw-loupe) | Open |
 
 ## Writing a task (owner and reviewer)
 

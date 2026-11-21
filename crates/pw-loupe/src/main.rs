@@ -5993,7 +5993,8 @@ impl Loupe {
         let window_width = ui.ctx().content_rect().width();
         let (min, max) = column_width_range(window_width);
         let pending = pending_writes(
-            self.metadata.pending_writes(),
+            self.metadata.pending_rating_writes(),
+            self.metadata.pending_rotation_writes(),
             self.metadata.batch_progress(),
             self.metadata.editor_saving(),
         );
