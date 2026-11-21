@@ -33,9 +33,10 @@ const DROP_WAIT: Duration = Duration::from_secs(2);
 const STOP_WAIT: Duration = Duration::from_millis(1500);
 
 /// What the watcher tells the shell. Each watch starts with `Started` or `Ended`; a live watch
-/// then gives `Changed` until it ends. The shell lists the folder again at `Started` (a file that
-/// arrived between the tab's listing and the watch's start would otherwise never be shown) and
-/// at `Changed` (ADR 0026 F3).
+/// then gives `Changed` until it ends. A watch started anew (`FolderWatcher::watch_again`) gives
+/// `Started` or `Ended` again, as a first watch does. The shell lists the folder again at
+/// `Started` (a file that arrived between the tab's listing and the watch's start would otherwise
+/// never be shown) and at `Changed` (ADR 0026 F3).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum WatchEvent {
     /// The folder's watch has started (its first read is issued): a change made from now on is
@@ -48,7 +49,7 @@ pub enum WatchEvent {
     /// The folder's watch could not start (the folder does not exist, cannot be opened, or its
     /// volume does not support notifications) or stopped (the drive is gone, the folder was
     /// deleted). `reason` is the system's error text, for the log only. The folder is not watched
-    /// again until it has left the set and been given again.
+    /// again until it has left the set and been given again, or until `watch_again` asks.
     Ended { folder: PathBuf, reason: String },
 }
 
@@ -61,6 +62,7 @@ fn call_wake(wake: &Wake) {
 }
 
 /// The watcher: one thread with one directory handle per watched folder (ADR 0026 §3.2).
+/// `set_folders` gives the set, `watch_again` starts one folder's watch anew.
 pub struct FolderWatcher {
     events_sender: Sender<WatchEvent>,
     events: Receiver<WatchEvent>,
@@ -135,6 +137,24 @@ impl FolderWatcher {
         self.answer_without_thread(folders);
     }
 
+    /// Starts the watch of `folder` anew (ADR 0026 F-Q3: Reload Folder, T252), whatever became of
+    /// the old one: a live watch is ended and opened again, an open still running is replaced,
+    /// and an ended watch is opened again. The new watch gives `Started` or `Ended` as a first
+    /// watch does. A folder not in the set (by `same_folder`) is left alone. Does not block.
+    /// Without a thread nothing is done: a folder in the set has already been answered with
+    /// `Ended`, and the shell lists such a tab itself (F-Q3).
+    pub fn watch_again(&mut self, folder: &Path) {
+        let Some(running) = &self.running else {
+            return;
+        };
+        if running.send_again(folder.to_path_buf()) {
+            return;
+        }
+        eprintln!("pw-loupe: the folder watcher has stopped");
+        self.running = None;
+        self.reason = "the folder watcher has stopped".to_string();
+    }
+
     /// Without a thread: each folder new to the set is answered with `Ended` at once.
     fn answer_without_thread(&mut self, folders: Vec<PathBuf>) {
         let change = plan_set(&self.unwatched, &folders, same_folder);
@@ -156,8 +176,9 @@ impl FolderWatcher {
     /// Blocks until the thread has applied the last `set_folders` made before this call (every
     /// watch of a folder that left the set has closed its handle, and every open still running
     /// for such a folder has come back and been closed) or `wait` has passed; true when applied.
-    /// Opens of folders still in the set do not count: applied means "nothing left open that
-    /// should not be". Without a thread, true at once (no handle is open).
+    /// Opens of folders still in the set do not count, except an open replaced by `watch_again`,
+    /// which is waited for as one of a folder that left the set: applied means "nothing left open
+    /// that should not be". Without a thread, true at once (no handle is open).
     pub fn wait_until_applied(&self, wait: Duration) -> bool {
         if self.running.is_none() {
             return true;
@@ -435,6 +456,8 @@ fn nearest_deadline<T>(items: &[(T, Instant)], now: Instant) -> Option<Duration>
 enum Control {
     /// A new set of folders, numbered.
     Set { number: u64, folders: Vec<PathBuf> },
+    /// Start the watch of this folder anew (`FolderWatcher::watch_again`).
+    Again(PathBuf),
     /// A helper thread's open of the watch with this key.
     Opened {
         key: usize,
@@ -638,6 +661,15 @@ mod sys {
             self.port.post()
         }
 
+        /// Asks for the watch of `folder` to be started anew; false when the thread is gone or
+        /// cannot be woken (as `send_set`).
+        pub(super) fn send_again(&self, folder: PathBuf) -> bool {
+            if self.control.send(Control::Again(folder)).is_err() {
+                return false;
+            }
+            self.port.post()
+        }
+
         /// Ends the thread and waits for it to have closed every handle, at most `wait`.
         pub(super) fn stop(self, wait: Duration) {
             if self.control.send(Control::Stop).is_ok() && self.port.post() {
@@ -794,7 +826,7 @@ mod sys {
         Opening(usize),
         Live(Watch),
         /// Its watch could not start or stopped; kept so it is not opened again while it stays
-        /// in the set.
+        /// in the set, unless `watch_again` asks.
         Ended,
     }
 
@@ -807,11 +839,13 @@ mod sys {
         wake: Wake,
         applied: Arc<Applied>,
         entries: Vec<Entry>,
-        /// Watches whose folder left the set (or every watch, after `Stop`), each waiting for its
-        /// cancelled read's completion before it is closed, at most until its deadline.
+        /// Watches whose folder left the set or that `watch_again` replaced for a folder still in
+        /// the set (or every watch, after `Stop`), each waiting for its cancelled read's
+        /// completion before it is closed, at most until its deadline.
         ending: Vec<(Watch, Instant)>,
-        /// The keys of opens still running on a helper thread for folders that left the set;
-        /// each is closed as soon as it comes back.
+        /// The keys of opens still running on a helper thread for folders that left the set, or
+        /// replaced by `watch_again` for a folder still in the set; each is closed as soon as it
+        /// comes back.
         opens_to_close: Vec<usize>,
         quiet: QuietMoment,
         next_key: usize,
@@ -885,6 +919,7 @@ mod sys {
 
         fn drain_control(&mut self) {
             let mut newest: Option<(u64, Vec<PathBuf>)> = None;
+            let mut again = Vec::new();
             let mut opened = Vec::new();
             let mut stop = false;
             while let Ok(message) = self.control_receiver.try_recv() {
@@ -894,6 +929,7 @@ mod sys {
                             newest = Some((number, folders));
                         }
                     }
+                    Control::Again(folder) => again.push(folder),
                     Control::Opened { key, result } => opened.push((key, result)),
                     Control::Stop => stop = true,
                 }
@@ -905,6 +941,11 @@ mod sys {
             if let Some((number, folders)) = newest {
                 self.apply(&folders);
                 self.to_publish = Some(number);
+            }
+            // After the newest set, so an `Again` acts on it, and before the opens that came
+            // back, so one it replaces is closed through `opens_to_close`.
+            for folder in again {
+                self.again(&folder);
             }
             for (key, result) in opened {
                 self.opened(key, result);
@@ -938,35 +979,63 @@ mod sys {
                 }
             }
             for folder in change.open {
-                let key = self.next_key;
-                let Some(next_key) = key.checked_add(1) else {
-                    self.entries.push(Entry {
-                        folder: folder.clone(),
-                        state: State::Ended,
-                    });
+                let state = self.begin_open(&folder);
+                self.entries.push(Entry { folder, state });
+            }
+        }
+
+        /// Starts a new open of `folder` (a new key, `spawn_open`) and gives the state for its
+        /// entry: `State::Opening`, or `State::Ended` with `WatchEvent::Ended` sent when no key
+        /// is left or the helper thread cannot be started.
+        fn begin_open(&mut self, folder: &Path) -> State {
+            let key = self.next_key;
+            let Some(next_key) = key.checked_add(1) else {
+                self.send(WatchEvent::Ended {
+                    folder: folder.to_path_buf(),
+                    reason: "the folder watcher has no completion key left".to_string(),
+                });
+                return State::Ended;
+            };
+            self.next_key = next_key;
+            match self.spawn_open(key, folder.to_path_buf()) {
+                Ok(()) => State::Opening(key),
+                Err(error) => {
                     self.send(WatchEvent::Ended {
-                        folder,
-                        reason: "the folder watcher has no completion key left".to_string(),
+                        folder: folder.to_path_buf(),
+                        reason: error.to_string(),
                     });
-                    continue;
-                };
-                self.next_key = next_key;
-                match self.spawn_open(key, folder.clone()) {
-                    Ok(()) => self.entries.push(Entry {
-                        folder,
-                        state: State::Opening(key),
-                    }),
-                    Err(error) => {
-                        self.entries.push(Entry {
-                            folder: folder.clone(),
-                            state: State::Ended,
-                        });
-                        self.send(WatchEvent::Ended {
-                            folder,
-                            reason: error.to_string(),
-                        });
-                    }
+                    State::Ended
                 }
+            }
+        }
+
+        /// Starts the watch of a folder in the set anew (`Control::Again`): a live watch is ended
+        /// (its completion is taken from `ending` and gives no `Ended`), an open still running is
+        /// closed when it comes back, and a new open is started; the entry keeps its place and
+        /// its spelling. A folder not in the set: nothing.
+        fn again(&mut self, folder: &Path) {
+            let Some(index) = self
+                .entries
+                .iter()
+                .position(|entry| same_folder(&entry.folder, folder))
+            else {
+                return;
+            };
+            let Some(entry) = self.entries.get_mut(index) else {
+                return;
+            };
+            let given = entry.folder.clone();
+            match std::mem::replace(&mut entry.state, State::Ended) {
+                State::Live(watch) => {
+                    self.begin_end(watch);
+                    self.quiet.forget(&given);
+                }
+                State::Opening(key) => self.opens_to_close.push(key),
+                State::Ended => {}
+            }
+            let state = self.begin_open(&given);
+            if let Some(entry) = self.entries.get_mut(index) {
+                entry.state = state;
             }
         }
 
@@ -1128,6 +1197,10 @@ mod sys {
         }
 
         pub(super) fn send_set(&self, _number: u64, _folders: Vec<PathBuf>) -> bool {
+            match self.0 {}
+        }
+
+        pub(super) fn send_again(&self, _folder: PathBuf) -> bool {
             match self.0 {}
         }
 
@@ -1839,6 +1912,115 @@ mod tests {
             events_until(&mut watcher, Duration::from_secs(5), |_| true),
             vec![WatchEvent::Started(folder.clone())]
         );
+    }
+
+    // --- `watch_again` (T252) ---
+
+    #[cfg(windows)]
+    #[test]
+    fn a_watched_folder_given_to_watch_again_gets_one_more_started_and_then_sees_a_new_file() {
+        let temp = TempDir::new();
+        let folder = temp.folder("watch-again");
+        let mut watcher = FolderWatcher::start(Box::new(|| {}));
+        watcher.set_folders(vec![folder.clone()]);
+        wait_until_watching(&mut watcher, &folder);
+        watcher.watch_again(&folder);
+        assert_eq!(
+            events_until(&mut watcher, Duration::from_secs(5), |_| true),
+            vec![WatchEvent::Started(folder.clone())]
+        );
+        touch(&folder.join("x.jpg"));
+        assert_eq!(
+            events_until(&mut watcher, Duration::from_secs(5), |_| true),
+            vec![changed(&folder)]
+        );
+        assert_eq!(events_for(&mut watcher, Duration::from_secs(1)), vec![]);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn watch_again_of_a_folder_not_in_the_set_gives_nothing_for_it() {
+        let temp = TempDir::new();
+        let watched = temp.folder("in-the-set");
+        let other = temp.folder("not-in-the-set");
+        let mut watcher = FolderWatcher::start(Box::new(|| {}));
+        watcher.set_folders(vec![watched.clone()]);
+        wait_until_watching(&mut watcher, &watched);
+        watcher.watch_again(&other);
+        touch(&other.join("x.jpg"));
+        assert_eq!(
+            events_for(&mut watcher, Duration::from_millis(1500)),
+            vec![]
+        );
+        touch(&watched.join("x.jpg"));
+        assert_eq!(
+            events_until(&mut watcher, Duration::from_secs(5), |_| true),
+            vec![changed(&watched)]
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn an_ended_folder_created_and_given_to_watch_again_is_watched() {
+        let temp = TempDir::new();
+        let folder = temp.0.join("created-later");
+        let mut watcher = FolderWatcher::start(Box::new(|| {}));
+        watcher.set_folders(vec![folder.clone()]);
+        let events = events_until(&mut watcher, Duration::from_secs(5), |_| true);
+        assert!(
+            matches!(events.as_slice(), [WatchEvent::Ended { folder: ended, .. }] if *ended == folder),
+            "{events:?}"
+        );
+        std::fs::create_dir_all(&folder).unwrap();
+        watcher.watch_again(&folder);
+        assert_eq!(
+            events_until(&mut watcher, Duration::from_secs(5), |_| true),
+            vec![WatchEvent::Started(folder.clone())]
+        );
+        touch(&folder.join("x.jpg"));
+        assert_eq!(
+            events_until(&mut watcher, Duration::from_secs(5), |_| true),
+            vec![changed(&folder)]
+        );
+    }
+
+    /// A guard that a folder outside the set is never opened by `watch_again`; it does not tell
+    /// apart whether the set and the `Again` were drained together or one after the other.
+    #[cfg(windows)]
+    #[test]
+    fn watch_again_right_after_a_set_without_the_folder_opens_nothing() {
+        let temp = TempDir::new();
+        let folder = temp.folder("left-out");
+        let mut watcher = FolderWatcher::start(Box::new(|| {}));
+        watcher.set_folders(vec![folder.clone()]);
+        wait_until_watching(&mut watcher, &folder);
+        watcher.set_folders(Vec::new());
+        watcher.watch_again(&folder);
+        assert!(watcher.wait_until_applied(STOP_WAIT + Duration::from_secs(1)));
+        let events = events_for(&mut watcher, Duration::from_secs(1));
+        assert!(!events.iter().any(is_started), "{events:?}");
+    }
+
+    #[test]
+    fn without_a_thread_watch_again_sends_nothing() {
+        let (events_sender, events) = mpsc::channel();
+        let mut watcher = FolderWatcher {
+            events_sender,
+            events,
+            wake: Arc::new(Mutex::new(Box::new(|| {}))),
+            applied: Arc::new(Applied::default()),
+            number: 0,
+            running: None,
+            unwatched: Vec::new(),
+            reason: "no thread".to_string(),
+        };
+        let temp = TempDir::new();
+        let folder = temp.folder("no-thread-again");
+        watcher.set_folders(vec![folder.clone()]);
+        assert!(matches!(watcher.try_recv(), Some(WatchEvent::Ended { .. })));
+        assert_eq!(watcher.try_recv(), None);
+        watcher.watch_again(&folder);
+        assert_eq!(watcher.try_recv(), None);
     }
 
     #[test]

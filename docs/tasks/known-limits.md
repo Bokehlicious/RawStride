@@ -264,6 +264,14 @@ with ADR 0026 F3, in `plans/adr-0018-0025-steps.md`.)
   noted, since the notes compare paths without reading the disk. Both only cost F3's fallback a
   listing on activation; a `subst` letter mapped onto a card is also not left out before an
   eject.
+- *A watch that goes dead without an error* (T252): when Windows does not end a watch whose
+  drive went away (a USB stick pulled out and put back, likely), the tab no longer follows the
+  folder and nothing says so; F5 starts the watch anew (`watch_again`). No device notification
+  is watched (ADR 0026 F-Q3).
+- *F5 on a folder whose open hangs* (T252): `watch_again` replaces an open still waiting on an
+  unreachable network folder, which keeps `wait_until_applied` from returning true until that
+  open returns (as "A hung open holds back applied"); an import that ejects right after waits
+  its 2 s and starts anyway.
 
 ## Tabs following the disk (ADR 0026 F3)
 

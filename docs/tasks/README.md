@@ -87,7 +87,6 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status |
 |---|---|---|
-| [T252](T252-reload-folder-starts-the-watch-anew.md) | ADR 0026 F3d: Reload Folder starts the folder's watch anew | Open |
 
 ## Writing a task (owner and reviewer)
 

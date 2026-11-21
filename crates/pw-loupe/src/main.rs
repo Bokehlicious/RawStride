@@ -2457,7 +2457,14 @@ impl Loupe {
     /// sort is followed. A tab without a folder: nothing. The tab's notes of the folder watcher
     /// are cleared (T251): `changed_on_disk`, since the folder is listed now, and `unwatched`, so
     /// its watch is tried again (`follow_tab_folders`; a watch that still cannot start marks it
-    /// again).
+    /// again). Before the listing, the folder's watch is started anew every time
+    /// (`FolderWatcher::watch_again`, T252), whatever the `unwatched` note was, since a watch can
+    /// be lost without an `Ended` (a USB stick pulled out and put back) or kept as ended by
+    /// another tab of the same folder. A folder the `unwatched` note left out of the watcher's set
+    /// is not touched by it; the cleared note puts it back into the next set, which opens a new
+    /// watch (when that set is drained with the `Again`, the open it began is replaced once: one
+    /// more open, still one `Started`). The new watch's `Started` lists the folder once more
+    /// (T249); that second listing is expected.
     fn reload_active_tab(&mut self, ctx: &egui::Context) {
         let Some(folder) = self.tabs.active().and_then(|tab| tab.folder.clone()) else {
             return;
@@ -2466,6 +2473,7 @@ impl Loupe {
             tab.changed_on_disk = false;
             tab.unwatched = false;
         }
+        self.folder_watcher.watch_again(&folder);
         let listing = list_folder(&folder).map(|(files, _)| files);
         if listing.is_ok() {
             self.anchor_from_note();
