@@ -254,6 +254,33 @@ impl AddedFiles {
             .is_some_and(|added| std::mem::take(&mut added.check))
     }
 
+    /// Replaces the recorded stamp of a kept path with `stamp` (also `None`), after RawStride's own
+    /// write of the file (T255), so that write does not count as a change. A kept path without a
+    /// stamp keeps none (its next request records one), and a path not kept stays not kept. The
+    /// mark "check when answered" is left as it is.
+    pub fn restamp(&mut self, path: &Path, stamp: Option<FileStamp>) {
+        if let Some(recorded) = self
+            .files
+            .get_mut(path)
+            .and_then(|added| added.stamp.as_mut())
+        {
+            *recorded = stamp;
+        }
+    }
+
+    /// The kept path whose resolved form is `absolute` (T255), resolved as `tab_pending` resolves a
+    /// tab path: a relative kept path joined to `cwd`; an absolute one, or any path when `cwd` is
+    /// `None`, as it is. `None` when no kept path matches.
+    pub fn kept_as(&self, absolute: &Path, cwd: Option<&Path>) -> Option<PathBuf> {
+        self.files
+            .keys()
+            .find(|path| match cwd {
+                Some(cwd) if !path.is_absolute() => cwd.join(path) == absolute,
+                _ => path.as_path() == absolute,
+            })
+            .cloned()
+    }
+
     /// The path's thumbnail is made anew: it stays kept, its stamp and mark are dropped (the next
     /// request records a new stamp).
     pub fn made_anew(&mut self, path: &Path) {
@@ -600,6 +627,59 @@ mod tests {
             added.note_requested(path, Some(stamp(3, 3)));
             assert!(added.is_stale(path, Some(stamp(1, 1))));
         }
+    }
+
+    /// T255: `restamp` replaces a recorded stamp (also with `None`), does nothing for a kept path
+    /// without a stamp or a path not kept, and leaves the mark.
+    #[test]
+    fn added_files_restamp_replaces_only_a_recorded_stamp_and_leaves_the_mark() {
+        let mut added = AddedFiles::default();
+        let a = PathBuf::from("a.jpg");
+        let b = PathBuf::from("b.jpg");
+        added.add(&[a.clone(), b.clone()]);
+        added.note_requested(&a, Some(stamp(1, 1)));
+        added.restamp(&a, Some(stamp(2, 2)));
+        assert!(!added.is_stale(&a, Some(stamp(2, 2))));
+        assert!(added.is_stale(&a, Some(stamp(1, 1))));
+        added.restamp(&a, None);
+        assert!(!added.is_stale(&a, None));
+        assert!(added.is_stale(&a, Some(stamp(2, 2))));
+
+        added.restamp(&b, Some(stamp(5, 5)));
+        assert!(!added.is_stale(&b, Some(stamp(6, 6))));
+        added.note_requested(&b, Some(stamp(7, 7)));
+        assert!(!added.is_stale(&b, Some(stamp(7, 7))));
+        assert!(added.is_stale(&b, Some(stamp(5, 5))));
+
+        let other = Path::new("other.jpg");
+        added.restamp(other, Some(stamp(1, 1)));
+        assert!(!added.contains(other));
+
+        added.mark_check(&a);
+        added.restamp(&a, Some(stamp(3, 3)));
+        assert!(added.take_check(&a));
+    }
+
+    /// T255: `kept_as` resolves a relative kept path against `cwd`, an absolute one as it is, and
+    /// every path as it is without a `cwd`.
+    #[test]
+    fn added_files_kept_as_finds_the_kept_path_by_its_resolved_form() {
+        let cwd = std::env::temp_dir();
+        let relative = PathBuf::from("rel.jpg");
+        let absolute = cwd.join("sub").join("abs.jpg");
+        let mut added = AddedFiles::default();
+        added.add(&[relative.clone(), absolute.clone()]);
+
+        assert_eq!(
+            added.kept_as(&cwd.join("rel.jpg"), Some(&cwd)),
+            Some(relative.clone())
+        );
+        assert_eq!(added.kept_as(&absolute, Some(&cwd)), Some(absolute.clone()));
+        assert_eq!(added.kept_as(&absolute, None), Some(absolute.clone()));
+        assert_eq!(added.kept_as(&cwd.join("rel.jpg"), None), None);
+        assert_eq!(added.kept_as(&relative, None), Some(relative.clone()));
+        assert_eq!(added.kept_as(&cwd.join("other.jpg"), Some(&cwd)), None);
+        assert_eq!(added.kept_as(&cwd.join("other.jpg"), None), None);
     }
 
     /// T254: `retain` drops the paths it refuses.

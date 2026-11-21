@@ -1717,6 +1717,8 @@ impl Loupe {
     /// from the stamp taken before its thumbnail was asked for has its thumbnail made anew
     /// (`made_anew_if_stale`); one still being made is marked and checked when it comes back
     /// (`poll_thumbnails`). So a file still being written is read again at most once per listing.
+    /// RawStride's own writes do not count (T255): a file it is writing is skipped, and its stamp
+    /// is renewed when the write answers.
     fn follow_disk_changes(&mut self, ctx: &egui::Context) {
         let ready = self.ratings_ready();
         let relisted = match self.list_active_from_disk(ready) {
@@ -1789,16 +1791,23 @@ impl Loupe {
     /// anew (the cached ones forgotten, the cell set to missing, its texture kept until the new
     /// one replaces it, as after a turn); a cell still requested (its read may have begun before
     /// the last write) is marked, and checked when it comes back (`poll_thumbnails`). Kept files
-    /// of other tabs are not read.
+    /// of other tabs are not read. RawStride's own writes do not count (T255): a kept file
+    /// RawStride is writing (`tab_pending`) is skipped, neither compared nor marked; its stamp is
+    /// renewed when the write answers (`draw`), and the next listing compares against that.
     fn made_anew_if_stale(&mut self, ctx: &egui::Context) {
         let Some(tab) = self.tabs.active() else {
             return;
         };
+        let cwd = std::env::current_dir().ok();
+        let pending = tab_pending(&self.metadata, cwd.as_deref());
         let kept: Vec<(usize, PathBuf)> = self
             .added_files
             .paths()
             .into_iter()
             .filter_map(|path| {
+                if pending(&path) {
+                    return None;
+                }
                 let index = tab.files.iter().position(|file| *file == path)?;
                 Some((index, path))
             })
@@ -2696,6 +2705,8 @@ impl Loupe {
     /// when it comes back, and made anew when the file still differs from the stamp taken before
     /// it was asked for (ADR 0026 §3.2, the addition to F-Q7, T254); so it is asked for again even
     /// when no later listing comes, but not after every answer. Other paths are not read.
+    /// RawStride's own writes do not count (T255): while RawStride is writing the file
+    /// (`tab_pending`), the mark is taken but nothing is made anew.
     fn poll_thumbnails(&mut self, ctx: &egui::Context) {
         let cwd = std::env::current_dir().ok();
         loop {
@@ -2731,6 +2742,7 @@ impl Loupe {
                     }
                     if self.added_files.contains(&event.path)
                         && self.added_files.take_check(&event.path)
+                        && !tab_pending(&self.metadata, cwd.as_deref())(&event.path)
                         && self
                             .added_files
                             .is_stale(&event.path, file_stamp(&event.path))
@@ -6874,12 +6886,35 @@ impl Loupe {
         // thumbnails (T232, T237).
         self.follow_orientations();
         // A kept histogram follows RawStride's own metadata writes of its file (U7c-Q7, T145).
+        // RawStride's own write of a file another program added renews its stamp, so the write
+        // does not make its thumbnail anew; a cell read while the safe write had renamed the
+        // file away is made anew (T255). A failed write left the file as it was.
+        let cwd = std::env::current_dir().ok();
         for written in self.metadata.take_written() {
             self.histograms.written(
                 &written.path,
                 written.succeeded,
                 self.histogram_reader.reads(),
             );
+            if !written.succeeded {
+                continue;
+            }
+            let Some(kept) = self.added_files.kept_as(&written.path, cwd.as_deref()) else {
+                continue;
+            };
+            self.added_files.restamp(&kept, file_stamp(&written.path));
+            let index = self
+                .tabs
+                .active()
+                .and_then(|tab| tab.files.iter().position(|file| *file == kept));
+            if let Some(index) = index
+                && matches!(self.thumb_grid.state(index), CellState::Failed(_))
+            {
+                self.thumb_worker.forget_path(&kept);
+                self.thumb_grid.forget(index);
+                self.added_files.made_anew(&kept);
+                ctx.request_repaint();
+            }
         }
         // Every failure also goes to the Tasks area's error list (U5-Q5).
         if !failures.is_empty() {

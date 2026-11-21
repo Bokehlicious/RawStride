@@ -294,8 +294,16 @@ with ADR 0026 F3, in `plans/adr-0018-0025-steps.md`.)
   the end of the copy normally differs.
 - *RawStride's own JPEG writes give a listing* (T254): every rating or turn RawStride writes into
   a JPEG (the safe write sets its write time) gives a `Changed` and a folder listing on the UI
-  thread, and a kept file gets its thumbnail made once more. While a kept file's cell waits for
-  its thumbnail, its size and write time are read on the UI thread each frame.
+  thread (a kept file's thumbnail is no longer made once more: T255). While a kept file's cell
+  waits for its thumbnail, its size and write time are read on the UI thread each frame.
+- *RawStride's write of a file still being copied in* (T255): the write renews the kept file's
+  stamp whatever changed it before, so a thumbnail made from the part written so far stays until
+  F5 when RawStride writes the file (a rating or turn) during its copy, or after the copy's last
+  change but before the listing that would have found it changed; a mark set by an earlier
+  listing is dropped when its thumbnail comes back while RawStride writes the file. A thumbnail
+  read that failed while the safe write had renamed the file away, and whose answer comes after
+  the write's answer, stays "Unreadable" until F5 (rare: the gap between the safe write's two
+  renames; any turned JPEG could already meet it).
 - *A rating key on a new image whose rating is not read yet* starts from no rating, as during a
   folder read.
 - *The listing runs on the UI thread,* as Reload Folder and opening a folder: a network folder

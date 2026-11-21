@@ -87,7 +87,6 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status |
 |---|---|---|
-| [T255](T255-own-writes-keep-the-thumbnail.md) | ADR 0026 F3f: RawStride's own write of an added file does not make its thumbnail anew (pw-loupe) | Open |
 
 ## Writing a task (owner and reviewer)
 
