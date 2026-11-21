@@ -87,10 +87,13 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status |
 |---|---|---|
+| [T249](T249-folder-follow-building-blocks.md) | ADR 0026 F3a: a listing that fails on an entry error, the watch's start, the status texts | Blocked |
+| [T250](T250-reading-only-new-files.md) | ADR 0026 F3b: the ratings of only the new files, files waiting for their rating, Reload Folder reads the embedded turns again | Blocked |
+| [T251](T251-tabs-follow-the-disk.md) | ADR 0026 F3c: the tabs follow their folders on disk | Blocked |
 
 ## Writing a task (owner and reviewer)
 
-- **Number:** the next free number after the highest in this folder and `done/` (T249 next).
+- **Number:** the next free number after the highest in this folder and `done/` (T252 next).
 - **File:** `docs/tasks/T246-<a-few-words>.md`; three digits, lower case, words joined by `-`.
 - **Index:** add a row to "Open tasks" above and keep its status in step with the file's heading.
 - **Size (owner, 2026-11-15, after T142):** one task is one layer (a C++ shim or a core crate, or
