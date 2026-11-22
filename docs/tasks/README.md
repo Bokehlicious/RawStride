@@ -87,7 +87,6 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status |
 |---|---|---|
-| [T273](T273-dng-damage-kinds-measured.md) | ADR 0007 §9.7 Q23: which checks refuse other kinds of DNG damage? (pw-imagecheck example) | Open |
 | [T274](T274-d8-allowance-dropped.md) | ADR 0007 §9.7 point 5: D8's allowance dropped, one more validation warning always refused | Open |
 
 ## Writing a task (owner and reviewer)

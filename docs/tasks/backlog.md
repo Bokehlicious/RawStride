@@ -62,6 +62,11 @@ Reorganised on 2026-11-21 (owner): the earlier file mixed these three kinds and 
   comment in `pw-metadata` still says in the present tense that the safe write makes a second
   call for the checksum and restarts after a TIFF write; both are dropped since T272 (ADR 0007
   §9.7). Comment only; fix it with the next task that touches the example.
+- **The work folder of `examples/check_timing.rs` and `examples/dng_damage.rs`** (T273's review,
+  2026-11-22): both make a `--work` folder before they check that it is not a source file's
+  folder or inside one, so a refused folder is left behind, empty, where the sources are. Check
+  first (on the parent of a folder that does not exist yet), then make it; with the next task
+  that touches either example.
 - **A timeout when ExifTool hangs** (process supervision across threads). Today only the shutdown
   has a timeout (`SHUTDOWN_TIMEOUT` in `pw-metadata`'s `exiftool.rs`). A worker that never answers
   also holds a delete, a move and an "Open in" request (`known-limits.md`).

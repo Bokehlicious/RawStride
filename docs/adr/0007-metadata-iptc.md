@@ -1058,6 +1058,9 @@ listed under the table (§17.1).
   restart dropped, the checksum checked) and T273 (other kinds of DNG damage measured, for Q23).
   T270 and T271 done 2026-11-22 (13.64 shipped and pinned; 13.64 the lowest version, §11, D9).
   T272 done 2026-11-22 (one call and no restart; the stored checksum checked: §5.2, §9.2, §9.3).
+  T273 done 2026-11-22 (seven kinds of DNG damage; none refused only by the unpack: the analysis
+  `docs/analyses/2026-11-21-metadata-write-time.md`, "Measured in T273"); §9.7 point 4 (Q23)
+  waits for the owner's decision on the unpack.
 - Revision 31 (D8 dropped, §9.7 point 5): task T274 written 2026-11-22.
 
 ## Revision history

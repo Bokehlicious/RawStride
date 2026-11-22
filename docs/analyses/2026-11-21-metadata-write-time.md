@@ -630,6 +630,159 @@ The three runs of each row lay close together: within about 3 % of each other in
    of processes is the owner's decision (ADR 0007 §9.6 point 2, Q18; T268 makes the app use it);
    nothing above is proposed as decided.
 
+## Measured in T273 (Q23: other kinds of DNG damage)
+
+- Build: `cargo run --release -p pw-imagecheck --example dng_damage` (T273,
+  [`dng_damage.rs`](../../crates/pw-imagecheck/examples/dng_damage.rs)), at commit `5fa156b`
+  (`feature/gui-workspace`) with the example added, uncommitted. The example finds the main RAW
+  image's IFD with its own small TIFF reader (IFD0's chain and every IFD's `SubIFDs`, depth first;
+  the first IFD whose `NewSubfileType` is 0 or missing and that has strip or tile offsets), makes
+  one damaged copy per damage kind from a fresh copy of the original (only the named bytes changed
+  in place, the length unchanged), and checks each against an unchanged copy of the original in a
+  child process of its own (a limit of 120 s; no child crashed or ran out of time). **ExifTool
+  13.64**, the one `ExifTool::start` finds: `exiftool` on PATH
+  (`%LOCALAPPDATA%\Programs\ExifTool-13.64`); there is no `exiftool.exe` in the example's folder.
+- Measured 2026-11-22 on thanos: the seven DNGs of T264 (the five `IMG_20261026_*.dng`,
+  `TN002512.DNG`, `TN002513.DNG`) from `D:\PhotoWorkflowData\RAW`, copied into a new work folder
+  under `%TEMP%` on C: (the default), **warm cache**, one run per copy. The work folder was gone
+  afterwards.
+- The checks, as T264's but with the snapshot comparison added: **the snapshot comparison** of the
+  safe write (§9.3 points 1–3): `ExifTool::snapshot` of the original and of the copy, each by a new
+  ExifTool process, then `verify_copy(original, copy, &WritePlan::default())`, a plan that writes
+  nothing, so any change in the listing, the hash or the validation is refused; its time is the
+  two snapshots and `verify_copy`, without the processes' starts. **The image data hash** alone
+  (`ExifTool::image_data_hash`; the damaged copy's call alone is timed). **The preview
+  comparison** alone (`check_copy` with `FileKind::Tiff`). **LibRaw's open** and **LibRaw's
+  unpack** through its C API (the unpack refused by a return code other than 0 or a data error).
+  **The shim** (`Session::open_with_diagnostics`). **The whole check**
+  (`RawImageCheck::without_release().check_copy(…, FileKind::Dng)`). `verify_copy` always allows
+  keys ending in `Offset`, `Offsets` or `Start` (`verify.rs`), so for a and b only the image data
+  hash or the validation can make the snapshot comparison refuse.
+- The damage kinds: **a.** the first strip or tile offset + 4096; **b.** the first two strip or
+  tile offsets exchanged; **c.** the first strip or tile byte count halved; **d.** 4096 bytes set
+  to 0 in the middle of the first strip or tile (offsets and counts unchanged); **e.** the RAW
+  IFD's `ImageWidth` − 16; **f.** its `Compression` changed to 1 (it was 7 in every file); **g.**
+  the pointer that leads to the RAW IFD set past the end of the file.
+
+Each file's RAW IFD:
+
+| File | RAW IFD | Compression | Size | Pieces | Where the piece tags' values lie |
+|---|---|---:|---|---|---|
+| `IMG_20261026_062851.dng` | IFD0 | 7 | 4096 × 3072 | 64 tiles | outside the entries (LONG lists) |
+| `IMG_20261026_084628.dng` | IFD0 | 7 | 4096 × 3072 | 64 tiles | outside the entries (LONG lists) |
+| `IMG_20261026_091722.dng` | IFD0 | 7 | 4096 × 3072 | 64 tiles | outside the entries (LONG lists) |
+| `IMG_20261026_092349.dng` | IFD0 | 7 | 4096 × 3072 | 64 tiles | outside the entries (LONG lists) |
+| `IMG_20261026_092351.dng` | IFD0 | 7 | 4096 × 3072 | 64 tiles | outside the entries (LONG lists) |
+| `TN002512.DNG` | IFD0 `SubIFDs[0]` | 7 | 6112 × 4064 | 1 strip | in the entries (LONG) |
+| `TN002513.DNG` | IFD0 `SubIFDs[0]` | 7 | 6112 × 4064 | 1 strip | in the entries (LONG) |
+
+So g was skipped for the five phone DNGs (their RAW IFD is IFD0: breaking the header's pointer
+makes the whole file unreadable, which any check finds) and b for the two `TN` files (one strip).
+In the `TN` files the pointer of g is IFD0's `SubIFDs[0]`, in a value list outside its entry
+(byte 626). `ImageWidth` and `Compression` lay in their entries in every file. 42 damaged copies
+were made and checked.
+
+Which check refuses each damaged copy ("refused" or "passed", and the time in ms; "not run": the
+unpack after a failed open):
+
+| File | Damage | Snapshot comparison | Image data hash | Preview comparison | LibRaw open | LibRaw unpack | Shim | `check_copy` (DNG) |
+|---|---|---|---|---|---|---|---|---|
+| `IMG_20261026_062851.dng` | a. data moved | refused, 741 | refused, 36 | passed, 5 | passed, 1 | passed, 0 | passed, 0 | passed, 4 |
+| `IMG_20261026_062851.dng` | b. two pieces swapped | refused, 742 | refused, 37 | passed, 4 | passed, 1 | passed, 252 | passed, 257 | passed, 259 |
+| `IMG_20261026_062851.dng` | c. a short piece | refused, 758 | refused, 36 | passed, 5 | passed, 1 | passed, 251 | passed, 256 | passed, 262 |
+| `IMG_20261026_062851.dng` | d. data zeroed | refused, 738 | refused, 37 | passed, 5 | passed, 1 | passed, 252 | passed, 253 | passed, 262 |
+| `IMG_20261026_062851.dng` | e. a wrong width | refused, 746 | passed, 36 | passed, 5 | passed, 1 | passed, 251 | passed, 254 | passed, 259 |
+| `IMG_20261026_062851.dng` | f. a wrong compression | refused, 743 | passed, 36 | passed, 4 | passed, 1 | refused, 49 | refused, 50 | refused, 307 |
+| `IMG_20261026_062851.dng` | g. a broken link | skipped: the RAW IFD is IFD0 | – | – | – | – | – | – |
+| `IMG_20261026_084628.dng` | a. data moved | refused, 743 | refused, 37 | passed, 5 | passed, 1 | passed, 0 | passed, 0 | passed, 5 |
+| `IMG_20261026_084628.dng` | b. two pieces swapped | refused, 745 | refused, 37 | passed, 5 | passed, 1 | passed, 248 | passed, 249 | passed, 259 |
+| `IMG_20261026_084628.dng` | c. a short piece | refused, 745 | refused, 37 | passed, 5 | passed, 1 | passed, 251 | passed, 255 | passed, 254 |
+| `IMG_20261026_084628.dng` | d. data zeroed | refused, 748 | refused, 43 | passed, 4 | passed, 1 | passed, 248 | passed, 253 | passed, 257 |
+| `IMG_20261026_084628.dng` | e. a wrong width | refused, 740 | passed, 37 | passed, 4 | passed, 1 | passed, 246 | passed, 249 | passed, 257 |
+| `IMG_20261026_084628.dng` | f. a wrong compression | refused, 746 | passed, 37 | passed, 5 | passed, 1 | refused, 49 | refused, 49 | refused, 301 |
+| `IMG_20261026_084628.dng` | g. a broken link | skipped: the RAW IFD is IFD0 | – | – | – | – | – | – |
+| `IMG_20261026_091722.dng` | a. data moved | refused, 808 | refused, 38 | passed, 4 | passed, 1 | passed, 0 | passed, 0 | passed, 4 |
+| `IMG_20261026_091722.dng` | b. two pieces swapped | refused, 799 | refused, 39 | passed, 4 | passed, 1 | passed, 248 | passed, 248 | passed, 259 |
+| `IMG_20261026_091722.dng` | c. a short piece | refused, 807 | refused, 38 | passed, 4 | passed, 1 | passed, 248 | passed, 249 | passed, 256 |
+| `IMG_20261026_091722.dng` | d. data zeroed | refused, 812 | refused, 38 | passed, 4 | passed, 1 | passed, 247 | passed, 252 | passed, 254 |
+| `IMG_20261026_091722.dng` | e. a wrong width | refused, 819 | passed, 38 | passed, 4 | passed, 1 | passed, 248 | passed, 249 | passed, 256 |
+| `IMG_20261026_091722.dng` | f. a wrong compression | refused, 804 | passed, 39 | passed, 4 | passed, 1 | refused, 49 | refused, 49 | refused, 300 |
+| `IMG_20261026_091722.dng` | g. a broken link | skipped: the RAW IFD is IFD0 | – | – | – | – | – | – |
+| `IMG_20261026_092349.dng` | a. data moved | refused, 839 | refused, 59 | passed, 6 | passed, 1 | passed, 0 | passed, 0 | passed, 6 |
+| `IMG_20261026_092349.dng` | b. two pieces swapped | refused, 839 | refused, 60 | passed, 6 | passed, 1 | passed, 265 | passed, 268 | passed, 272 |
+| `IMG_20261026_092349.dng` | c. a short piece | refused, 844 | refused, 59 | passed, 6 | passed, 1 | passed, 266 | passed, 270 | passed, 272 |
+| `IMG_20261026_092349.dng` | d. data zeroed | refused, 858 | refused, 59 | passed, 6 | passed, 1 | passed, 269 | passed, 286 | passed, 272 |
+| `IMG_20261026_092349.dng` | e. a wrong width | refused, 842 | passed, 59 | passed, 6 | passed, 1 | passed, 265 | passed, 267 | passed, 275 |
+| `IMG_20261026_092349.dng` | f. a wrong compression | refused, 842 | passed, 60 | passed, 6 | passed, 1 | refused, 51 | refused, 51 | refused, 318 |
+| `IMG_20261026_092349.dng` | g. a broken link | skipped: the RAW IFD is IFD0 | – | – | – | – | – | – |
+| `IMG_20261026_092351.dng` | a. data moved | refused, 841 | refused, 60 | passed, 7 | passed, 1 | passed, 0 | passed, 0 | passed, 7 |
+| `IMG_20261026_092351.dng` | b. two pieces swapped | refused, 841 | refused, 61 | passed, 7 | passed, 1 | passed, 266 | passed, 269 | passed, 274 |
+| `IMG_20261026_092351.dng` | c. a short piece | refused, 843 | refused, 60 | passed, 7 | passed, 1 | passed, 269 | passed, 270 | passed, 273 |
+| `IMG_20261026_092351.dng` | d. data zeroed | refused, 842 | refused, 61 | passed, 7 | passed, 1 | passed, 265 | passed, 274 | passed, 273 |
+| `IMG_20261026_092351.dng` | e. a wrong width | refused, 845 | passed, 60 | passed, 7 | passed, 1 | passed, 264 | passed, 266 | passed, 277 |
+| `IMG_20261026_092351.dng` | f. a wrong compression | refused, 844 | passed, 60 | passed, 7 | passed, 1 | refused, 51 | refused, 51 | refused, 321 |
+| `IMG_20261026_092351.dng` | g. a broken link | skipped: the RAW IFD is IFD0 | – | – | – | – | – | – |
+| `TN002512.DNG` | a. data moved | refused, 1073 | refused, 161 | passed, 3 | passed, 1 | passed, 0 | passed, 0 | passed, 3 |
+| `TN002512.DNG` | b. two pieces swapped | skipped: one strip | – | – | – | – | – | – |
+| `TN002512.DNG` | c. a short piece | refused, 1006 | refused, 90 | passed, 3 | passed, 1 | passed, 534 | passed, 544 | passed, 544 |
+| `TN002512.DNG` | d. data zeroed | refused, 1076 | refused, 158 | passed, 3 | passed, 1 | refused, 566 | refused, 553 | refused, 1086 |
+| `TN002512.DNG` | e. a wrong width | refused, 1078 | passed, 161 | passed, 3 | passed, 1 | passed, 535 | passed, 542 | passed, 546 |
+| `TN002512.DNG` | f. a wrong compression | refused, 1074 | passed, 160 | passed, 3 | passed, 1 | passed, 357 | refused, 402 | refused, 961 |
+| `TN002512.DNG` | g. a broken link | refused, 932 | refused, 19 | passed, 3 | refused, 1 | not run, 0 | refused, 0 | refused, 539 |
+| `TN002513.DNG` | a. data moved | refused, 1050 | refused, 135 | passed, 3 | passed, 1 | passed, 0 | passed, 0 | passed, 3 |
+| `TN002513.DNG` | b. two pieces swapped | skipped: one strip | – | – | – | – | – | – |
+| `TN002513.DNG` | c. a short piece | refused, 996 | refused, 79 | passed, 3 | passed, 1 | passed, 480 | passed, 496 | passed, 488 |
+| `TN002513.DNG` | d. data zeroed | refused, 1054 | refused, 136 | passed, 3 | passed, 1 | refused, 500 | refused, 500 | refused, 989 |
+| `TN002513.DNG` | e. a wrong width | refused, 1060 | passed, 136 | passed, 3 | passed, 1 | passed, 481 | passed, 484 | passed, 488 |
+| `TN002513.DNG` | f. a wrong compression | refused, 1054 | passed, 137 | passed, 3 | passed, 1 | passed, 402 | refused, 481 | refused, 964 |
+| `TN002513.DNG` | g. a broken link | refused, 942 | refused, 20 | passed, 3 | refused, 1 | not run, 0 | refused, 0 | refused, 484 |
+
+The snapshot comparison refused all 42 copies: a, b, c, d and g with "image data check failed"
+(the image data hash changed; 28 copies), e with "metadata check failed: IFD0:ImageWidth" or
+"SubIFD:ImageWidth changed unexpectedly" (7), and f with "validation check failed" (one more
+validation warning than the original; 7). None gave "snapshot failed". LibRaw's unpack refused f
+in the phone DNGs with `LIBRAW_IO_ERROR` (−100009) and one data error, and d in the `TN` files
+with return code 0 and one data error. The shim refused those as damaged (f: "RAW data
+incomplete (Input/output error)"; d: 1,992,129 and 8,582,455 data errors), and also f in the `TN`
+files ("RAW data incomplete, 7,640,356 bytes missing", and 13,095,710), which the C API's unpack
+passed. LibRaw's open refused only g (return code −2, "Unsupported file format or not RAW file").
+
+Refused by the whole check, but passed by the snapshot comparison, the preview comparison and
+LibRaw's open: **none**.
+
+1. **Inference:** no damage kind measured here is refused only by the unpack (or by the shim's
+   stream). Every copy the whole check refused (11 of 42: f in all seven files, d and g in the two
+   `TN` files) was also refused by the snapshot comparison, which runs before the image check in
+   `write_safely`. The program's list of copies that only the unpack finds is empty.
+2. **Inference:** the snapshot comparison refused every damaged copy (42 of 42), the whole check
+   11. The image data hash alone refused 28 (a, b, c, d and g); e and f leave the hash equal and
+   were refused by the listing (`ImageWidth`) and by the validation. **Hypothesis:** ExifTool's
+   `ImageDataHash` of a DNG is computed over the RAW IFD's pieces as its offsets and byte counts
+   give them, so moving, swapping, shortening, zeroing or unlinking them changes the hash, while a
+   changed width or compression does not; consistent with T264's interpretation 3.
+3. **Inference:** the whole check **passed** most of these damaged copies (31 of 42): a, b, c and e
+   in every file and d in the five phone DNGs. LibRaw's unpack noticed neither data moved by 4096
+   bytes, swapped tiles, a halved tile or strip byte count, 4096 zeroed bytes inside a tile of the
+   phone DNGs, nor a width 16 pixels too small. For a it returned at once (under 1 ms, against
+   about 250–550 ms for the others). **Hypothesis:** LibRaw's open passes (it does not read the
+   pieces), and its unpack, finding no lossless-JPEG start at the moved offset, stops at the
+   first piece without a return code or a data error; not examined.
+4. **Inference:** the preview comparison passed every copy (42 of 42): none of these kinds touches
+   a preview.
+5. **Inference:** for f in the `TN` files the C API's unpack passed but the shim refused (its own
+   stream counted 7.6 and 13.1 MB asked for but missing), as for T264's cut phone DNGs: the
+   shim's verdict is not LibRaw's unpack alone.
+6. **Not measured:** other kinds of damage (for example a changed `BitsPerSample`,
+   `SamplesPerPixel`, `TileWidth`, `CFAPattern`, a broken `DNGPrivateData` or opcode list, damage
+   in a later tile or strip than the first, several changes at once, or a damaged lossless-JPEG
+   header inside a piece), a RAW IFD in IFD0 with a broken link, DNGs from other cameras or
+   writers (only two sources here, both with compression 7), a cold file cache, and JPEG and
+   TIFF. **Hypothesis:** a damage that changes neither the RAW pieces' bytes as the hash reads
+   them, nor any listed tag, nor the validation, and that LibRaw's unpack does notice, would be
+   refused only by the unpack; none of the seven kinds measured is such a damage. Whether the
+   unpack is dropped (keeping LibRaw's open, the preview comparison and the snapshot comparison)
+   is the owner's decision (ADR 0007 §9.7 point 4, Q23); nothing above is proposed as decided.
+
 ## Appendix: the timing script
 
 ```python
