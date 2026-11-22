@@ -50,6 +50,9 @@
     (§9.7, §14); the unpack measured further (T273). Tasks: §18.
   - **Amended by the owner (2026-11-22, revision 31):** D8's allowance dropped (§9.7 point 5,
     §17.1); task T274.
+  - **Amended by the owner (2026-11-22, revision 32):** Q23 decided again after T273: LibRaw's
+    open and unpack of a DNG copy run only when the original has no `ImageDataHash` (§9.3 point
+    4, §9.7 point 4); task T275.
 - Date: 2026-11-04 (revision 1: storage, IIM policy and the role of XMP; revision 2: all owner
   decisions of 2026-11-04, MWG 2.0, the full IPTC specification and the Mapping Guidelines;
   revision 3: Q4 answered by the owner on 2026-11-08; revision 4: Q5 answered by the owner on
@@ -553,7 +556,9 @@ copy would be refused (point 3).
    - pw-raw finds the same previews (count, sizes, decodable JPEG);
    - DNG: `DNGVersion`, `NewSubfileType` of the main image and the IFD chain unchanged.
 4. **The RAW image still opens:** for DNG, LibRaw opens and unpacks the copy without a "damaged"
-   report (the M2 detection). This catches truncated or moved image data.
+   report (the M2 detection). This catches truncated or moved image data. **Only when the
+   original has no `ImageDataHash`** (owner, 2026-11-22, §9.7 point 4, Q23; T275): when it has
+   one, point 1 has compared it, and LibRaw is not run (point 3's preview comparison still is).
 5. **Flush:** the temporary file is flushed to disk (`FlushFileBuffers`).
 
 ### 9.4 Replace atomically
@@ -731,6 +736,20 @@ written; the reviewer changes them at those tasks' Done.
    - **Alternative:** drop the unpack and keep LibRaw's open, the preview comparison and the
      `ImageDataHash` comparison. Saves 250–550 ms per DNG (about half of a DNG write), with the
      unmeasured risk above.
+   - **Decided again by the owner 2026-11-22 (after T273, revision 32): LibRaw runs only when
+     the original has no `ImageDataHash`** (§9.3 point 4). T273 (the analysis
+     `docs/analyses/2026-11-21-metadata-write-time.md`, "Measured in T273") made seven kinds of
+     DNG damage in seven DNGs: the snapshot comparison (points 1–3 of §9.3) refused all 42
+     copies, the image check with LibRaw 11, each of them also refused by the snapshot
+     comparison; no copy was refused only by the unpack, and the unpack passed 31 of the 42. When
+     the original has a hash, the copy's equal hash covers the RAW data's bytes, the listing the
+     tags that say how to read them, and the validation the structure; LibRaw's open is not kept
+     on its own (`pw-libraw` opens and unpacks in one call; in T273 the open refused only a
+     broken link, which the snapshot comparison also refused). When the original has no hash,
+     nothing else checks the RAW data, so the open and unpack run as before. Not measured, and
+     accepted: damage that neither the hash, the listing nor the validation shows (for example
+     inside a binary block of the same length). Saves 250–550 ms per DNG with a hash (every DNG
+     in `D:\PhotoWorkflowData\RAW` that T273 used). Task T275.
 5. **D8 is kept for now.** With 13.64, a TIFF or DNG that gets a new Photoshop block may no longer
    get D8's extra warning. The task for point 1 records whether it still occurs; if not, removing
    D8's allowance is a later decision (in `docs/tasks/backlog.md`).
@@ -928,7 +947,7 @@ silently. All other deviations concern SHOULD-level recommendations; each is mar
 | ~~**Q20**~~ | **(Revision 30.)** The lowest ExifTool version | **Decided by the owner 2026-11-22, as proposed:** 13.64, which fixes both reasons of T92 (T269); shipped and in CI too. Alternative: 12.67 kept, the steps chosen by version (§9.7 point 1) |
 | ~~**Q21**~~ | **(Revision 30.)** The digest pass (§9.2) | **Decided by the owner 2026-11-22, as proposed:** dropped; the checksum written in the IIM call and the copy refused unless its checksum is current. Alternative: the digest pass only when the checksum is out of date (§9.7 point 2) |
 | ~~**Q22**~~ | **(Revision 30.)** The TIFF restart (§9.3) | **Decided by the owner 2026-11-22, as proposed:** dropped; a misread would show as new warnings and the copy be refused (§9.7 point 3) |
-| ~~**Q23**~~ | **(Revision 30.)** The DNG image check (§9.3 point 4) | **Decided by the owner 2026-11-22, as proposed:** kept as it is; the damage only LibRaw's unpack finds was not measured, and is measured in T273 before the unpack is decided again. Alternative: the unpack dropped, 250–550 ms saved per DNG (§9.7 point 4) |
+| ~~**Q23**~~ | **(Revision 30.)** The DNG image check (§9.3 point 4) | **Decided by the owner 2026-11-22, as proposed:** kept as it is; the damage only LibRaw's unpack finds was not measured, and is measured in T273 before the unpack is decided again. Alternative: the unpack dropped, 250–550 ms saved per DNG (§9.7 point 4). **Decided again by the owner 2026-11-22 (revision 32, after T273):** LibRaw's open and unpack run only when the original has no `ImageDataHash` (§9.3 point 4); task T275 |
 
 ## 15. Consequences
 
@@ -1063,6 +1082,8 @@ listed under the table (§17.1).
   waits for the owner's decision on the unpack.
 - Revision 31 (D8 dropped, §9.7 point 5): task T274 written 2026-11-22. T274 done 2026-11-22
   (the allowance removed from `verify_copy`; every real-file test passed with ExifTool 13.64).
+- Revision 32 (Q23 decided again, §9.3 point 4, §9.7 point 4): task T275 written 2026-11-22
+  (LibRaw's check of a DNG copy only when the original has no `ImageDataHash`).
 
 ## Revision history
 
@@ -1099,3 +1120,4 @@ listed under the table (§17.1).
 | 29 | 2026-11-22 | Owner decision (after T261): a faster safe write without a weaker check: §9.6, Q17 the final read asks for `ImageDataHash` alone, Q18 a batch shared among up to four ExifTool processes, Q19 the DNG image check, the digest pass and the TIFF restart measured before any change; proposed and approved by the owner the same day, all as proposed (§14); §18 |
 | 30 | 2026-11-22 | Proposal (after T264, T265 and T269, at the owner's request): Q19 decided in §9.7, Q20 ExifTool 13.64 or newer, Q21 the digest pass replaced by a check that the copy's checksum is current, Q22 the TIFF restart dropped, Q23 the DNG image check kept; approved by the owner the same day, all as proposed, with the measurement for Q23 as a task (T273); §18 |
 | 31 | 2026-11-22 | Owner decision (after T270 point 6 and T272): D8's allowance of one more validation warning when the write creates the Photoshop block of a TIFF or DNG is dropped, since ExifTool 13.64 no longer writes that warning (§9.7 point 5, §17.1); task T274, with every real-file test run with 13.64 as the gate |
+| 32 | 2026-11-22 | Owner decision (after T273: no kind of DNG damage measured was refused only by the unpack): Q23 decided again, LibRaw's open and unpack of a DNG copy run only when the original has no `ImageDataHash`; with a hash, the snapshot comparison and the preview comparison are the check (§9.3 point 4, §9.7 point 4); task T275 |
