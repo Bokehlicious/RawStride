@@ -41,6 +41,14 @@
   only for the items shown (§6.3, U10b-Q1–U10b-Q8; tasks T277, T278). U10b-Q8 narrows U9-Q10:
   the companion suffixes' page comes with U8. U10b-Q9 (the same day, after the chain review):
   with Rating and Label hidden, the keys still rate and the current rating is shown as one line.
+- **Questions of step U8 answered by the owner (2026-11-22, every proposal approved):** the keys
+  of the contact sheet's and the preview's actions can be changed on a new Keyboard Shortcuts page
+  of the Settings window, up to two keys per action, and are kept in `keys.txt`; the navigation,
+  Escape, Enter, Tab and the dialogs' and the metadata window's own keys stay fixed; a key already
+  taken is refused; the companion suffixes become a field on the General page (§2.4, §6.4,
+  U8-Q1–U8-Q11; tasks T279, T280, T281). U8-Q10 settles U9-Q10 and U10b-Q8. U8-Q12 and U8-Q13
+  (the same day, after the chain review): the map's keys act only with exactly their modifiers,
+  and egui's own Ctrl+Q and scale keys are turned off.
 - Date: 2026-11-12; amended 2026-11-13
 - Related:
   - [GUI_REQUIREMENTS.md](../GUI_REQUIREMENTS.md) (GR1–GR13), in particular GR6 (keyboard first),
@@ -257,7 +265,9 @@ a full photo-desk caption window.
 ### 2.4 Keyboard
 
 - One key map for the contact sheet and the preview, stored in a file and changeable in Settings
-  (U8). Until then the keys are fixed in code, as today.
+  (U8). Until then the keys are fixed in code, as today. **U8 (owner, 2026-11-22):** the file is
+  `keys.txt`, the page is Keyboard Shortcuts, and which keys can be changed is in §6.4
+  (U8-Q1–U8-Q11).
 - RawStride defines its own default map. Common functional keys are kept (arrows, Home/End, Space,
   Z for fit/100 %, +/−, Escape, F11). The rating and label keys of ADR 0013 are unchanged.
 - **Stage A** (review finding 15; today's keys of ADR 0009 and 0011 kept):
@@ -664,6 +674,26 @@ Asked by the reviewer when step U10b was taken up (tasks T277, T278).
 | U10b-Q7 | How is it stored? | In `settings.txt`: one line with the sections' order, one with the items' order, one with the hidden sections and one with the hidden items, each written only when it differs from the default. A name that is not known is skipped; an item a later version adds is shown in its default place |
 | U10b-Q8 | The companion suffixes' page (U9-Q10)? | Comes with U8 (the key map and its page), not with U10b (narrows U9-Q10's "U8 or U10b") |
 | U10b-Q9 | (asked the same day, after the chain review of T277–T278) The rating keys while Rating and Label is hidden? | **Owner (proposal A):** the keys rate as before; while the section is hidden, Other Metadata starts with one line showing the image's current rating and label ("Rating: 3 stars, Red"), not the rating read when the window opened, so a key press is seen at once |
+
+### 6.4 Questions of step U8 (answered by the owner, 2026-11-22: every proposal approved)
+
+Asked by the reviewer when step U8 was taken up (tasks T279, T280, T281).
+
+| # | Question | Answer |
+|---|---|---|
+| U8-Q1 | Which keys can be changed? | Every action of the contact sheet and the preview: the commands with a key in the menus (ratings and labels, Reject, Move to Picked, Undo Move, the rotations, RAW ↔ JPEG, Delete to Recycle Bin, Reload Folder, Open in {name}, Open Folder, Import, Close Tab, Select All, Metadata…, Preview, the zoom, clipping, focus and compare commands, the hide key, the inspector, Full Screen) and the preview's "Marked only". **Fixed:** the arrows, Page Up/Down, Home and End (and with Shift, which extends the marking), Escape, Enter, Space as a second key of Preview, `=` as a second key of Zoom In, Tab, Ctrl+Tab and Ctrl+Shift+Tab, Alt+F4, the dialogs' keys and the metadata window's own keys (its rating keys included) |
+| U8-Q2 | How many keys per action? | Up to two; the first is the one the menus show. The fixed extra keys of today stay besides them (↓, → and Page Down for the next image, Enter and Space for Preview, Escape and Enter to close the preview) |
+| U8-Q3 | One map or one per view? | One map (§2.4). A key may be used by an action that acts only in the contact sheet and by one that acts only in the preview; the hide key and `I` stay one action each, with their meaning in each view (U1-Q2, U3-Q1–Q3). Conflicts are checked per view |
+| U8-Q4 | A key already taken? | The page refuses it and names the action that has it; nothing is moved by itself |
+| U8-Q5 | Which combinations? | A key alone or with Ctrl, Shift, Alt, Ctrl+Shift or Shift+Alt. Not Ctrl+Alt (with or without Shift), which is AltGr on many keyboards; not a modifier alone; not a fixed key (U8-Q1) |
+| U8-Q6 | How is it stored? | In a file of its own, `keys.txt` beside `settings.txt`, one line per action that differs from the default (`action = Ctrl+K, F`; an action with no key written with nothing after `=`). A missing file gives the defaults. An unknown action, a key that cannot be read or is not allowed, or a key that clashes with an earlier line is skipped with a problem, and that action keeps its default |
+| U8-Q7 | The page? | A new page **Keyboard Shortcuts** of the Settings window: the actions in groups, each with its keys and the buttons **Change** (the next key pressed becomes the key, Escape cancels) and **Clear**; **Restore Defaults** for the whole map; the page scrolls. Applied and saved by Save, as the other choices |
+| U8-Q8 | The texts that name a key? | Follow the map: the menus, the right-click menu, the thumbnail buttons' hover texts and the preview's texts such as "Fit (F)" show the current first key; an action with no key is shown without the parentheses |
+| U8-Q9 | The mouse? | Not part of the map: the double-click, the wheel and Ctrl+wheel stay fixed |
+| U8-Q10 | The companion suffixes (U9-Q10, U10b-Q8)? | A text field "Companion File Suffixes" on the General page, the suffixes separated by commas; not a page of its own (it is one line) |
+| U8-Q11 | Steps? | One step U8, a chain of three tasks in `pw-loupe`: the map in plain Rust (the actions, the defaults equal to today's keys, the lookup per view, the rules of U8-Q4 and U8-Q5, reading and writing `keys.txt`), today's key tests unchanged and passing (T279); the shell asks the map, and the menus and texts show its keys (T280); the page Keyboard Shortcuts and the suffixes' field, then the owner's hand check (T281). The chain is reviewed as a whole before T279 is set to Open |
+| U8-Q12 | (asked the same day, after the chain review of T279–T281) Exact modifiers? | **Owner (proposal):** a key in the map acts only with exactly its modifiers, so Shift+Z, Shift+F, Shift+M and the like no longer act as Z, F and M (today some key functions ignore Shift). Kept as today, as fixed keys: Shift with the preview's arrows, Page Up/Down, Home, End, Escape and Enter, and Shift+`+` as Zoom In. The library's Refresh follows Reload Folder's keys exactly (Ctrl+F5 over the left column no longer refreshes). An empty Companion File Suffixes field gives the default list, as an empty line in `settings.txt` does |
+| U8-Q13 | (the same day) egui's own keys (Ctrl+Q quits; Ctrl+plus, Ctrl+minus and Ctrl+0 change the interface's scale, so Ctrl+0 for No Label also changes the scale today)? | **Owner (proposal A):** turned off in the program (egui's `zoom_with_keyboard` and `quit_shortcuts`), so those keys are free for the map; Ctrl+Q no longer quits (Alt+F4 and File ▸ Quit remain) |
 
 ## 7. Steps
 

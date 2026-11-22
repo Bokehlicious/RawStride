@@ -87,10 +87,13 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status |
 |---|---|---|
+| [T279](T279-key-map-model.md) | The key map: actions, default keys, lookup per view and `keys.txt` (model) | Open |
+| [T280](T280-shell-asks-key-map.md) | The shell asks the key map, and the menus and texts show its keys | Blocked: waits for T279 |
+| [T281](T281-keyboard-shortcuts-page.md) | The Settings page Keyboard Shortcuts and the companion suffixes' field | Blocked: waits for T280 |
 
 ## Writing a task (owner and reviewer)
 
-- **Number:** the next free number after the highest in this folder and `done/` (T279 next).
+- **Number:** the next free number after the highest in this folder and `done/` (T282 next).
 - **File:** `docs/tasks/T246-<a-few-words>.md`; three digits, lower case, words joined by `-`.
 - **Index:** add a row to "Open tasks" above and keep its status in step with the file's heading.
 - **Size (owner, 2026-11-15, after T142):** one task is one layer (a C++ shim or a core crate, or
