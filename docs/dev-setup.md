@@ -28,6 +28,31 @@ The Tauri CLI and Node.js are only needed for the current Tauri app. The planned
 - Antivirus exclusions for `target\`, `vcpkg\buildtrees\` and `%USERPROFILE%\.cargo\registry`
 - GPU driver: Intel Arc 32.0.101.9150 or newer
 
+## Git worktrees
+
+One repository, two working folders (`git worktree`):
+
+| Folder | Branch | Use |
+|---|---|---|
+| `C:\Development\PhotoWorkflow` | `main` | the main checkout; not edited |
+| `C:\Development\PhotoWorkflow-GUI` | `feature/gui-workspace` | all work: tasks, review, commits |
+
+Why the work does not happen directly in the main checkout:
+
+1. **`main` holds only reviewed and approved work.** Task agents leave their changes uncommitted,
+   and a commit on `feature/gui-workspace` comes only after the owner's approval and an all-OK
+   `.\tools\check.ps1` (`AGENTS.md` §2). Unfinished work, work under review and work awaiting the
+   owner's hand check therefore never touch `main`; the owner moves `main` forward after review.
+2. **Two folders instead of switching branches in one.** No `git checkout` back and forth, so
+   uncommitted changes cannot follow along to the wrong branch, and `target\` is not rebuilt on
+   every switch. The approved state stays untouched in its own folder and can be built and run
+   next to the development version.
+3. **The main checkout holds the shared native libraries.** `VCPKG_INSTALLED_DIR` points the
+   worktree at the main checkout's `vcpkg_installed` (see "Running the tests"), so the vcpkg
+   libraries are installed and built once.
+4. **It matches the pull request flow.** An approved pull request is merged into
+   `feature/gui-workspace`, checked there, and reaches `main` from it (`CONTRIBUTING.md`).
+
 ## Native dependencies
 
 LibRaw is built by vcpkg in **manifest mode** from `vcpkg.json`.
