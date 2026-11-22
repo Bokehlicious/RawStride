@@ -258,7 +258,7 @@ pub fn save_field_values(path: &Path, values: &FieldValues) -> io::Result<()> {
 }
 
 /// Writes the bytes to a new file and waits until they are on the disk.
-fn write_synced(path: &Path, bytes: &[u8]) -> io::Result<()> {
+pub(crate) fn write_synced(path: &Path, bytes: &[u8]) -> io::Result<()> {
     let mut file = File::create(path)?;
     file.write_all(bytes)?;
     file.sync_all()

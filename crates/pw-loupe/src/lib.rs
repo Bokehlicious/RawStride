@@ -24,6 +24,7 @@ mod import_tabs;
 mod import_text;
 mod import_worker;
 mod info_panel;
+mod keymap;
 pub mod library;
 pub mod library_text;
 mod loupe_text;
@@ -117,6 +118,10 @@ pub use import_worker::{ImportDone, ImportEvent, ImportWorker, RequestId, Submit
 pub use info_panel::{
     ConflictRow, ConflictValue, InfoPanel, Language, PanelText, ValueRow, info_panel, origin_text,
     other_values, panel_text, property_label, rule_text, value_text,
+};
+pub use keymap::{
+    FixedKey, KEYS_FILE, KeyAction, KeyGroup, KeyMap, KeyRefusal, KeyView, fixed_key, is_fixed,
+    is_modifier_key, keys_path, load_key_map, save_key_map,
 };
 pub use loupe_text::{
     PROFILE_UNUSABLE_TEXT, READING_RATINGS_TEXT, compare_side_text, error_text, failed_cell_text,

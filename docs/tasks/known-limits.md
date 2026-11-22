@@ -385,6 +385,16 @@ with ADR 0026 F3, in `plans/adr-0018-0025-steps.md`.)
   default predecessor, which can move the named ones (`editor_section_order = licence` alone
   gives the default order); RawStride always writes every entry (T277's review).
 
+## The key map (ADR 0017 U8)
+
+(T279's review, 2026-11-22.)
+
+- *Alt+Tab can be given to an action:* the map refuses Tab and Shift+Tab (egui's focus) but not
+  Alt+Tab, which Windows takes before RawStride sees it; such a key never acts.
+- *A hand-written `keys.txt` with a clash:* the clashing line's action gets back those of its
+  default keys that are free at that point, which can take a key a later line names; that line
+  then clashes too (one problem each). A file RawStride saved never clashes.
+
 ## Card eject
 
 (Independent review of T156, 2026-11-16; none affects the owner's readers.)

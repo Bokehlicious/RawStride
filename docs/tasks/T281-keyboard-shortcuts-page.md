@@ -48,10 +48,13 @@
      top of `ui()`, before anything is drawn**, with `ctx.input_mut(|i| i.events.retain(..))` as
      `draw_metadata_window` does: while a Change waits, every `Event::Key` is removed from the input,
      so neither the library's F5, the key loop nor a focused button (Enter or Space would click
-     the Change button again) sees it. The first press (not a repeat) is used: the chord built as
+     the Change button again) sees it. The first press (not a repeat) of a key that is not a
+     modifier itself (`is_modifier_key`, T279; egui reports Shift, Ctrl, Alt and the Windows key
+     as keys of their own, and such a press is removed and skipped) is used: the chord built as
      the key loop builds it (`ctrl = modifiers.ctrl || modifiers.command`); Escape cancels; any
      other chord is tried with `can_set` on the copy. Refused: the row says why ("Ctrl+Alt is not
-     allowed", "This key cannot be changed", "Used by {action}", U8-Q4; a `String` function
+     allowed", "This key cannot be changed", "Used by {action}", U8-Q4; `Modifier`, which the
+     skipped press never reaches, "Shift, Ctrl or Alt alone is not allowed"; a `String` function
      `key_refusal_text(KeyRefusal)` with `format!`, rule 13), and the copy is unchanged; a new
      Change or a successful key clears the refusal. egui moves the focus on Tab and drops it on
      Escape before `ui()` runs; that cannot be stopped and does no harm (Tab is refused as fixed).

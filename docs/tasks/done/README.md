@@ -285,3 +285,4 @@ was when the task was done, so "this file", "below" and "the Log" in T1–T115 m
 | [T276](T276-import-preview-list-kept-while-editing.md) | The import dialog's preview list stays while the form is edited: no new preview for the IPTC template or Eject, the last list kept dimmed until the next (pw-loupe) |
 | [T277](T277-metadata-window-layout-model.md) | The metadata window's layout: which sections and items, in which order (model) (pw-loupe) |
 | [T278](T278-metadata-window-layout-shell.md) | The metadata window drawn by the layout, and the Settings window's pages (pw-loupe) |
+| [T279](T279-key-map-model.md) | The key map: actions, default keys, lookup per view and `keys.txt` (model) (pw-loupe) |

@@ -1,4 +1,4 @@
-# T280. The shell asks the key map, and the menus and texts show its keys — Blocked: waits for T279
+# T280. The shell asks the key map, and the menus and texts show its keys — Open
 
 - **Why:** ADR 0017 §2.4, step U8 (ADR 0017 §6.4, U8-Q1–U8-Q13, owner 2026-11-22). T279 made the
   key map (`KeyMap`, `KeyAction`, `fixed_key`, `keys.txt`). This task makes the program use it:
@@ -94,3 +94,4 @@
 | Date | Status | Note |
 |---|---|---|
 | 2026-11-22 | Blocked | Written by the reviewer. Cold read: the guards listed per action (a key moved to a letter must not act in a text field), `tab_action` computed in the collecting closure, "Open in Another Program…" shows `open_in`'s key, the missing texts (the mode label's JPEG form, the two error texts) and the unused "Show Column (I)", `StatusBar.mode` a `String`, `draw_library`'s parameter, no parentheses without a key, `menu_key` named, `key_text` ↑ ↓, the old functions left `pub` rather than `#[cfg(test)]` (no warning, no split re-exports), `rating_key_action` stays in use. Chain review: every map action guarded against text fields; no key acts while the Settings window is open |
+| 2026-11-22 | Open | T279 Done: the map, `fixed_key`, `is_fixed`, `is_modifier_key` and `keys.txt` are in `keymap.rs` |

@@ -87,8 +87,7 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status |
 |---|---|---|
-| [T279](T279-key-map-model.md) | The key map: actions, default keys, lookup per view and `keys.txt` (model) | Open |
-| [T280](T280-shell-asks-key-map.md) | The shell asks the key map, and the menus and texts show its keys | Blocked: waits for T279 |
+| [T280](T280-shell-asks-key-map.md) | The shell asks the key map, and the menus and texts show its keys | Open |
 | [T281](T281-keyboard-shortcuts-page.md) | The Settings page Keyboard Shortcuts and the companion suffixes' field | Blocked: waits for T280 |
 | [T282](T282-code-of-conduct-and-pr-template.md) | A code of conduct and a pull request template (docs, `.github/`) | Open |
 
