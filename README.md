@@ -7,8 +7,8 @@ step through them quickly, rate and label them, and add IPTC metadata.
 > the [Releases page](https://github.com/Bokehlicious/RawStride/releases).** The program
 > (`rawstride.exe`, built from the crate `pw-loupe`; eframe + egui) has the loupe and preview, the
 > contact sheet, folder tabs, the import dialog, ratings and labels, filter and multi-selection, TIFF
-> viewing, colour management and the metadata window. It is not signed yet, and there is no
-> installer (MSI) yet.
+> viewing, colour management and the metadata window. See [Planned](#planned) for what is not
+> there yet.
 
 The project was called PhotoWorkflow until 2026-11-09 ([ADR 0012](docs/adr/0012-product-name-rawstride.md)).
 Folder and crate names (`pw-*`) keep the old name for now.
@@ -33,6 +33,34 @@ Folder and crate names (`pw-*`) keep the old name for now.
 
 **Cameras:** the goal is most cameras, through LibRaw. Development and testing use Sony (ARW),
 Panasonic (RW2), Fujifilm (RAF) and DNG files.
+
+## Planned
+
+Not in RawStride yet, roughly in the order they are planned. The order can change, and there
+are no dates.
+
+- **Settings:** choose which fields the info panel shows, and change the keyboard shortcuts.
+- **Metadata templates:** save and apply templates from the metadata window, with variables in
+  text fields.
+- **Search and filter on text and metadata:** a search box (Ctrl+F), a filter window and saved
+  filters.
+- **All camera data:** every Exif and maker tag in the inspector.
+- **Correcting the capture time:** shift the capture time for one camera or several, for example
+  when a camera's clock was wrong.
+- **Rename, copy and move** selected images, with their sidecars.
+- **Export:** JPEG and TIFF at a chosen size, with colour conversion and metadata.
+- **Display adjustments for assessment:** temporary exposure, white balance, sharpening, channel
+  view, clipping thresholds, the camera's crop frame and focus point. Nothing is written to the
+  file.
+- **Editor profiles:** see which images have been edited in another program, and step between an
+  original and its export.
+- **A catalog across folders:** search all indexed images, including folders on drives that are
+  not connected.
+- **Positions and a map:** edit GPS coordinates, see images on a map, and match a GPX track to
+  capture times.
+- **Signed releases and an installer (MSI).**
+
+Ideas and wishes are welcome as [issues](https://github.com/Bokehlicious/RawStride/issues/new/choose).
 
 ## Try it
 
