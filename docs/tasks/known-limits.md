@@ -372,7 +372,8 @@ with ADR 0026 F3, in `plans/adr-0018-0025-steps.md`.)
 
 ## The metadata window's layout (ADR 0017 U10b)
 
-(T278's brief and chain review, 2026-11-22.)
+(T278's brief and chain review, 2026-11-22; **kept** at the sort after ADR 0017 U10b, 2026-11-22
+(owner): none was seen in the hand check, so each becomes a task only if it is noticed in use.)
 
 - *The Paste button's count after a layout change:* when the layout is changed between Copy All
   Fields and Paste All Fields, the Paste button's tooltip still counts the copied items that are
