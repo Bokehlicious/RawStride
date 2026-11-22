@@ -90,10 +90,11 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 | [T266](T266-metadata-worker-several-exiftool-processes.md) | ADR 0007 §9.6 Q18: a pool of ExifTool write processes, used by the metadata worker | Open |
 | [T267](T267-batch-write-timing-by-process-count.md) | ADR 0007 §9.6 Q18: a batch write timed with 1, 2 and 4 ExifTool processes | Blocked: waits for T266 |
 | [T268](T268-app-and-import-use-several-exiftool-processes.md) | ADR 0007 §9.6 Q18: the app and the import use the owner's number of processes | Blocked: waits for T267 and the owner's number |
+| [T269](T269-digest-pass-and-tiff-restart-with-exiftool-13-64.md) | ADR 0007 §9.6 Q19: the digest pass and the TIFF restart with ExifTool 13.64 (measurement) | Blocked: waits for T266 |
 
 ## Writing a task (owner and reviewer)
 
-- **Number:** the next free number after the highest in this folder and `done/` (T269 next).
+- **Number:** the next free number after the highest in this folder and `done/` (T270 next).
 - **File:** `docs/tasks/T246-<a-few-words>.md`; three digits, lower case, words joined by `-`.
 - **Index:** add a row to "Open tasks" above and keep its status in step with the file's heading.
 - **Size (owner, 2026-11-15, after T142):** one task is one layer (a C++ shim or a core crate, or
