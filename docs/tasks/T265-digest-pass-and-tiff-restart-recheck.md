@@ -1,4 +1,4 @@
-# T265. ADR 0007 §9.6 Q19: do the reasons for the digest pass and the TIFF restart still hold? (pw-metadata example) — Blocked: waits for T264
+# T265. ADR 0007 §9.6 Q19: do the reasons for the digest pass and the TIFF restart still hold? (pw-metadata example) — Open
 
 - **Why:** ADR 0007 revision 29 (§9.6 point 3, Q19; approved by the owner 2026-11-22). Two steps
   of the safe write rest on behaviour measured with ExifTool 13.59 in T92:
@@ -98,3 +98,4 @@
 |---|---|---|
 | 2026-11-22 | Blocked | Written after ADR 0007 revision 29 (§9.6 point 3, Q19), approved by the owner 2026-11-22; waits for T264 (the order of §9.6; both add a section to the same analysis, so they run one after the other) |
 | 2026-11-22 | Blocked | Cold read: point 2's safe-write sequence corrected (`write_copy` keeps `-IPTCDigest=new` in the `-o` call, then the digest pass), `-IPTC:CodedCharacterSet=UTF8` added as in the T92 tests, the checksum read with `snapshot` and its listing keys as `digest_state` does, one fresh reader per copy; point 3: P runs the safe write's sequence (the T92 trigger), not a digest pass alone, the snapshots compared without `System`, the warnings from `validate` plus an extra `-validate -warning` call, `AgHg` found by a byte search, the restart timed on P including its end; ExifTool started as `start_exiftool`, `refuse_source_folders` named, no panicking test helpers copied; `%TEMP%` in the analysis, the section before the appendix, the DNG half of the restart not rechecked. No other file needs to change |
+| 2026-11-22 | Open | T264 done (the analysis has "Measured in T264") |

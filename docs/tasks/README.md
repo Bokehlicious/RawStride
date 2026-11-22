@@ -87,8 +87,7 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status |
 |---|---|---|
-| [T264](T264-dng-image-check-timing.md) | ADR 0007 §9.6 Q19: the DNG image check timed, and which check refuses a damaged copy | Open |
-| [T265](T265-digest-pass-and-tiff-restart-recheck.md) | ADR 0007 §9.6 Q19: do the reasons for the digest pass and the TIFF restart still hold? | Blocked: waits for T264 |
+| [T265](T265-digest-pass-and-tiff-restart-recheck.md) | ADR 0007 §9.6 Q19: do the reasons for the digest pass and the TIFF restart still hold? | Open |
 | [T266](T266-metadata-worker-several-exiftool-processes.md) | ADR 0007 §9.6 Q18: a pool of ExifTool write processes, used by the metadata worker | Blocked: waits for T265 |
 | [T267](T267-batch-write-timing-by-process-count.md) | ADR 0007 §9.6 Q18: a batch write timed with 1, 2 and 4 ExifTool processes | Blocked: waits for T266 |
 | [T268](T268-app-and-import-use-several-exiftool-processes.md) | ADR 0007 §9.6 Q18: the app and the import use the owner's number of processes | Blocked: waits for T267 and the owner's number |

@@ -258,6 +258,111 @@ process, T261's interpretation 4); DNG 449, 443, 470 ms (of which `check_copy` 2
    verified copy's as before, and T263's ignored test showed that the narrow read gives the same
    hash as the snapshot for every JPEG, TIFF and DNG in `D:\PhotoWorkflowData\RAW` (26 files).
 
+## Measured in T264 (Q19: the DNG image check)
+
+- Build: `cargo run --release -p pw-imagecheck --example check_timing` (T264,
+  [`check_timing.rs`](../../crates/pw-imagecheck/examples/check_timing.rs)), at commit `bde20e4`
+  (`feature/gui-workspace`) with the example added, uncommitted. The example calls the app's own
+  `RawImageCheck::without_release().check_copy` and `pw_libraw::Session::open_with_diagnostics`,
+  and LibRaw's own C API (`libraw_open_wfile`, `libraw_unpack`, `libraw_close`, with a
+  data-error handler set by `libraw_set_dataerror_handler`) from the `raw_r` that `pw-libraw`
+  already links. ExifTool 13.59 (`exiftool` on PATH), used only for the image data hash; its start
+  and first answer took 188 ms.
+- Measured 2026-11-22 on thanos, under the conditions of "Measured in T261": the seven DNGs of
+  T261 in `D:\PhotoWorkflowData\RAW`, copied for every run into a new folder under `%TEMP%` on C:,
+  **warm cache**, three runs per file, medians. Every run passed (21 of 21) and was deleted
+  afterwards.
+- Point 2 (an unchanged copy): each run copies the file twice (an "original" and a "copy") and
+  times the whole `check_copy(original, copy, FileKind::Dng)`; the shim's open and unpack
+  (`Session::open_with_diagnostics`, the session dropped at once, as `check_dng` does when the copy
+  opens); LibRaw's open, unpack and close through its C API; and the preview comparison alone,
+  which is `check_copy(original, copy, FileKind::Tiff)`, since for any kind other than DNG
+  `check_copy` runs only `check_previews`. The shim opens through its own data stream (`PwStream`)
+  and with its own settings, so the C API's parts need not add up to the shim's time.
+- Point 3 (damaged copies, once per file): the two damaged copies of
+  `crates/pw-imagecheck/tests/real_files.rs`: (a) cut at half its length, inside its RAW data; (b)
+  one byte changed (`^= 0x01`) in the middle of its largest preview. Each was checked against the
+  unchanged original. The image data hash is `ExifTool::image_data_hash` (T263) of both; its time
+  is the damaged copy's call alone.
+
+The check of an unchanged copy, medians in ms; a share is the step's median over `check_copy`'s:
+
+| File | MB | `check_copy` (DNG) | Shim open + unpack | LibRaw open | LibRaw unpack | LibRaw close | Preview comparison | Open share | Unpack share | Preview share |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| `IMG_20261026_062851.dng` | 11.7 | 261 | 257 | 0.3 | 254 | 2 | 4 | 0 % | 97 % | 2 % |
+| `IMG_20261026_084628.dng` | 12.2 | 257 | 251 | 0.2 | 249 | 2 | 4 | 0 % | 97 % | 2 % |
+| `IMG_20261026_091722.dng` | 11.4 | 257 | 256 | 0.2 | 250 | 2 | 4 | 0 % | 97 % | 2 % |
+| `IMG_20261026_092349.dng` | 18.9 | 281 | 275 | 0.2 | 270 | 2 | 6 | 0 % | 96 % | 2 % |
+| `IMG_20261026_092351.dng` | 20.4 | 283 | 273 | 0.2 | 272 | 2 | 7 | 0 % | 96 % | 2 % |
+| `TN002512.DNG` | 36.0 | 560 | 558 | 0.3 | 553 | 2 | 3 | 0 % | 99 % | 0 % |
+| `TN002513.DNG` | 30.5 | 506 | 503 | 0.2 | 501 | 2 | 3 | 0 % | 99 % | 1 % |
+
+The runs were even: every step's three runs lay within 11 ms of each other. LibRaw's unpack
+returned 0 with no data error in every run.
+
+Which check refuses a damaged copy ("refused" or "passed", and the time in ms):
+
+| File | Damage | Image data hash | Preview comparison | LibRaw open | LibRaw unpack (return code, data errors) | Shim | `check_copy` (DNG) |
+|---|---|---|---|---|---|---|---|
+| `IMG_20261026_062851.dng` | cut at half | refused, 11 | passed, 4 | passed, 0 | passed (0, 0), 27 | refused (damaged), 28 | refused, 283 |
+| `IMG_20261026_062851.dng` | one preview byte | passed, 36 | refused, 4 | passed, 0 | passed (0, 0), 253 | passed, 258 | refused, 260 |
+| `IMG_20261026_084628.dng` | cut at half | refused, 11 | passed, 5 | passed, 0 | passed (0, 0), 27 | refused (damaged), 28 | refused, 282 |
+| `IMG_20261026_084628.dng` | one preview byte | passed, 37 | refused, 4 | passed, 0 | passed (0, 0), 252 | passed, 255 | refused, 256 |
+| `IMG_20261026_091722.dng` | cut at half | refused, 14 | passed, 4 | passed, 0 | passed (0, 0), 41 | refused (damaged), 39 | refused, 292 |
+| `IMG_20261026_091722.dng` | one preview byte | passed, 38 | refused, 4 | passed, 0 | passed (0, 0), 250 | passed, 253 | refused, 256 |
+| `IMG_20261026_092349.dng` | cut at half | refused, 19 | passed, 6 | passed, 0 | passed (0, 0), 51 | refused (damaged), 53 | refused, 326 |
+| `IMG_20261026_092349.dng` | one preview byte | passed, 63 | refused, 5 | passed, 0 | passed (0, 0), 270 | passed, 273 | refused, 279 |
+| `IMG_20261026_092351.dng` | cut at half | refused, 19 | passed, 7 | passed, 0 | passed (0, 0), 39 | refused (damaged), 41 | refused, 313 |
+| `IMG_20261026_092351.dng` | one preview byte | passed, 63 | refused, 6 | passed, 0 | passed (0, 0), 269 | passed, 274 | refused, 285 |
+| `TN002512.DNG` | cut at half | refused, 97 | refused, 0 | passed, 0 | refused (−100009, 1), 317 | refused (damaged), 316 | refused, 872 |
+| `TN002512.DNG` | one preview byte | passed, 161 | refused, 3 | passed, 0 | passed (0, 0), 563 | passed, 558 | refused, 559 |
+| `TN002513.DNG` | cut at half | refused, 93 | refused, 0 | passed, 0 | refused (−100009, 1), 276 | refused (damaged), 278 | refused, 780 |
+| `TN002513.DNG` | one preview byte | passed, 145 | refused, 3 | passed, 0 | passed (0, 0), 499 | passed, 513 | refused, 508 |
+
+The shim refused every cut copy as damaged: the five phone DNGs with "RAW data incomplete, …
+bytes missing" (its own stream counted 7,849–113,711 missing bytes, no data error), the two
+`TN` files with "RAW data incomplete (Input/output error)" (one data error, 3 and 14 bytes
+missing). `check_copy` refused the cut copies with the shim's error and the changed preview with
+"preview 1 differs". −100009 is LibRaw's `LIBRAW_IO_ERROR`.
+
+1. **Inference:** almost all of the DNG image check is LibRaw's **unpack** of the copy: 96–99 %
+   of `check_copy` (249–553 ms). LibRaw's open (parsing the file's structure) takes 0.2–0.3 ms,
+   its close about 2 ms, and the preview comparison 3–7 ms (at most 2 %). The shim's open and
+   unpack is within 1–10 ms of the whole check. Hypothesis 2 of "Measured in T261" holds, more
+   precisely than it was put: it is LibRaw unpacking the copy's RAW data, not opening it and not
+   the preview comparison.
+2. **Inference:** LibRaw's open alone refuses **none** of the damaged copies (return code 0 for all
+   14): it reads only the file's structure, which a cut at half or a changed preview byte leaves
+   whole. An open-only check would not replace the unpack.
+3. **Inference:** the image data hash **refuses every cut copy** (7 of 7), in 11–19 ms for the
+   11–20 MB phone DNGs and 93–97 ms for the 30–36 MB `TN` files (the damaged copy's call alone).
+   It passes every copy with a changed preview byte (the hashes were equal).
+   **Hypothesis:** ExifTool's `ImageDataHash` of a DNG covers its RAW image data and not the
+   embedded preview; that would explain both results.
+4. **Inference:** the preview comparison is the only check here that refuses the changed preview
+   byte (7 of 7, in 3–6 ms); LibRaw's unpack and the shim pass it. It also refuses the cut copies
+   of the two `TN` files, whose largest preview lies in the cut-off half, but passes the five
+   phone DNGs' cut copies, whose preview lies in the first half.
+5. **Inference:** for the five phone DNGs, LibRaw's unpack through its C API **does not notice the
+   cut**: it returns 0 and reports no data error, in 27–51 ms. Only the shim's own data stream,
+   which counts the bytes asked for but missing (`PwStream`), refuses them. For the two `TN` files
+   the unpack returns `LIBRAW_IO_ERROR` with one data error. A check through LibRaw's unpack alone,
+   without the shim's stream, would have passed five of the seven cut copies.
+6. **Inference:** on a cut copy the whole `check_copy` takes longer than on an unchanged one
+   (283–872 ms against 257–560 ms): when the copy does not open, `check_dng` opens and unpacks the
+   original as well, to tell whether the write made it worse.
+7. **Inference (from the code):** in `write_safely`, `verify_copy` compares the copy's snapshot,
+   its `ImageDataHash` included, with the original's before `check_copy` runs
+   (`crates/pw-metadata/src/safe_write.rs`, §9.3 point 1). So a copy cut at half, as here, would
+   already be refused by the hash comparison and never reach the image check. **Hypothesis:** for
+   the two kinds of damage measured, the hash comparison and the preview comparison together
+   refuse what the LibRaw unpack refuses; damage of other kinds (for example a fault in the file's
+   structure, such as a wrong tile offset, that neither the hash nor the snapshot listing shows)
+   was not measured.
+8. **Not measured:** a cold file cache, other kinds of damage, and JPEG and TIFF (their check is
+   under 1 ms, T261). Whether the DNG check changes is the owner's decision (ADR 0007 §9.6 point 3);
+   nothing above is proposed as decided.
+
 ## Appendix: the timing script
 
 ```python

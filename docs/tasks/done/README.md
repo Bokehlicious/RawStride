@@ -270,3 +270,4 @@ was when the task was done, so "this file", "below" and "the Log" in T1–T115 m
 | [T262](T262-newer-folder-tab-active-when-it-opens.md) | ADR 0026 F4: a later destination folder's tab becomes active when it opens, if the user has not moved (pw-loupe) |
 | [T261](T261-metadata-write-timing.md) | The safe write's time per step, measured in a release build (pw-imagecheck example) |
 | [T263](T263-final-read-image-data-hash-only.md) | ADR 0007 §9.6 Q17: the final read after the replace asks for `ImageDataHash` alone (pw-metadata) |
+| [T264](T264-dng-image-check-timing.md) | ADR 0007 §9.6 Q19: the DNG image check timed step by step, and which check refuses a damaged copy (pw-imagecheck example) |
