@@ -122,7 +122,7 @@ revision) before a task. The estimated savings are from the tables above.
   2026-11-22). The shell's work after a write and a cold cache are still not measured.
 - The owner decides whether any of the changes above, or a change of the image check for DNG, is
   worth an ADR 0007 revision. **The owner, 2026-11-22:** make it faster without a weaker check;
-  proposed as ADR 0007 revision 29 (§9.6, Q17–Q19), awaiting the owner's approval. The cheaper
+  ADR 0007 revision 29 (§9.6, Q17–Q19), approved by the owner 2026-11-22. The cheaper
   final check is not taken up.
 
 ## Measured in T261

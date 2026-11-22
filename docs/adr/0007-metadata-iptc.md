@@ -38,12 +38,12 @@
     `lr:hierarchicalSubject` is kept equal to the keywords (§8, Q15); existing Exif and XMP
     rating percentages are kept equal to the rating (§6.1, §6.3, Q16). Two tasks carry the three
     (§18; T204, T205, split by the owner 2026-11-19).
-  - **Revision 29 proposed (2026-11-22), awaiting the owner:** a faster safe write without a
-    weaker check, from the analysis `docs/analyses/2026-11-21-metadata-write-time.md` and its
-    measurement T261; the owner chose three of its four directions (2026-11-22). Q17 (a narrow
+  - **Amended by the owner (2026-11-22, revision 29):** a faster safe write without a weaker
+    check, from the analysis `docs/analyses/2026-11-21-metadata-write-time.md` and its
+    measurement T261; the owner chose three of its four directions and approved Q17 (a narrow
     final read), Q18 (a batch written by several ExifTool processes at once) and Q19 (the DNG image
-    check, the digest pass and the TIFF restart measured before they are decided again) are open
-    (§9.6, §14). Nothing of §9.1–§9.5 changes until the owner approves.
+    check, the digest pass and the TIFF restart measured before they are decided again), all as
+    proposed (§9.6, §14). Tasks: §18.
 - Date: 2026-11-04 (revision 1: storage, IIM policy and the role of XMP; revision 2: all owner
   decisions of 2026-11-04, MWG 2.0, the full IPTC specification and the Mapping Guidelines;
   revision 3: Q4 answered by the owner on 2026-11-08; revision 4: Q5 answered by the owner on
@@ -610,7 +610,7 @@ writes do not do this. If the restart fails, the write fails and ExifTool is mar
     - a byte comparison of all non-metadata ranges; `ImageDataHash` and the byte-equal previews
       are used instead.
 
-### 9.6 Speed (proposed, revision 29; awaiting the owner)
+### 9.6 Speed (owner, 2026-11-22, revision 29)
 
 **Background:** the owner finds that writing metadata takes long (2026-11-21). Measured in a
 release build with a warm cache (T261, analysis of 2026-11-21): one edit costs about 0.65 s for a
@@ -650,8 +650,9 @@ fourth of the analysis (a cheaper final check that no longer proves the image da
    restart (§9.2, §9.3, T92) still hold with the ExifTool in use. The owner then decides whether
    any of the three changes, in a later revision.
 
-**Order (proposed):** Q17 first (small, the check unchanged), then Q19's measurement, then Q18
-(the largest gain for a batch, and the most work).
+**Order (approved by the owner 2026-11-22):** Q17 first (small, the check unchanged), then Q19's
+measurement, then Q18 (the largest gain for a batch, and the most work). Until each is done,
+§9.1–§9.5 apply as written.
 ## 10. Templates (ingest and batch)
 
 Each template field has one of four modes. The default is **Keep**. [Product]
@@ -799,7 +800,7 @@ silently. All other deviations concern SHOULD-level recommendations; each is mar
 [Product ≠ std] with its reason. The Lang Alt rule (§8, Q7) was checked against MWG §5.2 and
 [XMP-1] on 2026-11-18 and is one of them.
 
-## 14. Questions (Q17–Q19 open, revision 29)
+## 14. Questions (all answered by the owner)
 
 | # | Question | Answer |
 |---|---|---|
@@ -819,9 +820,9 @@ silently. All other deviations concern SHOULD-level recommendations; each is mar
 | ~~**Q14**~~ | **(Revision 26.)** The modification time of a written file: set back to the original's, or the time of the write? | **Decided by the owner 2026-11-19:** the time of the write, for every file (§9.4) |
 | ~~**Q15**~~ | **(Revision 26.)** A flat `lr:hierarchicalSubject` beside the keywords | **Decided by the owner 2026-11-19:** written equal to `dc:subject` when every entry is flat; unchanged when one entry has a `\|` (§8) |
 | ~~**Q16**~~ | **(Revision 26.)** Exif Rating/RatingPercent and `xmp:RatingPercent` that another program added | **Decided by the owner 2026-11-19:** existing ones written to match the rating, a reject removes them, never created or read (§6.3) |
-| **Q17** | **(Revision 29.)** The final read after the replace (§9.4): a full snapshot, or `ImageDataHash` alone? | **Reviewer's proposal:** `ImageDataHash` alone; it is all the final read compares, so the check is unchanged (§9.6 point 1). Awaiting the owner |
-| **Q18** | **(Revision 29.)** A batch: one ExifTool process, or several at once? | **Reviewer's proposal:** up to four at once, the number fixed after a measurement with 1, 2 and 4; every file its own transaction; one target never written twice at once and its writes in order; the journal holds several open entries (§9.6 point 2). Awaiting the owner |
-| **Q19** | **(Revision 29.)** The DNG image check (§9.3 point 4), the digest pass and the TIFF restart (§9.2, §9.3): changed now, or measured first? | **Reviewer's proposal:** measured first in a task, no rule changed now; the owner decides afterwards (§9.6 point 3). Awaiting the owner |
+| ~~**Q17**~~ | **(Revision 29.)** The final read after the replace (§9.4): a full snapshot, or `ImageDataHash` alone? | **Decided by the owner 2026-11-22, as proposed:** `ImageDataHash` alone; it is all the final read compares, so the check is unchanged (§9.6 point 1) |
+| ~~**Q18**~~ | **(Revision 29.)** A batch: one ExifTool process, or several at once? | **Decided by the owner 2026-11-22, as proposed:** up to four at once, the number fixed after a measurement with 1, 2 and 4; every file its own transaction; one target never written twice at once and its writes in order; the journal holds several open entries (§9.6 point 2) |
+| ~~**Q19**~~ | **(Revision 29.)** The DNG image check (§9.3 point 4), the digest pass and the TIFF restart (§9.2, §9.3): changed now, or measured first? | **Decided by the owner 2026-11-22, as proposed:** measured first in a task, no rule changed now; the owner decides afterwards (§9.6 point 3) |
 
 ## 15. Consequences
 
@@ -937,6 +938,8 @@ listed under the table (§17.1).
   safe write's tests (T211).
 - Revision 26 (§9.4 Q14, §8 Q15, §6.3 Q16): two tasks (ADR 0029 step P0b; T204 the
   modification time, T205 Q15 and Q16); both done and hand-checked by the owner 2026-11-19.
+- Revision 29 (§9.6, Q17–Q19, a faster safe write): tasks not written yet; in the order of §9.6
+  (Q17, Q19's measurement, Q18).
 
 ## Revision history
 
@@ -970,4 +973,4 @@ listed under the table (§17.1).
 | 26 | 2026-11-19 | From the test with DxO PhotoLab 10.3 (ADR 0029 step P0, test copies in `D:\PhotoWorkflowData\P0-dxo`): §9.4 a written file gets the time of the write as its modification time, sidecars and in-place writes alike (Q14; replaces the old time kept since ADR 0004); §8 a flat `lr:hierarchicalSubject` written equal to the keywords (Q15), §6.1 and §6.3 existing Exif Rating/RatingPercent and `xmp:RatingPercent` written to match the rating (Q16); all three decided by the owner; §14 Q14–Q16; §18 one task |
 | 27 | 2026-11-19 | Owner decision D17: the write warning `[minor] Error reading HiddenData` (a DxO export of a Sony RAW) is accepted by name; every other write warning is still refused (§9.2); task T212 |
 | 28 | 2026-11-20 | Owner decision D18: the write warning `[minor] Fixed incorrect HiddenDataOffset` (a Sony ILCE-1 JPEG on an Exif write) is accepted by name, added to D17's list (§9.2, §17); task T238 |
-| 29 | 2026-11-22 | **Proposed, awaiting the owner:** a faster safe write without a weaker check (the owner, 2026-11-22, after T261): §9.6, Q17 the final read asks for `ImageDataHash` alone, Q18 a batch shared among up to four ExifTool processes, Q19 the DNG image check, the digest pass and the TIFF restart measured before any change; §14 Q17–Q19 open |
+| 29 | 2026-11-22 | Owner decision (after T261): a faster safe write without a weaker check: §9.6, Q17 the final read asks for `ImageDataHash` alone, Q18 a batch shared among up to four ExifTool processes, Q19 the DNG image check, the digest pass and the TIFF restart measured before any change; proposed and approved by the owner the same day, all as proposed (§14); §18 |
