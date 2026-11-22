@@ -24,6 +24,9 @@ Downloads are on the [Releases page](https://github.com/Bokehlicious/RawStride/r
   with an older ExifTool it still reads them and tells you at start.
 - Saving metadata to a TIFF or DNG is faster: the IIM checksum is written in the same step as
   the rest, and the written copy is still refused unless its checksum is current.
+- A written TIFF or DNG with one more ExifTool validation warning than the original is now
+  always refused; before, one more warning was allowed when the write created the file's
+  Photoshop block, which ExifTool 13.64 does without a new warning.
 
 ## [0.2.0] - 2026-11-21
 

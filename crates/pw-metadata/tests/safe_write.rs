@@ -785,8 +785,9 @@ fn a_tiff_with_iim_keeps_a_current_digest() {
 }
 
 /// A TIFF without IIM and the setting "create IIM": the IIM and the Photoshop block are created,
-/// with one more validation warning (D8), and the checksum is current: ExifTool 13.64 or newer
-/// writes it current in the write's one call (ADR 0007 §9.7, Q21).
+/// and the copy is accepted without D8's allowance (no new validation warning with ExifTool 13.64
+/// or newer, ADR 0007 §9.7 point 5), and the checksum is current: ExifTool 13.64 or newer writes
+/// it current in the write's one call (ADR 0007 §9.7, Q21).
 #[test]
 fn a_tiff_without_iim_gets_iim_and_a_current_digest() {
     let mut et = exiftool();

@@ -1061,7 +1061,8 @@ listed under the table (§17.1).
   T273 done 2026-11-22 (seven kinds of DNG damage; none refused only by the unpack: the analysis
   `docs/analyses/2026-11-21-metadata-write-time.md`, "Measured in T273"); §9.7 point 4 (Q23)
   waits for the owner's decision on the unpack.
-- Revision 31 (D8 dropped, §9.7 point 5): task T274 written 2026-11-22.
+- Revision 31 (D8 dropped, §9.7 point 5): task T274 written 2026-11-22. T274 done 2026-11-22
+  (the allowance removed from `verify_copy`; every real-file test passed with ExifTool 13.64).
 
 ## Revision history
 

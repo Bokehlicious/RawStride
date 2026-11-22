@@ -6,8 +6,7 @@
 //! and every other tag as text. [`check_file_type`] refuses a file whose content does not match
 //! its kind (a JPEG renamed `.dng`). [`verify_copy`] compares the snapshot of the original with
 //! the snapshot of the written copy: the type and the image data must be unchanged, there must be
-//! no new errors or warnings (one more warning when the write creates the Photoshop block of a
-//! TIFF or DNG, D8), and every tag that was added, removed or changed must be one the
+//! no new errors or warnings, and every tag that was added, removed or changed must be one the
 //! write plan wrote or one a write is known to change (file data, pointers, tool data; the keys of
 //! an Exif block that an `IFD0:` write creates, only added, ADR 0024 §2.6). When the plan writes
 //! a new IIM checksum (`-IPTCDigest=new`), the copy's stored checksum must be current: its
@@ -113,8 +112,6 @@ const DIGEST_KEY: &str = "Photoshop:IPTCDigest";
 const CURRENT_DIGEST_KEY: &str = "File:CurrentIPTCDigest";
 /// The plan argument that writes a new IIM checksum (as `write_plan` makes it).
 pub(crate) const NEW_DIGEST: &str = "-IPTCDigest=new";
-/// The file types in which ExifTool stores the Photoshop block as a TIFF tag (IFD0 0x8649).
-const PHOTOSHOP_TAG_TYPES: &[&str] = &["TIFF", "DNG"];
 
 /// True if the plan writes a new IIM checksum (`-IPTCDigest=new`).
 pub(crate) fn writes_new_digest(plan: &WritePlan) -> bool {
@@ -415,15 +412,11 @@ pub fn verify_copy(
             after: copy.image_data_hash.clone(),
         });
     }
-    // D8 (owner, 2026-11-12; T92): when the write creates the Photoshop block of a TIFF or DNG to
-    // store a new checksum, ExifTool 13.59 adds the validation warning "Non-standard format
-    // (undef) for IFD0 0x8649 PhotoshopSettings" (measured on a Xiaomi DNG, `0 7 1` → `0 8 1`, and
-    // a Ricoh DNG), so exactly one more warning (never an error) is allowed then.
-    let extra_warnings = u32::from(creates_photoshop_tag(original, copy, plan));
+    // D8's allowance for the Photoshop block of a TIFF or DNG was dropped (ADR 0007 §9.7 point 5,
+    // ExifTool 13.64): one more error or warning is always refused.
     let more = match (original.validate, copy.validate) {
         (Some(before), Some(after)) => {
-            after.errors > before.errors
-                || after.warnings > before.warnings.saturating_add(extra_warnings)
+            after.errors > before.errors || after.warnings > before.warnings
         }
         (None, None) => false,
         _ => true,
@@ -475,15 +468,6 @@ pub fn verify_copy(
         }
     }
     Ok(())
-}
-
-/// D8: the copy of a TIFF or DNG has the key `Photoshop:IPTCDigest`, the original has not, and the
-/// plan writes `-IPTCDigest=new`, so the write created the Photoshop block.
-fn creates_photoshop_tag(original: &FileSnapshot, copy: &FileSnapshot, plan: &WritePlan) -> bool {
-    PHOTOSHOP_TAG_TYPES.contains(&original.file_type.as_str())
-        && copy.listing.contains_key(DIGEST_KEY)
-        && !original.listing.contains_key(DIGEST_KEY)
-        && writes_new_digest(plan)
 }
 
 /// Point 6 of T97 (owner decision A, 2026-11-12): in a JPEG whose only Exif is `IFD0:Copyright`,
@@ -1071,7 +1055,7 @@ mod tests {
         );
     }
 
-    /// D8: `verify_copy` of a `file_type` copy whose validation goes from `0 7 1` to `after`; the
+    /// `verify_copy` of a `file_type` copy whose validation goes from `0 7 1` to `after`; the
     /// copy has a new `Photoshop:IPTCDigest`, and the original has one when `original_digest`.
     fn photoshop_block(
         file_type: &str,
@@ -1242,16 +1226,25 @@ mod tests {
     }
 
     #[test]
-    fn one_more_warning_passes_when_a_tiff_or_dng_gets_its_photoshop_block() {
+    fn one_more_warning_is_refused_also_when_a_tiff_or_dng_gets_its_photoshop_block() {
+        // ADR 0007 §9.7 point 5: D8's allowance was dropped.
         for file_type in ["TIFF", "DNG"] {
             assert_eq!(
                 photoshop_block(file_type, false, &[NEW_DIGEST], validate(0, 8, 1)),
+                Err(VerifyError::NewWarnings {
+                    before: validate(0, 7, 1),
+                    after: validate(0, 8, 1),
+                }),
+                "{file_type}"
+            );
+            // More minor warnings only, or no change, still pass.
+            assert_eq!(
+                photoshop_block(file_type, false, &[NEW_DIGEST], validate(0, 7, 2)),
                 Ok(()),
                 "{file_type}"
             );
-            // Fewer warnings or more minor warnings still pass.
             assert_eq!(
-                photoshop_block(file_type, false, &[NEW_DIGEST], validate(0, 7, 2)),
+                photoshop_block(file_type, false, &[NEW_DIGEST], validate(0, 7, 1)),
                 Ok(()),
                 "{file_type}"
             );
@@ -1259,7 +1252,7 @@ mod tests {
     }
 
     #[test]
-    fn one_more_warning_is_refused_outside_the_photoshop_block_case() {
+    fn one_more_warning_is_refused() {
         let refused = |file_type, original_digest, args: &[&str], after| {
             assert_eq!(
                 photoshop_block(file_type, original_digest, args, after),

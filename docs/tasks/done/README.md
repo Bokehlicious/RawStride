@@ -280,3 +280,4 @@ was when the task was done, so "this file", "below" and "the Log" in T1–T115 m
 | [T271](T271-exiftool-13-64-the-lowest-version.md) | ADR 0007 §9.7 Q20: ExifTool 13.64 is the lowest version the app writes with (pw-metadata, pw-loupe) |
 | [T272](T272-drop-digest-pass-and-tiff-restart.md) | ADR 0007 §9.7 Q21 and Q22: the digest pass and the TIFF restart dropped, the copy's checksum checked (pw-metadata) |
 | [T273](T273-dng-damage-kinds-measured.md) | ADR 0007 §9.7 Q23: which checks refuse other kinds of DNG damage? (pw-imagecheck example) |
+| [T274](T274-d8-allowance-dropped.md) | ADR 0007 §9.7 point 5: D8's allowance dropped, one more validation warning always refused (pw-metadata) |
