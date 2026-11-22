@@ -1,4 +1,4 @@
-# T269. ADR 0007 §9.6 Q19: the digest pass and the TIFF restart with ExifTool 13.64 (measurement) — Blocked: waits for T266
+# T269. ADR 0007 §9.6 Q19: the digest pass and the TIFF restart with ExifTool 13.64 (measurement) — Open
 
 - **Why:** ADR 0007 revision 29 (§9.6 point 3, Q19). T265 found that both reasons for two extra
   steps of the safe write still hold with ExifTool 13.59 (the analysis
@@ -121,3 +121,4 @@
 |---|---|---|
 | 2026-11-22 | Blocked | Written at the owner's request after T265 (the owner: a newer ExifTool may have fixed the TIFF bug the owner reported); ExifTool 13.64's change notes list fixes for both reasons. Waits for T266 (same worktree, `pw-metadata` and `target` shared) |
 | 2026-11-22 | Blocked | Cold read: the checksum's fallback to SourceForge when 13.64 leaves `checksums.txt`; PATH set in every command (the shell keeps no variables); the repro in a folder per version, 13.59 called by its full path; the example's output kept outside the repository (it prints the work folder's path); a read-only command for whether each original holds IIM data; the five tests `every_real_` selects named, the recycle-bin tests must not run; check.ps1's exception to rules 6 and 9 stated; T265's section left as it is. No other file needs to change |
+| 2026-11-22 | Open | T266 done |

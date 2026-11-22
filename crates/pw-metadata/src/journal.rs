@@ -337,6 +337,119 @@ mod tests {
         assert_eq!(journal_files(&journal).len(), 2);
     }
 
+    /// T266 (ADR 0007 §9.5, §9.6 point 2): several write processes begin and end entries at
+    /// once, and a crash may leave several open entries. Windows only, as the restore test below
+    /// (the backup is renamed back with Windows file operations).
+    #[test]
+    #[cfg(windows)]
+    fn entries_from_several_threads_get_distinct_files_and_recover_resolves_each() {
+        const THREADS: usize = 4;
+        const EACH: usize = 25;
+        let folder = TempFolder::new("threads");
+        let journal = Journal::open(&folder.path("journal")).unwrap();
+
+        // All begun at once, from four threads: every entry its own file.
+        let ids: Vec<EntryId> = std::thread::scope(|scope| {
+            let handles: Vec<_> = (0..THREADS)
+                .map(|thread| {
+                    let journal = &journal;
+                    let folder = &folder;
+                    scope.spawn(move || {
+                        (0..EACH)
+                            .map(|number| {
+                                let name = format!("t{thread}-{number}");
+                                journal
+                                    .begin(&Entry {
+                                        original: folder.path(&format!("{name}.jpg")),
+                                        copy: folder.path(&format!("{name}.pwtmp-1.jpg")),
+                                        backup: folder.path(&format!("{name}.pwbak-1.jpg")),
+                                        original_existed: true,
+                                    })
+                                    .unwrap()
+                            })
+                            .collect::<Vec<_>>()
+                    })
+                })
+                .collect();
+            handles
+                .into_iter()
+                .flat_map(|handle| handle.join().unwrap())
+                .collect()
+        });
+        let mut distinct = ids.clone();
+        distinct.sort_by(|a, b| a.0.cmp(&b.0));
+        distinct.dedup();
+        assert_eq!(distinct.len(), THREADS * EACH);
+        assert_eq!(journal_files(&journal).len(), THREADS * EACH);
+
+        // All ended at once, from four threads.
+        std::thread::scope(|scope| {
+            for chunk in ids.chunks(EACH) {
+                let journal = &journal;
+                scope.spawn(move || {
+                    for id in chunk {
+                        journal.end(id.clone()).unwrap();
+                    }
+                });
+            }
+        });
+        assert!(journal_files(&journal).is_empty());
+
+        // Three open entries left by a crash, one of each kind: each is resolved.
+        let present = Entry {
+            original: folder.file("p.jpg", b"new"),
+            copy: folder.file("p.pwtmp-1.jpg", b"copy"),
+            backup: folder.file("p.pwbak-1.jpg", b"old"),
+            original_existed: true,
+        };
+        let new_sidecar = Entry {
+            original: folder.path("n.xmp"),
+            copy: folder.file("n.pwtmp-1.xmp", b"copy"),
+            backup: folder.path("n.pwbak-1.xmp"),
+            original_existed: false,
+        };
+        let replaced = Entry {
+            original: folder.path("r.jpg"),
+            copy: folder.file("r.pwtmp-1.jpg", b"copy"),
+            backup: folder.file("r.pwbak-1.jpg", b"old"),
+            original_existed: true,
+        };
+        for entry in [&present, &new_sidecar, &replaced] {
+            journal.begin(entry).unwrap();
+        }
+
+        let mut recovered = journal.recover().unwrap();
+
+        assert_eq!(recovered.len(), 3);
+        let original = |done: &Recovered| match done {
+            Recovered::Cleaned { entry, .. } | Recovered::Restored { entry, .. } => {
+                entry.original.clone()
+            }
+            other => panic!("not resolved: {other:?}"),
+        };
+        recovered.sort_by_key(original);
+        assert_eq!(
+            recovered,
+            vec![
+                Recovered::Cleaned {
+                    entry: new_sidecar.clone(),
+                    deleted: vec![new_sidecar.copy.clone()],
+                },
+                Recovered::Cleaned {
+                    entry: present.clone(),
+                    deleted: vec![present.copy.clone(), present.backup.clone()],
+                },
+                Recovered::Restored {
+                    entry: replaced.clone(),
+                    deleted: vec![replaced.copy.clone()],
+                },
+            ]
+        );
+        assert_eq!(std::fs::read(&present.original).unwrap(), b"new");
+        assert_eq!(std::fs::read(&replaced.original).unwrap(), b"old");
+        assert!(journal_files(&journal).is_empty());
+    }
+
     #[test]
     fn recover_with_the_original_present_deletes_the_copy_and_the_backup() {
         let folder = TempFolder::new("recover-present");

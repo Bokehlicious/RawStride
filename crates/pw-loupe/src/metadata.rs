@@ -1722,8 +1722,9 @@ mod tests {
             .unwrap_or_else(|error| panic!("could not open {}: {error}", folder.display()));
         WriteSetup {
             journal,
-            checks: Box::new(NoImageCheck),
+            checks: std::sync::Arc::new(NoImageCheck),
             options: EditOptions::default(),
+            write_processes: 1,
         }
     }
 

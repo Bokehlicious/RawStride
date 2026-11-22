@@ -38,6 +38,7 @@ pub mod verify;
 pub mod vocabulary;
 mod worker;
 pub mod write_plan;
+pub mod write_pool;
 
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;

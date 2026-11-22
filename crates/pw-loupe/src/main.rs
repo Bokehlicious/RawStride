@@ -10452,8 +10452,10 @@ fn run(options: Options) -> Result<(), String> {
     let histogram_reads = HistogramReads::default();
     let setup = journal.clone().map(|journal| WriteSetup {
         journal,
-        checks: Box::new(image_check(&core, &second_core, &histogram_reads, true)),
+        checks: std::sync::Arc::new(image_check(&core, &second_core, &histogram_reads, true)),
         options: settings.edit_options(),
+        // One process until the owner fixes the number after T267's measurement (T268).
+        write_processes: 1,
     });
     let metadata_worker = MetadataWorker::start(setup).map_err(|e| e.to_string())?;
     let import_worker = ImportWorker::start(

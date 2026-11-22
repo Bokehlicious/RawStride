@@ -1,4 +1,13 @@
-//! A background thread that owns the ExifTool process and runs metadata requests one at a time.
+//! A background thread that owns the ExifTool process and runs metadata requests.
+//!
+//! Several write processes (ADR 0007 §9.6 point 2, Q18; T266): [`WriteSetup::write_processes`]
+//! is the number of ExifTool processes that write (1..=4). With 1 the worker thread runs every
+//! request itself, one at a time and in order. With more, and a setup, the worker thread starts
+//! a [`WritePool`] of that many processes at its first write and gives it the rating, orientation
+//! and edit writes, each its own safe-write transaction, keyed by its image ([`write_key`]); it
+//! keeps its own process for everything else. Writes of different images may then answer in
+//! another order than they were asked; writes of one image keep their order, and a request that
+//! is not a write starts only when every earlier write has answered and its event has been sent.
 //!
 //! A rating is written through the write plan and the safe write (ADR 0007 §9, §15; T91):
 //! [`ExifTool::write_rating_safely`] with the [`WriteSetup`] given at the start. Without a setup
@@ -24,7 +33,9 @@
 //! - [`MetadataWorker::set_options`] changes the [`EditOptions`] without an event. The worker
 //!   starts with the setup's options (the default without a setup); every request queued after
 //!   `set_options` uses the new options for rating writes, edits and reads (the `fallback`).
-//!   Requests run in order, so a request queued before it uses the old options.
+//!   Requests are taken from the queue in order, so a request queued before it uses the old
+//!   options (with several write processes too: a write takes the options current when it is
+//!   taken from the queue).
 //!
 //! Moving an image with its companion files (ADR 0017 §2.6, step U9b; T170):
 //! - [`MetadataWorker::move_image`] finds the image's group with [`relocate::companions`],
@@ -45,28 +56,42 @@
 //!
 //! Both answer with a structured [`DeleteError`].
 //!
-//! Requests run in order, so a move or a delete sent after a rating write of the same image runs
-//! after it. Moves and deletes do not use ExifTool; without a [`WriteSetup`] (no `checks` to
-//! release the sessions) the moves and `delete_image` fail with [`NO_JOURNAL`] and nothing is
-//! moved or deleted. `prepare_delete` works without a setup.
+//! A move or a delete sent after a rating write of the same image runs after it, and its event
+//! comes after the write's: with one write process because requests run in order, with several
+//! because a request that is not a write waits for every earlier write's event. Moves and deletes
+//! do not use ExifTool; without a [`WriteSetup`] (no `checks` to release the sessions) the moves
+//! and `delete_image` fail with [`NO_JOURNAL`] and nothing is moved or deleted. `prepare_delete`
+//! works without a setup.
 
 use std::collections::HashMap;
 use std::fmt;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, SyncSender, TryRecvError, TrySendError};
 use std::sync::{Arc, OnceLock};
 use std::thread::JoinHandle;
+use std::time::Duration;
 
 use crate::edit::{Edit, EditOptions, EditReport};
-use crate::exiftool::{MIN_EXIFTOOL_VERSION, ToolVersion, exiftool_program};
+use crate::exiftool::{ToolVersion, exiftool_program};
 use crate::journal::Journal;
 use crate::read::MetadataRead;
 use crate::recycle::{self, DeleteError, DeleteRefusal};
 use crate::relocate::{self, Moved};
 use crate::safe_write::ImageCheck;
+use crate::write_pool::{
+    JobAnswer, Running, Ticket, VersionResult, WritePool, start_tool, write_key,
+};
 use crate::{ExifTool, Rating, Result, WriteError};
 
 const REQUEST_CAPACITY: usize = 8;
+
+/// The most write processes of a worker (ADR 0007 §9.6 point 2).
+const MAX_WRITE_PROCESSES: usize = 4;
+
+/// How long the worker waits for a pool answer before it looks at the request queue again, while
+/// writes are outstanding (T266).
+const ANSWER_POLL: Duration = Duration::from_millis(5);
 
 /// The text of [`WriteError::NoJournal`]: a write when the worker has no [`WriteSetup`].
 pub const NO_JOURNAL: &str = "the write journal could not be opened";
@@ -75,16 +100,19 @@ pub const NO_JOURNAL: &str = "the write journal could not be opened";
 /// [`MIN_EXIFTOOL_VERSION`] or its version could not be read (D9).
 pub const EXIFTOOL_TOO_OLD: &str = "ExifTool is older than 12.67";
 
-/// The first result of a start: the version, or the start or version error as text.
-type VersionResult = std::result::Result<ToolVersion, String>;
-
 /// What a rating write needs (T91): the app's write journal, its image checks and the edit
 /// options. `options` are the options the worker starts with; [`MetadataWorker::set_options`]
 /// changes them later (T98).
 pub struct WriteSetup {
     pub journal: Journal,
-    pub checks: Box<dyn ImageCheck + Send>,
+    /// Shared by the write processes' threads when there are several (T266).
+    pub checks: Arc<dyn ImageCheck + Send + Sync>,
     pub options: EditOptions,
+    /// The number of ExifTool processes that write (ADR 0007 §9.6 point 2, Q18; T266), clamped
+    /// to 1..=4 when the worker starts (0 counts as 1). With 1 the worker writes with its own
+    /// process, one request at a time, as before; with more it gives its writes to a
+    /// [`WritePool`] of that many processes.
+    pub write_processes: usize,
 }
 
 impl fmt::Debug for WriteSetup {
@@ -92,6 +120,7 @@ impl fmt::Debug for WriteSetup {
         f.debug_struct("WriteSetup")
             .field("journal", &self.journal)
             .field("options", &self.options)
+            .field("write_processes", &self.write_processes)
             .finish_non_exhaustive()
     }
 }
@@ -241,7 +270,11 @@ enum Request {
     },
 }
 
-/// Bounded, serial metadata I/O for UI clients. The ExifTool process starts on this worker.
+/// Bounded metadata I/O for UI clients. The ExifTool process starts on this worker.
+///
+/// With one write process ([`WriteSetup::write_processes`]) every request runs in order. With
+/// several (T266), writes of different images may answer in another order than they were asked,
+/// while one image's writes, and everything sent after a write, keep their order.
 ///
 /// The worker recovers on its own: if ExifTool cannot be started, the start is retried with the
 /// next request, and if it crashes or its output stream breaks, the process is discarded and a
@@ -254,6 +287,9 @@ pub struct MetadataWorker {
     next_id: RequestId,
     /// Set once by the worker thread after its first start (T94).
     version: Arc<OnceLock<VersionResult>>,
+    /// Set when the worker is dropped: with several write processes the worker thread takes no
+    /// further request from the queue (T266).
+    stopped: Arc<AtomicBool>,
 }
 
 impl MetadataWorker {
@@ -272,6 +308,8 @@ impl MetadataWorker {
         let pre_args: Vec<String> = pre_args.iter().map(|arg| (*arg).to_string()).collect();
         let version = Arc::new(OnceLock::new());
         let first_version = Arc::clone(&version);
+        let stopped = Arc::new(AtomicBool::new(false));
+        let thread_stopped = Arc::clone(&stopped);
         let thread = std::thread::Builder::new()
             .name("pw-metadata".into())
             .spawn(move || {
@@ -282,6 +320,7 @@ impl MetadataWorker {
                     &first_version,
                     &request_rx,
                     &event_tx,
+                    &thread_stopped,
                 );
             })?;
         Ok(Self {
@@ -290,6 +329,7 @@ impl MetadataWorker {
             thread: Some(thread),
             next_id: 0,
             version,
+            stopped,
         })
     }
 
@@ -310,7 +350,8 @@ impl MetadataWorker {
         Ok(id)
     }
 
-    /// Queues a rating update without blocking. Writes run in request order.
+    /// Queues a rating update without blocking. Writes of one image run in request order (with
+    /// one write process, all writes do).
     pub fn write_rating(
         &mut self,
         path: PathBuf,
@@ -321,8 +362,8 @@ impl MetadataWorker {
         Ok(id)
     }
 
-    /// Queues an orientation write without blocking. Writes run in request order (ADR 0024
-    /// §2.5); answered with [`Event::OrientationWritten`].
+    /// Queues an orientation write without blocking. Writes of one image run in request order
+    /// (ADR 0024 §2.5); answered with [`Event::OrientationWritten`].
     pub fn write_orientation(
         &mut self,
         path: PathBuf,
@@ -346,7 +387,7 @@ impl MetadataWorker {
     }
 
     /// Queues a safe write of the editor's `edits` to `path` without blocking (T98), answered
-    /// with [`Event::EditsWritten`]. Writes run in request order.
+    /// with [`Event::EditsWritten`]. Writes of one image run in request order.
     pub fn write_edits(
         &mut self,
         path: PathBuf,
@@ -439,6 +480,14 @@ impl MetadataWorker {
         self.events.try_recv()
     }
 
+    /// Drops the worker as `Drop` does but keeps its events (T266, tests only), so the worker
+    /// thread can still send them and only the stop flag keeps it from running queued requests.
+    #[cfg(test)]
+    fn drop_keeping_events(mut self) -> Receiver<Event> {
+        let (_unused, empty) = mpsc::sync_channel(0);
+        std::mem::replace(&mut self.events, empty)
+    }
+
     fn next_request_id(&mut self) -> RequestId {
         self.next_id = self.next_id.wrapping_add(1);
         self.next_id
@@ -462,45 +511,50 @@ impl MetadataWorker {
 
 impl Drop for MetadataWorker {
     fn drop(&mut self) {
+        // Requests still in the queue are not run (T266); set before the queue is closed.
+        self.stopped.store(true, Ordering::Release);
         self.requests.take();
         // Do not wait for an in-progress ExifTool operation on the UI thread.
         self.thread.take();
     }
 }
 
-/// A started ExifTool process and whether its version allows writes (D9).
-struct Running {
-    tool: ExifTool,
-    may_write: bool,
+/// The worker thread's own ExifTool process (T266: kept apart from the pool's).
+struct OwnProcess<'a> {
+    program: &'a str,
+    pre_args: Vec<&'a str>,
+    first_version: &'a OnceLock<VersionResult>,
+    exiftool: Option<Running>,
 }
 
-/// Starts ExifTool and asks its version. The first result (the version, the version error or
-/// the start error) is kept in `first`. A process that broke while answering is dropped and its
-/// error returned, so the next request starts a new one.
-fn start_tool(
-    program: &str,
-    pre_args: &[&str],
-    first: &OnceLock<VersionResult>,
-) -> std::result::Result<Running, String> {
-    let mut tool = match ExifTool::start_with(program, pre_args) {
-        Ok(tool) => tool,
-        Err(error) => {
-            let text = error.to_string();
-            let _ = first.set(Err(text.clone()));
-            return Err(text);
+impl OwnProcess<'_> {
+    /// Runs `request` with the worker thread's process, as the worker always has: the process is
+    /// started again when needed, so a missing or crashed ExifTool is retried with each request,
+    /// and a broken one is dropped after the request.
+    fn handle(
+        &mut self,
+        setup: Option<&WriteSetup>,
+        options: &EditOptions,
+        request: Request,
+    ) -> Event {
+        let mut start_error = None;
+        if self.exiftool.is_none() {
+            match start_tool(self.program, &self.pre_args, Some(self.first_version)) {
+                Ok(running) => self.exiftool = Some(running),
+                Err(error) => start_error = Some(error),
+            }
         }
-    };
-    let version = tool.version().map_err(|error| error.to_string());
-    let may_write = version
-        .as_ref()
-        .is_ok_and(|version| *version >= MIN_EXIFTOOL_VERSION);
-    let broken = tool.is_broken();
-    let error = version.as_ref().err().cloned();
-    let _ = first.set(version);
-    if broken {
-        return Err(error.unwrap_or_else(|| "ExifTool process is unusable".into()));
+        let event = handle(self.exiftool.as_mut(), start_error, setup, options, request);
+        // A broken process cannot be trusted with another command; dropping it shuts it down.
+        if self
+            .exiftool
+            .as_ref()
+            .is_some_and(|running| running.tool.is_broken())
+        {
+            self.exiftool = None;
+        }
+        event
     }
-    Ok(Running { tool, may_write })
 }
 
 /// The worker loop: runs until the request sender is dropped or the event receiver is gone.
@@ -511,13 +565,39 @@ fn run(
     first_version: &OnceLock<VersionResult>,
     requests: &Receiver<Command>,
     events: &SyncSender<Event>,
+    stopped: &AtomicBool,
 ) {
     let pre_args: Vec<&str> = pre_args.iter().map(String::as_str).collect();
-    // The current options (T98): the setup's, the default without a setup.
-    let mut options = setup.map_or_else(EditOptions::default, |setup| setup.options);
     // Start at once, so the version is known before the first request (T94). A failed start is
     // tried again with the next request.
-    let mut exiftool = start_tool(program, &pre_args, first_version).ok();
+    let exiftool = start_tool(program, &pre_args, Some(first_version)).ok();
+    let mut own = OwnProcess {
+        program,
+        pre_args,
+        first_version,
+        exiftool,
+    };
+    // Without a setup there is no pool: writes answer `NoJournal` (T266).
+    let processes = setup.map_or(1, |setup| {
+        setup.write_processes.clamp(1, MAX_WRITE_PROCESSES)
+    });
+    match setup {
+        Some(setup) if processes > 1 => {
+            run_pooled(&mut own, setup, processes, requests, events, stopped);
+        }
+        _ => run_serial(&mut own, setup, requests, events),
+    }
+}
+
+/// The worker with one write process: every request in order with the worker's own process.
+fn run_serial(
+    own: &mut OwnProcess<'_>,
+    setup: Option<&WriteSetup>,
+    requests: &Receiver<Command>,
+    events: &SyncSender<Event>,
+) {
+    // The current options (T98): the setup's, the default without a setup.
+    let mut options = setup.map_or_else(EditOptions::default, |setup| setup.options);
     while let Ok(command) = requests.recv() {
         let request = match command {
             Command::Run(request) => request,
@@ -526,24 +606,304 @@ fn run(
                 continue;
             }
         };
-        // Restart when needed, so a missing or crashed ExifTool is retried with each request.
-        let mut start_error = None;
-        if exiftool.is_none() {
-            match start_tool(program, &pre_args, first_version) {
-                Ok(running) => exiftool = Some(running),
-                Err(error) => start_error = Some(error),
-            }
-        }
-        let event = handle(exiftool.as_mut(), start_error, setup, &options, request);
-        // A broken process cannot be trusted with another command; dropping it shuts it down.
-        if exiftool
-            .as_ref()
-            .is_some_and(|running| running.tool.is_broken())
-        {
-            exiftool = None;
-        }
+        let event = own.handle(setup, &options, request);
         if events.send(event).is_err() {
             break;
+        }
+    }
+}
+
+/// The worker with `processes` (2..=4) write processes (T266): writes go to a [`WritePool`]
+/// started at the first write; every other request waits until every earlier write has answered
+/// and its event has been sent, then runs with the worker's own process. At most `processes`
+/// writes are given at once, so the request queue still fills and gives back-pressure. Once
+/// `stopped` is set (the worker was dropped) no request taken from the queue or held back is run,
+/// as with one process, where the next event cannot be sent. When the loop ends the pool is
+/// dropped here: writes that started finish, the rest are not run.
+fn run_pooled(
+    own: &mut OwnProcess<'_>,
+    setup: &WriteSetup,
+    processes: usize,
+    requests: &Receiver<Command>,
+    events: &SyncSender<Event>,
+    stopped: &AtomicBool,
+) {
+    let mut options = setup.options;
+    let mut pool: Option<WritePool<Event>> = None;
+    // What each outstanding write's event names, for an answer without one.
+    let mut writes: HashMap<Ticket, WriteHeader> = HashMap::new();
+    // A request taken from the queue that has to wait: a write while `processes` are given, or
+    // anything else while a write is outstanding.
+    let mut held: Option<Request> = None;
+    loop {
+        if let Some(pool) = pool.as_mut().filter(|pool| pool.outstanding() > 0) {
+            let mut answer = pool.answer_timeout(ANSWER_POLL);
+            while let Some((ticket, job)) = answer {
+                let Some(header) = writes.remove(&ticket) else {
+                    answer = pool.try_answer();
+                    continue;
+                };
+                if events.send(header.answered(job)).is_err() {
+                    return;
+                }
+                answer = pool.try_answer();
+            }
+        }
+        let outstanding = pool.as_ref().map_or(0, WritePool::outstanding);
+        let request = match held.take() {
+            Some(request) => request,
+            None => {
+                let command = if outstanding == 0 {
+                    match requests.recv() {
+                        Ok(command) => command,
+                        Err(_) => return,
+                    }
+                } else {
+                    match requests.try_recv() {
+                        Ok(command) => command,
+                        Err(TryRecvError::Empty) => continue,
+                        Err(TryRecvError::Disconnected) => return,
+                    }
+                };
+                match command {
+                    Command::Run(request) => request,
+                    Command::SetOptions(new) => {
+                        options = new;
+                        continue;
+                    }
+                }
+            }
+        };
+        // The worker was dropped: neither this request nor any later one is run.
+        if stopped.load(Ordering::Acquire) {
+            return;
+        }
+        let request = match Write::from_request(request) {
+            Ok(write) => {
+                if outstanding >= processes {
+                    held = Some(write.into_request());
+                    continue;
+                }
+                if pool.is_none() {
+                    match WritePool::start_with(own.program, &own.pre_args, processes) {
+                        Ok(started) => pool = Some(started),
+                        Err(error) => {
+                            // Tried again with the next write.
+                            let event = write.failed(WriteError::Other(error.to_string()));
+                            if events.send(event).is_err() {
+                                return;
+                            }
+                            continue;
+                        }
+                    }
+                }
+                let Some(pool) = pool.as_mut() else {
+                    continue;
+                };
+                let header = write.header.clone();
+                let key = write_key(header.path());
+                let checks = Arc::clone(&setup.checks);
+                let journal = setup.journal.clone();
+                let write_options = options;
+                let ticket = pool.submit(
+                    key,
+                    Box::new(move |tool: &mut ExifTool| {
+                        write.run(tool, &*checks, &journal, &write_options)
+                    }),
+                );
+                writes.insert(ticket, header);
+                continue;
+            }
+            Err(request) => request,
+        };
+        if outstanding > 0 {
+            held = Some(request);
+            continue;
+        }
+        let event = own.handle(Some(setup), &options, request);
+        if events.send(event).is_err() {
+            return;
+        }
+    }
+}
+
+/// What a write's event names besides its result (T266).
+#[derive(Clone, Debug)]
+enum WriteHeader {
+    Rating {
+        id: RequestId,
+        path: PathBuf,
+        rating: Rating,
+    },
+    Orientation {
+        id: RequestId,
+        path: PathBuf,
+        orientation: u16,
+    },
+    Edits {
+        id: RequestId,
+        path: PathBuf,
+    },
+}
+
+impl WriteHeader {
+    fn path(&self) -> &Path {
+        match self {
+            WriteHeader::Rating { path, .. }
+            | WriteHeader::Orientation { path, .. }
+            | WriteHeader::Edits { path, .. } => path,
+        }
+    }
+
+    /// The write's event with `error`.
+    fn failed(self, error: WriteError) -> Event {
+        match self {
+            WriteHeader::Rating { id, path, rating } => Event::RatingWritten {
+                id,
+                path,
+                rating,
+                result: Err(error),
+            },
+            WriteHeader::Orientation {
+                id,
+                path,
+                orientation,
+            } => Event::OrientationWritten {
+                id,
+                path,
+                orientation,
+                result: Err(error),
+            },
+            WriteHeader::Edits { id, path } => Event::EditsWritten {
+                id,
+                path,
+                result: Err(error),
+            },
+        }
+    }
+
+    /// The write's event from the pool's answer (T266): a too old ExifTool is
+    /// [`WriteError::ExifToolTooOld`], a failed start and a lost job [`WriteError::Other`] with
+    /// their text, as with the worker's own process.
+    fn answered(self, answer: JobAnswer<Event>) -> Event {
+        match answer {
+            JobAnswer::Done(event) => event,
+            JobAnswer::TooOld(_) => self.failed(WriteError::ExifToolTooOld),
+            JobAnswer::StartFailed(text) | JobAnswer::Lost(text) => {
+                self.failed(WriteError::Other(text))
+            }
+            // The worker never discards; said all the same rather than lost.
+            JobAnswer::Discarded => {
+                self.failed(WriteError::Other("the write was not started".into()))
+            }
+        }
+    }
+}
+
+/// A rating, orientation or edit write taken from a request (T266).
+#[derive(Debug)]
+struct Write {
+    header: WriteHeader,
+    /// The edits of an edit write; empty for the others.
+    edits: Vec<Edit>,
+}
+
+impl Write {
+    /// The write in `request`, or the request back when it is not a write.
+    fn from_request(request: Request) -> std::result::Result<Write, Request> {
+        match request {
+            Request::Write { id, path, rating } => Ok(Write {
+                header: WriteHeader::Rating { id, path, rating },
+                edits: Vec::new(),
+            }),
+            Request::WriteOrientation {
+                id,
+                path,
+                orientation,
+            } => Ok(Write {
+                header: WriteHeader::Orientation {
+                    id,
+                    path,
+                    orientation,
+                },
+                edits: Vec::new(),
+            }),
+            Request::WriteEdits { id, path, edits } => Ok(Write {
+                header: WriteHeader::Edits { id, path },
+                edits,
+            }),
+            other => Err(other),
+        }
+    }
+
+    /// The request this write came from.
+    fn into_request(self) -> Request {
+        match self.header {
+            WriteHeader::Rating { id, path, rating } => Request::Write { id, path, rating },
+            WriteHeader::Orientation {
+                id,
+                path,
+                orientation,
+            } => Request::WriteOrientation {
+                id,
+                path,
+                orientation,
+            },
+            WriteHeader::Edits { id, path } => Request::WriteEdits {
+                id,
+                path,
+                edits: self.edits,
+            },
+        }
+    }
+
+    fn failed(self, error: WriteError) -> Event {
+        self.header.failed(error)
+    }
+
+    /// Runs the write's safe write with `tool` and gives its event.
+    fn run(
+        self,
+        tool: &mut ExifTool,
+        checks: &dyn ImageCheck,
+        journal: &Journal,
+        options: &EditOptions,
+    ) -> Event {
+        match self.header {
+            WriteHeader::Rating { id, path, rating } => {
+                let result = tool
+                    .write_rating_safely(&path, &rating, options, checks, journal)
+                    .map(|_report| ())
+                    .map_err(WriteError::from);
+                Event::RatingWritten {
+                    id,
+                    path,
+                    rating,
+                    result,
+                }
+            }
+            WriteHeader::Orientation {
+                id,
+                path,
+                orientation,
+            } => {
+                let result = tool
+                    .write_orientation_safely(&path, orientation, checks, journal)
+                    .map(|_report| ())
+                    .map_err(WriteError::from);
+                Event::OrientationWritten {
+                    id,
+                    path,
+                    orientation,
+                    result,
+                }
+            }
+            WriteHeader::Edits { id, path } => {
+                let result = tool
+                    .write_edits_safely(&path, &self.edits, options, checks, journal)
+                    .map_err(WriteError::from);
+                Event::EditsWritten { id, path, result }
+            }
         }
     }
 }
@@ -578,46 +938,34 @@ fn handle(
                 },
             }
         }
-        Request::Write { id, path, rating } => {
-            let result = match (setup, running) {
-                (None, _) => Err(WriteError::NoJournal),
-                (Some(_), Some(running)) if !running.may_write => Err(WriteError::ExifToolTooOld),
-                (Some(setup), Some(running)) => running
-                    .tool
-                    .write_rating_safely(&path, &rating, options, &*setup.checks, &setup.journal)
-                    .map(|_report| ())
-                    .map_err(WriteError::from),
-                (Some(_), None) => Err(WriteError::Other(unavailable())),
-            };
-            Event::RatingWritten {
-                id,
-                path,
-                rating,
-                result,
-            }
-        }
+        Request::Write { id, path, rating } => handle_write(
+            running,
+            unavailable,
+            setup,
+            options,
+            Write {
+                header: WriteHeader::Rating { id, path, rating },
+                edits: Vec::new(),
+            },
+        ),
         Request::WriteOrientation {
             id,
             path,
             orientation,
-        } => {
-            let result = match (setup, running) {
-                (None, _) => Err(WriteError::NoJournal),
-                (Some(_), Some(running)) if !running.may_write => Err(WriteError::ExifToolTooOld),
-                (Some(setup), Some(running)) => running
-                    .tool
-                    .write_orientation_safely(&path, orientation, &*setup.checks, &setup.journal)
-                    .map(|_report| ())
-                    .map_err(WriteError::from),
-                (Some(_), None) => Err(WriteError::Other(unavailable())),
-            };
-            Event::OrientationWritten {
-                id,
-                path,
-                orientation,
-                result,
-            }
-        }
+        } => handle_write(
+            running,
+            unavailable,
+            setup,
+            options,
+            Write {
+                header: WriteHeader::Orientation {
+                    id,
+                    path,
+                    orientation,
+                },
+                edits: Vec::new(),
+            },
+        ),
         Request::ReadMetadata { id, path } => {
             let result = match running {
                 Some(running) => running
@@ -628,18 +976,16 @@ fn handle(
             };
             Event::MetadataRead { id, path, result }
         }
-        Request::WriteEdits { id, path, edits } => {
-            let result = match (setup, running) {
-                (None, _) => Err(WriteError::NoJournal),
-                (Some(_), Some(running)) if !running.may_write => Err(WriteError::ExifToolTooOld),
-                (Some(setup), Some(running)) => running
-                    .tool
-                    .write_edits_safely(&path, &edits, options, &*setup.checks, &setup.journal)
-                    .map_err(WriteError::from),
-                (Some(_), None) => Err(WriteError::Other(unavailable())),
-            };
-            Event::EditsWritten { id, path, result }
-        }
+        Request::WriteEdits { id, path, edits } => handle_write(
+            running,
+            unavailable,
+            setup,
+            options,
+            Write {
+                header: WriteHeader::Edits { id, path },
+                edits,
+            },
+        ),
         // A move does not use ExifTool (T170), so `running` and `start_error` do not matter.
         Request::Move {
             id,
@@ -703,6 +1049,26 @@ fn handle(
             };
             Event::Deleted { id, image, result }
         }
+    }
+}
+
+/// A write with the worker's own process: without a setup [`WriteError::NoJournal`], with a too
+/// old ExifTool [`WriteError::ExifToolTooOld`], without a process [`WriteError::Other`] with
+/// `unavailable`'s text, otherwise the safe write.
+fn handle_write(
+    running: Option<&mut Running>,
+    unavailable: impl FnOnce() -> String,
+    setup: Option<&WriteSetup>,
+    options: &EditOptions,
+    write: Write,
+) -> Event {
+    match (setup, running) {
+        (None, _) => write.failed(WriteError::NoJournal),
+        (Some(_), Some(running)) if !running.may_write => write.failed(WriteError::ExifToolTooOld),
+        (Some(setup), Some(running)) => {
+            write.run(&mut running.tool, &*setup.checks, &setup.journal, options)
+        }
+        (Some(_), None) => write.failed(WriteError::Other(unavailable())),
     }
 }
 
@@ -841,18 +1207,19 @@ mod tests {
         }
     }
 
-    /// A setup with `checks` and a journal in `folder`.
-    fn setup_with(folder: &Path, checks: Box<dyn ImageCheck + Send>) -> WriteSetup {
+    /// A setup with `checks`, a journal in `folder` and one write process.
+    fn setup_with(folder: &Path, checks: Arc<dyn ImageCheck + Send + Sync>) -> WriteSetup {
         WriteSetup {
             journal: Journal::open(folder).expect("open the temporary journal"),
             checks,
             options: EditOptions::default(),
+            write_processes: 1,
         }
     }
 
     /// A setup with `NoImageCheck` and a journal in `folder`.
     fn test_setup(folder: &Path) -> WriteSetup {
-        setup_with(folder, Box::new(NoImageCheck))
+        setup_with(folder, Arc::new(NoImageCheck))
     }
 
     fn next_event(worker: &MetadataWorker) -> Event {
@@ -1489,7 +1856,7 @@ mod tests {
         let check = RecordingCheck::default();
         let mut worker = start_without_exiftool(
             "move",
-            Some(setup_with(journal.path(), Box::new(check.clone()))),
+            Some(setup_with(journal.path(), Arc::new(check.clone()))),
         );
 
         let moved = move_result(&mut worker, &raw, &target).expect("the move should succeed");
@@ -1581,7 +1948,7 @@ mod tests {
         let check = RecordingCheck::default();
         let mut worker = start_without_exiftool(
             "move-back",
-            Some(setup_with(journal.path(), Box::new(check.clone()))),
+            Some(setup_with(journal.path(), Arc::new(check.clone()))),
         );
         let moved = move_result(&mut worker, &raw, &target).expect("the move should succeed");
 
@@ -1608,7 +1975,7 @@ mod tests {
         let check = RecordingCheck::default();
         let mut worker = start_without_exiftool(
             "move-unlisted",
-            Some(setup_with(journal.path(), Box::new(check.clone()))),
+            Some(setup_with(journal.path(), Arc::new(check.clone()))),
         );
 
         move_result(&mut worker, &image, &target).expect("the move should succeed");
@@ -1773,7 +2140,7 @@ mod tests {
             let check = RecordingCheck::default();
             let mut worker = start_without_exiftool(
                 "prepare",
-                Some(setup_with(journal.path(), Box::new(check.clone()))),
+                Some(setup_with(journal.path(), Arc::new(check.clone()))),
             );
 
             let prepared = prepare_result(&mut worker, &[jpg.clone(), raw.clone()]);
@@ -1870,7 +2237,7 @@ mod tests {
             let check = RecordingCheck::default();
             let mut worker = start_without_exiftool(
                 "delete-held",
-                Some(setup_with(journal.path(), Box::new(check.clone()))),
+                Some(setup_with(journal.path(), Arc::new(check.clone()))),
             );
 
             let held = hold_open(&xmp);
@@ -1942,7 +2309,7 @@ mod tests {
             let check = RecordingCheck::default();
             let mut worker = start_without_exiftool(
                 "delete-real",
-                Some(setup_with(journal.path(), Box::new(check.clone()))),
+                Some(setup_with(journal.path(), Arc::new(check.clone()))),
             );
 
             let id = worker
@@ -1980,12 +2347,268 @@ mod tests {
         }
     }
 
+    /// T266: the worker with several write processes, over the fake ExifTool's `slow` mode (a
+    /// command naming a file with [`SLOW_MARKER`] is answered after [`SLOW_WAIT`]). The fake
+    /// cannot be written through, so every write answers an error; what is checked is when and
+    /// in which order the events come.
+    mod pooled {
+        use super::*;
+        use crate::test_support::{LOG_PREFIX, SLOW_MARKER, SLOW_WAIT};
+        use crate::write_pool::tests::FAIL_START_WHILE;
+
+        /// A setup with `NoImageCheck`, a journal in `folder` and `n` write processes.
+        fn pooled_setup(folder: &Path, n: usize) -> WriteSetup {
+            WriteSetup {
+                write_processes: n,
+                ..test_setup(folder)
+            }
+        }
+
+        /// A worker over the fake's `slow` mode with `n` write processes and `extra` leading
+        /// arguments after the fake's own.
+        fn start_slow(journal: &Path, n: usize, extra: &[String]) -> MetadataWorker {
+            let (program, mut args) = fake_exiftool("slow");
+            args.extend(extra.iter().cloned());
+            let args: Vec<&str> = args.iter().map(String::as_str).collect();
+            MetadataWorker::start_with(&program, &args, Some(pooled_setup(journal, n)))
+                .expect("worker should start")
+        }
+
+        /// A file `name` in `folder` (`slow` puts the marker in its name).
+        fn image(folder: &Path, name: &str, slow: bool) -> PathBuf {
+            let name = if slow {
+                let (stem, extension) = name.rsplit_once('.').expect("a name with an extension");
+                format!("{stem}-{SLOW_MARKER}.{extension}")
+            } else {
+                name.to_string()
+            };
+            let path = folder.join(name);
+            std::fs::write(&path, b"not really an image").expect("write the file");
+            path
+        }
+
+        fn rate(worker: &mut MetadataWorker, path: &Path) -> RequestId {
+            worker
+                .write_rating(
+                    path.to_path_buf(),
+                    Rating {
+                        stars: Some(2),
+                        label: None,
+                    },
+                )
+                .expect("request should be accepted")
+        }
+
+        fn id_of(event: &Event) -> RequestId {
+            match event {
+                Event::RatingsRead { id, .. }
+                | Event::RatingWritten { id, .. }
+                | Event::OrientationWritten { id, .. }
+                | Event::MetadataRead { id, .. }
+                | Event::EditsWritten { id, .. }
+                | Event::Moved { id, .. }
+                | Event::MovedBack { id, .. }
+                | Event::DeletePrepared { id, .. }
+                | Event::Deleted { id, .. } => *id,
+            }
+        }
+
+        /// The ids of the next `count` events, in the order they came.
+        fn next_ids(worker: &MetadataWorker, count: usize) -> Vec<RequestId> {
+            (0..count).map(|_| id_of(&next_event(worker))).collect()
+        }
+
+        #[test]
+        fn writes_of_different_images_overlap_and_may_answer_out_of_order() {
+            for n in [2, 4] {
+                let folder = TempDir::new(&format!("pooled-overlap-{n}"));
+                let journal = TempDir::new(&format!("pooled-overlap-{n}-journal"));
+                let first = image(folder.path(), "a.jpg", true);
+                let second = image(folder.path(), "b.jpg", false);
+                let mut worker = start_slow(journal.path(), n, &[]);
+
+                let slow_id = rate(&mut worker, &first);
+                let quick_id = rate(&mut worker, &second);
+
+                // The quick write, asked second, answered while the slow one still ran.
+                assert_eq!(
+                    next_ids(&worker, 2),
+                    vec![quick_id, slow_id],
+                    "{n} processes"
+                );
+            }
+        }
+
+        #[test]
+        fn two_writes_of_one_image_answer_in_order() {
+            for n in [2, 4] {
+                let folder = TempDir::new(&format!("pooled-one-image-{n}"));
+                let journal = TempDir::new(&format!("pooled-one-image-{n}-journal"));
+                let file = image(folder.path(), "a.jpg", true);
+                let mut worker = start_slow(journal.path(), n, &[]);
+
+                let started = Instant::now();
+                let first = rate(&mut worker, &file);
+                let second = worker
+                    .write_orientation(file.clone(), 6)
+                    .expect("request should be accepted");
+
+                assert_eq!(next_ids(&worker, 2), vec![first, second], "{n} processes");
+                // One after the other: two slow commands.
+                assert!(started.elapsed() >= SLOW_WAIT * 2, "{n} processes");
+            }
+        }
+
+        #[test]
+        fn writes_queued_when_the_worker_is_dropped_are_never_given_to_the_pool() {
+            let folder = TempDir::new("pooled-drop-queued");
+            let journal = TempDir::new("pooled-drop-queued-journal");
+            let files: Vec<PathBuf> = ["q0.jpg", "q1.jpg", "q2.jpg", "q3.jpg"]
+                .iter()
+                .map(|name| image(folder.path(), name, true))
+                .collect();
+            // The fake logs every file a write's command names: which writes reached a process.
+            let log = folder.path().join("commands.log");
+            let mut worker = start_slow(
+                journal.path(),
+                2,
+                &[format!("{LOG_PREFIX}{}", log.display())],
+            );
+            let ids: Vec<RequestId> = files.iter().map(|file| rate(&mut worker, file)).collect();
+            // The first two are given to the pool and run; the third is held back, the fourth
+            // waits in the queue.
+            std::thread::sleep(SLOW_WAIT / 2);
+
+            // The events are kept, so the worker thread can still send the first two writes'
+            // events and go on: only the drop keeps it from giving the other two to the pool.
+            let events = worker.drop_keeping_events();
+
+            let mut answered = Vec::new();
+            let deadline = Instant::now() + Duration::from_secs(20);
+            loop {
+                match events.try_recv() {
+                    Ok(event) => answered.push(id_of(&event)),
+                    // The worker thread has ended, after its pool's threads.
+                    Err(TryRecvError::Disconnected) => break,
+                    Err(TryRecvError::Empty) => {
+                        assert!(Instant::now() < deadline, "the worker thread did not end");
+                        std::thread::sleep(Duration::from_millis(5));
+                    }
+                }
+            }
+            assert!(
+                answered.iter().all(|id| ids[..2].contains(id)),
+                "a write queued at the drop was answered: {answered:?} of {ids:?}"
+            );
+            let logged = std::fs::read_to_string(&log).expect("read the fake's log");
+            let reached = |file: &PathBuf| logged.contains(&*file.to_string_lossy());
+            assert!(reached(&files[0]) && reached(&files[1]), "{logged}");
+            assert!(
+                !reached(&files[2]) && !reached(&files[3]),
+                "a write queued at the drop reached ExifTool: {logged}"
+            );
+        }
+
+        #[test]
+        fn a_move_and_a_read_after_a_write_come_after_its_event() {
+            let folder = TempDir::new("pooled-after-write");
+            let journal = TempDir::new("pooled-after-write-journal");
+            let raw = image(folder.path(), "TN0001.ARW", true);
+            let other = image(folder.path(), "TN0002.jpg", false);
+            let target = folder.path().join("_rejected");
+            let mut worker = start_slow(journal.path(), 2, &[]);
+
+            let write = rate(&mut worker, &raw);
+            let quick = rate(&mut worker, &other);
+            let read = worker
+                .read_metadata(raw.clone())
+                .expect("request should be accepted");
+            let moving = worker
+                .move_image(raw.clone(), target.clone(), strings(&["arw"]), Vec::new())
+                .expect("request should be accepted");
+
+            let events: Vec<Event> = (0..4).map(|_| next_event(&worker)).collect();
+            let ids: Vec<RequestId> = events.iter().map(id_of).collect();
+            assert_eq!(ids, vec![quick, write, read, moving]);
+            match &events[3] {
+                Event::Moved { result, .. } => assert!(result.is_ok(), "{result:?}"),
+                other => panic!("expected the move, got {other:?}"),
+            }
+            assert!(target.join(raw.file_name().expect("a name")).is_file());
+        }
+
+        #[test]
+        fn a_failed_pool_start_answers_the_write_other_and_the_next_write_tries_again() {
+            let folder = TempDir::new("pooled-start-fails");
+            let journal = TempDir::new("pooled-start-fails-journal");
+            let file = image(folder.path(), "a.jpg", false);
+            let marker = folder.path().join("fail-the-pool-start");
+            std::fs::write(&marker, b"").expect("write the marker");
+            let extra = [format!("{FAIL_START_WHILE}{}", marker.display())];
+            let mut worker = start_slow(journal.path(), 2, &extra);
+
+            let first = write_result(&mut worker, &file);
+            assert_eq!(
+                first,
+                Err(WriteError::Other(
+                    "I/O error: the test asks the pool start to fail".to_string()
+                ))
+            );
+            std::fs::remove_file(&marker).expect("remove the marker");
+            let second = write_result(&mut worker, &file);
+            // The pool started and its process answered: the fake's answer is not a file's
+            // metadata, so the safe write stops there, with another error than the start's.
+            assert!(second.is_err());
+            assert_ne!(second, first);
+        }
+
+        /// Sends slow writes of different images until the queue is full; the number accepted.
+        fn accepted_until_full(worker: &mut MetadataWorker, folder: &Path) -> usize {
+            for number in 0..40 {
+                let file = image(folder, &format!("f{number}.jpg"), true);
+                match worker.write_rating(
+                    file,
+                    Rating {
+                        stars: Some(1),
+                        label: None,
+                    },
+                ) {
+                    Ok(_) => {}
+                    Err(SubmitError::QueueFull) => return number,
+                    Err(SubmitError::Stopped) => panic!("the worker stopped"),
+                }
+            }
+            panic!("the queue never filled");
+        }
+
+        #[test]
+        fn more_writes_than_processes_fill_the_queue_as_with_one() {
+            for n in [1, 2, 4] {
+                let folder = TempDir::new(&format!("pooled-full-{n}"));
+                let journal = TempDir::new(&format!("pooled-full-{n}-journal"));
+                let mut worker = start_slow(journal.path(), n, &[]);
+
+                let accepted = accepted_until_full(&mut worker, folder.path());
+
+                // The queue, the writes given (one with one process) and one held back.
+                assert!(
+                    (REQUEST_CAPACITY..=REQUEST_CAPACITY + n + 1).contains(&accepted),
+                    "{accepted} accepted with {n} processes"
+                );
+                for _ in 0..accepted {
+                    next_event(&worker);
+                }
+            }
+        }
+    }
+
     /// The tests below write through a real ExifTool (`exiftool` on PATH, or `PW_EXIFTOOL_PL`
     /// run through `perl`) and fail with an explanation when it is missing (docs/TESTING.md
     /// §4.5). The safe write uses Windows file operations.
     #[cfg(windows)]
     mod real_exiftool {
         use super::*;
+        use crate::MIN_EXIFTOOL_VERSION;
         use crate::iim::Fallback;
         use crate::reconcile::FileKind;
         use crate::safe_write::{OriginalState, Stage, WriteReport};
@@ -2020,7 +2643,7 @@ mod tests {
             (program, args)
         }
 
-        fn start(checks: Box<dyn ImageCheck + Send>, journal: &Path) -> MetadataWorker {
+        fn start(checks: Arc<dyn ImageCheck + Send + Sync>, journal: &Path) -> MetadataWorker {
             let (program, args) = exiftool();
             let args: Vec<&str> = args.iter().map(String::as_str).collect();
             MetadataWorker::start_with(&program, &args, Some(setup_with(journal, checks)))
@@ -2080,7 +2703,7 @@ mod tests {
             let folder = TempDir::new("safe-jpeg");
             let journal = TempDir::new("safe-jpeg-journal");
             let image = jpeg(folder.path());
-            let mut worker = start(Box::new(NoImageCheck), journal.path());
+            let mut worker = start(Arc::new(NoImageCheck), journal.path());
 
             assert_eq!(write_result(&mut worker, &image), Ok(()));
 
@@ -2098,7 +2721,7 @@ mod tests {
             let raw = folder.path().join("TN0001.ARW");
             std::fs::write(&raw, b"FAKE_RAW").expect("write the fake RAW");
             let sidecar = folder.path().join("TN0001.xmp");
-            let mut worker = start(Box::new(NoImageCheck), journal.path());
+            let mut worker = start(Arc::new(NoImageCheck), journal.path());
 
             let rating = Rating {
                 stars: Some(3),
@@ -2147,7 +2770,7 @@ mod tests {
             let mut read_only = writable.clone();
             read_only.set_readonly(true);
             std::fs::set_permissions(&image, read_only).expect("set read-only");
-            let mut worker = start(Box::new(NoImageCheck), journal.path());
+            let mut worker = start(Arc::new(NoImageCheck), journal.path());
 
             let result = write_result(&mut worker, &image);
 
@@ -2161,7 +2784,7 @@ mod tests {
             let folder = TempDir::new("failing-check");
             let journal = TempDir::new("failing-check-journal");
             let image = jpeg(folder.path());
-            let mut worker = start(Box::new(FailingCheck), journal.path());
+            let mut worker = start(Arc::new(FailingCheck), journal.path());
 
             let result = write_result(&mut worker, &image);
 
@@ -2230,7 +2853,7 @@ mod tests {
             let journal = TempDir::new("read-headline-journal");
             let image = jpeg(folder.path());
             write_tags(&mut direct(), &image, &["-XMP-photoshop:Headline=Rubrik"]);
-            let mut worker = start(Box::new(NoImageCheck), journal.path());
+            let mut worker = start(Arc::new(NoImageCheck), journal.path());
 
             let read = metadata_result(&mut worker, &image).expect("the metadata should be read");
 
@@ -2241,7 +2864,7 @@ mod tests {
         fn read_metadata_of_a_missing_file_is_an_error() {
             let folder = TempDir::new("read-missing");
             let journal = TempDir::new("read-missing-journal");
-            let mut worker = start(Box::new(NoImageCheck), journal.path());
+            let mut worker = start(Arc::new(NoImageCheck), journal.path());
 
             let result = metadata_result(&mut worker, &folder.path().join("saknas.jpg"));
 
@@ -2253,7 +2876,7 @@ mod tests {
             let folder = TempDir::new("edits-headline");
             let journal = TempDir::new("edits-headline-journal");
             let image = jpeg(folder.path());
-            let mut worker = start(Box::new(NoImageCheck), journal.path());
+            let mut worker = start(Arc::new(NoImageCheck), journal.path());
 
             let report = edits_result(
                 &mut worker,
@@ -2284,7 +2907,7 @@ mod tests {
                 "-",
                 "the fixture has IIM"
             );
-            let mut worker = start(Box::new(NoImageCheck), journal.path());
+            let mut worker = start(Arc::new(NoImageCheck), journal.path());
 
             worker
                 .set_options(EditOptions {
@@ -2302,13 +2925,208 @@ mod tests {
             assert_eq!(tag(&mut et, &image, "IPTC:City"), "Lund");
         }
 
+        /// T266: a worker over the real ExifTool with `n` write processes.
+        fn start_pooled(journal: &Path, n: usize) -> MetadataWorker {
+            let (program, args) = exiftool();
+            let args: Vec<&str> = args.iter().map(String::as_str).collect();
+            let setup = WriteSetup {
+                write_processes: n,
+                ..test_setup(journal)
+            };
+            MetadataWorker::start_with(&program, &args, Some(setup)).expect("worker should start")
+        }
+
+        #[test]
+        fn eight_copies_are_written_with_four_processes() {
+            let folder = TempDir::new("pooled-eight");
+            let journal = TempDir::new("pooled-eight-journal");
+            let images: Vec<PathBuf> = (0..8)
+                .map(|number| {
+                    let path = folder.path().join(format!("bild{number}.jpg"));
+                    std::fs::write(&path, jpeg_fixture::SMALL).expect("write the JPEG");
+                    path
+                })
+                .collect();
+            let mut worker = start_pooled(journal.path(), 4);
+
+            let mut ids = Vec::new();
+            for (number, image) in images.iter().enumerate() {
+                let stars = i8::try_from(number % 5 + 1).expect("a small number");
+                let rating = Rating {
+                    stars: Some(stars),
+                    label: None,
+                };
+                let deadline = Instant::now() + Duration::from_secs(60);
+                loop {
+                    match worker.write_rating(image.clone(), rating.clone()) {
+                        Ok(id) => {
+                            ids.push((id, image.clone(), stars));
+                            break;
+                        }
+                        Err(SubmitError::QueueFull) if Instant::now() < deadline => {
+                            std::thread::sleep(Duration::from_millis(20));
+                        }
+                        Err(error) => panic!("the write was not accepted: {error:?}"),
+                    }
+                }
+            }
+            let mut answered = Vec::new();
+            let deadline = Instant::now() + Duration::from_secs(120);
+            while answered.len() < ids.len() {
+                match worker.try_recv() {
+                    Ok(Event::RatingWritten { id, result, .. }) => {
+                        assert_eq!(result, Ok(()), "write {id}");
+                        answered.push(id);
+                    }
+                    Ok(other) => panic!("unexpected event {other:?}"),
+                    Err(TryRecvError::Empty) if Instant::now() < deadline => {
+                        std::thread::sleep(Duration::from_millis(5));
+                    }
+                    Err(error) => panic!("not every write answered: {error:?}"),
+                }
+            }
+
+            answered.sort_unstable();
+            let mut sent: Vec<RequestId> = ids.iter().map(|(id, _, _)| *id).collect();
+            sent.sort_unstable();
+            assert_eq!(answered, sent);
+            assert_eq!(entries(journal.path()), Vec::<PathBuf>::new());
+            let mut et = direct();
+            for (_, image, stars) in &ids {
+                assert_eq!(tag(&mut et, image, "XMP-xmp:Rating"), stars.to_string());
+            }
+            let mut left = entries(folder.path());
+            left.sort();
+            assert_eq!(left, images);
+        }
+
+        #[test]
+        fn dropping_the_worker_while_writes_run_leaves_each_file_unchanged_or_written() {
+            let folder = TempDir::new("pooled-drop");
+            let journal = TempDir::new("pooled-drop-journal");
+            let images: Vec<PathBuf> = (0..8)
+                .map(|number| {
+                    let path = folder.path().join(format!("drop{number}.jpg"));
+                    std::fs::write(&path, jpeg_fixture::SMALL).expect("write the JPEG");
+                    path
+                })
+                .collect();
+            let mut worker = start_pooled(journal.path(), 4);
+            let rating = Rating {
+                stars: Some(4),
+                label: None,
+            };
+            for image in &images {
+                let deadline = Instant::now() + Duration::from_secs(60);
+                loop {
+                    match worker.write_rating(image.clone(), rating.clone()) {
+                        Ok(_) => break,
+                        Err(SubmitError::QueueFull) if Instant::now() < deadline => {
+                            std::thread::sleep(Duration::from_millis(20));
+                        }
+                        Err(error) => panic!("the write was not accepted: {error:?}"),
+                    }
+                }
+            }
+            // The first answer: the pool's processes are writing now.
+            match next_event(&worker) {
+                Event::RatingWritten { result, .. } => assert_eq!(result, Ok(())),
+                other => panic!("unexpected event {other:?}"),
+            }
+
+            drop(worker);
+
+            // The worker thread is not joined: wait until the journal is empty and only the
+            // images are left, and still so two seconds later (the started writes have ended).
+            let settled = || {
+                entries(journal.path()).is_empty() && entries(folder.path()).len() == images.len()
+            };
+            let deadline = Instant::now() + Duration::from_secs(60);
+            loop {
+                if settled() {
+                    std::thread::sleep(Duration::from_secs(2));
+                    if settled() {
+                        break;
+                    }
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "journal entries or temporary files left: {:?}, {:?}",
+                    entries(journal.path()),
+                    entries(folder.path())
+                );
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            let mut et = direct();
+            let mut written = 0;
+            for image in &images {
+                let bytes = std::fs::read(image).expect("read the image");
+                if bytes != jpeg_fixture::SMALL {
+                    assert_eq!(
+                        tag(&mut et, image, "XMP-xmp:Rating"),
+                        "4",
+                        "{} is changed but not written",
+                        image.display()
+                    );
+                    written += 1;
+                }
+            }
+            assert!(
+                written >= 1,
+                "the write answered before the drop is missing"
+            );
+        }
+
+        #[test]
+        fn set_options_between_two_writes_with_two_processes() {
+            let folder = TempDir::new("pooled-options");
+            let journal = TempDir::new("pooled-options-journal");
+            let before = folder.path().join("before.jpg");
+            let after = folder.path().join("after.jpg");
+            std::fs::write(&before, jpeg_fixture::SMALL).expect("write the JPEG");
+            std::fs::write(&after, jpeg_fixture::SMALL).expect("write the JPEG");
+            let mut worker = start_pooled(journal.path(), 2);
+
+            let first = worker
+                .write_edits(before.clone(), vec![set_text("photoshop:City", "Lund")])
+                .expect("request should be accepted");
+            worker
+                .set_options(EditOptions {
+                    settings: WriteSettings { create_iim: true },
+                    fallback: Fallback::default(),
+                })
+                .expect("the options should be accepted");
+            let second = worker
+                .write_edits(after.clone(), vec![set_text("photoshop:City", "Lund")])
+                .expect("request should be accepted");
+            let mut answered = Vec::new();
+            for _ in 0..2 {
+                match next_event(&worker) {
+                    Event::EditsWritten { id, result, .. } => {
+                        assert!(result.is_ok(), "{result:?}");
+                        answered.push(id);
+                    }
+                    other => panic!("unexpected event {other:?}"),
+                }
+            }
+            answered.sort_unstable();
+            assert_eq!(answered, vec![first, second]);
+
+            let mut et = direct();
+            assert_eq!(tag(&mut et, &before, "XMP-photoshop:City"), "Lund");
+            assert_eq!(tag(&mut et, &before, "IPTC:City"), "-");
+            assert_eq!(tag(&mut et, &after, "XMP-photoshop:City"), "Lund");
+            assert_eq!(tag(&mut et, &after, "IPTC:City"), "Lund");
+            assert_eq!(entries(journal.path()), Vec::<PathBuf>::new());
+        }
+
         #[test]
         fn without_set_options_the_city_is_not_written_to_iim() {
             let folder = TempDir::new("options-no-iim");
             let journal = TempDir::new("options-no-iim-journal");
             let image = jpeg(folder.path());
             let mut et = direct();
-            let mut worker = start(Box::new(NoImageCheck), journal.path());
+            let mut worker = start(Arc::new(NoImageCheck), journal.path());
 
             edits_result(
                 &mut worker,
@@ -2330,7 +3148,7 @@ mod tests {
             // ExifTool writes IIM in Windows-1252 without 1:90 by default: `€` is the byte 0x80.
             write_tags(&mut et, &image, &["-IPTC:City=€"]);
             assert_eq!(tag(&mut et, &image, "IPTC:CodedCharacterSet"), "-");
-            let mut worker = start(Box::new(NoImageCheck), journal.path());
+            let mut worker = start(Arc::new(NoImageCheck), journal.path());
 
             let before = metadata_result(&mut worker, &image).expect("the metadata should be read");
             worker

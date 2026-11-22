@@ -87,10 +87,9 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status |
 |---|---|---|
-| [T266](T266-metadata-worker-several-exiftool-processes.md) | ADR 0007 §9.6 Q18: a pool of ExifTool write processes, used by the metadata worker | Open |
-| [T267](T267-batch-write-timing-by-process-count.md) | ADR 0007 §9.6 Q18: a batch write timed with 1, 2 and 4 ExifTool processes | Blocked: waits for T266 |
+| [T267](T267-batch-write-timing-by-process-count.md) | ADR 0007 §9.6 Q18: a batch write timed with 1, 2 and 4 ExifTool processes | Open |
 | [T268](T268-app-and-import-use-several-exiftool-processes.md) | ADR 0007 §9.6 Q18: the app and the import use the owner's number of processes | Blocked: waits for T267 and the owner's number |
-| [T269](T269-digest-pass-and-tiff-restart-with-exiftool-13-64.md) | ADR 0007 §9.6 Q19: the digest pass and the TIFF restart with ExifTool 13.64 (measurement) | Blocked: waits for T266 |
+| [T269](T269-digest-pass-and-tiff-restart-with-exiftool-13-64.md) | ADR 0007 §9.6 Q19: the digest pass and the TIFF restart with ExifTool 13.64 (measurement) | Open |
 
 ## Writing a task (owner and reviewer)
 

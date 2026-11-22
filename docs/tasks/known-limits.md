@@ -13,6 +13,11 @@ dropped is removed; git history and `done/` keep it.
 
 ## Metadata and the safe write (`pw-metadata`)
 
+- **The free-space check under several writes** (T266, ADR 0007 §9.6 point 2; accepted in its
+  task, 2026-11-22): with several write processes, each file's free-space check (§9.1, §9.2)
+  sees the space before the other threads' copies exist, so several writes on an almost full
+  volume can all pass it; a copy write then fails cleanly and the original is unchanged. A task
+  only if it is seen in use.
 - **Lists with qualifiers** (T193's chain review and review, 2026-11-18; sorted after T194, owner
   2026-11-19). Editing such a list with its qualifiers kept is in `backlog.md`. Known limits until
   then, each with its reason:

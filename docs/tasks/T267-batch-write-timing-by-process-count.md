@@ -1,4 +1,4 @@
-# T267. ADR 0007 §9.6 Q18: a batch write timed with 1, 2 and 4 ExifTool processes (pw-imagecheck example) — Blocked: waits for T266
+# T267. ADR 0007 §9.6 Q18: a batch write timed with 1, 2 and 4 ExifTool processes (pw-imagecheck example) — Open
 
 - **Why:** ADR 0007 §9.6 point 2 (Q18; approved by the owner 2026-11-22): the number of ExifTool
   processes a batch is shared among (at most four) "is fixed after a measurement with 1, 2 and 4
@@ -89,3 +89,4 @@
 |---|---|---|
 | 2026-11-22 | Blocked | Written with T266 and T268 (ADR 0007 §9.6 point 2, Q18); waits for T266 |
 | 2026-11-22 | Blocked | Cold read: the worker started with `MetadataWorker::start` or `start_with("perl", ..)` (the default program is not public), the version from `exiftool_version()` printed once, a too-old or unknown version stops; events drained with `try_recv()` while sending (the 8-event channel blocks the worker), a 1 ms sleep named; the pool's lazy start reported apart (a first and a warm batch per run on the same worker); `Unchanged` counted apart; the exact `Edit::Set`; names `<stem>-<s>-<i>` (one pool key per file); the journal opened per run, old ExifTool processes waited for, the journal and default work folder deleted; the section before the appendix, `%TEMP%`, the machine's cores; `refuse_source_folders`; the `-p` run allowed as in T261. Follows T266's API as its cold read named it |
+| 2026-11-22 | Open | T266 done |
