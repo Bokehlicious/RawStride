@@ -54,7 +54,7 @@
 | Destination | Folder dialog, typed path or drag-and-drop | – |
 | Templates | Folder and file name, with the variables of ADR 0005 point 4 and the default templates of ADR 0005 choice 1. Template errors mark the field | ADR 0005 |
 | Validation | Absolute paths, no `..`, destination not on or above the source; the same rules and messages as today, shared through `pw-ingest` (§4.3) | – |
-| Preview | Counts, bytes, conflicts, files without EXIF time and the first lines of the plan; recomputed shortly after each change; the scan is reused while only templates change and is redone before copying | ADR 0005; fix of 2026-11-08 |
+| Preview | Counts, bytes, conflicts, files without EXIF time and the first lines of the plan; recomputed shortly after each change, except a change of only the IPTC template or Eject, which the preview does not read (T276); the scan is reused while only templates change and is redone before copying. **Owner, 2026-11-22 (T276):** while a new preview is awaited, the last list stays, dimmed, with "Previewing …" beside Search Again; a field error, a lost worker, going back from the summary or a change made in the summary clears it, so a list from before an import is never shown | ADR 0005; fix of 2026-11-08; T276 |
 | Copy | `pw-ingest::execute` on a background thread; the UI only polls progress (G2, GR2) | ADR 0005 point 6 |
 | Progress and cancel | Files, bytes and current file; cancel stops between chunks and leaves no final-named file | ADR 0005 point 6 |
 | Summary | Copied, already present, failed (with reasons), time and speed, destination folders | – |

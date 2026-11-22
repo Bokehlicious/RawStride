@@ -40,6 +40,37 @@ pub struct ImportDialog {
     changed_at: Option<Instant>,
     source_changed: bool,
     request_id: Option<RequestId>,
+    /// The last successful preview, kept while the form is edited so the list can still be
+    /// drawn (dimmed) until the next preview comes (T276).
+    shown: Option<Preview>,
+}
+
+/// True when `a` and `b` give the same preview: every field of `ImportForm` the worker's
+/// `preview` reads is equal. `iptc` and `eject` are left out because the preview does not read
+/// them; a field added to `ImportForm` must be placed on one side or the other here.
+fn preview_fields_equal(a: &ImportForm, b: &ImportForm) -> bool {
+    let ImportForm {
+        source,
+        dest,
+        backup_on,
+        backup,
+        folder,
+        name,
+        job,
+        first_seq,
+        iptc: _,
+        eject: _,
+        incremental,
+    } = a;
+    *source == b.source
+        && *dest == b.dest
+        && *backup_on == b.backup_on
+        && *backup == b.backup
+        && *folder == b.folder
+        && *name == b.name
+        && *job == b.job
+        && *first_seq == b.first_seq
+        && *incremental == b.incremental
 }
 
 impl ImportDialog {
@@ -54,6 +85,7 @@ impl ImportDialog {
             changed_at: Some(Instant::now()),
             source_changed: true,
             request_id: None,
+            shown: None,
         }
     }
 
@@ -66,16 +98,33 @@ impl ImportDialog {
     }
 
     /// Updates form fields and restarts the preview debounce.
+    ///
+    /// In `Editing` and `Previewing`, an edit that changes only the IPTC template or Eject
+    /// updates the form and nothing else (T276): the worker's `preview` reads neither, so the
+    /// preview shown or on its way stays current. Every other field restarts the preview, as
+    /// does an edit that changes nothing. Leaving `Done` clears the kept preview, which no
+    /// longer matches the card after an import.
     pub fn edit(&mut self, change: impl FnOnce(&mut ImportForm), now: Instant) {
-        let previous_source = self.form.source.clone();
+        let previous = self.form.clone();
         change(&mut self.form);
-        self.source_changed |= self.form.source != previous_source;
+        if matches!(
+            self.state,
+            ImportDialogState::Editing { .. } | ImportDialogState::Previewing
+        ) && self.form != previous
+            && preview_fields_equal(&self.form, &previous)
+        {
+            return;
+        }
+        self.source_changed |= self.form.source != previous.source;
         self.changed_at = Some(now);
         if matches!(
             self.state,
             ImportDialogState::Running { .. } | ImportDialogState::Ejecting { .. }
         ) {
             return;
+        }
+        if matches!(self.state, ImportDialogState::Done { .. }) {
+            self.shown = None;
         }
         self.request_id = None;
         self.state = ImportDialogState::Editing {
@@ -137,12 +186,14 @@ impl ImportDialog {
                 match result {
                     Ok(preview) => {
                         self.source_changed = false;
+                        self.shown = Some(preview.clone());
                         self.state = ImportDialogState::Editing {
                             preview: Some(preview.clone()),
                             error: None,
                         };
                     }
                     Err(error) => {
+                        self.shown = None;
                         self.state = ImportDialogState::Editing {
                             preview: None,
                             error: Some(error.clone()),
@@ -188,6 +239,7 @@ impl ImportDialog {
         match self.state {
             ImportDialogState::Previewing => {
                 self.request_id = None;
+                self.shown = None;
                 self.state = ImportDialogState::Editing {
                     preview: None,
                     error: Some(FieldError {
@@ -230,7 +282,35 @@ impl ImportDialog {
             self.changed_at = Some(Instant::now());
             self.source_changed = true;
             self.request_id = None;
+            self.shown = None;
         }
+    }
+
+    /// The last successful preview, for drawing the list: kept while the state is `Editing`
+    /// without a field error or `Previewing`, so the list stays until the next preview comes
+    /// (T276); `None` with a field error, while running or ejecting, and in `Done`.
+    pub fn shown_preview(&self) -> Option<&Preview> {
+        match self.state {
+            ImportDialogState::Editing { error: None, .. } | ImportDialogState::Previewing => {
+                self.shown.as_ref()
+            }
+            ImportDialogState::Editing { error: Some(_), .. }
+            | ImportDialogState::Running { .. }
+            | ImportDialogState::Ejecting { .. }
+            | ImportDialogState::Done { .. } => None,
+        }
+    }
+
+    /// True when the preview shown belongs to the form as it is now (the same condition as
+    /// `can_start` and `marks_only`); the list is drawn dimmed otherwise.
+    pub fn preview_is_current(&self) -> bool {
+        matches!(
+            self.state,
+            ImportDialogState::Editing {
+                preview: Some(_),
+                error: None
+            }
+        )
     }
 
     pub fn can_start(&self) -> bool {
@@ -984,6 +1064,262 @@ mod tests {
         assert!(!dialog.source_changed);
         assert_eq!(dialog.request_id, Some(7));
         assert!(dialog.tick(now + PREVIEW_DELAY).is_none());
+    }
+
+    /// Reaches a current preview as the dialog does: a scheduled request, sent, then answered.
+    fn previewed(dialog: &mut ImportDialog, now: Instant, id: RequestId, result: Preview) {
+        let _ = schedule_preview(dialog, now);
+        dialog.sent(id);
+        dialog.apply(&ImportEvent::Previewed {
+            id,
+            result: Ok(result),
+        });
+    }
+
+    fn is_current(dialog: &ImportDialog, files_to_copy: usize) -> bool {
+        matches!(
+            dialog.state(),
+            ImportDialogState::Editing {
+                preview: Some(current),
+                error: None
+            } if current.files_to_copy == files_to_copy
+        )
+    }
+
+    #[test]
+    fn an_iptc_or_eject_only_edit_keeps_a_current_preview() {
+        let t = Instant::now();
+        let mut dialog = ImportDialog::new(ImportForm::default());
+        previewed(&mut dialog, t, 30, preview(2));
+        assert!(dialog.can_start());
+
+        dialog.edit(
+            |form| form.iptc.creator = "A. Photographer".to_string(),
+            t + Duration::from_secs(1),
+        );
+        assert_eq!(dialog.form().iptc.creator, "A. Photographer");
+        assert!(is_current(&dialog, 2));
+        assert!(dialog.can_start());
+        assert!(dialog.preview_is_current());
+        assert_eq!(dialog.shown_preview(), Some(&preview(2)));
+        assert!(dialog.tick(t + PREVIEW_DELAY * 2).is_none());
+        assert!(
+            dialog
+                .tick(t + Duration::from_secs(1) + PREVIEW_DELAY * 2)
+                .is_none()
+        );
+
+        dialog.edit(|form| form.eject = !form.eject, t + Duration::from_secs(2));
+        assert!(dialog.form().eject);
+        assert!(is_current(&dialog, 2));
+        assert!(dialog.can_start());
+        assert!(
+            dialog
+                .tick(t + Duration::from_secs(2) + PREVIEW_DELAY * 2)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn an_iptc_only_edit_while_previewing_keeps_the_request_on_its_way() {
+        let t = Instant::now();
+        let mut dialog = ImportDialog::new(ImportForm::default());
+        let _ = schedule_preview(&mut dialog, t);
+        dialog.sent(31);
+
+        dialog.edit(
+            |form| form.iptc.copyright = "(c) 2026".to_string(),
+            t + PREVIEW_DELAY + Duration::from_millis(50),
+        );
+        assert!(matches!(dialog.state(), ImportDialogState::Previewing));
+
+        dialog.apply(&ImportEvent::Previewed {
+            id: 31,
+            result: Ok(preview(3)),
+        });
+        assert!(is_current(&dialog, 3));
+        assert_eq!(dialog.form().iptc.copyright, "(c) 2026");
+    }
+
+    #[test]
+    fn an_iptc_only_edit_does_not_restart_or_cancel_a_running_debounce() {
+        let t = Instant::now();
+        let mut dialog = ImportDialog::new(ImportForm::default());
+
+        dialog.edit(|form| form.folder = "{year}".to_string(), t);
+        dialog.edit(
+            |form| form.iptc.credit = "Agency".to_string(),
+            t + Duration::from_millis(100),
+        );
+        assert!(dialog.tick(t + Duration::from_millis(250)).is_none());
+        assert!(matches!(
+            dialog.tick(t + PREVIEW_DELAY),
+            Some(DialogRequest::Preview { form, .. })
+                if form.folder == "{year}" && form.iptc.credit == "Agency"
+        ));
+    }
+
+    #[test]
+    fn an_iptc_only_edit_keeps_a_field_error() {
+        let t = Instant::now();
+        let mut dialog = ImportDialog::new(ImportForm::default());
+        let _ = schedule_preview(&mut dialog, t);
+        dialog.sent(32);
+        let error = FieldError {
+            field: Field::Folder,
+            message: "Folder Template: invalid".to_string(),
+        };
+        dialog.apply(&ImportEvent::Previewed {
+            id: 32,
+            result: Err(error.clone()),
+        });
+
+        dialog.edit(
+            |form| form.iptc.url = "https://example.com".to_string(),
+            t + Duration::from_secs(1),
+        );
+        assert!(matches!(
+            dialog.state(),
+            ImportDialogState::Editing {
+                preview: None,
+                error: Some(current),
+            } if current == &error
+        ));
+        assert!(dialog.shown_preview().is_none());
+    }
+
+    #[test]
+    fn an_iptc_only_edit_in_done_goes_back_to_editing_without_a_preview() {
+        let t = Instant::now();
+        let mut dialog = ImportDialog::new(ImportForm::default());
+        previewed(&mut dialog, t, 33, preview(1));
+        assert!(dialog.start().is_some());
+        dialog.sent(34);
+        dialog.apply(&ImportEvent::Done {
+            id: 34,
+            done: ImportDone::default(),
+        });
+
+        dialog.edit(
+            |form| form.iptc.phone = "+46 0".to_string(),
+            t + Duration::from_secs(1),
+        );
+        assert!(matches!(
+            dialog.state(),
+            ImportDialogState::Editing {
+                preview: None,
+                error: None
+            }
+        ));
+        // The list from before the import is not kept (the owner, 2026-11-22).
+        assert!(dialog.shown_preview().is_none());
+        assert!(!dialog.preview_is_current());
+    }
+
+    #[test]
+    fn a_changed_name_template_keeps_the_old_list_dimmed_until_the_new_preview() {
+        let t = Instant::now();
+        let mut dialog = ImportDialog::new(ImportForm::default());
+        previewed(&mut dialog, t, 35, preview(1));
+
+        let edited = t + Duration::from_secs(1);
+        dialog.edit(|form| form.name = "{seq}".to_string(), edited);
+        assert_eq!(dialog.shown_preview(), Some(&preview(1)));
+        assert!(!dialog.preview_is_current());
+        assert!(!dialog.can_start());
+
+        assert!(matches!(
+            dialog.tick(edited + PREVIEW_DELAY),
+            Some(DialogRequest::Preview { .. })
+        ));
+        dialog.sent(36);
+        assert!(matches!(dialog.state(), ImportDialogState::Previewing));
+        assert_eq!(dialog.shown_preview(), Some(&preview(1)));
+        assert!(!dialog.preview_is_current());
+        assert!(!dialog.can_start());
+
+        dialog.apply(&ImportEvent::Previewed {
+            id: 36,
+            result: Ok(preview(4)),
+        });
+        assert_eq!(dialog.shown_preview(), Some(&preview(4)));
+        assert!(dialog.preview_is_current());
+        assert!(dialog.can_start());
+    }
+
+    #[test]
+    fn rescan_keeps_the_shown_preview_dimmed() {
+        let t = Instant::now();
+        let mut dialog = ImportDialog::new(ImportForm::default());
+        previewed(&mut dialog, t, 37, preview(1));
+
+        dialog.rescan(t + Duration::from_secs(1));
+        assert_eq!(dialog.shown_preview(), Some(&preview(1)));
+        assert!(!dialog.preview_is_current());
+    }
+
+    #[test]
+    fn the_shown_preview_is_cleared_by_an_error_a_disconnect_and_back_to_editing() {
+        let t = Instant::now();
+
+        let mut errored = ImportDialog::new(ImportForm::default());
+        previewed(&mut errored, t, 38, preview(1));
+        let _ = schedule_preview(&mut errored, t + Duration::from_secs(1));
+        errored.sent(39);
+        errored.apply(&ImportEvent::Previewed {
+            id: 39,
+            result: Err(FieldError {
+                field: Field::Name,
+                message: "Name Template: invalid".to_string(),
+            }),
+        });
+        assert!(errored.shown_preview().is_none());
+        errored.edit(
+            |form| form.name = "{seq}".to_string(),
+            t + Duration::from_secs(2),
+        );
+        assert!(errored.shown_preview().is_none());
+
+        let mut disconnected = ImportDialog::new(ImportForm::default());
+        previewed(&mut disconnected, t, 40, preview(1));
+        let _ = schedule_preview(&mut disconnected, t + Duration::from_secs(1));
+        disconnected.sent(41);
+        disconnected.disconnected();
+        assert!(disconnected.shown_preview().is_none());
+        disconnected.edit(
+            |form| form.name = "{seq}".to_string(),
+            t + Duration::from_secs(2),
+        );
+        assert!(disconnected.shown_preview().is_none());
+
+        let mut finished = ImportDialog::new(ImportForm::default());
+        previewed(&mut finished, t, 42, preview(1));
+        assert!(finished.start().is_some());
+        finished.sent(43);
+        finished.apply(&ImportEvent::Done {
+            id: 43,
+            done: ImportDone::default(),
+        });
+        finished.back_to_editing();
+        assert!(finished.shown_preview().is_none());
+    }
+
+    #[test]
+    fn the_shown_preview_is_none_while_running_and_in_done() {
+        let t = Instant::now();
+        let mut dialog = ImportDialog::new(ImportForm::default());
+        previewed(&mut dialog, t, 44, preview(1));
+        assert!(dialog.start().is_some());
+        assert!(dialog.shown_preview().is_none());
+        assert!(!dialog.preview_is_current());
+
+        dialog.sent(45);
+        dialog.apply(&ImportEvent::Done {
+            id: 45,
+            done: ImportDone::default(),
+        });
+        assert!(dialog.shown_preview().is_none());
+        assert!(!dialog.preview_is_current());
     }
 
     #[test]

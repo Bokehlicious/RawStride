@@ -31,6 +31,12 @@ Downloads are on the [Releases page](https://github.com/Bokehlicious/RawStride/r
   RAW data is checked by that hash alone, without opening it with LibRaw; its previews are
   still compared.
 
+### Fixed
+
+- The list of images in the import dialog no longer disappears and comes back while you type
+  in the IPTC template, so the window no longer jumps. While a template or path is changed,
+  the last list stays, dimmed, until the new one is ready.
+
 ## [0.2.0] - 2026-11-21
 
 ### Added

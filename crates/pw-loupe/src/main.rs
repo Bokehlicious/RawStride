@@ -2224,6 +2224,8 @@ impl Loupe {
         let state = dialog.state().clone();
         let can_close = dialog.can_close();
         let can_start = dialog.can_start();
+        let shown_preview = dialog.shown_preview().cloned();
+        let preview_is_current = dialog.preview_is_current();
         let start_text = if dialog.marks_only() {
             ImportText::MarkCard
         } else {
@@ -2376,15 +2378,13 @@ impl Loupe {
                         if ui.button(import_text(ImportText::Rescan)).clicked() {
                             rescan = true;
                         }
-                    });
-                    match &state {
-                        ImportDialogState::Previewing => {
+                        if matches!(state, ImportDialogState::Previewing) {
                             ui.label(import_text(ImportText::Previewing));
                         }
-                        ImportDialogState::Editing {
-                            preview: Some(preview),
-                            ..
-                        } => {
+                    });
+                    // The last list stays, dimmed, until the next preview comes (T276).
+                    if let Some(preview) = &shown_preview {
+                        ui.add_enabled_ui(preview_is_current, |ui| {
                             ui.label(preview_summary(preview));
                             if let Some(note) = &preview.register_note {
                                 ui.label(note.as_str());
@@ -2399,11 +2399,7 @@ impl Loupe {
                                         ui.label(more);
                                     }
                                 });
-                        }
-                        ImportDialogState::Editing { .. } => {}
-                        ImportDialogState::Running { .. }
-                        | ImportDialogState::Ejecting { .. }
-                        | ImportDialogState::Done { .. } => {}
+                        });
                     }
                 });
 

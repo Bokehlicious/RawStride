@@ -87,7 +87,6 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status |
 |---|---|---|
-| [T276](T276-import-preview-list-kept-while-editing.md) | The import dialog's preview list stays while the form is edited: no new preview for the IPTC template or Eject, the last list kept dimmed until the next (pw-loupe) | Open |
 
 ## Writing a task (owner and reviewer)
 
