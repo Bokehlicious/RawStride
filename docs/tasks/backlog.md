@@ -51,6 +51,9 @@ Reorganised on 2026-11-21 (owner): the earlier file mixed these three kinds and 
 
 ## Technical work
 
+- **The shipped ExifTool at least `MIN_EXIFTOOL_VERSION`** (chain review of T270–T272,
+  2026-11-22): nothing checks that the version `tools/package-dist.ps1` ships (and CI pins) is not
+  below the app's lowest version. A guard in the script or a test; a tooling change, so a task.
 - **A timeout when ExifTool hangs** (process supervision across threads). Today only the shutdown
   has a timeout (`SHUTDOWN_TIMEOUT` in `pw-metadata`'s `exiftool.rs`). A worker that never answers
   also holds a delete, a move and an "Open in" request (`known-limits.md`).
