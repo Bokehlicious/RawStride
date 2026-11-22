@@ -51,6 +51,10 @@ Reorganised on 2026-11-21 (owner): the earlier file mixed these three kinds and 
 
 ## Technical work
 
+- **A setting for the number of ExifTool write processes** (T268, ADR 0007 §9.6 point 2: "may
+  become a setting later"): the app uses four (`WRITE_PROCESSES` in `pw-loupe`'s `main.rs`,
+  the owner, 2026-11-22, after T267); a memory card, a network share and a hard disk were not
+  measured. A task if a user needs fewer or the owner asks.
 - **The shipped ExifTool at least `MIN_EXIFTOOL_VERSION`** (chain review of T270–T272,
   2026-11-22): nothing checks that the version `tools/package-dist.ps1` ships (and CI pins) is not
   below the app's lowest version. A guard in the script or a test; a tooling change, so a task.

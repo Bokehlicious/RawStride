@@ -18,6 +18,15 @@ dropped is removed; git history and `done/` keep it.
   sees the space before the other threads' copies exist, so several writes on an almost full
   volume can all pass it; a copy write then fails cleanly and the original is unchanged. A task
   only if it is seen in use.
+- **Two pools of write processes can meet on one target** (T268, ADR 0007 §9.6 point 2; the
+  owner, 2026-11-22): `write_key` keeps one target from being written twice at once only within
+  one pool, so the metadata worker's pool and the import's pool can still meet on one target (a
+  backup folder open in a tab, or a sidecar `A001.xmp` shared by an existing `A001.CR2` and an
+  imported `A001.ARW`), as the worker's and the import's single processes could before. A task
+  only if it is seen in use.
+- **Writes cut off at the app's exit** (T268, 2026-11-22): at the exit up to four transactions
+  of each pool can be cut off after `EXIT_WAIT_LIMIT` (one before T268); the journal recovers
+  them at the next start.
 - **Lists with qualifiers** (T193's chain review and review, 2026-11-18; sorted after T194, owner
   2026-11-19). Editing such a list with its qualifiers kept is in `backlog.md`. Known limits until
   then, each with its reason:
@@ -355,6 +364,11 @@ with ADR 0026 F3, in `plans/adr-0018-0025-steps.md`.)
   through a `subst` drive or a `\\?\` path does not leave out the images not yet placed (one can
   show before its template is written). (Its last clause, a tab loaded once more at the end of
   the import, went with the end rule in T262.)
+- *A cancel during a long copy is seen at the next file* (T268 extra review, 2026-11-22): with
+  several write processes the import's pool keeps starting queued template writes until the
+  cancel is seen at the next progress call (or in the end's wait); writes started finish and
+  are listed. With one process no write ran during a copy. The template's writes add no
+  progress step, so the progress may also stay at 100 % while they finish.
 
 ## Card eject
 

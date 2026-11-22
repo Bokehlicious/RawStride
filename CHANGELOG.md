@@ -16,6 +16,9 @@ Downloads are on the [Releases page](https://github.com/Bokehlicious/RawStride/r
   first folder's tab is active, and each later folder's tab is made active when it opens if you
   have not moved. The import writes the template image by image, so its progress shows only the copy.
   Thumbnails already shown no longer flicker when a tab's files change.
+- A rating, a turn or an edit applied to several images, and the import's template, are
+  written by up to four ExifTool processes at once, so a batch is saved several times as
+  fast. Each file is still written and checked on its own.
 
 ## [0.2.0] - 2026-11-21
 

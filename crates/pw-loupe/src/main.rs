@@ -154,6 +154,10 @@ const MARKED_FILL: egui::Color32 = egui::Color32::from_rgba_premultiplied(0x0f, 
 const NO_FOLDER_TEXT: &str = "";
 /// How long the image check waits for the view core to close the RAW sessions of a file (T91).
 const RELEASE_TIMEOUT: Duration = Duration::from_secs(5);
+/// The number of ExifTool write processes of the metadata worker and of the import's template
+/// (ADR 0007 §9.6 point 2, Q18): four, fixed by the owner on 2026-11-22 after T267's measurement
+/// (T268).
+const WRITE_PROCESSES: usize = 4;
 /// How often a frame is asked for while the metadata worker has not yet tried to start ExifTool,
 /// so the message about it is not left waiting for the next input (T101).
 const EXIFTOOL_CHECK_INTERVAL: Duration = Duration::from_millis(200);
@@ -10454,13 +10458,13 @@ fn run(options: Options) -> Result<(), String> {
         journal,
         checks: std::sync::Arc::new(image_check(&core, &second_core, &histogram_reads, true)),
         options: settings.edit_options(),
-        // One process until the owner fixes the number after T267's measurement (T268).
-        write_processes: 1,
+        write_processes: WRITE_PROCESSES,
     });
     let metadata_worker = MetadataWorker::start(setup).map_err(|e| e.to_string())?;
-    let import_worker = ImportWorker::start(
+    let import_worker = ImportWorker::start_with_processes(
         journal,
-        Box::new(image_check(&core, &second_core, &histogram_reads, false)),
+        std::sync::Arc::new(image_check(&core, &second_core, &histogram_reads, false)),
+        WRITE_PROCESSES,
     )
     .map_err(|e| e.to_string())?;
     let thumb_worker = ThumbWorker::start_with_monitor_profile(monitor_profile.profile.clone())

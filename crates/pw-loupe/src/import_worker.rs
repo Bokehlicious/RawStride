@@ -1,3 +1,4 @@
+use std::collections::{HashMap, VecDeque};
 use std::io;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
@@ -12,6 +13,7 @@ use pw_metadata::edit::EditOptions;
 use pw_metadata::journal::Journal;
 use pw_metadata::safe_write::ImageCheck;
 use pw_metadata::template::Template;
+use pw_metadata::write_pool::{JobAnswer, Ticket, WritePool, write_key};
 use pw_metadata::{ExifTool, MIN_EXIFTOOL_VERSION};
 
 use crate::editor::{WriteReason, write_reason_text};
@@ -21,13 +23,20 @@ use crate::import_text::{
 
 const REQUEST_CAPACITY: usize = 8;
 
+/// How long [`ShotWriter::finish`] waits for one answer of the template's writes before it looks
+/// at the cancel flag again (T268).
+const ANSWER_WAIT: Duration = Duration::from_millis(50);
+
 /// What the ingest template's safe write needs (ADR 0007 §9.5, T91): the ExifTool program
-/// (`None` for `exiftool` on PATH), the app's write journal (`None` when it could not be opened)
-/// and its image checks.
+/// (`None` for `exiftool` on PATH), the app's write journal (`None` when it could not be opened),
+/// its image checks and the number of ExifTool write processes (ADR 0007 §9.6 point 2, T268: with
+/// 1 the template is written by one process on the import's thread, with more by a
+/// [`WritePool`] of that many).
 struct WriteContext {
     exiftool_program: Option<ExifToolProgram>,
     journal: Option<Journal>,
-    checks: Box<dyn ImageCheck + Send>,
+    checks: Arc<dyn ImageCheck + Send + Sync>,
+    write_processes: usize,
 }
 
 /// An ExifTool program with the arguments put before ExifTool's own (T101: a test starts its
@@ -153,14 +162,29 @@ impl std::fmt::Debug for ImportWorker {
 }
 
 impl ImportWorker {
-    /// Starts the single import worker thread. The ingest template is written safely with
-    /// `journal` and `checks`; when `journal` is `None` (it could not be opened), every template
-    /// write fails and nothing is written.
-    pub fn start(journal: Option<Journal>, checks: Box<dyn ImageCheck + Send>) -> io::Result<Self> {
+    /// Starts the single import worker thread with one ExifTool write process. The ingest
+    /// template is written safely with `journal` and `checks`; when `journal` is `None` (it could
+    /// not be opened), every template write fails and nothing is written.
+    pub fn start(
+        journal: Option<Journal>,
+        checks: Arc<dyn ImageCheck + Send + Sync>,
+    ) -> io::Result<Self> {
+        Self::start_with_processes(journal, checks, 1)
+    }
+
+    /// Starts the import worker thread; the ingest template is written by `write_processes`
+    /// ExifTool processes (ADR 0007 §9.6 point 2, T268): with 1 on the import's thread as before,
+    /// with more (at most 4) by a [`WritePool`] started at the import's first template write.
+    pub fn start_with_processes(
+        journal: Option<Journal>,
+        checks: Arc<dyn ImageCheck + Send + Sync>,
+        write_processes: usize,
+    ) -> io::Result<Self> {
         Self::start_inner(WriteContext {
             exiftool_program: None,
             journal,
             checks,
+            write_processes,
         })
     }
 
@@ -168,18 +192,30 @@ impl ImportWorker {
     pub fn start_with_exiftool(
         program: &str,
         journal: Option<Journal>,
-        checks: Box<dyn ImageCheck + Send>,
+        checks: Arc<dyn ImageCheck + Send + Sync>,
     ) -> io::Result<Self> {
         Self::start_with_exiftool_args(program, &[], journal, checks)
     }
 
     /// Starts the worker with a specific ExifTool program and arguments put before ExifTool's
-    /// own, primarily for tests (T101: a fake ExifTool).
+    /// own, primarily for tests (T101: a fake ExifTool); one write process.
     pub fn start_with_exiftool_args(
         program: &str,
         args: &[&str],
         journal: Option<Journal>,
-        checks: Box<dyn ImageCheck + Send>,
+        checks: Arc<dyn ImageCheck + Send + Sync>,
+    ) -> io::Result<Self> {
+        Self::start_with_exiftool_args_and_processes(program, args, journal, checks, 1)
+    }
+
+    /// [`ImportWorker::start_with_exiftool_args`] with `write_processes` ExifTool write processes
+    /// ([`ImportWorker::start_with_processes`]), primarily for tests (T268).
+    pub fn start_with_exiftool_args_and_processes(
+        program: &str,
+        args: &[&str],
+        journal: Option<Journal>,
+        checks: Arc<dyn ImageCheck + Send + Sync>,
+        write_processes: usize,
     ) -> io::Result<Self> {
         Self::start_inner(WriteContext {
             exiftool_program: Some(ExifToolProgram {
@@ -188,6 +224,7 @@ impl ImportWorker {
             }),
             journal,
             checks,
+            write_processes,
         })
     }
 
@@ -706,9 +743,30 @@ fn shot_targets(items: &[&pw_ingest::PlanItem], options: &pw_ingest::Options) ->
     targets
 }
 
+/// What one template write given to the pool answers: `Err` with the safe write's error text.
+type TemplateAnswer = Result<(), String>;
+
+/// A finished shot whose [`ImportEvent::Placed`] waits for its template writes, or for an earlier
+/// shot's (T268).
+struct HeldShot {
+    /// The shot's number in this import, counted from 0 in shot order.
+    number: usize,
+    /// Its destination images ([`ShotTargets::placed`]); may be empty.
+    placed: Vec<PathBuf>,
+    /// Its template writes given to the pool and not yet answered.
+    waiting: usize,
+}
+
 /// Writes the import's template to each shot's images when the shot is finished, and says which
 /// images are in place (ADR 0026 §3.4, T258). Driven by [`pw_ingest::execute_recording`]'s
 /// progress calls ([`ShotWriter::file_done`]).
+///
+/// With one write process ([`WriteContext::write_processes`]) each write runs on the import's
+/// thread before the copy goes on. With more (ADR 0007 §9.6 point 2, T268), a finished shot's
+/// writes are given to a [`WritePool`], started at the first write and kept for this import only,
+/// and the copy goes on at once; answers are taken at each progress call and in
+/// [`ShotWriter::finish`]. A shot's `Placed` is sent when all its writes have answered and every
+/// earlier shot's has been sent, so the events keep shot order; none is sent after a cancel.
 struct ShotWriter<'a> {
     /// The items `execute_recording` copies, in its order.
     items: Vec<&'a pw_ingest::PlanItem>,
@@ -727,6 +785,14 @@ struct ShotWriter<'a> {
     /// Set when a cancel was seen: nothing more is done for this shot or any later one.
     cancelled: bool,
     iptc_errors: Vec<String>,
+    /// With more than one write process: the pool, once the first write was given (T268).
+    pool: Option<WritePool<TemplateAnswer>>,
+    /// Each write given to the pool and not answered: its shot's number and its target.
+    tickets: HashMap<Ticket, (usize, PathBuf)>,
+    /// The finished shots not yet placed, in shot order.
+    held: VecDeque<HeldShot>,
+    /// The number of the next finished shot.
+    next_number: usize,
 }
 
 impl<'a> ShotWriter<'a> {
@@ -750,31 +816,235 @@ impl<'a> ShotWriter<'a> {
             writes_stopped: false,
             cancelled: false,
             iptc_errors: Vec::new(),
+            pool: None,
+            tickets: HashMap::new(),
+            held: VecDeque::new(),
+            next_number: 0,
         }
     }
 
+    /// Whether the template's writes go to a pool (more than one write process, T268).
+    fn pooled(&self) -> bool {
+        self.runtime.write.write_processes > 1
+    }
+
     /// Called after `execute_recording`'s progress call with `files_done`; finishes every shot
-    /// whose last item that was.
+    /// whose last item that was. With a pool it first takes the answers waiting, and then places
+    /// the shots that are ready.
     fn file_done(&mut self, files_done: usize) {
+        let pooled = self.pooled();
+        if pooled {
+            self.cancel_seen();
+            self.take_answers();
+        }
         while let Some(range) = self.shots.get(self.next_shot).cloned() {
             if range.end > files_done {
                 break;
             }
             self.next_shot += 1;
-            self.finish_shot(range);
+            if pooled {
+                self.finish_shot_pooled(range);
+            } else {
+                self.finish_shot(range);
+            }
+        }
+        if pooled {
+            self.place_ready();
         }
     }
 
-    /// The template's failures and whether a cancel was seen.
-    fn finish(self) -> (Vec<String>, bool) {
+    /// The template's failures and whether a cancel was seen. With a pool it first waits until
+    /// every write given has answered or was discarded (a cancel seen meanwhile discards the
+    /// writes not started), placing the shots that become ready unless a cancel was seen. When
+    /// no pool was started (nothing was given to write), it does what it does with one process:
+    /// a cancel after the last progress call is not counted, and the shots, which had no writes
+    /// to wait for, were placed at the progress calls.
+    fn finish(mut self) -> (Vec<String>, bool) {
+        if self.pooled() && self.pool.is_some() {
+            self.wait_for_writes();
+        }
         (self.iptc_errors, self.cancelled)
     }
 
+    /// Whether a cancel was seen. When it is seen first, the pool's writes not started are
+    /// discarded; the started ones finish.
     fn cancel_seen(&mut self) -> bool {
-        if self.runtime.cancel.load(Ordering::Relaxed) {
+        if !self.cancelled && self.runtime.cancel.load(Ordering::Relaxed) {
             self.cancelled = true;
+            if let Some(pool) = self.pool.as_ref() {
+                pool.discard();
+            }
         }
         self.cancelled
+    }
+
+    /// Takes every answer of the pool that is waiting, without blocking.
+    fn take_answers(&mut self) {
+        while let Some(answer) = self.pool.as_mut().and_then(WritePool::try_answer) {
+            self.answered(answer);
+        }
+    }
+
+    /// Waits for the pool's answers until none is outstanding.
+    fn wait_for_writes(&mut self) {
+        loop {
+            self.cancel_seen();
+            let answer = match self.pool.as_mut() {
+                Some(pool) if pool.outstanding() > 0 => pool.answer_timeout(ANSWER_WAIT),
+                _ => break,
+            };
+            if let Some(answer) = answer {
+                self.answered(answer);
+            }
+            self.place_ready();
+        }
+        self.place_ready();
+    }
+
+    /// One answer of the pool, mapped to the lines a write on the import's thread gives
+    /// ([`ShotWriter::write_template`]); a discarded write adds no line.
+    fn answered(&mut self, (ticket, answer): (Ticket, JobAnswer<TemplateAnswer>)) {
+        let Some((number, target)) = self.tickets.remove(&ticket) else {
+            return;
+        };
+        let file = file_name(&target);
+        match answer {
+            JobAnswer::Done(Ok(())) | JobAnswer::Discarded => {}
+            JobAnswer::Done(Err(text)) | JobAnswer::Lost(text) => {
+                self.iptc_errors.push(format!("{file}: {text}"));
+            }
+            JobAnswer::TooOld(Ok(version)) => {
+                self.stop_writes(exiftool_too_old_text(&file, version));
+            }
+            JobAnswer::TooOld(Err(text)) | JobAnswer::StartFailed(text) => {
+                self.stop_writes(format!("{file}: {text}"));
+            }
+        }
+        if let Some(shot) = self.held.iter_mut().find(|shot| shot.number == number) {
+            shot.waiting = shot.waiting.saturating_sub(1);
+        }
+    }
+
+    /// ExifTool cannot be used: `line` is listed once (later such answers add none), the writes
+    /// not started are discarded and no later shot gets the template; the shots are still placed.
+    fn stop_writes(&mut self, line: String) {
+        if self.writes_stopped {
+            return;
+        }
+        self.iptc_errors.push(line);
+        self.writes_stopped = true;
+        if let Some(pool) = self.pool.as_ref() {
+            pool.discard();
+        }
+    }
+
+    /// Sends `Placed` for the held shots at the front whose writes have all answered, in shot
+    /// order; nothing after a cancel.
+    fn place_ready(&mut self) {
+        if self.cancel_seen() {
+            return;
+        }
+        while self.held.front().is_some_and(|shot| shot.waiting == 0) {
+            let Some(shot) = self.held.pop_front() else {
+                break;
+            };
+            if !shot.placed.is_empty() {
+                let _ = self.runtime.events.send(ImportEvent::Placed {
+                    id: self.runtime.id,
+                    images: shot.placed,
+                });
+            }
+        }
+    }
+
+    /// [`ShotWriter::finish_shot`] with a pool: gives the shot's template writes to the pool and
+    /// holds the shot until they have answered.
+    fn finish_shot_pooled(&mut self, range: Range<usize>) {
+        if self.cancel_seen() {
+            return;
+        }
+        let Some(items) = self.items.get(range) else {
+            return;
+        };
+        let targets = shot_targets(items, self.options);
+        let number = self.next_number;
+        self.next_number += 1;
+        let mut waiting = 0;
+        if self.template.is_some() {
+            for target in &targets.writes {
+                if self.writes_stopped || self.cancel_seen() {
+                    break;
+                }
+                if self.submit_template(number, target) {
+                    waiting += 1;
+                }
+            }
+        }
+        if self.cancelled {
+            return;
+        }
+        self.held.push_back(HeldShot {
+            number,
+            placed: targets.placed,
+            waiting,
+        });
+    }
+
+    /// Gives the template's write to one target of shot `number` to the pool, starting the pool
+    /// first if needed; whether it was given. Without the journal, or when the pool cannot be
+    /// started, one line is listed and no later write is given, as in
+    /// [`ShotWriter::write_template`].
+    fn submit_template(&mut self, number: usize, target: &Path) -> bool {
+        let Some(template) = self.template.as_ref() else {
+            return false;
+        };
+        // Without the journal nothing may be written (§9.5); listed once, as a failed start.
+        let Some(journal) = self.runtime.write.journal.as_ref() else {
+            self.iptc_errors.push(format!(
+                "{}: {}",
+                file_name(target),
+                write_reason_text(&WriteReason::NoJournal)
+            ));
+            self.writes_stopped = true;
+            return false;
+        };
+        let template = template.clone();
+        let journal = journal.clone();
+        if self.pool.is_none() {
+            let processes = self.runtime.write.write_processes;
+            let started = match self.runtime.exiftool_program {
+                Some(program) => {
+                    WritePool::start_with(program, &self.runtime.write.exiftool_args(), processes)
+                }
+                None => WritePool::start(processes),
+            };
+            match started {
+                Ok(pool) => self.pool = Some(pool),
+                Err(error) => {
+                    self.iptc_errors
+                        .push(format!("{}: {error}", file_name(target)));
+                    self.writes_stopped = true;
+                    return false;
+                }
+            }
+        }
+        let Some(pool) = self.pool.as_mut() else {
+            return false;
+        };
+        let image = target.to_path_buf();
+        let options = self.runtime.options;
+        let checks = Arc::clone(&self.runtime.write.checks);
+        // §9.5: the template is written to the verified copy with the safe write.
+        let ticket = pool.submit(
+            write_key(target),
+            Box::new(move |tool: &mut ExifTool| {
+                tool.apply_template_safely(&image, &template, &options, &*checks, &journal)
+                    .map(|_| ())
+                    .map_err(|error| error.to_string())
+            }),
+        );
+        self.tickets.insert(ticket, (number, target.to_path_buf()));
+        true
     }
 
     fn finish_shot(&mut self, range: Range<usize>) {
@@ -1017,7 +1287,7 @@ mod tests {
     fn preview_reports_counts_and_rescan_controls_cache_reuse() {
         let dirs = TempDirs::new("preview-cache");
         dirs.write_image("A001.ARW", b"first image");
-        let mut worker = ImportWorker::start(Some(test_journal()), Box::new(NoImageCheck)).unwrap();
+        let mut worker = ImportWorker::start(Some(test_journal()), Arc::new(NoImageCheck)).unwrap();
 
         let id = worker.preview(dirs.form(""), false).unwrap();
         match next_event(&worker) {
@@ -1061,7 +1331,7 @@ mod tests {
     fn run_copies_reports_progress_and_summarizes_destination_folders() {
         let dirs = TempDirs::new("run");
         dirs.write_image("A001.ARW", b"image bytes");
-        let mut worker = ImportWorker::start(Some(test_journal()), Box::new(NoImageCheck)).unwrap();
+        let mut worker = ImportWorker::start(Some(test_journal()), Arc::new(NoImageCheck)).unwrap();
         let options = dirs.options("imported");
 
         let id = worker
@@ -1115,7 +1385,7 @@ mod tests {
     fn subsequent_run_reports_files_already_present() {
         let dirs = TempDirs::new("present");
         dirs.write_image("A001.ARW", b"image bytes");
-        let mut worker = ImportWorker::start(Some(test_journal()), Box::new(NoImageCheck)).unwrap();
+        let mut worker = ImportWorker::start(Some(test_journal()), Arc::new(NoImageCheck)).unwrap();
 
         let first = worker
             .run(dirs.form("imported"), EditOptions::default())
@@ -1134,7 +1404,7 @@ mod tests {
     fn missing_source_returns_validation_error() {
         let dirs = TempDirs::new("missing");
         let missing = dirs.root.join("missing");
-        let mut worker = ImportWorker::start(Some(test_journal()), Box::new(NoImageCheck)).unwrap();
+        let mut worker = ImportWorker::start(Some(test_journal()), Arc::new(NoImageCheck)).unwrap();
         let mut form = dirs.form("");
         form.source = missing.to_string_lossy().into_owned();
         let id = worker.preview(form, true).unwrap();
@@ -1158,7 +1428,7 @@ mod tests {
     #[test]
     fn invalid_form_returns_destination_error_from_preview() {
         let dirs = TempDirs::new("invalid-preview");
-        let mut worker = ImportWorker::start(Some(test_journal()), Box::new(NoImageCheck)).unwrap();
+        let mut worker = ImportWorker::start(Some(test_journal()), Arc::new(NoImageCheck)).unwrap();
         let mut form = dirs.form("");
         form.dest.clear();
         let id = worker.preview(form, true).unwrap();
@@ -1180,7 +1450,7 @@ mod tests {
     fn invalid_run_finishes_with_validation_error_without_copying() {
         let dirs = TempDirs::new("invalid-run");
         dirs.write_image("A001.ARW", b"image bytes");
-        let mut worker = ImportWorker::start(Some(test_journal()), Box::new(NoImageCheck)).unwrap();
+        let mut worker = ImportWorker::start(Some(test_journal()), Arc::new(NoImageCheck)).unwrap();
         let mut form = dirs.form("");
         form.dest.clear();
         let id = worker.run(form, EditOptions::default()).unwrap();
@@ -1203,7 +1473,7 @@ mod tests {
         let mut worker = ImportWorker::start_with_exiftool(
             &missing_exiftool,
             Some(test_journal()),
-            Box::new(NoImageCheck),
+            Arc::new(NoImageCheck),
         )
         .unwrap();
         let id = worker.run(dirs.form(""), EditOptions::default()).unwrap();
@@ -1226,7 +1496,7 @@ mod tests {
         let mut worker = ImportWorker::start_with_exiftool(
             &missing_exiftool,
             Some(test_journal()),
-            Box::new(NoImageCheck),
+            Arc::new(NoImageCheck),
         )
         .unwrap();
         let mut form = dirs.form("");
@@ -1265,9 +1535,28 @@ mod tests {
         ]
     }
 
+    /// T268: the fake appends the file of each command but `-ver` (its last argument not starting
+    /// with `-`) as one line to the file named after this prefix.
+    const FAKE_LOG_PREFIX: &str = "fake-exiftool-log=";
+    /// T268: the fake holds back its answer to a command naming a file with [`HOLD_MARKER`] until
+    /// the file named after this prefix exists (at most a minute).
+    const FAKE_HOLD_PREFIX: &str = "fake-exiftool-hold-until=";
+    /// T268: the mark in a file name whose commands the fake holds back.
+    const HOLD_MARKER: &str = "pwhold";
+
+    /// [`fake_exiftool_args`] for a fake that logs each command's file to `log` and holds back
+    /// commands for files with [`HOLD_MARKER`] until `hold_until` exists (T268).
+    fn fake_exiftool_args_observed(version: &str, log: &Path, hold_until: &Path) -> Vec<String> {
+        let mut args = fake_exiftool_args(version);
+        args.push(format!("{FAKE_LOG_PREFIX}{}", log.display()));
+        args.push(format!("{FAKE_HOLD_PREFIX}{}", hold_until.display()));
+        args
+    }
+
     /// The fake ExifTool started by the tests below: speaks the `-stay_open` protocol, answers
     /// `-ver` with the version of its arguments and every other command with "1 image files
-    /// updated".
+    /// updated"; with [`FAKE_LOG_PREFIX`] and [`FAKE_HOLD_PREFIX`] it also logs and holds back
+    /// commands (T268).
     #[test]
     #[ignore = "helper process for other tests; they start it, it is not a test itself"]
     fn fake_exiftool_entry() {
@@ -1278,9 +1567,15 @@ mod tests {
         else {
             return;
         };
+        let path_after = |prefix: &str| {
+            std::env::args().find_map(|arg| arg.strip_prefix(prefix).map(PathBuf::from))
+        };
+        let log = path_after(FAKE_LOG_PREFIX);
+        let hold_until = path_after(FAKE_HOLD_PREFIX);
         // Write through the raw handle: libtest only captures the print! macros.
         let mut out = std::io::stdout();
         let mut asks_version = false;
+        let mut command: Vec<String> = Vec::new();
         for line in std::io::stdin().lock().lines() {
             let Ok(line) = line else { break };
             if line == "False" {
@@ -1290,8 +1585,30 @@ mod tests {
                 asks_version = true;
             }
             let Some(seq) = line.strip_prefix("-execute") else {
+                command.push(line);
                 continue;
             };
+            let args = std::mem::take(&mut command);
+            if !asks_version {
+                if let Some(log) = &log
+                    && let Some(file) = args.iter().rev().find(|arg| !arg.starts_with('-'))
+                {
+                    let mut logged = fs::OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open(log)
+                        .unwrap();
+                    logged.write_all(format!("{file}\n").as_bytes()).unwrap();
+                }
+                if let Some(hold_until) = &hold_until
+                    && args.iter().any(|arg| arg.contains(HOLD_MARKER))
+                {
+                    let deadline = Instant::now() + Duration::from_secs(60);
+                    while !hold_until.exists() && Instant::now() < deadline {
+                        std::thread::sleep(Duration::from_millis(10));
+                    }
+                }
+            }
             let answer = if std::mem::take(&mut asks_version) {
                 format!("{version}\n{{ready{seq}}}\n")
             } else {
@@ -1321,7 +1638,7 @@ mod tests {
             &program.to_string_lossy(),
             &args,
             Some(test_journal()),
-            Box::new(NoImageCheck),
+            Arc::new(NoImageCheck),
         )
         .unwrap();
         let mut form = dirs.form("");
@@ -1352,7 +1669,7 @@ mod tests {
             .to_string_lossy()
             .into_owned();
         let mut worker =
-            ImportWorker::start_with_exiftool(&missing_exiftool, None, Box::new(NoImageCheck))
+            ImportWorker::start_with_exiftool(&missing_exiftool, None, Arc::new(NoImageCheck))
                 .unwrap();
         let mut form = dirs.form("");
         form.iptc.creator = "Fotograf".to_string();
@@ -1388,7 +1705,7 @@ mod tests {
         dirs.write_image("A001.jpg", jpeg_fixture::SMALL);
         let journal_folder = dirs.root.join("journal");
         let journal = Journal::open(&journal_folder).unwrap();
-        let mut worker = ImportWorker::start(Some(journal), Box::new(NoImageCheck)).unwrap();
+        let mut worker = ImportWorker::start(Some(journal), Arc::new(NoImageCheck)).unwrap();
         let mut form = dirs.form("");
         form.iptc.creator = "Fotograf".to_string();
         let id = worker.run(form, EditOptions::default()).unwrap();
@@ -1456,7 +1773,7 @@ mod tests {
         iptc: crate::IptcForm,
     ) -> pw_metadata::read::MetadataRead {
         let journal = Journal::open(&dirs.root.join("journal")).unwrap();
-        let mut worker = ImportWorker::start(Some(journal), Box::new(NoImageCheck)).unwrap();
+        let mut worker = ImportWorker::start(Some(journal), Arc::new(NoImageCheck)).unwrap();
         let mut form = dirs.form("");
         form.iptc = iptc;
         let id = worker.run(form, EditOptions::default()).unwrap();
@@ -1580,7 +1897,7 @@ mod tests {
         let dirs = TempDirs::new(tag);
         dirs.write_image("A001.jpg", jpeg_fixture::SMALL);
         let journal = Journal::open(&dirs.root.join("journal")).unwrap();
-        let mut worker = ImportWorker::start(Some(journal), Box::new(NoImageCheck)).unwrap();
+        let mut worker = ImportWorker::start(Some(journal), Arc::new(NoImageCheck)).unwrap();
         let mut form = dirs.form("");
         form.iptc.creator = "Fotograf".to_string();
         let id = worker.run(form, options).unwrap();
@@ -1705,7 +2022,8 @@ mod tests {
         let write = WriteContext {
             exiftool_program: None,
             journal: Some(test_journal()),
-            checks: Box::new(NoImageCheck),
+            checks: Arc::new(NoImageCheck),
+            write_processes: 1,
         };
         let iptc = crate::IptcForm {
             creator: "Fotograf".to_string(),
@@ -1762,7 +2080,8 @@ mod tests {
             &WriteContext {
                 exiftool_program: None,
                 journal: Some(test_journal()),
-                checks: Box::new(NoImageCheck),
+                checks: Arc::new(NoImageCheck),
+                write_processes: 1,
             },
         ) else {
             panic!("run_import did not return Done");
@@ -1806,7 +2125,8 @@ mod tests {
             &WriteContext {
                 exiftool_program: None,
                 journal: Some(test_journal()),
-                checks: Box::new(NoImageCheck),
+                checks: Arc::new(NoImageCheck),
+                write_processes: 1,
             },
         ) else {
             panic!("run_import did not return Done");
@@ -1831,7 +2151,7 @@ mod tests {
         for index in 0..96 {
             dirs.write_image(&format!("A{index:03}.ARW"), &bytes);
         }
-        let mut worker = ImportWorker::start(Some(test_journal()), Box::new(NoImageCheck)).unwrap();
+        let mut worker = ImportWorker::start(Some(test_journal()), Arc::new(NoImageCheck)).unwrap();
         let options = dirs.options("");
         let id = worker.run(dirs.form(""), EditOptions::default()).unwrap();
         worker.cancel();
@@ -1866,7 +2186,7 @@ mod tests {
 
     #[test]
     fn cards_answers_with_its_id() {
-        let mut worker = ImportWorker::start(Some(test_journal()), Box::new(NoImageCheck)).unwrap();
+        let mut worker = ImportWorker::start(Some(test_journal()), Arc::new(NoImageCheck)).unwrap();
         let id = worker.cards().unwrap();
         match next_event(&worker) {
             ImportEvent::Cards { id: event_id, .. } => assert_eq!(event_id, id),
@@ -1878,7 +2198,7 @@ mod tests {
     fn dropping_worker_does_not_wait_for_a_copy() {
         let dirs = TempDirs::new("drop");
         dirs.write_image("A001.ARW", &vec![3; 16 * 1024 * 1024]);
-        let mut worker = ImportWorker::start(Some(test_journal()), Box::new(NoImageCheck)).unwrap();
+        let mut worker = ImportWorker::start(Some(test_journal()), Arc::new(NoImageCheck)).unwrap();
         worker.run(dirs.form(""), EditOptions::default()).unwrap();
 
         let started = Instant::now();
@@ -1921,7 +2241,8 @@ mod tests {
             &WriteContext {
                 exiftool_program: None,
                 journal: Some(test_journal()),
-                checks: Box::new(NoImageCheck),
+                checks: Arc::new(NoImageCheck),
+                write_processes: 1,
             },
         ) else {
             panic!("run_import did not return Done");
@@ -2218,7 +2539,8 @@ mod tests {
                 args: Vec::new(),
             }),
             journal: Some(test_journal()),
-            checks: Box::new(NoImageCheck),
+            checks: Arc::new(NoImageCheck),
+            write_processes: 1,
         }
     }
 
@@ -2540,7 +2862,8 @@ mod tests {
         let write = WriteContext {
             exiftool_program: None,
             journal: Some(Journal::open(&dirs.root.join("journal")).unwrap()),
-            checks: Box::new(CancelOnRelease(Arc::clone(&cancel))),
+            checks: Arc::new(CancelOnRelease(Arc::clone(&cancel))),
+            write_processes: 1,
         };
 
         let (seen, done) = import_events(&form, &cancel, &write, &mut None);
@@ -2582,7 +2905,8 @@ mod tests {
         let write = WriteContext {
             exiftool_program: None,
             journal: Some(Journal::open(&dirs.root.join("journal")).unwrap()),
-            checks: Box::new(NoImageCheck),
+            checks: Arc::new(NoImageCheck),
+            write_processes: 1,
         };
 
         let (seen, done) = import_events(&form, &AtomicBool::new(false), &write, &mut None);
@@ -2608,5 +2932,421 @@ mod tests {
             files_below(&dirs.dest),
             [PathBuf::from("A001.ARW"), PathBuf::from("A001.xmp")]
         );
+    }
+
+    // ---------- the template through several write processes (ADR 0007 §9.6 point 2, T268) ----------
+
+    /// How long the tests below wait for a condition.
+    const POOL_LIMIT: Duration = Duration::from_secs(20);
+
+    /// Waits until `done` holds, at most [`POOL_LIMIT`]; fails with `what` otherwise.
+    fn wait_until(what: &str, mut done: impl FnMut() -> bool) {
+        let deadline = Instant::now() + POOL_LIMIT;
+        while !done() {
+            assert!(Instant::now() < deadline, "timed out waiting until {what}");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    /// The file names in the observed fake's `log`, in the order logged.
+    fn logged(log: &Path) -> Vec<String> {
+        fs::read_to_string(log)
+            .unwrap_or_default()
+            .lines()
+            .map(|line| file_name(Path::new(line)))
+            .collect()
+    }
+
+    /// A write context with `processes` write processes over the observed fake answering `-ver`
+    /// with `version`, its log and the file that lets held commands answer, both in `dirs`.
+    fn observed_write(
+        dirs: &TempDirs,
+        version: &str,
+        processes: usize,
+    ) -> (WriteContext, PathBuf, PathBuf) {
+        let log = dirs.root.join("fake-log.txt");
+        let hold_until = dirs.root.join("fake-go");
+        let write = WriteContext {
+            exiftool_program: Some(ExifToolProgram {
+                program: std::env::current_exe()
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned(),
+                args: fake_exiftool_args_observed(version, &log, &hold_until),
+            }),
+            journal: Some(test_journal()),
+            checks: Arc::new(NoImageCheck),
+            write_processes: processes,
+        };
+        (write, log, hold_until)
+    }
+
+    /// A plan of one copied destination JPEG per name (each its own shot), the files in place.
+    fn copied_jpegs(dirs: &TempDirs, names: &[&str]) -> (pw_ingest::Plan, pw_ingest::Options) {
+        let options = dirs.options("");
+        let items = names
+            .iter()
+            .map(|name| {
+                write_file(&options.dest.join(name));
+                plan_item(dirs, name, true, false)
+            })
+            .collect();
+        (pw_ingest::Plan { items }, options)
+    }
+
+    /// A template that writes the creator.
+    fn creator_template() -> crate::IptcForm {
+        crate::IptcForm {
+            creator: "Fotograf".to_string(),
+            ..crate::IptcForm::default()
+        }
+    }
+
+    /// The images of the `Placed` events in `receiver`, in the order sent.
+    fn placed_events(receiver: &Receiver<ImportEvent>) -> Vec<Vec<PathBuf>> {
+        receiver
+            .try_iter()
+            .map(|event| match event {
+                ImportEvent::Placed { id: 5, images } => images,
+                event => panic!("unexpected event: {event:?}"),
+            })
+            .collect()
+    }
+
+    /// With two processes a shot's `Placed` waits for its template write: none while the write
+    /// is held back (the copy goes on), and it comes once the write has answered.
+    #[test]
+    fn with_two_processes_a_shot_is_placed_after_its_template_write_answered() {
+        let dirs = TempDirs::new("pool-placed-after-write");
+        let (plan, options) = copied_jpegs(&dirs, &["A001pwhold.jpg"]);
+        let (write, log, hold_until) = observed_write(&dirs, "13.59", 2);
+        let program = write.exiftool_program.as_ref().unwrap().program.clone();
+        let cancel = AtomicBool::new(false);
+        let mut exiftool = None;
+        let (events, receiver) = mpsc::channel();
+        let iptc = creator_template();
+        let mut shot_writer = ShotWriter::new(
+            &plan,
+            &options,
+            &iptc,
+            IptcRuntime {
+                id: 5,
+                options: EditOptions::default(),
+                cancel: &cancel,
+                events: &events,
+                exiftool: &mut exiftool,
+                exiftool_program: Some(&program),
+                write: &write,
+            },
+        );
+
+        shot_writer.file_done(1);
+        wait_until("the write started", || logged(&log) == ["A001pwhold.jpg"]);
+        for _ in 0..20 {
+            shot_writer.take_answers();
+            shot_writer.place_ready();
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(placed_events(&receiver), Vec::<Vec<PathBuf>>::new());
+        assert_eq!(shot_writer.tickets.len(), 1);
+
+        fs::write(&hold_until, b"").unwrap();
+        let (iptc_errors, cancelled) = shot_writer.finish();
+
+        assert_eq!(
+            placed_events(&receiver),
+            [vec![options.dest.join("A001pwhold.jpg")]]
+        );
+        // The fake's answer to the safe write's read is not metadata: the write fails, and the
+        // image is placed anyway, as with one process.
+        assert_eq!(iptc_errors.len(), 1, "{iptc_errors:?}");
+        assert!(
+            iptc_errors[0].starts_with("A001pwhold.jpg: "),
+            "{iptc_errors:?}"
+        );
+        assert!(!cancelled);
+        assert!(exiftool.is_none());
+    }
+
+    /// The second shot's write answers while the first shot's is held back: the second shot
+    /// waits, and both are placed in shot order.
+    #[test]
+    fn with_two_processes_shots_are_placed_in_shot_order_when_a_later_write_answers_first() {
+        let dirs = TempDirs::new("pool-placed-order");
+        let (plan, options) = copied_jpegs(&dirs, &["A001pwhold.jpg", "A002.jpg"]);
+        let (write, log, hold_until) = observed_write(&dirs, "13.59", 2);
+        let program = write.exiftool_program.as_ref().unwrap().program.clone();
+        let cancel = AtomicBool::new(false);
+        let mut exiftool = None;
+        let (events, receiver) = mpsc::channel();
+        let iptc = creator_template();
+        let mut shot_writer = ShotWriter::new(
+            &plan,
+            &options,
+            &iptc,
+            IptcRuntime {
+                id: 5,
+                options: EditOptions::default(),
+                cancel: &cancel,
+                events: &events,
+                exiftool: &mut exiftool,
+                exiftool_program: Some(&program),
+                write: &write,
+            },
+        );
+
+        shot_writer.file_done(1);
+        shot_writer.file_done(2);
+        wait_until("the second shot's write answered", || {
+            shot_writer.take_answers();
+            shot_writer.place_ready();
+            shot_writer.tickets.len() == 1
+        });
+        assert!(logged(&log).contains(&"A001pwhold.jpg".to_string()));
+        assert_eq!(placed_events(&receiver), Vec::<Vec<PathBuf>>::new());
+
+        fs::write(&hold_until, b"").unwrap();
+        let (iptc_errors, cancelled) = shot_writer.finish();
+
+        assert_eq!(
+            placed_events(&receiver),
+            [
+                vec![options.dest.join("A001pwhold.jpg")],
+                vec![options.dest.join("A002.jpg")],
+            ]
+        );
+        assert_eq!(iptc_errors.len(), 2, "{iptc_errors:?}");
+        assert!(!cancelled);
+    }
+
+    /// A cancel while two writes run (held back) and one waits: the waiting write and the shot
+    /// finished after the cancel are never started and add no line, the running writes finish,
+    /// and no shot is placed, not even the one whose write had answered and that waited for the
+    /// first shot.
+    #[test]
+    fn with_two_processes_a_cancel_starts_no_write_and_places_nothing_more() {
+        let dirs = TempDirs::new("pool-cancel");
+        let (plan, options) = copied_jpegs(
+            &dirs,
+            &[
+                "A001pwhold.jpg",
+                "A002.jpg",
+                "A003pwhold.jpg",
+                "A004.jpg",
+                "A005.jpg",
+            ],
+        );
+        let (write, log, hold_until) = observed_write(&dirs, "13.59", 2);
+        let program = write.exiftool_program.as_ref().unwrap().program.clone();
+        let cancel = AtomicBool::new(false);
+        let mut exiftool = None;
+        let (events, receiver) = mpsc::channel();
+        let iptc = creator_template();
+        let mut shot_writer = ShotWriter::new(
+            &plan,
+            &options,
+            &iptc,
+            IptcRuntime {
+                id: 5,
+                options: EditOptions::default(),
+                cancel: &cancel,
+                events: &events,
+                exiftool: &mut exiftool,
+                exiftool_program: Some(&program),
+                write: &write,
+            },
+        );
+
+        // A001 and A003 hold both processes; A002 has answered; A004 waits.
+        shot_writer.file_done(4);
+        wait_until("A001 and A003 run and A002 answered", || {
+            shot_writer.take_answers();
+            let logged = logged(&log);
+            logged.contains(&"A001pwhold.jpg".to_string())
+                && logged.contains(&"A003pwhold.jpg".to_string())
+                && shot_writer.tickets.len() == 3
+        });
+        assert_eq!(placed_events(&receiver), Vec::<Vec<PathBuf>>::new());
+
+        cancel.store(true, Ordering::Relaxed);
+        shot_writer.file_done(5);
+        fs::write(&hold_until, b"").unwrap();
+        let (iptc_errors, cancelled) = shot_writer.finish();
+
+        assert!(cancelled);
+        assert_eq!(placed_events(&receiver), Vec::<Vec<PathBuf>>::new());
+        let mut started = logged(&log);
+        started.sort();
+        assert_eq!(started, ["A001pwhold.jpg", "A002.jpg", "A003pwhold.jpg"]);
+        let mut failed: Vec<String> = iptc_errors
+            .iter()
+            .map(|line| line.split(": ").next().unwrap_or_default().to_string())
+            .collect();
+        failed.sort();
+        assert_eq!(failed, ["A001pwhold.jpg", "A002.jpg", "A003pwhold.jpg"]);
+    }
+
+    /// With two processes an ExifTool older than the lowest version is listed once with its
+    /// version (whichever process answers first), writes nothing, and every shot is placed in
+    /// shot order.
+    #[test]
+    fn with_two_processes_a_too_old_exiftool_is_listed_once_and_the_shots_are_placed() {
+        let dirs = TempDirs::new("pool-too-old");
+        let names = ["A001.jpg", "A002.jpg", "A003.jpg", "A004.jpg"];
+        for (minute, name) in (0u64..).zip(names) {
+            write_image_dated(&dirs, name, NOV_15 + 60 * minute);
+        }
+        let mut form = dirs.form("");
+        form.iptc.creator = "Fotograf".to_string();
+        let (write, _log, _hold_until) = observed_write(&dirs, "12.40", 2);
+
+        let (seen, done) = import_events(&form, &AtomicBool::new(false), &write, &mut None);
+
+        let placed: Vec<&Seen> = seen
+            .iter()
+            .filter(|seen| matches!(seen, Seen::Placed(_)))
+            .collect();
+        let expected: Vec<Seen> = names
+            .iter()
+            .map(|name| Seen::Placed(vec![dirs.dest.join(name)]))
+            .collect();
+        assert_eq!(placed, expected.iter().collect::<Vec<_>>());
+        assert_eq!(done.iptc_errors.len(), 1, "{:?}", done.iptc_errors);
+        let version = pw_metadata::ToolVersion {
+            major: 12,
+            minor: 40,
+        };
+        assert!(
+            names
+                .iter()
+                .any(|name| done.iptc_errors[0] == exiftool_too_old_text(name, version)),
+            "{:?}",
+            done.iptc_errors
+        );
+        assert_eq!(done.copied, 4);
+        for name in names {
+            assert_eq!(fs::read(dirs.dest.join(name)).unwrap(), name.as_bytes());
+        }
+    }
+
+    /// With two processes and no template no pool is started, and a cancel that comes after the
+    /// last progress call is not counted, as with one process: every shot placed, not cancelled.
+    #[test]
+    fn with_two_processes_and_no_template_a_cancel_after_the_last_file_is_not_counted() {
+        let dirs = TempDirs::new("pool-late-cancel");
+        let (plan, options) = copied_jpegs(&dirs, &["A001.jpg", "A002.jpg"]);
+        let (write, _log, _hold_until) = observed_write(&dirs, "13.59", 2);
+        let program = write.exiftool_program.as_ref().unwrap().program.clone();
+        let cancel = AtomicBool::new(false);
+        let mut exiftool = None;
+        let (events, receiver) = mpsc::channel();
+        let iptc = crate::IptcForm::default();
+        let mut shot_writer = ShotWriter::new(
+            &plan,
+            &options,
+            &iptc,
+            IptcRuntime {
+                id: 5,
+                options: EditOptions::default(),
+                cancel: &cancel,
+                events: &events,
+                exiftool: &mut exiftool,
+                exiftool_program: Some(&program),
+                write: &write,
+            },
+        );
+
+        shot_writer.file_done(1);
+        shot_writer.file_done(2);
+        cancel.store(true, Ordering::Relaxed);
+        assert!(shot_writer.pool.is_none());
+        let (iptc_errors, cancelled) = shot_writer.finish();
+
+        assert!(!cancelled);
+        assert!(iptc_errors.is_empty(), "{iptc_errors:?}");
+        assert_eq!(
+            placed_events(&receiver),
+            [
+                vec![options.dest.join("A001.jpg")],
+                vec![options.dest.join("A002.jpg")],
+            ]
+        );
+    }
+
+    /// With two processes and no journal nothing is written: one line, and both shots placed.
+    #[test]
+    fn with_two_processes_and_no_journal_one_line_and_every_shot_is_placed() {
+        let dirs = TempDirs::new("pool-no-journal");
+        two_shots(&dirs);
+        let mut form = dirs.form("");
+        form.iptc.creator = "Fotograf".to_string();
+        let (mut write, log, _hold_until) = observed_write(&dirs, "13.59", 2);
+        write.journal = None;
+
+        let (seen, done) = import_events(&form, &AtomicBool::new(false), &write, &mut None);
+
+        let placed: Vec<&Seen> = seen
+            .iter()
+            .filter(|seen| matches!(seen, Seen::Placed(_)))
+            .collect();
+        assert_eq!(
+            placed,
+            [
+                &Seen::Placed(vec![dirs.dest.join("A001.ARW"), dirs.dest.join("A001.JPG")]),
+                &Seen::Placed(vec![dirs.dest.join("A002.ARW")]),
+            ]
+        );
+        assert_eq!(
+            done.iptc_errors,
+            ["A001.ARW: the write log could not be opened"]
+        );
+        assert_eq!(logged(&log), Vec::<String>::new());
+    }
+
+    /// An import of six JPEGs with two write processes: the template is in every file, no
+    /// temporary file is left and the journal is empty. Needs ExifTool on PATH; the safe write
+    /// uses Windows file operations.
+    #[cfg(windows)]
+    #[test]
+    fn with_two_processes_the_template_is_written_safely_to_six_imported_jpegs() {
+        let mut exiftool = required_exiftool();
+        let dirs = TempDirs::new("pool-six-jpegs");
+        let names: Vec<String> = (1..=6).map(|n| format!("A{n:03}.jpg")).collect();
+        for name in &names {
+            dirs.write_image(name, jpeg_fixture::SMALL);
+        }
+        let journal_folder = dirs.root.join("journal");
+        let journal = Journal::open(&journal_folder).unwrap();
+        let mut worker =
+            ImportWorker::start_with_processes(Some(journal), Arc::new(NoImageCheck), 2).unwrap();
+        let mut form = dirs.form("");
+        form.iptc.creator = "Fotograf".to_string();
+        let id = worker.run(form, EditOptions::default()).unwrap();
+
+        let done = done_event(&worker, id);
+
+        assert_eq!(done.copied, 6);
+        assert!(done.iptc_errors.is_empty(), "{:?}", done.iptc_errors);
+        for name in &names {
+            let read = exiftool
+                .read_metadata(
+                    &dirs.dest.join(name),
+                    pw_metadata::iim::Fallback::Windows1252,
+                )
+                .unwrap();
+            assert_eq!(
+                read.reconciled
+                    .metadata
+                    .get("dc:creator")
+                    .map(|stored| stored.value.clone()),
+                Some(pw_metadata::value::Value::List(vec![
+                    "Fotograf".to_string()
+                ])),
+                "{name}"
+            );
+        }
+        let expected: Vec<PathBuf> = names.iter().map(PathBuf::from).collect();
+        assert_eq!(files_below(&dirs.dest), expected);
+        assert_eq!(files_below(&journal_folder), Vec::<PathBuf>::new());
     }
 }

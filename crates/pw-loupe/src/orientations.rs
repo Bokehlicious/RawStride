@@ -1156,4 +1156,103 @@ mod tests {
         // The next turn of `plain` asks for its embedded value again.
         assert_eq!(turn(&mut store, &plain, true), std::slice::from_ref(&plain));
     }
+
+    /// What a batch of turns leaves (T268): each image's shown, confirmed and embedded value and
+    /// whether RawStride wrote it, the writes pending, the failure count, the failure messages
+    /// sorted, the changes since the turn sorted, and the name of the last failure.
+    type TurnBatchResult = (
+        Vec<(Option<u16>, Option<u16>, Option<u16>, bool)>,
+        usize,
+        usize,
+        Vec<String>,
+        Vec<(PathBuf, Option<u16>)>,
+        Option<String>,
+    );
+
+    /// One clockwise turn of three different images read as 1 (one write succeeds, two fail),
+    /// its answers given in `order` (indexes of the images).
+    fn turn_batch_answered_in(order: [usize; 3]) -> TurnBatchResult {
+        let paths = [
+            image("pw-loupe-turn-order-a.jpg"),
+            image("pw-loupe-turn-order-b.ARW"),
+            image("pw-loupe-turn-order-c.DNG"),
+        ];
+        let mut store = OrientationStore::default();
+        let read: HashMap<PathBuf, u16> = paths.iter().map(|path| (path.clone(), 1)).collect();
+        store.read(1, &read, &paths);
+        let mut writer = FakeWriter::default();
+        assert!(
+            store
+                .turn_many(&paths, true)
+                .expect("the turn is accepted")
+                .is_empty()
+        );
+        store.take_changes();
+        assert!(store.pump(&mut writer).is_empty());
+        assert_eq!(writer.requests.len(), 3);
+        let results = [Ok(()), Err("fel B".to_owned()), Err("fel C".to_owned())];
+
+        let mut messages: Vec<String> = order
+            .iter()
+            .filter_map(|&index| {
+                let (id, path, _) = &writer.requests[index];
+                store.written(*id, path, results[index].clone())
+            })
+            .collect();
+
+        messages.sort();
+        let mut changes = store.take_changes();
+        changes.sort();
+        let values = paths
+            .iter()
+            .map(|path| {
+                let entry = &store.entries[path];
+                (
+                    entry.shown,
+                    entry.confirmed,
+                    entry.embedded,
+                    entry.confirmed_by_write,
+                )
+            })
+            .collect();
+        let last = store.last_failure.as_ref().map(|last| last.name.clone());
+        (
+            values,
+            store.pending(),
+            store.failure_count,
+            messages,
+            changes,
+            last,
+        )
+    }
+
+    /// ADR 0007 §9.6 point 2 (T268): with several write processes the metadata worker may answer
+    /// a batch's turns of different images in another order than they were sent; the store ends
+    /// the same, the lists filled as answers come and the last failure compared without regard
+    /// to order.
+    #[test]
+    fn a_batchs_turn_answers_in_reverse_order_give_the_same_result() {
+        let in_order = turn_batch_answered_in([0, 1, 2]);
+        let reverse = turn_batch_answered_in([2, 1, 0]);
+
+        assert_eq!(in_order.0, reverse.0);
+        assert_eq!(
+            in_order.0,
+            [
+                (Some(6), Some(6), Some(6), true),
+                (Some(1), Some(1), None, false),
+                (Some(1), Some(1), None, false),
+            ]
+        );
+        assert_eq!((in_order.1, in_order.2), (0, 2));
+        assert_eq!((reverse.1, reverse.2), (0, 2));
+        assert_eq!(in_order.3, reverse.3);
+        assert_eq!(in_order.4, reverse.4);
+        let failed = [
+            Some("pw-loupe-turn-order-b.ARW".to_owned()),
+            Some("pw-loupe-turn-order-c.DNG".to_owned()),
+        ];
+        assert!(failed.contains(&in_order.5), "{:?}", in_order.5);
+        assert!(failed.contains(&reverse.5), "{:?}", reverse.5);
+    }
 }

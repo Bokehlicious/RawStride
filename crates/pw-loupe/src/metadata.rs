@@ -5613,4 +5613,120 @@ mod tests {
             "turned from the written 6"
         );
     }
+
+    /// What an editor batch leaves (T268): its summary with the failed and kept lines sorted, the
+    /// progress after each answer, the write answers sorted by file, the reads asked for and
+    /// whether the window's image is being read again.
+    type EditorBatchResult = (
+        BatchSummary,
+        Vec<Option<(usize, usize)>>,
+        Vec<WriteAnswer>,
+        Vec<(RequestId, PathBuf)>,
+        bool,
+    );
+
+    /// A batch of three different images (the window's JPEG with a notice, a failed ARW, a DNG
+    /// with notices), its answers given in `order` (indexes of the images).
+    fn editor_batch_answered_in(order: [usize; 3]) -> EditorBatchResult {
+        let mut worker = FakeSubmit::new([]);
+        let mut cache = MetadataCache::default();
+        let (a, b, c) = start_three(&mut cache, &mut worker);
+        assert_eq!(worker.edits_writes.len(), 3);
+        let answers = [
+            edits_written(
+                900,
+                &a,
+                Ok(report(vec![WriteNotice::Truncated {
+                    property: "dc:title".to_owned(),
+                }])),
+            ),
+            edits_written(901, &b, Err(WriteError::ReadOnly)),
+            edits_written(
+                902,
+                &c,
+                Ok(report(vec![
+                    WriteNotice::ConflictKept {
+                        property: "photoshop:City".to_owned(),
+                    },
+                    WriteNotice::DigestNotWritten,
+                ])),
+            ),
+        ];
+        let mut answers: Vec<Option<WorkerEvent>> = answers.into_iter().map(Some).collect();
+
+        let mut progress = Vec::new();
+        for index in order {
+            let answer = answers[index].take().expect("each answer once");
+            worker.events.push_back(answer);
+            assert!(cache.poll(&mut worker).is_empty());
+            progress.push(cache.batch_progress());
+        }
+
+        let mut events = cache.take_editor_events();
+        assert_eq!(events.len(), 1, "{events:?}");
+        let Some(EditorEvent::BatchDone(mut summary)) = events.pop() else {
+            panic!("expected the batch's summary");
+        };
+        summary.failed.sort();
+        summary.kept.sort();
+        let mut written = cache.take_written();
+        written.sort_by(|one, other| one.path.cmp(&other.path));
+        (
+            summary,
+            progress,
+            written,
+            worker.metadata_reads.clone(),
+            cache.editor_reloading(),
+        )
+    }
+
+    /// ADR 0007 §9.6 point 2 (T268): with several write processes the metadata worker may answer
+    /// an editor batch's writes of different images in another order than they were sent; the
+    /// batch ends the same, its lists compared without regard to order.
+    #[test]
+    fn an_editor_batchs_answers_in_reverse_order_give_the_same_result() {
+        let in_order = editor_batch_answered_in([0, 1, 2]);
+        let reverse = editor_batch_answered_in([2, 1, 0]);
+
+        assert_eq!(in_order, reverse);
+        let (a, b, c) = batch_images();
+        assert_eq!(
+            in_order.0,
+            BatchSummary {
+                written: 2,
+                total: 3,
+                failed: vec![
+                    "Could not save metadata for pw-loupe-batch-b.ARW: the file is read-only"
+                        .to_owned()
+                ],
+                kept: vec![
+                    "No new IIM checksum written: pw-loupe-batch-c.DNG".to_owned(),
+                    "Unresolved conflict kept: pw-loupe-batch-c.DNG (City)".to_owned(),
+                ],
+                notices: vec![WriteNotice::Truncated {
+                    property: "dc:title".to_owned(),
+                }],
+            }
+        );
+        assert_eq!(in_order.1, [Some((2, 3)), Some((3, 3)), None]);
+        assert_eq!(
+            in_order.2,
+            [
+                WriteAnswer {
+                    path: a.clone(),
+                    succeeded: true
+                },
+                WriteAnswer {
+                    path: b,
+                    succeeded: false
+                },
+                WriteAnswer {
+                    path: c,
+                    succeeded: true
+                },
+            ]
+        );
+        assert_eq!(in_order.3, [(500, a)]);
+        assert!(in_order.4);
+    }
 }

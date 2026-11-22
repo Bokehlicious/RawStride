@@ -1448,4 +1448,81 @@ mod tests {
             assert_eq!(written, &rating(None, None));
         }
     }
+
+    /// What a batch of rating writes leaves (T268): each image's shown and confirmed rating, the
+    /// writes pending, the failure count, the failure messages sorted, and the name of the last
+    /// failure.
+    type RatingBatchResult = (
+        Vec<(Option<Rating>, Option<Rating>)>,
+        usize,
+        usize,
+        Vec<String>,
+        Option<String>,
+    );
+
+    /// A batch of one rating on three different images (one write succeeds, two fail), its
+    /// answers given in `order` (indexes of the images).
+    fn rating_batch_answered_in(order: [usize; 3]) -> RatingBatchResult {
+        let paths = [
+            image("pw-loupe-rating-order-a.ARW"),
+            image("pw-loupe-rating-order-b.jpg"),
+            image("pw-loupe-rating-order-c.DNG"),
+        ];
+        let mut store = RatingStore::default();
+        let confirmed = [(paths[1].clone(), rating(Some(1), None))].into();
+        store.read(0, &confirmed, &paths);
+        let mut writer = FakeWriter::default();
+        assert_eq!(store.set_many(&paths, RatingKey::Stars(4)), Ok(3));
+        assert!(store.pump(&mut writer).is_empty());
+        assert_eq!(writer.requests.len(), 3);
+        let results = [Ok(()), Err("fel B".to_owned()), Err("fel C".to_owned())];
+
+        let mut messages: Vec<String> = order
+            .iter()
+            .filter_map(|&index| {
+                let (id, path, _) = &writer.requests[index];
+                store.written(*id, path, results[index].clone())
+            })
+            .collect();
+
+        messages.sort();
+        let values = paths
+            .iter()
+            .map(|path| {
+                let entry = &store.entries[path];
+                (entry.shown.clone(), entry.confirmed.clone())
+            })
+            .collect();
+        let last = store.last_failure.as_ref().map(|last| last.name.clone());
+        (values, store.pending(), store.failure_count, messages, last)
+    }
+
+    /// ADR 0007 §9.6 point 2 (T268): with several write processes the metadata worker may answer
+    /// a batch's writes of different images in another order than they were sent; the store ends
+    /// the same, the failure messages and the last failure compared without regard to order.
+    #[test]
+    fn a_batchs_rating_answers_in_reverse_order_give_the_same_result() {
+        let (values, pending, failures, messages, last) = rating_batch_answered_in([0, 1, 2]);
+        let (reverse_values, reverse_pending, reverse_failures, reverse_messages, reverse_last) =
+            rating_batch_answered_in([2, 1, 0]);
+
+        assert_eq!(values, reverse_values);
+        assert_eq!(
+            values,
+            [
+                (Some(rating(Some(4), None)), Some(rating(Some(4), None))),
+                (Some(rating(Some(1), None)), Some(rating(Some(1), None))),
+                (None, None),
+            ]
+        );
+        assert_eq!((pending, failures), (0, 2));
+        assert_eq!((reverse_pending, reverse_failures), (0, 2));
+        assert_eq!(messages, reverse_messages);
+        let failed = [
+            Some("pw-loupe-rating-order-b.jpg".to_owned()),
+            Some("pw-loupe-rating-order-c.DNG".to_owned()),
+        ];
+        assert!(failed.contains(&last), "{last:?}");
+        assert!(failed.contains(&reverse_last), "{reverse_last:?}");
+    }
 }
