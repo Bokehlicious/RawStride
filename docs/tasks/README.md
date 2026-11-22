@@ -136,9 +136,9 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 - **The README's Planned list (owner, 2026-11-22):** `README.md`'s "Planned" section lists the
   features with an accepted ADR and a place in `plans/adr-0018-0025-steps.md`, in the plan's
   order. When an ADR is accepted and placed there, the reviewer adds its item, in the same commit.
-  At the Done of the task that finishes an item's last step, the reviewer removes the item, and
-  adds it to "What it does" or the status box if it is worth naming, in the same commit as the
-  task's change log line; the owner's hand check is not waited for.
+  When the owner's hand check finishes an item's last step, the reviewer removes the item, and
+  adds it to "What it does" or the status box if it is worth naming, in the commit that records
+  the hand check.
 - **When to suggest a release (owner, 2026-11-21):** the reviewer tells the owner, unasked, that
   a new version is due when `## [Unreleased]` in `CHANGELOG.md` is not empty and an ADR's steps
   or an order in `plans/adr-0018-0025-steps.md` has just been finished, or when it has grown long
