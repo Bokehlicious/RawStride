@@ -87,12 +87,11 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status |
 |---|---|---|
-| [T267](T267-batch-write-timing-by-process-count.md) | ADR 0007 §9.6 Q18: a batch write timed with 1, 2 and 4 ExifTool processes | Open |
-| [T268](T268-app-and-import-use-several-exiftool-processes.md) | ADR 0007 §9.6 Q18: the app and the import use the owner's number of processes | Blocked: waits for T267 and the owner's number |
-| [T270](T270-ship-and-pin-exiftool-13-64.md) | ADR 0007 §9.7 Q20: ship and pin ExifTool 13.64 (CI, packaging, notices, documents) | Blocked: waits for T267 |
+| [T268](T268-app-and-import-use-several-exiftool-processes.md) | ADR 0007 §9.6 Q18: the app and the import use the owner's number of processes | Open |
+| [T270](T270-ship-and-pin-exiftool-13-64.md) | ADR 0007 §9.7 Q20: ship and pin ExifTool 13.64 (CI, packaging, notices, documents) | Open |
 | [T271](T271-exiftool-13-64-the-lowest-version.md) | ADR 0007 §9.7 Q20: ExifTool 13.64 is the lowest version the app writes with | Blocked: waits for T270 |
 | [T272](T272-drop-digest-pass-and-tiff-restart.md) | ADR 0007 §9.7 Q21 and Q22: the digest pass and the TIFF restart dropped, the copy's checksum checked | Blocked: waits for T271 |
-| [T273](T273-dng-damage-kinds-measured.md) | ADR 0007 §9.7 Q23: which checks refuse other kinds of DNG damage? (pw-imagecheck example) | Blocked: waits for T267 |
+| [T273](T273-dng-damage-kinds-measured.md) | ADR 0007 §9.7 Q23: which checks refuse other kinds of DNG damage? (pw-imagecheck example) | Open |
 
 ## Writing a task (owner and reviewer)
 

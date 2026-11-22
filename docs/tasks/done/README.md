@@ -274,3 +274,4 @@ was when the task was done, so "this file", "below" and "the Log" in T1–T115 m
 | [T265](T265-digest-pass-and-tiff-restart-recheck.md) | ADR 0007 §9.6 Q19: do the reasons for the digest pass and the TIFF restart still hold? (pw-metadata example) |
 | [T266](T266-metadata-worker-several-exiftool-processes.md) | ADR 0007 §9.6 Q18: a pool of ExifTool write processes, used by the metadata worker (pw-metadata) |
 | [T269](T269-digest-pass-and-tiff-restart-with-exiftool-13-64.md) | ADR 0007 §9.6 Q19: the digest pass and the TIFF restart with ExifTool 13.64 (measurement) |
+| [T267](T267-batch-write-timing-by-process-count.md) | ADR 0007 §9.6 Q18: a batch write timed with 1, 2 and 4 ExifTool processes (pw-imagecheck example) |

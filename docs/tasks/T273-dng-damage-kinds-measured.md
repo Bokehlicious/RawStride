@@ -1,4 +1,4 @@
-# T273. ADR 0007 §9.7 Q23: which checks refuse other kinds of DNG damage? (pw-imagecheck example) — Blocked: waits for T267
+# T273. ADR 0007 §9.7 Q23: which checks refuse other kinds of DNG damage? (pw-imagecheck example) — Open
 
 - **Why:** ADR 0007 revision 30 (§9.7 point 4, Q23; approved by the owner 2026-11-22). The DNG
   image check (§9.3 point 4) is kept for now. LibRaw's unpack is 96–99 % of it (249–553 ms per
@@ -103,3 +103,4 @@
 |---|---|---|
 | 2026-11-22 | Blocked | Written after ADR 0007 revision 30 (§9.7 point 4, Q23; the owner, 2026-11-22: the measurement as a task). Not part of the chain T270 → T272. Waits for T267 (the same analysis) |
 | 2026-11-22 | Blocked | Cold read: how the RAW IFD is found (nested SubIFDs, a missing `NewSubfileType` counts as 0, the first that has offsets); g skipped when the RAW is in IFD0; d for a piece under 4096 bytes; "snapshot failed" as a third result; `verify_copy` allows offset keys, so a and b show only in the hash or validation; each (file, damage) in a child process with a 120 s limit, so a crash or hang neither ends the run nor leaves copies; ExifTool's source printed. No other file needs to change |
+| 2026-11-22 | Open | T267 done (its section is in the analysis) |

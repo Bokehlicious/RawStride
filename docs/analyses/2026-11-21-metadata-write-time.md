@@ -552,6 +552,84 @@ and first answer 180–183 ms against 186–189 ms).
    whether `MIN_EXIFTOOL_VERSION` (12.67) or CI's pinned version (13.59) changes, is the owner's
    decision (ADR 0007 §9.6 point 3); nothing above is proposed as decided.
 
+## Measured in T267 (Q18: 1, 2 and 4 processes)
+
+- Build: `cargo run --release -p pw-imagecheck --example batch_timing` (T267,
+  [`batch_timing.rs`](../../crates/pw-imagecheck/examples/batch_timing.rs)), at commit `88fa430`
+  (`feature/gui-workspace`) with the example added, uncommitted. The example drives the metadata
+  worker (`MetadataWorker::start`, T266's `WriteSetup::write_processes`) with the real image check
+  (`RawImageCheck::without_release()`), the default `EditOptions` and one `write_edits` per file
+  with one City edit (`photoshop:City` = "Malmö"). **ExifTool 13.59**, the installed one
+  (`%LOCALAPPDATA%\Programs\ExifTool`, found on PATH; `PW_EXIFTOOL_PL` unset).
+- Machine: thanos, Intel i7-9700K (8 cores, no SMT). C: is an NVMe SSD (Kingston SNV3S1000G), D:
+  a SATA SSD (Samsung 850 PRO).
+- Measured 2026-11-22: the two camera JPEGs `TN006331.JPG` and `TN005701_DxO.jpg` and the seven
+  DNGs of T261 (the five `IMG_20261026_*.dng`, `TN002512.DNG`, `TN002513.DNG`) from
+  `D:\PhotoWorkflowData\RAW`, `--copies 3` (27 files: 6 JPEGs, 21 DNGs), copied fresh for every
+  batch into a new work folder: under `%TEMP%` on C: (the default), or a new folder under
+  `D:\PhotoWorkflowData` (`--work`). **Warm cache** (the sources had been read before). Three runs
+  per process count; each run starts a new worker (not timed) and writes the batch twice on it:
+  "first" includes the pool's lazy ExifTool starts (with 2 or 4 processes), "warm" none. The wall
+  time runs from the first request until the last file's `EditsWritten`. Every batch (216 of 216)
+  wrote every file: no failure, no "unchanged"; the work folders were gone afterwards.
+
+Medians in ms over the three runs; files/s is the batch's files divided by the median; the
+speed-up is against 1 process with the same batch (first or warm):
+
+| Batch | Drive | Files | Processes | First (ms) | First files/s | First speed-up | Warm (ms) | Warm files/s | Warm speed-up |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| JPEGs and DNGs | C: | 27 | 1 | 19,393 | 1.39 | 1.00× | 19,312 | 1.40 | 1.00× |
+| JPEGs and DNGs | C: | 27 | 2 | 10,115 | 2.67 | 1.92× | 9,771 | 2.76 | 1.98× |
+| JPEGs and DNGs | C: | 27 | 4 | 5,876 | 4.59 | 3.30× | 5,432 | 4.97 | 3.55× |
+| JPEGs and DNGs | D: | 27 | 1 | 20,481 | 1.32 | 1.00× | 20,203 | 1.34 | 1.00× |
+| JPEGs and DNGs | D: | 27 | 2 | 10,681 | 2.53 | 1.92× | 10,324 | 2.62 | 1.96× |
+| JPEGs and DNGs | D: | 27 | 4 | 6,316 | 4.27 | 3.24× | 5,845 | 4.62 | 3.46× |
+| JPEGs only | C: | 6 | 1 | 4,627 | 1.30 | 1.00× | 4,386 | 1.37 | 1.00× |
+| JPEGs only | C: | 6 | 2 | 2,755 | 2.18 | 1.68× | 2,340 | 2.56 | 1.87× |
+| JPEGs only | C: | 6 | 4 | 1,928 | 3.11 | 2.40× | 1,510 | 3.97 | 2.91× |
+| DNGs only | C: | 21 | 1 | 14,806 | 1.42 | 1.00× | 14,596 | 1.44 | 1.00× |
+| DNGs only | C: | 21 | 2 | 7,929 | 2.65 | 1.87× | 7,559 | 2.78 | 1.93× |
+| DNGs only | C: | 21 | 4 | 4,869 | 4.31 | 3.04× | 4,405 | 4.77 | 3.31× |
+
+The three runs of each row lay close together: within about 3 % of each other in every row but one
+(DNGs only, 4 processes, warm: 4,374, 4,405 and 4,709 ms).
+
+1. **Inference:** with one process a file of this batch takes about 0.7 s on average (715 ms on
+   C:, warm), the JPEGs (731 ms) and DNGs (695 ms) about alike, close to the mean of T261's
+   single-file medians of `read_metadata` + `write_safely` for the same files (785 ms for the two
+   JPEGs, 711 ms for the seven DNGs). Two processes nearly halve the batch's time on both drives (warm
+   1.96–1.98×, first 1.92×); four write it 3.46–3.55 times as fast as one when warm, 3.24–3.30
+   times in the first batch. Per process, two give about 0.98–0.99 of one process's throughput,
+   four about 0.87–0.89.
+2. **Inference:** the drive changes little here: the D: work folder (SATA SSD) was 4–8 % slower
+   than C: (NVMe) at every process count, and the speed-ups on D: are within 0.1× of those on C:.
+   A memory card, a network share or a hard disk were not measured (§9.6 point 2 expects less
+   gain there).
+3. **Inference:** the first batch is slower than the warm one by 80–280 ms with one process and by
+   340–470 ms with two or four. With several processes this includes the pool's ExifTool starts
+   (about 190 ms each, "Measured in T265" point 4), which overlap only partly; the one-process
+   difference, where no new process starts, shows a first-batch cost of its own. **Hypothesis:**
+   that cost is a new ExifTool process's (or the image check's) first use of modules and code
+   paths, as T261's interpretation 4 suggested for the first JPEG; not measured apart. In a
+   longer batch the starts weigh less: in the 27-file batch they cost 4 processes 0.25× of
+   speed-up (3.30× against 3.55×).
+4. **Inference:** the JPEG-only batch gains less (warm 1.87× with two, 2.91× with four). With six
+   files of about the same time, two processes write three each and four processes leave two of
+   them writing a second file while the other two are idle, so 2× and 3× are the most these
+   batches could gain; the measured speed-ups are close to that. **Hypothesis:** the JPEGs and
+   DNGs gain alike per process in a batch large enough for every process to stay busy; the
+   DNG-only batch (21 files: warm 1.93× and 3.31×) and the mixed batch point that way, but no
+   larger JPEG-only batch was measured.
+5. **Hypothesis:** four processes are not yet limited by the machine's 8 cores or by the drive
+   (the speed-up per process falls only from 0.99 to about 0.88, and the slower drive changes it
+   hardly at all); whether a fifth or more would still gain was not measured, since the worker
+   allows at most four (ADR 0007 §9.6 point 2).
+6. **Not measured:** a memory card, a network share or a hard disk; a cold file cache; TIFFs and
+   manufacturer RAWs with sidecars; another ExifTool version (13.64 was not used, T267 runs before
+   T270); the app itself while it draws and reads at the same time as a batch writes. The number
+   of processes is the owner's decision (ADR 0007 §9.6 point 2, Q18; T268 makes the app use it);
+   nothing above is proposed as decided.
+
 ## Appendix: the timing script
 
 ```python

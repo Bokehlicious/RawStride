@@ -1,18 +1,18 @@
-# T268. ADR 0007 §9.6 Q18: the app's writes and the import's template use the owner's number of ExifTool processes (pw-loupe) — Blocked: waits for T267 and the owner's number
+# T268. ADR 0007 §9.6 Q18: the app's writes and the import's template use the owner's number of ExifTool processes (pw-loupe) — Open
 
 - **Why:** ADR 0007 §9.6 point 2 (Q18; approved by the owner 2026-11-22). T266 gave
   `pw-metadata` a pool of ExifTool write processes (`write_pool.rs`) and made the metadata worker
   use it when `WriteSetup::write_processes` is above 1; the app still passes 1. T267 measured a
   batch with 1, 2 and 4 processes, and the owner fixed the number afterwards (recorded in ADR 0007
   §9.6 by the reviewer; **the reviewer writes the number here before this task is set to Open**:
-  `<n>`). This task makes the app use it: the editor's, the ratings' and the rotations' batches
-  through the metadata worker, and the import's template through the pool. Last task of the chain
-  T266 → T267 → T268. If the owner fixes the number at 1, this task is not done; the reviewer
+  **4**, the owner, 2026-11-22). This task makes the app use it: the editor's, the ratings' and
+  the rotations' batches through the metadata worker, and the import's template through the
+  pool. Last task of the chain T266 → T267 → T268. If the owner fixes the number at 1, this task is not done; the reviewer
   removes it and records why (ADR 0007 §9.6 and §14, the plan row), and the pool stays in
   `pw-metadata` unused by the import.
 - **The reviewer's documents** (not the agent's): before Open, the number and its date in ADR
   0007 §9.6 point 2, §14 (Q18) and §18; at Done, a CHANGELOG line (Changed: batches and the
-  import's template are written by up to `<n>` ExifTool processes), `docs/tasks/known-limits.md`
+  import's template are written by up to four ExifTool processes), `docs/tasks/known-limits.md`
   (T266's free-space line, and this task's limits in Rules), a `docs/tasks/backlog.md` item "a
   setting for the number of ExifTool write processes" (§9.6 point 2: "may become a setting
   later"), and the plan row (awaiting the owner's hand check).
@@ -148,3 +148,4 @@
 | 2026-11-22 | Blocked | Written with T266 and T267 (ADR 0007 §9.6 point 2, Q18); waits for T267 and the owner's number |
 | 2026-11-22 | Blocked | Cold read: the default program solved in T266 (`WritePool::start(n)`); the constructors: old ones mean 1, new `start_with_processes` and `start_with_exiftool_args_and_processes`, `checks` an `Arc`, the mechanical test edits (`Box::new` → `Arc::new`, `write_processes: 1`) allowed and nothing else; the pool's answers mapped to today's lines (`TooOld` carries the version, T266), later start or too-old answers dropped, a discarded write no line; the cancel rule made exact (no `Placed` after a cancel, started writes finish, a cancel seen in `finish`'s wait), hand check 3 worded to match; a pool that failed is never kept; answers taken at progress calls and in `finish`; `ratings.rs` and `orientations.rs` named, three different images; a recording or blocking `ImageCheck` or a new fake mode allowed in the tests; no panic in the waits; the process count said. At Done the reviewer adds a CHANGELOG line (Changed) |
 | 2026-11-22 | Blocked | The owner, 2026-11-22: two pools meeting on one target is a known limit, not an ADR rule change (recorded in ADR 0007 §9.6 point 2); this task's Rules stand |
+| 2026-11-22 | Open | T267 done; the owner, 2026-11-22: the number is four (ADR 0007 §9.6 point 2, §14 Q18, §18); written in "Why" and the CHANGELOG line |

@@ -634,7 +634,12 @@ fourth of the analysis (a cheaper final check that no longer proves the image da
    ingest template, an edit or a rating applied to several images, a rotation of several) are
    shared among up to **four** ExifTool processes, each in its own thread; the number is fixed
    after a measurement with 1, 2 and 4 processes on a batch of camera JPEGs and DNGs, and may
-   become a setting later. Rules:
+   become a setting later. **The owner, 2026-11-22 (after T267):** the number is **four**. T267
+   measured a batch of 27 camera JPEGs and DNGs written 3.5 times as fast with four processes as
+   with one (warm; about 1.96 times with two), on an NVMe and a SATA SSD alike
+   (`docs/analyses/2026-11-21-metadata-write-time.md`, "Measured in T267"); a memory card, a
+   network share, a hard disk and the app at work were not measured. T268 makes the app and the
+   import's template use it. Rules:
    - every file is still its own transaction with every check of §9.1–§9.5;
    - two writes to the same target (an image, or a sidecar) are never made at the same time, and
      the writes to one target keep the order they were asked in. This holds within one pool of
@@ -906,7 +911,7 @@ silently. All other deviations concern SHOULD-level recommendations; each is mar
 | ~~**Q15**~~ | **(Revision 26.)** A flat `lr:hierarchicalSubject` beside the keywords | **Decided by the owner 2026-11-19:** written equal to `dc:subject` when every entry is flat; unchanged when one entry has a `\|` (§8) |
 | ~~**Q16**~~ | **(Revision 26.)** Exif Rating/RatingPercent and `xmp:RatingPercent` that another program added | **Decided by the owner 2026-11-19:** existing ones written to match the rating, a reject removes them, never created or read (§6.3) |
 | ~~**Q17**~~ | **(Revision 29.)** The final read after the replace (§9.4): a full snapshot, or `ImageDataHash` alone? | **Decided by the owner 2026-11-22, as proposed:** `ImageDataHash` alone; it is all the final read compares, so the check is unchanged (§9.6 point 1) |
-| ~~**Q18**~~ | **(Revision 29.)** A batch: one ExifTool process, or several at once? | **Decided by the owner 2026-11-22, as proposed:** up to four at once, the number fixed after a measurement with 1, 2 and 4; every file its own transaction; one target never written twice at once and its writes in order; the journal holds several open entries (§9.6 point 2) |
+| ~~**Q18**~~ | **(Revision 29.)** A batch: one ExifTool process, or several at once? | **Decided by the owner 2026-11-22, as proposed:** up to four at once, the number fixed after a measurement with 1, 2 and 4; every file its own transaction; one target never written twice at once and its writes in order; the journal holds several open entries (§9.6 point 2). **The owner, 2026-11-22 (after T267's measurement):** the number is four (§9.6 point 2) |
 | ~~**Q19**~~ | **(Revision 29.)** The DNG image check (§9.3 point 4), the digest pass and the TIFF restart (§9.2, §9.3): changed now, or measured first? | **Decided by the owner 2026-11-22, as proposed:** measured first in a task, no rule changed now; the owner decides afterwards (§9.6 point 3). Measured in T264, T265 and T269; the decision is Q20–Q23 |
 | ~~**Q20**~~ | **(Revision 30.)** The lowest ExifTool version | **Decided by the owner 2026-11-22, as proposed:** 13.64, which fixes both reasons of T92 (T269); shipped and in CI too. Alternative: 12.67 kept, the steps chosen by version (§9.7 point 1) |
 | ~~**Q21**~~ | **(Revision 30.)** The digest pass (§9.2) | **Decided by the owner 2026-11-22, as proposed:** dropped; the checksum written in the IIM call and the copy refused unless its checksum is current. Alternative: the digest pass only when the checksum is out of date (§9.7 point 2) |
@@ -1029,7 +1034,8 @@ listed under the table (§17.1).
   modification time, T205 Q15 and Q16); both done and hand-checked by the owner 2026-11-19.
 - Revision 29 (§9.6, Q17–Q19, a faster safe write): tasks written 2026-11-22, in the order of
   §9.6: T263 (Q17), T264 and T265 (Q19's measurement), the chain T266 → T267 → T268 (Q18; the
-  number of processes is fixed by the owner after T267).
+  number of processes is fixed by the owner after T267). T267 done 2026-11-22; the owner fixed
+  the number at four the same day (§9.6 point 2); T268 makes the app use it.
 - Revision 30 (§9.7, Q20–Q23, Q19 decided): tasks written 2026-11-22: the chain T270 → T271 →
   T272 (ExifTool 13.64 shipped and pinned; 13.64 the lowest version; the digest pass and the
   restart dropped, the checksum checked) and T273 (other kinds of DNG damage measured, for Q23).
