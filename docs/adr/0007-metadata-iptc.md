@@ -1085,7 +1085,9 @@ listed under the table (§17.1).
 - Revision 32 (Q23 decided again, §9.3 point 4, §9.7 point 4): task T275 written 2026-11-22
   (LibRaw's check of a DNG copy only when the original has no `ImageDataHash`). T275 done
   2026-11-22 (`DataHash` and `ImageCheck::check_copy_with`; with a compared hash a cut DNG
-  copy was checked in under 10 ms instead of 301–907 ms); the owner's hand check follows.
+  copy was checked in under 10 ms instead of 301–907 ms); hand-checked by the owner 2026-11-22
+  (32 DNGs rated at once in a release build: 11.34 s and 10.55 s before, 6.97 s and 6.18 s
+  after; every rating shown after a restart).
 
 ## Revision history
 
