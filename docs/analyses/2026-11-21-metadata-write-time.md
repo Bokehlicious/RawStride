@@ -117,9 +117,104 @@ revision) before a task. The estimated savings are from the tables above.
 
 ## Follow-up
 
-- No task. If the owner wants one, first measure the steps that are missing here (the image check
-  and the shell's work after a write) in a release build.
-- The owner decides whether any of the changes above is worth an ADR 0007 revision.
+- The owner decided (2026-11-21) to measure what is missing first: T261 measured the image check
+  and the write as RawStride runs it in a release build ("Measured in T261" below; done
+  2026-11-22). The shell's work after a write and a cold cache are still not measured.
+- The owner decides whether any of the changes above, or a change of the image check for DNG, is
+  worth an ADR 0007 revision.
+
+## Measured in T261
+
+- Build: `cargo run --release -p pw-imagecheck --example write_timing` (T261,
+  [`write_timing.rs`](../../crates/pw-imagecheck/examples/write_timing.rs)), at commit `eea851c`
+  (`feature/gui-workspace`) with the example added, uncommitted. The example calls the app's own
+  code: `ExifTool::read_metadata`, `ExifTool::snapshot` and `ExifTool::write_safely` with
+  `RawImageCheck::without_release()` wrapped in a timer, and a journal in the work folder.
+  ExifTool 13.59 (`exiftool` on PATH), started once; its start and first answer took 189–193 ms.
+- Measured 2026-11-22 on thanos. Sources in `D:\PhotoWorkflowData\RAW`, copied for every run into
+  the work folder: first a new folder under `%TEMP%` on C: (Kingston NV3, NVMe), then a new folder
+  on D: (Samsung 850 PRO, SATA SSD). **Warm cache.** Three runs per file, one after another;
+  times are medians. Every run (48 on each drive) wrote successfully.
+- Plan: the copy's own read metadata with `photoshop:City` = "Malmö" (`Metadata::set`), through
+  `write_plan::plan` with the default settings: the plan of a City edit in the editor.
+- `write_safely` is the whole transaction as the app runs it: the snapshot of the original, the
+  journal, the copy, the digest pass and (TIFF) the ExifTool restart, the snapshot and check of
+  the copy, the flush, `ReplaceFileW`, the final snapshot. "Read + write" is what one edit costs
+  in the worker (its `read_metadata`, then `write_safely`); "snapshot" is one snapshot of the
+  target alone, for comparison.
+
+Medians in ms, work folder on C::
+
+| File | Case | MB | Kind | `read_metadata` | Snapshot | `write_safely` | `check_copy` | Write without check | Read + write |
+|---|---|---:|---|---:|---:|---:|---:|---:|---:|
+| `TN006331.JPG` | – | 13.5 | JPEG | 23 | 191 | 626 | 0 | 626 | 649 |
+| `TN005701_DxO.jpg` | – | 16.4 | JPEG | 40 | 266 | 877 | 0 | 877 | 921 |
+| `IMG_20261026_062851.dng` | – | 11.7 | DNG | 16 | 48 | 462 | 261 | 199 | 477 |
+| `IMG_20261026_084628.dng` | – | 12.2 | DNG | 16 | 49 | 457 | 254 | 203 | 472 |
+| `IMG_20261026_091722.dng` | – | 11.4 | DNG | 18 | 50 | 462 | 256 | 209 | 489 |
+| `IMG_20261026_092349.dng` | – | 18.9 | DNG | 19 | 74 | 570 | 273 | 297 | 589 |
+| `IMG_20261026_092351.dng` | – | 20.4 | DNG | 20 | 75 | 581 | 275 | 306 | 602 |
+| `TN002512.DNG` | – | 36.0 | DNG | 31 | 178 | 1,203 | 540 | 662 | 1,233 |
+| `TN002513.DNG` | – | 30.5 | DNG | 30 | 155 | 1,082 | 486 | 597 | 1,112 |
+| `TN002683.tif` | – | 41.2 | TIFF | 33 | 212 | 1,304 | 1 | 1,303 | 1,337 |
+| `TN004596.tif` | – | 97.1 | TIFF | 32 | 448 | 2,326 | 1 | 2,325 | 2,357 |
+| `TN006025.tif` | – | 177.3 | TIFF | 35 | 791 | 3,772 | 0 | 3,772 | 3,809 |
+| `P1240231.RW2` | sidecar exists | 19.6 | RAW | 25 | 5 | 31 | 0 | 31 | 56 |
+| `P1240231.RW2` | new sidecar | 19.6 | RAW | 19 | – | 21 | 0 | 21 | 41 |
+| `P1240233.RW2` | sidecar exists | 19.7 | RAW | 24 | 5 | 33 | 0 | 33 | 57 |
+| `P1240233.RW2` | new sidecar | 19.7 | RAW | 19 | – | 22 | 0 | 22 | 42 |
+
+With the work folder on D:, `read_metadata`, the snapshot and `check_copy` were the same within
+2 % (at most 8 ms); `write_safely` was longer:
+
+| Kind | `write_safely` on C: | on D: | Difference |
+|---|---:|---:|---:|
+| JPEG (2 files) | 626, 877 | 677, 904 | +27 to +51 ms (3–8 %) |
+| DNG (7 files) | 457–1,203 | 488–1,273 | +26 to +70 ms (5–8 %) |
+| TIFF 41, 97, 177 MB | 1,304, 2,326, 3,772 | 1,372, 2,441, 3,974 | +68, +115, +202 ms (5 %) |
+| RAW, sidecar exists | 31, 33 | 45, 43 | +10 to +14 ms |
+| RAW, new sidecar | 21, 22 | 32, 32 | +10 to +11 ms |
+
+The share of `check_copy` in the edit's total (read + write), on C::
+
+| Kind | `check_copy` | Share |
+|---|---:|---:|
+| JPEG | 0.3–0.5 ms | under 0.1 % |
+| DNG, 11–20 MB (5 files) | 254–275 ms | 46–55 % |
+| DNG, 30–36 MB (2 files) | 486–540 ms | 44 % |
+| TIFF | 0.4–1 ms | under 0.1 % |
+| RAW (both cases) | not called (sidecar) | 0 % |
+
+1. **Inference:** the image check matters only for DNG, where it is about half of an edit: 250–275
+   ms for an 11–20 MB DNG, 490–540 ms for a 30–36 MB one, very even between runs (±5 ms). For a
+   JPEG or TIFF it is under 1 ms: `check_copy` then only compares embedded previews
+   (`check_previews`), and these files have none or few that `pw_raw::inspect` finds. For a DNG it
+   also opens the copy with LibRaw (`check_dng`); the original is opened only when the copy fails.
+2. **Hypothesis:** most of a DNG's check is LibRaw opening the copy, not the preview comparison
+   (the JPEG and TIFF previews cost under 1 ms, and the time grows less than the file: 22 ms/MB at
+   11.7 MB, 15 ms/MB at 36 MB). Could be confirmed by timing `check_dng` and `check_previews`
+   apart.
+3. **Inference:** without the image check, the write costs what the script found or a little
+   less, so the script's conclusions 1–6 above hold: the time grows with the file, the snapshots
+   are the same as the script's (191/222, 48/46, 212/212 and 791/803 ms for the JPEG, the
+   11.7 MB DNG and the two TIFFs), and a RAW with a sidecar is cheap (41–57 ms per edit). The
+   script's write totals without its read (811, 249, 1,420 and 4,226 ms) are 9–30 % above the
+   medians here (626, 199, 1,303, 3,772 ms).
+4. **Inference:** the script's JPEG figures were raised by being the first file in a new ExifTool
+   process. Here, too, the first run of `TN006331.JPG` (the first file of each run of the
+   program) took 94 ms to read and 760–797 ms to write, against 22–23 ms and 626–677 ms in the next
+   two runs, on both drives. **Hypothesis:** ExifTool loads code on its first JPEG; in the app
+   that is the first write of a session. Could be confirmed by measuring another file first.
+5. **Inference:** the destination drive matters little with a warm cache: D: (SATA) adds 3–8 %
+   to an image file's write and about 10 ms to a sidecar's, all of it in writing, flushing and
+   replacing (the reads, snapshots and checks are the same). Interpretation 7's hypothesis about
+   a slower disk is not borne out for D: with a warm cache; a cold cache was not measured.
+6. **Inference:** per edit, with the warm cache on C:, a 13.5 MB camera JPEG costs about 0.65 s,
+   a 12 MB DNG about 0.48 s (of which 0.26 s the image check), a 36 MB DNG about 1.2 s, a 177 MB
+   TIFF about 3.8 s and a RAW with a sidecar about 0.06 s. A batch is their sum (interpretation 6):
+   50 such JPEGs about 33 s, not the 45 s estimated from the script's first-file figure.
+7. **Not measured:** the shell's work after a write (the new reads, the view and the thumbnails),
+   the worker's queue and events, and a cold cache (T261, "Not in this task").
 
 ## Appendix: the timing script
 

@@ -268,3 +268,4 @@ was when the task was done, so "this file", "below" and "the Log" in T1–T115 m
 | [T259](T259-import-tabs-logic.md) | ADR 0026 F4: what the import's tabs need to know (pw-loupe logic) |
 | [T260](T260-tabs-fill-while-importing.md) | ADR 0026 F4: the destination tabs open on the first image and fill while importing (pw-loupe shell) |
 | [T262](T262-newer-folder-tab-active-when-it-opens.md) | ADR 0026 F4: a later destination folder's tab becomes active when it opens, if the user has not moved (pw-loupe) |
+| [T261](T261-metadata-write-timing.md) | The safe write's time per step, measured in a release build (pw-imagecheck example) |
