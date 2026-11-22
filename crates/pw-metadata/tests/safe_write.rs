@@ -24,7 +24,7 @@ use pw_metadata::journal::Journal;
 use pw_metadata::read::MetadataRead;
 use pw_metadata::reconcile::{FileKind, IimDigest};
 use pw_metadata::safe_write::{
-    ImageCheck, NoImageCheck, OriginalState, SafeWriteError, Stage, WriteReport,
+    DataHash, ImageCheck, NoImageCheck, OriginalState, SafeWriteError, Stage, WriteReport,
 };
 use pw_metadata::value::{LangAlt, Metadata, Value};
 use pw_metadata::write_plan::{ExifPresent, FileState, WritePlan, WriteSettings, XmpPresent, plan};
@@ -383,6 +383,51 @@ impl ImageCheck for LockingCheck {
     }
 }
 
+/// An [`ImageCheck`] that records the [`DataHash`] the safe write gives `check_copy_with` (T275).
+#[derive(Default)]
+struct HashRecordingCheck {
+    hashes: Mutex<Vec<DataHash>>,
+}
+
+impl ImageCheck for HashRecordingCheck {
+    fn release(&self, _image: &Path) {}
+
+    fn release_for_move(&self, _image: &Path) {}
+
+    fn check_copy(&self, _original: &Path, _copy: &Path, _kind: FileKind) -> Result<(), String> {
+        Err("the safe write calls check_copy_with, not check_copy".to_string())
+    }
+
+    fn check_copy_with(
+        &self,
+        _original: &Path,
+        _copy: &Path,
+        _kind: FileKind,
+        hash: DataHash,
+    ) -> Result<(), String> {
+        self.hashes.lock().unwrap().push(hash);
+        Ok(())
+    }
+}
+
+/// A TIFF with one IFD holding only an image size and no strips: ExifTool 13.64 writes it but
+/// gives it no `ImageDataHash` (checked in T275; `tiny_tiff` has one).
+fn tiff_without_strips() -> Vec<u8> {
+    const SHORT: u16 = 3;
+    let mut tiff = b"II*\0".to_vec();
+    tiff.extend_from_slice(&8u32.to_le_bytes());
+    tiff.extend_from_slice(&2u16.to_le_bytes());
+    for tag in [256u16, 257] {
+        // ImageWidth and ImageLength, 1.
+        tiff.extend_from_slice(&tag.to_le_bytes());
+        tiff.extend_from_slice(&SHORT.to_le_bytes());
+        tiff.extend_from_slice(&1u32.to_le_bytes());
+        tiff.extend_from_slice(&[1, 0, 0, 0]);
+    }
+    tiff.extend_from_slice(&0u32.to_le_bytes());
+    tiff
+}
+
 /// A JPEG written with City, a two-line Description, keywords and IIM created: the values are
 /// read back, the modification time is the time of the write, and no `pwtmp`/`pwbak` file and no
 /// journal entry is left.
@@ -629,6 +674,45 @@ fn a_failing_image_check_fails_in_image_check() {
     let error = assert_failed(result, Stage::ImageCheck);
     assert_eq!(error.reason, "the previews of the copy differ");
     assert_eq!(std::fs::read(&file).unwrap(), SMALL);
+    s.assert_clean();
+    s.remove();
+}
+
+/// ADR 0007 §9.7 point 4 (Q23, T275): the image check is told whether §9.3 point 1 compared an
+/// image data hash: `Compared` for the small JPEG, `Missing` for a TIFF ExifTool gives no hash.
+#[test]
+fn the_image_check_is_told_whether_an_image_data_hash_was_compared() {
+    let mut et = exiftool();
+    let s = Scratch::new("data-hash");
+
+    let jpeg = s.jpeg();
+    assert!(et.snapshot(&jpeg).unwrap().image_data_hash.is_some());
+    let check = HashRecordingCheck::default();
+    let result = et.write_safely(
+        &jpeg,
+        &city_plan(FileKind::Jpeg, "Malmö"),
+        &check,
+        &s.journal,
+    );
+    assert_eq!(result, written(&jpeg));
+    assert_eq!(*check.hashes.lock().unwrap(), vec![DataHash::Compared]);
+
+    let tiff = s.dir.join("utan strips.tif");
+    std::fs::write(&tiff, tiff_without_strips()).unwrap();
+    assert_eq!(et.snapshot(&tiff).unwrap().image_data_hash, None);
+    let check = HashRecordingCheck::default();
+    let result = et.write_safely(
+        &tiff,
+        &city_plan(FileKind::Tiff, "Malmö"),
+        &check,
+        &s.journal,
+    );
+    assert_eq!(result, written(&tiff));
+    assert_eq!(*check.hashes.lock().unwrap(), vec![DataHash::Missing]);
+    assert_eq!(
+        value(&read_file(&mut et, &tiff), "photoshop:City"),
+        Some(text("Malmö"))
+    );
     s.assert_clean();
     s.remove();
 }

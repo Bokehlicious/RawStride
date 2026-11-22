@@ -32,7 +32,10 @@
 //!   the same way: if it fails too, the check passes (the write did not make it worse); otherwise
 //!   the error is the copy's LibRaw message. For a DNG this check runs before the preview check,
 //!   so a copy cut short inside its RAW data is reported as LibRaw's `damaged:` error rather than
-//!   as a missing preview.
+//!   as a missing preview. LibRaw runs only when the original had no image data hash
+//!   ([`ImageCheck::check_copy_with`] with [`DataHash::Missing`]; ADR 0007 §9.7 point 4, Q23):
+//!   with one, `verify_copy` has already refused a copy whose RAW data changed, so the safe write
+//!   leaves LibRaw's 250–550 ms out. [`ImageCheck::check_copy`] keeps the whole check with LibRaw.
 //!
 //! Error texts are in English and name the check (`"preview 2 differs"`, `"the copy has 1
 //! preview, the original 2"`, `"LibRaw: …: damaged: …"`); the Swedish texts are T91's.
@@ -42,7 +45,7 @@ use std::path::Path;
 
 use pw_libraw::Session;
 use pw_metadata::reconcile::FileKind;
-use pw_metadata::safe_write::ImageCheck;
+use pw_metadata::safe_write::{DataHash, ImageCheck};
 use pw_raw::PreviewRef;
 
 /// Closes the RAW engine sessions of a file.
@@ -108,8 +111,21 @@ impl ImageCheck for RawImageCheck {
         }
     }
 
+    /// The whole check with LibRaw for a DNG, as when the original has no image data hash.
     fn check_copy(&self, original: &Path, copy: &Path, kind: FileKind) -> Result<(), String> {
-        if kind == FileKind::Dng {
+        self.check_copy_with(original, copy, kind, DataHash::Missing)
+    }
+
+    /// LibRaw opens a DNG copy only when `hash` is [`DataHash::Missing`] (ADR 0007 §9.7 point 4,
+    /// Q23); the previews are compared in every case.
+    fn check_copy_with(
+        &self,
+        original: &Path,
+        copy: &Path,
+        kind: FileKind,
+        hash: DataHash,
+    ) -> Result<(), String> {
+        if kind == FileKind::Dng && hash == DataHash::Missing {
             check_dng(original, copy)?;
         }
         check_previews(original, copy)

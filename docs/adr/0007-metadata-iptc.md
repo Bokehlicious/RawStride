@@ -1083,7 +1083,9 @@ listed under the table (§17.1).
 - Revision 31 (D8 dropped, §9.7 point 5): task T274 written 2026-11-22. T274 done 2026-11-22
   (the allowance removed from `verify_copy`; every real-file test passed with ExifTool 13.64).
 - Revision 32 (Q23 decided again, §9.3 point 4, §9.7 point 4): task T275 written 2026-11-22
-  (LibRaw's check of a DNG copy only when the original has no `ImageDataHash`).
+  (LibRaw's check of a DNG copy only when the original has no `ImageDataHash`). T275 done
+  2026-11-22 (`DataHash` and `ImageCheck::check_copy_with`; with a compared hash a cut DNG
+  copy was checked in under 10 ms instead of 301–907 ms); the owner's hand check follows.
 
 ## Revision history
 

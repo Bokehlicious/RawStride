@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use pw_metadata::reconcile::FileKind;
-use pw_metadata::safe_write::ImageCheck;
+use pw_metadata::safe_write::{DataHash, ImageCheck};
 
 use super::RawImageCheck;
 
@@ -187,6 +187,48 @@ fn a_dng_copy_libraw_cannot_open_passes_when_the_original_does_not_open_either()
     assert!(pw_libraw::Session::open(&copy).is_err());
     let check = RawImageCheck::without_release();
     assert_eq!(check.check_copy(&original, &copy, FileKind::Dng), Ok(()));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// ADR 0007 §9.7 point 4 (Q23, T275): with a compared image data hash, the previews of a DNG are
+/// still compared. Whether LibRaw ran cannot be seen with a file LibRaw cannot open;
+/// `tests/real_files.rs` shows it.
+#[test]
+fn a_dng_with_a_compared_hash_still_has_its_previews_compared() {
+    let dir = temp_dir("dng-compared");
+    let original = write(&dir, "bild.dng", &tiff(true));
+    let identical = write(&dir, "bild.pwtmp-1.dng", &tiff(true));
+    let check = RawImageCheck::without_release();
+    assert_eq!(
+        check.check_copy_with(&original, &identical, FileKind::Dng, DataHash::Compared),
+        Ok(())
+    );
+
+    let preview = pw_raw::inspect(&original).unwrap().previews.remove(0);
+    let mut bytes = tiff(true);
+    // As in `a_copy_with_one_byte_changed_in_its_thumbnail_is_refused`.
+    let at = (preview.offset + preview.length - 3) as usize;
+    bytes[at] ^= 0x01;
+    let changed = write(&dir, "bild.pwtmp-2.dng", &bytes);
+    let error = check
+        .check_copy_with(&original, &changed, FileKind::Dng, DataHash::Compared)
+        .unwrap_err();
+    assert_eq!(error, "preview 1 differs");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Without a hash, `check_copy_with` is `check_copy` (the case of
+/// `a_dng_copy_libraw_cannot_open_passes_when_the_original_does_not_open_either`).
+#[test]
+fn a_dng_with_a_missing_hash_is_checked_as_by_check_copy() {
+    let dir = temp_dir("dng-missing");
+    let original = write(&dir, "bild.dng", &tiff(true));
+    let copy = write(&dir, "bild.pwtmp-1.dng", &tiff(true));
+    assert!(pw_libraw::Session::open(&copy).is_err());
+    let check = RawImageCheck::without_release();
+    let with = check.check_copy_with(&original, &copy, FileKind::Dng, DataHash::Missing);
+    assert_eq!(with, check.check_copy(&original, &copy, FileKind::Dng));
+    assert_eq!(with, Ok(()));
     let _ = std::fs::remove_dir_all(&dir);
 }
 

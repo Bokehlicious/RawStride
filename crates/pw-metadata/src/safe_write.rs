@@ -27,8 +27,10 @@
 //!   also checks that a checksum the plan writes is current, §9.7 Q21); a new
 //!   sidecar must be XMP and hold, besides `System`, `ExifTool` and `File` keys, only keys
 //!   [`verify_copy`] allows for the plan (owner's decision during T86: ExifTool always adds
-//!   `XMP-x:XMPToolkit`); then the caller's [`ImageCheck::check_copy`] for a JPEG, TIFF or DNG
-//!   (previews and the RAW image, §9.3 points 3–4, written in I9); then the copy is flushed; it
+//!   `XMP-x:XMPToolkit`); then the caller's [`ImageCheck::check_copy_with`] for a JPEG, TIFF or
+//!   DNG, told whether an image data hash was compared ([`DataHash`]; previews and the RAW image,
+//!   §9.3 points 3–4, written in I9; LibRaw only without a hash, §9.7 point 4, Q23); then the
+//!   copy is flushed; it
 //!   keeps the time of the write as its modification time (§9.4, Q14).
 //! - **9.4, replace:** `ReplaceFileW` with the backup `<name>.pwbak-<hex>.<ext>` (or two renames
 //!   on volumes without it), or a move without overwriting for a new sidecar; then a final read
@@ -76,6 +78,33 @@ pub trait ImageCheck {
     /// still opens). Called only for a JPEG, TIFF or DNG, never for a sidecar. An error is the
     /// reason shown to the user.
     fn check_copy(&self, original: &Path, copy: &Path, kind: FileKind) -> Result<(), String>;
+
+    /// Checks the written copy of `original` as [`ImageCheck::check_copy`] does, knowing whether
+    /// §9.3 point 1 compared an image data hash (`hash`). The safe write calls this method, not
+    /// `check_copy`. An implementation may leave out a check the hash already covers (ADR 0007
+    /// §9.3 point 4, §9.7 point 4: LibRaw's open and unpack of a DNG). The default calls
+    /// `check_copy`. A wrapper forwards it to the check it wraps. An implementation whose
+    /// `check_copy` calls `check_copy_with` must override `check_copy_with`, else the two call
+    /// each other without end.
+    fn check_copy_with(
+        &self,
+        original: &Path,
+        copy: &Path,
+        kind: FileKind,
+        hash: DataHash,
+    ) -> Result<(), String> {
+        let _ = hash;
+        self.check_copy(original, copy, kind)
+    }
+}
+
+/// Whether §9.3 point 1 compared an image data hash before [`ImageCheck::check_copy_with`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DataHash {
+    /// The original's snapshot has an `ImageDataHash`, so [`verify_copy`] found the copy's equal.
+    Compared,
+    /// The original's snapshot has no `ImageDataHash`: nothing compared the image data.
+    Missing,
 }
 
 /// An [`ImageCheck`] that does nothing (for tests and sidecars).
@@ -111,7 +140,7 @@ pub enum Stage {
     /// §9.3 points 1–3 and 5: the copy's snapshot and its comparison with the original; the
     /// flush.
     Verify,
-    /// §9.3 points 3–4: the caller's [`ImageCheck::check_copy`].
+    /// §9.3 points 3–4: the caller's [`ImageCheck::check_copy_with`].
     ImageCheck,
     /// §9.4: replacing the original with the copy (or moving a new sidecar into place).
     Replace,
@@ -396,8 +425,13 @@ impl Transaction<'_> {
                 verify_copy(original, &written, self.plan).map_err(|e| verify(e.to_string()))?;
                 // Never for a sidecar: the RAW's sidecar is not an image (reviewer's fix).
                 if kind != FileKind::Raw {
+                    let hash = if original.image_data_hash.is_some() {
+                        DataHash::Compared
+                    } else {
+                        DataHash::Missing
+                    };
                     checks
-                        .check_copy(self.target, &open.copy, kind)
+                        .check_copy_with(self.target, &open.copy, kind, hash)
                         .map_err(|reason| (Stage::ImageCheck, reason))?;
                 }
             }

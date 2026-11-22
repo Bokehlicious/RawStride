@@ -5,7 +5,7 @@
 //! The write test needs ExifTool (`exiftool` on PATH, or `PW_EXIFTOOL_PL=/path/to/exiftool` run
 //! through `perl`) and fails with an explanation when it is missing (docs/TESTING.md §4.5). The
 //! safe write uses Windows file operations (`ReplaceFileW`), so the file is built on Windows only.
-//! The time of each `check_copy` is printed (`-- --nocapture`).
+//! The time of each `check_copy` (and `check_copy_with`) is printed (`-- --nocapture`).
 #![cfg(windows)]
 
 use std::path::{Path, PathBuf};
@@ -18,7 +18,7 @@ use pw_metadata::ExifTool;
 use pw_metadata::iim::CodedCharset;
 use pw_metadata::journal::Journal;
 use pw_metadata::reconcile::{FileKind, IimDigest};
-use pw_metadata::safe_write::{ImageCheck, WriteReport};
+use pw_metadata::safe_write::{DataHash, ImageCheck, WriteReport};
 use pw_metadata::value::{Metadata, Value};
 use pw_metadata::write_plan::{ExifPresent, FileState, WriteSettings, XmpPresent, plan};
 
@@ -112,6 +112,19 @@ impl ImageCheck for Timed {
     fn check_copy(&self, original: &Path, copy: &Path, kind: FileKind) -> Result<(), String> {
         let start = Instant::now();
         let result = self.check.check_copy(original, copy, kind);
+        self.times.lock().unwrap().push(start.elapsed());
+        result
+    }
+
+    fn check_copy_with(
+        &self,
+        original: &Path,
+        copy: &Path,
+        kind: FileKind,
+        hash: DataHash,
+    ) -> Result<(), String> {
+        let start = Instant::now();
+        let result = self.check.check_copy_with(original, copy, kind, hash);
         self.times.lock().unwrap().push(start.elapsed());
         result
     }
@@ -213,6 +226,50 @@ fn a_dng_copy_cut_inside_its_raw_data_is_refused_as_damaged() {
         for file in [&original, &copy, &cut_original] {
             std::fs::remove_file(file).unwrap();
         }
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(failures.is_empty(), "{failures:#?}");
+}
+
+/// ADR 0007 §9.7 point 4 (Q23, T275): with a compared image data hash, LibRaw does not open the
+/// copy. The same cut copies as in `a_dng_copy_cut_inside_its_raw_data_is_refused_as_damaged`,
+/// where every one gives LibRaw's error, give none here: any `Ok` or any `Err` not starting with
+/// `LibRaw: ` passes.
+#[test]
+#[ignore = "needs real camera files: set PW_TESTDATA and run with --ignored"]
+fn a_dng_copy_cut_inside_its_raw_data_is_not_opened_by_libraw_when_the_hash_was_compared() {
+    let dir = temp_dir("cut-compared");
+    let check = RawImageCheck::without_release();
+    let mut failures = Vec::new();
+    for source in dngs() {
+        let len = std::fs::metadata(&source).unwrap().len();
+        let original = dir.join(name(&source));
+        std::fs::copy(&source, &original).unwrap();
+        let copy = dir.join(format!("cut-{}", name(&source)));
+        cut(&source, len / 2, &copy);
+
+        let start = Instant::now();
+        let with = check.check_copy_with(&original, &copy, FileKind::Dng, DataHash::Compared);
+        let with_time = start.elapsed();
+        let start = Instant::now();
+        let whole = check.check_copy(&original, &copy, FileKind::Dng);
+        let whole_time = start.elapsed();
+        println!(
+            "{} cut to {} bytes: Compared {:?} ({} ms); check_copy {:?} ({} ms)",
+            name(&source),
+            len / 2,
+            with,
+            with_time.as_millis(),
+            whole,
+            whole_time.as_millis()
+        );
+        if let Err(error) = &with
+            && error.starts_with("LibRaw: ")
+        {
+            failures.push(format!("{}: {error}", name(&source)));
+        }
+        std::fs::remove_file(&original).unwrap();
+        std::fs::remove_file(&copy).unwrap();
     }
     let _ = std::fs::remove_dir_all(&dir);
     assert!(failures.is_empty(), "{failures:#?}");

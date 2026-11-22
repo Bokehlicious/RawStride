@@ -67,6 +67,11 @@ Reorganised on 2026-11-21 (owner): the earlier file mixed these three kinds and 
   folder or inside one, so a refused folder is left behind, empty, where the sources are. Check
   first (on the parent of a folder that does not exist yet), then make it; with the next task
   that touches either example.
+- **The wrapper `Timed` of `examples/write_timing.rs`** (T275's review, 2026-11-22): it
+  forwards only `check_copy`, not `ImageCheck::check_copy_with`, so the example times a DNG
+  write with LibRaw's check, which the app leaves out when the original has an image data
+  hash (ADR 0007 §9.7 point 4). Forward `check_copy_with` (as `tests/real_files.rs` does)
+  with the next task that touches the example or measures the write again.
 - **A timeout when ExifTool hangs** (process supervision across threads). Today only the shutdown
   has a timeout (`SHUTDOWN_TIMEOUT` in `pw-metadata`'s `exiftool.rs`). A worker that never answers
   also holds a delete, a move and an "Open in" request (`known-limits.md`).

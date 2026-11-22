@@ -281,3 +281,4 @@ was when the task was done, so "this file", "below" and "the Log" in T1–T115 m
 | [T272](T272-drop-digest-pass-and-tiff-restart.md) | ADR 0007 §9.7 Q21 and Q22: the digest pass and the TIFF restart dropped, the copy's checksum checked (pw-metadata) |
 | [T273](T273-dng-damage-kinds-measured.md) | ADR 0007 §9.7 Q23: which checks refuse other kinds of DNG damage? (pw-imagecheck example) |
 | [T274](T274-d8-allowance-dropped.md) | ADR 0007 §9.7 point 5: D8's allowance dropped, one more validation warning always refused (pw-metadata) |
+| [T275](T275-dng-image-check-only-without-hash.md) | ADR 0007 §9.7 point 4 (Q23): LibRaw checks a DNG copy only when the original has no image data hash (pw-metadata, pw-imagecheck) |

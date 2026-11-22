@@ -27,6 +27,9 @@ Downloads are on the [Releases page](https://github.com/Bokehlicious/RawStride/r
 - A written TIFF or DNG with one more ExifTool validation warning than the original is now
   always refused; before, one more warning was allowed when the write created the file's
   Photoshop block, which ExifTool 13.64 does without a new warning.
+- Saving metadata to a DNG is faster: when the DNG has an image data hash, the written copy's
+  RAW data is checked by that hash alone, without opening it with LibRaw; its previews are
+  still compared.
 
 ## [0.2.0] - 2026-11-21
 
