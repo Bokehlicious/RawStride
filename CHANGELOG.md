@@ -9,7 +9,24 @@ Downloads are on the [Releases page](https://github.com/Bokehlicious/RawStride/r
 
 ## [Unreleased]
 
+### Added
+
+- Settings has the pages General, External Programs and Metadata Window. On Metadata Window
+  you choose which sections and fields the metadata window shows, and in which order; what is
+  hidden is shown read-only under Other Metadata, and Copy All Fields and Paste All Fields
+  take only what is shown. Restore Defaults brings back the full form.
+- The keyboard shortcuts can be changed on the Settings page Keyboard Shortcuts: each action has
+  two keys, each set with Change and removed with Clear, and Restore Defaults brings back the
+  defaults. A key that is taken or fixed is refused. The menus and buttons show the keys you
+  chose, and only changed keys are saved, in `keys.txt` beside the settings.
+- Companion File Suffixes on the Settings page General: the suffixes of the companion files that
+  move with an image (`dop, pp3, on1` when empty).
+
 ### Changed
+
+- The Settings window opens larger, in the middle of the program's window, and can be resized by
+  its edge; every page scrolls, with Save and Cancel always at the bottom. Its size is not kept:
+  each opening starts at the default size.
 
 - An import opens each destination folder in its own tab as soon as its first image is in place
   with the template, behind the import dialog, and the tab fills while the import goes on; the
@@ -41,10 +58,6 @@ Downloads are on the [Releases page](https://github.com/Bokehlicious/RawStride/r
 
 ### Added
 
-- Settings has the pages General, External Programs and Metadata Window. On Metadata Window
-  you choose which sections and fields the metadata window shows, and in which order; what is
-  hidden is shown read-only under Other Metadata, and Copy All Fields and Paste All Fields
-  take only what is shown. Restore Defaults brings back the full form.
 - An image whose XMP says it is turned (`tiff:Orientation` in a RAW's sidecar, or in the XMP of a
   DNG, JPEG or TIFF) is shown turned in the preview and the contact sheet.
 - Rotate Left (Ctrl+←) and Rotate Right (Ctrl+→) in the Image menu turn the marked images, or

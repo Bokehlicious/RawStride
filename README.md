@@ -26,6 +26,8 @@ Folder and crate names (`pw-*`) keep the old name for now.
 - **Metadata:** IPTC Core and Extension in XMP, and the older IIM, following the IPTC standards. A
   proprietary RAW file is never modified: its metadata goes into an XMP sidecar. DNG, JPEG and TIFF
   get the metadata inside the file, written safely (a backup and a check after every write).
+- **Settings:** choose which sections and fields the metadata window shows and in which order,
+  and change the keyboard shortcuts.
 
 | Loupe | Metadata window |
 | --- | --- |
@@ -39,8 +41,6 @@ Panasonic (RW2), Fujifilm (RAF) and DNG files.
 Not in RawStride yet, roughly in the order they are planned. The order can change, and there
 are no dates.
 
-- **Settings:** choose which sections and fields the metadata window shows, and change the
-  keyboard shortcuts.
 - **Metadata templates:** save and apply templates from the metadata window, with variables in
   text fields.
 - **Search and filter on text and metadata:** a search box (Ctrl+F), a filter window and saved
