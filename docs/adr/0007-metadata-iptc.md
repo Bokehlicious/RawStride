@@ -938,8 +938,9 @@ listed under the table (§17.1).
   safe write's tests (T211).
 - Revision 26 (§9.4 Q14, §8 Q15, §6.3 Q16): two tasks (ADR 0029 step P0b; T204 the
   modification time, T205 Q15 and Q16); both done and hand-checked by the owner 2026-11-19.
-- Revision 29 (§9.6, Q17–Q19, a faster safe write): tasks not written yet; in the order of §9.6
-  (Q17, Q19's measurement, Q18).
+- Revision 29 (§9.6, Q17–Q19, a faster safe write): tasks written 2026-11-22, in the order of
+  §9.6: T263 (Q17), T264 and T265 (Q19's measurement), the chain T266 → T267 → T268 (Q18; the
+  number of processes is fixed by the owner after T267).
 
 ## Revision history
 
