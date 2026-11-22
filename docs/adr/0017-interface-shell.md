@@ -51,6 +51,13 @@
   and egui's own Ctrl+Q and scale keys are turned off. U8-Q14 (the same day, at the backlog
   sort after U8): the Settings window opens larger and in the middle, can be resized, and its
   size is not saved (task T283).
+- **Questions of step U13 answered by the owner (2026-11-22):** a metadata template is a form
+  filled in and saved with Save… as a plain XMP file, and loaded again with Load…; each field has
+  a check box and only the checked fields are used; the file holds only standard XMP, so a
+  checked field replaces the image's value and there are no modes in a template; the import
+  chooses a template file instead of its six fields; the right-click menu gets Apply Template;
+  the variables are turned into each image's own values when written (§6.5, U13-Q1–U13-Q11).
+  Changes ADR 0007 §10 (revision 33). Tasks not yet written.
 - Date: 2026-11-12; amended 2026-11-13
 - Related:
   - [GUI_REQUIREMENTS.md](../GUI_REQUIREMENTS.md) (GR1–GR13), in particular GR6 (keyboard first),
@@ -251,11 +258,11 @@ a full photo-desk caption window.
 - **Speed while captioning:**
   - each field has a list of recent values and the user's own values (▼ beside the field);
   - "kopiera alla fält" and "klistra in alla fält" between images;
-  - load and save a template from the window (the template format of ADR 0007 §10); which of the
-    modes of §10 (keep, replace, append, clear) a template uses when loaded in the window is
-    decided in U13;
-  - variables in text fields (for example date, file name, camera), expanded when written; the
-    variable list is decided in its step.
+  - load and save a template from the window (the template format of ADR 0007 §10); decided in
+    U13 (owner, 2026-11-22, §6.5): a template holds only standard XMP values, each field has a
+    check box, and a checked field replaces the image's value (U13-Q1–U13-Q7);
+  - variables in text fields (for example date, file name, camera), turned into each image's own
+    values when written; the variable list is U13-Q9 (§6.5).
 - **What stays read-only, and why** (rules that protect the files, ADR 0007):
   - values RawStride cannot read safely (unknown namespaces, unreadable values): shown, never
     rewritten (§8);
@@ -698,6 +705,31 @@ Asked by the reviewer when step U8 was taken up (tasks T279, T280, T281).
 | U8-Q13 | (the same day) egui's own keys (Ctrl+Q quits; Ctrl+plus, Ctrl+minus and Ctrl+0 change the interface's scale, so Ctrl+0 for No Label also changes the scale today)? | **Owner (proposal A):** turned off in the program (egui's `zoom_with_keyboard` and `quit_shortcuts`), so those keys are free for the map; Ctrl+Q no longer quits (Alt+F4 and File ▸ Quit remain) |
 | U8-Q14 | (asked 2026-11-22 at the backlog sort after U8's hand check, where the owner found the page Keyboard Shortcuts cramped) The Settings window's size? | **Owner (proposal):** the window opens in the middle of the program's window, larger (about 640 × 560 points, smaller in a small program window), and can be resized by its edge; the size is not saved, so each opening starts at the default size in the middle. Applies to every page; task T283 |
 
+### 6.5 Questions of step U13 (answered by the owner, 2026-11-22)
+
+Asked by the reviewer when step U13 was taken up. The first proposals kept ADR 0007 §10's modes
+in a RawStride namespace of the template file. The owner changed them the same day, in four
+answers: a template is a form that is filled in, saved as a file with **Save…** and loaded again
+with **Load…**; each field has a check box, and only the fields checked are used, whatever text an
+unchecked field holds; the template file holds only standard XMP, with nothing of RawStride's own,
+so an unchecked field never reaches another program; and the variables are turned into each
+image's own values when written. The owner approved the result (the reviewer's "way A") the same
+day; the table holds it. The tasks are written in a later session.
+
+| # | Question | Answer |
+|---|---|---|
+| U13-Q1 | Where are a template's choices stored? | The template is a plain XMP file with **only standard XMP values**: the fields checked, each with its value. No RawStride namespace and no modes in the file (ADR 0007 §10 and §17.1, revision 33). A field present in the file is a checked field when the file is loaded |
+| U13-Q2 | Where is a template saved? | Where the user chooses: **Save…** opens the Windows save dialog, which starts in `%LOCALAPPDATA%\RawStride\templates\` (made when needed); **Load…** opens the Windows open dialog in the same folder. The file always ends in `.xmp`. Saving over an existing file asks first |
+| U13-Q3 | The template window? | The metadata window's form, in the order of the user's layout (U10b), with **every** field shown, hidden ones included, so a template never holds something out of sight. Buttons **Load…**, **Save…**, **Clear Form** and **Close**. No list of templates to manage: a template file is renamed or deleted in File Explorer. Opened from **File ▸ Metadata Template…** and from the import dialog (U13-Q5) |
+| U13-Q4 | Which fields are used? | **Each field has a check box**; only the checked fields are saved and applied. Typing in a field checks it; the user can uncheck it. An unchecked field's text is not saved, so it is gone after Save and Load. A checked field without content is not saved and does nothing (ADR 0007 §10: an empty field never clears). Location Created and Creator's Contact Info have a check box per sub-field; each list of structures (Image Creator, Copyright Owner, Licensor, Location Shown and the others) has one check box for the whole list |
+| U13-Q5 | What does a checked field do to an image? | It **replaces** the image's value; there is no Append, Prefix or Clear in a template (ADR 0007 §10, revision 33). A Lang Alt gets `x-default` set and keeps its other languages; a list is replaced by the template's list; a checked sub-field of Location Created or Creator's Contact Info replaces that sub-field and keeps the others; a list of structures is replaced as a whole. The copyright-management fields follow the same rule and are never cleared (ADR 0007 §8). A value equal to the image's is not written |
+| U13-Q6 | The import? | The import dialog's six template fields and their modes (ADR 0007 D13) are replaced by one row **Metadata Template:** with the file's name and the buttons **Choose…** (the open dialog), **Edit…** (the template window with that file) and **None**. The file chosen is kept in `settings.txt`; a file that is gone when the import starts stops the import with a message, before anything is copied |
+| U13-Q7 | Templates in the metadata window? | **Load Template…** opens the open dialog; the template's fields go into the form as unsaved edits the user sees, and are written as usual with Save (also with "Apply to {n} Marked"). **Save as Template…** opens the save dialog and saves the items shown that have a value, as Copy All Fields does (U10b-Q4); each becomes a checked field |
+| U13-Q8 | The right-click menu (ADR 0019 E-Q17)? | A submenu **Apply Template** after Metadata…, listing the `.xmp` files of the templates folder by name, with a last item **Choose File…**. The template is written to every marked image (the clicked image when none is marked) after one question naming the template and the number of images, in the same batch as "Apply to {n} Marked" |
+| U13-Q9 | Variables? | `{date}` (2026-11-22), `{year}`, `{month}`, `{day}`, `{time}` (143005), `{make}`, `{model}`, `{name}` (the file name without its extension) and `{folder}` (the name of the image's folder), written the same way as the import's names; `{{` and `}}` give a brace. They are **turned into each image's own values when written**, so the image gets the finished value, never the variable; the template file keeps the variable, so one template gives each image its own date. The date and time come from the image's capture time. They work in text fields and in the text of list items, in the metadata window and in templates, not in dates and numbers. An unknown variable, or a date variable on an image without a capture time, stops the write with a message before anything is written; `{make}` and `{model}` are empty when unknown |
+| U13-Q10 | Rating and label in a template? | No: a template holds only the metadata window's fields, not Rating and Label |
+| U13-Q11 | Steps? | Four parts, each a short chain read as a whole before its first task is set to Open: **U13a** the template file in `pw-metadata` (reading and writing standard XMP, the check boxes as the fields present, applying it with Replace only, lists of structures as a whole); **U13b** the variables; **U13c** the template window and the import, then the owner's hand check; **U13d** Load Template… and Save as Template… in the metadata window and the right-click submenu, then the owner's hand check |
+
 ## 7. Steps
 
 Each step ends with tests (GR11), the owner's hand check and, where an image is shown, `latency.ps1`.
@@ -717,7 +749,7 @@ Each step ends with tests (GR11), the owner's hand check and, where an image is 
 | **U10** | Metadata window: every simple text and date field of the six sections editable, with the PLUS fields (merged with I11; the PLUS vocabulary read first, ADR 0007 §16.4); sections and the user's choice of fields (§2.3.1) |
 | **U11** | Metadata window: lists and structures (persons, locations, creators, licensors, releases) with add and remove |
 | **U12** | Metadata window: previous/next and "spara och nästa" (the first part in stage A), recent values, copy/paste of all fields, "använd på alla markerade" with the batch rules (§2.3.1) |
-| **U13** | Metadata window: templates from the window (with the modes of ADR 0007 §10) and variables in text fields. **Also the import's template (owner, 2026-11-15):** instead of the template fields in the import dialog, a template window of its own (the metadata window's form with each field's mode), opened from the import dialog; the template is saved as an XMP template file (ADR 0007 §10) and chosen by name in the import. Where the modes are stored (a RawStride namespace or beside the XMP file) is decided first (ADR 0007 §10, §17.1). **Also (owner, 2026-11-19):** the right-click menu on images gets a submenu to apply a template, after Metadata… (ADR 0019 §2.9, E-Q17) |
+| **U13** | Metadata window: templates from the window (with the modes of ADR 0007 §10) and variables in text fields. **Also the import's template (owner, 2026-11-15):** instead of the template fields in the import dialog, a template window of its own, opened from the import dialog; the template is saved as an XMP template file (ADR 0007 §10) and chosen in the import. **Also (owner, 2026-11-19):** the right-click menu on images gets a submenu to apply a template, after Metadata… (ADR 0019 §2.9, E-Q17). **Decided by the owner (2026-11-22, §6.5):** a check box per field instead of modes, only standard XMP in the file, a checked field replaces; the parts U13a–U13d (U13-Q11) |
 | **U14** | Sort order in the command bar and the contact sheet |
 | **U15** | *Addition, accepted by the owner 2026-11-21; two tasks (U15-Q8): U15a the steps between the marked, U15b the buttons:* the four buttons on a thumbnail (§2.8): where they are and which one is under the pointer worked out in plain Rust and tested without a window; drawing, clicks, hover texts and the View setting in the binary; texts in the glossary; the metadata window's steps between the marked (U15-Q9) in plain Rust with tests. Hand check: each button on a marked and an image not marked, Preview on a marked image shows only the marked, the metadata window steps only between the marked, a double click on a rotation button, a file without metadata support, the setting off and after a restart, the smallest and largest thumbnail size |
 

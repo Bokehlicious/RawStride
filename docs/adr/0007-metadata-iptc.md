@@ -53,6 +53,10 @@
   - **Amended by the owner (2026-11-22, revision 32):** Q23 decided again after T273: LibRaw's
     open and unpack of a DNG copy run only when the original has no `ImageDataHash` (§9.3 point
     4, §9.7 point 4); task T275.
+  - **Amended by the owner (2026-11-22, revision 33):** with ADR 0017 U13 (§6.5), a template is
+    a plain XMP file with only standard values, each field has a check box, and a checked field
+    replaces the image's value; the modes Keep, Append, Prefix and Clear and the RawStride
+    namespace of §10 are dropped, and the import dialog's modes (D13) go with U13 (§10, §17.1).
 - Date: 2026-11-04 (revision 1: storage, IIM policy and the role of XMP; revision 2: all owner
   decisions of 2026-11-04, MWG 2.0, the full IPTC specification and the Mapping Guidelines;
   revision 3: Q4 answered by the owner on 2026-11-08; revision 4: Q5 answered by the owner on
@@ -775,25 +779,36 @@ with a new checksum would be refused).
 
 ## 10. Templates (ingest and batch)
 
-Each template field has one of four modes. The default is **Keep**. [Product]
+**Changed by the owner (2026-11-22, revision 33; ADR 0017 §6.5, U13-Q1–U13-Q11):** a template
+holds only standard XMP and has no modes. Until then each field had one of the modes Keep,
+Replace, Append (with Prefix) and Clear, kept in a RawStride namespace of the template file; the
+import dialog's modes (D13) were the part of that built. [Product]
 
-| Mode | Single value | List (Creator, Keywords, Person Shown, …) | Lang Alt |
-|---|---|---|---|
-| **Keep** | not touched | not touched | not touched |
-| **Replace** | set | replaced by the template's list | `x-default` set, other languages kept |
-| **Append** | text added with a separator (also **Prefix**), e.g. Description, Headline | missing values added, order kept, no duplicates | as single value |
-| **Clear** | removed as in §8 | removed | all languages removed |
+- **Template files are plain XMP** with only standard values: nothing of RawStride's own, no
+  namespace and no modes, so every program reads the file in the same way.
+- **Each field has a check box** in the template window. Only the checked fields are saved, and a
+  field present in the file is a checked field when it is loaded. An unchecked field's text is
+  not saved, so it never reaches another program.
+- **A checked field replaces** the image's value:
 
-- An empty template field never clears anything; clearing is always explicit.
-- **No Clear for copyright-management fields** (§8). Clearing any other field asks for
-  confirmation once per template.
+  | Kind | What the template does |
+  |---|---|
+  | Single value | set |
+  | List (Creator, Keywords, Person Shown, …) | replaced by the template's list |
+  | Lang Alt | `x-default` set, other languages kept |
+
+- An empty template field never clears anything, and a template clears nothing at all: a field
+  is cleared only in the metadata window. The copyright-management fields (§8) are replaced as
+  any other field and never cleared.
 - **Structures:**
-  - set per sub-field with the same modes;
-  - Location Created is one location;
+  - Location Created and Creator's Contact Info: a check box per sub-field; a checked sub-field
+    replaces that sub-field and keeps the others;
+  - a list of structures (Image Creator, Copyright Owner, Licensor, Location Shown, …) is
+    replaced as a whole;
   - Image Creator, Copyright Owner and Licensor have at most 3 entries.
-- **Variables** (`{date}` …) are expanded before the mode is applied.
-- **Template files are XMP.** The modes are stored in a RawStride namespace that other tools
-  ignore.
+- **Variables** (`{date}`, `{year}` …; ADR 0017 U13-Q9) are kept as written in the template
+  file and turned into each image's own values when it is written; the image never gets the
+  variable itself.
 
 ## 11. Validation (warnings, not refusals)
 
@@ -1018,8 +1033,9 @@ listed under the table (§17.1).
 ### 17.1 Later changes to D1–D16
 
 - **D1** is dropped (owner, 2026-11-18): Q2 was changed so that nothing records a cleared field
-  (§6.4), and RawStride has no XMP namespace of its own. If one is needed later (the modes of a
-  template file, §10; the original capture time, ADR 0020 §2.7), it is decided with that step.
+  (§6.4), and RawStride has no XMP namespace of its own. If one is needed later (the original
+  capture time, ADR 0020 §2.7), it is decided with that step. A template file needs none: it
+  holds only standard XMP (owner, 2026-11-22, revision 33, §10).
 - **D8** is dropped (owner, 2026-11-22, §9.7 point 5; T274): ExifTool 13.64, the lowest version,
   writes a new Photoshop block without the extra validation warning (T270 point 6), so one more
   warning is refused also when the write creates the Photoshop block of a TIFF or DNG.
@@ -1038,6 +1054,9 @@ listed under the table (§17.1).
 - **D11 and D12, names** (owner, 2026-11-13, T114): "Fotografens titel" (`photoshop:AuthorsPosition`)
   is now **Yrkestitel**, and "Fotografens kontaktuppgifter" (`Iptc4xmpCore:CreatorContactInfo`) is
   now **Kontaktuppgifter** (ADR 0017 §2.3.1).
+- **D13** is replaced (owner, 2026-11-22, revision 33; ADR 0017 U13-Q6): the import dialog's six
+  template fields and their modes give way to a template file chosen in the dialog, whose
+  checked fields replace (§10). Until U13's tasks are done, the dialog keeps D13.
 - **D15** was replaced by D16 the same day (2026-11-12).
 - **D16** is changed by ADR 0017:
   - the window is no longer locked to one image: previous/next and "Spara och nästa" with the
@@ -1125,3 +1144,4 @@ listed under the table (§17.1).
 | 30 | 2026-11-22 | Proposal (after T264, T265 and T269, at the owner's request): Q19 decided in §9.7, Q20 ExifTool 13.64 or newer, Q21 the digest pass replaced by a check that the copy's checksum is current, Q22 the TIFF restart dropped, Q23 the DNG image check kept; approved by the owner the same day, all as proposed, with the measurement for Q23 as a task (T273); §18 |
 | 31 | 2026-11-22 | Owner decision (after T270 point 6 and T272): D8's allowance of one more validation warning when the write creates the Photoshop block of a TIFF or DNG is dropped, since ExifTool 13.64 no longer writes that warning (§9.7 point 5, §17.1); task T274, with every real-file test run with 13.64 as the gate |
 | 32 | 2026-11-22 | Owner decision (after T273: no kind of DNG damage measured was refused only by the unpack): Q23 decided again, LibRaw's open and unpack of a DNG copy run only when the original has no `ImageDataHash`; with a hash, the snapshot comparison and the preview comparison are the check (§9.3 point 4, §9.7 point 4); task T275 |
+| 33 | 2026-11-22 | Owner decision with ADR 0017 U13 (§6.5, U13-Q1–U13-Q11): a template file holds only standard XMP; each field has a check box and only the checked fields are saved and applied; a checked field replaces the image's value; the modes Keep, Append, Prefix and Clear and the RawStride namespace are dropped from templates (§10); D1's note and D13 changed (§17.1); variables turned into each image's own values when written. Tasks with U13 |
