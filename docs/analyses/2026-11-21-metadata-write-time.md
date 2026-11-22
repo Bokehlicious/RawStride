@@ -451,6 +451,107 @@ so the example also ran the same call without `-j`, which lists every warning.
    pass or the restart changes is the owner's decision (ADR 0007 §9.6 point 3); nothing above is
    proposed as decided.
 
+## Measured in T269 (Q19 with ExifTool 13.64)
+
+- Build: `cargo run --release -p pw-metadata --example digest_and_restart` (T265's example,
+  unchanged), at commit `71a8c15` (`feature/gui-workspace`), no uncommitted changes. The example
+  printed "ExifTool 13.64 from the program folder or PATH (ExifTool::start)" at start.
+- Versions: **ExifTool 13.64** (2026-11-16, a development release), the Windows package
+  `exiftool-13.64_64.zip`, unpacked to `D:\PhotoWorkflowData\exiftool-13.64\` (`exiftool(-k).exe`
+  renamed to `exiftool.exe`, as CI's "Install ExifTool" step does) and put first on PATH for the
+  measuring commands only (`PW_EXIFTOOL_PL` unset; `exiftool -ver` answered 13.64). The zip came
+  from the SourceForge file archive (exiftool.org's own URL for it answered 404 that day); its
+  SHA-256 `72c29c44d1e860eebcaefa71692d979af9858fe9a6d7d791a5e7f1dac77804af` equals the value in
+  exiftool.org's `checksums.txt` (which still listed 13.64). For comparison, **ExifTool 13.59**,
+  the installed one (`%LOCALAPPDATA%\Programs\ExifTool\exiftool.exe`), not replaced.
+- Measured 2026-11-22 on thanos, under the same conditions as "Measured in T265": the same eleven
+  files in `D:\PhotoWorkflowData\RAW`, copied for every run into a new folder under `%TEMP%` on C:,
+  **warm cache**, three runs per file, medians. Every run (33 of 33) succeeded; every write was
+  answered "1 image files created" or "1 image files updated", and the work folder was gone
+  afterwards.
+
+**The owner's repro** (`D:\PhotoWorkflowData\exiftool-report`: `sample.tif` and
+`repro-args.txt`, copied for each version into a new folder under `%TEMP%`, run as
+`exiftool -stay_open True -@ repro-args.txt`; the out file's checksum then read by a new process
+of the same version with `-a -G1 -IPTCDigest -CurrentIPTCDigest`):
+
+| Version | Second `-validate` of `sample.tif` (same process, after writing `out.tif`) | `out.tif`'s checksum (new process) |
+|---|---|---|
+| 13.64 | 5 warnings (3 minor), the same as the first `-validate` | current |
+| 13.59 | 7 warnings (4 minor): the first five plus "[minor] Non-standard Photoshop at TIFF-IFD0-Photoshop-IPTCDigest" and "Bad Photoshop IRB resource" (byte for byte `repro-output.txt`) | out of date |
+
+**T265's example with 13.64** (the 13.59 columns are "Measured in T265"'s table; times are medians
+in ms, 13.64's):
+
+| File | Kind | MB | IIM data before the write | Checksum, one call (13.59 / 13.64) | Checksum, safe write's sequence (13.59 / 13.64) | Digest pass | `AgHg` | Untouched copy B read by P and by Q (13.59 / 13.64) | Restart | Restart and first answer |
+|---|---|---:|---|---|---|---:|---|---|---:|---:|
+| `TN006331.JPG` | JPEG | 13.5 | no | current / current | current / current | 43 | – | – | – | – |
+| `TN002683.tif` | TIFF | 41.2 | yes | out of date / current | current / current | 134 | yes | 2 more warnings from P / same | 34 | 180 |
+| `TN004596.tif` | TIFF | 97.1 | yes | out of date / current | current / current | 248 | yes | 2 more warnings from P / same | 35 | 183 |
+| `TN006025.tif` | TIFF | 177.3 | yes | out of date / current | current / current | 456 | yes | 2 more warnings from P / same | 24 | 180 |
+| `IMG_20261026_062851.dng` | DNG | 11.7 | no | out of date / current | current / current | 40 | – | – | – | – |
+| `IMG_20261026_084628.dng` | DNG | 12.2 | no | out of date / current | current / current | 42 | – | – | – | – |
+| `IMG_20261026_091722.dng` | DNG | 11.4 | no | out of date / current | current / current | 41 | – | – | – | – |
+| `IMG_20261026_092349.dng` | DNG | 18.9 | no | out of date / current | current / current | 59 | – | – | – | – |
+| `IMG_20261026_092351.dng` | DNG | 20.4 | no | out of date / current | current / current | 61 | – | – | – | – |
+| `TN002512.DNG` | DNG | 36.0 | no | out of date / current | current / current | 110 | – | – | – | – |
+| `TN002513.DNG` | DNG | 30.5 | no | out of date / current | current / current | 102 | – | – | – | – |
+
+"IIM data before the write" was read from each original by a new 13.64 process, without writing
+(`exiftool -a -G1 -IPTC:all <file>`): "yes" when it listed an `[IPTC]` tag other than
+`CodedCharacterSet` and `ApplicationRecordVersion`. The three TIFFs held IIM data (keywords, city,
+creator and more); the JPEG and the seven DNGs listed no `[IPTC]` tag at all. With 13.64 the
+checksum results and the P/Q comparison were the same in all three runs of every file. The digest
+pass and the restart were still run and timed (the example runs them whatever the checksum); with
+13.64 they take about what they took with 13.59 (digest pass 40–456 ms against 39–438 ms, restart
+and first answer 180–183 ms against 186–189 ms).
+
+**The tests with 13.64** (13.64 first on PATH, `PW_TESTDATA=D:\PhotoWorkflowData\RAW`, at commit
+`71a8c15`):
+
+- `cargo test --workspace`: 2,276 passed, 0 failed, 77 ignored (52 test result lines), the same
+  counts as T266's `.\tools\check.ps1` run with 13.59.
+- `cargo test --workspace -- --ignored every_real_`: exactly the five named tests ran, and all
+  passed: `every_real_dng_jpeg_and_tiff_is_rated_safely` (`tests/edit.rs`, 49 s),
+  `every_real_dng_is_written_safely` and `every_real_tiff_and_dng_gets_a_current_digest`
+  (`tests/safe_write.rs`, 52 s), `every_real_dng_written_with_a_city_plan_passes` and
+  `every_real_image_has_the_same_hash_from_the_narrow_read_as_from_the_snapshot`
+  (`tests/verify.rs`, 14 s). No other ignored test ran (every other test binary ran 0 tests). No
+  test failed.
+
+1. **Inference:** the reason for **the digest pass is gone** with ExifTool 13.64 for the files
+   measured: `-IPTCDigest=new` in the same call as the IIM write gave a current checksum in all
+   three TIFFs and all seven DNGs in every run (10 of 10 files, 30 of 30 runs), where 13.59 left it
+   out of date in all ten. The fix covers both cases measured: TIFFs that already held IIM data
+   (all three) and DNGs that held none before the write (all seven). The owner's repro agrees
+   (`out.tif`'s checksum current with 13.64, out of date with 13.59).
+2. **Inference:** the reason for **the TIFF restart is gone** with ExifTool 13.64 for the three
+   TIFFs measured, all of which hold an `AgHg` resource: after writing a copy the safe write's way,
+   the writing process P read an untouched copy the same as a new process Q in every run (9 of 9);
+   with 13.59 P gave the two extra warnings every time. The owner's repro agrees: with 13.64 the
+   second `-validate` no longer shows "Non-standard Photoshop" and "Bad Photoshop IRB resource".
+3. **Inference:** **the safe write as it is still works** with ExifTool 13.64: the workspace tests
+   and the five real-file tests passed with it: among them the safe write of every real DNG, a
+   rating (XMP) written safely into every real DNG, JPEG and TIFF, and the digest pass's own test,
+   which writes City and IIM through `write_safely` into every real TIFF and DNG. Since the safe
+   write compares the copy's warnings with the original's and refuses new ones (§9.3), these
+   passing tests are a sign that 13.64's third fix (PhotoshopSettings written with Adobe's format
+   code) added no warning the safe write compares, in the real TIFFs and DNGs of `PW_TESTDATA`.
+   **Hypothesis:** the fix changes only files where ExifTool creates new
+   PhotoshopSettings; whether any test file got new PhotoshopSettings was not checked, so a TIFF
+   where it does may still behave differently.
+4. **Inference:** with 13.64 the digest pass and the restart are kept but no longer needed for the
+   files measured; their cost is what dropping them would save, the same as in "Measured in T265"'s
+   point 5 (about 17–24 % of a TIFF write, the digest pass 8–11 % of a DNG write); 13.64 did not
+   make either step itself faster or slower by more than a few ms.
+5. **Not measured:** TIFFs without an `AgHg` resource; a TIFF with no IIM data before the write,
+   or a DNG that already held IIM data; whether a process that wrote a DNG reads correctly
+   afterwards (the DNG half of the restart's reason, as in T265); a cold file cache; another 13.6x
+   version, or 13.64 on the CI runner; the production release line (13.55 is the newest production
+   release, and it predates these fixes). Whether the digest pass or the restart changes, and
+   whether `MIN_EXIFTOOL_VERSION` (12.67) or CI's pinned version (13.59) changes, is the owner's
+   decision (ADR 0007 §9.6 point 3); nothing above is proposed as decided.
+
 ## Appendix: the timing script
 
 ```python
