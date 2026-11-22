@@ -88,7 +88,6 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 | Task | Title | Status |
 |---|---|---|
 | [T261](T261-metadata-write-timing.md) | The safe write's time per step, measured in a release build | Open |
-| [T262](T262-newer-folder-tab-active-when-it-opens.md) | ADR 0026 F4: a later destination folder's tab becomes active when it opens, if the user has not moved | Open |
 
 ## Writing a task (owner and reviewer)
 

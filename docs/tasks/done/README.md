@@ -267,3 +267,4 @@ was when the task was done, so "this file", "below" and "the Log" in T1–T115 m
 | [T258](T258-template-per-shot-and-placed-events.md) | ADR 0026 F4: the import writes the template per shot and says which images it has put in place (pw-loupe import worker) |
 | [T259](T259-import-tabs-logic.md) | ADR 0026 F4: what the import's tabs need to know (pw-loupe logic) |
 | [T260](T260-tabs-fill-while-importing.md) | ADR 0026 F4: the destination tabs open on the first image and fill while importing (pw-loupe shell) |
+| [T262](T262-newer-folder-tab-active-when-it-opens.md) | ADR 0026 F4: a later destination folder's tab becomes active when it opens, if the user has not moved (pw-loupe) |

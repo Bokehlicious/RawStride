@@ -1343,6 +1343,20 @@ impl Loupe {
                 self.loupe_follows_visible();
             }
         }
+        // A tab an import made active before its ratings were read: the refilter above may have
+        // moved its current image or view without the user, so its position is kept again
+        // (ADR 0026 F-Q10, T262).
+        if ready
+            && let Some(folder) = self.tabs.active().and_then(|tab| tab.folder.clone())
+            && self
+                .import_tabs
+                .as_ref()
+                .is_some_and(|import| import.settling_in(&folder))
+            && let Some(position) = self.import_position()
+            && let Some(import) = self.import_tabs.as_mut()
+        {
+            import.shown(position, false);
+        }
     }
 
     /// A sort chosen in the command bar or View ▸ Sort By (ADR 0017 U14, T138): remembered in
@@ -1983,10 +1997,7 @@ impl Loupe {
                             self.import_tabs = Some(ImportTabs::new(images));
                         }
                         ImportEvent::Placed { images, .. } => self.import_placed(ctx, &images),
-                        ImportEvent::Done { .. } => {
-                            self.import_ended();
-                            self.import_tabs = None;
-                        }
+                        ImportEvent::Done { .. } => self.import_tabs = None,
                         _ => {}
                     }
                     if refresh_cards {
@@ -2025,7 +2036,8 @@ impl Loupe {
         }
     }
 
-    /// The active tab's position for the import's end rule (ADR 0026 F-Q10, T260): its folder,
+    /// The active tab's position, kept when the import makes a tab active and compared when a
+    /// later folder opens, to tell whether the user has moved (ADR 0026 F-Q10, T262): its folder,
     /// its current file (`files[current]`, `None` when it has no files) and its view; `None`
     /// without an active tab with a folder.
     fn import_position(&self) -> Option<ImportPosition> {
@@ -2037,30 +2049,40 @@ impl Loupe {
         })
     }
 
-    /// An import's `Placed` event (ADR 0026 §3.4, F-Q10, T260): nothing without `import_tabs`.
-    /// Otherwise `ImportTabs::place` groups the images by folder, and each group, in order, goes
-    /// to its folder's tabs (`placed_tabs`): a folder with tabs has them filled
+    /// An import's `Placed` event (ADR 0026 §3.4, F-Q10, T260, T262): nothing without
+    /// `import_tabs`. Otherwise `ImportTabs::place` groups the images by folder, and each group, in
+    /// order, goes to its folder's tabs (`placed_tabs`): a folder with tabs has them filled
     /// (`fill_import_tabs`); a folder without one is opened at its first group
-    /// (`open_import_folder`), the import's first shown folder as the active tab and a later one
-    /// behind it; a folder whose tab the user closed during the import is not opened again. The
-    /// first group of the first event that has one is the import's first shown folder: when it
-    /// already had a tab and the active tab is not one of them, its first tab is activated and
-    /// read as a click on it does (`load_activated_tab`), its view kept; then the active tab's
-    /// position is kept for the end rule (`ImportTabs::first_shown`). The import dialog is not
-    /// hidden.
+    /// (`open_import_folder`), as the active tab when it is made active and otherwise behind it; a
+    /// folder whose tab the user closed during the import is not opened again. A group is made
+    /// active when it is its folder's first and either it is the import's first shown folder (no
+    /// position kept yet and the event's first group) or the user has not moved since the import
+    /// last made a tab active (`ImportTabs::unmoved` with the active tab's position taken before
+    /// the group's fill or open). A filled folder made active whose tabs do not include the active
+    /// one has its first tab activated and read as a click on it does (`load_activated_tab`), its
+    /// view kept. After a group made active, the active tab's position is kept
+    /// (`ImportTabs::shown`), settling while its ratings are not read yet
+    /// (`refilter_when_ratings_change` keeps it again once they are). So two new folders in a row
+    /// both become active in turn when the user has not moved, and the last one stays active. The
+    /// import dialog is not hidden.
     fn import_placed(&mut self, ctx: &egui::Context, images: &[PathBuf]) {
         let Some(import) = self.import_tabs.as_mut() else {
             return;
         };
-        let first_pending = !import.first_kept();
+        let first_pending = !import.position_kept();
         let groups = import.place(images);
         for (index, group) in groups.iter().enumerate() {
-            let first_shown = first_pending && index == 0;
+            let now = self.import_position();
+            let unmoved = self
+                .import_tabs
+                .as_ref()
+                .is_some_and(|import| import.unmoved(now.as_ref()));
+            let make_active = group.first && ((first_pending && index == 0) || unmoved);
             let has_tab = self.tabs.index_of_folder(&group.folder).is_some();
-            match placed_tabs(has_tab, group.first, first_shown) {
+            match placed_tabs(has_tab, group.first, make_active) {
                 PlacedTabs::Fill => {
                     self.fill_import_tabs(ctx, group);
-                    if first_shown
+                    if make_active
                         && !self.active_tab_of(&group.folder)
                         && let Some(index) = self.tabs.index_of_folder(&group.folder)
                     {
@@ -2072,11 +2094,11 @@ impl Loupe {
                 PlacedTabs::OpenBehind => self.open_import_folder(group, false),
                 PlacedTabs::Closed => continue,
             }
-            if first_shown
-                && let Some(position) = self.import_position()
-                && let Some(import) = self.import_tabs.as_mut()
-            {
-                import.first_shown(position);
+            if make_active && let Some(position) = self.import_position() {
+                let settling = !self.ratings_ready();
+                if let Some(import) = self.import_tabs.as_mut() {
+                    import.shown(position, settling);
+                }
             }
         }
     }
@@ -2162,7 +2184,7 @@ impl Loupe {
     /// yet (`leave_out_waiting`; files of earlier imports stay) with the group's images added
     /// (`with_placed`), or the group's images alone when the listing fails. The folder, in the
     /// import's form, becomes the first recent folder and the library is saved, as `open` does.
-    /// With `active` (the import's first shown folder) the tab is opened with `Tabs::open_new`,
+    /// With `active` (the group is made active, F-Q10) the tab is opened with `Tabs::open_new`,
     /// the first file current, shown as the contact sheet (GR13) and loaded; otherwise it is
     /// opened behind the active tab (`Tabs::open_behind`), the active tab unchanged and nothing
     /// loaded.
@@ -2184,27 +2206,6 @@ impl Loupe {
             self.tabs.open_behind(folder, files);
         }
         self.save_library();
-    }
-
-    /// An import's `Done` (ADR 0026 F-Q10's end rule, T260), before `import_tabs` is emptied: when
-    /// `ImportTabs::end_target` with the active tab's position now names a folder (the user has
-    /// not moved since the first shown image, and the newest folder is another), that folder's
-    /// first tab is activated and read as a click on it does (`load_activated_tab`). Nothing else
-    /// happens to the tabs: a tab whose watch noted a change is listed by `follow_disk_changes`
-    /// once nothing holds the listing (`disk_listing_held`: the dialog hidden or closed).
-    fn import_ended(&mut self) {
-        let now = self.import_position();
-        let Some(target) = self
-            .import_tabs
-            .as_ref()
-            .and_then(|import| import.end_target(now.as_ref()))
-        else {
-            return;
-        };
-        if let Some(index) = self.tabs.index_of_folder(&target) {
-            self.tabs.activate(index);
-            self.load_activated_tab();
-        }
     }
 
     fn draw_import_dialog(&mut self, ctx: &egui::Context) {
@@ -8885,10 +8886,10 @@ fn disk_listing_held(
 enum PlacedTabs {
     /// The folder has tabs: each gets the group's images.
     Fill,
-    /// The folder has no tab and this is its first group, the import's first shown folder: it
-    /// opens as the active tab.
+    /// The folder has no tab and this is its first group, made active (F-Q10): it opens as the
+    /// active tab.
     OpenActive,
-    /// The folder has no tab and this is its first group, a later folder: it opens behind the
+    /// The folder has no tab and this is its first group, not made active: it opens behind the
     /// active tab.
     OpenBehind,
     /// The folder has no tab and had images placed before: the user closed its tab during the
@@ -8896,11 +8897,11 @@ enum PlacedTabs {
     Closed,
 }
 
-/// The choice of `PlacedTabs` for one placed group (ADR 0026 §3.4, T260): `has_tab` when a tab
-/// shows its folder, `first_in_folder` when no image of the folder was placed earlier in the
-/// import (`PlacedInFolder::first`), `first_shown` when it is the import's first shown folder.
-fn placed_tabs(has_tab: bool, first_in_folder: bool, first_shown: bool) -> PlacedTabs {
-    match (has_tab, first_in_folder, first_shown) {
+/// The choice of `PlacedTabs` for one placed group (ADR 0026 §3.4, T260, T262): `has_tab` when a
+/// tab shows its folder, `first_in_folder` when no image of the folder was placed earlier in the
+/// import (`PlacedInFolder::first`), `make_active` when the group is made active (F-Q10).
+fn placed_tabs(has_tab: bool, first_in_folder: bool, make_active: bool) -> PlacedTabs {
+    match (has_tab, first_in_folder, make_active) {
         (true, _, _) => PlacedTabs::Fill,
         (false, true, true) => PlacedTabs::OpenActive,
         (false, true, false) => PlacedTabs::OpenBehind,
@@ -12263,14 +12264,14 @@ mod tests {
         fn a_placed_group_fills_its_folders_tabs_or_opens_one_at_its_first_group() {
             // tabs of the folder exist: filled, whatever else holds
             for first_in_folder in [false, true] {
-                for first_shown in [false, true] {
+                for make_active in [false, true] {
                     assert_eq!(
-                        placed_tabs(true, first_in_folder, first_shown),
+                        placed_tabs(true, first_in_folder, make_active),
                         PlacedTabs::Fill
                     );
                 }
             }
-            // no tab, the folder's first group: the first shown folder opens active, a later one
+            // no tab, the folder's first group: a folder made active opens active, another one
             // behind
             assert_eq!(placed_tabs(false, true, true), PlacedTabs::OpenActive);
             assert_eq!(placed_tabs(false, true, false), PlacedTabs::OpenBehind);

@@ -1,9 +1,11 @@
 //! What the destination tabs need to know about one running import (ADR 0026 §3.4, T259): the
 //! images the import will put in place (`ImportEvent::Planned`) and those it has put in place
 //! (`ImportEvent::Placed`), grouped by folder, so the shell can open and fill a tab per folder,
-//! leave the images not shown yet out of a listing, and at the end make the newest folder's tab
-//! active only if the user has not moved (F-Q10). Plain data, no file access: every folder
-//! comparison uses `same_folder_lexically`, never `same_folder`, which reads the disk.
+//! leave the images not shown yet out of a listing, and keep the active tab's position each time
+//! the import makes a tab active, so a later folder's tab is made active when it opens only if
+//! the user has not moved since (F-Q10, T262; no rule at the end). Plain data, no file access:
+//! every folder comparison uses `same_folder_lexically`, never `same_folder`, which reads the
+//! disk.
 
 use std::collections::HashSet;
 use std::ffi::OsString;
@@ -23,8 +25,8 @@ pub struct PlacedInFolder {
 }
 
 /// The active tab's folder, current image (`None` for an empty tab) and view, as the shell sees
-/// them; the end rule of F-Q10 compares the one kept at the first shown image with the one at the
-/// end (`ImportTabs::end_target`).
+/// them. F-Q10 keeps one each time the import makes a tab active (`ImportTabs::shown`) and
+/// compares it with the one when a later folder opens (`ImportTabs::unmoved`).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ImportPosition {
     pub folder: PathBuf,
@@ -86,7 +88,9 @@ pub struct ImportTabs {
     planned: Vec<FolderNames>,
     placed: Vec<FolderNames>,
     folders: Vec<PathBuf>,
-    first: Option<ImportPosition>,
+    /// The position kept by the last `shown`, and whether it was kept before the tab's ratings
+    /// were read.
+    kept: Option<(ImportPosition, bool)>,
 }
 
 impl ImportTabs {
@@ -162,38 +166,36 @@ impl ImportTabs {
             .collect()
     }
 
-    /// Keeps `at`, the active tab's position when the first image was shown, the first time it is
-    /// called; later calls are ignored (F-Q10).
-    pub fn first_shown(&mut self, at: ImportPosition) {
-        if self.first.is_none() {
-            self.first = Some(at);
-        }
+    /// Keeps `at`, the active tab's position after the import made a tab active (F-Q10),
+    /// replacing any position kept before. `settling` is true when that tab's ratings were not
+    /// read yet, so the shell keeps the position again once they are (`settling_in`).
+    pub fn shown(&mut self, at: ImportPosition, settling: bool) {
+        self.kept = Some((at, settling));
     }
 
-    /// Whether `first_shown` has kept a position.
-    pub fn first_kept(&self) -> bool {
-        self.first.is_some()
+    /// Whether a position is kept, it was kept with `settling` true, and its folder is `folder`
+    /// (`same_folder_lexically`).
+    pub fn settling_in(&self, folder: &Path) -> bool {
+        self.kept.as_ref().is_some_and(|(kept, settling)| {
+            *settling && same_folder_lexically(&kept.folder, folder)
+        })
     }
 
-    /// The end rule of F-Q10: the newest folder (the last of `folders()`) when a position was
-    /// kept, `now` is equal to it (folder by `same_folder_lexically`, `current` exactly, `mode`
-    /// equal) and the newest folder is not that same folder; otherwise `None`, so a user who has
-    /// moved stays where they are.
-    pub fn end_target(&self, now: Option<&ImportPosition>) -> Option<PathBuf> {
-        let kept = self.first.as_ref()?;
-        let now = now?;
-        let unmoved = same_folder_lexically(&kept.folder, &now.folder)
+    /// Whether `shown` has kept a position.
+    pub fn position_kept(&self) -> bool {
+        self.kept.is_some()
+    }
+
+    /// Whether the user has not moved since the import last made a tab active (F-Q10): a position
+    /// was kept and `now` is equal to it (folder by `same_folder_lexically`, `current` exactly,
+    /// `mode` equal); false without a kept position or without `now`.
+    pub fn unmoved(&self, now: Option<&ImportPosition>) -> bool {
+        let (Some((kept, _)), Some(now)) = (self.kept.as_ref(), now) else {
+            return false;
+        };
+        same_folder_lexically(&kept.folder, &now.folder)
             && kept.current == now.current
-            && kept.mode == now.mode;
-        if !unmoved {
-            return None;
-        }
-        let newest = self.folders.last()?;
-        if same_folder_lexically(newest, &kept.folder) {
-            None
-        } else {
-            Some(newest.clone())
-        }
+            && kept.mode == now.mode
     }
 }
 
@@ -407,61 +409,72 @@ mod tests {
     }
 
     #[test]
-    fn first_kept_is_set_by_first_shown() {
+    fn position_kept_is_set_by_shown() {
         let mut import = ImportTabs::new(Vec::new());
-        assert!(!import.first_kept());
-        import.first_shown(position(r"D:\Import\A", None, ViewMode::Grid));
-        assert!(import.first_kept());
+        assert!(!import.position_kept());
+        import.shown(position(r"D:\Import\A", None, ViewMode::Grid), false);
+        assert!(import.position_kept());
     }
 
     #[test]
-    fn end_target_is_the_newest_folder_only_when_the_user_has_not_moved() {
+    fn a_second_shown_replaces_the_first_and_its_settling() {
+        let mut import = ImportTabs::new(Vec::new());
+        let first = position(r"D:\Import\A", Some(r"D:\Import\A\1.arw"), ViewMode::Grid);
+        let second = position(r"D:\Import\B", Some(r"D:\Import\B\2.arw"), ViewMode::Grid);
+        import.shown(first.clone(), true);
+        assert!(import.settling_in(Path::new(r"D:\Import\A")));
+
+        import.shown(second.clone(), false);
+        assert!(!import.unmoved(Some(&first)));
+        assert!(import.unmoved(Some(&second)));
+        assert!(!import.settling_in(Path::new(r"D:\Import\A")));
+        assert!(!import.settling_in(Path::new(r"D:\Import\B")));
+
+        // Kept again once the ratings are read: no longer settling.
+        import.shown(second.clone(), true);
+        assert!(import.settling_in(Path::new(r"D:\Import\B")));
+        import.shown(second, false);
+        assert!(!import.settling_in(Path::new(r"D:\Import\B")));
+    }
+
+    #[test]
+    fn settling_in_is_true_only_for_a_settling_position_of_that_folder() {
+        let mut import = ImportTabs::new(Vec::new());
+        // Nothing kept.
+        assert!(!import.settling_in(Path::new(r"D:\Import\A")));
+
+        import.shown(position(r"D:\Import\A", None, ViewMode::Grid), true);
+        assert!(import.settling_in(Path::new(r"D:\Import\A")));
+        // The same folder spelt with a trailing separator.
+        assert!(import.settling_in(Path::new(r"D:\Import\A\")));
+        assert!(!import.settling_in(Path::new(r"D:\Import\B")));
+
+        import.shown(position(r"D:\Import\A", None, ViewMode::Grid), false);
+        assert!(!import.settling_in(Path::new(r"D:\Import\A")));
+    }
+
+    #[test]
+    fn unmoved_only_when_the_position_now_is_the_kept_one() {
         let mut import = ImportTabs::new(Vec::new());
         let kept = position(r"D:\Import\A", Some(r"D:\Import\A\1.arw"), ViewMode::Grid);
-        import.place(&paths(&[r"D:\Import\A\1.arw"]));
 
-        // Before `first_shown`.
-        assert_eq!(import.end_target(Some(&kept)), None);
+        // Nothing kept.
+        assert!(!import.unmoved(Some(&kept)));
 
-        import.first_shown(kept.clone());
-        // One folder: the newest is the kept one.
-        assert_eq!(import.end_target(Some(&kept)), None);
-
-        import.place(&paths(&[r"D:\Import\B\2.arw"]));
-        assert_eq!(
-            import.end_target(Some(&kept)),
-            Some(PathBuf::from(r"D:\Import\B"))
-        );
+        import.shown(kept.clone(), false);
+        assert!(import.unmoved(Some(&kept)));
         // The same folder spelt with a trailing separator is the same position.
         let same = position(r"D:\Import\A\", Some(r"D:\Import\A\1.arw"), ViewMode::Grid);
-        assert_eq!(
-            import.end_target(Some(&same)),
-            Some(PathBuf::from(r"D:\Import\B"))
-        );
+        assert!(import.unmoved(Some(&same)));
 
         let other_tab = position(r"D:\Import\B", Some(r"D:\Import\A\1.arw"), ViewMode::Grid);
         let other_image = position(r"D:\Import\A", Some(r"D:\Import\A\2.arw"), ViewMode::Grid);
         let no_image = position(r"D:\Import\A", None, ViewMode::Grid);
         let other_view = position(r"D:\Import\A", Some(r"D:\Import\A\1.arw"), ViewMode::Loupe);
-        assert_eq!(import.end_target(Some(&other_tab)), None);
-        assert_eq!(import.end_target(Some(&other_image)), None);
-        assert_eq!(import.end_target(Some(&no_image)), None);
-        assert_eq!(import.end_target(Some(&other_view)), None);
-        assert_eq!(import.end_target(None), None);
-    }
-
-    #[test]
-    fn a_second_first_shown_does_not_replace_the_first() {
-        let mut import = ImportTabs::new(Vec::new());
-        import.place(&paths(&[r"D:\Import\A\1.arw", r"D:\Import\B\2.arw"]));
-        let kept = position(r"D:\Import\A", Some(r"D:\Import\A\1.arw"), ViewMode::Grid);
-        let later = position(r"D:\Other", None, ViewMode::Loupe);
-        import.first_shown(kept.clone());
-        import.first_shown(later.clone());
-        assert_eq!(
-            import.end_target(Some(&kept)),
-            Some(PathBuf::from(r"D:\Import\B"))
-        );
-        assert_eq!(import.end_target(Some(&later)), None);
+        assert!(!import.unmoved(Some(&other_tab)));
+        assert!(!import.unmoved(Some(&other_image)));
+        assert!(!import.unmoved(Some(&no_image)));
+        assert!(!import.unmoved(Some(&other_view)));
+        assert!(!import.unmoved(None));
     }
 }

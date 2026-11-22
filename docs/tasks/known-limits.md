@@ -348,8 +348,8 @@ with ADR 0026 F3, in `plans/adr-0018-0025-steps.md`.)
 - *Another spelling of the destination is not recognised* (T260 extra review, 2026-11-21): the
   import compares folders lexically (`same_folder_lexically`), so a tab open on the destination
   through a `subst` drive or a `\\?\` path does not leave out the images not yet placed (one can
-  show before its template is written), and at the end of the import such a tab may be loaded
-  once more although it is already active.
+  show before its template is written). (Its last clause, a tab loaded once more at the end of
+  the import, went with the end rule in T262.)
 
 ## Card eject
 
