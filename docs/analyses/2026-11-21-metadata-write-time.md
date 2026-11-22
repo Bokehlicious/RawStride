@@ -363,6 +363,94 @@ missing). `check_copy` refused the cut copies with the shim's error and the chan
    under 1 ms, T261). Whether the DNG check changes is the owner's decision (ADR 0007 §9.6 point 3);
    nothing above is proposed as decided.
 
+## Measured in T265 (Q19: the digest pass and the TIFF restart)
+
+- Build: `cargo run --release -p pw-metadata --example digest_and_restart` (T265,
+  [`digest_and_restart.rs`](../../crates/pw-metadata/examples/digest_and_restart.rs)), at commit
+  `4f5edeb` (`feature/gui-workspace`) with the example added, uncommitted. The example uses the
+  crate's own `ExifTool::execute`, `ExifTool::snapshot` and `ExifTool::restart`; it does not run
+  `write_safely`. **ExifTool 13.59**, found by `ExifTool::start` (the version T92 measured with;
+  no other version was tried).
+- Measured 2026-11-22 on thanos: the eleven files in `D:\PhotoWorkflowData\RAW`, copied for every
+  run into a new folder under `%TEMP%` on C:, **warm cache**, three runs per file, medians. Every
+  run (33 of 33) succeeded; every write was answered "1 image files created" or "1 image files
+  updated", and every copy was deleted afterwards.
+- **The digest in the same call** (task point 2): per run, one copy written by one call
+  `-o <copy> -IPTC:CodedCharacterSet=UTF8 -IPTC:City=Lund -XMP-photoshop:City=Lund
+  -IPTCDigest=new <source copy>` ("one call"), and one written the safe write's way: the same
+  call, then the digest pass `-IPTCDigest=new -overwrite_original <copy>` ("safe write's
+  sequence"). The writes were made by a new process per run; each copy's checksum was read by a
+  further new process that had written nothing: "current" when `Photoshop:IPTCDigest` equals
+  `File:CurrentIPTCDigest`. The digest pass's time is that one call.
+- **The misread after a TIFF write** (task point 3): per run, a new process P wrote copy A the
+  safe write's way (the `-o` call to A2, then the digest pass on A2); then P and a new process Q
+  each took `ExifTool::snapshot` of a second, untouched copy B, compared without the `System`
+  group. Then P's `ExifTool::restart` was timed: it includes ending the old process (up to 2 s,
+  `Drop`), but it returns as soon as the new process is spawned. So the example also timed the
+  restart up to the new process's first answer (`-ver`), which is what the next call of the safe
+  write waits for. Whether the TIFF holds an `AgHg` resource was found by a byte search for
+  `AgHg` followed by the id 0x1f40.
+- Point 3 rechecks TIFFs only. The DNG half of the restart's reason (measured in T92: the same
+  write in a DNG leaves the process reading correctly, so `needs_restart` restarts only after a
+  TIFF write) was not rechecked.
+
+| File | Kind | MB | Checksum, one call | Checksum, safe write's sequence | Digest pass | `AgHg` | Untouched copy B read by P and by Q | Restart | Restart and first answer |
+|---|---|---:|---|---|---:|---|---|---:|---:|
+| `TN006331.JPG` | JPEG | 13.5 | current | current | 41 | – | – | – | – |
+| `TN002683.tif` | TIFF | 41.2 | out of date | current | 127 | yes | P 8 warnings (4 minor), Q 6 (3 minor) | 25 | 186 |
+| `TN004596.tif` | TIFF | 97.1 | out of date | current | 259 | yes | P 9 warnings (4 minor), Q 7 (3 minor) | 25 | 187 |
+| `TN006025.tif` | TIFF | 177.3 | out of date | current | 438 | yes | P 7 warnings (4 minor), Q 5 (3 minor) | 35 | 189 |
+| `IMG_20261026_062851.dng` | DNG | 11.7 | out of date | current | 39 | – | – | – | – |
+| `IMG_20261026_084628.dng` | DNG | 12.2 | out of date | current | 42 | – | – | – | – |
+| `IMG_20261026_091722.dng` | DNG | 11.4 | out of date | current | 40 | – | – | – | – |
+| `IMG_20261026_092349.dng` | DNG | 18.9 | out of date | current | 59 | – | – | – | – |
+| `IMG_20261026_092351.dng` | DNG | 20.4 | out of date | current | 62 | – | – | – | – |
+| `TN002512.DNG` | DNG | 36.0 | out of date | current | 111 | – | – | – | – |
+| `TN002513.DNG` | DNG | 30.5 | out of date | current | 100 | – | – | – | – |
+
+Times are medians in ms. The checksum results and the TIFFs' validation counts were the same in
+all three runs. No error counts differed; the first difference between B's two snapshots was
+always the validation counts (the example stops at the first difference, so whether a listing key
+differed too is not known). The warnings P gave for B and Q did not were,
+for each of the three TIFFs and in every run, exactly the two T92 named:
+"[minor] Non-standard Photoshop at TIFF-IFD0-Photoshop-IPTCDigest" and "Bad Photoshop IRB
+resource" (followed by four bytes that differed between files). The JSON call `-validate -warning
+-a -G1 -j` the task names shows only one `ExifTool:Warning` per file (JSON keeps one of several),
+so the example also ran the same call without `-j`, which lists every warning.
+
+1. **Inference:** the reason for **the digest pass still holds** with ExifTool 13.59: in all three
+   TIFFs and all seven DNGs, `-IPTCDigest=new` in the same call as the IIM write left the stored
+   checksum out of date, and the digest pass made it current (10 of 10 files, every run). In the
+   JPEG (the control) the one call already gave a current checksum, as T92 found.
+2. **Inference:** the reason for **the TIFF restart still holds** with ExifTool 13.59 for all three
+   TIFFs measured, all of which hold an `AgHg` resource: after writing a copy the safe write's way,
+   the writing process read an untouched copy of the same file with two more warnings (one of
+   them minor) than a new process, the two T92 named. In the safe write that copy would be
+   refused (`VerifyError::NewWarnings`). TIFFs without an `AgHg` resource were not among the files
+   and were not measured.
+3. **Inference:** the digest pass costs 39–62 ms for the five 11–20 MB phone DNGs, 100–111 ms for
+   the 30–36 MB `TN` DNGs, and 127–438 ms for the 41–177 MB TIFFs; it grows with the file size
+   (it reads and writes the whole copy once more). The JPEG's 41 ms is for comparison only: the
+   safe write runs no digest pass for a JPEG.
+4. **Inference:** `ExifTool::restart` itself returns in 25–35 ms, but the new process answers its
+   first call only 186–189 ms after the restart began, about the start time measured before (the
+   start and first answer of a process: 186–201 ms in the sections above). So the restart's real
+   cost in a TIFF write is about 190 ms, paid by the copy's snapshot that follows it.
+   **Hypothesis:** a new process's first snapshot of a TIFF may cost a little more than a warm
+   process's (modules loaded on first use, as T261's interpretation 4 suggested for the first
+   JPEG); not measured here.
+5. **Inference (from the medians of "Measured in T261", another run under the same conditions):**
+   the digest pass and the restart up to the first answer together are about 24 % of
+   `write_safely` for `TN002683.tif` (127 + 186 of 1,304 ms), 19 % for `TN004596.tif` (259 + 187
+   of 2,326 ms) and 17 % for `TN006025.tif` (438 + 189 of 3,772 ms); the digest pass alone is
+   8–11 % of `write_safely` for the seven DNGs (39–111 of 457–1,203 ms, about 20 % of the write
+   without the image check). This is within interpretation 5's 15–30 % for TIFF and below it for
+   DNG with the image check counted.
+6. **Not measured:** another ExifTool version (none is installed for this), the DNG half of the
+   restart's reason (whether a process that wrote a DNG still reads correctly), TIFFs without an `AgHg` resource, and a cold file cache. Whether the digest
+   pass or the restart changes is the owner's decision (ADR 0007 §9.6 point 3); nothing above is
+   proposed as decided.
+
 ## Appendix: the timing script
 
 ```python

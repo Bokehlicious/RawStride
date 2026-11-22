@@ -271,3 +271,4 @@ was when the task was done, so "this file", "below" and "the Log" in T1–T115 m
 | [T261](T261-metadata-write-timing.md) | The safe write's time per step, measured in a release build (pw-imagecheck example) |
 | [T263](T263-final-read-image-data-hash-only.md) | ADR 0007 §9.6 Q17: the final read after the replace asks for `ImageDataHash` alone (pw-metadata) |
 | [T264](T264-dng-image-check-timing.md) | ADR 0007 §9.6 Q19: the DNG image check timed step by step, and which check refuses a damaged copy (pw-imagecheck example) |
+| [T265](T265-digest-pass-and-tiff-restart-recheck.md) | ADR 0007 §9.6 Q19: do the reasons for the digest pass and the TIFF restart still hold? (pw-metadata example) |
