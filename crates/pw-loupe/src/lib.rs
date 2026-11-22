@@ -10,6 +10,7 @@ mod compare;
 mod deletes;
 mod deletes_text;
 mod editor;
+mod editor_layout;
 mod external;
 mod external_text;
 mod field_values;
@@ -66,6 +67,7 @@ pub use editor::{
     BatchEdits, CopiedFields, EditorField, EditorForm, EditorSection, EditorText, OpenConflict,
     RatingButton, WriteReason, apply_confirmation, editor_text, notice_text, write_reason_text,
 };
+pub use editor_layout::{EditorItem, EditorLayout};
 pub use external::{
     COMMAND_LINE_LIMIT, MANY_IMAGES, OpenPlan, OpenRequest, OpenStep, StartError,
     command_line_length, explorer_select_argument, images_that_fit, plan_open, show_in_explorer,

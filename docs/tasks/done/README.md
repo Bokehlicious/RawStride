@@ -283,3 +283,4 @@ was when the task was done, so "this file", "below" and "the Log" in T1–T115 m
 | [T274](T274-d8-allowance-dropped.md) | ADR 0007 §9.7 point 5: D8's allowance dropped, one more validation warning always refused (pw-metadata) |
 | [T275](T275-dng-image-check-only-without-hash.md) | ADR 0007 §9.7 point 4 (Q23): LibRaw checks a DNG copy only when the original has no image data hash (pw-metadata, pw-imagecheck) |
 | [T276](T276-import-preview-list-kept-while-editing.md) | The import dialog's preview list stays while the form is edited: no new preview for the IPTC template or Eject, the last list kept dimmed until the next (pw-loupe) |
+| [T277](T277-metadata-window-layout-model.md) | The metadata window's layout: which sections and items, in which order (model) (pw-loupe) |

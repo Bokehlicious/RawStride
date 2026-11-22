@@ -40,6 +40,7 @@ use pw_metadata::vocabulary;
 use pw_metadata::write_plan::WriteNotice;
 use pw_metadata::{MIN_EXIFTOOL_VERSION, Rating};
 
+use crate::editor_layout::{EditorItem, EditorLayout};
 use crate::filter::{LABEL_CHOICES, LabelChoice};
 use crate::info_panel::{
     ConflictValue, Language, origin_text, property_label, property_tooltip, value_text,
@@ -859,6 +860,12 @@ static LIST_SPECS: [ListSpec; 13] = [
 /// The spec of the structure list `list`.
 fn list_spec(list: &str) -> Option<&'static ListSpec> {
     LIST_SPECS.iter().find(|spec| spec.property == list)
+}
+
+/// The section the structure list `list` is drawn in; `None` for a property that is not one of
+/// [`EditorForm::ALL_LISTS`] (the metadata window's layout, U10b-Q5).
+pub(crate) fn list_section(list: &str) -> Option<EditorSection> {
+    list_spec(list).map(|spec| spec.section)
 }
 
 /// The place of a list among the fields: the index in [`EditorField::ALL`] of the first field
@@ -2016,17 +2023,31 @@ impl EditorForm {
     /// deprecated ones, a check box with another value), the conflict choices or the errors. A
     /// Lang Alt gives its text, which is the `x-default` text the window edits (Q7).
     pub fn copy(&self, file: &str) -> CopiedFields {
+        self.copy_shown(file, &EditorLayout::default())
+    }
+
+    /// "Copy All Fields" with the metadata window's layout (ADR 0017 U10b-Q4, T277): as
+    /// [`EditorForm::copy`], but only the fields and structure lists whose item `layout` shows
+    /// ([`EditorLayout::is_shown`]), so [`CopiedFields::count`] counts only those.
+    pub fn copy_shown(&self, file: &str, layout: &EditorLayout) -> CopiedFields {
         let texts = self
             .fields
             .iter()
-            .filter(|state| state.field.editable() && self.read_only_text(state.field).is_none())
+            .filter(|state| {
+                state.field.editable()
+                    && self.read_only_text(state.field).is_none()
+                    && layout.is_shown(EditorItem::of_field(state.field))
+            })
             .map(|state| (state.field, state.text.clone()))
             .collect();
         // Each structure list with an entry (U11a-Q5, U11b-Q5); an empty one is not pasted.
         let locations = self
             .lists
             .iter()
-            .filter(|state| self.list_read_only(state.property()).is_none())
+            .filter(|state| {
+                self.list_read_only(state.property()).is_none()
+                    && layout.is_shown(EditorItem::List(state.property()))
+            })
             .map(|state| (state.property(), list_values(&state.entries)))
             .filter(|(_, values)| !values.is_empty())
             .collect();
@@ -2041,8 +2062,20 @@ impl EditorForm {
     /// as if typed, an unsaved edit; the other fields keep their text, and a field shown read-only
     /// here is left as it is. The edits, errors and conflict decisions then follow as for typing.
     pub fn paste(&mut self, copied: &CopiedFields) {
+        self.paste_shown(copied, &EditorLayout::default());
+    }
+
+    /// "Paste All Fields" with the metadata window's layout (ADR 0017 U10b-Q4, T277): as
+    /// [`EditorForm::paste`], but a field or structure list whose item `layout` does not show
+    /// ([`EditorLayout::is_shown`]) is left as it is, also when `copied` holds it (the layout may
+    /// have changed between the copy and the paste). A hidden item cannot be edited in the
+    /// window either, so its text stays its start text and it never has a field error (errors
+    /// come only from changed text, and a conflict choice moves the start text along); the
+    /// edits ([`EditorForm::batch_edits`]) need no layout. An item shown again after the copy was
+    /// not copied, so it is not pasted.
+    pub fn paste_shown(&mut self, copied: &CopiedFields, layout: &EditorLayout) {
         for (field, text) in &copied.texts {
-            if text.is_empty() {
+            if text.is_empty() || !layout.is_shown(EditorItem::of_field(*field)) {
                 continue;
             }
             if field.check_box() {
@@ -2058,7 +2091,7 @@ impl EditorForm {
         // A copied structure list with entries replaces the whole list (U11a-Q5, U11b-Q5); an
         // empty one is not pasted (U12b-Q2), and a list shown read-only here is left as it is.
         for (list, values) in &copied.locations {
-            if values.is_empty() {
+            if values.is_empty() || !layout.is_shown(EditorItem::List(list)) {
                 continue;
             }
             if let Some(state) = self.list_editable(list) {
@@ -6412,6 +6445,86 @@ mod tests {
         let mut target = form_with(created_conflict());
         target.paste(&copied);
         assert_eq!(target.edits(), Ok(Vec::new()));
+    }
+
+    #[test]
+    fn copy_shown_leaves_out_a_hidden_field_and_a_hidden_list() {
+        let mut source = form_with(located(vec![umea()], vec![oslo()]));
+        type_into(&mut source, EditorField::City, "Lund");
+        type_into(&mut source, EditorField::Credit, "Anna");
+        let mut layout = EditorLayout::default();
+        layout.set_item_shown(EditorItem::Field(EditorField::City), false);
+        layout.set_item_shown(EditorItem::List(SHOWN), false);
+
+        let copied = source.copy_shown("a.jpg", &layout);
+        assert_eq!(copied.text(EditorField::City), None);
+        assert_eq!(copied.text(EditorField::Credit), Some("Anna"));
+        assert_eq!(copied.locations, [(CREATED, vec![umea()])]);
+        // Credit and Location Created; City and Location Shown are not counted.
+        assert_eq!(copied.count(), 2);
+        // With every item shown, it is `copy`.
+        assert_eq!(
+            source.copy_shown("a.jpg", &EditorLayout::default()),
+            source.copy("a.jpg")
+        );
+        assert_eq!(source.copy("a.jpg").count(), 4);
+    }
+
+    #[test]
+    fn paste_shown_leaves_a_hidden_field_and_a_hidden_list_as_they_are() {
+        let mut source = form_with(located(vec![umea()], vec![umea()]));
+        type_into(&mut source, EditorField::City, "Lund");
+        type_into(&mut source, EditorField::Credit, "Anna");
+        // Made with every item shown, so it holds City and Location Shown.
+        let copied = source.copy("a.jpg");
+        assert_eq!(copied.text(EditorField::City), Some("Lund"));
+
+        let mut layout = EditorLayout::default();
+        layout.set_item_shown(EditorItem::Field(EditorField::City), false);
+        layout.set_item_shown(EditorItem::List(SHOWN), false);
+        let mut target_metadata = located(vec![oslo()], vec![oslo()]);
+        insert(&mut target_metadata, "photoshop:City", text("Malmö"));
+        let mut target = form_with(target_metadata);
+        target.paste_shown(&copied, &layout);
+        // The hidden ones as they were.
+        assert_eq!(target.text(EditorField::City), "Malmö");
+        assert_eq!(target.location_text(SHOWN, 0, CITY), "Oslo");
+        // The shown ones pasted.
+        assert_eq!(target.text(EditorField::Credit), "Anna");
+        assert_eq!(target.location_text(CREATED, 0, CITY), "Umeå");
+        assert_eq!(
+            target.edits(),
+            Ok(vec![
+                set("photoshop:Credit", text("Anna")),
+                set(CREATED, places(vec![umea()])),
+            ])
+        );
+    }
+
+    #[test]
+    fn paste_shown_leaves_a_hidden_sections_fields_as_they_are() {
+        let mut source = form_with(located(vec![umea()], Vec::new()));
+        type_into(&mut source, EditorField::City, "Lund");
+        type_into(&mut source, EditorField::Credit, "Anna");
+        let copied = source.copy("a.jpg");
+
+        let mut layout = EditorLayout::default();
+        layout.set_section_shown(EditorSection::TimePlace, false);
+        let mut target = form_with(Metadata::new());
+        target.paste_shown(&copied, &layout);
+        // City and Location Created are in Time and Place.
+        assert_eq!(target.text(EditorField::City), "");
+        assert_eq!(target.location_count(CREATED), 0);
+        assert_eq!(target.text(EditorField::Credit), "Anna");
+        assert_eq!(
+            target.edits(),
+            Ok(vec![set("photoshop:Credit", text("Anna"))])
+        );
+        // And a copy with the section hidden leaves them out.
+        let copied = source.copy_shown("a.jpg", &layout);
+        assert_eq!(copied.text(EditorField::City), None);
+        assert!(copied.locations.is_empty());
+        assert_eq!(copied.count(), 1);
     }
 
     #[test]

@@ -87,8 +87,7 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status |
 |---|---|---|
-| [T277](T277-metadata-window-layout-model.md) | The metadata window's layout: which sections and items, in which order (model) | Open |
-| [T278](T278-metadata-window-layout-shell.md) | The metadata window drawn by the layout, and the Settings window's pages | Blocked: waits for T277 |
+| [T278](T278-metadata-window-layout-shell.md) | The metadata window drawn by the layout, and the Settings window's pages | Open |
 
 ## Writing a task (owner and reviewer)
 

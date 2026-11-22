@@ -1,4 +1,4 @@
-# T278. The metadata window drawn by the layout, and the Settings window's pages — Blocked: waits for T277
+# T278. The metadata window drawn by the layout, and the Settings window's pages — Open
 
 - **Why:** ADR 0017 §2.3.1 and step U10b (§6.3, U10b-Q1–U10b-Q9, the owner's answers
   2026-11-22): the user chooses which sections and fields of the metadata window are shown, and in
@@ -158,3 +158,4 @@
 |---|---|---|
 | 2026-11-22 | Blocked | Added. Waits for T277. ADR 0017 §6.3 (U10b-Q1–U10b-Q9). Second and last of the chain T277 → T278 (step U10b, order 2b); the owner's hand check after it. At Done: CHANGELOG (Added), README's Planned item, plan rows |
 | 2026-11-22 | Blocked | Cold read: doable once T277 is Done; nothing in the code contradicts it. Changed: `lib.rs` re-exports `SettingsPage` (required); the third test using `window_editor_properties` (about line 11506, 55 unique entries) named; the page names through `SettingsText::Page(SettingsPage)` and `RestoreDefaults`; the External Programs heading dropped on its page; the page set only when the window opens; how a long name wraps beside Move Up; the layout cloned before the closures; the doc comments to rewrite; the tooltip count after a layout change as an accepted limit. Chain review: Restore Defaults leaves the sections' open state; `Debug` on `SettingsPage`; hand check point on "Copy from Location Created" with the source hidden; U10b-Q9 (owner, proposal A): with Rating and Label hidden Other Metadata starts with `status_text` of the current rating, with a test and hand check point 5. For `known-limits.md` at Done: the tooltip count (point 3), and an older RawStride reading `settings.txt` gives a problem per layout line and drops them at its next save |
+| 2026-11-22 | Open | T277 Done: `EditorItem`, `EditorLayout`, `Settings::editor_layout`, `copy_shown` and `paste_shown` are in place as the task expects |

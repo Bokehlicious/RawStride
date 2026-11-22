@@ -19,6 +19,7 @@ use pw_metadata::iim::Fallback;
 use pw_metadata::write_plan::WriteSettings;
 
 use crate::editor::EditorSection;
+use crate::editor_layout::{EditorItem, EditorLayout, section_from_name, section_name};
 use crate::shell::{ColumnState, DEFAULT_LEFT_WIDTH, DEFAULT_RIGHT_WIDTH, Theme};
 use crate::sort::{SortKey, SortOrder};
 
@@ -86,6 +87,13 @@ const EDITOR_ASSIGNMENT: &str = "editor_assignment";
 const EDITOR_RATING_LABEL: &str = "editor_rating_label";
 /// The key of the metadata window's Licence (PLUS) section (U10d, T128).
 const EDITOR_LICENCE: &str = "editor_licence";
+/// The keys of the metadata window's layout (ADR 0017 U10b-Q7, T277): the order of the sections
+/// and of every section's items, and the hidden sections and items, each a list of names
+/// separated by `, `, written only when it differs from the default.
+const EDITOR_SECTION_ORDER: &str = "editor_section_order";
+const EDITOR_ITEM_ORDER: &str = "editor_item_order";
+const EDITOR_HIDDEN_SECTIONS: &str = "editor_hidden_sections";
+const EDITOR_HIDDEN_ITEMS: &str = "editor_hidden_items";
 /// The keys of the library's sections (T135, U4-Q7).
 const LIBRARY_FOLDERS: &str = "library_folders";
 const LIBRARY_FAVOURITES: &str = "library_favourites";
@@ -120,6 +128,9 @@ pub struct Settings {
     /// The external programs in the list's order, the first the default program; at most
     /// [`MAX_EXTERNAL_PROGRAMS`] (ADR 0019 §2.1, E-Q1, T200).
     pub external_programs: Vec<ExternalProgram>,
+    /// The metadata window's sections and items, their order and which are shown (ADR 0017
+    /// §2.3.1, U10b, T277).
+    pub editor_layout: EditorLayout,
 }
 
 impl Default for Settings {
@@ -129,6 +140,7 @@ impl Default for Settings {
             fallback: Fallback::Windows1252,
             shell: ShellSettings::default(),
             external_programs: Vec::new(),
+            editor_layout: EditorLayout::default(),
         }
     }
 }
@@ -552,6 +564,42 @@ pub fn load_settings_and_library(path: &Path) -> (Settings, SavedLibrary, Vec<St
                     path.display()
                 )),
             },
+            // Each unknown name is skipped with a problem; the rest of the line is used (T277).
+            // A hidden line names every hidden one, so it replaces an earlier line.
+            EDITOR_SECTION_ORDER | EDITOR_HIDDEN_SECTIONS => {
+                let (sections, unknown) = layout_names(value, section_from_name);
+                problems.extend(
+                    unknown
+                        .iter()
+                        .map(|name| unknown_name(path, number, key, name)),
+                );
+                let layout = &mut settings.editor_layout;
+                if key == EDITOR_SECTION_ORDER {
+                    layout.set_section_order(&sections);
+                } else {
+                    for section in EditorSection::ALL {
+                        layout.set_section_shown(section, !sections.contains(&section));
+                    }
+                }
+            }
+            EDITOR_ITEM_ORDER | EDITOR_HIDDEN_ITEMS => {
+                let (items, unknown) = layout_names(value, EditorItem::from_name);
+                problems.extend(
+                    unknown
+                        .iter()
+                        .map(|name| unknown_name(path, number, key, name)),
+                );
+                let layout = &mut settings.editor_layout;
+                if key == EDITOR_ITEM_ORDER {
+                    layout.set_item_order(&items);
+                } else {
+                    for section in EditorSection::ALL {
+                        for (item, _) in layout.items(section) {
+                            layout.set_item_shown(item, !items.contains(&item));
+                        }
+                    }
+                }
+            }
             _ => problems.push(format!(
                 "settings file {}, line {number}: unknown key \"{key}\", line ignored",
                 path.display()
@@ -594,6 +642,7 @@ pub fn save_settings_with_library(
         fallback_value(settings.fallback)
     );
     text.push_str(&shell_lines(&settings.shell));
+    text.push_str(&editor_layout_lines(&settings.editor_layout));
     text.push_str(&external_program_lines(&settings.external_programs));
     text.push_str(&library_lines(library));
     let written = write_synced(&temp, text.as_bytes()).and_then(|()| std::fs::rename(&temp, path));
@@ -697,6 +746,81 @@ fn shell_lines(shell: &ShellSettings) -> String {
         shell.thumbnail_buttons
     ));
     text
+}
+
+/// The lines of the metadata window's layout (T277), each only when it differs from the
+/// default, so a file with the default layout has none: the sections in the layout's order; every
+/// item of every section, the sections in `EditorSection::ALL` order and each section's items in
+/// the layout's order; the hidden sections and the hidden items in the same orders.
+fn editor_layout_lines(layout: &EditorLayout) -> String {
+    let mut text = String::new();
+    let sections = layout.sections();
+    let section_order: Vec<EditorSection> = sections.iter().map(|(section, _)| *section).collect();
+    if section_order != EditorSection::ALL {
+        let names: Vec<&str> = section_order.iter().map(|s| section_name(*s)).collect();
+        text.push_str(&format!("{EDITOR_SECTION_ORDER} = {}\n", names.join(", ")));
+    }
+    let items: Vec<(EditorItem, bool)> = EditorSection::ALL
+        .into_iter()
+        .flat_map(|section| layout.items(section))
+        .collect();
+    let default_items: Vec<EditorItem> = EditorSection::ALL
+        .into_iter()
+        .flat_map(EditorItem::defaults)
+        .collect();
+    if items.iter().map(|(item, _)| *item).ne(default_items) {
+        let names: Vec<&str> = items.iter().map(|(item, _)| item.name()).collect();
+        text.push_str(&format!("{EDITOR_ITEM_ORDER} = {}\n", names.join(", ")));
+    }
+    let hidden_sections: Vec<&str> = sections
+        .iter()
+        .filter(|(_, shown)| !*shown)
+        .map(|(section, _)| section_name(*section))
+        .collect();
+    if !hidden_sections.is_empty() {
+        text.push_str(&format!(
+            "{EDITOR_HIDDEN_SECTIONS} = {}\n",
+            hidden_sections.join(", ")
+        ));
+    }
+    let hidden_items: Vec<&str> = items
+        .iter()
+        .filter(|(_, shown)| !*shown)
+        .map(|(item, _)| item.name())
+        .collect();
+    if !hidden_items.is_empty() {
+        text.push_str(&format!(
+            "{EDITOR_HIDDEN_ITEMS} = {}\n",
+            hidden_items.join(", ")
+        ));
+    }
+    text
+}
+
+/// The entries of a layout line (T277), separated by commas and trimmed, an empty entry left
+/// out: those `from_name` knows in their order, and the names it does not know.
+fn layout_names<T>(value: &str, from_name: impl Fn(&str) -> Option<T>) -> (Vec<T>, Vec<String>) {
+    let mut known = Vec::new();
+    let mut unknown = Vec::new();
+    for name in value
+        .split(',')
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+    {
+        match from_name(name) {
+            Some(entry) => known.push(entry),
+            None => unknown.push(name.to_string()),
+        }
+    }
+    (known, unknown)
+}
+
+/// The problem of an unknown name on a layout line (T277).
+fn unknown_name(path: &Path, number: usize, key: &str, name: &str) -> String {
+    format!(
+        "settings file {}, line {number}: unknown name \"{name}\" for {key}, name skipped",
+        path.display()
+    )
 }
 
 /// The companion suffixes by default: `dop`, `pp3`, `on1` (U9-Q10).
@@ -930,6 +1054,7 @@ mod tests {
         settings_path, tidied_programs,
     };
     use crate::editor::EditorSection;
+    use crate::editor_layout::{EditorItem, EditorLayout};
     use crate::shell::{ColumnState, Theme};
     use crate::sort::{SORT_KEYS, SortKey, SortOrder};
 
@@ -2670,6 +2795,194 @@ mod tests {
         let (loaded, problems) = load_settings(&path);
         assert!(problems.is_empty(), "{problems:?}");
         assert_eq!(loaded.external_programs, vec![kept, also_kept]);
+    }
+
+    /// The item named `name`.
+    fn item(name: &str) -> EditorItem {
+        EditorItem::from_name(name).unwrap()
+    }
+
+    #[test]
+    fn a_changed_editor_layout_saves_and_loads_back_equal() {
+        let mut layout = EditorLayout::default();
+        layout.move_section_up(EditorSection::Licence);
+        layout.move_item_up(item("contact_info"));
+        layout.set_section_shown(EditorSection::Assignment, false);
+        layout.set_item_shown(item("city"), false);
+        let settings = Settings {
+            editor_layout: layout.clone(),
+            ..Settings::default()
+        };
+        let dir = TempDir::new();
+        let path = dir.0.join("settings.txt");
+        save_settings(&path, &settings).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            text.contains(
+                "editor_section_order = content, creator_rights, time_place, licence, \
+                 assignment, rating_label\n"
+            ),
+            "{text}"
+        );
+        assert!(
+            text.contains(
+                "\neditor_item_order = title, headline, description, alt_text, ext_description, \
+                 description_writer, keywords, person_shown, person_details, product_shown, \
+                 artwork, organisation_name, organisation_code, event, creator, contact_info, \
+                 creator_jobtitle, copyright,"
+            ),
+            "{text}"
+        );
+        assert!(
+            text.contains("editor_hidden_sections = assignment\n"),
+            "{text}"
+        );
+        assert!(text.contains("editor_hidden_items = city\n"), "{text}");
+        let (loaded, problems) = load_settings(&path);
+        assert!(problems.is_empty(), "{problems:?}");
+        assert_eq!(loaded.editor_layout, layout);
+        assert_eq!(loaded, settings);
+    }
+
+    #[test]
+    fn the_default_editor_layout_writes_none_of_its_keys() {
+        let dir = TempDir::new();
+        let path = dir.0.join("settings.txt");
+        save_settings(&path, &Settings::default()).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        for key in [
+            "editor_section_order",
+            "editor_item_order",
+            "editor_hidden_sections",
+            "editor_hidden_items",
+        ] {
+            assert!(!text.contains(key), "{key}: {text}");
+        }
+        // Only hidden items: the order lines stay out.
+        let mut layout = EditorLayout::default();
+        layout.set_item_shown(item("event"), false);
+        let settings = Settings {
+            editor_layout: layout,
+            ..Settings::default()
+        };
+        save_settings(&path, &settings).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains("editor_hidden_items = event\n"), "{text}");
+        for key in [
+            "editor_section_order",
+            "editor_item_order",
+            "editor_hidden_sections",
+        ] {
+            assert!(!text.contains(key), "{key}: {text}");
+        }
+        // A file without the lines gives the default layout.
+        let (_dir, path) = TempDir::with_file("# RawStride\ncreate_iim = true\n");
+        let (loaded, problems) = load_settings(&path);
+        assert!(problems.is_empty(), "{problems:?}");
+        assert!(loaded.editor_layout.is_default());
+    }
+
+    #[test]
+    fn an_unknown_layout_name_gives_one_problem_and_the_rest_of_the_line_is_used() {
+        let (_dir, path) = TempDir::with_file(
+            "# RawStride\neditor_hidden_items = city, rating, event, nope\n\
+             editor_section_order = licence, middle\n",
+        );
+        let (loaded, problems) = load_settings(&path);
+        assert_eq!(problems.len(), 3, "{problems:?}");
+        assert!(problems[0].contains("line 2"), "{problems:?}");
+        assert!(problems[0].contains("\"rating\""), "{problems:?}");
+        assert!(problems[0].contains("editor_hidden_items"), "{problems:?}");
+        assert!(problems[1].contains("line 2"), "{problems:?}");
+        assert!(problems[1].contains("\"nope\""), "{problems:?}");
+        assert!(problems[2].contains("line 3"), "{problems:?}");
+        assert!(problems[2].contains("\"middle\""), "{problems:?}");
+        let mut expected = EditorLayout::default();
+        expected.set_item_shown(item("city"), false);
+        expected.set_item_shown(item("event"), false);
+        expected.set_section_order(&[EditorSection::Licence]);
+        assert_eq!(loaded.editor_layout, expected);
+    }
+
+    #[test]
+    fn an_item_order_line_leaving_out_an_item_gives_it_its_default_place() {
+        let (_dir, path) = TempDir::with_file(
+            "# RawStride\neditor_item_order = sublocation, date_created, state, country, \
+             country_code, location_created, location_shown\n",
+        );
+        let (loaded, problems) = load_settings(&path);
+        assert!(problems.is_empty(), "{problems:?}");
+        let order: Vec<&str> = loaded
+            .editor_layout
+            .items(EditorSection::TimePlace)
+            .iter()
+            .map(|(item, _)| item.name())
+            .collect();
+        // City comes back right after Sublocation, the field before it by default.
+        assert_eq!(
+            order,
+            [
+                "sublocation",
+                "city",
+                "date_created",
+                "state",
+                "country",
+                "country_code",
+                "location_created",
+                "location_shown",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_hidden_line_before_an_order_line_gives_the_same_layout_as_after_it() {
+        let hidden = "editor_hidden_items = city, genre\neditor_hidden_sections = licence\n";
+        let order = "editor_item_order = genre, instructions, job_id, subject_code, scene_code, \
+                     about_cv_term, urgency, category, supplemental_categories, registry_entry, \
+                     city, sublocation\n\
+                     editor_section_order = licence, content, creator_rights, time_place, \
+                     assignment, rating_label\n";
+        let (_before_dir, before) = TempDir::with_file(&format!("# RawStride\n{hidden}{order}"));
+        let (_after_dir, after) = TempDir::with_file(&format!("# RawStride\n{order}{hidden}"));
+        let (from_before, problems) = load_settings(&before);
+        assert!(problems.is_empty(), "{problems:?}");
+        let (from_after, problems) = load_settings(&after);
+        assert!(problems.is_empty(), "{problems:?}");
+        assert_eq!(from_before.editor_layout, from_after.editor_layout);
+        let layout = &from_before.editor_layout;
+        assert!(!layout.is_shown(item("city")));
+        assert!(!layout.is_shown(item("genre")));
+        assert!(!layout.is_shown(item("image_creator")));
+        assert_eq!(
+            layout.sections().first(),
+            Some(&(EditorSection::Licence, false))
+        );
+        assert_eq!(
+            layout.items(EditorSection::Assignment).first(),
+            Some(&(item("genre"), false))
+        );
+    }
+
+    #[test]
+    fn an_empty_layout_value_gives_the_default_and_the_last_line_wins() {
+        let (_dir, path) = TempDir::with_file(
+            "# RawStride\neditor_hidden_items =\neditor_hidden_sections =\n\
+             editor_item_order =\neditor_section_order =\n",
+        );
+        let (loaded, problems) = load_settings(&path);
+        assert!(problems.is_empty(), "{problems:?}");
+        assert!(loaded.editor_layout.is_default());
+
+        // A key given twice: the last line wins.
+        let (_dir, path) = TempDir::with_file(
+            "# RawStride\neditor_hidden_items = city\neditor_hidden_items = event\n\
+             editor_section_order = licence\neditor_section_order =\n",
+        );
+        let (loaded, problems) = load_settings(&path);
+        assert!(problems.is_empty(), "{problems:?}");
+        let mut expected = EditorLayout::default();
+        expected.set_item_shown(item("event"), false);
+        assert_eq!(loaded.editor_layout, expected);
     }
 
     #[test]
