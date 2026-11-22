@@ -10,6 +10,8 @@
 //! TIFF or DNG, D8), and every tag that was added, removed or changed must be one the
 //! write plan wrote or one a write is known to change (file data, pointers, tool data; the keys of
 //! an Exif block that an `IFD0:` write creates, only added, ADR 0024 §2.6).
+//! [`ExifTool::image_data_hash`] is a narrow read of the image data hash alone, for the safe
+//! write's final read (ADR 0007 §9.6 point 1, Q17).
 //!
 //! Nothing here writes a file; the safe write (T86) uses these checks.
 
@@ -44,8 +46,22 @@ const SNAPSHOT_ARGS: &[&str] = &[
     "-warning",
 ];
 
+/// The ExifTool arguments of the narrow read of the image data hash, before the file name (ADR
+/// 0007 §9.6 point 1, Q17). `-Error` makes a file ExifTool cannot parse give its error in the
+/// answer: with the hash alone it gives only `SourceFile` on standard output.
+const IMAGE_HASH_ARGS: &[&str] = &[
+    "-j",
+    "-G1",
+    "-api",
+    "ImageHashType=SHA256",
+    "-ImageDataHash",
+    "-Error",
+];
+
 const FILE_TYPE: &str = "File:FileType";
 const IMAGE_DATA_HASH: &str = "File:ImageDataHash";
+/// ExifTool's error for a file it cannot parse ("File format error", "File is empty").
+const EXIFTOOL_ERROR: &str = "ExifTool:Error";
 const VALIDATE: &str = "ExifTool:Validate";
 /// Keys never put in the listing: the file name ExifTool was given, the warning (JSON keeps only
 /// one of several; the count is in `validate`) and the validation counts.
@@ -245,7 +261,9 @@ fn expected_type(kind: FileKind) -> &'static str {
 impl ExifTool {
     /// The snapshot of `file` (see the module comment): `size` and `modified` from the file
     /// system, everything else from one ExifTool call. A missing or unreadable file is the error
-    /// ExifTool reports.
+    /// ExifTool reports. The safe write takes it of the original and of the copy; its final read
+    /// after the replace asks for the hash alone ([`ExifTool::image_data_hash`], ADR 0007 §9.6
+    /// point 1, Q17).
     pub fn snapshot(&mut self, file: &Path) -> Result<FileSnapshot> {
         let mut args: Vec<String> = SNAPSHOT_ARGS.iter().map(|arg| arg.to_string()).collect();
         args.push(file.to_string_lossy().into_owned());
@@ -254,6 +272,26 @@ impl ExifTool {
         let metadata = std::fs::metadata(file)?;
         snapshot_from_json(object, metadata.len(), metadata.modified()?)
     }
+
+    /// The SHA-256 hash of `file`'s image data, as the snapshot's `image_data_hash` gives it, from
+    /// one ExifTool call that asks for nothing else (ADR 0007 §9.6 point 1, Q17). `None` when
+    /// ExifTool gives no hash (an XMP sidecar, a text file). A missing file, or one ExifTool cannot
+    /// parse, is the error ExifTool reports.
+    pub fn image_data_hash(&mut self, file: &Path) -> Result<Option<String>> {
+        let mut args: Vec<String> = IMAGE_HASH_ARGS.iter().map(|arg| arg.to_string()).collect();
+        args.push(file.to_string_lossy().into_owned());
+        let answer = self.execute(&args)?;
+        hash_from_json(&json_object(&answer, file)?)
+    }
+}
+
+/// The image data hash from ExifTool's object for the file; `ExifTool:Error` is an error with
+/// ExifTool's text.
+fn hash_from_json(object: &Map<String, Json>) -> Result<Option<String>> {
+    if let Some(error) = object.get(EXIFTOOL_ERROR) {
+        return Err(Error::ExifTool(json_text(error)));
+    }
+    Ok(object.get(IMAGE_DATA_HASH).map(json_text))
 }
 
 /// The object of the one file in ExifTool's JSON answer. No output means ExifTool could not read
@@ -1165,6 +1203,39 @@ mod tests {
         assert!(matches!(
             snapshot_from_json(object, 1, SystemTime::UNIX_EPOCH),
             Err(Error::ExifTool(m)) if m.contains("Validate")
+        ));
+    }
+
+    #[test]
+    fn the_narrow_read_asks_for_the_sha256_image_data_hash_and_the_error_only() {
+        assert!(IMAGE_HASH_ARGS.contains(&"-ImageDataHash"));
+        assert!(IMAGE_HASH_ARGS.contains(&"-Error"));
+        assert!(
+            IMAGE_HASH_ARGS
+                .windows(2)
+                .any(|pair| pair == ["-api", "ImageHashType=SHA256"]),
+            "{IMAGE_HASH_ARGS:?}"
+        );
+        for wide in ["-all", "-validate", "-warning"] {
+            assert!(
+                !IMAGE_HASH_ARGS
+                    .iter()
+                    .any(|arg| arg.eq_ignore_ascii_case(wide)),
+                "{wide} in {IMAGE_HASH_ARGS:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_narrow_read_takes_the_hash_and_refuses_exiftools_error() {
+        let hash = object(r#"{"SourceFile": "a.jpg", "File:ImageDataHash": "abc"}"#);
+        assert_eq!(hash_from_json(&hash).unwrap().as_deref(), Some("abc"));
+        let none = object(r#"{"SourceFile": "s.xmp"}"#);
+        assert_eq!(hash_from_json(&none).unwrap(), None);
+        let error = object(r#"{"SourceFile": "a.dng", "ExifTool:Error": "File format error"}"#);
+        assert!(matches!(
+            hash_from_json(&error),
+            Err(Error::ExifTool(m)) if m == "File format error"
         ));
     }
 

@@ -1,4 +1,4 @@
-# T264. ADR 0007 §9.6 Q19: the DNG image check timed step by step, and which check refuses a damaged copy (pw-imagecheck example) — Blocked: waits for T263
+# T264. ADR 0007 §9.6 Q19: the DNG image check timed step by step, and which check refuses a damaged copy (pw-imagecheck example) — Open
 
 - **Why:** ADR 0007 revision 29 (§9.6 point 3, Q19; approved by the owner 2026-11-22): the DNG
   image check (§9.3 point 4) is measured before anything about it is decided. T261 found that
@@ -83,3 +83,4 @@
 | Date | Status | Note |
 |---|---|---|
 | 2026-11-22 | Blocked | Written after ADR 0007 revision 29 (§9.6 point 3, Q19), approved by the owner 2026-11-22; waits for T263 (the order of §9.6, and point 3 uses `ExifTool::image_data_hash`). T265 follows it (the same analysis) |
+| 2026-11-22 | Open | T263 done (`ExifTool::image_data_hash` is in `verify.rs`) |

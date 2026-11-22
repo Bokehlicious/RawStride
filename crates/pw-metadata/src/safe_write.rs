@@ -37,8 +37,9 @@
 //!   keeps the time of the write as its modification time (§9.4, Q14).
 //! - **9.4, replace:** `ReplaceFileW` with the backup `<name>.pwbak-<hex>.<ext>` (or two renames
 //!   on volumes without it), or a move without overwriting for a new sidecar; then a final read
-//!   (size and `ImageDataHash` equal the copy's), the backup is deleted and the journal entry
-//!   ended.
+//!   (size and `ImageDataHash` equal the copy's; the size from the file system, the hash from an
+//!   ExifTool call that asks for it alone, [`ExifTool::image_data_hash`], ADR 0007 §9.6 point 1,
+//!   Q17), the backup is deleted and the journal entry ended.
 //! - **Failures** ([`SafeWriteError`]) leave no `pwtmp` file. When the original is intact the
 //!   journal entry is ended. When the original is under the backup name, the backup is renamed
 //!   back once; if that fails the entry is kept for [`Journal::recover`]. A failed final check
@@ -534,19 +535,25 @@ impl Transaction<'_> {
         })
     }
 
-    /// The final read (§9.4): the target's size and image data hash are the verified copy's.
+    /// The final read (§9.4): the target's size and image data hash are the verified copy's. The
+    /// size comes from the file system and the hash from a read that asks for it alone
+    /// ([`ExifTool::image_data_hash`], ADR 0007 §9.6 point 1, Q17), not a full snapshot.
     fn final_check(&mut self, written: &FileSnapshot) -> Result<(), String> {
-        let now = self
+        let unreadable = |e: String| format!("the written file could not be read: {e}");
+        let size = std::fs::metadata(self.target)
+            .map_err(|e| unreadable(e.to_string()))?
+            .len();
+        let hash = self
             .et
-            .snapshot(self.target)
-            .map_err(|e| format!("the written file could not be read: {e}"))?;
-        if now.size != written.size {
+            .image_data_hash(self.target)
+            .map_err(|e| unreadable(e.to_string()))?;
+        if size != written.size {
             return Err(format!(
                 "the written file has {} bytes, the verified copy had {}",
-                now.size, written.size
+                size, written.size
             ));
         }
-        if now.image_data_hash != written.image_data_hash {
+        if hash != written.image_data_hash {
             return Err(
                 "the image data hash of the written file differs from the verified copy's"
                     .to_string(),

@@ -218,6 +218,46 @@ The share of `check_copy` in the edit's total (read + write), on C::
 7. **Not measured:** the shell's work after a write (the new reads, the view and the thumbnails),
    the worker's queue and events, and a cold cache (T261, "Not in this task").
 
+## After T263 (Q17)
+
+- Build: `cargo run --release -p pw-imagecheck --example write_timing` (unchanged), at commit
+  `192aec9` (`feature/gui-workspace`; its code is `2322baf`'s) with T263 uncommitted: the final read after the replace
+  takes the size from the file system and asks ExifTool for `ImageDataHash` alone
+  (`ExifTool::image_data_hash`) instead of a full snapshot (ADR 0007 §9.6 point 1, Q17).
+  ExifTool 13.59 (`exiftool` on PATH); its start and first answer took 186 ms.
+- Measured 2026-11-22 on thanos, under the same conditions as "Measured in T261": sources in
+  `D:\PhotoWorkflowData\RAW`, work folder a new folder under `%TEMP%` on C:, **warm cache**,
+  three runs per file, medians. The three files in this order, in one run of the program; all 9
+  runs wrote successfully.
+
+`write_safely`, medians in ms (before: the "Measured in T261" table, work folder on C:):
+
+| File | Kind | MB | Before (T261) | After (T263) | Difference |
+|---|---|---:|---:|---:|---:|
+| `TN006331.JPG` | JPEG | 13.5 | 626 | 594 | −32 |
+| `IMG_20261026_062851.dng` | DNG | 11.7 | 462 | 449 | −13 |
+| `TN002683.tif` | TIFF | 41.2 | 1,304 | 1,279 | −25 |
+
+The single runs after: JPEG 719, 594, 594 ms (the first is the first JPEG in a new ExifTool
+process, T261's interpretation 4); DNG 449, 443, 470 ms (of which `check_copy` 264, 258,
+277 ms); TIFF 1,240, 1,295, 1,279 ms. The snapshot of the target alone was the same as in T261
+(187, 47 and 210 ms against 191, 48 and 212 ms).
+
+1. **Inference:** the narrow final read makes each write a little shorter: about 30 ms (5 %) for
+   the camera JPEG, about 13 ms (3 %) for the DNG (14 ms without the image check: 199 → 185 ms)
+   and about 25 ms (2 %) for the 41 MB TIFF. For the DNG this is about the estimate of 17 ms. For
+   the JPEG it is **clearly smaller than the estimate** of 80–110 ms in T263's text, and for the
+   TIFF it is smaller than the spread between its runs (55 ms), so that figure is uncertain.
+2. **Hypothesis:** the estimate took the cost of `-all`, `-validate` and `-warning` from the table
+   "What a snapshot of the original costs without parts of its arguments", which removes one part
+   at a time, so it does not show what the hash alone costs. Most of a snapshot of a JPEG or TIFF
+   is reading the image data for the hash, which the narrow read still does; the listing of the
+   other tags is cheaper than the difference between the rows suggested. Could be confirmed by
+   timing `ExifTool::image_data_hash` against `ExifTool::snapshot` on the same files.
+3. The check itself is unchanged: the size and the SHA-256 image data hash are compared with the
+   verified copy's as before, and T263's ignored test showed that the narrow read gives the same
+   hash as the snapshot for every JPEG, TIFF and DNG in `D:\PhotoWorkflowData\RAW` (26 files).
+
 ## Appendix: the timing script
 
 ```python

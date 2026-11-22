@@ -352,3 +352,95 @@ fn every_real_dng_written_with_a_city_plan_passes() {
     let _ = std::fs::remove_dir_all(&dir);
     assert!(failures.is_empty(), "{failures:#?}");
 }
+
+/// The narrow read of the image data hash (ADR 0007 §9.6 point 1, Q17, T263) gives what the
+/// snapshot gives: the hash of the small JPEG, and `None` for an XMP sidecar made from it with
+/// `-o`. A missing file is an error, and so is a file ExifTool cannot parse (four bytes named
+/// `.dng`), with ExifTool's text.
+#[test]
+fn the_narrow_image_data_hash_read_gives_the_snapshots_hash_and_refuses_unreadable_files() {
+    let mut et = exiftool();
+    let dir = temp_dir("hash");
+    let file = dir.join("bild ä.jpg");
+    std::fs::write(&file, SMALL).unwrap();
+    let hash = et.image_data_hash(&file).unwrap();
+    assert!(hash.is_some(), "no hash for the small JPEG");
+    assert_eq!(hash, take_snapshot(&mut et, &file).image_data_hash);
+
+    let sidecar = dir.join("bild ä.xmp");
+    let out = et
+        .execute(&[
+            "-o".to_string(),
+            sidecar.to_string_lossy().into_owned(),
+            file.to_string_lossy().into_owned(),
+        ])
+        .unwrap();
+    assert!(sidecar.is_file(), "ExifTool made no sidecar: {out}");
+    let sidecar_hash = et.image_data_hash(&sidecar).unwrap();
+    assert_eq!(sidecar_hash, None);
+    assert_eq!(
+        sidecar_hash,
+        take_snapshot(&mut et, &sidecar).image_data_hash
+    );
+
+    match et.image_data_hash(&dir.join("saknas.jpg")) {
+        Err(pw_metadata::Error::ExifTool(message)) => {
+            assert!(message.contains("not found"), "{message}");
+        }
+        other => panic!("expected ExifTool's error for a missing file, got {other:?}"),
+    }
+
+    let broken = dir.join("trasig.dng");
+    std::fs::write(&broken, [0x00, 0x01, 0x02, 0x03]).unwrap();
+    match et.image_data_hash(&broken) {
+        Err(pw_metadata::Error::ExifTool(message)) => {
+            assert!(message.contains("File format error"), "{message}");
+        }
+        other => panic!("expected ExifTool's error for an unparsable file, got {other:?}"),
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Every JPEG, TIFF and DNG directly in `PW_TESTDATA`: the narrow read of the image data hash
+/// (T263) is `Some` and equal to the snapshot's, so the safe write's final read compares the same
+/// value as before. The files are only read.
+#[test]
+#[ignore = "needs real camera files: set PW_TESTDATA and run with --ignored"]
+fn every_real_image_has_the_same_hash_from_the_narrow_read_as_from_the_snapshot() {
+    let Some(testdata) = std::env::var_os("PW_TESTDATA") else {
+        panic!("PW_TESTDATA is not set; set it to the real camera test-data folder");
+    };
+    let testdata = PathBuf::from(testdata);
+    let mut images: Vec<PathBuf> = std::fs::read_dir(&testdata)
+        .unwrap_or_else(|e| panic!("cannot read PW_TESTDATA {}: {e}", testdata.display()))
+        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .filter(|path| {
+            path.is_file()
+                && path.extension().is_some_and(|e| {
+                    ["jpg", "jpeg", "tif", "tiff", "dng"]
+                        .iter()
+                        .any(|kind| e.eq_ignore_ascii_case(kind))
+                })
+        })
+        .collect();
+    images.sort();
+    assert!(
+        !images.is_empty(),
+        "no JPEG, TIFF or DNG in PW_TESTDATA {}",
+        testdata.display()
+    );
+
+    let mut et = exiftool();
+    let mut failures = Vec::new();
+    for image in &images {
+        let name = image.file_name().unwrap().to_string_lossy().into_owned();
+        let narrow = et.image_data_hash(image);
+        let snapshot = take_snapshot(&mut et, image).image_data_hash;
+        println!("{name}: {narrow:?}");
+        match narrow {
+            Ok(Some(hash)) if Some(&hash) == snapshot.as_ref() => {}
+            other => failures.push(format!("{name}: narrow {other:?}, snapshot {snapshot:?}")),
+        }
+    }
+    assert!(failures.is_empty(), "{failures:#?}");
+}
