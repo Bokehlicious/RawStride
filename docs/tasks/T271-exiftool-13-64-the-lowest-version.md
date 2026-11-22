@@ -1,4 +1,4 @@
-# T271. ADR 0007 §9.7 Q20: ExifTool 13.64 is the lowest version the app writes with (pw-metadata, pw-loupe) — Blocked: waits for the owner's ExifTool 13.64 on PATH
+# T271. ADR 0007 §9.7 Q20: ExifTool 13.64 is the lowest version the app writes with (pw-metadata, pw-loupe) — Open
 
 - **Why:** ADR 0007 revision 30 (§9.7 point 1, Q20; approved by the owner 2026-11-22). The safe
   write will drop the digest pass and the TIFF restart (T272), which only ExifTool 13.64 or newer
@@ -67,3 +67,4 @@
 | 2026-11-22 | Blocked | Cold read: the fake's 13.59 in `test_support.rs` (code and two doc comments) becomes 13.64, since the `slow` mode's writes in `write_pool.rs` and the pooled worker tests depend on it; the two tests that only report a version keep 13.59; only the `MIN_EXIFTOOL_VERSION` asserts change in `exiftool.rs`'s ordering and `to_string` tests; a new `shell_text.rs` assert for 13.59; `docs/test-inventory.md` is certain to change; ADR 0007 §11 and D9 are the reviewer's. `worker.rs`'s real-ExifTool version test needs 13.64 on PATH (the owner's precondition) |
 | 2026-11-22 | Blocked | Chain review: see T270's log (the owner's install of 13.64 beside 13.59; `PW_EXIFTOOL_PL` unset and `exiftool -ver` logged) |
 | 2026-11-22 | Blocked | T270 done (13.64 shipped, pinned and in CI). Waits for the owner to put ExifTool 13.64 first on PATH ("Before this task") |
+| 2026-11-22 | Open | The owner's ExifTool 13.64 is first on PATH (`%LOCALAPPDATA%\Programs\ExifTool-13.64`, before the kept 13.59 folder); after a restart `exiftool -ver` answers 13.64 |
