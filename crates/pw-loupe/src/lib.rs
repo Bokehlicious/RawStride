@@ -163,25 +163,27 @@ pub use ratings::{RatingKey, RatingRefused, RatingStore, RatingWriter, apply, ra
 pub use selection::Selection;
 pub use settings::{
     ExternalProgram, MAX_EXTERNAL_PROGRAMS, SavedLibrary, Settings, ShellSettings, WindowRect,
-    load_settings, load_settings_and_library, save_settings, save_settings_with_library,
-    settings_path, tidied_programs,
+    load_settings, load_settings_and_library, parse_companion_suffixes, save_settings,
+    save_settings_with_library, settings_path, tidied_programs,
 };
 pub use shell::{
     AUTHORS, COLLAPSED_WIDTH, COMMIT, ColumnState, Command, HIDE_KEY, IMAGE_CONTEXT_MENU, KeyChord,
-    MENUS, Menu, MenuEntry, MenuItem, MenuKind, NON_TEXT_CONTRAST, OPEN_IN_KEY, Palette,
-    REPOSITORY, STATUS_TEXT_SIZE, SettingsPage, StartWindow, SubmenuKind, TEXT_CONTRAST, THEMES,
-    Theme, UNKNOWN_COMMIT, VERSION, Where, apply_text_sizes, clamp_column_width,
-    column_width_range, contrast_ratio, font_definitions, image_area, menu_items, menu_key,
-    non_text_pairs, palette, rect_on_a_screen, start_window, text_pairs, visuals,
+    KeyPress, KeySlot, MENUS, Menu, MenuEntry, MenuItem, MenuKind, NON_TEXT_CONTRAST, OPEN_IN_KEY,
+    Palette, REPOSITORY, STATUS_TEXT_SIZE, SettingsPage, StartWindow, SubmenuKind, TEXT_CONTRAST,
+    THEMES, Theme, UNKNOWN_COMMIT, VERSION, Where, apply_text_sizes, clamp_column_width,
+    column_width_range, companion_suffixes_field, contrast_ratio, font_definitions, image_area,
+    menu_items, menu_key, non_text_pairs, palette, rect_on_a_screen, start_window, take_key_press,
+    text_pairs, visuals,
 };
 pub use shell_text::{
-    AboutText, SettingsText, ShellText, about_text, command_text, exiftool_message,
-    external_program_limit_text, fallback_text, folder_changed_text, folder_gone_text, key_text,
-    menu_text, no_images_text, open_error_text, path_resolution_error_text, prune_error_text,
-    recovery_text, removed_by_another_program_text, settings_save_error_text, settings_text,
-    shell_text, sort_button_text, sort_direction_hover, sort_direction_text, sort_key_text,
-    sorting_text, status_line_text, submenu_text, theme_text, thumb_button_hover_text,
-    window_title,
+    AboutText, KeyPageGroup, SettingsText, ShellText, about_text, command_text, exiftool_message,
+    external_program_limit_text, fallback_text, folder_changed_text, folder_gone_text,
+    key_action_text, key_group_text, key_page_groups, key_refusal_text, key_text,
+    keys_save_error_text, menu_text, no_images_text, open_error_text, path_resolution_error_text,
+    prune_error_text, recovery_text, removed_by_another_program_text, settings_save_error_text,
+    settings_text, shell_text, sort_button_text, sort_direction_hover, sort_direction_text,
+    sort_key_text, sorting_text, status_line_text, submenu_text, theme_text,
+    thumb_button_hover_text, window_title,
 };
 pub use sort::{
     CaptureRead, CaptureReader, CaptureTime, CaptureTimes, SORT_KEYS, SortKey, SortOrder, SortPlan,

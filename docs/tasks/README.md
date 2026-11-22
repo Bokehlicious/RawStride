@@ -87,7 +87,6 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status |
 |---|---|---|
-| [T281](T281-keyboard-shortcuts-page.md) | The Settings page Keyboard Shortcuts and the companion suffixes' field | Open |
 
 ## Writing a task (owner and reviewer)
 

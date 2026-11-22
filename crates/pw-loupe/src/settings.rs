@@ -833,8 +833,9 @@ fn default_companion_suffixes() -> Vec<String> {
 
 /// The suffixes of a `companion_suffixes` line, separated by commas: each trimmed and in lower
 /// case; an empty entry, or one holding `.`, `/`, `\`, `:` or a space, is dropped. A line with no
-/// valid entry gives the default.
-fn parse_companion_suffixes(value: &str) -> Vec<String> {
+/// valid entry gives the default. The Settings window's field Companion File Suffixes is read the
+/// same way (ADR 0017 U8-Q10, T281).
+pub fn parse_companion_suffixes(value: &str) -> Vec<String> {
     let suffixes: Vec<String> = value
         .split(',')
         .map(|entry| entry.trim().to_lowercase())

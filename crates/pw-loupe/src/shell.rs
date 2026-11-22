@@ -5,7 +5,7 @@
 
 use egui::{Color32, Key};
 
-use crate::keymap::{KeyAction, KeyMap};
+use crate::keymap::{KeyAction, KeyMap, KeyRefusal};
 use crate::settings::{ShellSettings, WindowRect};
 use crate::sort::SortKey;
 
@@ -51,15 +51,80 @@ pub enum SettingsPage {
     ExternalPrograms,
     /// The sections and items of the metadata window and their order (step U10b).
     MetadataWindow,
+    /// The key map: each action's two keys, changed and cleared (ADR 0017 U8-Q7, T281).
+    KeyboardShortcuts,
 }
 
 impl SettingsPage {
     /// The pages in the order of their buttons.
-    pub const ALL: [SettingsPage; 3] = [
+    pub const ALL: [SettingsPage; 4] = [
         SettingsPage::General,
         SettingsPage::ExternalPrograms,
         SettingsPage::MetadataWindow,
+        SettingsPage::KeyboardShortcuts,
     ];
+}
+
+/// A key slot of the page Keyboard Shortcuts (ADR 0017 U8-Q7, T281): an action and its first (0)
+/// or second (1) key.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct KeySlot {
+    pub action: KeyAction,
+    pub slot: usize,
+}
+
+/// What a key event did to a waiting Change of the page Keyboard Shortcuts (T281).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum KeyPress {
+    /// Not a first press of a usable key (a release, a repeat, a modifier key itself): the Change
+    /// still waits.
+    Skipped,
+    /// Escape: the Change ends, the map unchanged.
+    Cancelled,
+    /// The chord became the slot's key; the Change ends.
+    Taken,
+    /// The chord was refused; the map is unchanged and the Change still waits for another key.
+    Refused(KeyRefusal),
+}
+
+/// Takes a key event for the waiting Change `wait` on `map`, the Settings window's copy of the key
+/// map (ADR 0017 U8-Q4, U8-Q5, U8-Q7, T281). Only the first press of a key that is not a modifier
+/// itself counts; its chord is built as the key loop builds it (`ctrl` is Ctrl or Command).
+/// Escape, with any modifiers, cancels; any other chord is set with [`KeyMap::set`] or refused.
+pub fn take_key_press(map: &mut KeyMap, wait: KeySlot, event: &egui::Event) -> KeyPress {
+    let egui::Event::Key {
+        key,
+        pressed: true,
+        repeat: false,
+        modifiers,
+        ..
+    } = event
+    else {
+        return KeyPress::Skipped;
+    };
+    if crate::keymap::is_modifier_key(*key) {
+        return KeyPress::Skipped;
+    }
+    if *key == Key::Escape {
+        return KeyPress::Cancelled;
+    }
+    let chord = KeyChord {
+        key: *key,
+        ctrl: modifiers.ctrl || modifiers.command,
+        shift: modifiers.shift,
+        alt: modifiers.alt,
+    };
+    match map.set(wait.action, wait.slot, chord) {
+        Ok(()) => KeyPress::Taken,
+        Err(refusal) => KeyPress::Refused(refusal),
+    }
+}
+
+/// The text of the field Companion File Suffixes when the Settings window opens (ADR 0017 U8-Q10,
+/// T281): the suffixes joined by `, `, as `settings.txt` writes them. Save reads the field back
+/// with [`crate::settings::parse_companion_suffixes`].
+pub fn companion_suffixes_field(suffixes: &[String]) -> String {
+    suffixes.join(", ")
 }
 
 /// Whether a side column is shown in full or as a thin strip with its open button.
@@ -1861,5 +1926,125 @@ mod tests {
             missing.iter().any(|text| text == "Fit ↔ 100% (Z)"),
             "egui's default fonts should miss the arrow of \"Fit ↔ 100% (Z)\"; missing: {missing:?}"
         );
+    }
+
+    /// A key event as egui reports it.
+    fn key_event(key: Key, pressed: bool, repeat: bool, modifiers: egui::Modifiers) -> egui::Event {
+        egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed,
+            repeat,
+            modifiers,
+        }
+    }
+
+    /// A waiting Change on the page Keyboard Shortcuts takes the first press of a key that is
+    /// not a modifier: taken, refused (the map unchanged, still waiting), Escape cancels; a
+    /// release, a repeat, a modifier key alone and other events are skipped (ADR 0017 U8-Q4,
+    /// U8-Q5, U8-Q7, T281).
+    #[test]
+    fn take_key_press_takes_refuses_cancels_and_skips() {
+        let none = egui::Modifiers::NONE;
+        let fit = KeySlot {
+            action: KeyAction::Fit,
+            slot: 0,
+        };
+        let q = KeyChord {
+            key: Key::Q,
+            ctrl: false,
+            shift: false,
+            alt: false,
+        };
+        let mut map = KeyMap::default();
+        let before = map.clone();
+
+        // Skipped: the map unchanged.
+        for event in [
+            key_event(Key::Q, false, false, none),
+            key_event(Key::Q, true, true, none),
+            key_event(Key::ShiftLeft, true, false, egui::Modifiers::SHIFT),
+            key_event(Key::ControlRight, true, false, egui::Modifiers::CTRL),
+            key_event(Key::AltLeft, true, false, egui::Modifiers::ALT),
+            egui::Event::Text("q".to_owned()),
+        ] {
+            assert_eq!(take_key_press(&mut map, fit, &event), KeyPress::Skipped);
+        }
+        assert_eq!(map, before);
+
+        // Escape cancels, with or without modifiers.
+        for modifiers in [none, egui::Modifiers::SHIFT] {
+            let event = key_event(Key::Escape, true, false, modifiers);
+            assert_eq!(take_key_press(&mut map, fit, &event), KeyPress::Cancelled);
+        }
+        assert_eq!(map, before);
+
+        // Refused: the map unchanged.
+        let ctrl_alt = egui::Modifiers {
+            alt: true,
+            ctrl: true,
+            ..none
+        };
+        let refused = [
+            (
+                key_event(Key::K, true, false, ctrl_alt),
+                KeyRefusal::CtrlAlt,
+            ),
+            (
+                key_event(Key::ArrowLeft, true, false, none),
+                KeyRefusal::Fixed,
+            ),
+            (key_event(Key::Tab, true, false, none), KeyRefusal::Fixed),
+            (
+                key_event(Key::C, true, false, none),
+                KeyRefusal::Taken(KeyAction::Compare),
+            ),
+        ];
+        for (event, refusal) in refused {
+            assert_eq!(
+                take_key_press(&mut map, fit, &event),
+                KeyPress::Refused(refusal)
+            );
+        }
+        assert_eq!(map, before);
+
+        // Taken: Q becomes Fit's first key.
+        let event = key_event(Key::Q, true, false, none);
+        assert_eq!(take_key_press(&mut map, fit, &event), KeyPress::Taken);
+        assert_eq!(map.keys(KeyAction::Fit), [Some(q), None]);
+
+        // Command counts as Ctrl, as in the key loop; Ctrl+Q fills the second slot.
+        let second = KeySlot { slot: 1, ..fit };
+        let event = key_event(Key::Q, true, false, egui::Modifiers::COMMAND);
+        assert_eq!(take_key_press(&mut map, second, &event), KeyPress::Taken);
+        assert_eq!(
+            map.keys(KeyAction::Fit),
+            [Some(q), Some(KeyChord { ctrl: true, ..q })]
+        );
+    }
+
+    /// The field Companion File Suffixes is written as `settings.txt` writes the list and read
+    /// back by the same rule; an empty field gives the default list (ADR 0017 U8-Q10, T281).
+    #[test]
+    fn the_companion_suffixes_field_is_written_and_read_back() {
+        use crate::settings::parse_companion_suffixes;
+        let list = |suffixes: &[&str]| -> Vec<String> {
+            suffixes.iter().map(|suffix| (*suffix).to_owned()).collect()
+        };
+        for (suffixes, text) in [
+            (list(&["dop", "pp3", "on1"]), "dop, pp3, on1"),
+            (list(&["dop", "xmp2"]), "dop, xmp2"),
+        ] {
+            let field = companion_suffixes_field(&suffixes);
+            assert_eq!(field, text);
+            assert_eq!(parse_companion_suffixes(&field), suffixes);
+        }
+        for empty in ["", "   ", " , "] {
+            assert_eq!(
+                parse_companion_suffixes(empty),
+                list(&["dop", "pp3", "on1"]),
+                "{empty:?}"
+            );
+        }
     }
 }

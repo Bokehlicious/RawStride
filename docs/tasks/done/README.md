@@ -288,3 +288,4 @@ was when the task was done, so "this file", "below" and "the Log" in T1–T115 m
 | [T279](T279-key-map-model.md) | The key map: actions, default keys, lookup per view and `keys.txt` (model) (pw-loupe) |
 | [T280](T280-shell-asks-key-map.md) | The shell asks the key map, and the menus and texts show its keys (pw-loupe) |
 | [T282](T282-code-of-conduct-and-pr-template.md) | A code of conduct and a pull request template (docs, `.github/`) |
+| [T281](T281-keyboard-shortcuts-page.md) | The Settings page Keyboard Shortcuts and the companion suffixes' field (pw-loupe) |

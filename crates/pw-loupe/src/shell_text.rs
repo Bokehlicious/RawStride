@@ -13,6 +13,7 @@ use pw_metadata::journal::Recovered;
 use pw_metadata::{MIN_EXIFTOOL_VERSION, ToolVersion};
 
 use crate::external_text::{open_in_another_text, program_number_text};
+use crate::keymap::{KeyAction, KeyGroup, KeyRefusal};
 use crate::monitor_profile::ProfileSource;
 use crate::rating_text::label_name;
 use crate::shell::{Command, KeyChord, MenuKind, SettingsPage, SubmenuKind, Theme, UNKNOWN_COMMIT};
@@ -297,8 +298,21 @@ pub enum SettingsText {
     ProgramsFilter,
     /// The name of a page's button at the top of the window (ADR 0017 U10b-Q6, T278).
     Page(SettingsPage),
-    /// The button under the page Metadata Window that sets its default layout back (T278).
+    /// The button under the page Metadata Window that sets its default layout back (T278); also
+    /// the one under the page Keyboard Shortcuts that sets every action's default keys back (T281).
     RestoreDefaults,
+    /// The button of a key slot on the page Keyboard Shortcuts that waits for a new key (T281).
+    ChangeKey,
+    /// The button of a key slot that takes its key away (T281).
+    ClearKey,
+    /// A key slot while its Change waits for a key (T281).
+    PressKey,
+    /// A key slot without a key (T281).
+    NoKey,
+    /// The label of the field on the page General (ADR 0017 U8-Q10, T281).
+    CompanionSuffixes,
+    /// The small text under that field (T281).
+    CompanionSuffixesNote,
 }
 
 /// The text of `text` in the settings window.
@@ -323,8 +337,84 @@ pub fn settings_text(text: SettingsText) -> &'static str {
         SettingsText::Page(SettingsPage::General) => "General",
         SettingsText::Page(SettingsPage::ExternalPrograms) => "External Programs",
         SettingsText::Page(SettingsPage::MetadataWindow) => "Metadata Window",
+        SettingsText::Page(SettingsPage::KeyboardShortcuts) => "Keyboard Shortcuts",
         SettingsText::RestoreDefaults => "Restore Defaults",
+        SettingsText::ChangeKey => "Change",
+        SettingsText::ClearKey => "Clear",
+        SettingsText::PressKey => "Press a key…",
+        SettingsText::NoKey => "–",
+        SettingsText::CompanionSuffixes => "Companion File Suffixes",
+        SettingsText::CompanionSuffixesNote => {
+            "Files with these suffixes move with an image; empty means the default"
+        }
     }
+}
+
+/// The message shown when `keys.txt` could not be saved; the keys still apply until RawStride
+/// closes (ADR 0017 U8-Q6, T281).
+pub fn keys_save_error_text(error: &str) -> String {
+    format!("The keyboard shortcuts could not be saved: {error}")
+}
+
+/// Why the page Keyboard Shortcuts refused a key (ADR 0017 U8-Q4, U8-Q5, T281); a taken key names
+/// the action that has it.
+pub fn key_refusal_text(refusal: KeyRefusal) -> String {
+    match refusal {
+        KeyRefusal::CtrlAlt => "Ctrl+Alt is not allowed".to_owned(),
+        KeyRefusal::Modifier => "Shift, Ctrl or Alt alone is not allowed".to_owned(),
+        KeyRefusal::Fixed => "This key cannot be changed".to_owned(),
+        KeyRefusal::Taken(action) => {
+            let action = key_action_text(action);
+            format!("Used by {action}")
+        }
+    }
+}
+
+/// The name of an action on the page Keyboard Shortcuts (ADR 0017 U8-Q7, T281): its menu text,
+/// "Open in First Program" for the first external program's key, and the preview's "Marked only".
+pub fn key_action_text(action: KeyAction) -> String {
+    match action {
+        KeyAction::OpenIn => "Open in First Program".to_owned(),
+        KeyAction::MarkedOnly => "Marked only".to_owned(),
+        other => other.command().map(command_text).unwrap_or_default(),
+    }
+}
+
+/// The heading of an action group on the page Keyboard Shortcuts: its menu's name.
+pub fn key_group_text(group: KeyGroup) -> &'static str {
+    menu_text(match group {
+        KeyGroup::File => MenuKind::File,
+        KeyGroup::Edit => MenuKind::Edit,
+        KeyGroup::Image => MenuKind::Image,
+        KeyGroup::View => MenuKind::View,
+    })
+}
+
+/// A group of the page Keyboard Shortcuts: its heading and its actions with their names.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct KeyPageGroup {
+    pub group: KeyGroup,
+    pub heading: &'static str,
+    pub actions: Vec<(KeyAction, String)>,
+}
+
+/// The rows of the page Keyboard Shortcuts (ADR 0017 U8-Q7, T281): the actions of
+/// [`KeyAction::ALL`] in that order, a new group wherever the group changes.
+pub fn key_page_groups() -> Vec<KeyPageGroup> {
+    let mut groups: Vec<KeyPageGroup> = Vec::new();
+    for action in KeyAction::ALL {
+        let group = action.group();
+        let row = (action, key_action_text(action));
+        match groups.last_mut() {
+            Some(last) if last.group == group => last.actions.push(row),
+            _ => groups.push(KeyPageGroup {
+                group,
+                heading: key_group_text(group),
+                actions: vec![row],
+            }),
+        }
+    }
+    groups
 }
 
 /// A text of the window "About RawStride": the version, the commit and the licence notice GPL-3.0
@@ -1070,13 +1160,22 @@ mod tests {
                 SettingsPage::General,
                 SettingsPage::ExternalPrograms,
                 SettingsPage::MetadataWindow,
+                SettingsPage::KeyboardShortcuts,
             ]
         );
         let names: Vec<&str> = SettingsPage::ALL
             .into_iter()
             .map(|page| settings_text(SettingsText::Page(page)))
             .collect();
-        assert_eq!(names, ["General", "External Programs", "Metadata Window"]);
+        assert_eq!(
+            names,
+            [
+                "General",
+                "External Programs",
+                "Metadata Window",
+                "Keyboard Shortcuts"
+            ]
+        );
         for (index, name) in names.iter().enumerate() {
             assert!(!name.is_empty(), "{name:?}");
             assert!(!names[..index].contains(name), "{name:?} twice");
@@ -1084,6 +1183,83 @@ mod tests {
         assert_eq!(
             settings_text(SettingsText::RestoreDefaults),
             "Restore Defaults"
+        );
+    }
+
+    /// The page Keyboard Shortcuts lists every action of `KeyAction::ALL` in that order, under the
+    /// headings File, Edit, Image and View, each with a name of its own (ADR 0017 U8-Q7, T281).
+    #[test]
+    fn the_keyboard_shortcuts_page_lists_every_action_in_order_under_its_menu() {
+        let groups = key_page_groups();
+        let headings: Vec<&str> = groups.iter().map(|group| group.heading).collect();
+        assert_eq!(headings, ["File", "Edit", "Image", "View"]);
+        let mut actions = Vec::new();
+        let mut names: Vec<String> = Vec::new();
+        for group in &groups {
+            assert_eq!(group.heading, key_group_text(group.group));
+            for (action, name) in &group.actions {
+                assert_eq!(action.group(), group.group, "{action:?}");
+                assert!(!name.is_empty(), "{action:?}");
+                assert_eq!(*name, key_action_text(*action));
+                assert!(!names.contains(name), "{name:?} twice");
+                actions.push(*action);
+                names.push(name.clone());
+            }
+        }
+        assert_eq!(actions, KeyAction::ALL);
+        assert_eq!(key_action_text(KeyAction::OpenIn), "Open in First Program");
+        assert_eq!(key_action_text(KeyAction::MarkedOnly), "Marked only");
+        assert_eq!(key_action_text(KeyAction::Fit), "Fit");
+        assert_eq!(key_action_text(KeyAction::Stars0), "No stars");
+        assert_eq!(key_action_text(KeyAction::Delete), "Delete to Recycle Bin");
+    }
+
+    /// Each reason a key is refused on the page Keyboard Shortcuts (U8-Q4, U8-Q5, T281).
+    #[test]
+    fn each_key_refusal_has_its_text() {
+        assert_eq!(
+            key_refusal_text(KeyRefusal::CtrlAlt),
+            "Ctrl+Alt is not allowed"
+        );
+        assert_eq!(
+            key_refusal_text(KeyRefusal::Modifier),
+            "Shift, Ctrl or Alt alone is not allowed"
+        );
+        assert_eq!(
+            key_refusal_text(KeyRefusal::Fixed),
+            "This key cannot be changed"
+        );
+        assert_eq!(
+            key_refusal_text(KeyRefusal::Taken(KeyAction::Compare)),
+            "Used by Compare"
+        );
+        assert_eq!(
+            key_refusal_text(KeyRefusal::Taken(KeyAction::MarkedOnly)),
+            "Used by Marked only"
+        );
+    }
+
+    /// The other texts of the page Keyboard Shortcuts and of the field Companion File Suffixes
+    /// (T281).
+    #[test]
+    fn the_keyboard_shortcuts_and_suffixes_texts() {
+        let texts = [
+            (SettingsText::ChangeKey, "Change"),
+            (SettingsText::ClearKey, "Clear"),
+            (SettingsText::PressKey, "Press a key…"),
+            (SettingsText::NoKey, "–"),
+            (SettingsText::CompanionSuffixes, "Companion File Suffixes"),
+            (
+                SettingsText::CompanionSuffixesNote,
+                "Files with these suffixes move with an image; empty means the default",
+            ),
+        ];
+        for (text, expected) in texts {
+            assert_eq!(settings_text(text), expected, "{text:?}");
+        }
+        assert_eq!(
+            keys_save_error_text("åtkomst nekad"),
+            "The keyboard shortcuts could not be saved: åtkomst nekad"
         );
     }
 

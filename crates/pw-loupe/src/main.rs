@@ -110,6 +110,10 @@ use pw_loupe::{
     no_preview_text,
 };
 use pw_loupe::{
+    KeyPress, KeyRefusal, KeySlot, companion_suffixes_field, key_page_groups, key_refusal_text,
+    keys_save_error_text, parse_companion_suffixes, save_key_map, take_key_press,
+};
+use pw_loupe::{
     OpenPlan, OpenRequest, OpenStep, StartError, explorer_failed_text, explorer_missing_text,
     image_gone_text, nothing_to_open_text, open_button_text, open_cancel_text,
     open_in_another_text, open_in_text, open_many_question_text, opened_text, plan_open,
@@ -771,13 +775,20 @@ struct Loupe {
     /// start; every changeable key, menu key and text that names a key asks it.
     key_map: KeyMap,
     /// `keys.txt`, beside the settings file; `None` without LOCALAPPDATA (nothing can be saved).
-    #[expect(
-        dead_code,
-        reason = "the Keyboard Shortcuts page saves the map to it (T281)"
-    )]
     keys_path: Option<PathBuf>,
     /// The settings window's choices while it is open.
     settings_window: Option<Settings>,
+    /// The page Keyboard Shortcuts' copy of the key map while the Settings window is open (ADR
+    /// 0017 U8-Q7, T281): set when it opens, put in use by Save, dropped by Cancel.
+    settings_keys: Option<KeyMap>,
+    /// The key slot whose Change waits for a key (T281); at most one. The key is taken at the top
+    /// of `ui()`, before anything is drawn.
+    key_wait: Option<KeySlot>,
+    /// The last refused key on the page Keyboard Shortcuts: the slot and why (T281).
+    key_refusal: Option<(KeySlot, KeyRefusal)>,
+    /// The text of the field Companion File Suffixes while the Settings window is open (ADR 0017
+    /// U8-Q10, T281), read with `parse_companion_suffixes` only by Save.
+    suffixes_text: String,
     /// The Settings window's page shown (ADR 0017 U10b-Q6, T278): set when the window opens, kept
     /// while it is open, not saved.
     settings_page: SettingsPage,
@@ -1014,6 +1025,87 @@ impl Loupe {
         if self.metadata_window.is_none() && self.settings_window.is_none() {
             self.settings_window = Some(self.settings.clone());
             self.settings_page = page;
+            // The page Keyboard Shortcuts and the suffixes' field (ADR 0017 U8-Q7, U8-Q10, T281).
+            self.settings_keys = Some(self.key_map.clone());
+            self.key_wait = None;
+            self.key_refusal = None;
+            self.suffixes_text = companion_suffixes_field(&self.settings.shell.companion_suffixes);
+        }
+    }
+
+    /// Ends the page Keyboard Shortcuts' state when the Settings window closes (Save or Cancel,
+    /// T281).
+    fn close_key_page(&mut self) {
+        self.settings_keys = None;
+        self.key_wait = None;
+        self.key_refusal = None;
+        self.suffixes_text.clear();
+    }
+
+    /// Takes the next key press for a waiting Change of the page Keyboard Shortcuts (ADR 0017
+    /// U8-Q7, T281), at the top of `ui()` before anything is drawn: while a Change waits every key
+    /// event is taken out of the input, so neither the library's F5, the key loop nor a focused
+    /// button (Enter or Space) sees it. The first press of a key that is not a modifier itself is
+    /// used: Escape cancels, a chord the copy accepts ends the Change, a refused one is named on
+    /// the row and the Change goes on waiting.
+    fn take_key_for_change(&mut self, ctx: &egui::Context) {
+        let Some(wait) = self.key_wait else {
+            return;
+        };
+        let Some(map) = self.settings_keys.as_mut() else {
+            self.key_wait = None;
+            return;
+        };
+        let mut waiting = true;
+        let mut refusal = None;
+        let mut taken = false;
+        ctx.input_mut(|input| {
+            input.events.retain(|event| {
+                if !matches!(event, egui::Event::Key { .. }) {
+                    return true;
+                }
+                if waiting {
+                    match take_key_press(map, wait, event) {
+                        KeyPress::Skipped => {}
+                        KeyPress::Cancelled => waiting = false,
+                        KeyPress::Taken => {
+                            waiting = false;
+                            taken = true;
+                        }
+                        KeyPress::Refused(reason) => refusal = Some(reason),
+                    }
+                }
+                false
+            });
+        });
+        if !waiting {
+            self.key_wait = None;
+        }
+        if taken {
+            self.key_refusal = None;
+        } else if let Some(reason) = refusal {
+            self.key_refusal = Some((wait, reason));
+        }
+    }
+
+    /// Save of the page Keyboard Shortcuts (ADR 0017 U8-Q6, U8-Q7, T281): the copy is put in use
+    /// and, only when it differs from the map in use, written to `keys.txt`, so a Save of other
+    /// settings never rewrites a hand-written file. A failed write shows its own warning; the keys
+    /// still apply until RawStride closes.
+    fn save_key_page(&mut self, map: KeyMap) {
+        if map == self.key_map {
+            return;
+        }
+        self.key_map = map;
+        let saved = match &self.keys_path {
+            Some(path) => save_key_map(path, &self.key_map).map_err(|error| error.to_string()),
+            None => Err(settings_text(SettingsText::NoFolder).to_string()),
+        };
+        if let Err(error) = saved {
+            show_warning(
+                settings_text(SettingsText::Title),
+                keys_save_error_text(&error),
+            );
         }
     }
 
@@ -1023,11 +1115,12 @@ impl Loupe {
     /// image when it opens, so no read made with the old settings is kept (it cannot be open
     /// while the settings window is).
     fn save_settings_window(&mut self, chosen: Settings) {
-        // The window was opened with the layout of that moment: only its theme is taken, so the
-        // file gets the current window and columns (T109).
+        // The window was opened with the layout of that moment: only its theme and the companion
+        // suffixes (T281) are taken, so the file gets the current window and columns (T109).
         let chosen = Settings {
             shell: ShellSettings {
                 theme: chosen.shell.theme,
+                companion_suffixes: chosen.shell.companion_suffixes,
                 ..self.settings.shell.clone()
             },
             ..chosen
@@ -1113,8 +1206,10 @@ impl Loupe {
     /// U10b-Q6, T278): General (the IIM check box, the encoding, the theme), External Programs (the
     /// list of programs, ADR 0019 E-Q2, T200) and Metadata Window (the sections and items of the
     /// metadata window, shown or hidden and in their order, in a scroll area, then "Restore
-    /// Defaults"). Save and Cancel are under every page; like every choice, the programs and the
-    /// layout are applied and saved only by "Save".
+    /// Defaults") and Keyboard Shortcuts (each action's two keys with Change and Clear, in a
+    /// scroll area, then "Restore Defaults"; ADR 0017 U8-Q7, T281). Save and Cancel are under every
+    /// page; like every choice, the programs, the layout, the keys and the companion suffixes are
+    /// applied and saved only by "Save".
     fn draw_settings_window(&mut self, ctx: &egui::Context) {
         /// The window's fixed width in points, so a long program path wraps (T200).
         const SETTINGS_WINDOW_WIDTH: f32 = 440.0;
@@ -1134,6 +1229,16 @@ impl Loupe {
         // The clicks of the page Metadata Window, applied after its rows are drawn (T278).
         let mut layout_clicks: Vec<LayoutClick> = Vec::new();
         let mut restore_defaults = false;
+        // The page Keyboard Shortcuts (T281): its clicks, applied to the copy of the map after
+        // drawing, and whether the pointer is on the waiting slot's Change.
+        let mut key_clicks: Vec<KeyClick> = Vec::new();
+        let mut restore_keys = false;
+        let mut wait_hovered = false;
+        let pointer_pressed = ctx.input(|input| input.pointer.any_pressed());
+        let keys = self.settings_keys.clone();
+        let key_wait = self.key_wait;
+        let key_refusal = self.key_refusal;
+        let mut suffixes = self.suffixes_text.clone();
         let layout_height = LAYOUT_PAGE_MAX_HEIGHT.min(ctx.content_rect().height() / 2.0);
         egui::Window::new(settings_text(SettingsText::Title))
             .collapsible(false)
@@ -1185,6 +1290,19 @@ impl Loupe {
                                     );
                                 }
                             });
+                        // ADR 0017 U8-Q10, T281: read only by Save.
+                        ui.add_space(PANEL_ROW_SPACING);
+                        ui.label(settings_text(SettingsText::CompanionSuffixes));
+                        ui.text_edit_singleline(&mut suffixes);
+                        ui.add(
+                            egui::Label::new(
+                                egui::RichText::new(settings_text(
+                                    SettingsText::CompanionSuffixesNote,
+                                ))
+                                .small(),
+                            )
+                            .wrap(),
+                        );
                     }
                     SettingsPage::ExternalPrograms => {
                         if chosen.external_programs.is_empty() {
@@ -1237,6 +1355,21 @@ impl Loupe {
                             .button(settings_text(SettingsText::RestoreDefaults))
                             .clicked();
                     }
+                    SettingsPage::KeyboardShortcuts => {
+                        egui::ScrollArea::vertical()
+                            .id_salt("settings-keyboard-shortcuts")
+                            .max_height(layout_height)
+                            .show(ui, |ui| {
+                                if let Some(map) = &keys {
+                                    (key_clicks, wait_hovered) =
+                                        draw_key_rows(ui, map, key_wait, key_refusal);
+                                }
+                            });
+                        ui.add_space(PANEL_ROW_SPACING);
+                        restore_keys = ui
+                            .button(settings_text(SettingsText::RestoreDefaults))
+                            .clicked();
+                    }
                 }
                 ui.add_space(PANEL_ROW_SPACING);
                 ui.horizontal(|ui| {
@@ -1245,6 +1378,26 @@ impl Loupe {
                 });
             });
         self.settings_page = page;
+        self.suffixes_text = suffixes;
+        // A waiting Change is cancelled by a pointer press anywhere but on its own Change (whose
+        // click cancels it below) and by another page (T281).
+        if (pointer_pressed && !wait_hovered) || page != SettingsPage::KeyboardShortcuts {
+            self.key_wait = None;
+        }
+        if let Some(map) = self.settings_keys.as_mut() {
+            if restore_keys {
+                map.restore_defaults();
+            }
+            for click in key_clicks {
+                match click {
+                    KeyClick::Change(slot) => {
+                        self.key_wait = (key_wait != Some(slot)).then_some(slot);
+                        self.key_refusal = None;
+                    }
+                    KeyClick::Clear(slot) => map.clear(slot.action, slot.slot),
+                }
+            }
+        }
         // Only the layout; the sections' open or collapsed state (the `editor_*` keys) stays.
         if restore_defaults {
             chosen.editor_layout = EditorLayout::default();
@@ -1285,11 +1438,20 @@ impl Loupe {
         if save {
             // A name typed empty or with a `|` never reaches the file (T200).
             chosen.external_programs = tidied_programs(&chosen.external_programs);
+            // The same rule as `settings.txt`: no valid entry gives the default list (U8-Q10).
+            chosen.shell.companion_suffixes = parse_companion_suffixes(&self.suffixes_text);
+            // Saved without a Change that still waits (T281).
+            let keys = self.settings_keys.take();
             self.settings_window = None;
+            self.close_key_page();
             self.save_settings_window(chosen);
+            if let Some(map) = keys {
+                self.save_key_page(map);
+            }
             ctx.set_theme(egui_theme(self.settings.shell.theme));
         } else if cancel {
             self.settings_window = None;
+            self.close_key_page();
         } else {
             self.settings_window = Some(chosen);
         }
@@ -8303,6 +8465,73 @@ fn draw_layout_rows(ui: &mut egui::Ui, layout: &EditorLayout) -> Vec<LayoutClick
     clicks
 }
 
+/// A click on the Settings window's page Keyboard Shortcuts (T281), applied to the copy of the key
+/// map after the rows are drawn.
+enum KeyClick {
+    /// A slot's Change: starts waiting for a key, or cancels the slot's own waiting Change.
+    Change(KeySlot),
+    /// A slot's Clear: takes its key away.
+    Clear(KeySlot),
+}
+
+/// The rows of the Settings window's page Keyboard Shortcuts (ADR 0017 U8-Q7, T281): the groups of
+/// `key_page_groups` under their menus' names, each action a row that wraps: its name, then for
+/// each of its two slots the key (`key_text`, "–" when empty, "Press a key…" while its Change
+/// waits), Change and Clear (greyed without a key). Under the row of the last refused key, why.
+/// Returns the clicks and whether the pointer is on the waiting slot's Change.
+fn draw_key_rows(
+    ui: &mut egui::Ui,
+    map: &KeyMap,
+    wait: Option<KeySlot>,
+    refusal: Option<(KeySlot, KeyRefusal)>,
+) -> (Vec<KeyClick>, bool) {
+    let mut clicks = Vec::new();
+    let mut wait_hovered = false;
+    for (index, group) in key_page_groups().into_iter().enumerate() {
+        if index > 0 {
+            ui.add_space(PANEL_ROW_SPACING);
+        }
+        ui.label(egui::RichText::new(group.heading).strong());
+        for (action, name) in group.actions {
+            ui.push_id(("settings-key", action), |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(name);
+                    for (slot, key) in map.keys(action).into_iter().enumerate() {
+                        let here = KeySlot { action, slot };
+                        let shown = if wait == Some(here) {
+                            settings_text(SettingsText::PressKey).to_owned()
+                        } else {
+                            key.map_or_else(
+                                || settings_text(SettingsText::NoKey).to_owned(),
+                                key_text,
+                            )
+                        };
+                        ui.label(egui::RichText::new(shown).strong());
+                        let change = ui.button(settings_text(SettingsText::ChangeKey));
+                        if wait == Some(here) && change.contains_pointer() {
+                            wait_hovered = true;
+                        }
+                        if change.clicked() {
+                            clicks.push(KeyClick::Change(here));
+                        }
+                        let clear = egui::Button::new(settings_text(SettingsText::ClearKey));
+                        if ui.add_enabled(key.is_some(), clear).clicked() {
+                            clicks.push(KeyClick::Clear(here));
+                        }
+                    }
+                });
+                if let Some((slot, reason)) = refusal
+                    && slot.action == action
+                {
+                    let color = ui.visuals().warn_fg_color;
+                    ui.colored_label(color, key_refusal_text(reason));
+                }
+            });
+        }
+    }
+    (clicks, wait_hovered)
+}
+
 /// What the metadata window's form reports after it was drawn.
 struct FormResponse {
     /// The conflict value chosen: the conflict's and the value's index.
@@ -10409,6 +10638,8 @@ impl eframe::App for Loupe {
     /// side columns and, in the middle, the folder tabs with the contact sheet or the loupe.
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+        // Before anything is drawn or reads the keys (ADR 0017 U8-Q7, T281).
+        self.take_key_for_change(&ctx);
         self.poll_import_worker(&ctx);
         self.poll_folder_watcher();
         // The active tab follows its folder on disk at once (ADR 0026 F3, T251).
@@ -10813,6 +11044,10 @@ fn run(options: Options) -> Result<(), String> {
                 key_map,
                 keys_path,
                 settings_window: None,
+                settings_keys: None,
+                key_wait: None,
+                key_refusal: None,
+                suffixes_text: String::new(),
                 settings_page: SettingsPage::General,
                 about_window: false,
                 pending_options: None,

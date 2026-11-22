@@ -268,9 +268,14 @@ Every other property already uses IPTC's English name in both languages.
 | – | Choose a Program | the title of the file dialog opened by "Add…" in the section External Programs (ADR 0019 E-Q2); added by T200 |
 | – | Programs | the name of the `.exe` filter of the file dialog "Choose a Program" (ADR 0019 E-Q2); added by T200 |
 | – | At most {n} programs | the tooltip of the disabled "Add…" when the list of external programs is full ("At most 1 program" in singular; ADR 0019 E-Q1); added by T200 |
-| – | General | the Settings window's first page, with the IIM check box, the encoding and the theme; the window opens on it from Settings… (ADR 0017 U10b-Q6); added by T278 |
+| – | General | the Settings window's first page, with the IIM check box, the encoding and the theme; the window opens on it from Settings… (ADR 0017 U10b-Q6); added by T278. The field Companion File Suffixes added by T281 |
 | – | Metadata Window | the Settings window's page where the user chooses which sections and items of the metadata window are shown, and in which order; what is hidden is shown read-only under Other Metadata (ADR 0017 §2.3.1, U10b-Q2–U10b-Q6); added by T278 |
-| – | Restore Defaults | the button under the Settings window's page Metadata Window that sets every section and item back to shown in the default order (not the sections' open or collapsed state); applied by Save (ADR 0017 U10b-Q6); added by T278 |
+| – | Restore Defaults | the button under the Settings window's page Metadata Window that sets every section and item back to shown in the default order (not the sections' open or collapsed state); applied by Save (ADR 0017 U10b-Q6); added by T278. Also the button under the page Keyboard Shortcuts that gives every action its default keys back (the whole map), applied by Save (ADR 0017 U8-Q7); added by T281 |
+| – | Keyboard Shortcuts | the Settings window's fourth page, where each changeable action's two keys are changed or cleared, the actions under the names of their menus (File, Edit, Image, View); its names are the menu texts, "Open in First Program" for the first external program's key and "Marked only" (ADR 0017 §2.4, U8-Q7); added by T281 |
+| – | Change, Press a key… | the button of a key slot on the page Keyboard Shortcuts, which waits for the next key press; while it waits the slot shows "Press a key…". Escape, a click elsewhere, another page, Save and Cancel end the wait. A refused key is named under the row: "Ctrl+Alt is not allowed", "Shift, Ctrl or Alt alone is not allowed", "This key cannot be changed", "Used by {action}" (U8-Q4, U8-Q5, U8-Q7); added by T281 |
+| – | Clear (a key) | the button of a key slot on the page Keyboard Shortcuts, which takes the slot's key away; an empty slot shows "–" (U8-Q7). Not the clearing of a field, a filter or a marking; added by T281 |
+| – | The keyboard shortcuts could not be saved: {error} | the warning when `keys.txt` cannot be written; the keys still apply until RawStride closes (U8-Q6); added by T281 |
+| – | Companion File Suffixes | the field on the Settings window's page General with the suffixes, separated by commas, of the companion files that move with an image; the note under it: "Files with these suffixes move with an image; empty means the default" (`dop, pp3, on1`; ADR 0017 U8-Q10, U9-Q10); added by T281 |
 
 ## 7. Recurring sentence parts
 
