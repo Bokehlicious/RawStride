@@ -143,10 +143,10 @@ fn photoshop_resource(signature: &[u8; 4], id: u16, data: &[u8]) -> Vec<u8> {
     resource
 }
 
-/// The Photoshop block that makes ExifTool 13.59 misread (T92, measured): an `IPTCDigest`
-/// (`8BIM` 0x0425) followed by an `AgHg` resource 0x1f40 of 4 bytes, as at the end of the block
-/// of `TN002683.tif`. After a process has written `-IPTCDigest=new` to such a TIFF, it reads the
-/// block of every such TIFF with two more warnings ("Non-standard Photoshop at
+/// The Photoshop block that made ExifTool 13.59 misread (T92, measured; 13.64 does not, T269): an
+/// `IPTCDigest` (`8BIM` 0x0425) followed by an `AgHg` resource 0x1f40 of 4 bytes, as at the end of
+/// the block of `TN002683.tif`. With 13.59, after a process had written `-IPTCDigest=new` to such
+/// a TIFF, it read the block of every such TIFF with two more warnings ("Non-standard Photoshop at
 /// TIFF-IFD0-Photoshop-IPTCDigest", "Bad Photoshop IRB resource").
 fn ag_hg_block() -> Vec<u8> {
     let digest: Vec<u8> = (0u8..16).collect();
@@ -736,8 +736,10 @@ fn read_city_plan(read: &MetadataRead, city: &str, settings: WriteSettings) -> W
 }
 
 /// A TIFF with IIM and a current checksum (made with two ExifTool calls): a City write leaves a
-/// current checksum, which the reader reports as `Matches` (T92: in a TIFF, `-IPTCDigest=new` in
-/// the same call as the IIM write leaves it out of date, measured with ExifTool 13.59).
+/// current checksum, which the reader reports as `Matches`. Since ADR 0007 §9.7 (Q21) this checks
+/// that ExifTool 13.64 or newer writes a current checksum in the write's one call (T92 measured
+/// with ExifTool 13.59 that in a TIFF, `-IPTCDigest=new` in the same call as the IIM write left it
+/// out of date, so the safe write then made a second call).
 #[test]
 fn a_tiff_with_iim_keeps_a_current_digest() {
     let mut et = exiftool();
@@ -783,7 +785,8 @@ fn a_tiff_with_iim_keeps_a_current_digest() {
 }
 
 /// A TIFF without IIM and the setting "create IIM": the IIM and the Photoshop block are created,
-/// with one more validation warning (D8), and the checksum is current.
+/// with one more validation warning (D8), and the checksum is current: ExifTool 13.64 or newer
+/// writes it current in the write's one call (ADR 0007 §9.7, Q21).
 #[test]
 fn a_tiff_without_iim_gets_iim_and_a_current_digest() {
     let mut et = exiftool();
@@ -826,8 +829,9 @@ fn a_tiff_without_iim_gets_iim_and_a_current_digest() {
 
 /// A TIFF whose Photoshop block holds an `IPTCDigest` and an `AgHg` resource (as `TN002683.tif`,
 /// see [`ag_hg_block`]), written with "create IIM": `Written` with a current checksum, and the same
-/// `ExifTool` afterwards reads an untouched copy of the file as it did before the write (T92: the
-/// safe write restarts ExifTool after a TIFF write of the checksum).
+/// `ExifTool` afterwards reads an untouched copy of the file as it did before the write. Since
+/// ADR 0007 §9.7 (Q22) the safe write does not restart ExifTool, so this checks that ExifTool
+/// 13.64 or newer reads correctly after such a write (with 13.59 it did not, T92).
 #[test]
 fn a_tiff_with_an_aghg_resource_is_written_and_read_correctly_afterwards() {
     let mut et = exiftool();
@@ -970,7 +974,8 @@ fn every_real_dng_is_written_safely() {
 
 /// Every TIFF and DNG in `PW_TESTDATA`, copied to a temporary folder, written with a City plan
 /// for the file as read and the setting "create IIM" through `write_safely` (T92): `Written`, the
-/// image data hash unchanged, City read back and a current IIM checksum (`Matches`). Prints the
+/// image data hash unchanged, City read back and a current IIM checksum (`Matches`), written by
+/// ExifTool 13.64 or newer in the write's one call (ADR 0007 §9.7, Q21). Prints the
 /// result for each file (run with `--nocapture` to see it).
 #[test]
 #[ignore = "needs real camera files: set PW_TESTDATA and run with --ignored"]

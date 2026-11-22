@@ -230,9 +230,10 @@ IIM block in PSIR 1061 [MWG §4.2.3.2].
 - **Checksum:** "If IPTC-IIM and XMP are both present, whether changed or not, a Changer MUST
   create or update the checksum" [MWG §4.2.3.2]. It is computed over the whole IIM block after
   conversion.
-  - **TIFF and DNG:** the checksum is written by a second ExifTool call on the temporary copy
-    (§9.2), because ExifTool 13.59 stores an out-of-date checksum there when it is written in the
-    same call as the IIM (T92).
+  - **TIFF and DNG:** the checksum is written in the same call as the IIM, as in a JPEG (owner,
+    2026-11-22, §9.7 Q21; T272): ExifTool 13.64, the lowest version, stores a current one there
+    (T269). §9.3 refuses a copy whose stored checksum is not current. Until T272 a second call
+    wrote it, because ExifTool 13.59 stored an out-of-date checksum in the IIM's call (T92).
 - **Both forms in line after every write** **(owner 2026-11-12, review of T83)**: §5.1 keeps a
   conflict marker until a write brings both forms in line, and §12 asks for IIM = XMP after every
   write. So when a JPEG, TIFF or DNG has IIM after the write and the write changes anything, these
@@ -519,30 +520,32 @@ written original. [Product]
 - No `-overwrite_original_in_place`.
   - *Change from ADR 0004:* today's ratings write uses it.
   - In-place copying back can leave a half-written original if it is interrupted.
-- **The checksum pass (TIFF and DNG, T92):** when the write includes a new IIM checksum, a second
-  ExifTool call (`-IPTCDigest=new -overwrite_original <copy>`) stores it on the copy (§5.2). It
-  must report one file updated and no warning; otherwise the write fails like any write of the
-  copy.
+- **One call** (owner, 2026-11-22, §9.7 Q21; T272): the copy is written with one ExifTool call,
+  also when the write includes a new IIM checksum (§5.2). The checksum pass of T92 (a second call,
+  `-IPTCDigest=new -overwrite_original <copy>`, for TIFF and DNG) is dropped; §9.3 point 2 checks
+  that the stored checksum is current instead.
 - **Known harmless write warnings (owner 2026-11-19, D17; 2026-11-20, D18):** a write answered
   only with warnings on the named list (today `[minor] Error reading HiddenData` and
-  `[minor] Fixed incorrect HiddenDataOffset`) counts as written, in the write of the copy and in
-  the checksum pass. Every other warning still fails the write.
+  `[minor] Fixed incorrect HiddenDataOffset`) counts as written. Every other warning still fails
+  the write.
 
 ### 9.3 Verify the temporary copy
 
-**Restart ExifTool before reading a TIFF copy** **(owner 2026-11-12, T92, "choice A")**: after a
-TIFF write that includes a new IIM checksum (also a failed one), ExifTool is restarted before the
-copy is read (about 0.25 s). Reason, measured with ExifTool 13.59: after a running ExifTool
-process (`-stay_open`) has written the checksum to a TIFF whose Photoshop block holds a checksum
-followed by an `AgHg` resource (written by Lightroom and Photo Mechanic), that process reads the
-block of every such TIFF wrongly until it ends, so a correct copy would be refused. JPEG and DNG
-writes do not do this. If the restart fails, the write fails and ExifTool is marked as broken.
+**No restart before reading a TIFF copy** **(owner 2026-11-22, §9.7 Q22; T272)**: the process
+that wrote the copy also reads it. The restart of T92 ("choice A", owner 2026-11-12) is dropped:
+with ExifTool 13.59 a process that had written the checksum to a TIFF whose Photoshop block holds
+a checksum followed by an `AgHg` resource read such TIFFs wrongly until it ended; ExifTool 13.64,
+the lowest version, reads them correctly (T269). A misread would show as new warnings, and the
+copy would be refused (point 3).
 
 1. **Image data unchanged:** `ImageDataHash` equals the original's.
 2. **Metadata as intended:**
    - the full listing differs from the original only in the properties written, their IIM and
      Exif representations, the IIM checksum, and `xmp:MetadataDate` / `xmp:ModifyDate`;
-   - anything else that changed is an error.
+   - anything else that changed is an error;
+   - when the write includes a new IIM checksum, the copy's stored checksum
+     (`Photoshop:IPTCDigest`) is present and equals the one computed from its IIM block
+     (`File:CurrentIPTCDigest`), for every file type (owner, 2026-11-22, §9.7 Q21; T272).
 3. **Structure intact:**
    - ExifTool reads the file without errors or warnings about the structure;
    - pw-raw finds the same previews (count, sizes, decodable JPEG);
@@ -650,7 +653,8 @@ fourth of the analysis (a cheaper final check that no longer proves the image da
    - the journal (§9.5) holds several open entries at once, each written whole, and the recovery
      at start is unchanged;
    - the RAW engine's sessions for an image are released before its write, as today (§9.1);
-   - the TIFF restart (§9.3) restarts only the process that wrote that TIFF;
+   - the TIFF restart (§9.3) restarted only the process that wrote that TIFF (dropped by §9.7
+     Q22, T272);
    - the answers may come back in another order than the files were asked; each names its file
      (§9.5), and a batch's summary is made when all have answered;
    - one file alone is not faster. The gain is largest for many files on a fast disk, and less on
@@ -1043,6 +1047,7 @@ listed under the table (§17.1).
   T272 (ExifTool 13.64 shipped and pinned; 13.64 the lowest version; the digest pass and the
   restart dropped, the checksum checked) and T273 (other kinds of DNG damage measured, for Q23).
   T270 and T271 done 2026-11-22 (13.64 shipped and pinned; 13.64 the lowest version, §11, D9).
+  T272 done 2026-11-22 (one call and no restart; the stored checksum checked: §5.2, §9.2, §9.3).
 
 ## Revision history
 

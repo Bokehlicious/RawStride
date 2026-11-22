@@ -9,7 +9,10 @@
 //! no new errors or warnings (one more warning when the write creates the Photoshop block of a
 //! TIFF or DNG, D8), and every tag that was added, removed or changed must be one the
 //! write plan wrote or one a write is known to change (file data, pointers, tool data; the keys of
-//! an Exif block that an `IFD0:` write creates, only added, ADR 0024 §2.6).
+//! an Exif block that an `IFD0:` write creates, only added, ADR 0024 §2.6). When the plan writes
+//! a new IIM checksum (`-IPTCDigest=new`), the copy's stored checksum must be current: its
+//! `Photoshop:IPTCDigest` must equal its `File:CurrentIPTCDigest` (ADR 0007 §9.7, Q21), so a
+//! checksum that is out of date is never stored silently.
 //! [`ExifTool::image_data_hash`] is a narrow read of the image data hash alone, for the safe
 //! write's final read (ADR 0007 §9.6 point 1, Q17).
 //!
@@ -72,7 +75,7 @@ const NOT_LISTED: &[&str] = &["SourceFile", "ExifTool:Warning", VALIDATE];
 const ALLOWED_GROUPS: &[&str] = &["System", "ExifTool", "Composite"];
 /// Single keys whose changes are always allowed.
 const ALLOWED_KEYS: &[&str] = &[
-    "File:CurrentIPTCDigest",
+    CURRENT_DIGEST_KEY,
     "XMP-x:XMPToolkit",
     "XMP-xmp:MetadataDate",
     "XMP-xmp:ModifyDate",
@@ -106,8 +109,9 @@ const EXIF_GROUPS: &[&str] = &["IFD0", "ExifIFD", "IFD1", "GPS", "InteropIFD"];
 /// The plan argument tag that writes the IIM checksum, and the key it changes.
 const DIGEST_TAG: &str = "IPTCDigest";
 const DIGEST_KEY: &str = "Photoshop:IPTCDigest";
-/// The plan argument that writes a new IIM checksum (as `write_plan` makes it); also the argument
-/// of the safe write's digest pass.
+/// The checksum ExifTool computes from the file's IIM block as it is.
+const CURRENT_DIGEST_KEY: &str = "File:CurrentIPTCDigest";
+/// The plan argument that writes a new IIM checksum (as `write_plan` makes it).
 pub(crate) const NEW_DIGEST: &str = "-IPTCDigest=new";
 /// The file types in which ExifTool stores the Photoshop block as a TIFF tag (IFD0 0x8649).
 const PHOTOSHOP_TAG_TYPES: &[&str] = &["TIFF", "DNG"];
@@ -196,6 +200,13 @@ pub enum VerifyError {
         before: Option<String>,
         after: Option<String>,
     },
+    /// The plan writes a new IIM checksum, but the copy's stored checksum (`Photoshop:IPTCDigest`)
+    /// is missing or differs from the one computed from its IIM block (`File:CurrentIPTCDigest`;
+    /// ADR 0007 §9.7, Q21).
+    DigestNotCurrent {
+        stored: Option<String>,
+        current: Option<String>,
+    },
 }
 
 impl fmt::Display for VerifyError {
@@ -227,6 +238,12 @@ impl fmt::Display for VerifyError {
                 "metadata check failed: {key} changed unexpectedly from {} to {}",
                 or_none(before.as_deref()),
                 or_none(after.as_deref())
+            ),
+            VerifyError::DigestNotCurrent { stored, current } => write!(
+                f,
+                "IIM checksum check failed: the written copy stores {}, its IIM block gives {}",
+                or_none(stored.as_deref()),
+                or_none(current.as_deref())
             ),
         }
     }
@@ -416,6 +433,20 @@ pub fn verify_copy(
             before: original.validate,
             after: copy.validate,
         });
+    }
+
+    // ADR 0007 §9.7, Q21 (owner, 2026-11-22): the copy's stored checksum must be current when the
+    // plan writes a new one. A plan without it is not checked: a stored checksum left out of date
+    // by an unresolved conflict (§5.2, Q1) still passes.
+    if writes_new_digest(plan) {
+        let stored = copy.listing.get(DIGEST_KEY);
+        let current = copy.listing.get(CURRENT_DIGEST_KEY);
+        if stored.is_none() || stored != current {
+            return Err(VerifyError::DigestNotCurrent {
+                stored: stored.cloned(),
+                current: current.cloned(),
+            });
+        }
     }
 
     let allowed = Allowed::from_plan(plan);
@@ -897,7 +928,10 @@ mod tests {
     #[test]
     fn the_digest_argument_allows_the_photoshop_digest() {
         passes(
-            &[("Photoshop:IPTCDigest", Some("31e3daf0"))],
+            &[
+                ("Photoshop:IPTCDigest", Some("31e3daf0")),
+                ("File:CurrentIPTCDigest", Some("31e3daf0")),
+            ],
             &["-IPTCDigest=new"],
         );
         unexpected(
@@ -1056,8 +1090,155 @@ mod tests {
         let mut copy = original.clone();
         copy.listing
             .insert(DIGEST_KEY.to_string(), "2c586d07".to_string());
+        copy.listing
+            .insert(CURRENT_DIGEST_KEY.to_string(), "2c586d07".to_string());
         copy.validate = after;
         verify_copy(&original, &copy, &plan(args))
+    }
+
+    /// §9.7 Q21: a `file_type` copy whose original stores `f379e478` (as the IIM block gave it)
+    /// and whose copy stores `stored` while its IIM block gives `current`, written with `args`.
+    fn digest_check(
+        file_type: &str,
+        stored: Option<&str>,
+        current: Option<&str>,
+        args: &[&str],
+    ) -> std::result::Result<(), VerifyError> {
+        let mut original = original();
+        original.file_type = file_type.to_string();
+        original
+            .listing
+            .insert(DIGEST_KEY.to_string(), "f379e478".to_string());
+        original
+            .listing
+            .insert(CURRENT_DIGEST_KEY.to_string(), "f379e478".to_string());
+        let mut copy = original.clone();
+        for (key, value) in [(DIGEST_KEY, stored), (CURRENT_DIGEST_KEY, current)] {
+            match value {
+                Some(value) => copy.listing.insert(key.to_string(), value.to_string()),
+                None => copy.listing.remove(key),
+            };
+        }
+        verify_copy(&original, &copy, &plan(args))
+    }
+
+    const IIM_CITY_WITH_DIGEST: &[&str] = &[IIM_UTF8, "-IPTC:City=Lund", NEW_DIGEST];
+
+    #[test]
+    fn a_stored_checksum_that_is_not_current_is_refused_when_the_plan_writes_one() {
+        for file_type in ["TIFF", "DNG"] {
+            assert_eq!(
+                digest_check(
+                    file_type,
+                    Some("2c586d07"),
+                    Some("9a0b1c2d"),
+                    IIM_CITY_WITH_DIGEST
+                ),
+                Err(VerifyError::DigestNotCurrent {
+                    stored: Some("2c586d07".to_string()),
+                    current: Some("9a0b1c2d".to_string()),
+                }),
+                "{file_type}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_current_stored_checksum_passes() {
+        for file_type in ["TIFF", "DNG", "JPEG"] {
+            assert_eq!(
+                digest_check(
+                    file_type,
+                    Some("2c586d07"),
+                    Some("2c586d07"),
+                    IIM_CITY_WITH_DIGEST
+                ),
+                Ok(()),
+                "{file_type}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_missing_stored_or_current_checksum_is_refused_when_the_plan_writes_one() {
+        for file_type in ["TIFF", "DNG"] {
+            assert_eq!(
+                digest_check(file_type, None, Some("2c586d07"), IIM_CITY_WITH_DIGEST),
+                Err(VerifyError::DigestNotCurrent {
+                    stored: None,
+                    current: Some("2c586d07".to_string()),
+                }),
+                "{file_type}"
+            );
+            assert_eq!(
+                digest_check(file_type, Some("2c586d07"), None, IIM_CITY_WITH_DIGEST),
+                Err(VerifyError::DigestNotCurrent {
+                    stored: Some("2c586d07".to_string()),
+                    current: None,
+                }),
+                "{file_type}"
+            );
+            assert_eq!(
+                digest_check(file_type, None, None, IIM_CITY_WITH_DIGEST),
+                Err(VerifyError::DigestNotCurrent {
+                    stored: None,
+                    current: None,
+                }),
+                "{file_type}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_checksum_left_out_of_date_passes_when_the_plan_does_not_write_one() {
+        // §5.2 Q1: an unresolved conflict leaves the stored checksum as it was while the IIM
+        // block changes.
+        for file_type in ["TIFF", "DNG", "JPEG"] {
+            assert_eq!(
+                digest_check(
+                    file_type,
+                    Some("f379e478"),
+                    Some("9a0b1c2d"),
+                    &["-IPTC:City=Lund"]
+                ),
+                Ok(()),
+                "{file_type}"
+            );
+        }
+    }
+
+    #[test]
+    fn new_warnings_are_reported_before_a_checksum_that_is_not_current() {
+        let mut original = original();
+        original.file_type = "TIFF".to_string();
+        original.validate = validate(0, 7, 1);
+        original
+            .listing
+            .insert(DIGEST_KEY.to_string(), "f379e478".to_string());
+        let mut copy = original.clone();
+        copy.validate = validate(0, 8, 1);
+        copy.listing
+            .insert(CURRENT_DIGEST_KEY.to_string(), "9a0b1c2d".to_string());
+        assert_eq!(
+            verify_copy(&original, &copy, &plan(IIM_CITY_WITH_DIGEST)),
+            Err(VerifyError::NewWarnings {
+                before: validate(0, 7, 1),
+                after: validate(0, 8, 1),
+            })
+        );
+    }
+
+    #[test]
+    fn the_checksum_error_names_both_checksums() {
+        assert_eq!(
+            VerifyError::DigestNotCurrent {
+                stored: Some("2c586d07".to_string()),
+                current: None,
+            }
+            .to_string(),
+            "IIM checksum check failed: the written copy stores \"2c586d07\", its IIM block \
+             gives (none)"
+        );
     }
 
     #[test]

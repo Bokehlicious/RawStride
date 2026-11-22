@@ -189,13 +189,11 @@ impl ExifTool {
     }
 
     /// Stops this ExifTool process and starts a new one with the same program and arguments
-    /// (T92). The safe write needs it: measured with ExifTool 13.59, after a process has written
-    /// `-IPTCDigest=new` to a TIFF whose Photoshop block holds an `IPTCDigest` and an `AgHg`
-    /// resource, that process reads the Photoshop block of such TIFFs wrongly until it ends (two
-    /// more validation warnings, "Non-standard Photoshop at TIFF-IFD0-Photoshop-IPTCDigest" and
-    /// "Bad Photoshop IRB resource"), even of files it never wrote. If the new process cannot be
-    /// started this instance is marked broken, so callers that start a new one when
-    /// [`ExifTool::is_broken`] do so.
+    /// (T92). Since ADR 0007 §9.7 (Q22; ExifTool 13.64, the lowest version the app writes with)
+    /// the safe write no longer restarts: a process that has written a TIFF with an `AgHg`
+    /// resource reads TIFFs correctly afterwards (measured in T269; with 13.59 it did not). If the
+    /// new process cannot be started this instance is marked broken, so callers that start a new
+    /// one when [`ExifTool::is_broken`] do so.
     pub fn restart(&mut self) -> Result<()> {
         let pre_args: Vec<&str> = self.pre_args.iter().map(String::as_str).collect();
         match Self::start_with(&self.program, &pre_args) {

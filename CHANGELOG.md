@@ -22,6 +22,8 @@ Downloads are on the [Releases page](https://github.com/Bokehlicious/RawStride/r
 - The zip includes ExifTool 13.64 instead of 13.59.
 - RawStride now needs ExifTool 13.64 or later to save ratings and metadata (12.67 before);
   with an older ExifTool it still reads them and tells you at start.
+- Saving metadata to a TIFF or DNG is faster: the IIM checksum is written in the same step as
+  the rest, and the written copy is still refused unless its checksum is current.
 
 ## [0.2.0] - 2026-11-21
 

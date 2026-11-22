@@ -16,20 +16,15 @@
 //!   the target is only read. A new sidecar is made without a source file (measured: `-o x.xmp`
 //!   from a RAW copies the RAW's Exif into the sidecar). ExifTool must report one file created
 //!   and no warning, except the known harmless ones accepted by name (`HARMLESS_WRITE_WARNINGS`,
-//!   D17 and D18). **The digest pass** (T92, §5.2, §12): for a TIFF or DNG whose plan writes
-//!   `-IPTCDigest=new`, a second call `-IPTCDigest=new -overwrite_original <copy>` on the copy
-//!   only (RawStride's own temporary file; the original is still only read). Measured with
-//!   ExifTool 13.59: in a TIFF or DNG, `-IPTCDigest=new` in the same call as an IIM write stores
-//!   the MD5 of the IIM block without the padding ExifTool adds to it in the TIFF structure, while
-//!   `CurrentIPTCDigest` includes it, so the checksum is out of date; the second call stores the
-//!   current one and leaves the image data hash unchanged. A JPEG is not affected. ExifTool must
-//!   report one file updated and no warning outside the same list. **The restart** (T92, owner's
-//!   choice A): after a TIFF write with `-IPTCDigest=new` (also a failed one),
-//!   [`ExifTool::restart`] starts a new process before the copy is read, because the process
-//!   that wrote it reads the Photoshop block
-//!   of such TIFFs wrongly from then on (measured on `TN002683.tif`, whose block holds an `AgHg`
-//!   resource: the correct copy read with two more warnings, and so refused in 9.3).
-//! - **9.3, verification:** the copy's snapshot against the original's ([`verify_copy`]); a new
+//!   D17 and D18). That one call is the whole write, also for a TIFF or DNG whose plan writes
+//!   `-IPTCDigest=new` (ADR 0007 §9.7, Q21 and Q22; measured in T269): with ExifTool 13.64, the
+//!   lowest version the app writes with, `-IPTCDigest=new` in the IIM write's own call stores a
+//!   current checksum in a TIFF or DNG, and the process that wrote a TIFF with an `AgHg` resource
+//!   reads TIFFs correctly afterwards. So there is no second call on the copy for the checksum
+//!   and no restart of ExifTool after a TIFF write (both were needed with 13.59, T92). A checksum
+//!   that is not current is refused in 9.3, and a misread would show there as new warnings.
+//! - **9.3, verification:** the copy's snapshot against the original's ([`verify_copy`], which
+//!   also checks that a checksum the plan writes is current, §9.7 Q21); a new
 //!   sidecar must be XMP and hold, besides `System`, `ExifTool` and `File` keys, only keys
 //!   [`verify_copy`] allows for the plan (owner's decision during T86: ExifTool always adds
 //!   `XMP-x:XMPToolkit`); then the caller's [`ImageCheck::check_copy`] for a JPEG, TIFF or DNG
@@ -52,9 +47,7 @@ use std::path::{Path, PathBuf};
 use crate::fileops::{self, ReplaceError};
 use crate::journal::{Entry, EntryId, Journal};
 use crate::reconcile::FileKind;
-use crate::verify::{
-    FileSnapshot, NEW_DIGEST, VerifyError, check_file_type, verify_copy, writes_new_digest,
-};
+use crate::verify::{FileSnapshot, VerifyError, check_file_type, verify_copy};
 use crate::write_plan::WritePlan;
 use crate::{ExifTool, sidecar_path};
 
@@ -391,21 +384,7 @@ impl Transaction<'_> {
         kind: FileKind,
         checks: &dyn ImageCheck,
     ) -> Result<FileSnapshot, (Stage, String)> {
-        let wrote = self.write_copy(open, original.is_some(), kind);
-        // The restart (T92; see the module comment), also after a failed write, before anything
-        // else is read with this ExifTool.
-        let restarted = if needs_restart(kind, self.plan) {
-            self.et.restart().map_err(|e| {
-                (
-                    Stage::Verify,
-                    format!("ExifTool could not be restarted to read the copy: {e}"),
-                )
-            })
-        } else {
-            Ok(())
-        };
-        wrote?;
-        restarted?;
+        self.write_copy(open, original.is_some())?;
 
         let verify = |reason: String| (Stage::Verify, reason);
         let written = self
@@ -429,13 +408,8 @@ impl Transaction<'_> {
         Ok(written)
     }
 
-    /// Writes the copy with one ExifTool call (§9.2) and, when needed, the digest pass.
-    fn write_copy(
-        &mut self,
-        open: &Open,
-        original_exists: bool,
-        kind: FileKind,
-    ) -> Result<(), (Stage, String)> {
+    /// Writes the copy with one ExifTool call (§9.2).
+    fn write_copy(&mut self, open: &Open, original_exists: bool) -> Result<(), (Stage, String)> {
         let mut args = self.plan.options.clone();
         args.extend(self.plan.args.iter().cloned());
         args.push("-o".to_string());
@@ -452,33 +426,6 @@ impl Transaction<'_> {
             return Err((
                 Stage::WriteCopy,
                 format!("ExifTool did not write the copy: {}", answer.trim()),
-            ));
-        }
-        if needs_digest_pass(kind, self.plan) {
-            self.digest_pass(&open.copy)?;
-        }
-        Ok(())
-    }
-
-    /// The digest pass (§9.2, T92; see the module comment): stores the current IIM checksum in
-    /// the copy, never in the original.
-    fn digest_pass(&mut self, copy: &Path) -> Result<(), (Stage, String)> {
-        let args = [
-            NEW_DIGEST.to_string(),
-            "-overwrite_original".to_string(),
-            copy.to_string_lossy().into_owned(),
-        ];
-        let answer = self
-            .et
-            .execute(&args)
-            .map_err(|e| (Stage::WriteCopy, e.to_string()))?;
-        if !digest_written(&answer) {
-            return Err((
-                Stage::WriteCopy,
-                format!(
-                    "ExifTool did not write the IIM checksum of the copy: {}",
-                    answer.trim()
-                ),
             ));
         }
         Ok(())
@@ -616,13 +563,7 @@ fn copy_written(answer: &str) -> bool {
     one_file_without_warning(answer, " image files created")
 }
 
-/// True if ExifTool's answer to the digest pass reports exactly one file updated, no failed file
-/// and no warning outside [`HARMLESS_WRITE_WARNINGS`].
-fn digest_written(answer: &str) -> bool {
-    one_file_without_warning(answer, " image files updated")
-}
-
-/// True if the answer's count of `summary` (`" image files created"`, …) is exactly one, no file
+/// True if the answer's count of `summary` (`" image files created"`) is exactly one, no file
 /// failed and no line is a warning, except a line that starts with an entry of
 /// [`HARMLESS_WRITE_WARNINGS`].
 fn one_file_without_warning(answer: &str, summary: &str) -> bool {
@@ -638,19 +579,6 @@ fn one_file_without_warning(answer: &str, summary: &str) -> bool {
                 .any(|harmless| line.starts_with(harmless))
     });
     crate::write_succeeded(answer) && count == 1 && !warned
-}
-
-/// True if the copy needs the digest pass (§9.2, T92): a TIFF or DNG whose plan writes
-/// `-IPTCDigest=new`. Never a JPEG or a sidecar.
-fn needs_digest_pass(kind: FileKind, plan: &WritePlan) -> bool {
-    matches!(kind, FileKind::Tiff | FileKind::Dng) && writes_new_digest(plan)
-}
-
-/// True if ExifTool must be restarted after the copy is written (T92, owner's choice A): a TIFF
-/// whose plan writes `-IPTCDigest=new`. Measured with ExifTool 13.59: the same write in a JPEG or
-/// a DNG leaves the process reading correctly.
-fn needs_restart(kind: FileKind, plan: &WritePlan) -> bool {
-    kind == FileKind::Tiff && writes_new_digest(plan)
 }
 
 /// The check of a new sidecar (§9.3, owner's decision during T86): it is XMP, and besides its
@@ -759,57 +687,6 @@ mod tests {
         assert!(!copy_written(""));
     }
 
-    #[test]
-    fn the_digest_pass_is_made_for_a_tiff_or_dng_whose_plan_writes_the_checksum() {
-        let with_digest = WritePlan {
-            args: vec![
-                "-IPTC:CodedCharacterSet=UTF8".to_string(),
-                "-IPTC:City=Lund".to_string(),
-                NEW_DIGEST.to_string(),
-            ],
-            ..WritePlan::default()
-        };
-        assert!(needs_digest_pass(FileKind::Tiff, &with_digest));
-        assert!(needs_digest_pass(FileKind::Dng, &with_digest));
-        assert!(!needs_digest_pass(FileKind::Jpeg, &with_digest));
-        assert!(!needs_digest_pass(FileKind::Raw, &with_digest));
-        for kind in [FileKind::Tiff, FileKind::Dng, FileKind::Jpeg, FileKind::Raw] {
-            assert!(!needs_digest_pass(kind, &city_plan()), "{kind:?}");
-            assert!(!needs_digest_pass(kind, &WritePlan::default()), "{kind:?}");
-        }
-    }
-
-    #[test]
-    fn exiftool_is_restarted_only_after_a_tiff_write_of_the_checksum() {
-        let with_digest = WritePlan {
-            args: vec!["-IPTC:City=Lund".to_string(), NEW_DIGEST.to_string()],
-            ..WritePlan::default()
-        };
-        assert!(needs_restart(FileKind::Tiff, &with_digest));
-        for kind in [FileKind::Dng, FileKind::Jpeg, FileKind::Raw] {
-            assert!(!needs_restart(kind, &with_digest), "{kind:?}");
-        }
-        for kind in [FileKind::Tiff, FileKind::Dng, FileKind::Jpeg, FileKind::Raw] {
-            assert!(!needs_restart(kind, &city_plan()), "{kind:?}");
-        }
-    }
-
-    #[test]
-    fn the_digest_pass_needs_one_file_updated_without_a_warning() {
-        // Measured with ExifTool 13.59 on a written DNG copy.
-        assert!(digest_written("    1 image files updated\n"));
-        assert!(!digest_written(
-            "    1 image files updated\n--- stderr ---\nWarning: IPTCDigest is not current\n"
-        ));
-        assert!(!digest_written("    1 image files unchanged\n"));
-        assert!(!digest_written("    1 image files created\n"));
-        assert!(!digest_written("    2 image files updated\n"));
-        assert!(!digest_written(
-            "    0 image files updated\n    1 files weren't updated due to errors\n"
-        ));
-        assert!(!digest_written(""));
-    }
-
     /// The HiddenData warning of a DxO export of a Sony RAW (D17), in the form
     /// `ExifTool::execute` gives: stdout lines may end with `\r\n`, stderr lines do not.
     const HIDDEN_DATA: &str = "Warning: [minor] Error reading HiddenData - C:/x/a.jpg\n";
@@ -824,9 +701,6 @@ mod tests {
         assert!(copy_written(&format!(
             "    1 image files created\r\n--- stderr ---\n{HIDDEN_DATA}"
         )));
-        assert!(digest_written(&format!(
-            "    1 image files updated\r\n--- stderr ---\n{HIDDEN_DATA}"
-        )));
         // Leading whitespace before the warning is ignored.
         assert!(copy_written(&format!(
             "    1 image files created\r\n--- stderr ---\n  {HIDDEN_DATA}"
@@ -839,51 +713,39 @@ mod tests {
             // HiddenData together with another warning.
             (
                 "    1 image files created\r\n",
-                "    1 image files updated\r\n",
                 format!(
                     "{HIDDEN_DATA}Warning: [minor] IPTC:City exceeds length limit (truncated) - a.jpg\n"
                 ),
             ),
             (
                 "    1 image files created\r\n",
-                "    1 image files updated\r\n",
                 format!("Warning: Tag 'XMP-photoshop:NoSuchTag' is not defined\n{HIDDEN_DATA}"),
             ),
             // A different [minor] warning alone.
             (
                 "    1 image files created\r\n",
-                "    1 image files updated\r\n",
                 "Warning: [minor] IPTC:City exceeds length limit (truncated) - a.jpg\n".to_string(),
             ),
             // The match is case-sensitive.
             (
                 "    1 image files created\r\n",
-                "    1 image files updated\r\n",
                 "Warning: [Minor] Error reading HiddenData - C:/x/a.jpg\n".to_string(),
             ),
             // HiddenData with no file written.
-            (
-                "    0 image files created\r\n",
-                "    0 image files updated\r\n",
-                HIDDEN_DATA.to_string(),
-            ),
+            ("    0 image files created\r\n", HIDDEN_DATA.to_string()),
             // HiddenData with a failed file.
             (
                 "    1 image files created\r\n    1 files weren't updated due to errors\r\n",
-                "    1 image files updated\r\n    1 files weren't updated due to errors\r\n",
                 format!("{HIDDEN_DATA}Error: Error writing a.jpg - a.jpg\n"),
             ),
             (
                 "    0 image files created\r\n    1 files weren't updated due to errors\r\n",
-                "    0 image files updated\r\n    1 files weren't updated due to errors\r\n",
                 HIDDEN_DATA.to_string(),
             ),
         ];
-        for (created, updated, stderr) in &cases {
+        for (created, stderr) in &cases {
             let copy = format!("{created}--- stderr ---\n{stderr}");
-            let digest = format!("{updated}--- stderr ---\n{stderr}");
             assert!(!copy_written(&copy), "{copy:?}");
-            assert!(!digest_written(&digest), "{digest:?}");
         }
         // The existing [Minor] City case stays refused.
         assert!(!copy_written(
@@ -901,15 +763,12 @@ mod tests {
             format!("{HIDDEN_DATA}{HIDDEN_DATA_OFFSET}"),
         ] {
             let copy = format!("    1 image files created\r\n--- stderr ---\n{stderr}");
-            let digest = format!("    1 image files updated\r\n--- stderr ---\n{stderr}");
             assert!(copy_written(&copy), "{copy:?}");
-            assert!(digest_written(&digest), "{digest:?}");
         }
         let refused = [
             // Together with another warning.
             (
                 "    1 image files created\r\n",
-                "    1 image files updated\r\n",
                 format!(
                     "{HIDDEN_DATA_OFFSET}Warning: [minor] IPTC:City exceeds length limit (truncated) - a.jpg\n"
                 ),
@@ -917,32 +776,26 @@ mod tests {
             // The match is case-sensitive.
             (
                 "    1 image files created\r\n",
-                "    1 image files updated\r\n",
                 "Warning: [Minor] Fixed incorrect HiddenDataOffset - C:/x/a.jpg\n".to_string(),
             ),
             // No file written.
             (
                 "    0 image files created\r\n",
-                "    0 image files updated\r\n",
                 HIDDEN_DATA_OFFSET.to_string(),
             ),
             // A failed file.
             (
                 "    1 image files created\r\n    1 files weren't updated due to errors\r\n",
-                "    1 image files updated\r\n    1 files weren't updated due to errors\r\n",
                 format!("{HIDDEN_DATA_OFFSET}Error: Error writing a.jpg - a.jpg\n"),
             ),
             (
                 "    0 image files created\r\n    1 files weren't updated due to errors\r\n",
-                "    0 image files updated\r\n    1 files weren't updated due to errors\r\n",
                 HIDDEN_DATA_OFFSET.to_string(),
             ),
         ];
-        for (created, updated, stderr) in &refused {
+        for (created, stderr) in &refused {
             let copy = format!("{created}--- stderr ---\n{stderr}");
-            let digest = format!("{updated}--- stderr ---\n{stderr}");
             assert!(!copy_written(&copy), "{copy:?}");
-            assert!(!digest_written(&digest), "{digest:?}");
         }
     }
 

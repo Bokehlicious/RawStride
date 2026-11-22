@@ -63,6 +63,10 @@ Reorganised on 2026-11-21 (owner): the earlier file mixed these three kinds and 
   creates a TIFF's or DNG's Photoshop block. ExifTool 13.64 no longer writes it (a DNG copy written
   with 13.59 has it, one written with 13.64 does not, whichever version reads). Once 13.64 is the
   lowest version (T271), the allowance can be dropped; the owner's decision, then a task.
+- **The comment of `examples/digest_and_restart.rs`** (T272's review, 2026-11-22): its module
+  comment in `pw-metadata` still says in the present tense that the safe write makes a second
+  call for the checksum and restarts after a TIFF write; both are dropped since T272 (ADR 0007
+  §9.7). Comment only; fix it with the next task that touches the example.
 - **A timeout when ExifTool hangs** (process supervision across threads). Today only the shutdown
   has a timeout (`SHUTDOWN_TIMEOUT` in `pw-metadata`'s `exiftool.rs`). A worker that never answers
   also holds a delete, a move and an "Open in" request (`known-limits.md`).

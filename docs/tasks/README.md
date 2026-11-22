@@ -87,7 +87,6 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status |
 |---|---|---|
-| [T272](T272-drop-digest-pass-and-tiff-restart.md) | ADR 0007 §9.7 Q21 and Q22: the digest pass and the TIFF restart dropped, the copy's checksum checked | Open |
 | [T273](T273-dng-damage-kinds-measured.md) | ADR 0007 §9.7 Q23: which checks refuse other kinds of DNG damage? (pw-imagecheck example) | Open |
 
 ## Writing a task (owner and reviewer)

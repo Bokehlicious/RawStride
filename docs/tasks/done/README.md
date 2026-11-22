@@ -278,3 +278,4 @@ was when the task was done, so "this file", "below" and "the Log" in T1–T115 m
 | [T268](T268-app-and-import-use-several-exiftool-processes.md) | ADR 0007 §9.6 Q18: the app's writes and the import's template use the owner's number of ExifTool processes (pw-loupe) |
 | [T270](T270-ship-and-pin-exiftool-13-64.md) | ADR 0007 §9.7 Q20: ship and pin ExifTool 13.64 (CI, packaging, notices, documents) |
 | [T271](T271-exiftool-13-64-the-lowest-version.md) | ADR 0007 §9.7 Q20: ExifTool 13.64 is the lowest version the app writes with (pw-metadata, pw-loupe) |
+| [T272](T272-drop-digest-pass-and-tiff-restart.md) | ADR 0007 §9.7 Q21 and Q22: the digest pass and the TIFF restart dropped, the copy's checksum checked (pw-metadata) |
