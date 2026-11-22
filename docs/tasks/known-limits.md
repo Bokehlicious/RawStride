@@ -394,6 +394,9 @@ with ADR 0026 F3, in `plans/adr-0018-0025-steps.md`.)
 - *A hand-written `keys.txt` with a clash:* the clashing line's action gets back those of its
   default keys that are free at that point, which can take a key a later line names; that line
   then clashes too (one problem each). A file RawStride saved never clashes.
+- *Key names in the texts* (T280's review): a menu, hover text or label shows the arrows,
+  Escape and `−` as symbols, every other key by egui's name ("PageUp", "Equals", "Backtick"),
+  so a key the user gives may read less well than the defaults.
 
 ## Card eject
 

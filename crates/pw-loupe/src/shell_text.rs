@@ -529,6 +529,8 @@ pub fn key_text(chord: KeyChord) -> String {
         Key::Escape => "Esc",
         Key::ArrowLeft => "←",
         Key::ArrowRight => "→",
+        Key::ArrowUp => "↑",
+        Key::ArrowDown => "↓",
         other => other.name(),
     };
     match (chord.ctrl, chord.shift, chord.alt) {
@@ -869,6 +871,20 @@ mod tests {
         assert_eq!(key_text(chord(true, false, true)), "Ctrl+Alt+K");
         assert_eq!(key_text(chord(false, true, true)), "Shift+Alt+K");
         assert_eq!(key_text(chord(true, true, true)), "Ctrl+Shift+Alt+K");
+    }
+
+    /// ↑ and ↓ are shown as arrows, as ← and → are, since a key the user gives may be one (T280).
+    #[test]
+    fn key_text_of_the_up_and_down_arrows() {
+        let chord = |key, shift| KeyChord {
+            key,
+            ctrl: false,
+            shift,
+            alt: false,
+        };
+        assert_eq!(key_text(chord(Key::ArrowUp, false)), "↑");
+        assert_eq!(key_text(chord(Key::ArrowDown, false)), "↓");
+        assert_eq!(key_text(chord(Key::ArrowUp, true)), "Shift+↑");
     }
 
     /// Rotate Left and Rotate Right (ADR 0024 §2.1, O-Q1, T237): their texts, and their keys

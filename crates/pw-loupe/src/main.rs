@@ -27,33 +27,32 @@ use pw_loupe::focus::FocusCache;
 use pw_loupe::library::{
     FolderList, Library, TreeRowKind, folder_key, read_drives, suppress_no_disk_dialogs,
 };
-use pw_loupe::library_text::{LibraryText, library_text};
+use pw_loupe::library_text::{LibraryText, library_text, refresh_hover_text};
 use pw_loupe::{AUTHORS, AboutText, COMMIT, REPOSITORY, VERSION, about_text};
 use pw_loupe::{
     Action, AddedFiles, CardRefresh, CellState, CopiedFields, DEFAULT_THUMBNAIL_SIZE, DialogKey,
     DialogRequest, EditorField, EditorForm, EditorItem, EditorKeyAction, EditorLayout,
-    EditorSection, EditorText, Field, Filter, GridKeyAction, ImportDialog, ImportDialogState,
-    ImportEvent, ImportForm, ImportWorker, IptcField, LABEL_CHOICES, LabelFilter, Language,
-    LoupeMove, MAX_THUMBNAIL_SIZE, MIN_THUMBNAIL_SIZE, MonitorProfile, Navigation, Options,
-    PanelText, READING_RATINGS_TEXT, RatingButton, RatingRefused, STAR_CONDITIONS, STAR_FILTERS,
-    Settings, StarFilter, SubmitError, Tab, TabAction, Tabs, ThumbGrid, UNSUPPORTED_TEXT, ViewMode,
+    EditorSection, EditorText, Field, Filter, ImportDialog, ImportDialogState, ImportEvent,
+    ImportForm, ImportWorker, IptcField, LABEL_CHOICES, LabelFilter, Language, LoupeMove,
+    MAX_THUMBNAIL_SIZE, MIN_THUMBNAIL_SIZE, MonitorProfile, Navigation, Options, PanelText,
+    READING_RATINGS_TEXT, RatingButton, RatingRefused, STAR_CONDITIONS, STAR_FILTERS, Settings,
+    StarFilter, SubmitError, Tab, TabAction, Tabs, ThumbGrid, UNSUPPORTED_TEXT, ViewMode,
     WINDOW_TITLE, allowed_modes, apply_confirmation, carried_map, clamp_thumbnail_size,
     clear_and_import_text, clear_cancel_text, clear_confirmation_text, clear_confirmation_title,
     color_image, columns, dialog_key_action, done_lines, editor_key_action, editor_rating_key,
-    editor_text, ejecting_progress_text, error_text, files_gone, grid_key_action, indicator_text,
-    info_panel, key_action, label_choice_text, label_filter_text, label_name, list_folder,
-    load_monitor_profile, load_settings_and_library, loupe_key_action, marked_text,
-    metadata_neighbour, metadata_steps, mode_label, mode_text, more_lines, no_match_text,
-    notice_text, opens_import, other_values, panel_text, parse_args, position_text, preview_line,
-    preview_summary, primary_monitor_profile_path, progress_text, property_label,
-    rating_key_action, request_cell, save_settings_with_library, settings_path,
-    star_condition_text, star_filter_text, star_glyphs, status_line, status_text, step_allowed,
-    step_thumbnail_size, tab_action, take_wheel_steps, visible_range, wheel_factor, window_title,
+    editor_text, ejecting_progress_text, files_gone, indicator_text, info_panel, label_choice_text,
+    label_filter_text, label_name, list_folder, load_monitor_profile, load_settings_and_library,
+    marked_text, metadata_neighbour, metadata_steps, mode_text, more_lines, no_match_text,
+    notice_text, other_values, panel_text, parse_args, position_text, preview_line,
+    preview_summary, primary_monitor_profile_path, progress_text, property_label, request_cell,
+    save_settings_with_library, settings_path, star_condition_text, star_filter_text, star_glyphs,
+    status_line, status_text, step_allowed, step_thumbnail_size, take_wheel_steps, visible_range,
+    wheel_factor, window_title,
 };
 use pw_loupe::{
-    Batch, MoveKey, MoveKind, MovedImage, UndoMoves, move_failed_text, move_key_action,
-    move_running_text, moved_to_folders, moves_failed_text, nothing_to_undo_text, same_folder,
-    target_folder, undo_failed_text, undone_text, worker_stopped_text,
+    Batch, MoveKind, MovedImage, UndoMoves, move_failed_text, move_running_text, moved_to_folders,
+    moves_failed_text, nothing_to_undo_text, same_folder, target_folder, undo_failed_text,
+    undone_text, worker_stopped_text,
 };
 use pw_loupe::{
     ButtonFacts, THUMB_BUTTONS, ThumbButton, button_at, button_rect, menu_items,
@@ -67,8 +66,7 @@ use pw_loupe::{
     exiftool_message, external_program_limit_text, fallback_text, font_definitions, image_area,
     key_text, menu_text, no_images_text, open_error_text, palette, path_resolution_error_text,
     prune_error_text, recovery_text, rect_on_a_screen, settings_save_error_text, settings_text,
-    shell_key_action, shell_text, start_window, status_line_text, submenu_text, theme_text,
-    tidied_programs, visuals,
+    shell_text, start_window, status_line_text, submenu_text, theme_text, tidied_programs, visuals,
 };
 use pw_loupe::{
     CaptureReader, SORT_KEYS, SortFollow, SortKey, SortOrder, modified_time, read_order,
@@ -83,23 +81,25 @@ use pw_loupe::{
 use pw_loupe::{Compare, Layout, compare_side_text, follow, open_indexes, sides};
 use pw_loupe::{
     DeleteBatch, DeleteStep, delete_button_text, delete_cancel_text, delete_confirm_text,
-    delete_failed_text, delete_key_action, delete_partly_failed_text, delete_partners_text,
-    delete_refused_text, delete_running_text, delete_title_text, delete_while_moving_text,
-    deleted_text, deletes_failed_text, image_partners, no_rejected_text, plan_delete,
-    ratings_not_ready_text, refuse_unrejected_partners, rejected_images, same_path,
+    delete_failed_text, delete_partly_failed_text, delete_partners_text, delete_refused_text,
+    delete_running_text, delete_title_text, delete_while_moving_text, deleted_text,
+    deletes_failed_text, image_partners, no_rejected_text, plan_delete, ratings_not_ready_text,
+    refuse_unrejected_partners, rejected_images, same_path,
 };
-use pw_loupe::{
-    EmbeddedOrientationReader, ROTATION_UNSUPPORTED_TEXT, ReaderStopped, rotation_key_action,
-};
+use pw_loupe::{EmbeddedOrientationReader, ROTATION_UNSUPPORTED_TEXT, ReaderStopped};
 use pw_loupe::{
     FILMSTRIP_CELL_WIDTH, FILMSTRIP_IMAGE_HEIGHT, FILMSTRIP_LABEL_HEIGHT, FILMSTRIP_MARGIN,
-    FILMSTRIP_SPACING, PreviewKey, PreviewText, Restore, ThumbGate, WindowBefore, clamp_offset,
-    filmstrip_range, hit_test, preview_info_shown, preview_key_action, preview_parts, preview_text,
-    scroll_target, thumbnail_gate, toggle_preview_column, toggle_preview_hidden, zoom_value_text,
+    FILMSTRIP_SPACING, PreviewText, Restore, ThumbGate, WindowBefore, clamp_offset,
+    filmstrip_range, hit_test, preview_info_shown, preview_parts, preview_text, scroll_target,
+    thumbnail_gate, toggle_preview_column, toggle_preview_hidden, zoom_value_text,
 };
 use pw_loupe::{
     FieldValues, ValueChoice, ValueList, field_values_path, load_field_values, save_field_values,
     value_choices,
+};
+use pw_loupe::{
+    FixedKey, KeyAction, KeyChord, KeyMap, KeyView, clipping_text_with_key, error_text_with_key,
+    fixed_key, keys_path, load_key_map, menu_key, mode_label_with_key, preview_text_with_key,
 };
 use pw_loupe::{FolderWatcher, WatchEvent};
 use pw_loupe::{HISTOGRAM_BINS, HistogramPanel, HistogramText, histogram_panel, histogram_text};
@@ -110,15 +110,15 @@ use pw_loupe::{
     no_preview_text,
 };
 use pw_loupe::{
-    OPEN_IN_KEY, OpenPlan, OpenRequest, OpenStep, StartError, explorer_failed_text,
-    explorer_missing_text, image_gone_text, nothing_to_open_text, open_button_text,
-    open_cancel_text, open_in_another_text, open_in_key_action, open_in_text,
-    open_many_question_text, opened_text, plan_open, program_missing_text, show_in_explorer,
-    start_failed_text, start_program, too_long_text, waiting_for_writes_text,
+    OpenPlan, OpenRequest, OpenStep, StartError, explorer_failed_text, explorer_missing_text,
+    image_gone_text, nothing_to_open_text, open_button_text, open_cancel_text,
+    open_in_another_text, open_in_text, open_many_question_text, opened_text, plan_open,
+    program_missing_text, show_in_explorer, start_failed_text, start_program, too_long_text,
+    waiting_for_writes_text,
 };
 use pw_loupe::{
     Relisted, anchored_offset, folder_changed_text, folder_gone_text, inside_lexically,
-    reload_key_action, removed_by_another_program_text, top_position,
+    removed_by_another_program_text, top_position,
 };
 use pw_metadata::edit::{Edit, EditOptions};
 use pw_metadata::iim::Fallback;
@@ -308,8 +308,38 @@ fn inspector_subject(tab: Option<&Tab>, cwd: Option<&Path>) -> Option<PathBuf> {
 #[derive(Clone, Debug, Default, PartialEq)]
 struct StatusBar {
     line: String,
-    /// The RAW/JPEG control's text in the loupe (G4: a key and a control).
-    mode: Option<&'static str>,
+    /// The RAW/JPEG control's text in the loupe (G4: a key and a control), with the key map's
+    /// key (T280).
+    mode: Option<String>,
+}
+
+/// What a key of the key map changed that the key loop goes on with (T280).
+#[derive(Debug, Default)]
+struct KeyDone {
+    /// The contact sheet's scroll target, when the key set one.
+    scroll_to: Option<Option<usize>>,
+    /// The import dialog was opened: it takes the frame's remaining keys.
+    import_opened: bool,
+}
+
+/// The view action of a fixed key of the preview (U8-Q1): the steps and `=`. `None` for the
+/// contact sheet's fixed keys, closing the preview and `Taken`.
+fn fixed_view_action(fixed: FixedKey) -> Option<Action> {
+    match fixed {
+        FixedKey::NextImage => Some(Action::Next),
+        FixedKey::PreviousImage => Some(Action::Previous),
+        FixedKey::FirstImage => Some(Action::First),
+        FixedKey::LastImage => Some(Action::Last),
+        FixedKey::ZoomIn => Some(Action::ZoomStep(1)),
+        FixedKey::Navigate(_)
+        | FixedKey::Extend(_)
+        | FixedKey::OpenPreview
+        | FixedKey::ClearMarking
+        | FixedKey::NextTab
+        | FixedKey::PreviousTab
+        | FixedKey::ClosePreview
+        | FixedKey::Taken => None,
+    }
 }
 
 /// egui's theme for one of RawStride's.
@@ -737,6 +767,15 @@ struct Loupe {
     settings: Settings,
     /// The settings file; `None` without LOCALAPPDATA (nothing can be saved).
     settings_path: Option<PathBuf>,
+    /// The keys of the changeable actions (ADR 0017 §2.4, U8, T280), read from `keys.txt` at
+    /// start; every changeable key, menu key and text that names a key asks it.
+    key_map: KeyMap,
+    /// `keys.txt`, beside the settings file; `None` without LOCALAPPDATA (nothing can be saved).
+    #[expect(
+        dead_code,
+        reason = "the Keyboard Shortcuts page saves the map to it (T281)"
+    )]
+    keys_path: Option<PathBuf>,
     /// The settings window's choices while it is open.
     settings_window: Option<Settings>,
     /// The Settings window's page shown (ADR 0017 U10b-Q6, T278): set when the window opens, kept
@@ -3301,7 +3340,7 @@ impl Loupe {
                                 let key = menu_items()
                                     .into_iter()
                                     .find(|item| item.command == command)
-                                    .and_then(|item| item.key);
+                                    .and_then(|item| menu_key(item, &self.key_map));
                                 button_response = button_response
                                     .on_hover_text(thumb_button_hover_text(command, key));
                                 if button_response.clicked() {
@@ -4380,6 +4419,151 @@ impl Loupe {
         }
     }
 
+    /// Does what a key of the key map does (ADR 0017 §2.4, U8, T280), as the key it replaces did
+    /// before the map; the caller has made sure no text field has the keyboard. Kept as before: in
+    /// the preview Open Folder, Import, Close Tab and Full Screen do nothing (U3-Q1); a dialog
+    /// that holds the program blocks the preview's own keys, the moves, Delete, Reload Folder,
+    /// Open in and the inspector; Reload Folder, Open in and the rotations act once while held,
+    /// and Reload Folder not when the library took its key this frame (U4-Q1).
+    fn key_map_action(
+        &mut self,
+        ctx: &egui::Context,
+        action: KeyAction,
+        in_preview: bool,
+        repeat: bool,
+        anchor: Option<[f64; 2]>,
+    ) -> KeyDone {
+        use KeyAction as A;
+        let mut done = KeyDone::default();
+        if let Some(rating) = action.rating_key() {
+            let (scroll, moves) = self.rate(rating);
+            done.scroll_to = scroll;
+            self.queue_moves(MoveKind::Reject, moves);
+            return done;
+        }
+        match action {
+            A::OpenFolder | A::Import | A::CloseTab | A::FullScreen if in_preview => {}
+            A::OpenFolder => self.shell_action(ctx, ShellAction::OpenFolder),
+            A::FullScreen => self.shell_action(ctx, ShellAction::ToggleFullscreen),
+            A::Import => {
+                self.open_import();
+                done.import_opened = true;
+            }
+            A::CloseTab => self.tab_action(TabAction::Close),
+            A::HideColumns if !in_preview => self.shell_action(ctx, ShellAction::ToggleColumns),
+            A::Inspector if !in_preview => {
+                if !self.dialog_open() {
+                    self.act(Action::ToggleInfo, None);
+                    ctx.request_repaint();
+                }
+            }
+            // The preview's own keys (U3-Q2, U3-Q3, U6, U7b, U7d).
+            A::HideColumns
+            | A::Inspector
+            | A::MarkedOnly
+            | A::ClippedHighlights
+            | A::DeepShadows
+            | A::FocusMarking
+            | A::Compare
+            | A::HoldImage
+            | A::SwapImages
+            | A::AboveBelow
+            | A::LockZoom => {
+                if !self.dialog_open() {
+                    match action {
+                        A::HideColumns => toggle_preview_hidden(&mut self.settings.shell),
+                        A::Inspector => toggle_preview_column(&mut self.settings.shell),
+                        A::MarkedOnly => self.toggle_only_marked(),
+                        A::ClippedHighlights => self.toggle_clip_highlights(),
+                        A::DeepShadows => self.toggle_clip_shadows(),
+                        A::FocusMarking => self.toggle_focus_marking(),
+                        A::Compare => self.toggle_compare(),
+                        A::HoldImage => self.hold_current_image(),
+                        A::SwapImages => self.swap_images(),
+                        A::AboveBelow => self.toggle_compare_layout(),
+                        A::LockZoom => self.toggle_compare_lock(),
+                        _ => {}
+                    }
+                    ctx.request_repaint();
+                }
+            }
+            // P goes through its command (nothing while the setting is off); Ctrl+Z with nothing
+            // to undo says so (U9-Q6, U9-Q8, T174); Delete through its command (B4, T189).
+            A::MovePicked | A::UndoMove | A::Delete => {
+                if !self.dialog_open() {
+                    match action {
+                        A::MovePicked => self.run_command(ctx, Command::MovePicked),
+                        A::UndoMove => self.undo_move(),
+                        _ => self.run_command(ctx, Command::DeleteToRecycleBin),
+                    }
+                    ctx.request_repaint();
+                }
+            }
+            A::ReloadFolder => {
+                if !repeat && !self.dialog_open() && !self.library_took_f5 {
+                    self.run_command(ctx, Command::ReloadFolder);
+                    ctx.request_repaint();
+                }
+            }
+            // The first program of the list, or the Settings window while the list is empty
+            // (ADR 0019 §2.2, T202).
+            A::OpenIn => {
+                if !repeat && !self.dialog_open() {
+                    let command = if self.settings.external_programs.is_empty() {
+                        Command::OpenInAnother
+                    } else {
+                        Command::OpenIn(0)
+                    };
+                    self.run_command(ctx, command);
+                    ctx.request_repaint();
+                }
+            }
+            // The images a rating key acts on (ADR 0024 §2.1, O-Q1, T237).
+            A::RotateLeft | A::RotateRight => {
+                if !repeat {
+                    self.rotate(ctx, action == A::RotateRight);
+                }
+            }
+            A::Metadata => {
+                self.act(Action::OpenMetadata, anchor);
+                ctx.request_repaint();
+            }
+            A::SelectAll => self.select_all(),
+            A::Preview => {
+                if in_preview {
+                    done.scroll_to = Some(self.switch_mode(ViewMode::Grid));
+                } else if self
+                    .tabs
+                    .active()
+                    .is_some_and(|tab| tab.mode == ViewMode::Grid)
+                {
+                    self.switch_mode(ViewMode::Loupe);
+                }
+            }
+            A::Fit => self.act(Action::Fit, anchor),
+            A::ZoomToggle => self.act(Action::ToggleZoom, anchor),
+            A::ZoomIn => self.act(Action::ZoomStep(1), anchor),
+            A::ZoomOut => self.act(Action::ZoomStep(-1), anchor),
+            A::ZoomAtPointer => self.act(Action::ToggleAnchor, anchor),
+            A::RawJpeg => self.act(Action::ToggleMode, anchor),
+            // Done above through `rating_key`.
+            A::Stars0
+            | A::Stars1
+            | A::Stars2
+            | A::Stars3
+            | A::Stars4
+            | A::Stars5
+            | A::LabelRed
+            | A::LabelYellow
+            | A::LabelGreen
+            | A::LabelBlue
+            | A::LabelPurple
+            | A::ClearLabel
+            | A::Reject => {}
+        }
+        done
+    }
+
     /// "Öppna mapp" (Ctrl+O, ADR 0017 §2.1, T109): the folder dialog, starting in the active
     /// tab's folder; the chosen folder opens as a dropped folder does (GR12, GR13). Not while a
     /// dialog holds the program.
@@ -4859,6 +5043,43 @@ impl Loupe {
             None
         };
         let exif = &self.exif;
+        // The texts that name a key show the key map's keys (U8-Q8, T280).
+        let map = &self.key_map;
+        let collapse_hover = preview_text_with_key(
+            PreviewText::CollapseColumn,
+            map.first_key(KeyAction::Inspector),
+        );
+        let zoom_buttons = [
+            (PreviewText::Fit, KeyAction::Fit, Action::Fit),
+            (
+                PreviewText::ToggleZoom,
+                KeyAction::ZoomToggle,
+                Action::ToggleZoom,
+            ),
+            (PreviewText::ZoomIn, KeyAction::ZoomIn, Action::ZoomStep(1)),
+            (
+                PreviewText::ZoomOut,
+                KeyAction::ZoomOut,
+                Action::ZoomStep(-1),
+            ),
+        ]
+        .map(|(text, key_action, action)| {
+            (
+                preview_text_with_key(text, map.first_key(key_action)),
+                action,
+            )
+        });
+        let zoom_at_pointer = preview_text_with_key(
+            PreviewText::ZoomAtPointer,
+            map.first_key(KeyAction::ZoomAtPointer),
+        );
+        let clip_texts = [
+            clipping_text_with_key(
+                ClippingText::Highlights,
+                map.first_key(KeyAction::ClippedHighlights),
+            ),
+            clipping_text_with_key(ClippingText::Shadows, map.first_key(KeyAction::DeepShadows)),
+        ];
         let mut actions = Vec::new();
         let mut toggled = [false; 4];
         let shown = egui::Panel::right("preview-column")
@@ -4874,7 +5095,7 @@ impl Loupe {
                         .horizontal(|ui| {
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                                 ui.small_button(shell_text(ShellText::CollapseRight))
-                                    .on_hover_text(preview_text(PreviewText::CollapseColumn))
+                                    .on_hover_text(collapse_hover.as_str())
                                     .clicked()
                             })
                             .inner
@@ -4913,21 +5134,16 @@ impl Loupe {
                                             );
                                         }
                                         ui.horizontal_wrapped(|ui| {
-                                            for (text, action) in [
-                                                (PreviewText::Fit, Action::Fit),
-                                                (PreviewText::ToggleZoom, Action::ToggleZoom),
-                                                (PreviewText::ZoomIn, Action::ZoomStep(1)),
-                                                (PreviewText::ZoomOut, Action::ZoomStep(-1)),
-                                            ] {
-                                                if ui.button(preview_text(text)).clicked() {
-                                                    actions.push(action);
+                                            for (text, action) in &zoom_buttons {
+                                                if ui.button(text.as_str()).clicked() {
+                                                    actions.push(*action);
                                                 }
                                             }
                                         });
                                         if ui
                                             .checkbox(
                                                 &mut anchor_at_pointer,
-                                                preview_text(PreviewText::ZoomAtPointer),
+                                                zoom_at_pointer.as_str(),
                                             )
                                             .changed()
                                         {
@@ -4947,10 +5163,9 @@ impl Loupe {
                                         for ((on, clicked), text) in clip
                                             .iter_mut()
                                             .zip(clip_clicked.iter_mut())
-                                            .zip([ClippingText::Highlights, ClippingText::Shadows])
+                                            .zip(&clip_texts)
                                         {
-                                            *clicked =
-                                                ui.checkbox(on, clipping_text(text)).changed();
+                                            *clicked = ui.checkbox(on, text.as_str()).changed();
                                         }
                                         if let Some(text) = clipping_state {
                                             ui.add(egui::Label::new(text).wrap());
@@ -5035,12 +5250,16 @@ impl Loupe {
             .compare
             .as_ref()
             .map(|open| open.compare.held().to_path_buf());
+        let only_marked_text = preview_text_with_key(
+            PreviewText::OnlyMarked,
+            self.key_map.first_key(KeyAction::MarkedOnly),
+        );
         let mut toggle = false;
         let mut clicked = None;
         ui.horizontal(|ui| {
             ui.add_enabled_ui(!blocked, |ui| {
                 toggle = ui
-                    .selectable_label(only_marked, preview_text(PreviewText::OnlyMarked))
+                    .selectable_label(only_marked, only_marked_text.as_str())
                     .on_hover_text(preview_text(PreviewText::OnlyMarkedHover))
                     .clicked();
             });
@@ -6723,14 +6942,19 @@ impl Loupe {
     }
 
     /// Image ▸ the external programs (ADR 0019 §2.2, E-Q3, E-Q9, T202): with an empty list "Open
-    /// in Another Program…" with Ctrl+E on its right; otherwise "Open in {name}" per program in
-    /// the list's order, the first with Ctrl+E, greyed while its command is not enabled or its
+    /// in Another Program…" with the key map's key of Open in (Ctrl+E by default, T280) on its
+    /// right; otherwise "Open in {name}" per program in the list's order, the first with that key,
+    /// greyed while its command is not enabled or its
     /// path is not a file (checked only while the menu is open).
     fn external_programs_menu(&self, ui: &mut egui::Ui, commands: &mut Vec<Command>) {
         let programs = &self.settings.external_programs;
+        let key_of =
+            |command| menu_key(MenuItem { command, key: None }, &self.key_map).map(key_text);
         if programs.is_empty() {
-            let button =
-                egui::Button::new(open_in_another_text()).shortcut_text(key_text(OPEN_IN_KEY));
+            let mut button = egui::Button::new(open_in_another_text());
+            if let Some(key) = key_of(Command::OpenInAnother) {
+                button = button.shortcut_text(key);
+            }
             if ui
                 .add_enabled(self.command_enabled(Command::OpenInAnother), button)
                 .clicked()
@@ -6746,8 +6970,9 @@ impl Loupe {
             };
             let command = Command::OpenIn(number);
             let mut button = egui::Button::new(open_in_text(&program.name));
-            if index == 0 {
-                button = button.shortcut_text(key_text(OPEN_IN_KEY));
+            // Only the first program's item has a key (`OpenIn(0)`).
+            if let Some(key) = key_of(command) {
+                button = button.shortcut_text(key);
             }
             let enabled = self.command_enabled(command) && program.path.is_file();
             if ui.add_enabled(enabled, button).clicked() {
@@ -6760,7 +6985,7 @@ impl Loupe {
     /// that is on, disabled where it does nothing.
     fn menu_item(&self, ui: &mut egui::Ui, item: MenuItem, commands: &mut Vec<Command>) {
         let mut button = egui::Button::new(command_text(item.command));
-        if let Some(key) = item.key {
+        if let Some(key) = menu_key(item, &self.key_map) {
             button = button.shortcut_text(key_text(key));
         }
         if let Some(on) = self.command_checked(item.command) {
@@ -6939,8 +7164,10 @@ impl Loupe {
     /// holds the program; the text stays readable.
     fn draw_status_bar(&self, ui: &mut egui::Ui, blocked: bool, commands: &mut Vec<Command>) {
         ui.horizontal_wrapped(|ui| {
-            if let Some(mode) = self.status_bar.mode
-                && ui.add_enabled(!blocked, egui::Button::new(mode)).clicked()
+            if let Some(mode) = &self.status_bar.mode
+                && ui
+                    .add_enabled(!blocked, egui::Button::new(mode.as_str()))
+                    .clicked()
             {
                 commands.push(Command::ToggleMode);
             }
@@ -7046,6 +7273,8 @@ impl Loupe {
                     .map(folder_key);
                 let library = &self.library;
                 let tasks = &self.tasks;
+                let refresh_hover =
+                    refresh_hover_text(self.key_map.first_key(KeyAction::ReloadFolder));
                 let shown = egui::Panel::left("left-column")
                     .resizable(true)
                     .default_size(clamp_column_width(
@@ -7061,21 +7290,39 @@ impl Loupe {
                             library,
                             &shell,
                             active_folder.as_deref(),
+                            &refresh_hover,
                             &mut library_actions,
                         );
                         ui.add_space(PANEL_ROW_SPACING * 2.0);
                         draw_tasks(ui, tasks, &shell, &pending, &mut task_actions);
                         collapse
                     });
-                // F5 while the library has the pointer reads the drives again (U4-Q1).
+                // Reload Folder's keys (F5 by default) while the library has the pointer read the
+                // drives again (U4-Q1); exactly, so a key with another modifier does not (T280).
                 let ctx = ui.ctx().clone();
                 let pointer_in_column = ctx
                     .pointer_hover_pos()
                     .is_some_and(|pos| shown.response.rect.contains(pos));
-                if pointer_in_column
-                    && !ctx.egui_wants_keyboard_input()
-                    && ctx.input(|input| input.key_pressed(egui::Key::F5))
-                {
+                let reload_keys = self.key_map.keys(KeyAction::ReloadFolder);
+                let reload_pressed = ctx.input(|input| {
+                    input.events.iter().any(|event| {
+                        matches!(
+                            event,
+                            egui::Event::Key {
+                                key,
+                                pressed: true,
+                                modifiers,
+                                ..
+                            } if reload_keys.contains(&Some(KeyChord {
+                                key: *key,
+                                ctrl: modifiers.ctrl || modifiers.command,
+                                shift: modifiers.shift,
+                                alt: modifiers.alt,
+                            }))
+                        )
+                    })
+                });
+                if pointer_in_column && !ctx.egui_wants_keyboard_input() && reload_pressed {
                     library_actions.push(LibraryAction::Refresh);
                     // The central area is drawn after this column: its key loop leaves this F5
                     // to the library (T242).
@@ -7250,26 +7497,24 @@ impl Loupe {
             }
             self.open(&path, true);
         }
-        let key_actions: Vec<(Option<TabAction>, egui::Key, bool, bool, bool, bool)> =
-            ctx.input(|i| {
-                i.events
-                    .iter()
-                    .filter_map(|event| match event {
-                        egui::Event::Key {
-                            key,
-                            pressed: true,
-                            modifiers,
-                            repeat,
-                            ..
-                        } => {
-                            let ctrl = modifiers.ctrl || modifiers.command;
-                            let tab = tab_action(*key, ctrl, modifiers.shift, modifiers.alt);
-                            Some((tab, *key, ctrl, modifiers.shift, modifiers.alt, *repeat))
-                        }
-                        _ => None,
-                    })
-                    .collect()
-            });
+        let key_actions: Vec<(egui::Key, bool, bool, bool, bool)> = ctx.input(|i| {
+            i.events
+                .iter()
+                .filter_map(|event| match event {
+                    egui::Event::Key {
+                        key,
+                        pressed: true,
+                        modifiers,
+                        repeat,
+                        ..
+                    } => {
+                        let ctrl = modifiers.ctrl || modifiers.command;
+                        Some((*key, ctrl, modifiers.shift, modifiers.alt, *repeat))
+                    }
+                    _ => None,
+                })
+                .collect()
+        });
         self.next_status = StatusBar::default();
         let titles = self.tabs.titles();
         let active = self.tabs.active_index();
@@ -7329,7 +7574,7 @@ impl Loupe {
         let key_anchor = self.anchor(ctx.input(|input| input.pointer.hover_pos()), key_rect, ppp);
         let mut dialog_consumes_keys = self.import_dialog.is_some() && !self.import_hidden;
         let mut start_import = false;
-        for (tab_action, key, ctrl, shift, alt, repeat) in key_actions {
+        for (key, ctrl, shift, alt, repeat) in key_actions {
             // The confirmation of a delete takes every key while it is shown (T189 point 4):
             // Escape cancels, Enter cancels unless the Delete button has the focus (then egui
             // clicks it), every other key does nothing.
@@ -7389,179 +7634,73 @@ impl Loupe {
                 }
                 continue;
             }
-            // The preview's own keys first (ADR 0017 §2.2, §2.4, U3-Q1–Q3, T111): S, H and I,
-            // and nothing for Ctrl+O, Ctrl+I, Ctrl+W, the tab keys and F11. Not while a text
-            // field has the keyboard or a dialog holds the program.
-            if self.in_preview()
-                && let Some(preview_key) = preview_key_action(key, ctrl, shift, alt)
-            {
-                if !ctx.egui_wants_keyboard_input() && !self.dialog_open() {
-                    match preview_key {
-                        PreviewKey::OnlyMarked => self.toggle_only_marked(),
-                        PreviewKey::HideParts => toggle_preview_hidden(&mut self.settings.shell),
-                        PreviewKey::ToggleColumn => {
-                            toggle_preview_column(&mut self.settings.shell);
-                        }
-                        PreviewKey::ClipHighlights => self.toggle_clip_highlights(),
-                        PreviewKey::ClipShadows => self.toggle_clip_shadows(),
-                        PreviewKey::FocusMarking => self.toggle_focus_marking(),
-                        PreviewKey::Compare => self.toggle_compare(),
-                        PreviewKey::HoldImage => self.hold_current_image(),
-                        PreviewKey::SwapImages => self.swap_images(),
-                        PreviewKey::AboveBelow => self.toggle_compare_layout(),
-                        PreviewKey::LockZoom => self.toggle_compare_lock(),
-                        PreviewKey::Nothing => {}
+            // While the Settings window is open no key of the key map and no fixed key acts
+            // (ADR 0017 U8, T280): the window's own fields and buttons take the keys.
+            if self.settings_window.is_some() {
+                continue;
+            }
+            let in_preview = self.in_preview();
+            let view = if in_preview {
+                KeyView::Preview
+            } else {
+                KeyView::Sheet
+            };
+            let chord = KeyChord {
+                key,
+                ctrl,
+                shift,
+                alt,
+            };
+            // The key map first (ADR 0017 §2.4, U8-Q1–U8-Q13, T280): every changeable key is
+            // looked up in it, so a key moved away from an action no longer does it. Never while a
+            // text field has the keyboard: a key moved to a letter must not act while the user
+            // types.
+            if let Some(action) = self.key_map.action_of(chord, view) {
+                if !ctx.egui_wants_keyboard_input() {
+                    let done = self.key_map_action(&ctx, action, in_preview, repeat, key_anchor);
+                    if let Some(position) = done.scroll_to {
+                        scroll_to = position;
                     }
-                    ctx.request_repaint();
-                }
-                continue;
-            }
-            if opens_import(key, ctrl, shift, alt) {
-                self.open_import();
-                dialog_consumes_keys = true;
-                continue;
-            }
-            if let Some(action) = tab_action {
-                self.tab_action(action);
-                continue;
-            }
-            // Ctrl+O, F11 and the hide key (ADR 0017 §2.4, T109); not while a text field has the
-            // keyboard.
-            if !ctx.egui_wants_keyboard_input()
-                && let Some(action) = shell_key_action(key, ctrl, shift, alt)
-            {
-                self.shell_action(&ctx, action);
-                continue;
-            }
-            // P and Ctrl+Z (ADR 0017 U9-Q6, U9-Q8, T174) in the contact sheet and the preview; not
-            // while a text field has the keyboard or a dialog holds the program. P goes through its
-            // command (nothing while the setting is off); Ctrl+Z with nothing to undo says so.
-            if !ctx.egui_wants_keyboard_input()
-                && let Some(move_key) = move_key_action(key, ctrl, shift, alt)
-            {
-                if !self.dialog_open() {
-                    match move_key {
-                        MoveKey::MovePicked => self.run_command(&ctx, Command::MovePicked),
-                        MoveKey::UndoMove => self.undo_move(),
+                    if done.import_opened {
+                        dialog_consumes_keys = true;
                     }
-                    ctx.request_repaint();
                 }
                 continue;
             }
-            // Delete (ADR 0018 §2.1, B4, T189) in the contact sheet and the preview, through its
-            // command; not while a text field has the keyboard or a dialog holds the program.
-            if !ctx.egui_wants_keyboard_input() && delete_key_action(key, ctrl, shift, alt) {
-                if !self.dialog_open() {
-                    self.run_command(&ctx, Command::DeleteToRecycleBin);
-                    ctx.request_repaint();
+            // Then the fixed keys (U8-Q1, U8-Q2), which no action of the map can take.
+            let in_grid = self
+                .tabs
+                .active()
+                .is_some_and(|tab| tab.mode == ViewMode::Grid);
+            match fixed_key(chord, view) {
+                Some(FixedKey::NextTab) => self.tab_action(TabAction::Next),
+                Some(FixedKey::PreviousTab) => self.tab_action(TabAction::Previous),
+                Some(fixed @ (FixedKey::Navigate(nav) | FixedKey::Extend(nav))) if in_grid => {
+                    let extend = matches!(fixed, FixedKey::Extend(_));
+                    let visible_rows = ((rect.height() / (self.thumb_size as f32 + GRID_SPACING))
+                        .floor() as usize)
+                        .max(1);
+                    self.grid_move(nav, extend, visible_rows);
+                    scroll_to = self.tabs.active().and_then(Tab::position);
                 }
-                continue;
-            }
-            // F5 (ADR 0026 §3.1, F-Q1, T242) in the contact sheet and the preview: "Reload
-            // Folder" through its command; not while a text field has the keyboard or a dialog
-            // holds the program, not on a repeat (a held F5 reloads once), and not when the left
-            // column took it this frame for the library's "Refresh" (U4-Q1).
-            if !ctx.egui_wants_keyboard_input() && reload_key_action(key, ctrl, shift, alt) {
-                if !repeat && !self.dialog_open() && !self.library_took_f5 {
-                    self.run_command(&ctx, Command::ReloadFolder);
-                    ctx.request_repaint();
+                Some(FixedKey::OpenPreview) if in_grid => {
+                    self.switch_mode(ViewMode::Loupe);
                 }
-                continue;
-            }
-            // Ctrl+E (ADR 0019 §2.2, T202) in the contact sheet and the preview: the first program
-            // of the list, or the Settings window while the list is empty, through its command;
-            // not while a text field has the keyboard or a dialog holds the program, and not on a
-            // repeat (a held Ctrl+E starts the program once).
-            if !ctx.egui_wants_keyboard_input() && open_in_key_action(key, ctrl, shift, alt) {
-                if !repeat && !self.dialog_open() {
-                    let command = if self.settings.external_programs.is_empty() {
-                        Command::OpenInAnother
-                    } else {
-                        Command::OpenIn(0)
-                    };
-                    self.run_command(&ctx, command);
-                    ctx.request_repaint();
-                }
-                continue;
-            }
-
-            if !ctx.egui_wants_keyboard_input()
-                && let Some(action) = rating_key_action(key, ctrl, shift, alt)
-            {
-                let (scroll, moves) = self.rate(action);
-                if let Some(position) = scroll {
-                    scroll_to = position;
-                }
-                self.queue_moves(MoveKind::Reject, moves);
-                continue;
-            }
-
-            // Ctrl+← and Ctrl+→ turn the images a rating key acts on (ADR 0024 §2.1, O-Q1, T237);
-            // a held key turns once.
-            if !ctx.egui_wants_keyboard_input()
-                && let Some(clockwise) = rotation_key_action(key, ctrl, shift, alt)
-            {
-                if !repeat {
-                    self.rotate(&ctx, clockwise);
-                }
-                continue;
-            }
-
-            // M opens the metadata window of the current image in the loupe and the contact sheet
-            // (D16); with several images marked on the current or the first marked image (U12c-Q1,
-            // T126); with a kind without metadata support nothing happens.
-            if !ctx.egui_wants_keyboard_input()
-                && key_action(key, ctrl, alt) == Some(Action::OpenMetadata)
-            {
-                self.act(Action::OpenMetadata, key_anchor);
-                ctx.request_repaint();
-                continue;
-            }
-
-            // I opens and collapses the inspector in the loupe and the contact sheet (ADR 0017
-            // §2.4, U2-Q3, T110); not while a text field has the keyboard or a dialog holds the
-            // program.
-            if !ctx.egui_wants_keyboard_input()
-                && key_action(key, ctrl, alt) == Some(Action::ToggleInfo)
-            {
-                if !self.dialog_open() {
-                    self.act(Action::ToggleInfo, None);
-                    ctx.request_repaint();
-                }
-                continue;
-            }
-
-            match self.tabs.active().map(|tab| tab.mode) {
-                Some(ViewMode::Grid) => match grid_key_action(key, ctrl, shift, alt) {
-                    Some(GridKeyAction::OpenLoupe) => {
-                        self.switch_mode(ViewMode::Loupe);
-                    }
-                    Some(action @ (GridKeyAction::Navigate(nav) | GridKeyAction::Extend(nav))) => {
-                        let extend = matches!(action, GridKeyAction::Extend(_));
-                        let visible_rows = ((rect.height()
-                            / (self.thumb_size as f32 + GRID_SPACING))
-                            .floor() as usize)
-                            .max(1);
-                        self.grid_move(nav, extend, visible_rows);
-                        scroll_to = self.tabs.active().and_then(Tab::position);
-                    }
-                    Some(GridKeyAction::SelectAll) => self.select_all(),
-                    Some(GridKeyAction::ClearSelection) => self.clear_selection(),
-                    None => {}
-                },
-                Some(ViewMode::Loupe) => {
-                    if self.compare.is_some()
-                        && key == egui::Key::Escape
-                        && loupe_key_action(key, ctrl, alt).is_some()
-                    {
-                        // Escape closes an open compare first and the current image stays in
-                        // the preview (U6-Q11, T153); G and Enter close the preview, and the
-                        // compare with it (`follow_compare`).
+                Some(FixedKey::ClearMarking) if in_grid => self.clear_selection(),
+                Some(FixedKey::ClosePreview) => {
+                    if self.compare.is_some() && key == egui::Key::Escape {
+                        // Escape closes an open compare first and the current image stays in the
+                        // preview (U6-Q11, T153); Enter closes the preview, and the compare with
+                        // it (`follow_compare`).
                         self.close_compare();
                         ctx.request_repaint();
-                    } else if loupe_key_action(key, ctrl, alt).is_some() {
+                    } else {
                         scroll_to = self.switch_mode(ViewMode::Grid);
-                    } else if let Some(action) = key_action(key, ctrl, alt)
+                    }
+                }
+                Some(fixed) => {
+                    // The steps and `=` in the preview; `Taken` does nothing (U3-Q1).
+                    if let Some(action) = fixed_view_action(fixed)
                         && step_allowed(action, repeat, &self.last_frame_status)
                     {
                         self.act(action, key_anchor);
@@ -7665,6 +7804,7 @@ impl Loupe {
             indicator_after: self.indicator_after,
             message: self.message.as_deref(),
             total,
+            mode_key: self.key_map.first_key(KeyAction::RawJpeg),
         };
         // While comparing, the image area is two halves (U6-Q5, T153): the held image left or on
         // top from the second view core, the current image right or below from the first.
@@ -7811,7 +7951,10 @@ impl Loupe {
         // The display-mode control (G4: a key and a control) sits in the status bar.
         self.next_status = StatusBar {
             line,
-            mode: Some(mode_label(frame.mode)),
+            mode: Some(mode_label_with_key(
+                frame.mode,
+                self.key_map.first_key(KeyAction::RawJpeg),
+            )),
         };
     }
 }
@@ -7833,6 +7976,8 @@ struct ImageAreaShown<'a> {
     message: Option<&'a str>,
     /// The number of files the status line of an empty area counts.
     total: usize,
+    /// The key map's key of RAW ↔ JPEG, for the error texts (T280).
+    mode_key: Option<KeyChord>,
 }
 
 /// The pointer's place in the image area in view pixels, which a zoom goes around; `None` (the
@@ -7972,7 +8117,7 @@ fn draw_image_area(
         );
     };
     match &frame.status {
-        Status::Error(e) => centre_text(&error_text(e, frame.mode)),
+        Status::Error(e) => centre_text(&error_text_with_key(e, frame.mode, shown.mode_key)),
         Status::Preparing {
             indicator: true, ..
         } => centre_text(&indicator_text(&frame)),
@@ -9736,13 +9881,15 @@ const LIST_HEIGHT_SHARE: f32 = 0.2;
 
 /// The library (ADR 0017 §2.1, U4-Q7, T135): the sections Folders, Favourites and Recent, each
 /// collapsible as `shell` says and in its own scroll area when long. `active` is the
-/// [`folder_key`] of the active tab's folder, highlighted in the tree when it is visible. Every
-/// text comes from `library_text.rs`; names and paths are data.
+/// [`folder_key`] of the active tab's folder, highlighted in the tree when it is visible.
+/// `refresh_hover` is the Refresh button's hover text with the key map's key (T280). Every text
+/// comes from `library_text.rs`; names and paths are data.
 fn draw_library(
     ui: &mut egui::Ui,
     library: &Library,
     shell: &ShellSettings,
     active: Option<&str>,
+    refresh_hover: &str,
     actions: &mut Vec<LibraryAction>,
 ) {
     let height = ui.available_height().max(0.0);
@@ -9752,7 +9899,7 @@ fn draw_library(
         .show(ui, |ui| {
             if ui
                 .small_button(library_text(LibraryText::Refresh))
-                .on_hover_text(library_text(LibraryText::RefreshHover))
+                .on_hover_text(refresh_hover)
                 .clicked()
             {
                 actions.push(LibraryAction::Refresh);
@@ -10449,6 +10596,19 @@ fn start_field_values(path: Option<&Path>) -> FieldValues {
     values
 }
 
+/// The key map (ADR 0017 U8-Q6, T280) from `keys.txt`, each problem written to the log; the
+/// default map without a path.
+fn start_key_map(path: Option<&Path>) -> KeyMap {
+    let Some(path) = path else {
+        return KeyMap::default();
+    };
+    let (map, problems) = load_key_map(path);
+    for problem in problems {
+        eprintln!("pw-loupe: {problem}");
+    }
+    map
+}
+
 /// Shows a warning box from its own thread, so the frame is not held up.
 fn show_warning(title: &'static str, text: String) {
     let shown = std::thread::Builder::new()
@@ -10542,6 +10702,8 @@ fn run(options: Options) -> Result<(), String> {
     let (settings, saved_library) = start_settings(settings_path.as_deref());
     let field_values_path = field_values_path();
     let field_values = start_field_values(field_values_path.as_deref());
+    let keys_path = keys_path();
+    let key_map = start_key_map(keys_path.as_deref());
     let library = Library::new(&read_drives(), &saved_library);
     let config = Config {
         core_budget: options.core_mb << 20,
@@ -10621,6 +10783,12 @@ fn run(options: Options) -> Result<(), String> {
                 .set_visuals_of(egui::Theme::Light, visuals(Theme::Light));
             cc.egui_ctx.all_styles_mut(apply_text_sizes);
             cc.egui_ctx.set_theme(egui_theme(settings.shell.theme));
+            // egui's own keys off (ADR 0017 U8-Q13, T280): Ctrl+Q does not quit, and Ctrl+plus,
+            // Ctrl+minus and Ctrl+0 do not scale the window (Ctrl+0 is only No Label).
+            cc.egui_ctx.options_mut(|options| {
+                options.zoom_with_keyboard = false;
+                options.quit_shortcuts.clear();
+            });
             let ctx = cc.egui_ctx.clone();
             core.set_wake({
                 let ctx = ctx.clone();
@@ -10642,6 +10810,8 @@ fn run(options: Options) -> Result<(), String> {
                 exiftool_checked: false,
                 settings: settings.clone(),
                 settings_path,
+                key_map,
+                keys_path,
                 settings_window: None,
                 settings_page: SettingsPage::General,
                 about_window: false,

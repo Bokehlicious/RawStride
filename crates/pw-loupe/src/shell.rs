@@ -5,6 +5,7 @@
 
 use egui::{Color32, Key};
 
+use crate::keymap::{KeyAction, KeyMap};
 use crate::settings::{ShellSettings, WindowRect};
 use crate::sort::SortKey;
 
@@ -947,10 +948,88 @@ pub fn menu_items() -> Vec<MenuItem> {
     items
 }
 
+/// The key a menu item, a right-click item or a thumbnail button's hover text shows (ADR 0017
+/// U8-Q8, T280): the key map's first key of the item's action (`OpenIn(0)` and `OpenInAnother`
+/// through [`KeyAction::of_command`]), `None` while the action has no key; else the item's own
+/// fixed key (Escape, Ctrl+Tab, Ctrl+Shift+Tab, Alt+F4) or none.
+pub fn menu_key(item: MenuItem, map: &KeyMap) -> Option<KeyChord> {
+    match KeyAction::of_command(item.command) {
+        Some(action) => map.first_key(action),
+        None => item.key,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::settings::ShellSettings;
+
+    /// With the default map every item shows the key it showed before the map (T280), the
+    /// right-click menu's items and "Open in Another Program…" included.
+    #[test]
+    fn the_default_map_gives_every_menu_item_its_old_key() {
+        let map = KeyMap::default();
+        let context_items = IMAGE_CONTEXT_MENU.iter().flat_map(|entry| match entry {
+            MenuEntry::Item(item) => vec![*item],
+            MenuEntry::Submenu(_, sub) => sub.to_vec(),
+            _ => Vec::new(),
+        });
+        for item in menu_items().into_iter().chain(context_items) {
+            assert_eq!(menu_key(item, &map), item.key, "{:?}", item.command);
+        }
+        let open_in_another = MenuItem {
+            command: Command::OpenInAnother,
+            key: None,
+        };
+        assert_eq!(menu_key(open_in_another, &map), Some(OPEN_IN_KEY));
+    }
+
+    /// A moved, a cleared and a fixed item, and both "Open in" items (T280).
+    #[test]
+    fn menu_key_follows_the_map() {
+        let find = |command| {
+            menu_items()
+                .into_iter()
+                .find(|item| item.command == command)
+                .unwrap()
+        };
+        let q = KeyChord {
+            key: Key::Q,
+            ctrl: false,
+            shift: false,
+            alt: false,
+        };
+        let shift_e = KeyChord {
+            key: Key::E,
+            ctrl: false,
+            shift: true,
+            alt: false,
+        };
+        let mut map = KeyMap::default();
+        map.clear(KeyAction::Fit, 0);
+        map.set(KeyAction::Fit, 0, q).unwrap();
+        map.clear(KeyAction::Reject, 0);
+        map.clear(KeyAction::OpenIn, 0);
+        map.set(KeyAction::OpenIn, 0, shift_e).unwrap();
+        assert_eq!(menu_key(find(Command::Fit), &map), Some(q));
+        assert_eq!(menu_key(find(Command::Reject), &map), None);
+        // A fixed key no map changes.
+        assert_eq!(
+            menu_key(find(Command::ClearSelection), &map),
+            plain(Key::Escape)
+        );
+        assert_eq!(menu_key(find(Command::NextTab), &map), ctrl(Key::Tab));
+        for command in [Command::OpenInAnother, Command::OpenIn(0)] {
+            let item = MenuItem { command, key: None };
+            assert_eq!(menu_key(item, &map), Some(shift_e), "{command:?}");
+        }
+        // The second program's item has no key.
+        let second = MenuItem {
+            command: Command::OpenIn(1),
+            key: None,
+        };
+        assert_eq!(menu_key(second, &map), None);
+    }
 
     fn rect(x: i32, y: i32, width: u32, height: u32, scale: f32) -> WindowRect {
         WindowRect {

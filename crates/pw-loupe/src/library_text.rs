@@ -6,6 +6,9 @@
 
 use std::io;
 
+use crate::shell::KeyChord;
+use crate::shell_text::key_text;
+
 /// A fixed text of the library.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LibraryText {
@@ -46,6 +49,20 @@ pub fn library_text(text: LibraryText) -> &'static str {
         LibraryText::NoFavourites => "Right-click a folder to add it.",
         LibraryText::NoRecent => "No folders opened yet.",
         LibraryText::FolderNotFound => "Folder not found",
+    }
+}
+
+/// The hover text of the library's Refresh button with the key the key map gives Reload Folder,
+/// which reads the drives again while the pointer is over the left column (ADR 0017 U4-Q1, U8-Q8,
+/// T280): "Read the drives again (F5)" with the key given, without the parentheses when it has no
+/// key.
+pub fn refresh_hover_text(key: Option<KeyChord>) -> String {
+    match key {
+        Some(chord) => {
+            let key = key_text(chord);
+            format!("Read the drives again ({key})")
+        }
+        None => "Read the drives again".to_string(),
     }
 }
 
@@ -131,5 +148,28 @@ mod tests {
         );
         let plain = io::Error::other("anything");
         assert_eq!(expand_error_text(&plain), "Cannot read this folder");
+    }
+
+    /// The Refresh hover text shows the key map's key of Reload Folder (T280): the default key
+    /// gives today's text, a moved key is shown, no key leaves out the parentheses.
+    #[test]
+    fn the_refresh_hover_text_shows_the_maps_key() {
+        use crate::keymap::{KeyAction, KeyMap};
+        let default = KeyMap::default().first_key(KeyAction::ReloadFolder);
+        assert_eq!(
+            refresh_hover_text(default),
+            library_text(LibraryText::RefreshHover)
+        );
+        let ctrl_r = KeyChord {
+            key: egui::Key::R,
+            ctrl: true,
+            shift: false,
+            alt: false,
+        };
+        assert_eq!(
+            refresh_hover_text(Some(ctrl_r)),
+            "Read the drives again (Ctrl+R)"
+        );
+        assert_eq!(refresh_hover_text(None), "Read the drives again");
     }
 }

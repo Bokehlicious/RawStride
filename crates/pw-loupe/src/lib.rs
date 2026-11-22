@@ -124,9 +124,10 @@ pub use keymap::{
     is_modifier_key, keys_path, load_key_map, save_key_map,
 };
 pub use loupe_text::{
-    PROFILE_UNUSABLE_TEXT, READING_RATINGS_TEXT, compare_side_text, error_text, failed_cell_text,
-    indicator_text, marked_text, mode_label, no_match_text, no_preview_text, position_text,
-    source_text, status_line, zoom_text,
+    PROFILE_UNUSABLE_TEXT, READING_RATINGS_TEXT, compare_side_text, error_text,
+    error_text_with_key, failed_cell_text, indicator_text, marked_text, mode_label,
+    mode_label_with_key, no_match_text, no_preview_text, position_text, source_text, status_line,
+    zoom_text,
 };
 pub use monitor_profile::{
     MonitorProfile, ProfileSource, load_monitor_profile, primary_monitor_profile_path,
@@ -151,7 +152,8 @@ pub use preview::{
 };
 pub use preview_text::{
     ClippingText, HistogramText, PreviewText, clipped_text, clipping_state_text, clipping_text,
-    deep_shadows_text, histogram_text, preview_text, zoom_value_text,
+    clipping_text_with_key, deep_shadows_text, histogram_text, preview_text, preview_text_with_key,
+    zoom_value_text,
 };
 pub use rating_text::{
     ROTATION_UNSUPPORTED_TEXT, UNSUPPORTED_TEXT, label_choice_text, label_filter_text, label_name,
@@ -169,8 +171,8 @@ pub use shell::{
     MENUS, Menu, MenuEntry, MenuItem, MenuKind, NON_TEXT_CONTRAST, OPEN_IN_KEY, Palette,
     REPOSITORY, STATUS_TEXT_SIZE, SettingsPage, StartWindow, SubmenuKind, TEXT_CONTRAST, THEMES,
     Theme, UNKNOWN_COMMIT, VERSION, Where, apply_text_sizes, clamp_column_width,
-    column_width_range, contrast_ratio, font_definitions, image_area, menu_items, non_text_pairs,
-    palette, rect_on_a_screen, start_window, text_pairs, visuals,
+    column_width_range, contrast_ratio, font_definitions, image_area, menu_items, menu_key,
+    non_text_pairs, palette, rect_on_a_screen, start_window, text_pairs, visuals,
 };
 pub use shell_text::{
     AboutText, SettingsText, ShellText, about_text, command_text, exiftool_message,

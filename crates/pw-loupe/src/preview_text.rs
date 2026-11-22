@@ -7,6 +7,9 @@
 
 use pw_viewcore::{ClippingState, Zoom};
 
+use crate::shell::KeyChord;
+use crate::shell_text::key_text;
+
 /// A fixed text of the preview.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PreviewText {
@@ -41,6 +44,33 @@ pub fn preview_text(text: PreviewText) -> &'static str {
         }
         PreviewText::CollapseColumn => "Collapse Column (I)",
         PreviewText::ExpandColumn => "Show Column (I)",
+    }
+}
+
+/// The text of `text` with the key the key map gives its action (ADR 0017 U8-Q8, T280): "Fit
+/// (F)", "Fit ↔ 100% (Z)", "Zoom In (+)", "Zoom Out (−)", "Zoom at Pointer (A)", "Marked only
+/// (S)" and "Collapse Column (I)" with the key given, without the parentheses when the action has
+/// no key. A text without a key (the section's heading, the hover text and "Show Column (I)",
+/// which is drawn nowhere) is [`preview_text`]'s.
+pub fn preview_text_with_key(text: PreviewText, key: Option<KeyChord>) -> String {
+    let name = match text {
+        PreviewText::Fit => "Fit",
+        PreviewText::ToggleZoom => "Fit ↔ 100%",
+        PreviewText::ZoomIn => "Zoom In",
+        PreviewText::ZoomOut => "Zoom Out",
+        PreviewText::ZoomAtPointer => "Zoom at Pointer",
+        PreviewText::OnlyMarked => "Marked only",
+        PreviewText::CollapseColumn => "Collapse Column",
+        PreviewText::ZoomSection | PreviewText::OnlyMarkedHover | PreviewText::ExpandColumn => {
+            return preview_text(text).to_owned();
+        }
+    };
+    match key {
+        Some(chord) => {
+            let key = key_text(chord);
+            format!("{name} ({key})")
+        }
+        None => name.to_owned(),
     }
 }
 
@@ -110,6 +140,25 @@ pub fn clipping_text(text: ClippingText) -> &'static str {
         ClippingText::Highlights => "Clipped highlights (J)",
         ClippingText::Shadows => "Deep shadows (Shift+J)",
         ClippingText::NoMap => "No clipping map for this file",
+    }
+}
+
+/// The text of `text` with the key the key map gives its action (ADR 0017 U8-Q8, T280):
+/// "Clipped highlights (J)" and "Deep shadows (Shift+J)" with the key given, without the
+/// parentheses when the action has no key. The heading and the line without a map are
+/// [`clipping_text`]'s.
+pub fn clipping_text_with_key(text: ClippingText, key: Option<KeyChord>) -> String {
+    let name = match text {
+        ClippingText::Highlights => "Clipped highlights",
+        ClippingText::Shadows => "Deep shadows",
+        ClippingText::Section | ClippingText::NoMap => return clipping_text(text).to_owned(),
+    };
+    match key {
+        Some(chord) => {
+            let key = key_text(chord);
+            format!("{name} ({key})")
+        }
+        None => name.to_owned(),
     }
 }
 
@@ -246,5 +295,90 @@ mod tests {
         assert_eq!(zoom_value_text(Zoom::Scale(1.0), Some(1.0)), "100%");
         assert_eq!(zoom_value_text(Zoom::Scale(2.0), None), "200%");
         assert_eq!(zoom_value_text(Zoom::Scale(0.126), Some(0.126)), "13%");
+    }
+
+    /// The default map's keys give exactly today's texts; a moved key is shown, and an action
+    /// without a key has no parentheses (T280).
+    #[test]
+    fn the_preview_texts_show_the_maps_keys() {
+        use crate::keymap::{KeyAction, KeyMap};
+        let map = KeyMap::default();
+        let preview = [
+            (PreviewText::Fit, KeyAction::Fit),
+            (PreviewText::ToggleZoom, KeyAction::ZoomToggle),
+            (PreviewText::ZoomIn, KeyAction::ZoomIn),
+            (PreviewText::ZoomOut, KeyAction::ZoomOut),
+            (PreviewText::ZoomAtPointer, KeyAction::ZoomAtPointer),
+            (PreviewText::OnlyMarked, KeyAction::MarkedOnly),
+            (PreviewText::CollapseColumn, KeyAction::Inspector),
+        ];
+        for (text, action) in preview {
+            assert_eq!(
+                preview_text_with_key(text, map.first_key(action)),
+                preview_text(text),
+                "{text:?}"
+            );
+        }
+        for (text, action) in [
+            (ClippingText::Highlights, KeyAction::ClippedHighlights),
+            (ClippingText::Shadows, KeyAction::DeepShadows),
+        ] {
+            assert_eq!(
+                clipping_text_with_key(text, map.first_key(action)),
+                clipping_text(text),
+                "{text:?}"
+            );
+        }
+        let q = KeyChord {
+            key: egui::Key::Q,
+            ctrl: false,
+            shift: false,
+            alt: false,
+        };
+        let ctrl_q = KeyChord { ctrl: true, ..q };
+        assert_eq!(preview_text_with_key(PreviewText::Fit, Some(q)), "Fit (Q)");
+        assert_eq!(preview_text_with_key(PreviewText::Fit, None), "Fit");
+        assert_eq!(
+            preview_text_with_key(PreviewText::ToggleZoom, Some(ctrl_q)),
+            "Fit ↔ 100% (Ctrl+Q)"
+        );
+        assert_eq!(preview_text_with_key(PreviewText::ZoomIn, None), "Zoom In");
+        assert_eq!(
+            preview_text_with_key(PreviewText::ZoomOut, None),
+            "Zoom Out"
+        );
+        assert_eq!(
+            preview_text_with_key(PreviewText::ZoomAtPointer, None),
+            "Zoom at Pointer"
+        );
+        assert_eq!(
+            preview_text_with_key(PreviewText::OnlyMarked, Some(q)),
+            "Marked only (Q)"
+        );
+        assert_eq!(
+            preview_text_with_key(PreviewText::CollapseColumn, None),
+            "Collapse Column"
+        );
+        // Texts without a key stay as they are, "Show Column (I)" included.
+        assert_eq!(
+            preview_text_with_key(PreviewText::ExpandColumn, None),
+            "Show Column (I)"
+        );
+        assert_eq!(
+            preview_text_with_key(PreviewText::ZoomSection, Some(q)),
+            "Zoom"
+        );
+        assert_eq!(
+            clipping_text_with_key(ClippingText::Highlights, Some(q)),
+            "Clipped highlights (Q)"
+        );
+        assert_eq!(
+            clipping_text_with_key(ClippingText::Shadows, None),
+            "Deep shadows"
+        );
+        assert_eq!(
+            clipping_text_with_key(ClippingText::Section, Some(q)),
+            "Clipping"
+        );
     }
 }

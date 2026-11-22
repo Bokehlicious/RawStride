@@ -1,4 +1,4 @@
-# T281. The Settings page Keyboard Shortcuts and the companion suffixes' field — Blocked: waits for T280
+# T281. The Settings page Keyboard Shortcuts and the companion suffixes' field — Open
 
 - **Why:** ADR 0017 §2.4, step U8 (ADR 0017 §6.4, owner 2026-11-22): the key map is changed on a
   page of the Settings window (U8-Q7), and the companion suffixes get a field on the General page
@@ -103,3 +103,4 @@
 | Date | Status | Note |
 |---|---|---|
 | 2026-11-22 | Blocked | Written by the reviewer. Cold read: the key taken at the top of `ui()` by removing the events (the library's F5 and focused buttons see them otherwise), Tab and Escape moved by egui first, the page's state as `Loupe` fields, `keys_path`, the failed save's own text, the suffixes' text buffer, `parse_companion_suffixes` made `pub` and an empty field giving the default list (the existing rule; the owner may choose otherwise), the existing pages test extended, wrapped rows, the glossary's Clear and Restore Defaults. Chain review: `keys.txt` written only when the map changed; Save while a Change waits; the log not visible in the release build |
+| 2026-11-22 | Open | T280 Done: the shell asks `key_map` (`Loupe.key_map`, `Loupe.keys_path` beside `settings_path`, `#[expect(dead_code)]` until this task saves to it), and every menu and text shows its keys through `menu_key` and the `*_with_key` functions |

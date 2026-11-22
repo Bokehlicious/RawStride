@@ -20,6 +20,7 @@ use egui::Key;
 
 use crate::field_values::write_synced;
 use crate::grid::Navigation;
+use crate::ratings::RatingKey;
 use crate::settings::settings_path;
 use crate::shell::{Command, KeyChord};
 
@@ -475,6 +476,27 @@ impl KeyAction {
             Self::HideColumns => Command::ToggleColumns,
             Self::Inspector => Command::ToggleInfo,
             Self::FullScreen => Command::Fullscreen,
+        })
+    }
+
+    /// The rating or label change of a rating action, for the shell's `rate` (T280); `None` for
+    /// every other action.
+    pub fn rating_key(self) -> Option<RatingKey> {
+        Some(match self {
+            Self::Stars0 => RatingKey::Stars(0),
+            Self::Stars1 => RatingKey::Stars(1),
+            Self::Stars2 => RatingKey::Stars(2),
+            Self::Stars3 => RatingKey::Stars(3),
+            Self::Stars4 => RatingKey::Stars(4),
+            Self::Stars5 => RatingKey::Stars(5),
+            Self::LabelRed => RatingKey::Label("Red"),
+            Self::LabelYellow => RatingKey::Label("Yellow"),
+            Self::LabelGreen => RatingKey::Label("Green"),
+            Self::LabelBlue => RatingKey::Label("Blue"),
+            Self::LabelPurple => RatingKey::Label("Purple"),
+            Self::ClearLabel => RatingKey::ClearLabel,
+            Self::Reject => RatingKey::Reject,
+            _ => return None,
         })
     }
 }
@@ -1669,5 +1691,61 @@ mod tests {
             keys_path(),
             settings_path().map(|path| path.with_file_name("keys.txt"))
         );
+    }
+
+    /// A key moved (T280): Fit on `Q` with `F` cleared acts on `Q` in the preview, and `F` does
+    /// nothing there any more (not a fixed key either).
+    #[test]
+    fn a_moved_key_acts_and_its_old_key_does_nothing() {
+        let mut map = KeyMap::default();
+        map.clear(KeyAction::Fit, 0);
+        map.set(KeyAction::Fit, 0, key(Key::Q)).unwrap();
+        assert_eq!(
+            map.action_of(key(Key::Q), KeyView::Preview),
+            Some(KeyAction::Fit)
+        );
+        assert_eq!(map.action_of(key(Key::F), KeyView::Preview), None);
+        assert_eq!(fixed_key(key(Key::F), KeyView::Preview), None);
+        // Fit acts only in the preview.
+        assert_eq!(map.action_of(key(Key::Q), KeyView::Sheet), None);
+    }
+
+    /// Every rating action gives the rating change today's rating keys gave it, and no other
+    /// action gives one (T280).
+    #[test]
+    fn the_rating_actions_give_their_rating_keys() {
+        use KeyAction as A;
+        let expected = [
+            (A::Stars0, RatingKey::Stars(0)),
+            (A::Stars1, RatingKey::Stars(1)),
+            (A::Stars2, RatingKey::Stars(2)),
+            (A::Stars3, RatingKey::Stars(3)),
+            (A::Stars4, RatingKey::Stars(4)),
+            (A::Stars5, RatingKey::Stars(5)),
+            (A::LabelRed, RatingKey::Label("Red")),
+            (A::LabelYellow, RatingKey::Label("Yellow")),
+            (A::LabelGreen, RatingKey::Label("Green")),
+            (A::LabelBlue, RatingKey::Label("Blue")),
+            (A::LabelPurple, RatingKey::Label("Purple")),
+            (A::ClearLabel, RatingKey::ClearLabel),
+            (A::Reject, RatingKey::Reject),
+        ];
+        for action in KeyAction::ALL {
+            let want = expected
+                .iter()
+                .find(|(rated, _)| *rated == action)
+                .map(|(_, rating)| *rating);
+            assert_eq!(action.rating_key(), want, "{action:?}");
+        }
+        // Each default key gives the rating change of today's rating keys.
+        for (action, rating) in expected {
+            for chord in action.default_keys().into_iter().flatten() {
+                assert_eq!(
+                    rating_key_action(chord.key, chord.ctrl, chord.shift, chord.alt),
+                    Some(rating),
+                    "{action:?}"
+                );
+            }
+        }
     }
 }

@@ -5,7 +5,8 @@
 
 use pw_viewcore::{DecodeError, Frame, Source, Status, Zoom};
 
-use crate::shell_text::status_line_text;
+use crate::shell::KeyChord;
+use crate::shell_text::{key_text, status_line_text};
 
 fn file_name(frame: &Frame) -> String {
     frame
@@ -193,11 +194,46 @@ pub fn error_text(e: &DecodeError, mode: Source) -> String {
     }
 }
 
+/// [`error_text`] with the key the key map gives RAW ↔ JPEG (ADR 0017 U8-Q8, T280): "… Switch to
+/// JPEG mode (R) …" with the key given, without the parentheses when the action has no key.
+pub fn error_text_with_key(e: &DecodeError, mode: Source, key: Option<KeyChord>) -> String {
+    let key = key.map(key_text);
+    if e.damaged {
+        match key {
+            Some(key) => format!(
+                "RAW data is missing or damaged. Switch to JPEG mode ({key}) to see the camera's preview."
+            ),
+            None => {
+                "RAW data is missing or damaged. Switch to JPEG mode to see the camera's preview."
+                    .to_string()
+            }
+        }
+    } else if mode == Source::Jpeg && e.no_embedded_jpeg {
+        match key {
+            Some(key) => format!("The file has no embedded JPEG. Switch to RAW mode ({key})."),
+            None => "The file has no embedded JPEG. Switch to RAW mode.".to_string(),
+        }
+    } else {
+        format!("The file cannot be shown: {}", e.message)
+    }
+}
+
 /// The label of the display-mode control (G4: "with a key and a control").
 pub fn mode_label(mode: Source) -> &'static str {
     match mode {
         Source::Raw => "Mode: RAW (R)",
         Source::Jpeg => "Mode: JPEG (R)",
+    }
+}
+
+/// [`mode_label`] with the key the key map gives RAW ↔ JPEG (ADR 0017 U8-Q8, T280): "Mode: RAW
+/// (R)" with the key given, "Mode: RAW" when the action has no key.
+pub fn mode_label_with_key(mode: Source, key: Option<KeyChord>) -> String {
+    match (mode, key.map(key_text)) {
+        (Source::Raw, Some(key)) => format!("Mode: RAW ({key})"),
+        (Source::Raw, None) => "Mode: RAW".to_string(),
+        (Source::Jpeg, Some(key)) => format!("Mode: JPEG ({key})"),
+        (Source::Jpeg, None) => "Mode: JPEG".to_string(),
     }
 }
 
@@ -325,6 +361,66 @@ mod tests {
         assert_eq!(
             error_text(&text_only, Source::Jpeg),
             "The file cannot be shown: x: the file has no embedded JPEG"
+        );
+    }
+
+    /// The mode label and the two error texts show the key map's key of RAW ↔ JPEG (T280): the
+    /// default map's key gives exactly today's texts, a moved key is shown, and with no key the
+    /// parentheses are left out.
+    #[test]
+    fn the_mode_texts_show_the_maps_key() {
+        use crate::keymap::{KeyAction, KeyMap};
+        let default = KeyMap::default().first_key(KeyAction::RawJpeg);
+        let shift_r = Some(KeyChord {
+            key: egui::Key::R,
+            ctrl: false,
+            shift: true,
+            alt: false,
+        });
+        for mode in [Source::Raw, Source::Jpeg] {
+            assert_eq!(mode_label_with_key(mode, default), mode_label(mode));
+        }
+        assert_eq!(
+            mode_label_with_key(Source::Raw, shift_r),
+            "Mode: RAW (Shift+R)"
+        );
+        assert_eq!(mode_label_with_key(Source::Raw, None), "Mode: RAW");
+        assert_eq!(mode_label_with_key(Source::Jpeg, None), "Mode: JPEG");
+
+        let damaged = DecodeError::damaged("damaged: cut");
+        let none = DecodeError::no_embedded_jpeg("x: the file has no embedded JPEG");
+        let other = DecodeError::new("boom");
+        for (error, mode) in [
+            (&damaged, Source::Raw),
+            (&none, Source::Jpeg),
+            (&none, Source::Raw),
+            (&other, Source::Jpeg),
+        ] {
+            assert_eq!(
+                error_text_with_key(error, mode, default),
+                error_text(error, mode)
+            );
+        }
+        assert_eq!(
+            error_text_with_key(&damaged, Source::Raw, shift_r),
+            "RAW data is missing or damaged. Switch to JPEG mode (Shift+R) to see the camera's \
+             preview."
+        );
+        assert_eq!(
+            error_text_with_key(&damaged, Source::Raw, None),
+            "RAW data is missing or damaged. Switch to JPEG mode to see the camera's preview."
+        );
+        assert_eq!(
+            error_text_with_key(&none, Source::Jpeg, shift_r),
+            "The file has no embedded JPEG. Switch to RAW mode (Shift+R)."
+        );
+        assert_eq!(
+            error_text_with_key(&none, Source::Jpeg, None),
+            "The file has no embedded JPEG. Switch to RAW mode."
+        );
+        assert_eq!(
+            error_text_with_key(&other, Source::Raw, None),
+            "The file cannot be shown: boom"
         );
     }
 
