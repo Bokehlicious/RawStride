@@ -633,7 +633,11 @@ fourth of the analysis (a cheaper final check that no longer proves the image da
    become a setting later. Rules:
    - every file is still its own transaction with every check of §9.1–§9.5;
    - two writes to the same target (an image, or a sidecar) are never made at the same time, and
-     the writes to one target keep the order they were asked in;
+     the writes to one target keep the order they were asked in. This holds within one pool of
+     processes; the metadata worker's pool and the ingest template's pool can still meet on one
+     target, as the two single processes can before Q18. **The owner, 2026-11-22 (T266–T268's
+     chain review):** that is a known limit (`docs/tasks/known-limits.md`, recorded when T268 is
+     done), not a rule change;
    - the journal (§9.5) holds several open entries at once, each written whole, and the recovery
      at start is unchanged;
    - the RAW engine's sessions for an image are released before its write, as today (§9.1);
