@@ -13,7 +13,7 @@ settings, and the setup of the Git worktrees.
 | LLVM/Clang | 23.1.4 | `LIBCLANG_PATH=C:\Program Files\LLVM\bin` (bindgen) |
 | CMake / Ninja | 4.4.5 / 1.13.2 | |
 | vcpkg | 2026-10-29 | `VCPKG_ROOT=C:\Development\vcpkg` |
-| ExifTool | 13.59 | on PATH |
+| ExifTool | 13.64 | on PATH |
 | Tauri CLI | 2.12.4 | `cargo install tauri-cli --version "^2" --locked` (current Tauri app only) |
 | Node.js | 26.13 | frontend tooling and UI tests of the current Tauri app |
 | Git | 2.56 | `core.longpaths=true` |

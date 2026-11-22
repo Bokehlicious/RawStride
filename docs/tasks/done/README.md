@@ -277,3 +277,4 @@ was when the task was done, so "this file", "below" and "the Log" in T1–T115 m
 | [T267](T267-batch-write-timing-by-process-count.md) | ADR 0007 §9.6 Q18: a batch write timed with 1, 2 and 4 ExifTool processes (pw-imagecheck example) |
 | [T268](T268-app-and-import-use-several-exiftool-processes.md) | ADR 0007 §9.6 Q18: the app's writes and the import's template use the owner's number of ExifTool processes (pw-loupe) |
 | [T270](T270-ship-and-pin-exiftool-13-64.md) | ADR 0007 §9.7 Q20: ship and pin ExifTool 13.64 (CI, packaging, notices, documents) |
+| [T271](T271-exiftool-13-64-the-lowest-version.md) | ADR 0007 §9.7 Q20: ExifTool 13.64 is the lowest version the app writes with (pw-metadata, pw-loupe) |

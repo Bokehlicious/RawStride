@@ -33,10 +33,10 @@ pub(crate) const LOG_PREFIX: &str = "fake-exiftool-log=";
 /// - `hang`: answers commands but ignores `-stay_open False` and end-of-input.
 /// - `version=<text>`: answers a `-ver` command with `<text>` and every other command like
 ///   `normal` (T94).
-/// - `exit-after-first-request`: answers every `-ver` command with `13.59`, answers the first
+/// - `exit-after-first-request`: answers every `-ver` command with `13.64`, answers the first
 ///   other command, then exits at the next other command without answering (T94: the worker
 ///   asks `-ver` when it starts a process).
-/// - `slow`: answers every `-ver` command with `13.59` and every other command like `normal`, but
+/// - `slow`: answers every `-ver` command with `13.64` and every other command like `normal`, but
 ///   a command with a line holding [`SLOW_MARKER`] only after [`SLOW_WAIT`], and at a command
 ///   with a line holding [`EXIT_MARKER`] it exits without answering (T266). With a leading
 ///   argument [`LOG_PREFIX`]`<file>` it logs the lines holding [`SLOW_MARKER`] to that file.
@@ -129,7 +129,7 @@ fn run(mode: &str) {
         }
         let version = match (mode, version) {
             (_, Some(text)) if is_version => Some(text),
-            ("exit-after-first-request" | "slow", _) if is_version => Some("13.59"),
+            ("exit-after-first-request" | "slow", _) if is_version => Some("13.64"),
             _ => None,
         };
         if mode == "exit-after-first-request" && !is_version {

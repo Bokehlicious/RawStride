@@ -822,7 +822,7 @@ mod tests {
                     minor: 40
                 }
             ),
-            "A001.jpg: ExifTool 12.40 is too old (at least 12.67 is needed)"
+            "A001.jpg: ExifTool 12.40 is too old (at least 13.64 is needed)"
         );
         assert_eq!(
             exiftool_unavailable_text("A001.jpg"),

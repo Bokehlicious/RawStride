@@ -561,7 +561,7 @@ mod write_error_tests {
             crate::EXIFTOOL_TOO_OLD
         );
         assert_eq!(crate::NO_JOURNAL, "the write journal could not be opened");
-        assert_eq!(crate::EXIFTOOL_TOO_OLD, "ExifTool is older than 12.67");
+        assert_eq!(crate::EXIFTOOL_TOO_OLD, "ExifTool is older than 13.64");
     }
 }
 

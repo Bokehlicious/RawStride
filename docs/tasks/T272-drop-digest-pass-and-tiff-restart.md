@@ -1,4 +1,4 @@
-# T272. ADR 0007 §9.7 Q21 and Q22: the digest pass and the TIFF restart dropped, the copy's checksum checked (pw-metadata) — Blocked: waits for T271
+# T272. ADR 0007 §9.7 Q21 and Q22: the digest pass and the TIFF restart dropped, the copy's checksum checked (pw-metadata) — Open
 
 - **Why:** ADR 0007 revision 30 (§9.7 points 2 and 3, Q21 and Q22; approved by the owner
   2026-11-22). With ExifTool 13.64, now the lowest version (T271), `-IPTCDigest=new` in the IIM
@@ -108,3 +108,4 @@
 | 2026-11-22 | Blocked | Written after ADR 0007 revision 30 (§9.7, Q21 and Q22); last of the chain T270 → T271 → T272. Waits for T271 |
 | 2026-11-22 | Blocked | Cold read: point 6 added (the `verify.rs` test copies get an equal `File:CurrentIPTCDigest`; the `digest_written` asserts in the D17/D18 tests go; rule 5 lifted for exactly these); the check placed after the validation check; it covers JPEG too; `ExifTool::restart` is used only by its own tests and the example, not by the worker or the pool; unused parameter and imports removed; `verify.rs`'s module comment and `NEW_DIGEST`'s doc; no call-count test (not observable), DNG covered by the real-file test. pw-loupe has no match on `VerifyError` |
 | 2026-11-22 | Blocked | Chain review: see T270's log. An undo goes in reverse order: this task before T271 (with this task and an ExifTool below 13.64, every TIFF and DNG write with a new checksum would be refused; ADR 0007 §9.7) |
+| 2026-11-22 | Open | T271 done (13.64 the lowest version the app writes with) |

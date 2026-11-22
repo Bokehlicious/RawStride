@@ -1,9 +1,11 @@
 //! A persistent ExifTool process in `-stay_open` mode.
 //!
 //! [`ExifTool::version`] asks the running process for its version (ADR 0007 §11: "ExifTool
-//! version: at least 12.67, checked at start", from IPTC §5.1). [`MIN_EXIFTOOL_VERSION`] is that
-//! minimum; the safe write (§9) also relies on newer features (`-api ImageHashType`,
-//! `ImageDataHash`). The metadata worker asks it each time it starts a process (T94).
+//! version: at least 12.67, checked at start", from IPTC §5.1); that is the standard's floor.
+//! [`MIN_EXIFTOOL_VERSION`] is higher, 13.64 (ADR 0007 §9.7 Q20): 13.64 fixes the misread and the
+//! out-of-date checksum the safe write relied on working around (T269), and the safe write (§9)
+//! also relies on newer features (`-api ImageHashType`, `ImageDataHash`). The metadata worker asks
+//! it each time it starts a process (T94).
 
 use std::fmt;
 use std::fmt::Write as _;
@@ -62,10 +64,11 @@ pub struct ToolVersion {
     pub minor: u32,
 }
 
-/// The oldest ExifTool the program writes with (ADR 0007 §11, D9).
+/// The oldest ExifTool the program writes with (ADR 0007 §11, D9; 13.64 since §9.7 Q20). 13.64
+/// fixes the misread and the out-of-date checksum the safe write relied on working around (T269).
 pub const MIN_EXIFTOOL_VERSION: ToolVersion = ToolVersion {
-    major: 12,
-    minor: 67,
+    major: 13,
+    minor: 64,
 };
 
 impl ToolVersion {
@@ -499,14 +502,21 @@ mod tests {
         assert!(version(12, 67) < version(13, 0));
         assert!(version(12, 99) < version(13, 0));
         assert!(version(12, 67) < version(13, 10));
-        assert_eq!(MIN_EXIFTOOL_VERSION, version(12, 67));
+        assert_eq!(MIN_EXIFTOOL_VERSION, version(13, 64));
+    }
+
+    /// ADR 0007 §9.7 Q20 (T271): 13.63 is too old to write with, 13.64 is not.
+    #[test]
+    fn writes_need_at_least_13_64() {
+        assert!(version(13, 63) < MIN_EXIFTOOL_VERSION);
+        assert!(version(13, 64) >= MIN_EXIFTOOL_VERSION);
     }
 
     #[test]
     fn a_version_is_shown_with_a_two_digit_minor_part() {
         assert_eq!(version(13, 5).to_string(), "13.05");
         assert_eq!(version(12, 67).to_string(), "12.67");
-        assert_eq!(MIN_EXIFTOOL_VERSION.to_string(), "12.67");
+        assert_eq!(MIN_EXIFTOOL_VERSION.to_string(), "13.64");
     }
 
     #[test]

@@ -98,7 +98,7 @@ pub const NO_JOURNAL: &str = "the write journal could not be opened";
 
 /// The text of [`WriteError::ExifToolTooOld`]: a write while the running ExifTool is older than
 /// [`MIN_EXIFTOOL_VERSION`] or its version could not be read (D9).
-pub const EXIFTOOL_TOO_OLD: &str = "ExifTool is older than 12.67";
+pub const EXIFTOOL_TOO_OLD: &str = "ExifTool is older than 13.64";
 
 /// What a rating write needs (T91): the app's write journal, its image checks and the edit
 /// options. `options` are the options the worker starts with; [`MetadataWorker::set_options`]

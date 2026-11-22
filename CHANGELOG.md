@@ -20,6 +20,8 @@ Downloads are on the [Releases page](https://github.com/Bokehlicious/RawStride/r
   written by up to four ExifTool processes at once, so a batch is saved several times as
   fast. Each file is still written and checked on its own.
 - The zip includes ExifTool 13.64 instead of 13.59.
+- RawStride now needs ExifTool 13.64 or later to save ratings and metadata (12.67 before);
+  with an older ExifTool it still reads them and tells you at start.
 
 ## [0.2.0] - 2026-11-21
 

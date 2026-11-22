@@ -4821,7 +4821,7 @@ mod tests {
             (WriteReason::NoJournal, "the write log could not be opened"),
             (
                 WriteReason::ExifToolTooOld,
-                "ExifTool is too old (at least 12.67 is needed)",
+                "ExifTool is too old (at least 13.64 is needed)",
             ),
             (
                 WriteReason::NotSafeIntact,

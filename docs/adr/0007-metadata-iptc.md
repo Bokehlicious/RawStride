@@ -691,9 +691,9 @@ written; the reviewer changes them at those tasks' Done.
   damaged copies. Other kinds of damage (a wrong tile offset, a broken structure that the hash and
   the listing do not show) were not measured.
 
-1. **ExifTool 13.64 or newer is required (Q20).** `MIN_EXIFTOOL_VERSION` becomes 13.64 (today
-   12.67, §11). The shipped copy (ADR 0002 §2.5, `docs/distribution.md`) and CI's pinned version
-   become 13.64, each checked by SHA-256 as today. ADR 0002's rule holds: a version is shipped only
+1. **ExifTool 13.64 or newer is required (Q20).** `MIN_EXIFTOOL_VERSION` becomes 13.64 (12.67
+   before; done by T271 2026-11-22, §11). The shipped copy (ADR 0002 §2.5,
+   `docs/distribution.md`) and CI's pinned version become 13.64, each checked by SHA-256 as today. ADR 0002's rule holds: a version is shipped only
    after the real-file tests of `pw-metadata` and `pw-imagecheck` pass with it (T269 ran those of
    `pw-metadata`; those of `pw-imagecheck` are run in the task). An older ExifTool on PATH is
    treated as D9 says: reading works, every write is refused with a clear text. One safe write
@@ -803,7 +803,8 @@ Each template field has one of four modes. The default is **Keep**. [Product]
 - **Image Registry Entry:** both sub-fields required [IPTC §11.21].
 - **Rating:** −1 … 5; real numbers allowed; out-of-range values shown as invalid and not changed
   (§8).
-- **ExifTool version:** at least 12.67, checked at start [IPTC §5.1].
+- **ExifTool version:** at least 12.67, checked at start [IPTC §5.1]. RawStride writes only with
+  13.64 or newer (owner, 2026-11-22, §9.7 Q20; T271); 12.67 is the standard's floor.
 
 ## 12. Tool and verification
 
@@ -989,6 +990,8 @@ listed under the table (§17.1).
 - **D1** is dropped (owner, 2026-11-18): Q2 was changed so that nothing records a cleared field
   (§6.4), and RawStride has no XMP namespace of its own. If one is needed later (the modes of a
   template file, §10; the original capture time, ADR 0020 §2.7), it is decided with that step.
+- **D9, the version** (owner, 2026-11-22, §9.7 Q20; T271): "older than 12.67" is now older than
+  13.64 (`MIN_EXIFTOOL_VERSION`); the rest of D9 is unchanged.
 - **D11, language** (owner, 2026-11-12, T102 and T104): `property_label` takes a language
   (`Language::Sv`, `Language::En`). English always gives the IPTC name from the property table;
   Swedish gives the D11 name where there is one and otherwise the IPTC name. The Swedish names are
@@ -1039,6 +1042,7 @@ listed under the table (§17.1).
 - Revision 30 (§9.7, Q20–Q23, Q19 decided): tasks written 2026-11-22: the chain T270 → T271 →
   T272 (ExifTool 13.64 shipped and pinned; 13.64 the lowest version; the digest pass and the
   restart dropped, the checksum checked) and T273 (other kinds of DNG damage measured, for Q23).
+  T270 and T271 done 2026-11-22 (13.64 shipped and pinned; 13.64 the lowest version, §11, D9).
 
 ## Revision history
 

@@ -1104,7 +1104,7 @@ impl<'a> ShotWriter<'a> {
                     return;
                 }
             };
-            // §11, D9 (T101): an ExifTool older than 12.67, or one whose version cannot be read,
+            // §11, D9 (T101): an ExifTool older than 13.64, or one whose version cannot be read,
             // does not write the template. It is listed once, as a failed start, and not kept, so
             // the next import starts and asks again; the copied files stay.
             match tool.version() {
@@ -1650,7 +1650,7 @@ mod tests {
         assert!(done.failed.is_empty());
         assert_eq!(
             done.iptc_errors,
-            ["A001.jpg: ExifTool 12.40 is too old (at least 12.67 is needed)"]
+            ["A001.jpg: ExifTool 12.40 is too old (at least 13.64 is needed)"]
         );
         assert_eq!(
             fs::read(dirs.dest.join("A001.jpg")).unwrap(),
@@ -3019,7 +3019,7 @@ mod tests {
     fn with_two_processes_a_shot_is_placed_after_its_template_write_answered() {
         let dirs = TempDirs::new("pool-placed-after-write");
         let (plan, options) = copied_jpegs(&dirs, &["A001pwhold.jpg"]);
-        let (write, log, hold_until) = observed_write(&dirs, "13.59", 2);
+        let (write, log, hold_until) = observed_write(&dirs, "13.64", 2);
         let program = write.exiftool_program.as_ref().unwrap().program.clone();
         let cancel = AtomicBool::new(false);
         let mut exiftool = None;
@@ -3074,7 +3074,7 @@ mod tests {
     fn with_two_processes_shots_are_placed_in_shot_order_when_a_later_write_answers_first() {
         let dirs = TempDirs::new("pool-placed-order");
         let (plan, options) = copied_jpegs(&dirs, &["A001pwhold.jpg", "A002.jpg"]);
-        let (write, log, hold_until) = observed_write(&dirs, "13.59", 2);
+        let (write, log, hold_until) = observed_write(&dirs, "13.64", 2);
         let program = write.exiftool_program.as_ref().unwrap().program.clone();
         let cancel = AtomicBool::new(false);
         let mut exiftool = None;
@@ -3136,7 +3136,7 @@ mod tests {
                 "A005.jpg",
             ],
         );
-        let (write, log, hold_until) = observed_write(&dirs, "13.59", 2);
+        let (write, log, hold_until) = observed_write(&dirs, "13.64", 2);
         let program = write.exiftool_program.as_ref().unwrap().program.clone();
         let cancel = AtomicBool::new(false);
         let mut exiftool = None;
@@ -3235,7 +3235,7 @@ mod tests {
     fn with_two_processes_and_no_template_a_cancel_after_the_last_file_is_not_counted() {
         let dirs = TempDirs::new("pool-late-cancel");
         let (plan, options) = copied_jpegs(&dirs, &["A001.jpg", "A002.jpg"]);
-        let (write, _log, _hold_until) = observed_write(&dirs, "13.59", 2);
+        let (write, _log, _hold_until) = observed_write(&dirs, "13.64", 2);
         let program = write.exiftool_program.as_ref().unwrap().program.clone();
         let cancel = AtomicBool::new(false);
         let mut exiftool = None;
@@ -3280,7 +3280,7 @@ mod tests {
         two_shots(&dirs);
         let mut form = dirs.form("");
         form.iptc.creator = "Fotograf".to_string();
-        let (mut write, log, _hold_until) = observed_write(&dirs, "13.59", 2);
+        let (mut write, log, _hold_until) = observed_write(&dirs, "13.64", 2);
         write.journal = None;
 
         let (seen, done) = import_events(&form, &AtomicBool::new(false), &write, &mut None);

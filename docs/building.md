@@ -11,7 +11,7 @@ about your machine beyond that.
 | Rust | the compiler | [rustup](https://rustup.rs). The version is pinned in `rust-toolchain.toml`; rustup installs it, with `rustfmt` and `clippy`, the first time you build |
 | vcpkg | builds LibRaw and libjpeg-turbo, the native libraries | clone [vcpkg](https://github.com/microsoft/vcpkg), run its `bootstrap-vcpkg.bat`, and put the folder on `PATH` (or set `VCPKG_ROOT`) |
 | Git | the source | enable long paths: `git config --global core.longpaths true` |
-| ExifTool | reading and writing metadata, at run time and in the tests | the Windows package from [exiftool.org](https://exiftool.org), version 12.67 or newer; put `exiftool.exe` (with its `exiftool_files` folder) on `PATH` |
+| ExifTool | reading and writing metadata, at run time and in the tests | the Windows package from [exiftool.org](https://exiftool.org), version 13.64 or newer; put `exiftool.exe` (with its `exiftool_files` folder) on `PATH` |
 | cargo-audit (optional) | checks the dependencies in `Cargo.lock` against known security advisories, in `.\tools\check.ps1` | `cargo install cargo-audit --locked` |
 | cargo-about (optional) | needed only to make `THIRD-PARTY-NOTICES.txt` with `.\tools\third-party-notices.ps1` | `cargo install cargo-about --locked --version 0.9.3 --features cli` (the `cli` feature gives the `cargo about` command) |
 

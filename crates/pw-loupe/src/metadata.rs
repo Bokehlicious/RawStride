@@ -2914,7 +2914,7 @@ mod tests {
     fn a_write_refused_for_an_old_exiftool_gives_the_english_text() {
         assert_eq!(
             write_error_text(WriteError::ExifToolTooOld),
-            "ExifTool is too old (at least 12.67 is needed)"
+            "ExifTool is too old (at least 13.64 is needed)"
         );
     }
 

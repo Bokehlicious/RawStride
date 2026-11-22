@@ -962,7 +962,7 @@ mod tests {
             exiftool_message(&result),
             Some((
                 "ExifTool is too old",
-                "ExifTool 12.40 is too old. RawStride needs version 12.67 or later. \
+                "ExifTool 12.40 is too old. RawStride needs version 13.64 or later. \
                  Ratings and metadata are not saved until ExifTool has been updated."
                     .to_string()
             ))
@@ -970,10 +970,28 @@ mod tests {
     }
 
     #[test]
-    fn exiftool_message_is_none_from_12_67() {
-        for (major, minor) in [(12, 67), (13, 59)] {
+    fn exiftool_message_is_none_from_13_64() {
+        for (major, minor) in [(13, 64), (13, 70)] {
             assert_eq!(exiftool_message(&Ok(ToolVersion { major, minor })), None);
         }
+    }
+
+    /// ADR 0007 §9.7 Q20 (T271): 13.59 is below the lowest version and gets the message.
+    #[test]
+    fn exiftool_message_says_that_13_59_is_too_old() {
+        let result = Ok(ToolVersion {
+            major: 13,
+            minor: 59,
+        });
+        assert_eq!(
+            exiftool_message(&result),
+            Some((
+                "ExifTool is too old",
+                "ExifTool 13.59 is too old. RawStride needs version 13.64 or later. \
+                 Ratings and metadata are not saved until ExifTool has been updated."
+                    .to_string()
+            ))
+        );
     }
 
     #[test]
