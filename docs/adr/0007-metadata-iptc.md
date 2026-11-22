@@ -48,6 +48,8 @@
     T269, all as proposed: ExifTool 13.64 or newer required (Q20), the digest pass replaced by a check of the
     copy's checksum (Q21), the TIFF restart dropped (Q22), the DNG image check kept (Q23)
     (§9.7, §14); the unpack measured further (T273). Tasks: §18.
+  - **Amended by the owner (2026-11-22, revision 31):** D8's allowance dropped (§9.7 point 5,
+    §17.1); task T274.
 - Date: 2026-11-04 (revision 1: storage, IIM policy and the role of XMP; revision 2: all owner
   decisions of 2026-11-04, MWG 2.0, the full IPTC specification and the Mapping Guidelines;
   revision 3: Q4 answered by the owner on 2026-11-08; revision 4: Q5 answered by the owner on
@@ -732,6 +734,11 @@ written; the reviewer changes them at those tasks' Done.
 5. **D8 is kept for now.** With 13.64, a TIFF or DNG that gets a new Photoshop block may no longer
    get D8's extra warning. The task for point 1 records whether it still occurs; if not, removing
    D8's allowance is a later decision (in `docs/tasks/backlog.md`).
+   - **Decided by the owner 2026-11-22 (after T270 point 6): D8's allowance is dropped** (§17.1).
+     T270 found that 13.64 no longer writes the warning (a Xiaomi DNG: 8 warnings with 13.59, 7
+     with 13.64; the writer differs, not the reader). A copy that gets one more validation warning
+     is then refused in every case (§9.3). T274 removes the allowance, with every real-file test
+     run with 13.64 as the gate: if a file is refused, the task stops and the owner decides again.
 
 **Saving:** points 2 and 3 together about 17–24 % of a TIFF write (310–630 ms) and 8–11 % of a DNG
 write (40–110 ms); nothing for a JPEG or a sidecar.
@@ -994,6 +1001,9 @@ listed under the table (§17.1).
 - **D1** is dropped (owner, 2026-11-18): Q2 was changed so that nothing records a cleared field
   (§6.4), and RawStride has no XMP namespace of its own. If one is needed later (the modes of a
   template file, §10; the original capture time, ADR 0020 §2.7), it is decided with that step.
+- **D8** is dropped (owner, 2026-11-22, §9.7 point 5; T274): ExifTool 13.64, the lowest version,
+  writes a new Photoshop block without the extra validation warning (T270 point 6), so one more
+  warning is refused also when the write creates the Photoshop block of a TIFF or DNG.
 - **D9, the version** (owner, 2026-11-22, §9.7 Q20; T271): "older than 12.67" is now older than
   13.64 (`MIN_EXIFTOOL_VERSION`); the rest of D9 is unchanged.
 - **D11, language** (owner, 2026-11-12, T102 and T104): `property_label` takes a language
@@ -1048,6 +1058,7 @@ listed under the table (§17.1).
   restart dropped, the checksum checked) and T273 (other kinds of DNG damage measured, for Q23).
   T270 and T271 done 2026-11-22 (13.64 shipped and pinned; 13.64 the lowest version, §11, D9).
   T272 done 2026-11-22 (one call and no restart; the stored checksum checked: §5.2, §9.2, §9.3).
+- Revision 31 (D8 dropped, §9.7 point 5): task T274 written 2026-11-22.
 
 ## Revision history
 
@@ -1083,3 +1094,4 @@ listed under the table (§17.1).
 | 28 | 2026-11-20 | Owner decision D18: the write warning `[minor] Fixed incorrect HiddenDataOffset` (a Sony ILCE-1 JPEG on an Exif write) is accepted by name, added to D17's list (§9.2, §17); task T238 |
 | 29 | 2026-11-22 | Owner decision (after T261): a faster safe write without a weaker check: §9.6, Q17 the final read asks for `ImageDataHash` alone, Q18 a batch shared among up to four ExifTool processes, Q19 the DNG image check, the digest pass and the TIFF restart measured before any change; proposed and approved by the owner the same day, all as proposed (§14); §18 |
 | 30 | 2026-11-22 | Proposal (after T264, T265 and T269, at the owner's request): Q19 decided in §9.7, Q20 ExifTool 13.64 or newer, Q21 the digest pass replaced by a check that the copy's checksum is current, Q22 the TIFF restart dropped, Q23 the DNG image check kept; approved by the owner the same day, all as proposed, with the measurement for Q23 as a task (T273); §18 |
+| 31 | 2026-11-22 | Owner decision (after T270 point 6 and T272): D8's allowance of one more validation warning when the write creates the Photoshop block of a TIFF or DNG is dropped, since ExifTool 13.64 no longer writes that warning (§9.7 point 5, §17.1); task T274, with every real-file test run with 13.64 as the gate |
