@@ -44,6 +44,10 @@
     final read), Q18 (a batch written by several ExifTool processes at once) and Q19 (the DNG image
     check, the digest pass and the TIFF restart measured before they are decided again), all as
     proposed (§9.6, §14). Tasks: §18.
+  - **Proposed (2026-11-22, revision 30), awaiting the owner:** Q19 decided after T264, T265 and
+    T269: ExifTool 13.64 or newer required (Q20), the digest pass replaced by a check of the
+    copy's checksum (Q21), the TIFF restart dropped (Q22), the DNG image check kept (Q23)
+    (§9.7, §14).
 - Date: 2026-11-04 (revision 1: storage, IIM policy and the role of XMP; revision 2: all owner
   decisions of 2026-11-04, MWG 2.0, the full IPTC specification and the Mapping Guidelines;
   revision 3: Q4 answered by the owner on 2026-11-08; revision 4: Q5 answered by the owner on
@@ -657,6 +661,76 @@ fourth of the analysis (a cheaper final check that no longer proves the image da
 **Order (approved by the owner 2026-11-22):** Q17 first (small, the check unchanged), then Q19's
 measurement, then Q18 (the largest gain for a batch, and the most work). Until each is done,
 §9.1–§9.5 apply as written.
+### 9.7 Q19 decided after the measurements (proposal, revision 30)
+
+**Proposed by the reviewer 2026-11-22, at the owner's request; not yet approved.** Until the owner
+approves, §5.2, §9.2, §9.3 and §11 apply as written.
+
+**Background:** Q19 measured three steps of the safe write (§9.6 point 3), in
+`docs/analyses/2026-11-21-metadata-write-time.md`:
+- **T265 (ExifTool 13.59):** both reasons from T92 still hold. In a TIFF or DNG, `-IPTCDigest=new`
+  in the IIM write's own call stores an out-of-date checksum, so the digest pass is needed
+  (39–438 ms). A process that has written a TIFF with an `AgHg` resource then reads such TIFFs
+  with two extra warnings, so the restart is needed (about 190 ms). Together they are 17–24 % of a
+  TIFF write; the digest pass is 8–11 % of a DNG write.
+- **T269 (ExifTool 13.64, 2026-11-16):** both reasons are gone. The one call gave a current
+  checksum in all 3 TIFFs and all 7 DNGs, in every run, and the writing process read every TIFF
+  the same as a new process. The owner's repro, reported to ExifTool's author, agrees. The safe
+  write as it is, the workspace tests and the five real-file tests all pass with 13.64. 13.64's
+  change notes name both fixes, and a third: new `PhotoshopSettings` in a TIFF are written with a
+  proper format code (the cause of D8's extra warning).
+- **T264 (the DNG image check, §9.3 point 4):** LibRaw's unpack is 96–99 % of the check
+  (249–553 ms per DNG). The `ImageDataHash` comparison refused every cut copy, and only the
+  preview comparison refused a changed preview byte. LibRaw's open alone refused none of the
+  damaged copies. Other kinds of damage (a wrong tile offset, a broken structure that the hash and
+  the listing do not show) were not measured.
+
+1. **ExifTool 13.64 or newer is required (Q20).** `MIN_EXIFTOOL_VERSION` becomes 13.64 (today
+   12.67, §11). The shipped copy (ADR 0002 §2.5, `docs/distribution.md`) and CI's pinned version
+   become 13.64, each checked by SHA-256 as today. ADR 0002's rule holds: a version is shipped only
+   after the real-file tests of `pw-metadata` and `pw-imagecheck` pass with it (T269 ran those of
+   `pw-metadata`; those of `pw-imagecheck` are run in the task). An older ExifTool on PATH is
+   treated as D9 says: reading works, every write is refused with a clear text. One safe write
+   for every version, so CI tests the only path there is.
+   - **Alternative:** keep 12.67 and choose by version (the digest pass and the restart only below
+     13.64). Two paths, and CI tests only one of them.
+   - **Note:** 13.64 is a development release; ExifTool's newest production release, 13.55, has
+     neither fix. RawStride already ships a development release (13.59).
+2. **The digest pass is dropped, and the checksum is checked instead (Q21).** The checksum is
+   written in the same call as the IIM (§5.2, §9.2). A new check is added to §9.3 point 2: when the
+   plan writes `-IPTCDigest=new`, the copy's `Photoshop:IPTCDigest` must equal its
+   `File:CurrentIPTCDigest`; otherwise the copy is refused like any other failed check. Both keys
+   are already in the copy's snapshot, so the check costs nothing. Today an out-of-date checksum
+   would not be noticed at all; with the check it can never be stored silently.
+   - **Alternative:** run the digest pass only when the check finds the checksum out of date, then
+     read the copy again. The write then succeeds in a case 13.64 might still get wrong (a TIFF
+     without IIM before the write, a DNG with IIM before it: not measured), at the cost of one
+     more path.
+3. **The TIFF restart is dropped (Q22).** The process is no longer restarted after a TIFF write.
+   This is safe even if a misread comes back in some file: the misread shows as new warnings, and
+   §9.3 refuses the copy. A file is never written wrongly; at worst a write fails with "could not be
+   written safely". `ExifTool::restart` stays for the worker's restart after ExifTool has stopped.
+4. **The DNG image check is kept as it is (Q23).** The owner's rule for §9.6 is "faster without a
+   weaker check". LibRaw's unpack is the only check of the RAW data's structure, and the damage
+   that only it would find was not measured. It stays until a measurement shows that the hash and
+   the preview comparison refuse those kinds of damage too.
+   - **Alternative:** drop the unpack and keep LibRaw's open, the preview comparison and the
+     `ImageDataHash` comparison. Saves 250–550 ms per DNG (about half of a DNG write), with the
+     unmeasured risk above.
+5. **D8 is kept for now.** With 13.64, a TIFF or DNG that gets a new Photoshop block may no longer
+   get D8's extra warning. The task for point 1 records whether it still occurs; if not, removing
+   D8's allowance is a later decision (in `docs/tasks/backlog.md`).
+
+**Saving:** points 2 and 3 together about 17–24 % of a TIFF write (310–630 ms) and 8–11 % of a DNG
+write (40–110 ms); nothing for a JPEG or a sidecar.
+
+**Tasks after approval** (§18): one task for point 1 (the version: `MIN_EXIFTOOL_VERSION`, CI's
+pin, `tools/package-dist.ps1`, `docs/distribution.md`, `docs/building.md`, ADR 0002 §2.5,
+`THIRD-PARTY-NOTICES.txt`, the real-file tests of both crates with 13.64, D8's warning recorded),
+then one for points 2 and 3 in `pw-metadata` (the safe write, its tests and the module comment),
+which waits for the first. The owner updates the ExifTool installed on PATH to 13.64 before
+the second task.
+
 ## 10. Templates (ingest and batch)
 
 Each template field has one of four modes. The default is **Keep**. [Product]
@@ -804,7 +878,7 @@ silently. All other deviations concern SHOULD-level recommendations; each is mar
 [Product ≠ std] with its reason. The Lang Alt rule (§8, Q7) was checked against MWG §5.2 and
 [XMP-1] on 2026-11-18 and is one of them.
 
-## 14. Questions (all answered by the owner)
+## 14. Questions (Q20–Q23 open, proposed in revision 30)
 
 | # | Question | Answer |
 |---|---|---|
@@ -826,7 +900,11 @@ silently. All other deviations concern SHOULD-level recommendations; each is mar
 | ~~**Q16**~~ | **(Revision 26.)** Exif Rating/RatingPercent and `xmp:RatingPercent` that another program added | **Decided by the owner 2026-11-19:** existing ones written to match the rating, a reject removes them, never created or read (§6.3) |
 | ~~**Q17**~~ | **(Revision 29.)** The final read after the replace (§9.4): a full snapshot, or `ImageDataHash` alone? | **Decided by the owner 2026-11-22, as proposed:** `ImageDataHash` alone; it is all the final read compares, so the check is unchanged (§9.6 point 1) |
 | ~~**Q18**~~ | **(Revision 29.)** A batch: one ExifTool process, or several at once? | **Decided by the owner 2026-11-22, as proposed:** up to four at once, the number fixed after a measurement with 1, 2 and 4; every file its own transaction; one target never written twice at once and its writes in order; the journal holds several open entries (§9.6 point 2) |
-| ~~**Q19**~~ | **(Revision 29.)** The DNG image check (§9.3 point 4), the digest pass and the TIFF restart (§9.2, §9.3): changed now, or measured first? | **Decided by the owner 2026-11-22, as proposed:** measured first in a task, no rule changed now; the owner decides afterwards (§9.6 point 3) |
+| ~~**Q19**~~ | **(Revision 29.)** The DNG image check (§9.3 point 4), the digest pass and the TIFF restart (§9.2, §9.3): changed now, or measured first? | **Decided by the owner 2026-11-22, as proposed:** measured first in a task, no rule changed now; the owner decides afterwards (§9.6 point 3). Measured in T264, T265 and T269; the decision is Q20–Q23 |
+| **Q20** | **(Revision 30, proposed.)** The lowest ExifTool version | **Proposal:** 13.64, which fixes both reasons of T92 (T269); shipped and in CI too. Alternative: 12.67 kept, the steps chosen by version (§9.7 point 1) |
+| **Q21** | **(Revision 30, proposed.)** The digest pass (§9.2) | **Proposal:** dropped; the checksum written in the IIM call and the copy refused unless its checksum is current. Alternative: the digest pass only when the checksum is out of date (§9.7 point 2) |
+| **Q22** | **(Revision 30, proposed.)** The TIFF restart (§9.3) | **Proposal:** dropped; a misread would show as new warnings and the copy be refused (§9.7 point 3) |
+| **Q23** | **(Revision 30, proposed.)** The DNG image check (§9.3 point 4) | **Proposal:** kept as it is; the damage only LibRaw's unpack finds was not measured. Alternative: the unpack dropped, 250–550 ms saved per DNG (§9.7 point 4) |
 
 ## 15. Consequences
 
@@ -979,3 +1057,4 @@ listed under the table (§17.1).
 | 27 | 2026-11-19 | Owner decision D17: the write warning `[minor] Error reading HiddenData` (a DxO export of a Sony RAW) is accepted by name; every other write warning is still refused (§9.2); task T212 |
 | 28 | 2026-11-20 | Owner decision D18: the write warning `[minor] Fixed incorrect HiddenDataOffset` (a Sony ILCE-1 JPEG on an Exif write) is accepted by name, added to D17's list (§9.2, §17); task T238 |
 | 29 | 2026-11-22 | Owner decision (after T261): a faster safe write without a weaker check: §9.6, Q17 the final read asks for `ImageDataHash` alone, Q18 a batch shared among up to four ExifTool processes, Q19 the DNG image check, the digest pass and the TIFF restart measured before any change; proposed and approved by the owner the same day, all as proposed (§14); §18 |
+| 30 | 2026-11-22 | Proposal (after T264, T265 and T269, at the owner's request): Q19 decided in §9.7, Q20 ExifTool 13.64 or newer, Q21 the digest pass replaced by a check that the copy's checksum is current, Q22 the TIFF restart dropped, Q23 the DNG image check kept; awaiting the owner |
