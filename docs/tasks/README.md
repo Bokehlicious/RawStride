@@ -87,7 +87,6 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status |
 |---|---|---|
-| [T283](T283-larger-settings-window.md) | A larger Settings window, in the middle of the program's window | Open |
 
 ## Writing a task (owner and reviewer)
 

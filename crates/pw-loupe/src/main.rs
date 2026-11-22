@@ -110,8 +110,9 @@ use pw_loupe::{
     no_preview_text,
 };
 use pw_loupe::{
-    KeyPress, KeyRefusal, KeySlot, companion_suffixes_field, key_page_groups, key_refusal_text,
-    keys_save_error_text, parse_companion_suffixes, save_key_map, take_key_press,
+    KeyPress, KeyRefusal, KeySlot, SETTINGS_WINDOW_MIN, companion_suffixes_field, key_page_groups,
+    key_refusal_text, keys_save_error_text, parse_companion_suffixes, save_key_map,
+    settings_window_size, take_key_press,
 };
 use pw_loupe::{
     OpenPlan, OpenRequest, OpenStep, StartError, explorer_failed_text, explorer_missing_text,
@@ -792,6 +793,10 @@ struct Loupe {
     /// The Settings window's page shown (ADR 0017 U10b-Q6, T278): set when the window opens, kept
     /// while it is open, not saved.
     settings_page: SettingsPage,
+    /// The number of the Settings window's opening (ADR 0017 U8-Q14, T283), increased each time it
+    /// opens: part of the window's id, so egui remembers nothing of the last opening and the window
+    /// opens at its default size in the middle each time.
+    settings_opening: u64,
     /// The window "About RawStride" is open (ADR 0031 RL-Q9, T225). It blocks nothing, so it is not
     /// part of `dialog_open`; only its Close button closes it.
     about_window: bool,
@@ -1025,6 +1030,7 @@ impl Loupe {
         if self.metadata_window.is_none() && self.settings_window.is_none() {
             self.settings_window = Some(self.settings.clone());
             self.settings_page = page;
+            self.settings_opening = self.settings_opening.wrapping_add(1);
             // The page Keyboard Shortcuts and the suffixes' field (ADR 0017 U8-Q7, U8-Q10, T281).
             self.settings_keys = Some(self.key_map.clone());
             self.key_wait = None;
@@ -1205,17 +1211,14 @@ impl Loupe {
     /// encoding is chosen by its value (T116). The buttons at the top choose a page (ADR 0017
     /// U10b-Q6, T278): General (the IIM check box, the encoding, the theme), External Programs (the
     /// list of programs, ADR 0019 E-Q2, T200) and Metadata Window (the sections and items of the
-    /// metadata window, shown or hidden and in their order, in a scroll area, then "Restore
-    /// Defaults") and Keyboard Shortcuts (each action's two keys with Change and Clear, in a
-    /// scroll area, then "Restore Defaults"; ADR 0017 U8-Q7, T281). Save and Cancel are under every
-    /// page; like every choice, the programs, the layout, the keys and the companion suffixes are
-    /// applied and saved only by "Save".
+    /// metadata window, shown or hidden and in their order, then "Restore Defaults") and Keyboard
+    /// Shortcuts (each action's two keys with Change and Clear, then "Restore Defaults"; ADR 0017
+    /// U8-Q7, T281). Save and Cancel are under every page; like every choice, the programs, the
+    /// layout, the keys and the companion suffixes are applied and saved only by "Save". The window
+    /// opens in the middle of the program's window at `settings_window_size` and can be resized;
+    /// every page is one scroll area above a bottom panel with "Restore Defaults", Save and Cancel
+    /// (ADR 0017 U8-Q14, T283).
     fn draw_settings_window(&mut self, ctx: &egui::Context) {
-        /// The window's fixed width in points, so a long program path wraps (T200).
-        const SETTINGS_WINDOW_WIDTH: f32 = 440.0;
-        /// The greatest height in points of the page Metadata Window's scroll area (T278); never
-        /// more than half the program's window, so the Settings window stays on the screen.
-        const LAYOUT_PAGE_MAX_HEIGHT: f32 = 420.0;
         let Some(mut chosen) = self.settings_window.clone() else {
             return;
         };
@@ -1239,12 +1242,17 @@ impl Loupe {
         let key_wait = self.key_wait;
         let key_refusal = self.key_refusal;
         let mut suffixes = self.suffixes_text.clone();
-        let layout_height = LAYOUT_PAGE_MAX_HEIGHT.min(ctx.content_rect().height() / 2.0);
+        // ADR 0017 U8-Q14, T283: larger, resizable, in the middle of the program's window; a new
+        // id each opening, so egui remembers neither the last size nor the last place.
+        let screen = ctx.content_rect();
+        let size = settings_window_size(screen.size());
         egui::Window::new(settings_text(SettingsText::Title))
             .collapsible(false)
-            .resizable(false)
-            .default_width(SETTINGS_WINDOW_WIDTH)
-            .max_width(SETTINGS_WINDOW_WIDTH)
+            .id(egui::Id::unique(("settings-window", self.settings_opening)))
+            .resizable(true)
+            .min_size(SETTINGS_WINDOW_MIN)
+            .default_size(size)
+            .default_pos(screen.center() - size / 2.0)
             .show(ctx, |ui| {
                 ui.horizontal_wrapped(|ui| {
                     for each in SettingsPage::ALL {
@@ -1255,127 +1263,151 @@ impl Loupe {
                     }
                 });
                 ui.separator();
-                match page {
-                    SettingsPage::General => {
-                        ui.checkbox(
-                            &mut chosen.create_iim,
-                            settings_text(SettingsText::CreateIim),
-                        );
-                        ui.label(
-                            egui::RichText::new(settings_text(SettingsText::CreateIimNote)).small(),
-                        );
+                // Save and Cancel, with "Restore Defaults" above them on the pages Metadata Window
+                // and Keyboard Shortcuts, stay at the bottom (T283).
+                egui::Panel::bottom("settings-window-buttons")
+                    .resizable(false)
+                    .frame(egui::Frame::NONE)
+                    .show(ui, |ui| {
                         ui.add_space(PANEL_ROW_SPACING);
-                        ui.label(settings_text(SettingsText::Encoding));
-                        egui::ComboBox::from_id_salt("fallback-encoding")
-                            .selected_text(fallback_text(chosen.fallback))
-                            .show_ui(ui, |ui| {
-                                for fallback in FALLBACK_CHOICES {
-                                    ui.selectable_value(
-                                        &mut chosen.fallback,
-                                        fallback,
-                                        fallback_text(fallback),
-                                    );
-                                }
-                            });
-                        ui.add_space(PANEL_ROW_SPACING);
-                        ui.label(shell_text(ShellText::ThemeLabel));
-                        egui::ComboBox::from_id_salt("theme")
-                            .selected_text(theme_text(chosen.shell.theme))
-                            .show_ui(ui, |ui| {
-                                for theme in THEMES {
-                                    ui.selectable_value(
-                                        &mut chosen.shell.theme,
-                                        theme,
-                                        theme_text(theme),
-                                    );
-                                }
-                            });
-                        // ADR 0017 U8-Q10, T281: read only by Save.
-                        ui.add_space(PANEL_ROW_SPACING);
-                        ui.label(settings_text(SettingsText::CompanionSuffixes));
-                        ui.text_edit_singleline(&mut suffixes);
-                        ui.add(
-                            egui::Label::new(
-                                egui::RichText::new(settings_text(
-                                    SettingsText::CompanionSuffixesNote,
-                                ))
-                                .small(),
-                            )
-                            .wrap(),
-                        );
-                    }
-                    SettingsPage::ExternalPrograms => {
-                        if chosen.external_programs.is_empty() {
-                            ui.label(settings_text(SettingsText::NoPrograms));
+                        match page {
+                            SettingsPage::MetadataWindow => {
+                                restore_defaults = ui
+                                    .button(settings_text(SettingsText::RestoreDefaults))
+                                    .clicked();
+                                ui.add_space(PANEL_ROW_SPACING);
+                            }
+                            SettingsPage::KeyboardShortcuts => {
+                                restore_keys = ui
+                                    .button(settings_text(SettingsText::RestoreDefaults))
+                                    .clicked();
+                                ui.add_space(PANEL_ROW_SPACING);
+                            }
+                            SettingsPage::General | SettingsPage::ExternalPrograms => {}
                         }
-                        for (index, program) in chosen.external_programs.iter_mut().enumerate() {
-                            ui.push_id(index, |ui| {
-                                ui.horizontal(|ui| {
-                                    ui.text_edit_singleline(&mut program.name);
-                                    let up = egui::Button::new(settings_text(SettingsText::MoveUp));
-                                    if ui.add_enabled(index > 0, up).clicked() {
-                                        move_up = Some(index);
-                                    }
-                                    if ui
-                                        .button(settings_text(SettingsText::RemoveProgram))
-                                        .clicked()
-                                    {
-                                        remove = Some(index);
-                                    }
-                                });
+                        ui.horizontal(|ui| {
+                            save = ui.button(settings_text(SettingsText::Save)).clicked();
+                            cancel = ui.button(settings_text(SettingsText::Cancel)).clicked();
+                        });
+                    });
+                // Every page in one scroll area that fills the rest of the window, so its content
+                // never grows the window and a small window scrolls (T283).
+                let scroll_id = match page {
+                    SettingsPage::General => "settings-general",
+                    SettingsPage::ExternalPrograms => "settings-external-programs",
+                    SettingsPage::MetadataWindow => "settings-metadata-window",
+                    SettingsPage::KeyboardShortcuts => "settings-keyboard-shortcuts",
+                };
+                egui::ScrollArea::vertical()
+                    .id_salt(scroll_id)
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        match page {
+                            SettingsPage::General => {
+                                ui.checkbox(
+                                    &mut chosen.create_iim,
+                                    settings_text(SettingsText::CreateIim),
+                                );
+                                ui.label(
+                                    egui::RichText::new(settings_text(SettingsText::CreateIimNote))
+                                        .small(),
+                                );
+                                ui.add_space(PANEL_ROW_SPACING);
+                                ui.label(settings_text(SettingsText::Encoding));
+                                egui::ComboBox::from_id_salt("fallback-encoding")
+                                    .selected_text(fallback_text(chosen.fallback))
+                                    .show_ui(ui, |ui| {
+                                        for fallback in FALLBACK_CHOICES {
+                                            ui.selectable_value(
+                                                &mut chosen.fallback,
+                                                fallback,
+                                                fallback_text(fallback),
+                                            );
+                                        }
+                                    });
+                                ui.add_space(PANEL_ROW_SPACING);
+                                ui.label(shell_text(ShellText::ThemeLabel));
+                                egui::ComboBox::from_id_salt("theme")
+                                    .selected_text(theme_text(chosen.shell.theme))
+                                    .show_ui(ui, |ui| {
+                                        for theme in THEMES {
+                                            ui.selectable_value(
+                                                &mut chosen.shell.theme,
+                                                theme,
+                                                theme_text(theme),
+                                            );
+                                        }
+                                    });
+                                // ADR 0017 U8-Q10, T281: read only by Save.
+                                ui.add_space(PANEL_ROW_SPACING);
+                                ui.label(settings_text(SettingsText::CompanionSuffixes));
+                                ui.text_edit_singleline(&mut suffixes);
                                 ui.add(
                                     egui::Label::new(
-                                        egui::RichText::new(program.path.display().to_string())
-                                            .small(),
+                                        egui::RichText::new(settings_text(
+                                            SettingsText::CompanionSuffixesNote,
+                                        ))
+                                        .small(),
                                     )
                                     .wrap(),
                                 );
-                            });
-                        }
-                        let room = chosen.external_programs.len() < MAX_EXTERNAL_PROGRAMS;
-                        add_program = ui
-                            .add_enabled(
-                                room,
-                                egui::Button::new(settings_text(SettingsText::AddProgram)),
-                            )
-                            .on_disabled_hover_text(external_program_limit_text(
-                                MAX_EXTERNAL_PROGRAMS,
-                            ))
-                            .clicked();
-                    }
-                    SettingsPage::MetadataWindow => {
-                        egui::ScrollArea::vertical()
-                            .id_salt("settings-metadata-window")
-                            .max_height(layout_height)
-                            .show(ui, |ui| {
+                            }
+                            SettingsPage::ExternalPrograms => {
+                                if chosen.external_programs.is_empty() {
+                                    ui.label(settings_text(SettingsText::NoPrograms));
+                                }
+                                for (index, program) in
+                                    chosen.external_programs.iter_mut().enumerate()
+                                {
+                                    ui.push_id(index, |ui| {
+                                        ui.horizontal(|ui| {
+                                            ui.text_edit_singleline(&mut program.name);
+                                            let up = egui::Button::new(settings_text(
+                                                SettingsText::MoveUp,
+                                            ));
+                                            if ui.add_enabled(index > 0, up).clicked() {
+                                                move_up = Some(index);
+                                            }
+                                            if ui
+                                                .button(settings_text(SettingsText::RemoveProgram))
+                                                .clicked()
+                                            {
+                                                remove = Some(index);
+                                            }
+                                        });
+                                        ui.add(
+                                            egui::Label::new(
+                                                egui::RichText::new(
+                                                    program.path.display().to_string(),
+                                                )
+                                                .small(),
+                                            )
+                                            .wrap(),
+                                        );
+                                    });
+                                }
+                                let room = chosen.external_programs.len() < MAX_EXTERNAL_PROGRAMS;
+                                add_program = ui
+                                    .add_enabled(
+                                        room,
+                                        egui::Button::new(settings_text(SettingsText::AddProgram)),
+                                    )
+                                    .on_disabled_hover_text(external_program_limit_text(
+                                        MAX_EXTERNAL_PROGRAMS,
+                                    ))
+                                    .clicked();
+                            }
+                            SettingsPage::MetadataWindow => {
                                 layout_clicks = draw_layout_rows(ui, &chosen.editor_layout);
-                            });
-                        ui.add_space(PANEL_ROW_SPACING);
-                        restore_defaults = ui
-                            .button(settings_text(SettingsText::RestoreDefaults))
-                            .clicked();
-                    }
-                    SettingsPage::KeyboardShortcuts => {
-                        egui::ScrollArea::vertical()
-                            .id_salt("settings-keyboard-shortcuts")
-                            .max_height(layout_height)
-                            .show(ui, |ui| {
+                            }
+                            SettingsPage::KeyboardShortcuts => {
                                 if let Some(map) = &keys {
                                     (key_clicks, wait_hovered) =
                                         draw_key_rows(ui, map, key_wait, key_refusal);
                                 }
-                            });
-                        ui.add_space(PANEL_ROW_SPACING);
-                        restore_keys = ui
-                            .button(settings_text(SettingsText::RestoreDefaults))
-                            .clicked();
-                    }
-                }
-                ui.add_space(PANEL_ROW_SPACING);
-                ui.horizontal(|ui| {
-                    save = ui.button(settings_text(SettingsText::Save)).clicked();
-                    cancel = ui.button(settings_text(SettingsText::Cancel)).clicked();
-                });
+                            }
+                        }
+                    });
             });
         self.settings_page = page;
         self.suffixes_text = suffixes;
@@ -11049,6 +11081,7 @@ fn run(options: Options) -> Result<(), String> {
                 key_refusal: None,
                 suffixes_text: String::new(),
                 settings_page: SettingsPage::General,
+                settings_opening: 0,
                 about_window: false,
                 pending_options: None,
                 metadata: MetadataCache::default(),

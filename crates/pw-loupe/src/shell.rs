@@ -178,6 +178,23 @@ pub fn clamp_column_width(width: f32, window_width: f32) -> f32 {
     }
 }
 
+/// The Settings window's smallest size in points, title bar included (ADR 0017 U8-Q14, T283).
+pub const SETTINGS_WINDOW_MIN: egui::Vec2 = egui::vec2(440.0, 320.0);
+/// The size in points the Settings window opens with in a large program window (U8-Q14, T283).
+pub const SETTINGS_WINDOW_DEFAULT: egui::Vec2 = egui::vec2(640.0, 560.0);
+/// The room in points kept free on each side of the Settings window when it opens (T283).
+pub const SETTINGS_WINDOW_MARGIN: f32 = 24.0;
+
+/// The size the Settings window opens with in a program window `screen` points large (ADR 0017
+/// U8-Q14, T283): the program window less [`SETTINGS_WINDOW_MARGIN`] on each side, between
+/// [`SETTINGS_WINDOW_MIN`] and [`SETTINGS_WINDOW_DEFAULT`], each side apart; never larger than the
+/// program window itself, so fitting wins over the minimum.
+pub fn settings_window_size(screen: egui::Vec2) -> egui::Vec2 {
+    (screen - egui::Vec2::splat(2.0 * SETTINGS_WINDOW_MARGIN))
+        .clamp(SETTINGS_WINDOW_MIN, SETTINGS_WINDOW_DEFAULT)
+        .min(screen)
+}
+
 /// The smallest saved window that is used at start, in points; a smaller one gives a maximized
 /// window.
 pub const MIN_START_SIZE: [u32; 2] = [400, 300];
@@ -1208,6 +1225,53 @@ mod tests {
         assert_eq!(clamp_column_width(250.0, 300.0), 160.0);
         assert_eq!(clamp_column_width(f32::NAN, 1000.0), 160.0);
         assert_eq!(column_width_range(f32::INFINITY), (160.0, 160.0));
+    }
+
+    /// A large program window gives the default size (ADR 0017 U8-Q14, T283).
+    #[test]
+    fn the_settings_window_has_its_default_size_in_a_large_program_window() {
+        let size = settings_window_size(egui::vec2(1920.0, 1080.0));
+        assert_eq!(size, egui::vec2(640.0, 560.0));
+        // Exactly the default plus the margins.
+        assert_eq!(settings_window_size(egui::vec2(688.0, 608.0)), size);
+    }
+
+    /// A mid-sized program window gives each side 2 × 24 points less (T283).
+    #[test]
+    fn the_settings_window_leaves_a_margin_in_a_mid_sized_program_window() {
+        let size = settings_window_size(egui::vec2(600.0, 500.0));
+        assert_eq!(size, egui::vec2(552.0, 452.0));
+        // Each side apart: a wide but low window keeps the default width.
+        let size = settings_window_size(egui::vec2(1920.0, 500.0));
+        assert_eq!(size, egui::vec2(640.0, 452.0));
+    }
+
+    /// A program window that leaves exactly the minimum gives the minimum (T283).
+    #[test]
+    fn the_settings_window_has_its_minimum_when_the_margins_leave_exactly_it() {
+        let size = settings_window_size(egui::vec2(488.0, 368.0));
+        assert_eq!(size, egui::vec2(440.0, 320.0));
+    }
+
+    /// A program window between the minimum and the minimum plus the margins gives the minimum
+    /// (T283).
+    #[test]
+    fn the_settings_window_keeps_its_minimum_in_a_program_window_just_above_it() {
+        let size = settings_window_size(egui::vec2(460.0, 340.0));
+        assert_eq!(size, egui::vec2(440.0, 320.0));
+        let size = settings_window_size(egui::vec2(440.0, 320.0));
+        assert_eq!(size, egui::vec2(440.0, 320.0));
+    }
+
+    /// In a program window smaller than the minimum, fitting wins: the program window's own size
+    /// (T283).
+    #[test]
+    fn the_settings_window_fits_a_program_window_smaller_than_its_minimum() {
+        let size = settings_window_size(egui::vec2(400.0, 300.0));
+        assert_eq!(size, egui::vec2(400.0, 300.0));
+        // Each side apart: only the low side shrinks below the minimum.
+        let size = settings_window_size(egui::vec2(800.0, 300.0));
+        assert_eq!(size, egui::vec2(640.0, 300.0));
     }
 
     #[test]
