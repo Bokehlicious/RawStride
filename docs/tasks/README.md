@@ -88,10 +88,11 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 | Task | Title | Status |
 |---|---|---|
 | [T275](T275-dng-image-check-only-without-hash.md) | ADR 0007 §9.7 point 4 (Q23): LibRaw checks a DNG copy only when the original has no image data hash (pw-metadata, pw-imagecheck) | Open |
+| [T276](T276-import-preview-list-kept-while-editing.md) | The import dialog's preview list stays while the form is edited: no new preview for the IPTC template or Eject, the last list kept dimmed until the next (pw-loupe) | Open |
 
 ## Writing a task (owner and reviewer)
 
-- **Number:** the next free number after the highest in this folder and `done/` (T276 next).
+- **Number:** the next free number after the highest in this folder and `done/` (T277 next).
 - **File:** `docs/tasks/T246-<a-few-words>.md`; three digits, lower case, words joined by `-`.
 - **Index:** add a row to "Open tasks" above and keep its status in step with the file's heading.
 - **Size (owner, 2026-11-15, after T142):** one task is one layer (a C++ shim or a core crate, or
