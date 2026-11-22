@@ -88,7 +88,6 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 | Task | Title | Status |
 |---|---|---|
 | [T281](T281-keyboard-shortcuts-page.md) | The Settings page Keyboard Shortcuts and the companion suffixes' field | Open |
-| [T282](T282-code-of-conduct-and-pr-template.md) | A code of conduct and a pull request template (docs, `.github/`) | Open |
 
 ## Writing a task (owner and reviewer)
 

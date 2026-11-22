@@ -3,6 +3,9 @@
 Thank you for your interest. RawStride is a small project with one maintainer, so a little
 coordination up front saves everyone time.
 
+Everyone taking part in issues, Discussions and pull requests follows the
+[code of conduct](CODE_OF_CONDUCT.md).
+
 ## Before you start
 
 - **Bugs and ideas:** open an issue. For a bug, say what you did, what you expected, what happened,
