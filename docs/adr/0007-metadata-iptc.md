@@ -38,6 +38,12 @@
     `lr:hierarchicalSubject` is kept equal to the keywords (§8, Q15); existing Exif and XMP
     rating percentages are kept equal to the rating (§6.1, §6.3, Q16). Two tasks carry the three
     (§18; T204, T205, split by the owner 2026-11-19).
+  - **Revision 29 proposed (2026-11-22), awaiting the owner:** a faster safe write without a
+    weaker check, from the analysis `docs/analyses/2026-11-21-metadata-write-time.md` and its
+    measurement T261; the owner chose three of its four directions (2026-11-22). Q17 (a narrow
+    final read), Q18 (a batch written by several ExifTool processes at once) and Q19 (the DNG image
+    check, the digest pass and the TIFF restart measured before they are decided again) are open
+    (§9.6, §14). Nothing of §9.1–§9.5 changes until the owner approves.
 - Date: 2026-11-04 (revision 1: storage, IIM policy and the role of XMP; revision 2: all owner
   decisions of 2026-11-04, MWG 2.0, the full IPTC specification and the Mapping Guidelines;
   revision 3: Q4 answered by the owner on 2026-11-08; revision 4: Q5 answered by the owner on
@@ -604,6 +610,48 @@ writes do not do this. If the restart fails, the write fails and ExifTool is mar
     - a byte comparison of all non-metadata ranges; `ImageDataHash` and the byte-equal previews
       are used instead.
 
+### 9.6 Speed (proposed, revision 29; awaiting the owner)
+
+**Background:** the owner finds that writing metadata takes long (2026-11-21). Measured in a
+release build with a warm cache (T261, analysis of 2026-11-21): one edit costs about 0.65 s for a
+13.5 MB camera JPEG, 0.48 s for a 12 MB DNG (0.26 s of it the image check, §9.3 point 4), 1.2 s
+for a 36 MB DNG, 3.8 s for a 177 MB TIFF and 0.06 s for a RAW with a sidecar. The three snapshots
+are more than half of an image file's write, almost all of it `ImageDataHash`; a batch costs the
+sum of its files, since all writes go through one ExifTool process. **The owner, 2026-11-22:** make
+the write faster without weakening what §9 proves; three directions are taken up (Q17–Q19), the
+fourth of the analysis (a cheaper final check that no longer proves the image data) is not.
+
+1. **A narrow final read (Q17).** The final read after the replace (§9.4) compares only the size
+   and `ImageDataHash` with the verified copy's, but today it takes a full snapshot (`-all`,
+   `-validate`). It asks ExifTool for `ImageDataHash` alone (SHA-256, as today). The check is the
+   same. **Estimated saving:** the `-all` and `-validate` part of one snapshot of three, about
+   80–110 ms per JPEG, about 30 ms per DNG, little for a TIFF (whose snapshot is almost all hash).
+2. **A batch written by several ExifTool processes at once (Q18).** Writes of several files (the
+   ingest template, an edit or a rating applied to several images, a rotation of several) are
+   shared among up to **four** ExifTool processes, each in its own thread; the number is fixed
+   after a measurement with 1, 2 and 4 processes on a batch of camera JPEGs and DNGs, and may
+   become a setting later. Rules:
+   - every file is still its own transaction with every check of §9.1–§9.5;
+   - two writes to the same target (an image, or a sidecar) are never made at the same time, and
+     the writes to one target keep the order they were asked in;
+   - the journal (§9.5) holds several open entries at once, each written whole, and the recovery
+     at start is unchanged;
+   - the RAW engine's sessions for an image are released before its write, as today (§9.1);
+   - the TIFF restart (§9.3) restarts only the process that wrote that TIFF;
+   - the answers may come back in another order than the files were asked; each names its file
+     (§9.5), and a batch's summary is made when all have answered;
+   - one file alone is not faster. The gain is largest for many files on a fast disk, and less on
+     a card or a network share.
+3. **The DNG image check, the digest pass and the TIFF restart measured first (Q19).** No rule
+   changes now. A measurement task times, in a release build: §9.3 point 4 split into LibRaw's
+   open and its unpack, and whether a cheaper form still refuses the damaged copies of
+   `pw-imagecheck`'s `tests/real_files.rs` (a copy cut inside its RAW data, a copy with one byte
+   changed in a preview); and whether the measured reasons for the digest pass and the TIFF
+   restart (§9.2, §9.3, T92) still hold with the ExifTool in use. The owner then decides whether
+   any of the three changes, in a later revision.
+
+**Order (proposed):** Q17 first (small, the check unchanged), then Q19's measurement, then Q18
+(the largest gain for a batch, and the most work).
 ## 10. Templates (ingest and batch)
 
 Each template field has one of four modes. The default is **Keep**. [Product]
@@ -751,7 +799,7 @@ silently. All other deviations concern SHOULD-level recommendations; each is mar
 [Product ≠ std] with its reason. The Lang Alt rule (§8, Q7) was checked against MWG §5.2 and
 [XMP-1] on 2026-11-18 and is one of them.
 
-## 14. Questions (all answered by the owner)
+## 14. Questions (Q17–Q19 open, revision 29)
 
 | # | Question | Answer |
 |---|---|---|
@@ -771,6 +819,9 @@ silently. All other deviations concern SHOULD-level recommendations; each is mar
 | ~~**Q14**~~ | **(Revision 26.)** The modification time of a written file: set back to the original's, or the time of the write? | **Decided by the owner 2026-11-19:** the time of the write, for every file (§9.4) |
 | ~~**Q15**~~ | **(Revision 26.)** A flat `lr:hierarchicalSubject` beside the keywords | **Decided by the owner 2026-11-19:** written equal to `dc:subject` when every entry is flat; unchanged when one entry has a `\|` (§8) |
 | ~~**Q16**~~ | **(Revision 26.)** Exif Rating/RatingPercent and `xmp:RatingPercent` that another program added | **Decided by the owner 2026-11-19:** existing ones written to match the rating, a reject removes them, never created or read (§6.3) |
+| **Q17** | **(Revision 29.)** The final read after the replace (§9.4): a full snapshot, or `ImageDataHash` alone? | **Reviewer's proposal:** `ImageDataHash` alone; it is all the final read compares, so the check is unchanged (§9.6 point 1). Awaiting the owner |
+| **Q18** | **(Revision 29.)** A batch: one ExifTool process, or several at once? | **Reviewer's proposal:** up to four at once, the number fixed after a measurement with 1, 2 and 4; every file its own transaction; one target never written twice at once and its writes in order; the journal holds several open entries (§9.6 point 2). Awaiting the owner |
+| **Q19** | **(Revision 29.)** The DNG image check (§9.3 point 4), the digest pass and the TIFF restart (§9.2, §9.3): changed now, or measured first? | **Reviewer's proposal:** measured first in a task, no rule changed now; the owner decides afterwards (§9.6 point 3). Awaiting the owner |
 
 ## 15. Consequences
 
@@ -919,3 +970,4 @@ listed under the table (§17.1).
 | 26 | 2026-11-19 | From the test with DxO PhotoLab 10.3 (ADR 0029 step P0, test copies in `D:\PhotoWorkflowData\P0-dxo`): §9.4 a written file gets the time of the write as its modification time, sidecars and in-place writes alike (Q14; replaces the old time kept since ADR 0004); §8 a flat `lr:hierarchicalSubject` written equal to the keywords (Q15), §6.1 and §6.3 existing Exif Rating/RatingPercent and `xmp:RatingPercent` written to match the rating (Q16); all three decided by the owner; §14 Q14–Q16; §18 one task |
 | 27 | 2026-11-19 | Owner decision D17: the write warning `[minor] Error reading HiddenData` (a DxO export of a Sony RAW) is accepted by name; every other write warning is still refused (§9.2); task T212 |
 | 28 | 2026-11-20 | Owner decision D18: the write warning `[minor] Fixed incorrect HiddenDataOffset` (a Sony ILCE-1 JPEG on an Exif write) is accepted by name, added to D17's list (§9.2, §17); task T238 |
+| 29 | 2026-11-22 | **Proposed, awaiting the owner:** a faster safe write without a weaker check (the owner, 2026-11-22, after T261): §9.6, Q17 the final read asks for `ImageDataHash` alone, Q18 a batch shared among up to four ExifTool processes, Q19 the DNG image check, the digest pass and the TIFF restart measured before any change; §14 Q17–Q19 open |
