@@ -387,7 +387,8 @@ with ADR 0026 F3, in `plans/adr-0018-0025-steps.md`.)
 
 ## The key map (ADR 0017 U8)
 
-(T279's review, 2026-11-22.)
+(T279's review, 2026-11-22; **kept** at the sort after ADR 0017 U8, 2026-11-22 (owner): none was
+seen in the hand check, so each becomes a task only if it is noticed in use.)
 
 - *Alt+Tab can be given to an action:* the map refuses Tab and Shift+Tab (egui's focus) but not
   Alt+Tab, which Windows takes before RawStride sees it; such a key never acts.
@@ -397,6 +398,10 @@ with ADR 0026 F3, in `plans/adr-0018-0025-steps.md`.)
 - *Key names in the texts* (T280's review): a menu, hover text or label shows the arrows,
   Escape and `−` as symbols, every other key by egui's name ("PageUp", "Equals", "Backtick"),
   so a key the user gives may read less well than the defaults.
+- *`keys.txt` is read only at start* (U8's hand check, kept by the owner at the sort): a
+  `keys.txt` edited while RawStride runs is used only after a restart, and a later Save of a
+  changed map on the page Keyboard Shortcuts writes the program's map over the hand edits. A
+  Save that does not change the map leaves the file as it is (T281).
 
 ## Card eject
 

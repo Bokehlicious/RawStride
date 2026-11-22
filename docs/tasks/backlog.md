@@ -13,13 +13,6 @@ Reorganised on 2026-11-21 (owner): the earlier file mixed these three kinds and 
 
 ## Waiting for a decision or an ADR
 
-- **A larger Settings window** (owner, 2026-11-22, at U8's hand check): the page Keyboard
-  Shortcuts feels cramped in the window's fixed 440 points and the scroll area's height (at
-  most 420 points, half the window). The owner would rather have the Settings window open in
-  the middle of the screen, larger and wider. Needs the owner's choice of size (fixed or a
-  share of the RawStride window, whether it can be resized and is remembered) before a task;
-  it affects every page (`draw_settings_window` in `main.rs`, `SETTINGS_WINDOW_WIDTH`,
-  `LAYOUT_PAGE_MAX_HEIGHT`).
 - **Swedish names for every IPTC property** (owner, 2026-11-12, after ADR 0007 D11): every
   property and structure field in T102's name table, so the Swedish info panel and editor show no
   English IPTC names. Today D11 names about 35 of them; the rest fall back to IPTC's English name.

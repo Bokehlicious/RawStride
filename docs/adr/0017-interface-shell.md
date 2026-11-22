@@ -48,7 +48,9 @@
   taken is refused; the companion suffixes become a field on the General page (§2.4, §6.4,
   U8-Q1–U8-Q11; tasks T279, T280, T281). U8-Q10 settles U9-Q10 and U10b-Q8. U8-Q12 and U8-Q13
   (the same day, after the chain review): the map's keys act only with exactly their modifiers,
-  and egui's own Ctrl+Q and scale keys are turned off.
+  and egui's own Ctrl+Q and scale keys are turned off. U8-Q14 (the same day, at the backlog
+  sort after U8): the Settings window opens larger and in the middle, can be resized, and its
+  size is not saved (task T283).
 - Date: 2026-11-12; amended 2026-11-13
 - Related:
   - [GUI_REQUIREMENTS.md](../GUI_REQUIREMENTS.md) (GR1–GR13), in particular GR6 (keyboard first),
@@ -694,6 +696,7 @@ Asked by the reviewer when step U8 was taken up (tasks T279, T280, T281).
 | U8-Q11 | Steps? | One step U8, a chain of three tasks in `pw-loupe`: the map in plain Rust (the actions, the defaults equal to today's keys, the lookup per view, the rules of U8-Q4 and U8-Q5, reading and writing `keys.txt`), today's key tests unchanged and passing (T279); the shell asks the map, and the menus and texts show its keys (T280); the page Keyboard Shortcuts and the suffixes' field, then the owner's hand check (T281). The chain is reviewed as a whole before T279 is set to Open |
 | U8-Q12 | (asked the same day, after the chain review of T279–T281) Exact modifiers? | **Owner (proposal):** a key in the map acts only with exactly its modifiers, so Shift+Z, Shift+F, Shift+M and the like no longer act as Z, F and M (today some key functions ignore Shift). Kept as today, as fixed keys: Shift with the preview's arrows, Page Up/Down, Home, End, Escape and Enter, and Shift+`+` as Zoom In. The library's Refresh follows Reload Folder's keys exactly (Ctrl+F5 over the left column no longer refreshes). An empty Companion File Suffixes field gives the default list, as an empty line in `settings.txt` does |
 | U8-Q13 | (the same day) egui's own keys (Ctrl+Q quits; Ctrl+plus, Ctrl+minus and Ctrl+0 change the interface's scale, so Ctrl+0 for No Label also changes the scale today)? | **Owner (proposal A):** turned off in the program (egui's `zoom_with_keyboard` and `quit_shortcuts`), so those keys are free for the map; Ctrl+Q no longer quits (Alt+F4 and File ▸ Quit remain) |
+| U8-Q14 | (asked 2026-11-22 at the backlog sort after U8's hand check, where the owner found the page Keyboard Shortcuts cramped) The Settings window's size? | **Owner (proposal):** the window opens in the middle of the program's window, larger (about 640 × 560 points, smaller in a small program window), and can be resized by its edge; the size is not saved, so each opening starts at the default size in the middle. Applies to every page; task T283 |
 
 ## 7. Steps
 
