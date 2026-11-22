@@ -35,6 +35,12 @@
   `thumbnail_buttons = true|false` (§2.8, U15-Q4, U15-Q5, U15-Q7). **Changed by the owner after
   the hand check of U15 (2026-11-21):** the buttons are 28 points, not 20, so the symbols are
   larger (§2.8, U15-Q6; task T246).
+- **Questions of step U10b answered by the owner (2026-11-22, every proposal approved):** the
+  user's choice of the metadata window's sections and fields, made on a new Metadata Window page
+  of the Settings window; a hidden field's value shown under Other Metadata; "Paste All Fields"
+  only for the items shown (§6.3, U10b-Q1–U10b-Q8; tasks T277, T278). U10b-Q8 narrows U9-Q10:
+  the companion suffixes' page comes with U8. U10b-Q9 (the same day, after the chain review):
+  with Rating and Label hidden, the keys still rate and the current rating is shown as one line.
 - Date: 2026-11-12; amended 2026-11-13
 - Related:
   - [GUI_REQUIREMENTS.md](../GUI_REQUIREMENTS.md) (GR1–GR13), in particular GR6 (keyboard first),
@@ -202,7 +208,7 @@ a full photo-desk caption window.
   6. Betyg och etikett.
 
   The user chooses which sections and fields are shown and in which order (Settings), so unused
-  fields take no room. The Swedish names follow D11 (Yrkestitel and Kontaktuppgifter: owner,
+  fields take no room (how: §6.3, U10b-Q1–U10b-Q8, owner 2026-11-22). The Swedish names follow D11 (Yrkestitel and Kontaktuppgifter: owner,
   2026-11-13); new names are proposed with the step. The
   PLUS fields are built in U10 together with milestone 8's I11, after the PLUS vocabulary is read
   (ADR 0007 §16.4).
@@ -642,6 +648,22 @@ the decisions do not live only in the tasks.
 | U15-Q7 | Can they be turned off? | "Buttons on Thumbnails" in the View menu, on by default, `thumbnail_buttons = true\|false` in `settings.txt` (corrected from `on\|off` by the owner, 2026-11-21) |
 | U15-Q8 | Steps? | One step U15 with the owner's hand check after it. **Changed by the owner (2026-11-21, after a look at the code):** two tasks in `pw-loupe`, a chain: U15a the metadata window's steps between the marked (U15-Q9), U15b the four buttons; the hand check after U15b |
 | U15-Q9 | Stepping in the metadata window | **Owner:** with the window's image marked and two or more marked, previous/next and "Spara och nästa" step only between the marked; this holds however the window is opened (`M`, the menus, the button); otherwise all shown images as today (amends §2.3.1) |
+
+### 6.3 Questions of step U10b (answered by the owner, 2026-11-22: every proposal approved, Q9 as proposal A)
+
+Asked by the reviewer when step U10b was taken up (tasks T277, T278).
+
+| # | Question | Answer |
+|---|---|---|
+| U10b-Q1 | What does the step cover? | The **metadata window**, as §2.3.1 and §7 say: which of its sections and fields are shown, and in which order. The step plan's line "of the info panel" was a slip and is corrected; a choice for the inspector's panels is not part of it |
+| U10b-Q2 | What can be chosen? | The six sections can each be hidden and put in another order; inside a section each item can be hidden and put in another order. An item never moves to another section. Other Metadata (with the conflicts, warnings and notices after it) is always last and always shown |
+| U10b-Q3 | A hidden field that has a value on the image? | Its value is shown read-only under Other Metadata, so nothing on the image is out of sight; it is never written away. The same holds for every item of a hidden section; Rating and Label hidden: U10b-Q9 |
+| U10b-Q4 | Hidden fields and the actions on several images? | "Paste All Fields" copies and pastes only the items shown; "Apply to {n} Marked" writes only what was edited, which is never a hidden item. A hidden item is never changed out of the user's sight. An open conflict on a hidden item is still listed with its choice |
+| U10b-Q5 | What is one item of the list? | Each simple field is one item; the creator's contact fields (address, city, region, postal code, country, email, phone, web URL) are one item, "Creator's Contact Info"; each list of structures (Location Shown, Licensor …) is one item. The Rating and Label section has no items, only the section |
+| U10b-Q6 | Where is the choice made? | The Settings window gets pages: **General** (today's choices), **External Programs** and **Metadata Window**. The Metadata Window page lists every section with a check box and Move Up, and under each its items with a check box and Move Up, and a button **Restore Defaults**; the page scrolls. No drag and drop. Applied and saved by Save, as the other choices |
+| U10b-Q7 | How is it stored? | In `settings.txt`: one line with the sections' order, one with the items' order, one with the hidden sections and one with the hidden items, each written only when it differs from the default. A name that is not known is skipped; an item a later version adds is shown in its default place |
+| U10b-Q8 | The companion suffixes' page (U9-Q10)? | Comes with U8 (the key map and its page), not with U10b (narrows U9-Q10's "U8 or U10b") |
+| U10b-Q9 | (asked the same day, after the chain review of T277–T278) The rating keys while Rating and Label is hidden? | **Owner (proposal A):** the keys rate as before; while the section is hidden, Other Metadata starts with one line showing the image's current rating and label ("Rating: 3 stars, Red"), not the rating read when the window opened, so a key press is seen at once |
 
 ## 7. Steps
 

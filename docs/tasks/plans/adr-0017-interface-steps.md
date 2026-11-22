@@ -16,7 +16,7 @@ the one before it is accepted.
 | Step | Task | Content | Can start |
 |---|---|---|---|
 | U10a | T123 | Every simple text, date and list field of sections 1–4 editable (the fields of §2.3.1 that are not structures), the contact address fields and Copyrighted; the form in collapsible sections whose state is remembered; the deprecated IIM fields read-only in their section | done (T123, 2026-11-14) |
-| U10b | – | Settings: which sections and fields are shown, and in which order | placed by the owner on 2026-11-21 as order 2b in [`adr-0018-0025-steps.md`](adr-0018-0025-steps.md), after ADR 0026 F4 |
+| U10b | T277, T278 | Settings: which sections and fields are shown, and in which order (U10b-Q1–U10b-Q9, ADR 0017 §6.3, 2026-11-22) | written 2026-11-22; placed by the owner on 2026-11-21 as order 2b in [`adr-0018-0025-steps.md`](adr-0018-0025-steps.md), after ADR 0026 F4 |
 | U10c | T124 | Rating and Label in the window (section 6), written through the rating path (U10-Q5) | done (T124, 2026-11-14) |
 | R1 | reviewer | Read the PLUS controlled vocabulary (ADR 0007 §16.4, Q9) and save it in `D:\PhotoWorkflowData\references\` as P1 was. **Done 2026-11-14:** `LDFXMP-1_2_0-ControlledVocabulary.xml` (7 764 bytes, SHA-256 `26961ebe…08c92fa2`) with Model and Property Release Status and Minor Model Age Disclosure; Data Mining (PLUS 2.0.1, not in that file) taken from the PLUS XMP specification page into the folder's `README.md` | done |
 | U10d | T128 | Licence section: Model and Property Release Status, the release ids and Digital Source Type as fixed choice lists (with I11) | done (T128, 2026-11-14) |

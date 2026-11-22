@@ -39,7 +39,8 @@ Panasonic (RW2), Fujifilm (RAF) and DNG files.
 Not in RawStride yet, roughly in the order they are planned. The order can change, and there
 are no dates.
 
-- **Settings:** choose which fields the info panel shows, and change the keyboard shortcuts.
+- **Settings:** choose which sections and fields the metadata window shows, and change the
+  keyboard shortcuts.
 - **Metadata templates:** save and apply templates from the metadata window, with variables in
   text fields.
 - **Search and filter on text and metadata:** a search box (Ctrl+F), a filter window and saved
