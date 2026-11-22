@@ -15,7 +15,7 @@ use pw_metadata::{MIN_EXIFTOOL_VERSION, ToolVersion};
 use crate::external_text::{open_in_another_text, program_number_text};
 use crate::monitor_profile::ProfileSource;
 use crate::rating_text::label_name;
-use crate::shell::{Command, KeyChord, MenuKind, SubmenuKind, Theme, UNKNOWN_COMMIT};
+use crate::shell::{Command, KeyChord, MenuKind, SettingsPage, SubmenuKind, Theme, UNKNOWN_COMMIT};
 use crate::sort::SortKey;
 
 /// The separator between the parts of the status line.
@@ -280,7 +280,8 @@ pub enum SettingsText {
     Cancel,
     /// The reason the file could not be saved when there is no settings folder (no LOCALAPPDATA).
     NoFolder,
-    /// The heading of the section with the list of external programs (ADR 0019 E-Q2, T200).
+    /// The name of the list of external programs (ADR 0019 E-Q2, T200); the window names its page
+    /// with `Page(SettingsPage::ExternalPrograms)` (T278).
     ExternalPrograms,
     /// The button under the list that chooses a program to add.
     AddProgram,
@@ -294,6 +295,10 @@ pub enum SettingsText {
     ChooseProgram,
     /// The name of the file dialog's filter for `.exe` files.
     ProgramsFilter,
+    /// The name of a page's button at the top of the window (ADR 0017 U10b-Q6, T278).
+    Page(SettingsPage),
+    /// The button under the page Metadata Window that sets its default layout back (T278).
+    RestoreDefaults,
 }
 
 /// The text of `text` in the settings window.
@@ -315,6 +320,10 @@ pub fn settings_text(text: SettingsText) -> &'static str {
         SettingsText::NoPrograms => "No programs added.",
         SettingsText::ChooseProgram => "Choose a Program",
         SettingsText::ProgramsFilter => "Programs",
+        SettingsText::Page(SettingsPage::General) => "General",
+        SettingsText::Page(SettingsPage::ExternalPrograms) => "External Programs",
+        SettingsText::Page(SettingsPage::MetadataWindow) => "Metadata Window",
+        SettingsText::RestoreDefaults => "Restore Defaults",
     }
 }
 
@@ -1033,6 +1042,33 @@ mod tests {
         }
         assert_eq!(external_program_limit_text(1), "At most 1 program");
         assert_eq!(external_program_limit_text(5), "At most 5 programs");
+    }
+
+    /// The Settings window's pages in the order of their buttons, each with its own name, and
+    /// "Restore Defaults" (ADR 0017 U10b-Q6, T278).
+    #[test]
+    fn the_settings_pages_are_in_order_with_distinct_names() {
+        assert_eq!(
+            SettingsPage::ALL,
+            [
+                SettingsPage::General,
+                SettingsPage::ExternalPrograms,
+                SettingsPage::MetadataWindow,
+            ]
+        );
+        let names: Vec<&str> = SettingsPage::ALL
+            .into_iter()
+            .map(|page| settings_text(SettingsText::Page(page)))
+            .collect();
+        assert_eq!(names, ["General", "External Programs", "Metadata Window"]);
+        for (index, name) in names.iter().enumerate() {
+            assert!(!name.is_empty(), "{name:?}");
+            assert!(!names[..index].contains(name), "{name:?} twice");
+        }
+        assert_eq!(
+            settings_text(SettingsText::RestoreDefaults),
+            "Restore Defaults"
+        );
     }
 
     /// Every text of the window "About RawStride", with sample values, not the real authors

@@ -31,23 +31,23 @@ use pw_loupe::library_text::{LibraryText, library_text};
 use pw_loupe::{AUTHORS, AboutText, COMMIT, REPOSITORY, VERSION, about_text};
 use pw_loupe::{
     Action, AddedFiles, CardRefresh, CellState, CopiedFields, DEFAULT_THUMBNAIL_SIZE, DialogKey,
-    DialogRequest, EditorField, EditorForm, EditorKeyAction, EditorSection, EditorText, Field,
-    Filter, GridKeyAction, ImportDialog, ImportDialogState, ImportEvent, ImportForm, ImportWorker,
-    IptcField, LABEL_CHOICES, LabelFilter, Language, LoupeMove, MAX_THUMBNAIL_SIZE,
-    MIN_THUMBNAIL_SIZE, MonitorProfile, Navigation, Options, PanelText, READING_RATINGS_TEXT,
-    RatingButton, RatingRefused, STAR_CONDITIONS, STAR_FILTERS, Settings, StarFilter, SubmitError,
-    Tab, TabAction, Tabs, ThumbGrid, UNSUPPORTED_TEXT, ViewMode, WINDOW_TITLE, allowed_modes,
-    apply_confirmation, carried_map, clamp_thumbnail_size, clear_and_import_text,
-    clear_cancel_text, clear_confirmation_text, clear_confirmation_title, color_image, columns,
-    dialog_key_action, done_lines, editor_key_action, editor_rating_key, editor_text,
-    ejecting_progress_text, error_text, files_gone, grid_key_action, indicator_text, info_panel,
-    key_action, label_choice_text, label_filter_text, label_name, list_folder,
+    DialogRequest, EditorField, EditorForm, EditorItem, EditorKeyAction, EditorLayout,
+    EditorSection, EditorText, Field, Filter, GridKeyAction, ImportDialog, ImportDialogState,
+    ImportEvent, ImportForm, ImportWorker, IptcField, LABEL_CHOICES, LabelFilter, Language,
+    LoupeMove, MAX_THUMBNAIL_SIZE, MIN_THUMBNAIL_SIZE, MonitorProfile, Navigation, Options,
+    PanelText, READING_RATINGS_TEXT, RatingButton, RatingRefused, STAR_CONDITIONS, STAR_FILTERS,
+    Settings, StarFilter, SubmitError, Tab, TabAction, Tabs, ThumbGrid, UNSUPPORTED_TEXT, ViewMode,
+    WINDOW_TITLE, allowed_modes, apply_confirmation, carried_map, clamp_thumbnail_size,
+    clear_and_import_text, clear_cancel_text, clear_confirmation_text, clear_confirmation_title,
+    color_image, columns, dialog_key_action, done_lines, editor_key_action, editor_rating_key,
+    editor_text, ejecting_progress_text, error_text, files_gone, grid_key_action, indicator_text,
+    info_panel, key_action, label_choice_text, label_filter_text, label_name, list_folder,
     load_monitor_profile, load_settings_and_library, loupe_key_action, marked_text,
     metadata_neighbour, metadata_steps, mode_label, mode_text, more_lines, no_match_text,
     notice_text, opens_import, other_values, panel_text, parse_args, position_text, preview_line,
     preview_summary, primary_monitor_profile_path, progress_text, property_label,
     rating_key_action, request_cell, save_settings_with_library, settings_path,
-    star_condition_text, star_filter_text, star_glyphs, status_line, step_allowed,
+    star_condition_text, star_filter_text, star_glyphs, status_line, status_text, step_allowed,
     step_thumbnail_size, tab_action, take_wheel_steps, visible_range, wheel_factor, window_title,
 };
 use pw_loupe::{
@@ -61,13 +61,14 @@ use pw_loupe::{
 };
 use pw_loupe::{
     COLLAPSED_WIDTH, ColumnState, Command, ExternalProgram, IMAGE_CONTEXT_MENU,
-    MAX_EXTERNAL_PROGRAMS, MENUS, MenuEntry, MenuItem, RatingKey, STATUS_TEXT_SIZE, SettingsText,
-    ShellAction, ShellSettings, ShellText, StartWindow, THEMES, Theme, Where, WindowRect,
-    apply_text_sizes, clamp_column_width, column_width_range, command_text, exiftool_message,
-    external_program_limit_text, fallback_text, font_definitions, image_area, key_text, menu_text,
-    no_images_text, open_error_text, palette, path_resolution_error_text, prune_error_text,
-    recovery_text, rect_on_a_screen, settings_save_error_text, settings_text, shell_key_action,
-    shell_text, start_window, status_line_text, submenu_text, theme_text, tidied_programs, visuals,
+    MAX_EXTERNAL_PROGRAMS, MENUS, MenuEntry, MenuItem, RatingKey, STATUS_TEXT_SIZE, SettingsPage,
+    SettingsText, ShellAction, ShellSettings, ShellText, StartWindow, THEMES, Theme, Where,
+    WindowRect, apply_text_sizes, clamp_column_width, column_width_range, command_text,
+    exiftool_message, external_program_limit_text, fallback_text, font_definitions, image_area,
+    key_text, menu_text, no_images_text, open_error_text, palette, path_resolution_error_text,
+    prune_error_text, recovery_text, rect_on_a_screen, settings_save_error_text, settings_text,
+    shell_key_action, shell_text, start_window, status_line_text, submenu_text, theme_text,
+    tidied_programs, visuals,
 };
 use pw_loupe::{
     CaptureReader, SORT_KEYS, SortFollow, SortKey, SortOrder, modified_time, read_order,
@@ -738,6 +739,9 @@ struct Loupe {
     settings_path: Option<PathBuf>,
     /// The settings window's choices while it is open.
     settings_window: Option<Settings>,
+    /// The Settings window's page shown (ADR 0017 U10b-Q6, T278): set when the window opens, kept
+    /// while it is open, not saved.
+    settings_page: SettingsPage,
     /// The window "About RawStride" is open (ADR 0031 RL-Q9, T225). It blocks nothing, so it is not
     /// part of `dialog_open`; only its Close button closes it.
     about_window: bool,
@@ -964,11 +968,13 @@ impl Loupe {
         }
     }
 
-    /// Opens the settings window with the settings in use. Not while the metadata window holds
-    /// the program (D16).
-    fn open_settings_window(&mut self) {
+    /// Opens the settings window with the settings in use, on `page` (T278). Not while the
+    /// metadata window holds the program (D16), and not while it is open already, so an open
+    /// window keeps its page.
+    fn open_settings_window(&mut self, page: SettingsPage) {
         if self.metadata_window.is_none() && self.settings_window.is_none() {
             self.settings_window = Some(self.settings.clone());
+            self.settings_page = page;
         }
     }
 
@@ -1063,96 +1069,158 @@ impl Loupe {
     }
 
     /// The settings window "Inställningar" (ADR 0007 §5.2, §5.4/Q10, T106). Every text comes
-    /// from `settings_text` or `fallback_text` (`shell_text.rs`); an encoding is chosen by its
-    /// value (T116). The section "External Programs" edits the list of programs (ADR 0019 E-Q2,
-    /// T200); like the other choices it is applied and saved only by "Save".
+    /// from `settings_text`, `fallback_text` or `editor_text` (`shell_text.rs`, `editor.rs`); an
+    /// encoding is chosen by its value (T116). The buttons at the top choose a page (ADR 0017
+    /// U10b-Q6, T278): General (the IIM check box, the encoding, the theme), External Programs (the
+    /// list of programs, ADR 0019 E-Q2, T200) and Metadata Window (the sections and items of the
+    /// metadata window, shown or hidden and in their order, in a scroll area, then "Restore
+    /// Defaults"). Save and Cancel are under every page; like every choice, the programs and the
+    /// layout are applied and saved only by "Save".
     fn draw_settings_window(&mut self, ctx: &egui::Context) {
         /// The window's fixed width in points, so a long program path wraps (T200).
         const SETTINGS_WINDOW_WIDTH: f32 = 440.0;
+        /// The greatest height in points of the page Metadata Window's scroll area (T278); never
+        /// more than half the program's window, so the Settings window stays on the screen.
+        const LAYOUT_PAGE_MAX_HEIGHT: f32 = 420.0;
         let Some(mut chosen) = self.settings_window.clone() else {
             return;
         };
+        let mut page = self.settings_page;
         let mut save = false;
         let mut cancel = false;
         // The clicks of the program rows and of "Add…", applied after the rows are drawn.
         let mut move_up = None;
         let mut remove = None;
         let mut add_program = false;
+        // The clicks of the page Metadata Window, applied after its rows are drawn (T278).
+        let mut layout_clicks: Vec<LayoutClick> = Vec::new();
+        let mut restore_defaults = false;
+        let layout_height = LAYOUT_PAGE_MAX_HEIGHT.min(ctx.content_rect().height() / 2.0);
         egui::Window::new(settings_text(SettingsText::Title))
             .collapsible(false)
             .resizable(false)
             .default_width(SETTINGS_WINDOW_WIDTH)
             .max_width(SETTINGS_WINDOW_WIDTH)
             .show(ctx, |ui| {
-                ui.checkbox(
-                    &mut chosen.create_iim,
-                    settings_text(SettingsText::CreateIim),
-                );
-                ui.label(egui::RichText::new(settings_text(SettingsText::CreateIimNote)).small());
-                ui.add_space(PANEL_ROW_SPACING);
-                ui.label(settings_text(SettingsText::Encoding));
-                egui::ComboBox::from_id_salt("fallback-encoding")
-                    .selected_text(fallback_text(chosen.fallback))
-                    .show_ui(ui, |ui| {
-                        for fallback in FALLBACK_CHOICES {
-                            ui.selectable_value(
-                                &mut chosen.fallback,
-                                fallback,
-                                fallback_text(fallback),
-                            );
+                ui.horizontal_wrapped(|ui| {
+                    for each in SettingsPage::ALL {
+                        let text = settings_text(SettingsText::Page(each));
+                        if ui.selectable_label(page == each, text).clicked() {
+                            page = each;
                         }
-                    });
-                ui.add_space(PANEL_ROW_SPACING);
-                ui.label(shell_text(ShellText::ThemeLabel));
-                egui::ComboBox::from_id_salt("theme")
-                    .selected_text(theme_text(chosen.shell.theme))
-                    .show_ui(ui, |ui| {
-                        for theme in THEMES {
-                            ui.selectable_value(&mut chosen.shell.theme, theme, theme_text(theme));
-                        }
-                    });
-                ui.add_space(PANEL_ROW_SPACING);
-                ui.heading(settings_text(SettingsText::ExternalPrograms));
-                if chosen.external_programs.is_empty() {
-                    ui.label(settings_text(SettingsText::NoPrograms));
-                }
-                for (index, program) in chosen.external_programs.iter_mut().enumerate() {
-                    ui.push_id(index, |ui| {
-                        ui.horizontal(|ui| {
-                            ui.text_edit_singleline(&mut program.name);
-                            let up = egui::Button::new(settings_text(SettingsText::MoveUp));
-                            if ui.add_enabled(index > 0, up).clicked() {
-                                move_up = Some(index);
-                            }
-                            if ui
-                                .button(settings_text(SettingsText::RemoveProgram))
-                                .clicked()
-                            {
-                                remove = Some(index);
-                            }
-                        });
-                        ui.add(
-                            egui::Label::new(
-                                egui::RichText::new(program.path.display().to_string()).small(),
-                            )
-                            .wrap(),
+                    }
+                });
+                ui.separator();
+                match page {
+                    SettingsPage::General => {
+                        ui.checkbox(
+                            &mut chosen.create_iim,
+                            settings_text(SettingsText::CreateIim),
                         );
-                    });
+                        ui.label(
+                            egui::RichText::new(settings_text(SettingsText::CreateIimNote)).small(),
+                        );
+                        ui.add_space(PANEL_ROW_SPACING);
+                        ui.label(settings_text(SettingsText::Encoding));
+                        egui::ComboBox::from_id_salt("fallback-encoding")
+                            .selected_text(fallback_text(chosen.fallback))
+                            .show_ui(ui, |ui| {
+                                for fallback in FALLBACK_CHOICES {
+                                    ui.selectable_value(
+                                        &mut chosen.fallback,
+                                        fallback,
+                                        fallback_text(fallback),
+                                    );
+                                }
+                            });
+                        ui.add_space(PANEL_ROW_SPACING);
+                        ui.label(shell_text(ShellText::ThemeLabel));
+                        egui::ComboBox::from_id_salt("theme")
+                            .selected_text(theme_text(chosen.shell.theme))
+                            .show_ui(ui, |ui| {
+                                for theme in THEMES {
+                                    ui.selectable_value(
+                                        &mut chosen.shell.theme,
+                                        theme,
+                                        theme_text(theme),
+                                    );
+                                }
+                            });
+                    }
+                    SettingsPage::ExternalPrograms => {
+                        if chosen.external_programs.is_empty() {
+                            ui.label(settings_text(SettingsText::NoPrograms));
+                        }
+                        for (index, program) in chosen.external_programs.iter_mut().enumerate() {
+                            ui.push_id(index, |ui| {
+                                ui.horizontal(|ui| {
+                                    ui.text_edit_singleline(&mut program.name);
+                                    let up = egui::Button::new(settings_text(SettingsText::MoveUp));
+                                    if ui.add_enabled(index > 0, up).clicked() {
+                                        move_up = Some(index);
+                                    }
+                                    if ui
+                                        .button(settings_text(SettingsText::RemoveProgram))
+                                        .clicked()
+                                    {
+                                        remove = Some(index);
+                                    }
+                                });
+                                ui.add(
+                                    egui::Label::new(
+                                        egui::RichText::new(program.path.display().to_string())
+                                            .small(),
+                                    )
+                                    .wrap(),
+                                );
+                            });
+                        }
+                        let room = chosen.external_programs.len() < MAX_EXTERNAL_PROGRAMS;
+                        add_program = ui
+                            .add_enabled(
+                                room,
+                                egui::Button::new(settings_text(SettingsText::AddProgram)),
+                            )
+                            .on_disabled_hover_text(external_program_limit_text(
+                                MAX_EXTERNAL_PROGRAMS,
+                            ))
+                            .clicked();
+                    }
+                    SettingsPage::MetadataWindow => {
+                        egui::ScrollArea::vertical()
+                            .id_salt("settings-metadata-window")
+                            .max_height(layout_height)
+                            .show(ui, |ui| {
+                                layout_clicks = draw_layout_rows(ui, &chosen.editor_layout);
+                            });
+                        ui.add_space(PANEL_ROW_SPACING);
+                        restore_defaults = ui
+                            .button(settings_text(SettingsText::RestoreDefaults))
+                            .clicked();
+                    }
                 }
-                let room = chosen.external_programs.len() < MAX_EXTERNAL_PROGRAMS;
-                add_program = ui
-                    .add_enabled(
-                        room,
-                        egui::Button::new(settings_text(SettingsText::AddProgram)),
-                    )
-                    .on_disabled_hover_text(external_program_limit_text(MAX_EXTERNAL_PROGRAMS))
-                    .clicked();
                 ui.add_space(PANEL_ROW_SPACING);
                 ui.horizontal(|ui| {
                     save = ui.button(settings_text(SettingsText::Save)).clicked();
                     cancel = ui.button(settings_text(SettingsText::Cancel)).clicked();
                 });
             });
+        self.settings_page = page;
+        // Only the layout; the sections' open or collapsed state (the `editor_*` keys) stays.
+        if restore_defaults {
+            chosen.editor_layout = EditorLayout::default();
+        }
+        for click in layout_clicks {
+            let layout = &mut chosen.editor_layout;
+            match click {
+                LayoutClick::SectionShown(section, shown) => {
+                    layout.set_section_shown(section, shown);
+                }
+                LayoutClick::SectionUp(section) => layout.move_section_up(section),
+                LayoutClick::ItemShown(item, shown) => layout.set_item_shown(item, shown),
+                LayoutClick::ItemUp(item) => layout.move_item_up(item),
+            }
+        }
         let programs = &mut chosen.external_programs;
         if let Some(index) = move_up
             && let Some(above) = index.checked_sub(1)
@@ -3777,6 +3845,9 @@ impl Loupe {
         let rating = self.metadata.shown_rating(&window.path).cloned();
         let mut rating_choice = None;
         let shell = self.settings.shell.clone();
+        // The sections and items the form shows, in their order (U10b, T278); the Settings window
+        // is never open with this window, so it does not change under the form.
+        let layout = self.settings.editor_layout.clone();
         let mut ok = false;
         let mut cancel = false;
         let mut previous = false;
@@ -4017,6 +4088,7 @@ impl Loupe {
                                     &warnings,
                                     !locked && !asking,
                                     &shell,
+                                    &layout,
                                     rating.as_ref(),
                                     !asking,
                                     &mut value_ui,
@@ -4062,13 +4134,14 @@ impl Loupe {
             state.form.choose(conflict_index, value_index);
         }
         // Copy, then paste, as the buttons and keys asked (T125). A paste is unsaved edits, as
-        // typing gives; the status below is cleared when it changed the form.
+        // typing gives; the status below is cleared when it changed the form. Only what the
+        // layout shows is copied and pasted (U10b-Q4, T278).
         if let WindowBody::Form(state) = &mut window.body {
             if copy {
-                self.copied_fields = Some(state.form.copy(&window.file));
+                self.copied_fields = Some(state.form.copy_shown(&window.file, &layout));
             }
             if paste && let Some(copied) = &self.copied_fields {
-                state.form.paste(copied);
+                state.form.paste_shown(copied, &layout);
                 ctx.request_repaint();
             }
         }
@@ -6475,7 +6548,7 @@ impl Loupe {
             Command::CloseTab => self.tab_action(TabAction::Close),
             Command::NextTab => self.tab_action(TabAction::Next),
             Command::PreviousTab => self.tab_action(TabAction::Previous),
-            Command::Settings => self.open_settings_window(),
+            Command::Settings => self.open_settings_window(SettingsPage::General),
             Command::About => self.about_window = true,
             Command::Quit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
             Command::SelectAll => self.select_all(),
@@ -6494,9 +6567,9 @@ impl Loupe {
             Command::DeleteToRecycleBin => self.delete_images(),
             Command::DeleteRejected => self.delete_rejected(),
             Command::OpenIn(index) => self.open_in(usize::from(index)),
-            // The Settings window has no scrolling, so its section "External Programs" is in view
-            // when it opens (ADR 0019 §2.2, E-Q3).
-            Command::OpenInAnother => self.open_settings_window(),
+            // The Settings window opens on its page "External Programs", where a program is added
+            // (ADR 0019 §2.2, E-Q3; its pages, U10b-Q6, T278).
+            Command::OpenInAnother => self.open_settings_window(SettingsPage::ExternalPrograms),
             Command::ShowInExplorer => self.show_current_in_explorer(),
             Command::ToggleView => match self.tabs.active().map(|tab| tab.mode) {
                 Some(ViewMode::Grid) => {
@@ -8016,27 +8089,73 @@ fn resolve_paths(files: &[PathBuf]) -> Result<Vec<PathBuf>, String> {
     Ok(files.iter().map(|path| resolve_path(&cwd, path)).collect())
 }
 
-/// The properties of the editor's fields, left out of the window's other metadata (D16, T107,
-/// T123): every field's property once, also `Iptc4xmpCore:CreatorContactInfo`, whose fields are
-/// all editor fields, and the read-only Urgency, Category and Supplemental Categories, which are
-/// shown in the Assignment section; `xmp:Rating` and `xmp:Label`, shown by the Rating and
-/// Label section (T124); and the structure lists edited in the form (T136, T139, T143). Conflicts
-/// on any of them are still listed.
+/// The properties the default layout's form shows, left out of the window's other metadata (D16,
+/// T107, T123; U10b-Q3, T278): every field's property once, also
+/// `Iptc4xmpCore:CreatorContactInfo`, the read-only Urgency, Category and Supplemental Categories,
+/// the structure lists (T136, T139, T143), `xmp:Rating` and `xmp:Label` (T124). Only the tests use
+/// it; the window takes `shown_properties` of the layout in use.
+#[cfg(test)]
 fn window_editor_properties() -> Vec<&'static str> {
-    let mut properties: Vec<&'static str> = Vec::new();
-    for field in EditorField::ALL {
-        if !properties.contains(&field.property()) {
-            properties.push(field.property());
-        }
+    EditorLayout::default().shown_properties()
+}
+
+/// A click on the Settings window's page Metadata Window (T278), applied to the chosen layout
+/// after the rows are drawn.
+enum LayoutClick {
+    /// A section's check box: shown or hidden.
+    SectionShown(EditorSection, bool),
+    /// A section's Move Up.
+    SectionUp(EditorSection),
+    /// An item's check box: shown or hidden.
+    ItemShown(EditorItem, bool),
+    /// An item's Move Up, inside its section.
+    ItemUp(EditorItem),
+}
+
+/// The rows of the Settings window's page Metadata Window (ADR 0017 U10b-Q6, T278): for each
+/// section of `layout` in its order, Move Up (greyed on the first) and a check box named by the
+/// section's heading; under it, indented, each of the section's items in its order, Move Up (greyed
+/// on the section's first item) and a check box named by the item's label. The items of a hidden
+/// section are greyed, their own checks kept. Move Up comes first, so a long name wraps beside it.
+/// Returns the clicks.
+fn draw_layout_rows(ui: &mut egui::Ui, layout: &EditorLayout) -> Vec<LayoutClick> {
+    let mut clicks = Vec::new();
+    for (index, (section, shown)) in layout.sections().into_iter().enumerate() {
+        ui.push_id(("settings-layout-section", section), |ui| {
+            ui.horizontal_wrapped(|ui| {
+                let up = egui::Button::new(settings_text(SettingsText::MoveUp));
+                if ui.add_enabled(index > 0, up).clicked() {
+                    clicks.push(LayoutClick::SectionUp(section));
+                }
+                let mut checked = shown;
+                let heading = editor_text(&EditorText::SectionHeading(section));
+                if ui.checkbox(&mut checked, heading).changed() {
+                    clicks.push(LayoutClick::SectionShown(section, checked));
+                }
+            });
+            ui.indent("items", |ui| {
+                ui.add_enabled_ui(shown, |ui| {
+                    for (item_index, (item, item_shown)) in
+                        layout.items(section).into_iter().enumerate()
+                    {
+                        ui.push_id(("settings-layout-item", item), |ui| {
+                            ui.horizontal_wrapped(|ui| {
+                                let up = egui::Button::new(settings_text(SettingsText::MoveUp));
+                                if ui.add_enabled(item_index > 0, up).clicked() {
+                                    clicks.push(LayoutClick::ItemUp(item));
+                                }
+                                let mut checked = item_shown;
+                                if ui.checkbox(&mut checked, item.label()).changed() {
+                                    clicks.push(LayoutClick::ItemShown(item, checked));
+                                }
+                            });
+                        });
+                    }
+                });
+            });
+        });
     }
-    properties.extend(["xmp:Rating", "xmp:Label"]);
-    // Location Created and Location Shown are edited in Time and Place (U11a, T136); Genre,
-    // Image Creator, Copyright Owner, Licensor and Image Supplier in Assignment and Licence (PLUS)
-    // (U11b, T139); Person Shown with Details, Product Shown, Artwork or Object, Contributor,
-    // CV-Term About Image and Image Registry Entry in Content, Creator and Rights and Assignment
-    // (U11c, T143).
-    properties.extend(EditorForm::ALL_LISTS);
-    properties
+    clicks
 }
 
 /// What the metadata window's form reports after it was drawn.
@@ -8049,21 +8168,20 @@ struct FormResponse {
     rating: Option<RatingKey>,
 }
 
-/// The contents of the metadata window's form (D16, T107, T123, T124, T128), top to bottom: the
-/// fields in their five sections (the Licence (PLUS) section's choice lists, T128) and the Rating
-/// and Label section, each a collapsible heading open or
-/// collapsed as `shell` has it; the open conflicts with a choice each and the warnings (editable
-/// when `enabled`); then read-only, in small text, the other metadata (without an origin line,
-/// T114), the conflicts a rule decided (each value with its origin) and the notices, each only
-/// when it has rows. The contact fields are drawn under the heading of their structure, "Creator's
-/// Contact Info" (T114). The structure lists (`draw_structure_lists`) are drawn in their places:
-/// Time and Place ends with Location Created and Location Shown (T136), Genre follows Scene Code
-/// and Licence (PLUS) starts with Image Creator, Copyright Owner, Licensor and Image Supplier
-/// (T139). Labels and values wrap at the window's width. The last section,
-/// Rating and Label (T124), holds the buttons of the image's shown `rating` instead of fields,
-/// usable when `rating_enabled` (also while the form's write runs, not while "Save changes?" is
-/// asked).
-#[allow(clippy::too_many_arguments)] // the window's form, its state and its two enabled flags
+/// The contents of the metadata window's form (D16, T107, T123, T124, T128; U10b, T278), top to
+/// bottom: the sections `layout` shows, in its order, each a collapsible heading open or collapsed
+/// as `shell` has it, and in each the items the layout shows, in its order: a field (the Licence
+/// (PLUS) section's choice lists, T128), the contact fields under the heading of their structure,
+/// "Creator's Contact Info" (T114), or a structure list (`draw_structure_list`, T136, T139, T143).
+/// Then the open conflicts with a choice each and the warnings (editable when `enabled`), every
+/// open conflict listed whatever is hidden (U10b-Q4); then read-only, in small text, the other
+/// metadata (without an origin line, T114; what the layout hides is there, U10b-Q3), the
+/// conflicts a rule decided (each value with its origin) and the notices, each only when it has
+/// rows. Labels and values wrap at the window's width. The section Rating and Label (T124) holds
+/// the buttons of the image's shown `rating` instead of fields, usable when `rating_enabled` (also
+/// while the form's write runs, not while "Save changes?" is asked); while it is hidden, the other
+/// metadata starts with that rating's status line (U10b-Q9).
+#[allow(clippy::too_many_arguments)] // the window's form, its state, its layout and two flags
 fn draw_window_form(
     ui: &mut egui::Ui,
     state: &mut FormState,
@@ -8071,6 +8189,7 @@ fn draw_window_form(
     warnings: &[String],
     enabled: bool,
     shell: &ShellSettings,
+    layout: &EditorLayout,
     rating: Option<&Rating>,
     rating_enabled: bool,
     values: &mut ValueUi<'_>,
@@ -8079,7 +8198,8 @@ fn draw_window_form(
     let mut choice = None;
     let mut toggled = Vec::new();
     let mut rating_choice = None;
-    for section in EditorSection::ALL {
+    let sections = layout.shown_sections();
+    for section in sections.iter().copied() {
         let section_enabled = if section == EditorSection::RatingLabel {
             rating_enabled
         } else {
@@ -8094,15 +8214,25 @@ fn draw_window_form(
                         if section == EditorSection::RatingLabel {
                             rating_choice = draw_rating_buttons(ui, rating);
                         }
-                        // The structure lists at the start of the section (T139), then each
-                        // field followed by the lists drawn after it (T136, T139).
-                        draw_structure_lists(ui, &mut state.form, section, None);
-                        for field in EditorField::ALL
-                            .into_iter()
-                            .filter(|field| field.section() == section)
-                        {
-                            draw_window_field(ui, &mut state.form, field, errors, values);
-                            draw_structure_lists(ui, &mut state.form, section, Some(field));
+                        for item in layout.shown_items(section) {
+                            match item {
+                                EditorItem::Field(_) | EditorItem::ContactInfo => {
+                                    // `draw_window_field` draws "Creator's Contact Info" once,
+                                    // before the first contact field.
+                                    for field in item.fields() {
+                                        draw_window_field(
+                                            ui,
+                                            &mut state.form,
+                                            field,
+                                            errors,
+                                            values,
+                                        );
+                                    }
+                                }
+                                EditorItem::List(list) => {
+                                    draw_structure_list(ui, &mut state.form, list);
+                                }
+                            }
                         }
                     })
             })
@@ -8154,10 +8284,18 @@ fn draw_window_form(
 
     // Read-only, from the read the form was filled from.
     let grey = ui.visuals().weak_text_color();
-    let others = other_values(&state.read, &window_editor_properties());
-    if !others.is_empty() {
+    let others = other_values(&state.read, &layout.shown_properties());
+    // With Rating and Label hidden, the rating keys still rate; the current rating is shown here
+    // so a key press is seen at once (U10b-Q9).
+    let rating_line =
+        (!sections.contains(&EditorSection::RatingLabel)).then(|| status_text(rating));
+    if !others.is_empty() || rating_line.is_some() {
         ui.separator();
         ui.label(egui::RichText::new(editor_text(&EditorText::OtherValuesHeading)).strong());
+        if let Some(line) = rating_line {
+            ui.label(egui::RichText::new(line).small());
+            ui.add_space(PANEL_ROW_SPACING);
+        }
         for row in &others {
             ui.label(egui::RichText::new(&row.label).strong().small());
             ui.label(egui::RichText::new(&row.value).small());
@@ -8460,128 +8598,110 @@ fn values_button(ui: &mut egui::Ui) -> egui::Response {
     response
 }
 
-/// The structure lists drawn in `section` after the field `after` (or at the start of the section
-/// for `None`): Person Shown with Details, Product Shown and Artwork or Object after Person Shown,
-/// Contributor at the end of Creator and Rights (U11c-Q2, T143), Location Created and Location
-/// Shown at the end of Time and Place (ADR 0017 U11a-Q2, T136), Genre and CV-Term About Image
-/// after Scene Code, Image Registry Entry at the end of Assignment (T143), and Image Creator,
-/// Copyright Owner, Licensor and Image Supplier at the start of Licence (PLUS) (U11b, T139). Each
-/// list's name, then one framed group per entry with its sub-fields (names from `property_label`,
-/// one-line text boxes as wide as the window, a drop-down for a Licensor's telephone types, a
-/// Licensor's address under a collapsed "Address" line, an Artwork or Object's further sub-fields
-/// under a collapsed "More" line) and "Remove", then "Add Location" or "Add {list}", disabled at
-/// the list's limit with the tooltip "At most {n} entries"; under Location Shown also "Copy from
-/// Location Created" (U11a-Q4), under Image Creator "Copy from Creator" (U11b-Q4), under Person
-/// Shown with Details "Copy from Person Shown" (U11c-Q6). A list with an undecided conflict, or a
-/// value the form cannot show, is its read-only text instead.
-fn draw_structure_lists(
-    ui: &mut egui::Ui,
-    form: &mut EditorForm,
-    section: EditorSection,
-    after: Option<EditorField>,
-) {
-    // Each list followed by the lists drawn right after it (CV-Term About Image after Genre,
-    // U11c-Q2, T143).
-    let lists: Vec<&'static str> = EditorForm::lists_at(section, after)
-        .into_iter()
-        .flat_map(|list| std::iter::once(list).chain(EditorForm::lists_after_list(list)))
-        .collect();
-    for list in lists {
-        ui.label(egui::RichText::new(property_label(list, Language::En)).strong());
-        if let Some(text) = form.list_read_only(list).map(str::to_string) {
-            ui.add(egui::Label::new(text).wrap());
-            ui.add_space(PANEL_ROW_SPACING);
-            continue;
-        }
-        let mut removed = None;
-        for entry in 0..form.list_count(list) {
-            ui.push_id(("metadata-window-list", list, entry), |ui| {
-                egui::Frame::group(ui.style()).show(ui, |ui| {
-                    for field in EditorForm::list_fields(list) {
-                        draw_list_field(ui, form, list, entry, field);
-                    }
-                    let address = EditorForm::list_address_fields(list);
-                    if !address.is_empty() {
-                        egui::CollapsingHeader::new(editor_text(&EditorText::Address))
-                            .id_salt("address")
-                            .default_open(false)
-                            .show(ui, |ui| {
-                                for field in address {
-                                    draw_list_field(ui, form, list, entry, field);
-                                }
-                            });
-                    }
-                    // An Artwork or Object's eleven further sub-fields (U11c-Q3, T143).
-                    let more = EditorForm::list_more_fields(list);
-                    if !more.is_empty() {
-                        egui::CollapsingHeader::new(editor_text(&EditorText::More))
-                            .id_salt("more")
-                            .default_open(false)
-                            .show(ui, |ui| {
-                                for field in more {
-                                    draw_list_field(ui, form, list, entry, field);
-                                }
-                            });
-                    }
-                    if ui
-                        .button(editor_text(&EditorText::RemoveLocation))
-                        .clicked()
-                    {
-                        removed = Some(entry);
-                    }
-                });
+/// One structure list of the metadata window's form, drawn where the layout puts it (T136, T139,
+/// T143; U10b, T278). The list's name, then one framed group per entry with its sub-fields (names
+/// from `property_label`, one-line text boxes as wide as the window, a drop-down for a Licensor's
+/// telephone types, a Licensor's address under a collapsed "Address" line, an Artwork or Object's
+/// further sub-fields under a collapsed "More" line) and "Remove", then "Add Location" or
+/// "Add {list}", disabled at the list's limit with the tooltip "At most {n} entries"; under
+/// Location Shown also "Copy from Location Created" (U11a-Q4), under Image Creator "Copy from
+/// Creator" (U11b-Q4), under Person Shown with Details "Copy from Person Shown" (U11c-Q6). A list
+/// with an undecided conflict, or a value the form cannot show, is its read-only text instead.
+fn draw_structure_list(ui: &mut egui::Ui, form: &mut EditorForm, list: &'static str) {
+    ui.label(egui::RichText::new(property_label(list, Language::En)).strong());
+    if let Some(text) = form.list_read_only(list).map(str::to_string) {
+        ui.add(egui::Label::new(text).wrap());
+        ui.add_space(PANEL_ROW_SPACING);
+        return;
+    }
+    let mut removed = None;
+    for entry in 0..form.list_count(list) {
+        ui.push_id(("metadata-window-list", list, entry), |ui| {
+            egui::Frame::group(ui.style()).show(ui, |ui| {
+                for field in EditorForm::list_fields(list) {
+                    draw_list_field(ui, form, list, entry, field);
+                }
+                let address = EditorForm::list_address_fields(list);
+                if !address.is_empty() {
+                    egui::CollapsingHeader::new(editor_text(&EditorText::Address))
+                        .id_salt("address")
+                        .default_open(false)
+                        .show(ui, |ui| {
+                            for field in address {
+                                draw_list_field(ui, form, list, entry, field);
+                            }
+                        });
+                }
+                // An Artwork or Object's eleven further sub-fields (U11c-Q3, T143).
+                let more = EditorForm::list_more_fields(list);
+                if !more.is_empty() {
+                    egui::CollapsingHeader::new(editor_text(&EditorText::More))
+                        .id_salt("more")
+                        .default_open(false)
+                        .show(ui, |ui| {
+                            for field in more {
+                                draw_list_field(ui, form, list, entry, field);
+                            }
+                        });
+                }
+                if ui
+                    .button(editor_text(&EditorText::RemoveLocation))
+                    .clicked()
+                {
+                    removed = Some(entry);
+                }
             });
-            ui.add_space(PANEL_ROW_SPACING);
-        }
-        if let Some(entry) = removed {
-            form.remove_entry(list, entry);
-        }
-        ui.horizontal_wrapped(|ui| {
-            let add_text = if EditorForm::LOCATION_LISTS.contains(&list) {
-                editor_text(&EditorText::AddLocation)
-            } else {
-                editor_text(&EditorText::AddEntry { list })
-            };
-            let add = ui.add_enabled(form.can_add_entry(list), egui::Button::new(add_text));
-            let add = match EditorForm::max_entries(list) {
-                Some(max) => {
-                    add.on_disabled_hover_text(editor_text(&EditorText::AtMostEntries { max }))
-                }
-                None => add,
-            };
-            if add.clicked() {
-                form.add_entry(list);
-            }
-            if list == EditorForm::LOCATION_SHOWN {
-                let copy = ui.add_enabled(
-                    form.can_copy_location_created(),
-                    egui::Button::new(editor_text(&EditorText::CopyFromLocationCreated)),
-                );
-                if copy.clicked() {
-                    form.copy_location_created();
-                }
-            }
-            if list == EditorForm::IMAGE_CREATOR {
-                let copy = ui.add_enabled(
-                    form.can_copy_creator(),
-                    egui::Button::new(editor_text(&EditorText::CopyFromCreator)),
-                );
-                if copy.clicked() {
-                    form.copy_creator();
-                }
-            }
-            if list == EditorForm::PERSON_DETAILS {
-                let copy = ui.add_enabled(
-                    form.can_copy_person_shown(),
-                    egui::Button::new(editor_text(&EditorText::CopyFromPersonShown)),
-                );
-                if copy.clicked() {
-                    form.copy_person_shown();
-                }
-            }
         });
         ui.add_space(PANEL_ROW_SPACING);
     }
+    if let Some(entry) = removed {
+        form.remove_entry(list, entry);
+    }
+    ui.horizontal_wrapped(|ui| {
+        let add_text = if EditorForm::LOCATION_LISTS.contains(&list) {
+            editor_text(&EditorText::AddLocation)
+        } else {
+            editor_text(&EditorText::AddEntry { list })
+        };
+        let add = ui.add_enabled(form.can_add_entry(list), egui::Button::new(add_text));
+        let add = match EditorForm::max_entries(list) {
+            Some(max) => {
+                add.on_disabled_hover_text(editor_text(&EditorText::AtMostEntries { max }))
+            }
+            None => add,
+        };
+        if add.clicked() {
+            form.add_entry(list);
+        }
+        if list == EditorForm::LOCATION_SHOWN {
+            let copy = ui.add_enabled(
+                form.can_copy_location_created(),
+                egui::Button::new(editor_text(&EditorText::CopyFromLocationCreated)),
+            );
+            if copy.clicked() {
+                form.copy_location_created();
+            }
+        }
+        if list == EditorForm::IMAGE_CREATOR {
+            let copy = ui.add_enabled(
+                form.can_copy_creator(),
+                egui::Button::new(editor_text(&EditorText::CopyFromCreator)),
+            );
+            if copy.clicked() {
+                form.copy_creator();
+            }
+        }
+        if list == EditorForm::PERSON_DETAILS {
+            let copy = ui.add_enabled(
+                form.can_copy_person_shown(),
+                egui::Button::new(editor_text(&EditorText::CopyFromPersonShown)),
+            );
+            if copy.clicked() {
+                form.copy_person_shown();
+            }
+        }
+    });
+    ui.add_space(PANEL_ROW_SPACING);
 }
 
 /// One sub-field of a structure list's entry (T136, T139): its name from `property_label`, then a
@@ -10523,6 +10643,7 @@ fn run(options: Options) -> Result<(), String> {
                 settings: settings.clone(),
                 settings_path,
                 settings_window: None,
+                settings_page: SettingsPage::General,
                 about_window: false,
                 pending_options: None,
                 metadata: MetadataCache::default(),
@@ -10652,6 +10773,7 @@ mod tests {
     use super::{WindowLeave, WindowRefilter, metadata_window_position, window_refilter};
     use egui::{Color32, Rect, pos2, vec2};
     use pw_loupe::{EditorField, EditorForm, Tab, ViewMode};
+    use pw_loupe::{EditorItem, EditorLayout, EditorSection, Language, property_label};
     use pw_loupe::{TEXT_CONTRAST, contrast_ratio};
     use pw_metadata::iim::Fallback;
     use std::path::{Path, PathBuf};
@@ -11706,6 +11828,113 @@ mod tests {
         let rows = other_values(&read, &properties);
         let labels: Vec<&str> = rows.iter().map(|row| row.label.as_str()).collect();
         assert_eq!(labels, ["Model Age"]);
+    }
+
+    /// A JPEG's read holding `values`, read from embedded XMP (T278's tests).
+    fn read_with(
+        values: Vec<(&str, pw_metadata::value::Value)>,
+    ) -> pw_metadata::read::MetadataRead {
+        use pw_metadata::iim::CodedCharset;
+        use pw_metadata::read::MetadataRead;
+        use pw_metadata::reconcile::{FileKind, IimDigest, Reconciled};
+        use pw_metadata::value::{Metadata, Origin};
+        use pw_metadata::write_plan::{ExifPresent, FileState, XmpPresent};
+
+        let mut metadata = Metadata::new();
+        for (id, value) in values {
+            metadata
+                .insert_read(id, value, Origin::XmpEmbedded)
+                .unwrap();
+        }
+        MetadataRead {
+            reconciled: Reconciled {
+                metadata,
+                notices: Vec::new(),
+                suggested_date_created: None,
+            },
+            file_notices: Vec::new(),
+            state: FileState {
+                kind: FileKind::Jpeg,
+                iim_present: false,
+                iim_charset: CodedCharset::Absent,
+                iim_values: Vec::new(),
+                digest: IimDigest::Missing,
+                exif_present: ExifPresent::default(),
+                xmp_present: XmpPresent::default(),
+            },
+        }
+    }
+
+    /// The labels of the form's Other Metadata rows for `read` with `layout` (U10b-Q3, T278).
+    fn other_labels(read: &pw_metadata::read::MetadataRead, layout: &EditorLayout) -> Vec<String> {
+        other_values(read, &layout.shown_properties())
+            .into_iter()
+            .map(|row| row.label)
+            .collect()
+    }
+
+    /// A hidden field's value is shown read-only under Other Metadata; with the default layout it
+    /// is not (U10b-Q3, T278).
+    #[test]
+    fn other_metadata_shows_a_hidden_fields_value() {
+        use pw_metadata::value::{LangAlt, Value};
+
+        let read = read_with(vec![(
+            "dc:title",
+            Value::LangAlt(LangAlt::from_entries(vec![(
+                "x-default".to_owned(),
+                "Hav".to_owned(),
+            )])),
+        )]);
+        let title = property_label("dc:title", Language::En);
+        assert!(other_labels(&read, &EditorLayout::default()).is_empty());
+        let mut layout = EditorLayout::default();
+        layout.set_item_shown(EditorItem::Field(EditorField::Title), false);
+        assert_eq!(other_labels(&read, &layout), [title]);
+    }
+
+    /// The field of a hidden section (Instructions in a hidden Assignment) is shown read-only
+    /// under Other Metadata; with the default layout it is not (U10b-Q3, T278).
+    #[test]
+    fn other_metadata_shows_a_hidden_sections_field() {
+        use pw_metadata::value::Value;
+
+        let read = read_with(vec![(
+            "photoshop:Instructions",
+            Value::Text("Embargo".to_owned()),
+        )]);
+        let instructions = property_label("photoshop:Instructions", Language::En);
+        assert!(other_labels(&read, &EditorLayout::default()).is_empty());
+        let mut layout = EditorLayout::default();
+        layout.set_section_shown(EditorSection::Assignment, false);
+        assert!(
+            layout
+                .items(EditorSection::Assignment)
+                .iter()
+                .all(|(_, shown)| *shown)
+        );
+        assert_eq!(other_labels(&read, &layout), [instructions]);
+    }
+
+    /// With Rating and Label hidden, the rating read when the window opened is not an Other
+    /// Metadata row (U10b-Q9, T278); the window's own line of the current rating is checked by
+    /// hand.
+    #[test]
+    fn other_metadata_holds_no_rating_row_with_rating_and_label_hidden() {
+        use pw_metadata::value::Value;
+
+        let read = read_with(vec![
+            ("xmp:Rating", Value::Number("3".into())),
+            ("xmp:Label", Value::Text("Red".to_owned())),
+        ]);
+        let mut layout = EditorLayout::default();
+        layout.set_section_shown(EditorSection::RatingLabel, false);
+        assert!(
+            !layout
+                .shown_sections()
+                .contains(&EditorSection::RatingLabel)
+        );
+        assert!(other_labels(&read, &layout).is_empty());
     }
 
     // --- the filter while the metadata window is open (ADR 0017 U10c-Q4, T124) ---

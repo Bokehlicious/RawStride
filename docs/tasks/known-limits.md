@@ -370,6 +370,20 @@ with ADR 0026 F3, in `plans/adr-0018-0025-steps.md`.)
   are listed. With one process no write ran during a copy. The template's writes add no
   progress step, so the progress may also stay at 100 % while they finish.
 
+## The metadata window's layout (ADR 0017 U10b)
+
+(T278's brief and chain review, 2026-11-22.)
+
+- *The Paste button's count after a layout change:* when the layout is changed between Copy All
+  Fields and Paste All Fields, the Paste button's tooltip still counts the copied items that are
+  now hidden, while the paste skips them (U10b-Q4).
+- *An older RawStride:* a version before T277 reading a `settings.txt` with the layout's lines
+  gives one problem per line (unknown key) and drops the lines at its next save, so the layout
+  is back to the default.
+- *A hand-written order line* naming only some entries puts each left-out entry right after its
+  default predecessor, which can move the named ones (`editor_section_order = licence` alone
+  gives the default order); RawStride always writes every entry (T277's review).
+
 ## Card eject
 
 (Independent review of T156, 2026-11-16; none affects the owner's readers.)

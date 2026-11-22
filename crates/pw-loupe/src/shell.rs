@@ -40,6 +40,27 @@ pub enum Theme {
 /// The themes in the order of the menu and the settings window.
 pub const THEMES: [Theme; 2] = [Theme::Dark, Theme::Light];
 
+/// A page of the Settings window (ADR 0017 U10b-Q6, T278), chosen by the buttons at its top. The
+/// chosen page is kept while the window is open, not saved.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SettingsPage {
+    /// The IIM check box, the encoding and the theme.
+    General,
+    /// The list of external programs (ADR 0019 E-Q2).
+    ExternalPrograms,
+    /// The sections and items of the metadata window and their order (step U10b).
+    MetadataWindow,
+}
+
+impl SettingsPage {
+    /// The pages in the order of their buttons.
+    pub const ALL: [SettingsPage; 3] = [
+        SettingsPage::General,
+        SettingsPage::ExternalPrograms,
+        SettingsPage::MetadataWindow,
+    ];
+}
+
 /// Whether a side column is shown in full or as a thin strip with its open button.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ColumnState {

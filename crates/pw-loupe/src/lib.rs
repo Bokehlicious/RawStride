@@ -162,10 +162,10 @@ pub use settings::{
 pub use shell::{
     AUTHORS, COLLAPSED_WIDTH, COMMIT, ColumnState, Command, HIDE_KEY, IMAGE_CONTEXT_MENU, KeyChord,
     MENUS, Menu, MenuEntry, MenuItem, MenuKind, NON_TEXT_CONTRAST, OPEN_IN_KEY, Palette,
-    REPOSITORY, STATUS_TEXT_SIZE, StartWindow, SubmenuKind, TEXT_CONTRAST, THEMES, Theme,
-    UNKNOWN_COMMIT, VERSION, Where, apply_text_sizes, clamp_column_width, column_width_range,
-    contrast_ratio, font_definitions, image_area, menu_items, non_text_pairs, palette,
-    rect_on_a_screen, start_window, text_pairs, visuals,
+    REPOSITORY, STATUS_TEXT_SIZE, SettingsPage, StartWindow, SubmenuKind, TEXT_CONTRAST, THEMES,
+    Theme, UNKNOWN_COMMIT, VERSION, Where, apply_text_sizes, clamp_column_width,
+    column_width_range, contrast_ratio, font_definitions, image_area, menu_items, non_text_pairs,
+    palette, rect_on_a_screen, start_window, text_pairs, visuals,
 };
 pub use shell_text::{
     AboutText, SettingsText, ShellText, about_text, command_text, exiftool_message,

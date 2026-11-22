@@ -41,6 +41,10 @@ Downloads are on the [Releases page](https://github.com/Bokehlicious/RawStride/r
 
 ### Added
 
+- Settings has the pages General, External Programs and Metadata Window. On Metadata Window
+  you choose which sections and fields the metadata window shows, and in which order; what is
+  hidden is shown read-only under Other Metadata, and Copy All Fields and Paste All Fields
+  take only what is shown. Restore Defaults brings back the full form.
 - An image whose XMP says it is turned (`tiff:Orientation` in a RAW's sidecar, or in the XMP of a
   DNG, JPEG or TIFF) is shown turned in the preview and the contact sheet.
 - Rotate Left (Ctrl+←) and Rotate Right (Ctrl+→) in the Image menu turn the marked images, or
