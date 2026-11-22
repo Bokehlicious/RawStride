@@ -82,8 +82,11 @@ program folder (ADR 0002 §2.5; T120 looks there before PATH).
    step.]
 6. **Code signing:** none for `0.1.0`; the release text says SmartScreen will warn and gives the
    SHA-256 checksums. After the first release, apply to SignPath Foundation (free signing for open
-   source projects) or use Azure Trusted Signing (paid, identity check) (RL-Q6). [Both services'
-   terms for an individual in Sweden: unchecked.]
+   source projects) or use Azure Trusted Signing (paid, identity check) (RL-Q6). [Checked
+   2026-11-22 (RL8): Azure Artifact Signing, as it is now named, takes individuals only in the USA
+   and Canada, so for the owner SignPath Foundation remains (the certificate and the publisher
+   shown are SignPath Foundation's; it asks for a verifiable reputation), with Certum Open Source
+   Code Signing (paid, the owner's name as publisher) as the fallback.]
 7. **Built by CI, not on the owner's machine:** a release workflow on a pushed tag `v*` builds the
    release exe on a clean runner, packs the zip, writes `SHA256SUMS.txt` and creates a **draft**
    GitHub Release; the owner reads it and presses Publish (RL-Q7). The release build gets path
@@ -141,7 +144,7 @@ program folder (ADR 0002 §2.5; T120 looks there before PATH).
 | RL5 | owner | The zip run on a clean PC or in Windows Sandbox: starts, renders a RAW, writes a rating through the shipped ExifTool, leaves the program folder unchanged; done 2026-11-20 in a new Windows account on the owner's PC (no other PC; no Sandbox on Windows 11 Home), all four OK | RL4 |
 | RL6 | task | `CHANGELOG.md` with the `0.1.0` section and the rule in `docs/tasks/README.md` (RL-Q3); `.github/workflows/release.yml` on `v*` tags (RL-Q7, RL-Q12); done (T229), its test run on `main` checked OK 2026-11-20 | RL4 |
 | RL7 | owner + reviewer | `0.1.0`: the `CHANGELOG.md` section renamed, tag on `main`, the workflow's draft read, published as a pre-release; the tag ruleset (RL-Q8); `README.md`'s status line; steps in `docs/distribution.md`, "Making a release"; done 2026-11-20: `v0.1.0` published as a pre-release, tag ruleset "release tags" active | RL5, RL6 |
-| RL8 | owner | Code signing applied for (RL-Q6) | RL7 |
+| RL8 | owner | Code signing applied for (RL-Q6); the options checked 2026-11-22 (§3.6); waits until RawStride has a reputation (owner, 2026-11-22) | RL7 |
 | RL9 | task | The MSI (RL-Q5) | RL7 and the owner's go |
 
 Placed by the owner (2026-11-20) as order 1d of `docs/tasks/plans/adr-0018-0025-steps.md`,
@@ -172,3 +175,4 @@ U13), so they are not lost.
 | 1 | 2026-11-20 | Proposed by the reviewer after the repository became public; waits for RL-Q1–RL-Q13 |
 | 2 | 2026-11-20 | Accepted: the owner approved RL-Q1–RL-Q13 as proposed; ADR 0002 §4 gets the About window's line |
 | 3 | 2026-11-21 | When a later release is suggested: a rule in `docs/tasks/README.md` (the reviewer raises it when `Unreleased` is not empty and an ADR or a step order is finished), approved by the owner |
+| 4 | 2026-11-22 | §3.6: the signing services' terms checked (RL8); RL8 waits until RawStride has a reputation (owner) |
