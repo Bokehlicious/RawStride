@@ -12,7 +12,7 @@
 #
 #     .\tools\package-dist.ps1                      builds the release exe first
 #     .\tools\package-dist.ps1 -NoBuild             uses the existing target\release\rawstride.exe
-#     .\tools\package-dist.ps1 -ExifToolZip <path>  uses a local exiftool-13.59_64.zip
+#     .\tools\package-dist.ps1 -ExifToolZip <path>  uses a local exiftool-13.64_64.zip
 #
 # Everything it writes is under target\dist\. A zip made on a developer's machine is for testing
 # only; a release zip is made by the release workflow (ADR 0031 RL6).
@@ -26,8 +26,8 @@ $ErrorActionPreference = 'Stop'
 
 # Both must match EXIFTOOL_VERSION / EXIFTOOL_SHA256 in .github/workflows/ci.yml and the ExifTool
 # version in tools/third-party-notices.ps1.
-$exifToolVersion = '13.59'
-$exifToolSha256 = '44b512b25af500724ba579d0a53c8fc5851628b692dd5e5d94ae4a15c2cba9ec'
+$exifToolVersion = '13.64'
+$exifToolSha256 = '72c29c44d1e860eebcaefa71692d979af9858fe9a6d7d791a5e7f1dac77804af'
 
 # The Microsoft DLLs rawstride.exe needs; THIRD-PARTY-NOTICES.txt's Microsoft paragraph names the
 # same four.

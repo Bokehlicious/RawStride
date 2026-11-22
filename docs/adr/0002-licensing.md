@@ -53,8 +53,8 @@
      licence. Its licence texts and the place of its source (exiftool.org) go into
      `THIRD-PARTY-NOTICES.txt`.
    - The shipped version is one the real-file tests of `pw-metadata` and `pw-imagecheck` passed
-     with (`--ignored`, `PW_TESTDATA`); today **13.59**. A newer version is shipped only after those
-     tests pass with it.
+     with (`--ignored`, `PW_TESTDATA`); today **13.64** (2026-11-22, T270; ADR 0007 §9.7). A newer
+     version is shipped only after those tests pass with it.
    - RawStride looks for `exiftool.exe` in its own program folder first and then on PATH, so a
      developer build and a user's own installation still work (T120).
 

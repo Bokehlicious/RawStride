@@ -15,7 +15,7 @@ $ErrorActionPreference = 'Stop'
 
 $cargoAboutVersion = '0.9.3'
 # Must match EXIFTOOL_VERSION in .github/workflows/ci.yml.
-$exifToolVersion = '13.59'
+$exifToolVersion = '13.64'
 $triplet = 'x64-windows-static-md'
 
 # The packages that ship no licence file of their own: cargo-about writes its standard licence text

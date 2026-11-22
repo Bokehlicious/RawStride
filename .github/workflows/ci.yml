@@ -148,11 +148,10 @@ jobs:
 
       - name: Install ExifTool
         env:
-          EXIFTOOL_VERSION: "13.59"
-          # SHA-256 of exiftool-13.59_64.zip. 13.59 is no longer in exiftool.org's checksums.txt;
-          # the value was computed from a hand download of the URL below and checked against the
-          # SHA-1 and MD5 in SourceForge's checksums-13.59.txt (which gives the same SHA-256).
-          EXIFTOOL_SHA256: 44b512b25af500724ba579d0a53c8fc5851628b692dd5e5d94ae4a15c2cba9ec
+          EXIFTOOL_VERSION: "13.64"
+          # SHA-256 of exiftool-13.64_64.zip, taken from exiftool.org's checksums.txt on 2026-11-22
+          # (T270); a download of the URL below on the same day gave the same SHA-256.
+          EXIFTOOL_SHA256: 72c29c44d1e860eebcaefa71692d979af9858fe9a6d7d791a5e7f1dac77804af
         run: |
           $name = "exiftool-$($env:EXIFTOOL_VERSION)_64"
           $zip = Join-Path $env:RUNNER_TEMP "$name.zip"

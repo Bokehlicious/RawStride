@@ -58,6 +58,11 @@ Reorganised on 2026-11-21 (owner): the earlier file mixed these three kinds and 
 - **The shipped ExifTool at least `MIN_EXIFTOOL_VERSION`** (chain review of T270–T272,
   2026-11-22): nothing checks that the version `tools/package-dist.ps1` ships (and CI pins) is not
   below the app's lowest version. A guard in the script or a test; a tooling change, so a task.
+- **D8's extra validation warning with ExifTool 13.64** (T270 point 6, 2026-11-22): D8 (ADR 0007
+  §17) allows "Non-standard format (undef) for IFD0 0x8649 PhotoshopSettings" when the safe write
+  creates a TIFF's or DNG's Photoshop block. ExifTool 13.64 no longer writes it (a DNG copy written
+  with 13.59 has it, one written with 13.64 does not, whichever version reads). Once 13.64 is the
+  lowest version (T271), the allowance can be dropped; the owner's decision, then a task.
 - **A timeout when ExifTool hangs** (process supervision across threads). Today only the shutdown
   has a timeout (`SHUTDOWN_TIMEOUT` in `pw-metadata`'s `exiftool.rs`). A worker that never answers
   also holds a delete, a move and an "Open in" request (`known-limits.md`).

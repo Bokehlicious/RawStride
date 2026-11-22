@@ -14,7 +14,7 @@ exactly these files at its top level:
 | `rawstride.exe` | The program (eframe + egui). LibRaw with OpenMP, LittleCMS, JasPer, libjpeg-turbo, libspng and zlib are linked statically (vcpkg `x64-windows-static-md`). | `cargo build --release --locked -p pw-loupe` |
 | `MSVCP140.dll`, `VCRUNTIME140.dll`, `VCRUNTIME140_1.dll` | The Microsoft Visual C++ runtime | The Visual Studio or Build Tools redistributable folder, `VC\Redist\MSVC\<version>\x64\Microsoft.VC<nnn>.CRT` |
 | `VCOMP140.DLL` | The Microsoft OpenMP runtime; LibRaw's multithreaded demosaicing needs it | The same folder's `Microsoft.VC<nnn>.OpenMP` |
-| `exiftool.exe`, `exiftool_files\` | ExifTool 13.59, unmodified (`exiftool(-k).exe` renamed) | `exiftool-13.59_64.zip` from SourceForge, the same file and SHA-256 as CI |
+| `exiftool.exe`, `exiftool_files\` | ExifTool 13.64, unmodified (`exiftool(-k).exe` renamed) | `exiftool-13.64_64.zip` from SourceForge, the same file and SHA-256 as CI |
 | `LICENSE` | RawStride's licence, GPL-3.0 | The repository root |
 | `THIRD-PARTY-NOTICES.txt` | The notices of everything in the zip that is not RawStride's own | The repository root (`tools/third-party-notices.ps1`, ADR 0031 RL3) |
 | `README.txt` | Installing, SmartScreen, removing, licence and where the source is | Written by `tools/package-dist.ps1` |
@@ -35,7 +35,7 @@ From the repository root:
 ```powershell
 .\tools\package-dist.ps1                      # builds the release exe first
 .\tools\package-dist.ps1 -NoBuild             # uses the existing target\release\rawstride.exe
-.\tools\package-dist.ps1 -ExifToolZip <path>  # uses a local exiftool-13.59_64.zip
+.\tools\package-dist.ps1 -ExifToolZip <path>  # uses a local exiftool-13.64_64.zip
 ```
 
 - **It needs** the build tools of [`building.md`](building.md) (Rust, vcpkg, Visual Studio or the
