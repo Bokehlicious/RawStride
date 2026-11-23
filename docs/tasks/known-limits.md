@@ -57,8 +57,9 @@ dropped is removed; git history and `done/` keep it.
     them in step); the separate empty-result branch beside the `Empty` fallback; `contains` in
     loops (quadratic, small at today's list sizes). U13 changed both files without it (T296,
     2026-11-23, removed the ingest template's modes and left this out on purpose; none of it
-    became moot), so it waits for a task of its own; none is reached from the window, whose list
-    text is trimmed and has no empty entries.
+    became moot), so it waits for a task of its own (**kept** at the sort after U13c, 2026-11-23
+    (owner)); none is reached from the window, whose list text is trimmed and has no empty
+    entries.
   - *A comma in an entry* (chain review of T179 and T180; owner, ADR 0017 U12d-Q8): an entry
     with a comma ("Lund, Sweden") is split by the window's list text, so removing it removes
     nothing on the other images while the confirmation names it; a failed file of a batch can
@@ -380,15 +381,27 @@ with ADR 0026 F3, in `plans/adr-0018-0025-steps.md`.)
   cancel is seen at the next progress call (or in the end's wait); writes started finish and
   are listed. With one process no write ran during a copy. The template's writes add no
   progress step, so the progress may also stay at 100 % while they finish.
-- *A backup copy's lines repeat the destination's* (`/code-review` of T294, 2026-11-23, owner):
-  the template is written to the destination copy and the backup copy, and each line of a
+- *A backup copy's lines repeat the destination's* (`/code-review` of T294, 2026-11-23, owner;
+  **kept** at the sort after U13c, 2026-11-23 (owner)): the template is written to the destination copy and the backup copy, and each line of a
   failure or a notice names the file only (`file_name(target)`), so with a backup every notice
   (and every failure) shows twice, the same, and the two take two of the ten lines. A task only if
   it is seen in use.
-- *The template is copied for each pooled write* (`/code-review` of T294, 2026-11-23, owner): with
-  more than one write process, `submit_template` gives each job its own clone of the whole
-  `TemplateFile` (up to 50 fields with lists) where an `Arc` would share one. Not measured; a
-  task only if a large import is seen to slow down.
+- *The template is copied for each pooled write* (`/code-review` of T294, 2026-11-23, owner;
+  **kept** at the sort after U13c, 2026-11-23 (owner)): with more than one write process,
+  `submit_template` gives each job its own clone of the whole `TemplateFile` (up to 50 fields
+  with lists) where an `Arc` would share one. Not measured; a task only if a large import is
+  seen to slow down.
+- *A template reader that stops while the import waits* (T295's review, 2026-11-23; **kept** at
+  the sort after U13c, 2026-11-23 (owner)): when the template thread ends after it has taken the
+  import's read at Start, no answer comes, and the dialog shows "Reading the metadata template…"
+  with the form and Start greyed until the dialog is closed (closing drops the wait). The thread
+  ends that way only on a panic, which the rules forbid; a task only if it is seen.
+- *A template path that cannot be read back is not remembered* (T295's review, 2026-11-23;
+  **kept** at the sort after U13c, 2026-11-23 (owner)): `import_template` is written to
+  `settings.txt` only when the path reads back as it is (`parse_folder`), so a chosen file whose
+  path is not valid Unicode or has spaces at an end is used while the program runs but is gone
+  after a restart, without a notice. A file chosen in the open dialog has a full path, so this is
+  rare.
 
 ## The metadata window's layout (ADR 0017 U10b)
 

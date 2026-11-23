@@ -19,7 +19,9 @@ Reorganised on 2026-11-21 (owner): the earlier file mixed these three kinds and 
   / Replace and Cancel; both answers work. Turning the feature on changes `pw-loupe`'s
   `Cargo.toml`, and the test binaries, which get no Common Controls 6 manifest, would then
   import `TaskDialogIndirect` and fail at start as before T47. Needs the owner's decision
-  (keep OK/Cancel, or a task that turns it on and gives the tests the manifest).
+  (keep OK/Cancel, or a task that turns it on and gives the tests the manifest). **Kept** at the
+  sort after U13c, 2026-11-23 (owner): OK/Cancel for now; a later task would take every Windows
+  question of the program, not only the template window's.
 - **Swedish names for every IPTC property** (owner, 2026-11-12, after ADR 0007 D11): every
   property and structure field in T102's name table, so the Swedish info panel and editor show no
   English IPTC names. Today D11 names about 35 of them; the rest fall back to IPTC's English name.
