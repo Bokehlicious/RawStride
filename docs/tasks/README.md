@@ -89,10 +89,11 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 |---|---|---|
 | [T284](T284-template-file-model.md) | The template file's model: checked fields, the + box, Location Created's sub-fields (ADR 0017 U13a) | Open |
 | [T285](T285-template-file-read-write.md) | Reading and saving a template file with ExifTool (ADR 0017 U13a) | Blocked: waits for T284 |
+| [T286](T286-keyboard-shortcuts-table.md) | The page Keyboard Shortcuts as a table of three columns, the Action column's width saved (ADR 0017 U8-Q15) | Open |
 
 ## Writing a task (owner and reviewer)
 
-- **Number:** the next free number after the highest in this folder and `done/` (T286 next).
+- **Number:** the next free number after the highest in this folder and `done/` (T287 next).
 - **File:** `docs/tasks/T246-<a-few-words>.md`; three digits, lower case, words joined by `-`.
 - **Index:** add a row to "Open tasks" above and keep its status in step with the file's heading.
 - **Size (owner, 2026-11-15, after T142):** one task is one layer (a C++ shim or a core crate, or
