@@ -107,7 +107,8 @@ use pw_loupe::{HistogramInspector, HistogramReader, HistogramReads};
 use pw_loupe::{ImportPosition, ImportTabs, PlacedInFolder, with_placed};
 use pw_loupe::{
     ImportText, failed_cell_text, hidden_done_text, hidden_progress_text, import_text,
-    no_preview_text,
+    no_preview_text, template_empty_text, template_not_found_text, template_read_error_text,
+    template_reader_stopped_text, template_variables_text,
 };
 use pw_loupe::{
     KeyPress, KeyRefusal, KeySlot, SETTINGS_WINDOW_MIN, companion_suffixes_field, key_page_groups,
@@ -135,6 +136,7 @@ use pw_metadata::edit::{Edit, EditOptions};
 use pw_metadata::iim::Fallback;
 use pw_metadata::journal::Journal;
 use pw_metadata::read::MetadataRead;
+use pw_metadata::template_file::TemplateFile;
 use pw_metadata::{
     DeleteError, DeleteRefusal, MetadataWorker, PreparedDelete, Rating, WriteSetup, supports_rating,
 };
@@ -691,7 +693,8 @@ impl MetadataWindow {
 enum Answered {
     /// The file at the path was loaded into the form.
     Loaded(PathBuf),
-    /// The template was saved at the path; T295 takes it as the import's template.
+    /// The template was saved at the path; in a window opened from the import dialog it becomes
+    /// the import's template (`saved_sets_import_template`, T295).
     Saved(PathBuf),
     /// The load or the save failed; the status line says why.
     Failed,
@@ -723,6 +726,9 @@ struct TemplateWindow {
     /// Each section's height in points as drawn in the last frame, for the split into two
     /// columns (U13-Q13).
     section_heights: HashMap<EditorSection, f32>,
+    /// Opened with the import dialog's Edit… (U13-Q17, T295): a successful save makes the saved
+    /// file the import's template. False when opened from the File menu.
+    from_import: bool,
 }
 
 impl TemplateWindow {
@@ -737,6 +743,7 @@ impl TemplateWindow {
             value_list_escape: false,
             escape: false,
             section_heights: HashMap::new(),
+            from_import: false,
         }
     }
 
@@ -876,6 +883,57 @@ fn error_line(text: String) -> StatusLine {
     StatusLine { text, error: true }
 }
 
+/// The submit error of an import whose template file `path` is not there at Start (ADR 0017
+/// U13-Q6, T295); `None` when it is a file.
+fn missing_template_error(path: &Path) -> Option<String> {
+    (!path.is_file()).then(|| template_not_found_text(&file_name_text(path)))
+}
+
+/// The import's read of its template file at Start (U13-Q6, U13-Q16, T295): the id of the load
+/// sent to the template thread and the file read. While it is set the dialog's form and Start are
+/// greyed; closing the dialog drops it, and a late answer is then ignored.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ImportTemplateWait {
+    id: u64,
+    path: PathBuf,
+}
+
+impl ImportTemplateWait {
+    /// The template thread's answer `event`: `None` when it answers another request; otherwise
+    /// the template to write, or the submit error that stops the import (the file could not be
+    /// read, has no field, or has an unknown or unclosed variable). What the read skipped or
+    /// dropped is not named here; Edit… shows it (U13-Q16).
+    fn answer(&self, event: &TemplateEvent) -> Option<Result<TemplateFile, String>> {
+        let TemplateEvent::Loaded { id, result, .. } = event else {
+            return None;
+        };
+        if *id != self.id {
+            return None;
+        }
+        let file = file_name_text(&self.path);
+        Some(match result {
+            Err(error) => Err(template_read_error_text(&file, error)),
+            Ok(read) if read.template.fields.is_empty() => Err(template_empty_text(&file)),
+            Ok(read) => match read.template.check_variables() {
+                Err(error) => Err(template_variables_text(&file, &error)),
+                Ok(()) => Ok(read.template.clone()),
+            },
+        })
+    }
+}
+
+/// Whether a successful save of the template window makes the saved file the import's template
+/// (U13-Q17, T295): only in a window opened from the import dialog (`from_import`), and only while
+/// an import dialog is open and editing or previewing (`dialog`, its state), not while it runs or
+/// shows its result.
+fn saved_sets_import_template(from_import: bool, dialog: Option<&ImportDialogState>) -> bool {
+    from_import
+        && matches!(
+            dialog,
+            Some(ImportDialogState::Editing { .. } | ImportDialogState::Previewing)
+        )
+}
+
 /// The open compare (ADR 0017 §2.2, U6, T153): the held image, where it was opened, and what the
 /// second view core has been told.
 struct CompareOpen {
@@ -1012,6 +1070,8 @@ struct Loupe {
     /// While the import dialog is open, when it asks for the cards again (T161).
     card_refresh: Option<CardRefresh>,
     import_submit_error: Option<String>,
+    /// The read of the import's template file at Start, waited for (T295).
+    import_template_wait: Option<ImportTemplateWait>,
     import_hidden: bool,
     /// The Tasks area under the library (ADR 0017 §2.1, U5, T140): the import's row and the
     /// error list.
@@ -2144,26 +2204,81 @@ impl Loupe {
     fn close_import(&mut self) {
         if let Some(dialog) = self.import_dialog.take() {
             self.last_form = dialog.form().clone();
-            // "Copy new images only" is remembered in the settings (T158).
+            // "Copy new images only" and the template are remembered in the settings (T158,
+            // T295).
             self.settings.shell.import_incremental = self.last_form.incremental;
+            self.settings.shell.import_template = self.last_form.template.clone();
         }
+        // A read of the template still waited for is dropped; its answer is ignored (T295).
+        self.import_template_wait = None;
         self.import_hidden = false;
         self.card_refresh = None;
     }
 
-    /// The start button or Enter: the import starts at once (a template clears no field, ADR 0017
-    /// U13, T294).
+    /// The start button or Enter (a template clears no field, ADR 0017 U13, T294); nothing while
+    /// the template file is read (T295).
     fn request_import_start(&mut self) {
         let Some(dialog) = self.import_dialog.as_ref() else {
             return;
         };
-        if !dialog.can_start() {
+        if !dialog.can_start() || self.import_template_wait.is_some() {
             return;
         }
         self.start_import();
     }
 
+    /// Start (U13-Q6, T295): without a template, and for a run that only marks the card, the
+    /// import runs at once. With one, a file that is not there stops it with a submit error;
+    /// otherwise the file is sent to the template thread and the import waits for its answer
+    /// (`import_template_read`), nothing copied until then.
     fn start_import(&mut self) {
+        let Some(dialog) = self.import_dialog.as_ref() else {
+            return;
+        };
+        let template = if dialog.marks_only() {
+            None
+        } else {
+            dialog.form().template.clone()
+        };
+        let Some(path) = template else {
+            self.run_import(None);
+            return;
+        };
+        if let Some(error) = missing_template_error(&path) {
+            self.import_submit_error = Some(error);
+            return;
+        }
+        match self.template_io.as_mut().map(|io| io.load(path.clone())) {
+            Some(Ok(id)) => {
+                self.import_template_wait = Some(ImportTemplateWait { id, path });
+                self.import_submit_error = None;
+            }
+            Some(Err(_)) | None => {
+                self.import_submit_error =
+                    Some(template_reader_stopped_text(&file_name_text(&path)));
+            }
+        }
+    }
+
+    /// The answer to the import's read of its template file `path` (T295): an error stops the
+    /// import with its submit error. A template runs the import with it, unless the dialog can no
+    /// longer start or its template is no longer `path`; the answer is then dropped.
+    fn import_template_read(&mut self, path: &Path, answer: Result<TemplateFile, String>) {
+        let Some(dialog) = self.import_dialog.as_ref() else {
+            return;
+        };
+        if !dialog.can_start() || dialog.form().template.as_deref() != Some(path) {
+            return;
+        }
+        match answer {
+            Ok(template) => self.run_import(Some(template)),
+            Err(error) => self.import_submit_error = Some(error),
+        }
+    }
+
+    /// The import itself, with the template read at Start (`None`: no template): the dialog's
+    /// start, the eject preparation, the watcher and the worker's run.
+    fn run_import(&mut self, template: Option<TemplateFile>) {
         let request = self.import_dialog.as_mut().and_then(ImportDialog::start);
         let Some(DialogRequest::Run { form }) = request else {
             return;
@@ -2186,10 +2301,9 @@ impl Loupe {
                 );
             }
         }
-        // The template file is read before the run from T295 on; until then no template.
         match self
             .import_worker
-            .run(form, self.settings.edit_options(), None)
+            .run(form, self.settings.edit_options(), template)
         {
             Ok(id) => {
                 if let Some(dialog) = &mut self.import_dialog {
@@ -2781,6 +2895,11 @@ impl Loupe {
             ImportText::Start
         };
         let running = dialog.cancel();
+        // While the template is read at Start, the form, its template row and Start are greyed
+        // (T295).
+        let reading_template = self.import_template_wait.is_some();
+        // The template window is modal (T293): the dialog behind it is greyed as a whole.
+        let template_window_open = self.template_window.is_some();
         let cards = self.detected_cards.clone();
         let mut rescan = false;
         let mut close = false;
@@ -2788,12 +2907,14 @@ impl Loupe {
         let mut cancel = false;
         let mut hide = false;
         let mut new_import = false;
+        let mut edit_template = false;
 
         egui::Window::new(import_text(ImportText::Title))
             .collapsible(false)
             .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+            .enabled(!template_window_open)
             .show(ctx, |ui| {
-                ui.add_enabled_ui(!running, |ui| {
+                ui.add_enabled_ui(!running && !reading_template, |ui| {
                     ui.label(import_text(ImportText::Source));
                     ui.horizontal(|ui| {
                         ui.text_edit_singleline(&mut form.source);
@@ -2883,6 +3004,43 @@ impl Loupe {
                             .color(ui.visuals().weak_text_color()),
                     );
 
+                    // The metadata template (U13-Q17, T295): the file's name, its full path as
+                    // the hover text, or None; Choose…, Edit… and None.
+                    ui.add_space(8.0);
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(import_text(ImportText::MetadataTemplate));
+                        match &form.template {
+                            Some(path) => {
+                                ui.label(file_name_text(path))
+                                    .on_hover_text(path.display().to_string());
+                            }
+                            None => {
+                                ui.label(
+                                    egui::RichText::new(import_text(ImportText::NoTemplate))
+                                        .color(ui.visuals().weak_text_color()),
+                                );
+                            }
+                        }
+                        if ui.button(import_text(ImportText::Choose)).clicked()
+                            && let Some(path) =
+                                import_template_dialog(form.template.as_deref()).pick_file()
+                        {
+                            form.template = Some(path);
+                        }
+                        if ui.button(import_text(ImportText::EditTemplate)).clicked() {
+                            edit_template = true;
+                        }
+                        if ui
+                            .add_enabled(
+                                form.template.is_some(),
+                                egui::Button::new(import_text(ImportText::NoTemplate)),
+                            )
+                            .clicked()
+                        {
+                            form.template = None;
+                        }
+                    });
+
                     ui.checkbox(&mut form.eject, import_text(ImportText::Eject));
                     ui.checkbox(&mut form.incremental, import_text(ImportText::Incremental));
 
@@ -2962,12 +3120,17 @@ impl Loupe {
                         }
                     }
                     ImportDialogState::Editing { .. } | ImportDialogState::Previewing => {
-                        if let Some(error) = &self.import_submit_error {
+                        if reading_template {
+                            ui.label(import_text(ImportText::ReadingTemplate));
+                        } else if let Some(error) = &self.import_submit_error {
                             ui.colored_label(ui.visuals().error_fg_color, error);
                         }
                         ui.horizontal(|ui| {
                             if ui
-                                .add_enabled(can_start, egui::Button::new(import_text(start_text)))
+                                .add_enabled(
+                                    can_start && !reading_template,
+                                    egui::Button::new(import_text(start_text)),
+                                )
                                 .clicked()
                             {
                                 start = true;
@@ -3003,6 +3166,14 @@ impl Loupe {
         }
         if start {
             self.request_import_start();
+        }
+        if edit_template {
+            // Edit… (U13-Q17): the chosen file, or an empty window without one.
+            let chosen = self
+                .import_dialog
+                .as_ref()
+                .and_then(|dialog| dialog.form().template.clone());
+            self.open_template_window(chosen, true);
         }
         if cancel
             && self
@@ -4678,14 +4849,19 @@ impl Loupe {
     }
 
     /// Opens the template window, or keeps the open one (T293 point 3); with `path`, a window it
-    /// newly opened then loads that file (Load's steps without the open dialog). T295 calls it
-    /// from the import dialog.
-    fn open_template_window(&mut self, path: Option<PathBuf>) {
-        if self.template_window.is_none() {
+    /// newly opened then loads that file (Load's steps without the open dialog). `from_import`:
+    /// opened with the import dialog's Edit… (T295), set on a newly opened window.
+    fn open_template_window(&mut self, path: Option<PathBuf>, from_import: bool) {
+        let newly_opened = self.template_window.is_none();
+        if newly_opened {
             // A new id each opening: the default size in the middle each time.
             self.template_opening = self.template_opening.wrapping_add(1);
         }
-        if let Some(path) = open_template(&mut self.template_window, path) {
+        let load = open_template(&mut self.template_window, path);
+        if newly_opened && let Some(window) = self.template_window.as_mut() {
+            window.from_import = from_import;
+        }
+        if let Some(path) = load {
             self.send_template_load(path);
         }
     }
@@ -4703,23 +4879,49 @@ impl Loupe {
         }
     }
 
-    /// Takes the template thread's answers (T293 point 2); an answer that arrives after the window
-    /// was closed is dropped. Repaints while a request is waited for.
+    /// Takes the template thread's answers (T293 point 2): the answer to the import's read of its
+    /// template goes to the import (T295), the others to the template window; an answer that
+    /// arrives after the window or the import dialog was closed is dropped. A save in a window
+    /// opened from the import dialog makes the saved file the import's template. Repaints while
+    /// the window or the import waits.
     fn poll_template_io(&mut self, ctx: &egui::Context) {
         let Some(io) = &self.template_io else {
             return;
         };
-        while let Some(event) = io.try_recv() {
-            if let Some(window) = self.template_window.as_mut()
-                && window.answer(event).is_some()
+        let events: Vec<TemplateEvent> = std::iter::from_fn(|| io.try_recv()).collect();
+        for event in events {
+            if let Some(wait) = self.import_template_wait.take() {
+                if let Some(answer) = wait.answer(&event) {
+                    self.import_template_read(&wait.path, answer);
+                    ctx.request_repaint();
+                    continue;
+                }
+                self.import_template_wait = Some(wait);
+            }
+            let Some(window) = self.template_window.as_mut() else {
+                continue;
+            };
+            let Some(answered) = window.answer(event) else {
+                continue;
+            };
+            ctx.request_repaint();
+            if let Answered::Saved(path) = answered
+                && saved_sets_import_template(
+                    window.from_import,
+                    self.import_dialog.as_ref().map(ImportDialog::state),
+                )
+                && let Some(dialog) = self.import_dialog.as_mut()
             {
-                ctx.request_repaint();
+                // Changing the template never rescans (T294).
+                dialog.edit(|form| form.template = Some(path), Instant::now());
+                self.import_submit_error = None;
             }
         }
-        if self
-            .template_window
-            .as_ref()
-            .is_some_and(|window| window.waiting.is_some())
+        if self.import_template_wait.is_some()
+            || self
+                .template_window
+                .as_ref()
+                .is_some_and(|window| window.waiting.is_some())
         {
             ctx.request_repaint_after(WINDOW_POLL_INTERVAL);
         }
@@ -7395,7 +7597,7 @@ impl Loupe {
             Command::OpenFolder => self.shell_action(ctx, ShellAction::OpenFolder),
             Command::ReloadFolder => self.reload_active_tab(ctx),
             Command::Import => self.open_import(),
-            Command::MetadataTemplate => self.open_template_window(None),
+            Command::MetadataTemplate => self.open_template_window(None, false),
             Command::CloseTab => self.tab_action(TabAction::Close),
             Command::NextTab => self.tab_action(TabAction::Next),
             Command::PreviousTab => self.tab_action(TabAction::Previous),
@@ -11644,9 +11846,11 @@ impl eframe::App for Loupe {
         if let Some(before) = self.window_before {
             self.settings.shell = before.saved(&self.settings.shell);
         }
-        // Quit with the import dialog open: its "copy new images only" is kept (T158).
+        // Quit with the import dialog open: its "copy new images only" and its template are kept
+        // (T158, T295).
         if let Some(dialog) = &self.import_dialog {
             self.settings.shell.import_incremental = dialog.form().incremental;
+            self.settings.shell.import_template = dialog.form().template.clone();
         }
         // The window, full screen and the columns as they are now (ADR 0017 §2.5, T109); a
         // failure is only logged, no dialog at exit.
@@ -11694,6 +11898,23 @@ fn template_file_dialog() -> rfd::FileDialog {
     let dialog =
         rfd::FileDialog::new().add_filter(template_text(&TemplateText::FileType), &["xmp"]);
     match templates_start_folder() {
+        Some(folder) => dialog.set_directory(folder),
+        None => dialog,
+    }
+}
+
+/// The Windows open dialog of the import dialog's Choose… for the metadata template (T295): its
+/// title, T291's file type name with the extension `xmp`, starting in the folder of the `chosen`
+/// file, or without one in the templates folder when there is one.
+fn import_template_dialog(chosen: Option<&Path>) -> rfd::FileDialog {
+    let dialog = rfd::FileDialog::new()
+        .set_title(import_text(ImportText::ChooseTemplate))
+        .add_filter(template_text(&TemplateText::FileType), &["xmp"]);
+    let folder = match chosen {
+        Some(file) => file.parent().map(Path::to_path_buf),
+        None => templates_start_folder(),
+    };
+    match folder {
         Some(folder) => dialog.set_directory(folder),
         None => dialog,
     }
@@ -12029,11 +12250,13 @@ fn run(options: Options) -> Result<(), String> {
                 tasks: Tasks::new(),
                 last_form: ImportForm {
                     incremental: settings.shell.import_incremental,
+                    template: settings.shell.import_template.clone(),
                     ..ImportForm::default()
                 },
                 detected_cards: Vec::new(),
                 card_refresh: None,
                 import_submit_error: None,
+                import_template_wait: None,
                 import_hidden: false,
                 thumb_worker,
                 thumb_grid: ThumbGrid::new(0, 0),
@@ -12363,6 +12586,146 @@ mod tests {
                 "Not saved: the template reader has stopped"
             );
             assert_eq!(window.waiting, None);
+        }
+    }
+
+    // --- The import's metadata template (ADR 0017 U13, part U13c, T295) ---
+
+    mod import_template {
+        use super::super::{
+            ImportTemplateWait, missing_template_error, saved_sets_import_template,
+        };
+        use pw_loupe::{ImportDialogState, TemplateEvent};
+        use pw_metadata::template_file::{TemplateFile, TemplateFileError, TemplateRead};
+        use pw_metadata::value::Value;
+        use std::path::PathBuf;
+
+        fn wait() -> ImportTemplateWait {
+            ImportTemplateWait {
+                id: 7,
+                path: PathBuf::from(r"C:\t\News.xmp"),
+            }
+        }
+
+        fn loaded(id: u64, template: TemplateFile) -> TemplateEvent {
+            TemplateEvent::Loaded {
+                id,
+                path: PathBuf::from(r"C:\t\News.xmp"),
+                result: Ok(TemplateRead {
+                    template,
+                    skipped: vec!["xmp:Rating".to_string()],
+                    dropped: Vec::new(),
+                    unreadable: Vec::new(),
+                }),
+            }
+        }
+
+        fn headline(text: &str) -> TemplateFile {
+            TemplateFile::new(
+                vec![(
+                    "photoshop:Headline".to_string(),
+                    Value::Text(text.to_string()),
+                )],
+                Vec::new(),
+            )
+        }
+
+        #[test]
+        fn a_missing_template_file_gives_the_message_and_a_file_none() {
+            let gone =
+                std::env::temp_dir().join(format!("pw-loupe-t295-gone-{}.xmp", std::process::id()));
+            assert_eq!(
+                missing_template_error(&gone),
+                Some(format!(
+                    "The metadata template {} was not found. Choose another or None.",
+                    gone.file_name()
+                        .map_or_else(String::new, |name| name.to_string_lossy().into_owned())
+                ))
+            );
+            let there = std::env::temp_dir()
+                .join(format!("pw-loupe-t295-there-{}.xmp", std::process::id()));
+            std::fs::write(&there, b"<x:xmpmeta/>").unwrap();
+            let answer = missing_template_error(&there);
+            let _ = std::fs::remove_file(&there);
+            assert_eq!(answer, None);
+        }
+
+        #[test]
+        fn a_template_with_no_field_stops_the_import() {
+            assert_eq!(
+                wait().answer(&loaded(7, TemplateFile::default())),
+                Some(Err(
+                    "The metadata template News.xmp has no field to write.".to_string()
+                ))
+            );
+        }
+
+        #[test]
+        fn a_template_with_an_unknown_variable_stops_the_import() {
+            assert_eq!(
+                wait().answer(&loaded(7, headline("{job}"))),
+                Some(Err(
+                    "The metadata template News.xmp cannot be used: {job} is not a variable. \
+                     Variables: {date} {year} {month} {day} {time} {make} {model} {name} \
+                     {folder}. Write {{ or }} for a brace."
+                        .to_string()
+                ))
+            );
+        }
+
+        #[test]
+        fn a_failed_read_gives_the_read_message() {
+            let event = TemplateEvent::Loaded {
+                id: 7,
+                path: PathBuf::from(r"C:\t\News.xmp"),
+                result: Err(TemplateFileError::NotFound(PathBuf::from(r"C:\t\News.xmp"))),
+            };
+            assert_eq!(
+                wait().answer(&event),
+                Some(Err(
+                    r"The metadata template News.xmp could not be read: C:\t\News.xmp does not exist"
+                        .to_string()
+                ))
+            );
+        }
+
+        #[test]
+        fn a_good_template_is_given_to_the_import_even_with_a_skipped_field() {
+            let template = headline("{date} {name}");
+            assert_eq!(
+                wait().answer(&loaded(7, template.clone())),
+                Some(Ok(template))
+            );
+        }
+
+        #[test]
+        fn an_answer_to_another_request_is_not_the_imports() {
+            assert_eq!(wait().answer(&loaded(8, headline("News"))), None);
+            let saved = TemplateEvent::Saved {
+                id: 7,
+                path: PathBuf::from(r"C:\t\News.xmp"),
+                result: Ok(()),
+            };
+            assert_eq!(wait().answer(&saved), None);
+        }
+
+        #[test]
+        fn a_save_sets_the_imports_template_only_from_the_import_dialog_while_editing() {
+            let editing = ImportDialogState::Editing {
+                preview: None,
+                error: None,
+            };
+            assert!(saved_sets_import_template(true, Some(&editing)));
+            assert!(saved_sets_import_template(
+                true,
+                Some(&ImportDialogState::Previewing)
+            ));
+            assert!(!saved_sets_import_template(false, Some(&editing)));
+            assert!(!saved_sets_import_template(
+                true,
+                Some(&ImportDialogState::Running { progress: None })
+            ));
+            assert!(!saved_sets_import_template(true, None));
         }
     }
 

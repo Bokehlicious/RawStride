@@ -2,9 +2,11 @@
 //! finished import with the template's notices, and the messages of the import worker. The
 //! drawing code in `main.rs` holds none of them.
 
-use crate::editor::notice_text;
+use crate::editor::{notice_text, variable_error_text};
 use crate::{ImportDone, ItemAction, Preview, PreviewLine};
 use pw_core::format_bytes;
+use pw_metadata::template_file::TemplateFileError;
+use pw_metadata::variables::VariableError;
 use pw_metadata::write_plan::WriteNotice;
 use pw_metadata::{MIN_EXIFTOOL_VERSION, ToolVersion};
 use std::path::Path;
@@ -76,6 +78,16 @@ pub enum ImportText {
     NoRegisterRoot,
     /// Every image of the source was imported earlier (T158).
     AllImportedEarlier,
+    /// The label of the metadata template's row (ADR 0017 U13, part U13c, T295).
+    MetadataTemplate,
+    /// The button that opens the template window with the chosen template (T295).
+    EditTemplate,
+    /// The button that chooses no template, and the row's text without one (T295).
+    NoTemplate,
+    /// The open dialog's title for the metadata template (T295).
+    ChooseTemplate,
+    /// Shown while the metadata template is read at Start (T295).
+    ReadingTemplate,
 }
 
 /// The text of `text`.
@@ -124,7 +136,45 @@ pub fn import_text(text: ImportText) -> &'static str {
         ImportText::AllImportedEarlier => {
             "Every image in the source was imported earlier; there is nothing new to copy."
         }
+        ImportText::MetadataTemplate => "Metadata Template:",
+        ImportText::EditTemplate => "Edit…",
+        ImportText::NoTemplate => "None",
+        ImportText::ChooseTemplate => "Choose Metadata Template",
+        ImportText::ReadingTemplate => "Reading the metadata template…",
     }
+}
+
+/// The submit error when the import's metadata template file `file` (its name) is not there at
+/// Start (ADR 0017 U13-Q6, T295).
+pub fn template_not_found_text(file: &str) -> String {
+    format!("The metadata template {file} was not found. Choose another or None.")
+}
+
+/// The submit error when the metadata template `file` cannot be sent to the template reader, which
+/// has stopped (T295).
+pub fn template_reader_stopped_text(file: &str) -> String {
+    format!("The metadata template {file} could not be read: the template reader has stopped.")
+}
+
+/// The submit error when the metadata template `file` could not be read at Start; the reason is
+/// the error's text as it is (it may name the file again) (T295).
+pub fn template_read_error_text(file: &str, error: &TemplateFileError) -> String {
+    format!("The metadata template {file} could not be read: {error}")
+}
+
+/// The submit error when the metadata template `file` read at Start has no field (T295).
+pub fn template_empty_text(file: &str) -> String {
+    format!("The metadata template {file} has no field to write.")
+}
+
+/// The submit error when a variable of the metadata template `file` is unknown or not closed
+/// (`TemplateFile::check_variables`, ADR 0017 U13-Q9, T295), with the metadata window's text of
+/// the error.
+pub fn template_variables_text(file: &str, error: &VariableError) -> String {
+    format!(
+        "The metadata template {file} cannot be used: {reason}",
+        reason = variable_error_text(error)
+    )
 }
 
 /// The status-line text of an import that runs hidden: the files copied of all.
@@ -166,13 +216,13 @@ pub fn scan_error_text(source: &Path, error: &str) -> String {
     format!("Could not read {}: {error}", source.display())
 }
 
-/// The line listed for the ingest template when the started ExifTool is older than
+/// The line listed for the import's metadata template when the started ExifTool is older than
 /// [`MIN_EXIFTOOL_VERSION`]; nothing is written (ADR 0007 §11, D9, T101).
 pub fn exiftool_too_old_text(file: &str, version: ToolVersion) -> String {
     format!("{file}: ExifTool {version} is too old (at least {MIN_EXIFTOOL_VERSION} is needed)")
 }
 
-/// The line listed for the ingest template when no ExifTool is at hand to write it.
+/// The line listed for the import's metadata template when no ExifTool is at hand to write it.
 pub fn exiftool_unavailable_text(file: &str) -> String {
     format!("{file}: ExifTool is not available")
 }
@@ -846,6 +896,63 @@ mod tests {
         assert_eq!(
             exiftool_unavailable_text("A001.jpg"),
             "A001.jpg: ExifTool is not available"
+        );
+    }
+
+    // ---------- the metadata template's row and messages (ADR 0017 U13, part U13c, T295) ----------
+
+    #[test]
+    fn the_template_row_texts_are_exact() {
+        let texts = [
+            (ImportText::MetadataTemplate, "Metadata Template:"),
+            (ImportText::Choose, "Choose…"),
+            (ImportText::EditTemplate, "Edit…"),
+            (ImportText::NoTemplate, "None"),
+            (ImportText::ChooseTemplate, "Choose Metadata Template"),
+            (
+                ImportText::ReadingTemplate,
+                "Reading the metadata template…",
+            ),
+        ];
+        for (text, expected) in texts {
+            assert_eq!(import_text(text), expected, "{text:?}");
+        }
+    }
+
+    #[test]
+    fn the_template_messages_are_exact() {
+        assert_eq!(
+            template_not_found_text("News.xmp"),
+            "The metadata template News.xmp was not found. Choose another or None."
+        );
+        assert_eq!(
+            template_reader_stopped_text("News.xmp"),
+            "The metadata template News.xmp could not be read: the template reader has stopped."
+        );
+        assert_eq!(
+            template_read_error_text(
+                "News.xmp",
+                &TemplateFileError::NotXmp {
+                    path: PathBuf::from(r"C:\t\News.xmp"),
+                    file_type: "TXT".to_string(),
+                }
+            ),
+            r"The metadata template News.xmp could not be read: C:\t\News.xmp is not an XMP file (TXT)"
+        );
+        assert_eq!(
+            template_empty_text("News.xmp"),
+            "The metadata template News.xmp has no field to write."
+        );
+        assert_eq!(
+            template_variables_text("News.xmp", &VariableError::Unknown("job".to_string())),
+            "The metadata template News.xmp cannot be used: {job} is not a variable. Variables: \
+             {date} {year} {month} {day} {time} {make} {model} {name} {folder}. Write {{ or }} \
+             for a brace."
+        );
+        assert_eq!(
+            template_variables_text("News.xmp", &VariableError::UnexpectedClose),
+            "The metadata template News.xmp cannot be used: A } is not opened. Write }} for a \
+             brace."
         );
     }
 

@@ -74,6 +74,9 @@ const COMPARE_ABOVE_BELOW: &str = "compare_above_below";
 const COMPARE_LOCKED: &str = "compare_locked";
 /// The key of the import dialog's "copy new images only" check box (ADR 0005 choice 6, T158).
 const IMPORT_INCREMENTAL: &str = "import_incremental";
+/// The key of the import's metadata template file, a full path; written only when a template is
+/// chosen (ADR 0017 U13, part U13c, T295).
+const IMPORT_TEMPLATE: &str = "import_template";
 /// The keys of whether `X` and `P` move images into subfolders and of the suffixes of the
 /// companion files that move with an image (ADR 0017 §2.6, U9-Q5, U9-Q10, T171).
 const MOVE_TO_SUBFOLDERS: &str = "move_to_subfolders";
@@ -241,6 +244,9 @@ pub struct ShellSettings {
     pub compare_locked: bool,
     /// The import dialog's "copy new images only" check box (ADR 0005 choice 6, T158).
     pub import_incremental: bool,
+    /// The import dialog's metadata template file, a full path; `None`: no template (ADR 0017
+    /// U13, part U13c, T295).
+    pub import_template: Option<PathBuf>,
     /// `X` and `P` move images into subfolders (ADR 0017 §2.6, U9-Q5, T171); off by default.
     pub move_to_subfolders: bool,
     /// The suffixes of the companion files that move with an image, without the dot, trimmed and
@@ -316,6 +322,8 @@ impl Default for ShellSettings {
             compare_locked: true,
             // New images only (owner, 2026-11-16, ADR 0005 choice 6).
             import_incremental: true,
+            // No metadata template (T295).
+            import_template: None,
             // Images are not moved (U9-Q5); the companion suffixes of U9-Q10.
             move_to_subfolders: false,
             companion_suffixes: default_companion_suffixes(),
@@ -549,6 +557,19 @@ pub fn load_settings_and_library(path: &Path) -> (Settings, SavedLibrary, Vec<St
                     None => problems.push(bad("open or collapsed")),
                 }
             }
+            // An empty value is no template and no problem; anything but a full path is one
+            // problem and no template (T295).
+            IMPORT_TEMPLATE if value.is_empty() => shell.import_template = None,
+            IMPORT_TEMPLATE => {
+                shell.import_template = parse_folder(value);
+                if shell.import_template.is_none() {
+                    problems.push(format!(
+                        "settings file {}, line {number}: bad value \"{value}\" for {key} \
+                         (expected a full file path), no template used",
+                        path.display()
+                    ));
+                }
+            }
             FAVOURITE | RECENT => match parse_folder(value) {
                 Some(folder) if key == FAVOURITE => library.favourites.push(folder),
                 Some(folder) => library.recent.push(folder),
@@ -749,6 +770,16 @@ fn shell_lines(shell: &ShellSettings) -> String {
         "{IMPORT_INCREMENTAL} = {}\n",
         shell.import_incremental
     ));
+    // Only a chosen template that is read back as it is, so a file without one is written as
+    // before T295.
+    if let Some(value) = shell
+        .import_template
+        .as_deref()
+        .and_then(Path::to_str)
+        .filter(|value| parse_folder(value).as_deref() == shell.import_template.as_deref())
+    {
+        text.push_str(&format!("{IMPORT_TEMPLATE} = {value}\n"));
+    }
     text.push_str(&format!(
         "{MOVE_TO_SUBFOLDERS} = {}\n{COMPANION_SUFFIXES} = {}\n",
         shell.move_to_subfolders,
@@ -947,7 +978,8 @@ pub fn tidied_programs(programs: &[ExternalProgram]) -> Vec<ExternalProgram> {
         .collect()
 }
 
-/// The folder of a `favourite` or `recent` line: a full path without a line break or spaces at
+/// The folder of a `favourite` or `recent` line, or the file of the `import_template` line
+/// (T295): a full path without a line break or spaces at
 /// either end (they would be lost when the line is read).
 fn parse_folder(value: &str) -> Option<PathBuf> {
     let folder = Path::new(value);
@@ -1382,6 +1414,7 @@ mod tests {
             compare_above_below: true,
             compare_locked: false,
             import_incremental: false,
+            import_template: Some(PathBuf::from(r"C:\Templates\News.xmp")),
             move_to_subfolders: true,
             companion_suffixes: vec!["xmp2".to_string(), "dop".to_string()],
             thumbnail_buttons: false,
@@ -2564,6 +2597,68 @@ mod tests {
         let (settings, problems) = load_settings(&path);
         assert!(problems.is_empty(), "{problems:?}");
         assert!(settings.shell.import_incremental);
+    }
+
+    // ---------- the import's metadata template (ADR 0017 U13, part U13c, T295) ----------
+
+    #[test]
+    fn import_template_is_written_and_read() {
+        let dir = TempDir::new();
+        let path = dir.0.join("settings.txt");
+        let template = PathBuf::from(r"C:\Templates\Sport news.xmp");
+        let settings = Settings {
+            shell: ShellSettings {
+                import_template: Some(template.clone()),
+                ..ShellSettings::default()
+            },
+            ..Settings::default()
+        };
+        save_settings(&path, &settings).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            text.contains("\nimport_template = C:\\Templates\\Sport news.xmp\n"),
+            "{text}"
+        );
+        let (loaded, problems) = load_settings(&path);
+        assert!(problems.is_empty(), "{problems:?}");
+        assert_eq!(loaded.shell.import_template, Some(template));
+        assert_eq!(loaded, settings);
+    }
+
+    #[test]
+    fn a_file_without_import_template_gives_no_template_and_no_problem() {
+        let (_dir, path) = TempDir::with_file("# RawStride\nimport_incremental = false\n");
+        let (settings, problems) = load_settings(&path);
+        assert!(problems.is_empty(), "{problems:?}");
+        assert_eq!(settings.shell.import_template, None);
+    }
+
+    #[test]
+    fn an_empty_import_template_gives_no_template() {
+        let (_dir, path) = TempDir::with_file("# RawStride\nimport_template =\n");
+        let (settings, problems) = load_settings(&path);
+        assert!(problems.is_empty(), "{problems:?}");
+        assert_eq!(settings.shell.import_template, None);
+    }
+
+    #[test]
+    fn a_relative_import_template_gives_one_problem_and_no_template() {
+        let (_dir, path) = TempDir::with_file("# RawStride\nimport_template = News.xmp\n");
+        let (settings, problems) = load_settings(&path);
+        assert_eq!(problems.len(), 1, "{problems:?}");
+        assert!(problems[0].contains("import_template"), "{problems:?}");
+        assert!(problems[0].contains("line 2"), "{problems:?}");
+        assert_eq!(settings.shell.import_template, None);
+        assert_eq!(settings.shell, ShellSettings::default());
+    }
+
+    #[test]
+    fn the_default_settings_write_no_import_template_line() {
+        let dir = TempDir::new();
+        let path = dir.0.join("settings.txt");
+        save_settings(&path, &Settings::default()).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(!text.contains("import_template"), "{text}");
     }
 
     fn default_suffixes() -> Vec<String> {

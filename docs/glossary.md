@@ -196,6 +196,7 @@ Every other property already uses IPTC's English name in both languages.
 | – | Clear Form, Load…, Save…, Close | the template window's buttons (ADR 0017 U13c); added by T291 |
 | – | the + box ("+") | the box beside a checked list of plain text values in the template window: "Add the template's entries after the image's own instead of replacing the list." (U13-Q12); the check box of each field: "Use this field in the template."; added by T291 |
 | – | Discard the changes to the template?, Discard, Cancel; {file} already exists. Replace it?, Replace | the template window's questions before a Load or Close loses changes (U13-Q15) and before a save over a file whose name got `.xmp` added; added by T291 |
+| – | Metadata Template:, Choose…, Edit…, None; Choose Metadata Template; Reading the metadata template…; the template reader | the import dialog's template row and its buttons (`None` also the row's text without a template), the open dialog's title, the line shown while the file is read at Start, and the thread that reads it ("The metadata template {file} could not be read: the template reader has stopped."; ADR 0017 U13c, U13-Q6, U13-Q17); added by T295 |
 | enhet | drive | "The source is not a drive"; added by T118 |
 | mata ut, utmatat | eject, ejected | "E: has been ejected and can be removed."; added by T118 |
 | Säker borttagning av maskinvara | Safely Remove Hardware | Windows' own name; "Use Safely Remove Hardware in the taskbar."; added by T156 |

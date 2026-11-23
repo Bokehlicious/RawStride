@@ -87,7 +87,6 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status |
 |---|---|---|
-| [T295](T295-import-template-row.md) | The import dialog's Metadata Template row | Open |
 
 ## Writing a task (owner and reviewer)
 

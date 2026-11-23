@@ -29,10 +29,10 @@ const REQUEST_CAPACITY: usize = 8;
 /// at the cancel flag again (T268).
 const ANSWER_WAIT: Duration = Duration::from_millis(50);
 
-/// What the ingest template's safe write needs (ADR 0007 §9.5, T91): the ExifTool program
-/// (`None` for `exiftool` on PATH), the app's write journal (`None` when it could not be opened),
-/// its image checks and the number of ExifTool write processes (ADR 0007 §9.6 point 2, T268: with
-/// 1 the template is written by one process on the import's thread, with more by a
+/// What the safe write of the import's metadata template needs (ADR 0007 §9.5, T91): the ExifTool
+/// program (`None` for `exiftool` on PATH), the app's write journal (`None` when it could not be
+/// opened), its image checks and the number of ExifTool write processes (ADR 0007 §9.6 point 2,
+/// T268: with 1 the template is written by one process on the import's thread, with more by a
 /// [`WritePool`] of that many).
 struct WriteContext {
     exiftool_program: Option<ExifToolProgram>,
@@ -179,9 +179,10 @@ impl ImportWorker {
         Self::start_with_processes(journal, checks, 1)
     }
 
-    /// Starts the import worker thread; the ingest template is written by `write_processes`
-    /// ExifTool processes (ADR 0007 §9.6 point 2, T268): with 1 on the import's thread as before,
-    /// with more (at most 4) by a [`WritePool`] started at the import's first template write.
+    /// Starts the import worker thread; the import's metadata template is written by
+    /// `write_processes` ExifTool processes (ADR 0007 §9.6 point 2, T268): with 1 on the import's
+    /// thread as before, with more (at most 4) by a [`WritePool`] started at the import's first
+    /// template write.
     pub fn start_with_processes(
         journal: Option<Journal>,
         checks: Arc<dyn ImageCheck + Send + Sync>,
