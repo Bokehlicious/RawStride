@@ -178,6 +178,33 @@ pub fn clamp_column_width(width: f32, window_width: f32) -> f32 {
     }
 }
 
+/// The Action column's width on the page Keyboard Shortcuts before the user has dragged it, in
+/// points (ADR 0017 U8-Q15, T286).
+pub const KEY_ACTION_WIDTH_DEFAULT: f32 = 220.0;
+/// The narrowest the Action column on the page Keyboard Shortcuts can be dragged, in points
+/// (U8-Q15, T286).
+pub const KEY_ACTION_WIDTH_MIN: f32 = 120.0;
+
+/// The Action column's width on the page Keyboard Shortcuts (ADR 0017 U8-Q15, T286): `width`
+/// clamped between [`KEY_ACTION_WIDTH_MIN`] and the room the two key columns leave on a page
+/// `page_width` points wide (`page_width − keys_width`). The minimum wins when the page is too
+/// narrow (the page then scrolls sideways); a `width` that is not finite gives
+/// [`KEY_ACTION_WIDTH_DEFAULT`] before clamping.
+pub fn key_action_width(width: f32, page_width: f32, keys_width: f32) -> f32 {
+    let width = if width.is_finite() {
+        width
+    } else {
+        KEY_ACTION_WIDTH_DEFAULT
+    };
+    let room = page_width - keys_width;
+    let max = if room.is_finite() {
+        room.max(KEY_ACTION_WIDTH_MIN)
+    } else {
+        KEY_ACTION_WIDTH_MIN
+    };
+    width.clamp(KEY_ACTION_WIDTH_MIN, max)
+}
+
 /// The Settings window's smallest size in points, title bar included (ADR 0017 U8-Q14, T283).
 pub const SETTINGS_WINDOW_MIN: egui::Vec2 = egui::vec2(440.0, 320.0);
 /// The size in points the Settings window opens with in a large program window (U8-Q14, T283).
@@ -1225,6 +1252,37 @@ mod tests {
         assert_eq!(clamp_column_width(250.0, 300.0), 160.0);
         assert_eq!(clamp_column_width(f32::NAN, 1000.0), 160.0);
         assert_eq!(column_width_range(f32::INFINITY), (160.0, 160.0));
+    }
+
+    /// The Action column's width on the page Keyboard Shortcuts (ADR 0017 U8-Q15, T286).
+    #[test]
+    fn the_key_action_width_is_clamped_to_the_minimum_and_the_room_left_by_the_keys() {
+        // Inside the range: kept.
+        assert_eq!(key_action_width(250.0, 800.0, 400.0), 250.0);
+        // Below the minimum: the minimum.
+        assert_eq!(key_action_width(50.0, 800.0, 400.0), KEY_ACTION_WIDTH_MIN);
+        // Above `page_width − keys_width`: that.
+        assert_eq!(key_action_width(500.0, 800.0, 400.0), 400.0);
+        // A page too narrow for the minimum: the minimum.
+        assert_eq!(key_action_width(250.0, 300.0, 400.0), KEY_ACTION_WIDTH_MIN);
+        // Not finite: the default, then clamped.
+        assert_eq!(
+            key_action_width(f32::NAN, 800.0, 400.0),
+            KEY_ACTION_WIDTH_DEFAULT
+        );
+        assert_eq!(
+            key_action_width(f32::INFINITY, 800.0, 400.0),
+            KEY_ACTION_WIDTH_DEFAULT
+        );
+        assert_eq!(
+            key_action_width(f32::NEG_INFINITY, 800.0, 400.0),
+            KEY_ACTION_WIDTH_DEFAULT
+        );
+        assert_eq!(
+            key_action_width(f32::NAN, 500.0, 400.0),
+            KEY_ACTION_WIDTH_MIN
+        );
+        assert_eq!(key_action_width(f32::NAN, 600.0, 400.0), 200.0);
     }
 
     /// A large program window gives the default size (ADR 0017 U8-Q14, T283).

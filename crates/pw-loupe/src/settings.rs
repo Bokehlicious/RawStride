@@ -20,7 +20,9 @@ use pw_metadata::write_plan::WriteSettings;
 
 use crate::editor::EditorSection;
 use crate::editor_layout::{EditorItem, EditorLayout, section_from_name, section_name};
-use crate::shell::{ColumnState, DEFAULT_LEFT_WIDTH, DEFAULT_RIGHT_WIDTH, Theme};
+use crate::shell::{
+    ColumnState, DEFAULT_LEFT_WIDTH, DEFAULT_RIGHT_WIDTH, KEY_ACTION_WIDTH_DEFAULT, Theme,
+};
 use crate::sort::{SortKey, SortOrder};
 
 /// The key of the setting "Skapa IPTC-IIM för kompatibilitet med äldre system".
@@ -52,6 +54,9 @@ const PREVIEW_ZOOM: &str = "preview_zoom";
 const FILMSTRIP: &str = "filmstrip";
 const FILMSTRIP_MARKED: &str = "filmstrip_marked";
 const PREVIEW_HIDDEN: &str = "preview_hidden";
+/// The key of the Action column's width on the Settings window's page Keyboard Shortcuts (ADR 0017
+/// U8-Q15, T286).
+const KEY_ACTION_WIDTH: &str = "key_action_width";
 /// The keys of the Histogram sections of the preview's column and of the inspector, open or
 /// collapsed (ADR 0017 §2.6, U7-Q7, T142).
 const PREVIEW_HISTOGRAM: &str = "preview_histogram";
@@ -198,6 +203,9 @@ pub struct ShellSettings {
     pub filmstrip_marked: bool,
     /// The right column and the filmstrip hidden with `H` in the preview.
     pub preview_hidden: bool,
+    /// The Action column's width in points on the Settings window's page Keyboard Shortcuts,
+    /// dragged by the user (ADR 0017 U8-Q15, T286).
+    pub key_action_width: u32,
     /// The metadata window's sections (T123, U10-Q6): Content, Creator and Rights, Time and
     /// Place, Assignment; Rating and Label (T124, U10c-Q5); Licence (PLUS) (T128, U10d).
     pub editor_content: ColumnState,
@@ -277,6 +285,8 @@ impl Default for ShellSettings {
             filmstrip: true,
             filmstrip_marked: false,
             preview_hidden: false,
+            // 220 points (U8-Q15).
+            key_action_width: KEY_ACTION_WIDTH_DEFAULT as u32,
             // Every section of the metadata window open (U10-Q6).
             editor_content: ColumnState::Open,
             editor_creator_rights: ColumnState::Open,
@@ -464,10 +474,11 @@ pub fn load_settings_and_library(path: &Path) -> (Settings, SavedLibrary, Vec<St
                     None => problems.push(bad("true or false")),
                 }
             }
-            LEFT_COLUMN_WIDTH | RIGHT_COLUMN_WIDTH | PREVIEW_COLUMN_WIDTH => {
+            LEFT_COLUMN_WIDTH | RIGHT_COLUMN_WIDTH | PREVIEW_COLUMN_WIDTH | KEY_ACTION_WIDTH => {
                 match value.parse::<u32>() {
                     Ok(width) if key == LEFT_COLUMN_WIDTH => shell.left_column_width = width,
                     Ok(width) if key == PREVIEW_COLUMN_WIDTH => shell.preview_column_width = width,
+                    Ok(width) if key == KEY_ACTION_WIDTH => shell.key_action_width = width,
                     Ok(width) => shell.right_column_width = width,
                     Err(_) => problems.push(bad("a width in points")),
                 }
@@ -675,7 +686,8 @@ fn shell_lines(shell: &ShellSettings) -> String {
          {RIGHT_COLUMN_WIDTH} = {}\n{LEFT_COLUMN} = {}\n{RIGHT_COLUMN} = {}\n\
          {COLUMNS_HIDDEN} = {}\n{INSPECTOR_INFO} = {}\n{INSPECTOR_METADATA} = {}\n\
          {PREVIEW_COLUMN} = {}\n{PREVIEW_COLUMN_WIDTH} = {}\n{PREVIEW_INFO} = {}\n\
-         {PREVIEW_ZOOM} = {}\n{FILMSTRIP} = {}\n{FILMSTRIP_MARKED} = {}\n{PREVIEW_HIDDEN} = {}\n",
+         {PREVIEW_ZOOM} = {}\n{FILMSTRIP} = {}\n{FILMSTRIP_MARKED} = {}\n{PREVIEW_HIDDEN} = {}\n\
+         {KEY_ACTION_WIDTH} = {}\n",
         shell.window_maximized,
         shell.fullscreen,
         shell.left_column_width,
@@ -691,7 +703,8 @@ fn shell_lines(shell: &ShellSettings) -> String {
         column_value(shell.preview_zoom),
         if shell.filmstrip { SHOWN } else { HIDDEN },
         if shell.filmstrip_marked { MARKED } else { ALL },
-        shell.preview_hidden
+        shell.preview_hidden,
+        shell.key_action_width
     ));
     text.push_str(&format!(
         "{EDITOR_CONTENT} = {}\n{EDITOR_CREATOR_RIGHTS} = {}\n{EDITOR_TIME_PLACE} = {}\n\
@@ -1161,7 +1174,8 @@ mod tests {
              columns_hidden = false\ninspector_info = open\ninspector_metadata = open\n\
              preview_column = open\npreview_column_width = 300\npreview_info = open\n\
              preview_zoom = open\nfilmstrip = shown\nfilmstrip_marked = all\n\
-             preview_hidden = false\neditor_content = open\neditor_creator_rights = open\n\
+             preview_hidden = false\nkey_action_width = 220\neditor_content = open\n\
+             editor_creator_rights = open\n\
              editor_time_place = open\neditor_assignment = open\n\
              editor_rating_label = open\neditor_licence = open\nlibrary_folders = open\n\
              library_favourites = open\nlibrary_recent = open\nlibrary_tasks = open\n\
@@ -1344,6 +1358,7 @@ mod tests {
             filmstrip: false,
             filmstrip_marked: true,
             preview_hidden: true,
+            key_action_width: 300,
             editor_content: ColumnState::Collapsed,
             editor_creator_rights: ColumnState::Collapsed,
             editor_time_place: ColumnState::Collapsed,
@@ -1481,6 +1496,8 @@ mod tests {
             ("fullscreen", "1"),
             ("left_column_width", "-5"),
             ("right_column_width", "wide"),
+            ("key_action_width", "wide"),
+            ("key_action_width", "-5"),
             ("left_column", "hidden"),
             ("right_column", ""),
             ("columns_hidden", "no"),
@@ -1580,6 +1597,21 @@ mod tests {
         assert!(!shell.filmstrip);
         assert!(shell.filmstrip_marked);
         assert!(shell.preview_hidden);
+    }
+
+    /// The Action column's width on the page Keyboard Shortcuts (ADR 0017 U8-Q15, T286): read
+    /// from its line; 220 without one.
+    #[test]
+    fn the_key_action_width_is_read_and_is_220_without_a_line() {
+        let (_dir, path) = TempDir::with_file("# RawStride\nkey_action_width = 300\n");
+        let (settings, problems) = load_settings(&path);
+        assert!(problems.is_empty(), "{problems:?}");
+        assert_eq!(settings.shell.key_action_width, 300);
+
+        let (_dir, path) = TempDir::with_file("# RawStride\ncreate_iim = true\n");
+        let (settings, problems) = load_settings(&path);
+        assert!(problems.is_empty(), "{problems:?}");
+        assert_eq!(settings.shell.key_action_width, 220);
     }
 
     #[test]

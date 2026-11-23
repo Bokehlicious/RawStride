@@ -309,6 +309,14 @@ pub enum SettingsText {
     PressKey,
     /// A key slot without a key (T281).
     NoKey,
+    /// The heading of the page Keyboard Shortcuts' column of the actions' names (ADR 0017
+    /// U8-Q15, T286).
+    KeyActionHeading,
+    /// The heading of the column of each action's first key, the one the menus show (U8-Q2,
+    /// U8-Q15, T286).
+    FirstKeyHeading,
+    /// The heading of the column of each action's second key (U8-Q15, T286).
+    SecondKeyHeading,
     /// The label of the field on the page General (ADR 0017 U8-Q10, T281).
     CompanionSuffixes,
     /// The small text under that field (T281).
@@ -343,6 +351,9 @@ pub fn settings_text(text: SettingsText) -> &'static str {
         SettingsText::ClearKey => "Clear",
         SettingsText::PressKey => "Press a key…",
         SettingsText::NoKey => "–",
+        SettingsText::KeyActionHeading => "Action",
+        SettingsText::FirstKeyHeading => "First Key",
+        SettingsText::SecondKeyHeading => "Second Key",
         SettingsText::CompanionSuffixes => "Companion File Suffixes",
         SettingsText::CompanionSuffixesNote => {
             "Files with these suffixes move with an image; empty means the default"
@@ -1261,6 +1272,19 @@ mod tests {
             keys_save_error_text("åtkomst nekad"),
             "The keyboard shortcuts could not be saved: åtkomst nekad"
         );
+    }
+
+    /// The headings of the page Keyboard Shortcuts' three columns (ADR 0017 U8-Q15, T286).
+    #[test]
+    fn the_keyboard_shortcuts_column_headings() {
+        let texts = [
+            (SettingsText::KeyActionHeading, "Action"),
+            (SettingsText::FirstKeyHeading, "First Key"),
+            (SettingsText::SecondKeyHeading, "Second Key"),
+        ];
+        for (text, expected) in texts {
+            assert_eq!(settings_text(text), expected, "{text:?}");
+        }
     }
 
     /// Every text of the window "About RawStride", with sample values, not the real authors

@@ -172,8 +172,8 @@ pub use shell::{
     Palette, REPOSITORY, SETTINGS_WINDOW_MIN, STATUS_TEXT_SIZE, SettingsPage, StartWindow,
     SubmenuKind, TEXT_CONTRAST, THEMES, Theme, UNKNOWN_COMMIT, VERSION, Where, apply_text_sizes,
     clamp_column_width, column_width_range, companion_suffixes_field, contrast_ratio,
-    font_definitions, image_area, menu_items, menu_key, non_text_pairs, palette, rect_on_a_screen,
-    settings_window_size, start_window, take_key_press, text_pairs, visuals,
+    font_definitions, image_area, key_action_width, menu_items, menu_key, non_text_pairs, palette,
+    rect_on_a_screen, settings_window_size, start_window, take_key_press, text_pairs, visuals,
 };
 pub use shell_text::{
     AboutText, KeyPageGroup, SettingsText, ShellText, about_text, command_text, exiftool_message,

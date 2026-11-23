@@ -64,9 +64,10 @@ use pw_loupe::{
     SettingsText, ShellAction, ShellSettings, ShellText, StartWindow, THEMES, Theme, Where,
     WindowRect, apply_text_sizes, clamp_column_width, column_width_range, command_text,
     exiftool_message, external_program_limit_text, fallback_text, font_definitions, image_area,
-    key_text, menu_text, no_images_text, open_error_text, palette, path_resolution_error_text,
-    prune_error_text, recovery_text, rect_on_a_screen, settings_save_error_text, settings_text,
-    shell_text, start_window, status_line_text, submenu_text, theme_text, tidied_programs, visuals,
+    key_action_width, key_text, menu_text, no_images_text, open_error_text, palette,
+    path_resolution_error_text, prune_error_text, recovery_text, rect_on_a_screen,
+    settings_save_error_text, settings_text, shell_text, start_window, status_line_text,
+    submenu_text, theme_text, tidied_programs, visuals,
 };
 use pw_loupe::{
     CaptureReader, SORT_KEYS, SortFollow, SortKey, SortOrder, modified_time, read_order,
@@ -787,6 +788,9 @@ struct Loupe {
     key_wait: Option<KeySlot>,
     /// The last refused key on the page Keyboard Shortcuts: the slot and why (T281).
     key_refusal: Option<(KeySlot, KeyRefusal)>,
+    /// The page Keyboard Shortcuts' horizontal scroll offset of the last frame (ADR 0017 U8-Q15,
+    /// T286): the heading row above the scroll area is shifted by it, so it follows one frame late.
+    key_scroll_x: f32,
     /// The text of the field Companion File Suffixes while the Settings window is open (ADR 0017
     /// U8-Q10, T281), read with `parse_companion_suffixes` only by Save.
     suffixes_text: String,
@@ -1035,6 +1039,8 @@ impl Loupe {
             self.settings_keys = Some(self.key_map.clone());
             self.key_wait = None;
             self.key_refusal = None;
+            // A new window id each opening starts its scroll area at 0 (U8-Q15, T286).
+            self.key_scroll_x = 0.0;
             self.suffixes_text = companion_suffixes_field(&self.settings.shell.companion_suffixes);
         }
     }
@@ -1242,6 +1248,13 @@ impl Loupe {
         let key_wait = self.key_wait;
         let key_refusal = self.key_refusal;
         let mut suffixes = self.suffixes_text.clone();
+        // The page Keyboard Shortcuts' table (ADR 0017 U8-Q15, T286): the Action column's kept
+        // width and the rows' horizontal scroll offset of the last frame; what the drag and the
+        // scroll area give leaves the window in the two locals and is written after it.
+        let key_width = self.settings.shell.key_action_width as f32;
+        let key_scroll_x = self.key_scroll_x;
+        let mut dragged_key_width: Option<f32> = None;
+        let mut new_key_scroll_x: Option<f32> = None;
         // ADR 0017 U8-Q14, T283: larger, resizable, in the middle of the program's window; a new
         // id each opening, so egui remembers neither the last size nor the last place.
         let screen = ctx.content_rect();
@@ -1298,7 +1311,29 @@ impl Loupe {
                     SettingsPage::MetadataWindow => "settings-metadata-window",
                     SettingsPage::KeyboardShortcuts => "settings-keyboard-shortcuts",
                 };
-                egui::ScrollArea::vertical()
+                // The page Keyboard Shortcuts: its widths worked out with the page's width before
+                // the scroll area, then the heading row above it, which stays at the top while the
+                // rows scroll (U8-Q15, T286). A drag's width is used from the next frame, so the
+                // heading and the rows always have the same widths.
+                let key_table = match (page, &keys) {
+                    (SettingsPage::KeyboardShortcuts, Some(map)) => {
+                        let page_width = ui.available_width();
+                        let columns = key_columns(ui, map, key_width, page_width);
+                        if let Some(width) = draw_key_heading(ui, columns, key_scroll_x) {
+                            dragged_key_width =
+                                Some(key_action_width(width, page_width, columns.keys_width()));
+                        }
+                        Some(columns)
+                    }
+                    _ => None,
+                };
+                // Only the page Keyboard Shortcuts scrolls sideways (T286).
+                let scroll_area = if page == SettingsPage::KeyboardShortcuts {
+                    egui::ScrollArea::both()
+                } else {
+                    egui::ScrollArea::vertical()
+                };
+                let scrolled = scroll_area
                     .id_salt(scroll_id)
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
@@ -1401,15 +1436,26 @@ impl Loupe {
                                 layout_clicks = draw_layout_rows(ui, &chosen.editor_layout);
                             }
                             SettingsPage::KeyboardShortcuts => {
-                                if let Some(map) = &keys {
+                                if let (Some(map), Some(columns)) = (&keys, key_table) {
                                     (key_clicks, wait_hovered) =
-                                        draw_key_rows(ui, map, key_wait, key_refusal);
+                                        draw_key_rows(ui, map, columns, key_wait, key_refusal);
                                 }
                             }
                         }
                     });
+                if page == SettingsPage::KeyboardShortcuts {
+                    new_key_scroll_x = Some(scrolled.state.clamped_offset().x);
+                }
             });
         self.settings_page = page;
+        // Kept like the side columns' widths: not in the window's copy, so Save keeps it and
+        // Cancel does not undo it; `on_exit` saves it (U8-Q15, T286).
+        if let Some(width) = dragged_key_width {
+            self.settings.shell.key_action_width = width.round().max(0.0) as u32;
+        }
+        if let Some(offset) = new_key_scroll_x {
+            self.key_scroll_x = offset;
+        }
         self.suffixes_text = suffixes;
         // A waiting Change is cancelled by a pointer press anywhere but on its own Change (whose
         // click cancels it below) and by another page (T281).
@@ -8506,57 +8552,254 @@ enum KeyClick {
     Clear(KeySlot),
 }
 
-/// The rows of the Settings window's page Keyboard Shortcuts (ADR 0017 U8-Q7, T281): the groups of
-/// `key_page_groups` under their menus' names, each action a row that wraps: its name, then for
-/// each of its two slots the key (`key_text`, "–" when empty, "Press a key…" while its Change
-/// waits), Change and Clear (greyed without a key). Under the row of the last refused key, why.
-/// Returns the clicks and whether the pointer is on the waiting slot's Change.
+/// The widths of the page Keyboard Shortcuts' table in one frame (ADR 0017 U8-Q15, T286), worked
+/// out before its heading row and its rows are drawn, so both use the same.
+#[derive(Clone, Copy, Debug)]
+struct KeyColumns {
+    /// The Action column, kept by `key_action_width`.
+    action: f32,
+    /// The space of the key text in the First Key and Second Key columns: the widest text the
+    /// column shows on the page, "–" and "Press a key…" included.
+    texts: [f32; 2],
+    /// Change and Clear with the item spacing before each, the same in both key columns.
+    buttons: f32,
+    /// The space between two columns; the drag line stands in the middle of the first.
+    gap: f32,
+    /// The height of a row.
+    row_height: f32,
+}
+
+impl KeyColumns {
+    /// The width of key column `slot`: its key text's space, then Change and Clear.
+    fn slot_width(self, slot: usize) -> f32 {
+        self.texts.get(slot).copied().unwrap_or_default() + self.buttons
+    }
+
+    /// The x of key column `slot`'s left edge, from the table's left edge.
+    fn slot_left(self, slot: usize) -> f32 {
+        let before: f32 = (0..slot).map(|each| self.slot_width(each) + self.gap).sum();
+        self.action + self.gap + before
+    }
+
+    /// The width of the two key columns and the spaces before them (`key_action_width`'s
+    /// `keys_width`).
+    fn keys_width(self) -> f32 {
+        self.slot_left(2) - self.action
+    }
+
+    /// The table's whole width.
+    fn width(self) -> f32 {
+        self.slot_left(1) + self.slot_width(1)
+    }
+}
+
+/// The widths of the page Keyboard Shortcuts' table (ADR 0017 U8-Q15, T286), measured with the
+/// frame's fonts: each key column the widest key text it shows on the page (every action's key in
+/// that slot of `map`, "–" and "Press a key…"), then Change and Clear (each its text's width and
+/// the button padding on both sides) with the item spacing before each. The Action column is
+/// `width` kept by `key_action_width` on a page `page_width` points wide.
+fn key_columns(ui: &egui::Ui, map: &KeyMap, width: f32, page_width: f32) -> KeyColumns {
+    let spacing = ui.spacing();
+    let body = egui::TextStyle::Body.resolve(ui.style());
+    let button = egui::TextStyle::Button.resolve(ui.style());
+    let measure = |text: String, font: &egui::FontId| {
+        ui.painter()
+            .layout_no_wrap(text, font.clone(), egui::Color32::PLACEHOLDER)
+            .size()
+            .x
+    };
+    let button_width = |text: SettingsText| {
+        measure(settings_text(text).to_owned(), &button) + spacing.button_padding.x * 2.0
+    };
+    let buttons = button_width(SettingsText::ChangeKey)
+        + button_width(SettingsText::ClearKey)
+        + spacing.item_spacing.x * 2.0;
+    let empty = measure(settings_text(SettingsText::NoKey).to_owned(), &body).max(measure(
+        settings_text(SettingsText::PressKey).to_owned(),
+        &body,
+    ));
+    let mut texts = [empty; 2];
+    for group in key_page_groups() {
+        for (action, _) in group.actions {
+            for (slot, key) in map.keys(action).into_iter().enumerate() {
+                if let Some(key) = key
+                    && let Some(widest) = texts.get_mut(slot)
+                {
+                    *widest = widest.max(measure(key_text(key), &body));
+                }
+            }
+        }
+    }
+    let mut columns = KeyColumns {
+        action: width,
+        texts,
+        buttons,
+        gap: spacing.item_spacing.x * 2.0,
+        row_height: spacing.interact_size.y,
+    };
+    columns.action = key_action_width(width, page_width, columns.keys_width());
+    columns
+}
+
+/// The heading row of the page Keyboard Shortcuts (ADR 0017 U8-Q15, T286), drawn above the page's
+/// scroll area: Action, First Key and Second Key at the x of their columns, shifted by the rows'
+/// horizontal scroll offset `scroll_x` of the last frame, and between Action and First Key a thin
+/// line that can be dragged (the cursor shows a horizontal resize on it and while dragging).
+/// Returns the Action column's width the drag asks for (the width at the drag's start and the
+/// pointer's horizontal movement since), not yet kept by `key_action_width`.
+fn draw_key_heading(ui: &mut egui::Ui, columns: KeyColumns, scroll_x: f32) -> Option<f32> {
+    /// How wide the drag line can be grabbed, in points.
+    const GRAB_WIDTH: f32 = 6.0;
+    let (row, _) = ui.allocate_exact_size(
+        egui::vec2(ui.available_width(), columns.row_height),
+        egui::Sense::hover(),
+    );
+    let painter = ui.painter_at(row);
+    let left = row.left() - scroll_x;
+    let font = egui::TextStyle::Body.resolve(ui.style());
+    let color = ui.visuals().strong_text_color();
+    let headings = [
+        (0.0, SettingsText::KeyActionHeading),
+        (columns.slot_left(0), SettingsText::FirstKeyHeading),
+        (columns.slot_left(1), SettingsText::SecondKeyHeading),
+    ];
+    for (x, text) in headings {
+        painter.text(
+            egui::pos2(left + x, row.center().y),
+            egui::Align2::LEFT_CENTER,
+            settings_text(text),
+            font.clone(),
+            color,
+        );
+    }
+    let line_x = left + columns.action + columns.gap / 2.0;
+    let handle = egui::Rect::from_center_size(
+        egui::pos2(line_x, row.center().y),
+        egui::vec2(GRAB_WIDTH, row.height()),
+    )
+    .intersect(row);
+    let id = ui.make_persistent_id("settings-key-divider");
+    let response = ui.interact(handle, id, egui::Sense::drag());
+    let active = response.hovered() || response.dragged();
+    let stroke = if active {
+        ui.visuals().widgets.hovered.fg_stroke
+    } else {
+        ui.visuals().widgets.noninteractive.bg_stroke
+    };
+    painter.vline(line_x, row.y_range(), stroke);
+    if active {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
+    }
+    let pointer = response.interact_pointer_pos()?;
+    if response.drag_started() {
+        ui.ctx()
+            .data_mut(|data| data.insert_temp(id, (columns.action, pointer.x)));
+    }
+    if !response.dragged() {
+        return None;
+    }
+    let (start_width, start_x) = ui.ctx().data(|data| data.get_temp::<(f32, f32)>(id))?;
+    Some(start_width + pointer.x - start_x)
+}
+
+/// The rows of the Settings window's page Keyboard Shortcuts (ADR 0017 U8-Q7, T281; a table,
+/// U8-Q15, T286): the groups of `key_page_groups` under their menus' names, each action a row of
+/// three columns of `columns`' widths that never wraps: its name on one line, cut with "…" when
+/// too wide (the whole name on hover), then for each of its two slots the key (`key_text`, "–"
+/// when empty, "Press a key…" while its Change waits) left in its space, Change and Clear (greyed
+/// without a key). Under the row of the last refused key, why. The groups' headings and the reason
+/// span the table's width. Returns the clicks and whether the pointer is on the waiting slot's
+/// Change.
 fn draw_key_rows(
     ui: &mut egui::Ui,
     map: &KeyMap,
+    columns: KeyColumns,
     wait: Option<KeySlot>,
     refusal: Option<(KeySlot, KeyRefusal)>,
 ) -> (Vec<KeyClick>, bool) {
+    // A label as wide as the table, wrapped at its width.
+    let full_width = |ui: &mut egui::Ui, label: egui::Label| {
+        ui.allocate_ui_with_layout(
+            egui::vec2(columns.width(), 0.0),
+            egui::Layout::top_down(egui::Align::Min),
+            |ui| ui.add(label.wrap()),
+        );
+    };
     let mut clicks = Vec::new();
     let mut wait_hovered = false;
     for (index, group) in key_page_groups().into_iter().enumerate() {
         if index > 0 {
             ui.add_space(PANEL_ROW_SPACING);
         }
-        ui.label(egui::RichText::new(group.heading).strong());
+        full_width(
+            ui,
+            egui::Label::new(egui::RichText::new(group.heading).strong()),
+        );
         for (action, name) in group.actions {
             ui.push_id(("settings-key", action), |ui| {
-                ui.horizontal_wrapped(|ui| {
-                    ui.label(name);
-                    for (slot, key) in map.keys(action).into_iter().enumerate() {
-                        let here = KeySlot { action, slot };
-                        let shown = if wait == Some(here) {
-                            settings_text(SettingsText::PressKey).to_owned()
-                        } else {
-                            key.map_or_else(
-                                || settings_text(SettingsText::NoKey).to_owned(),
-                                key_text,
-                            )
-                        };
-                        ui.label(egui::RichText::new(shown).strong());
-                        let change = ui.button(settings_text(SettingsText::ChangeKey));
-                        if wait == Some(here) && change.contains_pointer() {
-                            wait_hovered = true;
-                        }
-                        if change.clicked() {
-                            clicks.push(KeyClick::Change(here));
-                        }
-                        let clear = egui::Button::new(settings_text(SettingsText::ClearKey));
-                        if ui.add_enabled(key.is_some(), clear).clicked() {
-                            clicks.push(KeyClick::Clear(here));
-                        }
+                let (row, _) = ui.allocate_exact_size(
+                    egui::vec2(columns.width(), columns.row_height),
+                    egui::Sense::hover(),
+                );
+                // A cell of the row at `left` from the row's left edge, `width` wide; the row
+                // keeps its width whatever the cell holds, so the columns stay straight.
+                let cell = |ui: &mut egui::Ui, salt: usize, left: f32, width: f32| {
+                    ui.new_child(
+                        egui::UiBuilder::new()
+                            .id_salt(("settings-key-cell", salt))
+                            .max_rect(egui::Rect::from_min_size(
+                                egui::pos2(row.left() + left, row.top()),
+                                egui::vec2(width, row.height()),
+                            ))
+                            .layout(egui::Layout::left_to_right(egui::Align::Center)),
+                    )
+                };
+                let mut name_cell = cell(ui, 0, 0.0, columns.action);
+                name_cell.add(egui::Label::new(name).truncate());
+                for (slot, key) in map.keys(action).into_iter().enumerate() {
+                    let here = KeySlot { action, slot };
+                    let shown = if wait == Some(here) {
+                        settings_text(SettingsText::PressKey).to_owned()
+                    } else {
+                        key.map_or_else(|| settings_text(SettingsText::NoKey).to_owned(), key_text)
+                    };
+                    let mut slot_cell = cell(
+                        ui,
+                        slot + 1,
+                        columns.slot_left(slot),
+                        columns.slot_width(slot),
+                    );
+                    let text_width = columns.texts.get(slot).copied().unwrap_or_default();
+                    slot_cell.allocate_ui_with_layout(
+                        egui::vec2(text_width, columns.row_height),
+                        egui::Layout::left_to_right(egui::Align::Center),
+                        |ui| {
+                            ui.set_min_width(text_width);
+                            ui.add(egui::Label::new(egui::RichText::new(shown).strong()).extend());
+                        },
+                    );
+                    let change = slot_cell.button(settings_text(SettingsText::ChangeKey));
+                    if wait == Some(here) && change.contains_pointer() {
+                        wait_hovered = true;
                     }
-                });
+                    if change.clicked() {
+                        clicks.push(KeyClick::Change(here));
+                    }
+                    let clear = egui::Button::new(settings_text(SettingsText::ClearKey));
+                    if slot_cell.add_enabled(key.is_some(), clear).clicked() {
+                        clicks.push(KeyClick::Clear(here));
+                    }
+                }
                 if let Some((slot, reason)) = refusal
                     && slot.action == action
                 {
                     let color = ui.visuals().warn_fg_color;
-                    ui.colored_label(color, key_refusal_text(reason));
+                    full_width(
+                        ui,
+                        egui::Label::new(
+                            egui::RichText::new(key_refusal_text(reason)).color(color),
+                        ),
+                    );
                 }
             });
         }
@@ -11079,6 +11322,7 @@ fn run(options: Options) -> Result<(), String> {
                 settings_keys: None,
                 key_wait: None,
                 key_refusal: None,
+                key_scroll_x: 0.0,
                 suffixes_text: String::new(),
                 settings_page: SettingsPage::General,
                 settings_opening: 0,
