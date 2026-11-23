@@ -17,6 +17,10 @@ Downloads are on the [Releases page](https://github.com/Bokehlicious/RawStride/r
   `{date} {name}` applied to many marked images gives each its own date and name. Write `{{` or
   `}}` for a brace. An unknown variable is shown as an error before anything is saved; an image
   without a capture time is not saved when a date variable is used, while the others are.
+- File ▸ Metadata Template… opens a window to fill in a metadata template, with a check box
+  per field (only the checked fields are kept) and a + box on lists such as Keywords to add
+  the template's entries instead of replacing the image's. Templates are saved and loaded as
+  XMP files.
 
 ### Changed
 

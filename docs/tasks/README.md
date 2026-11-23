@@ -87,8 +87,7 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status |
 |---|---|---|
-| [T293](T293-template-window.md) | The template window | Open |
-| [T294](T294-import-applies-template-file.md) | The import writes a template file instead of its six fields | Blocked |
+| [T294](T294-import-applies-template-file.md) | The import writes a template file instead of its six fields | Open |
 | [T295](T295-import-template-row.md) | The import dialog's Metadata Template row | Blocked |
 | [T296](T296-remove-ingest-template-modes.md) | The ingest template's modes removed from pw-metadata | Blocked |
 

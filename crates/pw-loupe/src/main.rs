@@ -127,6 +127,12 @@ use pw_loupe::{
     Relisted, anchored_offset, folder_changed_text, folder_gone_text, inside_lexically,
     removed_by_another_program_text, top_position,
 };
+use pw_loupe::{
+    SaveError, TEMPLATE_COLUMN_MIN_WIDTH, TEMPLATE_WINDOW_MIN, TemplateEvent, TemplateFieldError,
+    TemplateForm, TemplateIo, TemplateItem, TemplateRefused, TemplateRow, TemplateText,
+    left_column_sections, load_failed_text, not_loaded_lines, refused_text, save_failed_text,
+    template_rows, template_text, template_window_size, templates_folder, with_xmp_extension,
+};
 use pw_metadata::edit::{Edit, EditOptions};
 use pw_metadata::iim::Fallback;
 use pw_metadata::journal::Journal;
@@ -683,6 +689,196 @@ impl MetadataWindow {
     }
 }
 
+/// What an answer of the template thread did to the template window (T293).
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum Answered {
+    /// The file at the path was loaded into the form.
+    Loaded(PathBuf),
+    /// The template was saved at the path; T295 takes it as the import's template.
+    Saved(PathBuf),
+    /// The load or the save failed; the status line says why.
+    Failed,
+}
+
+/// The template window (ADR 0017 U13, part U13c, U13-Q2–U13-Q4, U13-Q12, U13-Q13, U13-Q15,
+/// T293): a metadata template filled in, saved as an XMP file and loaded from one. Modal like the
+/// metadata window; at most one.
+struct TemplateWindow {
+    /// The form with its check and + boxes (T291).
+    form: TemplateForm,
+    /// The file the form was loaded from or saved to last; `None` until then. Clear Form keeps it.
+    file: Option<PathBuf>,
+    /// The lines of the last load or save, or of a refused save, each drawn in the error colour
+    /// when it is an error.
+    status: Vec<StatusLine>,
+    /// The checked items' errors of the last refused save, shown under them until the next Save…,
+    /// Load or Clear Form.
+    errors: Vec<TemplateFieldError>,
+    /// The id of the load or save sent to the template thread whose answer is waited for; while it
+    /// is set the form and the buttons are greyed.
+    waiting: Option<u64>,
+    /// The open "▼" list of recent and own values, as the metadata window's (U12a, T141).
+    value_list: Option<ValueList>,
+    /// Escape was pressed this frame while the "▼" list was open: it closes only the list.
+    value_list_escape: bool,
+    /// Escape was pressed this frame: the window's Close.
+    escape: bool,
+    /// Each section's height in points as drawn in the last frame, for the split into two
+    /// columns (U13-Q13).
+    section_heights: HashMap<EditorSection, f32>,
+}
+
+impl TemplateWindow {
+    fn new() -> Self {
+        Self {
+            form: TemplateForm::new(),
+            file: None,
+            status: Vec::new(),
+            errors: Vec::new(),
+            waiting: None,
+            value_list: None,
+            value_list_escape: false,
+            escape: false,
+            section_heights: HashMap::new(),
+        }
+    }
+
+    /// The window's title, naming its file when it has one.
+    fn title(&self) -> String {
+        template_text(&TemplateText::Title {
+            file: self.file.as_deref().map(file_name_text),
+        })
+    }
+
+    /// A load or a save was sent with `id`: its answer is waited for.
+    fn wait_for(&mut self, id: u64) {
+        self.waiting = Some(id);
+    }
+
+    /// A load of `path` that could not be sent: the template thread has stopped or never started.
+    fn load_stopped(&mut self, path: &Path) {
+        self.status = vec![error_line(template_text(&TemplateText::LoadStopped {
+            file: file_name_text(path),
+        }))];
+    }
+
+    /// A save that could not be sent: the template thread has stopped or never started.
+    fn save_stopped(&mut self) {
+        self.status = vec![error_line(template_text(&TemplateText::NotSavedStopped))];
+    }
+
+    /// Save… refused by the form: its errors under their items and one status line.
+    fn refused(&mut self, refused: &TemplateRefused) {
+        self.errors = match refused {
+            TemplateRefused::FieldErrors(errors) => errors.clone(),
+            TemplateRefused::Variables(_) | TemplateRefused::Empty => Vec::new(),
+        };
+        self.status = vec![error_line(refused_text(refused))];
+    }
+
+    /// Clear Form: the form emptied, the errors of a refused save cleared; the file stays.
+    fn clear_form(&mut self) {
+        self.form.clear_form();
+        self.errors.clear();
+        self.value_list = None;
+    }
+
+    /// The template thread's answer `event`. An answer to anything but the request waited for
+    /// changes nothing and gives `None`.
+    fn answer(&mut self, event: TemplateEvent) -> Option<Answered> {
+        let id = match &event {
+            TemplateEvent::Loaded { id, .. } | TemplateEvent::Saved { id, .. } => *id,
+        };
+        if self.waiting != Some(id) {
+            return None;
+        }
+        self.waiting = None;
+        match event {
+            TemplateEvent::Loaded {
+                path,
+                result: Ok(read),
+                ..
+            } => {
+                let not_loaded = self.form.load(&read.template);
+                self.errors.clear();
+                self.value_list = None;
+                self.status = vec![StatusLine {
+                    text: template_text(&TemplateText::Loaded {
+                        file: file_name_text(&path),
+                    }),
+                    error: false,
+                }];
+                self.status.extend(
+                    not_loaded_lines(&read, &not_loaded)
+                        .into_iter()
+                        .map(error_line),
+                );
+                self.file = Some(path.clone());
+                Some(Answered::Loaded(path))
+            }
+            TemplateEvent::Loaded {
+                path,
+                result: Err(error),
+                ..
+            } => {
+                self.status = vec![error_line(load_failed_text(&file_name_text(&path), &error))];
+                Some(Answered::Failed)
+            }
+            TemplateEvent::Saved {
+                path,
+                result: Ok(()),
+                ..
+            } => {
+                self.form.mark_saved();
+                self.status = vec![StatusLine {
+                    text: template_text(&TemplateText::Saved {
+                        file: file_name_text(&path),
+                    }),
+                    error: false,
+                }];
+                self.file = Some(path.clone());
+                Some(Answered::Saved(path))
+            }
+            TemplateEvent::Saved {
+                result: Err(error), ..
+            } => {
+                let text = match error {
+                    SaveError::File(error) => save_failed_text(&error),
+                    SaveError::NoConfig(reason) => {
+                        template_text(&TemplateText::NotSavedNoConfig { reason })
+                    }
+                };
+                self.status = vec![error_line(text)];
+                Some(Answered::Failed)
+            }
+        }
+    }
+}
+
+/// Opens the template window in `slot` when none is open, and gives the path to load into the new
+/// window (T293 point 3). An open window is kept as it is and nothing is loaded into it: a path is
+/// never loaded over an open form without the question of U13-Q15.
+fn open_template(slot: &mut Option<TemplateWindow>, path: Option<PathBuf>) -> Option<PathBuf> {
+    if slot.is_some() {
+        return None;
+    }
+    *slot = Some(TemplateWindow::new());
+    path
+}
+
+/// A file's name as the template window's texts show it, or the whole path when it has none.
+fn file_name_text(path: &Path) -> String {
+    path.file_name().map_or_else(
+        || path.display().to_string(),
+        |name| name.to_string_lossy().into_owned(),
+    )
+}
+
+/// A status line drawn in the error colour.
+fn error_line(text: String) -> StatusLine {
+    StatusLine { text, error: true }
+}
+
 /// The open compare (ADR 0017 §2.2, U6, T153): the held image, where it was opened, and what the
 /// second view core has been told.
 struct CompareOpen {
@@ -898,6 +1094,16 @@ struct Loupe {
     field_values: FieldValues,
     /// `field-values.txt`; `None` without LOCALAPPDATA (nothing can be saved).
     field_values_path: Option<PathBuf>,
+    /// The template window (File ▸ Metadata Template…, ADR 0017 U13c, T293); at most one. While
+    /// it is open it holds the program, as the metadata window does.
+    template_window: Option<TemplateWindow>,
+    /// The number of the template window's opening, increased each time it opens: part of the
+    /// window's id, so it opens at its default size in the middle each time (as the Settings
+    /// window, U8-Q14).
+    template_opening: u64,
+    /// The thread that loads and saves template files (T292), started at the program's start;
+    /// `None` when it could not be started, and then every Load and Save answers as stopped.
+    template_io: Option<TemplateIo>,
     message: Option<String>,
     /// The moves to subfolders, their undo list and the batch or undo that runs (T174).
     moves: Moves,
@@ -4551,8 +4757,260 @@ impl Loupe {
         self.metadata_window = Some(window);
     }
 
-    /// Whether a dialog holds the program: the metadata window (modal, D16), the settings window,
-    /// a shown import dialog, the question of "Open in {name}" above 100 images (T202), or the
+    /// Opens the template window, or keeps the open one (T293 point 3); with `path`, a window it
+    /// newly opened then loads that file (Load's steps without the open dialog). T295 calls it
+    /// from the import dialog.
+    fn open_template_window(&mut self, path: Option<PathBuf>) {
+        if self.template_window.is_none() {
+            // A new id each opening: the default size in the middle each time.
+            self.template_opening = self.template_opening.wrapping_add(1);
+        }
+        if let Some(path) = open_template(&mut self.template_window, path) {
+            self.send_template_load(path);
+        }
+    }
+
+    /// Sends a load of `path` to the template thread and waits for its answer; without the thread,
+    /// or when it has stopped, the window says so at once.
+    fn send_template_load(&mut self, path: PathBuf) {
+        let Some(window) = self.template_window.as_mut() else {
+            return;
+        };
+        window.errors.clear();
+        match self.template_io.as_mut().map(|io| io.load(path.clone())) {
+            Some(Ok(id)) => window.wait_for(id),
+            Some(Err(_)) | None => window.load_stopped(&path),
+        }
+    }
+
+    /// Takes the template thread's answers (T293 point 2); an answer that arrives after the window
+    /// was closed is dropped. Repaints while a request is waited for.
+    fn poll_template_io(&mut self, ctx: &egui::Context) {
+        let Some(io) = &self.template_io else {
+            return;
+        };
+        while let Some(event) = io.try_recv() {
+            if let Some(window) = self.template_window.as_mut()
+                && window.answer(event).is_some()
+            {
+                ctx.request_repaint();
+            }
+        }
+        if self
+            .template_window
+            .as_ref()
+            .is_some_and(|window| window.waiting.is_some())
+        {
+            ctx.request_repaint_after(WINDOW_POLL_INTERVAL);
+        }
+    }
+
+    /// Load… (T293 point 7): the question when the form has changes, then the open dialog; the
+    /// file chosen is sent to the template thread.
+    fn template_load(&mut self) {
+        let Some(window) = self.template_window.as_ref() else {
+            return;
+        };
+        if window.form.changed()
+            && !template_question(TemplateText::DiscardQuestion, TemplateText::Discard)
+        {
+            return;
+        }
+        if let Some(path) = template_file_dialog().pick_file() {
+            self.send_template_load(path);
+        }
+    }
+
+    /// Save… (T293 point 8): the template the form makes, or its refusal shown; then the save
+    /// dialog, the question before replacing a file whose name `.xmp` was added to, and the save
+    /// sent to the template thread.
+    fn template_save(&mut self) {
+        let Some(window) = self.template_window.as_mut() else {
+            return;
+        };
+        let template = match window.form.template() {
+            Ok(template) => template,
+            Err(refused) => {
+                window.refused(&refused);
+                return;
+            }
+        };
+        window.errors.clear();
+        let mut dialog = template_file_dialog();
+        if let Some(name) = window.file.as_deref().and_then(Path::file_name) {
+            dialog = dialog.set_file_name(name.to_string_lossy());
+        }
+        let Some(chosen) = dialog.save_file() else {
+            return;
+        };
+        let path = with_xmp_extension(&chosen);
+        if path != chosen
+            && path.exists()
+            && !template_question(
+                TemplateText::ReplaceQuestion {
+                    file: file_name_text(&path),
+                },
+                TemplateText::Replace,
+            )
+        {
+            return;
+        }
+        match self.template_io.as_mut().map(|io| io.save(path, template)) {
+            Some(Ok(id)) => window.wait_for(id),
+            Some(Err(_)) | None => window.save_stopped(),
+        }
+    }
+
+    /// Close, the window's × and Escape (T293 point 9): the question when the form has changes,
+    /// then the window closed and its form dropped.
+    fn template_close(&mut self) {
+        let Some(window) = self.template_window.as_ref() else {
+            return;
+        };
+        if window.form.changed()
+            && !template_question(TemplateText::DiscardQuestion, TemplateText::Discard)
+        {
+            return;
+        }
+        self.template_window = None;
+    }
+
+    /// The template window (ADR 0017 U13c, U13-Q13, T293): modal, resizable, opened in the middle
+    /// of the program's window; the form scrolls in one or two columns above the status lines and
+    /// the buttons Clear Form, Load…, Save… and Close. While a load or save is waited for, the
+    /// form and the buttons are greyed and Escape and × do nothing.
+    fn draw_template_window(&mut self, ctx: &egui::Context) {
+        let Some(mut window) = self.template_window.take() else {
+            return;
+        };
+        if std::mem::take(&mut window.value_list_escape) {
+            window.value_list = None;
+        }
+        let escape = std::mem::take(&mut window.escape);
+        let waiting = window.waiting.is_some();
+        let sections = template_rows(&self.settings.editor_layout);
+        let mut clear = false;
+        let mut load = false;
+        let mut save = false;
+        let mut close = false;
+        let mut open = true;
+
+        // Modal: a backdrop under the window in the same order, so neither the program nor an
+        // import dialog (a window at `Order::Middle`) behind it takes a click.
+        let screen = ctx.content_rect();
+        let backdrop_id = egui::Id::unique("template-window-backdrop");
+        egui::Area::new(backdrop_id)
+            .order(egui::Order::Foreground)
+            .fixed_pos(screen.min)
+            .show(ctx, |ui| {
+                let response = ui.allocate_response(screen.size(), egui::Sense::click_and_drag());
+                ui.painter().rect_filled(response.rect, 0.0, BACKDROP);
+            });
+        let window_id = egui::Id::unique(("template-window", self.template_opening));
+        // The window stays directly above its backdrop, also after a click on the backdrop.
+        ctx.set_sublayer(
+            egui::LayerId::new(egui::Order::Foreground, backdrop_id),
+            egui::LayerId::new(egui::Order::Foreground, window_id),
+        );
+        let size = template_window_size(screen.size());
+        let title = window.title();
+        let mut value_ui = ValueUi {
+            values: &self.field_values,
+            list: &mut window.value_list,
+            actions: Vec::new(),
+        };
+        egui::Window::new(title)
+            .id(window_id)
+            .order(egui::Order::Foreground)
+            .collapsible(false)
+            .resizable(true)
+            .open(&mut open)
+            .min_size(TEMPLATE_WINDOW_MIN.min(size))
+            .default_size(size)
+            .default_pos(screen.center() - size / 2.0)
+            .show(ctx, |ui| {
+                let error_color = ui.visuals().error_fg_color;
+                egui::Panel::bottom("template-window-buttons")
+                    .resizable(false)
+                    .frame(egui::Frame::NONE)
+                    .show(ui, |ui| {
+                        ui.add_space(WINDOW_BUTTON_SPACING);
+                        for line in &window.status {
+                            let text = if line.error {
+                                egui::RichText::new(&line.text).color(error_color)
+                            } else {
+                                egui::RichText::new(&line.text)
+                            };
+                            ui.add(egui::Label::new(text).wrap());
+                        }
+                        ui.add_enabled_ui(!waiting, |ui| {
+                            ui.horizontal_wrapped(|ui| {
+                                clear =
+                                    ui.button(template_text(&TemplateText::ClearForm)).clicked();
+                                load = ui.button(template_text(&TemplateText::Load)).clicked();
+                                save = ui.button(template_text(&TemplateText::Save)).clicked();
+                                close = ui.button(template_text(&TemplateText::Close)).clicked();
+                            });
+                        });
+                        ui.add_space(WINDOW_BUTTON_SPACING);
+                    });
+                egui::CentralPanel::default()
+                    .frame(egui::Frame::NONE)
+                    .show(ui, |ui| {
+                        egui::ScrollArea::vertical()
+                            .id_salt("template-window-scroll")
+                            .auto_shrink([false, false])
+                            .show(ui, |ui| {
+                                ui.add_enabled_ui(!waiting, |ui| {
+                                    draw_template_sections(
+                                        ui,
+                                        &sections,
+                                        &mut window.form,
+                                        &window.errors,
+                                        &mut window.section_heights,
+                                        &mut value_ui,
+                                    );
+                                });
+                            });
+                    });
+            });
+        window.form.notice_typing();
+
+        // "Add to My Values" and "×" (U12a-Q3, T141), saved at once as in the metadata window. A
+        // save of a template adds nothing to the recent values.
+        let ValueUi { actions, .. } = value_ui;
+        let mut values_changed = false;
+        for action in actions {
+            values_changed |= match action {
+                ValueAction::AddOwn(field, values) => self.field_values.add_own(field, &values),
+                ValueAction::RemoveOwn(field, value) => self.field_values.remove_own(field, &value),
+            };
+        }
+        if values_changed {
+            self.save_field_values();
+        }
+
+        let closing = (escape || close || !open) && !waiting;
+        self.template_window = Some(window);
+        if waiting {
+            return;
+        }
+        if clear && let Some(window) = self.template_window.as_mut() {
+            window.clear_form();
+        } else if load {
+            self.template_load();
+        } else if save {
+            self.template_save();
+        } else if closing {
+            self.template_close();
+        } else {
+            return;
+        }
+        ctx.request_repaint();
+    }
+
+    /// Whether a dialog holds the program: the metadata window (modal, D16), the template window
+    /// (modal, T293), the settings window, a shown import dialog, the question of "Open in {name}" above 100 images (T202), or the
     /// confirmation of a delete (T189), the last two also while they wait for another dialog to
     /// close.
     fn dialog_open(&self) -> bool {
@@ -4560,23 +5018,25 @@ impl Loupe {
     }
 
     /// Whether a dialog other than the confirmation of a delete is open: the metadata window, the
-    /// settings window, a shown import dialog, or the question of "Open in {name}" (its step
+    /// template window (T293), the settings window, a shown import dialog, or the question of "Open in {name}" (its step
     /// `Confirming`, T202). The confirmation waits while one is (T189).
     fn other_dialog_open(&self) -> bool {
         self.metadata_window.is_some()
+            || self.template_window.is_some()
             || self.settings_window.is_some()
             || (self.import_dialog.is_some() && !self.import_hidden)
             || matches!(self.open, OpenStep::Confirming(_))
     }
 
     /// Whether the question of "Open in {name}" is shown this frame (ADR 0019 §2.5, T202): the
-    /// step is `Confirming` and neither the metadata window, the settings window nor a shown
-    /// import dialog is open. Written out on its own: `other_dialog_open` is true while the
+    /// step is `Confirming` and neither the metadata window, the template window (T293), the
+    /// settings window nor a shown import dialog is open. Written out on its own: `other_dialog_open` is true while the
     /// question itself is `Confirming`. Unlike the delete's, it does not depend on the active tab
     /// (the request holds its own paths).
     fn open_window_shown(&self) -> bool {
         matches!(self.open, OpenStep::Confirming(_))
             && self.metadata_window.is_none()
+            && self.template_window.is_none()
             && self.settings_window.is_none()
             && !(self.import_dialog.is_some() && !self.import_hidden)
     }
@@ -7015,6 +7475,7 @@ impl Loupe {
             Command::OpenFolder => self.shell_action(ctx, ShellAction::OpenFolder),
             Command::ReloadFolder => self.reload_active_tab(ctx),
             Command::Import => self.open_import(),
+            Command::MetadataTemplate => self.open_template_window(None),
             Command::CloseTab => self.tab_action(TabAction::Close),
             Command::NextTab => self.tab_action(TabAction::Next),
             Command::PreviousTab => self.tab_action(TabAction::Previous),
@@ -7848,6 +8309,19 @@ impl Loupe {
                     .is_some_and(|id| ctx.memory(|memory| memory.has_focus(id)));
                 if key == egui::Key::Escape || (key == egui::Key::Enter && !open_focused) {
                     self.open_cancelled();
+                }
+                continue;
+            }
+            // The template window is modal (T293 point 4): every key goes to it, so neither an
+            // import dialog behind it nor the program gets one. Escape closes an open "▼" list
+            // first, otherwise it is the window's Close.
+            if let Some(window) = &mut self.template_window {
+                if key == egui::Key::Escape && !ctrl && !alt {
+                    if window.value_list.is_some() {
+                        window.value_list_escape = true;
+                    } else {
+                        window.escape = true;
+                    }
                 }
                 continue;
             }
@@ -9269,6 +9743,23 @@ fn values_button(ui: &mut egui::Ui) -> egui::Response {
 /// with an undecided conflict, or a value the form cannot show, is its read-only text instead.
 fn draw_structure_list(ui: &mut egui::Ui, form: &mut EditorForm, list: &'static str) {
     ui.label(egui::RichText::new(property_label(list, Language::En)).strong());
+    draw_structure_list_body(ui, form, list, &[]);
+}
+
+/// A sub-field's error kept from a refused save of the template window (T293): the entry's
+/// index, the sub-field's XMP id and the text.
+type SavedListError<'a> = (usize, &'static str, &'a str);
+
+/// `draw_structure_list` without the list's name: its entries, then its buttons (T293: the
+/// template window draws the name on the row of its check box). `saved` are the errors of the
+/// template window's last refused save, each drawn under its sub-field where it differs from the
+/// sub-field's own error; the metadata window gives none.
+fn draw_structure_list_body(
+    ui: &mut egui::Ui,
+    form: &mut EditorForm,
+    list: &'static str,
+    saved: &[SavedListError<'_>],
+) {
     if let Some(text) = form.list_read_only(list).map(str::to_string) {
         ui.add(egui::Label::new(text).wrap());
         ui.add_space(PANEL_ROW_SPACING);
@@ -9279,7 +9770,7 @@ fn draw_structure_list(ui: &mut egui::Ui, form: &mut EditorForm, list: &'static 
         ui.push_id(("metadata-window-list", list, entry), |ui| {
             egui::Frame::group(ui.style()).show(ui, |ui| {
                 for field in EditorForm::list_fields(list) {
-                    draw_list_field(ui, form, list, entry, field);
+                    draw_list_field(ui, form, list, entry, field, saved);
                 }
                 let address = EditorForm::list_address_fields(list);
                 if !address.is_empty() {
@@ -9288,7 +9779,7 @@ fn draw_structure_list(ui: &mut egui::Ui, form: &mut EditorForm, list: &'static 
                         .default_open(false)
                         .show(ui, |ui| {
                             for field in address {
-                                draw_list_field(ui, form, list, entry, field);
+                                draw_list_field(ui, form, list, entry, field, saved);
                             }
                         });
                 }
@@ -9300,7 +9791,7 @@ fn draw_structure_list(ui: &mut egui::Ui, form: &mut EditorForm, list: &'static 
                         .default_open(false)
                         .show(ui, |ui| {
                             for field in more {
-                                draw_list_field(ui, form, list, entry, field);
+                                draw_list_field(ui, form, list, entry, field, saved);
                             }
                         });
                 }
@@ -9368,23 +9859,37 @@ fn draw_structure_list(ui: &mut egui::Ui, form: &mut EditorForm, list: &'static 
 /// one-line text box as wide as the window, or a drop-down for a choice (a Licensor's telephone
 /// types, U11b-Q3): the empty entry, the PLUS values with their full URIs as tooltips, and an
 /// unknown value of the file as "Unknown value: {uri}" (U10d-Q4). Under a text box its error, in
-/// the error colour, while it has one (an Artwork or Object's Date Created, U11c-Q4, T143).
+/// the error colour, while it has one (an Artwork or Object's Date Created, U11c-Q4, T143), and
+/// the template window's `saved` errors of this sub-field that differ from it (T293). The text
+/// box's id is its sub-field's within the entry, so it keeps the focus when the template window
+/// moves its section to the other column.
 fn draw_list_field(
     ui: &mut egui::Ui,
     form: &mut EditorForm,
     list: &'static str,
     entry: usize,
     field: &'static str,
+    saved: &[SavedListError<'_>],
 ) {
     ui.label(egui::RichText::new(property_label(field, Language::En)).strong());
     let entries = form.list_choice_entries(list, entry, field);
     if entries.is_empty() {
         if let Some(text) = form.list_text_mut(list, entry, field) {
-            ui.add(egui::TextEdit::singleline(text).desired_width(f32::INFINITY));
+            ui.add(
+                egui::TextEdit::singleline(text)
+                    .id_salt(("list-field", field))
+                    .desired_width(f32::INFINITY),
+            );
         }
-        if let Some(error) = form.list_error(list, entry, field) {
-            let error_color = ui.visuals().error_fg_color;
+        let error_color = ui.visuals().error_fg_color;
+        let error = form.list_error(list, entry, field);
+        if let Some(error) = &error {
             ui.add(egui::Label::new(egui::RichText::new(error).color(error_color)).wrap());
+        }
+        for (_, _, text) in saved.iter().filter(|(index, id, text)| {
+            *index == entry && *id == field && error.as_deref() != Some(*text)
+        }) {
+            ui.add(egui::Label::new(egui::RichText::new(*text).color(error_color)).wrap());
         }
         return;
     }
@@ -9413,6 +9918,202 @@ fn draw_list_field(
         });
     if let Some(value) = chosen {
         form.set_list_choice(list, entry, field, &value);
+    }
+}
+
+/// The sections of the template window's form (ADR 0017 U13-Q13, T293): in two columns when the
+/// inner width is at least twice [`TEMPLATE_COLUMN_MIN_WIDTH`], otherwise in one. The sections go
+/// to the columns by `left_column_sections` of their heights in the last frame (`heights`; on the
+/// first frame, their numbers of rows); each section's height drawn now is kept for the next.
+fn draw_template_sections(
+    ui: &mut egui::Ui,
+    sections: &[(EditorSection, Vec<TemplateRow>)],
+    form: &mut TemplateForm,
+    errors: &[TemplateFieldError],
+    heights: &mut HashMap<EditorSection, f32>,
+    values: &mut ValueUi<'_>,
+) {
+    if ui.available_width() < 2.0 * TEMPLATE_COLUMN_MIN_WIDTH {
+        for (section, rows) in sections {
+            let height = draw_template_section(ui, *section, rows, form, errors, values);
+            heights.insert(*section, height);
+        }
+        return;
+    }
+    let measured: Option<Vec<f32>> = sections
+        .iter()
+        .map(|(section, _)| heights.get(section).copied())
+        .collect();
+    let estimates =
+        measured.unwrap_or_else(|| sections.iter().map(|(_, rows)| rows.len() as f32).collect());
+    let left = left_column_sections(&estimates).min(sections.len());
+    let (left, right) = sections.split_at(left);
+    ui.columns(2, |columns| {
+        if let [left_ui, right_ui] = columns {
+            for (ui, part) in [(left_ui, left), (right_ui, right)] {
+                for (section, rows) in part {
+                    let height = draw_template_section(ui, *section, rows, form, errors, values);
+                    heights.insert(*section, height);
+                }
+            }
+        }
+    });
+}
+
+/// One section of the template window's form (T293): a heading bar with its name, not
+/// collapsible, then its rows; Creator's Contact Info's and Location Created's sub-fields
+/// indented under their heading. Drawn inside `push_id(section)`, so its widgets keep their ids
+/// in either column. Returns its height in points.
+fn draw_template_section(
+    ui: &mut egui::Ui,
+    section: EditorSection,
+    rows: &[TemplateRow],
+    form: &mut TemplateForm,
+    errors: &[TemplateFieldError],
+    values: &mut ValueUi<'_>,
+) -> f32 {
+    ui.push_id(("template-section", section), |ui| {
+        egui::Frame::NONE
+            .fill(ui.visuals().faint_bg_color)
+            .inner_margin(egui::Margin::symmetric(4, 2))
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.label(
+                    egui::RichText::new(editor_text(&EditorText::SectionHeading(section))).strong(),
+                );
+            });
+        ui.add_space(PANEL_ROW_SPACING);
+        for row in rows {
+            match *row {
+                TemplateRow::Heading(_) => {
+                    ui.label(egui::RichText::new(row.label()).strong());
+                }
+                TemplateRow::Item(
+                    item @ (TemplateItem::ContactField(_) | TemplateItem::LocationField(_)),
+                ) => {
+                    ui.indent(("template-item", item), |ui| {
+                        draw_template_item(ui, item, form, errors, values);
+                    });
+                }
+                TemplateRow::Item(item) => draw_template_item(ui, item, form, errors, values),
+            }
+        }
+        ui.add_space(PANEL_ROW_SPACING);
+    })
+    .response
+    .rect
+    .height()
+}
+
+/// One item of the template window's form (T293): a row with its check box (T291's hover text),
+/// its name (with the field's own tooltip where it has one), its + box where it has one, and
+/// Copyrighted's own check box; then the field as the metadata window draws it (a one-line or
+/// long text, a "▼" field, a choice list), a Location Created sub-field as a one-line field, or
+/// a structure list without its name. Then the item's errors of the last refused save.
+fn draw_template_item(
+    ui: &mut egui::Ui,
+    item: TemplateItem,
+    form: &mut TemplateForm,
+    errors: &[TemplateFieldError],
+    values: &mut ValueUi<'_>,
+) {
+    ui.horizontal_wrapped(|ui| {
+        let mut checked = form.checked(item);
+        let check = ui
+            .add(egui::Checkbox::without_text(&mut checked))
+            .on_hover_text(template_text(&TemplateText::CheckHover));
+        if check.changed() {
+            form.set_checked(item, checked);
+        }
+        let label = ui.label(egui::RichText::new(item.label()).strong());
+        if let TemplateItem::Field(field) | TemplateItem::ContactField(field) = item
+            && let Some(tooltip) = field.tooltip()
+        {
+            label.on_hover_text(tooltip);
+        }
+        if item.has_add_box() {
+            let mut added = form.added(item);
+            let add = ui
+                .checkbox(&mut added, template_text(&TemplateText::AddLabel))
+                .on_hover_text(template_text(&TemplateText::AddHover));
+            if add.changed() {
+                form.set_added(item, added);
+            }
+        }
+        if let TemplateItem::Field(field) = item
+            && field.check_box()
+        {
+            let mut on = form.form().checked(field);
+            if ui.add(egui::Checkbox::without_text(&mut on)).changed() {
+                form.form_mut().set_checked(field, on);
+            }
+        }
+    });
+    match item {
+        TemplateItem::Field(field) | TemplateItem::ContactField(field) => {
+            if !field.check_box() {
+                draw_template_field(ui, form.form_mut(), field, values);
+            }
+        }
+        TemplateItem::LocationField(sub) => {
+            if let Some(text) = form
+                .form_mut()
+                .list_text_mut(EditorForm::LOCATION_CREATED, 0, sub)
+            {
+                ui.add(
+                    egui::TextEdit::singleline(text)
+                        .id_salt(("template-location", sub))
+                        .desired_width(f32::INFINITY),
+                );
+            }
+        }
+        TemplateItem::List(list) => {
+            let saved: Vec<SavedListError<'_>> = errors
+                .iter()
+                .filter(|error| error.item == item)
+                .filter_map(|error| {
+                    error
+                        .entry
+                        .map(|(entry, field)| (entry, field, error.text.as_str()))
+                })
+                .collect();
+            draw_structure_list_body(ui, form.form_mut(), list, &saved);
+        }
+    }
+    let error_color = ui.visuals().error_fg_color;
+    for error in errors
+        .iter()
+        .filter(|error| error.item == item && error.entry.is_none())
+    {
+        ui.add(egui::Label::new(egui::RichText::new(&error.text).color(error_color)).wrap());
+    }
+    ui.add_space(PANEL_ROW_SPACING);
+}
+
+/// A field of the template window's form as the metadata window draws it (T293): a choice list,
+/// a field with a "▼" (the same recent and own values), or a text box, several lines for the long
+/// texts. The text box's id is its field's, so it keeps the focus when its section moves to the
+/// other column.
+fn draw_template_field(
+    ui: &mut egui::Ui,
+    form: &mut EditorForm,
+    field: EditorField,
+    values: &mut ValueUi<'_>,
+) {
+    if field.choice_list().is_some() {
+        draw_choice_list(ui, form, field);
+    } else if form.values_shown(field) {
+        draw_values_field(ui, form, field, values);
+    } else if let Some(text) = form.text_mut(field) {
+        let edit = if field.multiline() {
+            egui::TextEdit::multiline(text).desired_rows(3)
+        } else {
+            egui::TextEdit::singleline(text)
+        };
+        ui.add(
+            edit.id_salt(("template-field", field))
+                .desired_width(f32::INFINITY),
+        );
     }
 }
 
@@ -10927,6 +11628,7 @@ impl eframe::App for Loupe {
         // Before anything is drawn or reads the keys (ADR 0017 U8-Q7, T281).
         self.take_key_for_change(&ctx);
         self.poll_import_worker(&ctx);
+        self.poll_template_io(&ctx);
         self.poll_folder_watcher();
         // The active tab follows its folder on disk at once (ADR 0026 F3, T251).
         self.follow_disk_changes(&ctx);
@@ -10982,6 +11684,7 @@ impl eframe::App for Loupe {
         self.draw_settings_window(&ctx);
         self.draw_about_window(&ctx);
         self.draw_metadata_window(&ctx);
+        self.draw_template_window(&ctx);
         self.draw_delete_window(&ctx);
         self.draw_open_window(&ctx);
         if !commands.is_empty() {
@@ -11045,6 +11748,63 @@ impl eframe::App for Loupe {
 fn journal_folder() -> Option<PathBuf> {
     std::env::var_os("LOCALAPPDATA")
         .map(|data| PathBuf::from(data).join("RawStride").join("journal"))
+}
+
+/// `%LOCALAPPDATA%\RawStride`, where the template thread writes ExifTool's config (T292, T293);
+/// `None` without `LOCALAPPDATA`.
+fn raw_stride_folder() -> Option<PathBuf> {
+    std::env::var_os("LOCALAPPDATA").map(|data| PathBuf::from(data).join("RawStride"))
+}
+
+/// The folder of the template files (U13-Q2), made when it is missing, for the template window's
+/// Load and Save dialogs to start in (T293); `None` without `LOCALAPPDATA` or when it cannot be
+/// made, and then the dialogs get no start folder.
+fn templates_start_folder() -> Option<PathBuf> {
+    let folder = templates_folder(&PathBuf::from(std::env::var_os("LOCALAPPDATA")?));
+    match std::fs::create_dir_all(&folder) {
+        Ok(()) => Some(folder),
+        Err(error) => {
+            eprintln!(
+                "pw-loupe: the templates folder {} could not be made: {error}",
+                folder.display()
+            );
+            None
+        }
+    }
+}
+
+/// The Windows open or save dialog of the template window (T293): no title, T291's file type
+/// name with the extension `xmp`, starting in the templates folder when there is one.
+fn template_file_dialog() -> rfd::FileDialog {
+    let dialog =
+        rfd::FileDialog::new().add_filter(template_text(&TemplateText::FileType), &["xmp"]);
+    match templates_start_folder() {
+        Some(folder) => dialog.set_directory(folder),
+        None => dialog,
+    }
+}
+
+/// A question of the template window (U13-Q15) in a Windows message box titled with T291's
+/// window title, with the buttons `yes` and Cancel; true when `yes` was chosen.
+fn template_question(question: TemplateText, yes: TemplateText) -> bool {
+    let yes = template_text(&yes);
+    let answer = rfd::MessageDialog::new()
+        .set_level(rfd::MessageLevel::Warning)
+        .set_title(template_text(&TemplateText::Title { file: None }))
+        .set_description(template_text(&question))
+        .set_buttons(rfd::MessageButtons::OkCancelCustom(
+            yes.clone(),
+            template_text(&TemplateText::Cancel),
+        ))
+        .show();
+    // Without the Windows task dialog the box has OK and Cancel, and OK answers `Ok`.
+    match answer {
+        rfd::MessageDialogResult::Ok => true,
+        rfd::MessageDialogResult::Custom(chosen) => chosen == yes,
+        rfd::MessageDialogResult::Yes
+        | rfd::MessageDialogResult::No
+        | rfd::MessageDialogResult::Cancel => false,
+    }
 }
 
 /// Opens the write journal and resolves the writes left open at the last exit (§9.5), before any
@@ -11264,6 +12024,15 @@ fn run(options: Options) -> Result<(), String> {
     .map_err(|e| e.to_string())?;
     let thumb_worker = ThumbWorker::start_with_monitor_profile(monitor_profile.profile.clone())
         .map_err(|e| e.to_string())?;
+    // The template window's thread (ADR 0017 U13c, T292, T293): ExifTool as the metadata
+    // worker's, its config in %LOCALAPPDATA%\RawStride. Without it the program still starts.
+    let template_io = match TemplateIo::start(None, raw_stride_folder()) {
+        Ok(io) => Some(io),
+        Err(error) => {
+            eprintln!("pw-loupe: the template thread could not be started: {error}");
+            None
+        }
+    };
     // The window as it was left (ADR 0017 §2.5, T109): maximized unless a normal size on a
     // screen was saved; full screen on top.
     let mut viewport = egui::ViewportBuilder::default()
@@ -11387,6 +12156,9 @@ fn run(options: Options) -> Result<(), String> {
                 copied_fields: None,
                 field_values,
                 field_values_path,
+                template_window: None,
+                template_opening: 0,
+                template_io,
                 message: None,
                 moves: Moves::default(),
                 delete: DeleteStep::Idle,
@@ -11470,6 +12242,215 @@ mod tests {
     use pw_loupe::{TEXT_CONTRAST, contrast_ratio};
     use pw_metadata::iim::Fallback;
     use std::path::{Path, PathBuf};
+
+    // --- The template window's answers and opening (ADR 0017 U13, part U13c, T293) ---
+
+    mod template_window {
+        use super::super::{Answered, TemplateWindow, open_template};
+        use pw_loupe::{
+            EditorField, Language, SaveError, TemplateEvent, TemplateItem, property_label,
+        };
+        use pw_metadata::template_file::{TemplateFile, TemplateFileError, TemplateRead};
+        use pw_metadata::value::Value;
+        use std::path::PathBuf;
+
+        /// A window whose Headline is typed and checked, so its form has changed.
+        fn typed_window() -> TemplateWindow {
+            let mut window = TemplateWindow::new();
+            if let Some(text) = window.form.form_mut().text_mut(EditorField::Headline) {
+                text.push_str("News");
+            }
+            window.form.notice_typing();
+            assert!(window.form.changed());
+            assert!(
+                window
+                    .form
+                    .checked(TemplateItem::Field(EditorField::Headline))
+            );
+            window
+        }
+
+        #[test]
+        fn opening_twice_gives_one_window_and_loads_only_into_a_new_one() {
+            let mut slot = None;
+            assert_eq!(open_template(&mut slot, None), None);
+            let Some(window) = slot.as_mut() else {
+                panic!("the window is open");
+            };
+            window.file = Some(PathBuf::from(r"C:\t\kept.xmp"));
+            // The open window is kept as it is, and no path is loaded over its form.
+            assert_eq!(
+                open_template(&mut slot, Some(PathBuf::from(r"C:\t\b.xmp"))),
+                None
+            );
+            assert_eq!(
+                slot.as_ref().and_then(|window| window.file.clone()),
+                Some(PathBuf::from(r"C:\t\kept.xmp"))
+            );
+            // A window newly opened with a path loads it.
+            let mut empty = None;
+            assert_eq!(
+                open_template(&mut empty, Some(PathBuf::from(r"C:\t\a.xmp"))),
+                Some(PathBuf::from(r"C:\t\a.xmp"))
+            );
+            assert!(empty.is_some());
+        }
+
+        #[test]
+        fn an_answer_with_another_id_changes_nothing() {
+            let mut window = typed_window();
+            window.wait_for(2);
+            let answered = window.answer(TemplateEvent::Saved {
+                id: 1,
+                path: PathBuf::from(r"C:\t\a.xmp"),
+                result: Ok(()),
+            });
+            assert_eq!(answered, None);
+            assert_eq!(window.waiting, Some(2));
+            assert_eq!(window.file, None);
+            assert!(window.status.is_empty());
+            assert!(window.form.changed());
+        }
+
+        #[test]
+        fn a_saved_answer_makes_the_path_the_file_and_the_form_unchanged() {
+            let mut window = typed_window();
+            window.wait_for(1);
+            let path = PathBuf::from(r"C:\t\News.xmp");
+            let answered = window.answer(TemplateEvent::Saved {
+                id: 1,
+                path: path.clone(),
+                result: Ok(()),
+            });
+            assert_eq!(answered, Some(Answered::Saved(path.clone())));
+            assert_eq!(window.waiting, None);
+            assert_eq!(window.file, Some(path));
+            assert!(!window.form.changed());
+            assert_eq!(window.title(), "Metadata Template – News.xmp");
+            assert_eq!(window.status.len(), 1);
+            assert_eq!(window.status[0].text, "Saved News.xmp.");
+            assert!(!window.status[0].error);
+        }
+
+        #[test]
+        fn a_failed_save_keeps_the_form_and_says_why() {
+            let mut window = typed_window();
+            window.wait_for(1);
+            let answered = window.answer(TemplateEvent::Saved {
+                id: 1,
+                path: PathBuf::from(r"C:\t\a.xmp"),
+                result: Err(SaveError::NoConfig("LOCALAPPDATA is not set".to_string())),
+            });
+            assert_eq!(answered, Some(Answered::Failed));
+            assert_eq!(window.file, None);
+            assert!(window.form.changed());
+            assert_eq!(window.status.len(), 1);
+            assert!(window.status[0].error);
+            assert_eq!(
+                window.status[0].text,
+                "Not saved: ExifTool cannot use its settings file for templates \
+                 (LOCALAPPDATA is not set)."
+            );
+        }
+
+        #[test]
+        fn a_failed_load_leaves_the_form_as_it_was_with_one_error_line() {
+            let mut window = typed_window();
+            let before = window.form.template();
+            window.wait_for(1);
+            let answered = window.answer(TemplateEvent::Loaded {
+                id: 1,
+                path: PathBuf::from(r"C:\t\a.xmp"),
+                result: Err(TemplateFileError::NotFound(PathBuf::from(r"C:\t\a.xmp"))),
+            });
+            assert_eq!(answered, Some(Answered::Failed));
+            assert_eq!(window.form.template(), before);
+            assert!(window.form.changed());
+            assert_eq!(window.file, None);
+            assert_eq!(window.status.len(), 1);
+            assert!(window.status[0].error);
+            assert_eq!(
+                window.status[0].text,
+                r"a.xmp was not loaded: C:\t\a.xmp does not exist"
+            );
+        }
+
+        #[test]
+        fn a_load_with_a_skipped_field_says_loaded_and_names_it_as_an_error() {
+            let mut window = typed_window();
+            window.wait_for(1);
+            let path = PathBuf::from(r"C:\t\Sport.xmp");
+            let read = TemplateRead {
+                template: TemplateFile::new(
+                    vec![(
+                        "photoshop:Headline".to_string(),
+                        Value::Text("Sport".to_string()),
+                    )],
+                    Vec::new(),
+                ),
+                skipped: vec!["xmp:Rating".to_string()],
+                dropped: Vec::new(),
+                unreadable: Vec::new(),
+            };
+            let answered = window.answer(TemplateEvent::Loaded {
+                id: 1,
+                path: path.clone(),
+                result: Ok(read),
+            });
+            assert_eq!(answered, Some(Answered::Loaded(path.clone())));
+            assert_eq!(window.file, Some(path));
+            assert_eq!(window.form.form().text(EditorField::Headline), "Sport");
+            assert!(!window.form.changed());
+            assert_eq!(window.status.len(), 2);
+            assert_eq!(window.status[0].text, "Loaded Sport.xmp.");
+            assert!(!window.status[0].error);
+            assert_eq!(
+                window.status[1].text,
+                format!(
+                    "1 field of the file was not loaded: {}.",
+                    property_label("xmp:Rating", Language::En)
+                )
+            );
+            assert!(window.status[1].error);
+        }
+
+        #[test]
+        fn a_refused_save_shows_its_errors_until_clear_form() {
+            let mut window = TemplateWindow::new();
+            let Err(refused) = window.form.template() else {
+                panic!("an empty form makes no template");
+            };
+            window.refused(&refused);
+            assert_eq!(window.status.len(), 1);
+            assert_eq!(
+                window.status[0].text,
+                "Not saved: no checked field has a value."
+            );
+            assert!(window.status[0].error);
+            window.file = Some(PathBuf::from(r"C:\t\a.xmp"));
+            window.clear_form();
+            assert!(window.errors.is_empty());
+            // Clear Form keeps the window's file.
+            assert_eq!(window.file, Some(PathBuf::from(r"C:\t\a.xmp")));
+        }
+
+        #[test]
+        fn a_load_or_save_that_cannot_be_sent_says_the_reader_has_stopped() {
+            let mut window = TemplateWindow::new();
+            window.load_stopped(&PathBuf::from(r"C:\t\a.xmp"));
+            assert_eq!(
+                window.status[0].text,
+                "a.xmp was not loaded: the template reader has stopped"
+            );
+            assert!(window.status[0].error);
+            window.save_stopped();
+            assert_eq!(
+                window.status[0].text,
+                "Not saved: the template reader has stopped"
+            );
+            assert_eq!(window.waiting, None);
+        }
+    }
 
     // --- The failed images of a batch are marked as errors (T290) ---
 

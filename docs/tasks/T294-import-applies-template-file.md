@@ -1,4 +1,4 @@
-# T294. The import writes a template file instead of its six fields — Blocked
+# T294. The import writes a template file instead of its six fields — Open
 
 - **Why:** ADR 0017 U13, part U13c (U13-Q5, U13-Q6, U13-Q9; U13-Q18 and U13-Q19), fourth of the chain T291 → T292 → T293 → T294 → T295 → T296. The import dialog's six
   template fields and their modes (ADR 0007 D13) are replaced by a template file (U13-Q6). This
@@ -129,3 +129,4 @@
 | 2026-11-23 | Blocked | Added (ADR 0017 U13, part U13c, fourth of the chain T291 → T292 → T293 → T294 → T295 → T296). Needs nothing of T291–T293 (other files except `main.rs`'s import dialog, which T293 does not touch). Waits for the owner's answers to U13-Q18 and U13-Q19, its cold read and the chain review |
 | 2026-11-23 | Blocked | The owner approved the reviewer's proposals U13-Q14–U13-Q19 (recorded in ADR 0017 §6.5); waits for its cold read and the chain review |
 | 2026-11-23 | Blocked | Cold read: the tests that go or change are named (eight in `import.rs`, `form_defaults_match_the_ingest_templates`, two in `import_text.rs`, the worker tests' `run`/`ImportRun`/`ShotWriter::new`/`finish` call sites); `mode_text` and the `clear_*` texts are in `import_text.rs`, all listed with their exports, the `Mode` import and every use of `import_clear_confirm`; `run`'s signature and the worker's plumbing named; the notice line made by `template_notice_text` in `import_text.rs` (rule 13), at most ten, a normal "… and {n} more", the IPTC error lines unchanged; notices in the order answers arrive; tests added for the notices (one and two processes), for a date variable failing on one image, and for both `None` and an empty template; `tasks.rs` unchanged on purpose |
+| 2026-11-23 | Open | T293 done and committed; its cold read and the chain review were done before (see T291's log). Set Open |

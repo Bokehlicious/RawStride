@@ -546,6 +546,7 @@ pub fn command_text(command: Command) -> String {
         Command::OpenFolder => "Open Folder…".to_owned(),
         Command::ReloadFolder => "Reload Folder".to_owned(),
         Command::Import => "Import…".to_owned(),
+        Command::MetadataTemplate => "Metadata Template…".to_owned(),
         Command::CloseTab => "Close Tab".to_owned(),
         Command::Settings => "Settings…".to_owned(),
         Command::Quit => "Exit".to_owned(),
@@ -685,6 +686,15 @@ mod tests {
         assert_eq!(theme_text(Theme::Light), "Light");
     }
 
+    /// The template window's menu item (ADR 0017 U13, part U13c, T293).
+    #[test]
+    fn metadata_template_is_named_with_an_ellipsis() {
+        assert_eq!(
+            command_text(Command::MetadataTemplate),
+            "Metadata Template…"
+        );
+    }
+
     #[test]
     fn every_menu_item_text_in_menu_order() {
         let texts: Vec<String> = menu_items()
@@ -697,6 +707,7 @@ mod tests {
                 "Open Folder…",
                 "Reload Folder",
                 "Import…",
+                "Metadata Template…",
                 "Close Tab",
                 "Settings…",
                 "Exit",
@@ -763,6 +774,8 @@ mod tests {
             Some("Ctrl+O"),
             Some("F5"),
             Some("Ctrl+I"),
+            // Metadata Template… has no key (T293).
+            None,
             Some("Ctrl+W"),
             None,
             Some("Alt+F4"),

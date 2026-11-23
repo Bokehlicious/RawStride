@@ -222,6 +222,28 @@ pub fn settings_window_size(screen: egui::Vec2) -> egui::Vec2 {
         .min(screen)
 }
 
+/// The template window's smallest column width in points (ADR 0017 U13-Q13, T293): two columns
+/// when the window's inner width is at least twice this, otherwise one.
+pub const TEMPLATE_COLUMN_MIN_WIDTH: f32 = 380.0;
+/// The template window's smallest size in points (T293): one column, a few rows and its buttons.
+pub const TEMPLATE_WINDOW_MIN: egui::Vec2 = egui::vec2(420.0, 360.0);
+/// The size in points the template window opens with in a large program window (T293): room for
+/// two columns, with the scroll bar and the spacing between the columns.
+pub const TEMPLATE_WINDOW_DEFAULT: egui::Vec2 =
+    egui::vec2(2.0 * TEMPLATE_COLUMN_MIN_WIDTH + 80.0, 760.0);
+/// The room in points kept free on each side of the template window when it opens (T293).
+pub const TEMPLATE_WINDOW_MARGIN: f32 = 24.0;
+
+/// The size the template window opens with in a program window `screen` points large (ADR 0017
+/// U13-Q13, T293): the program window less [`TEMPLATE_WINDOW_MARGIN`] on each side, between
+/// [`TEMPLATE_WINDOW_MIN`] and [`TEMPLATE_WINDOW_DEFAULT`], each side apart; never larger than the
+/// program window itself. The default is wide enough for two columns.
+pub fn template_window_size(screen: egui::Vec2) -> egui::Vec2 {
+    (screen - egui::Vec2::splat(2.0 * TEMPLATE_WINDOW_MARGIN))
+        .clamp(TEMPLATE_WINDOW_MIN, TEMPLATE_WINDOW_DEFAULT)
+        .min(screen)
+}
+
 /// The smallest saved window that is used at start, in points; a smaller one gives a maximized
 /// window.
 pub const MIN_START_SIZE: [u32; 2] = [400, 300];
@@ -667,6 +689,9 @@ pub enum Command {
     /// (File ▸ Reload Folder, F5 elsewhere than over the left column; ADR 0026 §3.1, F-Q1, T241).
     ReloadFolder,
     Import,
+    /// The template window opened (File ▸ Metadata Template…, no key; ADR 0017 U13, part U13c,
+    /// T293).
+    MetadataTemplate,
     CloseTab,
     Settings,
     Quit,
@@ -925,6 +950,7 @@ pub const MENUS: &[Menu] = &[
             item(Command::OpenFolder, ctrl(Key::O)),
             item(Command::ReloadFolder, plain(Key::F5)),
             item(Command::Import, ctrl(Key::I)),
+            item(Command::MetadataTemplate, None),
             item(Command::CloseTab, ctrl(Key::W)),
             MenuEntry::Separator,
             item(Command::Settings, None),
@@ -1536,6 +1562,76 @@ mod tests {
                 assert_ne!(menu_item.command, Command::ReloadFolder);
             }
         }
+    }
+
+    /// "Metadata Template…" is in the File menu right after "Import…", with no key (ADR 0017 U13,
+    /// part U13c, T293).
+    #[test]
+    fn metadata_template_follows_import_in_the_file_menu_without_a_key() {
+        let Some(file) = MENUS.iter().find(|menu| menu.kind == MenuKind::File) else {
+            panic!("there is a File menu");
+        };
+        let Some(import) = file
+            .entries
+            .iter()
+            .position(|entry| *entry == item(Command::Import, ctrl(Key::I)))
+        else {
+            panic!("there is Import… in the File menu");
+        };
+        assert_eq!(
+            file.entries.get(import + 1),
+            Some(&item(Command::MetadataTemplate, None))
+        );
+        assert_eq!(KeyAction::of_command(Command::MetadataTemplate), None);
+        assert_eq!(
+            menu_key(
+                MenuItem {
+                    command: Command::MetadataTemplate,
+                    key: None,
+                },
+                &KeyMap::default()
+            ),
+            None
+        );
+    }
+
+    /// A large program window gives the template window its default size, wide enough for two
+    /// columns (ADR 0017 U13-Q13, T293).
+    #[test]
+    fn the_template_window_opens_wide_enough_for_two_columns() {
+        let size = template_window_size(egui::vec2(1920.0, 1080.0));
+        assert_eq!(size, TEMPLATE_WINDOW_DEFAULT);
+        assert!(size.x >= 2.0 * TEMPLATE_COLUMN_MIN_WIDTH);
+        // Wider than the Settings window, whose cap gives one column.
+        const { assert!(SETTINGS_WINDOW_DEFAULT.x < 2.0 * TEMPLATE_COLUMN_MIN_WIDTH) };
+        // Exactly the default plus the margins.
+        assert_eq!(
+            template_window_size(TEMPLATE_WINDOW_DEFAULT + egui::Vec2::splat(48.0)),
+            size
+        );
+    }
+
+    /// A smaller program window gives the template window each side 2 × 24 points less, then its
+    /// minimum, and never more than the program window itself (T293).
+    #[test]
+    fn the_template_window_is_clamped_to_a_small_program_window() {
+        assert_eq!(
+            template_window_size(egui::vec2(700.0, 600.0)),
+            egui::vec2(652.0, 552.0)
+        );
+        assert_eq!(
+            template_window_size(egui::vec2(450.0, 380.0)),
+            TEMPLATE_WINDOW_MIN
+        );
+        assert_eq!(
+            template_window_size(egui::vec2(400.0, 300.0)),
+            egui::vec2(400.0, 300.0)
+        );
+        // Each side apart: a wide but low window keeps the default width.
+        assert_eq!(
+            template_window_size(egui::vec2(1920.0, 500.0)),
+            egui::vec2(TEMPLATE_WINDOW_DEFAULT.x, 452.0)
+        );
     }
 
     /// Buttons on Thumbnails is a check item of the View menu right after Full Screen, with no

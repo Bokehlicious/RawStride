@@ -13,6 +13,13 @@ Reorganised on 2026-11-21 (owner): the earlier file mixed these three kinds and 
 
 ## Waiting for a decision or an ADR
 
+- **Custom buttons in the template window's questions** (found at T293's review, 2026-11-23):
+  `rfd` is built without its `common-controls-v6` feature, so "Discard the changes to the
+  template?" and "{file} already exists. Replace it?" show OK and Cancel instead of Discard
+  / Replace and Cancel; both answers work. Turning the feature on changes `pw-loupe`'s
+  `Cargo.toml`, and the test binaries, which get no Common Controls 6 manifest, would then
+  import `TaskDialogIndirect` and fail at start as before T47. Needs the owner's decision
+  (keep OK/Cancel, or a task that turns it on and gives the tests the manifest).
 - **Swedish names for every IPTC property** (owner, 2026-11-12, after ADR 0007 D11): every
   property and structure field in T102's name table, so the Swedish info panel and editor show no
   English IPTC names. Today D11 names about 35 of them; the rest fall back to IPTC's English name.
