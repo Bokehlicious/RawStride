@@ -30,6 +30,7 @@ pub mod recycle;
 pub mod relocate;
 pub mod safe_write;
 pub mod template;
+pub mod template_file;
 #[cfg(test)]
 mod test_support;
 pub mod validate;

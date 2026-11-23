@@ -377,7 +377,7 @@ fn entry_count(value: &Value) -> usize {
 
 /// Checks that `value` fits `kind` and `occurrence` (ADR 0007 §3); for a structure, every field
 /// at any depth. `path` names the property, or the field as `property/field/…`.
-fn check_kind(
+pub(crate) fn check_kind(
     path: &str,
     kind: ValueKind,
     occurrence: Occurrence,

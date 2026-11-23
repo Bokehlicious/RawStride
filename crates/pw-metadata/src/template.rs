@@ -1,5 +1,7 @@
-//! The ingest template with the modes Keep, Replace, Append, Prefix and Clear (ADR 0007 §10, §8,
-//! §15; I9b, T88).
+//! The template applied to an image's metadata, with the modes Keep, Replace, Append, Prefix and
+//! Clear (ADR 0007 §10, §8, §15; I9b, T88): the ingest template's fields, and the metadata
+//! template file's fields through [`crate::template_file::TemplateFile::to_template`] (ADR 0017
+//! U13).
 //!
 //! A [`Template`] is a list of [`TemplateField`]s, each naming a property of the table by its XMP
 //! id (or one field of a single structure) with a [`Mode`] and a value. [`apply`] applies them to
@@ -25,9 +27,13 @@
 //! - **A field of a single structure** (`field`, e.g. `Iptc4xmpCore:CiEmailWork` of
 //!   `Iptc4xmpCore:CreatorContactInfo`): the mode is applied to that field of the structure's
 //!   current value (or of an empty one), and the whole structure is set; the other fields are
-//!   kept. Clearing the last field clears the property. A field of a **list** of structures
-//!   (Location Created, Image Creator, …) allows only Keep for now; it comes with the template
-//!   editor.
+//!   kept. Clearing the last field clears the property.
+//! - **A field of Location Created** (`Iptc4xmpExt:LocationCreated`, a list of structures; ADR
+//!   0017 U13-Q4): Replace sets the field in the **first entry** of the image's list, the entry's
+//!   other fields and every later entry kept; without a Location Created the result is a list of
+//!   one entry holding only that field. A field of any other list of structures (Location Shown,
+//!   Image Creator, …), and Append, Prefix or Clear on a field of Location Created, allow only
+//!   Keep.
 //! - **A result equal to the current value** ([`same_value`]) is not set, so a template that is
 //!   already in the file gives no change and an empty write plan.
 //! - The cardinality limits come from `set` (`ValueError::TooMany`).
@@ -46,6 +52,10 @@ const X_DEFAULT: &str = "x-default";
 
 /// The separator of Append and Prefix for a text or a Lang Alt (owner decision D5).
 const SEPARATOR: &str = " ";
+
+/// Location Created, the one list of structures whose fields a template can replace (in its first
+/// entry; ADR 0017 U13-Q4).
+pub(crate) const LOCATION_CREATED: &str = "Iptc4xmpExt:LocationCreated";
 
 /// The copyright-management properties of §8, which a template never clears.
 const COPYRIGHT_MANAGEMENT: &[&str] = &[
@@ -80,7 +90,8 @@ pub struct TemplateField {
     /// The XMP id of a property of the table.
     pub property: String,
     /// The XMP id of a field when `property` is a single structure (e.g.
-    /// `Iptc4xmpCore:CiEmailWork` of `Iptc4xmpCore:CreatorContactInfo`).
+    /// `Iptc4xmpCore:CiEmailWork` of `Iptc4xmpCore:CreatorContactInfo`), or Location Created
+    /// (e.g. `Iptc4xmpExt:City`, set in its first entry).
     pub field: Option<String>,
     pub mode: Mode,
     /// The value for Replace, Append and Prefix; ignored by Keep and Clear.
@@ -205,10 +216,13 @@ fn apply_sub_field(
         return Ok(());
     }
     if occurrence == Occurrence::Multi {
-        return Err(TemplateError::ModeNotAllowed {
-            property: path,
-            mode: field.mode,
-        });
+        if property != LOCATION_CREATED || field.mode != Mode::Replace {
+            return Err(TemplateError::ModeNotAllowed {
+                property: path,
+                mode: field.mode,
+            });
+        }
+        return replace_in_first_entry(field, sub, &path, struct_def, field_def, metadata);
     }
 
     let current = match metadata.get(property).map(|stored| &stored.value) {
@@ -257,13 +271,92 @@ fn apply_sub_field(
     else {
         return Ok(());
     };
-    let mut result = current.cloned().unwrap_or_default();
-    match result.fields.iter_mut().find(|(id, _)| id == sub) {
-        Some((_, value)) => *value = new_field,
-        None => result.fields.push((sub.to_string(), new_field)),
+    let result = Value::Struct(with_field(
+        current.cloned().unwrap_or_default(),
+        sub,
+        new_field,
+        struct_def,
+    ));
+    if current.is_some_and(|fields| Value::Struct(fields.clone()) == result) {
+        return Ok(());
     }
-    // Fields in the order of the structure, as the reader gives them, so a structure that is
-    // already in the file compares equal.
+    metadata.set(property, result)?;
+    Ok(())
+}
+
+/// Replace on a field of Location Created (`field.property`): the field is set in the first entry
+/// of the image's list, the entry's other fields and every later entry kept; without a list, a
+/// list of one entry holding only that field (ADR 0017 U13-Q4).
+fn replace_in_first_entry(
+    field: &TemplateField,
+    sub: &str,
+    path: &str,
+    struct_def: &properties::StructDef,
+    field_def: &properties::FieldDef,
+    metadata: &mut Metadata,
+) -> Result<(), TemplateError> {
+    let property = field.property.as_str();
+    let current = match metadata.get(property).map(|stored| &stored.value) {
+        Some(Value::StructList(list)) => Some(list),
+        _ => None,
+    };
+    let first = current.and_then(|list| list.first());
+    let current_field = first.and_then(|entry| {
+        entry
+            .fields
+            .iter()
+            .find(|(id, _)| id == sub)
+            .map(|(_, value)| value)
+    });
+    let Some(new_field) = combine(
+        path,
+        field_def.kind,
+        field_def.occurrence,
+        Mode::Replace,
+        current_field,
+        field.value.as_ref(),
+    )?
+    else {
+        return Ok(());
+    };
+    let entry = with_field(
+        first.cloned().unwrap_or_default(),
+        sub,
+        new_field,
+        struct_def,
+    );
+    let mut list = current.cloned().unwrap_or_default();
+    match list.first_mut() {
+        Some(old) => *old = entry,
+        None => list.push(entry),
+    }
+    let result = Value::StructList(list);
+    if current.is_some_and(|list| Value::StructList(list.clone()) == result) {
+        return Ok(());
+    }
+    metadata.set(property, result)?;
+    Ok(())
+}
+
+/// `fields` with the field `sub` set to `value` (replaced, or added), the fields in the order of
+/// the structure, as the reader gives them, so a structure that is already in the file compares
+/// equal.
+fn with_field(
+    mut fields: StructValue,
+    sub: &str,
+    value: Value,
+    struct_def: &properties::StructDef,
+) -> StructValue {
+    match fields.fields.iter_mut().find(|(id, _)| id == sub) {
+        Some((_, old)) => *old = value,
+        None => fields.fields.push((sub.to_string(), value)),
+    }
+    sort_fields(&mut fields, struct_def);
+    fields
+}
+
+/// Puts the fields of a structure value in the order of `struct_def` (an unknown field last).
+pub(crate) fn sort_fields(fields: &mut StructValue, struct_def: &properties::StructDef) {
     let position = |id: &str| {
         struct_def
             .fields
@@ -271,13 +364,7 @@ fn apply_sub_field(
             .position(|candidate| candidate.xmp_id == id)
             .unwrap_or(usize::MAX)
     };
-    result.fields.sort_by_key(|(id, _)| position(id));
-    let result = Value::Struct(result);
-    if current.is_some_and(|fields| Value::Struct(fields.clone()) == result) {
-        return Ok(());
-    }
-    metadata.set(property, result)?;
-    Ok(())
+    fields.fields.sort_by_key(|(id, _)| position(id));
 }
 
 /// The value `mode` makes of `current` and the template's `new` value for a property or field of
@@ -426,7 +513,7 @@ fn is_blank(text: &str) -> bool {
 
 /// False for a value without content: a blank text, a list or Lang Alt whose entries are all
 /// blank, a structure whose fields are all without content (at any depth).
-fn has_content(value: &Value) -> bool {
+pub(crate) fn has_content(value: &Value) -> bool {
     match value {
         Value::Text(text) | Value::Number(text) => !is_blank(text),
         Value::LangAlt(lang_alt) => lang_alt.entries().iter().any(|(_, text)| !is_blank(text)),
@@ -973,7 +1060,8 @@ mod tests {
             apply(&template(vec![creator_name(Mode::Keep)]), &mut metadata),
             Ok(())
         );
-        // The same for Location Created, which is not a copyright-management property.
+        // Clear on a field of Location Created, which is not a copyright-management property, is
+        // not allowed either (Replace on it is, `a_field_of_location_created_is_replaced_in_its_first_entry`).
         assert_eq!(
             apply(
                 &template(vec![sub_field(
@@ -987,6 +1075,123 @@ mod tests {
             Err(TemplateError::ModeNotAllowed {
                 property: "Iptc4xmpExt:LocationCreated/Iptc4xmpExt:City".to_string(),
                 mode: Mode::Clear
+            })
+        );
+        assert!(changed(&metadata).is_empty());
+    }
+
+    // --- A field of Location Created (ADR 0017 U13-Q4, T284) ---
+
+    const LOCATION: &str = "Iptc4xmpExt:LocationCreated";
+    const CITY: &str = "Iptc4xmpExt:City";
+    const SUBLOCATION: &str = "Iptc4xmpExt:Sublocation";
+
+    fn entry(fields: &[(&str, Value)]) -> StructValue {
+        StructValue {
+            fields: fields
+                .iter()
+                .map(|(id, value)| (id.to_string(), value.clone()))
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn a_field_of_location_created_is_replaced_in_its_first_entry() {
+        let mut metadata = read(&[(
+            LOCATION,
+            Value::StructList(vec![
+                entry(&[(SUBLOCATION, text("Hamnen")), (CITY, text("Göteborg"))]),
+                entry(&[(CITY, text("Malmö"))]),
+            ]),
+        )]);
+        assert_eq!(
+            after(
+                &mut metadata,
+                sub_field(LOCATION, CITY, Mode::Replace, Some(text("Lund")))
+            ),
+            Some(Value::StructList(vec![
+                entry(&[(SUBLOCATION, text("Hamnen")), (CITY, text("Lund"))]),
+                entry(&[(CITY, text("Malmö"))]),
+            ]))
+        );
+        assert_eq!(changed(&metadata), [LOCATION]);
+    }
+
+    #[test]
+    fn a_field_of_location_created_without_one_gives_one_entry() {
+        let mut metadata = Metadata::new();
+        assert_eq!(
+            after(
+                &mut metadata,
+                sub_field(LOCATION, CITY, Mode::Replace, Some(text("Lund")))
+            ),
+            Some(Value::StructList(vec![entry(&[(CITY, text("Lund"))])]))
+        );
+    }
+
+    #[test]
+    fn a_field_of_location_created_equal_or_without_content_changes_nothing() {
+        // The image's entry with its fields in the structure's order (Sublocation before City),
+        // so the sorted result is equal.
+        let location = || {
+            read(&[(
+                LOCATION,
+                Value::StructList(vec![entry(&[
+                    (SUBLOCATION, text("Hamnen")),
+                    (CITY, text("Lund")),
+                ])]),
+            )])
+        };
+        for value in [Some(text("Lund")), Some(text("  ")), None] {
+            let mut metadata = location();
+            assert_eq!(
+                apply(
+                    &template(vec![sub_field(
+                        LOCATION,
+                        CITY,
+                        Mode::Replace,
+                        value.clone()
+                    )]),
+                    &mut metadata
+                ),
+                Ok(()),
+                "{value:?}"
+            );
+            assert!(changed(&metadata).is_empty(), "{value:?}");
+            assert_eq!(metadata, location(), "{value:?}");
+        }
+    }
+
+    #[test]
+    fn only_replace_on_a_field_of_location_created_is_allowed() {
+        for mode in [Mode::Append, Mode::Prefix, Mode::Clear] {
+            let mut metadata = Metadata::new();
+            assert_eq!(
+                apply(
+                    &template(vec![sub_field(LOCATION, CITY, mode, Some(text("Lund")))]),
+                    &mut metadata
+                ),
+                Err(TemplateError::ModeNotAllowed {
+                    property: format!("{LOCATION}/{CITY}"),
+                    mode
+                }),
+                "{mode:?}"
+            );
+        }
+        let mut metadata = Metadata::new();
+        assert_eq!(
+            apply(
+                &template(vec![sub_field(
+                    "Iptc4xmpExt:LocationShown",
+                    CITY,
+                    Mode::Replace,
+                    Some(text("Lund"))
+                )]),
+                &mut metadata
+            ),
+            Err(TemplateError::ModeNotAllowed {
+                property: format!("Iptc4xmpExt:LocationShown/{CITY}"),
+                mode: Mode::Replace
             })
         );
         assert!(changed(&metadata).is_empty());

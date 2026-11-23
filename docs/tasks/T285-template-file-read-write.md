@@ -1,4 +1,4 @@
-# T285. Reading and saving a template file with ExifTool — Blocked: waits for T284
+# T285. Reading and saving a template file with ExifTool — Open
 
 - **Why:** ADR 0017 U13, part U13a (U13-Q1, Q2, Q4, Q12; ADR 0007 §10, §17.1, revision 34). A
   template is saved as a **plain XMP file** with only standard values, plus **one RawStride
@@ -166,3 +166,4 @@
 | 2026-11-23 | Blocked | Cold read: the read adds `-ExifTool:Error` and `-File:FileType` and refuses a file that is not XMP; `XmpRead`'s fields made `pub(crate)`; error variants for `ValueError` and `PlanError`; a value `Metadata::set` refuses goes to `unreadable`; `FileState` spelled out; the write counts only with one file created and no warning; numbers compared as numbers in the read-back check (a GPS latitude in the round trip); test helpers with `-config` spelled out; a config path outside the code page left to U13c |
 | 2026-11-23 | Blocked | The owner approved the namespace as proposed (asked whether the address matters if the repository moves: no, it is a name only); recorded in ADR 0007 §10. Waits for T284 |
 | 2026-11-23 | Blocked | Chain review (with T284): the new file goes to a `.saving` subfolder with a name of its own (two saves at once, a crash leftover not listed as a template); every failure removes it; a locked target is the error; `set` only a check when reading; `TemplateRead::dropped` names what `new` dropped as a whole; round trip with a variable in a structure field and a date with a time zone. T284 got: `in_template` as the window's explicit list, blank entries and duplicates dropped from lists, `check_kind` used |
+| 2026-11-23 | Open | T284 done (reviewer, 2026-11-23); `TemplateFile::new` also drops a list of structures over its limit (ADR 0017 U13-Q5) |

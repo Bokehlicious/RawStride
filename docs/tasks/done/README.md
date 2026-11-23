@@ -290,4 +290,5 @@ was when the task was done, so "this file", "below" and "the Log" in T1–T115 m
 | [T282](T282-code-of-conduct-and-pr-template.md) | A code of conduct and a pull request template (docs, `.github/`) |
 | [T281](T281-keyboard-shortcuts-page.md) | The Settings page Keyboard Shortcuts and the companion suffixes' field (pw-loupe) |
 | [T283](T283-larger-settings-window.md) | A larger Settings window, in the middle of the program's window (pw-loupe) |
+| [T284](T284-template-file-model.md) | The template file's model: checked fields, the + box, Location Created's sub-fields (pw-metadata) |
 | [T286](T286-keyboard-shortcuts-table.md) | The page Keyboard Shortcuts as a table of three columns, the Action column's width saved (pw-loupe) |
