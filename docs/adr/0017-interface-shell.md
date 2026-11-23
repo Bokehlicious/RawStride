@@ -749,6 +749,7 @@ reviewer's proposal in each of the three questions asked.
 | U13-Q17 | (owner, 2026-11-23, U13c) Edit… in the import dialog? | With no template chosen it opens an empty template window; a **Save…** in a window opened from the import dialog makes the saved file the import's template (T295) |
 | U13-Q18 | (owner, 2026-11-23, U13c) The import's old six fields? | They were never kept in `settings.txt` (only while the program runs), so nothing is converted; they go with their modes and the "Clear fields?" question. The chosen template file is kept as `import_template` in `settings.txt` (T294, T295) |
 | U13-Q19 | (owner, 2026-11-23, U13c) The notices of the import's template writes? | Listed in the import's summary as normal lines, at most ten (a list with qualifiers kept, a text cut in IIM), so a change that is not written is never dropped without a word (T294) |
+| U13-Q20 | (owner, 2026-11-23, U13c's hand check) Choose… in the import dialog? | **Choose… also opens the template window.** A file chosen in the open dialog becomes the import's template, as before, and the template window then opens with that file loaded, as Edit… does (opened from the import dialog, so a Save… there makes the saved file the import's template, U13-Q17); the user sees at once what the template holds. Closing the window without a save keeps the file chosen; cancelling the open dialog changes nothing and opens no window. Edit… and None are unchanged (T297) |
 
 ## 7. Steps
 
