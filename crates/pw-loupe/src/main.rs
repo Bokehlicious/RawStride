@@ -18,6 +18,7 @@ use inspector::{ExifInspector, ExifReader, ExifShown, exif_state_text};
 use inspector_text::{InspectorText, exif_label, inspector_text};
 use metadata::{
     DeleteAnswer, EditorEvent, InspectorState, MetadataCache, MetadataSubmit, MoveAnswer,
+    StatusLine,
 };
 use pw_imagecheck::RawImageCheck;
 use pw_loupe::SavedLibrary;
@@ -362,9 +363,10 @@ enum EditorStatus {
     Idle,
     /// "Sparat." and the notice texts of the write.
     Saved(Vec<String>),
-    /// The summary of "Apply to All Marked" (U12c-Q6, T126), each line as `BatchSummary::lines`
-    /// gives it, and a failed read after the batch.
-    Batch(Vec<String>),
+    /// The summary of "Apply to All Marked" (U12c-Q6, T126), each line as
+    /// `BatchSummary::status_lines` gives it, and a failed read after the batch; the lines marked
+    /// as errors are drawn in the error colour (T290).
+    Batch(Vec<StatusLine>),
     /// A failed write, or a failed read after a write; the whole text.
     Failed(String),
 }
@@ -648,7 +650,10 @@ impl MetadataWindow {
                     // After a batch the summary stays, with the read's error under it.
                     Err(error) => match &mut self.status {
                         EditorStatus::Batch(lines) => {
-                            lines.push(panel_text(&PanelText::ReadError(error)));
+                            lines.push(StatusLine {
+                                text: panel_text(&PanelText::ReadError(error)),
+                                error: true,
+                            });
                         }
                         _ => {
                             self.status =
@@ -667,7 +672,7 @@ impl MetadataWindow {
                 } else {
                     self.written.clear();
                 }
-                self.status = EditorStatus::Batch(summary.lines());
+                self.status = EditorStatus::Batch(summary.status_lines());
                 self.expect_reload = true;
             }
             EditorEvent::Saved { .. }
@@ -4230,7 +4235,13 @@ impl Loupe {
                             }
                             EditorStatus::Batch(lines) => {
                                 for line in lines {
-                                    ui.label(line);
+                                    if line.error {
+                                        ui.label(
+                                            egui::RichText::new(&line.text).color(error_color),
+                                        );
+                                    } else {
+                                        ui.label(&line.text);
+                                    }
                                 }
                             }
                             EditorStatus::Failed(message) => {
@@ -11459,6 +11470,57 @@ mod tests {
     use pw_loupe::{TEXT_CONTRAST, contrast_ratio};
     use pw_metadata::iim::Fallback;
     use std::path::{Path, PathBuf};
+
+    // --- The failed images of a batch are marked as errors (T290) ---
+
+    mod batch_failures_in_error_colour {
+        use super::super::metadata::{BatchSummary, StatusLine};
+        use super::super::{EditorEvent, EditorStatus, MetadataWindow};
+        use pw_loupe::{PanelText, panel_text};
+        use std::path::PathBuf;
+
+        #[test]
+        fn a_failed_image_and_a_failed_read_after_the_batch_are_error_lines() {
+            let path = PathBuf::from("pw-loupe-batch-a.jpg");
+            let marked = vec![path.clone(), PathBuf::from("pw-loupe-batch-b.ARW")];
+            let mut window = MetadataWindow::new(path.clone(), marked);
+            let failure = "Could not save metadata for pw-loupe-batch-b.ARW: the file is read-only"
+                .to_owned();
+            let summary = BatchSummary {
+                written: 1,
+                total: 2,
+                failed: vec![failure.clone()],
+                kept: Vec::new(),
+                notices: Vec::new(),
+            };
+            assert_eq!(window.apply(EditorEvent::BatchDone(summary)), None);
+            let mut expected = vec![
+                StatusLine {
+                    text: "Written to 1 of 2 images.".to_owned(),
+                    error: false,
+                },
+                StatusLine {
+                    text: failure,
+                    error: true,
+                },
+            ];
+            assert_eq!(window.status, EditorStatus::Batch(expected.clone()));
+
+            let error = "the file could not be read".to_owned();
+            assert_eq!(
+                window.apply(EditorEvent::Reloaded {
+                    path,
+                    result: Err(error.clone()),
+                }),
+                None
+            );
+            expected.push(StatusLine {
+                text: panel_text(&PanelText::ReadError(error)),
+                error: true,
+            });
+            assert_eq!(window.status, EditorStatus::Batch(expected));
+        }
+    }
 
     // --- A metadata write waits for the inspector's histogram read (U7c-Q4, T144) ---
 

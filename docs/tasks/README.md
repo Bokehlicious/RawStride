@@ -87,7 +87,6 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status |
 |---|---|---|
-| [T290](T290-batch-failures-in-error-colour.md) | The failed images of "Apply to {n} Marked" shown in the error colour | Open |
 
 ## Writing a task (owner and reviewer)
 

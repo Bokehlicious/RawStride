@@ -229,18 +229,40 @@ pub(crate) struct BatchSummary {
     pub notices: Vec<WriteNotice>,
 }
 
+/// A line of the metadata window's status and whether it is drawn in the error colour (T290).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct StatusLine {
+    pub text: String,
+    pub error: bool,
+}
+
 impl BatchSummary {
     /// The lines the window shows: the written count, the failed files, every notice of the other
-    /// images, then the window's image's notices.
+    /// images, then the window's image's notices. The window draws `status_lines`; the tests
+    /// still use this one.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn lines(&self) -> Vec<String> {
+        self.status_lines()
+            .into_iter()
+            .map(|line| line.text)
+            .collect()
+    }
+
+    /// The lines of `lines` in the same order, each failed file marked as an error (T290).
+    pub fn status_lines(&self) -> Vec<StatusLine> {
+        let line = |text: String, error: bool| StatusLine { text, error };
         let written = editor_text(&EditorText::BatchWritten {
             written: self.written,
             total: self.total,
         });
-        std::iter::once(written)
-            .chain(self.failed.iter().cloned())
-            .chain(self.kept.iter().cloned())
-            .chain(self.notices.iter().map(notice_text))
+        std::iter::once(line(written, false))
+            .chain(self.failed.iter().map(|text| line(text.clone(), true)))
+            .chain(self.kept.iter().map(|text| line(text.clone(), false)))
+            .chain(
+                self.notices
+                    .iter()
+                    .map(|notice| line(notice_text(notice), false)),
+            )
             .collect()
     }
 }
@@ -4298,6 +4320,44 @@ mod tests {
             field: None,
             value: pw_metadata::value::Value::Text("Hav".to_owned()),
         }]
+    }
+
+    // T290: the window draws the failed images of a batch in the error colour.
+    #[test]
+    fn the_status_lines_of_a_batch_mark_only_the_failures_as_errors() {
+        let summary = BatchSummary {
+            written: 1,
+            total: 2,
+            failed: vec![
+                "Could not save metadata for pw-loupe-batch-b.ARW: the file is read-only"
+                    .to_owned(),
+            ],
+            kept: vec![
+                "Unresolved conflict kept: pw-loupe-batch-c.DNG (City)".to_owned(),
+                "No new IIM checksum written: pw-loupe-batch-c.DNG".to_owned(),
+            ],
+            notices: vec![WriteNotice::IimConvertedToUtf8],
+        };
+        let lines = summary.status_lines();
+        assert_eq!(
+            lines
+                .iter()
+                .map(|line| line.text.clone())
+                .collect::<Vec<_>>(),
+            summary.lines()
+        );
+        assert_eq!(
+            lines.iter().map(|line| line.error).collect::<Vec<_>>(),
+            [false, true, false, false, false]
+        );
+        assert_eq!(
+            lines.get(1),
+            Some(&StatusLine {
+                text: "Could not save metadata for pw-loupe-batch-b.ARW: the file is read-only"
+                    .to_owned(),
+                error: true,
+            })
+        );
     }
 
     /// The three images of a batch: the window's JPEG, an ARW and a DNG.
