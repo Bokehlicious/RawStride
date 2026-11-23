@@ -87,10 +87,16 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status |
 |---|---|---|
+| [T291](T291-template-form-model.md) | The template window's form in plain Rust | Blocked |
+| [T292](T292-template-file-thread.md) | Reading and saving template files on a thread of their own | Blocked |
+| [T293](T293-template-window.md) | The template window | Blocked |
+| [T294](T294-import-applies-template-file.md) | The import writes a template file instead of its six fields | Blocked |
+| [T295](T295-import-template-row.md) | The import dialog's Metadata Template row | Blocked |
+| [T296](T296-remove-ingest-template-modes.md) | The ingest template's modes removed from pw-metadata | Blocked |
 
 ## Writing a task (owner and reviewer)
 
-- **Number:** the next free number after the highest in this folder and `done/` (T291 next).
+- **Number:** the next free number after the highest in this folder and `done/` (T297 next).
 - **File:** `docs/tasks/T246-<a-few-words>.md`; three digits, lower case, words joined by `-`.
 - **Index:** add a row to "Open tasks" above and keep its status in step with the file's heading.
 - **Size (owner, 2026-11-15, after T142):** one task is one layer (a C++ shim or a core crate, or
