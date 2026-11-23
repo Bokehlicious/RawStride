@@ -9,6 +9,15 @@ Downloads are on the [Releases page](https://github.com/Bokehlicious/RawStride/r
 
 ## [Unreleased]
 
+### Added
+
+- Text fields in the metadata window can hold variables that become each image's own value when
+  it is saved: `{date}`, `{year}`, `{month}`, `{day}`, `{time}` (from the capture time), `{make}`,
+  `{model}`, `{name}` (the file name without its extension) and `{folder}`. Headline
+  `{date} {name}` applied to many marked images gives each its own date and name. Write `{{` or
+  `}}` for a brace. An unknown variable is shown as an error before anything is saved; an image
+  without a capture time is not saved when a date variable is used, while the others are.
+
 ### Changed
 
 - The Settings page Keyboard Shortcuts is a table with the columns Action, First Key and Second

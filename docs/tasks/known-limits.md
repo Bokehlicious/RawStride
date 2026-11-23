@@ -97,6 +97,10 @@ dropped is removed; git history and `done/` keep it.
 
 - **Variables: a Lang Alt inside a structure is not cleaned** (T288's review, owner 2026-11-23): a Lang Alt sub-field (Location Shown's Location Name, for example) whose `x-default` fills to nothing while another language has text keeps an empty `x-default` beside that language, and is written so. The metadata window's own Lang Alt fields send only `x-default`, so they are not affected (an empty one is no change). A task only if it is seen in use.
 
+- **Variables: the §11 warnings count an escaped text** (T289, 2026-11-23): the metadata window's warnings look at the form's edits, where a text read from the file has its braces doubled (`variables::escape`), so an IIM length warning counts a keyword `{x}` from the file as the five bytes of `{{x}}`, and a typed text with its variables (`{date}`, not the date). A task only if a wrong warning is seen in use.
+
+- **Variables: another program's brace in pasted text** (T289's review, 2026-11-23, ADR 0017 U13-Q9 amended): Paste All Fields counts as typing, for fields and for a structure list's shown sub-fields, so a text with another program's `{x}` copied and pasted is a variable error until it is written `{{x}}`. A text read from the file and left unchanged is kept as it is.
+
 ## Moves to `_rejected` and `_picked`
 
 - **`relocate::companions`** (`/code-review` of T169, 2026-11-17; the moves are Windows only;

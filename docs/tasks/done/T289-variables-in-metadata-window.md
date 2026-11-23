@@ -1,4 +1,4 @@
-# T289. The metadata window checks the variables before Save — Open
+# T289. The metadata window checks the variables before Save — Done
 
 - **Why:** ADR 0017 U13, part U13b (U13-Q9). After T288 the variables (`{date}`, `{name}` …) in
   the metadata window's text fields are filled with each image's own values when it is written,
@@ -81,6 +81,39 @@
     entry changed to City `{folder}` gives a `Set` with `{{x}}` in the first and `{folder}` in
     the second, and a Lang Alt sub-field's other language with a brace escaped too;
   - recent values: after a save of Headline `{date}`, the recent values hold `{date}`.
+- **Review fix (owner, 2026-11-23; ADR 0017 U13-Q9 amended): Paste All Fields counts as typing
+  also for a structure list.** Found in the review: `paste_shown` makes each pasted entry a
+  `ListEntry::of` the copied structure, so the pasted texts are the entry's **base**: they count
+  as unchanged, are never checked, and `ListEntry::written` escapes them. A City `{folder}` typed
+  on one image, copied with Copy All Fields (which copies unsaved edits) and pasted on another, is
+  then written as the literal text `{folder}`, while a pasted Headline `{date}` is filled. Fix, in
+  `editor.rs` only:
+  1. A pasted entry remembers that it was pasted (for example a `pasted: bool` on `ListEntry`, set
+     by `paste_shown`; `ListEntry::of` and `add_entry` leave it false; it stays for the entry until
+     the form is made anew from a read).
+  2. In a pasted entry every shown sub-field of kind `Text`, `List` or `LangAlt` whose text is not
+     empty counts as typed: `ListEntry::error` checks it with `variables::check` whether or not
+     it differs from the base (so `list_error`, `has_error`, `lists_with_errors` and `edits()`
+     give the error at once after the paste), and `ListEntry::written` keeps its text as it is
+     (not escaped), so T288 fills it. For a `LangAlt` sub-field that is its `x-default` text (the
+     text the form shows); its other languages stay escaped.
+  3. Everything else of a pasted entry's base is escaped as for any entry: the sub-fields the form
+     does not show, the other languages of a Lang Alt sub-field, and every text of a `Date`,
+     `Choice` or nested value as point 4 says. `Date` and `Choice` sub-fields are not checked.
+  4. `ListEntry::value` (the comparison with the start, Copy All Fields) is unchanged, so a copy of
+     a form with a pasted list copies the texts as shown (unescaped), and pasting that again
+     behaves the same.
+  5. The comments of `paste_shown`, `ListEntry::error`, `ListEntry::written` and `list_edit` say
+     this.
+
+  **Tests to add for the fix** (unit tests in `editor.rs`): a form whose Location Shown entry's
+  City is typed as `{folder}`, copied with `copy` and pasted into a second form with `paste`: the
+  second form's `edits()` give a `Set` of Location Shown with City `{folder}` (not `{{folder}}`);
+  the same with City `{job}`: `list_error` gives the `Unknown` text at once after the paste and
+  `edits()` is `Err`; a pasted entry whose copied structure holds a sub-field the form does not
+  show with `{x}` and a Lang Alt sub-field with `sv` `{Anna}` writes `{{x}}` and `{{Anna}}`, and
+  its shown `x-default` as pasted; an entry read from the file (not pasted) with City `{x}` is
+  still escaped and gives no error (the existing tests may show this).
 - **Not in this task:** filling the variables (T288); a list of the variables shown in the window
   (U13-Q9 asks for none; the error text of point 1 names them); the template window (U13c); the
   §11 warnings, which still look at the text with its variables (an IIM length warning counts
@@ -104,3 +137,7 @@
 | 2026-11-23 | Blocked | Cold read: when the errors show (after Save is refused; a sub-field's at once); the choice-list test done in the check itself; Contact Info sub-fields checked; a list field's whole text checked; values written but not changed by the user (a chosen conflict value, unchanged list entries, unchanged parts of a structure list) named as an accepted limit for `known-limits.md` at Done; the "only a date" comments updated; the test's Caption replaced by Title, Location Shown's City spelled out, tests for an added entry, Contact Info and a choice list |
 | 2026-11-23 | Blocked | Chain review (T287–T289): texts the user did not type are escaped with `variables::escape` (point 4: unchanged list entries, a chosen conflict value, the unchanged parts of a structure list), so a brace from another program never fails a write and the accepted limit of the cold read is gone; only typed list entries checked; recent values keep the typed text (point 6); `docs/glossary.md` listed in case; tests for escaping; the hand check looks at the form after a batch with a failure and needs a JPEG without DateTimeOriginal |
 | 2026-11-23 | Open | T288 done (`apply_template_file_safely`, `EditError::Variable`, `TemplateFile::check_variables` as specified) |
+| 2026-11-23 | Ready for review | `editor.rs`: `variable_error_text` (four texts); `field_edit` takes the start text and checks text, Lang Alt and list fields that are not choice lists with `variables::check` (only a list field's typed entries; its start entries escaped); `ListEntry::error` checks changed text, list and Lang Alt sub-fields; `ListEntry::written` (the base escaped, changed sub-fields as typed) used for a structure list's `Set`, `value` kept for the comparison; a chosen conflict value escaped (`escaped_value`, `escaped_struct`); comments of `ListEntry::error`, `list_error`, `list_edit`, `edits` and `written_values` updated. 12 unit tests; test inventory (pw-loupe 1308 → 1320, totals 2459 passed, 78 ignored). Glossary not changed ("Variables", "Capture Time" there). Noted, not changed: the §11 warnings use `collect`'s edits, so an escaped text is counted with its doubled braces (an IIM length warning counts a keyword `{x}` from the file as the five bytes of `{{x}}`); a pasted text counts as typed, so another program's `{x}` copied from one image and pasted is a variable error. check.ps1 all OK, no clippy warnings |
+| 2026-11-23 | Open | Review: points 1–6 match the task, check.ps1 run again by the reviewer (2459 passed, 78 ignored, no clippy warnings). One finding: a structure list pasted with Paste All Fields becomes the entries' base, so its variables are escaped (written as literal text) and never checked, while pasted fields are filled. The owner chose to fix it in this task (2026-11-23, ADR 0017 U13-Q9 amended): the "Review fix" section above. Kept for `known-limits.md` at Done: the §11 warnings count an escaped text with its doubled braces; a pasted field's text counts as typed, so another program's `{x}` pasted is a variable error |
+| 2026-11-23 | Ready for review | Review fix done in `editor.rs`: `ListEntry` has `pasted` (false from `ListEntry::of`, so also for `add_entry` and a read; true from the new `ListEntry::pasted`, which `paste_shown` uses); `ListEntry::typed` (a pasted entry's shown text, list or Lang Alt sub-field with a text that is not empty); `ListEntry::error` checks such a sub-field even when equal to its base; `ListEntry::build` writes it from its text when escaping (a Lang Alt's `x-default` as pasted, other languages escaped); `ListEntry::value` unchanged; comments of `paste_shown`, `ListEntry::error`, `ListEntry::written` and `list_edit` updated. 3 unit tests (the hidden sub-field is Person Characteristics, as the property table refuses an unknown sub-field of Person Shown with Details); the entry read with City `{x}` is the existing escaping test, and the Lang Alt test also checks a read entry has no error. Test inventory (pw-loupe 1320 → 1323, totals 2462 passed, 78 ignored). Note: as a pasted entry counts as typed, copy and paste of a list with another program's `{x}` on the same form is now a variable error (the same as for a pasted field). check.ps1 all OK, no clippy warnings |
+| 2026-11-23 | Done | Reviewed again: the review fix matches its section (a pasted entry's shown text, list and Lang Alt sub-fields checked at once and written to be filled, the rest of its base escaped, `ListEntry::value` unchanged). check.ps1 run again by the reviewer, all OK (2462 passed, 78 ignored), no clippy warnings. Two known limits added to `known-limits.md`: the §11 warnings count an escaped text, and another program's brace in pasted text is a variable error. CHANGELOG line for the variables (Added). The owner's hand check of U13b follows; its points are in `plans/adr-0018-0025-steps.md`. ADR 0017 U13-Q9's amendment committed on its own (469383f) |

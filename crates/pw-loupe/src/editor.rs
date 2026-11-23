@@ -36,6 +36,7 @@ use pw_metadata::read::MetadataRead;
 use pw_metadata::reconcile::FileKind;
 use pw_metadata::validate::{Warning, validate};
 use pw_metadata::value::{Conflict, ConflictRule, LangAlt, StructValue, Value};
+use pw_metadata::variables::{self, VariableError};
 use pw_metadata::vocabulary;
 use pw_metadata::write_plan::WriteNotice;
 use pw_metadata::{MIN_EXIFTOOL_VERSION, Rating};
@@ -560,6 +561,63 @@ fn date_error_text() -> String {
         .to_string()
 }
 
+/// The error of a text whose variables cannot be read (ADR 0017 U13-Q9, T289): an unknown name, a
+/// `{` that is not closed or a `}` that is not opened; a field's or a structure list's sub-field's
+/// error, found before anything is written. `NoCaptureTime` is found only when an image is written
+/// (T288), but has a text too.
+fn variable_error_text(error: &VariableError) -> String {
+    match error {
+        VariableError::Unknown(name) => format!(
+            "{{{name}}} is not a variable. Variables: {{date}} {{year}} {{month}} {{day}} {{time}} \
+             {{make}} {{model}} {{name}} {{folder}}. Write {{{{ or }}}} for a brace."
+        ),
+        VariableError::Unclosed(_) => "A { is not closed. Write {{ for a brace.".to_string(),
+        VariableError::UnexpectedClose => "A } is not opened. Write }} for a brace.".to_string(),
+        VariableError::NoCaptureTime(name) => {
+            format!("The image has no capture time for {{{name}}}.")
+        }
+    }
+}
+
+/// `value` with every text escaped ([`variables::escape`], T289): a text, every language of a
+/// Lang Alt, every list entry and every field of a structure at any depth; dates and numbers are
+/// not texts and stay as they are. For a value the user did not type (a chosen conflict value, the
+/// unchanged parts of a structure list), so T288's filling gives it back exactly.
+fn escaped_value(value: &Value) -> Value {
+    match value {
+        Value::Text(text) => Value::Text(variables::escape(text)),
+        Value::LangAlt(lang_alt) => Value::LangAlt(LangAlt::from_entries(
+            lang_alt
+                .entries()
+                .iter()
+                .map(|(language, text)| (language.clone(), variables::escape(text)))
+                .collect(),
+        )),
+        Value::List(entries) => Value::List(
+            entries
+                .iter()
+                .map(|entry| variables::escape(entry))
+                .collect(),
+        ),
+        Value::Date(_) | Value::Number(_) => value.clone(),
+        Value::Struct(structure) => Value::Struct(escaped_struct(structure)),
+        Value::StructList(entries) => {
+            Value::StructList(entries.iter().map(escaped_struct).collect())
+        }
+    }
+}
+
+/// [`escaped_value`] on every field of a structure.
+fn escaped_struct(structure: &StructValue) -> StructValue {
+    StructValue {
+        fields: structure
+            .fields
+            .iter()
+            .map(|(id, value)| (id.clone(), escaped_value(value)))
+            .collect(),
+    }
+}
+
 /// One field of the form.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct FieldState {
@@ -939,10 +997,15 @@ struct ListEntry {
     texts: Vec<String>,
     /// The entry as read, pasted or copied; empty for an added entry.
     base: StructValue,
+    /// True for an entry put in by "Paste All Fields" (ADR 0017 U13-Q9 amended, T289's review
+    /// fix): its shown text, list and Lang Alt sub-fields count as typed
+    /// ([`ListEntry::typed`]). Kept until the form is made anew from a read.
+    pasted: bool,
 }
 
 impl ListEntry {
-    /// The entry of the structure `base`: each shown sub-field's text as the form shows it.
+    /// The entry of the structure `base`: each shown sub-field's text as the form shows it; not
+    /// pasted.
     fn of(spec: &'static ListSpec, base: &StructValue) -> ListEntry {
         ListEntry {
             spec,
@@ -952,22 +1015,56 @@ impl ListEntry {
                 .map(|field| sub_field_text(base, field))
                 .collect(),
             base: base.clone(),
+            pasted: false,
         }
     }
 
-    /// The error of the sub-field `field` (U11c-Q4, T143): a date sub-field whose text was
-    /// changed and is not an IPTC date gives the error of the form's Date Created; `None` for
-    /// every other sub-field and text.
-    fn error(&self, field: &str) -> Option<String> {
-        if sub_field_kind(self.spec.property, field) != SubFieldKind::Date {
-            return None;
+    /// The entry of the pasted structure `base` ([`EditorForm::paste_shown`]).
+    fn pasted(spec: &'static ListSpec, base: &StructValue) -> ListEntry {
+        ListEntry {
+            pasted: true,
+            ..ListEntry::of(spec, base)
         }
+    }
+
+    /// True when the sub-field `field` with the text `text` counts as typed by the user whether
+    /// or not it differs from the base (T289's review fix): a shown text, list or Lang Alt
+    /// sub-field of a pasted entry whose text is not empty. It is then checked
+    /// ([`ListEntry::error`]) and written as it is ([`ListEntry::written`]), so T288 fills its
+    /// variables.
+    fn typed(&self, field: &str, text: &str) -> bool {
+        self.pasted
+            && !text.trim().is_empty()
+            && matches!(
+                sub_field_kind(self.spec.property, field),
+                SubFieldKind::Text | SubFieldKind::List | SubFieldKind::LangAlt
+            )
+    }
+
+    /// The error of the sub-field `field`, only for a text that was changed (an unchanged text
+    /// never has one, except one that counts as typed in a pasted entry, [`ListEntry::typed`])
+    /// and is not empty: a date sub-field that is not an IPTC date gives the error of the form's
+    /// Date Created (U11c-Q4, T143); a text, list or Lang Alt sub-field that
+    /// [`variables::check`] refuses gives [`variable_error_text`] (U13-Q9, T289). `None` for a
+    /// choice and for every other text.
+    fn error(&self, field: &str) -> Option<String> {
         let index = self.spec.fields.iter().position(|id| *id == field)?;
         let text = self.texts.get(index)?;
-        let unchanged = sub_field_text(&self.base, field) == *text;
-        let wrong =
-            !unchanged && !text.trim().is_empty() && IptcDate::parse_xmp(text.trim()).is_err();
-        wrong.then(date_error_text)
+        let unchanged = sub_field_text(&self.base, field) == *text && !self.typed(field, text);
+        if unchanged || text.trim().is_empty() {
+            return None;
+        }
+        match sub_field_kind(self.spec.property, field) {
+            SubFieldKind::Date => IptcDate::parse_xmp(text.trim())
+                .is_err()
+                .then(date_error_text),
+            SubFieldKind::Text | SubFieldKind::List | SubFieldKind::LangAlt => {
+                variables::check(text)
+                    .err()
+                    .map(|error| variable_error_text(&error))
+            }
+            SubFieldKind::Choice => None,
+        }
     }
 
     /// True when a shown sub-field of the entry has an error ([`ListEntry::error`]).
@@ -985,13 +1082,37 @@ impl ListEntry {
     /// and the list gives no edit while it has one, T143). `None` when no sub-field is left
     /// (U11a-Q3).
     fn value(&self) -> Option<StructValue> {
-        let mut fields = self.base.fields.clone();
+        self.build(false)
+    }
+
+    /// The structure the entry writes, as [`ListEntry::value`], with every text of its base the
+    /// user did not change escaped ([`escaped_struct`], T289): an unchanged sub-field, the other
+    /// languages of a Lang Alt sub-field and the sub-fields the form does not show, at any depth.
+    /// A sub-field the user changed keeps its text as typed, so T288 fills its variables; so does
+    /// one that counts as typed in a pasted entry ([`ListEntry::typed`]: for a Lang Alt its
+    /// `x-default`, the other languages escaped). [`ListEntry::value`] is not changed by a paste,
+    /// so Copy All Fields copies a pasted entry's texts as shown.
+    fn written(&self) -> Option<StructValue> {
+        self.build(true)
+    }
+
+    /// [`ListEntry::value`], or with `escaped` [`ListEntry::written`].
+    fn build(&self, escaped: bool) -> Option<StructValue> {
+        let mut fields = if escaped {
+            escaped_struct(&self.base).fields
+        } else {
+            self.base.fields.clone()
+        };
         for (field, text) in self.spec.fields.iter().zip(&self.texts) {
             let position = fields.iter().position(|(id, _)| id == field);
             let old = position
                 .and_then(|index| fields.get(index))
                 .map(|(_, value)| value);
-            let unchanged = old.is_some_and(|value| form_text(value) == *text);
+            // Compared with the base as read, not with its escaped texts. When escaping, a pasted
+            // sub-field that counts as typed is written from its text, not escaped.
+            let unchanged = position.is_some()
+                && sub_field_text(&self.base, field) == *text
+                && !(escaped && self.typed(field, text));
             let value = if text.trim().is_empty() {
                 None
             } else {
@@ -1511,10 +1632,12 @@ impl EditorForm {
             .map_or("", String::as_str)
     }
 
-    /// The error of the sub-field `field` of entry `entry` of the list `list` (U11c-Q4, T143): an
-    /// Artwork or Object's Date Created that is not an IPTC date gets the error of the form's Date
-    /// Created, shown while the text is wrong; [`EditorForm::edits`] then writes nothing. `None`
-    /// for a right text, another sub-field, a read-only list or an entry that does not exist.
+    /// The error of the sub-field `field` of entry `entry` of the list `list`, shown while the
+    /// changed text is wrong; [`EditorForm::edits`] then writes nothing: an Artwork or Object's
+    /// Date Created that is not an IPTC date gets the error of the form's Date Created (U11c-Q4,
+    /// T143); a text, list or Lang Alt sub-field with an unknown variable or a brace that is not
+    /// closed gets [`variable_error_text`] (U13-Q9, T289). `None` for a right or unchanged text, a
+    /// choice, a read-only list or an entry that does not exist.
     pub fn list_error(&self, list: &str, entry: usize, field: &str) -> Option<String> {
         if self.list_read_only(list).is_some() {
             return None;
@@ -1810,8 +1933,11 @@ impl EditorForm {
     }
 
     /// The edit of a structure list (U11a-Q3, point 6 of T136): `None` when it is read-only or
-    /// writes the same structures as at the start, or (T143) while a sub-field has an error; a
-    /// `Clear` when no entry writes anything; else a `Set` of the whole list.
+    /// writes the same structures as at the start, or (T143, T289) while a sub-field has an error
+    /// (a wrong date or a text with a variable that cannot be read); a `Clear` when no entry
+    /// writes anything; else a `Set` of the whole list, the texts the user did not change escaped
+    /// and those typed or pasted (a pasted entry's shown text, list and Lang Alt sub-fields) as
+    /// they are ([`ListEntry::written`], T289).
     fn list_edit(&self, state: &ListState) -> Option<Edit> {
         if self.list_read_only(state.property()).is_some() {
             return None;
@@ -1833,7 +1959,13 @@ impl EditorForm {
             Edit::Set {
                 property,
                 field: None,
-                value: Value::StructList(values),
+                value: Value::StructList(
+                    state
+                        .entries
+                        .iter()
+                        .filter_map(ListEntry::written)
+                        .collect(),
+                ),
             }
         })
     }
@@ -1922,7 +2054,9 @@ impl EditorForm {
     /// values once the write has succeeded: each changed field (its text differs from its start
     /// text) with its values; for a list field only the entries the write adds (not in its start
     /// text), each on its own, so a keyword added to a long list is not pushed out of the recent
-    /// values by the entries the image already had. An emptied field gives nothing.
+    /// values by the entries the image already had. An emptied field gives nothing. The values
+    /// are the texts as typed, with their variables (`{date} {name}`, not the filled values,
+    /// ADR 0017 U13-Q9, T289), so a variable can be chosen again.
     pub fn written_values(&self) -> Vec<(EditorField, Vec<String>)> {
         self.fields
             .iter()
@@ -2090,6 +2224,9 @@ impl EditorForm {
         }
         // A copied structure list with entries replaces the whole list (U11a-Q5, U11b-Q5); an
         // empty one is not pasted (U12b-Q2), and a list shown read-only here is left as it is.
+        // Its entries are pasted ones (ADR 0017 U13-Q9 amended, T289's review fix): their shown
+        // text, list and Lang Alt sub-fields count as typed, so they are checked for variables at
+        // once and written with their variables to be filled, as a pasted field is.
         for (list, values) in &copied.locations {
             if values.is_empty() || !layout.is_shown(EditorItem::List(list)) {
                 continue;
@@ -2097,7 +2234,7 @@ impl EditorForm {
             if let Some(state) = self.list_editable(list) {
                 state.entries = values
                     .iter()
-                    .map(|s| ListEntry::of(state.spec, s))
+                    .map(|s| ListEntry::pasted(state.spec, s))
                     .collect();
             }
         }
@@ -2201,10 +2338,11 @@ impl EditorForm {
                 state.property() == conflict.property && self.list_edit(state).is_some()
             });
             if !changed_after_choice {
+                // Not typed by the user: escaped, so the write gives it back exactly (T289).
                 edits.push(Edit::Set {
                     property: conflict.property.clone(),
                     field: None,
-                    value: value.clone(),
+                    value: escaped_value(value),
                 });
             }
         }
@@ -2213,8 +2351,9 @@ impl EditorForm {
             edits.extend(self.list_edits_at(index));
             // A read-only field never gives an edit (point 4, U10-Q3).
             let read_only = !state.field.editable() || self.read_only_text(state.field).is_some();
-            if !read_only && state.text != self.start_text(state) {
-                match field_edit(state.field, &state.text) {
+            let start_text = self.start_text(state);
+            if !read_only && state.text != start_text {
+                match field_edit(state.field, &start_text, &state.text) {
                     Ok(edit) => edits.push(edit),
                     Err(error) => errors.push((state.field, error)),
                 }
@@ -2227,9 +2366,13 @@ impl EditorForm {
     /// The edits of the form: a `Set` or `Clear` for each changed field (in field order, after
     /// the chosen conflict values; a changed structure list in its place among the fields, as one
     /// `Set` of the whole list, or a `Clear` when no entry is left, U11a-Q3), or every field error
-    /// together. A structure list's sub-field with an error (an Artwork or Object's Date Created,
-    /// T143) also gives `Err`, so nothing is written; its error is not a field's, so it is not in
-    /// the list (it may then be empty) but comes from [`EditorForm::list_error`].
+    /// together (a wrong date, or a text with an unknown variable or a brace that is not closed,
+    /// T289). A structure list's sub-field with an error (a wrong date, T143, or a variable that
+    /// cannot be read, T289) also gives `Err`, so nothing is written; its error is not a field's,
+    /// so it is not in the list (it may then be empty) but comes from
+    /// [`EditorForm::list_error`]. The texts the user did not type are escaped (a chosen conflict
+    /// value, a list field's entries of its start text, the unchanged parts of a structure list),
+    /// those typed are kept with their variables, which T288 fills for each image.
     pub fn edits(&self) -> Result<Vec<Edit>, Vec<(EditorField, String)>> {
         let (edits, errors) = self.collect();
         if errors.is_empty() && !self.has_list_error() {
@@ -2299,7 +2442,8 @@ impl EditorForm {
             return Ok(());
         }
         // `edits` had no error, so neither has this field.
-        let edit = field_edit(state.field, &state.text).map_err(|e| vec![(state.field, e)])?;
+        let edit = field_edit(state.field, &start_text, &state.text)
+            .map_err(|e| vec![(state.field, e)])?;
         let cleared = matches!(edit, Edit::Clear { .. });
         if cleared && state.field.copyright_management() {
             batch.emptied_here_only.push(state.field);
@@ -2399,8 +2543,16 @@ fn text_values(field: EditorField, text: &str) -> Vec<String> {
     }
 }
 
-/// The edit of a changed field with the text `text`, or the field's error.
-fn field_edit(field: EditorField, text: &str) -> Result<Edit, String> {
+/// The edit of a changed field with the text `text`, or the field's error; `start` is the text the
+/// field is compared with ([`EditorForm::start_text`]).
+///
+/// Variables (ADR 0017 U13-Q9, T289): a text, Lang Alt or list field that is not a choice list is
+/// checked with [`variables::check`], so an unknown variable or a brace that is not closed is the
+/// field's error ([`variable_error_text`]) before anything is written; a date is not checked. In a
+/// list field only the entries the user typed (not among the entries of `start`, exact text) are
+/// checked and kept as typed, so T288 fills their variables; the entries of `start` are escaped
+/// ([`variables::escape`]), so the write gives them back exactly.
+fn field_edit(field: EditorField, start: &str, text: &str) -> Result<Edit, String> {
     let property = field.property().to_string();
     let struct_field = field.struct_field().map(str::to_string);
     let clear = || Edit::Clear {
@@ -2418,17 +2570,39 @@ fn field_edit(field: EditorField, text: &str) -> Result<Edit, String> {
     if text.trim().is_empty() {
         return Ok(clear());
     }
+    let checked = field.choice_list().is_none();
+    let check = |text: &str| -> Result<(), String> {
+        if checked {
+            variables::check(text).map_err(|error| variable_error_text(&error))
+        } else {
+            Ok(())
+        }
+    };
     let value = match field.kind() {
-        FieldKind::Text => Value::Text(text.to_string()),
-        FieldKind::LangAlt => Value::LangAlt(LangAlt::from_entries(vec![(
-            X_DEFAULT.to_string(),
-            text.to_string(),
-        )])),
+        FieldKind::Text => {
+            check(text)?;
+            Value::Text(text.to_string())
+        }
+        FieldKind::LangAlt => {
+            check(text)?;
+            Value::LangAlt(LangAlt::from_entries(vec![(
+                X_DEFAULT.to_string(),
+                text.to_string(),
+            )]))
+        }
         FieldKind::List => {
-            let entries = list_entries(text);
+            let start = list_entries(start);
+            let mut entries = list_entries(text);
             // Only spaces and commas: the list is emptied.
             if entries.is_empty() {
                 return Ok(clear());
+            }
+            for entry in &mut entries {
+                if start.contains(entry) {
+                    *entry = variables::escape(entry);
+                } else {
+                    check(entry)?;
+                }
             }
             Value::List(entries)
         }
@@ -8276,5 +8450,316 @@ mod tests {
         for (text, expected) in cases {
             assert_eq!(editor_text(&text), expected, "{text:?}");
         }
+    }
+
+    // --- the variables (ADR 0017 U13-Q9, T289) ---
+
+    const UNKNOWN_JOB: &str = "{job} is not a variable. Variables: {date} {year} {month} {day} \
+                               {time} {make} {model} {name} {folder}. Write {{ or }} for a brace.";
+    const UNCLOSED: &str = "A { is not closed. Write {{ for a brace.";
+    const NOT_OPENED: &str = "A } is not opened. Write }} for a brace.";
+
+    #[test]
+    fn the_variable_error_texts() {
+        assert_eq!(
+            variable_error_text(&VariableError::Unknown("job".into())),
+            UNKNOWN_JOB
+        );
+        assert_eq!(
+            variable_error_text(&VariableError::Unclosed("{date".into())),
+            UNCLOSED
+        );
+        assert_eq!(
+            variable_error_text(&VariableError::UnexpectedClose),
+            NOT_OPENED
+        );
+        assert_eq!(
+            variable_error_text(&VariableError::NoCaptureTime("date".into())),
+            "The image has no capture time for {date}."
+        );
+    }
+
+    #[test]
+    fn an_unknown_variable_is_the_fields_error_and_nothing_is_written() {
+        let mut form = form_with(Metadata::new());
+        type_into(&mut form, EditorField::Headline, "{job}");
+        let error = vec![(EditorField::Headline, UNKNOWN_JOB.to_string())];
+        assert_eq!(form.edits(), Err(error.clone()));
+        assert_eq!(form.batch_edits().err(), Some(error));
+
+        type_into(&mut form, EditorField::Headline, "{date} {name}");
+        assert_eq!(
+            form.edits(),
+            Ok(vec![set("photoshop:Headline", text("{date} {name}"))])
+        );
+        assert!(form.batch_edits().is_ok());
+        type_into(&mut form, EditorField::Headline, "{{x}}");
+        assert_eq!(
+            form.edits(),
+            Ok(vec![set("photoshop:Headline", text("{{x}}"))])
+        );
+    }
+
+    #[test]
+    fn an_unclosed_and_an_unopened_brace_are_the_fields_error() {
+        let mut form = form_with(Metadata::new());
+        type_into(&mut form, EditorField::Headline, "{date");
+        assert_eq!(
+            form.edits(),
+            Err(vec![(EditorField::Headline, UNCLOSED.to_string())])
+        );
+        type_into(&mut form, EditorField::Headline, "a}b");
+        assert_eq!(
+            form.edits(),
+            Err(vec![(EditorField::Headline, NOT_OPENED.to_string())])
+        );
+    }
+
+    #[test]
+    fn a_list_and_a_lang_alt_field_are_checked() {
+        let mut form = form_with(Metadata::new());
+        type_into(&mut form, EditorField::Keywords, "a, {job}");
+        assert_eq!(
+            form.edits(),
+            Err(vec![(EditorField::Keywords, UNKNOWN_JOB.to_string())])
+        );
+        let mut form = form_with(Metadata::new());
+        type_into(&mut form, EditorField::Description, "{job}");
+        assert_eq!(
+            form.edits(),
+            Err(vec![(EditorField::Description, UNKNOWN_JOB.to_string())])
+        );
+    }
+
+    #[test]
+    fn a_structure_lists_text_sub_field_is_checked_when_changed() {
+        let mut form = form_with(located(Vec::new(), vec![oslo()]));
+        assert_eq!(form.list_error(SHOWN, 0, CITY), None);
+        type_entry(&mut form, SHOWN, 0, CITY, "{job}");
+        assert_eq!(
+            form.list_error(SHOWN, 0, CITY),
+            Some(UNKNOWN_JOB.to_string())
+        );
+        assert_eq!(form.lists_with_errors(), vec![SHOWN]);
+        assert_eq!(form.edits(), Err(Vec::new()));
+        assert!(form.batch_edits().is_err());
+
+        type_entry(&mut form, SHOWN, 0, CITY, "{folder}");
+        assert_eq!(form.list_error(SHOWN, 0, CITY), None);
+        assert_eq!(
+            form.edits(),
+            Ok(vec![set(
+                SHOWN,
+                places(vec![place(&[(CITY, "{folder}"), (COUNTRY, "Norge")])])
+            )])
+        );
+
+        // An added entry is checked too.
+        form.add_entry(SHOWN);
+        type_entry(&mut form, SHOWN, 1, CITY, "{job}");
+        assert_eq!(
+            form.list_error(SHOWN, 1, CITY),
+            Some(UNKNOWN_JOB.to_string())
+        );
+        assert_eq!(form.edits(), Err(Vec::new()));
+    }
+
+    #[test]
+    fn another_programs_brace_in_an_unchanged_field_is_no_error() {
+        let mut metadata = Metadata::new();
+        insert(&mut metadata, "photoshop:Headline", text("{x}"));
+        let mut form = form_with(metadata);
+        type_into(&mut form, EditorField::Title, "T");
+        assert_eq!(
+            form.edits(),
+            Ok(vec![set("dc:title", lang_alt(&[("x-default", "T")]))])
+        );
+    }
+
+    #[test]
+    fn a_contact_field_is_checked_and_a_choice_list_is_not() {
+        let mut form = form_with(Metadata::new());
+        type_into(&mut form, EditorField::Email, "{job}");
+        assert_eq!(
+            form.edits(),
+            Err(vec![(EditorField::Email, UNKNOWN_JOB.to_string())])
+        );
+        // A choice list is never typed into; its value is not checked.
+        for field in EditorField::ALL {
+            if field.choice_list().is_some() {
+                assert_eq!(
+                    field_edit(field, "", "{job}"),
+                    Ok(set(field.property(), text("{job}"))),
+                    "{field:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_date_with_a_variable_is_a_date_error() {
+        let mut form = form_with(Metadata::new());
+        type_into(&mut form, EditorField::DateCreated, "{date}");
+        assert_eq!(
+            form.edits(),
+            Err(vec![(EditorField::DateCreated, date_error_text())])
+        );
+    }
+
+    #[test]
+    fn the_entries_of_a_list_field_the_user_did_not_type_are_escaped() {
+        let mut form = keywords_form(&["{draft}", "a"]);
+        type_into(&mut form, EditorField::Keywords, "{draft}, a, {year}");
+        assert_eq!(
+            form.edits(),
+            Ok(vec![set("dc:subject", list(&["{{draft}}", "a", "{year}"]))])
+        );
+        // The other images get only the typed entry, as typed.
+        assert_eq!(
+            batch_of(&form).others,
+            vec![entries("dc:subject", &["{year}"], &[])]
+        );
+    }
+
+    #[test]
+    fn a_chosen_conflict_value_is_escaped() {
+        let mut metadata = Metadata::new();
+        insert(&mut metadata, "photoshop:City", text("{x}"));
+        metadata.add_conflict(Conflict {
+            property: "photoshop:City".into(),
+            values: vec![
+                (Origin::XmpEmbedded, text("{x}")),
+                (Origin::Iim, text("Malmö")),
+            ],
+            rule: ConflictRule::Open,
+        });
+        let mut form = form_with(metadata);
+        assert!(form.choose(0, 0));
+        assert_eq!(form.edits(), Ok(vec![set("photoshop:City", text("{{x}}"))]));
+    }
+
+    #[test]
+    fn the_texts_of_a_structure_list_the_user_did_not_change_are_escaped() {
+        let mut second = oslo();
+        second
+            .fields
+            .push((NAME.to_string(), lang_alt(&[("x-default", "{n}")])));
+        let mut form = form_with(located(Vec::new(), vec![place(&[(CITY, "{x}")]), second]));
+        type_entry(&mut form, SHOWN, 1, CITY, "{folder}");
+        assert_eq!(
+            form.edits(),
+            Ok(vec![set(
+                SHOWN,
+                places(vec![
+                    place(&[(CITY, "{{x}}")]),
+                    entry(vec![
+                        (CITY, text("{folder}")),
+                        (COUNTRY, text("Norge")),
+                        (NAME, lang_alt(&[("x-default", "{{n}}")])),
+                    ]),
+                ])
+            )])
+        );
+
+        // A Lang Alt sub-field: the typed x-default as typed, the other language escaped.
+        let person = entry(vec![(
+            P_NAME,
+            lang_alt(&[("x-default", "Anna"), ("sv", "{Anna}")]),
+        )]);
+        let mut form = form_with(with_lists(&[(PERSON_LIST, vec![person])]));
+        type_entry(&mut form, PERSON_LIST, 0, P_NAME, "{name}");
+        assert_eq!(form.list_error(PERSON_LIST, 0, P_NAME), None);
+        assert_eq!(
+            form.edits(),
+            Ok(vec![set(
+                PERSON_LIST,
+                places(vec![entry(vec![(
+                    P_NAME,
+                    lang_alt(&[("x-default", "{name}"), ("sv", "{{Anna}}")]),
+                )])])
+            )])
+        );
+    }
+
+    #[test]
+    fn a_pasted_structure_lists_typed_variable_is_written_to_be_filled() {
+        let mut source = form_with(located(Vec::new(), vec![oslo()]));
+        type_entry(&mut source, SHOWN, 0, CITY, "{folder}");
+        let copied = source.copy("a.jpg");
+        let mut form = form_with(Metadata::new());
+        form.paste(&copied);
+        assert_eq!(form.list_error(SHOWN, 0, CITY), None);
+        assert_eq!(
+            form.edits(),
+            Ok(vec![set(
+                SHOWN,
+                places(vec![place(&[(CITY, "{folder}"), (COUNTRY, "Norge")])])
+            )])
+        );
+    }
+
+    #[test]
+    fn a_pasted_structure_lists_unknown_variable_is_an_error_at_once() {
+        let mut source = form_with(located(Vec::new(), vec![oslo()]));
+        type_entry(&mut source, SHOWN, 0, CITY, "{job}");
+        // The source shows the error too, but Copy All Fields copies unsaved edits.
+        let copied = source.copy("a.jpg");
+        let mut form = form_with(Metadata::new());
+        form.paste(&copied);
+        assert_eq!(
+            form.list_error(SHOWN, 0, CITY),
+            Some(UNKNOWN_JOB.to_string())
+        );
+        assert_eq!(form.lists_with_errors(), vec![SHOWN]);
+        assert_eq!(form.edits(), Err(Vec::new()));
+    }
+
+    #[test]
+    fn a_pasted_entrys_unshown_texts_and_other_languages_are_escaped() {
+        // Person Characteristics is not shown in the form.
+        let characteristic = |name: &str| {
+            places(vec![entry(vec![(
+                "Iptc4xmpExt:CvTermName",
+                lang_alt(&[("x-default", name)]),
+            )])])
+        };
+        let person = entry(vec![
+            (
+                P_NAME,
+                lang_alt(&[("x-default", "Anna {name}"), ("sv", "{Anna}")]),
+            ),
+            (P_CHARACTERISTIC, characteristic("{x}")),
+        ]);
+        let source = form_with(with_lists(&[(PERSON_LIST, vec![person])]));
+        // Read from the file, not pasted: escaped and no error.
+        assert_eq!(source.list_error(PERSON_LIST, 0, P_NAME), None);
+        let copied = source.copy("a.jpg");
+        let mut form = form_with(Metadata::new());
+        form.paste(&copied);
+        assert_eq!(form.list_error(PERSON_LIST, 0, P_NAME), None);
+        assert_eq!(
+            form.edits(),
+            Ok(vec![set(
+                PERSON_LIST,
+                places(vec![entry(vec![
+                    (
+                        P_NAME,
+                        lang_alt(&[("x-default", "Anna {name}"), ("sv", "{{Anna}}")]),
+                    ),
+                    (P_CHARACTERISTIC, characteristic("{{x}}")),
+                ])])
+            )])
+        );
+    }
+
+    #[test]
+    fn the_recent_values_keep_the_variables() {
+        let mut form = form_with(Metadata::new());
+        type_into(&mut form, EditorField::Headline, "{date}");
+        assert!(form.edits().is_ok());
+        assert_eq!(
+            form.written_values(),
+            [(EditorField::Headline, vec!["{date}".to_string()])]
+        );
     }
 }
