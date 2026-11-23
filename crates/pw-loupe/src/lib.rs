@@ -44,6 +44,7 @@ mod sort;
 mod tabs;
 mod tasks;
 mod tasks_text;
+mod template_form;
 mod thumb_buttons;
 mod thumbs;
 mod watcher;
@@ -196,6 +197,11 @@ pub use tasks::{
 pub use tasks_text::{
     TasksText, error_entry_text, errors_heading_text, import_done_text, import_route_text,
     importing_text, pending_write_text, tasks_text,
+};
+pub use template_form::{
+    TemplateFieldError, TemplateForm, TemplateItem, TemplateRefused, TemplateRow, TemplateText,
+    left_column_sections, load_failed_text, not_loaded_lines, property_path_name, refused_text,
+    save_failed_text, template_rows, template_text, templates_folder, with_xmp_extension,
 };
 pub use thumb_buttons::{
     BUTTON_INSET, BUTTON_SIZE, ButtonFacts, THUMB_BUTTONS, ThumbButton, button_at, button_rect,

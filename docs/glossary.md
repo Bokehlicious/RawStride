@@ -194,6 +194,10 @@ Every other property already uses IPTC's English name in both languages.
 | Rensa och importera | Clear and Import | |
 | Dölj, Stäng | Hide, Close | |
 | IPTC-mall, Mallen, Variabler | IPTC Template, the template, Variables | added by T117 |
+| – | Metadata Template | the template window's title ("Metadata Template – {file}" once a file is loaded or saved) and the Save and Load dialogs' file type (ADR 0017 U13c); added by T291 |
+| – | Clear Form, Load…, Save…, Close | the template window's buttons (ADR 0017 U13c); added by T291 |
+| – | the + box ("+") | the box beside a checked list of plain text values in the template window: "Add the template's entries after the image's own instead of replacing the list." (U13-Q12); the check box of each field: "Use this field in the template."; added by T291 |
+| – | Discard the changes to the template?, Discard, Cancel; {file} already exists. Replace it?, Replace | the template window's questions before a Load or Close loses changes (U13-Q15) and before a save over a file whose name got `.xmp` added; added by T291 |
 | enhet | drive | "The source is not a drive"; added by T118 |
 | mata ut, utmatat | eject, ejected | "E: has been ejected and can be removed."; added by T118 |
 | Säker borttagning av maskinvara | Safely Remove Hardware | Windows' own name; "Use Safely Remove Hardware in the taskbar."; added by T156 |

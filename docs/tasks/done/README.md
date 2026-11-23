@@ -297,3 +297,4 @@ was when the task was done, so "this file", "below" and "the Log" in T1–T115 m
 | [T288](T288-variables-when-written.md) | Variables filled when an image is written; applying a template file (pw-metadata) |
 | [T289](T289-variables-in-metadata-window.md) | The metadata window checks the variables before Save (pw-loupe) |
 | [T290](T290-batch-failures-in-error-colour.md) | The failed images of "Apply to {n} Marked" shown in the error colour (pw-loupe) |
+| [T291](T291-template-form-model.md) | The template window's form in plain Rust (pw-loupe) |

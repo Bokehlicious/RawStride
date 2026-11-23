@@ -565,7 +565,7 @@ fn date_error_text() -> String {
 /// `{` that is not closed or a `}` that is not opened; a field's or a structure list's sub-field's
 /// error, found before anything is written. `NoCaptureTime` is found only when an image is written
 /// (T288), but has a text too.
-fn variable_error_text(error: &VariableError) -> String {
+pub(crate) fn variable_error_text(error: &VariableError) -> String {
     match error {
         VariableError::Unknown(name) => format!(
             "{{{name}}} is not a variable. Variables: {{date}} {{year}} {{month}} {{day}} {{time}} \
@@ -2476,6 +2476,207 @@ impl EditorForm {
             .iter()
             .map(warning_text)
             .collect()
+    }
+}
+
+/// The values of the template window's form (ADR 0017 U13c, T291), from
+/// [`EditorForm::template_values`]: everything as typed, nothing escaped.
+#[derive(Clone, Debug)]
+pub(crate) struct TemplateValues {
+    /// Each editable field in [`EditorField::ALL`] order with its value (`None` when it gives
+    /// none, for example an empty text) or its error's text.
+    pub(crate) fields: Vec<(EditorField, Result<Option<Value>, String>)>,
+    /// Each structure list in [`EditorForm::ALL_LISTS`] order.
+    pub(crate) lists: Vec<TemplateListValues>,
+}
+
+/// One structure list of [`TemplateValues`].
+#[derive(Clone, Debug)]
+pub(crate) struct TemplateListValues {
+    /// The XMP id of the list.
+    pub(crate) list: &'static str,
+    /// The entries as [`ListEntry::value`] gives them, the empty ones left out.
+    pub(crate) entries: Vec<StructValue>,
+    /// The error of each sub-field that has one: the entry's index (among all the list's
+    /// entries, the empty ones included), the sub-field's XMP id and the error's text.
+    pub(crate) errors: Vec<(usize, &'static str, String)>,
+}
+
+impl TemplateValues {
+    /// The value or error of `field`; `None` for a field that is not editable.
+    pub(crate) fn field(&self, field: EditorField) -> Option<&Result<Option<Value>, String>> {
+        self.fields
+            .iter()
+            .find(|(f, _)| *f == field)
+            .map(|(_, value)| value)
+    }
+
+    /// The entries and errors of the structure list `list`.
+    pub(crate) fn list(&self, list: &str) -> Option<&TemplateListValues> {
+        self.lists.iter().find(|values| values.list == list)
+    }
+}
+
+/// The template window's form (ADR 0017 U13c, T291): the same form as the metadata window's, with
+/// no image behind it, so every start text is empty and whatever is in it counts as typed.
+impl EditorForm {
+    /// The empty form: no value, no conflict, every structure list empty; the same as
+    /// [`EditorForm::from_read`] of a read with no metadata.
+    pub(crate) fn empty() -> EditorForm {
+        EditorForm {
+            fields: EditorField::ALL
+                .iter()
+                .map(|&field| FieldState {
+                    field,
+                    text: String::new(),
+                    original: String::new(),
+                    language: None,
+                })
+                .collect(),
+            conflicts: Vec::new(),
+            chosen: Vec::new(),
+            lists: LIST_SPECS
+                .iter()
+                .map(|spec| ListState {
+                    spec,
+                    entries: Vec::new(),
+                    original: Vec::new(),
+                    read_text: String::new(),
+                    unsupported: false,
+                })
+                .collect(),
+        }
+    }
+
+    /// The values of the template form as typed, nothing escaped (a template is not read from an
+    /// image, so it has no text to keep exactly): each editable field's value from [`field_edit`]
+    /// with an empty start text (a `Set` gives its value, a `Clear` none, an error its text; a
+    /// contact field's value is its sub-field's), and each structure list's entries
+    /// ([`ListEntry::value`], the empty ones left out) with the error of each sub-field
+    /// ([`ListEntry::error`]).
+    pub(crate) fn template_values(&self) -> TemplateValues {
+        let fields = self
+            .fields
+            .iter()
+            .filter(|state| state.field.editable())
+            .map(|state| {
+                let value = match field_edit(state.field, "", &state.text) {
+                    Ok(Edit::Set { value, .. }) => Ok(Some(value)),
+                    Ok(_) => Ok(None),
+                    Err(error) => Err(error),
+                };
+                (state.field, value)
+            })
+            .collect();
+        let lists = self
+            .lists
+            .iter()
+            .map(|state| TemplateListValues {
+                list: state.property(),
+                entries: list_values(&state.entries),
+                errors: state
+                    .entries
+                    .iter()
+                    .enumerate()
+                    .flat_map(|(index, entry)| {
+                        entry.spec.fields.iter().filter_map(move |field| {
+                            entry.error(field).map(|error| (index, *field, error))
+                        })
+                    })
+                    .collect(),
+            })
+            .collect();
+        TemplateValues { fields, lists }
+    }
+
+    /// Puts a template's fields (`(XMP id, value)` as `TemplateFile::fields` holds them) in the
+    /// form as typed; the start texts stay empty. A field gets its text; Copyrighted is ticked
+    /// for `True` and left unticked for `False`; Creator's Contact Info fills its contact fields;
+    /// a structure list's entries replace the list's, each as pasted (its shown sub-fields typed,
+    /// the others kept in its base); Location Created gets its first entry as its only entry.
+    ///
+    /// Returns the XMP ids (`property` or `property/sub-field`) of what was not put in the form: a
+    /// property the form has no editable field or list for, a Copyrighted that is neither `True`
+    /// nor `False`, a value of a shape the field cannot take, and a sub-field of Creator's Contact
+    /// Info or Location Created that the form has no field for (Location Created's Location Name
+    /// and GPS fields, for example; they are not kept).
+    pub(crate) fn put_template_fields(&mut self, fields: &[(String, Value)]) -> Vec<String> {
+        let mut not_loaded = Vec::new();
+        for (property, value) in fields {
+            if property == CONTACT_INFO {
+                let Value::Struct(structure) = value else {
+                    not_loaded.push(property.clone());
+                    continue;
+                };
+                for (sub, sub_value) in &structure.fields {
+                    let state = self
+                        .fields
+                        .iter_mut()
+                        .find(|state| state.field.struct_field() == Some(sub.as_str()));
+                    match state {
+                        Some(state) => state.text = form_text(sub_value),
+                        None => not_loaded.push(format!("{property}/{sub}")),
+                    }
+                }
+                continue;
+            }
+            if let Some(state) = self
+                .lists
+                .iter_mut()
+                .find(|state| state.property() == property)
+            {
+                let entries = match value {
+                    Value::StructList(entries) => entries.clone(),
+                    Value::Struct(entry) => vec![entry.clone()],
+                    _ => {
+                        not_loaded.push(property.clone());
+                        continue;
+                    }
+                };
+                if property == LOCATION_CREATED {
+                    let mut first = entries.into_iter().next().unwrap_or_default();
+                    first.fields.retain(|(sub, _)| {
+                        let shown = LOCATION_FIELDS.contains(&sub.as_str());
+                        if !shown {
+                            not_loaded.push(format!("{property}/{sub}"));
+                        }
+                        shown
+                    });
+                    state.entries = vec![ListEntry::pasted(state.spec, &first)];
+                } else {
+                    state.entries = entries
+                        .iter()
+                        .map(|entry| ListEntry::pasted(state.spec, entry))
+                        .collect();
+                }
+                continue;
+            }
+            let state = self.fields.iter_mut().find(|state| {
+                state.field.struct_field().is_none()
+                    && state.field.editable()
+                    && state.field.property() == property
+            });
+            let Some(state) = state else {
+                not_loaded.push(property.clone());
+                continue;
+            };
+            if state.field.check_box() {
+                let text = form_text(value);
+                if text.eq_ignore_ascii_case(CHECKED) {
+                    state.text = CHECKED.to_string();
+                } else if text.eq_ignore_ascii_case(UNCHECKED) {
+                    state.text = String::new();
+                } else {
+                    not_loaded.push(property.clone());
+                }
+                continue;
+            }
+            match value {
+                Value::Struct(_) | Value::StructList(_) => not_loaded.push(property.clone()),
+                _ => state.text = state.field.text_of(value),
+            }
+        }
+        not_loaded
     }
 }
 
@@ -8761,5 +8962,179 @@ mod tests {
             form.written_values(),
             [(EditorField::Headline, vec!["{date}".to_string()])]
         );
+    }
+
+    // --- The template form (ADR 0017 U13c, T291) ---
+
+    #[test]
+    fn the_empty_form_is_the_form_of_a_read_without_metadata() {
+        assert_eq!(EditorForm::empty(), form_with(Metadata::new()));
+    }
+
+    #[test]
+    fn the_template_values_are_as_typed() {
+        let mut form = EditorForm::empty();
+        type_into(&mut form, EditorField::Headline, "{date} {{x}}");
+        type_into(&mut form, EditorField::Keywords, "a, {name}");
+        type_into(&mut form, EditorField::Email, "a@example.com");
+        type_into(&mut form, EditorField::DateCreated, "abc");
+        type_into(&mut form, EditorField::Title, "{job}");
+        form.add_entry(LOCATION_SHOWN);
+        form.add_entry(LOCATION_SHOWN);
+        *form
+            .list_text_mut(LOCATION_SHOWN, 1, "Iptc4xmpExt:City")
+            .unwrap() = "{folder}".to_string();
+        *form
+            .list_text_mut(LOCATION_SHOWN, 1, "Iptc4xmpExt:CountryName")
+            .unwrap() = "{x".to_string();
+        let values = form.template_values();
+        assert_eq!(
+            values.field(EditorField::Headline),
+            Some(&Ok(Some(text("{date} {{x}}"))))
+        );
+        assert_eq!(
+            values.field(EditorField::Keywords),
+            Some(&Ok(Some(list(&["a", "{name}"]))))
+        );
+        assert_eq!(
+            values.field(EditorField::Email),
+            Some(&Ok(Some(text("a@example.com"))))
+        );
+        assert_eq!(
+            values.field(EditorField::DateCreated),
+            Some(&Err(date_error_text()))
+        );
+        assert_eq!(
+            values.field(EditorField::Title),
+            Some(&Err(variable_error_text(&VariableError::Unknown(
+                "job".to_string()
+            ))))
+        );
+        assert_eq!(values.field(EditorField::Description), Some(&Ok(None)));
+        // Copyrighted always has a value.
+        assert_eq!(
+            values.field(EditorField::Copyrighted),
+            Some(&Ok(Some(text("False"))))
+        );
+        // Not editable: no value at all.
+        assert_eq!(values.field(EditorField::Urgency), None);
+        let shown = values.list(LOCATION_SHOWN).unwrap();
+        assert_eq!(
+            shown.entries,
+            [StructValue {
+                fields: vec![
+                    ("Iptc4xmpExt:City".to_string(), text("{folder}")),
+                    ("Iptc4xmpExt:CountryName".to_string(), text("{x")),
+                ]
+            }]
+        );
+        assert_eq!(
+            shown.errors,
+            [(
+                1,
+                "Iptc4xmpExt:CountryName",
+                variable_error_text(&VariableError::Unclosed("x".to_string()))
+            )]
+        );
+    }
+
+    #[test]
+    fn template_fields_are_put_in_the_form_as_typed() {
+        let mut form = EditorForm::empty();
+        let not_loaded = form.put_template_fields(&[
+            ("photoshop:Headline".to_string(), text("{date}")),
+            ("dc:subject".to_string(), list(&["a", "b"])),
+            ("dc:title".to_string(), lang_alt(&[("x-default", "T")])),
+            ("xmpRights:Marked".to_string(), text("true")),
+            (vocabulary::MODEL_RELEASE_STATUS.to_string(), text("MR-NON")),
+            (
+                CONTACT_INFO.to_string(),
+                contact(&[
+                    ("Iptc4xmpCore:CiEmailWork", "a@example.com"),
+                    ("Iptc4xmpCore:CiOther", "x"),
+                ]),
+            ),
+            (
+                LOCATION_CREATED.to_string(),
+                Value::StructList(vec![
+                    StructValue {
+                        fields: vec![
+                            ("Iptc4xmpExt:City".to_string(), text("Lund")),
+                            ("Iptc4xmpExt:LocationName".to_string(), text("Home")),
+                        ],
+                    },
+                    StructValue {
+                        fields: vec![("Iptc4xmpExt:City".to_string(), text("Malmö"))],
+                    },
+                ]),
+            ),
+            (
+                LOCATION_SHOWN.to_string(),
+                Value::StructList(vec![StructValue {
+                    fields: vec![
+                        ("Iptc4xmpExt:City".to_string(), text("{folder}")),
+                        ("Iptc4xmpExt:LocationName".to_string(), text("{name}")),
+                    ],
+                }]),
+            ),
+            ("photoshop:Urgency".to_string(), text("5")),
+            ("xmp:Nothing".to_string(), text("x")),
+        ]);
+        assert_eq!(
+            not_loaded,
+            [
+                "Iptc4xmpCore:CreatorContactInfo/Iptc4xmpCore:CiOther",
+                "Iptc4xmpExt:LocationCreated/Iptc4xmpExt:LocationName",
+                "photoshop:Urgency",
+                "xmp:Nothing",
+            ]
+        );
+        assert_eq!(form.text(EditorField::Headline), "{date}");
+        assert_eq!(form.text(EditorField::Keywords), "a, b");
+        assert_eq!(form.text(EditorField::Title), "T");
+        assert!(form.checked(EditorField::Copyrighted));
+        assert_eq!(form.text(EditorField::ModelReleaseStatus), "MR-NON");
+        assert_eq!(form.text(EditorField::Email), "a@example.com");
+        assert_eq!(form.list_count(LOCATION_CREATED), 1);
+        assert_eq!(
+            form.list_text(LOCATION_CREATED, 0, "Iptc4xmpExt:City"),
+            "Lund"
+        );
+        assert_eq!(
+            form.list_text(LOCATION_SHOWN, 0, "Iptc4xmpExt:City"),
+            "{folder}"
+        );
+        // Counts as typed: checked at once, and the hidden sub-field kept in the entry.
+        let values = form.template_values();
+        assert_eq!(
+            values.list(LOCATION_SHOWN).unwrap().entries,
+            [StructValue {
+                fields: vec![
+                    ("Iptc4xmpExt:City".to_string(), text("{folder}")),
+                    ("Iptc4xmpExt:LocationName".to_string(), text("{name}")),
+                ],
+            }]
+        );
+        assert_eq!(
+            values.list(LOCATION_CREATED).unwrap().entries,
+            [StructValue {
+                fields: vec![("Iptc4xmpExt:City".to_string(), text("Lund"))],
+            }]
+        );
+        // Nothing escaped, nothing compared with a start text.
+        assert_eq!(form.edits().map(|edits| edits.len()), Ok(8));
+
+        // False leaves the box unticked; another value is not loaded.
+        let mut form = EditorForm::empty();
+        assert!(
+            form.put_template_fields(&[("xmpRights:Marked".to_string(), text("False"))])
+                .is_empty()
+        );
+        assert!(!form.checked(EditorField::Copyrighted));
+        assert_eq!(
+            form.put_template_fields(&[("xmpRights:Marked".to_string(), text("Maybe"))]),
+            ["xmpRights:Marked"]
+        );
+        assert!(!form.checked(EditorField::Copyrighted));
     }
 }
