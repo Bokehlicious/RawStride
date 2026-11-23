@@ -38,8 +38,11 @@
 //!   already in the file gives no change and an empty write plan.
 //! - The cardinality limits come from `set` (`ValueError::TooMany`).
 //!
-//! The confirmation before a Clear (§10, once per template) belongs to the user interface (I10);
-//! variables (`{date}` …) and template files in XMP (§10) come later.
+//! The confirmation before a Clear (§10, once per template) belongs to the user interface (I10).
+//! A template's values are applied as they are: the variables (`{date}` …, ADR 0017 U13-Q9) of a
+//! template file are filled before it gets here, by
+//! [`crate::ExifTool::apply_template_file_safely`]; the template file in XMP is
+//! [`crate::template_file`].
 
 use std::fmt;
 

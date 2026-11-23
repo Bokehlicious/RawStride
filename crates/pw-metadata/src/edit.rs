@@ -39,13 +39,39 @@
 //! conflict (below) is always named in a [`WriteNotice::ConflictKept`], also when nothing was
 //! written, and only once (ADR 0017 U12d-Q6).
 //!
+//! **Variables** (ADR 0017 U13-Q9, [`crate::variables`]): [`ExifTool::write_edits_safely`] reads
+//! the image with its capture time, make and model, and fills each edit with the image's values
+//! before [`apply_edits`] (which itself fills nothing; the metadata window calls it too). A **Set**
+//! whose value is the same after filling (no variable, no `{{` or `}}`) is used exactly as given.
+//! Otherwise a list loses its blank entries and exact repeats; in a structure, or each entry of a
+//! list of structures, at any depth, a field that lost its content by the filling is dropped (so
+//! its old value leaves that entry), as are the blank and repeated entries of its lists, and an
+//! entry left with no field is dropped; languages, unknown fields and the order of the fields are
+//! kept, and a text or a Lang Alt is not cleaned. A value without content after that is **no
+//! change**: the edit is left out and the property keeps its value (as a template's empty field,
+//! §10). An **Entries** edit fills the entries it adds (a blank one is ignored) but not those it
+//! removes, which name the file's own entries; a **Clear** is as it is. The first variable that
+//! cannot be filled (an unknown name, a lone `{` or `}`, a date variable on an image without a
+//! capture time) is [`EditError::Variable`], returned before the plan is made, so nothing is
+//! written to that image.
+//!
+//! [`ExifTool::apply_template_file_safely`] applies a metadata template ([`TemplateFile`], U13a)
+//! the same way as [`ExifTool::apply_template_safely`], with its variables filled: the image is
+//! read with its values, each field is filled (the first error is [`EditError::Variable`],
+//! nothing written), the filled fields go through [`TemplateFile::new`] again (a field empty
+//! after filling is dropped, a list's repeated entries are merged), and the result is applied
+//! with [`template::apply`], planned and written. Its [`EditReport`] holds the plan's notices when
+//! something was written and a [`WriteNotice::QualifiersKept`] for each list with qualifiers put
+//! back, also when nothing was written. [`ExifTool::apply_template_safely`] fills no variables.
+//!
 //! **A list with qualifiers** ([`Metadata::has_qualifiers`], ADR 0007 §8) is shown but never
 //! written: RawStride cannot write such a list without losing or doubling its qualified items.
 //! After the edits (or the template) are applied, and before the plan is made, each such list that
 //! was changed is put back to the value read from the file ([`Metadata::restore`]), so the plan
 //! treats it like an untouched property and the edit leaks into no other form. The other changes
-//! are written. In [`ExifTool::write_edits_safely`] each list put back is named once in a
-//! [`WriteNotice::QualifiersKept`], also when nothing was written.
+//! are written. In [`ExifTool::write_edits_safely`] and [`ExifTool::apply_template_file_safely`]
+//! each list put back is named once in a [`WriteNotice::QualifiersKept`], also when nothing was
+//! written.
 //!
 //! - **Set** stores the value with [`Metadata::set`]; a Lang Alt edits `x-default` only and keeps
 //!   the other languages (§8, Q7). A value equal to the current one ([`same_value`]) is no change,
@@ -100,8 +126,10 @@ use crate::journal::Journal;
 use crate::properties::{self, Occurrence, ValueKind};
 use crate::reconcile::same_value;
 use crate::safe_write::{ImageCheck, SafeWriteError, WriteReport};
-use crate::template::{self, Template, TemplateError};
+use crate::template::{self, Template, TemplateError, has_content};
+use crate::template_file::TemplateFile;
 use crate::value::{ConflictRule, Metadata, StructValue, Value, ValueError};
+use crate::variables::{self, VariableError, VariableValues};
 use crate::write_plan::{self, PlanError, WriteNotice, WriteSettings};
 use crate::{Error, ExifTool, Rating, supports_rating, supports_sidecar};
 
@@ -139,6 +167,8 @@ pub enum EditError {
     Write(SafeWriteError),
     /// The template could not be applied.
     Template(TemplateError),
+    /// A variable of a text could not be filled (ADR 0017 U13-Q9); nothing was written.
+    Variable(VariableError),
 }
 
 impl fmt::Display for EditError {
@@ -152,6 +182,7 @@ impl fmt::Display for EditError {
             EditError::Template(error) => {
                 write!(f, "the template could not be applied: {error}")
             }
+            EditError::Variable(error) => write!(f, "{error}"),
         }
     }
 }
@@ -188,15 +219,15 @@ pub enum Edit {
     },
 }
 
-/// The result of [`ExifTool::write_edits_safely`].
+/// The result of [`ExifTool::write_edits_safely`] and [`ExifTool::apply_template_file_safely`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EditReport {
     /// What the safe write did.
     pub report: WriteReport,
     /// What the user is told about the write (§5.2, §5.4, Q1); empty when nothing was written,
     /// except for a [`WriteNotice::ConflictKept`] of each [`Edit::Entries`] left alone because of
-    /// an `Open` conflict (U12d-Q6) and a [`WriteNotice::QualifiersKept`] of each changed list
-    /// with qualifiers that was put back (ADR 0007 §8).
+    /// an `Open` conflict (U12d-Q6, edits only) and a [`WriteNotice::QualifiersKept`] of each
+    /// changed list with qualifiers that was put back (ADR 0007 §8).
     pub notices: Vec<WriteNotice>,
 }
 
@@ -489,13 +520,14 @@ impl ExifTool {
                 image.display()
             )));
         }
-        let read = self
-            .read_metadata(image, options.fallback)
+        let (read, values) = self
+            .read_metadata_with_values(image, options.fallback)
             .map_err(EditError::Read)?;
+        let edits = fill_edits(edits, &values)?;
         let original = read.reconciled.metadata.clone();
         let mut metadata = read.reconciled.metadata;
-        apply_edits(&mut metadata, edits)?;
-        let left_alone = entries_left_alone(&metadata, edits);
+        apply_edits(&mut metadata, &edits)?;
+        let left_alone = entries_left_alone(&metadata, &edits);
         let qualifiers_kept = restore_qualified(&mut metadata, &original);
         let plan =
             write_plan::plan(&metadata, &read.state, options.settings).map_err(EditError::Plan)?;
@@ -512,6 +544,61 @@ impl ExifTool {
                 notices.push(notice);
             }
         }
+        for property in qualifiers_kept {
+            let notice = WriteNotice::QualifiersKept { property };
+            if !notices.contains(&notice) {
+                notices.push(notice);
+            }
+        }
+        Ok(EditReport { report, notices })
+    }
+
+    /// Applies the metadata template `template` to `image` through the write plan and the safe
+    /// write, with its variables filled with the image's values (ADR 0017 U13-Q9; see the module
+    /// comment), and returns the report with the plan's notices. A variable that cannot be filled
+    /// is [`EditError::Variable`] and nothing is written. A changed list with qualifiers is put
+    /// back and not written, and adds a [`WriteNotice::QualifiersKept`], also when the report is
+    /// [`WriteReport::Unchanged`], never twice (§8). `checks` are the caller's image checks;
+    /// `journal` is the app's write journal.
+    pub fn apply_template_file_safely(
+        &mut self,
+        image: &Path,
+        template: &TemplateFile,
+        options: &EditOptions,
+        checks: &dyn ImageCheck,
+        journal: &Journal,
+    ) -> Result<EditReport, EditError> {
+        if !supports_rating(image) {
+            return Err(EditError::Unsupported(format!(
+                "metadata is not supported for {}",
+                image.display()
+            )));
+        }
+        let (read, values) = self
+            .read_metadata_with_values(image, options.fallback)
+            .map_err(EditError::Read)?;
+        let fields = template
+            .fields
+            .iter()
+            .map(|(xmp_id, value)| Ok((xmp_id.clone(), variables::fill_value(value, &values)?)))
+            .collect::<Result<Vec<_>, VariableError>>()
+            .map_err(EditError::Variable)?;
+        // A field empty after filling is dropped and a list's repeated entries are merged by the
+        // template's own rules.
+        let filled = TemplateFile::new(fields, template.add.clone());
+        let original = read.reconciled.metadata.clone();
+        let mut metadata = read.reconciled.metadata;
+        template::apply(&filled.to_template(), &mut metadata).map_err(EditError::Template)?;
+        let qualifiers_kept = restore_qualified(&mut metadata, &original);
+        let plan =
+            write_plan::plan(&metadata, &read.state, options.settings).map_err(EditError::Plan)?;
+        let report = self
+            .write_safely(image, &plan, checks, journal)
+            .map_err(EditError::Write)?;
+        let mut notices = match report {
+            WriteReport::Unchanged => Vec::new(),
+            WriteReport::Written { .. } => plan.notices,
+        };
         for property in qualifiers_kept {
             let notice = WriteNotice::QualifiersKept { property };
             if !notices.contains(&notice) {
@@ -635,6 +722,105 @@ fn orientation_value(value: &Json) -> Option<u16> {
     u16::try_from(number)
         .ok()
         .filter(|value| (1..=8).contains(value))
+}
+
+/// The editor's `edits` with their variables filled with one image's `values` (ADR 0017 U13-Q9;
+/// see the module comment), in order. A **Set** whose value is the same after filling is kept as
+/// it is; otherwise its value is cleaned ([`clean_filled`]) and, when it has no content left, the
+/// edit is left out (no change). The entries an **Entries** adds are filled, those it removes are
+/// not; a **Clear** is kept. The first error is returned.
+fn fill_edits(edits: &[Edit], values: &VariableValues) -> Result<Vec<Edit>, EditError> {
+    let mut filled = Vec::with_capacity(edits.len());
+    for edit in edits {
+        match edit {
+            Edit::Set {
+                property,
+                field,
+                value,
+            } => {
+                let new = variables::fill_value(value, values).map_err(EditError::Variable)?;
+                if new == *value {
+                    filled.push(edit.clone());
+                    continue;
+                }
+                let new = clean_filled(value, new);
+                if has_content(&new) {
+                    filled.push(Edit::Set {
+                        property: property.clone(),
+                        field: field.clone(),
+                        value: new,
+                    });
+                }
+            }
+            Edit::Entries {
+                property,
+                add,
+                remove,
+            } => {
+                let add = add
+                    .iter()
+                    .map(|entry| variables::fill(entry, values))
+                    .collect::<Result<Vec<_>, VariableError>>()
+                    .map_err(EditError::Variable)?;
+                filled.push(Edit::Entries {
+                    property: property.clone(),
+                    add,
+                    remove: remove.clone(),
+                });
+            }
+            Edit::Clear { .. } => filled.push(edit.clone()),
+        }
+    }
+    Ok(filled)
+}
+
+/// `filled`, the value `given` after [`variables::fill_value`] (the same shape), cleaned: a list
+/// loses its blank entries and exact repeats (the first kept); in a structure or each entry of a
+/// list of structures, at any depth, a field that lost its content by the filling is dropped, its
+/// lists are cleaned the same way and an entry left with no field is dropped. Languages, fields
+/// outside the structure's definition and the order of the fields are kept; a text or a Lang Alt
+/// is not cleaned.
+fn clean_filled(given: &Value, filled: Value) -> Value {
+    match (given, filled) {
+        (_, Value::List(entries)) => {
+            let mut kept: Vec<String> = Vec::new();
+            for entry in entries {
+                if !entry.trim().is_empty() && !kept.contains(&entry) {
+                    kept.push(entry);
+                }
+            }
+            Value::List(kept)
+        }
+        (Value::Struct(given), Value::Struct(filled)) => {
+            Value::Struct(clean_filled_struct(given, filled))
+        }
+        (Value::StructList(given), Value::StructList(filled)) => Value::StructList(
+            given
+                .iter()
+                .zip(filled)
+                .filter_map(|(given, filled)| {
+                    let entry = clean_filled_struct(given, filled);
+                    (!entry.fields.is_empty() || given.fields.is_empty()).then_some(entry)
+                })
+                .collect(),
+        ),
+        (_, filled) => filled,
+    }
+}
+
+/// [`clean_filled`] on each field of a structure: a field that had content in `given` and has none
+/// after filling and cleaning is dropped; the others are kept in their order.
+fn clean_filled_struct(given: &StructValue, filled: StructValue) -> StructValue {
+    let fields = given
+        .fields
+        .iter()
+        .zip(filled.fields)
+        .filter_map(|((_, before), (id, after))| {
+            let after = clean_filled(before, after);
+            (has_content(&after) || !has_content(before)).then_some((id, after))
+        })
+        .collect();
+    StructValue { fields }
 }
 
 /// The properties of the [`Edit::Entries`] in `edits` that were left alone because of an `Open`

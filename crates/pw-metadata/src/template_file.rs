@@ -7,6 +7,12 @@
 //! rules; [`TemplateFile::to_template`] turns it into the [`Template`] that
 //! [`crate::ExifTool::apply_template_safely`] applies through the write plan and the safe write.
 //!
+//! A template keeps its **variables** (`{date}` …, ADR 0017 U13-Q9, [`crate::variables`]) as
+//! written: they are filled with each image's values when it is applied, by
+//! [`crate::ExifTool::apply_template_file_safely`], which runs the filled fields through
+//! [`TemplateFile::new`] again before [`TemplateFile::to_template`].
+//! [`TemplateFile::check_variables`] finds an unknown variable before anything is written.
+//!
 //! A template holds only properties the metadata window edits ([`in_template`], U13-Q3), so a file
 //! from another program cannot bring in a field the template window cannot show.
 //!
@@ -37,6 +43,7 @@ use crate::template::{
     LOCATION_CREATED, Mode, Template, TemplateField, has_content, sort_fields, x_default,
 };
 use crate::value::{self, Metadata, Value, ValueError};
+use crate::variables::{self, VariableError};
 use crate::write_plan::{self, ExifPresent, FileState, PlanError, WriteSettings, XmpPresent};
 
 /// The URI of RawStride's template namespace (prefix `rawstride`; owner, 2026-11-23, ADR 0007
@@ -294,6 +301,17 @@ impl TemplateFile {
             });
         }
         Template { fields }
+    }
+
+    /// The first error of the variables of the fields' values, in order, by syntax and names
+    /// ([`variables::check_value`]; never [`VariableError::NoCaptureTime`], which depends on the
+    /// image). Called before anything is written, so an unknown variable is found once instead of
+    /// at each image (ADR 0017 U13-Q9).
+    pub fn check_variables(&self) -> Result<(), VariableError> {
+        for (_, value) in &self.fields {
+            variables::check_value(value)?;
+        }
+        Ok(())
     }
 }
 
@@ -1428,6 +1446,37 @@ mod tests {
         assert_eq!(
             value_of(&metadata, LOCATION_SHOWN),
             Some(&shown(&["Lund", "Malmö"]))
+        );
+    }
+
+    // --- check_variables (T288) ---
+
+    #[test]
+    fn check_variables_accepts_known_variables_and_doubled_braces() {
+        let template_file = made(&[
+            ("photoshop:Headline", text("{date} {{x}}")),
+            ("dc:subject", list(&["{year}", "{{y}}"])),
+        ]);
+        assert_eq!(template_file.fields.len(), 2, "precondition");
+        assert_eq!(template_file.check_variables(), Ok(()));
+    }
+
+    #[test]
+    fn check_variables_finds_an_unknown_variable_in_a_location_shown_city() {
+        let template_file = made(&[
+            ("photoshop:Headline", text("{date}")),
+            (
+                LOCATION_SHOWN,
+                Value::StructList(vec![
+                    entry(&[(CITY, text("Lund"))]),
+                    entry(&[(SUBLOCATION, text("Hamnen")), (CITY, text("{job}"))]),
+                ]),
+            ),
+        ]);
+        assert_eq!(template_file.fields.len(), 2, "precondition");
+        assert_eq!(
+            template_file.check_variables(),
+            Err(VariableError::Unknown("job".to_string()))
         );
     }
 }

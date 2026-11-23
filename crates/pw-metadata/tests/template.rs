@@ -11,7 +11,7 @@
 
 use std::path::{Path, PathBuf};
 
-use pw_metadata::edit::{EditError, EditOptions};
+use pw_metadata::edit::{EditError, EditOptions, EditReport};
 use pw_metadata::iim::Fallback;
 use pw_metadata::journal::Journal;
 use pw_metadata::read::MetadataRead;
@@ -20,6 +20,8 @@ use pw_metadata::safe_write::{NoImageCheck, WriteReport};
 use pw_metadata::template::{Mode, Template, TemplateField};
 use pw_metadata::template_file::{TemplateFile, write_exiftool_config};
 use pw_metadata::value::{LangAlt, StructValue, Value};
+use pw_metadata::variables::VariableError;
+use pw_metadata::write_plan::WriteNotice;
 use pw_metadata::{ExifTool, Iptc, LocalizedValue};
 
 /// The small baseline JPEG of `crates/pw-thumbcache/src/jpeg_fixture.rs`, copied.
@@ -204,6 +206,23 @@ impl Scratch {
         )
     }
 
+    /// Applies the template file `template` with its variables filled (T288), with the default
+    /// options and `NoImageCheck`.
+    fn apply_file(
+        &self,
+        et: &mut ExifTool,
+        image: &Path,
+        template: &TemplateFile,
+    ) -> Result<EditReport, EditError> {
+        et.apply_template_file_safely(
+            image,
+            template,
+            &EditOptions::default(),
+            &NoImageCheck,
+            &self.journal,
+        )
+    }
+
     fn remove(self) {
         let _ = std::fs::remove_dir_all(&self.dir);
         let _ = std::fs::remove_dir_all(&self.journal_dir);
@@ -285,6 +304,24 @@ fn assert_report(result: Result<WriteReport, EditError>, expected: WriteReport) 
     match result {
         Ok(report) => assert_eq!(report, expected),
         Err(error) => panic!("expected {expected:?}, got the error {error}"),
+    }
+}
+
+/// Fails the test unless `result` is an edit report with `report` and `notices`.
+fn assert_edit_report(
+    result: Result<EditReport, EditError>,
+    report: WriteReport,
+    notices: &[WriteNotice],
+) {
+    match result {
+        Ok(got) => assert_eq!(
+            got,
+            EditReport {
+                report,
+                notices: notices.to_vec(),
+            }
+        ),
+        Err(error) => panic!("expected {report:?}, got the error {error}"),
     }
 }
 
@@ -622,4 +659,269 @@ fn a_saved_template_file_is_read_back_and_applied() {
     s.assert_clean();
     s.remove();
     let _ = std::fs::remove_dir_all(&templates);
+}
+
+// --- A template file with variables (T288) ---
+
+/// The capture time, make and model the tests of variables set up.
+const CAMERA: [&str; 3] = [
+    "-ExifIFD:DateTimeOriginal=2026:11:22 14:30:05",
+    "-IFD0:Make=SONY",
+    "-IFD0:Model=ILCE-1",
+];
+const LOCATION_CREATED: &str = "Iptc4xmpExt:LocationCreated";
+const CONTACT_INFO: &str = "Iptc4xmpCore:CreatorContactInfo";
+const CITY: &str = "Iptc4xmpExt:City";
+const EMAIL: &str = "Iptc4xmpCore:CiEmailWork";
+
+/// The name of the folder `file` is in.
+fn folder_name(file: &Path) -> String {
+    file.parent()
+        .and_then(Path::file_name)
+        .unwrap()
+        .to_string_lossy()
+        .into_owned()
+}
+
+/// A structure of these fields.
+fn structure(fields: &[(&str, Value)]) -> StructValue {
+    StructValue {
+        fields: fields
+            .iter()
+            .map(|(id, value)| (id.to_string(), value.clone()))
+            .collect(),
+    }
+}
+
+/// `TemplateFile::new` of `fields`, with the + box of each of `add`; every field must be kept.
+fn template_file(fields: &[(&str, Value)], add: &[&str]) -> TemplateFile {
+    let made = TemplateFile::new(
+        fields
+            .iter()
+            .map(|(id, value)| (id.to_string(), value.clone()))
+            .collect(),
+        add.iter().map(|id| id.to_string()).collect(),
+    );
+    assert_eq!(made.fields.len(), fields.len(), "precondition: {made:?}");
+    made
+}
+
+/// A template file with a variable in every kind of field: a text, a Lang Alt, a list with its +
+/// box, a field of Location Created and a field of Creator's Contact Info.
+fn every_kind_of_field() -> TemplateFile {
+    template_file(
+        &[
+            ("photoshop:Headline", text("{date} {name}")),
+            ("dc:description", x_default("Shot with {model}")),
+            ("dc:subject", list(&["{year}", "{make}"])),
+            (
+                LOCATION_CREATED,
+                Value::StructList(vec![structure(&[(CITY, text("{folder}"))])]),
+            ),
+            (
+                CONTACT_INFO,
+                Value::Struct(structure(&[(EMAIL, text("{name}@example.com"))])),
+            ),
+        ],
+        &["dc:subject"],
+    )
+}
+
+/// Every kind of field of a template file is filled with the JPEG's own values; the same template
+/// again writes nothing.
+#[test]
+fn a_template_file_fills_every_kind_of_field() {
+    let mut et = exiftool();
+    let s = Scratch::new("variables-every-kind");
+    let file = s.jpeg();
+    let mut tags = CAMERA.to_vec();
+    tags.push("-XMP-dc:Subject=a");
+    write(&mut et, &file, &tags);
+    let template = every_kind_of_field();
+
+    assert_edit_report(s.apply_file(&mut et, &file, &template), written(&file), &[]);
+
+    let after = read(&mut et, &file);
+    assert_eq!(
+        value(&after, "photoshop:Headline"),
+        Some(text("2026-11-22 bild ä"))
+    );
+    assert_eq!(
+        value(&after, "dc:description"),
+        Some(x_default("Shot with ILCE-1"))
+    );
+    assert_eq!(
+        value(&after, "dc:subject"),
+        Some(list(&["a", "2026", "SONY"]))
+    );
+    assert_eq!(
+        value(&after, LOCATION_CREATED),
+        Some(Value::StructList(vec![structure(&[(
+            CITY,
+            text(&folder_name(&file))
+        )])]))
+    );
+    assert_eq!(
+        value(&after, CONTACT_INFO),
+        Some(Value::Struct(structure(&[(
+            EMAIL,
+            text("bild ä@example.com")
+        )])))
+    );
+    s.assert_clean();
+
+    let bytes = std::fs::read(&file).unwrap();
+    assert_edit_report(
+        s.apply_file(&mut et, &file, &template),
+        WriteReport::Unchanged,
+        &[],
+    );
+    assert_eq!(std::fs::read(&file).unwrap(), bytes);
+    s.assert_clean();
+    s.remove();
+}
+
+/// A date variable on a JPEG without a capture time stops the write: nothing is written.
+#[test]
+fn a_date_variable_without_a_capture_time_writes_nothing() {
+    let mut et = exiftool();
+    let s = Scratch::new("variables-no-date");
+    let file = s.jpeg();
+    write(&mut et, &file, &["-IFD0:Make=SONY", "-IFD0:Model=ILCE-1"]);
+    let bytes = std::fs::read(&file).unwrap();
+
+    match s.apply_file(&mut et, &file, &every_kind_of_field()) {
+        Err(EditError::Variable(VariableError::NoCaptureTime(name))) => assert_eq!(name, "date"),
+        other => panic!("expected NoCaptureTime, got {other:?}"),
+    }
+    assert_eq!(std::fs::read(&file).unwrap(), bytes);
+    s.assert_clean();
+    s.remove();
+}
+
+/// An unknown variable is an error and nothing is written.
+#[test]
+fn an_unknown_variable_in_a_template_file_writes_nothing() {
+    let mut et = exiftool();
+    let s = Scratch::new("variables-unknown");
+    let file = s.jpeg();
+    write(&mut et, &file, &CAMERA);
+    let bytes = std::fs::read(&file).unwrap();
+    let template = template_file(&[("photoshop:Headline", text("{job}"))], &[]);
+
+    match s.apply_file(&mut et, &file, &template) {
+        Err(EditError::Variable(VariableError::Unknown(name))) => assert_eq!(name, "job"),
+        other => panic!("expected Unknown, got {other:?}"),
+    }
+    assert_eq!(std::fs::read(&file).unwrap(), bytes);
+    s.assert_clean();
+    s.remove();
+}
+
+/// A `{make}` on a JPEG without Make leaves the field without content, which changes nothing: the
+/// Headline is kept and no keyword is added.
+#[test]
+fn a_field_empty_after_filling_changes_nothing() {
+    let mut et = exiftool();
+    let s = Scratch::new("variables-empty");
+    let file = s.jpeg();
+    write(&mut et, &file, &["-XMP-photoshop:Headline=Old"]);
+    let bytes = std::fs::read(&file).unwrap();
+    let template = template_file(
+        &[
+            ("photoshop:Headline", text("{make}")),
+            ("dc:subject", list(&["{make}"])),
+        ],
+        &["dc:subject"],
+    );
+
+    assert_edit_report(
+        s.apply_file(&mut et, &file, &template),
+        WriteReport::Unchanged,
+        &[],
+    );
+    assert_eq!(std::fs::read(&file).unwrap(), bytes);
+    let after = read(&mut et, &file);
+    assert_eq!(value(&after, "photoshop:Headline"), Some(text("Old")));
+    assert_eq!(value(&after, "dc:subject"), None);
+    s.assert_clean();
+    s.remove();
+}
+
+/// The fake RAW: `{date}` (it has no capture time) makes no sidecar; `{name}` gives its file stem
+/// in a new sidecar.
+#[test]
+fn a_template_file_on_a_raw_fills_its_sidecar() {
+    let mut et = exiftool();
+    let s = Scratch::new("variables-raw");
+    let raw = s.raw();
+    let sidecar = s.dir.join("TN0001.xmp");
+
+    let date = template_file(&[("photoshop:Headline", text("{date}"))], &[]);
+    match s.apply_file(&mut et, &raw, &date) {
+        Err(EditError::Variable(VariableError::NoCaptureTime(name))) => assert_eq!(name, "date"),
+        other => panic!("expected NoCaptureTime, got {other:?}"),
+    }
+    assert_eq!(s.files(), ["TN0001.ARW"]);
+
+    let name = template_file(&[("photoshop:Headline", text("{name}"))], &[]);
+    assert_edit_report(s.apply_file(&mut et, &raw, &name), written(&sidecar), &[]);
+    assert_eq!(std::fs::read(&raw).unwrap(), FAKE_RAW);
+    assert_eq!(tag(&mut et, &sidecar, "XMP-photoshop:Headline"), "TN0001");
+    s.assert_clean();
+    s.remove();
+}
+
+/// `{{x}}` gives `{x}`.
+#[test]
+fn doubled_braces_in_a_template_file_give_one_brace() {
+    let mut et = exiftool();
+    let s = Scratch::new("variables-braces");
+    let file = s.jpeg();
+    let template = template_file(&[("photoshop:Headline", text("{{x}}"))], &[]);
+
+    assert_edit_report(s.apply_file(&mut et, &file, &template), written(&file), &[]);
+    let after = read(&mut et, &file);
+    assert_eq!(value(&after, "photoshop:Headline"), Some(text("{x}")));
+    s.assert_clean();
+    s.remove();
+}
+
+/// A JPEG with IIM City and a matching checksum: a template file's literal City of 40 bytes gives
+/// the notice that IIM was cut to 32 bytes (§5.2), as an edit does.
+#[test]
+fn a_template_file_gives_the_plans_notices() {
+    let mut et = exiftool();
+    let s = Scratch::new("variables-notices");
+    let file = s.jpeg();
+    write(
+        &mut et,
+        &file,
+        &[
+            "-XMP-photoshop:City=Lund",
+            "-IPTC:CodedCharacterSet=UTF8",
+            "-IPTC:City=Lund",
+            "-IPTCDigest=new",
+        ],
+    );
+    assert_eq!(
+        read(&mut et, &file).state.digest,
+        IimDigest::Matches,
+        "precondition"
+    );
+    let long = "0123456789012345678901234567890123456789";
+    assert_eq!(long.len(), 40);
+    let template = template_file(&[("photoshop:City", text(long))], &[]);
+
+    assert_edit_report(
+        s.apply_file(&mut et, &file, &template),
+        written(&file),
+        &[WriteNotice::Truncated {
+            property: "photoshop:City".to_string(),
+        }],
+    );
+    assert_eq!(tag(&mut et, &file, "XMP-photoshop:City"), long);
+    assert_eq!(tag(&mut et, &file, "IPTC:City"), &long[..32]);
+    s.assert_clean();
+    s.remove();
 }

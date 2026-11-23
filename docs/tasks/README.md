@@ -87,8 +87,7 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status |
 |---|---|---|
-| [T288](T288-variables-when-written.md) | Variables filled when an image is written; applying a template file | Open |
-| [T289](T289-variables-in-metadata-window.md) | The metadata window checks the variables before Save | Blocked |
+| [T289](T289-variables-in-metadata-window.md) | The metadata window checks the variables before Save | Open |
 
 ## Writing a task (owner and reviewer)
 

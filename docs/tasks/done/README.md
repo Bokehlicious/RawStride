@@ -294,3 +294,4 @@ was when the task was done, so "this file", "below" and "the Log" in T1–T115 m
 | [T285](T285-template-file-read-write.md) | Reading and saving a template file with ExifTool (pw-metadata) |
 | [T286](T286-keyboard-shortcuts-table.md) | The page Keyboard Shortcuts as a table of three columns, the Action column's width saved (pw-loupe) |
 | [T287](T287-variables-model.md) | The variables of a metadata text: reading and filling them (pw-metadata) |
+| [T288](T288-variables-when-written.md) | Variables filled when an image is written; applying a template file (pw-metadata) |

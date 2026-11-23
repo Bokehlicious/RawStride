@@ -151,7 +151,8 @@ impl From<EditError> for WriteError {
             other @ (EditError::Unsupported(_)
             | EditError::Value(_)
             | EditError::Plan(_)
-            | EditError::Template(_)) => WriteError::Other(other.to_string()),
+            | EditError::Template(_)
+            | EditError::Variable(_)) => WriteError::Other(other.to_string()),
         }
     }
 }
@@ -574,6 +575,7 @@ mod edit_error_tests {
     use crate::safe_write::{OriginalState, SafeWriteError, Stage};
     use crate::template::TemplateError;
     use crate::value::ValueError;
+    use crate::variables::VariableError;
     use crate::write_plan::PlanError;
     use std::path::{Path, PathBuf};
 
@@ -664,6 +666,7 @@ mod edit_error_tests {
             EditError::Value(ValueError::Empty("xmp:Label".to_string())),
             EditError::Plan(PlanError::NotEditable("photoshop:Urgency".to_string())),
             EditError::Template(TemplateError::CannotClear("dc:rights".to_string())),
+            EditError::Variable(VariableError::Unknown("job".to_string())),
         ];
         for error in cases {
             let text = error.to_string();

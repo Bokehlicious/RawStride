@@ -1,4 +1,4 @@
-# T289. The metadata window checks the variables before Save — Blocked
+# T289. The metadata window checks the variables before Save — Open
 
 - **Why:** ADR 0017 U13, part U13b (U13-Q9). After T288 the variables (`{date}`, `{name}` …) in
   the metadata window's text fields are filled with each image's own values when it is written,
@@ -103,3 +103,4 @@
 | 2026-11-23 | Blocked | Added (ADR 0017 U13, part U13b, last of the chain T287 → T288 → T289); waits for T288 |
 | 2026-11-23 | Blocked | Cold read: when the errors show (after Save is refused; a sub-field's at once); the choice-list test done in the check itself; Contact Info sub-fields checked; a list field's whole text checked; values written but not changed by the user (a chosen conflict value, unchanged list entries, unchanged parts of a structure list) named as an accepted limit for `known-limits.md` at Done; the "only a date" comments updated; the test's Caption replaced by Title, Location Shown's City spelled out, tests for an added entry, Contact Info and a choice list |
 | 2026-11-23 | Blocked | Chain review (T287–T289): texts the user did not type are escaped with `variables::escape` (point 4: unchanged list entries, a chosen conflict value, the unchanged parts of a structure list), so a brace from another program never fails a write and the accepted limit of the cold read is gone; only typed list entries checked; recent values keep the typed text (point 6); `docs/glossary.md` listed in case; tests for escaping; the hand check looks at the form after a batch with a failure and needs a JPEG without DateTimeOriginal |
+| 2026-11-23 | Open | T288 done (`apply_template_file_safely`, `EditError::Variable`, `TemplateFile::check_variables` as specified) |

@@ -91,6 +91,12 @@ dropped is removed; git history and `done/` keep it.
 
 - **A template file left in `.saving`** (T285's review, 2026-11-23): when ExifTool does not answer in time but writes the new file afterwards, `write_template_file` has already cleaned up, so the file (and the `.saving` subfolder of the templates' folder) stays. `.saving` is never listed among the templates, so nothing is loaded from it. A task only if it is seen in use.
 
+- **Variables: the camera's tags in other groups** (T288's review, 2026-11-23): `{make}`, `{model}` and the date variables read `IFD0:Make`, `IFD0:Model` and Exif DateTimeOriginal. A RAW whose maker stores them elsewhere gives an empty `{make}` and `{model}` and no capture time (a date variable then fails that image). By ExifTool 13.64's tag list Panasonic RW2 has Make and Model in `IFD0`; where an RW2's DateTimeOriginal is was not seen, and no real file was checked. A task only if it is seen in use.
+
+- **Variables: a structure's sub-field emptied by filling** (T288, accepted in its chain review, 2026-11-23): in a Set of a whole structure list from the metadata window (Location Shown, for example), a sub-field whose variable fills to nothing (`{make}` without a Make) is dropped from its entry, so that sub-field's old value leaves the entry too, as the window's Set replaces the whole list.
+
+- **Variables: a Lang Alt inside a structure is not cleaned** (T288's review, owner 2026-11-23): a Lang Alt sub-field (Location Shown's Location Name, for example) whose `x-default` fills to nothing while another language has text keeps an empty `x-default` beside that language, and is written so. The metadata window's own Lang Alt fields send only `x-default`, so they are not affected (an empty one is no change). A task only if it is seen in use.
+
 ## Moves to `_rejected` and `_picked`
 
 - **`relocate::companions`** (`/code-review` of T169, 2026-11-17; the moves are Windows only;

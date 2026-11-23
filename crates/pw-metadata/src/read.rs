@@ -49,6 +49,7 @@ use crate::reconcile::{
     ExifFields, FileKind, IimDigest, IimRead, Notice, Readings, Reconciled, reconcile,
 };
 use crate::value::{LangAlt, Origin, StructValue, Value};
+use crate::variables::VariableValues;
 use crate::write_plan::{ExifPresent, FileState, XmpPresent};
 use crate::{Error, ExifTool, Result};
 
@@ -80,6 +81,8 @@ const IMAGE_TAGS: &[&str] = &[
     "-IFD0:ImageDescription",
     "-IFD0:Artist",
     "-IFD0:Copyright",
+    "-IFD0:Make",
+    "-IFD0:Model",
     "-ExifIFD:Photographer",
     "-ExifIFD:ImageEditor",
     "-IFD0:Rating",
@@ -128,6 +131,19 @@ impl ExifTool {
     /// TIFF; anything else is [`Error::Unsupported`]. A missing or unreadable file is the error
     /// ExifTool reports.
     pub fn read_metadata(&mut self, image: &Path, fallback: Fallback) -> Result<MetadataRead> {
+        self.read_metadata_with_values(image, fallback)
+            .map(|(read, _)| read)
+    }
+
+    /// [`ExifTool::read_metadata`], and also the values the variables of a metadata text are
+    /// filled with for `image` (ADR 0017 U13-Q9): Exif DateTimeOriginal as read, IFD0 Make and
+    /// Model, decoded as the other Exif fields (with `fallback`), all read from the image file (for
+    /// a manufacturer RAW the RAW itself).
+    pub(crate) fn read_metadata_with_values(
+        &mut self,
+        image: &Path,
+        fallback: Fallback,
+    ) -> Result<(MetadataRead, VariableValues)> {
         let kind = file_kind(image)?;
         let file = self.read_json(&image_args(image), image)?;
         let sidecars = find_sidecars(image)?;
@@ -202,6 +218,13 @@ impl ExifTool {
             .collect();
 
         let exif = exif_fields(&file, fallback);
+        let camera_text = |name: &str| tag(&file, name).and_then(|json| exif_text(json, fallback));
+        let values = VariableValues::of(
+            image,
+            exif.date_time_original.as_deref(),
+            camera_text("Make").as_deref(),
+            camera_text("Model").as_deref(),
+        );
         let state = file_state(kind, iim.as_ref(), &exif, &file, xmp_present);
         let mut reconciled = reconcile(Readings {
             kind,
@@ -215,11 +238,12 @@ impl ExifTool {
             reconciled.metadata.mark_qualified(id);
             file_notices.push(FileNotice::ListWithQualifiers(id.to_string()));
         }
-        Ok(MetadataRead {
+        let read = MetadataRead {
             reconciled,
             file_notices,
             state,
-        })
+        };
+        Ok((read, values))
     }
 
     /// Runs one JSON read and returns the object of its one file. No output means ExifTool could

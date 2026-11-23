@@ -16,7 +16,8 @@ use pw_metadata::iim::Fallback;
 use pw_metadata::journal::Journal;
 use pw_metadata::reconcile::IimDigest;
 use pw_metadata::safe_write::{NoImageCheck, WriteReport};
-use pw_metadata::value::{ConflictRule, LangAlt, Value};
+use pw_metadata::value::{ConflictRule, LangAlt, StructValue, Value};
+use pw_metadata::variables::VariableError;
 use pw_metadata::write_plan::WriteNotice;
 use pw_metadata::{ExifTool, Rating};
 
@@ -990,6 +991,226 @@ fn bad_orientations_and_file_kinds_are_refused() {
     }
     assert_eq!(std::fs::read(&file).unwrap(), SMALL);
     assert_eq!(s.names(), vec!["bild ä.jpg".to_string()]);
+    s.assert_clean();
+    s.remove();
+}
+
+// --- Edits with variables (T288) ---
+
+/// The capture time, make and model the tests of variables set up.
+const CAMERA: [&str; 3] = [
+    "-ExifIFD:DateTimeOriginal=2026:11:22 14:30:05",
+    "-IFD0:Make=SONY",
+    "-IFD0:Model=ILCE-1",
+];
+const CONTACT_INFO: &str = "Iptc4xmpCore:CreatorContactInfo";
+const EMAIL: &str = "Iptc4xmpCore:CiEmailWork";
+const LOCATION_SHOWN: &str = "Iptc4xmpExt:LocationShown";
+const LOCATION_NAME: &str = "Iptc4xmpExt:LocationName";
+const SUBLOCATION: &str = "Iptc4xmpExt:Sublocation";
+const CITY: &str = "Iptc4xmpExt:City";
+
+/// A Set of the field `field` of the single structure `property`.
+fn set_field(property: &str, field: &str, value: Value) -> Edit {
+    Edit::Set {
+        property: property.to_string(),
+        field: Some(field.to_string()),
+        value,
+    }
+}
+
+/// A structure of these fields, in this order.
+fn structure(fields: &[(&str, Value)]) -> StructValue {
+    StructValue {
+        fields: fields
+            .iter()
+            .map(|(id, value)| (id.to_string(), value.clone()))
+            .collect(),
+    }
+}
+
+/// A Lang Alt with `x-default` and `sv`.
+fn two_languages(default: &str, swedish: &str) -> Value {
+    Value::LangAlt(LangAlt::from_entries(vec![
+        ("x-default".to_string(), default.to_string()),
+        ("sv".to_string(), swedish.to_string()),
+    ]))
+}
+
+/// The name of the folder `file` is in.
+fn folder_name(file: &Path) -> String {
+    file.parent()
+        .and_then(Path::file_name)
+        .unwrap()
+        .to_string_lossy()
+        .into_owned()
+}
+
+/// A Set of a text, a Lang Alt and a field of Creator's Contact Info, and an Entries edit, all
+/// with variables, are written with the JPEG's own values.
+#[test]
+fn edits_with_variables_are_written_filled() {
+    let mut et = exiftool();
+    let s = Scratch::new("variables-filled");
+    let file = s.jpeg();
+    write(&mut et, &file, &CAMERA);
+    let edits = [
+        set("photoshop:Headline", text("{date}")),
+        set("dc:description", x_default("{name}")),
+        Edit::Entries {
+            property: "dc:subject".to_string(),
+            add: vec!["{year}".to_string()],
+            remove: Vec::new(),
+        },
+        set_field(CONTACT_INFO, EMAIL, text("{name}@example.com")),
+    ];
+
+    assert_edit(s.edit(&mut et, &file, &edits), written(&file), &[]);
+    assert_eq!(
+        read_value(&mut et, &file, "photoshop:Headline"),
+        Some(text("2026-11-22"))
+    );
+    assert_eq!(
+        read_value(&mut et, &file, "dc:description"),
+        Some(x_default("bild ä"))
+    );
+    assert_eq!(
+        read_value(&mut et, &file, "dc:subject"),
+        Some(list(&["2026"]))
+    );
+    assert_eq!(
+        read_value(&mut et, &file, CONTACT_INFO),
+        Some(Value::Struct(structure(&[(
+            EMAIL,
+            text("bild ä@example.com")
+        )])))
+    );
+    s.assert_clean();
+    s.remove();
+}
+
+/// A Set of Headline `{make}` on a JPEG without Make is no change; a Set of keywords with `{make}`
+/// and a repeated entry writes the one keyword left.
+#[test]
+fn a_value_emptied_by_filling_is_no_change_and_a_list_is_cleaned() {
+    let mut et = exiftool();
+    let s = Scratch::new("variables-empty");
+    let file = s.jpeg();
+
+    assert_edit(
+        s.edit(&mut et, &file, &[set("photoshop:Headline", text("{make}"))]),
+        WriteReport::Unchanged,
+        &[],
+    );
+    assert_eq!(std::fs::read(&file).unwrap(), SMALL);
+
+    assert_edit(
+        s.edit(
+            &mut et,
+            &file,
+            &[set("dc:subject", list(&["{make}", "x", "x"]))],
+        ),
+        written(&file),
+        &[],
+    );
+    assert_eq!(read_value(&mut et, &file, "dc:subject"), Some(list(&["x"])));
+    assert_eq!(read_value(&mut et, &file, "photoshop:Headline"), None);
+    s.assert_clean();
+    s.remove();
+}
+
+/// An unknown variable, and a date variable on a JPEG without a capture time, are errors and the
+/// file is not changed.
+#[test]
+fn a_variable_that_cannot_be_filled_writes_nothing() {
+    let mut et = exiftool();
+    let s = Scratch::new("variables-errors");
+    let file = s.jpeg();
+    write(&mut et, &file, &["-IFD0:Make=SONY"]);
+    let bytes = std::fs::read(&file).unwrap();
+
+    match s.edit(&mut et, &file, &[set("photoshop:Headline", text("{job}"))]) {
+        Err(EditError::Variable(VariableError::Unknown(name))) => assert_eq!(name, "job"),
+        other => panic!("expected Unknown, got {other:?}"),
+    }
+    assert_eq!(std::fs::read(&file).unwrap(), bytes);
+
+    let edits = [
+        set("photoshop:Headline", text("{make}")),
+        set("dc:title", x_default("{date}")),
+    ];
+    match s.edit(&mut et, &file, &edits) {
+        Err(EditError::Variable(VariableError::NoCaptureTime(name))) => assert_eq!(name, "date"),
+        other => panic!("expected NoCaptureTime, got {other:?}"),
+    }
+    assert_eq!(std::fs::read(&file).unwrap(), bytes);
+    s.assert_clean();
+    s.remove();
+}
+
+/// A Set of Location Shown with City `{folder}` in its first entry: the City is filled, the first
+/// entry's Location Name keeps its `sv` and the second entry is kept as it was.
+#[test]
+fn a_filled_location_shown_keeps_languages_and_other_entries() {
+    let mut et = exiftool();
+    let s = Scratch::new("variables-location-shown");
+    let file = s.jpeg();
+    let shown = |city: &str| {
+        Value::StructList(vec![
+            structure(&[
+                (LOCATION_NAME, two_languages("Harbour", "Hamnen")),
+                (CITY, text(city)),
+            ]),
+            structure(&[(SUBLOCATION, text("Torget")), (CITY, text("Lund"))]),
+        ])
+    };
+    assert_edit(
+        s.edit(&mut et, &file, &[set(LOCATION_SHOWN, shown("Old"))]),
+        written(&file),
+        &[],
+    );
+    assert_eq!(
+        read_value(&mut et, &file, LOCATION_SHOWN),
+        Some(shown("Old")),
+        "precondition"
+    );
+
+    assert_edit(
+        s.edit(&mut et, &file, &[set(LOCATION_SHOWN, shown("{folder}"))]),
+        written(&file),
+        &[],
+    );
+    assert_eq!(
+        read_value(&mut et, &file, LOCATION_SHOWN),
+        Some(shown(&folder_name(&file)))
+    );
+    s.assert_clean();
+    s.remove();
+}
+
+/// A City `{make}` on a JPEG without Make drops only the City from its entry; the entry's Location
+/// Name is written with both languages.
+#[test]
+fn a_sub_field_emptied_by_filling_is_dropped_from_its_entry() {
+    let mut et = exiftool();
+    let s = Scratch::new("variables-sub-field");
+    let file = s.jpeg();
+    let edit = set(
+        LOCATION_SHOWN,
+        Value::StructList(vec![structure(&[
+            (LOCATION_NAME, two_languages("Harbour", "Hamnen")),
+            (CITY, text("{make}")),
+        ])]),
+    );
+
+    assert_edit(s.edit(&mut et, &file, &[edit]), written(&file), &[]);
+    assert_eq!(
+        read_value(&mut et, &file, LOCATION_SHOWN),
+        Some(Value::StructList(vec![structure(&[(
+            LOCATION_NAME,
+            two_languages("Harbour", "Hamnen")
+        )])]))
+    );
     s.assert_clean();
     s.remove();
 }
