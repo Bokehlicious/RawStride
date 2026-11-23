@@ -300,3 +300,4 @@ was when the task was done, so "this file", "below" and "the Log" in T1–T115 m
 | [T291](T291-template-form-model.md) | The template window's form in plain Rust (pw-loupe) |
 | [T292](T292-template-file-thread.md) | Reading and saving template files on a thread of their own (pw-loupe, pw-metadata re-export) |
 | [T293](T293-template-window.md) | The template window (pw-loupe) |
+| [T294](T294-import-applies-template-file.md) | The import writes a template file instead of its six fields (pw-loupe) |

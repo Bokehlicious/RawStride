@@ -30,8 +30,6 @@ dropped is removed; git history and `done/` keep it.
 - **Lists with qualifiers** (T193's chain review and review, 2026-11-18; sorted after T194, owner
   2026-11-19). Editing such a list with its qualifiers kept is in `backlog.md`. Known limits until
   then, each with its reason:
-  - the import's template drops a change to such a list without a notice (`apply_template_safely`
-    returns no plan notices): waits for templates in full (ADR 0017 U13);
   - the editor gives no warning before OK that the list will not be written: not needed while the
     info panel's notice and the write notice tell the user;
   - `write_plan::plan` itself does not refuse a changed list with qualifiers (only its callers in
@@ -381,6 +379,15 @@ with ADR 0026 F3, in `plans/adr-0018-0025-steps.md`.)
   cancel is seen at the next progress call (or in the end's wait); writes started finish and
   are listed. With one process no write ran during a copy. The template's writes add no
   progress step, so the progress may also stay at 100 % while they finish.
+- *A backup copy's lines repeat the destination's* (`/code-review` of T294, 2026-11-23, owner):
+  the template is written to the destination copy and the backup copy, and each line of a
+  failure or a notice names the file only (`file_name(target)`), so with a backup every notice
+  (and every failure) shows twice, the same, and the two take two of the ten lines. A task only if
+  it is seen in use.
+- *The template is copied for each pooled write* (`/code-review` of T294, 2026-11-23, owner): with
+  more than one write process, `submit_template` gives each job its own clone of the whole
+  `TemplateFile` (up to 50 fields with lists) where an `Arc` would share one. Not measured; a
+  task only if a large import is seen to slow down.
 
 ## The metadata window's layout (ADR 0017 U10b)
 

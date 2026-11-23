@@ -46,8 +46,8 @@ pub struct ImportDialog {
 }
 
 /// True when `a` and `b` give the same preview: every field of `ImportForm` the worker's
-/// `preview` reads is equal. `iptc` and `eject` are left out because the preview does not read
-/// them; a field added to `ImportForm` must be placed on one side or the other here.
+/// `preview` reads is equal. `template` and `eject` are left out because the preview does not
+/// read them; a field added to `ImportForm` must be placed on one side or the other here.
 fn preview_fields_equal(a: &ImportForm, b: &ImportForm) -> bool {
     let ImportForm {
         source,
@@ -58,7 +58,7 @@ fn preview_fields_equal(a: &ImportForm, b: &ImportForm) -> bool {
         name,
         job,
         first_seq,
-        iptc: _,
+        template: _,
         eject: _,
         incremental,
     } = a;
@@ -1094,10 +1094,10 @@ mod tests {
         assert!(dialog.can_start());
 
         dialog.edit(
-            |form| form.iptc.creator = "A. Photographer".to_string(),
+            |form| form.template = Some("Studio.xmp".into()),
             t + Duration::from_secs(1),
         );
-        assert_eq!(dialog.form().iptc.creator, "A. Photographer");
+        assert_eq!(dialog.form().template, Some("Studio.xmp".into()));
         assert!(is_current(&dialog, 2));
         assert!(dialog.can_start());
         assert!(dialog.preview_is_current());
@@ -1128,7 +1128,7 @@ mod tests {
         dialog.sent(31);
 
         dialog.edit(
-            |form| form.iptc.copyright = "(c) 2026".to_string(),
+            |form| form.template = Some("Copyright.xmp".into()),
             t + PREVIEW_DELAY + Duration::from_millis(50),
         );
         assert!(matches!(dialog.state(), ImportDialogState::Previewing));
@@ -1138,7 +1138,7 @@ mod tests {
             result: Ok(preview(3)),
         });
         assert!(is_current(&dialog, 3));
-        assert_eq!(dialog.form().iptc.copyright, "(c) 2026");
+        assert_eq!(dialog.form().template, Some("Copyright.xmp".into()));
     }
 
     #[test]
@@ -1148,14 +1148,14 @@ mod tests {
 
         dialog.edit(|form| form.folder = "{year}".to_string(), t);
         dialog.edit(
-            |form| form.iptc.credit = "Agency".to_string(),
+            |form| form.template = Some("Agency.xmp".into()),
             t + Duration::from_millis(100),
         );
         assert!(dialog.tick(t + Duration::from_millis(250)).is_none());
         assert!(matches!(
             dialog.tick(t + PREVIEW_DELAY),
             Some(DialogRequest::Preview { form, .. })
-                if form.folder == "{year}" && form.iptc.credit == "Agency"
+                if form.folder == "{year}" && form.template == Some("Agency.xmp".into())
         ));
     }
 
@@ -1175,7 +1175,7 @@ mod tests {
         });
 
         dialog.edit(
-            |form| form.iptc.url = "https://example.com".to_string(),
+            |form| form.template = Some("Web.xmp".into()),
             t + Duration::from_secs(1),
         );
         assert!(matches!(
@@ -1201,7 +1201,7 @@ mod tests {
         });
 
         dialog.edit(
-            |form| form.iptc.phone = "+46 0".to_string(),
+            |form| form.template = Some("Phone.xmp".into()),
             t + Duration::from_secs(1),
         );
         assert!(matches!(

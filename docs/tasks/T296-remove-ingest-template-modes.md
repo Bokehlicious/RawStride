@@ -1,4 +1,4 @@
-# T296. The ingest template's modes removed from pw-metadata — Blocked
+# T296. The ingest template's modes removed from pw-metadata — Open
 
 - **Why:** ADR 0017 U13, part U13c (U13-Q5: a template has no Keep, Append, Prefix or Clear;
   plan notes of U13: "U13c … removes `apply_template_safely` and the modes if nothing else uses
@@ -14,7 +14,7 @@
   `crates/pw-metadata/src/template.rs`, `crates/pw-metadata/src/edit.rs`,
   `crates/pw-metadata/src/template_file.rs` (comments only),
   `crates/pw-metadata/tests/template.rs`, `crates/pw-metadata/tests/edits.rs` (point 6's two
-  Clear tests only), `docs/test-inventory.md`.
+  Clear tests only), `docs/glossary.md` (point 9 only), `docs/test-inventory.md`.
 - **Background (read before starting):** `lib.rs` (`Iptc`, `LocalizedValue`, `Iptc::tags`,
   `is_empty`, `to_template`, their unit tests `to_template_tests` and the others on `Iptc`);
   `template.rs` (the module comment, `Mode`, `apply`, the join of Append and Prefix, the Clear
@@ -104,6 +104,10 @@
   8. `known-limits.md`'s tidying item of `edit.rs` and `template.rs` (the shared list-append
      helper and the others) is **not** done here; the report says whether this task made any of
      it moot (for example a blank test that was only Prefix's), so the reviewer can update it.
+  9. **`docs/glossary.md`** (owner, 2026-11-23, at T294's review): the two rows of texts T294
+     removed from the import dialog go: "Behåll, Ersätt, Lägg till efter, Lägg till före, Rensa
+     | Keep, Replace, Append, Prefix, Clear" (the template modes) and "Rensa och importera |
+     Clear and Import". Nothing else in the glossary changes.
 - **Beside T295:** it may run beside T295 (other crate); both change the test inventory's
   totals, and the second of the two to be reviewed has its totals counted again by the reviewer.
 - **Tests to add:** none new; point 6 keeps the safe write's coverage. The test inventory's
@@ -124,3 +128,4 @@
 | 2026-11-23 | Blocked | Added (ADR 0017 U13, part U13c, last of the chain T291 → T292 → T293 → T294 → T295 → T296). Waits for T294, its cold read and the chain review. No user-visible change, no CHANGELOG line |
 | 2026-11-23 | Blocked | The owner approved the reviewer's proposals U13-Q14–U13-Q19 (recorded in ADR 0017 §6.5); waits for its cold read and the chain review |
 | 2026-11-23 | Blocked | Cold read: the two Clear integration tests (IIM City cleared, checksum without XMP) have no `TemplateFile` form, so they move to `tests/edits.rs` with `Edit::Clear` (file added); the two tests of `CannotClear`'s text (`lib.rs` `edit_error_tests`, `edit.rs` `errors_are_shown_in_english`) use `UnknownProperty`; `tests/template.rs`'s mapping decided (which test goes, which moves, `xmpRights:Marked` given explicitly, `a_saved_template_file_is_read_back_and_applied` included), the `template.rs` unit tests that go or lose parts named; Append on a text or Lang Alt stays (reviewer's choice, not asked); `lib.rs`'s `CONTACT`, `BTreeMap`, both test modules, `X_DEFAULT` only if unused; `edit.rs`'s module comment's three places; a `pw-loupe` hit means T294 is incomplete (T294 now removes `mode_text`) |
+| 2026-11-23 | Open | T294 done and committed; its cold read and the chain review were done before (see T291's log). Point 9 added (owner, at T294's review): the glossary rows of the modes and "Clear and Import". Set Open; may run beside T295 |

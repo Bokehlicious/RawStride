@@ -1,10 +1,11 @@
 //! The texts of the import (ADR 0010, T116, rule 13): the dialog, its preview and progress, the
-//! finished import, the template's field and mode names, the Clear confirmation and the messages
-//! of the import worker. The drawing code in `main.rs` holds none of them.
+//! finished import with the template's notices, and the messages of the import worker. The
+//! drawing code in `main.rs` holds none of them.
 
-use crate::{ImportDone, IptcField, ItemAction, Preview, PreviewLine};
+use crate::editor::notice_text;
+use crate::{ImportDone, ItemAction, Preview, PreviewLine};
 use pw_core::format_bytes;
-use pw_metadata::template::Mode;
+use pw_metadata::write_plan::WriteNotice;
 use pw_metadata::{MIN_EXIFTOOL_VERSION, ToolVersion};
 use std::path::Path;
 
@@ -38,12 +39,6 @@ pub enum ImportText {
     FirstNumber,
     /// The list of the templates' variables.
     Variables,
-    /// The heading of the IPTC template's fields.
-    IptcTemplate,
-    /// The placeholder of the copyright field.
-    CopyrightHint,
-    /// The note under the IPTC template's fields.
-    IptcNote,
     /// The check box that ejects the card after the import.
     Eject,
     /// The preview's label.
@@ -101,12 +96,6 @@ pub fn import_text(text: ImportText) -> &'static str {
         ImportText::Variables => {
             "Variables: {year} {year2} {month} {day} {hour} {minute} {second} \
              {date} {time} {make} {model} {name} {seq} {seq:4} {job}"
-        }
-        ImportText::IptcTemplate => "IPTC Template",
-        ImportText::CopyrightHint => "© 2026 Name",
-        ImportText::IptcNote => {
-            "Written to the .xmp sidecar for RAW and into DNG/JPG/TIF. \
-             Empty fields are left untouched."
         }
         ImportText::Eject => {
             "Eject the card when the import is done (nothing is deleted from the card)"
@@ -188,56 +177,17 @@ pub fn exiftool_unavailable_text(file: &str) -> String {
     format!("{file}: ExifTool is not available")
 }
 
-impl IptcField {
-    /// The field's label in the dialog.
-    pub fn label(self) -> &'static str {
-        match self {
-            IptcField::Creator => "Creator",
-            IptcField::Copyright => "Copyright Notice",
-            IptcField::Credit => "Credit Line",
-            IptcField::Email => "Email",
-            IptcField::Phone => "Phone",
-            IptcField::Url => "Web URL",
-        }
-    }
+/// The line of a finished import for one notice of the template's write to `file` (ADR 0017
+/// U13-Q19): the file's name and the notice's text.
+pub fn template_notice_text(file: &str, notice: &WriteNotice) -> String {
+    format!("{file}: {notice}", notice = notice_text(notice))
 }
 
-/// The name of a mode in the dialog (D13).
-pub fn mode_text(mode: Mode) -> &'static str {
-    match mode {
-        Mode::Keep => "Keep",
-        Mode::Replace => "Replace",
-        Mode::Append => "Append",
-        Mode::Prefix => "Prefix",
-        Mode::Clear => "Clear",
-    }
-}
+/// The most notices of the template's writes listed in a finished import's lines.
+const MAX_NOTICE_LINES: usize = 10;
 
-/// The text of the window that asks before an import with cleared fields (D14): one line per
-/// field with its label.
-pub fn clear_confirmation_text(fields: &[IptcField]) -> String {
-    let labels = fields
-        .iter()
-        .map(|field| field.label())
-        .collect::<Vec<_>>()
-        .join("\n");
-    format!("The template clears these fields in every imported image:\n{labels}")
-}
-
-/// The title of the window that asks before an import with cleared fields (D14).
-pub fn clear_confirmation_title() -> &'static str {
-    "Clear Fields?"
-}
-
-/// The button of that window that starts the import (D14).
-pub fn clear_and_import_text() -> &'static str {
-    "Clear and Import"
-}
-
-/// The button of that window that goes back to the dialog without starting anything (D14).
-pub fn clear_cancel_text() -> &'static str {
-    "Cancel"
-}
+/// The most IPTC errors listed in a finished import's lines; the rest are counted in one line.
+const MAX_IPTC_LINES: usize = 10;
 
 /// Returns the preview summary as in the Tauri app.
 pub fn preview_summary(p: &Preview) -> String {
@@ -391,10 +341,32 @@ pub fn done_lines(done: &ImportDone) -> Vec<DoneLine> {
         });
     }
 
-    for error in done.iptc_errors.iter().take(10) {
+    for error in done.iptc_errors.iter().take(MAX_IPTC_LINES) {
         lines.push(DoneLine {
             text: format!("IPTC: {error}"),
             error: true,
+        });
+    }
+    if done.iptc_errors.len() > MAX_IPTC_LINES {
+        lines.push(DoneLine {
+            text: format!("… and {} more", done.iptc_errors.len() - MAX_IPTC_LINES),
+            error: true,
+        });
+    }
+
+    for notice in done.template_notices.iter().take(MAX_NOTICE_LINES) {
+        lines.push(DoneLine {
+            text: notice.clone(),
+            error: false,
+        });
+    }
+    if done.template_notices.len() > MAX_NOTICE_LINES {
+        lines.push(DoneLine {
+            text: format!(
+                "… and {} more",
+                done.template_notices.len() - MAX_NOTICE_LINES
+            ),
+            error: false,
         });
     }
 
@@ -432,35 +404,6 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
     use std::time::Duration;
-
-    #[test]
-    fn mode_texts_and_field_labels() {
-        assert_eq!(
-            [
-                Mode::Keep,
-                Mode::Replace,
-                Mode::Append,
-                Mode::Prefix,
-                Mode::Clear
-            ]
-            .map(mode_text),
-            ["Keep", "Replace", "Append", "Prefix", "Clear"]
-        );
-        assert_eq!(
-            IptcField::ALL.map(IptcField::label),
-            [
-                "Creator",
-                "Copyright Notice",
-                "Credit Line",
-                "Email",
-                "Phone",
-                "Web URL"
-            ]
-        );
-        assert_eq!(clear_confirmation_title(), "Clear Fields?");
-        assert_eq!(clear_and_import_text(), "Clear and Import");
-        assert_eq!(clear_cancel_text(), "Cancel");
-    }
 
     fn empty_preview() -> Preview {
         Preview {
@@ -738,10 +681,92 @@ mod tests {
 
         assert_eq!(lines[1].text, "Failed: copy failure");
         assert!(lines[1].error);
-        assert_eq!(lines.len(), 12);
+        // T294 review: the two left out are counted in one error line after the ten.
+        assert_eq!(lines.len(), 13);
         assert_eq!(lines[2].text, "IPTC: image0.ARW: error");
         assert_eq!(lines[11].text, "IPTC: image9.ARW: error");
+        assert_eq!(lines[12].text, "… and 2 more");
         assert!(lines[2..].iter().all(|line| line.error));
+    }
+
+    /// T294 review: exactly ten IPTC errors are all listed, with no count line.
+    #[test]
+    fn done_lines_count_no_iptc_errors_when_ten_are_listed() {
+        let done = ImportDone {
+            iptc_errors: (0..10)
+                .map(|index| format!("image{index}.ARW: error"))
+                .collect(),
+            ..ImportDone::default()
+        };
+        let lines = done_lines(&done);
+
+        assert_eq!(lines.len(), 11);
+        assert_eq!(lines[10].text, "IPTC: image9.ARW: error");
+    }
+
+    /// T294 (U13-Q19): the line of one notice of the template's write.
+    #[test]
+    fn template_notice_text_names_the_file_and_the_notice() {
+        assert_eq!(
+            template_notice_text(
+                "A001.jpg",
+                &WriteNotice::Truncated {
+                    property: "photoshop:Headline".to_string()
+                }
+            ),
+            "A001.jpg: Headline was truncated in IIM; XMP has the whole text"
+        );
+        assert_eq!(
+            template_notice_text("A002.jpg", &WriteNotice::IimConvertedToUtf8),
+            "A002.jpg: The IIM texts were rewritten as UTF-8"
+        );
+    }
+
+    /// T294: the template's notices come after the `IPTC:` lines, as normal lines with no prefix.
+    #[test]
+    fn done_lines_show_the_template_notices_after_the_iptc_lines() {
+        let done = ImportDone {
+            iptc_errors: vec!["A001.ARW: metadata error".to_string()],
+            template_notices: (0..3)
+                .map(|index| format!("image{index}.jpg: notice"))
+                .collect(),
+            eject: Some("E: has been ejected and can be removed.".to_string()),
+            ..ImportDone::default()
+        };
+        let lines = done_lines(&done);
+        assert_eq!(lines[1].text, "IPTC: A001.ARW: metadata error");
+        assert!(lines[1].error);
+        assert_eq!(
+            lines[2..5]
+                .iter()
+                .map(|line| line.text.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "image0.jpg: notice",
+                "image1.jpg: notice",
+                "image2.jpg: notice"
+            ]
+        );
+        assert!(lines[2..5].iter().all(|line| !line.error));
+        assert_eq!(lines[5].text, "E: has been ejected and can be removed.");
+        assert_eq!(lines.len(), 6);
+    }
+
+    /// T294: at most ten notices are listed, then one normal line with the count of the rest.
+    #[test]
+    fn done_lines_show_at_most_ten_template_notices() {
+        let done = ImportDone {
+            template_notices: (0..12)
+                .map(|index| format!("image{index}.jpg: notice"))
+                .collect(),
+            ..ImportDone::default()
+        };
+        let lines = done_lines(&done);
+        assert_eq!(lines.len(), 12);
+        assert_eq!(lines[1].text, "image0.jpg: notice");
+        assert_eq!(lines[10].text, "image9.jpg: notice");
+        assert_eq!(lines[11].text, "… and 2 more");
+        assert!(lines[1..].iter().all(|line| !line.error));
     }
 
     /// One example of each text moved here by T116, as it was before.
@@ -764,12 +789,6 @@ mod tests {
                 ImportText::Variables,
                 "Variables: {year} {year2} {month} {day} {hour} {minute} {second} {date} {time} \
                  {make} {model} {name} {seq} {seq:4} {job}",
-            ),
-            (ImportText::IptcTemplate, "IPTC Template"),
-            (ImportText::CopyrightHint, "© 2026 Name"),
-            (
-                ImportText::IptcNote,
-                "Written to the .xmp sidecar for RAW and into DNG/JPG/TIF. Empty fields are left untouched.",
             ),
             (
                 ImportText::Eject,

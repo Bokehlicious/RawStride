@@ -1,4 +1,4 @@
-# T295. The import dialog's Metadata Template row — Blocked
+# T295. The import dialog's Metadata Template row — Open
 
 - **Why:** ADR 0017 U13, part U13c (U13-Q6; U13-Q16, U13-Q17 and U13-Q18), fifth of the chain T291 → T292 → T293 → T294 → T295 → T296. After T294 the import writes a
   `TemplateFile` it is given, and the dialog has no template row. This task adds the row
@@ -143,3 +143,4 @@
 | 2026-11-23 | Blocked | Added (ADR 0017 U13, part U13c, fifth of the chain T291 → T292 → T293 → T294 → T295 → T296). Waits for T293 and T294, the owner's answers to U13-Q16–U13-Q18, its cold read and the chain review |
 | 2026-11-23 | Blocked | The owner approved the reviewer's proposals U13-Q14–U13-Q19 (recorded in ADR 0017 §6.5); waits for its cold read and the chain review |
 | 2026-11-23 | Blocked | Cold read: `main.rs` tests cannot build a `Loupe`, so the missing-file check, the import's wait and the "sets the import's template" decision are plain pieces the tests use; the whole of today's `start_import` runs after a good answer, the form is greyed and Start does nothing while the read waits, a stale answer (dialog cannot start, template changed) is dropped; `on_exit` keeps the setting too (`import_incremental` is copied there); `ShellSettings::import_template` named, its line written only when set, read by `parse_folder`'s rule, the whole-literal test's change named; the waiting text is a normal line; a stopped `TemplateIo` gets a message; `Choose…` reuses `ImportText::Choose`, the dialog gets a title, its start folder decided; answers routed by id; the window's "opened from the import dialog" flag defined (Edit… sets, File menu clears, only an editing or previewing dialog takes the save); hand check gains `{job}`, no field, greyed while reading, quit with the dialog open. `variable_error_text` made `pub(crate)` by T291 |
+| 2026-11-23 | Open | T294 done and committed; its cold read and the chain review were done before (see T291's log). Set Open |

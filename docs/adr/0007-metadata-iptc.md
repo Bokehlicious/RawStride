@@ -1072,7 +1072,11 @@ listed under the table (§17.1).
   now **Kontaktuppgifter** (ADR 0017 §2.3.1).
 - **D13** is replaced (owner, 2026-11-22, revision 33; ADR 0017 U13-Q6): the import dialog's six
   template fields and their modes give way to a template file chosen in the dialog, whose
-  checked fields replace (§10). Until U13's tasks are done, the dialog keeps D13.
+  checked fields replace (§10). Done in the import by T294 (2026-11-23): the six fields and
+  their modes are gone, and the import writes a template file; the dialog's row to choose it
+  comes with T295.
+- **D14** is replaced with D13 (ADR 0017 U13; T294, 2026-11-23): a template clears no field, so
+  the question before a Clear ("Clear Fields?") is gone and an import starts at once.
 - **D15** was replaced by D16 the same day (2026-11-12).
 - **D16** is changed by ADR 0017:
   - the window is no longer locked to one image: previous/next and "Spara och nästa" with the

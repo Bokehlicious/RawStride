@@ -102,19 +102,14 @@ pub use histogram::{
     KEPT_HISTOGRAMS, file_stamp, histogram_bars, histogram_panel, histogram_source,
     histogram_source_text, histogram_view, read_statistics,
 };
-pub use import::{
-    Field, FieldError, ImportForm, IptcField, IptcForm, IptcModes, ItemAction, Preview,
-    PreviewLine, Validated, allowed_modes,
-};
+pub use import::{Field, FieldError, ImportForm, ItemAction, Preview, PreviewLine, Validated};
 pub use import_dialog::{
     CARD_REFRESH_INTERVAL, CardRefresh, DialogRequest, ImportDialog, ImportDialogState,
 };
 pub use import_tabs::{ImportPosition, ImportTabs, PlacedInFolder, with_placed};
 pub use import_text::{
-    DoneLine, ImportText, clear_and_import_text, clear_cancel_text, clear_confirmation_text,
-    clear_confirmation_title, done_lines, ejecting_progress_text, hidden_done_text,
-    hidden_progress_text, import_text, mode_text, more_lines, preview_line, preview_summary,
-    progress_text,
+    DoneLine, ImportText, done_lines, ejecting_progress_text, hidden_done_text,
+    hidden_progress_text, import_text, more_lines, preview_line, preview_summary, progress_text,
 };
 pub use import_worker::{ImportDone, ImportEvent, ImportWorker, RequestId, SubmitError};
 pub use info_panel::{

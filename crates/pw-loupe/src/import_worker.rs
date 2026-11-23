@@ -8,17 +8,19 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use crate::{Field, FieldError, ImportForm, IptcForm, Preview};
+use crate::{Field, FieldError, ImportForm, Preview};
 use pw_metadata::edit::EditOptions;
 use pw_metadata::journal::Journal;
 use pw_metadata::safe_write::ImageCheck;
-use pw_metadata::template::Template;
+use pw_metadata::template_file::TemplateFile;
+use pw_metadata::write_plan::WriteNotice;
 use pw_metadata::write_pool::{JobAnswer, Ticket, WritePool, write_key};
 use pw_metadata::{ExifTool, MIN_EXIFTOOL_VERSION};
 
 use crate::editor::{WriteReason, write_reason_text};
 use crate::import_text::{
     ImportText, exiftool_too_old_text, exiftool_unavailable_text, import_text, scan_error_text,
+    template_notice_text,
 };
 
 const REQUEST_CAPACITY: usize = 8;
@@ -110,6 +112,10 @@ pub struct ImportDone {
     pub bytes: u64,
     pub failed: Vec<String>,
     pub iptc_errors: Vec<String>,
+    /// One line for each notice of the template's writes (ADR 0017 U13-Q19: a list with
+    /// qualifiers kept, a text cut in IIM, …), `"{file}: {notice}"`, in the order the writes
+    /// answered.
+    pub template_notices: Vec<String>,
     pub eject: Option<String>,
     pub cancelled: bool,
     pub elapsed: Duration,
@@ -136,6 +142,7 @@ enum Request {
         id: RequestId,
         form: ImportForm,
         options: EditOptions,
+        template: Option<TemplateFile>,
     },
     Cards {
         id: RequestId,
@@ -264,19 +271,26 @@ impl ImportWorker {
         Ok(id)
     }
 
-    /// Queues a fresh scan and copy. A previous cancellation is cleared for this run. The ingest
-    /// template is written with `options`, the settings at the start of this import (create IIM,
-    /// fallback encoding; ADR 0007 §5.2, §5.4, T106).
+    /// Queues a fresh scan and copy. A previous cancellation is cleared for this run. `template`,
+    /// the metadata template read before the run (ADR 0017 U13-Q6; `None`: no template), is
+    /// written to each copied image with `options`, the settings at the start of this import
+    /// (create IIM, fallback encoding; ADR 0007 §5.2, §5.4, T106).
     pub fn run(
         &mut self,
         form: ImportForm,
         options: EditOptions,
+        template: Option<TemplateFile>,
     ) -> Result<RequestId, SubmitError> {
         let id = self.next_request_id();
         // The worker waits for this gate before it starts a run, so it cannot start copying
         // before the cancel flag of an earlier run is cleared below.
         let _gate = lock_recover(&self.run_gate);
-        self.submit(Request::Run { id, form, options })?;
+        self.submit(Request::Run {
+            id,
+            form,
+            options,
+            template,
+        })?;
         self.cancel.store(false, Ordering::Relaxed);
         Ok(id)
     }
@@ -343,7 +357,12 @@ fn run(
                 id,
                 result: preview(&form, rescan, &mut cached_scan, &pw_ingest::register_root),
             },
-            Request::Run { id, form, options } => {
+            Request::Run {
+                id,
+                form,
+                options,
+                template,
+            } => {
                 // Wait until `ImportWorker::run` has cleared the cancel flag for this run.
                 drop(lock_recover(&run_gate));
                 run_import(
@@ -351,6 +370,7 @@ fn run(
                     ImportRun {
                         form: &form,
                         options,
+                        template,
                         register_root: &pw_ingest::register_root,
                     },
                     &cancel,
@@ -479,11 +499,12 @@ fn preview(
     ))
 }
 
-/// What one import is asked to do: the dialog's form, the settings at its start (T106) and where
-/// the card's register is (T158).
+/// What one import is asked to do: the dialog's form, the settings at its start (T106), the
+/// metadata template to write (T294) and where the card's register is (T158).
 struct ImportRun<'a> {
     form: &'a ImportForm,
     options: EditOptions,
+    template: Option<TemplateFile>,
     register_root: RegisterRoot<'a>,
 }
 
@@ -492,6 +513,7 @@ fn run_import(
     ImportRun {
         form,
         options,
+        template,
         register_root,
     }: ImportRun<'_>,
     cancel: &AtomicBool,
@@ -554,7 +576,7 @@ fn run_import(
     let mut shot_writer = ShotWriter::new(
         &plan,
         &validated.options,
-        &form.iptc,
+        template,
         IptcRuntime {
             id,
             options,
@@ -581,7 +603,7 @@ fn run_import(
             shot_writer.file_done(progress.files_done);
         },
     );
-    let (iptc_errors, shot_cancelled) = shot_writer.finish();
+    let (iptc_errors, template_notices, shot_cancelled) = shot_writer.finish();
     // The register's file is closed before the card may be ejected.
     drop(writer);
     let register_error = register_error.or_else(|| report.register_error.clone());
@@ -607,6 +629,7 @@ fn run_import(
             })
             .collect(),
         iptc_errors,
+        template_notices,
         // A cancel seen after the last file's progress call is not in the report.
         cancelled: report.cancelled || shot_cancelled,
         elapsed: started.elapsed(),
@@ -743,8 +766,9 @@ fn shot_targets(items: &[&pw_ingest::PlanItem], options: &pw_ingest::Options) ->
     targets
 }
 
-/// What one template write given to the pool answers: `Err` with the safe write's error text.
-type TemplateAnswer = Result<(), String>;
+/// What one template write given to the pool answers: the write's notices, or `Err` with the
+/// safe write's error text.
+type TemplateAnswer = Result<Vec<WriteNotice>, String>;
 
 /// A finished shot whose [`ImportEvent::Placed`] waits for its template writes, or for an earlier
 /// shot's (T268).
@@ -775,9 +799,9 @@ struct ShotWriter<'a> {
     /// The first shot not finished yet.
     next_shot: usize,
     options: &'a pw_ingest::Options,
-    /// The form's template, each field with the mode chosen in the dialog (ADR 0007 §10, D13);
-    /// `None` when it does nothing, so ExifTool is not started.
-    template: Option<Template>,
+    /// The import's metadata template (ADR 0017 U13-Q6, T294); `None` when there is none or its
+    /// `fields` are empty, so ExifTool is not started.
+    template: Option<TemplateFile>,
     runtime: IptcRuntime<'a>,
     /// Set when the journal is missing or ExifTool cannot be used: listed once, and no template is
     /// written to any later shot of this import.
@@ -785,6 +809,8 @@ struct ShotWriter<'a> {
     /// Set when a cancel was seen: nothing more is done for this shot or any later one.
     cancelled: bool,
     iptc_errors: Vec<String>,
+    /// One line for each notice of the template's writes, in the order they answered.
+    template_notices: Vec<String>,
     /// With more than one write process: the pool, once the first write was given (T268).
     pool: Option<WritePool<TemplateAnswer>>,
     /// Each write given to the pool and not answered: its shot's number and its target.
@@ -799,7 +825,7 @@ impl<'a> ShotWriter<'a> {
     fn new(
         plan: &'a pw_ingest::Plan,
         options: &'a pw_ingest::Options,
-        iptc: &IptcForm,
+        template: Option<TemplateFile>,
         runtime: IptcRuntime<'a>,
     ) -> Self {
         Self {
@@ -811,11 +837,12 @@ impl<'a> ShotWriter<'a> {
             shots: copy_shots(plan),
             next_shot: 0,
             options,
-            template: (!iptc.template_is_empty()).then(|| iptc.to_template()),
+            template: template.filter(|template| !template.fields.is_empty()),
             runtime,
             writes_stopped: false,
             cancelled: false,
             iptc_errors: Vec::new(),
+            template_notices: Vec::new(),
             pool: None,
             tickets: HashMap::new(),
             held: VecDeque::new(),
@@ -853,17 +880,17 @@ impl<'a> ShotWriter<'a> {
         }
     }
 
-    /// The template's failures and whether a cancel was seen. With a pool it first waits until
-    /// every write given has answered or was discarded (a cancel seen meanwhile discards the
-    /// writes not started), placing the shots that become ready unless a cancel was seen. When
-    /// no pool was started (nothing was given to write), it does what it does with one process:
-    /// a cancel after the last progress call is not counted, and the shots, which had no writes
-    /// to wait for, were placed at the progress calls.
-    fn finish(mut self) -> (Vec<String>, bool) {
+    /// The template's failures, its notices and whether a cancel was seen. With a pool it first
+    /// waits until every write given has answered or was discarded (a cancel seen meanwhile
+    /// discards the writes not started), placing the shots that become ready unless a cancel was
+    /// seen. When no pool was started (nothing was given to write), it does what it does with one
+    /// process: a cancel after the last progress call is not counted, and the shots, which had no
+    /// writes to wait for, were placed at the progress calls.
+    fn finish(mut self) -> (Vec<String>, Vec<String>, bool) {
         if self.pooled() && self.pool.is_some() {
             self.wait_for_writes();
         }
-        (self.iptc_errors, self.cancelled)
+        (self.iptc_errors, self.template_notices, self.cancelled)
     }
 
     /// Whether a cancel was seen. When it is seen first, the pool's writes not started are
@@ -909,7 +936,8 @@ impl<'a> ShotWriter<'a> {
         };
         let file = file_name(&target);
         match answer {
-            JobAnswer::Done(Ok(())) | JobAnswer::Discarded => {}
+            JobAnswer::Done(Ok(notices)) => self.noticed(&file, &notices),
+            JobAnswer::Discarded => {}
             JobAnswer::Done(Err(text)) | JobAnswer::Lost(text) => {
                 self.iptc_errors.push(format!("{file}: {text}"));
             }
@@ -923,6 +951,15 @@ impl<'a> ShotWriter<'a> {
         if let Some(shot) = self.held.iter_mut().find(|shot| shot.number == number) {
             shot.waiting = shot.waiting.saturating_sub(1);
         }
+    }
+
+    /// Lists each of `notices` of a write to `file` (U13-Q19).
+    fn noticed(&mut self, file: &str, notices: &[WriteNotice]) {
+        self.template_notices.extend(
+            notices
+                .iter()
+                .map(|notice| template_notice_text(file, notice)),
+        );
     }
 
     /// ExifTool cannot be used: `line` is listed once (later such answers add none), the writes
@@ -1038,8 +1075,8 @@ impl<'a> ShotWriter<'a> {
         let ticket = pool.submit(
             write_key(target),
             Box::new(move |tool: &mut ExifTool| {
-                tool.apply_template_safely(&image, &template, &options, &*checks, &journal)
-                    .map(|_| ())
+                tool.apply_template_file_safely(&image, &template, &options, &*checks, &journal)
+                    .map(|report| report.notices)
                     .map_err(|error| error.to_string())
             }),
         );
@@ -1075,7 +1112,7 @@ impl<'a> ShotWriter<'a> {
     }
 
     /// Writes the template to one target with the safe write (§9.5); a failure is one line in
-    /// `iptc_errors`.
+    /// `iptc_errors`, each notice of the write one line in `template_notices`.
     fn write_template(&mut self, target: &Path) {
         let Some(template) = self.template.as_ref() else {
             return;
@@ -1132,16 +1169,18 @@ impl<'a> ShotWriter<'a> {
             return;
         };
         // §9.5: the template is written to the verified copy with the safe write.
-        let written = tool.apply_template_safely(
+        let written = tool.apply_template_file_safely(
             target,
             template,
             &self.runtime.options,
             &*self.runtime.write.checks,
             journal,
         );
-        if let Err(error) = written {
-            self.iptc_errors
-                .push(format!("{}: {error}", file_name(target)));
+        match written {
+            Ok(report) => self.noticed(&file_name(target), &report.notices),
+            Err(error) => self
+                .iptc_errors
+                .push(format!("{}: {error}", file_name(target))),
         }
     }
 }
@@ -1335,7 +1374,7 @@ mod tests {
         let options = dirs.options("imported");
 
         let id = worker
-            .run(dirs.form("imported"), EditOptions::default())
+            .run(dirs.form("imported"), EditOptions::default(), None)
             .unwrap();
         let mut progress_count = 0;
         let done = loop {
@@ -1388,13 +1427,13 @@ mod tests {
         let mut worker = ImportWorker::start(Some(test_journal()), Arc::new(NoImageCheck)).unwrap();
 
         let first = worker
-            .run(dirs.form("imported"), EditOptions::default())
+            .run(dirs.form("imported"), EditOptions::default(), None)
             .unwrap();
         let first_done = done_event(&worker, first);
         assert_eq!(first_done.copied, 1);
 
         let second = worker
-            .run(dirs.form("imported"), EditOptions::default())
+            .run(dirs.form("imported"), EditOptions::default(), None)
             .unwrap();
         let second_done = done_event(&worker, second);
         assert_eq!((second_done.copied, second_done.present), (0, 1));
@@ -1453,7 +1492,7 @@ mod tests {
         let mut worker = ImportWorker::start(Some(test_journal()), Arc::new(NoImageCheck)).unwrap();
         let mut form = dirs.form("");
         form.dest.clear();
-        let id = worker.run(form, EditOptions::default()).unwrap();
+        let id = worker.run(form, EditOptions::default(), None).unwrap();
 
         let done = done_event(&worker, id);
         assert_eq!(done.error.as_deref(), Some("Choose a destination."));
@@ -1461,27 +1500,42 @@ mod tests {
         assert!(!dirs.dest.exists());
     }
 
+    /// T294 (was `empty_iptc_template_does_not_start_exiftool`): no template, and a template whose
+    /// `fields` are empty, each start no ExifTool (a missing one would be listed) and give no
+    /// IPTC error and no notice.
     #[test]
-    fn empty_iptc_template_does_not_start_exiftool() {
-        let dirs = TempDirs::new("empty-iptc");
-        dirs.write_image("A001.ARW", b"image bytes");
-        let missing_exiftool = dirs
-            .root
-            .join("missing-exiftool")
-            .to_string_lossy()
-            .into_owned();
-        let mut worker = ImportWorker::start_with_exiftool(
-            &missing_exiftool,
-            Some(test_journal()),
-            Arc::new(NoImageCheck),
-        )
-        .unwrap();
-        let id = worker.run(dirs.form(""), EditOptions::default()).unwrap();
+    fn no_template_and_an_empty_template_do_not_start_exiftool() {
+        for (tag, template) in [
+            ("no-template", None),
+            ("empty-template", Some(TemplateFile::default())),
+        ] {
+            let dirs = TempDirs::new(tag);
+            dirs.write_image("A001.ARW", b"image bytes");
+            let missing_exiftool = dirs
+                .root
+                .join("missing-exiftool")
+                .to_string_lossy()
+                .into_owned();
+            let mut worker = ImportWorker::start_with_exiftool(
+                &missing_exiftool,
+                Some(test_journal()),
+                Arc::new(NoImageCheck),
+            )
+            .unwrap();
+            let id = worker
+                .run(dirs.form(""), EditOptions::default(), template)
+                .unwrap();
 
-        let done = done_event(&worker, id);
-        assert_eq!(done.copied, 1);
-        assert!(done.iptc_errors.is_empty());
-        assert!(dirs.dest.join("A001.ARW").exists());
+            let done = done_event(&worker, id);
+            assert_eq!(done.copied, 1, "{tag}");
+            assert!(done.iptc_errors.is_empty(), "{tag}: {:?}", done.iptc_errors);
+            assert!(
+                done.template_notices.is_empty(),
+                "{tag}: {:?}",
+                done.template_notices
+            );
+            assert!(dirs.dest.join("A001.ARW").exists(), "{tag}");
+        }
     }
 
     #[test]
@@ -1499,9 +1553,10 @@ mod tests {
             Arc::new(NoImageCheck),
         )
         .unwrap();
-        let mut form = dirs.form("");
-        form.iptc.creator = "Fotograf".to_string();
-        let id = worker.run(form, EditOptions::default()).unwrap();
+        let form = dirs.form("");
+        let id = worker
+            .run(form, EditOptions::default(), Some(creator_template()))
+            .unwrap();
 
         let done = done_event(&worker, id);
         assert_eq!(done.copied, 1);
@@ -1641,9 +1696,10 @@ mod tests {
             Arc::new(NoImageCheck),
         )
         .unwrap();
-        let mut form = dirs.form("");
-        form.iptc.creator = "Fotograf".to_string();
-        let id = worker.run(form, EditOptions::default()).unwrap();
+        let form = dirs.form("");
+        let id = worker
+            .run(form, EditOptions::default(), Some(creator_template()))
+            .unwrap();
 
         let done = done_event(&worker, id);
         assert_eq!(done.copied, 1);
@@ -1671,9 +1727,10 @@ mod tests {
         let mut worker =
             ImportWorker::start_with_exiftool(&missing_exiftool, None, Arc::new(NoImageCheck))
                 .unwrap();
-        let mut form = dirs.form("");
-        form.iptc.creator = "Fotograf".to_string();
-        let id = worker.run(form, EditOptions::default()).unwrap();
+        let form = dirs.form("");
+        let id = worker
+            .run(form, EditOptions::default(), Some(creator_template()))
+            .unwrap();
 
         let done = done_event(&worker, id);
         assert_eq!(done.copied, 1);
@@ -1706,9 +1763,10 @@ mod tests {
         let journal_folder = dirs.root.join("journal");
         let journal = Journal::open(&journal_folder).unwrap();
         let mut worker = ImportWorker::start(Some(journal), Arc::new(NoImageCheck)).unwrap();
-        let mut form = dirs.form("");
-        form.iptc.creator = "Fotograf".to_string();
-        let id = worker.run(form, EditOptions::default()).unwrap();
+        let form = dirs.form("");
+        let id = worker
+            .run(form, EditOptions::default(), Some(creator_template()))
+            .unwrap();
 
         let done = done_event(&worker, id);
         assert_eq!(done.copied, 1);
@@ -1764,19 +1822,20 @@ mod tests {
         assert!(output.contains("1 image files updated"), "{output}");
     }
 
-    /// Imports the card of `dirs` with `iptc` and the write journal of `dirs`, and reads the
+    /// Imports the card of `dirs` with `template` and the write journal of `dirs`, and reads the
     /// imported `A001.jpg` back.
     #[cfg(windows)]
     fn import_and_read(
         dirs: &TempDirs,
         exiftool: &mut ExifTool,
-        iptc: crate::IptcForm,
+        template: TemplateFile,
     ) -> pw_metadata::read::MetadataRead {
         let journal = Journal::open(&dirs.root.join("journal")).unwrap();
         let mut worker = ImportWorker::start(Some(journal), Arc::new(NoImageCheck)).unwrap();
-        let mut form = dirs.form("");
-        form.iptc = iptc;
-        let id = worker.run(form, EditOptions::default()).unwrap();
+        let form = dirs.form("");
+        let id = worker
+            .run(form, EditOptions::default(), Some(template))
+            .unwrap();
 
         let done = done_event(&worker, id);
         assert_eq!(done.copied, 1);
@@ -1789,93 +1848,204 @@ mod tests {
             .unwrap()
     }
 
-    /// E-post in Clear removes the work e-mail the file already had (ADR 0007 §10, D13). Needs
+    /// T294 (replaces the test of the creator in Append): a template with Keywords and its + box
+    /// adds its keyword after the keywords the file already had (ADR 0017 U13-Q12). Needs
     /// ExifTool on PATH; the safe write uses Windows file operations.
     #[cfg(windows)]
     #[test]
-    fn a_cleared_email_is_removed_from_the_imported_jpeg() {
+    fn a_template_with_keywords_and_its_plus_box_adds_to_the_files_keywords() {
         use pw_metadata::value::Value;
 
         let mut exiftool = required_exiftool();
-        let dirs = TempDirs::new("iptc-clear-email");
-        write_jpeg_with(
-            &dirs,
-            &mut exiftool,
-            &[
-                "-XMP-iptcCore:CreatorWorkEmail=gammal@example.com",
-                "-XMP-iptcCore:CreatorWorkTelephone=+46 31 12 34 56",
-            ],
+        let dirs = TempDirs::new("template-add-keywords");
+        write_jpeg_with(&dirs, &mut exiftool, &["-XMP-dc:Subject=Första"]);
+
+        let template = TemplateFile::new(
+            vec![(
+                "dc:subject".to_string(),
+                Value::List(vec!["Andra".to_string()]),
+            )],
+            vec!["dc:subject".to_string()],
         );
-        let contact = |read: &pw_metadata::read::MetadataRead| {
+        assert_eq!(template.add, ["dc:subject"]);
+        let read = import_and_read(&dirs, &mut exiftool, template);
+
+        assert_eq!(
             read.reconciled
                 .metadata
-                .get("Iptc4xmpCore:CreatorContactInfo")
-                .map(|stored| stored.value.clone())
-        };
-        let email_of = |value: &Option<Value>| match value {
-            Some(Value::Struct(fields)) => fields
-                .fields
-                .iter()
-                .find(|(id, _)| id == "Iptc4xmpCore:CiEmailWork")
-                .map(|(_, value)| value.clone()),
-            _ => None,
-        };
-        let before = exiftool
-            .read_metadata(
-                &dirs.source.join("DCIM").join("100TEST").join("A001.jpg"),
-                pw_metadata::iim::Fallback::Windows1252,
-            )
-            .unwrap();
-        assert_eq!(
-            email_of(&contact(&before)),
-            Some(Value::Text("gammal@example.com".to_string()))
-        );
-
-        let mut iptc = crate::IptcForm::default();
-        iptc.modes.email = pw_metadata::template::Mode::Clear;
-        let read = import_and_read(&dirs, &mut exiftool, iptc);
-
-        let after = contact(&read);
-        assert_eq!(email_of(&after), None, "{after:?}");
-        // The other field of the structure is kept.
-        let Some(Value::Struct(fields)) = &after else {
-            panic!("the contact details are gone: {after:?}");
-        };
-        assert_eq!(
-            fields.fields,
-            [(
-                "Iptc4xmpCore:CiTelWork".to_string(),
-                Value::Text("+46 31 12 34 56".to_string())
-            )]
+                .get("dc:subject")
+                .map(|stored| stored.value.clone()),
+            Some(Value::List(vec!["Första".to_string(), "Andra".to_string()]))
         );
     }
 
-    /// Fotograf in Append adds the name after the creator the file already had (ADR 0007 §10,
-    /// D13). Needs ExifTool on PATH; the safe write uses Windows file operations.
+    /// Writes the JPEG fixture to the card as each of `names`.
+    #[cfg(windows)]
+    fn write_jpegs(dirs: &TempDirs, names: &[&str]) {
+        for name in names {
+            dirs.write_image(name, jpeg_fixture::SMALL);
+        }
+    }
+
+    /// Imports the card of `dirs` with `template`, `options` and `processes` write processes, and
+    /// the write journal of `dirs`.
+    #[cfg(windows)]
+    fn import_with_template(
+        dirs: &TempDirs,
+        template: TemplateFile,
+        options: EditOptions,
+        processes: usize,
+    ) -> ImportDone {
+        let journal = Journal::open(&dirs.root.join("journal")).unwrap();
+        let mut worker =
+            ImportWorker::start_with_processes(Some(journal), Arc::new(NoImageCheck), processes)
+                .unwrap();
+        let id = worker.run(dirs.form(""), options, Some(template)).unwrap();
+        done_event(&worker, id)
+    }
+
+    /// A template with only Headline, `headline`.
+    #[cfg(windows)]
+    fn headline_template(headline: &str) -> TemplateFile {
+        TemplateFile::new(
+            vec![(
+                "photoshop:Headline".to_string(),
+                pw_metadata::value::Value::Text(headline.to_string()),
+            )],
+            Vec::new(),
+        )
+    }
+
+    /// The Headline of the imported `name`, if it has one.
+    #[cfg(windows)]
+    fn imported_headline(
+        exiftool: &mut ExifTool,
+        dirs: &TempDirs,
+        name: &str,
+    ) -> Option<pw_metadata::value::Value> {
+        exiftool
+            .read_metadata(
+                &dirs.dest.join(name),
+                pw_metadata::iim::Fallback::Windows1252,
+            )
+            .unwrap()
+            .reconciled
+            .metadata
+            .get("photoshop:Headline")
+            .map(|stored| stored.value.clone())
+    }
+
+    /// T294 (ADR 0017 U13-Q9): Headline `{name}` gives each imported JPEG its own file name
+    /// without the extension. Needs ExifTool on PATH; the safe write uses Windows file
+    /// operations.
     #[cfg(windows)]
     #[test]
-    fn an_appended_creator_follows_the_files_creator() {
+    fn a_name_variable_gives_each_imported_jpeg_its_own_name() {
         let mut exiftool = required_exiftool();
-        let dirs = TempDirs::new("iptc-append-creator");
-        write_jpeg_with(&dirs, &mut exiftool, &["-XMP-dc:Creator=Första Fotograf"]);
+        let dirs = TempDirs::new("template-name");
+        write_jpegs(&dirs, &["A001.jpg", "A002.jpg"]);
 
-        let mut iptc = crate::IptcForm {
-            creator: "Andra Fotograf".to_string(),
-            ..crate::IptcForm::default()
-        };
-        iptc.modes.creator = pw_metadata::template::Mode::Append;
-        let read = import_and_read(&dirs, &mut exiftool, iptc);
-
-        assert_eq!(
-            read.reconciled
-                .metadata
-                .get("dc:creator")
-                .map(|stored| stored.value.clone()),
-            Some(pw_metadata::value::Value::List(vec![
-                "Första Fotograf".to_string(),
-                "Andra Fotograf".to_string()
-            ]))
+        let done = import_with_template(
+            &dirs,
+            headline_template("{name}"),
+            EditOptions::default(),
+            1,
         );
+
+        assert_eq!(done.copied, 2);
+        assert!(done.iptc_errors.is_empty(), "{:?}", done.iptc_errors);
+        for (name, stem) in [("A001.jpg", "A001"), ("A002.jpg", "A002")] {
+            assert_eq!(
+                imported_headline(&mut exiftool, &dirs, name),
+                Some(pw_metadata::value::Value::Text(stem.to_string())),
+                "{name}"
+            );
+        }
+    }
+
+    /// T294 (U13-Q19): a Headline longer than IIM's 256 bytes, imported with IIM created, gives
+    /// one notice line naming the file and the cut, with one write process and with two. Needs
+    /// ExifTool on PATH; the safe write uses Windows file operations.
+    #[cfg(windows)]
+    #[test]
+    fn a_headline_cut_in_iim_gives_one_notice_with_one_and_two_processes() {
+        let _exiftool = required_exiftool();
+        let create = EditOptions {
+            settings: pw_metadata::write_plan::WriteSettings { create_iim: true },
+            ..EditOptions::default()
+        };
+        for processes in [1, 2] {
+            let dirs = TempDirs::new(&format!("template-notice-{processes}"));
+            write_jpegs(&dirs, &["A001.jpg"]);
+
+            let done = import_with_template(
+                &dirs,
+                headline_template(&"x".repeat(300)),
+                create,
+                processes,
+            );
+
+            assert_eq!(done.copied, 1, "{processes}");
+            assert!(
+                done.iptc_errors.is_empty(),
+                "{processes}: {:?}",
+                done.iptc_errors
+            );
+            assert_eq!(
+                done.template_notices,
+                ["A001.jpg: Headline was truncated in IIM; XMP has the whole text"],
+                "{processes}"
+            );
+        }
+    }
+
+    /// T294 (U13-Q9 amended): Headline `{date}` on two JPEGs, only one with a DateTimeOriginal
+    /// (the fixture has no date tag at all): one IPTC error names the other image and the reason,
+    /// and the first image is written. Needs ExifTool on PATH; the safe write uses Windows file
+    /// operations.
+    #[cfg(windows)]
+    #[test]
+    fn a_date_variable_fails_only_on_the_image_without_a_capture_time() {
+        let mut exiftool = required_exiftool();
+        let dirs = TempDirs::new("template-date");
+        write_jpegs(&dirs, &["A001.jpg", "A002.jpg"]);
+        let card = dirs.source.join("DCIM").join("100TEST");
+        let output = exiftool
+            .execute(&[
+                "-EXIF:DateTimeOriginal=2026:11:15 10:00:00".to_string(),
+                "-overwrite_original".to_string(),
+                card.join("A001.jpg").to_string_lossy().into_owned(),
+            ])
+            .unwrap();
+        assert!(output.contains("1 image files updated"), "{output}");
+        // A002 has no date tag `{date}` could fall back to.
+        let dates = exiftool
+            .execute(&[
+                "-s".to_string(),
+                "-AllDates".to_string(),
+                card.join("A002.jpg").to_string_lossy().into_owned(),
+            ])
+            .unwrap();
+        assert!(!dates.contains("DateTimeOriginal"), "{dates}");
+        assert!(!dates.contains("CreateDate"), "{dates}");
+
+        let done = import_with_template(
+            &dirs,
+            headline_template("{date}"),
+            EditOptions::default(),
+            1,
+        );
+
+        assert_eq!(done.copied, 2);
+        assert_eq!(
+            done.iptc_errors,
+            ["A002.jpg: the image has no capture time for {date}"]
+        );
+        assert_eq!(
+            imported_headline(&mut exiftool, &dirs, "A001.jpg"),
+            Some(pw_metadata::value::Value::Text("2026-11-15".to_string()))
+        );
+        assert_eq!(imported_headline(&mut exiftool, &dirs, "A002.jpg"), None);
     }
 
     /// The IIM of the imported copy, as ExifTool lists it with `-IPTC:all -s` (one `Tag: value`
@@ -1898,9 +2068,8 @@ mod tests {
         dirs.write_image("A001.jpg", jpeg_fixture::SMALL);
         let journal = Journal::open(&dirs.root.join("journal")).unwrap();
         let mut worker = ImportWorker::start(Some(journal), Arc::new(NoImageCheck)).unwrap();
-        let mut form = dirs.form("");
-        form.iptc.creator = "Fotograf".to_string();
-        let id = worker.run(form, options).unwrap();
+        let form = dirs.form("");
+        let id = worker.run(form, options, Some(creator_template())).unwrap();
 
         let done = done_event(&worker, id);
         assert_eq!(done.copied, 1);
@@ -2025,14 +2194,10 @@ mod tests {
             checks: Arc::new(NoImageCheck),
             write_processes: 1,
         };
-        let iptc = crate::IptcForm {
-            creator: "Fotograf".to_string(),
-            ..crate::IptcForm::default()
-        };
         let mut shot_writer = ShotWriter::new(
             &plan,
             &options,
-            &iptc,
+            Some(creator_template()),
             IptcRuntime {
                 id: 1,
                 options: EditOptions::default(),
@@ -2045,7 +2210,7 @@ mod tests {
         );
 
         shot_writer.file_done(1);
-        let (iptc_errors, cancelled) = shot_writer.finish();
+        let (iptc_errors, _template_notices, cancelled) = shot_writer.finish();
 
         assert!(cancelled);
         assert!(iptc_errors.is_empty());
@@ -2071,6 +2236,7 @@ mod tests {
             ImportRun {
                 form: &form,
                 options: EditOptions::default(),
+                template: None,
                 register_root: &|_| None,
             },
             &cancel,
@@ -2116,6 +2282,7 @@ mod tests {
             ImportRun {
                 form: &form,
                 options: EditOptions::default(),
+                template: None,
                 register_root: &|_| None,
             },
             &cancel,
@@ -2153,7 +2320,9 @@ mod tests {
         }
         let mut worker = ImportWorker::start(Some(test_journal()), Arc::new(NoImageCheck)).unwrap();
         let options = dirs.options("");
-        let id = worker.run(dirs.form(""), EditOptions::default()).unwrap();
+        let id = worker
+            .run(dirs.form(""), EditOptions::default(), None)
+            .unwrap();
         worker.cancel();
 
         let done = done_event(&worker, id);
@@ -2199,7 +2368,9 @@ mod tests {
         let dirs = TempDirs::new("drop");
         dirs.write_image("A001.ARW", &vec![3; 16 * 1024 * 1024]);
         let mut worker = ImportWorker::start(Some(test_journal()), Arc::new(NoImageCheck)).unwrap();
-        worker.run(dirs.form(""), EditOptions::default()).unwrap();
+        worker
+            .run(dirs.form(""), EditOptions::default(), None)
+            .unwrap();
 
         let started = Instant::now();
         drop(worker);
@@ -2232,6 +2403,7 @@ mod tests {
             ImportRun {
                 form,
                 options: EditOptions::default(),
+                template: None,
                 register_root: &register_root,
             },
             &cancel,
@@ -2485,9 +2657,11 @@ mod tests {
         Ejecting,
     }
 
-    /// `run_import` of `form` with `cancel` and `write`: the events it sent, and its summary.
+    /// `run_import` of `form` and `template` with `cancel` and `write`: the events it sent, and
+    /// its summary.
     fn import_events(
         form: &ImportForm,
+        template: Option<TemplateFile>,
         cancel: &AtomicBool,
         write: &WriteContext,
         exiftool: &mut Option<ExifTool>,
@@ -2498,6 +2672,7 @@ mod tests {
             ImportRun {
                 form,
                 options: EditOptions::default(),
+                template,
                 register_root: &|_| None,
             },
             cancel,
@@ -2590,6 +2765,7 @@ mod tests {
 
         let (seen, done) = import_events(
             &dirs.form(""),
+            None,
             &AtomicBool::new(false),
             &write_context(None),
             &mut None,
@@ -2628,6 +2804,7 @@ mod tests {
 
         let (seen, done) = import_events(
             &form,
+            None,
             &AtomicBool::new(false),
             &write_context(None),
             &mut None,
@@ -2671,7 +2848,7 @@ mod tests {
         let mut shot_writer = ShotWriter::new(
             &plan,
             &options,
-            &crate::IptcForm::default(),
+            None,
             IptcRuntime {
                 id: 3,
                 options: EditOptions::default(),
@@ -2686,7 +2863,7 @@ mod tests {
         for files_done in 1..=4 {
             shot_writer.file_done(files_done);
         }
-        let (iptc_errors, cancelled) = shot_writer.finish();
+        let (iptc_errors, _template_notices, cancelled) = shot_writer.finish();
 
         let placed: Vec<Vec<PathBuf>> = receiver
             .try_iter()
@@ -2709,6 +2886,7 @@ mod tests {
 
         let (seen, done) = import_events(
             &dirs.form(""),
+            None,
             &AtomicBool::new(false),
             &write_context(None),
             &mut None,
@@ -2732,12 +2910,12 @@ mod tests {
         let mut form = dirs.form("");
         form.backup_on = true;
         form.backup = backup.to_string_lossy().into_owned();
-        form.iptc.creator = "Fotograf".to_string();
         let missing_exiftool = dirs.root.join("missing-exiftool");
         let mut exiftool = None;
 
         let (seen, done) = import_events(
             &form,
+            Some(creator_template()),
             &AtomicBool::new(false),
             &write_context(Some(&missing_exiftool.to_string_lossy())),
             &mut exiftool,
@@ -2760,12 +2938,12 @@ mod tests {
     fn an_unavailable_exiftool_is_listed_once_and_both_shots_are_placed() {
         let dirs = TempDirs::new("placed-no-exiftool");
         two_shots(&dirs);
-        let mut form = dirs.form("");
-        form.iptc.creator = "Fotograf".to_string();
+        let form = dirs.form("");
         let missing_exiftool = dirs.root.join("missing-exiftool");
 
         let (seen, done) = import_events(
             &form,
+            Some(creator_template()),
             &AtomicBool::new(false),
             &write_context(Some(&missing_exiftool.to_string_lossy())),
             &mut None,
@@ -2797,12 +2975,12 @@ mod tests {
     fn a_run_cancelled_before_its_first_shot_plans_but_places_nothing() {
         let dirs = TempDirs::new("placed-cancel-first");
         two_shots(&dirs);
-        let mut form = dirs.form("");
-        form.iptc.creator = "Fotograf".to_string();
+        let form = dirs.form("");
         let mut exiftool = None;
 
         let (seen, done) = import_events(
             &form,
+            Some(creator_template()),
             &AtomicBool::new(true),
             &write_context(Some("missing-exiftool")),
             &mut exiftool,
@@ -2857,7 +3035,6 @@ mod tests {
         let mut form = dirs.form("");
         form.backup_on = true;
         form.backup = backup.to_string_lossy().into_owned();
-        form.iptc.creator = "Fotograf".to_string();
         let cancel = Arc::new(AtomicBool::new(false));
         let write = WriteContext {
             exiftool_program: None,
@@ -2866,7 +3043,8 @@ mod tests {
             write_processes: 1,
         };
 
-        let (seen, done) = import_events(&form, &cancel, &write, &mut None);
+        let (seen, done) =
+            import_events(&form, Some(creator_template()), &cancel, &write, &mut None);
 
         assert_eq!(
             seen,
@@ -2900,8 +3078,7 @@ mod tests {
             ])
             .unwrap();
         assert!(output.contains("1 image files created"), "{output}");
-        let mut form = dirs.form("");
-        form.iptc.creator = "Fotograf".to_string();
+        let form = dirs.form("");
         let write = WriteContext {
             exiftool_program: None,
             journal: Some(Journal::open(&dirs.root.join("journal")).unwrap()),
@@ -2909,7 +3086,13 @@ mod tests {
             write_processes: 1,
         };
 
-        let (seen, done) = import_events(&form, &AtomicBool::new(false), &write, &mut None);
+        let (seen, done) = import_events(
+            &form,
+            Some(creator_template()),
+            &AtomicBool::new(false),
+            &write,
+            &mut None,
+        );
 
         assert_eq!(done.copied, 2);
         assert!(done.failed.is_empty(), "{:?}", done.failed);
@@ -2994,12 +3177,16 @@ mod tests {
         (pw_ingest::Plan { items }, options)
     }
 
-    /// A template that writes the creator.
-    fn creator_template() -> crate::IptcForm {
-        crate::IptcForm {
-            creator: "Fotograf".to_string(),
-            ..crate::IptcForm::default()
-        }
+    /// A template that writes the creator (T294: a template file of the field the tests set in
+    /// the dialog's form before).
+    fn creator_template() -> TemplateFile {
+        TemplateFile::new(
+            vec![(
+                "dc:creator".to_string(),
+                pw_metadata::value::Value::List(vec!["Fotograf".to_string()]),
+            )],
+            Vec::new(),
+        )
     }
 
     /// The images of the `Placed` events in `receiver`, in the order sent.
@@ -3024,11 +3211,10 @@ mod tests {
         let cancel = AtomicBool::new(false);
         let mut exiftool = None;
         let (events, receiver) = mpsc::channel();
-        let iptc = creator_template();
         let mut shot_writer = ShotWriter::new(
             &plan,
             &options,
-            &iptc,
+            Some(creator_template()),
             IptcRuntime {
                 id: 5,
                 options: EditOptions::default(),
@@ -3051,7 +3237,7 @@ mod tests {
         assert_eq!(shot_writer.tickets.len(), 1);
 
         fs::write(&hold_until, b"").unwrap();
-        let (iptc_errors, cancelled) = shot_writer.finish();
+        let (iptc_errors, _template_notices, cancelled) = shot_writer.finish();
 
         assert_eq!(
             placed_events(&receiver),
@@ -3079,11 +3265,10 @@ mod tests {
         let cancel = AtomicBool::new(false);
         let mut exiftool = None;
         let (events, receiver) = mpsc::channel();
-        let iptc = creator_template();
         let mut shot_writer = ShotWriter::new(
             &plan,
             &options,
-            &iptc,
+            Some(creator_template()),
             IptcRuntime {
                 id: 5,
                 options: EditOptions::default(),
@@ -3106,7 +3291,7 @@ mod tests {
         assert_eq!(placed_events(&receiver), Vec::<Vec<PathBuf>>::new());
 
         fs::write(&hold_until, b"").unwrap();
-        let (iptc_errors, cancelled) = shot_writer.finish();
+        let (iptc_errors, _template_notices, cancelled) = shot_writer.finish();
 
         assert_eq!(
             placed_events(&receiver),
@@ -3141,11 +3326,10 @@ mod tests {
         let cancel = AtomicBool::new(false);
         let mut exiftool = None;
         let (events, receiver) = mpsc::channel();
-        let iptc = creator_template();
         let mut shot_writer = ShotWriter::new(
             &plan,
             &options,
-            &iptc,
+            Some(creator_template()),
             IptcRuntime {
                 id: 5,
                 options: EditOptions::default(),
@@ -3171,7 +3355,7 @@ mod tests {
         cancel.store(true, Ordering::Relaxed);
         shot_writer.file_done(5);
         fs::write(&hold_until, b"").unwrap();
-        let (iptc_errors, cancelled) = shot_writer.finish();
+        let (iptc_errors, _template_notices, cancelled) = shot_writer.finish();
 
         assert!(cancelled);
         assert_eq!(placed_events(&receiver), Vec::<Vec<PathBuf>>::new());
@@ -3196,11 +3380,16 @@ mod tests {
         for (minute, name) in (0u64..).zip(names) {
             write_image_dated(&dirs, name, NOV_15 + 60 * minute);
         }
-        let mut form = dirs.form("");
-        form.iptc.creator = "Fotograf".to_string();
+        let form = dirs.form("");
         let (write, _log, _hold_until) = observed_write(&dirs, "12.40", 2);
 
-        let (seen, done) = import_events(&form, &AtomicBool::new(false), &write, &mut None);
+        let (seen, done) = import_events(
+            &form,
+            Some(creator_template()),
+            &AtomicBool::new(false),
+            &write,
+            &mut None,
+        );
 
         let placed: Vec<&Seen> = seen
             .iter()
@@ -3240,11 +3429,10 @@ mod tests {
         let cancel = AtomicBool::new(false);
         let mut exiftool = None;
         let (events, receiver) = mpsc::channel();
-        let iptc = crate::IptcForm::default();
         let mut shot_writer = ShotWriter::new(
             &plan,
             &options,
-            &iptc,
+            None,
             IptcRuntime {
                 id: 5,
                 options: EditOptions::default(),
@@ -3260,7 +3448,7 @@ mod tests {
         shot_writer.file_done(2);
         cancel.store(true, Ordering::Relaxed);
         assert!(shot_writer.pool.is_none());
-        let (iptc_errors, cancelled) = shot_writer.finish();
+        let (iptc_errors, _template_notices, cancelled) = shot_writer.finish();
 
         assert!(!cancelled);
         assert!(iptc_errors.is_empty(), "{iptc_errors:?}");
@@ -3278,12 +3466,17 @@ mod tests {
     fn with_two_processes_and_no_journal_one_line_and_every_shot_is_placed() {
         let dirs = TempDirs::new("pool-no-journal");
         two_shots(&dirs);
-        let mut form = dirs.form("");
-        form.iptc.creator = "Fotograf".to_string();
+        let form = dirs.form("");
         let (mut write, log, _hold_until) = observed_write(&dirs, "13.64", 2);
         write.journal = None;
 
-        let (seen, done) = import_events(&form, &AtomicBool::new(false), &write, &mut None);
+        let (seen, done) = import_events(
+            &form,
+            Some(creator_template()),
+            &AtomicBool::new(false),
+            &write,
+            &mut None,
+        );
 
         let placed: Vec<&Seen> = seen
             .iter()
@@ -3319,9 +3512,10 @@ mod tests {
         let journal = Journal::open(&journal_folder).unwrap();
         let mut worker =
             ImportWorker::start_with_processes(Some(journal), Arc::new(NoImageCheck), 2).unwrap();
-        let mut form = dirs.form("");
-        form.iptc.creator = "Fotograf".to_string();
-        let id = worker.run(form, EditOptions::default()).unwrap();
+        let form = dirs.form("");
+        let id = worker
+            .run(form, EditOptions::default(), Some(creator_template()))
+            .unwrap();
 
         let done = done_event(&worker, id);
 
