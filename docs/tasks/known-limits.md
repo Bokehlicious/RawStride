@@ -402,7 +402,8 @@ seen in the hand check, so each becomes a task only if it is noticed in use.)
   `keys.txt` edited while RawStride runs is used only after a restart, and a later Save of a
   changed map on the page Keyboard Shortcuts writes the program's map over the hand edits. A
   Save that does not change the map leaves the file as it is (T281).
-- *The heading row follows sideways one frame late* (T286, accepted when the task was written):
+- *The heading row follows sideways one frame late* (T286, accepted when the task was written;
+  **kept** at the sort after T286, 2026-11-23 (owner)):
   on the page Keyboard Shortcuts the heading row above the scroll area is shifted by the rows'
   horizontal offset of the last frame, so while scrolling sideways it lags the rows by one frame.
 
