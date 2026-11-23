@@ -87,8 +87,8 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status |
 |---|---|---|
-| [T291](T291-template-form-model.md) | The template window's form in plain Rust | Blocked |
-| [T292](T292-template-file-thread.md) | Reading and saving template files on a thread of their own | Blocked |
+| [T291](T291-template-form-model.md) | The template window's form in plain Rust | Open |
+| [T292](T292-template-file-thread.md) | Reading and saving template files on a thread of their own | Open |
 | [T293](T293-template-window.md) | The template window | Blocked |
 | [T294](T294-import-applies-template-file.md) | The import writes a template file instead of its six fields | Blocked |
 | [T295](T295-import-template-row.md) | The import dialog's Metadata Template row | Blocked |
