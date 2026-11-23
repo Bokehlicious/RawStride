@@ -46,7 +46,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 use std::path::{Path, PathBuf};
 
-pub use exiftool::{ExifTool, MIN_EXIFTOOL_VERSION, ToolVersion};
+pub use exiftool::{ExifTool, MIN_EXIFTOOL_VERSION, ToolVersion, exiftool_program};
 pub use recycle::{DeleteError, DeleteRefusal};
 pub use relocate::{MoveError, Moved};
 pub use worker::{

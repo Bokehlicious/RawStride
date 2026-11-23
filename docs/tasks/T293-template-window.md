@@ -1,4 +1,4 @@
-# T293. The template window — Blocked
+# T293. The template window — Open
 
 - **Why:** ADR 0017 U13, part U13c (U13-Q2, U13-Q3, U13-Q4, U13-Q12, U13-Q13,
   U13-Q15), third of the chain T291 → T292 → T293 → T294 → T295 → T296. The user
@@ -155,3 +155,4 @@
 | 2026-11-23 | Blocked | Added (ADR 0017 U13, part U13c, third of the chain T291 → T292 → T293 → T294 → T295 → T296). Waits for T291 and T292, the owner's answer to U13-Q15, its cold read and the chain review |
 | 2026-11-23 | Blocked | The owner approved the reviewer's proposals U13-Q14–U13-Q19 (recorded in ADR 0017 §6.5); waits for its cold read and the chain review |
 | 2026-11-23 | Blocked | Cold read: point 4 "Modality and keys" added (modal like the metadata window, its place in the key loop, counts in `other_dialog_open()`, Escape closes a ▼ list first); the size from a function of its own in `shell.rs` (the Settings window's cap gives one column); the tests on a `TemplateWindow` and an `open_template` function, not a `Loupe`; `TemplateIo::start(None, …)`, a failed start answers as stopped; `draw_structure_list` without its name a second time; the ▼ fields' own list and Escape flag, own values saved, contact fields with ▼; a fixed `.id()` per opening; `push_id` per section; `Checkbox::without_text`; the File-menu sentence dropped (no test lists the menu); dialogs: no title on file dialogs, `OkCancelCustom` with T291's title, no start folder without `LOCALAPPDATA`; Windows adds `.xmp` itself; status line colours, errors cleared, list sub-field errors placed; Close greyed while a request waits; missing exports: stop and ask (T291 and T292 list them) |
+| 2026-11-23 | Open | T291 and T292 done (b3c3231 and the commit of T292's Done); its cold read and the chain review were done before (see T291's log). Set Open |

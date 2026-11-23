@@ -45,6 +45,7 @@ mod tabs;
 mod tasks;
 mod tasks_text;
 mod template_form;
+mod template_io;
 mod thumb_buttons;
 mod thumbs;
 mod watcher;
@@ -203,6 +204,7 @@ pub use template_form::{
     left_column_sections, load_failed_text, not_loaded_lines, property_path_name, refused_text,
     save_failed_text, template_rows, template_text, templates_folder, with_xmp_extension,
 };
+pub use template_io::{SaveError, TemplateEvent, TemplateIo, TemplateIoStopped};
 pub use thumb_buttons::{
     BUTTON_INSET, BUTTON_SIZE, ButtonFacts, THUMB_BUTTONS, ThumbButton, button_at, button_rect,
     preview_only_marked,
