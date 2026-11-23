@@ -18,6 +18,7 @@ use pw_metadata::read::MetadataRead;
 use pw_metadata::reconcile::IimDigest;
 use pw_metadata::safe_write::{NoImageCheck, WriteReport};
 use pw_metadata::template::{Mode, Template, TemplateField};
+use pw_metadata::template_file::{TemplateFile, write_exiftool_config};
 use pw_metadata::value::{LangAlt, StructValue, Value};
 use pw_metadata::{ExifTool, Iptc, LocalizedValue};
 
@@ -76,6 +77,34 @@ fn exiftool() -> ExifTool {
             format!("perl {pl} (PW_EXIFTOOL_PL)"),
         ),
         Err(_) => (ExifTool::start(), "exiftool on PATH".to_string()),
+    };
+    let mut et = match started {
+        Ok(et) => et,
+        Err(e) => panic!(
+            "ExifTool is required for this test but could not be started from {source}: {e}. \
+             Install ExifTool or set PW_EXIFTOOL_PL (docs/TESTING.md §4.5)."
+        ),
+    };
+    if let Err(e) = et.execute(&["-ver".to_string()]) {
+        panic!("ExifTool from {source} does not answer: {e} (docs/TESTING.md §4.5)");
+    }
+    et
+}
+
+/// Starts ExifTool with `-config` and the template config written in `dir` (T285), as `exiftool`
+/// does otherwise. Panics (fails the test) if it is unavailable.
+fn exiftool_with_config(dir: &Path) -> ExifTool {
+    let config = write_exiftool_config(dir).unwrap();
+    let config = config.to_string_lossy().into_owned();
+    let (started, source) = match std::env::var("PW_EXIFTOOL_PL") {
+        Ok(pl) => (
+            ExifTool::start_with("perl", &[&pl, "-config", &config]),
+            format!("perl {pl} (PW_EXIFTOOL_PL)"),
+        ),
+        Err(_) => (
+            ExifTool::start_with("exiftool", &["-config", &config]),
+            "exiftool on PATH".to_string(),
+        ),
     };
     let mut et = match started {
         Ok(et) => et,
@@ -550,4 +579,47 @@ fn a_template_keeps_an_earlier_rating_in_a_sidecar() {
     assert_eq!(std::fs::read(&sidecar).unwrap(), bytes);
     s.assert_clean();
     s.remove();
+}
+
+/// The whole path of a template file (T285 point 5): saved with keyword `c` and its + box checked
+/// and Headline `X`, read back, turned into a template and applied to a JPEG with keywords `a`,
+/// `b` and Headline `Y`: the keyword is added after the image's and the Headline replaced.
+#[test]
+fn a_saved_template_file_is_read_back_and_applied() {
+    let templates = temp_dir("whole-path-templates");
+    let mut et = exiftool_with_config(&templates);
+    let s = Scratch::new("whole-path");
+    let file = s.jpeg();
+    write(
+        &mut et,
+        &file,
+        &[
+            "-XMP-dc:Subject=a",
+            "-XMP-dc:Subject=b",
+            "-XMP-photoshop:Headline=Y",
+        ],
+    );
+
+    let path = templates.join("mall.xmp");
+    let saved = TemplateFile::new(
+        vec![
+            ("dc:subject".to_string(), list(&["c"])),
+            ("photoshop:Headline".to_string(), text("X")),
+        ],
+        vec!["dc:subject".to_string()],
+    );
+    et.write_template_file(&path, &saved).unwrap();
+    let read = et.read_template_file(&path).unwrap();
+    assert_eq!(read.template, saved);
+
+    assert_report(
+        s.apply(&mut et, &file, &read.template.to_template()),
+        written(&file),
+    );
+    let after = self::read(&mut et, &file);
+    assert_eq!(value(&after, "dc:subject"), Some(list(&["a", "b", "c"])));
+    assert_eq!(value(&after, "photoshop:Headline"), Some(text("X")));
+    s.assert_clean();
+    s.remove();
+    let _ = std::fs::remove_dir_all(&templates);
 }

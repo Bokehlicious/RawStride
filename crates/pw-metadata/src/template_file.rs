@@ -9,12 +9,78 @@
 //!
 //! A template holds only properties the metadata window edits ([`in_template`], U13-Q3), so a file
 //! from another program cannot bring in a field the template window cannot show.
+//!
+//! **The file** (U13-Q1, Q2, Q12; ADR 0007 §10, §17.1): a template is saved as a plain XMP file
+//! with only standard values, plus one RawStride property, `rawstride:AddTo` (an `rdf:Bag` of the
+//! XMP ids whose + box is checked), in the namespace `rawstride` =
+//! [`RAWSTRIDE_NAMESPACE`] (a name only, never fetched, never changed).
+//! [`ExifTool::write_template_file`] saves one and [`ExifTool::read_template_file`] reads one back,
+//! also a file another program wrote. ExifTool reads `rawstride:AddTo` without any setting but
+//! writes it only with the user-defined tag of [`EXIFTOOL_CONFIG`]: an [`ExifTool`] used for
+//! templates must be started with `-config <path>` as its first arguments, the path that
+//! [`write_exiftool_config`] gives (`ExifTool::start_with(program, &["-config", path])`; with
+//! `perl`, after the script). An ExifTool started without it cannot save a template (the save
+//! fails on ExifTool's warning); reading works either way.
 
+use std::fmt;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+
+use serde_json::Value as Json;
+
+use crate::ExifTool;
+use crate::iim::CodedCharset;
 use crate::properties::{self, Occurrence, ValueKind};
+use crate::read::{JSON_OPTIONS, xmp_values};
+use crate::reconcile::{FileKind, IimDigest};
 use crate::template::{
     LOCATION_CREATED, Mode, Template, TemplateField, has_content, sort_fields, x_default,
 };
-use crate::value::{self, Value};
+use crate::value::{self, Metadata, Value, ValueError};
+use crate::write_plan::{self, ExifPresent, FileState, PlanError, WriteSettings, XmpPresent};
+
+/// The URI of RawStride's template namespace (prefix `rawstride`; owner, 2026-11-23, ADR 0007
+/// §10). An identifier only, never fetched; never changed, or older template files lose their +
+/// boxes.
+pub const RAWSTRIDE_NAMESPACE: &str = "https://github.com/Bokehlicious/RawStride/ns/template/1.0/";
+
+/// The ExifTool config that defines `rawstride:AddTo` (group `XMP-rawstride`, an `rdf:Bag` of
+/// strings), so ExifTool can write it. Given with `-config` (see the module comment).
+pub const EXIFTOOL_CONFIG: &str = "\
+# RawStride's metadata template namespace (written by RawStride; do not edit).
+%Image::ExifTool::UserDefined = (
+    'Image::ExifTool::XMP::Main' => {
+        rawstride => {
+            SubDirectory => {
+                TagTable => 'Image::ExifTool::UserDefined::rawstride',
+            },
+        },
+    },
+);
+%Image::ExifTool::UserDefined::rawstride = (
+    GROUPS => { 0 => 'XMP', 1 => 'XMP-rawstride', 2 => 'Image' },
+    NAMESPACE => { 'rawstride' => 'https://github.com/Bokehlicious/RawStride/ns/template/1.0/' },
+    WRITABLE => 'string',
+    AddTo => { List => 'Bag' },
+);
+1;
+";
+
+/// The name of the config file [`write_exiftool_config`] writes.
+const CONFIG_FILE_NAME: &str = "rawstride-exiftool.config";
+
+/// `rawstride:AddTo` by its ExifTool name.
+const ADD_TO: &str = "XMP-rawstride:AddTo";
+
+/// The subfolder of the template's folder where a new file is written before it replaces the
+/// template (see [`ExifTool::write_template_file`]).
+const SAVING_FOLDER: &str = ".saving";
+
+/// Two numbers compared as numbers are equal within this part of the larger.
+const NUMBER_TOLERANCE: f64 = 1e-9;
+
+/// Makes the names of new files unique within this process.
+static SAVE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// Creator's Contact Info, the single structure whose checked fields are applied one by one.
 const CONTACT_INFO: &str = "Iptc4xmpCore:CreatorContactInfo";
@@ -298,6 +364,418 @@ fn clean_struct(fields: value::StructValue, kind: ValueKind) -> Option<value::St
     }
     sort_fields(&mut kept, struct_def);
     Some(kept)
+}
+
+/// Writes [`EXIFTOOL_CONFIG`] to `rawstride-exiftool.config` in `folder` (made when needed) and
+/// returns the file's path. The file is written only when it is missing or its content differs,
+/// so its modification time stays as it is otherwise. An [`ExifTool`] used for templates is
+/// started with `-config <that path>` as its first arguments (see the module comment).
+pub fn write_exiftool_config(folder: &Path) -> std::io::Result<PathBuf> {
+    std::fs::create_dir_all(folder)?;
+    let path = folder.join(CONFIG_FILE_NAME);
+    match std::fs::read(&path) {
+        Ok(content) if content == EXIFTOOL_CONFIG.as_bytes() => {}
+        Ok(_) => std::fs::write(&path, EXIFTOOL_CONFIG)?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            std::fs::write(&path, EXIFTOOL_CONFIG)?
+        }
+        Err(error) => return Err(error),
+    }
+    Ok(path)
+}
+
+/// Why a template file could not be saved or read.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TemplateFileError {
+    /// The file's name does not end in `.xmp` (any case).
+    NotXmpName(PathBuf),
+    /// The template has no field once [`TemplateFile::new`] has run: an empty template is not
+    /// saved.
+    Empty,
+    /// A value `Metadata::set` refuses (for example more than three Image Creators).
+    Value(ValueError),
+    /// The write plan refused the values.
+    Plan(PlanError),
+    /// ExifTool failed, did not answer or did not write the file; holds its text.
+    ExifTool(String),
+    /// A file operation failed: the path and the error's text.
+    File { path: PathBuf, reason: String },
+    /// The file read back after saving differs from the template; holds what differs.
+    Differs(String),
+    /// The file to read does not exist.
+    NotFound(PathBuf),
+    /// ExifTool could not read the file (`ExifTool:Error`); holds its text.
+    Unreadable { path: PathBuf, reason: String },
+    /// The file is not XMP (a text file or a JPEG named `.xmp`); holds the type ExifTool found.
+    NotXmp { path: PathBuf, file_type: String },
+    /// The template's folder has a `%` in its path, which ExifTool's `-o` reads as a format code
+    /// (`%d`, `%f`, …) with no way to escape it; holds the folder.
+    PercentInFolder(PathBuf),
+}
+
+impl fmt::Display for TemplateFileError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            TemplateFileError::NotXmpName(path) => {
+                write!(f, "{} is not the name of an .xmp file", path.display())
+            }
+            TemplateFileError::Empty => write!(f, "the template has no field to save"),
+            TemplateFileError::Value(error) => write!(f, "{error}"),
+            TemplateFileError::Plan(error) => write!(f, "{error}"),
+            TemplateFileError::ExifTool(text) => write!(f, "ExifTool: {text}"),
+            TemplateFileError::File { path, reason } => {
+                write!(f, "{}: {reason}", path.display())
+            }
+            TemplateFileError::Differs(what) => {
+                write!(f, "the saved file differs from the template: {what}")
+            }
+            TemplateFileError::NotFound(path) => write!(f, "{} does not exist", path.display()),
+            TemplateFileError::Unreadable { path, reason } => {
+                write!(f, "{} could not be read: {reason}", path.display())
+            }
+            TemplateFileError::NotXmp { path, file_type } => {
+                write!(f, "{} is not an XMP file ({file_type})", path.display())
+            }
+            TemplateFileError::PercentInFolder(folder) => write!(
+                f,
+                "a template cannot be saved in {}, as its path holds a % sign",
+                folder.display()
+            ),
+        }
+    }
+}
+
+impl std::error::Error for TemplateFileError {}
+
+/// What [`ExifTool::read_template_file`] read, so the template window can tell the user which
+/// fields of the file were not loaded (U13c).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TemplateRead {
+    /// The template, made by [`TemplateFile::new`].
+    pub template: TemplateFile,
+    /// The XMP ids of the file's properties of the table a template cannot hold ([`in_template`]:
+    /// Rating, Label, a deprecated IIM property), never applied.
+    pub skipped: Vec<String>,
+    /// The XMP ids of the properties [`TemplateFile::new`] dropped as a whole (for example a Lang
+    /// Alt with only `en-US`). A part it drops (a second Location Created entry, a blank list
+    /// entry) is not named.
+    pub dropped: Vec<String>,
+    /// The values that could not be read as `(property path, text)`: a date ExifTool gives in a
+    /// form that cannot be read, and a value `Metadata::set` refuses for its kind (with the
+    /// error's text).
+    pub unreadable: Vec<(String, String)>,
+}
+
+impl ExifTool {
+    /// Saves `template` as a plain XMP file at `path` (see the module comment).
+    ///
+    /// The template is passed through [`TemplateFile::new`] first, so only checked fields with
+    /// content and their + boxes are written; one with no field left is
+    /// [`TemplateFileError::Empty`]. The values go through `Metadata::set` and the write plan (XMP
+    /// only, as for a sidecar), plus one `rawstride:AddTo` entry per + box. ExifTool writes them
+    /// with `-o` to a new file with a name of its own (`<process id>-<counter>.xmp`) in the
+    /// subfolder `.saving` of `path`'s folder, so two saves at once never share a file and a file
+    /// left by a crash is not among the templates. ExifTool reads a `%` after `-o` as a format
+    /// code that cannot be escaped, so the new file's name never holds the template's name (which
+    /// may have a `%`; only the rename uses it), and a folder whose path holds a `%` is
+    /// [`TemplateFileError::PercentInFolder`]. The write counts only when ExifTool created
+    /// exactly one file and printed no warning and no error (an ExifTool started without the
+    /// config only warns that `AddTo` is not defined). The new file is then read back and compared
+    /// with the template (a number as a number, as XMP stores coordinates in another form).
+    ///
+    /// Only then the new file replaces `path` (an existing file too; asking first is the window's,
+    /// U13-Q2). The rename fails while another program holds `path` open; that is the error. On
+    /// every failure after ExifTool was asked to write, the new file is removed, `path` is not
+    /// touched, and the `.saving` folder is removed when it is left empty; so it is after a save.
+    pub fn write_template_file(
+        &mut self,
+        path: &Path,
+        template: &TemplateFile,
+    ) -> Result<(), TemplateFileError> {
+        if !has_xmp_extension(path) {
+            return Err(TemplateFileError::NotXmpName(path.to_path_buf()));
+        }
+        let template = TemplateFile::new(template.fields.clone(), template.add.clone());
+        if template.fields.is_empty() {
+            return Err(TemplateFileError::Empty);
+        }
+        let mut metadata = Metadata::new();
+        for (xmp_id, value) in &template.fields {
+            metadata
+                .set(xmp_id, value.clone())
+                .map_err(TemplateFileError::Value)?;
+        }
+        let state = FileState {
+            kind: FileKind::Raw,
+            iim_present: false,
+            iim_charset: CodedCharset::Absent,
+            iim_values: Vec::new(),
+            digest: IimDigest::Missing,
+            exif_present: ExifPresent::default(),
+            xmp_present: XmpPresent::default(),
+        };
+        let plan = write_plan::plan(&metadata, &state, WriteSettings::default())
+            .map_err(TemplateFileError::Plan)?;
+
+        let folder = match path.parent() {
+            Some(parent) if !parent.as_os_str().is_empty() => parent,
+            _ => Path::new("."),
+        };
+        if folder.to_string_lossy().contains('%') {
+            return Err(TemplateFileError::PercentInFolder(folder.to_path_buf()));
+        }
+        let saving = folder.join(SAVING_FOLDER);
+        std::fs::create_dir_all(&saving).map_err(|error| file_error(&saving, &error))?;
+        let new_file = saving.join(new_file_name());
+        if let Err(error) = remove_file_if_present(&new_file) {
+            remove_dir_if_empty(&saving);
+            return Err(file_error(&new_file, &error));
+        }
+
+        let mut args = plan.options.clone();
+        args.extend(plan.args.iter().cloned());
+        args.extend(
+            template
+                .add
+                .iter()
+                .map(|xmp_id| format!("-{ADD_TO}={xmp_id}")),
+        );
+        args.push("-o".to_string());
+        args.push(new_file.to_string_lossy().into_owned());
+
+        let saved = self
+            .execute(&args)
+            .map_err(|error| TemplateFileError::ExifTool(error.to_string()))
+            .and_then(|answer| {
+                if template_written(&answer) && new_file.is_file() {
+                    Ok(())
+                } else {
+                    Err(TemplateFileError::ExifTool(answer.trim().to_string()))
+                }
+            })
+            .and_then(|()| self.read_template_file(&new_file))
+            .and_then(|read| compare(&template, &read))
+            .and_then(|()| {
+                std::fs::rename(&new_file, path).map_err(|error| file_error(path, &error))
+            });
+        if saved.is_err() {
+            // The error being returned is the one that counts; a file left here is in `.saving`,
+            // which is never listed among the templates.
+            let _ = remove_file_if_present(&new_file);
+        }
+        remove_dir_if_empty(&saving);
+        saved
+    }
+
+    /// Reads the template file at `path`, also one another program wrote (see the module
+    /// comment).
+    ///
+    /// A missing file, a file ExifTool cannot read (`ExifTool:Error`) and a file that is not XMP
+    /// are the error. Each property of the table that a template holds ([`in_template`]) becomes
+    /// a checked field; one it cannot hold is named in [`TemplateRead::skipped`]; a value
+    /// `Metadata::set` refuses for its kind is added to [`TemplateRead::unreadable`] and left out
+    /// (`set` is a check only: the value passed on is the one read); an empty value and a list over
+    /// its limit are left to [`TemplateFile::new`]. `rawstride:AddTo` gives the + boxes; a
+    /// file without it loads with every + unchecked. The result is [`TemplateFile::new`] of these,
+    /// and what it dropped as a whole is named in [`TemplateRead::dropped`]. Variables in a text
+    /// (`{date}` and the others) are kept as written.
+    pub fn read_template_file(&mut self, path: &Path) -> Result<TemplateRead, TemplateFileError> {
+        if !path.is_file() {
+            return Err(TemplateFileError::NotFound(path.to_path_buf()));
+        }
+        let args: Vec<String> = JSON_OPTIONS
+            .iter()
+            .chain(&["-ExifTool:Error", "-File:FileType"])
+            .map(|arg| arg.to_string())
+            .chain([path.to_string_lossy().into_owned()])
+            .collect();
+        let object = self
+            .read_json(&args, path)
+            .map_err(|error| TemplateFileError::ExifTool(error.to_string()))?;
+        if let Some(error) = object.get("ExifTool:Error") {
+            return Err(TemplateFileError::Unreadable {
+                path: path.to_path_buf(),
+                reason: json_text(error),
+            });
+        }
+        match object.get("File:FileType") {
+            Some(Json::String(file_type)) if file_type == "XMP" => {}
+            other => {
+                return Err(TemplateFileError::NotXmp {
+                    path: path.to_path_buf(),
+                    file_type: other.map_or_else(|| "unknown".to_string(), json_text),
+                });
+            }
+        }
+
+        let read = xmp_values(&object);
+        let mut unreadable = read.unreadable;
+        let mut skipped = Vec::new();
+        let mut fields = Vec::new();
+        for (xmp_id, value) in read.values {
+            if !in_template(&xmp_id) {
+                skipped.push(xmp_id);
+                continue;
+            }
+            match Metadata::new().set(&xmp_id, value.clone()) {
+                // An empty value, and a list over its limit, are left to `new`: it drops the
+                // empty value, and the list once its entries without content are dropped if it
+                // is still over the limit (named in `dropped`).
+                Ok(()) | Err(ValueError::Empty(_) | ValueError::TooMany { .. }) => {
+                    fields.push((xmp_id, value))
+                }
+                Err(error) => unreadable.push((xmp_id, error.to_string())),
+            }
+        }
+        let add = match object.get(ADD_TO) {
+            Some(Json::Array(entries)) => entries.iter().map(json_text).collect(),
+            Some(entry @ Json::String(_)) => vec![json_text(entry)],
+            _ => Vec::new(),
+        };
+        let given: Vec<String> = fields.iter().map(|(xmp_id, _)| xmp_id.clone()).collect();
+        let template = TemplateFile::new(fields, add);
+        let dropped = given
+            .into_iter()
+            .filter(|xmp_id| !template.fields.iter().any(|(kept, _)| kept == xmp_id))
+            .collect();
+        Ok(TemplateRead {
+            template,
+            skipped,
+            dropped,
+            unreadable,
+        })
+    }
+}
+
+/// True when `path`'s name ends in `.xmp`, in any case.
+fn has_xmp_extension(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("xmp"))
+        && path.file_stem().is_some_and(|stem| !stem.is_empty())
+}
+
+/// The name of a new file in `.saving`: `<process id>-<counter>.xmp`, digits only, so ExifTool's
+/// `-o` finds no `%` in it.
+fn new_file_name() -> String {
+    let counter = SAVE_COUNTER.fetch_add(1, Ordering::Relaxed);
+    format!("{}-{counter}.xmp", std::process::id())
+}
+
+/// True if ExifTool's answer to the write of a template file reports exactly one file created, no
+/// failed file, and no line of a warning or an error.
+fn template_written(answer: &str) -> bool {
+    let created: u64 = answer
+        .lines()
+        .filter_map(|line| line.trim().strip_suffix(" image files created"))
+        .filter_map(|count| count.trim().parse::<u64>().ok())
+        .sum();
+    let warned = answer
+        .lines()
+        .map(str::trim_start)
+        .any(|line| line.starts_with("Warning") || line.starts_with("Error"));
+    crate::write_succeeded(answer) && created == 1 && !warned
+}
+
+/// `Ok` when the file read back, `read`, holds exactly `template` (already passed through
+/// [`TemplateFile::new`]), each value compared by [`values_match`]; otherwise what differs.
+fn compare(template: &TemplateFile, read: &TemplateRead) -> Result<(), TemplateFileError> {
+    let differs = |what: String| Err(TemplateFileError::Differs(what));
+    if let Some((property, text)) = read.unreadable.first() {
+        return differs(format!("{property} could not be read back ({text})"));
+    }
+    if let Some(property) = read.skipped.first().or(read.dropped.first()) {
+        return differs(format!("{property} was not expected"));
+    }
+    let ids = |fields: &[(String, Value)]| -> Vec<String> {
+        fields.iter().map(|(xmp_id, _)| xmp_id.clone()).collect()
+    };
+    if ids(&template.fields) != ids(&read.template.fields) {
+        return differs(format!(
+            "the fields {:?} were read back as {:?}",
+            ids(&template.fields),
+            ids(&read.template.fields)
+        ));
+    }
+    for ((xmp_id, written), (_, read_back)) in template.fields.iter().zip(&read.template.fields) {
+        if !values_match(written, read_back) {
+            return differs(format!("{xmp_id} was read back as {read_back:?}"));
+        }
+    }
+    if template.add != read.template.add {
+        return differs(format!(
+            "the + boxes {:?} were read back as {:?}",
+            template.add, read.template.add
+        ));
+    }
+    Ok(())
+}
+
+/// True when `written` and `read_back` are equal, a [`Value::Number`] (also inside a structure)
+/// compared as a number ([`numbers_match`]).
+fn values_match(written: &Value, read_back: &Value) -> bool {
+    match (written, read_back) {
+        (Value::Number(a), Value::Number(b)) => numbers_match(a, b),
+        (Value::Struct(a), Value::Struct(b)) => structs_match(a, b),
+        (Value::StructList(a), Value::StructList(b)) => {
+            a.len() == b.len() && a.iter().zip(b).all(|(a, b)| structs_match(a, b))
+        }
+        (a, b) => a == b,
+    }
+}
+
+/// True when the two structures have the same fields in the same order, each value matching by
+/// [`values_match`].
+fn structs_match(a: &value::StructValue, b: &value::StructValue) -> bool {
+    a.fields.len() == b.fields.len()
+        && a.fields
+            .iter()
+            .zip(&b.fields)
+            .all(|((id_a, a), (id_b, b))| id_a == id_b && values_match(a, b))
+}
+
+/// True when the texts are equal, or both read as `f64` and are equal within
+/// [`NUMBER_TOLERANCE`] of the larger.
+fn numbers_match(a: &str, b: &str) -> bool {
+    if a == b {
+        return true;
+    }
+    match (a.trim().parse::<f64>(), b.trim().parse::<f64>()) {
+        (Ok(a), Ok(b)) if a.is_finite() && b.is_finite() => {
+            (a - b).abs() <= NUMBER_TOLERANCE * a.abs().max(b.abs())
+        }
+        _ => false,
+    }
+}
+
+/// The text of a JSON value: a string as it is, anything else as JSON.
+fn json_text(json: &Json) -> String {
+    match json {
+        Json::String(text) => text.clone(),
+        other => other.to_string(),
+    }
+}
+
+/// A [`TemplateFileError::File`] for `path`.
+fn file_error(path: &Path, error: &std::io::Error) -> TemplateFileError {
+    TemplateFileError::File {
+        path: path.to_path_buf(),
+        reason: error.to_string(),
+    }
+}
+
+/// Removes the file at `path` if it exists.
+fn remove_file_if_present(path: &Path) -> std::io::Result<()> {
+    match std::fs::remove_file(path) {
+        Err(error) if error.kind() != std::io::ErrorKind::NotFound => Err(error),
+        _ => Ok(()),
+    }
+}
+
+/// Removes the folder at `path` when it is empty; a folder that is not empty, or any failure, is
+/// left as it is (another save may be using it).
+fn remove_dir_if_empty(path: &Path) {
+    let _ = std::fs::remove_dir(path);
 }
 
 #[cfg(test)]
@@ -839,6 +1317,99 @@ mod tests {
         for (id, value) in [(EMAIL, text("a@example.com")), (PHONE, text("1"))] {
             assert!(contact.fields.contains(&(id.to_string(), value)), "{id}");
         }
+    }
+
+    // --- the file (T285) ---
+
+    #[test]
+    fn the_config_defines_the_namespace_and_its_one_property() {
+        assert!(EXIFTOOL_CONFIG.contains(&format!("'rawstride' => '{RAWSTRIDE_NAMESPACE}'")));
+        assert!(EXIFTOOL_CONFIG.contains("1 => 'XMP-rawstride'"));
+        assert!(EXIFTOOL_CONFIG.contains("AddTo => { List => 'Bag' }"));
+    }
+
+    #[test]
+    fn numbers_match_as_numbers_within_the_tolerance() {
+        assert!(numbers_match("59.3293", "59.3293"));
+        assert!(numbers_match("59.3293", "59.32930000000001"));
+        assert!(numbers_match("1", "1.0"));
+        assert!(!numbers_match("59.3293", "59.3294"));
+        assert!(!numbers_match("59.3293", "north"));
+        assert!(!numbers_match("NaN", "1"));
+        assert!(!numbers_match("inf", "1e308"));
+        assert!(values_match(
+            &Value::StructList(vec![entry(&[(
+                "exif:GPSLatitude",
+                Value::Number("59.3293".to_string())
+            )])]),
+            &Value::StructList(vec![entry(&[(
+                "exif:GPSLatitude",
+                Value::Number("59.329300000000003".to_string())
+            )])]),
+        ));
+        // A text is compared as it is.
+        assert!(!values_match(&text("1"), &text("1.0")));
+    }
+
+    #[test]
+    fn a_template_write_counts_only_with_one_file_and_no_warning() {
+        assert!(template_written("    1 image files created\n"));
+        assert!(template_written("    1 image files created\r\n"));
+        assert!(!template_written(
+            "    1 image files created\n--- stderr ---\nWarning: Tag 'XMP-rawstride:AddTo' is not defined\n"
+        ));
+        assert!(!template_written(
+            "    0 image files created\n    1 files weren't created due to errors\n--- stderr ---\nError: 'a.xmp' already exists - \n"
+        ));
+        assert!(!template_written("    2 image files created\n"));
+        assert!(!template_written(""));
+    }
+
+    #[test]
+    fn the_name_must_end_in_xmp() {
+        for name in ["a.xmp", "a.XMP", "dir/b.Xmp"] {
+            assert!(has_xmp_extension(std::path::Path::new(name)), "{name}");
+        }
+        for name in ["a.txt", "a", "a.xmp.txt", ".xmp"] {
+            assert!(!has_xmp_extension(std::path::Path::new(name)), "{name}");
+        }
+    }
+
+    #[test]
+    fn new_file_names_differ_and_hold_only_digits() {
+        let (a, b) = (new_file_name(), new_file_name());
+        assert_ne!(a, b);
+        let prefix = format!("{}-", std::process::id());
+        assert!(a.starts_with(&prefix) && a.ends_with(".xmp"), "{a}");
+        // No `%` (nor anything else ExifTool's `-o` could read as a format code).
+        let stem = a.trim_end_matches(".xmp");
+        assert!(stem.chars().all(|c| c.is_ascii_digit() || c == '-'), "{a}");
+    }
+
+    #[test]
+    fn compare_names_what_differs() {
+        let saved = made(&[("photoshop:City", text("Lund"))]);
+        let read = |template: TemplateFile| TemplateRead {
+            template,
+            skipped: Vec::new(),
+            dropped: Vec::new(),
+            unreadable: Vec::new(),
+        };
+        assert_eq!(compare(&saved, &read(saved.clone())), Ok(()));
+        assert!(matches!(
+            compare(&saved, &read(made(&[("photoshop:City", text("Malmö"))]))),
+            Err(TemplateFileError::Differs(_))
+        ));
+        assert!(matches!(
+            compare(&saved, &read(TemplateFile::default())),
+            Err(TemplateFileError::Differs(_))
+        ));
+        let mut unreadable = read(saved.clone());
+        unreadable.unreadable = vec![("photoshop:DateCreated".to_string(), "x".to_string())];
+        assert!(matches!(
+            compare(&saved, &unreadable),
+            Err(TemplateFileError::Differs(_))
+        ));
     }
 
     #[test]

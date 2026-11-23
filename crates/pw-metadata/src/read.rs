@@ -61,7 +61,7 @@ const STDERR_MARKER: &str = "--- stderr ---\n";
 
 /// The options shared by both ExifTool calls: JSON, no print conversion, binary data as base64,
 /// structures as JSON objects, every value quoted, group 1 names.
-const JSON_OPTIONS: &[&str] = &[
+pub(crate) const JSON_OPTIONS: &[&str] = &[
     "-j",
     "-n",
     "-b",
@@ -224,7 +224,7 @@ impl ExifTool {
 
     /// Runs one JSON read and returns the object of its one file. No output means ExifTool could
     /// not read the file; its message is the error.
-    fn read_json(&mut self, args: &[String], file: &Path) -> Result<Map<String, Json>> {
+    pub(crate) fn read_json(&mut self, args: &[String], file: &Path) -> Result<Map<String, Json>> {
         let answer = self.execute(args)?;
         let (stdout, stderr) = answer
             .split_once(STDERR_MARKER)
@@ -427,13 +427,13 @@ fn find_sidecars(image: &Path) -> Result<Sidecars> {
 /// The XMP values of one JSON object, and the dates that could not be read as `(property path,
 /// text)`.
 #[derive(Debug, Default)]
-struct XmpRead {
-    values: Vec<(String, Value)>,
-    unreadable: Vec<(String, String)>,
+pub(crate) struct XmpRead {
+    pub(crate) values: Vec<(String, Value)>,
+    pub(crate) unreadable: Vec<(String, String)>,
 }
 
 /// The XMP of one ExifTool JSON object, keyed by the table's `et_xmp`, in table order.
-fn xmp_values(object: &Map<String, Json>) -> XmpRead {
+pub(crate) fn xmp_values(object: &Map<String, Json>) -> XmpRead {
     let mut read = XmpRead::default();
     for def in properties::properties() {
         let Some(et_xmp) = def.et_xmp else {

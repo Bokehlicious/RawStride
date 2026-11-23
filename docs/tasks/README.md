@@ -87,7 +87,6 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status |
 |---|---|---|
-| [T285](T285-template-file-read-write.md) | Reading and saving a template file with ExifTool (ADR 0017 U13a) | Open |
 
 ## Writing a task (owner and reviewer)
 

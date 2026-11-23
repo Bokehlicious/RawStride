@@ -89,6 +89,8 @@ dropped is removed; git history and `done/` keep it.
   example `ImageCheck::before_write`, called only by the safe write) would let `release` be the
   same for writes and moves, and `with_move_release` and the second closure could go.
 
+- **A template file left in `.saving`** (T285's review, 2026-11-23): when ExifTool does not answer in time but writes the new file afterwards, `write_template_file` has already cleaned up, so the file (and the `.saving` subfolder of the templates' folder) stays. `.saving` is never listed among the templates, so nothing is loaded from it. A task only if it is seen in use.
+
 ## Moves to `_rejected` and `_picked`
 
 - **`relocate::companions`** (`/code-review` of T169, 2026-11-17; the moves are Windows only;
