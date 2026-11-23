@@ -35,6 +35,7 @@ pub mod template_file;
 mod test_support;
 pub mod validate;
 pub mod value;
+pub mod variables;
 pub mod verify;
 pub mod vocabulary;
 mod worker;

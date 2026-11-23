@@ -293,3 +293,4 @@ was when the task was done, so "this file", "below" and "the Log" in T1–T115 m
 | [T284](T284-template-file-model.md) | The template file's model: checked fields, the + box, Location Created's sub-fields (pw-metadata) |
 | [T285](T285-template-file-read-write.md) | Reading and saving a template file with ExifTool (pw-metadata) |
 | [T286](T286-keyboard-shortcuts-table.md) | The page Keyboard Shortcuts as a table of three columns, the Action column's width saved (pw-loupe) |
+| [T287](T287-variables-model.md) | The variables of a metadata text: reading and filling them (pw-metadata) |

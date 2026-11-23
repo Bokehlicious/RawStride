@@ -1,4 +1,4 @@
-# T287. The variables of a metadata text: reading and filling them — Open
+# T287. The variables of a metadata text: reading and filling them — Done
 
 - **Why:** ADR 0017 U13, part U13b (U13-Q9). A text field or a list entry in the metadata window
   or in a template can hold **variables** such as `{date}` or `{name}`; they are turned into each
@@ -126,3 +126,5 @@
 | 2026-11-23 | Blocked | Cold read: the parsing pinned to the import's tokenizer (a `{` inside a name, `{date}}`), `str::trim` and `to_ascii_lowercase`; DateTimeOriginal trimmed of spaces and NULs before `from_exif`; `Unclosed` holds the brace; `NoCaptureTime` also for a capture time missing the part needed; every `Display` text given, and why rule 13 does not apply to them; tests added for these |
 | 2026-11-23 | Blocked | Chain review (T287–T289): `check_value` (point 6) and `escape` (point 7, for T289) added, so a template can be checked before anything is written (T288's `TemplateFile::check_variables`, U13c, U13d) |
 | 2026-11-23 | Open | Cold read and chain review done and worked in |
+| 2026-11-23 | Ready for review | `variables.rs` (new): `VariableValues` and `VariableValues::of`, `VariableError` with its four `Display` texts, `check`, `fill`, `fill_value`, `check_value`, `escape`, the module comment; one private tokenizer (`walk`) used by both `check` and `fill`, so they agree, and one private traversal (`map_texts`) used by both `fill_value` and `check_value`, so the order of the texts is the same. `lib.rs`: `pub mod variables;`. 12 unit tests; test inventory (pw-metadata unit 558 → 570, totals 2433 passed, 78 ignored). check.ps1 all OK, no clippy warnings |
+| 2026-11-23 | Done | Reviewed: matches the task point by point; the tokenizer reads as `Template::parse` in `pw-ingest`; check.ps1 run again by the reviewer, all OK (2433 passed, 78 ignored), no clippy warnings. No user-visible change, no CHANGELOG line (it comes at T289's Done); the owner's hand check of U13b follows T289. T288 set Open |

@@ -1,4 +1,4 @@
-# T288. Variables filled when an image is written; applying a template file — Blocked
+# T288. Variables filled when an image is written; applying a template file — Open
 
 - **Why:** ADR 0017 U13, part U13b (U13-Q9, Q5, Q12). The variables of T287 are turned into each
   image's own values when the image is written: by the metadata window's edits (Save and "Apply to
@@ -159,3 +159,4 @@
 | 2026-11-23 | Blocked | Added (ADR 0017 U13, part U13b, second of the chain T287 → T288 → T289); waits for T287 |
 | 2026-11-23 | Blocked | Cold read: `write_edits_safely` named as reading with `read_metadata_with_values`; the cleaning of a filled `Set` spelled out by kind (`clean` only after `check_kind`, Text and Lang Alt not cleaned, an unknown property or wrong kind kept for `apply_edit`'s error); the deliberate change for a lone brace stated; `EditReport`'s comment; the notices test with a literal City, a helper for `EditReport`, the fixture's file name; a test of a filled list cleaned; the `cases` array may grow; Make/Model of a RAW in another group as a known limit |
 | 2026-11-23 | Blocked | Chain review (T287–T289): `template_file::clean` not used for the editor's edits (it would drop other languages and unshown fields of every structure entry); a narrow pass in `edit.rs` instead, with a test keeping `sv`; a structure sub-field emptied by filling dropped from its entry, an accepted limit; `TemplateFile::check_variables` (point 5) so U13c and U13d find an unknown variable before anything is written |
+| 2026-11-23 | Open | T287 done (`variables.rs` as specified) |
