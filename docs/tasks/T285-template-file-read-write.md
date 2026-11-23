@@ -1,4 +1,4 @@
-# T285. Reading and saving a template file with ExifTool — Blocked: waits for T284 and the owner's approval of the namespace
+# T285. Reading and saving a template file with ExifTool — Blocked: waits for T284
 
 - **Why:** ADR 0017 U13, part U13a (U13-Q1, Q2, Q4, Q12; ADR 0007 §10, §17.1, revision 34). A
   template is saved as a **plain XMP file** with only standard values, plus **one RawStride
@@ -21,8 +21,8 @@
   is **read** without any setting (as `XMP-<prefix>:<Name>` in `-G1` JSON) but can only be
   **written** with a user-defined tag in a config file given with `-config <file>` as the first
   arguments of the command line; `-o` never overwrites an existing file.
-- **The namespace (proposed by the reviewer; the owner approves it before this task is set to
-  Open, ADR 0007 §10):** prefix `rawstride`, URI
+- **The namespace (proposed by the reviewer, approved by the owner 2026-11-23, ADR 0007 §10;
+  never changed later, or older template files lose their + boxes):** prefix `rawstride`, URI
   `https://github.com/Bokehlicious/RawStride/ns/template/1.0/` (an identifier only, never
   fetched), property `rawstride:AddTo`, an unordered list (`rdf:Bag`) of XMP ids such as
   `dc:subject`. It is the namespace's only property (ADR 0007 §17.1 D1).
@@ -54,9 +54,13 @@
        `exif_present` and `xmp_present` their `Default`; with these the plan gives only the XMP
        arguments (the reviewer's cold read checked `write_plan.rs`); then one
        `-XMP-rawstride:AddTo=<id>` per id of `add`;
-     - ExifTool writes them with `-o` to a **new file in the same folder** (for example
-       `<stem>.saving.xmp`; an old one of that name left by a crash is removed first); the plan's
-       `options` come first and the path after `-o` last, as `safe_write.rs` does;
+     - ExifTool writes them with `-o` to a **new file with a name of its own** in a subfolder
+       `.saving` of the template's folder (made when needed; on the same drive, so the rename
+       below stays a rename), named `<stem>-<process id>-<a counter>.xmp`, so two saves at once,
+       in one program or two, never share a file, and a file left by a crash is not among the
+       templates (U13c and U13d list only the files of the folder itself); a file of that exact
+       name is removed first; the plan's `options` come first and the path after `-o` last, as
+       `safe_write.rs` does;
      - **the write counts only** when ExifTool's answer says exactly one file was created and
        its error output holds no `Warning` and no `Error` line (an ExifTool started without the
        config only warns that `AddTo` is not defined and still creates the file: that is a
@@ -67,15 +71,21 @@
        location's `exif:GPSLatitude`), which is compared as a number (both parsed as `f64`,
        equal within `1e-9` of the larger), as XMP stores coordinates in another form. If a date
        comes back in another form than written (for example `Z` against `+00:00`), stop and ask;
-       on any difference, or when the write did not count, the new file is removed and the
-       error returned, and the file at `path` is not touched;
+       on any difference, or when the write did not count, the error is returned and the file
+       at `path` is not touched;
+     - **every failure** after ExifTool was asked to write (ExifTool's error, ExifTool not
+       answering or ended, the read-back, the comparison, the rename) removes the new file if
+       it exists, and the `.saving` folder when it is left empty, before the error is returned;
      - only then the new file replaces `path` (`std::fs::rename`, which replaces an existing file
        on Windows); the question before saving over an existing file is the window's (U13-Q2).
-       If the rename fails, the new file is removed and the error returned.
+       The rename fails while another program holds the file open (for example an ExifTool
+       reading it to apply the template); that is the error, which the window shows (U13c,
+       U13d). After a rename the `.saving` folder is removed when it is empty.
   4. **Reading:** `ExifTool::read_template_file(&mut self, path: &Path) ->
      Result<TemplateRead, TemplateFileError>`, where `pub struct TemplateRead { pub template:
-     TemplateFile, pub skipped: Vec<String>, pub unreadable: Vec<(String, String)> }` (`Debug,
-     Clone, PartialEq, Eq`):
+     TemplateFile, pub skipped: Vec<String>, pub dropped: Vec<String>, pub unreadable:
+     Vec<(String, String)> }` (`Debug, Clone, PartialEq, Eq`), so the window can tell the user
+     which fields of the file were not loaded (U13c):
      - ExifTool reads the file with `JSON_OPTIONS` plus `-ExifTool:Error` and `-File:FileType`
        (the names `verify.rs` uses) and the path, through `read_json`; a missing file, an
        `ExifTool:Error`, or a `FileType` other than `XMP` (a text file or a JPEG named `.xmp`)
@@ -83,11 +93,13 @@
      - the table's properties come from `xmp_values`; each that is `in_template` becomes a
        checked field; one that is not (Rating, Label, a deprecated IIM property) is named in
        `skipped` by its XMP id, never applied; `unreadable` is passed on as `xmp_values` gives
-       it; a value `Metadata::set` refuses on an empty `Metadata` (one `xmp_values` could not
-       build into the property's kind, or too many entries) is added to `unreadable` with the
-       error's text and left out; keys outside the table are ignored; what `new` drops on its
-       own rules (a Lang Alt without `x-default`, a second Location Created entry) is dropped
-       without a note;
+       it; each value is tried with `Metadata::set` on an empty `Metadata` **as a check only**
+       (`set` would give a Lang Alt without `x-default` one, so its stored value is never used;
+       the value passed on is the one `xmp_values` gave); one `set` refuses (a kind it cannot
+       be, or too many entries) is added to `unreadable` with the error's text and left out;
+       keys outside the table are ignored; a property `new` drops as a whole (for example a
+       Lang Alt with only `en-US`) is named in `dropped` by its XMP id; a part `new` drops
+       (a second Location Created entry, a blank list entry) is not named;
      - `XMP-rawstride:AddTo` (a list, or a single text, as ExifTool gives it) gives `add`;
      - the result is `TemplateFile::new(fields, add)`, so a Lang Alt keeps only `x-default`, a
        second Location Created entry is dropped and an id in `add` that is not a checked list of
@@ -110,9 +122,14 @@
     (`dc:description`), a list without + (`dc:creator`), a list with + (`dc:subject`), a date
     (`photoshop:DateCreated`), Location Created with City and Sublocation only, Creator's
     Contact Info with only an e-mail, a Location Shown list of two entries, and a text with
-    `{date} {name}`, and a Location Shown entry with `exif:GPSLatitude` `59.3293`: the file read
-    back equals the template as passed through `new` (the number compared as point 3 says), and
-    `skipped` and `unreadable` are empty.
+    `{date} {name}`, a Location Shown entry with `exif:GPSLatitude` `59.3293` and City
+    `{folder}` (a variable inside a structure field, which the plan's structure syntax escapes),
+    and a `photoshop:DateCreated` with a time and a time zone (`2026-11-23T14:30:00+01:00`): the
+    file read back equals the template as passed through `new` (the number compared as point 3
+    says), and `skipped`, `dropped` and `unreadable` are empty.
+  - **Dropped:** another program's file whose `dc:description` has only `en-US` reads with
+    `dropped` naming `dc:description`, and `Iptc4xmpCore:IntellectualGenre` in it is named in
+    `skipped`.
   - **Not a template:** a `.xmp` file holding plain text, and the small JPEG copied to a name
     ending in `.xmp`, are the error.
   - **Only standard XMP plus the one property:** the saved file's text declares no namespace
@@ -126,7 +143,9 @@
     + box, and `skipped` naming `xmp:Rating` and `xmp:Label`.
   - **Saving over a file** replaces it; **a failed save** (an ExifTool started without
     `-config`, so `AddTo` cannot be written) leaves an existing file at `path` byte for byte as
-    it was, and leaves no `*.saving.xmp` behind; a name ending in `.txt` is the error.
+    it was, and leaves no `.saving` folder behind; a name ending in `.txt` is the error; two
+    saves one after the other to the same path both succeed and the second's content is the
+    file's.
   - **The config file:** `write_exiftool_config` makes the folder and the file, writes the same
     text again without changing the file's modification time, and writes it again when the file
     differs.
@@ -145,3 +164,5 @@
 |---|---|---|
 | 2026-11-23 | Blocked | Added (ADR 0017 U13a, second of the chain T284 → T285); waits for T284 and the owner's approval of the namespace |
 | 2026-11-23 | Blocked | Cold read: the read adds `-ExifTool:Error` and `-File:FileType` and refuses a file that is not XMP; `XmpRead`'s fields made `pub(crate)`; error variants for `ValueError` and `PlanError`; a value `Metadata::set` refuses goes to `unreadable`; `FileState` spelled out; the write counts only with one file created and no warning; numbers compared as numbers in the read-back check (a GPS latitude in the round trip); test helpers with `-config` spelled out; a config path outside the code page left to U13c |
+| 2026-11-23 | Blocked | The owner approved the namespace as proposed (asked whether the address matters if the repository moves: no, it is a name only); recorded in ADR 0007 §10. Waits for T284 |
+| 2026-11-23 | Blocked | Chain review (with T284): the new file goes to a `.saving` subfolder with a name of its own (two saves at once, a crash leftover not listed as a template); every failure removes it; a locked target is the error; `set` only a check when reading; `TemplateRead::dropped` names what `new` dropped as a whole; round trip with a variable in a structure field and a date with a time zone. T284 got: `in_template` as the window's explicit list, blank entries and duplicates dropped from lists, `check_kind` used |

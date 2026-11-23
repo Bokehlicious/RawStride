@@ -87,8 +87,8 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status |
 |---|---|---|
-| [T284](T284-template-file-model.md) | The template file's model: checked fields, the + box, Location Created's sub-fields (ADR 0017 U13a) | Blocked: waits for the chain review |
-| [T285](T285-template-file-read-write.md) | Reading and saving a template file with ExifTool (ADR 0017 U13a) | Blocked: waits for T284 and the owner's approval of the namespace |
+| [T284](T284-template-file-model.md) | The template file's model: checked fields, the + box, Location Created's sub-fields (ADR 0017 U13a) | Open |
+| [T285](T285-template-file-read-write.md) | Reading and saving a template file with ExifTool (ADR 0017 U13a) | Blocked: waits for T284 |
 
 ## Writing a task (owner and reviewer)
 

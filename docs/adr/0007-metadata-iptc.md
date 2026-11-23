@@ -806,8 +806,10 @@ import dialog's modes (D13) were the part of that built. [Product]
   checked field. The template file keeps it in **one RawStride property**, a list of the XMP
   names of the fields with + checked (for example `dc:subject`). It holds no value, so an
   unchecked field's text still never reaches another program, and another program reading the
-  file sees the standard values as they are. Its namespace and property name are proposed in
-  U13a's task and approved by the owner. A file without it loads with every + unchecked; a name
+  file sees the standard values as they are. Its namespace (approved by the owner 2026-11-23,
+  T285): prefix `rawstride`, URI `https://github.com/Bokehlicious/RawStride/ns/template/1.0/`
+  (a name only, never fetched; a file keeps working if the address changes, but the name itself
+  is never changed), property `rawstride:AddTo`, a Bag of XMP ids. A file without it loads with every + unchecked; a name
   that is not such a list field is skipped.
 - An empty template field never clears anything, and a template clears nothing at all: a field
   is cleared only in the metadata window. The copyright-management fields (§8) are replaced as
