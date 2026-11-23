@@ -18,7 +18,7 @@ Folder and crate names (`pw-*`) keep the old name for now.
 ## What it does
 
 - **Import:** copies from a memory card to a destination and an optional backup, with folder and
-  file name templates, and can write an IPTC template into the copies and eject the card.
+  file name templates, and can write a metadata template into the copies and eject the card.
 - **Culling:** a contact sheet and a loupe built for speed: RAW files are shown from their embedded
   preview or rendered with LibRaw, and the next image is prepared ahead.
 - **Ratings and labels:** stars, reject and colour labels in XMP (`xmp:Rating`, `xmp:Label`), read
