@@ -1,6 +1,6 @@
-//! Integration tests of the ingest template with the modes of ADR 0007 §10 written through the
-//! write plan and the safe write (I9b, T88) against a real ExifTool: `exiftool` on PATH, or
-//! `PW_EXIFTOOL_PL=/path/to/exiftool` (run through `perl`).
+//! Integration tests of metadata template files (ADR 0017 U13) written through the write plan and
+//! the safe write with `apply_template_file_safely` (ADR 0007 §9, §10) against a real ExifTool:
+//! `exiftool` on PATH, or `PW_EXIFTOOL_PL=/path/to/exiftool` (run through `perl`).
 //!
 //! The files are the small JPEG of `pw-thumbcache`'s fixture and a fake RAW (`TN0001.ARW` with a
 //! few bytes, as in `tests/read.rs`), each in its own temporary folder, with a temporary journal
@@ -11,18 +11,17 @@
 
 use std::path::{Path, PathBuf};
 
+use pw_metadata::ExifTool;
 use pw_metadata::edit::{EditError, EditOptions, EditReport};
 use pw_metadata::iim::Fallback;
 use pw_metadata::journal::Journal;
 use pw_metadata::read::MetadataRead;
 use pw_metadata::reconcile::IimDigest;
 use pw_metadata::safe_write::{NoImageCheck, WriteReport};
-use pw_metadata::template::{Mode, Template, TemplateField};
 use pw_metadata::template_file::{TemplateFile, write_exiftool_config};
 use pw_metadata::value::{LangAlt, StructValue, Value};
 use pw_metadata::variables::VariableError;
 use pw_metadata::write_plan::WriteNotice;
-use pw_metadata::{ExifTool, Iptc, LocalizedValue};
 
 /// The small baseline JPEG of `crates/pw-thumbcache/src/jpeg_fixture.rs`, copied.
 const SMALL: &[u8] = &[
@@ -190,22 +189,6 @@ impl Scratch {
         assert_eq!(entries, Vec::<PathBuf>::new(), "journal entries left over");
     }
 
-    /// Applies `template` with the default options and `NoImageCheck`.
-    fn apply(
-        &self,
-        et: &mut ExifTool,
-        image: &Path,
-        template: &Template,
-    ) -> Result<WriteReport, EditError> {
-        et.apply_template_safely(
-            image,
-            template,
-            &EditOptions::default(),
-            &NoImageCheck,
-            &self.journal,
-        )
-    }
-
     /// Applies the template file `template` with its variables filled (T288), with the default
     /// options and `NoImageCheck`.
     fn apply_file(
@@ -282,28 +265,9 @@ fn x_default(text: &str) -> Value {
     )]))
 }
 
-fn one_field(property: &str, mode: Mode, value: Option<Value>) -> Template {
-    Template {
-        fields: vec![TemplateField {
-            property: property.to_string(),
-            field: None,
-            mode,
-            value,
-        }],
-    }
-}
-
 fn written(target: &Path) -> WriteReport {
     WriteReport::Written {
         target: target.to_path_buf(),
-    }
-}
-
-/// Fails the test unless `result` is the report `expected`.
-fn assert_report(result: Result<WriteReport, EditError>, expected: WriteReport) {
-    match result {
-        Ok(report) => assert_eq!(report, expected),
-        Err(error) => panic!("expected {expected:?}, got the error {error}"),
     }
 }
 
@@ -325,29 +289,38 @@ fn assert_edit_report(
     }
 }
 
-/// The template of an ingest as the import dialog fills it in.
-fn ingest_template() -> Iptc {
-    Iptc {
-        creator: "Anna Exempelström".into(),
-        copyright: LocalizedValue::x_default("© 2026 Anna Exempelström"),
-        credit: "Exempelström Foto".into(),
-        email: "foto@example.com".into(),
-        phone: "+46 31 12 34 56".into(),
-        url: "https://example.com".into(),
-        ..Iptc::default()
-    }
+/// The template of an ingest as a template file: Creator, Copyright Notice, Credit, the three
+/// contact fields and Copyrighted (`xmpRights:Marked`), which a template file gives itself.
+fn ingest_template() -> TemplateFile {
+    template_file(
+        &[
+            ("dc:creator", list(&["Anna Exempelström"])),
+            ("dc:rights", x_default("© 2026 Anna Exempelström")),
+            ("photoshop:Credit", text("Exempelström Foto")),
+            (
+                CONTACT_INFO,
+                Value::Struct(structure(&[
+                    (EMAIL, text("foto@example.com")),
+                    ("Iptc4xmpCore:CiTelWork", text("+46 31 12 34 56")),
+                    ("Iptc4xmpCore:CiUrlWork", text("https://example.com")),
+                ])),
+            ),
+            ("xmpRights:Marked", text("True")),
+        ],
+        &[],
+    )
 }
 
-/// `Iptc::to_template` on a JPEG: Creator, Copyright Notice, Credit and the three contact fields
+/// The ingest template on a JPEG: Creator, Copyright Notice, Credit and the three contact fields
 /// are read back; the same template again writes nothing.
 #[test]
 fn the_ingest_template_is_written_to_a_jpeg_and_read_back() {
     let mut et = exiftool();
     let s = Scratch::new("jpeg");
     let file = s.jpeg();
-    let template = ingest_template().to_template();
+    let template = ingest_template();
 
-    assert_report(s.apply(&mut et, &file, &template), written(&file));
+    assert_edit_report(s.apply_file(&mut et, &file, &template), written(&file), &[]);
 
     let after = read(&mut et, &file);
     assert_eq!(
@@ -386,7 +359,11 @@ fn the_ingest_template_is_written_to_a_jpeg_and_read_back() {
     s.assert_clean();
 
     let bytes = std::fs::read(&file).unwrap();
-    assert_report(s.apply(&mut et, &file, &template), WriteReport::Unchanged);
+    assert_edit_report(
+        s.apply_file(&mut et, &file, &template),
+        WriteReport::Unchanged,
+        &[],
+    );
     assert_eq!(std::fs::read(&file).unwrap(), bytes);
     s.assert_clean();
     s.remove();
@@ -400,9 +377,10 @@ fn the_exif_copyright_is_updated_too() {
     let file = s.jpeg();
     write(&mut et, &file, &["-IFD0:Copyright=Old copyright"]);
 
-    assert_report(
-        s.apply(&mut et, &file, &ingest_template().to_template()),
+    assert_edit_report(
+        s.apply_file(&mut et, &file, &ingest_template()),
         written(&file),
+        &[],
     );
 
     assert_eq!(
@@ -417,139 +395,6 @@ fn the_exif_copyright_is_updated_too() {
     s.remove();
 }
 
-/// Append of a keyword to a JPEG with two keywords gives three, in order.
-#[test]
-fn append_adds_a_keyword_at_the_end() {
-    let mut et = exiftool();
-    let s = Scratch::new("append");
-    let file = s.jpeg();
-    write(
-        &mut et,
-        &file,
-        &["-XMP-dc:Subject=hav", "-XMP-dc:Subject=båt"],
-    );
-
-    assert_report(
-        s.apply(
-            &mut et,
-            &file,
-            &one_field("dc:subject", Mode::Append, Some(list(&["sol"]))),
-        ),
-        written(&file),
-    );
-
-    let after = read(&mut et, &file);
-    assert_eq!(
-        value(&after, "dc:subject"),
-        Some(list(&["hav", "båt", "sol"]))
-    );
-    s.assert_clean();
-    s.remove();
-}
-
-/// Clear of City on a JPEG with IIM removes it from XMP and from IIM.
-///
-/// The file also has a keyword in XMP, so XMP is not empty after the Clear. With City as the only
-/// XMP value the write plan (T83) writes no new `IPTCDigest`, the old one is left out of date and
-/// the check of the copy refuses it ("IPTCDigest is not current"); that is reported to the owner
-/// separately (owner's choice, 2026-11-12, during T88).
-#[test]
-fn clear_removes_city_from_xmp_and_iim() {
-    let mut et = exiftool();
-    let s = Scratch::new("clear");
-    let file = s.jpeg();
-    write(
-        &mut et,
-        &file,
-        &[
-            "-XMP-photoshop:City=Göteborg",
-            "-XMP-dc:Subject=hamn",
-            "-IPTC:CodedCharacterSet=UTF8",
-            "-IPTC:City=Göteborg",
-            "-IPTCDigest=new",
-        ],
-    );
-    assert_eq!(tag(&mut et, &file, "IPTC:City"), "Göteborg", "precondition");
-
-    assert_report(
-        s.apply(
-            &mut et,
-            &file,
-            &one_field("photoshop:City", Mode::Clear, None),
-        ),
-        written(&file),
-    );
-
-    assert_eq!(tag(&mut et, &file, "XMP-photoshop:City"), "-");
-    assert_eq!(tag(&mut et, &file, "IPTC:City"), "-");
-    let after = read(&mut et, &file);
-    assert_eq!(value(&after, "photoshop:City"), None);
-    assert_eq!(value(&after, "dc:subject"), Some(list(&["hamn"])));
-    assert_eq!(after.state.digest, IimDigest::Matches);
-    assert!(
-        !after
-            .state
-            .iim_values
-            .iter()
-            .any(|(xmp_id, _)| xmp_id == "photoshop:City"),
-        "{:?}",
-        after.state.iim_values
-    );
-    s.assert_clean();
-    s.remove();
-}
-
-/// Clear of City on a JPEG with IIM and a checksum where City is the only XMP value (no keyword):
-/// no XMP is left, but the write plan writes a new `IPTCDigest` because the file has a stored one
-/// (T93), so the copy check accepts it and the checksum is current (§5.2, §12).
-#[test]
-fn clear_of_the_only_xmp_value_keeps_the_checksum_current() {
-    let mut et = exiftool();
-    let s = Scratch::new("clear-only");
-    let file = s.jpeg();
-    write(
-        &mut et,
-        &file,
-        &[
-            "-XMP-photoshop:City=Göteborg",
-            "-IPTC:CodedCharacterSet=UTF8",
-            "-IPTC:City=Göteborg",
-            "-IPTCDigest=new",
-        ],
-    );
-    assert_eq!(tag(&mut et, &file, "IPTC:City"), "Göteborg", "precondition");
-    assert_eq!(tag(&mut et, &file, "XMP-dc:Subject"), "-", "precondition");
-
-    assert_report(
-        s.apply(
-            &mut et,
-            &file,
-            &one_field("photoshop:City", Mode::Clear, None),
-        ),
-        written(&file),
-    );
-
-    assert_eq!(tag(&mut et, &file, "XMP-photoshop:City"), "-");
-    assert_eq!(tag(&mut et, &file, "IPTC:City"), "-");
-    let stored = tag(&mut et, &file, "Photoshop:IPTCDigest");
-    assert_ne!(stored, "-");
-    assert_eq!(stored, tag(&mut et, &file, "CurrentIPTCDigest"));
-    let after = read(&mut et, &file);
-    assert_eq!(value(&after, "photoshop:City"), None);
-    assert_eq!(after.state.digest, IimDigest::Matches);
-    assert!(
-        !after
-            .state
-            .iim_values
-            .iter()
-            .any(|(xmp_id, _)| xmp_id == "photoshop:City"),
-        "{:?}",
-        after.state.iim_values
-    );
-    s.assert_clean();
-    s.remove();
-}
-
 /// The fake RAW: only its sidecar is written (created), the RAW's bytes are unchanged.
 #[test]
 fn a_raw_gets_only_its_sidecar_written() {
@@ -558,9 +403,10 @@ fn a_raw_gets_only_its_sidecar_written() {
     let raw = s.raw();
     let sidecar = s.dir.join("TN0001.xmp");
 
-    assert_report(
-        s.apply(&mut et, &raw, &ingest_template().to_template()),
+    assert_edit_report(
+        s.apply_file(&mut et, &raw, &ingest_template()),
         written(&sidecar),
+        &[],
     );
 
     assert_eq!(std::fs::read(&raw).unwrap(), FAKE_RAW);
@@ -593,9 +439,10 @@ fn a_template_keeps_an_earlier_rating_in_a_sidecar() {
     let sidecar = s.dir.join("TN0001.xmp");
     write(&mut et, &sidecar, &["-XMP-xmp:Rating=4"]);
 
-    assert_report(
-        s.apply(&mut et, &raw, &ingest_template().to_template()),
+    assert_edit_report(
+        s.apply_file(&mut et, &raw, &ingest_template()),
         written(&sidecar),
+        &[],
     );
 
     assert_eq!(std::fs::read(&raw).unwrap(), FAKE_RAW);
@@ -609,9 +456,10 @@ fn a_template_keeps_an_earlier_rating_in_a_sidecar() {
     );
 
     let bytes = std::fs::read(&sidecar).unwrap();
-    assert_report(
-        s.apply(&mut et, &raw, &Iptc::default().to_template()),
+    assert_edit_report(
+        s.apply_file(&mut et, &raw, &TemplateFile::new(vec![], vec![])),
         WriteReport::Unchanged,
+        &[],
     );
     assert_eq!(std::fs::read(&sidecar).unwrap(), bytes);
     s.assert_clean();
@@ -619,7 +467,7 @@ fn a_template_keeps_an_earlier_rating_in_a_sidecar() {
 }
 
 /// The whole path of a template file (T285 point 5): saved with keyword `c` and its + box checked
-/// and Headline `X`, read back, turned into a template and applied to a JPEG with keywords `a`,
+/// and Headline `X`, read back and applied to a JPEG with keywords `a`,
 /// `b` and Headline `Y`: the keyword is added after the image's and the Headline replaced.
 #[test]
 fn a_saved_template_file_is_read_back_and_applied() {
@@ -649,9 +497,10 @@ fn a_saved_template_file_is_read_back_and_applied() {
     let read = et.read_template_file(&path).unwrap();
     assert_eq!(read.template, saved);
 
-    assert_report(
-        s.apply(&mut et, &file, &read.template.to_template()),
+    assert_edit_report(
+        s.apply_file(&mut et, &file, &read.template),
         written(&file),
+        &[],
     );
     let after = self::read(&mut et, &file);
     assert_eq!(value(&after, "dc:subject"), Some(list(&["a", "b", "c"])));

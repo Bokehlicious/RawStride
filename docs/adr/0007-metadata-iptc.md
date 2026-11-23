@@ -785,7 +785,10 @@ with a new checksum would be refused).
 **Changed by the owner (2026-11-22, revision 33; ADR 0017 §6.5, U13-Q1–U13-Q11):** a template
 holds only standard XMP and has no modes. Until then each field had one of the modes Keep,
 Replace, Append (with Prefix) and Clear, kept in a RawStride namespace of the template file; the
-import dialog's modes (D13) were the part of that built. [Product]
+import dialog's modes (D13) were the part of that built. The modes Keep, Prefix and Clear, the
+ingest template (`Iptc`) and `apply_template_safely` were removed from the code by T296
+(2026-11-23); `template::apply` keeps Replace and Append, the two modes a template file gives.
+[Product]
 
 - **Template files are plain XMP** with only standard values: no modes, so every program reads
   the file in the same way. The one exception is the list of fields with a + box (below,

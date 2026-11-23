@@ -21,17 +21,9 @@
 //!    rating that is already in the file writes nothing, and a manufacturer RAW without a sidecar
 //!    gets none for an empty rating. The RAW file itself is never written (§4.2); its sidecar is.
 //!
-//! [`ExifTool::apply_template_safely`] writes an ingest template the same way (§9.5, §10): a file
-//! kind that cannot hold metadata is [`EditError::Unsupported`] ("metadata is not supported for
-//! …", the text of the removed in-place write); then the file is read, [`template::apply`]
-//! applies the template's modes to its metadata (an error is [`EditError::Template`]), and the plan is made and written as
-//! above. A template that is already in the file gives an empty plan and
-//! [`WriteReport::Unchanged`]. A list with qualifiers the template changed is put back first, as
-//! below, but without a notice (the template path returns none).
-//!
 //! [`ExifTool::write_edits_safely`] writes the editor's [`Edit`]s of single properties (I10d,
 //! T97): a file kind that cannot hold metadata is [`EditError::Unsupported`] with the same text as
-//! [`ExifTool::apply_template_safely`]; then the file is read, [`apply_edits`] applies the edits
+//! [`ExifTool::apply_template_file_safely`]; then the file is read, [`apply_edits`] applies the edits
 //! in order, and the plan is made and written as above. The result is an [`EditReport`]: the safe write's report
 //! and the plan's [`WriteNotice`]s, which the user is told about (§5.2: an IIM value cut to its
 //! byte limit; §5.4: IIM converted to UTF-8; Q1: a conflict kept and no checksum written). They are
@@ -56,13 +48,16 @@
 //! written to that image.
 //!
 //! [`ExifTool::apply_template_file_safely`] applies a metadata template ([`TemplateFile`], U13a)
-//! the same way as [`ExifTool::apply_template_safely`], with its variables filled: the image is
-//! read with its values, each field is filled (the first error is [`EditError::Variable`],
-//! nothing written), the filled fields go through [`TemplateFile::new`] again (a field empty
-//! after filling is dropped, a list's repeated entries are merged), and the result is applied
-//! with [`template::apply`], planned and written. Its [`EditReport`] holds the plan's notices when
+//! through the write plan and the safe write (§9.5, §10), with its variables filled: a file kind
+//! that cannot hold metadata is [`EditError::Unsupported`] ("metadata is not supported for …",
+//! the text of the removed in-place write); then the image is read with its values, each field is
+//! filled (the first error is [`EditError::Variable`], nothing written), the filled fields go
+//! through [`TemplateFile::new`] again (a field empty after filling is dropped, a list's repeated
+//! entries are merged), and the result is applied with [`template::apply`] (an error is
+//! [`EditError::Template`]), planned and written. A template that is already in the file gives an
+//! empty plan and [`WriteReport::Unchanged`]. Its [`EditReport`] holds the plan's notices when
 //! something was written and a [`WriteNotice::QualifiersKept`] for each list with qualifiers put
-//! back, also when nothing was written. [`ExifTool::apply_template_safely`] fills no variables.
+//! back, also when nothing was written.
 //!
 //! **A list with qualifiers** ([`Metadata::has_qualifiers`], ADR 0007 §8) is shown but never
 //! written: RawStride cannot write such a list without losing or doubling its qualified items.
@@ -78,8 +73,8 @@
 //!   **unless** the property has an unresolved (`Open`) conflict (§5.1, Q1): then the user has
 //!   decided it by choosing a value, even the one already shown, and the plan writes both forms.
 //! - **Clear** removes every representation of the property (§8: every language of a Lang Alt,
-//!   IIM, and the Exif fields that exist). Unlike a template (§10), an edit may clear the
-//!   copyright-management properties. Nothing to clear (no value and no `Open` conflict) is no
+//!   IIM, and the Exif fields that exist), the copyright-management properties too (a template
+//!   clears nothing, §10). Nothing to clear (no value and no `Open` conflict) is no
 //!   change.
 //! - **Entries** adds and removes entries of a list (a repeated property that is not a structure,
 //!   e.g. `dc:subject`) in the file's own entries (ADR 0017 U12d-Q1): every entry equal to one in
@@ -126,7 +121,7 @@ use crate::journal::Journal;
 use crate::properties::{self, Occurrence, ValueKind};
 use crate::reconcile::same_value;
 use crate::safe_write::{ImageCheck, SafeWriteError, WriteReport};
-use crate::template::{self, Template, TemplateError, has_content};
+use crate::template::{self, TemplateError, has_content};
 use crate::template_file::TemplateFile;
 use crate::value::{ConflictRule, Metadata, StructValue, Value, ValueError};
 use crate::variables::{self, VariableError, VariableValues};
@@ -461,38 +456,6 @@ impl ExifTool {
             apply(&mut metadata, LABEL, new_label)?;
         }
 
-        let plan =
-            write_plan::plan(&metadata, &read.state, options.settings).map_err(EditError::Plan)?;
-        self.write_safely(image, &plan, checks, journal)
-            .map_err(EditError::Write)
-    }
-
-    /// Applies `template` to `image` through the write plan and the safe write (see the module
-    /// comment). A list with qualifiers the template changed is put back and not written (§8),
-    /// without a notice. `checks` are the caller's image checks; `journal` is the app's write
-    /// journal.
-    pub fn apply_template_safely(
-        &mut self,
-        image: &Path,
-        template: &Template,
-        options: &EditOptions,
-        checks: &dyn ImageCheck,
-        journal: &Journal,
-    ) -> Result<WriteReport, EditError> {
-        if !supports_rating(image) {
-            return Err(EditError::Unsupported(format!(
-                "metadata is not supported for {}",
-                image.display()
-            )));
-        }
-        let read = self
-            .read_metadata(image, options.fallback)
-            .map_err(EditError::Read)?;
-        let original = read.reconciled.metadata.clone();
-        let mut metadata = read.reconciled.metadata;
-        template::apply(template, &mut metadata).map_err(EditError::Template)?;
-        // §8: a changed list with qualifiers is not written; the template path gives no notice.
-        restore_qualified(&mut metadata, &original);
         let plan =
             write_plan::plan(&metadata, &read.state, options.settings).map_err(EditError::Plan)?;
         self.write_safely(image, &plan, checks, journal)
@@ -1408,11 +1371,10 @@ mod tests {
             "the write could not be planned: photoshop:Urgency is a deprecated IIM property and \
              cannot be edited"
         );
-        let template = EditError::Template(TemplateError::CannotClear("dc:rights".to_string()));
+        let template = EditError::Template(TemplateError::UnknownProperty("foo:Bar".to_string()));
         assert_eq!(
             template.to_string(),
-            "the template could not be applied: dc:rights is a copyright-management property and \
-             cannot be cleared by a template"
+            "the template could not be applied: unknown property foo:Bar"
         );
     }
 }

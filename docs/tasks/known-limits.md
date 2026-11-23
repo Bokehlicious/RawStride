@@ -55,9 +55,10 @@ dropped is removed; git history and `done/` keep it.
   - *Tidying:* the append rule repeats `template.rs`'s list Append (a shared helper);
     `entries_left_alone` works out afterwards what `apply_entries` skipped (one source would keep
     them in step); the separate empty-result branch beside the `Empty` fallback; `contains` in
-    loops (quadratic, small at today's list sizes). Until `edit.rs` or `template.rs` is next
-    changed (for example U13); none is reached from the window, whose list text is trimmed and
-    has no empty entries.
+    loops (quadratic, small at today's list sizes). U13 changed both files without it (T296,
+    2026-11-23, removed the ingest template's modes and left this out on purpose; none of it
+    became moot), so it waits for a task of its own; none is reached from the window, whose list
+    text is trimmed and has no empty entries.
   - *A comma in an entry* (chain review of T179 and T180; owner, ADR 0017 U12d-Q8): an entry
     with a comma ("Lund, Sweden") is split by the window's list text, so removing it removes
     nothing on the other images while the confirmation names it; a failed file of a batch can

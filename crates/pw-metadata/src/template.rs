@@ -1,44 +1,35 @@
-//! The template applied to an image's metadata, with the modes Keep, Replace, Append, Prefix and
-//! Clear (ADR 0007 §10, §8, §15; I9b, T88): the ingest template's fields, and the metadata
-//! template file's fields through [`crate::template_file::TemplateFile::to_template`] (ADR 0017
-//! U13).
+//! The template applied to an image's metadata, with the modes Replace and Append (ADR 0007 §10,
+//! §15; ADR 0017 U13): the fields of a metadata template file, through
+//! [`crate::template_file::TemplateFile::to_template`].
 //!
 //! A [`Template`] is a list of [`TemplateField`]s, each naming a property of the table by its XMP
-//! id (or one field of a single structure) with a [`Mode`] and a value. [`apply`] applies them to
-//! the [`Metadata`] of one file, field by field in order, through [`Metadata::set`] and
-//! [`Metadata::clear`]; the write plan and the safe write then write the result
-//! ([`crate::ExifTool::apply_template_safely`]).
+//! id (or one field of a single structure, or of Location Created) with a [`Mode`] and a value.
+//! [`apply`] applies them to the [`Metadata`] of one file, field by field in order, through
+//! [`Metadata::set`]; the write plan and the safe write then write the result
+//! ([`crate::ExifTool::apply_template_file_safely`]).
 //!
-//! - **Keep** changes nothing.
 //! - **Replace** sets the template's value. A Lang Alt sets `x-default` and keeps the other
 //!   languages (Q7, as `set` does); a list is replaced by the template's list.
-//! - **Append** and **Prefix** (§10: Prefix is a form of Append) join the old and the new text of
-//!   a text or a Lang Alt (its shown text, [`LangAlt::display`]) with one space (owner decision
-//!   D5): Append is old, space, new; Prefix is new, space, old. Without an old text the result is
-//!   the new text. On a list, Append adds the template's entries that are missing, at the end, in
-//!   order, without duplicates (exact text); Prefix on a list is not allowed. On a date, a number
-//!   or a whole structure neither is allowed.
-//! - **An empty field never clears** (§10): Replace, Append or Prefix without a value, or with a
-//!   value without content (an empty text or one of only white space, an empty list), changes
-//!   nothing.
-//! - **Clear** removes the property (every language of a Lang Alt). The copyright-management
-//!   properties of §8 cannot be cleared by a template, nor can their fields. Nothing to clear is
-//!   no change.
+//! - **Append** joins the old and the new text of a text or a Lang Alt (its shown text,
+//!   [`LangAlt::display`]) with one space (owner decision D5): old, space, new. Without an old
+//!   text the result is the new text. On a list, Append adds the template's entries that are
+//!   missing, at the end, in order, without duplicates (exact text). On a date, a number or a
+//!   whole structure it is not allowed.
+//! - **An empty field never clears** (§10): a field without a value, or with a value without
+//!   content (an empty text or one of only white space, an empty list), changes nothing.
 //! - **A field of a single structure** (`field`, e.g. `Iptc4xmpCore:CiEmailWork` of
 //!   `Iptc4xmpCore:CreatorContactInfo`): the mode is applied to that field of the structure's
 //!   current value (or of an empty one), and the whole structure is set; the other fields are
-//!   kept. Clearing the last field clears the property.
+//!   kept.
 //! - **A field of Location Created** (`Iptc4xmpExt:LocationCreated`, a list of structures; ADR
 //!   0017 U13-Q4): Replace sets the field in the **first entry** of the image's list, the entry's
 //!   other fields and every later entry kept; without a Location Created the result is a list of
 //!   one entry holding only that field. A field of any other list of structures (Location Shown,
-//!   Image Creator, …), and Append, Prefix or Clear on a field of Location Created, allow only
-//!   Keep.
+//!   Image Creator, …), and Append on a field of Location Created, are not allowed.
 //! - **A result equal to the current value** ([`same_value`]) is not set, so a template that is
 //!   already in the file gives no change and an empty write plan.
 //! - The cardinality limits come from `set` (`ValueError::TooMany`).
 //!
-//! The confirmation before a Clear (§10, once per template) belongs to the user interface (I10).
 //! A template's values are applied as they are: the variables (`{date}` …, ADR 0017 U13-Q9) of a
 //! template file are filled before it gets here, by
 //! [`crate::ExifTool::apply_template_file_safely`]; the template file in XMP is
@@ -53,38 +44,20 @@ use crate::value::{LangAlt, Metadata, StructValue, Value, ValueError};
 /// The language of the default entry of a Lang Alt value.
 const X_DEFAULT: &str = "x-default";
 
-/// The separator of Append and Prefix for a text or a Lang Alt (owner decision D5).
+/// The separator of Append for a text or a Lang Alt (owner decision D5).
 const SEPARATOR: &str = " ";
 
 /// Location Created, the one list of structures whose fields a template can replace (in its first
 /// entry; ADR 0017 U13-Q4).
 pub(crate) const LOCATION_CREATED: &str = "Iptc4xmpExt:LocationCreated";
 
-/// The copyright-management properties of §8, which a template never clears.
-const COPYRIGHT_MANAGEMENT: &[&str] = &[
-    "dc:rights",
-    "dc:creator",
-    "photoshop:Credit",
-    "xmpRights:UsageTerms",
-    "xmpRights:WebStatement",
-    "plus:CopyrightOwner",
-    "plus:Licensor",
-    "plus:ImageCreator",
-];
-
 /// How a template field changes the file's value (§10).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
-    /// Leave the value as it is.
-    Keep,
     /// Set the template's value.
     Replace,
     /// Add the template's value after the old one.
     Append,
-    /// Add the template's value before the old one.
-    Prefix,
-    /// Remove the value.
-    Clear,
 }
 
 /// One field of a template.
@@ -97,7 +70,7 @@ pub struct TemplateField {
     /// (e.g. `Iptc4xmpExt:City`, set in its first entry).
     pub field: Option<String>,
     pub mode: Mode,
-    /// The value for Replace, Append and Prefix; ignored by Keep and Clear.
+    /// The value; `None` changes nothing.
     pub value: Option<Value>,
 }
 
@@ -112,9 +85,6 @@ pub struct Template {
 pub enum TemplateError {
     /// The property, or the field of a structure (`property/field`), is not in the table.
     UnknownProperty(String),
-    /// A copyright-management property (§8), or one of its fields, cannot be cleared by a
-    /// template; holds the property (or `property/field`).
-    CannotClear(String),
     /// The mode cannot be used on this property or field (`property/field`).
     ModeNotAllowed { property: String, mode: Mode },
     /// The value was not accepted.
@@ -127,10 +97,6 @@ impl fmt::Display for TemplateError {
             TemplateError::UnknownProperty(property) => {
                 write!(f, "unknown property {property}")
             }
-            TemplateError::CannotClear(property) => write!(
-                f,
-                "{property} is a copyright-management property and cannot be cleared by a template"
-            ),
             TemplateError::ModeNotAllowed { property, mode } => {
                 write!(f, "{mode:?} cannot be used on {property}")
             }
@@ -163,15 +129,6 @@ fn apply_field(field: &TemplateField, metadata: &mut Metadata) -> Result<(), Tem
         .ok_or_else(|| TemplateError::UnknownProperty(property.to_string()))?;
     match &field.field {
         None => {
-            if field.mode == Mode::Clear {
-                if is_copyright_management(property) {
-                    return Err(TemplateError::CannotClear(property.to_string()));
-                }
-                if metadata.get(property).is_some() {
-                    metadata.clear(property)?;
-                }
-                return Ok(());
-            }
             let current = metadata.get(property).map(|stored| &stored.value);
             let result = combine(
                 property,
@@ -212,12 +169,6 @@ fn apply_sub_field(
         .iter()
         .find(|candidate| candidate.xmp_id == sub)
         .ok_or_else(|| TemplateError::UnknownProperty(path.clone()))?;
-    if field.mode == Mode::Clear && is_copyright_management(property) {
-        return Err(TemplateError::CannotClear(path));
-    }
-    if field.mode == Mode::Keep {
-        return Ok(());
-    }
     if occurrence == Occurrence::Multi {
         if property != LOCATION_CREATED || field.mode != Mode::Replace {
             return Err(TemplateError::ModeNotAllowed {
@@ -239,29 +190,6 @@ fn apply_sub_field(
             .find(|(id, _)| id == sub)
             .map(|(_, value)| value)
     });
-
-    if field.mode == Mode::Clear {
-        let Some(fields) = current else {
-            return Ok(());
-        };
-        if current_field.is_none() {
-            return Ok(());
-        }
-        let rest = StructValue {
-            fields: fields
-                .fields
-                .iter()
-                .filter(|(id, _)| id != sub)
-                .cloned()
-                .collect(),
-        };
-        if rest.fields.iter().any(|(_, value)| has_content(value)) {
-            metadata.set(property, Value::Struct(rest))?;
-        } else {
-            metadata.clear(property)?;
-        }
-        return Ok(());
-    }
 
     let Some(new_field) = combine(
         &path,
@@ -371,8 +299,8 @@ pub(crate) fn sort_fields(fields: &mut StructValue, struct_def: &properties::Str
 }
 
 /// The value `mode` makes of `current` and the template's `new` value for a property or field of
-/// `kind` and `occurrence`; `None` when nothing is to be set (Keep, or no value with content).
-/// `path` names the property or field in errors. Not for Clear.
+/// `kind` and `occurrence`; `None` when nothing is to be set (no value with content). `path`
+/// names the property or field in errors.
 fn combine(
     path: &str,
     kind: ValueKind,
@@ -385,19 +313,14 @@ fn combine(
         property: path.to_string(),
         mode,
     };
-    let joins = matches!(mode, Mode::Append | Mode::Prefix);
     let shape = Shape::of(kind, occurrence);
-    if joins {
-        match shape {
-            Shape::Text | Shape::LangAlt => {}
-            Shape::List if mode == Mode::Append => {}
-            Shape::List | Shape::Other => return Err(not_allowed()),
-        }
+    if mode == Mode::Append && shape == Shape::Other {
+        return Err(not_allowed());
     }
-    let new = match (mode, new) {
-        (Mode::Keep | Mode::Clear, _) | (_, None) => return Ok(None),
-        (_, Some(new)) if !has_content(new) => return Ok(None),
-        (_, Some(new)) => new,
+    let new = match new {
+        None => return Ok(None),
+        Some(new) if !has_content(new) => return Ok(None),
+        Some(new) => new,
     };
     let kind_error = |expected: &str| {
         TemplateError::Value(ValueError::Kind {
@@ -431,7 +354,7 @@ fn combine(
                 Some(Value::Text(old)) => Some(old.as_str()),
                 _ => None,
             };
-            Ok(Some(Value::Text(join(mode, old, new_text))))
+            Ok(Some(Value::Text(join(old, new_text))))
         }
         Shape::LangAlt => {
             let Value::LangAlt(new_alt) = new else {
@@ -445,7 +368,7 @@ fn combine(
                 _ => None,
             };
             let old_text = old.and_then(LangAlt::display).map(|(text, _)| text);
-            let joined = join(mode, old_text, new_text);
+            let joined = join(old_text, new_text);
             let mut result = old.cloned().unwrap_or_default();
             result.set_default(&joined)?;
             Ok(Some(Value::LangAlt(result)))
@@ -469,7 +392,7 @@ fn combine(
     }
 }
 
-/// What Append and Prefix see of a property or field.
+/// What Append sees of a property or field.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Shape {
     /// A single text, URI, URL or `Any`.
@@ -494,19 +417,12 @@ impl Shape {
     }
 }
 
-/// Append: old, separator, new; Prefix: new, separator, old. Without an old text (or a blank
-/// one), the new text.
-fn join(mode: Mode, old: Option<&str>, new: &str) -> String {
+/// Append: old, separator, new. Without an old text (or a blank one), the new text.
+fn join(old: Option<&str>, new: &str) -> String {
     match old.filter(|old| !is_blank(old)) {
         None => new.to_string(),
-        Some(old) if mode == Mode::Prefix => format!("{new}{SEPARATOR}{old}"),
         Some(old) => format!("{old}{SEPARATOR}{new}"),
     }
-}
-
-/// True for a copyright-management property of §8.
-fn is_copyright_management(xmp_id: &str) -> bool {
-    COPYRIGHT_MANAGEMENT.contains(&xmp_id)
 }
 
 /// True for an empty text or one of only white space.
@@ -633,13 +549,6 @@ mod tests {
 
         let mut metadata = city();
         assert_eq!(
-            after(&mut metadata, field("photoshop:City", Mode::Keep, new())),
-            Some(text("Göteborg"))
-        );
-        assert!(changed(&metadata).is_empty());
-
-        let mut metadata = city();
-        assert_eq!(
             after(&mut metadata, field("photoshop:City", Mode::Replace, new())),
             Some(text("Lund"))
         );
@@ -650,44 +559,18 @@ mod tests {
             after(&mut metadata, field("photoshop:City", Mode::Append, new())),
             Some(text("Göteborg Lund"))
         );
-
-        let mut metadata = city();
-        assert_eq!(
-            after(&mut metadata, field("photoshop:City", Mode::Prefix, new())),
-            Some(text("Lund Göteborg"))
-        );
-
-        let mut metadata = city();
-        assert_eq!(
-            after(&mut metadata, field("photoshop:City", Mode::Clear, None)),
-            None
-        );
-        assert_eq!(changed(&metadata), ["photoshop:City"]);
     }
 
     #[test]
-    fn append_and_prefix_without_an_old_text_give_the_new_text() {
-        for mode in [Mode::Append, Mode::Prefix] {
-            let mut metadata = Metadata::new();
-            assert_eq!(
-                after(
-                    &mut metadata,
-                    field("photoshop:City", mode, Some(text("Lund")))
-                ),
-                Some(text("Lund")),
-                "{mode:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn clear_without_a_value_changes_nothing() {
+    fn append_without_an_old_text_gives_the_new_text() {
         let mut metadata = Metadata::new();
         assert_eq!(
-            after(&mut metadata, field("photoshop:City", Mode::Clear, None)),
-            None
+            after(
+                &mut metadata,
+                field("photoshop:City", Mode::Append, Some(text("Lund")))
+            ),
+            Some(text("Lund"))
         );
-        assert!(changed(&metadata).is_empty());
     }
 
     // --- Lang Alt ---
@@ -701,16 +584,6 @@ mod tests {
             )])
         };
         let new = || Some(lang_alt(&[("x-default", "i dimma")]));
-
-        let mut metadata = description();
-        assert_eq!(
-            after(&mut metadata, field("dc:description", Mode::Keep, new())),
-            Some(lang_alt(&[
-                ("x-default", "Hamnen"),
-                ("sv", "Hamnen på svenska")
-            ]))
-        );
-        assert!(changed(&metadata).is_empty());
 
         // Replace and Append change `x-default` only; the `sv` entry is kept (Q7).
         let mut metadata = description();
@@ -730,23 +603,6 @@ mod tests {
                 ("sv", "Hamnen på svenska")
             ]))
         );
-
-        let mut metadata = description();
-        assert_eq!(
-            after(&mut metadata, field("dc:description", Mode::Prefix, new())),
-            Some(lang_alt(&[
-                ("x-default", "i dimma Hamnen"),
-                ("sv", "Hamnen på svenska")
-            ]))
-        );
-
-        // Clear removes every language.
-        let mut metadata = description();
-        assert_eq!(
-            after(&mut metadata, field("dc:description", Mode::Clear, None)),
-            None
-        );
-        assert_eq!(changed(&metadata), ["dc:description"]);
     }
 
     #[test]
@@ -775,16 +631,6 @@ mod tests {
         assert_eq!(
             after(
                 &mut metadata,
-                field("dc:subject", Mode::Keep, Some(list(&["sol"])))
-            ),
-            Some(list(&["hav", "båt"]))
-        );
-        assert!(changed(&metadata).is_empty());
-
-        let mut metadata = keywords();
-        assert_eq!(
-            after(
-                &mut metadata,
                 field("dc:subject", Mode::Replace, Some(list(&["sol", "hav"])))
             ),
             Some(list(&["sol", "hav"]))
@@ -803,13 +649,6 @@ mod tests {
             ),
             Some(list(&["hav", "båt", "sol", "Hav", "moln"]))
         );
-
-        let mut metadata = keywords();
-        assert_eq!(
-            after(&mut metadata, field("dc:subject", Mode::Clear, None)),
-            None
-        );
-        assert_eq!(changed(&metadata), ["dc:subject"]);
     }
 
     #[test]
@@ -832,19 +671,6 @@ mod tests {
                 structure(&[(EMAIL, text("a@example.com")), (PHONE, text("031-12"))]),
             )])
         };
-
-        let mut metadata = contact();
-        assert_eq!(
-            after(
-                &mut metadata,
-                sub_field(CONTACT, EMAIL, Mode::Keep, Some(text("b@example.com")))
-            ),
-            Some(structure(&[
-                (EMAIL, text("a@example.com")),
-                (PHONE, text("031-12"))
-            ]))
-        );
-        assert!(changed(&metadata).is_empty());
 
         // The other field is kept in every mode.
         let mut metadata = contact();
@@ -870,35 +696,6 @@ mod tests {
                 (PHONE, text("031-12 34"))
             ]))
         );
-
-        let mut metadata = contact();
-        assert_eq!(
-            after(
-                &mut metadata,
-                sub_field(CONTACT, PHONE, Mode::Prefix, Some(text("+46")))
-            ),
-            Some(structure(&[
-                (EMAIL, text("a@example.com")),
-                (PHONE, text("+46 031-12"))
-            ]))
-        );
-
-        let mut metadata = contact();
-        assert_eq!(
-            after(&mut metadata, sub_field(CONTACT, EMAIL, Mode::Clear, None)),
-            Some(structure(&[(PHONE, text("031-12"))]))
-        );
-        assert_eq!(changed(&metadata), [CONTACT]);
-    }
-
-    #[test]
-    fn clearing_the_last_field_clears_the_structure() {
-        let mut metadata = read(&[(CONTACT, structure(&[(EMAIL, text("a@example.com"))]))]);
-        assert_eq!(
-            after(&mut metadata, sub_field(CONTACT, EMAIL, Mode::Clear, None)),
-            None
-        );
-        assert_eq!(changed(&metadata), [CONTACT]);
     }
 
     #[test]
@@ -922,10 +719,10 @@ mod tests {
         );
     }
 
-    // --- Keep and empty values ---
+    // --- Empty values ---
 
     #[test]
-    fn keep_and_empty_values_change_nothing() {
+    fn empty_values_change_nothing() {
         let original = read(&[
             ("photoshop:City", text("Göteborg")),
             ("dc:subject", list(&["hav"])),
@@ -933,7 +730,7 @@ mod tests {
             (CONTACT, structure(&[(EMAIL, text("a@example.com"))])),
         ]);
         let mut fields = Vec::new();
-        for mode in [Mode::Replace, Mode::Append, Mode::Prefix] {
+        for mode in [Mode::Replace, Mode::Append] {
             fields.push(field("photoshop:City", mode, None));
             fields.push(field("photoshop:City", mode, Some(text(""))));
             fields.push(field("photoshop:City", mode, Some(text("   "))));
@@ -949,11 +746,6 @@ mod tests {
             fields.push(field("dc:subject", mode, Some(list(&[]))));
             fields.push(field("dc:subject", mode, Some(list(&["", " "]))));
         }
-        for property in ["photoshop:City", "dc:subject", "dc:title", CONTACT] {
-            fields.push(field(property, Mode::Keep, None));
-            fields.push(field(property, Mode::Keep, Some(text("x"))));
-        }
-        fields.push(sub_field(CONTACT, EMAIL, Mode::Keep, Some(text("b@x"))));
         let mut metadata = original.clone();
         assert_eq!(apply(&template(fields), &mut metadata), Ok(()));
         assert!(changed(&metadata).is_empty());
@@ -963,47 +755,6 @@ mod tests {
     // --- Errors ---
 
     #[test]
-    fn copyright_management_properties_cannot_be_cleared() {
-        for property in [
-            "dc:rights",
-            "dc:creator",
-            "photoshop:Credit",
-            "xmpRights:UsageTerms",
-            "xmpRights:WebStatement",
-            "plus:CopyrightOwner",
-            "plus:Licensor",
-            "plus:ImageCreator",
-        ] {
-            let mut metadata = Metadata::new();
-            assert_eq!(
-                apply(
-                    &template(vec![field(property, Mode::Clear, None)]),
-                    &mut metadata
-                ),
-                Err(TemplateError::CannotClear(property.to_string())),
-                "{property}"
-            );
-            assert!(changed(&metadata).is_empty(), "{property}");
-        }
-        // Nor their fields.
-        let mut metadata = Metadata::new();
-        assert_eq!(
-            apply(
-                &template(vec![sub_field(
-                    "plus:ImageCreator",
-                    "plus:ImageCreatorName",
-                    Mode::Clear,
-                    None
-                )]),
-                &mut metadata
-            ),
-            Err(TemplateError::CannotClear(
-                "plus:ImageCreator/plus:ImageCreatorName".to_string()
-            ))
-        );
-    }
-
-    #[test]
     fn modes_that_are_not_allowed() {
         let date = match IptcDate::parse_xmp("2026-11-04") {
             Ok(date) => Value::Date(date),
@@ -1011,11 +762,8 @@ mod tests {
         };
         let rating = || Some(Value::Number("3".to_string()));
         let cases = [
-            field("photoshop:DateCreated", Mode::Append, Some(date.clone())),
-            field("photoshop:DateCreated", Mode::Prefix, Some(date)),
+            field("photoshop:DateCreated", Mode::Append, Some(date)),
             field("xmp:Rating", Mode::Append, rating()),
-            field("xmp:Rating", Mode::Prefix, rating()),
-            field("dc:subject", Mode::Prefix, Some(list(&["hav"]))),
             field(
                 CONTACT,
                 Mode::Append,
@@ -1037,7 +785,7 @@ mod tests {
     }
 
     #[test]
-    fn a_field_of_a_list_of_structures_allows_only_keep() {
+    fn a_field_of_a_list_of_structures_is_not_allowed() {
         let path = "plus:ImageCreator/plus:ImageCreatorName";
         let creator_name = |mode: Mode| {
             sub_field(
@@ -1047,7 +795,7 @@ mod tests {
                 Some(text("Anna")),
             )
         };
-        for mode in [Mode::Replace, Mode::Append, Mode::Prefix] {
+        for mode in [Mode::Replace, Mode::Append] {
             let mut metadata = Metadata::new();
             assert_eq!(
                 apply(&template(vec![creator_name(mode)]), &mut metadata),
@@ -1057,30 +805,8 @@ mod tests {
                 }),
                 "{mode:?}"
             );
+            assert!(changed(&metadata).is_empty(), "{mode:?}");
         }
-        let mut metadata = Metadata::new();
-        assert_eq!(
-            apply(&template(vec![creator_name(Mode::Keep)]), &mut metadata),
-            Ok(())
-        );
-        // Clear on a field of Location Created, which is not a copyright-management property, is
-        // not allowed either (Replace on it is, `a_field_of_location_created_is_replaced_in_its_first_entry`).
-        assert_eq!(
-            apply(
-                &template(vec![sub_field(
-                    "Iptc4xmpExt:LocationCreated",
-                    "Iptc4xmpExt:City",
-                    Mode::Clear,
-                    None
-                )]),
-                &mut metadata
-            ),
-            Err(TemplateError::ModeNotAllowed {
-                property: "Iptc4xmpExt:LocationCreated/Iptc4xmpExt:City".to_string(),
-                mode: Mode::Clear
-            })
-        );
-        assert!(changed(&metadata).is_empty());
     }
 
     // --- A field of Location Created (ADR 0017 U13-Q4, T284) ---
@@ -1167,20 +893,22 @@ mod tests {
 
     #[test]
     fn only_replace_on_a_field_of_location_created_is_allowed() {
-        for mode in [Mode::Append, Mode::Prefix, Mode::Clear] {
-            let mut metadata = Metadata::new();
-            assert_eq!(
-                apply(
-                    &template(vec![sub_field(LOCATION, CITY, mode, Some(text("Lund")))]),
-                    &mut metadata
-                ),
-                Err(TemplateError::ModeNotAllowed {
-                    property: format!("{LOCATION}/{CITY}"),
-                    mode
-                }),
-                "{mode:?}"
-            );
-        }
+        let mut metadata = Metadata::new();
+        assert_eq!(
+            apply(
+                &template(vec![sub_field(
+                    LOCATION,
+                    CITY,
+                    Mode::Append,
+                    Some(text("Lund"))
+                )]),
+                &mut metadata
+            ),
+            Err(TemplateError::ModeNotAllowed {
+                property: format!("{LOCATION}/{CITY}"),
+                mode: Mode::Append
+            })
+        );
         let mut metadata = Metadata::new();
         assert_eq!(
             apply(
@@ -1287,7 +1015,6 @@ mod tests {
                 sub_field(CONTACT, PHONE, Mode::Replace, Some(text("031-12"))),
                 sub_field(CONTACT, EMAIL, Mode::Replace, Some(text("a@example.com"))),
                 field("xmpRights:Marked", Mode::Replace, Some(text("True"))),
-                field("dc:subject", Mode::Clear, None),
             ]),
             &mut metadata,
         );
@@ -1303,16 +1030,12 @@ mod tests {
             "unknown property foo:Bar"
         );
         assert_eq!(
-            TemplateError::CannotClear("dc:creator".to_string()).to_string(),
-            "dc:creator is a copyright-management property and cannot be cleared by a template"
-        );
-        assert_eq!(
             TemplateError::ModeNotAllowed {
                 property: "dc:subject".to_string(),
-                mode: Mode::Prefix
+                mode: Mode::Append
             }
             .to_string(),
-            "Prefix cannot be used on dc:subject"
+            "Append cannot be used on dc:subject"
         );
         assert_eq!(
             TemplateError::Value(ValueError::Empty("photoshop:City".to_string())).to_string(),

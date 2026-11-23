@@ -301,3 +301,4 @@ was when the task was done, so "this file", "below" and "the Log" in T1–T115 m
 | [T292](T292-template-file-thread.md) | Reading and saving template files on a thread of their own (pw-loupe, pw-metadata re-export) |
 | [T293](T293-template-window.md) | The template window (pw-loupe) |
 | [T294](T294-import-applies-template-file.md) | The import writes a template file instead of its six fields (pw-loupe) |
+| [T296](T296-remove-ingest-template-modes.md) | The ingest template's modes removed from pw-metadata (pw-metadata) |

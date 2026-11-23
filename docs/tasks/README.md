@@ -88,7 +88,6 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 | Task | Title | Status |
 |---|---|---|
 | [T295](T295-import-template-row.md) | The import dialog's Metadata Template row | Open |
-| [T296](T296-remove-ingest-template-modes.md) | The ingest template's modes removed from pw-metadata | Open |
 
 ## Writing a task (owner and reviewer)
 

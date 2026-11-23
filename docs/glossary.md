@@ -190,8 +190,6 @@ Every other property already uses IPTC's English name in both languages.
 | namnkrock, finns redan, bara backup | name conflict, already exists, backup only | |
 | Mata ut kortet … (inget raderas från kortet) | Eject the card … (nothing is deleted from the card) | |
 | Klar / Avbruten / Misslyckades | Done / Cancelled / Failed | |
-| Behåll, Ersätt, Lägg till efter, Lägg till före, Rensa | Keep, Replace, Append, Prefix, Clear | the template modes; the same words as ADR 0007 §10 |
-| Rensa och importera | Clear and Import | |
 | Dölj, Stäng | Hide, Close | |
 | IPTC-mall, Mallen, Variabler | IPTC Template, the template, Variables | added by T117 |
 | – | Metadata Template | the template window's title ("Metadata Template – {file}" once a file is loaded or saved) and the Save and Load dialogs' file type (ADR 0017 U13c); added by T291 |

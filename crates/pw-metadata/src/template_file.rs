@@ -5,7 +5,8 @@
 //! the image's instead of replacing the list (U13-Q12). [`TemplateFile::new`] is the one way the
 //! reader of a template file and the template window make a template, so both follow the same
 //! rules; [`TemplateFile::to_template`] turns it into the [`Template`] that
-//! [`crate::ExifTool::apply_template_safely`] applies through the write plan and the safe write.
+//! [`crate::ExifTool::apply_template_file_safely`] applies through the write plan and the safe
+//! write.
 //!
 //! A template keeps its **variables** (`{date}` …, ADR 0017 U13-Q9, [`crate::variables`]) as
 //! written: they are filled with each image's values when it is applied, by

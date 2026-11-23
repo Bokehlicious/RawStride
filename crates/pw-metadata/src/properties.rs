@@ -136,9 +136,9 @@ pub struct FieldDef {
 /// Properties that are not in the TechReference but belong to the model (written by hand).
 ///
 /// - `xmp:Label`: not IPTC, kept for Adobe/Photo Mechanic compatibility (ADR 0007 §3).
-/// - `xmpRights:Marked` ("Copyrighted" in Lightroom and Photo Mechanic): not IPTC; the ingest
-///   template sets it to `True` with a Copyright Notice, as the old template did (ADR 0007 §10,
-///   §15; owner decision D6). Text, as ExifTool reads and writes it (`True`/`False`).
+/// - `xmpRights:Marked` ("Copyrighted" in Lightroom and Photo Mechanic): not IPTC; a metadata
+///   template sets it with its Copyrighted box (ADR 0007 §10, §15; owner decision D6; ADR 0017
+///   U13). Text, as ExifTool reads and writes it (`True`/`False`).
 /// - The deprecated IIM datasets Urgency (2:10), Category (2:15) and Supplemental Categories
 ///   (2:20) with their `photoshop:` XMP properties: kept and synchronised, never offered for
 ///   editing (ADR 0007 §5.5). Their value kinds follow the Adobe XMP specification
