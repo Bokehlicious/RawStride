@@ -8,8 +8,8 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use pw_viewcore::{
-    Backend, Config, DecodeError, Frame, ImageSize, Rect, Rgb, Source, Status, ViewCore, ViewKind,
-    ViewOut, Zoom,
+    Backend, Config, DecodeError, FineState, Frame, ImageSize, Rect, Rgb, Source, Status, ViewCore,
+    ViewKind, ViewOut, Zoom,
 };
 
 const VIEW: [u32; 2] = [1000, 800];
@@ -224,6 +224,36 @@ fn a_free_zoom_level_is_rendered_scaled_and_sharp() {
         tex.image.height
     );
     assert!(tex.region.x <= 4 && tex.region.y <= 4, "{:?}", tex.region);
+}
+
+#[test]
+fn with_fine_details_on_a_raw_image_at_fit_gets_a_fine_view_from_the_whole_image() {
+    let fake = Fake::default();
+    let core = start(fake.clone(), Config::default());
+    core.set_fine_details(true);
+    core.open_folder(files(&["a"]));
+    let mut screen = Screen::new(&core);
+    // at fit (25 %): the reduced view first, then the fine view replaces it (ADR 0027 W2)
+    let f = screen.until(WAIT, |f| ready(f) && f.fine == FineState::Shown);
+    assert_eq!(f.fine, FineState::Shown);
+    let fine = &screen.textures[&f.draw.map_or(0, |d| d.id)];
+    assert_eq!(fine.kind, ViewKind::Fine);
+    let reduced = screen
+        .textures
+        .values()
+        .find(|v| v.kind == ViewKind::Reduced)
+        .unwrap_or_else(|| panic!("no reduced view"));
+    assert_eq!(
+        (fine.image.width, fine.image.height),
+        (reduced.image.width, reduced.image.height)
+    );
+    assert_eq!(
+        (fine.image.width, fine.image.height),
+        pw_viewcore::scale::scaled_size(4000, 3000, 0.25)
+    );
+    // made from the full-resolution render of the whole image
+    let renders = fake.renders.lock().map(|r| r.clone()).unwrap_or_default();
+    assert!(renders.contains(&(ViewKind::Zoom, Rect::new(0, 0, 4000, 3000))));
 }
 
 #[test]

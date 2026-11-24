@@ -72,6 +72,9 @@ pub enum ViewKind {
     /// The whole image below 50 %: the half-size render reduced on the worker to the view's
     /// density with the Lanczos filter (ADR 0027 §3.2, W1-Q3).
     Reduced,
+    /// The whole image below 50 % while fine details is on: the full-resolution render (PPG)
+    /// reduced on the worker to the view's density with the Lanczos filter (ADR 0027 §3.1, W2).
+    Fine,
 }
 
 impl ViewKind {
@@ -82,6 +85,7 @@ impl ViewKind {
             ViewKind::Ring => "ring",
             ViewKind::Scaled => "scaled",
             ViewKind::Reduced => "reduced",
+            ViewKind::Fine => "fine",
         }
     }
 }
@@ -199,6 +203,31 @@ pub enum FocusState {
     },
 }
 
+/// Why fine details does not apply to the current image (ADR 0027 W2-Q3, W2-Q6).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum FinePause {
+    /// The current image is shown from its embedded JPEG, or is a JPEG or TIFF file.
+    Mode,
+    /// Its scale is 50 % or more.
+    Zoom,
+    /// Its fine view failed, was refused by the texture budget or rejected by the presentation,
+    /// or the image cannot be shown.
+    Failed,
+}
+
+/// The state of fine details for the current image (ADR 0027 §3.1, W2), for the shell's mark.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum FineState {
+    /// Fine details is off, or there is no image.
+    Off,
+    /// It applies, and the drawn view is not a fine view of the current image yet.
+    Waiting,
+    /// The frame's view is ready and is a fine view of the current image.
+    Shown,
+    /// It does not apply to the current image now.
+    Paused(FinePause),
+}
+
 /// Everything the presentation needs for one frame.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Frame {
@@ -234,6 +263,8 @@ pub struct Frame {
     /// The focus map of the current image in its display mode, when the focus marking is on
     /// (ADR 0017 §2.6, U9a).
     pub focus: FocusState,
+    /// The state of fine details for the current image (ADR 0027 §3.1, W2).
+    pub fine: FineState,
 }
 
 /// One user request, for measurement (ADR 0009 §5.2; the P5 event format).
@@ -296,6 +327,8 @@ pub(crate) enum Want {
     Target,
     /// The ring for panning at 100 %.
     Ring,
+    /// The fine view of the current image below 50 %, while fine details is on (ADR 0027 W2).
+    Fine,
 }
 
 /// A view to render.
@@ -476,6 +509,13 @@ pub(crate) struct State<S> {
     /// The opened images that were asked for a focus map and have none (or making it failed):
     /// not asked again. Cleared and moved like `clipping_none`.
     pub focus_none: HashSet<Key>,
+    /// Fine details is on (ADR 0027 §3.1, W2). Set by the shell, which holds it for the session
+    /// (W2-Q4); a new folder or list of files does not change it.
+    pub fine_details: bool,
+    /// The images whose fine view failed, was refused by the texture budget or was rejected by
+    /// the presentation (W2-Q6): their fine view is not asked again. Kept as `failed` is (moved
+    /// by [`State::set_files`], emptied by a new folder).
+    fine_failed: HashSet<Key>,
     sessions: HashMap<Key, Option<S>>,
     /// The generation each lent session (`None` in `sessions`) was lent in.
     lent: HashMap<Key, u64>,
@@ -550,6 +590,8 @@ impl<S> State<S> {
             focus_wanted: false,
             focus_maps: Vec::new(),
             focus_none: HashSet::new(),
+            fine_details: false,
+            fine_failed: HashSet::new(),
             sessions: HashMap::new(),
             lent: HashMap::new(),
             detached: HashMap::new(),
@@ -780,6 +822,7 @@ impl<S> State<S> {
         self.focus_maps.clear();
         self.focus_none.clear();
         self.failed.clear();
+        self.fine_failed.clear();
         self.inflight.clear();
         self.outbox.clear();
         self.dropped.extend(self.resident.drain(..).map(|r| r.id));
@@ -904,6 +947,7 @@ impl<S> State<S> {
             .drain()
             .filter_map(|(k, v)| to(k).map(|n| (n, v)))
             .collect();
+        self.fine_failed = self.fine_failed.drain().filter_map(to).collect();
         self.ever_resident = self
             .ever_resident
             .drain()
@@ -1017,7 +1061,22 @@ impl<S> State<S> {
         if let Some(b) = self.neighbour(cur, 1, !forward) {
             add((self.key(b), primary));
         }
+        // the fine view last, after everything else (ADR 0027 W2-Q2)
+        if self.fine_applies(ck) {
+            add((ck, Want::Fine));
+        }
         v
+    }
+
+    /// Whether fine details applies to `key` (ADR 0027 W2-Q3): it is on, `key` is the current
+    /// image in RAW (never in JPEG mode, never a JPEG or TIFF file), its size is known, its scale
+    /// is below 50 %, and its fine view has not failed (W2-Q6).
+    fn fine_applies(&self, key: Key) -> bool {
+        self.fine_details
+            && self.cur_key() == Some(key)
+            && key.1 == Source::Raw
+            && self.scale_of(key).is_some_and(|s| s < HALF_DENSITY - EPS)
+            && !self.fine_failed.contains(&key)
     }
 
     /// The concrete requirement for a want, once the image's size is known.
@@ -1028,6 +1087,25 @@ impl<S> State<S> {
         }
         let scale = match want {
             Want::Shown => self.scale_of(key)?,
+            Want::Fine => {
+                // the whole image, reduced from the full-resolution render to the current scale;
+                // it covers what the shown view covers (ADR 0027 W2)
+                if !self.fine_applies(key) {
+                    return None;
+                }
+                let scale = self.scale_of(key)?;
+                let vis = geometry::visible(size, self.view_px, scale, self.centre);
+                return Some(Req {
+                    key,
+                    cover: geometry::sensor_box(size, vis),
+                    density: scale,
+                    job: JobView {
+                        kind: ViewKind::Fine,
+                        region: geometry::whole(size),
+                        density_q: quantise(scale),
+                    },
+                });
+            }
             Want::Fit => geometry::fit_scale(size, self.view_px),
             Want::Target => 1.0,
             Want::Ring => {
@@ -1097,7 +1175,8 @@ impl<S> State<S> {
     /// Whether a view of `kind` over `region` at `density` serves `req`. A reduced view has no
     /// mipmaps, so it does not serve a requirement below half its own density: the GPU would
     /// reduce it more than 2:1 (aliasing); the mipmapped half-size view is used there instead
-    /// (ADR 0027 W1, T309 R2).
+    /// (ADR 0027 W1, T309 R2). A fine view is the same, and serves nothing while fine details is
+    /// off (ADR 0027 W2-Q8).
     fn serves(
         &self,
         generation: u64,
@@ -1108,17 +1187,28 @@ impl<S> State<S> {
         req: &Req,
     ) -> bool {
         let need = req.density.min(1.0);
+        let reduced = matches!(kind, ViewKind::Reduced | ViewKind::Fine);
         generation == self.generation
             && key == req.key
+            && !(kind == ViewKind::Fine && !self.fine_details)
             && region.contains(req.cover)
             && density + EPS >= need
-            && !(kind == ViewKind::Reduced && density > 2.0 * need + EPS)
+            && !(reduced && density > 2.0 * need + EPS)
     }
 
-    /// The resident view that serves a requirement: the least dense one, then the smallest.
+    /// The resident view that serves a requirement: a fine view first while fine details is on
+    /// (ADR 0027 W2-Q8: it replaces the reduced view in one swap, and an earlier fine view that
+    /// still serves stays until the new one replaces it), then the least dense one, then the
+    /// smallest.
     pub fn serving(&self, req: &Req) -> Option<&Resident> {
+        self.serving_of(req, true)
+    }
+
+    /// [`State::serving`]; with `fine` false a fine view is not considered.
+    fn serving_of(&self, req: &Req, fine: bool) -> Option<&Resident> {
         self.resident
             .iter()
+            .filter(|r| fine || r.kind != ViewKind::Fine)
             .filter(|r| {
                 self.serves(
                     r.generation,
@@ -1130,47 +1220,67 @@ impl<S> State<S> {
                 )
             })
             .min_by(|a, b| {
-                a.density
-                    .total_cmp(&b.density)
+                (a.kind != ViewKind::Fine)
+                    .cmp(&(b.kind != ViewKind::Fine))
+                    .then(a.density.total_cmp(&b.density))
                     .then(a.region.area().cmp(&b.region.area()))
             })
     }
 
-    /// Whether the plan counts a requirement as done. A reduced view (ADR 0027 W1-Q3) counts only
-    /// as itself, resident or in flight: a denser view (the half-size view after a gesture, a
-    /// reduced view after zooming out) is drawn meanwhile ([`State::serving`]) but does not stop
-    /// the exact one from being made.
+    /// The resident view that is exactly what a reduced or fine requirement asks for: of its kind
+    /// and region, at its size.
+    fn exact(&self, req: &Req) -> Option<&Resident> {
+        let job = req.job;
+        self.resident.iter().find(|r| {
+            r.generation == self.generation
+                && (r.pos, r.source) == req.key
+                && r.kind == job.kind
+                && r.region == job.region
+                && same_reduction(r.region, r.density, job)
+        })
+    }
+
+    /// Whether the plan counts a requirement as done. A reduced view (ADR 0027 W1-Q3) and a fine
+    /// view (W2) count only as themselves, resident or in flight: a denser view (the half-size
+    /// view after a gesture, a reduced view after zooming out) is drawn meanwhile
+    /// ([`State::serving`]) but does not stop the exact one from being made. A fine view
+    /// satisfies no other requirement, so the shown view is still made while a fine render runs.
     fn satisfied(&self, req: &Req) -> bool {
-        if req.job.kind == ViewKind::Reduced {
+        if matches!(req.job.kind, ViewKind::Reduced | ViewKind::Fine) {
             let job = req.job;
-            return self.resident.iter().any(|r| {
-                r.generation == self.generation
-                    && (r.pos, r.source) == req.key
-                    && r.kind == ViewKind::Reduced
-                    && r.region == job.region
-                    && same_reduction(r.region, r.density, job)
-            }) || self
-                .inflight
-                .iter()
-                .any(|f| f.generation == self.generation && f.key == req.key && f.view == job);
+            return self.exact(req).is_some()
+                || self
+                    .inflight
+                    .iter()
+                    .any(|f| f.generation == self.generation && f.key == req.key && f.view == job);
         }
-        self.serving(req).is_some()
+        self.serving_of(req, false).is_some()
             || self.inflight.iter().any(|f| {
-                self.serves(
-                    f.generation,
-                    f.key,
-                    f.view.kind,
-                    f.view.region,
-                    f.view.density(),
-                    req,
-                )
+                f.view.kind != ViewKind::Fine
+                    && self.serves(
+                        f.generation,
+                        f.key,
+                        f.view.kind,
+                        f.view.region,
+                        f.view.density(),
+                        req,
+                    )
             })
     }
 
     /// The jobs the plan asks for now, in order.
     pub fn plan(&self) -> Vec<Job> {
+        self.plan_of(true)
+    }
+
+    /// [`State::plan`]; with `fine` false without the fine view's want (so [`State::pick`] can
+    /// tell an open asked only for the fine view).
+    fn plan_of(&self, fine: bool) -> Vec<Job> {
         let mut v = Vec::new();
         for (key, want) in self.wanted(false) {
+            if !fine && want == Want::Fine {
+                continue;
+            }
             if self.failed.contains_key(&key) {
                 continue;
             }
@@ -1363,12 +1473,24 @@ impl<S> State<S> {
     }
 
     /// Resident views that must not be evicted: those serving the full plan, and the one on
-    /// screen.
+    /// screen. While fine details is on, the current image's fine view and its exact reduced
+    /// view are both kept, so neither is evicted for the other (ADR 0027 W2-Q8); a fine view of
+    /// another image is not protected.
     fn protected_views(&self) -> HashSet<u64> {
         let mut p: HashSet<u64> = HashSet::new();
+        let ck = self.cur_key();
         for (key, want) in self.wanted(true) {
-            if let Some(req) = self.req(key, want)
-                && let Some(r) = self.serving(&req)
+            let Some(req) = self.req(key, want) else {
+                continue;
+            };
+            if let Some(r) = self.serving_of(&req, want == Want::Fine) {
+                p.insert(r.id);
+            }
+            if self.fine_details
+                && want == Want::Shown
+                && Some(key) == ck
+                && req.job.kind == ViewKind::Reduced
+                && let Some(r) = self.exact(&req)
             {
                 p.insert(r.id);
             }
@@ -1386,7 +1508,7 @@ impl<S> State<S> {
                 u64::from(s.w.div_ceil(2)) * u64::from(s.h.div_ceil(2)) * 4
             }),
             ViewKind::Zoom | ViewKind::Ring => area * 4,
-            ViewKind::Scaled | ViewKind::Reduced => {
+            ViewKind::Scaled | ViewKind::Reduced | ViewKind::Fine => {
                 let d = view.density();
                 ((area as f64) * d * d * 4.0).ceil() as u64
             }
@@ -1594,11 +1716,23 @@ impl<S> State<S> {
             first += 1;
         }
         // The focus map, when the focus marking wants it, after both (U9a).
-        if let Some(job) = self.focus_job()
+        let focus_job = self.focus_job();
+        if let Some(job) = focus_job
             && !jobs.contains(&job)
         {
             jobs.insert(first, job);
         }
+        // the opens asked for something other than the fine view: the interactive worker takes
+        // no open asked only for it (ADR 0027 W2-Q2)
+        let not_only_fine: Vec<Job> = if interactive {
+            let mut v = self.plan_of(false);
+            v.extend(self.statistics_job());
+            v.extend(self.clipping_job());
+            v.extend(focus_job);
+            v
+        } else {
+            Vec::new()
+        };
         for job in jobs {
             let key = job.key();
             if self.running.contains(&(generation, job)) || (interactive && Some(key) != ck) {
@@ -1607,6 +1741,9 @@ impl<S> State<S> {
             let is_cur = Some(key) == ck;
             match job {
                 Job::Open(key) => {
+                    if interactive && !not_only_fine.contains(&job) {
+                        continue;
+                    }
                     if self
                         .running
                         .iter()
@@ -1638,6 +1775,29 @@ impl<S> State<S> {
                         path,
                     });
                 }
+                Job::Render(key, view) if view.kind == ViewKind::Fine => {
+                    // the fine view (ADR 0027 W2-Q2, W2-Q6): only on the background worker, never
+                    // while its file is being released for a metadata write, and refused when it
+                    // does not fit, also for the current image; a refusal pauses fine details for
+                    // the image (it is not the shown view's miss)
+                    if interactive
+                        || self
+                            .files
+                            .get(key.0)
+                            .is_some_and(|p| self.releasing.contains(p))
+                    {
+                        continue;
+                    }
+                    let bytes = self.estimate_bytes(key, view);
+                    if !self.textures_fit(bytes) {
+                        self.stats.refused += 1;
+                        self.fine_failed.insert(key);
+                        continue;
+                    }
+                    if let Some(task) = self.lend_render(key, view, bytes) {
+                        return Some(task);
+                    }
+                }
                 Job::Render(key, view) => {
                     let bytes = self.estimate_bytes(key, view);
                     if !is_cur && !self.textures_fit(bytes) {
@@ -1645,30 +1805,9 @@ impl<S> State<S> {
                         self.refused.insert((self.generation, key));
                         continue;
                     }
-                    let Some(slot) = self.sessions.get_mut(&key) else {
-                        continue;
-                    };
-                    let Some(session) = slot.take() else {
-                        continue;
-                    };
-                    if let Some(path) = self.files.get(key.0) {
-                        self.lent_paths
-                            .insert((generation, key, view), path.clone());
+                    if let Some(task) = self.lend_render(key, view, bytes) {
+                        return Some(task);
                     }
-                    self.lent.insert(key, generation);
-                    self.running.insert((generation, job));
-                    self.inflight.push(Inflight {
-                        generation: self.generation,
-                        key,
-                        view,
-                        bytes,
-                    });
-                    return Some(Task::Render {
-                        generation: self.generation,
-                        key,
-                        view,
-                        session,
-                    });
                 }
                 Job::Statistics(key) => {
                     let Some(slot) = self.sessions.get_mut(&key) else {
@@ -1730,6 +1869,31 @@ impl<S> State<S> {
             }
         }
         None
+    }
+
+    /// Lends the session of `key` for a render of `view` (`bytes` its estimate), or `None` when
+    /// the session is not there or is lent.
+    fn lend_render(&mut self, key: Key, view: JobView, bytes: u64) -> Option<Task<S>> {
+        let generation = self.generation;
+        let session = self.sessions.get_mut(&key)?.take()?;
+        if let Some(path) = self.files.get(key.0) {
+            self.lent_paths
+                .insert((generation, key, view), path.clone());
+        }
+        self.lent.insert(key, generation);
+        self.running.insert((generation, Job::Render(key, view)));
+        self.inflight.push(Inflight {
+            generation,
+            key,
+            view,
+            bytes,
+        });
+        Some(Task::Render {
+            generation,
+            key,
+            view,
+            session,
+        })
     }
 
     /// An open (RAW unpack, or JPEG read) finished (`ms` = how long it took), for a backend whose
@@ -1809,6 +1973,7 @@ impl<S> State<S> {
             .entry(view.kind.name())
             .or_default()
             .push(ms);
+        let released = self.released.contains_key(&(generation, key, view));
         if !self.return_session(generation, key, view, session) {
             self.stats.discarded += 1;
             return;
@@ -1854,7 +2019,7 @@ impl<S> State<S> {
                 let density = match view.kind {
                     ViewKind::Half => HALF_DENSITY,
                     ViewKind::Zoom | ViewKind::Ring => 1.0,
-                    ViewKind::Scaled | ViewKind::Reduced => {
+                    ViewKind::Scaled | ViewKind::Reduced | ViewKind::Fine => {
                         let r = view.region;
                         (f64::from(image.width) / f64::from(r.w.max(1)))
                             .min(f64::from(image.height) / f64::from(r.h.max(1)))
@@ -1870,6 +2035,18 @@ impl<S> State<S> {
                     image,
                     hash,
                 });
+            }
+            Err(_) if view.kind == ViewKind::Fine => {
+                // no error is shown: the reduced view stays, and fine details is paused for the
+                // image (ADR 0027 W2-Q6). A failed LibRaw call ends the session, so it is dropped
+                // (unless it was released and is gone already); the plan opens a new one when
+                // one is needed.
+                self.remove_inflight(generation, key, view.kind, view.region, view.density());
+                self.stats.failures += 1;
+                self.fine_failed.insert(key);
+                if !released {
+                    self.drop_session(key);
+                }
             }
             Err(e) => {
                 self.remove_inflight(generation, key, view.kind, view.region, view.density());
@@ -1989,8 +2166,9 @@ impl<S> State<S> {
         }
     }
 
-    /// Removes the in-flight view of `kind` over `region`. Two reduced views of one image differ
-    /// only by their density, so for them it must match too (`density` as the view has it).
+    /// Removes the in-flight view of `kind` over `region`. Two reduced (or fine) views of one
+    /// image differ only by their density, so for them it must match too (`density` as the view
+    /// has it).
     fn remove_inflight(
         &mut self,
         generation: u64,
@@ -2004,7 +2182,8 @@ impl<S> State<S> {
                 && f.key == key
                 && f.view.kind == kind
                 && f.view.region == region
-                && (kind != ViewKind::Reduced || same_reduction(region, density, f.view))
+                && (!matches!(kind, ViewKind::Reduced | ViewKind::Fine)
+                    || same_reduction(region, density, f.view))
         }) {
             self.inflight.swap_remove(i);
         }
@@ -2022,7 +2201,14 @@ impl<S> State<S> {
             self.stats.discarded += 1;
             return None;
         }
-        if matches!(out.kind, ViewKind::Scaled | ViewKind::Reduced) {
+        if out.kind == ViewKind::Fine {
+            // kept while fine details is on, also when its image is no longer current (stepping
+            // back shows it at once); dropped while it is off (ADR 0027 W2-Q8)
+            if !self.fine_details {
+                self.stats.discarded += 1;
+                return None;
+            }
+        } else if matches!(out.kind, ViewKind::Scaled | ViewKind::Reduced) {
             let wanted = self.wanted(true).into_iter().any(|(k, want)| {
                 self.req(k, want).is_some_and(|req| {
                     self.serves(out.generation, key, out.kind, out.region, out.density, &req)
@@ -2074,13 +2260,18 @@ impl<S> State<S> {
     }
 
     /// A view the presentation cannot upload (larger than the GPU allows). The image is marked
-    /// as failed in that mode with `reason`.
+    /// as failed in that mode with `reason`; for a fine view only fine details is paused for the
+    /// image, and no error is shown (ADR 0027 W2-Q6).
     pub fn reject(&mut self, out: &ViewOut, reason: &str) {
         let key = (out.pos, out.source);
         self.remove_inflight(out.generation, key, out.kind, out.region, out.density);
         self.stats.discarded += 1;
         if out.generation == self.generation {
-            self.failed.insert(key, DecodeError::new(reason));
+            if out.kind == ViewKind::Fine {
+                self.fine_failed.insert(key);
+            } else {
+                self.failed.insert(key, DecodeError::new(reason));
+            }
         }
     }
 
@@ -2127,6 +2318,7 @@ impl<S> State<S> {
             } else {
                 FocusState::NotWanted
             },
+            fine: FineState::Off,
         };
         let Some(key) = key else {
             self.last_draw = None;
@@ -2137,10 +2329,25 @@ impl<S> State<S> {
             // G3: an unreadable file never leaves the previous image on screen; G4: a file
             // without an embedded JPEG says so in JPEG mode
             frame.status = Status::Error(e.clone());
+            if self.fine_details {
+                frame.fine = FineState::Paused(FinePause::Failed);
+            }
             self.last_draw = None;
             self.last_vis = None;
             self.waiting_since = None;
             return frame;
+        }
+        // a fine view is never drawn while fine details is off, also not as the kept last frame
+        // (ADR 0027 W2-Q8)
+        if !self.fine_details
+            && let Some(d) = self.last_draw
+            && self
+                .resident
+                .iter()
+                .any(|r| r.id == d.id && r.kind == ViewKind::Fine)
+        {
+            self.last_draw = None;
+            self.last_vis = None;
         }
         let ready = self.req(key, Want::Shown).and_then(|req| {
             let size = *self.sizes.get(&key)?;
@@ -2188,7 +2395,42 @@ impl<S> State<S> {
         if self.focus_wanted {
             frame.focus = self.focus_state(key, frame.draw);
         }
+        frame.fine = self.fine_state(key, &frame);
         frame
+    }
+
+    /// The state of fine details for the current image `key`, which can be shown, in `frame`
+    /// (ADR 0027 W2): the mode is checked before the zoom, the zoom before a failure.
+    fn fine_state(&self, key: Key, frame: &Frame) -> FineState {
+        if !self.fine_details {
+            return FineState::Off;
+        }
+        if key.1 != Source::Raw {
+            return FineState::Paused(FinePause::Mode);
+        }
+        let Some(scale) = self.scale_of(key) else {
+            return FineState::Waiting;
+        };
+        if scale >= HALF_DENSITY - EPS {
+            return FineState::Paused(FinePause::Zoom);
+        }
+        if self.fine_failed.contains(&key) {
+            return FineState::Paused(FinePause::Failed);
+        }
+        let shown = frame.status == Status::Ready
+            && frame.draw.is_some_and(|d| {
+                self.resident.iter().any(|r| {
+                    r.id == d.id
+                        && r.kind == ViewKind::Fine
+                        && r.generation == self.generation
+                        && (r.pos, r.source) == key
+                })
+            });
+        if shown {
+            FineState::Shown
+        } else {
+            FineState::Waiting
+        }
     }
 
     /// What stands in for the current image `key` during a zoom gesture at 50 % or less while no
@@ -2196,6 +2438,8 @@ impl<S> State<S> {
     /// arrives; ADR 0027 W1-Q3, W1-Q9): its densest resident reduced view of the whole image,
     /// placed at the gesture's scale and position (enlarged). Only a view of the current image
     /// and generation (V2), and none the GPU would reduce more than 2:1 (it has no mipmaps; R2).
+    /// While fine details is on, its fine views count too, and at an equal density the fine view
+    /// is taken (ADR 0027 W2-Q8).
     fn gesture_stand_in(&self, key: Key, view_px: [u32; 2]) -> Option<(Draw, RectF)> {
         if !self.in_gesture() {
             return None;
@@ -2212,11 +2456,16 @@ impl<S> State<S> {
             .filter(|r| {
                 r.generation == self.generation
                     && (r.pos, r.source) == key
-                    && r.kind == ViewKind::Reduced
+                    && (r.kind == ViewKind::Reduced
+                        || (r.kind == ViewKind::Fine && self.fine_details))
                     && r.region == whole
                     && r.density <= 2.0 * scale + EPS
             })
-            .max_by(|a, b| a.density.total_cmp(&b.density))?;
+            .max_by(|a, b| {
+                a.density
+                    .total_cmp(&b.density)
+                    .then((a.kind == ViewKind::Fine).cmp(&(b.kind == ViewKind::Fine)))
+            })?;
         let vis = geometry::visible(size, view_px, scale, self.centre);
         let d = geometry::dest(vis, view_px, scale);
         let draw = Draw {
@@ -2449,7 +2698,7 @@ mod tests {
         let density = match job.kind {
             ViewKind::Half => HALF_DENSITY,
             ViewKind::Zoom | ViewKind::Ring => 1.0,
-            ViewKind::Scaled | ViewKind::Reduced => job.density(),
+            ViewKind::Scaled | ViewKind::Reduced | ViewKind::Fine => job.density(),
         };
         ViewOut {
             generation: s.generation,
@@ -5379,6 +5628,399 @@ mod tests {
                 }
             )
         );
+    }
+
+    // ---------- fine details (ADR 0027 W2, T313) ----------
+
+    /// The job of a fine view of the whole image at `density_q` millionths.
+    fn fine_job(density_q: u64) -> JobView {
+        JobView {
+            kind: ViewKind::Fine,
+            region: geometry::whole(SIZE),
+            density_q,
+        }
+    }
+
+    fn is_fine(job: &Job) -> bool {
+        matches!(job, Job::Render(_, v) if v.kind == ViewKind::Fine)
+    }
+
+    /// Fine details on, image 10 (RAW, at fit, 0.25) opened, past the dwell, with its shown, 100 %
+    /// and ring views resident and its statistics known, so of the current image only the fine
+    /// view is left. Returns the reduced view's id.
+    fn ready_for_fine(s: &mut State<u32>) -> u64 {
+        s.fine_details = true;
+        with_session(s, 10);
+        s.statistics.insert(k(10), ImageStatistics::Unavailable);
+        let reduced = s.accept(&out(s, 10, Want::Shown), 100);
+        assert!(s.accept(&out(s, 10, Want::Target), 100).is_some());
+        assert!(s.accept(&out(s, 10, Want::Ring), 100).is_some());
+        let Some(reduced) = reduced else {
+            panic!("the reduced view was not accepted");
+        };
+        reduced
+    }
+
+    /// Picks on the background worker until it gives a fine render (the jobs before it are
+    /// handed out and left running).
+    fn pick_fine(s: &mut State<u32>) -> Option<(u64, Key, JobView, u32)> {
+        for _ in 0..30 {
+            match s.pick(false) {
+                Some(Task::Render {
+                    generation,
+                    key,
+                    view,
+                    session,
+                }) if view.kind == ViewKind::Fine => return Some((generation, key, view, session)),
+                Some(_) => {}
+                None => return None,
+            }
+        }
+        None
+    }
+
+    #[test]
+    fn with_fine_details_off_no_plan_holds_a_fine_render() {
+        let mut s = state(1024);
+        with_session(&mut s, 10);
+        for zoom in [Zoom::Fit, Zoom::Scale(0.3)] {
+            s.zoom = zoom;
+            assert_eq!(s.mode, Source::Raw);
+            assert!(!s.plan().iter().any(is_fine), "{zoom:?}");
+            assert!(!s.wanted(true).iter().any(|(_, w)| *w == Want::Fine));
+        }
+    }
+
+    #[test]
+    fn with_fine_details_on_the_fine_render_is_last_after_the_dwell_and_not_in_a_gesture() {
+        let mut s = state(1024);
+        s.fine_details = true;
+        with_session(&mut s, 10);
+        // before the dwell only the shown view
+        s.since = Instant::now();
+        assert!(!s.plan().iter().any(is_fine));
+        // after the dwell the fine view of the whole image at the fit scale, last
+        s.since = Instant::now() - Duration::from_secs(1);
+        assert_eq!(
+            s.plan().last(),
+            Some(&Job::Render(k(10), fine_job(250_000)))
+        );
+        // still last once the other wants of the current image are satisfied
+        let _ = ready_for_fine(&mut s);
+        let plan = s.plan();
+        assert_eq!(plan.last(), Some(&Job::Render(k(10), fine_job(250_000))));
+        assert_eq!(plan.iter().filter(|j| j.key() == k(10)).count(), 1);
+        // during a zoom gesture there is none
+        s.set_zoom(Zoom::Scale(0.3), None, true);
+        assert!(!s.plan().iter().any(is_fine));
+    }
+
+    #[test]
+    fn only_the_background_worker_takes_a_fine_render() {
+        let mut s = state(1024);
+        let _ = ready_for_fine(&mut s);
+        assert!(s.plan().iter().any(is_fine));
+        // nothing else of the current image is left: the interactive worker takes nothing
+        assert!(s.pick(true).is_none());
+        let fine = pick_fine(&mut s);
+        assert!(
+            matches!(fine, Some((_, key, view, _)) if key == k(10) && view == fine_job(250_000))
+        );
+    }
+
+    #[test]
+    fn no_fine_render_in_jpeg_mode_for_a_jpeg_file_or_at_50_percent_or_more() {
+        // JPEG mode
+        let mut s = state(1024);
+        s.fine_details = true;
+        s.set_mode(Source::Jpeg);
+        let jk = (10, Source::Jpeg);
+        s.sizes.insert(jk, SIZE);
+        s.sessions.insert(jk, Some(10));
+        assert!(!s.plan().iter().any(is_fine));
+        assert_eq!(s.frame(VIEW).fine, FineState::Paused(FinePause::Mode));
+        // a plain JPEG file in RAW mode
+        let mut s = state(1024);
+        s.fine_details = true;
+        let mut list = files(20);
+        list[10] = PathBuf::from("img10.jpg");
+        s.open_folder(list);
+        s.go(10);
+        s.since = Instant::now() - Duration::from_secs(1);
+        s.sizes.insert(jk, SIZE);
+        s.sessions.insert(jk, Some(10));
+        assert_eq!(s.cur_key(), Some(jk));
+        assert!(!s.plan().iter().any(is_fine));
+        assert_eq!(s.frame(VIEW).fine, FineState::Paused(FinePause::Mode));
+        // RAW at 50 % and at 100 %
+        for scale in [0.5, 1.0] {
+            let mut s = state(1024);
+            s.fine_details = true;
+            with_session(&mut s, 10);
+            s.zoom = Zoom::Scale(scale);
+            assert!(!s.plan().iter().any(is_fine), "{scale}");
+            assert_eq!(s.frame(VIEW).fine, FineState::Paused(FinePause::Zoom));
+        }
+    }
+
+    #[test]
+    fn the_fine_view_replaces_the_reduced_view_once_it_is_accepted() {
+        let mut s = state(1024);
+        let reduced = ready_for_fine(&mut s);
+        let f = s.frame(VIEW);
+        assert_eq!(f.status, Status::Ready);
+        assert_eq!(f.draw.map(|d| d.id), Some(reduced));
+        assert_eq!(f.fine, FineState::Waiting);
+        let fine = s.accept(&out(&s, 10, Want::Fine), 100);
+        assert!(fine.is_some());
+        let f = s.frame(VIEW);
+        assert_eq!(f.status, Status::Ready);
+        assert_eq!(f.draw.map(|d| d.id), fine);
+        assert_eq!(f.fine, FineState::Shown);
+    }
+
+    #[test]
+    fn turning_fine_details_off_draws_the_reduced_view_at_once() {
+        let mut s = state(1024);
+        let reduced = ready_for_fine(&mut s);
+        let fine = s.accept(&out(&s, 10, Want::Fine), 100);
+        assert_eq!(s.frame(VIEW).draw.map(|d| d.id), fine);
+        s.fine_details = false;
+        let f = s.frame(VIEW);
+        assert_eq!(f.status, Status::Ready);
+        assert_eq!(f.draw.map(|d| d.id), Some(reduced));
+        assert_eq!(f.fine, FineState::Off);
+        // a fine view coming in now is not kept
+        s.fine_details = true;
+        let o = out(&s, 10, Want::Fine);
+        s.fine_details = false;
+        assert!(s.accept(&o, 100).is_none());
+    }
+
+    #[test]
+    fn a_failed_fine_render_shows_no_error_and_pauses_fine_details_for_the_image() {
+        let mut s = state(1024);
+        let reduced = ready_for_fine(&mut s);
+        let Some((generation, key, view, session)) = pick_fine(&mut s) else {
+            panic!("no fine render");
+        };
+        s.finish_render(
+            generation,
+            key,
+            view,
+            session,
+            Err(DecodeError::new("render failed")),
+            1.0,
+        );
+        assert!(!s.failed.contains_key(&k(10)));
+        let f = s.frame(VIEW);
+        assert_eq!(f.status, Status::Ready);
+        assert_eq!(f.draw.map(|d| d.id), Some(reduced));
+        assert_eq!(f.fine, FineState::Paused(FinePause::Failed));
+        assert!(!s.plan().iter().any(is_fine));
+        assert!(!s.inflight.iter().any(|f| f.view.kind == ViewKind::Fine));
+    }
+
+    #[test]
+    fn a_failed_fine_render_drops_the_session_and_a_later_zoom_opens_a_new_one() {
+        let mut s = state(1024);
+        let _ = ready_for_fine(&mut s);
+        let Some((generation, key, view, session)) = pick_fine(&mut s) else {
+            panic!("no fine render");
+        };
+        s.finish_render(
+            generation,
+            key,
+            view,
+            session,
+            Err(DecodeError::new("render failed")),
+            1.0,
+        );
+        assert!(!s.sessions.contains_key(&k(10)));
+        // a zoom to 100 % at the top left corner, outside the resident 100 % view and ring, needs
+        // a new render, so a new session
+        s.zoom = Zoom::Scale(1.0);
+        s.centre = [0.1, 0.1];
+        let Some(Task::Open {
+            generation, key, ..
+        }) = s.pick(true)
+        else {
+            panic!("expected an open");
+        };
+        assert_eq!(key, k(10));
+        s.finish_open(generation, key, Ok((10, SIZE)), mb24, 1.0);
+        let Some(Task::Render {
+            generation,
+            key,
+            view,
+            session,
+        }) = s.pick(true)
+        else {
+            panic!("expected a render");
+        };
+        assert_eq!(view.kind, ViewKind::Zoom);
+        let region = view.region;
+        let image = Rgb {
+            width: region.w,
+            height: region.h,
+            data: vec![0; (region.w * region.h * 3) as usize],
+        };
+        s.finish_render(generation, key, view, session, Ok(image), 1.0);
+        let outs: Vec<ViewOut> = std::mem::take(&mut s.outbox);
+        for o in &outs {
+            assert!(s.accept(o, 100).is_some());
+        }
+        let f = s.frame(VIEW);
+        assert_eq!(f.status, Status::Ready);
+        assert_eq!(f.fine, FineState::Paused(FinePause::Zoom));
+    }
+
+    #[test]
+    fn a_fine_render_refused_by_the_texture_budget_pauses_fine_details() {
+        // 1 MiB: the fine view of 4000×3000 at 0.25 (about 3 MB) does not fit
+        let mut s = state(1);
+        let reduced = ready_for_fine(&mut s);
+        let refused = s.stats.refused;
+        assert!(pick_fine(&mut s).is_none());
+        assert!(s.stats.refused > refused);
+        assert!(!s.refused.contains(&(s.generation, k(10))));
+        let f = s.frame(VIEW);
+        assert_eq!(f.status, Status::Ready);
+        assert_eq!(f.draw.map(|d| d.id), Some(reduced));
+        assert_eq!(f.fine, FineState::Paused(FinePause::Failed));
+        assert!(!s.plan().iter().any(is_fine));
+    }
+
+    #[test]
+    fn a_rejected_fine_view_shows_no_error_and_pauses_fine_details() {
+        let mut s = state(1024);
+        let reduced = ready_for_fine(&mut s);
+        let o = out(&s, 10, Want::Fine);
+        s.reject(&o, "too large for the GPU");
+        let f = s.frame(VIEW);
+        assert_eq!(f.status, Status::Ready);
+        assert_eq!(f.draw.map(|d| d.id), Some(reduced));
+        assert_eq!(f.fine, FineState::Paused(FinePause::Failed));
+    }
+
+    #[test]
+    fn an_image_that_failed_for_fine_details_stays_paused_after_set_files_moves_it() {
+        let mut s = state(1024);
+        let _ = ready_for_fine(&mut s);
+        let o = out(&s, 10, Want::Fine);
+        s.reject(&o, "too large for the GPU");
+        assert_eq!(s.frame(VIEW).fine, FineState::Paused(FinePause::Failed));
+        // image 3 drops out: image 10 is now at position 9
+        s.set_files(without(20, &[3]), 9);
+        assert_eq!(s.cur_key(), Some(k(9)));
+        assert_eq!(s.frame(VIEW).fine, FineState::Paused(FinePause::Failed));
+        // a new folder starts again
+        s.open_folder(files(20));
+        s.go(9);
+        known(&mut s, 9);
+        assert_eq!(s.frame(VIEW).fine, FineState::Waiting);
+    }
+
+    #[test]
+    fn no_fine_render_is_picked_while_the_current_file_is_being_released() {
+        let mut s = state(1024);
+        let _ = ready_for_fine(&mut s);
+        s.begin_release(&path(10));
+        assert!(pick_fine(&mut s).is_none());
+        s.end_release(&path(10));
+        assert!(pick_fine(&mut s).is_some());
+    }
+
+    #[test]
+    fn a_fine_view_finished_after_a_step_is_kept_and_drawn_when_stepping_back() {
+        let mut s = state(1024);
+        let _ = ready_for_fine(&mut s);
+        let Some((generation, key, view, session)) = pick_fine(&mut s) else {
+            panic!("no fine render");
+        };
+        s.go(11);
+        s.finish_render(generation, key, view, session, Ok(rendered(view)), 1.0);
+        let outs: Vec<ViewOut> = std::mem::take(&mut s.outbox);
+        assert_eq!(outs.len(), 1);
+        let fine = outs.first().and_then(|o| s.accept(o, 100));
+        assert!(fine.is_some());
+        // not of the current image: never drawn for image 11 (V2)
+        assert_ne!(s.frame(VIEW).draw.map(|d| d.id), fine);
+        s.go(10);
+        let f = s.frame(VIEW);
+        assert_eq!(f.status, Status::Ready);
+        assert_eq!(f.draw.map(|d| d.id), fine);
+        assert_eq!(f.fine, FineState::Shown);
+    }
+
+    #[test]
+    fn after_a_zoom_gesture_the_earlier_fine_view_is_drawn_until_the_new_one_arrives() {
+        let mut s = state(1024);
+        s.fine_details = true;
+        with_session(&mut s, 10);
+        s.zoom = Zoom::Scale(0.4);
+        assert!(s.accept(&out(&s, 10, Want::Shown), 100).is_some());
+        let fine4 = s.accept(&out(&s, 10, Want::Fine), 100);
+        assert_eq!(s.frame(VIEW).draw.map(|d| d.id), fine4);
+        // a gesture out to 0.3: the fine view of 0.4 still serves (not below half its density)
+        s.set_zoom(Zoom::Scale(0.3), None, true);
+        assert_eq!(s.frame(VIEW).draw.map(|d| d.id), fine4);
+        pause_the_gesture(&mut s);
+        assert!(s.plan().contains(&Job::Render(k(10), fine_job(300_000))));
+        let f = s.frame(VIEW);
+        assert_eq!(f.status, Status::Ready);
+        assert_eq!(f.draw.map(|d| d.id), fine4);
+        // the new fine view replaces it in one swap
+        assert!(s.accept(&out(&s, 10, Want::Shown), 100).is_some());
+        assert_eq!(s.frame(VIEW).draw.map(|d| d.id), fine4);
+        let fine3 = s.accept(&out(&s, 10, Want::Fine), 100);
+        assert!(fine3.is_some());
+        let f = s.frame(VIEW);
+        assert_eq!(f.draw.map(|d| d.id), fine3);
+        assert_eq!(f.fine, FineState::Shown);
+    }
+
+    #[test]
+    fn the_drawn_fine_view_and_the_reduced_view_are_both_protected() {
+        let mut s = state(1);
+        s.fine_details = true;
+        with_session(&mut s, 10);
+        known(&mut s, 11);
+        let reduced = s.accept(&out(&s, 10, Want::Shown), 400 << 10);
+        let fine = s.accept(&out(&s, 10, Want::Fine), 400 << 10);
+        assert_eq!(s.frame(VIEW).draw.map(|d| d.id), fine);
+        let (Some(reduced), Some(fine)) = (reduced, fine) else {
+            panic!("not accepted");
+        };
+        let p = s.protected_views();
+        assert!(p.contains(&reduced) && p.contains(&fine));
+        // filling the budget evicts neither: the neighbour's view is discarded instead
+        assert!(s.accept(&out(&s, 11, Want::Fit), 400 << 10).is_none());
+        assert!(s.take_dropped().is_empty());
+        assert!(s.resident.iter().any(|r| r.id == reduced));
+        assert!(s.resident.iter().any(|r| r.id == fine));
+        assert!(!s.plan().contains(&Job::Render(k(10), reduced_job(250_000))));
+    }
+
+    #[test]
+    fn the_interactive_worker_takes_no_open_asked_only_for_the_fine_view() {
+        let mut s = state(1024);
+        let _ = ready_for_fine(&mut s);
+        s.drop_session(k(10));
+        assert!(s.plan().contains(&Job::Open(k(10))));
+        assert!(s.pick(true).is_none());
+        let mut opened = false;
+        for _ in 0..30 {
+            match s.pick(false) {
+                Some(Task::Open { key, .. }) if key == k(10) => {
+                    opened = true;
+                    break;
+                }
+                Some(_) => {}
+                None => break,
+            }
+        }
+        assert!(opened, "the background worker opens it for the fine view");
     }
 
     #[test]

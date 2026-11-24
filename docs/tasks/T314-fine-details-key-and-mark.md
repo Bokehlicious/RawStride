@@ -1,4 +1,4 @@
-# T314. ADR 0027 W2: the key, the menu item and the mark of fine details — Blocked
+# T314. ADR 0027 W2: the key, the menu item and the mark of fine details — Open
 
 - **Why:** ADR 0027 §2.1, §3.1, W2-Q4 and W2-Q5 (answered by the owner 2026-11-24, ADR 0027
   §4.2). T313 gave the view core fine details (`ViewCore::set_fine_details`, `Frame::fine`).
@@ -34,6 +34,11 @@
   - `ImageAreaShown` (`main.rs`) carries what `draw_image_area` needs, for example `mode_key`,
     filled from `self.key_map.first_key(…)`; the image-area colours are in `shell.rs`'s
     `image_area` module (`TEXT` is grey 0xbe), the plate is `SIDE_TEXT_PLATE` in `main.rs`.
+  - As T313 was made (known and accepted, owner 2026-11-24): an image that cannot be shown
+    (`Status::Error`) gives `Paused(Failed)` also in JPEG mode; and after a zoom, when the new
+    fine render fails or is refused while an earlier fine view still serves, that fine view stays
+    drawn while `Frame::fine` is `Paused(Failed)`. The mark follows `Frame::fine` as it is; this
+    task does not change the view core.
 - **Crate:** `pw-loupe`. **Files:** `crates/pw-loupe/src/shell.rs`, `crates/pw-loupe/src/keymap.rs`,
   `crates/pw-loupe/src/lib.rs`, `crates/pw-loupe/src/shell_text.rs`,
   `crates/pw-loupe/src/main.rs`, `crates/pw-loupe/src/preview_text.rs`, `docs/glossary.md`,
@@ -127,3 +132,4 @@
 | 2026-11-24 | Blocked | Added (ADR 0027 W2-Q4, W2-Q5); waits for T313 |
 | 2026-11-24 | Blocked | Cold read: the View menu's order test is updated (asked for, rule 5); `KeyAction::ALL` 44 → 45 with the new action after `FocusMarking`, `today()` and both `acts_in` lists (`KeyView::Preview`, `Where::Loupe`) named; a new `image_area::WEAK_TEXT` (0x80) for the dimmed mark; the hover by a second hover-only response; the key through a new `ImageAreaShown::fine_key`; the marks function and its type placed in `preview_text.rs` with two templates per text, "50%" as "100%"; the row at the bottom left, only while an image is drawn, so it never meets the compare's side text; the settings test dropped (the whole-file test covers it, `settings.rs` not touched). D checked free |
 | 2026-11-24 | Blocked | Chain review (T313's log): the row moved to the bottom right (the bottom left is the rating badge's); the hover text as a tooltip from the image area's own pointer position, not a second response, so the wheel zoom keeps working (hand check); the mark over an earlier image's kept view while the next one is prepared accepted (a moment) |
+| 2026-11-24 | Open | T313 Done; what T313 leaves for the mark (an error in JPEG mode, an earlier fine view drawn while paused) noted under the reviewer's checks. Set Open |

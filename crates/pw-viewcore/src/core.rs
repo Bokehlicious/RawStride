@@ -105,7 +105,9 @@ impl<B: Backend> Shared<B> {
                                 }
                             })
                         }
-                        ViewKind::Scaled => self
+                        // the fine view: the full-resolution render of the whole image, reduced
+                        // as the scaled view is (ADR 0027 §3.1, W2)
+                        ViewKind::Scaled | ViewKind::Fine => self
                             .backend
                             .render_region(&mut session, view.region)
                             .and_then(reduce),
@@ -341,6 +343,23 @@ impl<B: Backend> ViewCore<B> {
                 return;
             }
             s.focus_wanted = wanted;
+        }
+        self.shared.cv.notify_all();
+        self.shared.wake_ui();
+    }
+
+    /// Whether fine details is on (ADR 0027 §3.1, W2): the shell holds it for the session (it is
+    /// off at the start and not saved, W2-Q4). While it is on, a RAW view of the current image
+    /// below 50 % is also made from the full-resolution render, reduced on the worker, after
+    /// everything else the plan wants, and replaces the reduced view in one swap when it is
+    /// ready; [`Frame::fine`] tells its state. Not a user request: nothing is recorded.
+    pub fn set_fine_details(&self, on: bool) {
+        {
+            let mut s = self.shared.state();
+            if s.fine_details == on {
+                return;
+            }
+            s.fine_details = on;
         }
         self.shared.cv.notify_all();
         self.shared.wake_ui();

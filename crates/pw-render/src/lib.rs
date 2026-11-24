@@ -46,20 +46,20 @@ fn sane_ppp(ppp: f32) -> f32 {
 
 /// Whether a view is uploaded with mipmaps. The half-size view may be drawn reduced (during a zoom
 /// gesture below 50 %, before the reduced view is made); mipmaps keep that free of aliasing. The
-/// other views, the reduced view below 50 % included (ADR 0027 W1), are made for the screen's
-/// resolution and are drawn at about 1:1 or magnified.
+/// other views, the reduced and the fine view below 50 % included (ADR 0027 W1, W2), are made for
+/// the screen's resolution and are drawn at about 1:1 or magnified.
 pub fn mipmapped(kind: ViewKind) -> bool {
     kind == ViewKind::Half
 }
 
 /// The texture options for a view. Magnified pixels of the views at 50 % to 100 % and above stay
-/// sharp (nearest-neighbour above 100 %, "real pixels"); the half-size and the reduced view are
-/// magnified only as a zoom gesture's brief stand-in, so they are filtered linearly, which is not
-/// blocky (ADR 0027 W1-Q9). Reduced pixels are filtered linearly. Mipmaps for the half-size view
-/// (egui_glow supports them; glow is the renderer, GUI_REQUIREMENTS §7).
+/// sharp (nearest-neighbour above 100 %, "real pixels"); the half-size, the reduced and the fine
+/// view are magnified only as a zoom gesture's brief stand-in, so they are filtered linearly,
+/// which is not blocky (ADR 0027 W1-Q9, W2). Reduced pixels are filtered linearly. Mipmaps for the
+/// half-size view (egui_glow supports them; glow is the renderer, GUI_REQUIREMENTS §7).
 pub fn texture_options(kind: ViewKind) -> TextureOptions {
     let mut o = TextureOptions::LINEAR;
-    o.magnification = if matches!(kind, ViewKind::Half | ViewKind::Reduced) {
+    o.magnification = if matches!(kind, ViewKind::Half | ViewKind::Reduced | ViewKind::Fine) {
         TextureFilter::Linear
     } else {
         TextureFilter::Nearest
@@ -276,21 +276,25 @@ mod tests {
             ViewKind::Ring,
             ViewKind::Scaled,
             ViewKind::Reduced,
+            ViewKind::Fine,
         ] {
             let o = texture_options(kind);
-            // the half-size and the reduced view are magnified only as a gesture's stand-in
-            // (ADR 0027 W1-Q9): linearly; the others keep sharp pixels
-            let magnification = if matches!(kind, ViewKind::Half | ViewKind::Reduced) {
-                TextureFilter::Linear
-            } else {
-                TextureFilter::Nearest
-            };
+            // the half-size, the reduced and the fine view are magnified only as a gesture's
+            // stand-in (ADR 0027 W1-Q9, W2): linearly; the others keep sharp pixels
+            let magnification =
+                if matches!(kind, ViewKind::Half | ViewKind::Reduced | ViewKind::Fine) {
+                    TextureFilter::Linear
+                } else {
+                    TextureFilter::Nearest
+                };
             assert_eq!(o.magnification, magnification, "{kind:?}");
             assert_eq!(o.minification, TextureFilter::Linear);
             assert_eq!(o.mipmap_mode.is_some(), kind == ViewKind::Half);
         }
         assert!(!mipmapped(ViewKind::Reduced));
+        assert!(!mipmapped(ViewKind::Fine));
         assert_eq!(texture_bytes(100, 100, ViewKind::Reduced), 40_000);
+        assert_eq!(texture_bytes(100, 100, ViewKind::Fine), 40_000);
         assert_eq!(texture_bytes(100, 100, ViewKind::Zoom), 40_000);
         assert_eq!(texture_bytes(100, 100, ViewKind::Half), 53_334);
     }

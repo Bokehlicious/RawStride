@@ -281,6 +281,7 @@ mod tests {
             statistics: None,
             clipping: pw_viewcore::ClippingState::NotWanted,
             focus: pw_viewcore::FocusState::NotWanted,
+            fine: pw_viewcore::FineState::Off,
         }
     }
 
@@ -445,6 +446,7 @@ mod tests {
             statistics: None,
             clipping: pw_viewcore::ClippingState::NotWanted,
             focus: pw_viewcore::FocusState::NotWanted,
+            fine: pw_viewcore::FineState::Off,
         }
     }
 
