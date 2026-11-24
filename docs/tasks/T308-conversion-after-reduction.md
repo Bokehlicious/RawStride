@@ -1,4 +1,4 @@
-# T308. ADR 0027 W1: the conversion to the monitor profile moved after the reduction — Blocked: waits for T307
+# T308. ADR 0027 W1: the conversion to the monitor profile moved after the reduction — Open
 
 - **Why:** ADR 0027 §3.2, §7 (ADR 0016's order) and W1-Q4/W1-Q5 (answered by the owner
   2026-11-24, ADR 0027 §4.1): today the backend converts every RAW and JPEG view to the monitor
@@ -116,3 +116,4 @@
 |---|---|---|
 | 2026-11-24 | Blocked | Added (ADR 0027 W1, W1-Q4/W1-Q5); waits for T307 |
 | 2026-11-24 | Blocked | Cold read: point 5 contradicted an existing assert (the clipping map now keeps no decode, as today); the stale doc comments named (point 6); the simulated backends' description corrected; the core tests get a new 4000×3000 backend and countable asserts; "decodes once" made observable; the focus maps' small change with a non-sRGB monitor noted |
+| 2026-11-24 | Open | T307 Done |

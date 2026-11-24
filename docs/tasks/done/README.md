@@ -313,4 +313,5 @@ was when the task was done, so "this file", "below" and "the Log" in T1–T115 m
 | [T304](T304-metadata-window-two-columns.md) | The metadata window in two columns (pw-loupe) |
 | [T305](T305-msi-package.md) | ADR 0031 RL9: the MSI, made by `tools/package-msi.ps1` (tools) |
 | [T306](T306-msi-in-release.md) | ADR 0031 RL9: the MSI in the release build and workflow (tools, CI, docs) |
+| [T307](T307-pw-resample-lanczos.md) | ADR 0027 W1: the crate pw-resample, a Lanczos-3 reduction in linear light (pw-resample) |
 | [T310](T310-regular-releases.md) | ADR 0031 RL10: 0.x versions as regular releases in the release workflow (CI, docs) |

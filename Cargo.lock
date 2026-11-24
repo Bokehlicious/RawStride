@@ -2180,6 +2180,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "pw-resample"
+version = "0.5.0"
+
+[[package]]
 name = "pw-thumbcache"
 version = "0.5.0"
 dependencies = [
