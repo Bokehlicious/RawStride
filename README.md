@@ -3,8 +3,9 @@
 A fast and lightweight photo culling and ingest program for Windows: copy the photos off the card,
 step through them quickly, rate and label them, and add IPTC metadata.
 
-> **Status: in development; latest pre-release `0.5.0` (2026-11-24), an installer and a portable
-> zip for Windows on the [Releases page](https://github.com/Bokehlicious/RawStride/releases).** The program
+> **Status: in development; latest release `0.5.0` (2026-11-24), an early version, with an
+> installer and a portable zip for Windows on the
+> [Releases page](https://github.com/Bokehlicious/RawStride/releases/latest).** The program
 > (`rawstride.exe`, built from the crate `pw-loupe`; eframe + egui) has the loupe and preview, the
 > contact sheet, folder tabs, the import dialog, ratings and labels, filter and multi-selection, TIFF
 > viewing, colour management and the metadata window. See [Planned](#planned) for what is not
@@ -78,8 +79,8 @@ Testers are welcome, especially with cameras and file types other than the ones 
 2. Neither is signed yet, so Windows SmartScreen warns the first time: choose "More info", then
    "Run anyway".
 3. **Try it on copies of your photos first.** RawStride writes ratings, labels and metadata (into
-   XMP sidecars for RAW files, into DNG, JPEG and TIFF files themselves), and this is a first
-   pre-release.
+   XMP sidecars for RAW files, into DNG, JPEG and TIFF files themselves), and this is an early
+   version.
 
 Found a bug, or a file that does not open? [Open an issue](https://github.com/Bokehlicious/RawStride/issues/new/choose);
 the form asks for what helps. Ideas are welcome the same way. To remove RawStride, uninstall it in

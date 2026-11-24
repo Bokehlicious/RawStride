@@ -181,7 +181,7 @@ one as proposed:**
 | RL7 | owner + reviewer | `0.1.0`: the `CHANGELOG.md` section renamed, tag on `main`, the workflow's draft read, published as a pre-release; the tag ruleset (RL-Q8); `README.md`'s status line; steps in `docs/distribution.md`, "Making a release"; done 2026-11-20: `v0.1.0` published as a pre-release, tag ruleset "release tags" active | RL5, RL6 |
 | RL8 | owner | Code signing applied for (RL-Q6); the options checked 2026-11-22 (§3.6); waits until RawStride has a reputation (owner, 2026-11-22) | RL7 |
 | RL9 | task | The MSI (RL-Q5, RL9-Q1–RL9-Q8): T305 (the WiX source and `tools/package-msi.ps1`) → T306 (the release build and workflow, `docs/distribution.md`); the owner's hand check | RL7 and the owner's go (given 2026-11-24) |
-| RL10 | task, owner + reviewer | `0.x` as regular releases (RL-Q14): T310 (`release.yml` without `--prerelease`, `docs/distribution.md`); the reviewer changes `README.md`'s status line and install steps, `main` is moved and pushed by the push routine, then `v0.5.0` is made a regular release and Latest on the owner's yes | RL9; before the next release |
+| RL10 | task, owner + reviewer | `0.x` as regular releases (RL-Q14): T310 (`release.yml` without `--prerelease`, `docs/distribution.md`); the reviewer changes `README.md`'s status line and install steps, `main` is moved and pushed by the push routine, then `v0.5.0` is made a regular release and Latest on the owner's yes; done 2026-11-24 (T310; `v0.5.0` Latest) | RL9; before the next release |
 
 Placed by the owner (2026-11-20) as order 1d of `docs/tasks/plans/adr-0018-0025-steps.md`,
 before ADR 0024 O1; RL8 and RL9 do not hold O1 back. RL1–RL7 are done (2026-11-20); RL8 and RL9
