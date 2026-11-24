@@ -327,6 +327,11 @@ The steps were called A0–A9 until 2026-11-18, when the owner renamed them W0�
 crate (A-Q7) is therefore made by ADR 0025 X2, and W1 takes it into the view. **W0** (the
 region render on RAF, a fault today) is moved forward the same day: order 1b, before ADR 0024.
 
+**Moved by the owner on 2026-11-24:** W1–W9 to order 2d, after ADR 0031 RL9 and before ADR 0022
+(a change from the metadata work; renaming, copying, moving and export are not in use for now).
+W1 therefore makes the shared filter crate (A-Q7, ADR 0025 §2.9: "whichever comes first"), and
+ADR 0025 X2 uses it.
+
 ## 6. Not included
 
 - Saving any adjustment into the file, a sidecar or XMP; development settings of any kind.

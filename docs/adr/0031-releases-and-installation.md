@@ -150,7 +150,8 @@ program folder (ADR 0002 §2.5; T120 looks there before PATH).
 Placed by the owner (2026-11-20) as order 1d of `docs/tasks/plans/adr-0018-0025-steps.md`,
 before ADR 0024 O1; RL8 and RL9 do not hold O1 back. RL1–RL7 are done (2026-11-20); RL8 and RL9
 were moved by the owner on 2026-11-21 to order 2c of that plan, after ADR 0017's rest (U10b, U8,
-U13), so they are not lost.
+U13), so they are not lost. On 2026-11-24 the owner moved RL8 last in that plan (order 13), since
+a reputation takes time to build; RL9 stays at order 2c.
 
 ## 7. Not included
 
@@ -176,3 +177,4 @@ U13), so they are not lost.
 | 2 | 2026-11-20 | Accepted: the owner approved RL-Q1–RL-Q13 as proposed; ADR 0002 §4 gets the About window's line |
 | 3 | 2026-11-21 | When a later release is suggested: a rule in `docs/tasks/README.md` (the reviewer raises it when `Unreleased` is not empty and an ADR or a step order is finished), approved by the owner |
 | 4 | 2026-11-22 | §3.6: the signing services' terms checked (RL8); RL8 waits until RawStride has a reputation (owner) |
+| 5 | 2026-11-24 | RL8 moved last in the step plan (order 13), as a reputation takes time (owner) |
