@@ -3,8 +3,8 @@
 A fast and lightweight photo culling and ingest program for Windows: copy the photos off the card,
 step through them quickly, rate and label them, and add IPTC metadata.
 
-> **Status: in development; latest pre-release `0.4.0` (2026-11-24), a portable zip for Windows on
-> the [Releases page](https://github.com/Bokehlicious/RawStride/releases).** The program
+> **Status: in development; latest pre-release `0.5.0` (2026-11-24), an installer and a portable
+> zip for Windows on the [Releases page](https://github.com/Bokehlicious/RawStride/releases).** The program
 > (`rawstride.exe`, built from the crate `pw-loupe`; eframe + egui) has the loupe and preview, the
 > contact sheet, folder tabs, the import dialog, ratings and labels, filter and multi-selection, TIFF
 > viewing, colour management and the metadata window. See [Planned](#planned) for what is not
@@ -68,18 +68,23 @@ Ideas and wishes are welcome as [issues](https://github.com/Bokehlicious/RawStri
 
 Testers are welcome, especially with cameras and file types other than the ones above.
 
-1. Download `RawStride-<version>-windows-x64.zip` from the
+1. Download one of the two from the
    [Releases page](https://github.com/Bokehlicious/RawStride/releases) (Windows 10 or 11, x64;
-   nothing else to install, ExifTool is included).
-2. Unpack it anywhere and start `rawstride.exe`. The program is not signed yet, so Windows
-   SmartScreen warns the first time: choose "More info", then "Run anyway".
+   nothing else to install, ExifTool is included):
+   - `RawStride-<version>-windows-x64.msi`, the installer: run it, and RawStride is in the Start
+     menu. It installs for you only and needs no administrator rights.
+   - `RawStride-<version>-windows-x64.zip`, the portable version: unpack it anywhere and start
+     `rawstride.exe`.
+2. Neither is signed yet, so Windows SmartScreen warns the first time: choose "More info", then
+   "Run anyway".
 3. **Try it on copies of your photos first.** RawStride writes ratings, labels and metadata (into
    XMP sidecars for RAW files, into DNG, JPEG and TIFF files themselves), and this is a first
    pre-release.
 
 Found a bug, or a file that does not open? [Open an issue](https://github.com/Bokehlicious/RawStride/issues/new/choose);
-the form asks for what helps. Ideas are welcome the same way. To remove RawStride, delete its
-folder and `%LOCALAPPDATA%\RawStride`.
+the form asks for what helps. Ideas are welcome the same way. To remove RawStride, uninstall it in
+Installed apps (the installer) or delete its folder (the zip); your settings stay in
+`%LOCALAPPDATA%\RawStride` until you delete that folder too.
 
 ## Building
 

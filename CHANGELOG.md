@@ -9,6 +9,8 @@ Downloads are on the [Releases page](https://github.com/Bokehlicious/RawStride/r
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-24
+
 ### Added
 
 - Every release also has an installer, `RawStride-<version>-windows-x64.msi`: it installs
@@ -147,7 +149,8 @@ safely into DNG, JPEG and TIFF files. Folders open in tabs, with filters and mul
 selection; images can be moved, deleted to the Recycle Bin and opened in another program.
 ExifTool and the Microsoft Visual C++ runtime are included; the program is not signed yet.
 
-[Unreleased]: https://github.com/Bokehlicious/RawStride/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/Bokehlicious/RawStride/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/Bokehlicious/RawStride/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/Bokehlicious/RawStride/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/Bokehlicious/RawStride/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/Bokehlicious/RawStride/compare/v0.1.0...v0.2.0
