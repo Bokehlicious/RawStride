@@ -98,6 +98,8 @@ pub enum KeyAction {
     DeepShadows,
     FocusMarking,
     FineDetails,
+    Sharpening,
+    ResetAdjustments,
     Compare,
     HoldImage,
     SwapImages,
@@ -150,7 +152,7 @@ const fn with_alt(key: Key) -> Option<KeyChord> {
 
 impl KeyAction {
     /// Every action, in the order the Settings page lists them (T281) and `keys.txt` writes them.
-    pub const ALL: [KeyAction; 45] = [
+    pub const ALL: [KeyAction; 47] = [
         Self::OpenFolder,
         Self::ReloadFolder,
         Self::Import,
@@ -187,6 +189,8 @@ impl KeyAction {
         Self::DeepShadows,
         Self::FocusMarking,
         Self::FineDetails,
+        Self::Sharpening,
+        Self::ResetAdjustments,
         Self::Compare,
         Self::HoldImage,
         Self::SwapImages,
@@ -242,6 +246,8 @@ impl KeyAction {
             Self::DeepShadows => "deep_shadows",
             Self::FocusMarking => "focus_marking",
             Self::FineDetails => "fine_details",
+            Self::Sharpening => "sharpening",
+            Self::ResetAdjustments => "reset_adjustments",
             Self::Compare => "compare",
             Self::HoldImage => "hold_image",
             Self::SwapImages => "swap_images",
@@ -293,6 +299,8 @@ impl KeyAction {
             | Self::DeepShadows
             | Self::FocusMarking
             | Self::FineDetails
+            | Self::Sharpening
+            | Self::ResetAdjustments
             | Self::Compare
             | Self::HoldImage
             | Self::SwapImages
@@ -320,6 +328,8 @@ impl KeyAction {
             | Self::DeepShadows
             | Self::FocusMarking
             | Self::FineDetails
+            | Self::Sharpening
+            | Self::ResetAdjustments
             | Self::Compare
             | Self::HoldImage
             | Self::SwapImages
@@ -370,6 +380,8 @@ impl KeyAction {
             Self::DeepShadows => [with_shift(Key::J), None],
             Self::FocusMarking => [plain(Key::E), None],
             Self::FineDetails => [plain(Key::D), None],
+            Self::Sharpening => [plain(Key::U), None],
+            Self::ResetAdjustments => [plain(Key::Backspace), None],
             Self::Compare => [plain(Key::C), None],
             Self::HoldImage => [plain(Key::K), None],
             Self::SwapImages => [with_shift(Key::K), None],
@@ -424,6 +436,8 @@ impl KeyAction {
             Command::ClipShadows => Self::DeepShadows,
             Command::FocusMarking => Self::FocusMarking,
             Command::FineDetails => Self::FineDetails,
+            Command::Sharpening => Self::Sharpening,
+            Command::ResetAdjustments => Self::ResetAdjustments,
             Command::Compare => Self::Compare,
             Command::HoldImage => Self::HoldImage,
             Command::SwapImages => Self::SwapImages,
@@ -475,6 +489,8 @@ impl KeyAction {
             Self::DeepShadows => Command::ClipShadows,
             Self::FocusMarking => Command::FocusMarking,
             Self::FineDetails => Command::FineDetails,
+            Self::Sharpening => Command::Sharpening,
+            Self::ResetAdjustments => Command::ResetAdjustments,
             Self::Compare => Command::Compare,
             Self::HoldImage => Command::HoldImage,
             Self::SwapImages => Command::SwapImages,
@@ -1131,6 +1147,8 @@ mod tests {
                 PreviewKey::ClipShadows => Action(A::DeepShadows),
                 PreviewKey::FocusMarking => Action(A::FocusMarking),
                 PreviewKey::FineDetails => Action(A::FineDetails),
+                PreviewKey::Sharpening => Action(A::Sharpening),
+                PreviewKey::ResetAdjustments => Action(A::ResetAdjustments),
                 PreviewKey::Compare => Action(A::Compare),
                 PreviewKey::HoldImage => Action(A::HoldImage),
                 PreviewKey::SwapImages => Action(A::SwapImages),
@@ -1788,5 +1806,47 @@ mod tests {
             KeyAction::of_command(Command::FineDetails),
             Some(KeyAction::FineDetails)
         );
+    }
+
+    /// U is sharpening's key and Backspace the reset's (T318): View group, acting in the preview,
+    /// right after fine details in that order, and the only actions on their keys.
+    #[test]
+    fn sharpening_is_u_and_reset_adjustments_backspace_right_after_fine_details() {
+        let map = KeyMap::default();
+        for (action, name, default, command) in [
+            (
+                KeyAction::Sharpening,
+                "sharpening",
+                Key::U,
+                Command::Sharpening,
+            ),
+            (
+                KeyAction::ResetAdjustments,
+                "reset_adjustments",
+                Key::Backspace,
+                Command::ResetAdjustments,
+            ),
+        ] {
+            assert_eq!(action.name(), name);
+            assert_eq!(action.group(), KeyGroup::View, "{action:?}");
+            assert_eq!(action.acts_in(), KeyView::Preview, "{action:?}");
+            assert_eq!(action.default_keys(), [Some(key(default)), None]);
+            assert_eq!(map.first_key(action), Some(key(default)));
+            assert_eq!(map.action_of(key(default), KeyView::Preview), Some(action));
+            assert_eq!(map.action_of(key(default), KeyView::Sheet), None);
+            let on_key: Vec<KeyAction> = KeyAction::ALL
+                .into_iter()
+                .filter(|other| other.default_keys().contains(&Some(key(default))))
+                .collect();
+            assert_eq!(on_key, vec![action], "{action:?}");
+            assert_eq!(action.command(), Some(command));
+            assert_eq!(KeyAction::of_command(command), Some(action));
+        }
+        let place = KeyAction::ALL
+            .iter()
+            .position(|other| *other == KeyAction::FineDetails)
+            .unwrap();
+        assert_eq!(KeyAction::ALL[place + 1], KeyAction::Sharpening);
+        assert_eq!(KeyAction::ALL[place + 2], KeyAction::ResetAdjustments);
     }
 }

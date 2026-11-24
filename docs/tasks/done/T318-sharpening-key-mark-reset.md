@@ -1,4 +1,4 @@
-# T318. ADR 0027 W3: the key, the menu item and the mark of sharpening, and the reset — Open
+# T318. ADR 0027 W3: the key, the menu item and the mark of sharpening, and the reset — Done
 
 - **Why:** ADR 0027 §2.1, §3.3, W3-Q5, W3-Q6 and W3-Q8 (answered by the owner 2026-11-24, ADR
   0027 §4.3). T316 gave the view core sharpening (`ViewCore::set_sharpening`, `Frame::sharpen`)
@@ -138,3 +138,5 @@
 | 2026-11-24 | Blocked | Cold read: the existing test `the_adjustment_marks_follow_fine_details` named as updated; `ImageAreaShown::sharpening` added for the values; the constructor, `key_map_action`'s list and `command_checked` named; the reset as `reset_adjustments()` and `any_adjustment_on()` (keys do not check `command_enabled`); `group()` and `acts_in()` both named, `ALL` 45 → 47; the View menu test's range to +13; no change to `paint_adjustment_marks`; the radius format and the imports named; a `keys.txt` with U or Backspace on another action is accepted as for D. U and Backspace checked free and not fixed. Waits for T317 and the chain review |
 | 2026-11-24 | Blocked | Chain review: `Waiting` gets a hover text of its own ("the view is being made again"), since T316 now gives `Waiting` also while a sharpened view is still drawn after turning off; holding U accepted as for D. Waits for T317 |
 | 2026-11-24 | Open | T317 Done; set Open |
+| 2026-11-24 | Ready for review | Points 1–5 done in the named files. Besides the tests the task names, the two existing lists of every menu item's text and key (`shell_text.rs`, `every_menu_item_text_in_menu_order`, `every_menu_key_text_in_menu_order`) gained the two new items in place, as T314 did for D (nothing removed). Five new tests (keymap, lib, shell, shell_text, preview_text). `.\tools\check.ps1` all OK: 2670 passed, 81 ignored, 0 failed, no clippy warnings |
+| 2026-11-24 | Done | Reviewed and approved by the owner. Leftovers: a `keys.txt` with U or Backspace on another action and holding U in `known-limits.md` (Sharpening) and the first in `CHANGELOG.md` (one line with T317's); the owner's `latency.ps1` with sharpening on, the CPU or GPU decision and the hand check, which sets the defaults, in W3's row of `plans/`. Hand check follows |

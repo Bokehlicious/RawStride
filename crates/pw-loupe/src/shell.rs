@@ -789,6 +789,13 @@ pub enum Command {
     /// rendering (View ▸ Show Fine Details, D; ADR 0027 §3.1, W2-Q4, T314). Not a setting: it
     /// lasts for the session.
     FineDetails,
+    /// Sharpening on ↔ off: an unsharp mask on the view, with the values of the page Preview
+    /// (View ▸ Show Sharpening, U; ADR 0027 §3.3, W3-Q5, T318). Not a setting: it lasts for the
+    /// session.
+    Sharpening,
+    /// Every adjustment of the preview turned off (View ▸ Reset Adjustments, Backspace; ADR 0027
+    /// A-Q3, W3-Q8, T318). It changes no setting.
+    ResetAdjustments,
     /// The compare open ↔ closed: two images in the preview, the held image beside or above the
     /// current one (View ▸ Compare, C; ADR 0017 §2.2, U6-Q4, U6-Q11, T153).
     Compare,
@@ -856,6 +863,8 @@ impl Command {
             | Self::ClipShadows
             | Self::FocusMarking
             | Self::FineDetails
+            | Self::Sharpening
+            | Self::ResetAdjustments
             | Self::Compare
             | Self::HoldImage
             | Self::SwapImages
@@ -1059,6 +1068,8 @@ pub const MENUS: &[Menu] = &[
             item(Command::ClipShadows, shift(Key::J)),
             item(Command::FocusMarking, plain(Key::E)),
             item(Command::FineDetails, plain(Key::D)),
+            item(Command::Sharpening, plain(Key::U)),
+            item(Command::ResetAdjustments, plain(Key::Backspace)),
             item(Command::Compare, plain(Key::C)),
             item(Command::HoldImage, plain(Key::K)),
             item(Command::SwapImages, shift(Key::K)),
@@ -2086,8 +2097,9 @@ mod tests {
             }
         }
         // In the View menu, right after the last zoom item, with Show Fine Details (D) right
-        // after Show Focus Marking (T314); then the compare's five in their order (Lock Zoom and
-        // Position after Above and Below, T154), before the next separator.
+        // after Show Focus Marking (T314) and Show Sharpening (U) and Reset Adjustments
+        // (Backspace) right after it (T318); then the compare's five in their order (Lock Zoom
+        // and Position after Above and Below, T154), before the next separator.
         let Some(view) = MENUS.iter().find(|menu| menu.kind == MenuKind::View) else {
             panic!("there is a View menu");
         };
@@ -2099,13 +2111,21 @@ mod tests {
             panic!("the View menu has Zoom at Pointer");
         };
         assert_eq!(
-            view.entries.get(anchor + 1..anchor + 11),
+            view.entries.get(anchor + 1..anchor + 13),
             Some(
                 &[
                     item(Command::ClipHighlights, Some(j)),
                     item(Command::ClipShadows, Some(shift_j)),
                     item(Command::FocusMarking, Some(KeyChord { key: Key::E, ..j })),
                     item(Command::FineDetails, Some(KeyChord { key: Key::D, ..j })),
+                    item(Command::Sharpening, Some(KeyChord { key: Key::U, ..j })),
+                    item(
+                        Command::ResetAdjustments,
+                        Some(KeyChord {
+                            key: Key::Backspace,
+                            ..j
+                        })
+                    ),
                     item(Command::Compare, Some(c)),
                     item(Command::HoldImage, Some(k)),
                     item(Command::SwapImages, Some(shift_k)),
@@ -2197,6 +2217,53 @@ mod tests {
         assert_eq!(
             view.entries.get(focus + 1),
             Some(&item(Command::FineDetails, Some(d)))
+        );
+    }
+
+    /// View ▸ Show Sharpening (U) and Reset Adjustments (Backspace) come right after Show Fine
+    /// Details, act in the preview, and no other item has their keys (ADR 0027 W3-Q5, W3-Q8,
+    /// T318).
+    #[test]
+    fn sharpening_and_reset_adjustments_come_right_after_show_fine_details() {
+        let u = KeyChord {
+            key: Key::U,
+            ctrl: false,
+            shift: false,
+            alt: false,
+        };
+        let backspace = KeyChord {
+            key: Key::Backspace,
+            ..u
+        };
+        assert_eq!(plain(Key::U), Some(u));
+        assert_eq!(plain(Key::Backspace), Some(backspace));
+        for item in &menu_items() {
+            match item.key.map(|chord| chord.key) {
+                Some(Key::U) => assert_eq!(item.command, Command::Sharpening),
+                Some(Key::Backspace) => assert_eq!(item.command, Command::ResetAdjustments),
+                _ => {}
+            }
+        }
+        assert_eq!(Command::Sharpening.acts_in(), Where::Loupe);
+        assert_eq!(Command::ResetAdjustments.acts_in(), Where::Loupe);
+        let Some(view) = MENUS.iter().find(|menu| menu.kind == MenuKind::View) else {
+            panic!("there is a View menu");
+        };
+        let Some(fine) = view
+            .entries
+            .iter()
+            .position(|entry| *entry == item(Command::FineDetails, plain(Key::D)))
+        else {
+            panic!("the View menu has Show Fine Details");
+        };
+        assert_eq!(
+            view.entries.get(fine + 1..fine + 3),
+            Some(
+                &[
+                    item(Command::Sharpening, Some(u)),
+                    item(Command::ResetAdjustments, Some(backspace)),
+                ][..]
+            )
         );
     }
 

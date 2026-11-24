@@ -506,6 +506,11 @@ pub enum PreviewKey {
     /// `D`: fine details (below 50 %, the RAW view made from the full-resolution rendering), on
     /// ↔ off (ADR 0027 §3.1, W2-Q4, T314).
     FineDetails,
+    /// `U`: sharpening (an unsharp mask on the view, for the session only), on ↔ off (ADR 0027
+    /// §3.3, W3-Q5, T318).
+    Sharpening,
+    /// `Backspace`: every adjustment of the preview turned off (ADR 0027 A-Q3, W3-Q8, T318).
+    ResetAdjustments,
     /// `C`: the compare open ↔ closed (ADR 0017 §2.2, U6-Q4, U6-Q11, T153).
     Compare,
     /// `K`: the current image becomes the held image of the compare (U6-Q6).
@@ -541,6 +546,8 @@ pub fn preview_key_action(
         (K::J, false, true, false) => Some(PreviewKey::ClipShadows),
         (K::E, false, false, false) => Some(PreviewKey::FocusMarking),
         (K::D, false, false, false) => Some(PreviewKey::FineDetails),
+        (K::U, false, false, false) => Some(PreviewKey::Sharpening),
+        (K::Backspace, false, false, false) => Some(PreviewKey::ResetAdjustments),
         // The compare's keys (T153); K and Shift+K are told apart as J and Shift+J.
         (K::C, false, false, false) => Some(PreviewKey::Compare),
         (K::K, false, false, false) => Some(PreviewKey::HoldImage),
@@ -1212,6 +1219,10 @@ mod tests {
                     Some(PreviewKey::ClipShadows) => return Some(Command::ClipShadows),
                     Some(PreviewKey::FocusMarking) => return Some(Command::FocusMarking),
                     Some(PreviewKey::FineDetails) => return Some(Command::FineDetails),
+                    Some(PreviewKey::Sharpening) => return Some(Command::Sharpening),
+                    Some(PreviewKey::ResetAdjustments) => {
+                        return Some(Command::ResetAdjustments);
+                    }
                     Some(PreviewKey::Compare) => return Some(Command::Compare),
                     Some(PreviewKey::HoldImage) => return Some(Command::HoldImage),
                     Some(PreviewKey::SwapImages) => return Some(Command::SwapImages),
@@ -1833,6 +1844,65 @@ mod tests {
                 Some(Command::FineDetails),
                 "ctrl {ctrl} shift {shift} alt {alt}"
             );
+        }
+    }
+
+    /// U is the preview's sharpening key and Backspace its reset of the adjustments (ADR 0027
+    /// W3-Q5, W3-Q8, T318): only with no modifier, the commands Show Sharpening and Reset
+    /// Adjustments, nothing in the contact sheet.
+    #[test]
+    fn u_is_sharpening_and_backspace_the_reset_of_the_preview() {
+        use egui::Key as K;
+        for (key, preview_key, command) in [
+            (K::U, PreviewKey::Sharpening, Command::Sharpening),
+            (
+                K::Backspace,
+                PreviewKey::ResetAdjustments,
+                Command::ResetAdjustments,
+            ),
+        ] {
+            assert_eq!(
+                preview_key_action(key, false, false, false),
+                Some(preview_key)
+            );
+            let chord = KeyChord {
+                key,
+                ctrl: false,
+                shift: false,
+                alt: false,
+            };
+            assert_eq!(command_of_key(chord, ViewMode::Loupe), Some(command));
+            assert_eq!(command_of_key(chord, ViewMode::Grid), None);
+            assert!(
+                shell::menu_items()
+                    .iter()
+                    .any(|item| item.command == command && item.key == Some(chord))
+            );
+        }
+        // Ctrl+U, Shift+U, Alt+U and Ctrl+Backspace are neither the preview's keys nor the
+        // commands.
+        for (key, ctrl, shift, alt) in [
+            (K::U, true, false, false),
+            (K::U, false, true, false),
+            (K::U, false, false, true),
+            (K::Backspace, true, false, false),
+        ] {
+            assert_eq!(
+                preview_key_action(key, ctrl, shift, alt),
+                None,
+                "{key:?} ctrl {ctrl} shift {shift} alt {alt}"
+            );
+            let chord = KeyChord {
+                key,
+                ctrl,
+                shift,
+                alt,
+            };
+            for view in [ViewMode::Loupe, ViewMode::Grid] {
+                let command = command_of_key(chord, view);
+                assert_ne!(command, Some(Command::Sharpening), "{chord:?}");
+                assert_ne!(command, Some(Command::ResetAdjustments), "{chord:?}");
+            }
         }
     }
 

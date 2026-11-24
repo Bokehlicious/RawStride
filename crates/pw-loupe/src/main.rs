@@ -1363,6 +1363,9 @@ struct Loupe {
     /// Fine details is on (`D`, View ▸ Show Fine Details; ADR 0027 §3.1, W2-Q4, T314): off at
     /// start and not a setting, so it lasts for the session.
     fine_details: bool,
+    /// Sharpening is on (`U`, View ▸ Show Sharpening; ADR 0027 §3.3, W3-Q5, T318): off at start
+    /// and not a setting, so it lasts for the session; its values are the settings'.
+    sharpening: bool,
     /// The inspector's Exif reader and summary (ADR 0017 §2.1, T110).
     exif_reader: ExifReader,
     exif: ExifInspector,
@@ -5842,6 +5845,8 @@ impl Loupe {
             | A::DeepShadows
             | A::FocusMarking
             | A::FineDetails
+            | A::Sharpening
+            | A::ResetAdjustments
             | A::Compare
             | A::HoldImage
             | A::SwapImages
@@ -5856,6 +5861,8 @@ impl Loupe {
                         A::DeepShadows => self.toggle_clip_shadows(),
                         A::FocusMarking => self.toggle_focus_marking(),
                         A::FineDetails => self.toggle_fine_details(),
+                        A::Sharpening => self.toggle_sharpening(),
+                        A::ResetAdjustments => self.reset_adjustments(),
                         A::Compare => self.toggle_compare(),
                         A::HoldImage => self.hold_current_image(),
                         A::SwapImages => self.swap_images(),
@@ -6136,6 +6143,26 @@ impl Loupe {
         self.fine_details = !self.fine_details;
     }
 
+    /// `U` and View ▸ Show Sharpening: the view sharpened with the values of the page Preview,
+    /// on ↔ off (ADR 0027 §3.3, W3-Q5, T318). Not a setting: it lasts for the session.
+    fn toggle_sharpening(&mut self) {
+        self.sharpening = !self.sharpening;
+    }
+
+    /// `Backspace` and View ▸ Reset Adjustments: every adjustment of the preview off (ADR 0027
+    /// A-Q3, W3-Q8, T318); the view cores follow on the next frame through the `wish_`
+    /// functions. It changes no setting. W5 and W6 add their adjustments here and in
+    /// [`Self::any_adjustment_on`].
+    fn reset_adjustments(&mut self) {
+        self.fine_details = false;
+        self.sharpening = false;
+    }
+
+    /// Whether any adjustment of the preview is on, which Reset Adjustments turns off (W3-Q8).
+    fn any_adjustment_on(&self) -> bool {
+        self.fine_details || self.sharpening
+    }
+
     /// View ▸ Buttons on Thumbnails: the four buttons on a thumbnail in the contact sheet, on ↔
     /// off (ADR 0017 §2.8, U15-Q7, T245). The settings file is written when the program closes.
     fn toggle_thumbnail_buttons(&mut self) {
@@ -6172,6 +6199,18 @@ impl Loupe {
         self.core.set_fine_details(wanted);
         self.second_core
             .set_fine_details(wanted && self.compare.is_some());
+    }
+
+    /// Tells the view cores the sharpening (ADR 0027 W3-Q5, T318): the first gets the saved
+    /// values exactly when the preview is shown and sharpening is on, the second when the compare
+    /// is open as well; otherwise `None`. Called every frame, so values saved on the page Preview
+    /// apply at once.
+    fn wish_sharpening(&self) {
+        let wanted =
+            (self.in_preview() && self.sharpening).then_some(self.settings.shell.sharpening);
+        self.core.set_sharpening(wanted);
+        self.second_core
+            .set_sharpening(wanted.filter(|_| self.compare.is_some()));
     }
 
     /// The indexes the compare would open with, `(held, current)` (U6-Q4, T151's
@@ -8115,6 +8154,8 @@ impl Loupe {
             Command::HoldImage | Command::SwapImages | Command::AboveBelow | Command::LockZoom => {
                 self.compare.is_some()
             }
+            // Greyed while no adjustment is on (ADR 0027 W3-Q8, T318); its key does not ask.
+            Command::ResetAdjustments => self.any_adjustment_on(),
             // Greyed without a folder and while files are moved or deleted (ADR 0026 F1, T242):
             // a reload then could list a file on its way.
             Command::ReloadFolder => reload_enabled(tab, self.moves.busy() || self.delete.busy()),
@@ -8138,6 +8179,8 @@ impl Loupe {
             Command::ClipShadows => Some(shell.clip_shadows),
             Command::FocusMarking => Some(shell.focus_marking),
             Command::FineDetails => Some(self.fine_details),
+            Command::Sharpening => Some(self.sharpening),
+            Command::ResetAdjustments => None,
             Command::MoveToSubfolders => Some(shell.move_to_subfolders),
             Command::AboveBelow => Some(shell.compare_above_below),
             Command::LockZoom => Some(shell.compare_locked),
@@ -8210,6 +8253,8 @@ impl Loupe {
             Command::ClipShadows => self.toggle_clip_shadows(),
             Command::FocusMarking => self.toggle_focus_marking(),
             Command::FineDetails => self.toggle_fine_details(),
+            Command::Sharpening => self.toggle_sharpening(),
+            Command::ResetAdjustments => self.reset_adjustments(),
             Command::Compare => self.toggle_compare(),
             Command::HoldImage => self.hold_current_image(),
             Command::SwapImages => self.swap_images(),
@@ -9298,6 +9343,8 @@ impl Loupe {
         self.wish_focus_map();
         // Fine details likewise, with it on (T314).
         self.wish_fine_details();
+        // Sharpening likewise, with it on (T318).
+        self.wish_sharpening();
         // The preview opened or closed by a key this frame (T111): the next frame draws the new
         // layout, and the contact sheet scrolls to the last shown image there.
         let mode_after = self.tabs.active().map(|tab| tab.mode);
@@ -9385,6 +9432,8 @@ impl Loupe {
             total,
             mode_key: self.key_map.first_key(KeyAction::RawJpeg),
             fine_key: self.key_map.first_key(KeyAction::FineDetails),
+            sharpen_key: self.key_map.first_key(KeyAction::Sharpening),
+            sharpening: self.settings.shell.sharpening,
         };
         // While comparing, the image area is two halves (U6-Q5, T153): the held image left or on
         // top from the second view core, the current image right or below from the first.
@@ -9563,6 +9612,10 @@ struct ImageAreaShown<'a> {
     mode_key: Option<KeyChord>,
     /// The key map's key of fine details, for the hover text of its mark (T314).
     fine_key: Option<KeyChord>,
+    /// The key map's key of sharpening, for the hover text of its mark (T318).
+    sharpen_key: Option<KeyChord>,
+    /// Sharpening's saved values, for the hover text of its mark (T318).
+    sharpening: Sharpening,
 }
 
 /// The pointer's place in the image area in view pixels, which a zoom goes around; `None` (the
@@ -9683,10 +9736,17 @@ fn draw_image_area(
         }
         _ => clip_overlay.release(),
     }
-    // The row of adjustment marks at the bottom right (ADR 0027 §2.1, W2-Q5, T314), from this
-    // frame's state, only while an image is drawn; the rating badge is at the bottom left.
+    // The row of adjustment marks at the bottom right (ADR 0027 §2.1, W2-Q5, T314; W3-Q6,
+    // T318), from this frame's state, only while an image is drawn; the rating badge is at the
+    // bottom left.
     if frame.draw.is_some() {
-        let marks = adjustment_marks(&frame.fine, shown.fine_key);
+        let marks = adjustment_marks(
+            &frame.fine,
+            shown.fine_key,
+            &frame.sharpen,
+            shown.sharpen_key,
+            shown.sharpening,
+        );
         paint_adjustment_marks(&painter, rect, &marks, &response);
     }
     // The rating badge is always shown (T110).
@@ -13256,6 +13316,7 @@ fn run(options: Options) -> Result<(), String> {
                 textures: Textures::new(),
                 anchor_at_pointer: true,
                 fine_details: false,
+                sharpening: false,
                 exif_reader: ExifReader::start(),
                 exif: ExifInspector::default(),
                 histogram_reader: HistogramReader::start(backend, histogram_reads),

@@ -325,3 +325,4 @@ was when the task was done, so "this file", "below" and "the Log" in T1–T115 m
 | [T319](T319-sharpening-speed.md) | ADR 0027 W3: the sharpening's two blur passes made faster (pw-viewcore) |
 | [T316](T316-sharpening-in-the-core.md) | ADR 0027 W3: sharpening in the view core (pw-viewcore) |
 | [T317](T317-sharpening-settings-page.md) | ADR 0027 W3: the Settings page Preview and the sharpening values (pw-loupe) |
+| [T318](T318-sharpening-key-mark-reset.md) | ADR 0027 W3: the key, the menu item and the mark of sharpening, and the reset (pw-loupe) |

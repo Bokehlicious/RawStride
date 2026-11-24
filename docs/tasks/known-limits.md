@@ -555,6 +555,10 @@ only if it is seen in use.)
   shown when a view of the other sharpening is drawn (a neighbour prefetched before sharpening was
   turned on), so that step's latency is measured too short. For `latency.ps1` after T318, U is
   pressed and the neighbours' prefetch redone before a series starts (`plans/`, W3's row).
+- *A `keys.txt` from 0.5.0 with U or Backspace on another action* (T318, accepted as for D):
+  that line is lost on loading (the key map's rule for a taken key); written in `CHANGELOG.md`.
+- *Holding U* (T318, accepted as for D): sharpening toggles at the key-repeat rate, and each
+  toggle plans new views.
 
 ## LibRaw (`pw-libraw`)
 

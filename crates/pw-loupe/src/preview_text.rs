@@ -4,9 +4,9 @@
 //! (`inspector_text.rs`), the title line is the loupe's status line (`lib.rs`). The texts of the
 //! Histogram section (ADR 0017 §2.6, U7, T142) are here too; the inspector shows the same section
 //! with the same texts. The texts of the Clipping section (U7b, T148) are here as well, and the
-//! marks of the preview's row of adjustment marks (ADR 0027 W2-Q5, T314).
+//! marks of the preview's row of adjustment marks (ADR 0027 W2-Q5, T314; W3-Q6, T318).
 
-use pw_viewcore::{ClippingState, FinePause, FineState, Zoom};
+use pw_viewcore::{ClippingState, FinePause, FineState, SharpenState, Sharpening, Zoom};
 
 use crate::shell::KeyChord;
 use crate::shell_text::key_text;
@@ -198,14 +198,28 @@ pub struct AdjustmentMark {
     pub hover: String,
 }
 
-/// The marks of the row for fine details' state `fine` (ADR 0027 §3.1, W2-Q5, T314): none while
-/// it is off; otherwise one mark "Fine", dimmed while paused. `key` is the key map's key of fine
-/// details, shown in the hover text, which has no "(key)" when the action has no key. A later
-/// adjustment (USM, W3) adds its own mark to the same list.
-pub fn adjustment_marks(fine: &FineState, key: Option<KeyChord>) -> Vec<AdjustmentMark> {
+/// The marks of the row (ADR 0027 §2.1): "Fine" for fine details' state `fine` (§3.1, W2-Q5,
+/// T314), then "USM" for sharpening's state `sharpen` (§3.3, W3-Q6, T318); none for an adjustment
+/// that is off, dimmed while it is paused. `fine_key` and `sharpen_key` are the key map's keys of
+/// the two, shown in the hover texts, which have no "(key)" when the action has no key; `values`
+/// are sharpening's values, shown in its hover text while its view is shown.
+pub fn adjustment_marks(
+    fine: &FineState,
+    fine_key: Option<KeyChord>,
+    sharpen: &SharpenState,
+    sharpen_key: Option<KeyChord>,
+    values: Sharpening,
+) -> Vec<AdjustmentMark> {
     let mut marks = Vec::new();
+    marks.extend(fine_mark(fine, fine_key));
+    marks.extend(sharpen_mark(sharpen, sharpen_key, values));
+    marks
+}
+
+/// Fine details' mark "Fine", or `None` while it is off.
+fn fine_mark(fine: &FineState, key: Option<KeyChord>) -> Option<AdjustmentMark> {
     let (dimmed, hover) = match (fine, key) {
-        (FineState::Off, _) => return marks,
+        (FineState::Off, _) => return None,
         (FineState::Waiting | FineState::Shown, Some(chord)) => {
             let key = key_text(chord);
             (
@@ -255,12 +269,81 @@ pub fn adjustment_marks(fine: &FineState, key: Option<KeyChord>) -> Vec<Adjustme
             "Fine details could not be applied to this image.".to_owned(),
         ),
     };
-    marks.push(AdjustmentMark {
+    Some(AdjustmentMark {
         text: "Fine".to_owned(),
         dimmed,
         hover,
-    });
-    marks
+    })
+}
+
+/// Sharpening's mark "USM", or `None` while it is off. The radius is written in pixels with one
+/// decimal, for example 6 tenths as "0.6".
+fn sharpen_mark(
+    sharpen: &SharpenState,
+    key: Option<KeyChord>,
+    values: Sharpening,
+) -> Option<AdjustmentMark> {
+    let (dimmed, hover) = match (sharpen, key) {
+        (SharpenState::Off, _) => return None,
+        (SharpenState::Shown, Some(chord)) => {
+            let key = key_text(chord);
+            let Sharpening {
+                amount,
+                radius_tenths,
+                threshold,
+            } = values;
+            let (whole, tenth) = (radius_tenths / 10, radius_tenths % 10);
+            (
+                false,
+                format!(
+                    "Sharpening ({key}): amount {amount}%, radius {whole}.{tenth} px, threshold \
+                     {threshold}."
+                ),
+            )
+        }
+        (SharpenState::Shown, None) => {
+            let Sharpening {
+                amount,
+                radius_tenths,
+                threshold,
+            } = values;
+            let (whole, tenth) = (radius_tenths / 10, radius_tenths % 10);
+            (
+                false,
+                format!(
+                    "Sharpening: amount {amount}%, radius {whole}.{tenth} px, threshold \
+                     {threshold}."
+                ),
+            )
+        }
+        (SharpenState::Waiting, Some(chord)) => {
+            let key = key_text(chord);
+            (
+                false,
+                format!("Sharpening ({key}): the view is being made again."),
+            )
+        }
+        (SharpenState::Waiting, None) => (
+            false,
+            "Sharpening: the view is being made again.".to_owned(),
+        ),
+        (SharpenState::Paused, Some(chord)) => {
+            let key = key_text(chord);
+            (
+                true,
+                format!("Sharpening ({key}) is paused: it applies only below 100%."),
+            )
+        }
+        (SharpenState::Paused, None) => (
+            true,
+            "Sharpening is paused: it applies only below 100%.".to_owned(),
+        ),
+    };
+    Some(AdjustmentMark {
+        text: "USM".to_owned(),
+        dimmed,
+        hover,
+    })
 }
 
 #[cfg(test)]
@@ -470,8 +553,11 @@ mod tests {
             shift: false,
             alt: false,
         };
+        let usm_off = (SharpenState::Off, None, Sharpening::DEFAULT);
         for key in [Some(d), None] {
-            assert!(adjustment_marks(&FineState::Off, key).is_empty());
+            assert!(
+                adjustment_marks(&FineState::Off, key, &usm_off.0, usm_off.1, usm_off.2).is_empty()
+            );
         }
         let on_d = "Fine details (D): below 50%, the RAW view is made from the full-resolution \
                     rendering.";
@@ -502,7 +588,7 @@ mod tests {
         for (state, dimmed, with_key, without_key) in cases {
             for (key, hover) in [(Some(d), with_key), (None, without_key)] {
                 assert_eq!(
-                    adjustment_marks(&state, key),
+                    adjustment_marks(&state, key, &usm_off.0, usm_off.1, usm_off.2),
                     vec![AdjustmentMark {
                         text: "Fine".to_owned(),
                         dimmed,
@@ -518,5 +604,115 @@ mod tests {
             map.first_key(crate::keymap::KeyAction::FineDetails),
             Some(d)
         );
+    }
+
+    /// The row's mark "USM" for each state of sharpening, with U and with no key, with the
+    /// default values and with others, alone and after "Fine" (ADR 0027 W3-Q6, T318).
+    #[test]
+    fn the_adjustment_marks_follow_sharpening() {
+        let u = KeyChord {
+            key: egui::Key::U,
+            ctrl: false,
+            shift: false,
+            alt: false,
+        };
+        let others = Sharpening {
+            amount: 150,
+            radius_tenths: 13,
+            threshold: 7,
+        };
+        // Both off: no mark.
+        for key in [Some(u), None] {
+            for values in [Sharpening::DEFAULT, others] {
+                assert!(
+                    adjustment_marks(&FineState::Off, None, &SharpenState::Off, key, values)
+                        .is_empty()
+                );
+            }
+        }
+        let usm = |dimmed: bool, hover: &str| AdjustmentMark {
+            text: "USM".to_owned(),
+            dimmed,
+            hover: hover.to_owned(),
+        };
+        let cases = [
+            (
+                SharpenState::Shown,
+                Sharpening::DEFAULT,
+                false,
+                "Sharpening (U): amount 60%, radius 0.6 px, threshold 2.",
+                "Sharpening: amount 60%, radius 0.6 px, threshold 2.",
+            ),
+            (
+                SharpenState::Shown,
+                others,
+                false,
+                "Sharpening (U): amount 150%, radius 1.3 px, threshold 7.",
+                "Sharpening: amount 150%, radius 1.3 px, threshold 7.",
+            ),
+            (
+                SharpenState::Waiting,
+                Sharpening::DEFAULT,
+                false,
+                "Sharpening (U): the view is being made again.",
+                "Sharpening: the view is being made again.",
+            ),
+            (
+                SharpenState::Waiting,
+                others,
+                false,
+                "Sharpening (U): the view is being made again.",
+                "Sharpening: the view is being made again.",
+            ),
+            (
+                SharpenState::Paused,
+                Sharpening::DEFAULT,
+                true,
+                "Sharpening (U) is paused: it applies only below 100%.",
+                "Sharpening is paused: it applies only below 100%.",
+            ),
+            (
+                SharpenState::Paused,
+                others,
+                true,
+                "Sharpening (U) is paused: it applies only below 100%.",
+                "Sharpening is paused: it applies only below 100%.",
+            ),
+        ];
+        for (state, values, dimmed, with_key, without_key) in cases {
+            for (key, hover) in [(Some(u), with_key), (None, without_key)] {
+                // Fine details off: "USM" alone.
+                assert_eq!(
+                    adjustment_marks(&FineState::Off, None, &state, key, values),
+                    vec![usm(dimmed, hover)],
+                    "{state:?} {key:?} {values:?}"
+                );
+            }
+        }
+        // Both on: "Fine" and then "USM".
+        let marks = adjustment_marks(
+            &FineState::Shown,
+            None,
+            &SharpenState::Shown,
+            Some(u),
+            Sharpening::DEFAULT,
+        );
+        assert_eq!(
+            marks
+                .iter()
+                .map(|mark| mark.text.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Fine", "USM"]
+        );
+        assert_eq!(
+            marks.get(1),
+            Some(&usm(
+                false,
+                "Sharpening (U): amount 60%, radius 0.6 px, threshold 2."
+            ))
+        );
+        // The default key map's key is U.
+        let map = crate::keymap::KeyMap::default();
+        assert_eq!(map.first_key(crate::keymap::KeyAction::Sharpening), Some(u));
     }
 }

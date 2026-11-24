@@ -602,6 +602,8 @@ pub fn command_text(command: Command) -> String {
         Command::ClipShadows => "Show Deep Shadows".to_owned(),
         Command::FocusMarking => "Show Focus Marking".to_owned(),
         Command::FineDetails => "Show Fine Details".to_owned(),
+        Command::Sharpening => "Show Sharpening".to_owned(),
+        Command::ResetAdjustments => "Reset Adjustments".to_owned(),
         Command::Compare => "Compare".to_owned(),
         Command::HoldImage => "Hold Current Image".to_owned(),
         Command::SwapImages => "Swap Images".to_owned(),
@@ -771,6 +773,8 @@ mod tests {
                 "Show Deep Shadows",
                 "Show Focus Marking",
                 "Show Fine Details",
+                "Show Sharpening",
+                "Reset Adjustments",
                 "Compare",
                 "Hold Current Image",
                 "Swap Images",
@@ -840,6 +844,8 @@ mod tests {
             Some("Shift+J"),
             Some("E"),
             Some("D"),
+            Some("U"),
+            Some("Backspace"),
             Some("C"),
             Some("K"),
             Some("Shift+K"),
@@ -984,6 +990,25 @@ mod tests {
             .and_then(|item| item.key)
             .map(key_text);
         assert_eq!(key.as_deref(), Some("D"));
+    }
+
+    /// Sharpening's menu item and the reset of the adjustments (ADR 0027 W3-Q5, W3-Q8, T318).
+    #[test]
+    fn the_sharpening_and_reset_adjustments_menu_items_and_their_keys() {
+        assert_eq!(command_text(Command::Sharpening), "Show Sharpening");
+        assert_eq!(command_text(Command::ResetAdjustments), "Reset Adjustments");
+        let key_of = |command| {
+            menu_items()
+                .into_iter()
+                .find(|item| item.command == command)
+                .and_then(|item| item.key)
+                .map(key_text)
+        };
+        assert_eq!(key_of(Command::Sharpening).as_deref(), Some("U"));
+        assert_eq!(
+            key_of(Command::ResetAdjustments).as_deref(),
+            Some("Backspace")
+        );
     }
 
     /// The compare's menu items (ADR 0017 U6-Q12, T153, T154).
