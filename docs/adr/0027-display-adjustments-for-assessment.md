@@ -337,6 +337,11 @@ from then on (no render repeated), and (d) a reduced view, which has no mipmaps,
 reduced by the GPU more than 2:1: below half its density the mipmapped half-size view serves,
 also during a gesture.
 
+W1-Q2's measurement (owner, 2026-11-24, after T309's hand check, approved): V1 and V4 hold
+with the filter. Next image at fit and at 100 %, median first change 5.4–5.6 ms; at about 7
+images/s every step within 70 ms but a series' first press, which a scripted run showed to be
+the method (0.4.0 and T309's build alike, 7.1–7.4 ms). No further step is needed.
+
 ## 5. Steps
 
 Each step ends with tests (GR11), the owner's hand check and, where an image is shown,
