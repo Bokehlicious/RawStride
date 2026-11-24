@@ -1,4 +1,4 @@
-# T310. ADR 0031 RL10: 0.x versions as regular releases in the release workflow (CI, docs) — Open
+# T310. ADR 0031 RL10: 0.x versions as regular releases in the release workflow (CI, docs) — Done
 
 - **Why:** ADR 0031 RL-Q14 (owner, 2026-11-24, amends RL-Q2 and §3.2): from `0.6.0` on, a `0.x`
   version is published as a regular release, not a pre-release, so the newest version is GitHub's
@@ -44,3 +44,5 @@
 | Date | Status | Note |
 |---|---|---|
 | 2026-11-24 | Open | Added (ADR 0031 RL10, RL-Q14). Cold read: doable with the named files; point 2 now names the exact words replaced and the re-wrap, and the "Not in this task" list names `README.md`'s two lines and `package-msi.ps1`'s unrelated "pre-release suffix" |
+| 2026-11-24 | Ready for review | `release.yml`: the `--prerelease` comment and `if` block replaced by the one comment line; `docs/distribution.md` points 4 and 5 changed as written. `.\tools\check.ps1` all OK; no tests added (none asked) |
+| 2026-11-24 | Done | Review: the diff is exactly points 1 and 2, only the named files; `test-output.txt` newer than the change, all OK, no clippy warnings of the workspace's own. No `CHANGELOG.md` line (CI and documents only). Leftovers: `README.md`'s lines 6 and 82 and `v0.5.0` on GitHub are RL10's reviewer part (its row in `plans/adr-0018-0025-steps.md`); the next release's draft shows the workflow change (the same row) |

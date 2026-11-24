@@ -102,11 +102,12 @@ A release is built by CI on a pushed tag, not on a developer's machine (ADR 0031
    commit and pushed, on the owner's yes.
 4. The workflow `Release` checks that the tag is on `main` and names `pw-loupe`'s version, runs
    `tools/release-build.ps1 -Section <version>`, and creates a **draft** GitHub Release (a
-   pre-release while the version starts with `0.`) with the zip, the MSI, `SHA256SUMS.txt` and
+   regular release, also for `0.x`, ADR 0031 RL-Q14) with the zip, the MSI, `SHA256SUMS.txt` and
    the notes. The runner gets WiX 7.0.1 as a .NET tool first.
    If a release for the tag already exists the run fails; the draft is deleted and the run started
    again.
-5. The owner reads the draft and publishes it by hand.
+5. The owner reads the draft and publishes it by hand, with "Set as the latest release" ticked
+   (the default).
 
 **A test run:** Actions ▸ Release ▸ Run workflow, on any branch (GitHub offers the button only once
 the workflow is on the default branch), with the input `section` (`Unreleased` by default; a

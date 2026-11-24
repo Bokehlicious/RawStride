@@ -251,10 +251,7 @@ jobs:
           $zip = "RawStride-$version-windows-x64.zip"
           $msi = "RawStride-$version-windows-x64.msi"
           $arguments = @('release', 'create', $env:TAG_NAME, '--repo', $env:REPOSITORY, '--verify-tag', '--draft')
-          # A 0.x version is a pre-release (ADR 0031 section 3.2).
-          if ($version.StartsWith('0.')) {
-            $arguments += '--prerelease'
-          }
+          # Every version, 0.x included, is a regular release (ADR 0031 RL-Q14).
           $arguments += @('--title', "RawStride $version", '--notes-file', 'release-notes.md', $zip, $msi, 'SHA256SUMS.txt')
           gh @arguments
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
