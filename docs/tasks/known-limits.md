@@ -402,6 +402,18 @@ with ADR 0026 F3, in `plans/adr-0018-0025-steps.md`.)
   path is not valid Unicode or has spaces at an end is used while the program runs but is gone
   after a restart, without a notice. A file chosen in the open dialog has a full path, so this is
   rare.
+- *A change for this import names the import's file, not the one loaded* (T298's review,
+  2026-11-24; **kept** at the sort after T297 and T298, 2026-11-24 (owner)): when another file
+  is loaded with Load… in the template window opened from the import dialog and Use for This
+  Import is pressed, the row shows the import's own file as "{file} (changed for this import)",
+  though the values came from the other file. This follows U13-Q21 (the row names the import's
+  file); a task only if it confuses in use.
+- *Edit… with a change for this import ignores what the load leaves out* (T298's review,
+  2026-11-24; **kept** at the sort after T297 and T298, 2026-11-24 (owner)): the window is
+  filled with `TemplateForm::load` of the template the form made at Use for This Import, and
+  `load`'s list of what it could not put in the form is not shown. A field the form makes but
+  cannot load back would be lost from the window without a notice; no such field is known, and
+  tests cover file → form → template but not form → template → form for every field.
 
 ## The metadata window's layout (ADR 0017 U10b)
 
