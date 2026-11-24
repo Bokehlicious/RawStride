@@ -41,6 +41,8 @@
   only for the items shown (§6.3, U10b-Q1–U10b-Q8; tasks T277, T278). U10b-Q8 narrows U9-Q10:
   the companion suffixes' page comes with U8. U10b-Q9 (the same day, after the chain review):
   with Rating and Label hidden, the keys still rate and the current rating is shown as one line.
+  U10b-Q10 (owner, 2026-11-24): the metadata window gets two columns, as the template window
+  has (U13-Q13); amends §2.3.1's "long scrolling form".
 - **Questions of step U8 answered by the owner (2026-11-22, every proposal approved):** the keys
   of the contact sheet's and the preview's actions can be changed on a new Keyboard Shortcuts page
   of the Settings window, up to two keys per action, and are kept in `keys.txt`; the navigation,
@@ -208,7 +210,8 @@ a full photo-desk caption window.
   `photoshop:SupplementalCategories`) are shown **read-only** in their section. ADR 0007 §5.5 is
   unchanged: they are kept and synchronised, never edited, created or removed. If a recipient ever
   requires them, §5.5 is revisited first.
-- **Sections in a long scrolling form**, each collapsible, in this order:
+- **Sections in a long scrolling form**, each collapsible, in this order (in two columns when
+  the window is wide enough: owner, 2026-11-24, §6.3 U10b-Q10):
   1. Innehåll: Titel, Rubrik, Beskrivning, Alternativtext, Utökad beskrivning, Beskrivningens
      författare, Nyckelord, Person i bilden, Organisation i bilden (namn, kod), Händelse;
   2. Fotograf och rättigheter: Fotograf, Yrkestitel, Kontaktuppgifter, Copyright, Credit, Källa,
@@ -685,6 +688,7 @@ Asked by the reviewer when step U10b was taken up (tasks T277, T278).
 | U10b-Q7 | How is it stored? | In `settings.txt`: one line with the sections' order, one with the items' order, one with the hidden sections and one with the hidden items, each written only when it differs from the default. A name that is not known is skipped; an item a later version adds is shown in its default place |
 | U10b-Q8 | The companion suffixes' page (U9-Q10)? | Comes with U8 (the key map and its page), not with U10b (narrows U9-Q10's "U8 or U10b") |
 | U10b-Q9 | (asked the same day, after the chain review of T277–T278) The rating keys while Rating and Label is hidden? | **Owner (proposal A):** the keys rate as before; while the section is hidden, Other Metadata starts with one line showing the image's current rating and label ("Rating: 3 stars, Red"), not the rating read when the window opened, so a key press is seen at once |
+| U10b-Q10 | (owner, 2026-11-24, during the hand check of U13d) The metadata window in two columns, like the template window? | **Owner (proposal):** yes, with U13-Q13's rules: the shown sections, in the order of the user's layout (U10b-Q2), fill the left column first and then the right, split so the two columns are about equally long; a window too narrow for two gives one column. The form scrolls as before; the window's buttons stay in their row at the bottom. The window's default width grows so two columns fit, within the screen as the template window's size is. Nothing else in the window changes (conflict lines, Location Created entries, field errors, hidden fields and Other Metadata as before). One task in `pw-loupe`, written after the owner's hand check of U13d |
 
 ### 6.4 Questions of step U8 (answered by the owner, 2026-11-22: every proposal approved)
 
