@@ -286,6 +286,110 @@ fn the_8_and_16_bit_versions_agree() {
     }
 }
 
+/// `reduce_with_threads` for 8 bit, with the decode and encode of `reduce_rgb8`.
+fn with_threads8(src: &[u8], (w, h, ow, oh): (u32, u32, u32, u32), threads: usize) -> Vec<u8> {
+    let table: &[f32] = &DECODE_8;
+    reduce_with_threads(
+        src,
+        Size::new(w, h, ow, oh),
+        threads,
+        |v| table[usize::from(v)],
+        |l| encode(l, 255.0) as u8,
+    )
+    .unwrap_or_default()
+}
+
+/// `reduce_with_threads` for 16 bit, with the decode and encode of `reduce_rgb16`.
+fn with_threads16(src: &[u16], (w, h, ow, oh): (u32, u32, u32, u32), threads: usize) -> Vec<u16> {
+    let table: &[f32] = &DECODE_16;
+    reduce_with_threads(
+        src,
+        Size::new(w, h, ow, oh),
+        threads,
+        |v| table[usize::from(v)],
+        |l| encode(l, 65535.0) as u16,
+    )
+    .unwrap_or_default()
+}
+
+/// The sizes of the thread tests: few and many rows, fewer rows than threads, and a factor of 1
+/// in each direction.
+const THREAD_SIZES: [(u32, u32, u32, u32); 6] = [
+    (23, 17, 9, 6),
+    (4784, 40, 3241, 27),
+    (97, 300, 40, 200),
+    (9, 7, 4, 3),
+    (50, 40, 20, 40),
+    (40, 50, 40, 20),
+];
+
+#[test]
+fn any_number_of_threads_gives_the_same_8_bit_result() {
+    for size in THREAD_SIZES {
+        let (w, h, ow, oh) = size;
+        let src = image8(w, h);
+        let one = with_threads8(&src, size, 1);
+        assert_eq!(one.len(), (ow * oh * 3) as usize, "{size:?}");
+        for threads in [2, 3, 7, 8] {
+            assert_eq!(
+                with_threads8(&src, size, threads),
+                one,
+                "{size:?}, {threads} threads"
+            );
+        }
+    }
+}
+
+#[test]
+fn any_number_of_threads_gives_the_same_16_bit_result() {
+    for size in THREAD_SIZES {
+        let (w, h, ow, oh) = size;
+        let src = image16(w, h);
+        let one = with_threads16(&src, size, 1);
+        assert_eq!(one.len(), (ow * oh * 3) as usize, "{size:?}");
+        for threads in [2, 3, 7, 8] {
+            assert_eq!(
+                with_threads16(&src, size, threads),
+                one,
+                "{size:?}, {threads} threads"
+            );
+        }
+    }
+}
+
+#[test]
+fn the_public_functions_equal_one_thread() {
+    let size = (97, 300, 40, 200);
+    let (w, h, ow, oh) = size;
+    let src8 = image8(w, h);
+    let one8 = with_threads8(&src8, size, 1);
+    assert_eq!(one8.len(), (ow * oh * 3) as usize);
+    assert_eq!(reduce_rgb8(&src8, w, h, ow, oh), Some(one8));
+    let src16 = image16(w, h);
+    let one16 = with_threads16(&src16, size, 1);
+    assert_eq!(one16.len(), (ow * oh * 3) as usize);
+    assert_eq!(reduce_rgb16(&src16, w, h, ow, oh), Some(one16));
+}
+
+#[test]
+fn the_number_of_threads_follows_the_cores_and_the_rows() {
+    for (cores, out_h, expected) in [
+        (8, 1, 1),
+        (8, 63, 1),
+        (8, 64, 2),
+        (8, 10_000, 8),
+        (16, 10_000, 8),
+        (1, 10_000, 1),
+        (0, 10_000, 1),
+    ] {
+        assert_eq!(
+            thread_count(cores, out_h),
+            expected,
+            "{cores} cores, {out_h} rows"
+        );
+    }
+}
+
 #[test]
 #[ignore = "a time measurement; run with --release (ADR 0027 W1-Q2)"]
 fn timing_of_a_61_mpix_half_size_render_reduced_to_fit() {
@@ -295,8 +399,9 @@ fn timing_of_a_61_mpix_half_size_render_reduced_to_fit() {
     let out = reduce_rgb8(&src, w, h, ow, oh);
     let elapsed = started.elapsed();
     println!(
-        "{w}×{h} → {ow}×{oh} (8 bit): {:.1} ms",
-        elapsed.as_secs_f64() * 1000.0
+        "{w}×{h} → {ow}×{oh} (8 bit): {:.1} ms on {} threads",
+        elapsed.as_secs_f64() * 1000.0,
+        thread_count(available_cores(), oh)
     );
     assert_eq!(out.map(|o| o.len()), Some((ow * oh * 3) as usize));
 }

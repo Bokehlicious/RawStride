@@ -315,4 +315,5 @@ was when the task was done, so "this file", "below" and "the Log" in T1–T115 m
 | [T306](T306-msi-in-release.md) | ADR 0031 RL9: the MSI in the release build and workflow (tools, CI, docs) |
 | [T307](T307-pw-resample-lanczos.md) | ADR 0027 W1: the crate pw-resample, a Lanczos-3 reduction in linear light (pw-resample) |
 | [T308](T308-conversion-after-reduction.md) | ADR 0027 W1: the conversion to the monitor profile moved after the reduction (pw-viewcore) |
+| [T311](T311-pw-resample-threads.md) | ADR 0027 W1: pw-resample's output rows split over threads (pw-resample) |
 | [T310](T310-regular-releases.md) | ADR 0031 RL10: 0.x versions as regular releases in the release workflow (CI, docs) |

@@ -102,23 +102,190 @@ fn samples(width: u32, height: u32) -> Option<usize> {
 }
 
 /// Checks the sizes, then filters and encodes, or copies when the size is unchanged.
-fn reduce<T: Copy>(
+fn reduce<T: Copy + Send + Sync>(
     src: &[T],
     size: Size,
-    decode: impl Fn(T) -> f32,
-    encode: impl Fn(f32) -> T,
+    decode: impl Fn(T) -> f32 + Sync,
+    encode: impl Fn(f32) -> T + Sync,
 ) -> Option<Vec<T>> {
-    let out_len = size.check(src.len())?;
+    size.check(src.len())?;
     if size.out_w == size.width && size.out_h == size.height {
         return Some(src.to_vec());
     }
-    let mut out = Vec::with_capacity(out_len);
-    filter_linear(src, size, decode, |row| {
-        // The clamp keeps Lanczos' over- and undershoot from wrapping and keeps negative values
-        // away from the curve (a negative number to a fractional power is NaN).
-        out.extend(row.iter().map(|&l| encode(l.clamp(0.0, 1.0))));
-    })?;
-    Some(out)
+    let threads = thread_count(available_cores(), size.out_h);
+    reduce_with_threads(src, size, threads, decode, encode)
+}
+
+/// The most threads one reduction uses. `pw-viewcore` has two workers (the interactive one and
+/// the prefetch one) that may reduce at the same time, so one reduction does not take every core
+/// of a large PC.
+const MAX_THREADS: usize = 8;
+
+/// The fewest output rows a band gets from [`thread_count`], so a thread has enough work to be
+/// worth starting.
+const MIN_ROWS_PER_BAND: usize = 32;
+
+/// The number of cores, or 1 if the system cannot tell.
+fn available_cores() -> usize {
+    std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get)
+}
+
+/// The number of threads for a reduction to `out_h` rows on a PC with `cores` cores: `cores`, at
+/// most [`MAX_THREADS`] and at most `⌊out_h / 32⌋`, but at least 1.
+fn thread_count(cores: usize, out_h: u32) -> usize {
+    let by_rows = usize::try_from(out_h).unwrap_or(usize::MAX) / MIN_ROWS_PER_BAND;
+    cores.min(MAX_THREADS).min(by_rows).max(1)
+}
+
+/// Filters and encodes `src` in `threads` bands of contiguous output rows (0 counts as 1, and at
+/// most one band per output row), `threads − 1` of them on threads of their own and the last on
+/// the calling thread. Every band gives the same bits as one band would.
+fn reduce_with_threads<T, D, E>(
+    src: &[T],
+    size: Size,
+    threads: usize,
+    decode: D,
+    encode: E,
+) -> Option<Vec<T>>
+where
+    T: Copy + Send + Sync,
+    D: Fn(T) -> f32 + Sync,
+    E: Fn(f32) -> T + Sync,
+{
+    let out_len = size.check(src.len())?;
+    let out_rows = usize::try_from(size.out_h).ok()?;
+    let h_taps = taps(size.width, size.out_w)?;
+    let v_taps = taps(size.height, size.out_h)?;
+    let job = Job {
+        src,
+        size,
+        h_taps: &h_taps,
+        out_row_len: samples(size.out_w, 1)?,
+        decode: &decode,
+        encode: &encode,
+    };
+    let bands = threads.min(out_rows).max(1);
+    let mut out = vec![encode(0.0); out_len];
+    match job.run_bands(&v_taps, bands, &mut out) {
+        Outcome::Done => Some(out),
+        Outcome::Failed => None,
+        Outcome::SpawnFailed => {
+            // The failed spawn dropped its band's part of the output, so the whole reduction is
+            // done again here as one band.
+            job.band(&v_taps, &mut out)?;
+            Some(out)
+        }
+    }
+}
+
+/// How the bands of one reduction ended.
+enum Outcome {
+    Done,
+    /// A band failed or panicked.
+    Failed,
+    /// A thread could not be started; the bands already started were joined.
+    SpawnFailed,
+}
+
+/// What every band of one reduction shares.
+struct Job<'a, T, D, E> {
+    src: &'a [T],
+    size: Size,
+    h_taps: &'a [Taps],
+    out_row_len: usize,
+    decode: &'a D,
+    encode: &'a E,
+}
+
+impl<T, D, E> Job<'_, T, D, E>
+where
+    T: Copy + Send + Sync,
+    D: Fn(T) -> f32 + Sync,
+    E: Fn(f32) -> T + Sync,
+{
+    /// Splits the output rows into `bands` bands as even as possible (their sizes differ by at
+    /// most one row) and runs them.
+    fn run_bands(&self, v_taps: &[Taps], bands: usize, out: &mut [T]) -> Outcome {
+        let Some(mut parts) = self.split(v_taps, bands, out) else {
+            return Outcome::Failed;
+        };
+        let Some((last_taps, last_part)) = parts.pop() else {
+            return Outcome::Failed;
+        };
+        std::thread::scope(|scope| {
+            let mut handles = Vec::with_capacity(parts.len());
+            let mut spawn_failed = false;
+            for (band_taps, part) in parts {
+                let started = std::thread::Builder::new()
+                    .spawn_scoped(scope, move || self.band(band_taps, part));
+                match started {
+                    Ok(handle) => handles.push(handle),
+                    Err(_) => {
+                        spawn_failed = true;
+                        break;
+                    }
+                }
+            }
+            let mut ok = spawn_failed || self.band(last_taps, last_part).is_some();
+            // Every started band is joined here, so the scope never sees an unjoined panic.
+            for handle in handles {
+                ok &= matches!(handle.join(), Ok(Some(())));
+            }
+            if !ok {
+                Outcome::Failed
+            } else if spawn_failed {
+                Outcome::SpawnFailed
+            } else {
+                Outcome::Done
+            }
+        })
+    }
+
+    /// The vertical taps and the output part of each band, top to bottom.
+    fn split<'t, 'o>(
+        &self,
+        v_taps: &'t [Taps],
+        bands: usize,
+        out: &'o mut [T],
+    ) -> Option<Vec<(&'t [Taps], &'o mut [T])>> {
+        let base = v_taps.len().checked_div(bands)?;
+        let extra = v_taps.len().checked_rem(bands)?;
+        let mut parts = Vec::with_capacity(bands);
+        let mut taps_rest = v_taps;
+        let mut out_rest = out;
+        for index in 0..bands {
+            let rows = base + usize::from(index < extra);
+            let (band_taps, next_taps) = taps_rest.split_at_checked(rows)?;
+            let (part, next_out) =
+                out_rest.split_at_mut_checked(rows.checked_mul(self.out_row_len)?)?;
+            parts.push((band_taps, part));
+            taps_rest = next_taps;
+            out_rest = next_out;
+        }
+        Some(parts)
+    }
+
+    /// Filters the output rows of `v_taps` and encodes them into `part`, which must hold exactly
+    /// those rows.
+    fn band(&self, v_taps: &[Taps], part: &mut [T]) -> Option<()> {
+        if self.out_row_len == 0 {
+            return None;
+        }
+        let mut rows = part.chunks_exact_mut(self.out_row_len);
+        let mut fits = true;
+        let emit = |row: &[f32]| match rows.next() {
+            // The clamp keeps Lanczos' over- and undershoot from wrapping and keeps negative
+            // values away from the curve (a negative number to a fractional power is NaN).
+            Some(out_row) => {
+                for (out, &l) in out_row.iter_mut().zip(row) {
+                    *out = (self.encode)(l.clamp(0.0, 1.0));
+                }
+            }
+            None => fits = false,
+        };
+        filter_linear(self.src, self.size, self.h_taps, v_taps, self.decode, emit)?;
+        (fits && rows.next().is_none()).then_some(())
+    }
 }
 
 /// The filtered linear values of an 8-bit image, before the clamp, row by row (tests only).
@@ -137,6 +304,8 @@ fn reduce_linear_rgb8(
     filter_linear(
         src,
         size,
+        &taps(width, out_w)?,
+        &taps(height, out_h)?,
         |v| table.get(usize::from(v)).copied().unwrap_or(0.0),
         |row| out.extend_from_slice(row),
     )?;
@@ -159,6 +328,8 @@ fn reduce_linear_rgb16(
     filter_linear(
         src,
         size,
+        &taps(width, out_w)?,
+        &taps(height, out_h)?,
         |v| table.get(usize::from(v)).copied().unwrap_or(0.0),
         |row| out.extend_from_slice(row),
     )?;
@@ -244,23 +415,25 @@ fn lanczos3(x: f64) -> f64 {
     (px.sin() / px) * (px3.sin() / px3)
 }
 
-/// Decodes and filters `src` and gives each output row's linear values, before the clamp, to
-/// `emit`, top to bottom.
+/// Decodes and filters `src` and gives the linear values, before the clamp, of the output rows of
+/// `v_taps` (all of them, or one band's contiguous slice) to `emit`, top to bottom. `h_taps` are
+/// the horizontal taps of every output column.
 ///
 /// Memory: the horizontally filtered rows are kept as linear `f32` (not quantised between the
-/// passes), but only while the vertical kernel needs them, in a ring of rows; besides the output,
-/// at most about `2·⌈3/f⌉ + 2` such rows (`f` the vertical factor) are held, or the image's
-/// height if that is smaller, plus one decoded source row. No whole intermediate image is made.
+/// passes), but only while the vertical kernel needs them, in a ring of rows that begins at the
+/// first row's window; besides the output, at most about `2·⌈3/f⌉ + 2` such rows (`f` the
+/// vertical factor) are held, or the image's height if that is smaller, plus one decoded source
+/// row. No whole intermediate image is made.
 fn filter_linear<T: Copy>(
     src: &[T],
     size: Size,
+    h_taps: &[Taps],
+    v_taps: &[Taps],
     decode: impl Fn(T) -> f32,
     mut emit: impl FnMut(&[f32]),
 ) -> Option<()> {
     let row_len = samples(size.width, 1)?;
     let out_row_len = samples(size.out_w, 1)?;
-    let h_taps = taps(size.width, size.out_w)?;
-    let v_taps = taps(size.height, size.out_h)?;
 
     let mut linear_row = vec![0.0_f32; row_len];
     let mut ring: VecDeque<(usize, Vec<f32>)> = VecDeque::new();
@@ -268,7 +441,7 @@ fn filter_linear<T: Copy>(
     let mut out_row = vec![0.0_f32; out_row_len];
     let mut next_source = 0_usize;
 
-    for vertical in &v_taps {
+    for vertical in v_taps {
         let end = vertical.start.checked_add(vertical.weights.len())?;
         // Rows above this window are not needed again (the windows only move down).
         while ring
@@ -287,7 +460,7 @@ fn filter_linear<T: Copy>(
                 *linear = decode(sample);
             }
             let mut buffer = spare.pop().unwrap_or_else(|| vec![0.0; out_row_len]);
-            horizontal(&linear_row, &h_taps, &mut buffer)?;
+            horizontal(&linear_row, h_taps, &mut buffer)?;
             ring.push_back((next_source, buffer));
             next_source += 1;
         }
