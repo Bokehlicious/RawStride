@@ -87,11 +87,12 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status |
 |---|---|---|
+| [T311](T311-pw-resample-threads.md) | ADR 0027 W1: pw-resample's output rows split over threads | Open |
 | [T309](T309-lanczos-in-the-view.md) | ADR 0027 W1: the Lanczos filter in the view, the half-size view reduced, the gestures | Blocked: waits for T311 |
 
 ## Writing a task (owner and reviewer)
 
-- **Number:** the next free number after the highest in this folder and `done/` (T311 next).
+- **Number:** the next free number after the highest in this folder and `done/` (T312 next).
 - **File:** `docs/tasks/T246-<a-few-words>.md`; three digits, lower case, words joined by `-`.
 - **Index:** add a row to "Open tasks" above and keep its status in step with the file's heading.
 - **Size (owner, 2026-11-15, after T142):** one task is one layer (a C++ shim or a core crate, or

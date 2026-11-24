@@ -6,7 +6,7 @@
   Today a fit view below 50 % is the half-size render drawn smaller by the GPU from a mipmapped
   texture; after this task it is the half-size render reduced on the worker to the exact scale
   and drawn at 1:1. During a zoom gesture the unreduced half-size view is used as today. The last
-  task of the chain T307 → T308 → **T309**; the owner's hand check and `latency.ps1` follow it.
+  task of the chain T307 → T308 → T311 → **T309**; the owner's hand check and `latency.ps1` follow it.
 - **What the reviewer checked (2026-11-24):**
   - `pw-viewcore` `state.rs`: `ViewKind` is `Half`, `Zoom`, `Ring`, `Scaled`; `req` makes `Half`
     (region the whole image, density `HALF_DENSITY` = 0.5) for every scale ≤ 0.5, `Zoom` at 1 and
@@ -105,12 +105,12 @@
      doc comments of `mipmapped` and `texture_options` and the test of the kinds are updated to
      say so; the test gains `Reduced` and the magnification per kind (the existing asserts on
      mipmaps and `texture_bytes` unchanged).
-  10. **Threads (W1-Q2):** one thread, unless T307's timing is above 100 ms (the reviewer's
-      threshold: at about 7 images/s, V4, a neighbour's half-size render and its reduction must
-      fit in about 140 ms); then the rows are split over threads with `std::thread::scope` in
-      `pw-resample` (which then joins this task's file list). _The reviewer writes which one here
-      when the task is set to Open._ If the owner's `latency.ps1` fails V1 or V4 after this task,
-      a follow-up task splits the rows (the W1 row in `plans/` says so).
+  10. **Threads (W1-Q2):** T307's timing (440 ms on one thread) was above the reviewer's
+      threshold of 100 ms (at about 7 images/s, V4, a neighbour's half-size render and its
+      reduction must fit in about 140 ms), so T311 split `pw-resample`'s output rows over threads
+      (owner 2026-11-24). This task uses `reduce_rgb8`/`reduce_rgb16` as they are and does not
+      change `pw-resample`. If the owner's `latency.ps1` still fails V1 or V4 after this task, the
+      owner decides (W1-Q2; the W1 row in `plans/` says so).
 - **Changes allowed to existing tests:** only where W1-Q3 or W1-Q8 changes what a test expects:
   the kind of a view below 50 % (`Half` → `Reduced`), its size (the half-size render's size → the
   scaled size), its pixels (box or GPU reduction → Lanczos), and the jobs a plan lists at rest; and
@@ -157,7 +157,7 @@
   `pw-tiff`'s box filter (W1-Q6); the export; a setting or key for the filter (W1: none); the
   `latency.ps1` measurement (the owner's, after this task).
 - **Rules:** `docs/tasks/README.md` rules 1–12; the only `Cargo.toml` change is point 1 (no
-  `Cargo.toml` change in `pw-resample`, even if point 10 adds threads). `docs/test-inventory.md`:
+  `Cargo.toml` change in `pw-resample`). `docs/test-inventory.md`:
   besides the added tests, the `pw-viewcore` and `pw-render` rows and the totals are updated for
   the three removed box-filter tests and the changed kinds test.
 - **Extra code review:** yes (more than one crate, about ten files; README "An extra code

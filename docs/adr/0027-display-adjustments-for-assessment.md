@@ -319,9 +319,13 @@ image is reduced.
 | W1-Q9 | The brief enlarged view during a gesture (asked after T309's cold read, answered 2026-11-24 as proposed) | The reduced and the half-size views are magnified linearly (they are magnified only as that stand-in; nearest-neighbour would look blocky); `Zoom`, `Ring` and `Scaled` keep nearest-neighbour, sharp pixels above 100 %. The stand-in is drawn only during a gesture at ≤ 0.5 and counts as "preparing", not as the finished view |
 
 W1 is written as the chain T307 (the crate) → T308 (the conversion moved after the reduction, the
-box filter still used) → T309 (the filter in the view, the half-size view reduced, the gestures,
-and the owner's `latency.ps1` after it); the conversion moves first because the filter's linear light is only right
-before the data is converted to the monitor profile.
+box filter still used) → T311 (the output rows split over threads) → T309 (the filter in the view,
+the half-size view reduced, the gestures, and the owner's `latency.ps1` after it); the conversion
+moves first because the filter's linear light is only right before the data is converted to the
+monitor profile. W1-Q2 (owner, 2026-11-24): T307's timing on one thread was 440 ms (a 61 Mpix
+image's half-size render reduced to fit, Intel Core i7-9700K), above the 100 ms a neighbour's
+reduction may take at about 7 images/s (V4), so the rows are split over threads with
+`std::thread::scope` before the filter is used in the view, in a task of its own (T311).
 
 ## 5. Steps
 
