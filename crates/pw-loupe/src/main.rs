@@ -107,8 +107,9 @@ use pw_loupe::{HistogramInspector, HistogramReader, HistogramReads};
 use pw_loupe::{ImportPosition, ImportTabs, PlacedInFolder, with_placed};
 use pw_loupe::{
     ImportText, failed_cell_text, hidden_done_text, hidden_progress_text, import_text,
-    no_preview_text, template_empty_text, template_not_found_text, template_read_error_text,
-    template_reader_stopped_text, template_variables_text,
+    no_preview_text, template_changed_for_import_text, template_empty_text,
+    template_not_found_text, template_read_error_text, template_reader_stopped_text,
+    template_variables_text,
 };
 use pw_loupe::{
     KeyPress, KeyRefusal, KeySlot, SETTINGS_WINDOW_MIN, companion_suffixes_field, key_page_groups,
@@ -934,6 +935,44 @@ fn saved_sets_import_template(from_import: bool, dialog: Option<&ImportDialogSta
         )
 }
 
+/// The template window's form handed to the open import with Use for This Import (ADR 0017
+/// U13-Q21, T298), not saved to a file. Dropped by None, Choose…, a Save… that makes the saved
+/// file the import's template, and the dialog's close; an import run keeps it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ImportTemplateEdit {
+    /// The import's template file when the button was pressed; `None` without one.
+    file: Option<PathBuf>,
+    /// The template the form made at the button, its checks made there.
+    template: TemplateFile,
+}
+
+impl ImportTemplateEdit {
+    /// Whether the edit counts for an import whose template file is `chosen`: only while that is
+    /// still the file it was made with (`None` with `None`).
+    fn applies(&self, chosen: Option<&Path>) -> bool {
+        self.file.as_deref() == chosen
+    }
+}
+
+/// The import dialog's metadata template row (T295, T298): its text and whether it is drawn in
+/// the weak colour (no template). With an edit that applies to `chosen`, the file's name marked as
+/// changed for this import, or "not saved" without a file; otherwise the file's name, or None.
+fn template_row_text(chosen: Option<&Path>, edit: Option<&ImportTemplateEdit>) -> (String, bool) {
+    let edited = edit.is_some_and(|edit| edit.applies(chosen));
+    match (chosen, edited) {
+        (Some(path), true) => (
+            template_changed_for_import_text(&file_name_text(path)),
+            false,
+        ),
+        (None, true) => (
+            import_text(ImportText::NotSavedThisImport).to_string(),
+            false,
+        ),
+        (Some(path), false) => (file_name_text(path), false),
+        (None, false) => (import_text(ImportText::NoTemplate).to_string(), true),
+    }
+}
+
 /// The open compare (ADR 0017 §2.2, U6, T153): the held image, where it was opened, and what the
 /// second view core has been told.
 struct CompareOpen {
@@ -1072,6 +1111,9 @@ struct Loupe {
     import_submit_error: Option<String>,
     /// The read of the import's template file at Start, waited for (T295).
     import_template_wait: Option<ImportTemplateWait>,
+    /// The template window's form handed to the open import without a file (U13-Q21, T298);
+    /// it counts only while it `applies` to the import form's template.
+    import_template_edit: Option<ImportTemplateEdit>,
     import_hidden: bool,
     /// The Tasks area under the library (ADR 0017 §2.1, U5, T140): the import's row and the
     /// error list.
@@ -2209,8 +2251,11 @@ impl Loupe {
             self.settings.shell.import_incremental = self.last_form.incremental;
             self.settings.shell.import_template = self.last_form.template.clone();
         }
-        // A read of the template still waited for is dropped; its answer is ignored (T295).
+        // A read of the template still waited for is dropped; its answer is ignored (T295). An
+        // edit for this import is dropped too: a closed dialog never keeps it, and the settings
+        // keep only the file (U13-Q21, T298).
         self.import_template_wait = None;
+        self.import_template_edit = None;
         self.import_hidden = false;
         self.card_refresh = None;
     }
@@ -2230,11 +2275,23 @@ impl Loupe {
     /// Start (U13-Q6, T295): without a template, and for a run that only marks the card, the
     /// import runs at once. With one, a file that is not there stops it with a submit error;
     /// otherwise the file is sent to the template thread and the import waits for its answer
-    /// (`import_template_read`), nothing copied until then.
+    /// (`import_template_read`), nothing copied until then. With an edit for this import that
+    /// applies (U13-Q21, T298), a run that copies runs at once with it: no file is checked or read,
+    /// the checks were made at Use for This Import.
     fn start_import(&mut self) {
         let Some(dialog) = self.import_dialog.as_ref() else {
             return;
         };
+        if !dialog.marks_only()
+            && let Some(edit) = self
+                .import_template_edit
+                .as_ref()
+                .filter(|edit| edit.applies(dialog.form().template.as_deref()))
+        {
+            let template = edit.template.clone();
+            self.run_import(Some(template));
+            return;
+        }
         let template = if dialog.marks_only() {
             None
         } else {
@@ -2908,6 +2965,9 @@ impl Loupe {
         let mut hide = false;
         let mut new_import = false;
         let mut edit_template = false;
+        // The edit for this import (U13-Q21, T298), dropped by Choose… with a file and by None.
+        let template_edit = self.import_template_edit.clone();
+        let mut drop_template_edit = false;
 
         egui::Window::new(import_text(ImportText::Title))
             .collapsible(false)
@@ -3005,42 +3065,49 @@ impl Loupe {
                     );
 
                     // The metadata template (U13-Q17, T295): the file's name, its full path as
-                    // the hover text, or None; Choose…, Edit… and None.
+                    // the hover text, or None; marked when an edit for this import applies
+                    // (U13-Q21, T298). Choose…, Edit… and None.
                     ui.add_space(8.0);
                     ui.horizontal_wrapped(|ui| {
                         ui.label(import_text(ImportText::MetadataTemplate));
-                        match &form.template {
-                            Some(path) => {
-                                ui.label(file_name_text(path))
-                                    .on_hover_text(path.display().to_string());
-                            }
-                            None => {
-                                ui.label(
-                                    egui::RichText::new(import_text(ImportText::NoTemplate))
-                                        .color(ui.visuals().weak_text_color()),
-                                );
-                            }
+                        let (row_text, weak) =
+                            template_row_text(form.template.as_deref(), template_edit.as_ref());
+                        let row_text = if weak {
+                            egui::RichText::new(row_text).color(ui.visuals().weak_text_color())
+                        } else {
+                            egui::RichText::new(row_text)
+                        };
+                        let row = ui.label(row_text);
+                        if let Some(path) = &form.template {
+                            row.on_hover_text(path.display().to_string());
                         }
+                        let edit_applies = template_edit
+                            .as_ref()
+                            .is_some_and(|edit| edit.applies(form.template.as_deref()));
                         if ui.button(import_text(ImportText::Choose)).clicked()
                             && let Some(path) =
                                 import_template_dialog(form.template.as_deref()).pick_file()
                         {
                             // Choose… (U13-Q20): the file chosen, then the template window opens
-                            // with it as Edit… opens it, after the form is handed over below.
+                            // with it as Edit… opens it, after the form is handed over below. A
+                            // file chosen drops the edit for this import (T298); a cancelled
+                            // dialog keeps everything.
                             form.template = Some(path);
                             edit_template = true;
+                            drop_template_edit = true;
                         }
                         if ui.button(import_text(ImportText::EditTemplate)).clicked() {
                             edit_template = true;
                         }
                         if ui
                             .add_enabled(
-                                form.template.is_some(),
+                                form.template.is_some() || edit_applies,
                                 egui::Button::new(import_text(ImportText::NoTemplate)),
                             )
                             .clicked()
                         {
                             form.template = None;
+                            drop_template_edit = true;
                         }
                     });
 
@@ -3167,17 +3234,28 @@ impl Loupe {
             dialog.rescan(Instant::now());
             self.import_submit_error = None;
         }
+        if drop_template_edit {
+            self.import_template_edit = None;
+        }
         if start {
             self.request_import_start();
         }
         if edit_template {
             // Edit… (U13-Q17) and a file from Choose… (U13-Q20): the chosen file, or an empty
-            // window without one.
+            // window without one. With an edit for this import that applies, the window opens
+            // with the edit instead, nothing read from the file (U13-Q21, T298).
             let chosen = self
                 .import_dialog
                 .as_ref()
                 .and_then(|dialog| dialog.form().template.clone());
-            self.open_template_window(chosen, true);
+            let edit = self
+                .import_template_edit
+                .clone()
+                .filter(|edit| edit.applies(chosen.as_deref()));
+            match edit {
+                Some(edit) => self.open_template_window_with_edit(edit),
+                None => self.open_template_window(chosen, true),
+            }
         }
         if cancel
             && self
@@ -4871,6 +4949,59 @@ impl Loupe {
         }
     }
 
+    /// Edit… with an edit for this import that applies (U13-Q21, T298): opens the template window
+    /// from the import dialog, or keeps the open one, as `open_template_window` does, and puts the
+    /// edit's template in a newly opened window's form, its file the edit's file (the title and
+    /// Save…'s suggested name). Nothing is read from the file. The load settles the form, so Close
+    /// asks only after further changes; the edit stays the import's until it is dropped.
+    fn open_template_window_with_edit(&mut self, edit: ImportTemplateEdit) {
+        let newly_opened = self.template_window.is_none();
+        if !newly_opened {
+            return;
+        }
+        // A new id each opening: the default size in the middle each time.
+        self.template_opening = self.template_opening.wrapping_add(1);
+        open_template(&mut self.template_window, None);
+        if let Some(window) = self.template_window.as_mut() {
+            window.from_import = true;
+            // The template was made by the form at Use for This Import, so every field loads.
+            let _not_loaded = window.form.load(&edit.template);
+            window.file = edit.file;
+        }
+    }
+
+    /// Use for This Import (U13-Q21, T298): the template the form makes is kept as the open
+    /// import's edit, with the import's current template file, and the window closes without the
+    /// question (the changes are taken, not lost). A refusal is shown as Save… shows it and the
+    /// window stays.
+    fn template_use_for_import(&mut self) {
+        let Some(window) = self.template_window.as_mut() else {
+            return;
+        };
+        if !saved_sets_import_template(
+            window.from_import,
+            self.import_dialog.as_ref().map(ImportDialog::state),
+        ) {
+            return;
+        }
+        let template = match window.form.template() {
+            Ok(template) => template,
+            Err(refused) => {
+                window.refused(&refused);
+                return;
+            }
+        };
+        let Some(dialog) = self.import_dialog.as_ref() else {
+            return;
+        };
+        self.import_template_edit = Some(ImportTemplateEdit {
+            file: dialog.form().template.clone(),
+            template,
+        });
+        self.import_submit_error = None;
+        self.template_window = None;
+    }
+
     /// Sends a load of `path` to the template thread and waits for its answer; without the thread,
     /// or when it has stopped, the window says so at once.
     fn send_template_load(&mut self, path: PathBuf) {
@@ -4917,8 +5048,11 @@ impl Loupe {
                 )
                 && let Some(dialog) = self.import_dialog.as_mut()
             {
-                // Changing the template never rescans (T294).
+                // Changing the template never rescans (T294). The saved file now holds the edit
+                // for this import, so it is dropped, also when the file was already the chosen
+                // one (U13-Q21, T298).
                 dialog.edit(|form| form.template = Some(path), Instant::now());
+                self.import_template_edit = None;
                 self.import_submit_error = None;
             }
         }
@@ -5004,8 +5138,9 @@ impl Loupe {
 
     /// The template window (ADR 0017 U13c, U13-Q13, T293): modal, resizable, opened in the middle
     /// of the program's window; the form scrolls in one or two columns above the status lines and
-    /// the buttons Clear Form, Load…, Save… and Close. While a load or save is waited for, the
-    /// form and the buttons are greyed and Escape and × do nothing.
+    /// the buttons Clear Form, Load…, Save…, Use for This Import (from an import dialog, T298) and
+    /// Close. While a load or save is waited for, the form and the buttons are greyed and Escape
+    /// and × do nothing.
     fn draw_template_window(&mut self, ctx: &egui::Context) {
         let Some(mut window) = self.template_window.take() else {
             return;
@@ -5019,8 +5154,15 @@ impl Loupe {
         let mut clear = false;
         let mut load = false;
         let mut save = false;
+        let mut use_for_import = false;
         let mut close = false;
         let mut open = true;
+        // Use for This Import (U13-Q21, T298): only in a window opened from an import dialog that
+        // is editing or previewing.
+        let use_for_import_shown = saved_sets_import_template(
+            window.from_import,
+            self.import_dialog.as_ref().map(ImportDialog::state),
+        );
 
         // Modal: a backdrop under the window in the same order, so neither the program nor an
         // import dialog (a window at `Order::Middle`) behind it takes a click.
@@ -5076,6 +5218,11 @@ impl Loupe {
                                     ui.button(template_text(&TemplateText::ClearForm)).clicked();
                                 load = ui.button(template_text(&TemplateText::Load)).clicked();
                                 save = ui.button(template_text(&TemplateText::Save)).clicked();
+                                if use_for_import_shown {
+                                    use_for_import = ui
+                                        .button(template_text(&TemplateText::UseForImport))
+                                        .clicked();
+                                }
                                 close = ui.button(template_text(&TemplateText::Close)).clicked();
                             });
                         });
@@ -5128,6 +5275,8 @@ impl Loupe {
             self.template_load();
         } else if save {
             self.template_save();
+        } else if use_for_import {
+            self.template_use_for_import();
         } else if closing {
             self.template_close();
         } else {
@@ -12262,6 +12411,7 @@ fn run(options: Options) -> Result<(), String> {
                 card_refresh: None,
                 import_submit_error: None,
                 import_template_wait: None,
+                import_template_edit: None,
                 import_hidden: false,
                 thumb_worker,
                 thumb_grid: ThumbGrid::new(0, 0),
@@ -12731,6 +12881,66 @@ mod tests {
                 Some(&ImportDialogState::Running { progress: None })
             ));
             assert!(!saved_sets_import_template(true, None));
+        }
+    }
+
+    // --- The template changed for one import only (ADR 0017 U13-Q21, T298) ---
+
+    mod import_template_edit {
+        use super::super::{ImportTemplateEdit, template_row_text};
+        use pw_metadata::template_file::TemplateFile;
+        use pw_metadata::value::Value;
+        use std::path::{Path, PathBuf};
+
+        fn edit(file: Option<&str>) -> ImportTemplateEdit {
+            ImportTemplateEdit {
+                file: file.map(PathBuf::from),
+                template: TemplateFile::new(
+                    vec![(
+                        "photoshop:Headline".to_string(),
+                        Value::Text("Sport".to_string()),
+                    )],
+                    Vec::new(),
+                ),
+            }
+        }
+
+        #[test]
+        fn an_edit_applies_only_while_its_file_is_the_chosen_one() {
+            let news = edit(Some(r"C:\t\News.xmp"));
+            assert!(news.applies(Some(Path::new(r"C:\t\News.xmp"))));
+            assert!(!news.applies(Some(Path::new(r"C:\t\Sport.xmp"))));
+            assert!(!news.applies(None));
+            let unsaved = edit(None);
+            assert!(unsaved.applies(None));
+            assert!(!unsaved.applies(Some(Path::new(r"C:\t\News.xmp"))));
+        }
+
+        #[test]
+        fn the_template_row_shows_none_a_file_or_the_edit() {
+            let news = Path::new(r"C:\t\News.xmp");
+            assert_eq!(template_row_text(None, None), ("None".to_string(), true));
+            assert_eq!(
+                template_row_text(Some(news), None),
+                ("News.xmp".to_string(), false)
+            );
+            assert_eq!(
+                template_row_text(Some(news), Some(&edit(Some(r"C:\t\News.xmp")))),
+                ("News.xmp (changed for this import)".to_string(), false)
+            );
+            assert_eq!(
+                template_row_text(None, Some(&edit(None))),
+                ("Not saved (this import only)".to_string(), false)
+            );
+            // An edit made with another file does not count: the row is as without it.
+            assert_eq!(
+                template_row_text(Some(news), Some(&edit(Some(r"C:\t\Sport.xmp")))),
+                ("News.xmp".to_string(), false)
+            );
+            assert_eq!(
+                template_row_text(None, Some(&edit(Some(r"C:\t\Sport.xmp")))),
+                ("None".to_string(), true)
+            );
         }
     }
 

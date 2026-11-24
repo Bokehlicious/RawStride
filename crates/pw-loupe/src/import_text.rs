@@ -88,6 +88,9 @@ pub enum ImportText {
     ChooseTemplate,
     /// Shown while the metadata template is read at Start (T295).
     ReadingTemplate,
+    /// The metadata template row's text when the template window's form was handed to this import
+    /// without a template file (ADR 0017 U13-Q21, T298).
+    NotSavedThisImport,
 }
 
 /// The text of `text`.
@@ -141,7 +144,15 @@ pub fn import_text(text: ImportText) -> &'static str {
         ImportText::NoTemplate => "None",
         ImportText::ChooseTemplate => "Choose Metadata Template",
         ImportText::ReadingTemplate => "Reading the metadata template…",
+        ImportText::NotSavedThisImport => "Not saved (this import only)",
     }
+}
+
+/// The metadata template row's text when the template window's form was handed to this import
+/// with the template file `file` (its name) chosen; the file itself is unchanged (ADR 0017
+/// U13-Q21, T298).
+pub fn template_changed_for_import_text(file: &str) -> String {
+    format!("{file} (changed for this import)")
 }
 
 /// The submit error when the import's metadata template file `file` (its name) is not there at
@@ -917,6 +928,18 @@ mod tests {
         for (text, expected) in texts {
             assert_eq!(import_text(text), expected, "{text:?}");
         }
+    }
+
+    #[test]
+    fn the_template_row_texts_of_an_edit_for_this_import_are_exact() {
+        assert_eq!(
+            template_changed_for_import_text("News.xmp"),
+            "News.xmp (changed for this import)"
+        );
+        assert_eq!(
+            import_text(ImportText::NotSavedThisImport),
+            "Not saved (this import only)"
+        );
     }
 
     #[test]

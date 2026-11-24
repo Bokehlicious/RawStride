@@ -110,8 +110,8 @@ pub use import_tabs::{ImportPosition, ImportTabs, PlacedInFolder, with_placed};
 pub use import_text::{
     DoneLine, ImportText, done_lines, ejecting_progress_text, hidden_done_text,
     hidden_progress_text, import_text, more_lines, preview_line, preview_summary, progress_text,
-    template_empty_text, template_not_found_text, template_read_error_text,
-    template_reader_stopped_text, template_variables_text,
+    template_changed_for_import_text, template_empty_text, template_not_found_text,
+    template_read_error_text, template_reader_stopped_text, template_variables_text,
 };
 pub use import_worker::{ImportDone, ImportEvent, ImportWorker, RequestId, SubmitError};
 pub use info_panel::{

@@ -26,10 +26,12 @@ Downloads are on the [Releases page](https://github.com/Bokehlicious/RawStride/r
 
 - The import dialog's IPTC Template fields, their modes and the "Clear fields?" question are
   replaced by a Metadata Template row with Choose…, Edit… and None; Choose… also opens the chosen
-  template in the template window. The chosen template file is remembered and read when the import starts: a file that is gone, cannot be read, has no field
-  or has an unknown variable stops the import before anything is copied. Variables are filled
-  with each image's own values, and the notices of the template's writes (for example a text cut
-  to IIM's limit) are listed in the import's summary.
+  template in the template window. The chosen template file is remembered and read when the
+  import starts: a file that is gone, cannot be read, has no field or has an unknown variable
+  stops the import before anything is copied. Variables are filled with each image's own values,
+  and the notices of the template's writes (for example a text cut to IIM's limit) are listed in
+  the import's summary. Use for This Import in the template window changes the import's template
+  for this import only, without saving the file.
 - The Settings page Keyboard Shortcuts is a table with the columns Action, First Key and Second
   Key, whose headings stay at the top while the rows scroll. The Action column's width is changed
   by dragging the line beside its heading and is kept between sessions; a long name is cut and

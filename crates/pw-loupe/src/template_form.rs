@@ -587,6 +587,9 @@ pub enum TemplateText {
     Save,
     /// The button that closes the window.
     Close,
+    /// The button of a window opened from the import dialog that hands the form to that import
+    /// without saving a file (ADR 0017 U13-Q21, T298).
+    UseForImport,
     /// The hover text of an item's check box.
     CheckHover,
     /// The label of a + box.
@@ -642,6 +645,7 @@ pub fn template_text(text: &TemplateText) -> String {
         TemplateText::Load => "Load…".to_string(),
         TemplateText::Save => "Save…".to_string(),
         TemplateText::Close => "Close".to_string(),
+        TemplateText::UseForImport => "Use for This Import".to_string(),
         TemplateText::CheckHover => "Use this field in the template.".to_string(),
         TemplateText::AddLabel => "+".to_string(),
         TemplateText::AddHover => {
@@ -1453,6 +1457,14 @@ mod tests {
     }
 
     // --- Texts ---
+
+    #[test]
+    fn the_use_for_this_import_button_text() {
+        assert_eq!(
+            template_text(&TemplateText::UseForImport),
+            "Use for This Import"
+        );
+    }
 
     #[test]
     fn the_texts() {
