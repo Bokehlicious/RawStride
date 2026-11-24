@@ -419,6 +419,14 @@ the rows were split; on 8 threads 21.2 ms (radius 0.6) and 27.5 ms (radius 2.0) 
 passes faster with the same output to the byte (the horizontal pass with the taps in the outer
 loop, no buffer made per row), times it again, and the owner decides on the result.
 
+The CPU or the GPU (owner, 2026-11-24): §3.3 keeps sharpening on the CPU, but the choice is
+checked once, after T318 and before W5 starts, since W5 and W6 put more steps on the CPU before
+the conversion (§7), and a move to the GPU later would take the whole chain, not only
+sharpening. The check is the owner's `latency.ps1` with sharpening on, at fit and at 50 % (the
+half-size view, which is sharpened whole whatever the screen's size); if V1 or V4 fails, a GPU
+step is proposed as a question of its own before W5. The 3840×2160 timings weigh less: the owner
+expects a faster CPU by the time a 4K screen is used.
+
 ## 5. Steps
 
 Each step ends with tests (GR11), the owner's hand check and, where an image is shown,
