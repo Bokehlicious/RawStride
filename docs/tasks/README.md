@@ -87,8 +87,7 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status |
 |---|---|---|
-| [T319](T319-sharpening-speed.md) | ADR 0027 W3: the sharpening's two blur passes made faster | Open |
-| [T316](T316-sharpening-in-the-core.md) | ADR 0027 W3: sharpening in the view core | Blocked |
+| [T316](T316-sharpening-in-the-core.md) | ADR 0027 W3: sharpening in the view core | Open |
 | [T317](T317-sharpening-settings-page.md) | ADR 0027 W3: the Settings page Preview and the sharpening values | Blocked |
 | [T318](T318-sharpening-key-mark-reset.md) | ADR 0027 W3: the key, the menu item and the mark of sharpening, and the reset | Blocked |
 

@@ -1,4 +1,4 @@
-# T316. ADR 0027 W3: sharpening in the view core — Blocked
+# T316. ADR 0027 W3: sharpening in the view core — Open
 
 - **Why:** ADR 0027 §3.3 and W3-Q1, W3-Q4, W3-Q6 (answered by the owner 2026-11-24, ADR 0027
   §4.3). While sharpening is on, every view below 100 % made on the worker is sharpened last,
@@ -8,7 +8,7 @@
   ready and is replaced in one swap (V2). At 100 % and above sharpening is paused (A-Q8). This
   task makes the view core's part and tells the shell the state for the mark; the key, the mark
   and the settings are T317's and T318's. The third task of the chain T315 → T319 → **T316** → T317 →
-  T318. Waits for T319.
+  T318.
 - **What the reviewer checked (2026-11-24):**
   - `pw-viewcore` `state.rs`: `JobView { kind, region, density_q }` (derives `Hash`, `Eq`; in
     `Job::Render`, `Task::Render` and `Inflight`); `ViewOut` (made in `finish_render`, two
@@ -177,3 +177,4 @@
 | 2026-11-24 | Blocked | Cold read: every `JobView` literal named (`STATISTICS_LEND`, the unreducible `half`, the test helpers); the unreducible half-size image sharpened and its view carrying `view.sharpen`; `remove_inflight`'s new parameter and its four callers (with `reject`); the gesture's half-size job now **sharpened** (an unsharpened one would be rendered twice at 50 % and make the mark flip), with `satisfied` accepting a half-size view of either sharpening during a gesture and the mark `Waiting` then (W3-Q1 clarified by the owner 2026-11-24, ADR 0027 §4.3); `satisfied`'s wording; `frame()`'s early returns and the order of the states, `sharpen_state`; `State::set_sharpening` for the clamping test; the malformed half-size text; the `ViewOut` test helpers; the engine test asserts the field and a difference, not overshoot; point 6's facts stated. Waits for T315 and the chain review |
 | 2026-11-24 | Blocked | Chain review (whole chain, the first task's log holds the summary): a fine render with the new sharpening counts the old fine view of the same image as free in the budget check (else U with D on could pause fine details for good); `Waiting`, not `Off`, while a sharpened view is still drawn after turning off; `Paused` by `req`'s exact rule, tested at both sides of 1; the extra wait of a metadata write's release noted. Waits for T315 |
 | 2026-11-24 | Blocked | T319 added before this task (T315's timing above 10 ms after the split; owner 2026-11-24, ADR 0027 §4.3); now waits for T319 |
+| 2026-11-24 | Open | T319 Done; set Open |

@@ -113,11 +113,13 @@ fn sharpen_with_threads(img: &Rgb, s: Sharpening, threads: usize) -> Option<Rgb>
         width,
         threads,
         &|first, part: &mut [f32]| {
+            // One buffer per band, reused for every row of it.
+            let mut padded = Vec::with_capacity(width.checked_add(kernel.len())?);
             for (src_row, out_row) in src_rows(first)?
                 .chunks_exact(row_bytes)
                 .zip(part.chunks_exact_mut(width))
             {
-                blur_row(src_row, &kernel, out_row)?;
+                blur_row(src_row, &kernel, &mut padded, out_row)?;
             }
             Some(())
         },
@@ -125,12 +127,14 @@ fn sharpen_with_threads(img: &Rgb, s: Sharpening, threads: usize) -> Option<Rgb>
     let rows_blurred = &rows_blurred;
     let mut data = vec![0u8; img.data.len()];
     in_bands(&mut data, row_bytes, threads, &|first, part: &mut [u8]| {
+        // One buffer per band, reused for every row of it.
+        let mut blur = vec![0.0f32; width];
         for (i, (src_row, out_row)) in src_rows(first)?
             .chunks_exact(row_bytes)
             .zip(part.chunks_exact_mut(row_bytes))
             .enumerate()
         {
-            let blur = blur_column(rows_blurred, width, height, first + i, &kernel)?;
+            blur_column(rows_blurred, width, height, first + i, &kernel, &mut blur)?;
             apply_row(src_row, &blur, s, out_row);
         }
         Some(())
@@ -229,32 +233,41 @@ fn luma(p: &[u8; 3]) -> f32 {
 }
 
 /// Blurs the luminance of one row of pixels (`src`) horizontally into `out`, repeating the edge
-/// pixels.
-fn blur_row(src: &[u8], kernel: &[f32], out: &mut [f32]) -> Option<()> {
+/// pixels. `padded` is a buffer the caller reuses from row to row: it is cleared and filled with
+/// the row's luminance and `half` copies of the edge value at each end. `out` is set to 0.0 and
+/// then summed with the taps in the outer loop and the pixels in the inner one, so each pixel gets
+/// the same sums in the same order as one tap after another.
+fn blur_row(src: &[u8], kernel: &[f32], padded: &mut Vec<f32>, out: &mut [f32]) -> Option<()> {
     let half = kernel.len() / 2;
     let (pixels, _) = src.as_chunks::<3>();
     let first = luma(pixels.first()?);
     let last = luma(pixels.last()?);
-    let mut padded = Vec::with_capacity(pixels.len() + 2 * half);
+    padded.clear();
     padded.extend(std::iter::repeat_n(first, half));
     padded.extend(pixels.iter().map(luma));
     padded.extend(std::iter::repeat_n(last, half));
-    for (window, o) in padded.windows(kernel.len()).zip(out.iter_mut()) {
-        *o = window.iter().zip(kernel).fold(0.0, |a, (v, k)| a + v * k);
+    out.fill(0.0);
+    for (i, k) in kernel.iter().enumerate() {
+        let window = padded.get(i..)?;
+        for (o, v) in out.iter_mut().zip(window) {
+            *o += v * k;
+        }
     }
     Some(())
 }
 
-/// Blurs row `y` of the horizontally blurred rows vertically, repeating the edge rows.
+/// Blurs row `y` of the horizontally blurred rows vertically into `out` (`width` values), repeating
+/// the edge rows. `out` is a buffer the caller reuses from row to row; it is set to 0.0 first.
 fn blur_column(
     rows: &[f32],
     width: usize,
     height: usize,
     y: usize,
     kernel: &[f32],
-) -> Option<Vec<f32>> {
+    out: &mut [f32],
+) -> Option<()> {
     let half = kernel.len() / 2;
-    let mut out = vec![0.0f32; width];
+    out.fill(0.0);
     for (i, k) in kernel.iter().enumerate() {
         let row = (y + i).saturating_sub(half).min(height - 1);
         let start = row.checked_mul(width)?;
@@ -263,7 +276,7 @@ fn blur_column(
             *o += v * k;
         }
     }
-    Some(out)
+    Some(())
 }
 
 /// Writes one sharpened row: where `|Y′ − blur| ≥ threshold`, the offset
@@ -494,6 +507,85 @@ mod tests {
                 );
             }
             assert_eq!(sharpen(&src, p), one, "{p:?}");
+        }
+    }
+
+    /// T315's two passes as they were before T319, on one thread: a new `Vec` per row and the
+    /// horizontal taps summed in a `fold`.
+    fn reference_sharpen(img: &Rgb, p: Sharpening) -> Rgb {
+        fn blur_row(src: &[u8], kernel: &[f32], out: &mut [f32]) -> Option<()> {
+            let half = kernel.len() / 2;
+            let (pixels, _) = src.as_chunks::<3>();
+            let first = luma(pixels.first()?);
+            let last = luma(pixels.last()?);
+            let mut padded = Vec::with_capacity(pixels.len() + 2 * half);
+            padded.extend(std::iter::repeat_n(first, half));
+            padded.extend(pixels.iter().map(luma));
+            padded.extend(std::iter::repeat_n(last, half));
+            for (window, o) in padded.windows(kernel.len()).zip(out.iter_mut()) {
+                *o = window.iter().zip(kernel).fold(0.0, |a, (v, k)| a + v * k);
+            }
+            Some(())
+        }
+
+        fn blur_column(
+            rows: &[f32],
+            width: usize,
+            height: usize,
+            y: usize,
+            kernel: &[f32],
+        ) -> Option<Vec<f32>> {
+            let half = kernel.len() / 2;
+            let mut out = vec![0.0f32; width];
+            for (i, k) in kernel.iter().enumerate() {
+                let row = (y + i).saturating_sub(half).min(height - 1);
+                let start = row.checked_mul(width)?;
+                let src = rows.get(start..start.checked_add(width)?)?;
+                for (o, v) in out.iter_mut().zip(src) {
+                    *o += v * k;
+                }
+            }
+            Some(out)
+        }
+
+        let (width, height) = (img.width as usize, img.height as usize);
+        let kernel = kernel(p);
+        let row_bytes = width * 3;
+        let mut rows_blurred = vec![0.0f32; width * height];
+        for (src_row, out_row) in img
+            .data
+            .chunks_exact(row_bytes)
+            .zip(rows_blurred.chunks_exact_mut(width))
+        {
+            blur_row(src_row, &kernel, out_row).unwrap();
+        }
+        let mut data = vec![0u8; img.data.len()];
+        for (y, (src_row, out_row)) in img
+            .data
+            .chunks_exact(row_bytes)
+            .zip(data.chunks_exact_mut(row_bytes))
+            .enumerate()
+        {
+            let blur = blur_column(&rows_blurred, width, height, y, &kernel).unwrap();
+            apply_row(src_row, &blur, p, out_row);
+        }
+        Rgb {
+            width: img.width,
+            height: img.height,
+            data,
+        }
+    }
+
+    #[test]
+    fn the_faster_passes_give_the_same_bytes_as_t315s() {
+        for (w, h) in [(37, 300), (1, 1), (1, 5), (5, 1), (64, 65)] {
+            let src = patterned(w, h);
+            for p in [Sharpening::DEFAULT, RADIUS_2, s(300, 20, 0)] {
+                let reference = reference_sharpen(&src, p);
+                // One pixel's blur is the pixel itself, so only 1×1 stays as it is.
+                assert_eq!(reference == src, (w, h) == (1, 1), "{w}x{h} {p:?}");
+                assert_eq!(sharpen(&src, p), Some(reference), "{w}x{h} {p:?}");
+            }
         }
     }
 
