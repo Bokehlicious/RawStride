@@ -157,7 +157,7 @@ one as proposed:**
 |---|---|---|
 | RL9-Q9 | **The zip's `README.txt` in the MSI** (it says "unpack this folder" and "delete this folder") | Left out of the MSI; every other file of the zip's folder is installed unchanged |
 | RL9-Q10 | **Two MSIs of the same version** (a local build and the release's) would give two entries in Installed apps | An MSI of the same version replaces the installed one (WiX's `AllowSameVersionUpgrades`), so there is always one RawStride |
-| RL9-Q11 | **RawStride running during an upgrade or uninstall**: with no dialogs (RL9-Q4) Windows cannot ask to close it and may ask for a restart instead (amends RL9-Q5) | Accepted: no dialogs; `docs/distribution.md` and the release notes say to close RawStride before upgrading; the owner's hand check records what Windows does |
+| RL9-Q11 | **RawStride running during an upgrade or uninstall**: with no dialogs (RL9-Q4) Windows cannot ask to close it and may ask for a restart instead (amends RL9-Q5) | Accepted: no dialogs; `docs/distribution.md` and the release notes say to close RawStride before upgrading; the owner's hand check records what Windows does. **Hand check, 2026-11-24 (T305):** Windows Installer's own files-in-use box, shown even with no dialogs of RawStride's, asked to close RawStride and ExifTool, and the upgrade then went on; no restart was asked for |
 
 ## 6. Steps
 
@@ -205,3 +205,4 @@ a reputation takes time to build; RL9 stays at order 2c.
 | 4 | 2026-11-22 | §3.6: the signing services' terms checked (RL8); RL8 waits until RawStride has a reputation (owner) |
 | 5 | 2026-11-24 | RL8 moved last in the step plan (order 13), as a reputation takes time (owner) |
 | 6 | 2026-11-24 | RL9: WiX's licence checked (§3.5); RL9-Q1–RL9-Q8 approved by the owner as proposed (§5); the owner's go for RL9; after the cold read of T305 and T306, RL9-Q9–RL9-Q11 approved as proposed (RL9-Q11 amends RL9-Q5's "asked to close") |
+| 7 | 2026-11-24 | RL9-Q11: the owner's hand check of T305 found that Windows does ask to close RawStride and ExifTool during an upgrade (Windows Installer's files-in-use box); the advice to close RawStride first stays |

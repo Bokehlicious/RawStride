@@ -47,7 +47,7 @@
   5. **`docs/distribution.md`:** a section "The installer (MSI)" after "The zip": what it
      installs and where, no administrator rights, the Start menu shortcut, no dialogs, upgrade and
      the downgrade message, an equal version replaces the installed one, close RawStride before
-     upgrading (with no dialogs Windows may otherwise ask for a restart, RL9-Q11), no `README.txt`
+     upgrading (otherwise Windows asks to close RawStride and ExifTool, RL9-Q11), no `README.txt`
      in the installed folder (RL9-Q9), uninstall in Installed apps keeping `%LOCALAPPDATA%\RawStride` and
      never touching images or sidecars, that a zip copy and an installed copy share the settings,
      not signed (RL9-Q3–RL9-Q11). "Making it" gains `.\tools\package-msi.ps1` (after
@@ -82,3 +82,4 @@
 | Date | Status | Note |
 |---|---|---|
 | 2026-11-24 | Blocked | Added: waits for T305 (chain T305 → T306) |
+| 2026-11-24 | Blocked | Point 5: "with no dialogs Windows may otherwise ask for a restart" replaced by "otherwise Windows asks to close RawStride and ExifTool" (T305's hand check, ADR 0031 RL9-Q11) |
