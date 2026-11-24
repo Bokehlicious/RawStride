@@ -1,4 +1,4 @@
-# T312. ADR 0027 W2: the timing of a fine view on real files — Blocked
+# T312. ADR 0027 W2: the timing of a fine view on real files — Open
 
 - **Why:** ADR 0027 §3.1 and W2-Q1 (answered by the owner 2026-11-24, ADR 0027 §4.2): before the
   view core gets fine details (T313), the time of what a fine view costs is measured on the
@@ -72,3 +72,4 @@
 |---|---|---|
 | 2026-11-24 | Blocked | Added (ADR 0027 W2-Q1); Open after its cold read and the chain review |
 | 2026-11-24 | Blocked | Cold read: (d) cannot reduce the half-size render when the fit scale is 0.5 or more (a landscape RW2 at 4K): skipped there with "n/a"; files kept per upright size, since `fit_scale` depends on the flip; `reduce` gives `None`, not an error; the helpers `median_and_max` and `ms` named; opening every file takes tens of seconds. The API names, `test_files("P")` and the `native` feature under `--workspace` checked as written |
+| 2026-11-24 | Open | Chain review (T313's log): nothing for T312; its time also bounds the waits T313 accepts (Z, E, J, a metadata write's release). Set Open |

@@ -38,7 +38,7 @@
 - **Crates:** `pw-viewcore`, `pw-render`, `pw-loupe` (test helpers only). **Files:**
   `crates/pw-viewcore/src/state.rs` (points 1–8 and its tests; its test helper's match on
   `ViewKind` gets a `Fine` arm), `crates/pw-viewcore/src/core.rs`
-  (point 9), `crates/pw-viewcore/src/lib.rs` (the new types exported),
+  (points 2 and 9), `crates/pw-viewcore/src/lib.rs` (`FineState` and `FinePause` exported),
   `crates/pw-viewcore/tests/engine.rs` (the engine test), `crates/pw-render/src/lib.rs` (point
   10), `crates/pw-loupe/src/loupe_text.rs` (the new `Frame` field in its two test helpers, as
   `FineState::Off`; nothing else), `docs/test-inventory.md` (rule 12), and this task's own file
@@ -101,10 +101,16 @@
      for example too large for the GPU) does **not** go into `failed` and shows no error: the
      inflight entry is removed as for any failed render, and the key goes into a new set of
      images that failed for fine details, kept as `failed` is (moved by `set_files` to the new
-     positions, emptied by a new folder). `wanted` no longer asks for their fine view (a failed
-     LibRaw call ends the session, `known-limits.md`, LibRaw, so it is not tried again). The
-     reduced view stays drawn.
-  8. **What the frame says:** `Frame` gets `fine: FineState`, exported from `lib.rs`:
+     positions, emptied by a new folder). `wanted` no longer asks for their fine view. A
+     `Fine` render that **failed** in the backend also drops the image's session once it is
+     returned (`drop_session`): a failed LibRaw call ends the session (`known-limits.md`,
+     LibRaw), and a later job on it (Z, a new level, the focus map) would fail and show an
+     error; the plan opens a new session when one is needed. The reduced view stays drawn. A
+     budget refusal pauses fine details for that image until a new folder, as a failure does
+     (W2-Q6; a refusal that was only for a moment is not retried, accepted).
+  8. **What the frame says:** `Frame` gets `fine: FineState`; `FineState` and `FinePause` are
+     both exported from `lib.rs` (T314 matches on them) and derive at least `Clone, Copy, Debug,
+     PartialEq, Eq` (`Frame` derives `Clone, Debug, PartialEq`):
      `Off` (fine details is off); `Waiting` (it applies, point 3, and the drawn view is not a
      fine view of the current image yet); `Shown` (the frame's view is ready, `Status::Ready`,
      and it is a `Fine` view of the current key and generation, not an earlier image's view kept
@@ -149,13 +155,24 @@
   - A rejected `Fine` view (`reject`): no `Status::Error`, `Paused(Failed)`.
   - After `set_files` moves the images, an image that failed for fine details at its old
     position is still `Paused(Failed)` at its new one.
+  - A failed `Fine` render drops the session: a following `Zoom` request of the same image
+    opens a new session and is shown, with no `Status::Error`.
   - With the current image's session closed and the reduced view resident, the plan's open for
     the fine view is not given to the interactive worker.
   - `pw-render`: `Fine` not mipmapped, magnified linearly.
-- **Known and accepted (W2-Q2):** a fine render holds the current image's only session and
-  cannot be cancelled, so a zoom to 100 % made just after it starts (at a free level below 50 %,
-  where the 100 % view is not prefetched) waits for it, up to the time T312 measured. The owner's
-  `latency.ps1` after T314 shows whether it matters (W2-Q7).
+- **Known and accepted (W2-Q2; chain review 2026-11-24):**
+  - A fine render holds the current image's only session and cannot be cancelled; it keeps the
+    session through the reduction and `to_display` too. So a zoom to 100 % made just after it
+    starts (at a free level below 50 %, where the 100 % view is not prefetched), E or J, and the
+    release for a metadata write (`RELEASE_TIMEOUT`, 5 s, `main.rs`) wait for it, up to the time
+    T312 measured.
+  - It holds the background worker as well: after a step during it, only the current image is
+    served (the interactive worker) until it ends, so +1 and +2 of the new position are
+    prefetched late. "Only when +1 and +2 are ready" (W2-Q2) is reached by the plan's order:
+    a neighbour's job refused by the budget is passed over, and the fine render may then start.
+  - With the compare open both cores may make a full-resolution render at the same time; the
+    render's temporary buffers are not in the budget (as for `Scaled` today).
+  The owner's `latency.ps1` after T314 shows whether these matter (W2-Q7).
 - **Not in this task:** the key, the menu item and the mark (T314); a fine view for +1 (W2-Q7,
   after the owner's `latency.ps1`); fine details in JPEG mode (§2.2).
 - **Rules:** `AGENTS.md`; `docs/tasks/README.md` rules 1–12 (no user-visible text is added). No
@@ -168,3 +185,4 @@
 |---|---|---|
 | 2026-11-24 | Blocked | Added (ADR 0027 W2-Q2, W2-Q3, W2-Q6, W2-Q8); waits for T312 |
 | 2026-11-24 | Blocked | Cold read: the interactive worker also takes no open made only for the fine view; a `Fine` view satisfies no other requirement; a budget refusal not in `self.refused`; `remove_inflight`, `accept` and `reject` named (a rejected fine view does not go into `failed`); `serving` prefers any serving fine view (no fine → reduced → fine after a zoom); `protected_views` keeps the reduced view too; `gesture_stand_in` and `Shown` (only the current image's ready view) made exact; the failed set kept as `failed` is across `set_files`; the test helper's `ViewKind` match named; the wait of a zoom to 100 % behind a fine render written as accepted (W2-Q2, measured by W2-Q7); four tests added |
+| 2026-11-24 | Blocked | Chain review (whole chain T312-T314; noted here as T313 holds most of it): `FinePause` exported and both enums' derives named, `core.rs` also for point 2; a failed fine render drops the session (else a later Z or focus map fails on the dead session and shows an error, against W2-Q6), with a test; the waits behind a fine render (the session through the reduction, the background worker, the release's 5 s), the approximated "+1 and +2 ready", the compare's two renders and the budget refusal for the session written as known and accepted |

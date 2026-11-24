@@ -29,6 +29,8 @@
     `paint_side_text` (a text on a dark plate, `SIDE_TEXT_PLATE`, at the top of a side).
   - `preview_text.rs`: the preview's texts, made whole by functions (rule 13).
   - `docs/glossary.md`: the row "Focus marking, Show Focus Marking".
+  - `paint_rating_badge` (`main.rs`) draws the rating badge 8 px from the image area's
+    bottom left.
   - `ImageAreaShown` (`main.rs`) carries what `draw_image_area` needs, for example `mode_key`,
     filled from `self.key_map.first_key(…)`; the image-area colours are in `shell.rs`'s
     `image_area` module (`TEXT` is grey 0xbe), the plate is `SIDE_TEXT_PLATE` in `main.rs`.
@@ -64,18 +66,21 @@
      function of its own, `wish_fine_details`, called beside `wish_focus_map`.
   3. **The row of marks** (W2-Q5): in `draw_image_area`, after the image and its overlays, when
      the frame's `fine` is not `FineState::Off` and an image is drawn (`frame.draw` is `Some`):
-     the row of adjustment marks at the image area's **bottom left**, on a dark plate as
-     `paint_side_text` draws (the same plate colour `SIDE_TEXT_PLATE`, text size and margin; at
-     the bottom, so it never meets the compare's side text at the top, however that wraps). In
+     the row of adjustment marks at the image area's **bottom right**, on a dark plate as
+     `paint_side_text` draws (the same plate colour `SIDE_TEXT_PLATE`, text size and margin). The
+     bottom left holds the rating badge (`paint_rating_badge`) and the top the compare's side
+     text, so the bottom right meets neither. In
      the compare each side draws its own row from its own frame. Today the row holds one mark,
      "Fine": in `image_area::TEXT` for `Waiting` and `Shown`, and dimmed for `Paused(_)` in a
      new constant `image_area::WEAK_TEXT` in `shell.rs`, `Color32::from_gray(0x80)` (the
      theme's `weak_text` is too dark on the black plate in the Light theme); the existing
      contrast tests of the `image_area` colours get `WEAK_TEXT` against black (the plate is
      black at about two thirds over the image) at `TEXT_CONTRAST`. The hover text (point 4) is
-     given by a second, hover-only response over the row's plate,
-     `ui.interact(plate, id.with("marks"), egui::Sense::hover())` with `.on_hover_text(…)`, so
-     clicks, drags and the wheel still reach the image area's own response. The key comes from a
+     shown **without a second response** (one over the plate could take the hover from the image
+     area's response, which the wheel zoom reads): when the image area's own
+     `response.hover_pos()` lies inside the row's plate, the text is shown as a tooltip at the
+     pointer (for example `egui::show_tooltip_at_pointer`), so clicks, drags and the wheel still
+     reach the image area. The owner's hand check tries the wheel over the row. The key comes from a
      new field of `ImageAreaShown`, `fine_key: Option<KeyChord>`, filled with
      `self.key_map.first_key(KeyAction::FineDetails)` where `mode_key` is filled.
   4. **The marks and their texts** (rule 13), in `preview_text.rs`, none in drawing code: a type
@@ -121,3 +126,4 @@
 |---|---|---|
 | 2026-11-24 | Blocked | Added (ADR 0027 W2-Q4, W2-Q5); waits for T313 |
 | 2026-11-24 | Blocked | Cold read: the View menu's order test is updated (asked for, rule 5); `KeyAction::ALL` 44 → 45 with the new action after `FocusMarking`, `today()` and both `acts_in` lists (`KeyView::Preview`, `Where::Loupe`) named; a new `image_area::WEAK_TEXT` (0x80) for the dimmed mark; the hover by a second hover-only response; the key through a new `ImageAreaShown::fine_key`; the marks function and its type placed in `preview_text.rs` with two templates per text, "50%" as "100%"; the row at the bottom left, only while an image is drawn, so it never meets the compare's side text; the settings test dropped (the whole-file test covers it, `settings.rs` not touched). D checked free |
+| 2026-11-24 | Blocked | Chain review (T313's log): the row moved to the bottom right (the bottom left is the rating badge's); the hover text as a tooltip from the image area's own pointer position, not a second response, so the wheel zoom keeps working (hand check); the mark over an earlier image's kept view while the next one is prepared accepted (a moment) |
