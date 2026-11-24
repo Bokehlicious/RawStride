@@ -96,6 +96,9 @@ impl<B: Backend> Shared<B> {
                                     .ok_or_else(|| DecodeError::new("scaling the view failed"))
                             }),
                     };
+                    // to the display after the render and the reduction, before the check
+                    // (ADR 0027 W1-Q4)
+                    let result = result.and_then(|img| self.backend.to_display(&session, img));
                     let result = result.and_then(|img| {
                         if img.is_consistent() {
                             Ok(img)
@@ -133,7 +136,7 @@ impl<B: Backend> Shared<B> {
                     mut session,
                 } => {
                     // from the image's own half-size render, the pixels the view draws at fit
-                    // (ADR 0017 U9-Q2)
+                    // (ADR 0017 U9-Q2), not converted to the display (ADR 0027 W1-Q4)
                     let result = self
                         .backend
                         .render_half(&mut session)
@@ -844,6 +847,194 @@ mod tests {
         assert!(Arc::ptr_eq(&map, &again));
         std::thread::sleep(Duration::from_millis(100));
         assert_eq!(core.stats().focus_maps, 1);
+    }
+
+    // ---------- the conversion to the display after the reduction (ADR 0027 W1-Q4, T308) ----------
+
+    use crate::state::Status;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    /// The value of every byte the simulated [`Flat`] decoder renders.
+    const FLAT: u8 = 100;
+
+    /// A simulated decoder of 4000 × 3000 images in one flat colour (so a reduced view is the
+    /// same colour), whose `to_display` adds 1 to every byte and records the size it got, or
+    /// fails when `fail` is set.
+    #[derive(Clone, Default)]
+    struct Flat {
+        renders: Arc<AtomicUsize>,
+        shown: Arc<Mutex<Vec<(u32, u32)>>>,
+        fail: bool,
+    }
+
+    fn flat(w: u32, h: u32) -> Rgb {
+        Rgb {
+            width: w,
+            height: h,
+            data: vec![FLAT; (w * h * 3) as usize],
+        }
+    }
+
+    impl Backend for Flat {
+        type Session = u32;
+
+        fn open(&self, _path: &Path, _source: Source) -> Result<(u32, ImageSize), DecodeError> {
+            Ok((
+                0,
+                ImageSize {
+                    w: 4000,
+                    h: 3000,
+                    flip: 0,
+                },
+            ))
+        }
+
+        fn render_half(&self, _session: &mut u32) -> Result<Rgb, DecodeError> {
+            self.renders.fetch_add(1, Ordering::SeqCst);
+            Ok(flat(2000, 1500))
+        }
+
+        fn render_region(&self, _session: &mut u32, r: Rect) -> Result<Rgb, DecodeError> {
+            self.renders.fetch_add(1, Ordering::SeqCst);
+            Ok(flat(r.w, r.h))
+        }
+
+        fn to_display(&self, _session: &u32, mut img: Rgb) -> Result<Rgb, DecodeError> {
+            lock(&self.shown).push((img.width, img.height));
+            if self.fail {
+                return Err(DecodeError::new("the conversion to the display failed"));
+            }
+            for byte in &mut img.data {
+                *byte = byte.saturating_add(1);
+            }
+            Ok(img)
+        }
+    }
+
+    impl Flat {
+        fn shown(&self) -> Vec<(u32, u32)> {
+            lock(&self.shown).clone()
+        }
+    }
+
+    /// Frames of an 800 × 600 view, with every finished view accepted and kept in `views`, until
+    /// `done` (or 10 s).
+    fn flat_frames_until(
+        core: &ViewCore<Flat>,
+        views: &mut Vec<ViewOut>,
+        done: impl Fn(&Frame, &[ViewOut]) -> bool,
+    ) -> Frame {
+        let end = Instant::now() + Duration::from_secs(10);
+        loop {
+            for view in core.take_views() {
+                let _ = core.accept(&view, 1024);
+                views.push(view);
+            }
+            let _ = core.take_dropped();
+            let frame = core.frame([800, 600]);
+            if done(&frame, views) || Instant::now() > end {
+                return frame;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    #[test]
+    fn every_view_is_converted_to_the_display_after_its_reduction_and_the_focus_map_is_not() {
+        let backend = Flat::default();
+        let core = match ViewCore::start(backend.clone(), Config::default()) {
+            Ok(c) => c,
+            Err(e) => panic!("start: {e}"),
+        };
+        let mut views = Vec::new();
+        core.open_folder(vec![PathBuf::from(A)]);
+        core.set_focus_wanted(true);
+        let f = flat_frames_until(&core, &mut views, |f, _| {
+            f.status == Status::Ready && f.focus != FocusState::Reading
+        });
+        assert_eq!(f.status, Status::Ready);
+        // the focus map is of the unconverted half-size render (W1-Q4)
+        let FocusState::Ready { map, .. } = f.focus else {
+            panic!("expected the focus map, got {:?}", f.focus);
+        };
+        let half = flat(2000, 1500);
+        assert_eq!(
+            Some(map.as_ref()),
+            FocusMap::of_rgb8(half.width, half.height, &half.data).as_ref()
+        );
+
+        // a free level between 50 % and 100 %: a view reduced on the worker (near a corner, where
+        // the 100 % views made around the centre do not cover the visible region)
+        core.set_view(Zoom::Scale(0.75), [0.15, 0.15]);
+        flat_frames_until(&core, &mut views, |f, v| {
+            f.status == Status::Ready && v.iter().any(|v| v.kind == ViewKind::Scaled)
+        });
+        // every render that was not a focus render, and nothing else, went through to_display
+        let end = Instant::now() + Duration::from_secs(10);
+        while backend.shown().len() as u64 != core.stats().renders && Instant::now() < end {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        std::thread::sleep(Duration::from_millis(200));
+        let stats = core.stats();
+        let shown = backend.shown();
+        assert_eq!(shown.len() as u64, stats.renders);
+        assert_eq!(stats.focus_maps, 1);
+        assert_eq!(
+            backend.renders.load(Ordering::SeqCst) as u64,
+            stats.renders + stats.focus_maps,
+            "the focus render is not converted"
+        );
+
+        // every view given out is its render plus 1
+        flat_frames_until(&core, &mut views, |_, _| true);
+        assert!(!views.is_empty());
+        for view in &views {
+            assert!(view.image.is_consistent(), "{view:?}");
+            assert!(
+                view.image.data.iter().all(|b| *b == FLAT + 1),
+                "{:?} {:?} is not its render plus 1",
+                view.kind,
+                view.region
+            );
+        }
+
+        // the scaled view reached to_display at its reduced size
+        let Some(scaled) = views.iter().find(|v| v.kind == ViewKind::Scaled) else {
+            panic!("no scaled view in {views:?}");
+        };
+        let reduced = (scaled.image.width, scaled.image.height);
+        let region = (scaled.region.w, scaled.region.h);
+        assert!(
+            reduced.0 < region.0 && reduced.1 < region.1,
+            "{reduced:?} of {region:?}"
+        );
+        assert!(shown.contains(&reduced), "{shown:?} lacks {reduced:?}");
+        assert!(!shown.contains(&region), "{shown:?} has {region:?}");
+    }
+
+    #[test]
+    fn a_failed_conversion_to_the_display_is_the_frames_error() {
+        let backend = Flat {
+            fail: true,
+            ..Flat::default()
+        };
+        let core = match ViewCore::start(backend.clone(), Config::default()) {
+            Ok(c) => c,
+            Err(e) => panic!("start: {e}"),
+        };
+        let mut views = Vec::new();
+        core.open_folder(vec![PathBuf::from(A)]);
+        let f = flat_frames_until(&core, &mut views, |f, _| {
+            matches!(f.status, Status::Error(_))
+        });
+        let Status::Error(e) = f.status else {
+            panic!("expected an error, got {:?}", f.status);
+        };
+        assert_eq!(e.message, "the conversion to the display failed");
+        assert!(!e.damaged);
+        assert!(views.is_empty(), "{views:?}");
+        assert!(!backend.shown().is_empty());
+        assert!(core.stats().failures >= 1);
     }
 
     #[test]

@@ -87,8 +87,7 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status |
 |---|---|---|
-| [T308](T308-conversion-after-reduction.md) | ADR 0027 W1: the conversion to the monitor profile moved after the reduction | Open |
-| [T309](T309-lanczos-in-the-view.md) | ADR 0027 W1: the Lanczos filter in the view, the half-size view reduced, the gestures | Blocked: waits for T308 |
+| [T309](T309-lanczos-in-the-view.md) | ADR 0027 W1: the Lanczos filter in the view, the half-size view reduced, the gestures | Blocked: waits for T311 |
 
 ## Writing a task (owner and reviewer)
 

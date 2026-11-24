@@ -1,4 +1,4 @@
-# T309. ADR 0027 W1: the Lanczos filter in the view, the half-size view reduced, the gestures — Blocked: waits for T308
+# T309. ADR 0027 W1: the Lanczos filter in the view, the half-size view reduced, the gestures — Blocked: waits for T311
 
 - **Why:** ADR 0027 §3.2 and W1-Q2/W1-Q3/W1-Q5/W1-Q7 (answered by the owner 2026-11-24, ADR 0027
   §4.1): every view below 100 % is reduced on the worker with the Lanczos filter of T307
@@ -185,3 +185,4 @@
 | 2026-11-24 | Blocked | Added (ADR 0027 W1, W1-Q2/W1-Q3/W1-Q5/W1-Q7); waits for T308 |
 | 2026-11-24 | Blocked | Cold read: a resident `Half` would have satisfied every `Reduced` requirement, so `satisfied` now counts only the exact `Reduced` view (`serving` unchanged); the gesture switch only for `Want::Shown`; `remove_inflight` by density, `accept` for an unwanted `Reduced`; the stand-in stays `Preparing`, sets `last_draw`/`last_vis`, only at ≤ 0.5; free levels below 50 % keep quick stepping (W1-Q8); linear magnification for `Reduced`/`Half` (W1-Q9); the tests that change named; the a7r test's size by the quantised density |
 | 2026-11-24 | Blocked | Chain review (see T307's log): a view-size change counts as a gesture step; `docs/architecture.md`, the test-inventory removals, point 10's threshold, the extra code review, the Done steps and hand-check points added |
+| 2026-11-24 | Blocked | T308 Done; T307's timing (440 ms) is above point 10's 100 ms, so the threads come first as T311 (owner 2026-11-24); waits for T311 |

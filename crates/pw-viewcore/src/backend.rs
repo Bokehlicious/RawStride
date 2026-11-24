@@ -413,11 +413,20 @@ pub trait Backend: Send + Sync + 'static {
     /// orientation for RAW, the JPEG's own grid for JPEG) with the orientation to apply.
     fn open(&self, path: &Path, source: Source) -> Result<(Self::Session, ImageSize), DecodeError>;
 
-    /// The whole image at half size.
+    /// The whole image at half size, before the conversion to the display
+    /// ([`to_display`](Self::to_display)).
     fn render_half(&self, session: &mut Self::Session) -> Result<Rgb, DecodeError>;
 
-    /// Exactly the region `r` at full resolution (RAW: demosaiced with PPG).
+    /// Exactly the region `r` at full resolution (RAW: demosaiced with PPG), before the
+    /// conversion to the display ([`to_display`](Self::to_display)).
     fn render_region(&self, session: &mut Self::Session, r: Rect) -> Result<Rgb, DecodeError>;
+
+    /// Converts a rendered and reduced view of the opened image to the display (the monitor
+    /// profile), after the reduction (ADR 0016, ADR 0027 §3.2, W1-Q4). The default leaves it
+    /// unchanged.
+    fn to_display(&self, _session: &Self::Session, img: Rgb) -> Result<Rgb, DecodeError> {
+        Ok(img)
+    }
 
     /// Whether the file's embedded colour profile was present but could not be used, so its
     /// colours rest on a fallback (ADR 0016 §5). Asked once after a successful open.

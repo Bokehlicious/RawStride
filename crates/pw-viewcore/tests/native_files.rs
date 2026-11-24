@@ -276,7 +276,8 @@ fn jpeg_mode_shows_the_embedded_jpeg_upright_at_its_own_size() {
     }
 }
 
-/// `render_half` of `path` opened as `mode` with `backend`, and how long the render took.
+/// `render_half` of `path` opened as `mode` with `backend`, converted to the display with
+/// `to_display` as the core shows it (ADR 0027 W1-Q4), and how long both took.
 fn timed_half(backend: &NativeBackend, path: &std::path::Path, mode: Source) -> (Rgb, Duration) {
     let (mut session, _) = backend
         .open(path, mode)
@@ -285,6 +286,9 @@ fn timed_half(backend: &NativeBackend, path: &std::path::Path, mode: Source) -> 
     let half = backend
         .render_half(&mut session)
         .unwrap_or_else(|e| panic!("{} in {mode:?}: render_half: {}", path.display(), e.message));
+    let half = backend
+        .to_display(&session, half)
+        .unwrap_or_else(|e| panic!("{} in {mode:?}: to_display: {}", path.display(), e.message));
     (half, start.elapsed())
 }
 

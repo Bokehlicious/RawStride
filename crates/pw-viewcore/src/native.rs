@@ -3,13 +3,16 @@
 //! ADR 0009 §5.2), and `pw-tiff` for TIFF files, decoded once under the core budget (ADR 0015
 //! §4.1–§4.4). Without the feature the core's tests need no native libraries.
 //!
-//! Every image is converted from its source profile to the backend's destination (the monitor
-//! profile) with `pw-colour` before it leaves the backend, so the core's caches hold
-//! display-ready pixels (ADR 0016 §4.1, §4.2): TIFF from its embedded profile, JPEG from its
-//! APP2 profile or Exif marker (ADR 0016 §3.1), RAW from sRGB (LibRaw renders sRGB, ADR 0006).
-//! With the default destination sRGB, sRGB sources are identity transforms and the pixels are
-//! unchanged (F3). A session remembers whether the file's embedded profile could not be used
-//! (ADR 0016 §5), for the loupe's status line.
+//! Every view is converted from its source profile to the backend's destination (the monitor
+//! profile) with `pw-colour` before the core gives it out, so the core's caches hold
+//! display-ready pixels (ADR 0016 §4.1, §4.2): JPEG from its APP2 profile or Exif marker (ADR 0016
+//! §3.1) and RAW from sRGB (LibRaw renders sRGB, ADR 0006). The renders of RAW and JPEG are
+//! unconverted; the core reduces a view first and then converts it with
+//! [`Backend::to_display`] (ADR 0027 §3.2, W1-Q4). A TIFF is converted from its embedded profile
+//! once, when it is opened (W1-Q5), and `to_display` leaves it unchanged. With the default
+//! destination sRGB, sRGB sources are identity transforms and the pixels are unchanged (F3). A
+//! session remembers whether the file's embedded profile could not be used (ADR 0016 §5), for the
+//! loupe's status line.
 //!
 //! The histogram and the exposure statistics (ADR 0017 §2.6, U7) come from the data **before**
 //! that conversion: RAW from the unpacked RAW data (`pw-libraw`), a JPEG from its full decode and
@@ -128,7 +131,8 @@ pub struct JpegSession {
     decoder: Decoder,
     /// From the JPEG's source profile (ADR 0016 §3.1) to the destination.
     transform: Arc<Transform>,
-    /// The full decode, already converted.
+    /// The full decode, unconverted (a crop of it is converted by `to_display` like any other
+    /// view, ADR 0027 W1-Q4).
     full: Option<Rgb>,
     /// The statistics of the full decode before its conversion, once they were computed.
     statistics: Option<Box<Statistics>>,
@@ -296,25 +300,20 @@ fn raw_statistics(raw: &pw_libraw::RawStatistics) -> Statistics {
 }
 
 /// The statistics of a JPEG from its full decode **before** the conversion to the destination
-/// (ADR 0017 U7-Q5), computed once per session. A session without a full decode gets it here,
-/// and keeps it converted for the 100 % views, as `render_region` would; a session that already
-/// holds a converted one is decoded once more, unless the conversion changes nothing.
+/// (ADR 0017 U7-Q5), computed once per session. The session's full decode is unconverted, so it
+/// is used as it is; a session without one decodes it here and keeps it for the 100 % views, as
+/// `render_region` would.
 fn jpeg_statistics(j: &mut JpegSession) -> Option<Statistics> {
     if let Some(statistics) = &j.statistics {
         return Some(statistics.as_ref().clone());
     }
     let origin = StatisticsOrigin::EmbeddedJpeg;
     let statistics = match &j.full {
-        Some(full) if j.transform.is_identity() => Statistics::of_rgb8(origin, &full.data),
-        Some(_) => {
-            let full = j.decoder.decode(&j.data, Scale::Full).ok()?;
-            Statistics::of_rgb8(origin, &full.data)
-        }
+        Some(full) => Statistics::of_rgb8(origin, &full.data),
         None => {
             let full = j.decoder.decode(&j.data, Scale::Full).map(rgb_jpeg).ok()?;
             let statistics = Statistics::of_rgb8(origin, &full.data);
-            // a failed conversion leaves no full decode; a 100 % view then reports it
-            j.full = convert(&j.transform, full).ok();
+            j.full = Some(full);
             statistics
         }
     };
@@ -345,14 +344,12 @@ fn raw_clipping_map(raw: pw_libraw::ClippingMap) -> ClippingMap {
 }
 
 /// The clipping map of a JPEG from its full decode **before** the conversion to the destination
-/// (ADR 0017 U7b, U7-Q5): the session's full decode when the conversion changes nothing,
-/// otherwise a new decode of the JPEG. The session's own pixels are not changed.
+/// (ADR 0017 U7b, U7-Q5): the session's full decode (unconverted) when it has one, otherwise a
+/// new decode of the JPEG, which is not kept. The session's own pixels are not changed.
 fn jpeg_clipping_map(j: &mut JpegSession) -> Option<ClippingMap> {
     match &j.full {
-        Some(full) if j.transform.is_identity() => {
-            ClippingMap::of_rgb8(full.width, full.height, &full.data)
-        }
-        _ => {
+        Some(full) => ClippingMap::of_rgb8(full.width, full.height, &full.data),
+        None => {
             let full = j.decoder.decode(&j.data, Scale::Full).ok()?;
             ClippingMap::of_rgb8(full.width, full.height, &full.data)
         }
@@ -401,18 +398,12 @@ impl Backend for NativeBackend {
 
     fn render_half(&self, session: &mut NativeSession) -> Result<Rgb, DecodeError> {
         match session {
-            NativeSession::Raw(s, t) => {
-                let img = s.render_half().map(rgb_raw).map_err(raw_error)?;
-                convert(t, img)
-            }
-            NativeSession::Jpeg(j) => {
-                let img = j
-                    .decoder
-                    .decode(&j.data, Scale::Half)
-                    .map(rgb_jpeg)
-                    .map_err(jpeg_error)?;
-                convert(&j.transform, img)
-            }
+            NativeSession::Raw(s, _) => s.render_half().map(rgb_raw).map_err(raw_error),
+            NativeSession::Jpeg(j) => j
+                .decoder
+                .decode(&j.data, Scale::Half)
+                .map(rgb_jpeg)
+                .map_err(jpeg_error),
             NativeSession::Tiff(TiffSession { image: img, .. }) => {
                 let (w, h) = scale::scaled_size(img.width, img.height, 0.5);
                 scale::downscale(img, w, h).ok_or_else(|| {
@@ -427,13 +418,11 @@ impl Backend for NativeBackend {
 
     fn render_region(&self, session: &mut NativeSession, r: Rect) -> Result<Rgb, DecodeError> {
         match session {
-            NativeSession::Raw(s, t) => {
+            NativeSession::Raw(s, _) => {
                 let r = pw_libraw::Rect::new(r.x, r.y, r.w, r.h);
-                let img = s
-                    .render_region_with(r, MARGIN, Demosaic::Ppg)
+                s.render_region_with(r, MARGIN, Demosaic::Ppg)
                     .map(rgb_raw)
-                    .map_err(raw_error)?;
-                convert(t, img)
+                    .map_err(raw_error)
             }
             NativeSession::Jpeg(j) => {
                 if j.full.is_none() {
@@ -442,8 +431,8 @@ impl Backend for NativeBackend {
                         .decode(&j.data, Scale::Full)
                         .map(rgb_jpeg)
                         .map_err(jpeg_error)?;
-                    // converted once here, so crops need no work
-                    j.full = Some(convert(&j.transform, full)?);
+                    // decoded once here and kept unconverted, so crops need no decode
+                    j.full = Some(full);
                 }
                 let full = j
                     .full
@@ -456,6 +445,15 @@ impl Backend for NativeBackend {
                 scale::crop(img, r.x, r.y, r.w, r.h)
                     .ok_or_else(|| DecodeError::new(format!("region {r:?} is outside the TIFF")))
             }
+        }
+    }
+
+    fn to_display(&self, session: &NativeSession, img: Rgb) -> Result<Rgb, DecodeError> {
+        match session {
+            NativeSession::Raw(_, t) => convert(t, img),
+            NativeSession::Jpeg(j) => convert(&j.transform, img),
+            // converted once when it was opened (ADR 0027 W1-Q5)
+            NativeSession::Tiff(_) => Ok(img),
         }
     }
 
@@ -818,21 +816,25 @@ mod tests {
         (half, region)
     }
 
-    /// `render_half` and the region (4, 2, 8×4) of `path` opened with `backend`.
+    /// `render_half` and the region (4, 2, 8×4) of `path` opened with `backend`, as shown: each
+    /// through `to_display` (ADR 0027 W1-Q4).
     fn jpeg_renders(backend: &NativeBackend, path: &Path) -> (Rgb, Rgb) {
         let (mut session, size) = backend.open(path, Source::Jpeg).unwrap();
         assert!(matches!(session, NativeSession::Jpeg(_)), "{session:?}");
         assert_eq!((size.w, size.h), (16, 8));
         let half = backend.render_half(&mut session).unwrap();
-        let region = backend
-            .render_region(&mut session, Rect::new(4, 2, 8, 4))
-            .unwrap();
+        let half = backend.to_display(&session, half).unwrap();
+        let region = shown_region(backend, &mut session, Rect::new(4, 2, 8, 4));
         // a second region comes from the stored full decode and is converted the same way
-        let again = backend
-            .render_region(&mut session, Rect::new(4, 2, 8, 4))
-            .unwrap();
+        let again = shown_region(backend, &mut session, Rect::new(4, 2, 8, 4));
         assert_eq!(again, region);
         (half, region)
+    }
+
+    /// The region `r` of a session as shown: `render_region`, then `to_display`.
+    fn shown_region(backend: &NativeBackend, session: &mut NativeSession, r: Rect) -> Rgb {
+        let region = backend.render_region(session, r).unwrap();
+        backend.to_display(session, region).unwrap()
     }
 
     #[test]
@@ -953,6 +955,112 @@ mod tests {
         assert_eq!(region.data, converted(plain_region.data, &adobe, &srgb));
     }
 
+    // ---------- the conversion after the reduction (ADR 0027 §3.2, W1-Q4, W1-Q5, T308) ----------
+
+    /// The fixture JPEG's plain full decode.
+    fn plain_jpeg_full() -> Rgb {
+        let mut decoder = Decoder::new().unwrap();
+        rgb_jpeg(decoder.decode(jpeg_fixture::SMALL, Scale::Full).unwrap())
+    }
+
+    /// The session's full decode, when it is a JPEG session that has one.
+    fn jpeg_full(session: &NativeSession) -> Option<&Rgb> {
+        match session {
+            NativeSession::Jpeg(j) => j.full.as_ref(),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn the_renders_are_unconverted_and_to_display_converts_them() {
+        let (srgb, adobe) = (Profile::srgb(), Profile::adobe_rgb());
+        let backend = NativeBackend::default().with_monitor_profile(adobe.clone());
+
+        // a JPEG: the plain decodes, and to_display gives the converted ones
+        let path = temp_file("unconverted.jpg", jpeg_fixture::SMALL);
+        let (plain_half, plain_region) = plain_jpeg_decodes();
+        let (mut session, _) = backend.open(&path, Source::Jpeg).unwrap();
+        let half = backend.render_half(&mut session).unwrap();
+        assert_eq!(half, plain_half);
+        let region = backend
+            .render_region(&mut session, Rect::new(4, 2, 8, 4))
+            .unwrap();
+        assert_eq!(region, plain_region);
+        let expected_half = converted(plain_half.data.clone(), &srgb, &adobe);
+        assert_ne!(
+            expected_half, plain_half.data,
+            "the conversion changes the fixture"
+        );
+        assert_eq!(
+            backend.to_display(&session, half).unwrap().data,
+            expected_half
+        );
+        assert_eq!(
+            backend.to_display(&session, region).unwrap().data,
+            converted(plain_region.data.clone(), &srgb, &adobe)
+        );
+
+        // a TIFF stays as it was converted when it was opened: to_display changes nothing
+        let (w, h) = (6, 4);
+        let tiff = temp_file("unconverted.tif", &rgb_tiff(w, h, &pixels(w, h), None));
+        let (mut session, size) = backend.open(&tiff, Source::Jpeg).unwrap();
+        assert!(matches!(&session, NativeSession::Tiff(t) if !t.unconverted));
+        let half = backend.render_half(&mut session).unwrap();
+        assert_eq!(backend.to_display(&session, half.clone()).unwrap(), half);
+        let all = whole(&backend, &mut session, size);
+        assert_ne!(all.data, pixels(w, h), "the TIFF was converted when opened");
+        assert_eq!(backend.to_display(&session, all.clone()).unwrap(), all);
+    }
+
+    #[test]
+    fn a_jpeg_session_keeps_its_full_decode_unconverted_for_every_crop() {
+        let (srgb, adobe) = (Profile::srgb(), Profile::adobe_rgb());
+        let backend = NativeBackend::default().with_monitor_profile(adobe.clone());
+        let path = temp_file("full-unconverted.jpg", jpeg_fixture::SMALL);
+        let plain = plain_jpeg_full();
+        let (mut session, _) = backend.open(&path, Source::Jpeg).unwrap();
+        assert_eq!(jpeg_full(&session), None);
+
+        let first = backend
+            .render_region(&mut session, Rect::new(4, 2, 8, 4))
+            .unwrap();
+        assert_eq!(jpeg_full(&session), Some(&plain));
+        let second = backend
+            .render_region(&mut session, Rect::new(0, 3, 6, 5))
+            .unwrap();
+        assert_eq!(jpeg_full(&session), Some(&plain));
+
+        for (crop, r) in [(first, (4, 2, 8, 4)), (second, (0, 3, 6, 5))] {
+            let plain_crop = scale::crop(&plain, r.0, r.1, r.2, r.3).unwrap();
+            assert_eq!(crop, plain_crop, "{r:?} is unconverted");
+            let shown = backend.to_display(&session, crop).unwrap();
+            let expected = converted(plain_crop.data.clone(), &srgb, &adobe);
+            assert_ne!(expected, plain_crop.data, "the conversion changes {r:?}");
+            assert_eq!(shown.data, expected, "{r:?} as shown");
+        }
+    }
+
+    #[test]
+    fn jpeg_statistics_keep_the_full_decode_unconverted() {
+        let backend = NativeBackend::default().with_monitor_profile(Profile::adobe_rgb());
+        let path = temp_file("statistics-full.jpg", jpeg_fixture::SMALL);
+        let plain = plain_jpeg_full();
+
+        // before any render: the statistics leave the plain full decode in the session
+        let (mut session, _) = backend.open(&path, Source::Jpeg).unwrap();
+        let before = backend.statistics(&mut session).unwrap();
+        assert_eq!(before, plain_jpeg_statistics());
+        assert_eq!(jpeg_full(&session), Some(&plain));
+
+        // after a 100 % view: the same statistics, and the full decode is still there
+        let (mut session, _) = backend.open(&path, Source::Jpeg).unwrap();
+        backend
+            .render_region(&mut session, Rect::new(4, 2, 8, 4))
+            .unwrap();
+        assert_eq!(backend.statistics(&mut session), Some(before));
+        assert_eq!(jpeg_full(&session), Some(&plain));
+    }
+
     // ---------- statistics before the conversion (ADR 0017 §2.6, U7-Q5, T142) ----------
 
     /// The statistics of the fixture JPEG's plain full decode.
@@ -989,13 +1097,11 @@ mod tests {
         .unwrap();
         let backend = NativeBackend::default().with_monitor_profile(adobe);
 
-        // 1. before any render: the statistics decode the JPEG and leave the converted full
+        // 1. before any render: the statistics decode the JPEG and leave the unconverted full
         //    decode for the 100 % views
         let (mut session, _) = backend.open(&path, Source::Jpeg).unwrap();
         assert_eq!(backend.statistics(&mut session), Some(expected.clone()));
-        let region = backend
-            .render_region(&mut session, Rect::new(4, 2, 8, 4))
-            .unwrap();
+        let region = shown_region(&backend, &mut session, Rect::new(4, 2, 8, 4));
         assert_eq!(region, converted_region);
 
         // 2. after a half-size render
@@ -1003,18 +1109,14 @@ mod tests {
         backend.render_half(&mut session).unwrap();
         assert_eq!(backend.statistics(&mut session), Some(expected.clone()));
 
-        // 3. after a 100 % view, when the session already holds the converted full decode
+        // 3. after a 100 % view, when the session already holds the full decode
         let (mut session, _) = backend.open(&path, Source::Jpeg).unwrap();
-        let region = backend
-            .render_region(&mut session, Rect::new(4, 2, 8, 4))
-            .unwrap();
+        let region = shown_region(&backend, &mut session, Rect::new(4, 2, 8, 4));
         assert_eq!(region, converted_region);
         assert_eq!(backend.statistics(&mut session), Some(expected.clone()));
         // asked again, the same (kept in the session)
         assert_eq!(backend.statistics(&mut session), Some(expected.clone()));
-        let again = backend
-            .render_region(&mut session, Rect::new(4, 2, 8, 4))
-            .unwrap();
+        let again = shown_region(&backend, &mut session, Rect::new(4, 2, 8, 4));
         assert_eq!(again, converted_region);
 
         // destination sRGB (no conversion): the same statistics
@@ -1128,9 +1230,7 @@ mod tests {
         let (mut session, _) = backend.open(&path, Source::Jpeg).unwrap();
         assert_eq!(backend.clipping_map(&mut session), Some(expected.clone()));
         assert!(matches!(&session, NativeSession::Jpeg(j) if j.full.is_none()));
-        let region = backend
-            .render_region(&mut session, Rect::new(4, 2, 8, 4))
-            .unwrap();
+        let region = shown_region(&backend, &mut session, Rect::new(4, 2, 8, 4));
         assert_eq!(region, converted_region);
 
         // 2. after a half-size render
@@ -1138,19 +1238,15 @@ mod tests {
         backend.render_half(&mut session).unwrap();
         assert_eq!(backend.clipping_map(&mut session), Some(expected.clone()));
 
-        // 3. after a 100 % view and the statistics, when the session holds the converted full
-        //    decode: the map is still of the JPEG's own values, and the session's pixels stay
+        // 3. after a 100 % view and the statistics, when the session holds the full decode: the
+        //    map is still of the JPEG's own values, and the session's pixels stay
         let (mut session, _) = backend.open(&path, Source::Jpeg).unwrap();
-        let region = backend
-            .render_region(&mut session, Rect::new(4, 2, 8, 4))
-            .unwrap();
+        let region = shown_region(&backend, &mut session, Rect::new(4, 2, 8, 4));
         assert_eq!(region, converted_region);
         assert!(backend.statistics(&mut session).is_some());
         assert_eq!(backend.clipping_map(&mut session), Some(expected.clone()));
         assert_eq!(backend.clipping_map(&mut session), Some(expected.clone()));
-        let again = backend
-            .render_region(&mut session, Rect::new(4, 2, 8, 4))
-            .unwrap();
+        let again = shown_region(&backend, &mut session, Rect::new(4, 2, 8, 4));
         assert_eq!(again, converted_region);
 
         // a destination that is the JPEG's own profile (no conversion): the same map, from a
