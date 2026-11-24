@@ -87,7 +87,6 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status |
 |---|---|---|
-| [T301](T301-window-load-and-save-template.md) | Load Template… and Save as Template… in the metadata window | Open |
 | [T303](T303-apply-template-submenu.md) | The right-click menu's Apply Template submenu | Blocked |
 
 ## Writing a task (owner and reviewer)

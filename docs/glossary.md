@@ -228,6 +228,7 @@ Every other property already uses IPTC's English name in both languages.
 | OK, Avbryt, Spara, Släng | OK, Cancel, Save, Discard | |
 | Föregående, Nästa, Spara och nästa | Previous, Next, Save and Next | |
 | Kopiera alla fält, Klistra in alla fält | Copy All Fields, Paste All Fields | the metadata window's buttons (ADR 0017 §2.3.1, U12b-Q5); added by T125. The Paste tooltip: "1 field from {file}" / "{n} fields from {file}" |
+| – | Load Template…, Save as Template… | the metadata window's buttons after Paste All Fields (ADR 0017 U13-Q22); added by T301. A refused save: "No field shown has a value to save as a template." / "Not saved as a template: {reason}" |
 | Använd på alla markerade | Apply to {n} Marked; Apply to All Marked | the metadata window's button with two or more images marked, and the title of its confirmation (ADR 0017 §2.3.1, U12c); added by T126. Under the window's title: "1 image marked" / "{n} images marked" |
 | – | Write, Writing {i} of {n} … | the confirmation's button and the progress of "Apply to All Marked"; added by T126. The question: "Write {k} changed fields to {n} images?" (singular "1 changed field", "1 image") |
 | – | Changed: …, Emptied: …, Emptied only on this image: …, Skipped: {m} files | the confirmation's lines (U12c-Q4); added by T126. "Skipped: 1 file" in singular |

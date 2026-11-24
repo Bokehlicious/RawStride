@@ -3288,6 +3288,15 @@ pub enum EditorText {
     PasteAllFields,
     /// The tooltip of "Paste All Fields": how many fields it holds and from which file.
     PasteTooltip { fields: usize, file: String },
+    /// The button that loads a template file into the form (ADR 0017 U13-Q22, T301).
+    LoadTemplate,
+    /// The button that saves the fields shown as a template file (ADR 0017 U13-Q22, T301).
+    SaveAsTemplate,
+    /// Save as Template… refused: no field shown has a value (U13-Q25, T301).
+    TemplateEmpty,
+    /// Save as Template… refused: a variable cannot be read; the variable error's text (U13-Q25,
+    /// T301).
+    TemplateVariables { reason: String },
     /// The title of the message at program exit listing the rating and editor writes that were
     /// not saved (owner decision 2026-11-12: one message for both).
     UnsavedAtExitTitle,
@@ -3513,6 +3522,12 @@ pub fn editor_text(text: &EditorText) -> String {
                 format!("{fields} fields from {file}")
             }
         }
+        EditorText::LoadTemplate => "Load Template…".to_string(),
+        EditorText::SaveAsTemplate => "Save as Template…".to_string(),
+        EditorText::TemplateEmpty => {
+            "No field shown has a value to save as a template.".to_string()
+        }
+        EditorText::TemplateVariables { reason } => format!("Not saved as a template: {reason}"),
         EditorText::UnsavedAtExitTitle => "Unsaved Changes".to_string(),
         EditorText::MoreUnsaved { more } => format!("… and {more} more"),
         EditorText::ReadingMetadata => "Reading metadata…".to_string(),
@@ -5012,6 +5027,25 @@ mod tests {
         form.paste(&copied);
         assert_eq!(form.edits(), Ok(Vec::new()));
         assert_eq!(form, form_with(source_metadata()));
+    }
+
+    #[test]
+    fn the_template_button_and_refusal_texts() {
+        assert_eq!(editor_text(&EditorText::LoadTemplate), "Load Template…");
+        assert_eq!(
+            editor_text(&EditorText::SaveAsTemplate),
+            "Save as Template…"
+        );
+        assert_eq!(
+            editor_text(&EditorText::TemplateEmpty),
+            "No field shown has a value to save as a template."
+        );
+        assert_eq!(
+            editor_text(&EditorText::TemplateVariables {
+                reason: "{date unknown".into()
+            }),
+            "Not saved as a template: {date unknown"
+        );
     }
 
     #[test]

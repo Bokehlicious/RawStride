@@ -131,13 +131,14 @@ use pw_loupe::{
     SaveError, TEMPLATE_COLUMN_MIN_WIDTH, TEMPLATE_WINDOW_MIN, TemplateEvent, TemplateFieldError,
     TemplateForm, TemplateIo, TemplateItem, TemplateRefused, TemplateRow, TemplateText,
     left_column_sections, load_failed_text, not_loaded_lines, refused_text, save_failed_text,
-    template_rows, template_text, template_window_size, templates_folder, with_xmp_extension,
+    template_rows, template_text, template_window_size, templates_folder, window_template,
+    with_xmp_extension,
 };
 use pw_metadata::edit::{Edit, EditOptions};
 use pw_metadata::iim::Fallback;
 use pw_metadata::journal::Journal;
 use pw_metadata::read::MetadataRead;
-use pw_metadata::template_file::TemplateFile;
+use pw_metadata::template_file::{TemplateFile, TemplateRead};
 use pw_metadata::{
     DeleteError, DeleteRefusal, MetadataWorker, PreparedDelete, Rating, WriteSetup, supports_rating,
 };
@@ -375,6 +376,9 @@ enum EditorStatus {
     Batch(Vec<StatusLine>),
     /// A failed write, or a failed read after a write; the whole text.
     Failed(String),
+    /// Load Template… or Save as Template… (ADR 0017 U13-Q22, T301): the lines of the load's or
+    /// the save's answer, or of a refused save, each in the error colour when it is an error.
+    Template(Vec<StatusLine>),
 }
 
 /// The status when OK, Save and Next, Save or "Apply to {n} Marked" wrote nothing because of
@@ -563,6 +567,11 @@ struct MetadataWindow {
     written: Vec<(EditorField, Vec<String>)>,
     /// The values of a write that succeeded, not yet added to the recent values.
     recorded: Vec<(EditorField, Vec<String>)>,
+    /// The id of the Load Template… or Save as Template… sent to the template thread whose answer
+    /// is waited for (ADR 0017 U13-Q22, T301). While it is set the form and every button but
+    /// Cancel are greyed and the window's keys do nothing; Cancel and Escape still close the
+    /// window, and the late answer is then dropped.
+    template_waiting: Option<u64>,
 }
 
 impl MetadataWindow {
@@ -588,6 +597,72 @@ impl MetadataWindow {
             value_list_escape: false,
             written: Vec::new(),
             recorded: Vec::new(),
+            template_waiting: None,
+        }
+    }
+
+    /// The template thread's answer `event` to the window's Load Template… or Save as Template…
+    /// (ADR 0017 U13-Q7, U13-Q23, T301). An answer to another request is given back unchanged. A
+    /// read file goes into the form as unsaved edits (`EditorForm::load_template` with `layout`)
+    /// and the status names what was not loaded; a save does not change the form.
+    fn template_answer(
+        &mut self,
+        event: TemplateEvent,
+        layout: &EditorLayout,
+    ) -> Option<TemplateEvent> {
+        let id = match &event {
+            TemplateEvent::Loaded { id, .. } | TemplateEvent::Saved { id, .. } => *id,
+        };
+        if self.template_waiting != Some(id) {
+            return Some(event);
+        }
+        self.template_waiting = None;
+        let lines = match &event {
+            TemplateEvent::Loaded {
+                path,
+                result: Ok(read),
+                ..
+            } => match &mut self.body {
+                WindowBody::Form(state) => {
+                    let not_loaded = state.form.load_template(&read.template, layout);
+                    window_load_status(path, read, &not_loaded)
+                }
+                // The form is always shown when Load Template… can be pressed.
+                WindowBody::Loading | WindowBody::ReadError(_) => return None,
+            },
+            TemplateEvent::Loaded {
+                path,
+                result: Err(error),
+                ..
+            } => vec![error_line(load_failed_text(&file_name_text(path), error))],
+            TemplateEvent::Saved { path, result, .. } => window_save_status(path, Some(result)),
+        };
+        self.status = EditorStatus::Template(lines);
+        None
+    }
+
+    /// Save as Template… refused by `window_template` (U13-Q25, T301), shown as OK shows field
+    /// errors: each field's error under it and the status naming the fields and lists; nothing to
+    /// save and an unreadable variable as a line of their own in the error colour.
+    fn template_refused(&mut self, refused: &TemplateRefused) {
+        match refused {
+            TemplateRefused::FieldErrors(errors) => {
+                let (fields, lists) = refused_field_errors(errors);
+                self.status = not_saved_status(&fields, lists);
+                self.errors = fields;
+            }
+            TemplateRefused::Empty => {
+                self.status = EditorStatus::Template(vec![error_line(editor_text(
+                    &EditorText::TemplateEmpty,
+                ))]);
+            }
+            TemplateRefused::Variables(reason) => {
+                self.status = EditorStatus::Template(vec![error_line(editor_text(
+                    &EditorText::TemplateVariables {
+                        reason: reason.clone(),
+                    },
+                ))]);
+            }
         }
     }
 
@@ -882,6 +957,71 @@ fn file_name_text(path: &Path) -> String {
 /// A status line drawn in the error colour.
 fn error_line(text: String) -> StatusLine {
     StatusLine { text, error: true }
+}
+
+/// The metadata window's status after Load Template… read `path` (ADR 0017 U13-Q23, T301):
+/// `Loaded {file}.`, then in the error colour what the read and `EditorForm::load_template`
+/// (`not_loaded`) left out and the values that could not be read (`not_loaded_lines`), as the
+/// template window shows them after its Load.
+fn window_load_status(path: &Path, read: &TemplateRead, not_loaded: &[String]) -> Vec<StatusLine> {
+    let mut lines = vec![StatusLine {
+        text: template_text(&TemplateText::Loaded {
+            file: file_name_text(path),
+        }),
+        error: false,
+    }];
+    lines.extend(
+        not_loaded_lines(read, not_loaded)
+            .into_iter()
+            .map(error_line),
+    );
+    lines
+}
+
+/// The metadata window's status after Save as Template… to `path` (T301): `result` the template
+/// thread's answer, `None` when the save could not be sent (the thread has stopped). Saved, or in
+/// the error colour why not, with the template window's texts.
+fn window_save_status(path: &Path, result: Option<&Result<(), SaveError>>) -> Vec<StatusLine> {
+    vec![match result {
+        Some(Ok(())) => StatusLine {
+            text: template_text(&TemplateText::Saved {
+                file: file_name_text(path),
+            }),
+            error: false,
+        },
+        Some(Err(SaveError::File(error))) => error_line(save_failed_text(error)),
+        Some(Err(SaveError::NoConfig(reason))) => {
+            error_line(template_text(&TemplateText::NotSavedNoConfig {
+                reason: reason.clone(),
+            }))
+        }
+        None => error_line(template_text(&TemplateText::NotSavedStopped)),
+    }]
+}
+
+/// The errors of Save as Template… refused in the metadata window (U13-Q25, T301), as OK's field
+/// errors: each field's and contact field's error for `MetadataWindow::errors`, and the XMP ids
+/// of the structure lists with an error, each once, in the order given (Location Created for its
+/// sub-fields); the form shows a list's errors under its entries itself.
+fn refused_field_errors(
+    errors: &[TemplateFieldError],
+) -> (Vec<(EditorField, String)>, Vec<&'static str>) {
+    let mut fields = Vec::new();
+    let mut lists: Vec<&'static str> = Vec::new();
+    for error in errors {
+        match error.item {
+            TemplateItem::Field(field) | TemplateItem::ContactField(field) => {
+                fields.push((field, error.text.clone()));
+            }
+            TemplateItem::LocationField(_) | TemplateItem::List(_) => {
+                let list = error.item.property();
+                if !lists.contains(&list) {
+                    lists.push(list);
+                }
+            }
+        }
+    }
+    (fields, lists)
 }
 
 /// The submit error of an import whose template file `path` is not there at Start (ADR 0017
@@ -4430,7 +4570,10 @@ impl Loupe {
             window.read_arrived(result, locked);
         }
         let waiting = self.metadata.window_waiting();
-        if locked || waiting {
+        // Load Template… or Save as Template… waits for the template thread (T301): not part of
+        // `locked`, so no "Saving…" is shown and a read still refills the form.
+        let template_waiting = window.template_waiting.is_some();
+        if locked || waiting || template_waiting {
             ctx.request_repaint_after(WINDOW_POLL_INTERVAL);
         }
         // The window's keys (U12-Q1) and its rating keys (U10c-Q2, T124) are taken before the
@@ -4482,14 +4625,16 @@ impl Loupe {
         let marked_count = window.marked.len();
         let can_apply = !locked
             && !asking
+            && !template_waiting
             && match &window.body {
                 WindowBody::Form(state) => apply_allowed(&state.form, &window.path, &window.marked),
                 WindowBody::Loading | WindowBody::ReadError(_) => false,
             };
         let mut apply = false;
         let mut apply_answer = None;
-        // No move while the read or a write runs, nor at the first or last supported image.
-        let busy = locked || waiting;
+        // No move while the read, a write or the template thread runs, nor at the first or last
+        // supported image.
+        let busy = locked || waiting || template_waiting;
         let can_previous = !busy && self.window_neighbour(&window.path, false).is_some();
         let can_next = !busy && self.window_neighbour(&window.path, true).is_some();
         let create_iim = self.settings.create_iim;
@@ -4519,8 +4664,14 @@ impl Loupe {
         let mut answer = None;
         // "Copy All Fields" while the form is shown; "Paste All Fields" when something is copied
         // and the form is enabled (U12b-Q3, T125). Both buttons are hidden while asking.
-        let can_copy = has_form;
-        let can_paste = self.copied_fields.is_some() && has_form && !locked && !asking;
+        let can_copy = has_form && !template_waiting;
+        let can_paste =
+            self.copied_fields.is_some() && has_form && !locked && !asking && !template_waiting;
+        // Load Template… and Save as Template… while the form is shown and enabled (U13-Q22,
+        // T301); Save as Template… also without changes. Neither has a key.
+        let can_template = has_form && !locked && !asking && !template_waiting;
+        let mut load_template = false;
+        let mut save_template = false;
         let paste_tooltip = self.copied_fields.as_ref().map(|copied| {
             editor_text(&EditorText::PasteTooltip {
                 fields: copied.count(),
@@ -4612,7 +4763,7 @@ impl Loupe {
                                     ui.label(notice);
                                 }
                             }
-                            EditorStatus::Batch(lines) => {
+                            EditorStatus::Batch(lines) | EditorStatus::Template(lines) => {
                                 for line in lines {
                                     if line.error {
                                         ui.label(
@@ -4674,6 +4825,18 @@ impl Loupe {
                                     .on_disabled_hover_text(tooltip);
                             }
                             paste |= paste_button.clicked();
+                            load_template |= ui
+                                .add_enabled(
+                                    can_template,
+                                    egui::Button::new(editor_text(&EditorText::LoadTemplate)),
+                                )
+                                .clicked();
+                            save_template |= ui
+                                .add_enabled(
+                                    can_template,
+                                    egui::Button::new(editor_text(&EditorText::SaveAsTemplate)),
+                                )
+                                .clicked();
                             previous |= ui
                                 .add_enabled(
                                     can_previous,
@@ -4708,7 +4871,7 @@ impl Loupe {
                             if has_form {
                                 ok = ui
                                     .add_enabled(
-                                        !locked,
+                                        !locked && !template_waiting,
                                         egui::Button::new(editor_text(&EditorText::Ok)),
                                     )
                                     .clicked();
@@ -4755,11 +4918,11 @@ impl Loupe {
                                     state,
                                     &window.errors,
                                     &warnings,
-                                    !locked && !asking,
+                                    !locked && !asking && !template_waiting,
                                     &shell,
                                     &layout,
                                     rating.as_ref(),
-                                    !asking,
+                                    !asking && !template_waiting,
                                     &mut value_ui,
                                 );
                                 choice = response.choice;
@@ -4787,8 +4950,9 @@ impl Loupe {
             self.settings.shell.toggle_editor_section(section);
         }
         // A rating or label is queued at once (U10c-Q3); while the question is shown the rating
-        // keys do nothing (the buttons are disabled then).
-        if !asking {
+        // keys do nothing (the buttons are disabled then), nor while the template thread is waited
+        // for (T301).
+        if !asking && !template_waiting {
             let chosen: Vec<RatingKey> = rating_keys.into_iter().chain(rating_choice).collect();
             if !chosen.is_empty() {
                 for action in chosen {
@@ -4821,6 +4985,15 @@ impl Loupe {
         if form_after != form_before.as_ref() {
             // "Sparat." or an error no longer describes the form.
             window.status = EditorStatus::Idle;
+        }
+        // Load Template… and Save as Template… (U13-Q22, T301): their dialogs, then the request to
+        // the template thread, whose answer `poll_template_io` takes.
+        if load_template {
+            self.window_template_load(&mut window);
+            ctx.request_repaint();
+        } else if save_template {
+            self.window_template_save(&mut window, &layout);
+            ctx.request_repaint();
         }
         // Escape while asking is the question's "Avbryt" (back to the window).
         if escape && asking_save && answer.is_none() {
@@ -5015,11 +5188,77 @@ impl Loupe {
         }
     }
 
+    /// The metadata window's Load Template… (ADR 0017 U13-Q7, T301): the open dialog in the
+    /// templates folder, no question first (the loaded fields are unsaved edits); the file chosen
+    /// is sent to the template thread and the window waits for its answer, or says at once that
+    /// the thread has stopped.
+    fn window_template_load(&mut self, window: &mut MetadataWindow) {
+        let Some(path) = template_file_dialog().pick_file() else {
+            return;
+        };
+        match self.template_io.as_mut().map(|io| io.load(path.clone())) {
+            Some(Ok(id)) => window.template_waiting = Some(id),
+            Some(Err(_)) | None => {
+                window.status = EditorStatus::Template(vec![error_line(template_text(
+                    &TemplateText::LoadStopped {
+                        file: file_name_text(&path),
+                    },
+                ))]);
+            }
+        }
+    }
+
+    /// The metadata window's Save as Template… (ADR 0017 U13-Q7, U13-Q25, T301): the template of
+    /// the items `layout` shows (`window_template`), or its refusal shown in the window; then the
+    /// template window's save dialog (no file name given, `.xmp` added, the question before
+    /// replacing a file whose name `.xmp` was added to) and the save sent to the template thread.
+    /// The form is not changed.
+    fn window_template_save(&mut self, window: &mut MetadataWindow, layout: &EditorLayout) {
+        let WindowBody::Form(state) = &window.body else {
+            return;
+        };
+        let template = match window_template(&state.form, layout) {
+            Ok(template) => template,
+            Err(refused) => {
+                window.template_refused(&refused);
+                return;
+            }
+        };
+        let Some(chosen) = template_file_dialog().save_file() else {
+            return;
+        };
+        let path = with_xmp_extension(&chosen);
+        if path != chosen
+            && path.exists()
+            && !template_question(
+                TemplateText::ReplaceQuestion {
+                    file: file_name_text(&path),
+                },
+                TemplateText::Replace,
+            )
+        {
+            return;
+        }
+        // The errors of an earlier refusal no longer hold: the shown fields have none now.
+        window.errors.clear();
+        match self
+            .template_io
+            .as_mut()
+            .map(|io| io.save(path.clone(), template))
+        {
+            Some(Ok(id)) => window.template_waiting = Some(id),
+            Some(Err(_)) | None => {
+                window.status = EditorStatus::Template(window_save_status(&path, None));
+            }
+        }
+    }
+
     /// Takes the template thread's answers (T293 point 2): the answer to the import's read of its
-    /// template goes to the import (T295), the others to the template window; an answer that
-    /// arrives after the window or the import dialog was closed is dropped. A save in a window
-    /// opened from the import dialog makes the saved file the import's template. Repaints while
-    /// the window or the import waits.
+    /// template goes to the import (T295), the answer to the metadata window's Load Template… or
+    /// Save as Template… to that window (T301), the others to the template window; an answer that
+    /// arrives after the window or the import dialog was closed, or the metadata window moved to
+    /// another image, is dropped. A save in a window opened from the import dialog makes the
+    /// saved file the import's template. Repaints while a window or the import waits.
     fn poll_template_io(&mut self, ctx: &egui::Context) {
         let Some(io) = &self.template_io else {
             return;
@@ -5034,6 +5273,18 @@ impl Loupe {
                 }
                 self.import_template_wait = Some(wait);
             }
+            // Taken before the window is drawn, so the draw's check for a changed form does not
+            // clear the status the answer sets.
+            let event = match self.metadata_window.as_mut() {
+                Some(window) => match window.template_answer(event, &self.settings.editor_layout) {
+                    Some(event) => event,
+                    None => {
+                        ctx.request_repaint();
+                        continue;
+                    }
+                },
+                None => event,
+            };
             let Some(window) = self.template_window.as_mut() else {
                 continue;
             };
@@ -5061,6 +5312,10 @@ impl Loupe {
                 .template_window
                 .as_ref()
                 .is_some_and(|window| window.waiting.is_some())
+            || self
+                .metadata_window
+                .as_ref()
+                .is_some_and(|window| window.template_waiting.is_some())
         {
             ctx.request_repaint_after(WINDOW_POLL_INTERVAL);
         }
@@ -12741,6 +12996,135 @@ mod tests {
                 "Not saved: the template reader has stopped"
             );
             assert_eq!(window.waiting, None);
+        }
+    }
+
+    // --- Load Template… and Save as Template… in the metadata window (ADR 0017 U13d, T301) ---
+
+    mod window_template_status {
+        use super::super::{refused_field_errors, window_load_status, window_save_status};
+        use pw_loupe::{
+            EditorField, EditorForm, Language, SaveError, TemplateFieldError, TemplateItem,
+            property_label,
+        };
+        use pw_metadata::template_file::{TemplateFile, TemplateFileError, TemplateRead};
+        use pw_metadata::value::Value;
+        use std::path::PathBuf;
+
+        #[test]
+        fn a_load_says_loaded_then_names_the_skipped_and_not_loaded_fields_as_errors() {
+            let read = TemplateRead {
+                template: TemplateFile::new(
+                    vec![(
+                        "photoshop:Headline".to_string(),
+                        Value::Text("Sport".to_string()),
+                    )],
+                    Vec::new(),
+                ),
+                skipped: vec!["xmp:Rating".to_string()],
+                dropped: Vec::new(),
+                unreadable: Vec::new(),
+            };
+            let not_loaded = vec!["photoshop:CaptionWriter".to_string()];
+            let lines = window_load_status(&PathBuf::from(r"C:\t\Sport.xmp"), &read, &not_loaded);
+            assert_eq!(lines.len(), 2);
+            assert_eq!(lines[0].text, "Loaded Sport.xmp.");
+            assert!(!lines[0].error);
+            assert_eq!(
+                lines[1].text,
+                format!(
+                    "2 fields of the file were not loaded: {}, {}.",
+                    property_label("xmp:Rating", Language::En),
+                    property_label("photoshop:CaptionWriter", Language::En)
+                )
+            );
+            assert!(lines[1].error);
+        }
+
+        #[test]
+        fn a_load_with_nothing_left_out_says_only_loaded() {
+            let read = TemplateRead {
+                template: TemplateFile::default(),
+                skipped: Vec::new(),
+                dropped: Vec::new(),
+                unreadable: Vec::new(),
+            };
+            let lines = window_load_status(&PathBuf::from(r"C:\t\a.xmp"), &read, &[]);
+            assert_eq!(lines.len(), 1);
+            assert_eq!(lines[0].text, "Loaded a.xmp.");
+            assert!(!lines[0].error);
+        }
+
+        #[test]
+        fn the_status_of_a_save_saved_not_saved_without_config_and_stopped() {
+            let path = PathBuf::from(r"C:\t\News.xmp");
+            let saved = window_save_status(&path, Some(&Ok(())));
+            assert_eq!(saved.len(), 1);
+            assert_eq!(saved[0].text, "Saved News.xmp.");
+            assert!(!saved[0].error);
+
+            let failed = window_save_status(
+                &path,
+                Some(&Err(SaveError::File(TemplateFileError::NotFound(
+                    PathBuf::from(r"C:\t"),
+                )))),
+            );
+            assert_eq!(failed.len(), 1);
+            assert_eq!(failed[0].text, r"Not saved: C:\t does not exist");
+            assert!(failed[0].error);
+
+            let no_config = window_save_status(
+                &path,
+                Some(&Err(SaveError::NoConfig(
+                    "LOCALAPPDATA is not set".to_string(),
+                ))),
+            );
+            assert_eq!(no_config.len(), 1);
+            assert_eq!(
+                no_config[0].text,
+                "Not saved: ExifTool cannot use its settings file for templates \
+                 (LOCALAPPDATA is not set)."
+            );
+            assert!(no_config[0].error);
+
+            let stopped = window_save_status(&path, None);
+            assert_eq!(stopped.len(), 1);
+            assert_eq!(
+                stopped[0].text,
+                "Not saved: the template reader has stopped"
+            );
+            assert!(stopped[0].error);
+        }
+
+        #[test]
+        fn a_refused_save_gives_the_field_errors_and_each_list_once() {
+            let error = |item, entry, text: &str| TemplateFieldError {
+                item,
+                entry,
+                text: text.to_string(),
+            };
+            let (fields, lists) = refused_field_errors(&[
+                error(TemplateItem::Field(EditorField::Headline), None, "a"),
+                error(TemplateItem::LocationField("Iptc4xmpExt:City"), None, "b"),
+                error(
+                    TemplateItem::LocationField("Iptc4xmpExt:CountryName"),
+                    None,
+                    "c",
+                ),
+                error(
+                    TemplateItem::ContactField(EditorField::ContactCity),
+                    None,
+                    "d",
+                ),
+            ]);
+            assert_eq!(
+                fields,
+                vec![
+                    (EditorField::Headline, "a".to_string()),
+                    (EditorField::ContactCity, "d".to_string()),
+                ]
+            );
+            assert_eq!(lists, vec![EditorForm::LOCATION_CREATED]);
         }
     }
 

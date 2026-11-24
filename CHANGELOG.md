@@ -21,6 +21,9 @@ Downloads are on the [Releases page](https://github.com/Bokehlicious/RawStride/r
   per field (only the checked fields are kept) and a + box on lists such as Keywords to add
   the template's entries instead of replacing the image's. Templates are saved and loaded as
   XMP files.
+- The metadata window has Load Template… and Save as Template… buttons: Load Template… puts
+  a template file's fields into the form as unsaved changes and names what it could not load;
+  Save as Template… saves the fields the window shows as a template file.
 
 ### Changed
 
