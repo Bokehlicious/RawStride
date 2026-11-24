@@ -4,7 +4,8 @@
   A-Q4, A-Q6, A-Q10, A-Q14, A-Q15 and A-Q17 as proposed, A-Q2 and A-Q5 changed, A-Q7, A-Q8, A-Q9,
   A-Q11, A-Q12, A-Q13 and A-Q16 with additions. Nothing is built, installed or added as a
   dependency by this ADR. Each step in §5 becomes its own task, with its own approval and commit.
-  W1's questions W1-Q1–W1-Q9 answered by the owner on 2026-11-24, all as proposed (§4.1).
+  W1's questions W1-Q1–W1-Q9 answered by the owner on 2026-11-24, all as proposed (§4.1); W2's
+  W2-Q1–W2-Q8 the same day, all as proposed (§4.2).
 - Date: 2026-11-18
 - Related:
   - ADR 0006 §2 (decode settings identical everywhere; the view already uses PPG instead of its
@@ -115,10 +116,12 @@ A prerequisite: `Session::render_region_with` fails on every RAF file tried (bac
 
 ### 3.1 Fine details
 
-- A setting and a key (A-Q3) turn **fine details** on. While it is on, a fit view whose scale is
-  ≤ 0.5 is made like `Scaled` (full-resolution render, reduced on the worker) instead of `Half`.
-- The half-size view is shown first, as now; the fine view replaces it **in one swap** when it is
-  ready (V2: never an intermediate frame), after the dwell (today 150 ms).
+- A key (A-Q3; **D**, W2-Q4: no item in Settings, nothing saved) turns **fine details** on. While
+  it is on, a view whose scale is < 0.5 is made like `Scaled` (full-resolution render, reduced on
+  the worker) instead of from the half-size render (W2-Q3; since W1 the reduced view).
+- The reduced view is shown first, as now; the fine view replaces it **in one swap** when it is
+  ready (V2: never an intermediate frame), after the dwell (today 150 ms), on the background
+  worker once the neighbours' views are ready (W2-Q2).
 - Demosaic: **PPG**, as `Scaled` today (A-Q4; ADR 0008 §11). At fit the differences between PPG
   and AHD are mostly lost in the reduction; whether AHD is offered at 100 % stays open (ADR 0008
   §11.3).
@@ -342,6 +345,27 @@ with the filter. Next image at fit and at 100 %, median first change 5.4–5.6 m
 images/s every step within 70 ms but a series' first press, which a scripted run showed to be
 the method (0.4.0 and T309's build alike, 7.1–7.4 ms). No further step is needed.
 
+### 4.2 W2's questions (answered by the owner, 2026-11-24, all as proposed)
+
+Fine details (§3.1) is the first adjustment built. Batch and import do not apply: it changes only
+how the shown image is made. The RAW histogram, the clipping overlay and the focus marking do not
+change (§2.1).
+
+| # | Question | Answer |
+|---|---|---|
+| W2-Q1 | The measurement first | An ignored timing test measures a whole PPG render plus the Lanczos reduction to a fit size, on one of the owner's 61 Mpix ARW files and a 16 Mpix RW2, in a release build (the `--release` run approved for this one measurement, as in T307). If the time is far above ADR 0008 §11.2's (about 1 s for 61 Mpix), the owner decides before the view core is changed |
+| W2-Q2 | When and where it runs | Only for the current image, after the dwell (150 ms) and never during a zoom gesture. It runs on the background worker, and only when the neighbours' views the plan wants (+1, +2) are ready, so stepping never waits behind a render that cannot be cancelled; the interactive worker stays free. When the user steps on, a fine render that has started finishes and is kept as the memory budget allows |
+| W2-Q3 | Where it applies | RAW mode, at every scale below 0.5 (fit or a free level), where W1 shows the reduced view. At 0.5 and above the view is already made from the full render (`Scaled`, `Zoom`), so fine details is paused there; in JPEG mode (embedded preview, JPEG and TIFF files, §2.2) it is paused too. After a zoom gesture that ends at a new scale below 0.5, a new fine render is made for that scale. A fine view also serves smaller scales down to half its own density, as the reduced view does (W1, (d)) |
+| W2-Q4 | Key and setting | The key **D** (free in the key map), in the key map (U8) so it can be changed. No item in Settings and nothing saved: fine details lasts for the session (A-Q2); §3.1's "a setting and a key" is read as the key only |
+| W2-Q5 | The mark | §2.1 requires that an adjustment that is on is always visible. W2 therefore makes the preview overlay's row of adjustment marks, with its first mark "Fine", shown dimmed while fine details is paused (0.5 and above, JPEG mode). W3 adds "USM" to the same row (moved from W3 to W2) |
+| W2-Q6 | Failure and memory | A fine render that fails, or that does not fit the memory budget (V8), leaves the reduced view on screen and shows no error line (a correct view is shown); the mark is shown as paused for that image. The known limit that a failed LibRaw call ends the image's session (`known-limits.md`, LibRaw) applies as before |
+| W2-Q7 | Prefetching +1 (A-Q5) | The owner measures with `latency.ps1` with fine details on: stepping at about 7 images/s, and a step that comes while a fine render runs. Only if V1 and V4 hold is a task written for +1 in the direction of travel; otherwise this is written here and fine details stays on the current image only |
+| W2-Q8 | The cache | The fine view is a view kind of its own, with its own key in the cache. The reduced view is kept as the memory budget allows, so turning fine details off shows it at once |
+
+W2 is written as the chain T312 (the measurement) → T313 (the view core: the view kind, the plan,
+the worker and the cache, `pw-viewcore`) → T314 (the shell: the key, the mark and the glossary,
+`pw-loupe`), then the owner's `latency.ps1` and the decision on +1 (W2-Q7).
+
 ## 5. Steps
 
 Each step ends with tests (GR11), the owner's hand check and, where an image is shown,
@@ -351,8 +375,8 @@ Each step ends with tests (GR11), the owner's hand check and, where an image is 
 |---|---|
 | **W0** | (Prerequisite, its own task) the region render on RAF fixed (T197) |
 | **W1** | The Lanczos filter in its own crate (A-Q7) for every view below 100 %; the half-size view reduced on the worker and its use during zoom gestures; the conversion to the monitor profile moved after the downscale (§3.2) |
-| **W2** | Fine details (§3.1): measure a full PPG render of the owner's 61 Mpix files and a smaller format first; then the view kind and the swap; the measurement that decides the prefetch of +1 (A-Q5) |
-| **W3** | Sharpening (§3.3) with its settings; the overlay's adjustment marks, paused marks included (§2.1) |
+| **W2** | Fine details (§3.1): measure a full PPG render of the owner's 61 Mpix files and a smaller format first; then the view kind and the swap; the overlay's row of adjustment marks with "Fine", paused marks included (§2.1; moved from W3, W2-Q5); the measurement that decides the prefetch of +1 (A-Q5) |
+| **W3** | Sharpening (§3.3) with its settings; its mark "USM" in the overlay's row of marks (made by W2, W2-Q5) |
 | **W4** | Channel view (§3.6) |
 | **W5** | Exposure, auto exposure, shadows and the camera's brightness (§3.4); the new LibRaw parameters through `pwlr.cpp` and `pw-libraw`; the focus job kept on ADR 0006 §2's settings (A-Q6) |
 | **W6** | White balance: auto (worked out once per image and passed as `user_mul`, the same in every view), click on grey, the file's presets and "Daylight (LibRaw)" (§3.5) |
