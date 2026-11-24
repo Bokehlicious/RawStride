@@ -4,7 +4,9 @@ Limits and leftovers that were accepted when a task was done or at a backlog sor
 anything the owner has seen. They are records of how RawStride behaves, not work waiting to be
 done. Each becomes a task only if it is seen in use, or it is taken up when its area is next
 changed (the item says which). They are read when a task in the same area is written, not at
-every hand check.
+every hand check, and an area's items are gone through with the owner when an ADR there is
+finished (`README.md`, "Known limits after an ADR"); an item marked "Accepted for good" is not
+asked about again.
 
 Ordered by area. Each item names where it came from (the task or review) and the date. Leftovers
 that belong to a planned step are in that step's row or notes in `plans/`, not here; ideas and

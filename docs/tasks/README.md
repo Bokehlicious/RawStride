@@ -172,6 +172,24 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
   hand check gets it before `main` moves.
 - **Owner decisions** (decisions, approved Q proposals) are written into the ADR or requirement
   they change before the task is Done, not only into the task's log (`AGENTS.md` §6).
+- **Edge cases before the tasks (owner, 2026-11-24, after U13-Q9 and U13-Q21 were amended during
+  their chains):** when the reviewer proposes an ADR part's questions, each proposal also answers,
+  where it applies: one image and many marked images (a batch); the import; a file without the
+  value used (for example no capture time); a write that fails halfway, for one image and in a
+  batch; a value read from the file versus one the user typed; and what the user sees when it goes
+  wrong. A case that needs the owner's choice becomes a question of its own, so the decisions are
+  settled before the tasks are written, not at a cold read or a review.
+- **Known limits after an ADR (owner, 2026-11-24):** when the owner's hand check finishes an ADR's
+  (or an ADR part's) last step, the backlog sort also goes through every item of that ADR's area in
+  `known-limits.md` with the owner, not only the new ones. Each becomes a task, is accepted for
+  good (marked "Accepted for good, <date>"; not taken up again unless seen in use), or is removed.
+  An item already accepted for good is not asked about again.
+- **Commit messages (owner, 2026-11-24):** the first line is a short subject of at most about
+  72 characters (for example `T304 done: the metadata window in two columns`), then an empty line,
+  then the details as a body, wrapped at about 100 characters: the files and what changed, the
+  check's result, the personal-data search. The subject names the task or step and what happened
+  (Open, done, hand-checked, written, decided); `git log --oneline` must read as a list. Messages
+  written before 2026-11-24 stay as they are (they are pushed and referred to by their ids).
 
 Skeleton (the fields recent tasks use; leave out those that do not apply):
 
