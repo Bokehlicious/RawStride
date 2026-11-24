@@ -66,7 +66,10 @@ program folder (ADR 0002 §2.5; T120 looks there before PATH).
    `0.y.z` until the owner declares `1.0.0`. A new feature raises the minor version, a release
    with only fixes the patch version (RL-Q1).
 2. **The first release `0.1.0`** is made when the release-only items are done (§6, RL1–RL6), not
-   at a feature milestone; it is marked a pre-release on GitHub (RL-Q2).
+   at a feature milestone; it is marked a pre-release on GitHub (RL-Q2). [Changed by the owner
+   2026-11-24 (RL-Q14): from `0.6.0` on, a `0.x` version is published as a regular release, so
+   the newest one is GitHub's "Latest"; `v0.5.0` is changed to a regular release, `v0.1.0`–`v0.4.0`
+   stay pre-releases (RL10).]
 3. **A change log** `CHANGELOG.md` in the repository root, in the "Keep a Changelog" form. The
    reviewer adds a line under `Unreleased` when a task with a change a user can notice is set to
    Done (a rule in `docs/tasks/README.md`); the history before `0.1.0` is one summary paragraph,
@@ -117,7 +120,7 @@ program folder (ADR 0002 §2.5; T120 looks there before PATH).
   from the caches of `main`.
 - The MSI (RL9) needs the WiX Toolset installed on the runner (and the owner's approval of the
   tool, `AGENTS.md` §3); no new Rust dependency.
-- Signing (RL10) may cost money (Azure) or wait for an application (SignPath).
+- Signing (RL8) may cost money (Azure) or wait for an application (SignPath).
 
 ## 5. Questions (answered by the owner, 2026-11-20)
 
@@ -159,6 +162,12 @@ one as proposed:**
 | RL9-Q10 | **Two MSIs of the same version** (a local build and the release's) would give two entries in Installed apps | An MSI of the same version replaces the installed one (WiX's `AllowSameVersionUpgrades`), so there is always one RawStride |
 | RL9-Q11 | **RawStride running during an upgrade or uninstall**: with no dialogs (RL9-Q4) Windows cannot ask to close it and may ask for a restart instead (amends RL9-Q5) | Accepted: no dialogs; `docs/distribution.md` and the release notes say to close RawStride before upgrading; the owner's hand check records what Windows does. **Hand check, 2026-11-24 (T305):** Windows Installer's own files-in-use box, shown even with no dialogs of RawStride's, asked to close RawStride and ExifTool, and the upgrade then went on; no restart was asked for |
 
+**The release type of `0.x`, decided by the owner 2026-11-24, as proposed (amends RL-Q2):**
+
+| # | Question | Answer |
+|---|---|---|
+| RL-Q14 | **Pre-release or regular release for `0.x`?** RL-Q2 decided when `0.1.0` was made; the pre-release mark came with the proposal and had no reason of its own. A pre-release is never GitHub's "Latest": the repository's side panel shows no release, and `.../releases/latest` (and `.../releases/latest/download/<file>`) finds nothing while every release is one, so the README cannot link to the newest version. SemVer's `0.y.z` already says "early, may change", and the README's status line says so in words | Regular releases from now on: the release workflow no longer sets `--prerelease`, and the owner keeps "Set as the latest release" ticked when publishing the draft. `v0.5.0` is changed to a regular release and Latest (`gh release edit v0.5.0 --prerelease=false --latest`, on the owner's yes); `v0.1.0`–`v0.4.0` stay pre-releases (nothing links to them as the newest). The README's status line and install steps say "release" and "early version" instead of "pre-release" (RL10) |
+
 ## 6. Steps
 
 | Step | Who | Content | After |
@@ -172,12 +181,14 @@ one as proposed:**
 | RL7 | owner + reviewer | `0.1.0`: the `CHANGELOG.md` section renamed, tag on `main`, the workflow's draft read, published as a pre-release; the tag ruleset (RL-Q8); `README.md`'s status line; steps in `docs/distribution.md`, "Making a release"; done 2026-11-20: `v0.1.0` published as a pre-release, tag ruleset "release tags" active | RL5, RL6 |
 | RL8 | owner | Code signing applied for (RL-Q6); the options checked 2026-11-22 (§3.6); waits until RawStride has a reputation (owner, 2026-11-22) | RL7 |
 | RL9 | task | The MSI (RL-Q5, RL9-Q1–RL9-Q8): T305 (the WiX source and `tools/package-msi.ps1`) → T306 (the release build and workflow, `docs/distribution.md`); the owner's hand check | RL7 and the owner's go (given 2026-11-24) |
+| RL10 | task, owner + reviewer | `0.x` as regular releases (RL-Q14): T310 (`release.yml` without `--prerelease`, `docs/distribution.md`); the reviewer changes `README.md`'s status line and install steps, `main` is moved and pushed by the push routine, then `v0.5.0` is made a regular release and Latest on the owner's yes | RL9; before the next release |
 
 Placed by the owner (2026-11-20) as order 1d of `docs/tasks/plans/adr-0018-0025-steps.md`,
 before ADR 0024 O1; RL8 and RL9 do not hold O1 back. RL1–RL7 are done (2026-11-20); RL8 and RL9
 were moved by the owner on 2026-11-21 to order 2c of that plan, after ADR 0017's rest (U10b, U8,
 U13), so they are not lost. On 2026-11-24 the owner moved RL8 last in that plan (order 13), since
-a reputation takes time to build; RL9 stays at order 2c.
+a reputation takes time to build; RL9 stays at order 2c. RL10 was placed by the owner on
+2026-11-24 in order 2c after RL9, beside ADR 0027 W1, so it is done before the next release.
 
 ## 7. Not included
 
@@ -206,3 +217,4 @@ a reputation takes time to build; RL9 stays at order 2c.
 | 5 | 2026-11-24 | RL8 moved last in the step plan (order 13), as a reputation takes time (owner) |
 | 6 | 2026-11-24 | RL9: WiX's licence checked (§3.5); RL9-Q1–RL9-Q8 approved by the owner as proposed (§5); the owner's go for RL9; after the cold read of T305 and T306, RL9-Q9–RL9-Q11 approved as proposed (RL9-Q11 amends RL9-Q5's "asked to close") |
 | 7 | 2026-11-24 | RL9-Q11: the owner's hand check of T305 found that Windows does ask to close RawStride and ExifTool during an upgrade (Windows Installer's files-in-use box); the advice to close RawStride first stays |
+| 8 | 2026-11-24 | RL-Q14 (amends RL-Q2, §3.2): `0.x` published as regular releases, decided by the owner as proposed; step RL10 (T310, `v0.5.0` made Latest); §4's signing step named RL8 (it said RL10) |
