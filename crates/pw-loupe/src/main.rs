@@ -3025,7 +3025,10 @@ impl Loupe {
                             && let Some(path) =
                                 import_template_dialog(form.template.as_deref()).pick_file()
                         {
+                            // Choose… (U13-Q20): the file chosen, then the template window opens
+                            // with it as Edit… opens it, after the form is handed over below.
                             form.template = Some(path);
+                            edit_template = true;
                         }
                         if ui.button(import_text(ImportText::EditTemplate)).clicked() {
                             edit_template = true;
@@ -3168,7 +3171,8 @@ impl Loupe {
             self.request_import_start();
         }
         if edit_template {
-            // Edit… (U13-Q17): the chosen file, or an empty window without one.
+            // Edit… (U13-Q17) and a file from Choose… (U13-Q20): the chosen file, or an empty
+            // window without one.
             let chosen = self
                 .import_dialog
                 .as_ref()
@@ -4850,7 +4854,8 @@ impl Loupe {
 
     /// Opens the template window, or keeps the open one (T293 point 3); with `path`, a window it
     /// newly opened then loads that file (Load's steps without the open dialog). `from_import`:
-    /// opened with the import dialog's Edit… (T295), set on a newly opened window.
+    /// opened with the import dialog's Edit… (T295) or Choose… (T297), set on a newly opened
+    /// window.
     fn open_template_window(&mut self, path: Option<PathBuf>, from_import: bool) {
         let newly_opened = self.template_window.is_none();
         if newly_opened {

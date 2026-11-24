@@ -87,7 +87,6 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status |
 |---|---|---|
-| [T297](T297-choose-opens-template-window.md) | Choose… in the import dialog also opens the template window | Open |
 | [T298](T298-template-for-this-import-only.md) | Template changes for one import only | Blocked |
 
 ## Writing a task (owner and reviewer)

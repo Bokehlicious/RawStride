@@ -303,3 +303,4 @@ was when the task was done, so "this file", "below" and "the Log" in T1–T115 m
 | [T294](T294-import-applies-template-file.md) | The import writes a template file instead of its six fields (pw-loupe) |
 | [T296](T296-remove-ingest-template-modes.md) | The ingest template's modes removed from pw-metadata (pw-metadata) |
 | [T295](T295-import-template-row.md) | The import dialog's Metadata Template row (pw-loupe) |
+| [T297](T297-choose-opens-template-window.md) | Choose… in the import dialog also opens the template window (pw-loupe) |
