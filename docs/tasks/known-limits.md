@@ -509,6 +509,44 @@ seen in use.
   the neighbour's own minimum scale, so a much larger image (a panorama) is prefetched larger
   than its fit view.
 
+## Fine details (ADR 0027 W2)
+
+(T313's chain review and independent review and T314's independent review, 2026-11-24; each
+accepted by the owner 2026-11-24 when its task was reviewed. The owner decided after W2-Q7's
+measurement that no more work is spent on fine details (ADR 0027 §4.2); each item becomes a task
+only if it is seen in use.)
+
+- *Waits behind a fine render* (T313, W2-Q2): the render holds the current image's only session
+  through the reduction and `to_display` and cannot be cancelled, so a zoom to 100 % just after
+  it starts (at a free level below 50 %), E, J and the release for a metadata write
+  (`RELEASE_TIMEOUT`, 5 s) wait for it, up to T312's time (about 1.2 s for 61 Mpix).
+- *The background worker is taken* (T313): after a step during a fine render only the current
+  image is served until it ends, so +1 and +2 of the new position are prefetched late. "Only when
+  +1 and +2 are ready" (W2-Q2) is reached by the plan's order: a neighbour's job refused by the
+  budget is passed over, and the fine render may then start.
+- *The compare's two renders* (T313): with the compare open both cores may make a
+  full-resolution render at once; the render's temporary buffers are not in the budget (as for
+  `Scaled`).
+- *A protected stand-in* (T313's review): while no reduced view is resident, `protected_views`
+  may protect the half-size view for the fine want, which makes a budget refusal of the fine
+  render likelier under a tight budget.
+- *An earlier fine view drawn while paused* (T313's review): after a zoom whose new fine render
+  fails or is refused, an earlier fine view that still serves stays drawn while the mark shows
+  paused.
+- *Paused in JPEG mode for an error* (T313's review): an image that cannot be shown
+  (`Status::Error`) gives `Paused(Failed)` also in JPEG mode.
+- *A budget refusal pauses the image until a new folder* (T313's review, W2-Q6): a refusal that
+  was only for a moment is not retried.
+- *`plan_of(false)` twice* (T313's review): the interactive `pick` computes it a second time.
+- *The dimmed mark over a bright image* (T314's review): the plate is about grey 0x55 there, so
+  the dimmed "Fine" has about 1.9:1 (the test holds it against black).
+- *The tooltip has no delay* (T314's review): the mark's tooltip shows at once, also while panning
+  over the row.
+- *A narrow compare side* (T314's review): in a side under about 200 px wide the rating badge can
+  cover the row of marks.
+- *A `keys.txt` from 0.5.0 with D on another action* (T314's review): that line is lost on
+  loading (the key map's rule for a taken key); written in `CHANGELOG.md`.
+
 ## LibRaw (`pw-libraw`)
 
 (Reviewer and an independent review agent of T197, 2026-11-19; none is caused by T197, which
