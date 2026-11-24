@@ -305,4 +305,5 @@ was when the task was done, so "this file", "below" and "the Log" in T1–T115 m
 | [T295](T295-import-template-row.md) | The import dialog's Metadata Template row (pw-loupe) |
 | [T297](T297-choose-opens-template-window.md) | Choose… in the import dialog also opens the template window (pw-loupe) |
 | [T298](T298-template-for-this-import-only.md) | Template changes for one import only (pw-loupe) |
+| [T299](T299-worker-applies-template-file.md) | The metadata worker applies a template file (pw-metadata) |
 | [T300](T300-window-form-and-template-file.md) | The metadata window's form to and from a template file (pw-loupe) |

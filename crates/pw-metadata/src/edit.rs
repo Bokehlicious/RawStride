@@ -55,9 +55,15 @@
 //! through [`TemplateFile::new`] again (a field empty after filling is dropped, a list's repeated
 //! entries are merged), and the result is applied with [`template::apply`] (an error is
 //! [`EditError::Template`]), planned and written. A template that is already in the file gives an
-//! empty plan and [`WriteReport::Unchanged`]. Its [`EditReport`] holds the plan's notices when
-//! something was written and a [`WriteNotice::QualifiersKept`] for each list with qualifiers put
-//! back, also when nothing was written.
+//! empty plan and [`WriteReport::Unchanged`]. **A + list with an open conflict** (ADR 0017
+//! U13-Q28, as U12d-Q6 for the editor's edits): after [`template::apply`], each property in the
+//! filled template's `add` that has an `Open` conflict in the image as read is put back to its
+//! value before the template ([`Metadata::restore`]), whether or not the template changed it, so
+//! neither form is written; a property the template replaces (not in `add`) decides the conflict,
+//! as typing does. Its [`EditReport`] holds the plan's notices when something was written, then a
+//! [`WriteNotice::ConflictKept`] for each + list left alone that way, then a
+//! [`WriteNotice::QualifiersKept`] for each list with qualifiers put back, the last two also when
+//! nothing was written, each property named once.
 //!
 //! **A list with qualifiers** ([`Metadata::has_qualifiers`], ADR 0007 §8) is shown but never
 //! written: RawStride cannot write such a list without losing or doubling its qualified items.
@@ -66,7 +72,8 @@
 //! treats it like an untouched property and the edit leaks into no other form. The other changes
 //! are written. In [`ExifTool::write_edits_safely`] and [`ExifTool::apply_template_file_safely`]
 //! each list put back is named once in a [`WriteNotice::QualifiersKept`], also when nothing was
-//! written.
+//! written. In a template this comes after the + lists with an open conflict are put back (above),
+//! so a list with both is named only in its [`WriteNotice::ConflictKept`].
 //!
 //! - **Set** stores the value with [`Metadata::set`]; a Lang Alt edits `x-default` only and keeps
 //!   the other languages (§8, Q7). A value equal to the current one ([`same_value`]) is no change,
@@ -220,9 +227,10 @@ pub struct EditReport {
     /// What the safe write did.
     pub report: WriteReport,
     /// What the user is told about the write (§5.2, §5.4, Q1); empty when nothing was written,
-    /// except for a [`WriteNotice::ConflictKept`] of each [`Edit::Entries`] left alone because of
-    /// an `Open` conflict (U12d-Q6, edits only) and a [`WriteNotice::QualifiersKept`] of each
-    /// changed list with qualifiers that was put back (ADR 0007 §8).
+    /// except for a [`WriteNotice::ConflictKept`] of each [`Edit::Entries`] (edits) or + list
+    /// (a template's `add`) left alone because of an `Open` conflict (U12d-Q6, U13-Q28) and a
+    /// [`WriteNotice::QualifiersKept`] of each changed list with qualifiers that was put back
+    /// (ADR 0007 §8).
     pub notices: Vec<WriteNotice>,
 }
 
@@ -519,10 +527,14 @@ impl ExifTool {
     /// Applies the metadata template `template` to `image` through the write plan and the safe
     /// write, with its variables filled with the image's values (ADR 0017 U13-Q9; see the module
     /// comment), and returns the report with the plan's notices. A variable that cannot be filled
-    /// is [`EditError::Variable`] and nothing is written. A changed list with qualifiers is put
-    /// back and not written, and adds a [`WriteNotice::QualifiersKept`], also when the report is
-    /// [`WriteReport::Unchanged`], never twice (§8). `checks` are the caller's image checks;
-    /// `journal` is the app's write journal.
+    /// is [`EditError::Variable`] and nothing is written. A + list (the filled template's `add`)
+    /// whose property has an `Open` conflict in the image is put back and not written, whether or
+    /// not the template changed it, and adds a [`WriteNotice::ConflictKept`] for that property,
+    /// also when the report is [`WriteReport::Unchanged`], never twice (U13-Q28); a replacing
+    /// field decides the conflict. A changed list with qualifiers is then put back and not
+    /// written, and adds a [`WriteNotice::QualifiersKept`] the same way (§8). The notices: the
+    /// plan's, then the `ConflictKept`, then the `QualifiersKept`. `checks` are the caller's image
+    /// checks; `journal` is the app's write journal.
     pub fn apply_template_file_safely(
         &mut self,
         image: &Path,
@@ -552,6 +564,7 @@ impl ExifTool {
         let original = read.reconciled.metadata.clone();
         let mut metadata = read.reconciled.metadata;
         template::apply(&filled.to_template(), &mut metadata).map_err(EditError::Template)?;
+        let conflicts_kept = restore_added_with_conflict(&mut metadata, &original, &filled.add);
         let qualifiers_kept = restore_qualified(&mut metadata, &original);
         let plan =
             write_plan::plan(&metadata, &read.state, options.settings).map_err(EditError::Plan)?;
@@ -562,6 +575,12 @@ impl ExifTool {
             WriteReport::Unchanged => Vec::new(),
             WriteReport::Written { .. } => plan.notices,
         };
+        for property in conflicts_kept {
+            let notice = WriteNotice::ConflictKept { property };
+            if !notices.contains(&notice) {
+                notices.push(notice);
+            }
+        }
         for property in qualifiers_kept {
             let notice = WriteNotice::QualifiersKept { property };
             if !notices.contains(&notice) {
@@ -803,6 +822,25 @@ fn entries_left_alone(metadata: &Metadata, edits: &[Edit]) -> Vec<String> {
         }
     }
     left_alone
+}
+
+/// Puts each property of a template's `add` (its + lists) that has an `Open` conflict in
+/// `original`, the image as read, back to its value there, whether or not the template changed
+/// it, and returns their XMP ids in the order of `add`, each once (ADR 0017 U13-Q28, as U12d-Q6
+/// for the metadata window's edits).
+fn restore_added_with_conflict(
+    metadata: &mut Metadata,
+    original: &Metadata,
+    add: &[String],
+) -> Vec<String> {
+    let mut kept: Vec<String> = Vec::new();
+    for property in add {
+        if has_open_conflict(original, property) && !kept.contains(property) {
+            metadata.restore(original, property);
+            kept.push(property.clone());
+        }
+    }
+    kept
 }
 
 /// Puts each changed list with qualifiers back to its value in `original` (ADR 0007 §8; see the

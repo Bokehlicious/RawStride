@@ -3,11 +3,12 @@
 //! Several write processes (ADR 0007 §9.6 point 2, Q18; T266): [`WriteSetup::write_processes`]
 //! is the number of ExifTool processes that write (1..=4). With 1 the worker thread runs every
 //! request itself, one at a time and in order. With more, and a setup, the worker thread starts
-//! a [`WritePool`] of that many processes at its first write and gives it the rating, orientation
-//! and edit writes, each its own safe-write transaction, keyed by its image ([`write_key`]); it
-//! keeps its own process for everything else. Writes of different images may then answer in
-//! another order than they were asked; writes of one image keep their order, and a request that
-//! is not a write starts only when every earlier write has answered and its event has been sent.
+//! a [`WritePool`] of that many processes at its first write and gives it the rating, orientation,
+//! edit and template writes, each its own safe-write transaction, keyed by its image
+//! ([`write_key`]); it keeps its own process for everything else. Writes of different images may
+//! then answer in another order than they were asked; writes of one image keep their order, and a
+//! request that is not a write starts only when every earlier write has answered and its event
+//! has been sent.
 //!
 //! A rating is written through the write plan and the safe write (ADR 0007 §9, §15; T91):
 //! [`ExifTool::write_rating_safely`] with the [`WriteSetup`] given at the start. Without a setup
@@ -27,15 +28,20 @@
 //!   [`ExifTool::write_edits_safely`] and answers with [`Event::EditsWritten`]. It fails as a
 //!   rating write does: [`WriteError::NoJournal`] without a setup, [`WriteError::ExifToolTooOld`]
 //!   with a too old ExifTool.
+//! - [`MetadataWorker::apply_template`] applies a [`TemplateFile`] through
+//!   [`ExifTool::apply_template_file_safely`] (ADR 0017 U13-Q8, U13-Q27; T299) and answers with
+//!   the same [`Event::EditsWritten`] and [`EditReport`], so a batch can take both kinds. It is a
+//!   write like the edits: in the same queue and pool, one image's writes in order, with the
+//!   current options, and it fails as an edit write does.
 //! - [`MetadataWorker::write_orientation`] writes an Exif orientation through
 //!   [`ExifTool::write_orientation_safely`] in the same queue as the ratings (ADR 0024 §2.5) and
 //!   answers with [`Event::OrientationWritten`]; it fails as a rating write does.
 //! - [`MetadataWorker::set_options`] changes the [`EditOptions`] without an event. The worker
 //!   starts with the setup's options (the default without a setup); every request queued after
-//!   `set_options` uses the new options for rating writes, edits and reads (the `fallback`).
-//!   Requests are taken from the queue in order, so a request queued before it uses the old
-//!   options (with several write processes too: a write takes the options current when it is
-//!   taken from the queue).
+//!   `set_options` uses the new options for rating writes, edits, template writes and reads (the
+//!   `fallback`). Requests are taken from the queue in order, so a request queued before it uses
+//!   the old options (with several write processes too: a write takes the options current when it
+//!   is taken from the queue).
 //!
 //! Moving an image with its companion files (ADR 0017 §2.6, step U9b; T170):
 //! - [`MetadataWorker::move_image`] finds the image's group with [`relocate::companions`],
@@ -79,6 +85,7 @@ use crate::read::MetadataRead;
 use crate::recycle::{self, DeleteError, DeleteRefusal};
 use crate::relocate::{self, Moved};
 use crate::safe_write::ImageCheck;
+use crate::template_file::TemplateFile;
 use crate::write_pool::{
     JobAnswer, Running, Ticket, VersionResult, WritePool, start_tool, write_key,
 };
@@ -245,6 +252,11 @@ enum Request {
         path: PathBuf,
         edits: Vec<Edit>,
     },
+    ApplyTemplate {
+        id: RequestId,
+        path: PathBuf,
+        template: TemplateFile,
+    },
     Move {
         id: RequestId,
         image: PathBuf,
@@ -395,6 +407,20 @@ impl MetadataWorker {
     ) -> std::result::Result<RequestId, SubmitError> {
         let id = self.next_request_id();
         self.submit(Request::WriteEdits { id, path, edits })?;
+        Ok(id)
+    }
+
+    /// Queues a safe write of the metadata template `template` to `path` without blocking
+    /// (ADR 0017 U13-Q8, U13-Q27; T299), run with [`ExifTool::apply_template_file_safely`] and the
+    /// current options, and answered with [`Event::EditsWritten`] as an edit write is. Writes of
+    /// one image run in request order.
+    pub fn apply_template(
+        &mut self,
+        path: PathBuf,
+        template: TemplateFile,
+    ) -> std::result::Result<RequestId, SubmitError> {
+        let id = self.next_request_id();
+        self.submit(Request::ApplyTemplate { id, path, template })?;
         Ok(id)
     }
 
@@ -740,10 +766,8 @@ enum WriteHeader {
         path: PathBuf,
         orientation: u16,
     },
-    Edits {
-        id: RequestId,
-        path: PathBuf,
-    },
+    /// An edit or a template write (T299): both answer with [`Event::EditsWritten`].
+    Edits { id: RequestId, path: PathBuf },
 }
 
 impl WriteHeader {
@@ -800,12 +824,20 @@ impl WriteHeader {
     }
 }
 
-/// A rating, orientation or edit write taken from a request (T266).
+/// What an edit write ([`WriteHeader::Edits`]) writes: the editor's edits, or a template file
+/// (T299), kept apart from the header so the pool's copy of the header clones neither.
+#[derive(Debug)]
+enum Changes {
+    Edits(Vec<Edit>),
+    Template(TemplateFile),
+}
+
+/// A rating, orientation, edit or template write taken from a request (T266, T299).
 #[derive(Debug)]
 struct Write {
     header: WriteHeader,
-    /// The edits of an edit write; empty for the others.
-    edits: Vec<Edit>,
+    /// The edits of an edit write or the template of a template write; no edits for the others.
+    changes: Changes,
 }
 
 impl Write {
@@ -814,7 +846,7 @@ impl Write {
         match request {
             Request::Write { id, path, rating } => Ok(Write {
                 header: WriteHeader::Rating { id, path, rating },
-                edits: Vec::new(),
+                changes: Changes::Edits(Vec::new()),
             }),
             Request::WriteOrientation {
                 id,
@@ -826,11 +858,15 @@ impl Write {
                     path,
                     orientation,
                 },
-                edits: Vec::new(),
+                changes: Changes::Edits(Vec::new()),
             }),
             Request::WriteEdits { id, path, edits } => Ok(Write {
                 header: WriteHeader::Edits { id, path },
-                edits,
+                changes: Changes::Edits(edits),
+            }),
+            Request::ApplyTemplate { id, path, template } => Ok(Write {
+                header: WriteHeader::Edits { id, path },
+                changes: Changes::Template(template),
             }),
             other => Err(other),
         }
@@ -849,10 +885,9 @@ impl Write {
                 path,
                 orientation,
             },
-            WriteHeader::Edits { id, path } => Request::WriteEdits {
-                id,
-                path,
-                edits: self.edits,
+            WriteHeader::Edits { id, path } => match self.changes {
+                Changes::Edits(edits) => Request::WriteEdits { id, path, edits },
+                Changes::Template(template) => Request::ApplyTemplate { id, path, template },
             },
         }
     }
@@ -899,9 +934,15 @@ impl Write {
                 }
             }
             WriteHeader::Edits { id, path } => {
-                let result = tool
-                    .write_edits_safely(&path, &self.edits, options, checks, journal)
-                    .map_err(WriteError::from);
+                let result = match &self.changes {
+                    Changes::Edits(edits) => {
+                        tool.write_edits_safely(&path, edits, options, checks, journal)
+                    }
+                    Changes::Template(template) => {
+                        tool.apply_template_file_safely(&path, template, options, checks, journal)
+                    }
+                }
+                .map_err(WriteError::from);
                 Event::EditsWritten { id, path, result }
             }
         }
@@ -945,7 +986,7 @@ fn handle(
             options,
             Write {
                 header: WriteHeader::Rating { id, path, rating },
-                edits: Vec::new(),
+                changes: Changes::Edits(Vec::new()),
             },
         ),
         Request::WriteOrientation {
@@ -963,7 +1004,7 @@ fn handle(
                     path,
                     orientation,
                 },
-                edits: Vec::new(),
+                changes: Changes::Edits(Vec::new()),
             },
         ),
         Request::ReadMetadata { id, path } => {
@@ -983,7 +1024,17 @@ fn handle(
             options,
             Write {
                 header: WriteHeader::Edits { id, path },
-                edits,
+                changes: Changes::Edits(edits),
+            },
+        ),
+        Request::ApplyTemplate { id, path, template } => handle_write(
+            running,
+            unavailable,
+            setup,
+            options,
+            Write {
+                header: WriteHeader::Edits { id, path },
+                changes: Changes::Template(template),
             },
         ),
         // A move does not use ExifTool (T170), so `running` and `start_error` do not matter.
@@ -1352,6 +1403,43 @@ mod tests {
         }
     }
 
+    /// Applies `template` to `path` through the worker (T299), and checks that the answer is an
+    /// [`Event::EditsWritten`] with the id and path as sent.
+    fn template_result(
+        worker: &mut MetadataWorker,
+        path: &Path,
+        template: TemplateFile,
+    ) -> std::result::Result<EditReport, WriteError> {
+        let id = worker
+            .apply_template(path.to_path_buf(), template)
+            .expect("request should be accepted");
+        match next_event(worker) {
+            Event::EditsWritten {
+                id: event_id,
+                path: event_path,
+                result,
+            } => {
+                assert_eq!(event_id, id);
+                assert_eq!(event_path, path);
+                result
+            }
+            other => panic!("unexpected event {other:?}"),
+        }
+    }
+
+    /// A template file with only the Headline `value`.
+    fn headline_template(value: &str) -> TemplateFile {
+        let template = TemplateFile::new(
+            vec![(
+                "photoshop:Headline".to_string(),
+                crate::value::Value::Text(value.to_string()),
+            )],
+            Vec::new(),
+        );
+        assert_eq!(template.fields.len(), 1, "precondition: {template:?}");
+        template
+    }
+
     /// An edit that sets the text `value` on `property`.
     fn set_text(property: &str, value: &str) -> Edit {
         Edit::Set {
@@ -1566,6 +1654,32 @@ mod tests {
         );
     }
 
+    #[test]
+    fn without_a_setup_a_template_fails_and_the_file_is_unchanged() {
+        let folder = TempDir::new("no-journal-template");
+        let image = folder.path().join("bild.jpg");
+        std::fs::write(&image, b"not really a jpeg").expect("write the fake JPEG");
+        let (program, args) = fake_exiftool("normal");
+        let args: Vec<&str> = args.iter().map(String::as_str).collect();
+        let mut worker =
+            MetadataWorker::start_with(&program, &args, None).expect("worker should start");
+
+        assert_eq!(
+            template_result(&mut worker, &image, headline_template("Rubrik")),
+            Err(WriteError::NoJournal)
+        );
+        assert_eq!(
+            std::fs::read(&image).expect("read the file"),
+            b"not really a jpeg"
+        );
+        assert_eq!(
+            std::fs::read_dir(folder.path())
+                .expect("read the folder")
+                .count(),
+            1
+        );
+    }
+
     /// Waits up to `limit` for the first start's result of `worker`.
     fn wait_for_version(
         worker: &MetadataWorker,
@@ -1672,6 +1786,30 @@ mod tests {
             &image,
             vec![set_text("photoshop:Headline", "Headline")],
         );
+        assert_eq!(result, Err(WriteError::ExifToolTooOld));
+        assert_eq!(
+            result.err().map(|error| error.to_string()).as_deref(),
+            Some(EXIFTOOL_TOO_OLD)
+        );
+        assert_eq!(
+            std::fs::read(&image).expect("read the file"),
+            b"not really a jpeg"
+        );
+    }
+
+    #[test]
+    fn an_old_exiftool_refuses_a_template_with_the_typed_kind() {
+        let folder = TempDir::new("version-old-template");
+        let journal = TempDir::new("version-old-template-journal");
+        let image = folder.path().join("bild.jpg");
+        std::fs::write(&image, b"not really a jpeg").expect("write the fake JPEG");
+        let mut worker = start_with_version("12.40", journal.path());
+        assert!(matches!(
+            wait_for_version(&worker, Duration::from_secs(10)),
+            Some(Ok(_))
+        ));
+
+        let result = template_result(&mut worker, &image, headline_template("Headline"));
         assert_eq!(result, Err(WriteError::ExifToolTooOld));
         assert_eq!(
             result.err().map(|error| error.to_string()).as_deref(),
@@ -2455,6 +2593,56 @@ mod tests {
 
                 assert_eq!(next_ids(&worker, 2), vec![first, second], "{n} processes");
                 // One after the other: two slow commands.
+                assert!(started.elapsed() >= SLOW_WAIT * 2, "{n} processes");
+            }
+        }
+
+        #[test]
+        fn a_template_and_edits_of_different_images_overlap() {
+            for n in [2, 4] {
+                let folder = TempDir::new(&format!("pooled-template-overlap-{n}"));
+                let journal = TempDir::new(&format!("pooled-template-overlap-{n}-journal"));
+                let slow = image(folder.path(), "a.jpg", true);
+                let quick = image(folder.path(), "b.jpg", false);
+                let mut worker = start_slow(journal.path(), n, &[]);
+
+                let started = Instant::now();
+                let template_id = worker
+                    .apply_template(slow.clone(), headline_template("Rubrik"))
+                    .expect("request should be accepted");
+                let edits_id = worker
+                    .write_edits(quick.clone(), vec![set_text("photoshop:City", "Lund")])
+                    .expect("request should be accepted");
+
+                // The edits, asked second, answered while the template still ran: the template
+                // went through the pool, not the worker's own process.
+                assert_eq!(
+                    next_ids(&worker, 2),
+                    vec![edits_id, template_id],
+                    "{n} processes"
+                );
+                assert!(started.elapsed() < SLOW_WAIT * 2, "{n} processes");
+            }
+        }
+
+        #[test]
+        fn a_template_and_edits_of_one_image_answer_in_order() {
+            for n in [2, 4] {
+                let folder = TempDir::new(&format!("pooled-template-{n}"));
+                let journal = TempDir::new(&format!("pooled-template-{n}-journal"));
+                let file = image(folder.path(), "a.jpg", true);
+                let mut worker = start_slow(journal.path(), n, &[]);
+
+                let started = Instant::now();
+                let first = worker
+                    .apply_template(file.clone(), headline_template("Rubrik"))
+                    .expect("request should be accepted");
+                let second = worker
+                    .write_edits(file.clone(), vec![set_text("photoshop:City", "Lund")])
+                    .expect("request should be accepted");
+
+                assert_eq!(next_ids(&worker, 2), vec![first, second], "{n} processes");
+                // One after the other: each reads the image with a slow command first.
                 assert!(started.elapsed() >= SLOW_WAIT * 2, "{n} processes");
             }
         }

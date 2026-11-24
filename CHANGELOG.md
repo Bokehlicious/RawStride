@@ -32,6 +32,9 @@ Downloads are on the [Releases page](https://github.com/Bokehlicious/RawStride/r
   and the notices of the template's writes (for example a text cut to IIM's limit) are listed in
   the import's summary. Use for This Import in the template window changes the import's template
   for this import only, without saving the file.
+- A metadata template's list with its + box checked (such as Keywords) is no longer written to an
+  image whose IIM and XMP values of that list disagree: the list is left as it was and named in
+  the import's summary, as the metadata window does.
 - The Settings page Keyboard Shortcuts is a table with the columns Action, First Key and Second
   Key, whose headings stay at the top while the rows scroll. The Action column's width is changed
   by dragging the line beside its heading and is kept between sessions; a long name is cut and

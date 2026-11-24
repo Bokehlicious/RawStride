@@ -19,7 +19,7 @@ use pw_metadata::read::MetadataRead;
 use pw_metadata::reconcile::IimDigest;
 use pw_metadata::safe_write::{NoImageCheck, WriteReport};
 use pw_metadata::template_file::{TemplateFile, write_exiftool_config};
-use pw_metadata::value::{LangAlt, StructValue, Value};
+use pw_metadata::value::{ConflictRule, LangAlt, StructValue, Value};
 use pw_metadata::variables::VariableError;
 use pw_metadata::write_plan::WriteNotice;
 
@@ -771,6 +771,139 @@ fn a_template_file_gives_the_plans_notices() {
     );
     assert_eq!(tag(&mut et, &file, "XMP-photoshop:City"), long);
     assert_eq!(tag(&mut et, &file, "IPTC:City"), &long[..32]);
+    s.assert_clean();
+    s.remove();
+}
+
+/// A JPEG with XMP keywords `sol`, `hav` and IIM Keywords `sol`, `is` without a checksum: an
+/// `Open` conflict on `dc:subject` (ADR 0007 §5.1, Q1), as in `tests/edit.rs`.
+fn jpeg_with_keyword_conflict(et: &mut ExifTool, s: &Scratch) -> PathBuf {
+    let file = s.jpeg();
+    write(
+        et,
+        &file,
+        &[
+            "-XMP-dc:Subject=sol",
+            "-XMP-dc:Subject=hav",
+            "-IPTC:CodedCharacterSet=UTF8",
+            "-IPTC:Keywords=sol",
+            "-IPTC:Keywords=is",
+        ],
+    );
+    let before = read(et, &file);
+    let rules: Vec<_> = before
+        .reconciled
+        .metadata
+        .conflicts()
+        .iter()
+        .map(|c| (c.property.clone(), c.rule))
+        .collect();
+    assert_eq!(
+        rules,
+        [("dc:subject".to_string(), ConflictRule::Open)],
+        "precondition"
+    );
+    file
+}
+
+/// ADR 0017 U13-Q28 (T299): a template's + list on a property with an `Open` conflict is left
+/// alone and named once in a `ConflictKept`, also when nothing is written (a), and beside a field
+/// that is written (b).
+#[test]
+fn a_plus_list_with_an_open_conflict_is_left_alone_and_named() {
+    let mut et = exiftool();
+    let s = Scratch::new("plus-list-conflict");
+    let file = jpeg_with_keyword_conflict(&mut et, &s);
+    let kept = WriteNotice::ConflictKept {
+        property: "dc:subject".to_string(),
+    };
+
+    // (a) Only the + list: nothing is written, the conflict is still named.
+    let bytes = std::fs::read(&file).unwrap();
+    let keywords_only = template_file(&[("dc:subject", list(&["vinter"]))], &["dc:subject"]);
+    assert_eq!(keywords_only.add, ["dc:subject"], "precondition");
+    assert_edit_report(
+        s.apply_file(&mut et, &file, &keywords_only),
+        WriteReport::Unchanged,
+        std::slice::from_ref(&kept),
+    );
+    assert_eq!(std::fs::read(&file).unwrap(), bytes);
+    assert_eq!(tag(&mut et, &file, "XMP-dc:Subject"), "sol, hav");
+    assert_eq!(tag(&mut et, &file, "IPTC:Keywords"), "sol, is");
+
+    // (b) With a Headline: written, the conflict named once, both keyword forms unchanged.
+    let with_headline = template_file(
+        &[
+            ("photoshop:Headline", text("Ny")),
+            ("dc:subject", list(&["vinter"])),
+        ],
+        &["dc:subject"],
+    );
+    match s.apply_file(&mut et, &file, &with_headline) {
+        Ok(report) => {
+            assert_eq!(report.report, written(&file));
+            let named = report
+                .notices
+                .iter()
+                .filter(|notice| **notice == kept)
+                .count();
+            assert_eq!(named, 1, "{:?}", report.notices);
+        }
+        Err(error) => panic!("expected the file to be written, got the error {error}"),
+    }
+    assert_eq!(tag(&mut et, &file, "XMP-photoshop:Headline"), "Ny");
+    assert_eq!(tag(&mut et, &file, "XMP-dc:Subject"), "sol, hav");
+    assert_eq!(tag(&mut et, &file, "IPTC:Keywords"), "sol, is");
+    s.assert_clean();
+    s.remove();
+}
+
+/// ADR 0017 U13-Q28 (T299): a + list whose entries the image already holds (so the template does
+/// not change it) on a property with an `Open` conflict is still named in one `ConflictKept`.
+#[test]
+fn a_plus_list_already_in_the_image_still_names_the_conflict() {
+    let mut et = exiftool();
+    let s = Scratch::new("plus-list-conflict-unchanged");
+    let file = jpeg_with_keyword_conflict(&mut et, &s);
+    let bytes = std::fs::read(&file).unwrap();
+
+    let template = template_file(&[("dc:subject", list(&["sol"]))], &["dc:subject"]);
+    assert_eq!(template.add, ["dc:subject"], "precondition");
+    assert_edit_report(
+        s.apply_file(&mut et, &file, &template),
+        WriteReport::Unchanged,
+        &[WriteNotice::ConflictKept {
+            property: "dc:subject".to_string(),
+        }],
+    );
+    assert_eq!(std::fs::read(&file).unwrap(), bytes);
+    assert_eq!(tag(&mut et, &file, "XMP-dc:Subject"), "sol, hav");
+    assert_eq!(tag(&mut et, &file, "IPTC:Keywords"), "sol, is");
+    s.assert_clean();
+    s.remove();
+}
+
+/// ADR 0017 U13-Q28 (T299): a Keywords field **without** + replaces the list in both forms: it
+/// decides the conflict, as typing does, and gives no `ConflictKept` for it.
+#[test]
+fn a_replacing_list_decides_an_open_conflict() {
+    let mut et = exiftool();
+    let s = Scratch::new("replacing-list-conflict");
+    let file = jpeg_with_keyword_conflict(&mut et, &s);
+    let kept = WriteNotice::ConflictKept {
+        property: "dc:subject".to_string(),
+    };
+
+    let replacing = template_file(&[("dc:subject", list(&["vinter"]))], &[]);
+    match s.apply_file(&mut et, &file, &replacing) {
+        Ok(report) => {
+            assert_eq!(report.report, written(&file));
+            assert!(!report.notices.contains(&kept), "{:?}", report.notices);
+        }
+        Err(error) => panic!("expected the file to be written, got the error {error}"),
+    }
+    assert_eq!(tag(&mut et, &file, "XMP-dc:Subject"), "vinter");
+    assert_eq!(tag(&mut et, &file, "IPTC:Keywords"), "vinter");
     s.assert_clean();
     s.remove();
 }
