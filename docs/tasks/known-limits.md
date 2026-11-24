@@ -497,6 +497,9 @@ seen in the hand check, so each becomes a task only if it is noticed in use.)
 
 (T309's extra code review, 2026-11-24; taken up when the view core's plan is next changed.)
 
+Every item below **kept** at the sort after W1 (2026-11-24, owner): each a task only if it is
+seen in use.
+
 - *A panel shown or hidden at fit* costs a half-size render while the size changes and a
   reduced render after it; before, the resident half-size view served every fit scale.
 - *A view size that alternates by a pixel every frame* (a rounding at some scale factors)
