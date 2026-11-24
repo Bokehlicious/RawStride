@@ -81,20 +81,34 @@ impl<B: Backend> Shared<B> {
                     view,
                     mut session,
                 } => {
+                    // a view below 100 % is reduced on the worker with the Lanczos filter (ADR
+                    // 0027 §3.2, W1-Q3)
+                    let (w, h) = scale::scaled_size(view.region.w, view.region.h, view.density());
+                    let reduce = |img: Rgb| {
+                        scale::reduce(&img, w, h)
+                            .ok_or_else(|| DecodeError::new("scaling the view failed"))
+                    };
                     let result = match view.kind {
                         ViewKind::Half => self.backend.render_half(&mut session),
                         ViewKind::Zoom | ViewKind::Ring => {
                             self.backend.render_region(&mut session, view.region)
                         }
+                        ViewKind::Reduced => {
+                            self.backend.render_half(&mut session).and_then(|img| {
+                                if img.width < w || img.height < h {
+                                    // a backend whose half-size render is smaller than half the
+                                    // image: it is used as it is rather than failing, and
+                                    // `finish_render` gives it as the half-size view (T309 R1)
+                                    Ok(img)
+                                } else {
+                                    reduce(img)
+                                }
+                            })
+                        }
                         ViewKind::Scaled => self
                             .backend
                             .render_region(&mut session, view.region)
-                            .and_then(|img| {
-                                let (w, h) =
-                                    scale::scaled_size(img.width, img.height, view.density());
-                                scale::downscale(&img, w, h)
-                                    .ok_or_else(|| DecodeError::new("scaling the view failed"))
-                            }),
+                            .and_then(reduce),
                     };
                     // to the display after the render and the reduction, before the check
                     // (ADR 0027 W1-Q4)
@@ -863,8 +877,14 @@ mod tests {
     #[derive(Clone, Default)]
     struct Flat {
         renders: Arc<AtomicUsize>,
+        /// How many of the renders were half-size renders.
+        halves: Arc<AtomicUsize>,
         shown: Arc<Mutex<Vec<(u32, u32)>>>,
         fail: bool,
+        /// The half-size render is malformed (too few samples), so it cannot be reduced.
+        malformed_half: bool,
+        /// The half-size render is 700 × 500, smaller than half the image (T309 R1).
+        small_half: bool,
     }
 
     fn flat(w: u32, h: u32) -> Rgb {
@@ -891,7 +911,16 @@ mod tests {
 
         fn render_half(&self, _session: &mut u32) -> Result<Rgb, DecodeError> {
             self.renders.fetch_add(1, Ordering::SeqCst);
-            Ok(flat(2000, 1500))
+            self.halves.fetch_add(1, Ordering::SeqCst);
+            let mut half = if self.small_half {
+                flat(700, 500)
+            } else {
+                flat(2000, 1500)
+            };
+            if self.malformed_half {
+                half.data.truncate(5);
+            }
+            Ok(half)
         }
 
         fn render_region(&self, _session: &mut u32, r: Rect) -> Result<Rgb, DecodeError> {
@@ -1035,6 +1064,89 @@ mod tests {
         assert!(views.is_empty(), "{views:?}");
         assert!(!backend.shown().is_empty());
         assert!(core.stats().failures >= 1);
+    }
+
+    // ---------- the reduced view below 50 % (ADR 0027 W1, T309) ----------
+
+    /// A core on [`Flat`] whose view is 800 × 600 before the folder opens (so the first job is
+    /// for that size), and which prefetches nothing (a dwell of an hour).
+    fn flat_core(backend: &Flat) -> ViewCore<Flat> {
+        let config = Config {
+            dwell: Duration::from_secs(3600),
+            ..Config::default()
+        };
+        let core = match ViewCore::start(backend.clone(), config) {
+            Ok(c) => c,
+            Err(e) => panic!("start: {e}"),
+        };
+        let _ = core.frame([800, 600]);
+        core.open_folder(vec![PathBuf::from(A)]);
+        core
+    }
+
+    #[test]
+    fn a_reduced_view_is_the_half_size_render_reduced_then_converted_to_the_display() {
+        let backend = Flat::default();
+        let core = flat_core(&backend);
+        let mut views = Vec::new();
+        let f = flat_frames_until(&core, &mut views, |f, _| f.status == Status::Ready);
+        assert_eq!(f.status, Status::Ready);
+        // 4000 × 3000 at fit in 800 × 600: 0.2, one reduced view of 800 × 600
+        assert_eq!(views.len(), 1, "{views:?}");
+        let view = &views[0];
+        assert_eq!(view.kind, ViewKind::Reduced);
+        assert_eq!((view.image.width, view.image.height), (800, 600));
+        assert_eq!(backend.halves.load(Ordering::SeqCst), 1);
+        assert_eq!(core.stats().renders, 1);
+        // converted once, at the reduced size, after the reduction
+        assert_eq!(backend.shown(), vec![(800, 600)]);
+        assert!(view.image.data.iter().all(|b| *b == FLAT + 1));
+    }
+
+    #[test]
+    fn a_half_size_render_smaller_than_the_reduced_view_is_rendered_once_and_shown() {
+        let backend = Flat {
+            small_half: true,
+            ..Flat::default()
+        };
+        let core = flat_core(&backend);
+        let mut views = Vec::new();
+        let f = flat_frames_until(&core, &mut views, |f, _| f.status == Status::Ready);
+        assert_eq!(f.status, Status::Ready);
+        // a while longer: no second render of the same view
+        let end = Instant::now() + Duration::from_millis(300);
+        while Instant::now() < end {
+            let f = flat_frames_until(&core, &mut views, |_, _| true);
+            assert_eq!(f.status, Status::Ready);
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(backend.halves.load(Ordering::SeqCst), 1);
+        assert_eq!(core.stats().renders, 1);
+        // the 700 × 500 render, unreduced, shown as the half-size view and converted
+        assert_eq!(views.len(), 1, "{views:?}");
+        assert_eq!(views[0].kind, ViewKind::Half);
+        assert_eq!((views[0].image.width, views[0].image.height), (700, 500));
+        assert_eq!(backend.shown(), vec![(700, 500)]);
+        assert!(f.draw.is_some());
+    }
+
+    #[test]
+    fn a_failed_reduction_is_the_views_error() {
+        let backend = Flat {
+            malformed_half: true,
+            ..Flat::default()
+        };
+        let core = flat_core(&backend);
+        let mut views = Vec::new();
+        let f = flat_frames_until(&core, &mut views, |f, _| {
+            matches!(f.status, Status::Error(_))
+        });
+        let Status::Error(e) = f.status else {
+            panic!("expected an error, got {:?}", f.status);
+        };
+        assert_eq!(e.message, "scaling the view failed");
+        assert!(views.is_empty(), "{views:?}");
+        assert!(backend.shown().is_empty(), "nothing reached to_display");
     }
 
     #[test]

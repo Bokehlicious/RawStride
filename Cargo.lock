@@ -2214,6 +2214,7 @@ dependencies = [
  "pw-libjpeg",
  "pw-libraw",
  "pw-raw",
+ "pw-resample",
  "pw-tiff",
  "tiff 0.9.1",
 ]

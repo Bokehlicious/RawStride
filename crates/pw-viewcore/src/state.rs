@@ -69,6 +69,9 @@ pub enum ViewKind {
     Ring,
     /// The visible region at a free level between 50 % and 100 %, scaled down on the worker.
     Scaled,
+    /// The whole image below 50 %: the half-size render reduced on the worker to the view's
+    /// density with the Lanczos filter (ADR 0027 §3.2, W1-Q3).
+    Reduced,
 }
 
 impl ViewKind {
@@ -78,6 +81,7 @@ impl ViewKind {
             ViewKind::Zoom => "zoom",
             ViewKind::Ring => "ring",
             ViewKind::Scaled => "scaled",
+            ViewKind::Reduced => "reduced",
         }
     }
 }
@@ -313,6 +317,16 @@ fn quantise(d: f64) -> u64 {
     (d * 1e6).ceil().max(0.0) as u64
 }
 
+/// Whether a reduced view of `region` whose density is `density` (as [`State::finish_render`]
+/// gives it: the smaller of its two sides' ratios) has the size `job` asks for. The density of a
+/// view of the job's size lies between the job's density and the next size's, so the size is
+/// found again from it; a margin far below one pixel keeps rounding from moving it.
+fn same_reduction(region: Rect, density: f64, job: JobView) -> bool {
+    use crate::scale::scaled_size;
+    scaled_size(region.w, region.h, density - 1e-12)
+        == scaled_size(region.w, region.h, job.density())
+}
+
 /// A requirement: a view that covers `cover` at `density` or more, and how to render one.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Req {
@@ -500,6 +514,11 @@ pub(crate) struct State<S> {
     /// The upright rectangle of the image that `last_draw` shows (set with it).
     last_vis: Option<RectF>,
     waiting_since: Option<Instant>,
+    /// Whether [`State::frame`] has been called: the first frame's view size is not a change.
+    framed: bool,
+    /// The images, by the generation they were rendered in, whose half-size render came back
+    /// smaller than a reduced view's size: they get the half-size view below 50 % (T309 R1).
+    unreducible: HashSet<(u64, Key)>,
     pub records: Vec<Record>,
     open_record: Option<usize>,
     pub stop: bool,
@@ -555,6 +574,8 @@ impl<S> State<S> {
             last_draw: None,
             last_vis: None,
             waiting_since: None,
+            framed: false,
+            unreducible: HashSet::new(),
             records: Vec::new(),
             open_record: None,
             stop: false,
@@ -965,9 +986,13 @@ impl<S> State<S> {
         if !(full || self.since.elapsed() >= self.config.dwell) {
             return v;
         }
-        // free levels are not prefetched: neighbours get the fit view and the 100 % target
+        // free levels of 50 % or more are not prefetched: neighbours get the fit view and the
+        // 100 % target. Below 50 % the view at the current scale is of the whole image, so it is
+        // prefetched instead of the fit view, and stepping at such a level stays quick (ADR 0027
+        // W1-Q8).
         let (primary, other) = match self.zoom {
             Zoom::Scale(s) if s >= 1.0 - EPS => (Want::Target, Want::Fit),
+            Zoom::Scale(s) if s < HALF_DENSITY - EPS => (Want::Shown, Want::Target),
             _ => (Want::Fit, Want::Target),
         };
         let other_view = if self.zoom == Zoom::Fit {
@@ -1023,7 +1048,25 @@ impl<S> State<S> {
         };
         let vis = geometry::visible(size, self.view_px, scale, self.centre);
         let cover = geometry::sensor_box(size, vis);
-        let job = if scale <= HALF_DENSITY + EPS {
+        // Below 50 % the half-size render reduced to the exact scale (ADR 0027 W1-Q3), except
+        // for the shown view during a zoom gesture, which uses the half-size view as it is, so a
+        // gesture never starts a render per frame. At 50 % the half-size view is drawn at 1:1, and
+        // so it is just below, where the reduced size would not fit in a half-size render that
+        // rounds down (an odd side; less than a pixel apart; owner 2026-11-24, T309).
+        let reduced_fits = {
+            let (w, h) = crate::scale::scaled_size(size.w, size.h, quantise(scale) as f64 / 1e6);
+            w <= size.w / 2 && h <= size.h / 2
+        } && !self.unreducible.contains(&(self.generation, key));
+        let job = if scale < HALF_DENSITY - EPS
+            && reduced_fits
+            && !(want == Want::Shown && self.in_gesture())
+        {
+            JobView {
+                kind: ViewKind::Reduced,
+                region: geometry::whole(size),
+                density_q: quantise(scale),
+            }
+        } else if scale <= HALF_DENSITY + EPS {
             JobView {
                 kind: ViewKind::Half,
                 region: geometry::whole(size),
@@ -1051,18 +1094,41 @@ impl<S> State<S> {
         })
     }
 
-    fn serves(&self, generation: u64, key: Key, region: Rect, density: f64, req: &Req) -> bool {
+    /// Whether a view of `kind` over `region` at `density` serves `req`. A reduced view has no
+    /// mipmaps, so it does not serve a requirement below half its own density: the GPU would
+    /// reduce it more than 2:1 (aliasing); the mipmapped half-size view is used there instead
+    /// (ADR 0027 W1, T309 R2).
+    fn serves(
+        &self,
+        generation: u64,
+        key: Key,
+        kind: ViewKind,
+        region: Rect,
+        density: f64,
+        req: &Req,
+    ) -> bool {
+        let need = req.density.min(1.0);
         generation == self.generation
             && key == req.key
             && region.contains(req.cover)
-            && density + EPS >= req.density.min(1.0)
+            && density + EPS >= need
+            && !(kind == ViewKind::Reduced && density > 2.0 * need + EPS)
     }
 
     /// The resident view that serves a requirement: the least dense one, then the smallest.
     pub fn serving(&self, req: &Req) -> Option<&Resident> {
         self.resident
             .iter()
-            .filter(|r| self.serves(r.generation, (r.pos, r.source), r.region, r.density, req))
+            .filter(|r| {
+                self.serves(
+                    r.generation,
+                    (r.pos, r.source),
+                    r.kind,
+                    r.region,
+                    r.density,
+                    req,
+                )
+            })
             .min_by(|a, b| {
                 a.density
                     .total_cmp(&b.density)
@@ -1070,12 +1136,35 @@ impl<S> State<S> {
             })
     }
 
+    /// Whether the plan counts a requirement as done. A reduced view (ADR 0027 W1-Q3) counts only
+    /// as itself, resident or in flight: a denser view (the half-size view after a gesture, a
+    /// reduced view after zooming out) is drawn meanwhile ([`State::serving`]) but does not stop
+    /// the exact one from being made.
     fn satisfied(&self, req: &Req) -> bool {
-        self.serving(req).is_some()
-            || self
+        if req.job.kind == ViewKind::Reduced {
+            let job = req.job;
+            return self.resident.iter().any(|r| {
+                r.generation == self.generation
+                    && (r.pos, r.source) == req.key
+                    && r.kind == ViewKind::Reduced
+                    && r.region == job.region
+                    && same_reduction(r.region, r.density, job)
+            }) || self
                 .inflight
                 .iter()
-                .any(|f| self.serves(f.generation, f.key, f.view.region, f.view.density(), req))
+                .any(|f| f.generation == self.generation && f.key == req.key && f.view == job);
+        }
+        self.serving(req).is_some()
+            || self.inflight.iter().any(|f| {
+                self.serves(
+                    f.generation,
+                    f.key,
+                    f.view.kind,
+                    f.view.region,
+                    f.view.density(),
+                    req,
+                )
+            })
     }
 
     /// The jobs the plan asks for now, in order.
@@ -1297,7 +1386,7 @@ impl<S> State<S> {
                 u64::from(s.w.div_ceil(2)) * u64::from(s.h.div_ceil(2)) * 4
             }),
             ViewKind::Zoom | ViewKind::Ring => area * 4,
-            ViewKind::Scaled => {
+            ViewKind::Scaled | ViewKind::Reduced => {
                 let d = view.density();
                 ((area as f64) * d * d * 4.0).ceil() as u64
             }
@@ -1727,10 +1816,45 @@ impl<S> State<S> {
         match result {
             Ok(image) => {
                 let hash = self.config.record.then(|| fnv(&image.data));
+                let target =
+                    crate::scale::scaled_size(view.region.w, view.region.h, view.density());
+                if view.kind == ViewKind::Reduced && (image.width, image.height) != target {
+                    // The half-size render was smaller than the reduced size and came back as it
+                    // is (`core.rs`): it is the image's half-size view, and the image gets the
+                    // half-size view below 50 % from now on, so the plan counts it as done and
+                    // does not render it again (T309 R1). Its job stays in flight as the
+                    // half-size view it now is, until that view is accepted, so the plan does not
+                    // ask for one meanwhile.
+                    let half = JobView {
+                        kind: ViewKind::Half,
+                        region: view.region,
+                        density_q: quantise(HALF_DENSITY),
+                    };
+                    if let Some(f) = self
+                        .inflight
+                        .iter_mut()
+                        .find(|f| f.generation == generation && f.key == key && f.view == view)
+                    {
+                        f.view = half;
+                    }
+                    self.unreducible.retain(|(g, _)| *g == generation);
+                    self.unreducible.insert((generation, key));
+                    self.outbox.push(ViewOut {
+                        generation,
+                        pos: key.0,
+                        source: key.1,
+                        kind: ViewKind::Half,
+                        region: view.region,
+                        density: HALF_DENSITY,
+                        image,
+                        hash,
+                    });
+                    return;
+                }
                 let density = match view.kind {
                     ViewKind::Half => HALF_DENSITY,
                     ViewKind::Zoom | ViewKind::Ring => 1.0,
-                    ViewKind::Scaled => {
+                    ViewKind::Scaled | ViewKind::Reduced => {
                         let r = view.region;
                         (f64::from(image.width) / f64::from(r.w.max(1)))
                             .min(f64::from(image.height) / f64::from(r.h.max(1)))
@@ -1748,7 +1872,7 @@ impl<S> State<S> {
                 });
             }
             Err(e) => {
-                self.remove_inflight(generation, key, view.kind, view.region);
+                self.remove_inflight(generation, key, view.kind, view.region, view.density());
                 self.stats.failures += 1;
                 self.failed.insert(key, e);
             }
@@ -1865,12 +1989,22 @@ impl<S> State<S> {
         }
     }
 
-    fn remove_inflight(&mut self, generation: u64, key: Key, kind: ViewKind, region: Rect) {
+    /// Removes the in-flight view of `kind` over `region`. Two reduced views of one image differ
+    /// only by their density, so for them it must match too (`density` as the view has it).
+    fn remove_inflight(
+        &mut self,
+        generation: u64,
+        key: Key,
+        kind: ViewKind,
+        region: Rect,
+        density: f64,
+    ) {
         if let Some(i) = self.inflight.iter().position(|f| {
             f.generation == generation
                 && f.key == key
                 && f.view.kind == kind
                 && f.view.region == region
+                && (kind != ViewKind::Reduced || same_reduction(region, density, f.view))
         }) {
             self.inflight.swap_remove(i);
         }
@@ -1883,15 +2017,15 @@ impl<S> State<S> {
     /// not of the current image). Evicted ids go to [`State::take_dropped`].
     pub fn accept(&mut self, out: &ViewOut, bytes: u64) -> Option<u64> {
         let key = (out.pos, out.source);
-        self.remove_inflight(out.generation, key, out.kind, out.region);
+        self.remove_inflight(out.generation, key, out.kind, out.region, out.density);
         if out.generation != self.generation {
             self.stats.discarded += 1;
             return None;
         }
-        if out.kind == ViewKind::Scaled {
+        if matches!(out.kind, ViewKind::Scaled | ViewKind::Reduced) {
             let wanted = self.wanted(true).into_iter().any(|(k, want)| {
                 self.req(k, want).is_some_and(|req| {
-                    self.serves(out.generation, key, out.region, out.density, &req)
+                    self.serves(out.generation, key, out.kind, out.region, out.density, &req)
                 })
             });
             if !wanted {
@@ -1943,7 +2077,7 @@ impl<S> State<S> {
     /// as failed in that mode with `reason`.
     pub fn reject(&mut self, out: &ViewOut, reason: &str) {
         let key = (out.pos, out.source);
-        self.remove_inflight(out.generation, key, out.kind, out.region);
+        self.remove_inflight(out.generation, key, out.kind, out.region, out.density);
         self.stats.discarded += 1;
         if out.generation == self.generation {
             self.failed.insert(key, DecodeError::new(reason));
@@ -1958,6 +2092,14 @@ impl<S> State<S> {
     /// What to draw now, for a view of `view_px` physical pixels.
     pub fn frame(&mut self, view_px: [u32; 2]) -> Frame {
         let view_px = [view_px[0].max(1), view_px[1].max(1)];
+        // A changed view size (the window resized, a panel shown or hidden) changes the fit
+        // scale every frame: it counts as a step of a zoom gesture, so the reduced view is asked
+        // for once it pauses, not once per size (ADR 0027 W1). The first frame's size is not a
+        // change.
+        if self.framed && view_px != self.view_px {
+            self.gesture_at = Some(Instant::now());
+        }
+        self.framed = true;
         self.view_px = view_px;
         let key = self.cur_key();
         let mut frame = Frame {
@@ -2026,6 +2168,13 @@ impl<S> State<S> {
             }
             None => {
                 let since = *self.waiting_since.get_or_insert_with(Instant::now);
+                if let Some((draw, vis)) = self.gesture_stand_in(key, view_px) {
+                    // not the finished view: the status stays Preparing and the shown time is
+                    // not marked
+                    self.touch(draw.id);
+                    self.last_draw = Some(draw);
+                    self.last_vis = Some(vis);
+                }
                 frame.draw = self.last_draw;
                 frame.status = Status::Preparing {
                     since,
@@ -2040,6 +2189,43 @@ impl<S> State<S> {
             frame.focus = self.focus_state(key, frame.draw);
         }
         frame
+    }
+
+    /// What stands in for the current image `key` during a zoom gesture at 50 % or less while no
+    /// resident view serves it (the first gesture after a step, before the half-size view
+    /// arrives; ADR 0027 W1-Q3, W1-Q9): its densest resident reduced view of the whole image,
+    /// placed at the gesture's scale and position (enlarged). Only a view of the current image
+    /// and generation (V2), and none the GPU would reduce more than 2:1 (it has no mipmaps; R2).
+    fn gesture_stand_in(&self, key: Key, view_px: [u32; 2]) -> Option<(Draw, RectF)> {
+        if !self.in_gesture() {
+            return None;
+        }
+        let size = *self.sizes.get(&key)?;
+        let scale = self.scale_of(key)?;
+        if scale > HALF_DENSITY + EPS {
+            return None;
+        }
+        let whole = geometry::whole(size);
+        let r = self
+            .resident
+            .iter()
+            .filter(|r| {
+                r.generation == self.generation
+                    && (r.pos, r.source) == key
+                    && r.kind == ViewKind::Reduced
+                    && r.region == whole
+                    && r.density <= 2.0 * scale + EPS
+            })
+            .max_by(|a, b| a.density.total_cmp(&b.density))?;
+        let vis = geometry::visible(size, view_px, scale, self.centre);
+        let d = geometry::dest(vis, view_px, scale);
+        let draw = Draw {
+            id: r.id,
+            dest: [d[0] as f32, d[1] as f32, d[2] as f32, d[3] as f32],
+            uv: geometry::corner_uvs(size, r.region, vis),
+            nearest: false,
+        };
+        Some((draw, vis))
     }
 
     /// The clipping state of the current image `key` while a map is wanted and the image can be
@@ -2263,7 +2449,7 @@ mod tests {
         let density = match job.kind {
             ViewKind::Half => HALF_DENSITY,
             ViewKind::Zoom | ViewKind::Ring => 1.0,
-            ViewKind::Scaled => job.density(),
+            ViewKind::Scaled | ViewKind::Reduced => job.density(),
         };
         ViewOut {
             generation: s.generation,
@@ -2278,6 +2464,16 @@ mod tests {
                 data: vec![0; 3],
             },
             hash: None,
+        }
+    }
+
+    /// The half-size view of image `pos` (asked for during a zoom gesture below 50 %).
+    fn half_out(s: &State<u32>, pos: usize) -> ViewOut {
+        ViewOut {
+            kind: ViewKind::Half,
+            region: geometry::whole(SIZE),
+            density: HALF_DENSITY,
+            ..out(s, pos, Want::Fit)
         }
     }
 
@@ -2357,8 +2553,9 @@ mod tests {
             s.zoom = z;
             s.req(k(10), Want::Shown).map(|r| r.job.kind)
         };
-        assert_eq!(kind(&mut s, Zoom::Fit), Some(ViewKind::Half));
-        assert_eq!(kind(&mut s, Zoom::Scale(0.4)), Some(ViewKind::Half));
+        assert_eq!(kind(&mut s, Zoom::Fit), Some(ViewKind::Reduced));
+        assert_eq!(kind(&mut s, Zoom::Scale(0.4)), Some(ViewKind::Reduced));
+        assert_eq!(kind(&mut s, Zoom::Scale(0.5)), Some(ViewKind::Half));
         assert_eq!(kind(&mut s, Zoom::Scale(0.75)), Some(ViewKind::Scaled));
         assert_eq!(kind(&mut s, Zoom::Scale(1.0)), Some(ViewKind::Zoom));
         assert_eq!(kind(&mut s, Zoom::Scale(4.0)), Some(ViewKind::Zoom));
@@ -2378,10 +2575,16 @@ mod tests {
     fn a_view_is_never_drawn_upscaled_below_100_percent() {
         let mut s = state(1024);
         known(&mut s, 10);
-        let half = s.accept(&out(&s, 10, Want::Fit), 100);
-        assert!(half.is_some());
+        // the fit view (reduced to 0.25, ADR 0027 W1) is not drawn enlarged at 0.4 at rest
+        let fit = s.accept(&out(&s, 10, Want::Fit), 100);
+        assert!(fit.is_some());
         s.zoom = Zoom::Scale(0.4);
-        assert_eq!(s.frame(VIEW).draw.map(|d| d.id), half);
+        let f = s.frame(VIEW);
+        assert!(matches!(f.status, Status::Preparing { .. }));
+        assert_eq!(f.draw, None);
+        let reduced = s.accept(&out(&s, 10, Want::Shown), 100);
+        assert!(reduced.is_some());
+        assert_eq!(s.frame(VIEW).draw.map(|d| d.id), reduced);
         s.zoom = Zoom::Scale(0.7);
         let f = s.frame(VIEW);
         assert!(matches!(
@@ -2391,11 +2594,372 @@ mod tests {
                 ..
             }
         ));
-        // the previous (half-size) view stays on screen until the sharp one arrives (V2)
-        assert_eq!(f.draw.map(|d| d.id), half);
+        // the previous (reduced) view stays on screen until the sharp one arrives (V2)
+        assert_eq!(f.draw.map(|d| d.id), reduced);
         let scaled = s.accept(&out(&s, 10, Want::Shown), 100);
         assert!(scaled.is_some());
         assert_eq!(s.frame(VIEW).draw.map(|d| d.id), scaled);
+    }
+
+    // ---------- the reduced view below 50 % (ADR 0027 W1, T309) ----------
+
+    /// The job of a reduced view of the whole image at `density_q` millionths.
+    fn reduced_job(density_q: u64) -> JobView {
+        JobView {
+            kind: ViewKind::Reduced,
+            region: geometry::whole(SIZE),
+            density_q,
+        }
+    }
+
+    /// The job of the half-size view.
+    fn half_job() -> JobView {
+        JobView {
+            kind: ViewKind::Half,
+            region: geometry::whole(SIZE),
+            density_q: 500_000,
+        }
+    }
+
+    /// The finished render of `view`, at the size the worker reduces it to.
+    fn rendered(view: JobView) -> Rgb {
+        let (w, h) = crate::scale::scaled_size(view.region.w, view.region.h, view.density());
+        Rgb {
+            width: w,
+            height: h,
+            data: vec![0; (w * h * 3) as usize],
+        }
+    }
+
+    fn pause_the_gesture(s: &mut State<u32>) {
+        s.gesture_at = Some(Instant::now() - Duration::from_secs(1));
+    }
+
+    #[test]
+    fn below_50_percent_the_view_is_reduced_to_the_scale_and_a_gesture_uses_the_half_size_view() {
+        let mut s = state(1024);
+        with_session(&mut s, 10);
+        let job = |s: &State<u32>| s.req(k(10), Want::Shown).map(|r| r.job);
+        // at rest (the fit scale of 4000×3000 in 1000×800 is 0.25)
+        s.zoom = Zoom::Fit;
+        assert_eq!(job(&s), Some(reduced_job(250_000)));
+        s.zoom = Zoom::Scale(0.4);
+        assert_eq!(job(&s), Some(reduced_job(400_000)));
+        s.zoom = Zoom::Scale(0.5);
+        assert_eq!(job(&s), Some(half_job()));
+        s.zoom = Zoom::Scale(0.6);
+        assert_eq!(job(&s).map(|j| j.kind), Some(ViewKind::Scaled));
+        // during a zoom gesture the half-size view, so no render per step
+        s.set_zoom(Zoom::Fit, None, false);
+        s.set_zoom(Zoom::Scale(0.25), None, true);
+        assert_eq!(job(&s), Some(half_job()));
+        s.set_zoom(Zoom::Scale(0.4), None, true);
+        assert_eq!(job(&s), Some(half_job()));
+        // only the shown view switches: the fit view stays the reduced one
+        assert_eq!(
+            s.req(k(10), Want::Fit).map(|r| r.job),
+            Some(reduced_job(250_000))
+        );
+        assert_eq!(s.plan(), vec![Job::Render(k(10), half_job())]);
+        let half = s.accept(&half_out(&s, 10), 100);
+        assert!(half.is_some());
+        assert_eq!(s.frame(VIEW).draw.map(|d| d.id), half);
+        // the gesture pauses: the half-size view does not satisfy the plan, the reduced view at
+        // the gesture's last scale is made, and the half-size view is drawn until it arrives
+        pause_the_gesture(&mut s);
+        assert_eq!(s.plan()[0], Job::Render(k(10), reduced_job(400_000)));
+        let f = s.frame(VIEW);
+        assert_eq!(f.status, Status::Ready);
+        assert_eq!(f.draw.map(|d| d.id), half);
+        let reduced = s.accept(&out(&s, 10, Want::Shown), 100);
+        assert!(reduced.is_some());
+        assert_eq!(s.frame(VIEW).draw.map(|d| d.id), reduced);
+        assert!(!s.plan().contains(&Job::Render(k(10), reduced_job(400_000))));
+    }
+
+    #[test]
+    fn just_below_50_percent_an_odd_image_gets_the_half_size_view_when_the_reduced_one_would_not_fit()
+     {
+        let mut s = state(1024);
+        let odd = ImageSize {
+            w: 6001,
+            h: 4001,
+            flip: 0,
+        };
+        s.sizes.insert(k(10), odd);
+        let kind = |s: &mut State<u32>, scale: f64| {
+            s.zoom = Zoom::Scale(scale);
+            s.req(k(10), Want::Shown).map(|r| r.job.kind)
+        };
+        // 6001 × 0.49995 rounds up to 3001, more than a half-size render of 3000 that rounds down
+        assert_eq!(kind(&mut s, 0.49995), Some(ViewKind::Half));
+        // 4001 × 0.4999 rounds up to 2001, more than 2000
+        assert_eq!(kind(&mut s, 0.4999), Some(ViewKind::Half));
+        // 6001 × 0.4998 and 4001 × 0.4998 round up to 3000 and 2000: it fits
+        assert_eq!(kind(&mut s, 0.4998), Some(ViewKind::Reduced));
+        assert_eq!(kind(&mut s, 0.4), Some(ViewKind::Reduced));
+    }
+
+    #[test]
+    fn a_gesture_below_50_percent_draws_the_reduced_view_enlarged_until_the_half_size_view_arrives()
+    {
+        let mut s = state(1024);
+        s.config.record = true;
+        known(&mut s, 10);
+        // image 10 at fit: its reduced view (0.25) is drawn
+        let fit = s.accept(&out(&s, 10, Want::Shown), 100);
+        assert!(fit.is_some());
+        assert_eq!(s.frame(VIEW).status, Status::Ready);
+        // the first gesture step to 0.4: the reduced view stands in, enlarged to the gesture's
+        // scale and position, while the half-size view is made
+        s.set_zoom(Zoom::Scale(0.4), Some([200.0, 100.0]), true);
+        s.record("zoom");
+        let f = s.frame(VIEW);
+        assert!(
+            matches!(f.status, Status::Preparing { .. }),
+            "{:?}",
+            f.status
+        );
+        let vis = geometry::visible(SIZE, VIEW, 0.4, s.centre);
+        let d = geometry::dest(vis, VIEW, 0.4);
+        let want = Draw {
+            id: fit.unwrap_or(0),
+            dest: [d[0] as f32, d[1] as f32, d[2] as f32, d[3] as f32],
+            uv: geometry::corner_uvs(SIZE, geometry::whole(SIZE), vis),
+            nearest: false,
+        };
+        assert_eq!(f.draw, Some(want));
+        assert_eq!(s.last_vis, Some(vis));
+        // not the finished view: the request is not marked shown
+        assert!(s.records.last().is_some_and(|r| r.shown.is_none()));
+        // the half-size view replaces it
+        let half = s.accept(&half_out(&s, 10), 100);
+        let f = s.frame(VIEW);
+        assert_eq!(f.status, Status::Ready);
+        assert_eq!(f.draw.map(|d| d.id), half);
+        assert!(s.records.last().is_some_and(|r| r.shown.is_some()));
+    }
+
+    #[test]
+    fn without_a_reduced_view_of_the_current_image_a_gesture_keeps_the_last_frame() {
+        let mut s = state(1024);
+        known(&mut s, 10);
+        known(&mut s, 11);
+        // image 10 at 100 %, and a reduced view of image 11 (prefetched)
+        s.zoom = Zoom::Scale(1.0);
+        let zoom = s.accept(&out(&s, 10, Want::Shown), 100);
+        let other = s.accept(&out(&s, 11, Want::Fit), 100);
+        assert!(zoom.is_some() && other.is_some());
+        let before = s.frame(VIEW);
+        assert_eq!(before.draw.map(|d| d.id), zoom);
+        // a gesture to 0.4: no whole-image view of image 10, so the last frame stays, and image
+        // 11's view is never drawn (V2)
+        s.set_zoom(Zoom::Scale(0.4), None, true);
+        let f = s.frame(VIEW);
+        assert!(matches!(f.status, Status::Preparing { .. }));
+        assert_eq!(f.draw, before.draw);
+    }
+
+    #[test]
+    fn a_gesture_above_50_percent_keeps_the_last_frame_as_before() {
+        let mut s = state(1024);
+        known(&mut s, 10);
+        let fit = s.accept(&out(&s, 10, Want::Shown), 100);
+        let before = s.frame(VIEW);
+        assert_eq!(before.draw.map(|d| d.id), fit);
+        s.set_zoom(Zoom::Scale(0.7), None, true);
+        let f = s.frame(VIEW);
+        assert!(matches!(f.status, Status::Preparing { .. }));
+        // drawn as it was, not moved to the gesture's scale
+        assert_eq!(f.draw, before.draw);
+    }
+
+    #[test]
+    fn zooming_out_draws_the_denser_reduced_view_and_plans_the_exact_one() {
+        let mut s = state(1024);
+        with_session(&mut s, 10);
+        s.zoom = Zoom::Scale(0.4);
+        let r4 = s.accept(&out(&s, 10, Want::Shown), 100);
+        assert!(r4.is_some());
+        s.zoom = Zoom::Scale(0.3);
+        let f = s.frame(VIEW);
+        assert_eq!(f.status, Status::Ready);
+        assert_eq!(f.draw.map(|d| d.id), r4);
+        assert_eq!(s.plan()[0], Job::Render(k(10), reduced_job(300_000)));
+        // the half-size view serves 0.3 too: the least dense serving view is drawn
+        let half = s.accept(&half_out(&s, 10), 100);
+        assert!(half.is_some());
+        assert_eq!(s.frame(VIEW).draw.map(|d| d.id), r4);
+    }
+
+    #[test]
+    fn a_gesture_far_below_a_reduced_view_draws_the_half_size_view_not_the_reduced_one() {
+        let mut s = state(1024);
+        with_session(&mut s, 10);
+        // at rest at 0.4: the reduced view of 0.4
+        s.zoom = Zoom::Scale(0.4);
+        let r4 = s.accept(&out(&s, 10, Want::Shown), 100);
+        assert!(r4.is_some());
+        let before = s.frame(VIEW);
+        assert_eq!(before.draw.map(|d| d.id), r4);
+        // a gesture down to 0.15: the 0.4 view would be reduced more than 2:1 without mipmaps,
+        // so it does not serve and is no stand-in; the half-size view is planned
+        s.set_zoom(Zoom::Scale(0.15), None, true);
+        assert_eq!(s.plan(), vec![Job::Render(k(10), half_job())]);
+        let f = s.frame(VIEW);
+        assert!(matches!(f.status, Status::Preparing { .. }));
+        assert_eq!(f.draw, before.draw);
+        // the half-size view arrives and is drawn
+        let half = s.accept(&half_out(&s, 10), 100);
+        assert!(half.is_some());
+        let f = s.frame(VIEW);
+        assert_eq!(f.status, Status::Ready);
+        assert_eq!(f.draw.map(|d| d.id), half);
+    }
+
+    #[test]
+    fn a_half_size_render_smaller_than_the_reduced_view_becomes_the_half_size_view_once() {
+        let mut s = state(1024);
+        with_session(&mut s, 10);
+        let (generation, key, view, session) = match s.pick(true) {
+            Some(Task::Render {
+                generation,
+                key,
+                view,
+                session,
+            }) => (generation, key, view, session),
+            other => panic!("expected a render, got {other:?}"),
+        };
+        assert_eq!(view, reduced_job(250_000));
+        // the backend's half-size render is 700 × 500, smaller than the 1000 × 750 asked for,
+        // and comes back unreduced
+        let small = Rgb {
+            width: 700,
+            height: 500,
+            data: vec![0; 700 * 500 * 3],
+        };
+        s.finish_render(generation, key, view, session, Ok(small), 1.0);
+        // in flight as the half-size view until it is accepted: no half-size render meanwhile
+        assert_eq!(
+            s.inflight.iter().map(|f| f.view).collect::<Vec<_>>(),
+            vec![half_job()]
+        );
+        assert!(!s.plan().iter().any(|j| matches!(
+            j,
+            Job::Render(key, v) if *key == k(10) && matches!(v.kind, ViewKind::Half | ViewKind::Reduced)
+        )));
+        let outs = std::mem::take(&mut s.outbox);
+        assert_eq!(outs.len(), 1);
+        assert_eq!(outs[0].kind, ViewKind::Half);
+        assert!(s.accept(&outs[0], 100).is_some());
+        assert!(s.inflight.is_empty());
+        assert_eq!(s.frame(VIEW).status, Status::Ready);
+        // the image now gets the half-size view below 50 %: nothing of it is rendered again
+        assert_eq!(s.req(k(10), Want::Shown).map(|r| r.job), Some(half_job()));
+        assert!(!s.plan().iter().any(|j| matches!(
+            j,
+            Job::Render(key, v) if *key == k(10) && matches!(v.kind, ViewKind::Half | ViewKind::Reduced)
+        )));
+    }
+
+    #[test]
+    fn two_reduced_views_of_one_image_in_flight_are_each_accepted_and_removed_as_their_own() {
+        let mut s = state(1024);
+        with_session(&mut s, 10);
+        let render = |s: &mut State<u32>| match s.pick(true) {
+            Some(Task::Render {
+                generation,
+                key,
+                view,
+                session,
+            }) => {
+                s.finish_render(generation, key, view, session, Ok(rendered(view)), 1.0);
+                view
+            }
+            other => panic!("expected a render, got {other:?}"),
+        };
+        s.zoom = Zoom::Scale(0.4);
+        assert_eq!(render(&mut s), reduced_job(400_000));
+        // zoomed out before the 0.4 view is accepted: the 0.3 view is made too
+        s.zoom = Zoom::Scale(0.3);
+        assert_eq!(render(&mut s), reduced_job(300_000));
+        assert_eq!(s.inflight.len(), 2);
+        let outs = std::mem::take(&mut s.outbox);
+        let (o4, o3) = (&outs[0], &outs[1]);
+        // the 0.3 view first: only its own job leaves the in-flight list
+        let id3 = s.accept(o3, 100);
+        assert!(id3.is_some());
+        assert_eq!(
+            s.inflight.iter().map(|f| f.view).collect::<Vec<_>>(),
+            vec![reduced_job(400_000)]
+        );
+        // the 0.4 view still serves 0.3: accepted
+        let id4 = s.accept(o4, 100);
+        assert!(id4.is_some());
+        assert!(s.inflight.is_empty());
+        assert_eq!(s.frame(VIEW).draw.map(|d| d.id), id3);
+        assert!(!s.plan().contains(&Job::Render(k(10), reduced_job(300_000))));
+    }
+
+    #[test]
+    fn below_50_percent_the_neighbours_prefetch_the_view_at_the_current_scale() {
+        let mut s = state(1024);
+        known(&mut s, 11);
+        let prefetch = |s: &State<u32>| {
+            s.wanted(false)
+                .into_iter()
+                .filter(|(key, _)| *key == k(11))
+                .filter_map(|(key, want)| s.req(key, want))
+                .map(|r| r.job)
+                .collect::<Vec<_>>()
+        };
+        // a free level of 0.4: the view at 0.4 first, then the 100 % target
+        s.zoom = Zoom::Scale(0.4);
+        assert!(s.wanted(false).contains(&(k(11), Want::Shown)));
+        assert!(!s.wanted(false).contains(&(k(11), Want::Fit)));
+        let jobs = prefetch(&s);
+        assert_eq!(jobs.first(), Some(&reduced_job(400_000)));
+        assert_eq!(jobs.get(1).map(|j| j.kind), Some(ViewKind::Zoom));
+        // at fit, the fit view as before (reduced to the fit scale)
+        s.zoom = Zoom::Fit;
+        assert!(s.wanted(false).contains(&(k(11), Want::Fit)));
+        assert_eq!(prefetch(&s).first(), Some(&reduced_job(250_000)));
+        // at 50 % or more, unchanged: the fit view
+        s.zoom = Zoom::Scale(0.6);
+        assert!(s.wanted(false).contains(&(k(11), Want::Fit)));
+        assert!(!s.wanted(false).contains(&(k(11), Want::Shown)));
+    }
+
+    #[test]
+    fn a_run_of_view_size_changes_at_fit_asks_for_the_half_size_view_then_one_reduced_view() {
+        let mut s = state(1024);
+        with_session(&mut s, 10);
+        // the first frame's size is not a change
+        let _ = s.frame(VIEW);
+        assert!(!s.in_gesture());
+        let reduced_of_10 = |s: &State<u32>| {
+            s.plan()
+                .into_iter()
+                .filter(|j| matches!(j, Job::Render(key, v) if *key == k(10) && v.kind == ViewKind::Reduced))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(reduced_of_10(&s).len(), 1);
+        // the window's edge is dragged: a new size every frame
+        let mut last = VIEW;
+        for i in 1..=10 {
+            last = [1000 + 20 * i, 800];
+            let _ = s.frame(last);
+            assert!(s.in_gesture());
+            assert_eq!(s.plan(), vec![Job::Render(k(10), half_job())]);
+            assert!(reduced_of_10(&s).is_empty());
+        }
+        // it pauses: one reduced view, at the last size's fit scale
+        pause_the_gesture(&mut s);
+        let fit = geometry::fit_scale(SIZE, last);
+        assert_eq!(
+            reduced_of_10(&s),
+            vec![Job::Render(k(10), reduced_job(quantise(fit)))]
+        );
     }
 
     #[test]
@@ -2465,7 +3029,7 @@ mod tests {
         let mut s = state(1024);
         assert_eq!(s.plan()[0], Job::Open(k(10)));
         with_session(&mut s, 10);
-        assert!(matches!(s.plan()[0], Job::Render((10, _), v) if v.kind == ViewKind::Half));
+        assert!(matches!(s.plan()[0], Job::Render((10, _), v) if v.kind == ViewKind::Reduced));
         // the interactive worker only takes the current image
         assert!(matches!(
             s.pick(true),
@@ -2484,7 +3048,9 @@ mod tests {
         for p in [3, 10] {
             known(&mut s, p);
         }
-        let a = s.accept(&out(&s, 3, Want::Fit), 600 << 10);
+        // image 3's half-size view (left from a gesture there): an unwanted reduced view would
+        // be discarded at once (ADR 0027 W1), a half-size view is kept until evicted
+        let a = s.accept(&half_out(&s, 3), 600 << 10);
         let b = s.accept(&out(&s, 10, Want::Fit), 600 << 10);
         assert!(a.is_some() && b.is_some());
         assert_eq!(s.take_dropped(), a.into_iter().collect::<Vec<_>>());
@@ -3514,8 +4080,15 @@ mod tests {
             }) => (generation, key, view, session),
             other => panic!("expected the shown view's render, got {other:?}"),
         };
-        assert_eq!(view.kind, ViewKind::Half);
-        s.finish_render(generation, key, view, session, Ok(img()), 1.0);
+        assert_eq!(view.kind, ViewKind::Reduced);
+        // the reduced view's size, so its density is the job's (ADR 0027 W1)
+        let (w, h) = crate::scale::scaled_size(view.region.w, view.region.h, view.density());
+        let reduced = Rgb {
+            width: w,
+            height: h,
+            data: vec![0; (w * h * 3) as usize],
+        };
+        s.finish_render(generation, key, view, session, Ok(reduced), 1.0);
         // rendered, but not on the screen until the presentation accepted it
         assert_eq!(s.statistics_job(), None);
         let views = std::mem::take(&mut s.outbox);

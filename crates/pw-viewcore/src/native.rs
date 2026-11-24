@@ -405,8 +405,11 @@ impl Backend for NativeBackend {
                 .map(rgb_jpeg)
                 .map_err(jpeg_error),
             NativeSession::Tiff(TiffSession { image: img, .. }) => {
+                // With the Lanczos filter (ADR 0027 W1-Q5). A TIFF's view below 50 % is thus
+                // reduced twice (whole → half → the view's size); accepted, a TIFF is rare in
+                // the owner's work.
                 let (w, h) = scale::scaled_size(img.width, img.height, 0.5);
-                scale::downscale(img, w, h).ok_or_else(|| {
+                scale::reduce(img, w, h).ok_or_else(|| {
                     DecodeError::new(format!(
                         "the TIFF could not be reduced to {w}x{h} (it is {}x{})",
                         img.width, img.height

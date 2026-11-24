@@ -153,7 +153,7 @@ screen at that level, so it is never a blurred upscale (V2).
 
 | Level (RAW mode) | Source texture | Ready at once? |
 |---|---|---|
-| Up to the half-size fit view's resolution (≤ 50 % of the sensor) | The fit view, scaled down on the GPU | Yes, when the fit view is resident |
+| Up to the half-size fit view's resolution (≤ 50 % of the sensor) | The fit view, scaled down on the GPU. Changed by ADR 0027 W1 (T309): below 50 % the half-size render reduced on the worker to the exact scale (Lanczos), drawn at 1:1; the mipmapped half-size view during a zoom gesture | Yes, when the fit view is resident |
 | Between that and 100 % | A **scaled view**: the visible region rendered at full resolution, then scaled down to the screen size on the worker | No. Rendered on demand on the interactive worker |
 | 100 % and above (up to 800 %) | The 100 % view or the ring, when they cover the visible region; drawn with nearest-neighbour magnification above 100 % | Yes, inside the prepared region |
 

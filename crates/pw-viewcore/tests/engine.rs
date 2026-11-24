@@ -266,7 +266,9 @@ fn a_damaged_file_shows_its_error_and_stepping_on_works() {
 
 #[test]
 fn the_texture_budget_holds_while_stepping_through_a_folder() {
-    let budget = 40 << 20; // about four half-size views of 4000x3000
+    // about three fit views of 4000x3000 (reduced to 1000x750, ADR 0027 W1) with their 100 %
+    // views (1000x800)
+    let budget = 20 << 20;
     let config = Config {
         texture_budget: budget,
         ..Config::default()

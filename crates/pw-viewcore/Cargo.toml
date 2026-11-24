@@ -24,6 +24,7 @@ pw-libjpeg = { workspace = true, optional = true }
 pw-raw = { workspace = true, optional = true }
 pw-tiff = { workspace = true, optional = true }
 pw-colour = { workspace = true, optional = true }
+pw-resample.workspace = true
 
 [dev-dependencies]
 pw-raw.workspace = true

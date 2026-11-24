@@ -87,7 +87,6 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status |
 |---|---|---|
-| [T309](T309-lanczos-in-the-view.md) | ADR 0027 W1: the Lanczos filter in the view, the half-size view reduced, the gestures | Open |
 
 ## Writing a task (owner and reviewer)
 

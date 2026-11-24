@@ -9,6 +9,10 @@ Downloads are on the [Releases page](https://github.com/Bokehlicious/RawStride/r
 
 ## [Unreleased]
 
+### Changed
+
+- Views below 50 % are reduced with a sharper filter.
+
 ## [0.5.0] - 2026-11-24
 
 ### Added

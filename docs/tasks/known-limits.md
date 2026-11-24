@@ -493,6 +493,19 @@ seen in the hand check, so each becomes a task only if it is noticed in use.)
 - `CR_FAILURE` (19) is reused for "no matching disk" and reads like Windows error 19 in a bug
   report. The veto-name length is passed as `MAX_PATH` instead of the buffer's own length.
 
+## The view's reduction below 50 % (ADR 0027 W1)
+
+(T309's extra code review, 2026-11-24; taken up when the view core's plan is next changed.)
+
+- *A panel shown or hidden at fit* costs a half-size render while the size changes and a
+  reduced render after it; before, the resident half-size view served every fit scale.
+- *A view size that alternates by a pixel every frame* (a rounding at some scale factors)
+  would keep the view core in a zoom gesture: no exact reduced view, statistics or prefetch
+  until it stops. Not seen.
+- *The neighbours' prefetch at a free level below 50 %* asks for the current scale without
+  the neighbour's own minimum scale, so a much larger image (a panorama) is prefetched larger
+  than its fit view.
+
 ## LibRaw (`pw-libraw`)
 
 (Reviewer and an independent review agent of T197, 2026-11-19; none is caused by T197, which

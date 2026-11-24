@@ -327,6 +327,16 @@ image's half-size render reduced to fit, Intel Core i7-9700K), above the 100 ms 
 reduction may take at about 7 images/s (V4), so the rows are split over threads with
 `std::thread::scope` before the filter is used in the view, in a task of its own (T311).
 
+Decided during T309 (owner, 2026-11-24): (a) the fit view is the reduced view, so tests that
+expected the half-size view's size at fit expect the reduced size (`pw-render`
+`tests/sync.rs`); (b) just below 0.5, where the reduced size of an odd side would not fit in a
+half-size render that rounds down (less than a pixel apart), the half-size view is used as at
+0.5, so no render is repeated; and, after T309's review, (c) a half-size render that comes back
+smaller than the reduced size is kept as the image's half-size view, which it gets below 50 %
+from then on (no render repeated), and (d) a reduced view, which has no mipmaps, is never drawn
+reduced by the GPU more than 2:1: below half its density the mipmapped half-size view serves,
+also during a gesture.
+
 ## 5. Steps
 
 Each step ends with tests (GR11), the owner's hand check and, where an image is shown,

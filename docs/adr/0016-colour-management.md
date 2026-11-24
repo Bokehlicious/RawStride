@@ -118,7 +118,7 @@ on the worker threads, before the pixels become a texture. One screen, one profi
 | TIFF source profile, 16-bit path | `pw-tiff` | `decode` returns the ICC bytes alongside the pixels; a 16-bit image stays 16 bit until `pw-colour` has converted it, then reduces. Memory: +2 bytes/pixel while converting (240 MB for 40 MP), counted in the budget |
 | JPEG source profile | `pw-libjpeg` | `tj3GetICCProfile` (libjpeg-turbo 3.1 in vcpkg already has it, with `TJPARAM_SAVEMARKERS`); no new dependency |
 | Exif Adobe RGB marker | `pw-raw` | ColorSpace (0xA001) and InteropIndex (`R03`) from the file or the embedded preview's Exif |
-| Applying it in the loupe | `pw-viewcore` (`native`) | The session knows its source profile; `render_half` and `render_region` convert their output (RAW, JPEG). A TIFF session holds the already converted full image |
+| Applying it in the loupe | `pw-viewcore` (`native`) | The session knows its source profile; `render_half` and `render_region` convert their output (RAW, JPEG). A TIFF session holds the already converted full image. Changed by ADR 0027 W1 (T308, T309): the view core converts each view after its reduction |
 | Thumbnails | `pw-thumbcache` | Converted after the reduction to the cell size (cheap) |
 
 ### 4.2 Caches

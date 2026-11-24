@@ -79,9 +79,9 @@ fn finished_views_become_textures_and_the_drawn_one_is_resident() {
     assert_eq!(f.status, Status::Ready);
     let id = f.draw.map(|d| d.id).unwrap_or(0);
     assert!(tex.texture(id).is_some(), "the drawn view has a texture");
-    // the core counts the mipmapped half-size view at 4/3 of its RGBA size
+    // the core counts the fit view, reduced to 1000×750 (ADR 0027 W1), at its RGBA size
     let (_, bytes) = core.memory();
-    assert!(bytes >= 2000 * 1500 * 4 * 4 / 3);
+    assert!(bytes >= 1000 * 750 * 4);
 }
 
 #[test]
@@ -90,8 +90,8 @@ fn a_view_larger_than_the_gpu_allows_is_rejected_and_shown_as_an_error() {
     let core = start();
     core.open_folder(vec![PathBuf::from("a")]);
     let mut tex = Textures::new();
-    // half size is 2000×1500: too large for a GPU limit of 1024
-    let f = until(&mut tex, &ctx, &core, 1024, |f| {
+    // the fit view is 1000×750 (ADR 0027 W1): too large for a GPU limit of 512
+    let f = until(&mut tex, &ctx, &core, 512, |f| {
         matches!(f.status, Status::Error(_))
     });
     assert!(matches!(f.status, Status::Error(ref e) if e.message.contains("larger than the GPU")));

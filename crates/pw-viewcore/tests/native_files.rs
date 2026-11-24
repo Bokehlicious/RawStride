@@ -157,10 +157,13 @@ fn a7r_vertical_images_fit_and_zoom_with_correct_sizes() {
         "A7R test files are vertical: {size:?}"
     );
     let tex = &screen.textures[&f.draw.map_or(0, |d| d.id)];
-    assert_eq!(tex.kind, ViewKind::Half);
+    // the half-size render reduced to the fit scale (ADR 0027 W1), at the job's density (the
+    // fit scale rounded up to millionths)
+    assert_eq!(tex.kind, ViewKind::Reduced);
+    let density = (f.scale.unwrap_or_else(|| panic!("no scale")) * 1e6).ceil() / 1e6;
     assert_eq!(
         (tex.image.width, tex.image.height),
-        (size.w / 2, size.h / 2)
+        pw_viewcore::scale::scaled_size(tex.region.w, tex.region.h, density)
     );
     // 100 %: a sensor region of the view's size, swapped for the vertical image
     core.toggle_zoom(None);
