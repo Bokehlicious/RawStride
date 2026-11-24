@@ -3283,12 +3283,17 @@ mod tests {
 
         shot_writer.file_done(1);
         shot_writer.file_done(2);
-        wait_until("the second shot's write answered", || {
-            shot_writer.take_answers();
-            shot_writer.place_ready();
-            shot_writer.tickets.len() == 1
-        });
-        assert!(logged(&log).contains(&"A001pwhold.jpg".to_string()));
+        // The fake logs a held write when its process gets to it, which on a slow machine can
+        // come after the second shot's write has answered: both are waited for.
+        wait_until(
+            "the second shot's write answered and the first shot's started",
+            || {
+                shot_writer.take_answers();
+                shot_writer.place_ready();
+                shot_writer.tickets.len() == 1
+                    && logged(&log).contains(&"A001pwhold.jpg".to_string())
+            },
+        );
         assert_eq!(placed_events(&receiver), Vec::<Vec<PathBuf>>::new());
 
         fs::write(&hold_until, b"").unwrap();
