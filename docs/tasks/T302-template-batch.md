@@ -1,4 +1,4 @@
-# T302. A batch that applies a template file to many images — Blocked
+# T302. A batch that applies a template file to many images — Open
 
 - **Why:** ADR 0017 U13-Q8 and U13-Q27 (owner, 2026-11-24; part U13d). The right-click menu's
   **Apply Template** writes a template file to every target image "in the same batch as Apply to
@@ -88,3 +88,4 @@
 | 2026-11-24 | Blocked | Added (ADR 0017 U13-Q8, U13-Q27, owner, 2026-11-24; part U13d). Waits for T299, its cold read and the chain review of T299–T303 |
 | 2026-11-24 | Blocked | Cold read (fresh agent): the task fits `metadata.rs`. Added: the one batch slot for both kinds (`finish_batch` and `batch_written` with an optional window image; `start_batch` keeps its signature); an empty list refused; the shared template cloned once per request; the exit wait also lists a template batch's failed images; the window's lock during a template batch intended; `allow(dead_code)` outside tests until T303 (new point 6); `FakeSubmit`'s record and one shared queue limit; "no window open" in the first test |
 | 2026-11-24 | Blocked | Chain review (T299–T303, one fresh agent; recorded in T299's log): the names T303 calls fixed (`start_template_batch`, `take_template_batch_done`, `template_batch_progress`); T303 removes the `dead_code` attributes (`metadata.rs` in its files for that only) |
+| 2026-11-24 | Open | T299 Done and committed (164f35d); cold read and chain review done. Set Open; may run beside T301 (neither changes the other's files) |

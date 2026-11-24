@@ -1,4 +1,4 @@
-# T301. Load Template… and Save as Template… in the metadata window — Blocked
+# T301. Load Template… and Save as Template… in the metadata window — Open
 
 - **Why:** ADR 0017 U13-Q7, U13-Q22, U13-Q23 and U13-Q25 (owner, 2026-11-24; part U13d). The
   metadata window gets two buttons: **Load Template…** puts a template file's fields into the
@@ -102,3 +102,4 @@
 | 2026-11-24 | Blocked | Added (ADR 0017 U13-Q7, U13-Q22, U13-Q23, U13-Q25, owner, 2026-11-24; part U13d). Waits for T300, its cold read and the chain review of T299–T303 |
 | 2026-11-24 | Blocked | Cold read (fresh agent). Fixed: the exports moved to T300 (`lib.rs`); the waiting state as its own flag and every place it greys (form, buttons, Cancel, Escape, keys), not ORed into `locked`/`saving`; the answer taken in `poll_template_io` before its early drop; new methods taking the window for the dialogs; the refusals worded for this window (field errors as an OK shows them, two new texts); `NoConfig`'s text; a new status variant, not `Batch`; the tests made required plain functions |
 | 2026-11-24 | Blocked | Chain review (T299–T303; recorded in T299's log): Cancel and Escape stay enabled while waiting (a thread that never answers would hold the modal window); a repaint asked for while waiting; the field-error refusal shown as the window's own OK shows it, ADR 0017 U13-Q25's wording settled to match |
+| 2026-11-24 | Open | T300 Done and committed (a53f7d4); cold read and chain review done. Set Open; may run beside T302 (T302 changes `metadata.rs`, this task does not) |
