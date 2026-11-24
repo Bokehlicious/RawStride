@@ -1,4 +1,4 @@
-# T313. ADR 0027 W2: fine details in the view core — Blocked
+# T313. ADR 0027 W2: fine details in the view core — Open
 
 - **Why:** ADR 0027 §3.1 and W2-Q2, W2-Q3, W2-Q6, W2-Q8 (answered by the owner 2026-11-24, ADR
   0027 §4.2). While **fine details** is on, a RAW view below 50 % is also made from the
@@ -186,3 +186,4 @@
 | 2026-11-24 | Blocked | Added (ADR 0027 W2-Q2, W2-Q3, W2-Q6, W2-Q8); waits for T312 |
 | 2026-11-24 | Blocked | Cold read: the interactive worker also takes no open made only for the fine view; a `Fine` view satisfies no other requirement; a budget refusal not in `self.refused`; `remove_inflight`, `accept` and `reject` named (a rejected fine view does not go into `failed`); `serving` prefers any serving fine view (no fine → reduced → fine after a zoom); `protected_views` keeps the reduced view too; `gesture_stand_in` and `Shown` (only the current image's ready view) made exact; the failed set kept as `failed` is across `set_files`; the test helper's `ViewKind` match named; the wait of a zoom to 100 % behind a fine render written as accepted (W2-Q2, measured by W2-Q7); four tests added |
 | 2026-11-24 | Blocked | Chain review (whole chain T312-T314; noted here as T313 holds most of it): `FinePause` exported and both enums' derives named, `core.rs` also for point 2; a failed fine render drops the session (else a later Z or focus map fails on the dead session and shows an error, against W2-Q6), with a test; the waits behind a fine render (the session through the reduction, the background worker, the release's 5 s), the approximated "+1 and +2 ready", the compare's two renders and the budget refusal for the session written as known and accepted |
+| 2026-11-24 | Open | T312 Done; the owner accepted its time 2026-11-24 (ADR 0027 §4.2): T313 goes ahead as written. Set Open |

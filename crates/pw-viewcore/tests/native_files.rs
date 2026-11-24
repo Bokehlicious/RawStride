@@ -820,3 +820,107 @@ fn focus_map_time_and_stepping_and_zoom_with_and_without_the_marking() {
         }
     }
 }
+
+/// The screen a fine view is measured for: the owner's 4K screen, as T307's timing (ADR 0027 W2).
+const SCREEN_4K: [u32; 2] = [3840, 2160];
+
+/// ADR 0027 W2-Q1 (T312): a measurement, not a check of times. For one RAW file of every distinct
+/// upright size among the TN and P files: the fine view's stages, (a) `render_region` of the whole
+/// image (PPG), (b) `scale::reduce` of it to the fit size on a 4K screen and (c) `to_display`, and
+/// for comparison (d) today's reduced view (`render_half`, `scale::reduce` to the same size,
+/// `to_display`) when the fit scale is below 0.5. Three runs each, a new session every run (the
+/// open is not timed); prints the median of each stage.
+#[test]
+#[ignore = "a time measurement on real files; run with --release (ADR 0027 W2-Q1)"]
+fn timing_of_a_fine_view() {
+    use pw_viewcore::{geometry, scale};
+
+    const RUNS: usize = 3;
+
+    let mut files = test_files("TN");
+    files.extend(test_files("P"));
+    let backend = NativeBackend::default();
+    let open = |file: &std::path::Path| {
+        backend
+            .open(file, Source::Raw)
+            .unwrap_or_else(|e| panic!("{}: open: {}", file.display(), e.message))
+    };
+
+    // the first file of every distinct upright size (a portrait and a landscape image differ)
+    let mut kept = Vec::new();
+    let mut uprights = Vec::new();
+    for file in &files {
+        let (_, size) = open(file);
+        let upright = size.oriented();
+        if !uprights.contains(&upright) {
+            uprights.push(upright);
+            kept.push((file.clone(), size));
+        }
+    }
+
+    for (file, size) in kept {
+        let s = geometry::fit_scale(size, SCREEN_4K);
+        let (out_w, out_h) = scale::scaled_size(size.w, size.h, s);
+        let fails =
+            |stage: &str, message: &str| -> ! { panic!("{}: {stage}: {message}", file.display()) };
+        let (mut render, mut reduce, mut display, mut half) = (vec![], vec![], vec![], vec![]);
+        for _ in 0..RUNS {
+            let (mut session, _) = open(&file);
+            let at = Instant::now();
+            let full = backend
+                .render_region(&mut session, geometry::whole(size))
+                .unwrap_or_else(|e| fails("(a) render_region", &e.message));
+            render.push(ms(at.elapsed()));
+            let at = Instant::now();
+            let reduced = scale::reduce(&full, out_w, out_h)
+                .unwrap_or_else(|| fails("(b) scale::reduce", "None"));
+            reduce.push(ms(at.elapsed()));
+            assert_eq!(
+                (reduced.width, reduced.height),
+                (out_w, out_h),
+                "{}: (b) the reduced image's size",
+                file.display()
+            );
+            let at = Instant::now();
+            backend
+                .to_display(&session, reduced)
+                .unwrap_or_else(|e| fails("(c) to_display", &e.message));
+            display.push(ms(at.elapsed()));
+            drop(session);
+
+            if s < 0.5 {
+                let (mut session, _) = open(&file);
+                let at = Instant::now();
+                let img = backend
+                    .render_half(&mut session)
+                    .unwrap_or_else(|e| fails("(d) render_half", &e.message));
+                let img = scale::reduce(&img, out_w, out_h)
+                    .unwrap_or_else(|| fails("(d) scale::reduce", "None"));
+                backend
+                    .to_display(&session, img)
+                    .unwrap_or_else(|e| fails("(d) to_display", &e.message));
+                half.push(ms(at.elapsed()));
+            }
+        }
+        let (upright_w, upright_h) = size.oriented();
+        let mpix = f64::from(size.w) * f64::from(size.h) / 1e6;
+        let median = |v: &[f64]| median_and_max(v).0;
+        let half = if half.is_empty() {
+            "n/a (fit scale ≥ 0.5)".to_owned()
+        } else {
+            format!("{:.1} ms", median(&half))
+        };
+        println!(
+            "{}: sensor {}x{}, upright {upright_w}x{upright_h}, {mpix:.1} Mpix, s {s:.4} -> \
+             {out_w}x{out_h}; median of {RUNS}: (a) render_region {:.1} ms, (b) reduce {:.1} ms, \
+             (c) to_display {:.1} ms, fine view (a+b+c) {:.1} ms; (d) half-size view {half}",
+            file.display(),
+            size.w,
+            size.h,
+            median(&render),
+            median(&reduce),
+            median(&display),
+            median(&render) + median(&reduce) + median(&display),
+        );
+    }
+}

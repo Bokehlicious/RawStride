@@ -366,6 +366,12 @@ W2 is written as the chain T312 (the measurement) → T313 (the view core: the v
 the worker and the cache, `pw-viewcore`) → T314 (the shell: the key, the mark and the glossary,
 `pw-loupe`), then the owner's `latency.ps1` and the decision on +1 (W2-Q7).
 
+W2-Q1's measurement (T312, 2026-11-24, release build, i7-9700K, 4K fit size): a fine view of a
+61 Mpix ARW takes 1240 ms (the PPG render 1156 ms, about 14 % above ADR 0008 §11.2), of a 50 Mpix
+ARW 987 ms and of a 16 Mpix RW2 403–422 ms; today's half-size view of the same files 299, 274 and
+139 ms. **The owner accepted the time on 2026-11-24** (not far above §11.2's); T313 goes ahead as
+written.
+
 ## 5. Steps
 
 Each step ends with tests (GR11), the owner's hand check and, where an image is shown,
