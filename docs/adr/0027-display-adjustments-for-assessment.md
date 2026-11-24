@@ -5,7 +5,8 @@
   A-Q11, A-Q12, A-Q13 and A-Q16 with additions. Nothing is built, installed or added as a
   dependency by this ADR. Each step in §5 becomes its own task, with its own approval and commit.
   W1's questions W1-Q1–W1-Q9 answered by the owner on 2026-11-24, all as proposed (§4.1); W2's
-  W2-Q1–W2-Q8 the same day, all as proposed (§4.2).
+  W2-Q1–W2-Q8 the same day, all as proposed (§4.2); W3's
+  W3-Q1–W3-Q8 the same day, all as proposed (§4.3).
 - Date: 2026-11-18
 - Related:
   - ADR 0006 §2 (decode settings identical everywhere; the view already uses PPG instead of its
@@ -164,7 +165,7 @@ A prerequisite: `Session::render_region_with` fails on every RAF file tried (bac
 
 ### 3.3 Sharpening in the view (unsharp mask)
 
-- A key (A-Q3) turns sharpening on and off. It is applied **last on the worker**, to the view at
+- A key (A-Q3; **U**, W3-Q5) turns sharpening on and off. It is applied **last on the worker**, to the view at
   screen resolution after the downscale (sharpening before a reduction is mostly lost), and
   before the conversion to the monitor profile (ADR 0016).
 - On luminance only, so no colour fringes are added.
@@ -382,6 +383,34 @@ prefetched; not caused by W2). The owner's hand check passed (2026-11-24): the i
 at the swap. The visible gain is small on that screen, at fit and at 45 % alike. **The owner
 decided on 2026-11-24 that no task is written for +1 (A-Q5) and no more work is spent on fine
 details**; it stays on the current image only.
+
+### 4.3 W3's questions (answered by the owner, 2026-11-24, all as proposed)
+
+Sharpening (§3.3) is the second adjustment built. Batch and import do not apply: it changes only
+how the shown image is made. The RAW histogram, the exposure statistics, the clipping overlay and
+the focus marking do not change (§2.1): they are made from the file's data, not from the view.
+
+| # | Question | Answer |
+|---|---|---|
+| W3-Q1 | Where it applies | Last on the worker, after the reduction and before the conversion to the monitor profile (§3.3, W1-Q4), to every view below 100 % made on the worker: the reduced view, the fine view, `Scaled`, and the half-size view at exactly 50 % (drawn at 1:1). In RAW and JPEG mode, for JPEG and TIFF files, and on both sides of the compare. At 100 % and above (`Zoom`, `Ring`) it is paused (A-Q8). During a zoom gesture the stand-in (the mipmapped half-size view, W1-Q3) is drawn unsharpened, and the mark counts as waiting. **Clarified by the owner 2026-11-24, after T316's cold read:** the half-size view a gesture asks for is made sharpened (it is drawn at 1:1 at 50 % when the gesture ends; an unsharpened one would be rendered twice there and make the mark flip); during the gesture the view already there is drawn, sharpened or not, and the mark shows waiting |
+| W3-Q2 | How it is computed | On luminance only, so no colour fringes are added: the luminance Y′ = 0.2126 R′ + 0.7152 G′ + 0.0722 B′ of the sRGB-encoded values (not linear light), blurred with a separable Gaussian whose sigma is the radius; where the difference between Y′ and the blur is below the threshold (levels, 0–255) nothing changes, elsewhere the amount times the difference is added equally to R′, G′ and B′, each clamped to 0–255. The edges repeat the edge pixels, so an image of 1×1 or 1×n works. A module of its own in `pw-viewcore`, plain Rust, no new dependency |
+| W3-Q3 | Its speed | The first task times it on a screen-sized view (3840×2160 and the owner's 1920×1200). If it takes more than 10 ms on one thread, the rows are split over threads with `std::thread::scope` in the same task (as T311) |
+| W3-Q4 | The cache, and what the user sees when it is turned on or off | The view's key gains the sharpening state (on or off, and the three values), so turning it on or off or changing a value makes new views. The drawn view stays until the new one is ready and is replaced in one swap (V2). The unsharpened view is kept as the memory budget allows, so turning sharpening off shows it at once. Cost accepted: turning sharpening on renders the shown view again (about 0.3 s for 61 Mpix at fit, about 1.2 s with fine details on); keeping the unsharpened pixels in memory to sharpen them in milliseconds is not done (more memory under V8, more code) |
+| W3-Q5 | Key and menu | The key **U** (free in the key map), in the key map (U8) so it can be changed, and View ▸ Show Sharpening, right after Show Fine Details. It lasts for the session and is not saved (A-Q2) |
+| W3-Q6 | The mark, and when it goes wrong | "USM" in the row of adjustment marks (W2-Q5), after "Fine"; dimmed while paused (100 % and above). The hover text names the key and the three values (for example "Sharpening (U): amount 60%, radius 0.6 px, threshold 2."). Sharpening can fail only on inconsistent image data; such a view then fails as any render does and shows today's error line. Nothing new is shown to the user |
+| W3-Q7 | The settings | A new Settings page **Preview** (W7 adds the thresholds and colours of §3.7 to it) with a section Sharpening: amount 10–300 %, radius 0.3–2.0 px, threshold 0–20 levels, and a button Restore Defaults. Defaults 60 %, 0.6 px and 2 [T, set in the owner's hand check]. Saved in `settings.txt`; a value in the file that cannot be read or lies outside its range gives that value's default. A changed value applies when the slider is released (or the field is left), not on every frame of a drag, since each change renders the views again |
+| W3-Q8 | The reset of every adjustment (A-Q3; left from W2 by T314) | The key **Backspace** (free in the key map), in the key map, and View ▸ Reset Adjustments: it turns off every adjustment that is on (today fine details and sharpening; later exposure and white balance, W5, W6). The menu item is greyed while no adjustment is on |
+
+After the chain the owner measures with `latency.ps1` with sharpening on, at fit (V1, V4), and
+sets the defaults in the hand check.
+
+W3 is written as the chain T315 (the sharpening function and its timing, `pw-viewcore`) → T316
+(the view core: the flag, the values, the view's key and the state for the mark, `pw-viewcore`)
+→ T317 (the Settings page Preview and `settings.txt`, `pw-loupe`) → T318 (the shell: the key U,
+the menu item, the mark "USM", the reset, and the saved values passed to the view core,
+`pw-loupe`). The Settings window applies its pages only at Save (as every page today), so W3-Q7's
+"not on every frame of a drag" holds: a changed value applies at Save (reviewer, 2026-11-24,
+when the tasks were written).
 
 ## 5. Steps
 

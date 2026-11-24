@@ -87,10 +87,14 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status |
 |---|---|---|
+| [T315](T315-sharpening-function.md) | ADR 0027 W3: the sharpening function and its timing | Open |
+| [T316](T316-sharpening-in-the-core.md) | ADR 0027 W3: sharpening in the view core | Blocked |
+| [T317](T317-sharpening-settings-page.md) | ADR 0027 W3: the Settings page Preview and the sharpening values | Blocked |
+| [T318](T318-sharpening-key-mark-reset.md) | ADR 0027 W3: the key, the menu item and the mark of sharpening, and the reset | Blocked |
 
 ## Writing a task (owner and reviewer)
 
-- **Number:** the next free number after the highest in this folder and `done/` (T315 next).
+- **Number:** the next free number after the highest in this folder and `done/` (T319 next).
 - **File:** `docs/tasks/T246-<a-few-words>.md`; three digits, lower case, words joined by `-`.
 - **Index:** add a row to "Open tasks" above and keep its status in step with the file's heading.
 - **Size (owner, 2026-11-15, after T142):** one task is one layer (a C++ shim or a core crate, or
