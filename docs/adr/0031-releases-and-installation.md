@@ -78,8 +78,12 @@ program folder (ADR 0002 §2.5; T120 looks there before PATH).
 5. **An `.msi` installer later**, as its own step after the zip has been used: the WiX Toolset,
    installed per user (`%LOCALAPPDATA%\Programs\RawStride`, no administrator rights) with a Start
    menu shortcut, an entry in "Installed apps" and an upgrade that replaces the older version
-   (RL-Q5). [WiX's licence and its maintenance fee for organisations: unchecked, checked in the
-   step.]
+   (RL-Q5). [Checked 2026-11-24 (RL9), from FireGiant's documentation and the WiX author's
+   notes, not from the full EULA text: WiX 7's binaries come under the Open Source Maintenance
+   Fee EULA v1.1, whose fee applies only to users with an annual revenue of US$10,000 or more
+   from the software; RawStride has none, so no fee is owed. The EULA must be accepted on each
+   run (`-acceptEula wix7`), CI included. It does not restrict the MSI files WiX makes.] The
+   details were decided by the owner on 2026-11-24 (RL9-Q1–RL9-Q11, §5).
 6. **Code signing:** none for `0.1.0`; the release text says SmartScreen will warn and gives the
    SHA-256 checksums. After the first release, apply to SignPath Foundation (free signing for open
    source projects) or use Azure Trusted Signing (paid, identity check) (RL-Q6). [Checked
@@ -133,6 +137,28 @@ program folder (ADR 0002 §2.5; T120 looks there before PATH).
 | RL-Q12 | **The release build without the build machine's paths** (`--remap-path-prefix`) and without the `.pdb` name? | Yes, in the release workflow (the local release profile unchanged, so latency measurements keep their line tables) (as proposed) |
 | RL-Q13 | **`docs/distribution.md`** rewritten for RawStride? | Yes, at RL4 (as proposed) |
 
+**The MSI's questions (RL9), proposed by the reviewer and approved by the owner 2026-11-24, every
+one as proposed:**
+
+| # | Question | Answer |
+|---|---|---|
+| RL9-Q1 | **WiX's version and where it runs** | WiX 7.0.1, pinned, installed as a .NET tool on the release workflow's runner; its EULA accepted in the script with `-acceptEula wix7`; no fee (§3.5) |
+| RL9-Q2 | **WiX on the owner's PC** | Yes, so a task can make and check an MSI locally: the .NET 10 SDK, then WiX 7.0.1 as a .NET tool (approved under `AGENTS.md` §3) |
+| RL9-Q3 | **What the installation does** | Per user in `%LOCALAPPDATA%\Programs\RawStride`, no administrator rights; one shortcut in the Start menu, none on the desktop; no file types associated |
+| RL9-Q4 | **The installer's window** | No dialogs, only Windows' progress bar; no licence page to accept (the GPL asks for none); `LICENSE` and `THIRD-PARTY-NOTICES.txt` are in the program folder as in the zip |
+| RL9-Q5 | **Upgrading and downgrading** | A newer version replaces the older one; with a newer version already installed the MSI stops with "A newer version of RawStride is already installed."; a running RawStride is asked to close by Windows (the Restart Manager); an installation that fails halfway is rolled back by Windows |
+| RL9-Q6 | **Uninstalling** | The program folder and the shortcut are removed; `%LOCALAPPDATA%\RawStride` (settings, field values, the write journal) is kept, and images and sidecars are never touched; `docs/distribution.md` says so |
+| RL9-Q7 | **Name, version and publisher** | "RawStride" in Installed apps, publisher "RawStride" (no person's name), the program's icon; the MSI's version is `pw-loupe`'s (for example `0.4.0`); not signed, so SmartScreen warns as for the zip |
+| RL9-Q8 | **The zip and the MSI** | Both in every release, both in `SHA256SUMS.txt`; a zip copy and an installed copy share `%LOCALAPPDATA%\RawStride` |
+
+**Found at the cold read of T305 and T306, decided by the owner 2026-11-24, each as proposed:**
+
+| # | Question | Answer |
+|---|---|---|
+| RL9-Q9 | **The zip's `README.txt` in the MSI** (it says "unpack this folder" and "delete this folder") | Left out of the MSI; every other file of the zip's folder is installed unchanged |
+| RL9-Q10 | **Two MSIs of the same version** (a local build and the release's) would give two entries in Installed apps | An MSI of the same version replaces the installed one (WiX's `AllowSameVersionUpgrades`), so there is always one RawStride |
+| RL9-Q11 | **RawStride running during an upgrade or uninstall**: with no dialogs (RL9-Q4) Windows cannot ask to close it and may ask for a restart instead (amends RL9-Q5) | Accepted: no dialogs; `docs/distribution.md` and the release notes say to close RawStride before upgrading; the owner's hand check records what Windows does |
+
 ## 6. Steps
 
 | Step | Who | Content | After |
@@ -145,7 +171,7 @@ program folder (ADR 0002 §2.5; T120 looks there before PATH).
 | RL6 | task | `CHANGELOG.md` with the `0.1.0` section and the rule in `docs/tasks/README.md` (RL-Q3); `.github/workflows/release.yml` on `v*` tags (RL-Q7, RL-Q12); done (T229), its test run on `main` checked OK 2026-11-20 | RL4 |
 | RL7 | owner + reviewer | `0.1.0`: the `CHANGELOG.md` section renamed, tag on `main`, the workflow's draft read, published as a pre-release; the tag ruleset (RL-Q8); `README.md`'s status line; steps in `docs/distribution.md`, "Making a release"; done 2026-11-20: `v0.1.0` published as a pre-release, tag ruleset "release tags" active | RL5, RL6 |
 | RL8 | owner | Code signing applied for (RL-Q6); the options checked 2026-11-22 (§3.6); waits until RawStride has a reputation (owner, 2026-11-22) | RL7 |
-| RL9 | task | The MSI (RL-Q5) | RL7 and the owner's go |
+| RL9 | task | The MSI (RL-Q5, RL9-Q1–RL9-Q8): T305 (the WiX source and `tools/package-msi.ps1`) → T306 (the release build and workflow, `docs/distribution.md`); the owner's hand check | RL7 and the owner's go (given 2026-11-24) |
 
 Placed by the owner (2026-11-20) as order 1d of `docs/tasks/plans/adr-0018-0025-steps.md`,
 before ADR 0024 O1; RL8 and RL9 do not hold O1 back. RL1–RL7 are done (2026-11-20); RL8 and RL9
@@ -178,3 +204,4 @@ a reputation takes time to build; RL9 stays at order 2c.
 | 3 | 2026-11-21 | When a later release is suggested: a rule in `docs/tasks/README.md` (the reviewer raises it when `Unreleased` is not empty and an ADR or a step order is finished), approved by the owner |
 | 4 | 2026-11-22 | §3.6: the signing services' terms checked (RL8); RL8 waits until RawStride has a reputation (owner) |
 | 5 | 2026-11-24 | RL8 moved last in the step plan (order 13), as a reputation takes time (owner) |
+| 6 | 2026-11-24 | RL9: WiX's licence checked (§3.5); RL9-Q1–RL9-Q8 approved by the owner as proposed (§5); the owner's go for RL9; after the cold read of T305 and T306, RL9-Q9–RL9-Q11 approved as proposed (RL9-Q11 amends RL9-Q5's "asked to close") |

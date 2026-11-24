@@ -87,11 +87,12 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status |
 |---|---|---|
-| – | No open tasks | – |
+| [T305](T305-msi-package.md) | ADR 0031 RL9: the MSI, made by `tools/package-msi.ps1` (tools) | Open |
+| [T306](T306-msi-in-release.md) | ADR 0031 RL9: the MSI in the release build and workflow (tools, CI, docs) | Blocked: waits for T305 |
 
 ## Writing a task (owner and reviewer)
 
-- **Number:** the next free number after the highest in this folder and `done/` (T305 next).
+- **Number:** the next free number after the highest in this folder and `done/` (T307 next).
 - **File:** `docs/tasks/T246-<a-few-words>.md`; three digits, lower case, words joined by `-`.
 - **Index:** add a row to "Open tasks" above and keep its status in step with the file's heading.
 - **Size (owner, 2026-11-15, after T142):** one task is one layer (a C++ shim or a core crate, or
