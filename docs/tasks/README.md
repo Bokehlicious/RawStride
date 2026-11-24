@@ -87,7 +87,7 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status |
 |---|---|---|
-| [T304](T304-metadata-window-two-columns.md) | The metadata window in two columns | Open |
+| – | No open tasks | – |
 
 ## Writing a task (owner and reviewer)
 

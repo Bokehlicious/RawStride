@@ -244,6 +244,22 @@ pub fn template_window_size(screen: egui::Vec2) -> egui::Vec2 {
         .min(screen)
 }
 
+/// The size in points the metadata window opens with in a large program window (ADR 0017
+/// U10b-Q10, T304): room for two columns of [`TEMPLATE_COLUMN_MIN_WIDTH`], with the scroll bar
+/// and the spacing between the columns, as [`TEMPLATE_WINDOW_DEFAULT`]; 640 high, as before.
+pub const METADATA_WINDOW_DEFAULT: egui::Vec2 =
+    egui::vec2(2.0 * TEMPLATE_COLUMN_MIN_WIDTH + 80.0, 640.0);
+
+/// The size the metadata window opens with in a program window `screen` points large (ADR 0017
+/// U10b-Q10, T304): the program window less [`TEMPLATE_WINDOW_MARGIN`] on each side, between
+/// [`TEMPLATE_WINDOW_MIN`] and [`METADATA_WINDOW_DEFAULT`], each side apart; never larger than the
+/// program window itself. The default is wide enough for two columns.
+pub fn metadata_window_size(screen: egui::Vec2) -> egui::Vec2 {
+    (screen - egui::Vec2::splat(2.0 * TEMPLATE_WINDOW_MARGIN))
+        .clamp(TEMPLATE_WINDOW_MIN, METADATA_WINDOW_DEFAULT)
+        .min(screen)
+}
+
 /// The smallest saved window that is used at start, in points; a smaller one gives a maximized
 /// window.
 pub const MIN_START_SIZE: [u32; 2] = [400, 300];
@@ -1646,6 +1662,32 @@ mod tests {
             template_window_size(egui::vec2(1920.0, 500.0)),
             egui::vec2(TEMPLATE_WINDOW_DEFAULT.x, 452.0)
         );
+    }
+
+    /// A large program window gives the metadata window its default size, wide enough for two
+    /// columns less the margins, 640 high (ADR 0017 U10b-Q10, T304).
+    #[test]
+    fn the_metadata_window_opens_wide_enough_for_two_columns() {
+        let size = metadata_window_size(egui::vec2(1920.0, 1080.0));
+        assert_eq!(size, METADATA_WINDOW_DEFAULT);
+        assert!(size.x - 2.0 * TEMPLATE_WINDOW_MARGIN >= 2.0 * TEMPLATE_COLUMN_MIN_WIDTH);
+        assert_eq!(METADATA_WINDOW_DEFAULT.y, 640.0);
+        // Exactly the default plus the margins.
+        assert_eq!(
+            metadata_window_size(METADATA_WINDOW_DEFAULT + egui::Vec2::splat(48.0)),
+            METADATA_WINDOW_DEFAULT
+        );
+    }
+
+    /// A small program window gives the metadata window a size no larger than itself (T304).
+    #[test]
+    fn the_metadata_window_fits_a_small_program_window() {
+        let screen = egui::vec2(600.0, 400.0);
+        let size = metadata_window_size(screen);
+        assert!(size.x <= screen.x && size.y <= screen.y);
+        assert_eq!(size, egui::vec2(552.0, 360.0));
+        let tiny = egui::vec2(400.0, 300.0);
+        assert_eq!(metadata_window_size(tiny), tiny);
     }
 
     /// Buttons on Thumbnails is a check item of the View menu right after Full Screen, with no

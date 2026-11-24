@@ -45,6 +45,8 @@ Downloads are on the [Releases page](https://github.com/Bokehlicious/RawStride/r
   Key, whose headings stay at the top while the rows scroll. The Action column's width is changed
   by dragging the line beside its heading and is kept between sessions; a long name is cut and
   shown whole on hover.
+- The metadata window shows its sections in two columns when it is wide enough, and opens wide
+  enough for them when the program window allows; narrowed, it shows one column.
 
 ## [0.3.0] - 2026-11-22
 

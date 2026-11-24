@@ -131,9 +131,9 @@ use pw_loupe::{
 use pw_loupe::{
     SaveError, TEMPLATE_COLUMN_MIN_WIDTH, TEMPLATE_WINDOW_MIN, TemplateEvent, TemplateFieldError,
     TemplateForm, TemplateIo, TemplateItem, TemplateRefused, TemplateRow, TemplateText,
-    apply_variables_text, left_column_sections, load_failed_text, not_loaded_lines, refused_text,
-    save_failed_text, template_files, template_name, template_rows, template_text,
-    template_window_size, templates_folder, window_template, with_xmp_extension,
+    apply_variables_text, left_column_sections, load_failed_text, metadata_window_size,
+    not_loaded_lines, refused_text, save_failed_text, template_files, template_name, template_rows,
+    template_text, template_window_size, templates_folder, window_template, with_xmp_extension,
 };
 use pw_metadata::edit::{Edit, EditOptions};
 use pw_metadata::iim::Fallback;
@@ -179,8 +179,6 @@ const WRITE_PROCESSES: usize = 4;
 const EXIFTOOL_CHECK_INTERVAL: Duration = Duration::from_millis(200);
 /// The space between two rows of the metadata window.
 const PANEL_ROW_SPACING: f32 = 6.0;
-/// The size the metadata window opens with (D16, T107); the user can resize it.
-const WINDOW_SIZE: [f32; 2] = [460.0, 640.0];
 /// The space above and below the metadata window's buttons.
 const WINDOW_BUTTON_SPACING: f32 = 4.0;
 /// How dark the program behind the metadata window is drawn while the window holds it (D16).
@@ -573,6 +571,9 @@ struct MetadataWindow {
     /// Cancel are greyed and the window's keys do nothing; Cancel and Escape still close the
     /// window, and the late answer is then dropped.
     template_waiting: Option<u64>,
+    /// Each shown section's height in points as drawn in the last frame, in one column or two:
+    /// the split between the two columns follows it (ADR 0017 U10b-Q10, T304).
+    section_heights: HashMap<EditorSection, f32>,
 }
 
 impl MetadataWindow {
@@ -599,6 +600,7 @@ impl MetadataWindow {
             written: Vec::new(),
             recorded: Vec::new(),
             template_waiting: None,
+            section_heights: HashMap::new(),
         }
     }
 
@@ -4784,6 +4786,9 @@ impl Loupe {
             });
 
         let window_id = egui::Id::unique("metadata-window");
+        // The size it opens with: wide enough for two columns when the program window allows
+        // (U10b-Q10, T304); the user can resize it.
+        let open_size = metadata_window_size(screen.size());
         let mut metadata_window = egui::Window::new(editor_text(&EditorText::WindowTitle {
             file: window.file.clone(),
         }))
@@ -4791,7 +4796,7 @@ impl Loupe {
         .order(egui::Order::Foreground)
         .collapsible(false)
         .resizable(true)
-        .default_size(WINDOW_SIZE);
+        .default_size(open_size);
         // Placed in the middle of the image area on the first frame it is drawn (T131), and left
         // to the user after that: egui remembers the position by the window's id, so it is set
         // here once rather than given as a default, which the remembered position would win over.
@@ -4799,7 +4804,7 @@ impl Loupe {
             // The size the window had when it was last open, else the size it opens with.
             let size = ctx
                 .memory(|memory| memory.area_rect(window_id))
-                .map_or_else(|| egui::Vec2::from(WINDOW_SIZE), |rect| rect.size());
+                .map_or(open_size, |rect| rect.size());
             let image_area = self.image_area.unwrap_or(screen);
             let position = metadata_window_position(image_area, size, screen);
             metadata_window = metadata_window.current_pos(position);
@@ -5003,6 +5008,7 @@ impl Loupe {
                                     &layout,
                                     rating.as_ref(),
                                     !asking && !template_waiting,
+                                    &mut window.section_heights,
                                     &mut value_ui,
                                 );
                                 choice = response.choice;
@@ -10113,7 +10119,11 @@ struct FormResponse {
 /// as `shell` has it, and in each the items the layout shows, in its order: a field (the Licence
 /// (PLUS) section's choice lists, T128), the contact fields under the heading of their structure,
 /// "Creator's Contact Info" (T114), or a structure list (`draw_structure_list`, T136, T139, T143).
-/// Then the open conflicts with a choice each and the warnings (editable when `enabled`), every
+/// The sections are in two columns when the inner width is at least twice
+/// [`TEMPLATE_COLUMN_MIN_WIDTH`], otherwise in one (U10b-Q10, T304): the left column takes the
+/// first sections, split by `left_column_sections` of `section_estimates`; each section's height
+/// drawn now is kept in `heights` for the next frame. Below them, across the whole width, the
+/// open conflicts with a choice each and the warnings (editable when `enabled`), every
 /// open conflict listed whatever is hidden (U10b-Q4); then read-only, in small text, the other
 /// metadata (without an origin line, T114; what the layout hides is there, U10b-Q3), the
 /// conflicts a rule decided (each value with its origin) and the notices, each only when it has
@@ -10132,6 +10142,7 @@ fn draw_window_form(
     layout: &EditorLayout,
     rating: Option<&Rating>,
     rating_enabled: bool,
+    heights: &mut HashMap<EditorSection, f32>,
     values: &mut ValueUi<'_>,
 ) -> FormResponse {
     let warning = ui.visuals().warn_fg_color;
@@ -10139,46 +10150,48 @@ fn draw_window_form(
     let mut toggled = Vec::new();
     let mut rating_choice = None;
     let sections = layout.shown_sections();
-    for section in sections.iter().copied() {
-        let section_enabled = if section == EditorSection::RatingLabel {
-            rating_enabled
-        } else {
-            enabled
-        };
-        let shown = ui
-            .add_enabled_ui(section_enabled, |ui| {
-                egui::CollapsingHeader::new(editor_text(&EditorText::SectionHeading(section)))
-                    .id_salt(("metadata-window-section", section))
-                    .open(Some(shell.editor_section(section) == ColumnState::Open))
-                    .show(ui, |ui| {
-                        if section == EditorSection::RatingLabel {
-                            rating_choice = draw_rating_buttons(ui, rating);
-                        }
-                        for item in layout.shown_items(section) {
-                            match item {
-                                EditorItem::Field(_) | EditorItem::ContactInfo => {
-                                    // `draw_window_field` draws "Creator's Contact Info" once,
-                                    // before the first contact field.
-                                    for field in item.fields() {
-                                        draw_window_field(
-                                            ui,
-                                            &mut state.form,
-                                            field,
-                                            errors,
-                                            values,
-                                        );
-                                    }
-                                }
-                                EditorItem::List(list) => {
-                                    draw_structure_list(ui, &mut state.form, list);
-                                }
-                            }
-                        }
-                    })
-            })
-            .inner;
-        if shown.header_response.clicked() {
+    // Two columns when there is room for both (U10b-Q10, T304: the template window's width,
+    // U13-Q13), else one. The left column takes the first sections, split by last frame's
+    // heights (or the item counts, `section_estimates`).
+    let two_columns = ui.available_width() >= 2.0 * TEMPLATE_COLUMN_MIN_WIDTH;
+    let left =
+        left_column_sections(&section_estimates(&sections, layout, heights)).min(sections.len());
+    let mut draw = |ui: &mut egui::Ui, section: EditorSection, state: &mut FormState| {
+        let response = draw_window_section(
+            ui,
+            section,
+            state,
+            errors,
+            enabled,
+            shell,
+            layout,
+            rating,
+            rating_enabled,
+            values,
+        );
+        // Kept: its height for the next frame's split, its header's click, its rating button.
+        heights.insert(section, response.height);
+        if response.clicked {
             toggled.push(section);
+        }
+        if response.rating.is_some() {
+            rating_choice = response.rating;
+        }
+    };
+    if two_columns {
+        let (left, right) = sections.split_at(left);
+        ui.columns(2, |columns| {
+            if let [left_ui, right_ui] = columns {
+                for (ui, part) in [(left_ui, left), (right_ui, right)] {
+                    for section in part.iter().copied() {
+                        draw(ui, section, state);
+                    }
+                }
+            }
+        });
+    } else {
+        for section in sections.iter().copied() {
+            draw(ui, section, state);
         }
     }
 
@@ -10277,6 +10290,94 @@ fn draw_window_form(
         toggled,
         rating: rating_choice,
     }
+}
+
+/// What one section of the metadata window's form reports after it was drawn (T304).
+struct SectionResponse {
+    /// Its height in points, header and body.
+    height: f32,
+    /// Its header was clicked.
+    clicked: bool,
+    /// The rating or label button pressed (Rating and Label only, T124).
+    rating: Option<RatingKey>,
+}
+
+/// One section of the metadata window's form (T107, T124, T128; U10b, T278, T304): a collapsible
+/// heading, open or collapsed as `shell` has it, and in it the items `layout` shows, in its order
+/// (`draw_window_form`). Drawn inside `push_id(section)`, so its widgets keep their ids in either
+/// of two columns.
+#[allow(clippy::too_many_arguments)] // one section of the window's form, its state and two flags
+fn draw_window_section(
+    ui: &mut egui::Ui,
+    section: EditorSection,
+    state: &mut FormState,
+    errors: &[(EditorField, String)],
+    enabled: bool,
+    shell: &ShellSettings,
+    layout: &EditorLayout,
+    rating: Option<&Rating>,
+    rating_enabled: bool,
+    values: &mut ValueUi<'_>,
+) -> SectionResponse {
+    let section_enabled = if section == EditorSection::RatingLabel {
+        rating_enabled
+    } else {
+        enabled
+    };
+    let mut rating_choice = None;
+    let drawn = ui.push_id(("metadata-window-section", section), |ui| {
+        ui.add_enabled_ui(section_enabled, |ui| {
+            egui::CollapsingHeader::new(editor_text(&EditorText::SectionHeading(section)))
+                .id_salt(("metadata-window-section", section))
+                .open(Some(shell.editor_section(section) == ColumnState::Open))
+                .show(ui, |ui| {
+                    if section == EditorSection::RatingLabel {
+                        rating_choice = draw_rating_buttons(ui, rating);
+                    }
+                    for item in layout.shown_items(section) {
+                        match item {
+                            EditorItem::Field(_) | EditorItem::ContactInfo => {
+                                // `draw_window_field` draws "Creator's Contact Info" once,
+                                // before the first contact field.
+                                for field in item.fields() {
+                                    draw_window_field(ui, &mut state.form, field, errors, values);
+                                }
+                            }
+                            EditorItem::List(list) => {
+                                draw_structure_list(ui, &mut state.form, list);
+                            }
+                        }
+                    }
+                })
+        })
+        .inner
+    });
+    SectionResponse {
+        height: drawn.response.rect.height(),
+        clicked: drawn.inner.header_response.clicked(),
+        rating: rating_choice,
+    }
+}
+
+/// The estimated height of each of the shown `sections` (in the layout's order) by which the
+/// metadata window's two columns are split (ADR 0017 U10b-Q10, T304): last frame's `heights` when
+/// every section has one, else, for all of them, the number of items `layout` shows in each, an
+/// empty section (Rating and Label) counted as one.
+fn section_estimates(
+    sections: &[EditorSection],
+    layout: &EditorLayout,
+    heights: &HashMap<EditorSection, f32>,
+) -> Vec<f32> {
+    let measured: Option<Vec<f32>> = sections
+        .iter()
+        .map(|section| heights.get(section).copied())
+        .collect();
+    measured.unwrap_or_else(|| {
+        sections
+            .iter()
+            .map(|section| layout.shown_items(*section).len().max(1) as f32)
+            .collect()
+    })
 }
 
 /// The buttons of the Rating and Label section (ADR 0017 U10c-Q1, T124): a row of no stars, 1–5
@@ -13082,6 +13183,7 @@ fn main() -> ExitCode {
 
 #[cfg(test)]
 mod tests {
+    use super::section_estimates;
     use super::{ApplyPlan, apply_allowed, marked_subjects, metadata_subject};
     use super::{
         FALLBACK_CHOICES, LABEL_TEXT, fallback_text, index_span, label_color, label_pill,
@@ -13094,6 +13196,7 @@ mod tests {
     use pw_loupe::{EditorItem, EditorLayout, EditorSection, Language, property_label};
     use pw_loupe::{TEXT_CONTRAST, contrast_ratio};
     use pw_metadata::iim::Fallback;
+    use std::collections::HashMap;
     use std::path::{Path, PathBuf};
 
     // --- The template window's answers and opening (ADR 0017 U13, part U13c, T293) ---
@@ -14197,6 +14300,73 @@ mod tests {
         assert!(screen.contains_rect(window));
         // Centring alone would end at 820, below the program window: moved up to fit.
         assert_eq!(position.y, 160.0);
+    }
+
+    // --- The metadata window's two columns (ADR 0017 U10b-Q10, T304) ---
+
+    /// The item counts of the default layout's shown sections, Rating and Label (no items)
+    /// counted as one.
+    fn item_counts(layout: &EditorLayout) -> Vec<f32> {
+        layout
+            .shown_sections()
+            .into_iter()
+            .map(|section| {
+                let items = layout.shown_items(section).len();
+                if section == EditorSection::RatingLabel {
+                    assert_eq!(items, 0);
+                    1.0
+                } else {
+                    assert!(items > 0, "{section:?} shows items");
+                    items as f32
+                }
+            })
+            .collect()
+    }
+
+    /// With no heights yet (the first frame), the split uses the item counts.
+    #[test]
+    fn section_estimates_without_heights_are_the_item_counts() {
+        let layout = EditorLayout::default();
+        let sections = layout.shown_sections();
+        assert!(sections.contains(&EditorSection::RatingLabel));
+        let estimates = section_estimates(&sections, &layout, &HashMap::new());
+        assert_eq!(estimates, item_counts(&layout));
+    }
+
+    /// With every shown section's height from the last frame, the split uses the heights.
+    #[test]
+    fn section_estimates_with_every_height_are_the_heights() {
+        let layout = EditorLayout::default();
+        let sections = layout.shown_sections();
+        let heights: HashMap<EditorSection, f32> = sections
+            .iter()
+            .enumerate()
+            .map(|(index, section)| (*section, 100.0 + 10.0 * index as f32))
+            .collect();
+        let estimates = section_estimates(&sections, &layout, &heights);
+        let expected: Vec<f32> = (0..sections.len())
+            .map(|index| 100.0 + 10.0 * index as f32)
+            .collect();
+        assert_eq!(estimates, expected);
+    }
+
+    /// With one shown section's height missing, the item counts are used for all of them.
+    #[test]
+    fn section_estimates_with_one_height_missing_are_the_item_counts() {
+        let layout = EditorLayout::default();
+        let sections = layout.shown_sections();
+        let mut heights: HashMap<EditorSection, f32> =
+            sections.iter().map(|section| (*section, 250.0)).collect();
+        heights.remove(&EditorSection::RatingLabel);
+        let estimates = section_estimates(&sections, &layout, &heights);
+        assert_eq!(estimates, item_counts(&layout));
+        // A height kept for a section that is not shown does not count.
+        heights.insert(EditorSection::RatingLabel, 250.0);
+        let without_first = &sections[1..];
+        assert_eq!(
+            section_estimates(without_first, &layout, &heights),
+            vec![250.0; without_first.len()]
+        );
     }
 
     // --- `M` and "Apply to All Marked" with several images marked (ADR 0017 U12c, T126) ---
