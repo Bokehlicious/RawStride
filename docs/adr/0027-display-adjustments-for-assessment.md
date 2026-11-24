@@ -372,6 +372,17 @@ ARW 987 ms and of a 16 Mpix RW2 403–422 ms; today's half-size view of the same
 139 ms. **The owner accepted the time on 2026-11-24** (not far above §11.2's); T313 goes ahead as
 written.
 
+W2-Q7's measurement (2026-11-24, release build of cb1b5e1, `latency.ps1`, fit, RAW, on the owner's
+1920×1200 screen; labels `t314-*`): with fine details on, the next image's first change has a
+median of 5.2–6.3 ms (A7R and A1; at most 10.8 ms), and a step 500 or 900 ms into a fine render a
+median of 5.1–8 ms (at most 34 ms), so V1 holds; at about 7 images/s with a warm cache every step
+is at most 61 ms (off: 86 ms), so V4 holds. From a freshly started program, stepping at 7 images/s
+misses V4 with fine details on and off alike (the steps come faster than the dwell, so nothing is
+prefetched; not caused by W2). The owner's hand check passed (2026-11-24): the image does not move
+at the swap. The visible gain is small on that screen, at fit and at 45 % alike. **The owner
+decided on 2026-11-24 that no task is written for +1 (A-Q5) and no more work is spent on fine
+details**; it stays on the current image only.
+
 ## 5. Steps
 
 Each step ends with tests (GR11), the owner's hand check and, where an image is shown,
