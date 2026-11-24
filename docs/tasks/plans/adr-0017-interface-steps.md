@@ -1,5 +1,11 @@
 # ADR 0017 (the interface): steps
 
+**Status (2026-11-24):** every step built and hand-checked by the owner (U1–U15; the last, U10b-Q10 in
+T304, on 2026-11-24), and ADR 0017's known limits gone through with the owner (all accepted for
+good). Left: **U0**, the separate preview window, postponed until the owner has a second screen to
+test with (ADR 0017 §7, §7.2). The rows of U10b, U8 and U13 below are kept up to date in
+[`adr-0018-0025-steps.md`](adr-0018-0025-steps.md), order 2b.
+
 ADR 0017 was accepted by the owner on 2026-11-12 and amended on 2026-11-13. Its steps are U0–U14
 (§7); stage A, the usable version, is U1, U2 and U3 plus previous/next in today's `M` window (the
 first part of U12, §7.1). Each step becomes one or more tasks here, written when the step before

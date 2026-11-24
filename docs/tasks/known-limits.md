@@ -46,7 +46,7 @@ dropped is removed; git history and `done/` keep it.
   - T193's hand check (owner, 2026-11-19) did not try a JPEG with IIM, a list with qualifiers and
     an IIM/XMP conflict (no such file at hand), so the held list's `DigestNotWritten` is checked
     only by tests: done when such a file is at hand.
-- **List entries in `Edit::Entries`** (reviewer and `/code-review` of T179, 2026-11-17; none is
+- **List entries in `Edit::Entries`** (**accepted for good, 2026-11-24**; reviewer and `/code-review` of T179, 2026-11-17; none is
   reached by T180's use):
   - *`same_value` compares list entries on the IIM prediction:* removing a keyword over 64 bytes
     and adding it cut to 64 bytes is no change and is lost without a notice (as for `Set`). Rare;
@@ -86,24 +86,26 @@ dropped is removed; git history and `done/` keep it.
   never from XMP inside the RAW file itself. ADR 0024 §2.4's "embedded" XMP is that of a DNG,
   JPEG or TIFF. A task only if a camera or program is found that puts a different orientation in
   a RAW's own XMP.
-- **`ImageCheck`: a cleaner design** (`/code-review` of T177, 2026-11-17; for when `ImageCheck` is
+- **`ImageCheck`: a cleaner design** (**accepted for good, 2026-11-24**; `/code-review` of T177, 2026-11-17; for when `ImageCheck` is
   next changed): the stamp is part of the write, not of the release. A write-only hook (for
   example `ImageCheck::before_write`, called only by the safe write) would let `release` be the
   same for writes and moves, and `with_move_release` and the second closure could go.
 
-- **A template file left in `.saving`** (T285's review, 2026-11-23): when ExifTool does not answer in time but writes the new file afterwards, `write_template_file` has already cleaned up, so the file (and the `.saving` subfolder of the templates' folder) stays. `.saving` is never listed among the templates, so nothing is loaded from it. A task only if it is seen in use.
+- **A template file left in `.saving`** (**accepted for good, 2026-11-24**; T285's review, 2026-11-23): when ExifTool does not answer in time but writes the new file afterwards, `write_template_file` has already cleaned up, so the file (and the `.saving` subfolder of the templates' folder) stays. `.saving` is never listed among the templates, so nothing is loaded from it. A task only if it is seen in use.
 
-- **Variables: the camera's tags in other groups** (T288's review, 2026-11-23; **kept** at the sort after U13b, 2026-11-23 (owner)): `{make}`, `{model}` and the date variables read `IFD0:Make`, `IFD0:Model` and Exif DateTimeOriginal. A RAW whose maker stores them elsewhere gives an empty `{make}` and `{model}` and no capture time (a date variable then fails that image). By ExifTool 13.64's tag list Panasonic RW2 has Make and Model in `IFD0`; where an RW2's DateTimeOriginal is was not seen, and no real file was checked. A task only if it is seen in use.
+- **Variables: the camera's tags in other groups** (**accepted for good, 2026-11-24**; T288's review, 2026-11-23; **kept** at the sort after U13b, 2026-11-23 (owner)): `{make}`, `{model}` and the date variables read `IFD0:Make`, `IFD0:Model` and Exif DateTimeOriginal. A RAW whose maker stores them elsewhere gives an empty `{make}` and `{model}` and no capture time (a date variable then fails that image). By ExifTool 13.64's tag list Panasonic RW2 has Make and Model in `IFD0`; where an RW2's DateTimeOriginal is was not seen, and no real file was checked. A task only if it is seen in use.
 
-- **Variables: a structure's sub-field emptied by filling** (T288, accepted in its chain review, 2026-11-23; **kept** at the sort after U13b, 2026-11-23 (owner)): in a Set of a whole structure list from the metadata window (Location Shown, for example), a sub-field whose variable fills to nothing (`{make}` without a Make) is dropped from its entry, so that sub-field's old value leaves the entry too, as the window's Set replaces the whole list.
+- **Variables: a structure's sub-field emptied by filling** (**accepted for good, 2026-11-24**; T288, accepted in its chain review, 2026-11-23; **kept** at the sort after U13b, 2026-11-23 (owner)): in a Set of a whole structure list from the metadata window (Location Shown, for example), a sub-field whose variable fills to nothing (`{make}` without a Make) is dropped from its entry, so that sub-field's old value leaves the entry too, as the window's Set replaces the whole list.
 
-- **Variables: a Lang Alt inside a structure is not cleaned** (T288's review, owner 2026-11-23; **kept** at the sort after U13b, 2026-11-23 (owner)): a Lang Alt sub-field (Location Shown's Location Name, for example) whose `x-default` fills to nothing while another language has text keeps an empty `x-default` beside that language, and is written so. The metadata window's own Lang Alt fields send only `x-default`, so they are not affected (an empty one is no change). A task only if it is seen in use.
+- **Variables: a Lang Alt inside a structure is not cleaned** (**accepted for good, 2026-11-24**; T288's review, owner 2026-11-23; **kept** at the sort after U13b, 2026-11-23 (owner)): a Lang Alt sub-field (Location Shown's Location Name, for example) whose `x-default` fills to nothing while another language has text keeps an empty `x-default` beside that language, and is written so. The metadata window's own Lang Alt fields send only `x-default`, so they are not affected (an empty one is no change). A task only if it is seen in use.
 
-- **Variables: the §11 warnings count an escaped text** (T289, 2026-11-23; **kept** at the sort after U13b, 2026-11-23 (owner)): the metadata window's warnings look at the form's edits, where a text read from the file has its braces doubled (`variables::escape`), so an IIM length warning counts a keyword `{x}` from the file as the five bytes of `{{x}}`, and a typed text with its variables (`{date}`, not the date). A task only if a wrong warning is seen in use.
+- **Variables: the §11 warnings count an escaped text** (**accepted for good, 2026-11-24**; T289, 2026-11-23; **kept** at the sort after U13b, 2026-11-23 (owner)): the metadata window's warnings look at the form's edits, where a text read from the file has its braces doubled (`variables::escape`), so an IIM length warning counts a keyword `{x}` from the file as the five bytes of `{{x}}`, and a typed text with its variables (`{date}`, not the date). A task only if a wrong warning is seen in use.
 
-- **Variables: another program's brace in pasted text** (T289's review, 2026-11-23, ADR 0017 U13-Q9 amended; **kept** at the sort after U13b, 2026-11-23 (owner)): Paste All Fields counts as typing, for fields and for a structure list's shown sub-fields, so a text with another program's `{x}` copied and pasted is a variable error until it is written `{{x}}`. A text read from the file and left unchanged is kept as it is.
+- **Variables: another program's brace in pasted text** (**accepted for good, 2026-11-24**; T289's review, 2026-11-23, ADR 0017 U13-Q9 amended; **kept** at the sort after U13b, 2026-11-23 (owner)): Paste All Fields counts as typing, for fields and for a structure list's shown sub-fields, so a text with another program's `{x}` copied and pasted is a variable error until it is written `{{x}}`. A text read from the file and left unchanged is kept as it is.
 
 ## Moves to `_rejected` and `_picked`
+
+**Accepted for good, 2026-11-24** (owner, at the sort after ADR 0017's last step): every item below; not asked about again unless seen in use.
 
 - **`relocate::companions`** (`/code-review` of T169, 2026-11-17; the moves are Windows only;
   until a Linux or macOS port):
@@ -383,34 +385,34 @@ with ADR 0026 F3, in `plans/adr-0018-0025-steps.md`.)
   cancel is seen at the next progress call (or in the end's wait); writes started finish and
   are listed. With one process no write ran during a copy. The template's writes add no
   progress step, so the progress may also stay at 100 % while they finish.
-- *A backup copy's lines repeat the destination's* (`/code-review` of T294, 2026-11-23, owner;
+- *A backup copy's lines repeat the destination's* (**accepted for good, 2026-11-24**; `/code-review` of T294, 2026-11-23, owner;
   **kept** at the sort after U13c, 2026-11-23 (owner)): the template is written to the destination copy and the backup copy, and each line of a
   failure or a notice names the file only (`file_name(target)`), so with a backup every notice
   (and every failure) shows twice, the same, and the two take two of the ten lines. A task only if
   it is seen in use.
-- *The template is copied for each pooled write* (`/code-review` of T294, 2026-11-23, owner;
+- *The template is copied for each pooled write* (**accepted for good, 2026-11-24**; `/code-review` of T294, 2026-11-23, owner;
   **kept** at the sort after U13c, 2026-11-23 (owner)): with more than one write process,
   `submit_template` gives each job its own clone of the whole `TemplateFile` (up to 50 fields
   with lists) where an `Arc` would share one. Not measured; a task only if a large import is
   seen to slow down.
-- *A template reader that stops while the import waits* (T295's review, 2026-11-23; **kept** at
+- *A template reader that stops while the import waits* (**accepted for good, 2026-11-24**; T295's review, 2026-11-23; **kept** at
   the sort after U13c, 2026-11-23 (owner)): when the template thread ends after it has taken the
   import's read at Start, no answer comes, and the dialog shows "Reading the metadata template…"
   with the form and Start greyed until the dialog is closed (closing drops the wait). The thread
   ends that way only on a panic, which the rules forbid; a task only if it is seen.
-- *A template path that cannot be read back is not remembered* (T295's review, 2026-11-23;
+- *A template path that cannot be read back is not remembered* (**accepted for good, 2026-11-24**; T295's review, 2026-11-23;
   **kept** at the sort after U13c, 2026-11-23 (owner)): `import_template` is written to
   `settings.txt` only when the path reads back as it is (`parse_folder`), so a chosen file whose
   path is not valid Unicode or has spaces at an end is used while the program runs but is gone
   after a restart, without a notice. A file chosen in the open dialog has a full path, so this is
   rare.
-- *A change for this import names the import's file, not the one loaded* (T298's review,
+- *A change for this import names the import's file, not the one loaded* (**accepted for good, 2026-11-24**; T298's review,
   2026-11-24; **kept** at the sort after T297 and T298, 2026-11-24 (owner)): when another file
   is loaded with Load… in the template window opened from the import dialog and Use for This
   Import is pressed, the row shows the import's own file as "{file} (changed for this import)",
   though the values came from the other file. This follows U13-Q21 (the row names the import's
   file); a task only if it confuses in use.
-- *Edit… with a change for this import ignores what the load leaves out* (T298's review,
+- *Edit… with a change for this import ignores what the load leaves out* (**accepted for good, 2026-11-24**; T298's review,
   2026-11-24; **kept** at the sort after T297 and T298, 2026-11-24 (owner)): the window is
   filled with `TemplateForm::load` of the template the form made at Use for This Import, and
   `load`'s list of what it could not put in the form is not shown. A field the form makes but
@@ -420,7 +422,7 @@ with ADR 0026 F3, in `plans/adr-0018-0025-steps.md`.)
 ## Templates in the metadata window (ADR 0017 U13d)
 
 Every item below **kept** at the sort after U13d (2026-11-24, owner); the first is a decision,
-each of the others a task only if it is seen in use.
+each of the others a task only if it is seen in use. **Accepted for good, 2026-11-24** (owner, at the sort after ADR 0017's last step): every item below; not asked about again unless seen in use. U13-Q24 stays as decided.
 
 - *Load Template… and "Apply to {n} Marked"* (ADR 0017 U13-Q24, owner 2026-11-24; recorded at
   T300's Done): a loaded field counts as typed, so the batch follows the window's own rules
@@ -444,6 +446,7 @@ each of the others a task only if it is seen in use.
 
 (T278's brief and chain review, 2026-11-22; **kept** at the sort after ADR 0017 U10b, 2026-11-22
 (owner): none was seen in the hand check, so each becomes a task only if it is noticed in use.)
+**Accepted for good, 2026-11-24** (owner, at the sort after ADR 0017's last step): every item below; not asked about again unless seen in use.
 
 - *The Paste button's count after a layout change:* when the layout is changed between Copy All
   Fields and Paste All Fields, the Paste button's tooltip still counts the copied items that are
@@ -459,6 +462,7 @@ each of the others a task only if it is seen in use.
 
 (T279's review, 2026-11-22; **kept** at the sort after ADR 0017 U8, 2026-11-22 (owner): none was
 seen in the hand check, so each becomes a task only if it is noticed in use.)
+**Accepted for good, 2026-11-24** (owner, at the sort after ADR 0017's last step): every item below; not asked about again unless seen in use.
 
 - *Alt+Tab can be given to an action:* the map refuses Tab and Shift+Tab (egui's focus) but not
   Alt+Tab, which Windows takes before RawStride sees it; such a key never acts.
