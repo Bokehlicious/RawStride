@@ -1,4 +1,4 @@
-# T306. ADR 0031 RL9: the MSI in the release build and workflow, docs/distribution.md (tools, CI, docs) — Blocked: waits for T305
+# T306. ADR 0031 RL9: the MSI in the release build and workflow, docs/distribution.md (tools, CI, docs) — Open
 
 - **Why:** ADR 0031 RL9, RL9-Q1 and RL9-Q8 (owner, 2026-11-24): every release has both the zip
   and the MSI, both in `SHA256SUMS.txt`, built by the release workflow on a clean runner. T305
@@ -15,9 +15,10 @@
     and `release-notes.md` as the artifact `release`, and creates the draft with
     `gh release create` and the zip and `SHA256SUMS.txt` as files. Only GitHub's own actions,
     each pinned to a full commit SHA. The runner `windows-latest` has the .NET SDK; WiX is
-    installed with `dotnet tool install --global wix --version 7.0.1` (RL9-Q1; [unverified that the
-    tools folder is on the runner's PATH in the next step: check it, and add
-    `%USERPROFILE%\.dotnet\tools` to `GITHUB_PATH` if it is not]).
+    installed with `dotnet tool install --global wix --version 7.0.1` (RL9-Q1). Whether the .NET
+    tools folder is on the runner's PATH in the next step cannot be checked locally, so the step
+    always adds `$env:USERPROFILE\.dotnet\tools` to `$env:GITHUB_PATH` (harmless if it is already
+    there); the reviewer's test run shows that it works.
   - `README.md`'s "Planned" list has "Signed releases and an installer (MSI)." and its install
     steps name only the zip: the reviewer changes `README.md` at Done, not this task.
 - **Crates:** none. **Files:** `tools/release-build.ps1` (points 1–3), `.github/workflows/release.yml`
@@ -39,8 +40,8 @@
      warning and the checksum check for both (`Get-FileHash` with each file name).
   4. **`release.yml`:** a step before "Run tools/release-build.ps1" that installs WiX 7.0.1 as a
      .NET tool (the version in one `env` value, `WIX_VERSION: "7.0.1"`, with a comment that it
-     must match `$wixVersion` in `tools/package-msi.ps1`), checks `wix --version` and makes sure
-     `wix` is found in the next steps (the PATH note above). No new action. The artifact
+     must match `$wixVersion` in `tools/package-msi.ps1`), checks `wix --version` and adds the .NET tools folder to
+     `GITHUB_PATH` so `wix` is found in the next steps (the PATH note above). No new action. The artifact
      `release` also holds `target/dist/RawStride-*-windows-x64.msi`; the draft release attaches
      the MSI too (`$msi` beside `$zip` in `gh release create`). The header comment names the MSI
      (today "The three files"; now four).
@@ -83,3 +84,4 @@
 |---|---|---|
 | 2026-11-24 | Blocked | Added: waits for T305 (chain T305 → T306) |
 | 2026-11-24 | Blocked | Point 5: "with no dialogs Windows may otherwise ask for a restart" replaced by "otherwise Windows asks to close RawStride and ExifTool" (T305's hand check, ADR 0031 RL9-Q11) |
+| 2026-11-24 | Open | T305 Done (5ea385e) and hand-checked (679c4e3); names checked against it: `tools/package-msi.ps1` with no `-Version`, `$wixVersion`, the MSI's name and path, the files it leaves in `target\dist\msi\` (not in the artifact), and `release-build.ps1` steps 6–7, its Download text, `release.yml`'s header and `gh release create`, `distribution.md`'s headings as the task names them. The PATH note made definite: the WiX step always adds the .NET tools folder to `GITHUB_PATH` (it cannot be checked locally). Cold read done earlier with T305 |
