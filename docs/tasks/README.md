@@ -87,11 +87,15 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status |
 |---|---|---|
-| – | No open tasks | – |
+| [T299](T299-worker-applies-template-file.md) | The metadata worker applies a template file | Open |
+| [T300](T300-window-form-and-template-file.md) | The metadata window's form to and from a template file | Open |
+| [T301](T301-window-load-and-save-template.md) | Load Template… and Save as Template… in the metadata window | Blocked |
+| [T302](T302-template-batch.md) | A batch that applies a template file to many images | Blocked |
+| [T303](T303-apply-template-submenu.md) | The right-click menu's Apply Template submenu | Blocked |
 
 ## Writing a task (owner and reviewer)
 
-- **Number:** the next free number after the highest in this folder and `done/` (T299 next).
+- **Number:** the next free number after the highest in this folder and `done/` (T304 next).
 - **File:** `docs/tasks/T246-<a-few-words>.md`; three digits, lower case, words joined by `-`.
 - **Index:** add a row to "Open tasks" above and keep its status in step with the file's heading.
 - **Size (owner, 2026-11-15, after T142):** one task is one layer (a C++ shim or a core crate, or
