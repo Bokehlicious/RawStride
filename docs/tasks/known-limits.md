@@ -547,6 +547,15 @@ only if it is seen in use.)
 - *A `keys.txt` from 0.5.0 with D on another action* (T314's review): that line is lost on
   loading (the key map's rule for a taken key); written in `CHANGELOG.md`.
 
+## Sharpening (ADR 0027 W3)
+
+(T316's independent review, 2026-11-24.)
+
+- *A step's shown time with the other sharpening* (T316's review): `mark_shown` records a step as
+  shown when a view of the other sharpening is drawn (a neighbour prefetched before sharpening was
+  turned on), so that step's latency is measured too short. For `latency.ps1` after T318, U is
+  pressed and the neighbours' prefetch redone before a series starts (`plans/`, W3's row).
+
 ## LibRaw (`pw-libraw`)
 
 (Reviewer and an independent review agent of T197, 2026-11-19; none is caused by T197, which

@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 
 use crate::backend::{Backend, DecodeError, FocusMap, Rgb, Source};
 use crate::scale;
+use crate::sharpen::{self, Sharpening};
 use crate::state::{Config, Frame, Record, State, Stats, Task, ViewKind, ViewOut, ZOOM_STEP, Zoom};
 
 /// The longest a worker sleeps without a reason (a safety net; changes wake it at once).
@@ -111,6 +112,17 @@ impl<B: Backend> Shared<B> {
                             .backend
                             .render_region(&mut session, view.region)
                             .and_then(reduce),
+                    };
+                    // sharpened last, after the reduction and before the conversion to the
+                    // display (ADR 0027 §3.3, W3-Q1); with a valid value it fails only on
+                    // inconsistent data, which gets the check's text (W3-Q6)
+                    let result = match view.sharpen {
+                        Some(s) => result.and_then(|img| {
+                            sharpen::sharpen(&img, s).ok_or_else(|| {
+                                DecodeError::new("the decoder returned a malformed image")
+                            })
+                        }),
+                        None => result,
                     };
                     // to the display after the render and the reduction, before the check
                     // (ADR 0027 W1-Q4)
@@ -360,6 +372,20 @@ impl<B: Backend> ViewCore<B> {
                 return;
             }
             s.fine_details = on;
+        }
+        self.shared.cv.notify_all();
+        self.shared.wake_ui();
+    }
+
+    /// Sets sharpening (ADR 0027 §3.3, W3): `None` turns it off; a value is first made valid with
+    /// [`Sharpening::clamped`]. The shell holds it for the session (off at the start, not saved,
+    /// W3-Q5). While it is on, every view below 100 % is sharpened after its reduction; a change
+    /// makes the wanted views again, and the drawn view stays until one with the new sharpening
+    /// replaces it in one swap (V2). [`Frame::sharpen`] tells its state. Not a user request:
+    /// nothing is recorded.
+    pub fn set_sharpening(&self, s: Option<Sharpening>) {
+        if !self.shared.state().set_sharpening(s) {
+            return;
         }
         self.shared.cv.notify_all();
         self.shared.wake_ui();

@@ -1,4 +1,4 @@
-# T317. ADR 0027 W3: the Settings page Preview and the sharpening values — Blocked
+# T317. ADR 0027 W3: the Settings page Preview and the sharpening values — Open
 
 - **Why:** ADR 0027 §3.3 and W3-Q7 (answered by the owner 2026-11-24, ADR 0027 §4.3).
   Sharpening has three values, amount, radius and threshold, which are settings and are saved
@@ -112,3 +112,4 @@
 | 2026-11-24 | Blocked | Added (ADR 0027 W3-Q7); waits for T316 |
 | 2026-11-24 | Blocked | Cold read: Save takes only the theme and the suffixes from the window, so it must also take `sharpening` (point 1); the four existing tests that end with `thumbnail_buttons` or build `ShellSettings` whole named as updated; the reader's rule for the radius (finite, rounded to tenths, then the range) and the three `expected` texts; the sliders (`.text`, `step_by`, `fixed_decimals`), the Restore Defaults flag and arm, the exhaustive matches, `ALL` of 5, the new `SettingsText` variants named; the note no longer names T318's menu item and wraps; the glossary row named "Preview (Settings page)"; the order test is in `shell_text.rs`. Waits for T316 and the chain review |
 | 2026-11-24 | Blocked | Chain review: nothing for T317's text; its `CHANGELOG.md` line is written together with T318's at T318's Done (until then there is no way to turn sharpening on). Waits for T316 |
+| 2026-11-24 | Open | T316 Done; set Open |

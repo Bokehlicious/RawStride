@@ -11,6 +11,7 @@ use crate::backend::{
     ClippingMap, DecodeError, FocusMap, ImageStatistics, Rgb, Source, Statistics,
 };
 use crate::geometry::{self, ImageSize, Rect, RectF};
+use crate::sharpen::Sharpening;
 
 /// Settings of the core. Both budgets are user settings (V8); in milestone 1 they come from the
 /// command line (ADR 0009 §11).
@@ -105,6 +106,8 @@ pub struct ViewOut {
     pub region: Rect,
     /// Output pixels per image pixel (0.5 for half size, 1.0 at 100 %).
     pub density: f64,
+    /// The sharpening the view was made with (ADR 0027 §3.3, W3); `None` = unsharpened.
+    pub sharpen: Option<Sharpening>,
     pub image: Rgb,
     /// FNV-1a over the pixels, only when recording (correctness checks).
     pub hash: Option<u64>,
@@ -120,6 +123,8 @@ pub struct Resident {
     pub kind: ViewKind,
     pub region: Rect,
     pub density: f64,
+    /// The sharpening the view was made with (ADR 0027 §3.3, W3); `None` = unsharpened.
+    pub sharpen: Option<Sharpening>,
     pub bytes: u64,
     pub used: u64,
     pub hash: Option<u64>,
@@ -228,6 +233,21 @@ pub enum FineState {
     Paused(FinePause),
 }
 
+/// The state of sharpening for the current image (ADR 0027 §3.3, W3), for the shell's mark.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum SharpenState {
+    /// There is no image, or sharpening is off and the drawn view (if any) is unsharpened.
+    Off,
+    /// Sharpening is on and the current scale is 100 % or more, where it does not apply (A-Q8).
+    Paused,
+    /// Sharpening is on (or was just turned off), and the drawn view is not yet one with the
+    /// current sharpening: the new view is being made, a zoom gesture is under way, the size is
+    /// not known yet, or the image cannot be shown.
+    Waiting,
+    /// The frame's view is ready and was made with the current sharpening.
+    Shown,
+}
+
 /// Everything the presentation needs for one frame.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Frame {
@@ -265,6 +285,8 @@ pub struct Frame {
     pub focus: FocusState,
     /// The state of fine details for the current image (ADR 0027 §3.1, W2).
     pub fine: FineState,
+    /// The state of sharpening for the current image (ADR 0027 §3.3, W3).
+    pub sharpen: SharpenState,
 }
 
 /// One user request, for measurement (ADR 0009 §5.2; the P5 event format).
@@ -338,6 +360,8 @@ pub(crate) struct JobView {
     pub region: Rect,
     /// Density in millionths (hashable).
     pub density_q: u64,
+    /// The sharpening to apply after the reduction (ADR 0027 §3.3, W3); `None` = unsharpened.
+    pub sharpen: Option<Sharpening>,
 }
 
 impl JobView {
@@ -402,6 +426,7 @@ const STATISTICS_LEND: JobView = JobView {
     kind: ViewKind::Half,
     region: Rect::new(0, 0, 0, 0),
     density_q: 0,
+    sharpen: None,
 };
 
 /// A view being rendered, or rendered and not yet accepted.
@@ -516,6 +541,10 @@ pub(crate) struct State<S> {
     /// the presentation (W2-Q6): their fine view is not asked again. Kept as `failed` is (moved
     /// by [`State::set_files`], emptied by a new folder).
     fine_failed: HashSet<Key>,
+    /// Sharpening (ADR 0027 §3.3, W3): `None` = off. Set by the shell, which holds it for the
+    /// session (off at the start, not saved, W3-Q5); a new folder or list of files does not
+    /// change it. Always valid ([`State::set_sharpening`]).
+    pub sharpening: Option<Sharpening>,
     sessions: HashMap<Key, Option<S>>,
     /// The generation each lent session (`None` in `sessions`) was lent in.
     lent: HashMap<Key, u64>,
@@ -592,6 +621,7 @@ impl<S> State<S> {
             focus_none: HashSet::new(),
             fine_details: false,
             fine_failed: HashSet::new(),
+            sharpening: None,
             sessions: HashMap::new(),
             lent: HashMap::new(),
             detached: HashMap::new(),
@@ -725,6 +755,18 @@ impl<S> State<S> {
         self.zoom = zoom;
         self.centre = centre;
         self.gesture_at = Some(Instant::now());
+        true
+    }
+
+    /// Sets sharpening (ADR 0027 §3.3, W3): `None` turns it off; a `Some` value is first made
+    /// valid with [`Sharpening::clamped`]. Returns whether it changed: a value equal to the one
+    /// held changes nothing.
+    pub fn set_sharpening(&mut self, s: Option<Sharpening>) -> bool {
+        let s = s.map(Sharpening::clamped);
+        if s == self.sharpening {
+            return false;
+        }
+        self.sharpening = s;
         true
     }
 
@@ -1103,6 +1145,7 @@ impl<S> State<S> {
                         kind: ViewKind::Fine,
                         region: geometry::whole(size),
                         density_q: quantise(scale),
+                        sharpen: self.sharpening,
                     },
                 });
             }
@@ -1115,6 +1158,8 @@ impl<S> State<S> {
                     kind: ViewKind::Ring,
                     region: r,
                     density_q: quantise(1.0),
+                    // 100 % and above is never sharpened (ADR 0027 A-Q8)
+                    sharpen: None,
                 };
                 return Some(Req {
                     key,
@@ -1135,6 +1180,9 @@ impl<S> State<S> {
             let (w, h) = crate::scale::scaled_size(size.w, size.h, quantise(scale) as f64 / 1e6);
             w <= size.w / 2 && h <= size.h / 2
         } && !self.unreducible.contains(&(self.generation, key));
+        // Every view below 100 % is sharpened while sharpening is on, the half-size view of a
+        // gesture too (it is drawn at 1:1 at 50 % when the gesture ends); 100 % and above never
+        // is (ADR 0027 W3-Q1, A-Q8).
         let job = if scale < HALF_DENSITY - EPS
             && reduced_fits
             && !(want == Want::Shown && self.in_gesture())
@@ -1143,12 +1191,14 @@ impl<S> State<S> {
                 kind: ViewKind::Reduced,
                 region: geometry::whole(size),
                 density_q: quantise(scale),
+                sharpen: self.sharpening,
             }
         } else if scale <= HALF_DENSITY + EPS {
             JobView {
                 kind: ViewKind::Half,
                 region: geometry::whole(size),
                 density_q: quantise(HALF_DENSITY),
+                sharpen: self.sharpening,
             }
         } else if scale >= 1.0 - EPS {
             let vis1 = geometry::visible(size, self.view_px, 1.0, self.centre);
@@ -1156,12 +1206,14 @@ impl<S> State<S> {
                 kind: ViewKind::Zoom,
                 region: geometry::sensor_box(size, vis1),
                 density_q: quantise(1.0),
+                sharpen: None,
             }
         } else {
             JobView {
                 kind: ViewKind::Scaled,
                 region: cover,
                 density_q: quantise(scale),
+                sharpen: self.sharpening,
             }
         };
         Some(Req {
@@ -1198,8 +1250,10 @@ impl<S> State<S> {
 
     /// The resident view that serves a requirement: a fine view first while fine details is on
     /// (ADR 0027 W2-Q8: it replaces the reduced view in one swap, and an earlier fine view that
-    /// still serves stays until the new one replaces it), then the least dense one, then the
-    /// smallest.
+    /// still serves stays until the new one replaces it), then one with the requirement's
+    /// sharpening (W3-Q4: a view of the other sharpening stays drawn until it is ready), then the
+    /// least dense one, then the smallest. Once the image's fine view has failed (W2-Q6), the
+    /// sharpening comes first: a fine view of the other sharpening would never be replaced.
     pub fn serving(&self, req: &Req) -> Option<&Resident> {
         self.serving_of(req, true)
     }
@@ -1220,15 +1274,22 @@ impl<S> State<S> {
                 )
             })
             .min_by(|a, b| {
-                (a.kind != ViewKind::Fine)
-                    .cmp(&(b.kind != ViewKind::Fine))
+                let not_fine = (a.kind != ViewKind::Fine).cmp(&(b.kind != ViewKind::Fine));
+                let other_sharpen =
+                    (a.sharpen != req.job.sharpen).cmp(&(b.sharpen != req.job.sharpen));
+                let first = if self.fine_failed.contains(&req.key) {
+                    other_sharpen.then(not_fine)
+                } else {
+                    not_fine.then(other_sharpen)
+                };
+                first
                     .then(a.density.total_cmp(&b.density))
                     .then(a.region.area().cmp(&b.region.area()))
             })
     }
 
     /// The resident view that is exactly what a reduced or fine requirement asks for: of its kind
-    /// and region, at its size.
+    /// and region, at its size, with its sharpening.
     fn exact(&self, req: &Req) -> Option<&Resident> {
         let job = req.job;
         self.resident.iter().find(|r| {
@@ -1236,16 +1297,20 @@ impl<S> State<S> {
                 && (r.pos, r.source) == req.key
                 && r.kind == job.kind
                 && r.region == job.region
+                && r.sharpen == job.sharpen
                 && same_reduction(r.region, r.density, job)
         })
     }
 
-    /// Whether the plan counts a requirement as done. A reduced view (ADR 0027 W1-Q3) and a fine
-    /// view (W2) count only as themselves, resident or in flight: a denser view (the half-size
-    /// view after a gesture, a reduced view after zooming out) is drawn meanwhile
+    /// Whether the plan counts a requirement of `want` as done. A reduced view (ADR 0027 W1-Q3)
+    /// and a fine view (W2) count only as themselves, resident or in flight: a denser view (the
+    /// half-size view after a gesture, a reduced view after zooming out) is drawn meanwhile
     /// ([`State::serving`]) but does not stop the exact one from being made. A fine view
     /// satisfies no other requirement, so the shown view is still made while a fine render runs.
-    fn satisfied(&self, req: &Req) -> bool {
+    /// Only a view with the requirement's sharpening counts (W3-Q4), except for the current
+    /// image's half-size view during a zoom gesture, which a half-size view of either sharpening
+    /// satisfies, so a gesture never starts a render only for the sharpening.
+    fn satisfied(&self, req: &Req, want: Want) -> bool {
         if matches!(req.job.kind, ViewKind::Reduced | ViewKind::Fine) {
             let job = req.job;
             return self.exact(req).is_some()
@@ -1254,18 +1319,34 @@ impl<S> State<S> {
                     .iter()
                     .any(|f| f.generation == self.generation && f.key == req.key && f.view == job);
         }
-        self.serving_of(req, false).is_some()
-            || self.inflight.iter().any(|f| {
-                f.view.kind != ViewKind::Fine
-                    && self.serves(
-                        f.generation,
-                        f.key,
-                        f.view.kind,
-                        f.view.region,
-                        f.view.density(),
-                        req,
-                    )
-            })
+        let any_sharpen = want == Want::Shown
+            && req.job.kind == ViewKind::Half
+            && Some(req.key) == self.cur_key()
+            && self.in_gesture();
+        let sharpen_ok = |s: Option<Sharpening>| any_sharpen || s == req.job.sharpen;
+        self.resident.iter().any(|r| {
+            r.kind != ViewKind::Fine
+                && sharpen_ok(r.sharpen)
+                && self.serves(
+                    r.generation,
+                    (r.pos, r.source),
+                    r.kind,
+                    r.region,
+                    r.density,
+                    req,
+                )
+        }) || self.inflight.iter().any(|f| {
+            f.view.kind != ViewKind::Fine
+                && sharpen_ok(f.view.sharpen)
+                && self.serves(
+                    f.generation,
+                    f.key,
+                    f.view.kind,
+                    f.view.region,
+                    f.view.density(),
+                    req,
+                )
+        })
     }
 
     /// The jobs the plan asks for now, in order.
@@ -1287,7 +1368,7 @@ impl<S> State<S> {
             if !self.sessions.contains_key(&key) {
                 // a view whose size is known and is already served needs no session
                 if let Some(req) = self.req(key, want)
-                    && self.satisfied(&req)
+                    && self.satisfied(&req, want)
                 {
                     continue;
                 }
@@ -1299,7 +1380,7 @@ impl<S> State<S> {
             let Some(req) = self.req(key, want) else {
                 continue;
             };
-            if self.satisfied(&req) {
+            if self.satisfied(&req, want) {
                 continue;
             }
             let job = Job::Render(key, req.job);
@@ -1513,6 +1594,21 @@ impl<S> State<S> {
                 ((area as f64) * d * d * 4.0).ceil() as u64
             }
         }
+    }
+
+    /// The resident fine views of `key` in this generation whose sharpening is not `sharpen`: a
+    /// fine view of `key` with `sharpen` replaces them (ADR 0027 W3-Q4).
+    fn replaced_fine(
+        &self,
+        key: Key,
+        sharpen: Option<Sharpening>,
+    ) -> impl Iterator<Item = &Resident> + '_ {
+        self.resident.iter().filter(move |r| {
+            r.kind == ViewKind::Fine
+                && r.generation == self.generation
+                && (r.pos, r.source) == key
+                && r.sharpen != sharpen
+        })
     }
 
     fn textures_fit(&self, need: u64) -> bool {
@@ -1789,7 +1885,16 @@ impl<S> State<S> {
                         continue;
                     }
                     let bytes = self.estimate_bytes(key, view);
-                    if !self.textures_fit(bytes) {
+                    // a resident fine view of the image with another sharpening is replaced by
+                    // this one and evicted when it is accepted, so its bytes count as free (ADR
+                    // 0027 W3-Q4); the unprotected ones are already counted so by `textures_fit`
+                    let protect = self.protected_views();
+                    let replaced: u64 = self
+                        .replaced_fine(key, view.sharpen)
+                        .filter(|r| protect.contains(&r.id))
+                        .map(|r| r.bytes)
+                        .sum();
+                    if !self.textures_fit(bytes.saturating_sub(replaced)) {
                         self.stats.refused += 1;
                         self.fine_failed.insert(key);
                         continue;
@@ -1994,6 +2099,7 @@ impl<S> State<S> {
                         kind: ViewKind::Half,
                         region: view.region,
                         density_q: quantise(HALF_DENSITY),
+                        sharpen: view.sharpen,
                     };
                     if let Some(f) = self
                         .inflight
@@ -2011,6 +2117,7 @@ impl<S> State<S> {
                         kind: ViewKind::Half,
                         region: view.region,
                         density: HALF_DENSITY,
+                        sharpen: view.sharpen,
                         image,
                         hash,
                     });
@@ -2032,6 +2139,7 @@ impl<S> State<S> {
                     kind: view.kind,
                     region: view.region,
                     density,
+                    sharpen: view.sharpen,
                     image,
                     hash,
                 });
@@ -2041,7 +2149,14 @@ impl<S> State<S> {
                 // image (ADR 0027 W2-Q6). A failed LibRaw call ends the session, so it is dropped
                 // (unless it was released and is gone already); the plan opens a new one when
                 // one is needed.
-                self.remove_inflight(generation, key, view.kind, view.region, view.density());
+                self.remove_inflight(
+                    generation,
+                    key,
+                    view.kind,
+                    view.region,
+                    view.density(),
+                    view.sharpen,
+                );
                 self.stats.failures += 1;
                 self.fine_failed.insert(key);
                 if !released {
@@ -2049,7 +2164,14 @@ impl<S> State<S> {
                 }
             }
             Err(e) => {
-                self.remove_inflight(generation, key, view.kind, view.region, view.density());
+                self.remove_inflight(
+                    generation,
+                    key,
+                    view.kind,
+                    view.region,
+                    view.density(),
+                    view.sharpen,
+                );
                 self.stats.failures += 1;
                 self.failed.insert(key, e);
             }
@@ -2166,9 +2288,10 @@ impl<S> State<S> {
         }
     }
 
-    /// Removes the in-flight view of `kind` over `region`. Two reduced (or fine) views of one
-    /// image differ only by their density, so for them it must match too (`density` as the view
-    /// has it).
+    /// Removes the in-flight view of `kind` over `region` with `sharpen`. Two reduced (or fine)
+    /// views of one image differ only by their density, so for them it must match too
+    /// (`density` as the view has it); two views that differ only by their sharpening can be in
+    /// flight after a quick toggle (ADR 0027 W3).
     fn remove_inflight(
         &mut self,
         generation: u64,
@@ -2176,12 +2299,14 @@ impl<S> State<S> {
         kind: ViewKind,
         region: Rect,
         density: f64,
+        sharpen: Option<Sharpening>,
     ) {
         if let Some(i) = self.inflight.iter().position(|f| {
             f.generation == generation
                 && f.key == key
                 && f.view.kind == kind
                 && f.view.region == region
+                && f.view.sharpen == sharpen
                 && (!matches!(kind, ViewKind::Reduced | ViewKind::Fine)
                     || same_reduction(region, density, f.view))
         }) {
@@ -2196,7 +2321,14 @@ impl<S> State<S> {
     /// not of the current image). Evicted ids go to [`State::take_dropped`].
     pub fn accept(&mut self, out: &ViewOut, bytes: u64) -> Option<u64> {
         let key = (out.pos, out.source);
-        self.remove_inflight(out.generation, key, out.kind, out.region, out.density);
+        self.remove_inflight(
+            out.generation,
+            key,
+            out.kind,
+            out.region,
+            out.density,
+            out.sharpen,
+        );
         if out.generation != self.generation {
             self.stats.discarded += 1;
             return None;
@@ -2219,7 +2351,16 @@ impl<S> State<S> {
                 return None;
             }
         }
-        let protect = self.protected_views();
+        let mut protect = self.protected_views();
+        if out.kind == ViewKind::Fine && out.sharpen == self.sharpening {
+            // it replaces the image's fine view of another sharpening, which may be evicted for
+            // it although it is drawn (ADR 0027 W3-Q4; counted as free when it was planned); a
+            // late result of an old sharpening never evicts the wanted one
+            let replaced: Vec<u64> = self.replaced_fine(key, out.sharpen).map(|r| r.id).collect();
+            for id in replaced {
+                protect.remove(&id);
+            }
+        }
         while self.texture_bytes + bytes > self.config.texture_budget {
             let victim = self
                 .resident
@@ -2249,6 +2390,7 @@ impl<S> State<S> {
             kind: out.kind,
             region: out.region,
             density: out.density,
+            sharpen: out.sharpen,
             bytes,
             used: self.tick,
             hash: out.hash,
@@ -2264,7 +2406,14 @@ impl<S> State<S> {
     /// image, and no error is shown (ADR 0027 W2-Q6).
     pub fn reject(&mut self, out: &ViewOut, reason: &str) {
         let key = (out.pos, out.source);
-        self.remove_inflight(out.generation, key, out.kind, out.region, out.density);
+        self.remove_inflight(
+            out.generation,
+            key,
+            out.kind,
+            out.region,
+            out.density,
+            out.sharpen,
+        );
         self.stats.discarded += 1;
         if out.generation == self.generation {
             if out.kind == ViewKind::Fine {
@@ -2319,6 +2468,7 @@ impl<S> State<S> {
                 FocusState::NotWanted
             },
             fine: FineState::Off,
+            sharpen: SharpenState::Off,
         };
         let Some(key) = key else {
             self.last_draw = None;
@@ -2331,6 +2481,13 @@ impl<S> State<S> {
             frame.status = Status::Error(e.clone());
             if self.fine_details {
                 frame.fine = FineState::Paused(FinePause::Failed);
+            }
+            if self.sharpening.is_some() {
+                frame.sharpen = if self.sharpen_paused(key) {
+                    SharpenState::Paused
+                } else {
+                    SharpenState::Waiting
+                };
             }
             self.last_draw = None;
             self.last_vis = None;
@@ -2396,7 +2553,50 @@ impl<S> State<S> {
             frame.focus = self.focus_state(key, frame.draw);
         }
         frame.fine = self.fine_state(key, &frame);
+        frame.sharpen = self.sharpen_state(key, &frame);
         frame
+    }
+
+    /// Whether sharpening is paused for `key`: its scale is 100 % or more, by the rule
+    /// [`State::req`] uses to choose the 100 % view (ADR 0027 A-Q8).
+    fn sharpen_paused(&self, key: Key) -> bool {
+        self.scale_of(key).is_some_and(|s| s >= 1.0 - EPS)
+    }
+
+    /// The state of sharpening for the current image `key`, which can be shown, in `frame` (ADR
+    /// 0027 W3): off, then paused, then waiting during a gesture, then shown, else waiting.
+    fn sharpen_state(&self, key: Key, frame: &Frame) -> SharpenState {
+        let drawn = frame
+            .draw
+            .and_then(|d| self.resident.iter().find(|r| r.id == d.id));
+        let Some(sharpening) = self.sharpening else {
+            // the mark stays while a sharpened picture of this image is still drawn after turning
+            // it off; another image's view kept on screen meanwhile does not count
+            return if drawn.is_some_and(|r| {
+                r.sharpen.is_some() && r.generation == self.generation && (r.pos, r.source) == key
+            }) {
+                SharpenState::Waiting
+            } else {
+                SharpenState::Off
+            };
+        };
+        if self.sharpen_paused(key) {
+            return SharpenState::Paused;
+        }
+        if self.in_gesture() {
+            return SharpenState::Waiting;
+        }
+        let shown = frame.status == Status::Ready
+            && drawn.is_some_and(|r| {
+                r.generation == self.generation
+                    && (r.pos, r.source) == key
+                    && r.sharpen == Some(sharpening)
+            });
+        if shown {
+            SharpenState::Shown
+        } else {
+            SharpenState::Waiting
+        }
     }
 
     /// The state of fine details for the current image `key`, which can be shown, in `frame`
@@ -2694,6 +2894,7 @@ mod tests {
             kind: ViewKind::Half,
             region: Rect::new(0, 0, 1, 1),
             density_q: 500_000,
+            sharpen: None,
         });
         let density = match job.kind {
             ViewKind::Half => HALF_DENSITY,
@@ -2707,6 +2908,7 @@ mod tests {
             kind: job.kind,
             region: job.region,
             density,
+            sharpen: job.sharpen,
             image: Rgb {
                 width: 1,
                 height: 1,
@@ -2716,12 +2918,22 @@ mod tests {
         }
     }
 
-    /// The half-size view of image `pos` (asked for during a zoom gesture below 50 %).
+    /// [`out`] with the sharpening `sharpen` instead of the one the plan asks for.
+    fn out_with(s: &State<u32>, pos: usize, want: Want, sharpen: Option<Sharpening>) -> ViewOut {
+        ViewOut {
+            sharpen,
+            ..out(s, pos, want)
+        }
+    }
+
+    /// The half-size view of image `pos` (asked for during a zoom gesture below 50 %), with the
+    /// current sharpening.
     fn half_out(s: &State<u32>, pos: usize) -> ViewOut {
         ViewOut {
             kind: ViewKind::Half,
             region: geometry::whole(SIZE),
             density: HALF_DENSITY,
+            sharpen: s.sharpening,
             ..out(s, pos, Want::Fit)
         }
     }
@@ -2858,6 +3070,7 @@ mod tests {
             kind: ViewKind::Reduced,
             region: geometry::whole(SIZE),
             density_q,
+            sharpen: None,
         }
     }
 
@@ -2867,6 +3080,7 @@ mod tests {
             kind: ViewKind::Half,
             region: geometry::whole(SIZE),
             density_q: 500_000,
+            sharpen: None,
         }
     }
 
@@ -3410,6 +3624,7 @@ mod tests {
             kind: o.kind,
             region: o.region,
             density_q: quantise(o.density),
+            sharpen: o.sharpen,
         }
     }
 
@@ -5625,6 +5840,7 @@ mod tests {
                     kind: ViewKind::Zoom,
                     region,
                     density_q: 1_000_000,
+                    sharpen: None,
                 }
             )
         );
@@ -5638,6 +5854,7 @@ mod tests {
             kind: ViewKind::Fine,
             region: geometry::whole(SIZE),
             density_q,
+            sharpen: None,
         }
     }
 
@@ -6021,6 +6238,472 @@ mod tests {
             }
         }
         assert!(opened, "the background worker opens it for the fine view");
+    }
+
+    // ---------- sharpening (ADR 0027 W3, T316) ----------
+
+    const SHARP: Sharpening = Sharpening::DEFAULT;
+
+    /// `job` sharpened with `s`.
+    fn sharpened(job: JobView, s: Sharpening) -> JobView {
+        JobView {
+            sharpen: Some(s),
+            ..job
+        }
+    }
+
+    /// The shown job of image 10 at `zoom`.
+    fn shown_job(s: &mut State<u32>, zoom: Zoom) -> Option<JobView> {
+        s.zoom = zoom;
+        s.req(k(10), Want::Shown).map(|r| r.job)
+    }
+
+    fn renders_of(s: &State<u32>, pos: usize) -> Vec<JobView> {
+        s.plan()
+            .into_iter()
+            .filter_map(|j| match j {
+                Job::Render(key, v) if key == k(pos) => Some(v),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Image 10 opened with its 100 % view and ring resident (unsharpened, as at 100 % always).
+    fn with_full_size_views(s: &mut State<u32>) {
+        with_session(s, 10);
+        assert!(s.accept(&out(s, 10, Want::Target), 100).is_some());
+        assert!(s.accept(&out(s, 10, Want::Ring), 100).is_some());
+    }
+
+    #[test]
+    fn with_sharpening_off_no_job_of_the_plan_is_sharpened() {
+        for zoom in [
+            Zoom::Fit,
+            Zoom::Scale(0.5),
+            Zoom::Scale(0.75),
+            Zoom::Scale(1.0),
+        ] {
+            let mut s = state(1024);
+            for pos in [9, 10, 11, 12] {
+                with_session(&mut s, pos);
+            }
+            s.zoom = zoom;
+            let jobs = s.plan();
+            assert!(
+                jobs.iter().any(|j| matches!(j, Job::Render(..))),
+                "{zoom:?}"
+            );
+            assert!(
+                jobs.iter()
+                    .all(|j| !matches!(j, Job::Render(_, v) if v.sharpen.is_some())),
+                "{zoom:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn with_sharpening_on_every_view_below_100_percent_is_sharpened() {
+        for mode in [Source::Raw, Source::Jpeg] {
+            let mut s = state(1024);
+            s.set_mode(mode);
+            let key = (10, mode);
+            s.sizes.insert(key, SIZE);
+            assert!(s.set_sharpening(Some(SHARP)));
+            let shown = |s: &mut State<u32>, zoom: Zoom| {
+                s.zoom = zoom;
+                s.req(key, Want::Shown).map(|r| (r.job.kind, r.job.sharpen))
+            };
+            let on = Some(SHARP);
+            assert_eq!(
+                shown(&mut s, Zoom::Fit),
+                Some((ViewKind::Reduced, on)),
+                "{mode:?}"
+            );
+            assert_eq!(
+                shown(&mut s, Zoom::Scale(0.5)),
+                Some((ViewKind::Half, on)),
+                "{mode:?}"
+            );
+            assert_eq!(
+                shown(&mut s, Zoom::Scale(0.75)),
+                Some((ViewKind::Scaled, on)),
+                "{mode:?}"
+            );
+            assert_eq!(
+                shown(&mut s, Zoom::Scale(1.0)),
+                Some((ViewKind::Zoom, None)),
+                "{mode:?}"
+            );
+            assert_eq!(
+                s.req(key, Want::Ring).map(|r| (r.job.kind, r.job.sharpen)),
+                Some((ViewKind::Ring, None)),
+                "{mode:?}"
+            );
+        }
+        // a neighbour's prefetched view at fit
+        let mut s = state(1024);
+        with_session(&mut s, 11);
+        s.set_sharpening(Some(SHARP));
+        assert!(
+            renders_of(&s, 11).contains(&sharpened(reduced_job(250_000), SHARP)),
+            "{:?}",
+            renders_of(&s, 11)
+        );
+    }
+
+    #[test]
+    fn during_a_zoom_gesture_a_half_size_view_of_either_sharpening_serves() {
+        let mut s = state(1024);
+        with_session(&mut s, 10);
+        s.set_sharpening(Some(SHARP));
+        s.set_zoom(Zoom::Scale(0.3), None, true);
+        assert_eq!(
+            s.req(k(10), Want::Shown).map(|r| r.job),
+            Some(sharpened(half_job(), SHARP))
+        );
+        // an unsharpened half-size view is resident: no new render is planned for the gesture
+        let plain = s.accept(&out_with(&s, 10, Want::Shown, None), 100);
+        assert!(plain.is_some());
+        assert!(renders_of(&s, 10).is_empty(), "{:?}", s.plan());
+        let f = s.frame(VIEW);
+        assert_eq!(f.draw.map(|d| d.id), plain);
+        assert_eq!(f.sharpen, SharpenState::Waiting);
+    }
+
+    #[test]
+    fn an_unreducible_half_size_render_is_the_sharpened_half_size_view() {
+        let mut s = state(1024);
+        with_session(&mut s, 10);
+        s.set_sharpening(Some(SHARP));
+        let (generation, key, view, session) = match s.pick(true) {
+            Some(Task::Render {
+                generation,
+                key,
+                view,
+                session,
+            }) => (generation, key, view, session),
+            other => panic!("expected a render, got {other:?}"),
+        };
+        assert_eq!(view, sharpened(reduced_job(250_000), SHARP));
+        let small = Rgb {
+            width: 700,
+            height: 500,
+            data: vec![0; 700 * 500 * 3],
+        };
+        s.finish_render(generation, key, view, session, Ok(small), 1.0);
+        assert_eq!(
+            s.inflight.iter().map(|f| f.view).collect::<Vec<_>>(),
+            vec![sharpened(half_job(), SHARP)]
+        );
+        let outs = std::mem::take(&mut s.outbox);
+        assert_eq!(outs.len(), 1);
+        assert_eq!(outs[0].kind, ViewKind::Half);
+        assert_eq!(outs[0].sharpen, Some(SHARP));
+        assert!(s.accept(&outs[0], 100).is_some());
+        assert!(s.inflight.is_empty());
+        assert_eq!(
+            s.req(k(10), Want::Shown).map(|r| r.job),
+            Some(sharpened(half_job(), SHARP))
+        );
+        assert!(!s.plan().iter().any(|j| matches!(
+            j,
+            Job::Render(key, v) if *key == k(10) && matches!(v.kind, ViewKind::Half | ViewKind::Reduced)
+        )));
+        let f = s.frame(VIEW);
+        assert_eq!(f.status, Status::Ready);
+        assert_eq!(f.sharpen, SharpenState::Shown);
+    }
+
+    #[test]
+    fn set_sharpening_holds_a_valid_value_and_reports_a_change() {
+        let mut s = state(1024);
+        assert_eq!(s.sharpening, None);
+        let bad = Sharpening {
+            amount: 1000,
+            radius_tenths: 0,
+            threshold: 99,
+        };
+        assert!(s.set_sharpening(Some(bad)));
+        assert_eq!(s.sharpening, Some(bad.clamped()));
+        assert!(s.sharpening.is_some_and(Sharpening::is_valid));
+        assert!(!s.set_sharpening(Some(bad)));
+        assert!(!s.set_sharpening(Some(bad.clamped())));
+        assert!(s.set_sharpening(None));
+        assert!(!s.set_sharpening(None));
+    }
+
+    #[test]
+    fn turning_sharpening_on_keeps_the_drawn_view_until_the_sharpened_one_is_accepted() {
+        let mut s = state(1024);
+        with_session(&mut s, 10);
+        let plain = s.accept(&out(&s, 10, Want::Shown), 100);
+        assert!(plain.is_some());
+        assert_eq!(s.frame(VIEW).sharpen, SharpenState::Off);
+        s.set_sharpening(Some(SHARP));
+        let f = s.frame(VIEW);
+        assert_eq!(f.status, Status::Ready);
+        assert_eq!(f.draw.map(|d| d.id), plain);
+        assert_eq!(f.sharpen, SharpenState::Waiting);
+        assert!(
+            s.plan()
+                .contains(&Job::Render(k(10), sharpened(reduced_job(250_000), SHARP)))
+        );
+        let sharp = s.accept(&out(&s, 10, Want::Shown), 100);
+        assert!(sharp.is_some());
+        assert_ne!(sharp, plain);
+        let f = s.frame(VIEW);
+        assert_eq!(f.draw.map(|d| d.id), sharp);
+        assert_eq!(f.sharpen, SharpenState::Shown);
+    }
+
+    #[test]
+    fn turning_sharpening_off_with_both_views_resident_draws_the_unsharpened_one_at_once() {
+        let mut s = state(1024);
+        with_full_size_views(&mut s);
+        let plain = s.accept(&out(&s, 10, Want::Shown), 100);
+        s.set_sharpening(Some(SHARP));
+        let sharp = s.accept(&out(&s, 10, Want::Shown), 100);
+        let f = s.frame(VIEW);
+        assert_eq!(f.draw.map(|d| d.id), sharp);
+        assert_eq!(f.sharpen, SharpenState::Shown);
+        s.set_sharpening(None);
+        let f = s.frame(VIEW);
+        assert_eq!(f.status, Status::Ready);
+        assert_eq!(f.draw.map(|d| d.id), plain);
+        assert_eq!(f.sharpen, SharpenState::Off);
+        assert!(
+            !s.plan().iter().any(|j| matches!(j, Job::Render(..))),
+            "{:?}",
+            s.plan()
+        );
+    }
+
+    #[test]
+    fn changing_a_value_plans_new_sharpened_views_and_the_same_value_plans_nothing() {
+        let mut s = state(1024);
+        with_full_size_views(&mut s);
+        s.set_sharpening(Some(SHARP));
+        assert!(s.accept(&out(&s, 10, Want::Shown), 100).is_some());
+        assert!(renders_of(&s, 10).is_empty(), "{:?}", s.plan());
+        let other = Sharpening {
+            amount: SHARP.amount + 50,
+            ..SHARP
+        };
+        assert!(s.set_sharpening(Some(other)));
+        assert_eq!(
+            renders_of(&s, 10),
+            vec![sharpened(reduced_job(250_000), other)]
+        );
+        assert!(s.accept(&out(&s, 10, Want::Shown), 100).is_some());
+        assert!(renders_of(&s, 10).is_empty());
+        assert!(!s.set_sharpening(Some(other)));
+        assert!(renders_of(&s, 10).is_empty());
+    }
+
+    #[test]
+    fn at_100_percent_sharpening_is_paused_and_below_it_applies_again() {
+        let mut s = state(1024);
+        with_session(&mut s, 10);
+        s.set_sharpening(Some(SHARP));
+        s.zoom = Zoom::Scale(1.0);
+        assert_eq!(s.frame(VIEW).sharpen, SharpenState::Paused);
+        // back below 100 %: applied again, with no key
+        assert_eq!(
+            shown_job(&mut s, Zoom::Scale(0.75)).map(|j| (j.kind, j.sharpen)),
+            Some((ViewKind::Scaled, Some(SHARP)))
+        );
+        assert!(s.accept(&out(&s, 10, Want::Shown), 100).is_some());
+        assert_eq!(s.frame(VIEW).sharpen, SharpenState::Shown);
+        // the rule `req` uses to choose the 100 % view, at both sides of it
+        assert_eq!(
+            shown_job(&mut s, Zoom::Scale(1.0 - EPS / 2.0)).map(|j| (j.kind, j.sharpen)),
+            Some((ViewKind::Zoom, None))
+        );
+        assert_eq!(s.frame(VIEW).sharpen, SharpenState::Paused);
+        assert_eq!(
+            shown_job(&mut s, Zoom::Scale(1.0 - 2.0 * EPS)).map(|j| (j.kind, j.sharpen)),
+            Some((ViewKind::Scaled, Some(SHARP)))
+        );
+        assert_ne!(s.frame(VIEW).sharpen, SharpenState::Paused);
+    }
+
+    #[test]
+    fn turning_sharpening_off_while_only_a_sharpened_view_is_resident_waits() {
+        let mut s = state(1024);
+        with_session(&mut s, 10);
+        s.set_sharpening(Some(SHARP));
+        let sharp = s.accept(&out(&s, 10, Want::Shown), 100);
+        assert_eq!(s.frame(VIEW).sharpen, SharpenState::Shown);
+        s.set_sharpening(None);
+        let f = s.frame(VIEW);
+        assert_eq!(f.draw.map(|d| d.id), sharp);
+        assert_eq!(f.sharpen, SharpenState::Waiting);
+        assert!(s.plan().contains(&Job::Render(k(10), reduced_job(250_000))));
+        let plain = s.accept(&out(&s, 10, Want::Shown), 100);
+        let f = s.frame(VIEW);
+        assert_eq!(f.draw.map(|d| d.id), plain);
+        assert_eq!(f.sharpen, SharpenState::Off);
+    }
+
+    #[test]
+    fn with_fine_details_on_a_tight_budget_does_not_refuse_the_sharpened_fine_view() {
+        // 4 MiB holds one fine view of 4000×3000 at 0.25 (3 MB), not two
+        let mut s = state(4);
+        let _ = ready_for_fine(&mut s);
+        let old = s.accept(&out(&s, 10, Want::Fine), 3_000_000);
+        assert_eq!(s.frame(VIEW).draw.map(|d| d.id), old);
+        s.set_sharpening(Some(SHARP));
+        assert!(s.accept(&out(&s, 10, Want::Shown), 100).is_some());
+        let Some((generation, key, view, session)) = pick_fine(&mut s) else {
+            panic!("the sharpened fine render was refused");
+        };
+        assert_eq!(view, sharpened(fine_job(250_000), SHARP));
+        assert!(!s.fine_failed.contains(&k(10)));
+        assert_eq!(s.frame(VIEW).fine, FineState::Shown);
+        s.finish_render(generation, key, view, session, Ok(rendered(view)), 1.0);
+        let outs: Vec<ViewOut> = std::mem::take(&mut s.outbox);
+        assert_eq!(outs.len(), 1);
+        let new = outs.first().and_then(|o| s.accept(o, 3_000_000));
+        assert!(new.is_some());
+        let Some(old) = old else {
+            panic!("the first fine view was not accepted");
+        };
+        assert!(s.take_dropped().contains(&old));
+        assert!(!s.resident.iter().any(|r| r.id == old));
+        let f = s.frame(VIEW);
+        assert_eq!(f.draw.map(|d| d.id), new);
+        assert_eq!(f.fine, FineState::Shown);
+        assert_eq!(f.sharpen, SharpenState::Shown);
+    }
+
+    #[test]
+    fn with_fine_details_on_the_fine_view_stays_drawn_until_the_sharpened_fine_view_arrives() {
+        let mut s = state(1024);
+        let _ = ready_for_fine(&mut s);
+        let old = s.accept(&out(&s, 10, Want::Fine), 100);
+        assert_eq!(s.frame(VIEW).draw.map(|d| d.id), old);
+        s.set_sharpening(Some(SHARP));
+        let f = s.frame(VIEW);
+        assert_eq!(f.draw.map(|d| d.id), old);
+        assert_eq!(f.sharpen, SharpenState::Waiting);
+        // the sharpened reduced view does not replace it
+        assert!(s.accept(&out(&s, 10, Want::Shown), 100).is_some());
+        let f = s.frame(VIEW);
+        assert_eq!(f.draw.map(|d| d.id), old);
+        assert_eq!(f.sharpen, SharpenState::Waiting);
+        let new = s.accept(&out(&s, 10, Want::Fine), 100);
+        assert!(new.is_some());
+        let f = s.frame(VIEW);
+        assert_eq!(f.draw.map(|d| d.id), new);
+        assert_eq!(f.fine, FineState::Shown);
+        assert_eq!(f.sharpen, SharpenState::Shown);
+    }
+
+    #[test]
+    fn two_jobs_differing_only_in_sharpening_are_each_removed_as_their_own() {
+        let mut s = state(1024);
+        with_session(&mut s, 10);
+        let render = |s: &mut State<u32>| match s.pick(true) {
+            Some(Task::Render {
+                generation,
+                key,
+                view,
+                session,
+            }) => {
+                s.finish_render(generation, key, view, session, Ok(rendered(view)), 1.0);
+                std::mem::take(&mut s.outbox)
+            }
+            other => panic!("expected a render, got {other:?}"),
+        };
+        let plain = render(&mut s);
+        s.set_sharpening(Some(SHARP));
+        let sharp = render(&mut s);
+        let (Some(plain), Some(sharp)) = (plain.first(), sharp.first()) else {
+            panic!("no views");
+        };
+        assert_eq!(plain.sharpen, None);
+        assert_eq!(sharp.sharpen, Some(SHARP));
+        assert_eq!(s.inflight.len(), 2);
+        assert!(s.accept(sharp, 100).is_some());
+        assert_eq!(
+            s.inflight.iter().map(|f| f.view).collect::<Vec<_>>(),
+            vec![reduced_job(250_000)]
+        );
+        assert!(s.accept(plain, 100).is_some());
+        assert!(s.inflight.is_empty());
+    }
+
+    #[test]
+    fn when_the_sharpened_fine_render_fails_the_sharpened_reduced_view_is_drawn() {
+        let mut s = state(1024);
+        let _ = ready_for_fine(&mut s);
+        let old = s.accept(&out(&s, 10, Want::Fine), 100);
+        assert_eq!(s.frame(VIEW).draw.map(|d| d.id), old);
+        s.set_sharpening(Some(SHARP));
+        let sharp = s.accept(&out(&s, 10, Want::Shown), 100);
+        assert!(sharp.is_some());
+        let Some((generation, key, view, session)) = pick_fine(&mut s) else {
+            panic!("no fine render");
+        };
+        assert_eq!(view, sharpened(fine_job(250_000), SHARP));
+        s.finish_render(
+            generation,
+            key,
+            view,
+            session,
+            Err(DecodeError::new("render failed")),
+            1.0,
+        );
+        let f = s.frame(VIEW);
+        assert_eq!(f.status, Status::Ready);
+        assert_eq!(f.draw.map(|d| d.id), sharp);
+        assert_eq!(f.fine, FineState::Paused(FinePause::Failed));
+        assert_eq!(f.sharpen, SharpenState::Shown);
+    }
+
+    #[test]
+    fn a_late_fine_result_of_an_old_sharpening_does_not_evict_the_wanted_fine_view() {
+        // 4 MiB holds one fine view of 4000×3000 at 0.25 (3 MB), not two
+        let mut s = state(4);
+        let _ = ready_for_fine(&mut s);
+        let old = s.accept(&out(&s, 10, Want::Fine), 3_000_000);
+        assert_eq!(s.frame(VIEW).draw.map(|d| d.id), old);
+        s.set_sharpening(Some(SHARP));
+        assert!(s.accept(&out(&s, 10, Want::Shown), 100).is_some());
+        let Some((generation, key, view, session)) = pick_fine(&mut s) else {
+            panic!("no fine render");
+        };
+        assert_eq!(view.sharpen, Some(SHARP));
+        // turned on and off again while it runs
+        s.set_sharpening(None);
+        s.finish_render(generation, key, view, session, Ok(rendered(view)), 1.0);
+        let outs: Vec<ViewOut> = std::mem::take(&mut s.outbox);
+        assert_eq!(outs.len(), 1);
+        let _ = outs.first().and_then(|o| s.accept(o, 3_000_000));
+        let Some(old) = old else {
+            panic!("the first fine view was not accepted");
+        };
+        assert!(!s.take_dropped().contains(&old));
+        assert!(s.resident.iter().any(|r| r.id == old));
+        let f = s.frame(VIEW);
+        assert_eq!(f.draw.map(|d| d.id), Some(old));
+        assert_eq!(f.sharpen, SharpenState::Off);
+    }
+
+    #[test]
+    fn another_images_sharpened_view_kept_on_screen_does_not_make_the_mark_wait() {
+        let mut s = state(1024);
+        with_session(&mut s, 10);
+        s.set_sharpening(Some(SHARP));
+        let sharp = s.accept(&out(&s, 10, Want::Shown), 100);
+        assert_eq!(s.frame(VIEW).sharpen, SharpenState::Shown);
+        s.set_sharpening(None);
+        // image 11 has no view yet: image 10's view stays on the screen (V2)
+        s.go(11);
+        let f = s.frame(VIEW);
+        assert!(matches!(f.status, Status::Preparing { .. }));
+        assert_eq!(f.draw.map(|d| d.id), sharp);
+        assert_eq!(f.sharpen, SharpenState::Off);
     }
 
     #[test]

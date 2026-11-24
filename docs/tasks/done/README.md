@@ -323,3 +323,4 @@ was when the task was done, so "this file", "below" and "the Log" in T1–T115 m
 | [T314](T314-fine-details-key-and-mark.md) | ADR 0027 W2: the key, the menu item and the mark of fine details (pw-loupe) |
 | [T315](T315-sharpening-function.md) | ADR 0027 W3: the sharpening function and its timing (pw-viewcore) |
 | [T319](T319-sharpening-speed.md) | ADR 0027 W3: the sharpening's two blur passes made faster (pw-viewcore) |
+| [T316](T316-sharpening-in-the-core.md) | ADR 0027 W3: sharpening in the view core (pw-viewcore) |

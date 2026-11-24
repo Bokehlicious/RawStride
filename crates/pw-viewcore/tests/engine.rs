@@ -420,6 +420,40 @@ fn a_plain_jpeg_file_is_shown_in_raw_mode_too() {
     assert_eq!((f.mode, f.source), (Source::Raw, Source::Jpeg));
 }
 
+// ---------- sharpening (ADR 0027 W3, T316) ----------
+
+use pw_viewcore::{SharpenState, Sharpening};
+
+/// The fit view of a 4000×3000 RAW image as the core makes it with `sharpening`, once the frame
+/// shows it in `state`.
+fn fit_view(sharpening: Option<Sharpening>, state: SharpenState) -> ViewOut {
+    let core = start(Fake::default(), Config::default());
+    core.set_sharpening(sharpening);
+    core.open_folder(files(&["a"]));
+    let mut screen = Screen::new(&core);
+    let f = screen.until(WAIT, |f| ready(f) && f.sharpen == state);
+    assert_eq!(f.status, Status::Ready);
+    assert_eq!(f.sharpen, state);
+    let d = f.draw.unwrap_or_else(|| panic!("nothing drawn"));
+    screen.textures[&d.id].clone()
+}
+
+#[test]
+fn the_fit_view_made_with_sharpening_on_is_sharpened() {
+    let s = Sharpening::DEFAULT;
+    let sharp = fit_view(Some(s), SharpenState::Shown);
+    let plain = fit_view(None, SharpenState::Off);
+    assert_eq!(sharp.kind, ViewKind::Reduced);
+    assert_eq!(plain.kind, ViewKind::Reduced);
+    assert_eq!(sharp.sharpen, Some(s));
+    assert_eq!(plain.sharpen, None);
+    assert_eq!(
+        (sharp.image.width, sharp.image.height),
+        (plain.image.width, plain.image.height)
+    );
+    assert_ne!(sharp.image.data, plain.image.data);
+}
+
 // ---------- statistics (ADR 0017 §2.6, U7-Q6, T142) ----------
 
 use pw_viewcore::{ImageStatistics, Statistics, StatisticsOrigin};

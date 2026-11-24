@@ -282,6 +282,7 @@ mod tests {
             clipping: pw_viewcore::ClippingState::NotWanted,
             focus: pw_viewcore::FocusState::NotWanted,
             fine: pw_viewcore::FineState::Off,
+            sharpen: pw_viewcore::SharpenState::Off,
         }
     }
 
@@ -447,6 +448,7 @@ mod tests {
             clipping: pw_viewcore::ClippingState::NotWanted,
             focus: pw_viewcore::FocusState::NotWanted,
             fine: pw_viewcore::FineState::Off,
+            sharpen: pw_viewcore::SharpenState::Off,
         }
     }
 
