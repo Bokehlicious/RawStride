@@ -413,6 +413,10 @@ pub mod image_area {
     /// Text drawn on the background or a cell (file names, "ingen förhandsvisning", the loupe's
     /// centre texts).
     pub const TEXT: Color32 = Color32::from_gray(0xbe);
+    /// A dimmed text on the dark plate of the preview's row of adjustment marks (a paused
+    /// adjustment; ADR 0027 W2-Q5, T314). The theme's `weak_text` is too dark on the black plate
+    /// in the Light theme.
+    pub const WEAK_TEXT: Color32 = Color32::from_gray(0x80);
     /// The frame of a marked cell (ADR 0014 §5.1: the label blue, the dark theme's accent).
     pub const MARKED: Color32 = Color32::from_rgb(0x4c, 0x8d, 0xff);
     /// The disc of a button on a thumbnail (ADR 0017 §2.8, U15-Q6, T245): black at about 55 %
@@ -581,6 +585,13 @@ pub fn text_pairs(theme: Theme) -> Vec<(&'static str, Color32, Color32)> {
             "text on a thumbnail cell",
             image_area::TEXT,
             image_area::CELL,
+        ),
+        // The dimmed mark on the plate of the preview's row of adjustment marks (T314): the plate
+        // is black at about two thirds over the image, so the text is held against black.
+        (
+            "weak text of a mark on its plate",
+            image_area::WEAK_TEXT,
+            Color32::BLACK,
         ),
     ]);
     pairs
@@ -770,6 +781,10 @@ pub enum Command {
     /// The preview's focus marking, the edges of high local contrast marked in green on the
     /// image, on ↔ off (View ▸ Show Focus Marking, E; ADR 0017 §2.6, U9-Q1, T168).
     FocusMarking,
+    /// Fine details on ↔ off: below 50 %, the RAW view is made from the full-resolution
+    /// rendering (View ▸ Show Fine Details, D; ADR 0027 §3.1, W2-Q4, T314). Not a setting: it
+    /// lasts for the session.
+    FineDetails,
     /// The compare open ↔ closed: two images in the preview, the held image beside or above the
     /// current one (View ▸ Compare, C; ADR 0017 §2.2, U6-Q4, U6-Q11, T153).
     Compare,
@@ -836,6 +851,7 @@ impl Command {
             | Self::ClipHighlights
             | Self::ClipShadows
             | Self::FocusMarking
+            | Self::FineDetails
             | Self::Compare
             | Self::HoldImage
             | Self::SwapImages
@@ -1038,6 +1054,7 @@ pub const MENUS: &[Menu] = &[
             item(Command::ClipHighlights, plain(Key::J)),
             item(Command::ClipShadows, shift(Key::J)),
             item(Command::FocusMarking, plain(Key::E)),
+            item(Command::FineDetails, plain(Key::D)),
             item(Command::Compare, plain(Key::C)),
             item(Command::HoldImage, plain(Key::K)),
             item(Command::SwapImages, shift(Key::K)),
@@ -2064,8 +2081,9 @@ mod tests {
                 );
             }
         }
-        // In the View menu, right after the last zoom item; then the compare's five in their
-        // order (Lock Zoom and Position after Above and Below, T154), before the next separator.
+        // In the View menu, right after the last zoom item, with Show Fine Details (D) right
+        // after Show Focus Marking (T314); then the compare's five in their order (Lock Zoom and
+        // Position after Above and Below, T154), before the next separator.
         let Some(view) = MENUS.iter().find(|menu| menu.kind == MenuKind::View) else {
             panic!("there is a View menu");
         };
@@ -2077,12 +2095,13 @@ mod tests {
             panic!("the View menu has Zoom at Pointer");
         };
         assert_eq!(
-            view.entries.get(anchor + 1..anchor + 10),
+            view.entries.get(anchor + 1..anchor + 11),
             Some(
                 &[
                     item(Command::ClipHighlights, Some(j)),
                     item(Command::ClipShadows, Some(shift_j)),
                     item(Command::FocusMarking, Some(KeyChord { key: Key::E, ..j })),
+                    item(Command::FineDetails, Some(KeyChord { key: Key::D, ..j })),
                     item(Command::Compare, Some(c)),
                     item(Command::HoldImage, Some(k)),
                     item(Command::SwapImages, Some(shift_k)),
@@ -2136,6 +2155,57 @@ mod tests {
             view.entries.get(shadows + 1),
             Some(&item(Command::FocusMarking, Some(e)))
         );
+    }
+
+    /// View ▸ Show Fine Details (D) comes right after Show Focus Marking, acts in the preview, and
+    /// no other item has the key D (ADR 0027 W2-Q4, T314).
+    #[test]
+    fn the_fine_details_command_has_d_right_after_show_focus_marking() {
+        let d = KeyChord {
+            key: Key::D,
+            ctrl: false,
+            shift: false,
+            alt: false,
+        };
+        assert_eq!(plain(Key::D), Some(d));
+        let items = menu_items();
+        for item in &items {
+            if item.key.is_some_and(|chord| chord.key == Key::D) {
+                assert_eq!(
+                    item.command,
+                    Command::FineDetails,
+                    "{:?} has D",
+                    item.command
+                );
+            }
+        }
+        assert_eq!(Command::FineDetails.acts_in(), Where::Loupe);
+        let Some(view) = MENUS.iter().find(|menu| menu.kind == MenuKind::View) else {
+            panic!("there is a View menu");
+        };
+        let Some(focus) = view
+            .entries
+            .iter()
+            .position(|entry| *entry == item(Command::FocusMarking, plain(Key::E)))
+        else {
+            panic!("the View menu has Show Focus Marking");
+        };
+        assert_eq!(
+            view.entries.get(focus + 1),
+            Some(&item(Command::FineDetails, Some(d)))
+        );
+    }
+
+    /// The dimmed mark's colour is mid grey and is held against the black plate at 4.5:1 (T314).
+    #[test]
+    fn the_weak_mark_text_reaches_4_5_on_the_black_plate() {
+        assert_eq!(image_area::WEAK_TEXT, Color32::from_gray(0x80));
+        for theme in THEMES {
+            assert!(text_pairs(theme).iter().any(|(_, text, background)| {
+                *text == image_area::WEAK_TEXT && *background == Color32::BLACK
+            }));
+        }
+        assert!(contrast_ratio(image_area::WEAK_TEXT, Color32::BLACK) >= TEXT_CONTRAST);
     }
 
     #[test]

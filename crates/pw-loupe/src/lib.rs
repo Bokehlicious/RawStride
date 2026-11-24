@@ -150,9 +150,9 @@ pub use preview::{
     thumbnail_gate, toggle_preview_column, toggle_preview_hidden,
 };
 pub use preview_text::{
-    ClippingText, HistogramText, PreviewText, clipped_text, clipping_state_text, clipping_text,
-    clipping_text_with_key, deep_shadows_text, histogram_text, preview_text, preview_text_with_key,
-    zoom_value_text,
+    AdjustmentMark, ClippingText, HistogramText, PreviewText, adjustment_marks, clipped_text,
+    clipping_state_text, clipping_text, clipping_text_with_key, deep_shadows_text, histogram_text,
+    preview_text, preview_text_with_key, zoom_value_text,
 };
 pub use rating_text::{
     ROTATION_UNSUPPORTED_TEXT, UNSUPPORTED_TEXT, label_choice_text, label_filter_text, label_name,
@@ -503,6 +503,9 @@ pub enum PreviewKey {
     /// `E`: the focus marking (the edges of high local contrast marked on the image), on ↔ off
     /// (ADR 0017 §2.6, U9-Q1, T168).
     FocusMarking,
+    /// `D`: fine details (below 50 %, the RAW view made from the full-resolution rendering), on
+    /// ↔ off (ADR 0027 §3.1, W2-Q4, T314).
+    FineDetails,
     /// `C`: the compare open ↔ closed (ADR 0017 §2.2, U6-Q4, U6-Q11, T153).
     Compare,
     /// `K`: the current image becomes the held image of the compare (U6-Q6).
@@ -537,6 +540,7 @@ pub fn preview_key_action(
         (K::J, false, false, false) => Some(PreviewKey::ClipHighlights),
         (K::J, false, true, false) => Some(PreviewKey::ClipShadows),
         (K::E, false, false, false) => Some(PreviewKey::FocusMarking),
+        (K::D, false, false, false) => Some(PreviewKey::FineDetails),
         // The compare's keys (T153); K and Shift+K are told apart as J and Shift+J.
         (K::C, false, false, false) => Some(PreviewKey::Compare),
         (K::K, false, false, false) => Some(PreviewKey::HoldImage),
@@ -1207,6 +1211,7 @@ mod tests {
                     Some(PreviewKey::ClipHighlights) => return Some(Command::ClipHighlights),
                     Some(PreviewKey::ClipShadows) => return Some(Command::ClipShadows),
                     Some(PreviewKey::FocusMarking) => return Some(Command::FocusMarking),
+                    Some(PreviewKey::FineDetails) => return Some(Command::FineDetails),
                     Some(PreviewKey::Compare) => return Some(Command::Compare),
                     Some(PreviewKey::HoldImage) => return Some(Command::HoldImage),
                     Some(PreviewKey::SwapImages) => return Some(Command::SwapImages),
@@ -1778,6 +1783,56 @@ mod tests {
                 assert_eq!(shell_key_action(K::E, ctrl, shift, false), None);
                 assert_eq!(tab_action(K::E, ctrl, shift, false), None);
             }
+        }
+    }
+
+    /// D is the preview's fine details key (ADR 0027 W2-Q4, T314): only with no modifier, the
+    /// command Show Fine Details, nothing in the contact sheet.
+    #[test]
+    fn d_is_the_fine_details_key_of_the_preview() {
+        use egui::Key as K;
+        assert_eq!(
+            preview_key_action(K::D, false, false, false),
+            Some(PreviewKey::FineDetails)
+        );
+        let chord = KeyChord {
+            key: K::D,
+            ctrl: false,
+            shift: false,
+            alt: false,
+        };
+        assert_eq!(
+            command_of_key(chord, ViewMode::Loupe),
+            Some(Command::FineDetails)
+        );
+        assert_eq!(command_of_key(chord, ViewMode::Grid), None);
+        assert!(
+            shell::menu_items()
+                .iter()
+                .any(|item| item.command == Command::FineDetails && item.key == Some(chord))
+        );
+        // Ctrl+D, Shift+D and Alt+D are neither the preview's key nor the command.
+        for (ctrl, shift, alt) in [
+            (true, false, false),
+            (false, true, false),
+            (false, false, true),
+        ] {
+            assert_eq!(
+                preview_key_action(K::D, ctrl, shift, alt),
+                None,
+                "ctrl {ctrl} shift {shift} alt {alt}"
+            );
+            let chord = KeyChord {
+                key: K::D,
+                ctrl,
+                shift,
+                alt,
+            };
+            assert_ne!(
+                command_of_key(chord, ViewMode::Loupe),
+                Some(Command::FineDetails),
+                "ctrl {ctrl} shift {shift} alt {alt}"
+            );
         }
     }
 

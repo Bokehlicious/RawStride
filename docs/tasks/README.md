@@ -89,7 +89,7 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 |---|---|---|
 | [T312](T312-fine-view-timing.md) | ADR 0027 W2: the timing of a fine view on real files | Done |
 | [T313](T313-fine-view-in-the-core.md) | ADR 0027 W2: fine details in the view core | Done |
-| [T314](T314-fine-details-key-and-mark.md) | ADR 0027 W2: the key, the menu item and the mark of fine details | Open |
+| [T314](T314-fine-details-key-and-mark.md) | ADR 0027 W2: the key, the menu item and the mark of fine details | Done |
 
 ## Writing a task (owner and reviewer)
 

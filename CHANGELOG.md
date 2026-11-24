@@ -9,6 +9,12 @@ Downloads are on the [Releases page](https://github.com/Bokehlicious/RawStride/r
 
 ## [Unreleased]
 
+### Added
+
+- Fine details (D, View ▸ Show Fine Details): below 50 %, RAW views are made from the
+  full-resolution rendering; a "Fine" mark at the bottom right shows it is on. If D was assigned
+  to another action in your keyboard shortcuts, that action goes back to its default key.
+
 ### Changed
 
 - Views below 50 % are reduced with a sharper filter.

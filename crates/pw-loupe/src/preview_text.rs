@@ -3,9 +3,10 @@
 //! `main.rs` holds none of them. The Info section's texts are the inspector's
 //! (`inspector_text.rs`), the title line is the loupe's status line (`lib.rs`). The texts of the
 //! Histogram section (ADR 0017 §2.6, U7, T142) are here too; the inspector shows the same section
-//! with the same texts. The texts of the Clipping section (U7b, T148) are here as well.
+//! with the same texts. The texts of the Clipping section (U7b, T148) are here as well, and the
+//! marks of the preview's row of adjustment marks (ADR 0027 W2-Q5, T314).
 
-use pw_viewcore::{ClippingState, Zoom};
+use pw_viewcore::{ClippingState, FinePause, FineState, Zoom};
 
 use crate::shell::KeyChord;
 use crate::shell_text::key_text;
@@ -183,6 +184,83 @@ pub fn zoom_value_text(zoom: Zoom, scale: Option<f64>) -> String {
         (Zoom::Fit, None) => "Fit".to_owned(),
         (Zoom::Scale(scale), _) => format!("{:.0}%", scale * 100.0),
     }
+}
+
+/// One mark of the preview's row of adjustment marks (ADR 0027 §2.1, W2-Q5, T314): an
+/// adjustment that is on is always visible there.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AdjustmentMark {
+    /// The mark itself, for example "Fine".
+    pub text: String,
+    /// The adjustment is on but paused: the mark is drawn dimmed.
+    pub dimmed: bool,
+    /// The hover text: what the adjustment does, or why it is paused, with its key.
+    pub hover: String,
+}
+
+/// The marks of the row for fine details' state `fine` (ADR 0027 §3.1, W2-Q5, T314): none while
+/// it is off; otherwise one mark "Fine", dimmed while paused. `key` is the key map's key of fine
+/// details, shown in the hover text, which has no "(key)" when the action has no key. A later
+/// adjustment (USM, W3) adds its own mark to the same list.
+pub fn adjustment_marks(fine: &FineState, key: Option<KeyChord>) -> Vec<AdjustmentMark> {
+    let mut marks = Vec::new();
+    let (dimmed, hover) = match (fine, key) {
+        (FineState::Off, _) => return marks,
+        (FineState::Waiting | FineState::Shown, Some(chord)) => {
+            let key = key_text(chord);
+            (
+                false,
+                format!(
+                    "Fine details ({key}): below 50%, the RAW view is made from the \
+                     full-resolution rendering."
+                ),
+            )
+        }
+        (FineState::Waiting | FineState::Shown, None) => (
+            false,
+            "Fine details: below 50%, the RAW view is made from the full-resolution rendering."
+                .to_owned(),
+        ),
+        (FineState::Paused(FinePause::Mode), Some(chord)) => {
+            let key = key_text(chord);
+            (
+                true,
+                format!("Fine details ({key}) is paused: it applies only to RAW renderings."),
+            )
+        }
+        (FineState::Paused(FinePause::Mode), None) => (
+            true,
+            "Fine details is paused: it applies only to RAW renderings.".to_owned(),
+        ),
+        (FineState::Paused(FinePause::Zoom), Some(chord)) => {
+            let key = key_text(chord);
+            (
+                true,
+                format!("Fine details ({key}) is paused: it applies only below 50%."),
+            )
+        }
+        (FineState::Paused(FinePause::Zoom), None) => (
+            true,
+            "Fine details is paused: it applies only below 50%.".to_owned(),
+        ),
+        (FineState::Paused(FinePause::Failed), Some(chord)) => {
+            let key = key_text(chord);
+            (
+                true,
+                format!("Fine details ({key}) could not be applied to this image."),
+            )
+        }
+        (FineState::Paused(FinePause::Failed), None) => (
+            true,
+            "Fine details could not be applied to this image.".to_owned(),
+        ),
+    };
+    marks.push(AdjustmentMark {
+        text: "Fine".to_owned(),
+        dimmed,
+        hover,
+    });
+    marks
 }
 
 #[cfg(test)]
@@ -379,6 +457,66 @@ mod tests {
         assert_eq!(
             clipping_text_with_key(ClippingText::Section, Some(q)),
             "Clipping"
+        );
+    }
+
+    /// The row's marks for each state of fine details, with D and with no key (ADR 0027 W2-Q5,
+    /// T314).
+    #[test]
+    fn the_adjustment_marks_follow_fine_details() {
+        let d = KeyChord {
+            key: egui::Key::D,
+            ctrl: false,
+            shift: false,
+            alt: false,
+        };
+        for key in [Some(d), None] {
+            assert!(adjustment_marks(&FineState::Off, key).is_empty());
+        }
+        let on_d = "Fine details (D): below 50%, the RAW view is made from the full-resolution \
+                    rendering.";
+        let on =
+            "Fine details: below 50%, the RAW view is made from the full-resolution rendering.";
+        let cases = [
+            (FineState::Waiting, false, on_d, on),
+            (FineState::Shown, false, on_d, on),
+            (
+                FineState::Paused(FinePause::Mode),
+                true,
+                "Fine details (D) is paused: it applies only to RAW renderings.",
+                "Fine details is paused: it applies only to RAW renderings.",
+            ),
+            (
+                FineState::Paused(FinePause::Zoom),
+                true,
+                "Fine details (D) is paused: it applies only below 50%.",
+                "Fine details is paused: it applies only below 50%.",
+            ),
+            (
+                FineState::Paused(FinePause::Failed),
+                true,
+                "Fine details (D) could not be applied to this image.",
+                "Fine details could not be applied to this image.",
+            ),
+        ];
+        for (state, dimmed, with_key, without_key) in cases {
+            for (key, hover) in [(Some(d), with_key), (None, without_key)] {
+                assert_eq!(
+                    adjustment_marks(&state, key),
+                    vec![AdjustmentMark {
+                        text: "Fine".to_owned(),
+                        dimmed,
+                        hover: hover.to_owned(),
+                    }],
+                    "{state:?} {key:?}"
+                );
+            }
+        }
+        // The default key map's key is D.
+        let map = crate::keymap::KeyMap::default();
+        assert_eq!(
+            map.first_key(crate::keymap::KeyAction::FineDetails),
+            Some(d)
         );
     }
 }

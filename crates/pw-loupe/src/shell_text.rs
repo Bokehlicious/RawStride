@@ -583,6 +583,7 @@ pub fn command_text(command: Command) -> String {
         Command::ClipHighlights => "Show Clipped Highlights".to_owned(),
         Command::ClipShadows => "Show Deep Shadows".to_owned(),
         Command::FocusMarking => "Show Focus Marking".to_owned(),
+        Command::FineDetails => "Show Fine Details".to_owned(),
         Command::Compare => "Compare".to_owned(),
         Command::HoldImage => "Hold Current Image".to_owned(),
         Command::SwapImages => "Swap Images".to_owned(),
@@ -751,6 +752,7 @@ mod tests {
                 "Show Clipped Highlights",
                 "Show Deep Shadows",
                 "Show Focus Marking",
+                "Show Fine Details",
                 "Compare",
                 "Hold Current Image",
                 "Swap Images",
@@ -819,6 +821,7 @@ mod tests {
             Some("J"),
             Some("Shift+J"),
             Some("E"),
+            Some("D"),
             Some("C"),
             Some("K"),
             Some("Shift+K"),
@@ -951,6 +954,18 @@ mod tests {
             .and_then(|item| item.key)
             .map(key_text);
         assert_eq!(key.as_deref(), Some("E"));
+    }
+
+    /// Fine details' menu item (ADR 0027 W2-Q4, T314).
+    #[test]
+    fn the_fine_details_menu_item_and_its_key() {
+        assert_eq!(command_text(Command::FineDetails), "Show Fine Details");
+        let key = menu_items()
+            .into_iter()
+            .find(|item| item.command == Command::FineDetails)
+            .and_then(|item| item.key)
+            .map(key_text);
+        assert_eq!(key.as_deref(), Some("D"));
     }
 
     /// The compare's menu items (ADR 0017 U6-Q12, T153, T154).

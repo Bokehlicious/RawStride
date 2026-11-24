@@ -97,6 +97,7 @@ pub enum KeyAction {
     ClippedHighlights,
     DeepShadows,
     FocusMarking,
+    FineDetails,
     Compare,
     HoldImage,
     SwapImages,
@@ -149,7 +150,7 @@ const fn with_alt(key: Key) -> Option<KeyChord> {
 
 impl KeyAction {
     /// Every action, in the order the Settings page lists them (T281) and `keys.txt` writes them.
-    pub const ALL: [KeyAction; 44] = [
+    pub const ALL: [KeyAction; 45] = [
         Self::OpenFolder,
         Self::ReloadFolder,
         Self::Import,
@@ -185,6 +186,7 @@ impl KeyAction {
         Self::ClippedHighlights,
         Self::DeepShadows,
         Self::FocusMarking,
+        Self::FineDetails,
         Self::Compare,
         Self::HoldImage,
         Self::SwapImages,
@@ -239,6 +241,7 @@ impl KeyAction {
             Self::ClippedHighlights => "clipped_highlights",
             Self::DeepShadows => "deep_shadows",
             Self::FocusMarking => "focus_marking",
+            Self::FineDetails => "fine_details",
             Self::Compare => "compare",
             Self::HoldImage => "hold_image",
             Self::SwapImages => "swap_images",
@@ -289,6 +292,7 @@ impl KeyAction {
             | Self::ClippedHighlights
             | Self::DeepShadows
             | Self::FocusMarking
+            | Self::FineDetails
             | Self::Compare
             | Self::HoldImage
             | Self::SwapImages
@@ -315,6 +319,7 @@ impl KeyAction {
             | Self::ClippedHighlights
             | Self::DeepShadows
             | Self::FocusMarking
+            | Self::FineDetails
             | Self::Compare
             | Self::HoldImage
             | Self::SwapImages
@@ -364,6 +369,7 @@ impl KeyAction {
             Self::ClippedHighlights => [plain(Key::J), None],
             Self::DeepShadows => [with_shift(Key::J), None],
             Self::FocusMarking => [plain(Key::E), None],
+            Self::FineDetails => [plain(Key::D), None],
             Self::Compare => [plain(Key::C), None],
             Self::HoldImage => [plain(Key::K), None],
             Self::SwapImages => [with_shift(Key::K), None],
@@ -417,6 +423,7 @@ impl KeyAction {
             Command::ClipHighlights => Self::ClippedHighlights,
             Command::ClipShadows => Self::DeepShadows,
             Command::FocusMarking => Self::FocusMarking,
+            Command::FineDetails => Self::FineDetails,
             Command::Compare => Self::Compare,
             Command::HoldImage => Self::HoldImage,
             Command::SwapImages => Self::SwapImages,
@@ -467,6 +474,7 @@ impl KeyAction {
             Self::ClippedHighlights => Command::ClipHighlights,
             Self::DeepShadows => Command::ClipShadows,
             Self::FocusMarking => Command::FocusMarking,
+            Self::FineDetails => Command::FineDetails,
             Self::Compare => Command::Compare,
             Self::HoldImage => Command::HoldImage,
             Self::SwapImages => Command::SwapImages,
@@ -1122,6 +1130,7 @@ mod tests {
                 PreviewKey::ClipHighlights => Action(A::ClippedHighlights),
                 PreviewKey::ClipShadows => Action(A::DeepShadows),
                 PreviewKey::FocusMarking => Action(A::FocusMarking),
+                PreviewKey::FineDetails => Action(A::FineDetails),
                 PreviewKey::Compare => Action(A::Compare),
                 PreviewKey::HoldImage => Action(A::HoldImage),
                 PreviewKey::SwapImages => Action(A::SwapImages),
@@ -1747,5 +1756,37 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// D is fine details' key (T314): View group, acting in the preview, right after Show Focus
+    /// Marking, and the only action on D.
+    #[test]
+    fn fine_details_is_d_in_the_view_group_after_focus_marking() {
+        let action = KeyAction::FineDetails;
+        assert_eq!(action.name(), "fine_details");
+        assert_eq!(action.group(), KeyGroup::View);
+        assert_eq!(action.acts_in(), KeyView::Preview);
+        assert_eq!(action.default_keys(), [Some(key(Key::D)), None]);
+        let map = KeyMap::default();
+        assert_eq!(map.first_key(action), Some(key(Key::D)));
+        assert_eq!(
+            map.action_of(key(Key::D), KeyView::Preview),
+            Some(KeyAction::FineDetails)
+        );
+        let on_d: Vec<KeyAction> = KeyAction::ALL
+            .into_iter()
+            .filter(|other| other.default_keys().contains(&Some(key(Key::D))))
+            .collect();
+        assert_eq!(on_d, vec![KeyAction::FineDetails]);
+        let place = KeyAction::ALL
+            .iter()
+            .position(|other| *other == KeyAction::FocusMarking)
+            .unwrap();
+        assert_eq!(KeyAction::ALL[place + 1], KeyAction::FineDetails);
+        assert_eq!(action.command(), Some(Command::FineDetails));
+        assert_eq!(
+            KeyAction::of_command(Command::FineDetails),
+            Some(KeyAction::FineDetails)
+        );
     }
 }

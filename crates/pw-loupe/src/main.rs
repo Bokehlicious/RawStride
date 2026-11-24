@@ -49,6 +49,7 @@ use pw_loupe::{
     star_filter_text, star_glyphs, status_line, status_text, step_allowed, step_thumbnail_size,
     take_wheel_steps, visible_range, wheel_factor, window_title,
 };
+use pw_loupe::{AdjustmentMark, adjustment_marks};
 use pw_loupe::{
     Batch, MoveKind, MovedImage, UndoMoves, move_failed_text, move_running_text, moved_to_folders,
     moves_failed_text, nothing_to_undo_text, same_folder, target_folder, undo_failed_text,
@@ -1358,6 +1359,9 @@ struct Loupe {
     wheel_notches: f32,
     textures: Textures,
     anchor_at_pointer: bool,
+    /// Fine details is on (`D`, View ▸ Show Fine Details; ADR 0027 §3.1, W2-Q4, T314): off at
+    /// start and not a setting, so it lasts for the session.
+    fine_details: bool,
     /// The inspector's Exif reader and summary (ADR 0017 §2.1, T110).
     exif_reader: ExifReader,
     exif: ExifInspector,
@@ -5818,6 +5822,7 @@ impl Loupe {
             | A::ClippedHighlights
             | A::DeepShadows
             | A::FocusMarking
+            | A::FineDetails
             | A::Compare
             | A::HoldImage
             | A::SwapImages
@@ -5831,6 +5836,7 @@ impl Loupe {
                         A::ClippedHighlights => self.toggle_clip_highlights(),
                         A::DeepShadows => self.toggle_clip_shadows(),
                         A::FocusMarking => self.toggle_focus_marking(),
+                        A::FineDetails => self.toggle_fine_details(),
                         A::Compare => self.toggle_compare(),
                         A::HoldImage => self.hold_current_image(),
                         A::SwapImages => self.swap_images(),
@@ -6105,6 +6111,12 @@ impl Loupe {
         shell.focus_marking = !shell.focus_marking;
     }
 
+    /// `D` and View ▸ Show Fine Details: below 50 %, the RAW view made from the full-resolution
+    /// rendering, on ↔ off (ADR 0027 §3.1, W2-Q4, T314). Not a setting: it lasts for the session.
+    fn toggle_fine_details(&mut self) {
+        self.fine_details = !self.fine_details;
+    }
+
     /// View ▸ Buttons on Thumbnails: the four buttons on a thumbnail in the contact sheet, on ↔
     /// off (ADR 0017 §2.8, U15-Q7, T245). The settings file is written when the program closes.
     fn toggle_thumbnail_buttons(&mut self) {
@@ -6131,6 +6143,16 @@ impl Loupe {
         self.core.set_focus_wanted(wanted);
         self.second_core
             .set_focus_wanted(wanted && self.compare.is_some());
+    }
+
+    /// Tells the view cores whether fine details applies (ADR 0027 W2, T314): the first exactly
+    /// when the preview is shown and fine details is on, the second when the compare is open as
+    /// well. Called every frame.
+    fn wish_fine_details(&self) {
+        let wanted = self.in_preview() && self.fine_details;
+        self.core.set_fine_details(wanted);
+        self.second_core
+            .set_fine_details(wanted && self.compare.is_some());
     }
 
     /// The indexes the compare would open with, `(held, current)` (U6-Q4, T151's
@@ -8096,6 +8118,7 @@ impl Loupe {
             Command::ClipHighlights => Some(shell.clip_highlights),
             Command::ClipShadows => Some(shell.clip_shadows),
             Command::FocusMarking => Some(shell.focus_marking),
+            Command::FineDetails => Some(self.fine_details),
             Command::MoveToSubfolders => Some(shell.move_to_subfolders),
             Command::AboveBelow => Some(shell.compare_above_below),
             Command::LockZoom => Some(shell.compare_locked),
@@ -8167,6 +8190,7 @@ impl Loupe {
             Command::ClipHighlights => self.toggle_clip_highlights(),
             Command::ClipShadows => self.toggle_clip_shadows(),
             Command::FocusMarking => self.toggle_focus_marking(),
+            Command::FineDetails => self.toggle_fine_details(),
             Command::Compare => self.toggle_compare(),
             Command::HoldImage => self.hold_current_image(),
             Command::SwapImages => self.swap_images(),
@@ -9253,6 +9277,8 @@ impl Loupe {
         self.wish_clipping_map();
         // The focus map likewise, with the focus marking on (T168).
         self.wish_focus_map();
+        // Fine details likewise, with it on (T314).
+        self.wish_fine_details();
         // The preview opened or closed by a key this frame (T111): the next frame draws the new
         // layout, and the contact sheet scrolls to the last shown image there.
         let mode_after = self.tabs.active().map(|tab| tab.mode);
@@ -9339,6 +9365,7 @@ impl Loupe {
             message: self.message.as_deref(),
             total,
             mode_key: self.key_map.first_key(KeyAction::RawJpeg),
+            fine_key: self.key_map.first_key(KeyAction::FineDetails),
         };
         // While comparing, the image area is two halves (U6-Q5, T153): the held image left or on
         // top from the second view core, the current image right or below from the first.
@@ -9515,6 +9542,8 @@ struct ImageAreaShown<'a> {
     total: usize,
     /// The key map's key of RAW ↔ JPEG, for the error texts (T280).
     mode_key: Option<KeyChord>,
+    /// The key map's key of fine details, for the hover text of its mark (T314).
+    fine_key: Option<KeyChord>,
 }
 
 /// The pointer's place in the image area in view pixels, which a zoom goes around; `None` (the
@@ -9635,6 +9664,12 @@ fn draw_image_area(
         }
         _ => clip_overlay.release(),
     }
+    // The row of adjustment marks at the bottom right (ADR 0027 §2.1, W2-Q5, T314), from this
+    // frame's state, only while an image is drawn; the rating badge is at the bottom left.
+    if frame.draw.is_some() {
+        let marks = adjustment_marks(&frame.fine, shown.fine_key);
+        paint_adjustment_marks(&painter, rect, &marks, &response);
+    }
     // The rating badge is always shown (T110).
     if let Some(rating) = frame
         .path
@@ -9705,6 +9740,81 @@ fn paint_side_text(ui: &egui::Ui, rect: egui::Rect, text: &str) {
         galley,
         image_area::TEXT,
     );
+}
+
+/// The preview's row of adjustment marks (ADR 0027 §2.1, W2-Q5, T314): `marks` side by side at
+/// the bottom right of `rect`, on the dark plate of the compare's side text, a paused one dimmed.
+/// The hovered mark's text is shown as a tooltip at the pointer from the image area's own
+/// `response`, not from a response of its own, so clicks, drags and the wheel still reach the
+/// image area. Nothing without marks.
+fn paint_adjustment_marks(
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    marks: &[AdjustmentMark],
+    response: &egui::Response,
+) {
+    let wrap = (rect.width() - 4.0 * SIDE_TEXT_MARGIN).max(0.0);
+    let laid: Vec<_> = marks
+        .iter()
+        .map(|mark| {
+            let colour = if mark.dimmed {
+                image_area::WEAK_TEXT
+            } else {
+                image_area::TEXT
+            };
+            let galley = painter.layout(
+                mark.text.clone(),
+                egui::FontId::proportional(STATUS_TEXT_SIZE),
+                colour,
+                wrap,
+            );
+            (mark, galley, colour)
+        })
+        .collect();
+    let Some(height) = laid
+        .iter()
+        .map(|(_, galley, _)| galley.size().y)
+        .reduce(f32::max)
+    else {
+        return;
+    };
+    let gaps = laid.len().saturating_sub(1) as f32 * SIDE_TEXT_MARGIN;
+    let width = laid
+        .iter()
+        .map(|(_, galley, _)| galley.size().x)
+        .sum::<f32>()
+        + gaps;
+    let size = egui::vec2(width + 2.0 * SIDE_TEXT_MARGIN, height + SIDE_TEXT_MARGIN);
+    let plate = egui::Rect::from_min_size(
+        egui::pos2(
+            rect.max.x - SIDE_TEXT_MARGIN - size.x,
+            rect.max.y - SIDE_TEXT_MARGIN - size.y,
+        ),
+        size,
+    );
+    painter.rect_filled(plate, 3.0, SIDE_TEXT_PLATE);
+    let pointer = response.hover_pos().filter(|p| plate.contains(*p));
+    let mut hovered = None;
+    let mut x = plate.min.x + SIDE_TEXT_MARGIN;
+    for (mark, galley, colour) in laid {
+        let w = galley.size().x;
+        let half = SIDE_TEXT_MARGIN / 2.0;
+        let hit = egui::Rect::from_x_y_ranges(x - half..=x + w + half, plate.y_range());
+        if pointer.is_some_and(|p| hit.contains(p)) {
+            hovered = Some(mark);
+        }
+        painter.galley(
+            egui::pos2(x, plate.min.y + SIDE_TEXT_MARGIN / 2.0),
+            galley,
+            colour,
+        );
+        x += w + SIDE_TEXT_MARGIN;
+    }
+    if let Some(mark) = hovered {
+        egui::Tooltip::for_widget(response).at_pointer().show(|ui| {
+            ui.label(mark.hover.as_str());
+        });
+    }
 }
 
 /// The range from the smallest to the largest file index (+1), for the thumbnail worker's
@@ -13086,6 +13196,7 @@ fn run(options: Options) -> Result<(), String> {
                 wheel_notches: 0.0,
                 textures: Textures::new(),
                 anchor_at_pointer: true,
+                fine_details: false,
                 exif_reader: ExifReader::start(),
                 exif: ExifInspector::default(),
                 histogram_reader: HistogramReader::start(backend, histogram_reads),
