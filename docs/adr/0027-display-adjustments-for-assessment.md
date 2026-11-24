@@ -4,6 +4,7 @@
   A-Q4, A-Q6, A-Q10, A-Q14, A-Q15 and A-Q17 as proposed, A-Q2 and A-Q5 changed, A-Q7, A-Q8, A-Q9,
   A-Q11, A-Q12, A-Q13 and A-Q16 with additions. Nothing is built, installed or added as a
   dependency by this ADR. Each step in §5 becomes its own task, with its own approval and commit.
+  W1's questions W1-Q1–W1-Q9 answered by the owner on 2026-11-24, all as proposed (§4.1).
 - Date: 2026-11-18
 - Related:
   - ADR 0006 §2 (decode settings identical everywhere; the view already uses PPG instead of its
@@ -148,13 +149,13 @@ A prerequisite: `Session::render_region_with` fails on every RAF file tried (bac
 - The half-size view, today drawn reduced by the GPU from a mipmapped texture, is reduced on the
   worker to the screen size by the same filter. During a zoom gesture the view core asks only for
   views at a scale ≤ 0.5 (`state.rs`, `wanted`), today the half-size view; a half-size view
-  reduced to the fit size would be drawn enlarged during a gesture between fit and 50 % [T, to be
-  handled in W1: keep the unreduced half-size view for gestures, or accept the softer frames
-  during the gesture].
+  reduced to the fit size would be drawn enlarged during a gesture between fit and 50 %; the
+  unreduced half-size view is kept for gestures (W1-Q3, owner 2026-11-24).
 - Today every view is converted to the monitor profile in the backend, before the box filter
   (`native.rs`, `convert` in `render_half` and `render_region`). This ADR moves the conversion
   after the downscale and the post steps (§7, ADR 0016), so the filter works on LibRaw's sRGB
-  output (or the JPEG's own colour space), where linear light is well defined.
+  output (or the JPEG's own colour space), where linear light is well defined. A TIFF stays
+  converted when it is opened (W1-Q5).
 - Applies to every view kind below 100 % and to JPEG mode. The cost is higher than the box
   filter's (floating point); W1 measures it [T].
 
@@ -298,6 +299,29 @@ A prerequisite: `Session::render_region_with` fails on every RAF file tried (bac
 | A-Q15 | Crop frame (§3.8) in this ADR? | Yes, as a later step (as proposed), after a survey of the owner's files; only frames inside a whole sensor image |
 | A-Q16 | Focus point (§3.9) in this ADR? | Yes, as a later step (as proposed); **changed order:** Sony, Panasonic, Fujifilm, Nikon and Canon only with files; a step per maker; its own colour; can be on with the focus marking |
 | A-Q17 | 2×2 compare here or later? | Later, as an amendment of U6 (as proposed); moved to §6 |
+
+### 4.1 W1's questions (answered by the owner, 2026-11-24, all as proposed; W1-Q8 and W1-Q9 after T309's cold read)
+
+The filter is not an adjustment (§2.1): it is always on, has no key, no setting and no mark, and
+V1–V8 apply to it without exception. Batch and import do not apply: W1 changes only how one shown
+image is reduced.
+
+| # | Question | Answer |
+|---|---|---|
+| W1-Q1 | The crate and what it holds | `pw-resample`, a workspace crate without dependencies, in plain Rust. Lanczos-3, separable, in linear light: the input is taken as sRGB-encoded and made linear with the sRGB curve, the result encoded back with it and clamped to 0–255 (0–65535 for 16 bit); lookup tables for the curve. An 8-bit and a 16-bit version of the same filter. Only reduction: an output larger than the input, a size of 0 or a buffer of the wrong length is refused (no panic), the same size is a copy; the kernel's weights are normalised per output pixel, so the edges and an image of 1×1 or 1×n work. Another transfer curve (for example already linear data) is added by ADR 0025 X2 if the export needs it |
+| W1-Q2 | Its speed | The filter is always on, so V1–V8 must hold with it. It runs on one worker thread first; the owner's `latency.ps1` on a release build, on 61 Mpix files at fit, measures it in W1's last task. If V1 does not hold, the rows are split over threads with `std::thread::scope` (no new dependency); if it still does not hold, the owner decides |
+| W1-Q3 | The half-size view and zoom gestures (§3.2's open point) | At rest, every view whose scale is below 0.5 (fit or a free level) is the half-size render reduced on the worker to that scale with the filter: a new view kind, not mipmapped, drawn at 1:1. At exactly 0.5 the half-size render is drawn as it is. During a zoom gesture the unreduced half-size view is asked for, as today (mipmapped, reduced by the GPU), so a gesture never makes a new render per frame; it is kept only as the memory budget (V8) allows. The first gesture after a step shows the reduced view enlarged until the half-size view is ready, which replaces it in one swap (V2) |
+| W1-Q4 | Where the conversion to the monitor profile goes (RAW and JPEG) | After the reduction (§7): the backend's renders return LibRaw's sRGB output or the JPEG's own colour space, and the view core converts each view after reducing it, in a backend step of its own. The decoded whole JPEG is kept unconverted and each crop (`Zoom`, `Ring`) is converted on its own (a crop is about screen-sized). The focus map is then made from the unconverted half-size render, so it no longer depends on the monitor profile; its threshold is unchanged (A-Q6). For a JPEG in another colour space (for example Adobe RGB) the sRGB curve is an approximation, accepted |
+| W1-Q5 | TIFF files | Unchanged: converted when the file is opened (`pw-tiff`, ADR 0015/0016), since a 16-bit TIFF in a wide colour space would lose precision as 8-bit sRGB. The filter then works on the converted data with the sRGB curve, an approximation accepted. The TIFF's half-size view, today made with the box filter, uses the new filter |
+| W1-Q6 | Thumbnails and `pw-tiff`'s box filter | Unchanged: thumbnails (`pw-thumbcache`) and the Tauri app keep `pw_tiff::downscale` (§7: the thumbnails do not differ) |
+| W1-Q7 | When it goes wrong, and small images | An image whose fit scale is 1 or more is not reduced (`Zoom`, as today). A reduction that fails shows today's error line ("scaling the view failed"); a conversion that fails or a profile that cannot be used behaves as today. Nothing new is shown to the user |
+| W1-Q8 | Stepping at a free zoom level below 50 % (asked after T309's cold read, answered 2026-11-24 as proposed) | Today it is quick because the prefetched half-size view serves every scale ≤ 0.5; a reduced view serves only its own scale and below. So while the zoom is a free level below 0.5, the neighbours are prefetched at the current scale instead of at fit; at fit and at 50 % or more the prefetch is unchanged |
+| W1-Q9 | The brief enlarged view during a gesture (asked after T309's cold read, answered 2026-11-24 as proposed) | The reduced and the half-size views are magnified linearly (they are magnified only as that stand-in; nearest-neighbour would look blocky); `Zoom`, `Ring` and `Scaled` keep nearest-neighbour, sharp pixels above 100 %. The stand-in is drawn only during a gesture at ≤ 0.5 and counts as "preparing", not as the finished view |
+
+W1 is written as the chain T307 (the crate) → T308 (the conversion moved after the reduction, the
+box filter still used) → T309 (the filter in the view, the half-size view reduced, the gestures,
+and the owner's `latency.ps1` after it); the conversion moves first because the filter's linear light is only right
+before the data is converted to the monitor profile.
 
 ## 5. Steps
 
