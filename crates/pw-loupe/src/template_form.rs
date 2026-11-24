@@ -14,6 +14,9 @@
 //!   (`can_add`).
 //! - **The template** ([`TemplateForm::template`]) and **Load** ([`TemplateForm::load`]): a
 //!   [`TemplateFile`] made from the checked items, and the form filled from one.
+//! - **The metadata window's Save as Template…** ([`window_template`], U13-Q7, U13-Q25, T300): a
+//!   [`TemplateFile`] made from the items the metadata window shows; its Load Template… is
+//!   `EditorForm::load_template`.
 //! - **Texts** ([`TemplateText`], [`template_text`] and the functions after it): every text the
 //!   template window shows (`docs/tasks/README.md` rule 13).
 
@@ -173,8 +176,9 @@ struct Snapshot {
     added: Vec<bool>,
 }
 
-/// A checked item's error that refuses the template ([`TemplateRefused::FieldErrors`]), so T293
-/// shows it under the item.
+/// The error that refuses the template ([`TemplateRefused::FieldErrors`]) of a checked item of the
+/// template window, so T293 shows it under the item, or of an item the metadata window shows
+/// ([`window_template`], T300).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TemplateFieldError {
     /// The item with the error.
@@ -186,16 +190,17 @@ pub struct TemplateFieldError {
     pub text: String,
 }
 
-/// Why [`TemplateForm::template`] gives no template.
+/// Why [`TemplateForm::template`] or [`window_template`] gives no template.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TemplateRefused {
-    /// A checked item has an error (a field error, or a sub-field error of a checked list or of a
-    /// checked Location Created sub-field), each named.
+    /// A checked item (the template window) or a shown item (the metadata window) has an error (a
+    /// field error, or a sub-field error of such a list or Location Created sub-field), each
+    /// named.
     FieldErrors(Vec<TemplateFieldError>),
-    /// A variable cannot be read (in a part the form does not show, kept from a loaded file): the
-    /// variable error's text.
+    /// A variable cannot be read (in a part the form does not show, kept from a loaded file or
+    /// read from the image): the variable error's text.
     Variables(String),
-    /// Nothing checked has a value.
+    /// Nothing checked (the template window) or shown (the metadata window) has a value.
     Empty,
 }
 
@@ -507,32 +512,128 @@ impl TemplateForm {
                 }
             }
         }
-        if !errors.is_empty() {
-            return Err(TemplateRefused::FieldErrors(errors));
-        }
-        if !contact.is_empty() {
-            fields.push((
-                CONTACT_INFO.to_string(),
-                Value::Struct(StructValue { fields: contact }),
-            ));
-        }
-        if !location_fields.is_empty() {
-            fields.push((
-                EditorForm::LOCATION_CREATED.to_string(),
-                Value::StructList(vec![StructValue {
-                    fields: location_fields,
-                }]),
-            ));
-        }
-        let template = TemplateFile::new(fields, add);
-        if template.fields.is_empty() {
-            return Err(TemplateRefused::Empty);
-        }
-        template
-            .check_variables()
-            .map_err(|error| TemplateRefused::Variables(variable_error_text(&error)))?;
-        Ok(template)
+        finish_template(errors, fields, contact, location_fields, add)
     }
+}
+
+/// The end of [`TemplateForm::template`] and [`window_template`]: refused with the `errors` when
+/// there are any; else `fields` with one Creator's Contact Info structure of `contact` and one
+/// Location Created entry of `location_fields` (each when not empty), made by
+/// [`TemplateFile::new`] with `add`, refused when nothing is left or a variable cannot be read.
+fn finish_template(
+    errors: Vec<TemplateFieldError>,
+    mut fields: Vec<(String, Value)>,
+    contact: Vec<(String, Value)>,
+    location_fields: Vec<(String, Value)>,
+    add: Vec<String>,
+) -> Result<TemplateFile, TemplateRefused> {
+    if !errors.is_empty() {
+        return Err(TemplateRefused::FieldErrors(errors));
+    }
+    if !contact.is_empty() {
+        fields.push((
+            CONTACT_INFO.to_string(),
+            Value::Struct(StructValue { fields: contact }),
+        ));
+    }
+    if !location_fields.is_empty() {
+        fields.push((
+            EditorForm::LOCATION_CREATED.to_string(),
+            Value::StructList(vec![StructValue {
+                fields: location_fields,
+            }]),
+        ));
+    }
+    let template = TemplateFile::new(fields, add);
+    if template.fields.is_empty() {
+        return Err(TemplateRefused::Empty);
+    }
+    template
+        .check_variables()
+        .map_err(|error| TemplateRefused::Variables(variable_error_text(&error)))?;
+    Ok(template)
+}
+
+/// Save as Template… in the metadata window (ADR 0017 U13-Q7, U13-Q25, T300): a template of what
+/// the window shows. The items Copy All Fields copies (the editable fields `layout` shows that are
+/// not read-only, and the shown structure lists that are not read-only) that have a value, each a
+/// checked field, `add` empty:
+///
+/// - a field's value from its text ([`EditorForm::window_template_values`]): what was read from
+///   the image and left unchanged escaped, what was typed or pasted as it stands; Copyrighted
+///   gives `True` when ticked and nothing when not;
+/// - the shown contact fields with a value give one Creator's Contact Info structure of only
+///   those sub-fields; Location Created its first entry's sub-fields of
+///   [`EditorForm::LOCATION_FIELDS`] with a value; another structure list its entries that write
+///   something, whole.
+///
+/// Refused with [`TemplateRefused::FieldErrors`] when a shown item has an error (a contact field
+/// named as [`TemplateItem::ContactField`], a Location Created sub-field as
+/// [`TemplateItem::LocationField`], another list's as [`TemplateItem::List`] with its entry and
+/// sub-field), with `Empty` when nothing has a value and with `Variables` when
+/// `TemplateFile::check_variables` fails. [`TemplateFile::new`] then keeps only `x-default` of a
+/// Lang Alt and the first Location Created entry, and leaves out a structure list over its limit.
+pub fn window_template(
+    form: &EditorForm,
+    layout: &EditorLayout,
+) -> Result<TemplateFile, TemplateRefused> {
+    let values = form.window_template_values(layout);
+    let mut errors = Vec::new();
+    let mut fields: Vec<(String, Value)> = Vec::new();
+    let mut contact = Vec::new();
+    let mut location_fields = Vec::new();
+    for (field, value) in &values.fields {
+        let item = match field.struct_field() {
+            Some(_) => TemplateItem::ContactField(*field),
+            None => TemplateItem::Field(*field),
+        };
+        match value {
+            Err(text) => errors.push(TemplateFieldError {
+                item,
+                entry: None,
+                text: text.clone(),
+            }),
+            Ok(Some(value)) => match field.struct_field() {
+                Some(sub) => contact.push((sub.to_string(), value.clone())),
+                None => fields.push((field.property().to_string(), value.clone())),
+            },
+            Ok(None) => {}
+        }
+    }
+    for list in &values.lists {
+        if list.list == EditorForm::LOCATION_CREATED {
+            errors.extend(list.errors.iter().map(|(_, sub, text)| TemplateFieldError {
+                item: TemplateItem::LocationField(sub),
+                entry: None,
+                text: text.clone(),
+            }));
+            if let Some(first) = list.entries.first() {
+                location_fields = first
+                    .fields
+                    .iter()
+                    .filter(|(id, _)| EditorForm::LOCATION_FIELDS.contains(&id.as_str()))
+                    .cloned()
+                    .collect();
+            }
+            continue;
+        }
+        errors.extend(
+            list.errors
+                .iter()
+                .map(|(entry, sub, text)| TemplateFieldError {
+                    item: TemplateItem::List(list.list),
+                    entry: Some((*entry, *sub)),
+                    text: text.clone(),
+                }),
+        );
+        if !list.entries.is_empty() {
+            fields.push((
+                list.list.to_string(),
+                Value::StructList(list.entries.clone()),
+            ));
+        }
+    }
+    finish_template(errors, fields, contact, location_fields, Vec::new())
 }
 
 /// How many sections go in the left column of two (U13-Q13), given each section's height in

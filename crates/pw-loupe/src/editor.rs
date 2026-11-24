@@ -34,6 +34,7 @@ use pw_metadata::edit::{Edit, apply_edits};
 use pw_metadata::properties::{self, Occurrence, ValueKind};
 use pw_metadata::read::MetadataRead;
 use pw_metadata::reconcile::FileKind;
+use pw_metadata::template_file::TemplateFile;
 use pw_metadata::validate::{Warning, validate};
 use pw_metadata::value::{Conflict, ConflictRule, LangAlt, StructValue, Value};
 use pw_metadata::variables::{self, VariableError};
@@ -2480,7 +2481,10 @@ impl EditorForm {
 }
 
 /// The values of the template window's form (ADR 0017 U13c, T291), from
-/// [`EditorForm::template_values`]: everything as typed, nothing escaped.
+/// [`EditorForm::template_values`]: everything as typed, nothing escaped. Also the values of the
+/// metadata window's Save as Template… (U13-Q7, U13-Q25, T300), from
+/// [`EditorForm::window_template_values`]: only the items shown, what was read from the image
+/// escaped.
 #[derive(Clone, Debug)]
 pub(crate) struct TemplateValues {
     /// Each editable field in [`EditorField::ALL`] order with its value (`None` when it gives
@@ -2495,7 +2499,8 @@ pub(crate) struct TemplateValues {
 pub(crate) struct TemplateListValues {
     /// The XMP id of the list.
     pub(crate) list: &'static str,
-    /// The entries as [`ListEntry::value`] gives them, the empty ones left out.
+    /// The entries as [`ListEntry::value`] gives them (for the metadata window
+    /// [`ListEntry::written`]), the empty ones left out.
     pub(crate) entries: Vec<StructValue>,
     /// The error of each sub-field that has one: the entry's index (among all the list's
     /// entries, the empty ones included), the sub-field's XMP id and the error's text.
@@ -2574,19 +2579,84 @@ impl EditorForm {
             .map(|state| TemplateListValues {
                 list: state.property(),
                 entries: list_values(&state.entries),
-                errors: state
-                    .entries
-                    .iter()
-                    .enumerate()
-                    .flat_map(|(index, entry)| {
-                        entry.spec.fields.iter().filter_map(move |field| {
-                            entry.error(field).map(|error| (index, *field, error))
-                        })
-                    })
-                    .collect(),
+                errors: entry_errors(&state.entries),
             })
             .collect();
         TemplateValues { fields, lists }
+    }
+
+    /// The values of the metadata window's Save as Template… (ADR 0017 U13-Q7, U13-Q25, T300):
+    /// the items Copy All Fields copies ([`EditorForm::copy_shown`]: the editable fields `layout`
+    /// shows that are not read-only, and the shown structure lists that are not read-only).
+    ///
+    /// What was read from the image and left unchanged is escaped ([`variables::escape`]), so the
+    /// image's own braces stay text; what was typed or pasted is kept as it stands, its variables
+    /// with it. A field's value is made by [`field_edit`] with an empty start text from its text,
+    /// escaped as a whole when it equals its start text; in a list field each entry that is also
+    /// an entry of the start text is escaped and the others are not. Copyrighted gives `True`
+    /// when its box is ticked and nothing when not (the form cannot tell an image's `False` from
+    /// no value). A structure list's entries are [`ListEntry::written`] (the empty ones left
+    /// out), with the error of each sub-field ([`ListEntry::error`]).
+    pub(crate) fn window_template_values(&self, layout: &EditorLayout) -> TemplateValues {
+        let fields = self
+            .fields
+            .iter()
+            .filter(|state| {
+                state.field.editable()
+                    && self.read_only_text(state.field).is_none()
+                    && layout.is_shown(EditorItem::of_field(state.field))
+            })
+            .map(|state| (state.field, self.window_field_value(state)))
+            .collect();
+        let lists = self
+            .lists
+            .iter()
+            .filter(|state| {
+                self.list_read_only(state.property()).is_none()
+                    && layout.is_shown(EditorItem::List(state.property()))
+            })
+            .map(|state| TemplateListValues {
+                list: state.property(),
+                entries: state
+                    .entries
+                    .iter()
+                    .filter_map(ListEntry::written)
+                    .collect(),
+                errors: entry_errors(&state.entries),
+            })
+            .collect();
+        TemplateValues { fields, lists }
+    }
+
+    /// The value of one field for [`EditorForm::window_template_values`].
+    fn window_field_value(&self, state: &FieldState) -> Result<Option<Value>, String> {
+        if state.field.check_box() {
+            return Ok((state.text == CHECKED).then(|| Value::Text(CHECKED.to_string())));
+        }
+        let start = self.start_text(state);
+        let text = if state.field.is_list() {
+            let start = list_entries(&start);
+            list_entries(&state.text)
+                .into_iter()
+                .map(|entry| {
+                    if start.contains(&entry) {
+                        variables::escape(&entry)
+                    } else {
+                        entry
+                    }
+                })
+                .collect::<Vec<String>>()
+                .join(LIST_SEPARATOR)
+        } else if state.text == start {
+            variables::escape(&state.text)
+        } else {
+            state.text.clone()
+        };
+        match field_edit(state.field, "", &text) {
+            Ok(Edit::Set { value, .. }) => Ok(Some(value)),
+            Ok(_) => Ok(None),
+            Err(error) => Err(error),
+        }
     }
 
     /// Puts a template's fields (`(XMP id, value)` as `TemplateFile::fields` holds them) in the
@@ -2660,24 +2730,205 @@ impl EditorForm {
                 not_loaded.push(property.clone());
                 continue;
             };
-            if state.field.check_box() {
-                let text = form_text(value);
-                if text.eq_ignore_ascii_case(CHECKED) {
-                    state.text = CHECKED.to_string();
-                } else if text.eq_ignore_ascii_case(UNCHECKED) {
-                    state.text = String::new();
-                } else {
-                    not_loaded.push(property.clone());
-                }
-                continue;
-            }
-            match value {
-                Value::Struct(_) | Value::StructList(_) => not_loaded.push(property.clone()),
-                _ => state.text = state.field.text_of(value),
+            match template_field_text(state.field, value) {
+                Some(text) => state.text = text,
+                None => not_loaded.push(property.clone()),
             }
         }
         not_loaded
     }
+
+    /// Load Template… in the metadata window (ADR 0017 U13-Q7, U13-Q12, U13-Q23, T300): each field
+    /// of `template` goes into the form as typed, an unsaved edit, as Paste All Fields puts a
+    /// copied text, so its variables are checked and filled per image (U13-Q9). The start texts
+    /// are not changed, so what was loaded counts as changed.
+    ///
+    /// - a text, Lang Alt (`x-default`), date, number or choice field gets the template's value;
+    ///   Copyrighted is ticked for `True` and unticked for `False`;
+    /// - a list field without its id in the template's `add` gets the template's entries in place
+    ///   of the form's; with it, the form's own entries are kept and the template's added after
+    ///   them, an entry the form already holds (exact text) not added again. The entries are split
+    ///   and joined as the form's own list text is, so an entry holding a comma becomes two;
+    /// - Creator's Contact Info: each sub-field in the template replaces that contact field's
+    ///   text, the others are kept;
+    /// - Location Created: each sub-field in the template replaces that sub-field of the form's
+    ///   first entry, the others are kept (an entry is added when the form has none);
+    /// - any other structure list: the template's entries replace the form's, each as pasted.
+    ///
+    /// Returns, in the template's order, the XMP ids (`property` or `property/sub-field`) of what
+    /// was not loaded: a field or list `layout` hides, one shown read-only, a property the form has
+    /// no editable field or list for, a sub-field of Location Created the form has no field for,
+    /// a value of a shape the field cannot take, and a Copyrighted that is neither `True` nor
+    /// `False`. A hidden contact field is named as `Iptc4xmpCore:CreatorContactInfo/{sub-field}`.
+    pub fn load_template(&mut self, template: &TemplateFile, layout: &EditorLayout) -> Vec<String> {
+        let mut not_loaded = Vec::new();
+        for (property, value) in &template.fields {
+            if property == CONTACT_INFO {
+                let Value::Struct(structure) = value else {
+                    not_loaded.push(property.clone());
+                    continue;
+                };
+                for (sub, sub_value) in &structure.fields {
+                    let field = EditorField::ALL
+                        .into_iter()
+                        .find(|field| field.struct_field() == Some(sub.as_str()))
+                        .filter(|field| self.field_loads(*field, layout));
+                    let text = match sub_value {
+                        Value::Struct(_) | Value::StructList(_) => None,
+                        _ => Some(form_text(sub_value)),
+                    };
+                    match field.zip(text) {
+                        Some((field, text)) => self.set_text(field, text),
+                        None => not_loaded.push(format!("{property}/{sub}")),
+                    }
+                }
+                continue;
+            }
+            if list_spec(property).is_some() {
+                self.load_template_list(property, value, layout, &mut not_loaded);
+                continue;
+            }
+            let loaded = EditorField::ALL
+                .into_iter()
+                .find(|field| field.struct_field().is_none() && field.property() == property)
+                .filter(|field| self.field_loads(*field, layout))
+                .and_then(|field| template_field_text(field, value).map(|text| (field, text)));
+            let Some((field, text)) = loaded else {
+                not_loaded.push(property.clone());
+                continue;
+            };
+            let text = if field.is_list() && template.add.contains(property) {
+                let mut entries = list_entries(self.text(field));
+                let before = entries.len();
+                for entry in list_entries(&text) {
+                    if !entries.contains(&entry) {
+                        entries.push(entry);
+                    }
+                }
+                if entries.len() == before {
+                    continue;
+                }
+                entries.join(LIST_SEPARATOR)
+            } else {
+                text
+            };
+            self.set_text(field, text);
+        }
+        not_loaded
+    }
+
+    /// True when Load Template… may put a value in `field` (U13-Q23): it is editable, `layout`
+    /// shows it and it is not shown read-only.
+    fn field_loads(&self, field: EditorField, layout: &EditorLayout) -> bool {
+        field.editable()
+            && layout.is_shown(EditorItem::of_field(field))
+            && self.read_only_text(field).is_none()
+    }
+
+    /// Sets the text of `field` (a check box's `True` or empty, a choice's value).
+    fn set_text(&mut self, field: EditorField, text: String) {
+        if let Some(state) = self.fields.iter_mut().find(|state| state.field == field) {
+            state.text = text;
+        }
+    }
+
+    /// The structure list `list` of [`EditorForm::load_template`]; what is not loaded is pushed on
+    /// `not_loaded`.
+    fn load_template_list(
+        &mut self,
+        list: &str,
+        value: &Value,
+        layout: &EditorLayout,
+        not_loaded: &mut Vec<String>,
+    ) {
+        let entries = match value {
+            Value::StructList(entries) => Some(entries.clone()),
+            Value::Struct(entry) => Some(vec![entry.clone()]),
+            _ => None,
+        };
+        let shown =
+            list_spec(list).is_some_and(|spec| layout.is_shown(EditorItem::List(spec.property)));
+        let state = if shown {
+            self.list_editable(list)
+        } else {
+            None
+        };
+        let (Some(entries), Some(state)) = (entries, state) else {
+            not_loaded.push(list.to_string());
+            return;
+        };
+        if list != LOCATION_CREATED {
+            state.entries = entries
+                .iter()
+                .map(|entry| ListEntry::pasted(state.spec, entry))
+                .collect();
+            return;
+        }
+        let first = entries.into_iter().next().unwrap_or_default();
+        let mut texts = Vec::new();
+        for (sub, sub_value) in &first.fields {
+            let index = state.spec.fields.iter().position(|field| field == sub);
+            let text = match sub_value {
+                Value::Struct(_) | Value::StructList(_) => None,
+                _ => Some(form_text(sub_value)),
+            };
+            match index.zip(text) {
+                Some(found) => texts.push(found),
+                None => not_loaded.push(format!("{list}/{sub}")),
+            }
+        }
+        if texts.is_empty() {
+            return;
+        }
+        if state.entries.is_empty() {
+            state
+                .entries
+                .push(ListEntry::of(state.spec, &StructValue::default()));
+        }
+        if let Some(entry) = state.entries.first_mut() {
+            for (index, text) in texts {
+                if let Some(slot) = entry.texts.get_mut(index) {
+                    *slot = text;
+                }
+            }
+        }
+    }
+}
+
+/// The text a template's `value` gives the field `field` (not a contact field): a check box's
+/// `True` for `True` and empty for `False` (any case); [`EditorField::text_of`] for any other
+/// field. `None` for a check box with another value and for a structure.
+fn template_field_text(field: EditorField, value: &Value) -> Option<String> {
+    if field.check_box() {
+        let text = form_text(value);
+        return if text.eq_ignore_ascii_case(CHECKED) {
+            Some(CHECKED.to_string())
+        } else if text.eq_ignore_ascii_case(UNCHECKED) {
+            Some(String::new())
+        } else {
+            None
+        };
+    }
+    match value {
+        Value::Struct(_) | Value::StructList(_) => None,
+        _ => Some(field.text_of(value)),
+    }
+}
+
+/// The error of each sub-field of `entries` that has one ([`ListEntry::error`]): the entry's
+/// index, the sub-field's XMP id and the error's text.
+fn entry_errors(entries: &[ListEntry]) -> Vec<(usize, &'static str, String)> {
+    entries
+        .iter()
+        .enumerate()
+        .flat_map(|(index, entry)| {
+            entry
+                .spec
+                .fields
+                .iter()
+                .filter_map(move |field| entry.error(field).map(|error| (index, *field, error)))
+        })
+        .collect()
 }
 
 /// The part of `batch` a changed list field `field` gives (U12d-Q1, U12d-Q2, T180): the entries
@@ -9136,5 +9387,477 @@ mod tests {
             ["xmpRights:Marked"]
         );
         assert!(!form.checked(EditorField::Copyrighted));
+    }
+
+    // --- Templates in the metadata window (ADR 0017 U13-Q7, U13-Q23–U13-Q25, T300) ---
+
+    use crate::template_form::{
+        TemplateFieldError, TemplateItem, TemplateRefused, window_template,
+    };
+
+    const C_EMAIL: &str = "Iptc4xmpCore:CiEmailWork";
+    const C_CITY: &str = "Iptc4xmpCore:CiAdrCity";
+    const C_PHONE: &str = "Iptc4xmpCore:CiTelWork";
+
+    /// A template of `fields` and `add` as given, not cleaned by `TemplateFile::new` (so it can
+    /// hold a property no template holds).
+    fn template_of(fields: Vec<(&str, Value)>, add: &[&str]) -> TemplateFile {
+        TemplateFile {
+            fields: fields
+                .into_iter()
+                .map(|(id, value)| (id.to_string(), value))
+                .collect(),
+            add: add.iter().map(|id| id.to_string()).collect(),
+        }
+    }
+
+    fn template_field(template: &TemplateFile, property: &str) -> Option<Value> {
+        template
+            .fields
+            .iter()
+            .find(|(id, _)| id == property)
+            .map(|(_, value)| value.clone())
+    }
+
+    #[test]
+    fn load_template_puts_a_text_a_lang_alt_a_date_and_copyrighted_in_the_form() {
+        let mut metadata = Metadata::new();
+        insert(&mut metadata, "photoshop:Headline", text("Old"));
+        insert(
+            &mut metadata,
+            "dc:title",
+            lang_alt(&[("sv", "Gammal"), ("x-default", "Old")]),
+        );
+        insert(&mut metadata, "xmpRights:Marked", text("True"));
+        let mut form = form_with(metadata);
+        let template = template_of(
+            vec![
+                ("photoshop:Headline", text("New")),
+                ("dc:title", lang_alt(&[("x-default", "Title")])),
+                ("photoshop:DateCreated", date("2024-05-01")),
+                ("xmpRights:Marked", text("False")),
+            ],
+            &[],
+        );
+        let not_loaded = form.load_template(&template, &EditorLayout::default());
+        assert_eq!(not_loaded, Vec::<String>::new());
+        assert_eq!(form.text(EditorField::Headline), "New");
+        assert_eq!(form.text(EditorField::Title), "Title");
+        assert_eq!(form.text(EditorField::DateCreated), "2024-05-01");
+        assert!(!form.checked(EditorField::Copyrighted));
+
+        // `True` ticks it.
+        let mut form = form_with(Metadata::new());
+        form.load_template(
+            &template_of(vec![("xmpRights:Marked", text("true"))], &[]),
+            &EditorLayout::default(),
+        );
+        assert!(form.checked(EditorField::Copyrighted));
+    }
+
+    #[test]
+    fn load_template_replaces_keywords_without_plus_and_adds_after_them_with_it() {
+        let mut metadata = Metadata::new();
+        insert(&mut metadata, "dc:subject", list(&["a", "b"]));
+        let keywords = || vec![("dc:subject", list(&["c", "a"]))];
+
+        let mut form = form_with(metadata.clone());
+        form.load_template(&template_of(keywords(), &[]), &EditorLayout::default());
+        assert_eq!(form.text(EditorField::Keywords), "c, a");
+
+        // With +: the form's own first, the template's after them, "a" not again.
+        let mut form = form_with(metadata);
+        form.load_template(
+            &template_of(keywords(), &["dc:subject"]),
+            &EditorLayout::default(),
+        );
+        assert_eq!(form.text(EditorField::Keywords), "a, b, c");
+    }
+
+    #[test]
+    fn load_template_replaces_only_the_contact_fields_it_holds() {
+        let mut metadata = Metadata::new();
+        insert(
+            &mut metadata,
+            CONTACT_INFO,
+            contact(&[
+                (C_EMAIL, "old@example.com"),
+                (C_CITY, "Lund"),
+                (C_PHONE, "1"),
+            ]),
+        );
+        let mut form = form_with(metadata);
+        let template = template_of(
+            vec![(CONTACT_INFO, contact(&[(C_CITY, "Malmö"), (C_PHONE, "2")]))],
+            &[],
+        );
+        assert!(
+            form.load_template(&template, &EditorLayout::default())
+                .is_empty()
+        );
+        assert_eq!(form.text(EditorField::Email), "old@example.com");
+        assert_eq!(form.text(EditorField::ContactCity), "Malmö");
+        assert_eq!(form.text(EditorField::Phone), "2");
+    }
+
+    #[test]
+    fn load_template_sets_a_location_created_city_and_replaces_location_shown() {
+        let mut form = form_with(located(vec![umea(), oslo()], vec![umea(), oslo()]));
+        let template = template_of(
+            vec![
+                (CREATED, places(vec![place(&[(CITY, "Lund")])])),
+                (SHOWN, places(vec![place(&[(CITY, "Bergen")])])),
+            ],
+            &[],
+        );
+        assert!(
+            form.load_template(&template, &EditorLayout::default())
+                .is_empty()
+        );
+        // Only City of the first entry; its other sub-fields and the second entry are kept.
+        assert_eq!(form.location_count(CREATED), 2);
+        assert_eq!(form.location_text(CREATED, 0, CITY), "Lund");
+        assert_eq!(form.location_text(CREATED, 0, COUNTRY), "Sverige");
+        assert_eq!(form.location_text(CREATED, 1, CITY), "Oslo");
+        // Location Shown's entries are replaced.
+        assert_eq!(form.location_count(SHOWN), 1);
+        assert_eq!(form.location_text(SHOWN, 0, CITY), "Bergen");
+        assert_eq!(form.location_text(SHOWN, 0, COUNTRY), "");
+
+        // A form without a Location Created entry gets one.
+        let mut form = form_with(Metadata::new());
+        form.load_template(&template, &EditorLayout::default());
+        assert_eq!(form.location_count(CREATED), 1);
+        assert_eq!(form.location_text(CREATED, 0, CITY), "Lund");
+    }
+
+    #[test]
+    fn load_template_leaves_out_what_is_hidden_read_only_or_unknown() {
+        let mut metadata = located(vec![oslo()], vec![umea()]);
+        insert(&mut metadata, "photoshop:Headline", text("Old"));
+        insert(&mut metadata, "xmpRights:Marked", text("Ja"));
+        insert(
+            &mut metadata,
+            CONTACT_INFO,
+            contact(&[(C_EMAIL, "old@example.com")]),
+        );
+        let mut form = form_with(metadata);
+        let mut layout = EditorLayout::default();
+        layout.set_item_shown(EditorItem::Field(EditorField::Headline), false);
+        layout.set_item_shown(EditorItem::ContactInfo, false);
+        layout.set_item_shown(EditorItem::List(SHOWN), false);
+        let template = template_of(
+            vec![
+                ("photoshop:Headline", text("New")),
+                ("Iptc4xmpExt:Unknown", text("x")),
+                ("xmpRights:Marked", text("True")),
+                (CONTACT_INFO, contact(&[(C_EMAIL, "new@example.com")])),
+                (
+                    CREATED,
+                    places(vec![entry(vec![(
+                        NAME,
+                        lang_alt(&[("x-default", "Home")]),
+                    )])]),
+                ),
+                (SHOWN, places(vec![oslo()])),
+                ("photoshop:City", text("Lund")),
+            ],
+            &[],
+        );
+        assert_eq!(
+            form.load_template(&template, &layout),
+            [
+                "photoshop:Headline".to_string(),
+                "Iptc4xmpExt:Unknown".to_string(),
+                "xmpRights:Marked".to_string(),
+                format!("{CONTACT_INFO}/{C_EMAIL}"),
+                format!("{CREATED}/{NAME}"),
+                SHOWN.to_string(),
+            ]
+        );
+        // They are left as they were; only City was loaded.
+        assert_eq!(form.text(EditorField::Headline), "Old");
+        assert_eq!(form.read_only_text(EditorField::Copyrighted), Some("Ja"));
+        assert_eq!(form.text(EditorField::Email), "old@example.com");
+        assert_eq!(form.location_count(CREATED), 1);
+        assert_eq!(form.location_text(CREATED, 0, CITY), "Oslo");
+        assert_eq!(form.location_text(SHOWN, 0, CITY), "Umeå");
+        assert_eq!(form.edits(), Ok(vec![set("photoshop:City", text("Lund"))]));
+    }
+
+    #[test]
+    fn a_loaded_template_counts_as_changed_in_the_batch() {
+        let mut metadata = Metadata::new();
+        insert(&mut metadata, "photoshop:Headline", text("Old"));
+        insert(&mut metadata, "dc:subject", list(&["a"]));
+        let mut form = form_with(metadata);
+        form.load_template(
+            &template_of(
+                vec![
+                    ("photoshop:Headline", text("New")),
+                    ("dc:subject", list(&["b"])),
+                ],
+                &["dc:subject"],
+            ),
+            &EditorLayout::default(),
+        );
+        let batch = form.batch_edits().unwrap();
+        assert_eq!(batch.changed, [EditorField::Headline]);
+        assert_eq!(
+            batch.list_changes,
+            [ListChange {
+                field: EditorField::Keywords,
+                adds: vec!["b".to_string()],
+                removes: Vec::new(),
+                removes_here: Vec::new(),
+            }]
+        );
+    }
+
+    #[test]
+    fn a_loaded_variable_is_written_as_typed() {
+        let mut metadata = Metadata::new();
+        insert(&mut metadata, "photoshop:Headline", text("Old"));
+        let mut form = form_with(metadata);
+        form.load_template(
+            &template_of(vec![("photoshop:Headline", text("{date}"))], &[]),
+            &EditorLayout::default(),
+        );
+        assert_eq!(
+            form.edits(),
+            Ok(vec![set("photoshop:Headline", text("{date}"))])
+        );
+    }
+
+    #[test]
+    fn window_template_escapes_what_was_read_and_keeps_what_was_typed() {
+        let mut metadata = located(Vec::new(), vec![place(&[(CITY, "{c}")])]);
+        insert(&mut metadata, "photoshop:Headline", text("a {b}"));
+        insert(&mut metadata, "dc:subject", list(&["x{1}"]));
+        let mut form = form_with(metadata);
+        type_into(&mut form, EditorField::Keywords, "x{1}, {date}");
+        let template = window_template(&form, &EditorLayout::default()).unwrap();
+        assert_eq!(
+            template_field(&template, "photoshop:Headline"),
+            Some(text("a {{b}}"))
+        );
+        assert_eq!(
+            template_field(&template, "dc:subject"),
+            Some(list(&["x{{1}}", "{date}"]))
+        );
+        assert_eq!(
+            template_field(&template, SHOWN),
+            Some(places(vec![place(&[(CITY, "{{c}}")])]))
+        );
+        assert!(template.add.is_empty());
+
+        // The same Headline typed as a variable is kept.
+        type_into(&mut form, EditorField::Headline, "{date}");
+        let template = window_template(&form, &EditorLayout::default()).unwrap();
+        assert_eq!(
+            template_field(&template, "photoshop:Headline"),
+            Some(text("{date}"))
+        );
+    }
+
+    #[test]
+    fn window_template_gives_copyrighted_true_or_nothing() {
+        let mut metadata = Metadata::new();
+        insert(&mut metadata, "photoshop:Headline", text("h"));
+        insert(&mut metadata, "xmpRights:Marked", text("True"));
+        let mut form = form_with(metadata);
+        let template = window_template(&form, &EditorLayout::default()).unwrap();
+        assert_eq!(
+            template_field(&template, "xmpRights:Marked"),
+            Some(text("True"))
+        );
+        form.set_checked(EditorField::Copyrighted, false);
+        let template = window_template(&form, &EditorLayout::default()).unwrap();
+        assert_eq!(template_field(&template, "xmpRights:Marked"), None);
+    }
+
+    #[test]
+    fn window_template_leaves_out_hidden_and_read_only_items() {
+        let mut metadata = located(Vec::new(), vec![oslo()]);
+        insert(&mut metadata, "photoshop:Headline", text("h"));
+        insert(&mut metadata, "photoshop:Credit", text("c"));
+        insert(&mut metadata, "xmpRights:Marked", text("Ja"));
+        insert(&mut metadata, "photoshop:Category", text("SPO"));
+        let form = form_with(metadata);
+        let mut layout = EditorLayout::default();
+        layout.set_item_shown(EditorItem::Field(EditorField::Headline), false);
+        layout.set_item_shown(EditorItem::List(SHOWN), false);
+        let template = window_template(&form, &layout).unwrap();
+        assert_eq!(
+            template.fields,
+            [("photoshop:Credit".to_string(), text("c"))]
+        );
+    }
+
+    #[test]
+    fn window_template_of_an_empty_form_is_refused() {
+        assert_eq!(
+            window_template(&form_with(Metadata::new()), &EditorLayout::default()),
+            Err(TemplateRefused::Empty)
+        );
+    }
+
+    #[test]
+    fn a_shown_item_with_an_error_refuses_the_window_template() {
+        let mut form = form_with(Metadata::new());
+        type_into(&mut form, EditorField::Headline, "{nope}");
+        type_into(&mut form, EditorField::City, "Lund");
+        form.add_location(SHOWN);
+        type_location(&mut form, SHOWN, 0, CITY, "{x");
+        let headline_error = field_edit(EditorField::Headline, "", "{nope}").unwrap_err();
+        let city_error = form.list_error(SHOWN, 0, CITY).unwrap();
+        assert_eq!(
+            window_template(&form, &EditorLayout::default()),
+            Err(TemplateRefused::FieldErrors(vec![
+                TemplateFieldError {
+                    item: TemplateItem::Field(EditorField::Headline),
+                    entry: None,
+                    text: headline_error,
+                },
+                TemplateFieldError {
+                    item: TemplateItem::List(SHOWN),
+                    entry: Some((0, CITY)),
+                    text: city_error,
+                },
+            ]))
+        );
+
+        // Hidden, their errors do not refuse it.
+        let mut layout = EditorLayout::default();
+        layout.set_item_shown(EditorItem::Field(EditorField::Headline), false);
+        layout.set_item_shown(EditorItem::List(SHOWN), false);
+        assert_eq!(
+            window_template(&form, &layout).map(|template| template.fields),
+            Ok(vec![("photoshop:City".to_string(), text("Lund"))])
+        );
+    }
+
+    #[test]
+    fn window_template_gives_one_contact_structure_and_one_location_created_entry() {
+        let mut metadata = located(
+            vec![
+                entry(vec![
+                    (CITY, text("Lund")),
+                    (NAME, lang_alt(&[("x-default", "Home")])),
+                ]),
+                oslo(),
+            ],
+            Vec::new(),
+        );
+        insert(
+            &mut metadata,
+            CONTACT_INFO,
+            contact(&[(C_EMAIL, "a@example.com"), (C_CITY, "Lund")]),
+        );
+        let mut form = form_with(metadata);
+        type_into(&mut form, EditorField::Phone, "2");
+        let template = window_template(&form, &EditorLayout::default()).unwrap();
+        let Some(Value::Struct(contact_info)) = template_field(&template, CONTACT_INFO) else {
+            panic!("no Creator's Contact Info structure");
+        };
+        let mut sub_fields = contact_info.fields.clone();
+        sub_fields.sort_by(|a, b| a.0.cmp(&b.0));
+        assert_eq!(
+            sub_fields,
+            [
+                (C_CITY.to_string(), text("Lund")),
+                (C_EMAIL.to_string(), text("a@example.com")),
+                (C_PHONE.to_string(), text("2")),
+            ]
+        );
+        // The first entry, only its sub-fields the form shows (not Location Name).
+        assert_eq!(
+            template_field(&template, CREATED),
+            Some(places(vec![place(&[(CITY, "Lund")])]))
+        );
+    }
+
+    #[test]
+    fn window_template_keeps_x_default_and_leaves_out_a_list_over_its_limit() {
+        let mut metadata = Metadata::new();
+        insert(
+            &mut metadata,
+            "dc:title",
+            lang_alt(&[("sv", "Solnedgång"), ("x-default", "Sunset")]),
+        );
+        insert(
+            &mut metadata,
+            "plus:ImageSupplier",
+            places(vec![
+                place(&[(SUPPLIER_NAME, "A")]),
+                place(&[(SUPPLIER_NAME, "B")]),
+            ]),
+        );
+        let template = window_template(&form_with(metadata), &EditorLayout::default()).unwrap();
+        assert_eq!(
+            template.fields,
+            [("dc:title".to_string(), lang_alt(&[("x-default", "Sunset")]))]
+        );
+    }
+
+    #[test]
+    fn window_template_loads_back_into_an_empty_form() {
+        let mut form = form_with(Metadata::new());
+        type_into(&mut form, EditorField::Headline, "Head");
+        type_into(&mut form, EditorField::Title, "Title");
+        type_into(&mut form, EditorField::Keywords, "a, b");
+        type_into(&mut form, EditorField::DateCreated, "2024-05-01");
+        type_into(&mut form, EditorField::Email, "a@example.com");
+        type_into(&mut form, EditorField::ContactCity, "Lund");
+        form.set_checked(EditorField::Copyrighted, true);
+        let status = EditorField::ModelReleaseStatus.choice_list().unwrap()[0];
+        form.set_choice(EditorField::ModelReleaseStatus, status);
+        form.add_location(CREATED);
+        type_location(&mut form, CREATED, 0, CITY, "Umeå");
+        type_location(
+            &mut form,
+            CREATED,
+            0,
+            ID,
+            "https://example.org/a, https://example.org/b",
+        );
+        form.add_location(SHOWN);
+        type_location(&mut form, SHOWN, 0, CITY, "Oslo");
+        type_location(&mut form, SHOWN, 0, COUNTRY, "Norge");
+
+        let template = window_template(&form, &EditorLayout::default()).unwrap();
+        let mut loaded = form_with(Metadata::new());
+        assert!(
+            loaded
+                .load_template(&template, &EditorLayout::default())
+                .is_empty()
+        );
+        for field in EditorField::ALL {
+            assert_eq!(loaded.text(field), form.text(field), "{field:?}");
+        }
+        for list in EditorForm::ALL_LISTS {
+            assert_eq!(loaded.list_count(list), form.list_count(list), "{list}");
+            for index in 0..form.list_count(list) {
+                for field in EditorForm::list_fields(list) {
+                    assert_eq!(
+                        loaded.list_text(list, index, field),
+                        form.list_text(list, index, field),
+                        "{list} {field}"
+                    );
+                }
+            }
+        }
+
+        // A text with braces read from an image comes back doubled, which writes `{b}`.
+        let mut metadata = Metadata::new();
+        insert(&mut metadata, "photoshop:Headline", text("a {b}"));
+        let template = window_template(&form_with(metadata), &EditorLayout::default()).unwrap();
+        let mut loaded = form_with(Metadata::new());
+        loaded.load_template(&template, &EditorLayout::default());
+        assert_eq!(loaded.text(EditorField::Headline), "a {{b}}");
+        assert_eq!(
+            loaded.edits(),
+            Ok(vec![set("photoshop:Headline", text("a {{b}}"))])
+        );
     }
 }

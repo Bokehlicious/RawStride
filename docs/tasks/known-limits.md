@@ -415,6 +415,18 @@ with ADR 0026 F3, in `plans/adr-0018-0025-steps.md`.)
   cannot load back would be lost from the window without a notice; no such field is known, and
   tests cover file → form → template but not form → template → form for every field.
 
+## Templates in the metadata window (ADR 0017 U13d)
+
+- *Load Template… and "Apply to {n} Marked"* (ADR 0017 U13-Q24, owner 2026-11-24; recorded at
+  T300's Done): a loaded field counts as typed, so the batch follows the window's own rules
+  (U12d-Q1): a list without + is replaced only on the window's image, while the other images get
+  the entries the form added and lose those the window's image had; a list with + adds on every
+  image. To replace whole lists on many images, the right-click menu's Apply Template is used.
+- *A Location Created error after the first entry* (T300's review, 2026-11-24): Save as
+  Template… saves only the first Location Created entry, but an error in any entry refuses it,
+  and the error is named by its sub-field without the entry, as if it were in the first. A task
+  only if it is seen in use.
+
 ## The metadata window's layout (ADR 0017 U10b)
 
 (T278's brief and chain review, 2026-11-22; **kept** at the sort after ADR 0017 U10b, 2026-11-22

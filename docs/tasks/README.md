@@ -88,7 +88,6 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 | Task | Title | Status |
 |---|---|---|
 | [T299](T299-worker-applies-template-file.md) | The metadata worker applies a template file | Open |
-| [T300](T300-window-form-and-template-file.md) | The metadata window's form to and from a template file | Open |
 | [T301](T301-window-load-and-save-template.md) | Load Template… and Save as Template… in the metadata window | Blocked |
 | [T302](T302-template-batch.md) | A batch that applies a template file to many images | Blocked |
 | [T303](T303-apply-template-submenu.md) | The right-click menu's Apply Template submenu | Blocked |

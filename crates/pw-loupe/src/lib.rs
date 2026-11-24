@@ -200,7 +200,8 @@ pub use tasks_text::{
 pub use template_form::{
     TemplateFieldError, TemplateForm, TemplateItem, TemplateRefused, TemplateRow, TemplateText,
     left_column_sections, load_failed_text, not_loaded_lines, property_path_name, refused_text,
-    save_failed_text, template_rows, template_text, templates_folder, with_xmp_extension,
+    save_failed_text, template_rows, template_text, templates_folder, window_template,
+    with_xmp_extension,
 };
 pub use template_io::{SaveError, TemplateEvent, TemplateIo, TemplateIoStopped};
 pub use thumb_buttons::{
