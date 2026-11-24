@@ -417,6 +417,9 @@ with ADR 0026 F3, in `plans/adr-0018-0025-steps.md`.)
 
 ## Templates in the metadata window (ADR 0017 U13d)
 
+Every item below **kept** at the sort after U13d (2026-11-24, owner); the first is a decision,
+each of the others a task only if it is seen in use.
+
 - *Load Template… and "Apply to {n} Marked"* (ADR 0017 U13-Q24, owner 2026-11-24; recorded at
   T300's Done): a loaded field counts as typed, so the batch follows the window's own rules
   (U12d-Q1): a list without + is replaced only on the window's image, while the other images get
