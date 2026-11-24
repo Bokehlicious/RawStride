@@ -318,3 +318,6 @@ was when the task was done, so "this file", "below" and "the Log" in T1–T115 m
 | [T311](T311-pw-resample-threads.md) | ADR 0027 W1: pw-resample's output rows split over threads (pw-resample) |
 | [T309](T309-lanczos-in-the-view.md) | ADR 0027 W1: the Lanczos filter in the view, the half-size view reduced, the gestures (pw-viewcore, pw-render) |
 | [T310](T310-regular-releases.md) | ADR 0031 RL10: 0.x versions as regular releases in the release workflow (CI, docs) |
+| [T312](T312-fine-view-timing.md) | ADR 0027 W2: the timing of a fine view on real files (pw-viewcore tests) |
+| [T313](T313-fine-view-in-the-core.md) | ADR 0027 W2: fine details in the view core (pw-viewcore, pw-render) |
+| [T314](T314-fine-details-key-and-mark.md) | ADR 0027 W2: the key, the menu item and the mark of fine details (pw-loupe) |
