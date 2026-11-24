@@ -87,7 +87,6 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status |
 |---|---|---|
-| [T305](T305-msi-package.md) | ADR 0031 RL9: the MSI, made by `tools/package-msi.ps1` (tools) | Open |
 | [T306](T306-msi-in-release.md) | ADR 0031 RL9: the MSI in the release build and workflow (tools, CI, docs) | Blocked: waits for T305 |
 
 ## Writing a task (owner and reviewer)

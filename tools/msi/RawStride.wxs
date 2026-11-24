@@ -1,0 +1,83 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  RawStride's installer (ADR 0031 RL9, task T305), built with the WiX Toolset 7.0.1 by
+  tools/package-msi.ps1 from the program folder tools/package-dist.ps1 makes.
+
+  Per user, no administrator rights (RL9-Q3): the program goes to
+  %LOCALAPPDATA%\Programs\RawStride, one shortcut to the user's Start menu. No UI and no dialogs
+  (RL9-Q4), no custom actions. Nothing under %LOCALAPPDATA%\RawStride (the settings) is touched by
+  install or uninstall (RL9-Q6).
+
+  Defines given by the script: Version, ProgramDir, IconPath, RepositoryUrl. The program's files
+  come from target\dist\msi\files.wxs, which the script writes before each build (found through
+  wix build's include path): one component per folder, each with an HKCU registry value as its key
+  path and a RemoveFolder (ICE38, ICE64).
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <!--
+    The UpgradeCode must never change: every later version finds the installed one by it.
+  -->
+  <Package
+      Name="RawStride"
+      Manufacturer="RawStride"
+      Version="$(var.Version)"
+      UpgradeCode="9DA7D7C8-8D15-4CC5-9C80-2D12BB33937B"
+      Scope="perUser"
+      Compressed="yes">
+
+    <!--
+      A newer or an equal version replaces the installed one (RL9-Q5, RL9-Q10), so Installed apps
+      always shows one RawStride; an older one is refused. AllowSameVersionUpgrades gives the
+      validation warning ICE61, which is expected.
+    -->
+    <MajorUpgrade
+        DowngradeErrorMessage="A newer version of RawStride is already installed."
+        AllowSameVersionUpgrades="yes" />
+
+    <!-- The cabinet inside the .msi: one file to download. -->
+    <MediaTemplate EmbedCab="yes" />
+
+    <Icon Id="RawStride.ico" SourceFile="$(var.IconPath)" />
+    <Property Id="ARPPRODUCTICON" Value="RawStride.ico" />
+    <Property Id="ARPURLINFOABOUT" Value="$(var.RepositoryUrl)" />
+    <!-- There is nothing to modify. -->
+    <Property Id="ARPNOMODIFY" Value="1" />
+
+    <!-- The install folder, written out: %LOCALAPPDATA%\Programs\RawStride (RL9-Q3). -->
+    <StandardDirectory Id="LocalAppDataFolder">
+      <Directory Id="LocalProgramsFolder" Name="Programs">
+        <Directory Id="INSTALLFOLDER" Name="RawStride" />
+      </Directory>
+    </StandardDirectory>
+
+    <!-- One shortcut in the user's Start menu; no desktop shortcut, no file types (RL9-Q3). -->
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Component Id="StartMenuShortcut">
+        <Shortcut
+            Id="RawStrideShortcut"
+            Name="RawStride"
+            Target="[INSTALLFOLDER]rawstride.exe"
+            WorkingDirectory="INSTALLFOLDER"
+            Icon="RawStride.ico" />
+        <!--
+          %LOCALAPPDATA%\Programs belongs to no folder of the program, so its RemoveFolder is here
+          (ICE64). Windows Installer removes a folder only when it is empty, so a Programs folder
+          holding other programs stays.
+        -->
+        <RemoveFolder Id="RemoveLocalProgramsFolder" Directory="LocalProgramsFolder" On="uninstall" />
+        <RegistryValue
+            Root="HKCU"
+            Key="Software\RawStride\Installer"
+            Name="StartMenuShortcut"
+            Type="integer"
+            Value="1"
+            KeyPath="yes" />
+      </Component>
+    </StandardDirectory>
+
+    <ComponentGroupRef Id="ProgramFiles" />
+    <ComponentRef Id="StartMenuShortcut" />
+  </Package>
+
+  <?include files.wxs ?>
+</Wix>
