@@ -1,8 +1,9 @@
 # Builds a RawStride release on a clean Windows machine (ADR 0031 RL6, task T229). It runs
 # tools/release-build.ps1: THIRD-PARTY-NOTICES.txt checked against a fresh run of
 # tools/third-party-notices.ps1, the release exe built with the build machine's paths remapped and
-# checked, the portable zip (tools/package-dist.ps1), SHA256SUMS.txt and the release notes from
-# CHANGELOG.md. The three files are kept as the artifact "release".
+# checked, the portable zip (tools/package-dist.ps1), the MSI (tools/package-msi.ps1, ADR 0031 RL9,
+# with WiX installed as a .NET tool below), SHA256SUMS.txt for both and the release notes from
+# CHANGELOG.md. The four files are kept as the artifact "release".
 #
 # On a pushed tag v<version> (a tag on main naming pw-loupe's version) it then creates a DRAFT
 # GitHub Release with them; it never publishes. The owner reads the draft and publishes it by hand
@@ -49,6 +50,8 @@ jobs:
       CARGO_INCREMENTAL: "0"
       VCPKG_TRIPLET: x64-windows-static-md
       CARGO_ABOUT_VERSION: "0.9.3"
+      # Must match $wixVersion in tools/package-msi.ps1, which checks it.
+      WIX_VERSION: "7.0.1"
     defaults:
       run:
         shell: powershell
@@ -180,6 +183,19 @@ jobs:
           Write-Output "The tag $env:TAG_NAME is on main and names pw-loupe's version $version."
           exit 0
 
+      # WiX as a .NET tool (the runner has the .NET SDK; ADR 0031 RL9-Q1). The .NET tools folder is
+      # always added to GITHUB_PATH, so wix is found in the next steps even if the runner's PATH
+      # lacks it (harmless if it is already there).
+      - name: Install WiX
+        run: |
+          dotnet tool install --global wix --version $env:WIX_VERSION
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $toolsFolder = Join-Path $env:USERPROFILE '.dotnet\tools'
+          $env:PATH = "$toolsFolder;$env:PATH"
+          wix --version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Add-Content -Path $env:GITHUB_PATH -Value $toolsFolder -Encoding ascii
+
       - name: Run tools/release-build.ps1
         env:
           IS_TAG_RUN: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}
@@ -200,6 +216,7 @@ jobs:
           name: release
           path: |
             target/dist/RawStride-*-windows-x64.zip
+            target/dist/RawStride-*-windows-x64.msi
             target/dist/SHA256SUMS.txt
             target/dist/release-notes.md
           if-no-files-found: error
@@ -232,11 +249,12 @@ jobs:
         run: |
           $version = $env:TAG_NAME -replace '^v', ''
           $zip = "RawStride-$version-windows-x64.zip"
+          $msi = "RawStride-$version-windows-x64.msi"
           $arguments = @('release', 'create', $env:TAG_NAME, '--repo', $env:REPOSITORY, '--verify-tag', '--draft')
           # A 0.x version is a pre-release (ADR 0031 section 3.2).
           if ($version.StartsWith('0.')) {
             $arguments += '--prerelease'
           }
-          $arguments += @('--title', "RawStride $version", '--notes-file', 'release-notes.md', $zip, 'SHA256SUMS.txt')
+          $arguments += @('--title', "RawStride $version", '--notes-file', 'release-notes.md', $zip, $msi, 'SHA256SUMS.txt')
           gh @arguments
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

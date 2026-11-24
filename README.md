@@ -60,7 +60,7 @@ are no dates.
   not connected.
 - **Positions and a map:** edit GPS coordinates, see images on a map, and match a GPX track to
   capture times.
-- **Signed releases and an installer (MSI).**
+- **Signed releases.**
 
 Ideas and wishes are welcome as [issues](https://github.com/Bokehlicious/RawStride/issues/new/choose).
 

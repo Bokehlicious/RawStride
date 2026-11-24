@@ -9,6 +9,12 @@ Downloads are on the [Releases page](https://github.com/Bokehlicious/RawStride/r
 
 ## [Unreleased]
 
+### Added
+
+- Every release also has an installer, `RawStride-<version>-windows-x64.msi`: it installs
+  RawStride for the current user, without administrator rights, with a Start menu shortcut;
+  uninstall it in Installed apps, which keeps your settings.
+
 ## [0.4.0] - 2026-11-24
 
 ### Added

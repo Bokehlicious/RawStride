@@ -312,3 +312,4 @@ was when the task was done, so "this file", "below" and "the Log" in T1–T115 m
 | [T303](T303-apply-template-submenu.md) | The right-click menu's Apply Template submenu (pw-loupe) |
 | [T304](T304-metadata-window-two-columns.md) | The metadata window in two columns (pw-loupe) |
 | [T305](T305-msi-package.md) | ADR 0031 RL9: the MSI, made by `tools/package-msi.ps1` (tools) |
+| [T306](T306-msi-in-release.md) | ADR 0031 RL9: the MSI in the release build and workflow (tools, CI, docs) |

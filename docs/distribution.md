@@ -1,8 +1,11 @@
-# Distributing RawStride: the portable zip
+# Distributing RawStride: the portable zip and the installer (MSI)
 
-RawStride is given out as a portable zip (ADR 0031 §3.4, RL-Q4, step RL4). Unpacking it is the
-installation; there is no installer and nothing is registered. Deleting the folder and
-`%LOCALAPPDATA%\RawStride` removes it.
+RawStride is given out in two forms, both in every release (ADR 0031 RL9-Q8):
+
+- **The portable zip** (ADR 0031 §3.4, RL-Q4, step RL4). Unpacking it is the installation;
+  nothing is registered. Deleting the folder and `%LOCALAPPDATA%\RawStride` removes it.
+- **The installer, an MSI** (ADR 0031 RL-Q5, step RL9). It installs the same files for the current
+  user, with a Start menu shortcut and an entry in Installed apps, which uninstalls it.
 
 ## The zip
 
@@ -28,6 +31,30 @@ exactly these files at its top level:
   folder before PATH (T120), so the copy in the zip is used even when another ExifTool is
   installed. Its `exiftool_files` folder must stay next to it.
 
+## The installer (MSI)
+
+`RawStride-<version>-windows-x64.msi` installs the files of the zip's folder (ADR 0031 RL9-Q3 to
+RL9-Q11):
+
+- **What and where:** every file of the zip's folder, unchanged, except `README.txt` (it describes
+  the zip: "unpack this folder", "delete this folder"; RL9-Q9), per user into
+  `%LOCALAPPDATA%\Programs\RawStride`. **No administrator rights** are needed.
+- **One shortcut**, in the Start menu; none on the desktop, and no file types are associated.
+- **No dialogs:** only Windows' progress bar, and no licence page to accept (the GPL asks for
+  none); `LICENSE` and `THIRD-PARTY-NOTICES.txt` are in the program folder as in the zip.
+- **Upgrade:** a newer version replaces the older one. An MSI of the **same** version replaces the
+  installed one too, so there is always one RawStride in Installed apps (RL9-Q10). With a newer
+  version already installed the MSI stops with "A newer version of RawStride is already
+  installed." An installation that fails halfway is rolled back by Windows.
+- **Close RawStride before upgrading.** Otherwise Windows Installer asks to close RawStride and
+  ExifTool, and then goes on (RL9-Q11, checked by the owner on 2026-11-24).
+- **Uninstall** in Installed apps: the program folder and the shortcut are removed.
+  `%LOCALAPPDATA%\RawStride` (settings, field values, the write journal) is kept, and images and
+  sidecars are never touched (RL9-Q6).
+- **A zip copy and an installed copy share** `%LOCALAPPDATA%\RawStride`: the same settings, field
+  values and write journal (RL9-Q8).
+- **Not signed** yet, as the zip (below): SmartScreen may warn.
+
 ## Making it
 
 From the repository root:
@@ -36,6 +63,7 @@ From the repository root:
 .\tools\package-dist.ps1                      # builds the release exe first
 .\tools\package-dist.ps1 -NoBuild             # uses the existing target\release\rawstride.exe
 .\tools\package-dist.ps1 -ExifToolZip <path>  # uses a local exiftool-13.64_64.zip
+.\tools\package-msi.ps1                       # the MSI, from the folder package-dist.ps1 made
 ```
 
 - **It needs** the build tools of [`building.md`](building.md) (Rust, vcpkg, Visual Studio or the
@@ -49,6 +77,13 @@ From the repository root:
   is removed afterwards. It checks its own result: the DLL set, ExifTool's hash and `-ver`, the
   folder's top level, no empty folders, and the zip's entry count. At the end it prints the zip's
   path, size and SHA-256.
+- **`package-msi.ps1`** makes `target\dist\RawStride-<version>-windows-x64.msi` from the program
+  folder `package-dist.ps1` made (run that first) and `tools\msi\RawStride.wxs`. It needs the .NET
+  SDK and WiX 7.0.1 as a .NET tool (`dotnet tool install --global wix --version 7.0.1`); the
+  script accepts WiX's EULA for each run only. It checks its result without installing anything:
+  it validates the MSI (the ICE checks) and compares an administrative image of it with the
+  program folder. `-Version <x.y.z>` gives the same files another version, for the upgrade test
+  only.
 - **A zip built on a developer's machine is for testing only.** Its exe holds the build machine's
   source paths in panic messages: the release profile has `debug = "line-tables-only"` and no path
   remapping, kept for latency measurements (ADR 0031 RL-Q12). A release is built by the release
@@ -67,7 +102,8 @@ A release is built by CI on a pushed tag, not on a developer's machine (ADR 0031
    commit and pushed, on the owner's yes.
 4. The workflow `Release` checks that the tag is on `main` and names `pw-loupe`'s version, runs
    `tools/release-build.ps1 -Section <version>`, and creates a **draft** GitHub Release (a
-   pre-release while the version starts with `0.`) with the zip, `SHA256SUMS.txt` and the notes.
+   pre-release while the version starts with `0.`) with the zip, the MSI, `SHA256SUMS.txt` and
+   the notes. The runner gets WiX 7.0.1 as a .NET tool first.
    If a release for the tag already exists the run fails; the draft is deleted and the run started
    again.
 5. The owner reads the draft and publishes it by hand.
@@ -89,9 +125,12 @@ release.
   (through `CARGO_ENCODED_RUSTFLAGS`, for that build only; it stops if `RUSTFLAGS` or
   `CARGO_ENCODED_RUSTFLAGS` is already set), holds neither of them nor `%USERPROFILE%`, with `\`
   or `/`, as ASCII or UTF-16LE, and names its PDB as `rawstride.pdb` without a folder;
-- `tools/package-dist.ps1 -NoBuild` succeeds; then it writes `target\dist\SHA256SUMS.txt`
-  (`sha256sum` form) for the zip. The zip is not byte-for-byte reproducible (entry times), so the
-  checksum that counts is the one of the zip the release run uploads.
+- `tools/package-dist.ps1 -NoBuild` succeeds, and then `tools/package-msi.ps1` (with the
+  release's version) makes `RawStride-<version>-windows-x64.msi` (an old MSI of that name is
+  removed at the start, as the old checksum file is); then it writes
+  `target\dist\SHA256SUMS.txt` (`sha256sum` form) with two lines, the zip's and the MSI's, in that
+  order. Neither file is byte-for-byte reproducible (the zip's entry times, the MSI's package
+  code), so the checksums that count are those of the files the release run uploads.
 
 A local run of `release-build.ps1` rebuilds `target\release\` with the remapping; a later plain
 `cargo build --release` rebuilds it back.
@@ -99,7 +138,8 @@ A local run of `release-build.ps1` rebuilds `target\release\` with the remapping
 ## What the PC needs
 
 Windows 10 or 11, x64. Nothing else: no Visual C++ Redistributable, no ExifTool, no WebView2, no
-Rust, vcpkg or Visual Studio.
+Rust, vcpkg or Visual Studio. This holds for the zip and the MSI alike: the MSI installs the same
+files.
 
 RL5 (the owner, 2026-11-20) ran the zip in a new standard Windows account on a development PC:
 it started, rendered a RAW, wrote a rating through the shipped ExifTool and left its folder
@@ -110,9 +150,11 @@ unchanged. That PC has the Build Tools and its own graphics driver, so two point
 
 ## Installing and removing
 
-- **Installing:** unpack the zip anywhere and start `rawstride.exe`.
-- **Removing:** delete the folder and `%LOCALAPPDATA%\RawStride` (`settings.txt`,
-  `field-values.txt` and the write journal `journal\`).
+- **With the MSI:** run it; RawStride is then in the Start menu. Remove it in Installed apps; that
+  keeps `%LOCALAPPDATA%\RawStride`, which can be deleted by hand afterwards.
+- **With the zip:** unpack it anywhere and start `rawstride.exe`. Remove it by deleting the folder
+  and `%LOCALAPPDATA%\RawStride` (`settings.txt`, `field-values.txt` and the write journal
+  `journal\`).
 
 ## What it writes, and where
 
@@ -124,8 +166,9 @@ unchanged. That PC has the Build Tools and its own graphics driver, so two point
 
 ## Not signed
 
-The exe is not signed yet, so Windows SmartScreen warns the first time it is started ("More info",
-then "Run anyway"; `README.txt` says so). The release page gives the zips' SHA-256 checksums.
+Neither the exe nor the MSI is signed yet, so Windows SmartScreen warns the first time either is
+started ("More info", then "Run anyway"; `README.txt` and the release notes say so). The release
+page gives the SHA-256 checksums of both files in `SHA256SUMS.txt`.
 Signing comes after `0.1.0` (ADR 0031 RL-Q6, RL8).
 
 ## History: the Tauri app's folder (2026-11-04)

@@ -13,7 +13,9 @@
 #   5. checks that the exe holds no repository, cargo home or user folder path and that it names
 #      its PDB as rawstride.pdb only;
 #   6. makes the portable zip (tools/package-dist.ps1 -NoBuild);
-#   7. writes target\dist\SHA256SUMS.txt for the zip.
+#   7. makes the installer from the zip's program folder (tools/package-msi.ps1, ADR 0031 RL9,
+#      task T306; needs WiX 7.0.1 on PATH);
+#   8. writes target\dist\SHA256SUMS.txt for the zip and the MSI.
 #
 # Run it from the repository root (docs/distribution.md):
 #
@@ -177,12 +179,16 @@ try {
     $distRoot = Join-Path $repositoryRoot 'target\dist'
     $zipName = "RawStride-$version-windows-x64.zip"
     $zipPath = Join-Path $distRoot $zipName
+    $msiName = "RawStride-$version-windows-x64.msi"
+    $msiPath = Join-Path $distRoot $msiName
     $sumsPath = Join-Path $distRoot 'SHA256SUMS.txt'
     $notesPath = Join-Path $distRoot 'release-notes.md'
     New-Item -ItemType Directory -Force -Path $distRoot | Out-Null
-    # A checksum file from an earlier run must not stand next to a zip from this one.
-    if (Test-Path -LiteralPath $sumsPath) {
-        Remove-Item -LiteralPath $sumsPath -Force
+    # A checksum file or an MSI from an earlier run must not stand next to a zip from this one.
+    foreach ($oldPath in @($sumsPath, $msiPath)) {
+        if (Test-Path -LiteralPath $oldPath) {
+            Remove-Item -LiteralPath $oldPath -Force
+        }
     }
 
     # --- 2. Release notes. ---
@@ -190,12 +196,20 @@ try {
     $download = @'
 ## Download
 
-`RawStride-<version>-windows-x64.zip`: unpack it anywhere and start `rawstride.exe`; the zip's
-`README.txt` says more. Windows 10 or 11, x64.
+`RawStride-<version>-windows-x64.msi`: installs RawStride for the current user in
+`%LOCALAPPDATA%\Programs\RawStride`, with a Start menu shortcut; no administrator rights. Close
+RawStride before installing a new version over an older one, which it replaces. Uninstall it in
+Installed apps, which keeps your settings in `%LOCALAPPDATA%\RawStride`.
 
-The program is not signed yet, so Windows SmartScreen may warn the first time it is started
-("Windows protected your PC": choose "More info", then "Run anyway"). Compare the zip's
-SHA-256 checksum with `SHA256SUMS.txt` first, for example with
+`RawStride-<version>-windows-x64.zip`: unpack it anywhere and start `rawstride.exe`; the zip's
+`README.txt` says more.
+
+Both need Windows 10 or 11, x64.
+
+The program and the installer are not signed yet, so Windows SmartScreen may warn the first time
+the MSI or the program is started ("Windows protected your PC": choose "More info", then "Run
+anyway"). Compare the file's SHA-256 checksum with `SHA256SUMS.txt` first, for example with
+`Get-FileHash RawStride-<version>-windows-x64.msi` or
 `Get-FileHash RawStride-<version>-windows-x64.zip` in PowerShell.
 
 The source code of this version is the tag's source archive below; how to build it is in
@@ -306,9 +320,16 @@ The source code of this version is the tag's source archive below; how to build 
         throw "tools\package-dist.ps1 made no $zipPath."
     }
 
-    # --- 7. SHA256SUMS.txt. ---
+    # --- 7. The installer, from the zip's program folder (no -Version: the release's version). ---
+    & (Join-Path $repositoryRoot 'tools\package-msi.ps1')
+    if (-not (Test-Path -LiteralPath $msiPath -PathType Leaf)) {
+        throw "tools\package-msi.ps1 made no $msiPath."
+    }
+
+    # --- 8. SHA256SUMS.txt: the zip, then the MSI. ---
     $zipSha256 = (Get-FileHash -LiteralPath $zipPath -Algorithm SHA256).Hash.ToLowerInvariant()
-    $sums = "$zipSha256  $zipName`n"
+    $msiSha256 = (Get-FileHash -LiteralPath $msiPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    $sums = "$zipSha256  $zipName`n$msiSha256  $msiName`n"
     [System.IO.File]::WriteAllText($sumsPath, $sums, $utf8WithoutBom)
     Write-Output ''
     Write-Output "$sumsPath`:"
