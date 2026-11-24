@@ -1,4 +1,4 @@
-# T298. Template changes for one import only — Blocked
+# T298. Template changes for one import only — Open
 
 - **Why:** ADR 0017 U13-Q21 (owner, 2026-11-23, at U13c's hand check). After T295 (and T297) a
   change made with Edit… reaches the import only when it is saved to the template file, so a
@@ -37,17 +37,23 @@
      **Choose…** drops the edit (a file chosen, or the dialog cancelled: cancelled keeps
      everything as it was, edit included). **Edit…** with an edit that applies opens the window
      (`from_import` true) and puts the edit's template in the form with `TemplateForm::load`,
-     the window's `file` the edit's `file` (its title and Save…'s suggested name), and the form
-     counted as changed so Close asks before the changes in the window are lost (the edit itself
-     stays the import's until another Use for This Import, a Save…, Choose… or None).
+     the window's `file` the edit's `file` (its title and Save…'s suggested name). The load
+     settles the form as `load` always does, so Close asks only after further changes in the
+     window (U13-Q21, amended 2026-11-24): the edit itself stays the import's until another Use
+     for This Import, a Save…, Choose… or None, so closing loses nothing of it. This path does not
+     go through `open_template_window`'s file load (nothing is read from the file); it opens the
+     window as `open_template` does, sets `from_import`, and puts the edit in it.
   4. **A Save…** in a window opened from the import dialog that makes the saved file the
      import's template (`poll_template_io`, T295) also drops the edit: the saved file now holds
-     it.
+     it. The edit is dropped there explicitly, also when the saved file is the one already chosen
+     (the form's `template` then does not change, so `applies` alone would keep it).
   5. **Start** (`start_import`): for a run that copies, with an edit that applies, the import
      runs at once with `Some(edit.template.clone())` (no file check, no read; the checks were
      made at the button). Without an edit, as today. `marks_only` as today (no template).
   6. **The edit is dropped** in `close_import` (with the template read's wait), so a closed
-     dialog never keeps it; `settings.txt` keeps only the file, unchanged.
+     dialog never keeps it; `settings.txt` keeps only the file, unchanged. An import run does not
+     drop it: after New Import in the same dialog it still applies, as the file stays chosen
+     (U13-Q21, amended 2026-11-24).
   7. **Texts** (rule 13): `Use for This Import` in `template_form.rs` (`TemplateText`, the
      window's text); `{file} (changed for this import)` and `Not saved (this import only)` in
      `import_text.rs` (a function for the first, an `ImportText` variant for the second),
@@ -68,7 +74,8 @@
   import without saving it. The owner's hand check: Edit…, a change, Use for This Import → the
   row shows "(changed for this import)", the import writes the changed values, the file is
   unchanged (opened again with Edit… after closing the dialog); Edit… with an edit shows the
-  changed version; `{job}` refuses the button with its text; None and Choose… drop the edit; a
+  changed version, and Close there without a further change asks nothing and keeps the edit;
+  after the import, New Import still shows "(changed for this import)"; `{job}` refuses the button with its text; None and Choose… drop the edit; a
   Save… after an edit makes the saved file the template; closing and opening the import dialog
   shows the file without the changes.
 
@@ -77,3 +84,4 @@
 | Date | Status | Note |
 |---|---|---|
 | 2026-11-23 | Blocked | Added (ADR 0017 U13-Q21, owner, 2026-11-23, at U13c's hand check). Waits for T297 and its cold read |
+| 2026-11-24 | Open | Cold read by the reviewer after T297 (e2a1d8a, hand-checked b3c16ce), against main.rs and template_form.rs. `TemplateForm::load` always settles the form, so "counted as changed" in point 3 had no way to be made; the owner decided (U13-Q21 amended 2026-11-24, ADR 0017 §6.5) that Close asks only after further changes, as a plain load gives, and that the edit stays after New Import in the same dialog. Point 3: Edit… with an edit opens the window without `open_template_window`'s file load. Point 4: the edit dropped explicitly on a Save…, also of the file already chosen. Point 6 and the hand check updated |
