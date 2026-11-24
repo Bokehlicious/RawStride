@@ -17,6 +17,8 @@
 //! - **The metadata window's Save as Template…** ([`window_template`], U13-Q7, U13-Q25, T300): a
 //!   [`TemplateFile`] made from the items the metadata window shows; its Load Template… is
 //!   `EditorForm::load_template`.
+//! - **The right-click menu's Apply Template** ([`template_files`], [`template_name`], U13-Q26,
+//!   T303): the templates folder's files and the names the submenu shows.
 //! - **Texts** ([`TemplateText`], [`template_text`] and the functions after it): every text the
 //!   template window shows (`docs/tasks/README.md` rule 13).
 
@@ -24,6 +26,7 @@ use std::path::{Path, PathBuf};
 
 use pw_metadata::template_file::{TemplateFile, TemplateFileError, TemplateRead, can_add};
 use pw_metadata::value::{StructValue, Value};
+use pw_metadata::variables::VariableError;
 
 use crate::editor::{EditorField, EditorForm, EditorSection, TemplateValues, variable_error_text};
 use crate::editor_layout::{EditorItem, EditorLayout};
@@ -661,6 +664,48 @@ pub fn templates_folder(local_app_data: &Path) -> PathBuf {
     local_app_data.join("RawStride").join("templates")
 }
 
+/// The template files the right-click menu's Apply Template lists (ADR 0017 U13-Q26, T303): the
+/// files of `folder` itself whose extension is `xmp` in any case, not those in its subfolders
+/// (`.saving` included), sorted by name without regard to case; empty when the folder is missing
+/// or cannot be read.
+pub fn template_files(folder: &Path) -> Vec<PathBuf> {
+    let Ok(entries) = std::fs::read_dir(folder) else {
+        return Vec::new();
+    };
+    let mut files: Vec<PathBuf> = entries
+        .filter_map(Result::ok)
+        .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_file()))
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.extension()
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("xmp"))
+        })
+        .collect();
+    files.sort_by_cached_key(|path| {
+        path.file_name()
+            .map(|name| name.to_string_lossy().to_lowercase())
+            .unwrap_or_default()
+    });
+    files
+}
+
+/// The name of a template file as Apply Template shows it (ADR 0017 U13-Q26, U13-Q27, T303): the
+/// file name without `.xmp` (any case); a name with another extension, or none, whole.
+pub fn template_name(path: &Path) -> String {
+    let is_xmp = path
+        .extension()
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("xmp"));
+    let name = if is_xmp {
+        path.file_stem()
+    } else {
+        path.file_name()
+    };
+    name.map_or_else(
+        || path.display().to_string(),
+        |name| name.to_string_lossy().into_owned(),
+    )
+}
+
 /// `path` with a name that ends in `.xmp`: unchanged when it does (any case), otherwise with
 /// `.xmp` added to the whole name (`a.txt` → `a.txt.xmp`).
 pub fn with_xmp_extension(path: &Path) -> PathBuf {
@@ -735,6 +780,31 @@ pub enum TemplateText {
     ReplaceQuestion { file: String },
     /// The button that replaces the file.
     Replace,
+    /// The question before Apply Template writes the template `name` (the file name without
+    /// `.xmp`) to `images` images (ADR 0017 U13-Q27, T303): then, when `left_out` images without
+    /// metadata support were left out, a sentence that says so, then the lines of
+    /// [`not_loaded_lines`] of the read, one each.
+    ApplyQuestion {
+        name: String,
+        images: usize,
+        left_out: usize,
+        not_loaded: Vec<String>,
+    },
+    /// The button of that question that writes the template.
+    Apply,
+    /// The status line while a template batch writes image `current` of `total`.
+    Applying { current: usize, total: usize },
+    /// The status line after a template batch wrote `images` images with nothing failed and no
+    /// notice.
+    Applied { name: String, images: usize },
+    /// Apply Template with a template that holds no field.
+    ApplyNoField { name: String },
+    /// Apply Template with a template whose variable cannot be read; the variable error's text.
+    ApplyVariables { name: String, reason: String },
+    /// Apply Template when none of the target images can hold metadata.
+    ApplyNoTarget,
+    /// Apply Template refused because a batch or the metadata window's own save started meanwhile.
+    ApplyBatchRunning,
 }
 
 /// The text of `text`.
@@ -785,6 +855,45 @@ pub fn template_text(text: &TemplateText) -> String {
         TemplateText::Cancel => "Cancel".to_string(),
         TemplateText::ReplaceQuestion { file } => format!("{file} already exists. Replace it?"),
         TemplateText::Replace => "Replace".to_string(),
+        TemplateText::ApplyQuestion {
+            name,
+            images,
+            left_out,
+            not_loaded,
+        } => {
+            let mut text = match images {
+                1 => format!("Apply the template {name} to 1 image?"),
+                n => format!("Apply the template {name} to {n} images?"),
+            };
+            match left_out {
+                0 => {}
+                1 => text.push_str("\n1 image without metadata support is left out."),
+                m => text.push_str(&format!(
+                    "\n{m} images without metadata support are left out."
+                )),
+            }
+            for line in not_loaded {
+                text.push('\n');
+                text.push_str(line);
+            }
+            text
+        }
+        TemplateText::Apply => "Apply".to_string(),
+        TemplateText::Applying { current, total } => {
+            format!("Applying the template {current} of {total} …")
+        }
+        TemplateText::Applied { name, images } => match images {
+            1 => format!("Template {name} applied to 1 image."),
+            n => format!("Template {name} applied to {n} images."),
+        },
+        TemplateText::ApplyNoField { name } => format!("The template {name} holds no field."),
+        TemplateText::ApplyVariables { name, reason } => {
+            format!("The template {name} cannot be applied: {reason}")
+        }
+        TemplateText::ApplyNoTarget => "None of the images can hold metadata.".to_string(),
+        TemplateText::ApplyBatchRunning => {
+            "Metadata is being written. Try again when it is done.".to_string()
+        }
     }
 }
 
@@ -824,6 +933,16 @@ pub fn load_failed_text(file: &str, error: &TemplateFileError) -> String {
     template_text(&TemplateText::LoadFailed {
         file: file.to_string(),
         reason: error.to_string(),
+    })
+}
+
+/// The message of Apply Template with the template `name` whose variable cannot be read
+/// (`TemplateFile::check_variables`, ADR 0017 U13-Q9, U13-Q27, T303), with the metadata window's
+/// text of the error.
+pub fn apply_variables_text(name: &str, error: &VariableError) -> String {
+    template_text(&TemplateText::ApplyVariables {
+        name: name.to_string(),
+        reason: variable_error_text(error),
     })
 }
 
@@ -1770,6 +1889,155 @@ mod tests {
                     property_label("Iptc4xmpExt:AODateCreated", Language::En)
                 ),
             ]
+        );
+    }
+
+    /// Apply Template lists the folder's own `.xmp` files in any case, sorted by name without
+    /// regard to case; not another extension, not a subfolder's file (`.saving` included), not a
+    /// folder whose name ends in `.xmp` (ADR 0017 U13-Q26, T303).
+    #[test]
+    fn template_files_lists_the_folders_own_xmp_files_by_name() {
+        let folder =
+            std::env::temp_dir().join(format!("pw-loupe-template-files-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&folder);
+        std::fs::create_dir_all(folder.join(".saving")).unwrap();
+        std::fs::create_dir_all(folder.join("e.xmp")).unwrap();
+        for file in ["b.xmp", "A.XMP", "c.txt", ".saving/d.xmp"] {
+            std::fs::write(folder.join(file), b"x").unwrap();
+        }
+        let files = template_files(&folder);
+        let _ = std::fs::remove_dir_all(&folder);
+        assert_eq!(files, [folder.join("A.XMP"), folder.join("b.xmp")]);
+    }
+
+    /// A folder that is missing gives an empty list (T303).
+    #[test]
+    fn template_files_of_a_missing_folder_is_empty() {
+        let folder = std::env::temp_dir().join(format!(
+            "pw-loupe-template-files-missing-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&folder);
+        assert!(template_files(&folder).is_empty());
+    }
+
+    /// A template's name in Apply Template is the file name without `.xmp` in any case; another
+    /// extension stays (T303).
+    #[test]
+    fn a_template_name_is_the_file_name_without_xmp() {
+        assert_eq!(template_name(Path::new(r"C:\t\News.xmp")), "News");
+        assert_eq!(template_name(Path::new(r"C:\t\Sport 2.XMP")), "Sport 2");
+        assert_eq!(template_name(Path::new(r"C:\t\a.b.xmp")), "a.b");
+        assert_eq!(template_name(Path::new(r"C:\t\notes.txt")), "notes.txt");
+        assert_eq!(template_name(Path::new(r"C:\t\plain")), "plain");
+    }
+
+    /// Every text of Apply Template, exactly, in the singular and the plural (ADR 0017 U13-Q27,
+    /// T303).
+    #[test]
+    fn every_apply_template_text() {
+        let texts = [
+            (TemplateText::Apply, "Apply"),
+            (
+                TemplateText::Applying {
+                    current: 2,
+                    total: 3,
+                },
+                "Applying the template 2 of 3 …",
+            ),
+            (
+                TemplateText::Applied {
+                    name: "News".to_string(),
+                    images: 1,
+                },
+                "Template News applied to 1 image.",
+            ),
+            (
+                TemplateText::Applied {
+                    name: "News".to_string(),
+                    images: 3,
+                },
+                "Template News applied to 3 images.",
+            ),
+            (
+                TemplateText::ApplyNoField {
+                    name: "News".to_string(),
+                },
+                "The template News holds no field.",
+            ),
+            (
+                TemplateText::ApplyVariables {
+                    name: "News".to_string(),
+                    reason: "the variable {job} is unknown.".to_string(),
+                },
+                "The template News cannot be applied: the variable {job} is unknown.",
+            ),
+            (
+                TemplateText::ApplyNoTarget,
+                "None of the images can hold metadata.",
+            ),
+            (
+                TemplateText::ApplyBatchRunning,
+                "Metadata is being written. Try again when it is done.",
+            ),
+        ];
+        for (text, expected) in texts {
+            assert_eq!(template_text(&text), expected, "{text:?}");
+        }
+        let error = VariableError::Unknown("job".to_string());
+        assert_eq!(
+            apply_variables_text("News", &error),
+            format!(
+                "The template News cannot be applied: {}",
+                variable_error_text(&error)
+            )
+        );
+        assert!(apply_variables_text("News", &error).contains("{job}"));
+    }
+
+    /// The question before Apply Template: one image or several, with and without the sentence on
+    /// the images left out (singular and plural), and the lines of what was not loaded after it
+    /// (T303).
+    #[test]
+    fn the_apply_template_question() {
+        let question = |images, left_out, not_loaded: &[&str]| {
+            template_text(&TemplateText::ApplyQuestion {
+                name: "News".to_string(),
+                images,
+                left_out,
+                not_loaded: not_loaded.iter().map(|line| line.to_string()).collect(),
+            })
+        };
+        assert_eq!(question(1, 0, &[]), "Apply the template News to 1 image?");
+        assert_eq!(question(3, 0, &[]), "Apply the template News to 3 images?");
+        assert_eq!(
+            question(3, 1, &[]),
+            "Apply the template News to 3 images?\n\
+             1 image without metadata support is left out."
+        );
+        assert_eq!(
+            question(1, 2, &[]),
+            "Apply the template News to 1 image?\n\
+             2 images without metadata support are left out."
+        );
+        assert_eq!(
+            question(
+                2,
+                0,
+                &[
+                    "1 field of the file was not loaded: Rating.",
+                    "x could not be read (y)."
+                ]
+            ),
+            "Apply the template News to 2 images?\n\
+             1 field of the file was not loaded: Rating.\n\
+             x could not be read (y)."
+        );
+        assert_eq!(
+            question(2, 2, &["1 field of the file was not loaded: Rating."]),
+            "Apply the template News to 2 images?\n\
+             2 images without metadata support are left out.\n\
+             1 field of the file was not loaded: Rating."
         );
     }
 }

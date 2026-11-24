@@ -216,7 +216,7 @@ ADR 0019 E1–E3.)
 ## The right-click menu on images
 
 (Review of T221, ADR 0019 E4, 2026-11-19; none seen in the hand check of E4. The filmstrip has no
-menu by the owner's choice, ADR 0019 §2.9; the template submenu waits for ADR 0017 U13.)
+menu by the owner's choice, ADR 0019 §2.9.)
 
 - *Keys while the menu is open:* the keys keep acting while the right-click menu is open, as with
   the menu bar's menus: Escape closes it and also clears the marking, the arrows move the current
@@ -426,6 +426,14 @@ with ADR 0026 F3, in `plans/adr-0018-0025-steps.md`.)
   Template… saves only the first Location Created entry, but an error in any entry refuses it,
   and the error is named by its sub-field without the entry, as if it were in the first. A task
   only if it is seen in use.
+- *Apply Template and moves* (T303's chain review, recorded at its Done, 2026-11-24): a move or
+  delete of an image while a template batch still has it pending is not held back (moves wait
+  only for rating writes); the write then fails and the image is listed as failed.
+- *A stopped thread greys the submenu* (T303): a template thread or metadata worker that stops
+  with Apply Template's request taken leaves the submenu greyed until the program restarts.
+- *No undo* (T303): a template write, from the right-click menu or the import, has no undo.
+- *Apply Template during an import* (T303): a template batch on a backup or `subst` tab of a
+  running import may write a file the import is about to write.
 
 ## The metadata window's layout (ADR 0017 U10b)
 

@@ -87,7 +87,7 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status |
 |---|---|---|
-| [T303](T303-apply-template-submenu.md) | The right-click menu's Apply Template submenu | Open |
+| – | No open tasks | – |
 
 ## Writing a task (owner and reviewer)
 

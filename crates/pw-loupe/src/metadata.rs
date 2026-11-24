@@ -1149,7 +1149,6 @@ impl MetadataCache {
     /// no image is read again at its end, and its `BatchSummary`, with every image's notices in
     /// `kept`, is taken with `take_template_batch_done`. False, and nothing sent, for no images or
     /// while the editor's write or any batch runs.
-    #[cfg_attr(not(test), allow(dead_code))]
     pub fn start_template_batch(
         &mut self,
         images: Vec<PathBuf>,
@@ -1204,7 +1203,6 @@ impl MetadataCache {
 
     /// The progress of a running template batch only, counted as `batch_progress` (T302), for the
     /// main window's status bar; `None` while no batch or "Apply to All Marked" runs.
-    #[cfg_attr(not(test), allow(dead_code))]
     pub fn template_batch_progress(&self) -> Option<(usize, usize)> {
         self.editor
             .batch
@@ -1215,7 +1213,6 @@ impl MetadataCache {
 
     /// The summary of the last template batch once every write has answered (T302), taken once.
     /// The metadata window's `take_editor_events` never gives it.
-    #[cfg_attr(not(test), allow(dead_code))]
     pub fn take_template_batch_done(&mut self) -> Option<BatchSummary> {
         self.editor.template_done.take()
     }

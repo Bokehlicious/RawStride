@@ -68,6 +68,8 @@ pub enum ShellText {
     RecoveryTitle,
     /// View ▸ Sort By (ADR 0017 U14-Q7, T138).
     SortMenu,
+    /// The right-click menu's submenu Apply Template (ADR 0017 U13-Q8, T303).
+    ApplyTemplate,
 }
 
 /// The text of `text`.
@@ -95,6 +97,7 @@ pub fn shell_text(text: ShellText) -> &'static str {
         ShellText::ThumbnailSize => "Size",
         ShellText::RecoveryTitle => "Metadata writing was interrupted",
         ShellText::SortMenu => "Sort By",
+        ShellText::ApplyTemplate => "Apply Template",
     }
 }
 
@@ -596,6 +599,9 @@ pub fn command_text(command: Command) -> String {
         Command::Sort(key) => sort_key_text(key).to_owned(),
         Command::SortDescending => "Descending".to_owned(),
         Command::About => "About RawStride…".to_owned(),
+        // Never shown in the menu, which draws each template file's name.
+        Command::ApplyTemplate(_) => "Apply Template".to_owned(),
+        Command::ApplyTemplateFile => "Choose File…".to_owned(),
     }
 }
 
@@ -1030,6 +1036,17 @@ mod tests {
             "Open in Another Program…"
         );
         assert_eq!(key_text(OPEN_IN_KEY), "Ctrl+E");
+    }
+
+    /// The right-click menu's submenu Apply Template and its two commands (ADR 0017 U13-Q8,
+    /// U13-Q27, T303): a listed file (never shown, the menu draws the file's name) and Choose
+    /// File….
+    #[test]
+    fn the_apply_template_texts() {
+        assert_eq!(shell_text(ShellText::ApplyTemplate), "Apply Template");
+        assert_eq!(command_text(Command::ApplyTemplate(0)), "Apply Template");
+        assert_eq!(command_text(Command::ApplyTemplate(7)), "Apply Template");
+        assert_eq!(command_text(Command::ApplyTemplateFile), "Choose File…");
     }
 
     /// Visa ▸ Förhandsvisning (G) opens and closes the preview (ADR 0017 §2.2, T111); the old

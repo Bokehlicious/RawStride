@@ -24,6 +24,9 @@ Downloads are on the [Releases page](https://github.com/Bokehlicious/RawStride/r
 - The metadata window has Load Template… and Save as Template… buttons: Load Template… puts
   a template file's fields into the form as unsaved changes and names what it could not load;
   Save as Template… saves the fields the window shows as a template file.
+- The right-click menu on images has an Apply Template submenu, listing the saved templates and
+  Choose File…: after one question the chosen template is written to the marked images (or the
+  clicked one), with its progress in the status bar.
 
 ### Changed
 

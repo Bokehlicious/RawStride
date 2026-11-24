@@ -7,6 +7,7 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -17,8 +18,8 @@ use eframe::egui;
 use inspector::{ExifInspector, ExifReader, ExifShown, exif_state_text};
 use inspector_text::{InspectorText, exif_label, inspector_text};
 use metadata::{
-    DeleteAnswer, EditorEvent, InspectorState, MetadataCache, MetadataSubmit, MoveAnswer,
-    StatusLine,
+    BatchSummary, DeleteAnswer, EditorEvent, InspectorState, MetadataCache, MetadataSubmit,
+    MoveAnswer, StatusLine,
 };
 use pw_imagecheck::RawImageCheck;
 use pw_loupe::SavedLibrary;
@@ -130,15 +131,15 @@ use pw_loupe::{
 use pw_loupe::{
     SaveError, TEMPLATE_COLUMN_MIN_WIDTH, TEMPLATE_WINDOW_MIN, TemplateEvent, TemplateFieldError,
     TemplateForm, TemplateIo, TemplateItem, TemplateRefused, TemplateRow, TemplateText,
-    left_column_sections, load_failed_text, not_loaded_lines, refused_text, save_failed_text,
-    template_rows, template_text, template_window_size, templates_folder, window_template,
-    with_xmp_extension,
+    apply_variables_text, left_column_sections, load_failed_text, not_loaded_lines, refused_text,
+    save_failed_text, template_files, template_name, template_rows, template_text,
+    template_window_size, templates_folder, window_template, with_xmp_extension,
 };
 use pw_metadata::edit::{Edit, EditOptions};
 use pw_metadata::iim::Fallback;
 use pw_metadata::journal::Journal;
 use pw_metadata::read::MetadataRead;
-use pw_metadata::template_file::{TemplateFile, TemplateRead};
+use pw_metadata::template_file::{TemplateFile, TemplateFileError, TemplateRead};
 use pw_metadata::{
     DeleteError, DeleteRefusal, MetadataWorker, PreparedDelete, Rating, WriteSetup, supports_rating,
 };
@@ -1063,6 +1064,73 @@ impl ImportTemplateWait {
     }
 }
 
+/// The right-click menu's Apply Template while its template file is read (ADR 0017 U13-Q27,
+/// T303): the id of the load sent to the template thread, the file, the images taken when the
+/// item was chosen and how many were left out. While it is set the submenu's items are greyed and
+/// a repaint is asked for; the answer is held while the metadata window is open.
+#[derive(Debug)]
+struct ApplyTemplateWait {
+    id: u64,
+    path: PathBuf,
+    /// The target images that can hold metadata, as the metadata cache keys them.
+    targets: Vec<PathBuf>,
+    /// How many target images were left out because their kind holds no metadata.
+    left_out: usize,
+    /// The template thread's answer, held until the metadata window is closed.
+    answer: Option<Result<TemplateRead, TemplateFileError>>,
+}
+
+/// The images Apply Template writes (ADR 0017 U13-Q8, U13-Q27, T303): `paths` (the right-click
+/// targets, as the tab names them) resolved against `cwd` as the metadata cache keys them, less
+/// the files whose kind holds no metadata (`supports_rating`), which are counted.
+fn template_targets(paths: &[PathBuf], cwd: Option<&Path>) -> (Vec<PathBuf>, usize) {
+    let resolved = paths.iter().map(|path| match cwd {
+        Some(cwd) => resolve_path(cwd, path),
+        None => path.clone(),
+    });
+    let (targets, left_out): (Vec<PathBuf>, Vec<PathBuf>) =
+        resolved.partition(|path| supports_rating(path));
+    (targets, left_out.len())
+}
+
+/// How many lines of a template batch's summary its message box shows at most before "… and
+/// {more} more" (T303).
+const TEMPLATE_REPORT_LINES: usize = 20;
+
+/// What the main window shows when a template batch has ended (ADR 0017 U13-Q27, T303).
+#[derive(Debug, PartialEq, Eq)]
+enum TemplateBatchReport {
+    /// Nothing failed and no notice: only the status line's text.
+    Applied(String),
+    /// A failure or a notice: the message box's lines and the status line's text.
+    Listed { lines: Vec<String>, message: String },
+}
+
+/// The report of the template batch that wrote the template `name` (T303): with nothing failed and
+/// no notice, `Template {name} applied to {n} images.`; otherwise the summary's `status_lines`
+/// (the written count, the failed files, the notices), at most `TEMPLATE_REPORT_LINES` and then
+/// "… and {more} more", with the written-count line for the status line.
+fn template_batch_report(name: &str, summary: &BatchSummary) -> TemplateBatchReport {
+    if summary.failed.is_empty() && summary.kept.is_empty() && summary.notices.is_empty() {
+        return TemplateBatchReport::Applied(template_text(&TemplateText::Applied {
+            name: name.to_string(),
+            images: summary.written,
+        }));
+    }
+    let all: Vec<String> = summary
+        .status_lines()
+        .into_iter()
+        .map(|line| line.text)
+        .collect();
+    let message = all.first().cloned().unwrap_or_default();
+    let more = all.len().saturating_sub(TEMPLATE_REPORT_LINES);
+    let mut lines: Vec<String> = all.into_iter().take(TEMPLATE_REPORT_LINES).collect();
+    if more > 0 {
+        lines.push(editor_text(&EditorText::MoreUnsaved { more }));
+    }
+    TemplateBatchReport::Listed { lines, message }
+}
+
 /// Whether a successful save of the template window makes the saved file the import's template
 /// (U13-Q17, T295): only in a window opened from the import dialog (`from_import`), and only while
 /// an import dialog is open and editing or previewing (`dialog`, its state), not while it runs or
@@ -1254,6 +1322,15 @@ struct Loupe {
     /// The template window's form handed to the open import without a file (U13-Q21, T298);
     /// it counts only while it `applies` to the import form's template.
     import_template_edit: Option<ImportTemplateEdit>,
+    /// The right-click menu's Apply Template while its template file is read (T303).
+    apply_template_wait: Option<ApplyTemplateWait>,
+    /// The name of the template the running template batch writes, for its texts (T303).
+    template_batch_name: Option<String>,
+    /// The templates folder's files Apply Template lists (U13-Q26, T303): read when the submenu
+    /// is drawn and this is `None`, set through `&self` as the menu is drawn, and emptied after
+    /// the frame's commands have run and no popup is open, so each opening reads the folder once
+    /// and `run_command` still finds the file of `ApplyTemplate(i)` in the frame of the click.
+    template_list: RefCell<Option<Vec<PathBuf>>>,
     import_hidden: bool,
     /// The Tasks area under the library (ADR 0017 §2.1, U5, T140): the import's row and the
     /// error list.
@@ -4213,6 +4290,9 @@ impl Loupe {
             if let Some(message) = &self.message {
                 parts.push(message.clone());
             }
+            if let Some(applying) = self.template_batch_status() {
+                parts.push(applying);
+            }
             if let Some(sorting) = self.sort_status() {
                 parts.push(sorting);
             }
@@ -5254,8 +5334,10 @@ impl Loupe {
     }
 
     /// Takes the template thread's answers (T293 point 2): the answer to the import's read of its
-    /// template goes to the import (T295), the answer to the metadata window's Load Template… or
-    /// Save as Template… to that window (T301), the others to the template window; an answer that
+    /// template goes to the import (T295), the answer to the right-click menu's Apply Template to
+    /// its wait, acted on once the metadata window is closed (T303), the answer to the metadata
+    /// window's Load Template… or Save as Template… to that window (T301), the others to the
+    /// template window; an answer that
     /// arrives after the window or the import dialog was closed, or the metadata window moved to
     /// another image, is dropped. A save in a window opened from the import dialog makes the
     /// saved file the import's template. Repaints while a window or the import waits.
@@ -5273,6 +5355,17 @@ impl Loupe {
                 }
                 self.import_template_wait = Some(wait);
             }
+            // The read of Apply Template's file (T303), held until it is acted on below.
+            let event = match (self.apply_template_wait.as_mut(), event) {
+                (Some(wait), TemplateEvent::Loaded { id, result, .. })
+                    if wait.answer.is_none() && id == wait.id =>
+                {
+                    wait.answer = Some(result);
+                    ctx.request_repaint();
+                    continue;
+                }
+                (_, event) => event,
+            };
             // Taken before the window is drawn, so the draw's check for a changed form does not
             // clear the status the answer sets.
             let event = match self.metadata_window.as_mut() {
@@ -5307,7 +5400,20 @@ impl Loupe {
                 self.import_submit_error = None;
             }
         }
+        // Apply Template's answer is acted on once the metadata window is closed (no question over
+        // the window; T303).
+        if self.metadata_window.is_none()
+            && self
+                .apply_template_wait
+                .as_ref()
+                .is_some_and(|wait| wait.answer.is_some())
+            && let Some(wait) = self.apply_template_wait.take()
+        {
+            self.apply_template_answer(wait);
+            ctx.request_repaint();
+        }
         if self.import_template_wait.is_some()
+            || self.apply_template_wait.is_some()
             || self
                 .template_window
                 .as_ref()
@@ -7965,6 +8071,13 @@ impl Loupe {
             // Greyed without a folder and while files are moved or deleted (ADR 0026 F1, T242):
             // a reload then could list a file on its way.
             Command::ReloadFolder => reload_enabled(tab, self.moves.busy() || self.delete.busy()),
+            // Greyed without a current image, while a batch of either kind runs, and while a
+            // template chosen here is read (ADR 0017 U13-Q27, T303).
+            Command::ApplyTemplate(_) | Command::ApplyTemplateFile => {
+                tab.is_some_and(|tab| tab.position().is_some())
+                    && !self.metadata.batch_running()
+                    && self.apply_template_wait.is_none()
+            }
             _ => true,
         }
     }
@@ -8073,6 +8186,133 @@ impl Loupe {
                     ..self.settings.shell.sort
                 },
             ),
+            Command::ApplyTemplate(index) => {
+                let path = self
+                    .template_list
+                    .borrow()
+                    .as_ref()
+                    .and_then(|files| files.get(usize::from(index)).cloned());
+                if let Some(path) = path {
+                    let targets = self.key_targets();
+                    self.send_apply_template(path, &targets);
+                }
+            }
+            Command::ApplyTemplateFile => self.apply_template_file(),
+        }
+    }
+
+    /// Apply Template ▸ Choose File… (ADR 0017 U13-Q27, T303): the targets are taken before the
+    /// open dialog opens; the file chosen is read as a listed one is, Cancel does nothing.
+    fn apply_template_file(&mut self) {
+        let targets = self.key_targets();
+        if let Some(path) = template_file_dialog().pick_file() {
+            self.send_apply_template(path, &targets);
+        }
+    }
+
+    /// Sends the template file `path` chosen in Apply Template to the template thread and waits
+    /// for it with `targets` (the right-click targets, ADR 0019 E-Q16) less the files without
+    /// metadata support (T303). When it cannot be sent, the message box says the reader stopped.
+    fn send_apply_template(&mut self, path: PathBuf, targets: &[PathBuf]) {
+        let cwd = std::env::current_dir().ok();
+        let (targets, left_out) = template_targets(targets, cwd.as_deref());
+        match self.template_io.as_mut().map(|io| io.load(path.clone())) {
+            Some(Ok(id)) => {
+                self.apply_template_wait = Some(ApplyTemplateWait {
+                    id,
+                    path,
+                    targets,
+                    left_out,
+                    answer: None,
+                });
+            }
+            Some(Err(_)) | None => template_message(
+                &template_name(&path),
+                &template_text(&TemplateText::LoadStopped {
+                    file: file_name_text(&path),
+                }),
+            ),
+        }
+    }
+
+    /// Apply Template's answer from the template thread (ADR 0017 U13-Q27, T303), once the
+    /// metadata window is closed: a message box when the file could not be read, holds no field,
+    /// has a variable that cannot be read, or no target is left; otherwise the question, and on
+    /// Apply the template batch, or the message box when a batch or the metadata window's save
+    /// started meanwhile.
+    fn apply_template_answer(&mut self, wait: ApplyTemplateWait) {
+        let Some(answer) = wait.answer else {
+            return;
+        };
+        let name = template_name(&wait.path);
+        let read = match answer {
+            Ok(read) => read,
+            Err(error) => {
+                template_message(
+                    &name,
+                    &load_failed_text(&file_name_text(&wait.path), &error),
+                );
+                return;
+            }
+        };
+        if read.template.fields.is_empty() {
+            template_message(
+                &name,
+                &template_text(&TemplateText::ApplyNoField { name: name.clone() }),
+            );
+            return;
+        }
+        if let Err(error) = read.template.check_variables() {
+            template_message(&name, &apply_variables_text(&name, &error));
+            return;
+        }
+        if wait.targets.is_empty() {
+            template_message(&name, &template_text(&TemplateText::ApplyNoTarget));
+            return;
+        }
+        let question = TemplateText::ApplyQuestion {
+            name: name.clone(),
+            images: wait.targets.len(),
+            left_out: wait.left_out,
+            not_loaded: not_loaded_lines(&read, &[]),
+        };
+        if !template_question(question, TemplateText::Apply) {
+            return;
+        }
+        if self.metadata.start_template_batch(
+            wait.targets,
+            read.template,
+            &mut self.metadata_worker,
+        ) {
+            self.template_batch_name = Some(name);
+        } else {
+            template_message(&name, &template_text(&TemplateText::ApplyBatchRunning));
+        }
+    }
+
+    /// The status line's part while a template batch runs (ADR 0017 U13-Q27, T303): "Applying the
+    /// template {i} of {n} …"; `None` otherwise.
+    fn template_batch_status(&self) -> Option<String> {
+        self.metadata
+            .template_batch_progress()
+            .map(|(current, total)| template_text(&TemplateText::Applying { current, total }))
+    }
+
+    /// The end of a template batch (ADR 0017 U13-Q27, T303), taken every frame, also while the
+    /// metadata window is open: with nothing failed and no notice the status line says it was
+    /// applied; otherwise a message box lists the summary and the status line gets the written
+    /// count.
+    fn finish_template_batch(&mut self) {
+        let Some(summary) = self.metadata.take_template_batch_done() else {
+            return;
+        };
+        let name = self.template_batch_name.take().unwrap_or_default();
+        match template_batch_report(&name, &summary) {
+            TemplateBatchReport::Applied(text) => self.message = Some(text),
+            TemplateBatchReport::Listed { lines, message } => {
+                self.message = Some(message);
+                template_message(&name, &lines.join("\n"));
+            }
         }
     }
 
@@ -8146,6 +8386,8 @@ impl Loupe {
                                     });
                                 });
                             }
+                            // Only the right-click menu has Apply Template (U13-Q8, T303).
+                            MenuEntry::Templates => {}
                         }
                     }
                 });
@@ -8169,9 +8411,44 @@ impl Loupe {
                 });
             }
             MenuEntry::ExternalPrograms => self.external_programs_menu(ui, commands),
+            MenuEntry::Templates => self.templates_menu(ui, commands),
             // The menu bar draws the filter and the sort itself; the right-click menu has neither.
             MenuEntry::Filter | MenuEntry::Sort => {}
         }
+    }
+
+    /// The right-click menu's submenu Apply Template (ADR 0017 U13-Q8, U13-Q26, U13-Q27, T303):
+    /// the templates folder's files by name without `.xmp`, read once per opening of the menu,
+    /// then a separator and Choose File…; with no file only Choose File…. Every item is greyed
+    /// while its commands are not enabled.
+    fn templates_menu(&self, ui: &mut egui::Ui, commands: &mut Vec<Command>) {
+        let enabled = self.command_enabled(Command::ApplyTemplateFile);
+        ui.menu_button(shell_text(ShellText::ApplyTemplate), |ui| {
+            let mut list = self.template_list.borrow_mut();
+            let files = list.get_or_insert_with(|| {
+                std::env::var_os("LOCALAPPDATA")
+                    .map(|data| template_files(&templates_folder(Path::new(&data))))
+                    .unwrap_or_default()
+            });
+            for (index, path) in files.iter().enumerate() {
+                let Ok(number) = u16::try_from(index) else {
+                    break;
+                };
+                if ui
+                    .add_enabled(enabled, egui::Button::new(template_name(path)))
+                    .clicked()
+                {
+                    commands.push(Command::ApplyTemplate(number));
+                }
+            }
+            if !files.is_empty() {
+                ui.separator();
+            }
+            let choose = egui::Button::new(command_text(Command::ApplyTemplateFile));
+            if ui.add_enabled(enabled, choose).clicked() {
+                commands.push(Command::ApplyTemplateFile);
+            }
+        });
     }
 
     /// The right-click menu on an image in the contact sheet or the preview (ADR 0019 §2.9,
@@ -9185,6 +9462,9 @@ impl Loupe {
         let mut parts = vec![status_line(&frame, self.anchor_at_pointer, total)];
         if let Some(m) = &self.message {
             parts.push(m.clone());
+        }
+        if let Some(applying) = self.template_batch_status() {
+            parts.push(applying);
         }
         if let Some(sorting) = self.sort_status() {
             parts.push(sorting);
@@ -12219,6 +12499,16 @@ impl eframe::App for Loupe {
             }
             ctx.request_repaint();
         }
+        // Apply Template's list is read again at the next opening of the menu (T303).
+        if !egui::Popup::is_any_open(&ctx) {
+            *self.template_list.get_mut() = None;
+        }
+        // A template batch's end, also while the metadata window is open, and its progress moved
+        // without a mouse move (T303).
+        self.finish_template_batch();
+        if self.metadata.template_batch_progress().is_some() {
+            ctx.request_repaint_after(WINDOW_POLL_INTERVAL);
+        }
         // A tab opened, closed or cleared this frame is watched or ended at once (T248).
         self.follow_tab_folders();
         self.follow_inspector(&ctx);
@@ -12350,6 +12640,19 @@ fn template_question(question: TemplateText, yes: TemplateText) -> bool {
         | rfd::MessageDialogResult::No
         | rfd::MessageDialogResult::Cancel => false,
     }
+}
+
+/// A message of the right-click menu's Apply Template (ADR 0017 U13-Q27, T303) in a Windows
+/// message box titled `Metadata Template – {name}` with OK only.
+fn template_message(name: &str, text: &str) {
+    let _ = rfd::MessageDialog::new()
+        .set_level(rfd::MessageLevel::Warning)
+        .set_title(template_text(&TemplateText::Title {
+            file: Some(name.to_string()),
+        }))
+        .set_description(text)
+        .set_buttons(rfd::MessageButtons::Ok)
+        .show();
 }
 
 /// Opens the write journal and resolves the writes left open at the last exit (§9.5), before any
@@ -12667,6 +12970,9 @@ fn run(options: Options) -> Result<(), String> {
                 import_submit_error: None,
                 import_template_wait: None,
                 import_template_edit: None,
+                apply_template_wait: None,
+                template_batch_name: None,
+                template_list: RefCell::new(None),
                 import_hidden: false,
                 thumb_worker,
                 thumb_grid: ThumbGrid::new(0, 0),
@@ -13376,6 +13682,119 @@ mod tests {
                 error: true,
             });
             assert_eq!(window.status, EditorStatus::Batch(expected));
+        }
+    }
+
+    // --- The right-click menu's Apply Template (ADR 0017 U13-Q27, T303) ---
+
+    mod apply_template {
+        use super::super::metadata::BatchSummary;
+        use super::super::{TemplateBatchReport, template_batch_report, template_targets};
+        use std::path::{Path, PathBuf};
+
+        /// The targets resolved against the working folder as the metadata cache keys them, in
+        /// their order; the kinds without metadata support left out and counted.
+        #[test]
+        fn the_targets_less_the_files_without_metadata_support() {
+            let paths = [
+                PathBuf::from("a.ARW"),
+                PathBuf::from("notes.txt"),
+                PathBuf::from(r"C:\f\b.jpg"),
+                PathBuf::from("c.NEF"),
+                PathBuf::from("clip.mp4"),
+            ];
+            let cwd = Path::new(r"C:\work");
+            assert_eq!(
+                template_targets(&paths, Some(cwd)),
+                (
+                    vec![
+                        PathBuf::from(r"C:\work\a.ARW"),
+                        PathBuf::from(r"C:\f\b.jpg"),
+                        PathBuf::from(r"C:\work\c.NEF"),
+                    ],
+                    2
+                )
+            );
+            // Without a working folder the paths stay as the tab names them.
+            assert_eq!(
+                template_targets(&paths[..2], None),
+                (vec![PathBuf::from("a.ARW")], 1)
+            );
+            assert_eq!(template_targets(&[], Some(cwd)), (Vec::new(), 0));
+            assert_eq!(
+                template_targets(&[PathBuf::from("notes.txt")], Some(cwd)),
+                (Vec::new(), 1)
+            );
+        }
+
+        fn summary(written: usize, total: usize, failed: usize, kept: usize) -> BatchSummary {
+            BatchSummary {
+                written,
+                total,
+                failed: (1..=failed)
+                    .map(|n| format!("Could not save metadata for {n}.jpg: read-only"))
+                    .collect(),
+                kept: (1..=kept)
+                    .map(|n| format!("Unresolved conflict kept: Keywords ({n}.jpg)"))
+                    .collect(),
+                notices: Vec::new(),
+            }
+        }
+
+        /// Nothing failed and no notice: only the status line's text, singular and plural.
+        #[test]
+        fn a_batch_with_nothing_to_say_gives_the_done_line() {
+            assert_eq!(
+                template_batch_report("News", &summary(3, 3, 0, 0)),
+                TemplateBatchReport::Applied("Template News applied to 3 images.".to_string())
+            );
+            assert_eq!(
+                template_batch_report("News", &summary(1, 1, 0, 0)),
+                TemplateBatchReport::Applied("Template News applied to 1 image.".to_string())
+            );
+        }
+
+        /// A failure or a notice: the summary's lines in the message box (the written count, the
+        /// failed files, the notices) and the written count in the status line.
+        #[test]
+        fn a_batch_with_a_failure_or_a_notice_gives_the_message_box() {
+            let report = template_batch_report("News", &summary(2, 3, 1, 1));
+            assert_eq!(
+                report,
+                TemplateBatchReport::Listed {
+                    lines: vec![
+                        "Written to 2 of 3 images.".to_string(),
+                        "Could not save metadata for 1.jpg: read-only".to_string(),
+                        "Unresolved conflict kept: Keywords (1.jpg)".to_string(),
+                    ],
+                    message: "Written to 2 of 3 images.".to_string(),
+                }
+            );
+            let notice_only = template_batch_report("News", &summary(3, 3, 0, 1));
+            assert!(matches!(notice_only, TemplateBatchReport::Listed { .. }));
+        }
+
+        /// At most 20 lines, then "… and {more} more"; exactly 20 lines get no "more" line.
+        #[test]
+        fn the_message_box_shows_at_most_twenty_lines() {
+            let TemplateBatchReport::Listed { lines, message } =
+                template_batch_report("News", &summary(5, 30, 25, 0))
+            else {
+                panic!("a batch with failures is listed");
+            };
+            assert_eq!(lines.len(), 21);
+            assert_eq!(lines[0], "Written to 5 of 30 images.");
+            assert_eq!(lines[19], "Could not save metadata for 19.jpg: read-only");
+            assert_eq!(lines[20], "… and 6 more");
+            assert_eq!(message, "Written to 5 of 30 images.");
+
+            let TemplateBatchReport::Listed { lines, .. } =
+                template_batch_report("News", &summary(11, 30, 19, 0))
+            else {
+                panic!("a batch with failures is listed");
+            };
+            assert_eq!(lines.len(), 20);
+            assert_eq!(lines[19], "Could not save metadata for 19.jpg: read-only");
         }
     }
 

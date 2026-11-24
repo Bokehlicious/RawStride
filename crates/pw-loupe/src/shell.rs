@@ -788,6 +788,13 @@ pub enum Command {
     /// The window "About RawStride" opened: the version, the commit and the licence notice (Help ▸
     /// About RawStride…, no key; ADR 0031 RL-Q9, T225).
     About,
+    /// The template file at this index of the list kept for the open right-click menu written to
+    /// the target images after one question (the right-click menu's Apply Template, no key; ADR
+    /// 0017 U13-Q8, U13-Q26, U13-Q27, T303).
+    ApplyTemplate(u16),
+    /// A template file chosen in an open dialog written to the target images after one question
+    /// (Apply Template ▸ Choose File…, no key; U13-Q27, T303).
+    ApplyTemplateFile,
 }
 
 /// The view a command acts in.
@@ -869,6 +876,10 @@ pub enum MenuEntry {
     /// first with `OPEN_IN_KEY`, or "Open in Another Program…" while the list is empty (ADR 0019
     /// §2.2, T202), drawn from `Settings::external_programs`.
     ExternalPrograms,
+    /// The right-click menu's submenu Apply Template: the templates folder's files by name, a
+    /// separator and Choose File…, or only Choose File… (ADR 0017 U13-Q8, U13-Q26, T303), drawn
+    /// from the folder as it is when the menu opens. Not in the menu bar.
+    Templates,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1050,7 +1061,8 @@ pub const MENUS: &[Menu] = &[
 /// the commands that act on images, in the order of ADR 0019 §2.9 and E-Q17. Every item has the
 /// same key as its item in `MENUS` (E-Q18). Left out on purpose: Move to Subfolders, RAW ↔ JPEG,
 /// Delete Rejected Images, Reload Folder (ADR 0026 §3.1, T241) and Buttons on Thumbnails (ADR 0017
-/// §2.8, T245), which act on the folder or the view, not on the images clicked.
+/// §2.8, T245), which act on the folder or the view, not on the images clicked. Apply Template,
+/// right after Metadata…, is only here (ADR 0017 U13-Q8, T303).
 pub const IMAGE_CONTEXT_MENU: &[MenuEntry] = &[
     MenuEntry::ExternalPrograms,
     item(Command::ShowInExplorer, None),
@@ -1061,6 +1073,7 @@ pub const IMAGE_CONTEXT_MENU: &[MenuEntry] = &[
     item(Command::MovePicked, plain(Key::P)),
     MenuEntry::Separator,
     item(Command::Metadata, plain(Key::M)),
+    MenuEntry::Templates,
     MenuEntry::Separator,
     item(Command::DeleteToRecycleBin, plain(Key::Delete)),
 ];
@@ -1076,7 +1089,8 @@ pub fn menu_items() -> Vec<MenuItem> {
                 MenuEntry::Separator
                 | MenuEntry::Filter
                 | MenuEntry::Sort
-                | MenuEntry::ExternalPrograms => {}
+                | MenuEntry::ExternalPrograms
+                | MenuEntry::Templates => {}
             }
         }
     }
@@ -1767,7 +1781,8 @@ mod tests {
 
     /// The right-click menu on images holds the commands that act on images, in the order of
     /// ADR 0019 §2.9 and E-Q17 (T221), with the Label submenu right after the Rating submenu (the
-    /// owner's change of the order, ADR 0019 §2.9, 2026-11-21, T243).
+    /// owner's change of the order, ADR 0019 §2.9, 2026-11-21, T243), and the submenu Apply
+    /// Template right after Metadata…, before its separator (ADR 0017 U13-Q8, T303).
     #[test]
     fn the_image_context_menu_holds_the_image_commands_in_order() {
         assert_eq!(
@@ -1782,15 +1797,41 @@ mod tests {
                 item(Command::MovePicked, plain(Key::P)),
                 MenuEntry::Separator,
                 item(Command::Metadata, plain(Key::M)),
+                MenuEntry::Templates,
                 MenuEntry::Separator,
                 item(Command::DeleteToRecycleBin, plain(Key::Delete)),
             ][..]
         );
     }
 
+    /// Apply Template is only in the right-click menu (U13-Q8, T303): no menu of the menu bar has
+    /// the entry or either of its commands, and neither command has a key.
+    #[test]
+    fn apply_template_is_in_no_menu_of_the_menu_bar() {
+        for menu in MENUS {
+            assert!(
+                !menu.entries.contains(&MenuEntry::Templates),
+                "{:?} has Apply Template",
+                menu.kind
+            );
+        }
+        for menu_item in menu_items() {
+            assert!(
+                !matches!(
+                    menu_item.command,
+                    Command::ApplyTemplate(_) | Command::ApplyTemplateFile
+                ),
+                "{menu_item:?} is in the menu bar"
+            );
+        }
+        assert_eq!(KeyAction::of_command(Command::ApplyTemplate(0)), None);
+        assert_eq!(KeyAction::of_command(Command::ApplyTemplateFile), None);
+    }
+
     /// Every item of the right-click menu is an item of the menu bar with the same key, every
     /// submenu is the Image menu's, and it holds neither the filter nor the sort, nor the commands
-    /// that act on the folder or the view (ADR 0019 §2.9, E-Q18, T221).
+    /// that act on the folder or the view (ADR 0019 §2.9, E-Q18, T221). Apply Template is skipped:
+    /// only the right-click menu has it (ADR 0017 U13-Q8, T303).
     #[test]
     fn every_item_of_the_image_context_menu_is_the_menu_bars_item() {
         let items = menu_items();
@@ -1828,7 +1869,7 @@ mod tests {
                 MenuEntry::Filter | MenuEntry::Sort => {
                     panic!("{entry:?} is in the right-click menu");
                 }
-                MenuEntry::Separator | MenuEntry::ExternalPrograms => {}
+                MenuEntry::Separator | MenuEntry::ExternalPrograms | MenuEntry::Templates => {}
             }
         }
     }
