@@ -87,8 +87,7 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status |
 |---|---|---|
-| [T317](T317-sharpening-settings-page.md) | ADR 0027 W3: the Settings page Preview and the sharpening values | Open |
-| [T318](T318-sharpening-key-mark-reset.md) | ADR 0027 W3: the key, the menu item and the mark of sharpening, and the reset | Blocked |
+| [T318](T318-sharpening-key-mark-reset.md) | ADR 0027 W3: the key, the menu item and the mark of sharpening, and the reset | Open |
 
 ## Writing a task (owner and reviewer)
 

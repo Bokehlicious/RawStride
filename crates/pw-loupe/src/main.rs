@@ -148,7 +148,8 @@ use pw_render::{Textures, view_px};
 use pw_thumbcache::{ThumbWorker, ThumbnailRequest};
 use pw_viewcore::native::NativeBackend;
 use pw_viewcore::{
-    ClippingState, Config, FocusState, Frame, ImageStatistics, Source, Status, ViewCore, Zoom,
+    ClippingState, Config, FocusState, Frame, ImageStatistics, Sharpening, Source, Status,
+    ViewCore, Zoom,
 };
 
 mod inspector;
@@ -1657,12 +1658,14 @@ impl Loupe {
     /// image when it opens, so no read made with the old settings is kept (it cannot be open
     /// while the settings window is).
     fn save_settings_window(&mut self, chosen: Settings) {
-        // The window was opened with the layout of that moment: only its theme and the companion
-        // suffixes (T281) are taken, so the file gets the current window and columns (T109).
+        // The window was opened with the layout of that moment: only its theme, the companion
+        // suffixes (T281) and the sharpening's values (T317) are taken, so the file gets the
+        // current window and columns (T109).
         let chosen = Settings {
             shell: ShellSettings {
                 theme: chosen.shell.theme,
                 companion_suffixes: chosen.shell.companion_suffixes,
+                sharpening: chosen.shell.sharpening,
                 ..self.settings.shell.clone()
             },
             ..chosen
@@ -1772,6 +1775,8 @@ impl Loupe {
         // drawing, and whether the pointer is on the waiting slot's Change.
         let mut key_clicks: Vec<KeyClick> = Vec::new();
         let mut restore_keys = false;
+        // The page Preview's Restore Defaults (T317).
+        let mut restore_sharpening = false;
         let mut wait_hovered = false;
         let pointer_pressed = ctx.input(|input| input.pointer.any_pressed());
         let keys = self.settings_keys.clone();
@@ -1806,8 +1811,8 @@ impl Loupe {
                     }
                 });
                 ui.separator();
-                // Save and Cancel, with "Restore Defaults" above them on the pages Metadata Window
-                // and Keyboard Shortcuts, stay at the bottom (T283).
+                // Save and Cancel, with "Restore Defaults" above them on the pages Metadata
+                // Window, Keyboard Shortcuts and Preview, stay at the bottom (T283, T317).
                 egui::Panel::bottom("settings-window-buttons")
                     .resizable(false)
                     .frame(egui::Frame::NONE)
@@ -1826,6 +1831,12 @@ impl Loupe {
                                     .clicked();
                                 ui.add_space(PANEL_ROW_SPACING);
                             }
+                            SettingsPage::Preview => {
+                                restore_sharpening = ui
+                                    .button(settings_text(SettingsText::RestoreDefaults))
+                                    .clicked();
+                                ui.add_space(PANEL_ROW_SPACING);
+                            }
                             SettingsPage::General | SettingsPage::ExternalPrograms => {}
                         }
                         ui.horizontal(|ui| {
@@ -1840,6 +1851,7 @@ impl Loupe {
                     SettingsPage::ExternalPrograms => "settings-external-programs",
                     SettingsPage::MetadataWindow => "settings-metadata-window",
                     SettingsPage::KeyboardShortcuts => "settings-keyboard-shortcuts",
+                    SettingsPage::Preview => "settings-preview",
                 };
                 // The page Keyboard Shortcuts: its widths worked out with the page's width before
                 // the scroll area, then the heading row above it, which stays at the top while the
@@ -1971,6 +1983,9 @@ impl Loupe {
                                         draw_key_rows(ui, map, columns, key_wait, key_refusal);
                                 }
                             }
+                            SettingsPage::Preview => {
+                                draw_sharpening_section(ui, &mut chosen.shell.sharpening);
+                            }
                         }
                     });
                 if page == SettingsPage::KeyboardShortcuts {
@@ -2009,6 +2024,10 @@ impl Loupe {
         // Only the layout; the sections' open or collapsed state (the `editor_*` keys) stays.
         if restore_defaults {
             chosen.editor_layout = EditorLayout::default();
+        }
+        // Like every change on the page, kept only by Save (T317).
+        if restore_sharpening {
+            chosen.shell.sharpening = Sharpening::DEFAULT;
         }
         for click in layout_clicks {
             let layout = &mut chosen.editor_layout;
@@ -9902,6 +9921,46 @@ enum LayoutClick {
     ItemShown(EditorItem, bool),
     /// An item's Move Up, inside its section.
     ItemUp(EditorItem),
+}
+
+/// The section Sharpening of the Settings window's page Preview (ADR 0027 §3.3, W3-Q7, T317): a
+/// heading, a note that wraps and three sliders on the window's copy of the values. The amount
+/// moves in steps of 5, so a value from the file that is not a multiple of 5 is kept until its
+/// slider is dragged; the radius is shown in pixels with one decimal and kept in tenths.
+fn draw_sharpening_section(ui: &mut egui::Ui, sharpening: &mut Sharpening) {
+    ui.heading(settings_text(SettingsText::SharpeningHeading));
+    ui.add(
+        egui::Label::new(egui::RichText::new(settings_text(SettingsText::SharpeningNote)).small())
+            .wrap(),
+    );
+    ui.add_space(PANEL_ROW_SPACING);
+    ui.add(
+        egui::Slider::new(&mut sharpening.amount, Sharpening::AMOUNT_RANGE)
+            .step_by(5.0)
+            .text(settings_text(SettingsText::SharpenAmount)),
+    );
+    let tenths = &Sharpening::RADIUS_TENTHS_RANGE;
+    let mut radius = f64::from(sharpening.radius_tenths) / 10.0;
+    let radius_range = f64::from(*tenths.start()) / 10.0..=f64::from(*tenths.end()) / 10.0;
+    if ui
+        .add(
+            egui::Slider::new(&mut radius, radius_range)
+                .step_by(0.1)
+                .fixed_decimals(1)
+                .text(settings_text(SettingsText::SharpenRadius)),
+        )
+        .changed()
+    {
+        let rounded = (radius * 10.0)
+            .round()
+            .clamp(f64::from(*tenths.start()), f64::from(*tenths.end()));
+        sharpening.radius_tenths = rounded as u8;
+    }
+    ui.add(
+        egui::Slider::new(&mut sharpening.threshold, Sharpening::THRESHOLD_RANGE)
+            .step_by(1.0)
+            .text(settings_text(SettingsText::SharpenThreshold)),
+    );
 }
 
 /// The rows of the Settings window's page Metadata Window (ADR 0017 U10b-Q6, T278): for each

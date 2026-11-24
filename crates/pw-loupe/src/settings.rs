@@ -17,6 +17,7 @@ use std::path::{Path, PathBuf};
 use pw_metadata::edit::EditOptions;
 use pw_metadata::iim::Fallback;
 use pw_metadata::write_plan::WriteSettings;
+use pw_viewcore::Sharpening;
 
 use crate::editor::EditorSection;
 use crate::editor_layout::{EditorItem, EditorLayout, section_from_name, section_name};
@@ -84,6 +85,11 @@ const COMPANION_SUFFIXES: &str = "companion_suffixes";
 /// The key of the four buttons on a thumbnail in the contact sheet, on or off (ADR 0017 §2.8,
 /// U15-Q7, T245).
 const THUMBNAIL_BUTTONS: &str = "thumbnail_buttons";
+/// The keys of the sharpening's three values: amount in whole percent, radius in pixels with one
+/// decimal, threshold in levels (ADR 0027 §3.3, W3-Q7, T317).
+const SHARPEN_AMOUNT: &str = "sharpen_amount";
+const SHARPEN_RADIUS: &str = "sharpen_radius";
+const SHARPEN_THRESHOLD: &str = "sharpen_threshold";
 /// The companion suffixes by default (U9-Q10).
 const DEFAULT_COMPANION_SUFFIXES: [&str; 3] = ["dop", "pp3", "on1"];
 /// The keys of the metadata window's sections, open or collapsed (ADR 0017 U10-Q6, T123).
@@ -255,6 +261,9 @@ pub struct ShellSettings {
     /// The four buttons on a thumbnail in the contact sheet, shown while the pointer is over the
     /// cell (View ▸ Buttons on Thumbnails; ADR 0017 §2.8, U15-Q7, T245); on by default.
     pub thumbnail_buttons: bool,
+    /// The sharpening's amount, radius and threshold, set on the Settings page Preview (ADR 0027
+    /// §3.3, W3-Q7, T317); whether sharpening is on is not saved.
+    pub sharpening: Sharpening,
 }
 
 /// The library's lists as `settings.txt` keeps them (T135, U4-Q3, U4-Q4): the favourites in the
@@ -329,6 +338,8 @@ impl Default for ShellSettings {
             companion_suffixes: default_companion_suffixes(),
             // The buttons on a thumbnail shown (U15-Q7).
             thumbnail_buttons: true,
+            // Amount 60 %, radius 0.6 px, threshold 2 (ADR 0027 §3.3).
+            sharpening: Sharpening::DEFAULT,
         }
     }
 }
@@ -557,6 +568,32 @@ pub fn load_settings_and_library(path: &Path) -> (Settings, SavedLibrary, Vec<St
                     None => problems.push(bad("open or collapsed")),
                 }
             }
+            // A value that cannot be read or lies outside its range keeps that value's default
+            // (W3-Q7, T317).
+            SHARPEN_AMOUNT => match parse_sharpen_amount(value) {
+                Some(amount) => shell.sharpening.amount = amount,
+                None => problems.push(bad(&format!(
+                    "a whole number from {} to {}",
+                    Sharpening::AMOUNT_RANGE.start(),
+                    Sharpening::AMOUNT_RANGE.end()
+                ))),
+            },
+            SHARPEN_RADIUS => match parse_sharpen_radius(value) {
+                Some(tenths) => shell.sharpening.radius_tenths = tenths,
+                None => problems.push(bad(&format!(
+                    "a number from {} to {}",
+                    tenths_text(*Sharpening::RADIUS_TENTHS_RANGE.start()),
+                    tenths_text(*Sharpening::RADIUS_TENTHS_RANGE.end())
+                ))),
+            },
+            SHARPEN_THRESHOLD => match parse_sharpen_threshold(value) {
+                Some(threshold) => shell.sharpening.threshold = threshold,
+                None => problems.push(bad(&format!(
+                    "a whole number from {} to {}",
+                    Sharpening::THRESHOLD_RANGE.start(),
+                    Sharpening::THRESHOLD_RANGE.end()
+                ))),
+            },
             // An empty value is no template and no problem; anything but a full path is one
             // problem and no template (T295).
             IMPORT_TEMPLATE if value.is_empty() => shell.import_template = None,
@@ -789,7 +826,48 @@ fn shell_lines(shell: &ShellSettings) -> String {
         "{THUMBNAIL_BUTTONS} = {}\n",
         shell.thumbnail_buttons
     ));
+    // The sharpening's three values (T317).
+    text.push_str(&format!(
+        "{SHARPEN_AMOUNT} = {}\n{SHARPEN_RADIUS} = {}\n{SHARPEN_THRESHOLD} = {}\n",
+        shell.sharpening.amount,
+        tenths_text(shell.sharpening.radius_tenths),
+        shell.sharpening.threshold
+    ));
     text
+}
+
+/// Tenths written as a number with one decimal, `6` as `0.6` (T317).
+fn tenths_text(tenths: u8) -> String {
+    format!("{}.{}", tenths / 10, tenths % 10)
+}
+
+/// The sharpening's amount, a whole number inside its range (T317).
+fn parse_sharpen_amount(value: &str) -> Option<u16> {
+    value
+        .parse::<u16>()
+        .ok()
+        .filter(|amount| Sharpening::AMOUNT_RANGE.contains(amount))
+}
+
+/// The sharpening's radius in pixels, made into tenths: a finite number rounded to tenths and
+/// then checked against the range, before any cast, so 0.25 is 3 tenths (T317).
+fn parse_sharpen_radius(value: &str) -> Option<u8> {
+    let pixels = value.parse::<f64>().ok().filter(|v| v.is_finite())?;
+    let tenths = (pixels * 10.0).round();
+    let start = f64::from(*Sharpening::RADIUS_TENTHS_RANGE.start());
+    let end = f64::from(*Sharpening::RADIUS_TENTHS_RANGE.end());
+    if !(start..=end).contains(&tenths) {
+        return None;
+    }
+    u8::try_from(tenths as i64).ok()
+}
+
+/// The sharpening's threshold, a whole number inside its range (T317).
+fn parse_sharpen_threshold(value: &str) -> Option<u8> {
+    value
+        .parse::<u8>()
+        .ok()
+        .filter(|threshold| Sharpening::THRESHOLD_RANGE.contains(threshold))
 }
 
 /// The lines of the metadata window's layout (T277), each only when it differs from the
@@ -1093,6 +1171,7 @@ mod tests {
     use pw_metadata::edit::EditOptions;
     use pw_metadata::iim::Fallback;
     use pw_metadata::write_plan::WriteSettings;
+    use pw_viewcore::Sharpening;
 
     use super::{
         ExternalProgram, MAX_EXTERNAL_PROGRAMS, SavedLibrary, Settings, ShellSettings, WindowRect,
@@ -1218,7 +1297,8 @@ mod tests {
              compare_above_below = false\ncompare_locked = true\n\
              import_incremental = true\n\
              move_to_subfolders = false\ncompanion_suffixes = dop, pp3, on1\n\
-             thumbnail_buttons = true\n"
+             thumbnail_buttons = true\n\
+             sharpen_amount = 60\nsharpen_radius = 0.6\nsharpen_threshold = 2\n"
         );
     }
 
@@ -1418,6 +1498,11 @@ mod tests {
             move_to_subfolders: true,
             companion_suffixes: vec!["xmp2".to_string(), "dop".to_string()],
             thumbnail_buttons: false,
+            sharpening: Sharpening {
+                amount: 150,
+                radius_tenths: 13,
+                threshold: 7,
+            },
         }
     }
 
@@ -2409,7 +2494,10 @@ mod tests {
             save_settings(&path, &settings).unwrap();
             let text = std::fs::read_to_string(&path).unwrap();
             assert!(
-                text.ends_with(&format!("\nthumbnail_buttons = {on}\n")),
+                text.ends_with(&format!(
+                    "\nthumbnail_buttons = {on}\n\
+                     sharpen_amount = 60\nsharpen_radius = 0.6\nsharpen_threshold = 2\n"
+                )),
                 "{text}"
             );
             let (loaded, problems) = load_settings(&path);
@@ -2450,6 +2538,109 @@ mod tests {
             assert!(settings.shell.thumbnail_buttons, "{value}");
             assert_eq!(settings.shell, ShellSettings::default(), "{value}");
             assert!(settings.create_iim, "{value}");
+        }
+    }
+
+    // ---------- the sharpening's values (ADR 0027 §3.3, W3-Q7, T317) ----------
+
+    #[test]
+    fn the_default_file_holds_the_sharpening_lines() {
+        let dir = TempDir::new();
+        let path = dir.0.join("settings.txt");
+        save_settings(&path, &Settings::default()).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains("\nsharpen_amount = 60\n"), "{text}");
+        assert!(text.contains("\nsharpen_radius = 0.6\n"), "{text}");
+        assert!(text.contains("\nsharpen_threshold = 2\n"), "{text}");
+        assert_eq!(ShellSettings::default().sharpening, Sharpening::DEFAULT);
+    }
+
+    #[test]
+    fn a_changed_sharpening_is_written_and_read_back() {
+        let dir = TempDir::new();
+        let path = dir.0.join("settings.txt");
+        let sharpening = Sharpening {
+            amount: 150,
+            radius_tenths: 13,
+            threshold: 7,
+        };
+        let settings = Settings {
+            shell: ShellSettings {
+                sharpening,
+                ..ShellSettings::default()
+            },
+            ..Settings::default()
+        };
+        save_settings(&path, &settings).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            text.contains("\nsharpen_amount = 150\nsharpen_radius = 1.3\nsharpen_threshold = 7\n"),
+            "{text}"
+        );
+        let (loaded, problems) = load_settings(&path);
+        assert!(problems.is_empty(), "{problems:?}");
+        assert_eq!(loaded.shell.sharpening, sharpening);
+        assert_eq!(loaded, settings);
+    }
+
+    #[test]
+    fn a_bad_sharpening_value_keeps_its_default_and_gives_one_problem() {
+        for (line, expected) in [
+            ("sharpen_amount = 5", "a whole number from 10 to 300"),
+            ("sharpen_amount = 301", "a whole number from 10 to 300"),
+            ("sharpen_amount = sixty", "a whole number from 10 to 300"),
+            ("sharpen_radius = 0.2", "a number from 0.3 to 2.0"),
+            ("sharpen_radius = 2.1", "a number from 0.3 to 2.0"),
+            ("sharpen_radius = wide", "a number from 0.3 to 2.0"),
+            ("sharpen_radius = inf", "a number from 0.3 to 2.0"),
+            ("sharpen_radius = NaN", "a number from 0.3 to 2.0"),
+            ("sharpen_threshold = 21", "a whole number from 0 to 20"),
+            ("sharpen_threshold = -1", "a whole number from 0 to 20"),
+        ] {
+            let (_dir, path) =
+                TempDir::with_file(&format!("# RawStride\ncreate_iim = true\n{line}\n"));
+            let (settings, problems) = load_settings(&path);
+            assert_one_problem_on_line(&problems, 3);
+            assert!(problems[0].contains(expected), "{line}: {problems:?}");
+            assert_eq!(settings.shell.sharpening, Sharpening::DEFAULT, "{line}");
+            assert!(settings.create_iim, "{line}");
+        }
+    }
+
+    #[test]
+    fn a_bad_sharpening_value_keeps_only_its_own_default() {
+        let (_dir, path) = TempDir::with_file(
+            "# RawStride\nsharpen_amount = 150\nsharpen_radius = 9\nsharpen_threshold = 7\n",
+        );
+        let (settings, problems) = load_settings(&path);
+        assert_one_problem_on_line(&problems, 3);
+        assert_eq!(
+            settings.shell.sharpening,
+            Sharpening {
+                amount: 150,
+                radius_tenths: Sharpening::DEFAULT.radius_tenths,
+                threshold: 7,
+            }
+        );
+    }
+
+    #[test]
+    fn a_file_without_the_sharpening_lines_gives_the_defaults_and_no_problem() {
+        let (_dir, path) =
+            TempDir::with_file("# RawStride\ncreate_iim = true\nthumbnail_buttons = false\n");
+        let (settings, problems) = load_settings(&path);
+        assert!(problems.is_empty(), "{problems:?}");
+        assert_eq!(settings.shell.sharpening, Sharpening::DEFAULT);
+    }
+
+    #[test]
+    fn the_sharpening_radius_is_rounded_to_tenths() {
+        for (value, tenths) in [("0.64", 6), ("0.66", 7), ("0.25", 3), ("2", 20), ("0.3", 3)] {
+            let (_dir, path) =
+                TempDir::with_file(&format!("# RawStride\nsharpen_radius = {value}\n"));
+            let (settings, problems) = load_settings(&path);
+            assert!(problems.is_empty(), "{value}: {problems:?}");
+            assert_eq!(settings.shell.sharpening.radius_tenths, tenths, "{value}");
         }
     }
 
@@ -2699,11 +2890,13 @@ mod tests {
             };
             save_settings(&path, &settings).unwrap();
             let text = std::fs::read_to_string(&path).unwrap();
-            // The two lines come last but `thumbnail_buttons` (T245), `move_to_subfolders` first.
+            // The two lines come last but `thumbnail_buttons` (T245) and the sharpening (T317),
+            // `move_to_subfolders` first.
             assert!(
                 text.ends_with(&format!(
                     "\nimport_incremental = true\nmove_to_subfolders = {on}\n{line}\n\
-                     thumbnail_buttons = true\n"
+                     thumbnail_buttons = true\n\
+                     sharpen_amount = 60\nsharpen_radius = 0.6\nsharpen_threshold = 2\n"
                 )),
                 "{text}"
             );
@@ -2846,6 +3039,7 @@ mod tests {
         let text = std::fs::read_to_string(&path).unwrap();
         let expected = format!(
             "companion_suffixes = dop, pp3, on1\nthumbnail_buttons = true\n\
+             sharpen_amount = 60\nsharpen_radius = 0.6\nsharpen_threshold = 2\n\
              external_program = Capture One | C:\\Program Files\\Capture One\\CaptureOne.exe\n\
              favourite = {}\n",
             full("Favourite").display()

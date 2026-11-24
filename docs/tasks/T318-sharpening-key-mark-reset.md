@@ -1,4 +1,4 @@
-# T318. ADR 0027 W3: the key, the menu item and the mark of sharpening, and the reset — Blocked
+# T318. ADR 0027 W3: the key, the menu item and the mark of sharpening, and the reset — Open
 
 - **Why:** ADR 0027 §2.1, §3.3, W3-Q5, W3-Q6 and W3-Q8 (answered by the owner 2026-11-24, ADR
   0027 §4.3). T316 gave the view core sharpening (`ViewCore::set_sharpening`, `Frame::sharpen`)
@@ -137,3 +137,4 @@
 | 2026-11-24 | Blocked | Added (ADR 0027 W3-Q5, W3-Q6, W3-Q8); waits for T317 |
 | 2026-11-24 | Blocked | Cold read: the existing test `the_adjustment_marks_follow_fine_details` named as updated; `ImageAreaShown::sharpening` added for the values; the constructor, `key_map_action`'s list and `command_checked` named; the reset as `reset_adjustments()` and `any_adjustment_on()` (keys do not check `command_enabled`); `group()` and `acts_in()` both named, `ALL` 45 → 47; the View menu test's range to +13; no change to `paint_adjustment_marks`; the radius format and the imports named; a `keys.txt` with U or Backspace on another action is accepted as for D. U and Backspace checked free and not fixed. Waits for T317 and the chain review |
 | 2026-11-24 | Blocked | Chain review: `Waiting` gets a hover text of its own ("the view is being made again"), since T316 now gives `Waiting` also while a sharpened view is still drawn after turning off; holding U accepted as for D. Waits for T317 |
+| 2026-11-24 | Open | T317 Done; set Open |

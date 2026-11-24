@@ -53,15 +53,19 @@ pub enum SettingsPage {
     MetadataWindow,
     /// The key map: each action's two keys, changed and cleared (ADR 0017 U8-Q7, T281).
     KeyboardShortcuts,
+    /// The preview's display settings: today the sharpening's three values (ADR 0027 §3.3,
+    /// W3-Q7, T317).
+    Preview,
 }
 
 impl SettingsPage {
     /// The pages in the order of their buttons.
-    pub const ALL: [SettingsPage; 4] = [
+    pub const ALL: [SettingsPage; 5] = [
         SettingsPage::General,
         SettingsPage::ExternalPrograms,
         SettingsPage::MetadataWindow,
         SettingsPage::KeyboardShortcuts,
+        SettingsPage::Preview,
     ];
 }
 

@@ -324,6 +324,16 @@ pub enum SettingsText {
     CompanionSuffixes,
     /// The small text under that field (T281).
     CompanionSuffixesNote,
+    /// The heading of the section Sharpening on the page Preview (ADR 0027 §3.3, W3-Q7, T317).
+    SharpeningHeading,
+    /// The small text under that heading (T317).
+    SharpeningNote,
+    /// The label of the sharpening's amount slider (T317).
+    SharpenAmount,
+    /// The label of the sharpening's radius slider (T317).
+    SharpenRadius,
+    /// The label of the sharpening's threshold slider (T317).
+    SharpenThreshold,
 }
 
 /// The text of `text` in the settings window.
@@ -349,6 +359,7 @@ pub fn settings_text(text: SettingsText) -> &'static str {
         SettingsText::Page(SettingsPage::ExternalPrograms) => "External Programs",
         SettingsText::Page(SettingsPage::MetadataWindow) => "Metadata Window",
         SettingsText::Page(SettingsPage::KeyboardShortcuts) => "Keyboard Shortcuts",
+        SettingsText::Page(SettingsPage::Preview) => "Preview",
         SettingsText::RestoreDefaults => "Restore Defaults",
         SettingsText::ChangeKey => "Change",
         SettingsText::ClearKey => "Clear",
@@ -361,6 +372,13 @@ pub fn settings_text(text: SettingsText) -> &'static str {
         SettingsText::CompanionSuffixesNote => {
             "Files with these suffixes move with an image; empty means the default"
         }
+        SettingsText::SharpeningHeading => "Sharpening",
+        SettingsText::SharpeningNote => {
+            "Used in the preview below 100% while sharpening is turned on. Not saved in the images."
+        }
+        SettingsText::SharpenAmount => "Amount (%)",
+        SettingsText::SharpenRadius => "Radius (pixels)",
+        SettingsText::SharpenThreshold => "Threshold (levels)",
     }
 }
 
@@ -1217,6 +1235,7 @@ mod tests {
                 SettingsPage::ExternalPrograms,
                 SettingsPage::MetadataWindow,
                 SettingsPage::KeyboardShortcuts,
+                SettingsPage::Preview,
             ]
         );
         let names: Vec<&str> = SettingsPage::ALL
@@ -1229,7 +1248,8 @@ mod tests {
                 "General",
                 "External Programs",
                 "Metadata Window",
-                "Keyboard Shortcuts"
+                "Keyboard Shortcuts",
+                "Preview"
             ]
         );
         for (index, name) in names.iter().enumerate() {
@@ -1239,6 +1259,30 @@ mod tests {
         assert_eq!(
             settings_text(SettingsText::RestoreDefaults),
             "Restore Defaults"
+        );
+    }
+
+    /// The page Preview's section Sharpening: its heading, note and the three sliders' labels
+    /// (ADR 0027 §3.3, W3-Q7, T317).
+    #[test]
+    fn the_preview_page_has_the_sharpening_texts() {
+        assert_eq!(
+            settings_text(SettingsText::Page(SettingsPage::Preview)),
+            "Preview"
+        );
+        assert_eq!(settings_text(SettingsText::SharpeningHeading), "Sharpening");
+        assert_eq!(
+            settings_text(SettingsText::SharpeningNote),
+            "Used in the preview below 100% while sharpening is turned on. Not saved in the images."
+        );
+        assert_eq!(settings_text(SettingsText::SharpenAmount), "Amount (%)");
+        assert_eq!(
+            settings_text(SettingsText::SharpenRadius),
+            "Radius (pixels)"
+        );
+        assert_eq!(
+            settings_text(SettingsText::SharpenThreshold),
+            "Threshold (levels)"
         );
     }
 
