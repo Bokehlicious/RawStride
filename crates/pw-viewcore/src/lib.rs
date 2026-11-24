@@ -28,6 +28,7 @@ pub mod geometry;
 #[cfg(feature = "native")]
 pub mod native;
 pub mod scale;
+pub mod sharpen;
 mod state;
 
 pub use crate::backend::{
@@ -36,6 +37,7 @@ pub use crate::backend::{
 };
 pub use crate::core::{Releaser, ViewCore};
 pub use crate::geometry::{ImageSize, Rect};
+pub use crate::sharpen::Sharpening;
 pub use crate::state::{
     ClippingState, Config, Draw, FinePause, FineState, FocusState, Frame, HALF_DENSITY, MAX_SCALE,
     Record, Resident, Stats, Status, ViewKind, ViewOut, ZOOM_STEP, Zoom, fnv, is_plain_jpeg,

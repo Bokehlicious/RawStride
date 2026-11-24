@@ -7,7 +7,7 @@
   `settings.txt`. W7 later adds the thresholds and colours of §3.7 to the same page. The values
   are not used yet: T318 passes them to the view core. The Settings window applies a page only at
   Save, as every page does today, so no view is rendered again while a slider is dragged (W3-Q7;
-  ADR 0027 §4.3, the note after the table). The third task of the chain T315 → T316 → **T317** →
+  ADR 0027 §4.3, the note after the table). The fourth task of the chain T315 → T319 → T316 → **T317** →
   T318. Waits for T316 (it uses T315's `Sharpening`; T316 is not needed for it, but the chain is
   done in order).
 - **What the reviewer checked (2026-11-24; line numbers from the cold read):**

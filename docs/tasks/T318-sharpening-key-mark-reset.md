@@ -7,7 +7,7 @@
   the mark "USM" to the preview's row of adjustment marks (made by T314), and adds the reset of
   every adjustment (A-Q3): **Backspace** and View ▸ Reset Adjustments, which turn off fine details
   and sharpening. Sharpening is not saved: it lasts for the session (A-Q2). The last task of the
-  chain T315 → T316 → T317 → **T318**; the owner's `latency.ps1` with sharpening on and the hand
+  chain T315 → T319 → T316 → T317 → **T318**; the owner's `latency.ps1` with sharpening on and the hand
   check, which sets the defaults, follow it. Waits for T317.
 - **What the reviewer checked (2026-11-24):** fine details (T314) goes through every place a
   toggle of the preview does that is not a setting, and sharpening follows it:

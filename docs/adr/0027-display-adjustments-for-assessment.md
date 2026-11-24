@@ -412,6 +412,13 @@ the menu item, the mark "USM", the reset, and the saved values passed to the vie
 "not on every frame of a drag" holds: a changed value applies at Save (reviewer, 2026-11-24,
 when the tasks were written).
 
+W3-Q3's timing (T315, 2026-11-24, Intel Core i7-9700K, median): above 10 ms on one thread, so
+the rows were split; on 8 threads 21.2 ms (radius 0.6) and 27.5 ms (radius 2.0) on 3840×2160,
+6.5 and 7.4 ms on 1920×1200, and 40.3 and 69.8 ms on 4800×3200, the half-size view sharpened at
+50 %. The owner decided on 2026-11-24: a task of its own before T316, T319, makes the two blur
+passes faster with the same output to the byte (the horizontal pass with the taps in the outer
+loop, no buffer made per row), times it again, and the owner decides on the result.
+
 ## 5. Steps
 
 Each step ends with tests (GR11), the owner's hand check and, where an image is shown,
