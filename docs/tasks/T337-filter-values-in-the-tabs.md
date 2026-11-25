@@ -11,7 +11,7 @@
   a `#[cfg(test)] mod tests`), `crates/pw-loupe/src/sort.rs`, `crates/pw-loupe/src/tabs.rs`,
   `crates/pw-loupe/src/browse.rs` (point 3 only), `crates/pw-loupe/src/metadata.rs`, `crates/pw-loupe/src/main.rs`, `crates/pw-loupe/src/lib.rs`,
   and this task's own file (status and log).
-- **Model:** Codex Astra — reads in flight while the user keeps working, a request queue shared
+- **Model:** Opus — reads in flight while the user keeps working, a request queue shared
   with the metadata window, and a read that must not overtake a write (README, "Model").
 - **Read first:** `AGENTS.md`, `docs/tasks/README.md` (How to work on a task), `docs/TESTING.md`,
   ADR 0022 §2.4 and §3.1 (read, do not edit), `meta_filter.rs` (S1's model: `Field`, `Group`,
@@ -225,13 +225,13 @@
   `CHANGELOG.md`, and `docs/test-inventory.md` (**an exception to README rule 12:** the reviewer
   updates it after the merge; put the new tests' count and a one-line description of each in your
   report). If another file seems to need a change, stop and ask.
-- **Rules:** README rules 1–11 and 13 apply, except that **this task overrides rule 1**: you work
-  in the worktree `C:\Development\PhotoWorkflow-Codex` on the branch `codex`, not on
-  `feature/gui-workspace`. **Never run `git commit`, `git add`, `git stash`, `git reset` or
-  `git checkout`, and never create a branch or a checkpoint;** the reviewer brings your work over
-  as a patch and commits. **Stop and ask the owner whenever something is unclear, contradicts the
+- **Rules:** README rules 1–11 and 13 apply. You work in this worktree
+  (`C:\Development\PhotoWorkflow-GUI`) on `feature/gui-workspace`, and you are the only agent
+  editing files meanwhile. **Never run `git commit`, `git add`, `git stash`, `git reset` or
+  `git checkout`, and never create a branch or a checkpoint;** the reviewer reviews your changes
+  and commits. **Stop and ask the owner whenever something is unclear, contradicts the
   code or ADR 0022, or needs a file outside the list;** do not guess and do not leave a point out.
-  Do not weaken a test to pass it. Build only in the worktree's own `target` folder. No personal
+  Do not weaken a test to pass it. No personal
   data in any file.
 - **Report (as README rule 9, plus):** every file changed and why; the exact summary from
   `test-output.txt` after `.\tools\check.ps1` (or, if it cannot run in your sandbox, as T336's

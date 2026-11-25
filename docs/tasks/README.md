@@ -90,7 +90,7 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 | [T333](T333-exposure-and-shadows-in-the-state.md) | ADR 0027 W5: the exposure and the shadows in the view core's state | Open | Opus |
 | [T334](T334-shadows-amount-settings-page.md) | ADR 0027 W5: the shadows' amount on the Settings page Preview | Blocked | Sonnet |
 | [T335](T335-exposure-keys-menu-marks.md) | ADR 0027 W5: the keys, the menu and the marks of the exposure and the shadows | Blocked | Opus |
-| [T337](T337-filter-values-in-the-tabs.md) | ADR 0022 S2b: the filter's values kept per tab and read when needed | Open | Codex Astra |
+| [T337](T337-filter-values-in-the-tabs.md) | ADR 0022 S2b: the filter's values kept per tab and read when needed | Open | Opus |
 
 ## Writing a task (owner and reviewer)
 
@@ -113,22 +113,17 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
   contradictions with the code; or the work is a review, an ADR, or a cold read or chain review
   rather than an implementation. If a Sonnet task needs files outside its list, or `check.ps1`
   fails twice on the same thing, it is moved to Opus and the log says so.
-- **Codex tasks (owner, 2026-11-25, after T330):** a task the owner gives to Codex has the `Model:`
-  line `Codex Sol` or `Codex Astra`, chosen by the same rules: **Sol** where Sonnet would do,
-  **Astra** where Opus is needed (and a Sol task moves to Astra as a Sonnet task moves to Opus).
-  Codex works in its own fixed worktree `C:\Development\PhotoWorkflow-Codex` on the branch `codex`,
-  never on `feature/gui-workspace`, so the task's Rules override rule 1 and also forbid
-  `git commit`, `add`, `stash`, `reset` and `checkout` and new branches. One Codex task at a time.
-  Before a Codex task is set to Open, the reviewer moves the worktree to the tip of
-  `feature/gui-workspace` (`git -C C:\Development\PhotoWorkflow-Codex checkout -f -B codex
-  feature/gui-workspace`), only after the previous Codex task is committed. At the review the
-  reviewer brings the task's work into `feature/gui-workspace` as a patch, never by copying its
-  files (owner, 2026-11-25, ADR 0022 S2-Q7: a file such as `main.rs` may have changed here
-  meanwhile): `git -C C:\Development\PhotoWorkflow-Codex add -N .` (new files only marked; the
-  reviewer's, not Codex's), then that worktree's `git diff` piped to `git apply --3way` here; a
-  conflict is resolved by the reviewer and named in the log. The reviewer runs `.\tools\check.ps1` there
-  (Codex's own run may fail in its sandbox, for example ExifTool not starting) and commits; the
-  reviewer also updates `docs/test-inventory.md`, which the task tells Codex not to touch.
+- **Codex tasks (owner, 2026-11-25, after T330; changed the same day):** the owner may give a task
+  to Codex. It has the same `Model:` line as any other task, `Sonnet` or `Opus`; the owner picks
+  the Codex model that matches it, and the task names no Codex model. Codex works in this
+  worktree (`C:\Development\PhotoWorkflow-GUI`) on `feature/gui-workspace`, like any task agent,
+  and never in a worktree of its own (a separate worktree was dropped: a change had to be rolled
+  back because its review was missed). **One agent at a time:** no Codex task runs while the
+  reviewer or another agent edits files, and none starts before the previous task is committed.
+  The task's Rules also forbid `git commit`, `add`, `stash`, `reset` and `checkout` and new
+  branches (rule 8). The reviewer runs `.\tools\check.ps1` (Codex's own run may fail in its
+  sandbox, for example ExifTool not starting), reviews the diff and commits; the reviewer also
+  updates `docs/test-inventory.md`, which the task tells Codex not to touch.
 - **Chains:** a split step is written as a chain at once (for example T146 → T147 → T148), the later
   tasks "Blocked: waits for T146" until the one before is Done. The step's row in `plans/` names
   the whole chain. Writing the last task's file first is how a gap is found before code is written
@@ -227,7 +222,7 @@ Skeleton (the fields recent tasks use; leave out those that do not apply):
 
 - **Why:** …
 - **Crates:** … **Files:** …
-- **Model:** Sonnet | Opus | Codex Sol | Codex Astra — <the rule that decided it>
+- **Model:** Sonnet | Opus — <the rule that decided it>
 - **What:**
   1. …
 - **Tests to add:** …
