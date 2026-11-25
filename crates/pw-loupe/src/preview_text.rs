@@ -277,7 +277,8 @@ fn fine_mark(fine: &FineState, key: Option<KeyChord>) -> Option<AdjustmentMark> 
 }
 
 /// Sharpening's mark "USM", or `None` while it is off. The radius is written in pixels with one
-/// decimal, for example 6 tenths as "0.6".
+/// decimal, for example 6 tenths as "0.6". It is never dimmed: sharpening applies at every zoom
+/// level (ADR 0027 A-Q8, changed 2026-11-25).
 fn sharpen_mark(
     sharpen: &SharpenState,
     key: Option<KeyChord>,
@@ -326,17 +327,6 @@ fn sharpen_mark(
         (SharpenState::Waiting, None) => (
             false,
             "Sharpening: the view is being made again.".to_owned(),
-        ),
-        (SharpenState::Paused, Some(chord)) => {
-            let key = key_text(chord);
-            (
-                true,
-                format!("Sharpening ({key}) is paused: it applies only below 100%."),
-            )
-        }
-        (SharpenState::Paused, None) => (
-            true,
-            "Sharpening is paused: it applies only below 100%.".to_owned(),
         ),
     };
     Some(AdjustmentMark {
@@ -663,20 +653,6 @@ mod tests {
                 false,
                 "Sharpening (U): the view is being made again.",
                 "Sharpening: the view is being made again.",
-            ),
-            (
-                SharpenState::Paused,
-                Sharpening::DEFAULT,
-                true,
-                "Sharpening (U) is paused: it applies only below 100%.",
-                "Sharpening is paused: it applies only below 100%.",
-            ),
-            (
-                SharpenState::Paused,
-                others,
-                true,
-                "Sharpening (U) is paused: it applies only below 100%.",
-                "Sharpening is paused: it applies only below 100%.",
             ),
         ];
         for (state, values, dimmed, with_key, without_key) in cases {

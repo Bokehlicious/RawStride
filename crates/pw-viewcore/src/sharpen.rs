@@ -1,5 +1,6 @@
-//! Sharpening of a view (ADR 0027 §3.3, W3-Q2): an unsharp mask on luminance, applied to a view at
-//! screen resolution after the reduction. The luminance `Y′` of the 8-bit values as they are is
+//! Sharpening of a view (ADR 0027 §3.3, W3-Q2): an unsharp mask on luminance, applied to a view as it
+//! is made (after the region render and any reduction; at every zoom level, A-Q8 changed
+//! 2026-11-25). The luminance `Y′` of the 8-bit values as they are is
 //! blurred with a separable Gaussian, and where `Y′` differs from its blur by at least the
 //! threshold, the same offset is added to R′, G′ and B′, so no colour fringe is made.
 

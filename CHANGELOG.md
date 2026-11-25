@@ -14,8 +14,8 @@ Downloads are on the [Releases page](https://github.com/Bokehlicious/RawStride/r
 - Fine details (D, View ▸ Show Fine Details): below 50 %, RAW views are made from the
   full-resolution rendering; a "Fine" mark at the bottom right shows it is on. If D was assigned
   to another action in your keyboard shortcuts, that action goes back to its default key.
-- Sharpening (U, View ▸ Show Sharpening): below 100 %, the preview is shown with an unsharp
-  mask, never saved in the images; its amount, radius and threshold are set on the new Settings
+- Sharpening (U, View ▸ Show Sharpening): at every zoom level, the preview is shown with an
+  unsharp mask, never saved in the images; its amount, radius and threshold are set on the new Settings
   page Preview, and a "USM" mark at the bottom right shows it is on. Reset Adjustments
   (Backspace, View ▸ Reset Adjustments) turns fine details and sharpening off. If U or Backspace
   was assigned to another action in your keyboard shortcuts, that action goes back to its

@@ -1,4 +1,4 @@
-# T321. ADR 0027 W3: sharpening at 100 % and above — Open
+# T321. ADR 0027 W3: sharpening at 100 % and above — Done
 
 - **Why:** W3's hand check (owner, 2026-11-25; ADR 0027 A-Q8, W3-Q1 and W3-Q6 changed, §3.3 and
   §4.3, "W3's hand check"): sharpening applies at **every zoom level**, 100 % and above included,
@@ -92,6 +92,16 @@
     tests named above then keep checking what they check, with their assertions unchanged (asked
     for here, not a weakening, rule 5). If one of them still fails, or another test fails, stop and
     report it by name.
+  - **One exception** (review, 2026-11-25): in
+    `changing_a_value_plans_new_sharpened_views_and_the_same_value_plans_nothing` a changed value
+    now also plans the 100 % target and the ring again, since they carry the sharpening. After
+    `set_sharpening(Some(other))` the test expects the three renders of image 10, the reduced view
+    (`sharpened(reduced_job(250_000), other)`), the 100 % target and the ring, all with `other`
+    (compared as `renders_of` gives them, the 100 % target and the ring taken from
+    `s.req(k(10), Want::Target)` and `s.req(k(10), Want::Ring)`); it then accepts the shown view,
+    the 100 % target and the ring with `other` (for example with `out_with`) before it checks that
+    nothing is left. The rest of the test is unchanged: it still checks that the same value plans
+    nothing (asked for here, not a weakening, rule 5).
 - **Not in this task:** which view serves a requirement between 50 % and 100 % (T322); the
   neighbours' prefetch there (T324); the button (T323). The pixels at the edge of a 100 % view or
   ring (about 3 pixels at radius 0.8) are sharpened with the edge pixels repeated, as a scaled
@@ -114,3 +124,6 @@
 | 2026-11-25 | Blocked | Cold read (fresh agent): line numbers and every use of `Paused` checked. Added: `shell_text.rs` (`SharpeningNote` and its test); the four tests whose fixtures accept unsharpened 100 % views and rings, with their helpers to be changed (rule 5); the doc comment of `sharpen_state`; three accepted side effects for `known-limits.md` |
 | 2026-11-25 | Blocked | Chain review (fresh agent, T320–T324): added the test of an image whose fit scale is 100 % or more. Between T321 and T322 a sharpened ring satisfies a sharpened scaled requirement (weaker sharpening at 51–99 %): T322 follows at once, no hand check, `main` fast-forward or release in between (`plans/`, W3's row) |
 | 2026-11-25 | Open | T320 Done |
+| 2026-11-25 | Open | Review of the stopped work (agent left no log row): items 1–5 and every test but one are done as written, nothing of `SharpenState::Paused` is left. The reviewer's `.\tools\check.ps1`: only `changing_a_value_plans_new_sharpened_views_and_the_same_value_plans_nothing` fails, its expected plan holds only the reduced view while the 100 % target and the ring are now planned again too (a gap in the task text, not the code; the cold read and the chain review missed it). Added under Tests to change: "One exception", that test's new expectation. Left for the agent: that test, `docs/test-inventory.md`, `.\tools\check.ps1`, the report |
+| 2026-11-25 | Ready for review | Items 1–5 done; `changing_a_value_plans_new_sharpened_views_and_the_same_value_plans_nothing` changed as "One exception" says (the 100 % target and the ring from `s.req`, all three accepted with `out_with` before the check that nothing is left). `ready_for_fine` and `with_full_size_views` take the sharpening of the 100 % target and ring as a parameter (`None` where the test turns none on). New tests: `at_100_percent_and_above_the_sharpened_100_percent_view_is_shown` (replaces the paused test), `the_neighbours_prefetched_100_percent_view_carries_the_sharpening`, `a_failed_image_with_sharpening_on_at_100_percent_waits`, `an_image_whose_fit_scale_is_100_percent_or_more_is_sharpened_at_fit`. `docs/test-inventory.md` updated (pw-viewcore 225 → 228, total 2673 passed, 81 ignored). `.\tools\check.ps1` all OK |
+| 2026-11-25 | Done | Reviewed: the "One exception" test as written, the other tests unchanged in their assertions, `test-inventory.md` (+3: 2673 passed). Independent review (fresh agent): no bugs; two stale doc comments ("after the reduction") fixed by the reviewer with the owner's yes, `JobView::sharpen` in `state.rs` and the module doc of `crates/pw-viewcore/src/sharpen.rs` (outside the file list, comments only); a late 100 % view or ring of an old sharpening is kept (`accept` checks only scaled and reduced views) and the prefetch test checks only at fit (low, accepted). The reviewer's `.\tools\check.ps1` after the fix: all OK, 2673 passed, 0 failed, 81 ignored, no clippy warnings. Leftovers: `known-limits.md` (Sharpening) the edge pixels, `wants_a_full_size_view`, the fine render behind the 100 % target and ring, the late view; `CHANGELOG.md` Sharpening line "below 100 %" → "at every zoom level". T322 set Open, to follow at once (no hand check, `main` fast-forward or release before it) |

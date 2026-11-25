@@ -379,7 +379,8 @@ impl<B: Backend> ViewCore<B> {
 
     /// Sets sharpening (ADR 0027 §3.3, W3): `None` turns it off; a value is first made valid with
     /// [`Sharpening::clamped`]. The shell holds it for the session (off at the start, not saved,
-    /// W3-Q5). While it is on, every view below 100 % is sharpened after its reduction; a change
+    /// W3-Q5). While it is on, every view is sharpened, at every zoom level (A-Q8, changed
+    /// 2026-11-25), after its region render and any reduction; a change
     /// makes the wanted views again, and the drawn view stays until one with the new sharpening
     /// replaces it in one swap (V2). [`Frame::sharpen`] tells its state. Not a user request:
     /// nothing is recorded.

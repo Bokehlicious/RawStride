@@ -374,7 +374,7 @@ pub fn settings_text(text: SettingsText) -> &'static str {
         }
         SettingsText::SharpeningHeading => "Sharpening",
         SettingsText::SharpeningNote => {
-            "Used in the preview below 100% while sharpening is turned on. Not saved in the images."
+            "Used in the preview while sharpening is turned on. Not saved in the images."
         }
         SettingsText::SharpenAmount => "Amount (%)",
         SettingsText::SharpenRadius => "Radius (pixels)",
@@ -1298,7 +1298,7 @@ mod tests {
         assert_eq!(settings_text(SettingsText::SharpeningHeading), "Sharpening");
         assert_eq!(
             settings_text(SettingsText::SharpeningNote),
-            "Used in the preview below 100% while sharpening is turned on. Not saved in the images."
+            "Used in the preview while sharpening is turned on. Not saved in the images."
         );
         assert_eq!(settings_text(SettingsText::SharpenAmount), "Amount (%)");
         assert_eq!(

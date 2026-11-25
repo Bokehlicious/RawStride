@@ -559,6 +559,18 @@ only if it is seen in use.)
   that line is lost on loading (the key map's rule for a taken key); written in `CHANGELOG.md`.
 - *Holding U* (T318, accepted as for D): sharpening toggles at the key-repeat rate, and each
   toggle plans new views.
+- *The edge of a sharpened 100 % view or ring* (T321, accepted): its outermost pixels (about 3 at
+  radius 0.8) are sharpened with the edge pixels repeated, as a scaled view's are, so they can
+  differ slightly from the same pixels inside the next view.
+- *The full-size jobs after U at 100 %* (T321, minor): `wants_a_full_size_view` asks `serving`,
+  which ignores sharpening, so the statistics, clipping and focus jobs are not held back while
+  the sharpened 100 % view is made.
+- *Fine details and sharpening at fit* (T321): the fine render waits behind the sharpened 100 %
+  target and ring of the current image, so the fine view comes later than with sharpening off.
+- *A late 100 % view or ring of an old sharpening* (T321's independent review, low): `accept`
+  checks whether a result is still wanted only for scaled and reduced views, so after U pressed
+  twice quickly a late 100 % view or ring of the old sharpening is kept and takes texture budget
+  until it is evicted (it is not protected, so it goes first).
 
 ## LibRaw (`pw-libraw`)
 

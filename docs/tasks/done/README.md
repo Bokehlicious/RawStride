@@ -327,3 +327,4 @@ was when the task was done, so "this file", "below" and "the Log" in T1–T115 m
 | [T317](T317-sharpening-settings-page.md) | ADR 0027 W3: the Settings page Preview and the sharpening values (pw-loupe) |
 | [T318](T318-sharpening-key-mark-reset.md) | ADR 0027 W3: the key, the menu item and the mark of sharpening, and the reset (pw-loupe) |
 | [T320](T320-sharpening-defaults.md) | ADR 0027 W3: sharpening's defaults 80 %, 0.8 px and 2 (pw-viewcore, pw-loupe) |
+| [T321](T321-sharpening-at-every-zoom.md) | ADR 0027 W3: sharpening at 100 % and above (pw-viewcore, pw-loupe) |

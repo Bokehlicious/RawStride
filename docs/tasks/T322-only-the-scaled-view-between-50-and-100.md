@@ -1,4 +1,4 @@
-# T322. ADR 0027: only the exact scaled view between 50 % and 100 % — Blocked: waits for T321
+# T322. ADR 0027: only the exact scaled view between 50 % and 100 % — Open
 
 - **Why:** found in W3's hand check (owner, 2026-11-25; ADR 0027 §4.3, "W3's hand check"):
   between about 51 % and 99 %, the pixels move when sharpening is turned on or off. The cause
@@ -102,3 +102,4 @@
 |---|---|---|
 | 2026-11-25 | Blocked | Added after W3's hand check (owner, 2026-11-25); waits for T321 |
 | 2026-11-25 | Blocked | Cold read and chain review (fresh agents): the cause confirmed from the code, no existing test breaks. Added: `exact` not used and why `same_reduction` holds for a scaled view; the rule covers every scaled requirement (fit between 50 % and 100 % too) with a test; test 4's setup; the mark says shown while the sharpened ring is drawn (known-limits); the CHANGELOG line under Changed. The owner decided the pan's pause on 2026-11-25 (item 2, ADR 0027 §4.3) |
+| 2026-11-25 | Open | T321 Done |
