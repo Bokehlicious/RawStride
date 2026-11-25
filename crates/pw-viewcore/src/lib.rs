@@ -6,7 +6,8 @@
 //!   zoom target, V7); a ring of twice that for panning; and free levels between 50 % and 100 % as
 //!   a region scaled down on the worker. A view is never drawn upscaled below 100 % (V2).
 //! - **Plan (strategy p5):** the current view first; after a 150 ms dwell the other view, then +1
-//!   and +2 in the direction of travel, the ring, and −1 behind. Free levels are not prefetched.
+//!   and +2 in the direction of travel, the ring, and −1 behind. At a free level the neighbours are
+//!   prefetched at the current scale.
 //! - **Budgets (V8):** LibRaw sessions under the core budget and finished views under the texture
 //!   budget, counted separately (ADR 0008 §18). Prefetch starts only if it fits; the current image
 //!   and the view on screen are never evicted.

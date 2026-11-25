@@ -25,6 +25,8 @@ Downloads are on the [Releases page](https://github.com/Bokehlicious/RawStride/r
 ### Changed
 
 - Views below 100 % are reduced with a sharper filter.
+- Stepping to the next image at a zoom level between 50 % and 100 % is quicker: the images
+  around the current one are prepared at that zoom level.
 
 ## [0.5.0] - 2026-11-24
 

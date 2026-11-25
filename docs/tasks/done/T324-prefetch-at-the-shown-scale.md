@@ -1,4 +1,4 @@
-# T324. ADR 0027: the neighbours prefetched at the shown scale between 50 % and 100 % — Open
+# T324. ADR 0027: the neighbours prefetched at the shown scale between 50 % and 100 % — Done
 
 - **Why:** W3's `latency.ps1` run after T318 (reviewer, 2026-11-24, release build of 160e3d7,
   folder `s6\a1`, 1920×1200, labels `t318-*-51-*`): at 51.2 % (100 % and three steps out) the
@@ -70,3 +70,5 @@
 | 2026-11-25 | Blocked | Cold read and chain review (fresh agents): the prefetched view serves after a step (same centre, zoom and size). Added: `lib.rs` (its doc line); the existing test `free_zoom_waits_for_the_gesture_to_pause_and_is_not_prefetched` to change; tests of the other mode and −1; the cost. The owner decided on 2026-11-25: from 50 % to below 100 % the second view is fit, not 100 % (Z's target there), and the cost is accepted, measured after Done (ADR 0027 §4.3) |
 | 2026-11-25 | Blocked | T322 Done; waits for T323 (the owner chose T323 first, 2026-11-25; both change `docs/test-inventory.md`) |
 | 2026-11-25 | Open | T323 Done |
+| 2026-11-25 | Ready for review | Done by the agent: `State::wanted`, `lib.rs` doc line, tests, inventory |
+| 2026-11-25 | Done | Reviewed: item 1 as written (50 % to below 100 %: `(Want::Shown, Want::Fit)`), the `lib.rs` line; every test of the list, 0.4 and fit in the kept parts of the renamed test, two new tests (the other mode and −1, the step to a prefetched neighbour). The agent left `docs/test-inventory.md`'s counts unchanged: the reviewer set them by script (2683 passed; `pw-viewcore` unit row 234 → 236, from `test-output.txt`). `.\tools\check.ps1` all OK (the agent's run, newer than the code), 2683 passed, 0 failed, 81 ignored, no clippy warnings. `CHANGELOG.md`: a Changed line (stepping between 50 % and 100 % is quicker). No leftovers; the owner's `latency.ps1` and the hand check of T320–T324 follow (`plans/`, W3's row) |

@@ -1095,13 +1095,15 @@ impl<S> State<S> {
         if !(full || self.since.elapsed() >= self.config.dwell) {
             return v;
         }
-        // free levels of 50 % or more are not prefetched: neighbours get the fit view and the
-        // 100 % target. Below 50 % the view at the current scale is of the whole image, so it is
-        // prefetched instead of the fit view, and stepping at such a level stays quick (ADR 0027
-        // W1-Q8).
+        // at every free level below 100 % the neighbours are prefetched at the current scale (ADR
+        // 0008 §12.1: the shown view and the zoom target), so stepping stays quick (ADR 0027
+        // W1-Q8, changed by the owner 2026-11-25). Below 50 % the second view is the 100 % target;
+        // from 50 % to below 100 % it is the fit view, since Z goes to fit from there. At fit
+        // the fit view comes first, then the target.
         let (primary, other) = match self.zoom {
             Zoom::Scale(s) if s >= 1.0 - EPS => (Want::Target, Want::Fit),
             Zoom::Scale(s) if s < HALF_DENSITY - EPS => (Want::Shown, Want::Target),
+            Zoom::Scale(_) => (Want::Shown, Want::Fit),
             _ => (Want::Fit, Want::Target),
         };
         let other_view = if self.zoom == Zoom::Fit {
@@ -3024,7 +3026,7 @@ mod tests {
     }
 
     #[test]
-    fn free_zoom_waits_for_the_gesture_to_pause_and_is_not_prefetched() {
+    fn free_zoom_waits_for_the_gesture_to_pause_then_prefetches_the_neighbours() {
         let mut s = state(1024);
         with_session(&mut s, 10);
         s.set_zoom(Zoom::Scale(0.7), None, true);
@@ -3045,8 +3047,9 @@ mod tests {
         assert!(
             w.iter()
                 .filter(|(key, _)| key.0 != 10)
-                .all(|(_, x)| matches!(x, Want::Fit | Want::Target))
+                .all(|(_, x)| matches!(x, Want::Shown | Want::Fit))
         );
+        assert!(w.contains(&(k(11), Want::Shown)) && w.contains(&(k(11), Want::Fit)));
         // the job is a scaled view of the visible region
         assert!(matches!(s.plan()[0], Job::Render((10, _), v) if v.kind == ViewKind::Scaled));
     }
@@ -3410,7 +3413,7 @@ mod tests {
     }
 
     #[test]
-    fn below_50_percent_the_neighbours_prefetch_the_view_at_the_current_scale() {
+    fn below_100_percent_the_neighbours_prefetch_the_view_at_the_current_scale() {
         let mut s = state(1024);
         known(&mut s, 11);
         let prefetch = |s: &State<u32>| {
@@ -3432,10 +3435,63 @@ mod tests {
         s.zoom = Zoom::Fit;
         assert!(s.wanted(false).contains(&(k(11), Want::Fit)));
         assert_eq!(prefetch(&s).first(), Some(&reduced_job(250_000)));
-        // at 50 % or more, unchanged: the fit view
+        // at 50 % or more, below 100 %: the view at the current scale, then the fit view
         s.zoom = Zoom::Scale(0.6);
         assert!(s.wanted(false).contains(&(k(11), Want::Fit)));
-        assert!(!s.wanted(false).contains(&(k(11), Want::Shown)));
+        assert!(s.wanted(false).contains(&(k(11), Want::Shown)));
+        assert!(!s.wanted(false).contains(&(k(11), Want::Target)));
+        // exactly 50 %: the half-size view first
+        s.zoom = Zoom::Scale(0.5);
+        assert_eq!(prefetch(&s).first().map(|j| j.kind), Some(ViewKind::Half));
+        // 51.2 % and 75 %: a scaled view at that scale first, the fit view second; with
+        // sharpening on both carry it
+        for sharpen in [None, Some(Sharpening::DEFAULT)] {
+            s.set_sharpening(sharpen);
+            for z in [0.512, 0.75] {
+                s.zoom = Zoom::Scale(z);
+                let jobs = prefetch(&s);
+                assert_eq!(jobs.first().map(|j| j.kind), Some(ViewKind::Scaled));
+                assert_eq!(jobs.first().map(|j| j.density()), s.scale_of(k(11)));
+                assert_eq!(jobs.get(1).map(|j| j.kind), Some(ViewKind::Reduced));
+                assert!(jobs.iter().take(2).all(|j| j.sharpen == sharpen));
+            }
+        }
+    }
+
+    #[test]
+    fn at_a_free_level_the_other_mode_and_the_neighbour_behind_get_the_scaled_view() {
+        let mut s = state(1024);
+        known(&mut s, 9);
+        known(&mut s, 10);
+        s.sizes.insert((10, Source::Jpeg), SIZE);
+        s.zoom = Zoom::Scale(0.75);
+        let w = s.wanted(false);
+        let other = (10, Source::Jpeg);
+        assert!(w.contains(&(other, Want::Shown)));
+        assert!(w.contains(&(k(9), Want::Shown)));
+        for key in [other, k(9)] {
+            let job = s.req(key, Want::Shown).map(|r| r.job);
+            assert_eq!(job.map(|j| j.kind), Some(ViewKind::Scaled));
+            assert_eq!(job.map(|j| j.density()), Some(0.75));
+        }
+    }
+
+    #[test]
+    fn stepping_to_a_prefetched_neighbour_at_a_free_level_draws_its_scaled_view_at_once() {
+        let mut s = state(1024);
+        known(&mut s, 10);
+        known(&mut s, 11);
+        s.zoom = Zoom::Scale(0.75);
+        let id = s.accept(&out(&s, 11, Want::Shown), 100);
+        assert!(id.is_some());
+        s.go(11);
+        s.since = Instant::now() - Duration::from_secs(1);
+        let f = s.frame(VIEW);
+        assert_eq!(f.draw.map(|d| d.id), id);
+        // nothing is planned for its shown view
+        assert!(!s.plan().iter().any(
+            |j| matches!(j, Job::Render(key, v) if *key == k(11) && v.kind == ViewKind::Scaled)
+        ));
     }
 
     #[test]
