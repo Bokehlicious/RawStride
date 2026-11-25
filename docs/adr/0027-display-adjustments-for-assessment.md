@@ -470,9 +470,43 @@ sharpening (`backlog.md`, Technical work).
   level between 50 % and 100 % with sharpening off and on, a step right after a pan, and U at
   100 %.
 
+**The hand check of T320–T324, and the measurement (owner and reviewer, 2026-11-25):** the owner
+hand-checked the five and approved them. `latency.ps1` (release build of 173319d, folder
+`s6\a1`, 1920×1200, defaults 80 %/0.8 px/2, 13 steps a series, labels `t324-*`): the next
+image's first change, median (worst), is 5.3 (8.4) ms at fit with sharpening off and 5.4 (6.9)
+ms on; 5.3 (6.7) ms off and 5.3 (6.7) ms on at the level reached by Z and three presses of
+minus (51.2 %); 5.3 (7.0) ms off and 5.4 (6.5) ms on at two presses (64 %). Every step was one
+change, none refined. V1 and V4 hold at every level, and the 155–180 ms at 51.2 % before T324
+are gone. Two limits of the run: the title shows no zoom level, and in three setup series one
+press of minus gave one change instead of two, so a press may have been swallowed and a level
+may have been 64 or 80 % (inside the same band); the levels are named as the keys were pressed.
+U at 100 % could not be measured: `latency.ps1` counts a change only where enough sampled grey
+values differ by 6 levels or more (`Diff(…, 6)`), and sharpening at 80 %/0.8 px changes too
+little for that, so only the first press (a new render, 188 ms, 1.3 s of CPU) was seen. The
+owner saw by eye that the first U on a new image is a little slower and that off and on after
+that are immediate (W3-Q4: the kept view). The step right after a pan was checked by the owner
+by eye: a new image is sharp quickly, no remark.
+
+**The pan between 50 % and 100 % (owner, 2026-11-25, W3's hand check):** with the Sony A1's RAW
+files, dragging the image with the left mouse button stutters through the whole drag at about
+51–59 %, with sharpening on and off alike; at other levels it runs better. The cause, from the
+code and not profiled: the ring drawn while a drag goes on (T322) is made over the region
+visible at 50 %, so its margin for panning is `1 − 0.5 / s`: about 2 % at 51 %, 15 % at 59 %,
+33 % at 75 %. **Decided by the owner on 2026-11-25**, of three alternatives (A a larger ring, B a
+pan view, C a known limit): **B**. Between 50 % and 100 % the ring is replaced by a **pan view**:
+a scaled view at the shown scale over two times the visible region on each axis (clamped to the
+image), made after the dwell in the ring's place in the plan, kept while it contains one and a
+half times the visible region, not asked for during a drag, and reduced with the same filter as
+the shown view, so the swap to the exact view moves nothing. It satisfies the shown requirement
+while it contains the visible region. At 100 % and above and at 50 % and below the ring is as
+before. Cost: about four times the pixels of a shown view's render, in the background, made again
+after a pan beyond the kept region and after a zoom step; the owner re-checks the drag and the
+stepping after T325 (T325).
+
 The tasks: T320 (the defaults), T321 (sharpening at 100 % and above), T322 (only the exact
 `Scaled` view between 50 % and 100 %, and the pan's pause), T323 (the button "USM"), T324 (the
-neighbours prefetched at the shown scale and at fit between 50 % and 100 %).
+neighbours prefetched at the shown scale and at fit between 50 % and 100 %), T325 (the pan
+view).
 
 ## 5. Steps
 

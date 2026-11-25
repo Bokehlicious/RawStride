@@ -87,6 +87,7 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status |
 |---|---|---|
+| [T325](T325-pan-view-between-50-and-100.md) | ADR 0027: a pan view between 50 % and 100 % | Open |
 
 ## Writing a task (owner and reviewer)
 
