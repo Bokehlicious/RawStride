@@ -1,4 +1,4 @@
-# T321. ADR 0027 W3: sharpening at 100 % and above — Blocked: waits for T320
+# T321. ADR 0027 W3: sharpening at 100 % and above — Open
 
 - **Why:** W3's hand check (owner, 2026-11-25; ADR 0027 A-Q8, W3-Q1 and W3-Q6 changed, §3.3 and
   §4.3, "W3's hand check"): sharpening applies at **every zoom level**, 100 % and above included,
@@ -113,3 +113,4 @@
 | 2026-11-25 | Blocked | Added after W3's hand check (owner, 2026-11-25); waits for T320 |
 | 2026-11-25 | Blocked | Cold read (fresh agent): line numbers and every use of `Paused` checked. Added: `shell_text.rs` (`SharpeningNote` and its test); the four tests whose fixtures accept unsharpened 100 % views and rings, with their helpers to be changed (rule 5); the doc comment of `sharpen_state`; three accepted side effects for `known-limits.md` |
 | 2026-11-25 | Blocked | Chain review (fresh agent, T320–T324): added the test of an image whose fit scale is 100 % or more. Between T321 and T322 a sharpened ring satisfies a sharpened scaled requirement (weaker sharpening at 51–99 %): T322 follows at once, no hand check, `main` fast-forward or release in between (`plans/`, W3's row) |
+| 2026-11-25 | Open | T320 Done |

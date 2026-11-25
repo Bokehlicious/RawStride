@@ -640,8 +640,8 @@ mod tests {
                 SharpenState::Shown,
                 Sharpening::DEFAULT,
                 false,
-                "Sharpening (U): amount 60%, radius 0.6 px, threshold 2.",
-                "Sharpening: amount 60%, radius 0.6 px, threshold 2.",
+                "Sharpening (U): amount 80%, radius 0.8 px, threshold 2.",
+                "Sharpening: amount 80%, radius 0.8 px, threshold 2.",
             ),
             (
                 SharpenState::Shown,
@@ -708,7 +708,7 @@ mod tests {
             marks.get(1),
             Some(&usm(
                 false,
-                "Sharpening (U): amount 60%, radius 0.6 px, threshold 2."
+                "Sharpening (U): amount 80%, radius 0.8 px, threshold 2."
             ))
         );
         // The default key map's key is U.

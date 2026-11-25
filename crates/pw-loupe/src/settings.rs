@@ -338,7 +338,7 @@ impl Default for ShellSettings {
             companion_suffixes: default_companion_suffixes(),
             // The buttons on a thumbnail shown (U15-Q7).
             thumbnail_buttons: true,
-            // Amount 60 %, radius 0.6 px, threshold 2 (ADR 0027 §3.3).
+            // Amount 80 %, radius 0.8 px, threshold 2 (ADR 0027 §3.3).
             sharpening: Sharpening::DEFAULT,
         }
     }
@@ -1298,7 +1298,7 @@ mod tests {
              import_incremental = true\n\
              move_to_subfolders = false\ncompanion_suffixes = dop, pp3, on1\n\
              thumbnail_buttons = true\n\
-             sharpen_amount = 60\nsharpen_radius = 0.6\nsharpen_threshold = 2\n"
+             sharpen_amount = 80\nsharpen_radius = 0.8\nsharpen_threshold = 2\n"
         );
     }
 
@@ -2496,7 +2496,7 @@ mod tests {
             assert!(
                 text.ends_with(&format!(
                     "\nthumbnail_buttons = {on}\n\
-                     sharpen_amount = 60\nsharpen_radius = 0.6\nsharpen_threshold = 2\n"
+                     sharpen_amount = 80\nsharpen_radius = 0.8\nsharpen_threshold = 2\n"
                 )),
                 "{text}"
             );
@@ -2549,8 +2549,8 @@ mod tests {
         let path = dir.0.join("settings.txt");
         save_settings(&path, &Settings::default()).unwrap();
         let text = std::fs::read_to_string(&path).unwrap();
-        assert!(text.contains("\nsharpen_amount = 60\n"), "{text}");
-        assert!(text.contains("\nsharpen_radius = 0.6\n"), "{text}");
+        assert!(text.contains("\nsharpen_amount = 80\n"), "{text}");
+        assert!(text.contains("\nsharpen_radius = 0.8\n"), "{text}");
         assert!(text.contains("\nsharpen_threshold = 2\n"), "{text}");
         assert_eq!(ShellSettings::default().sharpening, Sharpening::DEFAULT);
     }
@@ -2896,7 +2896,7 @@ mod tests {
                 text.ends_with(&format!(
                     "\nimport_incremental = true\nmove_to_subfolders = {on}\n{line}\n\
                      thumbnail_buttons = true\n\
-                     sharpen_amount = 60\nsharpen_radius = 0.6\nsharpen_threshold = 2\n"
+                     sharpen_amount = 80\nsharpen_radius = 0.8\nsharpen_threshold = 2\n"
                 )),
                 "{text}"
             );
@@ -3039,7 +3039,7 @@ mod tests {
         let text = std::fs::read_to_string(&path).unwrap();
         let expected = format!(
             "companion_suffixes = dop, pp3, on1\nthumbnail_buttons = true\n\
-             sharpen_amount = 60\nsharpen_radius = 0.6\nsharpen_threshold = 2\n\
+             sharpen_amount = 80\nsharpen_radius = 0.8\nsharpen_threshold = 2\n\
              external_program = Capture One | C:\\Program Files\\Capture One\\CaptureOne.exe\n\
              favourite = {}\n",
             full("Favourite").display()

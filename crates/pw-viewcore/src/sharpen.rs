@@ -23,10 +23,10 @@ impl Sharpening {
     pub const AMOUNT_RANGE: RangeInclusive<u16> = 10..=300;
     pub const RADIUS_TENTHS_RANGE: RangeInclusive<u8> = 3..=20;
     pub const THRESHOLD_RANGE: RangeInclusive<u8> = 0..=20;
-    /// Amount 60 %, radius 0.6 px, threshold 2 (ADR 0027 §3.3).
+    /// Amount 80 %, radius 0.8 px, threshold 2 (ADR 0027 §3.3).
     pub const DEFAULT: Sharpening = Sharpening {
-        amount: 60,
-        radius_tenths: 6,
+        amount: 80,
+        radius_tenths: 8,
         threshold: 2,
     };
 
@@ -473,8 +473,8 @@ mod tests {
         }
         assert_eq!(s(9, 2, 21).clamped(), s(10, 3, 20));
         assert_eq!(s(301, 21, 0).clamped(), s(300, 20, 0));
-        assert_eq!(Sharpening::default(), s(60, 6, 2));
-        assert_eq!(Sharpening::DEFAULT.radius(), 0.6);
+        assert_eq!(Sharpening::default(), s(80, 8, 2));
+        assert_eq!(Sharpening::DEFAULT.radius(), 0.8);
     }
 
     /// A pattern with edges everywhere, as `pw-resample`'s test images.

@@ -1,4 +1,4 @@
-# T320. ADR 0027 W3: sharpening's defaults 80 %, 0.8 px and 2 — Open
+# T320. ADR 0027 W3: sharpening's defaults 80 %, 0.8 px and 2 — Done
 
 - **Why:** W3's hand check (owner, 2026-11-25; ADR 0027 §3.3, W3-Q7 and §4.3, "W3's hand
   check"): the defaults amount 60 %, radius 0.6 px and threshold 2 sharpen too little. The new
@@ -57,3 +57,5 @@
 |---|---|---|
 | 2026-11-25 | Open | Added after W3's hand check (owner, 2026-11-25) |
 | 2026-11-25 | Open | Cold read (fresh agent): every line number and claim checked against the code; no test compares sharpened bytes with stored ones. Added: the timing test's description in `test-inventory.md` (item 4) and that `Sharpening::default()` follows (item 1). The task files and the owner's ADR changes are committed before an agent starts, so `git diff --stat` holds only this task's files |
+| 2026-11-25 | Ready for review | `Sharpening::DEFAULT` is 80 / 8 / 2 with its doc comment; the comment in `settings.rs`; the default literals in the tests of item 3 (`sharpen.rs` 2, `settings.rs` 6 lines, `preview_text.rs` 3); `test-inventory.md` 3 descriptions (T317, T318, the timing test). No other test changed, none failed. `.\tools\check.ps1` all OK (2670 passed, 0 failed, 81 ignored; no clippy warnings). `git diff --stat` shows only this task's files |
+| 2026-11-25 | Done | Reviewed: only the files named; the 60 / 6 literals left in `sharpen.rs` are test values outside the ranges (`s(60, 6, 21)` and its neighbours) and `RADIUS_2`, as the task says. ADR 0027 §3.3 and §4.3 already hold the new values (6419193). `.\tools\check.ps1` all OK (the agent's run, newer than the last change; no clippy warnings). No `CHANGELOG.md` line, no leftovers. T321 set Open |

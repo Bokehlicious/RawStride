@@ -87,8 +87,7 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status |
 |---|---|---|
-| [T320](T320-sharpening-defaults.md) | ADR 0027 W3: sharpening's defaults 80 %, 0.8 px and 2 | Open |
-| [T321](T321-sharpening-at-every-zoom.md) | ADR 0027 W3: sharpening at 100 % and above | Blocked: waits for T320 |
+| [T321](T321-sharpening-at-every-zoom.md) | ADR 0027 W3: sharpening at 100 % and above | Open |
 | [T322](T322-only-the-scaled-view-between-50-and-100.md) | ADR 0027: only the exact scaled view between 50 % and 100 % | Blocked: waits for T321 |
 | [T323](T323-sharpening-button.md) | ADR 0027 W3: the button "USM" in the preview's title line | Blocked: waits for T321 |
 | [T324](T324-prefetch-at-the-shown-scale.md) | ADR 0027: the neighbours prefetched at the shown scale between 50 % and 100 % | Blocked: waits for T322 |
