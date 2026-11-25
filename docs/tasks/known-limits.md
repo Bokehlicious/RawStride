@@ -590,6 +590,13 @@ only if it is seen in use.)
   ring is drawn meanwhile, since the ring carries the sharpening, as below 50 % with the
   half-size view.
 
+## Filter on text and metadata (ADR 0022)
+
+- *A sidecar changed by another program* (ADR 0022 S2-Q6, owner 2026-11-25): the filter's values
+  of a tab are read once and kept until its folder is listed again; only RawStride's own writes
+  read them again (S2-Q5). A value another program writes is seen by the filter after F5 (Reload
+  Folder) or when the folder is opened again. A task only if it is seen in use.
+
 ## LibRaw (`pw-libraw`)
 
 (Reviewer and an independent review agent of T197, 2026-11-19; none is caused by T197, which

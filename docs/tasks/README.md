@@ -92,10 +92,12 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 | [T333](T333-exposure-and-shadows-in-the-state.md) | ADR 0027 W5: the exposure and the shadows in the view core's state | Blocked | Opus |
 | [T334](T334-shadows-amount-settings-page.md) | ADR 0027 W5: the shadows' amount on the Settings page Preview | Blocked | Sonnet |
 | [T335](T335-exposure-keys-menu-marks.md) | ADR 0027 W5: the keys, the menu and the marks of the exposure and the shadows | Blocked | Opus |
+| [T336](T336-filter-values-batch-read.md) | ADR 0022 S2a: the filter's IPTC values, read for many images at once | Open | Codex Astra |
+| [T337](T337-filter-values-in-the-tabs.md) | ADR 0022 S2b: the filter's values kept per tab and read when needed | Blocked | Codex Astra |
 
 ## Writing a task (owner and reviewer)
 
-- **Number:** the next free number after the highest in this folder and `done/` (T336 next).
+- **Number:** the next free number after the highest in this folder and `done/` (T338 next).
 - **File:** `docs/tasks/T246-<a-few-words>.md`; three digits, lower case, words joined by `-`.
 - **Index:** add a row to "Open tasks" above and keep its status in step with the file's heading.
 - **Size (owner, 2026-11-15, after T142):** one task is one layer (a C++ shim or a core crate, or
@@ -123,7 +125,11 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
   Before a Codex task is set to Open, the reviewer moves the worktree to the tip of
   `feature/gui-workspace` (`git -C C:\Development\PhotoWorkflow-Codex checkout -f -B codex
   feature/gui-workspace`), only after the previous Codex task is committed. At the review the
-  reviewer copies the task's files into `feature/gui-workspace`, runs `.\tools\check.ps1` there
+  reviewer brings the task's work into `feature/gui-workspace` as a patch, never by copying its
+  files (owner, 2026-11-25, ADR 0022 S2-Q7: a file such as `main.rs` may have changed here
+  meanwhile): `git -C C:\Development\PhotoWorkflow-Codex add -N .` (new files only marked; the
+  reviewer's, not Codex's), then that worktree's `git diff` piped to `git apply --3way` here; a
+  conflict is resolved by the reviewer and named in the log. The reviewer runs `.\tools\check.ps1` there
   (Codex's own run may fail in its sandbox, for example ExifTool not starting) and commits; the
   reviewer also updates `docs/test-inventory.md`, which the task tells Codex not to touch.
 - **Chains:** a split step is written as a chain at once (for example T146 → T147 → T148), the later

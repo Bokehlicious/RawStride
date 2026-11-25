@@ -59,7 +59,8 @@
 ### 2.4 Reading the values
 
 - The IPTC values are read with the same kind of batch call per folder as the ratings: either
-  `read_ratings` extended or a new request beside it in the metadata worker (decided in S2). The
+  `read_ratings` extended or a new request beside it in the metadata worker (decided in S2: a new
+  request, S2-Q1 in §3.1). The
   Exif values are read as for sorting (U14-Q4), visible images first (S-Q6).
 - **Only when needed** (S-Q7): the values are read when a text or metadata condition is active,
   not when a folder is opened. They are kept in memory for the tab until its folder is listed
@@ -104,6 +105,18 @@
 | S-Q12 | Rejected images | Follow the star filter as today |
 | S-Q13 | Steps | S1–S5 as §4 |
 | S-Q14 | Not included | As §5 |
+
+### 3.1 S2's questions (decided by the owner, 2026-11-25: every proposal approved)
+
+| # | Question | Answer (as proposed) |
+|---|---|---|
+| S2-Q1 | The request for the IPTC values | A **new request** in the metadata worker beside `read_ratings`, which stays as it is (it runs at every folder opening, which must stay as fast as today). It reads the values the same way as the metadata window and Info (`read_metadata`'s reading and reconciliation of XMP and IIM, ADR 0007), but for many files per ExifTool call, so the filter sees exactly what the panel shows, also a JPEG with IIM values only. A plain XMP-only read was rejected: faster, but it could differ from the panel. Its time is measured on one of the owner's folders in S2's first task |
+| S2-Q2 | Order and parts | Chunks of 50 images, the visible images first; each chunk's answer counts "{i} of {n}" up (shown by S3). **Amended by the owner, 2026-11-25** (found while S2's tasks were written): every image is read with ExifTool, also a manufacturer RAW without a sidecar, since the metadata window fills such a RAW's values from its Exif and its camera XMP (ADR 0007), and the filter must see what the window shows (S2-Q1). The proposal's shortcut (no call for a RAW without a sidecar) was dropped |
+| S2-Q3 | Exif | The capture-time reader of the sort (`pw_raw::inspect`, U14-Q4) keeps the whole Exif summary, not only the date: one read per file serves the sort and the filter. File Type from the extension. Camera is "Make Model", or the model alone when it already begins with the make; no serial number until ADR 0020 C1. Capture Date is the embedded DateTimeOriginal, without a time zone; all zeros counts as no date. A file `pw_raw` cannot read has no Exif values (as the sort counts it as having no date) |
+| S2-Q4 | A read that fails | The chunk is tried once more; if it fails again, its images count as **"could not be read"**: they stay unknown (hidden while a text or metadata condition is active), are not asked for again until the folder is listed again, and S3 shows their number in the status line. Not counted as having no values (they would wrongly show under "has no Title"). ExifTool answers per file, so one broken file fails only its own image |
+| S2-Q5 | RawStride's own writes (S-Q8) | The written images are **read again from the file** with the same request (the editor's save, `M`, Apply to All Marked, a template at an import into an open tab), not filled in from what the user typed, so the values are exactly the file's, also after the IIM–XMP sync. A batch: all its images read again after it, in chunks, also those whose write failed (a batch stopped halfway has written some) |
+| S2-Q6 | A read and a write at once; moves and deletes | An answer for an image written after the read was asked is dropped and the image read again after the write. A deleted image leaves the tab's values; an image moved to another folder leaves them too (the destination's tab reads it when needed). New files from the watcher or an import are unknown until read. A sidecar changed by another program is seen only when the folder is listed again (§2.4; `known-limits.md`) |
+| S2-Q7 | Split and who | A chain of two tasks, both Codex Astra (concurrency): **S2a** in `pw-metadata` (the request, the reading in chunks, the timing) → **S2b** in `pw-loupe` (the tab keeps the values, the Exif reader extended, reading only while the tab's filter has a text or metadata condition, the reading again after own writes). The filter is per tab, as the star filter. Nothing changes on screen until S3; the hand check after S3 as §4. S2 moved to order 2d beside ADR 0027 W. A Codex task's work is brought to `feature/gui-workspace` as a patch (`git apply --3way`), not by copying its files, since S2b shares `main.rs` and `lib.rs` with ADR 0027's tasks (`docs/tasks/README.md`, "Codex tasks") |
 
 ## 4. Steps
 
