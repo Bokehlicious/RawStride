@@ -226,9 +226,10 @@
 - **Known and accepted (W5-Q7, W5-Q4):** every change renders the shown view again (about
   0.3 s for 61 Mpix at fit, 1.2 s with fine details on), and the neighbours after it. While auto
   is on, a step to an image that was not prefetched waits for its statistics before its first
-  view (T331 times the statistics; if that is later than V1 allows, the owner chooses by W5-Q4
-  between this and a first view at 0 EV replaced by the auto-exposed one, and the choice is
-  written into this task before it is set to Open). A kept view of another value may be
+  view: the owner's W5-Q4 choice after T331's timings (2026-11-25, ADR 0027 §4.4): the step
+  waits (open, statistics and a half-size render 625–794 ms on the 61 Mpix ARW files, the
+  statistics 170–220 ms of it); no first view at 0 EV replaced by the auto-exposed one. A kept
+  view of another value may be
   drawn meanwhile, marked `Waiting`.
 - **Not in this task:** the compare's shared steps, the keys, the marks and the reset (T335);
   the shadows' amount in the settings (T334).
@@ -241,3 +242,4 @@
 | Date | Status | Note |
 |---|---|---|
 | 2026-11-25 | Blocked | Added; waits for T332. Cold read: every cited line found; fixed: a RAW key waiting for its statistics is opened even if a kept view satisfies it (else a neighbour never gets them); clipping and focus jobs wait while the current image's statistics are due; `f64::from(steps) / 3.0`; the unlimited total defined and the −2.7 case accepted; `accept`'s fine branch spelled out; `stop_unwanted` in the setters; the `fine_failed` branch of `serving_of`; `CameraWaiting` and the base of a paused key; the mode change keeps the steps; the `ViewOut`, `Resident` literals and `open_checked`; a bin for `Thirds(3)`; the engine test's order; the cases of point 12 stated. Chain review (T331–T335, 2026-11-25): the APIs line up; fixed here: the setters set `since` (the dwell after a change, W5-Q7); a spent session's failed statistics reopen the file instead of storing `Unavailable` for the folder; a failed image's states `Off`. Fixed in the others: T331 times the open too (W5-Q4 is open + statistics + render); T332 declares the public modules; T334 and the plan: `main` waits for T335; T335: where leaving the preview resets the steps, the compare with a non-RAW first side and the unexposed overlays as known limits, `ev_text`'s rounding in `f64`, "no usable RAW statistics"; the plan's W5 row: the latency series and the hand check's items |
+| 2026-11-25 | Blocked | The owner's W5-Q4 choice after T331's timings written into "Known and accepted" (the step waits for the statistics; ADR 0027 §4.4); point 6 already says so, unchanged. Still waits for T332 |
