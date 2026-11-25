@@ -6,6 +6,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use crate::exposure::Ev;
 use crate::geometry::{ImageSize, Rect};
 
 /// An 8-bit RGB image (3 bytes per pixel, rows top to bottom), in sensor orientation.
@@ -464,27 +465,38 @@ pub trait Backend: Send + Sync + 'static {
     /// conversion to the display ([`to_display`](Self::to_display)).
     fn render_region(&self, session: &mut Self::Session, r: Rect) -> Result<Rgb, DecodeError>;
 
-    /// Like [`render_half`](Self::render_half), and ends early with
-    /// [`DecodeError::cancelled`] when `stop` is set (T328). The default does not look at `stop`.
-    /// A backend that stops a render while its decoder works may spend the session
-    /// ([`session_usable`](Self::session_usable)).
+    /// Like [`render_half`](Self::render_half), rendered with the temporary exposure `exposure`
+    /// (ADR 0027 §3.4, W5), and ends early with [`DecodeError::cancelled`] when `stop` is set
+    /// (T328). The default looks at neither: a backend that has no exposure (and a JPEG or a TIFF
+    /// file) renders as without one. A backend that stops a render while its decoder works may
+    /// spend the session ([`session_usable`](Self::session_usable)).
     fn render_half_stoppable(
         &self,
         session: &mut Self::Session,
+        _exposure: Ev,
         _stop: &Stop,
     ) -> Result<Rgb, DecodeError> {
         self.render_half(session)
     }
 
-    /// Like [`render_region`](Self::render_region), stoppable as
-    /// [`render_half_stoppable`](Self::render_half_stoppable) (T328).
+    /// Like [`render_region`](Self::render_region), with the exposure and stoppable as
+    /// [`render_half_stoppable`](Self::render_half_stoppable) (T328); the default ignores both
+    /// as that one's does.
     fn render_region_stoppable(
         &self,
         session: &mut Self::Session,
         r: Rect,
+        _exposure: Ev,
         _stop: &Stop,
     ) -> Result<Rgb, DecodeError> {
         self.render_region(session, r)
+    }
+
+    /// The camera's own brightness offset of the opened image in EV, as the file gives it (not
+    /// limited to [`Ev`]'s range; ADR 0027 W5-Q5). Asked once after a successful open. The default
+    /// has none.
+    fn camera_exposure(&self, _session: &Self::Session) -> Option<f64> {
+        None
     }
 
     /// Whether the session can render again. False after a stop (or a failure) made the decoder

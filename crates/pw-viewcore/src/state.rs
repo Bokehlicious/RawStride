@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 use crate::backend::{
     ClippingMap, DecodeError, FocusMap, ImageStatistics, Rgb, Source, Statistics, Stop,
 };
+use crate::exposure::Ev;
 use crate::geometry::{self, ImageSize, Rect, RectF};
 use crate::sharpen::Sharpening;
 
@@ -384,6 +385,11 @@ pub(crate) struct JobView {
     /// The sharpening to apply after the region render and any reduction (ADR 0027 §3.3, W3; every
     /// kind of view, A-Q8 changed 2026-11-25); `None` = unsharpened.
     pub sharpen: Option<Sharpening>,
+    /// The exposure the render is made with (ADR 0027 §3.4, W5); [`Ev::ZERO`] = none.
+    pub exposure: Ev,
+    /// The shadows' amount the view is lifted with after the reduction and before the sharpening
+    /// (ADR 0027 §3.4, W5-Q3, W5-Q6); `None` = off.
+    pub shadows: Option<u8>,
 }
 
 impl JobView {
@@ -450,6 +456,8 @@ const STATISTICS_LEND: JobView = JobView {
     region: Rect::new(0, 0, 0, 0),
     density_q: 0,
     sharpen: None,
+    exposure: Ev::ZERO,
+    shadows: None,
 };
 
 /// A view being rendered, or rendered and not yet accepted.
@@ -1278,6 +1286,8 @@ impl<S> State<S> {
             region,
             density_q: quantise(scale),
             sharpen: self.sharpening,
+            exposure: Ev::ZERO,
+            shadows: None,
         };
         Some((
             Req {
@@ -1315,6 +1325,8 @@ impl<S> State<S> {
                         region: geometry::whole(size),
                         density_q: quantise(scale),
                         sharpen: self.sharpening,
+                        exposure: Ev::ZERO,
+                        shadows: None,
                     },
                 });
             }
@@ -1333,6 +1345,8 @@ impl<S> State<S> {
                     // every view is sharpened while sharpening is on, 100 % and above too (ADR
                     // 0027 A-Q8, W3-Q1, changed 2026-11-25)
                     sharpen: self.sharpening,
+                    exposure: Ev::ZERO,
+                    shadows: None,
                 };
                 return Some(Req {
                     key,
@@ -1365,6 +1379,8 @@ impl<S> State<S> {
                 region: geometry::whole(size),
                 density_q: quantise(scale),
                 sharpen: self.sharpening,
+                exposure: Ev::ZERO,
+                shadows: None,
             }
         } else if scale <= HALF_DENSITY + EPS {
             JobView {
@@ -1372,6 +1388,8 @@ impl<S> State<S> {
                 region: geometry::whole(size),
                 density_q: quantise(HALF_DENSITY),
                 sharpen: self.sharpening,
+                exposure: Ev::ZERO,
+                shadows: None,
             }
         } else if scale >= 1.0 - EPS {
             let vis1 = geometry::visible(size, self.view_px, 1.0, self.centre);
@@ -1380,6 +1398,8 @@ impl<S> State<S> {
                 region: geometry::sensor_box(size, vis1),
                 density_q: quantise(1.0),
                 sharpen: self.sharpening,
+                exposure: Ev::ZERO,
+                shadows: None,
             }
         } else {
             JobView {
@@ -1387,6 +1407,8 @@ impl<S> State<S> {
                 region: cover,
                 density_q: quantise(scale),
                 sharpen: self.sharpening,
+                exposure: Ev::ZERO,
+                shadows: None,
             }
         };
         Some(Req {
@@ -2452,6 +2474,8 @@ impl<S> State<S> {
                         region: view.region,
                         density_q: quantise(HALF_DENSITY),
                         sharpen: view.sharpen,
+                        exposure: Ev::ZERO,
+                        shadows: None,
                     };
                     if let Some(f) = self
                         .inflight
@@ -3250,6 +3274,8 @@ mod tests {
             region: Rect::new(0, 0, 1, 1),
             density_q: 500_000,
             sharpen: None,
+            exposure: Ev::ZERO,
+            shadows: None,
         });
         let density = match job.kind {
             ViewKind::Half => HALF_DENSITY,
@@ -3441,6 +3467,8 @@ mod tests {
             region: geometry::whole(SIZE),
             density_q,
             sharpen: None,
+            exposure: Ev::ZERO,
+            shadows: None,
         }
     }
 
@@ -3451,6 +3479,8 @@ mod tests {
             region: geometry::whole(SIZE),
             density_q: 500_000,
             sharpen: None,
+            exposure: Ev::ZERO,
+            shadows: None,
         }
     }
 
@@ -4050,6 +4080,8 @@ mod tests {
             region: o.region,
             density_q: quantise(o.density),
             sharpen: o.sharpen,
+            exposure: Ev::ZERO,
+            shadows: None,
         }
     }
 
@@ -6271,6 +6303,8 @@ mod tests {
                     region,
                     density_q: 1_000_000,
                     sharpen: None,
+                    exposure: Ev::ZERO,
+                    shadows: None,
                 }
             )
         );
@@ -6285,6 +6319,8 @@ mod tests {
             region: geometry::whole(SIZE),
             density_q,
             sharpen: None,
+            exposure: Ev::ZERO,
+            shadows: None,
         }
     }
 
@@ -6948,6 +6984,8 @@ mod tests {
                     region,
                     density_q: quantise(scale),
                     sharpen,
+                    exposure: Ev::ZERO,
+                    shadows: None,
                 };
                 let jobs = renders_of(&s, 10);
                 assert_eq!(scaled_renders(&s), vec![want], "{scale} {sharpen:?}");

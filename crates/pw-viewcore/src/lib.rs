@@ -25,10 +25,12 @@
 
 mod backend;
 mod core;
+pub mod exposure;
 pub mod geometry;
 #[cfg(feature = "native")]
 pub mod native;
 pub mod scale;
+pub mod shadows;
 pub mod sharpen;
 mod state;
 
@@ -37,6 +39,7 @@ pub use crate::backend::{
     StatisticsOrigin, Stop,
 };
 pub use crate::core::{Releaser, ViewCore};
+pub use crate::exposure::{AutoExposure, Ev};
 pub use crate::geometry::{ImageSize, Rect};
 pub use crate::sharpen::Sharpening;
 pub use crate::state::{

@@ -8,10 +8,13 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use crate::backend::{Backend, DecodeError, FocusMap, Rgb, Source};
+use crate::backend::{Backend, DecodeError, FocusMap, Rgb, Source, Stop};
 use crate::scale;
+use crate::shadows;
 use crate::sharpen::{self, Sharpening};
-use crate::state::{Config, Frame, Record, State, Stats, Task, ViewKind, ViewOut, ZOOM_STEP, Zoom};
+use crate::state::{
+    Config, Frame, JobView, Record, State, Stats, Task, ViewKind, ViewOut, ZOOM_STEP, Zoom,
+};
 
 /// The longest a worker sleeps without a reason (a safety net; changes wake it at once).
 const IDLE_WAIT: Duration = Duration::from_secs(1);
@@ -84,68 +87,7 @@ impl<B: Backend> Shared<B> {
                     mut session,
                     stop,
                 } => {
-                    // a view below 100 % is reduced on the worker with the Lanczos filter (ADR
-                    // 0027 §3.2, W1-Q3)
-                    let (w, h) = scale::scaled_size(view.region.w, view.region.h, view.density());
-                    let reduce = |img: Rgb| {
-                        scale::reduce(&img, w, h)
-                            .ok_or_else(|| DecodeError::new("scaling the view failed"))
-                    };
-                    // the renders are stoppable (T328); the look at the stop after the render
-                    // ends the job before the reduction, the sharpening and the conversion
-                    let rendered = match view.kind {
-                        ViewKind::Half | ViewKind::Reduced => {
-                            self.backend.render_half_stoppable(&mut session, &stop)
-                        }
-                        ViewKind::Zoom | ViewKind::Ring | ViewKind::Scaled | ViewKind::Fine => self
-                            .backend
-                            .render_region_stoppable(&mut session, view.region, &stop),
-                    };
-                    // a stop set while the render ran counts as cancelled, also when it came
-                    // back whole (the session is not spent by that)
-                    let rendered = match rendered {
-                        Ok(_) if stop.is_stopped() => Err(DecodeError::cancelled()),
-                        other => other,
-                    };
-                    let result = match view.kind {
-                        ViewKind::Half | ViewKind::Zoom | ViewKind::Ring => rendered,
-                        ViewKind::Reduced => {
-                            rendered.and_then(|img| {
-                                if img.width < w || img.height < h {
-                                    // a backend whose half-size render is smaller than half the
-                                    // image: it is used as it is rather than failing, and
-                                    // `finish_render` gives it as the half-size view (T309 R1)
-                                    Ok(img)
-                                } else {
-                                    reduce(img)
-                                }
-                            })
-                        }
-                        // the fine view: the full-resolution render of the whole image, reduced
-                        // as the scaled view is (ADR 0027 §3.1, W2)
-                        ViewKind::Scaled | ViewKind::Fine => rendered.and_then(reduce),
-                    };
-                    // sharpened last, after the reduction and before the conversion to the
-                    // display (ADR 0027 §3.3, W3-Q1); with a valid value it fails only on
-                    // inconsistent data, which gets the check's text (W3-Q6)
-                    let result = match view.sharpen {
-                        Some(s) => result.and_then(|img| {
-                            sharpen::sharpen(&img, s).ok_or_else(|| {
-                                DecodeError::new("the decoder returned a malformed image")
-                            })
-                        }),
-                        None => result,
-                    };
-                    // to the display after the render and the reduction, before the check
-                    // (ADR 0027 W1-Q4)
-                    let result = result.and_then(|img| self.backend.to_display(&session, img));
-                    let result = result.and_then(|img| {
-                        if img.is_consistent() {
-                            Ok(img)
-                        } else {
-                            Err(DecodeError::new("the decoder returned a malformed image"))
-                        }
-                    });
+                    let result = render_view(&self.backend, &mut session, view, &stop);
                     let ms = t0.elapsed().as_secs_f64() * 1000.0;
                     let usable = self.backend.session_usable(&session);
                     let mut s = self.state();
@@ -195,6 +137,86 @@ impl<B: Backend> Shared<B> {
             g = self.state();
         }
     }
+}
+
+/// Renders `view` from `session` as a render job does: the render (stoppable, with the view's
+/// exposure), the reduction, the shadows, the sharpening, the conversion to the display and the
+/// check that the image is whole.
+fn render_view<B: Backend>(
+    backend: &B,
+    session: &mut B::Session,
+    view: JobView,
+    stop: &Stop,
+) -> Result<Rgb, DecodeError> {
+    // a view below 100 % is reduced on the worker with the Lanczos filter (ADR 0027 §3.2, W1-Q3)
+    let (w, h) = scale::scaled_size(view.region.w, view.region.h, view.density());
+    let reduce = |img: Rgb| {
+        scale::reduce(&img, w, h).ok_or_else(|| DecodeError::new("scaling the view failed"))
+    };
+    // the renders are stoppable (T328) and made with the view's exposure (ADR 0027 §3.4, W5); the
+    // look at the stop after the render ends the job before the reduction, the sharpening and the
+    // conversion
+    let rendered = match view.kind {
+        ViewKind::Half | ViewKind::Reduced => {
+            backend.render_half_stoppable(session, view.exposure, stop)
+        }
+        ViewKind::Zoom | ViewKind::Ring | ViewKind::Scaled | ViewKind::Fine => {
+            backend.render_region_stoppable(session, view.region, view.exposure, stop)
+        }
+    };
+    // a stop set while the render ran counts as cancelled, also when it came back whole (the
+    // session is not spent by that)
+    let rendered = match rendered {
+        Ok(_) if stop.is_stopped() => Err(DecodeError::cancelled()),
+        other => other,
+    };
+    let result = match view.kind {
+        ViewKind::Half | ViewKind::Zoom | ViewKind::Ring => rendered,
+        ViewKind::Reduced => {
+            rendered.and_then(|img| {
+                if img.width < w || img.height < h {
+                    // a backend whose half-size render is smaller than half the image: it is used
+                    // as it is rather than failing, and `finish_render` gives it as the half-size
+                    // view (T309 R1)
+                    Ok(img)
+                } else {
+                    reduce(img)
+                }
+            })
+        }
+        // the fine view: the full-resolution render of the whole image, reduced as the scaled
+        // view is (ADR 0027 §3.1, W2)
+        ViewKind::Scaled | ViewKind::Fine => rendered.and_then(reduce),
+    };
+    // the shadows lifted after the reduction (also of a half-size image used as it is) and
+    // before the sharpening and the conversion to the display (ADR 0027 W5-Q3); it fails only on
+    // inconsistent data, which gets the check's text
+    let result = match view.shadows {
+        Some(a) => result.and_then(|img| {
+            shadows::lift(&img, a)
+                .ok_or_else(|| DecodeError::new("the decoder returned a malformed image"))
+        }),
+        None => result,
+    };
+    // sharpened last, after the reduction and before the conversion to the display (ADR 0027
+    // §3.3, W3-Q1); with a valid value it fails only on inconsistent data, which gets the check's
+    // text (W3-Q6)
+    let result = match view.sharpen {
+        Some(s) => result.and_then(|img| {
+            sharpen::sharpen(&img, s)
+                .ok_or_else(|| DecodeError::new("the decoder returned a malformed image"))
+        }),
+        None => result,
+    };
+    // to the display after the render and the reduction, before the check (ADR 0027 W1-Q4)
+    let result = result.and_then(|img| backend.to_display(session, img));
+    result.and_then(|img| {
+        if img.is_consistent() {
+            Ok(img)
+        } else {
+            Err(DecodeError::new("the decoder returned a malformed image"))
+        }
+    })
 }
 
 /// The view core (`pw-viewcore`): the view model, the plan, both budgets and the workers.
@@ -1266,6 +1288,7 @@ mod tests {
         fn render_half_stoppable(
             &self,
             session: &mut u32,
+            _exposure: crate::exposure::Ev,
             stop: &crate::backend::Stop,
         ) -> Result<Rgb, DecodeError> {
             self.wait_for(stop)?;
@@ -1276,6 +1299,7 @@ mod tests {
             &self,
             session: &mut u32,
             r: Rect,
+            _exposure: crate::exposure::Ev,
             stop: &crate::backend::Stop,
         ) -> Result<Rgb, DecodeError> {
             self.wait_for(stop)?;
@@ -1333,5 +1357,218 @@ mod tests {
         });
         assert!(t0.elapsed() < Duration::from_secs(4));
         assert!(core.stats().stops >= 1);
+    }
+
+    // ---------- the exposure and the shadows in a render (ADR 0027 W5, T332) ----------
+
+    use crate::exposure::Ev;
+    use crate::state::JobView;
+
+    /// A decoder that records the exposure of every stoppable render and renders a 400×300 image
+    /// whose pixels come from `pixel`: the half-size render at `half` (its size), a region at its
+    /// own size.
+    struct Exposed {
+        exposures: Mutex<Vec<i32>>,
+        half: (u32, u32),
+        pixel: fn(u32, u32) -> u8,
+    }
+
+    impl Exposed {
+        fn new(half: (u32, u32), pixel: fn(u32, u32) -> u8) -> Exposed {
+            Exposed {
+                exposures: Mutex::new(Vec::new()),
+                half,
+                pixel,
+            }
+        }
+
+        fn image(&self, w: u32, h: u32) -> Rgb {
+            let mut data = Vec::new();
+            for y in 0..h {
+                for x in 0..w {
+                    let v = (self.pixel)(x, y);
+                    data.extend([v, v, v]);
+                }
+            }
+            Rgb {
+                width: w,
+                height: h,
+                data,
+            }
+        }
+    }
+
+    impl Backend for Exposed {
+        type Session = u32;
+
+        fn open(&self, _path: &Path, _source: Source) -> Result<(u32, ImageSize), DecodeError> {
+            Ok((
+                0,
+                ImageSize {
+                    w: 400,
+                    h: 300,
+                    flip: 0,
+                },
+            ))
+        }
+
+        fn render_half(&self, _session: &mut u32) -> Result<Rgb, DecodeError> {
+            Ok(self.image(self.half.0, self.half.1))
+        }
+
+        fn render_region(&self, _session: &mut u32, r: Rect) -> Result<Rgb, DecodeError> {
+            Ok(self.image(r.w, r.h))
+        }
+
+        fn render_half_stoppable(
+            &self,
+            session: &mut u32,
+            exposure: Ev,
+            _stop: &Stop,
+        ) -> Result<Rgb, DecodeError> {
+            lock(&self.exposures).push(exposure.milli());
+            self.render_half(session)
+        }
+
+        fn render_region_stoppable(
+            &self,
+            session: &mut u32,
+            r: Rect,
+            exposure: Ev,
+            _stop: &Stop,
+        ) -> Result<Rgb, DecodeError> {
+            lock(&self.exposures).push(exposure.milli());
+            self.render_region(session, r)
+        }
+    }
+
+    fn dark(_x: u32, _y: u32) -> u8 {
+        40
+    }
+
+    /// Dark values that vary, so a sharpening changes them and its order with the lift shows.
+    fn dark_pattern(x: u32, y: u32) -> u8 {
+        (20 + (x * 7 + y * 13) % 50) as u8
+    }
+
+    fn half_view() -> JobView {
+        JobView {
+            kind: ViewKind::Half,
+            region: Rect::new(0, 0, 400, 300),
+            density_q: 500_000,
+            sharpen: None,
+            exposure: Ev::ZERO,
+            shadows: None,
+        }
+    }
+
+    fn zoom_view() -> JobView {
+        JobView {
+            kind: ViewKind::Zoom,
+            region: Rect::new(10, 20, 60, 40),
+            density_q: 1_000_000,
+            sharpen: None,
+            exposure: Ev::ZERO,
+            shadows: None,
+        }
+    }
+
+    fn rendered(backend: &Exposed, view: JobView) -> Rgb {
+        match render_view(backend, &mut 0, view, &Stop::new()) {
+            Ok(img) => img,
+            Err(e) => panic!("render: {e:?}"),
+        }
+    }
+
+    #[test]
+    fn a_view_passes_its_exposure_to_the_render() {
+        let backend = Exposed::new((200, 150), dark);
+        let exposure = Ev::from_thirds(3);
+        rendered(
+            &backend,
+            JobView {
+                exposure,
+                ..half_view()
+            },
+        );
+        rendered(
+            &backend,
+            JobView {
+                exposure,
+                ..zoom_view()
+            },
+        );
+        rendered(&backend, half_view());
+        assert_eq!(*lock(&backend.exposures), vec![1000, 1000, 0]);
+    }
+
+    #[test]
+    fn a_view_with_shadows_is_lifted_by_the_table() {
+        let backend = Exposed::new((200, 150), dark);
+        let want = crate::shadows::table(100)[40];
+        assert!(want > 40);
+        for view in [half_view(), zoom_view()] {
+            let img = rendered(
+                &backend,
+                JobView {
+                    shadows: Some(100),
+                    ..view
+                },
+            );
+            assert!(img.data.iter().all(|&v| v == want), "{:?}", view.kind);
+        }
+    }
+
+    #[test]
+    fn the_too_small_half_size_image_of_a_reduced_view_is_lifted_too() {
+        // the half-size render is 100×75, smaller than the 200×150 the view asks for, so it is
+        // used as it is (T309 R1); the lift still applies
+        let backend = Exposed::new((100, 75), dark);
+        let view = JobView {
+            kind: ViewKind::Reduced,
+            shadows: Some(100),
+            ..half_view()
+        };
+        let img = rendered(&backend, view);
+        assert_eq!((img.width, img.height), (100, 75));
+        let want = crate::shadows::table(100)[40];
+        assert!(img.data.iter().all(|&v| v == want));
+    }
+
+    #[test]
+    fn the_shadows_are_lifted_before_the_sharpening() {
+        let backend = Exposed::new((200, 150), dark_pattern);
+        let plain = backend.image(200, 150);
+        let s = Sharpening::DEFAULT;
+        let img = rendered(
+            &backend,
+            JobView {
+                sharpen: Some(s),
+                shadows: Some(100),
+                ..half_view()
+            },
+        );
+        let lifted = crate::shadows::lift(&plain, 100).unwrap();
+        let want = sharpen::sharpen(&lifted, s).unwrap();
+        assert_eq!(img, want);
+        // the other order gives another image, so the test sees the order
+        let other = crate::shadows::lift(&sharpen::sharpen(&plain, s).unwrap(), 100).unwrap();
+        assert_ne!(img, other);
+    }
+
+    #[test]
+    fn a_view_without_shadows_is_not_lifted() {
+        let backend = Exposed::new((200, 150), dark_pattern);
+        let plain = backend.image(200, 150);
+        assert_eq!(rendered(&backend, half_view()), plain);
+        let s = Sharpening::DEFAULT;
+        let img = rendered(
+            &backend,
+            JobView {
+                sharpen: Some(s),
+                ..half_view()
+            },
+        );
+        assert_eq!(img, sharpen::sharpen(&plain, s).unwrap());
     }
 }

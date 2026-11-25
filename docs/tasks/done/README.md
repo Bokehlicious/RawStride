@@ -338,3 +338,4 @@ was when the task was done, so "this file", "below" and "the Log" in T1–T115 m
 | [T329](T329-pan-view-after-standing-still.md) | ADR 0027: the pan view also once the view has stood still (pw-viewcore) |
 | [T330](T330-filter-model-in-plain-rust.md) | ADR 0022 S1: the filter model in plain Rust (pw-loupe; done by Codex) |
 | [T331](T331-libraw-exposure-per-render.md) | ADR 0027 W5: the exposure per LibRaw render and the camera's brightness (pw-libraw) |
+| [T332](T332-exposure-and-shadows-in-the-render.md) | ADR 0027 W5: the exposure and the shadows in the view core's render (pw-viewcore) |

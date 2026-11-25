@@ -10,7 +10,8 @@ use std::time::{Duration, Instant};
 use pw_colour::{Profile, TransformCache, jpeg_source_profile};
 use pw_viewcore::native::NativeBackend;
 use pw_viewcore::{
-    Backend, Config, FineState, Frame, Rgb, Source, Status, ViewCore, ViewKind, ViewOut, Zoom,
+    Backend, Config, Ev, FineState, Frame, Rect, Rgb, Source, Status, Stop, ViewCore, ViewKind,
+    ViewOut, Zoom,
 };
 
 const VIEW: [u32; 2] = [1920, 1080];
@@ -235,6 +236,138 @@ fn tiff_files_are_shown_as_themselves_in_both_modes() {
             assert_eq!((size.w, size.h), (w, h), "{} in {mode:?}", file.display());
             let tex = &screen.textures[&f.draw.map_or(0, |d| d.id)];
             assert_eq!(tex.source, Source::Jpeg, "{} in {mode:?}", file.display());
+        }
+    }
+}
+
+// ---------- the exposure in the backend (ADR 0027 W5, T332) ----------
+
+fn with_extension(files: Vec<PathBuf>, ext: &str) -> Vec<PathBuf> {
+    files
+        .into_iter()
+        .filter(|path| {
+            path.extension()
+                .and_then(|e| e.to_str())
+                .is_some_and(|e| e.eq_ignore_ascii_case(ext))
+        })
+        .collect()
+}
+
+fn mean(img: &Rgb) -> f64 {
+    img.data.iter().map(|&v| f64::from(v)).sum::<f64>() / img.data.len().max(1) as f64
+}
+
+#[test]
+#[ignore = "needs real camera files: set PW_TESTDATA and run with --ignored"]
+fn only_a_raw_file_with_its_own_brightness_has_a_camera_exposure() {
+    let backend = NativeBackend::default();
+    let files = test_files("");
+    let mut dng_with = 0;
+    for file in &files {
+        let (session, _) = backend
+            .open(file, Source::Raw)
+            .unwrap_or_else(|e| panic!("{}: open: {}", file.display(), e.message));
+        let camera = backend.camera_exposure(&session);
+        let ext = file
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        match ext.as_str() {
+            "arw" | "rw2" => assert_eq!(camera, None, "{}", file.display()),
+            // a DNG without BaselineExposure has none (T331)
+            _ => dng_with += usize::from(camera.is_some()),
+        }
+    }
+    assert!(dng_with > 0, "no DNG with a camera exposure");
+    // a JPEG mode session and a TIFF have none
+    let arw = with_extension(files, "arw");
+    let (jpeg, _) = backend
+        .open(&arw[0], Source::Jpeg)
+        .unwrap_or_else(|e| panic!("{}: open: {}", arw[0].display(), e.message));
+    assert_eq!(backend.camera_exposure(&jpeg), None);
+    let tiff = tiff_files()[0].clone();
+    let (tiff_session, _) = backend
+        .open(&tiff, Source::Raw)
+        .unwrap_or_else(|e| panic!("{}: open: {}", tiff.display(), e.message));
+    assert_eq!(backend.camera_exposure(&tiff_session), None);
+}
+
+#[test]
+#[ignore = "needs real camera files: set PW_TESTDATA and run with --ignored"]
+fn an_exposure_brightens_a_raw_render_and_zero_gives_the_plain_render() {
+    let backend = NativeBackend::default();
+    let file = with_extension(test_files(""), "arw")[0].clone();
+    let (mut session, size) = backend
+        .open(&file, Source::Raw)
+        .unwrap_or_else(|e| panic!("{}: open: {}", file.display(), e.message));
+    let stop = Stop::new();
+    let mut half = |ev: Ev| {
+        backend
+            .render_half_stoppable(&mut session, ev, &stop)
+            .unwrap_or_else(|e| panic!("{} at {ev:?}: {}", file.display(), e.message))
+    };
+    let zero = half(Ev::ZERO);
+    let brighter = half(Ev::from_thirds(3));
+    let plain = backend
+        .render_half(&mut session)
+        .unwrap_or_else(|e| panic!("{}: render_half: {}", file.display(), e.message));
+    assert_eq!(zero, plain, "{}", file.display());
+    assert!(
+        mean(&brighter) > mean(&zero),
+        "{}: {} at +1 EV, {} at 0",
+        file.display(),
+        mean(&brighter),
+        mean(&zero)
+    );
+    // a region the same way
+    let r = Rect::new(size.w / 2, size.h / 2, 256, 192);
+    let mut region = |ev: Ev| {
+        backend
+            .render_region_stoppable(&mut session, r, ev, &stop)
+            .unwrap_or_else(|e| panic!("{} region at {ev:?}: {}", file.display(), e.message))
+    };
+    let zero = region(Ev::ZERO);
+    let brighter = region(Ev::from_thirds(3));
+    let plain = backend
+        .render_region(&mut session, r)
+        .unwrap_or_else(|e| panic!("{}: render_region: {}", file.display(), e.message));
+    assert_eq!(zero, plain, "{}", file.display());
+    assert!(mean(&brighter) > mean(&zero), "{}", file.display());
+}
+
+#[test]
+#[ignore = "needs real camera files: set PW_TESTDATA and run with --ignored"]
+fn an_exposure_changes_no_byte_of_an_embedded_jpeg_or_a_tiff() {
+    let backend = NativeBackend::default();
+    let arw = with_extension(test_files(""), "arw")[0].clone();
+    let tiff = tiff_files()[0].clone();
+    for (file, mode) in [(arw, Source::Jpeg), (tiff, Source::Raw)] {
+        let (mut session, size) = backend
+            .open(&file, mode)
+            .unwrap_or_else(|e| panic!("{} in {mode:?}: open: {}", file.display(), e.message));
+        let stop = Stop::new();
+        let r = Rect::new(size.w / 4, size.h / 4, 128, 96);
+        let mut renders = Vec::new();
+        for ev in [Ev::ZERO, Ev::from_thirds(3), Ev::from_thirds(-6)] {
+            let half = backend
+                .render_half_stoppable(&mut session, ev, &stop)
+                .unwrap_or_else(|e| panic!("{} at {ev:?}: {}", file.display(), e.message));
+            let region = backend
+                .render_region_stoppable(&mut session, r, ev, &stop)
+                .unwrap_or_else(|e| panic!("{} at {ev:?}: {}", file.display(), e.message));
+            renders.push((half, region));
+        }
+        let plain = (
+            backend
+                .render_half(&mut session)
+                .unwrap_or_else(|e| panic!("{}: render_half: {}", file.display(), e.message)),
+            backend
+                .render_region(&mut session, r)
+                .unwrap_or_else(|e| panic!("{}: render_region: {}", file.display(), e.message)),
+        );
+        for render in &renders {
+            assert!(*render == plain, "{} in {mode:?}", file.display());
         }
     }
 }

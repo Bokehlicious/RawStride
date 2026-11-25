@@ -23,12 +23,13 @@ use std::sync::Arc;
 
 use pw_colour::{ColourError, Profile, Transform, TransformCache, jpeg_source_profile_checked};
 use pw_libjpeg::{Decoder, Scale};
-use pw_libraw::{DAMAGED, Demosaic, Session};
+use pw_libraw::{DAMAGED, Demosaic, Exposure, Session};
 use pw_raw::ExifColourSpace;
 
 use crate::backend::{
     Backend, ClippingMap, DecodeError, Rgb, Source, Statistics, StatisticsOrigin, Stop,
 };
+use crate::exposure::Ev;
 use crate::geometry::{ImageSize, Rect};
 use crate::scale;
 
@@ -288,6 +289,18 @@ fn open_tiff(
     Ok((session, size))
 }
 
+/// `pw-libraw`'s exposure for `exposure`. An [`Ev`] always lies in LibRaw's range, so the error
+/// is never given in practice.
+fn raw_exposure(exposure: Ev) -> Result<Exposure, DecodeError> {
+    let ev = exposure.milli() as f32 / 1000.0;
+    Exposure::from_ev(ev).ok_or_else(|| {
+        DecodeError::new(format!(
+            "the exposure {} EV is outside the range",
+            exposure.ev()
+        ))
+    })
+}
+
 /// The statistics of a RAW file's unpacked data in the core's form.
 fn raw_statistics(raw: &pw_libraw::RawStatistics) -> Statistics {
     Statistics {
@@ -454,16 +467,18 @@ impl Backend for NativeBackend {
         }
     }
 
-    /// A RAW render is stopped between LibRaw's stages; a stop while LibRaw works spends the
-    /// session (T327). JPEG and TIFF renders are short and are not stopped.
+    /// A RAW render is made with the exposure applied by LibRaw (ADR 0027 §3.4, W5) and is
+    /// stopped between LibRaw's stages; a stop while LibRaw works spends the session (T327). JPEG
+    /// and TIFF renders ignore the exposure, are short and are not stopped.
     fn render_half_stoppable(
         &self,
         session: &mut NativeSession,
+        exposure: Ev,
         stop: &Stop,
     ) -> Result<Rgb, DecodeError> {
         match session {
             NativeSession::Raw(s, _) => s
-                .render_half_stoppable(&|| stop.is_stopped())
+                .render_half_exposed(raw_exposure(exposure)?, &|| stop.is_stopped())
                 .map(rgb_raw)
                 .map_err(raw_error),
             _ => self.render_half(session),
@@ -475,16 +490,27 @@ impl Backend for NativeBackend {
         &self,
         session: &mut NativeSession,
         r: Rect,
+        exposure: Ev,
         stop: &Stop,
     ) -> Result<Rgb, DecodeError> {
         match session {
             NativeSession::Raw(s, _) => {
                 let r = pw_libraw::Rect::new(r.x, r.y, r.w, r.h);
-                s.render_region_stoppable(r, MARGIN, Demosaic::Ppg, &|| stop.is_stopped())
+                let exposure = raw_exposure(exposure)?;
+                s.render_region_exposed(r, MARGIN, Demosaic::Ppg, exposure, &|| stop.is_stopped())
                     .map(rgb_raw)
                     .map_err(raw_error)
             }
             _ => self.render_region(session, r),
+        }
+    }
+
+    /// A RAW file's own brightness (a DNG's `BaselineExposure`, a Fujifilm file's exposure bias;
+    /// ADR 0027 W5-Q5); a JPEG or a TIFF session has none.
+    fn camera_exposure(&self, session: &NativeSession) -> Option<f64> {
+        match session {
+            NativeSession::Raw(s, _) => s.camera_exposure().map(|c| f64::from(c.ev)),
+            _ => None,
         }
     }
 
