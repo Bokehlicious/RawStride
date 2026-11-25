@@ -87,7 +87,7 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status | Model |
 |---|---|---|---|
-| [T332](T332-exposure-and-shadows-in-the-render.md) | ADR 0027 W5: the exposure and the shadows in the view core's render | Blocked | Opus |
+| [T332](T332-exposure-and-shadows-in-the-render.md) | ADR 0027 W5: the exposure and the shadows in the view core's render | Open | Opus |
 | [T333](T333-exposure-and-shadows-in-the-state.md) | ADR 0027 W5: the exposure and the shadows in the view core's state | Blocked | Opus |
 | [T334](T334-shadows-amount-settings-page.md) | ADR 0027 W5: the shadows' amount on the Settings page Preview | Blocked | Sonnet |
 | [T335](T335-exposure-keys-menu-marks.md) | ADR 0027 W5: the keys, the menu and the marks of the exposure and the shadows | Blocked | Opus |

@@ -1,4 +1,4 @@
-# T332. ADR 0027 W5: the exposure and the shadows in the view core's render — Blocked
+# T332. ADR 0027 W5: the exposure and the shadows in the view core's render — Open
 
 - **Why:** ADR 0027 §3.4 and W5-Q2, W5-Q3, W5-Q6 and A-Q11 (answered by the owner 2026-11-25 and
   2026-11-18, ADR 0027 §4.4 and §4). The view core's render path learns to carry an exposure to
@@ -153,3 +153,4 @@
 | Date | Status | Note |
 |---|---|---|
 | 2026-11-25 | Blocked | Added; waits for T331. Cold read: the files suffice (no other `Backend` implementor overrides the stoppable renders); the maths of the rule and the curve checked (peak lift 23 at s = 0.5 and 46 at s = 1, at entries 55–73). Fixed: 17 `JobView` literals listed by line (not 26); `Ev`'s private field, constants' type and rounding stated; the percentile in integers; NaN in `clipped` counts as clipped; `render_view` a free generic function; the lift also on the unreduced half and before `to_display`; `f64::from` for the camera's value; the native tests use ARW in JPEG mode and TIFF, not a plain JPEG; the focus job's line |
+| 2026-11-25 | Open | Set to Open by the reviewer on the owner's word after T331 was Done (0a6699b); T331's API as this task names it (`Exposure`, `render_half_exposed`, `render_region_exposed`, `Session::camera_exposure`); no change to this text needed |
