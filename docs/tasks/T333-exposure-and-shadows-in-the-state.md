@@ -1,4 +1,4 @@
-# T333. ADR 0027 W5: the exposure and the shadows in the view core's state — Blocked
+# T333. ADR 0027 W5: the exposure and the shadows in the view core's state — Open
 
 - **Why:** ADR 0027 §2.1, §3.4 and W5-Q2, W5-Q3, W5-Q4, W5-Q5, W5-Q7 (answered by the owner
   2026-11-25, ADR 0027 §4.4). T332 made the render path carry an exposure (`JobView::exposure`,
@@ -9,25 +9,25 @@
   of W5's chain T331 → T332 → **T333** → T334 → T335. Waits for T332.
 - **What the reviewer checked (2026-11-25):** sharpening (T316) goes through every place a look
   of the view must go, and the exposure and the shadows follow it:
-  - `crates/pw-viewcore/src/state.rs`: `State::sharpening` and `set_sharpening` (line 842);
-    `ViewOut` (line 113) and `Resident` (line 131) with `sharpen`, copied in `finish_render` and
-    `accept`; `same_view` (line 477, "the same view but for their sharpening"); `serving_of`
-    (line 1435: a fine view first while fine details is on, then one whose `sharpen` equals the
-    requirement's, then the least dense, then the smallest); `exact` (line 1466); `satisfied`
-    (line 1491, with the exception for the current image's `Half` during a zoom gesture);
-    `remove_inflight` (line 2647, with a `sharpen` parameter); `replaced_fine` (line 1821) and
-    its use in `pick` (about line 2182); `accept`'s fine branch (line 2707:
-    `out.sharpen == self.sharpening`); `sharpen_state` (line 2918) and its calls from
+  - `crates/pw-viewcore/src/state.rs`: `State::sharpening` and `set_sharpening` (line 850);
+    `ViewOut` (line 114) and `Resident` (line 132) with `sharpen`, copied in `finish_render` and
+    `accept`; `same_view` (line 485, "the same view but for their sharpening"); `serving_of`
+    (line 1457: a fine view first while fine details is on, then one whose `sharpen` equals the
+    requirement's, then the least dense, then the smallest); `exact` (line 1488); `satisfied`
+    (line 1513, with the exception for the current image's `Half` during a zoom gesture);
+    `remove_inflight` (line 2671, with a `sharpen` parameter); `replaced_fine` (line 1843) and
+    its use in `pick` (about line 2209); `accept`'s fine branch (line 2731:
+    `out.sharpen == self.sharpening`); `sharpen_state` (line 2942) and its calls from
     `frame_of`, also on the early returns (no image, a failed image).
-  - `go` (line 918, `dragged = false` when the position changes), `open_folder` (line 939),
-    `set_files` (line 982): where the current image changes. `set_mode`: the display mode, the
+  - `go` (line 926, `dragged = false` when the position changes), `open_folder` (line 947),
+    `set_files` (line 990): where the current image changes. `set_mode`: the display mode, the
     same image (ADR 0027 §4.4, T328's cold read).
-  - `own_flips` (line 573): a per-key map kept, cleared and moved like `sizes` (lines 954, 1058,
-    2350); `finish_open_checked` (line 2332) with the closure `profile_unusable`, called from
+  - `own_flips` (line 581): a per-key map kept, cleared and moved like `sizes` (lines 962, 1066,
+    2372); `finish_open_checked` (line 2354) with the closure `profile_unusable`, called from
     `core.rs`'s `Task::Open`, and `finish_open` (test only) calling it.
-  - `statistics: HashMap<Key, ImageStatistics>` and `finish_statistics` (line 2570), which keeps
-    the statistics of any key whose session came back; `statistics_job` (line 1623: the current
-    image's, after its view is on the screen); `plan_wants` (line 1572); `pick` (line 2080),
+  - `statistics: HashMap<Key, ImageStatistics>` and `finish_statistics` (line 2594), which keeps
+    the statistics of any key whose session came back; `statistics_job` (line 1645: the current
+    image's, after its view is on the screen); `plan_wants` (line 1594); `pick` (line 2102),
     which already lends a session for a `Job::Statistics` from its job list (the interactive
     worker only for the current image).
   - T332's `Ev`, `AutoExposure`, `auto_exposure`, `shadows::AMOUNT_RANGE`, and
@@ -62,14 +62,14 @@
      - `reset_exposure_steps()`.
      - A change of mode keeps the steps (they are reset only as point 3 says).
      - Each setter that returns `true` also sets `since = Instant::now()`, as a zoom step does
-       (about line 1128; W5-Q7: after a change the shown view comes first, the ring, the 100 %
+       (about line 1136; W5-Q7: after a change the shown view comes first, the ring, the 100 %
        view, the neighbours and the fine view after the dwell), so a quick run of steps plans
        only the shown view at each value.
   2. **The camera's value per image:** `State` gets `camera_ev: HashMap<Key, Option<f64>>`,
      kept, cleared and moved exactly where `own_flips` is. `finish_open_checked` gets a closure
      `camera_exposure: impl Fn(&S) -> Option<f64>` after `profile_unusable`, called once on a
      successful open and stored; `core.rs` passes `|session| self.backend.camera_exposure(session)`,
-     `finish_open` and the test helper `open_checked` (about line 4863) pass `|_| None` (a test
+     `finish_open` and the test helper `open_checked` (about line 4894) pass `|_| None` (a test
      that needs a value passes its own).
   3. **The steps are reset when another image is shown** (A-Q2): `exposure_steps = 0` in `go`
      when the position changes (beside `dragged = false`), in `open_folder`, and in `set_files`
@@ -96,24 +96,24 @@
      in the place of its first render job, and none of its render jobs. A key without a session
      gets its `Open`, **also when a resident view satisfies its requirement**: the check
      "a view whose size is known and is already served needs no session" (about lines
-     1581–1591) does not apply to a `Source::Raw` key while auto is on and its statistics are
+     1603–1613) does not apply to a `Source::Raw` key while auto is on and its statistics are
      not there (else a neighbour drawn from a kept 0 EV view would never get them). So the
      current image and the prefetched neighbours get their statistics before their first view,
      in the plan's order. `pick` needs no new branch (it lends for `Job::Statistics` already);
      `statistics_job` is unchanged. While the current image waits for them, `clipping_job` and
      `focus_job` give `None` (in `pick` they would else go ahead of the plan's statistics job,
      whose place `statistics_job` does not mark); they are asked once the statistics are there.
-     A failed statistics job gives `Unavailable` (core.rs about lines 155–163), so 0 EV and
+     A failed statistics job gives `Unavailable` (core.rs about lines 97–106), so 0 EV and
      `AutoNone`, **except** on a session that can no longer be used (a LibRaw session spent by
-     an earlier failed render, which the core keeps, `backend.rs` about line 492): after a
+     an earlier failed render, which the core keeps, `backend.rs` about line 506): after a
      `None`, `Task::Statistics` asks `backend.session_usable(&session)`, and when it is not
      usable `finish_statistics` (a new parameter `usable: bool`, as `finish_render_checked` has)
      drops the session and stores nothing, so the file is opened and asked again. `Frame::statistics`' doc comment (about lines 287–290) adds that while auto
      exposure is on they are made before the first view.
   7. **The views are told apart by their look:** `ViewOut` and `Resident` get `exposure: Ev`
      and `shadows: Option<u8>`, copied as `sharpen` is (`finish_render_checked`'s two `ViewOut`
-     literals, about lines 2465 and 2487; the one `Resident` literal in `accept`, about line
-     2737; the test helpers `out`, `out_in`, `out_with`, `half_out`, `ring_out` and the other
+     literals, about lines 2489 and 2511; the one `Resident` literal in `accept`, about line
+     2761; the test helpers `out`, `out_in`, `out_with`, `half_out`, `ring_out` and the other
      `ViewOut` literals of the tests). A view's
      **look** is its `sharpen`, `exposure` and `shadows`; `same_view` becomes "the same view but
      for the look". Every place that compares `sharpen` today compares the whole look instead:
@@ -162,7 +162,7 @@
       `None` (paused there).
   11. **The core's setters** (`core.rs`): `ViewCore::set_exposure_mode`, `set_shadows`,
       `step_exposure` (returns the `bool`) and `reset_exposure_steps`, each as
-      `set_sharpening` (core.rs about lines 403–416): under the lock, `stop_unwanted()` as it
+      `set_sharpening` (core.rs about lines 425–435): under the lock, `stop_unwanted()` as it
       calls it, and on a change `cv.notify_all` and `wake_ui`; not user requests, nothing
       recorded.
   12. **Cases and what they do** (no new code beyond the points above): a session released for
@@ -243,3 +243,4 @@
 |---|---|---|
 | 2026-11-25 | Blocked | Added; waits for T332. Cold read: every cited line found; fixed: a RAW key waiting for its statistics is opened even if a kept view satisfies it (else a neighbour never gets them); clipping and focus jobs wait while the current image's statistics are due; `f64::from(steps) / 3.0`; the unlimited total defined and the −2.7 case accepted; `accept`'s fine branch spelled out; `stop_unwanted` in the setters; the `fine_failed` branch of `serving_of`; `CameraWaiting` and the base of a paused key; the mode change keeps the steps; the `ViewOut`, `Resident` literals and `open_checked`; a bin for `Thirds(3)`; the engine test's order; the cases of point 12 stated. Chain review (T331–T335, 2026-11-25): the APIs line up; fixed here: the setters set `since` (the dwell after a change, W5-Q7); a spent session's failed statistics reopen the file instead of storing `Unavailable` for the folder; a failed image's states `Off`. Fixed in the others: T331 times the open too (W5-Q4 is open + statistics + render); T332 declares the public modules; T334 and the plan: `main` waits for T335; T335: where leaving the preview resets the steps, the compare with a non-RAW first side and the unexposed overlays as known limits, `ev_text`'s rounding in `f64`, "no usable RAW statistics"; the plan's W5 row: the latency series and the hand check's items |
 | 2026-11-25 | Blocked | The owner's W5-Q4 choice after T331's timings written into "Known and accepted" (the step waits for the statistics; ADR 0027 §4.4); point 6 already says so, unchanged. Still waits for T332 |
+| 2026-11-25 | Open | Set to Open by the reviewer on the owner's word after T332 was Done (aa15dc1). T332 moved lines: every cited line of `state.rs` (+8 to +31), `core.rs` (`Task::Statistics` now about lines 97–106, `set_sharpening` 425–435) and `backend.rs` (`session_usable` 506) updated to the tree at aa15dc1; T332's API as this task names it; nothing else changed |
