@@ -87,10 +87,15 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status |
 |---|---|---|
+| [T320](T320-sharpening-defaults.md) | ADR 0027 W3: sharpening's defaults 80 %, 0.8 px and 2 | Open |
+| [T321](T321-sharpening-at-every-zoom.md) | ADR 0027 W3: sharpening at 100 % and above | Blocked: waits for T320 |
+| [T322](T322-only-the-scaled-view-between-50-and-100.md) | ADR 0027: only the exact scaled view between 50 % and 100 % | Blocked: waits for T321 |
+| [T323](T323-sharpening-button.md) | ADR 0027 W3: the button "USM" in the preview's title line | Blocked: waits for T321 |
+| [T324](T324-prefetch-at-the-shown-scale.md) | ADR 0027: the neighbours prefetched at the shown scale between 50 % and 100 % | Blocked: waits for T322 |
 
 ## Writing a task (owner and reviewer)
 
-- **Number:** the next free number after the highest in this folder and `done/` (T320 next).
+- **Number:** the next free number after the highest in this folder and `done/` (T325 next).
 - **File:** `docs/tasks/T246-<a-few-words>.md`; three digits, lower case, words joined by `-`.
 - **Index:** add a row to "Open tasks" above and keep its status in step with the file's heading.
 - **Size (owner, 2026-11-15, after T142):** one task is one layer (a C++ shim or a core crate, or

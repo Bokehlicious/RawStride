@@ -7,7 +7,8 @@
   W1's questions W1-Q1–W1-Q9 answered by the owner on 2026-11-24, all as proposed (§4.1); W2's
   W2-Q1–W2-Q8 the same day, all as proposed (§4.2); W3's
   W3-Q1–W3-Q8 the same day, all as proposed (§4.3). W3's hand check on 2026-11-25 set the
-  sharpening's defaults and changed A-Q8, W3-Q1, W3-Q5 and W3-Q6 (§4.3, "W3's hand check").
+  sharpening's defaults and changed A-Q8, W1-Q8, W3-Q1, W3-Q5 and W3-Q6 (§4.3, "W3's hand
+  check").
 - Date: 2026-11-18
 - Related:
   - ADR 0006 §2 (decode settings identical everywhere; the view already uses PPG instead of its
@@ -166,8 +167,8 @@ A prerequisite: `Session::render_region_with` fails on every RAF file tried (bac
 
 ### 3.3 Sharpening in the view (unsharp mask)
 
-- A key (A-Q3; **U**, W3-Q5) and a button "USM" in the status bar, after the RAW/JPEG control
-  (W3-Q5, owner 2026-11-25), turn sharpening on and off. It is applied **last on the worker**, to
+- A key (A-Q3; **U**, W3-Q5) and a button "USM" in the preview's title line above the image, after
+  the RAW/JPEG control (W3-Q5, owner 2026-11-25), turn sharpening on and off. It is applied **last on the worker**, to
   the view at screen resolution after the downscale (sharpening before a reduction is mostly
   lost), and before the conversion to the monitor profile (ADR 0016).
 - On luminance only, so no colour fringes are added.
@@ -322,7 +323,7 @@ image is reduced.
 | W1-Q5 | TIFF files | Unchanged: converted when the file is opened (`pw-tiff`, ADR 0015/0016), since a 16-bit TIFF in a wide colour space would lose precision as 8-bit sRGB. The filter then works on the converted data with the sRGB curve, an approximation accepted. The TIFF's half-size view, today made with the box filter, uses the new filter |
 | W1-Q6 | Thumbnails and `pw-tiff`'s box filter | Unchanged: thumbnails (`pw-thumbcache`) and the Tauri app keep `pw_tiff::downscale` (§7: the thumbnails do not differ) |
 | W1-Q7 | When it goes wrong, and small images | An image whose fit scale is 1 or more is not reduced (`Zoom`, as today). A reduction that fails shows today's error line ("scaling the view failed"); a conversion that fails or a profile that cannot be used behaves as today. Nothing new is shown to the user |
-| W1-Q8 | Stepping at a free zoom level below 50 % (asked after T309's cold read, answered 2026-11-24 as proposed) | Today it is quick because the prefetched half-size view serves every scale ≤ 0.5; a reduced view serves only its own scale and below. So while the zoom is a free level below 0.5, the neighbours are prefetched at the current scale instead of at fit; at fit and at 50 % or more the prefetch is unchanged |
+| W1-Q8 | Stepping at a free zoom level below 50 % (asked after T309's cold read, answered 2026-11-24 as proposed) | Today it is quick because the prefetched half-size view serves every scale ≤ 0.5; a reduced view serves only its own scale and below. So while the zoom is a free level below 0.5, the neighbours are prefetched at the current scale instead of at fit; at fit and at 50 % or more the prefetch is unchanged. **Changed by the owner on 2026-11-25** (W3's hand check, §4.3): at every free level below 100 %, 50 % or more included, the neighbours are prefetched at the current scale (ADR 0008 §12.1): below 50 % with the 100 % view, as before, and from 50 % to below 100 % with the fit view, Z's target there; at fit unchanged (T324) |
 | W1-Q9 | The brief enlarged view during a gesture (asked after T309's cold read, answered 2026-11-24 as proposed) | The reduced and the half-size views are magnified linearly (they are magnified only as that stand-in; nearest-neighbour would look blocky); `Zoom`, `Ring` and `Scaled` keep nearest-neighbour, sharp pixels above 100 %. The stand-in is drawn only during a gesture at ≤ 0.5 and counts as "preparing", not as the finished view |
 
 W1 is written as the chain T307 (the crate) → T308 (the conversion moved after the reduction, the
@@ -399,8 +400,8 @@ the focus marking do not change (§2.1): they are made from the file's data, not
 | W3-Q2 | How it is computed | On luminance only, so no colour fringes are added: the luminance Y′ = 0.2126 R′ + 0.7152 G′ + 0.0722 B′ of the sRGB-encoded values (not linear light), blurred with a separable Gaussian whose sigma is the radius; where the difference between Y′ and the blur is below the threshold (levels, 0–255) nothing changes, elsewhere the amount times the difference is added equally to R′, G′ and B′, each clamped to 0–255. The edges repeat the edge pixels, so an image of 1×1 or 1×n works. A module of its own in `pw-viewcore`, plain Rust, no new dependency |
 | W3-Q3 | Its speed | The first task times it on a screen-sized view (3840×2160 and the owner's 1920×1200). If it takes more than 10 ms on one thread, the rows are split over threads with `std::thread::scope` in the same task (as T311) |
 | W3-Q4 | The cache, and what the user sees when it is turned on or off | The view's key gains the sharpening state (on or off, and the three values), so turning it on or off or changing a value makes new views. The drawn view stays until the new one is ready and is replaced in one swap (V2). The unsharpened view is kept as the memory budget allows, so turning sharpening off shows it at once. Cost accepted: turning sharpening on renders the shown view again (about 0.3 s for 61 Mpix at fit, about 1.2 s with fine details on); keeping the unsharpened pixels in memory to sharpen them in milliseconds is not done (more memory under V8, more code) |
-| W3-Q5 | Key and menu | The key **U** (free in the key map), in the key map (U8) so it can be changed, and View ▸ Show Sharpening, right after Show Fine Details. It lasts for the session and is not saved (A-Q2). **Added by the owner on 2026-11-25** (W3's hand check): a button "USM" with the key map's key (for example "USM (U)") in the status bar, right after the RAW/JPEG control, shown and disabled as that control is; it is drawn as selected while sharpening is on, and its hover text is the mark's (W3-Q6) |
-| W3-Q6 | The mark, and when it goes wrong | "USM" in the row of adjustment marks (W2-Q5), after "Fine"; dimmed while paused (100 % and above). The hover text names the key and the three values (for example "Sharpening (U): amount 60%, radius 0.6 px, threshold 2."). Sharpening can fail only on inconsistent image data; such a view then fails as any render does and shows today's error line. Nothing new is shown to the user. **Changed by the owner on 2026-11-25** (W3's hand check, A-Q8): the mark is never dimmed for sharpening, which applies at every zoom level; it still counts as waiting during a gesture or while its view is made |
+| W3-Q5 | Key and menu | The key **U** (free in the key map), in the key map (U8) so it can be changed, and View ▸ Show Sharpening, right after Show Fine Details. It lasts for the session and is not saved (A-Q2). **Added by the owner on 2026-11-25** (W3's hand check): a button "USM" with the key map's key (for example "USM (U)") in the preview's title line above the image, right after the RAW/JPEG control, shown and disabled as that control is; it is drawn as selected while sharpening is on, and its hover text is the mark's (W3-Q6) |
+| W3-Q6 | The mark, and when it goes wrong | "USM" in the row of adjustment marks (W2-Q5), after "Fine"; dimmed while paused (100 % and above). The hover text names the key and the three values (for example "Sharpening (U): amount 80%, radius 0.8 px, threshold 2."). Sharpening can fail only on inconsistent image data; such a view then fails as any render does and shows today's error line. Nothing new is shown to the user. **Changed by the owner on 2026-11-25** (W3's hand check, A-Q8): the mark is never dimmed for sharpening, which applies at every zoom level; it still counts as waiting during a gesture or while its view is made |
 | W3-Q7 | The settings | A new Settings page **Preview** (W7 adds the thresholds and colours of §3.7 to it) with a section Sharpening: amount 10–300 %, radius 0.3–2.0 px, threshold 0–20 levels, and a button Restore Defaults. Defaults 80 %, 0.8 px and 2 (set in the owner's hand check, 2026-11-25; first 60 %, 0.6 px and 2). Saved in `settings.txt`; a value in the file that cannot be read or lies outside its range gives that value's default. A changed value applies when the slider is released (or the field is left), not on every frame of a drag, since each change renders the views again |
 | W3-Q8 | The reset of every adjustment (A-Q3; left from W2 by T314) | The key **Backspace** (free in the key map), in the key map, and View ▸ Reset Adjustments: it turns off every adjustment that is on (today fine details and sharpening; later exposure and white balance, W5, W6). The menu item is greyed while no adjustment is on |
 
@@ -440,16 +441,38 @@ sharpening (`backlog.md`, Technical work).
 
 - The defaults are amount 80 %, radius 0.8 px and threshold 2 (§3.3, W3-Q7); 60 % was too weak.
 - Sharpening applies at every zoom level, 100 % and above included (A-Q8, W3-Q1, W3-Q6, §3.3).
-- A button "USM" in the status bar, after the RAW/JPEG control (W3-Q5).
+- A button "USM" in the preview's title line above the image, after the RAW/JPEG control (W3-Q5).
 - Found in the hand check: between about 51 % and 99 %, the pixels move when sharpening is
-  turned on or off. Sharpening itself does not move them (the blur is symmetric); the views there
-  (`Scaled`) are the visible region reduced on the worker, and the likely cause is that on and
-  off draw two views whose reduction starts at different places (not proven). Found out and
-  fixed in a task of its own, together with the 51.2 % stepping time above, which concerns the
-  same views.
+  turned on or off. Sharpening itself does not move them (the blur is symmetric). The cause
+  (reviewer, 2026-11-25, from the code): the current image's ring at 100 % is always prefetched,
+  and between 50 % and 100 % it satisfies the shown requirement when its region covers the
+  visible one and its sharpening is the requirement's. With sharpening off the ring is drawn,
+  reduced by the GPU; with it on a `Scaled` view is made, reduced with the Lanczos filter on the
+  worker. **Decided by the owner on 2026-11-25:** between 50 % and 100 % only the exact `Scaled`
+  view satisfies the shown requirement, as the reduced view below 50 % (W1-Q3); a denser view
+  (the ring, the 100 % view) is drawn meanwhile and replaced in one swap. Every view below 100 %
+  is then reduced with the Lanczos filter (§3.2), with sharpening on and off alike. **Also decided
+  the same day:** a pan counts as a gesture step for that view: while the user drags between 50 %
+  and 100 %, no scaled view is asked for (the ring is drawn); it is asked for once the drag has
+  paused as long as a zoom gesture's pause, then one swap.
+- The 51.2 % stepping time above: between 50 % and 100 % the neighbours are prefetched at fit
+  and at 100 % only, not at the shown scale, so the next image waits for a full render of its
+  visible region. **Decided by the owner on 2026-11-25:** there the neighbours are prefetched
+  at the shown scale (`Scaled`) and at fit, as ADR 0008 §12.1 says ("the shown view and the zoom
+  target": from a level between 50 % and 100 %, Z goes to fit); the owner measures it with
+  `latency.ps1` afterwards.
+- **The cost, accepted by the owner on 2026-11-25:** after the dwell, up to four full-resolution
+  region renders on the background worker (+1, +2, the other display mode and −1), made again
+  after every pan or zoom, so a step right after a pan is not quick; and the sharpened rings and
+  100 % views (T321), which with the views of both sharpenings kept (W3-Q4) can take about
+  800 MB of the 1 GB texture budget on a 3840×2160 screen, so turning sharpening off shows the
+  kept view at once less often there. Measured after T324: stepping at 51.2 % and at one more
+  level between 50 % and 100 % with sharpening off and on, a step right after a pan, and U at
+  100 %.
 
-The tasks: T320 (the defaults), T321 (sharpening at 100 % and above), T322 (the pixels that
-move between 50 % and 100 %, and the stepping time there), T323 (the button "USM").
+The tasks: T320 (the defaults), T321 (sharpening at 100 % and above), T322 (only the exact
+`Scaled` view between 50 % and 100 %, and the pan's pause), T323 (the button "USM"), T324 (the
+neighbours prefetched at the shown scale and at fit between 50 % and 100 %).
 
 ## 5. Steps
 
