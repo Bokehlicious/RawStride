@@ -87,10 +87,11 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status | Model |
 |---|---|---|---|
+| [T330](T330-filter-model-in-plain-rust.md) | ADR 0022 S1: the filter model in plain Rust (`pw-loupe/src/meta_filter.rs`; for Codex, in its own worktree) | Open | Codex |
 
 ## Writing a task (owner and reviewer)
 
-- **Number:** the next free number after the highest in this folder and `done/` (T330 next).
+- **Number:** the next free number after the highest in this folder and `done/` (T331 next).
 - **File:** `docs/tasks/T246-<a-few-words>.md`; three digits, lower case, words joined by `-`.
 - **Index:** add a row to "Open tasks" above and keep its status in step with the file's heading.
 - **Size (owner, 2026-11-15, after T142):** one task is one layer (a C++ shim or a core crate, or
