@@ -503,10 +503,31 @@ before. Cost: about four times the pixels of a shown view's render, in the backg
 after a pan beyond the kept region and after a zoom step; the owner re-checks the drag and the
 stepping after T325 (T325).
 
+**The check after T325, and the pan view only after a drag (owner and reviewer, 2026-11-25):**
+the owner found the drag at 51–59 % now as smooth as at 60–99 %. `latency.ps1` (release build of
+4659495, folder `s6\a1`, 1920×1200, defaults 80 %/0.8 px/2, 13 steps a series, labels `t325-*`,
+the program restarted for each series): at 51.2 % and at 64 %, sharpening off and on, 5–6 of 13
+steps showed no change within the 8 s timeout (51.2 %: 8 of 13 seen in both series; 64 %: 7 of
+13), each such press with about 5 s of CPU and 300 MB more memory (the next image opened and
+rendered from the start); the steps that were seen took 5.2–5.4 ms (median), and the memory grew
+to about 4.7 GB a series, against 2.5 GB after T324, when all 13 were seen. V1 and V4 no longer
+held between 50 % and 100 %. The cause, from the code and not profiled: at 51.2 % the pan view is
+nearly the whole image (about 7500 × 4700 of 8640 × 5760 sensor pixels), one full-resolution render
+of it about four times the ring's, asked for on every image after the dwell; a render under way
+is not cancelled by a step, so the worker is still busy with the last image's pan view when +2
+should be prefetched. **Decided by the owner on 2026-11-25** (of A, a pan view only after a drag;
+B, a smaller pan view; C, a render that a step cancels): **A**. The pan view is asked for only
+once the current image has been dragged (a `pan` that moved the centre, or a `set_view` that
+moved only the centre, as the compare's second core is dragged) since it became current; a zoom step or the other display mode keeps that, a step to
+another image or a new folder ends it. The first drag on an image draws the last drawn view
+still until the drag pauses (as T322 did before the ring was resident); the drags after it run
+on the pan view. Stepping without dragging pays nothing for it. At 100 % and above and at 50 %
+and below the ring is as before (T326).
+
 The tasks: T320 (the defaults), T321 (sharpening at 100 % and above), T322 (only the exact
 `Scaled` view between 50 % and 100 %, and the pan's pause), T323 (the button "USM"), T324 (the
 neighbours prefetched at the shown scale and at fit between 50 % and 100 %), T325 (the pan
-view).
+view), T326 (the pan view only after a drag).
 
 ## 5. Steps
 
