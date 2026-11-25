@@ -133,6 +133,13 @@ Reorganised on 2026-11-21 (owner): the earlier file mixed these three kinds and 
   - *Size (estimate)*: Linux about 1–1.5 weeks (build, Unix fileops and settings folder, tests on
     Unix and CI, eject and monitor profile); macOS about as much again, mostly packaging. Ongoing
     cost: every later change to files, cards or windows tested on three platforms.
+- **Stepping at a zoom level between 50 % and 100 % misses V1** (found in W3's `latency.ps1` run
+  after T318, 2026-11-24, release build of 160e3d7, `s6\a1`, 1920×1200, labels `t318-*-51-*`):
+  at 51.2 % (100 % and three steps out) the next image's first change takes about 155–180 ms,
+  with sharpening off as well as on (ADR 0008 V1: 30 ms). Every view there is `Scaled`, made
+  from the full-resolution render, and the next image's view does not seem to be prefetched at
+  that scale. Not caused by W3. Needs the owner's decision: accept it in `known-limits.md`, or a
+  task that finds out what is prefetched there and proposes a fix.
 
 ## Watched
 
