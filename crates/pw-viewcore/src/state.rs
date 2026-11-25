@@ -373,10 +373,11 @@ fn quantise(d: f64) -> u64 {
     (d * 1e6).ceil().max(0.0) as u64
 }
 
-/// Whether a reduced view of `region` whose density is `density` (as [`State::finish_render`]
-/// gives it: the smaller of its two sides' ratios) has the size `job` asks for. The density of a
-/// view of the job's size lies between the job's density and the next size's, so the size is
-/// found again from it; a margin far below one pixel keeps rounding from moving it.
+/// Whether a reduced or scaled view of `region` whose density is `density` (as
+/// [`State::finish_render`] gives it: the smaller of its two sides' ratios) has the size `job` asks
+/// for. The density of a view of the job's size lies between the job's density and the next
+/// size's, so the size is found again from it; a margin far below one pixel keeps rounding from
+/// moving it.
 fn same_reduction(region: Rect, density: f64, job: JobView) -> bool {
     use crate::scale::scaled_size;
     scaled_size(region.w, region.h, density - 1e-12)
@@ -498,6 +499,9 @@ pub(crate) struct State<S> {
     pub mode: Source,
     pub zoom: Zoom,
     gesture_at: Option<Instant>,
+    /// The last pan step that moved the centre; a scaled view is not planned while a drag is under
+    /// way (ADR 0027 §4.3, owner 2026-11-25).
+    pan_at: Option<Instant>,
     pub centre: [f64; 2],
     pub view_px: [u32; 2],
     pub sizes: HashMap<Key, ImageSize>,
@@ -605,6 +609,7 @@ impl<S> State<S> {
             mode: Source::Raw,
             zoom: Zoom::Fit,
             gesture_at: None,
+            pan_at: None,
             centre: [0.5, 0.5],
             view_px: [1920, 1080],
             sizes: HashMap::new(),
@@ -821,7 +826,17 @@ impl<S> State<S> {
         if self.zoom == Zoom::Fit {
             return;
         }
-        self.centre = geometry::pan_centre(size, self.view_px, scale, self.centre, delta);
+        let centre = geometry::pan_centre(size, self.view_px, scale, self.centre, delta);
+        if centre != self.centre {
+            self.pan_at = Some(Instant::now());
+        }
+        self.centre = centre;
+    }
+
+    /// Whether a drag is under way (its last step is younger than the pause).
+    fn in_pan(&self) -> bool {
+        self.pan_at
+            .is_some_and(|t| t.elapsed() < self.config.gesture_pause)
     }
 
     /// Makes `pos` current (clamped to the folder).
@@ -1067,7 +1082,16 @@ impl<S> State<S> {
             }
             return v;
         }
-        add((ck, Want::Shown));
+        // while a drag is under way between 50 % and 100 %, no scaled view is asked for: every
+        // frame would ask for a new one; the ring is drawn meanwhile (ADR 0027 §4.3)
+        let panning_scaled = !full
+            && self.in_pan()
+            && self
+                .req(ck, Want::Shown)
+                .is_some_and(|r| r.job.kind == ViewKind::Scaled);
+        if !panning_scaled {
+            add((ck, Want::Shown));
+        }
         if !(full || self.since.elapsed() >= self.config.dwell) {
             return v;
         }
@@ -1302,10 +1326,12 @@ impl<S> State<S> {
         })
     }
 
-    /// Whether the plan counts a requirement of `want` as done. A reduced view (ADR 0027 W1-Q3)
-    /// and a fine view (W2) count only as themselves, resident or in flight: a denser view (the
-    /// half-size view after a gesture, a reduced view after zooming out) is drawn meanwhile
-    /// ([`State::serving`]) but does not stop the exact one from being made. A fine view
+    /// Whether the plan counts a requirement of `want` as done. A reduced view (ADR 0027 W1-Q3),
+    /// a fine view (W2) and a scaled view (between 50 % and 100 %; §4.3, owner 2026-11-25) count
+    /// only as themselves, resident or in flight: a denser view (the half-size view after a
+    /// gesture, the ring, a reduced view after zooming out) is drawn meanwhile
+    /// ([`State::serving`]) but does not stop the exact one from being made, so every view below
+    /// 100 % is reduced by the same filter, with sharpening on and off alike. A fine view
     /// satisfies no other requirement, so the shown view is still made while a fine render runs.
     /// Only a view with the requirement's sharpening counts (W3-Q4), except for the current
     /// image's half-size view during a zoom gesture, which a half-size view of either sharpening
@@ -1318,6 +1344,34 @@ impl<S> State<S> {
                     .inflight
                     .iter()
                     .any(|f| f.generation == self.generation && f.key == req.key && f.view == job);
+        }
+        if req.job.kind == ViewKind::Scaled {
+            let job = req.job;
+            return self.resident.iter().any(|r| {
+                r.kind == ViewKind::Scaled
+                    && r.sharpen == job.sharpen
+                    && same_reduction(r.region, r.density, job)
+                    && self.serves(
+                        r.generation,
+                        (r.pos, r.source),
+                        r.kind,
+                        r.region,
+                        r.density,
+                        req,
+                    )
+            }) || self.inflight.iter().any(|f| {
+                f.view.kind == ViewKind::Scaled
+                    && f.view.sharpen == job.sharpen
+                    && same_reduction(f.view.region, f.view.density(), job)
+                    && self.serves(
+                        f.generation,
+                        f.key,
+                        f.view.kind,
+                        f.view.region,
+                        f.view.density(),
+                        req,
+                    )
+            });
         }
         let any_sharpen = want == Want::Shown
             && req.job.kind == ViewKind::Half
@@ -2811,6 +2865,9 @@ impl<S> State<S> {
         if self.cur.is_some() {
             consider(self.since + self.config.dwell);
             if let Some(t) = self.gesture_at {
+                consider(t + self.config.gesture_pause);
+            }
+            if let Some(t) = self.pan_at {
                 consider(t + self.config.gesture_pause);
             }
         }
@@ -6383,6 +6440,131 @@ mod tests {
         let f = s.frame(VIEW);
         assert_eq!(f.draw.map(|d| d.id), plain);
         assert_eq!(f.sharpen, SharpenState::Waiting);
+    }
+
+    // ---------- only the exact scaled view between 50 % and 100 % (T322) ----------
+
+    /// Image 10 at `zoom` with its ring resident (sharpened with `sharpen`); returns the ring.
+    fn scaled_setup(zoom: Zoom, sharpen: Option<Sharpening>) -> (State<u32>, Option<u64>) {
+        let mut s = state(1024);
+        with_session(&mut s, 10);
+        s.set_sharpening(sharpen);
+        s.zoom = zoom;
+        let ring = s.accept(&out(&s, 10, Want::Ring), 100);
+        assert!(ring.is_some());
+        (s, ring)
+    }
+
+    fn shown_req_job(s: &State<u32>) -> JobView {
+        let Some(r) = s.req(k(10), Want::Shown) else {
+            panic!("no requirement");
+        };
+        r.job
+    }
+
+    #[test]
+    fn a_ring_does_not_satisfy_the_scaled_view_with_sharpening_off_or_on() {
+        for sharpen in [None, Some(SHARP)] {
+            let (mut s, ring) = scaled_setup(Zoom::Scale(0.75), sharpen);
+            let job = shown_req_job(&s);
+            assert_eq!(job.kind, ViewKind::Scaled);
+            assert!(renders_of(&s, 10).contains(&job), "{sharpen:?}");
+            assert_eq!(s.frame(VIEW).draw.map(|d| d.id), ring, "{sharpen:?}");
+            let scaled = s.accept(&out(&s, 10, Want::Shown), 100);
+            assert!(scaled.is_some());
+            assert_eq!(s.frame(VIEW).draw.map(|d| d.id), scaled, "{sharpen:?}");
+            assert!(!renders_of(&s, 10).contains(&job), "{sharpen:?}");
+        }
+    }
+
+    #[test]
+    fn three_steps_out_from_100_percent_the_scaled_view_is_asked_for() {
+        let (s, _) = scaled_setup(Zoom::Scale(0.512), None);
+        let job = shown_req_job(&s);
+        assert_eq!(job.kind, ViewKind::Scaled);
+        assert!(renders_of(&s, 10).contains(&job));
+    }
+
+    #[test]
+    fn a_resident_scaled_view_is_planned_once_and_a_changed_sharpening_asks_again() {
+        let (mut s, ring) = scaled_setup(Zoom::Scale(0.75), None);
+        let scaled = s.accept(&out(&s, 10, Want::Shown), 100);
+        assert!(!renders_of(&s, 10).contains(&shown_req_job(&s)));
+        // the other sharpening: the old scaled view is not the ring (ring sharpened differently)
+        assert!(s.set_sharpening(Some(SHARP)));
+        // the ring is unsharpened here too, so the scaled view (least dense) stays drawn
+        let job = shown_req_job(&s);
+        assert!(renders_of(&s, 10).contains(&job));
+        assert_eq!(s.frame(VIEW).draw.map(|d| d.id), scaled);
+        // a ring of the requirement's sharpening is drawn meanwhile
+        let sharp_ring = s.accept(&out(&s, 10, Want::Ring), 100);
+        assert!(sharp_ring.is_some() && sharp_ring != ring);
+        assert_eq!(s.frame(VIEW).draw.map(|d| d.id), sharp_ring);
+        assert!(renders_of(&s, 10).contains(&job));
+    }
+
+    #[test]
+    fn a_fit_scale_between_50_and_100_percent_asks_for_the_scaled_view() {
+        let mut s = state(1024);
+        with_session(&mut s, 10);
+        s.view_px = [3000, 2400];
+        s.zoom = Zoom::Fit;
+        assert!(s.accept(&out(&s, 10, Want::Ring), 100).is_some());
+        let job = shown_req_job(&s);
+        assert_eq!(job.kind, ViewKind::Scaled);
+        assert!(renders_of(&s, 10).contains(&job));
+    }
+
+    #[test]
+    fn an_inflight_scaled_job_is_not_planned_twice() {
+        // nothing resident, so the statistics do not come first and take the session
+        let mut s = state(1024);
+        with_session(&mut s, 10);
+        s.zoom = Zoom::Scale(0.75);
+        let job = shown_req_job(&s);
+        assert_eq!(job.kind, ViewKind::Scaled);
+        assert!(renders_of(&s, 10).contains(&job));
+        let mut picked = false;
+        for _ in 0..10 {
+            match s.pick(true) {
+                Some(Task::Render { view, .. }) if view == job => {
+                    picked = true;
+                    break;
+                }
+                Some(_) => {}
+                None => break,
+            }
+        }
+        assert!(picked, "the scaled view is picked");
+        assert!(s.inflight.iter().any(|f| f.view == job));
+        assert!(!renders_of(&s, 10).contains(&job));
+    }
+
+    #[test]
+    fn a_scaled_view_waits_for_a_drag_to_pause() {
+        let (mut s, ring) = scaled_setup(Zoom::Scale(0.75), None);
+        s.pan([10.0, 0.0]);
+        assert!(s.pan_at.is_some());
+        assert!(
+            !renders_of(&s, 10)
+                .iter()
+                .any(|v| v.kind == ViewKind::Scaled)
+        );
+        assert_eq!(s.frame(VIEW).draw.map(|d| d.id), ring);
+        let left = s.next_deadline();
+        assert!(
+            left.is_some_and(|d| d <= s.config.gesture_pause),
+            "{left:?}"
+        );
+        s.pan_at = Some(Instant::now() - Duration::from_secs(1));
+        assert!(renders_of(&s, 10).contains(&shown_req_job(&s)));
+        // at 100 % a pan step plans as before
+        let mut s = state(1024);
+        with_session(&mut s, 10);
+        s.zoom = Zoom::Scale(1.0);
+        s.pan([10.0, 0.0]);
+        assert!(s.pan_at.is_some());
+        assert!(renders_of(&s, 10).contains(&shown_req_job(&s)));
     }
 
     #[test]

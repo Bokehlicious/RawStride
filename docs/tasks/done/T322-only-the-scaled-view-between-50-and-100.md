@@ -1,4 +1,4 @@
-# T322. ADR 0027: only the exact scaled view between 50 % and 100 % — Open
+# T322. ADR 0027: only the exact scaled view between 50 % and 100 % — Done
 
 - **Why:** found in W3's hand check (owner, 2026-11-25; ADR 0027 §4.3, "W3's hand check"):
   between about 51 % and 99 %, the pixels move when sharpening is turned on or off. The cause
@@ -103,3 +103,5 @@
 | 2026-11-25 | Blocked | Added after W3's hand check (owner, 2026-11-25); waits for T321 |
 | 2026-11-25 | Blocked | Cold read and chain review (fresh agents): the cause confirmed from the code, no existing test breaks. Added: `exact` not used and why `same_reduction` holds for a scaled view; the rule covers every scaled requirement (fit between 50 % and 100 % too) with a test; test 4's setup; the mark says shown while the sharpened ring is drawn (known-limits); the CHANGELOG line under Changed. The owner decided the pan's pause on 2026-11-25 (item 2, ADR 0027 §4.3) |
 | 2026-11-25 | Open | T321 Done |
+| 2026-11-25 | Ready for review | Items 1–3 and the seven tests done in `state.rs`; test-inventory updated (2679, pw-viewcore unit row 234); no existing test needed a change |
+| 2026-11-25 | Done | Reviewed: items 1–3 as written; the seven tests in six (the ring with sharpening off and on in one loop; test 4 uses an unsharpened ring in place of none, the same rule of `serving_of`). The reviewer wrapped the doc comment of `same_reduction` (a line over 100 characters) and ran `.\tools\check.ps1`: all OK, 2679 passed, 0 failed, 81 ignored, no clippy warnings. Found in review: a drag before the ring is resident (within the dwell after a step) keeps the last view still until the pause (not worse than before). Leftovers: `known-limits.md` (Sharpening) the drag between 50 % and 100 % with that case, the mark while the sharpened ring stands in; `CHANGELOG.md` Changed line widened to below 100 %. Owner, 2026-11-25: T323 next, then T324 |

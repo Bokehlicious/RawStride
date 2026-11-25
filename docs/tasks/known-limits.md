@@ -571,6 +571,13 @@ only if it is seen in use.)
   checks whether a result is still wanted only for scaled and reduced views, so after U pressed
   twice quickly a late 100 % view or ring of the old sharpening is kept and takes texture budget
   until it is evicted (it is not protected, so it goes first).
+- *A drag between 50 % and 100 %* (T322, accepted): while the drag goes on, the ring (reduced by
+  the GPU) is drawn; when it has paused, the new scaled view replaces it in one swap with a
+  slightly sharper look. If the ring is not resident yet (a drag within the dwell after a step),
+  the last drawn view stays still until the drag pauses and the scaled view arrives.
+- *The mark while the sharpened ring stands in* (T322, accepted): between 50 % and 100 % the mark
+  says shown while the ring is drawn meanwhile, since the ring carries the sharpening, as below
+  50 % with the half-size view.
 
 ## LibRaw (`pw-libraw`)
 
