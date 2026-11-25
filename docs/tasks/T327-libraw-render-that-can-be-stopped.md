@@ -1,4 +1,4 @@
-# T327. ADR 0027 W5-Q1: a LibRaw render that can be stopped, and its timing — Blocked
+# T327. ADR 0027 W5-Q1: a LibRaw render that can be stopped, and its timing — Open
 
 - **Why:** ADR 0027 W5-Q1 (answered by the owner 2026-11-25, ADR 0027 §4.4): a render under way
   cannot be cancelled today, so a long render on either worker makes the next image wait (the pan
@@ -41,8 +41,11 @@
      - `pwlr_open` sets a progress handler (`LibRaw::set_progress_handler`) on the LibRaw object
        with the session as its data, after the unpack has succeeded. `PwSession` gains the
        current render's `stop` and `ctx` and the spent flag (its `new PwSession{…}` initialises
-       them). The session's `stop` and `ctx` are set at the start of `pwlr_render` and cleared
-       before it returns on every path; the handler returns `stop(ctx)` when one is set, else 0.
+       them). The session's `stop` and `ctx` are set right before `dcraw_process` and cleared
+       right after it returns, in one place, so they are never left set; the handler returns
+       `stop(ctx)` when one is set, else 0. When `dcraw_process` fails (cancelled or not) and the
+       session is not spent, `free_image()` is called as after a success, so a kept session never
+       holds a processed buffer beyond its budget.
        As far as is known LibRaw calls the handler on the thread that called `dcraw_process`
        (between its stages, `LibRaw_progress`), not on an OpenMP worker; the Rust side does not
        rely on it (point 2's `Sync` bound).
@@ -100,7 +103,10 @@
      stops set from another thread at 10 %, 50 % and 90 % of that time, three runs each (a fresh
      session every run; the open not timed). It prints, per file and render, the median and
      the largest **time from the stop to the return**, and how many of the runs ended
-     cancelled and how many finished anyway.
+     cancelled and how many finished anyway, and how many left the session spent. The report
+     says plainly whether a stop during LibRaw's work always spends the session (then every stop
+     costs opening the file again, about 0.3 s for 61 Mpix, if the image is still wanted; T328
+     and the owner weigh that).
   5. **The measurement:** run
      `$env:PW_TESTDATA = "D:\PhotoWorkflowData\RAW"; cargo test --workspace --release -- --ignored --nocapture timing_of_a_stop`
      (a debug build measures the wrong thing; **the `--release` run is approved by the owner for
@@ -131,3 +137,4 @@
 |---|---|---|
 | 2026-11-25 | Blocked | Added (ADR 0027 W5-Q1); Open after its cold read, the chain review and the owner's yes to the `--release` run |
 | 2026-11-25 | Blocked | Cold read: the handler set after the unpack and `PwSession`'s new fields initialised; a spent session's statistics and clipping map fail with −1 (an `Err`, never "no statistics"); `stop` gets a `Sync` bound, `ctx` points at the fat reference, `catch_unwind` with `AssertUnwindSafe`; `render_half_stoppable` uses `render_half`'s demosaic value; `stop.rs` has its own helpers (those of `statistics.rs` are private); every ARW is opened to learn its size; a spent error is not `is_cancelled()`; LibRaw's `setCancelFlag` named as the alternative if the handler is called only between stages. Confirmed against LibRaw 0.22's headers: the callback type, `set_progress_handler`, `LIBRAW_CANCELLED_BY_CALLBACK`, `imgdata.rawdata.raw_alloc` |
+| 2026-11-25 | Open | Chain review (T327 and T328): `stop`/`ctx` set right before `dcraw_process` and cleared right after, in one place; `free_image()` after a failed `dcraw_process` when the session is not spent; the report says whether a stop always spends the session (each stop then costs a reopen, weighed in T328). T328 changed for the rest (its log). **The `--release` run of point 5 approved by the owner on 2026-11-25** ("Ja till båda"). Set Open |

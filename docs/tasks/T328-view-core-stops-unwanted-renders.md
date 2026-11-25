@@ -56,23 +56,36 @@
      `render_region`) and `session_usable(&self, s) -> bool` (default `true`).
   2. **The native backend** (`native.rs`): for a RAW session the two stoppable renders call
      T327's `render_half_stoppable` and `render_region_stoppable` with `&|| stop.is_stopped()`;
-     an error with `is_cancelled()` becomes `DecodeError::cancelled()`. `session_usable` is
-     `!is_spent()` for a RAW session, `true` otherwise. JPEG and TIFF sessions are not stopped.
+     an error for which `pw_libraw::Error::is_cancelled()` is true (it tests the start of the
+     text; not `contains`, as `raw_error` does for `DAMAGED`, since the spent text also holds the
+     word "cancelled") becomes `DecodeError::cancelled()`. `session_usable` is `!is_spent()` for
+     a RAW session, `true` otherwise. JPEG and TIFF sessions are not stopped (their renders are
+     short), and if LibRaw does not call the handler during a half-size render (T327's report), a
+     `Half` or `Reduced` render is stopped only before LibRaw starts; the doc comments say so. A
+     spent session is never lent again (point 5), so `native.rs`'s statistics, clipping map and
+     focus never see one (they turn an `Err` into "none", which would be kept for good).
   3. **The worker** (`core.rs`): `Task::Render` carries a `Stop`; the render uses the stoppable
-     methods; a cancelled result skips the reduction, sharpening and `to_display` and goes to
+     methods. After the render, before the reduction, the worker looks at the `Stop` once more:
+     if it is set, the result counts as cancelled (the session is not spent by that). A
+     cancelled result skips the reduction, sharpening and `to_display` and goes to
      `finish_render`, which gains the backend's `session_usable` answer as an argument (passed
      in by the core, as `finish_open_checked` gets its answers). `Task::Focus`, the statistics
      and the clipping map are not stopped.
   4. **What is stopped** (`state.rs`): `lend_render` makes a new `Stop` and keeps a clone in a
-     map of its own beside `running`, keyed as `running` is, together with the `Want` the job
-     was lent for (`inflight` stays `Copy` and is not used for it). The map is emptied only as
+     map of its own beside `running`, keyed as `running` is, together with the `Want`s the job
+     was lent for (`inflight` stays `Copy` and is not used for it). The `Want` is lost today in
+     `plan_of` (it gives `Job::Render(key, view)`); it is carried through `plan_of` → `pick` →
+     `lend_render`. When one `JobView` is wanted under several `Want`s at the lend (between 50 %
+     and 100 % the shown view and the pan view are both `Scaled`, but of different regions, so
+     they are different `JobView`s), every `Want` whose requirement gave exactly that `JobView`
+     is recorded. The map is emptied only as
      the jobs finish, not by `open_folder` or `set_files`. One state method, `stop_unwanted`,
      stops every job of that map that is still in `running`, not yet stopped, and for which
      one of these holds:
      - it was lent in an older generation (a new folder or a new file list);
      - its session is marked for release (`Releaser::release`, a metadata write waiting);
      - the full plan (`wanted(true)`) wants **neither** its exact `JobView` for its key (under
-       any `Want`) **nor**, under the same `Want` it was lent for, a view of its key of the same
+       any `Want`) **nor**, under one of the `Want`s it was lent for, a view of its key of the same
        `ViewKind` and the same `sharpen`. For this comparison `Half` and `Reduced` count as one
        kind, so the start of a gesture stops nothing. So a pan or a zoom step of the same image
        keeps its ring, its 100 % view or its pan view running (same `Want`, same kind, another
@@ -82,21 +95,29 @@
      `stop_unwanted` is called, under the lock, at the end of `act()`, in `set_fine_details`,
      `set_sharpening`, `set_view` and `set_orientation` where they change something, after each
      `release(path)` in `Releaser::release`, in `frame()` and `reject()`, and in the worker after
-     `finish_open_checked` and `finish_render`. Every stop is counted once in `Stats` as
-     `cancelled`.
-  5. **A stopped render finishes** (`finish_render`, result `is_cancelled()`): it gives no view
-     and no failure, and is not counted as `discarded`. Its `inflight` entry is removed, so the
-     plan may ask for the view again. When the session is usable it goes back as today
-     (`return_session`); when it is not, it is dropped as `drop_session` does (its bytes off the
-     budget, without `return_session` first), so the plan opens the file again if it is still
-     wanted; a session marked for release is handled as today. A render that finishes normally
-     although its stop was set is handled as today (its view is booked or discarded by today's
-     rules).
+     `finish_open_checked` and `finish_render`. `Stats` gains three counters: `stops` (a `Stop`
+     set, once per job), `cancelled` (a render that came back cancelled) and `spent` (a session
+     dropped because it was spent). Each core of the compare (`pw-loupe` has a second
+     `ViewCore`) stops only its own renders; that is intended.
+  5. **A render comes back** (`finish_render`), in this order: its entry in the stop map is
+     removed first, on every path. A render of an older generation is then handled as today
+     (`discarded`), cancelled or not. Otherwise, a cancelled result (`is_cancelled()`) gives no
+     view and no failure, is not counted as `discarded`, and its time is not added to
+     `render_ms` (so W3's and W5's timings are not skewed); `cancelled` is counted, and its
+     `inflight` entry is removed, so the plan may ask for the view again. The session goes back
+     with `return_session` first, always (it cleans up `lent` and `lent_paths`, which
+     `release()` waits on, and the detached bytes of an old folder); only when that returns true
+     and the session is not usable is it then dropped with `drop_session` and `spent` counted, as
+     today's path for a failed fine render does, so the plan opens the file again if it is still
+     wanted and a spent session is never lent again. A render that finishes normally although
+     its stop was set is handled as today (its view is booked or discarded by today's rules).
   6. **A real file** (`tests/native_files.rs`, `#[ignore]`, `PW_TESTDATA`): open a folder of
      the owner's ARW files at fit below 50 % (fine views are made only there), turn fine details
-     on, wait until the current image's fine render is under way, step to the next image, and
-     check that the stats count **at least one** cancelled render and that the next image's view
-     arrives; then step back and check that the first image is shown again (its session
+     on, wait until the fine render has been lent (`Stats` or `frame()` show it asked for and not
+     yet back) plus half of T327's measured time for a whole 61 Mpix PPG render, step to the next
+     image, and check that the stats count **at least one** `cancelled` render (not only a
+     `stop`) and that the next image's view arrives. If the render had already finished, the
+     test repeats on the next image, up to five times, and fails only if none was cancelled; then step back and check that the first image is shown again (its session
      reopened if it was spent). Run it with
      `$env:PW_TESTDATA = "D:\PhotoWorkflowData\RAW"; cargo test --workspace -- --ignored <the test's name>`
      (not `cargo test -p`, whatever the file's header says, `AGENTS.md` §5).
@@ -109,9 +130,15 @@
   - `set_files` with a different list and `open_folder` stop everything in flight (the stop is
     still found after `inflight` is cleared); a release stops the render of that path's session;
   - a change of sharpening stops a view in flight with the old sharpening;
-  - a stopped render that comes back: no view, no failure, not `discarded`, `cancelled` counted
-    once, its `inflight` entry gone and the view asked for again when still wanted; its session
-    back when usable, dropped and opened again when wanted when not;
+  - a stopped render that comes back: no view, no failure, not `discarded`, no time in
+    `render_ms`, `cancelled` counted once, its `inflight` entry gone and the view asked for again
+    when still wanted; its session back when usable; when not, `lent_paths` cleaned (a release
+    of that path then finishes at once), the session dropped, `spent` counted, and the file
+    opened again when wanted; a cancelled render of an older generation does not drop the new
+    folder's session at the same position;
+  - a stop set after the render finished: `stops` counted, `cancelled` not, the view booked;
+  - the pan view of the image left is stopped although −1's shown view is also `Scaled` (the
+    `Want` carried to the lend);
   - a core test with a fake backend whose stoppable render waits until its `Stop` is set (with
     a time limit, so the test cannot hang): stepping away returns the worker within that limit.
 - **Not in this task:** asking for the pan view again without a drag (T326; a question of its
@@ -123,7 +150,10 @@
 - **Done when:** `.\tools\check.ps1` is all OK, the test of point 6 has been run with
   `PW_TESTDATA` and its result is in the log, and `git diff --stat` shows only the files above.
   Then the owner's hand check (fine details on and quick steps; a drag between 50 % and 100 % and
-  a step at once) and `latency.ps1` at fit and at 51.2 %, as after T326.
+  a step at once; the compare) and `latency.ps1` (the owner's, `D:\PhotoWorkflowData\pm-study\tools\latency.ps1`,
+  not in the repository) at fit and at 51.2 %, as after T326, with the `spent` counter read: if
+  every stop spends the session (T327's report), quick steps reopen the images left (about 0.3 s
+  each), and the owner weighs that.
 
 ## Log
 
@@ -131,3 +161,4 @@
 |---|---|---|
 | 2026-11-25 | Blocked | Added (ADR 0027 W5-Q1); waits for T327 and its cold read |
 | 2026-11-25 | Blocked | Cold read: the rule of point 4 did not stop the pan view of the image left (it is a `Scaled` view as −1's shown view): now the exact view, or the same `Want` with the same kind and sharpening; `Half` and `Reduced` one kind (a gesture stops nothing); the stops kept beside `running`, not in `inflight` (`Copy`, cleared by `open_folder` and `set_files`, and holding finished views); only running jobs stopped, once; a stopped render's `inflight` entry removed, not `discarded`; `finish_render` gets `session_usable` from the core; one method `stop_unwanted` at named places (`act`, the four setters, `release`, `frame`, `reject`, after the worker's finishes); `DecodeError` without a new field (`pw-loupe`'s test builds it as a literal); the tests drive `State<u32>`; `set_files` with a different list; point 6 below 50 %, "at least one", and its run command |
+| 2026-11-25 | Blocked | Chain review (T327 and T328): `return_session` always first, `drop_session` only when it returned true (else `lent_paths` stays and a release waits until its timeout, and an old generation's key could drop the new folder's session); the order in `finish_render` (stop entry removed, old generation as today, then the cancelled path); the `Want` carried through `plan_of` → `pick` → `lend_render`; counters `stops`, `cancelled` and `spent`, no `render_ms` for a cancelled render; the worker looks at the stop again before the reduction; `is_cancelled` by the start of the text; a spent session never lent again; each compare core stops its own; point 6 waits for the lend and repeats up to five images; the hand check names `latency.ps1`'s place and reads `spent`. Waits for T327 |
