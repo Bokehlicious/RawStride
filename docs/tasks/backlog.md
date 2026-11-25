@@ -13,6 +13,24 @@ Reorganised on 2026-11-21 (owner): the earlier file mixed these three kinds and 
 
 ## Waiting for a decision or an ADR
 
+- **Fine details stand still while stepping quickly** (T328's hand check, 2026-11-25): with
+  fine details on, quick steps leave the main image standing still until the user pauses; with
+  them off the image changes almost at once. The same before T328 (a build without it), so not
+  caused by the stop. Likely cause: the new image's fine render starts as soon as it is opened
+  and takes its only session and every core, while the neighbours are asked for only after the
+  dwell. A possible fix: start the fine render only after the dwell. The owner (2026-11-25) will
+  hardly use fine details and thinks what was wanted was rather a mask that shows the fine
+  details; a question for the owner before any task (ADR 0027 §4.2 said no more work on fine
+  details unless seen in use).
+- **Steps that stall at 51.2 % with the clipping marks on** (T328's latency run, 2026-11-25): in
+  `s6\a1` at 51.2 %, steps 2 and 6–10 of 13 changed nothing on the screen within 8 s (about
+  2.8 s of CPU and 270 MB each), with and without sharpening, and the same with the view core
+  from before T328 and `pw-libraw` from before T327; with `clip_highlights` and `clip_shadows`
+  off every step was seen (4.8–5.3 ms). T326's run earlier that day saw every step, the owner
+  says with clipping on, though its CPU per step (250–650 ms) matches the run without; not
+  explained. The owner sees no stall stepping by hand. A question of its own (`latency.ps1` with
+  clipping on and off, the clipping job's place in `pick`).
+
 - **Custom buttons in the template window's questions** (found at T293's review, 2026-11-23):
   `rfd` is built without its `common-controls-v6` feature, so "Discard the changes to the
   template?" and "{file} already exists. Replace it?" show OK and Cancel instead of Discard
@@ -60,7 +78,8 @@ Reorganised on 2026-11-21 (owner): the earlier file mixed these three kinds and 
   whole-image PPG render of an ARW and up to 1.3 s on an X-Trans RAF (its demosaic has no ask).
   LibRaw's `setCancelFlag()` is checked inside some of its loops (`checkCancel`, `libraw.h`) and
   might stop sooner; it most likely still frees the RAW data (the same exception). The owner's
-  question, after T328's hand check shows whether the stop is felt late.
+  question if a stop is felt late; T328's hand check (2026-11-25) did not show one apart from
+  fine details standing still (above).
 - **A setting for the number of ExifTool write processes** (T268, ADR 0007 §9.6 point 2: "may
   become a setting later"): the app uses four (`WRITE_PROCESSES` in `pw-loupe`'s `main.rs`,
   the owner, 2026-11-22, after T267); a memory card, a network share and a hard disk were not
