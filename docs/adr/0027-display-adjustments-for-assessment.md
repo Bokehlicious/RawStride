@@ -632,6 +632,14 @@ smooth, on one that has not it is still as after T326. After the task: the owner
 (the first drag after a pause, quick stepping) and `latency.ps1` at 51.2 % and 64 % with the
 clipping marks off and on (T329).
 
+**T329's hand check (owner, 2026-11-25):** the first drag after the view has stood still is
+smooth and quick stepping is unchanged, for RAW files in RAW mode. `latency.ps1` (the reviewer,
+2026-11-25, `s6\a1`, 13 steps per series, RawStride restarted per series): every step seen; at
+51.2 % a median of 4.9 ms with the clipping marks off and 5.3 ms with them on, at 64 % 4.9 ms and
+5.3 ms (as after T326 and T328); memory up to about 4.6 GB per series, as after T326. The 1 s
+stays. Found in the hand check: TIFF files in RAW mode stutter badly when dragged, also after the
+pause (`backlog.md`).
+
 ## 5. Steps
 
 Each step ends with tests (GR11), the owner's hand check and, where an image is shown,

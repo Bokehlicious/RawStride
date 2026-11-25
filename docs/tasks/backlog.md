@@ -28,8 +28,16 @@ Reorganised on 2026-11-21 (owner): the earlier file mixed these three kinds and 
   from before T328 and `pw-libraw` from before T327; with `clip_highlights` and `clip_shadows`
   off every step was seen (4.8–5.3 ms). T326's run earlier that day saw every step, the owner
   says with clipping on, though its CPU per step (250–650 ms) matches the run without; not
-  explained. The owner sees no stall stepping by hand. A question of its own (`latency.ps1` with
-  clipping on and off, the clipping job's place in `pick`).
+  explained. The owner sees no stall stepping by hand. T329's run (2026-11-25, same folder, with
+  T329) saw every step at 51.2 % and 64 % with clipping on (5.2–7.2 ms). A question of its own
+  (`latency.ps1` with clipping on and off, the clipping job's place in `pick`).
+- **TIFF files stutter when dragged between 50 % and 100 %** (T329's hand check, 2026-11-25):
+  TIFF files in a folder viewed in RAW mode stutter badly when the user drags them, also after
+  the view has stood still for 1 s, while RAW files drag smoothly then. Not known whether it was
+  so before T329 (the first drag stood still on every image then). Not looked into; the pan view
+  (`State::pan_view`) has no limit on the source, so a TIFF's pan view (its decode or size) or
+  its ring are where to look first. A question of its own (which levels, how large the files,
+  JPEG mode too, a build before T329).
 
 - **Custom buttons in the template window's questions** (found at T293's review, 2026-11-23):
   `rfd` is built without its `common-controls-v6` feature, so "Discard the changes to the
