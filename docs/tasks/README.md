@@ -87,7 +87,7 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status |
 |---|---|---|
-| [T328](T328-view-core-stops-unwanted-renders.md) | ADR 0027 W5-Q1: the view core stops a render that is no longer wanted (pw-viewcore) | Blocked |
+| [T328](T328-view-core-stops-unwanted-renders.md) | ADR 0027 W5-Q1: the view core stops a render that is no longer wanted (pw-viewcore) | Open |
 
 ## Writing a task (owner and reviewer)
 

@@ -601,6 +601,8 @@ opened again (about 0.3 s for 61 Mpix). The chain goes on, and **T328 stops a re
 image is no longer wanted** (a step to another image, a new folder); a new exposure value of the
 same image does not stop the render under way, which finishes first (stop plus reopen would cost
 as much or more). LibRaw's `setCancelFlag()`, which might stop sooner, waits in `backlog.md`.
+At T328's cold read the owner added (2026-11-25): a change of display mode (RAW and the embedded
+JPEG of the same file) is the same image and stops nothing.
 
 ## 5. Steps
 
