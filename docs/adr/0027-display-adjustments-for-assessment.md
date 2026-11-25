@@ -8,7 +8,8 @@
   W2-Q1–W2-Q8 the same day, all as proposed (§4.2); W3's
   W3-Q1–W3-Q8 the same day, all as proposed (§4.3). W3's hand check on 2026-11-25 set the
   sharpening's defaults and changed A-Q8, W1-Q8, W3-Q1, W3-Q5 and W3-Q6 (§4.3, "W3's hand
-  check").
+  check"). W5's W5-Q1–W5-Q9 answered by the owner on 2026-11-25, all as proposed (§4.4); they
+  change §3.4's range to −2 to +3 EV and make the shadows a display mode for the session.
 - Date: 2026-11-18
 - Related:
   - ADR 0006 §2 (decode settings identical everywhere; the view already uses PPG instead of its
@@ -88,8 +89,8 @@ A prerequisite: `Session::render_region_with` fails on every RAF file tried (bac
 - **It is off by default and is never saved** per image or in `settings.txt` (A-Q2):
   - a value taken from one image is reset when another image is shown: the **manual exposure**
     and the white balance from a **click on grey**;
-  - **fine details, sharpening and the channel view** are display modes and last for the session,
-    for every image;
+  - **fine details, sharpening, the shadows (W5-Q6, owner 2026-11-25) and the channel view** are
+    display modes and last for the session, for every image;
   - a choice that is worked out again for every image, or is a fixed choice, is a mode that lasts
     for the session: **auto exposure** and **the camera's brightness** (§3.4), and **auto white
     balance** and the **white balance presets** (§3.5; owner, 2026-11-18);
@@ -184,7 +185,8 @@ A prerequisite: `Session::render_region_with` fails on every RAF file tried (bac
 
 ### 3.4 Temporary exposure and shadows (RAW mode)
 
-- **Exposure:** −3 to +3 EV in steps of 1/3 EV, with keys for up, down and zero (A-Q3). Applied in
+- **Exposure:** −2 to +3 EV (W5-Q2, owner 2026-11-25; first −3 to +3, below LibRaw's lowest
+  `exp_shift`) in steps of 1/3 EV, with keys for up, down and zero (A-Q3). Applied in
   LibRaw (`exp_correc`, `exp_shift`, with `exp_preser` to protect highlights), so a negative
   correction can use the headroom above the camera's white point. Every view of the image is
   rendered again [T: the cost is a new `dcraw_process` per view; the unpacked data is kept in the
@@ -194,12 +196,14 @@ A prerequisite: `Session::render_region_with` fails on every RAF file tried (bac
   shadows; banding in smooth dark areas is accepted for that purpose. If the hand check sees
   banding that hides detail, that step decides how the lift moves into the render (a 16-bit output
   or LibRaw's own tone curve) [T]. Today the whole chain after LibRaw is 8-bit (`output_bps = 8`).
+  A display mode for the session, turned on and off with a key; the amount is a setting on the
+  Settings page Preview (W5-Q6, owner 2026-11-25).
 - **Auto exposure** (A-Q11): sets the exposure from U7's RAW statistics (`RawStatistics`, the
   histogram after white balance, scaled to the white level). Our own rule, not LibRaw's
   `no_auto_bright = 0`, so the result is explained by the histogram the user sees:
   - the **99.9th percentile of the brightest channel** is placed **1/3 EV below clipping** (a few
     hot pixels or a specular highlight do not decide the brightness of the whole image);
-  - the result is **rounded down to 1/3 EV** and limited to **−3 to +3 EV**, the steps and range
+  - the result is **rounded down to 1/3 EV** and limited to **−2 to +3 EV** (W5-Q2), the steps and range
     of the manual exposure; the mark shows for example "+1⅓ EV auto", and up and down go on from
     there;
   - if **more than 0.1 %** of the pixels are already clipped in the RAW data, the result is 0 EV:
@@ -539,6 +543,55 @@ The tasks: T320 (the defaults), T321 (sharpening at 100 % and above), T322 (only
 `Scaled` view between 50 % and 100 %, and the pan's pause), T323 (the button "USM"), T324 (the
 neighbours prefetched at the shown scale and at fit between 50 % and 100 %), T325 (the pan
 view), T326 (the pan view only after a drag).
+
+### 4.4 W5's questions (answered by the owner, 2026-11-25, all as proposed)
+
+Exposure, auto exposure, shadows and the camera's brightness (§3.4) are the third step built
+(order W3, W5, W4: kept by the owner on 2026-11-25). Batch and import do not apply: they change
+only how the shown image is made. The RAW histogram, the exposure statistics, the clipping
+overlay and the focus marking do not change (§2.1). Each proposal below also answers the edge
+cases of `docs/tasks/README.md` ("Edge cases before the tasks") where they apply.
+
+What the code and the files say today (reviewer, 2026-11-25, code read and ExifTool 13.64):
+
+- `pwlr.cpp` sets every LibRaw parameter once, in `pwlr_open`; a render changes only the
+  demosaic, half size and the crop box. One session per image serves every view, the statistics,
+  the clipping map and the focus job (`Task::Focus` renders the half-size view again).
+- The statistics (`RawStatistics`: a 256-bin histogram per channel on an sRGB-like curve, and the
+  clipped counts) are asked for only for the current image, and only after its view is on the
+  screen (U7-Q6, U7c-Q5); the neighbours have none.
+- LibRaw 0.22 (vcpkg) has `exp_correc`, `exp_shift` and `exp_preser`; by LibRaw's documentation
+  `exp_shift` is usable from 0.25 to 8.0 (−2 to +3 EV) [T, not checked in the code], and
+  `exp_preser` (0–1) protects the highlights only when the image is made brighter. It has a
+  progress callback (`progress_cb`) whose non-zero return cancels the processing [T: how often
+  it is called during a demosaic].
+- The camera's brightness in the owner's files: DNG `BaselineExposure` (Ricoh GR III −0.51 EV,
+  a Xiaomi phone 0), Fujifilm RAF `RawExposureBias` −0.7 (X-T30); **none** in Sony ARW (A1,
+  A7R IV) or Panasonic RW2 (GM1). LibRaw gives `color.dng_levels.baseline_exposure` and
+  `makernotes.fuji.ExpoMidPointShift` [T: whether this is the same value as ExifTool's
+  `RawExposureBias`, and its sign].
+- Free default keys (key map, U8): Ctrl+↑ and Ctrl+↓ (the arrows alone step), B, N, O, Q, T, Y and
+  W in the preview; Backspace is the reset of every adjustment (W3-Q8).
+
+| # | Question | Proposal |
+|---|---|---|
+| W5-Q1 | A render that a step cancels (backlog, "To be taken up before W5's questions are decided") | **A chain of its own before W5's tasks**: the shim sets LibRaw's progress callback and returns "cancel" when the session's cancel flag is set (`pwlr.cpp`, an extra review); `pw-libraw` gives a cancel handle that another thread may set; the view core sets it when a render under way is no longer wanted (a step to another image, a new exposure value, a new folder), and the cancelled render is neither shown nor counted as failed. Its first task measures, on the owner's 61 Mpix files, the time from the flag to the return for a half-size render and a full PPG render; if it is above 100 ms the owner decides whether the chain goes on. Without it, W5 still works: the plan asks only for the newest value, so at most one render with an old value finishes first (about 0.3 s at fit, 1.2 s with fine details on). Whether the pan view may then be asked for without a drag again (T326) is a question of that chain, not of W5 |
+| W5-Q2 | The range and the steps | **−2 to +3 EV** in steps of 1/3 EV (§3.4 said −3 to +3; LibRaw's `exp_shift` goes no lower than 0.25), with `exp_preser` at 1.0, tuned in the hand check. Auto exposure (A-Q11) and the camera's brightness are limited to the same range, and so is the sum of a mode and the manual steps; a key press beyond a limit changes nothing and shows nothing new (the mark already shows the limit). −3 EV would need a second step after LibRaw and is not built unless the hand check asks for it |
+| W5-Q3 | Where it applies | In RAW mode, to every view of the image (the half-size, reduced, fine, scaled, 100 %, ring and pan views), in LibRaw before the demosaic; the shadows after the reduction and before sharpening (§7). Paused (the mark dimmed, A-Q9) in JPEG mode and for JPEG and TIFF files. The parameters are passed with each render, not left in the session, so the focus job, the statistics and the clipping map always run on ADR 0006 §2's settings (A-Q6), and the export has nothing to undo. **The compare:** the modes (auto, camera) apply to both sides, each worked out for its own image; the manual steps apply to both sides as the same offset, so two images are compared at the same correction, and are reset when either side's image changes. **The neighbours:** prefetched with the active mode's value for their own file (the manual steps are reset by the step anyway) |
+| W5-Q4 | Auto exposure and the statistics | While auto exposure is on, an image's statistics are made **when it is opened, before its first view** (the current image and the prefetched neighbours), so a step shows the auto-exposed view as one change (V2) and the next image never first appears at 0 EV. The first task times the statistics on the owner's 61 Mpix files [T]; if a step to an image that was not prefetched (a jump, a new folder) then shows its first view later than V1 allows, the owner decides between that and a first view at 0 EV replaced by the auto-exposed one. The rule is A-Q11's, read from the histogram the user sees. **Without a value:** a file without statistics (a layout `RawStatistics` does not read) gets 0 EV and the mark says so; more than 0.1 % clipped gives 0 EV by the rule, and the hover text says why |
+| W5-Q5 | The camera's brightness: which values | DNG `BaselineExposure` and the Fujifilm RAF value through LibRaw, nothing else in this step; the RAF value's sign and whether it is ExifTool's `RawExposureBias` are checked in the first task against the embedded JPEG [T]. Applied exactly (not rounded to 1/3 EV); manual steps of 1/3 EV are added on top (A-Q12). Sony ARW and Panasonic RW2 carry none: the mark says "Camera EV: none" and the view is at 0 EV (A-Q12), so for the owner's Sony files the choice does nothing visible. Read once when the file is opened (no ExifTool call), so it costs no time on a step. A value outside the range is limited to it, and the hover text gives the file's value |
+| W5-Q6 | The shadows: how long they last, and the value | Not named in A-Q2. Proposed: **a display mode for the session**, as sharpening (on or off with a key, the same for every image, not saved); the amount (0–100) a setting on the Settings page Preview (section Shadows, default 50, set in the hand check), saved in `settings.txt` with the rules of W3-Q7. The curve: a smooth table over 0–255 that keeps 0 and 255, never lowers a value and lifts the darkest quarter most; its formula is the first task's, tested to be monotonic. In RAW mode only (A-Q9), on the 8-bit view (A-Q10) |
+| W5-Q7 | The cache, and what the user sees while a value changes | The view's key gains the exposure (in 1/3 EV, plus the camera's value) and the shadows' amount, so a change never shows an old texture; the drawn view stays until the new one is ready and is replaced in one swap (V2). Several quick presses ask only for the newest value. After a change the shown view comes first; the ring, the 100 % view and the neighbours follow after the dwell, as after a zoom step. The views of the earlier value are kept as the memory budget allows (V8), so Shift+Backspace or a press back often shows a kept view at once. Cost accepted: every change renders the shown view again (about 0.3 s at fit for 61 Mpix, 1.2 s with fine details on) |
+| W5-Q8 | Keys and menu | **Ctrl+↑ / Ctrl+↓** ±1/3 EV, **Shift+Backspace** the manual steps back to 0, **B** auto exposure on and off, **Shift+B** the camera's brightness on and off (each turns the other off, A-Q12), **O** the shadows on and off; all in the key map (U8), so they can be changed. View ▸ Exposure ▸ Brighter, Darker, Reset Exposure, Auto Exposure, Camera Brightness, and View ▸ Show Shadows after Show Sharpening; greyed where they cannot apply (JPEG mode, a JPEG or TIFF file). Backspace (W3-Q8) also turns these off and resets the steps. No button in the title line in this step (the hand check may add one, as for "USM") |
+| W5-Q9 | The marks, and when it goes wrong | One exposure mark after "USM" in the row of marks (W2-Q5) giving the total: "+1⅓ EV" (manual), "+1 EV auto", "−0.5 EV camera", "Camera EV: none"; the hover text names the key and the parts (for example "Auto exposure (B): +1 EV from the histogram, plus +⅓ EV by hand."). A mark "Shadows" after it. Both dimmed while paused, and waiting while their view is made. A render that fails shows today's error line; nothing new. New glossary terms: exposure, auto exposure, camera brightness, shadows (rule 13) |
+
+W5-Q1's chain, written 2026-11-25 and done first: T327 (a LibRaw render that can be stopped, and
+its timing; `pwlr.cpp`, `pw-libraw`) → T328 (the view core stops a render no longer wanted). W5's own chain is then proposed as
+three or four tasks: the shim and `pw-libraw` (the exposure per render, the camera's value at the
+open, the range checked, the statistics timed; an extra review, C++), the view core (the state,
+the view key, the statistics at the open while auto is on, the shadows' function), the Settings
+page (the shadows' amount), and the shell (keys, menu, marks, reset, glossary). After it, the
+owner's hand check and `latency.ps1` at fit with exposure and with auto exposure on.
 
 ## 5. Steps
 

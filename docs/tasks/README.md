@@ -87,10 +87,12 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status |
 |---|---|---|
+| [T327](T327-libraw-render-that-can-be-stopped.md) | ADR 0027 W5-Q1: a LibRaw render that can be stopped, and its timing (pw-libraw) | Blocked |
+| [T328](T328-view-core-stops-unwanted-renders.md) | ADR 0027 W5-Q1: the view core stops a render that is no longer wanted (pw-viewcore) | Blocked |
 
 ## Writing a task (owner and reviewer)
 
-- **Number:** the next free number after the highest in this folder and `done/` (T327 next).
+- **Number:** the next free number after the highest in this folder and `done/` (T329 next).
 - **File:** `docs/tasks/T246-<a-few-words>.md`; three digits, lower case, words joined by `-`.
 - **Index:** add a row to "Open tasks" above and keep its status in step with the file's heading.
 - **Size (owner, 2026-11-15, after T142):** one task is one layer (a C++ shim or a core crate, or

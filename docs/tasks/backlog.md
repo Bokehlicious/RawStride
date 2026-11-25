@@ -55,17 +55,6 @@ Reorganised on 2026-11-21 (owner): the earlier file mixed these three kinds and 
 
 ## Technical work
 
-- **A render that a step cancels** (owner, 2026-11-25, after T325's check; ADR 0027 §4.3,
-  alternative C): a render under way cannot be cancelled today, so a long job on either worker
-  (`viewcore-interactive`, `viewcore-background`) makes the next image wait: the pan view after
-  a drag and a step at once (T326), the fine render (known-limits, T313). Would be a chain
-  across three layers: LibRaw's progress callback in the C++ shim (`pwlr.cpp`, an extra review),
-  `pw-libraw`, and the worker in `pw-viewcore`. **To be taken up before W5's questions are
-  decided** (ADR 0027 W5 makes renders of the current image more frequent: every changed value).
-  The owner approved T326's drag on 2026-11-25 but hopes for a better solution after W5: once a
-  step cancels a render, the pan view could be asked for without a drag again, so the first drag
-  on an image is smooth too.
-
 - **A setting for the number of ExifTool write processes** (T268, ADR 0007 §9.6 point 2: "may
   become a setting later"): the app uses four (`WRITE_PROCESSES` in `pw-loupe`'s `main.rs`,
   the owner, 2026-11-22, after T267); a memory card, a network share and a hard disk were not
