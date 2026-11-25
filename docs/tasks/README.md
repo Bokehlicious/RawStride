@@ -109,6 +109,18 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
   contradictions with the code; or the work is a review, an ADR, or a cold read or chain review
   rather than an implementation. If a Sonnet task needs files outside its list, or `check.ps1`
   fails twice on the same thing, it is moved to Opus and the log says so.
+- **Codex tasks (owner, 2026-11-25, after T330):** a task the owner gives to Codex has the `Model:`
+  line `Codex Sol` or `Codex Astra`, chosen by the same rules: **Sol** where Sonnet would do,
+  **Astra** where Opus is needed (and a Sol task moves to Astra as a Sonnet task moves to Opus).
+  Codex works in its own fixed worktree `C:\Development\PhotoWorkflow-Codex` on the branch `codex`,
+  never on `feature/gui-workspace`, so the task's Rules override rule 1 and also forbid
+  `git commit`, `add`, `stash`, `reset` and `checkout` and new branches. One Codex task at a time.
+  Before a Codex task is set to Open, the reviewer moves the worktree to the tip of
+  `feature/gui-workspace` (`git -C C:\Development\PhotoWorkflow-Codex checkout -f -B codex
+  feature/gui-workspace`), only after the previous Codex task is committed. At the review the
+  reviewer copies the task's files into `feature/gui-workspace`, runs `.\tools\check.ps1` there
+  (Codex's own run may fail in its sandbox, for example ExifTool not starting) and commits; the
+  reviewer also updates `docs/test-inventory.md`, which the task tells Codex not to touch.
 - **Chains:** a split step is written as a chain at once (for example T146 → T147 → T148), the later
   tasks "Blocked: waits for T146" until the one before is Done. The step's row in `plans/` names
   the whole chain. Writing the last task's file first is how a gap is found before code is written
@@ -207,7 +219,7 @@ Skeleton (the fields recent tasks use; leave out those that do not apply):
 
 - **Why:** …
 - **Crates:** … **Files:** …
-- **Model:** Sonnet | Opus — <the rule that decided it>
+- **Model:** Sonnet | Opus | Codex Sol | Codex Astra — <the rule that decided it>
 - **What:**
   1. …
 - **Tests to add:** …
