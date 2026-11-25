@@ -19,6 +19,7 @@ pub mod date;
 pub mod edit;
 mod exiftool;
 mod fileops;
+pub mod filter_values;
 pub mod iim;
 pub mod iim_read;
 mod iptc_table;
@@ -47,6 +48,7 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 
 pub use exiftool::{ExifTool, MIN_EXIFTOOL_VERSION, ToolVersion, exiftool_program};
+pub use filter_values::FilterValues;
 pub use recycle::{DeleteError, DeleteRefusal};
 pub use relocate::{MoveError, Moved};
 pub use worker::{

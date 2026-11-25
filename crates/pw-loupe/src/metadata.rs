@@ -1566,6 +1566,7 @@ impl MetadataCache {
                 }
             }
             WorkerEvent::RatingsRead { .. } => {}
+            WorkerEvent::FilterValuesRead { .. } => {} // ADR 0022 S2: used from T337.
             WorkerEvent::MetadataRead { id, path, result }
                 if self
                     .editor

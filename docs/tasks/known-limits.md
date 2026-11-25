@@ -602,6 +602,11 @@ only if it is seen in use.)
   many images then may give an image `"no answer for …"` instead of ExifTool's message, and a
   stale line may show in a later error text. The values read are not affected. Older than T336,
   seen more often with batch reads. A task only if it is seen in use.
+- *An ExifTool message with `" - "` of its own* (T336, 2026-11-25): a batch read gives an image
+  the standard error lines whose part after the first `" - "` is its path; a message whose own
+  text has `" - "` before the path is not matched, and the image gets `"no answer for …"`
+  instead. ExifTool's usual "Error: … - <path>" lines are matched. A task only if it is seen in
+  use.
 
 ## LibRaw (`pw-libraw`)
 

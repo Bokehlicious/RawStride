@@ -24,6 +24,7 @@
 //! All metadata, edits and options (ADR 0007 I10e; T98):
 //! - [`MetadataWorker::read_metadata`] reads and reconciles all metadata of one image
 //!   ([`ExifTool::read_metadata`]) and answers with [`Event::MetadataRead`].
+//! - [`MetadataWorker::read_filter_values`] reads the reconciled filter values for many images.
 //! - [`MetadataWorker::write_edits`] writes the editor's edits through
 //!   [`ExifTool::write_edits_safely`] and answers with [`Event::EditsWritten`]. It fails as a
 //!   rating write does: [`WriteError::NoJournal`] without a setup, [`WriteError::ExifToolTooOld`]
@@ -89,7 +90,7 @@ use crate::template_file::TemplateFile;
 use crate::write_pool::{
     JobAnswer, Running, Ticket, VersionResult, WritePool, start_tool, write_key,
 };
-use crate::{ExifTool, Rating, Result, WriteError};
+use crate::{ExifTool, FilterValues, Rating, Result, WriteError};
 
 const REQUEST_CAPACITY: usize = 8;
 
@@ -158,6 +159,11 @@ pub enum SubmitError {
 
 #[derive(Debug)]
 pub enum Event {
+    /// One entry per image sent, in order, with each image's error as text.
+    FilterValuesRead {
+        id: RequestId,
+        values: Vec<(PathBuf, std::result::Result<FilterValues, String>)>,
+    },
     RatingsRead {
         id: RequestId,
         result: std::result::Result<HashMap<PathBuf, Rating>, String>,
@@ -229,6 +235,10 @@ enum Command {
 
 #[derive(Debug)]
 enum Request {
+    ReadFilterValues {
+        id: RequestId,
+        images: Vec<PathBuf>,
+    },
     Read {
         id: RequestId,
         images: Vec<PathBuf>,
@@ -350,6 +360,16 @@ impl MetadataWorker {
     /// restarts do not change it.
     pub fn exiftool_version(&self) -> Option<std::result::Result<ToolVersion, String>> {
         self.version.get().cloned()
+    }
+
+    /// Queues the filter's reconciled IPTC values for a batch of images (ADR 0022 S2-Q1).
+    pub fn read_filter_values(
+        &mut self,
+        images: Vec<PathBuf>,
+    ) -> std::result::Result<RequestId, SubmitError> {
+        let id = self.next_request_id();
+        self.submit(Request::ReadFilterValues { id, images })?;
+        Ok(id)
     }
 
     /// Queues a batch read without blocking. The bounded queue reports back-pressure explicitly.
@@ -958,6 +978,30 @@ fn handle(
 ) -> Event {
     let unavailable = || start_error.unwrap_or_else(|| "ExifTool worker is unavailable".into());
     match request {
+        Request::ReadFilterValues { id, images } => {
+            let values = match running {
+                Some(running) => running
+                    .tool
+                    .read_metadata_many(&images, options.fallback)
+                    .into_iter()
+                    .map(|(path, read)| {
+                        (
+                            path,
+                            read.map(|read| FilterValues::from_metadata(&read))
+                                .map_err(|e| e.to_string()),
+                        )
+                    })
+                    .collect(),
+                None => {
+                    let reason = unavailable();
+                    images
+                        .into_iter()
+                        .map(|image| (image, Err(reason.clone())))
+                        .collect()
+                }
+            };
+            Event::FilterValuesRead { id, values }
+        }
         Request::Read { id, images } => {
             let read = match running {
                 Some(running) => running
@@ -1458,6 +1502,34 @@ mod tests {
     }
 
     #[test]
+    fn filter_read_reports_start_errors_per_image_and_accepts_empty_requests() {
+        let program = std::env::temp_dir().join(format!(
+            "pw-metadata-missing-exiftool-{}",
+            std::process::id()
+        ));
+        let mut worker = MetadataWorker::start_with(&program.to_string_lossy(), &[], None).unwrap();
+        for images in [
+            vec![PathBuf::from("a.jpg"), PathBuf::from("b.arw")],
+            Vec::new(),
+        ] {
+            let id = worker.read_filter_values(images.clone()).unwrap();
+            let Event::FilterValuesRead {
+                id: received,
+                values,
+            } = next_event(&worker)
+            else {
+                panic!("expected filter values")
+            };
+            assert_eq!(id, received);
+            assert_eq!(images.len(), values.len());
+            for (image, (path, result)) in images.into_iter().zip(values) {
+                assert_eq!(path, image);
+                assert!(result.unwrap_err().contains("could not start"));
+            }
+        }
+    }
+
+    #[test]
     fn reports_exiftool_start_errors_asynchronously() {
         let journal = TempDir::new("start-errors-journal");
         let program = std::env::temp_dir().join(format!(
@@ -1494,6 +1566,7 @@ mod tests {
                 Ok(Event::RatingWritten { .. }) => panic!("unexpected write result"),
                 Ok(
                     other @ (Event::MetadataRead { .. }
+                    | Event::FilterValuesRead { .. }
                     | Event::OrientationWritten { .. }
                     | Event::EditsWritten { .. }
                     | Event::Moved { .. }
@@ -2540,6 +2613,7 @@ mod tests {
         fn id_of(event: &Event) -> RequestId {
             match event {
                 Event::RatingsRead { id, .. }
+                | Event::FilterValuesRead { id, .. }
                 | Event::RatingWritten { id, .. }
                 | Event::OrientationWritten { id, .. }
                 | Event::MetadataRead { id, .. }

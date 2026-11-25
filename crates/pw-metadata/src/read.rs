@@ -37,6 +37,7 @@
 //! `lr:hierarchicalSubject`; for a manufacturer RAW no IIM and no Exif, because the plan never
 //! writes the RAW file and its sidecar holds neither (§4.2).
 
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use serde_json::{Map, Value as Json};
@@ -148,102 +149,110 @@ impl ExifTool {
         let file = self.read_json(&image_args(image), image)?;
         let sidecars = find_sidecars(image)?;
 
-        let mut file_notices = Vec::new();
-        if let Some(path) = sidecars.with_extension {
-            file_notices.push(FileNotice::ExtSidecarIgnored(path));
-        }
-        let file_xmp = xmp_values(&file);
-        // The lists with qualifiers, `xmp:RatingPercent` and a flat `lr:hierarchicalSubject` are
-        // looked for in the primary XMP only, never in the camera XMP inside a RAW (ADR 0007 §6.3,
-        // §8).
-        let (primary, camera, qualified, xmp_present) = match kind {
-            FileKind::Raw => match sidecars.plain {
-                Some(path) => {
-                    let sidecar = self.read_json(&sidecar_args(&path), &path)?;
-                    (
-                        xmp_values(&sidecar),
-                        file_xmp,
-                        qualified_lists(&sidecar),
-                        xmp_present(&sidecar),
-                    )
-                }
-                None => (
-                    XmpRead::default(),
-                    file_xmp,
-                    Vec::new(),
-                    XmpPresent::default(),
-                ),
-            },
-            FileKind::Dng => {
-                if let Some(path) = sidecars.plain {
-                    file_notices.push(FileNotice::ForeignSidecarIgnored(path));
-                }
-                (
-                    file_xmp,
-                    XmpRead::default(),
-                    qualified_lists(&file),
-                    xmp_present(&file),
-                )
-            }
-            FileKind::Jpeg | FileKind::Tiff => (
-                file_xmp,
-                XmpRead::default(),
-                qualified_lists(&file),
-                xmp_present(&file),
-            ),
-        };
-        let (iim, iim_notice) = iim_read(&file, fallback);
-        file_notices.extend(iim_notice);
-
-        let primary_origin = if kind == FileKind::Raw {
-            Origin::XmpSidecar
-        } else {
-            Origin::XmpEmbedded
-        };
-        let unreadable: Vec<Notice> = primary
-            .unreadable
-            .into_iter()
-            .map(|(property, text)| (property, text, primary_origin))
-            .chain(
-                camera
-                    .unreadable
-                    .into_iter()
-                    .map(|(property, text)| (property, text, Origin::XmpEmbedded)),
-            )
-            .map(|(property, text, origin)| Notice::Unreadable {
-                property,
-                origin,
-                text,
-            })
-            .collect();
-
-        let exif = exif_fields(&file, fallback);
-        let camera_text = |name: &str| tag(&file, name).and_then(|json| exif_text(json, fallback));
-        let values = VariableValues::of(
+        let sidecar = sidecars
+            .raw_sidecar(kind)
+            .map(|path| self.read_json(&sidecar_args(path), path))
+            .transpose()?;
+        Ok(metadata_from_objects(
             image,
-            exif.date_time_original.as_deref(),
-            camera_text("Make").as_deref(),
-            camera_text("Model").as_deref(),
-        );
-        let state = file_state(kind, iim.as_ref(), &exif, &file, xmp_present);
-        let mut reconciled = reconcile(Readings {
+            &file,
+            sidecar.as_ref(),
+            sidecars,
             kind,
-            xmp: primary.values,
-            camera_xmp: camera.values,
-            iim,
-            exif,
+            fallback,
+        ))
+    }
+
+    /// Reads the same reconciled metadata as a single read, with one answer per input in order.
+    pub fn read_metadata_many(
+        &mut self,
+        images: &[PathBuf],
+        fallback: Fallback,
+    ) -> Vec<(PathBuf, Result<MetadataRead>)> {
+        let prepared: Vec<_> = images
+            .iter()
+            .map(|image| Ok((file_kind(image)?, find_sidecars(image)?)))
+            .collect();
+        let files = self.read_batch(
+            IMAGE_TAGS,
+            images
+                .iter()
+                .zip(&prepared)
+                .filter(|(_, info)| info.is_ok())
+                .map(|(image, _)| image.as_path()),
+        );
+        let sidecar_files = files.as_ref().map_err(Clone::clone).and_then(|_| {
+            self.read_batch(
+                &[],
+                prepared.iter().filter_map(|info| {
+                    let (kind, sidecars) = info.as_ref().ok()?;
+                    sidecars.raw_sidecar(*kind)
+                }),
+            )
         });
-        reconciled.notices.extend(unreadable);
-        for id in qualified {
-            reconciled.metadata.mark_qualified(id);
-            file_notices.push(FileNotice::ListWithQualifiers(id.to_string()));
+        images
+            .iter()
+            .zip(prepared)
+            .map(|(image, info)| {
+                let read = info.and_then(|(kind, sidecars)| {
+                    let file = batch_object(&files, image)?;
+                    let sidecar = sidecars
+                        .raw_sidecar(kind)
+                        .map(|path| batch_object(&sidecar_files, path))
+                        .transpose()?;
+                    Ok(metadata_from_objects(image, file, sidecar, sidecars, kind, fallback).0)
+                });
+                (image.clone(), read)
+            })
+            .collect()
+    }
+
+    fn read_batch<'a>(
+        &mut self,
+        tags: &[&str],
+        paths: impl Iterator<Item = &'a Path>,
+    ) -> std::result::Result<BatchAnswer, String> {
+        let mut sent = HashSet::new();
+        let mut args: Vec<String> = JSON_OPTIONS
+            .iter()
+            .chain(tags)
+            .map(|arg| arg.to_string())
+            .collect();
+        for path in paths {
+            let name = path.to_string_lossy();
+            if sent.insert(source_key(&name)) {
+                args.push(name.into_owned());
+            }
         }
-        let read = MetadataRead {
-            reconciled,
-            file_notices,
-            state,
+        if sent.is_empty() {
+            return Ok(BatchAnswer::default());
+        }
+        let answer = self.execute(&args).map_err(|error| match error {
+            Error::ExifTool(message) => message,
+            other => other.to_string(),
+        })?;
+        let (stdout, stderr) = answer.split_once(STDERR_MARKER).unwrap_or((&answer, ""));
+        let items: Vec<Json> = if stdout.trim().is_empty() {
+            Vec::new()
+        } else {
+            serde_json::from_str(stdout)
+                .map_err(|error| format!("could not read ExifTool's JSON array: {error}"))?
         };
-        Ok((read, values))
+        let mut objects = HashMap::new();
+        for item in items {
+            if let Json::Object(object) = item
+                && let Some(source) = object.get("SourceFile").and_then(Json::as_str)
+            {
+                let key = source_key(source);
+                if sent.contains(&key) {
+                    objects.insert(key, object);
+                }
+            }
+        }
+        Ok(BatchAnswer {
+            objects,
+            stderr: stderr.to_owned(),
+        })
     }
 
     /// Runs one JSON read and returns the object of its one file. No output means ExifTool could
@@ -276,6 +285,154 @@ impl ExifTool {
             _ => Err(unreadable("not a JSON array".to_string())),
         }
     }
+}
+
+#[derive(Default)]
+struct BatchAnswer {
+    objects: HashMap<String, Map<String, Json>>,
+    stderr: String,
+}
+
+fn source_key(text: &str) -> String {
+    let mut key = text.replace('\\', "/");
+    if cfg!(windows) {
+        key.make_ascii_lowercase();
+    }
+    key
+}
+
+fn batch_object<'a>(
+    answer: &'a std::result::Result<BatchAnswer, String>,
+    path: &Path,
+) -> Result<&'a Map<String, Json>> {
+    let answer = answer
+        .as_ref()
+        .map_err(|reason| Error::ExifTool(reason.clone()))?;
+    let key = source_key(&path.to_string_lossy());
+    answer.objects.get(&key).ok_or_else(|| {
+        let lines = answer
+            .stderr
+            .lines()
+            .filter(|line| {
+                let line = source_key(line);
+                // ExifTool appends " - <path>" to file diagnostics. Compare the
+                // entire suffix so relative names such as a.jpg and aa.jpg stay distinct.
+                match line.split_once(" - ") {
+                    Some((_, reported)) => reported == key,
+                    None => line.contains(&key),
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        Error::ExifTool(if lines.is_empty() {
+            format!("no answer for {}", path.display())
+        } else {
+            lines
+        })
+    })
+}
+
+fn metadata_from_objects(
+    image: &Path,
+    file: &Map<String, Json>,
+    sidecar: Option<&Map<String, Json>>,
+    sidecars: Sidecars,
+    kind: FileKind,
+    fallback: Fallback,
+) -> (MetadataRead, VariableValues) {
+    let mut file_notices = Vec::new();
+    if let Some(path) = sidecars.with_extension {
+        file_notices.push(FileNotice::ExtSidecarIgnored(path));
+    }
+    let file_xmp = xmp_values(file);
+    // The lists with qualifiers, `xmp:RatingPercent` and a flat `lr:hierarchicalSubject` are
+    // looked for in the primary XMP only, never in the camera XMP inside a RAW (ADR 0007 §6.3,
+    // §8).
+    let (primary, camera, qualified, xmp_present) = match kind {
+        FileKind::Raw => match sidecar {
+            Some(sidecar) => (
+                xmp_values(sidecar),
+                file_xmp,
+                qualified_lists(sidecar),
+                xmp_present(sidecar),
+            ),
+            None => (
+                XmpRead::default(),
+                file_xmp,
+                Vec::new(),
+                XmpPresent::default(),
+            ),
+        },
+        FileKind::Dng => {
+            if let Some(path) = sidecars.plain {
+                file_notices.push(FileNotice::ForeignSidecarIgnored(path));
+            }
+            (
+                file_xmp,
+                XmpRead::default(),
+                qualified_lists(file),
+                xmp_present(file),
+            )
+        }
+        FileKind::Jpeg | FileKind::Tiff => (
+            file_xmp,
+            XmpRead::default(),
+            qualified_lists(file),
+            xmp_present(file),
+        ),
+    };
+    let (iim, iim_notice) = iim_read(file, fallback);
+    file_notices.extend(iim_notice);
+
+    let primary_origin = if kind == FileKind::Raw {
+        Origin::XmpSidecar
+    } else {
+        Origin::XmpEmbedded
+    };
+    let unreadable: Vec<Notice> = primary
+        .unreadable
+        .into_iter()
+        .map(|(property, text)| (property, text, primary_origin))
+        .chain(
+            camera
+                .unreadable
+                .into_iter()
+                .map(|(property, text)| (property, text, Origin::XmpEmbedded)),
+        )
+        .map(|(property, text, origin)| Notice::Unreadable {
+            property,
+            origin,
+            text,
+        })
+        .collect();
+
+    let exif = exif_fields(file, fallback);
+    let camera_text = |name: &str| tag(file, name).and_then(|json| exif_text(json, fallback));
+    let values = VariableValues::of(
+        image,
+        exif.date_time_original.as_deref(),
+        camera_text("Make").as_deref(),
+        camera_text("Model").as_deref(),
+    );
+    let state = file_state(kind, iim.as_ref(), &exif, file, xmp_present);
+    let mut reconciled = reconcile(Readings {
+        kind,
+        xmp: primary.values,
+        camera_xmp: camera.values,
+        iim,
+        exif,
+    });
+    reconciled.notices.extend(unreadable);
+    for id in qualified {
+        reconciled.metadata.mark_qualified(id);
+        file_notices.push(FileNotice::ListWithQualifiers(id.to_string()));
+    }
+    let read = MetadataRead {
+        reconciled,
+        file_notices,
+        state,
+    };
+    (read, values)
 }
 
 /// The [`FileState`] of a file of `kind` with the IIM `iim` (`None` when it has no readable IIM
@@ -364,6 +521,16 @@ struct Sidecars {
     plain: Option<PathBuf>,
     /// `<basename>.<ext>.xmp`.
     with_extension: Option<PathBuf>,
+}
+
+impl Sidecars {
+    fn raw_sidecar(&self, kind: FileKind) -> Option<&Path> {
+        if kind == FileKind::Raw {
+            self.plain.as_deref()
+        } else {
+            None
+        }
+    }
 }
 
 /// The `<basename>.xmp` sidecar of `image` with its name as stored in the folder (found without

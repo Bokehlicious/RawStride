@@ -11,13 +11,13 @@
 
 use std::path::{Path, PathBuf};
 
-use pw_metadata::ExifTool;
 use pw_metadata::date::IptcDate;
 use pw_metadata::iim::{CodedCharset, Fallback};
 use pw_metadata::read::{FileNotice, MetadataRead};
 use pw_metadata::reconcile::{FileKind, IimDigest};
 use pw_metadata::value::{ConflictRule, LangAlt, Origin, StructValue, Value};
 use pw_metadata::write_plan::{ExifPresent, XmpPresent};
+use pw_metadata::{ExifTool, FilterValues};
 
 /// The small baseline JPEG of `crates/pw-thumbcache/src/jpeg_fixture.rs`, copied.
 const SMALL: &[u8] = &[
@@ -618,6 +618,217 @@ fn an_embedded_keyword_with_a_qualifier_is_marked() {
         read.file_notices
     );
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn batch_reads_match_individual_reads_in_a_mixed_folder() {
+    let mut et = exiftool();
+    let dir = temp_dir("mixed-batch");
+    let images = [
+        "xmp.jpg",
+        "iim.jpg",
+        "TN0001.ARW",
+        "TN0002.ARW",
+        "räv här.jpg",
+    ]
+    .map(|name| dir.join(name));
+    for file in [&images[0], &images[1], &images[4]] {
+        std::fs::write(file, SMALL).unwrap();
+    }
+    for file in [&images[2], &images[3]] {
+        std::fs::write(file, b"not really a raw file").unwrap();
+    }
+    write(
+        &mut et,
+        &images[0],
+        &[
+            "-XMP-dc:Title=Morning",
+            "-XMP-dc:Subject=sun",
+            "-XMP-photoshop:City=Lund",
+        ],
+    );
+    write(
+        &mut et,
+        &images[1],
+        &[
+            "-IPTC:CodedCharacterSet=UTF8",
+            "-IPTC:City=Malmö",
+            "-IPTC:Keywords=a",
+        ],
+    );
+    write(
+        &mut et,
+        &dir.join("TN0001.xmp"),
+        &["-XMP-photoshop:City=Oslo"],
+    );
+    let batch = et.read_metadata_many(&images, Fallback::Windows1252);
+    assert_eq!(batch.len(), images.len());
+    for ((path, result), image) in batch.into_iter().zip(&images) {
+        assert_eq!(&path, image);
+        let read = result.unwrap();
+        assert_eq!(read, read_file(&mut et, image));
+        if image == &images[1] {
+            let values = FilterValues::from_metadata(&read);
+            assert_eq!(values.city, ["Malmö"]);
+            assert_eq!(values.keywords, ["a"]);
+        }
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn batch_reads_isolate_errors_and_preserve_duplicate_paths() {
+    let mut et = exiftool();
+    let (dir, first) = jpeg("batch-errors");
+    let last = dir.join("last.jpg");
+    std::fs::write(&last, SMALL).unwrap();
+    let first_read = read_file(&mut et, &first);
+    let last_read = read_file(&mut et, &last);
+    let fallback = Fallback::Windows1252;
+    for invalid in [dir.join("missing.jpg"), dir.join("unsupported.txt")] {
+        let images = [first.clone(), invalid.clone(), last.clone()];
+        let results = et.read_metadata_many(&images, fallback);
+        assert_eq!(
+            results.iter().map(|(path, _)| path).collect::<Vec<_>>(),
+            images.iter().collect::<Vec<_>>()
+        );
+        assert_eq!(results[0].1.as_ref().unwrap(), &first_read);
+        if invalid.ends_with("missing.jpg") {
+            assert!(
+                matches!(&results[1].1, Err(pw_metadata::Error::ExifTool(reason)) if reason.contains("missing.jpg"))
+            );
+        } else {
+            assert!(matches!(
+                &results[1].1,
+                Err(pw_metadata::Error::Unsupported(_))
+            ));
+        }
+        assert_eq!(results[2].1.as_ref().unwrap(), &last_read);
+    }
+    let missing = [dir.join("missing-one.jpg"), dir.join("missing-two.jpg")];
+    let results = et.read_metadata_many(&missing, fallback);
+    assert_eq!(results.len(), 2);
+    for ((path, result), expected) in results.into_iter().zip(missing) {
+        assert_eq!(path, expected);
+        let error = result.unwrap_err().to_string();
+        assert!(error.contains(expected.file_name().unwrap().to_str().unwrap()));
+        assert!(!(error.contains("missing-one") && error.contains("missing-two")));
+    }
+    let short = dir.join("a.jpg");
+    let long = dir.join("aa.jpg");
+    let images = [short.clone(), first.clone(), long.clone()];
+    let results = et.read_metadata_many(&images, fallback);
+    assert_eq!(results.len(), images.len());
+    for ((path, result), expected) in results.into_iter().zip(&images) {
+        assert_eq!(&path, expected);
+        if path == first {
+            assert_eq!(result.unwrap(), first_read);
+        } else {
+            let pw_metadata::Error::ExifTool(message) = result.unwrap_err() else {
+                panic!("expected ExifTool's missing-file message");
+            };
+            let message = message.replace('\\', "/").to_ascii_lowercase();
+            let other = if path == short { &long } else { &short };
+            assert!(message.contains("file not found"), "{message}");
+            for (file, present) in [(&path, true), (other, false)] {
+                let file = file
+                    .to_string_lossy()
+                    .replace('\\', "/")
+                    .to_ascii_lowercase();
+                assert_eq!(message.contains(&file), present, "{message}");
+            }
+        }
+    }
+    let repeated = et.read_metadata_many(&[first.clone(), first.clone()], fallback);
+    assert_eq!(repeated.len(), 2);
+    for (path, result) in repeated {
+        assert_eq!(path, first);
+        assert_eq!(result.unwrap(), first_read);
+    }
+    assert!(et.read_metadata_many(&[], fallback).is_empty());
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+#[ignore = "timing: needs PW_FILTER_TIMING_DIR; run with --ignored --nocapture"]
+fn the_filter_read_of_a_real_folder() {
+    use std::time::{Duration, Instant};
+
+    let folder = std::env::var_os("PW_FILTER_TIMING_DIR")
+        .expect("set PW_FILTER_TIMING_DIR to the image folder to measure");
+    let mut images: Vec<_> = std::fs::read_dir(folder)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| path.is_file() && pw_metadata::supports_rating(path))
+        .collect();
+    images.sort();
+    let first: Vec<_> = images.iter().take(50).cloned().collect();
+    let count = first.len() as u32;
+    assert!(
+        count > 0,
+        "PW_FILTER_TIMING_DIR contains no supported images"
+    );
+    let mut et = exiftool();
+    let fallback = Fallback::Windows1252;
+    let mut times = [Duration::ZERO; 3];
+    let mut batches = Vec::new();
+    for time in &mut times {
+        let start = Instant::now();
+        let batch = et.read_metadata_many(&first, fallback);
+        *time = start.elapsed();
+        batches.push(batch);
+    }
+    times.sort();
+    println!(
+        "First {count} images, batch median of three: {:?}, {:?} per image",
+        times[1],
+        times[1] / count
+    );
+    let start = Instant::now();
+    let single: Vec<_> = first
+        .iter()
+        .map(|path| et.read_metadata(path, fallback))
+        .collect();
+    let elapsed = start.elapsed();
+    println!(
+        "First {count} images, individual reads: {elapsed:?}, {:?} per image",
+        elapsed / count
+    );
+    let start = Instant::now();
+    let mut slowest = Duration::ZERO;
+    let mut failures = Vec::new();
+    for chunk in images.chunks(50) {
+        let chunk_start = Instant::now();
+        let batch = et.read_metadata_many(chunk, fallback);
+        slowest = slowest.max(chunk_start.elapsed());
+        assert_eq!(batch.len(), chunk.len());
+        for (path, result) in batch {
+            if let Err(error) = result {
+                failures.push((path, error));
+            }
+        }
+    }
+    println!(
+        "{} images in chunks of 50: {:?} total, {slowest:?} slowest chunk, {} failed",
+        images.len(),
+        start.elapsed(),
+        failures.len()
+    );
+    for (path, error) in failures {
+        println!("{}: {error}", path.display());
+    }
+    for batch in batches {
+        assert_eq!(batch.len(), first.len());
+        for ((path, result), (expected, read)) in batch.into_iter().zip(first.iter().zip(&single)) {
+            assert_eq!(&path, expected);
+            assert_eq!(
+                result.as_ref().ok().map(FilterValues::from_metadata),
+                read.as_ref().ok().map(FilterValues::from_metadata),
+                "{}",
+                path.display()
+            );
+        }
+    }
 }
 
 /// A missing file is the error ExifTool reports; an unknown extension is `Unsupported`.
