@@ -6,7 +6,8 @@
   dependency by this ADR. Each step in §5 becomes its own task, with its own approval and commit.
   W1's questions W1-Q1–W1-Q9 answered by the owner on 2026-11-24, all as proposed (§4.1); W2's
   W2-Q1–W2-Q8 the same day, all as proposed (§4.2); W3's
-  W3-Q1–W3-Q8 the same day, all as proposed (§4.3).
+  W3-Q1–W3-Q8 the same day, all as proposed (§4.3). W3's hand check on 2026-11-25 set the
+  sharpening's defaults and changed A-Q8, W3-Q1, W3-Q5 and W3-Q6 (§4.3, "W3's hand check").
 - Date: 2026-11-18
 - Related:
   - ADR 0006 §2 (decode settings identical everywhere; the view already uses PPG instead of its
@@ -81,7 +82,7 @@ A prerequisite: `Session::render_region_with` fails on every RAF file tried (bac
 - **It is always visible that an adjustment is on.** The preview's overlay shows a short mark
   for each active adjustment (for example "+1 EV", "WB auto", "USM", "R"), in the same way the
   source is always stated (G1). An adjustment that is on but does not apply to what is shown (for
-  example sharpening at 100 %, A-Q8, or exposure in JPEG mode, A-Q9) keeps its mark, shown as
+  example exposure in JPEG mode, A-Q9) keeps its mark, shown as
   paused (for example dimmed); it applies again as soon as the view allows it, without a key.
 - **It is off by default and is never saved** per image or in `settings.txt` (A-Q2):
   - a value taken from one image is reset when another image is shown: the **manual exposure**
@@ -165,15 +166,17 @@ A prerequisite: `Session::render_region_with` fails on every RAF file tried (bac
 
 ### 3.3 Sharpening in the view (unsharp mask)
 
-- A key (A-Q3; **U**, W3-Q5) turns sharpening on and off. It is applied **last on the worker**, to the view at
-  screen resolution after the downscale (sharpening before a reduction is mostly lost), and
-  before the conversion to the monitor profile (ADR 0016).
+- A key (A-Q3; **U**, W3-Q5) and a button "USM" in the status bar, after the RAW/JPEG control
+  (W3-Q5, owner 2026-11-25), turn sharpening on and off. It is applied **last on the worker**, to
+  the view at screen resolution after the downscale (sharpening before a reduction is mostly
+  lost), and before the conversion to the monitor profile (ADR 0016).
 - On luminance only, so no colour fringes are added.
-- Three settings: amount, radius (px) and threshold (levels). Defaults [T, set in the hand check]:
-  amount 60 %, radius 0.6 px, threshold 2.
-- **Not at 100 % and above** (A-Q8): there the user judges the file's own pixels, and there is no
-  reduction to make up for. Sharpening stays on, its mark "USM" is shown as paused (§2.1), and it
-  applies again when the user zooms out.
+- Three settings: amount, radius (px) and threshold (levels). Defaults (set in the owner's hand
+  check, 2026-11-25): amount 80 %, radius 0.8 px, threshold 2.
+- **At every zoom level** (A-Q8, changed by the owner on 2026-11-25): at 100 % and above too,
+  since the user often judges sharpness there, and the key and the button make it a visible
+  choice that is undone at once. The views above 100 % are the 100 % views drawn larger, so they
+  are sharpened with them; the mark "USM" is never paused.
 - Cost [T]: a separable Gaussian blur and a difference on ≈ 8 Mpix (4K) is a few milliseconds on
   several threads; it is done in the view core as plain, testable Rust (GR11). A GPU shader is
   considered only if the measurement fails V1.
@@ -293,7 +296,7 @@ A prerequisite: `Session::render_region_with` fails on every RAF file tried (bac
 | A-Q5 | Fine view prefetched for neighbours? | **Changed:** only the current image in W2; +1 in the direction of travel is added only if W2's measurement shows that V1 and V4 (not V8) hold while a fine render runs, since a LibRaw render cannot be cancelled (§3.1) |
 | A-Q6 | Focus marking with or without the adjustments? | Without (as proposed): the focus job renders with ADR 0006 §2's settings, so the marking never changes with a display setting (§2.1) |
 | A-Q7 | Filter, linear light or gamma, and the crate shared with ADR 0025's `pw-export`? | Lanczos-3 in linear light, clamped to 0–255; **added:** in a new workspace crate without dependencies, 8- and 16-bit, used by `pw-viewcore` and `pw-export`; the dependency lines approved (§3.2) |
-| A-Q8 | Sharpening at 100 % and above? | Off (as proposed); **added:** the mark "USM" is shown as paused, and sharpening applies again when the user zooms out (§3.3) |
+| A-Q8 | Sharpening at 100 % and above? | Off (as proposed); **added:** the mark "USM" is shown as paused, and sharpening applies again when the user zooms out (§3.3). **Changed by the owner on 2026-11-25** (W3's hand check): sharpening applies at every zoom level, 100 % and above included, and the mark is never paused (§3.3) |
 | A-Q9 | Exposure in JPEG mode (a gain on 8-bit data)? | No, for exposure and shadows (as proposed); **added:** the mark is shown as paused in JPEG mode (§2.1) |
 | A-Q10 | Shadow lift: on the 8-bit view, or in the render? | On the 8-bit view first; moved into the render only if the hand check sees banding that hides detail (as proposed, §3.4) |
 | A-Q11 | Auto exposure's rule? | 99.9th percentile of the brightest channel at −1/3 EV (as proposed); **added:** rounded down to 1/3 EV, limited to −3 to +3 EV, 0 EV when more than 0.1 % is clipped in the RAW; tuned in the hand check (§3.4) |
@@ -392,13 +395,13 @@ the focus marking do not change (§2.1): they are made from the file's data, not
 
 | # | Question | Answer |
 |---|---|---|
-| W3-Q1 | Where it applies | Last on the worker, after the reduction and before the conversion to the monitor profile (§3.3, W1-Q4), to every view below 100 % made on the worker: the reduced view, the fine view, `Scaled`, and the half-size view at exactly 50 % (drawn at 1:1). In RAW and JPEG mode, for JPEG and TIFF files, and on both sides of the compare. At 100 % and above (`Zoom`, `Ring`) it is paused (A-Q8). During a zoom gesture the stand-in (the mipmapped half-size view, W1-Q3) is drawn unsharpened, and the mark counts as waiting. **Clarified by the owner 2026-11-24, after T316's cold read:** the half-size view a gesture asks for is made sharpened (it is drawn at 1:1 at 50 % when the gesture ends; an unsharpened one would be rendered twice there and make the mark flip); during the gesture the view already there is drawn, sharpened or not, and the mark shows waiting |
+| W3-Q1 | Where it applies | Last on the worker, after the reduction and before the conversion to the monitor profile (§3.3, W1-Q4), to every view below 100 % made on the worker: the reduced view, the fine view, `Scaled`, and the half-size view at exactly 50 % (drawn at 1:1). In RAW and JPEG mode, for JPEG and TIFF files, and on both sides of the compare. At 100 % and above (`Zoom`, `Ring`) it is paused (A-Q8). During a zoom gesture the stand-in (the mipmapped half-size view, W1-Q3) is drawn unsharpened, and the mark counts as waiting. **Clarified by the owner 2026-11-24, after T316's cold read:** the half-size view a gesture asks for is made sharpened (it is drawn at 1:1 at 50 % when the gesture ends; an unsharpened one would be rendered twice there and make the mark flip); during the gesture the view already there is drawn, sharpened or not, and the mark shows waiting. **Changed by the owner on 2026-11-25** (W3's hand check, A-Q8): the 100 % views (`Zoom`, `Ring`) are sharpened too, so every zoom level is; nothing is paused (§3.3) |
 | W3-Q2 | How it is computed | On luminance only, so no colour fringes are added: the luminance Y′ = 0.2126 R′ + 0.7152 G′ + 0.0722 B′ of the sRGB-encoded values (not linear light), blurred with a separable Gaussian whose sigma is the radius; where the difference between Y′ and the blur is below the threshold (levels, 0–255) nothing changes, elsewhere the amount times the difference is added equally to R′, G′ and B′, each clamped to 0–255. The edges repeat the edge pixels, so an image of 1×1 or 1×n works. A module of its own in `pw-viewcore`, plain Rust, no new dependency |
 | W3-Q3 | Its speed | The first task times it on a screen-sized view (3840×2160 and the owner's 1920×1200). If it takes more than 10 ms on one thread, the rows are split over threads with `std::thread::scope` in the same task (as T311) |
 | W3-Q4 | The cache, and what the user sees when it is turned on or off | The view's key gains the sharpening state (on or off, and the three values), so turning it on or off or changing a value makes new views. The drawn view stays until the new one is ready and is replaced in one swap (V2). The unsharpened view is kept as the memory budget allows, so turning sharpening off shows it at once. Cost accepted: turning sharpening on renders the shown view again (about 0.3 s for 61 Mpix at fit, about 1.2 s with fine details on); keeping the unsharpened pixels in memory to sharpen them in milliseconds is not done (more memory under V8, more code) |
-| W3-Q5 | Key and menu | The key **U** (free in the key map), in the key map (U8) so it can be changed, and View ▸ Show Sharpening, right after Show Fine Details. It lasts for the session and is not saved (A-Q2) |
-| W3-Q6 | The mark, and when it goes wrong | "USM" in the row of adjustment marks (W2-Q5), after "Fine"; dimmed while paused (100 % and above). The hover text names the key and the three values (for example "Sharpening (U): amount 60%, radius 0.6 px, threshold 2."). Sharpening can fail only on inconsistent image data; such a view then fails as any render does and shows today's error line. Nothing new is shown to the user |
-| W3-Q7 | The settings | A new Settings page **Preview** (W7 adds the thresholds and colours of §3.7 to it) with a section Sharpening: amount 10–300 %, radius 0.3–2.0 px, threshold 0–20 levels, and a button Restore Defaults. Defaults 60 %, 0.6 px and 2 [T, set in the owner's hand check]. Saved in `settings.txt`; a value in the file that cannot be read or lies outside its range gives that value's default. A changed value applies when the slider is released (or the field is left), not on every frame of a drag, since each change renders the views again |
+| W3-Q5 | Key and menu | The key **U** (free in the key map), in the key map (U8) so it can be changed, and View ▸ Show Sharpening, right after Show Fine Details. It lasts for the session and is not saved (A-Q2). **Added by the owner on 2026-11-25** (W3's hand check): a button "USM" with the key map's key (for example "USM (U)") in the status bar, right after the RAW/JPEG control, shown and disabled as that control is; it is drawn as selected while sharpening is on, and its hover text is the mark's (W3-Q6) |
+| W3-Q6 | The mark, and when it goes wrong | "USM" in the row of adjustment marks (W2-Q5), after "Fine"; dimmed while paused (100 % and above). The hover text names the key and the three values (for example "Sharpening (U): amount 60%, radius 0.6 px, threshold 2."). Sharpening can fail only on inconsistent image data; such a view then fails as any render does and shows today's error line. Nothing new is shown to the user. **Changed by the owner on 2026-11-25** (W3's hand check, A-Q8): the mark is never dimmed for sharpening, which applies at every zoom level; it still counts as waiting during a gesture or while its view is made |
+| W3-Q7 | The settings | A new Settings page **Preview** (W7 adds the thresholds and colours of §3.7 to it) with a section Sharpening: amount 10–300 %, radius 0.3–2.0 px, threshold 0–20 levels, and a button Restore Defaults. Defaults 80 %, 0.8 px and 2 (set in the owner's hand check, 2026-11-25; first 60 %, 0.6 px and 2). Saved in `settings.txt`; a value in the file that cannot be read or lies outside its range gives that value's default. A changed value applies when the slider is released (or the field is left), not on every frame of a drag, since each change renders the views again |
 | W3-Q8 | The reset of every adjustment (A-Q3; left from W2 by T314) | The key **Backspace** (free in the key map), in the key map, and View ▸ Reset Adjustments: it turns off every adjustment that is on (today fine details and sharpening; later exposure and white balance, W5, W6). The menu item is greyed while no adjustment is on |
 
 After the chain the owner measures with `latency.ps1` with sharpening on, at fit (V1, V4), and
@@ -426,6 +429,27 @@ sharpening. The check is the owner's `latency.ps1` with sharpening on, at fit an
 half-size view, which is sharpened whole whatever the screen's size); if V1 or V4 fails, a GPU
 step is proposed as a question of its own before W5. The 3840×2160 timings weigh less: the owner
 expects a faster CPU by the time a 4K screen is used.
+
+The measurement (reviewer, 2026-11-24, release build of T318's commit, 1920×1200): at fit,
+the next image's first change 5.4 ms with sharpening on and 5.5 ms off, and at 41 % (exact 50 %
+cannot be reached with the keys) 5.5 and 5.4 ms; V1 and V4 hold, so sharpening stays on the CPU.
+At 51.2 % the next image takes about 155–180 ms with sharpening on and off alike: not caused by
+sharpening (`backlog.md`, Technical work).
+
+**W3's hand check (owner, 2026-11-25):** approved, with these changes:
+
+- The defaults are amount 80 %, radius 0.8 px and threshold 2 (§3.3, W3-Q7); 60 % was too weak.
+- Sharpening applies at every zoom level, 100 % and above included (A-Q8, W3-Q1, W3-Q6, §3.3).
+- A button "USM" in the status bar, after the RAW/JPEG control (W3-Q5).
+- Found in the hand check: between about 51 % and 99 %, the pixels move when sharpening is
+  turned on or off. Sharpening itself does not move them (the blur is symmetric); the views there
+  (`Scaled`) are the visible region reduced on the worker, and the likely cause is that on and
+  off draw two views whose reduction starts at different places (not proven). Found out and
+  fixed in a task of its own, together with the 51.2 % stepping time above, which concerns the
+  same views.
+
+The tasks: T320 (the defaults), T321 (sharpening at 100 % and above), T322 (the pixels that
+move between 50 % and 100 %, and the stepping time there), T323 (the button "USM").
 
 ## 5. Steps
 
