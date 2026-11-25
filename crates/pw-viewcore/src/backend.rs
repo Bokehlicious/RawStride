@@ -4,6 +4,7 @@
 use std::fmt;
 use std::path::Path;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::geometry::{ImageSize, Rect};
 
@@ -63,6 +64,48 @@ impl DecodeError {
             damaged: false,
             no_embedded_jpeg: true,
         }
+    }
+}
+
+/// The text of the error of a render that a [`Stop`] ended (T328).
+const CANCELLED_TEXT: &str = "cancelled: the render was no longer wanted";
+
+impl DecodeError {
+    /// A render that its [`Stop`] ended (T328): not a failure of the file. It has no field of its
+    /// own (the struct is built as a literal elsewhere); [`is_cancelled`](Self::is_cancelled)
+    /// compares the constant text.
+    pub fn cancelled() -> DecodeError {
+        DecodeError::new(CANCELLED_TEXT)
+    }
+
+    /// Whether this is [`cancelled`](Self::cancelled)'s error.
+    pub fn is_cancelled(&self) -> bool {
+        !self.damaged && !self.no_embedded_jpeg && self.message == CANCELLED_TEXT
+    }
+}
+
+/// A flag the core sets to end a render that is no longer wanted (T328). Clones share the flag.
+#[derive(Clone, Debug, Default)]
+pub struct Stop(Arc<AtomicBool>);
+
+impl Stop {
+    pub fn new() -> Stop {
+        Stop::default()
+    }
+
+    /// Asks the render to end.
+    pub fn stop(&self) {
+        self.0.store(true, Ordering::Relaxed);
+    }
+
+    /// Clears the flag again: the render is wanted again before it ended (T328). A render that
+    /// has already ended cancelled stays cancelled.
+    pub fn resume(&self) {
+        self.0.store(false, Ordering::Relaxed);
+    }
+
+    pub fn is_stopped(&self) -> bool {
+        self.0.load(Ordering::Relaxed)
     }
 }
 
@@ -420,6 +463,37 @@ pub trait Backend: Send + Sync + 'static {
     /// Exactly the region `r` at full resolution (RAW: demosaiced with PPG), before the
     /// conversion to the display ([`to_display`](Self::to_display)).
     fn render_region(&self, session: &mut Self::Session, r: Rect) -> Result<Rgb, DecodeError>;
+
+    /// Like [`render_half`](Self::render_half), and ends early with
+    /// [`DecodeError::cancelled`] when `stop` is set (T328). The default does not look at `stop`.
+    /// A backend that stops a render while its decoder works may spend the session
+    /// ([`session_usable`](Self::session_usable)).
+    fn render_half_stoppable(
+        &self,
+        session: &mut Self::Session,
+        _stop: &Stop,
+    ) -> Result<Rgb, DecodeError> {
+        self.render_half(session)
+    }
+
+    /// Like [`render_region`](Self::render_region), stoppable as
+    /// [`render_half_stoppable`](Self::render_half_stoppable) (T328).
+    fn render_region_stoppable(
+        &self,
+        session: &mut Self::Session,
+        r: Rect,
+        _stop: &Stop,
+    ) -> Result<Rgb, DecodeError> {
+        self.render_region(session, r)
+    }
+
+    /// Whether the session can render again. False after a stop (or a failure) made the decoder
+    /// free its data. The core asks it only after a cancelled render, and then drops such a
+    /// session and opens the file again (T328); a session spent by another failure is kept
+    /// (`docs/tasks/known-limits.md`).
+    fn session_usable(&self, _session: &Self::Session) -> bool {
+        true
+    }
 
     /// Converts a rendered and reduced view of the opened image to the display (the monitor
     /// profile), after the reduction (ADR 0016, ADR 0027 §3.2, W1-Q4). The default leaves it

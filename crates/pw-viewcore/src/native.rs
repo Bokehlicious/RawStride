@@ -27,7 +27,7 @@ use pw_libraw::{DAMAGED, Demosaic, Session};
 use pw_raw::ExifColourSpace;
 
 use crate::backend::{
-    Backend, ClippingMap, DecodeError, Rgb, Source, Statistics, StatisticsOrigin,
+    Backend, ClippingMap, DecodeError, Rgb, Source, Statistics, StatisticsOrigin, Stop,
 };
 use crate::geometry::{ImageSize, Rect};
 use crate::scale;
@@ -146,6 +146,9 @@ pub struct JpegSession {
 pub use crate::geometry::flip_of_orientation;
 
 fn raw_error(e: pw_libraw::Error) -> DecodeError {
+    if e.is_cancelled() {
+        return DecodeError::cancelled();
+    }
     let message = e.0;
     if message.contains(DAMAGED) {
         DecodeError::damaged(message)
@@ -448,6 +451,48 @@ impl Backend for NativeBackend {
                 scale::crop(img, r.x, r.y, r.w, r.h)
                     .ok_or_else(|| DecodeError::new(format!("region {r:?} is outside the TIFF")))
             }
+        }
+    }
+
+    /// A RAW render is stopped between LibRaw's stages; a stop while LibRaw works spends the
+    /// session (T327). JPEG and TIFF renders are short and are not stopped.
+    fn render_half_stoppable(
+        &self,
+        session: &mut NativeSession,
+        stop: &Stop,
+    ) -> Result<Rgb, DecodeError> {
+        match session {
+            NativeSession::Raw(s, _) => s
+                .render_half_stoppable(&|| stop.is_stopped())
+                .map(rgb_raw)
+                .map_err(raw_error),
+            _ => self.render_half(session),
+        }
+    }
+
+    /// As [`render_half_stoppable`](Self::render_half_stoppable), for a region.
+    fn render_region_stoppable(
+        &self,
+        session: &mut NativeSession,
+        r: Rect,
+        stop: &Stop,
+    ) -> Result<Rgb, DecodeError> {
+        match session {
+            NativeSession::Raw(s, _) => {
+                let r = pw_libraw::Rect::new(r.x, r.y, r.w, r.h);
+                s.render_region_stoppable(r, MARGIN, Demosaic::Ppg, &|| stop.is_stopped())
+                    .map(rgb_raw)
+                    .map_err(raw_error)
+            }
+            _ => self.render_region(session, r),
+        }
+    }
+
+    /// A RAW session is spent after a stopped or failed render (T327).
+    fn session_usable(&self, session: &NativeSession) -> bool {
+        match session {
+            NativeSession::Raw(s, _) => !s.is_spent(),
+            _ => true,
         }
     }
 

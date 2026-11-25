@@ -599,7 +599,10 @@ avoids the first for X-Trans by refusing a box under 512 px before LibRaw is cal
   every exception in `dcraw_process` (a stop, `IO_CORRUPT`, out of memory), so the unpacked RAW
   data is gone. Since T327 the shim marks such a session spent (`Session::is_spent`), and every
   later render, `statistics` and `clipping_map` fails with a `spent:` error without calling
-  LibRaw; outside T328's stops, nothing opens the file again by itself. Only the stop
+  LibRaw; outside T328's stops, nothing opens the file again by itself. The view core (T328's
+  review, 2026-11-25) drops a spent session only after a cancelled render: after another failed
+  render it goes back to its slot with its bytes counted, and a later statistics, clipping map or
+  focus job on it gets "none", which is kept for the image. Only the stop
   case is tested: no file in `PW_TESTDATA` and no generated file makes `dcraw_process` fail
   otherwise (a corrupt file is refused at the open, the X-Trans box under 512 px by the shim).
 - *A half-size render of an X-Trans file is not deterministic* (found in T327, 2026-11-25, not

@@ -602,7 +602,13 @@ image is no longer wanted** (a step to another image, a new folder); a new expos
 same image does not stop the render under way, which finishes first (stop plus reopen would cost
 as much or more). LibRaw's `setCancelFlag()`, which might stop sooner, waits in `backlog.md`.
 At T328's cold read the owner added (2026-11-25): a change of display mode (RAW and the embedded
-JPEG of the same file) is the same image and stops nothing.
+JPEG of the same file) is the same image and stops nothing. At T328's review the owner decided
+(2026-11-25): a render stopped because its image was left has its stop cleared when the image is
+wanted again before the render ended (a step away and back); if LibRaw has already looked at the
+stop, the render is cancelled all the same. A release for a metadata write stops the render of
+that file's session, also of the current image, so the write does not wait for it; a render that
+comes back whole with its stop set is not used, and the view is made again after the write
+(accepted). A cancelled render adds no time to the render timings, also in an older folder.
 
 ## 5. Steps
 

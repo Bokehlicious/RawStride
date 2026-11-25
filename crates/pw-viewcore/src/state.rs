@@ -8,7 +8,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::backend::{
-    ClippingMap, DecodeError, FocusMap, ImageStatistics, Rgb, Source, Statistics,
+    ClippingMap, DecodeError, FocusMap, ImageStatistics, Rgb, Source, Statistics, Stop,
 };
 use crate::geometry::{self, ImageSize, Rect, RectF};
 use crate::sharpen::Sharpening;
@@ -334,6 +334,13 @@ pub struct Stats {
     /// How many times an image's focus map was made, and how long each took.
     pub focus_maps: u64,
     pub focus_ms: Vec<f64>,
+    /// Renders that a [`Stop`] was set for, once per job (T328).
+    pub stops: u64,
+    /// Renders that came back cancelled (T328): no view, no failure.
+    pub cancelled: u64,
+    /// Sessions dropped because a stopped render spent them (T328); the file is opened again
+    /// when it is wanted.
+    pub spent: u64,
 }
 
 /// How many clipping maps are kept: those of the images shown last (ADR 0017 U7b-Q8).
@@ -449,6 +456,36 @@ struct Inflight {
     bytes: u64,
 }
 
+/// The stop of a render under way, and what it was lent for (T328).
+#[derive(Debug)]
+struct StopEntry {
+    stop: Stop,
+    /// The wants whose requirement gave exactly the job's view when it was lent.
+    wants: Vec<Want>,
+    /// The stop is set now.
+    stopped: bool,
+    /// The stop has been set at least once (counted in `Stats::stops` once per job).
+    counted: bool,
+}
+
+/// Whether two views are the same view but for their sharpening.
+fn same_view(a: JobView, b: JobView) -> bool {
+    a.kind == b.kind && a.region == b.region && a.density_q == b.density_q
+}
+
+/// Whether two kinds of view are the same kind; a half-size and a reduced view count as one (a
+/// zoom gesture asks for the first where the plan asks for the second).
+fn same_kind(a: ViewKind, b: ViewKind) -> bool {
+    let one = |k: ViewKind| {
+        if k == ViewKind::Reduced {
+            ViewKind::Half
+        } else {
+            k
+        }
+    };
+    one(a) == one(b)
+}
+
 /// What a worker should do.
 #[derive(Debug)]
 pub(crate) enum Task<S> {
@@ -462,6 +499,8 @@ pub(crate) enum Task<S> {
         key: Key,
         view: JobView,
         session: S,
+        /// Set when the image is no longer wanted (T328).
+        stop: Stop,
     },
     Statistics {
         generation: u64,
@@ -592,6 +631,10 @@ pub(crate) struct State<S> {
     inflight: Vec<Inflight>,
     /// Jobs handed to a worker, with the generation they were handed out in.
     running: HashSet<(u64, Job)>,
+    /// The stop of each render in `running`, with what it was lent for (T328). Emptied only as
+    /// the jobs finish, so a new folder or list of files still finds the stops of what is under
+    /// way.
+    stops: HashMap<(u64, Job), StopEntry>,
     failed: HashMap<Key, DecodeError>,
     ever_resident: HashSet<(u64, Key)>,
     refused: HashSet<(u64, Key)>,
@@ -658,6 +701,7 @@ impl<S> State<S> {
             next_id: 1,
             inflight: Vec::new(),
             running: HashSet::new(),
+            stops: HashMap::new(),
             failed: HashMap::new(),
             ever_resident: HashSet::new(),
             refused: HashSet::new(),
@@ -1485,6 +1529,7 @@ impl<S> State<S> {
     }
 
     /// The jobs the plan asks for now, in order.
+    #[cfg(test)]
     pub fn plan(&self) -> Vec<Job> {
         self.plan_of(true)
     }
@@ -1492,7 +1537,13 @@ impl<S> State<S> {
     /// [`State::plan`]; with `fine` false without the fine view's want (so [`State::pick`] can
     /// tell an open asked only for the fine view).
     fn plan_of(&self, fine: bool) -> Vec<Job> {
-        let mut v = Vec::new();
+        self.plan_wants(fine).into_iter().map(|(j, _)| j).collect()
+    }
+
+    /// [`State::plan_of`] with the wants each render job was asked for under (every want whose
+    /// requirement gave exactly its view), for [`State::lend_render`] (T328).
+    fn plan_wants(&self, fine: bool) -> Vec<(Job, Vec<Want>)> {
+        let mut v: Vec<(Job, Vec<Want>)> = Vec::new();
         for (key, want) in self.wanted(false) {
             if !fine && want == Want::Fine {
                 continue;
@@ -1507,21 +1558,28 @@ impl<S> State<S> {
                 {
                     continue;
                 }
-                if !v.contains(&Job::Open(key)) {
-                    v.push(Job::Open(key));
+                if !v.iter().any(|(j, _)| *j == Job::Open(key)) {
+                    v.push((Job::Open(key), Vec::new()));
                 }
                 continue;
             }
             let Some(req) = self.req(key, want) else {
                 continue;
             };
+            let job = Job::Render(key, req.job);
+            if let Some((_, wants)) = v.iter_mut().find(|(j, _)| *j == job) {
+                if !wants.contains(&want) {
+                    wants.push(want);
+                }
+                continue;
+            }
+            // a want skipped here as satisfied has a sibling of the same view that is satisfied
+            // too (`satisfied` differs by want only for `Shown` during a gesture, when no other
+            // want is asked for), so no want of a pushed job is missed
             if self.satisfied(&req, want) {
                 continue;
             }
-            let job = Job::Render(key, req.job);
-            if !v.contains(&job) {
-                v.push(job);
-            }
+            v.push((job, vec![want]));
         }
         v
     }
@@ -1922,6 +1980,72 @@ impl<S> State<S> {
         }
     }
 
+    // ---------- stopping a render that is no longer wanted (T328) ----------
+
+    /// Sets the [`Stop`] of every render under way whose image is no longer wanted (owner,
+    /// 2026-11-25: never for a changed setting of the current image). A render is stopped when it
+    /// was lent in an older generation (a new folder or list of files), when its session is marked
+    /// for release, or when its image is not the current one (in either display mode) and the
+    /// full plan wants neither its view nor, under a want it was lent for, a view of the same
+    /// kind. A stopped render that is wanted again before it ends (a step away and back) has its
+    /// stop cleared (owner, 2026-11-25): if LibRaw has not looked at it yet, the render finishes.
+    /// Returns at once when no render is under way.
+    pub fn stop_unwanted(&mut self) {
+        if self.stops.is_empty() {
+            return;
+        }
+        let mut plan: Option<Vec<(Key, Want)>> = None;
+        let mut to_stop: Vec<(u64, Job)> = Vec::new();
+        let mut to_resume: Vec<(u64, Job)> = Vec::new();
+        for (id, entry) in &self.stops {
+            let Job::Render(key, view) = id.1 else {
+                continue;
+            };
+            if !self.running.contains(id) {
+                continue;
+            }
+            let unwanted =
+                if id.0 != self.generation || self.released.contains_key(&(id.0, key, view)) {
+                    true
+                } else if self.cur == Some(key.0) {
+                    false
+                } else {
+                    let plan = plan.get_or_insert_with(|| self.wanted(true));
+                    let exact = plan.iter().any(|(k, w)| {
+                        *k == key && self.req(*k, *w).is_some_and(|r| same_view(r.job, view))
+                    });
+                    let same_kind_of_want = entry.wants.iter().any(|w| {
+                        plan.contains(&(key, *w))
+                            && self
+                                .req(key, *w)
+                                .is_some_and(|r| same_kind(r.job.kind, view.kind))
+                    });
+                    !(exact || same_kind_of_want)
+                };
+            if unwanted && !entry.stopped {
+                to_stop.push(*id);
+            } else if !unwanted && entry.stopped {
+                to_resume.push(*id);
+            }
+        }
+        for id in to_stop {
+            if let Some(entry) = self.stops.get_mut(&id) {
+                entry.stop.stop();
+                entry.stopped = true;
+                if !entry.counted {
+                    entry.counted = true;
+                    self.stats.stops += 1;
+                }
+            }
+        }
+        for id in to_resume {
+            if let Some(entry) = self.stops.get_mut(&id) {
+                entry.stop.resume();
+                entry.stopped = false;
+            }
+        }
+    }
+
     // ---------- the workers' side ----------
 
     /// Picks the next task. The interactive worker only takes the current image in the current
@@ -1929,7 +2053,15 @@ impl<S> State<S> {
     pub fn pick(&mut self, interactive: bool) -> Option<Task<S>> {
         let ck = self.cur_key();
         let generation = self.generation;
-        let mut jobs = self.plan();
+        let planned = self.plan_wants(true);
+        let mut jobs: Vec<Job> = planned.iter().map(|(j, _)| *j).collect();
+        let wants_of = |job: Job| -> Vec<Want> {
+            planned
+                .iter()
+                .find(|(j, _)| *j == job)
+                .map(|(_, w)| w.clone())
+                .unwrap_or_default()
+        };
         // The statistics come first once they are due: the shown view and a wanted 100 % view of
         // the current image are on the screen by then (U7c-Q5).
         let mut first = 0;
@@ -2034,7 +2166,7 @@ impl<S> State<S> {
                         self.fine_failed.insert(key);
                         continue;
                     }
-                    if let Some(task) = self.lend_render(key, view, bytes) {
+                    if let Some(task) = self.lend_render(key, view, bytes, wants_of(job)) {
                         return Some(task);
                     }
                 }
@@ -2045,7 +2177,7 @@ impl<S> State<S> {
                         self.refused.insert((self.generation, key));
                         continue;
                     }
-                    if let Some(task) = self.lend_render(key, view, bytes) {
+                    if let Some(task) = self.lend_render(key, view, bytes, wants_of(job)) {
                         return Some(task);
                     }
                 }
@@ -2113,7 +2245,13 @@ impl<S> State<S> {
 
     /// Lends the session of `key` for a render of `view` (`bytes` its estimate), or `None` when
     /// the session is not there or is lent.
-    fn lend_render(&mut self, key: Key, view: JobView, bytes: u64) -> Option<Task<S>> {
+    fn lend_render(
+        &mut self,
+        key: Key,
+        view: JobView,
+        bytes: u64,
+        wants: Vec<Want>,
+    ) -> Option<Task<S>> {
         let generation = self.generation;
         let session = self.sessions.get_mut(&key)?.take()?;
         if let Some(path) = self.files.get(key.0) {
@@ -2122,6 +2260,16 @@ impl<S> State<S> {
         }
         self.lent.insert(key, generation);
         self.running.insert((generation, Job::Render(key, view)));
+        let stop = Stop::new();
+        self.stops.insert(
+            (generation, Job::Render(key, view)),
+            StopEntry {
+                stop: stop.clone(),
+                wants,
+                stopped: false,
+                counted: false,
+            },
+        );
         self.inflight.push(Inflight {
             generation,
             key,
@@ -2133,6 +2281,7 @@ impl<S> State<S> {
             key,
             view,
             session,
+            stop,
         })
     }
 
@@ -2195,8 +2344,9 @@ impl<S> State<S> {
         }
     }
 
-    /// A render finished. The session comes back (or is dropped if [`State::release`] marked
-    /// it); the view goes to the outbox.
+    /// A render finished, for a backend whose sessions stay usable. The core calls
+    /// [`State::finish_render_checked`].
+    #[cfg(test)]
     pub fn finish_render(
         &mut self,
         generation: u64,
@@ -2206,13 +2356,53 @@ impl<S> State<S> {
         result: Result<Rgb, DecodeError>,
         ms: f64,
     ) {
+        self.finish_render_checked(generation, key, view, session, result, true, ms);
+    }
+
+    /// A render finished. The session comes back (or is dropped if [`State::release`] marked
+    /// it); the view goes to the outbox. `session_usable` is the backend's answer for the
+    /// session (T328): a cancelled render gives no view and no failure, and its session is
+    /// dropped when it is not usable, so the file is opened again when it is wanted.
+    #[allow(clippy::too_many_arguments)]
+    pub fn finish_render_checked(
+        &mut self,
+        generation: u64,
+        key: Key,
+        view: JobView,
+        session: S,
+        result: Result<Rgb, DecodeError>,
+        session_usable: bool,
+        ms: f64,
+    ) {
         self.running.remove(&(generation, Job::Render(key, view)));
-        self.stats.renders += 1;
-        self.stats
-            .render_ms
-            .entry(view.kind.name())
-            .or_default()
-            .push(ms);
+        self.stops.remove(&(generation, Job::Render(key, view)));
+        let is_cancelled = result.as_ref().err().is_some_and(DecodeError::is_cancelled);
+        if generation == self.generation && is_cancelled {
+            let released = self.released.contains_key(&(generation, key, view));
+            self.stats.cancelled += 1;
+            if let Some(i) = self
+                .inflight
+                .iter()
+                .position(|f| f.generation == generation && f.key == key && f.view == view)
+            {
+                self.inflight.swap_remove(i);
+            }
+            if self.return_session(generation, key, view, session) && !released && !session_usable {
+                self.drop_session(key);
+                self.stats.spent += 1;
+            }
+            return;
+        }
+        // a cancelled render of an older generation is discarded below; its cut-short time is
+        // not a render's time (W3's and W5's timings)
+        if !is_cancelled {
+            self.stats.renders += 1;
+            self.stats
+                .render_ms
+                .entry(view.kind.name())
+                .or_default()
+                .push(ms);
+        }
         let released = self.released.contains_key(&(generation, key, view));
         if !self.return_session(generation, key, view, session) {
             self.stats.discarded += 1;
@@ -2557,6 +2747,7 @@ impl<S> State<S> {
                 self.failed.insert(key, DecodeError::new(reason));
             }
         }
+        self.stop_unwanted();
     }
 
     /// Texture ids the presentation must release.
@@ -2566,6 +2757,12 @@ impl<S> State<S> {
 
     /// What to draw now, for a view of `view_px` physical pixels.
     pub fn frame(&mut self, view_px: [u32; 2]) -> Frame {
+        let frame = self.frame_of(view_px);
+        self.stop_unwanted();
+        frame
+    }
+
+    fn frame_of(&mut self, view_px: [u32; 2]) -> Frame {
         let view_px = [view_px[0].max(1), view_px[1].max(1)];
         // A changed view size (the window resized, a panel shown or hidden) changes the fit
         // scale every frame: it counts as a step of a zoom gesture, so the reduced view is asked
@@ -3431,6 +3628,7 @@ mod tests {
                 key,
                 view,
                 session,
+                stop: _,
             }) => (generation, key, view, session),
             other => panic!("expected a render, got {other:?}"),
         };
@@ -3476,6 +3674,7 @@ mod tests {
                 key,
                 view,
                 session,
+                stop: _,
             }) => {
                 s.finish_render(generation, key, view, session, Ok(rendered(view)), 1.0);
                 view
@@ -3871,6 +4070,7 @@ mod tests {
             key,
             view,
             session,
+            stop: _,
         }) = s.pick(true)
         else {
             panic!("expected a render task");
@@ -4368,6 +4568,7 @@ mod tests {
             key,
             view,
             session,
+            stop: _,
         }) = s.pick(true)
         else {
             panic!("expected a render task");
@@ -4499,6 +4700,7 @@ mod tests {
                 key,
                 view,
                 session,
+                stop: _,
             }) => (generation, key, view, session),
             other => panic!("expected a render task, got {other:?}"),
         }
@@ -4735,6 +4937,7 @@ mod tests {
                 key,
                 view,
                 session,
+                stop: _,
             }) => (generation, key, view, session),
             other => panic!("expected the shown view's render, got {other:?}"),
         };
@@ -4789,6 +4992,7 @@ mod tests {
                 key,
                 view,
                 session,
+                stop: _,
             }) => (generation, key, view, session),
             other => panic!("expected a render, got {other:?}"),
         };
@@ -6090,6 +6294,7 @@ mod tests {
                     key,
                     view,
                     session,
+                    stop: _,
                 }) if view.kind == ViewKind::Fine => return Some((generation, key, view, session)),
                 Some(_) => {}
                 None => return None,
@@ -6273,6 +6478,7 @@ mod tests {
             key,
             view,
             session,
+            stop: _,
         }) = s.pick(true)
         else {
             panic!("expected a render");
@@ -7017,6 +7223,7 @@ mod tests {
                 key,
                 view,
                 session,
+                stop: _,
             }) => (generation, key, view, session),
             other => panic!("expected a render, got {other:?}"),
         };
@@ -7340,6 +7547,7 @@ mod tests {
                 key,
                 view,
                 session,
+                stop: _,
             }) => {
                 s.finish_render(generation, key, view, session, Ok(rendered(view)), 1.0);
                 std::mem::take(&mut s.outbox)
@@ -7441,5 +7649,314 @@ mod tests {
     fn fnv_is_stable() {
         assert_eq!(fnv(b""), 0xcbf2_9ce4_8422_2325);
         assert_ne!(fnv(b"a"), fnv(b"b"));
+    }
+
+    // ---------- stopping a render that is no longer wanted (T328) ----------
+
+    /// Picks on the background worker until a render for which `pred` holds is lent; the jobs
+    /// before it are handed out and left running.
+    fn lend_where(
+        s: &mut State<u32>,
+        pred: impl Fn(Key, JobView) -> bool,
+    ) -> (u64, Key, JobView, u32) {
+        for _ in 0..30 {
+            match s.pick(false) {
+                Some(Task::Render {
+                    generation,
+                    key,
+                    view,
+                    session,
+                    stop: _,
+                }) if pred(key, view) => return (generation, key, view, session),
+                Some(_) => {}
+                None => break,
+            }
+        }
+        panic!("no such render was lent");
+    }
+
+    /// Whether the stop of the render lent as `(generation, key, view)` is set.
+    fn stop_set(s: &State<u32>, generation: u64, key: Key, view: JobView) -> bool {
+        s.stops
+            .get(&(generation, Job::Render(key, view)))
+            .is_some_and(|e| e.stop.is_stopped())
+    }
+
+    fn ten_and_eleven_at(scale: f64) -> State<u32> {
+        let mut s = shown_resident(scale, None);
+        with_session(&mut s, 11);
+        s.statistics.insert(k(10), ImageStatistics::Unavailable);
+        // the fit view too, so that only the pan view of image 10 is left to render
+        assert!(s.accept(&out(&s, 10, Want::Fit), 100).is_some());
+        s.dragged = true;
+        s
+    }
+
+    fn is_pan_view_of_ten(key: Key, v: JobView) -> bool {
+        key == k(10) && v.kind == ViewKind::Scaled
+    }
+
+    #[test]
+    fn stepping_forward_stops_the_pan_view_of_the_image_left_and_not_the_next_ones_render() {
+        let mut s = ten_and_eleven_at(0.75);
+        let (g11, key11, v11, _) = lend_where(&mut s, |key, _| key == k(11));
+        let (g, key, pan, _) = lend_where(&mut s, is_pan_view_of_ten);
+        s.stop_unwanted();
+        assert!(!stop_set(&s, g, key, pan));
+        s.go(11);
+        // image 10 is the one behind, whose shown view is also a scaled view, but not this one
+        assert_eq!(
+            s.req(k(10), Want::Shown).map(|r| r.job.kind),
+            Some(ViewKind::Scaled)
+        );
+        s.stop_unwanted();
+        assert!(stop_set(&s, g, key, pan));
+        assert!(!stop_set(&s, g11, key11, v11));
+        assert_eq!(s.stats.stops, 1);
+        // once per job
+        s.stop_unwanted();
+        assert_eq!(s.stats.stops, 1);
+    }
+
+    #[test]
+    fn a_pan_a_zoom_step_and_a_gesture_stop_nothing_of_the_current_image() {
+        let mut s = ten_and_eleven_at(0.75);
+        let (g, key, pan, _) = lend_where(&mut s, is_pan_view_of_ten);
+        s.centre[0] += centre_step(0.75, 0.25);
+        s.stop_unwanted();
+        assert!(!stop_set(&s, g, key, pan));
+        s.zoom_by(1.1, None);
+        s.stop_unwanted();
+        assert!(!stop_set(&s, g, key, pan));
+        // the start of a gesture, with a reduced view in flight
+        let mut s = state(1024);
+        with_session(&mut s, 10);
+        let (g, key, reduced, _) =
+            lend_where(&mut s, |key, v| key == k(10) && v.kind == ViewKind::Reduced);
+        s.set_zoom(Zoom::Scale(0.3), None, true);
+        s.stop_unwanted();
+        assert!(!stop_set(&s, g, key, reduced));
+        assert_eq!(s.stats.stops, 0);
+    }
+
+    #[test]
+    fn a_new_list_and_a_new_folder_stop_everything_and_a_release_stops_its_path() {
+        for how in 0..3 {
+            let mut s = state(1024);
+            with_session(&mut s, 10);
+            let (g, key, view, _) = lend_where(&mut s, |key, _| key == k(10));
+            s.stop_unwanted();
+            assert!(!stop_set(&s, g, key, view), "{how}");
+            match how {
+                0 => s.set_files(files(19), 10),
+                1 => s.open_folder(files(20)),
+                _ => {
+                    let _ = s.release(Path::new("img10.raw"));
+                }
+            }
+            assert!(
+                how == 2 || s.inflight.is_empty(),
+                "inflight is cleared by a new list"
+            );
+            s.stop_unwanted();
+            assert!(stop_set(&s, g, key, view), "{how}");
+            assert_eq!(s.stats.stops, 1, "{how}");
+        }
+    }
+
+    #[test]
+    fn a_changed_setting_of_the_same_image_stops_nothing_and_stepping_away_stops_the_fine_render() {
+        let mut s = state(1024);
+        let _ = ready_for_fine(&mut s, None);
+        let Some((g, key, fine, _)) = pick_fine(&mut s) else {
+            panic!("no fine render");
+        };
+        assert!(s.set_sharpening(Some(SHARP)));
+        s.stop_unwanted();
+        assert!(!stop_set(&s, g, key, fine));
+        s.fine_details = false;
+        s.stop_unwanted();
+        assert!(!stop_set(&s, g, key, fine));
+        s.go(11);
+        s.stop_unwanted();
+        assert!(stop_set(&s, g, key, fine));
+        // a reduced view in flight with the old sharpening is not stopped by a new sharpening
+        let mut s = state(1024);
+        with_session(&mut s, 10);
+        let (g, key, reduced, _) = lend_where(&mut s, |key, _| key == k(10));
+        assert!(s.set_sharpening(Some(SHARP)));
+        s.stop_unwanted();
+        assert!(!stop_set(&s, g, key, reduced));
+    }
+
+    #[test]
+    fn a_change_of_display_mode_stops_nothing_of_the_current_image() {
+        let mut s = state(1024);
+        let _ = ready_for_fine(&mut s, None);
+        let Some((g, key, fine, _)) = pick_fine(&mut s) else {
+            panic!("no fine render");
+        };
+        s.set_mode(Source::Jpeg);
+        s.stop_unwanted();
+        assert!(!stop_set(&s, g, key, fine));
+        let mut s = ten_and_eleven_at(0.75);
+        let (g, key, pan, _) = lend_where(&mut s, is_pan_view_of_ten);
+        s.set_mode(Source::Jpeg);
+        s.stop_unwanted();
+        assert!(!stop_set(&s, g, key, pan));
+    }
+
+    #[test]
+    fn a_new_sharpening_does_not_stop_a_neighbours_render_and_stepping_on_stops_the_target_left() {
+        let mut s = shown_resident(0.75, None);
+        with_session(&mut s, 11);
+        let (g, key, view, _) = lend_where(&mut s, |key, _| key == k(11));
+        assert!(s.set_sharpening(Some(SHARP)));
+        s.stop_unwanted();
+        assert!(!stop_set(&s, g, key, view));
+        // at fit the 100 % view asked for in advance is stopped when the image is left
+        let mut s = state(1024);
+        with_session(&mut s, 10);
+        assert!(s.accept(&out(&s, 10, Want::Shown), 100).is_some());
+        let (g, key, target, _) =
+            lend_where(&mut s, |key, v| key == k(10) && v.kind == ViewKind::Zoom);
+        s.stop_unwanted();
+        assert!(!stop_set(&s, g, key, target));
+        s.go(11);
+        s.stop_unwanted();
+        assert!(stop_set(&s, g, key, target));
+    }
+
+    #[test]
+    fn a_stop_set_after_the_render_finished_counts_a_stop_and_books_the_view() {
+        let mut s = ten_and_eleven_at(0.75);
+        let (g, key, pan, session) = lend_where(&mut s, is_pan_view_of_ten);
+        s.go(11);
+        s.stop_unwanted();
+        assert!(stop_set(&s, g, key, pan));
+        // the worker looked at the stop before it was set: the view is whole
+        s.finish_render(g, key, pan, session, Ok(rendered(pan)), 5.0);
+        assert_eq!(s.stats.stops, 1);
+        assert_eq!(s.stats.cancelled, 0);
+        assert_eq!(s.outbox.len(), 1);
+    }
+
+    #[test]
+    fn a_cancelled_render_gives_no_view_no_failure_and_its_session_back() {
+        let mut s = state(1024);
+        with_session(&mut s, 10);
+        let (g, key, view, session) = lend_where(&mut s, |key, _| key == k(10));
+        s.finish_render_checked(
+            g,
+            key,
+            view,
+            session,
+            Err(DecodeError::cancelled()),
+            true,
+            7.0,
+        );
+        assert!(s.outbox.is_empty());
+        assert!(!s.failed.contains_key(&k(10)));
+        assert_eq!(s.stats.discarded, 0);
+        assert_eq!(s.stats.cancelled, 1);
+        assert_eq!(s.stats.spent, 0);
+        assert!(s.stats.render_ms.is_empty());
+        assert!(s.inflight.is_empty());
+        assert!(s.stops.is_empty());
+        assert!(matches!(s.sessions.get(&k(10)), Some(Some(10))));
+        // still wanted: asked for again
+        assert!(renders_of(&s, 10).contains(&view));
+    }
+
+    #[test]
+    fn a_cancelled_render_of_a_spent_session_drops_it_and_the_file_is_opened_again() {
+        let mut s = state(1024);
+        with_session(&mut s, 10);
+        let (g, key, view, session) = lend_where(&mut s, |key, _| key == k(10));
+        s.finish_render_checked(
+            g,
+            key,
+            view,
+            session,
+            Err(DecodeError::cancelled()),
+            false,
+            7.0,
+        );
+        assert_eq!(s.stats.cancelled, 1);
+        assert_eq!(s.stats.spent, 1);
+        assert!(!s.sessions.contains_key(&k(10)));
+        assert!(s.lent_paths.is_empty());
+        // a release of that path finishes at once
+        assert_eq!(s.release(Path::new("img10.raw")), (false, true));
+        assert!(s.plan().contains(&Job::Open(k(10))));
+    }
+
+    #[test]
+    fn a_cancelled_render_of_an_older_generation_or_a_released_session_keeps_the_newer_session() {
+        // an older folder
+        let mut s = state(1024);
+        with_session(&mut s, 10);
+        let (g, key, view, session) = lend_where(&mut s, |key, _| key == k(10));
+        s.open_folder(files(20));
+        with_session(&mut s, 10);
+        s.finish_render_checked(
+            g,
+            key,
+            view,
+            session,
+            Err(DecodeError::cancelled()),
+            false,
+            7.0,
+        );
+        assert_eq!(s.stats.discarded, 1);
+        assert_eq!(s.stats.cancelled, 0);
+        assert_eq!(s.stats.spent, 0);
+        // its cut-short time is not a render's time
+        assert_eq!(s.stats.renders, 0);
+        assert!(s.stats.render_ms.is_empty());
+        assert!(matches!(s.sessions.get(&k(10)), Some(Some(10))));
+        // released while lent, the file opened again meanwhile
+        let mut s = state(1024);
+        with_session(&mut s, 10);
+        let (g, key, view, session) = lend_where(&mut s, |key, _| key == k(10));
+        let _ = s.release(Path::new("img10.raw"));
+        with_session(&mut s, 10);
+        s.finish_render_checked(
+            g,
+            key,
+            view,
+            session,
+            Err(DecodeError::cancelled()),
+            false,
+            7.0,
+        );
+        assert_eq!(s.stats.cancelled, 1);
+        assert_eq!(s.stats.spent, 0);
+        assert!(matches!(s.sessions.get(&k(10)), Some(Some(10))));
+    }
+
+    #[test]
+    fn a_step_away_and_back_clears_the_stop_and_the_render_is_booked() {
+        // owner, 2026-11-25: the current image's render is not stopped, also after a step away
+        // and back before it ended
+        let mut s = ten_and_eleven_at(0.75);
+        let (g, key, pan, session) = lend_where(&mut s, is_pan_view_of_ten);
+        s.go(11);
+        s.stop_unwanted();
+        assert!(stop_set(&s, g, key, pan));
+        s.go(10);
+        s.stop_unwanted();
+        assert!(!stop_set(&s, g, key, pan));
+        // stepping away again sets it again, still counted once for the job
+        s.go(11);
+        s.stop_unwanted();
+        assert!(stop_set(&s, g, key, pan));
+        s.go(10);
+        s.stop_unwanted();
+        assert!(!stop_set(&s, g, key, pan));
+        assert_eq!(s.stats.stops, 1);
+        s.finish_render(g, key, pan, session, Ok(rendered(pan)), 5.0);
+        assert_eq!(s.stats.cancelled, 0);
+        assert_eq!(s.outbox.len(), 1);
     }
 }

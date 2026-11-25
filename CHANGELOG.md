@@ -9,6 +9,11 @@ Downloads are on the [Releases page](https://github.com/Bokehlicious/RawStride/r
 
 ## [Unreleased]
 
+### Changed
+
+- Stepping to another image is quicker with fine details on or between 50 % and 100 %: the
+  view still being made of the image left is stopped instead of finished.
+
 ## [0.6.0] - 2026-11-25
 
 ### Added

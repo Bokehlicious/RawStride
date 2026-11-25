@@ -75,12 +75,14 @@ impl<B: Backend> Shared<B> {
                         |session| self.backend.profile_unusable(session),
                         ms,
                     );
+                    s.stop_unwanted();
                 }
                 Task::Render {
                     generation,
                     key,
                     view,
                     mut session,
+                    stop,
                 } => {
                     // a view below 100 % is reduced on the worker with the Lanczos filter (ADR
                     // 0027 §3.2, W1-Q3)
@@ -89,13 +91,26 @@ impl<B: Backend> Shared<B> {
                         scale::reduce(&img, w, h)
                             .ok_or_else(|| DecodeError::new("scaling the view failed"))
                     };
-                    let result = match view.kind {
-                        ViewKind::Half => self.backend.render_half(&mut session),
-                        ViewKind::Zoom | ViewKind::Ring => {
-                            self.backend.render_region(&mut session, view.region)
+                    // the renders are stoppable (T328); the look at the stop after the render
+                    // ends the job before the reduction, the sharpening and the conversion
+                    let rendered = match view.kind {
+                        ViewKind::Half | ViewKind::Reduced => {
+                            self.backend.render_half_stoppable(&mut session, &stop)
                         }
+                        ViewKind::Zoom | ViewKind::Ring | ViewKind::Scaled | ViewKind::Fine => self
+                            .backend
+                            .render_region_stoppable(&mut session, view.region, &stop),
+                    };
+                    // a stop set while the render ran counts as cancelled, also when it came
+                    // back whole (the session is not spent by that)
+                    let rendered = match rendered {
+                        Ok(_) if stop.is_stopped() => Err(DecodeError::cancelled()),
+                        other => other,
+                    };
+                    let result = match view.kind {
+                        ViewKind::Half | ViewKind::Zoom | ViewKind::Ring => rendered,
                         ViewKind::Reduced => {
-                            self.backend.render_half(&mut session).and_then(|img| {
+                            rendered.and_then(|img| {
                                 if img.width < w || img.height < h {
                                     // a backend whose half-size render is smaller than half the
                                     // image: it is used as it is rather than failing, and
@@ -108,10 +123,7 @@ impl<B: Backend> Shared<B> {
                         }
                         // the fine view: the full-resolution render of the whole image, reduced
                         // as the scaled view is (ADR 0027 §3.1, W2)
-                        ViewKind::Scaled | ViewKind::Fine => self
-                            .backend
-                            .render_region(&mut session, view.region)
-                            .and_then(reduce),
+                        ViewKind::Scaled | ViewKind::Fine => rendered.and_then(reduce),
                     };
                     // sharpened last, after the reduction and before the conversion to the
                     // display (ADR 0027 §3.3, W3-Q1); with a valid value it fails only on
@@ -135,8 +147,10 @@ impl<B: Backend> Shared<B> {
                         }
                     });
                     let ms = t0.elapsed().as_secs_f64() * 1000.0;
+                    let usable = self.backend.session_usable(&session);
                     let mut s = self.state();
-                    s.finish_render(generation, key, view, session, result, ms);
+                    s.finish_render_checked(generation, key, view, session, result, usable, ms);
+                    s.stop_unwanted();
                 }
                 Task::Statistics {
                     generation,
@@ -248,6 +262,7 @@ impl<B: Backend> ViewCore<B> {
         {
             let mut s = self.shared.state();
             f(&mut s);
+            s.stop_unwanted();
             s.changed();
             s.record(label);
         }
@@ -372,6 +387,7 @@ impl<B: Backend> ViewCore<B> {
                 return;
             }
             s.fine_details = on;
+            s.stop_unwanted();
         }
         self.shared.cv.notify_all();
         self.shared.wake_ui();
@@ -385,8 +401,12 @@ impl<B: Backend> ViewCore<B> {
     /// replaces it in one swap (V2). [`Frame::sharpen`] tells its state. Not a user request:
     /// nothing is recorded.
     pub fn set_sharpening(&self, s: Option<Sharpening>) {
-        if !self.shared.state().set_sharpening(s) {
-            return;
+        {
+            let mut st = self.shared.state();
+            if !st.set_sharpening(s) {
+                return;
+            }
+            st.stop_unwanted();
         }
         self.shared.cv.notify_all();
         self.shared.wake_ui();
@@ -409,6 +429,7 @@ impl<B: Backend> ViewCore<B> {
             if !s.set_view(zoom, centre) {
                 return;
             }
+            s.stop_unwanted();
             s.changed();
         }
         self.shared.cv.notify_all();
@@ -429,6 +450,7 @@ impl<B: Backend> ViewCore<B> {
             if !s.set_orientation(&path, orientation) {
                 return;
             }
+            s.stop_unwanted();
             s.changed();
         }
         self.shared.cv.notify_all();
@@ -563,6 +585,7 @@ impl<B: Backend> Releaser<B> {
         g.begin_release(path);
         let none_left = loop {
             let (dropped, none_left) = g.release(path);
+            g.stop_unwanted();
             if dropped {
                 changed = true;
                 // a worker may now open what the plan wants
@@ -1207,5 +1230,108 @@ mod tests {
         assert!(t0.elapsed() < Duration::from_secs(1));
         // the session of the other file is still lent and counted
         assert!(lent.core.memory().0 > 0);
+    }
+
+    // ---------- a render that is no longer wanted is stopped (T328) ----------
+
+    /// A decoder whose first render waits until its stop is set (or a time limit), and ends
+    /// cancelled; later renders come back at once.
+    struct Stoppable {
+        entered: Arc<std::sync::atomic::AtomicUsize>,
+        cancelled: Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    impl Backend for Stoppable {
+        type Session = u32;
+
+        fn open(&self, _path: &Path, _source: Source) -> Result<(u32, ImageSize), DecodeError> {
+            Ok((
+                0,
+                ImageSize {
+                    w: 400,
+                    h: 300,
+                    flip: 0,
+                },
+            ))
+        }
+
+        fn render_half(&self, _session: &mut u32) -> Result<Rgb, DecodeError> {
+            Ok(rgb(200, 150))
+        }
+
+        fn render_region(&self, _session: &mut u32, r: Rect) -> Result<Rgb, DecodeError> {
+            Ok(rgb(r.w, r.h))
+        }
+
+        fn render_half_stoppable(
+            &self,
+            session: &mut u32,
+            stop: &crate::backend::Stop,
+        ) -> Result<Rgb, DecodeError> {
+            self.wait_for(stop)?;
+            self.render_half(session)
+        }
+
+        fn render_region_stoppable(
+            &self,
+            session: &mut u32,
+            r: Rect,
+            stop: &crate::backend::Stop,
+        ) -> Result<Rgb, DecodeError> {
+            self.wait_for(stop)?;
+            self.render_region(session, r)
+        }
+    }
+
+    impl Stoppable {
+        /// The first render waits for its stop (at most five seconds); later ones do not.
+        fn wait_for(&self, stop: &crate::backend::Stop) -> Result<(), DecodeError> {
+            use std::sync::atomic::Ordering;
+            if self.entered.fetch_add(1, Ordering::SeqCst) > 0 {
+                return Ok(());
+            }
+            let end = Instant::now() + Duration::from_secs(5);
+            while !stop.is_stopped() {
+                if Instant::now() >= end {
+                    return Ok(());
+                }
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            self.cancelled.fetch_add(1, Ordering::SeqCst);
+            Err(DecodeError::cancelled())
+        }
+    }
+
+    #[test]
+    fn a_new_folder_ends_a_render_that_waits_for_its_stop_within_the_time_limit() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let entered = Arc::new(AtomicUsize::new(0));
+        let cancelled = Arc::new(AtomicUsize::new(0));
+        let backend = Stoppable {
+            entered: entered.clone(),
+            cancelled: cancelled.clone(),
+        };
+        let core = match ViewCore::start(backend, Config::default()) {
+            Ok(c) => c,
+            Err(e) => panic!("start: {e}"),
+        };
+        core.open_folder(vec![PathBuf::from(A)]);
+        let wait = |what: &str, done: &dyn Fn() -> bool| {
+            let end = Instant::now() + Duration::from_secs(4);
+            while !done() {
+                assert!(Instant::now() < end, "{what}");
+                std::thread::sleep(Duration::from_millis(5));
+            }
+        };
+        wait("the render did not start", &|| {
+            entered.load(Ordering::SeqCst) > 0
+        });
+        let t0 = Instant::now();
+        core.open_folder(vec![PathBuf::from("b.raw")]);
+        wait("the render was not stopped", &|| {
+            cancelled.load(Ordering::SeqCst) > 0
+        });
+        assert!(t0.elapsed() < Duration::from_secs(4));
+        assert!(core.stats().stops >= 1);
     }
 }

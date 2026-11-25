@@ -9,7 +9,9 @@ use std::time::{Duration, Instant};
 
 use pw_colour::{Profile, TransformCache, jpeg_source_profile};
 use pw_viewcore::native::NativeBackend;
-use pw_viewcore::{Backend, Config, Frame, Rgb, Source, Status, ViewCore, ViewKind, ViewOut, Zoom};
+use pw_viewcore::{
+    Backend, Config, FineState, Frame, Rgb, Source, Status, ViewCore, ViewKind, ViewOut, Zoom,
+};
 
 const VIEW: [u32; 2] = [1920, 1080];
 const WAIT: Duration = Duration::from_secs(30);
@@ -923,4 +925,93 @@ fn timing_of_a_fine_view() {
             median(&render) + median(&reduce) + median(&display),
         );
     }
+}
+
+/// T328 (ADR 0027 W5-Q1): a step to the next image stops the fine render of the image left, and
+/// the next image's view arrives. A stop takes effect between LibRaw's stages and spends the
+/// session (T327), so stepping back opens the file again. Run with
+/// `$env:PW_TESTDATA = "D:\PhotoWorkflowData\RAW"; cargo test --workspace -- --ignored
+/// a_step_stops_the_fine_render`; a debug build is slower than a release build, which the repeats
+/// cover.
+#[test]
+#[ignore = "needs real camera files: set PW_TESTDATA and run with --ignored"]
+fn a_step_stops_the_fine_render_of_the_image_left_and_the_next_image_arrives() {
+    let files: Vec<PathBuf> = test_files("TN")
+        .into_iter()
+        .filter(|f| {
+            f.extension()
+                .and_then(|e| e.to_str())
+                .is_some_and(|e| e.eq_ignore_ascii_case("arw"))
+        })
+        .collect();
+    assert!(files.len() >= 2, "at least two TN ARW files are needed");
+    let core = start();
+    core.set_fine_details(true);
+    core.open_folder(files.clone());
+    let mut screen = Screen {
+        core: &core,
+        textures: HashMap::new(),
+    };
+    let tries = 5.min(files.len() - 1);
+    // the image whose fine render was cancelled
+    let mut cancelled = None;
+    for i in 0..tries {
+        core.go(i);
+        // the fine render is lent soon after the frame says it is waited for
+        let f = until_frame(&mut screen, &files[i], "the fine view waiting", |f| {
+            f.pos == Some(i)
+                && f.status == Status::Ready
+                && matches!(f.fine, FineState::Waiting | FineState::Shown)
+        });
+        if f.fine == FineState::Shown {
+            // its fine render finished before this try began: nothing to stop, step on
+            core.step(1);
+            continue;
+        }
+        let at = Instant::now();
+        while at.elapsed() < Duration::from_millis(450) {
+            screen.frame();
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        core.step(1);
+        until_frame(&mut screen, &files[i + 1], "the next image's view", |f| {
+            f.pos == Some(i + 1) && f.status == Status::Ready && f.draw.is_some()
+        });
+        // a stop takes effect between LibRaw's stages (up to about 1.3 s on a RAF)
+        let end = Instant::now() + Duration::from_secs(5);
+        while core.stats().cancelled == 0 && Instant::now() < end {
+            screen.frame();
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let st = core.stats();
+        println!(
+            "try {i}: stops {}, cancelled {}, spent {}, renders {}",
+            st.stops, st.cancelled, st.spent, st.renders
+        );
+        if st.cancelled > 0 {
+            cancelled = Some(i);
+            break;
+        }
+    }
+    let stats = core.stats();
+    let Some(left) = cancelled else {
+        panic!(
+            "no render was cancelled in {tries} tries: stops {}, cancelled {}",
+            stats.stops, stats.cancelled
+        );
+    };
+    assert!(stats.stops >= 1);
+    println!(
+        "image {left} left: stops {}, cancelled {}, spent {}",
+        stats.stops, stats.cancelled, stats.spent
+    );
+    // a step back to the image whose fine render was cancelled: shown again, its session opened
+    // again if the stop spent it
+    core.step(-1);
+    until_frame(
+        &mut screen,
+        &files[left],
+        "the image left shown again",
+        |f| f.pos == Some(left) && f.status == Status::Ready && f.draw.is_some(),
+    );
 }

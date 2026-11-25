@@ -34,7 +34,7 @@ mod state;
 
 pub use crate::backend::{
     Backend, ClippingMap, DecodeError, FocusMap, ImageStatistics, Rgb, Source, Statistics,
-    StatisticsOrigin,
+    StatisticsOrigin, Stop,
 };
 pub use crate::core::{Releaser, ViewCore};
 pub use crate::geometry::{ImageSize, Rect};
