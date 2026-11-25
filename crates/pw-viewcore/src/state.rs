@@ -66,9 +66,11 @@ pub enum ViewKind {
     Half,
     /// The visible region at 100 %.
     Zoom,
-    /// Twice the visible region at 100 %, for panning.
+    /// Twice the visible region at 100 %, for panning at 100 % and above (between 50 % and 100 %
+    /// a scaled view over a larger region, the pan view, is used instead; ADR 0027 §4.3).
     Ring,
-    /// The visible region at a free level between 50 % and 100 %, scaled down on the worker.
+    /// The visible region at a free level between 50 % and 100 %, scaled down on the worker; also
+    /// the pan view over a larger region.
     Scaled,
     /// The whole image below 50 %: the half-size render reduced on the worker to the view's
     /// density with the Lanczos filter (ADR 0027 §3.2, W1-Q3).
@@ -93,6 +95,13 @@ impl ViewKind {
 
 /// The density of a half-size view: half an output pixel per image pixel.
 pub const HALF_DENSITY: f64 = 0.5;
+/// The pan view's size (between 50 % and 100 %): its region is this many times the visible
+/// region on each axis, clamped to the image (ADR 0027 §4.3, owner 2026-11-25).
+pub const PAN_VIEW_SIZE: f64 = 2.0;
+/// The margin that keeps a pan view: a resident pan view that still contains this many times the
+/// visible region on each axis counts as done, so a short drag makes no new one (a quarter of the
+/// view on each side at 1.5).
+pub const PAN_VIEW_KEEP: f64 = 1.5;
 const EPS: f64 = 1e-9;
 
 /// A finished view on its way to the presentation, which uploads it as a texture.
@@ -345,7 +354,9 @@ pub(crate) enum Want {
     Fit,
     /// The 100 % view at the current position (the zoom target, V7).
     Target,
-    /// The ring for panning at 100 %.
+    /// The ring for panning at 100 % and above, and below 50 %; between 50 % and 100 % the pan
+    /// view (a scaled view over a larger region) takes its place (ADR 0027 §4.3, owner
+    /// 2026-11-25).
     Ring,
     /// The fine view of the current image below 50 %, while fine details is on (ADR 0027 W2).
     Fine,
@@ -1124,7 +1135,17 @@ impl<S> State<S> {
         if other_mode != ck {
             add((other_mode, primary));
         }
-        add((ck, Want::Ring));
+        // between 50 % and 100 % the pan view takes the ring's place; it is not asked for during
+        // a drag (a drag leaving it would ask for a new one every frame) nor when it is no larger
+        // than the shown view
+        match self.pan_view(ck) {
+            Some((_, useful)) => {
+                if useful && (full || !self.in_pan()) {
+                    add((ck, Want::Ring));
+                }
+            }
+            None => add((ck, Want::Ring)),
+        }
         if let Some(b) = self.neighbour(cur, 1, !forward) {
             add((self.key(b), primary));
         }
@@ -1144,6 +1165,44 @@ impl<S> State<S> {
             && key.1 == Source::Raw
             && self.scale_of(key).is_some_and(|s| s < HALF_DENSITY - EPS)
             && !self.fine_failed.contains(&key)
+    }
+
+    /// The pan view of `key` (ADR 0027 §4.3, owner 2026-11-25): when the shown requirement is a
+    /// scaled view (a scale between 50 % and 100 %), a scaled view at the shown scale over
+    /// [`PAN_VIEW_SIZE`] times the visible region, in the place of the 100 % ring. The flag says
+    /// whether it is of any use: it is not when its region is the whole image or the shown view's
+    /// own region (the shown view then serves every pan). `None` where the ring applies.
+    fn pan_view(&self, key: Key) -> Option<(Req, bool)> {
+        let size = *self.sizes.get(&key)?;
+        let shown = self.req(key, Want::Shown)?;
+        if shown.job.kind != ViewKind::Scaled {
+            return None;
+        }
+        let scale = shown.density;
+        let region = geometry::sensor_box(
+            size,
+            geometry::visible(size, self.view_px, scale / PAN_VIEW_SIZE, self.centre),
+        );
+        let cover = geometry::sensor_box(
+            size,
+            geometry::visible(size, self.view_px, scale / PAN_VIEW_KEEP, self.centre),
+        );
+        let useful = region != geometry::whole(size) && region != shown.job.region;
+        let job = JobView {
+            kind: ViewKind::Scaled,
+            region,
+            density_q: quantise(scale),
+            sharpen: self.sharpening,
+        };
+        Some((
+            Req {
+                key,
+                cover,
+                density: scale,
+                job,
+            },
+            useful,
+        ))
     }
 
     /// The concrete requirement for a want, once the image's size is known.
@@ -1177,6 +1236,9 @@ impl<S> State<S> {
             Want::Fit => geometry::fit_scale(size, self.view_px),
             Want::Target => 1.0,
             Want::Ring => {
+                if let Some((pan, _)) = self.pan_view(key) {
+                    return Some(pan);
+                }
                 let vis = geometry::visible(size, self.view_px, 0.5, self.centre);
                 let r = geometry::sensor_box(size, vis);
                 let job = JobView {
@@ -1333,7 +1395,10 @@ impl<S> State<S> {
     /// only as themselves, resident or in flight: a denser view (the half-size view after a
     /// gesture, the ring, a reduced view after zooming out) is drawn meanwhile
     /// ([`State::serving`]) but does not stop the exact one from being made, so every view below
-    /// 100 % is reduced by the same filter, with sharpening on and off alike. A fine view
+    /// 100 % is reduced by the same filter, with sharpening on and off alike. Between 50 % and
+    /// 100 % the pan view (a scaled view over a larger region at the same scale, ADR 0027 §4.3)
+    /// takes the ring's place; as a resident scaled view that contains the visible region it also
+    /// satisfies the shown requirement. A fine view
     /// satisfies no other requirement, so the shown view is still made while a fine render runs.
     /// Only a view with the requirement's sharpening counts (W3-Q4), except for the current
     /// image's half-size view during a zoom gesture, which a half-size view of either sharpening
@@ -2980,6 +3045,20 @@ mod tests {
             kind: ViewKind::Half,
             region: geometry::whole(SIZE),
             density: HALF_DENSITY,
+            sharpen: s.sharpening,
+            ..out(s, pos, Want::Fit)
+        }
+    }
+
+    /// The 100 % ring of image `pos` at the current position, with the current sharpening, at any
+    /// level: between 50 % and 100 % `Want::Ring` is the pan view (T325), but a ring made at
+    /// 100 % stays resident after zooming out (owner, 2026-11-25).
+    fn ring_out(s: &State<u32>, pos: usize) -> ViewOut {
+        let vis = geometry::visible(SIZE, s.view_px, 0.5, s.centre);
+        ViewOut {
+            kind: ViewKind::Ring,
+            region: geometry::sensor_box(SIZE, vis),
+            density: 1.0,
             sharpen: s.sharpening,
             ..out(s, pos, Want::Fit)
         }
@@ -6506,7 +6585,7 @@ mod tests {
         with_session(&mut s, 10);
         s.set_sharpening(sharpen);
         s.zoom = zoom;
-        let ring = s.accept(&out(&s, 10, Want::Ring), 100);
+        let ring = s.accept(&ring_out(&s, 10), 100);
         assert!(ring.is_some());
         (s, ring)
     }
@@ -6553,7 +6632,7 @@ mod tests {
         assert!(renders_of(&s, 10).contains(&job));
         assert_eq!(s.frame(VIEW).draw.map(|d| d.id), scaled);
         // a ring of the requirement's sharpening is drawn meanwhile
-        let sharp_ring = s.accept(&out(&s, 10, Want::Ring), 100);
+        let sharp_ring = s.accept(&ring_out(&s, 10), 100);
         assert!(sharp_ring.is_some() && sharp_ring != ring);
         assert_eq!(s.frame(VIEW).draw.map(|d| d.id), sharp_ring);
         assert!(renders_of(&s, 10).contains(&job));
@@ -6565,10 +6644,170 @@ mod tests {
         with_session(&mut s, 10);
         s.view_px = [3000, 2400];
         s.zoom = Zoom::Fit;
-        assert!(s.accept(&out(&s, 10, Want::Ring), 100).is_some());
+        assert!(s.accept(&ring_out(&s, 10), 100).is_some());
         let job = shown_req_job(&s);
         assert_eq!(job.kind, ViewKind::Scaled);
         assert!(renders_of(&s, 10).contains(&job));
+    }
+
+    // ---------- the pan view between 50 % and 100 % (T325) ----------
+
+    /// Image 10 at the free `scale` with its shown view resident (sharpened with `sharpen`).
+    fn shown_resident(scale: f64, sharpen: Option<Sharpening>) -> State<u32> {
+        let mut s = state(1024);
+        with_session(&mut s, 10);
+        s.set_sharpening(sharpen);
+        s.zoom = Zoom::Scale(scale);
+        assert!(s.accept(&out(&s, 10, Want::Shown), 100).is_some());
+        s
+    }
+
+    /// The region the pan view of image 10 has at `scale` and the current centre.
+    fn pan_region(s: &State<u32>, scale: f64) -> Rect {
+        let vis = geometry::visible(SIZE, s.view_px, scale / PAN_VIEW_SIZE, s.centre);
+        geometry::sensor_box(SIZE, vis)
+    }
+
+    /// The step of the centre (relative to the image's width) that moves the view by `part` of
+    /// its visible width at `scale`.
+    fn centre_step(scale: f64, part: f64) -> f64 {
+        part * (f64::from(VIEW[0]) / scale) / f64::from(SIZE.w)
+    }
+
+    fn scaled_renders(s: &State<u32>) -> Vec<JobView> {
+        renders_of(s, 10)
+            .into_iter()
+            .filter(|v| v.kind == ViewKind::Scaled)
+            .collect()
+    }
+
+    #[test]
+    fn between_50_and_100_percent_the_plan_asks_for_a_pan_view_not_a_ring() {
+        for sharpen in [None, Some(SHARP)] {
+            for scale in [0.512, 0.6, 0.75] {
+                let s = shown_resident(scale, sharpen);
+                let region = pan_region(&s, scale);
+                let vis =
+                    geometry::sensor_box(SIZE, geometry::visible(SIZE, s.view_px, scale, s.centre));
+                assert!(region.contains(vis) && region.area() > vis.area());
+                let want = JobView {
+                    kind: ViewKind::Scaled,
+                    region,
+                    density_q: quantise(scale),
+                    sharpen,
+                };
+                let jobs = renders_of(&s, 10);
+                assert_eq!(scaled_renders(&s), vec![want], "{scale} {sharpen:?}");
+                assert!(jobs.iter().all(|v| v.kind != ViewKind::Ring));
+            }
+        }
+    }
+
+    #[test]
+    fn at_100_percent_and_above_and_below_50_the_ring_is_the_100_percent_ring() {
+        for scale in [1.0, 2.0, 0.4] {
+            let mut s = state(1024);
+            with_session(&mut s, 10);
+            s.zoom = Zoom::Scale(scale);
+            let Some(r) = s.req(k(10), Want::Ring) else {
+                panic!("no ring requirement at {scale}");
+            };
+            assert_eq!(r.job.kind, ViewKind::Ring, "{scale}");
+            assert_eq!(r.job.density_q, quantise(1.0), "{scale}");
+            assert_eq!(r.density, 1.0, "{scale}");
+        }
+    }
+
+    #[test]
+    fn a_short_pan_inside_the_pan_view_plans_nothing_and_draws_the_pan_view() {
+        for scale in [0.512, 0.75] {
+            let mut s = shown_resident(scale, None);
+            let shown = s.frame(VIEW).draw.map(|d| d.id);
+            let pan = s.accept(&out(&s, 10, Want::Ring), 100);
+            assert!(pan.is_some() && pan != shown);
+            assert!(scaled_renders(&s).is_empty(), "{scale}: {:?}", s.plan());
+            // a quarter of the view
+            s.centre[0] += centre_step(scale, 0.25);
+            assert!(scaled_renders(&s).is_empty(), "{scale}: {:?}", s.plan());
+            assert_eq!(s.frame(VIEW).draw.map(|d| d.id), pan, "{scale}");
+        }
+    }
+
+    #[test]
+    fn a_pan_past_the_cover_plans_a_new_pan_view_only_after_the_pause() {
+        for scale in [0.512, 0.75] {
+            let mut s = shown_resident(scale, None);
+            assert!(s.accept(&out(&s, 10, Want::Ring), 100).is_some());
+            s.centre[0] += centre_step(scale, 0.6);
+            s.pan_at = Some(Instant::now());
+            assert!(scaled_renders(&s).is_empty(), "{scale}: {:?}", s.plan());
+            s.pan_at = Some(Instant::now() - Duration::from_secs(1));
+            let jobs = scaled_renders(&s);
+            assert!(jobs.contains(&shown_req_job(&s)), "{scale}: {jobs:?}");
+            assert!(
+                jobs.iter().any(|v| v.region == pan_region(&s, scale)),
+                "{scale}: {jobs:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn during_a_drag_neither_the_shown_view_nor_the_pan_view_is_planned_between_50_and_100() {
+        let mut s = state(1024);
+        with_session(&mut s, 10);
+        s.zoom = Zoom::Scale(0.75);
+        s.pan_at = Some(Instant::now());
+        let w = s.wanted(false);
+        assert!(!w.contains(&(k(10), Want::Shown)), "{w:?}");
+        assert!(!w.contains(&(k(10), Want::Ring)), "{w:?}");
+        // the full plan (what is protected from eviction) keeps both
+        let w = s.wanted(true);
+        assert!(w.contains(&(k(10), Want::Shown)) && w.contains(&(k(10), Want::Ring)));
+        // at 100 % a pan step plans as before
+        s.zoom = Zoom::Scale(1.0);
+        let w = s.wanted(false);
+        assert!(w.contains(&(k(10), Want::Shown)) && w.contains(&(k(10), Want::Ring)));
+    }
+
+    #[test]
+    fn no_pan_view_is_wanted_when_the_shown_view_is_the_whole_image() {
+        // fit scale 0.75
+        let mut s = state(1024);
+        with_session(&mut s, 10);
+        s.view_px = [3000, 2400];
+        s.zoom = Zoom::Fit;
+        assert!(!s.wanted(true).contains(&(k(10), Want::Ring)));
+        // an image smaller than the view at 75 %
+        s.view_px = [4000, 3200];
+        s.zoom = Zoom::Scale(0.75);
+        assert!(!s.wanted(true).contains(&(k(10), Want::Ring)));
+        // a 75 % view of a part of the image does want one
+        s.view_px = VIEW;
+        assert!(s.wanted(true).contains(&(k(10), Want::Ring)));
+    }
+
+    #[test]
+    fn an_accepted_pan_view_satisfies_the_shown_requirement_while_it_contains_the_visible_region() {
+        let mut s = state(1024);
+        with_session(&mut s, 10);
+        s.zoom = Zoom::Scale(0.75);
+        // only the pan view is resident: no exact shown view is asked for
+        assert!(s.accept(&out(&s, 10, Want::Ring), 100).is_some());
+        assert!(scaled_renders(&s).is_empty(), "{:?}", s.plan());
+        // the shown view alone does not satisfy the pan requirement
+        let mut s = shown_resident(0.75, None);
+        assert_eq!(scaled_renders(&s).len(), 1);
+        // a resident pan view of the other sharpening is drawn until the new one is accepted
+        let pan = s.accept(&out(&s, 10, Want::Ring), 100);
+        s.centre[0] += centre_step(0.75, 0.2);
+        assert!(s.set_sharpening(Some(SHARP)));
+        assert_eq!(s.frame(VIEW).draw.map(|d| d.id), pan);
+        let jobs = scaled_renders(&s);
+        assert!(!jobs.is_empty(), "a sharpened pan view is planned");
+        assert!(jobs.iter().all(|v| v.sharpen == Some(SHARP)));
+        let new = s.accept(&out(&s, 10, Want::Ring), 100);
+        assert!(new.is_some() && new != pan);
+        assert_eq!(s.frame(VIEW).draw.map(|d| d.id), new);
     }
 
     #[test]
