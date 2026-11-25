@@ -276,6 +276,28 @@ fn fine_mark(fine: &FineState, key: Option<KeyChord>) -> Option<AdjustmentMark> 
     })
 }
 
+/// The text of sharpening's values, with the key the key map gives the action: "Sharpening (U):
+/// amount 80%, radius 0.8 px, threshold 2." (without a key "Sharpening: amount …"). The radius is
+/// written in pixels with one decimal. The shown mark and the button "USM" both use it (ADR 0027
+/// W3-Q5, T323).
+pub fn sharpening_values_text(key: Option<KeyChord>, values: Sharpening) -> String {
+    let Sharpening {
+        amount,
+        radius_tenths,
+        threshold,
+    } = values;
+    let (whole, tenth) = (radius_tenths / 10, radius_tenths % 10);
+    match key.map(key_text) {
+        Some(key) => format!(
+            "Sharpening ({key}): amount {amount}%, radius {whole}.{tenth} px, threshold \
+             {threshold}."
+        ),
+        None => format!(
+            "Sharpening: amount {amount}%, radius {whole}.{tenth} px, threshold {threshold}."
+        ),
+    }
+}
+
 /// Sharpening's mark "USM", or `None` while it is off. The radius is written in pixels with one
 /// decimal, for example 6 tenths as "0.6". It is never dimmed: sharpening applies at every zoom
 /// level (ADR 0027 A-Q8, changed 2026-11-25).
@@ -286,37 +308,7 @@ fn sharpen_mark(
 ) -> Option<AdjustmentMark> {
     let (dimmed, hover) = match (sharpen, key) {
         (SharpenState::Off, _) => return None,
-        (SharpenState::Shown, Some(chord)) => {
-            let key = key_text(chord);
-            let Sharpening {
-                amount,
-                radius_tenths,
-                threshold,
-            } = values;
-            let (whole, tenth) = (radius_tenths / 10, radius_tenths % 10);
-            (
-                false,
-                format!(
-                    "Sharpening ({key}): amount {amount}%, radius {whole}.{tenth} px, threshold \
-                     {threshold}."
-                ),
-            )
-        }
-        (SharpenState::Shown, None) => {
-            let Sharpening {
-                amount,
-                radius_tenths,
-                threshold,
-            } = values;
-            let (whole, tenth) = (radius_tenths / 10, radius_tenths % 10);
-            (
-                false,
-                format!(
-                    "Sharpening: amount {amount}%, radius {whole}.{tenth} px, threshold \
-                     {threshold}."
-                ),
-            )
-        }
+        (SharpenState::Shown, _) => (false, sharpening_values_text(key, values)),
         (SharpenState::Waiting, Some(chord)) => {
             let key = key_text(chord);
             (
@@ -596,6 +588,39 @@ mod tests {
         );
     }
 
+    /// The text of sharpening's values, with and without the key, with the default values and with
+    /// others (T323).
+    #[test]
+    fn sharpening_values_text_gives_the_values() {
+        let u = Some(KeyChord {
+            key: egui::Key::U,
+            ctrl: false,
+            shift: false,
+            alt: false,
+        });
+        let others = Sharpening {
+            amount: 150,
+            radius_tenths: 13,
+            threshold: 7,
+        };
+        let cases = [
+            (
+                Sharpening::DEFAULT,
+                "Sharpening (U): amount 80%, radius 0.8 px, threshold 2.",
+                "Sharpening: amount 80%, radius 0.8 px, threshold 2.",
+            ),
+            (
+                others,
+                "Sharpening (U): amount 150%, radius 1.3 px, threshold 7.",
+                "Sharpening: amount 150%, radius 1.3 px, threshold 7.",
+            ),
+        ];
+        for (values, with_key, without_key) in cases {
+            assert_eq!(sharpening_values_text(u, values), with_key);
+            assert_eq!(sharpening_values_text(None, values), without_key);
+        }
+    }
+
     /// The row's mark "USM" for each state of sharpening, with U and with no key, with the
     /// default values and with others, alone and after "Fine" (ADR 0027 W3-Q6, T318).
     #[test]
@@ -687,6 +712,17 @@ mod tests {
                 "Sharpening (U): amount 80%, radius 0.8 px, threshold 2."
             ))
         );
+        // The button's hover text is the shown mark's text.
+        for key in [Some(u), None] {
+            for values in [Sharpening::DEFAULT, others] {
+                assert_eq!(
+                    adjustment_marks(&FineState::Off, None, &SharpenState::Shown, key, values)
+                        .first()
+                        .map(|mark| mark.hover.clone()),
+                    Some(sharpening_values_text(key, values))
+                );
+            }
+        }
         // The default key map's key is U.
         let map = crate::keymap::KeyMap::default();
         assert_eq!(map.first_key(crate::keymap::KeyAction::Sharpening), Some(u));

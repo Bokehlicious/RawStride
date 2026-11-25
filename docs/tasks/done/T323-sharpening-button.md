@@ -1,4 +1,4 @@
-# T323. ADR 0027 W3: the button "USM" in the preview's title line — Open
+# T323. ADR 0027 W3: the button "USM" in the preview's title line — Done
 
 - **Why:** W3's hand check (owner, 2026-11-25; ADR 0027 §3.3 and W3-Q5, added 2026-11-25, §4.3
   "W3's hand check"): a button turns sharpening on and off beside the RAW/JPEG control, so it can
@@ -72,3 +72,5 @@
 | 2026-11-25 | Blocked | Added after W3's hand check (owner, 2026-11-25); waits for T321 |
 | 2026-11-25 | Blocked | Cold read (fresh agent): line numbers and claims checked. Added: `lib.rs` (the `pub use` lists) to the files; the control is in the preview's title line above the image, not the window's status bar (task, glossary item and ADR 0027 §3.3/W3-Q5 reworded); `StatusBar`'s derives; that a click is gated by `run_command`; the expected texts of the key test; that the hover text shows the saved values also while off |
 | 2026-11-25 | Open | T322 Done; the owner chose T323 before T324 (2026-11-25) |
+| 2026-11-25 | Ready for review | Done by the agent; `.\tools\check.ps1` run |
+| 2026-11-25 | Done | Reviewed: items 1–4 as written; `StatusBar` is built in two places, `sharpen` is `None` where `mode` is; no string literal in the drawing code. The agent also added to the mark's test a check that the mark's hover text is the button's (added, not weakened). The agent's log row names no files or summary: `lib.rs`, `loupe_text.rs`, `main.rs`, `preview_text.rs`, `glossary.md`, `test-inventory.md`; `.\tools\check.ps1` all OK, 2681 passed, 0 failed, 81 ignored, no clippy warnings. `CHANGELOG.md`: the Sharpening line names the button. No leftovers. T324 set Open |

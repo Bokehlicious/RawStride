@@ -237,6 +237,15 @@ pub fn mode_label_with_key(mode: Source, key: Option<KeyChord>) -> String {
     }
 }
 
+/// The text of the button that turns sharpening on and off, beside the RAW/JPEG control (ADR 0027
+/// W3-Q5, T323): "USM (U)" with the key the key map gives the action, "USM" when it has no key.
+pub fn sharpen_button_label(key: Option<KeyChord>) -> String {
+    match key.map(key_text) {
+        Some(key) => format!("USM ({key})"),
+        None => "USM".to_string(),
+    }
+}
+
 /// The text of a contact-sheet or filmstrip cell whose file has no embedded preview
 /// (`CellState::NoPreview`).
 pub fn no_preview_text() -> &'static str {
@@ -364,6 +373,22 @@ mod tests {
             error_text(&text_only, Source::Jpeg),
             "The file cannot be shown: x: the file has no embedded JPEG"
         );
+    }
+
+    /// The button "USM" shows the key map's key of sharpening (T323).
+    #[test]
+    fn the_sharpen_button_shows_the_maps_key() {
+        let chord = |shift: bool| {
+            Some(KeyChord {
+                key: egui::Key::U,
+                ctrl: false,
+                shift,
+                alt: false,
+            })
+        };
+        assert_eq!(sharpen_button_label(chord(false)), "USM (U)");
+        assert_eq!(sharpen_button_label(chord(true)), "USM (Shift+U)");
+        assert_eq!(sharpen_button_label(None), "USM");
     }
 
     /// The mode label and the two error texts show the key map's key of RAW ↔ JPEG (T280): the

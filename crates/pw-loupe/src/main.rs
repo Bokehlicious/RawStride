@@ -102,6 +102,7 @@ use pw_loupe::{
 use pw_loupe::{
     FixedKey, KeyAction, KeyChord, KeyMap, KeyView, clipping_text_with_key, error_text_with_key,
     fixed_key, keys_path, load_key_map, menu_key, mode_label_with_key, preview_text_with_key,
+    sharpen_button_label, sharpening_values_text,
 };
 use pw_loupe::{FolderWatcher, WatchEvent};
 use pw_loupe::{HISTOGRAM_BINS, HistogramPanel, HistogramText, histogram_panel, histogram_text};
@@ -326,6 +327,17 @@ struct StatusBar {
     /// The RAW/JPEG control's text in the loupe (G4: a key and a control), with the key map's
     /// key (T280).
     mode: Option<String>,
+    /// The button "USM" beside it (ADR 0027 W3-Q5, T323).
+    sharpen: Option<SharpenButton>,
+}
+
+/// The button that turns sharpening on and off (ADR 0027 W3-Q5, T323).
+#[derive(Clone, Debug, PartialEq)]
+struct SharpenButton {
+    text: String,
+    /// Sharpening is on: the button is drawn selected.
+    on: bool,
+    hover: String,
 }
 
 /// What a key of the key map changed that the key loop goes on with (T280).
@@ -4338,7 +4350,11 @@ impl Loupe {
             }
             let line = status_line_text(&parts);
             // The thumbnail size moved to the command bar (T109).
-            self.next_status = StatusBar { line, mode: None };
+            self.next_status = StatusBar {
+                line,
+                mode: None,
+                sharpen: None,
+            };
         }
     }
 
@@ -8785,6 +8801,17 @@ impl Loupe {
             {
                 commands.push(Command::ToggleMode);
             }
+            if let Some(sharpen) = &self.status_bar.sharpen
+                && ui
+                    .add_enabled(
+                        !blocked,
+                        egui::Button::new(sharpen.text.as_str()).selected(sharpen.on),
+                    )
+                    .on_hover_text(sharpen.hover.as_str())
+                    .clicked()
+            {
+                commands.push(Command::Sharpening);
+            }
             ui.label(egui::RichText::new(&self.status_bar.line).size(STATUS_TEXT_SIZE));
         });
     }
@@ -9580,6 +9607,7 @@ impl Loupe {
             parts.push(status);
         }
         let line = status_line_text(&parts);
+        let sharpen_key = self.key_map.first_key(KeyAction::Sharpening);
         // The display-mode control (G4: a key and a control) sits in the status bar.
         self.next_status = StatusBar {
             line,
@@ -9587,6 +9615,11 @@ impl Loupe {
                 frame.mode,
                 self.key_map.first_key(KeyAction::RawJpeg),
             )),
+            sharpen: Some(SharpenButton {
+                text: sharpen_button_label(sharpen_key),
+                on: self.sharpening,
+                hover: sharpening_values_text(sharpen_key, self.settings.shell.sharpening),
+            }),
         };
     }
 }

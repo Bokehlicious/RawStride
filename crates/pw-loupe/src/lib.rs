@@ -125,8 +125,8 @@ pub use keymap::{
 pub use loupe_text::{
     PROFILE_UNUSABLE_TEXT, READING_RATINGS_TEXT, compare_side_text, error_text,
     error_text_with_key, failed_cell_text, indicator_text, marked_text, mode_label,
-    mode_label_with_key, no_match_text, no_preview_text, position_text, source_text, status_line,
-    zoom_text,
+    mode_label_with_key, no_match_text, no_preview_text, position_text, sharpen_button_label,
+    source_text, status_line, zoom_text,
 };
 pub use monitor_profile::{
     MonitorProfile, ProfileSource, load_monitor_profile, primary_monitor_profile_path,
@@ -152,7 +152,7 @@ pub use preview::{
 pub use preview_text::{
     AdjustmentMark, ClippingText, HistogramText, PreviewText, adjustment_marks, clipped_text,
     clipping_state_text, clipping_text, clipping_text_with_key, deep_shadows_text, histogram_text,
-    preview_text, preview_text_with_key, zoom_value_text,
+    preview_text, preview_text_with_key, sharpening_values_text, zoom_value_text,
 };
 pub use rating_text::{
     ROTATION_UNSUPPORTED_TEXT, UNSUPPORTED_TEXT, label_choice_text, label_filter_text, label_name,

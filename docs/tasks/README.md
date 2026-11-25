@@ -87,8 +87,7 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status |
 |---|---|---|
-| [T323](T323-sharpening-button.md) | ADR 0027 W3: the button "USM" in the preview's title line | Open |
-| [T324](T324-prefetch-at-the-shown-scale.md) | ADR 0027: the neighbours prefetched at the shown scale between 50 % and 100 % | Blocked: waits for T323 |
+| [T324](T324-prefetch-at-the-shown-scale.md) | ADR 0027: the neighbours prefetched at the shown scale between 50 % and 100 % | Open |
 
 ## Writing a task (owner and reviewer)
 

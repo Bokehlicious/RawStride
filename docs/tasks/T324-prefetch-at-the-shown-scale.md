@@ -1,4 +1,4 @@
-# T324. ADR 0027: the neighbours prefetched at the shown scale between 50 % and 100 % — Blocked: waits for T323
+# T324. ADR 0027: the neighbours prefetched at the shown scale between 50 % and 100 % — Open
 
 - **Why:** W3's `latency.ps1` run after T318 (reviewer, 2026-11-24, release build of 160e3d7,
   folder `s6\a1`, 1920×1200, labels `t318-*-51-*`): at 51.2 % (100 % and three steps out) the
@@ -69,3 +69,4 @@
 | 2026-11-25 | Blocked | Added after W3's hand check (owner, 2026-11-25); waits for T322 |
 | 2026-11-25 | Blocked | Cold read and chain review (fresh agents): the prefetched view serves after a step (same centre, zoom and size). Added: `lib.rs` (its doc line); the existing test `free_zoom_waits_for_the_gesture_to_pause_and_is_not_prefetched` to change; tests of the other mode and −1; the cost. The owner decided on 2026-11-25: from 50 % to below 100 % the second view is fit, not 100 % (Z's target there), and the cost is accepted, measured after Done (ADR 0027 §4.3) |
 | 2026-11-25 | Blocked | T322 Done; waits for T323 (the owner chose T323 first, 2026-11-25; both change `docs/test-inventory.md`) |
+| 2026-11-25 | Open | T323 Done |
