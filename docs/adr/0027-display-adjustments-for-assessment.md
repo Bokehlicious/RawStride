@@ -524,6 +524,17 @@ still until the drag pauses (as T322 did before the ring was resident); the drag
 on the pan view. Stepping without dragging pays nothing for it. At 100 % and above and at 50 %
 and below the ring is as before (T326).
 
+**The hand check of T325 and T326, and the measurement (owner and reviewer, 2026-11-25):** the
+owner checked the drag after T326 and approved it (the first drag on an image still until it
+pauses, the later ones smooth), and hopes for a better solution after W5, once a step can
+cancel a render (backlog, "A render that a step cancels"). `latency.ps1` (release build of
+aceae24, folder `s6\a1`, 1920×1200, defaults 80 %/0.8 px/2, 13 steps a series, labels `t326-*`,
+the program restarted for each series): every step was seen and was one change; the next image's
+first change, median (worst), is 5.1 (7.5) ms at 51.2 % with sharpening off and 5.1 (7.1) ms on,
+5.2 (7.1) ms off and 5.1 (6.9) ms on at 64 %. V1 and V4 hold again between 50 % and 100 %. The
+process's memory grew to 4.1–4.4 GB over a series (2.4–2.5 GB in T324's run, 4.7 GB after
+T325), inside the core and texture budgets (V8); not looked into further.
+
 The tasks: T320 (the defaults), T321 (sharpening at 100 % and above), T322 (only the exact
 `Scaled` view between 50 % and 100 %, and the pan's pause), T323 (the button "USM"), T324 (the
 neighbours prefetched at the shown scale and at fit between 50 % and 100 %), T325 (the pan
