@@ -201,6 +201,31 @@ impl ClippingMap {
 /// Prefix of the error for a file whose RAW data is missing or corrupt.
 pub const DAMAGED: &str = "damaged:";
 
+/// Prefix of the error for a render that the caller's stop check ended (T327); see
+/// [`Error::is_cancelled`].
+pub const CANCELLED: &str = "cancelled";
+
+impl Error {
+    /// True when a stoppable render was ended by its stop check. A spent session's error (the
+    /// text starts with `spent:`) is not one; ask [`Session::is_spent`].
+    pub fn is_cancelled(&self) -> bool {
+        self.0.starts_with(CANCELLED)
+    }
+}
+
+/// The type of a stop check as the shim calls it: non-zero ends the render.
+type StopFn = extern "C" fn(*mut c_void) -> c_int;
+
+/// What the shim calls for a stop check. `ctx` points at the caller's `&(dyn Fn() -> bool + Sync)`.
+/// A panic of the check answers "stop"; it never crosses into C++.
+extern "C" fn stop_trampoline(ctx: *mut c_void) -> c_int {
+    // SAFETY: `ctx` is the address of a `&(dyn Fn() -> bool + Sync)` that lives on the stack of
+    // `Session::render` for the whole call of `pwlr_render`, the only place the shim calls this.
+    let stop = unsafe { &*(ctx as *const &(dyn Fn() -> bool + Sync)) };
+    let answer = std::panic::catch_unwind(std::panic::AssertUnwindSafe(stop));
+    c_int::from(answer.unwrap_or(true))
+}
+
 unsafe extern "C" {
     fn pwlr_version() -> *const c_char;
     fn pwlr_capabilities() -> c_uint;
@@ -218,7 +243,10 @@ unsafe extern "C" {
         ow: *mut c_int,
         oh: *mut c_int,
         error: *mut c_char,
+        stop: Option<StopFn>,
+        ctx: *mut c_void,
     ) -> *mut c_void;
+    fn pwlr_spent(session: *mut c_void) -> c_int;
     fn pwlr_image(
         img: *const c_void,
         w: *mut c_int,
@@ -551,11 +579,27 @@ impl Session {
     /// box of the visible image the shim processed: all 0 for the whole image, `r` for a region
     /// of a Bayer file, and for a region of an X-Trans file a wider box that holds `r` (its origin
     /// on a multiple of 1488 px, at least 512 px; `csrc/pwlr.cpp`).
-    fn render(&mut self, half: bool, r: Option<Rect>, demosaic: Demosaic) -> Result<(Rgb8, Rect)> {
+    fn render(
+        &mut self,
+        half: bool,
+        r: Option<Rect>,
+        demosaic: Demosaic,
+        stop: Option<&(dyn Fn() -> bool + Sync)>,
+    ) -> Result<(Rgb8, Rect)> {
         let r = r.unwrap_or(Rect::new(0, 0, 0, 0));
         let mut err = [0 as c_char; 200];
         let (mut ox, mut oy, mut ow, mut oh): (c_int, c_int, c_int, c_int) = (0, 0, 0, 0);
-        // SAFETY: live session (exclusive &mut), valid out-pointers and error buffer.
+        let stop_ref = stop;
+        let (check, ctx): (Option<StopFn>, *mut c_void) = match &stop_ref {
+            Some(reference) => (
+                Some(stop_trampoline),
+                std::ptr::from_ref(reference).cast_mut().cast(),
+            ),
+            None => (None, std::ptr::null_mut()),
+        };
+        // SAFETY: live session (exclusive &mut), valid out-pointers and error buffer; `ctx` points
+        // at `stop_ref`, which outlives the call, and the shim keeps neither it nor `check`
+        // beyond it.
         let img = unsafe {
             pwlr_render(
                 self.ptr,
@@ -570,6 +614,8 @@ impl Session {
                 &mut ow,
                 &mut oh,
                 err.as_mut_ptr(),
+                check,
+                ctx,
             )
         };
         if img.is_null() {
@@ -608,13 +654,36 @@ impl Session {
 
     /// The whole image at full resolution, with the given demosaic method.
     pub fn render_full_with(&mut self, demosaic: Demosaic) -> Result<Rgb8> {
-        self.render(false, None, demosaic).map(|(image, _)| image)
+        self.render(false, None, demosaic, None)
+            .map(|(image, _)| image)
     }
 
     /// The whole image at half resolution (2×2 binning, no demosaicing).
     pub fn render_half(&mut self) -> Result<Rgb8> {
-        self.render(true, None, Demosaic::Ahd)
+        self.render(true, None, Demosaic::Ahd, None)
             .map(|(image, _)| image)
+    }
+
+    /// Like [`render_half`](Self::render_half), and `stop` is asked before LibRaw starts and
+    /// while it works (from the thread that renders; it must be quick and may read an atomic set
+    /// by another thread). When it answers `true` the render ends with an error for which
+    /// [`Error::is_cancelled`] is true. A stop before LibRaw starts costs nothing: the session is
+    /// untouched. A stop while LibRaw works makes LibRaw free the unpacked RAW data (measured with
+    /// LibRaw 0.22: every time): then [`is_spent`](Self::is_spent) is true and the file must be
+    /// opened again (about 0.3 s for 61 Mpix). LibRaw asks only between its stages, so a stop can
+    /// take most of a stage to take effect, or come after the last ask and let the render finish.
+    pub fn render_half_stoppable(&mut self, stop: &(dyn Fn() -> bool + Sync)) -> Result<Rgb8> {
+        self.render(true, None, Demosaic::Ahd, Some(stop))
+            .map(|(image, _)| image)
+    }
+
+    /// True after a stopped or failed render made LibRaw free the unpacked RAW data (its exception
+    /// handler does that for every failure of the processing, not only a stop): every later render,
+    /// [`statistics`](Self::statistics) and [`clipping_map`](Self::clipping_map) fails with an
+    /// error that starts with `spent:`, and the file must be opened again.
+    pub fn is_spent(&self) -> bool {
+        // SAFETY: live session; the shim only reads a flag.
+        unsafe { pwlr_spent(self.ptr) != 0 }
     }
 
     /// Exactly the region `r`, rendered with AHD and with `margin` extra pixels of context on
@@ -633,6 +702,29 @@ impl Session {
     /// a Bayer file with a margin of at least 8 px). An image from LibRaw whose size is not the
     /// box the shim processed, or a box that does not hold the asked one, is refused.
     pub fn render_region_with(&mut self, r: Rect, margin: u32, demosaic: Demosaic) -> Result<Rgb8> {
+        self.render_region_checked(r, margin, demosaic, None)
+    }
+
+    /// Like [`render_region_with`](Self::render_region_with), with a stop check as in
+    /// [`render_half_stoppable`](Self::render_half_stoppable) (the same cost: a stop while LibRaw
+    /// works spends the session, see [`is_spent`](Self::is_spent)).
+    pub fn render_region_stoppable(
+        &mut self,
+        r: Rect,
+        margin: u32,
+        demosaic: Demosaic,
+        stop: &(dyn Fn() -> bool + Sync),
+    ) -> Result<Rgb8> {
+        self.render_region_checked(r, margin, demosaic, Some(stop))
+    }
+
+    fn render_region_checked(
+        &mut self,
+        r: Rect,
+        margin: u32,
+        demosaic: Demosaic,
+        stop: Option<&(dyn Fn() -> bool + Sync)>,
+    ) -> Result<Rgb8> {
         if r.w == 0 || r.h == 0 || r.x + r.w > self.width || r.y + r.h > self.height {
             return Err(Error(format!(
                 "region {r:?} is outside the image ({}x{})",
@@ -644,7 +736,7 @@ impl Session {
         let x1 = (r.x + r.w + margin).min(self.width);
         let y1 = (r.y + r.h + margin).min(self.height);
         let asked = Rect::new(x0, y0, x1 - x0, y1 - y0);
-        let (big, used) = self.render(false, Some(asked), demosaic)?;
+        let (big, used) = self.render(false, Some(asked), demosaic, stop)?;
         // The image must be exactly the box the shim processed: the asked one, or (X-Trans) a
         // wider box inside the image that holds it.
         let (ux1, uy1) = (
@@ -683,6 +775,26 @@ mod tests {
         assert_eq!(Demosaic::default(), Demosaic::Ahd);
         assert_eq!(Demosaic::Ahd.user_qual(), 3);
         assert_eq!(Demosaic::Ppg.user_qual(), 2);
+    }
+
+    #[test]
+    fn a_cancelled_error_is_told_from_a_damaged_and_a_spent_one() {
+        assert!(Error("cancelled: the render was stopped".into()).is_cancelled());
+        assert!(!Error(format!("{DAMAGED} RAW data incomplete")).is_cancelled());
+        assert!(!Error("spent: a render failed or was stopped".into()).is_cancelled());
+    }
+
+    #[test]
+    fn the_stop_trampoline_passes_the_answer_and_a_panic_means_stop() {
+        let yes: &(dyn Fn() -> bool + Sync) = &|| true;
+        let no: &(dyn Fn() -> bool + Sync) = &|| false;
+        let boom: &(dyn Fn() -> bool + Sync) = &|| panic!("a stop check that panics");
+        let ask = |f: &&(dyn Fn() -> bool + Sync)| {
+            stop_trampoline(std::ptr::from_ref(f).cast_mut().cast())
+        };
+        assert_eq!(ask(&yes), 1);
+        assert_eq!(ask(&no), 0);
+        assert_eq!(ask(&boom), 1);
     }
 
     #[test]

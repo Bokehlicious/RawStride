@@ -87,7 +87,6 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status |
 |---|---|---|
-| [T327](T327-libraw-render-that-can-be-stopped.md) | ADR 0027 W5-Q1: a LibRaw render that can be stopped, and its timing (pw-libraw) | Open |
 | [T328](T328-view-core-stops-unwanted-renders.md) | ADR 0027 W5-Q1: the view core stops a render that is no longer wanted (pw-viewcore) | Blocked |
 
 ## Writing a task (owner and reviewer)

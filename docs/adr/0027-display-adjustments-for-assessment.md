@@ -593,6 +593,15 @@ the view key, the statistics at the open while auto is on, the shadows' function
 page (the shadows' amount), and the shell (keys, menu, marks, reset, glossary). After it, the
 owner's hand check and `latency.ps1` at fit with exposure and with auto exposure on.
 
+**W5-Q1 after T327's measurement (owner, 2026-11-25):** a stop takes effect only between LibRaw's
+stages: 220–350 ms from the stop to the return for a whole-image PPG render of the 50 and 61 Mpix
+ARW files, 0.55–1.3 s for the X-Trans RAF, 35–90 ms for a half-size render (i7-9700K, T327's log).
+A stop while LibRaw works always makes LibRaw free the unpacked RAW data, so the session must be
+opened again (about 0.3 s for 61 Mpix). The chain goes on, and **T328 stops a render only when its
+image is no longer wanted** (a step to another image, a new folder); a new exposure value of the
+same image does not stop the render under way, which finishes first (stop plus reopen would cost
+as much or more). LibRaw's `setCancelFlag()`, which might stop sooner, waits in `backlog.md`.
+
 ## 5. Steps
 
 Each step ends with tests (GR11), the owner's hand check and, where an image is shown,

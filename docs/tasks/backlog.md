@@ -55,6 +55,12 @@ Reorganised on 2026-11-21 (owner): the earlier file mixed these three kinds and 
 
 ## Technical work
 
+- **A stop that LibRaw feels sooner: `setCancelFlag()`** (T327, 2026-11-25; ADR 0027 W5-Q1): the
+  progress handler is asked only between LibRaw's stages, so a stop takes 220–350 ms on a
+  whole-image PPG render of an ARW and up to 1.3 s on an X-Trans RAF (its demosaic has no ask).
+  LibRaw's `setCancelFlag()` is checked inside some of its loops (`checkCancel`, `libraw.h`) and
+  might stop sooner; it most likely still frees the RAW data (the same exception). The owner's
+  question, after T328's hand check shows whether the stop is felt late.
 - **A setting for the number of ExifTool write processes** (T268, ADR 0007 §9.6 point 2: "may
   become a setting later"): the app uses four (`WRITE_PROCESSES` in `pw-loupe`'s `main.rs`,
   the owner, 2026-11-22, after T267); a memory card, a network share and a hard disk were not

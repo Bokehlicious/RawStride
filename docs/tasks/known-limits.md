@@ -595,11 +595,18 @@ only if it is seen in use.)
 (Reviewer and an independent review agent of T197, 2026-11-19; none is caused by T197, which
 avoids the first for X-Trans by refusing a box under 512 px before LibRaw is called.)
 
-- *A failed LibRaw call kills the session:* LibRaw's exception handler calls `recycle()` on an
-  error such as `IO_CORRUPT`, so the unpacked RAW data is gone and every later call on that
-  `pw_libraw::Session` fails ("Out of order call of libraw function"), Bayer files too;
-  `statistics` then gives `Ok(None)` without an error. A fix would reopen the session or report it
-  as dead.
+- *A failed LibRaw render kills the session:* LibRaw's exception handler calls `recycle()` on
+  every exception in `dcraw_process` (a stop, `IO_CORRUPT`, out of memory), so the unpacked RAW
+  data is gone. Since T327 the shim marks such a session spent (`Session::is_spent`), and every
+  later render, `statistics` and `clipping_map` fails with a `spent:` error without calling
+  LibRaw; outside T328's stops, nothing opens the file again by itself. Only the stop
+  case is tested: no file in `PW_TESTDATA` and no generated file makes `dcraw_process` fail
+  otherwise (a corrupt file is refused at the open, the X-Trans box under 512 px by the shim).
+- *A half-size render of an X-Trans file is not deterministic* (found in T327, 2026-11-25, not
+  caused by it): two fresh sessions of `_DSF4243.RAF` give half-size images that differ in about
+  half the bytes (1.7 M and 3.1 M of 19.5 M in two runs); a whole-image PPG render of the same
+  file and every ARW render are identical. `tests/stop.rs` compares only the size there. A task if
+  it is seen in use (for example a flicker when the same RAF is shown again at fit).
 - *Panic paths in `pw-libraw/src/lib.rs` from before T197* (AGENTS.md §3): `r.x + r.w` and
   `r.x + r.w + margin` in `render_region_with` can overflow `u32` (a panic in a debug build; in
   release the shim's bounds check and the box check refuse the result), and `Rgb8::crop` is a

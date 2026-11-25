@@ -50,7 +50,17 @@ struct PwSession {
   LibRaw *lr;
   PwStream *stream;
   int data_errors;
+  /* The check of the render under way (T327), set right before dcraw_process and cleared right
+   * after it; NULL otherwise. */
+  int (*stop)(void *ctx);
+  void *ctx;
+  /* 1 when a failed render (a stop, or any other failure) made LibRaw free the unpacked RAW data:
+   * nothing but pwlr_close and pwlr_spent may be used on the session any more. */
+  int spent;
 };
+
+static const char PWLR_SPENT_TEXT[] =
+    "spent: a render failed or was stopped and LibRaw dropped the RAW data; open the file again";
 
 extern "C" {
 
@@ -81,13 +91,21 @@ static void on_data_error(void *data, const char *, const INT64) {
   if (s) s->data_errors++;
 }
 
+/* LibRaw's progress handler (T327): a non-zero return cancels the render under way. LibRaw calls
+ * it between the stages of dcraw_process; it throws nothing. */
+static int on_progress(void *data, enum LibRaw_progress, int, int) {
+  PwSession *s = (PwSession *)data;
+  if (s && s->stop) return s->stop(s->ctx) ? 1 : 0;
+  return 0;
+}
+
 void pwlr_close(void *session);
 
 /* Opens and unpacks; NULL on failure (info->error says why; "damaged: ..." for missing or
  * corrupt RAW data). */
 void *pwlr_open(const wchar_t *path, pwlr_info *info) {
   memset(info, 0, sizeof *info);
-  PwSession *s = new PwSession{nullptr, nullptr, 0};
+  PwSession *s = new PwSession{nullptr, nullptr, 0, nullptr, nullptr, 0};
   s->stream = new PwStream(path);
   if (!s->stream->valid()) {
     strcpy(info->error, "open: cannot read the file");
@@ -150,6 +168,7 @@ void *pwlr_open(const wchar_t *path, pwlr_info *info) {
     pwlr_close(s);
     return 0;
   }
+  lr->set_progress_handler(on_progress, s);
   return s;
 }
 
@@ -207,18 +226,34 @@ static int pwlr_xtrans_axis(int a, int len, int size, int *lo_out, int *len_out)
  * image that the caller frees with pwlr_free; NULL on failure. For a region, *ox, *oy, *ow and
  * *oh are set to the box of the visible image it was processed in, which the returned image is:
  * (x, y, w, h) on a Bayer file, and on an X-Trans file the wider box above, which holds the asked
- * one. For the whole image they are 0. */
+ * one. For the whole image they are 0.
+ *
+ * `stop` (may be NULL) is asked with `ctx` before LibRaw starts and while it works; a non-zero
+ * answer ends the render with an error that starts with "cancelled" (T327). Before LibRaw starts
+ * that costs nothing. If LibRaw frees the unpacked RAW data when the render fails (a stop while it
+ * works always does, in LibRaw 0.22), the session is spent (pwlr_spent): the error of every later
+ * render, statistics and clipping map starts with "spent:" and LibRaw is not called. */
 libraw_processed_image_t *pwlr_render(void *session, int quality, int half, int x, int y, int w,
-                                      int h, int *ox, int *oy, int *ow, int *oh, char *error) {
+                                      int h, int *ox, int *oy, int *ow, int *oh, char *error,
+                                      int (*stop)(void *ctx), void *ctx) {
   *ox = 0;
   *oy = 0;
   *ow = 0;
   *oh = 0;
+  PwSession *s = (PwSession *)session;
+  if (s->spent) {
+    strcpy(error, PWLR_SPENT_TEXT);
+    return 0;
+  }
   if (quality != PWLR_QUAL_PPG && quality != PWLR_QUAL_AHD) {
     snprintf(error, 200, "unsupported demosaic method %d", quality);
     return 0;
   }
-  LibRaw *lr = ((PwSession *)session)->lr;
+  if (stop && stop(ctx)) {
+    strcpy(error, "cancelled: the render was stopped before it started");
+    return 0;
+  }
+  LibRaw *lr = s->lr;
   lr->imgdata.params.user_qual = quality;
   lr->imgdata.params.half_size = half ? 1 : 0;
   if (w > 0 && h > 0) {
@@ -251,8 +286,26 @@ libraw_processed_image_t *pwlr_render(void *session, int quality, int half, int 
     lr->imgdata.params.cropbox[2] = 0xFFFFFFFFu;
     lr->imgdata.params.cropbox[3] = 0xFFFFFFFFu;
   }
+  s->stop = stop;
+  s->ctx = ctx;
   int rc = lr->dcraw_process();
-  if (rc != LIBRAW_SUCCESS) { set_error(error, "process", rc); return 0; }
+  s->stop = nullptr;
+  s->ctx = nullptr;
+  if (rc != LIBRAW_SUCCESS) {
+    /* LibRaw's exception handler in dcraw_process calls recycle() on every exception (a stop, a
+     * corrupt-data error, out of memory): the unpacked RAW data is then gone. In LibRaw 0.22 a stop
+     * while LibRaw works always does it (T327 measured so). */
+    if (!lr->imgdata.rawdata.raw_alloc) s->spent = 1;
+    if (rc == LIBRAW_CANCELLED_BY_CALLBACK) {
+      snprintf(error, 200, "cancelled: %s%s", libraw_strerror(rc),
+               s->spent ? " (the session is spent)" : "");
+    } else {
+      set_error(error, "process", rc);
+    }
+    /* A kept session holds only the unpacked RAW data, as after a success. */
+    if (!s->spent) lr->free_image();
+    return 0;
+  }
   libraw_processed_image_t *img = lr->dcraw_make_mem_image(&rc);
   /* The processed buffer (image[]) is not needed once copied out; a kept session then holds
    * only the unpacked RAW data. The next render rebuilds it from the RAW data. */
@@ -550,6 +603,7 @@ int pwlr_statistics(void *session, pwlr_stats *out, char *error) {
   error[0] = 0;
   PwSession *s = (PwSession *)session;
   if (!s || !s->lr) { strcpy(error, "statistics: no session"); return -1; }
+  if (s->spent) { strcpy(error, PWLR_SPENT_TEXT); return -1; }
   const libraw_rawdata_t &R = s->lr->imgdata.rawdata;
   PwLayout *layout = new (std::nothrow) PwLayout;
   PwLevels *lv = new (std::nothrow) PwLevels[4];
@@ -658,6 +712,7 @@ int pwlr_clipping_map(void *session, unsigned char *map, size_t length, unsigned
   error[0] = 0;
   PwSession *s = (PwSession *)session;
   if (!s || !s->lr) { strcpy(error, "clipping map: no session"); return -1; }
+  if (s->spent) { strcpy(error, PWLR_SPENT_TEXT); return -1; }
   const libraw_rawdata_t &R = s->lr->imgdata.rawdata;
   PwLayout *layout = new (std::nothrow) PwLayout;
   if (!layout) { strcpy(error, "clipping map: out of memory"); return -1; }
@@ -680,6 +735,12 @@ int pwlr_clipping_map(void *session, unsigned char *map, size_t length, unsigned
   }
   delete layout;
   return result;
+}
+
+/* 1 when a failed or stopped render made LibRaw free the unpacked RAW data (see pwlr_render). */
+int pwlr_spent(void *session) {
+  PwSession *s = (PwSession *)session;
+  return s && s->spent ? 1 : 0;
 }
 
 void pwlr_close(void *session) {
