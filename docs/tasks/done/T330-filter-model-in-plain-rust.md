@@ -1,4 +1,4 @@
-# T330. ADR 0022 S1: the filter model in plain Rust — Open
+# T330. ADR 0022 S1: the filter model in plain Rust — Done
 
 - **Why:** ADR 0022 (accepted 2026-11-17) adds a quick search and an extended filter on text and
   metadata. Step S1 is the part that needs no file, no ExifTool and no window: which fields exist,
@@ -199,3 +199,5 @@
 | Date | Status | Note |
 |---|---|---|
 | 2026-11-25 | Open | Written (ADR 0022 S1; the first task for Codex, in its own worktree `C:\Development\PhotoWorkflow-T330` on `task/T330`). Reviewer's reading: `filter.rs` is the star and label filter and stays unchanged; no existing code calls the new module; `pw-loupe` has no `meta_filter` yet. Chain review: not needed (a single task, no other task between S1 and S2 touches it). Cold read (fresh agent): found the value type per field, the order of the `Row::new` checks, empty `OneOf` elements, stored texts, file name form, `needs` with an inactive search, the derives, rule 1 for the worktree, a typo and a vague test 15 — all fixed in the text. The README's index row is added by the reviewer; the README's Model line lists only Sonnet and Opus, so `Codex` is a one-off for this test. |
+| 2026-11-25 | Ready for review | Implemented the plain Rust filter model and added 15 tests. The owner confirmed that “the reverse” in test 13 is a wording error and item 2 applies. An empty filter needs no group, and only an Exif row makes `needs(Exif)` true. |
+| 2026-11-25 | Done | Reviewed (reviewer): every point of What and all 15 tests are in `meta_filter.rs`; no panic paths outside the tests (`Vec::remove` behind a bounds check); `lib.rs` has the one line. Test 3's "`OneOf` on `Title`" is read as the empty texts on `Title` and `OneOf` on `Keywords`, since `Title` does not allow `OneOf` and `NotAllowed` comes first: the task text's slip, the code is right. Codex's own `check.ps1` failed only in its sandbox (ExifTool could not start, os error 623; the advisory database locked); the files were copied unchanged into `feature/gui-workspace` and `.\tools\check.ps1` there is all OK: 2735 passed, 87 ignored, 0 failed, no clippy warning. `docs/test-inventory.md` updated by the reviewer (pw-loupe 1476). No hand check of its own (nothing in the program changes); ADR 0022's hand check follows S3. Leftovers: none. |

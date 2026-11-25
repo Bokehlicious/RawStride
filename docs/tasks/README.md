@@ -87,7 +87,6 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status | Model |
 |---|---|---|---|
-| [T330](T330-filter-model-in-plain-rust.md) | ADR 0022 S1: the filter model in plain Rust (`pw-loupe/src/meta_filter.rs`; for Codex, in its own worktree) | Open | Codex |
 
 ## Writing a task (owner and reviewer)
 

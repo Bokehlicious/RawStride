@@ -28,6 +28,7 @@ mod keymap;
 pub mod library;
 pub mod library_text;
 mod loupe_text;
+pub mod meta_filter;
 mod monitor_profile;
 mod moves;
 mod moves_text;

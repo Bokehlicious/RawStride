@@ -336,3 +336,4 @@ was when the task was done, so "this file", "below" and "the Log" in T1–T115 m
 | [T327](T327-libraw-render-that-can-be-stopped.md) | ADR 0027 W5-Q1: a LibRaw render that can be stopped, and its timing (pw-libraw) |
 | [T328](T328-view-core-stops-unwanted-renders.md) | ADR 0027 W5-Q1: the view core stops a render that is no longer wanted (pw-viewcore) |
 | [T329](T329-pan-view-after-standing-still.md) | ADR 0027: the pan view also once the view has stood still (pw-viewcore) |
+| [T330](T330-filter-model-in-plain-rust.md) | ADR 0022 S1: the filter model in plain Rust (pw-loupe; done by Codex) |
