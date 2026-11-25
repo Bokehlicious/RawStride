@@ -571,11 +571,19 @@ only if it is seen in use.)
   checks whether a result is still wanted only for scaled and reduced views, so after U pressed
   twice quickly a late 100 % view or ring of the old sharpening is kept and takes texture budget
   until it is evicted (it is not protected, so it goes first).
-- *A drag between 50 % and 100 %* (T322, T325, accepted): while the drag goes on, the pan view
-  (a scaled view at the shown scale over twice the visible region) is drawn, reduced by the same
-  filter, so nothing moves when the exact view replaces it. A drag that leaves the pan view, or
-  one before it is resident (within the dwell after a step), keeps the last drawn view still
-  until the drag pauses and the new views arrive.
+- *A drag between 50 % and 100 %* (T322, T325, T326, accepted): the pan view (a scaled view at
+  the shown scale over twice the visible region) is asked for only once the image has been
+  dragged since it became current (ADR 0027 §4.3, owner 2026-11-25). The first drag on an image
+  keeps the last drawn view still until the drag pauses and the new views arrive; the drags after
+  it run on the pan view, reduced by the same filter, so nothing moves when the exact view
+  replaces it. A drag that leaves the pan view keeps the last drawn view still the same way.
+- *A drag and a step at once between 50 % and 100 %* (T326, accepted with the owner's choice A,
+  2026-11-25): the pan view's render, once started, is not cancelled by a step, so the next image
+  can wait for it (at 51.2 % nearly a whole-image render). Backlog: "A render that a step
+  cancels".
+- *The compare's second core counts a new image as dragged* (T326's cold read, accepted): a new
+  held image shown at the same zoom with another centre (`set_view` from `pw-loupe`) sets
+  `dragged` for the second core without a drag, so its pan view may be made needlessly.
 - *The mark while the sharpened ring stands in* (T322, accepted): between 50 % and 100 % the mark
   says shown while the ring is drawn meanwhile, since the ring carries the sharpening, as below
   50 % with the half-size view.

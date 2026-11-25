@@ -1,4 +1,4 @@
-# T326. ADR 0027: the pan view only after a drag — Open
+# T326. ADR 0027: the pan view only after a drag — Done
 
 - **Why:** found in the check after T325 (owner and reviewer, 2026-11-25; ADR 0027 §4.3, "The
   check after T325"): `latency.ps1` at 51.2 % and 64 % showed 5–6 of 13 steps with no change
@@ -89,3 +89,5 @@
 |---|---|---|
 | 2026-11-25 | Open | Added after the check of T325 (owner, 2026-11-25): alternative A chosen of A (the pan view only after a drag), B (a smaller pan view) and C (a render that a step cancels) |
 | 2026-11-25 | Open | Cold read (a fresh agent, 2026-11-25): doable with the named file and points, line references right, no other existing test expected to fail. Changed after it: `set_view`'s comparison after the clamping, `go` compares the clamped position, the "not dragged" test builds its state or sets the flag back, `an_accepted_pan_view_…` marks both its states by hand, and the compare's `set_view` of a new held image at the same zoom counting as a drag written under "Not in this task" |
+| 2026-11-25 | Ready for review | Done by the agent: `dragged` in `State` (set in `pan` and `set_view`, cleared in `go`, `open_folder`, `set_files`), the pan view in `wanted` only when dragged; six T325 tests mark the image as dragged, no assertion changed; 8 new tests; `check.ps1` all OK (2698 passed) |
+| 2026-11-25 | Done | Reviewed and approved by the owner on 2026-11-25; the owner's hand check follows (the first drag on an image still, the later ones smooth, at 51–59 % and one more level between 50 % and 100 %; `latency.ps1` at 51.2 % and 64 %, sharpening off and on; the result goes into ADR 0027 §4.3). Leftovers in `known-limits.md` (Sharpening): "A drag between 50 % and 100 %" rewritten (the first drag), "A drag and a step at once between 50 % and 100 %" and "The compare's second core counts a new image as dragged" added; cancelling a render is in `backlog.md` ("A render that a step cancels"). `CHANGELOG.md`: T325's line under Changed changed (after the first drag), no new line |

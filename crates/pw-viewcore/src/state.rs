@@ -355,8 +355,8 @@ pub(crate) enum Want {
     /// The 100 % view at the current position (the zoom target, V7).
     Target,
     /// The ring for panning at 100 % and above, and below 50 %; between 50 % and 100 % the pan
-    /// view (a scaled view over a larger region) takes its place (ADR 0027 §4.3, owner
-    /// 2026-11-25).
+    /// view (a scaled view over a larger region) takes its place, asked for only after the image
+    /// has been dragged (ADR 0027 §4.3, owner 2026-11-25).
     Ring,
     /// The fine view of the current image below 50 %, while fine details is on (ADR 0027 W2).
     Fine,
@@ -513,6 +513,9 @@ pub(crate) struct State<S> {
     /// The last pan step that moved the centre; a scaled view is not planned while a drag is under
     /// way (ADR 0027 §4.3, owner 2026-11-25).
     pan_at: Option<Instant>,
+    /// Whether the current image has been dragged since it became current (ADR 0027 §4.3, owner
+    /// 2026-11-25). The pan view is asked for only then.
+    dragged: bool,
     pub centre: [f64; 2],
     pub view_px: [u32; 2],
     pub sizes: HashMap<Key, ImageSize>,
@@ -621,6 +624,7 @@ impl<S> State<S> {
             zoom: Zoom::Fit,
             gesture_at: None,
             pan_at: None,
+            dragged: false,
             centre: [0.5, 0.5],
             view_px: [1920, 1080],
             sizes: HashMap::new(),
@@ -767,6 +771,9 @@ impl<S> State<S> {
         if zoom == self.zoom && centre == self.centre {
             return false;
         }
+        if zoom == self.zoom && centre != self.centre {
+            self.dragged = true;
+        }
         self.zoom = zoom;
         self.centre = centre;
         self.gesture_at = Some(Instant::now());
@@ -840,6 +847,7 @@ impl<S> State<S> {
         let centre = geometry::pan_centre(size, self.view_px, scale, self.centre, delta);
         if centre != self.centre {
             self.pan_at = Some(Instant::now());
+            self.dragged = true;
         }
         self.centre = centre;
     }
@@ -861,6 +869,9 @@ impl<S> State<S> {
             Some(c) if pos < c => -1,
             _ => 1,
         };
+        if self.cur != Some(pos) {
+            self.dragged = false;
+        }
         self.cur = Some(pos);
         self.since = Instant::now();
     }
@@ -872,6 +883,7 @@ impl<S> State<S> {
         self.generation += 1;
         self.files = files;
         self.cur = None;
+        self.dragged = false;
         self.zoom = Zoom::Fit;
         self.centre = [0.5, 0.5];
         self.sessions.retain(|_, s| s.is_none());
@@ -1056,6 +1068,7 @@ impl<S> State<S> {
         self.cur = Some(pos);
         if self.files.get(pos) != before.as_ref() {
             self.since = Instant::now();
+            self.dragged = false;
         }
     }
 
@@ -1137,10 +1150,11 @@ impl<S> State<S> {
         }
         // between 50 % and 100 % the pan view takes the ring's place; it is not asked for during
         // a drag (a drag leaving it would ask for a new one every frame) nor when it is no larger
-        // than the shown view
+        // than the shown view; and only once the image has been dragged since it became current
+        // (ADR 0027 §4.3, owner 2026-11-25), so stepping pays nothing for it
         match self.pan_view(ck) {
             Some((_, useful)) => {
-                if useful && (full || !self.in_pan()) {
+                if self.dragged && useful && (full || !self.in_pan()) {
                     add((ck, Want::Ring));
                 }
             }
@@ -6685,7 +6699,8 @@ mod tests {
     fn between_50_and_100_percent_the_plan_asks_for_a_pan_view_not_a_ring() {
         for sharpen in [None, Some(SHARP)] {
             for scale in [0.512, 0.6, 0.75] {
-                let s = shown_resident(scale, sharpen);
+                let mut s = shown_resident(scale, sharpen);
+                s.dragged = true;
                 let region = pan_region(&s, scale);
                 let vis =
                     geometry::sensor_box(SIZE, geometry::visible(SIZE, s.view_px, scale, s.centre));
@@ -6722,6 +6737,7 @@ mod tests {
     fn a_short_pan_inside_the_pan_view_plans_nothing_and_draws_the_pan_view() {
         for scale in [0.512, 0.75] {
             let mut s = shown_resident(scale, None);
+            s.dragged = true;
             let shown = s.frame(VIEW).draw.map(|d| d.id);
             let pan = s.accept(&out(&s, 10, Want::Ring), 100);
             assert!(pan.is_some() && pan != shown);
@@ -6737,6 +6753,7 @@ mod tests {
     fn a_pan_past_the_cover_plans_a_new_pan_view_only_after_the_pause() {
         for scale in [0.512, 0.75] {
             let mut s = shown_resident(scale, None);
+            s.dragged = true;
             assert!(s.accept(&out(&s, 10, Want::Ring), 100).is_some());
             s.centre[0] += centre_step(scale, 0.6);
             s.pan_at = Some(Instant::now());
@@ -6755,6 +6772,7 @@ mod tests {
     fn during_a_drag_neither_the_shown_view_nor_the_pan_view_is_planned_between_50_and_100() {
         let mut s = state(1024);
         with_session(&mut s, 10);
+        s.dragged = true;
         s.zoom = Zoom::Scale(0.75);
         s.pan_at = Some(Instant::now());
         let w = s.wanted(false);
@@ -6774,6 +6792,7 @@ mod tests {
         // fit scale 0.75
         let mut s = state(1024);
         with_session(&mut s, 10);
+        s.dragged = true;
         s.view_px = [3000, 2400];
         s.zoom = Zoom::Fit;
         assert!(!s.wanted(true).contains(&(k(10), Want::Ring)));
@@ -6790,12 +6809,14 @@ mod tests {
     fn an_accepted_pan_view_satisfies_the_shown_requirement_while_it_contains_the_visible_region() {
         let mut s = state(1024);
         with_session(&mut s, 10);
+        s.dragged = true;
         s.zoom = Zoom::Scale(0.75);
         // only the pan view is resident: no exact shown view is asked for
         assert!(s.accept(&out(&s, 10, Want::Ring), 100).is_some());
         assert!(scaled_renders(&s).is_empty(), "{:?}", s.plan());
         // the shown view alone does not satisfy the pan requirement
         let mut s = shown_resident(0.75, None);
+        s.dragged = true;
         assert_eq!(scaled_renders(&s).len(), 1);
         // a resident pan view of the other sharpening is drawn until the new one is accepted
         let pan = s.accept(&out(&s, 10, Want::Ring), 100);
@@ -6808,6 +6829,129 @@ mod tests {
         let new = s.accept(&out(&s, 10, Want::Ring), 100);
         assert!(new.is_some() && new != pan);
         assert_eq!(s.frame(VIEW).draw.map(|d| d.id), new);
+    }
+
+    // ---------- the pan view only after a drag (T326) ----------
+
+    #[test]
+    fn without_a_drag_no_pan_view_is_wanted_between_50_and_100() {
+        for scale in [0.512, 0.75] {
+            let mut s = shown_resident(scale, None);
+            s.dragged = false;
+            for full in [false, true] {
+                let w = s.wanted(full);
+                assert!(!w.contains(&(k(10), Want::Ring)), "{scale} {full}: {w:?}");
+            }
+            let shown = shown_req_job(&s);
+            assert!(
+                scaled_renders(&s).iter().all(|v| *v == shown),
+                "{scale}: {:?}",
+                s.plan()
+            );
+            let w = s.wanted(false);
+            assert!(w.contains(&(k(11), Want::Shown)), "{scale}: {w:?}");
+            assert!(w.contains(&(k(12), Want::Shown)), "{scale}: {w:?}");
+        }
+    }
+
+    #[test]
+    fn after_a_drag_and_its_pause_the_pan_view_is_planned() {
+        let mut s = shown_resident(0.75, None);
+        assert!(!s.dragged);
+        s.pan([10.0, 0.0]);
+        assert!(s.dragged);
+        s.pan_at = Some(Instant::now() - Duration::from_secs(1));
+        let jobs = scaled_renders(&s);
+        assert!(
+            jobs.iter().any(|v| v.region == pan_region(&s, 0.75)),
+            "{jobs:?}"
+        );
+    }
+
+    #[test]
+    fn a_pan_at_fit_or_one_that_does_not_move_the_centre_is_not_a_drag() {
+        let mut s = state(1024);
+        with_session(&mut s, 10);
+        s.zoom = Zoom::Fit;
+        s.pan([10.0, 10.0]);
+        assert!(!s.dragged);
+        s.zoom = Zoom::Scale(0.75);
+        s.pan([-1.0e9, -1.0e9]);
+        assert!(s.dragged);
+        // now at the image's edge: a further step the same way moves nothing
+        s.dragged = false;
+        s.pan([-10.0, -10.0]);
+        assert!(!s.dragged);
+    }
+
+    #[test]
+    fn set_view_with_only_the_centre_changed_is_a_drag_a_zoom_is_not() {
+        let mut s = state(1024);
+        known(&mut s, 10);
+        assert!(s.set_view(Zoom::Scale(0.75), [0.5, 0.5]));
+        assert!(!s.dragged);
+        assert!(s.set_view(Zoom::Scale(0.8), [0.3, 0.3]));
+        assert!(!s.dragged);
+        assert!(s.set_view(Zoom::Scale(0.8), [0.4, 0.3]));
+        assert!(s.dragged);
+    }
+
+    #[test]
+    fn a_step_to_another_image_clears_the_drag_and_the_same_position_keeps_it() {
+        let mut s = state(1024);
+        s.dragged = true;
+        s.go(10);
+        assert!(s.dragged);
+        s.go(11);
+        assert!(!s.dragged);
+        s.dragged = true;
+        s.open_folder(files(5));
+        assert!(!s.dragged);
+    }
+
+    #[test]
+    fn set_files_clears_the_drag_only_when_the_current_path_changed() {
+        let mut s = state(1024);
+        s.dragged = true;
+        // image 3 drops out: the current image (img10) is at position 9
+        s.set_files(without(20, &[3]), 9);
+        assert!(s.dragged);
+        s.set_files(without(20, &[3]), 9);
+        assert!(s.dragged);
+        // another path is current
+        s.set_files(files(20), 4);
+        assert!(!s.dragged);
+    }
+
+    #[test]
+    fn a_zoom_step_and_the_mode_keep_the_drag() {
+        let mut s = shown_resident(0.75, None);
+        s.dragged = true;
+        s.zoom_by(1.1, None);
+        s.set_mode(Source::Jpeg);
+        s.set_mode(Source::Raw);
+        assert!(s.dragged);
+        s.gesture_at = Some(Instant::now() - Duration::from_secs(1));
+        let Zoom::Scale(scale) = s.zoom else {
+            panic!("no scale");
+        };
+        assert!((0.5..1.0).contains(&scale), "{scale}");
+        let jobs = scaled_renders(&s);
+        assert!(
+            jobs.iter().any(|v| v.region == pan_region(&s, scale)),
+            "{jobs:?}"
+        );
+    }
+
+    #[test]
+    fn the_100_percent_ring_does_not_depend_on_a_drag() {
+        for scale in [1.0, 2.0, 0.4] {
+            let mut s = state(1024);
+            with_session(&mut s, 10);
+            s.zoom = Zoom::Scale(scale);
+            assert!(!s.dragged);
+            assert!(s.wanted(true).contains(&(k(10), Want::Ring)), "{scale}");
+        }
     }
 
     #[test]

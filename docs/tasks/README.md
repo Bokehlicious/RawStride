@@ -87,7 +87,6 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status |
 |---|---|---|
-| [T326](T326-pan-view-only-after-a-drag.md) | ADR 0027: the pan view only after a drag | Open |
 
 ## Writing a task (owner and reviewer)
 
