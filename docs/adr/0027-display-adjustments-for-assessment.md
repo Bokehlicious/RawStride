@@ -526,7 +526,9 @@ moved only the centre, as the compare's second core is dragged) since it became 
 another image or a new folder ends it. The first drag on an image draws the last drawn view
 still until the drag pauses (as T322 did before the ring was resident); the drags after it run
 on the pan view. Stepping without dragging pays nothing for it. At 100 % and above and at 50 %
-and below the ring is as before (T326).
+and below the ring is as before (T326). Changed by the owner after W5-Q1's chain (2026-11-25,
+§4.4, "The pan view without a drag"): it is also asked for once the view has stood still for a
+while.
 
 **The hand check of T325 and T326, and the measurement (owner and reviewer, 2026-11-25):** the
 owner checked the drag after T326 and approved it (the first drag on an image still until it
@@ -609,6 +611,26 @@ stop, the render is cancelled all the same. A release for a metadata write stops
 that file's session, also of the current image, so the write does not wait for it; a render that
 comes back whole with its stop set is not used, and the view is made again after the write
 (accepted). A cancelled render adds no time to the render timings, also in an older folder.
+
+**The pan view without a drag (owner, 2026-11-25, after T328's hand check):** of A (keep the pan
+view only after a drag, T326), B (ask for it without a drag again, as after T325, and rely on
+T328's stop) and C (without a drag, but only once the view has stood still for a while, and last
+in the plan), the owner chose **C**. Between 50 % and 100 % the pan view of the current image is
+asked for when the image has been dragged (as T326 made it, in the same place in the plan), or,
+without a drag, once its view has **stood still for 1 s**: no step to another image, no new
+folder or file list, no zoom step and no `set_view` that changed anything for that long. Without
+a drag it comes **after everything else the plan asks for** (the backward neighbour included), so
+quick stepping never starts it and the neighbours are prefetched first. A step to another image
+while it renders stops it (T328); that costs the worker the stop (220–350 ms on a whole-image ARW
+render) and the left image's session, accepted, since the next image is already prefetched and
+only the prefetch after it waits. The 1 s is a setting of the core (`Config`), not of the user,
+and is tuned in the hand check. Edge cases: batch and import do not apply (only the view changes);
+the compare's second core follows the same rule (its known limit, a new held image counted as
+dragged, stays); a JPEG or TIFF file and JPEG mode follow the same rule as RAW, as the pan view
+does today; what the user sees: nothing new, the first drag on an image that has stood still is
+smooth, on one that has not it is still as after T326. After the task: the owner's hand check
+(the first drag after a pause, quick stepping) and `latency.ps1` at 51.2 % and 64 % with the
+clipping marks off and on (T329).
 
 ## 5. Steps
 
