@@ -87,7 +87,6 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status | Model |
 |---|---|---|---|
-| [T331](T331-libraw-exposure-per-render.md) | ADR 0027 W5: the exposure per LibRaw render and the camera's brightness | Open | Opus |
 | [T332](T332-exposure-and-shadows-in-the-render.md) | ADR 0027 W5: the exposure and the shadows in the view core's render | Blocked | Opus |
 | [T333](T333-exposure-and-shadows-in-the-state.md) | ADR 0027 W5: the exposure and the shadows in the view core's state | Blocked | Opus |
 | [T334](T334-shadows-amount-settings-page.md) | ADR 0027 W5: the shadows' amount on the Settings page Preview | Blocked | Sonnet |

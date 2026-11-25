@@ -640,6 +640,23 @@ smooth and quick stepping is unchanged, for RAW files in RAW mode. `latency.ps1`
 stays. Found in the hand check: TIFF files in RAW mode stutter badly when dragged, also after the
 pause (`backlog.md`).
 
+**W5-Q5 after T331 (owner, 2026-11-25, during the task):** LibRaw 0.22.3 never sets
+`LIBRAW_DNGFM_BASELINEEXPOSURE` in `dng_levels.parsedfields`, so a DNG's `BaselineExposure` is
+taken when LibRaw's value differs from its "not set" value −999; the Fujifilm value is read the
+same way (a RAF without the tag gives none). On the owner's X-T30 files LibRaw gives **−0.72**,
+ExifTool's unrounded `RawExposureBias` (`exiftool -n`; ExifTool shows −0.7), with the same sign;
+it is kept as LibRaw has it. Whether that sign is the one to add to the view is still the owner's
+hand check after T335. The owner's DNG files give −0.5062 (Ricoh GR III) and 0 (Xiaomi).
+
+**T331's timings for W5-Q4 (2026-11-25, i7-9700K, median of 5, `--release`):** a step to an
+image that was not prefetched, with auto exposure on (open, statistics and a half-size render),
+takes 625–694 ms on the A7R IV's ARW (8660×5784), 769–794 ms on the A1's (9568×6376) and
+506–567 ms on the X-T30's RAF; the statistics alone 169–218 ms on the ARW files and 86–91 ms on
+the RAF. An exposed half-size render costs about 30 % more than one at 0 EV (+65–85 ms), an
+exposed whole-image PPG render the same as one at 0 EV. The owner's W5-Q4 choice (wait for the
+statistics, or a first view at 0 EV replaced by the auto-exposed one) is made before T333 is set
+to Open.
+
 ## 5. Steps
 
 Each step ends with tests (GR11), the owner's hand check and, where an image is shown,

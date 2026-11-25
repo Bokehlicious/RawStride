@@ -7,6 +7,11 @@
 //!   region is **pixel-identical** to the same area of a whole-image render, so tiles cannot show
 //!   seams or differ in colour (measured: docs/analyses/2026-11-04-m2-libraw-decode.md; checked
 //!   again by `tests/regions.rs`).
+//! - The one setting passed per render is the temporary exposure ([`Exposure`], ADR 0027 §3.4),
+//!   applied by LibRaw before the demosaic ([`Session::render_half_exposed`],
+//!   [`Session::render_region_exposed`]). Every render sets it, so nothing of it stays in the
+//!   session, and the region identity holds with it too (`tests/exposure.rs`). The camera's own
+//!   brightness is read once at the open ([`Session::camera_exposure`]).
 //! - The demosaic method is chosen per render ([`Demosaic`]): **AHD** is the default and what
 //!   [`Session::render_full`] and [`Session::render_region`] use (ADR 0006);
 //!   **PPG** is the decided method for the egui loupe (ADR 0008 §11, ADR 0009) and is used through
@@ -48,7 +53,72 @@ struct Info {
     missing: i64,
     file_size: i64,
     damaged: c_int,
+    camera_ev: f32,
+    camera_ev_from: c_int,
     error: [c_char; 200],
+}
+
+/// Where a file's own brightness ([`CameraExposure`]) comes from.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum CameraEv {
+    /// A DNG's `BaselineExposure` tag.
+    DngBaseline,
+    /// A Fujifilm RAW file's maker note, read as ExifTool's `RawExposureBias`.
+    Fujifilm,
+}
+
+/// The brightness the camera asks for on top of the RAW data, in EV (ADR 0027 W5-Q5), as the file
+/// has it: not limited to [`Exposure`]'s range.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CameraExposure {
+    pub ev: f32,
+    pub from: CameraEv,
+}
+
+impl CameraExposure {
+    /// The shim's `camera_ev` and `camera_ev_from`; `None` for any source other than 1 and 2.
+    fn from_shim(ev: f32, from: c_int) -> Option<CameraExposure> {
+        let from = match from {
+            1 => CameraEv::DngBaseline,
+            2 => CameraEv::Fujifilm,
+            _ => return None,
+        };
+        Some(CameraExposure { ev, from })
+    }
+}
+
+/// The temporary exposure of one render (ADR 0027 §3.4), in EV: applied by LibRaw before the
+/// demosaic (its `exp_shift`, the linear factor 2^EV, with highlight protection when brightening).
+/// It is passed with each render and never kept in the [`Session`]; the statistics and the clipping
+/// map never see it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Exposure {
+    ev: f32,
+}
+
+impl Exposure {
+    /// No correction (0 EV).
+    pub const NONE: Exposure = Exposure { ev: 0.0 };
+    /// The darkest correction LibRaw takes (its `exp_shift` 0.25).
+    pub const MIN_EV: f32 = -2.0;
+    /// The brightest correction LibRaw takes (its `exp_shift` 8.0).
+    pub const MAX_EV: f32 = 3.0;
+
+    /// The correction `ev`; `None` when it is not finite or lies outside
+    /// [`MIN_EV`](Self::MIN_EV)`..=`[`MAX_EV`](Self::MAX_EV).
+    pub fn from_ev(ev: f32) -> Option<Exposure> {
+        (ev.is_finite() && (Self::MIN_EV..=Self::MAX_EV).contains(&ev)).then_some(Exposure { ev })
+    }
+
+    /// The correction in EV.
+    pub fn ev(self) -> f32 {
+        self.ev
+    }
+
+    /// LibRaw's `exp_shift`: the linear factor 2^EV (exactly 0.25 at -2 EV and 8.0 at +3 EV).
+    fn shift(self) -> f32 {
+        self.ev.exp2()
+    }
 }
 
 /// What LibRaw reported while unpacking a file (see `csrc/pwlr.cpp`).
@@ -234,6 +304,7 @@ unsafe extern "C" {
         session: *mut c_void,
         quality: c_int,
         half: c_int,
+        exp_shift: f32,
         x: c_int,
         y: c_int,
         w: c_int,
@@ -394,6 +465,7 @@ pub struct Session {
     height: u32,
     flip: u8,
     diagnostics: Diagnostics,
+    camera: Option<CameraExposure>,
 }
 
 // SAFETY: LibRaw's thread-safe build (`raw_r`) keeps all state in the instance; a Session is
@@ -431,6 +503,8 @@ impl Session {
             missing: 0,
             file_size: 0,
             damaged: 0,
+            camera_ev: 0.0,
+            camera_ev_from: 0,
             error: [0; 200],
         };
         // SAFETY: NUL-terminated UTF-16 path and a valid out-pointer.
@@ -453,6 +527,7 @@ impl Session {
             height: info.height.max(0) as u32,
             flip: info.flip.clamp(0, 7) as u8,
             diagnostics,
+            camera: CameraExposure::from_shim(info.camera_ev, info.camera_ev_from),
         };
         (Ok(s), diagnostics)
     }
@@ -460,6 +535,13 @@ impl Session {
     /// What LibRaw reported while unpacking this file.
     pub fn diagnostics(&self) -> Diagnostics {
         self.diagnostics
+    }
+
+    /// The camera's own brightness, read once at the open (ADR 0027 W5-Q5): a DNG's
+    /// `BaselineExposure`, or a Fujifilm file's value read as ExifTool's `RawExposureBias`; `None`
+    /// for any other file. Given as the file has it, not limited to [`Exposure`]'s range.
+    pub fn camera_exposure(&self) -> Option<CameraExposure> {
+        self.camera
     }
 
     /// Visible image width in sensor orientation.
@@ -578,12 +660,14 @@ impl Session {
     /// Renders the whole image (`r` is `None`) or the region `r`, and returns the image with the
     /// box of the visible image the shim processed: all 0 for the whole image, `r` for a region
     /// of a Bayer file, and for a region of an X-Trans file a wider box that holds `r` (its origin
-    /// on a multiple of 1488 px, at least 512 px; `csrc/pwlr.cpp`).
+    /// on a multiple of 1488 px, at least 512 px; `csrc/pwlr.cpp`). `exposure` is this render's
+    /// alone: the shim sets it for every render.
     fn render(
         &mut self,
         half: bool,
         r: Option<Rect>,
         demosaic: Demosaic,
+        exposure: Exposure,
         stop: Option<&(dyn Fn() -> bool + Sync)>,
     ) -> Result<(Rgb8, Rect)> {
         let r = r.unwrap_or(Rect::new(0, 0, 0, 0));
@@ -605,6 +689,7 @@ impl Session {
                 self.ptr,
                 demosaic.user_qual(),
                 c_int::from(half),
+                exposure.shift(),
                 r.x as c_int,
                 r.y as c_int,
                 r.w as c_int,
@@ -654,13 +739,13 @@ impl Session {
 
     /// The whole image at full resolution, with the given demosaic method.
     pub fn render_full_with(&mut self, demosaic: Demosaic) -> Result<Rgb8> {
-        self.render(false, None, demosaic, None)
+        self.render(false, None, demosaic, Exposure::NONE, None)
             .map(|(image, _)| image)
     }
 
     /// The whole image at half resolution (2×2 binning, no demosaicing).
     pub fn render_half(&mut self) -> Result<Rgb8> {
-        self.render(true, None, Demosaic::Ahd, None)
+        self.render(true, None, Demosaic::Ahd, Exposure::NONE, None)
             .map(|(image, _)| image)
     }
 
@@ -673,7 +758,18 @@ impl Session {
     /// opened again (about 0.3 s for 61 Mpix). LibRaw asks only between its stages, so a stop can
     /// take most of a stage to take effect, or come after the last ask and let the render finish.
     pub fn render_half_stoppable(&mut self, stop: &(dyn Fn() -> bool + Sync)) -> Result<Rgb8> {
-        self.render(true, None, Demosaic::Ahd, Some(stop))
+        self.render_half_exposed(Exposure::NONE, stop)
+    }
+
+    /// Like [`render_half_stoppable`](Self::render_half_stoppable) (the same stop and its cost),
+    /// with the temporary exposure `exposure` applied by LibRaw before the binning. It is this
+    /// render's alone: a later render without it gives the plain image.
+    pub fn render_half_exposed(
+        &mut self,
+        exposure: Exposure,
+        stop: &(dyn Fn() -> bool + Sync),
+    ) -> Result<Rgb8> {
+        self.render(true, None, Demosaic::Ahd, exposure, Some(stop))
             .map(|(image, _)| image)
     }
 
@@ -702,7 +798,7 @@ impl Session {
     /// a Bayer file with a margin of at least 8 px). An image from LibRaw whose size is not the
     /// box the shim processed, or a box that does not hold the asked one, is refused.
     pub fn render_region_with(&mut self, r: Rect, margin: u32, demosaic: Demosaic) -> Result<Rgb8> {
-        self.render_region_checked(r, margin, demosaic, None)
+        self.render_region_checked(r, margin, demosaic, Exposure::NONE, None)
     }
 
     /// Like [`render_region_with`](Self::render_region_with), with a stop check as in
@@ -715,7 +811,23 @@ impl Session {
         demosaic: Demosaic,
         stop: &(dyn Fn() -> bool + Sync),
     ) -> Result<Rgb8> {
-        self.render_region_checked(r, margin, demosaic, Some(stop))
+        self.render_region_exposed(r, margin, demosaic, Exposure::NONE, stop)
+    }
+
+    /// Like [`render_region_stoppable`](Self::render_region_stoppable) (the same stop and its
+    /// cost), with the temporary exposure `exposure` applied by LibRaw before the demosaic. It is
+    /// this render's alone: a later render without it gives the plain image. The region identity
+    /// holds with it: the result equals the same area of the whole image rendered with the same
+    /// exposure (on a Bayer file with a margin of at least 8 px; `tests/exposure.rs`).
+    pub fn render_region_exposed(
+        &mut self,
+        r: Rect,
+        margin: u32,
+        demosaic: Demosaic,
+        exposure: Exposure,
+        stop: &(dyn Fn() -> bool + Sync),
+    ) -> Result<Rgb8> {
+        self.render_region_checked(r, margin, demosaic, exposure, Some(stop))
     }
 
     fn render_region_checked(
@@ -723,6 +835,7 @@ impl Session {
         r: Rect,
         margin: u32,
         demosaic: Demosaic,
+        exposure: Exposure,
         stop: Option<&(dyn Fn() -> bool + Sync)>,
     ) -> Result<Rgb8> {
         if r.w == 0 || r.h == 0 || r.x + r.w > self.width || r.y + r.h > self.height {
@@ -736,7 +849,7 @@ impl Session {
         let x1 = (r.x + r.w + margin).min(self.width);
         let y1 = (r.y + r.h + margin).min(self.height);
         let asked = Rect::new(x0, y0, x1 - x0, y1 - y0);
-        let (big, used) = self.render(false, Some(asked), demosaic, stop)?;
+        let (big, used) = self.render(false, Some(asked), demosaic, exposure, stop)?;
         // The image must be exactly the box the shim processed: the asked one, or (X-Trans) a
         // wider box inside the image that holds it.
         let (ux1, uy1) = (
@@ -775,6 +888,50 @@ mod tests {
         assert_eq!(Demosaic::default(), Demosaic::Ahd);
         assert_eq!(Demosaic::Ahd.user_qual(), 3);
         assert_eq!(Demosaic::Ppg.user_qual(), 2);
+    }
+
+    #[test]
+    fn an_exposure_is_taken_only_inside_libraws_range() {
+        for ev in [-2.0f32, 0.0, 1.0 / 3.0, 3.0] {
+            let exposure = Exposure::from_ev(ev);
+            assert_eq!(exposure.map(Exposure::ev), Some(ev), "{ev}");
+        }
+        for ev in [-2.01f32, 3.01, f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            assert_eq!(Exposure::from_ev(ev), None, "{ev}");
+        }
+        assert_eq!(Exposure::MIN_EV, -2.0);
+        assert_eq!(Exposure::MAX_EV, 3.0);
+    }
+
+    #[test]
+    fn the_exposure_ends_are_libraws_exact_shifts() {
+        let darkest = Exposure::from_ev(-2.0).map(Exposure::shift);
+        let brightest = Exposure::from_ev(3.0).map(Exposure::shift);
+        assert!(darkest == Some(0.25), "{darkest:?}");
+        assert!(brightest == Some(8.0), "{brightest:?}");
+        assert!(Exposure::NONE.shift() == 1.0);
+        assert_eq!(Exposure::NONE.ev(), 0.0);
+    }
+
+    #[test]
+    fn the_camera_exposure_comes_only_from_a_known_source() {
+        assert_eq!(
+            CameraExposure::from_shim(-0.5, 1),
+            Some(CameraExposure {
+                ev: -0.5,
+                from: CameraEv::DngBaseline
+            })
+        );
+        assert_eq!(
+            CameraExposure::from_shim(-0.7, 2),
+            Some(CameraExposure {
+                ev: -0.7,
+                from: CameraEv::Fujifilm
+            })
+        );
+        for from in [0, 3, -1] {
+            assert_eq!(CameraExposure::from_shim(1.0, from), None, "{from}");
+        }
     }
 
     #[test]

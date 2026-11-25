@@ -5,6 +5,9 @@
  * 3 and 4): camera white balance, no auto white balance, no auto brightness, no white-level
  * adjustment from the image data, sensor orientation, 8-bit sRGB. The demosaic method is chosen per
  * render: AHD (the default, ADR 0006) or PPG (ADR 0008 section 11; the egui loupe, ADR 0009).
+ * The exposure (exp_correc, exp_shift, exp_preser; ADR 0027 section 3.4, T331) is the one setting
+ * passed with each render: every render sets it, so a render without a correction leaves no trace
+ * of an earlier one, and the statistics and the clipping map never see it.
  *
  * Damaged files (M2 error handling): LibRaw does not return an error when the RAW data is
  * shorter than the file says (a truncated copy); many decoders read on and fill the rest. The
@@ -77,8 +80,51 @@ typedef struct {
   long long missing;     /* bytes asked for but not in the file while unpacking */
   long long file_size;
   int damaged;           /* 1 = refused because RAW data is missing or corrupt */
+  /* The camera's brightness (ADR 0027 W5-Q5, T331), read once after a successful unpack, in EV as
+   * the file has it: */
+  float camera_ev;
+  int camera_ev_from; /* 0 none, 1 DNG BaselineExposure, 2 Fujifilm (ExifTool's RawExposureBias) */
   char error[200];
 } pwlr_info;
+
+/* Where pwlr_info.camera_ev came from. */
+static const int PWLR_CAMERA_EV_NONE = 0;
+static const int PWLR_CAMERA_EV_DNG = 1;
+static const int PWLR_CAMERA_EV_FUJIFILM = 2;
+
+/* LibRaw's value for "not in the file" of dng_levels.baseline_exposure and
+ * makernotes.fuji.ExpoMidPointShift (set by LibRaw's init, utils/init_close_utils.cpp, 0.22.3). */
+static const float PWLR_LIBRAW_NOT_SET = -999.0f;
+
+/* The camera's brightness of an unpacked file: a DNG's BaselineExposure when the file has the
+ * tag; for a Fujifilm file that is not a DNG, the maker note's ExpoMidPointShift; else none. A
+ * value that is not finite, or LibRaw's "not set" value, counts as none.
+ *
+ * - DNG: LibRaw 0.22.3 copies the tag's value from the raw IFD (or IFD 0) into
+ *   color.dng_levels.baseline_exposure but never sets LIBRAW_DNGFM_BASELINEEXPOSURE in
+ *   color.dng_levels.parsedfields (metadata/identify.cpp), so the flag cannot tell whether the file
+ *   has the tag; the value differs from PWLR_LIBRAW_NOT_SET exactly when it does (the owner's
+ *   decision, T331, 2026-11-25).
+ * - Fujifilm: LibRaw reads the maker note's tag 0x9650 as a / b, which is ExifTool's
+ *   RawExposureBias with the same sign (-0.72 on the owner's X-T30 files, ExifTool's unrounded
+ *   value; found in T331), so it is kept as LibRaw has it. */
+static void pwlr_camera_ev(LibRaw *lr, pwlr_info *info) {
+  info->camera_ev = 0.0f;
+  info->camera_ev_from = PWLR_CAMERA_EV_NONE;
+  float ev = 0.0f;
+  int from = PWLR_CAMERA_EV_NONE;
+  if (lr->imgdata.idata.dng_version != 0) {
+    ev = lr->imgdata.color.dng_levels.baseline_exposure;
+    from = PWLR_CAMERA_EV_DNG;
+  } else if (lr->imgdata.idata.maker_index == LIBRAW_CAMERAMAKER_Fujifilm) {
+    ev = lr->imgdata.makernotes.fuji.ExpoMidPointShift;
+    from = PWLR_CAMERA_EV_FUJIFILM;
+  }
+  if (from != PWLR_CAMERA_EV_NONE && isfinite(ev) && ev != PWLR_LIBRAW_NOT_SET) {
+    info->camera_ev = ev;
+    info->camera_ev_from = from;
+  }
+}
 
 static void set_error(char *dst, const char *what, int rc) {
   snprintf(dst, 200, "%s: %s", what, libraw_strerror(rc));
@@ -168,6 +214,7 @@ void *pwlr_open(const wchar_t *path, pwlr_info *info) {
     pwlr_close(s);
     return 0;
   }
+  pwlr_camera_ev(lr, info);
   lr->set_progress_handler(on_progress, s);
   return s;
 }
@@ -175,6 +222,14 @@ void *pwlr_open(const wchar_t *path, pwlr_info *info) {
 /* LibRaw user_qual values the shim accepts. */
 static const int PWLR_QUAL_PPG = 2;
 static const int PWLR_QUAL_AHD = 3;
+
+/* The exposure per render (ADR 0027 section 3.4, T331). LibRaw's exp_shift is usable from 0.25 to
+ * 8 (-2 to +3 EV). exp_preser (0 to 1) keeps the highlights from clipping when the image is made
+ * brighter (LibRaw ignores it when darkening); 1.0 is the starting value of ADR 0027 W5-Q2, to be
+ * tuned in the owner's hand check. */
+static const float PWLR_EXP_SHIFT_MIN = 0.25f;
+static const float PWLR_EXP_SHIFT_MAX = 8.0f;
+static const float PWLR_EXP_PRESER = 1.0f;
 
 /* ---- The box an X-Trans region is processed in (T197) ----
  *
@@ -232,10 +287,16 @@ static int pwlr_xtrans_axis(int a, int len, int size, int *lo_out, int *len_out)
  * answer ends the render with an error that starts with "cancelled" (T327). Before LibRaw starts
  * that costs nothing. If LibRaw frees the unpacked RAW data when the render fails (a stop while it
  * works always does, in LibRaw 0.22), the session is spent (pwlr_spent): the error of every later
- * render, statistics and clipping map starts with "spent:" and LibRaw is not called. */
-libraw_processed_image_t *pwlr_render(void *session, int quality, int half, int x, int y, int w,
-                                      int h, int *ox, int *oy, int *ow, int *oh, char *error,
-                                      int (*stop)(void *ctx), void *ctx) {
+ * render, statistics and clipping map starts with "spent:" and LibRaw is not called.
+ *
+ * `exp_shift` is the exposure of this render (ADR 0027 section 3.4, T331), the one setting passed
+ * per render: LibRaw's linear factor (2^EV) applied before the demosaic, 1.0 for none. Every render
+ * sets exp_correc, exp_shift and exp_preser, so nothing of an earlier render's exposure is left. A
+ * factor that is not finite or lies outside 0.25 to 8 (LibRaw's usable range, -2 to +3 EV) is
+ * refused before LibRaw is called, and the session is untouched. */
+libraw_processed_image_t *pwlr_render(void *session, int quality, int half, float exp_shift, int x,
+                                      int y, int w, int h, int *ox, int *oy, int *ow, int *oh,
+                                      char *error, int (*stop)(void *ctx), void *ctx) {
   *ox = 0;
   *oy = 0;
   *ow = 0;
@@ -249,6 +310,10 @@ libraw_processed_image_t *pwlr_render(void *session, int quality, int half, int 
     snprintf(error, 200, "unsupported demosaic method %d", quality);
     return 0;
   }
+  if (!isfinite(exp_shift) || exp_shift < PWLR_EXP_SHIFT_MIN || exp_shift > PWLR_EXP_SHIFT_MAX) {
+    snprintf(error, 200, "exposure shift %g is outside 0.25 to 8", (double)exp_shift);
+    return 0;
+  }
   if (stop && stop(ctx)) {
     strcpy(error, "cancelled: the render was stopped before it started");
     return 0;
@@ -256,6 +321,9 @@ libraw_processed_image_t *pwlr_render(void *session, int quality, int half, int 
   LibRaw *lr = s->lr;
   lr->imgdata.params.user_qual = quality;
   lr->imgdata.params.half_size = half ? 1 : 0;
+  lr->imgdata.params.exp_correc = (exp_shift != 1.0f) ? 1 : 0;
+  lr->imgdata.params.exp_shift = exp_shift;
+  lr->imgdata.params.exp_preser = PWLR_EXP_PRESER;
   if (w > 0 && h > 0) {
     /* The layout saved at the unpack; a render changes imgdata.idata and imgdata.sizes. */
     const libraw_rawdata_t &R = lr->imgdata.rawdata;
