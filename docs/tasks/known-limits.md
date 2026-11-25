@@ -584,9 +584,11 @@ only if it is seen in use.)
 - *The compare's second core counts a new image as dragged* (T326's cold read, accepted): a new
   held image shown at the same zoom with another centre (`set_view` from `pw-loupe`) sets
   `dragged` for the second core without a drag, so its pan view may be made needlessly.
-- *The mark while the sharpened ring stands in* (T322, accepted): between 50 % and 100 % the mark
-  says shown while the ring is drawn meanwhile, since the ring carries the sharpening, as below
-  50 % with the half-size view.
+- *The mark while the sharpened ring stands in* (T322, accepted; narrowed after T325 and T326,
+  2026-11-25): between 50 % and 100 % a drag runs on the pan view, the shown view itself, so this
+  is left only for a 100 % ring kept from zooming out of 100 %: the mark says shown while that
+  ring is drawn meanwhile, since the ring carries the sharpening, as below 50 % with the
+  half-size view.
 
 ## LibRaw (`pw-libraw`)
 
