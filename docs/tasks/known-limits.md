@@ -596,6 +596,12 @@ only if it is seen in use.)
   of a tab are read once and kept until its folder is listed again; only RawStride's own writes
   read them again (S2-Q5). A value another program writes is seen by the filter after F5 (Reload
   Folder) or when the folder is opened again. A task only if it is seen in use.
+- *A late line of ExifTool's standard error* (T336's extra review, 2026-11-25): `ExifTool::execute`
+  waits 2 ms for standard error after the answer; a line that comes later (a batch read's summary
+  "N image files read", a "File not found") is given with the next command's answer. A read of
+  many images then may give an image `"no answer for …"` instead of ExifTool's message, and a
+  stale line may show in a later error text. The values read are not affected. Older than T336,
+  seen more often with batch reads. A task only if it is seen in use.
 
 ## LibRaw (`pw-libraw`)
 

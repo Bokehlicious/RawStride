@@ -54,12 +54,16 @@
        and, on Windows, without regard to ASCII case. An object that matches no file sent is
        ignored;
      - an image whose image object is missing gets `Error::ExifTool` with the lines of the call's
-       standard error that contain its file name (the last part of the path, compared as
-       `SourceFile` is), joined with a line feed, else `"no answer for {path}"`; a RAW whose sidecar was
+       standard error that contain its whole path as sent (compared as `SourceFile` is; the
+       whole path, not the file name, so the error of a missing `a.jpg` does not take the line of
+       a missing `aa.jpg`; changed at the review, 2026-11-25), joined with a line feed, else
+       `"no answer for {path}"`; a RAW whose sidecar was
        sent but whose sidecar object is missing gets the same kind of error. A failed call
        (`execute` returns an error, or the standard output is not a JSON array) gives every image
        of that call the error as text in `Error::ExifTool` (both calls' images when the first
-       fails; the second call is then not made);
+       fails; the second call is then not made); for an `Error::ExifTool(m)` the text is `m`
+       itself, so it does not read "ExifTool: ExifTool: …", for any other error its `Display`
+       text;
      - every image with its objects goes through the shared function of point 1, so its
        `MetadataRead` is the one `read_metadata` would give (the `VariableValues` are dropped).
   3. **`filter_values.rs`** (new; module doc comment: "the values ADR 0022's filter reads, taken
@@ -129,8 +133,10 @@
        sidecar; a RAW without a sidecar (`TN0002.ARW`); and a file name with `ä` and a space;
     5. a missing file among three: that image is `Err`, the two others are `Ok` and equal to
        `read_metadata`'s; an image with the extension `.txt` is `Err` (unsupported) and the
-       others are read; two missing files only: both `Err`; the same path twice: two equal
-       answers; an empty list gives an empty answer;
+       others are read; two missing files only: both `Err`; two missing files whose names contain
+       one another (`a.jpg` and `aa.jpg`, with a good image between them): each error is
+       ExifTool's message (not `"no answer for …"`) and names only its own file; the same path
+       twice: two equal answers; an empty list gives an empty answer;
     6. `FilterValues::from_metadata` of the IIM-only JPEG has the city and the keyword (the
        reconciliation's work reaches the filter);
     7. **timing, ignored** (`#[ignore = "timing: needs PW_FILTER_TIMING_DIR; run with --ignored
@@ -140,8 +146,10 @@
        prints: (a) for the first 50, the time of one `read_metadata_many` call (median of three)
        and per image; (b) for the same 50, the time of `read_metadata` one by one, in total and
        per image; (c) the whole folder in chunks of 50: the number of images, the total time and
-       the slowest chunk. It asserts that (a) and (b) give equal `FilterValues` for every one of
-       the 50 images.
+       the slowest chunk, and the number of images that failed, each with its error (a failed
+       image is counted and printed, never a panic). It asserts that (a) and (b) give equal
+       `FilterValues` for every one of the 50 images; an image that fails in both counts as equal,
+       one that fails in only one of them is a test failure.
   - In `worker.rs`'s tests: 8. `read_filter_values` with a missing ExifTool answers
     `Event::FilterValuesRead` with the request's id and every image `Err` containing
     `"could not start"` (as `reports_exiftool_start_errors_asynchronously` does for the ratings);
@@ -185,3 +193,6 @@
 | 2026-11-25 | Blocked | Added; waits for the cold read and the chain review with T337. Cold read: the files suffice (the only exhaustive `WorkerEvent` match outside `pw-metadata` is `apply`; `batch_timing.rs` has a catch-all). Fixed: the shared function also takes the image's path; empty standard output is an empty array; a path given twice; which standard error lines name a file; `.value` of `get`; Location is "Sublocation (legacy)", Person Shown `PersonInImage`; the `pub use` as its own line; `handle`'s arm and the two test matches named; test 3's case of another `Value` kind dropped (the reconciliation refuses it); `FileState` filled by hand in unit tests; test 4 in one folder with `TN0002.ARW`; the sidecar lookup before the call accepted |
 | 2026-11-25 | Blocked | Chain review (T336 → T337): the hand-over matches; T337 fixed (see its log). Here only the note that a hang is not handled |
 | 2026-11-25 | Open | Cold reads and the chain review done; the Codex worktree moved to the tip of `feature/gui-workspace` |
+| 2026-11-25 | Ready for review | Added the batch reader, reconciled filter values, worker request and tests. The reviewer runs the folder timing before choosing T337's chunk size. |
+| 2026-11-25 | Review | Reviewer's review: brought over as a patch from the Codex worktree (`git apply --3way`, no conflict). `read_metadata_with_values` unchanged in behaviour (the shared `metadata_from_objects`); `read_metadata_many` makes at most two ExifTool calls, matches `SourceFile` as the task says, keeps an error to its own image (a failed first call fails all and skips the second), sends a path given twice once; `FilterValues` as the table; the worker request, its event and the `pw-loupe` arm as points 5–6; no panic paths outside tests. Test 6 is inside test 4 (accepted). `FilterValues` has no doc comments (accepted). `.\tools\check.ps1` all OK, run with T332's uncommitted work in the same tree (2765 passed, 98 ignored, 0 failed; clippy without warnings besides `raw-decode-bench`'s build note). Test 7 on the owner's folder `D:\PhotoWorkflowData\RAW` (79 images): 50 in one call 1.43 s (median of three), 28.7 ms per image; one by one 1.52 s, 30.3 ms per image; equal `FilterValues` for all 50; the whole folder in chunks of 50 2.41 s, slowest chunk 1.30 s. The owner chose a chunk of **10** (ADR 0022 S2-Q2 as amended, 2026-11-25; written into T337). Extra code review (one fresh review agent, read-only): nothing serious; the split faithful, the batch's `MetadataRead` equal for every kind of file. Its findings: (1) a standard error line is matched by the file name, so a missing `a.jpg` also takes the line of a missing `aa.jpg`, and test 5 cannot see it (its names do not contain one another, and the missing file's assert also passes on the fallback text); (2) a failed call's text is `Error::to_string()` wrapped in `Error::ExifTool` again: "ExifTool: ExifTool: …"; (3) test 7 panics on the first image that fails instead of printing; (4) `execute` waits 2 ms for standard error, so a late line (a batch's summary, a "File not found") can land in the next command's answer: an old race, harmless for the results (`known-limits.md`, ADR 0022). (1)–(3) are sent back; the task's point 2 and tests 5 and 7 are amended to say them. The patch was taken out of `feature/gui-workspace` again (nothing committed) |
+| 2026-11-25 | Open | Sent back by the owner's choice for the review's findings (1)–(3), written into point 2 and tests 5 and 7 (each marked or worded as amended). **Keep your work in the Codex worktree** (it was not moved) and change only what those three need; then check, report and set "Ready for review" as before |

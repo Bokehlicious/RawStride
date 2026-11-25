@@ -20,8 +20,8 @@
 - **What:**
   1. **`filter_values.rs`** (new; module doc comment: ADR 0022 S2, the values a tab keeps for the
      filter; plain Rust, no I/O):
-     - `pub const FILTER_READ_CHUNK: usize = 50;` (S2-Q2; the owner may lower it after T336's
-       timing: use the value written in T336's Done log row).
+     - `pub const FILTER_READ_CHUNK: usize = 10;` (S2-Q2 as amended by the owner after T336's
+       timing, 2026-11-25).
      - `pub struct ExifSummary { make, model, lens: Option<String>, date_time_original:
        Option<String>, exposure_time: Option<(u32, u32)>, f_number, focal_length: Option<f64>,
        iso: Option<u32> }` (`Debug, Clone, Default, PartialEq`), and `pub fn
@@ -63,7 +63,7 @@
        no entry, such as a file the watcher or an import added, counts as not asked). **A path
        that failed once is sent alone** (if the first eligible path failed once, the chunk is that
        path only; failed-once paths are otherwise left out of a chunk), so a file that breaks
-       ExifTool fails only itself, not 50 images twice (S2-Q4);
+       ExifTool fails only itself, not a whole chunk twice (S2-Q4);
        `mark_in_flight(&mut self, paths: &[PathBuf])` (creates the entry of a path that has none,
        with `ImageValues::new` and the file name by `to_string_lossy`);
        `mark_unreadable(&mut self, paths: &[PathBuf])`: "could not be read" at once (used when the
