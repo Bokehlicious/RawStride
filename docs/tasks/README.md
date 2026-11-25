@@ -87,7 +87,6 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status | Model |
 |---|---|---|---|
-| [T329](T329-pan-view-after-standing-still.md) | ADR 0027: the pan view also once the view has stood still | Open | Opus |
 
 ## Writing a task (owner and reviewer)
 

@@ -13,6 +13,8 @@ Downloads are on the [Releases page](https://github.com/Bokehlicious/RawStride/r
 
 - Stepping to another image is quicker with fine details on or between 50 % and 100 %: the
   view still being made of the image left is stopped instead of finished.
+- Between 50 % and 100 %, the first drag of an image no longer stands still once the view has
+  rested for a second.
 
 ## [0.6.0] - 2026-11-25
 

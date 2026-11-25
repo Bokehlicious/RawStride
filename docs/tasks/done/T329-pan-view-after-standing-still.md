@@ -1,4 +1,4 @@
-# T329. ADR 0027: the pan view also once the view has stood still — Open
+# T329. ADR 0027: the pan view also once the view has stood still — Done
 
 - **Why:** decided by the owner on 2026-11-25 after T328's hand check (ADR 0027 §4.4, "The pan
   view without a drag", alternative C). Since T326 the pan view (a scaled view at the shown scale
@@ -115,3 +115,5 @@
 |---|---|---|
 | 2026-11-25 | Open | Added after T328's hand check: alternative C chosen by the owner (ADR 0027 §4.4, "The pan view without a drag") |
 | 2026-11-25 | Open | Cold read (a fresh agent, 2026-11-25): doable with the named file, line references right, the plan's order and the helpers as assumed. Changed after it: `next_deadline` considers the pause (point 5, a test), so the worker does not wake up to 1 s late; `set_files` with an equal list resets the pause through `go` (the "keeps it" test uses a changed list); the full plan does not skip the pause, said outright; `pw-loupe`'s two `Config`s named (no change needed); the two real-time tests at risk named |
+| 2026-11-25 | Ready for review | `Config::pan_view_dwell` (1 s), `State::still_since` reset in `go`, `open_folder`, `set_files` (current path changed), `set_zoom` and a `set_view` that changed something; without a drag the pan view is added after the backward neighbour once the pause has passed (also in the full plan); `next_deadline` considers the pause when not dragged. 8 tests added in `state.rs` (pw-viewcore 262 → 270); every existing test passed before and after, the two named real-time tests included; `check.ps1` all OK, 2720 passed, 87 ignored |
+| 2026-11-25 | Done | Reviewed (the reviewer, 2026-11-25): every point and test as written, no findings; `check.ps1` all OK (2720 passed, 87 ignored, no clippy warning). Approved by the owner 2026-11-25. Nothing left over: the owner's hand check and `latency.ps1` at 51.2 % and 64 % (clipping marks off and on) follow, named in `plans/adr-0018-0025-steps.md` W5 row; their result goes into ADR 0027 §4.4. CHANGELOG.md: one line under Changed |

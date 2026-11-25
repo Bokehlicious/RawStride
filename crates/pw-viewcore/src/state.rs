@@ -25,6 +25,9 @@ pub struct Config {
     pub dwell: Duration,
     /// A free-zoom view is requested when the zoom gesture has paused this long (ADR 0009 §3.4).
     pub gesture_pause: Duration,
+    /// Without a drag, the pan view is asked for once the current image's view has stood still
+    /// this long (ADR 0027 §4.4, owner 2026-11-25). Default 1 s.
+    pub pan_view_dwell: Duration,
     /// The neutral loading indicator appears after this long (V2).
     pub indicator_after: Duration,
     /// Keep a record of every user request (measurement, ADR 0009 §5.2).
@@ -38,6 +41,7 @@ impl Default for Config {
             texture_budget: 1 << 30,
             dwell: Duration::from_millis(150),
             gesture_pause: Duration::from_millis(100),
+            pan_view_dwell: Duration::from_secs(1),
             indicator_after: Duration::from_secs(1),
             record: false,
         }
@@ -362,8 +366,9 @@ pub(crate) enum Want {
     /// The 100 % view at the current position (the zoom target, V7).
     Target,
     /// The ring for panning at 100 % and above, and below 50 %; between 50 % and 100 % the pan
-    /// view (a scaled view over a larger region) takes its place, asked for only after the image
-    /// has been dragged (ADR 0027 §4.3, owner 2026-11-25).
+    /// view (a scaled view over a larger region) takes its place, asked for after the image has
+    /// been dragged (ADR 0027 §4.3, owner 2026-11-25), or without a drag once the view has stood
+    /// still for `Config::pan_view_dwell`, then last (ADR 0027 §4.4, owner 2026-11-25).
     Ring,
     /// The fine view of the current image below 50 %, while fine details is on (ADR 0027 W2).
     Fine,
@@ -555,6 +560,10 @@ pub(crate) struct State<S> {
     /// Whether the current image has been dragged since it became current (ADR 0027 §4.3, owner
     /// 2026-11-25). The pan view is asked for only then.
     dragged: bool,
+    /// When the current image's view last changed: the image became current, a new folder or
+    /// list of files, a zoom, a `set_view` that changed something (ADR 0027 §4.4, owner
+    /// 2026-11-25). Without a drag the pan view is asked for once this is `pan_view_dwell` old.
+    still_since: Instant,
     pub centre: [f64; 2],
     pub view_px: [u32; 2],
     pub sizes: HashMap<Key, ImageSize>,
@@ -668,6 +677,7 @@ impl<S> State<S> {
             gesture_at: None,
             pan_at: None,
             dragged: false,
+            still_since: Instant::now(),
             centre: [0.5, 0.5],
             view_px: [1920, 1080],
             sizes: HashMap::new(),
@@ -777,6 +787,7 @@ impl<S> State<S> {
         }
         self.zoom = zoom;
         self.gesture_at = gesture.then(Instant::now);
+        self.still_since = Instant::now();
     }
 
     /// Sets the view model's zoom level and position from outside, as if the user had zoomed and
@@ -821,6 +832,7 @@ impl<S> State<S> {
         self.zoom = zoom;
         self.centre = centre;
         self.gesture_at = Some(Instant::now());
+        self.still_since = Instant::now();
         true
     }
 
@@ -918,6 +930,7 @@ impl<S> State<S> {
         }
         self.cur = Some(pos);
         self.since = Instant::now();
+        self.still_since = Instant::now();
     }
 
     /// A new folder: every cache is emptied and the first image becomes current. Textures are
@@ -928,6 +941,7 @@ impl<S> State<S> {
         self.files = files;
         self.cur = None;
         self.dragged = false;
+        self.still_since = Instant::now();
         self.zoom = Zoom::Fit;
         self.centre = [0.5, 0.5];
         self.sessions.retain(|_, s| s.is_none());
@@ -1112,6 +1126,7 @@ impl<S> State<S> {
         self.cur = Some(pos);
         if self.files.get(pos) != before.as_ref() {
             self.since = Instant::now();
+            self.still_since = Instant::now();
             self.dragged = false;
         }
     }
@@ -1194,9 +1209,12 @@ impl<S> State<S> {
         }
         // between 50 % and 100 % the pan view takes the ring's place; it is not asked for during
         // a drag (a drag leaving it would ask for a new one every frame) nor when it is no larger
-        // than the shown view; and only once the image has been dragged since it became current
-        // (ADR 0027 §4.3, owner 2026-11-25), so stepping pays nothing for it
-        match self.pan_view(ck) {
+        // than the shown view; here only once the image has been dragged since it became current
+        // (ADR 0027 §4.3, owner 2026-11-25); without a drag it is asked for once the view has
+        // stood still for `Config::pan_view_dwell`, and then last, after the backward neighbour
+        // (ADR 0027 §4.4, owner 2026-11-25), so stepping pays nothing for it
+        let pan_view = self.pan_view(ck);
+        match pan_view {
             Some((_, useful)) => {
                 if self.dragged && useful && (full || !self.in_pan()) {
                     add((ck, Want::Ring));
@@ -1206,6 +1224,15 @@ impl<S> State<S> {
         }
         if let Some(b) = self.neighbour(cur, 1, !forward) {
             add((self.key(b), primary));
+        }
+        // the pan view without a drag: not even the full plan skips the pause, so one not yet
+        // wanted is neither protected nor kept (`in_pan` cannot hold without a drag)
+        if let Some((_, useful)) = pan_view
+            && !self.dragged
+            && useful
+            && self.still_since.elapsed() >= self.config.pan_view_dwell
+        {
+            add((ck, Want::Ring));
         }
         // the fine view last, after everything else (ADR 0027 W2-Q2)
         if self.fine_applies(ck) {
@@ -3130,7 +3157,9 @@ impl<S> State<S> {
         }
     }
 
-    /// How long a worker may sleep before the plan can change by itself (dwell or gesture pause).
+    /// How long a worker may sleep before the plan can change by itself (dwell, gesture pause,
+    /// the pan's pause, or, without a drag, the pause before the pan view,
+    /// `Config::pan_view_dwell`).
     pub fn next_deadline(&self) -> Option<Duration> {
         let now = Instant::now();
         let mut d: Option<Duration> = None;
@@ -3147,6 +3176,9 @@ impl<S> State<S> {
             }
             if let Some(t) = self.pan_at {
                 consider(t + self.config.gesture_pause);
+            }
+            if !self.dragged {
+                consider(self.still_since + self.config.pan_view_dwell);
             }
         }
         d
@@ -7958,5 +7990,174 @@ mod tests {
         s.finish_render(g, key, pan, session, Ok(rendered(pan)), 5.0);
         assert_eq!(s.stats.cancelled, 0);
         assert_eq!(s.outbox.len(), 1);
+    }
+
+    // ---------- the pan view once the view has stood still (T329) ----------
+
+    /// Sets the moment the view last changed back past the pause before the pan view.
+    fn still_long(s: &mut State<u32>) {
+        s.still_since = Instant::now() - Duration::from_secs(2);
+    }
+
+    /// Whether the view changed within the pause before the pan view.
+    fn still_reset(s: &State<u32>) -> bool {
+        s.still_since.elapsed() < s.config.pan_view_dwell
+    }
+
+    fn index_of(w: &[(Key, Want)], x: (Key, Want)) -> usize {
+        match w.iter().position(|y| *y == x) {
+            Some(i) => i,
+            None => panic!("{x:?} not in {w:?}"),
+        }
+    }
+
+    #[test]
+    fn the_pause_before_the_pan_view_is_one_second_by_default() {
+        assert_eq!(Config::default().pan_view_dwell, Duration::from_secs(1));
+    }
+
+    #[test]
+    fn without_a_drag_the_pan_view_is_wanted_last_once_the_view_has_stood_still() {
+        for scale in [0.512, 0.75] {
+            let mut s = shown_resident(scale, None);
+            assert!(!s.dragged);
+            still_long(&mut s);
+            for full in [false, true] {
+                let w = s.wanted(full);
+                assert!(w.contains(&(k(10), Want::Ring)), "{scale} {full}: {w:?}");
+            }
+            let w = s.wanted(false);
+            assert!(
+                index_of(&w, (k(10), Want::Ring)) > index_of(&w, (k(9), Want::Shown)),
+                "{scale}: {w:?}"
+            );
+            let jobs = scaled_renders(&s);
+            assert!(
+                jobs.iter().any(|v| v.region == pan_region(&s, scale)),
+                "{scale}: {jobs:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn after_a_drag_the_pan_view_keeps_its_place_before_the_backward_neighbour() {
+        for scale in [0.512, 0.75] {
+            let mut s = shown_resident(scale, None);
+            s.dragged = true;
+            s.still_since = Instant::now();
+            let w = s.wanted(false);
+            assert!(
+                index_of(&w, (k(10), Want::Ring)) < index_of(&w, (k(9), Want::Shown)),
+                "{scale}: {w:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn without_a_drag_no_pan_view_is_wanted_inside_the_pause() {
+        for scale in [0.512, 0.75] {
+            let mut s = shown_resident(scale, None);
+            assert!(!s.dragged);
+            assert!(s.since.elapsed() >= s.config.dwell);
+            s.still_since = Instant::now();
+            for full in [false, true] {
+                let w = s.wanted(full);
+                assert!(!w.contains(&(k(10), Want::Ring)), "{scale} {full}: {w:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_change_of_the_view_starts_the_pause_again() {
+        let mut s = shown_resident(0.75, None);
+        still_long(&mut s);
+        s.go(11);
+        assert!(still_reset(&s), "go to another image");
+        still_long(&mut s);
+        s.go(11);
+        assert!(still_reset(&s), "go to the same position");
+        let mut s = state(1024);
+        still_long(&mut s);
+        s.open_folder(files(5));
+        assert!(still_reset(&s), "open_folder");
+        let mut s = state(1024);
+        s.set_files(without(20, &[3]), 9);
+        still_long(&mut s);
+        s.set_files(files(20), 4);
+        assert!(still_reset(&s), "set_files with another path current");
+        let mut s = shown_resident(0.75, None);
+        still_long(&mut s);
+        s.zoom_by(1.1, None);
+        assert!(still_reset(&s), "zoom_by");
+        still_long(&mut s);
+        s.toggle_zoom(None);
+        assert!(still_reset(&s), "toggle_zoom");
+        still_long(&mut s);
+        s.set_zoom(Zoom::Scale(0.6), None, false);
+        assert!(still_reset(&s), "set_zoom");
+        still_long(&mut s);
+        assert!(s.set_view(Zoom::Scale(0.8), [0.4, 0.4]));
+        assert!(still_reset(&s), "set_view that changed something");
+    }
+
+    #[test]
+    fn what_does_not_change_the_view_keeps_the_pause() {
+        let mut s = shown_resident(0.75, None);
+        still_long(&mut s);
+        // image 3 drops out: the current image (img10) is at position 9
+        s.set_files(without(20, &[3]), 9);
+        assert!(!still_reset(&s), "set_files keeping the current path");
+        let (zoom, centre) = (s.zoom, s.centre);
+        assert!(!s.set_view(zoom, centre));
+        assert!(!still_reset(&s), "set_view that changed nothing");
+        s.pan([10.0, 0.0]);
+        assert!(s.dragged);
+        assert!(!still_reset(&s), "pan");
+        s.set_mode(Source::Jpeg);
+        assert!(!still_reset(&s), "set_mode");
+        assert!(s.set_sharpening(Some(SHARP)));
+        assert!(!still_reset(&s), "set_sharpening");
+    }
+
+    #[test]
+    fn the_worker_wakes_when_the_pause_before_the_pan_view_ends() {
+        let mut s = state(1024);
+        assert!(!s.dragged);
+        assert!(s.since.elapsed() >= s.config.dwell);
+        s.still_since = Instant::now();
+        let dwell = s.config.pan_view_dwell;
+        let left = s.next_deadline();
+        assert!(
+            left.is_some_and(|d| d > dwell / 2 && d <= dwell),
+            "{left:?}"
+        );
+        // the pause has passed and no gesture or pan is under way
+        still_long(&mut s);
+        assert_eq!(s.next_deadline(), None);
+        // after a drag the pause is not considered
+        s.dragged = true;
+        s.still_since = Instant::now();
+        assert_eq!(s.next_deadline(), None);
+    }
+
+    #[test]
+    fn a_zoom_step_without_a_drag_waits_for_the_pause_again() {
+        let mut s = shown_resident(0.75, None);
+        assert!(!s.dragged);
+        still_long(&mut s);
+        s.zoom_by(1.1, None);
+        s.gesture_at = Some(Instant::now() - Duration::from_secs(1));
+        let w = s.wanted(false);
+        assert!(!w.contains(&(k(10), Want::Ring)), "{w:?}");
+        still_long(&mut s);
+        let Zoom::Scale(scale) = s.zoom else {
+            panic!("no scale");
+        };
+        assert!((0.5..1.0).contains(&scale), "{scale}");
+        let jobs = scaled_renders(&s);
+        assert!(
+            jobs.iter().any(|v| v.region == pan_region(&s, scale)),
+            "{jobs:?}"
+        );
     }
 }
