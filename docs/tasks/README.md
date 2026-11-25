@@ -85,9 +85,9 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 ## Open tasks
 
-| Task | Title | Status |
-|---|---|---|
-| — | No open task | |
+| Task | Title | Status | Model |
+|---|---|---|---|
+| — | No open task | | |
 
 ## Writing a task (owner and reviewer)
 
@@ -100,6 +100,16 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
   view core asking for them, and a panel drawing them) is split. A latency measurement and a new
   panel are not in the same task. If a task's agent must change files outside the task's list, the
   task was too big or its list was guessed: note it in the log, and split the next one.
+- **Model (owner, 2026-11-25):** every task has a `Model:` line, `Sonnet` or `Opus` with a one-line
+  reason, set by the reviewer when the task is written (with the cold read) and repeated in the
+  "Open tasks" row. **Sonnet** only if all hold: one layer, at most about four files, files and
+  functions named in the task, the tests to add specified, no design choice left, the cold read
+  found no gaps, and none of the Opus cases below. **Opus** if any holds: the C++ shim or FFI; the
+  safe write in `pw-metadata`; concurrency, cancellation or state machines (T327 and T328 are the
+  type); more than one crate or more than about eight files; the cold read or chain review found
+  contradictions with the code; or the work is a review, an ADR, or a cold read or chain review
+  rather than an implementation. If a Sonnet task needs files outside its list, or `check.ps1`
+  fails twice on the same thing, it is moved to Opus and the log says so.
 - **Chains:** a split step is written as a chain at once (for example T146 → T147 → T148), the later
   tasks "Blocked: waits for T146" until the one before is Done. The step's row in `plans/` names
   the whole chain. Writing the last task's file first is how a gap is found before code is written
@@ -198,6 +208,7 @@ Skeleton (the fields recent tasks use; leave out those that do not apply):
 
 - **Why:** …
 - **Crates:** … **Files:** …
+- **Model:** Sonnet | Opus — <the rule that decided it>
 - **What:**
   1. …
 - **Tests to add:** …
