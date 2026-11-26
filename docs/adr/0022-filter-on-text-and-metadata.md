@@ -141,9 +141,29 @@ S3 was moved by the owner on 2026-11-26 to order 2d, right after ADR 0027 W5, wi
 | S3-Q14 | Marks while typing (found in the chain review of S3's tasks; decided by the owner 2026-11-26 as proposed) | Each 0.3 s pause applies the text typed so far, and an image it hides because it does not match is unmarked (ADR 0014 §2.8), also when the finished text would have kept it (typing "caz" and erasing the "z"). Accepted as a known limit (`known-limits.md`): a hidden image is never marked, so no action reaches an image the user does not see |
 | S3-Q15 | Ctrl+A with nothing shown (found in the chain review; decided by the owner 2026-11-26 as proposed) | Ctrl+A does nothing while no image is shown, so it does not clear the marks kept for images whose values are unknown (S3-Q7) or whose ratings are being read (ADR 0014 amendment 3). This ends the known limit "Ctrl+A while nothing is shown clears the kept marks" |
 
+### 3.3 S4's questions (decided by the owner, 2026-11-26: every proposal approved)
+
+| # | Question | Answer (as proposed) |
+|---|---|---|
+| S4-Q1 | The window | A **modal** window "Filter…": the rows are edited freely, and the filter applies only at **OK**. **Cancel** (or Escape) keeps the filter as it was; **Clear** removes every row in the window (applied at OK). The list behind does not change while the window is open |
+| S4-Q2 | Opening it | View ▸ Filter ▸ "Filter…"; a button in the command bar after the search box; a new action "Filter…" in the key map (changeable, ADR 0017 U8), Ctrl+Shift+F by default if it is free. In the preview (the loupe and Compare), which has no menu bar or command bar, the key goes back to the contact sheet and opens the window, as Ctrl+F does (S3-Q13) |
+| S4-Q3 | The rows | Each row: a field (grouped File, Exif, IPTC, in that order), a condition that follows the field (§2.3, the conditions S1's model allows), and a value. "Add Condition" adds a row, a button on the row removes it. While a row has no value or an invalid one, OK is disabled and the row says what is missing, so what is counted is always what is shown |
+| S4-Q4 | Numbers and dates | Exposure Time typed as "1/250" or "2" (seconds); Aperture as "2.8" or "f/2.8"; Focal Length in mm; ISO a whole number; a decimal comma is accepted. Dates as YYYY-MM-DD: "≤ a date" counts to the end of that day, "between" includes both days. Bounds typed in the wrong order are swapped. An image without the value (no ISO, no capture date) does not match a number or date condition |
+| S4-Q5 | "is not" and a missing value | "City is not Stockholm" also matches the images without a City, as S1's model does; "is empty" (§2.1's "has no …") is the condition for the images without one |
+| S4-Q6 | Value lists | "is one of" on Camera, Lens, Keywords, City and Country shows the folder's values, each with its number of images, as check boxes, several may be picked (S-Q3, S-Q10). Values that differ only in case count as one. File Type has a fixed list: RAW, JPEG, TIFF, DNG |
+| S4-Q7 | Reading for the value lists | While the window has a row with a value list, its group (Exif or IPTC) is read for the whole folder (an extension of S-Q7: an open value list needs the values). The list grows as the chunks come in, with "Reading metadata {i} of {n} …" under it. A value already picked that is not in the folder stays, with the count 0 |
+| S4-Q8 | The status line (left open by S3-Q4) | An image counts as done when every group the filter needs is read, or its IPTC values could not be read. `n` is the images of the star and label filter's list. Exif never fails as a whole (the file type is known from the extension). The images that could not be read are shown as S3-Q5 says |
+| S4-Q9 | Marks and the current image | As for the search box (S3-Q7, S3-Q11): an image hidden because it does not match is unmarked, one hidden because its values are unknown keeps its mark; the preview waits while the values are read |
+| S4-Q10 | What is shown | The button says "Filter…" with no rows and "Filter: {n} conditions" with rows ("Filter: 1 condition"), outlined in the accent colour as the other filter controls (ADR 0014 point 4). No tooltip: the conditions are seen in the window |
+| S4-Q11 | Show All and tabs | Show All removes every row too (S-Q9). The rows are per tab and follow the search box at F5 and when the folder is opened again |
+| S4-Q12 | Own writes, import and the watcher | As S3-Q8 and S3-Q12, nothing new. RawStride writes no Exif value before ADR 0020. New files are unknown until read |
+| S4-Q13 | Texts | The IPTC fields' names come from `property_label` (`docs/tasks/README.md` rule 13); the Exif fields and the conditions (contains, is, is not, is one of, ≥, ≤, between, is empty) get texts of their own in a new text module; the glossary is updated |
+| S4-Q14 | Split and who | A chain, all Opus (state): **S4a** plain Rust (the window's model, the parsing of numbers and dates, the value lists' counts, the texts) → **S4b** the shell (the window, the button, the menu item, the key, the status line's count) → **S4c** the value lists and the reading of the whole folder. Codex or Claude per task, the owner's choice. **The owner's hand check after S4** as well as after S5 (§4 amended) |
+
 ## 4. Steps
 
-Each step ends with `.\tools\check.ps1`; the owner's hand check comes after S3 and after S5.
+Each step ends with `.\tools\check.ps1`; the owner's hand check comes after S3, after S4 (S4-Q14,
+owner 2026-11-26) and after S5.
 
 | Step | Content |
 |---|---|

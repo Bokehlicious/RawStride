@@ -87,10 +87,13 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status | Model |
 |---|---|---|---|
+| [T343](T343-filter-window-model.md) | ADR 0022 S4a: the "Filter…" window's model, parsing and texts | Open | Opus |
+| [T344](T344-filter-window-in-the-shell.md) | ADR 0022 S4b: the "Filter…" window, its button, menu item and key | Blocked | Opus |
+| [T345](T345-value-lists-read-the-folder.md) | ADR 0022 S4c: the value lists read the whole folder | Blocked | Opus |
 
 ## Writing a task (owner and reviewer)
 
-- **Number:** the next free number after the highest in this folder and `done/` (T343 next).
+- **Number:** the next free number after the highest in this folder and `done/` (T346 next).
 - **File:** `docs/tasks/T246-<a-few-words>.md`; three digits, lower case, words joined by `-`.
 - **Index:** add a row to "Open tasks" above and keep its status in step with the file's heading.
 - **Size (owner, 2026-11-15, after T142):** one task is one layer (a C++ shim or a core crate, or
