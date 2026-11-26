@@ -1,4 +1,4 @@
-# T341. ADR 0022 S3a: the search in the refilter, the reads and the status line — Blocked: waits for the chain review
+# T341. ADR 0022 S3a: the search in the refilter, the reads and the status line — Open
 
 - **Why:** ADR 0022 S3 (the search box and Ctrl+F), decided by the owner on 2026-11-26 (ADR 0022
   §3.2, S3-Q1–S3-Q12, every proposal approved). S1 (T330) made the filter model
@@ -64,7 +64,11 @@
      `refilter`. `refilter` uses it for its first condition, so the two cannot differ.
   3. **The order of the reads** (S3-Q6): `filter_read_order` in `main.rs` takes the ratings
      (`ratings_ready`, `rating_of`, as `refilter_active` gets them) and gives
-     `read_order(tab.files.len(), &tab.star_label_list(…), tab.current, |_| false)`, so the
+     `read_order(tab.files.len(), &list, tab.current, skip)` with `list` from
+     `tab.star_label_list(…)` and `skip` true for every index not in `list` (a `HashSet` of
+     it), since `read_order` adds every remaining file after the list (`sort.rs`, about line
+     328) and the files the stars hide must not be read (while an active star filter waits for
+     the ratings, nothing is read). So the
      reads start at the current image and go forward over the images the search must decide,
      not over `visible` (where they are hidden). The Exif reads of `follow_filter_values` use
      the same order. When the current image is not in the list (for example hidden by the
@@ -79,13 +83,23 @@
      answer was delivered (`take_filter_answers` gave something), a chunk ended
      (`end_filter_read`), or a chunk was refused by a stopped worker
      (`SubmitError::Stopped` → `mark_unreadable`, about line 2546), and the active tab's
-     `meta_filter` is active: `refilter_active(None)`, and when it changed something or
+     `meta_filter` is active: first `anchor_from_note()` (the contact sheet keeps its top
+     image, as for `SortChange::Placed`, about line 2451), then `refilter_active(None)`; when
+     `visible` went from empty to not empty, `scroll_request` is set to the current image's
+     position, so the first matches are seen; and when it changed something or
      `preview_must_leave` (point 6) holds, `loupe_follows_visible()`, as in
      `refilter_when_ratings_change` (about line 2392). The refilter after the answers and
      `end_filter_read` sits before the borrow `self.tabs.active()` (about line 2503), and once
      more after `mark_unreadable`. Images whose answer came are shown or hidden at once; the
-     current image stays current while it is shown. No scroll is asked for (as the ratings'
-     refilter asks none).
+     current image stays current while it is shown. Otherwise no scroll is asked for. An image
+     shown only through `keep` (a neighbour kept by `WindowRefilter::KeepNeighbour`, about line
+     4774) leaves at the next chunk's refilter if it does not match; that is accepted (the
+     ratings' and `unread` refilters do the same) and said in the doc comment.
+  4b. **Ctrl+A with nothing shown** (S3-Q15): `select_all` (`main.rs`, about line 7125) does
+     nothing when the active tab's `visible` is empty, so the marks kept for unknown values
+     (S3-Q7) and for unread ratings (ADR 0014 amendment 3) stay. Its doc comment says so. (The
+     reviewer removes the known limit "Ctrl+A while nothing is shown clears the kept marks" at
+     this task's Done.)
   5. **Read again after RawStride's own write: the old values kept** (S3-Q8, S3-Q12):
      `TabValues::forget_iptc` no longer drops IPTC values that were read. `Entry` gets
      `reread: bool`; `forget_iptc` sets `reread = e.image.is_read(Group::Iptc)` (an image never
@@ -94,7 +108,8 @@
      skip of a read IPTC group (about line 215): an entry with `reread` is chunked like a
      `NotAsked` image (a pending write still held back as today, a retry still alone).
      `record_iptc` with `Ok` sets the new values and clears `reread`; a first `Err` gives
-     `FailedOnce` with the old values kept; a second `Err` (the retry) drops the IPTC values and
+     `FailedOnce` with the old values kept and `reread` still set (so the retry is chunked); a
+     second `Err` (the retry) drops the IPTC values and
      gives `Unreadable`, `reread` cleared (S3-Q12). `mark_unreadable` (a stopped worker) does
      the same to a `reread` entry. Dropping is today's body of `forget_iptc` (the name and Exif
      kept, `named_image` plus the Exif copy), moved into a private helper used by these places.
@@ -141,7 +156,8 @@
        `"1 image could not be read"` for 1, `format!("{count} images could not be read")`
        otherwise.
      `docs/glossary.md` gets one row in §2 (Ratings, labels, marking and filters) for both, in
-     the form of the rows around it ("added by T341").
+     the form of the rows around it ("–" in the first column, as new rows have; "added by
+     T341").
   9. **The status line and the grid** (S3-Q4, S3-Q5), in `main.rs`, only while the active
      tab's `meta_filter` is active:
      - while `search_waiting`: the part `reading_metadata_text(done, total)` is added after the
@@ -173,7 +189,8 @@
     `reread`, `FailedOnce` and `Unreadable` images.
   - `loupe_text.rs`: both texts, with 0, 1 and 2 for the unreadable one.
   - `main.rs`: (a) `filter_read_order` follows `star_label_list` from the current image, also
-    when the current image is hidden by the search; (b) `search_waiting` true while an image of
+    when the current image is hidden by the search, and leaves out a file the stars hide;
+    (a2) `select_all` with nothing visible keeps the marks; (b) `search_waiting` true while an image of
     the list is unread, false when all are read or unreadable; (c) `preview_must_leave` with
     `search_waiting` true is false, and with it false (the reads done) and nothing shown is
     true.
@@ -192,3 +209,4 @@
 |---|---|---|
 | 2026-11-26 | Blocked | Added (ADR 0022 §3.2, S3-Q1–S3-Q13) |
 | 2026-11-26 | Blocked | Cold read: the preview showed "No folder open …" for an empty list, not "Reading ratings …" (point 6 now names the `Status::Empty` text, the preview's status line and `set_files(Vec::new(), 0)`); `preview_must_leave` gets `search_waiting` as a parameter; `reread` only for an image whose IPTC was read, checked first in `iptc_chunk`, and `mark_unreadable` drops it too; the two existing tests whose expectations S3-Q6 and S3-Q8 change are named; the refilter also after a stopped worker; the status part's place after the name |
+| 2026-11-26 | Open | Chain review (T341 → T342): the read order skips the files the stars hide (point 3; `read_order` added them last); the sheet keeps its top image and scrolls to the first matches (point 4); `keep` dropped by the chunk refilter accepted; `reread` kept after a first failure; two owner decisions: S3-Q14 (marks lost while typing, a known limit) and S3-Q15 (Ctrl+A does nothing with nothing shown: point 4b; the known limit removed at Done); the glossary's first column; T342's hand check extended |

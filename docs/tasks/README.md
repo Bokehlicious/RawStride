@@ -87,7 +87,7 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status | Model |
 |---|---|---|---|
-| [T341](T341-search-in-the-refilter.md) | ADR 0022 S3a: the search in the refilter, the reads and the status line | Blocked: waits for the chain review | Opus |
+| [T341](T341-search-in-the-refilter.md) | ADR 0022 S3a: the search in the refilter, the reads and the status line | Open | Opus |
 | [T342](T342-search-box-and-ctrl-f.md) | ADR 0022 S3b: the search box and Ctrl+F | Blocked: waits for T341 | Opus |
 
 ## Writing a task (owner and reviewer)

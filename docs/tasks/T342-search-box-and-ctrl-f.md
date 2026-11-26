@@ -61,7 +61,8 @@
      - **Typing:** each change sets `search_edited_at` to now; once 0.3 s have passed without a
        change (a repaint is asked for that moment), the text is applied (point 3).
      - **Enter:** applies the text at once and gives the keyboard back to the images, as
-       `apply_filter` does.
+       `apply_filter` does, and the contact sheet scrolls to the current image also when the
+       text was already applied (`set_search` then does nothing).
      - **Escape** in the box: empties it, applies the empty text at once, and the box loses the
        keyboard. egui (0.37) takes the focus away on Escape at the start of the frame and a
        single-line field gives it up on Enter, so both are seen as `response.lost_focus()` with
@@ -74,8 +75,9 @@
        Enter or Escape (a flag `search_took_key`, set by the box and cleared by the key loop),
        so Escape does not also clear the marking and Enter does not open the preview.
      - **Another tab:** `Tab` has no id. The box remembers what it shows: the active tab's
-       index and folder, and the search it last applied or loaded. Each frame, when the active
-       index or folder differs, or no change is pending and the tab's search
+       index and folder, the number of tabs, and the search it last applied or loaded. Each
+       frame, when the active index, folder or number of tabs differs (a tab of the same folder
+       closed at the same index is then noticed too), or no change is pending and the tab's search
        (`tab.meta_filter.search()`) differs from the remembered one (a folder opened again
        empties it, `Tab::open`), the box loads the tab's search and a change not yet applied is
        dropped (it was less than 0.3 s of typing).
@@ -127,11 +129,18 @@
   {i} of {n} …" counts, several words (AND), a part of a word, a file name, a JPEG with IIM
   only, the search with a star filter, marks kept for unread images, `M` on a shown image that
   then stops matching (it leaves after its read, not before), Show All, another tab with its
-  own search, `latency.ps1` not needed (no change to the view).
+  own search; from the chain review: F5 and a change on disk while the values are read, a tab
+  switch while they are read, a batch (`M` on several, Apply to All Marked) with a search
+  active (the count stands still while the batch writes), the waiting preview's text, a file
+  that cannot be read ("could not be read"), Ctrl+A while nothing is shown (the marks stay,
+  S3-Q15), and a tab closed while a change in the box is pending. `latency.ps1` is not needed
+  (no change to the view). At Done one CHANGELOG line under Added covers T341 and T342 (T341
+  gets none: nothing is visible after it alone).
 
 ## Log
 
 | Date | Status | Note |
 |---|---|---|
 | 2026-11-26 | Blocked | Added (ADR 0022 §3.2, S3-Q1, S3-Q2, S3-Q9, S3-Q13); waits for T341 (both change `main.rs`) |
+| 2026-11-26 | Blocked | Chain review (see T341's log): Enter scrolls also with the text already applied; the number of tabs remembered too; the hand check extended; the CHANGELOG line at this task's Done |
 | 2026-11-26 | Blocked | Cold read: the fixed keys were not guarded while a text field has the keyboard, and Enter or Escape leaving the box reached the grid in the same frame (point 2: the guard and `search_took_key`); keys go through `key_map_action` (point 4: the `A::Search` arm, leaving the preview as `A::Preview`); `command_enabled`; `the_default_map_is_todays_keys` and its `today()`; the box's place before the sort group; how Show All is told; how a tab change is noticed; select-all through `TextEditState` |
