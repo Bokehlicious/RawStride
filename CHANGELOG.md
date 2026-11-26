@@ -22,6 +22,10 @@ Downloads are on the [Releases page](https://github.com/Bokehlicious/RawStride/r
   brighter by ⅓ EV, and A turns auto exposure on and off.
 - The setting Auto exposure at start (Settings ▸ Preview ▸ Exposure), on by default: auto
   exposure is on when RawStride starts; B still turns it off for the session.
+- A search box in the command bar (Ctrl+F): it shows only the images whose file name or IPTC
+  text (title, description, keywords, creator, place and the like) holds every word typed. Each
+  folder tab keeps its own search, the status bar counts the images still being read, and View ▸
+  Filter ▸ Show All empties the search too.
 
 ### Changed
 

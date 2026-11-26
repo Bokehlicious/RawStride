@@ -378,6 +378,69 @@ struct KeyDone {
     import_opened: bool,
 }
 
+/// `fixed_key`, but none while a text field has the keyboard or in the frame the search box
+/// gave it up on Enter or Escape (ADR 0022 S3, T342 point 2).
+fn fixed_image_key(chord: KeyChord, view: KeyView, keyboard_taken: bool) -> Option<FixedKey> {
+    if keyboard_taken {
+        return None;
+    }
+    fixed_key(chord, view)
+}
+
+/// The pause after the last change in the search box before its text is applied (S3-Q1).
+const SEARCH_DELAY: Duration = Duration::from_millis(300);
+
+/// Whether the search box's text is applied now: at once on Enter or Escape, otherwise once
+/// `SEARCH_DELAY` has passed since the last change.
+fn search_apply_due(edited_at: Option<Instant>, now: Instant, took_key: bool) -> bool {
+    took_key || edited_at.is_some_and(|edited_at| now.duration_since(edited_at) >= SEARCH_DELAY)
+}
+
+/// What the search box shows: the active tab's index and folder, the number of tabs and the
+/// search last applied or loaded. A difference makes the box load the tab's search (T342).
+struct SearchTab {
+    index: usize,
+    folder: Option<PathBuf>,
+    count: usize,
+    applied: String,
+}
+
+/// Sets the active tab's search. Returns false, changing nothing, when it already is `text`.
+fn set_tab_search(tabs: &mut Tabs, text: &str) -> bool {
+    let Some(tab) = tabs
+        .active_mut()
+        .filter(|tab| tab.meta_filter.search() != text)
+    else {
+        return false;
+    };
+    tab.meta_filter.set_search(text);
+    true
+}
+
+/// A choice in View ▸ Filter: a star or label filter, or Show All, which also empties the
+/// search (S3-Q9).
+enum FilterMenuChoice {
+    Filter(Filter),
+    ShowAll,
+}
+
+impl FilterMenuChoice {
+    /// The filter to apply, and the search to apply after it (`Some("")` for Show All).
+    fn filter_and_search(self, current: Filter) -> (Filter, Option<&'static str>) {
+        match self {
+            Self::Filter(filter) => (filter, None),
+            Self::ShowAll => (
+                Filter {
+                    stars: StarFilter::All,
+                    label: LabelFilter::all(),
+                    ..current
+                },
+                Some(""),
+            ),
+        }
+    }
+}
+
 /// The view action of a fixed key of the preview (U8-Q1): the steps and `=`. `None` for the
 /// contact sheet's fixed keys, closing the preview and `Taken`.
 fn fixed_view_action(fixed: FixedKey) -> Option<Action> {
@@ -1519,6 +1582,16 @@ struct Loupe {
     /// A position the contact sheet scrolls to on the next frame: a menu command or the command
     /// bar changed the current image or the filter (T109).
     scroll_request: Option<usize>,
+    /// The search box's text (the shell's, not the tab's; ADR 0022 S3, T342).
+    search_edit: String,
+    /// When the box's text last changed and is not applied yet.
+    search_edited_at: Option<Instant>,
+    /// What the box shows; see `SearchTab`.
+    search_tab: Option<SearchTab>,
+    /// Ctrl+F: the box asks for the keyboard, its text selected, when it is next drawn.
+    search_focus_wanted: bool,
+    /// The box gave up the keyboard on Enter or Escape this frame: no image key acts.
+    search_took_key: bool,
     /// What the contact sheet showed in its last frame (ADR 0026 §2 point 5, T242), made by
     /// `draw_grid` every frame it runs.
     grid_note: Option<GridNote>,
@@ -2374,6 +2447,89 @@ impl Loupe {
         self.tabs.set_filter(filter);
         self.refilter_active(None);
         self.loupe_follows_visible();
+    }
+
+    /// Applies a search to the active tab (T342 point 3): nothing when it already is `text`;
+    /// otherwise the refilter, the preview following and the contact sheet scrolled to the
+    /// current image. T341's reads start by themselves.
+    fn set_search(&mut self, text: &str) {
+        if !set_tab_search(&mut self.tabs, text) {
+            return;
+        }
+        self.refilter_active(None);
+        self.loupe_follows_visible();
+        self.scroll_request = self.tabs.active().and_then(Tab::position);
+    }
+
+    /// Loads the active tab's search into the box when the tab, its folder or the number of
+    /// tabs changed, or nothing is pending and the tab's search changed; a pending change is
+    /// dropped then.
+    fn sync_search_edit(&mut self) {
+        let index = self.tabs.active_index();
+        let count = self.tabs.tabs().len();
+        let Some(tab) = self.tabs.active() else {
+            self.search_tab = None;
+            self.search_edit.clear();
+            self.search_edited_at = None;
+            self.search_focus_wanted = false;
+            return;
+        };
+        let applied = tab.meta_filter.search();
+        let reload = self.search_tab.as_ref().is_none_or(|shown| {
+            shown.index != index
+                || shown.count != count
+                || shown.folder != tab.folder
+                || (self.search_edited_at.is_none() && shown.applied != applied)
+        });
+        if reload {
+            self.search_edit = applied.to_owned();
+            self.search_edited_at = None;
+            self.search_tab = Some(SearchTab {
+                index,
+                folder: tab.folder.clone(),
+                count,
+                applied: applied.to_owned(),
+            });
+        }
+    }
+
+    /// Applies the box's text and remembers it as applied.
+    fn apply_search_edit(&mut self) {
+        let text = self.search_edit.clone();
+        self.set_search(&text);
+        self.search_edited_at = None;
+        if let Some(shown) = &mut self.search_tab {
+            shown.applied = text;
+        }
+    }
+
+    /// Applies the box's text when `search_apply_due`, otherwise asks for a repaint at the
+    /// moment it is due.
+    fn apply_search_when_due(&mut self, ctx: &egui::Context, took_key: bool) {
+        let now = Instant::now();
+        if search_apply_due(self.search_edited_at, now, took_key) {
+            self.apply_search_edit();
+            ctx.request_repaint();
+        } else if let Some(edited_at) = self.search_edited_at {
+            ctx.request_repaint_after(SEARCH_DELAY - now.duration_since(edited_at));
+        }
+    }
+
+    /// Ctrl+F (S3-Q2, S3-Q13): with an active tab and no dialog open, the preview goes back to
+    /// the contact sheet and the box asks for the keyboard. Returns `None` when nothing is
+    /// done, or the position `switch_mode` gives when the preview was left.
+    fn focus_search(&mut self, ctx: &egui::Context) -> Option<Option<usize>> {
+        if self.tabs.active().is_none() || self.dialog_open() {
+            return None;
+        }
+        let scroll_to = if self.in_preview() {
+            Some(self.switch_mode(ViewMode::Grid))
+        } else {
+            None
+        };
+        self.search_focus_wanted = true;
+        ctx.request_repaint();
+        scroll_to
     }
 
     /// Recomputes the active tab's visible list when `ratings_ready` has changed since the last
@@ -6238,6 +6394,7 @@ impl Loupe {
                 self.act(Action::OpenMetadata, anchor);
                 ctx.request_repaint();
             }
+            A::Search => done.scroll_to = self.focus_search(ctx),
             A::SelectAll => select_all(self.tabs.active_mut()),
             A::Preview => {
                 if in_preview {
@@ -8460,6 +8617,7 @@ impl Loupe {
             | Command::NextTab
             | Command::PreviousTab
             | Command::SelectAll
+            | Command::Search
             | Command::ClearSelection => tab.is_some(),
             Command::Metadata => {
                 let cwd = std::env::current_dir().ok();
@@ -8578,6 +8736,11 @@ impl Loupe {
             Command::SelectAll => select_all(self.tabs.active_mut()),
             Command::ClearSelection => self.clear_selection(),
             Command::Metadata => self.act(Action::OpenMetadata, None),
+            Command::Search => {
+                if let Some(position) = self.focus_search(ctx) {
+                    self.scroll_request = position;
+                }
+            }
             Command::Stars(stars) => self.rate_from_menu(RatingKey::Stars(stars)),
             Command::Reject => self.rate_from_menu(RatingKey::Reject),
             Command::MovePicked => self.move_picked(),
@@ -8790,7 +8953,7 @@ impl Loupe {
         &self,
         ui: &mut egui::Ui,
         commands: &mut Vec<Command>,
-        filter_choice: &mut Option<Filter>,
+        filter_choice: &mut Option<FilterMenuChoice>,
         favourite: &mut Option<PathBuf>,
     ) {
         egui::MenuBar::new().ui(ui, |ui| {
@@ -8979,16 +9142,12 @@ impl Loupe {
 
     /// Visa ▸ Filter: "Visa alla", then the command bar's three lists as radio items (the
     /// condition only for a number of stars) and the label check boxes (ADR 0014 §5.2).
-    fn filter_menu(&self, ui: &mut egui::Ui) -> Option<Filter> {
+    fn filter_menu(&self, ui: &mut egui::Ui) -> Option<FilterMenuChoice> {
         let filter = self.tabs.active().map(|tab| tab.filter)?;
-        let mut chosen = None;
         if ui.button(shell_text(ShellText::ShowAll)).clicked() {
-            chosen = Some(Filter {
-                stars: StarFilter::All,
-                label: LabelFilter::all(),
-                ..filter
-            });
+            return Some(FilterMenuChoice::ShowAll);
         }
+        let mut chosen = None;
         ui.separator();
         let counts_stars = matches!(filter.stars, StarFilter::Stars(_));
         ui.add_enabled_ui(counts_stars, |ui| {
@@ -9038,7 +9197,69 @@ impl Loupe {
                 chosen = Some(Filter { label, ..filter });
             }
         }
-        chosen
+        chosen.map(FilterMenuChoice::Filter)
+    }
+
+    /// The search box of the command bar (S3-Q1, S3-Q9): the delayed apply, Enter, Escape, the
+    /// focus asked for by Ctrl+F, and the accent outline while the tab's search is active.
+    fn draw_search_box(&mut self, ui: &mut egui::Ui, accent: egui::Color32) {
+        let response = ui.add(
+            egui::TextEdit::singleline(&mut self.search_edit)
+                .id_salt("quick-search")
+                .desired_width(160.0)
+                .hint_text(shell_text(ShellText::SearchHint)),
+        );
+        if !ui.is_enabled() {
+            return;
+        }
+        if response.changed() {
+            self.search_edited_at = Some(Instant::now());
+        }
+        let (enter, escape) = if response.lost_focus() {
+            ui.input(|input| {
+                (
+                    input.key_pressed(egui::Key::Enter),
+                    input.key_pressed(egui::Key::Escape),
+                )
+            })
+        } else {
+            (false, false)
+        };
+        self.search_took_key = enter || escape;
+        if self.search_took_key {
+            if escape {
+                self.search_edit.clear();
+            }
+            self.apply_search_when_due(ui.ctx(), self.search_took_key);
+            response.surrender_focus();
+            if enter {
+                self.scroll_request = self.tabs.active().and_then(Tab::position);
+            }
+        }
+        if std::mem::take(&mut self.search_focus_wanted) {
+            let mut state =
+                egui::text_edit::TextEditState::load(ui.ctx(), response.id).unwrap_or_default();
+            state
+                .cursor
+                .set_char_range(Some(egui::text::CCursorRange::select_all_str(
+                    &self.search_edit,
+                )));
+            state.store(ui.ctx(), response.id);
+            response.request_focus();
+        }
+        if !response.has_focus()
+            && self
+                .tabs
+                .active()
+                .is_some_and(|tab| tab.meta_filter.is_active())
+        {
+            ui.painter().rect_stroke(
+                response.rect,
+                ui.visuals().widgets.inactive.corner_radius,
+                egui::Stroke::new(1.5, accent),
+                egui::StrokeKind::Inside,
+            );
+        }
     }
 
     /// The command bar (ADR 0017 §2.1, T109): "Importera…", "Öppna mapp…", the active tab's
@@ -9094,6 +9315,7 @@ impl Loupe {
                 if let Some(label) = label_combo(ui, "label-filter", filter.label, accent) {
                     new_filter = Some(Filter { label, ..filter });
                 }
+                self.draw_search_box(ui, accent);
             });
             ui.separator();
             // The sort order of every tab (ADR 0017 U14-Q7, T138): the key and the direction.
@@ -9587,6 +9809,7 @@ impl Loupe {
         let key_anchor = self.anchor(ctx.input(|input| input.pointer.hover_pos()), key_rect, ppp);
         let mut dialog_consumes_keys = self.import_dialog.is_some() && !self.import_hidden;
         let mut start_import = false;
+        let search_took_key = std::mem::take(&mut self.search_took_key);
         for (key, ctrl, shift, alt, repeat) in key_actions {
             // The confirmation of a delete takes every key while it is shown (T189 point 4):
             // Escape cancels, Enter cancels unless the Delete button has the focus (then egui
@@ -9672,12 +9895,13 @@ impl Loupe {
                 shift,
                 alt,
             };
+            let keyboard_taken = search_took_key || ctx.egui_wants_keyboard_input();
             // The key map first (ADR 0017 §2.4, U8-Q1–U8-Q13, T280): every changeable key is
             // looked up in it, so a key moved away from an action no longer does it. Never while a
             // text field has the keyboard: a key moved to a letter must not act while the user
             // types.
             if let Some(action) = self.key_map.action_of(chord, view) {
-                if !ctx.egui_wants_keyboard_input() {
+                if !keyboard_taken {
                     let done = self.key_map_action(&ctx, action, in_preview, repeat, key_anchor);
                     if let Some(position) = done.scroll_to {
                         scroll_to = position;
@@ -9693,7 +9917,7 @@ impl Loupe {
                 .tabs
                 .active()
                 .is_some_and(|tab| tab.mode == ViewMode::Grid);
-            match fixed_key(chord, view) {
+            match fixed_image_key(chord, view, keyboard_taken) {
                 Some(FixedKey::NextTab) => self.tab_action(TabAction::Next),
                 Some(FixedKey::PreviousTab) => self.tab_action(TabAction::Previous),
                 Some(fixed @ (FixedKey::Navigate(nav) | FixedKey::Extend(nav))) if in_grid => {
@@ -13333,6 +13557,7 @@ impl eframe::App for Loupe {
             ctx.request_repaint_after(WINDOW_POLL_INTERVAL);
         }
         self.remember_window(&ctx);
+        self.sync_search_edit();
         // The bars take no clicks while a dialog holds the program: the metadata window is modal
         // (D16), and the import and settings windows keep the program as their keys do.
         let blocked = self.dialog_open();
@@ -13357,17 +13582,23 @@ impl eframe::App for Loupe {
             if let Some(folder) = favourite {
                 self.library_action(LibraryAction::AddFavourite(folder));
             }
+            if let Some(choice) = filter_choice
+                && !blocked
+                && let Some(tab) = self.tabs.active()
+            {
+                let (filter, search) = choice.filter_and_search(tab.filter);
+                self.apply_filter(&ctx, filter);
+                if let Some(text) = search {
+                    self.search_edit = text.to_owned();
+                    self.apply_search_edit();
+                }
+            }
             egui::Panel::top("command-bar").show(ui, |ui| {
                 ui.add_enabled_ui(!blocked, |ui| self.draw_command_bar(ui, &mut commands));
             });
             egui::Panel::bottom("status-bar").show(ui, |ui| {
                 self.draw_status_bar(ui, blocked, &mut commands);
             });
-            if let Some(filter) = filter_choice
-                && !blocked
-            {
-                self.apply_filter(&ctx, filter);
-            }
             self.draw_columns(ui);
             let fill = ui.visuals().panel_fill;
             let central = egui::CentralPanel::default()
@@ -13387,6 +13618,11 @@ impl eframe::App for Loupe {
                 self.run_command(&ctx, command);
             }
             ctx.request_repaint();
+        }
+        // The tab bar and commands may have changed tabs after the box was drawn.
+        self.sync_search_edit();
+        if self.search_edited_at.is_some() {
+            self.apply_search_when_due(&ctx, false);
         }
         // Apply Template's list is read again at the next opening of the menu (T303).
         if !egui::Popup::is_any_open(&ctx) {
@@ -13892,6 +14128,11 @@ fn run(options: Options) -> Result<(), String> {
                 status_bar: StatusBar::default(),
                 next_status: StatusBar::default(),
                 scroll_request: None,
+                search_edit: String::new(),
+                search_edited_at: None,
+                search_tab: None,
+                search_focus_wanted: false,
+                search_took_key: false,
                 grid_note: None,
                 grid_anchor: None,
                 library_took_f5: false,
@@ -13993,6 +14234,115 @@ mod tests {
     use pw_metadata::iim::Fallback;
     use std::collections::HashMap;
     use std::path::{Path, PathBuf};
+
+    mod search {
+        use super::super::{
+            FilterMenuChoice, LabelFilter, StarFilter, Tabs, fixed_image_key, search_apply_due,
+            set_tab_search,
+        };
+        use egui::Key;
+        use pw_loupe::{KeyChord, KeyView, LabelChoice, StarCondition};
+        use std::time::{Duration, Instant};
+
+        #[test]
+        fn image_keys_wait_for_the_keyboard_even_when_search_just_released_it() {
+            for key in [Key::Escape, Key::Enter, Key::Space, Key::ArrowLeft] {
+                let chord = KeyChord {
+                    key,
+                    ctrl: false,
+                    shift: false,
+                    alt: false,
+                };
+                let view = KeyView::Sheet;
+                assert!(fixed_image_key(chord, view, false).is_some());
+                for (text_has_keyboard, search_took_key) in
+                    [(true, false), (false, true), (true, true)]
+                {
+                    assert_eq!(
+                        fixed_image_key(chord, view, text_has_keyboard || search_took_key),
+                        None
+                    );
+                }
+            }
+        }
+
+        #[test]
+        fn search_applies_after_three_hundred_milliseconds_or_on_enter_or_escape() {
+            let edited = Instant::now();
+            assert!(!search_apply_due(None, edited, false));
+            assert!(!search_apply_due(
+                Some(edited),
+                edited + Duration::from_millis(299),
+                false
+            ));
+            assert!(search_apply_due(
+                Some(edited),
+                edited + Duration::from_millis(300),
+                false
+            ));
+            assert!(search_apply_due(Some(edited), edited, true));
+            assert!(search_apply_due(None, edited, true));
+        }
+
+        fn two_images() -> Tabs {
+            let mut tabs = Tabs::default();
+            tabs.open_in_active("first".into(), vec!["a.jpg".into(), "b.jpg".into()], 0);
+            tabs
+        }
+
+        fn apply(tabs: &mut Tabs, text: &str) {
+            assert!(set_tab_search(tabs, text));
+            tabs.active_mut().unwrap().refilter(true, &|_| None, None);
+        }
+
+        #[test]
+        fn setting_search_refilters_only_the_active_tab() {
+            let mut tabs = two_images();
+            apply(&mut tabs, "first search");
+            let first = tabs.active().unwrap().clone();
+            tabs.open_new("second".into(), vec!["c.jpg".into(), "d.jpg".into()], 0);
+            assert_eq!(tabs.active().unwrap().visible, [0, 1]);
+
+            apply(&mut tabs, "second search");
+
+            let second = tabs.active().unwrap();
+            assert_eq!(second.meta_filter.search(), "second search");
+            assert!(second.visible.is_empty());
+            assert_eq!(tabs.tabs().first(), Some(&first));
+            assert!(!set_tab_search(&mut tabs, "second search"));
+        }
+
+        #[test]
+        fn show_all_clears_search_stars_and_labels() {
+            let mut tabs = two_images();
+            apply(&mut tabs, "needle");
+            let tab = tabs.active_mut().unwrap();
+            tab.filter.stars = StarFilter::Stars(3);
+            tab.filter.label = LabelFilter::only(LabelChoice::NoLabel);
+            tab.filter.condition = StarCondition::Exactly;
+            let condition = tab.filter.condition;
+            let (filter, search) = FilterMenuChoice::ShowAll.filter_and_search(tab.filter);
+
+            tabs.set_filter(filter);
+            apply(&mut tabs, search.unwrap());
+
+            let tab = tabs.active().unwrap();
+            assert!(tab.meta_filter.search().is_empty());
+            assert_eq!(tab.filter.condition, condition);
+            assert_eq!(tab.filter.stars, StarFilter::All);
+            assert!(tab.filter.label.is_all());
+            assert_eq!(tab.visible, [0, 1]);
+        }
+
+        #[test]
+        fn a_search_of_spaces_shows_every_image() {
+            let mut tabs = two_images();
+            apply(&mut tabs, "needle");
+            assert!(tabs.active().unwrap().visible.is_empty());
+            apply(&mut tabs, "   ");
+            assert_eq!(tabs.active().unwrap().visible, [0, 1]);
+        }
+    }
 
     mod preview_exposure {
         use super::super::{PreviewExposure, exposure_buttons};

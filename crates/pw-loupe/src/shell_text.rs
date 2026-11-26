@@ -39,6 +39,8 @@ pub enum ShellText {
     FilterMenu,
     /// View ▸ Filter ▸ Show All (clears the filter).
     ShowAll,
+    /// The command bar's search box's hint text (ADR 0022 S3-Q1).
+    SearchHint,
     /// The settings window's theme list.
     ThemeLabel,
     /// The collapse button of the left column (a glyph in the bundled font) and its hover text.
@@ -82,6 +84,7 @@ pub fn shell_text(text: ShellText) -> &'static str {
         ShellText::OpenFolderTitle => "Open Folder",
         ShellText::FilterMenu => "Filter",
         ShellText::ShowAll => "Show All",
+        ShellText::SearchHint => "Search",
         ShellText::ThemeLabel => "Theme",
         ShellText::CollapseLeft => "«",
         ShellText::CollapseRight => "»",
@@ -599,6 +602,7 @@ pub fn command_text(command: Command) -> String {
         Command::SelectAll => "Mark All".to_owned(),
         Command::ClearSelection => "Unmark All".to_owned(),
         Command::Metadata => "Metadata…".to_owned(),
+        Command::Search => "Search".to_owned(),
         Command::Stars(0) => "No stars".to_owned(),
         Command::Stars(1) => "1 star".to_owned(),
         Command::Stars(stars) => format!("{stars} stars"),
@@ -707,6 +711,13 @@ pub fn key_text(chord: KeyChord) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn search_text_is_shared_by_the_box_command_and_shortcut() {
+        assert_eq!(shell_text(ShellText::SearchHint), "Search");
+        assert_eq!(command_text(Command::Search), "Search");
+        assert_eq!(key_action_text(KeyAction::Search), "Search");
+    }
+
     use super::*;
     use crate::shell::{MENUS, MenuEntry, menu_items};
     use pw_metadata::journal::Entry;

@@ -127,6 +127,7 @@ Every other property already uses IPTC's English name in both languages.
 | Öppna mapp… / Importera… / Stäng flik / Inställningar… / Avsluta | Open Folder… / Import… / Close Tab / Settings… / Exit | |
 | – | Help; About RawStride… | the fifth menu and its one item, which opens the window "About RawStride" (ADR 0031 RL-Q9); added by T225 |
 | Nästa flik / Föregående flik | Next Tab / Previous Tab | |
+| – | Search | the command bar's search box's hint text and the key action Ctrl+F (ADR 0022 S3-Q1, S3-Q2); added by T342 |
 | Bibliotek, Uppgifter, Inspektör | Library, Tasks, Inspector | column titles |
 | Sidokolumner, Vänster kolumn | Side Columns, Left Column | |
 | Fäll ihop kolumnen / Visa kolumnen | Collapse Column / Show Column | |

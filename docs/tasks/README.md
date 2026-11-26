@@ -87,7 +87,6 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status | Model |
 |---|---|---|---|
-| [T342](T342-search-box-and-ctrl-f.md) | ADR 0022 S3b: the search box and Ctrl+F | Open | Opus |
 
 ## Writing a task (owner and reviewer)
 

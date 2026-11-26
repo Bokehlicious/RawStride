@@ -67,6 +67,7 @@ pub enum KeyAction {
     UndoMove,
     SelectAll,
     Metadata,
+    Search,
     Stars0,
     Stars1,
     Stars2,
@@ -158,7 +159,7 @@ const fn with_alt(key: Key) -> Option<KeyChord> {
 
 impl KeyAction {
     /// Every action, in the order the Settings page lists them (T281) and `keys.txt` writes them.
-    pub const ALL: [KeyAction; 53] = [
+    pub const ALL: [KeyAction; 54] = [
         Self::OpenFolder,
         Self::ReloadFolder,
         Self::Import,
@@ -166,6 +167,7 @@ impl KeyAction {
         Self::UndoMove,
         Self::SelectAll,
         Self::Metadata,
+        Self::Search,
         Self::Stars0,
         Self::Stars1,
         Self::Stars2,
@@ -229,6 +231,7 @@ impl KeyAction {
             Self::UndoMove => "undo_move",
             Self::SelectAll => "select_all",
             Self::Metadata => "metadata",
+            Self::Search => "search",
             Self::Stars0 => "stars_0",
             Self::Stars1 => "stars_1",
             Self::Stars2 => "stars_2",
@@ -287,7 +290,7 @@ impl KeyAction {
     pub fn group(self) -> KeyGroup {
         match self {
             Self::OpenFolder | Self::ReloadFolder | Self::Import | Self::CloseTab => KeyGroup::File,
-            Self::UndoMove | Self::SelectAll | Self::Metadata => KeyGroup::Edit,
+            Self::UndoMove | Self::SelectAll | Self::Metadata | Self::Search => KeyGroup::Edit,
             Self::Stars0
             | Self::Stars1
             | Self::Stars2
@@ -381,6 +384,7 @@ impl KeyAction {
             Self::UndoMove => [with_ctrl(Key::Z), None],
             Self::SelectAll => [with_ctrl(Key::A), None],
             Self::Metadata => [plain(Key::M), None],
+            Self::Search => [with_ctrl(Key::F), None],
             Self::Stars0 => [plain(Key::Num0), with_alt(Key::Num0)],
             Self::Stars1 => [plain(Key::Num1), with_alt(Key::Num1)],
             Self::Stars2 => [plain(Key::Num2), with_alt(Key::Num2)],
@@ -443,6 +447,7 @@ impl KeyAction {
             Command::UndoMove => Self::UndoMove,
             Command::SelectAll => Self::SelectAll,
             Command::Metadata => Self::Metadata,
+            Command::Search => Self::Search,
             Command::Stars(0) => Self::Stars0,
             Command::Stars(1) => Self::Stars1,
             Command::Stars(2) => Self::Stars2,
@@ -502,6 +507,7 @@ impl KeyAction {
             Self::UndoMove => Command::UndoMove,
             Self::SelectAll => Command::SelectAll,
             Self::Metadata => Command::Metadata,
+            Self::Search => Command::Search,
             Self::Stars0 => Command::Stars(0),
             Self::Stars1 => Command::Stars(1),
             Self::Stars2 => Command::Stars(2),
@@ -1281,6 +1287,9 @@ mod tests {
             _ => {}
         }
         match view {
+            KeyView::Sheet | KeyView::Preview if Some(chord) == with_ctrl(Key::F) => {
+                Action(A::Search)
+            }
             KeyView::Sheet => match grid_key_action(key, ctrl, shift, alt) {
                 Some(GridKeyAction::OpenLoupe) if key == Key::G => Action(A::Preview),
                 Some(GridKeyAction::OpenLoupe) => Fixed(FixedKey::OpenPreview),
@@ -1368,6 +1377,21 @@ mod tests {
         assert_eq!(
             with_map(&map, chord(Key::Z, false, true, false), KeyView::Preview),
             Outcome::Nothing
+        );
+    }
+
+    #[test]
+    fn search_uses_ctrl_f_in_both_views_and_has_a_persisted_name() {
+        let map = KeyMap::default();
+        let ctrl_f = chord(Key::F, true, false, false);
+        for view in [KeyView::Sheet, KeyView::Preview] {
+            assert_eq!(map.action_of(ctrl_f, view), Some(KeyAction::Search));
+        }
+        assert_eq!(KeyAction::Search.name(), "search");
+        assert_eq!(KeyAction::from_name("search"), Some(KeyAction::Search));
+        assert_eq!(
+            KeyAction::of_command(Command::Search),
+            Some(KeyAction::Search)
         );
     }
 

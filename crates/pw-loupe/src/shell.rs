@@ -729,6 +729,7 @@ pub enum Command {
     SelectAll,
     ClearSelection,
     Metadata,
+    Search,
     /// 0–5 stars (0 clears the stars).
     Stars(u8),
     Reject,
@@ -1204,6 +1205,11 @@ pub fn menu_key(item: MenuItem, map: &KeyMap) -> Option<KeyChord> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn search_acts_in_both_views() {
+        assert_eq!(super::Command::Search.acts_in(), super::Where::Both);
+    }
+
     use super::*;
     use crate::settings::ShellSettings;
 

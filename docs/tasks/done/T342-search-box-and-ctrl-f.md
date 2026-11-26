@@ -1,4 +1,4 @@
-# T342. ADR 0022 S3b: the search box and Ctrl+F — Open
+# T342. ADR 0022 S3b: the search box and Ctrl+F — Done
 
 - **Why:** ADR 0022 S3 (the search box and Ctrl+F), decided by the owner on 2026-11-26 (ADR 0022
   §3.2, S3-Q1, S3-Q2, S3-Q9, S3-Q13). T341 makes the shown list, the reads and the status line
@@ -133,7 +133,7 @@
   switch while they are read, a batch (`M` on several, Apply to All Marked) with a search
   active (the count stands still while the batch writes), the waiting preview's text, a file
   that cannot be read ("could not be read"), Ctrl+A while nothing is shown (the marks stay,
-  S3-Q15), and a tab closed while a change in the box is pending. `latency.ps1` is not needed
+  S3-Q15), and a tab closed while a change in the box is pending; from the review: after Tab has moved the keyboard to a button, the arrows and Space in the contact sheet wait until a click (the guard of point 2 counts every widget with the keyboard, not only a text field). `latency.ps1` is not needed
   (no change to the view). At Done one CHANGELOG line under Added covers T341 and T342 (T341
   gets none: nothing is visible after it alone).
 
@@ -145,3 +145,5 @@
 | 2026-11-26 | Blocked | Chain review (see T341's log): Enter scrolls also with the text already applied; the number of tabs remembered too; the hand check extended; the CHANGELOG line at this task's Done |
 | 2026-11-26 | Blocked | Cold read: the fixed keys were not guarded while a text field has the keyboard, and Enter or Escape leaving the box reached the grid in the same frame (point 2: the guard and `search_took_key`); keys go through `key_map_action` (point 4: the `A::Search` arm, leaving the preview as `A::Preview`); `command_enabled`; `the_default_map_is_todays_keys` and its `today()`; the box's place before the sort group; how Show All is told; how a tab change is noticed; select-all through `TextEditState` |
 | 2026-11-26 | Open | T341 done |
+| 2026-11-26 | Ready for review | Implemented S3b. All eight new tests passed. The sandbox run passed fmt, personal data and clippy. Cargo audit could not lock the RustSec database, and existing workspace tests failed when ExifTool and `mklink /J` could not run. The full check and the owner's hand check remain pending. |
+| 2026-11-26 | Done | Reviewed (done by Codex): every point and test as written; Codex's own check failed in its sandbox (ExifTool, `mklink`, the audit lock); `.\tools\check.ps1` run by the reviewer, all OK, no clippy warnings. Changed by the reviewer (owner's yes): the outline follows `meta_filter.is_active()`, so a search of spaces only (no search) is not outlined; the glossary row moved to §3 as point 1 says; doc comments on the new items; `docs/test-inventory.md` rewritten in its form and its total (2841). Noted: the fixed keys' guard counts every widget with the keyboard (`egui_wants_keyboard_input`, as the key map's), so after Tab has focused a button the arrows wait until a click; added to the hand check, no change. CHANGELOG line under Added for T341 and T342. Awaiting the owner's hand check of S1–S3 (the list above) |
