@@ -1,4 +1,4 @@
-# T344. ADR 0022 S4b: the "Filter…" window, its button, menu item and key — Blocked
+# T344. ADR 0022 S4b: the "Filter…" window, its button, menu item and key — Open
 
 - **Why:** ADR 0022 S4 (the "Filter…" window), decided by the owner on 2026-11-26 (ADR 0022
   §3.3, S4-Q1–S4-Q3, S4-Q5, S4-Q8–S4-Q11). T343 makes the window's model (`FilterDraft`,
@@ -186,3 +186,4 @@
 | 2026-11-26 | Blocked | Added (ADR 0022 §3.3); waits for T343 (uses its model and texts) |
 | 2026-11-26 | Blocked | Cold read: the key loop's branch for the modal window, Escape closing an open combo list first, the draw call in `ui()` with ids of its own; `ALL` 54 → 55 and `today()`'s line beside Ctrl+F; Ctrl+Shift+F confirmed free (an older `keys.txt` that took it: "taken", as at T342); Show All through today's flow plus one refilter when only the rows changed, `filter_and_search` unchanged; `set_tab_rows` as a free function for the tests; OK's tab check by index and folder; Enter not OK; F5 clears, a relist on disk keeps |
 | 2026-11-26 | Blocked | Chain review (see T343's log): point 4a (Exif answers refilter); the window closes as Cancel when its tab stops being the active one; no folder drop while it is open; S4-Q1's "list behind" read as "the draft is not applied"; F5 keeps `meta_filter` (corrected); the menu item's text from `command_text` |
+| 2026-11-26 | Open | T343 done |

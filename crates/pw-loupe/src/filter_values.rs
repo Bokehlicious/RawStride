@@ -1,9 +1,10 @@
 //! ADR 0022 S2: the values a tab keeps for the filter.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::slice;
 
-use crate::meta_filter::{Field, Group, ImageValues, Value};
+use crate::meta_filter::{Field, Filter, Group, ImageValues, Value, normalized};
 use crate::sort::CaptureTime;
 use pw_metadata::FilterValues;
 
@@ -47,6 +48,16 @@ fn capture_seconds(stored: &str) -> Option<i64> {
     let hour = digits(11..13)?;
     let minute = digits(14..16)?;
     let second = digits(17..19)?;
+    if hour > 23 || minute > 59 || second > 59 {
+        return None;
+    }
+    Some(day_number(year, month, day)? * SECONDS_PER_DAY + hour * 3600 + minute * 60 + second)
+}
+
+pub(crate) const SECONDS_PER_DAY: i64 = 86_400;
+
+/// Returns the day offset from 1970-01-01 for a valid calendar date.
+pub(crate) fn day_number(year: i64, month: i64, day: i64) -> Option<i64> {
     let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
     let last_day = match month {
         2 => 28 + i64::from(leap),
@@ -54,19 +65,42 @@ fn capture_seconds(stored: &str) -> Option<i64> {
         1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
         _ => return None,
     };
-    if !(1..=last_day).contains(&day) || hour > 23 || minute > 59 || second > 59 {
+    if !(1..=last_day).contains(&day) {
         return None;
     }
     // Count from March so the leap day is at the end of its year.
-    let year = year - i64::from(month <= 2);
-    let march_month = if month <= 2 { month + 9 } else { month - 3 };
+    let year = i128::from(year) - i128::from(month <= 2);
+    let march_month = i128::from(if month <= 2 { month + 9 } else { month - 3 });
     let days = year * 365 + year.div_euclid(4) - year.div_euclid(100)
         + year.div_euclid(400)
         + (153 * march_month + 2) / 5
-        + day
+        + i128::from(day)
         - 1
         - 719_468;
-    Some(days * 86400 + hour * 3600 + minute * 60 + second)
+    i64::try_from(days).ok()
+}
+
+/// Inverts the day offset by counting complete 400-year cycles from March.
+pub(crate) fn civil_date(day: i64) -> (i64, i64, i64) {
+    let shifted = i128::from(day) + 719_468;
+    let era = shifted.div_euclid(146_097);
+    let day_of_era = shifted.rem_euclid(146_097);
+    let year_of_era =
+        (day_of_era - day_of_era / 1460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let year = year_of_era + era * 400;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let march_month = (5 * day_of_year + 2) / 153;
+    let day = day_of_year - (153 * march_month + 2) / 5 + 1;
+    let month = if march_month < 10 {
+        march_month + 3
+    } else {
+        march_month - 9
+    };
+    (
+        (year + i128::from(month <= 2)) as i64,
+        month as i64,
+        day as i64,
+    )
 }
 
 /// Converts available Exif fields and the file extension to filter values.
@@ -203,7 +237,7 @@ pub struct TabValues {
     entries: HashMap<PathBuf, Entry>,
 }
 
-/// Progress of the IPTC reads for the images that pass the star and label filter.
+/// Progress of metadata reads for the images that pass the star and label filter.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SearchCounts {
     pub done: usize,
@@ -351,11 +385,175 @@ impl TabValues {
             unreadable,
         }
     }
+
+    /// Counts the images with each distinct text value, in case-blind order.
+    pub fn value_counts(&self, field: Field, files: &[PathBuf]) -> Vec<(String, usize)> {
+        let mut counts = BTreeMap::new();
+        for value in files
+            .iter()
+            .filter_map(|path| self.values(path)?.value(field))
+        {
+            let texts = match value {
+                Value::Text(text) => slice::from_ref(text),
+                Value::List(texts) => texts.as_slice(),
+                Value::Number(_) | Value::Date(_) => continue,
+            };
+            let mut seen = HashSet::new();
+            for text in texts {
+                let key = normalized(text);
+                if !key.is_empty() && seen.insert(key.clone()) {
+                    counts
+                        .entry(key)
+                        .or_insert_with(|| (text.trim().to_owned(), 0))
+                        .1 += 1;
+                }
+            }
+        }
+        counts.into_values().collect()
+    }
+
+    /// Counts images whose required groups have finished and final IPTC failures.
+    pub fn filter_counts(&self, filter: &Filter, files: &[PathBuf]) -> SearchCounts {
+        let needs_exif = filter.needs(Group::Exif);
+        let needs_iptc = filter.needs(Group::Iptc);
+        let mut counts = SearchCounts {
+            done: 0,
+            total: files.len(),
+            unreadable: 0,
+        };
+        for path in files {
+            let entry = self.entries.get(path);
+            let unreadable = needs_iptc && entry.is_some_and(|e| e.state == ReadState::Unreadable);
+            let exif_done = !needs_exif || entry.is_some_and(|e| e.image.is_read(Group::Exif));
+            let iptc_done =
+                !needs_iptc || unreadable || entry.is_some_and(|e| e.image.is_read(Group::Iptc));
+            counts.done += usize::from(exif_done && iptc_done);
+            counts.unreadable += usize::from(unreadable);
+        }
+        counts
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::meta_filter::{Condition, Row};
+
+    #[test]
+    fn civil_dates_round_trip_over_leap_day_and_epoch() {
+        for (year, month, day, offset) in [
+            (1969, 12, 31, -1),
+            (1970, 1, 1, 0),
+            (2024, 2, 28, 19_781),
+            (2024, 2, 29, 19_782),
+            (2024, 3, 1, 19_783),
+        ] {
+            assert_eq!(day_number(year, month, day), Some(offset));
+            assert_eq!(civil_date(offset), (year, month, day));
+        }
+        for offset in [i64::MIN, i64::MAX] {
+            let (year, month, day) = civil_date(offset);
+            assert_eq!(day_number(year, month, day), Some(offset));
+        }
+    }
+
+    #[test]
+    fn value_counts_deduplicate_per_image_and_keep_the_first_trimmed_spelling() {
+        let files = ["first.jpg", "second.jpg", "unread.jpg", "blank.jpg"].map(PathBuf::from);
+        let mut tab = TabValues::default();
+        for (path, model, keywords) in [
+            (&files[0], " Canon ", vec!["Zoo", "Bird", " bird ", ""]),
+            (&files[1], "canon ", vec!["bird", "  ant  ", " "]),
+            (&files[3], " ", vec![" "]),
+        ] {
+            tab.record_exif(
+                path,
+                Some(&ExifSummary {
+                    model: Some(model.into()),
+                    iso: Some(1600),
+                    ..Default::default()
+                }),
+            );
+            tab.mark_in_flight(std::slice::from_ref(path));
+            tab.record_iptc(
+                path,
+                Ok(&FilterValues {
+                    keywords: keywords.into_iter().map(String::from).collect(),
+                    ..Default::default()
+                }),
+            );
+        }
+        assert_eq!(
+            tab.value_counts(Field::Camera, &files),
+            [("Canon".into(), 2)]
+        );
+        assert_eq!(
+            tab.value_counts(Field::Keywords, &files),
+            [("ant".into(), 1), ("Bird".into(), 2), ("Zoo".into(), 1)]
+        );
+        assert!(tab.value_counts(Field::Iso, &files).is_empty());
+        assert!(tab.value_counts(Field::FileName, &files).is_empty());
+    }
+
+    #[test]
+    fn filter_counts_wait_for_all_needed_groups() {
+        let files = [
+            "read.jpg",
+            "exif.jpg",
+            "iptc.jpg",
+            "failed.jpg",
+            "exif-failed-iptc.jpg",
+            "pending.jpg",
+        ]
+        .map(PathBuf::from);
+        let mut tab = TabValues::default();
+        for path in [&files[0], &files[1], &files[4]] {
+            tab.record_exif(path, None);
+        }
+        for path in [&files[0], &files[2]] {
+            record_title(&mut tab, path, "a title");
+        }
+        tab.mark_unreadable(&files[3..5]);
+
+        let mut filter = Filter::default();
+        filter.push(Row::new(Field::Camera, Condition::Is("Canon".into())).unwrap());
+        assert_eq!(
+            tab.filter_counts(&filter, &files),
+            SearchCounts {
+                done: 3,
+                total: 6,
+                unreadable: 0
+            }
+        );
+        filter.push(Row::new(Field::Title, Condition::HasNo).unwrap());
+        assert_eq!(
+            tab.filter_counts(&filter, &files),
+            SearchCounts {
+                done: 2,
+                total: 6,
+                unreadable: 2
+            }
+        );
+
+        filter.set_rows(vec![
+            Row::new(Field::FileName, Condition::Contains("jpg".into())).unwrap(),
+        ]);
+        assert_eq!(
+            tab.filter_counts(&filter, &files),
+            SearchCounts {
+                done: 6,
+                total: 6,
+                unreadable: 0
+            }
+        );
+
+        filter.set_rows(Vec::new());
+        filter.set_search("a title");
+        assert_eq!(
+            tab.filter_counts(&filter, &files),
+            tab.search_counts(&files)
+        );
+    }
 
     #[test]
     fn file_type_survives_a_failed_inspection() {

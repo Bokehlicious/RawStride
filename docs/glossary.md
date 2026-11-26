@@ -116,6 +116,8 @@ Every other property already uses IPTC's English name in both languages.
 | Bara markerade | Marked only | |
 | Filter, Visa alla | Filter, Show All | |
 | – | Reading metadata {done} of {total} … / 1 image could not be read / {count} images could not be read | search progress and read failures (ADR 0022 S3-Q4, S3-Q5); added by T341 |
+| – | Filter, Add Condition, Remove, Clear, OK, Cancel, No conditions: every image is shown., No values in the folder, contains, is, is not, is one of, ≥, ≤, between, is empty, {low} and {high}, 1/250, 2.8, 35, 1600, YYYY-MM-DD, Enter a value, Pick at least one value, Enter a number, Enter a date as YYYY-MM-DD, Filter…, Filter: 1 condition, Filter: {n} conditions, {value} ({count}), RAW, JPEG, TIFF, DNG | Filter window, input hints, validation, counts, command bar button and file type choices (ADR 0022 §3.3). Added by T343. |
+| – | Capture Date, Exif, IPTC | The filter's date field and field list headings (ADR 0022 S4-Q3, S4-Q4). File Name and File Type use the sort labels below, File uses the menu title in §3, other Exif field names use the Info terms in §4 and IPTC field labels use §1. Added by T343. |
 | – | Sort By, Sort: {key}; File Name, Capture Time, Modified, File Type, Rating; Ascending / Descending (↑ / ↓) | the sort order in View and the command bar (ADR 0017 U14-Q1, U14-Q7); added by T138 |
 | – | Sorting by capture time: {i} of {n} | the status bar while a tab's capture times are read (U14-Q4); added by T138 |
 

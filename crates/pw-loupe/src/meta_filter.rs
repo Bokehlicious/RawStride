@@ -4,6 +4,9 @@ use std::collections::HashMap;
 use std::fmt;
 use std::slice;
 
+/// The fixed choices for the file type condition.
+pub const FILE_TYPES: [&str; 4] = ["RAW", "JPEG", "TIFF", "DNG"];
+
 /// Where a field's value comes from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Group {
@@ -107,46 +110,39 @@ impl Field {
         }
     }
 
-    fn allows(self, condition: &Condition) -> bool {
-        match condition {
-            Condition::Contains(_) | Condition::Is(_) | Condition::IsNot(_) => matches!(
-                self,
-                Self::FileName
-                    | Self::Camera
-                    | Self::Lens
-                    | Self::Title
-                    | Self::Headline
-                    | Self::Description
-                    | Self::Keywords
-                    | Self::PersonShown
-                    | Self::Creator
-                    | Self::CopyrightNotice
-                    | Self::City
-                    | Self::Country
-                    | Self::Location
-            ),
-            Condition::OneOf(_) => matches!(
-                self,
-                Self::Camera
-                    | Self::Lens
-                    | Self::City
-                    | Self::Country
-                    | Self::Keywords
-                    | Self::FileType
-            ),
-            Condition::HasNo => matches!(
-                self,
-                Self::Title | Self::Description | Self::Keywords | Self::CopyrightNotice
-            ),
-            Condition::AtLeast(_) | Condition::AtMost(_) | Condition::Between(_, _) => matches!(
-                self,
-                Self::FocalLength
-                    | Self::Aperture
-                    | Self::ExposureTime
-                    | Self::Iso
-                    | Self::CaptureDate
-            ),
+    /// The conditions this field takes, in the order shown in the filter window.
+    pub fn kinds(self) -> &'static [ConditionKind] {
+        use ConditionKind::*;
+        match self {
+            Self::FileName
+            | Self::Headline
+            | Self::PersonShown
+            | Self::Creator
+            | Self::Location => &[Contains, Is, IsNot],
+            Self::Camera | Self::Lens | Self::City | Self::Country => &[Contains, Is, IsNot, OneOf],
+            Self::Title | Self::Description | Self::CopyrightNotice => {
+                &[Contains, Is, IsNot, IsEmpty]
+            }
+            Self::Keywords => &[Contains, Is, IsNot, OneOf, IsEmpty],
+            Self::FocalLength
+            | Self::Aperture
+            | Self::ExposureTime
+            | Self::Iso
+            | Self::CaptureDate => &[AtLeast, AtMost, Between],
+            Self::FileType => &[OneOf],
         }
+    }
+
+    /// Whether this field offers choices collected from the folder's metadata.
+    pub fn has_value_list(self) -> bool {
+        matches!(
+            self,
+            Self::Camera | Self::Lens | Self::Keywords | Self::City | Self::Country
+        )
+    }
+
+    fn allows(self, condition: &Condition) -> bool {
+        self.kinds().contains(&condition.kind())
     }
 
     fn has_value(self, value: &Value) -> bool {
@@ -196,6 +192,35 @@ pub enum Condition {
     Between(f64, f64),
     /// The field has no value.
     HasNo,
+}
+
+/// The comparison offered by a filter row, without its operands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConditionKind {
+    Contains,
+    Is,
+    IsNot,
+    OneOf,
+    AtLeast,
+    AtMost,
+    Between,
+    IsEmpty,
+}
+
+impl Condition {
+    /// Returns the comparison without its operands.
+    pub fn kind(&self) -> ConditionKind {
+        match self {
+            Self::Contains(_) => ConditionKind::Contains,
+            Self::Is(_) => ConditionKind::Is,
+            Self::IsNot(_) => ConditionKind::IsNot,
+            Self::OneOf(_) => ConditionKind::OneOf,
+            Self::AtLeast(_) => ConditionKind::AtLeast,
+            Self::AtMost(_) => ConditionKind::AtMost,
+            Self::Between(_, _) => ConditionKind::Between,
+            Self::HasNo => ConditionKind::IsEmpty,
+        }
+    }
 }
 
 /// Why a filter row could not be created.
@@ -414,7 +439,7 @@ impl ImageValues {
     }
 }
 
-fn normalized(text: &str) -> String {
+pub(crate) fn normalized(text: &str) -> String {
     text.trim().to_lowercase()
 }
 
@@ -452,6 +477,11 @@ impl Filter {
     /// Appends a validated row.
     pub fn push(&mut self, row: Row) {
         self.rows.push(row);
+    }
+
+    /// Replaces the extended filter rows, keeping the quick search.
+    pub fn set_rows(&mut self, rows: Vec<Row>) {
+        self.rows = rows;
     }
 
     /// Removes the row at the index, returning false if the index is out of range.
@@ -589,6 +619,59 @@ mod tests {
                 expected
             );
         }
+    }
+
+    #[test]
+    fn kinds_follow_allowed_conditions_in_window_order() {
+        let examples = [
+            (Contains("x".into()), ConditionKind::Contains),
+            (Is("x".into()), ConditionKind::Is),
+            (IsNot("x".into()), ConditionKind::IsNot),
+            (OneOf(vec!["x".into()]), ConditionKind::OneOf),
+            (AtLeast(1.0), ConditionKind::AtLeast),
+            (AtMost(1.0), ConditionKind::AtMost),
+            (Between(1.0, 2.0), ConditionKind::Between),
+            (HasNo, ConditionKind::IsEmpty),
+        ];
+        for (condition, kind) in &examples {
+            assert_eq!(condition.kind(), *kind);
+        }
+        for field in Field::ALL {
+            let allowed: Vec<_> = examples
+                .iter()
+                .filter(|(condition, _)| field.allows(condition))
+                .map(|(_, kind)| *kind)
+                .collect();
+            assert_eq!(field.kinds(), allowed, "{field:?}");
+        }
+    }
+
+    #[test]
+    fn only_five_fields_have_folder_value_lists() {
+        for field in Field::ALL {
+            assert_eq!(
+                field.has_value_list(),
+                [Camera, Lens, Keywords, City, Country].contains(&field),
+                "{field:?}"
+            );
+        }
+        assert_eq!(FILE_TYPES, ["RAW", "JPEG", "TIFF", "DNG"]);
+    }
+
+    #[test]
+    fn replacing_rows_keeps_the_search() {
+        let mut filter = single_row(FileName, Contains("old".into()));
+        filter.set_search("keep me");
+        let rows = vec![
+            Row::new(Camera, Is("Canon".into())).unwrap(),
+            Row::new(Iso, AtLeast(1600.0)).unwrap(),
+        ];
+        filter.set_rows(rows.clone());
+        assert_eq!(filter.rows(), rows);
+        assert_eq!(filter.search(), "keep me");
+        filter.set_rows(Vec::new());
+        assert!(filter.rows().is_empty());
+        assert_eq!(filter.search(), "keep me");
     }
 
     #[test]
