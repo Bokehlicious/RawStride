@@ -608,6 +608,14 @@ only if it is seen in use.)
   last source and steps are taken only while the preview is drawn, so on returning to the
   preview after the steps were reset the two items may look enabled for one frame.
 
+## The channel view (ADR 0027 W4)
+
+(W4-Q3, accepted by the owner 2026-11-26.)
+
+- *A TIFF's channel is the display's*: a TIFF is converted to the display's profile when it is
+  opened (W1-Q5), so its red, green and blue are the display's channels, not the file's; for a
+  RAW or JPEG file the channel is taken before the conversion.
+
 ## Filter on text and metadata (ADR 0022)
 
 - *A sidecar changed by another program* (**accepted for good, 2026-11-26**; ADR 0022 S2-Q6, owner 2026-11-25): the filter's values

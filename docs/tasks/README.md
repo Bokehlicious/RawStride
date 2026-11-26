@@ -87,10 +87,12 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status | Model |
 |---|---|---|---|
+| [T346](T346-channel-view-in-the-core.md) | ADR 0027 W4: the channel view's function, its timing and the channel in the view core | Open | Opus |
+| [T347](T347-channel-view-keys-menu-mark.md) | ADR 0027 W4: the keys, the menu and the mark of the channel view | Blocked | Opus |
 
 ## Writing a task (owner and reviewer)
 
-- **Number:** the next free number after the highest in this folder and `done/` (T346 next).
+- **Number:** the next free number after the highest in this folder and `done/` (T348 next).
 - **File:** `docs/tasks/T246-<a-few-words>.md`; three digits, lower case, words joined by `-`.
 - **Index:** add a row to "Open tasks" above and keep its status in step with the file's heading.
 - **Size (owner, 2026-11-15, after T142):** one task is one layer (a C++ shim or a core crate, or

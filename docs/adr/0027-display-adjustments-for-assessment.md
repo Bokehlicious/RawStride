@@ -710,6 +710,33 @@ showed no change in the measured area although the owner sees it by hand (taken 
 measurement's, not the program's). The camera's brightness was measured only on files without a
 value (the folder's order is by capture date) and is measured again after T338.
 
+### 4.5 W4's questions (answered by the owner, 2026-11-26, all as proposed)
+
+The channel view (§3.6) is the fourth adjustment built (after W5, by the order of §5). Batch and
+import do not apply: it changes only how the shown image is made, and it has no value that a file
+can lack. The RAW histogram, the exposure statistics, the clipping overlay and the focus marking do
+not change (§2.1).
+
+What the code says today (reviewer, 2026-11-26): `render_view` (`core.rs`) renders, reduces, lifts
+the shadows, sharpens and then converts to the display (`Backend::to_display`); the view's look
+(`Look` in `state.rs`: sharpening, exposure, shadows) is part of every view's identity in the cache.
+A TIFF is converted to the display's profile once when it is opened (W1-Q5), so its
+`to_display` passes it on unchanged. Free single keys in the preview: N, Q, T, W and Y.
+
+| # | Question | Answer |
+|---|---|---|
+| W4-Q1 | Where it applies | Last on the worker, after the sharpening and before the conversion to the display (§7), to every kind of view (half size, reduced, fine, scaled, 100 %, ring and pan), at every zoom level. In RAW and JPEG mode, for JPEG and TIFF files (§2.2), and on both sides of the compare. The histogram, the clipping overlay and the focus marking do not change (§2.1) |
+| W4-Q2 | How it is computed | Red, green or blue: that channel's value v shown as grey (v, v, v). Luminance: Y′ = 0.2126 R′ + 0.7152 G′ + 0.0722 B′ of the encoded values, rounded to the nearest level and clamped to 0–255, as the sharpening's luminance (W3-Q2), shown as grey. Colour leaves the view as it is. A module of its own in `pw-viewcore` (`channel.rs`), plain Rust, no new dependency |
+| W4-Q3 | TIFF | A TIFF is already in the display's profile when the channel is taken out (W1-Q5), so its channel is the display's red, not the file's. Accepted; an item in `known-limits.md` |
+| W4-Q4 | The cache, and what the user sees on a change | The channel is part of the view's look and key, as sharpening (W3-Q4): every press makes the shown view again (about 0.3 s at fit for 61 Mpix, 1.2 s with fine details on). The drawn view stays until the new one is ready and is replaced in one swap (V2); views of the other channels are kept as the memory budget allows (V8). Taking the channel out of the finished view in a few milliseconds (in the display's colours, with more memory) is not done |
+| W4-Q5 | Keys and menu | **N** steps forward (colour → red → green → blue → luminance → colour) and **Shift+N** back, both in the key map (U8), so they can be changed. A submenu View ▸ Channel after Show Shadows and the submenu Exposure (which follows it), with Next Channel (N), Previous Channel (Shift+N) and the five channels Color, Red, Green, Blue and Luminance as radio items (the program's texts in American spelling, glossary G5; the hover texts say "gray"; noted at T347's cold read). It lasts for the session and is not saved (A-Q2). Backspace (W3-Q8) sets it back to colour. No button in the title line in this step (the hand check may add one) |
+| W4-Q6 | The mark, and when it goes wrong | "R", "G", "B" or "Lum" last in the row of adjustment marks (W2-Q5); none for colour, except "RGB" while a view of another channel is still drawn after a return to colour (§2.1: what is shown is always marked; reviewer, 2026-11-26, when T347 was written). The hover text names the key and the channel (for example "Channel view (N): the red channel as gray."); the mark counts as waiting while its view is made. It is never paused (§2.2: it applies in both modes). It fails only on inconsistent image data, and then as any render does, with today's error line. New glossary term: channel view |
+| W4-Q7 | Its speed | The first task times the function on 3840×2160 and 1920×1200 in a release build; if the median is above 10 ms on one thread, the rows are split over threads with `std::thread::scope` in the same task (as W3-Q3) |
+
+W4 is written as the chain T346 (the channel function, its timing and the channel in the view
+core, `pw-viewcore`) → T347 (the shell: the keys, the menu, the mark, the reset, the texts,
+`pw-loupe`). After it, the owner's hand check and `latency.ps1` at fit with a channel shown.
+
 ## 5. Steps
 
 Each step ends with tests (GR11), the owner's hand check and, where an image is shown,
