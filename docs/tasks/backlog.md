@@ -13,6 +13,16 @@ Reorganised on 2026-11-21 (owner): the earlier file mixed these three kinds and 
 
 ## Waiting for a decision or an ADR
 
+- **The camera's brightness worked out from the embedded JPEG** (W5's hand check, 2026-11-26;
+  ADR 0027 §4.4): the file's own value (DNG `BaselineExposure`, the Fujifilm value) exists only
+  in some formats and matches the camera's JPEG only roughly. An offset worked out by comparing
+  the embedded JPEG's histogram with the RAW view's would serve every format (ARW and RW2
+  included). A new design with its own questions (which part of the histogram, the JPEG's tone
+  curve, the cost per image); an ADR question before any task.
+- **The auto exposure rule's target** (W5's hand check, 2026-11-26; ADR 0027 §3.4, §4.4): the
+  owner may want the auto-exposed view a little brighter than the 99.9th percentile 1/3 EV
+  below clipping; to be tuned after T338–T340, when the owner has used auto exposure at start
+  for a while.
 - **Fine details stand still while stepping quickly** (T328's hand check, 2026-11-25): with
   fine details on, quick steps leave the main image standing still until the user pauses; with
   them off the image changes almost at once. The same before T328 (a build without it), so not

@@ -93,7 +93,9 @@ A prerequisite: `Session::render_region_with` fails on every RAF file tried (bac
     display modes and last for the session, for every image;
   - a choice that is worked out again for every image, or is a fixed choice, is a mode that lasts
     for the session: **auto exposure** and **the camera's brightness** (§3.4), and **auto white
-    balance** and the **white balance presets** (§3.5; owner, 2026-11-18);
+    balance** and the **white balance presets** (§3.5; owner, 2026-11-18); auto exposure alone
+    may be on at start, by the setting "Auto exposure at start" (owner, 2026-11-26, §4.4 "W5's
+    hand check");
   - one key resets every adjustment (A-Q3).
 
   The adjustments' own parameters (USM amount, radius and threshold, the thresholds and colours of
@@ -213,7 +215,8 @@ A prerequisite: `Session::render_region_with` fails on every RAF file tried (bac
 - **The camera's brightness** (A-Q12): a choice to apply the camera's own brightness offset (for
   example DNG `BaselineExposure`, and the makers' equivalents where LibRaw or ExifTool gives them
   [T: which formats carry it is checked in W5]), so the RAW view can be compared with the embedded
-  JPEG fairly. ADR 0006 §2 left matching the camera JPEG's look as "a separate, later question"
+  JPEG fairly; the file's value is applied with its sign turned (owner, 2026-11-26, §4.4 "W5's
+  hand check"). ADR 0006 §2 left matching the camera JPEG's look as "a separate, later question"
   and required it to be one value per image, never per tile; this offset is such a value.
   - **Off by default**: the default view stays the fair view of ADR 0006, and its brightness does
     not depend on the file format.
@@ -663,6 +666,49 @@ mode already takes 450–560 ms without the statistics, which add 170–220 ms (
 embedded preview, not the RAW view); and a brightness change after the first view would be two
 changes (V2) at the moment the exposure is judged. If the wait is felt in the hand check after
 T335, the statistics could later be made in a session of their own beside the render (not now).
+
+**W5's hand check (owner, 2026-11-26, the build of T335):** approved, with three changes that
+follow as tasks (T338 → T339 → T340):
+
+- *The manual exposure, auto exposure, the shadows, the paused marks, the menu and the compare*
+  work as written. The highlights at +2 to +3 EV look fairly protected but still burn out
+  visibly; `exp_preser` is already at its highest (1.0), so this is LibRaw's limit and is
+  accepted. The shadows' default amount 50 stays; no banding that hides detail (A-Q10 holds,
+  the lift stays on the 8-bit view); the auto rule and W5-Q4's wait approved as they are. Every
+  press of Ctrl+↑ is seen, at any speed.
+- *The camera's brightness has the wrong sign* (W5-Q5): with Shift+B the view of an X-T30 RAF
+  (−0.72) and of a Ricoh GR III DNG (−0.51) is darker than the RAW view at 0 EV, while the
+  embedded JPEG is brighter than both. The file's value says how far the camera kept the RAW
+  data below its own rendering, which its JPEG lifts again; so the view applies the file's
+  value **with the sign turned** (+0.72, +0.51), for both formats, and the hover text names it
+  as the camera's brightness rather than the file's value (**T338**). The match with the JPEG
+  stays approximate, since the camera's JPEG has its own tone curve. An offset worked out from
+  the embedded JPEG's histogram, which would also serve ARW and RW2, is in `backlog.md`.
+- *Buttons for the exposure* (W5-Q8 left this to the hand check): three buttons **"−", "A",
+  "+"** after "USM" in the status bar: − and + step the exposure by 1/3 EV (Ctrl+↓, Ctrl+↑), A
+  turns auto exposure on and off (B) and is drawn selected while it is on. No number in the
+  buttons (the mark shows the total); the camera's brightness and Reset Exposure get no button.
+  Greyed where the menu items are (**T339**).
+- *Auto exposure at start* (amends §2.1's "off by default and never saved" for auto exposure
+  alone): the owner finds the RAW view at 0 EV often clearly darker than the camera's JPEG. A
+  setting on the Settings page Preview, **"Auto exposure at start"**, saved in `settings.txt`,
+  **on by default**: auto exposure is on when RawStride starts, and B (or A, or Backspace) turns
+  it off for the session as before (**T340**). With it on, the first view of a jump waits for
+  its statistics (W5-Q4) and the overlays stay unexposed (`known-limits.md`), both accepted.
+  The view of ADR 0006 §2 stays one key away and is what the export renders (A-Q14).
+- *The auto rule's target* (1/3 EV below clipping) may be raised a little later; not now
+  (`backlog.md`).
+
+`latency.ps1` (the reviewer, 2026-11-26, `s6\a1`, at fit, 13 steps per series, RawStride
+restarted per series, the mode pressed and the prefetch left to finish first): every step seen;
+the next image's first change, median (max), 5.5 ms (10.5) with every adjustment off, 5.8 ms
+(7.4) with auto exposure, 5.5 ms (7.2) with the shadows; with fine details on 5.4 ms (10.5),
+6.0 ms (15.1) and 5.3 ms (7.0). V1 and V4 met. Memory after 13 steps 2.4–2.8 GB. Turning auto
+exposure on: the view changes after 56 ms and is whole after 406 ms. Ctrl+↑ on one image at fit:
+42 ms to the first change and 280–295 ms to the exposed view; the second press of each series
+showed no change in the measured area although the owner sees it by hand (taken as the
+measurement's, not the program's). The camera's brightness was measured only on files without a
+value (the folder's order is by capture date) and is measured again after T338.
 
 ## 5. Steps
 
