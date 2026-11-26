@@ -250,9 +250,6 @@ with ADR 0026 F3, in `plans/adr-0018-0025-steps.md`.)
 (T240–T242, 2026-11-21. The F1 leftovers that ADR 0026 F3 must take up are in
 `plans/adr-0018-0025-steps.md`.)
 
-- *Ctrl+A while nothing is shown clears the kept marks:* under an active filter while the ratings
-  are read, `visible` is empty and Ctrl+A (`Selection::all` of nothing) clears the marks that
-  ADR 0014 amendment 3 keeps (cold read of T240).
 - *A read in flight at a reload is still taken* (review of T241): the inspector's, the Exif
   summary's and the histogram's read in flight stays in flight at "Reload Folder", and its answer
   is kept for the same image, so it may show values read just before the reload.
@@ -641,6 +638,10 @@ only if it is seen in use.)
 - *Marks while typing a search* (ADR 0022 S3-Q14, owner 2026-11-26): each 0.3 s pause applies the
   text typed so far, and the marked images it hides are unmarked (ADR 0014 §2.8), also when the
   finished text would have kept them. Accepted: a hidden image is never marked.
+- *The search's counts in every frame* (review of T341, 2026-11-26): while a search is active,
+  the status line's counts (`star_label_list` and `search_counts`, with each file's rating under
+  a star filter) are made again over all the tab's files in every frame drawn, in the contact
+  sheet and the preview. A task only if it is seen in use (large folders).
 
 ## LibRaw (`pw-libraw`)
 

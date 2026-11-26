@@ -170,6 +170,27 @@ enum ReadState {
 struct Entry {
     image: ImageValues,
     state: ReadState,
+    reread: bool,
+}
+
+impl Entry {
+    fn mark_unreadable(&mut self, path: &Path) {
+        if self.reread {
+            let mut image = named_image(path);
+            if self.image.is_read(Group::Exif) {
+                image.set_exif(
+                    Field::ALL
+                        .into_iter()
+                        .filter(|f| f.group() == Group::Exif)
+                        .filter_map(|f| Some((f, self.image.value(f)?.clone())))
+                        .collect(),
+                );
+            }
+            self.image = image;
+            self.reread = false;
+        }
+        self.state = ReadState::Unreadable;
+    }
 }
 
 fn named_image(path: &Path) -> ImageValues {
@@ -182,6 +203,14 @@ pub struct TabValues {
     entries: HashMap<PathBuf, Entry>,
 }
 
+/// Progress of the IPTC reads for the images that pass the star and label filter.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SearchCounts {
+    pub done: usize,
+    pub total: usize,
+    pub unreadable: usize,
+}
+
 impl TabValues {
     fn entry(&mut self, path: &Path) -> &mut Entry {
         self.entries
@@ -189,6 +218,7 @@ impl TabValues {
             .or_insert_with(|| Entry {
                 image: named_image(path),
                 state: ReadState::NotAsked,
+                reread: false,
             })
     }
     /// Drops all groups and pending reads on a fresh listing.
@@ -211,7 +241,8 @@ impl TabValues {
     pub fn record_exif(&mut self, path: &Path, summary: Option<&ExifSummary>) {
         self.entry(path).image.set_exif(exif_values(path, summary));
     }
-    /// Selects the next eligible paths in display order. A retry travels alone.
+    /// Selects the next eligible paths in the given order, including rereads with old IPTC
+    /// values still present. Pending writes are held back and a retry travels alone.
     pub fn iptc_chunk(
         &self,
         order: &[PathBuf],
@@ -220,7 +251,7 @@ impl TabValues {
         let mut chunk = Vec::new();
         for path in order {
             let entry = self.entries.get(path);
-            if entry.is_some_and(|e| e.image.is_read(Group::Iptc)) {
+            if entry.is_some_and(|e| !e.reread && e.image.is_read(Group::Iptc)) {
                 continue;
             }
             match entry.map(|e| e.state).unwrap_or_default() {
@@ -248,7 +279,7 @@ impl TabValues {
     /// Ends attempts for paths refused by a stopped worker.
     pub fn mark_unreadable(&mut self, paths: &[PathBuf]) {
         for path in paths {
-            self.entry(path).state = ReadState::Unreadable;
+            self.entry(path).mark_unreadable(path);
         }
     }
     /// Releases unanswered paths when a chunk finishes.
@@ -265,7 +296,8 @@ impl TabValues {
             }
         }
     }
-    /// Accepts only outstanding reads, retrying a failed path once.
+    /// Accepts only outstanding reads. A successful reread replaces the old IPTC values.
+    /// A failed reread keeps them until its retry also fails.
     pub fn record_iptc(&mut self, path: &Path, result: Result<&FilterValues, &str>) {
         let Some(e) = self.entries.get_mut(path) else {
             return;
@@ -273,31 +305,23 @@ impl TabValues {
         let ReadState::InFlight { retry } = e.state else {
             return;
         };
-        e.state = match result {
+        match result {
             Ok(values) => {
                 e.image.set_iptc(iptc_values(values));
-                ReadState::NotAsked
+                e.reread = false;
+                e.state = ReadState::NotAsked;
             }
-            Err(_) if retry => ReadState::Unreadable,
-            Err(_) => ReadState::FailedOnce,
-        };
+            Err(_) if retry => e.mark_unreadable(path),
+            Err(_) => e.state = ReadState::FailedOnce,
+        }
     }
-    /// Invalidates IPTC after a write while keeping the image name and Exif group.
+    /// Schedules a fresh IPTC read after a write. Keeps the image name, Exif and any old IPTC
+    /// values available while the fresh read is pending.
     pub fn forget_iptc(&mut self, path: &Path) {
         let Some(e) = self.entries.get_mut(path) else {
             return;
         };
-        let mut image = named_image(path);
-        if e.image.is_read(Group::Exif) {
-            image.set_exif(
-                Field::ALL
-                    .into_iter()
-                    .filter(|f| f.group() == Group::Exif)
-                    .filter_map(|f| Some((f, e.image.value(f)?.clone())))
-                    .collect(),
-            );
-        }
-        e.image = image;
+        e.reread = e.image.is_read(Group::Iptc);
         e.state = ReadState::NotAsked;
     }
     /// Lists images awaiting inspection in the caller's order.
@@ -316,6 +340,16 @@ impl TabValues {
             .filter(|e| group == Group::Iptc && e.state == ReadState::Unreadable)
             .count();
         (read, files.len(), unreadable)
+    }
+
+    /// Counts images with usable IPTC values (including during a reread) or a final read failure.
+    pub fn search_counts(&self, files: &[PathBuf]) -> SearchCounts {
+        let (read, total, unreadable) = self.counts(Group::Iptc, files);
+        SearchCounts {
+            done: read + unreadable,
+            total,
+            unreadable,
+        }
     }
 }
 
@@ -477,6 +511,116 @@ mod tests {
         assert!(!next.contains(&paths[6]));
     }
 
+    fn record_title(tab: &mut TabValues, path: &Path, title: &str) {
+        tab.mark_in_flight(&[path.to_path_buf()]);
+        tab.record_iptc(
+            path,
+            Ok(&FilterValues {
+                title: vec![title.into()],
+                ..Default::default()
+            }),
+        );
+    }
+
+    #[test]
+    fn successful_reread_replaces_the_kept_iptc() {
+        let paths = [PathBuf::from("a.jpg")];
+        let path = &paths[0];
+        let mut tab = TabValues::default();
+        record_title(&mut tab, path, "old");
+        tab.forget_iptc(path);
+        assert_eq!(
+            tab.values(path).unwrap().value(Field::Title),
+            Some(&Value::Text("old".into()))
+        );
+        assert!(tab.iptc_chunk(&paths, &|_| true).is_empty());
+        assert_eq!(tab.iptc_chunk(&paths, &|_| false), paths);
+        record_title(&mut tab, path, "new");
+        assert_eq!(
+            tab.values(path).unwrap().value(Field::Title),
+            Some(&Value::Text("new".into()))
+        );
+        assert!(tab.iptc_chunk(&paths, &|_| false).is_empty());
+    }
+
+    #[test]
+    fn failed_reread_keeps_iptc_until_the_retry_fails() {
+        let paths = [PathBuf::from("a.jpg"), PathBuf::from("b.jpg")];
+        let path = &paths[0];
+        let mut tab = TabValues::default();
+        record_title(&mut tab, path, "old");
+        tab.forget_iptc(path);
+        tab.mark_in_flight(&paths[..1]);
+        tab.end_in_flight(&paths[..1]);
+        assert_eq!(tab.iptc_chunk(&paths, &|_| false), paths);
+        tab.mark_in_flight(&paths[..1]);
+        tab.record_iptc(path, Err("failed"));
+        assert_eq!(tab.entries[path].state, ReadState::FailedOnce);
+        assert_eq!(
+            tab.values(path).unwrap().value(Field::Title),
+            Some(&Value::Text("old".into()))
+        );
+        assert_eq!(tab.iptc_chunk(&paths, &|_| false), paths[..1]);
+        tab.mark_in_flight(&paths[..1]);
+        tab.record_iptc(path, Err("failed again"));
+        assert!(!tab.values(path).unwrap().is_read(Group::Iptc));
+        assert_eq!(tab.values(path).unwrap().value(Field::Title), None);
+        assert_eq!(tab.entries[path].state, ReadState::Unreadable);
+        assert!(!tab.entries[path].reread);
+        assert_eq!(tab.iptc_chunk(&paths, &|_| false), paths[1..]);
+    }
+
+    #[test]
+    fn stopped_worker_drops_kept_iptc_and_preserves_exif() {
+        let paths = [PathBuf::from("a.jpg")];
+        let path = &paths[0];
+        let mut tab = TabValues::default();
+        tab.record_exif(path, None);
+        record_title(&mut tab, path, "old");
+        tab.forget_iptc(path);
+        tab.mark_unreadable(&paths);
+        let image = tab.values(path).unwrap();
+        assert!(!image.is_read(Group::Iptc));
+        assert_eq!(
+            image.value(Field::FileType),
+            Some(&Value::Text("JPEG".into()))
+        );
+        assert_eq!(tab.entries[path].state, ReadState::Unreadable);
+        assert!(!tab.entries[path].reread);
+    }
+
+    #[test]
+    fn forgetting_unread_iptc_leaves_it_unread_and_eligible() {
+        let paths = [PathBuf::from("a.jpg")];
+        let path = &paths[0];
+        let mut tab = TabValues::default();
+        tab.mark_in_flight(&paths);
+        tab.forget_iptc(path);
+        assert!(!tab.values(path).unwrap().is_read(Group::Iptc));
+        assert!(!tab.entries[path].reread);
+        assert_eq!(tab.iptc_chunk(&paths, &|_| false), paths);
+    }
+
+    #[test]
+    fn search_counts_include_reads_rereads_and_final_failures() {
+        let paths = ["a.jpg", "b.jpg", "c.jpg", "d.jpg", "e.jpg"].map(PathBuf::from);
+        let mut tab = TabValues::default();
+        record_title(&mut tab, &paths[0], "read");
+        record_title(&mut tab, &paths[2], "reread");
+        tab.forget_iptc(&paths[2]);
+        tab.mark_in_flight(&paths[3..4]);
+        tab.record_iptc(&paths[3], Err("failed"));
+        tab.mark_unreadable(&paths[4..]);
+        assert_eq!(
+            tab.search_counts(&paths),
+            SearchCounts {
+                done: 3,
+                total: 5,
+                unreadable: 1
+            }
+        );
+    }
+
     #[test]
     fn stale_answers_and_listing_changes_preserve_group_state() {
         let paths = [PathBuf::from("first.jpg"), PathBuf::from("second.jpg")];
@@ -487,7 +631,13 @@ mod tests {
         assert!(tab.values(&paths[0]).is_none());
         tab.record_exif(&paths[0], None);
         tab.mark_in_flight(&paths);
-        tab.record_iptc(&paths[0], Ok(&FilterValues::default()));
+        tab.record_iptc(
+            &paths[0],
+            Ok(&FilterValues {
+                title: vec!["old".into()],
+                ..Default::default()
+            }),
+        );
         assert_eq!(tab.counts(Group::Iptc, &paths), (1, 2, 0));
         tab.forget_iptc(&paths[0]);
         assert_eq!(tab.iptc_chunk(&paths, &|_| false), paths[..1]);
@@ -496,7 +646,8 @@ mod tests {
             image.value(Field::FileType),
             Some(&Value::Text("JPEG".into()))
         );
-        assert!(!image.is_read(Group::Iptc));
+        assert!(image.is_read(Group::Iptc));
+        assert_eq!(image.value(Field::Title), Some(&Value::Text("old".into())));
         assert_eq!(tab.exif_wanted(&paths), paths[1..]);
         tab.retain(&paths[..1]);
         assert!(tab.values(&paths[1]).is_none());

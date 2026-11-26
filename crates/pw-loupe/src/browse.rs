@@ -9,8 +9,9 @@ use std::time::SystemTime;
 
 use pw_metadata::Rating;
 
-use crate::filter::{matches, nearest_visible, visible};
+use crate::filter::{matches, nearest_visible};
 use crate::grid::{Navigation, navigate};
+use crate::meta_filter::Outcome;
 use crate::selection::Selection;
 use crate::sort::{CaptureTimes, Keyed, SortKey, SortOrder, key_known, place};
 use crate::tabs::Tab;
@@ -125,57 +126,85 @@ pub fn metadata_steps(visible: &[usize], marked: &[usize], current: usize) -> Ve
 }
 
 impl Tab {
-    /// Recomputes `visible`: every file without an active filter; nothing with an active filter
-    /// while the ratings are not read yet (Q7); otherwise the files that match, plus `keep` (the
-    /// image a move lands on, §4.2). Then unmarks the images the filter hides (§2.8), except while
-    /// an active filter waits for the ratings: those images are hidden only because their values
-    /// are unknown, so their marks stay (§2.8 as changed by amendment 3, §16, the owner
-    /// 2026-11-21; this holds for inactive tabs too). If the current image is hidden, makes the
-    /// nearest visible one current (§2.3; unchanged when nothing is visible). A file of `unread`
-    /// (its rating read on its own, T250) is treated the same way on its own: under an active
-    /// filter it is not visible unless `keep` names it, and its mark stays; without a filter it is
-    /// shown at once. Returns whether `visible` changed.
+    /// Returns the file indexes that pass the star and label filter in display order.
+    /// With no star or label filter, every file passes. With one, the list is empty while
+    /// ratings are loading, and files in `unread` wait for their own rating. Search and
+    /// temporarily kept images do not affect this list.
+    pub fn star_label_list(
+        &self,
+        ratings_ready: bool,
+        rating_of: &dyn Fn(&Path) -> Option<Rating>,
+    ) -> Vec<usize> {
+        if !self.filter.is_active() {
+            return (0..self.files.len()).collect();
+        }
+        if !ratings_ready {
+            return Vec::new();
+        }
+        let unread: HashSet<_> = self.unread.iter().collect();
+        self.files
+            .iter()
+            .enumerate()
+            .filter(|(_, path)| {
+                !unread.contains(path) && matches(&self.filter, rating_of(path).as_ref())
+            })
+            .map(|(index, _)| index)
+            .collect()
+    }
+
+    /// Shows every file when neither filter is active. Otherwise shows files that pass the
+    /// star and label filter and match the metadata filter, plus the temporary `keep` image.
+    /// The next refilter without `keep`, including after a read chunk, drops that exception.
+    /// An active star and label filter shows nothing while ratings load, even with `keep` (Q7).
+    /// Hidden files lose their marks when they fail either filter (§2.8). Marks are preserved
+    /// while ratings load, for individually unread ratings (T250) under an active star and label
+    /// filter (§2.8 as changed by amendment 3), and for files that pass that filter but have an
+    /// unknown metadata outcome (ADR 0022 S3-Q7). If the current file is hidden, makes the
+    /// nearest visible one current when available (§2.3). Returns whether `visible` changed.
     pub fn refilter(
         &mut self,
         ratings_ready: bool,
         rating_of: &dyn Fn(&Path) -> Option<Rating>,
         keep: Option<usize>,
     ) -> bool {
-        let count = self.files.len();
-        let waiting_for_ratings = self.filter.is_active() && !ratings_ready;
-        let unread: HashSet<&PathBuf> = self.unread.iter().collect();
-        let new_visible = if !self.filter.is_active() {
-            (0..count).collect()
-        } else if waiting_for_ratings {
-            Vec::new()
+        let stars_active = self.filter.is_active();
+        let metadata_active = self.meta_filter.is_active();
+        let candidates = self.star_label_list(ratings_ready, rating_of);
+        let new_visible = if stars_active && !ratings_ready {
+            candidates
+        } else if !stars_active && !metadata_active {
+            self.selection.retain_visible(&candidates);
+            candidates
         } else {
-            let files = &self.files;
-            let filter = self.filter;
-            visible(count, keep, |index| {
-                files.get(index).is_some_and(|path| {
-                    !unread.contains(path) && matches(&filter, rating_of(path).as_ref())
-                })
-            })
+            let mut candidates = candidates.into_iter().peekable();
+            let unread: HashSet<_> = self.unread.iter().collect();
+            let mut shown = Vec::new();
+            let mut kept_marks = Vec::new();
+            for (index, path) in self.files.iter().enumerate() {
+                let passes_stars = candidates.next_if_eq(&index).is_some();
+                let outcome = if !passes_stars {
+                    Outcome::NoMatch
+                } else if metadata_active {
+                    self.filter_values
+                        .values(path)
+                        .map_or(Outcome::Unknown, |values| self.meta_filter.outcome(values))
+                } else {
+                    Outcome::Match
+                };
+                let visible = outcome == Outcome::Match || keep == Some(index);
+                if visible {
+                    shown.push(index);
+                }
+                if visible || outcome == Outcome::Unknown || (stars_active && unread.contains(path))
+                {
+                    kept_marks.push(index);
+                }
+            }
+            self.selection.retain_visible(&kept_marks);
+            shown
         };
         let changed = new_visible != self.visible;
         self.visible = new_visible;
-        if !waiting_for_ratings {
-            if unread.is_empty() || !self.filter.is_active() {
-                self.selection.retain_visible(&self.visible);
-            } else {
-                // The unread files are hidden only because their ratings are unknown: their
-                // marks stay (amendment 3), as while the whole tab's ratings are read.
-                let mut kept = self.visible.clone();
-                kept.extend(
-                    self.files
-                        .iter()
-                        .enumerate()
-                        .filter(|(_, path)| unread.contains(path))
-                        .map(|(index, _)| index),
-                );
-                self.selection.retain_visible(&kept);
-            }
-        }
         if let Some(nearest) = nearest_visible(&self.visible, self.current) {
             self.current = nearest;
         }
@@ -809,6 +838,106 @@ mod tests {
             Some(pos) => position_text(pos, tab.visible.len(), tab.files.len()),
             None => no_match_text(tab.files.len()),
         }
+    }
+
+    fn read_title(tab: &mut Tab, index: usize, title: &str) {
+        let path = name(index);
+        tab.filter_values
+            .mark_in_flight(std::slice::from_ref(&path));
+        tab.filter_values.record_iptc(
+            &path,
+            Ok(&pw_metadata::FilterValues {
+                title: vec![title.into()],
+                ..Default::default()
+            }),
+        );
+    }
+
+    #[test]
+    fn search_hides_unread_images_and_preserves_their_marks() {
+        let (mut tabs, ratings) = setup();
+        let tab = tab(&mut tabs);
+        tab.selection.all(&tab.visible);
+        tab.meta_filter.set_search("needle");
+        assert!(tab.refilter(true, &of(&ratings), None));
+        assert!(tab.visible.is_empty());
+        assert_eq!(tab.selection.count(), tab.files.len());
+    }
+
+    #[test]
+    fn search_shows_matches_in_order_and_unmarks_nonmatches() {
+        let (mut tabs, ratings) = setup();
+        let tab = tab(&mut tabs);
+        tab.selection.all(&tab.visible);
+        tab.meta_filter.set_search("needle");
+        read_title(tab, 3, "needle");
+        read_title(tab, 1, "needle");
+        read_title(tab, 2, "different");
+        assert!(tab.refilter(true, &of(&ratings), None));
+        assert_eq!(tab.visible, [1, 3]);
+        assert!(tab.selection.is_marked(1));
+        assert!(!tab.selection.is_marked(2));
+        assert!(tab.selection.is_marked(3));
+        assert!(tab.selection.is_marked(4));
+    }
+
+    #[test]
+    fn search_and_stars_must_both_match() {
+        let (mut tabs, ratings) = setup();
+        let tab = tab(&mut tabs);
+        tab.selection.all(&tab.visible);
+        tab.filter = filter(StarFilter::Stars(3), LabelFilter::all());
+        tab.meta_filter.set_search("needle");
+        read_title(tab, 1, "needle");
+        read_title(tab, 4, "needle");
+        assert!(tab.refilter(true, &of(&ratings), None));
+        assert_eq!(tab.visible, [1]);
+        assert!(tab.selection.is_marked(2));
+        assert!(!tab.selection.is_marked(4));
+        assert!(!tab.selection.is_marked(5));
+    }
+
+    #[test]
+    fn star_label_candidates_ignore_search_and_wait_for_ratings() {
+        let (mut tabs, ratings) = setup();
+        let tab = tab(&mut tabs);
+        tab.meta_filter.set_search("needle");
+        tab.unread.push(name(2));
+        let rating_of = of(&ratings);
+        assert_eq!(
+            tab.star_label_list(false, &rating_of),
+            (0..12).collect::<Vec<_>>()
+        );
+        tab.filter = filter(StarFilter::Stars(3), LabelFilter::all());
+        assert!(tab.star_label_list(false, &rating_of).is_empty());
+        assert_eq!(tab.star_label_list(true, &rating_of), [1]);
+        tab.unread.clear();
+        assert_eq!(tab.star_label_list(true, &rating_of), [1, 2]);
+    }
+
+    #[test]
+    fn search_moves_current_to_the_nearest_match() {
+        let (mut tabs, ratings) = setup();
+        let tab = tab(&mut tabs);
+        tab.current = 2;
+        tab.meta_filter.set_search("needle");
+        read_title(tab, 1, "needle");
+        read_title(tab, 2, "different");
+        read_title(tab, 3, "needle");
+        assert!(tab.refilter(true, &of(&ratings), None));
+        assert_eq!(tab.current, 3);
+    }
+
+    #[test]
+    fn clearing_search_shows_every_file_again() {
+        let (mut tabs, ratings) = setup();
+        let tab = tab(&mut tabs);
+        tab.meta_filter.set_search("needle");
+        assert!(tab.refilter(true, &of(&ratings), None));
+        assert!(tab.visible.is_empty());
+        tab.meta_filter.set_search("");
+        assert!(tab.refilter(true, &of(&ratings), None));
+        assert_eq!(tab.visible, (0..12).collect::<Vec<_>>());
     }
 
     #[test]

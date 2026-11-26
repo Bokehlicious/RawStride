@@ -25,6 +25,7 @@ use pw_imagecheck::RawImageCheck;
 use pw_loupe::SavedLibrary;
 use pw_loupe::clipping::{ClipChoice, OverlayCache, overlay_uv};
 use pw_loupe::file_stamp;
+use pw_loupe::filter_values::SearchCounts;
 use pw_loupe::focus::FocusCache;
 use pw_loupe::library::{
     FolderList, Library, TreeRowKind, folder_key, read_drives, suppress_no_disk_dialogs,
@@ -139,6 +140,7 @@ use pw_loupe::{
     not_loaded_lines, refused_text, save_failed_text, template_files, template_name, template_rows,
     template_text, template_window_size, templates_folder, window_template, with_xmp_extension,
 };
+use pw_loupe::{reading_metadata_text, unreadable_images_text};
 use pw_metadata::edit::{Edit, EditOptions};
 use pw_metadata::iim::Fallback;
 use pw_metadata::journal::Journal;
@@ -2389,7 +2391,9 @@ impl Loupe {
         let ready = self.ratings_ready();
         if ready != self.last_ratings_ready {
             self.last_ratings_ready = ready;
-            if self.refilter_active(None) || preview_must_leave(self.tabs.active(), ready) {
+            if self.refilter_active(None)
+                || preview_must_leave(self.tabs.active(), ready, self.active_search_waiting())
+            {
                 self.loupe_follows_visible();
             }
         }
@@ -2481,7 +2485,9 @@ impl Loupe {
     fn follow_filter_values(&mut self, ctx: &egui::Context) {
         let cwd = std::env::current_dir().ok();
         let cwd = cwd.as_deref();
-        for (path, result) in self.metadata.take_filter_answers() {
+        let answers = self.metadata.take_filter_answers();
+        let had_answers = !answers.is_empty();
+        for (path, result) in answers {
             apply_filter_answer(
                 &mut self.tabs,
                 cwd,
@@ -2490,9 +2496,13 @@ impl Loupe {
                 self.metadata.write_pending(&path),
             );
         }
-        if !self.metadata.filter_read_in_flight() && !self.filter_read_paths.is_empty() {
+        let ended = !self.metadata.filter_read_in_flight() && !self.filter_read_paths.is_empty();
+        if ended {
             self.tabs.end_filter_read(&self.filter_read_paths);
             self.filter_read_paths.clear();
+        }
+        if had_answers || ended {
+            self.refilter_after_filter_read();
         }
         // follow_sort already schedules a repaint for outstanding capture reads.
         if self.metadata.filter_read_in_flight() {
@@ -2509,7 +2519,7 @@ impl Loupe {
         if !exif && !iptc {
             return;
         }
-        let order = filter_read_order(tab);
+        let order = filter_read_order(tab, self.ratings_ready(), &tab_rating(&self.metadata, cwd));
         let chunk = if iptc {
             tab.filter_values
                 .iptc_chunk(&order, &tab_pending(&self.metadata, cwd))
@@ -2541,10 +2551,58 @@ impl Loupe {
                     self.filter_read_paths = chunk;
                 }
                 Err(pw_metadata::SubmitError::QueueFull) => {}
-                Err(pw_metadata::SubmitError::Stopped) => tab.filter_values.mark_unreadable(&chunk),
+                Err(pw_metadata::SubmitError::Stopped) => {
+                    tab.filter_values.mark_unreadable(&chunk);
+                    self.refilter_after_filter_read();
+                }
             }
             ctx.request_repaint_after(CAPTURE_POLL_INTERVAL);
         }
+    }
+
+    /// Applies the latest answers to the active search, keeping the contact sheet's top image.
+    fn refilter_after_filter_read(&mut self) {
+        let Some(tab) = self.tabs.active().filter(|tab| tab.meta_filter.is_active()) else {
+            return;
+        };
+        let was_empty = tab.visible.is_empty();
+        self.anchor_from_note();
+        let changed = self.refilter_active(None);
+        if was_empty && let Some(position) = self.tabs.active().and_then(Tab::position) {
+            self.scroll_request = Some(position);
+        }
+        if changed
+            || preview_must_leave(
+                self.tabs.active(),
+                self.ratings_ready(),
+                self.active_search_waiting(),
+            )
+        {
+            self.loupe_follows_visible();
+        }
+    }
+
+    fn active_search_waiting(&self) -> bool {
+        self.tabs
+            .active()
+            .filter(|tab| tab.visible.is_empty() && tab.mode == ViewMode::Loupe)
+            .is_some_and(|tab| {
+                let cwd = std::env::current_dir().ok();
+                search_waiting(
+                    tab,
+                    self.ratings_ready(),
+                    &tab_rating(&self.metadata, cwd.as_deref()),
+                )
+            })
+    }
+
+    fn tab_search_counts(&self, tab: &Tab) -> Option<SearchCounts> {
+        let cwd = std::env::current_dir().ok();
+        search_counts(
+            tab,
+            self.ratings_ready(),
+            &tab_rating(&self.metadata, cwd.as_deref()),
+        )
     }
 
     /// `Tabs::follow_sort` with the chosen order, the shown ratings and the files' modification
@@ -2668,14 +2726,19 @@ impl Loupe {
     /// After the active tab's visible list changed while it shows the loupe (a filter change, the
     /// ratings becoming ready, a rating key, a step): `core.set_files` with the visible paths and the
     /// current position, so the views of images still in the list are kept and the next image
-    /// comes from the prefetched views (ADR 0014 §4.4 way C). With nothing visible, back to the grid
-    /// (§2.3). Returns the position the grid should scroll to when it returned to the grid.
+    /// comes from the prefetched views (ADR 0014 §4.4 way C). With nothing visible, stays in the
+    /// preview with an empty view while the search waits, then returns to the grid (§2.3).
+    /// Returns the position the grid should scroll to when it returned to the grid.
     fn loupe_follows_visible(&mut self) -> Option<usize> {
         let (mode, position) = self.tabs.active().map(|tab| (tab.mode, tab.position()))?;
         if mode != ViewMode::Loupe {
             return None;
         }
         let Some(position) = position else {
+            if self.active_search_waiting() {
+                self.core.set_files(Vec::new(), 0);
+                return None;
+            }
             return self.switch_mode(ViewMode::Grid);
         };
         let tab = self.tabs.active()?;
@@ -4003,8 +4066,11 @@ impl Loupe {
         // A preview left with nothing to show (every image removed) goes back to the contact
         // sheet (ADR 0014 §2.3, T242 point 9.1); under a filter it waits for the ratings
         // (`refilter_when_ratings_change`).
-        if preview_must_leave(self.tabs.active(), self.ratings_ready())
-            && let Some(position) = self.loupe_follows_visible()
+        if preview_must_leave(
+            self.tabs.active(),
+            self.ratings_ready(),
+            self.active_search_waiting(),
+        ) && let Some(position) = self.loupe_follows_visible()
         {
             self.scroll_request = Some(position);
         }
@@ -4498,15 +4564,19 @@ impl Loupe {
             tab = active.clone();
         }
 
+        let counts = self.tab_search_counts(&tab);
+        let reading_metadata = counts
+            .filter(|counts| counts.done < counts.total)
+            .map(|counts| reading_metadata_text(counts.done, counts.total));
+        let nothing_shown = (tab.visible.is_empty() && !tab.files.is_empty())
+            .then(|| self.nothing_shown_text(&tab, reading_metadata.as_deref()));
         let painter = ui.painter().clone();
         if tab.visible.is_empty() {
-            let text = if tab.files.is_empty() {
+            let text = nothing_shown.clone().unwrap_or_else(|| {
                 self.message
                     .clone()
                     .unwrap_or_else(|| shell_text(ShellText::DropHere).to_string())
-            } else {
-                self.nothing_shown_text(&tab)
-            };
+            });
             painter.text(
                 rect.center(),
                 egui::Align2::CENTER_CENTER,
@@ -4535,11 +4605,21 @@ impl Loupe {
                 }
                 parts.push(name);
                 parts
-            } else if tab.files.is_empty() {
-                vec![shell_text(ShellText::NoImageSelected).to_string()]
             } else {
-                vec![self.nothing_shown_text(&tab)]
+                vec![
+                    nothing_shown
+                        .unwrap_or_else(|| shell_text(ShellText::NoImageSelected).to_string()),
+                ]
             };
+            if let Some(reading_metadata) = reading_metadata {
+                if parts.first() != Some(&reading_metadata) {
+                    parts.push(reading_metadata);
+                }
+            } else if let Some(unreadable) =
+                counts.and_then(|counts| unreadable_images_text(counts.unreadable))
+            {
+                parts.push(unreadable);
+            }
             if let Some(message) = &self.message {
                 parts.push(message.clone());
             }
@@ -4573,8 +4653,8 @@ impl Loupe {
     }
 
     /// Why a tab with files shows nothing (ADR 0014 §2.4, §5.3, Q7): the read error, the ratings
-    /// still being read under an active filter, or no image matching the filter.
-    fn nothing_shown_text(&self, tab: &Tab) -> String {
+    /// still being read under an active filter, the metadata reads, or no match.
+    fn nothing_shown_text(&self, tab: &Tab, reading_metadata: Option<&str>) -> String {
         if tab.filter.is_active() {
             if let Some(error) = self.metadata.read_error() {
                 return editor_text(&EditorText::MetadataError { error });
@@ -4583,7 +4663,7 @@ impl Loupe {
                 return READING_RATINGS_TEXT.to_string();
             }
         }
-        no_match_text(tab.files.len())
+        reading_metadata.map_or_else(|| no_match_text(tab.files.len()), str::to_owned)
     }
 
     fn tab_action(&mut self, action: TabAction) {
@@ -6158,7 +6238,7 @@ impl Loupe {
                 self.act(Action::OpenMetadata, anchor);
                 ctx.request_repaint();
             }
-            A::SelectAll => self.select_all(),
+            A::SelectAll => select_all(self.tabs.active_mut()),
             A::Preview => {
                 if in_preview {
                     done.scroll_to = Some(self.switch_mode(ViewMode::Grid));
@@ -7118,13 +7198,6 @@ impl Loupe {
         {
             self.loupe_move(LoupeMove::To(index));
             ctx.request_repaint();
-        }
-    }
-
-    /// Ctrl+A in the contact sheet: marks every visible image (ADR 0014 §4.5).
-    fn select_all(&mut self) {
-        if let Some(tab) = self.tabs.active_mut() {
-            tab.selection.all(&tab.visible);
         }
     }
 
@@ -8502,7 +8575,7 @@ impl Loupe {
             Command::Settings => self.open_settings_window(SettingsPage::General),
             Command::About => self.about_window = true,
             Command::Quit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
-            Command::SelectAll => self.select_all(),
+            Command::SelectAll => select_all(self.tabs.active_mut()),
             Command::ClearSelection => self.clear_selection(),
             Command::Metadata => self.act(Action::OpenMetadata, None),
             Command::Stars(stars) => self.rate_from_menu(RatingKey::Stars(stars)),
@@ -9745,7 +9818,13 @@ impl Loupe {
         ui.painter().rect_filled(full, 0.0, BACKGROUND);
         // The tab's current image comes from the tab, not from `frame.pos`: every step goes through
         // the tab and the core follows it (ADR 0014 §4.4). The status line counts the whole folder.
-        let total = self.tabs.active().map_or(0, |tab| tab.files.len());
+        let tab = self.tabs.active();
+        let total = tab.map_or(0, |tab| tab.files.len());
+        let counts = tab.and_then(|tab| self.tab_search_counts(tab));
+        let reading_metadata = counts
+            .filter(|counts| counts.done < counts.total)
+            .filter(|_| tab.is_some_and(|tab| tab.visible.is_empty()))
+            .map(|counts| reading_metadata_text(counts.done, counts.total));
         let shown = ImageAreaShown {
             anchor_at_pointer: self.anchor_at_pointer,
             choice: ClipChoice {
@@ -9756,6 +9835,7 @@ impl Loupe {
             metadata: &self.metadata,
             indicator_after: self.indicator_after,
             message: self.message.as_deref(),
+            reading_metadata: reading_metadata.as_deref(),
             total,
             mode_key: self.key_map.first_key(KeyAction::RawJpeg),
             fine_key: self.key_map.first_key(KeyAction::FineDetails),
@@ -9905,7 +9985,19 @@ impl Loupe {
             ctx.request_repaint_after(Duration::from_millis(100));
         }
         // The status line is always shown in full, with the RAW/JPEG control (T110).
-        let mut parts = vec![status_line(&frame, self.anchor_at_pointer, total)];
+        let mut parts = vec![if matches!(frame.status, Status::Empty)
+            && let Some(reading_metadata) = reading_metadata
+        {
+            reading_metadata
+        } else {
+            status_line(&frame, self.anchor_at_pointer, total)
+        }];
+        if let Some(unreadable) = counts
+            .filter(|counts| counts.done == counts.total)
+            .and_then(|counts| unreadable_images_text(counts.unreadable))
+        {
+            parts.push(unreadable);
+        }
         if let Some(m) = &self.message {
             parts.push(m.clone());
         }
@@ -9967,6 +10059,8 @@ struct ImageAreaShown<'a> {
     indicator_after: Duration,
     /// The message shown in place of the status line when the area has no image.
     message: Option<&'a str>,
+    /// The search progress shown when the preview is waiting with an empty list.
+    reading_metadata: Option<&'a str>,
     /// The number of files the status line of an empty area counts.
     total: usize,
     /// The key map's key of RAW ↔ JPEG, for the error texts (T280).
@@ -10149,7 +10243,7 @@ fn draw_image_area(
             let due = shown.indicator_after.saturating_sub(since.elapsed());
             ctx.request_repaint_after(due.max(Duration::from_millis(20)));
         }
-        Status::Empty => match shown.message {
+        Status::Empty => match shown.reading_metadata.or(shown.message) {
             Some(message) => centre_text(message),
             None => centre_text(&status_line(&frame, true, shown.total)),
         },
@@ -11746,12 +11840,54 @@ fn tab_pending<'a>(
     }
 }
 
-/// The order of a tab's filter reads: the visible images from the current one, then the rest.
-fn filter_read_order(tab: &Tab) -> Vec<PathBuf> {
-    read_order(tab.files.len(), &tab.visible, tab.current, |_| false)
+/// The order of a tab's filter reads: from the current image, wrapping over the files that
+/// pass the star and label filter.
+fn filter_read_order(
+    tab: &Tab,
+    ratings_ready: bool,
+    rating_of: &dyn Fn(&Path) -> Option<Rating>,
+) -> Vec<PathBuf> {
+    let list = tab.star_label_list(ratings_ready, rating_of);
+    let eligible: HashSet<_> = list.iter().copied().collect();
+    read_order(tab.files.len(), &list, tab.current, |i| {
+        !eligible.contains(&i)
+    })
+    .into_iter()
+    .filter_map(|i| tab.files.get(i).cloned())
+    .collect()
+}
+
+/// The progress of an active metadata filter over its star and label candidates.
+fn search_counts(
+    tab: &Tab,
+    ratings_ready: bool,
+    rating_of: &dyn Fn(&Path) -> Option<Rating>,
+) -> Option<SearchCounts> {
+    if !tab.meta_filter.is_active() {
+        return None;
+    }
+    let files: Vec<_> = tab
+        .star_label_list(ratings_ready, rating_of)
         .into_iter()
         .filter_map(|i| tab.files.get(i).cloned())
-        .collect()
+        .collect();
+    Some(tab.filter_values.search_counts(&files))
+}
+
+fn search_waiting(
+    tab: &Tab,
+    ratings_ready: bool,
+    rating_of: &dyn Fn(&Path) -> Option<Rating>,
+) -> bool {
+    search_counts(tab, ratings_ready, rating_of).is_some_and(|counts| counts.done < counts.total)
+}
+
+/// Ctrl+A in the contact sheet: marks every visible image (ADR 0014 §4.5).
+/// With nothing visible, leaves the marks kept while ratings or metadata are unknown.
+fn select_all(tab: Option<&mut Tab>) {
+    if let Some(tab) = tab.filter(|tab| !tab.visible.is_empty()) {
+        tab.selection.all(&tab.visible);
+    }
 }
 
 /// One entry of a filter read's answer: dropped and read again when a write is pending (S2-Q6).
@@ -11790,9 +11926,11 @@ fn reload_enabled(tab: Option<&Tab>, busy: bool) -> bool {
 
 /// Whether the preview must go back to the contact sheet (ADR 0014 §2.3, T242 point 9.1): the
 /// active tab shows the preview, nothing is visible, and the ratings are ready, so nothing will be
-/// shown by them (while they are read, an active filter shows nothing and the preview waits).
-fn preview_must_leave(tab: Option<&Tab>, ratings_ready: bool) -> bool {
-    ratings_ready && tab.is_some_and(|tab| tab.mode == ViewMode::Loupe && tab.visible.is_empty())
+/// shown by them. The preview also waits for the search's pending IPTC reads.
+fn preview_must_leave(tab: Option<&Tab>, ratings_ready: bool, search_waiting: bool) -> bool {
+    ratings_ready
+        && !search_waiting
+        && tab.is_some_and(|tab| tab.mode == ViewMode::Loupe && tab.visible.is_empty())
 }
 
 /// `Tab::relist`, and the image an undo brings back made current also when the listing brought
@@ -16322,26 +16460,83 @@ mod tests {
         }
 
         #[test]
-        fn filter_reads_start_at_current_then_wrap_before_hidden_files() {
-            let files: Vec<_> = ["a", "b", "c", "d"]
-                .into_iter()
-                .map(PathBuf::from)
-                .collect();
-            let tab = Tab {
-                files: files.clone(),
+        fn filter_reads_start_at_current_and_wrap_over_star_label_candidates() {
+            let files = ["a", "b", "c", "d"].map(PathBuf::from);
+            let mut tab = Tab {
+                files: files.to_vec(),
                 visible: vec![1, 3],
                 current: 3,
                 ..Default::default()
             };
+            tab.meta_filter.set_search("needle");
             assert_eq!(
-                crate::filter_read_order(&tab),
+                crate::filter_read_order(&tab, true, &|_| None),
                 [
                     files[3].clone(),
-                    files[1].clone(),
                     files[0].clone(),
+                    files[1].clone(),
                     files[2].clone()
                 ]
             );
+            tab.filter.stars = pw_loupe::StarFilter::Stars(3);
+            let rating_of = |path: &Path| {
+                (path != files[1]).then_some(pw_metadata::Rating {
+                    stars: Some(3),
+                    label: None,
+                })
+            };
+            assert_eq!(
+                crate::filter_read_order(&tab, true, &rating_of),
+                [files[3].clone(), files[0].clone(), files[2].clone()]
+            );
+            tab.current = 2;
+            assert_eq!(
+                crate::filter_read_order(&tab, true, &rating_of),
+                [files[2].clone(), files[3].clone(), files[0].clone()]
+            );
+            assert!(crate::filter_read_order(&tab, false, &rating_of).is_empty());
+        }
+
+        #[test]
+        fn select_all_with_nothing_visible_keeps_marks() {
+            let mut tab = Tab {
+                files: vec!["a.jpg".into(), "b.jpg".into()],
+                ..Default::default()
+            };
+            tab.selection.all(&[0, 1]);
+            let kept = tab.selection.clone();
+            crate::select_all(Some(&mut tab));
+            assert_eq!(tab.selection, kept);
+            tab.visible = vec![1];
+            crate::select_all(Some(&mut tab));
+            assert_eq!(tab.selection.count(), 1);
+            assert!(tab.selection.is_marked(1));
+        }
+
+        #[test]
+        fn search_waits_for_unread_star_label_candidates_only() {
+            let files = ["a.jpg", "b.jpg", "c.jpg"].map(PathBuf::from);
+            let mut tab = Tab {
+                files: files.to_vec(),
+                ..Default::default()
+            };
+            tab.filter.stars = pw_loupe::StarFilter::Stars(3);
+            let rating_of = |path: &Path| {
+                (path != files[2]).then_some(pw_metadata::Rating {
+                    stars: Some(3),
+                    label: None,
+                })
+            };
+            assert!(!crate::search_waiting(&tab, true, &rating_of));
+            tab.meta_filter.set_search("needle");
+            assert!(crate::search_waiting(&tab, true, &rating_of));
+            assert!(!crate::search_waiting(&tab, false, &rating_of));
+            tab.filter_values.mark_in_flight(&files[..1]);
+            tab.filter_values
+                .record_iptc(&files[0], Ok(&pw_metadata::FilterValues::default()));
+            assert!(crate::search_waiting(&tab, true, &rating_of));
+            tab.filter_values.mark_unreadable(&files[1..2]);
+            assert!(!crate::search_waiting(&tab, true, &rating_of));
         }
 
         #[test]
@@ -16433,21 +16628,32 @@ mod tests {
             };
             // Every image removed: the tab has no files.
             let emptied = preview(Vec::new(), Vec::new());
-            assert!(preview_must_leave(Some(&emptied), true));
+            assert!(preview_must_leave(Some(&emptied), true, false));
             // A filter no file matches: files, nothing visible; it waits while the ratings are
             // read.
             let unmatched = preview(vec![path("a.jpg"), path("b.jpg")], Vec::new());
-            assert!(!preview_must_leave(Some(&unmatched), false));
-            assert!(preview_must_leave(Some(&unmatched), true));
+            assert!(!preview_must_leave(Some(&unmatched), false, false));
+            assert!(preview_must_leave(Some(&unmatched), true, false));
             // Something shown, the contact sheet, or no tab: it stays.
             let shown = preview(vec![path("a.jpg")], vec![0]);
-            assert!(!preview_must_leave(Some(&shown), true));
+            assert!(!preview_must_leave(Some(&shown), true, false));
             let sheet = Tab {
                 mode: ViewMode::Grid,
                 ..unmatched.clone()
             };
-            assert!(!preview_must_leave(Some(&sheet), true));
-            assert!(!preview_must_leave(None, true));
+            assert!(!preview_must_leave(Some(&sheet), true, false));
+            assert!(!preview_must_leave(None, true, false));
+        }
+
+        #[test]
+        fn the_empty_preview_leaves_only_after_the_search_finishes() {
+            let tab = Tab {
+                files: vec!["a.jpg".into()],
+                mode: ViewMode::Loupe,
+                ..Default::default()
+            };
+            assert!(!preview_must_leave(Some(&tab), true, true));
+            assert!(preview_must_leave(Some(&tab), true, false));
         }
 
         #[test]

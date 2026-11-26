@@ -128,7 +128,8 @@ pub use loupe_text::{
     ExposureButton, PROFILE_UNUSABLE_TEXT, READING_RATINGS_TEXT, compare_side_text, error_text,
     error_text_with_key, exposure_button_hover, exposure_button_label, failed_cell_text,
     indicator_text, marked_text, mode_label, mode_label_with_key, no_match_text, no_preview_text,
-    position_text, sharpen_button_label, source_text, status_line, zoom_text,
+    position_text, reading_metadata_text, sharpen_button_label, source_text, status_line,
+    unreadable_images_text, zoom_text,
 };
 pub use monitor_profile::{
     MonitorProfile, ProfileSource, load_monitor_profile, primary_monitor_profile_path,

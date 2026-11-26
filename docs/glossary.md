@@ -115,6 +115,7 @@ Every other property already uses IPTC's English name in both languages.
 | vald (Ingen bild vald) | selected (No image selected) | the current image (G4) |
 | Bara markerade | Marked only | |
 | Filter, Visa alla | Filter, Show All | |
+| – | Reading metadata {done} of {total} … / 1 image could not be read / {count} images could not be read | search progress and read failures (ADR 0022 S3-Q4, S3-Q5); added by T341 |
 | – | Sort By, Sort: {key}; File Name, Capture Time, Modified, File Type, Rating; Ascending / Descending (↑ / ↓) | the sort order in View and the command bar (ADR 0017 U14-Q1, U14-Q7); added by T138 |
 | – | Sorting by capture time: {i} of {n} | the status bar while a tab's capture times are read (U14-Q4); added by T138 |
 

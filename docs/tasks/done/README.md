@@ -347,3 +347,4 @@ was when the task was done, so "this file", "below" and "the Log" in T1–T115 m
 | [T338](T338-camera-brightness-sign.md) | ADR 0027 W5: the camera's brightness with its sign turned (pw-viewcore, pw-loupe; done by Codex) |
 | [T339](T339-exposure-buttons.md) | ADR 0027 W5: the buttons −, A and + for the exposure (pw-loupe) |
 | [T340](T340-auto-exposure-at-start.md) | ADR 0027 W5: the setting Auto exposure at start (pw-loupe) |
+| [T341](T341-search-in-the-refilter.md) | ADR 0022 S3a: the search in the refilter, the reads and the status line (pw-loupe; done by Codex) |

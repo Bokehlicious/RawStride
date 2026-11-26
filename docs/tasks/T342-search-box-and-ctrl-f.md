@@ -1,4 +1,4 @@
-# T342. ADR 0022 S3b: the search box and Ctrl+F — Blocked: waits for T341
+# T342. ADR 0022 S3b: the search box and Ctrl+F — Open
 
 - **Why:** ADR 0022 S3 (the search box and Ctrl+F), decided by the owner on 2026-11-26 (ADR 0022
   §3.2, S3-Q1, S3-Q2, S3-Q9, S3-Q13). T341 makes the shown list, the reads and the status line
@@ -144,3 +144,4 @@
 | 2026-11-26 | Blocked | Added (ADR 0022 §3.2, S3-Q1, S3-Q2, S3-Q9, S3-Q13); waits for T341 (both change `main.rs`) |
 | 2026-11-26 | Blocked | Chain review (see T341's log): Enter scrolls also with the text already applied; the number of tabs remembered too; the hand check extended; the CHANGELOG line at this task's Done |
 | 2026-11-26 | Blocked | Cold read: the fixed keys were not guarded while a text field has the keyboard, and Enter or Escape leaving the box reached the grid in the same frame (point 2: the guard and `search_took_key`); keys go through `key_map_action` (point 4: the `A::Search` arm, leaving the preview as `A::Preview`); `command_enabled`; `the_default_map_is_todays_keys` and its `today()`; the box's place before the sort group; how Show All is told; how a tab change is noticed; select-all through `TextEditState` |
+| 2026-11-26 | Open | T341 done |

@@ -173,6 +173,20 @@ pub fn marked_text(n: usize) -> Option<String> {
 /// Shown in the grid and the status line while an active filter waits for the ratings (Q7).
 pub const READING_RATINGS_TEXT: &str = "Reading ratings …";
 
+/// The status while the search waits for IPTC reads.
+pub fn reading_metadata_text(done: usize, total: usize) -> String {
+    format!("Reading metadata {done} of {total} …")
+}
+
+/// The search status for final IPTC read failures.
+pub fn unreadable_images_text(count: usize) -> Option<String> {
+    match count {
+        0 => None,
+        1 => Some("1 image could not be read".into()),
+        _ => Some(format!("{count} images could not be read")),
+    }
+}
+
 /// The neutral loading indicator (V2): no image content, only what is being prepared.
 pub fn indicator_text(frame: &Frame) -> String {
     match frame.source {
@@ -291,6 +305,23 @@ pub fn failed_cell_text(error: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_search_status_reports_progress_and_final_failures() {
+        assert_eq!(
+            super::reading_metadata_text(2, 5),
+            "Reading metadata 2 of 5 …"
+        );
+        assert_eq!(super::unreadable_images_text(0), None);
+        assert_eq!(
+            super::unreadable_images_text(1).as_deref(),
+            Some("1 image could not be read")
+        );
+        assert_eq!(
+            super::unreadable_images_text(2).as_deref(),
+            Some("2 images could not be read")
+        );
+    }
+
     use super::*;
     use pw_viewcore::ImageSize;
     use std::path::PathBuf;
