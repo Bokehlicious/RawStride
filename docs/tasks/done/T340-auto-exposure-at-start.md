@@ -1,4 +1,4 @@
-# T340. ADR 0027 W5: the setting "Auto exposure at start" — Open
+# T340. ADR 0027 W5: the setting "Auto exposure at start" — Done
 
 - **Why:** W5's hand check (owner, 2026-11-26; ADR 0027 §4.4 "W5's hand check", which amends
   §2.1's "off by default and never saved" for auto exposure alone). The owner finds the RAW view
@@ -100,3 +100,5 @@
 |---|---|---|
 | 2026-11-26 | Blocked | Added after W5's hand check (ADR 0027 §4.4); waits for T339. Cold read (also of T339 beside it): names and lines found; fixed: the fifth settings test's real name, the nested bool arm, when the old value is read, the expected side effects (Reset Adjustments enabled, Auto Exposure ticked, "A" selected), the glossary row shared with T339. No other test breaks. Sonnet kept |
 | 2026-11-26 | Open | T339 done; its cold read is in the row above |
+| 2026-11-26 | Ready for review | Added the Preview setting and the startup and Save behavior. Added six tests for settings and session modes, and extended the Preview text test and the five settings file assertions. The T340 tests passed in the sandbox. See `test-output.txt` for the full check. |
+| 2026-11-26 | Done | Reviewed: the key read and written after `shadows_amount` (default true), the section Exposure with its three texts by `settings_text`, Restore Defaults, `PreviewExposure::at_start` and `follow_setting` called in `save_settings_window` before the settings are replaced (the mode reaches both cores through `wish` each frame); the glossary rows; six new tests and the five settings tests updated as asked (rustfmt re-laid the bool keys' pattern one per line). The agent left `docs/test-inventory.md` again: the reviewer updated it (`pw-loupe` 1507→1513, total 2818). `.\tools\check.ps1` all OK: 2818 passed, 0 failed, 98 ignored; no clippy warnings. CHANGELOG: Unreleased ▸ Added. No new known limit. The owner's hand check follows |

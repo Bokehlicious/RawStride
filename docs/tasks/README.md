@@ -87,7 +87,7 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status | Model |
 |---|---|---|---|
-| [T340](T340-auto-exposure-at-start.md) | ADR 0027 W5: the setting Auto exposure at start (pw-loupe) | Open | Sonnet |
+| – | No open tasks | – | – |
 
 ## Writing a task (owner and reviewer)
 

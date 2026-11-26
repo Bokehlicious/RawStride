@@ -92,6 +92,8 @@ const SHARPEN_RADIUS: &str = "sharpen_radius";
 const SHARPEN_THRESHOLD: &str = "sharpen_threshold";
 /// The key of the shadows' amount (ADR 0027 §3.4, W5-Q6, T334).
 const SHADOWS_AMOUNT: &str = "shadows_amount";
+/// The key of the default exposure mode at start (ADR 0027 §4.4, T340).
+const AUTO_EXPOSURE_AT_START: &str = "auto_exposure_at_start";
 /// The companion suffixes by default (U9-Q10).
 const DEFAULT_COMPANION_SUFFIXES: [&str; 3] = ["dop", "pp3", "on1"];
 /// The keys of the metadata window's sections, open or collapsed (ADR 0017 U10-Q6, T123).
@@ -268,6 +270,8 @@ pub struct ShellSettings {
     pub sharpening: Sharpening,
     /// The amount of the shadows, set on the Settings page Preview (ADR 0027 §3.4, W5-Q6, T334).
     pub shadows_amount: u8,
+    /// Whether the app starts with auto exposure on (ADR 0027 §4.4, T340).
+    pub auto_exposure_at_start: bool,
 }
 
 /// The library's lists as `settings.txt` keeps them (T135, U4-Q3, U4-Q4): the favourites in the
@@ -345,6 +349,7 @@ impl Default for ShellSettings {
             // Amount 80 %, radius 0.8 px, threshold 2 (ADR 0027 §3.3).
             sharpening: Sharpening::DEFAULT,
             shadows_amount: shadows::DEFAULT_AMOUNT,
+            auto_exposure_at_start: true,
         }
     }
 }
@@ -476,28 +481,38 @@ pub fn load_settings_and_library(path: &Path) -> (Settings, SavedLibrary, Vec<St
                 Some(key) => shell.sort.key = key,
                 None => problems.push(bad("name, capture, modified, type or rating")),
             },
-            WINDOW_MAXIMIZED | FULLSCREEN | COLUMNS_HIDDEN | PREVIEW_HIDDEN | SORT_DESCENDING
-            | CLIP_HIGHLIGHTS | CLIP_SHADOWS | FOCUS_MARKING | COMPARE_ABOVE_BELOW
-            | COMPARE_LOCKED | IMPORT_INCREMENTAL | MOVE_TO_SUBFOLDERS | THUMBNAIL_BUTTONS => {
-                match parse_bool(value) {
-                    Some(on) => match key {
-                        WINDOW_MAXIMIZED => shell.window_maximized = on,
-                        FULLSCREEN => shell.fullscreen = on,
-                        PREVIEW_HIDDEN => shell.preview_hidden = on,
-                        SORT_DESCENDING => shell.sort.descending = on,
-                        CLIP_HIGHLIGHTS => shell.clip_highlights = on,
-                        CLIP_SHADOWS => shell.clip_shadows = on,
-                        FOCUS_MARKING => shell.focus_marking = on,
-                        COMPARE_ABOVE_BELOW => shell.compare_above_below = on,
-                        COMPARE_LOCKED => shell.compare_locked = on,
-                        IMPORT_INCREMENTAL => shell.import_incremental = on,
-                        MOVE_TO_SUBFOLDERS => shell.move_to_subfolders = on,
-                        THUMBNAIL_BUTTONS => shell.thumbnail_buttons = on,
-                        _ => shell.columns_hidden = on,
-                    },
-                    None => problems.push(bad("true or false")),
-                }
-            }
+            WINDOW_MAXIMIZED
+            | FULLSCREEN
+            | COLUMNS_HIDDEN
+            | PREVIEW_HIDDEN
+            | SORT_DESCENDING
+            | CLIP_HIGHLIGHTS
+            | CLIP_SHADOWS
+            | FOCUS_MARKING
+            | COMPARE_ABOVE_BELOW
+            | COMPARE_LOCKED
+            | IMPORT_INCREMENTAL
+            | MOVE_TO_SUBFOLDERS
+            | THUMBNAIL_BUTTONS
+            | AUTO_EXPOSURE_AT_START => match parse_bool(value) {
+                Some(on) => match key {
+                    WINDOW_MAXIMIZED => shell.window_maximized = on,
+                    FULLSCREEN => shell.fullscreen = on,
+                    PREVIEW_HIDDEN => shell.preview_hidden = on,
+                    SORT_DESCENDING => shell.sort.descending = on,
+                    CLIP_HIGHLIGHTS => shell.clip_highlights = on,
+                    CLIP_SHADOWS => shell.clip_shadows = on,
+                    FOCUS_MARKING => shell.focus_marking = on,
+                    COMPARE_ABOVE_BELOW => shell.compare_above_below = on,
+                    COMPARE_LOCKED => shell.compare_locked = on,
+                    IMPORT_INCREMENTAL => shell.import_incremental = on,
+                    MOVE_TO_SUBFOLDERS => shell.move_to_subfolders = on,
+                    THUMBNAIL_BUTTONS => shell.thumbnail_buttons = on,
+                    AUTO_EXPOSURE_AT_START => shell.auto_exposure_at_start = on,
+                    _ => shell.columns_hidden = on,
+                },
+                None => problems.push(bad("true or false")),
+            },
             LEFT_COLUMN_WIDTH | RIGHT_COLUMN_WIDTH | PREVIEW_COLUMN_WIDTH | KEY_ACTION_WIDTH => {
                 match value.parse::<u32>() {
                     Ok(width) if key == LEFT_COLUMN_WIDTH => shell.left_column_width = width,
@@ -849,6 +864,10 @@ fn shell_lines(shell: &ShellSettings) -> String {
         shell.sharpening.threshold
     ));
     text.push_str(&format!("{SHADOWS_AMOUNT} = {}\n", shell.shadows_amount));
+    text.push_str(&format!(
+        "{AUTO_EXPOSURE_AT_START} = {}\n",
+        shell.auto_exposure_at_start
+    ));
     text
 }
 
@@ -1314,7 +1333,8 @@ mod tests {
              import_incremental = true\n\
              move_to_subfolders = false\ncompanion_suffixes = dop, pp3, on1\n\
              thumbnail_buttons = true\n\
-             sharpen_amount = 80\nsharpen_radius = 0.8\nsharpen_threshold = 2\nshadows_amount = 50\n"
+             sharpen_amount = 80\nsharpen_radius = 0.8\nsharpen_threshold = 2\nshadows_amount = 50\n\
+             auto_exposure_at_start = true\n"
         );
     }
 
@@ -1520,6 +1540,7 @@ mod tests {
                 threshold: 7,
             },
             shadows_amount: 35,
+            auto_exposure_at_start: false,
         }
     }
 
@@ -2514,7 +2535,7 @@ mod tests {
                 text.ends_with(&format!(
                     "\nthumbnail_buttons = {on}\n\
                      sharpen_amount = 80\nsharpen_radius = 0.8\nsharpen_threshold = 2\n\
-                     shadows_amount = 50\n"
+                     shadows_amount = 50\nauto_exposure_at_start = true\n"
                 )),
                 "{text}"
             );
@@ -2680,7 +2701,8 @@ mod tests {
             let text = std::fs::read_to_string(&path).unwrap();
             assert!(
                 text.ends_with(&format!(
-                    "\nsharpen_threshold = 2\nshadows_amount = {shadows_amount}\n"
+                    "\nsharpen_threshold = 2\nshadows_amount = {shadows_amount}\n\
+                     auto_exposure_at_start = true\n"
                 )),
                 "{text}"
             );
@@ -2711,6 +2733,51 @@ mod tests {
         let (settings, problems) = load_settings(&path);
         assert!(problems.is_empty(), "{problems:?}");
         assert_eq!(settings.shell.shadows_amount, 50);
+    }
+
+    // ---------- auto exposure at start (ADR 0027 §4.4, T340) ----------
+
+    #[test]
+    fn auto_exposure_at_start_is_written_and_read_back() {
+        let dir = TempDir::new();
+        let path = dir.0.join("settings.txt");
+        for auto_exposure_at_start in [true, false] {
+            let settings = Settings {
+                shell: ShellSettings {
+                    auto_exposure_at_start,
+                    ..ShellSettings::default()
+                },
+                ..Settings::default()
+            };
+            save_settings(&path, &settings).unwrap();
+            let text = std::fs::read_to_string(&path).unwrap();
+            assert!(text.ends_with(&format!(
+                "\nshadows_amount = 50\nauto_exposure_at_start = {auto_exposure_at_start}\n"
+            )));
+            let (loaded, problems) = load_settings(&path);
+            assert!(problems.is_empty(), "{problems:?}");
+            assert_eq!(loaded.shell.auto_exposure_at_start, auto_exposure_at_start);
+        }
+    }
+
+    #[test]
+    fn bad_auto_exposure_at_start_keeps_the_default_and_gives_one_problem() {
+        let (_dir, path) = TempDir::with_file("# RawStride\nauto_exposure_at_start = yes\n");
+        let (settings, problems) = load_settings(&path);
+        assert_one_problem_on_line(&problems, 2);
+        assert!(
+            problems[0].contains("expected true or false"),
+            "{problems:?}"
+        );
+        assert!(settings.shell.auto_exposure_at_start);
+    }
+
+    #[test]
+    fn a_file_without_auto_exposure_at_start_gives_the_default_and_no_problem() {
+        let (_dir, path) = TempDir::with_file("# RawStride\nshadows_amount = 35\n");
+        let (settings, problems) = load_settings(&path);
+        assert!(problems.is_empty(), "{problems:?}");
+        assert!(settings.shell.auto_exposure_at_start);
     }
 
     // ---------- the compare's layout and lock (ADR 0017 §2.2, U6-Q7, U6-Q8, T151) ----------
@@ -2966,7 +3033,7 @@ mod tests {
                     "\nimport_incremental = true\nmove_to_subfolders = {on}\n{line}\n\
                      thumbnail_buttons = true\n\
                      sharpen_amount = 80\nsharpen_radius = 0.8\nsharpen_threshold = 2\n\
-                     shadows_amount = 50\n"
+                     shadows_amount = 50\nauto_exposure_at_start = true\n"
                 )),
                 "{text}"
             );
@@ -3111,6 +3178,7 @@ mod tests {
             "companion_suffixes = dop, pp3, on1\nthumbnail_buttons = true\n\
              sharpen_amount = 80\nsharpen_radius = 0.8\nsharpen_threshold = 2\n\
              shadows_amount = 50\n\
+             auto_exposure_at_start = true\n\
              external_program = Capture One | C:\\Program Files\\Capture One\\CaptureOne.exe\n\
              favourite = {}\n",
             full("Favourite").display()

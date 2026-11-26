@@ -20,6 +20,8 @@ Downloads are on the [Releases page](https://github.com/Bokehlicious/RawStride/r
   shortcuts, that action goes back to its default key.
 - Buttons −, A and + after USM in the status bar: − and + make the RAW preview darker or
   brighter by ⅓ EV, and A turns auto exposure on and off.
+- The setting Auto exposure at start (Settings ▸ Preview ▸ Exposure), on by default: auto
+  exposure is on when RawStride starts; B still turns it off for the session.
 
 ### Changed
 

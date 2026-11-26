@@ -1252,7 +1252,8 @@ struct CompareOpen {
 /// Session adjustments shared by the current and held previews (ADR 0027 W5).
 #[derive(Default)]
 struct PreviewExposure {
-    /// The exposure's mode (B, Shift+B; A-Q12: one at a time), off at start, not saved.
+    /// The exposure's mode (B, Shift+B; A-Q12: one at a time), off at start unless the setting
+    /// Auto exposure at start is on (T340), not saved.
     exposure_mode: ExposureMode,
     /// The shadows are on (O), off at start, not saved; the amount is the settings'.
     shadows: bool,
@@ -1261,6 +1262,27 @@ struct PreviewExposure {
 }
 
 impl PreviewExposure {
+    fn at_start(auto: bool) -> Self {
+        Self {
+            exposure_mode: if auto {
+                ExposureMode::Auto
+            } else {
+                ExposureMode::Off
+            },
+            ..Self::default()
+        }
+    }
+
+    fn follow_setting(&mut self, old: bool, new: bool) {
+        match (old, new) {
+            (false, true) => self.exposure_mode = ExposureMode::Auto,
+            (true, false) if self.exposure_mode == ExposureMode::Auto => {
+                self.exposure_mode = ExposureMode::Off;
+            }
+            _ => {}
+        }
+    }
+
     fn toggle_mode(&mut self, mode: ExposureMode, repeat: bool) {
         if !repeat {
             self.exposure_mode = if self.exposure_mode == mode {
@@ -1773,15 +1795,21 @@ impl Loupe {
     /// image when it opens, so no read made with the old settings is kept (it cannot be open
     /// while the settings window is).
     fn save_settings_window(&mut self, chosen: Settings) {
+        let old_auto_exposure_at_start = self.settings.shell.auto_exposure_at_start;
+        self.exposure.follow_setting(
+            old_auto_exposure_at_start,
+            chosen.shell.auto_exposure_at_start,
+        );
         // The settings window uses a copy of the layout. Take its theme, companion suffixes
-        // (T281), sharpening values (T317) and shadows amount (T334) while saving the current
-        // window and columns (T109).
+        // (T281), sharpening values (T317), shadows amount (T334) and Auto exposure at start
+        // (T340) while saving the current window and columns (T109).
         let chosen = Settings {
             shell: ShellSettings {
                 theme: chosen.shell.theme,
                 companion_suffixes: chosen.shell.companion_suffixes,
                 sharpening: chosen.shell.sharpening,
                 shadows_amount: chosen.shell.shadows_amount,
+                auto_exposure_at_start: chosen.shell.auto_exposure_at_start,
                 ..self.settings.shell.clone()
             },
             ..chosen
@@ -2103,6 +2131,8 @@ impl Loupe {
                                 draw_sharpening_section(ui, &mut chosen.shell.sharpening);
                                 ui.add_space(PANEL_ROW_SPACING);
                                 draw_shadows_section(ui, &mut chosen.shell.shadows_amount);
+                                ui.add_space(PANEL_ROW_SPACING);
+                                draw_exposure_section(ui, &mut chosen.shell.auto_exposure_at_start);
                             }
                         }
                     });
@@ -2143,10 +2173,11 @@ impl Loupe {
         if restore_defaults {
             chosen.editor_layout = EditorLayout::default();
         }
-        // Like every change on the page, kept only by Save (T317, T334).
+        // Like every change on the page, kept only by Save (T317, T334, T340).
         if restore_preview {
             chosen.shell.sharpening = Sharpening::DEFAULT;
             chosen.shell.shadows_amount = shadows::DEFAULT_AMOUNT;
+            chosen.shell.auto_exposure_at_start = true;
         }
         for click in layout_clicks {
             let layout = &mut chosen.editor_layout;
@@ -10379,6 +10410,17 @@ fn draw_shadows_section(ui: &mut egui::Ui, amount: &mut u8) {
     );
 }
 
+/// The Exposure section of the Settings page Preview (ADR 0027 §4.4, T340).
+fn draw_exposure_section(ui: &mut egui::Ui, at_start: &mut bool) {
+    ui.heading(settings_text(SettingsText::ExposureHeading));
+    ui.add(
+        egui::Label::new(egui::RichText::new(settings_text(SettingsText::ExposureNote)).small())
+            .wrap(),
+    );
+    ui.add_space(PANEL_ROW_SPACING);
+    ui.checkbox(at_start, settings_text(SettingsText::AutoExposureAtStart));
+}
+
 /// The rows of the Settings window's page Metadata Window (ADR 0017 U10b-Q6, T278): for each
 /// section of `layout` in its order, Move Up (greyed on the first) and a check box named by the
 /// section's heading; under it, indented, each of the section's items in its order, Move Up (greyed
@@ -13696,7 +13738,7 @@ fn run(options: Options) -> Result<(), String> {
                 anchor_at_pointer: true,
                 fine_details: false,
                 sharpening: false,
-                exposure: PreviewExposure::default(),
+                exposure: PreviewExposure::at_start(settings.shell.auto_exposure_at_start),
                 exif_reader: ExifReader::start(),
                 exif: ExifInspector::default(),
                 histogram_reader: HistogramReader::start(backend, histogram_reads),
@@ -13819,6 +13861,53 @@ mod tests {
         use pw_loupe::KeyChord;
         use pw_viewcore::{Config, ExposureMode, ViewCore, native::NativeBackend};
         use std::path::PathBuf;
+
+        #[test]
+        fn exposure_starts_in_the_configured_mode_with_shadows_off() {
+            for (auto, expected) in [(true, ExposureMode::Auto), (false, ExposureMode::Off)] {
+                let state = PreviewExposure::at_start(auto);
+                assert_eq!(state.exposure_mode, expected);
+                assert!(!state.shadows);
+            }
+        }
+
+        #[test]
+        fn the_session_mode_follows_changes_to_the_start_setting() {
+            use ExposureMode::{Auto, Camera, Off};
+
+            for (old, new, mode, expected) in [
+                (false, true, Off, Auto),
+                (false, true, Auto, Auto),
+                (false, true, Camera, Auto),
+                (true, false, Off, Off),
+                (true, false, Auto, Off),
+                (true, false, Camera, Camera),
+            ] {
+                let mut state = PreviewExposure {
+                    exposure_mode: mode,
+                    ..PreviewExposure::default()
+                };
+                state.follow_setting(old, new);
+                assert_eq!(
+                    state.exposure_mode, expected,
+                    "{old} -> {new} from {mode:?}"
+                );
+            }
+        }
+
+        #[test]
+        fn saving_the_same_start_setting_keeps_the_session_mode() {
+            for setting in [true, false] {
+                for mode in [ExposureMode::Off, ExposureMode::Auto, ExposureMode::Camera] {
+                    let mut state = PreviewExposure {
+                        exposure_mode: mode,
+                        ..PreviewExposure::default()
+                    };
+                    state.follow_setting(setting, setting);
+                    assert_eq!(state.exposure_mode, mode, "{setting}");
+                }
+            }
+        }
 
         #[test]
         fn exposure_buttons_follow_the_mode_menu_availability_and_key_map() {

@@ -340,6 +340,12 @@ pub enum SettingsText {
     ShadowsNote,
     /// The label of the shadows' amount slider (T334).
     ShadowsAmount,
+    /// The heading of the Exposure section on the page Preview (ADR 0027 §4.4, T340).
+    ExposureHeading,
+    /// The small text under the Exposure heading (T340).
+    ExposureNote,
+    /// The label of the auto exposure checkbox (T340).
+    AutoExposureAtStart,
 }
 
 /// The text of `text` in the settings window.
@@ -390,6 +396,11 @@ pub fn settings_text(text: SettingsText) -> &'static str {
             "Lifts the dark tones of the preview in RAW mode while the shadows are turned on. Not saved in the images."
         }
         SettingsText::ShadowsAmount => "Amount",
+        SettingsText::ExposureHeading => "Exposure",
+        SettingsText::ExposureNote => {
+            "Auto exposure sets the RAW preview's brightness from the RAW histogram. B turns it on or off for the session. Not saved in the images."
+        }
+        SettingsText::AutoExposureAtStart => "Auto exposure at start",
     }
 }
 
@@ -1320,8 +1331,8 @@ mod tests {
         );
     }
 
-    /// The headings, notes and slider labels for Sharpening and Shadows on the Preview page
-    /// (ADR 0027 §3.3, W3-Q7, T317 and §3.4, W5-Q6, T334).
+    /// The headings, notes and control labels for Sharpening, Shadows and Exposure on the
+    /// Preview page (ADR 0027 §3.3, T317, §3.4, T334 and §4.4, T340).
     #[test]
     fn the_preview_page_has_the_sharpening_texts() {
         assert_eq!(
@@ -1348,6 +1359,15 @@ mod tests {
             "Lifts the dark tones of the preview in RAW mode while the shadows are turned on. Not saved in the images."
         );
         assert_eq!(settings_text(SettingsText::ShadowsAmount), "Amount");
+        assert_eq!(settings_text(SettingsText::ExposureHeading), "Exposure");
+        assert_eq!(
+            settings_text(SettingsText::ExposureNote),
+            "Auto exposure sets the RAW preview's brightness from the RAW histogram. B turns it on or off for the session. Not saved in the images."
+        );
+        assert_eq!(
+            settings_text(SettingsText::AutoExposureAtStart),
+            "Auto exposure at start"
+        );
     }
 
     /// The page Keyboard Shortcuts lists every action of `KeyAction::ALL` in that order, under the
