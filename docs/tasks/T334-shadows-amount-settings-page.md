@@ -1,4 +1,4 @@
-# T334. ADR 0027 W5: the shadows' amount on the Settings page Preview — Blocked
+# T334. ADR 0027 W5: the shadows' amount on the Settings page Preview — Open
 
 - **Why:** ADR 0027 §3.4 and W5-Q6 (answered by the owner 2026-11-25, ADR 0027 §4.4). The
   shadows (a lift of the dark tones of the RAW view) are a display mode for the session, turned
@@ -90,3 +90,4 @@
 | Date | Status | Note |
 |---|---|---|
 | 2026-11-25 | Blocked | Added; waits for T333. Cold read: all names and lines found; fixed: "the last line" is the last shell line (library lines follow); the four tests to update named, the library test among them; the constants' types stated; the flag's name decided (`restore_preview`); doc comments and the glossary's distinction from "Deep shadows" named; the `shell_text.rs` test named. Sonnet kept: no gap left |
+| 2026-11-26 | Open | Set to Open by the reviewer on the owner's word after T333 was Done; T333 changed no file this task names, so its text is unchanged |

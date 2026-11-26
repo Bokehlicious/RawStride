@@ -292,6 +292,14 @@ mod tests {
             focus: pw_viewcore::FocusState::NotWanted,
             fine: pw_viewcore::FineState::Off,
             sharpen: pw_viewcore::SharpenState::Off,
+            exposure: pw_viewcore::ExposureState {
+                mode: pw_viewcore::ExposureMode::Off,
+                steps: 0,
+                base: pw_viewcore::ExposureBase::Manual,
+                total: pw_viewcore::Ev::ZERO,
+                view: pw_viewcore::AdjustState::Off,
+            },
+            shadows: pw_viewcore::AdjustState::Off,
         }
     }
 
@@ -474,6 +482,14 @@ mod tests {
             focus: pw_viewcore::FocusState::NotWanted,
             fine: pw_viewcore::FineState::Off,
             sharpen: pw_viewcore::SharpenState::Off,
+            exposure: pw_viewcore::ExposureState {
+                mode: pw_viewcore::ExposureMode::Off,
+                steps: 0,
+                base: pw_viewcore::ExposureBase::Manual,
+                total: pw_viewcore::Ev::ZERO,
+                view: pw_viewcore::AdjustState::Off,
+            },
+            shadows: pw_viewcore::AdjustState::Off,
         }
     }
 

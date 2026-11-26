@@ -43,7 +43,7 @@ pub use crate::exposure::{AutoExposure, Ev};
 pub use crate::geometry::{ImageSize, Rect};
 pub use crate::sharpen::Sharpening;
 pub use crate::state::{
-    ClippingState, Config, Draw, FinePause, FineState, FocusState, Frame, HALF_DENSITY, MAX_SCALE,
-    Record, Resident, SharpenState, Stats, Status, ViewKind, ViewOut, ZOOM_STEP, Zoom, fnv,
-    is_plain_jpeg, is_shown_as_itself,
+    AdjustState, ClippingState, Config, Draw, ExposureBase, ExposureMode, ExposureState, FinePause,
+    FineState, FocusState, Frame, HALF_DENSITY, MAX_SCALE, Record, Resident, SharpenState, Stats,
+    Status, ViewKind, ViewOut, ZOOM_STEP, Zoom, fnv, is_plain_jpeg, is_shown_as_itself,
 };

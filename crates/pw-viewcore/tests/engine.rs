@@ -8,8 +8,8 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use pw_viewcore::{
-    Backend, Config, DecodeError, FineState, Frame, ImageSize, Rect, Rgb, Source, Status, ViewCore,
-    ViewKind, ViewOut, Zoom,
+    AdjustState, Backend, Config, DecodeError, ExposureBase, ExposureMode, FineState, Frame,
+    ImageSize, Rect, Rgb, Source, Status, ViewCore, ViewKind, ViewOut, Zoom,
 };
 
 const VIEW: [u32; 2] = [1000, 800];
@@ -540,6 +540,10 @@ impl Backend for Recorder {
         })
     }
 
+    fn session_usable(&self, session: &String) -> bool {
+        session != "none-spent Raw" || self.count("open none-spent Raw") > 1
+    }
+
     fn statistics(&self, session: &mut String) -> Option<Statistics> {
         self.record(format!("statistics {session}"));
         (!session.starts_with("none")).then(|| recorded_statistics(session))
@@ -681,4 +685,44 @@ fn set_view_gives_its_zoom_and_centre_in_the_frame_and_is_not_recorded() {
         "({x}, {y})"
     );
     assert!(core.take_records().is_empty(), "set_view is not recorded");
+}
+
+#[test]
+fn manual_exposure_and_shadows_reach_the_drawn_fit_view() {
+    let core = start(Fake::default(), Config::default());
+    assert!(!core.step_exposure(1));
+    core.open_folder(files(&["a"]));
+    assert!(core.step_exposure(1));
+    let mut screen = Screen::new(&core);
+    let f = screen.until(WAIT, |f| f.exposure.view == AdjustState::Shown);
+    assert_eq!(f.exposure.view, AdjustState::Shown);
+    let plain = screen.textures[&f.draw.unwrap().id].clone();
+    assert_eq!(plain.kind, ViewKind::Reduced);
+    assert_eq!(plain.exposure.milli(), 333);
+    core.set_shadows(Some(100));
+    let f = screen.until(WAIT, |f| f.shadows == AdjustState::Shown);
+    assert_eq!(f.shadows, AdjustState::Shown);
+    let lifted = &screen.textures[&f.draw.unwrap().id];
+    assert_eq!(
+        (lifted.kind, lifted.exposure, lifted.shadows),
+        (plain.kind, plain.exposure, Some(100))
+    );
+    assert_ne!(plain.image.data, lifted.image.data);
+}
+
+#[test]
+fn auto_exposure_retries_missing_statistics_only_on_a_spent_session() {
+    for (name, opens) in [("none-spent", 2), ("none-usable", 1)] {
+        let recorder = Recorder::default();
+        let core = start_recorder(&recorder);
+        core.set_exposure_mode(ExposureMode::Auto);
+        core.open_folder(files(&[name]));
+        let mut screen = Screen::new(&core);
+        let f = screen.until(WAIT, |f| f.exposure.view == AdjustState::Shown);
+        assert_eq!(f.exposure.view, AdjustState::Shown);
+        assert_eq!(f.statistics, Some(ImageStatistics::Unavailable));
+        assert_eq!(f.exposure.base, ExposureBase::AutoNone);
+        assert_eq!(recorder.count(&format!("open {name} Raw")), opens);
+        assert_eq!(recorder.count(&format!("statistics {name} Raw")), opens);
+    }
 }

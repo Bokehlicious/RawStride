@@ -13,7 +13,8 @@ use crate::scale;
 use crate::shadows;
 use crate::sharpen::{self, Sharpening};
 use crate::state::{
-    Config, Frame, JobView, Record, State, Stats, Task, ViewKind, ViewOut, ZOOM_STEP, Zoom,
+    Config, ExposureMode, Frame, JobView, Record, State, Stats, Task, ViewKind, ViewOut, ZOOM_STEP,
+    Zoom,
 };
 
 /// The longest a worker sleeps without a reason (a safety net; changes wake it at once).
@@ -76,6 +77,7 @@ impl<B: Backend> Shared<B> {
                         result,
                         |size, source| self.backend.session_bytes(size, source),
                         |session| self.backend.profile_unusable(session),
+                        |session| self.backend.camera_exposure(session),
                         ms,
                     );
                     s.stop_unwanted();
@@ -101,8 +103,9 @@ impl<B: Backend> Shared<B> {
                 } => {
                     let result = self.backend.statistics(&mut session);
                     let ms = t0.elapsed().as_secs_f64() * 1000.0;
+                    let usable = result.is_some() || self.backend.session_usable(&session);
                     let mut s = self.state();
-                    s.finish_statistics(generation, key, session, result, ms);
+                    s.finish_statistics(generation, key, session, result, usable, ms);
                 }
                 Task::Clipping {
                     generation,
@@ -423,15 +426,48 @@ impl<B: Backend> ViewCore<B> {
     /// replaces it in one swap (V2). [`Frame::sharpen`] tells its state. Not a user request:
     /// nothing is recorded.
     pub fn set_sharpening(&self, s: Option<Sharpening>) {
+        self.update_adjustment(|st| st.set_sharpening(s));
+    }
+
+    /// Sets the exposure's mode (ADR 0027 W5): off, auto or the camera's brightness. The shell
+    /// holds it for the session; a change keeps the manual steps. Applies to RAW views only
+    /// (A-Q9); [`Frame::exposure`] tells its state. Not a user request: nothing is recorded.
+    pub fn set_exposure_mode(&self, mode: ExposureMode) {
+        self.update_adjustment(|st| st.set_exposure_mode(mode));
+    }
+
+    /// Sets the shadows' amount (ADR 0027 §3.4, W5-Q6): `None` turns them off; a value above 100
+    /// is held as 100. Applies to RAW views only; [`Frame::shadows`] tells its state. Not a user
+    /// request: nothing is recorded.
+    pub fn set_shadows(&self, amount: Option<u8>) {
+        self.update_adjustment(|st| st.set_shadows(amount));
+    }
+
+    /// One manual exposure step of ⅓ EV for the current image (`delta` 1 or −1, W5-Q2). Returns
+    /// whether it was taken: not beyond +3 or −2 EV, not without a current image, not for a key
+    /// that is not RAW. The steps are reset when another image is shown (A-Q2).
+    pub fn step_exposure(&self, delta: i32) -> bool {
+        self.update_adjustment(|st| st.step_exposure(delta))
+    }
+
+    /// Sets the manual exposure steps back to 0.
+    pub fn reset_exposure_steps(&self) {
+        self.update_adjustment(State::reset_exposure_steps);
+    }
+
+    /// Applies `change` under the lock; on a change, stops renders no longer wanted and wakes the
+    /// workers and the shell. Returns whether something changed.
+    fn update_adjustment(&self, change: impl FnOnce(&mut State<B::Session>) -> bool) -> bool {
         {
             let mut st = self.shared.state();
-            if !st.set_sharpening(s) {
-                return;
+            if !change(&mut st) {
+                return false;
             }
             st.stop_unwanted();
         }
         self.shared.cv.notify_all();
         self.shared.wake_ui();
+        true
     }
 
     /// Sets the view model's zoom level and position from outside, as if the user had zoomed and

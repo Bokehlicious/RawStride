@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 use crate::backend::{
     ClippingMap, DecodeError, FocusMap, ImageStatistics, Rgb, Source, Statistics, Stop,
 };
-use crate::exposure::Ev;
+use crate::exposure::{AutoExposure, Ev, auto_exposure};
 use crate::geometry::{self, ImageSize, Rect, RectF};
 use crate::sharpen::Sharpening;
 
@@ -122,6 +122,10 @@ pub struct ViewOut {
     pub density: f64,
     /// The sharpening the view was made with (ADR 0027 §3.3, W3); `None` = unsharpened.
     pub sharpen: Option<Sharpening>,
+    /// The exposure the view was made with (ADR 0027 W5); `Ev::ZERO` = unexposed.
+    pub exposure: Ev,
+    /// The shadows' amount the view was made with (ADR 0027 §3.4); `None` = not lifted.
+    pub shadows: Option<u8>,
     pub image: Rgb,
     /// FNV-1a over the pixels, only when recording (correctness checks).
     pub hash: Option<u64>,
@@ -139,6 +143,10 @@ pub struct Resident {
     pub density: f64,
     /// The sharpening the view was made with (ADR 0027 §3.3, W3); `None` = unsharpened.
     pub sharpen: Option<Sharpening>,
+    /// The exposure the view was made with (ADR 0027 W5); `Ev::ZERO` = unexposed.
+    pub exposure: Ev,
+    /// The shadows' amount the view was made with (ADR 0027 §3.4); `None` = not lifted.
+    pub shadows: Option<u8>,
     pub bytes: u64,
     pub used: u64,
     pub hash: Option<u64>,
@@ -247,6 +255,69 @@ pub enum FineState {
     Paused(FinePause),
 }
 
+/// The base correction applied to RAW views before manual steps (ADR 0027 W5).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ExposureMode {
+    /// No base correction; only the manual steps.
+    #[default]
+    Off,
+    /// The auto exposure rule over the image's statistics (W5-Q4).
+    Auto,
+    /// The camera's own brightness value from the file (W5-Q5).
+    Camera,
+}
+
+/// Whether the drawn view shows the requested adjustment (W5-Q9), for the shell's mark.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AdjustState {
+    /// The adjustment is off and the drawn view (if any) is unadjusted; also with no image and
+    /// for a failed image.
+    Off,
+    /// The adjustment is on but does not apply to the current image (not RAW, A-Q9).
+    Paused,
+    /// The adjustment is on (or just turned off) and the drawn view does not show it yet.
+    Waiting,
+    /// The drawn view shows the adjustment.
+    Shown,
+}
+
+/// The source correction before manual steps and render limits. Auto values are thirds
+/// of an EV and camera values are in EV.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum ExposureBase {
+    /// The mode is off.
+    Manual,
+    /// The auto rule's correction, in thirds of an EV.
+    Auto(i32),
+    /// The auto rule found the image clipped: no correction.
+    AutoClipped,
+    /// No usable RAW statistics: no correction.
+    AutoNone,
+    /// The image's statistics are not there yet.
+    AutoWaiting,
+    /// The file's own value in EV, not limited (for the hover text).
+    Camera(f64),
+    /// An opened file without a camera value: no correction.
+    CameraNone,
+    /// The file is not opened yet.
+    CameraWaiting,
+}
+
+/// The current image's exposure settings and the correction visible in the frame.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ExposureState {
+    /// The mode the shell set.
+    pub mode: ExposureMode,
+    /// The manual steps in thirds of an EV.
+    pub steps: i32,
+    /// The current image's base correction.
+    pub base: ExposureBase,
+    /// The requested correction, zero while auto exposure waits for statistics.
+    pub total: Ev,
+    /// Whether the drawn view shows `total`.
+    pub view: AdjustState,
+}
+
 /// The state of sharpening for the current image (ADR 0027 §3.3, W3), for the shell's mark.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum SharpenState {
@@ -287,7 +358,7 @@ pub struct Frame {
     pub profile_unusable: bool,
     /// The histogram and the exposure statistics of the current image in its display mode (ADR
     /// 0017 §2.6, U7-Q6): `None` until they are ready. They are asked once per opened image,
-    /// after its first view is on the screen.
+    /// before its first RAW view with auto exposure on, otherwise after its first view is shown.
     pub statistics: Option<ImageStatistics>,
     /// The clipping map of the current image in its display mode, when an overlay wants one
     /// (ADR 0017 §2.6, U7b).
@@ -299,6 +370,10 @@ pub struct Frame {
     pub fine: FineState,
     /// The state of sharpening for the current image (ADR 0027 §3.3, W3).
     pub sharpen: SharpenState,
+    /// The exposure's settings and state for the current image (ADR 0027 W5).
+    pub exposure: ExposureState,
+    /// The state of the shadows for the current image (ADR 0027 §3.4, W5).
+    pub shadows: AdjustState,
 }
 
 /// One user request, for measurement (ADR 0009 §5.2; the P5 event format).
@@ -392,7 +467,42 @@ pub(crate) struct JobView {
     pub shadows: Option<u8>,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct Look {
+    sharpen: Option<Sharpening>,
+    exposure: Ev,
+    shadows: Option<u8>,
+}
+
+impl Resident {
+    fn look(&self) -> Look {
+        Look {
+            sharpen: self.sharpen,
+            exposure: self.exposure,
+            shadows: self.shadows,
+        }
+    }
+}
+
+impl ViewOut {
+    fn look(&self) -> Look {
+        Look {
+            sharpen: self.sharpen,
+            exposure: self.exposure,
+            shadows: self.shadows,
+        }
+    }
+}
+
 impl JobView {
+    fn look(&self) -> Look {
+        Look {
+            sharpen: self.sharpen,
+            exposure: self.exposure,
+            shadows: self.shadows,
+        }
+    }
+
     pub fn density(self) -> f64 {
         self.density_q as f64 / 1e6
     }
@@ -481,7 +591,7 @@ struct StopEntry {
     counted: bool,
 }
 
-/// Whether two views are the same view but for their sharpening.
+/// Whether two views are the same view but for their look.
 fn same_view(a: JobView, b: JobView) -> bool {
     a.kind == b.kind && a.region == b.region && a.density_q == b.density_q
 }
@@ -579,6 +689,7 @@ pub(crate) struct State<S> {
     /// `sizes` so an orientation told and taken back again ([`State::set_orientation`]) brings it
     /// back without opening the file again. Inserted, cleared and moved where `sizes` is.
     own_flips: HashMap<Key, u8>,
+    camera_ev: HashMap<Key, Option<f64>>,
     /// The orientations told by the shell, by path (ADR 0024 §2.4: an XMP orientation is used
     /// before the file's own). Not cleared by a new folder or list of files: the shell sends a
     /// value once (T232).
@@ -618,6 +729,9 @@ pub(crate) struct State<S> {
     /// session (off at the start, not saved, W3-Q5); a new folder or list of files does not
     /// change it. Always valid ([`State::set_sharpening`]).
     pub sharpening: Option<Sharpening>,
+    exposure_mode: ExposureMode,
+    exposure_steps: i32,
+    shadows: Option<u8>,
     sessions: HashMap<Key, Option<S>>,
     /// The generation each lent session (`None` in `sessions`) was lent in.
     lent: HashMap<Key, u64>,
@@ -690,6 +804,7 @@ impl<S> State<S> {
             view_px: [1920, 1080],
             sizes: HashMap::new(),
             own_flips: HashMap::new(),
+            camera_ev: HashMap::new(),
             orientations: HashMap::new(),
             profile_unusable: HashSet::new(),
             statistics: HashMap::new(),
@@ -702,6 +817,9 @@ impl<S> State<S> {
             fine_details: false,
             fine_failed: HashSet::new(),
             sharpening: None,
+            exposure_mode: ExposureMode::Off,
+            exposure_steps: 0,
+            shadows: None,
             sessions: HashMap::new(),
             lent: HashMap::new(),
             detached: HashMap::new(),
@@ -856,6 +974,107 @@ impl<S> State<S> {
         true
     }
 
+    pub fn set_exposure_mode(&mut self, mode: ExposureMode) -> bool {
+        if self.exposure_mode == mode {
+            return false;
+        }
+        self.exposure_mode = mode;
+        self.since = Instant::now();
+        true
+    }
+
+    pub fn set_shadows(&mut self, amount: Option<u8>) -> bool {
+        let amount = amount.map(|v| v.min(*crate::shadows::AMOUNT_RANGE.end()));
+        if self.shadows == amount {
+            return false;
+        }
+        self.shadows = amount;
+        self.since = Instant::now();
+        true
+    }
+
+    fn set_steps(&mut self, steps: i32) -> bool {
+        if self.exposure_steps == steps {
+            return false;
+        }
+        self.exposure_steps = steps;
+        self.since = Instant::now();
+        true
+    }
+
+    pub fn reset_exposure_steps(&mut self) -> bool {
+        self.set_steps(0)
+    }
+
+    pub fn step_exposure(&mut self, delta: i32) -> bool {
+        let Some(key) = self.cur_key().filter(|k| k.1 == Source::Raw) else {
+            return false;
+        };
+        let steps = self.exposure_steps;
+        let total = match self.exposure_base(key) {
+            ExposureBase::Camera(ev) => ev + f64::from(steps) / 3.0,
+            ExposureBase::Auto(t) => f64::from(t + steps) / 3.0,
+            _ => f64::from(steps) / 3.0,
+        };
+        if (delta > 0 && total >= 3.0) || (delta < 0 && total <= -2.0) {
+            return false;
+        }
+        self.set_steps(steps.saturating_add(delta).clamp(-15, 15))
+    }
+
+    fn exposure_base(&self, key: Key) -> ExposureBase {
+        match self.exposure_mode {
+            ExposureMode::Off => ExposureBase::Manual,
+            ExposureMode::Auto if key.1 != Source::Raw => ExposureBase::AutoNone,
+            ExposureMode::Auto => match self.statistics.get(&key) {
+                None => ExposureBase::AutoWaiting,
+                Some(ImageStatistics::Unavailable) => ExposureBase::AutoNone,
+                Some(ImageStatistics::Available(stats)) => match auto_exposure(stats) {
+                    AutoExposure::Thirds(t) => ExposureBase::Auto(t),
+                    AutoExposure::Clipped => ExposureBase::AutoClipped,
+                    AutoExposure::NotRaw | AutoExposure::NoData => ExposureBase::AutoNone,
+                },
+            },
+            ExposureMode::Camera if key.1 != Source::Raw => ExposureBase::CameraNone,
+            ExposureMode::Camera => match self.camera_ev.get(&key) {
+                None => ExposureBase::CameraWaiting,
+                Some(None) => ExposureBase::CameraNone,
+                Some(Some(ev)) => ExposureBase::Camera(*ev),
+            },
+        }
+    }
+
+    fn exposure_of(&self, key: Key) -> Option<Ev> {
+        if key.1 != Source::Raw {
+            return Some(Ev::ZERO);
+        }
+        let steps = if Some(key.0) == self.cur {
+            self.exposure_steps
+        } else {
+            0
+        };
+        match self.exposure_base(key) {
+            ExposureBase::AutoWaiting => None,
+            ExposureBase::Auto(t) => Some(Ev::from_thirds(t + steps)),
+            ExposureBase::Camera(ev) => Some(Ev::from_ev(ev + f64::from(steps) / 3.0)),
+            _ => Some(Ev::from_thirds(steps)),
+        }
+    }
+
+    fn waiting_for_auto(&self, key: Key) -> bool {
+        self.exposure_mode == ExposureMode::Auto
+            && key.1 == Source::Raw
+            && !self.statistics.contains_key(&key)
+    }
+
+    fn shadows_of(&self, key: Key) -> Option<u8> {
+        if key.1 == Source::Raw {
+            self.shadows
+        } else {
+            None
+        }
+    }
+
     /// Whether a zoom gesture is under way (its last step is younger than the pause).
     fn in_gesture(&self) -> bool {
         self.gesture_at
@@ -934,6 +1153,7 @@ impl<S> State<S> {
             _ => 1,
         };
         if self.cur != Some(pos) {
+            self.exposure_steps = 0;
             self.dragged = false;
         }
         self.cur = Some(pos);
@@ -948,6 +1168,7 @@ impl<S> State<S> {
         self.generation += 1;
         self.files = files;
         self.cur = None;
+        self.exposure_steps = 0;
         self.dragged = false;
         self.still_since = Instant::now();
         self.zoom = Zoom::Fit;
@@ -960,6 +1181,7 @@ impl<S> State<S> {
         self.session_bytes = 0;
         self.sizes.clear();
         self.own_flips.clear();
+        self.camera_ev.clear();
         self.profile_unusable.clear();
         self.statistics.clear();
         self.clipping_maps.clear();
@@ -1063,6 +1285,11 @@ impl<S> State<S> {
             .drain()
             .filter_map(|(k, v)| to(k).map(|n| (n, v)))
             .collect();
+        self.camera_ev = self
+            .camera_ev
+            .drain()
+            .filter_map(|(k, v)| to(k).map(|n| (n, v)))
+            .collect();
         self.own_flips = self
             .own_flips
             .drain()
@@ -1125,6 +1352,7 @@ impl<S> State<S> {
 
         if self.files.is_empty() {
             self.cur = None;
+            self.exposure_steps = 0;
             self.last_draw = None;
             self.last_vis = None;
             self.waiting_since = None;
@@ -1133,6 +1361,7 @@ impl<S> State<S> {
         let pos = current.min(self.files.len() - 1);
         self.cur = Some(pos);
         if self.files.get(pos) != before.as_ref() {
+            self.exposure_steps = 0;
             self.since = Instant::now();
             self.still_since = Instant::now();
             self.dragged = false;
@@ -1282,12 +1511,8 @@ impl<S> State<S> {
         );
         let useful = region != geometry::whole(size) && region != shown.job.region;
         let job = JobView {
-            kind: ViewKind::Scaled,
             region,
-            density_q: quantise(scale),
-            sharpen: self.sharpening,
-            exposure: Ev::ZERO,
-            shadows: None,
+            ..shown.job
         };
         Some((
             Req {
@@ -1325,8 +1550,8 @@ impl<S> State<S> {
                         region: geometry::whole(size),
                         density_q: quantise(scale),
                         sharpen: self.sharpening,
-                        exposure: Ev::ZERO,
-                        shadows: None,
+                        exposure: self.exposure_of(key).unwrap_or(Ev::ZERO),
+                        shadows: self.shadows_of(key),
                     },
                 });
             }
@@ -1345,8 +1570,8 @@ impl<S> State<S> {
                     // every view is sharpened while sharpening is on, 100 % and above too (ADR
                     // 0027 A-Q8, W3-Q1, changed 2026-11-25)
                     sharpen: self.sharpening,
-                    exposure: Ev::ZERO,
-                    shadows: None,
+                    exposure: self.exposure_of(key).unwrap_or(Ev::ZERO),
+                    shadows: self.shadows_of(key),
                 };
                 return Some(Req {
                     key,
@@ -1379,8 +1604,8 @@ impl<S> State<S> {
                 region: geometry::whole(size),
                 density_q: quantise(scale),
                 sharpen: self.sharpening,
-                exposure: Ev::ZERO,
-                shadows: None,
+                exposure: self.exposure_of(key).unwrap_or(Ev::ZERO),
+                shadows: self.shadows_of(key),
             }
         } else if scale <= HALF_DENSITY + EPS {
             JobView {
@@ -1388,8 +1613,8 @@ impl<S> State<S> {
                 region: geometry::whole(size),
                 density_q: quantise(HALF_DENSITY),
                 sharpen: self.sharpening,
-                exposure: Ev::ZERO,
-                shadows: None,
+                exposure: self.exposure_of(key).unwrap_or(Ev::ZERO),
+                shadows: self.shadows_of(key),
             }
         } else if scale >= 1.0 - EPS {
             let vis1 = geometry::visible(size, self.view_px, 1.0, self.centre);
@@ -1398,8 +1623,8 @@ impl<S> State<S> {
                 region: geometry::sensor_box(size, vis1),
                 density_q: quantise(1.0),
                 sharpen: self.sharpening,
-                exposure: Ev::ZERO,
-                shadows: None,
+                exposure: self.exposure_of(key).unwrap_or(Ev::ZERO),
+                shadows: self.shadows_of(key),
             }
         } else {
             JobView {
@@ -1407,8 +1632,8 @@ impl<S> State<S> {
                 region: cover,
                 density_q: quantise(scale),
                 sharpen: self.sharpening,
-                exposure: Ev::ZERO,
-                shadows: None,
+                exposure: self.exposure_of(key).unwrap_or(Ev::ZERO),
+                shadows: self.shadows_of(key),
             }
         };
         Some(Req {
@@ -1443,12 +1668,9 @@ impl<S> State<S> {
             && !(reduced && density > 2.0 * need + EPS)
     }
 
-    /// The resident view that serves a requirement: a fine view first while fine details is on
-    /// (ADR 0027 W2-Q8: it replaces the reduced view in one swap, and an earlier fine view that
-    /// still serves stays until the new one replaces it), then one with the requirement's
-    /// sharpening (W3-Q4: a view of the other sharpening stays drawn until it is ready), then the
-    /// least dense one, then the smallest. Once the image's fine view has failed (W2-Q6), the
-    /// sharpening comes first: a fine view of the other sharpening would never be replaced.
+    /// Prefer a serving fine view, then the requested look, then the least dense and smallest
+    /// view. After a fine render fails, prefer the requested look before the fine kind so
+    /// a view with the previous adjustments can still be replaced (ADR 0027 W2–W5).
     pub fn serving(&self, req: &Req) -> Option<&Resident> {
         self.serving_of(req, true)
     }
@@ -1470,12 +1692,11 @@ impl<S> State<S> {
             })
             .min_by(|a, b| {
                 let not_fine = (a.kind != ViewKind::Fine).cmp(&(b.kind != ViewKind::Fine));
-                let other_sharpen =
-                    (a.sharpen != req.job.sharpen).cmp(&(b.sharpen != req.job.sharpen));
+                let other_look = (a.look() != req.job.look()).cmp(&(b.look() != req.job.look()));
                 let first = if self.fine_failed.contains(&req.key) {
-                    other_sharpen.then(not_fine)
+                    other_look.then(not_fine)
                 } else {
-                    not_fine.then(other_sharpen)
+                    not_fine.then(other_look)
                 };
                 first
                     .then(a.density.total_cmp(&b.density))
@@ -1484,7 +1705,7 @@ impl<S> State<S> {
     }
 
     /// The resident view that is exactly what a reduced or fine requirement asks for: of its kind
-    /// and region, at its size, with its sharpening.
+    /// and region, at its size, with its look.
     fn exact(&self, req: &Req) -> Option<&Resident> {
         let job = req.job;
         self.resident.iter().find(|r| {
@@ -1492,7 +1713,7 @@ impl<S> State<S> {
                 && (r.pos, r.source) == req.key
                 && r.kind == job.kind
                 && r.region == job.region
-                && r.sharpen == job.sharpen
+                && r.look() == job.look()
                 && same_reduction(r.region, r.density, job)
         })
     }
@@ -1507,9 +1728,8 @@ impl<S> State<S> {
     /// takes the ring's place; as a resident scaled view that contains the visible region it also
     /// satisfies the shown requirement. A fine view
     /// satisfies no other requirement, so the shown view is still made while a fine render runs.
-    /// Only a view with the requirement's sharpening counts (W3-Q4), except for the current
-    /// image's half-size view during a zoom gesture, which a half-size view of either sharpening
-    /// satisfies, so a gesture never starts a render only for the sharpening.
+    /// Only the requested look counts, except that a half-size view of any look can serve
+    /// the current image during a zoom gesture.
     fn satisfied(&self, req: &Req, want: Want) -> bool {
         if matches!(req.job.kind, ViewKind::Reduced | ViewKind::Fine) {
             let job = req.job;
@@ -1523,7 +1743,7 @@ impl<S> State<S> {
             let job = req.job;
             return self.resident.iter().any(|r| {
                 r.kind == ViewKind::Scaled
-                    && r.sharpen == job.sharpen
+                    && r.look() == job.look()
                     && same_reduction(r.region, r.density, job)
                     && self.serves(
                         r.generation,
@@ -1535,7 +1755,7 @@ impl<S> State<S> {
                     )
             }) || self.inflight.iter().any(|f| {
                 f.view.kind == ViewKind::Scaled
-                    && f.view.sharpen == job.sharpen
+                    && f.view.look() == job.look()
                     && same_reduction(f.view.region, f.view.density(), job)
                     && self.serves(
                         f.generation,
@@ -1547,14 +1767,14 @@ impl<S> State<S> {
                     )
             });
         }
-        let any_sharpen = want == Want::Shown
+        let any_look = want == Want::Shown
             && req.job.kind == ViewKind::Half
             && Some(req.key) == self.cur_key()
             && self.in_gesture();
-        let sharpen_ok = |s: Option<Sharpening>| any_sharpen || s == req.job.sharpen;
+        let look_ok = |look| any_look || look == req.job.look();
         self.resident.iter().any(|r| {
             r.kind != ViewKind::Fine
-                && sharpen_ok(r.sharpen)
+                && look_ok(r.look())
                 && self.serves(
                     r.generation,
                     (r.pos, r.source),
@@ -1565,7 +1785,7 @@ impl<S> State<S> {
                 )
         }) || self.inflight.iter().any(|f| {
             f.view.kind != ViewKind::Fine
-                && sharpen_ok(f.view.sharpen)
+                && look_ok(f.view.look())
                 && self.serves(
                     f.generation,
                     f.key,
@@ -1601,14 +1821,22 @@ impl<S> State<S> {
                 continue;
             }
             if !self.sessions.contains_key(&key) {
-                // a view whose size is known and is already served needs no session
-                if let Some(req) = self.req(key, want)
+                // Even a served view needs a session when its RAW statistics are due.
+                if !self.waiting_for_auto(key)
+                    && let Some(req) = self.req(key, want)
                     && self.satisfied(&req, want)
                 {
                     continue;
                 }
                 if !v.iter().any(|(j, _)| *j == Job::Open(key)) {
                     v.push((Job::Open(key), Vec::new()));
+                }
+                continue;
+            }
+            if self.waiting_for_auto(key) {
+                let job = Job::Statistics(key);
+                if !v.iter().any(|(j, _)| *j == job) {
+                    v.push((job, Vec::new()));
                 }
                 continue;
             }
@@ -1675,6 +1903,9 @@ impl<S> State<S> {
             return None;
         }
         let key = self.cur_key()?;
+        if self.waiting_for_auto(key) {
+            return None;
+        }
         if self.clipping_map(key).is_some()
             || self.clipping_none.contains(&key)
             || self.failed.contains_key(&key)
@@ -1730,6 +1961,9 @@ impl<S> State<S> {
             return None;
         }
         let key = self.cur_key()?;
+        if self.waiting_for_auto(key) {
+            return None;
+        }
         if self.focus_map(key).is_some()
             || self.focus_none.contains(&key)
             || self.failed.contains_key(&key)
@@ -1838,18 +2072,13 @@ impl<S> State<S> {
         }
     }
 
-    /// The resident fine views of `key` in this generation whose sharpening is not `sharpen`: a
-    /// fine view of `key` with `sharpen` replaces them (ADR 0027 W3-Q4).
-    fn replaced_fine(
-        &self,
-        key: Key,
-        sharpen: Option<Sharpening>,
-    ) -> impl Iterator<Item = &Resident> + '_ {
+    /// Fine views of this image that a fine render with the requested look can replace.
+    fn replaced_fine(&self, key: Key, look: Look) -> impl Iterator<Item = &Resident> + '_ {
         self.resident.iter().filter(move |r| {
             r.kind == ViewKind::Fine
                 && r.generation == self.generation
                 && (r.pos, r.source) == key
-                && r.sharpen != sharpen
+                && r.look() != look
         })
     }
 
@@ -2201,12 +2430,12 @@ impl<S> State<S> {
                         continue;
                     }
                     let bytes = self.estimate_bytes(key, view);
-                    // a resident fine view of the image with another sharpening is replaced by
+                    // a resident fine view of the image with another look is replaced by
                     // this one and evicted when it is accepted, so its bytes count as free (ADR
                     // 0027 W3-Q4); the unprotected ones are already counted so by `textures_fit`
                     let protect = self.protected_views();
                     let replaced: u64 = self
-                        .replaced_fine(key, view.sharpen)
+                        .replaced_fine(key, view.look())
                         .filter(|r| protect.contains(&r.id))
                         .map(|r| r.bytes)
                         .sum();
@@ -2345,12 +2574,21 @@ impl<S> State<S> {
         session_bytes: impl Fn(ImageSize, Source) -> u64,
         ms: f64,
     ) {
-        self.finish_open_checked(generation, key, result, session_bytes, |_| false, ms);
+        self.finish_open_checked(
+            generation,
+            key,
+            result,
+            session_bytes,
+            |_| false,
+            |_| None,
+            ms,
+        );
     }
 
     /// [`State::finish_open`], and `profile_unusable` (the backend's
     /// [`profile_unusable`](crate::backend::Backend::profile_unusable)) is asked of the session
     /// after a successful open whose result is stored (ADR 0016 §5).
+    #[allow(clippy::too_many_arguments)]
     pub fn finish_open_checked(
         &mut self,
         generation: u64,
@@ -2358,6 +2596,7 @@ impl<S> State<S> {
         result: Result<(S, ImageSize), DecodeError>,
         session_bytes: impl Fn(ImageSize, Source) -> u64,
         profile_unusable: impl Fn(&S) -> bool,
+        camera_exposure: impl Fn(&S) -> Option<f64>,
         ms: f64,
     ) {
         self.running.remove(&(generation, Job::Open(key)));
@@ -2370,6 +2609,7 @@ impl<S> State<S> {
             Ok((session, size)) => {
                 let bytes = session_bytes(size, key.1);
                 self.own_flips.insert(key, size.flip);
+                self.camera_ev.insert(key, camera_exposure(&session));
                 let flip = self.told_flip(key).unwrap_or(size.flip);
                 self.sizes.insert(key, ImageSize { flip, ..size });
                 if profile_unusable(&session) {
@@ -2471,11 +2711,8 @@ impl<S> State<S> {
                     // ask for one meanwhile.
                     let half = JobView {
                         kind: ViewKind::Half,
-                        region: view.region,
                         density_q: quantise(HALF_DENSITY),
-                        sharpen: view.sharpen,
-                        exposure: Ev::ZERO,
-                        shadows: None,
+                        ..view
                     };
                     if let Some(f) = self
                         .inflight
@@ -2494,6 +2731,8 @@ impl<S> State<S> {
                         region: view.region,
                         density: HALF_DENSITY,
                         sharpen: view.sharpen,
+                        exposure: view.exposure,
+                        shadows: view.shadows,
                         image,
                         hash,
                     });
@@ -2516,6 +2755,8 @@ impl<S> State<S> {
                     region: view.region,
                     density,
                     sharpen: view.sharpen,
+                    exposure: view.exposure,
+                    shadows: view.shadows,
                     image,
                     hash,
                 });
@@ -2531,7 +2772,7 @@ impl<S> State<S> {
                     view.kind,
                     view.region,
                     view.density(),
-                    view.sharpen,
+                    view.look(),
                 );
                 self.stats.failures += 1;
                 self.fine_failed.insert(key);
@@ -2546,7 +2787,7 @@ impl<S> State<S> {
                     view.kind,
                     view.region,
                     view.density(),
-                    view.sharpen,
+                    view.look(),
                 );
                 self.stats.failures += 1;
                 self.failed.insert(key, e);
@@ -2590,19 +2831,31 @@ impl<S> State<S> {
 
     /// The statistics of an opened image were computed (`ms` = how long it took; `None` = the
     /// file has none). The session comes back as after a render; the result is kept for the
-    /// image, so it is not asked again, unless the list of files changed meanwhile.
+    /// image, so it is not asked again, unless the list of files changed meanwhile. A `None` on a
+    /// session that is not `usable` (spent by an earlier failed render) stores nothing and drops
+    /// the session, so the file is opened and asked again (ADR 0027 W5-Q4).
     pub fn finish_statistics(
         &mut self,
         generation: u64,
         key: Key,
         session: S,
         result: Option<Statistics>,
+        usable: bool,
         ms: f64,
     ) {
         self.running.remove(&(generation, Job::Statistics(key)));
         self.stats.statistics += 1;
         self.stats.statistics_ms.push(ms);
+        let released = self
+            .released
+            .contains_key(&(generation, key, STATISTICS_LEND));
         if !self.return_session(generation, key, STATISTICS_LEND, session) {
+            return;
+        }
+        if result.is_none() && !usable {
+            if !released {
+                self.drop_session(key);
+            }
             return;
         }
         let statistics = match result {
@@ -2664,9 +2917,9 @@ impl<S> State<S> {
         }
     }
 
-    /// Removes the in-flight view of `kind` over `region` with `sharpen`. Two reduced (or fine)
+    /// Removes the in-flight view of `kind` over `region` with `look`. Two reduced (or fine)
     /// views of one image differ only by their density, so for them it must match too
-    /// (`density` as the view has it); two views that differ only by their sharpening can be in
+    /// (`density` as the view has it); two views that differ only by their look can be in
     /// flight after a quick toggle (ADR 0027 W3).
     fn remove_inflight(
         &mut self,
@@ -2675,14 +2928,14 @@ impl<S> State<S> {
         kind: ViewKind,
         region: Rect,
         density: f64,
-        sharpen: Option<Sharpening>,
+        look: Look,
     ) {
         if let Some(i) = self.inflight.iter().position(|f| {
             f.generation == generation
                 && f.key == key
                 && f.view.kind == kind
                 && f.view.region == region
-                && f.view.sharpen == sharpen
+                && f.view.look() == look
                 && (!matches!(kind, ViewKind::Reduced | ViewKind::Fine)
                     || same_reduction(region, density, f.view))
         }) {
@@ -2703,7 +2956,7 @@ impl<S> State<S> {
             out.kind,
             out.region,
             out.density,
-            out.sharpen,
+            out.look(),
         );
         if out.generation != self.generation {
             self.stats.discarded += 1;
@@ -2728,11 +2981,15 @@ impl<S> State<S> {
             }
         }
         let mut protect = self.protected_views();
-        if out.kind == ViewKind::Fine && out.sharpen == self.sharpening {
-            // it replaces the image's fine view of another sharpening, which may be evicted for
+        if out.kind == ViewKind::Fine
+            && out.sharpen == self.sharpening
+            && Some(out.exposure) == self.exposure_of(key)
+            && out.shadows == self.shadows_of(key)
+        {
+            // it replaces the image's fine view of another look, which may be evicted for
             // it although it is drawn (ADR 0027 W3-Q4; counted as free when it was planned); a
-            // late result of an old sharpening never evicts the wanted one
-            let replaced: Vec<u64> = self.replaced_fine(key, out.sharpen).map(|r| r.id).collect();
+            // late result of an old look never evicts the wanted one
+            let replaced: Vec<u64> = self.replaced_fine(key, out.look()).map(|r| r.id).collect();
             for id in replaced {
                 protect.remove(&id);
             }
@@ -2767,6 +3024,8 @@ impl<S> State<S> {
             region: out.region,
             density: out.density,
             sharpen: out.sharpen,
+            exposure: out.exposure,
+            shadows: out.shadows,
             bytes,
             used: self.tick,
             hash: out.hash,
@@ -2788,7 +3047,7 @@ impl<S> State<S> {
             out.kind,
             out.region,
             out.density,
-            out.sharpen,
+            out.look(),
         );
         self.stats.discarded += 1;
         if out.generation == self.generation {
@@ -2852,6 +3111,14 @@ impl<S> State<S> {
             },
             fine: FineState::Off,
             sharpen: SharpenState::Off,
+            exposure: ExposureState {
+                mode: self.exposure_mode,
+                steps: self.exposure_steps,
+                base: key.map_or(ExposureBase::Manual, |k| self.exposure_base(k)),
+                total: key.and_then(|k| self.exposure_of(k)).unwrap_or(Ev::ZERO),
+                view: AdjustState::Off,
+            },
+            shadows: AdjustState::Off,
         };
         let Some(key) = key else {
             self.last_draw = None;
@@ -2933,7 +3200,53 @@ impl<S> State<S> {
         }
         frame.fine = self.fine_state(key, &frame);
         frame.sharpen = self.sharpen_state(key, &frame);
+        frame.exposure.view = self.exposure_state(key, &frame);
+        frame.shadows = self.shadows_state(key, &frame);
         frame
+    }
+
+    fn exposure_state(&self, key: Key, frame: &Frame) -> AdjustState {
+        let on = self.exposure_mode != ExposureMode::Off || self.exposure_steps != 0;
+        self.adjust_state(key, frame, on, |r| r.exposure == frame.exposure.total)
+    }
+
+    fn shadows_state(&self, key: Key, frame: &Frame) -> AdjustState {
+        self.adjust_state(key, frame, self.shadows.is_some(), |r| {
+            r.shadows == self.shadows
+        })
+    }
+
+    fn adjust_state(
+        &self,
+        key: Key,
+        frame: &Frame,
+        on: bool,
+        matches: impl Fn(&Resident) -> bool,
+    ) -> AdjustState {
+        let drawn = frame.draw.and_then(|d| {
+            self.resident.iter().find(|r| {
+                r.id == d.id && r.generation == self.generation && (r.pos, r.source) == key
+            })
+        });
+        if !on {
+            return if drawn.is_none_or(matches) {
+                AdjustState::Off
+            } else {
+                AdjustState::Waiting
+            };
+        }
+        if key.1 != Source::Raw {
+            return AdjustState::Paused;
+        }
+        if frame.status == Status::Ready
+            && !self.in_gesture()
+            && frame.exposure.base != ExposureBase::AutoWaiting
+            && drawn.is_some_and(matches)
+        {
+            AdjustState::Shown
+        } else {
+            AdjustState::Waiting
+        }
     }
 
     /// The state of sharpening for the current image `key`, which can be shown, in `frame` (ADR
@@ -3290,6 +3603,8 @@ mod tests {
             region: job.region,
             density,
             sharpen: job.sharpen,
+            exposure: job.exposure,
+            shadows: job.shadows,
             image: Rgb {
                 width: 1,
                 height: 1,
@@ -4080,8 +4395,8 @@ mod tests {
             region: o.region,
             density_q: quantise(o.density),
             sharpen: o.sharpen,
-            exposure: Ev::ZERO,
-            shadows: None,
+            exposure: o.exposure,
+            shadows: o.shadows,
         }
     }
 
@@ -4898,6 +5213,7 @@ mod tests {
             Ok((pos as u32, SIZE)),
             mb24,
             unusable_for_img10,
+            |_| None,
             1.0,
         );
     }
@@ -5034,7 +5350,7 @@ mod tests {
         assert!(!is_statistics(&s.pick(false)));
         assert_eq!(s.frame(VIEW).statistics, None);
 
-        s.finish_statistics(generation, key, session, Some(statistics(0.25)), 3.0);
+        s.finish_statistics(generation, key, session, Some(statistics(0.25)), true, 3.0);
         assert_eq!(s.frame(VIEW).statistics, Some(available(0.25)));
         // the session is back, and the statistics are never asked again for this image
         assert!(matches!(s.sessions.get(&k(10)), Some(Some(10))));
@@ -5138,7 +5454,7 @@ mod tests {
         let mut s = state(1024);
         open_and_show(&mut s, 10);
         let (generation, key, session) = lend_for_statistics(&mut s);
-        s.finish_statistics(generation, key, session, Some(statistics(0.5)), 1.0);
+        s.finish_statistics(generation, key, session, Some(statistics(0.5)), true, 1.0);
         assert_eq!(s.frame(VIEW).statistics, Some(available(0.5)));
         // another image has none (it is not even opened)
         s.go(11);
@@ -5161,7 +5477,7 @@ mod tests {
         let mut s = state(1024);
         open_and_show(&mut s, 10);
         let (generation, key, session) = lend_for_statistics(&mut s);
-        s.finish_statistics(generation, key, session, None, 1.0);
+        s.finish_statistics(generation, key, session, None, true, 1.0);
         assert_eq!(s.frame(VIEW).statistics, Some(ImageStatistics::Unavailable));
         assert_eq!(s.statistics_job(), None);
         assert!(!is_statistics(&s.pick(true)));
@@ -5195,7 +5511,7 @@ mod tests {
         let mut s = state(1024);
         open_and_show(&mut s, 10);
         let (generation, key, session) = lend_for_statistics(&mut s);
-        s.finish_statistics(generation, key, session, Some(statistics(0.125)), 1.0);
+        s.finish_statistics(generation, key, session, Some(statistics(0.125)), true, 1.0);
         // image 3 drops out: image 10 is now at position 9
         s.set_files(without(20, &[3]), 9);
         assert_eq!(s.statistics.get(&k(9)), Some(&available(0.125)));
@@ -5219,7 +5535,7 @@ mod tests {
         let (generation, key, session) = lend_for_statistics(&mut s);
         assert_eq!(s.session_bytes, 24 << 20);
         s.set_files(without(20, &[3]), 9);
-        s.finish_statistics(generation, key, session, Some(statistics(0.5)), 1.0);
+        s.finish_statistics(generation, key, session, Some(statistics(0.5)), true, 1.0);
         // neither the old key nor the image's new one got them, and the session is gone
         assert!(s.statistics.is_empty());
         assert_eq!(s.session_bytes, 0);
@@ -5237,7 +5553,7 @@ mod tests {
         assert!(!s.sessions.contains_key(&k(10)));
         assert_eq!(s.session_bytes, 24 << 20);
         assert_eq!(s.release(&path(10)), (false, false));
-        s.finish_statistics(generation, key, session, Some(statistics(0.5)), 1.0);
+        s.finish_statistics(generation, key, session, Some(statistics(0.5)), true, 1.0);
         assert_eq!(s.session_bytes, 0);
         assert!(!s.sessions.contains_key(&k(10)));
         assert!(s.released.is_empty() && s.lent.is_empty() && s.lent_paths.is_empty());
@@ -5282,7 +5598,7 @@ mod tests {
     fn show_with_statistics(s: &mut State<u32>, pos: usize) {
         open_and_show(s, pos);
         let (generation, key, session) = lend_for_statistics(s);
-        s.finish_statistics(generation, key, session, Some(statistics(0.5)), 1.0);
+        s.finish_statistics(generation, key, session, Some(statistics(0.5)), true, 1.0);
     }
 
     /// Goes to image `pos`, shows it, and makes its clipping map `map(first)` as the workers do.
@@ -5352,7 +5668,7 @@ mod tests {
         assert_eq!(s.clipping_job(), None);
         assert!(!is_clipping(&s.pick(true)));
         assert!(!is_clipping(&s.pick(false)));
-        s.finish_statistics(generation, key, session, Some(statistics(0.5)), 1.0);
+        s.finish_statistics(generation, key, session, Some(statistics(0.5)), true, 1.0);
 
         // then the map, of the current image, with its session lent as for the statistics
         assert_eq!(s.clipping_job(), Some(Job::Clipping(k(10))));
@@ -5847,7 +6163,7 @@ mod tests {
         assert_eq!(s.focus_job(), None);
         assert!(!is_focus(&s.pick(true)));
         assert!(!is_focus(&s.pick(false)));
-        s.finish_statistics(generation, key, session, Some(statistics(0.5)), 1.0);
+        s.finish_statistics(generation, key, session, Some(statistics(0.5)), true, 1.0);
 
         // then the clipping map, before the focus map
         assert_eq!(s.focus_job(), Some(Job::Focus(k(10))));
@@ -8197,5 +8513,401 @@ mod tests {
             jobs.iter().any(|v| v.region == pan_region(&s, scale)),
             "{jobs:?}"
         );
+    }
+
+    // Exposure and shadows in the view core (ADR 0027 W5).
+    fn past_dwell(s: &mut State<u32>) {
+        s.since = Instant::now() - s.config.dwell;
+    }
+
+    #[test]
+    fn adjustments_follow_the_raw_views_at_every_zoom() {
+        let mut s = state(1024);
+        for pos in [9, 10, 11, 12] {
+            with_session(&mut s, pos);
+        }
+        let jpeg = (10, Source::Jpeg);
+        s.sizes.insert(jpeg, SIZE);
+        s.sessions.insert(jpeg, Some(10));
+        let frame = s.frame(VIEW);
+        assert_eq!(
+            frame.exposure,
+            ExposureState {
+                mode: ExposureMode::Off,
+                steps: 0,
+                base: ExposureBase::Manual,
+                total: Ev::ZERO,
+                view: AdjustState::Off
+            }
+        );
+        for adjusted in [false, true] {
+            if adjusted {
+                assert!(s.step_exposure(1));
+                assert!(s.step_exposure(1));
+                assert!(s.set_shadows(Some(50)));
+            }
+            past_dwell(&mut s);
+            s.dragged = true;
+            for zoom in [
+                Zoom::Fit,
+                Zoom::Scale(0.5),
+                Zoom::Scale(0.75),
+                Zoom::Scale(1.0),
+            ] {
+                s.zoom = zoom;
+                let jobs = s.plan();
+                for key in [k(10), k(11), jpeg] {
+                    assert!(
+                        jobs.iter()
+                            .any(|j| matches!(j, Job::Render(k, _) if *k == key))
+                    );
+                }
+                for job in jobs {
+                    if let Job::Render(key, v) = job {
+                        assert_eq!(
+                            v.exposure.milli(),
+                            if adjusted && key == k(10) { 667 } else { 0 }
+                        );
+                        assert_eq!(v.shadows, (adjusted && key.1 == Source::Raw).then_some(50));
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn exposure_steps_belong_to_the_current_path() {
+        let mut s = state(1024);
+        s.step_exposure(1);
+        s.set_mode(Source::Jpeg);
+        assert!(!s.step_exposure(1));
+        assert_eq!(s.frame(VIEW).exposure.steps, 1);
+        s.set_mode(Source::Raw);
+        assert!(s.set_exposure_mode(ExposureMode::Camera));
+        s.set_files(vec![path(10), path(11)], 0);
+        assert_eq!(s.frame(VIEW).exposure.steps, 1);
+        s.go(1);
+        assert_eq!(s.frame(VIEW).exposure.steps, 0);
+        s.step_exposure(1);
+        s.set_files(files(20), 3);
+        assert_eq!(s.frame(VIEW).exposure.steps, 0);
+        s.step_exposure(1);
+        s.open_folder(files(2));
+        assert_eq!(s.frame(VIEW).exposure.steps, 0);
+        assert_eq!(s.frame(VIEW).exposure.mode, ExposureMode::Camera);
+    }
+
+    #[test]
+    fn manual_exposure_stops_at_each_limit_and_pauses_for_other_sources() {
+        let mut s = state(1024);
+        for (delta, count, limit) in [(1, 9, 3000), (-1, 6, -2000)] {
+            for _ in 0..count {
+                assert!(s.step_exposure(delta));
+            }
+            assert!(!s.step_exposure(delta));
+            assert_eq!(s.frame(VIEW).exposure.total.milli(), limit);
+            assert!(s.reset_exposure_steps());
+            assert!(!s.reset_exposure_steps());
+        }
+        assert!(s.set_shadows(Some(150)));
+        assert_eq!(s.shadows_of(k(10)), Some(100));
+        assert!(!s.set_shadows(Some(100)));
+        s.set_exposure_mode(ExposureMode::Auto);
+        s.set_mode(Source::Jpeg);
+        for file in [None, Some("a.jpg"), Some("a.tif")] {
+            if let Some(name) = file {
+                s.set_mode(Source::Raw);
+                s.open_folder(vec![PathBuf::from(name)]);
+            }
+            let key = s.cur_key().unwrap();
+            s.sizes.insert(key, SIZE);
+            let job = s.req(key, Want::Shown).unwrap().job;
+            assert_eq!((job.exposure, job.shadows), (Ev::ZERO, None));
+            assert!(!s.step_exposure(1));
+            let f = s.frame(VIEW);
+            assert_eq!(f.shadows, AdjustState::Paused);
+            assert_eq!(
+                (f.exposure.base, f.exposure.view),
+                (ExposureBase::AutoNone, AdjustState::Paused)
+            );
+        }
+    }
+
+    #[test]
+    fn auto_exposure_waits_for_each_images_own_statistics() {
+        let mut s = state(1024);
+        open_and_show(&mut s, 10);
+        with_session(&mut s, 11);
+        for want in [Want::Fit, Want::Target] {
+            s.accept(&out(&s, 11, want), 100).unwrap();
+        }
+        s.drop_session(k(11));
+        s.set_exposure_mode(ExposureMode::Auto);
+        s.focus_wanted = true;
+        s.clipping_wanted = true;
+        past_dwell(&mut s);
+        let plan = s.plan();
+        assert_eq!(plan.first(), Some(&Job::Statistics(k(10))));
+        assert!(renders_of(&s, 10).is_empty());
+        assert!(plan.contains(&Job::Open(k(11))));
+        assert!(s.focus_job().is_none() && s.clipping_job().is_none());
+        assert_eq!(s.frame(VIEW).exposure.base, ExposureBase::AutoWaiting);
+        let (g, key, session) = lend_for_statistics(&mut s);
+        let mut stats = statistics(0.0);
+        for bins in &mut stats.histogram {
+            bins[160] = 20;
+        }
+        s.finish_statistics(g, key, session, Some(stats.clone()), true, 1.0);
+        let jobs = renders_of(&s, 10);
+        assert!(!jobs.is_empty() && jobs.iter().all(|v| v.exposure.milli() == 1000));
+        with_session(&mut s, 11);
+        assert!(s.plan().contains(&Job::Statistics(k(11))));
+        assert!(renders_of(&s, 11).is_empty());
+        let mut neighbour = statistics(0.0);
+        for bins in &mut neighbour.histogram {
+            bins[187] = 20;
+        }
+        s.statistics
+            .insert(k(11), ImageStatistics::Available(Arc::new(neighbour)));
+        assert!(s.step_exposure(1));
+        past_dwell(&mut s);
+        let jobs = renders_of(&s, 11);
+        assert!(!jobs.is_empty() && jobs.iter().all(|v| v.exposure == Ev::from_thirds(2)));
+        let f = s.frame(VIEW);
+        assert_eq!(
+            (f.exposure.base, f.exposure.steps, f.exposure.total.milli()),
+            (ExposureBase::Auto(3), 1, 1333)
+        );
+        assert_eq!(
+            f.statistics,
+            Some(ImageStatistics::Available(Arc::new(stats)))
+        );
+    }
+
+    #[test]
+    fn releasing_the_first_auto_statistics_keeps_the_result_until_rendering_can_resume() {
+        let mut s = state(1024);
+        s.set_exposure_mode(ExposureMode::Auto);
+        s.finish_open(s.generation, k(10), Ok((10, SIZE)), mb24, 1.0);
+        let (generation, key, session) = lend_for_statistics(&mut s);
+        let path = path(10);
+        s.begin_release(&path);
+        assert_eq!(s.release(&path), (true, false));
+        s.finish_statistics(generation, key, session, Some(statistics(0.01)), true, 1.0);
+        assert!(!s.sessions.contains_key(&key));
+        assert!(s.pick(true).is_none());
+        let frame = s.frame(VIEW);
+        assert_eq!(frame.statistics, Some(available(0.01)));
+        assert_eq!(frame.exposure.view, AdjustState::Waiting);
+        s.end_release(&path);
+        assert!(matches!(s.pick(true), Some(Task::Open { key: opened, .. }) if opened == key));
+        s.finish_open(generation, key, Ok((10, SIZE)), mb24, 1.0);
+        assert!(matches!(s.pick(true), Some(Task::Render {key: rendered, ..}) if rendered == key));
+    }
+
+    #[test]
+    fn auto_exposure_reports_missing_or_clipped_statistics() {
+        for (result, base) in [
+            (None, ExposureBase::AutoNone),
+            (Some(statistics(0.01)), ExposureBase::AutoClipped),
+        ] {
+            let mut s = state(1024);
+            with_session(&mut s, 10);
+            s.set_exposure_mode(ExposureMode::Auto);
+            let (g, key, session) = lend_for_statistics(&mut s);
+            s.finish_statistics(g, key, session, result, true, 1.0);
+            let f = s.frame(VIEW);
+            assert_eq!((f.exposure.base, f.exposure.total), (base, Ev::ZERO));
+            assert!(!renders_of(&s, 10).is_empty());
+        }
+    }
+
+    #[test]
+    fn camera_exposure_preserves_the_file_value_and_limits_the_render() {
+        for (camera, base, total, stepped) in [
+            (Some(-0.51), ExposureBase::Camera(-0.51), -510, -177),
+            (None, ExposureBase::CameraNone, 0, 333),
+            (Some(-2.7), ExposureBase::Camera(-2.7), -2000, -2000),
+        ] {
+            let mut s = state(1024);
+            s.set_exposure_mode(ExposureMode::Camera);
+            assert_eq!(s.frame(VIEW).exposure.base, ExposureBase::CameraWaiting);
+            s.finish_open_checked(
+                s.generation,
+                k(10),
+                Ok((10, SIZE)),
+                mb24,
+                |_| false,
+                |_| camera,
+                1.0,
+            );
+            let job = s.req(k(10), Want::Shown).unwrap().job;
+            assert_eq!(job.exposure.milli(), total);
+            assert_eq!(s.frame(VIEW).exposure.base, base);
+            assert!(s.step_exposure(1));
+            assert_eq!(s.frame(VIEW).exposure.total.milli(), stepped);
+            s.set_files(vec![path(10)], 0);
+            assert_eq!(s.frame(VIEW).exposure.base, base);
+        }
+    }
+
+    #[test]
+    fn exposure_swaps_once_and_reuses_the_original_view() {
+        let mut s = state(1024);
+        with_session(&mut s, 10);
+        let plain = s.accept(&out(&s, 10, Want::Shown), 100).unwrap();
+        assert_eq!(s.frame(VIEW).draw.unwrap().id, plain);
+        s.step_exposure(1);
+        let f = s.frame(VIEW);
+        assert_eq!(
+            (f.draw.unwrap().id, f.exposure.view),
+            (plain, AdjustState::Waiting)
+        );
+        assert_eq!(renders_of(&s, 10)[0].exposure.milli(), 333);
+        let exposed = s.accept(&out(&s, 10, Want::Shown), 100).unwrap();
+        let f = s.frame(VIEW);
+        assert_eq!(
+            (f.draw.unwrap().id, f.exposure.view),
+            (exposed, AdjustState::Shown)
+        );
+        s.step_exposure(-1);
+        let f = s.frame(VIEW);
+        assert_eq!(
+            (f.draw.unwrap().id, f.exposure.view),
+            (plain, AdjustState::Off)
+        );
+        assert!(s.plan().is_empty());
+    }
+
+    #[test]
+    fn disabling_adjustments_waits_for_the_plain_picture() {
+        let mut s = state(1024);
+        s.set_exposure_mode(ExposureMode::Camera);
+        s.finish_open_checked(
+            s.generation,
+            k(10),
+            Ok((10, SIZE)),
+            mb24,
+            |_| false,
+            |_| Some(0.5),
+            1.0,
+        );
+        s.set_shadows(Some(50));
+        let adjusted = s.accept(&out(&s, 10, Want::Shown), 100).unwrap();
+        assert_eq!(s.frame(VIEW).draw.unwrap().id, adjusted);
+        s.set_exposure_mode(ExposureMode::Off);
+        s.set_shadows(None);
+        let f = s.frame(VIEW);
+        assert_eq!(
+            (f.draw.unwrap().id, f.exposure.view, f.shadows),
+            (adjusted, AdjustState::Waiting, AdjustState::Waiting)
+        );
+        s.accept(&out(&s, 10, Want::Shown), 100).unwrap();
+        let f = s.frame(VIEW);
+        assert_eq!(
+            (f.exposure.view, f.shadows),
+            (AdjustState::Off, AdjustState::Off)
+        );
+    }
+
+    #[test]
+    fn no_adjustment_marks_for_empty_and_failed_images() {
+        let mut s = state(1024);
+        s.set_exposure_mode(ExposureMode::Auto);
+        s.set_shadows(Some(50));
+        s.open_folder(vec![]);
+        let f = s.frame(VIEW);
+        assert_eq!(
+            (f.exposure.base, f.exposure.total),
+            (ExposureBase::Manual, Ev::ZERO)
+        );
+        assert_eq!(
+            (f.exposure.view, f.shadows),
+            (AdjustState::Off, AdjustState::Off)
+        );
+        s.open_folder(files(1));
+        s.finish_open(
+            s.generation,
+            k(0),
+            Err(DecodeError::damaged("broken")),
+            mb24,
+            1.0,
+        );
+        let f = s.frame(VIEW);
+        assert_eq!(
+            (f.exposure.view, f.shadows),
+            (AdjustState::Off, AdjustState::Off)
+        );
+    }
+
+    #[test]
+    fn an_exposure_step_restarts_the_dwell_before_prefetch_and_fine() {
+        let mut s = state(1024);
+        with_session(&mut s, 10);
+        with_session(&mut s, 11);
+        s.fine_details = true;
+        s.step_exposure(1);
+        let shown = s.req(k(10), Want::Shown).unwrap().job;
+        assert_eq!(s.plan(), vec![Job::Render(k(10), shown)]);
+        past_dwell(&mut s);
+        let plan = s.plan();
+        assert!(plan.contains(&Job::Render(k(10), s.req(k(10), Want::Target).unwrap().job)));
+        assert!(!renders_of(&s, 11).is_empty());
+        assert!(
+            matches!(plan.last(),Some(Job::Render(_,v)) if v.kind == ViewKind::Fine && v.exposure.milli()==333)
+        );
+    }
+
+    #[test]
+    fn accepting_an_exposure_removes_only_its_own_inflight_view() {
+        let mut s = state(1024);
+        with_session(&mut s, 10);
+        let render = |s: &mut State<u32>| {
+            let Some(Task::Render {
+                generation,
+                key,
+                view,
+                session,
+                ..
+            }) = s.pick(true)
+            else {
+                panic!("expected render")
+            };
+            s.finish_render(generation, key, view, session, Ok(rendered(view)), 1.0);
+            s.outbox.pop().unwrap()
+        };
+        let plain = render(&mut s);
+        s.step_exposure(1);
+        let adjusted = render(&mut s);
+        assert_eq!(
+            (plain.exposure.milli(), adjusted.exposure.milli()),
+            (0, 333)
+        );
+        assert_eq!(s.inflight.len(), 2);
+        s.accept(&adjusted, 100).unwrap();
+        assert_eq!(s.inflight.len(), 1);
+        assert_eq!(s.inflight[0].view.exposure, Ev::ZERO);
+        s.accept(&plain, 100).unwrap();
+        assert!(s.inflight.is_empty());
+    }
+
+    #[test]
+    fn an_exposure_step_can_replace_the_only_fine_view_under_budget() {
+        let mut s = state(4);
+        ready_for_fine(&mut s, None);
+        let old = s.accept(&out(&s, 10, Want::Fine), 3_000_000).unwrap();
+        assert_eq!(s.frame(VIEW).draw.unwrap().id, old);
+        s.step_exposure(1);
+        past_dwell(&mut s);
+        for want in [Want::Shown, Want::Target, Want::Ring] {
+            s.accept(&out(&s, 10, want), 100).unwrap();
+        }
+        let (g, key, v, session) = pick_fine(&mut s).expect("replacement fine render");
+        assert_eq!(v.exposure.milli(), 333);
+        s.finish_render(g, key, v, session, Ok(rendered(v)), 1.0);
+        let out = s.outbox.pop().unwrap();
+        let new = s.accept(&out, 3_000_000).unwrap();
+        assert_eq!(s.frame(VIEW).draw.unwrap().id, new);
+        assert!(s.take_dropped().contains(&old));
     }
 }
