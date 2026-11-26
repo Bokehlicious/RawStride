@@ -1,4 +1,4 @@
-# T335. ADR 0027 W5: the keys, the menu and the marks of the exposure and the shadows — Blocked
+# T335. ADR 0027 W5: the keys, the menu and the marks of the exposure and the shadows — Open
 
 - **Why:** ADR 0027 §2.1, §3.4 and W5-Q3, W5-Q8, W5-Q9 (answered by the owner 2026-11-25, ADR
   0027 §4.4). T333 gave the view core the exposure's mode, the manual steps and the shadows
@@ -23,30 +23,30 @@
     `MenuEntry::Submenu(kind, &[MenuItem])` (the Theme submenu in the View menu is the model),
     `acts_in`'s `Where::Loupe` list, the test of the View menu's slice after the zoom items
     (about line 2104).
-  - `lib.rs`: `PreviewKey` and `preview_key_action` (line 534, matching `(key, ctrl, shift,
+  - `lib.rs`: `PreviewKey` and `preview_key_action` (line 535, matching `(key, ctrl, shift,
     alt)`), with their tests; the mapping of a `PreviewKey` to a `Command` there (about line
-    1214) is the test helper `command_of_key` (the tests start at about line 636), used by
+    1215) is the test helper `command_of_key` (the tests start at about line 637), used by
     `every_menu_key_gives_its_items_command`. The production path is the key map first
-    (`key_map.action_of`, main.rs about line 9306), then `key_map_action`'s match (main.rs
-    about lines 5824–5885) and `run_command`.
+    (`key_map.action_of`, main.rs about line 9395), then `key_map_action`'s match (main.rs
+    about lines 5910–6053) and `run_command`.
   - Ctrl+↑ and Ctrl+↓ step nothing (cold read 2026-11-25): the loupe's `key_action` returns
-    `None` for any Ctrl (lib.rs about line 373), `fixed_in_preview` returns early for Ctrl,
+    `None` for any Ctrl (lib.rs about line 374), `fixed_in_preview` returns early for Ctrl,
     `rotation_key_action` covers only Ctrl+← and Ctrl+→, and egui moves the focus only for
     arrows without modifiers.
-  - A submenu's items are drawn by `menu_item` (main.rs about lines 8516–8520), which calls
-    `command_checked` and `.selected(on)` (about line 8621); `Command::Theme(…)` is ticked so
-    today (about line 8212), from the static slice `THEME_ITEMS`.
+  - A submenu's items are drawn by `menu_item` (main.rs about lines 8565–8572), which calls
+    `command_checked` and `.selected(on)` (about line 8708); `Command::Theme(…)` is ticked so
+    today (about line 8298), from the static slice `THEME_ITEMS`.
   - The shell keeps no side's frame: `frame` and `held_frame` are locals of the drawing (main.rs
-    about lines 9471 and 9515); it keeps `last_frame_status`, `last_zoom`, `last_clipping` and
-    `last_statistics`. `close_compare` empties the second core (about line 6292);
-    `open_compare` already sets both cores' files (about lines 6271–6273).
-  - `shell_text.rs`: `command_text` and `submenu_text` (line 548).
+    about lines 9561 and 9607); it keeps `last_frame_status`, `last_zoom`, `last_clipping` and
+    `last_statistics`. `close_compare` empties the second core (about line 6378);
+    `open_compare` already sets both cores' files (about lines 6356–6359).
+  - `shell_text.rs`: `command_text` and `submenu_text` (lines 559 and 576).
   - `main.rs`: `fine_details` and `sharpening` in the app's state; `toggle_sharpening`;
-    `reset_adjustments` and `any_adjustment_on` (about lines 6172–6180, "W5 and W6 add their
-    adjustments here"); `wish_sharpening` (line 6224, the first core while the preview is shown,
+    `reset_adjustments` and `any_adjustment_on` (about lines 6258–6266, "W5 and W6 add their
+    adjustments here"); `wish_sharpening` (line 6310, the first core while the preview is shown,
     the second while the compare is open as well); `command_checked`, `command_enabled`,
-    `run_command`; the action match of the preview's own keys; `ImageAreaShown` (line 9629, with
-    `sharpen_key`) and `draw_image_area`'s call of `adjustment_marks` (about line 9780) for each
+    `run_command`; the action match of the preview's own keys; `ImageAreaShown` (line 9717, with
+    `sharpen_key`) and `draw_image_area`'s call of `adjustment_marks` (about line 9864) for each
     side of the compare; `open_compare` and `close_compare`.
   - `preview_text.rs`: `AdjustmentMark`, `adjustment_marks(fine, fine_key, sharpen, sharpen_key,
     values)` (line 206), `fine_mark`, `sharpen_mark`, `key_text`.
@@ -230,3 +230,4 @@
 | Date | Status | Note |
 |---|---|---|
 | 2026-11-25 | Blocked | Added; waits for T334. Cold read: every cited line found; Ctrl+↑/↓ step nothing, and a submenu's item can be ticked (both recorded under "What the reviewer checked", the "stop and report" points removed). Fixed: three more existing tests to update named; `command_of_key` is test code, the production path named; the fields the shell must keep named; only the other core is reset on a path change; leaving the preview resets the steps; repeats of B, Shift+B and O ignored; `ev_text`'s rounding and every number's format; `CameraWaiting`'s text; the Manual hover with one key; "Exposure: Brighter" on the Keyboard Shortcuts page; the glossary apart from "Deep shadows" |
+| 2026-11-26 | Open | Set to Open by the reviewer on the owner's word after T334 was Done. T333, T334 and T337 moved lines: the cited lines of `main.rs` (+86 to +94; `key_map_action` now about 5910–6053), `lib.rs` (+1) and `shell_text.rs` (`submenu_text` 559, `command_text` 576) updated to the tree after T334; `keymap.rs`, `shell.rs` and `preview_text.rs` unchanged. T333's API (`ExposureMode`, `ExposureState`, `ExposureBase`, `AdjustState`, the four setters) and T334's `shadows_amount` as this task names them; nothing else changed |

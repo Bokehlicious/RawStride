@@ -151,7 +151,7 @@ use pw_thumbcache::{ThumbWorker, ThumbnailRequest};
 use pw_viewcore::native::NativeBackend;
 use pw_viewcore::{
     ClippingState, Config, FocusState, Frame, ImageStatistics, Sharpening, Source, Status,
-    ViewCore, Zoom,
+    ViewCore, Zoom, shadows,
 };
 
 mod inspector;
@@ -1677,14 +1677,15 @@ impl Loupe {
     /// image when it opens, so no read made with the old settings is kept (it cannot be open
     /// while the settings window is).
     fn save_settings_window(&mut self, chosen: Settings) {
-        // The window was opened with the layout of that moment: only its theme, the companion
-        // suffixes (T281) and the sharpening's values (T317) are taken, so the file gets the
-        // current window and columns (T109).
+        // The settings window uses a copy of the layout. Take its theme, companion suffixes
+        // (T281), sharpening values (T317) and shadows amount (T334) while saving the current
+        // window and columns (T109).
         let chosen = Settings {
             shell: ShellSettings {
                 theme: chosen.shell.theme,
                 companion_suffixes: chosen.shell.companion_suffixes,
                 sharpening: chosen.shell.sharpening,
+                shadows_amount: chosen.shell.shadows_amount,
                 ..self.settings.shell.clone()
             },
             ..chosen
@@ -1794,8 +1795,8 @@ impl Loupe {
         // drawing, and whether the pointer is on the waiting slot's Change.
         let mut key_clicks: Vec<KeyClick> = Vec::new();
         let mut restore_keys = false;
-        // The page Preview's Restore Defaults (T317).
-        let mut restore_sharpening = false;
+        // The page Preview's Restore Defaults (T317, T334).
+        let mut restore_preview = false;
         let mut wait_hovered = false;
         let pointer_pressed = ctx.input(|input| input.pointer.any_pressed());
         let keys = self.settings_keys.clone();
@@ -1851,7 +1852,7 @@ impl Loupe {
                                 ui.add_space(PANEL_ROW_SPACING);
                             }
                             SettingsPage::Preview => {
-                                restore_sharpening = ui
+                                restore_preview = ui
                                     .button(settings_text(SettingsText::RestoreDefaults))
                                     .clicked();
                                 ui.add_space(PANEL_ROW_SPACING);
@@ -2004,6 +2005,8 @@ impl Loupe {
                             }
                             SettingsPage::Preview => {
                                 draw_sharpening_section(ui, &mut chosen.shell.sharpening);
+                                ui.add_space(PANEL_ROW_SPACING);
+                                draw_shadows_section(ui, &mut chosen.shell.shadows_amount);
                             }
                         }
                     });
@@ -2044,9 +2047,10 @@ impl Loupe {
         if restore_defaults {
             chosen.editor_layout = EditorLayout::default();
         }
-        // Like every change on the page, kept only by Save (T317).
-        if restore_sharpening {
+        // Like every change on the page, kept only by Save (T317, T334).
+        if restore_preview {
             chosen.shell.sharpening = Sharpening::DEFAULT;
+            chosen.shell.shadows_amount = shadows::DEFAULT_AMOUNT;
         }
         for click in layout_clicks {
             let layout = &mut chosen.editor_layout;
@@ -10137,6 +10141,24 @@ fn draw_sharpening_section(ui: &mut egui::Ui, sharpening: &mut Sharpening) {
         egui::Slider::new(&mut sharpening.threshold, Sharpening::THRESHOLD_RANGE)
             .step_by(1.0)
             .text(settings_text(SettingsText::SharpenThreshold)),
+    );
+}
+
+/// The Shadows section of the Settings page Preview (ADR 0027 §3.4, W5-Q6, T334).
+/// The amount moves in steps of 5. A value from the file that is between steps is kept until
+/// the slider is dragged or otherwise edited.
+fn draw_shadows_section(ui: &mut egui::Ui, amount: &mut u8) {
+    ui.heading(settings_text(SettingsText::ShadowsHeading));
+    ui.add(
+        egui::Label::new(egui::RichText::new(settings_text(SettingsText::ShadowsNote)).small())
+            .wrap(),
+    );
+    ui.add_space(PANEL_ROW_SPACING);
+    ui.add(
+        egui::Slider::new(amount, shadows::AMOUNT_RANGE)
+            .clamping(egui::SliderClamping::Edits)
+            .step_by(5.0)
+            .text(settings_text(SettingsText::ShadowsAmount)),
     );
 }
 

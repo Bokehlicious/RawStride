@@ -1,4 +1,4 @@
-# T334. ADR 0027 W5: the shadows' amount on the Settings page Preview — Open
+# T334. ADR 0027 W5: the shadows' amount on the Settings page Preview — Done
 
 - **Why:** ADR 0027 §3.4 and W5-Q6 (answered by the owner 2026-11-25, ADR 0027 §4.4). The
   shadows (a lift of the dark tones of the RAW view) are a display mode for the session, turned
@@ -91,3 +91,5 @@
 |---|---|---|
 | 2026-11-25 | Blocked | Added; waits for T333. Cold read: all names and lines found; fixed: "the last line" is the last shell line (library lines follow); the four tests to update named, the library test among them; the constants' types stated; the flag's name decided (`restore_preview`); doc comments and the glossary's distinction from "Deep shadows" named; the `shell_text.rs` test named. Sonnet kept: no gap left |
 | 2026-11-26 | Open | Set to Open by the reviewer on the owner's word after T333 was Done; T333 changed no file this task names, so its text is unchanged |
+| 2026-11-26 | Ready for review | Added the Shadows amount to Preview settings and settings-file persistence. The T334 tests passed. Formatting, personal data and clippy checks passed. The sandbox blocked the audit database lock, ExifTool startup and a Windows junction test. The reviewer still needs to run the full check and update the test inventory. |
+| 2026-11-26 | Done | Reviewed (done by Codex): no bug; every point and the four updated tests as written. Accepted as they are: the slider's `.clamping(SliderClamping::Edits)` (no effect on a `u8` read inside 0–100), the glossary's Preview row reworded beyond naming the sections, and the inner comment of `save_settings_window` reworded. The reviewer updated `docs/test-inventory.md` (header 2797/98, the `pw-loupe` unit row 1490 → 1493, the shadows amount's tests described). `.\tools\check.ps1` all OK, 2797 passed, 98 ignored, 0 failed, no clippy warnings. No leftovers. No `CHANGELOG.md` line (T335's covers W5); `main` not moved before T335. The owner's hand check follows after T335 |

@@ -334,6 +334,12 @@ pub enum SettingsText {
     SharpenRadius,
     /// The label of the sharpening's threshold slider (T317).
     SharpenThreshold,
+    /// The heading of the Shadows section on the page Preview (ADR 0027 §3.4, W5-Q6, T334).
+    ShadowsHeading,
+    /// The small text under the Shadows heading (T334).
+    ShadowsNote,
+    /// The label of the shadows' amount slider (T334).
+    ShadowsAmount,
 }
 
 /// The text of `text` in the settings window.
@@ -379,6 +385,11 @@ pub fn settings_text(text: SettingsText) -> &'static str {
         SettingsText::SharpenAmount => "Amount (%)",
         SettingsText::SharpenRadius => "Radius (pixels)",
         SettingsText::SharpenThreshold => "Threshold (levels)",
+        SettingsText::ShadowsHeading => "Shadows",
+        SettingsText::ShadowsNote => {
+            "Lifts the dark tones of the preview in RAW mode while the shadows are turned on. Not saved in the images."
+        }
+        SettingsText::ShadowsAmount => "Amount",
     }
 }
 
@@ -1287,8 +1298,8 @@ mod tests {
         );
     }
 
-    /// The page Preview's section Sharpening: its heading, note and the three sliders' labels
-    /// (ADR 0027 §3.3, W3-Q7, T317).
+    /// The headings, notes and slider labels for Sharpening and Shadows on the Preview page
+    /// (ADR 0027 §3.3, W3-Q7, T317 and §3.4, W5-Q6, T334).
     #[test]
     fn the_preview_page_has_the_sharpening_texts() {
         assert_eq!(
@@ -1309,6 +1320,12 @@ mod tests {
             settings_text(SettingsText::SharpenThreshold),
             "Threshold (levels)"
         );
+        assert_eq!(settings_text(SettingsText::ShadowsHeading), "Shadows");
+        assert_eq!(
+            settings_text(SettingsText::ShadowsNote),
+            "Lifts the dark tones of the preview in RAW mode while the shadows are turned on. Not saved in the images."
+        );
+        assert_eq!(settings_text(SettingsText::ShadowsAmount), "Amount");
     }
 
     /// The page Keyboard Shortcuts lists every action of `KeyAction::ALL` in that order, under the

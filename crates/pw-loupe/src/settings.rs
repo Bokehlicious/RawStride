@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 use pw_metadata::edit::EditOptions;
 use pw_metadata::iim::Fallback;
 use pw_metadata::write_plan::WriteSettings;
-use pw_viewcore::Sharpening;
+use pw_viewcore::{Sharpening, shadows};
 
 use crate::editor::EditorSection;
 use crate::editor_layout::{EditorItem, EditorLayout, section_from_name, section_name};
@@ -90,6 +90,8 @@ const THUMBNAIL_BUTTONS: &str = "thumbnail_buttons";
 const SHARPEN_AMOUNT: &str = "sharpen_amount";
 const SHARPEN_RADIUS: &str = "sharpen_radius";
 const SHARPEN_THRESHOLD: &str = "sharpen_threshold";
+/// The key of the shadows' amount (ADR 0027 §3.4, W5-Q6, T334).
+const SHADOWS_AMOUNT: &str = "shadows_amount";
 /// The companion suffixes by default (U9-Q10).
 const DEFAULT_COMPANION_SUFFIXES: [&str; 3] = ["dop", "pp3", "on1"];
 /// The keys of the metadata window's sections, open or collapsed (ADR 0017 U10-Q6, T123).
@@ -264,6 +266,8 @@ pub struct ShellSettings {
     /// The sharpening's amount, radius and threshold, set on the Settings page Preview (ADR 0027
     /// §3.3, W3-Q7, T317); whether sharpening is on is not saved.
     pub sharpening: Sharpening,
+    /// The amount of the shadows, set on the Settings page Preview (ADR 0027 §3.4, W5-Q6, T334).
+    pub shadows_amount: u8,
 }
 
 /// The library's lists as `settings.txt` keeps them (T135, U4-Q3, U4-Q4): the favourites in the
@@ -340,6 +344,7 @@ impl Default for ShellSettings {
             thumbnail_buttons: true,
             // Amount 80 %, radius 0.8 px, threshold 2 (ADR 0027 §3.3).
             sharpening: Sharpening::DEFAULT,
+            shadows_amount: shadows::DEFAULT_AMOUNT,
         }
     }
 }
@@ -594,6 +599,16 @@ pub fn load_settings_and_library(path: &Path) -> (Settings, SavedLibrary, Vec<St
                     Sharpening::THRESHOLD_RANGE.end()
                 ))),
             },
+            SHADOWS_AMOUNT => match value.parse::<u8>() {
+                Ok(amount) if shadows::AMOUNT_RANGE.contains(&amount) => {
+                    shell.shadows_amount = amount;
+                }
+                _ => problems.push(bad(&format!(
+                    "a whole number from {} to {}",
+                    shadows::AMOUNT_RANGE.start(),
+                    shadows::AMOUNT_RANGE.end()
+                ))),
+            },
             // An empty value is no template and no problem; anything but a full path is one
             // problem and no template (T295).
             IMPORT_TEMPLATE if value.is_empty() => shell.import_template = None,
@@ -833,6 +848,7 @@ fn shell_lines(shell: &ShellSettings) -> String {
         tenths_text(shell.sharpening.radius_tenths),
         shell.sharpening.threshold
     ));
+    text.push_str(&format!("{SHADOWS_AMOUNT} = {}\n", shell.shadows_amount));
     text
 }
 
@@ -1298,7 +1314,7 @@ mod tests {
              import_incremental = true\n\
              move_to_subfolders = false\ncompanion_suffixes = dop, pp3, on1\n\
              thumbnail_buttons = true\n\
-             sharpen_amount = 80\nsharpen_radius = 0.8\nsharpen_threshold = 2\n"
+             sharpen_amount = 80\nsharpen_radius = 0.8\nsharpen_threshold = 2\nshadows_amount = 50\n"
         );
     }
 
@@ -1503,6 +1519,7 @@ mod tests {
                 radius_tenths: 13,
                 threshold: 7,
             },
+            shadows_amount: 35,
         }
     }
 
@@ -2496,7 +2513,8 @@ mod tests {
             assert!(
                 text.ends_with(&format!(
                     "\nthumbnail_buttons = {on}\n\
-                     sharpen_amount = 80\nsharpen_radius = 0.8\nsharpen_threshold = 2\n"
+                     sharpen_amount = 80\nsharpen_radius = 0.8\nsharpen_threshold = 2\n\
+                     shadows_amount = 50\n"
                 )),
                 "{text}"
             );
@@ -2642,6 +2660,57 @@ mod tests {
             assert!(problems.is_empty(), "{value}: {problems:?}");
             assert_eq!(settings.shell.sharpening.radius_tenths, tenths, "{value}");
         }
+    }
+
+    // ---------- the shadows' amount (ADR 0027 §3.4, W5-Q6, T334) ----------
+
+    #[test]
+    fn the_shadows_amount_is_written_and_read_back() {
+        let dir = TempDir::new();
+        let path = dir.0.join("settings.txt");
+        for shadows_amount in [0, 35, 100] {
+            let settings = Settings {
+                shell: ShellSettings {
+                    shadows_amount,
+                    ..ShellSettings::default()
+                },
+                ..Settings::default()
+            };
+            save_settings(&path, &settings).unwrap();
+            let text = std::fs::read_to_string(&path).unwrap();
+            assert!(
+                text.ends_with(&format!(
+                    "\nsharpen_threshold = 2\nshadows_amount = {shadows_amount}\n"
+                )),
+                "{text}"
+            );
+            let (loaded, problems) = load_settings(&path);
+            assert!(problems.is_empty(), "{shadows_amount}: {problems:?}");
+            assert_eq!(loaded.shell.shadows_amount, shadows_amount);
+        }
+    }
+
+    #[test]
+    fn a_bad_shadows_amount_keeps_the_default_and_gives_one_problem() {
+        for value in ["101", "-1", "half"] {
+            let (_dir, path) =
+                TempDir::with_file(&format!("# RawStride\nshadows_amount = {value}\n"));
+            let (settings, problems) = load_settings(&path);
+            assert_one_problem_on_line(&problems, 2);
+            assert!(
+                problems[0].contains("expected a whole number from 0 to 100"),
+                "{value}: {problems:?}"
+            );
+            assert_eq!(settings.shell.shadows_amount, 50, "{value}");
+        }
+    }
+
+    #[test]
+    fn a_file_without_the_shadows_amount_gives_the_default_and_no_problem() {
+        let (_dir, path) = TempDir::with_file("# RawStride\nsharpen_threshold = 7\n");
+        let (settings, problems) = load_settings(&path);
+        assert!(problems.is_empty(), "{problems:?}");
+        assert_eq!(settings.shell.shadows_amount, 50);
     }
 
     // ---------- the compare's layout and lock (ADR 0017 §2.2, U6-Q7, U6-Q8, T151) ----------
@@ -2890,13 +2959,14 @@ mod tests {
             };
             save_settings(&path, &settings).unwrap();
             let text = std::fs::read_to_string(&path).unwrap();
-            // The two lines come last but `thumbnail_buttons` (T245) and the sharpening (T317),
-            // `move_to_subfolders` first.
+            // The two lines come last but `thumbnail_buttons` (T245), the sharpening (T317)
+            // and the shadows (T334), `move_to_subfolders` first.
             assert!(
                 text.ends_with(&format!(
                     "\nimport_incremental = true\nmove_to_subfolders = {on}\n{line}\n\
                      thumbnail_buttons = true\n\
-                     sharpen_amount = 80\nsharpen_radius = 0.8\nsharpen_threshold = 2\n"
+                     sharpen_amount = 80\nsharpen_radius = 0.8\nsharpen_threshold = 2\n\
+                     shadows_amount = 50\n"
                 )),
                 "{text}"
             );
@@ -3040,6 +3110,7 @@ mod tests {
         let expected = format!(
             "companion_suffixes = dop, pp3, on1\nthumbnail_buttons = true\n\
              sharpen_amount = 80\nsharpen_radius = 0.8\nsharpen_threshold = 2\n\
+             shadows_amount = 50\n\
              external_program = Capture One | C:\\Program Files\\Capture One\\CaptureOne.exe\n\
              favourite = {}\n",
             full("Favourite").display()
