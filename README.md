@@ -27,6 +27,9 @@ Folder and crate names (`pw-*`) keep the old name for now.
 - **Metadata:** IPTC Core and Extension in XMP, and the older IIM, following the IPTC standards. A
   proprietary RAW file is never modified: its metadata goes into an XMP sidecar. DNG, JPEG and TIFF
   get the metadata inside the file, written safely (a backup and a check after every write).
+- **Search and filter:** a search box (Ctrl+F) over the file name and the IPTC text fields, and a
+  "Filter…" window with conditions on camera, lens, exposure, capture date, file type and IPTC
+  fields, together with the star and label filter.
 - **Metadata templates:** fill in and save templates as XMP files, load and save them from the
   metadata window, and apply them to the marked images from the right-click menu or to every
   image of an import; text fields can hold variables such as `{date}` and `{name}`.
@@ -45,8 +48,6 @@ Panasonic (RW2), Fujifilm (RAF) and DNG files.
 Not in RawStride yet, roughly in the order they are planned. The order can change, and there
 are no dates.
 
-- **Search and filter on text and metadata:** a search box (Ctrl+F), a filter window and saved
-  filters.
 - **Display adjustments for assessment:** temporary exposure, white balance, sharpening, channel
   view, clipping thresholds, the camera's crop frame and focus point. Nothing is written to the
   file.

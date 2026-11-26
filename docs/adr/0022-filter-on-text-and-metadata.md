@@ -2,7 +2,8 @@
 
 - Status: **accepted by the owner (2026-11-17):** every question answered, all proposals approved
   (§3). Nothing is built, installed or added as a dependency by this ADR. Each step in §4 becomes
-  its own task, with its own approval and commit.
+  its own task, with its own approval and commit. **Done 2026-11-26:** S1–S4 hand-checked by the
+  owner; S5 (saved filters) dropped by the owner (§2.6).
 - Date: 2026-11-17
 - Related:
   - ADR 0014 (the star and label filter, the rule that an image leaves the list when it stops
@@ -82,8 +83,12 @@
 
 ### 2.6 Saved filters
 
-- An extended filter can be saved under a name in `settings.txt` and chosen in View ▸ Filter
-  (S-Q11).
+- **Dropped by the owner, 2026-11-26** (before S5's questions were decided): a folder holds one
+  shoot or one day, so a saved filter is of little use in a folder tab; the search box and the
+  "Filter…" window cover a folder. Saved searches over many folders come as ADR 0030's smart
+  collections (ADR 0030 §3.7 and §7, "later", K-Q7), which can build on this ADR's filter model. Before
+  that, S-Q11 said: an extended filter can be saved under a name in `settings.txt` and chosen in
+  View ▸ Filter.
 - The active filter is not restored after a restart: the program starts with every image shown
   (ADR 0014 Q2).
 
@@ -101,7 +106,7 @@
 | S-Q8 | Changed values | RawStride's own writes update the values; an image that stops matching leaves the list (ADR 0014 point 2) |
 | S-Q9 | Combination | Everything AND; "Show All" clears everything; the filter visible, "Filter: {n} conditions" |
 | S-Q10 | Value lists | For Camera, Lens, Keywords, City, Country, with counts |
-| S-Q11 | Saved filters | Named, in `settings.txt`, chosen in View ▸ Filter; the active filter not restored at start |
+| S-Q11 | Saved filters | Named, in `settings.txt`, chosen in View ▸ Filter; the active filter not restored at start. **Saved filters dropped by the owner, 2026-11-26** (§2.6): saved searches come as ADR 0030's smart collections; the active filter is still not restored at start |
 | S-Q12 | Rejected images | Follow the star filter as today |
 | S-Q13 | Steps | S1–S5 as §4 |
 | S-Q14 | Not included | As §5 |
@@ -162,8 +167,9 @@ S3 was moved by the owner on 2026-11-26 to order 2d, right after ADR 0027 W5, wi
 
 ## 4. Steps
 
-Each step ends with `.\tools\check.ps1`; the owner's hand check comes after S3, after S4 (S4-Q14,
-owner 2026-11-26) and after S5.
+Each step ends with `.\tools\check.ps1`; the owner's hand check comes after S3 and after S4 (S4-Q14,
+owner 2026-11-26). S5 was dropped by the owner on 2026-11-26 (§2.6), so ADR 0022 is done with S4's
+hand check (2026-11-26).
 
 | Step | Content |
 |---|---|
@@ -171,7 +177,7 @@ owner 2026-11-26) and after S5.
 | **S2** | Reading: the IPTC values in the folder's batch call in `pw-metadata` (the request decided here), the Exif values in the tab, both kept per tab and updated by RawStride's own writes |
 | **S3** | The search box in the command bar and Ctrl+F; the status line while reading; texts and glossary |
 | **S4** | The "Filter…" window with its rows and value lists; "Filter: {n} conditions"; "Show All" |
-| **S5** | Saved filters in `settings.txt` and View ▸ Filter |
+| S5 | Dropped by the owner, 2026-11-26 (§2.6): saved filters in `settings.txt` and View ▸ Filter |
 
 ## 5. Not included
 
