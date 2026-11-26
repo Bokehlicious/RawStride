@@ -54,14 +54,14 @@ are no dates.
 - **All camera data:** every Exif and maker tag in the inspector.
 - **Correcting the capture time:** shift the capture time for one camera or several, for example
   when a camera's clock was wrong.
-- **Rename, copy and move** selected images, with their sidecars.
-- **Export:** JPEG and TIFF at a chosen size, with colour conversion and metadata.
 - **Editor profiles:** see which images have been edited in another program, and step between an
   original and its export.
 - **A catalog across folders:** search all indexed images, including folders on drives that are
   not connected.
 - **Positions and a map:** edit GPS coordinates, see images on a map, and match a GPX track to
   capture times.
+- **Rename, copy and move** selected images, with their sidecars.
+- **Export:** JPEG and TIFF at a chosen size, with colour conversion and metadata.
 - **Signed releases.**
 
 Ideas and wishes are welcome as [issues](https://github.com/Bokehlicious/RawStride/issues/new/choose).

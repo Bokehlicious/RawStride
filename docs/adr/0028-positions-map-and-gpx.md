@@ -296,8 +296,9 @@ nor a map and can be done on its own. L6 and L7 wait for ADR 0020. **Placed in t
 - **ADR 0017:** the §7.2 GPS row points here (2026-11-19); §2.3.1's "The GPS coordinates are
   read-only until the GPS ADR" points here (2026-11-21, on acceptance).
 - **ADR 0025:** an option to leave the position out of an export (L-Q5, approved 2026-11-21);
-  ADR 0025's steps (order 8) come before this ADR's, so the amendment is written with L1, when
-  the properties that hold a position are settled.
+  the amendment is written with L1, when the properties that hold a position are settled (ADR
+  0025's steps, order 8 when this was written, were moved after this ADR's by the owner on
+  2026-11-26, as order 12b).
 - **ADR 0022:** the batch reading of values possibly shared (L-Q11).
 - **New crate** `pw-map` (working name); new dependencies only with source C (an HTTP client, TLS,
   possibly a PNG decoder) and possibly B (SQLite for MBTiles), each approved by the owner and
