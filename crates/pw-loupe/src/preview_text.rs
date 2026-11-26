@@ -7,7 +7,7 @@
 //! marks of the preview's row of adjustment marks (ADR 0027 W2-Q5, T314; W3-Q6, T318).
 
 use pw_viewcore::{
-    AdjustState, ClippingState, Ev, ExposureBase, ExposureMode, ExposureState, FinePause,
+    AdjustState, Channel, ClippingState, Ev, ExposureBase, ExposureMode, ExposureState, FinePause,
     FineState, SharpenState, Sharpening, Zoom,
 };
 
@@ -215,9 +215,11 @@ pub struct ExposureKeys {
     pub camera: Option<KeyChord>,
 }
 
-/// The marks in row order (ADR 0027 §2.1): "Fine", "USM", the exposure, and "Shadows".
+/// The marks in row order (ADR 0027 §2.1): "Fine", "USM", exposure, "Shadows", and channel view.
 /// Off adjustments have no mark. Paused adjustments are dimmed. The shortcuts and values
 /// appear in the hover texts when available.
+// Each mark receives its own state, shortcut and any values needed for its hover text.
+#[allow(clippy::too_many_arguments)]
 pub fn adjustment_marks(
     fine: &FineState,
     fine_key: Option<KeyChord>,
@@ -226,12 +228,14 @@ pub fn adjustment_marks(
     values: Sharpening,
     (exposure, exposure_keys): (&ExposureState, ExposureKeys),
     (shadows, shadows_key, shadows_amount): (&AdjustState, Option<KeyChord>, u8),
+    (channel_state, channel, channel_key): (&AdjustState, Channel, Option<KeyChord>),
 ) -> Vec<AdjustmentMark> {
     let mut marks = Vec::new();
     marks.extend(fine_mark(fine, fine_key));
     marks.extend(sharpen_mark(sharpen, sharpen_key, values));
     marks.extend(exposure_mark(exposure, exposure_keys));
     marks.extend(shadows_mark(*shadows, shadows_key, shadows_amount));
+    marks.extend(channel_mark(*channel_state, channel, channel_key));
     marks
 }
 
@@ -564,6 +568,70 @@ fn shadows_mark(state: AdjustState, key: Option<KeyChord>, amount: u8) -> Option
     })
 }
 
+fn channel_mark(
+    state: AdjustState,
+    channel: Channel,
+    key: Option<KeyChord>,
+) -> Option<AdjustmentMark> {
+    let hover = match (state, channel, key) {
+        (AdjustState::Off, _, _) | (AdjustState::Shown, Channel::Color, _) => return None,
+        (AdjustState::Shown, Channel::Red, Some(chord)) => {
+            let key = key_text(chord);
+            format!("Channel view ({key}): the red channel as gray.")
+        }
+        (AdjustState::Shown, Channel::Red, None) => {
+            "Channel view: the red channel as gray.".to_owned()
+        }
+        (AdjustState::Shown, Channel::Green, Some(chord)) => {
+            let key = key_text(chord);
+            format!("Channel view ({key}): the green channel as gray.")
+        }
+        (AdjustState::Shown, Channel::Green, None) => {
+            "Channel view: the green channel as gray.".to_owned()
+        }
+        (AdjustState::Shown, Channel::Blue, Some(chord)) => {
+            let key = key_text(chord);
+            format!("Channel view ({key}): the blue channel as gray.")
+        }
+        (AdjustState::Shown, Channel::Blue, None) => {
+            "Channel view: the blue channel as gray.".to_owned()
+        }
+        (AdjustState::Shown, Channel::Luminance, Some(chord)) => {
+            let key = key_text(chord);
+            format!("Channel view ({key}): the luminance as gray.")
+        }
+        (AdjustState::Shown, Channel::Luminance, None) => {
+            "Channel view: the luminance as gray.".to_owned()
+        }
+        (AdjustState::Waiting | AdjustState::Paused, Channel::Color, Some(chord)) => {
+            let key = key_text(chord);
+            format!("Channel view ({key}): the color view is being made again.")
+        }
+        (AdjustState::Waiting | AdjustState::Paused, Channel::Color, None) => {
+            "Channel view: the color view is being made again.".to_owned()
+        }
+        (AdjustState::Waiting | AdjustState::Paused, _, Some(chord)) => {
+            let key = key_text(chord);
+            format!("Channel view ({key}): the view is being made again.")
+        }
+        (AdjustState::Waiting | AdjustState::Paused, _, None) => {
+            "Channel view: the view is being made again.".to_owned()
+        }
+    };
+    let text = match channel {
+        Channel::Color => "RGB",
+        Channel::Red => "R",
+        Channel::Green => "G",
+        Channel::Blue => "B",
+        Channel::Luminance => "Lum",
+    };
+    Some(AdjustmentMark {
+        text: text.to_owned(),
+        hover,
+        dimmed: false,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -577,6 +645,8 @@ mod tests {
     };
 
     const SHADOWS_OFF: (&AdjustState, Option<KeyChord>, u8) = (&AdjustState::Off, None, 50);
+    const CHANNEL_OFF: (&AdjustState, Channel, Option<KeyChord>) =
+        (&AdjustState::Off, Channel::Color, None);
 
     fn exposure_off() -> (&'static ExposureState, ExposureKeys) {
         (&EXPOSURE_OFF, ExposureKeys::default())
@@ -795,7 +865,8 @@ mod tests {
                     usm_off.1,
                     usm_off.2,
                     exposure_off(),
-                    SHADOWS_OFF
+                    SHADOWS_OFF,
+                    CHANNEL_OFF,
                 )
                 .is_empty()
             );
@@ -836,7 +907,8 @@ mod tests {
                         usm_off.1,
                         usm_off.2,
                         exposure_off(),
-                        SHADOWS_OFF
+                        SHADOWS_OFF,
+                        CHANNEL_OFF,
                     ),
                     vec![AdjustmentMark {
                         text: "Fine".to_owned(),
@@ -914,7 +986,8 @@ mod tests {
                         key,
                         values,
                         exposure_off(),
-                        SHADOWS_OFF
+                        SHADOWS_OFF,
+                        CHANNEL_OFF,
                     )
                     .is_empty()
                 );
@@ -966,7 +1039,8 @@ mod tests {
                         key,
                         values,
                         exposure_off(),
-                        SHADOWS_OFF
+                        SHADOWS_OFF,
+                        CHANNEL_OFF,
                     ),
                     vec![usm(dimmed, hover)],
                     "{state:?} {key:?} {values:?}"
@@ -982,6 +1056,7 @@ mod tests {
             Sharpening::DEFAULT,
             exposure_off(),
             SHADOWS_OFF,
+            CHANNEL_OFF,
         );
         assert_eq!(
             marks
@@ -1008,7 +1083,8 @@ mod tests {
                         key,
                         values,
                         exposure_off(),
-                        SHADOWS_OFF
+                        SHADOWS_OFF,
+                        CHANNEL_OFF,
                     )
                     .first()
                     .map(|mark| mark.hover.clone()),
@@ -1041,6 +1117,7 @@ mod tests {
             Sharpening::DEFAULT,
             (state, keys),
             SHADOWS_OFF,
+            CHANNEL_OFF,
         )
     }
 
@@ -1379,6 +1456,7 @@ mod tests {
                     Sharpening::DEFAULT,
                     (&exposure, default_exposure_keys()),
                     (&state, key, 75),
+                    CHANNEL_OFF,
                 );
                 let (first, shadows) = marks.split_at(3);
                 assert_eq!(
@@ -1394,6 +1472,109 @@ mod tests {
                     hover: if key.is_some() { with_key } else { without_key }.to_owned(),
                 });
                 assert_eq!(shadows, expected.as_slice());
+            }
+        }
+    }
+
+    #[test]
+    fn the_channel_mark_follows_shadows_and_reports_each_state() {
+        use crate::keymap::{KeyAction, KeyMap};
+        let n = KeyMap::default().first_key(KeyAction::NextChannel).unwrap();
+        let exposure = ExposureState {
+            steps: 1,
+            total: Ev::from_thirds(1),
+            view: AdjustState::Shown,
+            ..EXPOSURE_OFF
+        };
+        let marks_for = |state, channel, key| {
+            adjustment_marks(
+                &FineState::Shown,
+                None,
+                &SharpenState::Shown,
+                None,
+                Sharpening::DEFAULT,
+                (&exposure, default_exposure_keys()),
+                (&AdjustState::Shown, None, 75),
+                (&state, channel, key),
+            )
+        };
+        for key in [Some(n), None] {
+            let first = marks_for(AdjustState::Off, Channel::Red, key);
+            assert_eq!(
+                first
+                    .iter()
+                    .map(|mark| mark.text.as_str())
+                    .collect::<Vec<_>>(),
+                ["Fine", "USM", "+⅓ EV", "Shadows"]
+            );
+            assert_eq!(marks_for(AdjustState::Shown, Channel::Color, key), first);
+
+            for (channel, text, shown_with_key, shown_without_key) in [
+                (
+                    Channel::Red,
+                    "R",
+                    "Channel view (N): the red channel as gray.",
+                    "Channel view: the red channel as gray.",
+                ),
+                (
+                    Channel::Green,
+                    "G",
+                    "Channel view (N): the green channel as gray.",
+                    "Channel view: the green channel as gray.",
+                ),
+                (
+                    Channel::Blue,
+                    "B",
+                    "Channel view (N): the blue channel as gray.",
+                    "Channel view: the blue channel as gray.",
+                ),
+                (
+                    Channel::Luminance,
+                    "Lum",
+                    "Channel view (N): the luminance as gray.",
+                    "Channel view: the luminance as gray.",
+                ),
+            ] {
+                for (state, with_key, without_key) in [
+                    (AdjustState::Shown, shown_with_key, shown_without_key),
+                    (
+                        AdjustState::Waiting,
+                        "Channel view (N): the view is being made again.",
+                        "Channel view: the view is being made again.",
+                    ),
+                    (
+                        AdjustState::Paused,
+                        "Channel view (N): the view is being made again.",
+                        "Channel view: the view is being made again.",
+                    ),
+                ] {
+                    let mut expected = first.clone();
+                    expected.push(AdjustmentMark {
+                        text: text.to_owned(),
+                        hover: if key.is_some() { with_key } else { without_key }.to_owned(),
+                        dimmed: false,
+                    });
+                    assert_eq!(
+                        marks_for(state, channel, key),
+                        expected,
+                        "{state:?} {channel:?}"
+                    );
+                }
+            }
+
+            let mut expected = first;
+            expected.push(AdjustmentMark {
+                text: "RGB".to_owned(),
+                hover: if key.is_some() {
+                    "Channel view (N): the color view is being made again."
+                } else {
+                    "Channel view: the color view is being made again."
+                }
+                .to_owned(),
+                dimmed: false,
+            });
+            for state in [AdjustState::Waiting, AdjustState::Paused] {
+                assert_eq!(marks_for(state, Channel::Color, key), expected);
             }
         }
     }

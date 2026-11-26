@@ -107,6 +107,8 @@ pub enum KeyAction {
     ResetExposure,
     AutoExposure,
     CameraBrightness,
+    NextChannel,
+    PreviousChannel,
     ResetAdjustments,
     Compare,
     HoldImage,
@@ -169,7 +171,7 @@ const fn with_alt(key: Key) -> Option<KeyChord> {
 
 impl KeyAction {
     /// Every action, in the order the Settings page lists them (T281) and `keys.txt` writes them.
-    pub const ALL: [KeyAction; 55] = [
+    pub const ALL: [KeyAction; 57] = [
         Self::OpenFolder,
         Self::ReloadFolder,
         Self::Import,
@@ -215,6 +217,8 @@ impl KeyAction {
         Self::ResetExposure,
         Self::AutoExposure,
         Self::CameraBrightness,
+        Self::NextChannel,
+        Self::PreviousChannel,
         Self::ResetAdjustments,
         Self::Compare,
         Self::HoldImage,
@@ -280,6 +284,8 @@ impl KeyAction {
             Self::ResetExposure => "reset_exposure",
             Self::AutoExposure => "auto_exposure",
             Self::CameraBrightness => "camera_brightness",
+            Self::NextChannel => "next_channel",
+            Self::PreviousChannel => "previous_channel",
             Self::ResetAdjustments => "reset_adjustments",
             Self::Compare => "compare",
             Self::HoldImage => "hold_image",
@@ -343,6 +349,8 @@ impl KeyAction {
             | Self::ResetExposure
             | Self::AutoExposure
             | Self::CameraBrightness
+            | Self::NextChannel
+            | Self::PreviousChannel
             | Self::ResetAdjustments
             | Self::Compare
             | Self::HoldImage
@@ -378,6 +386,8 @@ impl KeyAction {
             | Self::ResetExposure
             | Self::AutoExposure
             | Self::CameraBrightness
+            | Self::NextChannel
+            | Self::PreviousChannel
             | Self::ResetAdjustments
             | Self::Compare
             | Self::HoldImage
@@ -438,6 +448,8 @@ impl KeyAction {
             Self::ResetExposure => [with_shift(Key::Backspace), None],
             Self::AutoExposure => [plain(Key::B), None],
             Self::CameraBrightness => [with_shift(Key::B), None],
+            Self::NextChannel => [plain(Key::N), None],
+            Self::PreviousChannel => [with_shift(Key::N), None],
             Self::ResetAdjustments => [plain(Key::Backspace), None],
             Self::Compare => [plain(Key::C), None],
             Self::HoldImage => [plain(Key::K), None],
@@ -502,6 +514,8 @@ impl KeyAction {
             Command::ResetExposure => Self::ResetExposure,
             Command::AutoExposure => Self::AutoExposure,
             Command::CameraBrightness => Self::CameraBrightness,
+            Command::NextChannel => Self::NextChannel,
+            Command::PreviousChannel => Self::PreviousChannel,
             Command::ResetAdjustments => Self::ResetAdjustments,
             Command::Compare => Self::Compare,
             Command::HoldImage => Self::HoldImage,
@@ -563,6 +577,8 @@ impl KeyAction {
             Self::ResetExposure => Command::ResetExposure,
             Self::AutoExposure => Command::AutoExposure,
             Self::CameraBrightness => Command::CameraBrightness,
+            Self::NextChannel => Command::NextChannel,
+            Self::PreviousChannel => Command::PreviousChannel,
             Self::ResetAdjustments => Command::ResetAdjustments,
             Self::Compare => Command::Compare,
             Self::HoldImage => Command::HoldImage,
@@ -1227,6 +1243,8 @@ mod tests {
                 PreviewKey::ResetExposure => Action(A::ResetExposure),
                 PreviewKey::AutoExposure => Action(A::AutoExposure),
                 PreviewKey::CameraBrightness => Action(A::CameraBrightness),
+                PreviewKey::NextChannel => Action(A::NextChannel),
+                PreviewKey::PreviousChannel => Action(A::PreviousChannel),
                 PreviewKey::ResetAdjustments => Action(A::ResetAdjustments),
                 PreviewKey::Compare => Action(A::Compare),
                 PreviewKey::HoldImage => Action(A::HoldImage),
@@ -1968,11 +1986,11 @@ mod tests {
             .position(|other| *other == KeyAction::FineDetails)
             .unwrap();
         assert_eq!(KeyAction::ALL[place + 1], KeyAction::Sharpening);
-        assert_eq!(KeyAction::ALL[place + 8], KeyAction::ResetAdjustments);
+        assert_eq!(KeyAction::ALL[place + 10], KeyAction::ResetAdjustments);
     }
 
     #[test]
-    fn exposure_and_shadows_have_unique_default_keys_and_follow_sharpening() {
+    fn exposure_shadows_and_channel_have_unique_default_keys_and_follow_sharpening() {
         let map = KeyMap::default();
         let actions = [
             (
@@ -2011,6 +2029,18 @@ mod tests {
                 with_shift(Key::B).unwrap(),
                 Command::CameraBrightness,
             ),
+            (
+                KeyAction::NextChannel,
+                "next_channel",
+                plain(Key::N).unwrap(),
+                Command::NextChannel,
+            ),
+            (
+                KeyAction::PreviousChannel,
+                "previous_channel",
+                with_shift(Key::N).unwrap(),
+                Command::PreviousChannel,
+            ),
         ];
         let place = KeyAction::ALL
             .iter()
@@ -2037,6 +2067,19 @@ mod tests {
         }
         for key in [Key::ArrowUp, Key::ArrowDown] {
             assert_eq!(fixed_in_preview(with_ctrl(key).unwrap()), None);
+        }
+        for chord in [plain(Key::N).unwrap(), with_shift(Key::N).unwrap()] {
+            assert_eq!(fixed_in_preview(chord), None);
+        }
+        use pw_viewcore::Channel;
+        for channel in [
+            Channel::Color,
+            Channel::Red,
+            Channel::Green,
+            Channel::Blue,
+            Channel::Luminance,
+        ] {
+            assert_eq!(KeyAction::of_command(Command::Channel(channel)), None);
         }
     }
 }

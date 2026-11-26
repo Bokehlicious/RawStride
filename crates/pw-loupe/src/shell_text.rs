@@ -11,6 +11,7 @@ use egui::Key;
 use pw_metadata::iim::Fallback;
 use pw_metadata::journal::Recovered;
 use pw_metadata::{MIN_EXIFTOOL_VERSION, ToolVersion};
+use pw_viewcore::Channel;
 
 use crate::external_text::{open_in_another_text, program_number_text};
 use crate::keymap::{KeyAction, KeyGroup, KeyRefusal};
@@ -578,6 +579,7 @@ pub fn submenu_text(submenu: SubmenuKind) -> &'static str {
         SubmenuKind::Label => "Label",
         SubmenuKind::Theme => "Theme",
         SubmenuKind::Exposure => "Exposure",
+        SubmenuKind::Channel => "Channel",
     }
 }
 
@@ -639,6 +641,16 @@ pub fn command_text(command: Command) -> String {
         Command::ResetExposure => "Reset Exposure".to_owned(),
         Command::AutoExposure => "Auto Exposure".to_owned(),
         Command::CameraBrightness => "Camera Brightness".to_owned(),
+        Command::NextChannel => "Next Channel".to_owned(),
+        Command::PreviousChannel => "Previous Channel".to_owned(),
+        Command::Channel(channel) => match channel {
+            Channel::Color => "Color",
+            Channel::Red => "Red",
+            Channel::Green => "Green",
+            Channel::Blue => "Blue",
+            Channel::Luminance => "Luminance",
+        }
+        .to_owned(),
         Command::ResetAdjustments => "Reset Adjustments".to_owned(),
         Command::Compare => "Compare".to_owned(),
         Command::HoldImage => "Hold Current Image".to_owned(),
@@ -759,6 +771,7 @@ mod tests {
         assert_eq!(submenu_text(SubmenuKind::Label), "Label");
         assert_eq!(submenu_text(SubmenuKind::Theme), "Theme");
         assert_eq!(submenu_text(SubmenuKind::Exposure), "Exposure");
+        assert_eq!(submenu_text(SubmenuKind::Channel), "Channel");
         assert_eq!(theme_text(Theme::Dark), "Dark");
         assert_eq!(theme_text(Theme::Light), "Light");
     }
@@ -830,6 +843,13 @@ mod tests {
                 "Reset Exposure",
                 "Auto Exposure",
                 "Camera Brightness",
+                "Next Channel",
+                "Previous Channel",
+                "Color",
+                "Red",
+                "Green",
+                "Blue",
+                "Luminance",
                 "Reset Adjustments",
                 "Compare",
                 "Hold Current Image",
@@ -907,6 +927,13 @@ mod tests {
             Some("Shift+Backspace"),
             Some("B"),
             Some("Shift+B"),
+            Some("N"),
+            Some("Shift+N"),
+            None,
+            None,
+            None,
+            None,
+            None,
             Some("Backspace"),
             Some("C"),
             Some("K"),

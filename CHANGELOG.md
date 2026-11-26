@@ -17,6 +17,9 @@ Downloads are on the [Releases page](https://github.com/Bokehlicious/RawStride/r
   is one of …"; an image is shown when it meets every condition. For "is one of", the window
   lists the folder's own values with the number of images for each, read while it is open. The
   button shows how many conditions are on, and View ▸ Filter ▸ Show All removes them too.
+- A channel view in the preview: View ▸ Channel, or N and Shift+N, shows the red, green or blue
+  channel, or the luminance, as gray, in RAW and JPEG mode and on both sides of the compare. A
+  mark ("R", "G", "B" or "Lum") shows it; Reset Adjustments (Backspace) returns to color.
 
 ## [0.7.0] - 2026-11-26
 

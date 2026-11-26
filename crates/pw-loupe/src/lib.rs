@@ -526,6 +526,10 @@ pub enum PreviewKey {
     AutoExposure,
     /// `Shift+B`: the camera's brightness on ↔ off (W5-Q8, T335).
     CameraBrightness,
+    /// The next channel in the preview (N, ADR 0027 W4-Q5).
+    NextChannel,
+    /// The previous channel in the preview (Shift+N, ADR 0027 W4-Q5).
+    PreviousChannel,
     /// `Backspace`: every adjustment of the preview turned off (ADR 0027 A-Q3, W3-Q8, T318).
     ResetAdjustments,
     /// `C`: the compare open ↔ closed (ADR 0017 §2.2, U6-Q4, U6-Q11, T153).
@@ -570,6 +574,8 @@ pub fn preview_key_action(
         (K::Backspace, false, true, false) => Some(PreviewKey::ResetExposure),
         (K::B, false, false, false) => Some(PreviewKey::AutoExposure),
         (K::B, false, true, false) => Some(PreviewKey::CameraBrightness),
+        (K::N, false, false, false) => Some(PreviewKey::NextChannel),
+        (K::N, false, true, false) => Some(PreviewKey::PreviousChannel),
         (K::Backspace, false, false, false) => Some(PreviewKey::ResetAdjustments),
         // The compare's keys (T153); K and Shift+K are told apart as J and Shift+J.
         (K::C, false, false, false) => Some(PreviewKey::Compare),
@@ -1249,6 +1255,8 @@ mod tests {
                     Some(PreviewKey::ResetExposure) => return Some(Command::ResetExposure),
                     Some(PreviewKey::AutoExposure) => return Some(Command::AutoExposure),
                     Some(PreviewKey::CameraBrightness) => return Some(Command::CameraBrightness),
+                    Some(PreviewKey::NextChannel) => return Some(Command::NextChannel),
+                    Some(PreviewKey::PreviousChannel) => return Some(Command::PreviousChannel),
                     Some(PreviewKey::ResetAdjustments) => {
                         return Some(Command::ResetAdjustments);
                     }
@@ -1936,7 +1944,7 @@ mod tests {
     }
 
     #[test]
-    fn exposure_and_shadows_require_the_exact_preview_chords() {
+    fn exposure_shadows_and_channel_require_the_exact_preview_chords() {
         use egui::Key as K;
         for (key, ctrl, shift, alt, preview, command) in [
             (
@@ -1987,6 +1995,25 @@ mod tests {
                 Some(PreviewKey::CameraBrightness),
                 Some(Command::CameraBrightness),
             ),
+            (
+                K::N,
+                false,
+                false,
+                false,
+                Some(PreviewKey::NextChannel),
+                Some(Command::NextChannel),
+            ),
+            (
+                K::N,
+                false,
+                true,
+                false,
+                Some(PreviewKey::PreviousChannel),
+                Some(Command::PreviousChannel),
+            ),
+            (K::N, true, false, false, None, None),
+            (K::N, false, false, true, None, None),
+            (K::N, true, true, false, None, None),
             (K::ArrowUp, true, false, true, None, None),
             (K::ArrowUp, true, true, false, None, None),
             (K::B, false, false, true, None, None),

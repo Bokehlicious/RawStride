@@ -160,8 +160,8 @@ use pw_render::{Textures, view_px};
 use pw_thumbcache::{ThumbWorker, ThumbnailRequest};
 use pw_viewcore::native::NativeBackend;
 use pw_viewcore::{
-    ClippingState, Config, ExposureMode, FocusState, Frame, ImageStatistics, Sharpening, Source,
-    Status, ViewCore, Zoom, shadows,
+    Channel, ClippingState, Config, ExposureMode, FocusState, Frame, ImageStatistics, Sharpening,
+    Source, Status, ViewCore, Zoom, shadows,
 };
 
 mod inspector;
@@ -1359,7 +1359,7 @@ struct CompareOpen {
     last_held_path: Option<PathBuf>,
 }
 
-/// Session adjustments shared by the current and held previews (ADR 0027 W5).
+/// Session adjustments shared by the current and held previews (ADR 0027 W4 and W5).
 #[derive(Default)]
 struct PreviewExposure {
     /// The exposure's mode (B, Shift+B; A-Q12: one at a time), off at start unless the setting
@@ -1367,6 +1367,8 @@ struct PreviewExposure {
     exposure_mode: ExposureMode,
     /// The shadows are on (O), off at start, not saved; the amount is the settings'.
     shadows: bool,
+    /// The selected channel (N, Shift+N), full color at start and kept for the session.
+    channel: Channel,
     /// The preview was shown on the frame before, so leaving it resets the steps (A-Q2).
     was_in_preview: bool,
 }
@@ -1409,9 +1411,32 @@ impl PreviewExposure {
         }
     }
 
+    fn step_channel(&mut self, forward: bool, repeat: bool) {
+        if !repeat {
+            self.channel = if forward {
+                self.channel.next()
+            } else {
+                self.channel.previous()
+            };
+        }
+    }
+
+    fn set_channel(&mut self, channel: Channel) {
+        self.channel = channel;
+    }
+
+    fn channel_checked(&self, channel: Channel) -> bool {
+        self.channel == channel
+    }
+
+    fn channel_on(&self) -> bool {
+        !self.channel_checked(Channel::Color)
+    }
+
     fn reset(&mut self, cores: [&ViewCore<NativeBackend>; 2]) {
         self.exposure_mode = ExposureMode::Off;
         self.shadows = false;
+        self.channel = Channel::Color;
         for core in cores {
             core.reset_exposure_steps();
         }
@@ -1438,6 +1463,11 @@ impl PreviewExposure {
                 ExposureMode::Off
             });
             core.set_shadows((visible && self.shadows).then_some(shadows_amount));
+            core.set_channel(if visible {
+                self.channel
+            } else {
+                Channel::Color
+            });
         }
     }
 }
@@ -6548,6 +6578,8 @@ impl Loupe {
             | A::ResetExposure
             | A::AutoExposure
             | A::CameraBrightness
+            | A::NextChannel
+            | A::PreviousChannel
             | A::ResetAdjustments
             | A::Compare
             | A::HoldImage
@@ -6572,6 +6604,8 @@ impl Loupe {
                         A::CameraBrightness => {
                             self.exposure.toggle_mode(ExposureMode::Camera, repeat)
                         }
+                        A::NextChannel => self.exposure.step_channel(true, repeat),
+                        A::PreviousChannel => self.exposure.step_channel(false, repeat),
                         A::ResetAdjustments => self.reset_adjustments(),
                         A::Compare => self.toggle_compare(),
                         A::HoldImage => self.hold_current_image(),
@@ -6861,9 +6895,9 @@ impl Loupe {
         self.sharpening = !self.sharpening;
     }
 
-    /// `Backspace` and View ▸ Reset Adjustments: every adjustment of the preview off (ADR 0027
-    /// A-Q3, W3-Q8, T318); the view cores follow on the next frame through the `wish_`
-    /// functions. It changes no setting. W6 adds its adjustments here and in
+    /// `Backspace` and View ▸ Reset Adjustments: turn off the preview's adjustments and return
+    /// the channel view to Color (ADR 0027 A-Q3, W3-Q8, W4-Q5). The view cores follow through
+    /// the `wish_` functions. It changes no setting. W6 adds its adjustments here and in
     /// [`Self::any_adjustment_on`].
     fn reset_adjustments(&mut self) {
         self.fine_details = false;
@@ -6877,6 +6911,7 @@ impl Loupe {
             || self.sharpening
             || self.exposure.exposure_mode != ExposureMode::Off
             || self.exposure.shadows
+            || self.exposure.channel_on()
             || self.last_exposure_steps != 0
     }
 
@@ -8928,6 +8963,7 @@ impl Loupe {
             Command::Shadows => Some(self.exposure.shadows),
             Command::AutoExposure => Some(self.exposure.exposure_mode == ExposureMode::Auto),
             Command::CameraBrightness => Some(self.exposure.exposure_mode == ExposureMode::Camera),
+            Command::Channel(channel) => Some(self.exposure.channel_checked(channel)),
             Command::ResetAdjustments => None,
             Command::MoveToSubfolders => Some(shell.move_to_subfolders),
             Command::AboveBelow => Some(shell.compare_above_below),
@@ -9018,6 +9054,9 @@ impl Loupe {
             Command::ResetExposure => self.reset_exposure_steps(),
             Command::AutoExposure => self.exposure.toggle_mode(ExposureMode::Auto, false),
             Command::CameraBrightness => self.exposure.toggle_mode(ExposureMode::Camera, false),
+            Command::NextChannel => self.exposure.step_channel(true, false),
+            Command::PreviousChannel => self.exposure.step_channel(false, false),
+            Command::Channel(channel) => self.exposure.set_channel(channel),
             Command::ResetAdjustments => self.reset_adjustments(),
             Command::Compare => self.toggle_compare(),
             Command::HoldImage => self.hold_current_image(),
@@ -10337,6 +10376,8 @@ impl Loupe {
             },
             shadows_key: self.key_map.first_key(KeyAction::Shadows),
             shadows_amount: self.settings.shell.shadows_amount,
+            channel: self.exposure.channel,
+            channel_key: self.key_map.first_key(KeyAction::NextChannel),
         };
         // While comparing, the image area is two halves (U6-Q5, T153): the held image left or on
         // top from the second view core, the current image right or below from the first.
@@ -10565,6 +10606,10 @@ struct ImageAreaShown<'a> {
     shadows_key: Option<KeyChord>,
     /// The shadows' saved amount, for the hover text of its mark (T335).
     shadows_amount: u8,
+    /// The selected channel, for the channel view's mark (T347).
+    channel: Channel,
+    /// The key of Next Channel, for the hover text of the channel view's mark (T347).
+    channel_key: Option<KeyChord>,
 }
 
 /// The pointer's place in the image area in view pixels, which a zoom goes around; `None` (the
@@ -10697,6 +10742,7 @@ fn draw_image_area(
             shown.sharpening,
             (&frame.exposure, shown.exposure_keys),
             (&frame.shadows, shown.shadows_key, shown.shadows_amount),
+            (&frame.channel, shown.channel, shown.channel_key),
         );
         paint_adjustment_marks(&painter, rect, &marks, &response);
     }
@@ -15038,7 +15084,9 @@ mod tests {
     mod preview_exposure {
         use super::super::{PreviewExposure, exposure_buttons};
         use pw_loupe::KeyChord;
-        use pw_viewcore::{Config, ExposureMode, ViewCore, native::NativeBackend};
+        use pw_viewcore::{
+            AdjustState, Channel, Config, ExposureMode, ViewCore, native::NativeBackend,
+        };
         use std::path::PathBuf;
 
         #[test]
@@ -15148,6 +15196,80 @@ mod tests {
             state.toggle_shadows(false);
             state.toggle_shadows(true);
             assert!(state.shadows);
+        }
+
+        #[test]
+        fn channel_steps_in_both_directions_and_ignores_repeats() {
+            let mut state = PreviewExposure::default();
+            assert_eq!(state.channel, Channel::Color);
+            state.step_channel(false, false);
+            assert_eq!(state.channel, Channel::Luminance);
+            state.step_channel(true, false);
+            assert_eq!(state.channel, Channel::Color);
+            for channel in [Channel::Red, Channel::Green, Channel::Blue] {
+                state.step_channel(true, false);
+                assert_eq!(state.channel, channel);
+                state.step_channel(true, true);
+                assert_eq!(state.channel, channel);
+            }
+        }
+
+        #[test]
+        fn selecting_and_resetting_a_channel_updates_the_tick_and_adjustment_state() {
+            let [current, held] = cores_with_manual_steps();
+            let mut state = PreviewExposure::default();
+            assert!(!state.channel_on());
+            state.set_channel(Channel::Blue);
+            assert_eq!(state.channel, Channel::Blue);
+            assert!(state.channel_on());
+            for channel in [
+                Channel::Color,
+                Channel::Red,
+                Channel::Green,
+                Channel::Blue,
+                Channel::Luminance,
+            ] {
+                assert_eq!(state.channel_checked(channel), channel == Channel::Blue);
+            }
+            state.reset([&current, &held]);
+            assert_eq!(state.channel, Channel::Color);
+            assert!(state.channel_checked(Channel::Color));
+            assert!(!state.channel_on());
+        }
+
+        #[test]
+        fn only_visible_preview_cores_receive_the_channel_view() {
+            mod jpeg_fixture {
+                include!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/../pw-thumbcache/src/jpeg_fixture.rs"
+                ));
+            }
+            let file = std::env::temp_dir()
+                .join(format!("pw-loupe-channel-view-{}.jpg", std::process::id()));
+            std::fs::write(&file, jpeg_fixture::SMALL).unwrap();
+            let [current, held] = cores_with_manual_steps();
+            // A failed decode would mask the channel state. Use the JPEG fixture and leave
+            // its views unaccepted so that a requested channel stays in Waiting.
+            for core in [&current, &held] {
+                core.set_files(vec![file.clone()], 0);
+            }
+            let mut state = PreviewExposure::default();
+            state.set_channel(Channel::Blue);
+            for (in_preview, comparing, current_state, held_state) in [
+                (true, false, AdjustState::Waiting, AdjustState::Off),
+                (true, true, AdjustState::Waiting, AdjustState::Waiting),
+                (true, false, AdjustState::Waiting, AdjustState::Off),
+                (false, true, AdjustState::Off, AdjustState::Off),
+            ] {
+                state.wish(in_preview, comparing, 50, [&current, &held]);
+                assert_eq!(current.frame([1, 1]).channel, current_state);
+                assert_eq!(held.frame([1, 1]).channel, held_state);
+            }
+            assert_eq!(state.channel, Channel::Blue);
+            drop((current, held));
+            // a scanner may hold the new file for a moment; a leftover in %TEMP% is harmless
+            let _ = std::fs::remove_file(file);
         }
 
         #[test]

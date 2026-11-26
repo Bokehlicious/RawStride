@@ -615,6 +615,14 @@ only if it is seen in use.)
 - *A TIFF's channel is the display's*: a TIFF is converted to the display's profile when it is
   opened (W1-Q5), so its red, green and blue are the display's channels, not the file's; for a
   RAW or JPEG file the channel is taken before the conversion.
+- *A `keys.txt` line on N or Shift+N* (T347): a `keys.txt` that binds N or Shift+N to another
+  action acting in the preview loses that line on loading (the key map's rule, as for O, B and U).
+- *The histogram, the clipping marks and the focus marking* (§2.1) show the image's data, not
+  the channel.
+- *Each change of channel makes the views again* (W4-Q4): the shown image's and the prefetched
+  neighbours' views are rendered again in the new channel.
+- *A view that fails to render with a channel* shows today's error line, and the mark stays
+  "being made again", as the shadows' does (T347).
 
 ## Filter on text and metadata (ADR 0022)
 

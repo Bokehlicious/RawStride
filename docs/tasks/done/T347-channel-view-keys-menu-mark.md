@@ -1,4 +1,4 @@
-# T347. ADR 0027 W4: the keys, the menu and the mark of the channel view — Open
+# T347. ADR 0027 W4: the keys, the menu and the mark of the channel view — Done
 
 - **Why:** ADR 0027 §2.1, §3.6 and W4-Q5, W4-Q6 (answered by the owner 2026-11-26, ADR 0027
   §4.5). T346 gave the view core the channel (`pw_viewcore::Channel` with `next` and
@@ -196,3 +196,6 @@
 |---|---|---|
 | 2026-11-26 | Blocked | Written; waits for T346. Cold read (fresh agent): the named files suffice; added the enum `KeyAction` beside `ALL`, `today()`, the two menu-order tests of `shell_text.rs`, `fine + 6`, `run_command`'s three arms, `acts_in`; the state moved into `PreviewExposure` so the tests need no `Loupe`; the repeat handled in `step_channel`; clippy's argument limit (an allow with a reason); no separator in the submenu; `Shown` with Color and `Off` with a channel give no mark; the mark texts in `preview_text.rs`; "Color" and "gray" by glossary G5. Chain review (T346–T347, fresh agent, noted in T346's log): the failed render's mark and the re-made neighbours added to the accepted list; where `latency.ps1`'s result is written |
 | 2026-11-26 | Open | T346 done; set Open |
+| 2026-11-26 | Ready for review | Added the channel shortcuts, View submenu, session selection and reset, and marks on both sides of the compare. Added five tests and extended the shortcut and menu tests. The owner's hand check and latency measurement follow review. |
+| 2026-11-26 | Ready for review | Review: nothing to fix. Independent review (fresh agent): nothing to fix; three nits, two taken by the reviewer: the JPEG test's temporary file removed without `unwrap` (a scanner may hold it), `ImageAreaShown`'s channel fields after `shadows_amount` with a doc comment each. The glossary's "lasts for the session" kept (means "never saved"). |
+| 2026-11-26 | Done | Approved by the owner; `.\tools\check.ps1` all OK. The accepted points written in `known-limits.md` ("The channel view (ADR 0027 W4)"), one `CHANGELOG.md` line under Added, W4's row in `plans/` awaiting the owner's hand check and `latency.ps1` (its result goes in W4's row). |

@@ -4,6 +4,7 @@
 //! `shell_text.rs` (rule 13).
 
 use egui::{Color32, Key};
+use pw_viewcore::Channel;
 
 use crate::keymap::{KeyAction, KeyMap, KeyRefusal};
 use crate::settings::{ShellSettings, WindowRect};
@@ -810,6 +811,12 @@ pub enum Command {
     /// The camera's brightness on ↔ off (View ▸ Exposure ▸ Camera Brightness, Shift+B; W5-Q5).
     /// Not a setting.
     CameraBrightness,
+    /// Step forward through the channel views (View ▸ Channel ▸ Next Channel, N; ADR 0027 W4).
+    NextChannel,
+    /// Step backward through the channel views (View ▸ Channel ▸ Previous Channel, Shift+N).
+    PreviousChannel,
+    /// Select a channel view for the session (View ▸ Channel; ADR 0027 W4).
+    Channel(Channel),
     /// Every adjustment of the preview turned off (View ▸ Reset Adjustments, Backspace; ADR 0027
     /// A-Q3, W3-Q8, T318). It changes no setting.
     ResetAdjustments,
@@ -887,6 +894,9 @@ impl Command {
             | Self::ResetExposure
             | Self::AutoExposure
             | Self::CameraBrightness
+            | Self::NextChannel
+            | Self::PreviousChannel
+            | Self::Channel(_)
             | Self::ResetAdjustments
             | Self::Compare
             | Self::HoldImage
@@ -928,6 +938,7 @@ pub enum SubmenuKind {
     Label,
     Theme,
     Exposure,
+    Channel,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1034,6 +1045,37 @@ const EXPOSURE_ITEMS: &[MenuItem] = &[
     },
 ];
 
+const CHANNEL_ITEMS: &[MenuItem] = &[
+    MenuItem {
+        command: Command::NextChannel,
+        key: plain(Key::N),
+    },
+    MenuItem {
+        command: Command::PreviousChannel,
+        key: shift(Key::N),
+    },
+    MenuItem {
+        command: Command::Channel(Channel::Color),
+        key: None,
+    },
+    MenuItem {
+        command: Command::Channel(Channel::Red),
+        key: None,
+    },
+    MenuItem {
+        command: Command::Channel(Channel::Green),
+        key: None,
+    },
+    MenuItem {
+        command: Command::Channel(Channel::Blue),
+        key: None,
+    },
+    MenuItem {
+        command: Command::Channel(Channel::Luminance),
+        key: None,
+    },
+];
+
 const THEME_ITEMS: &[MenuItem] = &[
     MenuItem {
         command: Command::Theme(Theme::Dark),
@@ -1118,6 +1160,7 @@ pub const MENUS: &[Menu] = &[
             item(Command::Sharpening, plain(Key::U)),
             item(Command::Shadows, plain(Key::O)),
             MenuEntry::Submenu(SubmenuKind::Exposure, EXPOSURE_ITEMS),
+            MenuEntry::Submenu(SubmenuKind::Channel, CHANNEL_ITEMS),
             item(Command::ResetAdjustments, plain(Key::Backspace)),
             item(Command::Compare, plain(Key::C)),
             item(Command::HoldImage, plain(Key::K)),
@@ -2157,7 +2200,7 @@ mod tests {
         }
         // In the View menu, right after the last zoom item, with Show Fine Details (D) right
         // after Show Focus Marking (T314), then Show Sharpening (U), Show Shadows (O),
-        // Exposure and Reset Adjustments (Backspace), then the compare's five (Lock Zoom
+        // Exposure, Channel and Reset Adjustments (Backspace), then the compare's five (Lock Zoom
         // and Position after Above and Below, T154), before the next separator.
         let Some(view) = MENUS.iter().find(|menu| menu.kind == MenuKind::View) else {
             panic!("there is a View menu");
@@ -2170,7 +2213,7 @@ mod tests {
             panic!("the View menu has Zoom at Pointer");
         };
         assert_eq!(
-            view.entries.get(anchor + 1..anchor + 15),
+            view.entries.get(anchor + 1..anchor + 16),
             Some(
                 &[
                     item(Command::ClipHighlights, Some(j)),
@@ -2180,6 +2223,7 @@ mod tests {
                     item(Command::Sharpening, Some(KeyChord { key: Key::U, ..j })),
                     item(Command::Shadows, plain(Key::O)),
                     MenuEntry::Submenu(SubmenuKind::Exposure, EXPOSURE_ITEMS),
+                    MenuEntry::Submenu(SubmenuKind::Channel, CHANNEL_ITEMS),
                     item(
                         Command::ResetAdjustments,
                         Some(KeyChord {
@@ -2321,12 +2365,13 @@ mod tests {
             panic!("the View menu has Show Fine Details");
         };
         assert_eq!(
-            view.entries.get(fine + 1..fine + 5),
+            view.entries.get(fine + 1..fine + 6),
             Some(
                 &[
                     item(Command::Sharpening, Some(u)),
                     item(Command::Shadows, plain(Key::O)),
                     MenuEntry::Submenu(SubmenuKind::Exposure, EXPOSURE_ITEMS),
+                    MenuEntry::Submenu(SubmenuKind::Channel, CHANNEL_ITEMS),
                     item(Command::ResetAdjustments, Some(backspace)),
                 ][..]
             )
@@ -2362,6 +2407,26 @@ mod tests {
         );
         assert_eq!(Command::Shadows.acts_in(), Where::Loupe);
         for item in EXPOSURE_ITEMS {
+            assert_eq!(item.command.acts_in(), Where::Loupe);
+        }
+    }
+
+    #[test]
+    fn channel_submenu_items_have_their_default_keys_and_act_in_the_loupe() {
+        let expected = [
+            (Command::NextChannel, plain(Key::N)),
+            (Command::PreviousChannel, shift(Key::N)),
+            (Command::Channel(Channel::Color), None),
+            (Command::Channel(Channel::Red), None),
+            (Command::Channel(Channel::Green), None),
+            (Command::Channel(Channel::Blue), None),
+            (Command::Channel(Channel::Luminance), None),
+        ];
+        assert_eq!(
+            CHANNEL_ITEMS,
+            &expected.map(|(command, key)| MenuItem { command, key })
+        );
+        for item in CHANNEL_ITEMS {
             assert_eq!(item.command.acts_in(), Where::Loupe);
         }
     }
