@@ -152,9 +152,9 @@ pub use preview::{
     thumbnail_gate, toggle_preview_column, toggle_preview_hidden,
 };
 pub use preview_text::{
-    AdjustmentMark, ClippingText, HistogramText, PreviewText, adjustment_marks, clipped_text,
-    clipping_state_text, clipping_text, clipping_text_with_key, deep_shadows_text, histogram_text,
-    preview_text, preview_text_with_key, sharpening_values_text, zoom_value_text,
+    AdjustmentMark, ClippingText, ExposureKeys, HistogramText, PreviewText, adjustment_marks,
+    clipped_text, clipping_state_text, clipping_text, clipping_text_with_key, deep_shadows_text,
+    histogram_text, preview_text, preview_text_with_key, sharpening_values_text, zoom_value_text,
 };
 pub use rating_text::{
     ROTATION_UNSUPPORTED_TEXT, UNSUPPORTED_TEXT, label_choice_text, label_filter_text, label_name,
@@ -511,6 +511,18 @@ pub enum PreviewKey {
     /// `U`: sharpening (an unsharp mask on the view, for the session only), on ↔ off (ADR 0027
     /// §3.3, W3-Q5, T318).
     Sharpening,
+    /// `O`: the shadows on ↔ off (ADR 0027 §3.4, W5-Q8, T335).
+    Shadows,
+    /// `Ctrl+↑`: one manual exposure step brighter (W5-Q8, T335).
+    ExposureBrighter,
+    /// `Ctrl+↓`: one manual exposure step darker (W5-Q8, T335).
+    ExposureDarker,
+    /// `Shift+Backspace`: the manual exposure steps back to 0 (W5-Q8, T335).
+    ResetExposure,
+    /// `B`: auto exposure on ↔ off (W5-Q8, T335).
+    AutoExposure,
+    /// `Shift+B`: the camera's brightness on ↔ off (W5-Q8, T335).
+    CameraBrightness,
     /// `Backspace`: every adjustment of the preview turned off (ADR 0027 A-Q3, W3-Q8, T318).
     ResetAdjustments,
     /// `C`: the compare open ↔ closed (ADR 0017 §2.2, U6-Q4, U6-Q11, T153).
@@ -549,6 +561,12 @@ pub fn preview_key_action(
         (K::E, false, false, false) => Some(PreviewKey::FocusMarking),
         (K::D, false, false, false) => Some(PreviewKey::FineDetails),
         (K::U, false, false, false) => Some(PreviewKey::Sharpening),
+        (K::O, false, false, false) => Some(PreviewKey::Shadows),
+        (K::ArrowUp, true, false, false) => Some(PreviewKey::ExposureBrighter),
+        (K::ArrowDown, true, false, false) => Some(PreviewKey::ExposureDarker),
+        (K::Backspace, false, true, false) => Some(PreviewKey::ResetExposure),
+        (K::B, false, false, false) => Some(PreviewKey::AutoExposure),
+        (K::B, false, true, false) => Some(PreviewKey::CameraBrightness),
         (K::Backspace, false, false, false) => Some(PreviewKey::ResetAdjustments),
         // The compare's keys (T153); K and Shift+K are told apart as J and Shift+J.
         (K::C, false, false, false) => Some(PreviewKey::Compare),
@@ -1222,6 +1240,12 @@ mod tests {
                     Some(PreviewKey::FocusMarking) => return Some(Command::FocusMarking),
                     Some(PreviewKey::FineDetails) => return Some(Command::FineDetails),
                     Some(PreviewKey::Sharpening) => return Some(Command::Sharpening),
+                    Some(PreviewKey::Shadows) => return Some(Command::Shadows),
+                    Some(PreviewKey::ExposureBrighter) => return Some(Command::ExposureBrighter),
+                    Some(PreviewKey::ExposureDarker) => return Some(Command::ExposureDarker),
+                    Some(PreviewKey::ResetExposure) => return Some(Command::ResetExposure),
+                    Some(PreviewKey::AutoExposure) => return Some(Command::AutoExposure),
+                    Some(PreviewKey::CameraBrightness) => return Some(Command::CameraBrightness),
                     Some(PreviewKey::ResetAdjustments) => {
                         return Some(Command::ResetAdjustments);
                     }
@@ -1905,6 +1929,79 @@ mod tests {
                 assert_ne!(command, Some(Command::Sharpening), "{chord:?}");
                 assert_ne!(command, Some(Command::ResetAdjustments), "{chord:?}");
             }
+        }
+    }
+
+    #[test]
+    fn exposure_and_shadows_require_the_exact_preview_chords() {
+        use egui::Key as K;
+        for (key, ctrl, shift, alt, preview, command) in [
+            (
+                K::O,
+                false,
+                false,
+                false,
+                Some(PreviewKey::Shadows),
+                Some(Command::Shadows),
+            ),
+            (
+                K::ArrowUp,
+                true,
+                false,
+                false,
+                Some(PreviewKey::ExposureBrighter),
+                Some(Command::ExposureBrighter),
+            ),
+            (
+                K::ArrowDown,
+                true,
+                false,
+                false,
+                Some(PreviewKey::ExposureDarker),
+                Some(Command::ExposureDarker),
+            ),
+            (
+                K::Backspace,
+                false,
+                true,
+                false,
+                Some(PreviewKey::ResetExposure),
+                Some(Command::ResetExposure),
+            ),
+            (
+                K::B,
+                false,
+                false,
+                false,
+                Some(PreviewKey::AutoExposure),
+                Some(Command::AutoExposure),
+            ),
+            (
+                K::B,
+                false,
+                true,
+                false,
+                Some(PreviewKey::CameraBrightness),
+                Some(Command::CameraBrightness),
+            ),
+            (K::ArrowUp, true, false, true, None, None),
+            (K::ArrowUp, true, true, false, None, None),
+            (K::B, false, false, true, None, None),
+            (K::B, true, false, false, None, None),
+        ] {
+            let chord = KeyChord {
+                key,
+                ctrl,
+                shift,
+                alt,
+            };
+            assert_eq!(
+                preview_key_action(key, ctrl, shift, alt),
+                preview,
+                "{chord:?}"
+            );
+            assert_eq!(command_of_key(chord, ViewMode::Loupe), command, "{chord:?}");
+            assert_eq!(command_of_key(chord, ViewMode::Grid), None, "{chord:?}");
         }
     }
 

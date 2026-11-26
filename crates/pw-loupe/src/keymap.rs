@@ -99,6 +99,12 @@ pub enum KeyAction {
     FocusMarking,
     FineDetails,
     Sharpening,
+    Shadows,
+    ExposureBrighter,
+    ExposureDarker,
+    ResetExposure,
+    AutoExposure,
+    CameraBrightness,
     ResetAdjustments,
     Compare,
     HoldImage,
@@ -152,7 +158,7 @@ const fn with_alt(key: Key) -> Option<KeyChord> {
 
 impl KeyAction {
     /// Every action, in the order the Settings page lists them (T281) and `keys.txt` writes them.
-    pub const ALL: [KeyAction; 47] = [
+    pub const ALL: [KeyAction; 53] = [
         Self::OpenFolder,
         Self::ReloadFolder,
         Self::Import,
@@ -190,6 +196,12 @@ impl KeyAction {
         Self::FocusMarking,
         Self::FineDetails,
         Self::Sharpening,
+        Self::Shadows,
+        Self::ExposureBrighter,
+        Self::ExposureDarker,
+        Self::ResetExposure,
+        Self::AutoExposure,
+        Self::CameraBrightness,
         Self::ResetAdjustments,
         Self::Compare,
         Self::HoldImage,
@@ -247,6 +259,12 @@ impl KeyAction {
             Self::FocusMarking => "focus_marking",
             Self::FineDetails => "fine_details",
             Self::Sharpening => "sharpening",
+            Self::Shadows => "shadows",
+            Self::ExposureBrighter => "exposure_brighter",
+            Self::ExposureDarker => "exposure_darker",
+            Self::ResetExposure => "reset_exposure",
+            Self::AutoExposure => "auto_exposure",
+            Self::CameraBrightness => "camera_brightness",
             Self::ResetAdjustments => "reset_adjustments",
             Self::Compare => "compare",
             Self::HoldImage => "hold_image",
@@ -300,6 +318,12 @@ impl KeyAction {
             | Self::FocusMarking
             | Self::FineDetails
             | Self::Sharpening
+            | Self::Shadows
+            | Self::ExposureBrighter
+            | Self::ExposureDarker
+            | Self::ResetExposure
+            | Self::AutoExposure
+            | Self::CameraBrightness
             | Self::ResetAdjustments
             | Self::Compare
             | Self::HoldImage
@@ -329,6 +353,12 @@ impl KeyAction {
             | Self::FocusMarking
             | Self::FineDetails
             | Self::Sharpening
+            | Self::Shadows
+            | Self::ExposureBrighter
+            | Self::ExposureDarker
+            | Self::ResetExposure
+            | Self::AutoExposure
+            | Self::CameraBrightness
             | Self::ResetAdjustments
             | Self::Compare
             | Self::HoldImage
@@ -381,6 +411,12 @@ impl KeyAction {
             Self::FocusMarking => [plain(Key::E), None],
             Self::FineDetails => [plain(Key::D), None],
             Self::Sharpening => [plain(Key::U), None],
+            Self::Shadows => [plain(Key::O), None],
+            Self::ExposureBrighter => [with_ctrl(Key::ArrowUp), None],
+            Self::ExposureDarker => [with_ctrl(Key::ArrowDown), None],
+            Self::ResetExposure => [with_shift(Key::Backspace), None],
+            Self::AutoExposure => [plain(Key::B), None],
+            Self::CameraBrightness => [with_shift(Key::B), None],
             Self::ResetAdjustments => [plain(Key::Backspace), None],
             Self::Compare => [plain(Key::C), None],
             Self::HoldImage => [plain(Key::K), None],
@@ -437,6 +473,12 @@ impl KeyAction {
             Command::FocusMarking => Self::FocusMarking,
             Command::FineDetails => Self::FineDetails,
             Command::Sharpening => Self::Sharpening,
+            Command::Shadows => Self::Shadows,
+            Command::ExposureBrighter => Self::ExposureBrighter,
+            Command::ExposureDarker => Self::ExposureDarker,
+            Command::ResetExposure => Self::ResetExposure,
+            Command::AutoExposure => Self::AutoExposure,
+            Command::CameraBrightness => Self::CameraBrightness,
             Command::ResetAdjustments => Self::ResetAdjustments,
             Command::Compare => Self::Compare,
             Command::HoldImage => Self::HoldImage,
@@ -490,6 +532,12 @@ impl KeyAction {
             Self::FocusMarking => Command::FocusMarking,
             Self::FineDetails => Command::FineDetails,
             Self::Sharpening => Command::Sharpening,
+            Self::Shadows => Command::Shadows,
+            Self::ExposureBrighter => Command::ExposureBrighter,
+            Self::ExposureDarker => Command::ExposureDarker,
+            Self::ResetExposure => Command::ResetExposure,
+            Self::AutoExposure => Command::AutoExposure,
+            Self::CameraBrightness => Command::CameraBrightness,
             Self::ResetAdjustments => Command::ResetAdjustments,
             Self::Compare => Command::Compare,
             Self::HoldImage => Command::HoldImage,
@@ -1148,6 +1196,12 @@ mod tests {
                 PreviewKey::FocusMarking => Action(A::FocusMarking),
                 PreviewKey::FineDetails => Action(A::FineDetails),
                 PreviewKey::Sharpening => Action(A::Sharpening),
+                PreviewKey::Shadows => Action(A::Shadows),
+                PreviewKey::ExposureBrighter => Action(A::ExposureBrighter),
+                PreviewKey::ExposureDarker => Action(A::ExposureDarker),
+                PreviewKey::ResetExposure => Action(A::ResetExposure),
+                PreviewKey::AutoExposure => Action(A::AutoExposure),
+                PreviewKey::CameraBrightness => Action(A::CameraBrightness),
                 PreviewKey::ResetAdjustments => Action(A::ResetAdjustments),
                 PreviewKey::Compare => Action(A::Compare),
                 PreviewKey::HoldImage => Action(A::HoldImage),
@@ -1809,7 +1863,7 @@ mod tests {
     }
 
     /// U is sharpening's key and Backspace the reset's (T318): View group, acting in the preview,
-    /// right after fine details in that order, and the only actions on their keys.
+    /// in the adjustment group, and the only actions on their keys.
     #[test]
     fn sharpening_is_u_and_reset_adjustments_backspace_right_after_fine_details() {
         let map = KeyMap::default();
@@ -1847,6 +1901,75 @@ mod tests {
             .position(|other| *other == KeyAction::FineDetails)
             .unwrap();
         assert_eq!(KeyAction::ALL[place + 1], KeyAction::Sharpening);
-        assert_eq!(KeyAction::ALL[place + 2], KeyAction::ResetAdjustments);
+        assert_eq!(KeyAction::ALL[place + 8], KeyAction::ResetAdjustments);
+    }
+
+    #[test]
+    fn exposure_and_shadows_have_unique_default_keys_and_follow_sharpening() {
+        let map = KeyMap::default();
+        let actions = [
+            (
+                KeyAction::Shadows,
+                "shadows",
+                plain(Key::O).unwrap(),
+                Command::Shadows,
+            ),
+            (
+                KeyAction::ExposureBrighter,
+                "exposure_brighter",
+                with_ctrl(Key::ArrowUp).unwrap(),
+                Command::ExposureBrighter,
+            ),
+            (
+                KeyAction::ExposureDarker,
+                "exposure_darker",
+                with_ctrl(Key::ArrowDown).unwrap(),
+                Command::ExposureDarker,
+            ),
+            (
+                KeyAction::ResetExposure,
+                "reset_exposure",
+                with_shift(Key::Backspace).unwrap(),
+                Command::ResetExposure,
+            ),
+            (
+                KeyAction::AutoExposure,
+                "auto_exposure",
+                plain(Key::B).unwrap(),
+                Command::AutoExposure,
+            ),
+            (
+                KeyAction::CameraBrightness,
+                "camera_brightness",
+                with_shift(Key::B).unwrap(),
+                Command::CameraBrightness,
+            ),
+        ];
+        let place = KeyAction::ALL
+            .iter()
+            .position(|action| *action == KeyAction::Sharpening)
+            .unwrap();
+        for (offset, (action, name, key, command)) in actions.into_iter().enumerate() {
+            assert_eq!(KeyAction::ALL[place + 1 + offset], action);
+            assert_eq!(action.name(), name);
+            assert_eq!(action.group(), KeyGroup::View);
+            assert_eq!(action.acts_in(), KeyView::Preview);
+            assert_eq!(action.default_keys(), [Some(key), None]);
+            assert_eq!(map.first_key(action), Some(key));
+            assert_eq!(map.action_of(key, KeyView::Preview), Some(action));
+            assert_eq!(map.action_of(key, KeyView::Sheet), None);
+            assert_eq!(
+                KeyAction::ALL
+                    .into_iter()
+                    .filter(|other| other.default_keys().contains(&Some(key)))
+                    .collect::<Vec<_>>(),
+                vec![action]
+            );
+            assert_eq!(action.command(), Some(command));
+            assert_eq!(KeyAction::of_command(command), Some(action));
+        }
+        for key in [Key::ArrowUp, Key::ArrowDown] {
+            assert_eq!(fixed_in_preview(with_ctrl(key).unwrap()), None);
+        }
     }
 }

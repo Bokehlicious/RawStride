@@ -9,6 +9,16 @@ Downloads are on the [Releases page](https://github.com/Bokehlicious/RawStride/r
 
 ## [Unreleased]
 
+### Added
+
+- Exposure and shadows for RAW images in the preview, for the session only, never saved in the
+  images: Ctrl+↑ and Ctrl+↓ (View ▸ Exposure) brighten or darken in steps of ⅓ EV from −2 to
+  +3 EV, Shift+Backspace resets them, B turns on auto exposure from the RAW histogram and
+  Shift+B the camera's own brightness value; O (View ▸ Show Shadows) lifts the dark tones by the
+  amount set on the Settings page Preview. Marks at the bottom right show them; in the compare
+  both sides follow. If one of these keys was assigned to another action in your keyboard
+  shortcuts, that action goes back to its default key.
+
 ### Changed
 
 - Stepping to another image is quicker with fine details on or between 50 % and 100 %: the

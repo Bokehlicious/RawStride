@@ -91,6 +91,11 @@ use pw_loupe::{
 };
 use pw_loupe::{EmbeddedOrientationReader, ROTATION_UNSUPPORTED_TEXT, ReaderStopped};
 use pw_loupe::{
+    ExposureKeys, FixedKey, KeyAction, KeyChord, KeyMap, KeyView, clipping_text_with_key,
+    error_text_with_key, fixed_key, keys_path, load_key_map, menu_key, mode_label_with_key,
+    preview_text_with_key, sharpen_button_label, sharpening_values_text,
+};
+use pw_loupe::{
     FILMSTRIP_CELL_WIDTH, FILMSTRIP_IMAGE_HEIGHT, FILMSTRIP_LABEL_HEIGHT, FILMSTRIP_MARGIN,
     FILMSTRIP_SPACING, PreviewText, Restore, ThumbGate, WindowBefore, clamp_offset,
     filmstrip_range, hit_test, preview_info_shown, preview_parts, preview_text, scroll_target,
@@ -99,11 +104,6 @@ use pw_loupe::{
 use pw_loupe::{
     FieldValues, ValueChoice, ValueList, field_values_path, load_field_values, save_field_values,
     value_choices,
-};
-use pw_loupe::{
-    FixedKey, KeyAction, KeyChord, KeyMap, KeyView, clipping_text_with_key, error_text_with_key,
-    fixed_key, keys_path, load_key_map, menu_key, mode_label_with_key, preview_text_with_key,
-    sharpen_button_label, sharpening_values_text,
 };
 use pw_loupe::{FolderWatcher, WatchEvent};
 use pw_loupe::{HISTOGRAM_BINS, HistogramPanel, HistogramText, histogram_panel, histogram_text};
@@ -150,8 +150,8 @@ use pw_render::{Textures, view_px};
 use pw_thumbcache::{ThumbWorker, ThumbnailRequest};
 use pw_viewcore::native::NativeBackend;
 use pw_viewcore::{
-    ClippingState, Config, FocusState, Frame, ImageStatistics, Sharpening, Source, Status,
-    ViewCore, Zoom, shadows,
+    ClippingState, Config, ExposureMode, FocusState, Frame, ImageStatistics, Sharpening, Source,
+    Status, ViewCore, Zoom, shadows,
 };
 
 mod inspector;
@@ -1219,6 +1219,69 @@ struct CompareOpen {
     /// The held side's frame has given its image's size since the held image was last set
     /// (T154): the view sent before that is sent again once.
     held_size_known: bool,
+    /// The unresolved path in the last drawn held frame, for resetting the other side's steps.
+    last_held_path: Option<PathBuf>,
+}
+
+/// Session adjustments shared by the current and held previews (ADR 0027 W5).
+#[derive(Default)]
+struct PreviewExposure {
+    /// The exposure's mode (B, Shift+B; A-Q12: one at a time), off at start, not saved.
+    exposure_mode: ExposureMode,
+    /// The shadows are on (O), off at start, not saved; the amount is the settings'.
+    shadows: bool,
+    /// The preview was shown on the frame before, so leaving it resets the steps (A-Q2).
+    was_in_preview: bool,
+}
+
+impl PreviewExposure {
+    fn toggle_mode(&mut self, mode: ExposureMode, repeat: bool) {
+        if !repeat {
+            self.exposure_mode = if self.exposure_mode == mode {
+                ExposureMode::Off
+            } else {
+                mode
+            };
+        }
+    }
+
+    fn toggle_shadows(&mut self, repeat: bool) {
+        if !repeat {
+            self.shadows = !self.shadows;
+        }
+    }
+
+    fn reset(&mut self, cores: [&ViewCore<NativeBackend>; 2]) {
+        self.exposure_mode = ExposureMode::Off;
+        self.shadows = false;
+        for core in cores {
+            core.reset_exposure_steps();
+        }
+    }
+
+    fn wish(
+        &mut self,
+        in_preview: bool,
+        comparing: bool,
+        shadows_amount: u8,
+        cores: [&ViewCore<NativeBackend>; 2],
+    ) {
+        let [current, held] = cores;
+        if self.was_in_preview && !in_preview {
+            current.reset_exposure_steps();
+            held.reset_exposure_steps();
+        }
+        self.was_in_preview = in_preview;
+
+        for (core, visible) in [(current, in_preview), (held, in_preview && comparing)] {
+            core.set_exposure_mode(if visible {
+                self.exposure_mode
+            } else {
+                ExposureMode::Off
+            });
+            core.set_shadows((visible && self.shadows).then_some(shadows_amount));
+        }
+    }
 }
 
 /// The images of one batch of moves: `(image, target folder, rating to restore)`, absolute paths
@@ -1379,6 +1442,9 @@ struct Loupe {
     /// Sharpening is on (`U`, View ▸ Show Sharpening; ADR 0027 §3.3, W3-Q5, T318): off at start
     /// and not a setting, so it lasts for the session; its values are the settings'.
     sharpening: bool,
+    /// The exposure's mode and the shadows (ADR 0027 W5, T335): for the session, sent to both
+    /// cores every frame by [`Self::wish_exposure`].
+    exposure: PreviewExposure,
     /// The inspector's Exif reader and summary (ADR 0017 §2.1, T110).
     exif_reader: ExifReader,
     exif: ExifInspector,
@@ -1491,6 +1557,10 @@ struct Loupe {
     last_ratings_ready: bool,
     /// Status of the last rendered loupe frame (ADR 0009 §13).
     last_frame_status: Status,
+    /// The unresolved path, source and manual steps in the last drawn current frame (T335).
+    last_preview_path: Option<PathBuf>,
+    last_preview_source: Option<Source>,
+    last_exposure_steps: i32,
     /// The zoom and the effective scale of the last rendered preview frame, for the preview
     /// column's Zoom section (T111).
     last_zoom: Option<(Zoom, Option<f64>)>,
@@ -5948,6 +6018,12 @@ impl Loupe {
             | A::FocusMarking
             | A::FineDetails
             | A::Sharpening
+            | A::Shadows
+            | A::ExposureBrighter
+            | A::ExposureDarker
+            | A::ResetExposure
+            | A::AutoExposure
+            | A::CameraBrightness
             | A::ResetAdjustments
             | A::Compare
             | A::HoldImage
@@ -5964,6 +6040,14 @@ impl Loupe {
                         A::FocusMarking => self.toggle_focus_marking(),
                         A::FineDetails => self.toggle_fine_details(),
                         A::Sharpening => self.toggle_sharpening(),
+                        A::Shadows => self.exposure.toggle_shadows(repeat),
+                        A::ExposureBrighter => self.step_exposure(1),
+                        A::ExposureDarker => self.step_exposure(-1),
+                        A::ResetExposure => self.reset_exposure_steps(),
+                        A::AutoExposure => self.exposure.toggle_mode(ExposureMode::Auto, repeat),
+                        A::CameraBrightness => {
+                            self.exposure.toggle_mode(ExposureMode::Camera, repeat)
+                        }
                         A::ResetAdjustments => self.reset_adjustments(),
                         A::Compare => self.toggle_compare(),
                         A::HoldImage => self.hold_current_image(),
@@ -6253,16 +6337,33 @@ impl Loupe {
 
     /// `Backspace` and View ▸ Reset Adjustments: every adjustment of the preview off (ADR 0027
     /// A-Q3, W3-Q8, T318); the view cores follow on the next frame through the `wish_`
-    /// functions. It changes no setting. W5 and W6 add their adjustments here and in
+    /// functions. It changes no setting. W6 adds its adjustments here and in
     /// [`Self::any_adjustment_on`].
     fn reset_adjustments(&mut self) {
         self.fine_details = false;
         self.sharpening = false;
+        self.exposure.reset([&self.core, &self.second_core]);
     }
 
     /// Whether any adjustment of the preview is on, which Reset Adjustments turns off (W3-Q8).
     fn any_adjustment_on(&self) -> bool {
-        self.fine_details || self.sharpening
+        self.fine_details
+            || self.sharpening
+            || self.exposure.exposure_mode != ExposureMode::Off
+            || self.exposure.shadows
+            || self.last_exposure_steps != 0
+    }
+
+    /// Apply a manual step to both sides if the current side accepts it (W5-Q3).
+    fn step_exposure(&self, delta: i32) {
+        if self.core.step_exposure(delta) && self.compare.is_some() {
+            self.second_core.step_exposure(delta);
+        }
+    }
+
+    fn reset_exposure_steps(&self) {
+        self.core.reset_exposure_steps();
+        self.second_core.reset_exposure_steps();
     }
 
     /// View ▸ Buttons on Thumbnails: the four buttons on a thumbnail in the contact sheet, on ↔
@@ -6315,6 +6416,17 @@ impl Loupe {
             .set_sharpening(wanted.filter(|_| self.compare.is_some()));
     }
 
+    /// Update the visible cores' adjustment requests and clear manual steps on preview exit.
+    fn wish_exposure(&mut self) {
+        let in_preview = self.in_preview();
+        self.exposure.wish(
+            in_preview,
+            self.compare.is_some(),
+            self.settings.shell.shadows_amount,
+            [&self.core, &self.second_core],
+        );
+    }
+
     /// The indexes the compare would open with, `(held, current)` (U6-Q4, T151's
     /// `open_indexes` on the stepped list); `None` outside the preview, with fewer than two
     /// images in the stepped list, or when the current image is not in it.
@@ -6357,6 +6469,7 @@ impl Loupe {
             return;
         }
         self.hold_in_second_core(&held);
+        self.reset_exposure_steps();
         self.compare = Some(CompareOpen {
             compare: Compare::new(held),
             tab: self.tabs.active_index(),
@@ -6365,6 +6478,7 @@ impl Loupe {
             mode_sent: None,
             view_sent: None,
             held_size_known: false,
+            last_held_path: None,
         });
     }
 
@@ -8258,6 +8372,14 @@ impl Loupe {
             }
             // Greyed while no adjustment is on (ADR 0027 W3-Q8, T318); its key does not ask.
             Command::ResetAdjustments => self.any_adjustment_on(),
+            Command::Shadows
+            | Command::ExposureBrighter
+            | Command::ExposureDarker
+            | Command::AutoExposure
+            | Command::CameraBrightness => self.last_preview_source == Some(Source::Raw),
+            Command::ResetExposure => {
+                self.last_preview_source == Some(Source::Raw) && self.last_exposure_steps != 0
+            }
             // Greyed without a folder and while files are moved or deleted (ADR 0026 F1, T242):
             // a reload then could list a file on its way.
             Command::ReloadFolder => reload_enabled(tab, self.moves.busy() || self.delete.busy()),
@@ -8282,6 +8404,9 @@ impl Loupe {
             Command::FocusMarking => Some(shell.focus_marking),
             Command::FineDetails => Some(self.fine_details),
             Command::Sharpening => Some(self.sharpening),
+            Command::Shadows => Some(self.exposure.shadows),
+            Command::AutoExposure => Some(self.exposure.exposure_mode == ExposureMode::Auto),
+            Command::CameraBrightness => Some(self.exposure.exposure_mode == ExposureMode::Camera),
             Command::ResetAdjustments => None,
             Command::MoveToSubfolders => Some(shell.move_to_subfolders),
             Command::AboveBelow => Some(shell.compare_above_below),
@@ -8356,6 +8481,12 @@ impl Loupe {
             Command::FocusMarking => self.toggle_focus_marking(),
             Command::FineDetails => self.toggle_fine_details(),
             Command::Sharpening => self.toggle_sharpening(),
+            Command::Shadows => self.exposure.toggle_shadows(false),
+            Command::ExposureBrighter => self.step_exposure(1),
+            Command::ExposureDarker => self.step_exposure(-1),
+            Command::ResetExposure => self.reset_exposure_steps(),
+            Command::AutoExposure => self.exposure.toggle_mode(ExposureMode::Auto, false),
+            Command::CameraBrightness => self.exposure.toggle_mode(ExposureMode::Camera, false),
             Command::ResetAdjustments => self.reset_adjustments(),
             Command::Compare => self.toggle_compare(),
             Command::HoldImage => self.hold_current_image(),
@@ -9460,6 +9591,7 @@ impl Loupe {
         self.wish_fine_details();
         // Sharpening likewise, with it on (T318).
         self.wish_sharpening();
+        self.wish_exposure();
         // The preview opened or closed by a key this frame (T111): the next frame draws the new
         // layout, and the contact sheet scrolls to the last shown image there.
         let mode_after = self.tabs.active().map(|tab| tab.mode);
@@ -9549,6 +9681,14 @@ impl Loupe {
             fine_key: self.key_map.first_key(KeyAction::FineDetails),
             sharpen_key: self.key_map.first_key(KeyAction::Sharpening),
             sharpening: self.settings.shell.sharpening,
+            exposure_keys: ExposureKeys {
+                brighter: self.key_map.first_key(KeyAction::ExposureBrighter),
+                darker: self.key_map.first_key(KeyAction::ExposureDarker),
+                auto: self.key_map.first_key(KeyAction::AutoExposure),
+                camera: self.key_map.first_key(KeyAction::CameraBrightness),
+            },
+            shadows_key: self.key_map.first_key(KeyAction::Shadows),
+            shadows_amount: self.settings.shell.shadows_amount,
         };
         // While comparing, the image area is two halves (U6-Q5, T153): the held image left or on
         // top from the second view core, the current image right or below from the first.
@@ -9576,6 +9716,9 @@ impl Loupe {
         let mut held_response = None;
         match (halves, &mut self.compare) {
             (Some((held_rect, _)), Some(open)) => {
+                if self.last_preview_path.is_some() && self.last_preview_path != frame.path {
+                    self.second_core.reset_exposure_steps();
+                }
                 // The held side starts as the current one is shown: the display mode when the
                 // compare opens and whenever `R` changes it (U6-Q9), the zoom and centre once
                 // when it opens and when the held image changes. Unlocked, each side has its
@@ -9616,6 +9759,10 @@ impl Loupe {
                     &shown,
                 );
                 held_response = Some(held);
+                if open.last_held_path.is_some() && open.last_held_path != held_frame.path {
+                    self.core.reset_exposure_steps();
+                }
+                open.last_held_path.clone_from(&held_frame.path);
                 // The held image's size became known: the view sent before it was clamped without
                 // it (T150), so it is sent again at the next frame (T154).
                 if !open.held_size_known && held_frame.size.is_some() {
@@ -9650,6 +9797,9 @@ impl Loupe {
             held.context_menu(|ui| self.image_context_menu(ui, commands));
         }
         self.last_frame_status = frame.status.clone();
+        self.last_preview_path.clone_from(&frame.path);
+        self.last_preview_source = Some(frame.source);
+        self.last_exposure_steps = frame.exposure.steps;
         self.last_zoom = Some((frame.zoom, frame.scale));
         // The clipping state, for the preview column's Clipping section (T148).
         self.last_clipping = frame.clipping.clone();
@@ -9737,6 +9887,12 @@ struct ImageAreaShown<'a> {
     sharpen_key: Option<KeyChord>,
     /// Sharpening's saved values, for the hover text of its mark (T318).
     sharpening: Sharpening,
+    /// The keys of the exposure's commands, for the hover text of its mark (T335).
+    exposure_keys: ExposureKeys,
+    /// The key of Show Shadows, for the hover text of its mark (T335).
+    shadows_key: Option<KeyChord>,
+    /// The shadows' saved amount, for the hover text of its mark (T335).
+    shadows_amount: u8,
 }
 
 /// The pointer's place in the image area in view pixels, which a zoom goes around; `None` (the
@@ -9867,6 +10023,8 @@ fn draw_image_area(
             &frame.sharpen,
             shown.sharpen_key,
             shown.sharpening,
+            (&frame.exposure, shown.exposure_keys),
+            (&frame.shadows, shown.shadows_key, shown.shadows_amount),
         );
         paint_adjustment_marks(&painter, rect, &marks, &response);
     }
@@ -13479,6 +13637,7 @@ fn run(options: Options) -> Result<(), String> {
                 anchor_at_pointer: true,
                 fine_details: false,
                 sharpening: false,
+                exposure: PreviewExposure::default(),
                 exif_reader: ExifReader::start(),
                 exif: ExifInspector::default(),
                 histogram_reader: HistogramReader::start(backend, histogram_reads),
@@ -13524,6 +13683,9 @@ fn run(options: Options) -> Result<(), String> {
                 ratings_read: false,
                 last_ratings_ready: false,
                 last_frame_status: Status::Empty,
+                last_preview_path: None,
+                last_preview_source: None,
+                last_exposure_steps: 0,
                 last_zoom: None,
                 last_statistics: None,
                 last_clipping: ClippingState::NotWanted,
@@ -13592,6 +13754,79 @@ mod tests {
     use pw_metadata::iim::Fallback;
     use std::collections::HashMap;
     use std::path::{Path, PathBuf};
+
+    mod preview_exposure {
+        use super::super::PreviewExposure;
+        use pw_viewcore::{Config, ExposureMode, ViewCore, native::NativeBackend};
+        use std::path::PathBuf;
+
+        fn cores_with_manual_steps() -> [ViewCore<NativeBackend>; 2] {
+            ["current.dng", "held.dng"].map(|file| {
+                let core = ViewCore::start(NativeBackend::default(), Config::default()).unwrap();
+                core.set_files(vec![PathBuf::from(file)], 0);
+                assert!(core.step_exposure(1));
+                assert_eq!(core.frame([1, 1]).exposure.steps, 1);
+                core
+            })
+        }
+
+        #[test]
+        fn exposure_toggles_between_off_auto_and_camera_and_ignores_repeats() {
+            let mut state = PreviewExposure::default();
+            state.toggle_mode(ExposureMode::Auto, false);
+            assert_eq!(state.exposure_mode, ExposureMode::Auto);
+            state.toggle_mode(ExposureMode::Auto, true);
+            assert_eq!(state.exposure_mode, ExposureMode::Auto);
+            state.toggle_mode(ExposureMode::Auto, false);
+            assert_eq!(state.exposure_mode, ExposureMode::Off);
+            state.toggle_mode(ExposureMode::Auto, false);
+            state.toggle_mode(ExposureMode::Camera, false);
+            assert_eq!(state.exposure_mode, ExposureMode::Camera);
+            state.toggle_mode(ExposureMode::Camera, true);
+            assert_eq!(state.exposure_mode, ExposureMode::Camera);
+            state.toggle_mode(ExposureMode::Camera, false);
+            assert_eq!(state.exposure_mode, ExposureMode::Off);
+            state.toggle_shadows(false);
+            state.toggle_shadows(true);
+            assert!(state.shadows);
+        }
+
+        #[test]
+        fn resetting_adjustments_turns_the_mode_and_shadows_off_and_clears_both_steps() {
+            let [current, held] = cores_with_manual_steps();
+            let mut state = PreviewExposure::default();
+            state.toggle_mode(ExposureMode::Camera, false);
+            state.toggle_shadows(false);
+            state.reset([&current, &held]);
+            assert_eq!(state.exposure_mode, ExposureMode::Off);
+            assert!(!state.shadows);
+            for core in [&current, &held] {
+                assert_eq!(core.frame([1, 1]).exposure.steps, 0);
+            }
+        }
+
+        #[test]
+        fn leaving_the_preview_resets_both_cores_steps() {
+            let [current, held] = cores_with_manual_steps();
+            let mut state = PreviewExposure::default();
+            state.toggle_mode(ExposureMode::Auto, false);
+            state.toggle_shadows(false);
+            state.wish(true, true, 50, [&current, &held]);
+            for core in [&current, &held] {
+                let exposure = core.frame([1, 1]).exposure;
+                assert_eq!(exposure.mode, ExposureMode::Auto);
+                assert_eq!(exposure.steps, 1);
+            }
+            state.wish(false, false, 50, [&current, &held]);
+            for core in [&current, &held] {
+                let exposure = core.frame([1, 1]).exposure;
+                assert_eq!(exposure.mode, ExposureMode::Off);
+                assert_eq!(exposure.steps, 0);
+            }
+            assert_eq!(state.exposure_mode, ExposureMode::Auto);
+            assert!(state.shadows);
+        }
+    }
 
     // --- The template window's answers and opening (ADR 0017 U13, part U13c, T293) ---
 

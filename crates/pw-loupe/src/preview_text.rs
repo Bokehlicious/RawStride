@@ -6,7 +6,10 @@
 //! with the same texts. The texts of the Clipping section (U7b, T148) are here as well, and the
 //! marks of the preview's row of adjustment marks (ADR 0027 W2-Q5, T314; W3-Q6, T318).
 
-use pw_viewcore::{ClippingState, FinePause, FineState, SharpenState, Sharpening, Zoom};
+use pw_viewcore::{
+    AdjustState, ClippingState, Ev, ExposureBase, ExposureMode, ExposureState, FinePause,
+    FineState, SharpenState, Sharpening, Zoom,
+};
 
 use crate::shell::KeyChord;
 use crate::shell_text::key_text;
@@ -198,21 +201,37 @@ pub struct AdjustmentMark {
     pub hover: String,
 }
 
-/// The marks of the row (ADR 0027 §2.1): "Fine" for fine details' state `fine` (§3.1, W2-Q5,
-/// T314), then "USM" for sharpening's state `sharpen` (§3.3, W3-Q6, T318); none for an adjustment
-/// that is off, dimmed while it is paused. `fine_key` and `sharpen_key` are the key map's keys of
-/// the two, shown in the hover texts, which have no "(key)" when the action has no key; `values`
-/// are sharpening's values, shown in its hover text while its view is shown.
+/// The shortcuts shown in the exposure mark's hover text (ADR 0027 W5-Q9, T335); `None` = the
+/// action has no key, and the hover text has no "(key)".
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ExposureKeys {
+    /// The key of Brighter.
+    pub brighter: Option<KeyChord>,
+    /// The key of Darker.
+    pub darker: Option<KeyChord>,
+    /// The key of Auto Exposure.
+    pub auto: Option<KeyChord>,
+    /// The key of Camera Brightness.
+    pub camera: Option<KeyChord>,
+}
+
+/// The marks in row order (ADR 0027 §2.1): "Fine", "USM", the exposure, and "Shadows".
+/// Off adjustments have no mark. Paused adjustments are dimmed. The shortcuts and values
+/// appear in the hover texts when available.
 pub fn adjustment_marks(
     fine: &FineState,
     fine_key: Option<KeyChord>,
     sharpen: &SharpenState,
     sharpen_key: Option<KeyChord>,
     values: Sharpening,
+    (exposure, exposure_keys): (&ExposureState, ExposureKeys),
+    (shadows, shadows_key, shadows_amount): (&AdjustState, Option<KeyChord>, u8),
 ) -> Vec<AdjustmentMark> {
     let mut marks = Vec::new();
     marks.extend(fine_mark(fine, fine_key));
     marks.extend(sharpen_mark(sharpen, sharpen_key, values));
+    marks.extend(exposure_mark(exposure, exposure_keys));
+    marks.extend(shadows_mark(*shadows, shadows_key, shadows_amount));
     marks
 }
 
@@ -328,9 +347,236 @@ fn sharpen_mark(
     })
 }
 
+/// The signed EV value of the exposure mark (W5-Q9), in exact thirds or one decimal.
+fn ev_text(ev: Ev) -> String {
+    let milli = ev.milli();
+    let sign = ev_sign(f64::from(milli));
+    let thirds = (f64::from(milli) * 3.0 / 1000.0).round() as i32;
+    if Ev::from_thirds(thirds) == ev {
+        let thirds = thirds.abs();
+        let whole = thirds / 3;
+        let fraction = match thirds % 3 {
+            1 => "⅓",
+            2 => "⅔",
+            _ => "",
+        };
+        if whole == 0 && thirds != 0 {
+            format!("{sign}{fraction}")
+        } else {
+            format!("{sign}{whole}{fraction}")
+        }
+    } else {
+        let tenths = (f64::from(milli).abs() / 100.0).round();
+        format!("{sign}{:.1}", tenths / 10.0)
+    }
+}
+
+fn ev_sign(value: f64) -> &'static str {
+    if value < 0.0 {
+        "−"
+    } else if value > 0.0 {
+        "+"
+    } else {
+        ""
+    }
+}
+
+fn exposure_mark(exposure: &ExposureState, keys: ExposureKeys) -> Option<AdjustmentMark> {
+    if exposure.view == AdjustState::Off {
+        return None;
+    }
+    let value = ev_text(exposure.total);
+    let hover = match (exposure.view, exposure.base) {
+        (AdjustState::Paused, _) => {
+            "Exposure is paused: it applies only to RAW renderings.".to_owned()
+        }
+        (AdjustState::Waiting, base)
+            if !matches!(
+                base,
+                ExposureBase::AutoWaiting | ExposureBase::CameraWaiting
+            ) =>
+        {
+            "Exposure: the view is being made again.".to_owned()
+        }
+        _ => exposure_hover(exposure, keys, &value),
+    };
+    let text = match exposure.mode {
+        ExposureMode::Off => format!("{value} EV"),
+        ExposureMode::Auto => format!("{value} EV auto"),
+        ExposureMode::Camera
+            if exposure.base == ExposureBase::CameraNone && exposure.steps == 0 =>
+        {
+            "Camera EV: none".to_owned()
+        }
+        ExposureMode::Camera => format!("{value} EV camera"),
+    };
+    Some(AdjustmentMark {
+        text,
+        hover,
+        dimmed: exposure.view == AdjustState::Paused,
+    })
+}
+
+fn exposure_hover(exposure: &ExposureState, keys: ExposureKeys, value: &str) -> String {
+    let steps = (exposure.steps != 0).then(|| ev_text(Ev::from_thirds(exposure.steps)));
+    match exposure.base {
+        ExposureBase::Manual => match (keys.brighter, keys.darker) {
+            (Some(brighter), Some(darker)) => {
+                let brighter = key_text(brighter);
+                let darker = key_text(darker);
+                format!("Exposure: {value} EV by hand ({brighter} brighter, {darker} darker).")
+            }
+            _ => format!("Exposure: {value} EV by hand."),
+        },
+        ExposureBase::Camera(v) => camera_hover(v, keys.camera.map(key_text), steps.as_deref()),
+        ExposureBase::CameraWaiting => match keys.camera.map(key_text) {
+            Some(key) => format!("Camera brightness ({key}): the file is being read."),
+            None => "Camera brightness: the file is being read.".to_owned(),
+        },
+        ExposureBase::AutoWaiting => match keys.auto.map(key_text) {
+            Some(key) => format!("Auto exposure ({key}): the histogram is being read."),
+            None => "Auto exposure: the histogram is being read.".to_owned(),
+        },
+        ExposureBase::Auto(t) => {
+            let base = ev_text(Ev::from_thirds(t));
+            match (keys.auto.map(key_text), steps) {
+                (Some(key), Some(steps)) => format!(
+                    "Auto exposure ({key}): {base} EV from the histogram, plus {steps} EV by hand."
+                ),
+                (None, Some(steps)) => {
+                    format!("Auto exposure: {base} EV from the histogram, plus {steps} EV by hand.")
+                }
+                (Some(key), None) => {
+                    format!("Auto exposure ({key}): {base} EV from the histogram.")
+                }
+                (None, None) => format!("Auto exposure: {base} EV from the histogram."),
+            }
+        }
+        ExposureBase::AutoClipped => match (keys.auto.map(key_text), steps) {
+            (Some(key), Some(steps)) => format!(
+                "Auto exposure ({key}): 0 EV, since more than 0.1% of the RAW data is clipped, plus {steps} EV by hand."
+            ),
+            (None, Some(steps)) => format!(
+                "Auto exposure: 0 EV, since more than 0.1% of the RAW data is clipped, plus {steps} EV by hand."
+            ),
+            (Some(key), None) => format!(
+                "Auto exposure ({key}): 0 EV, since more than 0.1% of the RAW data is clipped."
+            ),
+            (None, None) => {
+                "Auto exposure: 0 EV, since more than 0.1% of the RAW data is clipped.".to_owned()
+            }
+        },
+        ExposureBase::AutoNone => match (keys.auto.map(key_text), steps) {
+            (Some(key), Some(steps)) => format!(
+                "Auto exposure ({key}): 0 EV, since the file has no usable RAW statistics, plus {steps} EV by hand."
+            ),
+            (None, Some(steps)) => format!(
+                "Auto exposure: 0 EV, since the file has no usable RAW statistics, plus {steps} EV by hand."
+            ),
+            (Some(key), None) => {
+                format!("Auto exposure ({key}): 0 EV, since the file has no usable RAW statistics.")
+            }
+            (None, None) => {
+                "Auto exposure: 0 EV, since the file has no usable RAW statistics.".to_owned()
+            }
+        },
+        ExposureBase::CameraNone => match (keys.camera.map(key_text), steps) {
+            (Some(key), Some(steps)) => format!(
+                "Camera brightness ({key}): the file gives no value, so 0 EV is used, plus {steps} EV by hand."
+            ),
+            (None, Some(steps)) => format!(
+                "Camera brightness: the file gives no value, so 0 EV is used, plus {steps} EV by hand."
+            ),
+            (Some(key), None) => {
+                format!("Camera brightness ({key}): the file gives no value, so 0 EV is used.")
+            }
+            (None, None) => {
+                "Camera brightness: the file gives no value, so 0 EV is used.".to_owned()
+            }
+        },
+    }
+}
+
+fn camera_hover(v: f64, key: Option<String>, steps: Option<&str>) -> String {
+    let value = format!("{}{:.2}", ev_sign(v), v.abs());
+    let min = f64::from(Ev::MIN_MILLI) / 1000.0;
+    let max = f64::from(Ev::MAX_MILLI) / 1000.0;
+    let limit = if v < min {
+        Some(ev_text(Ev::from_ev(min)))
+    } else if v > max {
+        Some(ev_text(Ev::from_ev(max)))
+    } else {
+        None
+    };
+    match (limit, key, steps) {
+        (Some(limit), Some(key), Some(steps)) => format!(
+            "Camera brightness ({key}): {value} EV from the file, limited to {limit} EV, plus {steps} EV by hand."
+        ),
+        (Some(limit), None, Some(steps)) => format!(
+            "Camera brightness: {value} EV from the file, limited to {limit} EV, plus {steps} EV by hand."
+        ),
+        (Some(limit), Some(key), None) => {
+            format!("Camera brightness ({key}): {value} EV from the file, limited to {limit} EV.")
+        }
+        (Some(limit), None, None) => {
+            format!("Camera brightness: {value} EV from the file, limited to {limit} EV.")
+        }
+        (None, Some(key), Some(steps)) => {
+            format!("Camera brightness ({key}): {value} EV from the file, plus {steps} EV by hand.")
+        }
+        (None, None, Some(steps)) => {
+            format!("Camera brightness: {value} EV from the file, plus {steps} EV by hand.")
+        }
+        (None, Some(key), None) => format!("Camera brightness ({key}): {value} EV from the file."),
+        (None, None, None) => format!("Camera brightness: {value} EV from the file."),
+    }
+}
+
+fn shadows_mark(state: AdjustState, key: Option<KeyChord>, amount: u8) -> Option<AdjustmentMark> {
+    let hover = match (state, key) {
+        (AdjustState::Off, _) => return None,
+        (AdjustState::Shown, Some(chord)) => {
+            let key = key_text(chord);
+            format!("Shadows ({key}): the dark tones are lifted by {amount}.")
+        }
+        (AdjustState::Shown, None) => format!("Shadows: the dark tones are lifted by {amount}."),
+        (AdjustState::Waiting, Some(chord)) => {
+            let key = key_text(chord);
+            format!("Shadows ({key}): the view is being made again.")
+        }
+        (AdjustState::Waiting, None) => "Shadows: the view is being made again.".to_owned(),
+        (AdjustState::Paused, Some(chord)) => {
+            let key = key_text(chord);
+            format!("Shadows ({key}) is paused: it applies only to RAW renderings.")
+        }
+        (AdjustState::Paused, None) => {
+            "Shadows is paused: it applies only to RAW renderings.".to_owned()
+        }
+    };
+    Some(AdjustmentMark {
+        text: "Shadows".to_owned(),
+        hover,
+        dimmed: state == AdjustState::Paused,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const EXPOSURE_OFF: ExposureState = ExposureState {
+        mode: ExposureMode::Off,
+        steps: 0,
+        base: ExposureBase::Manual,
+        total: Ev::ZERO,
+        view: AdjustState::Off,
+    };
+
+    const SHADOWS_OFF: (&AdjustState, Option<KeyChord>, u8) = (&AdjustState::Off, None, 50);
+
+    fn exposure_off() -> (&'static ExposureState, ExposureKeys) {
+        (&EXPOSURE_OFF, ExposureKeys::default())
+    }
 
     #[test]
     fn every_fixed_text_of_the_preview() {
@@ -538,7 +784,16 @@ mod tests {
         let usm_off = (SharpenState::Off, None, Sharpening::DEFAULT);
         for key in [Some(d), None] {
             assert!(
-                adjustment_marks(&FineState::Off, key, &usm_off.0, usm_off.1, usm_off.2).is_empty()
+                adjustment_marks(
+                    &FineState::Off,
+                    key,
+                    &usm_off.0,
+                    usm_off.1,
+                    usm_off.2,
+                    exposure_off(),
+                    SHADOWS_OFF
+                )
+                .is_empty()
             );
         }
         let on_d = "Fine details (D): below 50%, the RAW view is made from the full-resolution \
@@ -570,7 +825,15 @@ mod tests {
         for (state, dimmed, with_key, without_key) in cases {
             for (key, hover) in [(Some(d), with_key), (None, without_key)] {
                 assert_eq!(
-                    adjustment_marks(&state, key, &usm_off.0, usm_off.1, usm_off.2),
+                    adjustment_marks(
+                        &state,
+                        key,
+                        &usm_off.0,
+                        usm_off.1,
+                        usm_off.2,
+                        exposure_off(),
+                        SHADOWS_OFF
+                    ),
                     vec![AdjustmentMark {
                         text: "Fine".to_owned(),
                         dimmed,
@@ -640,8 +903,16 @@ mod tests {
         for key in [Some(u), None] {
             for values in [Sharpening::DEFAULT, others] {
                 assert!(
-                    adjustment_marks(&FineState::Off, None, &SharpenState::Off, key, values)
-                        .is_empty()
+                    adjustment_marks(
+                        &FineState::Off,
+                        None,
+                        &SharpenState::Off,
+                        key,
+                        values,
+                        exposure_off(),
+                        SHADOWS_OFF
+                    )
+                    .is_empty()
                 );
             }
         }
@@ -684,7 +955,15 @@ mod tests {
             for (key, hover) in [(Some(u), with_key), (None, without_key)] {
                 // Fine details off: "USM" alone.
                 assert_eq!(
-                    adjustment_marks(&FineState::Off, None, &state, key, values),
+                    adjustment_marks(
+                        &FineState::Off,
+                        None,
+                        &state,
+                        key,
+                        values,
+                        exposure_off(),
+                        SHADOWS_OFF
+                    ),
                     vec![usm(dimmed, hover)],
                     "{state:?} {key:?} {values:?}"
                 );
@@ -697,6 +976,8 @@ mod tests {
             &SharpenState::Shown,
             Some(u),
             Sharpening::DEFAULT,
+            exposure_off(),
+            SHADOWS_OFF,
         );
         assert_eq!(
             marks
@@ -716,9 +997,17 @@ mod tests {
         for key in [Some(u), None] {
             for values in [Sharpening::DEFAULT, others] {
                 assert_eq!(
-                    adjustment_marks(&FineState::Off, None, &SharpenState::Shown, key, values)
-                        .first()
-                        .map(|mark| mark.hover.clone()),
+                    adjustment_marks(
+                        &FineState::Off,
+                        None,
+                        &SharpenState::Shown,
+                        key,
+                        values,
+                        exposure_off(),
+                        SHADOWS_OFF
+                    )
+                    .first()
+                    .map(|mark| mark.hover.clone()),
                     Some(sharpening_values_text(key, values))
                 );
             }
@@ -726,5 +1015,382 @@ mod tests {
         // The default key map's key is U.
         let map = crate::keymap::KeyMap::default();
         assert_eq!(map.first_key(crate::keymap::KeyAction::Sharpening), Some(u));
+    }
+
+    fn default_exposure_keys() -> ExposureKeys {
+        use crate::keymap::{KeyAction, KeyMap};
+        let map = KeyMap::default();
+        ExposureKeys {
+            brighter: map.first_key(KeyAction::ExposureBrighter),
+            darker: map.first_key(KeyAction::ExposureDarker),
+            auto: map.first_key(KeyAction::AutoExposure),
+            camera: map.first_key(KeyAction::CameraBrightness),
+        }
+    }
+
+    fn exposure_only(state: &ExposureState, keys: ExposureKeys) -> Vec<AdjustmentMark> {
+        adjustment_marks(
+            &FineState::Off,
+            None,
+            &SharpenState::Off,
+            None,
+            Sharpening::DEFAULT,
+            (state, keys),
+            SHADOWS_OFF,
+        )
+    }
+
+    #[test]
+    fn ev_text_uses_signed_exact_thirds_or_rounds_to_one_decimal() {
+        for (milli, expected) in [
+            (0, "0"),
+            (333, "+⅓"),
+            (667, "+⅔"),
+            (1000, "+1"),
+            (1333, "+1⅓"),
+            (-333, "−⅓"),
+            (-667, "−⅔"),
+            (-2000, "−2"),
+            (3000, "+3"),
+            (-510, "−0.5"),
+            (-177, "−0.2"),
+            (250, "+0.3"),
+            (40, "+0.0"),
+        ] {
+            assert_eq!(ev_text(Ev::from_ev(f64::from(milli) / 1000.0)), expected);
+        }
+    }
+
+    #[test]
+    fn the_manual_exposure_hover_names_both_shortcuts_when_available() {
+        let state = ExposureState {
+            steps: 4,
+            total: Ev::from_thirds(4),
+            view: AdjustState::Shown,
+            ..EXPOSURE_OFF
+        };
+        let keys = default_exposure_keys();
+        for (keys, hover) in [
+            (
+                keys,
+                "Exposure: +1⅓ EV by hand (Ctrl+↑ brighter, Ctrl+↓ darker).",
+            ),
+            (
+                ExposureKeys {
+                    brighter: None,
+                    ..keys
+                },
+                "Exposure: +1⅓ EV by hand.",
+            ),
+            (
+                ExposureKeys {
+                    darker: None,
+                    ..keys
+                },
+                "Exposure: +1⅓ EV by hand.",
+            ),
+            (ExposureKeys::default(), "Exposure: +1⅓ EV by hand."),
+        ] {
+            assert_eq!(
+                exposure_only(&state, keys),
+                vec![AdjustmentMark {
+                    text: "+1⅓ EV".to_owned(),
+                    dimmed: false,
+                    hover: hover.to_owned(),
+                }]
+            );
+        }
+    }
+
+    #[test]
+    fn the_auto_and_camera_marks_explain_the_base_and_manual_steps() {
+        let keys = default_exposure_keys();
+        for (mode, base, base_ev, no_steps, one_step) in [
+            (
+                ExposureMode::Auto,
+                ExposureBase::Auto(3),
+                1.0,
+                (
+                    "+1 EV auto",
+                    "Auto exposure (B): +1 EV from the histogram.",
+                    "Auto exposure: +1 EV from the histogram.",
+                ),
+                (
+                    "+1⅓ EV auto",
+                    "Auto exposure (B): +1 EV from the histogram, plus +⅓ EV by hand.",
+                    "Auto exposure: +1 EV from the histogram, plus +⅓ EV by hand.",
+                ),
+            ),
+            (
+                ExposureMode::Auto,
+                ExposureBase::AutoClipped,
+                0.0,
+                (
+                    "0 EV auto",
+                    "Auto exposure (B): 0 EV, since more than 0.1% of the RAW data is clipped.",
+                    "Auto exposure: 0 EV, since more than 0.1% of the RAW data is clipped.",
+                ),
+                (
+                    "+⅓ EV auto",
+                    "Auto exposure (B): 0 EV, since more than 0.1% of the RAW data is clipped, plus +⅓ EV by hand.",
+                    "Auto exposure: 0 EV, since more than 0.1% of the RAW data is clipped, plus +⅓ EV by hand.",
+                ),
+            ),
+            (
+                ExposureMode::Auto,
+                ExposureBase::AutoNone,
+                0.0,
+                (
+                    "0 EV auto",
+                    "Auto exposure (B): 0 EV, since the file has no usable RAW statistics.",
+                    "Auto exposure: 0 EV, since the file has no usable RAW statistics.",
+                ),
+                (
+                    "+⅓ EV auto",
+                    "Auto exposure (B): 0 EV, since the file has no usable RAW statistics, plus +⅓ EV by hand.",
+                    "Auto exposure: 0 EV, since the file has no usable RAW statistics, plus +⅓ EV by hand.",
+                ),
+            ),
+            (
+                ExposureMode::Camera,
+                ExposureBase::Camera(-0.51),
+                -0.51,
+                (
+                    "−0.5 EV camera",
+                    "Camera brightness (Shift+B): −0.51 EV from the file.",
+                    "Camera brightness: −0.51 EV from the file.",
+                ),
+                (
+                    "−0.2 EV camera",
+                    "Camera brightness (Shift+B): −0.51 EV from the file, plus +⅓ EV by hand.",
+                    "Camera brightness: −0.51 EV from the file, plus +⅓ EV by hand.",
+                ),
+            ),
+            (
+                ExposureMode::Camera,
+                ExposureBase::Camera(0.70),
+                0.7,
+                (
+                    "+0.7 EV camera",
+                    "Camera brightness (Shift+B): +0.70 EV from the file.",
+                    "Camera brightness: +0.70 EV from the file.",
+                ),
+                (
+                    "+1.0 EV camera",
+                    "Camera brightness (Shift+B): +0.70 EV from the file, plus +⅓ EV by hand.",
+                    "Camera brightness: +0.70 EV from the file, plus +⅓ EV by hand.",
+                ),
+            ),
+            (
+                ExposureMode::Camera,
+                ExposureBase::Camera(0.0),
+                0.0,
+                (
+                    "0 EV camera",
+                    "Camera brightness (Shift+B): 0.00 EV from the file.",
+                    "Camera brightness: 0.00 EV from the file.",
+                ),
+                (
+                    "+⅓ EV camera",
+                    "Camera brightness (Shift+B): 0.00 EV from the file, plus +⅓ EV by hand.",
+                    "Camera brightness: 0.00 EV from the file, plus +⅓ EV by hand.",
+                ),
+            ),
+            (
+                ExposureMode::Camera,
+                ExposureBase::Camera(-2.51),
+                -2.51,
+                (
+                    "−2 EV camera",
+                    "Camera brightness (Shift+B): −2.51 EV from the file, limited to −2 EV.",
+                    "Camera brightness: −2.51 EV from the file, limited to −2 EV.",
+                ),
+                (
+                    "−2 EV camera",
+                    "Camera brightness (Shift+B): −2.51 EV from the file, limited to −2 EV, plus +⅓ EV by hand.",
+                    "Camera brightness: −2.51 EV from the file, limited to −2 EV, plus +⅓ EV by hand.",
+                ),
+            ),
+            (
+                ExposureMode::Camera,
+                ExposureBase::Camera(3.10),
+                3.1,
+                (
+                    "+3 EV camera",
+                    "Camera brightness (Shift+B): +3.10 EV from the file, limited to +3 EV.",
+                    "Camera brightness: +3.10 EV from the file, limited to +3 EV.",
+                ),
+                (
+                    "+3 EV camera",
+                    "Camera brightness (Shift+B): +3.10 EV from the file, limited to +3 EV, plus +⅓ EV by hand.",
+                    "Camera brightness: +3.10 EV from the file, limited to +3 EV, plus +⅓ EV by hand.",
+                ),
+            ),
+            (
+                ExposureMode::Camera,
+                ExposureBase::CameraNone,
+                0.0,
+                (
+                    "Camera EV: none",
+                    "Camera brightness (Shift+B): the file gives no value, so 0 EV is used.",
+                    "Camera brightness: the file gives no value, so 0 EV is used.",
+                ),
+                (
+                    "+⅓ EV camera",
+                    "Camera brightness (Shift+B): the file gives no value, so 0 EV is used, plus +⅓ EV by hand.",
+                    "Camera brightness: the file gives no value, so 0 EV is used, plus +⅓ EV by hand.",
+                ),
+            ),
+        ] {
+            for (steps, (text, with_key, without_key)) in [(0, no_steps), (1, one_step)] {
+                let state = ExposureState {
+                    mode,
+                    base,
+                    steps,
+                    total: Ev::from_ev(base_ev + f64::from(steps) / 3.0),
+                    view: AdjustState::Shown,
+                };
+                for (keys, hover) in [(keys, with_key), (ExposureKeys::default(), without_key)] {
+                    assert_eq!(
+                        exposure_only(&state, keys),
+                        vec![AdjustmentMark {
+                            text: text.to_owned(),
+                            dimmed: false,
+                            hover: hover.to_owned(),
+                        }],
+                        "{state:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_exposure_mark_reports_when_waiting_and_dims_when_paused() {
+        let keys = default_exposure_keys();
+        for (mode, base, view, text, with_key, without_key) in [
+            (
+                ExposureMode::Auto,
+                ExposureBase::AutoWaiting,
+                AdjustState::Waiting,
+                "0 EV auto",
+                "Auto exposure (B): the histogram is being read.",
+                "Auto exposure: the histogram is being read.",
+            ),
+            (
+                ExposureMode::Camera,
+                ExposureBase::CameraWaiting,
+                AdjustState::Waiting,
+                "0 EV camera",
+                "Camera brightness (Shift+B): the file is being read.",
+                "Camera brightness: the file is being read.",
+            ),
+            (
+                ExposureMode::Off,
+                ExposureBase::Manual,
+                AdjustState::Waiting,
+                "0 EV",
+                "Exposure: the view is being made again.",
+                "Exposure: the view is being made again.",
+            ),
+            (
+                ExposureMode::Auto,
+                ExposureBase::AutoNone,
+                AdjustState::Paused,
+                "0 EV auto",
+                "Exposure is paused: it applies only to RAW renderings.",
+                "Exposure is paused: it applies only to RAW renderings.",
+            ),
+        ] {
+            let state = ExposureState {
+                mode,
+                base,
+                view,
+                ..EXPOSURE_OFF
+            };
+            for (keys, hover) in [(keys, with_key), (ExposureKeys::default(), without_key)] {
+                assert_eq!(
+                    exposure_only(&state, keys),
+                    vec![AdjustmentMark {
+                        text: text.to_owned(),
+                        dimmed: view == AdjustState::Paused,
+                        hover: hover.to_owned(),
+                    }],
+                    "{state:?}"
+                );
+                assert!(
+                    exposure_only(
+                        &ExposureState {
+                            view: AdjustState::Off,
+                            ..state
+                        },
+                        keys
+                    )
+                    .is_empty()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_shadows_mark_follows_exposure_and_reports_each_state() {
+        use crate::keymap::{KeyAction, KeyMap};
+        let o = KeyMap::default().first_key(KeyAction::Shadows);
+        let exposure = ExposureState {
+            steps: 1,
+            total: Ev::from_thirds(1),
+            view: AdjustState::Shown,
+            ..EXPOSURE_OFF
+        };
+        for (state, expected) in [
+            (AdjustState::Off, None),
+            (
+                AdjustState::Shown,
+                Some((
+                    "Shadows (O): the dark tones are lifted by 75.",
+                    "Shadows: the dark tones are lifted by 75.",
+                )),
+            ),
+            (
+                AdjustState::Waiting,
+                Some((
+                    "Shadows (O): the view is being made again.",
+                    "Shadows: the view is being made again.",
+                )),
+            ),
+            (
+                AdjustState::Paused,
+                Some((
+                    "Shadows (O) is paused: it applies only to RAW renderings.",
+                    "Shadows is paused: it applies only to RAW renderings.",
+                )),
+            ),
+        ] {
+            for key in [o, None] {
+                let marks = adjustment_marks(
+                    &FineState::Shown,
+                    None,
+                    &SharpenState::Shown,
+                    None,
+                    Sharpening::DEFAULT,
+                    (&exposure, default_exposure_keys()),
+                    (&state, key, 75),
+                );
+                let (first, shadows) = marks.split_at(3);
+                assert_eq!(
+                    first
+                        .iter()
+                        .map(|mark| mark.text.as_str())
+                        .collect::<Vec<_>>(),
+                    ["Fine", "USM", "+⅓ EV"]
+                );
+                let expected = expected.map(|(with_key, without_key)| AdjustmentMark {
+                    text: "Shadows".to_owned(),
+                    dimmed: state == AdjustState::Paused,
+                    hover: if key.is_some() { with_key } else { without_key }.to_owned(),
+                });
+                assert_eq!(shadows, expected.as_slice());
+            }
+        }
     }
 }

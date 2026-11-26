@@ -590,6 +590,27 @@ only if it is seen in use.)
   ring is drawn meanwhile, since the ring carries the sharpening, as below 50 % with the
   half-size view.
 
+## Exposure and shadows (ADR 0027 W5)
+
+(T335, accepted 2026-11-26.)
+
+- *A `keys.txt` with O, B, Shift+B, Ctrl+↑, Ctrl+↓ or Shift+Backspace on another action*
+  (accepted as for D and U): that line is lost on loading (the key map's rule for a taken key);
+  written in `CHANGELOG.md`.
+- *The overlays are unexposed* (A-Q6): the histogram, the clipping marks and the focus marking
+  are made from the unexposed RAW data, so at +2 EV the clipping marks do not match the picture.
+- *The compare with a JPEG or TIFF first side* (or JPEG mode): the six commands are greyed and a
+  step is refused there, so a RAW file on the second side cannot be stepped by hand (its modes
+  and shadows still apply).
+- *The compare's sides one step apart*: a step the second core refuses at its own limit (its
+  image's base is higher or lower) leaves the two sides one step apart until a reset; each mark
+  shows its own total.
+- *A step in the same frame as a step to another image* on one side of the compare is kept on
+  that side and reset on the other (the keys run before the drawing); rare, and the marks show it.
+- *Reset Exposure and Reset Adjustments for one frame* (T335's review, cosmetic): the shell's
+  last source and steps are taken only while the preview is drawn, so on returning to the
+  preview after the steps were reset the two items may look enabled for one frame.
+
 ## Filter on text and metadata (ADR 0022)
 
 - *A sidecar changed by another program* (ADR 0022 S2-Q6, owner 2026-11-25): the filter's values

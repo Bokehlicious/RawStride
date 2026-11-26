@@ -419,6 +419,8 @@ pub fn key_action_text(action: KeyAction) -> String {
     match action {
         KeyAction::OpenIn => "Open in First Program".to_owned(),
         KeyAction::MarkedOnly => "Marked only".to_owned(),
+        KeyAction::ExposureBrighter => "Exposure: Brighter".to_owned(),
+        KeyAction::ExposureDarker => "Exposure: Darker".to_owned(),
         other => other.command().map(command_text).unwrap_or_default(),
     }
 }
@@ -561,6 +563,7 @@ pub fn submenu_text(submenu: SubmenuKind) -> &'static str {
         SubmenuKind::Rating => "Rating",
         SubmenuKind::Label => "Label",
         SubmenuKind::Theme => "Theme",
+        SubmenuKind::Exposure => "Exposure",
     }
 }
 
@@ -614,6 +617,12 @@ pub fn command_text(command: Command) -> String {
         Command::FocusMarking => "Show Focus Marking".to_owned(),
         Command::FineDetails => "Show Fine Details".to_owned(),
         Command::Sharpening => "Show Sharpening".to_owned(),
+        Command::Shadows => "Show Shadows".to_owned(),
+        Command::ExposureBrighter => "Brighter".to_owned(),
+        Command::ExposureDarker => "Darker".to_owned(),
+        Command::ResetExposure => "Reset Exposure".to_owned(),
+        Command::AutoExposure => "Auto Exposure".to_owned(),
+        Command::CameraBrightness => "Camera Brightness".to_owned(),
         Command::ResetAdjustments => "Reset Adjustments".to_owned(),
         Command::Compare => "Compare".to_owned(),
         Command::HoldImage => "Hold Current Image".to_owned(),
@@ -720,6 +729,7 @@ mod tests {
         assert_eq!(submenu_text(SubmenuKind::Rating), "Rating");
         assert_eq!(submenu_text(SubmenuKind::Label), "Label");
         assert_eq!(submenu_text(SubmenuKind::Theme), "Theme");
+        assert_eq!(submenu_text(SubmenuKind::Exposure), "Exposure");
         assert_eq!(theme_text(Theme::Dark), "Dark");
         assert_eq!(theme_text(Theme::Light), "Light");
     }
@@ -785,6 +795,12 @@ mod tests {
                 "Show Focus Marking",
                 "Show Fine Details",
                 "Show Sharpening",
+                "Show Shadows",
+                "Brighter",
+                "Darker",
+                "Reset Exposure",
+                "Auto Exposure",
+                "Camera Brightness",
                 "Reset Adjustments",
                 "Compare",
                 "Hold Current Image",
@@ -856,6 +872,12 @@ mod tests {
             Some("E"),
             Some("D"),
             Some("U"),
+            Some("O"),
+            Some("Ctrl+↑"),
+            Some("Ctrl+↓"),
+            Some("Shift+Backspace"),
+            Some("B"),
+            Some("Shift+B"),
             Some("Backspace"),
             Some("C"),
             Some("K"),
@@ -1351,6 +1373,14 @@ mod tests {
         assert_eq!(actions, KeyAction::ALL);
         assert_eq!(key_action_text(KeyAction::OpenIn), "Open in First Program");
         assert_eq!(key_action_text(KeyAction::MarkedOnly), "Marked only");
+        assert_eq!(
+            key_action_text(KeyAction::ExposureBrighter),
+            "Exposure: Brighter"
+        );
+        assert_eq!(
+            key_action_text(KeyAction::ExposureDarker),
+            "Exposure: Darker"
+        );
         assert_eq!(key_action_text(KeyAction::Fit), "Fit");
         assert_eq!(key_action_text(KeyAction::Stars0), "No stars");
         assert_eq!(key_action_text(KeyAction::Delete), "Delete to Recycle Bin");

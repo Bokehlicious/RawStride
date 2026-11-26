@@ -793,6 +793,20 @@ pub enum Command {
     /// (View ▸ Show Sharpening, U; ADR 0027 §3.3, W3-Q5, T318). Not a setting: it lasts for the
     /// session.
     Sharpening,
+    /// The shadows on ↔ off: the dark tones of the RAW view lifted by the amount of the page
+    /// Preview (View ▸ Show Shadows, O; ADR 0027 §3.4, W5-Q6, T335). Not a setting.
+    Shadows,
+    /// One manual exposure step of ⅓ EV brighter (View ▸ Exposure ▸ Brighter, Ctrl+↑; W5-Q2).
+    ExposureBrighter,
+    /// One manual exposure step of ⅓ EV darker (View ▸ Exposure ▸ Darker, Ctrl+↓; W5-Q2).
+    ExposureDarker,
+    /// The manual exposure steps back to 0 (View ▸ Exposure ▸ Reset Exposure, Shift+Backspace).
+    ResetExposure,
+    /// Auto exposure on ↔ off (View ▸ Exposure ▸ Auto Exposure, B; W5-Q4). Not a setting.
+    AutoExposure,
+    /// The camera's brightness on ↔ off (View ▸ Exposure ▸ Camera Brightness, Shift+B; W5-Q5).
+    /// Not a setting.
+    CameraBrightness,
     /// Every adjustment of the preview turned off (View ▸ Reset Adjustments, Backspace; ADR 0027
     /// A-Q3, W3-Q8, T318). It changes no setting.
     ResetAdjustments,
@@ -864,6 +878,12 @@ impl Command {
             | Self::FocusMarking
             | Self::FineDetails
             | Self::Sharpening
+            | Self::Shadows
+            | Self::ExposureBrighter
+            | Self::ExposureDarker
+            | Self::ResetExposure
+            | Self::AutoExposure
+            | Self::CameraBrightness
             | Self::ResetAdjustments
             | Self::Compare
             | Self::HoldImage
@@ -904,6 +924,7 @@ pub enum SubmenuKind {
     Rating,
     Label,
     Theme,
+    Exposure,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -984,6 +1005,29 @@ const LABEL_ITEMS: &[MenuItem] = &[
     MenuItem {
         command: Command::ClearLabel,
         key: ctrl(Key::Num0),
+    },
+];
+
+const EXPOSURE_ITEMS: &[MenuItem] = &[
+    MenuItem {
+        command: Command::ExposureBrighter,
+        key: ctrl(Key::ArrowUp),
+    },
+    MenuItem {
+        command: Command::ExposureDarker,
+        key: ctrl(Key::ArrowDown),
+    },
+    MenuItem {
+        command: Command::ResetExposure,
+        key: shift(Key::Backspace),
+    },
+    MenuItem {
+        command: Command::AutoExposure,
+        key: plain(Key::B),
+    },
+    MenuItem {
+        command: Command::CameraBrightness,
+        key: shift(Key::B),
     },
 ];
 
@@ -1069,6 +1113,8 @@ pub const MENUS: &[Menu] = &[
             item(Command::FocusMarking, plain(Key::E)),
             item(Command::FineDetails, plain(Key::D)),
             item(Command::Sharpening, plain(Key::U)),
+            item(Command::Shadows, plain(Key::O)),
+            MenuEntry::Submenu(SubmenuKind::Exposure, EXPOSURE_ITEMS),
             item(Command::ResetAdjustments, plain(Key::Backspace)),
             item(Command::Compare, plain(Key::C)),
             item(Command::HoldImage, plain(Key::K)),
@@ -2097,8 +2143,8 @@ mod tests {
             }
         }
         // In the View menu, right after the last zoom item, with Show Fine Details (D) right
-        // after Show Focus Marking (T314) and Show Sharpening (U) and Reset Adjustments
-        // (Backspace) right after it (T318); then the compare's five in their order (Lock Zoom
+        // after Show Focus Marking (T314), then Show Sharpening (U), Show Shadows (O),
+        // Exposure and Reset Adjustments (Backspace), then the compare's five (Lock Zoom
         // and Position after Above and Below, T154), before the next separator.
         let Some(view) = MENUS.iter().find(|menu| menu.kind == MenuKind::View) else {
             panic!("there is a View menu");
@@ -2111,7 +2157,7 @@ mod tests {
             panic!("the View menu has Zoom at Pointer");
         };
         assert_eq!(
-            view.entries.get(anchor + 1..anchor + 13),
+            view.entries.get(anchor + 1..anchor + 15),
             Some(
                 &[
                     item(Command::ClipHighlights, Some(j)),
@@ -2119,6 +2165,8 @@ mod tests {
                     item(Command::FocusMarking, Some(KeyChord { key: Key::E, ..j })),
                     item(Command::FineDetails, Some(KeyChord { key: Key::D, ..j })),
                     item(Command::Sharpening, Some(KeyChord { key: Key::U, ..j })),
+                    item(Command::Shadows, plain(Key::O)),
+                    MenuEntry::Submenu(SubmenuKind::Exposure, EXPOSURE_ITEMS),
                     item(
                         Command::ResetAdjustments,
                         Some(KeyChord {
@@ -2220,9 +2268,7 @@ mod tests {
         );
     }
 
-    /// View ▸ Show Sharpening (U) and Reset Adjustments (Backspace) come right after Show Fine
-    /// Details, act in the preview, and no other item has their keys (ADR 0027 W3-Q5, W3-Q8,
-    /// T318).
+    /// The adjustment commands after Show Fine Details act in the preview (ADR 0027 W3, W5).
     #[test]
     fn sharpening_and_reset_adjustments_come_right_after_show_fine_details() {
         let u = KeyChord {
@@ -2238,9 +2284,14 @@ mod tests {
         assert_eq!(plain(Key::U), Some(u));
         assert_eq!(plain(Key::Backspace), Some(backspace));
         for item in &menu_items() {
-            match item.key.map(|chord| chord.key) {
-                Some(Key::U) => assert_eq!(item.command, Command::Sharpening),
-                Some(Key::Backspace) => assert_eq!(item.command, Command::ResetAdjustments),
+            match item.key {
+                Some(chord) if chord.key == Key::U => assert_eq!(item.command, Command::Sharpening),
+                Some(chord) if chord == backspace => {
+                    assert_eq!(item.command, Command::ResetAdjustments)
+                }
+                Some(chord) if Some(chord) == shift(Key::Backspace) => {
+                    assert_eq!(item.command, Command::ResetExposure);
+                }
                 _ => {}
             }
         }
@@ -2257,14 +2308,49 @@ mod tests {
             panic!("the View menu has Show Fine Details");
         };
         assert_eq!(
-            view.entries.get(fine + 1..fine + 3),
+            view.entries.get(fine + 1..fine + 5),
             Some(
                 &[
                     item(Command::Sharpening, Some(u)),
+                    item(Command::Shadows, plain(Key::O)),
+                    MenuEntry::Submenu(SubmenuKind::Exposure, EXPOSURE_ITEMS),
                     item(Command::ResetAdjustments, Some(backspace)),
                 ][..]
             )
         );
+    }
+
+    #[test]
+    fn exposure_submenu_items_have_their_default_keys_and_act_in_the_loupe() {
+        assert_eq!(
+            EXPOSURE_ITEMS,
+            &[
+                MenuItem {
+                    command: Command::ExposureBrighter,
+                    key: ctrl(Key::ArrowUp)
+                },
+                MenuItem {
+                    command: Command::ExposureDarker,
+                    key: ctrl(Key::ArrowDown)
+                },
+                MenuItem {
+                    command: Command::ResetExposure,
+                    key: shift(Key::Backspace)
+                },
+                MenuItem {
+                    command: Command::AutoExposure,
+                    key: plain(Key::B)
+                },
+                MenuItem {
+                    command: Command::CameraBrightness,
+                    key: shift(Key::B)
+                },
+            ]
+        );
+        assert_eq!(Command::Shadows.acts_in(), Where::Loupe);
+        for item in EXPOSURE_ITEMS {
+            assert_eq!(item.command.acts_in(), Where::Loupe);
+        }
     }
 
     /// The dimmed mark's colour is mid grey and is held against the black plate at 4.5:1 (T314).

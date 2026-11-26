@@ -87,7 +87,6 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status | Model |
 |---|---|---|---|
-| [T335](T335-exposure-keys-menu-marks.md) | ADR 0027 W5: the keys, the menu and the marks of the exposure and the shadows | Open | Opus |
 
 ## Writing a task (owner and reviewer)
 
