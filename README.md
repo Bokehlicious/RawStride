@@ -1,5 +1,10 @@
 # RawStride
 
+[![CI](https://github.com/Bokehlicious/RawStride/actions/workflows/ci.yml/badge.svg)](https://github.com/Bokehlicious/RawStride/actions/workflows/ci.yml)
+[![Latest release](https://img.shields.io/github/v/release/Bokehlicious/RawStride)](https://github.com/Bokehlicious/RawStride/releases/latest)
+[![License: GPL-3.0-or-later](https://img.shields.io/badge/license-GPL--3.0--or--later-blue)](LICENSE)
+![Platform: Windows](https://img.shields.io/badge/platform-Windows-0078D6)
+
 A fast and lightweight photo culling and ingest program for Windows: copy the photos off the card,
 step through them quickly, rate and label them, and add IPTC metadata.
 
