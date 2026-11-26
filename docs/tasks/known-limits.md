@@ -610,50 +610,50 @@ only if it is seen in use.)
 
 ## Filter on text and metadata (ADR 0022)
 
-- *A sidecar changed by another program* (ADR 0022 S2-Q6, owner 2026-11-25): the filter's values
+- *A sidecar changed by another program* (**accepted for good, 2026-11-26**; ADR 0022 S2-Q6, owner 2026-11-25): the filter's values
   of a tab are read once and kept until its folder is listed again; only RawStride's own writes
   read them again (S2-Q5). A value another program writes is seen by the filter after F5 (Reload
   Folder) or when the folder is opened again. A task only if it is seen in use.
-- *A late line of ExifTool's standard error* (T336's extra review, 2026-11-25): `ExifTool::execute`
+- *A late line of ExifTool's standard error* (**accepted for good, 2026-11-26**; T336's extra review, 2026-11-25): `ExifTool::execute`
   waits 2 ms for standard error after the answer; a line that comes later (a batch read's summary
   "N image files read", a "File not found") is given with the next command's answer. A read of
   many images then may give an image `"no answer for …"` instead of ExifTool's message, and a
   stale line may show in a later error text. The values read are not affected. Older than T336,
   seen more often with batch reads. A task only if it is seen in use.
-- *An ExifTool message with `" - "` of its own* (T336, 2026-11-25): a batch read gives an image
+- *An ExifTool message with `" - "` of its own* (**accepted for good, 2026-11-26**; T336, 2026-11-25): a batch read gives an image
   the standard error lines whose part after the first `" - "` is its path; a message whose own
   text has `" - "` before the path is not matched, and the image gets `"no answer for …"`
   instead. ExifTool's usual "Error: … - <path>" lines are matched. A task only if it is seen in
   use.
-- *Two tabs of the same folder* (T337, 2026-11-26): each tab keeps its own filter values, so two
+- *Two tabs of the same folder* (**accepted for good, 2026-11-26**; T337, 2026-11-26): each tab keeps its own filter values, so two
   tabs of one folder read the same files each. A task only if it is seen in use.
-- *The Exif reads' order* (T337, 2026-11-26): the filter's Exif requests are queued in the capture
+- *The Exif reads' order* (**accepted for good, 2026-11-26**; T337, 2026-11-26): the filter's Exif requests are queued in the capture
   reader's channel at once, so their order is fixed when they are queued; scrolling meanwhile
   does not move the newly visible images first. A task only if it is seen in use.
 - *An ExifTool that hangs* (T337, 2026-11-26): `execute` has no read timeout, so an ExifTool that
   hangs on one file blocks the metadata worker, the filter's reads as every other request. A
   task only if it is seen in use.
-- *Values of other tabs* (T337, 2026-11-26): only the active tab's values are read; another tab's
+- *Values of other tabs* (**accepted for good, 2026-11-26**; T337, 2026-11-26): only the active tab's values are read; another tab's
   are read when it becomes active. A task only if it is seen in use.
-- *The search's counts in every frame* (review of T341, 2026-11-26): while a search is active,
+- *The search's counts in every frame* (**accepted for good, 2026-11-26**; review of T341, 2026-11-26): while a search is active,
   the status line's counts (`star_label_list` and `search_counts`, with each file's rating under
   a star filter) are made again over all the tab's files in every frame drawn, in the contact
   sheet and the preview. A task only if it is seen in use (large folders). Seen in the hand check
   of S1–S3 (owner, 2026-11-26): a little slow, manageable. The same holds for the counts of an
   extended filter (T344, `filter_counts`) and, while the "Filter…" window is open, for each value
   list of an "is one of" row (`value_counts` over the tab's files in every frame).
-- *The filter window's draft when the tab changes* (T344, 2026-11-26): when the active tab stops
+- *The filter window's draft when the tab changes* (**accepted for good, 2026-11-26**; T344, 2026-11-26): when the active tab stops
   being the one the "Filter…" window was opened for (an import can open a tab while it is open),
   the window closes as Cancel and the rows typed in it are lost. Rare. A task only if it is seen
   in use.
-- *An Exif answer looked up in the tab's files* (review of T344, 2026-11-26): while the active
+- *An Exif answer looked up in the tab's files* (**accepted for good, 2026-11-26**; review of T344, 2026-11-26): while the active
   tab's filter needs Exif, each capture read's answer is looked up in the tab's file list to
   decide whether to refilter, so a large folder's Exif reads cost time that grows with the
   square of its size, spread over the frames. A task only if it is seen in use.
-- *Exif reads queued for a value list* (T345, 2026-11-26): the "Filter…" window's value list on
+- *Exif reads queued for a value list* (**accepted for good, 2026-11-26**; T345, 2026-11-26): the "Filter…" window's value list on
   Camera or Lens queues the folder's Exif reads in the capture reader at once; closing the window
   cannot take them back, so they are read and kept. A task only if it is seen in use.
-- *Ctrl+Shift+F while the search box has the keyboard* (T344 chain review, 2026-11-26): the key
+- *Ctrl+Shift+F while the search box has the keyboard* (**accepted for good, 2026-11-26**; T344 chain review, 2026-11-26): the key
   does nothing then, as Ctrl+F; the button or View ▸ Filter ▸ Filter… opens the window. A task
   only if it is seen in use.
 - *The capture reader's thread dying* (T345 chain review, owner 2026-11-26):
