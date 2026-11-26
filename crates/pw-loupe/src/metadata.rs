@@ -10,6 +10,7 @@ use pw_loupe::{
     RatingWriter, UNSUPPORTED_TEXT, WriteReason, editor_text, notice_text,
     path_resolution_error_text, status_text, write_reason_text,
 };
+use pw_metadata::FilterValues;
 use pw_metadata::edit::Edit;
 use pw_metadata::read::MetadataRead;
 use pw_metadata::safe_write::OriginalState;
@@ -27,6 +28,9 @@ pub(crate) trait MetadataSubmit: RatingWriter + OrientationWriter {
 
     /// All metadata of one image, for the metadata window (T98, T107).
     fn read_metadata(&mut self, image: PathBuf) -> Result<RequestId, SubmitError>;
+
+    /// The filter's IPTC values of some images, in one request (ADR 0022 S2, T336).
+    fn read_filter_values(&mut self, images: Vec<PathBuf>) -> Result<RequestId, SubmitError>;
 
     /// The editor's edits of one image (T98, T105).
     fn write_edits(&mut self, image: PathBuf, edits: Vec<Edit>) -> Result<RequestId, SubmitError>;
@@ -78,6 +82,10 @@ impl MetadataSubmit for MetadataWorker {
 
     fn read_metadata(&mut self, image: PathBuf) -> Result<RequestId, SubmitError> {
         MetadataWorker::read_metadata(self, image)
+    }
+
+    fn read_filter_values(&mut self, images: Vec<PathBuf>) -> Result<RequestId, SubmitError> {
+        MetadataWorker::read_filter_values(self, images)
     }
 
     fn write_edits(&mut self, image: PathBuf, edits: Vec<Edit>) -> Result<RequestId, SubmitError> {
@@ -357,6 +365,8 @@ enum FailedWrite {
 
 #[derive(Default)]
 pub(crate) struct MetadataCache {
+    filter_read: Option<(RequestId, Vec<PathBuf>)>,
+    filter_answers: Vec<(PathBuf, Result<FilterValues, String>)>,
     images: HashMap<PathBuf, ImageMetadata>,
     load_request: Option<RequestId>,
     pending_read: Option<Vec<PathBuf>>,
@@ -438,6 +448,30 @@ pub(crate) struct WriteAnswer {
 }
 
 impl MetadataCache {
+    /// Sends one filter read; refused with `QueueFull` while another is in flight (ADR 0022 S2).
+    pub(crate) fn request_filter_values(
+        &mut self,
+        worker: &mut impl MetadataSubmit,
+        images: Vec<PathBuf>,
+    ) -> Result<(), SubmitError> {
+        if self.filter_read_in_flight() {
+            return Err(SubmitError::QueueFull);
+        }
+        let id = worker.read_filter_values(images.clone())?;
+        self.filter_read = Some((id, images));
+        Ok(())
+    }
+
+    /// Whether a filter read has been sent and its answer has not come back.
+    pub(crate) fn filter_read_in_flight(&self) -> bool {
+        self.filter_read.is_some()
+    }
+
+    /// The entries of the filter read's answer (or its failure when the worker stopped).
+    pub(crate) fn take_filter_answers(&mut self) -> Vec<(PathBuf, Result<FilterValues, String>)> {
+        std::mem::take(&mut self.filter_answers)
+    }
+
     /// Keys metadata by absolute path so it matches the paths sent to the view core.
     pub fn begin_load(
         &mut self,
@@ -729,6 +763,10 @@ impl MetadataCache {
                 Err(TryRecvError::Empty) => return,
                 Err(TryRecvError::Disconnected) => {
                     let message = submit_error(SubmitError::Stopped);
+                    if let Some((_, paths)) = self.filter_read.take() {
+                        self.filter_answers
+                            .extend(paths.into_iter().map(|path| (path, Err(message.clone()))));
+                    }
                     // The `add_files` reads can never finish either: each fails on its own
                     // (T250), the sent ones in request order, then the waiting paths.
                     let mut added: Vec<(RequestId, Vec<PathBuf>)> =
@@ -1566,7 +1604,16 @@ impl MetadataCache {
                 }
             }
             WorkerEvent::RatingsRead { .. } => {}
-            WorkerEvent::FilterValuesRead { .. } => {} // ADR 0022 S2: used from T337.
+            WorkerEvent::FilterValuesRead { id, values } => {
+                if self
+                    .filter_read
+                    .as_ref()
+                    .is_some_and(|(sent, _)| *sent == id)
+                {
+                    self.filter_read = None;
+                    self.filter_answers.extend(values);
+                }
+            }
             WorkerEvent::MetadataRead { id, path, result }
                 if self
                     .editor
@@ -1874,6 +1921,7 @@ mod tests {
         write_result: Option<Result<(), String>>,
         /// The images of every `read_metadata` call, with the id each was given.
         metadata_reads: Vec<(RequestId, PathBuf)>,
+        filter_reads: Vec<(RequestId, Vec<PathBuf>)>,
         next_metadata_id: RequestId,
         /// The image and edits of every `write_edits` call, with the id each was given.
         edits_writes: Vec<(RequestId, PathBuf, Vec<Edit>)>,
@@ -1899,6 +1947,61 @@ mod tests {
         next_delete_id: RequestId,
     }
 
+    #[test]
+    fn filter_read_accepts_only_the_outstanding_request() {
+        let mut cache = MetadataCache::default();
+        let mut worker = FakeSubmit::new([]);
+        let paths = vec![PathBuf::from("a.jpg")];
+        cache
+            .request_filter_values(&mut worker, paths.clone())
+            .unwrap();
+        let id = worker.filter_reads[0].0;
+        assert!(matches!(
+            cache.request_filter_values(&mut worker, paths.clone()),
+            Err(SubmitError::QueueFull)
+        ));
+        assert_eq!(worker.filter_reads, [(id, paths.clone())]);
+        let values = vec![(paths[0].clone(), Ok(FilterValues::default()))];
+        cache.apply(
+            WorkerEvent::FilterValuesRead {
+                id: id + 1,
+                values: values.clone(),
+            },
+            &mut Vec::new(),
+        );
+        assert!(cache.filter_read_in_flight());
+        assert!(cache.take_filter_answers().is_empty());
+        cache.apply(
+            WorkerEvent::FilterValuesRead {
+                id,
+                values: values.clone(),
+            },
+            &mut Vec::new(),
+        );
+        assert!(!cache.filter_read_in_flight());
+        assert_eq!(cache.take_filter_answers(), values);
+        assert!(cache.take_filter_answers().is_empty());
+        assert!(cache.request_filter_values(&mut worker, paths).is_ok());
+    }
+
+    #[test]
+    fn filter_disconnect_returns_each_sent_path() {
+        let paths = vec![PathBuf::from("a.jpg"), PathBuf::from("b.jpg")];
+        let mut cache = MetadataCache::default();
+        cache
+            .request_filter_values(&mut FakeSubmit::new([]), paths.clone())
+            .unwrap();
+        cache.drain(|| Err(TryRecvError::Disconnected), &mut Vec::new());
+        assert!(!cache.filter_read_in_flight());
+        assert_eq!(
+            cache.take_filter_answers(),
+            paths
+                .into_iter()
+                .map(|p| (p, Err(submit_error(SubmitError::Stopped))))
+                .collect::<Vec<_>>()
+        );
+    }
+
     impl FakeSubmit {
         fn new(read_responses: impl IntoIterator<Item = Result<RequestId, SubmitError>>) -> Self {
             Self {
@@ -1911,6 +2014,7 @@ mod tests {
                 next_write_id: 100,
                 write_result: None,
                 metadata_reads: Vec::new(),
+                filter_reads: Vec::new(),
                 next_metadata_id: 500,
                 edits_writes: Vec::new(),
                 next_edits_id: 900,
@@ -2004,6 +2108,13 @@ mod tests {
             let id = self.next_metadata_id;
             self.next_metadata_id += 1;
             self.metadata_reads.push((id, image));
+            Ok(id)
+        }
+
+        fn read_filter_values(&mut self, images: Vec<PathBuf>) -> Result<RequestId, SubmitError> {
+            let id = self.next_metadata_id;
+            self.next_metadata_id += 1;
+            self.filter_reads.push((id, images));
             Ok(id)
         }
 

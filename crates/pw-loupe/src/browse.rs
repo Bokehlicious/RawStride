@@ -467,6 +467,7 @@ impl Tab {
 
     /// Keeps `unread` a subset of `files`, in its own order (T250).
     fn keep_unread_listed(&mut self) {
+        self.filter_values.retain(&self.files);
         if self.unread.is_empty() {
             return;
         }
@@ -1966,7 +1967,11 @@ mod tests {
     fn sorted_by_capture() -> (Tabs, HashMap<PathBuf, Rating>) {
         let (mut tabs, ratings) = setup();
         for index in 0..12 {
-            tabs.record_capture(&name(index), time(&format!("2026:10:30 14:00:{index:02}")));
+            tabs.record_capture(
+                &name(index),
+                time(&format!("2026:10:30 14:00:{index:02}")),
+                None,
+            );
         }
         let order = by(SortKey::Capture, false);
         tabs.follow_sort(order, true, &of(&ratings), &no_time);
@@ -2071,7 +2076,7 @@ mod tests {
         assert_eq!(t.unplaced, std::slice::from_ref(&first));
 
         // The time of AAA.ARW comes back (before every other): it is placed first.
-        tabs.record_capture(&first, time("2026:10:30 13:00:00"));
+        tabs.record_capture(&first, time("2026:10:30 13:00:00"), None);
         let t = tab(&mut tabs);
         assert!(t.place_waiting(order, true, &r, &no_time));
         assert_eq!(t.files.first(), Some(&first));

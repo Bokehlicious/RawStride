@@ -30,6 +30,7 @@ use pw_loupe::library::{
     FolderList, Library, TreeRowKind, folder_key, read_drives, suppress_no_disk_dialogs,
 };
 use pw_loupe::library_text::{LibraryText, library_text, refresh_hover_text};
+use pw_loupe::meta_filter::Group;
 use pw_loupe::{AUTHORS, AboutText, COMMIT, REPOSITORY, VERSION, about_text};
 use pw_loupe::{
     Action, AddedFiles, CardRefresh, CellState, CopiedFields, DEFAULT_THUMBNAIL_SIZE, DialogKey,
@@ -1388,6 +1389,9 @@ struct Loupe {
     /// answer has not come back.
     capture_reader: CaptureReader,
     capture_in_flight: HashSet<PathBuf>,
+    /// The tab paths of the filter read in flight (ADR 0022 S2), kept as the tab spells them so
+    /// they are released even if the working directory changes.
+    filter_read_paths: Vec<PathBuf>,
     /// The reader of a file's own Exif orientation, for a turn of an image without a known value
     /// (ADR 0024 §2.5, T236, T237), and the number of its reads asked for whose answer has not
     /// come back.
@@ -2302,7 +2306,8 @@ impl Loupe {
     fn follow_sort(&mut self, ctx: &egui::Context) {
         while let Some(read) = self.capture_reader.try_recv() {
             self.capture_in_flight.remove(&read.path);
-            self.tabs.record_capture(&read.path, read.time);
+            self.tabs
+                .record_capture(&read.path, read.time, read.exif.as_ref());
         }
         if self.settings.shell.sort.key == SortKey::Capture {
             self.request_capture_times();
@@ -2328,12 +2333,86 @@ impl Loupe {
             return;
         };
         let wanted = capture_requests(tab, self.settings.shell.sort, &self.capture_in_flight);
+        self.request_captures(wanted);
+    }
+
+    fn request_captures(&mut self, wanted: Vec<PathBuf>) {
         for path in wanted {
             if self.capture_reader.request(path.clone()) {
                 self.capture_in_flight.insert(path);
             } else {
-                self.tabs.record_capture(&path, None);
+                self.tabs.record_capture(&path, None, None);
             }
+        }
+    }
+
+    /// Follows ADR 0022 S2 reads for the active tab and delivers finished reads to their tabs.
+    fn follow_filter_values(&mut self, ctx: &egui::Context) {
+        let cwd = std::env::current_dir().ok();
+        let cwd = cwd.as_deref();
+        for (path, result) in self.metadata.take_filter_answers() {
+            apply_filter_answer(
+                &mut self.tabs,
+                cwd,
+                &path,
+                result.as_ref().map_err(String::as_str),
+                self.metadata.write_pending(&path),
+            );
+        }
+        if !self.metadata.filter_read_in_flight() && !self.filter_read_paths.is_empty() {
+            self.tabs.end_filter_read(&self.filter_read_paths);
+            self.filter_read_paths.clear();
+        }
+        // follow_sort already schedules a repaint for outstanding capture reads.
+        if self.metadata.filter_read_in_flight() {
+            ctx.request_repaint_after(CAPTURE_POLL_INTERVAL);
+        }
+        let Some(tab) = self.tabs.active() else {
+            return;
+        };
+        let exif = tab.meta_filter.needs(Group::Exif);
+        let iptc = tab.meta_filter.needs(Group::Iptc)
+            && !self.metadata.filter_read_in_flight()
+            && !self.metadata.batch_running()
+            && self.metadata.template_batch_progress().is_none();
+        if !exif && !iptc {
+            return;
+        }
+        let order = filter_read_order(tab);
+        let chunk = if iptc {
+            tab.filter_values
+                .iptc_chunk(&order, &tab_pending(&self.metadata, cwd))
+        } else {
+            Vec::new()
+        };
+        if exif {
+            let mut wanted = tab.filter_values.exif_wanted(&order);
+            wanted.retain(|p| !self.capture_in_flight.contains(p));
+            self.request_captures(wanted);
+            if !self.capture_in_flight.is_empty() {
+                ctx.request_repaint_after(CAPTURE_POLL_INTERVAL);
+            }
+        }
+        if chunk.is_empty() {
+            return;
+        }
+        let paths = chunk
+            .iter()
+            .map(|p| cwd.map_or_else(|| p.clone(), |cwd| resolve_path(cwd, p)))
+            .collect();
+        if let Some(tab) = self.tabs.active_mut() {
+            match self
+                .metadata
+                .request_filter_values(&mut self.metadata_worker, paths)
+            {
+                Ok(()) => {
+                    tab.filter_values.mark_in_flight(&chunk);
+                    self.filter_read_paths = chunk;
+                }
+                Err(pw_metadata::SubmitError::QueueFull) => {}
+                Err(pw_metadata::SubmitError::Stopped) => tab.filter_values.mark_unreadable(&chunk),
+            }
+            ctx.request_repaint_after(CAPTURE_POLL_INTERVAL);
         }
     }
 
@@ -3780,6 +3859,9 @@ impl Loupe {
                 return;
             }
         };
+        if let Some(tab) = self.tabs.active_mut() {
+            tab.filter_values.clear();
+        }
         self.exif.folder_reloaded();
         self.histograms.folder_reloaded();
         if self.load_tab(true)
@@ -9062,6 +9144,7 @@ impl Loupe {
         // file away is made anew (T255). A failed write left the file as it was.
         let cwd = std::env::current_dir().ok();
         for written in self.metadata.take_written() {
+            self.tabs.forget_iptc(cwd.as_deref(), &written.path);
             self.histograms.written(
                 &written.path,
                 written.succeeded,
@@ -9115,6 +9198,7 @@ impl Loupe {
         self.refilter_when_ratings_change();
         // The sort order follows its keys as they are read (U14-Q4, T138).
         self.follow_sort(&ctx);
+        self.follow_filter_values(&ctx);
         // A folder or a file dropped on the window opens in a new tab (owner decision 2026-11-08,
         // ADR 0010 Q3). An empty active tab is filled instead, and an already open folder is
         // activated (GR12). Modifier keys are not used: Windows does not report them reliably
@@ -11381,6 +11465,29 @@ fn tab_pending<'a>(
     }
 }
 
+/// The order of a tab's filter reads: the visible images from the current one, then the rest.
+fn filter_read_order(tab: &Tab) -> Vec<PathBuf> {
+    read_order(tab.files.len(), &tab.visible, tab.current, |_| false)
+        .into_iter()
+        .filter_map(|i| tab.files.get(i).cloned())
+        .collect()
+}
+
+/// One entry of a filter read's answer: dropped and read again when a write is pending (S2-Q6).
+fn apply_filter_answer(
+    tabs: &mut Tabs,
+    cwd: Option<&Path>,
+    path: &Path,
+    result: Result<&pw_metadata::FilterValues, &str>,
+    write_pending: bool,
+) {
+    if write_pending {
+        tabs.forget_iptc(cwd, path);
+    } else {
+        tabs.record_iptc(cwd, path, result);
+    }
+}
+
 /// What `sort_tabs` did to the active tab (T242).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SortChange {
@@ -13359,6 +13466,7 @@ fn run(options: Options) -> Result<(), String> {
                 ),
                 capture_reader: CaptureReader::start(),
                 capture_in_flight: HashSet::new(),
+                filter_read_paths: Vec::new(),
                 orientation_reader: EmbeddedOrientationReader::start(),
                 orientation_reads: 0,
                 status_bar: StatusBar::default(),
@@ -15774,6 +15882,79 @@ mod tests {
             assert_eq!(names(&tab), ["b.jpg", "c.jpg", "a.jpg"]);
             assert_eq!(current_name(&tab), "c.jpg");
             remove_folder(&dir);
+        }
+
+        #[test]
+        fn filter_reads_start_at_current_then_wrap_before_hidden_files() {
+            let files: Vec<_> = ["a", "b", "c", "d"]
+                .into_iter()
+                .map(PathBuf::from)
+                .collect();
+            let tab = Tab {
+                files: files.clone(),
+                visible: vec![1, 3],
+                current: 3,
+                ..Default::default()
+            };
+            assert_eq!(
+                crate::filter_read_order(&tab),
+                [
+                    files[3].clone(),
+                    files[1].clone(),
+                    files[0].clone(),
+                    files[2].clone()
+                ]
+            );
+        }
+
+        #[test]
+        fn changed_working_directory_releases_relative_paths_for_retry() {
+            let files = vec![PathBuf::from("album/a.jpg")];
+            let mut tabs = Tabs::default();
+            tabs.open_in_active("album".into(), files.clone(), 0);
+            tabs.active_mut()
+                .unwrap()
+                .filter_values
+                .mark_in_flight(&files);
+            crate::apply_filter_answer(
+                &mut tabs,
+                Some(Path::new("C:/new")),
+                &Path::new("C:/old").join(&files[0]),
+                Ok(&pw_metadata::FilterValues::default()),
+                false,
+            );
+            tabs.end_filter_read(&files);
+            let values = &tabs.active().unwrap().filter_values;
+            assert_eq!(
+                values.counts(pw_loupe::meta_filter::Group::Iptc, &files),
+                (0, 1, 0)
+            );
+            assert_eq!(values.iptc_chunk(&files, &|_| false), files);
+        }
+
+        #[test]
+        fn pending_write_discards_filter_answer_and_allows_a_fresh_read() {
+            let files = vec![PathBuf::from("a.jpg")];
+            let mut tabs = Tabs::default();
+            tabs.open_in_active("folder".into(), files.clone(), 0);
+            tabs.active_mut()
+                .unwrap()
+                .filter_values
+                .mark_in_flight(&files);
+            crate::apply_filter_answer(
+                &mut tabs,
+                None,
+                &files[0],
+                Ok(&pw_metadata::FilterValues::default()),
+                true,
+            );
+            let values = &tabs.active().unwrap().filter_values;
+            assert_eq!(
+                values.counts(pw_loupe::meta_filter::Group::Iptc, &files),
+                (0, 1, 0)
+            );
+            assert!(values.iptc_chunk(&files, &|_| true).is_empty());
+            assert_eq!(values.iptc_chunk(&files, &|_| false), files);
         }
 
         #[test]

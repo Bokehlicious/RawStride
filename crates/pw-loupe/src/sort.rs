@@ -344,6 +344,7 @@ pub fn read_order(
 /// The answer of one capture-time read.
 #[derive(Debug)]
 pub struct CaptureRead {
+    pub exif: Option<crate::filter_values::ExifSummary>,
     pub path: PathBuf,
     pub time: Option<CaptureTime>,
 }
@@ -366,11 +367,16 @@ impl CaptureReader {
             .name("pw-capture-reader".into())
             .spawn(move || {
                 for path in request_receiver {
-                    let time = pw_raw::inspect(&path)
-                        .ok()
-                        .and_then(|info| info.date_time_original)
-                        .and_then(|stored| CaptureTime::parse(&stored));
-                    if result_sender.send(CaptureRead { path, time }).is_err() {
+                    let info = pw_raw::inspect(&path).ok();
+                    let exif = info.as_ref().map(crate::filter_values::exif_summary);
+                    let time = info
+                        .as_ref()
+                        .and_then(|i| i.date_time_original.as_deref())
+                        .and_then(CaptureTime::parse);
+                    if result_sender
+                        .send(CaptureRead { path, time, exif })
+                        .is_err()
+                    {
                         return;
                     }
                 }

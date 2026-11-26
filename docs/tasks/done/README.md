@@ -340,3 +340,4 @@ was when the task was done, so "this file", "below" and "the Log" in T1–T115 m
 | [T331](T331-libraw-exposure-per-render.md) | ADR 0027 W5: the exposure per LibRaw render and the camera's brightness (pw-libraw) |
 | [T332](T332-exposure-and-shadows-in-the-render.md) | ADR 0027 W5: the exposure and the shadows in the view core's render (pw-viewcore) |
 | [T336](T336-filter-values-batch-read.md) | ADR 0022 S2a: the filter's IPTC values, read for many images at once (pw-metadata; done by Codex) |
+| [T337](T337-filter-values-in-the-tabs.md) | ADR 0022 S2b: the filter's values kept per tab and read when needed (pw-loupe) |

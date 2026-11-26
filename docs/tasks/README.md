@@ -90,7 +90,6 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 | [T333](T333-exposure-and-shadows-in-the-state.md) | ADR 0027 W5: the exposure and the shadows in the view core's state | Open | Opus |
 | [T334](T334-shadows-amount-settings-page.md) | ADR 0027 W5: the shadows' amount on the Settings page Preview | Blocked | Sonnet |
 | [T335](T335-exposure-keys-menu-marks.md) | ADR 0027 W5: the keys, the menu and the marks of the exposure and the shadows | Blocked | Opus |
-| [T337](T337-filter-values-in-the-tabs.md) | ADR 0022 S2b: the filter's values kept per tab and read when needed | Open | Opus |
 
 ## Writing a task (owner and reviewer)
 

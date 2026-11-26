@@ -4,6 +4,7 @@ use std::time::SystemTime;
 use pw_metadata::Rating;
 
 use crate::filter::Filter;
+use crate::filter_values::{ExifSummary, TabValues};
 use crate::selection::Selection;
 use crate::shell_text::{ShellText, shell_text};
 use crate::sort::{CaptureTime, CaptureTimes, SortOrder, SortPlan, plan};
@@ -17,7 +18,7 @@ pub enum ViewMode {
 }
 
 /// One open folder and the image it should return to.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Tab {
     pub folder: Option<PathBuf>,
     pub files: Vec<PathBuf>,
@@ -25,6 +26,10 @@ pub struct Tab {
     pub mode: ViewMode,
     /// The filter of this tab (ADR 0014 Q1: per tab, reset when the folder is opened again).
     pub filter: Filter,
+    /// Text and metadata conditions for this folder (ADR 0022).
+    pub meta_filter: crate::meta_filter::Filter,
+    /// Filter values and outstanding IPTC reads, keyed by the tab's own paths.
+    pub filter_values: TabValues,
     /// The marked images of this tab (ADR 0014 §2.5); cleared when the folder is opened again.
     pub selection: Selection,
     /// The file indexes shown, in display order (ADR 0014 §4.2). Set only by `refilter`, `rated`
@@ -65,6 +70,8 @@ impl Tab {
         self.changed_on_disk = false;
         self.unwatched = false;
         self.filter = Filter::default();
+        self.meta_filter.clear();
+        self.filter_values.clear();
         self.selection = Selection::default();
         // The folder in file-name order from `list_folder`: the sort is applied again (U14-Q5).
         self.sorted = None;
@@ -154,7 +161,7 @@ pub enum SortFollow {
 }
 
 /// A collection of folder tabs sharing one view core.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Tabs {
     tabs: Vec<Tab>,
     active: usize,
@@ -344,11 +351,58 @@ impl Tabs {
     }
 
     /// Records a capture time that has come back in every tab listing `path` (U14-Q4).
-    pub fn record_capture(&mut self, path: &Path, time: Option<CaptureTime>) {
+    pub fn record_capture(
+        &mut self,
+        path: &Path,
+        time: Option<CaptureTime>,
+        exif: Option<&ExifSummary>,
+    ) {
         for tab in &mut self.tabs {
             if tab.files.iter().any(|file| file == path) {
                 tab.capture.insert(path.to_path_buf(), time.clone());
+                tab.filter_values.record_exif(path, exif);
             }
+        }
+    }
+
+    fn for_filter_path(
+        &mut self,
+        cwd: Option<&Path>,
+        path: &Path,
+        mut apply: impl FnMut(&mut TabValues, &Path),
+    ) {
+        for tab in &mut self.tabs {
+            for file in &tab.files {
+                let matches = match cwd {
+                    Some(cwd) if !file.is_absolute() => cwd.join(file) == path,
+                    _ => file == path,
+                };
+                if matches {
+                    apply(&mut tab.filter_values, file);
+                }
+            }
+        }
+    }
+
+    /// Delivers a resolved worker answer under each matching tab's own path.
+    pub fn record_iptc(
+        &mut self,
+        cwd: Option<&Path>,
+        path: &Path,
+        result: Result<&pw_metadata::FilterValues, &str>,
+    ) {
+        self.for_filter_path(cwd, path, |values, file| values.record_iptc(file, result));
+    }
+
+    /// Invalidates the written image in every tab listing it.
+    pub fn forget_iptc(&mut self, cwd: Option<&Path>, path: &Path) {
+        self.for_filter_path(cwd, path, |values, file| values.forget_iptc(file));
+    }
+
+    /// Releases remaining marks under the original tab paths after a chunk finishes.
+    pub fn end_filter_read(&mut self, paths: &[PathBuf]) {
+        for tab in &mut self.tabs {
+            tab.filter_values.end_in_flight(paths);
         }
     }
 
@@ -1143,6 +1197,86 @@ mod tests {
         }
     }
 
+    #[test]
+    fn filter_values_follow_matching_tabs_and_resolved_paths() {
+        use crate::meta_filter::{Field, Group, Value};
+        let cwd = Path::new("C:/photos");
+        let file = PathBuf::from("album/a.jpg");
+        let resolved = cwd.join(&file);
+        let mut tabs = Tabs::default();
+        tabs.open_in_active("one".into(), vec![file.clone()], 0);
+        tabs.open_new("two".into(), vec![file.clone(), resolved.clone()], 0);
+        tabs.open_new("three".into(), vec!["other.jpg".into()], 0);
+        let summary = ExifSummary {
+            model: Some("Camera".into()),
+            ..Default::default()
+        };
+        tabs.record_capture(&file, None, Some(&summary));
+        for tab in &mut tabs.tabs {
+            tab.filter_values.mark_in_flight(&tab.files);
+        }
+        tabs.record_iptc(
+            Some(cwd),
+            &resolved,
+            Ok(&pw_metadata::FilterValues::default()),
+        );
+        for tab in tabs.tabs().iter().take(2) {
+            let image = tab.filter_values.values(&file).unwrap();
+            assert_eq!(
+                image.value(Field::Camera),
+                Some(&Value::Text("Camera".into()))
+            );
+            assert!(image.is_read(Group::Iptc));
+        }
+        assert!(
+            tabs.tabs()[1]
+                .filter_values
+                .values(&resolved)
+                .unwrap()
+                .is_read(Group::Iptc)
+        );
+        assert!(active(&tabs).filter_values.values(&file).is_none());
+        assert_eq!(
+            active(&tabs)
+                .filter_values
+                .counts(Group::Iptc, &active(&tabs).files),
+            (0, 1, 0)
+        );
+        tabs.forget_iptc(Some(cwd), &resolved);
+        for tab in tabs.tabs().iter().take(2) {
+            assert_eq!(
+                tab.filter_values.iptc_chunk(&tab.files, &|_| false),
+                tab.files
+            );
+        }
+    }
+
+    #[test]
+    fn relist_drops_removed_values_and_open_resets_the_filter() {
+        let files = named(&["a.jpg", "b.jpg"]);
+        let mut tab = Tab::default();
+        tab.open("folder".into(), files.clone(), 0);
+        tab.meta_filter.set_search("needle");
+        for file in &files {
+            tab.filter_values.record_exif(file, None);
+        }
+        tab.relist(
+            files[..1].to_vec(),
+            None,
+            &|_| false,
+            by(SortKey::Name, false),
+            true,
+            &no_rating,
+            &no_time,
+        );
+        assert!(tab.filter_values.values(&files[0]).is_some());
+        assert!(tab.filter_values.values(&files[1]).is_none());
+        assert!(tab.meta_filter.is_active());
+        tab.open("folder".into(), files.clone(), 0);
+        assert_eq!(tab.filter_values, TabValues::default());
+        assert!(!tab.meta_filter.is_active());
+    }
+
     fn active(tabs: &Tabs) -> &Tab {
         match tabs.active() {
             Some(tab) => tab,
@@ -1210,6 +1344,7 @@ mod tests {
         tabs.record_capture(
             Path::new("a.arw"),
             CaptureTime::parse("2026:10:30 14:03:15"),
+            None,
         );
         let follow = tabs.follow_sort(capture, true, &no_rating, &no_time);
         assert_eq!(
@@ -1223,10 +1358,11 @@ mod tests {
         assert_eq!(file_names(active(&tabs)), ["a.arw", "b.arw", "c.arw"]);
         assert_eq!(active(&tabs).sorted, None);
 
-        tabs.record_capture(Path::new("b.arw"), None);
+        tabs.record_capture(Path::new("b.arw"), None, None);
         tabs.record_capture(
             Path::new("c.arw"),
             CaptureTime::parse("2026:10:30 14:03:12"),
+            None,
         );
         assert_eq!(
             tabs.follow_sort(capture, true, &no_rating, &no_time),
@@ -1289,14 +1425,17 @@ mod tests {
         tabs.record_capture(
             Path::new("a.arw"),
             CaptureTime::parse("2026:10:30 12:00:02"),
+            None,
         );
         tabs.record_capture(
             Path::new("b.arw"),
             CaptureTime::parse("2026:10:30 12:00:03"),
+            None,
         );
         tabs.record_capture(
             Path::new("c.arw"),
             CaptureTime::parse("2026:10:30 12:00:01"),
+            None,
         );
         let capture = by(SortKey::Capture, false);
         assert_eq!(
@@ -1324,6 +1463,7 @@ mod tests {
         tabs.record_capture(
             Path::new("d.arw"),
             CaptureTime::parse("2026:10:30 12:00:00"),
+            None,
         );
         assert_eq!(
             tabs.follow_sort(capture, true, &no_rating, &no_time),
@@ -1376,6 +1516,7 @@ mod tests {
         tabs.record_capture(
             Path::new("a.arw"),
             CaptureTime::parse("2026:10:30 14:03:12"),
+            None,
         );
         assert!(tabs.tabs()[0].capture.is_read(Path::new("a.arw")));
         assert!(!tabs.tabs()[1].capture.is_read(Path::new("a.arw")));

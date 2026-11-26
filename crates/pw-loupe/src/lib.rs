@@ -15,6 +15,7 @@ mod external;
 mod external_text;
 mod field_values;
 mod filter;
+pub mod filter_values;
 pub mod focus;
 mod grid;
 mod histogram;

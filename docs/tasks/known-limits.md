@@ -607,6 +607,16 @@ only if it is seen in use.)
   text has `" - "` before the path is not matched, and the image gets `"no answer for …"`
   instead. ExifTool's usual "Error: … - <path>" lines are matched. A task only if it is seen in
   use.
+- *Two tabs of the same folder* (T337, 2026-11-26): each tab keeps its own filter values, so two
+  tabs of one folder read the same files each. A task only if it is seen in use.
+- *The Exif reads' order* (T337, 2026-11-26): the filter's Exif requests are queued in the capture
+  reader's channel at once, so their order is fixed when they are queued; scrolling meanwhile
+  does not move the newly visible images first. A task only if it is seen in use.
+- *An ExifTool that hangs* (T337, 2026-11-26): `execute` has no read timeout, so an ExifTool that
+  hangs on one file blocks the metadata worker, the filter's reads as every other request. A
+  task only if it is seen in use.
+- *Values of other tabs* (T337, 2026-11-26): only the active tab's values are read; another tab's
+  are read when it becomes active. A task only if it is seen in use.
 
 ## LibRaw (`pw-libraw`)
 
