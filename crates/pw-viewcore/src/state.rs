@@ -3366,9 +3366,9 @@ impl<S> State<S> {
     /// resident view serves it (the first gesture after a step, before the half-size view
     /// arrives; ADR 0027 W1-Q3, W1-Q9): its densest resident reduced view of the whole image,
     /// preferring the wanted look (W4), placed at the gesture's scale and position (enlarged).
-    /// Only a view of the current image and generation (V2), and none the GPU would reduce more than 2:1 (it has no mipmaps; R2).
-    /// While fine details is on, its fine views count too, and at an equal density the fine view
-    /// is taken (ADR 0027 W2-Q8).
+    /// Only a view of the current image and generation (V2), and none the GPU would reduce more
+    /// than 2:1 (it has no mipmaps; R2). While fine details is on, its fine views count too, and
+    /// at an equal density the fine view is taken (ADR 0027 W2-Q8).
     fn gesture_stand_in(&self, key: Key, view_px: [u32; 2]) -> Option<(Draw, RectF)> {
         if !self.in_gesture() {
             return None;
