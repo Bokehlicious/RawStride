@@ -79,6 +79,20 @@ Reorganised on 2026-11-21 (owner): the earlier file mixed these three kinds and 
   ADR 0014 §15): a row "0★ 1★ 2★ 3★ 4★ 5★" and a row of colour swatches, each clicked on and off,
   with a check box per row that turns the row on or off. Needs an amendment of ADR 0014 first: the
   star part would become a set of star values instead of the ≥ / = / ≤ condition (T60).
+- **Value columns over the catalog** (owner, 2026-11-26, during S4's hand check; ADR 0030 K5,
+  ADR 0022): columns side by side, for example Capture Date, Camera, Lens and File Type, each
+  listing the catalog's values with the number of images for each and an "All" row at the top
+  (the number of values and of images). Several values picked in one column mean "or", picks in
+  different columns "and", and a pick narrows the other columns' counts. Capture Date as a tree
+  of years, months and days. **Only in the catalog, not in a folder tab** (owner, 2026-11-26): a
+  folder holds one shoot or day, so its columns would hold one or two values each, and the
+  "Filter…" window's "is one of" rows cover a folder; over the catalog the values are in the
+  database, so the counts are cheap queries. To build on the filter's model (a column as an "is
+  one of" row) so a folder version stays possible if it is ever wanted. Open questions, settled
+  with K5's questions: where the columns are shown (a panel above the contact sheet or the
+  "Filter…" window); which fields get a column, and whether the user picks them; whether the
+  columns and the window's rows are one filter; how picks change the other columns' counts; the
+  date tree.
 - **Rotate items in the right-click menu** (cold reads of T235–T237, 2026-11-20): ADR 0024 names
   only the Image menu, and the right-click menu's items and order are ADR 0019's (E-Q17). Needs an
   ADR addition if the owner wants them.
