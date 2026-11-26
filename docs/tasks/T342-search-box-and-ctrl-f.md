@@ -1,0 +1,137 @@
+# T342. ADR 0022 S3b: the search box and Ctrl+F — Blocked: waits for T341
+
+- **Why:** ADR 0022 S3 (the search box and Ctrl+F), decided by the owner on 2026-11-26 (ADR 0022
+  §3.2, S3-Q1, S3-Q2, S3-Q9, S3-Q13). T341 makes the shown list, the reads and the status line
+  follow the active tab's search (`tab.meta_filter`); this task adds what sets it: the box in the
+  command bar and the key. The second task of the chain T341 → **T342**; after it the owner's
+  hand check of S1–S3 (ADR 0022 §4).
+- **What the reviewer checked (2026-11-26):**
+  - `crates/pw-loupe/src/main.rs`: `draw_command_bar` (about line 8973): Import…, Open Folder…,
+    the star condition, stars and label lists (`filter_combo`, about line 12128, outlines an
+    active list in the accent, about lines 12143–12150), then the thumbnail size; it is drawn
+    only outside the preview (about lines 13207–13223: in the preview there is no menu bar or
+    command bar, U3-Q1). `apply_filter` (about line 8368) gives the keyboard back to the images
+    after a filter choice (`surrender_focus`) and scrolls to the current image; `set_filter`
+    (about line 2368). `filter_menu` (about line 8909) with "Show All" (about line 8912), which
+    keeps the stars' condition and clears stars and label. `run_command` (about line 8490). The
+    key map is asked only while no text field has the keyboard (about lines 9596–9615:
+    `!ctx.egui_wants_keyboard_input()`). `switch_mode` (about line 4025).
+  - `crates/pw-loupe/src/keymap.rs`: `KeyAction` (about line 62), `ALL` (about line 160),
+    `name` (about line 220), `group` (`KeyGroup::File`, `Edit`, `Image`, `View`, about line
+    296), `acts_in` (`KeyView::Sheet`, `Preview`, `Both`, about line 340), the default keys
+    (about line 380; `with_ctrl(Key::…)`), `of_command` (about line 436) and `command` (about
+    line 496); the tests `commands_and_actions_correspond`, `names_round_trip_and_are_unique`,
+    `the_default_map_passes_can_set_for_every_key_it_holds`,
+    `every_menu_item_with_an_action_shows_its_default_first_key` (about lines 1375–1440).
+    Ctrl+F is free (F alone is Fit, in the preview).
+  - `crates/pw-loupe/src/shell.rs`: `Command` (about line 717), `Where` and `Command::acts_in`
+    (about lines 858–870).
+  - `crates/pw-loupe/src/shell_text.rs`: `ShellText` with `FilterMenu` and `ShowAll` (about
+    lines 38–84), the key action names (about line 431), the command texts (about line 621),
+    and their tests.
+  - `crates/pw-loupe/src/meta_filter.rs`: `Filter::set_search`, `search` (about lines 443–450);
+    a text of spaces only is no search (`has_search`).
+- **Crate:** `pw-loupe`. **Files:** `crates/pw-loupe/src/main.rs`,
+  `crates/pw-loupe/src/keymap.rs`, `crates/pw-loupe/src/shell.rs`,
+  `crates/pw-loupe/src/shell_text.rs`, `docs/glossary.md`, `docs/test-inventory.md` (rule 12),
+  and this task's own file (status and log).
+- **Model:** Opus — the keyboard focus between the box, the key map and the preview, and a
+  delayed apply over tab switches (README, "Model").
+- **What:**
+  1. **The command and the key** (S3-Q2): `Command::Search` in `shell.rs` (`acts_in` falls to
+     `Where::Both`), in no menu (none is decided); `command_enabled` (`main.rs`, about line
+     8379) gives `Command::Search` true only with an active tab. `KeyAction::Search` in
+     `keymap.rs`, right after `Metadata` (the last of the Edit group) in the enum and in `ALL`
+     (`index()` is the declaration order; `ALL` grows by one), name `search` in `keys.txt`,
+     group `KeyGroup::Edit`, `acts_in` `KeyView::Both`, default keys
+     `[with_ctrl(Key::F), None]`; arms in `name`, `group`, the default keys, `of_command` and
+     `command`. `command_text` (`shell_text.rs`, about line 590) gives "Search"; the Keyboard
+     Shortcuts page takes the name from there (rule 13). The test `the_default_map_is_todays_keys`
+     (`keymap.rs`, about line 1346) compares the map with its reference `today()` (about line
+     1177): `today()` gets one line, Ctrl+F → Search in both views, the only change to it. `docs/glossary.md` gets a row in §3 (Window, menus and
+     commands) for "Search" (the box's hint text and the action), "added by T342".
+  2. **The box** (S3-Q1), in `draw_command_bar` right after the label list, inside the filter
+     group and before the separator and the sort list (about lines 9021–9026): a single-line
+     text field
+     with the hint text "Search" (`ShellText::SearchHint`, the same word as point 1's text,
+     its own variant), about 160 points wide (the hint and the text may be cut by the field,
+     not by the layout). Disabled when there is no active tab, as the filter lists are. The
+     text being typed is the shell's (`App`), not the tab's: `search_edit: String` and
+     `search_edited_at: Option<Instant>`.
+     - **Typing:** each change sets `search_edited_at` to now; once 0.3 s have passed without a
+       change (a repaint is asked for that moment), the text is applied (point 3).
+     - **Enter:** applies the text at once and gives the keyboard back to the images, as
+       `apply_filter` does.
+     - **Escape** in the box: empties it, applies the empty text at once, and the box loses the
+       keyboard. egui (0.37) takes the focus away on Escape at the start of the frame and a
+       single-line field gives it up on Enter, so both are seen as `response.lost_focus()` with
+       `key_pressed(Escape)` or `key_pressed(Enter)`.
+     - **Keys while the box has the keyboard:** the command bar is drawn before the key loop of
+       `draw` (about lines 9440–9660), where only the key map is guarded by
+       `egui_wants_keyboard_input` (about line 9607); the fixed keys after it (arrows, Home, End,
+       Page Up/Down, Space, Enter, Escape, Ctrl+Tab) are not. Both get the guard: no fixed key
+       acts while a text field has the keyboard, and none in the frame the box gave it up on
+       Enter or Escape (a flag `search_took_key`, set by the box and cleared by the key loop),
+       so Escape does not also clear the marking and Enter does not open the preview.
+     - **Another tab:** `Tab` has no id. The box remembers what it shows: the active tab's
+       index and folder, and the search it last applied or loaded. Each frame, when the active
+       index or folder differs, or no change is pending and the tab's search
+       (`tab.meta_filter.search()`) differs from the remembered one (a folder opened again
+       empties it, `Tab::open`), the box loads the tab's search and a change not yet applied is
+       dropped (it was less than 0.3 s of typing).
+     - **Outlined** in the accent colour while the tab's applied search is not empty, as an
+       active filter list is (the same stroke as `filter_combo`) (S3-Q9). While the box has the
+       keyboard egui draws its own focus border; that is accepted.
+  3. **Applying** a text: a new `fn set_search(&mut self, text: &str)` in `main.rs`, beside
+     `set_filter`: nothing when the active tab's search is already `text`; otherwise
+     `tab.meta_filter.set_search(text)`, `refilter_active(None)`, the preview follows
+     (`loupe_follows_visible`), and the contact sheet scrolls to the current image (as
+     `apply_filter`). T341's reads start by themselves (`follow_filter_values`).
+  4. **Ctrl+F**: an arm `A::Search` in `key_map_action` (about line 6038; keys reach it, not
+     `run_command`) and `Command::Search` in `run_command` do the same: with no active tab or a
+     dialog open (`dialog_open`), nothing. In the preview (the loupe and Compare), back to the
+     contact sheet as `A::Preview` leaves it, `done.scroll_to = Some(self.switch_mode(
+     ViewMode::Grid))` (about lines 6165–6172; Compare closes with it through
+     `follow_compare`), so the key loop's own `scroll_to` is not overwritten (about lines
+     9676–9679) (S3-Q13). Then `search_focus_wanted = true`: when the box is next drawn it asks
+     for the keyboard with its whole text selected, so typing replaces it (egui:
+     `TextEditState::load`, `cursor.set_char_range` over the whole text, `store`, then
+     `request_focus`).
+  5. **Show All** (S3-Q9, `filter_menu`, about line 8909): also empties the active tab's search
+     (and the box). `filter_menu` returns only a `Filter` today (through `draw_menu_bar`'s
+     `filter_choice`, about lines 8720 and 13228); it also says that Show All was chosen (a
+     small enum or a flag, the agent's choice), and the caller applies the star and label
+     filter, then `set_search("")`; the result is every image.
+- **Tests to add:**
+  - `keymap.rs`: `KeyAction::Search` has Ctrl+F by default in both views, the name `search`
+    round-trips, and `of_command(Command::Search)` gives it; the existing tests over `ALL` pass
+    with it (`today()` as point 1 says, nothing else in them changed).
+  - `main.rs`: the guard of the fixed keys as a plain function (a key with a text field having
+    the keyboard, or with `search_took_key`, gives no fixed key), tested for Escape, Enter,
+    Space and an arrow.
+  - `shell.rs`: `Command::Search.acts_in()` is `Where::Both`.
+  - `shell_text.rs`: the texts "Search" (hint, command, key action name).
+  - `main.rs`: (a) the delayed apply as a plain function of the edit time and now (applied at
+    0.3 s, not before; Enter and Escape at once) so it can be tested without a window; (b)
+    `set_search` refilters the active tab only and leaves other tabs' searches as they were;
+    (c) Show All leaves the search empty and every image shown; (d) a text of spaces only
+    shows every image.
+- **Not in this task:** the "Filter…" window, "Filter: {n} conditions" (S4); saved filters
+  (S5); any change to the refilter, the reads or the status line (T341); a menu item for Search.
+- **Rules:** `docs/tasks/README.md` rules 1–13. No `git commit`, `git add`, `git stash`,
+  `git reset`, `git checkout` and no new branch (rule 8). No new dependency.
+- **Done when:** `.\tools\check.ps1` is all OK and `git diff --stat` shows only the files above.
+  Then the owner's hand check of S1–S3 (written by the reviewer at T342's review): typing in the
+  box with the delay, Enter, Escape, Ctrl+F in the contact sheet and in the loupe and Compare
+  (back to the sheet, the cursor in the box), the matches coming in while "Reading metadata
+  {i} of {n} …" counts, several words (AND), a part of a word, a file name, a JPEG with IIM
+  only, the search with a star filter, marks kept for unread images, `M` on a shown image that
+  then stops matching (it leaves after its read, not before), Show All, another tab with its
+  own search, `latency.ps1` not needed (no change to the view).
+
+## Log
+
+| Date | Status | Note |
+|---|---|---|
+| 2026-11-26 | Blocked | Added (ADR 0022 §3.2, S3-Q1, S3-Q2, S3-Q9, S3-Q13); waits for T341 (both change `main.rs`) |
+| 2026-11-26 | Blocked | Cold read: the fixed keys were not guarded while a text field has the keyboard, and Enter or Escape leaving the box reached the grid in the same frame (point 2: the guard and `search_took_key`); keys go through `key_map_action` (point 4: the `A::Search` arm, leaving the preview as `A::Preview`); `command_enabled`; `the_default_map_is_todays_keys` and its `today()`; the box's place before the sort group; how Show All is told; how a tab change is noticed; select-all through `TextEditState` |
