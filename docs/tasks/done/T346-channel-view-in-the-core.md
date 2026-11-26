@@ -1,4 +1,4 @@
-# T346. ADR 0027 W4: the channel view's function, its timing and the channel in the view core — Open
+# T346. ADR 0027 W4: the channel view's function, its timing and the channel in the view core — Done
 
 - **Why:** ADR 0027 §3.6 and W4-Q1, W4-Q2, W4-Q4, W4-Q6, W4-Q7 (answered by the owner 2026-11-26,
   ADR 0027 §4.5). The channel view shows the red, green or blue channel, or the luminance, as
@@ -102,7 +102,8 @@
        `set_shadows`, with a doc comment (ADR 0027 §3.6, W4; the shell holds it for the session,
        not saved; not a user request, nothing is recorded).
      So a change of channel plans the wanted views again, a render of the old channel under way
-     is stopped (`stop_unwanted`), and the drawn view stays until one with the new channel
+     finishes (`stop_unwanted` is not changed: owner, 2026-11-25, never stopped for a changed
+     setting of the current image; confirmed for the channel 2026-11-26), and the drawn view stays until one with the new channel
      replaces it in one swap (V2), as sharpening does (W3-Q4).
   5. **The gesture's stand-in** (§2.1, from the chain review): during a zoom gesture
      `gesture_stand_in` may today draw a view of another look, which for a grey channel shows
@@ -173,3 +174,6 @@
 |---|---|---|
 | 2026-11-26 | Blocked | Written |
 | 2026-11-26 | Open | Cold read (fresh agent): the named files suffice; `Exposed` makes only grey pixels, so the render tests could not show the order (a coloured pattern asked for); `STATISTICS_LEND`, the test literals and the helpers `out_in` and `o_job` named (they must copy the channel); the neighbours' prefetch in the channel said; the `AutoWaiting` and gesture conditions said to apply on purpose; the JPEG key's route in the tests named; `render_view`'s line fixed. Chain review (T346–T347, fresh agent): `gesture_stand_in` drew a view of any look (point 5 added, with a test); a test for Red then Green before the red view arrives and one for a prefetched neighbour added; the 1920×1200 medians logged too; W4-Q6 added to Why. Spelling `Color` (glossary G5, from T347's cold read). Set Open |
+| 2026-11-26 | Ready for review | Implemented the channel view in rendering, planning, cache identity and frame state. Release timing on Windows (build 26300, Core i7-9700K, synthetic RGB, 11 runs per size and channel), median/max in ms. Single thread at 3840×2160: Red 9.248/10.268, Luminance 13.914/14.586. At 1920×1200: Red 2.505/2.972, Luminance 3.975/4.392. With up to eight row bands at 3840×2160: Red 6.191/6.773, Luminance 7.205/7.976. At 1920×1200: Red 1.691/1.774, Luminance 2.108/2.226. A test checks byte-for-byte agreement with a single pass. The full workspace check passed with the `C` locale for ExifTool (2890 passed, 99 ignored). |
+| 2026-11-26 | Ready for review | Review: point 4's text said a render of the old channel is stopped, against the owner's rule of 2026-11-25 (T328: never stopped for a changed setting of the current image); the agent had added `view.channel != self.channel` to `stop_unwanted` and removed the rule from its doc comment. The owner chose to keep the rule for the channel (2026-11-26). The reviewer removed the condition, restored the doc comment, made the Red-then-Green test assert the red render is not stopped, fixed point 4's text, rewrapped two comments and completed `ViewCore::set_channel`'s doc comment (not saved). |
+| 2026-11-26 | Done | Approved by the owner; `.\tools\check.ps1` all OK (2890 passed, 99 ignored, no clippy warnings). Nothing left over: the TIFF's channel (W4-Q3) is in `known-limits.md`; the keys, the menu and the mark are T347. No change-log line (nothing turns the channel view on yet). |

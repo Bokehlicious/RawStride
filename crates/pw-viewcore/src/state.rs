@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 use crate::backend::{
     ClippingMap, DecodeError, FocusMap, ImageStatistics, Rgb, Source, Statistics, Stop,
 };
+use crate::channel::Channel;
 use crate::exposure::{AutoExposure, Ev, auto_exposure};
 use crate::geometry::{self, ImageSize, Rect, RectF};
 use crate::sharpen::Sharpening;
@@ -126,6 +127,8 @@ pub struct ViewOut {
     pub exposure: Ev,
     /// The shadows' amount the view was made with (ADR 0027 §3.4); `None` = not lifted.
     pub shadows: Option<u8>,
+    /// The channel used to render this view (ADR 0027 §3.6, W4).
+    pub channel: Channel,
     pub image: Rgb,
     /// FNV-1a over the pixels, only when recording (correctness checks).
     pub hash: Option<u64>,
@@ -147,6 +150,8 @@ pub struct Resident {
     pub exposure: Ev,
     /// The shadows' amount the view was made with (ADR 0027 §3.4); `None` = not lifted.
     pub shadows: Option<u8>,
+    /// The channel used to render this view (ADR 0027 §3.6, W4).
+    pub channel: Channel,
     pub bytes: u64,
     pub used: u64,
     pub hash: Option<u64>,
@@ -375,6 +380,8 @@ pub struct Frame {
     pub exposure: ExposureState,
     /// The state of the shadows for the current image (ADR 0027 §3.4, W5).
     pub shadows: AdjustState,
+    /// The state of the channel view for the current image (ADR 0027 §3.6, W4).
+    pub channel: AdjustState,
 }
 
 /// One user request, for measurement (ADR 0009 §5.2; the P5 event format).
@@ -466,6 +473,8 @@ pub(crate) struct JobView {
     /// The shadows' amount the view is lifted with after the reduction and before the sharpening
     /// (ADR 0027 §3.4, W5-Q3, W5-Q6); `None` = off.
     pub shadows: Option<u8>,
+    /// The channel to apply after sharpening (ADR 0027 §3.6, W4).
+    pub channel: Channel,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -473,6 +482,7 @@ struct Look {
     sharpen: Option<Sharpening>,
     exposure: Ev,
     shadows: Option<u8>,
+    channel: Channel,
 }
 
 impl Resident {
@@ -481,6 +491,7 @@ impl Resident {
             sharpen: self.sharpen,
             exposure: self.exposure,
             shadows: self.shadows,
+            channel: self.channel,
         }
     }
 }
@@ -491,6 +502,7 @@ impl ViewOut {
             sharpen: self.sharpen,
             exposure: self.exposure,
             shadows: self.shadows,
+            channel: self.channel,
         }
     }
 }
@@ -501,6 +513,7 @@ impl JobView {
             sharpen: self.sharpen,
             exposure: self.exposure,
             shadows: self.shadows,
+            channel: self.channel,
         }
     }
 
@@ -569,6 +582,7 @@ const STATISTICS_LEND: JobView = JobView {
     sharpen: None,
     exposure: Ev::ZERO,
     shadows: None,
+    channel: Channel::Color,
 };
 
 /// A view being rendered, or rendered and not yet accepted.
@@ -733,6 +747,7 @@ pub(crate) struct State<S> {
     exposure_mode: ExposureMode,
     exposure_steps: i32,
     shadows: Option<u8>,
+    channel: Channel,
     sessions: HashMap<Key, Option<S>>,
     /// The generation each lent session (`None` in `sessions`) was lent in.
     lent: HashMap<Key, u64>,
@@ -821,6 +836,7 @@ impl<S> State<S> {
             exposure_mode: ExposureMode::Off,
             exposure_steps: 0,
             shadows: None,
+            channel: Channel::Color,
             sessions: HashMap::new(),
             lent: HashMap::new(),
             detached: HashMap::new(),
@@ -990,6 +1006,15 @@ impl<S> State<S> {
             return false;
         }
         self.shadows = amount;
+        self.since = Instant::now();
+        true
+    }
+
+    pub fn set_channel(&mut self, channel: Channel) -> bool {
+        if self.channel == channel {
+            return false;
+        }
+        self.channel = channel;
         self.since = Instant::now();
         true
     }
@@ -1553,6 +1578,7 @@ impl<S> State<S> {
                         sharpen: self.sharpening,
                         exposure: self.exposure_of(key).unwrap_or(Ev::ZERO),
                         shadows: self.shadows_of(key),
+                        channel: self.channel,
                     },
                 });
             }
@@ -1573,6 +1599,7 @@ impl<S> State<S> {
                     sharpen: self.sharpening,
                     exposure: self.exposure_of(key).unwrap_or(Ev::ZERO),
                     shadows: self.shadows_of(key),
+                    channel: self.channel,
                 };
                 return Some(Req {
                     key,
@@ -1607,6 +1634,7 @@ impl<S> State<S> {
                 sharpen: self.sharpening,
                 exposure: self.exposure_of(key).unwrap_or(Ev::ZERO),
                 shadows: self.shadows_of(key),
+                channel: self.channel,
             }
         } else if scale <= HALF_DENSITY + EPS {
             JobView {
@@ -1616,6 +1644,7 @@ impl<S> State<S> {
                 sharpen: self.sharpening,
                 exposure: self.exposure_of(key).unwrap_or(Ev::ZERO),
                 shadows: self.shadows_of(key),
+                channel: self.channel,
             }
         } else if scale >= 1.0 - EPS {
             let vis1 = geometry::visible(size, self.view_px, 1.0, self.centre);
@@ -1626,6 +1655,7 @@ impl<S> State<S> {
                 sharpen: self.sharpening,
                 exposure: self.exposure_of(key).unwrap_or(Ev::ZERO),
                 shadows: self.shadows_of(key),
+                channel: self.channel,
             }
         } else {
             JobView {
@@ -1635,6 +1665,7 @@ impl<S> State<S> {
                 sharpen: self.sharpening,
                 exposure: self.exposure_of(key).unwrap_or(Ev::ZERO),
                 shadows: self.shadows_of(key),
+                channel: self.channel,
             }
         };
         Some(Req {
@@ -2734,6 +2765,7 @@ impl<S> State<S> {
                         sharpen: view.sharpen,
                         exposure: view.exposure,
                         shadows: view.shadows,
+                        channel: view.channel,
                         image,
                         hash,
                     });
@@ -2758,6 +2790,7 @@ impl<S> State<S> {
                     sharpen: view.sharpen,
                     exposure: view.exposure,
                     shadows: view.shadows,
+                    channel: view.channel,
                     image,
                     hash,
                 });
@@ -2986,6 +3019,7 @@ impl<S> State<S> {
             && out.sharpen == self.sharpening
             && Some(out.exposure) == self.exposure_of(key)
             && out.shadows == self.shadows_of(key)
+            && out.channel == self.channel
         {
             // it replaces the image's fine view of another look, which may be evicted for
             // it although it is drawn (ADR 0027 W3-Q4; counted as free when it was planned); a
@@ -3027,6 +3061,7 @@ impl<S> State<S> {
             sharpen: out.sharpen,
             exposure: out.exposure,
             shadows: out.shadows,
+            channel: out.channel,
             bytes,
             used: self.tick,
             hash: out.hash,
@@ -3120,6 +3155,7 @@ impl<S> State<S> {
                 view: AdjustState::Off,
             },
             shadows: AdjustState::Off,
+            channel: AdjustState::Off,
         };
         let Some(key) = key else {
             self.last_draw = None;
@@ -3203,17 +3239,24 @@ impl<S> State<S> {
         frame.sharpen = self.sharpen_state(key, &frame);
         frame.exposure.view = self.exposure_state(key, &frame);
         frame.shadows = self.shadows_state(key, &frame);
+        frame.channel = self.channel_state(key, &frame);
         frame
     }
 
     fn exposure_state(&self, key: Key, frame: &Frame) -> AdjustState {
         let on = self.exposure_mode != ExposureMode::Off || self.exposure_steps != 0;
-        self.adjust_state(key, frame, on, |r| r.exposure == frame.exposure.total)
+        self.adjust_state(key, frame, on, true, |r| r.exposure == frame.exposure.total)
     }
 
     fn shadows_state(&self, key: Key, frame: &Frame) -> AdjustState {
-        self.adjust_state(key, frame, self.shadows.is_some(), |r| {
+        self.adjust_state(key, frame, self.shadows.is_some(), true, |r| {
             r.shadows == self.shadows
+        })
+    }
+
+    fn channel_state(&self, key: Key, frame: &Frame) -> AdjustState {
+        self.adjust_state(key, frame, self.channel != Channel::Color, false, |r| {
+            r.channel == self.channel
         })
     }
 
@@ -3222,6 +3265,7 @@ impl<S> State<S> {
         key: Key,
         frame: &Frame,
         on: bool,
+        raw_only: bool,
         matches: impl Fn(&Resident) -> bool,
     ) -> AdjustState {
         let drawn = frame.draw.and_then(|d| {
@@ -3236,7 +3280,7 @@ impl<S> State<S> {
                 AdjustState::Waiting
             };
         }
-        if key.1 != Source::Raw {
+        if raw_only && key.1 != Source::Raw {
             return AdjustState::Paused;
         }
         if frame.status == Status::Ready
@@ -3321,8 +3365,8 @@ impl<S> State<S> {
     /// What stands in for the current image `key` during a zoom gesture at 50 % or less while no
     /// resident view serves it (the first gesture after a step, before the half-size view
     /// arrives; ADR 0027 W1-Q3, W1-Q9): its densest resident reduced view of the whole image,
-    /// placed at the gesture's scale and position (enlarged). Only a view of the current image
-    /// and generation (V2), and none the GPU would reduce more than 2:1 (it has no mipmaps; R2).
+    /// preferring the wanted look (W4), placed at the gesture's scale and position (enlarged).
+    /// Only a view of the current image and generation (V2), and none the GPU would reduce more than 2:1 (it has no mipmaps; R2).
     /// While fine details is on, its fine views count too, and at an equal density the fine view
     /// is taken (ADR 0027 W2-Q8).
     fn gesture_stand_in(&self, key: Key, view_px: [u32; 2]) -> Option<(Draw, RectF)> {
@@ -3334,6 +3378,7 @@ impl<S> State<S> {
         if scale > HALF_DENSITY + EPS {
             return None;
         }
+        let look = self.req(key, Want::Shown)?.job.look();
         let whole = geometry::whole(size);
         let r = self
             .resident
@@ -3347,8 +3392,9 @@ impl<S> State<S> {
                     && r.density <= 2.0 * scale + EPS
             })
             .max_by(|a, b| {
-                a.density
-                    .total_cmp(&b.density)
+                (a.look() == look)
+                    .cmp(&(b.look() == look))
+                    .then_with(|| a.density.total_cmp(&b.density))
                     .then((a.kind == ViewKind::Fine).cmp(&(b.kind == ViewKind::Fine)))
             })?;
         let vis = geometry::visible(size, view_px, scale, self.centre);
@@ -3590,6 +3636,7 @@ mod tests {
             sharpen: None,
             exposure: Ev::ZERO,
             shadows: None,
+            channel: Channel::Color,
         });
         let density = match job.kind {
             ViewKind::Half => HALF_DENSITY,
@@ -3606,6 +3653,7 @@ mod tests {
             sharpen: job.sharpen,
             exposure: job.exposure,
             shadows: job.shadows,
+            channel: job.channel,
             image: Rgb {
                 width: 1,
                 height: 1,
@@ -3785,6 +3833,7 @@ mod tests {
             sharpen: None,
             exposure: Ev::ZERO,
             shadows: None,
+            channel: Channel::Color,
         }
     }
 
@@ -3797,6 +3846,7 @@ mod tests {
             sharpen: None,
             exposure: Ev::ZERO,
             shadows: None,
+            channel: Channel::Color,
         }
     }
 
@@ -4398,6 +4448,7 @@ mod tests {
             sharpen: o.sharpen,
             exposure: o.exposure,
             shadows: o.shadows,
+            channel: o.channel,
         }
     }
 
@@ -6622,6 +6673,7 @@ mod tests {
                     sharpen: None,
                     exposure: Ev::ZERO,
                     shadows: None,
+                    channel: Channel::Color,
                 }
             )
         );
@@ -6638,6 +6690,7 @@ mod tests {
             sharpen: None,
             exposure: Ev::ZERO,
             shadows: None,
+            channel: Channel::Color,
         }
     }
 
@@ -7303,6 +7356,7 @@ mod tests {
                     sharpen,
                     exposure: Ev::ZERO,
                     shadows: None,
+                    channel: Channel::Color,
                 };
                 let jobs = renders_of(&s, 10);
                 assert_eq!(scaled_renders(&s), vec![want], "{scale} {sharpen:?}");
@@ -8910,5 +8964,189 @@ mod tests {
         let new = s.accept(&out, 3_000_000).unwrap();
         assert_eq!(s.frame(VIEW).draw.unwrap().id, new);
         assert!(s.take_dropped().contains(&old));
+    }
+
+    // Channel view in the view core (ADR 0027 W4).
+
+    #[test]
+    fn channel_changes_restart_dwell_and_apply_to_the_whole_plan() {
+        let mut s = state(1024);
+        with_session(&mut s, 10);
+        with_session(&mut s, 11);
+        let jpeg = (10, Source::Jpeg);
+        s.sizes.insert(jpeg, SIZE);
+        s.sessions.insert(jpeg, Some(10));
+        s.set_shadows(Some(50));
+        past_dwell(&mut s);
+        let before = s.since;
+        assert!(s.set_channel(Channel::Red));
+        assert!(s.since > before);
+        past_dwell(&mut s);
+        let before = s.since;
+        assert!(!s.set_channel(Channel::Red));
+        assert_eq!(s.since, before);
+
+        let plan = s.plan();
+        for key in [k(10), k(11), jpeg] {
+            let view = plan
+                .iter()
+                .find_map(|job| match job {
+                    Job::Render(k, view) if *k == key => Some(view),
+                    _ => None,
+                })
+                .unwrap();
+            assert_eq!(view.channel, Channel::Red);
+            assert_eq!(view.shadows, (key.1 == Source::Raw).then_some(50));
+        }
+        assert!(
+            plan.iter()
+                .all(|job| !matches!(job, Job::Render(_, v) if v.channel != Channel::Red))
+        );
+
+        s.set_files(files(2), 0);
+        known(&mut s, 0);
+        assert_eq!(s.req(k(0), Want::Shown).unwrap().job.channel, Channel::Red);
+        s.open_folder(vec![PathBuf::from("another.raw")]);
+        known(&mut s, 0);
+        assert_eq!(s.req(k(0), Want::Shown).unwrap().job.channel, Channel::Red);
+    }
+
+    #[test]
+    fn channel_changes_keep_the_drawn_view_until_the_replacement_arrives() {
+        let mut s = state(1024);
+        with_session(&mut s, 10);
+        let color = s.accept(&out(&s, 10, Want::Shown), 100).unwrap();
+        assert_eq!(s.frame(VIEW).channel, AdjustState::Off);
+        s.set_channel(Channel::Red);
+        let req = s.req(k(10), Want::Shown).unwrap();
+        assert!(s.exact(&req).is_none());
+        assert!(s.plan().contains(&Job::Render(k(10), req.job)));
+        let f = s.frame(VIEW);
+        assert_eq!(
+            (f.draw.unwrap().id, f.channel),
+            (color, AdjustState::Waiting)
+        );
+        let red = s.accept(&out(&s, 10, Want::Shown), 100).unwrap();
+        let f = s.frame(VIEW);
+        assert_eq!((f.draw.unwrap().id, f.channel), (red, AdjustState::Shown));
+
+        // At 100 % there is no color view in the cache to swap in immediately.
+        s.set_zoom(Zoom::Scale(1.0), None, false);
+        let red = s.accept(&out(&s, 10, Want::Shown), 100).unwrap();
+        assert_eq!(s.frame(VIEW).draw.unwrap().id, red);
+        s.set_channel(Channel::Color);
+        let f = s.frame(VIEW);
+        assert_eq!((f.draw.unwrap().id, f.channel), (red, AdjustState::Waiting));
+        let color = s.accept(&out(&s, 10, Want::Shown), 100).unwrap();
+        let f = s.frame(VIEW);
+        assert_eq!((f.draw.unwrap().id, f.channel), (color, AdjustState::Off));
+    }
+
+    #[test]
+    fn a_late_red_view_does_not_show_while_green_is_wanted() {
+        let mut s = state(1024);
+        with_session(&mut s, 10);
+        let color = s.accept(&out(&s, 10, Want::Shown), 100).unwrap();
+        s.frame(VIEW);
+        s.set_channel(Channel::Red);
+        let Some(Task::Render {
+            generation,
+            key,
+            view,
+            session,
+            stop,
+        }) = s.pick(true)
+        else {
+            panic!("expected a red render");
+        };
+        assert_eq!(view.channel, Channel::Red);
+        s.set_channel(Channel::Green);
+        s.stop_unwanted();
+        // owner, 2026-11-25: a changed setting of the current image lets its render finish
+        assert!(!stop.is_stopped());
+        s.finish_render(generation, key, view, session, Ok(rendered(view)), 1.0);
+        let red = s.outbox.pop().unwrap();
+        assert_eq!(red.channel, Channel::Red);
+        s.accept(&red, 100).unwrap();
+        let green = s.req(key, Want::Shown).unwrap();
+        assert_eq!(green.job.channel, Channel::Green);
+        assert!(s.plan().contains(&Job::Render(key, green.job)));
+        let f = s.frame(VIEW);
+        assert_eq!(
+            (f.draw.unwrap().id, f.channel),
+            (color, AdjustState::Waiting)
+        );
+        let green = s.accept(&out(&s, 10, Want::Shown), 100).unwrap();
+        let f = s.frame(VIEW);
+        assert_eq!((f.draw.unwrap().id, f.channel), (green, AdjustState::Shown));
+    }
+
+    #[test]
+    fn channel_marks_are_shown_for_jpeg_and_tiff() {
+        let mut s = state(1024);
+        s.set_mode(Source::Jpeg);
+        s.set_channel(Channel::Red);
+        for file in [None, Some("a.jpg"), Some("a.tif")] {
+            if let Some(file) = file {
+                s.set_mode(Source::Raw);
+                s.open_folder(vec![PathBuf::from(file)]);
+            }
+            let key = s.cur_key().unwrap();
+            assert_ne!(key.1, Source::Raw);
+            s.sizes.insert(key, SIZE);
+            assert_eq!(s.frame(VIEW).channel, AdjustState::Waiting);
+            s.accept(&out_in(&s, key, Want::Shown), 100).unwrap();
+            assert_eq!(s.frame(VIEW).channel, AdjustState::Shown);
+        }
+    }
+
+    #[test]
+    fn a_late_fine_view_cannot_replace_the_wanted_channel_under_budget() {
+        let mut s = state(4);
+        ready_for_fine(&mut s, None);
+        let late = out(&s, 10, Want::Fine);
+        s.set_channel(Channel::Red);
+        let red = s.accept(&out(&s, 10, Want::Fine), 3_000_000).unwrap();
+        assert_eq!(s.frame(VIEW).draw.unwrap().id, red);
+        s.accept(&late, 3_000_000).unwrap();
+        assert!(!s.take_dropped().contains(&red));
+        let f = s.frame(VIEW);
+        assert_eq!((f.draw.unwrap().id, f.channel), (red, AdjustState::Shown));
+    }
+
+    #[test]
+    fn a_gesture_prefers_the_wanted_look_before_density() {
+        let mut s = state(1024);
+        with_session(&mut s, 10);
+        s.zoom = Zoom::Scale(0.4);
+        let color = s.accept(&out(&s, 10, Want::Shown), 100).unwrap();
+        s.set_channel(Channel::Red);
+        s.zoom = Zoom::Scale(0.25);
+        let red = s.accept(&out(&s, 10, Want::Shown), 100).unwrap();
+        // Both reduced views must be enlarged at this scale, so neither serves directly.
+        s.set_zoom(Zoom::Scale(0.45), None, true);
+        let f = s.frame(VIEW);
+        assert!(matches!(f.status, Status::Preparing { .. }));
+        assert_eq!((f.draw.unwrap().id, f.channel), (red, AdjustState::Waiting));
+
+        s.set_channel(Channel::Green);
+        let f = s.frame(VIEW);
+        assert_eq!(
+            (f.draw.unwrap().id, f.channel),
+            (color, AdjustState::Waiting)
+        );
+    }
+
+    #[test]
+    fn a_channel_view_waits_for_auto_exposure_statistics() {
+        let mut s = state(1024);
+        with_session(&mut s, 10);
+        s.set_channel(Channel::Red);
+        let red = s.accept(&out(&s, 10, Want::Shown), 100).unwrap();
+        assert_eq!(s.frame(VIEW).channel, AdjustState::Shown);
+        s.set_exposure_mode(ExposureMode::Auto);
+        let f = s.frame(VIEW);
+        assert_eq!(f.exposure.base, ExposureBase::AutoWaiting);
+        assert_eq!((f.draw.unwrap().id, f.channel), (red, AdjustState::Waiting));
     }
 }

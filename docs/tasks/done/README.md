@@ -352,3 +352,4 @@ was when the task was done, so "this file", "below" and "the Log" in T1–T115 m
 | [T343](T343-filter-window-model.md) | ADR 0022 S4a: the "Filter…" window's model, parsing and texts (pw-loupe; done by Codex) |
 | [T344](T344-filter-window-in-the-shell.md) | ADR 0022 S4b: the "Filter…" window, its button, menu item and key (pw-loupe; done by Codex) |
 | [T345](T345-value-lists-read-the-folder.md) | ADR 0022 S4c: the value lists read the whole folder (pw-loupe; done by Codex) |
+| [T346](T346-channel-view-in-the-core.md) | ADR 0027 W4: the channel view's function, its timing and the channel in the view core (pw-viewcore) |

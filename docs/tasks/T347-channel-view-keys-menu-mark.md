@@ -1,4 +1,4 @@
-# T347. ADR 0027 W4: the keys, the menu and the mark of the channel view — Blocked
+# T347. ADR 0027 W4: the keys, the menu and the mark of the channel view — Open
 
 - **Why:** ADR 0027 §2.1, §3.6 and W4-Q5, W4-Q6 (answered by the owner 2026-11-26, ADR 0027
   §4.5). T346 gave the view core the channel (`pw_viewcore::Channel` with `next` and
@@ -195,3 +195,4 @@
 | Date | Status | Note |
 |---|---|---|
 | 2026-11-26 | Blocked | Written; waits for T346. Cold read (fresh agent): the named files suffice; added the enum `KeyAction` beside `ALL`, `today()`, the two menu-order tests of `shell_text.rs`, `fine + 6`, `run_command`'s three arms, `acts_in`; the state moved into `PreviewExposure` so the tests need no `Loupe`; the repeat handled in `step_channel`; clippy's argument limit (an allow with a reason); no separator in the submenu; `Shown` with Color and `Off` with a channel give no mark; the mark texts in `preview_text.rs`; "Color" and "gray" by glossary G5. Chain review (T346–T347, fresh agent, noted in T346's log): the failed render's mark and the re-made neighbours added to the accepted list; where `latency.ps1`'s result is written |
+| 2026-11-26 | Open | T346 done; set Open |

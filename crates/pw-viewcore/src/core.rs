@@ -9,6 +9,7 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use crate::backend::{Backend, DecodeError, FocusMap, Rgb, Source, Stop};
+use crate::channel::{self, Channel};
 use crate::scale;
 use crate::shadows;
 use crate::sharpen::{self, Sharpening};
@@ -143,8 +144,8 @@ impl<B: Backend> Shared<B> {
 }
 
 /// Renders `view` from `session` as a render job does: the render (stoppable, with the view's
-/// exposure), the reduction, the shadows, the sharpening, the conversion to the display and the
-/// check that the image is whole.
+/// exposure), the reduction, the shadows, the sharpening, the channel view, the conversion to
+/// the display and the check that the image is whole.
 fn render_view<B: Backend>(
     backend: &B,
     session: &mut B::Session,
@@ -157,8 +158,7 @@ fn render_view<B: Backend>(
         scale::reduce(&img, w, h).ok_or_else(|| DecodeError::new("scaling the view failed"))
     };
     // the renders are stoppable (T328) and made with the view's exposure (ADR 0027 §3.4, W5); the
-    // look at the stop after the render ends the job before the reduction, the sharpening and the
-    // conversion
+    // look at the stop after the render ends the job before reduction, adjustments and conversion
     let rendered = match view.kind {
         ViewKind::Half | ViewKind::Reduced => {
             backend.render_half_stoppable(session, view.exposure, stop)
@@ -201,9 +201,8 @@ fn render_view<B: Backend>(
         }),
         None => result,
     };
-    // sharpened last, after the reduction and before the conversion to the display (ADR 0027
-    // §3.3, W3-Q1); with a valid value it fails only on inconsistent data, which gets the check's
-    // text (W3-Q6)
+    // sharpened after the reduction and before the channel view (ADR 0027 §3.3, W3-Q1); with a
+    // valid value it fails only on inconsistent data, which gets the check's text (W3-Q6)
     let result = match view.sharpen {
         Some(s) => result.and_then(|img| {
             sharpen::sharpen(&img, s)
@@ -211,7 +210,15 @@ fn render_view<B: Backend>(
         }),
         None => result,
     };
-    // to the display after the render and the reduction, before the check (ADR 0027 W1-Q4)
+    let result = if view.channel == Channel::Color {
+        result
+    } else {
+        result.and_then(|img| {
+            channel::apply(&img, view.channel)
+                .ok_or_else(|| DecodeError::new("the decoder returned a malformed image"))
+        })
+    };
+    // to the display after the view's adjustments, before the check (ADR 0027 W1-Q4, W4-Q1)
     let result = result.and_then(|img| backend.to_display(session, img));
     result.and_then(|img| {
         if img.is_consistent() {
@@ -441,6 +448,13 @@ impl<B: Backend> ViewCore<B> {
     /// request: nothing is recorded.
     pub fn set_shadows(&self, amount: Option<u8>) {
         self.update_adjustment(|st| st.set_shadows(amount));
+    }
+
+    /// Sets the channel view for every source (ADR 0027 §3.6, W4). The shell holds the choice
+    /// for the session; it is not saved. [`Frame::channel`] tells its state. Not a user request:
+    /// nothing is recorded. A render under way finishes (owner, 2026-11-25, as for sharpening).
+    pub fn set_channel(&self, channel: Channel) {
+        self.update_adjustment(|st| st.set_channel(channel));
     }
 
     /// One manual exposure step of ⅓ EV for the current image (`delta` 1 or −1, W5-Q2). Returns
@@ -1407,6 +1421,8 @@ mod tests {
         exposures: Mutex<Vec<i32>>,
         half: (u32, u32),
         pixel: fn(u32, u32) -> u8,
+        color: Option<fn(u32, u32) -> [u8; 3]>,
+        display_input: Mutex<Option<Rgb>>,
     }
 
     impl Exposed {
@@ -1415,6 +1431,8 @@ mod tests {
                 exposures: Mutex::new(Vec::new()),
                 half,
                 pixel,
+                color: None,
+                display_input: Mutex::new(None),
             }
         }
 
@@ -1422,8 +1440,10 @@ mod tests {
             let mut data = Vec::new();
             for y in 0..h {
                 for x in 0..w {
-                    let v = (self.pixel)(x, y);
-                    data.extend([v, v, v]);
+                    let rgb = self
+                        .color
+                        .map_or_else(|| [(self.pixel)(x, y); 3], |f| f(x, y));
+                    data.extend(rgb);
                 }
             }
             Rgb {
@@ -1476,6 +1496,13 @@ mod tests {
             lock(&self.exposures).push(exposure.milli());
             self.render_region(session, r)
         }
+
+        fn to_display(&self, _session: &u32, img: Rgb) -> Result<Rgb, DecodeError> {
+            if self.color.is_some() {
+                *lock(&self.display_input) = Some(img.clone());
+            }
+            Ok(img)
+        }
     }
 
     fn dark(_x: u32, _y: u32) -> u8 {
@@ -1487,6 +1514,18 @@ mod tests {
         (20 + (x * 7 + y * 13) % 50) as u8
     }
 
+    fn color_backend() -> Exposed {
+        let mut backend = Exposed::new((200, 150), dark);
+        backend.color = Some(|x, y| {
+            [
+                dark_pattern(x, y),
+                if (x + y).is_multiple_of(2) { 20 } else { 200 },
+                40,
+            ]
+        });
+        backend
+    }
+
     fn half_view() -> JobView {
         JobView {
             kind: ViewKind::Half,
@@ -1495,6 +1534,7 @@ mod tests {
             sharpen: None,
             exposure: Ev::ZERO,
             shadows: None,
+            channel: Channel::Color,
         }
     }
 
@@ -1506,6 +1546,7 @@ mod tests {
             sharpen: None,
             exposure: Ev::ZERO,
             shadows: None,
+            channel: Channel::Color,
         }
     }
 
@@ -1606,5 +1647,76 @@ mod tests {
             },
         );
         assert_eq!(img, sharpen::sharpen(&plain, s).unwrap());
+    }
+
+    #[test]
+    fn each_view_kind_applies_its_channel_before_display_conversion() {
+        let backend = color_backend();
+        assert_eq!(rendered(&backend, half_view()), backend.image(200, 150));
+        for kind in [
+            ViewKind::Half,
+            ViewKind::Reduced,
+            ViewKind::Fine,
+            ViewKind::Scaled,
+            ViewKind::Zoom,
+            ViewKind::Ring,
+        ] {
+            let density_q = match kind {
+                ViewKind::Reduced | ViewKind::Fine => 250_000,
+                ViewKind::Scaled => 750_000,
+                _ => half_view().density_q,
+            };
+            let view = JobView {
+                kind,
+                density_q,
+                ..half_view()
+            };
+            let plain = rendered(&backend, view);
+            let red = rendered(
+                &backend,
+                JobView {
+                    channel: Channel::Red,
+                    ..view
+                },
+            );
+            let expected = channel::apply(&plain, Channel::Red).unwrap();
+            assert_eq!(red, expected, "{kind:?}");
+            assert_eq!(*lock(&backend.display_input), Some(expected), "{kind:?}");
+        }
+    }
+
+    #[test]
+    fn the_channel_view_follows_sharpening_and_shadows() {
+        let backend = color_backend();
+        let plain = backend.image(200, 150);
+        let s = Sharpening::DEFAULT;
+        let red = rendered(
+            &backend,
+            JobView {
+                sharpen: Some(s),
+                channel: Channel::Red,
+                ..half_view()
+            },
+        );
+        let sharpened = sharpen::sharpen(&plain, s).unwrap();
+        assert_eq!(red, channel::apply(&sharpened, Channel::Red).unwrap());
+        let red_first = channel::apply(&plain, Channel::Red).unwrap();
+        assert_ne!(red, sharpen::sharpen(&red_first, s).unwrap());
+
+        let luminance = rendered(
+            &backend,
+            JobView {
+                shadows: Some(100),
+                sharpen: Some(s),
+                channel: Channel::Luminance,
+                ..half_view()
+            },
+        );
+        let lifted = shadows::lift(&plain, 100).unwrap();
+        let sharpened = sharpen::sharpen(&lifted, s).unwrap();
+        assert_eq!(
+            luminance,
+            channel::apply(&sharpened, Channel::Luminance).unwrap()
+        );
     }
 }

@@ -87,8 +87,7 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status | Model |
 |---|---|---|---|
-| [T346](T346-channel-view-in-the-core.md) | ADR 0027 W4: the channel view's function, its timing and the channel in the view core | Open | Opus |
-| [T347](T347-channel-view-keys-menu-mark.md) | ADR 0027 W4: the keys, the menu and the mark of the channel view | Blocked | Opus |
+| [T347](T347-channel-view-keys-menu-mark.md) | ADR 0027 W4: the keys, the menu and the mark of the channel view | Open | Opus |
 
 ## Writing a task (owner and reviewer)
 

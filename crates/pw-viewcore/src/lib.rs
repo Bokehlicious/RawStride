@@ -24,6 +24,7 @@
 //! [`Backend`], and the presentation (`pw-render`, `pw-loupe`) uploads and draws.
 
 mod backend;
+pub mod channel;
 mod core;
 pub mod exposure;
 pub mod geometry;
@@ -38,6 +39,7 @@ pub use crate::backend::{
     Backend, ClippingMap, DecodeError, FocusMap, ImageStatistics, Rgb, Source, Statistics,
     StatisticsOrigin, Stop,
 };
+pub use crate::channel::Channel;
 pub use crate::core::{Releaser, ViewCore};
 pub use crate::exposure::{AutoExposure, Ev};
 pub use crate::geometry::{ImageSize, Rect};

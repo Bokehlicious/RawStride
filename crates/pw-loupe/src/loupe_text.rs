@@ -358,6 +358,7 @@ mod tests {
                 view: pw_viewcore::AdjustState::Off,
             },
             shadows: pw_viewcore::AdjustState::Off,
+            channel: pw_viewcore::AdjustState::Off,
         }
     }
 
@@ -594,6 +595,7 @@ mod tests {
                 view: pw_viewcore::AdjustState::Off,
             },
             shadows: pw_viewcore::AdjustState::Off,
+            channel: pw_viewcore::AdjustState::Off,
         }
     }
 
