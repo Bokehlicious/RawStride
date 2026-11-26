@@ -641,7 +641,8 @@ only if it is seen in use.)
 - *The search's counts in every frame* (review of T341, 2026-11-26): while a search is active,
   the status line's counts (`star_label_list` and `search_counts`, with each file's rating under
   a star filter) are made again over all the tab's files in every frame drawn, in the contact
-  sheet and the preview. A task only if it is seen in use (large folders).
+  sheet and the preview. A task only if it is seen in use (large folders). Seen in the hand check
+  of S1–S3 (owner, 2026-11-26): a little slow, manageable.
 
 ## LibRaw (`pw-libraw`)
 
