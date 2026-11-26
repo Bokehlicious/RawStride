@@ -246,6 +246,33 @@ pub fn sharpen_button_label(key: Option<KeyChord>) -> String {
     }
 }
 
+/// The exposure controls next to USM in the loupe's status bar (ADR 0027 W5, T339).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ExposureButton {
+    Darker,
+    Auto,
+    Brighter,
+}
+
+pub fn exposure_button_label(button: ExposureButton) -> &'static str {
+    match button {
+        ExposureButton::Darker => "\u{2212}", // MINUS SIGN
+        ExposureButton::Auto => "A",
+        ExposureButton::Brighter => "+",
+    }
+}
+
+pub fn exposure_button_hover(button: ExposureButton, key: Option<KeyChord>) -> String {
+    let shortcut = key
+        .map(|key| format!(" ({})", key_text(key)))
+        .unwrap_or_default();
+    match button {
+        ExposureButton::Darker => format!("Darker by ⅓ EV{shortcut}."),
+        ExposureButton::Auto => format!("Auto exposure on or off{shortcut}."),
+        ExposureButton::Brighter => format!("Brighter by ⅓ EV{shortcut}."),
+    }
+}
+
 /// The text of a contact-sheet or filmstrip cell whose file has no embedded preview
 /// (`CellState::NoPreview`).
 pub fn no_preview_text() -> &'static str {
@@ -397,6 +424,52 @@ mod tests {
         assert_eq!(sharpen_button_label(chord(false)), "USM (U)");
         assert_eq!(sharpen_button_label(chord(true)), "USM (Shift+U)");
         assert_eq!(sharpen_button_label(None), "USM");
+    }
+
+    #[test]
+    fn the_exposure_buttons_have_fixed_labels() {
+        assert_eq!(exposure_button_label(ExposureButton::Darker), "\u{2212}"); // MINUS SIGN
+        assert_eq!(exposure_button_label(ExposureButton::Auto), "A");
+        assert_eq!(exposure_button_label(ExposureButton::Brighter), "+");
+    }
+
+    #[test]
+    fn the_exposure_button_hovers_show_the_maps_keys() {
+        let chord = |key, ctrl, shift| {
+            Some(KeyChord {
+                key,
+                ctrl,
+                shift,
+                alt: false,
+            })
+        };
+        for (button, key, with_key, without_key) in [
+            (
+                ExposureButton::Darker,
+                chord(egui::Key::ArrowDown, true, false),
+                "Darker by ⅓ EV (Ctrl+↓).",
+                "Darker by ⅓ EV.",
+            ),
+            (
+                ExposureButton::Auto,
+                chord(egui::Key::B, false, false),
+                "Auto exposure on or off (B).",
+                "Auto exposure on or off.",
+            ),
+            (
+                ExposureButton::Brighter,
+                chord(egui::Key::ArrowUp, true, false),
+                "Brighter by ⅓ EV (Ctrl+↑).",
+                "Brighter by ⅓ EV.",
+            ),
+        ] {
+            assert_eq!(exposure_button_hover(button, key), with_key);
+            assert_eq!(exposure_button_hover(button, None), without_key);
+        }
+        assert_eq!(
+            exposure_button_hover(ExposureButton::Auto, chord(egui::Key::B, false, true)),
+            "Auto exposure on or off (Shift+B)."
+        );
     }
 
     /// The mode label and the two error texts show the key map's key of RAW ↔ JPEG (T280): the

@@ -125,10 +125,10 @@ pub use keymap::{
     is_modifier_key, keys_path, load_key_map, save_key_map,
 };
 pub use loupe_text::{
-    PROFILE_UNUSABLE_TEXT, READING_RATINGS_TEXT, compare_side_text, error_text,
-    error_text_with_key, failed_cell_text, indicator_text, marked_text, mode_label,
-    mode_label_with_key, no_match_text, no_preview_text, position_text, sharpen_button_label,
-    source_text, status_line, zoom_text,
+    ExposureButton, PROFILE_UNUSABLE_TEXT, READING_RATINGS_TEXT, compare_side_text, error_text,
+    error_text_with_key, exposure_button_hover, exposure_button_label, failed_cell_text,
+    indicator_text, marked_text, mode_label, mode_label_with_key, no_match_text, no_preview_text,
+    position_text, sharpen_button_label, source_text, status_line, zoom_text,
 };
 pub use monitor_profile::{
     MonitorProfile, ProfileSource, load_monitor_profile, primary_monitor_profile_path,

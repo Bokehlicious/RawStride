@@ -1,4 +1,4 @@
-# T340. ADR 0027 W5: the setting "Auto exposure at start" — Blocked
+# T340. ADR 0027 W5: the setting "Auto exposure at start" — Open
 
 - **Why:** W5's hand check (owner, 2026-11-26; ADR 0027 §4.4 "W5's hand check", which amends
   §2.1's "off by default and never saved" for auto exposure alone). The owner finds the RAW view
@@ -99,3 +99,4 @@
 | Date | Status | Note |
 |---|---|---|
 | 2026-11-26 | Blocked | Added after W5's hand check (ADR 0027 §4.4); waits for T339. Cold read (also of T339 beside it): names and lines found; fixed: the fifth settings test's real name, the nested bool arm, when the old value is read, the expected side effects (Reset Adjustments enabled, Auto Exposure ticked, "A" selected), the glossary row shared with T339. No other test breaks. Sonnet kept |
+| 2026-11-26 | Open | T339 done; its cold read is in the row above |

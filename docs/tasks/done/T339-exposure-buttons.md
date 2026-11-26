@@ -1,4 +1,4 @@
-# T339. ADR 0027 W5: the buttons "−", "A" and "+" for the exposure — Open
+# T339. ADR 0027 W5: the buttons "−", "A" and "+" for the exposure — Done
 
 - **Why:** W5's hand check (owner, 2026-11-26; ADR 0027 §4.4 "W5's hand check"; W5-Q8 left a
   button to the hand check). Three buttons after "USM" in the status bar: **"−"** and **"+"**
@@ -96,3 +96,5 @@
 |---|---|---|
 | 2026-11-26 | Blocked | Added after W5's hand check (ADR 0027 §4.4); waits for T338. Cold read: names, lines and egui 0.37's API found; fixed: `lib.rs` added (the re-export of `loupe_text`), the minus as `\u{2212}`, only two `StatusBar` literals, both hover calls explained. Sonnet kept: the gap was the one-line re-export, now named |
 | 2026-11-26 | Open | T338 done; its cold read is in the row above |
+| 2026-11-26 | Ready for review | Added the three status-bar buttons and their shortcut hovers, using the existing exposure commands and availability. All three new tests passed. The sandbox check could not lock the RustSec database or start ExifTool. The full check and the owner's hand check are pending |
+| 2026-11-26 | Done | Reviewed: labels and hovers in `loupe_text.rs` (minus as `\u{2212}`, one template per sentence), `ExposureButtons` and `exposure_buttons` in `main.rs`, the three buttons after "USM" pushing the menu's commands, enabled as `command_enabled(ExposureBrighter)`, both hover calls; the glossary rows; three tests as asked. The reviewer updated the inventory's total (2809→2812; the agent had changed only the `pw-loupe` row, 1504→1507). `.\tools\check.ps1` all OK: 2812 passed, 0 failed, 98 ignored; no clippy warnings. CHANGELOG: the buttons added to Unreleased ▸ Added (the exposure itself is not released yet). The owner's hand check follows |

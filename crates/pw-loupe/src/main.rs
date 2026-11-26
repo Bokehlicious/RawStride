@@ -91,9 +91,10 @@ use pw_loupe::{
 };
 use pw_loupe::{EmbeddedOrientationReader, ROTATION_UNSUPPORTED_TEXT, ReaderStopped};
 use pw_loupe::{
-    ExposureKeys, FixedKey, KeyAction, KeyChord, KeyMap, KeyView, clipping_text_with_key,
-    error_text_with_key, fixed_key, keys_path, load_key_map, menu_key, mode_label_with_key,
-    preview_text_with_key, sharpen_button_label, sharpening_values_text,
+    ExposureButton, ExposureKeys, FixedKey, KeyAction, KeyChord, KeyMap, KeyView,
+    clipping_text_with_key, error_text_with_key, exposure_button_hover, exposure_button_label,
+    fixed_key, keys_path, load_key_map, menu_key, mode_label_with_key, preview_text_with_key,
+    sharpen_button_label, sharpening_values_text,
 };
 use pw_loupe::{
     FILMSTRIP_CELL_WIDTH, FILMSTRIP_IMAGE_HEIGHT, FILMSTRIP_LABEL_HEIGHT, FILMSTRIP_MARGIN,
@@ -330,6 +331,7 @@ struct StatusBar {
     mode: Option<String>,
     /// The button "USM" beside it (ADR 0027 W3-Q5, T323).
     sharpen: Option<SharpenButton>,
+    exposure: Option<ExposureButtons>,
 }
 
 /// The button that turns sharpening on and off (ADR 0027 W3-Q5, T323).
@@ -339,6 +341,30 @@ struct SharpenButton {
     /// Sharpening is on: the button is drawn selected.
     on: bool,
     hover: String,
+}
+
+/// The exposure controls after USM in the loupe (ADR 0027 W5, T339).
+#[derive(Clone, Debug, PartialEq)]
+struct ExposureButtons {
+    auto_on: bool,
+    enabled: bool,
+    hovers: [String; 3],
+}
+
+fn exposure_buttons(
+    mode: ExposureMode,
+    enabled: bool,
+    [darker, auto, brighter]: [Option<KeyChord>; 3],
+) -> ExposureButtons {
+    ExposureButtons {
+        auto_on: mode == ExposureMode::Auto,
+        enabled,
+        hovers: [
+            exposure_button_hover(ExposureButton::Darker, darker),
+            exposure_button_hover(ExposureButton::Auto, auto),
+            exposure_button_hover(ExposureButton::Brighter, brighter),
+        ],
+    }
 }
 
 /// What a key of the key map changed that the key loop goes on with (T280).
@@ -4510,6 +4536,7 @@ impl Loupe {
                 line,
                 mode: None,
                 sharpen: None,
+                exposure: None,
             };
         }
     }
@@ -9029,6 +9056,28 @@ impl Loupe {
             {
                 commands.push(Command::Sharpening);
             }
+            if let Some(buttons) = &self.status_bar.exposure {
+                let controls = [
+                    (ExposureButton::Darker, Command::ExposureDarker, false),
+                    (ExposureButton::Auto, Command::AutoExposure, buttons.auto_on),
+                    (ExposureButton::Brighter, Command::ExposureBrighter, false),
+                ];
+                for ((button, command, selected), hover) in
+                    controls.into_iter().zip(&buttons.hovers)
+                {
+                    if ui
+                        .add_enabled(
+                            !blocked && buttons.enabled,
+                            egui::Button::new(exposure_button_label(button)).selected(selected),
+                        )
+                        .on_hover_text(hover.as_str())
+                        .on_disabled_hover_text(hover.as_str())
+                        .clicked()
+                    {
+                        commands.push(command);
+                    }
+                }
+            }
             ui.label(egui::RichText::new(&self.status_bar.line).size(STATUS_TEXT_SIZE));
         });
     }
@@ -9846,6 +9895,7 @@ impl Loupe {
         }
         let line = status_line_text(&parts);
         let sharpen_key = self.key_map.first_key(KeyAction::Sharpening);
+        let exposure_enabled = self.command_enabled(Command::ExposureBrighter);
         // The display-mode control (G4: a key and a control) sits in the status bar.
         self.next_status = StatusBar {
             line,
@@ -9858,6 +9908,15 @@ impl Loupe {
                 on: self.sharpening,
                 hover: sharpening_values_text(sharpen_key, self.settings.shell.sharpening),
             }),
+            exposure: Some(exposure_buttons(
+                self.exposure.exposure_mode,
+                exposure_enabled,
+                [
+                    self.key_map.first_key(KeyAction::ExposureDarker),
+                    self.key_map.first_key(KeyAction::AutoExposure),
+                    self.key_map.first_key(KeyAction::ExposureBrighter),
+                ],
+            )),
         };
     }
 }
@@ -13756,9 +13815,41 @@ mod tests {
     use std::path::{Path, PathBuf};
 
     mod preview_exposure {
-        use super::super::PreviewExposure;
+        use super::super::{PreviewExposure, exposure_buttons};
+        use pw_loupe::KeyChord;
         use pw_viewcore::{Config, ExposureMode, ViewCore, native::NativeBackend};
         use std::path::PathBuf;
+
+        #[test]
+        fn exposure_buttons_follow_the_mode_menu_availability_and_key_map() {
+            let keys = [egui::Key::D, egui::Key::B, egui::Key::F].map(|key| {
+                Some(KeyChord {
+                    key,
+                    ctrl: false,
+                    shift: true,
+                    alt: false,
+                })
+            });
+            for (mode, auto_on) in [
+                (ExposureMode::Auto, true),
+                (ExposureMode::Off, false),
+                (ExposureMode::Camera, false),
+            ] {
+                for enabled in [true, false] {
+                    let buttons = exposure_buttons(mode, enabled, keys);
+                    assert_eq!(buttons.auto_on, auto_on);
+                    assert_eq!(buttons.enabled, enabled);
+                    assert_eq!(
+                        buttons.hovers,
+                        [
+                            "Darker by ⅓ EV (Shift+D).",
+                            "Auto exposure on or off (Shift+B).",
+                            "Brighter by ⅓ EV (Shift+F).",
+                        ]
+                    );
+                }
+            }
+        }
 
         fn cores_with_manual_steps() -> [ViewCore<NativeBackend>; 2] {
             ["current.dng", "held.dng"].map(|file| {

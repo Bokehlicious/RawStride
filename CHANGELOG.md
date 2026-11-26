@@ -18,6 +18,8 @@ Downloads are on the [Releases page](https://github.com/Bokehlicious/RawStride/r
   amount set on the Settings page Preview. Marks at the bottom right show them; in the compare
   both sides follow. If one of these keys was assigned to another action in your keyboard
   shortcuts, that action goes back to its default key.
+- Buttons −, A and + after USM in the status bar: − and + make the RAW preview darker or
+  brighter by ⅓ EV, and A turns auto exposure on and off.
 
 ### Changed
 
