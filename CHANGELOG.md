@@ -9,6 +9,8 @@ Downloads are on the [Releases page](https://github.com/Bokehlicious/RawStride/r
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-11-26
+
 ### Added
 
 - Exposure and shadows for RAW images in the preview, for the session only, never saved in the
@@ -197,7 +199,8 @@ safely into DNG, JPEG and TIFF files. Folders open in tabs, with filters and mul
 selection; images can be moved, deleted to the Recycle Bin and opened in another program.
 ExifTool and the Microsoft Visual C++ runtime are included; the program is not signed yet.
 
-[Unreleased]: https://github.com/Bokehlicious/RawStride/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/Bokehlicious/RawStride/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/Bokehlicious/RawStride/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/Bokehlicious/RawStride/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/Bokehlicious/RawStride/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/Bokehlicious/RawStride/compare/v0.3.0...v0.4.0
