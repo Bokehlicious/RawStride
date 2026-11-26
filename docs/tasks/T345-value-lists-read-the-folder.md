@@ -1,4 +1,4 @@
-# T345. ADR 0022 S4c: the value lists read the whole folder — Blocked
+# T345. ADR 0022 S4c: the value lists read the whole folder — Open
 
 - **Why:** ADR 0022 S4 (the "Filter…" window's value lists), decided by the owner on 2026-11-26
   (ADR 0022 §3.3, S4-Q6, S4-Q7). After T344 a value list ("is one of" on Camera, Lens,
@@ -99,3 +99,4 @@
 | 2026-11-26 | Blocked | Added (ADR 0022 §3.3); waits for T344 (uses its window state and lists) |
 | 2026-11-26 | Blocked | Cold read: the order per group (`ReadScope`: a group only the applied filter needs is not read past its list), `read_order` named for the folder order, the tab's own paths, the window's tab checked by the caller; the answers land already (`record_capture`, `apply_filter_answer`); queued Exif reads cannot be taken back (accepted, a known limit at Done); no Exif failure text; the text stands still during a batch |
 | 2026-11-26 | Blocked | Chain review (see T343's log): the window's tab checked by index and folder as in T344; the hand check extended (an Exif-only row, a drop or import while the window is open, F5 keeping the rows). Leftovers for this task's Done: `known-limits.md` gets the queued Exif reads (point 4), the draft lost when the window's tab stops being active (T344), Ctrl+Shift+F doing nothing while the search box has the keyboard; `backlog.md` or `known-limits.md` (the owner's choice at the sort) gets the capture reader's thread dying (`try_recv` hides the disconnect, `sort.rs` about line 396: its files stay unknown and "Reading metadata" never ends; older than S4, the sort has it too) |
+| 2026-11-26 | Open | T344 done |

@@ -22,16 +22,20 @@ use metadata::{
     MoveAnswer, StatusLine,
 };
 use pw_imagecheck::RawImageCheck;
-use pw_loupe::SavedLibrary;
 use pw_loupe::clipping::{ClipChoice, OverlayCache, overlay_uv};
 use pw_loupe::file_stamp;
-use pw_loupe::filter_values::SearchCounts;
+use pw_loupe::filter_text::{
+    BetweenPart, FilterText, between_parts, condition_text, field_label, filter_button_text,
+    filter_text, group_label, missing_text, value_count_text, value_hint,
+};
+use pw_loupe::filter_values::{ExifSummary, SearchCounts};
+use pw_loupe::filter_window::{DraftRow, FilterDraft, list_entries};
 use pw_loupe::focus::FocusCache;
 use pw_loupe::library::{
     FolderList, Library, TreeRowKind, folder_key, read_drives, suppress_no_disk_dialogs,
 };
 use pw_loupe::library_text::{LibraryText, library_text, refresh_hover_text};
-use pw_loupe::meta_filter::Group;
+use pw_loupe::meta_filter::{ConditionKind, FILE_TYPES, Field as FilterField, Group, Row};
 use pw_loupe::{AUTHORS, AboutText, COMMIT, REPOSITORY, VERSION, about_text};
 use pw_loupe::{
     Action, AddedFiles, CardRefresh, CellState, CopiedFields, DEFAULT_THUMBNAIL_SIZE, DialogKey,
@@ -76,6 +80,7 @@ use pw_loupe::{
     CaptureReader, SORT_KEYS, SortFollow, SortKey, SortOrder, modified_time, read_order,
     sort_button_text, sort_direction_hover, sort_direction_text, sort_key_text, sorting_text,
 };
+use pw_loupe::{CaptureTime, SavedLibrary};
 use pw_loupe::{ClippingText, clipping_state_text, clipping_text};
 use pw_loupe::{
     ClockTime, ImportRow, ImportStep, PendingWrite, Tasks, TasksText, error_entry_text,
@@ -417,11 +422,48 @@ fn set_tab_search(tabs: &mut Tabs, text: &str) -> bool {
     true
 }
 
-/// A choice in View ▸ Filter: a star or label filter, or Show All, which also empties the
-/// search (S3-Q9).
+/// Sets the active tab's filter rows (ADR 0022 S4-Q1), keeping its search; false, changing
+/// nothing, without a tab or when the rows are already these. The caller refilters.
+fn set_tab_rows(tabs: &mut Tabs, rows: Vec<Row>) -> bool {
+    let Some(tab) = tabs
+        .active_mut()
+        .filter(|tab| tab.meta_filter.rows() != rows)
+    else {
+        return false;
+    };
+    tab.meta_filter.set_rows(rows);
+    true
+}
+
+/// The open "Filter…" window (ADR 0022 S4, T344): the rows being edited, the index and folder of
+/// the tab it was opened for, and Escape seen by the key loop (closes as Cancel).
+struct FilterWindowState {
+    draft: FilterDraft,
+    index: usize,
+    folder: Option<PathBuf>,
+    escape: bool,
+}
+
+/// Whether the filter window opens (an active tab, no dialog), and whether the preview goes back
+/// to the contact sheet first, as `focus_search` (S4-Q2).
+fn filter_window_opening(active: bool, dialog: bool, preview: bool) -> (bool, bool) {
+    let open = active && !dialog;
+    (open, open && preview)
+}
+
+/// Whether the active tab is still the one the filter window was opened for (same index and
+/// folder); otherwise the window closes as Cancel and OK changes nothing.
+fn filter_window_tab_matches(window: &FilterWindowState, tabs: &Tabs) -> bool {
+    tabs.active_index() == window.index
+        && tabs.active().is_some_and(|tab| tab.folder == window.folder)
+}
+
+/// A choice in View ▸ Filter: a star or label filter, Show All, which also empties the search
+/// (S3-Q9) and removes the rows (S4-Q11), or "Filter…", which opens the filter window (S4-Q2).
 enum FilterMenuChoice {
     Filter(Filter),
     ShowAll,
+    Window,
 }
 
 impl FilterMenuChoice {
@@ -429,6 +471,7 @@ impl FilterMenuChoice {
     fn filter_and_search(self, current: Filter) -> (Filter, Option<&'static str>) {
         match self {
             Self::Filter(filter) => (filter, None),
+            Self::Window => (current, None),
             Self::ShowAll => (
                 Filter {
                     stars: StarFilter::All,
@@ -1571,6 +1614,9 @@ struct Loupe {
     /// The tab paths of the filter read in flight (ADR 0022 S2), kept as the tab spells them so
     /// they are released even if the working directory changes.
     filter_read_paths: Vec<PathBuf>,
+    /// An Exif answer came for a file of the active tab while its filter needs Exif; the next
+    /// `follow_filter_values` refilters (T344 point 4a).
+    exif_arrived: bool,
     /// The reader of a file's own Exif orientation, for a turn of an image without a known value
     /// (ADR 0024 §2.5, T236, T237), and the number of its reads asked for whose answer has not
     /// come back.
@@ -1625,6 +1671,8 @@ struct Loupe {
     /// The template window (File ▸ Metadata Template…, ADR 0017 U13c, T293); at most one. While
     /// it is open it holds the program, as the metadata window does.
     template_window: Option<TemplateWindow>,
+    /// The "Filter…" window (View ▸ Filter ▸ Filter…, ADR 0022 S4, T344); at most one, modal.
+    filter_window: Option<FilterWindowState>,
     /// The number of the template window's opening, increased each time it opens: part of the
     /// window's id, so it opens at its default size in the middle each time (as the Settings
     /// window, U8-Q14).
@@ -2461,6 +2509,16 @@ impl Loupe {
         self.scroll_request = self.tabs.active().and_then(Tab::position);
     }
 
+    /// Applies the filter window's rows to the active tab (S4-Q1): on a change the tab is
+    /// refiltered and the contact sheet scrolls to the current image, as `set_search`.
+    fn set_rows(&mut self, rows: Vec<Row>) {
+        if set_tab_rows(&mut self.tabs, rows) {
+            self.refilter_active(None);
+            self.loupe_follows_visible();
+            self.scroll_request = self.tabs.active().and_then(Tab::position);
+        }
+    }
+
     /// Loads the active tab's search into the box when the tab, its folder or the number of
     /// tabs changed, or nothing is pending and the tab's search changed; a pending change is
     /// dropped then.
@@ -2532,6 +2590,32 @@ impl Loupe {
         scroll_to
     }
 
+    /// Opens the filter window with the active tab's rows (S4-Q2), from the preview through the
+    /// contact sheet; nothing without a tab or with a dialog open. Gives the scroll position when
+    /// it left the preview.
+    fn open_filter_window(&mut self, ctx: &egui::Context) -> Option<Option<usize>> {
+        let (open, back_to_sheet) = filter_window_opening(
+            self.tabs.active().is_some(),
+            self.dialog_open(),
+            self.in_preview(),
+        );
+        let tab = self.tabs.active().filter(|_| open)?;
+        let window = FilterWindowState {
+            draft: FilterDraft::from_filter(&tab.meta_filter),
+            index: self.tabs.active_index(),
+            folder: tab.folder.clone(),
+            escape: false,
+        };
+        let scroll_to = back_to_sheet.then(|| self.switch_mode(ViewMode::Grid));
+        if let Some(id) = ctx.memory(|memory| memory.focused()) {
+            ctx.memory_mut(|memory| memory.surrender_focus(id));
+        }
+        egui::Popup::close_all(ctx);
+        self.filter_window = Some(window);
+        ctx.request_repaint();
+        scroll_to
+    }
+
     /// Recomputes the active tab's visible list when `ratings_ready` has changed since the last
     /// time (ADR 0014 Q7): the list fills when the ratings are read, and empties under an active
     /// filter when the read fails. A preview left with nothing to show once the ratings are ready
@@ -2597,8 +2681,7 @@ impl Loupe {
     fn follow_sort(&mut self, ctx: &egui::Context) {
         while let Some(read) = self.capture_reader.try_recv() {
             self.capture_in_flight.remove(&read.path);
-            self.tabs
-                .record_capture(&read.path, read.time, read.exif.as_ref());
+            self.record_capture(&read.path, read.time, read.exif.as_ref());
         }
         if self.settings.shell.sort.key == SortKey::Capture {
             self.request_capture_times();
@@ -2632,9 +2715,23 @@ impl Loupe {
             if self.capture_reader.request(path.clone()) {
                 self.capture_in_flight.insert(path);
             } else {
-                self.tabs.record_capture(&path, None, None);
+                self.record_capture(&path, None, None);
             }
         }
+    }
+
+    /// Records a capture read's answer and notes it for the refilter when the active tab's filter
+    /// needs Exif (T344 point 4a).
+    fn record_capture(
+        &mut self,
+        path: &Path,
+        time: Option<CaptureTime>,
+        exif: Option<&ExifSummary>,
+    ) {
+        self.tabs.record_capture(path, time, exif);
+        self.exif_arrived |= self.tabs.active().is_some_and(|tab| {
+            tab.meta_filter.needs(Group::Exif) && tab.files.iter().any(|file| file == path)
+        });
     }
 
     /// Follows ADR 0022 S2 reads for the active tab and delivers finished reads to their tabs.
@@ -2657,7 +2754,7 @@ impl Loupe {
             self.tabs.end_filter_read(&self.filter_read_paths);
             self.filter_read_paths.clear();
         }
-        if had_answers || ended {
+        if filter_read_changed(had_answers, ended, std::mem::take(&mut self.exif_arrived)) {
             self.refilter_after_filter_read();
         }
         // follow_sort already schedules a repaint for outstanding capture reads.
@@ -2686,6 +2783,9 @@ impl Loupe {
             let mut wanted = tab.filter_values.exif_wanted(&order);
             wanted.retain(|p| !self.capture_in_flight.contains(p));
             self.request_captures(wanted);
+            if self.exif_arrived {
+                ctx.request_repaint();
+            }
             if !self.capture_in_flight.is_empty() {
                 ctx.request_repaint_after(CAPTURE_POLL_INTERVAL);
             }
@@ -6144,20 +6244,122 @@ impl Loupe {
         ctx.request_repaint();
     }
 
+    /// Draws the modal filter window (S4-Q1, S4-Q3) over a backdrop: its rows, Add Condition,
+    /// Clear, OK (only while every row is complete) and Cancel. Escape, the close button and a
+    /// change of the active tab are Cancel.
+    fn draw_filter_window(&mut self, ctx: &egui::Context) {
+        let Some(mut window) = self.filter_window.take() else {
+            return;
+        };
+        if !filter_window_tab_matches(&window, &self.tabs) || window.escape {
+            self.close_filter_window(ctx);
+            return;
+        }
+        let Some(tab) = self.tabs.active() else {
+            return;
+        };
+        let screen = ctx.content_rect();
+        let backdrop_id = egui::Id::unique("filter-window-backdrop");
+        let window_id = egui::Id::unique("filter-window");
+        let backdrop_layer = egui::LayerId::new(egui::Order::Foreground, backdrop_id);
+        ctx.memory_mut(|memory| memory.set_modal_layer(backdrop_layer));
+        egui::Area::new(backdrop_id)
+            .order(egui::Order::Foreground)
+            .fixed_pos(screen.min)
+            .show(ctx, |ui| {
+                let response = ui.allocate_response(screen.size(), egui::Sense::click_and_drag());
+                ui.painter().rect_filled(response.rect, 0.0, BACKDROP);
+            });
+        ctx.set_sublayer(
+            backdrop_layer,
+            egui::LayerId::new(egui::Order::Foreground, window_id),
+        );
+        let width = screen.width().min(760.0);
+        let mut open = true;
+        let mut cancel = false;
+        let mut apply = None;
+        egui::Window::new(filter_text(FilterText::Title))
+            .id(window_id)
+            .order(egui::Order::Foreground)
+            .collapsible(false)
+            .default_width(width)
+            .default_pos(screen.center_top() + egui::vec2(-width / 2.0, 48.0))
+            .open(&mut open)
+            .show(ctx, |ui| {
+                let mut remove = None;
+                egui::ScrollArea::vertical()
+                    .max_height(screen.height() * 0.65)
+                    .show(ui, |ui| {
+                        if window.draft.rows().is_empty() {
+                            ui.label(filter_text(FilterText::NoConditions));
+                        }
+                        for (index, row) in window.draft.rows_mut().iter_mut().enumerate() {
+                            ui.push_id(index, |ui| {
+                                if draw_filter_row(ui, row, tab) {
+                                    remove = Some(index);
+                                }
+                            });
+                        }
+                    });
+                if let Some(index) = remove {
+                    window.draft.remove(index);
+                }
+                ui.separator();
+                ui.horizontal_wrapped(|ui| {
+                    if ui.button(filter_text(FilterText::AddCondition)).clicked() {
+                        window.draft.add();
+                    }
+                    if ui.button(filter_text(FilterText::Clear)).clicked() {
+                        window.draft.clear();
+                    }
+                    let rows = window.draft.result();
+                    if ui
+                        .add_enabled(rows.is_ok(), egui::Button::new(filter_text(FilterText::Ok)))
+                        .clicked()
+                    {
+                        apply = rows.ok();
+                    }
+                    cancel = ui.button(filter_text(FilterText::Cancel)).clicked();
+                });
+            });
+        if cancel || !open {
+            self.close_filter_window(ctx);
+        } else if let Some(rows) = apply {
+            if filter_window_tab_matches(&window, &self.tabs) {
+                self.set_rows(rows);
+            }
+            self.close_filter_window(ctx);
+        } else {
+            self.filter_window = Some(window);
+        }
+    }
+
+    /// Closes the filter window, dropping its draft, with its lists and focus.
+    fn close_filter_window(&mut self, ctx: &egui::Context) {
+        self.filter_window = None;
+        egui::Popup::close_all(ctx);
+        if let Some(id) = ctx.memory(|memory| memory.focused()) {
+            ctx.memory_mut(|memory| memory.surrender_focus(id));
+        }
+        ctx.request_repaint();
+    }
+
     /// Whether a dialog holds the program: the metadata window (modal, D16), the template window
-    /// (modal, T293), the settings window, a shown import dialog, the question of "Open in {name}" above 100 images (T202), or the
-    /// confirmation of a delete (T189), the last two also while they wait for another dialog to
-    /// close.
+    /// (modal, T293), the filter window (modal, T344), the settings window, a shown import
+    /// dialog, the question of "Open in {name}" above 100 images (T202), or the confirmation of a
+    /// delete (T189), the last two also while they wait for another dialog to close.
     fn dialog_open(&self) -> bool {
         self.other_dialog_open() || matches!(self.delete, DeleteStep::Confirming(_))
     }
 
     /// Whether a dialog other than the confirmation of a delete is open: the metadata window, the
-    /// template window (T293), the settings window, a shown import dialog, or the question of "Open in {name}" (its step
-    /// `Confirming`, T202). The confirmation waits while one is (T189).
+    /// template window (T293), the filter window (T344), the settings window, a shown import
+    /// dialog, or the question of "Open in {name}" (its step `Confirming`, T202). The
+    /// confirmation waits while one is (T189).
     fn other_dialog_open(&self) -> bool {
         self.metadata_window.is_some()
             || self.template_window.is_some()
+            || self.filter_window.is_some()
             || self.settings_window.is_some()
             || (self.import_dialog.is_some() && !self.import_hidden)
             || matches!(self.open, OpenStep::Confirming(_))
@@ -6165,13 +6367,15 @@ impl Loupe {
 
     /// Whether the question of "Open in {name}" is shown this frame (ADR 0019 §2.5, T202): the
     /// step is `Confirming` and neither the metadata window, the template window (T293), the
-    /// settings window nor a shown import dialog is open. Written out on its own: `other_dialog_open` is true while the
+    /// filter window (T344), the settings window nor a shown import dialog is open. Written out
+    /// on its own: `other_dialog_open` is true while the
     /// question itself is `Confirming`. Unlike the delete's, it does not depend on the active tab
     /// (the request holds its own paths).
     fn open_window_shown(&self) -> bool {
         matches!(self.open, OpenStep::Confirming(_))
             && self.metadata_window.is_none()
             && self.template_window.is_none()
+            && self.filter_window.is_none()
             && self.settings_window.is_none()
             && !(self.import_dialog.is_some() && !self.import_hidden)
     }
@@ -6395,6 +6599,7 @@ impl Loupe {
                 ctx.request_repaint();
             }
             A::Search => done.scroll_to = self.focus_search(ctx),
+            A::FilterWindow => done.scroll_to = self.open_filter_window(ctx),
             A::SelectAll => select_all(self.tabs.active_mut()),
             A::Preview => {
                 if in_preview {
@@ -8618,6 +8823,7 @@ impl Loupe {
             | Command::PreviousTab
             | Command::SelectAll
             | Command::Search
+            | Command::FilterWindow
             | Command::ClearSelection => tab.is_some(),
             Command::Metadata => {
                 let cwd = std::env::current_dir().ok();
@@ -8738,6 +8944,11 @@ impl Loupe {
             Command::Metadata => self.act(Action::OpenMetadata, None),
             Command::Search => {
                 if let Some(position) = self.focus_search(ctx) {
+                    self.scroll_request = position;
+                }
+            }
+            Command::FilterWindow => {
+                if let Some(position) = self.open_filter_window(ctx) {
                     self.scroll_request = position;
                 }
             }
@@ -9147,6 +9358,14 @@ impl Loupe {
         if ui.button(shell_text(ShellText::ShowAll)).clicked() {
             return Some(FilterMenuChoice::ShowAll);
         }
+        let command = Command::FilterWindow;
+        let mut button = egui::Button::new(command_text(command));
+        if let Some(key) = menu_key(MenuItem { command, key: None }, &self.key_map) {
+            button = button.shortcut_text(key_text(key));
+        }
+        if ui.add(button).clicked() {
+            return Some(FilterMenuChoice::Window);
+        }
         let mut chosen = None;
         ui.separator();
         let counts_stars = matches!(filter.stars, StarFilter::Stars(_));
@@ -9316,6 +9535,17 @@ impl Loupe {
                     new_filter = Some(Filter { label, ..filter });
                 }
                 self.draw_search_box(ui, accent);
+                let count = self
+                    .tabs
+                    .active()
+                    .map_or(0, |tab| tab.meta_filter.condition_count());
+                let mut button = egui::Button::new(filter_button_text(count));
+                if count != 0 {
+                    button = button.stroke(egui::Stroke::new(1.5, accent));
+                }
+                if ui.add(button).clicked() {
+                    commands.push(Command::FilterWindow);
+                }
             });
             ui.separator();
             // The sort order of every tab (ADR 0017 U14-Q7, T138): the key and the direction.
@@ -9724,6 +9954,7 @@ impl Loupe {
         // on the preview closes it first, then opens as in the contact sheet (T111).
         if let Some(path) = dropped
             && self.metadata_window.is_none()
+            && self.filter_window.is_none()
             && !matches!(self.delete, DeleteStep::Confirming(_))
             && !matches!(self.open, OpenStep::Confirming(_))
         {
@@ -9811,6 +10042,13 @@ impl Loupe {
         let mut start_import = false;
         let search_took_key = std::mem::take(&mut self.search_took_key);
         for (key, ctrl, shift, alt, repeat) in key_actions {
+            if let Some(window) = &mut self.filter_window {
+                // An open combo box takes Escape through egui's popup handling.
+                if key == egui::Key::Escape && !ctrl && !alt && !egui::Popup::is_any_open(&ctx) {
+                    window.escape = true;
+                }
+                continue;
+            }
             // The confirmation of a delete takes every key while it is shown (T189 point 4):
             // Escape cancels, Enter cancels unless the Delete button has the focus (then egui
             // clicks it), every other key does nothing.
@@ -12081,7 +12319,125 @@ fn filter_read_order(
     .collect()
 }
 
-/// The progress of an active metadata filter over its star and label candidates.
+/// Whether the active tab is refiltered after the filter's reads (ADR 0022 S3-Q3, T344 point
+/// 4a): IPTC answers came, a chunk ended, or Exif answers came while the filter needs Exif.
+fn filter_read_changed(had_answers: bool, ended: bool, exif_arrived: bool) -> bool {
+    had_answers || ended || exif_arrived
+}
+
+/// Draws one row of the filter window (field, condition, value, Remove) and what it still
+/// misses; true when Remove was clicked.
+fn draw_filter_row(ui: &mut egui::Ui, row: &mut DraftRow, tab: &Tab) -> bool {
+    let mut remove = false;
+    ui.horizontal_wrapped(|ui| {
+        egui::ComboBox::from_id_salt("field")
+            .selected_text(field_label(row.field()))
+            .show_ui(ui, |ui| {
+                for group in [Group::Name, Group::Exif, Group::Iptc] {
+                    ui.strong(group_label(group));
+                    for field in FilterField::ALL
+                        .into_iter()
+                        .filter(|field| field.group() == group)
+                    {
+                        if ui
+                            .selectable_label(row.field() == field, field_label(field))
+                            .clicked()
+                        {
+                            row.set_field(field);
+                        }
+                    }
+                }
+            });
+        let field = row.field();
+        egui::ComboBox::from_id_salt("condition")
+            .selected_text(condition_text(row.kind()))
+            .show_ui(ui, |ui| {
+                for &kind in field.kinds() {
+                    if ui
+                        .selectable_label(row.kind() == kind, condition_text(kind))
+                        .clicked()
+                    {
+                        row.set_kind(kind);
+                    }
+                }
+            });
+        draw_filter_operand(ui, row, tab);
+        remove = ui.button(filter_text(FilterText::Remove)).clicked();
+    });
+    if let Err(missing) = row.to_row() {
+        ui.colored_label(ui.visuals().error_fg_color, missing_text(missing));
+    }
+    remove
+}
+
+/// Draws a row's value: one text field, two in the order of `between_parts`, the file types'
+/// check boxes, or the value list counted from what the tab has read (S4-Q6, S4-Q7).
+fn draw_filter_operand(ui: &mut egui::Ui, row: &mut DraftRow, tab: &Tab) {
+    let field = row.field();
+    let edit = |ui: &mut egui::Ui, text: &mut String, width| {
+        ui.add(
+            egui::TextEdit::singleline(text)
+                .desired_width(width)
+                .hint_text(value_hint(field).unwrap_or_default()),
+        );
+    };
+    match row.kind() {
+        ConditionKind::Contains
+        | ConditionKind::Is
+        | ConditionKind::IsNot
+        | ConditionKind::AtLeast
+        | ConditionKind::AtMost => edit(ui, row.text_mut(), 130.0),
+        ConditionKind::Between => {
+            for part in between_parts() {
+                match part {
+                    BetweenPart::Low => edit(ui, row.text_mut(), 95.0),
+                    BetweenPart::High => edit(ui, row.text2_mut(), 95.0),
+                    BetweenPart::Text(text) => {
+                        ui.label(text);
+                    }
+                }
+            }
+        }
+        ConditionKind::OneOf if field == FilterField::FileType => {
+            for value in FILE_TYPES {
+                let mut picked = row
+                    .picks()
+                    .iter()
+                    .any(|pick| pick.eq_ignore_ascii_case(value));
+                if ui.checkbox(&mut picked, value).changed() {
+                    row.toggle_pick(value);
+                }
+            }
+        }
+        ConditionKind::OneOf if field.has_value_list() => {
+            let counts = tab.filter_values.value_counts(field, &tab.files);
+            let entries = list_entries(&counts, row.picks());
+            if entries.is_empty() {
+                ui.label(filter_text(FilterText::NoValues));
+            } else {
+                ui.vertical(|ui| {
+                    egui::ScrollArea::vertical()
+                        .id_salt("values")
+                        .max_height(120.0)
+                        .show(ui, |ui| {
+                            for (value, count, mut picked) in entries {
+                                if ui
+                                    .checkbox(&mut picked, value_count_text(&value, count))
+                                    .changed()
+                                {
+                                    row.toggle_pick(&value);
+                                }
+                            }
+                        });
+                });
+            }
+        }
+        ConditionKind::OneOf | ConditionKind::IsEmpty => {}
+    }
+}
+
+/// The progress of an active metadata filter over its star and label candidates: every group the
+/// search and the rows need (ADR 0022 S4-Q8).
 fn search_counts(
     tab: &Tab,
     ratings_ready: bool,
@@ -12095,7 +12451,7 @@ fn search_counts(
         .into_iter()
         .filter_map(|i| tab.files.get(i).cloned())
         .collect();
-    Some(tab.filter_values.search_counts(&files))
+    Some(tab.filter_values.filter_counts(&tab.meta_filter, &files))
 }
 
 fn search_waiting(
@@ -13558,6 +13914,13 @@ impl eframe::App for Loupe {
         }
         self.remember_window(&ctx);
         self.sync_search_edit();
+        if self
+            .filter_window
+            .as_ref()
+            .is_some_and(|window| !filter_window_tab_matches(window, &self.tabs))
+        {
+            self.close_filter_window(&ctx);
+        }
         // The bars take no clicks while a dialog holds the program: the metadata window is modal
         // (D16), and the import and settings windows keep the program as their keys do.
         let blocked = self.dialog_open();
@@ -13584,17 +13947,32 @@ impl eframe::App for Loupe {
             }
             if let Some(choice) = filter_choice
                 && !blocked
-                && let Some(tab) = self.tabs.active()
             {
-                let (filter, search) = choice.filter_and_search(tab.filter);
-                self.apply_filter(&ctx, filter);
-                if let Some(text) = search {
-                    self.search_edit = text.to_owned();
-                    self.apply_search_edit();
+                if matches!(choice, FilterMenuChoice::Window) {
+                    self.run_command(&ctx, Command::FilterWindow);
+                } else if let Some(tab) = self.tabs.active() {
+                    let show_all = matches!(choice, FilterMenuChoice::ShowAll);
+                    let (filter, search) = choice.filter_and_search(tab.filter);
+                    let filter_changed = filter != tab.filter;
+                    let search_changed =
+                        search.is_some_and(|text| text != tab.meta_filter.search());
+                    let rows_removed = show_all && set_tab_rows(&mut self.tabs, Vec::new());
+                    self.apply_filter(&ctx, filter);
+                    if let Some(text) = search {
+                        self.search_edit = text.to_owned();
+                        self.apply_search_edit();
+                    }
+                    if rows_removed && !filter_changed && !search_changed {
+                        self.refilter_active(None);
+                        self.loupe_follows_visible();
+                        self.scroll_request = self.tabs.active().and_then(Tab::position);
+                    }
                 }
             }
             egui::Panel::top("command-bar").show(ui, |ui| {
-                ui.add_enabled_ui(!blocked, |ui| self.draw_command_bar(ui, &mut commands));
+                ui.add_enabled_ui(!self.dialog_open(), |ui| {
+                    self.draw_command_bar(ui, &mut commands)
+                });
             });
             egui::Panel::bottom("status-bar").show(ui, |ui| {
                 self.draw_status_bar(ui, blocked, &mut commands);
@@ -13611,6 +13989,7 @@ impl eframe::App for Loupe {
         self.draw_about_window(&ctx);
         self.draw_metadata_window(&ctx);
         self.draw_template_window(&ctx);
+        self.draw_filter_window(&ctx);
         self.draw_delete_window(&ctx);
         self.draw_open_window(&ctx);
         if !commands.is_empty() {
@@ -14123,6 +14502,7 @@ fn run(options: Options) -> Result<(), String> {
                 capture_reader: CaptureReader::start(),
                 capture_in_flight: HashSet::new(),
                 filter_read_paths: Vec::new(),
+                exif_arrived: false,
                 orientation_reader: EmbeddedOrientationReader::start(),
                 orientation_reads: 0,
                 status_bar: StatusBar::default(),
@@ -14144,6 +14524,7 @@ fn run(options: Options) -> Result<(), String> {
                 field_values,
                 field_values_path,
                 template_window: None,
+                filter_window: None,
                 template_opening: 0,
                 template_io,
                 message: None,
@@ -14237,11 +14618,15 @@ mod tests {
 
     mod search {
         use super::super::{
-            FilterMenuChoice, LabelFilter, StarFilter, Tabs, fixed_image_key, search_apply_due,
-            set_tab_search,
+            ExifSummary, FilterMenuChoice, FilterWindowState, LabelFilter, SearchCounts,
+            StarFilter, Tabs, filter_read_changed, filter_window_opening,
+            filter_window_tab_matches, fixed_image_key, search_apply_due, search_counts,
+            set_tab_rows, set_tab_search,
         };
         use egui::Key;
+        use pw_loupe::meta_filter::{Condition, Field, Row};
         use pw_loupe::{KeyChord, KeyView, LabelChoice, StarCondition};
+        use std::path::Path;
         use std::time::{Duration, Instant};
 
         #[test]
@@ -14295,6 +14680,159 @@ mod tests {
             tabs.active_mut().unwrap().refilter(true, &|_| None, None);
         }
 
+        fn contains(field: Field, text: &str) -> Row {
+            Row::new(field, Condition::Contains(text.to_owned())).unwrap()
+        }
+
+        #[test]
+        fn setting_rows_refilters_only_the_active_tab_and_keeps_its_search() {
+            let mut tabs = two_images();
+            assert!(set_tab_rows(
+                &mut tabs,
+                vec![contains(Field::FileName, "a.jpg")]
+            ));
+            tabs.active_mut().unwrap().refilter(true, &|_| None, None);
+            let first = tabs.active().unwrap().clone();
+            tabs.open_new("second".into(), vec!["c.jpg".into(), "d.jpg".into()], 0);
+            let tab = tabs.active_mut().unwrap();
+            tab.filter_values.mark_in_flight(&tab.files);
+            for path in ["c.jpg", "d.jpg"] {
+                tabs.record_iptc(
+                    None,
+                    Path::new(path),
+                    Ok(&pw_metadata::FilterValues::default()),
+                );
+            }
+            apply(&mut tabs, ".jpg");
+            assert_eq!(tabs.active().unwrap().visible, [0, 1]);
+
+            let rows = vec![contains(Field::FileName, "d.jpg")];
+            assert!(set_tab_rows(&mut tabs, rows.clone()));
+            tabs.active_mut().unwrap().refilter(true, &|_| None, None);
+            let second = tabs.active().unwrap().clone();
+            assert_eq!(second.meta_filter.search(), ".jpg");
+            assert_eq!(second.meta_filter.rows(), rows);
+            assert_eq!(second.visible, [1]);
+            assert_eq!(tabs.tabs().first(), Some(&first));
+            assert!(!set_tab_rows(&mut tabs, rows));
+            assert_eq!(tabs.active(), Some(&second));
+        }
+
+        #[test]
+        fn an_exif_row_keeps_marks_only_on_hidden_images_that_are_still_unknown() {
+            let mut tabs = two_images();
+            tabs.record_capture(Path::new("a.jpg"), None, None);
+            tabs.active_mut().unwrap().selection.all(&[0, 1]);
+            assert!(set_tab_rows(&mut tabs, vec![contains(Field::Camera, "x")]));
+
+            let tab = tabs.active_mut().unwrap();
+            tab.refilter(true, &|_| None, None);
+            assert!(tab.visible.is_empty());
+            assert!(!tab.selection.is_marked(0));
+            assert!(tab.selection.is_marked(1));
+        }
+
+        #[test]
+        fn status_count_waits_for_both_the_exif_row_and_the_search_metadata() {
+            let mut tabs = two_images();
+            set_tab_rows(&mut tabs, vec![contains(Field::Camera, "x")]);
+            set_tab_search(&mut tabs, "needle");
+            let a = Path::new("a.jpg");
+            let b = Path::new("b.jpg");
+            let iptc = pw_metadata::FilterValues::default();
+            let tab = tabs.active_mut().unwrap();
+            tab.filter_values.mark_in_flight(&tab.files);
+            tabs.record_capture(a, None, None);
+            tabs.record_iptc(None, b, Ok(&iptc));
+            let counts = |tabs: &Tabs| search_counts(tabs.active().unwrap(), true, &|_| None);
+            assert_eq!(
+                counts(&tabs),
+                Some(SearchCounts {
+                    done: 0,
+                    total: 2,
+                    unreadable: 0
+                })
+            );
+            tabs.record_iptc(None, a, Ok(&iptc));
+            assert_eq!(
+                counts(&tabs),
+                Some(SearchCounts {
+                    done: 1,
+                    total: 2,
+                    unreadable: 0
+                })
+            );
+            tabs.record_capture(b, None, None);
+            assert_eq!(
+                counts(&tabs),
+                Some(SearchCounts {
+                    done: 2,
+                    total: 2,
+                    unreadable: 0
+                })
+            );
+        }
+
+        #[test]
+        fn filter_window_opens_only_with_a_tab_and_no_dialog_and_leaves_the_preview() {
+            for preview in [false, true] {
+                assert_eq!(filter_window_opening(false, false, preview), (false, false));
+                assert_eq!(filter_window_opening(false, true, preview), (false, false));
+                assert_eq!(filter_window_opening(true, true, preview), (false, false));
+                assert_eq!(filter_window_opening(true, false, preview), (true, preview));
+            }
+        }
+
+        #[test]
+        fn filter_window_matches_only_the_original_tab_index_and_folder() {
+            let mut tabs = two_images();
+            tabs.open_new("second".into(), vec![], 0);
+            let window = FilterWindowState {
+                draft: Default::default(),
+                index: tabs.active_index(),
+                folder: tabs.active().unwrap().folder.clone(),
+                escape: false,
+            };
+            assert!(filter_window_tab_matches(&window, &tabs));
+            assert!(tabs.activate(0));
+            tabs.close_active();
+            assert_eq!(tabs.active().unwrap().folder, window.folder);
+            assert!(!filter_window_tab_matches(&window, &tabs));
+            tabs.open_in_active("third".into(), vec![], 0);
+            let window = FilterWindowState {
+                index: tabs.active_index(),
+                ..window
+            };
+            assert!(!filter_window_tab_matches(&window, &tabs));
+        }
+
+        #[test]
+        fn filter_reads_refilter_for_each_kind_of_update() {
+            assert!(!filter_read_changed(false, false, false));
+            assert!(filter_read_changed(true, false, false));
+            assert!(filter_read_changed(false, true, false));
+            assert!(filter_read_changed(false, false, true));
+        }
+
+        #[test]
+        fn an_exif_only_row_shows_the_match_after_the_capture_answer_and_refilter() {
+            let mut tabs = two_images();
+            set_tab_rows(&mut tabs, vec![contains(Field::Camera, "x")]);
+            let tab = tabs.active_mut().unwrap();
+            tab.refilter(true, &|_| None, None);
+            assert!(tab.visible.is_empty());
+            assert!(tab.meta_filter.search().is_empty());
+
+            let exif = ExifSummary {
+                make: Some("X".to_owned()),
+                ..Default::default()
+            };
+            tabs.record_capture(Path::new("b.jpg"), None, Some(&exif));
+            let tab = tabs.active_mut().unwrap();
+            tab.refilter(true, &|_| None, None);
+            assert_eq!(tab.visible, [1]);
+        }
+
         #[test]
         fn setting_search_refilters_only_the_active_tab() {
             let mut tabs = two_images();
@@ -14316,6 +14854,10 @@ mod tests {
         fn show_all_clears_search_stars_and_labels() {
             let mut tabs = two_images();
             apply(&mut tabs, "needle");
+            assert!(set_tab_rows(
+                &mut tabs,
+                vec![contains(Field::FileName, "a.jpg")]
+            ));
             let tab = tabs.active_mut().unwrap();
             tab.filter.stars = StarFilter::Stars(3);
             tab.filter.label = LabelFilter::only(LabelChoice::NoLabel);
@@ -14323,10 +14865,12 @@ mod tests {
             let condition = tab.filter.condition;
             let (filter, search) = FilterMenuChoice::ShowAll.filter_and_search(tab.filter);
 
+            assert!(set_tab_rows(&mut tabs, Vec::new()));
             tabs.set_filter(filter);
             apply(&mut tabs, search.unwrap());
 
             let tab = tabs.active().unwrap();
+            assert!(tab.meta_filter.rows().is_empty());
             assert!(tab.meta_filter.search().is_empty());
             assert_eq!(tab.filter.condition, condition);
             assert_eq!(tab.filter.stars, StarFilter::All);

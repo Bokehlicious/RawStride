@@ -87,8 +87,7 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status | Model |
 |---|---|---|---|
-| [T344](T344-filter-window-in-the-shell.md) | ADR 0022 S4b: the "Filter…" window, its button, menu item and key | Open | Opus |
-| [T345](T345-value-lists-read-the-folder.md) | ADR 0022 S4c: the value lists read the whole folder | Blocked | Opus |
+| [T345](T345-value-lists-read-the-folder.md) | ADR 0022 S4c: the value lists read the whole folder | Open | Opus |
 
 ## Writing a task (owner and reviewer)
 

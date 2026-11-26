@@ -639,7 +639,17 @@ only if it is seen in use.)
   the status line's counts (`star_label_list` and `search_counts`, with each file's rating under
   a star filter) are made again over all the tab's files in every frame drawn, in the contact
   sheet and the preview. A task only if it is seen in use (large folders). Seen in the hand check
-  of S1–S3 (owner, 2026-11-26): a little slow, manageable.
+  of S1–S3 (owner, 2026-11-26): a little slow, manageable. The same holds for the counts of an
+  extended filter (T344, `filter_counts`) and, while the "Filter…" window is open, for each value
+  list of an "is one of" row (`value_counts` over the tab's files in every frame).
+- *The filter window's draft when the tab changes* (T344, 2026-11-26): when the active tab stops
+  being the one the "Filter…" window was opened for (an import can open a tab while it is open),
+  the window closes as Cancel and the rows typed in it are lost. Rare. A task only if it is seen
+  in use.
+- *An Exif answer looked up in the tab's files* (review of T344, 2026-11-26): while the active
+  tab's filter needs Exif, each capture read's answer is looked up in the tab's file list to
+  decide whether to refilter, so a large folder's Exif reads cost time that grows with the
+  square of its size, spread over the frames. A task only if it is seen in use.
 
 ## LibRaw (`pw-libraw`)
 

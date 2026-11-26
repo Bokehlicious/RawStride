@@ -603,6 +603,7 @@ pub fn command_text(command: Command) -> String {
         Command::ClearSelection => "Unmark All".to_owned(),
         Command::Metadata => "Metadata…".to_owned(),
         Command::Search => "Search".to_owned(),
+        Command::FilterWindow => "Filter…".to_owned(),
         Command::Stars(0) => "No stars".to_owned(),
         Command::Stars(1) => "1 star".to_owned(),
         Command::Stars(stars) => format!("{stars} stars"),
@@ -716,6 +717,12 @@ mod tests {
         assert_eq!(shell_text(ShellText::SearchHint), "Search");
         assert_eq!(command_text(Command::Search), "Search");
         assert_eq!(key_action_text(KeyAction::Search), "Search");
+    }
+
+    #[test]
+    fn filter_window_text_is_shared_by_the_command_and_shortcut() {
+        assert_eq!(command_text(Command::FilterWindow), "Filter…");
+        assert_eq!(key_action_text(KeyAction::FilterWindow), "Filter…");
     }
 
     use super::*;

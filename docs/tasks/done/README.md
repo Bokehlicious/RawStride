@@ -350,3 +350,4 @@ was when the task was done, so "this file", "below" and "the Log" in T1–T115 m
 | [T341](T341-search-in-the-refilter.md) | ADR 0022 S3a: the search in the refilter, the reads and the status line (pw-loupe; done by Codex) |
 | [T342](T342-search-box-and-ctrl-f.md) | ADR 0022 S3b: the search box and Ctrl+F (pw-loupe; done by Codex) |
 | [T343](T343-filter-window-model.md) | ADR 0022 S4a: the "Filter…" window's model, parsing and texts (pw-loupe; done by Codex) |
+| [T344](T344-filter-window-in-the-shell.md) | ADR 0022 S4b: the "Filter…" window, its button, menu item and key (pw-loupe; done by Codex) |

@@ -730,6 +730,8 @@ pub enum Command {
     ClearSelection,
     Metadata,
     Search,
+    /// Opens the active tab's metadata conditions in the filter window (ADR 0022 S4).
+    FilterWindow,
     /// 0–5 stars (0 clears the stars).
     Stars(u8),
     Reject,
@@ -1208,6 +1210,11 @@ mod tests {
     #[test]
     fn search_acts_in_both_views() {
         assert_eq!(super::Command::Search.acts_in(), super::Where::Both);
+    }
+
+    #[test]
+    fn filter_window_acts_in_both_views() {
+        assert_eq!(Command::FilterWindow.acts_in(), Where::Both);
     }
 
     use super::*;
