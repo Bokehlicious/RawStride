@@ -635,9 +635,6 @@ only if it is seen in use.)
   task only if it is seen in use.
 - *Values of other tabs* (T337, 2026-11-26): only the active tab's values are read; another tab's
   are read when it becomes active. A task only if it is seen in use.
-- *Marks while typing a search* (ADR 0022 S3-Q14, owner 2026-11-26): each 0.3 s pause applies the
-  text typed so far, and the marked images it hides are unmarked (ADR 0014 §2.8), also when the
-  finished text would have kept them. Accepted: a hidden image is never marked.
 - *The search's counts in every frame* (review of T341, 2026-11-26): while a search is active,
   the status line's counts (`star_label_list` and `search_counts`, with each file's rating under
   a star filter) are made again over all the tab's files in every frame drawn, in the contact
