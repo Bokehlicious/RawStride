@@ -93,6 +93,24 @@ Reorganised on 2026-11-21 (owner): the earlier file mixed these three kinds and 
   "Filter…" window); which fields get a column, and whether the user picks them; whether the
   columns and the window's rows are one filter; how picks change the other columns' counts; the
   date tree.
+- **The catalog search against the folder tab's search** (owner's question, 2026-11-26; ADR 0022,
+  ADR 0030 §3.3, §3.6): found by comparing the two ADRs; the first three bear on the schema, so
+  they are settled before K1. (1) **Part of a word:** a folder tab finds `gjuse` in `fiskgjuse`
+  (ADR 0022 §2.2); ADR 0030 §3.6 counts on a prefix (`fiskgjus*`), and FTS5's word tokenizers
+  find no text inside a word. Proposed: keep ADR 0022's rule in both and try FTS5's `trigram`
+  tokenizer, with a way of its own for search texts under three characters; the index size and
+  speed measured on about 250,000 images. (2) **The fields searched:** the quick search covers
+  ten; §3.3's FTS table names neither the file name, Person Shown nor Creator. Proposed: all ten.
+  (3) **å, ä and ö:** the folder search tells them from a and o; by SQLite's documentation
+  `unicode61` removes diacritics unless told not to, so whichever tokenizer is chosen is set to
+  keep them, with a test (not tried here). (4) **Where a search of the whole catalog starts**
+  (with K5's questions): Ctrl+F in a folder tab searches the folder; the catalog tab comes in K5
+  and the library's "All Photos" in K6. Proposed: a command of its own that opens a catalog tab
+  with the folder tab's search text, rather than a folder-or-catalog switch at the search box.
+  Also for K1 and K5: the filter's model and the Exif and IPTC value conversion are in
+  `pw-loupe`, which `pw-catalog` should not depend on, so they likely move to a shared crate; and
+  the filter then has two evaluations (in Rust and in SQL, the star and label filter too), which
+  need common test cases that give the same hits.
 - **Rotate items in the right-click menu** (cold reads of T235–T237, 2026-11-20): ADR 0024 names
   only the Image menu, and the right-click menu's items and order are ADR 0019's (E-Q17). Needs an
   ADR addition if the owner wants them.
