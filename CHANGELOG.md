@@ -14,8 +14,9 @@ Downloads are on the [Releases page](https://github.com/Bokehlicious/RawStride/r
 - A "Filter…" window (View ▸ Filter ▸ Filter…, Ctrl+Shift+F, or the button after the search box
   in the command bar): conditions on the file name, the camera, lens, focal length, aperture,
   exposure time, ISO, capture date, file type and IPTC fields, such as "ISO ≥ 1600" or "Keywords
-  is one of …"; an image is shown when it meets every condition. The button shows how many
-  conditions are on, and View ▸ Filter ▸ Show All removes them too.
+  is one of …"; an image is shown when it meets every condition. For "is one of", the window
+  lists the folder's own values with the number of images for each, read while it is open. The
+  button shows how many conditions are on, and View ▸ Filter ▸ Show All removes them too.
 
 ## [0.7.0] - 2026-11-26
 

@@ -87,7 +87,6 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status | Model |
 |---|---|---|---|
-| [T345](T345-value-lists-read-the-folder.md) | ADR 0022 S4c: the value lists read the whole folder | Open | Opus |
 
 ## Writing a task (owner and reviewer)
 

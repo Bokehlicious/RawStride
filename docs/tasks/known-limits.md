@@ -650,6 +650,16 @@ only if it is seen in use.)
   tab's filter needs Exif, each capture read's answer is looked up in the tab's file list to
   decide whether to refilter, so a large folder's Exif reads cost time that grows with the
   square of its size, spread over the frames. A task only if it is seen in use.
+- *Exif reads queued for a value list* (T345, 2026-11-26): the "Filter…" window's value list on
+  Camera or Lens queues the folder's Exif reads in the capture reader at once; closing the window
+  cannot take them back, so they are read and kept. A task only if it is seen in use.
+- *Ctrl+Shift+F while the search box has the keyboard* (T344 chain review, 2026-11-26): the key
+  does nothing then, as Ctrl+F; the button or View ▸ Filter ▸ Filter… opens the window. A task
+  only if it is seen in use.
+- *The capture reader's thread dying* (T345 chain review, owner 2026-11-26):
+  `CaptureReader::try_recv` (`sort.rs`) does not tell a disconnected channel from an empty one, so if its thread dies the
+  files asked for stay unknown, "Reading metadata {i} of {n} …" never ends and the sort by
+  capture time waits. Older than S4. A task only if it is seen in use.
 
 ## LibRaw (`pw-libraw`)
 

@@ -35,7 +35,9 @@ use pw_loupe::library::{
     FolderList, Library, TreeRowKind, folder_key, read_drives, suppress_no_disk_dialogs,
 };
 use pw_loupe::library_text::{LibraryText, library_text, refresh_hover_text};
-use pw_loupe::meta_filter::{ConditionKind, FILE_TYPES, Field as FilterField, Group, Row};
+use pw_loupe::meta_filter::{
+    ConditionKind, FILE_TYPES, Field as FilterField, Filter as MetaFilter, Group, Row,
+};
 use pw_loupe::{AUTHORS, AboutText, COMMIT, REPOSITORY, VERSION, about_text};
 use pw_loupe::{
     Action, AddedFiles, CardRefresh, CellState, CopiedFields, DEFAULT_THUMBNAIL_SIZE, DialogKey,
@@ -2734,7 +2736,9 @@ impl Loupe {
         });
     }
 
-    /// Follows ADR 0022 S2 reads for the active tab and delivers finished reads to their tabs.
+    /// Follows ADR 0022's reads for the active tab: what its applied filter needs (S2, S3) and
+    /// the whole folder for the filter window's open value lists (S4-Q7, T345); delivers
+    /// finished reads to their tabs.
     fn follow_filter_values(&mut self, ctx: &egui::Context) {
         let cwd = std::env::current_dir().ok();
         let cwd = cwd.as_deref();
@@ -2764,23 +2768,41 @@ impl Loupe {
         let Some(tab) = self.tabs.active() else {
             return;
         };
-        let exif = tab.meta_filter.needs(Group::Exif);
-        let iptc = tab.meta_filter.needs(Group::Iptc)
-            && !self.metadata.filter_read_in_flight()
-            && !self.metadata.batch_running()
-            && self.metadata.template_batch_progress().is_none();
-        if !exif && !iptc {
+        let draft = self
+            .filter_window
+            .as_ref()
+            .filter(|window| filter_window_tab_matches(window, &self.tabs))
+            .map(|window| &window.draft);
+        let (exif, mut iptc) = filter_read_scopes(&tab.meta_filter, draft);
+        if self.metadata.filter_read_in_flight()
+            || self.metadata.batch_running()
+            || self.metadata.template_batch_progress().is_some()
+        {
+            iptc = ReadScope::None;
+        }
+        if exif == ReadScope::None && iptc == ReadScope::None {
             return;
         }
-        let order = filter_read_order(tab, self.ratings_ready(), &tab_rating(&self.metadata, cwd));
-        let chunk = if iptc {
-            tab.filter_values
-                .iptc_chunk(&order, &tab_pending(&self.metadata, cwd))
-        } else {
-            Vec::new()
+        let (filter_order, folder_order) = {
+            let ratings_ready = self.ratings_ready();
+            let rating_of = tab_rating(&self.metadata, cwd);
+            let filter_order = (exif == ReadScope::Filter || iptc == ReadScope::Filter)
+                .then(|| filter_read_order(tab, ratings_ready, &rating_of));
+            let folder_order = (exif == ReadScope::Folder || iptc == ReadScope::Folder)
+                .then(|| folder_read_order(tab, ratings_ready, &rating_of));
+            (filter_order, folder_order)
         };
-        if exif {
-            let mut wanted = tab.filter_values.exif_wanted(&order);
+        let order = |scope| match scope {
+            ReadScope::None => None,
+            ReadScope::Filter => filter_order.as_deref(),
+            ReadScope::Folder => folder_order.as_deref(),
+        };
+        let chunk = order(iptc).map_or_else(Vec::new, |paths| {
+            tab.filter_values
+                .iptc_chunk(paths, &tab_pending(&self.metadata, cwd))
+        });
+        if let Some(paths) = order(exif) {
+            let mut wanted = tab.filter_values.exif_wanted(paths);
             wanted.retain(|p| !self.capture_in_flight.contains(p));
             self.request_captures(wanted);
             if self.exif_arrived {
@@ -6258,6 +6280,7 @@ impl Loupe {
         let Some(tab) = self.tabs.active() else {
             return;
         };
+        let list_groups = window.draft.list_groups();
         let screen = ctx.content_rect();
         let backdrop_id = egui::Id::unique("filter-window-backdrop");
         let window_id = egui::Id::unique("filter-window");
@@ -6330,6 +6353,9 @@ impl Loupe {
             }
             self.close_filter_window(ctx);
         } else {
+            if window.draft.list_groups() != list_groups {
+                ctx.request_repaint();
+            }
             self.filter_window = Some(window);
         }
     }
@@ -12302,6 +12328,30 @@ fn tab_pending<'a>(
     }
 }
 
+/// How far a metadata group is read for the active tab (ADR 0022 S4-Q7, T345): not at all, over
+/// the applied filter's star and label list, or over the whole folder for an open value list.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ReadScope {
+    None,
+    Filter,
+    Folder,
+}
+
+/// The Exif and IPTC read scopes for the applied filter and the draft's open value lists.
+fn filter_read_scopes(filter: &MetaFilter, window: Option<&FilterDraft>) -> (ReadScope, ReadScope) {
+    let list_groups = window.map_or_else(Vec::new, FilterDraft::list_groups);
+    let scope = |group| {
+        if list_groups.contains(&group) {
+            ReadScope::Folder
+        } else if filter.needs(group) {
+            ReadScope::Filter
+        } else {
+            ReadScope::None
+        }
+    };
+    (scope(Group::Exif), scope(Group::Iptc))
+}
+
 /// The order of a tab's filter reads: from the current image, wrapping over the files that
 /// pass the star and label filter.
 fn filter_read_order(
@@ -12317,6 +12367,29 @@ fn filter_read_order(
     .into_iter()
     .filter_map(|i| tab.files.get(i).cloned())
     .collect()
+}
+
+/// Gives a value list the star and label candidates first, then the rest of the folder.
+fn folder_read_order(
+    tab: &Tab,
+    ratings_ready: bool,
+    rating_of: &dyn Fn(&Path) -> Option<Rating>,
+) -> Vec<PathBuf> {
+    let list = tab.star_label_list(ratings_ready, rating_of);
+    read_order(tab.files.len(), &list, tab.current, |_| false)
+        .into_iter()
+        .filter_map(|i| tab.files.get(i).cloned())
+        .collect()
+}
+
+/// The status of a value list over the whole folder, from the read, total and unreadable counts.
+fn value_list_progress_text((read, total, unreadable): (usize, usize, usize)) -> Option<String> {
+    let done = read + unreadable;
+    if done < total {
+        Some(reading_metadata_text(done, total))
+    } else {
+        unreadable_images_text(unreadable)
+    }
 }
 
 /// Whether the active tab is refiltered after the filter's reads (ADR 0022 S3-Q3, T344 point
@@ -12412,10 +12485,10 @@ fn draw_filter_operand(ui: &mut egui::Ui, row: &mut DraftRow, tab: &Tab) {
         ConditionKind::OneOf if field.has_value_list() => {
             let counts = tab.filter_values.value_counts(field, &tab.files);
             let entries = list_entries(&counts, row.picks());
-            if entries.is_empty() {
-                ui.label(filter_text(FilterText::NoValues));
-            } else {
-                ui.vertical(|ui| {
+            ui.vertical(|ui| {
+                if entries.is_empty() {
+                    ui.label(filter_text(FilterText::NoValues));
+                } else {
                     egui::ScrollArea::vertical()
                         .id_salt("values")
                         .max_height(120.0)
@@ -12429,8 +12502,13 @@ fn draw_filter_operand(ui: &mut egui::Ui, row: &mut DraftRow, tab: &Tab) {
                                 }
                             }
                         });
-                });
-            }
+                }
+                if let Some(text) =
+                    value_list_progress_text(tab.filter_values.counts(field.group(), &tab.files))
+                {
+                    ui.label(text);
+                }
+            });
         }
         ConditionKind::OneOf | ConditionKind::IsEmpty => {}
     }
@@ -14618,16 +14696,85 @@ mod tests {
 
     mod search {
         use super::super::{
-            ExifSummary, FilterMenuChoice, FilterWindowState, LabelFilter, SearchCounts,
-            StarFilter, Tabs, filter_read_changed, filter_window_opening,
+            ExifSummary, FilterMenuChoice, FilterWindowState, LabelFilter, ReadScope, SearchCounts,
+            StarFilter, Tabs, filter_read_changed, filter_read_scopes, filter_window_opening,
             filter_window_tab_matches, fixed_image_key, search_apply_due, search_counts,
-            set_tab_rows, set_tab_search,
+            set_tab_rows, set_tab_search, value_list_progress_text,
         };
         use egui::Key;
-        use pw_loupe::meta_filter::{Condition, Field, Row};
+        use pw_loupe::filter_values::TabValues;
+        use pw_loupe::filter_window::FilterDraft;
+        use pw_loupe::meta_filter::{Condition, ConditionKind, Field, Filter, Group, Row};
         use pw_loupe::{KeyChord, KeyView, LabelChoice, StarCondition};
-        use std::path::Path;
+        use std::path::{Path, PathBuf};
         use std::time::{Duration, Instant};
+
+        #[test]
+        fn filter_read_scopes_follow_the_applied_filter_and_draft_value_lists() {
+            use ReadScope::{Filter as Applied, Folder, None as NoRead};
+
+            let draft_with = |field, kind| {
+                let mut draft = FilterDraft::default();
+                draft.add();
+                draft.rows_mut()[0].set_field(field);
+                draft.rows_mut()[0].set_kind(kind);
+                draft
+            };
+            let empty = Filter::default();
+            assert_eq!(filter_read_scopes(&empty, None), (NoRead, NoRead));
+
+            let mut applied = Filter::default();
+            applied.set_search("needle");
+            assert_eq!(filter_read_scopes(&applied, None), (NoRead, Applied));
+            applied.set_search("");
+
+            let camera = draft_with(Field::Camera, ConditionKind::OneOf);
+            assert_eq!(filter_read_scopes(&empty, Some(&camera)), (Folder, NoRead));
+
+            let city = draft_with(Field::City, ConditionKind::OneOf);
+            applied.set_rows(vec![
+                Row::new(Field::Iso, Condition::AtLeast(1600.0)).unwrap(),
+            ]);
+            assert_eq!(filter_read_scopes(&applied, Some(&city)), (Applied, Folder));
+
+            applied.set_rows(vec![
+                Row::new(Field::City, Condition::Is("Uppsala".into())).unwrap(),
+            ]);
+            assert_eq!(filter_read_scopes(&applied, Some(&city)), (NoRead, Folder));
+
+            let camera_text = draft_with(Field::Camera, ConditionKind::Contains);
+            assert_eq!(
+                filter_read_scopes(&empty, Some(&camera_text)),
+                (NoRead, NoRead)
+            );
+        }
+
+        #[test]
+        fn value_list_progress_counts_unreadable_iptc_and_completed_exif_inspections() {
+            let files = ["a.jpg", "b.jpg"].map(PathBuf::from);
+            let mut values = TabValues::default();
+            values.mark_unreadable(&files[..1]);
+            assert_eq!(
+                value_list_progress_text(values.counts(Group::Iptc, &files)).as_deref(),
+                Some("Reading metadata 1 of 2 …")
+            );
+            values.mark_in_flight(&files[1..]);
+            values.record_iptc(&files[1], Ok(&Default::default()));
+            assert_eq!(
+                value_list_progress_text(values.counts(Group::Iptc, &files)).as_deref(),
+                Some("1 image could not be read")
+            );
+            values.record_exif(&files[0], None);
+            assert_eq!(
+                value_list_progress_text(values.counts(Group::Exif, &files)).as_deref(),
+                Some("Reading metadata 1 of 2 …")
+            );
+            values.record_exif(&files[1], None);
+            assert_eq!(
+                value_list_progress_text(values.counts(Group::Exif, &files)),
+                None
+            );
+        }
 
         #[test]
         fn image_keys_wait_for_the_keyboard_even_when_search_just_released_it() {
@@ -17389,6 +17536,35 @@ mod tests {
                 [files[2].clone(), files[3].clone(), files[0].clone()]
             );
             assert!(crate::filter_read_order(&tab, false, &rating_of).is_empty());
+        }
+
+        #[test]
+        fn folder_reads_take_star_candidates_from_current_then_the_remaining_tab_paths() {
+            let files = [
+                "relative/a.jpg",
+                "relative/b.jpg",
+                "c.jpg",
+                "relative/d.jpg",
+                "e.jpg",
+            ]
+            .map(PathBuf::from);
+            let mut tab = Tab {
+                files: files.to_vec(),
+                visible: vec![3],
+                current: 3,
+                ..Default::default()
+            };
+            tab.filter.stars = pw_loupe::StarFilter::Stars(3);
+            let rating_of = |path: &Path| {
+                (path != files[1] && path != files[4]).then_some(pw_metadata::Rating {
+                    stars: Some(3),
+                    label: None,
+                })
+            };
+            assert_eq!(
+                crate::folder_read_order(&tab, true, &rating_of),
+                [&files[3], &files[0], &files[2], &files[1], &files[4]].map(PathBuf::from)
+            );
         }
 
         #[test]
