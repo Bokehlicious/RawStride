@@ -492,9 +492,9 @@ pub trait Backend: Send + Sync + 'static {
         self.render_region(session, r)
     }
 
-    /// The camera's own brightness offset of the opened image in EV, as the file gives it (not
-    /// limited to [`Ev`]'s range; ADR 0027 W5-Q5). Asked once after a successful open. The default
-    /// has none.
+    /// The camera's own brightness of the opened image in EV, the brightness the view adds (for
+    /// `NativeBackend` the file's value with its sign turned; not limited to [`Ev`]'s range;
+    /// ADR 0027 W5-Q5, §4.4). Asked once after a successful open. The default has none.
     fn camera_exposure(&self, _session: &Self::Session) -> Option<f64> {
         None
     }

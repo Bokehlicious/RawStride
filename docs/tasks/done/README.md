@@ -344,3 +344,4 @@ was when the task was done, so "this file", "below" and "the Log" in T1–T115 m
 | [T335](T335-exposure-keys-menu-marks.md) | ADR 0027 W5: the keys, the menu and the marks of the exposure and the shadows (pw-loupe; done by Codex) |
 | [T336](T336-filter-values-batch-read.md) | ADR 0022 S2a: the filter's IPTC values, read for many images at once (pw-metadata; done by Codex) |
 | [T337](T337-filter-values-in-the-tabs.md) | ADR 0022 S2b: the filter's values kept per tab and read when needed (pw-loupe) |
+| [T338](T338-camera-brightness-sign.md) | ADR 0027 W5: the camera's brightness with its sign turned (pw-viewcore, pw-loupe; done by Codex) |

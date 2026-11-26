@@ -1,4 +1,4 @@
-# T338. ADR 0027 W5: the camera's brightness with its sign turned — Open
+# T338. ADR 0027 W5: the camera's brightness with its sign turned — Done
 
 - **Why:** W5's hand check (owner, 2026-11-26; ADR 0027 §4.4 "W5's hand check", §3.4). With
   the camera's brightness on (Shift+B), the view of an X-T30 RAF (file value −0.72) and of a
@@ -79,3 +79,5 @@
 | Date | Status | Note |
 |---|---|---|
 | 2026-11-26 | Open | Added after W5's hand check (ADR 0027 §4.4). Cold read: all names and lines found; fixed: the −0.0 point dropped (`ev_sign` gives no sign to −0.0 and the mark goes through milli values, so it never showed a minus; a tiny value showing "−0.00" is older and out of scope); `state.rs`'s doc comment of `ExposureMode::Camera` added (doc only); the ignored real-file test and the inventory row named. Opus kept (two crates) |
+| 2026-11-26 | Ready for review | Turned the file value's sign in the native backend, updated the camera hover text and glossary, and verified both affected tests in the Codex run. The initial sandboxed check could not lock the RustSec database or start ExifTool. The reviewer owns the test inventory update. |
+| 2026-11-26 | Done | Reviewed: the sign turned in `native.rs` (`camera_brightness`, tested), the docs of the trait and `ExposureMode::Camera`, the eight hover texts and the glossary row as written. The agent left `docs/test-inventory.md` to the reviewer (rule 12 and the task name it as the agent's): the reviewer updated it (pw-viewcore unit 305→306, total 2809). `.\tools\check.ps1` all OK: 2809 passed, 0 failed, 98 ignored; no clippy warnings (only the incremental cache's hard-link notices). No CHANGELOG line: the camera's brightness is not released yet (it is in Unreleased ▸ Added), so a Fixed line would describe a fault no release had |

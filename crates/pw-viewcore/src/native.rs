@@ -505,11 +505,10 @@ impl Backend for NativeBackend {
         }
     }
 
-    /// A RAW file's own brightness (a DNG's `BaselineExposure`, a Fujifilm file's exposure bias;
-    /// ADR 0027 W5-Q5); a JPEG or a TIFF session has none.
+    /// The brightness the view adds is the RAW file's value with its sign turned (ADR 0027 §4.4).
     fn camera_exposure(&self, session: &NativeSession) -> Option<f64> {
         match session {
-            NativeSession::Raw(s, _) => s.camera_exposure().map(|c| f64::from(c.ev)),
+            NativeSession::Raw(s, _) => s.camera_exposure().map(|c| camera_brightness(c.ev)),
             _ => None,
         }
     }
@@ -559,9 +558,23 @@ impl Backend for NativeBackend {
     }
 }
 
+/// The view adds the file's value with its sign turned because the value says how far the camera
+/// kept the RAW data below its own rendering (ADR 0027 §4.4, W5's hand check, owner 2026-11-26).
+fn camera_brightness(file_ev: f32) -> f64 {
+    -f64::from(file_ev)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn camera_brightness_turns_the_sign_of_the_file_value() {
+        assert!((camera_brightness(-0.72) - 0.72).abs() < 1e-6);
+        assert!((camera_brightness(-0.5062) - 0.5062).abs() < 1e-6);
+        assert_eq!(camera_brightness(0.0), 0.0);
+        assert!((camera_brightness(1.2) + 1.2).abs() < 1e-6);
+    }
 
     #[test]
     fn orientation_tags_map_to_libraw_flips() {

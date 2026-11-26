@@ -263,7 +263,8 @@ pub enum ExposureMode {
     Off,
     /// The auto exposure rule over the image's statistics (W5-Q4).
     Auto,
-    /// The camera's own brightness value from the file (W5-Q5).
+    /// The camera's own brightness: the backend's value, for `NativeBackend` the file's value
+    /// with its sign turned (W5-Q5, §4.4).
     Camera,
 }
 

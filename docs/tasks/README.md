@@ -87,8 +87,7 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status | Model |
 |---|---|---|---|
-| [T338](T338-camera-brightness-sign.md) | ADR 0027 W5: the camera's brightness with its sign turned (pw-viewcore, pw-loupe) | Open | Opus |
-| [T339](T339-exposure-buttons.md) | ADR 0027 W5: the buttons −, A and + for the exposure (pw-loupe) | Blocked | Sonnet |
+| [T339](T339-exposure-buttons.md) | ADR 0027 W5: the buttons −, A and + for the exposure (pw-loupe) | Open | Sonnet |
 | [T340](T340-auto-exposure-at-start.md) | ADR 0027 W5: the setting Auto exposure at start (pw-loupe) | Blocked | Sonnet |
 
 ## Writing a task (owner and reviewer)

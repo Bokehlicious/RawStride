@@ -1,4 +1,4 @@
-# T339. ADR 0027 W5: the buttons "−", "A" and "+" for the exposure — Blocked
+# T339. ADR 0027 W5: the buttons "−", "A" and "+" for the exposure — Open
 
 - **Why:** W5's hand check (owner, 2026-11-26; ADR 0027 §4.4 "W5's hand check"; W5-Q8 left a
   button to the hand check). Three buttons after "USM" in the status bar: **"−"** and **"+"**
@@ -95,3 +95,4 @@
 | Date | Status | Note |
 |---|---|---|
 | 2026-11-26 | Blocked | Added after W5's hand check (ADR 0027 §4.4); waits for T338. Cold read: names, lines and egui 0.37's API found; fixed: `lib.rs` added (the re-export of `loupe_text`), the minus as `\u{2212}`, only two `StatusBar` literals, both hover calls explained. Sonnet kept: the gap was the one-line re-export, now named |
+| 2026-11-26 | Open | T338 done; its cold read is in the row above |

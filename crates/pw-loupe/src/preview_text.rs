@@ -510,25 +510,29 @@ fn camera_hover(v: f64, key: Option<String>, steps: Option<&str>) -> String {
     };
     match (limit, key, steps) {
         (Some(limit), Some(key), Some(steps)) => format!(
-            "Camera brightness ({key}): {value} EV from the file, limited to {limit} EV, plus {steps} EV by hand."
+            "Camera brightness ({key}): {value} EV from the camera, limited to {limit} EV, plus {steps} EV by hand."
         ),
         (Some(limit), None, Some(steps)) => format!(
-            "Camera brightness: {value} EV from the file, limited to {limit} EV, plus {steps} EV by hand."
+            "Camera brightness: {value} EV from the camera, limited to {limit} EV, plus {steps} EV by hand."
         ),
         (Some(limit), Some(key), None) => {
-            format!("Camera brightness ({key}): {value} EV from the file, limited to {limit} EV.")
+            format!("Camera brightness ({key}): {value} EV from the camera, limited to {limit} EV.")
         }
         (Some(limit), None, None) => {
-            format!("Camera brightness: {value} EV from the file, limited to {limit} EV.")
+            format!("Camera brightness: {value} EV from the camera, limited to {limit} EV.")
         }
         (None, Some(key), Some(steps)) => {
-            format!("Camera brightness ({key}): {value} EV from the file, plus {steps} EV by hand.")
+            format!(
+                "Camera brightness ({key}): {value} EV from the camera, plus {steps} EV by hand."
+            )
         }
         (None, None, Some(steps)) => {
-            format!("Camera brightness: {value} EV from the file, plus {steps} EV by hand.")
+            format!("Camera brightness: {value} EV from the camera, plus {steps} EV by hand.")
         }
-        (None, Some(key), None) => format!("Camera brightness ({key}): {value} EV from the file."),
-        (None, None, None) => format!("Camera brightness: {value} EV from the file."),
+        (None, Some(key), None) => {
+            format!("Camera brightness ({key}): {value} EV from the camera.")
+        }
+        (None, None, None) => format!("Camera brightness: {value} EV from the camera."),
     }
 }
 
@@ -1157,13 +1161,13 @@ mod tests {
                 -0.51,
                 (
                     "−0.5 EV camera",
-                    "Camera brightness (Shift+B): −0.51 EV from the file.",
-                    "Camera brightness: −0.51 EV from the file.",
+                    "Camera brightness (Shift+B): −0.51 EV from the camera.",
+                    "Camera brightness: −0.51 EV from the camera.",
                 ),
                 (
                     "−0.2 EV camera",
-                    "Camera brightness (Shift+B): −0.51 EV from the file, plus +⅓ EV by hand.",
-                    "Camera brightness: −0.51 EV from the file, plus +⅓ EV by hand.",
+                    "Camera brightness (Shift+B): −0.51 EV from the camera, plus +⅓ EV by hand.",
+                    "Camera brightness: −0.51 EV from the camera, plus +⅓ EV by hand.",
                 ),
             ),
             (
@@ -1172,13 +1176,13 @@ mod tests {
                 0.7,
                 (
                     "+0.7 EV camera",
-                    "Camera brightness (Shift+B): +0.70 EV from the file.",
-                    "Camera brightness: +0.70 EV from the file.",
+                    "Camera brightness (Shift+B): +0.70 EV from the camera.",
+                    "Camera brightness: +0.70 EV from the camera.",
                 ),
                 (
                     "+1.0 EV camera",
-                    "Camera brightness (Shift+B): +0.70 EV from the file, plus +⅓ EV by hand.",
-                    "Camera brightness: +0.70 EV from the file, plus +⅓ EV by hand.",
+                    "Camera brightness (Shift+B): +0.70 EV from the camera, plus +⅓ EV by hand.",
+                    "Camera brightness: +0.70 EV from the camera, plus +⅓ EV by hand.",
                 ),
             ),
             (
@@ -1187,13 +1191,13 @@ mod tests {
                 0.0,
                 (
                     "0 EV camera",
-                    "Camera brightness (Shift+B): 0.00 EV from the file.",
-                    "Camera brightness: 0.00 EV from the file.",
+                    "Camera brightness (Shift+B): 0.00 EV from the camera.",
+                    "Camera brightness: 0.00 EV from the camera.",
                 ),
                 (
                     "+⅓ EV camera",
-                    "Camera brightness (Shift+B): 0.00 EV from the file, plus +⅓ EV by hand.",
-                    "Camera brightness: 0.00 EV from the file, plus +⅓ EV by hand.",
+                    "Camera brightness (Shift+B): 0.00 EV from the camera, plus +⅓ EV by hand.",
+                    "Camera brightness: 0.00 EV from the camera, plus +⅓ EV by hand.",
                 ),
             ),
             (
@@ -1202,13 +1206,13 @@ mod tests {
                 -2.51,
                 (
                     "−2 EV camera",
-                    "Camera brightness (Shift+B): −2.51 EV from the file, limited to −2 EV.",
-                    "Camera brightness: −2.51 EV from the file, limited to −2 EV.",
+                    "Camera brightness (Shift+B): −2.51 EV from the camera, limited to −2 EV.",
+                    "Camera brightness: −2.51 EV from the camera, limited to −2 EV.",
                 ),
                 (
                     "−2 EV camera",
-                    "Camera brightness (Shift+B): −2.51 EV from the file, limited to −2 EV, plus +⅓ EV by hand.",
-                    "Camera brightness: −2.51 EV from the file, limited to −2 EV, plus +⅓ EV by hand.",
+                    "Camera brightness (Shift+B): −2.51 EV from the camera, limited to −2 EV, plus +⅓ EV by hand.",
+                    "Camera brightness: −2.51 EV from the camera, limited to −2 EV, plus +⅓ EV by hand.",
                 ),
             ),
             (
@@ -1217,13 +1221,13 @@ mod tests {
                 3.1,
                 (
                     "+3 EV camera",
-                    "Camera brightness (Shift+B): +3.10 EV from the file, limited to +3 EV.",
-                    "Camera brightness: +3.10 EV from the file, limited to +3 EV.",
+                    "Camera brightness (Shift+B): +3.10 EV from the camera, limited to +3 EV.",
+                    "Camera brightness: +3.10 EV from the camera, limited to +3 EV.",
                 ),
                 (
                     "+3 EV camera",
-                    "Camera brightness (Shift+B): +3.10 EV from the file, limited to +3 EV, plus +⅓ EV by hand.",
-                    "Camera brightness: +3.10 EV from the file, limited to +3 EV, plus +⅓ EV by hand.",
+                    "Camera brightness (Shift+B): +3.10 EV from the camera, limited to +3 EV, plus +⅓ EV by hand.",
+                    "Camera brightness: +3.10 EV from the camera, limited to +3 EV, plus +⅓ EV by hand.",
                 ),
             ),
             (
