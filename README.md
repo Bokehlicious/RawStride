@@ -4,6 +4,7 @@
 [![Latest release](https://img.shields.io/github/v/release/Bokehlicious/RawStride)](https://github.com/Bokehlicious/RawStride/releases/latest)
 [![License: GPL-3.0-or-later](https://img.shields.io/badge/license-GPL--3.0--or--later-blue)](LICENSE)
 ![Platform: Windows](https://img.shields.io/badge/platform-Windows-0078D6)
+[![Support on Ko-fi](https://img.shields.io/badge/Ko--fi-support-FF5E5B?logo=ko-fi&logoColor=white)](https://ko-fi.com/bokehlicious)
 
 A fast and lightweight photo culling and ingest program for Windows: copy the photos off the card,
 step through them quickly, rate and label them, and add IPTC metadata.
