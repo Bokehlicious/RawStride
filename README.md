@@ -9,7 +9,7 @@
 A fast and lightweight photo culling and ingest program for Windows: copy the photos off the card,
 step through them quickly, rate and label them, and add IPTC metadata.
 
-> **Status: in development; latest release `0.7.0` (2026-11-26), an early version, with an
+> **Status: in development; latest release `0.8.0` (2026-11-27), an early version, with an
 > installer and a portable zip for Windows on the
 > [Releases page](https://github.com/Bokehlicious/RawStride/releases/latest).** The program
 > (`rawstride.exe`, built from the crate `pw-loupe`; eframe + egui) has the loupe and preview, the
@@ -28,6 +28,8 @@ Folder and crate names (`pw-*`) keep the old name for now.
   file name templates, and can write a metadata template into the copies and eject the card.
 - **Culling:** a contact sheet and a loupe built for speed: RAW files are shown from their embedded
   preview or rendered with LibRaw, and the next image is prepared ahead.
+- **Assessment:** temporary exposure, shadow lifting and a channel view in the preview; nothing is
+  written to the file.
 - **Ratings and labels:** stars, reject and colour labels in XMP (`xmp:Rating`, `xmp:Label`), read
   and written the way other photo programs do.
 - **Metadata:** IPTC Core and Extension in XMP, and the older IIM, following the IPTC standards. A
@@ -54,9 +56,8 @@ Panasonic (RW2), Fujifilm (RAF) and DNG files.
 Not in RawStride yet, roughly in the order they are planned. The order can change, and there
 are no dates.
 
-- **Display adjustments for assessment:** temporary exposure, white balance, sharpening, channel
-  view, clipping thresholds, the camera's crop frame and focus point. Nothing is written to the
-  file.
+- **More display adjustments for assessment:** white balance, sharpening, clipping thresholds, the
+  camera's crop frame and focus point. Nothing is written to the file.
 - **All camera data:** every Exif and maker tag in the inspector.
 - **Correcting the capture time:** shift the capture time for one camera or several, for example
   when a camera's clock was wrong.
