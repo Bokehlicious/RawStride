@@ -156,12 +156,6 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
   When the owner's hand check finishes an item's last step, the reviewer removes the item, and
   adds it to "What it does" or the status box if it is worth naming, in the commit that records
   the hand check.
-- **When to suggest a release (owner, 2026-11-21):** the reviewer tells the owner, unasked, that
-  a new version is due when `## [Unreleased]` in `CHANGELOG.md` is not empty and an ADR's steps
-  or an order in `plans/adr-0018-0025-steps.md` has just been finished, or when it has grown long
-  since the last release. The suggestion names the version number by ADR 0031 RL-Q1 (minor for a
-  new feature, patch for fixes only) and what it would contain. The owner decides; the tag is set
-  and pushed only on the owner's yes.
 - **Leftovers:** before a task is set to Done, everything its log calls left, not covered, noted
   or not changed gets a home: a new task; a step's row or notes in `plans/` (something a planned
   step must take up); an item in `known-limits.md` (accepted, a task only if it is seen in use),

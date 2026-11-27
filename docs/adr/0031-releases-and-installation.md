@@ -218,3 +218,4 @@ a reputation takes time to build; RL9 stays at order 2c. RL10 was placed by the 
 | 6 | 2026-11-24 | RL9: WiX's licence checked (§3.5); RL9-Q1–RL9-Q8 approved by the owner as proposed (§5); the owner's go for RL9; after the cold read of T305 and T306, RL9-Q9–RL9-Q11 approved as proposed (RL9-Q11 amends RL9-Q5's "asked to close") |
 | 7 | 2026-11-24 | RL9-Q11: the owner's hand check of T305 found that Windows does ask to close RawStride and ExifTool during an upgrade (Windows Installer's files-in-use box); the advice to close RawStride first stays |
 | 8 | 2026-11-24 | RL-Q14 (amends RL-Q2, §3.2): `0.x` published as regular releases, decided by the owner as proposed; step RL10 (T310, `v0.5.0` made Latest); §4's signing step named RL8 (it said RL10) |
+| 9 | 2026-11-27 | Revision 3's rule removed from `docs/tasks/README.md` (owner): the reviewer no longer suggests releases; the owner proposes them |
