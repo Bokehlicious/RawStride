@@ -9,7 +9,9 @@
   W3-Q1–W3-Q8 the same day, all as proposed (§4.3). W3's hand check on 2026-11-25 set the
   sharpening's defaults and changed A-Q8, W1-Q8, W3-Q1, W3-Q5 and W3-Q6 (§4.3, "W3's hand
   check"). W5's W5-Q1–W5-Q9 answered by the owner on 2026-11-25, all as proposed (§4.4); they
-  change §3.4's range to −2 to +3 EV and make the shadows a display mode for the session.
+  change §3.4's range to −2 to +3 EV and make the shadows a display mode for the session. W4's
+questions (§4.5) were answered on 2026-11-26 and W6's W6-Q1–W6-Q8 on 2026-11-28, all as proposed
+(§4.6).
 - Date: 2026-11-18
 - Related:
   - ADR 0006 §2 (decode settings identical everywhere; the view already uses PPG instead of its
@@ -736,6 +738,59 @@ A TIFF is converted to the display's profile once when it is opened (W1-Q5), so 
 W4 is written as the chain T346 (the channel function, its timing and the channel in the view
 core, `pw-viewcore`) → T347 (the shell: the keys, the menu, the mark, the reset, the texts,
 `pw-loupe`). After it, the owner's hand check and `latency.ps1` at fit with a channel shown.
+
+### 4.6 W6's questions (answered by the owner, 2026-11-28, all as proposed)
+
+White balance (§3.5) is the fifth adjustment built (order W3, W5, W4, W6). Batch and import do
+not apply: it changes only how the shown image is made. The RAW histogram, the exposure
+statistics, the clipping overlay and the focus marking do not change (§2.1). Each proposal below
+also answers the edge cases of `docs/tasks/README.md` ("Edge cases before the tasks") where they
+apply.
+
+What the code and the files say today (reviewer, 2026-11-28, code read and ExifTool 13.64):
+
+- `pwlr_open` sets `use_camera_wb = 1` and `use_auto_wb = 0` once; `pwlr_render` passes only the
+  demosaic, half size, the crop box and (since T331) the exposure. The statistics shim already
+  works out the multipliers itself (the camera's `cam_mul`, else `pre_mul`, scaled so the smallest
+  is 1), as the render uses them.
+- The view's look (`Look` in `state.rs`: sharpening, exposure, shadows, channel) is part of every
+  view's identity in the cache; the white balance joins it as W5 and W4 did.
+- In the preview the mouse is taken: double-click is Z, drag pans, the wheel zooms (`main.rs`).
+  Free single keys: Q, T, W and Y (B, N, O, U and D are taken); Backspace resets every adjustment
+  (W3-Q8).
+- The presets in the owner's files (ExifTool; which of them LibRaw's `WB_Coeffs` gives is checked
+  in the first task [T]): Sony ARW (A1, A7R IV) 15 named levels (Daylight, Cloudy, Shade,
+  Tungsten, Flash, Fluorescent and its three variants, and 2500, 3200, 4500, 6000, 8500 K) besides
+  the "auto" levels; Panasonic RW2 (GM1) 7 named entries (Fine Weather, Cloudy, Shade, Tungsten,
+  Flash, D55, ISO Studio Tungsten); Fujifilm RAF (X-T30) only "Standard" and "Auto" levels; DNG
+  (Ricoh GR III, a Xiaomi phone) only `AsShotNeutral`, no presets. So for the owner's DNG and RAF
+  files the choice of presets does little, and "Daylight (LibRaw)" is the only fixed reference.
+
+| # | Question | Proposal |
+|---|---|---|
+| W6-Q1 | Auto white balance: the rule | **Our own rule**, as A-Q11 for exposure, so the result is explained and the same in every view: the multipliers are worked out **once per image, over the whole RAW data**, as the mean of each colour's photosites (black level taken off) **leaving out photosites at the clipping level and in the deep shadows** (the limits of the clipping map, U7), so that G = 1 after the scaling: `mul(c) = mean(G) / mean(c)`, then scaled so the smallest is 1 as today. This is the grey-world rule: a picture dominated by one colour (a green forest, a sunset) gets a cast of the other kind; accepted, since click on grey and the presets are the answers to it, and the hover text says what the rule is. LibRaw's `use_auto_wb` is not used (it measures the area it renders, so a crop box would give every region its own balance, §3.5). One pass in the shim like the statistics (`pwlr.cpp`, an extra review); the first task times it on the owner's 61 Mpix files [T] and says whether it can share the statistics' pass. Passed to every view as `user_mul` (W6-Q3) |
+| W6-Q2 | Click on grey | A key, **Shift+W**, and the item View ▸ White Balance ▸ Pick Grey start a **pick mode**: the pointer becomes a cross, and the **next click** on the image sets the balance and ends the mode; Esc, another key that changes the view, or a step to another image ends it without a change. Outside the mode the mouse is as today (double-click Z, drag pans, wheel zooms), so nothing existing changes. The sample is a square of **15 × 15 pixels of the shown view**, mapped to the RAW data by the clipping overlay's mapping (U7, orientation included) and grown, where it is smaller, to at least **12 × 12 photosites** (so every colour of a 6 × 6 X-Trans pattern is in it) and cut at the image's edge; the mean of each colour (black level off, clipped photosites and deep shadows left out) gives `mul(c) = mean(G) / mean(c)` as in W6-Q1. **Edge cases:** if fewer than half of the photosites are usable, or one colour has none (a clipped or very dark spot), nothing changes and the status line says "That area is too bright or too dark to measure grey." (the program's texts in American spelling, glossary G5); a click outside the image changes nothing and ends the mode; a file whose layout the shim cannot read (as `RawStatistics`) greys the item. A new function in `pw-libraw` returns the means under a RAW rectangle; it is the first task's |
+| W6-Q3 | Where it applies, and the parameters | In RAW mode, to every view of the image (half size, reduced, fine, scaled, 100 %, ring and pan), in LibRaw before the demosaic, as `user_mul` **passed with each render and cleared after it** (as the exposure, W5-Q3), so the focus job, the statistics and the clipping map always run on ADR 0006 §2's settings (A-Q6) and the export has nothing to undo. The multipliers are scaled so the smallest is 1, so brightness stays that of the camera's balance. `user_mul` taking the place of `use_camera_wb` is checked in the first task [T]. Paused (the mark dimmed, A-Q9) in JPEG mode and for JPEG and TIFF files. **The compare:** auto and the presets apply to both sides, each worked out or looked up for its own image; a click on grey belongs to the image it was taken on and is reset when that side's image changes (a value from one image is wrong for another). **The neighbours:** prefetched with the active mode for their own file (auto worked out, the preset looked up); a click on grey is reset by the step, so they are prefetched as shot |
+| W6-Q4 | The presets | **From the file:** what LibRaw gives in `WB_Coeffs` (with the colour temperatures of `WBCT_Coeffs`), read **once when the file is opened**, no ExifTool call (as the camera's brightness, W5-Q5), named as LibRaw names them ("Daylight", "Cloudy", "Shade", "Tungsten", "Fluorescent", "Flash", and the temperatures as "4500 K"). **"Daylight (LibRaw)"** for every RAW file: LibRaw's daylight multipliers from its colour matrix; whether `pre_mul` read before a render is those multipliers, and not the camera's balance, is checked in the first task [T], and if it is not, they are worked out from the matrix by the D65 white point in the shim. When the file's own table has "Daylight" too, both are shown with their different names (§3.5). **The menu** View ▸ White Balance after the Exposure submenu: As Shot (the default), Auto (W), Daylight (LibRaw), Pick Grey (Shift+W), then a separator and **the presets of the current image** (the list is the image's; the choice is kept by name). **Edge cases:** a chosen preset is looked up by name in the next image; one that lacks it is shown as shot and the mark says "WB Shade: none" (as "Camera EV: none"); a file with no presets shows only the four fixed items; a preset whose multipliers are zero or not finite is left out of the list; a file with no `cam_mul` and no `pre_mul` is shown as shot and only auto and click on grey (which need neither) work. There is **no key per preset** and no cycling key; the keys are W (auto on and off) and Shift+W (pick grey), both in the key map (U8) |
+| W6-Q5 | What the other measurements see | As W5 and W4: unchanged (§2.1). The RAW histogram, the exposure statistics, the clipping overlay and the focus marking stay on the camera's balance, so with a balance changed the overlay can mark a channel clipped that the view no longer shows clipped, or the other way round. **Auto exposure (A-Q11) is not worked out again** when the balance changes: its value comes from the unadjusted histogram, and a balance that lifts one colour can move the brightness a little. Both are accepted and written into `known-limits.md` with the exposure's earlier items; the hover text of the mark says that the measurements are as shot |
+| W6-Q6 | How long it lasts, and a setting | Auto, the presets and "Daylight (LibRaw)" are modes for the session (§2.1), the same for every image, not saved; a click on grey is reset when another image is shown (A-Q2). Backspace (W3-Q8) sets the balance back to as shot, and View ▸ White Balance ▸ As Shot does the same alone (the exposure's Shift+Backspace has no counterpart). **No setting "Auto white balance at start"**: the camera's balance is mostly right, and the fair view of ADR 0006 §2 stays the start; the owner may add it after the hand check, as for the exposure (T340). **No buttons** in the status bar in this step (the hand check may add them, as for the exposure) |
+| W6-Q7 | The cache, and what the user sees on a change | The balance is part of the view's look and key (as W5-Q7): a change never shows an old texture; the drawn view stays until the new one is ready and is replaced in one swap (V2); several quick changes ask only for the newest; the ring, the 100 % view and the neighbours follow after the dwell. Every change renders the shown view again (about 0.3 s at fit for 61 Mpix, 1.2 s with fine details on); the views of the earlier balance are kept as the memory budget allows (V8). With auto on, the multipliers of an image that was not prefetched are made **when it is opened, before its first view** (as auto exposure, W5-Q4), so a step shows the balanced view as one change (V2); the first task's timing says what a jump then costs, and the owner decides if it is too much |
+| W6-Q8 | The marks, and when it goes wrong | One mark after the exposure's in the row of marks (W2-Q5): "WB auto", "WB grey", "WB Shade", "WB Daylight (LibRaw)"; none for as shot; "WB Shade: none" when the file lacks the preset (W6-Q4); the hover text names the key and the multipliers (for example "Auto white balance (W): red ×1.9, blue ×1.4, worked out over the whole image; the histogram and overlays are as shot."). Dimmed while paused, waiting while its view is made. Auto on an image with too few usable photosites (all clipped or all dark) gives as shot and the mark "WB auto: none". A render that fails shows today's error line. New glossary terms: white balance, auto white balance, click on grey, white balance preset (rule 13) |
+
+W6 is proposed as a chain of three tasks: the shim and `pw-libraw` (`user_mul` per render, the
+auto rule, the means under a RAW rectangle, the presets and the daylight multipliers read at the
+open, each timed and checked against the owner's four formats; an extra review, C++, Opus), the
+view core (the state, the view key, the multipliers made at the open while auto is on, the
+compare and the neighbours), and the shell (the keys, the menu, the pick mode and its click, the
+marks, the reset, the texts and the glossary). After it, the owner's hand check and
+`latency.ps1` at fit with auto white balance on.
+
+**Cost with everything off (owner, 2026-11-28, asked before approving):** the only thing W6 does
+with every adjustment off is read the file's presets when it is opened (W6-Q4). The first task
+therefore also runs `latency.ps1` with every adjustment off, before and after, and reports the
+step time; if a step is measurably slower, the presets are read only when the menu is opened. No
+global switch for all adjustments is built: every adjustment is off by default and Backspace
+turns them off (§2.1), and the measurement is what guards the cost.
 
 ## 5. Steps
 
