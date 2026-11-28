@@ -87,10 +87,16 @@ names another file. Finished tasks are in `done/`; reading them is not needed to
 
 | Task | Title | Status | Model |
 |---|---|---|---|
+| [T348](T348-libraw-white-balance-per-render.md) | ADR 0027 W6: the white balance per LibRaw render, the means under a RAW area and the file's presets (pw-libraw) | Blocked | Opus |
+| [T349](T349-white-balance-in-the-render-path.md) | ADR 0027 W6: the white balance in the view core's render path (pw-viewcore) | Blocked | Opus |
+| [T350](T350-white-balance-in-the-state.md) | ADR 0027 W6: the white balance's mode in the view core's state (pw-viewcore) | Blocked | Opus |
+| [T351](T351-white-balance-keys-menu-marks.md) | ADR 0027 W6: the key, the menu and the mark of the white balance (pw-loupe) | Blocked | Opus |
+| [T352](T352-click-on-gray-in-the-state.md) | ADR 0027 W6: the click on gray in the view core's state (pw-viewcore) | Blocked | Opus |
+| [T353](T353-pick-gray-keys-and-mode.md) | ADR 0027 W6: Pick Gray, the key, the menu item, the pick mode and its click (pw-loupe) | Blocked | Opus |
 
 ## Writing a task (owner and reviewer)
 
-- **Number:** the next free number after the highest in this folder and `done/` (T348 next).
+- **Number:** the next free number after the highest in this folder and `done/` (T354 next).
 - **File:** `docs/tasks/T246-<a-few-words>.md`; three digits, lower case, words joined by `-`.
 - **Index:** add a row to "Open tasks" above and keep its status in step with the file's heading.
 - **Size (owner, 2026-11-15, after T142):** one task is one layer (a C++ shim or a core crate, or

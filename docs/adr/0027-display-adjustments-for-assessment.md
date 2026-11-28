@@ -777,18 +777,30 @@ What the code and the files say today (reviewer, 2026-11-28, code read and ExifT
 | W6-Q7 | The cache, and what the user sees on a change | The balance is part of the view's look and key (as W5-Q7): a change never shows an old texture; the drawn view stays until the new one is ready and is replaced in one swap (V2); several quick changes ask only for the newest; the ring, the 100 % view and the neighbours follow after the dwell. Every change renders the shown view again (about 0.3 s at fit for 61 Mpix, 1.2 s with fine details on); the views of the earlier balance are kept as the memory budget allows (V8). With auto on, the multipliers of an image that was not prefetched are made **when it is opened, before its first view** (as auto exposure, W5-Q4), so a step shows the balanced view as one change (V2); the first task's timing says what a jump then costs, and the owner decides if it is too much |
 | W6-Q8 | The marks, and when it goes wrong | One mark after the exposure's in the row of marks (W2-Q5): "WB auto", "WB grey", "WB Shade", "WB Daylight (LibRaw)"; none for as shot; "WB Shade: none" when the file lacks the preset (W6-Q4); the hover text names the key and the multipliers (for example "Auto white balance (W): red ×1.9, blue ×1.4, worked out over the whole image; the histogram and overlays are as shot."). Dimmed while paused, waiting while its view is made. Auto on an image with too few usable photosites (all clipped or all dark) gives as shot and the mark "WB auto: none". A render that fails shows today's error line. New glossary terms: white balance, auto white balance, click on grey, white balance preset (rule 13) |
 
-W6 is proposed as a chain of three tasks: the shim and `pw-libraw` (`user_mul` per render, the
-auto rule, the means under a RAW rectangle, the presets and the daylight multipliers read at the
-open, each timed and checked against the owner's four formats; an extra review, C++, Opus), the
-view core (the state, the view key, the multipliers made at the open while auto is on, the
-compare and the neighbours), and the shell (the keys, the menu, the pick mode and its click, the
-marks, the reset, the texts and the glossary). After it, the owner's hand check and
-`latency.ps1` at fit with auto white balance on.
+W6 is written as a chain of six tasks (2026-11-28, after the cold reads and the chain review):
+T348 (the shim and `pw-libraw`: `user_mul` per render with `use_camera_wb` off, the means under a
+RAW rectangle, the presets and the daylight multipliers read at the open, each timed and checked
+against the owner's four formats; an extra review, C++), T349 (the view core's render path and the
+backend's three questions), T350 (the view core's state: the mode, the info, the auto balance made
+before the first view), T351 (the shell: the key W, the menu, the mark), T352 (the view core's
+click on gray) and T353 (the shell: Pick Gray, the pick mode and its click). After it, the
+owner's hand check and `latency.ps1` at fit with auto white balance on.
+
+**Decided while the tasks were written (reviewer, 2026-11-28, for the owner's notice):**
+the program's texts use American spelling (glossary G5), so the menu item is "Pick Gray" and the
+mark "WB gray" (the questions above wrote "grey"); the sample square is **moved** inside the
+image when it is near the edge, not cut at it (W6-Q2 said "cut"), so that every colour of an
+X-Trans pattern stays in it; the means for auto and for the click judge whole cells (2 × 2, or
+3 × 3 for X-Trans) as the clipping map does, and leave out a cell with a clipped photosite or one
+that is all deep shadow, so that a dim or bright area does not skew a colour's mean; a balance is
+passed to LibRaw with `use_camera_wb` off (LibRaw otherwise puts the camera's own multipliers
+over a `user_mul`).
 
 **Cost with everything off (owner, 2026-11-28, asked before approving):** the only thing W6 does
 with every adjustment off is read the file's presets when it is opened (W6-Q4). The first task
-therefore also runs `latency.ps1` with every adjustment off, before and after, and reports the
-step time; if a step is measurably slower, the presets are read only when the menu is opened. No
+therefore reports the time of that read itself (the shim times it), and the reviewer records
+`latency.ps1` with every adjustment off at the head before T348 starts and again after T353; if a
+step is measurably slower, the presets are read only when the menu is opened. No
 global switch for all adjustments is built: every adjustment is off by default and Backspace
 turns them off (§2.1), and the measurement is what guards the cost.
 
