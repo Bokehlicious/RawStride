@@ -14,7 +14,7 @@ use crate::channel::Channel;
 use crate::exposure::{AutoExposure, Ev, auto_exposure};
 use crate::geometry::{self, ImageSize, Rect, RectF};
 use crate::sharpen::Sharpening;
-use crate::wb::{Wb, WbInfo, WbPreset};
+use crate::wb::{Wb, WbInfo, WbPreset, grey_area};
 
 /// Settings of the core. Both budgets are user settings (V8); in milestone 1 they come from the
 /// command line (ADR 0009 §11).
@@ -354,6 +354,24 @@ pub enum WbBase {
     Grey,
 }
 
+/// The state of the current image's grey measurement.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum PickState {
+    #[default]
+    Idle,
+    Measuring,
+    Unusable,
+    TooBrightOrDark,
+}
+
+/// The immediate outcome of a click to measure grey.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PickResult {
+    Started,
+    Outside,
+    Unusable,
+}
+
 /// The current image's white balance and whether the frame shows it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct WhiteBalanceState {
@@ -363,6 +381,8 @@ pub struct WhiteBalanceState {
     pub view: AdjustState,
     pub presets: Arc<[WbPreset]>,
     pub has_daylight: bool,
+    pub pick: PickState,
+    pub can_pick: bool,
 }
 
 impl WhiteBalanceState {
@@ -374,6 +394,8 @@ impl WhiteBalanceState {
             view: AdjustState::Off,
             presets: Arc::default(),
             has_daylight: false,
+            pick: PickState::Idle,
+            can_pick: false,
         }
     }
 }
@@ -625,6 +647,8 @@ pub(crate) enum Job {
     Statistics(Key),
     /// The auto white balance of an opened RAW image (ADR 0027 W6).
     Balance(Key),
+    /// The white balance of a clicked RAW area (ADR 0027 W6).
+    Grey(Key, Rect),
     /// The clipping map of an opened image (ADR 0017 U7b-Q8).
     Clipping(Key),
     /// The focus map of an opened image, from its half-size render (ADR 0017 U9a).
@@ -638,13 +662,14 @@ impl Job {
             | Job::Render(k, _)
             | Job::Statistics(k)
             | Job::Balance(k)
+            | Job::Grey(k, _)
             | Job::Clipping(k)
             | Job::Focus(k) => k,
         }
     }
 }
 
-/// What a session lent for its statistics, auto white balance, clipping map or focus map is booked
+/// What a session lent for statistics, auto or grey white balance, clipping or focus is booked
 /// under in `lent_paths` and `released`: a placeholder no render job uses. These jobs share it:
 /// an image's session is lent to one job at a time, and no new session of the image is opened
 /// while a job of it runs, so no two of them are ever booked at the same time.
@@ -722,6 +747,12 @@ pub(crate) enum Task<S> {
     Balance {
         generation: u64,
         key: Key,
+        session: S,
+    },
+    Grey {
+        generation: u64,
+        key: Key,
+        area: Rect,
         session: S,
     },
     Clipping {
@@ -836,6 +867,9 @@ pub(crate) struct State<S> {
     shadows: Option<u8>,
     channel: Channel,
     wb_mode: WbMode,
+    grey: Option<(usize, Wb)>,
+    pending_grey: Option<(Key, Rect)>,
+    pick_note: PickState,
     sessions: HashMap<Key, Option<S>>,
     /// The generation each lent session (`None` in `sessions`) was lent in.
     lent: HashMap<Key, u64>,
@@ -928,6 +962,9 @@ impl<S> State<S> {
             shadows: None,
             channel: Channel::Color,
             wb_mode: WbMode::Shot,
+            grey: None,
+            pending_grey: None,
+            pick_note: PickState::Idle,
             sessions: HashMap::new(),
             lent: HashMap::new(),
             detached: HashMap::new(),
@@ -985,10 +1022,14 @@ impl<S> State<S> {
     /// The effective scale for `key` at the current zoom, once its size is known.
     pub fn scale_of(&self, key: Key) -> Option<f64> {
         let size = *self.sizes.get(&key)?;
-        Some(match self.zoom {
-            Zoom::Fit => geometry::fit_scale(size, self.view_px),
+        Some(self.shown_scale(size, self.view_px))
+    }
+
+    fn shown_scale(&self, size: ImageSize, view_px: [u32; 2]) -> f64 {
+        match self.zoom {
+            Zoom::Fit => geometry::fit_scale(size, view_px),
             Zoom::Scale(s) => s,
-        })
+        }
     }
 
     fn min_scale(&self, size: Option<ImageSize>) -> f64 {
@@ -1114,13 +1155,64 @@ impl<S> State<S> {
         if mode == WbMode::Grey || self.wb_mode == mode {
             return false;
         }
+        self.clear_pick();
+        self.grey = None;
         self.wb_mode = mode;
         self.since = Instant::now();
         true
     }
 
     pub fn reset_white_balance(&mut self) -> bool {
+        if self.wb_mode == WbMode::Shot {
+            let changed = self.pending_grey.is_some() || self.pick_note != PickState::Idle;
+            self.clear_pick();
+            return changed;
+        }
         self.set_white_balance(WbMode::Shot)
+    }
+
+    pub fn pick_grey(&mut self, point: [f64; 2], view_px: [u32; 2]) -> PickResult {
+        let Some((key, size)) = self
+            .cur_key()
+            .filter(|key| {
+                key.1 == Source::Raw
+                    && !self.failed.contains_key(key)
+                    && self.wb_info.get(key).is_none_or(|info| info.measurable)
+            })
+            .and_then(|key| self.sizes.get(&key).copied().map(|size| (key, size)))
+        else {
+            self.pick_note = PickState::Unusable;
+            return PickResult::Unusable;
+        };
+        let scale = self.shown_scale(size, view_px);
+        let vis = geometry::visible(size, view_px, scale, self.centre);
+        let [left, top, ..] = vis;
+        let [x0, y0, x1, y1] = geometry::dest(vis, view_px, scale);
+        let [x, y] = point;
+        if !(x0..=x1).contains(&x) || !(y0..=y1).contains(&y) {
+            return PickResult::Outside;
+        }
+        let point = [left + (x - x0) / scale, top + (y - y0) / scale];
+        let Some(area) = grey_area(size, point, scale) else {
+            return PickResult::Outside;
+        };
+        self.pending_grey = Some((key, area));
+        self.pick_note = PickState::Measuring;
+        self.since = Instant::now();
+        PickResult::Started
+    }
+
+    fn clear_pick(&mut self) {
+        self.pending_grey = None;
+        self.pick_note = PickState::Idle;
+    }
+
+    fn forget_grey(&mut self) {
+        self.clear_pick();
+        self.grey = None;
+        if self.wb_mode == WbMode::Grey {
+            self.wb_mode = WbMode::Shot;
+        }
     }
 
     fn set_steps(&mut self, steps: i32) -> bool {
@@ -1206,7 +1298,11 @@ impl<S> State<S> {
             return Some(Wb::Shot);
         }
         Some(match &self.wb_mode {
-            WbMode::Shot | WbMode::Grey => Wb::Shot,
+            WbMode::Shot => Wb::Shot,
+            WbMode::Grey => self
+                .grey
+                .filter(|&(pos, _)| pos == key.0 && self.cur == Some(pos))
+                .map_or(Wb::Shot, |(_, wb)| wb),
             WbMode::Auto => match self.wb_auto.get(&key)? {
                 AutoWb::Available(wb) => *wb,
                 AutoWb::Unavailable => Wb::Shot,
@@ -1272,6 +1368,9 @@ impl<S> State<S> {
     /// R: switches the display mode (G4). Zoom and position stay (V6); 100 % then means 100 % of
     /// the other source.
     pub fn set_mode(&mut self, mode: Source) {
+        if self.mode != mode {
+            self.clear_pick();
+        }
         self.mode = mode;
     }
 
@@ -1310,6 +1409,7 @@ impl<S> State<S> {
             _ => 1,
         };
         if self.cur != Some(pos) {
+            self.forget_grey();
             self.exposure_steps = 0;
             self.dragged = false;
         }
@@ -1325,6 +1425,7 @@ impl<S> State<S> {
         self.generation += 1;
         self.files = files;
         self.cur = None;
+        self.forget_grey();
         self.exposure_steps = 0;
         self.dragged = false;
         self.still_since = Instant::now();
@@ -1521,6 +1622,7 @@ impl<S> State<S> {
 
         if self.files.is_empty() {
             self.cur = None;
+            self.forget_grey();
             self.exposure_steps = 0;
             self.last_draw = None;
             self.last_vis = None;
@@ -1530,10 +1632,23 @@ impl<S> State<S> {
         let pos = current.min(self.files.len() - 1);
         self.cur = Some(pos);
         if self.files.get(pos) != before.as_ref() {
+            self.forget_grey();
             self.exposure_steps = 0;
             self.since = Instant::now();
             self.still_since = Instant::now();
             self.dragged = false;
+        } else {
+            self.grey = self
+                .grey
+                .and_then(|(old, wb)| to((old, Source::Raw)).map(|(new, _)| (new, wb)));
+            // The click still belongs to this path, but its old-generation worker cannot finish it.
+            if let Some((key, area)) = self.pending_grey {
+                if let Some(new) = to(key).filter(|k| k.0 == pos) {
+                    self.pending_grey = Some((new, area));
+                } else {
+                    self.clear_pick();
+                }
+            }
         }
     }
 
@@ -1994,6 +2109,9 @@ impl<S> State<S> {
     /// requirement gave exactly its view), for [`State::lend_render`] (T328).
     fn plan_wants(&self, fine: bool) -> Vec<(Job, Vec<Want>)> {
         let mut v: Vec<(Job, Vec<Want>)> = Vec::new();
+        if let Some(job) = self.grey_job() {
+            v.push((job, Vec::new()));
+        }
         for (key, want) in self.wanted(false) {
             if !fine && want == Want::Fine {
                 continue;
@@ -2046,6 +2164,18 @@ impl<S> State<S> {
             v.push((job, vec![want]));
         }
         v
+    }
+
+    fn grey_job(&self) -> Option<Job> {
+        let (key, area) = self.pending_grey?;
+        if self.failed.contains_key(&key) || !self.sizes.contains_key(&key) {
+            return None;
+        }
+        Some(if self.sessions.contains_key(&key) {
+            Job::Grey(key, area)
+        } else {
+            Job::Open(key)
+        })
     }
 
     /// The job for the current image's statistics, when it is due (ADR 0017 U7-Q6): they are
@@ -2530,14 +2660,14 @@ impl<S> State<S> {
                 .map(|(_, w)| w.clone())
                 .unwrap_or_default()
         };
-        // The statistics come first once they are due: the shown view and a wanted 100 % view of
-        // the current image are on the screen by then (U7c-Q5).
-        let mut first = 0;
+        // The statistics come next after a grey measurement once they are due: the shown view
+        // and a wanted 100 % view of the current image are on the screen by then (U7c-Q5).
+        let mut first = usize::from(self.grey_job().is_some());
         if let Some(job) = self.statistics_job()
             && !jobs.contains(&job)
         {
-            jobs.insert(0, job);
-            first = 1;
+            jobs.insert(first, job);
+            first += 1;
         }
         // The clipping map, when an overlay wants it, right after them (U7b-Q8).
         if let Some(job) = self.clipping_job()
@@ -2649,7 +2779,7 @@ impl<S> State<S> {
                         return Some(task);
                     }
                 }
-                Job::Statistics(key) | Job::Balance(key) => {
+                Job::Statistics(key) | Job::Balance(key) | Job::Grey(key, _) => {
                     let Some(slot) = self.sessions.get_mut(&key) else {
                         continue;
                     };
@@ -2662,7 +2792,14 @@ impl<S> State<S> {
                     }
                     self.lent.insert(key, generation);
                     self.running.insert((generation, job));
-                    return Some(if matches!(job, Job::Balance(_)) {
+                    return Some(if let Job::Grey(_, area) = job {
+                        Task::Grey {
+                            generation,
+                            key,
+                            area,
+                            session,
+                        }
+                    } else if matches!(job, Job::Balance(_)) {
                         Task::Balance {
                             generation,
                             key,
@@ -2831,6 +2968,10 @@ impl<S> State<S> {
             Err(e) => {
                 self.stats.failures += 1;
                 self.failed.insert(key, e);
+                if self.pending_grey.is_some_and(|(pending, _)| pending == key) {
+                    self.pending_grey = None;
+                    self.pick_note = PickState::Unusable;
+                }
             }
         }
     }
@@ -3099,6 +3240,40 @@ impl<S> State<S> {
         }
         self.wb_auto
             .insert(key, result.map_or(AutoWb::Unavailable, AutoWb::Available));
+    }
+
+    /// Keeps a grey balance only for the request still pending on the current image.
+    pub fn finish_grey(
+        &mut self,
+        generation: u64,
+        key: Key,
+        area: Rect,
+        session: S,
+        result: Option<Wb>,
+        usable: bool,
+    ) {
+        self.running.remove(&(generation, Job::Grey(key, area)));
+        let released = self
+            .released
+            .contains_key(&(generation, key, STATISTICS_LEND));
+        if !self.return_session(generation, key, STATISTICS_LEND, session)
+            || released
+            || self.cur != Some(key.0)
+            || self.pending_grey != Some((key, area))
+        {
+            return;
+        }
+        if let Some(wb) = result {
+            self.grey = Some((key.0, wb));
+            self.wb_mode = WbMode::Grey;
+            self.clear_pick();
+            self.since = Instant::now();
+        } else if usable {
+            self.pending_grey = None;
+            self.pick_note = PickState::TooBrightOrDark;
+        } else {
+            self.drop_session(key);
+        }
     }
 
     /// The clipping map of an opened image was made (`ms` = how long it took; `None` = the file
@@ -3502,6 +3677,13 @@ impl<S> State<S> {
             view: AdjustState::Off,
             presets: info.map(|i| Arc::clone(&i.presets)).unwrap_or_default(),
             has_daylight: info.is_some_and(|i| i.daylight.is_some()),
+            pick: if self.pending_grey.is_some() {
+                PickState::Measuring
+            } else {
+                self.pick_note
+            },
+            can_pick: raw.is_some_and(|k| !self.failed.contains_key(&k))
+                && info.is_some_and(|i| i.measurable),
         }
     }
 
@@ -3510,7 +3692,8 @@ impl<S> State<S> {
             let waiting = match &self.wb_mode {
                 WbMode::Auto => frame.white_balance.base == WbBase::AutoWaiting,
                 WbMode::Daylight | WbMode::Preset(_) => !self.wb_info.contains_key(&key),
-                WbMode::Shot | WbMode::Grey => false,
+                WbMode::Grey => frame.white_balance.pick == PickState::Measuring,
+                WbMode::Shot => false,
             };
             if waiting {
                 return AdjustState::Waiting;
@@ -9243,6 +9426,8 @@ mod tests {
     const AUTO_WB: Wb = Wb::Mul { r: 2000, b: 1500 };
     const DAYLIGHT_WB: Wb = Wb::Mul { r: 2300, b: 1600 };
     const SHADE_WB: Wb = Wb::Mul { r: 2700, b: 1400 };
+    const GREY_WB: Wb = Wb::Mul { r: 1800, b: 900 };
+    const VIEW_CENTRE: [f64; 2] = [500.0, 400.0];
 
     fn open_with_wb(s: &mut State<u32>, pos: usize, info: WbInfo) {
         s.finish_open_checked(
@@ -9265,6 +9450,341 @@ mod tests {
                 session,
             }) => (generation, key, session),
             other => panic!("expected a balance task, got {other:?}"),
+        }
+    }
+
+    fn open_measurable(s: &mut State<u32>) {
+        open_with_wb(
+            s,
+            10,
+            WbInfo {
+                measurable: true,
+                ..WbInfo::default()
+            },
+        );
+    }
+
+    fn lend_for_grey(s: &mut State<u32>) -> (u64, Key, Rect, u32) {
+        match s.pick(true) {
+            Some(Task::Grey {
+                generation,
+                key,
+                area,
+                session,
+            }) => (generation, key, area, session),
+            other => panic!("expected a grey task, got {other:?}"),
+        }
+    }
+
+    fn measure_grey(s: &mut State<u32>, result: Option<Wb>) {
+        assert_eq!(s.pick_grey(VIEW_CENTRE, VIEW), PickResult::Started);
+        let (generation, key, area, session) = lend_for_grey(s);
+        s.finish_grey(generation, key, area, session, result, true);
+    }
+
+    #[test]
+    fn grey_click_at_fit_uses_the_passed_view_and_precedes_statistics_and_renders() {
+        for flip in [0, 6] {
+            let mut s = state(1024);
+            let key = k(10);
+            open_measurable(&mut s);
+            s.sizes.insert(
+                key,
+                ImageSize {
+                    w: 6000,
+                    h: 4000,
+                    flip,
+                },
+            );
+            s.drop_session(key);
+            s.view_px = [120, 100];
+            assert_eq!(s.pick_grey(VIEW_CENTRE, VIEW), PickResult::Started);
+            let (pending, area) = s.pending_grey.unwrap();
+            assert_eq!(pending, key);
+            assert!((f64::from(area.x) + f64::from(area.w) / 2.0 - 3000.0).abs() <= 1.0);
+            assert!((f64::from(area.y) + f64::from(area.h) / 2.0 - 2000.0).abs() <= 1.0);
+            let wb = s.frame(VIEW).white_balance;
+            assert_eq!((wb.pick, wb.view), (PickState::Measuring, AdjustState::Off));
+            assert_eq!(s.plan().first(), Some(&Job::Open(key)));
+            assert!(matches!(s.pick(true), Some(Task::Open { key: k, .. }) if k == key));
+
+            s.finish_open_checked(
+                s.generation,
+                key,
+                Ok((10, s.sizes[&key])),
+                mb24,
+                |_| false,
+                |_| None,
+                |_| WbInfo {
+                    measurable: true,
+                    ..WbInfo::default()
+                },
+                1.0,
+            );
+            assert_eq!(s.plan().first(), Some(&Job::Grey(key, area)));
+            assert!(!renders_of(&s, 10).is_empty());
+            for want in [Want::Shown, Want::Target] {
+                s.accept(&out(&s, 10, want), 100).unwrap();
+            }
+            past_dwell(&mut s);
+            assert_eq!(s.statistics_job(), Some(Job::Statistics(key)));
+            let (generation, _, _, session) = lend_for_grey(&mut s);
+            s.finish_grey(generation, key, area, session, None, true);
+
+            assert_eq!(s.pick_grey(VIEW_CENTRE, VIEW), PickResult::Started);
+            s.set_exposure_mode(ExposureMode::Auto);
+            assert_eq!(
+                &s.plan()[..2],
+                &[Job::Grey(key, area), Job::Statistics(key)]
+            );
+            assert_eq!(lend_for_grey(&mut s).2, area);
+        }
+    }
+
+    #[test]
+    fn grey_click_in_the_letterbox_leaves_a_pending_click_unchanged() {
+        let mut s = state(1024);
+        open_measurable(&mut s);
+        assert_eq!(s.pick_grey(VIEW_CENTRE, VIEW), PickResult::Started);
+        let before = (s.pending_grey, s.pick_note, s.since);
+        assert_eq!(s.pick_grey([500.0, 10.0], VIEW), PickResult::Outside);
+        assert_eq!((s.pending_grey, s.pick_note, s.since), before);
+    }
+
+    #[test]
+    fn grey_pick_is_available_only_for_measurable_raw_images() {
+        let mut s = state(1024);
+        assert!(!s.frame(VIEW).white_balance.can_pick);
+        open_measurable(&mut s);
+        assert!(s.frame(VIEW).white_balance.can_pick);
+        let assert_unusable = |s: &mut State<u32>| {
+            assert_eq!(s.pick_grey(VIEW_CENTRE, VIEW), PickResult::Unusable);
+            let wb = s.frame(VIEW).white_balance;
+            assert_eq!(wb.pick, PickState::Unusable);
+            assert!(!wb.can_pick);
+            assert_eq!(s.pending_grey, None);
+        };
+        s.set_mode(Source::Jpeg);
+        assert_unusable(&mut s);
+        s.set_mode(Source::Raw);
+        s.failed.insert(k(10), DecodeError::new("failed"));
+        assert_unusable(&mut s);
+        s.failed.clear();
+        open_with_wb(&mut s, 10, WbInfo::default());
+        assert_unusable(&mut s);
+        s.open_folder(vec![PathBuf::from("a.tif")]);
+        assert_unusable(&mut s);
+        s.open_folder(Vec::new());
+        assert_unusable(&mut s);
+    }
+
+    #[test]
+    fn grey_balance_applies_to_every_current_view_and_can_return_to_auto_or_shot() {
+        let mut s = state(1024);
+        open_measurable(&mut s);
+        with_session(&mut s, 11);
+        s.set_white_balance(WbMode::Auto);
+        s.wb_auto.insert(k(10), AutoWb::Available(AUTO_WB));
+        measure_grey(&mut s, Some(GREY_WB));
+        let wb = s.frame(VIEW).white_balance;
+        assert_eq!(
+            (wb.mode, wb.base, wb.pick),
+            (WbMode::Grey, WbBase::Grey, PickState::Idle)
+        );
+        past_dwell(&mut s);
+        for zoom in [
+            Zoom::Fit,
+            Zoom::Scale(0.75),
+            Zoom::Scale(1.0),
+            Zoom::Scale(2.0),
+        ] {
+            s.set_zoom(zoom, None, false);
+            for (pos, balance) in [(10, GREY_WB), (11, Wb::Shot)] {
+                let views = renders_of(&s, pos);
+                assert!(!views.is_empty());
+                assert!(views.iter().all(|view| view.wb == balance));
+            }
+        }
+        assert!(!s.set_white_balance(WbMode::Grey));
+        assert!(s.set_white_balance(WbMode::Auto));
+        assert_eq!(s.wb_of(k(10)), Some(AUTO_WB));
+        assert_eq!(s.grey, None);
+        measure_grey(&mut s, Some(GREY_WB));
+        assert!(s.set_white_balance(WbMode::Shot));
+        assert_eq!(s.grey, None);
+        assert_eq!(s.wb_of(k(10)), Some(Wb::Shot));
+    }
+
+    #[test]
+    fn a_grey_measurement_failure_keeps_the_balance_until_the_note_is_cleared() {
+        let mut s = state(1024);
+        open_measurable(&mut s);
+        measure_grey(&mut s, Some(GREY_WB));
+        measure_grey(&mut s, None);
+        assert_eq!(s.grey, Some((10, GREY_WB)));
+        assert_eq!(s.wb_mode, WbMode::Grey);
+        assert_eq!(s.frame(VIEW).white_balance.pick, PickState::TooBrightOrDark);
+        assert_eq!(s.pick_grey(VIEW_CENTRE, VIEW), PickResult::Started);
+        let wb = s.frame(VIEW).white_balance;
+        assert_eq!(
+            (wb.pick, wb.base, wb.view),
+            (PickState::Measuring, WbBase::Grey, AdjustState::Waiting)
+        );
+
+        let clear_actions: [fn(&mut State<u32>); 4] = [
+            |s: &mut State<u32>| {
+                s.set_white_balance(WbMode::Daylight);
+            },
+            |s: &mut State<u32>| s.set_mode(Source::Jpeg),
+            |s: &mut State<u32>| s.go(11),
+            |s: &mut State<u32>| {
+                assert!(s.reset_white_balance());
+            },
+        ];
+        for clear in clear_actions {
+            let mut s = state(1024);
+            open_measurable(&mut s);
+            measure_grey(&mut s, None);
+            assert_eq!(s.wb_mode, WbMode::Shot);
+            assert_eq!(s.frame(VIEW).white_balance.pick, PickState::TooBrightOrDark);
+            clear(&mut s);
+            assert_eq!(s.frame(VIEW).white_balance.pick, PickState::Idle);
+            assert_eq!(s.pending_grey, None);
+        }
+    }
+
+    #[test]
+    fn grey_measurement_reopens_after_a_spent_session_or_metadata_release() {
+        for release in [false, true] {
+            let mut s = state(1024);
+            open_measurable(&mut s);
+            assert_eq!(s.pick_grey(VIEW_CENTRE, VIEW), PickResult::Started);
+            let (generation, key, area, session) = lend_for_grey(&mut s);
+            let path = s.files[key.0].clone();
+            if release {
+                s.begin_release(&path);
+                assert_eq!(s.release(&path), (true, false));
+            }
+            s.finish_grey(
+                generation,
+                key,
+                area,
+                session,
+                release.then_some(GREY_WB),
+                release,
+            );
+            assert!(!s.sessions.contains_key(&key));
+            assert_eq!(s.pending_grey, Some((key, area)));
+            assert_eq!(s.wb_mode, WbMode::Shot);
+            if release {
+                assert_eq!(s.release(&path), (false, true));
+                assert!(s.pick(true).is_none());
+                s.end_release(&path);
+            }
+            assert!(matches!(s.pick(true), Some(Task::Open { key: k, .. }) if k == key));
+            open_measurable(&mut s);
+            let (_, _, retry, session) = lend_for_grey(&mut s);
+            assert_eq!(retry, area);
+            s.finish_grey(generation, key, retry, session, Some(GREY_WB), true);
+            assert_eq!(s.grey, Some((10, GREY_WB)));
+        }
+    }
+
+    #[test]
+    fn grey_results_for_a_replaced_click_a_left_image_or_an_old_generation_are_ignored() {
+        let mut s = state(1024);
+        open_measurable(&mut s);
+        assert_eq!(s.pick_grey(VIEW_CENTRE, VIEW), PickResult::Started);
+        let (generation, key, area, session) = lend_for_grey(&mut s);
+        assert_eq!(s.pick_grey([300.0, 300.0], VIEW), PickResult::Started);
+        let next = s.pending_grey.unwrap();
+        assert_ne!(next.1, area);
+        s.finish_grey(generation, key, area, session, Some(GREY_WB), true);
+        assert_eq!(s.sessions.get(&key), Some(&Some(session)));
+        assert_eq!(s.pending_grey, Some(next));
+        assert_eq!((s.wb_mode.clone(), s.grey), (WbMode::Shot, None));
+
+        let (_, _, area, session) = lend_for_grey(&mut s);
+        s.go(11);
+        s.finish_grey(generation, key, area, session, Some(GREY_WB), true);
+        assert_eq!(s.sessions.get(&key), Some(&Some(session)));
+        assert_eq!((s.wb_mode.clone(), s.grey), (WbMode::Shot, None));
+
+        s.go(10);
+        assert_eq!(s.pick_grey(VIEW_CENTRE, VIEW), PickResult::Started);
+        let (_, _, area, session) = lend_for_grey(&mut s);
+        s.set_files(files(21), 10);
+        s.finish_grey(generation, key, area, session, Some(GREY_WB), true);
+        assert_eq!(s.pending_grey, Some((key, area)));
+        assert_eq!(s.wb_mode, WbMode::Shot);
+        assert_eq!(s.grey, None);
+        assert!(s.lent_paths.is_empty());
+        assert_eq!(s.plan().first(), Some(&Job::Open(key)));
+    }
+
+    #[test]
+    fn grey_balance_follows_the_current_path_and_pick_ends_on_display_mode_change() {
+        let mut s = state(1024);
+        open_measurable(&mut s);
+        measure_grey(&mut s, Some(GREY_WB));
+        assert_eq!(s.pick_grey(VIEW_CENTRE, VIEW), PickResult::Started);
+        s.set_mode(Source::Jpeg);
+        assert_eq!((s.pending_grey, s.pick_note), (None, PickState::Idle));
+        assert_eq!(s.grey, Some((10, GREY_WB)));
+        assert_eq!(s.wb_mode, WbMode::Grey);
+        s.set_mode(Source::Raw);
+        let mut reordered = s.files.clone();
+        reordered.swap(10, 11);
+        s.set_files(reordered, 11);
+        assert_eq!(s.grey, Some((11, GREY_WB)));
+        assert_eq!(s.wb_mode, WbMode::Grey);
+        assert_eq!(s.wb_of(k(11)), Some(GREY_WB));
+
+        let changes: [fn(&mut State<u32>); 3] = [
+            |s: &mut State<u32>| s.go(11),
+            |s: &mut State<u32>| s.open_folder(files(20)),
+            |s: &mut State<u32>| s.set_files(files(2), 0),
+        ];
+        for change in changes {
+            let mut s = state(1024);
+            open_measurable(&mut s);
+            measure_grey(&mut s, Some(GREY_WB));
+            assert_eq!(s.pick_grey(VIEW_CENTRE, VIEW), PickResult::Started);
+            change(&mut s);
+            assert_eq!((s.wb_mode, s.grey), (WbMode::Shot, None));
+            assert_eq!((s.pending_grey, s.pick_note), (None, PickState::Idle));
+        }
+    }
+
+    #[test]
+    fn file_wide_white_balance_modes_keep_their_balance_when_stepping() {
+        let mut s = state(1024);
+        for pos in [10, 11] {
+            open_with_wb(
+                &mut s,
+                pos,
+                WbInfo {
+                    daylight: Some(DAYLIGHT_WB),
+                    presets: Arc::from([WbPreset {
+                        name: "Shade".into(),
+                        wb: SHADE_WB,
+                    }]),
+                    ..WbInfo::default()
+                },
+            );
+            s.wb_auto.insert(k(pos), AutoWb::Available(AUTO_WB));
+        }
+        for (mode, balance) in [
+            (WbMode::Auto, AUTO_WB),
+            (WbMode::Daylight, DAYLIGHT_WB),
+            (WbMode::Preset("Shade".into()), SHADE_WB),
+        ] {
+            s.go(10);
+            s.set_white_balance(mode.clone());
+            assert_eq!(s.wb_of(k(10)), Some(balance));
+            s.go(11);
+            let wb = s.frame(VIEW).white_balance;
+            assert_eq!((wb.mode, wb.wb), (mode, balance));
         }
     }
 

@@ -14,8 +14,8 @@ use crate::scale;
 use crate::shadows;
 use crate::sharpen::{self, Sharpening};
 use crate::state::{
-    Config, ExposureMode, Frame, JobView, Record, State, Stats, Task, ViewKind, ViewOut, WbMode,
-    ZOOM_STEP, Zoom,
+    Config, ExposureMode, Frame, JobView, PickResult, Record, State, Stats, Task, ViewKind,
+    ViewOut, WbMode, ZOOM_STEP, Zoom,
 };
 
 /// The longest a worker sleeps without a reason (a safety net; changes wake it at once).
@@ -119,6 +119,18 @@ impl<B: Backend> Shared<B> {
                     let usable = result.is_some() || self.backend.session_usable(&session);
                     let mut s = self.state();
                     s.finish_balance(generation, key, session, result, usable, ms);
+                }
+                Task::Grey {
+                    generation,
+                    key,
+                    area,
+                    mut session,
+                } => {
+                    let result = self.backend.grey_white_balance(&mut session, area);
+                    let usable = result.is_some() || self.backend.session_usable(&session);
+                    let mut s = self.state();
+                    s.finish_grey(generation, key, area, session, result, usable);
+                    s.stop_unwanted();
                 }
                 Task::Clipping {
                     generation,
@@ -477,6 +489,19 @@ impl<B: Backend> ViewCore<B> {
     /// Returns to the camera's as-shot white balance.
     pub fn reset_white_balance(&self) -> bool {
         self.update_adjustment(State::reset_white_balance)
+    }
+
+    /// Requests a grey measurement at a point relative to the view, in physical pixels.
+    pub fn pick_grey(&self, point: [f64; 2], view_px: [u32; 2]) -> PickResult {
+        let result = {
+            let mut st = self.shared.state();
+            let result = st.pick_grey(point, view_px);
+            st.stop_unwanted();
+            result
+        };
+        self.shared.cv.notify_all();
+        self.shared.wake_ui();
+        result
     }
 
     /// One manual exposure step of ⅓ EV for the current image (`delta` 1 or −1, W5-Q2). Returns

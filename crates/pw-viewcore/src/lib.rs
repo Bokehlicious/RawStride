@@ -47,8 +47,8 @@ pub use crate::geometry::{ImageSize, Rect};
 pub use crate::sharpen::Sharpening;
 pub use crate::state::{
     AdjustState, ClippingState, Config, Draw, ExposureBase, ExposureMode, ExposureState, FinePause,
-    FineState, FocusState, Frame, HALF_DENSITY, MAX_SCALE, Record, Resident, SharpenState, Stats,
-    Status, ViewKind, ViewOut, WbBase, WbMode, WhiteBalanceState, ZOOM_STEP, Zoom, fnv,
-    is_plain_jpeg, is_shown_as_itself,
+    FineState, FocusState, Frame, HALF_DENSITY, MAX_SCALE, PickResult, PickState, Record, Resident,
+    SharpenState, Stats, Status, ViewKind, ViewOut, WbBase, WbMode, WhiteBalanceState, ZOOM_STEP,
+    Zoom, fnv, is_plain_jpeg, is_shown_as_itself,
 };
 pub use crate::wb::{Wb, WbInfo, WbPreset};

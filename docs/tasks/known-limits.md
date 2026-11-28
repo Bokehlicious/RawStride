@@ -634,6 +634,9 @@ only if it is seen in use.)
   (one lock per frame).
 - *The presets of the current image only* (W6-Q4, T351): on the compare's held side the
   right-click menu lists the current image's presets, not the held image's.
+- *A grey note kept by As Shot* (T352): after a click that was too bright or too dark, choosing
+  As Shot while the mode is already As Shot changes nothing, so the note stays until the next
+  click, another white balance, Reset Adjustments, the display mode or another image.
 
 ## Filter on text and metadata (ADR 0022)
 

@@ -1,4 +1,4 @@
-# T352. ADR 0027 W6: the click on gray in the view core's state — Open
+# T352. ADR 0027 W6: the click on gray in the view core's state — Done
 
 - **Why:** ADR 0027 §3.5 and W6-Q2, W6-Q3, W6-Q8 (answered by the owner 2026-11-28, ADR 0027
   §4.6). T349 gave the backend `grey_white_balance(session, area)` and the pure `grey_area`;
@@ -141,3 +141,5 @@
 |---|---|---|
 | 2026-11-28 | Blocked | Added (from the cold reads and the chain review of T350 and T351); waits for T350 |
 | 2026-11-28 | Open | T351 done; set to Open by the reviewer (the cold read and the chain review are above) |
+| 2026-11-28 | Ready for review | Implemented grey picking, measurement scheduling and retry, per-image balance and frame state in pw-viewcore. Added nine state tests and one worker integration test. The Windows workspace check passed (2940 passed, 112 ignored by default). |
+| 2026-11-28 | Done | Reviewed: points 1–8 and every test asked for are there (nine state tests, one in `tests/engine.rs`); the diff is only the files above. Beyond the text: a failed open of the clicked image ends the request with `Unusable`; a click before the image's size is known is `Unusable` (the shell cannot pick then, `can_pick` is false); in a `set_files` that keeps the path a pending request moves to the new key and is measured again. Noted, no change: a result that is dropped (replaced click, left image) puts a spent session back, and the next job of the image finds it spent and reopens it, as after a render. Leftover: As Shot chosen while the mode is As Shot does not clear a "too bright or too dark" note (`known-limits.md`, "The white balance (ADR 0027 W6)"). No user-visible change yet (T353), so no change log line. `check.ps1` all OK, 2940 passed, 112 ignored, no clippy warnings. T353 set to Open. |

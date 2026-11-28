@@ -1,4 +1,4 @@
-# T353. ADR 0027 W6: Pick Gray — the key, the menu item, the pick mode and its click — Blocked
+# T353. ADR 0027 W6: Pick Gray — the key, the menu item, the pick mode and its click — Open
 
 - **Why:** ADR 0027 §3.5 and W6-Q2, W6-Q6, W6-Q8 (answered by the owner 2026-11-28, ADR 0027
   §4.6). T352 gave the view core the click on gray (`ViewCore::pick_grey(point, view_px) ->
@@ -129,3 +129,4 @@
 | Date | Status | Note |
 |---|---|---|
 | 2026-11-28 | Blocked | Added (from the cold reads and the chain review of T350 and T351); waits for T351 and T352 |
+| 2026-11-28 | Open | T352 done; set to Open by the reviewer (the cold read and the chain review are above) |

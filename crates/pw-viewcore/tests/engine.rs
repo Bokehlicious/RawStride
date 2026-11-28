@@ -9,12 +9,13 @@ use std::time::{Duration, Instant};
 
 use pw_viewcore::{
     AdjustState, Backend, Config, DecodeError, Ev, ExposureBase, ExposureMode, FineState, Frame,
-    ImageSize, Rect, Rgb, Source, Status, Stop, ViewCore, ViewKind, ViewOut, Wb, WbBase, WbMode,
-    Zoom,
+    ImageSize, PickResult, PickState, Rect, Rgb, Source, Status, Stop, ViewCore, ViewKind, ViewOut,
+    Wb, WbBase, WbInfo, WbMode, Zoom,
 };
 
 const VIEW: [u32; 2] = [1000, 800];
 const AUTO_WB: Wb = Wb::Mul { r: 2000, b: 1500 };
+const GREY_WB: Wb = Wb::Mul { r: 1800, b: 900 };
 
 /// Simulated files. RAW: "bad*" fails as damaged, the rest are 4000×3000 (flip 6 for "v*").
 /// JPEG: "nojpeg*" has no embedded JPEG, the rest have a 1600×1200 one. Every pixel encodes its
@@ -24,6 +25,7 @@ struct Fake {
     opens: Arc<AtomicUsize>,
     renders: Arc<Mutex<Vec<(ViewKind, Rect)>>>,
     balances: Arc<AtomicUsize>,
+    grey_measurements: Arc<AtomicUsize>,
     render_balances: Arc<Mutex<Vec<(Wb, usize)>>>,
     delay: Duration,
 }
@@ -128,6 +130,18 @@ impl Backend for Fake {
         self.balances.fetch_add(1, Ordering::SeqCst);
         Some(AUTO_WB)
     }
+
+    fn white_balance_info(&self, _session: &Self::Session) -> WbInfo {
+        WbInfo {
+            measurable: true,
+            ..WbInfo::default()
+        }
+    }
+
+    fn grey_white_balance(&self, _session: &mut Self::Session, _area: Rect) -> Option<Wb> {
+        self.grey_measurements.fetch_add(1, Ordering::SeqCst);
+        Some(GREY_WB)
+    }
 }
 
 /// The presentation's side: uploads finished views into a map of "textures".
@@ -216,6 +230,32 @@ fn auto_white_balance_runs_before_the_first_view_is_rendered() {
         Some(&(AUTO_WB, 1))
     );
     assert_eq!(fake.balances.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn picking_grey_measures_once_and_renders_the_current_view_with_its_balance() {
+    let fake = Fake::default();
+    let core = start(fake.clone(), Config::default());
+    core.open_folder(files(&["a.raw"]));
+    let mut screen = Screen::new(&core);
+    let before = screen.until(WAIT, ready);
+    assert_eq!(before.status, Status::Ready);
+    assert!(before.white_balance.can_pick);
+    assert_eq!(screen.textures[&before.draw.unwrap().id].wb, Wb::Shot);
+    core.take_records();
+
+    assert_eq!(core.pick_grey([500.0, 400.0], VIEW), PickResult::Started);
+    let after = screen.until(WAIT, |f| {
+        f.white_balance.mode == WbMode::Grey && f.white_balance.view == AdjustState::Shown
+    });
+    assert_eq!(after.status, Status::Ready);
+    assert_eq!(after.white_balance.mode, WbMode::Grey);
+    assert_eq!(after.white_balance.base, WbBase::Grey);
+    assert_eq!(after.white_balance.view, AdjustState::Shown);
+    assert_eq!(after.white_balance.pick, PickState::Idle);
+    assert_eq!(screen.textures[&after.draw.unwrap().id].wb, GREY_WB);
+    assert_eq!(fake.grey_measurements.load(Ordering::SeqCst), 1);
+    assert!(core.take_records().is_empty());
 }
 
 #[test]
