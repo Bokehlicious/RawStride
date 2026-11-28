@@ -23,7 +23,7 @@ use std::sync::Arc;
 
 use pw_colour::{ColourError, Profile, Transform, TransformCache, jpeg_source_profile_checked};
 use pw_libjpeg::{Decoder, Scale};
-use pw_libraw::{DAMAGED, Demosaic, Exposure, Session};
+use pw_libraw::{Adjust, DAMAGED, Demosaic, Exposure, Multipliers, Session, WhiteBalance};
 use pw_raw::ExifColourSpace;
 
 use crate::backend::{
@@ -32,6 +32,7 @@ use crate::backend::{
 use crate::exposure::Ev;
 use crate::geometry::{ImageSize, Rect};
 use crate::scale;
+use crate::wb::{Wb, WbInfo, WbPreset};
 
 /// Context rendered around a RAW region and cut off again, so a region equals the same area of a
 /// whole render (ADR 0006; checked for PPG in `pw-libraw/tests/regions.rs`).
@@ -301,6 +302,22 @@ fn raw_exposure(exposure: Ev) -> Result<Exposure, DecodeError> {
     })
 }
 
+fn raw_white_balance(wb: Wb) -> Result<WhiteBalance, DecodeError> {
+    match wb {
+        Wb::Shot => Ok(WhiteBalance::AsShot),
+        Wb::Mul { r, b } => Multipliers::new(r as f32 / 1000.0, 1.0, b as f32 / 1000.0)
+            .map(WhiteBalance::Multipliers)
+            .ok_or_else(|| {
+                DecodeError::new(format!("the white balance {r}/{b} is outside the range"))
+            }),
+    }
+}
+
+fn measured_white_balance(session: &mut Session, area: pw_libraw::Rect) -> Option<Wb> {
+    let means = session.channel_means(area).ok()??;
+    Wb::from_multipliers(means.multipliers()?.get())
+}
+
 /// The statistics of a RAW file's unpacked data in the core's form.
 fn raw_statistics(raw: &pw_libraw::RawStatistics) -> Statistics {
     Statistics {
@@ -467,20 +484,26 @@ impl Backend for NativeBackend {
         }
     }
 
-    /// A RAW render is made with the exposure applied by LibRaw (ADR 0027 §3.4, W5) and is
-    /// stopped between LibRaw's stages; a stop while LibRaw works spends the session (T327). JPEG
-    /// and TIFF renders ignore the exposure, are short and are not stopped.
+    /// LibRaw applies exposure and white balance to RAW renders (ADR 0027 §3.4, W5 and §3.5, W6).
+    /// A stop while LibRaw works spends the session (T327). JPEG and TIFF renders ignore both
+    /// adjustments and run to completion.
     fn render_half_stoppable(
         &self,
         session: &mut NativeSession,
         exposure: Ev,
+        wb: Wb,
         stop: &Stop,
     ) -> Result<Rgb, DecodeError> {
         match session {
-            NativeSession::Raw(s, _) => s
-                .render_half_exposed(raw_exposure(exposure)?, &|| stop.is_stopped())
-                .map(rgb_raw)
-                .map_err(raw_error),
+            NativeSession::Raw(s, _) => {
+                let adjust = Adjust {
+                    exposure: raw_exposure(exposure)?,
+                    white_balance: raw_white_balance(wb)?,
+                };
+                s.render_half_adjusted(adjust, &|| stop.is_stopped())
+                    .map(rgb_raw)
+                    .map_err(raw_error)
+            }
             _ => self.render_half(session),
         }
     }
@@ -491,13 +514,17 @@ impl Backend for NativeBackend {
         session: &mut NativeSession,
         r: Rect,
         exposure: Ev,
+        wb: Wb,
         stop: &Stop,
     ) -> Result<Rgb, DecodeError> {
         match session {
             NativeSession::Raw(s, _) => {
                 let r = pw_libraw::Rect::new(r.x, r.y, r.w, r.h);
-                let exposure = raw_exposure(exposure)?;
-                s.render_region_exposed(r, MARGIN, Demosaic::Ppg, exposure, &|| stop.is_stopped())
+                let adjust = Adjust {
+                    exposure: raw_exposure(exposure)?,
+                    white_balance: raw_white_balance(wb)?,
+                };
+                s.render_region_adjusted(r, MARGIN, Demosaic::Ppg, adjust, &|| stop.is_stopped())
                     .map(rgb_raw)
                     .map_err(raw_error)
             }
@@ -511,6 +538,43 @@ impl Backend for NativeBackend {
             NativeSession::Raw(s, _) => s.camera_exposure().map(|c| camera_brightness(c.ev)),
             _ => None,
         }
+    }
+
+    fn white_balance_info(&self, session: &NativeSession) -> WbInfo {
+        let NativeSession::Raw(s, _) = session else {
+            return WbInfo::default();
+        };
+        let to_wb = |m: Multipliers| Wb::from_multipliers(m.get());
+        WbInfo {
+            presets: s
+                .white_balance_presets()
+                .iter()
+                .filter_map(|preset| {
+                    Some(WbPreset {
+                        wb: to_wb(preset.multipliers)?,
+                        name: preset.name.clone(),
+                    })
+                })
+                .collect(),
+            daylight: s.daylight().and_then(to_wb),
+            camera: s.camera_multipliers().and_then(to_wb),
+            measurable: s.can_measure(),
+        }
+    }
+
+    fn auto_white_balance(&self, session: &mut NativeSession) -> Option<Wb> {
+        let NativeSession::Raw(s, _) = session else {
+            return None;
+        };
+        let area = pw_libraw::Rect::new(0, 0, s.width(), s.height());
+        measured_white_balance(s, area)
+    }
+
+    fn grey_white_balance(&self, session: &mut NativeSession, area: Rect) -> Option<Wb> {
+        let NativeSession::Raw(s, _) = session else {
+            return None;
+        };
+        measured_white_balance(s, pw_libraw::Rect::new(area.x, area.y, area.w, area.h))
     }
 
     /// A RAW session is spent after a stopped or failed render (T327).

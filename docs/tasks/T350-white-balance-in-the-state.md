@@ -1,4 +1,4 @@
-# T350. ADR 0027 W6: the white balance's mode in the view core's state — Blocked
+# T350. ADR 0027 W6: the white balance's mode in the view core's state — Open
 
 - **Why:** ADR 0027 §2.1, §3.5 and W6-Q3, W6-Q4, W6-Q6, W6-Q7, W6-Q8 (answered by the owner
   2026-11-28, ADR 0027 §4.6). T349 made the render path carry a balance (`JobView::wb`, a `Wb`)
@@ -212,3 +212,4 @@
 |---|---|---|
 | 2026-11-28 | Blocked | Added (as T350 with the click); waits for T349 |
 | 2026-11-28 | Blocked | Cold read and chain review: the click split out to T352; added the key-first `wb_of` for `Shot`, the `waiting_for_auto` extension, `Stats` fields for the balance's time, `finish_open_checked`'s other callers, the `WbBase` rules before the info is there and for a non-RAW key, `Arc` for the preset list, the exports and derives, the engine test's `Fake` |
+| 2026-11-28 | Open | T349 done; set to Open by the reviewer (the cold read and the chain review are above) |

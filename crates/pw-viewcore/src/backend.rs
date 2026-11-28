@@ -8,6 +8,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::exposure::Ev;
 use crate::geometry::{ImageSize, Rect};
+use crate::wb::{Wb, WbInfo};
 
 /// An 8-bit RGB image (3 bytes per pixel, rows top to bottom), in sensor orientation.
 #[derive(Clone, PartialEq, Eq)]
@@ -465,28 +466,29 @@ pub trait Backend: Send + Sync + 'static {
     /// conversion to the display ([`to_display`](Self::to_display)).
     fn render_region(&self, session: &mut Self::Session, r: Rect) -> Result<Rgb, DecodeError>;
 
-    /// Like [`render_half`](Self::render_half), rendered with the temporary exposure `exposure`
-    /// (ADR 0027 §3.4, W5), and ends early with [`DecodeError::cancelled`] when `stop` is set
-    /// (T328). The default looks at neither: a backend that has no exposure (and a JPEG or a TIFF
-    /// file) renders as without one. A backend that stops a render while its decoder works may
-    /// spend the session ([`session_usable`](Self::session_usable)).
+    /// Like [`render_half`](Self::render_half), with temporary exposure and white balance (ADR 0027
+    /// §3.4, W5 and §3.5, W6). Returns [`DecodeError::cancelled`] when stopped (T328). The default
+    /// ignores both adjustments and the stop. JPEG and TIFF renders ignore both adjustments.
+    /// A backend that stops a render while its decoder works may spend the session
+    /// ([`session_usable`](Self::session_usable)).
     fn render_half_stoppable(
         &self,
         session: &mut Self::Session,
         _exposure: Ev,
+        _wb: Wb,
         _stop: &Stop,
     ) -> Result<Rgb, DecodeError> {
         self.render_half(session)
     }
 
-    /// Like [`render_region`](Self::render_region), with the exposure and stoppable as
-    /// [`render_half_stoppable`](Self::render_half_stoppable) (T328); the default ignores both
-    /// as that one's does.
+    /// Like [`render_region`](Self::render_region), with the adjustments and stop of
+    /// [`render_half_stoppable`](Self::render_half_stoppable). The default ignores them.
     fn render_region_stoppable(
         &self,
         session: &mut Self::Session,
         r: Rect,
         _exposure: Ev,
+        _wb: Wb,
         _stop: &Stop,
     ) -> Result<Rgb, DecodeError> {
         self.render_region(session, r)
@@ -496,6 +498,24 @@ pub trait Backend: Send + Sync + 'static {
     /// `NativeBackend` the file's value with its sign turned; not limited to [`Ev`]'s range;
     /// ADR 0027 W5-Q5, §4.4). Asked once after a successful open. The default has none.
     fn camera_exposure(&self, _session: &Self::Session) -> Option<f64> {
+        None
+    }
+
+    /// The file's white balance information, asked for once after a successful open (ADR 0027
+    /// §3.5, W6). The default has no values and does not support measurement.
+    fn white_balance_info(&self, _session: &Self::Session) -> WbInfo {
+        WbInfo::default()
+    }
+
+    /// Measure white balance across the whole RAW image (ADR 0027 §3.5, W6-Q1). This may take as
+    /// long as statistics. Returns `None` if the file has no measurable balance or on failure.
+    fn auto_white_balance(&self, _session: &mut Self::Session) -> Option<Wb> {
+        None
+    }
+
+    /// Measure the balance that makes the mean colour of a sensor rectangle grey (ADR 0027 §3.5,
+    /// W6-Q2). Returns `None` if the area cannot be measured or on failure.
+    fn grey_white_balance(&self, _session: &mut Self::Session, _area: Rect) -> Option<Wb> {
         None
     }
 
@@ -579,23 +599,35 @@ mod tests {
         assert!(s.histogram.iter().flatten().all(|n| *n == 0));
     }
 
+    struct Plain;
+
+    impl Backend for Plain {
+        type Session = ();
+        fn open(&self, _: &Path, _: Source) -> Result<((), ImageSize), DecodeError> {
+            Err(DecodeError::new("no files"))
+        }
+        fn render_half(&self, _: &mut ()) -> Result<Rgb, DecodeError> {
+            Err(DecodeError::new("no image"))
+        }
+        fn render_region(&self, _: &mut (), _: Rect) -> Result<Rgb, DecodeError> {
+            Err(DecodeError::new("no image"))
+        }
+    }
+
     #[test]
     fn a_backend_without_statistics_has_none() {
-        struct Plain;
-        impl Backend for Plain {
-            type Session = ();
-            fn open(&self, _: &Path, _: Source) -> Result<((), ImageSize), DecodeError> {
-                Err(DecodeError::new("no files"))
-            }
-            fn render_half(&self, _: &mut ()) -> Result<Rgb, DecodeError> {
-                Err(DecodeError::new("no image"))
-            }
-            fn render_region(&self, _: &mut (), _: Rect) -> Result<Rgb, DecodeError> {
-                Err(DecodeError::new("no image"))
-            }
-        }
         assert_eq!(Plain.statistics(&mut ()), None);
         assert_eq!(Plain.clipping_map(&mut ()), None);
+    }
+
+    #[test]
+    fn a_backend_without_white_balance_has_no_information_or_measurement() {
+        assert_eq!(Plain.white_balance_info(&()), WbInfo::default());
+        assert_eq!(Plain.auto_white_balance(&mut ()), None);
+        assert_eq!(
+            Plain.grey_white_balance(&mut (), Rect::new(0, 0, 12, 12)),
+            None
+        );
     }
 
     // ---------- the clipping map of 8-bit pixels (ADR 0017 U7b, T147) ----------

@@ -14,6 +14,7 @@ use crate::channel::Channel;
 use crate::exposure::{AutoExposure, Ev, auto_exposure};
 use crate::geometry::{self, ImageSize, Rect, RectF};
 use crate::sharpen::Sharpening;
+use crate::wb::Wb;
 
 /// Settings of the core. Both budgets are user settings (V8); in milestone 1 they come from the
 /// command line (ADR 0009 §11).
@@ -470,6 +471,8 @@ pub(crate) struct JobView {
     pub sharpen: Option<Sharpening>,
     /// The exposure the render is made with (ADR 0027 §3.4, W5); [`Ev::ZERO`] = none.
     pub exposure: Ev,
+    /// The white balance applied by the render (ADR 0027 §3.5, W6).
+    pub wb: Wb,
     /// The shadows' amount the view is lifted with after the reduction and before the sharpening
     /// (ADR 0027 §3.4, W5-Q3, W5-Q6); `None` = off.
     pub shadows: Option<u8>,
@@ -581,6 +584,7 @@ const STATISTICS_LEND: JobView = JobView {
     density_q: 0,
     sharpen: None,
     exposure: Ev::ZERO,
+    wb: Wb::Shot,
     shadows: None,
     channel: Channel::Color,
 };
@@ -1577,6 +1581,7 @@ impl<S> State<S> {
                         density_q: quantise(scale),
                         sharpen: self.sharpening,
                         exposure: self.exposure_of(key).unwrap_or(Ev::ZERO),
+                        wb: Wb::Shot,
                         shadows: self.shadows_of(key),
                         channel: self.channel,
                     },
@@ -1598,6 +1603,7 @@ impl<S> State<S> {
                     // 0027 A-Q8, W3-Q1, changed 2026-11-25)
                     sharpen: self.sharpening,
                     exposure: self.exposure_of(key).unwrap_or(Ev::ZERO),
+                    wb: Wb::Shot,
                     shadows: self.shadows_of(key),
                     channel: self.channel,
                 };
@@ -1633,6 +1639,7 @@ impl<S> State<S> {
                 density_q: quantise(scale),
                 sharpen: self.sharpening,
                 exposure: self.exposure_of(key).unwrap_or(Ev::ZERO),
+                wb: Wb::Shot,
                 shadows: self.shadows_of(key),
                 channel: self.channel,
             }
@@ -1643,6 +1650,7 @@ impl<S> State<S> {
                 density_q: quantise(HALF_DENSITY),
                 sharpen: self.sharpening,
                 exposure: self.exposure_of(key).unwrap_or(Ev::ZERO),
+                wb: Wb::Shot,
                 shadows: self.shadows_of(key),
                 channel: self.channel,
             }
@@ -1654,6 +1662,7 @@ impl<S> State<S> {
                 density_q: quantise(1.0),
                 sharpen: self.sharpening,
                 exposure: self.exposure_of(key).unwrap_or(Ev::ZERO),
+                wb: Wb::Shot,
                 shadows: self.shadows_of(key),
                 channel: self.channel,
             }
@@ -1664,6 +1673,7 @@ impl<S> State<S> {
                 density_q: quantise(scale),
                 sharpen: self.sharpening,
                 exposure: self.exposure_of(key).unwrap_or(Ev::ZERO),
+                wb: Wb::Shot,
                 shadows: self.shadows_of(key),
                 channel: self.channel,
             }
@@ -3635,6 +3645,7 @@ mod tests {
             density_q: 500_000,
             sharpen: None,
             exposure: Ev::ZERO,
+            wb: Wb::Shot,
             shadows: None,
             channel: Channel::Color,
         });
@@ -3832,6 +3843,7 @@ mod tests {
             density_q,
             sharpen: None,
             exposure: Ev::ZERO,
+            wb: Wb::Shot,
             shadows: None,
             channel: Channel::Color,
         }
@@ -3845,6 +3857,7 @@ mod tests {
             density_q: 500_000,
             sharpen: None,
             exposure: Ev::ZERO,
+            wb: Wb::Shot,
             shadows: None,
             channel: Channel::Color,
         }
@@ -4447,6 +4460,7 @@ mod tests {
             density_q: quantise(o.density),
             sharpen: o.sharpen,
             exposure: o.exposure,
+            wb: Wb::Shot,
             shadows: o.shadows,
             channel: o.channel,
         }
@@ -6672,6 +6686,7 @@ mod tests {
                     density_q: 1_000_000,
                     sharpen: None,
                     exposure: Ev::ZERO,
+                    wb: Wb::Shot,
                     shadows: None,
                     channel: Channel::Color,
                 }
@@ -6689,6 +6704,7 @@ mod tests {
             density_q,
             sharpen: None,
             exposure: Ev::ZERO,
+            wb: Wb::Shot,
             shadows: None,
             channel: Channel::Color,
         }
@@ -7355,6 +7371,7 @@ mod tests {
                     density_q: quantise(scale),
                     sharpen,
                     exposure: Ev::ZERO,
+                    wb: Wb::Shot,
                     shadows: None,
                     channel: Channel::Color,
                 };

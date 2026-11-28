@@ -34,6 +34,7 @@ pub mod scale;
 pub mod shadows;
 pub mod sharpen;
 mod state;
+pub mod wb;
 
 pub use crate::backend::{
     Backend, ClippingMap, DecodeError, FocusMap, ImageStatistics, Rgb, Source, Statistics,
@@ -49,3 +50,4 @@ pub use crate::state::{
     FineState, FocusState, Frame, HALF_DENSITY, MAX_SCALE, Record, Resident, SharpenState, Stats,
     Status, ViewKind, ViewOut, ZOOM_STEP, Zoom, fnv, is_plain_jpeg, is_shown_as_itself,
 };
+pub use crate::wb::{Wb, WbInfo, WbPreset};

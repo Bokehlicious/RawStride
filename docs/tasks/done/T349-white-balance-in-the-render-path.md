@@ -1,4 +1,4 @@
-# T349. ADR 0027 W6: the white balance in the view core's render path — Open
+# T349. ADR 0027 W6: the white balance in the view core's render path — Done
 
 - **Why:** ADR 0027 §3.5 and W6-Q1–W6-Q4 (answered by the owner 2026-11-28, ADR 0027 §4.6). T348
   made `pw-libraw` render with a white balance and give the means under a RAW area, the file's
@@ -179,3 +179,5 @@
 | 2026-11-28 | Blocked | Cold read and chain review: `from_multipliers` checks the ratio on the rounded values; the `grey_area` rule worked out (nearest even origin, moved inside, the numbers at scale 8 and at the corners); `WbInfo.measurable` and the preset list as an `Arc`; the `JobView` literals in `core.rs`'s tests and the four calls in `native_files.rs`; the baseline of the native test; the line numbers |
 | 2026-11-28 | Blocked | T348 done; T354 (the means made faster, owner 2026-11-28, W6-Q7) now comes before this task: waits for T354 |
 | 2026-11-28 | Open | T354 done; set to Open by the reviewer (the cold read and the chain review are above) |
+| 2026-11-28 | Ready for review | Added render-time white balance, RAW balance information and measurements, and grey area geometry. All four real-file white balance tests passed, including auto measurements on 24 ARW and 5 RAF files. See `test-output.txt` for the workspace check. The reviewer updates the test inventory under the Codex workflow. |
+| 2026-11-28 | Done | Review (Codex's work): every point under What and every test under Tests to add done as written; only the named files changed; no stoppable-render override outside `native.rs` and `core.rs`. `.\tools\check.ps1` all OK (2905 passed, 112 ignored; no clippy warning, only the incremental cache's hard-link notices); `native_files.rs` with `--ignored` on `PW_TESTDATA`: the four white balance tests and the two exposure tests passed (auto balance on 24 ARW and 5 RAF). No extra code review (one crate, no shim). `docs/test-inventory.md` updated by the reviewer. Nothing left over; no change-log line (the state still asks for as shot, T350) |

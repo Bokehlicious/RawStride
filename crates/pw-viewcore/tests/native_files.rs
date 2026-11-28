@@ -8,10 +8,10 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use pw_colour::{Profile, TransformCache, jpeg_source_profile};
-use pw_viewcore::native::NativeBackend;
+use pw_viewcore::native::{NativeBackend, NativeSession};
 use pw_viewcore::{
     Backend, Config, Ev, FineState, Frame, Rect, Rgb, Source, Status, Stop, ViewCore, ViewKind,
-    ViewOut, Zoom,
+    ViewOut, Wb, WbInfo, Zoom,
 };
 
 const VIEW: [u32; 2] = [1920, 1080];
@@ -31,6 +31,10 @@ fn testdata() -> PathBuf {
 }
 
 fn test_files(prefix: &str) -> Vec<PathBuf> {
+    test_files_with_extensions(prefix, &["arw", "rw2", "dng"])
+}
+
+fn test_files_with_extensions(prefix: &str, extensions: &[&str]) -> Vec<PathBuf> {
     let dir = testdata();
     let entries = std::fs::read_dir(&dir).unwrap_or_else(|error| {
         panic!(
@@ -56,15 +60,13 @@ fn test_files(prefix: &str) -> Vec<PathBuf> {
                 && path
                     .extension()
                     .and_then(|ext| ext.to_str())
-                    .is_some_and(|ext| {
-                        matches!(ext.to_ascii_lowercase().as_str(), "arw" | "rw2" | "dng")
-                    })
+                    .is_some_and(|ext| extensions.iter().any(|e| ext.eq_ignore_ascii_case(e)))
         })
         .collect();
     files.sort();
     assert!(
         !files.is_empty(),
-        "no RAW test file with prefix {prefix} was found in PW_TESTDATA folder {}",
+        "no {extensions:?} test file with prefix {prefix} was found in PW_TESTDATA folder {}",
         dir.display()
     );
     files
@@ -304,7 +306,7 @@ fn an_exposure_brightens_a_raw_render_and_zero_gives_the_plain_render() {
     let stop = Stop::new();
     let mut half = |ev: Ev| {
         backend
-            .render_half_stoppable(&mut session, ev, &stop)
+            .render_half_stoppable(&mut session, ev, Wb::Shot, &stop)
             .unwrap_or_else(|e| panic!("{} at {ev:?}: {}", file.display(), e.message))
     };
     let zero = half(Ev::ZERO);
@@ -324,7 +326,7 @@ fn an_exposure_brightens_a_raw_render_and_zero_gives_the_plain_render() {
     let r = Rect::new(size.w / 2, size.h / 2, 256, 192);
     let mut region = |ev: Ev| {
         backend
-            .render_region_stoppable(&mut session, r, ev, &stop)
+            .render_region_stoppable(&mut session, r, ev, Wb::Shot, &stop)
             .unwrap_or_else(|e| panic!("{} region at {ev:?}: {}", file.display(), e.message))
     };
     let zero = region(Ev::ZERO);
@@ -351,10 +353,10 @@ fn an_exposure_changes_no_byte_of_an_embedded_jpeg_or_a_tiff() {
         let mut renders = Vec::new();
         for ev in [Ev::ZERO, Ev::from_thirds(3), Ev::from_thirds(-6)] {
             let half = backend
-                .render_half_stoppable(&mut session, ev, &stop)
+                .render_half_stoppable(&mut session, ev, Wb::Shot, &stop)
                 .unwrap_or_else(|e| panic!("{} at {ev:?}: {}", file.display(), e.message));
             let region = backend
-                .render_region_stoppable(&mut session, r, ev, &stop)
+                .render_region_stoppable(&mut session, r, ev, Wb::Shot, &stop)
                 .unwrap_or_else(|e| panic!("{} at {ev:?}: {}", file.display(), e.message));
             renders.push((half, region));
         }
@@ -370,6 +372,163 @@ fn an_exposure_changes_no_byte_of_an_embedded_jpeg_or_a_tiff() {
             assert!(*render == plain, "{} in {mode:?}", file.display());
         }
     }
+}
+
+const TEST_BALANCE: Wb = Wb::Mul { r: 3000, b: 600 };
+
+#[test]
+#[ignore = "needs real camera files: set PW_TESTDATA and run with --ignored"]
+fn white_balance_changes_the_raw_render_with_an_as_shot_baseline() {
+    let backend = NativeBackend::default();
+    let file = test_files_with_extensions("", &["arw"]).remove(0);
+    let (mut session, _) = backend
+        .open(&file, Source::Raw)
+        .unwrap_or_else(|e| panic!("{}: open: {}", file.display(), e.message));
+    let info = backend.white_balance_info(&session);
+    assert!(info.presets.iter().any(|preset| preset.name == "Daylight"));
+    assert!(info.daylight.is_some());
+    assert!(info.measurable);
+    let camera = info.camera.expect("no camera white balance");
+
+    let plain = backend.render_half(&mut session).unwrap();
+    let stop = Stop::new();
+    let mut half = |wb| {
+        backend
+            .render_half_stoppable(&mut session, Ev::ZERO, wb, &stop)
+            .unwrap_or_else(|e| panic!("{} at {wb:?}: {}", file.display(), e.message))
+    };
+    let shot = half(Wb::Shot);
+    assert_eq!(shot, plain, "{}", file.display());
+
+    let camera_render = half(camera);
+    assert_eq!(
+        (camera_render.width, camera_render.height),
+        (shot.width, shot.height)
+    );
+    assert_eq!(camera_render.data.len(), shot.data.len());
+    let mean_diff = camera_render
+        .data
+        .iter()
+        .zip(&shot.data)
+        .map(|(&a, &b)| f64::from(a.abs_diff(b)))
+        .sum::<f64>()
+        / shot.data.len() as f64;
+    assert!(
+        mean_diff < 0.5,
+        "{}: mean byte difference {mean_diff}",
+        file.display()
+    );
+
+    let changed = half(TEST_BALANCE);
+    let channel_mean = |img: &Rgb, channel: usize| {
+        let (pixels, _) = img.data.as_chunks::<3>();
+        pixels
+            .iter()
+            .map(|pixel| f64::from(pixel[channel]))
+            .sum::<f64>()
+            / pixels.len() as f64
+    };
+    assert!(
+        channel_mean(&changed, 0) > channel_mean(&shot, 0),
+        "{}",
+        file.display()
+    );
+    assert!(
+        channel_mean(&changed, 2) < channel_mean(&shot, 2),
+        "{}",
+        file.display()
+    );
+}
+
+#[test]
+#[ignore = "needs real camera files: set PW_TESTDATA and run with --ignored"]
+fn white_balance_changes_no_byte_of_an_embedded_jpeg_or_a_tiff() {
+    let backend = NativeBackend::default();
+    let arw = test_files_with_extensions("", &["arw"]).remove(0);
+    let tiff = tiff_files().remove(0);
+    let stop = Stop::new();
+    for (file, mode) in [(arw, Source::Jpeg), (tiff, Source::Raw)] {
+        let (mut session, size) = backend
+            .open(&file, mode)
+            .unwrap_or_else(|e| panic!("{} in {mode:?}: open: {}", file.display(), e.message));
+        let area = Rect::new(size.w / 4, size.h / 4, 128, 96);
+        assert_eq!(backend.white_balance_info(&session), WbInfo::default());
+        assert_eq!(backend.auto_white_balance(&mut session), None);
+        assert_eq!(backend.grey_white_balance(&mut session, area), None);
+
+        let mut render = |wb| {
+            (
+                backend
+                    .render_half_stoppable(&mut session, Ev::ZERO, wb, &stop)
+                    .unwrap(),
+                backend
+                    .render_region_stoppable(&mut session, area, Ev::ZERO, wb, &stop)
+                    .unwrap(),
+            )
+        };
+        assert_eq!(
+            render(TEST_BALANCE),
+            render(Wb::Shot),
+            "{} in {mode:?}",
+            file.display()
+        );
+    }
+}
+
+#[test]
+#[ignore = "needs real camera files: set PW_TESTDATA and run with --ignored"]
+fn white_balance_auto_measures_every_arw_and_raf() {
+    let backend = NativeBackend::default();
+    let arws = test_files_with_extensions("", &["arw"]);
+    let rafs = test_files_with_extensions("", &["raf"]);
+    for file in arws.into_iter().chain(rafs) {
+        let (mut session, _) = backend
+            .open(&file, Source::Raw)
+            .unwrap_or_else(|e| panic!("{}: open: {}", file.display(), e.message));
+        let wb = backend.auto_white_balance(&mut session);
+        println!("{}: auto white balance {wb:?}", file.display());
+        let Some(Wb::Mul { r, b }) = wb else {
+            panic!("{}: no measured white balance", file.display());
+        };
+        assert!(
+            (200..=8000).contains(&r) && (200..=8000).contains(&b),
+            "{}: {wb:?}",
+            file.display()
+        );
+    }
+}
+
+#[test]
+#[ignore = "needs real camera files: set PW_TESTDATA and run with --ignored"]
+fn white_balance_grey_matches_the_channel_means_and_whole_image_auto() {
+    let backend = NativeBackend::default();
+    let file = test_files_with_extensions("", &["arw"]).remove(0);
+    let (mut session, _) = backend
+        .open(&file, Source::Raw)
+        .unwrap_or_else(|e| panic!("{}: open: {}", file.display(), e.message));
+    let NativeSession::Raw(raw, _) = &mut session else {
+        panic!("{}: expected a RAW session", file.display());
+    };
+    let (w, h) = (raw.width(), raw.height());
+    let area = Rect::new((w / 2 - 6) & !1, (h / 2 - 6) & !1, 12, 12);
+    let means = raw
+        .channel_means(pw_libraw::Rect::new(area.x, area.y, area.w, area.h))
+        .unwrap();
+    let expected = means
+        .and_then(|m| m.multipliers())
+        .and_then(|m| Wb::from_multipliers(m.get()));
+    let grey = backend.grey_white_balance(&mut session, area);
+    println!(
+        "{}: grey white balance in {area:?}: {grey:?}",
+        file.display()
+    );
+    assert_eq!(grey, expected, "{}", file.display());
+    assert_eq!(
+        backend.grey_white_balance(&mut session, Rect::new(0, 0, w, h)),
+        backend.auto_white_balance(&mut session),
+        "{}",
+        file.display()
+    );
 }
 
 #[test]

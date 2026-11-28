@@ -161,10 +161,10 @@ fn render_view<B: Backend>(
     // look at the stop after the render ends the job before reduction, adjustments and conversion
     let rendered = match view.kind {
         ViewKind::Half | ViewKind::Reduced => {
-            backend.render_half_stoppable(session, view.exposure, stop)
+            backend.render_half_stoppable(session, view.exposure, view.wb, stop)
         }
         ViewKind::Zoom | ViewKind::Ring | ViewKind::Scaled | ViewKind::Fine => {
-            backend.render_region_stoppable(session, view.region, view.exposure, stop)
+            backend.render_region_stoppable(session, view.region, view.exposure, view.wb, stop)
         }
     };
     // a stop set while the render ran counts as cancelled, also when it came back whole (the
@@ -1339,6 +1339,7 @@ mod tests {
             &self,
             session: &mut u32,
             _exposure: crate::exposure::Ev,
+            _wb: Wb,
             stop: &crate::backend::Stop,
         ) -> Result<Rgb, DecodeError> {
             self.wait_for(stop)?;
@@ -1350,6 +1351,7 @@ mod tests {
             session: &mut u32,
             r: Rect,
             _exposure: crate::exposure::Ev,
+            _wb: Wb,
             stop: &crate::backend::Stop,
         ) -> Result<Rgb, DecodeError> {
             self.wait_for(stop)?;
@@ -1413,12 +1415,14 @@ mod tests {
 
     use crate::exposure::Ev;
     use crate::state::JobView;
+    use crate::wb::Wb;
 
-    /// A decoder that records the exposure of every stoppable render and renders a 400×300 image
+    /// A decoder that records the adjustments of every stoppable render and renders a 400×300 image
     /// whose pixels come from `pixel`: the half-size render at `half` (its size), a region at its
     /// own size.
     struct Exposed {
         exposures: Mutex<Vec<i32>>,
+        balances: Mutex<Vec<Wb>>,
         half: (u32, u32),
         pixel: fn(u32, u32) -> u8,
         color: Option<fn(u32, u32) -> [u8; 3]>,
@@ -1429,6 +1433,7 @@ mod tests {
         fn new(half: (u32, u32), pixel: fn(u32, u32) -> u8) -> Exposed {
             Exposed {
                 exposures: Mutex::new(Vec::new()),
+                balances: Mutex::new(Vec::new()),
                 half,
                 pixel,
                 color: None,
@@ -1480,9 +1485,11 @@ mod tests {
             &self,
             session: &mut u32,
             exposure: Ev,
+            wb: Wb,
             _stop: &Stop,
         ) -> Result<Rgb, DecodeError> {
             lock(&self.exposures).push(exposure.milli());
+            lock(&self.balances).push(wb);
             self.render_half(session)
         }
 
@@ -1491,9 +1498,11 @@ mod tests {
             session: &mut u32,
             r: Rect,
             exposure: Ev,
+            wb: Wb,
             _stop: &Stop,
         ) -> Result<Rgb, DecodeError> {
             lock(&self.exposures).push(exposure.milli());
+            lock(&self.balances).push(wb);
             self.render_region(session, r)
         }
 
@@ -1533,6 +1542,7 @@ mod tests {
             density_q: 500_000,
             sharpen: None,
             exposure: Ev::ZERO,
+            wb: Wb::Shot,
             shadows: None,
             channel: Channel::Color,
         }
@@ -1545,6 +1555,7 @@ mod tests {
             density_q: 1_000_000,
             sharpen: None,
             exposure: Ev::ZERO,
+            wb: Wb::Shot,
             shadows: None,
             channel: Channel::Color,
         }
@@ -1577,6 +1588,17 @@ mod tests {
         );
         rendered(&backend, half_view());
         assert_eq!(*lock(&backend.exposures), vec![1000, 1000, 0]);
+    }
+
+    #[test]
+    fn a_view_passes_its_white_balance_to_the_render() {
+        let backend = Exposed::new((200, 150), dark);
+        let wb = Wb::Mul { r: 2000, b: 1500 };
+        for view in [half_view(), zoom_view()] {
+            rendered(&backend, JobView { wb, ..view });
+        }
+        rendered(&backend, half_view());
+        assert_eq!(*lock(&backend.balances), vec![wb, wb, Wb::Shot]);
     }
 
     #[test]
